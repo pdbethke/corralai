@@ -158,7 +158,7 @@ func subcommand(args []string) string {
 		return ""
 	}
 	switch args[0] {
-	case "certify", "secret", "control", "scorecard", "criticscore", "matrix", "scans", "seal", "eval", "mcp", "doctor", "demo":
+	case "certify", "secret", "control", "scorecard", "criticscore", "matrix", "scans", "seal", "eval", "mcp", "doctor", "demo", "verify":
 		return args[0]
 	}
 	return ""
@@ -277,6 +277,17 @@ Usage:
                                   Local DuckDB file, no brain required:
                                   --db <path> (default $CORRALAI_SCANS_DB, else
                                   ~/.claude/corralai_scans.duckdb), --limit n, --json
+  corral verify --attest <path> [flags]
+                                  the checker for a certify --repo --attest statement: verifies
+                                  its DSSE signature (against --pub or the local certify key,
+                                  reporting who signed either way), and — opted in per flag —
+                                  recomputes the pushed warehouse rows' hash from a --db and
+                                  confirms a Rekor entry (--rekor-index, or read from --db)
+                                  matches the envelope on disk. Prints check marks and one
+                                  plain sentence per check; exits 1 only on a real mismatch.
+                                  Different from "corral certify verify", which checks a
+                                  corral certify BUILD record, a different artifact.
+                                  flags: --db <dsn>  --rekor-index <n>  --pub <hex>
   corral seal [flags]            the repo's CURRENT state as the union of still-valid verdicts,
                                   read from a certify --repo --push warehouse (many audits, one
                                   current state — not one scan's snapshot). Reads corral_seal
@@ -805,6 +816,12 @@ func main() {
 			return mcpPoolRunner{client: mcpAdvClient{}, brainURL: brainURL, corpusVersion: corpusVersion,
 				poll: 5 * time.Second, timeout: 15 * time.Minute}
 		}, os.Stdout, os.Stderr))
+	case "verify":
+		// `corral verify` — the checker for a `certify --repo --attest`
+		// AUDIT statement (signature + --db warehouse rows + Rekor
+		// inclusion). Distinct from `corral certify verify`, which checks
+		// a `corral certify` BUILD record — see verify_attest.go's doc.
+		os.Exit(runVerifyAttest(os.Args[2:], os.Stdout, os.Stderr))
 	}
 	if showVersion(os.Args[1:]) {
 		printVersion(os.Stdout, os.Stderr)

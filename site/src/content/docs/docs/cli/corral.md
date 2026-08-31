@@ -79,6 +79,17 @@ Usage:
                                   Local DuckDB file, no brain required:
                                   --db <path> (default $CORRALAI_SCANS_DB, else
                                   ~/.claude/corralai_scans.duckdb), --limit n, --json
+  corral verify --attest <path> [flags]
+                                  the checker for a certify --repo --attest statement: verifies
+                                  its DSSE signature (against --pub or the local certify key,
+                                  reporting who signed either way), and — opted in per flag —
+                                  recomputes the pushed warehouse rows' hash from a --db and
+                                  confirms a Rekor entry (--rekor-index, or read from --db)
+                                  matches the envelope on disk. Prints check marks and one
+                                  plain sentence per check; exits 1 only on a real mismatch.
+                                  Different from "corral certify verify", which checks a
+                                  corral certify BUILD record, a different artifact.
+                                  flags: --db <dsn>  --rekor-index <n>  --pub <hex>
   corral seal [flags]            the repo's CURRENT state as the union of still-valid verdicts,
                                   read from a certify --repo --push warehouse (many audits, one
                                   current state — not one scan's snapshot). Reads corral_seal
@@ -206,7 +217,7 @@ Usage of certify --repo:
   -all
     	audit every candidate, ignoring --top
   -attest string
-    	write the scan's verdict as an in-toto Statement to this file — the receipt a reviewer can verify without trusting the run that produced it. Consumed by GitHub's attestation API (actions/attest), which signs it keylessly through the workflow's own OIDC identity, so the signature chains to the repository and workflow rather than to a key that lived on an ephemeral runner. Carries every file's kill rate, survivors and proven gaps WITH the honesty flags that say what a zero means, the thresholds it was judged against, and the models in each role
+    	write the scan's verdict as an in-toto Statement to this file — the receipt a reviewer can verify without trusting the run that produced it. Consumed by GitHub's attestation API (actions/attest), which signs it keylessly through the workflow's own OIDC identity, so the signature chains to the repository and workflow rather than to a key that lived on an ephemeral runner. Carries every file's kill rate, survivors and proven gaps WITH the honesty flags that say what a zero means, the thresholds it was judged against, and the models in each role. When a local signing key is configured (CORRALAI_CERTIFY_KEY_FILE), the same statement is ALSO signed into a DSSE envelope written beside this file as <path>.dsse.json — this plain file is unchanged either way, so actions/attest keeps working exactly as it does today; --transparency uploads the envelope, never this file
   -commit string
     	commit SHA the report is bound to
   -critic-model string
@@ -267,6 +278,8 @@ Usage of certify --repo:
     	per-file budget: give up on a single file's run if it makes no progress for this long (not a hard wall-clock cap — a single slow LLM call can overshoot it). Same default and semantics as certify --local's --timeout; raise it for a large file that needs more room to converge (default 10m0s)
   -top int
     	audit only the N highest-ranked candidates (0 or --all = every candidate). Bounded by default: a whole-repo audit runs a full herd per file, so an unbounded first scan on a large repo costs hours and real money. The DEFAULT bound does not apply with --goals — a hand-written goals map has already chosen the surface — but an explicit --top does (default 25)
+  -transparency
+    	also upload the --attest statement — SIGNED into a DSSE envelope with the local certify key — to Sigstore's public Rekor transparency log (requires --attest — there is nothing to log without one; and a usable local signing key, CORRALAI_CERTIFY_KEY_FILE — refused with exit 2 naming it if none is configured, since an unsigned entry in a public log is worthless and this never mints a fresh key just to have one). THE ENTRY IS PUBLIC AND PERMANENT: once logged it cannot be removed or edited, by anyone, including you. It carries the same statement --attest writes — the repo URL, the audited commit, per-file paths, kill rates and survivor/proven-gap counts, and the models in each role — and never the audited source itself. Fails OPEN for the UPLOAD itself: an unreachable log or a rejected entry prints one line and leaves the scan's own verdict and exit code untouched; the local statement, envelope and ledger are unaffected either way. Prints the log index and entry UUID on success, and records both in the scan ledger and, with --push, the warehouse
   -whole-suite
     	grade every mutant against the project's WHOLE suite instead of the tests that demonstrably execute each file (the default, from one instrumented run per scan). Costs O(mutants x whole-suite runtime) per file and answers a different question — 'did ANY test catch it' rather than 'do this file's tests test it'. The verdict records which was used
   -writer-mode per-survivor

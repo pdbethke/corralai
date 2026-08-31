@@ -132,6 +132,27 @@ type Scan struct {
 	// scan produced, or "" when --attest was not given. The warehouse row
 	// carries the same value; this is the local half of the same link.
 	StatementSHA256 string
+	// RekorLogIndex and RekorUUID are the receipt --transparency earns when
+	// it uploads the --attest statement to a public Rekor log: the entry's
+	// position in the log and its UUID, the two coordinates a third party
+	// needs to look the entry back up without trusting this ledger.
+	//
+	// RekorLogIndex is *int64, not int64, for the same NULL-not-zero reason
+	// every other unmeasured column here is a pointer: log index 0 is a
+	// REAL, valid position (the very first entry a fresh log ever
+	// committed), so a scan that was never uploaded — --transparency was
+	// not given, or the upload failed and this run fails open — must read
+	// back nil, never a fabricated 0 that would misname it "logged at
+	// index zero". RekorUUID has no such collision (there is no valid empty
+	// UUID), so it stays a plain string, "" meaning "no receipt", exactly
+	// like StatementSHA256 above.
+	//
+	// Both are written empty at Record time and STAMPED after, mirroring
+	// StatementSHA256: the statement has to exist (and be uploaded) before
+	// there is a receipt to record, and the scan row is written before the
+	// statement is.
+	RekorLogIndex *int64
+	RekorUUID     string
 }
 
 // File is one row per file per scan: what corral decided about it, and, for
@@ -512,6 +533,8 @@ var scansMigrationCols = []struct{ name, ddl string }{
 	{"statement_sha256", "statement_sha256 VARCHAR"},
 	{"selection_ms", "selection_ms BIGINT"},
 	{"selection_reused_from", "selection_reused_from BIGINT"},
+	{"rekor_log_index", "rekor_log_index BIGINT"},
+	{"rekor_uuid", "rekor_uuid VARCHAR"},
 }
 
 // scanMutantsMigrationCols is the same ledger, at the mutant grain: the
@@ -554,7 +577,8 @@ func Open(dsn string) (*Store, error) {
 		corral_version VARCHAR, host VARCHAR, cores INTEGER, trees_requested INTEGER,
 		total_ms BIGINT, input_tokens BIGINT, output_tokens BIGINT, model_calls BIGINT,
 		source_pushed BOOLEAN, statement_sha256 VARCHAR,
-		selection_ms BIGINT, selection_reused_from BIGINT
+		selection_ms BIGINT, selection_reused_from BIGINT,
+		rekor_log_index BIGINT, rekor_uuid VARCHAR
 	)`); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("scanstore: create scans table: %w", err)
@@ -1038,8 +1062,9 @@ func (s *Store) Record(ctx context.Context, scan Scan, files []File) (int64, err
 		kill_rate, cache_hits, preflight_ran, preflight_note, started_at, finished_at,
 		corral_version, host, cores, trees_requested,
 		total_ms, input_tokens, output_tokens, model_calls,
-		source_pushed, statement_sha256, selection_ms, selection_reused_from
-	) VALUES (nextval('scans_id'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		source_pushed, statement_sha256, selection_ms, selection_reused_from,
+		rekor_log_index, rekor_uuid
+	) VALUES (nextval('scans_id'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	RETURNING id`,
 		time.Now().UTC(), scan.Owner, scan.Repo, scan.Commit, scan.Substrate, scan.EngineVersion, scan.ModelSet,
 		scan.Top, scan.AllCandidates, scan.DiffBase, scan.TotalFiles, scan.Candidates, scan.Audited,
@@ -1047,6 +1072,7 @@ func (s *Store) Record(ctx context.Context, scan Scan, files []File) (int64, err
 		scan.CorralVersion, scan.Host, scan.Cores, nullableTrees(scan.TreesRequested),
 		scan.TotalMillis, scan.InputTokens, scan.OutputTokens, scan.ModelCalls,
 		scan.SourcePushed, scan.StatementSHA256, scan.SelectionMillis, scan.SelectionReusedFrom,
+		scan.RekorLogIndex, scan.RekorUUID,
 	).Scan(&id)
 	if err != nil {
 		return 0, fmt.Errorf("scanstore: insert scan header: %w", err)
@@ -1161,7 +1187,8 @@ const scanHeaderCols = `id, ts, owner, repo, commit,
 		preflight_ran, preflight_note, started_at, finished_at,
 		corral_version, host, cores, trees_requested,
 		total_ms, input_tokens, output_tokens, model_calls,
-		source_pushed, statement_sha256, selection_ms, selection_reused_from`
+		source_pushed, statement_sha256, selection_ms, selection_reused_from,
+		rekor_log_index, rekor_uuid`
 
 // scanScanRow decodes one scans row, in scanHeaderCols' order. Shared by both
 // readers for the same reason the column list is.
@@ -1178,9 +1205,9 @@ func scanScanRow(rows *sql.Rows) (ScanRow, error) {
 	// trees_requested is stored NULL on the jail substrate, which builds no
 	// trees at all, and selection_ms is NULL for a scan that instrumented
 	// nothing.
-	var corralVersion, host, statementSHA sql.NullString
+	var corralVersion, host, statementSHA, rekorUUID sql.NullString
 	var cores, treesRequested, totalMS, inputTokens, outputTokens, modelCalls sql.NullInt64
-	var selectionMS, selectionReusedFrom sql.NullInt64
+	var selectionMS, selectionReusedFrom, rekorLogIndex sql.NullInt64
 	var sourcePushed sql.NullBool
 	if err := rows.Scan(&r.ID, &ts, &r.Owner, &r.Repo, &r.Commit,
 		&substrate, &engineVersion, &modelSet, &r.Top, &r.AllCandidates, &diffBase,
@@ -1188,7 +1215,8 @@ func scanScanRow(rows *sql.Rows) (ScanRow, error) {
 		&r.PreflightRan, &preflightNote, &started, &finished,
 		&corralVersion, &host, &cores, &treesRequested,
 		&totalMS, &inputTokens, &outputTokens, &modelCalls,
-		&sourcePushed, &statementSHA, &selectionMS, &selectionReusedFrom); err != nil {
+		&sourcePushed, &statementSHA, &selectionMS, &selectionReusedFrom,
+		&rekorLogIndex, &rekorUUID); err != nil {
 		return ScanRow{}, fmt.Errorf("scanstore: scan scans row: %w", err)
 	}
 	r.TS, r.StartedAt, r.FinishedAt = ts.Time, started.Time, finished.Time
@@ -1212,6 +1240,14 @@ func scanScanRow(rows *sql.Rows) (ScanRow, error) {
 		v := selectionReusedFrom.Int64
 		r.SelectionReusedFrom = &v
 	}
+	// Same discipline again: log index 0 is a real position (a log's very
+	// first entry), so it must read back as a real pointer or not at all,
+	// never a fabricated 0 standing in for "never uploaded".
+	if rekorLogIndex.Valid {
+		v := rekorLogIndex.Int64
+		r.RekorLogIndex = &v
+	}
+	r.RekorUUID = rekorUUID.String
 	return r, nil
 }
 
@@ -1816,6 +1852,19 @@ func (s *Store) EventsForScan(ctx context.Context, scanID int64) ([]Event, error
 func (s *Store) SetStatementSHA256(ctx context.Context, id int64, sha string) error {
 	if _, err := s.db.ExecContext(ctx, `UPDATE scans SET statement_sha256 = ? WHERE id = ?`, sha, id); err != nil {
 		return fmt.Errorf("scanstore: SetStatementSHA256 for scan %d: %w", id, err)
+	}
+	return nil
+}
+
+// SetRekorReceipt stamps the Rekor upload receipt onto one scan header,
+// mirroring SetStatementSHA256: --transparency's upload happens after the
+// scan row already exists (it needs the --attest statement, which needs the
+// scan id), so the receipt has to be stamped on rather than written at
+// Record time. logIndex is a pointer so the caller can never accidentally
+// stamp a fabricated 0 — pass a real address or do not call this at all.
+func (s *Store) SetRekorReceipt(ctx context.Context, id int64, logIndex *int64, uuid string) error {
+	if _, err := s.db.ExecContext(ctx, `UPDATE scans SET rekor_log_index = ?, rekor_uuid = ? WHERE id = ?`, logIndex, uuid, id); err != nil {
+		return fmt.Errorf("scanstore: SetRekorReceipt for scan %d: %w", id, err)
 	}
 	return nil
 }

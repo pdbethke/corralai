@@ -348,12 +348,14 @@ func TestPushBundleMigratesEveryPriorWarehouseShape(t *testing.T) {
 			// only fixture that can exercise it is one whose warehouse
 			// already has the table — every earlier shape predates it and
 			// gets it by CREATE, which is not the additive path.
-			var n int
-			if err := db.QueryRow(`SELECT count(*) FROM duckdb_columns() WHERE table_name = 'corral_scans' AND column_name = 'selection_ms'`).Scan(&n); err != nil {
-				t.Fatalf("probe corral_scans.selection_ms: %v", err)
-			}
-			if n != 1 {
-				t.Error("corral_scans.selection_ms missing after the migration")
+			for _, col := range []string{"selection_ms", "rekor_log_index", "rekor_uuid"} {
+				var n int
+				if err := db.QueryRow(`SELECT count(*) FROM duckdb_columns() WHERE table_name = 'corral_scans' AND column_name = ?`, col).Scan(&n); err != nil {
+					t.Fatalf("probe corral_scans.%s: %v", col, err)
+				}
+				if n != 1 {
+					t.Errorf("corral_scans.%s missing after the migration", col)
+				}
 			}
 		})
 	}
@@ -461,4 +463,55 @@ func TestIsLockHeldMatchesDuckDBsRealMessage(t *testing.T) {
 	if isLockHeld(nil) {
 		t.Error("isLockHeld(nil) is true")
 	}
+}
+
+// TestScanRekorReceiptRoundTrips pins the warehouse's half of the
+// --transparency receipt: a scan that WAS uploaded carries its real log
+// index and UUID through to corral_scans, and a scan that was never
+// uploaded (the ordinary sampleBundle fixture, which sets neither field)
+// stores rekor_log_index as SQL NULL — never a fabricated 0, which is a
+// real, valid log position and would misname an un-uploaded scan as logged
+// at index zero.
+func TestScanRekorReceiptRoundTrips(t *testing.T) {
+	t.Run("uploaded", func(t *testing.T) {
+		target := filepath.Join(t.TempDir(), "w.duckdb")
+		b := sampleBundle()
+		idx := int64(12345)
+		b.Scan.RekorLogIndex = &idx
+		b.Scan.RekorUUID = "24296fb24b8ad77b-abc123"
+		if _, err := PushBundle(target, b); err != nil {
+			t.Fatalf("PushBundle: %v", err)
+		}
+		db := openWarehouse(t, target)
+		var gotIdx sql.NullInt64
+		var gotUUID sql.NullString
+		if err := db.QueryRow(`SELECT rekor_log_index, rekor_uuid FROM corral_scans`).Scan(&gotIdx, &gotUUID); err != nil {
+			t.Fatalf("read corral_scans: %v", err)
+		}
+		if !gotIdx.Valid || gotIdx.Int64 != idx {
+			t.Errorf("rekor_log_index = %+v, want %d", gotIdx, idx)
+		}
+		if !gotUUID.Valid || gotUUID.String != b.Scan.RekorUUID {
+			t.Errorf("rekor_uuid = %+v, want %q", gotUUID, b.Scan.RekorUUID)
+		}
+	})
+
+	t.Run("never uploaded", func(t *testing.T) {
+		target := filepath.Join(t.TempDir(), "w.duckdb")
+		if _, err := PushBundle(target, sampleBundle()); err != nil {
+			t.Fatalf("PushBundle: %v", err)
+		}
+		db := openWarehouse(t, target)
+		var gotIdx sql.NullInt64
+		var gotUUID sql.NullString
+		if err := db.QueryRow(`SELECT rekor_log_index, rekor_uuid FROM corral_scans`).Scan(&gotIdx, &gotUUID); err != nil {
+			t.Fatalf("read corral_scans: %v", err)
+		}
+		if gotIdx.Valid {
+			t.Errorf("rekor_log_index = %v, want NULL for a scan that was never uploaded", gotIdx.Int64)
+		}
+		if gotUUID.Valid {
+			t.Errorf("rekor_uuid = %v, want NULL for a scan that was never uploaded", gotUUID.String)
+		}
+	})
 }

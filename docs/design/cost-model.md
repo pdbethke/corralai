@@ -155,6 +155,23 @@ warehouse design doc and this page disagreeing about them:
   rest, so `corral_mutants.code` is NULL regardless. The scan row records
   which setting was used, so the custody question is answerable from the
   table.
+- **`corral verify --db`'s warehouse-rows check can false-alarm on a
+  disturbed warehouse.** It reads a scan's pushed rows back
+  (`auditpush.ReadBundle`) with no `ORDER BY`, relying on DuckDB returning an
+  untouched, append-only table's rows in insertion order, then recomputes
+  `warehouseRowsSha256` (the same hash `--attest` signs) and compares it to
+  the statement's claim. That holds for a warehouse nothing has touched since
+  the push — exactly the case this check exists for — but a warehouse an
+  operator has `VACUUM`ed, or one that received a second push for the same
+  `(repo, scan_id)` (these tables are append-only; a repeat push duplicates
+  rather than overwrites), can show a ✗ that is not evidence of tampering.
+  `corral verify`'s own output says so at the point of failure; this is the
+  one place the caveat is stated in full. Proven live end to end otherwise: a
+  real flask audit's statement, uploaded with `--transparency`, logged as
+  `rekor index 2666822278`
+  (`uuid 108e9186e8c5677ae9f3336fa369c41474bb07f6e1fc3a2481e441d46d1e7914f41a5ac3fedab1dc`),
+  and `corral verify --attest <statement> --rekor-index 2666822278` returned
+  ✓ signature / ✓ rekor inclusion, exit 0.
 - **The public cross-repo dataset is out of scope here.** A Tier-1 aggregate
   across public repos' pushed rows needs a corral-owned account and a policy
   page; every row this design writes is shaped so that dataset can be a

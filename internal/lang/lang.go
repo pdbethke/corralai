@@ -431,6 +431,29 @@ type TestSelector interface {
 	// selection, because corral reports what it ran, not what coverage
 	// predicted. Only meaningful when len(sel.Tests) > 0.
 	ForSpan(sel Selection, span LineRange) (cmd []string, tests []string, rule string)
+	// Index parses ONE instrumented run's evidence — the exact document
+	// Select reads — into a per-file readout covering EVERY measured file at
+	// once, rather than narrowing to a single codePath. It exists for
+	// evidence-first candidacy: "which files does any test cover, and by how
+	// much" is a repo-wide question, and calling Select once per source file
+	// just to answer it would re-parse the same document a file-count worth
+	// of times. Implementations MUST share Select's own parsing rather than
+	// hand-roll a second reader of the same format.
+	//
+	// Paths are relative in the same sense Select's codePath is; a plugin
+	// that needs an absolute repoRoot to relativize evidence paths applies
+	// the empty-root case Select already handles (most evidence paths are
+	// already repo-relative — see python's alignPyPath).
+	Index(evidence []byte) (map[string]FileCoverage, error)
+}
+
+// FileCoverage is one measured file's entry from TestSelector.Index: every
+// covering test (by whatever selector the evidence stores as a test's
+// identity), mapped to how many of THIS file's lines it executed. A caller
+// ranking "which test covers this file the most" reads it directly, without
+// re-parsing the evidence.
+type FileCoverage struct {
+	Tests map[string]int
 }
 
 // SpanRule names why ForSpan chose what it chose.

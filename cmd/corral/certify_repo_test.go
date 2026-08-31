@@ -3784,6 +3784,15 @@ func skipWithoutPythonCoverage(t *testing.T) {
 //
 // The language set now comes from the ENUMERATED SOURCE SET, which is the
 // same slice the report buckets against.
+//
+// Since the evidence-as-candidacy change, PAIRING alone still finds no
+// candidates here (mypkg/core.py has no filename-conventional test), but the
+// scan's own selection evidence now DOES pair it — tests/test_smoke.py
+// covers it — so it is 1 candidate, "paired by evidence", not 0. It stays
+// COULD-NOT-GRADE because --goals `{}` supplies it none, so nothing about
+// the pre-flight assertions below — the reason this test exists — changes:
+// the pre-flight still runs over the same enumerated source set and still
+// finds mypkg/orphan.py the one file measured and never executed.
 func TestCertifyRepoPreflightRunsWhenPairingFindsNoCandidates(t *testing.T) {
 	skipWithoutPythonCoverage(t)
 	t.Setenv("ANTHROPIC_API_KEY", "test-placeholder-not-a-real-key")
@@ -3795,8 +3804,11 @@ func TestCertifyRepoPreflightRunsWhenPairingFindsNoCandidates(t *testing.T) {
 		"--substrate", substrateWorkspace, "--preflight"}, &out, &errb)
 
 	s := out.String()
-	if !strings.Contains(s, "0 candidate(s)") {
-		t.Fatalf("fixture is wrong: this scan must have ZERO candidates:\n%s", s)
+	if !strings.Contains(s, "1 candidate(s)") {
+		t.Fatalf("fixture is wrong: this scan must have exactly 1 candidate (mypkg/core.py, paired by evidence):\n%s", s)
+	}
+	if !strings.Contains(s, "mypkg/core.py paired by evidence:") {
+		t.Errorf("mypkg/core.py must be disclosed as evidence-paired — pairing alone finds no candidate here:\n%s", s)
 	}
 	_, section, found := strings.Cut(s, "\nCoverage pre-flight")
 	if !found {

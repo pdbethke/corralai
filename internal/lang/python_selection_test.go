@@ -476,3 +476,45 @@ func TestForSpanFileFallbackWhenCmdIsShorterThanTests(t *testing.T) {
 		t.Errorf("rule=%q cmd=%v, want the file selection unchanged", rule, cmd)
 	}
 }
+
+// Index parses the SAME evidence document Select reads, but answers about
+// every measured file at once: the per-file test->lines-executed readout
+// candidacy needs to decide "does anything cover this file" without calling
+// Select once per source file.
+func TestPythonIndexReadsEveryMeasuredFile(t *testing.T) {
+	idx, err := pyPlugin{}.Index(recordedEvidence(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	calc, ok := idx["pkg/calc.py"]
+	if !ok {
+		t.Fatal("Index: pkg/calc.py missing from the readout")
+	}
+	want := map[string]int{
+		"tests/test_calc.py::test_add":  1,
+		"tests/test_other.py::test_sub": 1,
+	}
+	if !reflect.DeepEqual(calc.Tests, want) {
+		t.Errorf("pkg/calc.py Tests = %v, want %v", calc.Tests, want)
+	}
+	// A file the suite measured but nothing executed still appears, with an
+	// empty Tests map — Index reports zero coverage as a fact about the
+	// file, not as the file's absence from the readout.
+	if init, ok := idx["pkg/__init__.py"]; !ok || len(init.Tests) != 0 {
+		t.Errorf("pkg/__init__.py = %+v, ok=%v, want a present entry with zero covering tests", init, ok)
+	}
+	// A file the evidence never measured at all is genuinely absent — Index
+	// must not invent a zero-coverage entry for it.
+	if _, ok := idx["never/measured.py"]; ok {
+		t.Error("Index must not fabricate an entry for a file the evidence never measured")
+	}
+}
+
+func TestPythonIndexSharesSelectsParsing(t *testing.T) {
+	if _, err := (pyPlugin{}).Index([]byte(`{"format":"not-corral-selection-2"}`)); err == nil {
+		t.Error("Index must refuse a document with the wrong format stamp, exactly like Select")
+	}
+	if _, err := (pyPlugin{}).Index([]byte("")); err == nil {
+		t.Error("Index must refuse empty evidence, exactly like Select")
+	}
+}

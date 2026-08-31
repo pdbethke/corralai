@@ -32,6 +32,25 @@ type Candidate struct {
 	// selection), so a later reader (the JSON inventory, the human report)
 	// can disclose it without re-deriving the fact.
 	ViaSearch bool
+	// CoveringTestPath is the selection evidence's most-covering test FILE
+	// for this candidate — the covering test with the most executed lines of
+	// this file, by containing file (ties: the more specific path — see
+	// moreSpecificTestPath). Set ONLY for an evidence-only candidate
+	// (TestPath == ""), where it is the authored-test landing hint: the
+	// pairing-based candidate already has an obvious home (TestPath's own
+	// directory), and this is the measured proxy for "where this file's
+	// tests live" when no filename pairing exists. "" for a paired
+	// candidate — WidenCandidacyByEvidence never sets it there, so a
+	// mirrored fixture's already-candidate rows stay byte-identical.
+	CoveringTestPath string
+	// CoveringTests is the number of tests the evidence showed execute this
+	// file, disclosed on the evidence-paired report line and carried to the
+	// ledger's covering_tests column. nil means the evidence never measured
+	// this file (including every candidate on a scan where no evidence ran
+	// at all) — never confused with a measured, genuine zero, which
+	// WidenCandidacyByEvidence excludes as ReasonUncovered rather than
+	// leaving as a zero-value Candidate.
+	CoveringTests *int
 }
 
 // Exclusion is a file deliberately NOT audited, with a machine-stable reason.
@@ -78,6 +97,18 @@ const (
 	// this repo three stale worktrees under .worktrees/ turned 227 candidates
 	// into 468. Accounted like skipped-dir: the file is listed, never dropped.
 	ReasonGitignored = "gitignored"
+	// ReasonUncovered marks a source file the selection evidence actually
+	// MEASURED and found zero tests executing — the loudest finding a
+	// mutation audit of a test suite can produce, and a different claim from
+	// ReasonNoPairedTest (a statement about NAMES: no filename convention
+	// predicted a test, which says nothing about whether some other test
+	// happens to execute the file). Applied ONLY when evidence exists and
+	// positively measured the file at zero covering tests — see
+	// WidenCandidacyByEvidence. Absence of evidence is never treated as
+	// evidence of absence: a file the evidence never measured keeps
+	// ReasonNoPairedTest. The exact string is load-bearing — it is the
+	// disclosure text itself, not a machine code a reader has to translate.
+	ReasonUncovered = "uncovered — no test executes this file"
 )
 
 // skipDirs are never walked: dependency, build-output and VCS trees are not
@@ -377,6 +408,73 @@ func EnumerateWithTests(root string, tests *TestMap) ([]Candidate, []Exclusion, 
 	sort.Slice(cands, func(i, j int) bool { return cands[i].Path < cands[j].Path })
 	sort.Slice(excl, func(i, j int) bool { return excl[i].Path < excl[j].Path })
 	return cands, excl, nil
+}
+
+// WidenCandidacyByEvidence is the evidence-first half of candidacy: a file
+// with a language, not gitignored, not a test — and NO filename pairing —
+// still becomes a candidate when the selection evidence shows at least one
+// test executes it, and is relabeled ReasonUncovered (rather than left as
+// ReasonNoPairedTest) when the evidence positively measured it at ZERO
+// covering tests. Candidacy is therefore paired ∪ evidence-covered: pairing
+// alone (stranger-path's own walk) is untouched, and this only ever ADDS
+// candidates or renames the reason on an exclusion — it never removes a
+// pairing-based candidate or changes its TestPath/ViaSearch.
+//
+// ok mirrors ParseEvidenceIndex's own bool: false means there is no index to
+// widen with (evidence never ran, an unsupported language, or unparseable
+// evidence), and cands/excl come back byte-identical to what was passed in —
+// the pairing-only candidacy the design calls the fallback.
+//
+// Already-paired candidates get CoveringTests filled in when the evidence
+// also measured them (ledger metadata only — see Candidate.CoveringTests);
+// TestPath, ViaSearch and every other field, and every excluded-for-another-
+// reason entry, are left exactly as the pairing walk produced them, which is
+// what keeps an already-candidate file's report line, grading command, cache
+// key and verdict byte-identical (see the mirrored-fixture test).
+func WidenCandidacyByEvidence(cands []Candidate, excl []Exclusion, idx EvidenceIndex, ok bool) ([]Candidate, []Exclusion) {
+	if !ok {
+		return cands, excl
+	}
+
+	for i := range cands {
+		if n, _, measured := idx.CoverageFor(cands[i].Path); measured {
+			v := n
+			cands[i].CoveringTests = &v
+		}
+	}
+
+	kept := excl[:0:0]
+	for _, e := range excl {
+		if e.Reason != ReasonNoPairedTest {
+			kept = append(kept, e)
+			continue
+		}
+		n, mostCovering, measured := idx.CoverageFor(e.Path)
+		switch {
+		case !measured:
+			// Absence of evidence is not evidence of absence: this file's
+			// only honest reason remains "no filename convention predicted a
+			// test", not a claim the evidence never actually made.
+			kept = append(kept, e)
+		case n == 0:
+			kept = append(kept, Exclusion{Path: e.Path, Reason: ReasonUncovered})
+		default:
+			v := n
+			langName := ""
+			if p, ok := lang.Detect(e.Path); ok {
+				langName = p.Name()
+			}
+			cands = append(cands, Candidate{
+				Path:             e.Path,
+				Lang:             langName,
+				CoveringTestPath: mostCovering,
+				CoveringTests:    &v,
+			})
+		}
+	}
+
+	sort.Slice(cands, func(i, j int) bool { return cands[i].Path < cands[j].Path })
+	return cands, kept
 }
 
 // demoteAmbiguousPairings enforces, as a global property (not a per-plugin

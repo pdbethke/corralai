@@ -1200,39 +1200,53 @@ type pySelectionEvidenceFiles struct {
 	Files map[string]pySelectionFile `json:"files"`
 }
 
-// Select narrows testCmd to the tests whose recorded context executed any
-// line of codePath. Node ids are sorted so the command — and therefore the
-// cache key — is stable for the same evidence.
-func (pyPlugin) Select(evidence []byte, repoRoot, codePath, testPath string, testCmd []string) (Selection, error) {
-	// The evidence is usually a raw `coverage json` capture: whatever the
-	// wrapped test run printed, then the JSON as the LAST line (Instrument's
-	// own shape). It may also be the JSON alone, pretty-printed across many
-	// lines (a recorded fixture) — try the whole trimmed payload first, and
-	// only fall back to the last-line-of-stdout rule on failure.
+// parsePySelectionEvidence decodes ONE instrumented run's evidence into the
+// corral-selection-2 document, checking the format stamp BEFORE ever
+// trusting the shape of what follows. This is the ONE reader of the format —
+// Select (one file) and Index (every file) both call it, rather than each
+// re-implementing the same decode.
+//
+// The evidence is usually a raw `coverage json` capture: whatever the
+// wrapped test run printed, then the JSON as the LAST line (Instrument's own
+// shape). It may also be the JSON alone, pretty-printed across many lines (a
+// recorded fixture) — try the whole trimmed payload first, and only fall
+// back to the last-line-of-stdout rule on failure.
+func parsePySelectionEvidence(evidence []byte) (pySelectionEvidence, error) {
 	var rep pySelectionEvidence
 	payload := strings.TrimSpace(string(evidence))
 	if payload == "" {
-		return Selection{}, fmt.Errorf("lang: python selection evidence is empty")
+		return pySelectionEvidence{}, fmt.Errorf("lang: python selection evidence is empty")
 	}
 	if err := json.Unmarshal([]byte(payload), &rep); err != nil {
 		payload = lastNonEmptyLine(evidence)
 		if payload == "" {
-			return Selection{}, fmt.Errorf("lang: python selection evidence is empty")
+			return pySelectionEvidence{}, fmt.Errorf("lang: python selection evidence is empty")
 		}
 		if err := json.Unmarshal([]byte(payload), &rep); err != nil {
-			return Selection{}, fmt.Errorf("lang: unparseable python selection evidence (last line is not JSON): %w", err)
+			return pySelectionEvidence{}, fmt.Errorf("lang: unparseable python selection evidence (last line is not JSON): %w", err)
 		}
 	}
 	if rep.Format != pySelectionFormat {
-		return Selection{}, fmt.Errorf("lang: python selection evidence is not a %s document (format %q)", pySelectionFormat, rep.Format)
+		return pySelectionEvidence{}, fmt.Errorf("lang: python selection evidence is not a %s document (format %q)", pySelectionFormat, rep.Format)
 	}
 	var files pySelectionEvidenceFiles
 	if err := json.Unmarshal([]byte(payload), &files); err != nil {
-		return Selection{}, fmt.Errorf("lang: unparseable %s files: %w", pySelectionFormat, err)
+		return pySelectionEvidence{}, fmt.Errorf("lang: unparseable %s files: %w", pySelectionFormat, err)
 	}
 	rep.Files = files.Files
 	if rep.Files == nil {
-		return Selection{}, fmt.Errorf("lang: python selection evidence has no files — the suite most likely never ran")
+		return pySelectionEvidence{}, fmt.Errorf("lang: python selection evidence has no files — the suite most likely never ran")
+	}
+	return rep, nil
+}
+
+// Select narrows testCmd to the tests whose recorded context executed any
+// line of codePath. Node ids are sorted so the command — and therefore the
+// cache key — is stable for the same evidence.
+func (pyPlugin) Select(evidence []byte, repoRoot, codePath, testPath string, testCmd []string) (Selection, error) {
+	rep, err := parsePySelectionEvidence(evidence)
+	if err != nil {
+		return Selection{}, err
 	}
 
 	root := normalizePyRepoRoot(repoRoot)
@@ -1306,6 +1320,54 @@ func (pyPlugin) Select(evidence []byte, repoRoot, codePath, testPath string, tes
 	sel.Tests = ids
 	sel.Cmd = append(append([]string{}, sel.Base...), ids...)
 	return sel, nil
+}
+
+// Index parses the same corral-selection-2 document Select reads, into a
+// per-file readout for EVERY file the run measured: for each, the covering
+// tests mapped to how many of THAT file's lines each one executed. Shares
+// parsePySelectionEvidence with Select — no second reader of the format.
+//
+// Paths come back exactly as alignPyPath resolves them with an empty root:
+// the reducer already writes repo-relative paths for the common case
+// (os.path.relpath against the run's own cwd), and a caller building a
+// scan-wide index has no single per-file repoRoot to relativize against
+// anyway — candidacy is evaluated at the repo root the evidence was
+// collected from, so this matches Select's own root="" behaviour for a
+// relative measured path.
+func (pyPlugin) Index(evidence []byte) (map[string]FileCoverage, error) {
+	rep, err := parsePySelectionEvidence(evidence)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]FileCoverage, len(rep.Files))
+	for path, f := range rep.Files {
+		p, ok := alignPyPath(path, "")
+		if !ok {
+			continue
+		}
+		tests := make(map[string]int, len(f.Tests))
+		for _, id := range f.Tests {
+			tests[id] = 0
+		}
+		for idxStr, rngs := range f.Lines {
+			idx, err := strconv.Atoi(idxStr)
+			if err != nil || idx < 0 || idx >= len(f.Tests) {
+				// Index degrades per-entry rather than failing the whole
+				// scan-wide readout over one file's malformed lines index —
+				// unlike Select, which errors because it is answering about
+				// exactly one file and has nothing safer to fall back to.
+				continue
+			}
+			id := f.Tests[idx]
+			n := 0
+			for _, r := range rngs {
+				n += r[1] - r[0] + 1
+			}
+			tests[id] += n
+		}
+		out[p] = FileCoverage{Tests: tests}
+	}
+	return out, nil
 }
 
 // collapseToFilesIfTooLong collapses ids (sorted node ids) to their

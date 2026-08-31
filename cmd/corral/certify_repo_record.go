@@ -338,6 +338,12 @@ func buildScanFileRows(results []reposcan.FileResult, excluded []reposcan.Exclus
 				// actually came from derivingGoalSource.
 				GoalsDerived: goalsDerivedFor(r.Job.Goal),
 				GoalReused:   goalReusedFor(r.Job.GoalReused),
+				// CoveringTests is the evidence-first candidacy measurement,
+				// carried straight through from the job — see
+				// reposcan.Candidate.CoveringTests's doc. nil (SQL NULL) on
+				// any row from a scan where the evidence never measured this
+				// file.
+				CoveringTests: r.Job.CoveringTests,
 			})
 			continue
 		}
@@ -360,8 +366,9 @@ func buildScanFileRows(results []reposcan.FileResult, excluded []reposcan.Exclus
 			// A job WAS emitted for this file (it has a Goal — EmitJobs never
 			// emits one without), so the same GoalsDerived question has a real
 			// answer here too, even though the file never got a verdict.
-			GoalsDerived: goalsDerivedFor(r.Job.Goal),
-			GoalReused:   goalReusedFor(r.Job.GoalReused),
+			GoalsDerived:  goalsDerivedFor(r.Job.Goal),
+			GoalReused:    goalReusedFor(r.Job.GoalReused),
+			CoveringTests: r.Job.CoveringTests,
 		})
 	}
 

@@ -21,8 +21,19 @@ const ReasonUngoaled = "ungoaled"
 type Job struct {
 	Owner, Repo, Commit  string
 	Path, TestPath, Lang string
-	Goal                 Goal
-	CacheKey             string
+	// CoveringTestPath is Candidate.CoveringTestPath, carried through for an
+	// evidence-only candidate (TestPath == ""): the authored-landing hint —
+	// "the authored test lands beside CoveringTestPath" — since there is no
+	// TestPath directory to land it beside. "" for a pairing-based
+	// candidate, which already has one.
+	CoveringTestPath string
+	// CoveringTests is Candidate.CoveringTests, carried through for the
+	// ledger: how many tests the evidence showed execute this file. nil
+	// when the evidence never measured it (no evidence run, or a
+	// pairing-only fallback — see WidenCandidacyByEvidence).
+	CoveringTests *int
+	Goal          Goal
+	CacheKey      string
 	// GoalReused mirrors GoalWasReused(Goal): this file's goal was served
 	// by a CachingGoalSource from a prior scan over identical bytes, rather
 	// than freshly derived. Carried on the job so every downstream
@@ -212,7 +223,9 @@ func EmitJobs(cfg EmitConfig, cands []Candidate, gs GoalSource) ([]Job, []Exclus
 		jobs = append(jobs, Job{
 			Owner: cfg.Owner, Repo: cfg.Repo, Commit: cfg.Commit,
 			Path: c.Path, TestPath: c.TestPath, Lang: c.Lang,
-			Goal: goal, CacheKey: key,
+			CoveringTestPath: c.CoveringTestPath,
+			CoveringTests:    c.CoveringTests,
+			Goal:             goal, CacheKey: key,
 			GoalReused: GoalWasReused(goal),
 		})
 	}

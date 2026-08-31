@@ -207,6 +207,12 @@ type Row struct {
 	// shard fell back to the whole file (including every unsharded run).
 	// "" for a row from before this disclosure existed — never fabricated.
 	PromptShape string
+	// CoveringTests mirrors scanstore.File.CoveringTests: the number of
+	// tests the selection evidence showed execute this file. *int, and NULL
+	// for a row from a scan where the evidence never measured this file
+	// (no evidence collected, or a pairing-only fallback) — never confused
+	// with a measured, genuine zero.
+	CoveringTests *int
 }
 
 // Link identifies the ledger scan and signed statement a pushed row belongs

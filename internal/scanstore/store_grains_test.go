@@ -66,6 +66,7 @@ func TestLedgerRecordsEveryGrain(t *testing.T) {
 			TestsPerMutantMin:    iptr(3),
 			TestsPerMutantMedian: iptr(5),
 			TestsPerMutantMax:    iptr(41),
+			CoveringTests:        iptr(4),
 		},
 		{
 			Path: "pkg/b.go", Lang: "go", Disposition: "rejected",

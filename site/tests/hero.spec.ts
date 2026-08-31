@@ -34,3 +34,8 @@ test('the same-model comic opens the hero', async ({ page }) => {
   await expect(comic).toBeVisible();
   await expect(comic).toHaveAttribute('alt', /same frontier model/);
 });
+
+test('the hero leads with the house question', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.locator('#hero h1')).toContainText('Would you trust your house');
+});

@@ -63,6 +63,18 @@ type sealReader interface {
 	// so the comparison is against the newest row for the path, period, not
 	// the newest UNCOVERED one.
 	UncoveredPaths(ctx context.Context, repo string) (map[string]bool, error)
+	// ImportOnlyPaths is UncoveredPaths' refinement: the paths, scoped to
+	// repo, whose truly-latest corral_audits row is import-only
+	// (reposcan.ReasonImportOnly) — the file WAS executed, at
+	// import/module-load time, just never by a test directly. Every
+	// import-only path is ALSO an uncovered one (the `uncovered` column is
+	// the union both shapes set — see auditpush.Row.ImportOnly's own doc),
+	// so a caller reporting a path's state MUST check THIS map first:
+	// falling through to UncoveredPaths alone reintroduces the exact false
+	// "UNCOVERED — no test executes this file" claim
+	// reposcan.ReasonImportOnly exists to correct. Same "truly latest"
+	// contract as UncoveredPaths.
+	ImportOnlyPaths(ctx context.Context, repo string) (map[string]bool, error)
 	Close() error
 }
 
@@ -134,6 +146,35 @@ func (r dbSealReader) UncoveredPaths(ctx context.Context, repo string) (map[stri
 	        FROM corral_audits WHERE repo = ?
 	      ) WHERE rn = 1 AND (uncovered OR reason = ?)`
 	rows, err := r.db.QueryContext(ctx, q, repo, reposcan.ReasonUncovered)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := map[string]bool{}
+	for rows.Next() {
+		var p string
+		if err := rows.Scan(&p); err != nil {
+			return nil, err
+		}
+		out[p] = true
+	}
+	return out, rows.Err()
+}
+
+// ImportOnlyPaths is UncoveredPaths with import_only/ReasonImportOnly in
+// place of uncovered/ReasonUncovered — same query shape, same "truly
+// latest" tiebreak (see UncoveredPaths' own doc for why `ORDER BY ts DESC,
+// rowid DESC` is load-bearing), same OR-tolerance for a row pushed before
+// this column existed but whose `reason` already named
+// reposcan.ReasonImportOnly.
+func (r dbSealReader) ImportOnlyPaths(ctx context.Context, repo string) (map[string]bool, error) {
+	q := `SELECT path FROM (
+	        SELECT path, COALESCE(import_only, false) AS import_only, COALESCE(reason, '') AS reason,
+	               row_number() OVER (PARTITION BY path ORDER BY ts DESC, rowid DESC) AS rn
+	        FROM corral_audits WHERE repo = ?
+	      ) WHERE rn = 1 AND (import_only OR reason = ?)`
+	rows, err := r.db.QueryContext(ctx, q, repo, reposcan.ReasonImportOnly)
 	if err != nil {
 		return nil, err
 	}
@@ -367,9 +408,14 @@ func runSealWithRepo(st sealReader, repoDir string, top int, asJSON bool, stdout
 		fmt.Fprintln(stderr, "corral seal:", err)
 		return 1
 	}
+	impOnly, err := st.ImportOnlyPaths(context.Background(), repo)
+	if err != nil {
+		fmt.Fprintln(stderr, "corral seal:", err)
+		return 1
+	}
 
 	states := make([]sealState, 0, len(hot))
-	live, uncovered := 0, 0
+	live, uncovered, importOnly := 0, 0, 0
 	for _, c := range hot {
 		if uncov[c.Path] {
 			// Checked BEFORE the "never audited" default and before the
@@ -380,6 +426,21 @@ func runSealWithRepo(st sealReader, repoDir string, top int, asJSON bool, stdout
 			// UncoveredPaths' own contract, the file's truly-latest verdict,
 			// so it takes priority over anything corral_seal (graded-only)
 			// might still hold from an OLDER row.
+			//
+			// impOnly is checked FIRST, inside this same branch (every
+			// import-only path is ALSO an uncovered one — see
+			// ImportOnlyPaths' own doc): a path in both maps was executed
+			// at import time, never by a test directly, and calling that
+			// plain "uncovered" is the exact false claim
+			// reposcan.ReasonImportOnly exists to correct. Counted
+			// separately from the genuinely-uncovered tally below, the same
+			// split the console report already makes, so the coverage
+			// line's own "%d uncovered" never folds the two together.
+			if impOnly[c.Path] {
+				states = append(states, sealState{Path: c.Path, State: reposcan.ReasonImportOnly})
+				importOnly++
+				continue
+			}
 			states = append(states, sealState{Path: c.Path, State: "uncovered"})
 			uncovered++
 			continue
@@ -457,6 +518,14 @@ func runSealWithRepo(st sealReader, repoDir string, top int, asJSON bool, stdout
 		// ran and found no test that executes them at all, which is a
 		// finding, not an omission.
 		line += fmt.Sprintf("; %d uncovered — no test executes them", uncovered)
+	}
+	if importOnly > 0 {
+		// Reported separately from uncovered, for the same reason the
+		// console report keeps two counts: these files WERE executed, at
+		// import time, just never by a test directly — folding them into
+		// "uncovered" would be the false claim reposcan.ReasonImportOnly
+		// exists to correct.
+		line += fmt.Sprintf("; %d %s", importOnly, reposcan.ReasonImportOnly)
 	}
 	fmt.Fprintln(stdout, line)
 	return 0

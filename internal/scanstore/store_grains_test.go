@@ -67,6 +67,7 @@ func TestLedgerRecordsEveryGrain(t *testing.T) {
 			TestsPerMutantMedian: iptr(5),
 			TestsPerMutantMax:    iptr(41),
 			CoveringTests:        iptr(4),
+			ImportOnly:           bptr(true),
 		},
 		{
 			Path: "pkg/b.go", Lang: "go", Disposition: "rejected",
@@ -552,5 +553,49 @@ func TestRekorReceiptRoundTrips(t *testing.T) {
 	}
 	if listedRow.RekorUUID != "uuid-abc" {
 		t.Errorf("Scans(): RekorUUID = %q, want uuid-abc", listedRow.RekorUUID)
+	}
+}
+
+// TestImportOnlyRoundTripsTriState pins the fix for the ledger surfaces
+// (corral scans, corral seal) still calling an imported-but-untested file
+// UNCOVERED: File.ImportOnly must round-trip all three states a *bool can
+// carry — true (import-only), false (genuinely uncovered, known), and nil
+// (a row this scan never set it on, the same state a pre-migration row
+// reads back as) — never conflating false with nil, the way a plain bool
+// column would.
+func TestImportOnlyRoundTripsTriState(t *testing.T) {
+	dsn := filepath.Join(t.TempDir(), "import-only.duckdb")
+	st, err := scanstore.Open(dsn)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer st.Close()
+	ctx := context.Background()
+
+	files := []scanstore.File{
+		{Path: "pkg/init.go", Lang: "go", Disposition: "audited", Uncovered: true, ImportOnly: bptr(true)},
+		{Path: "pkg/dead.go", Lang: "go", Disposition: "audited", Uncovered: true, ImportOnly: bptr(false)},
+		{Path: "pkg/graded.go", Lang: "go", Disposition: "audited", KillRate: ptr(0.7)},
+	}
+	id, err := st.Record(ctx, scanstore.Scan{Owner: "o", Repo: "r", Commit: "c"}, files)
+	if err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	got, err := st.FilesForScan(ctx, id)
+	if err != nil {
+		t.Fatalf("FilesForScan: %v", err)
+	}
+	byPath := map[string]scanstore.File{}
+	for _, f := range got {
+		byPath[f.Path] = f
+	}
+	if f := byPath["pkg/init.go"]; f.ImportOnly == nil || !*f.ImportOnly {
+		t.Errorf("pkg/init.go ImportOnly = %v, want *true", f.ImportOnly)
+	}
+	if f := byPath["pkg/dead.go"]; f.ImportOnly == nil || *f.ImportOnly {
+		t.Errorf("pkg/dead.go ImportOnly = %v, want *false — genuinely uncovered, known, not NULL", f.ImportOnly)
+	}
+	if f := byPath["pkg/graded.go"]; f.ImportOnly != nil {
+		t.Errorf("pkg/graded.go ImportOnly = %v, want nil — this write path never set it", f.ImportOnly)
 	}
 }

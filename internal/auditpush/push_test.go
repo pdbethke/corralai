@@ -12,6 +12,7 @@ import (
 
 func rate(f float64) *float64 { return &f }
 func gaps(n int) *int         { return &n }
+func boolPtr(v bool) *bool    { return &v }
 
 func openTarget(t *testing.T, path string) *sql.DB {
 	t.Helper()
@@ -220,6 +221,41 @@ func TestUncoveredCandidacyRowIsFindableByColumn(t *testing.T) {
 	}
 	if killRate != nil {
 		t.Errorf("an uncovered candidacy row was never graded — kill_rate = %v, want NULL", *killRate)
+	}
+}
+
+// TestImportOnlyRoundTripsThroughPushAndRead is the warehouse-side half of
+// the fix for corral scans / corral seal still calling an imported-but-
+// untested file UNCOVERED: Row.ImportOnly must reach corral_audits as its
+// own queryable column — true, false and NULL all distinct — the same
+// tri-state proof scanstore's own TestImportOnlyRoundTripsTriState pins on
+// the local ledger.
+func TestImportOnlyRoundTripsThroughPushAndRead(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "w.duckdb")
+	if _, err := Push(target, []Row{
+		{Repo: "o/r", Commit: "c", Path: "pkg/init.py", Uncovered: true, ImportOnly: boolPtr(true)},
+		{Repo: "o/r", Commit: "c", Path: "pkg/dead.py", Uncovered: true, ImportOnly: boolPtr(false)},
+		{Repo: "o/r", Commit: "c", Path: "pkg/graded.py", KillRate: rate(0.7)},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	db := openTarget(t, target)
+	for path, want := range map[string]*bool{
+		"pkg/init.py":   boolPtr(true),
+		"pkg/dead.py":   boolPtr(false),
+		"pkg/graded.py": nil,
+	} {
+		var importOnly sql.NullBool
+		if err := db.QueryRow(`SELECT import_only FROM corral_audits WHERE path = ?`, path).Scan(&importOnly); err != nil {
+			t.Fatalf("%s: %v", path, err)
+		}
+		switch {
+		case want == nil && importOnly.Valid:
+			t.Errorf("%s: import_only = %v, want NULL", path, importOnly.Bool)
+		case want != nil && (!importOnly.Valid || importOnly.Bool != *want):
+			t.Errorf("%s: import_only = %v (valid=%v), want %v", path, importOnly.Bool, importOnly.Valid, *want)
+		}
 	}
 }
 

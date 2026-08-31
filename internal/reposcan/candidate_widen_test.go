@@ -3,6 +3,8 @@
 package reposcan
 
 import (
+	"reflect"
+	"sort"
 	"testing"
 
 	"github.com/pdbethke/corralai/internal/lang"
@@ -276,8 +278,23 @@ func TestWidenCandidacyPromotesRegardlessOfHasStaticWhenTestsCoverIt(t *testing.
 
 // A file the evidence never measured AT ALL keeps its original reason:
 // absence of evidence must never be read as evidence of absence.
+// pkg/__init__.py is deliberately IN excl too (also unmeasured — absent
+// from idx below) — not because this test cares about it, but because
+// WITHOUT it, "pkg" is not a known package to the library-code gate
+// (isLibraryCode), and pkg/never_imported.py would be left untouched by
+// THAT gate instead of by the absence-of-evidence rule this test exists to
+// pin: the two produce the identical outcome (untouched, ReasonNoPairedTest)
+// for entirely different reasons, and a fixture that lets the wrong one
+// fire still passes while leaving the absence invariant completely
+// unpinned. Verified by temporarily deleting the `case !measured:` branch
+// in WidenCandidacyByEvidence: WITH pkg/__init__.py present here, this test
+// then fails (pkg/never_imported.py gets relabeled); confirming the fixture
+// actually exercises the branch it claims to.
 func TestWidenCandidacyLeavesAnUnmeasuredFileAsNoPairedTest(t *testing.T) {
-	excl := []Exclusion{{Path: "pkg/never_imported.py", Reason: ReasonNoPairedTest}}
+	excl := []Exclusion{
+		{Path: "pkg/never_imported.py", Reason: ReasonNoPairedTest},
+		{Path: "pkg/__init__.py", Reason: ReasonNoPairedTest},
+	}
 	idx, ok := widenFixtureIndex(t, map[string]lang.FileCoverage{
 		"pkg/other.py": {Tests: map[string]int{"tests/test_x.py::test_x": 1}},
 	})
@@ -287,8 +304,16 @@ func TestWidenCandidacyLeavesAnUnmeasuredFileAsNoPairedTest(t *testing.T) {
 	if len(gotCands) != 0 {
 		t.Fatalf("cands = %+v, want none", gotCands)
 	}
-	if len(gotExcl) != 1 || gotExcl[0].Reason != ReasonNoPairedTest || gotExcl[0].Path != "pkg/never_imported.py" {
-		t.Fatalf("excl = %+v, want the original no-paired-test entry untouched", gotExcl)
+	// pkg/__init__.py itself is ALSO unmeasured (absent from idx), so it
+	// must keep its own original reason too — the assertion below checks
+	// the whole slice, both entries, not just never_imported.py.
+	want := []Exclusion{
+		{Path: "pkg/__init__.py", Reason: ReasonNoPairedTest},
+		{Path: "pkg/never_imported.py", Reason: ReasonNoPairedTest},
+	}
+	sort.Slice(gotExcl, func(i, j int) bool { return gotExcl[i].Path < gotExcl[j].Path })
+	if !reflect.DeepEqual(gotExcl, want) {
+		t.Fatalf("excl = %+v, want both original no-paired-test entries untouched: %+v", gotExcl, want)
 	}
 	if promoted != 0 {
 		t.Errorf("promoted = %d, want 0", promoted)

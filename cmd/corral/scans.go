@@ -15,6 +15,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/pdbethke/corralai/internal/reposcan"
 	"github.com/pdbethke/corralai/internal/scanstore"
 )
 
@@ -529,6 +530,14 @@ func killedByListing(ms []scanstore.Mutant) []string {
 // ordinary shared-command run, and prints exactly the column that always was.
 func scanFileSelectionWith(f scanstore.File, sp mutantSpread) string {
 	switch {
+	// Checked BEFORE Uncovered: f.ImportOnly refines it, and a file that
+	// was executed at import time — just never by a test directly — is not
+	// the same claim as one nothing ever executed. Printing plain
+	// "UNCOVERED" for the former is the exact false claim
+	// reposcan.ReasonImportOnly exists to correct; see File.ImportOnly's
+	// own doc for the full precedence rule.
+	case f.Uncovered && f.ImportOnly != nil && *f.ImportOnly:
+		return reposcan.ReasonImportOnly
 	case f.Uncovered:
 		return "UNCOVERED"
 	case f.TestSelection != "" && sp.ok:

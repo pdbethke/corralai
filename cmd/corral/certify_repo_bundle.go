@@ -198,6 +198,7 @@ func buildAuditRows(files []scanstore.File, scanID int64, meta bundleMeta) []aud
 			VerdictJSON:   f.VerdictJSON,
 			PromptShape:   f.PromptShape,
 			CoveringTests: f.CoveringTests,
+			ImportOnly:    f.ImportOnly,
 		})
 	}
 	return rows

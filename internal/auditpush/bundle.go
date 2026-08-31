@@ -338,7 +338,8 @@ CREATE TABLE IF NOT EXISTS corral_audits (
   verdict_json            VARCHAR,
   schema_version          INTEGER,
   prompt_shape            VARCHAR,
-  covering_tests          INTEGER
+  covering_tests          INTEGER,
+  import_only             BOOLEAN
 );`
 
 // The mutant grain's outcome CHECK is the same discipline scan_files'
@@ -488,6 +489,7 @@ var corralAuditsMigrationCols = []struct{ name, ddl string }{
 	{"schema_version", "schema_version INTEGER"},
 	{"prompt_shape", "prompt_shape VARCHAR"},
 	{"covering_tests", "covering_tests INTEGER"},
+	{"import_only", "import_only BOOLEAN"},
 }
 
 // The other four tables are NEW at schema_version 2, so nothing predates
@@ -1091,8 +1093,8 @@ func insertFileRow(tx *sql.Tx, now time.Time, r Row) error {
 	    challenger_sufficient, goals_derived, goal_reused,
 	    selection_ms, generation_ms, pool_ms, dev_pass_ms, authored_pass_ms,
 	    critic_ms, total_ms, mutant_ms_median, mutant_ms_max,
-	    authored_test, verdict_json, schema_version, prompt_shape, covering_tests
-	  ) VALUES (`+placeholders(74)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
+	    authored_test, verdict_json, schema_version, prompt_shape, covering_tests, import_only
+	  ) VALUES (`+placeholders(75)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
 		now, r.Repo, r.Commit, r.Path, r.Lang,
 		killRate, r.Survivors, r.ProvenMissed,
 		r.TimedOut, r.TestWriterFailed, r.PoolTestUnsound,
@@ -1117,7 +1119,7 @@ func insertFileRow(tx *sql.Tx, now time.Time, r Row) error {
 		r.SelectionMillis, r.GenerationMillis, r.PoolMillis, r.DevPassMillis,
 		r.AuthoredPassMillis, r.CriticMillis, r.TotalMillis,
 		r.MutantMillisMedian, r.MutantMillisMax,
-		authoredTest, verdictJSON, SchemaVersion, nullIfEmpty(r.PromptShape), r.CoveringTests,
+		authoredTest, verdictJSON, SchemaVersion, nullIfEmpty(r.PromptShape), r.CoveringTests, r.ImportOnly,
 	)
 	if err != nil {
 		return fmt.Errorf("auditpush: insert %s: %w", r.Path, err)

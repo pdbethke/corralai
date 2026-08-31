@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"fmt"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -566,6 +567,15 @@ const lockRetryWindow = 30 * time.Second
 // uses, and the reason this takes no credential of its own: corral never
 // holds one.
 //
+// A local path is created by ATTACH itself on first use; a MotherDuck
+// database is not — the first push to a `md:<db>` an operator has never
+// created gets ATTACH's "no database/share named" Catalog Error, which
+// pushBundleOnce recovers from by issuing CREATE DATABASE IF NOT EXISTS and
+// retrying the attach once (see attachWithAutoCreate). A MotherDuck SHARE
+// is a READ target, not a push target: CREATE DATABASE against a share
+// name fails, and that failure surfaces verbatim rather than being
+// retried.
+//
 // The handle is opened and closed inside this call, on purpose. DuckDB
 // allows a single writer on a file, so holding a handle across a scan would
 // lock every other writer (and every reader) out for the scan's whole
@@ -773,6 +783,83 @@ func isLockHeld(err error) bool {
 		strings.Contains(msg, "database is locked")
 }
 
+// motherDuckDatabaseNamePattern is what motherDuckDBName requires a
+// MotherDuck database name to match before it is ever interpolated into
+// DDL: identifier characters only. `md:foo"; DROP TABLE x; --` is refused
+// here, not sanitized — there is no safe way to quote an arbitrary string
+// into a bare CREATE DATABASE identifier, so a name outside this pattern is
+// a hard error instead.
+var motherDuckDatabaseNamePattern = regexp.MustCompile(`^[A-Za-z0-9_]+$`)
+
+// motherDuckDBName extracts the database name from a `md:<db>` target — the
+// part after "md:", up to a "?" (a DSN can carry query parameters) or a
+// "/" (a share path, see below) — and validates it against
+// motherDuckDatabaseNamePattern.
+func motherDuckDBName(target string) (string, error) {
+	name := strings.TrimPrefix(target, "md:")
+	if i := strings.IndexAny(name, "?/"); i >= 0 {
+		name = name[:i]
+	}
+	if name == "" {
+		return "", fmt.Errorf("auditpush: %q names no database after \"md:\"", target)
+	}
+	if !motherDuckDatabaseNamePattern.MatchString(name) {
+		return "", fmt.Errorf("auditpush: database name %q is not [A-Za-z0-9_]+, refusing to build DDL from it", name)
+	}
+	return name, nil
+}
+
+// isMissingMotherDuckDatabase reports whether err is the specific DuckDB
+// Catalog Error MotherDuck raises when ATTACH names a database (or share)
+// that does not exist yet: "Catalog Error: no database/share named '<db>'
+// found". Matched on this literal substring — nothing else in this
+// package's error surface produces it — so a first-time push to a database
+// an operator has never created is distinguishable from every other ATTACH
+// failure (a bad token, a network error, a genuinely misspelled share).
+func isMissingMotherDuckDatabase(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(err.Error(), "no database/share named")
+}
+
+// attachWithAutoCreate runs attach() once. If it fails on a `md:` target
+// with the specific "no database/share named" Catalog Error (see
+// isMissingMotherDuckDatabase), it treats that as "this is a first push to
+// a database nobody has created yet" — unlike a local DuckDB path, which
+// ATTACH itself creates on first use, MotherDuck requires an explicit
+// CREATE DATABASE before a database it does not already know about can be
+// attached. It validates and extracts the database name (motherDuckDBName,
+// which refuses anything but [A-Za-z0-9_]+ rather than quoting an arbitrary
+// string into DDL), calls createDB(name) once, and retries attach() exactly
+// once. Any other error class (a bad token, a network failure, an ATTACH
+// that fails for a reason unrelated to the database not existing) is
+// returned as-is, with no create and no retry — and a database created via
+// createDB is never attempted for a local path, since attach is not even
+// asked for a local path here.
+//
+// A MotherDuck SHARE is a READ target, not a push target: CREATE DATABASE
+// against a share name fails (shares are not databases an account can
+// create into), and that failure is surfaced verbatim rather than retried
+// again — a share was never going to become writable by trying harder.
+func attachWithAutoCreate(target string, attach func() error, createDB func(name string) error) error {
+	err := attach()
+	if err == nil {
+		return nil
+	}
+	if !strings.HasPrefix(target, "md:") || !isMissingMotherDuckDatabase(err) {
+		return err
+	}
+	name, nerr := motherDuckDBName(target)
+	if nerr != nil {
+		return fmt.Errorf("%w (and could not create it: %v)", err, nerr)
+	}
+	if cerr := createDB(name); cerr != nil {
+		return fmt.Errorf("%w (creating database %q failed: %v)", err, name, cerr)
+	}
+	return attach()
+}
+
 func pushBundleOnce(target string, b Bundle) (Counts, error) {
 	db, err := sql.Open("duckdb", "")
 	if err != nil {
@@ -789,7 +876,15 @@ func pushBundleOnce(target string, b Bundle) (Counts, error) {
 			return Counts{}, fmt.Errorf("auditpush: load motherduck extension: %w", err)
 		}
 	}
-	if _, err := db.Exec(fmt.Sprintf("ATTACH '%s' AS warehouse", strings.ReplaceAll(target, "'", "''"))); err != nil {
+	attach := func() error {
+		_, err := db.Exec(fmt.Sprintf("ATTACH '%s' AS warehouse", strings.ReplaceAll(target, "'", "''")))
+		return err
+	}
+	createDB := func(name string) error {
+		_, err := db.Exec(fmt.Sprintf(`CREATE DATABASE IF NOT EXISTS "%s"`, name))
+		return err
+	}
+	if err := attachWithAutoCreate(target, attach, createDB); err != nil {
 		return Counts{}, fmt.Errorf("auditpush: attach %q: %w", target, err)
 	}
 	// From here every statement is unqualified and lands in the operator's

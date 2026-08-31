@@ -124,7 +124,8 @@ func bwrapUnavailableError(cause error, containerFallback bool) error {
 sandbox-backend override.`
 	if containerFallback {
 		tail = `Or skip bwrap entirely: --jail container (needs docker or podman, plus
-CORRALAI_EXEC_IMAGE set to an image with your toolchain).`
+CORRALAI_EXEC_IMAGE set to an image with your toolchain, e.g.
+CORRALAI_EXEC_IMAGE=python:3.12-bookworm).`
 	}
 	return fmt.Errorf(
 		`no working bwrap sandbox: %w

@@ -53,7 +53,7 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	code := fs.String("code", "", "the source file you intend to audit (optional, enables the pairing and baseline checks)")
 	test := fs.String("test", "", "its test file (optional; otherwise inferred from the language's convention)")
-	backend := fs.String("jail", "", "sandbox backend (default: auto-detect)")
+	backend := fs.String("jail", "", "sandbox backend (default: auto-detect). \"container\" needs CORRALAI_EXEC_IMAGE set to a toolchain image, e.g. CORRALAI_EXEC_IMAGE=python:3.12-bookworm")
 	mutantModel := fs.String("mutant-model", "", "the mutant-generator model whose credential to check")
 	writerModel := fs.String("writer-model", "", "the test-writer model whose credential to check")
 	criticModel := fs.String("critic-model", "", "the test-critic model whose credential to check")

@@ -25,24 +25,26 @@ that did the work never certifies the work, nothing is taken on a model's say-so
 the one number that means anything is the one no model was allowed to author — it's
 what happened when the check actually ran, in a sandbox.
 
-## `corral certify --local` — the whole thing in one command
+## Quickstart
 
-The fastest way to see it is `--local`: a complete adversarial audit, in-process, off
-your own key, no server.
+### See it work (2 minutes)
+
+One command, no setup beyond a provider key. `corral demo` writes a small Go
+package with a five-clause password rule and a test that checks only two of
+them, then audits it with the real `certify --local`:
 
 ```bash
 go install github.com/pdbethke/corralai/cmd/corral@latest
 export ANTHROPIC_API_KEY=sk-ant-...     # or OPENAI_/GEMINI_/OPENROUTER_API_KEY
 
-corral certify --local \
-  --code path/to/your/file.py \
-  --goal "what this code must guarantee" \
-  --writer-model claude-sonnet-5 \
-  --mutant-model claude-sonnet-5 \
-  --critic-model claude-haiku-4-5 \
-  --out verdict.json \
-  -- python -m pytest
+corral demo --writer-model <model> --mutant-model <model> --critic-model <model>
 ```
+
+Measured on a clean machine: **~11s to install, ~75s for the demo itself** to
+converge to a verdict — call it two minutes end to end. You need a Go
+toolchain — you installed corral with one — and one key. No venv, no
+database, no fixtures, nothing of yours to configure. It leaves the project on
+disk so you can read the test and see what it never asserts.
 
 **Those model names are an example, not a default — corral has none.** Every seat
 is yours to name, from whichever provider you have a key for; the models above are
@@ -58,23 +60,6 @@ question, and corral measures it rather than assuming it. `--critic-model off`
 drops the critic entirely (it's advisory and never gates the verdict). A run with an
 unnamed seat is refused, and the refusal tells you which provider credentials it can
 actually see.
-
-### See it work first: `corral demo`
-
-One command, no setup beyond a provider key. It writes a small Go package with a
-five-clause password rule and a test that checks only two of them, then audits it
-with the real `certify --local`:
-
-```bash
-corral demo --writer-model <model> --mutant-model <model> --critic-model <model>
-```
-
-You need a Go toolchain — you installed corral with one — and one key. No venv, no
-database, no fixtures, nothing of yours to configure. It leaves the project on disk
-so you can read the test and see what it never asserts.
-
-Then point it at your own code, and run `corral doctor` first: the environment stops
-an audit far more often than the tests do.
 
 It asks the question you can never answer honestly about your own code — *do my tests
 actually test anything, or do they just pass?* — and answers it by execution:
@@ -113,6 +98,32 @@ the log — and tampering is detectable even by someone who doesn't trust the br
 witness outage degrades honestly (`anchored=false`, never a fabricated proof); verify
 then refuses unless you pass `--allow-unanchored`.
 
+### Audit a real repo
+
+Install your project's dev dependencies first — the suite must pass for you
+before corral can plant bugs against it. Then:
+
+```bash
+corral certify --repo . --substrate workspace \
+  --writer-model <model> --mutant-model <model> --critic-model <model> \
+  -- <your test command>       # e.g. -- python -m pytest, or -- npm test
+```
+
+`--substrate workspace` mutates your own checkout in place instead of copying
+it into a bwrap jail — the caller (your shell, a CI runner) *is* the isolation
+boundary — which sidesteps the jail's one real limitation: a sandboxed run
+can't see a project virtualenv or any other host-local toolchain state, only
+what's on `PATH` inside the jail. Pairing a source file with its test now
+searches `tests/**` (and each language's conventional test roots) for a file
+that actually exists rather than guessing a filename, so most
+conventionally-laid-out repos pair without any extra step. The exception is a
+project that names tests after *behavior* rather than after the source file
+(`expressjs/express` tests `lib/response.js` from `test/res.send.js`,
+`test/res.json.js` — no filename rule derives that); for those, hand it a
+**`--tests` map** (JSON, source path → test path — see below) instead of
+relying on pairing to find it. Before spending a real run, `corral doctor`
+checks the environment for free — see below.
+
 Go, Python, Ruby, JavaScript and TypeScript — the language is inferred from
 `--code`'s extension, each a plugin in `internal/lang`. The authored test is
 written in **your project's own harness** (it is shown your existing test file
@@ -143,12 +154,35 @@ evidence of specific gaps, **not a grade** — never quote one as a score.
 
 C is next.
 
+### Single files, and what the demo runs: `corral certify --local`
+
+`--local` is the primitive everything above builds on — a complete adversarial
+audit of one file, in-process, off your own key, no server. `corral demo` runs
+it under the hood; call it directly to audit one file of your own, with your
+own goal:
+
+```bash
+corral certify --local \
+  --code path/to/your/file.py \
+  --goal "what this code must guarantee" \
+  --writer-model claude-sonnet-5 \
+  --mutant-model claude-sonnet-5 \
+  --critic-model claude-haiku-4-5 \
+  --out verdict.json \
+  -- python -m pytest
+```
+
+It runs inside a jail that cannot see a project virtualenv or any other
+host-local toolchain state — fine for a self-contained file, but **for a repo
+with a virtualenv, use the `--repo --substrate workspace` path above
+instead.**
+
 > **Whole-repo scanning is not equally strong across those languages.** `certify
 > --local` audits any single file you name, in any of them — you give it the path,
 > so nothing has to be discovered. `certify --repo` must first *find* the files, by
 > pairing each source file with its test using naming conventions, and that pairing
 > is much better at some ecosystems than others. Measured on real repos:
-> `rubocop/rubocop` **736** candidates, `gin-gonic/gin` **29**, `pallets/flask`
+> `rubocop/rubocop` **737** candidates, `gin-gonic/gin` **29**, `pallets/flask`
 > **9** — and `expressjs/express` **zero**, because common JavaScript layouts don't
 > match the conventions corral knows.
 >
@@ -888,7 +922,7 @@ of.
 for a docker/podman fallback; `sandbox-exec` on macOS) — there is no unsandboxed
 option. On Ubuntu 24.04+, apparmor disables unprivileged user namespaces and bwrap
 won't start; the CLI's error message spells out the one-line fix, or use `--jail
-container` with a toolchain image (`export CORRALAI_EXEC_IMAGE=python:3`). One gotcha:
+container` with a toolchain image (`export CORRALAI_EXEC_IMAGE=python:3.12-bookworm`). One gotcha:
 the language toolchain has to be **jail-visible** — installed system-wide under `/usr`,
 not a `--user`/snap/pyenv install invisible to the sandboxed mount namespace.
 
@@ -925,6 +959,8 @@ spawns is isolated:
 - **`container` backend.** `--jail container` (or `AGENT_EXEC_BACKEND=container`) runs
   the jailed command inside a docker/podman container with `--cap-drop=ALL`,
   `--read-only`, `--network=none`, and pid/memory limits — for hosts without bwrap.
+  Refuses to start without `CORRALAI_EXEC_IMAGE` naming the toolchain image, e.g.
+  `CORRALAI_EXEC_IMAGE=python:3.12-bookworm`.
 - **Network off by default.** Opt a build step in only where it legitimately fetches
   deps.
 

@@ -830,3 +830,43 @@ func TestVerdictStillReportsACleanCriticWhenOneActuallyRan(t *testing.T) {
 		t.Errorf("a critic that ran and found nothing must say so:\n%s", buf.String())
 	}
 }
+
+// TestRenderAdvVerdictBaselineFailedModuleNotFoundHint pins the stranger's-path
+// fix: a baseline that fails during COLLECTION with ModuleNotFoundError reads,
+// out of the box, exactly like a broken project — the most common real cause
+// (PEP-735 [dependency-groups] not installed by a plain `pip install`) is
+// invisible unless the readout says so.
+func TestRenderAdvVerdictBaselineFailedModuleNotFoundHint(t *testing.T) {
+	var b strings.Builder
+	renderAdvVerdict(&b, "src/pkg/mod.py", advVerdict{
+		Lang: "python", Commit: "abc1234", MutantsTotal: 4,
+		Status:         "needs-review",
+		BaselineFailed: true,
+		BaselineOutput: "ImportError while importing test module 'tests/test_mod.py'.\nModuleNotFoundError: No module named 'pytest_cov'",
+	})
+	out := b.String()
+	if !strings.Contains(out, "PEP-735") {
+		t.Fatalf("a ModuleNotFoundError baseline must append the dependency-groups hint:\n%s", out)
+	}
+	if !strings.Contains(out, "pip install --group") {
+		t.Fatalf("the hint must name the fix:\n%s", out)
+	}
+}
+
+// TestRenderAdvVerdictBaselineFailedNoHintWithoutImportError guards the
+// negative: a baseline failure that is NOT an import/collection error must
+// not print the dependency-groups hint — it would misdirect an operator whose
+// suite failed for an unrelated reason.
+func TestRenderAdvVerdictBaselineFailedNoHintWithoutImportError(t *testing.T) {
+	var b strings.Builder
+	renderAdvVerdict(&b, "src/pkg/mod.py", advVerdict{
+		Lang: "python", Commit: "abc1234", MutantsTotal: 4,
+		Status:         "needs-review",
+		BaselineFailed: true,
+		BaselineOutput: "AssertionError: expected 2 got 3",
+	})
+	out := b.String()
+	if strings.Contains(out, "PEP-735") {
+		t.Fatalf("a non-import baseline failure must not print the dependency-groups hint:\n%s", out)
+	}
+}

@@ -3930,6 +3930,9 @@ func (l *localExecutor) Execute(ctx context.Context, j reposcan.Job) (reposcan.F
 		if br, ok := runner.(interface{ BaselineOutput() string }); ok {
 			if out := strings.TrimSpace(br.BaselineOutput()); out != "" {
 				l.note("%s: baseline does not pass unmutated — not graded. The suite said:\n%s\n", j.Path, indentLines(out, "    "))
+				if hint := moduleImportHint(out); hint != "" {
+					l.note("%s: %s\n", j.Path, hint)
+				}
 				return reposcan.FileResult{Gradable: false, Reason: reposcan.ReasonBaselineFailed}, nil
 			}
 		}
@@ -4124,6 +4127,21 @@ func indentLines(s, pad string) string {
 		lines[i] = pad + l
 	}
 	return strings.Join(lines, "\n")
+}
+
+// moduleImportHint inspects a failing baseline's own output and, when it
+// shows a Python import failing during COLLECTION (ModuleNotFoundError or
+// ImportError — pytest's own wording for "never even started running the
+// suite"), returns one extra line naming the most common cause: PEP-735
+// dependency groups aren't installed by a plain `pip install`, so a project
+// that moved its test deps into [dependency-groups] looks, from the outside,
+// exactly like a broken baseline. Empty when the output doesn't show that
+// shape — this is a hint for one specific failure, not a catch-all.
+func moduleImportHint(suiteOutput string) string {
+	if !strings.Contains(suiteOutput, "ModuleNotFoundError") && !strings.Contains(suiteOutput, "ImportError") {
+		return ""
+	}
+	return "note: your test dependencies may be missing — PEP-735 [dependency-groups] are not pip extras; try `pip install --group <name>` or install them explicitly"
 }
 
 // signableKillRate is the rate a statement or a warehouse row may carry for

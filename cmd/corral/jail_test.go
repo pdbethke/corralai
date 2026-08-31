@@ -140,14 +140,31 @@ func TestNewRunJailIsTheOnlyJailBuilder(t *testing.T) {
 	}
 
 	// jail.go itself holds the ONE direct call to each lower-level adequacy
-	// constructor, inside newRunJail/newRunEnumerator. certify_repo.go's
-	// (--repo, not --local) coverage-preflight enumerator is a genuinely
-	// different, deliberately one-off shape (see its own comment: "built
-	// SPECIFICALLY for this one call") and is out of scope here — but
-	// neither doctor.go nor certify_local.go, the two files this bug was
-	// actually found in, may call adequacy.NewJail/NewEnumerator directly;
-	// they must go through the shared builder.
-	for _, name := range []string{"doctor.go", "certify_local.go"} {
+	// constructor, inside newRunJail/newRunEnumerator — excepted below by
+	// name, not skipped by exempting the whole file, since a SECOND direct
+	// call landing anywhere else in jail.go would be exactly the kind of
+	// divergence this test exists to catch. certify_repo.go's (--repo, not
+	// --local) coverage-preflight enumerator is a genuinely different,
+	// deliberately one-off shape (see its own comment: "built SPECIFICALLY
+	// for this one call") and is excepted too — but every OTHER file in this
+	// package, not just the two doctor.go/certify_local.go this bug was
+	// first found in, must go through the shared builder. A third call site
+	// added anywhere else in the package — a new command, a new scan mode —
+	// would be exactly this bug happening again in a file nobody thought to
+	// name here, so this scans the WHOLE package rather than an enumerated
+	// allowlist of files.
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		if name == "jail.go" || name == "certify_repo.go" {
+			continue
+		}
 		s := sourceOf(t, name)
 		if strings.Contains(s, "adequacy.NewJail(") {
 			t.Errorf("%s calls adequacy.NewJail directly — it must go through newRunJail, the shared builder, or it can silently diverge from the other call site again", name)
@@ -155,6 +172,9 @@ func TestNewRunJailIsTheOnlyJailBuilder(t *testing.T) {
 		if strings.Contains(s, "adequacy.NewEnumerator(") {
 			t.Errorf("%s calls adequacy.NewEnumerator directly — it must go through newRunEnumerator", name)
 		}
+	}
+	for _, name := range []string{"doctor.go", "certify_local.go"} {
+		s := sourceOf(t, name)
 		if !strings.Contains(s, "newRunJail(") {
 			t.Errorf("%s must build its jail via newRunJail, the shared builder", name)
 		}

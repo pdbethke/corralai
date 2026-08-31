@@ -1701,6 +1701,67 @@ func TestLocalExecutorExecuteRedBaselineSkipsTheAudit(t *testing.T) {
 	}
 }
 
+// TestLocalExecutorExecuteRedBaselineModuleNotFoundHint pins the stranger's-
+// path fix on the `--repo` scan path (the sibling of
+// TestRenderAdvVerdictBaselineFailedModuleNotFoundHint, which covers the
+// same fix on the `--local` renderer): a consistently red baseline whose own
+// output shows ModuleNotFoundError during collection gets one extra progress
+// line naming PEP-735 dependency groups as the likely cause.
+func TestLocalExecutorExecuteRedBaselineModuleNotFoundHint(t *testing.T) {
+	var buf bytes.Buffer
+	ex := localExecutor{
+		baselineRuns: 2,
+		progress:     &buf,
+		newBaseline: func(context.Context, localAuditInput) (reposcan.BaselineRunner, func(), error) {
+			return &scriptedBaseline{
+				results: []bool{false, false},
+				output:  "ImportError while importing test module 'tests/test_mod.py'.\nModuleNotFoundError: No module named 'pytest_cov'",
+			}, func() {}, nil
+		},
+		audit: func(context.Context, localAuditInput) (advpool.Verdict, error) {
+			t.Fatal("a consistently red baseline must not pay for an audit")
+			return advpool.Verdict{}, nil
+		},
+	}
+	if _, err := ex.Execute(context.Background(), reposcan.Job{Path: "pkg/mod.py", Goal: reposcan.Goal{Text: "g"}}); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	got := buf.String()
+	if !strings.Contains(got, "PEP-735") {
+		t.Errorf("progress output is missing the dependency-groups hint:\n%s", got)
+	}
+	if !strings.Contains(got, "pip install --group") {
+		t.Errorf("progress output must name the fix:\n%s", got)
+	}
+}
+
+// TestLocalExecutorExecuteRedBaselineNoHintWithoutImportError guards the
+// negative on the same path: a baseline failure unrelated to imports must not
+// print the dependency-groups hint.
+func TestLocalExecutorExecuteRedBaselineNoHintWithoutImportError(t *testing.T) {
+	var buf bytes.Buffer
+	ex := localExecutor{
+		baselineRuns: 2,
+		progress:     &buf,
+		newBaseline: func(context.Context, localAuditInput) (reposcan.BaselineRunner, func(), error) {
+			return &scriptedBaseline{
+				results: []bool{false, false},
+				output:  "AssertionError: expected 2 got 3",
+			}, func() {}, nil
+		},
+		audit: func(context.Context, localAuditInput) (advpool.Verdict, error) {
+			t.Fatal("a consistently red baseline must not pay for an audit")
+			return advpool.Verdict{}, nil
+		},
+	}
+	if _, err := ex.Execute(context.Background(), reposcan.Job{Path: "pkg/mod.py", Goal: reposcan.Goal{Text: "g"}}); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if got := buf.String(); strings.Contains(got, "PEP-735") {
+		t.Errorf("a non-import baseline failure must not print the dependency-groups hint:\n%s", got)
+	}
+}
+
 // TestLocalExecutorExecuteLogsProvenMissed proves the per-file progress line
 // carries ProvenMissed the same way it already carries DevKillRate and
 // Survivors — corral's real audit converged with a verdict of
@@ -1807,6 +1868,10 @@ func TestCertifyRepoMissingGoalsFileFailsClosed(t *testing.T) {
 type scriptedBaseline struct {
 	results []bool
 	n       int
+	// output, when set, is returned by BaselineOutput() — the runner's own
+	// words on a failing baseline, the same optional interface
+	// jailBaselineRunner satisfies.
+	output string
 }
 
 func (s *scriptedBaseline) RunBaseline() (bool, error) {
@@ -1817,6 +1882,10 @@ func (s *scriptedBaseline) RunBaseline() (bool, error) {
 	s.n++
 	return v, nil
 }
+
+// BaselineOutput satisfies the same optional interface Execute's
+// baseline-failure path type-asserts for (see jailBaselineRunner).
+func (s *scriptedBaseline) BaselineOutput() string { return s.output }
 
 func TestLocalExecutorFlakyBaselineIsUngradable(t *testing.T) {
 	flaky := &scriptedBaseline{results: []bool{true, false}}

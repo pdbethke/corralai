@@ -22,6 +22,8 @@ func extractSignatures(text, lang string) ([]Signature, error) {
 		return extractRubySignatures(text)
 	case "javascript", "typescript":
 		return extractCurlySignatures(text, lang)
+	case "php":
+		return extractPHPSignatures(text)
 	}
 	return nil, ErrUnsupportedLang
 }
@@ -89,6 +91,20 @@ var branchNodeTypes = map[string]map[string]bool{
 		"conditional_expression": true,
 		"boolean_operator":       true, // `and` / `or`
 	},
+	"php": {
+		"if_statement":                 true,
+		"else_if_clause":               true,
+		"foreach_statement":            true,
+		"while_statement":              true,
+		"do_statement":                 true,
+		"catch_clause":                 true,
+		"case_statement":               true,
+		"match_conditional_expression": true,
+		"conditional_expression":       true, // a ? b : c
+		// default_statement / match_default_expression are deliberately
+		// absent — the default arm is the fall-through, not an independent
+		// decision, mirroring how the JS extractor treats switch_default.
+	},
 }
 
 // jsBranchNodes is shared by javascript and typescript: the TS grammar is a
@@ -119,6 +135,7 @@ var booleanOpNode = map[string]string{
 	"javascript": "binary_expression",
 	"typescript": "binary_expression",
 	"ruby":       "binary",
+	"php":        "binary_expression",
 }
 
 // symbolComplexity walks n's subtree counting branch nodes, returning the

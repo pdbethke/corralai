@@ -24,6 +24,14 @@ type Candidate struct {
 	Path     string
 	TestPath string
 	Lang     string
+	// ViaSearch is true when TestPath was found by the recursive fallback
+	// (findInUniverse's second stage) rather than by the plugin's own
+	// ordered TestPaths candidates — a test that EXISTS but that no
+	// filename convention predicted. Carried through unchanged whenever a
+	// Candidate is copied (demoteAmbiguousPairings, --diff/--top
+	// selection), so a later reader (the JSON inventory, the human report)
+	// can disclose it without re-deriving the fact.
+	ViaSearch bool
 }
 
 // Exclusion is a file deliberately NOT audited, with a machine-stable reason.
@@ -299,6 +307,18 @@ func EnumerateWithTests(root string, tests *TestMap) ([]Candidate, []Exclusion, 
 	// collision (see demoteAmbiguousPairings).
 	var explicitPairs []bool
 
+	// presentList is present's keys as a slice, computed ONCE for the whole
+	// scan: findInUniverse's recursive-search fallback needs to range over
+	// the visible file set, and a fresh git ls-files (or map-to-slice) per
+	// source file would turn an O(files) walk into O(files²). Every entry
+	// here already passed the same gitignore/skipDir gate `present` did, so
+	// the recursive fallback can never reach a directory the walk above
+	// itself refused to enter.
+	presentList := make([]string, 0, len(present))
+	for rel := range present {
+		presentList = append(presentList, rel)
+	}
+
 	for rel := range present {
 		p, ok := lang.Detect(rel)
 		if !ok {
@@ -320,6 +340,7 @@ func EnumerateWithTests(root string, tests *TestMap) ([]Candidate, []Exclusion, 
 		tp := ""
 		tpRank := -1
 		explicit := false
+		viaSearch := false
 
 		// The tenant's mapping wins: they know their layout, and corral cannot
 		// infer a project's own naming shorthand (see TestMap).
@@ -333,20 +354,20 @@ func EnumerateWithTests(root string, tests *TestMap) ([]Candidate, []Exclusion, 
 			}
 			tp, tpRank, explicit = mapped, 0, true
 		} else {
-			for _, cand := range p.TestPaths(rel) {
-				path := filepath.ToSlash(cand.Path)
-				if path != "" && present[path] {
-					tp = path
-					tpRank = cand.Rank
-					break
-				}
-			}
+			// The plugin's own ordered candidates first — a test that EXISTS
+			// under the exact convention TestPaths predicts keeps absolute
+			// priority, unchanged from before findInUniverse existed. Only
+			// when NONE of them exists does the recursive fallback run (see
+			// findInUniverse and lang.TestRooter): a test that exists but
+			// that no filename convention predicted still beats no pairing
+			// at all.
+			tp, tpRank, viaSearch = findInUniverse(p, rel, present, presentList)
 		}
 		if tp == "" {
 			excl = append(excl, Exclusion{Path: rel, Reason: ReasonNoPairedTest})
 			continue
 		}
-		cands = append(cands, Candidate{Path: rel, TestPath: tp, Lang: p.Name()})
+		cands = append(cands, Candidate{Path: rel, TestPath: tp, Lang: p.Name(), ViaSearch: viaSearch})
 		rank = append(rank, tpRank)
 		explicitPairs = append(explicitPairs, explicit)
 	}

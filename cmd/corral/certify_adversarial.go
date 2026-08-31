@@ -398,6 +398,9 @@ func renderAdvVerdict(w io.Writer, codePath string, v advVerdict) {
 		// cannot start inside the jail — arrived with no way to diagnose it.
 		if out := strings.TrimSpace(v.BaselineOutput); out != "" {
 			fmt.Fprintf(w, "  the suite said:\n%s\n", indentLines(out, "    "))
+			if hint := moduleImportHint(out); hint != "" {
+				fmt.Fprintf(w, "  %s\n", hint)
+			}
 		}
 		return
 	}

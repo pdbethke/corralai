@@ -95,7 +95,7 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 	writerModel := fs.String("writer-model", "", "model for the test-writer role — REQUIRED, corral has no default models")
 	criticModel := fs.String("critic-model", "", "model for the test-critic role, which must differ from the writer's; \"off\" disables the critic entirely (it is advisory and never gates the verdict, so a single-vendor run with only one usable model can drop it). No default")
 	mutantModel := fs.String("mutant-model", "", "model for the mutant-generator role — REQUIRED, corral has no default models")
-	jailFlag := fs.String("jail", "", "sandbox backend: bwrap|container (Linux), sandbox-exec (macOS) (default: auto-detect for this OS; \"none\" is not supported — --local always sandboxes)")
+	jailFlag := fs.String("jail", "", "sandbox backend: bwrap|container (Linux), sandbox-exec (macOS) (default: auto-detect for this OS; \"none\" is not supported — --local always sandboxes). \"container\" needs CORRALAI_EXEC_IMAGE set to a toolchain image, e.g. CORRALAI_EXEC_IMAGE=python:3.12-bookworm")
 	timeout := fs.Duration("timeout", 10*time.Minute, "give up if the run makes no progress for this long (not a hard wall-clock cap — a single slow LLM call can overshoot it)")
 	testTimeout := fs.Duration("test-timeout", 0, "hard cap on a SINGLE test-suite run in the jail (0 = auto: derived from the healthy suite's own runtime, so a mutant that makes the suite hang is killed fast instead of eating the whole --timeout). Raise it only if your suite legitimately runs long")
 	poll := fs.Duration("poll", 2*time.Second, "how long to wait between drive iterations when nothing is claimable")
@@ -561,6 +561,26 @@ func auditErr(format string, a ...any) error {
 	return localAuditError{msg: fmt.Sprintf(format, a...)}
 }
 
+// noTestFoundErr renders a reposcan.FindTest miss as the message an operator
+// actually needs: not just "no test found", but every convention candidate
+// FindTest already ruled out and every root its recursive fallback already
+// searched — the rehearsal this whole change exists for made a stranger
+// guess wrong TWICE (a --repo run that silently excluded the file, then a
+// --local run that guessed one sibling path and died trying to open it)
+// before ever learning where corral had actually looked. This message is the
+// third guess made unnecessary.
+func noTestFoundErr(codePath string, res reposcan.SearchResult) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "no test found for %s (pass --test to override). Looked for:\n", codePath)
+	for _, t := range res.Tried {
+		fmt.Fprintf(&b, "  %s\n", t)
+	}
+	if len(res.Roots) > 0 {
+		fmt.Fprintf(&b, "and searched %s recursively for a matching basename\n", strings.Join(res.Roots, ", "))
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
 // isAuditUsageError reports whether err is an auditOneFile usage error (exit
 // 2 rather than exit 1). Anything else — including a nil-safe non-audit error
 // — is an internal failure.
@@ -650,9 +670,33 @@ func prepareAuditJail(ctx context.Context, in localAuditInput, plug lang.Plugin,
 	}
 	tp := strings.TrimSpace(in.testPath)
 	if tp == "" {
-		tp = plug.TestPaths(in.codePath)[0].Path
+		// --test always overrides everything below it; only reached when the
+		// operator named no test at all. searchRoot is where FindTest resolves
+		// its candidates AND its recursive fallback against: repoDir in
+		// repo-aware mode (codePath is repo-relative), the working directory
+		// otherwise (codePath is already a filesystem path relative to it) —
+		// the same root fsPath itself joins against.
+		searchRoot := repoDir
+		if searchRoot == "" {
+			searchRoot = "."
+		}
+		res, ferr := reposcan.FindTest(plug, searchRoot, in.codePath)
+		if ferr != nil {
+			return p, auditErr("searching for a test for %s: %v", in.codePath, ferr)
+		}
+		if !res.Found {
+			return p, auditUsageErr("%s", noTestFoundErr(in.codePath, res))
+		}
+		tp = res.Path
+		if res.ViaSearch {
+			// The plugin's own naming convention never found this — every
+			// TestPaths candidate came up empty, and this is the ONE line
+			// that discloses the pairing came from somewhere else instead of
+			// silently presenting it as though it were the expected sibling.
+			fmt.Fprintf(stdout, "  paired by search: %s\n", tp)
+		}
 	}
-	devTest, err := os.ReadFile(fsPath(tp)) // #nosec G304 -- operator-supplied (or sibling-derived) test path
+	devTest, err := os.ReadFile(fsPath(tp)) // #nosec G304 -- operator-supplied (or convention/search-derived) test path
 	if err != nil {
 		return p, auditUsageErr("reading test %s: %v (pass --test to override)", tp, err)
 	}
@@ -1881,14 +1925,14 @@ func buildJailWiring(ctx context.Context, in jailWiringInput) (w jailWiring, err
 			w.codeKey:    string(in.code),
 			w.devTestKey: string(in.devTest),
 		})
-		jail := adequacy.NewJail(in.iso, in.timeout, adequacy.WithReadOnlyBinds(depBinds))
+		jail := newRunJail(in.iso, in.timeout, depBinds)
 		// enumerator backs the tests×mutants matrix's test-listing step
 		// (--matrix). Wired unconditionally off the SAME backend/timeout/binds
 		// as jail (bwrapJail satisfies both interfaces) — a nil
 		// advpool.Driver.Enumerator makes tickMatrix always skip regardless of
 		// RunSpec.Matrix, so wiring it here costs nothing when --matrix is off
 		// (the flag is the real gate).
-		enumerator := adequacy.NewEnumerator(in.iso, in.timeout, adequacy.WithReadOnlyBinds(depBinds))
+		enumerator := newRunEnumerator(in.iso, in.timeout, depBinds)
 		w.scorer = advpool.JailScorer{Jail: jail, BaseFiles: repoFiles, MutantTimeout: in.testTimeout, DevTestPath: w.devTestKey, Concurrency: in.mutantConcurrency, Lang: in.langName, Selection: in.selection, FailureParser: failureParser}
 		w.validator = advpool.JailValidator{Jail: jail, BaseFiles: repoFiles, DevTestPath: w.devTestKey}
 		w.jailEnum = advpool.JailEnumerator{Jail: enumerator, BaseFiles: repoFiles}
@@ -1902,8 +1946,8 @@ func buildJailWiring(ctx context.Context, in jailWiringInput) (w jailWiring, err
 	} else {
 		w.codeKey = filepath.Base(in.codePath)
 		w.devTestKey = filepath.Base(in.testPath)
-		jail := adequacy.NewJail(in.iso, in.timeout)
-		enumerator := adequacy.NewEnumerator(in.iso, in.timeout)
+		jail := newRunJail(in.iso, in.timeout, nil)
+		enumerator := newRunEnumerator(in.iso, in.timeout, nil)
 		w.scorer = advpool.JailScorer{Jail: jail, MutantTimeout: in.testTimeout, Concurrency: in.mutantConcurrency, Lang: in.langName, Selection: in.selection, FailureParser: failureParser}
 		w.validator = advpool.JailValidator{Jail: jail}
 		w.jailEnum = advpool.JailEnumerator{Jail: enumerator}

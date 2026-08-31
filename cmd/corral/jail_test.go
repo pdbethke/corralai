@@ -4,9 +4,15 @@ package main
 
 import (
 	"errors"
+	"os"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/pdbethke/corralai/internal/adequacy"
+	"github.com/pdbethke/corralai/internal/sandbox"
 )
 
 // resolveLocalJail must NEVER return a "none"/unsafe backend, even if the
@@ -112,4 +118,119 @@ func TestBwrapUnavailableError_OmitsTheContainerHatchWhenUnreachable(t *testing.
 	if !strings.Contains(msg, cause.Error()) {
 		t.Errorf("message %q dropped the underlying cause", msg)
 	}
+}
+
+// TestNewRunJailIsTheOnlyJailBuilder pins the structural parity guarantee by
+// construction: doctor's preflight probe and certify --local's actual
+// scoring/enumeration jails must go through exactly ONE function
+// (newRunJail/newRunEnumerator), never a second, independent call to
+// adequacy.NewJail/NewEnumerator — that duplication is exactly how doctor
+// and the run it preflights came to probe two different sandbox realities.
+// Checked by reading this package's own non-test source rather than by
+// comparing behavior, because the whole point is that there is nowhere left
+// for a divergent SECOND builder to hide.
+func TestNewRunJailIsTheOnlyJailBuilder(t *testing.T) {
+	src := packageSourceExcludingTests(t)
+
+	if n := strings.Count(src, "func newRunJail("); n != 1 {
+		t.Fatalf("newRunJail must have exactly one definition in this package, found %d", n)
+	}
+	if n := strings.Count(src, "func newRunEnumerator("); n != 1 {
+		t.Fatalf("newRunEnumerator must have exactly one definition in this package, found %d", n)
+	}
+
+	// jail.go itself holds the ONE direct call to each lower-level adequacy
+	// constructor, inside newRunJail/newRunEnumerator — excepted below by
+	// name, not skipped by exempting the whole file, since a SECOND direct
+	// call landing anywhere else in jail.go would be exactly the kind of
+	// divergence this test exists to catch. certify_repo.go's (--repo, not
+	// --local) coverage-preflight enumerator is a genuinely different,
+	// deliberately one-off shape (see its own comment: "built SPECIFICALLY
+	// for this one call") and is excepted too — but every OTHER file in this
+	// package, not just the two doctor.go/certify_local.go this bug was
+	// first found in, must go through the shared builder. A third call site
+	// added anywhere else in the package — a new command, a new scan mode —
+	// would be exactly this bug happening again in a file nobody thought to
+	// name here, so this scans the WHOLE package rather than an enumerated
+	// allowlist of files.
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		if name == "jail.go" || name == "certify_repo.go" {
+			continue
+		}
+		s := sourceOf(t, name)
+		if strings.Contains(s, "adequacy.NewJail(") {
+			t.Errorf("%s calls adequacy.NewJail directly — it must go through newRunJail, the shared builder, or it can silently diverge from the other call site again", name)
+		}
+		if strings.Contains(s, "adequacy.NewEnumerator(") {
+			t.Errorf("%s calls adequacy.NewEnumerator directly — it must go through newRunEnumerator", name)
+		}
+	}
+	for _, name := range []string{"doctor.go", "certify_local.go"} {
+		s := sourceOf(t, name)
+		if !strings.Contains(s, "newRunJail(") {
+			t.Errorf("%s must build its jail via newRunJail, the shared builder", name)
+		}
+	}
+}
+
+// TestNewRunJailBuildsIdenticalConfigForIdenticalInputs pins parity at the
+// value level, not just the source level: the same iso/timeout/depBinds
+// handed to newRunJail twice must build two jails with an identical
+// configuration — nothing about doctor's own call is special-cased inside
+// the builder.
+func TestNewRunJailBuildsIdenticalConfigForIdenticalInputs(t *testing.T) {
+	iso, err := sandbox.Resolve(sandbox.Config{})
+	if err != nil {
+		t.Skipf("no working sandbox backend on this host: %v", err)
+	}
+	binds := []adequacy.DepBind{{Host: "/tmp/does-not-need-to-exist", Rel: "node_modules"}}
+
+	a := newRunJail(iso, 45*time.Second, binds)
+	b := newRunJail(iso, 45*time.Second, binds)
+	if !reflect.DeepEqual(a, b) {
+		t.Fatalf("newRunJail built two different configurations from identical inputs:\n%#v\n%#v", a, b)
+	}
+
+	ae := newRunEnumerator(iso, 45*time.Second, binds)
+	be := newRunEnumerator(iso, 45*time.Second, binds)
+	if !reflect.DeepEqual(ae, be) {
+		t.Fatalf("newRunEnumerator built two different configurations from identical inputs:\n%#v\n%#v", ae, be)
+	}
+}
+
+// packageSourceExcludingTests concatenates every non-test .go file in this
+// package, for the structural (source-text) assertions above.
+func packageSourceExcludingTests(t *testing.T) string {
+	t.Helper()
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var b strings.Builder
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		b.WriteString(sourceOf(t, name))
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+func sourceOf(t *testing.T, name string) string {
+	t.Helper()
+	data, err := os.ReadFile(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
 }

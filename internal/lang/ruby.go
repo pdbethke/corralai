@@ -97,6 +97,11 @@ func (rubyPlugin) TestPaths(codePath string) []TestCandidate {
 	return dedupeCandidates(out)
 }
 
+// TestRoots names Ruby's own additional conventional test roots (beyond
+// reposcan's generic "tests" default): the classic lib/-vs-test/ split, and
+// its RSpec equivalent lib/-vs-spec/.
+func (rubyPlugin) TestRoots() []string { return []string{"test", "spec"} }
+
 // Preflight requires only `ruby` (minitest is bundled) — or, when the
 // operator named an explicit test command (e.g. `bundle exec rspec`, or an
 // interpreter under a version manager's shim not on PATH under "ruby"),

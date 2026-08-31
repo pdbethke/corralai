@@ -128,6 +128,10 @@ func (tsPlugin) TestPaths(codePath string) []TestCandidate {
 	return dedupeCandidates(out)
 }
 
+// TestRoots names TS's additional conventional test roots — mirrors
+// jsPlugin.TestRoots, see there for rationale.
+func (tsPlugin) TestRoots() []string { return []string{"__tests__", "test", "tests"} }
+
 // Preflight requires BOTH the test runtime AND tsc (TS genuinely needs the
 // compiler; unlike JS this is a hard dependency, preflighted fail-closed).
 // The runtime check honors the operator's own test command's binary when one

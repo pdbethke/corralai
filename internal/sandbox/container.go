@@ -24,7 +24,7 @@ func (c containerIsolator) Name() string { return "container" }
 // registry auth are the caller's concern.
 func (c containerIsolator) Preflight() error {
 	if c.image == "" {
-		return errors.New("container backend: set CORRALAI_EXEC_IMAGE to the image to run commands in")
+		return errors.New("container backend: set CORRALAI_EXEC_IMAGE to the image to run commands in (e.g. CORRALAI_EXEC_IMAGE=python:3.12-bookworm)")
 	}
 	if _, err := exec.LookPath(c.runtime); err != nil {
 		return fmt.Errorf("container backend: runtime %q not found on PATH: %w", c.runtime, err)

@@ -146,7 +146,7 @@ Usage of certify --local:
   -goal string
     	the correctness/security goal the code must satisfy (required)
   -jail string
-    	sandbox backend: bwrap|container (Linux), sandbox-exec (macOS) (default: auto-detect for this OS; "none" is not supported — --local always sandboxes)
+    	sandbox backend: bwrap|container (Linux), sandbox-exec (macOS) (default: auto-detect for this OS; "none" is not supported — --local always sandboxes). "container" needs CORRALAI_EXEC_IMAGE set to a toolchain image, e.g. CORRALAI_EXEC_IMAGE=python:3.12-bookworm
   -lang string
     	source language (default: inferred from --code extension)
   -local

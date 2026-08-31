@@ -221,6 +221,17 @@ func runScansShow(args []string, open func(string) (scansReader, error), stdout,
 	}
 	tw.Flush()
 
+	// THE --transparency RECEIPT, unconditionally — not gated behind --json
+	// or --timing, since it is a scan-grain fact a reader should not have to
+	// ask for specially. Silent when the scan was never uploaded to Rekor
+	// (--transparency was not given, or the upload failed open): an em dash
+	// here would announce a receipt that does not exist.
+	if row, ok, serr := st.ScanByID(context.Background(), id); serr != nil {
+		fmt.Fprintln(stderr, "corral scans show: scan header unavailable:", serr)
+	} else if ok && row.RekorLogIndex != nil {
+		fmt.Fprintf(stdout, "\nrekor: index %d (uuid %s)\n", *row.RekorLogIndex, row.RekorUUID)
+	}
+
 	// WHICH TEST WAS AWAKE, per killed mutant, when the runner said so.
 	// Silent otherwise — see killedByListing.
 	if lines := killedByListing(mutants); len(lines) > 0 {

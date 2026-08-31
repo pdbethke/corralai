@@ -76,6 +76,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	pushFlag := fs.String("push", "", "append this scan's per-file verdicts to a DuckDB you own — a path, or `md:<db>` for MotherDuck (which reads motherduck_token from the environment; the database is created on first push if it does not already exist — a MotherDuck SHARE is a read target and cannot be pushed to). corral has no hosted tier and keeps nothing: the warehouse is yours, and any DuckDB works, so this is a destination rather than a lock-in. Append-only. Every row carries the ledger's scan id (0 when --record was not given), and — traceable only with --attest — the sha256 of the signed statement it came from, so a row can be checked against something a third party can verify; without --attest, statement_sha256 is honestly empty rather than fabricated; and with --attest, a statement that FAILS to write withholds the push too, since a row that cannot name the statement it came from is not written. It answers what one pull request cannot — a single kill rate is a sample, and the same unchanged diff has scored 0.85 and 0.90; forty of them are a distribution")
 	pushSourceFlag := fs.Bool("push-source", false, "with --push, also send the SOURCE BYTES corral holds to your warehouse: the pool's authored test, and the full verdict JSON. Off by default because those bytes are derived from — and quote — your audited code; without this the pushed rows carry numbers, hashes, reasons and model names, and no source leaves the box. Mutant code is NOT carried, by either setting: corral does not keep mutant source at rest, so the corral_mutants.code column exists and is always NULL until something records it. The scan row records which setting was used, so the custody question is answerable from the table rather than from whoever remembers the argv")
 	attestFlag := fs.String("attest", "", "write the scan's verdict as an in-toto Statement to this file — the receipt a reviewer can verify without trusting the run that produced it. Consumed by GitHub's attestation API (actions/attest), which signs it keylessly through the workflow's own OIDC identity, so the signature chains to the repository and workflow rather than to a key that lived on an ephemeral runner. Carries every file's kill rate, survivors and proven gaps WITH the honesty flags that say what a zero means, the thresholds it was judged against, and the models in each role")
+	transparencyFlag := fs.Bool("transparency", false, "also upload the --attest statement to Sigstore's public Rekor transparency log (requires --attest — there is nothing to log without one). THE ENTRY IS PUBLIC AND PERMANENT: once logged it cannot be removed or edited, by anyone, including you. It carries the same statement --attest writes — the repo URL, the audited commit, per-file paths, kill rates and survivor/proven-gap counts, and the models in each role — and never the audited source itself. Fails OPEN: an unreachable log or a failed upload prints one line and leaves the scan's own verdict and exit code untouched; the local statement and ledger are unaffected either way. Prints the log index and entry UUID on success, and records both in the scan ledger and, with --push, the warehouse")
 	maxProvenMissedFlag := fs.String("max-proven-missed", "", "fail the scan (exit 1) if ANY audited file has MORE than this many proven-missed gaps — survivors the pool then killed with a test it WROTE and RAN. Opt-in and unset by default. Prefer this to --min-kill-rate as a merge gate: a kill rate is a proportion of freshly generated mutants and moves between runs on unchanged code, so a threshold set near a healthy value flaps red and gets switched off. A proven-missed gap is a specific demonstrated bug the suite does not catch, established by execution, and 0 means the pool proved nothing — not that it sampled well")
 	minKillRateFlag := fs.String("min-kill-rate", "", "fail the scan (exit 1) if ANY audited file's kill rate is below this value (0.0-1.0 inclusive; a minimum, so a file exactly at the threshold passes). Opt-in: unset by default, so exit codes are unchanged unless this is given. Applies PER FILE, not to the aggregate — a well-tested file must not mask a weak one")
 	preflightFlag := fs.Bool("preflight", false, "run the project's test suite once with coverage instrumentation and report which source files it never executes. One extra suite run; reports coverage-grade evidence, not proof")
@@ -112,6 +113,14 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	}
 	if *scopeTestsFlag {
 		fmt.Fprintln(stderr, "corral certify --repo: --scope-tests was removed. Its paired-FILE scoping inverted verdicts (requests/adapters.py 1.00 -> 0.00). Selection is now by coverage evidence and on by default; pass --whole-suite to grade against the whole suite. See docs/design/test-selection.md")
+		return 2
+	}
+
+	// --transparency logs an attestation; there is none without --attest —
+	// caught here, before anything is spent, rather than discovered at the
+	// end of a full run when writeAuditStatement never ran.
+	if *transparencyFlag && strings.TrimSpace(*attestFlag) == "" {
+		fmt.Fprintln(stderr, "corral certify --repo: --transparency logs an attestation; there is none — pass --attest too")
 		return 2
 	}
 
@@ -1145,6 +1154,31 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 			}
 			bundle.Scan.StatementSHA256 = sha
 			fmt.Fprintf(stdout, "  wrote the audit statement to %s — attest it with actions/attest, verify with `gh attestation verify`\n", *attestFlag)
+
+			// --transparency: upload the statement just written to a public
+			// Rekor log. Fails OPEN — see uploadToTransparencyLog's doc —
+			// so a failure here never changes exitCode, only prints and
+			// leaves both receipt columns NULL.
+			if *transparencyFlag {
+				pubKeyPEM, pkerr := transparencyPublicKeyPEM()
+				if pkerr != nil {
+					fmt.Fprintf(stderr, "corral certify --repo: --transparency: %v\n", pkerr)
+				} else if entry, ok := uploadToTransparencyLog(context.Background(),
+					newTransparencyLogger(rekorBaseURL()), *attestFlag, pubKeyPEM, stdout, stderr); ok {
+					logIndex := entry.LogIndex
+					bundle.Scan.RekorLogIndex = &logIndex
+					bundle.Scan.RekorUUID = entry.UUID
+					// Same close-the-loop reasoning as statement_sha256
+					// above: the receipt only exists after the ledger row
+					// does, so it has to be stamped on rather than written
+					// at Record time.
+					if scanID != 0 && ledgerDSN != "" {
+						if uerr := stampRekorReceipt(ledgerDSN, scanID, &logIndex, entry.UUID); uerr != nil {
+							fmt.Fprintf(stderr, "corral certify --repo: scan %d recorded, but its rekor receipt was NOT stamped: %v\n", scanID, uerr)
+						}
+					}
+				}
+			}
 		}
 	}
 
@@ -4375,6 +4409,23 @@ func stampStatementSHA256(dsn string, scanID int64, sha string) error {
 		return err
 	}
 	if uerr := st.SetStatementSHA256(context.Background(), scanID, sha); uerr != nil {
+		_ = st.Close()
+		return uerr
+	}
+	return st.Close()
+}
+
+// stampRekorReceipt mirrors stampStatementSHA256: open the ledger, stamp one
+// scan's --transparency receipt, close it again. logIndex is passed through
+// as the pointer it already is — nil never reaches here (the caller only
+// calls this after a successful upload), but the store's own SetRekorReceipt
+// keeps the nil-means-not-uploaded contract regardless of the caller.
+func stampRekorReceipt(dsn string, scanID int64, logIndex *int64, uuid string) error {
+	st, err := scanstore.Open(dsn)
+	if err != nil {
+		return err
+	}
+	if uerr := st.SetRekorReceipt(context.Background(), scanID, logIndex, uuid); uerr != nil {
 		_ = st.Close()
 		return uerr
 	}

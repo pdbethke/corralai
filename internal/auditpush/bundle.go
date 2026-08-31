@@ -85,6 +85,13 @@ type ScanRow struct {
 	// whoever remembers the argv.
 	SourcePushed    bool
 	StatementSHA256 string
+	// RekorLogIndex and RekorUUID are the same --transparency receipt the
+	// local ledger's scans.rekor_log_index/rekor_uuid carry (see
+	// scanstore.Scan's doc for why LogIndex is a pointer: 0 is a real log
+	// position, so an un-uploaded scan must read back nil, never a
+	// fabricated 0).
+	RekorLogIndex *int64
+	RekorUUID     string
 }
 
 // MutantRow is one mutant's fate. The warehouse table is new, so unlike the
@@ -251,6 +258,8 @@ CREATE TABLE IF NOT EXISTS corral_scans (
   statement_sha256 VARCHAR,
   selection_ms     BIGINT,
   selection_reused_from BIGINT,
+  rekor_log_index  BIGINT,
+  rekor_uuid       VARCHAR,
   schema_version   INTEGER
 );`
 
@@ -491,6 +500,11 @@ var (
 	corralScansMigrationCols = []struct{ name, ddl string }{
 		{"selection_ms", "selection_ms BIGINT"},
 		{"selection_reused_from", "selection_reused_from BIGINT"},
+		// The --transparency receipt: additive for the same reason every
+		// other column in this list is — a warehouse an earlier corral
+		// created keeps its old shape until the next push meets it.
+		{"rekor_log_index", "rekor_log_index BIGINT"},
+		{"rekor_uuid", "rekor_uuid VARCHAR"},
 	}
 	corralMutantsMigrationCols = []struct{ name, ddl string }{}
 	// cached_input_tokens is additive: a warehouse an earlier corral created
@@ -939,14 +953,16 @@ func pushBundleOnce(target string, b Bundle) (Counts, error) {
 		    ts, repo, run_url, scan_id, commit_sha, corral_version, substrate,
 		    host, cores, trees_requested, diff_base, candidates, audited, passed,
 		    total_ms, input_tokens, output_tokens, model_calls,
-		    source_pushed, statement_sha256, selection_ms, selection_reused_from, schema_version
-		  ) VALUES (`+placeholders(23)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
+		    source_pushed, statement_sha256, selection_ms, selection_reused_from,
+		    rekor_log_index, rekor_uuid, schema_version
+		  ) VALUES (`+placeholders(25)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
 			now, b.Scan.Repo, b.Scan.RunURL, b.Scan.ScanID, b.Scan.Commit,
 			b.Scan.CorralVersion, b.Scan.Substrate, b.Scan.Host, b.Scan.Cores,
 			nullIfZeroInt(b.Scan.TreesRequested), b.Scan.DiffBase,
 			b.Scan.Candidates, b.Scan.Audited, b.Scan.Passed,
 			b.Scan.TotalMillis, b.Scan.InputTokens, b.Scan.OutputTokens, b.Scan.ModelCalls,
-			b.Scan.SourcePushed, b.Scan.StatementSHA256, b.Scan.SelectionMillis, b.Scan.SelectionReusedFrom, SchemaVersion,
+			b.Scan.SourcePushed, b.Scan.StatementSHA256, b.Scan.SelectionMillis, b.Scan.SelectionReusedFrom,
+			b.Scan.RekorLogIndex, nullIfEmpty(b.Scan.RekorUUID), SchemaVersion,
 		); err != nil {
 			return Counts{}, fmt.Errorf("auditpush: insert scan row: %w", err)
 		}

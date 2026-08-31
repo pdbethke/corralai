@@ -353,3 +353,37 @@ func TestScansShow_SaysNothingAboutKillersWhenNoneWereRecorded(t *testing.T) {
 		t.Errorf("a killed-by block was printed with nothing to put in it:\n%s", out.String())
 	}
 }
+
+// TestScansShow_PrintsTheRekorReceiptWhenPresent: a scan --transparency
+// uploaded must show its receipt without needing --json or --timing — the
+// same discoverability every other scan-grain fact in this command gets.
+func TestScansShow_PrintsTheRekorReceiptWhenPresent(t *testing.T) {
+	idx := int64(55)
+	r := &fakeScansReader{
+		files: []scanstore.File{{Path: "a.py", Disposition: "audited", KillRate: ptrF(0.5)}},
+		scan:  scanstore.ScanRow{ID: 7, Scan: scanstore.Scan{RekorLogIndex: &idx, RekorUUID: "uuid-xyz"}},
+	}
+	var out, errOut bytes.Buffer
+	if code := runScansShow([]string{"7"}, openFake(r), &out, &errOut); code != 0 {
+		t.Fatalf("exit %d: %s", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), "rekor: index 55") {
+		t.Errorf("scans show did not print the rekor receipt:\n%s", out.String())
+	}
+}
+
+// ...and stays silent when the scan was never uploaded — an em dash here
+// would announce a receipt that does not exist.
+func TestScansShow_SaysNothingAboutRekorWhenAbsent(t *testing.T) {
+	r := &fakeScansReader{
+		files: []scanstore.File{{Path: "a.py", Disposition: "audited", KillRate: ptrF(0.5)}},
+		scan:  scanstore.ScanRow{ID: 7},
+	}
+	var out, errOut bytes.Buffer
+	if code := runScansShow([]string{"7"}, openFake(r), &out, &errOut); code != 0 {
+		t.Fatalf("exit %d: %s", code, errOut.String())
+	}
+	if strings.Contains(out.String(), "rekor:") {
+		t.Errorf("a rekor line was printed for a scan with no receipt:\n%s", out.String())
+	}
+}

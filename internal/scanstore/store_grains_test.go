@@ -470,3 +470,86 @@ func TestStatementSHAIsStampedOnTheScanRow(t *testing.T) {
 		t.Fatalf("statement_sha256 = %q, want deadbeef", headers[0].StatementSHA256)
 	}
 }
+
+// TestRekorReceiptRoundTrips pins the two receipt columns --transparency
+// adds: a scan that was never uploaded to Rekor must read back with both
+// columns NULL (RekorLogIndex nil, RekorUUID ""), never a fabricated 0/"" —
+// the same NULL-not-zero discipline every other unmeasured column in this
+// ledger follows. SetRekorReceipt mirrors SetStatementSHA256: the receipt is
+// only known AFTER the scan row and the --attest statement both exist, so it
+// has to be stamped on, not written at Record time.
+func TestRekorReceiptRoundTrips(t *testing.T) {
+	dsn := filepath.Join(t.TempDir(), "rekor.duckdb")
+	st, err := scanstore.Open(dsn)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer st.Close()
+	ctx := context.Background()
+
+	unstamped, err := st.Record(ctx, scanstore.Scan{Owner: "local", Repo: "demo"}, nil)
+	if err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	headers, err := st.Scans(ctx, 10)
+	if err != nil {
+		t.Fatalf("Scans: %v", err)
+	}
+	var unstampedRow scanstore.ScanRow
+	for _, h := range headers {
+		if h.ID == unstamped {
+			unstampedRow = h
+		}
+	}
+	if unstampedRow.RekorLogIndex != nil {
+		t.Errorf("an un-uploaded scan's RekorLogIndex must read back nil, got %v", *unstampedRow.RekorLogIndex)
+	}
+	if unstampedRow.RekorUUID != "" {
+		t.Errorf("an un-uploaded scan's RekorUUID must read back empty, got %q", unstampedRow.RekorUUID)
+	}
+
+	stamped, err := st.Record(ctx, scanstore.Scan{Owner: "local", Repo: "demo2"}, nil)
+	if err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	if err := st.SetRekorReceipt(ctx, stamped, i64(99), "uuid-abc"); err != nil {
+		t.Fatalf("SetRekorReceipt: %v", err)
+	}
+	row, ok, err := st.ScanByID(ctx, stamped)
+	if err != nil {
+		t.Fatalf("ScanByID: %v", err)
+	}
+	if !ok {
+		t.Fatalf("ScanByID(%d): not found", stamped)
+	}
+	if row.RekorLogIndex == nil || *row.RekorLogIndex != 99 {
+		t.Errorf("RekorLogIndex = %v, want 99", row.RekorLogIndex)
+	}
+	if row.RekorUUID != "uuid-abc" {
+		t.Errorf("RekorUUID = %q, want uuid-abc", row.RekorUUID)
+	}
+
+	// The Scans() list reader shares scanScanRow with ScanByID — pin it too,
+	// so the two readers cannot silently diverge on this column the way an
+	// earlier bug let statement_sha256 diverge (see stampLink's own history).
+	listed, err := st.Scans(ctx, 10)
+	if err != nil {
+		t.Fatalf("Scans: %v", err)
+	}
+	var listedRow scanstore.ScanRow
+	found := false
+	for _, h := range listed {
+		if h.ID == stamped {
+			listedRow, found = h, true
+		}
+	}
+	if !found {
+		t.Fatalf("Scans() did not list scan %d", stamped)
+	}
+	if listedRow.RekorLogIndex == nil || *listedRow.RekorLogIndex != 99 {
+		t.Errorf("Scans(): RekorLogIndex = %v, want 99", listedRow.RekorLogIndex)
+	}
+	if listedRow.RekorUUID != "uuid-abc" {
+		t.Errorf("Scans(): RekorUUID = %q, want uuid-abc", listedRow.RekorUUID)
+	}
+}

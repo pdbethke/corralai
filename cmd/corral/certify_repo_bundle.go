@@ -105,6 +105,10 @@ func buildBundle(
 			InputTokens:         scan.InputTokens, OutputTokens: scan.OutputTokens,
 			ModelCalls:   scan.ModelCalls,
 			SourcePushed: sourcePushed,
+			// The --transparency receipt. Already nullable in the ledger,
+			// rides through as-is: nil/"" on every scan that never uploaded
+			// (--transparency was not given, or the upload failed open).
+			RekorLogIndex: scan.RekorLogIndex, RekorUUID: scan.RekorUUID,
 		},
 		Files:        buildAuditRows(files, scanID, meta),
 		Mutants:      buildMutantRows(mutants, scanID, meta),

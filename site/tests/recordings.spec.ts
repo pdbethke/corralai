@@ -27,6 +27,25 @@ const RECORDING_SLUGS = fs.existsSync(RECORDINGS_DIR)
       })
   : [];
 
+// Pin: the four fresh tapes (corral auditing its own signing code, the
+// sportspicker re-certify, the Ruby free-refusal story, and the TypeScript
+// pnpm-jail lesson) must each render a card and lead the gallery ahead of the
+// July tapes, which remain as dated history.
+const FRESH_SLUGS = ['corral-audits-corral', 'sportspicker-awards', 'ruby-levenshtein-v2', 'ms-index'];
+
+test('the four fresh tapes each render a card and lead the gallery', async ({ page }) => {
+  await page.goto('/recordings/');
+  for (const slug of FRESH_SLUGS) {
+    test.skip(!RECORDING_SLUGS.includes(slug), `requires ${slug} recording`);
+  }
+  const cardSlugsInOrder = await page.locator('.card').evaluateAll((els) => els.map((el) => el.getAttribute('data-slug')));
+  const leadFour = cardSlugsInOrder.slice(0, 4);
+  expect(leadFour, `expected the four fresh tapes to lead the gallery, got ${leadFour.join(', ')}`).toEqual(FRESH_SLUGS);
+  for (const slug of FRESH_SLUGS) {
+    await expect(page.locator(`.card[data-slug="${slug}"]`)).toBeVisible();
+  }
+});
+
 test('the gallery renders a card per recording, plays one, points at the scorecard, and stays on-domain', async ({ page }) => {
   const external: string[] = [];
   const backendApiCalls: string[] = [];

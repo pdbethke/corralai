@@ -1,0 +1,561 @@
+{
+  "events": [
+    {
+      "ts": 1,
+      "kind": "pool_subject",
+      "actor": "corral-advpool",
+      "subject": "src/index.ts",
+      "detail": {
+        "code": "const s = 1000;\nconst m = s * 60;\nconst h = m * 60;\nconst d = h * 24;\nconst w = d * 7;\nconst y = d * 365.25;\nconst mo = y / 12;\n\ntype Years = 'years' | 'year' | 'yrs' | 'yr' | 'y';\ntype Months = 'months' | 'month' | 'mo';\ntype Weeks = 'weeks' | 'week' | 'w';\ntype Days = 'days' | 'day' | 'd';\ntype Hours = 'hours' | 'hour' | 'hrs' | 'hr' | 'h';\ntype Minutes = 'minutes' | 'minute' | 'mins' | 'min' | 'm';\ntype Seconds = 'seconds' | 'second' | 'secs' | 'sec' | 's';\ntype Milliseconds = 'milliseconds' | 'millisecond' | 'msecs' | 'msec' | 'ms';\ntype Unit =\n  | Years\n  | Months\n  | Weeks\n  | Days\n  | Hours\n  | Minutes\n  | Seconds\n  | Milliseconds;\n\ntype UnitAnyCase = Capitalize\u003cUnit\u003e | Uppercase\u003cUnit\u003e | Unit;\n\nexport type StringValue =\n  | `${number}`\n  | `${number}${UnitAnyCase}`\n  | `${number} ${UnitAnyCase}`;\n\ninterface Options {\n  /**\n   * Set to `true` to use verbose formatting. Defaults to `false`.\n   */\n  long?: boolean;\n}\n\n/**\n * Parse or format the given value.\n *\n * @param value - The string or number to convert\n * @param options - Options for the conversion\n * @throws Error if `value` is not a non-empty string or a number\n */\nexport function ms(value: StringValue, options?: Options): number;\nexport function ms(value: number, options?: Options): string;\nexport function ms(\n  value: StringValue | number,\n  options?: Options,\n): number | string {\n  if (typeof value === 'string') {\n    return parse(value);\n  } else if (typeof value === 'number') {\n    return format(value, options);\n  }\n  throw new Error(\n    `Value provided to ms() must be a string or number. value=${JSON.stringify(value)}`,\n  );\n}\n\n/**\n * Parse the given string and return milliseconds.\n *\n * @param str - A string to parse to milliseconds\n * @returns The parsed value in milliseconds, or `NaN` if the string can't be\n * parsed\n */\nexport function parse(str: string): number {\n  if (typeof str !== 'string' || str.length === 0 || str.length \u003e 100) {\n    throw new Error(\n      `Value provided to ms.parse() must be a string with length between 1 and 99. value=${JSON.stringify(str)}`,\n    );\n  }\n  const match =\n    /^(?\u003cvalue\u003e-?\\d*\\.?\\d+) *(?\u003cunit\u003emilliseconds?|msecs?|ms|seconds?|secs?|s|minutes?|mins?|m|hours?|hrs?|h|days?|d|weeks?|w|months?|mo|years?|yrs?|y)?$/i.exec(\n      str,\n    );\n\n  if (!match?.groups) {\n    return NaN;\n  }\n\n  // Named capture groups need to be manually typed today.\n  // https://github.com/microsoft/TypeScript/issues/32098\n  const { value, unit = 'ms' } = match.groups as {\n    value: string;\n    unit: string | undefined;\n  };\n\n  const n = parseFloat(value);\n\n  const matchUnit = unit.toLowerCase() as Lowercase\u003cUnit\u003e;\n\n  /* istanbul ignore next - istanbul doesn't understand, but thankfully the TypeScript the exhaustiveness check in the default case keeps us type safe here */\n  switch (matchUnit) {\n    case 'years':\n    case 'year':\n    case 'yrs':\n    case 'yr':\n    case 'y':\n      return n * y;\n    case 'months':\n    case 'month':\n    case 'mo':\n      return n * mo;\n    case 'weeks':\n    case 'week':\n    case 'w':\n      return n * w;\n    case 'days':\n    case 'day':\n    case 'd':\n      return n * d;\n    case 'hours':\n    case 'hour':\n    case 'hrs':\n    case 'hr':\n    case 'h':\n      return n * h;\n    case 'minutes':\n    case 'minute':\n    case 'mins':\n    case 'min':\n    case 'm':\n      return n * m;\n    case 'seconds':\n    case 'second':\n    case 'secs':\n    case 'sec':\n    case 's':\n      return n * s;\n    case 'milliseconds':\n    case 'millisecond':\n    case 'msecs':\n    case 'msec':\n    case 'ms':\n      return n;\n    default:\n      matchUnit satisfies never;\n      throw new Error(\n        `Unknown unit \"${matchUnit}\" provided to ms.parse(). value=${JSON.stringify(str)}`,\n      );\n  }\n}\n\n/**\n * Parse the given StringValue and return milliseconds.\n *\n * @param value - A typesafe StringValue to parse to milliseconds\n * @returns The parsed value in milliseconds, or `NaN` if the string can't be\n * parsed\n */\nexport function parseStrict(value: StringValue): number {\n  return parse(value);\n}\n\n/**\n * Short format for `ms`.\n */\nfunction fmtShort(ms: number): StringValue {\n  const msAbs = Math.abs(ms);\n  if (msAbs \u003e= y) {\n    return `${Math.round(ms / y)}y`;\n  }\n  if (msAbs \u003e= mo) {\n    return `${Math.round(ms / mo)}mo`;\n  }\n  if (msAbs \u003e= w) {\n    return `${Math.round(ms / w)}w`;\n  }\n  if (msAbs \u003e= d) {\n    return `${Math.round(ms / d)}d`;\n  }\n  if (msAbs \u003e= h) {\n    return `${Math.round(ms / h)}h`;\n  }\n  if (msAbs \u003e= m) {\n    return `${Math.round(ms / m)}m`;\n  }\n  if (msAbs \u003e= s) {\n    return `${Math.round(ms / s)}s`;\n  }\n  return `${ms}ms`;\n}\n\n/**\n * Long format for `ms`.\n */\nfunction fmtLong(ms: number): StringValue {\n  const msAbs = Math.abs(ms);\n  if (msAbs \u003e= y) {\n    return plural(ms, msAbs, y, 'year');\n  }\n  if (msAbs \u003e= mo) {\n    return plural(ms, msAbs, mo, 'month');\n  }\n  if (msAbs \u003e= w) {\n    return plural(ms, msAbs, w, 'week');\n  }\n  if (msAbs \u003e= d) {\n    return plural(ms, msAbs, d, 'day');\n  }\n  if (msAbs \u003e= h) {\n    return plural(ms, msAbs, h, 'hour');\n  }\n  if (msAbs \u003e= m) {\n    return plural(ms, msAbs, m, 'minute');\n  }\n  if (msAbs \u003e= s) {\n    return plural(ms, msAbs, s, 'second');\n  }\n  return `${ms} ms`;\n}\n\n/**\n * Format the given integer as a string.\n *\n * @param ms - milliseconds\n * @param options - Options for the conversion\n * @returns The formatted string\n */\nexport function format(ms: number, options?: Options): string {\n  if (typeof ms !== 'number' || !Number.isFinite(ms)) {\n    throw new Error('Value provided to ms.format() must be of type number.');\n  }\n\n  return options?.long ? fmtLong(ms) : fmtShort(ms);\n}\n\n/**\n * Pluralization helper.\n */\nfunction plural(\n  ms: number,\n  msAbs: number,\n  n: number,\n  name: string,\n): StringValue {\n  const isPlural = msAbs \u003e= n * 1.5;\n  return `${Math.round(ms / n)} ${name}${isPlural ? 's' : ''}` as StringValue;\n}\n",
+        "code_path": "src/index.ts",
+        "dev_test_code": "import { describe, expect, it } from '@jest/globals';\nimport { ms } from './index';\n\ndescribe('ms(string)', () =\u003e {\n  it('should not throw an error', () =\u003e {\n    expect(() =\u003e {\n      ms('1m');\n    }).not.toThrow();\n  });\n\n  it('should preserve ms', () =\u003e {\n    expect(ms('100')).toBe(100);\n  });\n\n  it('should convert from m to ms', () =\u003e {\n    expect(ms('1m')).toBe(60000);\n  });\n\n  it('should convert from h to ms', () =\u003e {\n    expect(ms('1h')).toBe(3600000);\n  });\n\n  it('should convert d to ms', () =\u003e {\n    expect(ms('2d')).toBe(172800000);\n  });\n\n  it('should convert w to ms', () =\u003e {\n    expect(ms('3w')).toBe(1814400000);\n  });\n\n  it('should convert s to ms', () =\u003e {\n    expect(ms('1s')).toBe(1000);\n  });\n\n  it('should convert ms to ms', () =\u003e {\n    expect(ms('100ms')).toBe(100);\n  });\n\n  it('should convert y to ms', () =\u003e {\n    expect(ms('1y')).toBe(31557600000);\n  });\n\n  it('should work with decimals', () =\u003e {\n    expect(ms('1.5h')).toBe(5400000);\n  });\n\n  it('should work with multiple spaces', () =\u003e {\n    expect(ms('1   s')).toBe(1000);\n  });\n\n  it('should return NaN if invalid', () =\u003e {\n    // @ts-expect-error - We expect this to fail.\n    expect(Number.isNaN(ms('☃'))).toBe(true);\n    // @ts-expect-error - We expect this to fail.\n    expect(Number.isNaN(ms('10-.5'))).toBe(true);\n    // @ts-expect-error - We expect this to fail.\n    expect(Number.isNaN(ms('ms'))).toBe(true);\n  });\n\n  it('should be case-insensitive', () =\u003e {\n    expect(ms('1.5H')).toBe(5400000);\n  });\n\n  it('should work with numbers starting with .', () =\u003e {\n    expect(ms('.5ms')).toBe(0.5);\n  });\n\n  it('should work with negative integers', () =\u003e {\n    expect(ms('-100ms')).toBe(-100);\n  });\n\n  it('should work with negative decimals', () =\u003e {\n    expect(ms('-1.5h')).toBe(-5400000);\n    expect(ms('-10.5h')).toBe(-37800000);\n  });\n\n  it('should work with negative decimals starting with \".\"', () =\u003e {\n    expect(ms('-.5h')).toBe(-1800000);\n  });\n});\n\n// long strings\n\ndescribe('ms(long string)', () =\u003e {\n  it('should not throw an error', () =\u003e {\n    expect(() =\u003e {\n      ms('53 milliseconds');\n    }).not.toThrow();\n  });\n\n  it('should convert milliseconds to ms', () =\u003e {\n    expect(ms('53 milliseconds')).toBe(53);\n  });\n\n  it('should convert msecs to ms', () =\u003e {\n    expect(ms('17 msecs')).toBe(17);\n  });\n\n  it('should convert sec to ms', () =\u003e {\n    expect(ms('1 sec')).toBe(1000);\n  });\n\n  it('should convert from min to ms', () =\u003e {\n    expect(ms('1 min')).toBe(60000);\n  });\n\n  it('should convert from hr to ms', () =\u003e {\n    expect(ms('1 hr')).toBe(3600000);\n  });\n\n  it('should convert days to ms', () =\u003e {\n    expect(ms('2 days')).toBe(172800000);\n  });\n\n  it('should convert weeks to ms', () =\u003e {\n    expect(ms('1 week')).toBe(604800000);\n  });\n\n  it('should convert years to ms', () =\u003e {\n    expect(ms('1 year')).toBe(31557600000);\n  });\n\n  it('should work with decimals', () =\u003e {\n    expect(ms('1.5 hours')).toBe(5400000);\n  });\n\n  it('should work with negative integers', () =\u003e {\n    expect(ms('-100 milliseconds')).toBe(-100);\n  });\n\n  it('should work with negative decimals', () =\u003e {\n    expect(ms('-1.5 hours')).toBe(-5400000);\n  });\n\n  it('should work with negative decimals starting with \".\"', () =\u003e {\n    expect(ms('-.5 hr')).toBe(-1800000);\n  });\n});\n\n// numbers\n\ndescribe('ms(number, { long: true })', () =\u003e {\n  it('should not throw an error', () =\u003e {\n    expect(() =\u003e {\n      ms(500, { long: true });\n    }).not.toThrow();\n  });\n\n  it('should support milliseconds', () =\u003e {\n    expect(ms(500, { long: true })).toBe('500 ms');\n\n    expect(ms(-500, { long: true })).toBe('-500 ms');\n  });\n\n  it('should support seconds', () =\u003e {\n    expect(ms(1000, { long: true })).toBe('1 second');\n    expect(ms(1200, { long: true })).toBe('1 second');\n    expect(ms(10000, { long: true })).toBe('10 seconds');\n\n    expect(ms(-1000, { long: true })).toBe('-1 second');\n    expect(ms(-1200, { long: true })).toBe('-1 second');\n    expect(ms(-10000, { long: true })).toBe('-10 seconds');\n  });\n\n  it('should support minutes', () =\u003e {\n    expect(ms(60 * 1000, { long: true })).toBe('1 minute');\n    expect(ms(60 * 1200, { long: true })).toBe('1 minute');\n    expect(ms(60 * 10000, { long: true })).toBe('10 minutes');\n\n    expect(ms(-1 * 60 * 1000, { long: true })).toBe('-1 minute');\n    expect(ms(-1 * 60 * 1200, { long: true })).toBe('-1 minute');\n    expect(ms(-1 * 60 * 10000, { long: true })).toBe('-10 minutes');\n  });\n\n  it('should support hours', () =\u003e {\n    expect(ms(60 * 60 * 1000, { long: true })).toBe('1 hour');\n    expect(ms(60 * 60 * 1200, { long: true })).toBe('1 hour');\n    expect(ms(60 * 60 * 10000, { long: true })).toBe('10 hours');\n\n    expect(ms(-1 * 60 * 60 * 1000, { long: true })).toBe('-1 hour');\n    expect(ms(-1 * 60 * 60 * 1200, { long: true })).toBe('-1 hour');\n    expect(ms(-1 * 60 * 60 * 10000, { long: true })).toBe('-10 hours');\n  });\n\n  it('should support days', () =\u003e {\n    expect(ms(1 * 24 * 60 * 60 * 1000, { long: true })).toBe('1 day');\n    expect(ms(1 * 24 * 60 * 60 * 1200, { long: true })).toBe('1 day');\n    expect(ms(6 * 24 * 60 * 60 * 1000, { long: true })).toBe('6 days');\n\n    expect(ms(-1 * 1 * 24 * 60 * 60 * 1000, { long: true })).toBe('-1 day');\n    expect(ms(-1 * 1 * 24 * 60 * 60 * 1200, { long: true })).toBe('-1 day');\n    expect(ms(-1 * 6 * 24 * 60 * 60 * 1000, { long: true })).toBe('-6 days');\n  });\n\n  it('should support weeks', () =\u003e {\n    expect(ms(1 * 7 * 24 * 60 * 60 * 1000, { long: true })).toBe('1 week');\n    expect(ms(2 * 7 * 24 * 60 * 60 * 1000, { long: true })).toBe('2 weeks');\n\n    expect(ms(-1 * 1 * 7 * 24 * 60 * 60 * 1000, { long: true })).toBe(\n      '-1 week',\n    );\n    expect(ms(-1 * 2 * 7 * 24 * 60 * 60 * 1000, { long: true })).toBe(\n      '-2 weeks',\n    );\n  });\n\n  it('should support months', () =\u003e {\n    expect(ms(30.4375 * 24 * 60 * 60 * 1000, { long: true })).toBe('1 month');\n    expect(ms(30.4375 * 24 * 60 * 60 * 1200, { long: true })).toBe('1 month');\n    expect(ms(30.4375 * 24 * 60 * 60 * 10000, { long: true })).toBe(\n      '10 months',\n    );\n\n    expect(ms(-1 * 30.4375 * 24 * 60 * 60 * 1000, { long: true })).toBe(\n      '-1 month',\n    );\n    expect(ms(-1 * 30.4375 * 24 * 60 * 60 * 1200, { long: true })).toBe(\n      '-1 month',\n    );\n    expect(ms(-1 * 30.4375 * 24 * 60 * 60 * 10000, { long: true })).toBe(\n      '-10 months',\n    );\n  });\n\n  it('should support years', () =\u003e {\n    expect(ms(365.25 * 24 * 60 * 60 * 1000 + 1, { long: true })).toBe('1 year');\n    expect(ms(365.25 * 24 * 60 * 60 * 1200 + 1, { long: true })).toBe('1 year');\n    expect(ms(365.25 * 24 * 60 * 60 * 10000 + 1, { long: true })).toBe(\n      '10 years',\n    );\n\n    expect(ms(-1 * 365.25 * 24 * 60 * 60 * 1000 - 1, { long: true })).toBe(\n      '-1 year',\n    );\n    expect(ms(-1 * 365.25 * 24 * 60 * 60 * 1200 - 1, { long: true })).toBe(\n      '-1 year',\n    );\n    expect(ms(-1 * 365.25 * 24 * 60 * 60 * 10000 - 1, { long: true })).toBe(\n      '-10 years',\n    );\n  });\n\n  it('should round', () =\u003e {\n    expect(ms(234234234, { long: true })).toBe('3 days');\n\n    expect(ms(-234234234, { long: true })).toBe('-3 days');\n  });\n});\n\n// numbers\n\ndescribe('ms(number)', () =\u003e {\n  it('should not throw an error', () =\u003e {\n    expect(() =\u003e {\n      ms(500);\n    }).not.toThrow();\n  });\n\n  it('should support milliseconds', () =\u003e {\n    expect(ms(500)).toBe('500ms');\n\n    expect(ms(-500)).toBe('-500ms');\n  });\n\n  it('should support seconds', () =\u003e {\n    expect(ms(1000)).toBe('1s');\n    expect(ms(10000)).toBe('10s');\n\n    expect(ms(-1000)).toBe('-1s');\n    expect(ms(-10000)).toBe('-10s');\n  });\n\n  it('should support minutes', () =\u003e {\n    expect(ms(60 * 1000)).toBe('1m');\n    expect(ms(60 * 10000)).toBe('10m');\n\n    expect(ms(-1 * 60 * 1000)).toBe('-1m');\n    expect(ms(-1 * 60 * 10000)).toBe('-10m');\n  });\n\n  it('should support hours', () =\u003e {\n    expect(ms(60 * 60 * 1000)).toBe('1h');\n    expect(ms(60 * 60 * 10000)).toBe('10h');\n\n    expect(ms(-1 * 60 * 60 * 1000)).toBe('-1h');\n    expect(ms(-1 * 60 * 60 * 10000)).toBe('-10h');\n  });\n\n  it('should support days', () =\u003e {\n    expect(ms(24 * 60 * 60 * 1000)).toBe('1d');\n    expect(ms(24 * 60 * 60 * 6000)).toBe('6d');\n\n    expect(ms(-1 * 24 * 60 * 60 * 1000)).toBe('-1d');\n    expect(ms(-1 * 24 * 60 * 60 * 6000)).toBe('-6d');\n  });\n\n  it('should support weeks', () =\u003e {\n    expect(ms(1 * 7 * 24 * 60 * 60 * 1000)).toBe('1w');\n    expect(ms(2 * 7 * 24 * 60 * 60 * 1000)).toBe('2w');\n\n    expect(ms(-1 * 1 * 7 * 24 * 60 * 60 * 1000)).toBe('-1w');\n    expect(ms(-1 * 2 * 7 * 24 * 60 * 60 * 1000)).toBe('-2w');\n  });\n\n  it('should support months', () =\u003e {\n    expect(ms(30.4375 * 24 * 60 * 60 * 1000)).toBe('1mo');\n    expect(ms(30.4375 * 24 * 60 * 60 * 1200)).toBe('1mo');\n    expect(ms(30.4375 * 24 * 60 * 60 * 10000)).toBe('10mo');\n\n    expect(ms(-1 * 30.4375 * 24 * 60 * 60 * 1000)).toBe('-1mo');\n    expect(ms(-1 * 30.4375 * 24 * 60 * 60 * 1200)).toBe('-1mo');\n    expect(ms(-1 * 30.4375 * 24 * 60 * 60 * 10000)).toBe('-10mo');\n  });\n\n  it('should support years', () =\u003e {\n    expect(ms(365.25 * 24 * 60 * 60 * 1000 + 1)).toBe('1y');\n    expect(ms(365.25 * 24 * 60 * 60 * 1200 + 1)).toBe('1y');\n    expect(ms(365.25 * 24 * 60 * 60 * 10000 + 1)).toBe('10y');\n\n    expect(ms(-1 * 365.25 * 24 * 60 * 60 * 1000 - 1)).toBe('-1y');\n    expect(ms(-1 * 365.25 * 24 * 60 * 60 * 1200 - 1)).toBe('-1y');\n    expect(ms(-1 * 365.25 * 24 * 60 * 60 * 10000 - 1)).toBe('-10y');\n  });\n\n  it('should round', () =\u003e {\n    expect(ms(234234234)).toBe('3d');\n\n    expect(ms(-234234234)).toBe('-3d');\n  });\n});\n\n// invalid inputs\n\ndescribe('ms(invalid inputs)', () =\u003e {\n  it('should throw an error, when ms(\"\")', () =\u003e {\n    expect(() =\u003e {\n      // @ts-expect-error - We expect this to throw.\n      ms('');\n    }).toThrow();\n  });\n\n  it('should throw an error, when ms(undefined)', () =\u003e {\n    expect(() =\u003e {\n      // @ts-expect-error - We expect this to throw.\n      ms(undefined);\n    }).toThrow();\n  });\n\n  it('should throw an error, when ms(null)', () =\u003e {\n    expect(() =\u003e {\n      // @ts-expect-error - We expect this to throw.\n      ms(null);\n    }).toThrow();\n  });\n\n  it('should throw an error, when ms([])', () =\u003e {\n    expect(() =\u003e {\n      // @ts-expect-error - We expect this to throw.\n      ms([]);\n    }).toThrow();\n  });\n\n  it('should throw an error, when ms({})', () =\u003e {\n    expect(() =\u003e {\n      // @ts-expect-error - We expect this to throw.\n      ms({});\n    }).toThrow();\n  });\n\n  it('should throw an error, when ms(NaN)', () =\u003e {\n    expect(() =\u003e {\n      ms(NaN);\n    }).toThrow();\n  });\n\n  it('should throw an error, when ms(Infinity)', () =\u003e {\n    expect(() =\u003e {\n      ms(Infinity);\n    }).toThrow();\n  });\n\n  it('should throw an error, when ms(-Infinity)', () =\u003e {\n    expect(() =\u003e {\n      ms(-Infinity);\n    }).toThrow();\n  });\n});\n",
+        "dev_test_path": "src/index.test.ts",
+        "goal": "ms converts between duration strings and milliseconds exactly: every documented unit parses, round-trips format(parse(x)), and malformed input throws rather than guessing"
+      }
+    },
+    {
+      "ts": 2,
+      "kind": "task_created",
+      "subject": "mutant-generator/0",
+      "detail": {
+        "role": "mutant-generator",
+        "title": "Generate mutants for parse"
+      }
+    },
+    {
+      "ts": 3,
+      "kind": "task_claimed",
+      "actor": "gemini-3.6-flash/mutant-generator",
+      "subject": "mutant-generator/0",
+      "detail": {
+        "role": "mutant-generator",
+        "title": "Generate mutants for parse"
+      }
+    },
+    {
+      "ts": 4,
+      "kind": "task_created",
+      "subject": "mutant-generator/1",
+      "detail": {
+        "role": "mutant-generator",
+        "title": "Generate mutants for fmtLong"
+      }
+    },
+    {
+      "ts": 5,
+      "kind": "task_claimed",
+      "actor": "gemini-3.6-flash/mutant-generator",
+      "subject": "mutant-generator/1",
+      "detail": {
+        "role": "mutant-generator",
+        "title": "Generate mutants for fmtLong"
+      }
+    },
+    {
+      "ts": 6,
+      "kind": "task_created",
+      "subject": "mutant-generator/2",
+      "detail": {
+        "role": "mutant-generator",
+        "title": "Generate mutants for fmtShort"
+      }
+    },
+    {
+      "ts": 7,
+      "kind": "task_claimed",
+      "actor": "gemini-3.6-flash/mutant-generator",
+      "subject": "mutant-generator/2",
+      "detail": {
+        "role": "mutant-generator",
+        "title": "Generate mutants for fmtShort"
+      }
+    },
+    {
+      "ts": 8,
+      "kind": "task_created",
+      "subject": "mutant-generator/3",
+      "detail": {
+        "role": "mutant-generator",
+        "title": "Generate mutants for format"
+      }
+    },
+    {
+      "ts": 9,
+      "kind": "task_claimed",
+      "actor": "gemini-3.6-flash/mutant-generator",
+      "subject": "mutant-generator/3",
+      "detail": {
+        "role": "mutant-generator",
+        "title": "Generate mutants for format"
+      }
+    },
+    {
+      "ts": 10,
+      "kind": "task_created",
+      "subject": "mutant-generator/4",
+      "detail": {
+        "role": "mutant-generator",
+        "title": "Generate mutants for ms"
+      }
+    },
+    {
+      "ts": 11,
+      "kind": "task_claimed",
+      "actor": "gemini-3.6-flash/mutant-generator",
+      "subject": "mutant-generator/4",
+      "detail": {
+        "role": "mutant-generator",
+        "title": "Generate mutants for ms"
+      }
+    },
+    {
+      "ts": 12,
+      "kind": "task_created",
+      "subject": "mutant-generator/5",
+      "detail": {
+        "role": "mutant-generator",
+        "title": "Generate mutants for plural"
+      }
+    },
+    {
+      "ts": 13,
+      "kind": "task_claimed",
+      "actor": "gemini-3.6-flash/mutant-generator",
+      "subject": "mutant-generator/5",
+      "detail": {
+        "role": "mutant-generator",
+        "title": "Generate mutants for plural"
+      }
+    },
+    {
+      "ts": 14,
+      "kind": "task_created",
+      "subject": "mutant-generator/6",
+      "detail": {
+        "role": "mutant-generator",
+        "title": "Generate mutants for parseStrict"
+      }
+    },
+    {
+      "ts": 15,
+      "kind": "task_claimed",
+      "actor": "gemini-3.6-flash/mutant-generator",
+      "subject": "mutant-generator/6",
+      "detail": {
+        "role": "mutant-generator",
+        "title": "Generate mutants for parseStrict"
+      }
+    },
+    {
+      "ts": 16,
+      "kind": "task_created",
+      "subject": "test-critic",
+      "detail": {
+        "role": "test-critic",
+        "title": "Critique the dev's tests"
+      }
+    },
+    {
+      "ts": 17,
+      "kind": "task_claimed",
+      "actor": "gemini-3.7-flash/test-critic",
+      "subject": "test-critic",
+      "detail": {
+        "role": "test-critic",
+        "title": "Critique the dev's tests"
+      }
+    },
+    {
+      "ts": 18,
+      "kind": "task_done",
+      "actor": "gemini-3.6-flash/mutant-generator",
+      "subject": "mutant-generator/6",
+      "detail": {
+        "result": "===MUTATION_1===\n\u003c\u003c\u003c\u003c\u003c\u003c\u003c SEARCH\nexport function parseStrict(value: StringValue): number {\n  return parse(value);\n}\n=======\nexport function parseStrict(value: StringValue): number {\n  return -parse(value);\n}\n\u003e\u003e\u003e\u003e\u003e\u003e\u003e REPLACE\n===MUTATION_2===\n\u003c\u003c\u003c\u003c\u003c\u003c\u003c SEARCH\nexport function parseStrict(value: StringValue): number {\n  return parse(value);\n}\n=======\nexport function parseStrict(value: StringValue): number {\n  return parse(value) * 1000;\n}\n\u003e\u003e\u003e\u003e\u003e\u003e\u003e REPLACE\n===MUTATION_3===\n\u003c\u003c\u003c\u003c\u003c\u003c\u003c SEARCH\nexport function parseStrict(value: StringValue): number {\n  return parse(value);\n}\n=======\nexport function parseStrict(value: StringValue): number {\n  return 0;\n}\n\u003e\u003e\u003e\u003e\u003e\u003e\u003e REPLACE\n===MUTATION_4===\n\u003c\u003c\u003c\u003c\u003c\u003c\u003c SEARCH\nexport function parseStrict(value: StringValue): number {\n  return parse(value);\n}\n=======\nexport function parseStrict(value: StringValue): number {\n  return parse(value) + 1;\n}\n\u003e\u003e\u003e\u003e\u003e\u003e\u003e REPLACE\n===MUTATION_5===\n\u003c\u003c\u003c\u003c\u003c\u003c\u003c SEARCH\nexport function parseStrict(value: StringValue): number {\n  return parse(value);\n}\n=======\nexport function parseStrict(value: StringValue): number {\n  return parse(value) / 2;\n}\n\u003e\u003e\u003e\u003e\u003e\u003e\u003e REPLACE",
+        "role": "mutant-generator"
+      }
+    },
+    {
+      "ts": 19,
+      "kind": "task_done",
+      "actor": "gemini-3.6-flash/mutant-generator",
+      "subject": "mutant-generator/5",
+      "detail": {
+        "result": "===MUTATION_1===\n\u003c\u003c\u003c\u003c\u003c\u003c\u003c SEARCH\n  const isPlural = msAbs \u003e= n * 1.5;\n=======\n  const isPlural = msAbs \u003e= n * 2;\n\u003e\u003e\u003e\u003e\u003e\u003e\u003e REPLACE\n===MUTATION_2===\n\u003c\u003c\u003c\u003c\u003c\u003c\u003c SEARCH\n  const isPlural = msAbs \u003e= n * 1.5;\n=======\n  const isPlural = msAbs \u003e n * 1.5;\n\u003e\u003e\u003e\u003e\u003e\u003e\u003e REPLACE\n===MUTATION_3===\n\u003c\u003c\u003c\u003c\u003c\u003c\u003c SEARCH\n  return `${Math.round(ms / n)} ${name}${isPlural ? 's' : ''}` as StringValue;\n=======\n  return `${Math.floor(ms / n)} ${name}${isPlural ? 's' : ''}` as StringValue;\n\u003e\u003e\u003e\u003e\u003e\u003e\u003e REPLACE\n===MUTATION_4===\n\u003c\u003c\u003c\u003c\u003c\u003c\u003c SEARCH\n  return `${Math.round(ms / n)} ${name}${isPlural ? 's' : ''}` as StringValue;\n=======\n  return `${Math.round(ms / n)} ${name}${isPlural ? 'es' : ''}` as StringValue;\n\u003e\u003e\u003e\u003e\u003e\u003e\u003e REPLACE\n===MUTATION_5===\n\u003c\u003c\u003c\u003c\u003c\u003c\u003c SEARCH\n  const isPlural = msAbs \u003e= n * 1.5;\n=======\n  const isPlural = ms \u003e= n * 1.5;\n\u003e\u003e\u003e\u003e\u003e\u003e\u003e REPLACE",
+        "role": "mutant-generator"
+      }
+    },
+    {
+      "ts": 20,
+      "kind": "task_done",
+      "actor": "gemini-3.6-flash/mutant-generator",
+      "subject": "mutant-generator/2",
+      "detail": {
+        "result": "===MUTATION_1===\n\u003c\u003c\u003c\u003c\u003c\u003c\u003c SEARCH\n  if (msAbs \u003e= y) {\n    return `${Math.round(ms / y)}y`;\n  }\n=======\n  if (msAbs \u003e= y) {\n    return `${Math.floor(ms / y)}y`;\n  }\n\u003e\u003e\u003e\u003e\u003e\u003e\u003e REPLACE\n===MUTATION_2===\n\u003c\u003c\u003c\u003c\u003c\u003c\u003c SEARCH\nfunction fmtShort(ms: number): StringValue {\n  const msAbs = Math.abs(ms);\n=======\nfunction fmtShort(ms: number): StringValue {\n  const msAbs = ms;\n\u003e\u003e\u003e\u003e\u003e\u003e\u003e REPLACE\n===MUTATION_3===\n\u003c\u003c\u003c\u003c\u003c\u003c\u003c SEARCH\n  if (msAbs \u003e= mo) {\n    return `${Math.round(ms / mo)}mo`;\n  }\n=======\n  if (msAbs \u003e mo) {\n    return `${Math.round(ms / mo)}mo`;\n  }\n\u003e\u003e\u003e\u003e\u003e\u003e\u003e REPLACE\n===MUTATION_4===\n\u003c\u003c\u003c\u003c\u003c\u003c\u003c SEARCH\n  if (msAbs \u003e= m) {\n    return `${Math.round(ms / m)}m`;\n  }\n=======\n  if (msAbs \u003e= m) {\n    return `${Math.round(ms / s)}m`;\n  }\n\u003e\u003e\u003e\u003e\u003e\u003e\u003e REPLACE\n===MUTATION_5===\n\u003c\u003c\u003c\u003c\u003c\u003c\u003c SEARCH\n  if (msAbs \u003e= s) {\n    return `${Math.round(ms / s)}s`;\n  }\n=======\n  if (msAbs \u003e= s) {\n    return `${Math.round(ms / s)}sec`;\n  }\n\u003e\u003e\u003e\u003e\u003e\u003e\u003e REPLACE",
+        "role": "mutant-generator"
+      }
+    },
+    {
+      "ts": 21,
+      "kind": "task_done",
+      "actor": "gemini-3.6-flash/mutant-generator",
+      "subject": "mutant-generator/1",
+      "detail": {
+        "result": "===MUTATION_1===\n\u003c\u003c\u003c\u003c\u003c\u003c\u003c SEARCH\n  const msAbs = Math.abs(ms);\n=======\n  const msAbs = ms;\n\u003e\u003e\u003e\u003e\u003e\u003e\u003e REPLACE\n===MUTATION_2===\n\u003c\u003c\u003c\u003c\u003c\u003c\u003c SEARCH\n  if (msAbs \u003e= mo) {\n    return plural(ms, msAbs, mo, 'month');\n  }\n=======\n  if (msAbs \u003e mo) {\n    return plural(ms, msAbs, mo, 'month');\n  }\n\u003e\u003e\u003e\u003e\u003e\u003e\u003e REPLACE\n===MUTATION_3===\n\u003c\u003c\u003c\u003c\u003c\u003c\u003c SEARCH\n  if (msAbs \u003e= d) {\n    return plural(ms, msAbs, d, 'day');\n  }\n=======\n  if (msAbs \u003e= d) {\n    return plural(ms, msAbs, d, 'd');\n  }\n\u003e\u003e\u003e\u003e\u003e\u003e\u003e REPLACE\n===MUTATION_4===\n\u003c\u003c\u003c\u003c\u003c\u003c\u003c SEARCH\n  if (msAbs \u003e= m) {\n    return plural(ms, msAbs, m, 'minute');\n  }\n=======\n  if (msAbs \u003e= m) {\n    return plural(ms, msAbs, s, 'minute');\n  }\n\u003e\u003e\u003e\u003e\u003e\u003e\u003e REPLACE\n===MUTATION_5===\n\u003c\u003c\u003c\u003c\u003c\u003c\u003c SEARCH\n  return `${ms} ms`;\n=======\n  return `${ms}ms`;\n\u003e\u003e\u003e\u003e\u003e\u003e\u003e REPLACE",
+        "role": "mutant-generator"
+      }
+    },
+    {
+      "ts": 22,
+      "kind": "task_done",
+      "actor": "gemini-3.6-flash/mutant-generator",
+      "subject": "mutant-generator/3",
+      "detail": {
+        "result": "===MUTATION_1===\n\u003c\u003c\u003c\u003c\u003c\u003c\u003c SEARCH\n  return options?.long ? fmtLong(ms) : fmtShort(ms);\n=======\n  return options?.long ? fmtShort(ms) : fmtLong(ms);\n\u003e\u003e\u003e\u003e\u003e\u003e\u003e REPLACE\n===MUTATION_2===\n\u003c\u003c\u003c\u003c\u003c\u003c\u003c SEARCH\n  return options?.long ? fmtLong(ms) : fmtShort(ms);\n=======\n  return options?.long ? fmtLong(ms + 1) : fmtShort(ms + 1);\n\u003e\u003e\u003e\u003e\u003e\u003e\u003e REPLACE\n===MUTATION_3===\n\u003c\u003c\u003c\u003c\u003c\u003c\u003c SEARCH\n  if (typeof ms !== 'number' || !Number.isFinite(ms)) {\n=======\n  if (typeof ms !== 'number' || Number.isFinite(ms)) {\n\u003e\u003e\u003e\u003e\u003e\u003e\u003e REPLACE\n===MUTATION_4===\n\u003c\u003c\u003c\u003c\u003c\u003c\u003c SEARCH\n  if (typeof ms !== 'number' || !Number.isFinite(ms)) {\n=======\n  if (typeof ms !== 'number') {\n\u003e\u003e\u003e\u003e\u003e\u003e\u003e REPLACE\n===MUTATION_5===\n\u003c\u003c\u003c\u003c\u003c\u003c\u003c SEARCH\n  return options?.long ? fmtLong(ms) : fmtShort(ms);\n=======\n  return options?.long ? fmtLong(ms) : fmtShort(-ms);\n\u003e\u003e\u003e\u003e\u003e\u003e\u003e REPLACE",
+        "role": "mutant-generator"
+      }
+    },
+    {
+      "ts": 23,
+      "kind": "task_done",
+      "actor": "gemini-3.7-flash/test-critic",
+      "subject": "test-critic",
+      "detail": {
+        "result": "All tests in `src/index.test.ts` contain sound, non-vacuous assertions validating the parsing, formatting, and error-handling behavior of `ms`.",
+        "role": "test-critic"
+      }
+    },
+    {
+      "ts": 24,
+      "kind": "task_done",
+      "actor": "gemini-3.6-flash/mutant-generator",
+      "subject": "mutant-generator/0",
+      "detail": {
+        "result": "===MUTATION_1===\n\u003c\u003c\u003c\u003c\u003c\u003c\u003c SEARCH\n  if (typeof str !== 'string' || str.length === 0 || str.length \u003e 100) {\n=======\n  if (typeof str !== 'string' || str.length \u003c 0 || str.length \u003e 100) {\n\u003e\u003e\u003e\u003e\u003e\u003e\u003e REPLACE\n===MUTATION_2===\n\u003c\u003c\u003c\u003c\u003c\u003c\u003c SEARCH\n  if (!match?.groups) {\n    return NaN;\n  }\n=======\n  if (!match?.groups) {\n    return 0;\n  }\n\u003e\u003e\u003e\u003e\u003e\u003e\u003e REPLACE\n===MUTATION_3===\n\u003c\u003c\u003c\u003c\u003c\u003c\u003c SEARCH\n  const { value, unit = 'ms' } = match.groups as {\n=======\n  const { value, unit = 's' } = match.groups as {\n\u003e\u003e\u003e\u003e\u003e\u003e\u003e REPLACE\n===MUTATION_4===\n\u003c\u003c\u003c\u003c\u003c\u003c\u003c SEARCH\n    case 'days':\n    case 'day':\n    case 'd':\n      return n * d;\n=======\n    case 'days':\n    case 'day':\n    case 'd':\n      return n * h;\n\u003e\u003e\u003e\u003e\u003e\u003e\u003e REPLACE\n===MUTATION_5===\n\u003c\u003c\u003c\u003c\u003c\u003c\u003c SEARCH\n    case 'months':\n    case 'month':\n    case 'mo':\n      return n * mo;\n=======\n    case 'months':\n    case 'month':\n    case 'mo':\n      return n * m;\n\u003e\u003e\u003e\u003e\u003e\u003e\u003e REPLACE",
+        "role": "mutant-generator"
+      }
+    },
+    {
+      "ts": 25,
+      "kind": "task_done",
+      "actor": "gemini-3.6-flash/mutant-generator",
+      "subject": "mutant-generator/4",
+      "detail": {
+        "result": "===MUTATION_1===\n\u003c\u003c\u003c\u003c\u003c\u003c\u003c SEARCH\n  } else if (typeof value === 'number') {\n    return format(value, options);\n  }\n=======\n  } else if (typeof value === 'number') {\n    return format(value);\n  }\n\u003e\u003e\u003e\u003e\u003e\u003e\u003e REPLACE\n===MUTATION_2===\n\u003c\u003c\u003c\u003c\u003c\u003c\u003c SEARCH\n  if (typeof value === 'string') {\n    return parse(value);\n  }\n=======\n  if (typeof value === 'string') {\n    return parse(value) + 1;\n  }\n\u003e\u003e\u003e\u003e\u003e\u003e\u003e REPLACE\n===MUTATION_3===\n\u003c\u003c\u003c\u003c\u003c\u003c\u003c SEARCH\n  throw new Error(\n    `Value provided to ms() must be a string or number. value=${JSON.stringify(value)}`,\n  );\n=======\n  return 0;\n\u003e\u003e\u003e\u003e\u003e\u003e\u003e REPLACE\n===MUTATION_4===\n\u003c\u003c\u003c\u003c\u003c\u003c\u003c SEARCH\n  } else if (typeof value === 'number') {\n    return format(value, options);\n  }\n=======\n  } else if (typeof value === 'number') {\n    return String(value);\n  }\n\u003e\u003e\u003e\u003e\u003e\u003e\u003e REPLACE\n===MUTATION_5===\n\u003c\u003c\u003c\u003c\u003c\u003c\u003c SEARCH\n  if (typeof value === 'string') {\n    return parse(value);\n  }\n=======\n  if (typeof value === 'string') {\n    return -parse(value);\n  }\n\u003e\u003e\u003e\u003e\u003e\u003e\u003e REPLACE",
+        "role": "mutant-generator"
+      }
+    },
+    {
+      "ts": 26,
+      "kind": "phase_generation",
+      "actor": "corral-advpool",
+      "subject": "src/index.ts",
+      "detail": {
+        "duration_ms": 22135
+      }
+    },
+    {
+      "ts": 27,
+      "kind": "pool_shard",
+      "actor": "corral-advpool",
+      "subject": "parse",
+      "detail": {
+        "dropped": false,
+        "mutants": 5,
+        "parse_retries": 0,
+        "region": "parse",
+        "region_complexity": 39,
+        "region_lines": 77,
+        "shard": 0
+      }
+    },
+    {
+      "ts": 28,
+      "kind": "pool_shard",
+      "actor": "corral-advpool",
+      "subject": "fmtLong",
+      "detail": {
+        "dropped": false,
+        "mutants": 4,
+        "parse_retries": 0,
+        "region": "fmtLong",
+        "region_complexity": 8,
+        "region_lines": 25,
+        "shard": 1
+      }
+    },
+    {
+      "ts": 29,
+      "kind": "pool_shard",
+      "actor": "corral-advpool",
+      "subject": "fmtShort",
+      "detail": {
+        "dropped": false,
+        "mutants": 5,
+        "parse_retries": 0,
+        "region": "fmtShort",
+        "region_complexity": 8,
+        "region_lines": 25,
+        "shard": 2
+      }
+    },
+    {
+      "ts": 30,
+      "kind": "pool_shard",
+      "actor": "corral-advpool",
+      "subject": "format",
+      "detail": {
+        "dropped": false,
+        "mutants": 5,
+        "parse_retries": 0,
+        "region": "format",
+        "region_complexity": 4,
+        "region_lines": 7,
+        "shard": 3
+      }
+    },
+    {
+      "ts": 31,
+      "kind": "pool_shard",
+      "actor": "corral-advpool",
+      "subject": "ms",
+      "detail": {
+        "dropped": false,
+        "mutants": 5,
+        "parse_retries": 0,
+        "region": "ms",
+        "region_complexity": 3,
+        "region_lines": 13,
+        "shard": 4
+      }
+    },
+    {
+      "ts": 32,
+      "kind": "pool_shard",
+      "actor": "corral-advpool",
+      "subject": "plural",
+      "detail": {
+        "dropped": false,
+        "mutants": 5,
+        "parse_retries": 0,
+        "region": "plural",
+        "region_complexity": 2,
+        "region_lines": 9,
+        "shard": 5
+      }
+    },
+    {
+      "ts": 33,
+      "kind": "pool_shard",
+      "actor": "corral-advpool",
+      "subject": "parseStrict",
+      "detail": {
+        "dropped": false,
+        "mutants": 5,
+        "parse_retries": 0,
+        "region": "parseStrict",
+        "region_complexity": 1,
+        "region_lines": 3,
+        "shard": 6
+      }
+    },
+    {
+      "ts": 34,
+      "kind": "pool_dev_adequacy",
+      "actor": "corral-advpool",
+      "detail": {
+        "dev_kill_rate": 0.9411764705882353,
+        "duration_ms": 142773,
+        "mutants_total": 34,
+        "survivor_ids": [
+          "s5/m1",
+          "s5/m2"
+        ],
+        "survivors": 2
+      }
+    },
+    {
+      "ts": 35,
+      "kind": "task_created",
+      "subject": "test-writer/s5/m1",
+      "detail": {
+        "role": "test-writer",
+        "title": "Write test killing survivor s5/m1"
+      }
+    },
+    {
+      "ts": 36,
+      "kind": "task_claimed",
+      "actor": "gemini-3.6-flash/test-writer",
+      "subject": "test-writer/s5/m1",
+      "detail": {
+        "role": "test-writer",
+        "title": "Write test killing survivor s5/m1"
+      }
+    },
+    {
+      "ts": 37,
+      "kind": "task_created",
+      "subject": "test-writer/s5/m2",
+      "detail": {
+        "role": "test-writer",
+        "title": "Write test killing survivor s5/m2"
+      }
+    },
+    {
+      "ts": 38,
+      "kind": "task_claimed",
+      "actor": "gemini-3.6-flash/test-writer",
+      "subject": "test-writer/s5/m2",
+      "detail": {
+        "role": "test-writer",
+        "title": "Write test killing survivor s5/m2"
+      }
+    },
+    {
+      "ts": 39,
+      "kind": "task_done",
+      "actor": "gemini-3.6-flash/test-writer",
+      "subject": "test-writer/s5/m2",
+      "detail": {
+        "result": "import { describe, expect, it } from '@jest/globals';\nimport { ms } from './index';\n\ndescribe('ms pluralization boundary tests', () =\u003e {\n  it('should pluralize at exactly 1.5 units in long format', () =\u003e {\n    expect(ms(1500, { long: true })).toBe('2 seconds');\n    expect(ms(90000, { long: true })).toBe('2 minutes');\n    expect(ms(5400000, { long: true })).toBe('2 hours');\n    expect(ms(129600000, { long: true })).toBe('2 days');\n  });\n});",
+        "role": "test-writer"
+      }
+    },
+    {
+      "ts": 40,
+      "kind": "task_done",
+      "actor": "gemini-3.6-flash/test-writer",
+      "subject": "test-writer/s5/m1",
+      "detail": {
+        "result": "import { describe, expect, it } from '@jest/globals';\nimport { ms } from './index';\n\ndescribe('ms pluralization threshold corral', () =\u003e {\n  it('should pluralize units starting at 1.5x of the unit value', () =\u003e {\n    expect(ms(1500, { long: true })).toBe('2 seconds');\n    expect(ms(-1500, { long: true })).toBe('-2 seconds');\n    expect(ms(90000, { long: true })).toBe('2 minutes');\n    expect(ms(5400000, { long: true })).toBe('2 hours');\n    expect(ms(129600000, { long: true })).toBe('2 days');\n  });\n});",
+        "role": "test-writer"
+      }
+    },
+    {
+      "ts": 41,
+      "kind": "task_created",
+      "subject": "test-writer/s5/m1-r2",
+      "detail": {
+        "role": "test-writer",
+        "title": "Write test killing survivor s5/m1"
+      }
+    },
+    {
+      "ts": 42,
+      "kind": "task_claimed",
+      "actor": "gemini-3.6-flash/test-writer",
+      "subject": "test-writer/s5/m1-r2",
+      "detail": {
+        "role": "test-writer",
+        "title": "Write test killing survivor s5/m1"
+      }
+    },
+    {
+      "ts": 43,
+      "kind": "task_created",
+      "subject": "test-writer/s5/m2-r2",
+      "detail": {
+        "role": "test-writer",
+        "title": "Write test killing survivor s5/m2"
+      }
+    },
+    {
+      "ts": 44,
+      "kind": "task_claimed",
+      "actor": "gemini-3.6-flash/test-writer",
+      "subject": "test-writer/s5/m2-r2",
+      "detail": {
+        "role": "test-writer",
+        "title": "Write test killing survivor s5/m2"
+      }
+    },
+    {
+      "ts": 45,
+      "kind": "task_done",
+      "actor": "gemini-3.6-flash/test-writer",
+      "subject": "test-writer/s5/m1-r2",
+      "detail": {
+        "result": "import { describe, expect, it } from '@jest/globals';\nimport { ms } from './index.ts';\n\ndescribe('ms pluralization threshold corral', () =\u003e {\n  it('should pluralize unit when value is at 1.5x of the unit value', () =\u003e {\n    expect(ms(1500, { long: true })).toBe('2 seconds');\n    expect(ms(-1500, { long: true })).toBe('-2 seconds');\n    expect(ms(90000, { long: true })).toBe('2 minutes');\n    expect(ms(5400000, { long: true })).toBe('2 hours');\n    expect(ms(129600000, { long: true })).toBe('2 days');\n  });\n});",
+        "role": "test-writer"
+      }
+    },
+    {
+      "ts": 46,
+      "kind": "task_done",
+      "actor": "gemini-3.6-flash/test-writer",
+      "subject": "test-writer/s5/m2-r2",
+      "detail": {
+        "result": "import { describe, expect, it } from '@jest/globals';\nimport { ms } from './index.ts';\n\ndescribe('ms pluralization exact boundary test for survivor', () =\u003e {\n  it('should format exactly 1.5 seconds as plural \"2 seconds\"', () =\u003e {\n    expect(ms(1500, { long: true })).toBe('2 seconds');\n  });\n\n  it('should format exactly 1.5 minutes as plural \"2 minutes\"', () =\u003e {\n    expect(ms(90000, { long: true })).toBe('2 minutes');\n  });\n\n  it('should format exactly 1.5 hours as plural \"2 hours\"', () =\u003e {\n    expect(ms(5400000, { long: true })).toBe('2 hours');\n  });\n});",
+        "role": "test-writer"
+      }
+    },
+    {
+      "ts": 47,
+      "kind": "task_created",
+      "subject": "test-writer/s5/m1-r3",
+      "detail": {
+        "role": "test-writer",
+        "title": "Write test killing survivor s5/m1"
+      }
+    },
+    {
+      "ts": 48,
+      "kind": "task_claimed",
+      "actor": "gemini-3.6-flash/test-writer",
+      "subject": "test-writer/s5/m1-r3",
+      "detail": {
+        "role": "test-writer",
+        "title": "Write test killing survivor s5/m1"
+      }
+    },
+    {
+      "ts": 49,
+      "kind": "task_done",
+      "actor": "gemini-3.6-flash/test-writer",
+      "subject": "test-writer/s5/m1-r3",
+      "detail": {
+        "result": "import { describe, expect, it } from '@jest/globals';\nimport { ms } from './index.ts';\n\ndescribe('ms pluralization threshold corral', () =\u003e {\n  it('should pluralize unit when value is at 1.5x of the unit value', () =\u003e {\n    expect(ms(1500, { long: true })).toBe('2 seconds');\n    expect(ms(90000, { long: true })).toBe('2 minutes');\n    expect(ms(5400000, { long: true })).toBe('2 hours');\n    expect(ms(129600000, { long: true })).toBe('2 days');\n  });\n});",
+        "role": "test-writer"
+      }
+    },
+    {
+      "ts": 50,
+      "kind": "phase_authored_pass",
+      "actor": "corral-advpool",
+      "subject": "src/index.ts",
+      "detail": {
+        "duration_ms": 74390
+      }
+    },
+    {
+      "ts": 51,
+      "kind": "phase_critic",
+      "actor": "corral-advpool",
+      "subject": "src/index.ts",
+      "detail": {
+        "duration_ms": 0
+      }
+    },
+    {
+      "ts": 52,
+      "kind": "pool_verdict",
+      "actor": "corral-advpool",
+      "subject": "4ff48cec099f0514c3e9bbca18706c9c21122bfb",
+      "detail": {
+        "dev_kill_rate": 0.9411764705882353,
+        "models_by_role": {
+          "mutant-generator": "gemini-3.6-flash",
+          "test-critic": "gemini-3.7-flash",
+          "test-writer": "gemini-3.6-flash"
+        },
+        "mutants_total": 34,
+        "proven_missed": 2,
+        "record_head": "d75fbac30a661a9bec1b69c7678a1b6b415470bfa2c3d034a333a6ea458eb958",
+        "record_id": 76,
+        "status": "certified",
+        "survivors": 2
+      }
+    }
+  ]
+}

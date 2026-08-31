@@ -1,0 +1,13 @@
+{
+  "directive": "adversarial pool · src/index.ts (vercel/ms) — duration parsing/formatting against the project's own jest suite (167 tests)",
+  "task_count": 7,
+  "done_task_count": 7,
+  "finding_count": 2,
+  "duration_seconds": 239,
+  "models": ["gemini-3.6-flash", "gemini-3.7-flash"],
+  "platform": {
+    "inference": "vendor cloud — Gemini 3.6 Flash planting and writing, a decorrelated Gemini 3.7 Flash critic",
+    "host": "linux/amd64 · bwrap jail · --repo-dir"
+  },
+  "hero_note": "CERTIFIED at 0.94 on a 167-test suite — and the per-survivor writer still proved both survivors catchable. TypeScript, in the project's own harness."
+}

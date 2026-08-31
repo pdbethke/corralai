@@ -1,0 +1,13 @@
+{
+  "directive": "adversarial pool · internal/certify/certify.go — corral's OWN signing code, audited by corral (nemo iudex, applied to us)",
+  "task_count": 8,
+  "done_task_count": 8,
+  "finding_count": 30,
+  "duration_seconds": 1742,
+  "models": ["gemini-3.6-flash", "gemini-3.7-flash"],
+  "platform": {
+    "inference": "vendor cloud — Gemini 3.6 Flash planting and writing, a decorrelated Gemini 3.7 Flash critic",
+    "host": "linux/amd64 · bwrap jail · --repo-dir"
+  },
+  "hero_note": "We ran our own gate on our own signing code and published the result: NEEDS-REVIEW. 43 of 78 planted faults killed, 35 survived — and the writer handed back tests proving 30 of them catchable. The corrective-retry loop is visible mid-tape: an authored test failed on clean code and was reissued with the failure fed back."
+}

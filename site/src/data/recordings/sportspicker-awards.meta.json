@@ -1,0 +1,13 @@
+{
+  "directive": "adversarial pool · sportspicker_core/awards.py — the award arithmetic, audited against its own suite (90 tests, green)",
+  "task_count": 7,
+  "done_task_count": 7,
+  "finding_count": 2,
+  "duration_seconds": 71,
+  "models": ["gemini-3.6-flash", "gemini-3.7-flash"],
+  "platform": {
+    "inference": "vendor cloud — Gemini 3.6 Flash planting and writing, a decorrelated Gemini 3.7 Flash critic",
+    "host": "linux/amd64 · bwrap jail · --repo-dir"
+  },
+  "hero_note": "CERTIFIED at 0.90 — and the per-survivor writer still proved both surviving faults catchable, handing back the test that catches each."
+}

@@ -61,11 +61,29 @@ function isPrivateOrLocalIPv4(ip: string): boolean {
   return false;
 }
 
+// The deny-list's job is to catch the OPERATOR's own identity leaking, not
+// to redact an audited public repo's own published authorship out of a
+// verbatim source-code excerpt. This is an exact-match allowlist, not a
+// pattern — it does not weaken the email rule for anything else. Each entry
+// is a verified case: the email is the target repo's own author byline,
+// already public upstream, quoted here only because it's literally in the
+// file corral audited.
+//   pbattley@gmail.com — threedaymonk/text, lib/text/levenshtein.rb's own
+//   doc-comment ("# Author: Paul Battley (pbattley@gmail.com)"), matching
+//   the address in the gem's own public gemspec (s.email). Not an operator
+//   identity; verified against github.com/threedaymonk/text before this
+//   tape shipped.
+const ALLOWED_PUBLIC_SOURCE_EMAILS = new Set(['pbattley@gmail.com']);
+
 function scanDeny(text: string): string[] {
   const offenses: string[] = [];
   for (const [pattern, label] of DENY_PATTERNS) {
     const matches = text.match(pattern);
-    if (matches) offenses.push(`[${label}] ${matches.join(', ')}`);
+    const flagged =
+      label === 'email address'
+        ? (matches ?? []).filter((m) => !ALLOWED_PUBLIC_SOURCE_EMAILS.has(m))
+        : matches;
+    if (flagged && flagged.length > 0) offenses.push(`[${label}] ${flagged.join(', ')}`);
   }
   for (const m of text.matchAll(IPV4_RE)) {
     if (!isPrivateOrLocalIPv4(m[0])) offenses.push(`[non-private/non-localhost IP] ${m[0]}`);
@@ -80,7 +98,16 @@ function scanDeny(text: string): string[] {
     // in scripts/scrub-golden-run.py).
     const precedingChar = idx > 0 ? text[idx - 1] : '';
     const precededByWord = idx > 0 && /[A-Za-z0-9._-]/.test(precedingChar);
-    if (!precededByWord && !SAFE_PATH_PREFIXES.some((prefix) => path.startsWith(prefix))) {
+    // A schema/spec URL (https://slsa.dev/provenance/v1,
+    // https://in-toto.io/Statement/v1, …) is public identifier text, not a
+    // host path — it shows up verbatim in signing/attestation source. The
+    // match starts at the SECOND '/' of the scheme's "://" (the first '/'
+    // isn't alnum, so it never opens the path-segment group), so the
+    // carve-out looks one char back for that leading '/' and then for
+    // "http:" or "https:" immediately before it. Kept in sync with the same
+    // carve-out in scrub-golden-run.py's scan_deny().
+    const precededByUrlScheme = precedingChar === '/' && /https?:$/.test(text.slice(Math.max(0, idx - 7), idx - 1));
+    if (!precededByWord && !precededByUrlScheme && !SAFE_PATH_PREFIXES.some((prefix) => path.startsWith(prefix))) {
       offenses.push(`[absolute path outside demo-container roots] ${path}`);
     }
   }
@@ -111,6 +138,15 @@ test('the deny-list scan flags the Important-1 parity rules (non-private IPv4, a
   // ported faithfully from scan_deny's own documented edge case.
   const gluedSlash = scanDeny('see github.com/yourusername/stack for the source');
   expect(gluedSlash).toHaveLength(0);
+
+  // Schema/spec URL carve-out: an https:// (or http://) URL is public
+  // identifier text (SLSA/in-toto predicate types show up verbatim in
+  // signing source), not a host path — must NOT false-positive. A genuine
+  // absolute host path glued right after other URL-shaped text must still fire.
+  const schemaUrl = scanDeny('predicateType: "https://slsa.dev/provenance/v1" and "https://in-toto.io/Statement/v1"');
+  expect(schemaUrl).toHaveLength(0);
+  const hostPathAfterUrl = scanDeny('see https://example.com then /etc/secrets/prod.env');
+  expect(hostPathAfterUrl.some((o) => o.includes('absolute path outside demo-container roots'))).toBe(true);
 
   // Provider API keys: Anthropic sk-ant-… (hyphens defeat the plain sk-… rule)
   // and Google AIza… — the two vendors the cross-vendor critic uses.
@@ -644,11 +680,13 @@ test('the skills lens describes the audit on screen, not a generic one', async (
   await page.evaluate((n) => (window as any).seekReplay(n), max);
   await page.evaluate(() => (window as any).setView('skills'));
   const skills = page.locator('#skills');
-  // This run's own subject matter, straight off the pool_subject beat.
+  // This run's own subject matter, straight off the pool_subject beat — the
+  // hero's default tape is corral-audits-corral (corral auditing its own
+  // signing code), so the goal is the ledger's tamper-evidence guarantee.
   await expect(skills).toContainText('goal-first mutation');
-  await expect(skills).toContainText(/contributes exactly its budget/);
-  // The functions it actually sharded across.
-  await expect(skills).toContainText('effective_pot');
+  await expect(skills).toContainText(/tamper-evident/);
+  // A function it actually sharded across.
+  await expect(skills).toContainText('VerifyDSSE');
   // The measured grade, not a slogan.
   await expect(skills).toContainText(/\d+% of planted faults killed/);
 });

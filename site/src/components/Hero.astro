@@ -13,7 +13,7 @@ const hasGeneratedRecordings = Object.keys(generatedRecordings).some(
 );
 const preferredRecordings = hasGeneratedRecordings ? generatedRecordings : legacyRecordings;
 const fallbackRecordings = hasGeneratedRecordings ? legacyRecordings : {};
-const heroSlug = (process.env.CORRALAI_HERO_SLUG || 'sportspicker-green-suite-gap').trim() || 'sportspicker-green-suite-gap';
+const heroSlug = (process.env.CORRALAI_HERO_SLUG || 'corral-audits-corral').trim() || 'corral-audits-corral';
 
 function readRecordingModule(modules: Record<string, any>, slug: string, suffix: string) {
   const key = Object.keys(modules).find((p) => p.endsWith(`/${slug}${suffix}`));

@@ -7,7 +7,9 @@
   <pre class="code">go install github.com/pdbethke/corralai/cmd/corral@latest
 export ANTHROPIC_API_KEY=sk-ant-...
 corral certify --local --code path/to/file.go \
-  --goal "what it must guarantee" -- go test ./...</pre>
+  --goal "what it must guarantee" \
+  --writer-model claude-sonnet-5 --mutant-model claude-sonnet-5 --critic-model claude-haiku-4-5 \
+  -- go test ./...</pre>
   <p>
     Out comes a signed verdict — <strong>certified</strong> or
     <strong>needs-review</strong> — with the kill-rate, the survivors, and any
@@ -19,7 +21,8 @@ corral certify --local --code path/to/file.go \
     docker/podman elsewhere) and grades tests in five languages — Go, Python,
     Ruby, JavaScript, TypeScript — writing its killing test in
     <em>your</em> project's harness, so vitest, jest, pytest and minitest work
-    without configuration. Roles are decorrelated across models by default, and
+    without configuration. Roles are decorrelation-<strong>enforced</strong> across
+    models — the critic must differ from the writer or the run refuses — and
     each role can be pointed at a different <em>vendor</em>: a Gemini
     fault-planter with a Claude critic is a supported run, off your own keys.
   </p>
@@ -31,6 +34,15 @@ corral certify --local --code path/to/file.go \
     the plugin works and is not evidence about the ecosystem.
     <a href="https://github.com/pdbethke/corralai#readme">The evidence table is in the README →</a>
   </p>
+  <p>
+    Ready for more than one file? Install your project's dev dependencies first —
+    the suite has to pass before corral can plant bugs against it — then point
+    corral at the whole repo:
+  </p>
+  <pre class="code">corral certify --repo . --substrate workspace \
+  --writer-model claude-sonnet-5 --mutant-model claude-sonnet-5 --critic-model claude-haiku-4-5 \
+  --derive-model claude-sonnet-5 \
+  -- python -m pytest   # or your own test command</pre>
 </section>
 
 <style>

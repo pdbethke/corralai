@@ -27,3 +27,10 @@ test('scrubbing the replay bar updates the position label', async ({ page }) => 
   }, Math.floor(max / 2));
   await expect(page.locator('#replay-label')).toHaveText(new RegExp(`^${Math.floor(max / 2)} / ${max}$`));
 });
+
+test('the same-model comic opens the hero', async ({ page }) => {
+  await page.goto('/');
+  const comic = page.locator('#hero img.hero-comic');
+  await expect(comic).toBeVisible();
+  await expect(comic).toHaveAttribute('alt', /same frontier model/);
+});

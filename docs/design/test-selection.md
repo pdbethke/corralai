@@ -411,3 +411,38 @@ What that says, plainly:
 - `--swarm` sizes both the LLM workers and the trees; a clean N = 1 versus
   N = 6 comparison uses `--swarm 4` versus `--swarm 24` so the writer's
   parallelism matches.
+
+
+## Tier A — the second scan is nearly free, and says why
+
+Shipped 2026-08-31 on `feat/tier-a-caches`. Two content-addressed caches in
+the scan ledger, exact keys only, every reuse disclosed:
+
+- **Goals**: a goal derived from identical bytes is a fact — cached by
+  `(path, source sha256, model, prompt revision)`, ungoaled results included.
+  The line says `goals: N derived, M reused (identical source)`; the ledger
+  says `goal_reused`. Pinned `--goals` bypasses; `--no-goal-cache` opts out.
+- **Selection evidence**: the instrumented run's output is cached by
+  `(tree digest, instrumented-command digest, plugin)` where the tree digest
+  covers the same universe the pool copies — tracked + untracked-not-ignored,
+  symlink targets included — so a one-byte source edit misses and gitignored
+  churn cannot poison. The line says `selection: reused — tree unchanged
+  since scan <id>`; `selection_ms` is NULL because the phase did not run.
+- **The interplay is the point**: stable goals make `GoalDigest` stable,
+  which makes the verdict cache key stable — so the verdict cache, inert
+  since it shipped (#110: goals re-derived differently every run), now
+  fires. An in-process test drives all three caches through the production
+  paths, with a salted-deriver control proving the claim is not an artifact.
+
+Measured (flask, `--top 1`, per-survivor, recorded mutant set, 24 cores):
+
+| | scan 1 (cold) | scan 2 (tree unchanged) |
+|---|---|---|
+| wall | 3m47s | **0.87s** |
+| model calls | 25 (writer) + goal derivation | **0** |
+| writer tokens in | 0.4M | 0 |
+| lines | `time: … authored 3m17s · total 3m32s` | `selection: reused…`, `goals: 0 derived, 1 reused`, `1 verdict(s) reused from cache` |
+| proven | 17 of 24 | (reused verdict — no new claim) |
+
+The kill rate did not move (it cannot: identical bytes, identical exam), and
+the cache-hit row records no spend and no time, because it paid none.

@@ -57,7 +57,7 @@ func TestScoreJSNonTerminatingMutantIsKilledFast(t *testing.T) {
 	// once the test below calls it, the node process never returns on its
 	// own; only the jail's timeout can end the run.
 	mutants := []adequacy.Mutant{
-		{ID: "m-infinite-loop", Code: "function maybeLoop(n){ while (true) {} }\nmodule.exports = { maybeLoop };\n"},
+		{ID: "m-infinite-loop", Replace: "function maybeLoop(n){ while (true) {} }\nmodule.exports = { maybeLoop };\n"},
 	}
 	tp := js.TestPaths(codePath)[0].Path
 	test := "const { test } = require('node:test');\nconst assert = require('node:assert');\nconst { maybeLoop } = require('./loopmod.js');\ntest('maybe loop', () => {\n  assert.strictEqual(maybeLoop(1), 1);\n});\n"

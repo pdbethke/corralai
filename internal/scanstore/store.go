@@ -216,6 +216,14 @@ type File struct {
 	// (no selector for the language, --whole-suite, an evidence run that
 	// failed). Empty when TestSelection is set — never both.
 	SelectionFallback string
+	// WriterMode mirrors advpool.Verdict.WriterMode: whether this file's
+	// survivors were attacked by one writer call each ("per-survivor") or by
+	// one call carrying them all ("batched"). NULL — never one of the two
+	// spellings — on a row from a run that named no mode and on every row
+	// written before this column existed: the two modes are not the same
+	// measurement, so a query that groups by them must be able to exclude the
+	// rows that cannot say which they are.
+	WriterMode string
 	// Uncovered: the evidence ran and found NO test executing this file. Its
 	// KillRate is written NULL for the same reason a rejected file's is —
 	// nothing graded the file, so a stored 0.0 would later read as "your
@@ -287,6 +295,13 @@ type File struct {
 	VacuousFindings int
 	// Status is advpool.Verdict.Status ("certified" | "needs-review").
 	Status string
+	// PromptShape mirrors advpool.Verdict.PromptShape: "chunk" when every
+	// mutant-generator shard on this file's run saw only its own symbols'
+	// bodies plus the file's preamble, "file" when even one shard fell back
+	// to the whole file (including every unsharded run, which always shows
+	// the whole file). "" for a row written before this column existed, or
+	// a rejected file that was never scored — never a fabricated value.
+	PromptShape string
 	// AuthoredTestNotCollected mirrors advpool.Verdict.AuthoredTestNotCollected:
 	// the run proved a killing test compiled and ran, but the dev suite's own
 	// collection never picked it up, so ProvenMissed on this row is earned
@@ -454,6 +469,8 @@ var scanFilesMigrationCols = []struct{ name, ddl string }{
 	{"tests_per_mutant_min", "tests_per_mutant_min INTEGER"},
 	{"tests_per_mutant_median", "tests_per_mutant_median INTEGER"},
 	{"tests_per_mutant_max", "tests_per_mutant_max INTEGER"},
+	{"writer_mode", "writer_mode VARCHAR"},
+	{"prompt_shape", "prompt_shape VARCHAR"},
 }
 
 // scansMigrationCols is the same ledger at the SCAN grain. `scans` had no
@@ -600,7 +617,9 @@ func Open(dsn string) (*Store, error) {
 		per_mutant BOOLEAN,
 		tests_per_mutant_min INTEGER,
 		tests_per_mutant_median INTEGER,
-		tests_per_mutant_max INTEGER
+		tests_per_mutant_max INTEGER,
+		writer_mode VARCHAR,
+		prompt_shape VARCHAR
 	)`); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("scanstore: create scan_files table: %w", err)
@@ -663,7 +682,8 @@ func Open(dsn string) (*Store, error) {
 	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS scan_model_calls (
 		scan_id BIGINT, path VARCHAR, role VARCHAR, model VARCHAR,
 		calls INTEGER, retries INTEGER,
-		input_tokens BIGINT, output_tokens BIGINT, wall_ms BIGINT
+		input_tokens BIGINT, output_tokens BIGINT,
+		cached_input_tokens BIGINT, cache_write_input_tokens BIGINT, wall_ms BIGINT
 	)`); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("scanstore: create scan_model_calls table: %w", err)
@@ -775,13 +795,22 @@ func migrateScanMutants(db *sql.DB) error {
 	return migrateColumns(db, "scan_mutants", scanMutantsMigrationCols)
 }
 
-// migrateScanModelCalls and migrateScanEvents exist with EMPTY lists on
-// purpose: both tables are new at this schema version, so nothing predates
-// their CREATE and there is nothing to add today. They are here so the next
-// column added to either goes through the same additive path as every other
-// column in this package, rather than being appended to a CREATE TABLE that
-// an existing ledger will never re-run.
-var scanModelCallsMigrationCols = []struct{ name, ddl string }{}
+// scanModelCallsMigrationCols carries the columns scan_model_calls has grown
+// since its original CREATE. cached_input_tokens is the first: a ledger an
+// earlier corral wrote gets it added on open, and every row already in it
+// keeps NULL — which is correct, not a gap. Those runs never asked a provider
+// for a cached prompt and never read one back, so "not measured" is exactly
+// what they mean.
+//
+// migrateScanEvents keeps an EMPTY list on purpose: nothing predates
+// scan_events' CREATE, and the list is here so the next column added to it
+// goes through the same additive path as every other column in this package
+// rather than being appended to a CREATE TABLE an existing ledger will never
+// re-run.
+var scanModelCallsMigrationCols = []struct{ name, ddl string }{
+	{"cached_input_tokens", "cached_input_tokens BIGINT"},
+	{"cache_write_input_tokens", "cache_write_input_tokens BIGINT"},
+}
 
 var scanEventsMigrationCols = []struct{ name, ddl string }{}
 
@@ -904,6 +933,15 @@ func retriesParam(v *int) any {
 	return *v
 }
 
+// cachedTokensParam is retriesParam for the cached-prompt count: NULL when
+// nothing measured one, never a stored 0 a later query would average.
+func cachedTokensParam(v *int64) any {
+	if v == nil {
+		return nil
+	}
+	return *v
+}
+
 func fileKillRate(f File) *float64 {
 	if f.Uncovered {
 		return nil
@@ -959,9 +997,10 @@ func (s *Store) Record(ctx context.Context, scan Scan, files []File) (int64, err
 			selection_ms, generation_ms, pool_ms, dev_pass_ms, authored_pass_ms, critic_ms, total_ms,
 			mutant_ms_median, mutant_ms_max,
 			challenger_jaccard, challenger_kappa, challenger_sufficient, goals_derived,
-			per_mutant, tests_per_mutant_min, tests_per_mutant_median, tests_per_mutant_max
+			per_mutant, tests_per_mutant_min, tests_per_mutant_median, tests_per_mutant_max,
+			writer_mode, prompt_shape
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			id, f.Path, f.Lang, f.Disposition, f.Reason,
 			fileKillRate(f), f.Survivors, f.Gradable, f.PreflightState, f.Evidence, f.Detail, f.TimedOut, f.TestWriterFailed, f.ProvenMissed, f.PoolTestUnsound,
 			f.ProvenMutantIDs, f.AuthoredTest, f.CacheKey, f.VerdictJSON, f.ComputedAt,
@@ -974,6 +1013,7 @@ func (s *Store) Record(ctx context.Context, scan Scan, files []File) (int64, err
 			f.MutantMillisMedian, f.MutantMillisMax,
 			f.ChallengerJaccard, f.ChallengerKappa, f.ChallengerSufficient, f.GoalsDerived,
 			f.PerMutant, f.TestsPerMutantMin, f.TestsPerMutantMedian, f.TestsPerMutantMax,
+			nullableString(f.WriterMode), nullableString(f.PromptShape),
 		); err != nil {
 			return 0, fmt.Errorf("scanstore: insert scan_files row for %q: %w", f.Path, err)
 		}
@@ -1138,7 +1178,8 @@ func (s *Store) FilesForScan(ctx context.Context, scanID int64) ([]File, error) 
 		selection_ms, generation_ms, pool_ms, dev_pass_ms, authored_pass_ms, critic_ms, total_ms,
 		mutant_ms_median, mutant_ms_max,
 		challenger_jaccard, challenger_kappa, challenger_sufficient, goals_derived,
-		per_mutant, tests_per_mutant_min, tests_per_mutant_median, tests_per_mutant_max
+		per_mutant, tests_per_mutant_min, tests_per_mutant_median, tests_per_mutant_max,
+		writer_mode, prompt_shape
 		FROM scan_files WHERE scan_id = ? ORDER BY rowid`, scanID)
 	if err != nil {
 		return nil, fmt.Errorf("scanstore: files for scan %d: %w", scanID, err)
@@ -1155,6 +1196,7 @@ func (s *Store) FilesForScan(ctx context.Context, scanID int64) ([]File, error) 
 		// The eleven verdict columns all read back nullable: a row written
 		// before this migration ran will not have them, and a rejected file
 		// was never scored, so NULL is the honest value for its counts too.
+		var writerMode sql.NullString
 		var modelsByRole, droppedRegions, status sql.NullString
 		var mutantsTotal, regionsTotal, regionsProbed, vacuousFindings sql.NullInt64
 		var authoredTestNotCollected, baselineFailed, cacheHit sql.NullBool
@@ -1198,6 +1240,7 @@ func (s *Store) FilesForScan(ctx context.Context, scanID int64) ([]File, error) 
 		var challengerJaccard, challengerKappa sql.NullFloat64
 		var challengerSufficient, perMutant sql.NullBool
 		var tpmMin, tpmMedian, tpmMax sql.NullInt64
+		var promptShape sql.NullString
 		if err := rows.Scan(&f.Path, &f.Lang, &f.Disposition, &f.Reason,
 			&f.KillRate, &f.Survivors, &f.Gradable, &f.PreflightState, &f.Evidence, &detail, &timedOut, &testWriterFailed, &provenMissed, &poolTestUnsound,
 			&provenIDs, &authoredTest,
@@ -1210,7 +1253,7 @@ func (s *Store) FilesForScan(ctx context.Context, scanID int64) ([]File, error) 
 			&selectionMS, &generationMS, &poolMS, &devPassMS, &authoredPassMS, &criticMS, &totalMS,
 			&mutantMSMedian, &mutantMSMax,
 			&challengerJaccard, &challengerKappa, &challengerSufficient, &goalsDerived,
-			&perMutant, &tpmMin, &tpmMedian, &tpmMax); err != nil {
+			&perMutant, &tpmMin, &tpmMedian, &tpmMax, &writerMode, &promptShape); err != nil {
 			return nil, fmt.Errorf("scanstore: scan scan_files row: %w", err)
 		}
 		f.Detail = detail.String
@@ -1243,6 +1286,7 @@ func (s *Store) FilesForScan(ctx context.Context, scanID int64) ([]File, error) 
 		f.SelectedTests = int(selectedTests.Int64)
 		f.SuiteTests = int(suiteTests.Int64)
 		f.SelectionFallback = selectionFallback.String
+		f.WriterMode = writerMode.String
 		f.Uncovered = uncovered.Bool
 		f.Trees = int(trees.Int64)
 		f.ConcurrencyNote = concurrencyNote.String
@@ -1285,6 +1329,7 @@ func (s *Store) FilesForScan(ctx context.Context, scanID int64) ([]File, error) 
 		f.TestsPerMutantMin = nullCount(tpmMin)
 		f.TestsPerMutantMedian = nullCount(tpmMedian)
 		f.TestsPerMutantMax = nullCount(tpmMax)
+		f.PromptShape = promptShape.String
 		out = append(out, f)
 	}
 	return out, rows.Err()
@@ -1426,10 +1471,22 @@ type ModelCall struct {
 	// is a NUMBER a later query averages and ranks on; NULL is the only
 	// honest encoding of "this ledger does not say" — same rule as
 	// nullablePositive/nullCount elsewhere in this file.
-	Retries      *int
-	InputTokens  int64
-	OutputTokens int64
-	WallMillis   int64
+	Retries     *int
+	InputTokens int64
+	// CachedInputTokens is how many of InputTokens the provider served from
+	// its own prompt cache. NULLABLE for the same reason Retries is, but for
+	// a different cause: a provider that says nothing about caching has
+	// reported nothing, not a miss, and a stored 0 is a number a later query
+	// would average as a measured zero. See
+	// agentbackend.Usage.CachedInputTokens.
+	CachedInputTokens *int64
+	// CacheWriteInputTokens is what filling that cache cost — billed at 1.25x
+	// an ordinary input token, so the saving above has a price and both
+	// belong in the same row. Nullable for the same reason, and independently
+	// of the read count.
+	CacheWriteInputTokens *int64
+	OutputTokens          int64
+	WallMillis            int64
 }
 
 // Event is one entry on the tape: an ordered log of what the pool did, at
@@ -1554,9 +1611,11 @@ func (s *Store) RecordModelCalls(ctx context.Context, cs []ModelCall) error {
 	defer func() { _ = tx.Rollback() }()
 	for _, c := range cs {
 		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO scan_model_calls (scan_id, path, role, model, calls, retries, input_tokens, output_tokens, wall_ms)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			c.ScanID, c.Path, c.Role, c.Model, c.Calls, retriesParam(c.Retries), c.InputTokens, c.OutputTokens, c.WallMillis,
+			`INSERT INTO scan_model_calls (scan_id, path, role, model, calls, retries, input_tokens, output_tokens, cached_input_tokens, cache_write_input_tokens, wall_ms)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			c.ScanID, c.Path, c.Role, c.Model, c.Calls, retriesParam(c.Retries),
+			c.InputTokens, c.OutputTokens,
+			cachedTokensParam(c.CachedInputTokens), cachedTokensParam(c.CacheWriteInputTokens), c.WallMillis,
 		); err != nil {
 			return fmt.Errorf("scanstore: RecordModelCalls: insert %s/%s: %w", c.Path, c.Role, err)
 		}
@@ -1569,7 +1628,7 @@ func (s *Store) RecordModelCalls(ctx context.Context, cs []ModelCall) error {
 // than whatever the storage layer happens to return.
 func (s *Store) ModelCallsForScan(ctx context.Context, scanID int64) ([]ModelCall, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT scan_id, path, role, model, calls, retries, input_tokens, output_tokens, wall_ms
+		`SELECT scan_id, path, role, model, calls, retries, input_tokens, output_tokens, cached_input_tokens, cache_write_input_tokens, wall_ms
 		 FROM scan_model_calls WHERE scan_id = ? ORDER BY path, role`, scanID)
 	if err != nil {
 		return nil, fmt.Errorf("scanstore: ModelCallsForScan: %w", err)
@@ -1579,13 +1638,21 @@ func (s *Store) ModelCallsForScan(ctx context.Context, scanID int64) ([]ModelCal
 	for rows.Next() {
 		var c ModelCall
 		var path, role, model sql.NullString
-		var calls, retries, in, outTok, wall sql.NullInt64
-		if err := rows.Scan(&c.ScanID, &path, &role, &model, &calls, &retries, &in, &outTok, &wall); err != nil {
+		var calls, retries, in, outTok, cached, written, wall sql.NullInt64
+		if err := rows.Scan(&c.ScanID, &path, &role, &model, &calls, &retries, &in, &outTok, &cached, &written, &wall); err != nil {
 			return nil, fmt.Errorf("scanstore: ModelCallsForScan: scan row: %w", err)
 		}
 		c.Path, c.Role, c.Model = path.String, role.String, model.String
 		c.Calls = int(calls.Int64)
 		c.Retries = nullCount(retries)
+		if cached.Valid {
+			v := cached.Int64
+			c.CachedInputTokens = &v
+		}
+		if written.Valid {
+			v := written.Int64
+			c.CacheWriteInputTokens = &v
+		}
 		c.InputTokens, c.OutputTokens, c.WallMillis = in.Int64, outTok.Int64, wall.Int64
 		out = append(out, c)
 	}

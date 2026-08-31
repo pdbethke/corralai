@@ -27,8 +27,60 @@ import (
 // renegotiated; a token count is a measurement that stays true. Pricing belongs
 // in the query that reads the ledger, not in the record.
 type Usage struct {
+	// InputTokens is the WHOLE prompt this call sent, cached part included —
+	// one meaning for every provider, so the ledger's input_tokens series can
+	// be summed across seats of different vendors.
+	//
+	// It is NORMALISED at the backend where a wire disagrees. The
+	// OpenAI-compatible wire's prompt_tokens already includes its cached
+	// half. Anthropic's three input counters are DISJOINT — `input_tokens`
+	// is only the uncached remainder — so the Anthropic backend adds the two
+	// cache counters back in before filling this field. Without that, a seat
+	// whose prefix cached well would report a smaller prompt than the
+	// identical uncached one, which reads as a saving in the wrong column.
 	InputTokens  int
 	OutputTokens int
+	// CachedInputTokens is how many of InputTokens the provider served from
+	// its own prompt cache — Anthropic's `cache_read_input_tokens`, the
+	// OpenAI-compatible wire's `prompt_tokens_details.cached_tokens` (which
+	// is also what Gemini's OpenAI-compatible endpoint reports for its
+	// implicit cache).
+	//
+	// It exists because the writer seat now sends the SAME prefix (the file,
+	// the signature surface, the harness exemplar) on every one of a file's
+	// per-survivor calls, and that prefix is most of the prompt. Whether the
+	// provider actually reused it is the difference between a fan-out that
+	// costs N x the file and one that costs the file once — and InputTokens
+	// alone cannot express it: a cached 40k-token prompt and a fresh one
+	// report the same total.
+	//
+	// A SUBSET of InputTokens, on every provider — see that field: the
+	// Anthropic backend normalises its disjoint counters so the subset
+	// relation holds there too, rather than leaving one vendor's numbers to
+	// mean something else.
+	//
+	// A POINTER, and nil is the common case. A response that says nothing
+	// about caching has not reported a MISS; it has reported nothing. A
+	// stored 0 is a measurement ("this call read nothing from cache") that a
+	// later query would average, so the honest value for silence is NULL —
+	// the same NULL-not-zero rule ModelCall.Retries follows, for the same
+	// reason.
+	CachedInputTokens *int64
+	// CacheWriteInputTokens is how many tokens the provider WROTE into its
+	// cache on this call — Anthropic's `cache_creation_input_tokens`.
+	//
+	// It is recorded beside the reads because a cache write is billed at
+	// 1.25x an ordinary input token: the FIRST call of a fan-out costs more
+	// than an uncached one, and only the calls after it save. A ledger that
+	// held the reads alone would report the saving and hide its price, which
+	// is the wrong half of the trade to be able to see.
+	//
+	// Nullable, separately from CachedInputTokens: a response that reports a
+	// write and no read has not reported a read of zero. Only Anthropic
+	// reports this at all — the OpenAI-compatible wire has no equivalent, and
+	// Gemini's implicit cache has no write to bill — so it is NULL almost
+	// everywhere, which is exactly what NULL is for.
+	CacheWriteInputTokens *int64
 }
 
 // UsageMeter accumulates Usage across the calls of one run — or, since this
@@ -60,6 +112,17 @@ type UsageMeter struct {
 	out   int64
 	calls int64
 	wall  time.Duration
+	// cached accumulates CachedInputTokens across the calls that REPORTED
+	// one; cachedSeen says whether any call did. Two fields rather than a
+	// *int64 because a meter is written under a lock from several
+	// goroutines, and "measured, and it was zero" must stay distinguishable
+	// from "nothing measured" without allocating on every Add.
+	cached     int64
+	cachedSeen bool
+	// The write half of the same pair, tracked separately for the same
+	// reason: "reported a write, said nothing about reads" is a real shape.
+	cacheWrite     int64
+	cacheWriteSeen bool
 
 	// Model is which model this meter is timing. Set once, at construction,
 	// before the meter is handed to any Chatter — one meter per role means
@@ -89,6 +152,14 @@ func (m *UsageMeter) AddTimed(u Usage, wall time.Duration) {
 	m.out += int64(u.OutputTokens)
 	m.calls++
 	m.wall += wall
+	if u.CachedInputTokens != nil {
+		m.cached += *u.CachedInputTokens
+		m.cachedSeen = true
+	}
+	if u.CacheWriteInputTokens != nil {
+		m.cacheWrite += *u.CacheWriteInputTokens
+		m.cacheWriteSeen = true
+	}
 }
 
 // Totals reports the accumulated input tokens, output tokens, and call count.
@@ -112,8 +183,16 @@ func (m *UsageMeter) Totals() (inputTokens, outputTokens, calls int64) {
 type ModelUsage struct {
 	Model                     string
 	InputTokens, OutputTokens int64
-	Calls                     int64
-	Wall                      time.Duration
+	// CachedInputTokens is the sum over the calls that REPORTED a cached
+	// prompt-token count, and nil when no call did — see Usage's own field
+	// for why silence is NULL and never 0.
+	CachedInputTokens *int64
+	// CacheWriteInputTokens is the sum over the calls that reported a cache
+	// WRITE, nil when none did — see Usage's field for why the price of the
+	// saving is recorded beside the saving.
+	CacheWriteInputTokens *int64
+	Calls                 int64
+	Wall                  time.Duration
 }
 
 // Snapshot reads every field of the meter at once, under one lock
@@ -127,7 +206,18 @@ func (m *UsageMeter) Snapshot() ModelUsage {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return ModelUsage{Model: m.Model, InputTokens: m.in, OutputTokens: m.out, Calls: m.calls, Wall: m.wall}
+	var cached, written *int64
+	if m.cachedSeen {
+		v := m.cached
+		cached = &v
+	}
+	if m.cacheWriteSeen {
+		v := m.cacheWrite
+		written = &v
+	}
+	return ModelUsage{Model: m.Model, InputTokens: m.in, OutputTokens: m.out,
+		CachedInputTokens: cached, CacheWriteInputTokens: written,
+		Calls: m.calls, Wall: m.wall}
 }
 
 // meteredChatter is AsChatter plus an observer. It changes nothing about the

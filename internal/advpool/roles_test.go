@@ -3,6 +3,7 @@
 package advpool
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 	"testing"
@@ -158,9 +159,9 @@ func TestBuildDAGShardedEmitsOneSpecPerShard(t *testing.T) {
 		Code: "package p\nfunc A() {}\nfunc B() {}\nfunc C() {}\n",
 	}
 	sigs := []repoindex.Signature{
-		{Name: "A", Complexity: 5, Lines: 10},
-		{Name: "B", Complexity: 3, Lines: 6},
-		{Name: "C", Complexity: 1, Lines: 2},
+		{Name: "A", Complexity: 5, Line: 2, Lines: 1},
+		{Name: "B", Complexity: 3, Line: 3, Lines: 1},
+		{Name: "C", Complexity: 1, Line: 4, Lines: 1},
 	}
 	assign := RoleAssignment{RoleMutantGenerator: "m", RoleTestWriter: "w", RoleTestCritic: "c"}
 	got := mutantSpecs(BuildDAG(rs, assign, sigs))
@@ -179,9 +180,10 @@ func TestBuildDAGShardedEmitsOneSpecPerShard(t *testing.T) {
 		if len(s.DependsOn) != 0 {
 			t.Errorf("spec[%d].DependsOn: want none, got %v", i, s.DependsOn)
 		}
-		// Whole file is still the context — sharding changes aim, not context.
-		if !strings.Contains(s.Instruction, rs.Code) {
-			t.Errorf("spec[%d] must carry the whole file as context", i)
+		// A shard sees its OWN symbol's body plus the file's preamble — never
+		// the whole file, which is exactly what chunking exists to stop.
+		if !strings.Contains(s.Instruction, "package p") {
+			t.Errorf("spec[%d] must carry the file's preamble", i)
 		}
 	}
 	for i := 0; i < 3; i++ {
@@ -290,7 +292,7 @@ func TestShadowShardTaskKeyRoundTrip(t *testing.T) {
 
 func TestRenderTestWriterWithRepair(t *testing.T) {
 	rs := RunSpec{Goal: "reject bad input", CodePath: "version4.go", Code: "package uuid\nfunc New() {}\n", Lang: "go"}
-	survivors := []adequacy.Mutant{{ID: "m1", Code: "mutant one"}}
+	survivors := []adequacy.Mutant{{ID: "m1", Replace: "mutant one"}}
 
 	// Base render (no repair): carries the goal + the same-package unique-names
 	// hint, but no repair block.
@@ -328,7 +330,7 @@ func TestRenderTestWriterWithRepair(t *testing.T) {
 // this only proves the plumbing: the derivation itself is
 // TestPythonImportPath/TestPythonImportNote in internal/lang.
 func TestRenderTestWriterCarriesImportFactForPython(t *testing.T) {
-	survivors := []adequacy.Mutant{{ID: "m1", Code: "mutant one"}}
+	survivors := []adequacy.Mutant{{ID: "m1", Replace: "mutant one"}}
 
 	known := RunSpec{Goal: "reject bad input", CodePath: "src/flask/cli.py", Code: "def f(): pass\n", Lang: "python", ImportPath: "flask.cli"}
 	got := renderTestWriterWithRepair(known, nil, survivors, "", "")
@@ -381,7 +383,7 @@ func TestRenderTestWriterDropsStaleFileNameClauseForPython(t *testing.T) {
 	// The stable head of the reference clause, emitted only when the plugin's
 	// ImportNote is empty.
 	const staleClause = "Reference or import the code under test by"
-	survivors := []adequacy.Mutant{{ID: "m1", Code: "mutant one"}}
+	survivors := []adequacy.Mutant{{ID: "m1", Replace: "mutant one"}}
 
 	known := RunSpec{Goal: "g", CodePath: "src/flask/cli.py", Code: "def f(): pass\n", Lang: "python", ImportPath: "flask.cli"}
 	if got := renderTestWriterWithRepair(known, nil, survivors, "", ""); strings.Contains(got, staleClause) {
@@ -505,5 +507,60 @@ func TestHarnessOverrideNoopWithoutProjectTests(t *testing.T) {
 	base := "You are a TEST-WRITER. Use node:test."
 	if got := harnessOverride(base, RunSpec{}); got != base {
 		t.Fatalf("system prompt must be untouched with no project tests, got:\n%s", got)
+	}
+}
+
+// bigCodeFile builds a synthetic file of roughly n bytes out of unique,
+// numbered lines — big enough to stand in for the 36 KB file the cost
+// measurement (0.5M tokens on one writer seat) was taken against, and with
+// every line unique so a single-line SEARCH anchors uniquely.
+func bigCodeFile(n int) string {
+	var b strings.Builder
+	for i := 0; b.Len() < n; i++ {
+		fmt.Fprintf(&b, "var line%05d = %d // filler content for line %05d\n", i, i, i)
+	}
+	return b.String()
+}
+
+// TestWriterPromptCarriesTheFileOnceAndDiffs pins the shape the whole-file
+// representation was replaced for: the code under review appears in the
+// writer's prompt exactly ONCE (via WriteTestPrompt's TARGET FILE section),
+// and each survivor appears as one small RenderHunk diff rather than a
+// second copy of the file. The size bound is the plan's own acceptance
+// number: 24 survivors of a 36 KB file must render under 60 KB, not the
+// ~0.5M-token/864 KB a whole-file-per-survivor render would have cost.
+func TestWriterPromptCarriesTheFileOnceAndDiffs(t *testing.T) {
+	const fileSize = 36 * 1024
+	const nSurvivors = 24
+	code := bigCodeFile(fileSize)
+	lines := strings.Split(strings.TrimSuffix(code, "\n"), "\n")
+
+	survivors := make([]adequacy.Mutant, nSurvivors)
+	stride := len(lines) / nSurvivors
+	for i := range survivors {
+		line := lines[i*stride]
+		survivors[i] = adequacy.Mutant{
+			ID:      fmt.Sprintf("m%d", i),
+			Search:  line + "\n",
+			Replace: strings.Replace(line, "var ", "var MUTATED_", 1) + "\n",
+		}
+	}
+
+	rs := RunSpec{
+		Goal: "reject bad input", CodePath: "big.go", Code: code, Lang: "go",
+	}
+	got := renderTestWriter(rs, nil, survivors)
+
+	if n := strings.Count(got, code); n != 1 {
+		t.Fatalf("code under review must appear exactly once in the prompt, appeared %d times", n)
+	}
+	if n := strings.Count(got, "--- SURVIVOR "); n != nSurvivors {
+		t.Fatalf("expected %d SURVIVOR diff blocks, got %d", nSurvivors, n)
+	}
+	if strings.Contains(got, "(not renderable)") {
+		t.Fatal("RenderHunk always renders — no survivor should fall back to the old not-renderable marker")
+	}
+	if len(got) >= 60*1024 {
+		t.Fatalf("writer prompt for %d survivors of a %d-byte file is %d bytes, want < 60 KB", nSurvivors, len(code), len(got))
 	}
 }

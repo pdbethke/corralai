@@ -65,7 +65,7 @@ func (j *countingJail) peakConcurrency() int {
 func mutantsN(n int) []Mutant {
 	out := make([]Mutant, 0, n)
 	for i := 0; i < n; i++ {
-		out = append(out, Mutant{ID: fmt.Sprintf("m%d", i), Code: fmt.Sprintf("mut%d", i)})
+		out = append(out, Mutant{ID: fmt.Sprintf("m%d", i), Replace: fmt.Sprintf("mut%d", i)})
 	}
 	return out
 }
@@ -81,7 +81,7 @@ func TestScoreConcurrency_PreservesDeterministicOrder(t *testing.T) {
 	// Kill every third mutant, so both slices are non-trivially interleaved.
 	kill := map[string]bool{}
 	for i, m := range muts {
-		kill[m.Code] = i%3 == 0
+		kill[m.Replace] = i%3 == 0
 	}
 
 	run := func(conc int) Report {

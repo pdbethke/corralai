@@ -203,18 +203,27 @@ func buildScanFileRows(results []reposcan.FileResult, excluded []reposcan.Exclus
 				// wall a real pallets/flask "tried and missed" hit on
 				// 2026-07-31.
 				ProvenMutantIDs: strings.Join(r.Verdict.ProvenMutantIDs, ","),
-				AuthoredTest:    r.Verdict.AuthoredTest,
+				// AuthoredRecord, not AuthoredTest: the column holds ONE
+				// artifact per file, and a per-survivor run on a language
+				// whose parts will not merge has several proven tests. The
+				// record joins them behind a separator comment that says it
+				// is a record rather than a runnable file — dropping the
+				// extras would retain fewer proofs than proven_missed counts.
+				AuthoredTest: r.Verdict.AuthoredRecord(),
 				// ModelsByRole is canonicalized the same way the scan-wide
 				// model_set is (reposcan.CanonicalKV), so a per-file role
 				// assignment is byte-comparable with it rather than a second,
 				// possibly-drifting serialization.
-				ModelsByRole:             reposcan.CanonicalKV(r.Verdict.ModelsByRole),
-				MutantsTotal:             r.Verdict.MutantsTotal,
-				RegionsTotal:             r.Verdict.RegionsTotal,
-				RegionsProbed:            r.Verdict.RegionsProbed,
-				DroppedRegions:           strings.Join(r.Verdict.DroppedRegions, ","),
-				VacuousFindings:          len(r.Verdict.VacuousFindings),
-				Status:                   r.Verdict.Status,
+				ModelsByRole:    reposcan.CanonicalKV(r.Verdict.ModelsByRole),
+				MutantsTotal:    r.Verdict.MutantsTotal,
+				RegionsTotal:    r.Verdict.RegionsTotal,
+				RegionsProbed:   r.Verdict.RegionsProbed,
+				DroppedRegions:  strings.Join(r.Verdict.DroppedRegions, ","),
+				VacuousFindings: len(r.Verdict.VacuousFindings),
+				Status:          r.Verdict.Status,
+				// What a mutant-generator shard actually saw for this file —
+				// see scanstore.File.PromptShape's doc.
+				PromptShape:              r.Verdict.PromptShape,
 				AuthoredTestNotCollected: r.Verdict.AuthoredTestNotCollected,
 				BaselineFailed:           r.Verdict.BaselineFailed,
 				// SuiteBaselineMillis is the cost-model input: how long the
@@ -241,6 +250,7 @@ func buildScanFileRows(results []reposcan.FileResult, excluded []reposcan.Exclus
 				SelectedTests:     r.Verdict.TestSelection.Selected,
 				SuiteTests:        r.Verdict.TestSelection.Of,
 				SelectionFallback: r.Verdict.TestSelection.Fallback,
+				WriterMode:        r.Verdict.WriterMode,
 				// Uncovered also makes the store write kill_rate NULL (see
 				// scanstore.fileKillRate): no test executes this file, so
 				// there is no measurement to record.
@@ -613,7 +623,9 @@ func buildScanModelCallRows(results []reposcan.FileResult) []scanstore.ModelCall
 				Path: r.Job.Path, Role: c.Role, Model: c.Model,
 				Calls: c.Calls, Retries: c.Retries,
 				InputTokens: c.InputTokens, OutputTokens: c.OutputTokens,
-				WallMillis: c.Wall.Milliseconds(),
+				CachedInputTokens:     c.CachedInputTokens,
+				CacheWriteInputTokens: c.CacheWriteInputTokens,
+				WallMillis:            c.Wall.Milliseconds(),
 			})
 		}
 	}
@@ -659,6 +671,12 @@ func scanModelCallTotals(results []reposcan.FileResult) []advpool.ModelCall {
 			}
 			t.InputTokens += c.InputTokens
 			t.OutputTokens += c.OutputTokens
+			// The two cache counters follow Retries' NULL-not-zero rule, not
+			// InputTokens' plain addition: a role no provider reported
+			// caching for must leave the total nil, so the cost line says
+			// nothing about caching rather than claiming a measured miss.
+			t.CachedInputTokens = addCacheCount(t.CachedInputTokens, c.CachedInputTokens)
+			t.CacheWriteInputTokens = addCacheCount(t.CacheWriteInputTokens, c.CacheWriteInputTokens)
 			t.Wall += c.Wall
 		}
 	}

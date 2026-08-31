@@ -71,7 +71,11 @@ func TestBugCatch_UnsoundTestIsNotASoundTest(t *testing.T) {
 // a run that genuinely graded must still charge its survivors as opportunities
 // and credit its catches, or the fix would erase the metric it is protecting.
 func TestBugCatch_SoundRunStillCountsNormally(t *testing.T) {
-	run := &runState{poolScored: true, authoredTest: "AUTHORED"}
+	// primaryWriterMeasured is what "genuinely graded" MEANS — see the flag's
+	// own doc. bugCatchObservations asks it directly now, rather than
+	// inferring it from a non-empty authoredTest (which is empty on a sound
+	// per-survivor run whose parts would not merge).
+	run := &runState{poolScored: true, authoredTest: "AUTHORED", primaryWriterMeasured: true}
 	v := Verdict{ProvenMissed: 3, Survivors: 10,
 		ModelsByRole: map[string]string{RoleTestWriter: "m"}}
 

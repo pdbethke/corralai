@@ -34,7 +34,7 @@ func (g *gateJail) RunTest(ctx context.Context, files map[string]string, cmd []s
 		return true, nil // healthy baseline passes
 	}
 	for _, m := range gateMutants() {
-		if code == m.Code {
+		if code == m.Replace {
 			return g.testPasses, nil
 		}
 	}
@@ -47,8 +47,8 @@ const gateBase = "package p\nfunc f() int { return 1 }\n"
 
 func gateMutants() []Mutant {
 	return []Mutant{
-		{ID: "m1", Code: "package p\nfunc f() int { return 2 }\n"},  // compiles
-		{ID: "m2", Code: "package p\nfunc f() int { return zz }\n"}, // does NOT compile
+		{ID: "m1", Replace: "package p\nfunc f() int { return 2 }\n"},  // compiles
+		{ID: "m2", Replace: "package p\nfunc f() int { return zz }\n"}, // does NOT compile
 	}
 }
 
@@ -59,7 +59,7 @@ func gateMutants() []Mutant {
 func TestScore_UncompilableMutantIsInvalidNotKilled(t *testing.T) {
 	j := &gateJail{
 		compileCmd:    "COMPILE",
-		uncompilable:  map[string]bool{gateMutants()[1].Code: true},
+		uncompilable:  map[string]bool{gateMutants()[1].Replace: true},
 		testPasses:    true, // a compiling mutant SURVIVES, so any "kill" can only come from the gate
 		baselineFiles: gateBase,
 	}
@@ -85,7 +85,7 @@ func TestScore_UncompilableMutantIsInvalidNotKilled(t *testing.T) {
 func TestScore_InvalidMutantsLeaveTheDenominator(t *testing.T) {
 	j := &gateJail{
 		compileCmd:    "COMPILE",
-		uncompilable:  map[string]bool{gateMutants()[1].Code: true},
+		uncompilable:  map[string]bool{gateMutants()[1].Replace: true},
 		testPasses:    false, // the compiling mutant IS killed
 		baselineFiles: gateBase,
 	}
@@ -107,7 +107,7 @@ func TestScore_InvalidMutantsLeaveTheDenominator(t *testing.T) {
 func TestScore_InvalidMutantSkipsTheSuiteRun(t *testing.T) {
 	j := &gateJail{
 		compileCmd:    "COMPILE",
-		uncompilable:  map[string]bool{gateMutants()[1].Code: true},
+		uncompilable:  map[string]bool{gateMutants()[1].Replace: true},
 		testPasses:    true,
 		baselineFiles: gateBase,
 	}

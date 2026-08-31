@@ -43,9 +43,9 @@ func newTestRunSpec(t *testing.T) RunSpec {
 // the dev suite misses and both writers are therefore asked to kill.
 func writerShadowMutants() []adequacy.Mutant {
 	return []adequacy.Mutant{
-		{ID: "m1", Code: "c1", ParentSHA256: "p1"},
-		{ID: "m2", Code: "c2", ParentSHA256: "p2"},
-		{ID: "m3", Code: "c3", ParentSHA256: "p3"},
+		{ID: "m1", Replace: "c1", ParentSHA256: "p1"},
+		{ID: "m2", Replace: "c2", ParentSHA256: "p2"},
+		{ID: "m3", Replace: "c3", ParentSHA256: "p3"},
 	}
 }
 
@@ -564,11 +564,11 @@ func TestShadowWriterRetriesDoNotConsumePrimaryBudget(t *testing.T) {
 	if st.shadowWriterMeasured {
 		t.Error("shadowWriterMeasured = true after every attempt failed to compile")
 	}
-	if st.shadowWriterAttempts == 0 {
+	if st.shadowWriterCompileRetries == 0 {
 		t.Error("shadowWriterAttempts = 0 — the challenger's own budget was never charged")
 	}
-	if st.shadowWriterAttempts > MaxShadowWriterAttempts {
-		t.Errorf("shadowWriterAttempts = %d, over its own budget of %d", st.shadowWriterAttempts, MaxShadowWriterAttempts)
+	if st.shadowWriterCompileRetries > MaxShadowWriterAttempts {
+		t.Errorf("shadowWriterAttempts = %d, over its own budget of %d", st.shadowWriterCompileRetries, MaxShadowWriterAttempts)
 	}
 }
 

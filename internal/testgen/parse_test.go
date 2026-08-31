@@ -39,14 +39,24 @@ func TestParseMutants_AppliesSearchReplaceHunks(t *testing.T) {
 	if len(muts) != 2 {
 		t.Fatalf("got %d mutants, want 2: %+v", len(muts), muts)
 	}
-	// Each mutant is the FULL original with exactly one region changed.
+	// A mutant IS its hunk: the anchor and its replacement are retained
+	// VERBATIM, and the full file exists only when Apply materialises it.
+	if muts[0].Search != "\treturn 1" || muts[0].Replace != "\treturn 99" {
+		t.Errorf("m1 hunk = %q -> %q, want the verbatim SEARCH/REPLACE bodies", muts[0].Search, muts[0].Replace)
+	}
+	if muts[1].Search != "\treturn 2" || muts[1].Replace != "\treturn -2" {
+		t.Errorf("m2 hunk = %q -> %q", muts[1].Search, muts[1].Replace)
+	}
+	// Each mutant applies to the FULL original with exactly one region changed.
 	want1 := strings.Replace(srOrig, "\treturn 1", "\treturn 99", 1)
-	if muts[0].ID != "m1" || muts[0].Code != want1 {
-		t.Errorf("m1:\n got %q\nwant %q", muts[0].Code, want1)
+	got1, err := muts[0].Apply(srOrig)
+	if muts[0].ID != "m1" || err != nil || got1 != want1 {
+		t.Errorf("m1:\n got %q (err=%v)\nwant %q", got1, err, want1)
 	}
 	want2 := strings.Replace(srOrig, "\treturn 2", "\treturn -2", 1)
-	if muts[1].ID != "m2" || muts[1].Code != want2 {
-		t.Errorf("m2:\n got %q\nwant %q", muts[1].Code, want2)
+	got2, err := muts[1].Apply(srOrig)
+	if muts[1].ID != "m2" || err != nil || got2 != want2 {
+		t.Errorf("m2:\n got %q (err=%v)\nwant %q", got2, err, want2)
 	}
 	// Tamper-evident: each mutant carries the hash of the EXACT original it
 	// derives from (the trust link the user asked for).
@@ -67,54 +77,52 @@ func TestParseMutants_DropsUnappliableHunks(t *testing.T) {
 	if len(muts) != 1 {
 		t.Fatalf("want 1 kept mutant (ambiguous/not-found/no-op dropped), got %d: %+v", len(muts), muts)
 	}
-	if !strings.Contains(muts[0].Code, "\treturn false") || strings.Contains(muts[0].Code, "\treturn true") {
-		t.Errorf("kept mutant should apply the unique real edit: %q", muts[0].Code)
+	code, err := muts[0].Apply(orig)
+	if err != nil {
+		t.Fatalf("kept mutant does not apply: %v", err)
+	}
+	if !strings.Contains(code, "\treturn false") || strings.Contains(code, "\treturn true") {
+		t.Errorf("kept mutant should apply the unique real edit: %q", code)
 	}
 	// IDs renumber over KEPT blocks only.
 	if muts[0].ID != "m1" {
 		t.Errorf("kept mutant ID = %q, want m1", muts[0].ID)
 	}
+
+	// An empty SEARCH is now OVERLOADED: adequacy.Mutant treats Search=="" as
+	// the v1 WHOLE-FILE shape, where Replace IS the entire file. That shape is
+	// only ever CONSTRUCTED by the v1 reader. A model that emits an empty
+	// SEARCH must still be refused here as a no-op — accepting it would turn a
+	// hunk the generator botched into a whole-file mutant whose "Replace" is
+	// three lines of code, silently replacing the file under audit with them.
+	t.Run("an empty SEARCH is a no-op, never the whole-file shape", func(t *testing.T) {
+		ms, d := parseMutantsDiag(srBlock("5", "", "x"), orig)
+		if len(ms) != 0 {
+			t.Fatalf("an empty SEARCH must produce NO mutant, got %+v", ms)
+		}
+		if d.NoOp != 1 {
+			t.Fatalf("diag = %+v, want the empty SEARCH counted as 1 no-op", d)
+		}
+	})
 }
 
-func TestApplyMutation_IntegrityGuarantees(t *testing.T) {
-	orig := "abc\ndef\nghi\n"
-	if m, _, ok := applyMutation(orig, "def", "DEF"); !ok || m != "abc\nDEF\nghi\n" {
-		t.Fatalf("unique real edit: got (%q, %v)", m, ok)
+// TestWhitespaceMangledSearchIsRefusedNotAnchored pins the subtlety the hunk
+// representation depends on: stripLeading is a DIAGNOSIS. A SEARCH whose
+// leading whitespace the model mangled is counted as WhitespaceOnly and the
+// block is DROPPED — it is never re-anchored on the stripped bytes. That is
+// what makes it safe for Mutant.Search to store the model's verbatim SEARCH:
+// the only anchors that ever reach a Mutant are ones that matched exactly.
+func TestWhitespaceMangledSearchIsRefusedNotAnchored(t *testing.T) {
+	original := "def f():\n    return 1\n"
+	// A tab where the file has four spaces: identical once leading whitespace
+	// is normalized, and absent from the file's actual bytes.
+	resp := srBlock("1", "\treturn 1", "\treturn 99")
+	muts, d := parseMutantsDiag(resp, original)
+	if len(muts) != 0 {
+		t.Fatalf("a whitespace-mangled anchor must produce NO mutant, got %+v", muts)
 	}
-	if _, _, ok := applyMutation(orig, "def", "def"); ok {
-		t.Error("no-op (REPLACE == SEARCH) must be rejected")
-	}
-	if _, _, ok := applyMutation(orig, "", "x"); ok {
-		t.Error("empty SEARCH must be rejected")
-	}
-	if _, _, ok := applyMutation(orig, "zzz", "y"); ok {
-		t.Error("anchor-not-found must be rejected")
-	}
-	if _, _, ok := applyMutation("aa\naa\n", "aa", "bb"); ok {
-		t.Error("ambiguous (non-unique) anchor must be rejected")
-	}
-}
-
-func TestApplyMutationReportsTheAnchorsOriginalLines(t *testing.T) {
-	original := "a\nb\nc\nd\ne\n"
-	cases := []struct {
-		search, replace string
-		want            lang.LineRange
-	}{
-		{"c\n", "C\n", lang.LineRange{Start: 3, End: 3}},         // one-line replacement
-		{"b\nc\n", "X\n", lang.LineRange{Start: 2, End: 3}},      // two lines collapse to one
-		{"d\n", "d\nd2\nd3\n", lang.LineRange{Start: 4, End: 4}}, // growth: span is the ORIGINAL lines
-		{"b\nc\nd\n", "", lang.LineRange{Start: 2, End: 4}},      // deletion spans the removed lines
-		{"a\nb", "A\nB", lang.LineRange{Start: 1, End: 2}},       // no trailing newline in the anchor
-	}
-	for _, c := range cases {
-		_, span, ok := applyMutation(original, c.search, c.replace)
-		if !ok {
-			t.Fatalf("%q: ok=false", c.search)
-		}
-		if span != c.want {
-			t.Errorf("%q: span = %v, want %v", c.search, span, c.want)
-		}
+	if d.AnchorNotFound != 1 || d.WhitespaceOnly != 1 {
+		t.Fatalf("diag = %+v, want 1 anchor-not-found of which 1 whitespace-only", d)
 	}
 }
 
@@ -126,5 +134,8 @@ func TestParsedMutantsCarryTheirSpan(t *testing.T) {
 	ms, _ := parseMutantsDiag(raw, original)
 	if len(ms) != 1 || ms[0].Span != (lang.LineRange{Start: 5, End: 5}) {
 		t.Fatalf("got %+v", ms)
+	}
+	if ms[0].Search != "    return 2" || ms[0].Replace != "    return 3" {
+		t.Fatalf("hunk must be retained verbatim, got %q -> %q", ms[0].Search, ms[0].Replace)
 	}
 }

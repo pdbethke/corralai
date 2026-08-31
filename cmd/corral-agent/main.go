@@ -389,9 +389,14 @@ func runQueueLoop(ctx context.Context, backend Backend, name, role string, rs ag
 				Title       string `json:"title"`
 				Role        string `json:"role"` // the CLAIMED task's role — drives the structured fast path, even for a generalist worker
 				Instruction string `json:"instruction"`
-				Verify      string `json:"verify"`
-				Reissued    bool   `json:"reissued"`
-				Model       string `json:"model"` // gate-earned model assignment; "" = worker's own default
+				// The system half, when the brain set one (the per-survivor
+				// writer's shared cacheable prefix). Absent from an older
+				// brain's reply, which simply leaves it empty and sends the
+				// one-turn request this worker always sent.
+				System   string `json:"system"`
+				Verify   string `json:"verify"`
+				Reissued bool   `json:"reissued"`
+				Model    string `json:"model"` // gate-earned model assignment; "" = worker's own default
 			} `json:"task"`
 			Error string `json:"error"`
 		}
@@ -427,7 +432,7 @@ func runQueueLoop(ctx context.Context, backend Backend, name, role string, rs ag
 		// structured single-Chat path, not the freeform tool loop.
 		effRole := effectiveTaskRole(out.Task.Role, role)
 		taskStart := time.Now()
-		summary, taskErr := runTask(ctx, backend, name, effRole, ws, brain, tools, out.Task.MissionID, out.Task.ID, out.Task.Title, instruction, mir, bc, out.Task.Model)
+		summary, taskErr := runTask(ctx, backend, name, effRole, ws, brain, tools, out.Task.MissionID, out.Task.ID, out.Task.Title, out.Task.System, instruction, mir, bc, out.Task.Model)
 		fmt.Printf("[%s/%s] task #%d ran %s\n", name, role, out.Task.ID, time.Since(taskStart).Round(time.Second))
 		switch handleTaskError(out.Task.ID, out.Task.MissionID, effRole, modelDesc, taskErr, brain) {
 		case releasedForReclaim:
@@ -754,7 +759,7 @@ func handleTaskError(taskID, missionID int64, role, modelDesc string, err error,
 // backend can't be told a different model, the worker still runs its own
 // model — but the mismatch is recorded in the returned summary ("ran <own>
 // not assigned <x>") rather than silently pretending it ran the assignment.
-func runTask(ctx context.Context, backend Backend, name, role, ws string, brain func(string, map[string]any) string, tools []any, missionID, taskID int64, title, instruction string, mir *mirror, bc brainCall, assignedModel string) (string, error) {
+func runTask(ctx context.Context, backend Backend, name, role, ws string, brain func(string, map[string]any) string, tools []any, missionID, taskID int64, title, system, instruction string, mir *mirror, bc brainCall, assignedModel string) (string, error) {
 	defaultModel := env("AGENT_MODEL", "qwen2.5-coder:7b")
 	wantModel := taskModel(assignedModel, defaultModel)
 	modelMismatch := ""
@@ -788,7 +793,7 @@ func runTask(ctx context.Context, backend Backend, name, role, ws string, brain 
 	// separate handling needed.
 	if isStructuredRole(role) {
 		brain("heartbeat", map[string]any{"status": "working"})
-		result, _, err := agentworker.RunRole(ctx, agentbackend.AsChatter(backend), role, instruction)
+		result, _, err := agentworker.RunRoleWithSystem(ctx, agentbackend.AsChatter(backend), role, system, instruction)
 		if err != nil {
 			if errors.Is(err, ErrModelUnreachable) {
 				return "", ErrModelUnreachable

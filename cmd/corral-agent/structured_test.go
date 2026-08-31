@@ -55,7 +55,7 @@ func TestRunTaskStructuredRoleReturnsRawOutput(t *testing.T) {
 	brain := func(tool string, args map[string]any) string { return `{"ok":true}` }
 
 	summary, err := runTask(context.Background(), backend, "test-agent", "test-writer",
-		t.TempDir(), brain, nil, 1, 1, "write tests", "RENDERED TESTGEN PROMPT HERE", nil, nil, "")
+		t.TempDir(), brain, nil, 1, 1, "write tests", "" /* no system half */, "RENDERED TESTGEN PROMPT HERE", nil, nil, "")
 	if err != nil {
 		t.Fatalf("runTask: %v", err)
 	}
@@ -86,7 +86,7 @@ func TestRunTaskFreeformRoleStillUsesLoop(t *testing.T) {
 	brain := func(tool string, args map[string]any) string { return `{"ok":true}` }
 
 	summary, err := runTask(context.Background(), backend, "test-agent", "builder",
-		t.TempDir(), brain, nil, 1, 1, "critique tests", "do the review", nil, nil, "")
+		t.TempDir(), brain, nil, 1, 1, "critique tests", "" /* no system half */, "do the review", nil, nil, "")
 	if err != nil {
 		t.Fatalf("runTask: %v", err)
 	}
@@ -133,7 +133,7 @@ func TestRunTaskShadowRoleDaemonDispatch(t *testing.T) {
 
 	summary, err := runTask(context.Background(), backend, "test-agent", "mutant-generator-shadow",
 		t.TempDir(), brain, nil, 1, 1, "challenger: generate mutants for foo.go",
-		"RENDERED TESTGEN PROMPT HERE", nil, nil, "claude-haiku-4-5")
+		"" /* no system half */, "RENDERED TESTGEN PROMPT HERE", nil, nil, "claude-haiku-4-5")
 	if err != nil {
 		t.Fatalf("runTask: %v", err)
 	}

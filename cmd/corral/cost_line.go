@@ -68,7 +68,12 @@ func modelCallsFromMeters(meters map[string]*agentbackend.UsageMeter) []advpool.
 			// put here. nil, never a stored 0, which would read as
 			// "measured: zero retries".
 			InputTokens: snap.InputTokens, OutputTokens: snap.OutputTokens,
-			Wall: snap.Wall,
+			// nil unless at least one of this seat's calls actually
+			// reported a cached-prompt count — see
+			// agentbackend.ModelUsage.CachedInputTokens.
+			CachedInputTokens:     snap.CachedInputTokens,
+			CacheWriteInputTokens: snap.CacheWriteInputTokens,
+			Wall:                  snap.Wall,
 		})
 	}
 	return out
@@ -95,6 +100,7 @@ func modelCallsFromMeters(meters map[string]*agentbackend.UsageMeter) []advpool.
 func costLine(calls []advpool.ModelCall) string {
 	var totalIn, totalOut int64
 	var totalCalls int
+	var cached []*int64
 	parts := make([]string, 0, len(calls))
 	for _, c := range calls {
 		if c.Calls == 0 {
@@ -103,14 +109,49 @@ func costLine(calls []advpool.ModelCall) string {
 		totalIn += c.InputTokens
 		totalOut += c.OutputTokens
 		totalCalls += c.Calls
+		cached = append(cached, c.CachedInputTokens)
 		parts = append(parts, fmt.Sprintf("%s %s/%s (%d call%s)",
 			c.Role, abbreviateTokens(c.InputTokens), abbreviateTokens(c.OutputTokens), c.Calls, pluralS(c.Calls)))
 	}
 	if totalCalls == 0 {
 		return ""
 	}
-	return fmt.Sprintf("  cost: %s tokens in / %s out across %d call%s — %s",
-		abbreviateTokens(totalIn), abbreviateTokens(totalOut), totalCalls, pluralS(totalCalls), strings.Join(parts, ", "))
+	// The cached share of those input tokens, when any provider reported one.
+	// It is the number the per-survivor writer's whole cost story turns on —
+	// a file's N calls share one prefix, and `900k in` alone cannot tell a
+	// fan-out that reused it from one that paid for it N times. Absent, never
+	// "(0 cached)", when nothing measured it: most providers say nothing
+	// about caching, and a zero would read as a measured total miss.
+	cachedNote := ""
+	if sum := sumCacheCounts(cached); sum != nil {
+		cachedNote = fmt.Sprintf(" (%s cached)", abbreviateTokens(*sum))
+	}
+	return fmt.Sprintf("  cost: %s tokens in / %s out across %d call%s%s — %s",
+		abbreviateTokens(totalIn), abbreviateTokens(totalOut), totalCalls, pluralS(totalCalls),
+		cachedNote, strings.Join(parts, ", "))
+}
+
+// sumCacheCounts totals a nullable per-role counter the NULL-not-zero way: a
+// role nothing measured contributes nothing, and a set where NOTHING was
+// measured totals nil rather than 0.
+//
+// The distinction is the whole point of the column. 0 is a measurement ("this
+// scan read nothing from cache"); nil is "no provider here told us", and the
+// two must not print the same.
+func sumCacheCounts(vs []*int64) *int64 {
+	var total int64
+	seen := false
+	for _, v := range vs {
+		if v == nil {
+			continue
+		}
+		total += *v
+		seen = true
+	}
+	if !seen {
+		return nil
+	}
+	return &total
 }
 
 // abbreviateTokens renders a token count the way the cost line does: plain
@@ -138,4 +179,19 @@ func pluralS(n int) string {
 		return ""
 	}
 	return "s"
+}
+
+// addCacheCount folds one row's nullable cache counter into a running total,
+// keeping nil until something is actually measured. It is sumCacheCounts in
+// accumulator form, for a loop that has one value at a time.
+func addCacheCount(total, add *int64) *int64 {
+	if add == nil {
+		return total
+	}
+	if total == nil {
+		zero := int64(0)
+		total = &zero
+	}
+	v := *total + *add
+	return &v
 }

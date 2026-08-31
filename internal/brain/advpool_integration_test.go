@@ -237,14 +237,14 @@ func mustCompleteTask(t *testing.T, q *queue.Store, id int64, result string) {
 // the same checks `corral certify verify`/buildcert_test.go's TestReportBuild
 // run over report_build's own output.
 func TestAdversarialPoolEndToEnd_Certified(t *testing.T) {
-	survivors := []adequacy.Mutant{{ID: "m1", Code: "SURVIVOR-1"}, {ID: "m2", Code: "SURVIVOR-2"}}
+	survivors := []adequacy.Mutant{{ID: "m1", Replace: "SURVIVOR-1"}, {ID: "m2", Replace: "SURVIVOR-2"}}
 	scorer := &canonScorer{
 		devKillRate:  0.9,
 		devSurvivors: survivors,
 		// the pool's authored test kills m1 but not m2 -> ProvenMissed=1
-		poolSurvivors: []adequacy.Mutant{{ID: "m2", Code: "SURVIVOR-2"}},
+		poolSurvivors: []adequacy.Mutant{{ID: "m2", Replace: "SURVIVOR-2"}},
 	}
-	validator := &canonValidator{mutants: []adequacy.Mutant{{ID: "m0", Code: "killed-m0"}, survivors[0], survivors[1]}}
+	validator := &canonValidator{mutants: []adequacy.Mutant{{ID: "m0", Replace: "killed-m0"}, survivors[0], survivors[1]}}
 
 	d, q, missionID, bs, pub := setupIntegrationDriver(t, scorer, validator, 0.5)
 	v := driveFullRun(t, d, q, missionID, "low") // low severity: surfaced, but never blocks certification
@@ -343,13 +343,13 @@ func TestAdversarialPoolEndToEnd_Certified(t *testing.T) {
 // EVIDENCE record is still produced (needs-review is not silence), but its
 // Status must never read "certified".
 func TestAdversarialPoolEndToEnd_LowDevKillRate_NeedsReview(t *testing.T) {
-	survivors := []adequacy.Mutant{{ID: "m1", Code: "SURVIVOR-1"}, {ID: "m2", Code: "SURVIVOR-2"}, {ID: "m3", Code: "SURVIVOR-3"}}
+	survivors := []adequacy.Mutant{{ID: "m1", Replace: "SURVIVOR-1"}, {ID: "m2", Replace: "SURVIVOR-2"}, {ID: "m3", Replace: "SURVIVOR-3"}}
 	scorer := &canonScorer{
 		devKillRate:   0.1, // the dev's tests catch almost nothing
 		devSurvivors:  survivors,
 		poolSurvivors: nil, // the pool's test kills every survivor it was targeted at
 	}
-	validator := &canonValidator{mutants: append([]adequacy.Mutant{{ID: "m0", Code: "killed-m0"}}, survivors...)}
+	validator := &canonValidator{mutants: append([]adequacy.Mutant{{ID: "m0", Replace: "killed-m0"}}, survivors...)}
 
 	d, q, missionID, bs, _ := setupIntegrationDriver(t, scorer, validator, 0.8)
 	v := driveFullRun(t, d, q, missionID, "") // no critic finding needed for this path

@@ -33,8 +33,8 @@ func TestCompileVerify(t *testing.T) {
 	// fake jail: RunTest returns "compiles" (true) for mutant code containing "OK",
 	// and false for code containing "BAD" (a stand-in for a build failure).
 	fj := &fakeJail{compileOK: func(code string) bool { return strings.Contains(code, "OK") }}
-	muts := []adequacy.Mutant{{ID: "m1", Code: "OK-1"}, {ID: "m2", Code: "BAD-2"}, {ID: "m3", Code: "OK-3"}}
-	valid, discarded, err := compileVerify(context.Background(), fj, map[string]string{"go.mod": "x"}, "code.go", muts, []string{"go", "build", "./"})
+	muts := []adequacy.Mutant{{ID: "m1", Replace: "OK-1"}, {ID: "m2", Replace: "BAD-2"}, {ID: "m3", Replace: "OK-3"}}
+	valid, discarded, err := compileVerify(context.Background(), fj, map[string]string{"go.mod": "x"}, "code.go", "COMPLIANT", muts, []string{"go", "build", "./"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,8 +52,8 @@ func TestCompileVerify(t *testing.T) {
 
 func TestCompileVerify_JailError(t *testing.T) {
 	fj := &fakeJail{compileOK: func(string) bool { return true }, err: errors.New("sandbox exploded")}
-	muts := []adequacy.Mutant{{ID: "m1", Code: "OK-1"}}
-	_, _, err := compileVerify(context.Background(), fj, map[string]string{"go.mod": "x"}, "code.go", muts, []string{"go", "build", "./"})
+	muts := []adequacy.Mutant{{ID: "m1", Replace: "OK-1"}}
+	_, _, err := compileVerify(context.Background(), fj, map[string]string{"go.mod": "x"}, "code.go", "COMPLIANT", muts, []string{"go", "build", "./"})
 	if err == nil {
 		t.Fatal("expected error to propagate from jail")
 	}

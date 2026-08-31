@@ -15,6 +15,8 @@ import (
 // or a divergence in the fixture itself could hide a real regression.
 func scansShowJSONFixture() *fakeScansReader {
 	retries := 1
+	cachedTokens := int64(240000)
+	cacheWrites := int64(38000)
 	return &fakeScansReader{
 		files: []scanstore.File{{
 			Path: "pkg/a.py", Lang: "python", Disposition: "audited", Gradable: true,
@@ -24,8 +26,13 @@ func scansShowJSONFixture() *fakeScansReader {
 		modelCalls: []scanstore.ModelCall{
 			{ScanID: 1, Path: "pkg/a.py", Role: "mutant-generator", Model: "m-1",
 				Calls: 24, Retries: &retries, InputTokens: 900000, OutputTokens: 31000, WallMillis: 4100},
+			// The writer seat is the one that sends a byte-identical prefix on
+			// every call of a file, so it is the seat a caching provider
+			// actually reports on; the generator row leaves it NULL.
 			{ScanID: 1, Path: "pkg/a.py", Role: "test-writer", Model: "w-1",
-				Calls: 5, InputTokens: 300000, OutputTokens: 17000, WallMillis: 2200},
+				Calls: 5, InputTokens: 300000, OutputTokens: 17000,
+				CachedInputTokens: &cachedTokens, CacheWriteInputTokens: &cacheWrites,
+				WallMillis: 2200},
 		},
 	}
 }
@@ -34,8 +41,8 @@ func scansShowJSONFixture() *fakeScansReader {
 // file array under "files", the scan-grain selection_ms this ledger reads
 // nowhere else, and one model_calls row per scan_model_calls row —
 // snake_case keys, NULLs where the ledger genuinely has none (retries on the
-// second call, cached_input_tokens on both — nothing measures that column
-// yet), never a stored 0 standing in for "not measured".
+// second call, cached_input_tokens on the generator — which reported none),
+// never a stored 0 standing in for "not measured".
 const wantScansShowJSONWithTiming = `{
   "files": [
     {
@@ -59,6 +66,7 @@ const wantScansShowJSONWithTiming = `{
       "SelectedTests": 0,
       "SuiteTests": 0,
       "SelectionFallback": "",
+      "WriterMode": "",
       "Uncovered": false,
       "MutantsFrom": "",
       "Trees": 0,
@@ -74,6 +82,7 @@ const wantScansShowJSONWithTiming = `{
       "DroppedRegions": "",
       "VacuousFindings": 0,
       "Status": "",
+      "PromptShape": "",
       "AuthoredTestNotCollected": false,
       "BaselineFailed": false,
       "SuiteBaselineMillis": 0,
@@ -113,6 +122,7 @@ const wantScansShowJSONWithTiming = `{
       "input_tokens": 900000,
       "output_tokens": 31000,
       "cached_input_tokens": null,
+      "cache_write_input_tokens": null,
       "wall_ms": 4100
     },
     {
@@ -123,7 +133,8 @@ const wantScansShowJSONWithTiming = `{
       "retries": null,
       "input_tokens": 300000,
       "output_tokens": 17000,
-      "cached_input_tokens": null,
+      "cached_input_tokens": 240000,
+      "cache_write_input_tokens": 38000,
       "wall_ms": 2200
     }
   ]
@@ -170,6 +181,7 @@ const wantScansShowJSONBare = `[
     "SelectedTests": 0,
     "SuiteTests": 0,
     "SelectionFallback": "",
+    "WriterMode": "",
     "Uncovered": false,
     "MutantsFrom": "",
     "Trees": 0,
@@ -185,6 +197,7 @@ const wantScansShowJSONBare = `[
     "DroppedRegions": "",
     "VacuousFindings": 0,
     "Status": "",
+    "PromptShape": "",
     "AuthoredTestNotCollected": false,
     "BaselineFailed": false,
     "SuiteBaselineMillis": 0,

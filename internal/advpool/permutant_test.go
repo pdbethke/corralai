@@ -114,9 +114,9 @@ func TestVerdictCarriesPerMutantGrading(t *testing.T) {
 	// exactly one test (lines), {2,2} touches an import-time line (static),
 	// and a zero span has no evidence to narrow by (file).
 	mutants := []adequacy.Mutant{
-		{ID: "m1", Code: "c1", ParentSHA256: "p1", Span: lang.LineRange{Start: 41, End: 41}},
-		{ID: "m2", Code: "c2", ParentSHA256: "p2", Span: lang.LineRange{Start: 2, End: 2}},
-		{ID: "m3", Code: "c3", ParentSHA256: "p3"},
+		{ID: "m1", Replace: "c1", ParentSHA256: "p1", Span: lang.LineRange{Start: 41, End: 41}},
+		{ID: "m2", Replace: "c2", ParentSHA256: "p2", Span: lang.LineRange{Start: 2, End: 2}},
+		{ID: "m3", Replace: "c3", ParentSHA256: "p3"},
 	}
 	// The dev report must KILL a real mutant, not the fake's synthetic "k0"
 	// ids: killedFrom drops an id that names no mutant, so a scripted-by-rate
@@ -208,8 +208,8 @@ func (a *allInvalidPerMutantScorer) ScoreFor(ctx context.Context, codePath, code
 // an ordinary whole-selection one — a claim about behaviour that never ran.
 func TestPerMutantDisclosedEvenWhenEveryMutantIsInvalid(t *testing.T) {
 	mutants := []adequacy.Mutant{
-		{ID: "m1", Code: "c1", Span: lang.LineRange{Start: 41, End: 41}},
-		{ID: "m2", Code: "c2", Span: lang.LineRange{Start: 2, End: 2}},
+		{ID: "m1", Replace: "c1", Span: lang.LineRange{Start: 41, End: 41}},
+		{ID: "m2", Replace: "c2", Span: lang.LineRange{Start: 2, End: 2}},
 	}
 	scorer := &allInvalidPerMutantScorer{mutants: mutants}
 	validator := &fakeValidator{mutants: mutants}
@@ -278,8 +278,8 @@ func TestScoreReportForRunsEachMutantsOwnCommand(t *testing.T) {
 	s.BaseFiles = map[string]string{codePath: code, "tests/test_a.py": "def test_x(): pass\n"}
 
 	mutants := []adequacy.Mutant{
-		{ID: "m1", Code: "x = 2\n", Span: lang.LineRange{Start: 41, End: 41}}, // reached by t2 alone
-		{ID: "m2", Code: "x = 3\n", Span: lang.LineRange{Start: 2, End: 2}},   // import-time: the file selection
+		{ID: "m1", Replace: "x = 2\n", Span: lang.LineRange{Start: 41, End: 41}}, // reached by t2 alone
+		{ID: "m2", Replace: "x = 3\n", Span: lang.LineRange{Start: 2, End: 2}},   // import-time: the file selection
 	}
 	shared := DevCommand(RunSpec{Lang: "python", TestCmd: "python3 -m pytest -q", Selection: lineSelection()})
 	rep, err := s.ScoreReportFor(context.Background(), codePath, code, "", mutants,
@@ -369,8 +369,8 @@ func TestVerdictOmitsAnUnmeasuredSpread(t *testing.T) {
 func TestTimeoutVerdictCarriesPerMutantGrading(t *testing.T) {
 	const mission int64 = 93
 	mutants := []adequacy.Mutant{
-		{ID: "m1", Code: "c1", ParentSHA256: "p1", Span: lang.LineRange{Start: 41, End: 41}},
-		{ID: "m2", Code: "c2", ParentSHA256: "p2", Span: lang.LineRange{Start: 2, End: 2}},
+		{ID: "m1", Replace: "c1", ParentSHA256: "p1", Span: lang.LineRange{Start: 41, End: 41}},
+		{ID: "m2", Replace: "c2", ParentSHA256: "p2", Span: lang.LineRange{Start: 2, End: 2}},
 	}
 	scorer := &recordingPerMutantScorer{fakeScorer: fakeScorer{devKillRate: 0.5, devSurvivors: mutants}}
 	validator := &fakeValidator{mutants: mutants}
@@ -436,8 +436,8 @@ func TestScoreAuthoredReportGradesEachSurvivorWithTheAuthoredTestAlone(t *testin
 	authored := authoredTestPath(codePath, s.DevTestPath, s.BaseFiles)
 
 	mutants := []adequacy.Mutant{
-		{ID: "m1", Code: "x = 2\n", Span: lang.LineRange{Start: 41, End: 41}},
-		{ID: "m2", Code: "x = 3\n", Span: lang.LineRange{Start: 2, End: 2}},
+		{ID: "m1", Replace: "x = 2\n", Span: lang.LineRange{Start: 41, End: 41}},
+		{ID: "m2", Replace: "x = 3\n", Span: lang.LineRange{Start: 2, End: 2}},
 	}
 	rep, err := s.ScoreAuthoredReport(context.Background(), codePath, code, "def test_authored(): pass\n", mutants, "python3 -m pytest -q")
 	if err != nil {
@@ -473,7 +473,7 @@ func TestScoreAuthoredReportWithoutASelectorIsUnchanged(t *testing.T) {
 	s.Jail = jail
 	s.BaseFiles = map[string]string{codePath: code, "tests/test_a.py": "def test_x(): pass\n"}
 	rep, err := s.ScoreAuthoredReport(context.Background(), codePath, code, "def test_authored(): pass\n",
-		[]adequacy.Mutant{{ID: "m1", Code: "x = 2\n"}}, "python3 -m pytest -q")
+		[]adequacy.Mutant{{ID: "m1", Replace: "x = 2\n"}}, "python3 -m pytest -q")
 	if err != nil {
 		t.Fatal(err)
 	}

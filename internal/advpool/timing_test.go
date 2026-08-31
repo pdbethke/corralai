@@ -40,12 +40,12 @@ func (c *clockScorer) ScoreAuthoredReport(ctx context.Context, codePath, code, t
 func TestVerdictTimingSumsWithinTotal(t *testing.T) {
 	const mission int64 = 7701
 	clk := &fakeClock{t: time.Date(2026, 8, 30, 9, 0, 0, 0, time.UTC)}
-	survivors := []adequacy.Mutant{{ID: "m2", Code: "s"}}
+	survivors := []adequacy.Mutant{{ID: "m2", Replace: "s"}}
 	scorer := &clockScorer{
 		fakeScorer: &fakeScorer{devKillRate: 0.5, devSurvivors: survivors},
 		clk:        clk, dev: 5 * time.Minute, authored: 2 * time.Minute,
 	}
-	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m1", Code: "k"}, {ID: "m2", Code: "s"}}}
+	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m1", Replace: "k"}, {ID: "m2", Replace: "s"}}}
 	q := newTestQueue(t)
 	d, err := NewDriver(q, scorer, validator, decorrelatedAssign(), 0.9)
 	if err != nil {

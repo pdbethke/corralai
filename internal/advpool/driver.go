@@ -453,13 +453,58 @@ type Verdict struct {
 	// whole surviving record of the attempt was the integer 0 — `certify
 	// --repo` has no tape flag, so diagnosing it meant paying to re-run. "" when
 	// the writer never produced a compiling test.
-	AuthoredTest    string
-	RegionsTotal    int             // mutant-generator seats the run dispatched
-	RegionsProbed   int             // seats that returned usable mutants
-	DroppedRegions  []string        // seats abandoned after MaxShardRetries — the coverage shortfall
-	VacuousFindings []queue.Finding // test-critic's designed-to-pass/vacuous flags
-	ModelsByRole    map[string]string
-	Status          string // certified | needs-review
+	AuthoredTest string
+	// WriterMode is HOW the writer seat attacked this file's survivors —
+	// "per-survivor" (one call, one repair budget and one proof PER survivor)
+	// or "batched" (one call carrying every survivor as a diff). Empty on a
+	// run whose caller never named a mode, and on every verdict earned before
+	// the mode existed; a reader must render that as "not recorded", never as
+	// either mode.
+	//
+	// DISCLOSURE, not decoration. Nothing about what a kill is or what
+	// "proven" means changes between the modes — a survivor is proven iff an
+	// authored test kills it alone and passes on the original, in both — but
+	// the two cost differently and attempt differently, and two verdicts
+	// earned under different modes are not the same measurement. The record
+	// says which one it is rather than leaving a reader to infer it from a
+	// call count.
+	WriterMode string `json:"writer_mode,omitempty"`
+	// AuthoredExtra holds PROVEN authored tests that could not be merged into
+	// AuthoredTest — a per-survivor run whose parts collide on a helper the
+	// concatenator will not rename (see lang.TestConcatenator), or a language
+	// with no concatenator at all.
+	//
+	// They are carried, not dropped, because each one is a real
+	// execution-proven artifact: a test corral wrote, compiled and ran to
+	// kill a specific survivor. Losing it to make a tidy single file would
+	// throw away exactly the evidence ProvenMissed is a count OF. Empty on a
+	// batched run, which has only ever had one file.
+	AuthoredExtra []golang.AuthoredPart `json:"authored_extra,omitempty"`
+	// WriterSeatsUngraded is how many of a per-survivor run's writer seats
+	// never produced a test that genuinely graded — no compiling test within
+	// their own budget, or one that compiled and then failed on the
+	// unmutated code / never reached the file.
+	//
+	// It exists because the fan-out made PARTIAL failure the common case, and
+	// the two flags beside it cannot express it: TestWriterFailed means
+	// NOTHING compiled anywhere and PoolTestUnsound means nothing graded
+	// anywhere, so a file where twenty-one of twenty-four seats graded
+	// carries neither — and its ProvenMissed then reads like a count over all
+	// twenty-four. Three seats unattempted changes what a 5 means.
+	//
+	// 0 is omitted, and is also what a BATCHED run reports: that mode has one
+	// seat for the whole file, and its total failure is already
+	// TestWriterFailed or PoolTestUnsound. It rides in verdict_json only —
+	// there is deliberately NO ledger column for it this round, so a query
+	// that wants it must read the JSON rather than find a half-populated
+	// column.
+	WriterSeatsUngraded int             `json:"writer_seats_ungraded,omitempty"`
+	RegionsTotal        int             // mutant-generator seats the run dispatched
+	RegionsProbed       int             // seats that returned usable mutants
+	DroppedRegions      []string        // seats abandoned after MaxShardRetries — the coverage shortfall
+	VacuousFindings     []queue.Finding // test-critic's designed-to-pass/vacuous flags
+	ModelsByRole        map[string]string
+	Status              string // certified | needs-review
 	// TestWriterFailed is true when the pool exhausted MaxTestWriterAttempts
 	// without producing a compiling killing test. HONESTY NOTE: when this is
 	// true, ProvenMissed==0 does NOT mean "no real gaps" — it means "gaps
@@ -589,12 +634,39 @@ type Verdict struct {
 	// and Cohen's kappa, from internal/modelcorr. nil whenever no comparable
 	// pair exists: no challenger was configured, either seat's own kill
 	// vector was never measured (see runState.primaryWriterMeasured /
-	// shadowWriterMeasured), or the primary salvaged (RULING P11 — a
-	// salvaged primary is not comparable to a challenger that got no rescue).
+	// shadowWriterMeasured), every comparable seat was salvaged (RULING P11
+	// — a salvaged proof came from a deselected remainder the challenger got
+	// no equivalent of; batched refuses the whole file, per-survivor drops
+	// the salvaged seats' own survivors), or the two seats' measured sets do
+	// not overlap at all.
+	//
+	// THE PAIR COVERS ONLY THE SURVIVORS BOTH SEATS GENUINELY ATTEMPTED, not
+	// every survivor the file had. Under WriterModePerSurvivor each survivor
+	// gets its own seat on each side, and a seat that exhausted its budget
+	// without a grading test measured NOTHING about that survivor — for
+	// either writer. Counting it would put a survivor neither side attempted
+	// into the vectors as `false` on both, which Compare reads as a shared
+	// blind spot, inflating SharedSurvivors and therefore Jaccard by however
+	// many seats failed. Pair.Mutants is the size of the ACTUAL overlap, and
+	// Pair.Sufficient follows it — a narrow overlap reports itself as
+	// under-powered rather than as a confident measurement of the wrong
+	// thing. In batched mode one seat per writer faces every survivor, so the
+	// overlap is the whole set and nothing changes.
 	// Non-nil does NOT mean the coefficients are meaningful on their own —
 	// callers must still check Pair.Sufficient before reading Jaccard and
 	// Pair.KappaDefined before reading Kappa, exactly as modelcorr documents.
 	ChallengerAgreement *modelcorr.Pair
+	// PromptShape discloses what a mutant-generator shard actually SAW:
+	// "chunk" when every shard of this run showed only its own symbols'
+	// bodies (see advpool's shardCode), "file" when even one shard fell back
+	// to the whole file (a shard whose symbols never resolved to a signature,
+	// or whose extractor never populated Lines), and "" — never fabricated —
+	// on a run that predates this disclosure (an unsharded whole-file run
+	// also reads "file": the model saw the whole file either way, which is
+	// the same claim). A caller must never guess this from RegionsTotal or
+	// any other field; it is set once, here, from the SAME shard-by-shard
+	// decision the render actually made.
+	PromptShape string `json:"prompt_shape,omitempty"`
 }
 
 // RunState is the observable status of one run: Converged is true once the run
@@ -607,6 +679,12 @@ type RunState struct {
 	// perfect dev suite made the test-writer moot. NOT part of the signed
 	// Verdict — evidence handed back to the dev, not certified state.
 	AuthoredTest string
+	// AuthoredExtra is every proven authored test that could NOT be merged
+	// into AuthoredTest — see Verdict.AuthoredExtra. Exposed here beside
+	// AuthoredTest because a caller that prints one must print the other:
+	// they are one set of proofs, split only by what the language's
+	// concatenator could fold.
+	AuthoredExtra []golang.AuthoredPart
 	// Matrix is the tests×mutants matrix result (swarm slice 5), when the run
 	// opted in (RunSpec.Matrix) and a Driver.Enumerator was wired. nil when
 	// the matrix phase never ran (opted out, no Enumerator, or it hasn't
@@ -662,6 +740,44 @@ type shardStat struct {
 // test-writer task's id (not its key) is tracked explicitly because
 // SupersedeTask auto-uniquifies the replacement's key when it reuses the
 // original — see the comment in Tick.
+// writerAttempt is ONE survivor's writer seat under WriterModePerSurvivor:
+// the live task, the test it last returned, how many repairs it has spent out
+// of its own budget, and whether it ended up proving its survivor.
+//
+// The budget is PER SURVIVOR and equal to the per-file budget the batched mode
+// gives the whole set (MaxTestWriterAttempts). That is the point of the
+// fan-out: under batching one unbuildable test consumed the file's entire
+// retry budget and every survivor lost its chance with it. Here a survivor's
+// failures are charged to that survivor alone.
+//
+// `done` is the state machine's completion flag, and it is set on THREE
+// terminal outcomes, not one: proven, exhausted (no compiling or grading test
+// within the budget), or salvaged. The tick completes when every attempt is
+// done — never when one is, and never on a count of ticks.
+type writerAttempt struct {
+	mutant  adequacy.Mutant
+	taskID  int64
+	test    string
+	repairs int
+	done    bool
+	proven  bool
+	// measured is this seat's own primaryWriterMeasured: its test genuinely
+	// graded against its survivor (baseline passed, canary killed, something
+	// scored). UNMEASURED IS NOT ZERO holds per seat exactly as it holds per
+	// run — a seat whose test never ran must not contribute a "caught
+	// nothing" observation.
+	measured bool
+	// salvaged records that this seat's proof came from a DESELECTED
+	// re-score rather than a clean run. It rides up to run.writerSalvaged
+	// because the challenger gets no equivalent rescue, so a salvaged proof
+	// anywhere in the file confounds the head-to-head (RULING P11).
+	salvaged bool
+	// compiled is whether this seat ever produced a test that built at all.
+	// It separates the two honest failures: testWriterFailed (nothing
+	// compiled) from poolTestUnsound (something compiled and never graded).
+	compiled bool
+}
+
 type runState struct {
 	rs   RunSpec
 	sigs []repoindex.Signature
@@ -735,6 +851,28 @@ type runState struct {
 
 	testWriterTaskID int64
 
+	// writerMode is the resolved mode for THIS run — RunSpec.WriterMode with
+	// the empty value already folded to WriterModeBatched, so nothing below
+	// has to remember which spelling means the historical shape.
+	writerMode string
+	// writerAttempts is the per-survivor writer state, keyed by mutant id,
+	// and writerOrder fixes the iteration order to the survivor order the dev
+	// pass produced. Both are empty in batched mode, where the whole file
+	// shares run.testWriterTaskID and run.testWriterAttempts.
+	//
+	// A MAP KEYED BY MUTANT, not a slice indexed by position: a seat is
+	// superseded on every repair, so its task id changes while its survivor
+	// does not, and the survivor is the only stable identity in the whole
+	// loop. The separate order slice exists because map iteration is random
+	// and this state produces a signed count, an ordered id list and a
+	// concatenated file.
+	writerAttempts map[string]*writerAttempt
+	writerOrder    []string
+	// authoredExtra holds proven parts the language's concatenator refused to
+	// merge — carried onto the verdict rather than dropped. See
+	// Verdict.AuthoredExtra.
+	authoredExtra []golang.AuthoredPart
+
 	poolScored   bool
 	provenMissed int
 
@@ -762,16 +900,28 @@ type runState struct {
 	// vector over every mutant and answers a different question.
 	shadowWriterKilled   []MutantRef
 	shadowWriterMeasured bool
-	// shadowWriterAttempts is the challenger's OWN compile-retry budget.
-	// Sharing testWriterAttempts would let a failing measurement seat exhaust
-	// the graded seat's retries and change the verdict.
-	shadowWriterAttempts int
+	// shadowWriterCompileRetries is the challenger's OWN compile-retry budget
+	// in BATCHED mode. Sharing testWriterAttempts would let a failing
+	// measurement seat exhaust the graded seat's retries and change the
+	// verdict. (Under WriterModePerSurvivor each challenger seat carries its
+	// own budget on its writerAttempt, exactly as the primary's does.)
+	shadowWriterCompileRetries int
 	// shadowWriterTaskID is the live challenger writer task's id, tracked the
 	// same way testWriterTaskID is and for the same reason: SupersedeTask
 	// auto-uniquifies a replacement that reuses the old key, so the seat can
 	// never be re-looked-up by RoleTestWriterShadow's key after a retry.
 	// 0 when the challenger is off or was never enqueued.
 	shadowWriterTaskID int64
+	// shadowWriterAttempts / shadowWriterOrder are the CHALLENGER's
+	// per-survivor seats under WriterModePerSurvivor, mirroring
+	// writerAttempts / writerOrder. They are separate state, not a shared
+	// map, for the same reason every other shadow field is separate: nothing
+	// here may reach aggregate(), the Verdict or the signed record.
+	shadowWriterAttempts map[string]*writerAttempt
+	shadowWriterOrder    []string
+	// shadowWriterDone is set once every challenger seat is terminal, so the
+	// pass stops re-entering after it has recorded what it could.
+	shadowWriterDone bool
 	// shadowWriterSpent is the CUMULATIVE wall-clock this run has credited
 	// back to the deadline clock for challenger-writer work. runShadowWriterPass
 	// may be entered on several ticks (unlike runShadowPass, which runs once),
@@ -842,6 +992,13 @@ type runState struct {
 	// should read like the former. Empty/absent for an unsharded run's single
 	// bare-keyed task, which falls back to its Title.
 	shardSymbols map[string][]string
+	// promptShape is Verdict.PromptShape, computed once at StartRun from the
+	// SAME ShardSymbols call BuildDAG made internally (mirroring
+	// shardSymbols/shardStats): "chunk" when every shard's signatures were
+	// signaturesChunkable, "file" when any fell back or the run had no
+	// shards at all (PresetMutants replays a fixed exam and generates
+	// nothing, so it stays "").
+	promptShape string
 
 	// shardStats is per-shard generation outcome, keyed by shard index — the
 	// metrics substrate. Recorded per shard and NEVER summed: summing collapses
@@ -892,10 +1049,16 @@ type runState struct {
 	// silently start fabricating a vector because nobody remembered to extend
 	// the exclusion list.
 	primaryWriterMeasured bool
-	// writerSalvaged is true when the primary writer's provenIDs came from a
-	// DESELECTED re-score rather than a clean run. The challenger seat has no
-	// equivalent rescue, so a salvaged run's head-to-head is confounded in the
-	// primary's favour and must not be recorded as a comparison.
+	// writerSalvaged is true when ANY of the primary writer's provenIDs came
+	// from a DESELECTED re-score rather than a clean run. The challenger seat
+	// has no equivalent rescue, so a salvaged proof is confounded in the
+	// primary's favour and must not enter a comparison.
+	//
+	// FILE-WIDE, which is the right grain only in batched mode — one seat
+	// there covers every survivor. Under the fan-out consult
+	// primarySeatSalvaged instead: this flag is true as soon as one of a
+	// file's many seats needed the rescue, and treating that as a fact about
+	// the file discards every clean pair beside it.
 	writerSalvaged bool
 	// authoredTest is the pool's compiling killing test (the test-writer's
 	// cleaned source), surfaced via RunState so `corral certify --adversarial`
@@ -977,7 +1140,8 @@ type Driver struct {
 	// MutantAttempts is the optional per-run feed of BOTH writer seats'
 	// per-mutant outcomes (nil = no-op), mirroring BugCatch/CriticFindings.
 	// Fed pair-or-nothing by recordMutantAttempts: see its doc for the full
-	// gating (challenger configured AND measured AND primary not salvaged).
+	// gating (challenger configured AND measured, per-seat graded, and the
+	// primary's proof for that survivor not salvaged).
 	MutantAttempts MutantAttemptSink
 
 	// Enumerator is the optional jail-backed test-list seam (nil = the matrix
@@ -1224,6 +1388,26 @@ func (d *Driver) StartRun(missionID int64, rs RunSpec, sigs []repoindex.Signatur
 		}
 	}
 
+	// promptShape is the disclosure a signed verdict carries about what a
+	// generator shard actually SAW — "chunk" only when EVERY shard's own
+	// signatures resolved to a real Lines span (ShardIsChunked, the same
+	// rule renderMutantGeneratorShard applied when it actually rendered),
+	// "file" the moment any shard fell back, and "" (never fabricated) for
+	// a preset run that never dispatched a generator seat at all.
+	promptShape := ""
+	if rs.PresetMutants == nil {
+		promptShape = "file"
+		if len(shards) > 0 {
+			promptShape = "chunk"
+			for _, sh := range shards {
+				if !ShardIsChunked(sigs, sh) {
+					promptShape = "file"
+					break
+				}
+			}
+		}
+	}
+
 	// testComplexity is the dev suite's own complexity — see the runState
 	// field comment. A parse failure here (an unsupported/unparseable dev
 	// test) is not fatal to the run: the conditioning axis is best-effort
@@ -1241,10 +1425,13 @@ func (d *Driver) StartRun(missionID int64, rs RunSpec, sigs []repoindex.Signatur
 		shardRetries:   map[string]int{},
 		droppedKeys:    map[string]bool{},
 		shardSymbols:   shardSymbols,
+		promptShape:    promptShape,
 		shardStats:     stats,
 		shadowStats:    shadowStats,
 		testComplexity: testComplexity,
 		phaseStart:     map[string]time.Time{},
+		writerMode:     resolvedWriterMode(rs),
+		writerAttempts: map[string]*writerAttempt{},
 	}
 	// GENERATION starts the moment its seats are enqueued and claimable —
 	// the model's thinking time is the phase, and the driver only ever sees
@@ -1280,6 +1467,18 @@ func (d *Driver) StartRun(missionID int64, rs RunSpec, sigs []repoindex.Signatur
 // d.runs after convergence (never deleted), so a converged verdict stays
 // queryable after the runtime frees the active slot — which is exactly when a
 // caller polls for it. Safe to call concurrently with Tick (guarded by d.mu).
+// resolvedWriterMode folds RunSpec.WriterMode's empty value to the historical
+// batched shape, in ONE place, so no branch below has to re-decide what an
+// unset mode means. The CLI resolves its own default to "per-survivor" before
+// building a RunSpec (see ResolveWriterMode); a caller that never named a mode
+// keeps exactly the run it has always had.
+func resolvedWriterMode(rs RunSpec) string {
+	if strings.TrimSpace(rs.WriterMode) == WriterModePerSurvivor {
+		return WriterModePerSurvivor
+	}
+	return WriterModeBatched
+}
+
 func (d *Driver) RunStatus(missionID int64) (RunState, bool) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -1287,7 +1486,8 @@ func (d *Driver) RunStatus(missionID int64) (RunState, bool) {
 	if !ok {
 		return RunState{}, false
 	}
-	return RunState{Converged: run.verdict != nil, Verdict: run.verdict, AuthoredTest: run.authoredTest, Matrix: run.matrix}, true
+	return RunState{Converged: run.verdict != nil, Verdict: run.verdict,
+		AuthoredTest: run.authoredTest, AuthoredExtra: run.authoredExtra, Matrix: run.matrix}, true
 }
 
 // Tick advances one run given the current task states. It returns a non-nil
@@ -1536,7 +1736,11 @@ func killedFrom(rep adequacy.Report, mutants []adequacy.Mutant) []adequacy.Mutan
 // Scorer to be able to report the failure output. Anything missing means no
 // salvage, never a guess: a wrong selector would deselect the wrong test and
 // silently narrow the exam, making the run look healthier while proving less.
-func (d *Driver) salvageByDeselect(ctx context.Context, run *runState, writerTest string, rep adequacy.Report) (proven int, ids []string, deselected int, ok bool) {
+// survivors is the set this salvage is over: the whole file's survivors in
+// batched mode, and exactly ONE survivor under WriterModePerSurvivor — the
+// deselect is arithmetic over the runner's output either way, and the scope
+// is the caller's to state rather than this function's to assume.
+func (d *Driver) salvageByDeselect(ctx context.Context, run *runState, writerTest string, rep adequacy.Report, survivors []adequacy.Mutant) (proven int, ids []string, deselected int, ok bool) {
 	fd, canDeselect := langFor(run.rs).(golang.FailureDeselector)
 	if !canDeselect {
 		return 0, nil, 0, false
@@ -1552,7 +1756,7 @@ func (d *Driver) salvageByDeselect(ctx context.Context, run *runState, writerTes
 	}
 
 	cmd := strings.TrimSpace(run.rs.TestCmd + " " + strings.Join(args, " "))
-	salvaged, serr := scoreAuthored(ctx, d.Scorer, run.rs.CodePath, run.rs.Code, writerTest, run.devSurvivors, cmd)
+	salvaged, serr := scoreAuthored(ctx, d.Scorer, run.rs.CodePath, run.rs.Code, writerTest, survivors, cmd)
 	if serr != nil {
 		// A failed salvage attempt is not a failed run: fall back to the
 		// retry path rather than losing the dev-adequacy result already
@@ -1562,7 +1766,7 @@ func (d *Driver) salvageByDeselect(ctx context.Context, run *runState, writerTes
 	if !salvaged.CompliantPass || !salvaged.CanaryKilled || salvaged.Total == 0 {
 		return 0, nil, 0, false
 	}
-	killed := provenMutantIDs(salvaged, run.devSurvivors)
+	killed := provenMutantIDs(salvaged, survivors)
 	if len(killed) == 0 {
 		return 0, nil, 0, false
 	}
@@ -1923,17 +2127,27 @@ func (d *Driver) tickDevAdequacy(ctx context.Context, missionID int64, run *runS
 	// key (the old row's key isn't freed until the same transaction that
 	// inserts the new row), so the live test-writer task must be tracked by
 	// id (run.testWriterTaskID), never re-looked-up by RoleTestWriter's key.
-	newID, serr2 := d.Q.SupersedeTask(tw.ID, queue.TaskSpec{
-		Key:         RoleTestWriter,
-		Role:        RoleTestWriter,
-		Title:       tw.Title,
-		Instruction: renderTestWriter(run.rs, run.sigs, survivors),
-		Model:       tw.Model,
-	})
-	if serr2 != nil {
-		return fmt.Errorf("advpool: promote test-writer with survivors: %w", serr2)
+	if run.writerMode == WriterModePerSurvivor {
+		// ONE SEAT PER SURVIVOR, all claimable at once. See
+		// promotePerSurvivorWriters — and RunSpec.WriterMode for why the
+		// batched shape below is still reachable and still the RunSpec
+		// default.
+		if perr := d.promotePerSurvivorWriters(missionID, run, tw, survivors); perr != nil {
+			return perr
+		}
+	} else {
+		newID, serr2 := d.Q.SupersedeTask(tw.ID, queue.TaskSpec{
+			Key:         RoleTestWriter,
+			Role:        RoleTestWriter,
+			Title:       tw.Title,
+			Instruction: renderTestWriter(run.rs, run.sigs, survivors),
+			Model:       tw.Model,
+		})
+		if serr2 != nil {
+			return fmt.Errorf("advpool: promote test-writer with survivors: %w", serr2)
+		}
+		run.testWriterTaskID = newID
 	}
-	run.testWriterTaskID = newID
 
 	// The CHALLENGER writer seat, enqueued from the SAME rendered instruction
 	// the primary was just superseded with — the same survivors, the same
@@ -1949,7 +2163,16 @@ func (d *Driver) tickDevAdequacy(ctx context.Context, missionID int64, run *runS
 	// NEVER fatal: the seat is measurement, so an enqueue failure is logged
 	// and the challenger is simply skipped.
 	if strings.TrimSpace(run.rs.ShadowWriterModel) != "" {
-		d.enqueueShadowWriter(missionID, run, tw.Title, renderTestWriter(run.rs, run.sigs, survivors))
+		if run.writerMode == WriterModePerSurvivor {
+			// The challenger fans out the SAME way, one seat per survivor,
+			// so the head-to-head still compares two writers facing the
+			// identical exam under the identical shape. A challenger asked
+			// one batched question while the primary answered N per-survivor
+			// ones would be confounded by the shape, not by the model.
+			d.enqueueShadowWritersPerSurvivor(missionID, run, survivors)
+		} else {
+			d.enqueueShadowWriter(missionID, run, tw.Title, renderTestWriter(run.rs, run.sigs, survivors))
+		}
 	}
 
 	if _, err := d.Q.PromoteReady(missionID); err != nil {
@@ -1971,6 +2194,18 @@ func (d *Driver) tickPoolAdequacy(ctx context.Context, missionID int64, run *run
 	// happens to take without ever adding one of its own.
 	if strings.TrimSpace(run.rs.ShadowWriterModel) != "" {
 		d.runShadowWriterPass(ctx, missionID, run)
+	}
+
+	if run.writerMode == WriterModePerSurvivor {
+		done, ferr := d.tickWriterFanout(ctx, missionID, run)
+		if ferr != nil {
+			return ferr
+		}
+		if !done {
+			return nil
+		}
+		d.finishWriterFanout(run)
+		return nil
 	}
 
 	tw, err := d.Q.TaskByID(run.testWriterTaskID)
@@ -2106,7 +2341,7 @@ func (d *Driver) tickPoolAdequacy(ctx context.Context, missionID int64, run *run
 		// actually proves something: a salvage that proves nothing is no
 		// better than the retry it would displace, so in that case we fall
 		// through and let the writer try again.
-		if salvaged, ids, n, ok := d.salvageByDeselect(ctx, run, writerTest, rep); ok {
+		if salvaged, ids, n, ok := d.salvageByDeselect(ctx, run, writerTest, rep, run.devSurvivors); ok {
 			run.poolScored = true
 			run.writerSalvaged = true
 			// GRADED, and therefore measured: the salvaged remainder proved
@@ -2242,6 +2477,7 @@ func (d *Driver) tickAggregate(ctx context.Context, missionID int64, run *runSta
 	v := aggregate(run.rs, d.Assign, run.devKillRate, run.mutantsTotal, len(run.devSurvivors), run.provenMissed,
 		criticFindings, d.Threshold, false, run.testWriterFailed, run.poolTestUnsound)
 	v.RegionsTotal = run.regionsTotal
+	v.PromptShape = run.promptShape
 	v.RegionsProbed = run.regionsProbed
 	v.DroppedRegions = run.droppedRegions
 	// The evidence behind ProvenMissed rides onto the verdict beside the count
@@ -2256,6 +2492,12 @@ func (d *Driver) tickAggregate(ctx context.Context, missionID int64, run *runSta
 	// place and a second construction/conversion site was missed.
 	v.MutantsInvalid = run.mutantsInvalid
 	v.AuthoredTest = run.authoredTest
+	// The mode is stamped from the RUN's resolved value, never from the
+	// RunSpec's raw field: an unset spec means batched, and the verdict must
+	// say which measurement this is in the same words a reader can look up.
+	v.WriterMode = run.writerMode
+	v.AuthoredExtra = run.authoredExtra
+	v.WriterSeatsUngraded = run.writerSeatsUngraded()
 	// Narrows PoolTestUnsound to "your test command never collected the
 	// authored test's file" -- set here rather than widening aggregate()'s
 	// signature, alongside the other post-aggregate diagnosis fields.
@@ -2383,6 +2625,15 @@ func (d *Driver) tickAggregate(ctx context.Context, missionID int64, run *runSta
 // carried straight onto the Verdict), so the two never disagree about WHEN a
 // comparison is legitimate.
 //
+// IT ANSWERS "IS A COMPARISON LEGITIMATE AT ALL", NOT "WHICH SURVIVORS ARE
+// IN IT". The maps it returns are the two proven-kill SETS; neither is
+// zero-filled over devSurvivors, and a caller must not read a miss out of an
+// absent key. Under WriterModePerSurvivor each survivor has its own seat on
+// each side, so which survivors are comparable is a PER-MUTANT question —
+// both consumers answer it with runState.primarySeatMeasured /
+// shadowSeatMeasured, and folding in a survivor neither seat attempted is the
+// fabrication both of those filters exist to refuse.
+//
 // UNMEASURED IS NOT ZERO, for the primary and the challenger alike: this
 // guard was originally written for the challenger alone, which left two
 // reachable paths to a signed verdict with run.provenIDs still nil
@@ -2400,8 +2651,20 @@ func (d *Driver) tickAggregate(ctx context.Context, missionID int64, run *runSta
 // the same class of error as scoring the two seats against different mutant
 // sets. This pool's standing discipline is to record no comparison rather
 // than a confounded one.
+//
+// P11 IS A PER-SEAT RULING UNDER THE FAN-OUT, and only a file-wide one in
+// batched mode. Batched has one primary seat covering every survivor, so a
+// salvage there confounds all of them and the whole file is refused. Under
+// per-survivor each survivor has its OWN seat and its own salvage, and
+// run.writerSalvaged is true as soon as one of them needed the rescue —
+// refusing the file on that threw away every clean, symmetric pair on it
+// because one seat was partially broken. The salvaged seats' survivors are
+// excluded (runState.primarySeatComparable) and the rest are compared.
 func challengerVectors(run *runState) (killedByPrimary, killedByShadow map[string]bool, ok bool) {
-	if run.rs.ShadowWriterModel == "" || !run.shadowWriterMeasured || !run.primaryWriterMeasured || run.writerSalvaged {
+	if run.rs.ShadowWriterModel == "" || !run.shadowWriterMeasured || !run.primaryWriterMeasured {
+		return nil, nil, false
+	}
+	if run.writerMode != WriterModePerSurvivor && run.writerSalvaged {
 		return nil, nil, false
 	}
 	// `run.provenIDs` is the PRIMARY writer's proven-kill vector (from
@@ -2438,20 +2701,29 @@ func (d *Driver) recordMutantAttempts(run *runState, v Verdict) {
 		}
 		return "survived"
 	}
+	// PER SEAT, not per file. Under the fan-out one survivor's seat grading
+	// sets primaryWriterMeasured for the WHOLE run, and stamping a `survived`
+	// row for the seats that never produced a grading test would record a
+	// blind spot for a model that was never given a chance to answer — the
+	// same fabrication the file-level guard above already refuses, one grain
+	// down. In batched mode both helpers report the file-level flag, because
+	// there really is one seat covering every survivor.
 	attempts := make([]MutantAttempt, 0, 2*len(run.devSurvivors))
 	for _, m := range run.devSurvivors {
-		attempts = append(attempts,
-			MutantAttempt{
+		if run.primarySeatComparable(m.ID) {
+			attempts = append(attempts, MutantAttempt{
 				Path: run.rs.CodePath, MutantID: m.ID,
 				Model: d.Assign[RoleTestWriter], Role: RoleTestWriter,
 				Shadow: false, Outcome: outcome(killedByPrimary[m.ID]),
-			},
-			MutantAttempt{
+			})
+		}
+		if run.shadowSeatMeasured(m.ID) {
+			attempts = append(attempts, MutantAttempt{
 				Path: run.rs.CodePath, MutantID: m.ID,
 				Model: run.rs.ShadowWriterModel, Role: RoleTestWriterShadow,
 				Shadow: true, Outcome: outcome(killedByShadow[m.ID]),
-			},
-		)
+			})
+		}
 	}
 	d.MutantAttempts.Record(v.RecordID, v.RecordHead, attempts)
 }
@@ -2474,11 +2746,36 @@ func challengerPair(d *Driver, run *runState) *modelcorr.Pair {
 	if !ok {
 		return nil
 	}
+	// PER SEAT, exactly as recordMutantAttempts filters — and for the same
+	// reason, one consumer over. challengerVectors gates on the FILE-level
+	// measured flags, which under the fan-out are true as soon as ANY seat on
+	// each side grades. Folding in a survivor whose primary or challenger
+	// seat never produced a grading test reads `false` on both sides by
+	// map-zero-value, which Compare counts as bothSurvived: a SHARED BLIND
+	// SPOT invented out of a retry budget. SharedSurvivors inflates, and
+	// Jaccard is that over the union, so the headline coefficient would rise
+	// with the number of seats that never ran — a measurement of corral's own
+	// exhaustion, reported as a fact about two models.
+	//
+	// A survivor enters the comparison only when BOTH sides genuinely
+	// attempted it. In batched mode both helpers report the file-level flag,
+	// because one seat per writer really did face every survivor, so that
+	// path's vectors are unchanged.
 	primaryVec := make(map[string]bool, len(run.devSurvivors))
 	shadowVec := make(map[string]bool, len(run.devSurvivors))
 	for _, m := range run.devSurvivors {
+		if !run.primarySeatComparable(m.ID) || !run.shadowSeatMeasured(m.ID) {
+			continue
+		}
 		primaryVec[m.ID] = killedByPrimary[m.ID]
 		shadowVec[m.ID] = killedByShadow[m.ID]
+	}
+	if len(primaryVec) == 0 {
+		// The two seats' measured sets do not overlap at all, so there is
+		// nothing to compare. Comparing zero mutants would produce a Pair —
+		// a number — where the honest answer is that no comparison exists,
+		// the same absence a run with no challenger reports.
+		return nil
 	}
 	pair, err := modelcorr.Compare(
 		modelcorr.Vector{Model: d.Assign[RoleTestWriter], Killed: primaryVec},
@@ -2610,6 +2907,15 @@ func (d *Driver) timeoutVerdict(run *runState) Verdict {
 	v.TestWriterFailed = run.testWriterFailed
 	v.PoolTestUnsound = run.poolTestUnsound
 	v.AuthoredTestNotCollected = run.authoredTestNotCollected
+	// The writer's own disclosure, for the same reason as the flags above: a
+	// run that fanned out, graded some seats and only THEN stalled must sign
+	// WHICH measurement its partial numbers are, keep the proofs it earned,
+	// and say how many seats never graded. This function's doc records that
+	// it has been the place a field was forgotten more than once; these three
+	// are pinned by TestTimeoutVerdictCarriesTheWriterDisclosure.
+	v.WriterMode = run.writerMode
+	v.AuthoredExtra = run.authoredExtra
+	v.WriterSeatsUngraded = run.writerSeatsUngraded()
 	// Coverage fields (I-5): a run that dispatched N regions and dropped
 	// some before hitting RunDeadline must carry that shortfall on the
 	// timeout verdict too, or the CLI's RegionsTotal > 0 guard silently
@@ -2618,6 +2924,7 @@ func (d *Driver) timeoutVerdict(run *runState) Verdict {
 	v.RegionsTotal = run.regionsTotal
 	v.RegionsProbed = run.regionsProbed
 	v.DroppedRegions = run.droppedRegions
+	v.PromptShape = run.promptShape
 	v.ModelsByRole = map[string]string(d.Assign)
 	// A stalled run still spent everything it spent, and it is the run an
 	// operator most needs the clock for: "which phase was it sitting in when

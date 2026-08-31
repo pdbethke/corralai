@@ -36,8 +36,8 @@ func TestScoreRecordsKilledByFromTheRunnersOutput(t *testing.T) {
 
 	rep, err := Score(context.Background(), w, map[string]string{}, "a.py", "ORIGINAL\n",
 		[]Mutant{
-			{ID: "m-killed", Code: "MUTANT\n"},
-			{ID: "m-survivor", Code: "ORIGINAL # harmless\n"},
+			{ID: "m-killed", Replace: "MUTANT\n"},
+			{ID: "m-survivor", Replace: "ORIGINAL # harmless\n"},
 		},
 		killedBySuite,
 		WithFailureParser(pythonFailureParser(t)))
@@ -68,7 +68,7 @@ func TestScoreWithoutAParserNamesNothing(t *testing.T) {
 	w := NewWorkspaceRunner(root, 0)
 
 	rep, err := Score(context.Background(), w, map[string]string{}, "a.py", "ORIGINAL\n",
-		[]Mutant{{ID: "m-killed", Code: "MUTANT\n"}}, killedBySuite)
+		[]Mutant{{ID: "m-killed", Replace: "MUTANT\n"}}, killedBySuite)
 	if err != nil {
 		t.Fatalf("Score: %v", err)
 	}
@@ -91,7 +91,7 @@ func (plainKilledByJail) RunTest(_ context.Context, files map[string]string, _ [
 
 func TestScoreOnAJailWithoutDetailedOutputNamesNothing(t *testing.T) {
 	rep, err := Score(context.Background(), plainKilledByJail{}, map[string]string{}, "a.py", "ORIGINAL\n",
-		[]Mutant{{ID: "m-killed", Code: "MUTANT\n"}}, []string{"whatever"},
+		[]Mutant{{ID: "m-killed", Replace: "MUTANT\n"}}, []string{"whatever"},
 		WithFailureParser(pythonFailureParser(t)))
 	if err != nil {
 		t.Fatalf("Score: %v", err)

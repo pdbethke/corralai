@@ -19,6 +19,8 @@ package adequacy
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"sort"
@@ -155,21 +157,155 @@ func WithConcurrency(n int) ScoreOption {
 }
 
 // Mutant is a single goal-violating variant of the code under test.
+// A MUTANT IS ITS HUNK, not a copy of the file.
+//
+// It used to carry Code: the whole mutated file, materialised once at parse
+// time and then dragged through every prompt, every recorded set and every
+// event that touched it. Cost telemetry put the number on it — the writer
+// seat spending ~0.5M tokens on one file — because a ten-line edit was being
+// shipped as six hundred lines, forty-two times over. The generator already
+// emits a SEARCH/REPLACE hunk; the whole-file copy was something corral built
+// itself and then never threw away.
+//
+// So the hunk IS the representation, and the file exists only where a file is
+// genuinely required: inside the jail, for the length of one run, via Apply.
 type Mutant struct {
-	ID   string
-	Code string
+	ID string
 	// ParentSHA256 is the hex SHA-256 of the EXACT original code this mutant was
 	// derived from (empty for hand-built test fixtures). It ties each mutant to
 	// the precise bytes under audit: a mutant is a faithful single-point edit of
-	// that original, so `sha256(original) == ParentSHA256` and the recorded
-	// patch re-applies to reproduce Code. Set by testgen's patch applier, which
-	// drops any mutant that cannot be proven a clean single-region derivative.
+	// that original, so `sha256(original) == ParentSHA256` and Apply against
+	// those bytes reproduces the mutated file. Set by testgen's patch applier,
+	// which drops any mutant that cannot be proven a clean single-region
+	// derivative.
 	ParentSHA256 string
 	// Span is the 1-based, inclusive range of ORIGINAL lines this mutant's
 	// SEARCH anchor occupied — the lines a test must reach to observe it.
 	// Zero when the producer cannot say (hand-built fixtures): the scorer
 	// then grades the mutant by the file's whole selection and says so.
 	Span lang.LineRange
+	// Search is the VERBATIM anchor the generator emitted — indentation and
+	// line endings included, because that is what makes the edit provably
+	// single-point against known bytes. Empty means the v1 whole-file shape:
+	// a mutant read back from a corral-mutants-1 document, which recorded the
+	// finished file and not the hunk that produced it.
+	Search string
+	// Replace is what Search becomes. When Search is empty, Replace IS the
+	// whole mutated file.
+	Replace string
+}
+
+// invalidReasonAnchor prefixes the InvalidReasons entry for a mutant whose
+// hunk would not apply to the source being graded. It sits on the same
+// accounting path as a compile-gate rejection because it is the same kind of
+// fact: the mutant never sat the exam, so it belongs in neither numerator nor
+// denominator — and it is DISCLOSED rather than dropped, since a set that
+// silently loses mutants looks identical to a set that never had them.
+const invalidReasonAnchor = "anchor"
+
+// IsWholeFile reports the v1 shape: no anchor, so Replace is the entire
+// mutated file rather than a hunk of it.
+func (m Mutant) IsWholeFile() bool { return m.Search == "" }
+
+// Apply materialises the mutated file.
+//
+// It is the ONLY place a mutant becomes a file, and it is byte-for-byte the
+// algorithm testgen.applyMutation used to run at parse time.
+//
+// THE GUARANTEE IS THE PARENT HASH, not a round-trip. This used to end by
+// undoing its own splice and demanding the original back, described as the
+// thing a signed verdict rests on. It was not: mutated[:i] + Search +
+// mutated[i+len(Replace):] is arithmetic over the string Apply built one line
+// earlier, so it reconstructs `original` for ANY source the anchor occurs in
+// and can only fail if Go's own slicing is wrong. It proved that the splice
+// was a splice, which was never in doubt, and said nothing about WHICH bytes
+// were spliced.
+//
+// So when the mutant records one (ParentSHA256, set by the generator's patch
+// applier), the real check is made instead: sha256(original) must be the
+// bytes this mutant is a single-point edit OF. A replay against a file that
+// has changed since — the case --mutants exists to make safe — is refused on
+// the anchor-invalid path rather than grading an exam nobody wrote. An EMPTY
+// ParentSHA256 is not a claim (hand-built fixtures, pre-hash producers) and
+// is checked against nothing.
+//
+// A whole-file mutant (Search == "") returns Replace verbatim, whatever
+// original says — that is the v1 compatibility path, where the recorded
+// document holds the finished file and there is nothing to splice.
+//
+// THE EMPTY SEARCH IS OVERLOADED, so be exact about who may construct one: an
+// empty Search is the v1 whole-file shape and is only ever CONSTRUCTED by the
+// v1 reader — the parser refuses an empty SEARCH from a model. Were it not,
+// a generator that botched a hunk would produce a "whole-file mutant" whose
+// entire content is the three lines it meant to substitute, and Apply would
+// hand that to the jail as the file under audit.
+//
+// Otherwise Search must be non-empty, must DIFFER from Replace (a mutation
+// that changes nothing is not a mutant), and must occur EXACTLY ONCE in
+// original. Every violation is an error and never a silent no-op: an
+// unanchored mutant scored as a survivor would be a coverage gap that does
+// not exist, and scored as a kill would be credit for catching nothing.
+func (m Mutant) Apply(original string) (string, error) {
+	// BEFORE the whole-file shortcut, deliberately: the v1 path returns
+	// Replace without ever reading original, so it was the one shape with no
+	// tie to the bytes at all. A v1 document that recorded a parent hash
+	// still names the only source its finished file is a derivative of.
+	if m.ParentSHA256 != "" {
+		sum := sha256.Sum256([]byte(original))
+		if got := hex.EncodeToString(sum[:]); got != m.ParentSHA256 {
+			return "", fmt.Errorf("adequacy: mutant %s is an edit of source %s, not the %s being graded — a mutant is a single-point edit of SPECIFIC bytes and re-applying it to different ones grades an exam nobody wrote", m.ID, short(m.ParentSHA256), short(got))
+		}
+	}
+	if m.IsWholeFile() {
+		return m.Replace, nil
+	}
+	if m.Search == m.Replace {
+		return "", fmt.Errorf("adequacy: mutant %s has SEARCH identical to REPLACE — it changes nothing", m.ID)
+	}
+	i := strings.Index(original, m.Search)
+	if i < 0 {
+		return "", fmt.Errorf("adequacy: mutant %s does not anchor: its SEARCH is not in the source's bytes", m.ID)
+	}
+	if strings.Contains(original[i+len(m.Search):], m.Search) {
+		return "", fmt.Errorf("adequacy: mutant %s does not anchor uniquely: its SEARCH occurs more than once", m.ID)
+	}
+	return original[:i] + m.Replace + original[i+len(m.Search):], nil
+}
+
+// short renders a hex digest for an error message. Full 64-hex digests in a
+// one-line rejection push the sentence off the operator's terminal, and the
+// first twelve are already unambiguous for telling "these two files differ"
+// apart at a glance.
+func short(hexDigest string) string {
+	if len(hexDigest) <= 12 {
+		return hexDigest
+	}
+	return hexDigest[:12]
+}
+
+// HunkSpan is the 1-based, inclusive range of ORIGINAL lines that search
+// occupied — the lines a test must reach to observe the mutant.
+//
+// THE SPAN ALGORITHM LIVES HERE, next to Apply and nowhere else. Both are
+// derived from the same two inputs (original, Search), and a second copy in
+// the parser would be free to drift: the span is what a selection rule aims a
+// test at, and Apply is what the jail actually grades, so a disagreement
+// between them would aim tests at the wrong lines while every number still
+// looked plausible.
+//
+// A zero LineRange means the anchor is absent (or empty) — the caller has
+// nothing to say about where the edit lands.
+func HunkSpan(original, search string) lang.LineRange {
+	if search == "" {
+		return lang.LineRange{}
+	}
+	i := strings.Index(original, search)
+	if i < 0 {
+		return lang.LineRange{}
+	}
+	start := strings.Count(original[:i], "\n") + 1
+	end := start + strings.Count(strings.TrimSuffix(search, "\n"), "\n")
+	return lang.LineRange{Start: start, End: end}
 }
 
 // Jail runs a test command against a set of files (path -> content) in an
@@ -562,12 +698,28 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 	outcomes := make([]outcome, len(mutants))
 
 	scoreOne := func(i int, m Mutant) {
+		// THE FILE IS MATERIALISED HERE AND NOWHERE ELSE. A mutant is its hunk;
+		// this is the one moment it has to become source, for exactly as long
+		// as the jail needs it.
+		//
+		// An anchor that does not apply is an INVALID mutant, on the same
+		// accounting path the compile gate uses — never a kill (nothing was
+		// caught) and never a survivor (nothing was missed). It cannot happen
+		// for a mutant this run generated, whose anchor was proven unique
+		// against these exact bytes; it CAN happen for a replayed set whose
+		// parent hash was somehow satisfied by different source, and that is
+		// precisely the case that must not quietly become a number.
+		mutantCode, aerr := m.Apply(compliantCode)
+		if aerr != nil {
+			outcomes[i] = outcome{invalid: true, invalidReason: invalidReasonAnchor + ": " + aerr.Error()}
+			return
+		}
 		// The compile gate runs FIRST and is cheap relative to a suite run, so
 		// an invalid mutant costs one type-check instead of a full execution.
 		if len(cfg.mutantCompileCheck) > 0 {
 			gctx, gcancel := context.WithTimeout(ctx, perMutant)
 			for _, cmd := range cfg.mutantCompileCheck {
-				ok, out, err := runCmdVerbose(gctx, m.Code, cmd)
+				ok, out, err := runCmdVerbose(gctx, mutantCode, cmd)
 				if err != nil {
 					// FAIL CLOSED. A gate that could not RUN says nothing about
 					// the mutant; treating that as "invalid" would quietly erase
@@ -611,14 +763,14 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 		)
 		if nameKiller {
 			var out []byte
-			passed, out, err = runCmdDetailed(mctx, m.Code, cmd)
+			passed, out, err = runCmdDetailed(mctx, mutantCode, cmd)
 			if err == nil && !passed {
 				// A kill, and the output is the only thing entitled to say
 				// which test made it one. "" when the summary says nothing.
 				killedBy = cfg.failureParser.FirstFailure(out)
 			}
 		} else {
-			passed, err = runCmd(mctx, m.Code, cmd)
+			passed, err = runCmd(mctx, mutantCode, cmd)
 		}
 		grading.Duration = time.Since(mstart)
 		cancel()

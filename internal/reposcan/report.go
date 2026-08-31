@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/pdbethke/corralai/internal/advpool"
+	"github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/modelcorr"
 )
 
@@ -68,6 +69,16 @@ type WeakFile struct {
 	//
 	// Only meaningful alongside ProvenMissed > 0.
 	AuthoredTest string
+	// AuthoredExtra mirrors advpool.Verdict.AuthoredExtra: proven authored
+	// tests the language's concatenator would not fold into AuthoredTest.
+	//
+	// Every reader MUST render these. Each one is a test corral wrote,
+	// compiled and ran to kill a specific survivor, and ProvenMissed counts
+	// it — so a report that prints AuthoredTest alone tells a developer that
+	// N gaps are provable and hands them fewer than N tests. That is the same
+	// "told a gap is provable and handed nothing to act on" failure
+	// AuthoredTest itself was added to fix, in a narrower form.
+	AuthoredExtra []lang.AuthoredPart
 	// PoolTestUnsound mirrors advpool.Verdict.PoolTestUnsound: true when the
 	// pool's authored test DID compile (TestWriterFailed is false) but its
 	// scoring report never genuinely graded (it failed on the unmutated
@@ -92,6 +103,25 @@ type WeakFile struct {
 	// the language, --whole-suite, an evidence run that failed). Empty when
 	// SelectionMethod is set. Never both.
 	SelectionFallback string
+	// WriterMode and WriterCalls mirror advpool.Verdict.WriterMode and the
+	// test-writer's own entry in advpool.Verdict.ModelCalls: whether this
+	// file's survivors were attacked one call each ("per-survivor") or all in
+	// one ("batched"), and how many calls that actually took.
+	//
+	// The COUNT rides beside the mode because the mode alone understates the
+	// shape: "per-survivor" over 24 survivors that needed 31 calls says
+	// something the label does not (seven repairs). Empty/0 is NOT RECORDED
+	// — a run that named no mode, or a verdict from before the mode existed —
+	// and a reader must print nothing rather than pick a mode.
+	WriterMode  string
+	WriterCalls int
+	// WriterSeatsUngraded mirrors advpool.Verdict.WriterSeatsUngraded: how
+	// many of a per-survivor run's seats never produced a test that genuinely
+	// graded. It rides beside the mode because a proven count over
+	// twenty-four survivors means something different when three of them were
+	// never actually attempted. 0 on a batched run and on a fully-graded
+	// fan-out, and the line prints nothing for it.
+	WriterSeatsUngraded int
 	// PerMutant and TestsPerMutant mirror
 	// advpool.Verdict.TestSelection.PerMutant / .TestsPerMutant: each mutant
 	// was graded by the tests that reach ITS OWN lines, not by one command
@@ -176,14 +206,25 @@ type WeakFile struct {
 	MutantMillisMedian int64
 	MutantMillisMax    int64
 	// Challenger mirrors advpool.Verdict.ChallengerAgreement: the primary
-	// writer's agreement with the challenger writer over the same survivor
-	// set. nil whenever no comparable pair exists — no challenger ran,
-	// either seat's kill vector was never measured, or the primary salvaged
-	// (see ChallengerAgreement's own doc for the full gating). Non-nil does
-	// NOT mean Jaccard/Kappa are individually meaningful: a caller must
-	// still check Challenger.Sufficient / Challenger.KappaDefined before
-	// printing or storing either coefficient.
+	// writer's agreement with the challenger writer over the survivors BOTH
+	// seats genuinely attempted — which under the per-survivor writer mode is
+	// the overlap of their measured sets, not necessarily every survivor the
+	// file had (see ChallengerAgreement's own doc for why counting the rest
+	// would invent a shared blind spot). nil whenever no comparable pair
+	// exists — no challenger ran, either seat's kill vector was never
+	// measured, the primary salvaged, or the two measured sets do not
+	// overlap. Non-nil does NOT mean Jaccard/Kappa are individually
+	// meaningful: a caller must still check Challenger.Sufficient /
+	// Challenger.KappaDefined before printing or storing either coefficient,
+	// and Challenger.Mutants is how many survivors the pair actually covers.
 	Challenger *modelcorr.Pair
+	// PromptShape mirrors advpool.Verdict.PromptShape: "chunk" when every
+	// mutant-generator shard saw only its own symbols' bodies plus the
+	// file's preamble, "file" when even one shard fell back to showing the
+	// whole file (including an unsharded run, which always showed the whole
+	// file). "" — never fabricated — for a run that predates this
+	// disclosure, or a preset (`--mutants`) run that generated nothing.
+	PromptShape string
 }
 
 // MeasuredSpread reports whether this file's run actually measured a
@@ -406,10 +447,14 @@ func Aggregate(owner, repo, commit string, totalFiles, candidates int, results [
 			// Which measurement this file's rate IS, carried onto the report
 			// so the printer never has to reach back into the verdict — and
 			// so it cannot print a rate without the question it answers.
-			SelectionMethod:   r.Verdict.TestSelection.Method,
-			SelectedTests:     r.Verdict.TestSelection.Selected,
-			SuiteTests:        r.Verdict.TestSelection.Of,
-			SelectionFallback: r.Verdict.TestSelection.Fallback,
+			SelectionMethod:     r.Verdict.TestSelection.Method,
+			SelectedTests:       r.Verdict.TestSelection.Selected,
+			SuiteTests:          r.Verdict.TestSelection.Of,
+			SelectionFallback:   r.Verdict.TestSelection.Fallback,
+			AuthoredExtra:       r.Verdict.AuthoredExtra,
+			WriterMode:          r.Verdict.WriterMode,
+			WriterCalls:         writerCallsOf(r.Verdict),
+			WriterSeatsUngraded: r.Verdict.WriterSeatsUngraded,
 			// And at which GRAIN it was measured: a rate averaged over
 			// mutants that each faced a different test set is not one
 			// measurement unless the report carries the spread.
@@ -436,6 +481,8 @@ func Aggregate(owner, repo, commit string, totalFiles, candidates int, results [
 			// nil whenever no comparable pair exists (see
 			// advpool.Verdict.ChallengerAgreement's doc).
 			Challenger: r.Verdict.ChallengerAgreement,
+			// What a generator shard actually saw — see WeakFile.PromptShape.
+			PromptShape: r.Verdict.PromptShape,
 		})
 	}
 
@@ -453,4 +500,20 @@ func Aggregate(owner, repo, commit string, totalFiles, candidates int, results [
 		return rep.Weakest[i].KillRate < rep.Weakest[j].KillRate
 	})
 	return rep
+}
+
+// writerCallsOf reads the test-writer seat's call count out of a verdict's
+// per-role cost rows — the SAME numbers the cost line and the ledger use,
+// never a second derivation from the survivor count (which would be a
+// prediction, not a measurement: repairs are calls too).
+//
+// 0 when the verdict carries no test-writer row at all, which the printer
+// renders as "not recorded" rather than as a writer that made no calls.
+func writerCallsOf(v advpool.Verdict) int {
+	for _, c := range v.ModelCalls {
+		if c.Role == advpool.RoleTestWriter {
+			return c.Calls
+		}
+	}
+	return 0
 }

@@ -39,10 +39,12 @@ func TestScore(t *testing.T) {
 	// mutant m2 (a survivor the test misses); it "fails" (false) on m1 and m3.
 	fj := &fakeJail{passOn: map[string]bool{"COMPLIANT": true, "m1": false, "m2": true, "m3": false}}
 	base := map[string]string{"code_test.go": "<test>", "go.mod": "module target\ngo 1.26\n"}
-	// Mutant.Code is the marker the fake jail keys on (matching passOn); ID is
+	// Mutant.Replace is the marker the fake jail keys on (matching passOn) —
+	// these are whole-file mutants (no anchor), so Apply hands it back verbatim.
+	// ID is
 	// the identifier Score reports in Killed/Survived. Same value here — the
 	// fake doesn't care about ID, only about the code content it's handed.
-	muts := []Mutant{{ID: "m1", Code: "m1"}, {ID: "m2", Code: "m2"}, {ID: "m3", Code: "m3"}}
+	muts := []Mutant{{ID: "m1", Replace: "m1"}, {ID: "m2", Replace: "m2"}, {ID: "m3", Replace: "m3"}}
 	rep, err := Score(context.Background(), fj, base, "code.go", "COMPLIANT", muts, []string{"go", "test", "./"})
 	if err != nil {
 		t.Fatal(err)
@@ -62,7 +64,7 @@ func TestScoreInvalidWhenCompliantFails(t *testing.T) {
 	// A test that fails on compliant code is broken/overreaching: report invalid, no mutants run.
 	fj := &fakeJail{passOn: map[string]bool{"COMPLIANT": false}}
 	rep, err := Score(context.Background(), fj, map[string]string{}, "code.go", "COMPLIANT",
-		[]Mutant{{ID: "m1", Code: "M1"}}, []string{"go", "test"})
+		[]Mutant{{ID: "m1", Replace: "M1"}}, []string{"go", "test"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,7 +106,7 @@ func TestScoreMutantTimeoutCountsAsKilled(t *testing.T) {
 		passOn:    map[string]bool{"COMPLIANT": true, "m2": false},
 		timeoutOn: map[string]bool{"m1": true},
 	}
-	muts := []Mutant{{ID: "m1", Code: "m1"}, {ID: "m2", Code: "m2"}}
+	muts := []Mutant{{ID: "m1", Replace: "m1"}, {ID: "m2", Replace: "m2"}}
 	rep, err := Score(context.Background(), fj, map[string]string{}, "code.go", "COMPLIANT", muts, []string{"go", "test"})
 	if err != nil {
 		t.Fatalf("a mutant timeout must not abort Score: %v", err)
@@ -128,7 +130,7 @@ func TestScoreMutantTimeoutCountsAsKilled(t *testing.T) {
 // jail's generous budget is broken/too-slow; it must never earn a kill rate.
 func TestScoreBaselineTimeoutFailsClosed(t *testing.T) {
 	fj := &timeoutJail{timeoutOn: map[string]bool{"COMPLIANT": true}}
-	muts := []Mutant{{ID: "m1", Code: "m1"}}
+	muts := []Mutant{{ID: "m1", Replace: "m1"}}
 	rep, err := Score(context.Background(), fj, map[string]string{}, "code.go", "COMPLIANT", muts, []string{"go", "test"})
 	if err != nil {
 		t.Fatalf("a baseline timeout must fail closed, not error: %v", err)
@@ -166,7 +168,7 @@ func (j *realJail) RunTest(ctx context.Context, files map[string]string, cmd []s
 func TestScoreCanarySurvivesWhenSuiteIgnoresTheFile(t *testing.T) {
 	j := &ignoringJail{}
 	rep, err := Score(context.Background(), j, map[string]string{}, "a.go", "package a\n",
-		[]Mutant{{ID: "m1", Code: "package a // mutated\n"}}, []string{"true"})
+		[]Mutant{{ID: "m1", Replace: "package a // mutated\n"}}, []string{"true"})
 	if err != nil {
 		t.Fatalf("Score: %v", err)
 	}
@@ -184,7 +186,7 @@ func TestScoreCanarySurvivesWhenSuiteIgnoresTheFile(t *testing.T) {
 func TestScoreCanaryKilledLeavesTheMeasurementUntouched(t *testing.T) {
 	j := &realJail{}
 	rep, err := Score(context.Background(), j, map[string]string{}, "a.go", "package a\n",
-		[]Mutant{{ID: "m1", Code: "package a // mutated\n"}}, []string{"true"})
+		[]Mutant{{ID: "m1", Replace: "package a // mutated\n"}}, []string{"true"})
 	if err != nil {
 		t.Fatalf("Score: %v", err)
 	}
@@ -231,7 +233,7 @@ func TestScoreRunsNoCanaryWithoutMutants(t *testing.T) {
 func TestScoreMutantOtherErrorPropagates(t *testing.T) {
 	wantErr := errors.New("boom: sandbox could not start")
 	fj := &errJail{err: wantErr}
-	muts := []Mutant{{ID: "m1", Code: "m1"}}
+	muts := []Mutant{{ID: "m1", Replace: "m1"}}
 	_, err := Score(context.Background(), fj, map[string]string{}, "code.go", "COMPLIANT", muts, []string{"go", "test"})
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("want the infra error propagated, got %v", err)
@@ -271,7 +273,7 @@ func TestScoreCanaryTimeoutCountsAsKilled(t *testing.T) {
 		passOn:    map[string]bool{"COMPLIANT": true, "m1": false},
 		timeoutOn: map[string]bool{CanaryCode: true},
 	}
-	muts := []Mutant{{ID: "m1", Code: "m1"}}
+	muts := []Mutant{{ID: "m1", Replace: "m1"}}
 	rep, err := Score(context.Background(), fj, map[string]string{}, "code.go", "COMPLIANT", muts, []string{"go", "test"})
 	if err != nil {
 		t.Fatalf("a canary timeout must not abort Score: %v", err)
@@ -295,7 +297,7 @@ func TestScoreCanaryTimeoutCountsAsKilled(t *testing.T) {
 func TestScoreCanaryOtherErrorPropagates(t *testing.T) {
 	wantErr := errors.New("boom: sandbox could not start")
 	fj := &canaryErrJail{err: wantErr}
-	muts := []Mutant{{ID: "m1", Code: "m1"}}
+	muts := []Mutant{{ID: "m1", Replace: "m1"}}
 	_, err := Score(context.Background(), fj, map[string]string{}, "code.go", "COMPLIANT", muts, []string{"go", "test"})
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("want the infra error propagated from the canary run, got %v", err)

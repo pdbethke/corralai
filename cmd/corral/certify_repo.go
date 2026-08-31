@@ -80,8 +80,9 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	minKillRateFlag := fs.String("min-kill-rate", "", "fail the scan (exit 1) if ANY audited file's kill rate is below this value (0.0-1.0 inclusive; a minimum, so a file exactly at the threshold passes). Opt-in: unset by default, so exit codes are unchanged unless this is given. Applies PER FILE, not to the aggregate — a well-tested file must not mask a weak one")
 	preflightFlag := fs.Bool("preflight", false, "run the project's test suite once with coverage instrumentation and report which source files it never executes. One extra suite run; reports coverage-grade evidence, not proof")
 	recordFlag := fs.Bool("record", false, "record every file this scan audited or rejected, and why, into the DuckDB scan ledger (default: off). A BOOL here — unlike `certify --local`'s --record, which takes a tape PATH — see --record-db for where the ledger goes. A recording failure never changes the scan's verdict or exit code")
-	mutantsFlag := fs.String("mutants", "", "REPLAY a recorded mutant set (see --record-mutants) instead of generating one: every audited file is graded against exactly the mutants in this file, and not one generator model call is made. Mutants are authored by a model, so an ordinary run re-draws the exam every time and two runs of the same audit are not two samples of one measurement — pin the set and a change to anything ELSE becomes measurable. Every selected file must appear in the set with the SAME bytes it was recorded from; a missing file or a changed one is refused (exit 2) up front, never half-replayed")
-	recordMutantsFlag := fs.String("record-mutants", "", "write the mutants this scan actually GRADED to this file, as a replayable corral-mutants-1 document — one entry per audited file, each tied to the sha256 of the source it was derived from. Written even when the scan's gates fail: a red verdict is still a recorded exam")
+	mutantsFlag := fs.String("mutants", "", "REPLAY a recorded mutant set (see --record-mutants) instead of generating one: every audited file is graded against exactly the mutants in this file, and not one generator model call is made. Mutants are authored by a model, so an ordinary run re-draws the exam every time and two runs of the same audit are not two samples of one measurement — pin the set and a change to anything ELSE becomes measurable. Every selected file must appear in the set with the SAME bytes it was recorded from; a missing file or a changed one is refused (exit 2) up front, never half-replayed. Reads a corral-mutants-2 document, or an older corral-mutants-1 one, whose whole-file mutants still replay byte-for-byte.")
+	recordMutantsFlag := fs.String("record-mutants", "", "write the mutants this scan actually GRADED to this file, as a replayable corral-mutants-2 document — one entry per audited file, each mutant its SEARCH/REPLACE hunk, tied to the sha256 of the source it was derived from. Written even when the scan's gates fail: a red verdict is still a recorded exam. A v2 document re-recorded from a --mutants replay of an older corral-mutants-1 set contains that set's WHOLE-FILE entries, not hunks — the run graded what was recorded, and re-recording it does not manufacture anchors it never had")
+	writerModeFlag := fs.String("writer-mode", "", "how the test-writer attacks a file's survivors: `per-survivor` (the default) makes ONE call per survivor — each carrying the file once as a cacheable shared prefix plus that survivor's diff, each repaired on its own budget and each PROVEN ALONE against its own mutant — or `batched`, the original shape: one call carrying every survivor, one repair budget for the file, one proof pass over all of them. Nothing measured changes between them (a survivor is proven iff an authored test kills it alone and passes on the original, either way); what changes is that one unbuildable test no longer spends the whole file's retries and takes every other survivor down with it. The verdict, the report line, the ledger and the attestation all record which mode earned the numbers. Each survivor's proof in per-survivor mode runs its OWN compliant baseline (a compliant pass plus a canary, per seat), so a file with N survivors pays N baselines where batched paid one: on a repo whose suite takes a minute, prefer --writer-mode batched or expect N baselines' worth of wall clock.")
 	shadowWriterModelFlag := fs.String("shadow-writer-model", "", "CHALLENGER test-writer: a second writer attacks the SAME survivors as the primary, so the two seats' misses can be compared (Jaccard over survivors, Cohen's kappa). Measurement only — it NEVER gates the verdict. OFF unless named. Recording the per-mutant outcomes additionally needs --mutant-attempts-db")
 
 	var localEndpointFlag stringSlice
@@ -98,6 +99,15 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// they now get it by default — but from execution evidence, and the
 	// replacement flag goes the OTHER way, so silently honouring the old
 	// spelling would mean the opposite of what it used to.
+	// Validated here, before anything is spent: the mode changes how many
+	// model calls a run makes and what its verdict discloses, so a typo must
+	// exit 2 rather than quietly take the default and hand back a different
+	// measurement than the one that was asked for.
+	writerMode, wmErr := advpool.ResolveWriterMode(*writerModeFlag)
+	if wmErr != nil {
+		fmt.Fprintf(stderr, "%s: %v\n", "corral certify --repo", wmErr)
+		return 2
+	}
 	if *scopeTestsFlag {
 		fmt.Fprintln(stderr, "corral certify --repo: --scope-tests was removed. Its paired-FILE scoping inverted verdicts (requests/adapters.py 1.00 -> 0.00). Selection is now by coverage evidence and on by default; pass --whole-suite to grade against the whole suite. See docs/design/test-selection.md")
 		return 2
@@ -455,6 +465,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		if mutantRecorder != nil {
 			ex.mutantSink = mutantRecorder.sink
 		}
+		ex.writerMode = writerMode
 		ex.models = auditModels{
 			writer: *writerModelFlag, mutant: *mutantModelFlag,
 			critic: *criticModelFlag, shadow: *shadowModelFlag,
@@ -572,7 +583,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// carries the flags that change what a mutant run against a given file
 	// MEASURES, not which files get audited. See auditConfigKey for the
 	// inclusion/exclusion rationale.
-	auditConfig := auditConfigKey(*wholeSuiteFlag, selectionMethod, checkArgv, mutantsFromSHA)
+	auditConfig := auditConfigKey(*wholeSuiteFlag, selectionMethod, checkArgv, mutantsFromSHA, writerMode)
 
 	// testSurfacePaths has to STAT the testdata entries it admits, and every
 	// read a scan performs is confined to the repository through an *os.Root —
@@ -1187,8 +1198,24 @@ func fileSelectionKey(sel lang.Selection) string {
 // Bias when adding to this list: include. Over-inclusion causes a needless
 // miss, which costs money. Under-inclusion serves a stale verdict, which
 // signs an unmeasured claim.
-func auditConfigKey(wholeSuite bool, method string, checkArgv []string, mutantsFrom string) string {
+func auditConfigKey(wholeSuite bool, method string, checkArgv []string, mutantsFrom, writerMode string) string {
 	m := map[string]string{}
+	// The WRITER MODE, for the same reason the grading mode is here: the two
+	// shapes are different exams. Per-survivor proves each survivor ALONE
+	// against its own mutant, on its own repair budget, behind its own
+	// compliant baseline; batched proves all of them together on one budget
+	// and one pass. Whichever earned the numbers is disclosed on the report
+	// line, recorded in the ledger and SIGNED into the attestation — so a key
+	// blind to it would serve a per-survivor verdict to a batched run and
+	// then sign `writerMode: per-survivor` for a run that never executed it.
+	//
+	// Keyed by its resolved spelling, never by a bool: an EMPTY mode is a
+	// caller that named none (the brain, a test) and must key exactly as it
+	// always has, which is also why this is the one component that can be
+	// absent while a mode is nonetheless in force downstream.
+	if writerMode != "" {
+		m["writer-mode"] = writerMode
+	}
 	// A REPLAYED run sat a different exam from a generated one, so its
 	// verdict is not interchangeable with a cached generated verdict for the
 	// same content — and a generated verdict is not interchangeable with a
@@ -2558,6 +2585,13 @@ func printWeakFile(w io.Writer, f reposcan.WeakFile) {
 		// authored test's own — never a dev test that happened to flake.
 		fmt.Fprint(w, " — proven by the authored test alone")
 	}
+	// What a mutant-generator shard actually SAW: "chunk" when every shard
+	// showed only its own symbols, "file" when even one fell back (including
+	// an unsharded run, which always shows the whole file). Silent — never a
+	// fabricated "file" — for a run that predates this disclosure.
+	if f.PromptShape != "" {
+		fmt.Fprintf(w, " — prompts: %s", f.PromptShape)
+	}
 	fmt.Fprintln(w)
 	// How many private trees scored this file at once, or why it only got
 	// one — the same wording noteConcurrency printed live during the run,
@@ -2567,6 +2601,28 @@ func printWeakFile(w io.Writer, f reposcan.WeakFile) {
 	// none — matching noteConcurrency, which already stays quiet there.
 	if f.Trees >= 1 {
 		fmt.Fprintf(w, "   concurrency: %s\n", concurrencyDisclosure(f.Trees, f.ConcurrencyNote, f.SharedDirs))
+	}
+	// WHICH SHAPE the writer attacked in, and what it cost in calls. The two
+	// modes prove the same thing — a survivor is proven iff an authored test
+	// kills it alone and passes on the original — but they attempt it
+	// differently and cost differently, so a proven count read without the
+	// mode is two incomparable measurements wearing one number. Silent when
+	// nothing recorded a mode (a run that named none, or a verdict from
+	// before the mode existed): a reader is told nothing rather than told the
+	// wrong one.
+	//
+	// A CACHE HIT prints the mode and NOTHING ELSE, for the same reason the
+	// timing line above is suppressed entirely: the call count round-trips
+	// through verdict_json and comes back fully populated with the EARNING
+	// run's calls, which this scan did not make. The mode is a property of
+	// the verdict and stays true however it was served; the count is a cost
+	// this run did not pay.
+	calls, ungraded := f.WriterCalls, f.WriterSeatsUngraded
+	if f.CacheHit {
+		calls, ungraded = 0, 0
+	}
+	if line := writerModeDisclosure(f.WriterMode, calls, ungraded); line != "" {
+		fmt.Fprintf(w, "   %s\n", line)
 	}
 	// WHERE THE MINUTES WENT. Printed through the same helper `corral scans
 	// show --timing` uses, so the line an operator reads now and the line
@@ -2600,9 +2656,32 @@ func printWeakFile(w io.Writer, f reposcan.WeakFile) {
 	// the markers above already say why.
 	if f.ProvenMissed > 0 && strings.TrimSpace(f.AuthoredTest) != "" {
 		fmt.Fprintf(w, "      the pool wrote this test and RAN it to prove the gap — add it to your suite:\n")
-		for _, line := range strings.Split(strings.TrimRight(f.AuthoredTest, "\n"), "\n") {
-			fmt.Fprintf(w, "        %s\n", line)
+		printAuthoredSource(w, f.AuthoredTest)
+	}
+	// The parts that would not merge into the file above. Printed in FULL,
+	// each under its own header: every one is a test corral wrote, compiled
+	// and ran to kill the survivor it names, and ProvenMissed counts it — so
+	// printing only the merged file would report N provable gaps and hand the
+	// developer fewer than N tests. On a language whose parts routinely will
+	// not merge that is not an edge case, it is the whole output.
+	//
+	// Not gated on ProvenMissed > 0 the way the merged file is: a part only
+	// ever exists BECAUSE it proved its survivor, so an extra with a zero
+	// count would be a bug worth seeing rather than noise worth hiding.
+	for _, p := range f.AuthoredExtra {
+		fmt.Fprintf(w, "      proven test for %s (separate file — it cannot be merged with the others):\n", p.MutantID)
+		if r := strings.TrimSpace(p.Reason); r != "" {
+			fmt.Fprintf(w, "        why: %s\n", r)
 		}
+		printAuthoredSource(w, p.Source)
+	}
+}
+
+// printAuthoredSource writes one authored test's source, indented, so several
+// of them in a row read as separate files rather than one run-on block.
+func printAuthoredSource(w io.Writer, src string) {
+	for _, line := range strings.Split(strings.TrimRight(src, "\n"), "\n") {
+		fmt.Fprintf(w, "        %s\n", line)
 	}
 }
 
@@ -3101,6 +3180,10 @@ type localExecutor struct {
 	// measurement: summing it across files would invent time nobody spent.
 	selectionDuration time.Duration
 
+	// writerMode is the scan-wide --writer-mode, carried onto every job's
+	// localAuditInput. Resolved and validated once at the flag boundary.
+	writerMode string
+
 	// wholeSuite is the operator's --whole-suite opt-out: grade every mutant
 	// against the project's whole suite instead of the tests that
 	// demonstrably execute the file. It changes the MEASUREMENT, not just the
@@ -3324,6 +3407,7 @@ func (l *localExecutor) auditInputFor(j reposcan.Job) localAuditInput {
 		criticModel:       l.models.critic,
 		shadowModel:       l.models.shadow,
 		shadowWriterModel: l.models.shadowWriter,
+		writerMode:        l.writerMode,
 
 		// A nil entry is an ordinary generated run — see localExecutor.presetMutants.
 		presetMutants: l.presetMutants[j.Path],
@@ -3765,10 +3849,15 @@ func writeAuditStatement(path, repoDir string, r reposcan.RepoReport, models map
 			// rate for a file nothing executes.
 			TestSelection:         f.SelectionMethod,
 			ProvenByAuthoredAlone: f.ProvenByAuthoredAlone,
-			SelectedTests:         f.SelectedTests,
-			SuiteTests:            f.SuiteTests,
-			SelectionFallback:     f.SelectionFallback,
-			Uncovered:             f.Uncovered,
+			// And which shape earned that proven count. A verifier comparing
+			// two signed statements has to be able to see that one file's
+			// writer got a call per survivor and the other's got one call
+			// for all of them.
+			WriterMode:        f.WriterMode,
+			SelectedTests:     f.SelectedTests,
+			SuiteTests:        f.SuiteTests,
+			SelectionFallback: f.SelectionFallback,
+			Uncovered:         f.Uncovered,
 			// And at which grain: a signed rate averaged over mutants that
 			// each faced a different test set needs the spread to be read
 			// as the measurement it is.
@@ -3781,6 +3870,9 @@ func writeAuditStatement(path, repoDir string, r reposcan.RepoReport, models map
 			Trees:           f.Trees,
 			ConcurrencyNote: f.ConcurrencyNote,
 			SharedDirs:      f.SharedDirs,
+			// What a mutant-generator shard actually saw — see
+			// certify.AuditedFile.PromptShape's doc.
+			PromptShape: f.PromptShape,
 		})
 	}
 	// Same resolution the warehouse push uses: a statement whose subject names
@@ -3979,4 +4071,43 @@ func resolveRepoName(repoDir, given string) string {
 		}
 	}
 	return repo
+}
+
+// writerModeDisclosure renders the per-file writer line: which shape the
+// writer seat attacked in, and how many calls that took.
+//
+// Shared by the live report and `corral scans show` for the same reason
+// timingLine and concurrencyDisclosure are: the sentence an operator reads
+// during the run and the one they read back out of the ledger must be the
+// same sentence, or the two will drift and a reader will have to work out
+// whether they mean the same thing.
+//
+// Returns "" when the mode was NOT RECORDED — a run whose caller named no
+// mode, or a verdict earned before the mode existed. Silence is the honest
+// rendering: neither spelling is true of such a row, and printing one would
+// be an invented fact about how a measurement was made.
+func writerModeDisclosure(mode string, calls, seatsUngraded int) string {
+	if strings.TrimSpace(mode) == "" {
+		return ""
+	}
+	// The call count is a MEASUREMENT (the seat's own ledger row), so 0 means
+	// "no cost row for this seat", not "the writer made no calls" — a cached
+	// verdict and a pre-cost-column row both look like that. The mode is
+	// still worth saying on its own.
+	if calls <= 0 {
+		return "writer: " + mode
+	}
+	unit := "calls"
+	if calls == 1 {
+		unit = "call"
+	}
+	// Partial failure, said out loud. Neither WRITER FAILED nor TEST UNSOUND
+	// fires when SOME seats graded, so without this a file where three of
+	// twenty-four survivors were never actually attempted reads exactly like
+	// one where all twenty-four were.
+	if seatsUngraded > 0 {
+		return fmt.Sprintf("writer: %s (%d %s, %d seats ungraded — those survivors were never attempted, so the proven count is over the rest)",
+			mode, calls, unit, seatsUngraded)
+	}
+	return fmt.Sprintf("writer: %s (%d %s)", mode, calls, unit)
 }

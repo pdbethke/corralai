@@ -23,9 +23,9 @@ import (
 func TestVerdictCarriesTheProvenEvidence(t *testing.T) {
 	// m1 and m3 die to the authored test; m2 survives it.
 	mutants := []adequacy.Mutant{
-		{ID: "m1", Code: "MUT1"},
-		{ID: "m2", Code: "MUT2"},
-		{ID: "m3", Code: "MUT3"},
+		{ID: "m1", Replace: "MUT1"},
+		{ID: "m2", Replace: "MUT2"},
+		{ID: "m3", Replace: "MUT3"},
 	}
 	run := &runState{
 		rs:           RunSpec{CodePath: "src/flask/cli.py", Lang: "python"},

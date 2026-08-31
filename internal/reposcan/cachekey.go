@@ -30,7 +30,13 @@ type KeyInputs struct {
 	TestSurfaceDigest string
 	EngineVersion     string
 	ModelSet          string
-	AuditConfig       string
+	// AuditConfig is the scan-wide bundle of flags that change WHAT a run
+	// measures rather than which files it audits — the grading mode, the
+	// check argv, a replayed mutant set, and the WRITER MODE (per-survivor
+	// vs batched, two different exams over the same survivors). Built by
+	// cmd/corral's auditConfigKey, which carries the inclusion rules and the
+	// reason each component is in it.
+	AuditConfig string
 	// Substrate is where the audit ran — SubstrateJail or SubstrateWorkspace.
 	// A verdict earned under bwrap and one earned in a CI runner's checkout
 	// are different claims: different isolation, different toolchain

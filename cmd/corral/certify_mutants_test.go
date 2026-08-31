@@ -25,7 +25,7 @@ func TestMutantSetFlagsParseOnBothCommands(t *testing.T) {
 	dir := t.TempDir()
 	setPath := filepath.Join(dir, "mutants.json")
 	if err := adequacy.WriteMutantSet(setPath, adequacy.MutantSetFile{
-		Format: "corral-mutants-1", Files: map[string]adequacy.MutantSetEntry{},
+		Format: adequacy.MutantSetFormat, Files: map[string]adequacy.MutantSetEntry{},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -72,12 +72,12 @@ func TestCertifyRepoRefusesAStaleMutantSet(t *testing.T) {
 
 	setPath := filepath.Join(root, "mutants.json")
 	if err := adequacy.WriteMutantSet(setPath, adequacy.MutantSetFile{
-		Format: "corral-mutants-1",
+		Format: adequacy.MutantSetFormat,
 		Files: map[string]adequacy.MutantSetEntry{
 			"pkg/a.go": {
 				// Derived from OTHER bytes than what is on disk.
 				ParentSHA256: shaOf("package pkg\n\nfunc A() int { return 2 }\n"),
-				Mutants:      []adequacy.RecordedMutant{{ID: "m1", Code: "package pkg\n\nfunc A() int { return 0 }\n"}},
+				Mutants:      []adequacy.RecordedMutant{{ID: "m1", Replace: "package pkg\n\nfunc A() int { return 0 }\n"}},
 			},
 		},
 	}); err != nil {
@@ -127,7 +127,7 @@ func TestCertifyRepoRefusesAMutantSetMissingASelectedFile(t *testing.T) {
 
 	setPath := filepath.Join(root, "mutants.json")
 	if err := adequacy.WriteMutantSet(setPath, adequacy.MutantSetFile{
-		Format: "corral-mutants-1", Files: map[string]adequacy.MutantSetEntry{},
+		Format: adequacy.MutantSetFormat, Files: map[string]adequacy.MutantSetEntry{},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -154,9 +154,9 @@ func TestCertifyRepoRefusesAMutantSetMissingASelectedFile(t *testing.T) {
 func TestMutantSetFileRoundTripsThroughTheWriter(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "set.json")
 	if err := adequacy.WriteMutantSet(p, adequacy.MutantSetFile{
-		Format: "corral-mutants-1",
+		Format: adequacy.MutantSetFormat,
 		Files: map[string]adequacy.MutantSetEntry{
-			"pkg/a.go": {ParentSHA256: shaOf("x"), Mutants: []adequacy.RecordedMutant{{ID: "m1", Code: "y"}}},
+			"pkg/a.go": {ParentSHA256: shaOf("x"), Mutants: []adequacy.RecordedMutant{{ID: "m1", Replace: "y"}}},
 		},
 	}); err != nil {
 		t.Fatal(err)
@@ -171,8 +171,50 @@ func TestMutantSetFileRoundTripsThroughTheWriter(t *testing.T) {
 	if err := json.Unmarshal(raw, &probe); err != nil {
 		t.Fatal(err)
 	}
-	if probe.Format != "corral-mutants-1" {
-		t.Fatalf("format = %q, want corral-mutants-1", probe.Format)
+	if probe.Format != "corral-mutants-2" {
+		t.Fatalf("format = %q, want corral-mutants-2", probe.Format)
+	}
+}
+
+// TestRecorderWritesV2Only: --record-mutants writes HUNKS. A recorder that
+// still emitted v1 would keep shipping a whole mutated file per mutant — the
+// cost the representation change exists to remove — and would do it silently,
+// since a v1 document still reads.
+func TestRecorderWritesV2Only(t *testing.T) {
+	const src = "def add(a, b):\n    return a + b\n"
+	rec := newMutantSetRecorder()
+	rec.sink("x.py", []adequacy.Mutant{{
+		ID: "m1", ParentSHA256: shaOf(src),
+		Search: "return a + b", Replace: "return a - b",
+	}})
+	p := filepath.Join(t.TempDir(), "s.json")
+	if _, err := rec.write(p); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(p) // #nosec G304 -- test-owned temp path
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"format": "corral-mutants-2"`) {
+		t.Fatalf("the recorder must write corral-mutants-2, got:\n%s", raw)
+	}
+	if strings.Contains(string(raw), `"code"`) {
+		t.Fatalf("a recorded mutant must carry its hunk, never a copy of the file:\n%s", raw)
+	}
+	set, err := adequacy.ReadMutantSet(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ms, err := set.MutantsFor("x.py", src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ms) != 1 || ms[0].Search != "return a + b" || ms[0].Replace != "return a - b" {
+		t.Fatalf("the hunk did not survive the round trip: %+v", ms)
+	}
+	code, aerr := ms[0].Apply(src)
+	if aerr != nil || code != "def add(a, b):\n    return a - b\n" {
+		t.Fatalf("replayed hunk applies to %q (err=%v)", code, aerr)
 	}
 }
 
@@ -183,9 +225,9 @@ func TestMutantSetFileRoundTripsThroughTheWriter(t *testing.T) {
 // authored exam — the same model-blind key bug that once let one model's
 // verdict be served for another's, in the one dimension --mutants controls.
 func TestAuditConfigKeySeparatesAReplayFromAGeneratedRun(t *testing.T) {
-	generated := auditConfigKey(false, "coverage-context", nil, "")
-	replayA := auditConfigKey(false, "coverage-context", nil, shaOf("set-a"))
-	replayB := auditConfigKey(false, "coverage-context", nil, shaOf("set-b"))
+	generated := auditConfigKey(false, "coverage-context", nil, "", "")
+	replayA := auditConfigKey(false, "coverage-context", nil, shaOf("set-a"), "")
+	replayB := auditConfigKey(false, "coverage-context", nil, shaOf("set-b"), "")
 
 	if generated == replayA {
 		t.Error("a replayed run shares a cache key with a generated one — a cached verdict from another exam would be served as this one's")
@@ -193,7 +235,7 @@ func TestAuditConfigKeySeparatesAReplayFromAGeneratedRun(t *testing.T) {
 	if replayA == replayB {
 		t.Error("two DIFFERENT recorded sets share a cache key — the key does not identify the exam")
 	}
-	if replayA != auditConfigKey(false, "coverage-context", nil, shaOf("set-a")) {
+	if replayA != auditConfigKey(false, "coverage-context", nil, shaOf("set-a"), "") {
 		t.Error("the key is not stable for the same set")
 	}
 }
@@ -214,7 +256,7 @@ func TestLocalMutantSetKeyRoundTripsWhatItRecords(t *testing.T) {
 		// The recorder's key is what the driver hands MutantSink, which in
 		// single-file mode is filepath.Base(--code).
 		rec := newMutantSetRecorder()
-		rec.sink("x.py", []adequacy.Mutant{{ID: "m1", Code: "bad", ParentSHA256: shaOf(src)}})
+		rec.sink("x.py", []adequacy.Mutant{{ID: "m1", Replace: "bad", ParentSHA256: shaOf(src)}})
 		setPath := filepath.Join(t.TempDir(), "s.json")
 		if _, err := rec.write(setPath); err != nil {
 			t.Fatal(err)
@@ -237,7 +279,7 @@ func TestLocalMutantSetKeyRoundTripsWhatItRecords(t *testing.T) {
 
 	t.Run("repo-dir mode records and looks up the repo-relative path", func(t *testing.T) {
 		rec := newMutantSetRecorder()
-		rec.sink("sub/dir/x.py", []adequacy.Mutant{{ID: "m1", Code: "bad", ParentSHA256: shaOf(src)}})
+		rec.sink("sub/dir/x.py", []adequacy.Mutant{{ID: "m1", Replace: "bad", ParentSHA256: shaOf(src)}})
 		setPath := filepath.Join(t.TempDir(), "s.json")
 		if _, err := rec.write(setPath); err != nil {
 			t.Fatal(err)
@@ -278,7 +320,7 @@ func TestCertifyLocalReplaysItsOwnRecordingKey(t *testing.T) {
 	// in single-file mode is filepath.Base(--code).
 	setPath := filepath.Join(t.TempDir(), "s.json")
 	rec := newMutantSetRecorder()
-	rec.sink("x.py", []adequacy.Mutant{{ID: "m1", Code: "def add(a, b):\n    return a - b\n", ParentSHA256: shaOf(src)}})
+	rec.sink("x.py", []adequacy.Mutant{{ID: "m1", Replace: "def add(a, b):\n    return a - b\n", ParentSHA256: shaOf(src)}})
 	if _, err := rec.write(setPath); err != nil {
 		t.Fatal(err)
 	}
@@ -305,9 +347,9 @@ func TestCertifyLocalReplaysItsOwnRecordingKey(t *testing.T) {
 // line has to carry the denominator and the reason, not just the count.
 func TestMutantSetRecorderReportDisclosesCacheHits(t *testing.T) {
 	rec := newMutantSetRecorder()
-	rec.sink("pkg/a.go", []adequacy.Mutant{{ID: "m1", Code: "x", ParentSHA256: shaOf("a")}})
+	rec.sink("pkg/a.go", []adequacy.Mutant{{ID: "m1", Replace: "x", ParentSHA256: shaOf("a")}})
 	// No parent hash: recorded as skipped, never as a replayable entry.
-	rec.sink("pkg/b.go", []adequacy.Mutant{{ID: "m1", Code: "x"}})
+	rec.sink("pkg/b.go", []adequacy.Mutant{{ID: "m1", Replace: "x"}})
 
 	var buf bytes.Buffer
 	// 4 audited: a (recorded), b (skipped), and 2 served from the cache.

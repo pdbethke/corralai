@@ -76,7 +76,7 @@ func newTimeoutTestDriver(t *testing.T, killRate float64, survivors []adequacy.M
 	t.Helper()
 	q := newLocalTestQueue(t)
 	scorer := &timeoutFakeScorer{devKillRate: killRate, devSurvivors: survivors}
-	validator := &timeoutFakeValidator{mutants: []adequacy.Mutant{{ID: "m1", Code: "one"}, {ID: "m2", Code: "two"}}}
+	validator := &timeoutFakeValidator{mutants: []adequacy.Mutant{{ID: "m1", Replace: "one"}, {ID: "m2", Replace: "two"}}}
 	assign := advpool.RoleAssignment{
 		advpool.RoleMutantGenerator: "model-gen",
 		advpool.RoleTestWriter:      "model-writer",
@@ -143,7 +143,7 @@ func alreadyExpiredCtx(t *testing.T) context.Context {
 // After the fix, it must return a verdict carrying that same 50%, marked
 // TimedOut so a reader can tell it apart from a clean convergence.
 func TestDriveLocalRun_BanksTimedOutDevScore(t *testing.T) {
-	survivors := []adequacy.Mutant{{ID: "m2", Code: "two"}} // 1 of 2 mutants survives -> 0.5 kill rate
+	survivors := []adequacy.Mutant{{ID: "m2", Replace: "two"}} // 1 of 2 mutants survives -> 0.5 kill rate
 	d, q, clk := newTimeoutTestDriver(t, 0.5, survivors)
 
 	rs := advpool.RunSpec{

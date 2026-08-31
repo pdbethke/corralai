@@ -561,3 +561,47 @@ func TestPushScanIDRoundTrips(t *testing.T) {
 		t.Errorf("scan_id = %d, want 42", scanID)
 	}
 }
+
+// TestPushCarriesCachedInputTokens: the per-survivor writer's whole cost claim
+// is that one file's N calls share one cached prefix. The warehouse column is
+// where that claim is checkable, and NULL-vs-0 is the difference between "the
+// provider said nothing" and "the provider reused nothing".
+func TestPushCarriesCachedInputTokens(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "w.duckdb")
+	cached := int64(1200)
+	if _, err := PushBundle(target, Bundle{Calls: []ModelCallRow{
+		{Repo: "o/r", ScanID: 1, Path: "a.py", Role: "test-writer", Model: "w",
+			Calls: 24, InputTokens: 50000, OutputTokens: 4000, CachedInputTokens: &cached},
+		{Repo: "o/r", ScanID: 1, Path: "a.py", Role: "mutant-generator", Model: "g",
+			Calls: 8, InputTokens: 9000, OutputTokens: 3000},
+	}}); err != nil {
+		t.Fatalf("PushBundle: %v", err)
+	}
+
+	db := openTarget(t, target)
+	rows, err := db.Query(`SELECT role, cached_input_tokens FROM corral_model_calls ORDER BY role`)
+	if err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	defer rows.Close()
+	got := map[string]*int64{}
+	for rows.Next() {
+		var role string
+		var v sql.NullInt64
+		if err := rows.Scan(&role, &v); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		if v.Valid {
+			n := v.Int64
+			got[role] = &n
+		} else {
+			got[role] = nil
+		}
+	}
+	if got["test-writer"] == nil || *got["test-writer"] != 1200 {
+		t.Errorf("test-writer cached_input_tokens = %v, want 1200", got["test-writer"])
+	}
+	if got["mutant-generator"] != nil {
+		t.Errorf("mutant-generator cached_input_tokens = %d, want NULL — nothing reported one", *got["mutant-generator"])
+	}
+}

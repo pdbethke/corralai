@@ -8,6 +8,8 @@
 // system prompts. Everything else in the gate is language-neutral.
 package lang
 
+import "strings"
+
 // TestCandidate is one plausible test-file location for a source file,
 // carrying its evidentiary Rank: how much real directory context the
 // candidate's own construction encodes, NOT its position in the returned
@@ -223,6 +225,45 @@ func Detect(codePath string) (Plugin, bool) {
 		}
 	}
 	return nil, false
+}
+
+// defaultPreambleLines is how many leading lines PreambleFor contributes for
+// a plugin with no Preambler implementation of its own — generous over any
+// real import block on purpose: guessing too much only costs a harmless
+// extra line count, guessing too little risks losing the file's actual
+// header (the package/imports a shard's sliced view needs to still read as
+// plausible code).
+const defaultPreambleLines = 40
+
+// Preambler is an OPTIONAL plugin extension: a language whose package/import
+// header corral can reliably locate returns it verbatim, so a mutant-
+// generator shard shown only ITS OWN symbols (see advpool's shard-chunking)
+// still has the names its body actually references. Deliberately optional —
+// a plugin with no implementation is not wrong, just less precise, and
+// PreambleFor's line-count fallback is a guess that is usually right and
+// never wrong in a way that breaks anchoring: the preamble is CONTEXT, never
+// a SEARCH-anchor target.
+type Preambler interface {
+	// Preamble returns code's leading package/import block, VERBATIM — a
+	// literal prefix of code's own lines, never rewritten or reformatted —
+	// so prepending it to a shard's slice cannot alter anchor bytes found
+	// elsewhere in the file.
+	Preamble(code string) string
+}
+
+// PreambleFor returns p's package/import header for code: p.Preamble(code)
+// when p implements Preambler, else the file's first defaultPreambleLines
+// lines. The one call site outside this package that needs a plugin's
+// preamble without knowing whether it implements the optional interface.
+func PreambleFor(p Plugin, code string) string {
+	if pr, ok := p.(Preambler); ok {
+		return pr.Preamble(code)
+	}
+	lines := strings.Split(code, "\n")
+	if len(lines) <= defaultPreambleLines {
+		return code
+	}
+	return strings.Join(lines[:defaultPreambleLines], "\n")
 }
 
 // FailureDeselector is an OPTIONAL plugin extension for salvaging a partially

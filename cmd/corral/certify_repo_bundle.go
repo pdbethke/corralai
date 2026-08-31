@@ -147,6 +147,7 @@ func buildAuditRows(files []scanstore.File, scanID int64, meta bundleMeta) []aud
 			// WHICH measurement the rate is, and at which grain.
 			TestSelection: f.TestSelection, SelectedTests: f.SelectedTests,
 			SuiteTests: f.SuiteTests, SelectionFallback: f.SelectionFallback,
+			WriterMode:     f.WriterMode,
 			Uncovered:      f.Uncovered,
 			PerMutant:      f.PerMutant,
 			TestsPerMutant: ledgerSpread(f),
@@ -187,6 +188,7 @@ func buildAuditRows(files []scanstore.File, scanID int64, meta bundleMeta) []aud
 			// forgotten blanking here cannot leak code.
 			AuthoredTest: f.AuthoredTest,
 			VerdictJSON:  f.VerdictJSON,
+			PromptShape:  f.PromptShape,
 		})
 	}
 	return rows
@@ -222,7 +224,9 @@ func buildModelCallRows(calls []scanstore.ModelCall, scanID int64, meta bundleMe
 			Path: c.Path, Role: c.Role, Model: c.Model,
 			Calls: c.Calls, Retries: c.Retries,
 			InputTokens: c.InputTokens, OutputTokens: c.OutputTokens,
-			WallMillis: c.WallMillis,
+			CachedInputTokens:     c.CachedInputTokens,
+			CacheWriteInputTokens: c.CacheWriteInputTokens,
+			WallMillis:            c.WallMillis,
 		})
 	}
 	return rows

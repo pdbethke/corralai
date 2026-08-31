@@ -110,11 +110,36 @@ const critFreeformSteps = 6
 // queue.Finding documents 0 as "standalone") and returns them to the caller
 // instead of sending them anywhere.
 func RunRole(ctx context.Context, model Chatter, role, instruction string) (result string, findings []queue.Finding, err error) {
+	return RunRoleWithSystem(ctx, model, role, "", instruction)
+}
+
+// RunRoleWithSystem is RunRole with the task's SYSTEM half sent as its own
+// turn. An empty system is exactly RunRole — one user message — so every
+// caller that has no system half keeps the request it always sent.
+//
+// It exists for the per-survivor writer fan-out. Those tasks share a long,
+// byte-identical prefix (the file, its signatures, the harness), and a
+// provider can only be ASKED to cache it if it arrives as the system turn:
+// agentbackend's Anthropic backend attaches cache_control to the system field
+// and nowhere else, and Gemini's implicit cache matches on the leading turns.
+// Folded into the user message — which is what joinPrompt used to do — the
+// request carries no system field at all and there is nothing to mark.
+//
+// Only the structured fast path reads the system half today. The critic's own
+// loop supplies its own system prompt (see runCriticLoop), so a system half on
+// a critic task would be a second, competing one; it is ignored rather than
+// concatenated, and no caller sets one.
+func RunRoleWithSystem(ctx context.Context, model Chatter, role, system, instruction string) (result string, findings []queue.Finding, err error) {
 	if err := ctx.Err(); err != nil {
 		return "", nil, err
 	}
 	if isStructuredRole(role) {
-		m, err := model.Chat([]Message{{Role: "user", Content: instruction}}, nil)
+		msgs := make([]Message, 0, 2)
+		if strings.TrimSpace(system) != "" {
+			msgs = append(msgs, Message{Role: "system", Content: system})
+		}
+		msgs = append(msgs, Message{Role: "user", Content: instruction})
+		m, err := model.Chat(msgs, nil)
 		if err != nil {
 			return "", nil, err
 		}

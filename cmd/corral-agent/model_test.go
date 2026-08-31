@@ -59,7 +59,7 @@ func TestRunTaskUsesAssignedModelWhenBackendCanSwitch(t *testing.T) {
 	brain := func(tool string, args map[string]any) string { return `{"ok":true}` }
 
 	summary, err := runTask(context.Background(), backend, "test-agent", "builder",
-		t.TempDir(), brain, nil, 1, 1, "test task", "do nothing", nil, nil, "claude-sonnet-4-6")
+		t.TempDir(), brain, nil, 1, 1, "test task", "" /* no system half */, "do nothing", nil, nil, "claude-sonnet-4-6")
 	if err != nil {
 		t.Fatalf("runTask: %v", err)
 	}
@@ -89,7 +89,7 @@ func TestRunTaskRecordsMismatchWhenBackendCannotSwitch(t *testing.T) {
 	brain := func(tool string, args map[string]any) string { return `{"ok":true}` }
 
 	summary, err := runTask(context.Background(), backend, "test-agent", "builder",
-		t.TempDir(), brain, nil, 1, 1, "test task", "do nothing", nil, nil, "claude-sonnet-4-6")
+		t.TempDir(), brain, nil, 1, 1, "test task", "" /* no system half */, "do nothing", nil, nil, "claude-sonnet-4-6")
 	if err != nil {
 		t.Fatalf("runTask: %v", err)
 	}
@@ -106,7 +106,7 @@ func TestRunTaskNoAssignmentIsUnchanged(t *testing.T) {
 	brain := func(tool string, args map[string]any) string { return `{"ok":true}` }
 
 	summary, err := runTask(context.Background(), backend, "test-agent", "builder",
-		t.TempDir(), brain, nil, 1, 1, "test task", "do nothing", nil, nil, "")
+		t.TempDir(), brain, nil, 1, 1, "test task", "" /* no system half */, "do nothing", nil, nil, "")
 	if err != nil {
 		t.Fatalf("runTask: %v", err)
 	}

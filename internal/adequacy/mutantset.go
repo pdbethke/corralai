@@ -13,15 +13,26 @@ import (
 	"github.com/pdbethke/corralai/internal/lang"
 )
 
-// MutantSetFormat is the only document version this package writes or reads.
-// It is checked on BOTH sides — an unknown format is refused at write time as
+// MutantSetFormat is the only document version this package WRITES. Both
+// sides are still checked — an unknown format is refused at write time as
 // well as at read time — because the whole value of a recorded set is that
 // the run replaying it is grading against exactly what the run that recorded
 // it graded against. A document whose shape corral cannot vouch for must
 // never enter that exchange in either direction.
-const MutantSetFormat = "corral-mutants-1"
+//
+// v2 exists because a mutant is now its HUNK: v1 stored the whole mutated
+// file per mutant, which is the same waste the representation change removed
+// everywhere else.
+const MutantSetFormat = "corral-mutants-2"
 
-// MutantSetFile is the corral-mutants-1 document: one recorded mutant set
+// MutantSetFormatV1 is the previous document version. It is READ and never
+// written: every set already recorded must keep replaying, and it does —
+// each v1 entry becomes a WHOLE-FILE mutant (Search empty, Replace the file
+// v1 stored), so the bytes the jail grades are byte-for-byte the ones that
+// run graded. Nothing measured moves.
+const MutantSetFormatV1 = "corral-mutants-1"
+
+// MutantSetFile is the corral-mutants-2 document: one recorded mutant set
 // per audited file, tied to the exact source it was derived from.
 //
 // It exists because every corral run generates its mutants with a MODEL, and
@@ -30,7 +41,7 @@ const MutantSetFormat = "corral-mutants-1"
 // different exams. A recorded set turns the exam into a FIXED input: the same
 // mutants, in the same order, against whatever else is being varied.
 type MutantSetFile struct {
-	Format string                    `json:"format"` // "corral-mutants-1"
+	Format string                    `json:"format"` // "corral-mutants-2"
 	Files  map[string]MutantSetEntry `json:"files"`  // repo-relative path
 }
 
@@ -44,14 +55,67 @@ type MutantSetEntry struct {
 	Mutants      []RecordedMutant `json:"mutants"`
 }
 
-// RecordedMutant is a Mutant as it survives to disk. ParentSHA256 is NOT
-// repeated per mutant — it belongs to the entry, since every mutant in an
-// entry is by construction derived from the same source — and is restored
-// onto each Mutant by MutantsFor.
+// RecordedMutant is a Mutant as it survives to disk: its HUNK, not a copy of
+// the file it edits. ParentSHA256 is NOT repeated per mutant — it belongs to
+// the entry, since every mutant in an entry is by construction derived from
+// the same source — and is restored onto each Mutant by MutantsFor.
+//
+// The parent hash is what makes storing only the hunk safe: the source the
+// hunk re-applies to is proven to be the source it was cut from before any
+// mutant is handed back.
+//
+// A WHOLE-FILE ENTRY IS LEGAL HERE, and re-recording a replayed v1 set is how
+// one gets written: the v1 reader upgrades each entry to Search:"" /
+// Replace:<the file>, and --record-mutants writes those straight back out, so
+// a v2 document can legitimately contain whole-file entries alongside hunks.
+// Neither the format nor the parent hash distinguishes them —
+// Mutant.IsWholeFile() is the discriminator, and anything that renders a hunk
+// (a diff view, a per-survivor prompt) must ask it first.
 type RecordedMutant struct {
+	ID      string         `json:"id"`
+	Span    lang.LineRange `json:"span"`
+	Search  string         `json:"search"`
+	Replace string         `json:"replace"`
+}
+
+// recordedMutantV1 is one entry of a corral-mutants-1 document. Its "code"
+// field is the WHOLE mutated file — hence the name: it is not a hunk, and
+// nothing in this build produces one. It is decoded into its own type rather
+// than into RecordedMutant so that no live code path can read a mutant's file
+// by accident.
+type recordedMutantV1 struct {
 	ID   string         `json:"id"`
-	Code string         `json:"code"`
+	File string         `json:"code"`
 	Span lang.LineRange `json:"span"`
+}
+
+type mutantSetEntryV1 struct {
+	ParentSHA256 string             `json:"parent_sha256"`
+	Mutants      []recordedMutantV1 `json:"mutants"`
+}
+
+type mutantSetFileV1 struct {
+	Format string                      `json:"format"`
+	Files  map[string]mutantSetEntryV1 `json:"files"`
+}
+
+// upgrade turns a v1 document into the in-memory shape the rest of corral
+// speaks, one whole-file mutant per recorded entry.
+func (v mutantSetFileV1) upgrade() MutantSetFile {
+	out := MutantSetFile{Format: MutantSetFormatV1, Files: map[string]MutantSetEntry{}}
+	for path, e := range v.Files {
+		entry := MutantSetEntry{ParentSHA256: e.ParentSHA256}
+		for _, rm := range e.Mutants {
+			// Search stays EMPTY on purpose. v1 never recorded the anchor, and
+			// inventing one here — by diffing the stored file against the
+			// parent — would replay a hunk nobody generated. The whole-file
+			// shape replays exactly what was graded, which is the only claim
+			// this document can honestly make.
+			entry.Mutants = append(entry.Mutants, RecordedMutant{ID: rm.ID, Span: rm.Span, Replace: rm.File})
+		}
+		out.Files[path] = entry
+	}
+	return out
 }
 
 // WriteMutantSet writes set to path as pretty-printed JSON, refusing any
@@ -79,25 +143,44 @@ func WriteMutantSet(path string, set MutantSetFile) error {
 	return nil
 }
 
-// ReadMutantSet reads a corral-mutants-1 document from path. A document of
-// any other format is refused rather than best-effort decoded: a shape corral
-// does not know is a shape it cannot honestly claim to be replaying.
+// ReadMutantSet reads a corral-mutants-2 document from path, or a
+// corral-mutants-1 one, which is upgraded in memory to whole-file mutants. A
+// document of any other format is refused rather than best-effort decoded: a
+// shape corral does not know is a shape it cannot honestly claim to be
+// replaying.
+//
+// The returned MutantSetFile keeps the format it was READ as, so a caller can
+// still say which document it replayed.
 func ReadMutantSet(path string) (MutantSetFile, error) {
-	var set MutantSetFile
 	raw, err := os.ReadFile(path) // #nosec G304 -- operator-supplied path, same contract as --goals
 	if err != nil {
-		return set, fmt.Errorf("adequacy: reading mutant set %s: %w", path, err)
+		return MutantSetFile{}, fmt.Errorf("adequacy: reading mutant set %s: %w", path, err)
 	}
-	if err := json.Unmarshal(raw, &set); err != nil {
-		return set, fmt.Errorf("adequacy: parsing mutant set %s: %w", path, err)
+	var probe struct {
+		Format string `json:"format"`
 	}
-	if set.Format != MutantSetFormat {
-		return MutantSetFile{}, fmt.Errorf("adequacy: mutant set %s has format %q, want %q", path, set.Format, MutantSetFormat)
+	if err := json.Unmarshal(raw, &probe); err != nil {
+		return MutantSetFile{}, fmt.Errorf("adequacy: parsing mutant set %s: %w", path, err)
 	}
-	if set.Files == nil {
-		set.Files = map[string]MutantSetEntry{}
+	switch probe.Format {
+	case MutantSetFormat:
+		var set MutantSetFile
+		if err := json.Unmarshal(raw, &set); err != nil {
+			return MutantSetFile{}, fmt.Errorf("adequacy: parsing mutant set %s: %w", path, err)
+		}
+		if set.Files == nil {
+			set.Files = map[string]MutantSetEntry{}
+		}
+		return set, nil
+	case MutantSetFormatV1:
+		var v1 mutantSetFileV1
+		if err := json.Unmarshal(raw, &v1); err != nil {
+			return MutantSetFile{}, fmt.Errorf("adequacy: parsing mutant set %s: %w", path, err)
+		}
+		return v1.upgrade(), nil
+	default:
+		return MutantSetFile{}, fmt.Errorf("adequacy: mutant set %s has format %q, want %q (or the read-only %q)", path, probe.Format, MutantSetFormat, MutantSetFormatV1)
 	}
-	return set, nil
 }
 
 // MutantsFor returns the recorded mutants for codePath, refusing when the
@@ -121,7 +204,7 @@ func (s MutantSetFile) MutantsFor(codePath, currentSource string) ([]Mutant, err
 	out := make([]Mutant, 0, len(entry.Mutants))
 	for _, rm := range entry.Mutants {
 		out = append(out, Mutant{
-			ID: rm.ID, Code: rm.Code, Span: rm.Span,
+			ID: rm.ID, Span: rm.Span, Search: rm.Search, Replace: rm.Replace,
 			// Restored from the entry, never trusted from the record: every
 			// mutant in an entry is by construction an edit of that entry's
 			// parent, and the hash was just proven to match the file on disk.

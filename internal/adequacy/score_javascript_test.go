@@ -43,7 +43,7 @@ func TestScoreJSKillsAndSurvives(t *testing.T) {
 	// Always-true mutant: killed by the thorough suite's `!isEven(3)`
 	// assertion, survives the gappy suite that only checks an even input.
 	mutants := []adequacy.Mutant{
-		{ID: "m1", Code: "module.exports = { isEven: () => true };\n"},
+		{ID: "m1", Replace: "module.exports = { isEven: () => true };\n"},
 	}
 	tp := js.TestPaths(codePath)[0].Path // evenmod.test.js
 

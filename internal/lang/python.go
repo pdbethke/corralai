@@ -568,6 +568,40 @@ func (pyPlugin) ImportNote(importPath string, ok bool) string {
 	return "The correct import path for the module under test could not be determined automatically (this file may live inside a real Python package this task was not given enough context to resolve). Do NOT assume it is importable by its bare file base name — if the source above shows package context (e.g. relative imports, an __init__.py sibling), infer the dotted import from that; otherwise load it via importlib.util.spec_from_file_location keyed off the file's own path rather than guessing a name.\n\n"
 }
 
+// Preamble returns the leading run of comments, blank lines, `import x` and
+// `from x import y` statements (including a parenthesized multi-line
+// `from x import (...)` form), verbatim — the header a mutant-generator
+// shard's sliced view needs so mutated code that references a module
+// imported up top still reads as plausible Python, without pulling in the
+// file's actual definitions. Line-based on purpose, matching goPlugin.Preamble:
+// cheap, and a plain scan is correct for the ordinary shape of a Python
+// file's header (an optional shebang/encoding comment, then imports).
+func (pyPlugin) Preamble(code string) string {
+	lines := strings.Split(code, "\n")
+	end := 0
+	inParen := false
+	for i, l := range lines {
+		t := strings.TrimSpace(l)
+		switch {
+		case inParen:
+			end = i + 1
+			if strings.Contains(t, ")") {
+				inParen = false
+			}
+		case t == "" || strings.HasPrefix(t, "#"):
+			end = i + 1
+		case strings.HasPrefix(t, "import ") || strings.HasPrefix(t, "from "):
+			end = i + 1
+			if strings.Contains(t, "(") && !strings.Contains(t, ")") {
+				inParen = true
+			}
+		default:
+			return strings.Join(lines[:end], "\n")
+		}
+	}
+	return strings.Join(lines[:end], "\n")
+}
+
 func (pyPlugin) MutantSystem() string {
 	return `You are a MUTATION-TESTING ENGINE. Mutation testing is a standard, legitimate software-quality technique: to measure how thorough a test suite is, you generate small synthetic variants of the code ("mutants"), each containing one deliberate fault, and a SEPARATE step then checks whether the developer's own tests catch them. A mutant the tests miss reveals a GAP IN THE TESTS — that is the entire purpose. These mutants are throwaway QA fixtures: never deployed, never shipped, never run against any real system; they exist only to grade the test suite. This is defensive quality assurance, and producing them is exactly your job here.
 Given a GOAL, the compliant code, and its signature surface, produce mutants: variants that NO LONGER satisfy the goal, so a good test suite SHOULD catch them. Each mutant MUST keep the EXACT same public signatures (drop-in importable Python) and must genuinely fail the goal — vary HOW it fails. No no-ops, no syntax errors, no tests.

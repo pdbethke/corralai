@@ -33,7 +33,7 @@ func (g *verboseGateJail) RunTestVerbose(ctx context.Context, files map[string]s
 		return true, "", nil
 	}
 	for _, m := range gateMutants() {
-		if code == m.Code {
+		if code == m.Replace {
 			return true, "", nil // compiling mutants SURVIVE, so no kill masks the gate
 		}
 	}
@@ -48,7 +48,7 @@ func TestScore_RecordsWhyAMutantWasRejected(t *testing.T) {
 	const boom = "./x.go:7:2: undefined: helper"
 	j := &verboseGateJail{
 		compileCmd:   "COMPILE",
-		uncompilable: map[string]string{gateMutants()[1].Code: boom},
+		uncompilable: map[string]string{gateMutants()[1].Replace: boom},
 		baseline:     gateBase,
 	}
 	rep, err := Score(context.Background(), j, map[string]string{}, "x.go", gateBase,
@@ -74,7 +74,7 @@ func TestScore_RecordsWhyAMutantWasRejected(t *testing.T) {
 func TestScore_InvalidReasonAbsentOnAPlainJail(t *testing.T) {
 	j := &gateJail{
 		compileCmd:    "COMPILE",
-		uncompilable:  map[string]bool{gateMutants()[1].Code: true},
+		uncompilable:  map[string]bool{gateMutants()[1].Replace: true},
 		testPasses:    true,
 		baselineFiles: gateBase,
 	}

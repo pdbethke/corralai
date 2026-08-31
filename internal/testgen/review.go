@@ -74,7 +74,12 @@ func TriageSurvivors(ctx context.Context, m LLM, goal, code, test string, surviv
 	var b strings.Builder
 	fmt.Fprintf(&b, "GOAL:\n%s\n\nCOMPLIANT CODE:\n%s\n\nCANDIDATE TEST:\n%s\n\nUNCAUGHT MUTATIONS:\n", goal, code, test)
 	for _, s := range survivors {
-		fmt.Fprintf(&b, "MUTANT %s:\n%s\n\n", s.ID, s.Code)
+		// A mutant is its hunk, not the file it would make; the compliant
+		// code is already above in the same prompt, so showing the reviewer
+		// the whole mutated file per survivor was redundant bulk on top of
+		// it — see adequacy.RenderHunk's doc comment for the cost that
+		// materialising whole files was measured to have.
+		fmt.Fprintf(&b, "MUTANT %s:\n%s\n\n", s.ID, adequacy.RenderHunk(s, code, 3))
 	}
 	resp, err := m.Ask(ctx, reviewSystem, b.String())
 	if err != nil {

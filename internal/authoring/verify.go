@@ -26,15 +26,25 @@ import (
 // Determinism: valid and discarded are both built by appending in mutants'
 // input order — no map iteration, no reordering — so the filtered set is
 // reproducible across runs.
-func compileVerify(ctx context.Context, jail adequacy.Jail, base map[string]string, codePath string, mutants []adequacy.Mutant, buildCmd []string) ([]adequacy.Mutant, []string, error) {
+func compileVerify(ctx context.Context, jail adequacy.Jail, base map[string]string, codePath, compliantCode string, mutants []adequacy.Mutant, buildCmd []string) ([]adequacy.Mutant, []string, error) {
 	var valid []adequacy.Mutant
 	var discarded []string
 	for _, mut := range mutants {
+		// The mutant becomes a file HERE and only here — the jail needs source,
+		// and nothing outside it does.
+		code, aerr := mut.Apply(compliantCode)
+		if aerr != nil {
+			// An anchor that will not apply is not a mutant that failed to
+			// compile: nothing was built, so nothing was learned. Refuse rather
+			// than record it as discarded, which would read as a generator
+			// producing broken code.
+			return nil, nil, fmt.Errorf("authoring: mutant %s does not apply to %s: %w", mut.ID, codePath, aerr)
+		}
 		ws := make(map[string]string, len(base)+1)
 		for k, v := range base {
 			ws[k] = v
 		}
-		ws[codePath] = mut.Code
+		ws[codePath] = code
 
 		compiles, err := jail.RunTest(ctx, ws, buildCmd)
 		if err != nil {

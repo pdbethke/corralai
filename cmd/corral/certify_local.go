@@ -110,13 +110,14 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 	swarmFlag := fs.Int("swarm", 0, "max concurrent audit workers (0 = auto-size to this host's cores). The BUDGET clamp: independent role tasks run in parallel up to this bound, so a big audit swarms without melting the box")
 	maxShardsFlag := fs.Int("max-shards", 0, "max mutant-generator seats fanned out across the file's functions (0 = "+fmt.Sprint(advpool.DefaultMaxShards)+"). Bounds PARALLELISM only — every function is probed regardless; --n-mutants is the PER-SHARD budget")
 	shadowModelFlag := fs.String("shadow-model", "", "challenger model that attacks every region a SECOND time for a region-controlled head-to-head. OFF unless named. Recorded for comparison — NEVER gates the verdict")
+	writerModeFlag := fs.String("writer-mode", "", "how the test-writer attacks this file's survivors: `per-survivor` (the default) makes ONE call per survivor — each carrying the file once as a cacheable shared prefix plus that survivor's diff, each repaired on its own budget and each PROVEN ALONE against its own mutant — or `batched`, the original shape: one call carrying every survivor, one repair budget, one proof pass over all of them. Nothing measured changes between them (a survivor is proven iff an authored test kills it alone and passes on the original, either way); what changes is that one unbuildable test no longer spends the whole file's retries and takes every other survivor down with it. Each survivor's proof in per-survivor mode runs its OWN compliant baseline (a compliant pass plus a canary, per seat), so a file with N survivors pays N baselines where batched paid one: on a repo whose suite takes a minute, prefer --writer-mode batched or expect N baselines' worth of wall clock.")
 	shadowWriterModelFlag := fs.String("shadow-writer-model", "", "challenger WRITER model that authors a second suite against the SAME mutant set for a mutant-controlled head-to-head. OFF unless named. Recorded for correlation — NEVER gates the verdict")
 	matrixFlag := fs.Bool("matrix", false, "opt into the tests×mutants matrix: after the primary pass, re-score EVERY dev test ALONE against the run's mutants — a per-test adequacy readout + a delete-candidate list, instead of one dev-suite-wide number. COSTLY: T tests × M mutants extra jail runs (T×M, on top of the primary pass), so leave off by default on a big suite")
 	var localEndpointFlag stringSlice
 	fs.Var(&localEndpointFlag, "local-endpoint", "place a LOCAL seat on a specific ollama daemon, as <role>=<url> (repeatable; e.g. test-writer=http://localhost:11436). A daemon is pinned to a GPU by its own environment (HIP_VISIBLE_DEVICES / CUDA_VISIBLE_DEVICES), so this is how two models occupy two cards at once — corral selects the DAEMON, never the device. Without it every local seat shares OLLAMA_URL, one card and one VRAM budget. Roles: mutant-generator, test-writer, test-critic, mutant-generator-shadow, test-writer-shadow. An unknown role, a duplicate role, a non-absolute url, or an endpoint on a seat holding a CLOUD model is refused rather than ignored")
 
-	mutantsFlag := fs.String("mutants", "", "REPLAY a recorded mutant set (see --record-mutants) instead of generating one: --code is graded against exactly the mutants recorded for it, and no mutant-generator model call is made. Refused (exit 2) if the file is absent from the set or its bytes have changed since it was recorded — a mutant is a single-point edit of specific bytes, and re-applying it to different ones grades an exam nobody wrote")
-	recordMutantsFlag := fs.String("record-mutants", "", "write the mutants this run actually GRADED to this file, as a replayable corral-mutants-1 document tied to the sha256 of the source they came from. Mutants are authored by a model, so an ordinary run re-draws the exam every time; pin the set and a later comparison measures the thing you changed instead of generator variance. Written even when the verdict is needs-review")
+	mutantsFlag := fs.String("mutants", "", "REPLAY a recorded mutant set (see --record-mutants) instead of generating one: --code is graded against exactly the mutants recorded for it, and no mutant-generator model call is made. Refused (exit 2) if the file is absent from the set or its bytes have changed since it was recorded — a mutant is a single-point edit of specific bytes, and re-applying it to different ones grades an exam nobody wrote. Reads a corral-mutants-2 document, or an older corral-mutants-1 one, whose whole-file mutants still replay byte-for-byte.")
+	recordMutantsFlag := fs.String("record-mutants", "", "write the mutants this run actually GRADED to this file, as a replayable corral-mutants-2 document — each mutant its SEARCH/REPLACE hunk, tied to the sha256 of the source it is an edit of. Mutants are authored by a model, so an ordinary run re-draws the exam every time; pin the set and a later comparison measures the thing you changed instead of generator variance. Written even when the verdict is needs-review. A v2 document re-recorded from a --mutants replay of an older corral-mutants-1 set contains that set's WHOLE-FILE entries, not hunks — the run graded what was recorded, and re-recording it does not manufacture anchors it never had")
 	var bindDirFlag stringSlice
 	fs.Var(&bindDirFlag, "bind-dir", "extra repo-relative dependency dir to mount read-only into the jail instead of copying it into the workspace (repeatable; node_modules/vendor/.venv/venv/.bundle are auto-detected) — --repo-dir mode only")
 	noBindDepsFlag := fs.Bool("no-bind-deps", false, "copy dependency dirs into the jail workspace instead of bind-mounting them read-only (the pre-bind behavior; subject to the workspace size cap)")
@@ -124,6 +125,15 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 
+	// Validated here, before anything is spent: the mode changes how many
+	// model calls a run makes and what its verdict discloses, so a typo must
+	// exit 2 rather than quietly take the default and hand back a different
+	// measurement than the one that was asked for.
+	writerMode, wmErr := advpool.ResolveWriterMode(*writerModeFlag)
+	if wmErr != nil {
+		fmt.Fprintf(stderr, "%s: %v\n", "corral certify --local", wmErr)
+		return 2
+	}
 	if strings.TrimSpace(*codePath) == "" {
 		fmt.Fprintln(stderr, "corral certify --local: --code is required")
 		return 2
@@ -275,6 +285,7 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 		writerModel: *writerModel, criticModel: *criticModel,
 		mutantModel: *mutantModel, shadowModel: *shadowModelFlag,
 		shadowWriterModel: *shadowWriterModelFlag,
+		writerMode:        writerMode,
 
 		jail: *jailFlag, checkArgv: checkArgv,
 		localEndpoints: localEndpoints,
@@ -370,6 +381,12 @@ type localAuditInput struct {
 	// Role models. Empty means this file's stock default.
 	writerModel, criticModel, mutantModel, shadowModel string
 	shadowWriterModel                                  string
+
+	// writerMode is the resolved --writer-mode: how the writer seat attacks
+	// this file's survivors. Already validated by ResolveWriterMode at the
+	// flag boundary, so it is one of the two canonical spellings by the time
+	// it reaches here — never an operator's raw string.
+	writerMode string
 
 	// localEndpoints places a LOCAL seat on a specific ollama daemon
 	// (role -> base URL). A daemon is pinned to a GPU by its own environment,
@@ -1149,8 +1166,12 @@ func newAuditRunSpec(in localAuditInput, roles auditRoles, subj runSubject) advp
 		// recorded is also a seat the driver can actually run.
 		ShadowModel:       roles.shadow,
 		ShadowWriterModel: roles.shadowWriter,
-		Matrix:            in.matrix,
-		ImportPath:        subj.importPath,
+		// HOW the writer attacks. The CLI's default is per-survivor; an
+		// EMPTY value here means batched, which is what a caller outside the
+		// CLI (the brain, a test) gets — see RunSpec.WriterMode.
+		WriterMode: in.writerMode,
+		Matrix:     in.matrix,
+		ImportPath: subj.importPath,
 		// nil = generate, exactly as every caller did before --mutants existed.
 		PresetMutants: in.presetMutants,
 	}
@@ -1499,9 +1520,23 @@ func auditOneFile(ctx context.Context, in localAuditInput) (advpool.Verdict, err
 
 	// Hand the pool's authored test back: when it killed a survivor the dev suite
 	// missed, print it so the dev can adopt it.
-	if st, ok := d.RunStatus(localMissionID); ok && strings.TrimSpace(st.AuthoredTest) != "" {
-		fmt.Fprintf(stdout, "\nthe herd authored a test that catches a gap your suite missed — add it to %s:\n\n", tp)
-		fmt.Fprintln(stdout, strings.TrimRight(st.AuthoredTest, "\n"))
+	if st, ok := d.RunStatus(localMissionID); ok {
+		if strings.TrimSpace(st.AuthoredTest) != "" {
+			fmt.Fprintf(stdout, "\nthe herd authored a test that catches a gap your suite missed — add it to %s:\n\n", tp)
+			fmt.Fprintln(stdout, strings.TrimRight(st.AuthoredTest, "\n"))
+		}
+		// And every proven part the language's concatenator would not fold
+		// into that file. Each is a test that was written, compiled and RUN
+		// to kill the survivor it names, so it must reach the operator whole
+		// — see reposcan.WeakFile.AuthoredExtra.
+		for _, p := range st.AuthoredExtra {
+			fmt.Fprintf(stdout, "\nproven test for survivor %s — a SEPARATE file, it cannot be merged with the one above:\n", p.MutantID)
+			if r := strings.TrimSpace(p.Reason); r != "" {
+				fmt.Fprintf(stdout, "  why: %s\n", r)
+			}
+			fmt.Fprintln(stdout, "")
+			fmt.Fprintln(stdout, strings.TrimRight(p.Source, "\n"))
+		}
 	}
 
 	return *verdict, nil

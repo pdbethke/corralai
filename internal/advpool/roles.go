@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -150,10 +151,7 @@ func renderTestWriterRepairing(rs RunSpec, sigs []repoindex.Signature, survivors
 	goal := rs.Goal
 	if len(survivors) > 0 {
 		var b strings.Builder
-		fmt.Fprintf(&b, "%s\n\nThe developer's own tests did NOT catch the following goal-violating mutants (they passed undetected). Write a test that specifically kills these survivors — proving the missed bugs are real and catchable, not equivalent mutants.\n\n%s\n", rs.Goal, testgen.WriterStrictnessNote())
-		for _, m := range survivors {
-			fmt.Fprintf(&b, "\n--- SURVIVOR %s ---\n%s\n", m.ID, m.Code)
-		}
+		fmt.Fprintf(&b, "%s\n\n%s", rs.Goal, survivorBlock(rs, survivors))
 		goal = b.String()
 	}
 	// Tell the writer the actual file name. WriteTestPrompt hands the model the
@@ -224,26 +222,122 @@ func renderTestWriterRepairing(rs RunSpec, sigs []repoindex.Signature, survivors
 	}
 	named := fmt.Sprintf("%s Your test may share the package/namespace with the developer's OWN tests, so give your test function(s) and any helpers UNIQUE names — never redeclare an identifier the existing suite may already define.\n\n%s%s%s",
 		fileFact, harnessExemplar(rs), importNote, goal)
-	if strings.TrimSpace(cleanFailure) != "" {
-		// A DIFFERENT failure from a compile error, and it must not be worded
-		// as one: this test BUILT and RAN, and then failed against the
-		// unmutated, correct code — so it asserts something untrue about
-		// working software, and every mutant it might have caught is
-		// discarded (an invalid test may never earn a kill rate).
-		//
-		// The measured shape this exists for: a writer produced 13 tests
-		// against flask's internals, TEN of which passed; three carried wrong
-		// API assumptions and, because the compliant check is all-or-nothing
-		// per FILE, took the other ten down with them. Naming the failing
-		// tests specifically is what lets a model drop or fix three
-		// assumptions instead of rewriting thirteen tests it mostly got right.
-		named = fmt.Sprintf("%s\n\n--- YOUR PREVIOUS ATTEMPT FAILED ON THE UNMUTATED, CORRECT CODE ---\nYou wrote:\n%s\n\nRun against the ORIGINAL (unmodified) source, your test reported:\n%s\n\nThat means your test asserts something that is NOT true of the correct code — a wrong assumption about the API, not a bug you have found. The whole file is discarded when ANY test in it fails this way, so tests of yours that were fine are being thrown away too.\n\nReturn a corrected FULL test file that PASSES against the unmodified source. Fix or DELETE only the assertions that failed; keep the ones that already passed. Do not weaken a test into something that would pass against a broken implementation too — a test that cannot fail proves nothing.", named, prevTest, strings.TrimSpace(cleanFailure))
-	}
-	if strings.TrimSpace(compileErr) != "" {
-		named = fmt.Sprintf("%s\n\n--- YOUR PREVIOUS ATTEMPT DID NOT COMPILE ---\nYou wrote:\n%s\n\nThe compiler reported:\n%s\n\nReturn a corrected FULL test file that compiles cleanly. Fix exactly what the compiler flagged; if it is a redeclared/duplicate identifier, rename yours to something unique.", named, prevTest, strings.TrimSpace(compileErr))
-	}
+	named += cleanFailureRepairBlock(prevTest, cleanFailure) + compileRepairBlock(prevTest, compileErr)
 	system, user := testgen.WriteTestPrompt(harnessOverride(p.TestWriterSystem(), rs), named, rs.Code, sigs)
 	return joinPrompt(system, user)
+}
+
+// survivorBlock is the SURVIVOR half of the writer's instruction: the
+// strictness note plus one rendered hunk per survivor. Shared by the batched
+// render (every survivor at once) and the per-survivor suffix (exactly one),
+// so the two modes cannot drift on how a survivor is described.
+//
+// A mutant is its hunk, not the whole file it would make: the code under
+// review is already in the prompt once (WriteTestPrompt's TARGET FILE), so
+// each survivor here is a small diff against it rather than a second copy of
+// the file — see RenderHunk's doc comment for the 0.5M-token-per-file cost
+// this removes. RenderHunk always renders (never errors, never dumps a whole
+// file), so every survivor handed in is named — none can silently vanish from
+// what the writer is told to kill.
+func survivorBlock(rs RunSpec, survivors []adequacy.Mutant) string {
+	var b strings.Builder
+	verb := "these survivors"
+	if len(survivors) == 1 {
+		verb = "this survivor"
+	}
+	fmt.Fprintf(&b, "The developer's own tests did NOT catch the following goal-violating mutant(s) (they passed undetected). Write a test that specifically kills %s — proving the missed bug is real and catchable, not an equivalent mutant.\n\n%s\n", verb, testgen.WriterStrictnessNote())
+	for _, m := range survivors {
+		fmt.Fprintf(&b, "\n%s\n", RenderHunk(m, rs.Code, 3))
+	}
+	return b.String()
+}
+
+// cleanFailureRepairBlock is the repair prompt for a test that COMPILED and
+// then failed against the unmutated, correct code. Empty when there is no such
+// failure to feed back.
+//
+// Factored out of the render so the per-survivor path (renderTestWriterFor)
+// and the batched path use the SAME words: the two repair prompts are the most
+// carefully-worded text in this file, each written against a measured failure,
+// and two copies would drift.
+func cleanFailureRepairBlock(prevTest, cleanFailure string) string {
+	if strings.TrimSpace(cleanFailure) == "" {
+		return ""
+	}
+	// A DIFFERENT failure from a compile error, and it must not be worded
+	// as one: this test BUILT and RAN, and then failed against the
+	// unmutated, correct code — so it asserts something untrue about
+	// working software, and every mutant it might have caught is
+	// discarded (an invalid test may never earn a kill rate).
+	//
+	// The measured shape this exists for: a writer produced 13 tests
+	// against flask's internals, TEN of which passed; three carried wrong
+	// API assumptions and, because the compliant check is all-or-nothing
+	// per FILE, took the other ten down with them. Naming the failing
+	// tests specifically is what lets a model drop or fix three
+	// assumptions instead of rewriting thirteen tests it mostly got right.
+	return fmt.Sprintf("\n\n--- YOUR PREVIOUS ATTEMPT FAILED ON THE UNMUTATED, CORRECT CODE ---\nYou wrote:\n%s\n\nRun against the ORIGINAL (unmodified) source, your test reported:\n%s\n\nThat means your test asserts something that is NOT true of the correct code — a wrong assumption about the API, not a bug you have found. The whole file is discarded when ANY test in it fails this way, so tests of yours that were fine are being thrown away too.\n\nReturn a corrected FULL test file that PASSES against the unmodified source. Fix or DELETE only the assertions that failed; keep the ones that already passed. Do not weaken a test into something that would pass against a broken implementation too — a test that cannot fail proves nothing.", prevTest, strings.TrimSpace(cleanFailure))
+}
+
+// compileRepairBlock is the repair prompt for a test that did not build.
+// Empty when there is no compiler error to feed back. See
+// cleanFailureRepairBlock for why both live here rather than inline.
+func compileRepairBlock(prevTest, compileErr string) string {
+	if strings.TrimSpace(compileErr) == "" {
+		return ""
+	}
+	return fmt.Sprintf("\n\n--- YOUR PREVIOUS ATTEMPT DID NOT COMPILE ---\nYou wrote:\n%s\n\nThe compiler reported:\n%s\n\nReturn a corrected FULL test file that compiles cleanly. Fix exactly what the compiler flagged; if it is a redeclared/duplicate identifier, rename yours to something unique.", prevTest, strings.TrimSpace(compileErr))
+}
+
+// renderTestWriterPrefix is the part of a writer instruction that is the SAME
+// for every survivor of one file: the system prompt, the goal, the target
+// file, the signature surface, the harness exemplar and the import/placement
+// facts. It is exactly the survivor-less render — the instruction BuildDAG
+// seeds the pre-promotion task with — so there is one definition of "the
+// file's context", not two that could drift.
+//
+// BYTE-IDENTICAL ACROSS A FILE'S TASKS is the load-bearing property, and it is
+// what makes the per-survivor fan-out affordable: this prefix is most of the
+// prompt (a real file plus its signatures), and a provider that can cache a
+// repeated prefix bills it once instead of N times. A single differing byte —
+// a survivor id, a count, a timestamp — defeats the cache entirely, so nothing
+// per-survivor may appear here. See renderTestWriterSuffix for the half that
+// varies.
+//
+// It is sent as the task's SYSTEM half (queue.TaskSpec.System), not folded
+// into the instruction: Anthropic's cache_control block only exists on the
+// system field, so a joined prompt has nowhere to carry the request to cache
+// and pays full price on every seat. See renderTestWriterSeat.
+func renderTestWriterPrefix(rs RunSpec, sigs []repoindex.Signature) string {
+	return renderTestWriter(rs, sigs, nil)
+}
+
+// renderTestWriterSuffix is the per-survivor half: exactly one rendered hunk,
+// appended after the shared prefix. Kept short on purpose — every byte here is
+// a byte the provider cannot serve from cache.
+func renderTestWriterSuffix(rs RunSpec, m adequacy.Mutant) string {
+	return "\n\n" + survivorBlock(rs, []adequacy.Mutant{m})
+}
+
+// renderTestWriterSeat renders ONE survivor's writer task as the two halves a
+// caching provider needs them in: the SYSTEM half (the shared prefix, byte-
+// identical across the file's seats) and the USER half (that survivor's diff,
+// plus the repair block for whichever of the two failure modes this seat hit).
+// prevTest/compileErr/cleanFailure are all empty on a first attempt.
+//
+// TWO RETURNS, not one joined string, and that is the whole mechanism. A
+// joined prompt goes out as a single user message with NO system field on the
+// request, so Anthropic's cache_control block — which attaches to the system
+// field and nowhere else — has nothing to attach to, and the cacheable prefix
+// is re-billed in full on every seat. queue.TaskSpec.System carries this half
+// to the worker, and agentworker.RunRoleWithSystem sends it as its own turn.
+//
+// The repair block goes in the USER half, after the survivor: a repaired seat
+// must still share its prefix with its siblings, byte for byte.
+func renderTestWriterSeat(rs RunSpec, sigs []repoindex.Signature, m adequacy.Mutant, prevTest, compileErr, cleanFailure string) (system, user string) {
+	return renderTestWriterPrefix(rs, sigs),
+		strings.TrimPrefix(renderTestWriterSuffix(rs, m), "\n\n") +
+			cleanFailureRepairBlock(prevTest, cleanFailure) + compileRepairBlock(prevTest, compileErr)
 }
 
 // DefaultMaxShards is the stock generator width. It matches
@@ -274,16 +368,163 @@ func ShardIndexFromKey(key string) (int, bool) {
 }
 
 // renderMutantGeneratorShard renders one shard's prompt: the SAME testgen
-// prompt and the SAME whole-file context as the unsharded path, with the goal
-// augmented by an aiming directive and the signature list filtered to this
-// shard's symbols. The file is never fragmented — patch-based mutants anchor
-// against the whole original.
-func renderMutantGeneratorShard(rs RunSpec, sigs []repoindex.Signature, sh Shard) string {
+// prompt as the unsharded path, with the goal augmented by an aiming
+// directive, the signature list filtered to this shard's symbols, and the
+// CODE narrowed to this shard's own symbol bodies plus the file's preamble
+// (see shardCode) — a shard sees its symbols, not the file. The bool result
+// is false whenever the narrowing fell back to the whole file (shardCode
+// could not slice it); callers that need to know the SHAPE of the whole
+// run's prompts (StartRun, for Verdict.PromptShape) use ShardIsChunked
+// instead of re-rendering.
+//
+// The SEARCH-anchor uniqueness check this narrowing must never touch lives
+// entirely downstream, in testgen.parseMutantsDiag/adequacy.Mutant.Apply,
+// and is always called with the WHOLE original file (see driver.go's
+// d.Validator.ParseMutants(mgs[i].Result, run.rs.Code)) — narrowing what the
+// model SEES changes nothing about what an anchor is validated against.
+func renderMutantGeneratorShard(rs RunSpec, sigs []repoindex.Signature, sh Shard) (string, bool) {
+	shardSigs := filterSignatures(sigs, sh.Symbols)
 	aimed := rs
 	aimed.Goal = fmt.Sprintf(
 		"%s\n\nATTACK ONLY THESE FUNCTIONS: %s. Every mutation you produce MUST edit code inside one of them. Other functions in the file are being attacked by other seats — do not mutate them, and do not report that you skipped them.",
 		rs.Goal, strings.Join(sh.Symbols, ", "))
-	return renderMutantGenerator(aimed, filterSignatures(sigs, sh.Symbols), nil)
+	code, chunked := shardCode(langFor(rs), rs.Code, shardSigs)
+	aimed.Code = code
+	if chunked {
+		aimed.Goal += "\n\nThe code below is NOT the whole file — only the functions you are attacking, plus the file's own imports. SEARCH anchors must be copied VERBATIM from the code shown below, and must be UNIQUE in the whole file (not just in what is shown)."
+	}
+	return renderMutantGenerator(aimed, shardSigs, nil), chunked
+}
+
+// signaturesChunkable reports whether every signature in sigs carries a real
+// Lines span. Empty or any zero/negative Lines means "cannot slice this
+// shard" — an unnamed extractor gap must never silently hide code from the
+// model with no way for a reader to know it happened, so the honest answer
+// is to show everything instead of guessing at a range.
+func signaturesChunkable(sigs []repoindex.Signature) bool {
+	if len(sigs) == 0 {
+		return false
+	}
+	for _, s := range sigs {
+		if s.Lines <= 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// ShardIsChunked reports whether sh's rendered generator prompt would show
+// only its symbols' bodies (true) or fall back to the whole file (false),
+// without paying for the render itself. StartRun uses this to tally the
+// run's overall PromptShape from the SAME ShardSymbols call BuildDAG makes
+// internally, mirroring the existing shardSymbols/shardStats bookkeeping
+// pattern rather than re-deriving the rule a third way.
+func ShardIsChunked(sigs []repoindex.Signature, sh Shard) bool {
+	return signaturesChunkable(filterSignatures(sigs, sh.Symbols))
+}
+
+// commentPrefix is the line-comment token to render the elision separator
+// in, so it reads as a comment (never code) in the language a shard's slice
+// is shown in. Best-effort for a language not listed: "//" is wrong for
+// some, but the separator never touches an anchor, so a wrong comment
+// character costs nothing but cosmetics.
+func commentPrefix(lang string) string {
+	switch lang {
+	case "python", "ruby":
+		return "#"
+	default:
+		return "//"
+	}
+}
+
+// shardCode returns the code shown to one generator shard: the language's
+// Preamble (see lang.PreambleFor) followed by the union of shardSigs' own
+// [Line, Line+Lines) ranges (1-indexed, half-open — repoindex.Signature.Line
+// is the 1-indexed start row, Lines is the inclusive line-count span),
+// merged where they touch or overlap, each gap marked with an elision
+// comment naming how many lines were cut. The bool is false — meaning
+// shardCode fell back to the WHOLE file — whenever shardSigs is not
+// signaturesChunkable: a shard whose symbols didn't resolve to any
+// signature, or whose extractor never populated Lines, has no honest range
+// to slice, and showing a PARTIAL or WRONG range would hide code from the
+// model with no way for a reader to know it happened.
+func shardCode(p golang.Plugin, code string, shardSigs []repoindex.Signature) (string, bool) {
+	if !signaturesChunkable(shardSigs) {
+		return code, false
+	}
+	lines := strings.Split(code, "\n")
+
+	type span struct{ from, to int } // 1-indexed, inclusive
+	spans := make([]span, 0, len(shardSigs))
+	for _, s := range shardSigs {
+		from, to := s.Line, s.Line+s.Lines-1
+		if from < 1 {
+			from = 1
+		}
+		if to > len(lines) {
+			to = len(lines)
+		}
+		if from > to {
+			continue
+		}
+		spans = append(spans, span{from, to})
+	}
+	if len(spans) == 0 {
+		return code, false
+	}
+	sort.Slice(spans, func(i, j int) bool { return spans[i].from < spans[j].from })
+	merged := spans[:1]
+	for _, s := range spans[1:] {
+		last := &merged[len(merged)-1]
+		if s.from <= last.to+1 {
+			if s.to > last.to {
+				last.to = s.to
+			}
+			continue
+		}
+		merged = append(merged, s)
+	}
+
+	preamble := golang.PreambleFor(p, code)
+	preambleLines := 0
+	if preamble != "" {
+		preambleLines = len(strings.Split(preamble, "\n"))
+	}
+	cprefix := commentPrefix(p.Name())
+
+	var b strings.Builder
+	if preamble != "" {
+		// Only when there IS one. A file that begins straight at a
+		// definition has no preamble, and an unconditional newline opened
+		// its slice with a blank line the file does not have — a cosmetic
+		// lie about where the code starts, in a view whose whole job is to
+		// be verbatim enough to anchor a SEARCH against.
+		b.WriteString(preamble)
+		b.WriteString("\n")
+	}
+	shown := preambleLines
+	for _, sp := range merged {
+		// CLAMPED past the preamble, which was already written. A symbol
+		// whose span starts inside it — a doc comment the language's
+		// preamble scanner consumes and the extractor counts as part of the
+		// declaration is the ordinary case — would otherwise be emitted a
+		// second time, and the elision arithmetic below would go negative
+		// and say nothing about it.
+		if sp.from <= preambleLines {
+			sp.from = preambleLines + 1
+		}
+		if sp.from > sp.to {
+			// Wholly inside the preamble: already shown, in full.
+			continue
+		}
+		if elided := sp.from - 1 - shown; elided > 0 {
+			fmt.Fprintf(&b, "%s … %d lines elided — SEARCH anchors must be verbatim from the code shown and unique in the WHOLE file\n", cprefix, elided)
+		}
+		b.WriteString(strings.Join(lines[sp.from-1:sp.to], "\n"))
+		b.WriteString("\n")
+		shown = sp.to
+	}
+	return strings.TrimRight(b.String(), "\n"), true
 }
 
 // filterSignatures keeps only the signatures whose symbolIdentity is in
@@ -382,6 +623,66 @@ func ResolveOptionalModel(flag, def string) string {
 	return f
 }
 
+// Writer modes: HOW the writer seat attacks a file's survivors. See
+// RunSpec.WriterMode for the semantics and why an EMPTY RunSpec value means
+// batched while the CLI's default is per-survivor.
+const (
+	// WriterModePerSurvivor makes one writer call PER SURVIVOR. Each call
+	// carries the file's byte-identical cacheable prefix plus exactly one
+	// survivor's diff; each returned test is repaired on its own budget and
+	// PROVEN ALONE against its own mutant, so a proof names the survivor it
+	// killed rather than being attributed from a whole-file re-score. The
+	// operator's authored file is the proven tests concatenated.
+	WriterModePerSurvivor = "per-survivor"
+	// WriterModeBatched is the original shape: ONE call carrying every
+	// survivor as a diff, one repair budget for the whole file, one proof
+	// pass over all survivors at once.
+	WriterModeBatched = "batched"
+)
+
+// ResolveWriterMode validates an operator's --writer-mode spelling, returning
+// the canonical value. An empty flag takes WriterModePerSurvivor — the
+// COMMAND-LINE default, which is not the RunSpec zero value (see
+// RunSpec.WriterMode for why those differ).
+//
+// A closed set with a hard error, not a silent fallback: the mode changes how
+// many model calls a run makes, what each proof means, and what the verdict
+// discloses. An operator who typed `--writer-mode per_survivor` and got the
+// default would be handed a different measurement than the one they asked for
+// and told nothing.
+func ResolveWriterMode(flag string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(flag)) {
+	case "":
+		return WriterModePerSurvivor, nil
+	case WriterModePerSurvivor:
+		return WriterModePerSurvivor, nil
+	case WriterModeBatched:
+		return WriterModeBatched, nil
+	}
+	return "", fmt.Errorf("unknown --writer-mode %q: want %q or %q", flag, WriterModePerSurvivor, WriterModeBatched)
+}
+
+// TestWriterTaskKey is the queue key for the writer seat aimed at ONE
+// survivor. Keys are unique per mission and a mutant id is unique within a run
+// (a sharded run prefixes ids with the shard index), so one survivor is
+// exactly one seat — two survivors can never collide onto one key and quietly
+// leave one of them unattacked while the verdict still counts it.
+//
+// The bare role key (RoleTestWriter) stays the batched mode's key, unchanged,
+// so nothing about a batched run's queue shape moves.
+func TestWriterTaskKey(mutantID string) string {
+	return RoleTestWriter + "/" + mutantID
+}
+
+// ShadowTestWriterTaskKey is TestWriterTaskKey for the CHALLENGER seat. It
+// carries the challenger's own role prefix for the same structural reason
+// RoleTestWriterShadow exists: tasksByRole(RoleTestWriter) must not be able to
+// return a shadow task, and a prefix is a fact about the key rather than a
+// check someone must remember to write.
+func ShadowTestWriterTaskKey(mutantID string) string {
+	return RoleTestWriterShadow + "/" + mutantID
+}
+
 // ShadowShardTaskKey is the queue key for the challenger seat on shard i.
 func ShadowShardTaskKey(index int) string {
 	return RoleMutantGeneratorShadow + "/" + strconv.Itoa(index)
@@ -467,11 +768,12 @@ func BuildDAG(rs RunSpec, assign RoleAssignment, sigs []repoindex.Signature) []q
 		// whole-file seat with an unchanged key and a byte-identical prompt.
 		if role.Name == RoleMutantGenerator && len(shards) > 0 {
 			for _, sh := range shards {
+				instruction, _ := renderMutantGeneratorShard(rs, sigs, sh)
 				specs = append(specs, queue.TaskSpec{
 					Key:         ShardTaskKey(sh.Index),
 					Role:        RoleMutantGenerator,
 					Title:       shardTitle(sh),
-					Instruction: renderMutantGeneratorShard(rs, sigs, sh),
+					Instruction: instruction,
 					Model:       assign[RoleMutantGenerator],
 				})
 			}
@@ -482,11 +784,12 @@ func BuildDAG(rs RunSpec, assign RoleAssignment, sigs []repoindex.Signature) []q
 			// why this is a role key and not a boolean field.
 			if strings.TrimSpace(rs.ShadowModel) != "" {
 				for _, sh := range shards {
+					instruction, _ := renderMutantGeneratorShard(rs, sigs, sh)
 					specs = append(specs, queue.TaskSpec{
 						Key:         ShadowShardTaskKey(sh.Index),
 						Role:        RoleMutantGeneratorShadow,
 						Title:       "Challenger: " + shardTitle(sh),
-						Instruction: renderMutantGeneratorShard(rs, sigs, sh),
+						Instruction: instruction,
 						Model:       rs.ShadowModel,
 					})
 				}

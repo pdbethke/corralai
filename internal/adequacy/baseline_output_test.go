@@ -41,7 +41,7 @@ func TestScore_FailingBaselineCarriesItsOutput(t *testing.T) {
 	}
 
 	rep, err := adequacy.Score(context.Background(), jail, nil, "a.py", "code",
-		[]adequacy.Mutant{{ID: "m1", Code: "x"}}, []string{"pytest"})
+		[]adequacy.Mutant{{ID: "m1", Replace: "x"}}, []string{"pytest"})
 	if err != nil {
 		t.Fatalf("Score: %v", err)
 	}
@@ -60,7 +60,7 @@ func TestScore_BaselineOutputCostsNoExtraRun(t *testing.T) {
 	jail := &verboseFakeJail{pass: false, output: "boom"}
 
 	if _, err := adequacy.Score(context.Background(), jail, nil, "a.py", "code",
-		[]adequacy.Mutant{{ID: "m1", Code: "x"}}, []string{"pytest"}); err != nil {
+		[]adequacy.Mutant{{ID: "m1", Replace: "x"}}, []string{"pytest"}); err != nil {
 		t.Fatalf("Score: %v", err)
 	}
 	if jail.calls != 1 {
@@ -75,7 +75,7 @@ func TestScore_NonVerboseJailStillWorks(t *testing.T) {
 	fj := &plainFakeJail{pass: false}
 
 	rep, err := adequacy.Score(context.Background(), fj, nil, "a.py", "code",
-		[]adequacy.Mutant{{ID: "m1", Code: "x"}}, []string{"pytest"})
+		[]adequacy.Mutant{{ID: "m1", Replace: "x"}}, []string{"pytest"})
 	if err != nil {
 		t.Fatalf("Score: %v", err)
 	}

@@ -141,10 +141,19 @@ type ModelCallRow struct {
 	// Retries is nullable: nil means "not measured" (every producer today,
 	// since agentbackend has no retry loop to observe), never a stored 0
 	// that would read as "measured: zero retries".
-	Retries      *int
-	InputTokens  int64
-	OutputTokens int64
-	WallMillis   int64
+	Retries     *int
+	InputTokens int64
+	// CachedInputTokens is how many of InputTokens the provider served from
+	// its own prompt cache. Nullable for the same NULL-not-zero reason
+	// Retries is: silence from a provider is not a measured miss. See
+	// scanstore.ModelCall.CachedInputTokens.
+	CachedInputTokens *int64
+	// CacheWriteInputTokens is the price of the saving above: Anthropic bills
+	// a cache write at 1.25x an ordinary input token. Nullable, and nil
+	// independently of the read count.
+	CacheWriteInputTokens *int64
+	OutputTokens          int64
+	WallMillis            int64
 
 	StatementSHA256 string
 }
@@ -264,6 +273,7 @@ CREATE TABLE IF NOT EXISTS corral_audits (
   selected_tests     INTEGER,
   suite_tests        INTEGER,
   selection_fallback VARCHAR,
+  writer_mode        VARCHAR,
   uncovered          BOOLEAN,
   per_mutant              BOOLEAN,
   tests_per_mutant_min    INTEGER,
@@ -309,7 +319,8 @@ CREATE TABLE IF NOT EXISTS corral_audits (
   mutant_ms_max           BIGINT,
   authored_test           VARCHAR,
   verdict_json            VARCHAR,
-  schema_version          INTEGER
+  schema_version          INTEGER,
+  prompt_shape            VARCHAR
 );`
 
 // The mutant grain's outcome CHECK is the same discipline scan_files'
@@ -352,6 +363,8 @@ CREATE TABLE IF NOT EXISTS corral_model_calls (
   retries          INTEGER,
   input_tokens     BIGINT,
   output_tokens    BIGINT,
+  cached_input_tokens BIGINT,
+  cache_write_input_tokens BIGINT,
   wall_ms          BIGINT,
   statement_sha256 VARCHAR,
   schema_version   INTEGER
@@ -407,6 +420,7 @@ var corralAuditsMigrationCols = []struct{ name, ddl string }{
 	{"selected_tests", "selected_tests INTEGER"},
 	{"suite_tests", "suite_tests INTEGER"},
 	{"selection_fallback", "selection_fallback VARCHAR"},
+	{"writer_mode", "writer_mode VARCHAR"},
 	{"uncovered", "uncovered BOOLEAN"},
 	{"per_mutant", "per_mutant BOOLEAN"},
 	{"tests_per_mutant_min", "tests_per_mutant_min INTEGER"},
@@ -453,6 +467,7 @@ var corralAuditsMigrationCols = []struct{ name, ddl string }{
 	{"authored_test", "authored_test VARCHAR"},
 	{"verdict_json", "verdict_json VARCHAR"},
 	{"schema_version", "schema_version INTEGER"},
+	{"prompt_shape", "prompt_shape VARCHAR"},
 }
 
 // The other four tables are NEW at schema_version 2, so nothing predates
@@ -467,9 +482,16 @@ var (
 	corralScansMigrationCols = []struct{ name, ddl string }{
 		{"selection_ms", "selection_ms BIGINT"},
 	}
-	corralMutantsMigrationCols    = []struct{ name, ddl string }{}
-	corralModelCallsMigrationCols = []struct{ name, ddl string }{}
-	corralEventsMigrationCols     = []struct{ name, ddl string }{}
+	corralMutantsMigrationCols = []struct{ name, ddl string }{}
+	// cached_input_tokens is additive: a warehouse an earlier corral created
+	// gets it on the next push, and its existing rows keep NULL — correct,
+	// since those runs never asked a provider to cache a prefix and never
+	// read one back.
+	corralModelCallsMigrationCols = []struct{ name, ddl string }{
+		{"cached_input_tokens", "cached_input_tokens BIGINT"},
+		{"cache_write_input_tokens", "cache_write_input_tokens BIGINT"},
+	}
+	corralEventsMigrationCols = []struct{ name, ddl string }{}
 )
 
 // migrateTable additively brings one warehouse table up to the current
@@ -859,10 +881,14 @@ func pushBundleOnce(target string, b Bundle) (Counts, error) {
 	for _, mc := range b.Calls {
 		if _, err := tx.Exec(`INSERT INTO corral_model_calls (
 		    ts, repo, run_url, scan_id, path, role, model, calls, retries,
-		    input_tokens, output_tokens, wall_ms, statement_sha256, schema_version
-		  ) VALUES (`+placeholders(14)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
+		    input_tokens, output_tokens, cached_input_tokens,
+		    cache_write_input_tokens, wall_ms,
+		    statement_sha256, schema_version
+		  ) VALUES (`+placeholders(16)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
 			now, mc.Repo, mc.RunURL, mc.ScanID, mc.Path, mc.Role, mc.Model,
-			mc.Calls, mc.Retries, mc.InputTokens, mc.OutputTokens, mc.WallMillis,
+			mc.Calls, mc.Retries, mc.InputTokens, mc.OutputTokens,
+			nullIfNilInt64(mc.CachedInputTokens), nullIfNilInt64(mc.CacheWriteInputTokens),
+			mc.WallMillis,
 			mc.StatementSHA256, SchemaVersion,
 		); err != nil {
 			return Counts{}, fmt.Errorf("auditpush: insert model call %s/%s: %w", mc.Path, mc.Role, err)
@@ -931,6 +957,7 @@ func insertFileRow(tx *sql.Tx, now time.Time, r Row) error {
 	    audited, candidates, mutants_planted, models_by_role,
 	    min_kill_rate, max_proven_missed, passed, statement_sha256, run_url,
 	    test_selection, selected_tests, suite_tests, selection_fallback, uncovered,
+	    writer_mode,
 	    per_mutant, tests_per_mutant_min, tests_per_mutant_median, tests_per_mutant_max,
 	    trees, concurrency_note, shared_dirs, scan_id,
 	    disposition, reason, preflight_state, evidence, detail, status,
@@ -942,14 +969,15 @@ func insertFileRow(tx *sql.Tx, now time.Time, r Row) error {
 	    challenger_sufficient, goals_derived,
 	    selection_ms, generation_ms, pool_ms, dev_pass_ms, authored_pass_ms,
 	    critic_ms, total_ms, mutant_ms_median, mutant_ms_max,
-	    authored_test, verdict_json, schema_version
-	  ) VALUES (`+placeholders(70)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
+	    authored_test, verdict_json, schema_version, prompt_shape
+	  ) VALUES (`+placeholders(72)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
 		now, r.Repo, r.Commit, r.Path, r.Lang,
 		killRate, r.Survivors, r.ProvenMissed,
 		r.TimedOut, r.TestWriterFailed, r.PoolTestUnsound,
 		r.Audited, r.Candidates, r.MutantsPlanted, r.ModelsByRole,
 		minKill, maxGaps, r.Passed, r.StatementSHA256, r.RunURL,
 		r.TestSelection, r.SelectedTests, r.SuiteTests, r.SelectionFallback, r.Uncovered,
+		nullIfEmpty(r.WriterMode),
 		r.PerMutant, pmMin, pmMedian, pmMax,
 		// trees is SQL NULL, not 0, when nothing measured it: the jail
 		// substrate builds no trees and a cached pre-concurrency verdict
@@ -967,7 +995,7 @@ func insertFileRow(tx *sql.Tx, now time.Time, r Row) error {
 		r.SelectionMillis, r.GenerationMillis, r.PoolMillis, r.DevPassMillis,
 		r.AuthoredPassMillis, r.CriticMillis, r.TotalMillis,
 		r.MutantMillisMedian, r.MutantMillisMax,
-		authoredTest, verdictJSON, SchemaVersion,
+		authoredTest, verdictJSON, SchemaVersion, nullIfEmpty(r.PromptShape),
 	)
 	if err != nil {
 		return fmt.Errorf("auditpush: insert %s: %w", r.Path, err)
@@ -1003,4 +1031,15 @@ func nullIfZeroInt(v int) any {
 		return nil
 	}
 	return v
+}
+
+// nullIfNilInt64 writes a nullable measured count: NULL when nothing measured
+// it, the value otherwise — including a measured 0, which is a real
+// observation and must not be collapsed with silence the way nullIfZeroInt's
+// only-ever-positive counts can be.
+func nullIfNilInt64(v *int64) any {
+	if v == nil {
+		return nil
+	}
+	return *v
 }

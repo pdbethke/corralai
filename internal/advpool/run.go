@@ -80,6 +80,28 @@ type RunSpec struct {
 	// default would silently spend tokens and force a vendor.
 	ShadowWriterModel string
 
+	// WriterMode is HOW the writer seat attacks the survivors:
+	// WriterModePerSurvivor fans out into one call per survivor, each proven
+	// alone against its own mutant; WriterModeBatched makes ONE call carrying
+	// every survivor as a diff and proves the resulting file against all of
+	// them at once.
+	//
+	// EMPTY MEANS BATCHED, deliberately. Per-survivor is the CLI's default —
+	// `certify --repo` and `certify --local` both resolve it before they get
+	// here — but a RunSpec built by any other caller (the brain, an
+	// in-package test) has never asked for a fan-out and must keep the shape
+	// it has always had. A zero value that silently changed how many model
+	// calls a run makes, and what its verdict discloses, would be a default
+	// nobody chose.
+	//
+	// The distinction is disclosed on the verdict (Verdict.WriterMode) rather
+	// than left implicit: the two modes cost differently and prove
+	// differently — per-survivor proves each survivor with a test written for
+	// IT, batched proves whichever survivors one shared file happens to kill
+	// — so two verdicts earned under different modes are not the same
+	// measurement, and a reader must be able to tell which one they hold.
+	WriterMode string
+
 	// Matrix opts a run into the tests×mutants matrix (swarm slice 5): after
 	// pool-adequacy, the driver enumerates the dev suite's individual tests
 	// and scores each ALONE against the run's own mutants, then drives critic

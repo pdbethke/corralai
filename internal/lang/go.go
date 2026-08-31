@@ -76,6 +76,43 @@ func (goPlugin) TestWriterSystem() string {
 Return ONLY the raw Go test file content — no prose, no markdown fences.`
 }
 
+// Preamble returns the package clause and the import block immediately
+// following it (a bare `import "x"` or a grouped `import (...)`), verbatim —
+// the header a mutant-generator shard's sliced view needs so mutated code
+// that references an import still reads as a real Go file, without pulling
+// in the file's actual declarations. Line-based, not AST-based: this package
+// already has a full tree-sitter parse available at the signature-extraction
+// call site, but a shard's preamble is cheap enough not to need one, and a
+// plain scan is trivially correct for the shape every real Go file's header
+// takes (comments, one package clause, then imports).
+func (goPlugin) Preamble(code string) string {
+	lines := strings.Split(code, "\n")
+	end := 0
+	inImportGroup := false
+	for i, l := range lines {
+		t := strings.TrimSpace(l)
+		switch {
+		case inImportGroup:
+			end = i + 1
+			if t == ")" {
+				inImportGroup = false
+			}
+		case t == "" || strings.HasPrefix(t, "//"):
+			end = i + 1
+		case strings.HasPrefix(t, "package "):
+			end = i + 1
+		case strings.HasPrefix(t, "import ("):
+			inImportGroup = true
+			end = i + 1
+		case strings.HasPrefix(t, "import "):
+			end = i + 1
+		default:
+			return strings.Join(lines[:end], "\n")
+		}
+	}
+	return strings.Join(lines[:end], "\n")
+}
+
 // MutantSystem is the EXACT string previously named genMutantsSystem in
 // internal/testgen/testgen.go — moved here unchanged.
 func (goPlugin) MutantSystem() string {

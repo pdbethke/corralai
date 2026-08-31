@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"github.com/pdbethke/corralai/internal/adequacy"
-	"github.com/pdbethke/corralai/internal/lang"
 )
 
 // extractCode pulls Go source out of a model response. It handles a
@@ -113,37 +112,12 @@ func afterMarkerLine(s string) string {
 	return ""
 }
 
-// applyMutation applies one SEARCH/REPLACE hunk to original and returns the
-// full mutant, GUARANTEEING it is original with exactly one contiguous region
-// changed: SEARCH must be non-empty and occur EXACTLY once (a unique anchor),
-// REPLACE must differ from SEARCH (a real mutation), and reversing the single
-// splice must reproduce original byte-for-byte. Any violation returns ok=false
-// so the caller drops the mutant — corral never scores a mutant it cannot prove
-// is a faithful single-point derivative of the exact code under audit.
-//
-// span is the 1-based, inclusive range of ORIGINAL lines the SEARCH anchor
-// occupied — the lines a test must reach to observe this mutant.
-func applyMutation(original, search, replace string) (mutant string, span lang.LineRange, ok bool) {
-	if search == "" || search == replace {
-		return "", lang.LineRange{}, false
-	}
-	i := strings.Index(original, search)
-	if i < 0 {
-		return "", lang.LineRange{}, false // anchor not found
-	}
-	if strings.Contains(original[i+len(search):], search) {
-		return "", lang.LineRange{}, false // anchor not unique
-	}
-	mutant = original[:i] + replace + original[i+len(search):]
-	// Integrity round-trip: undo the one change and demand the EXACT original
-	// back — nothing outside the replaced span may have moved.
-	if mutant[:i]+search+mutant[i+len(replace):] != original {
-		return "", lang.LineRange{}, false
-	}
-	start := strings.Count(original[:i], "\n") + 1
-	end := start + strings.Count(strings.TrimSuffix(search, "\n"), "\n")
-	return mutant, lang.LineRange{Start: start, End: end}, true
-}
+// The application of a hunk — and the span it occupies — lives in
+// adequacy.Mutant.Apply / adequacy.HunkSpan, beside the type that carries it.
+// It used to live here as applyMutation, which materialised the whole mutated
+// file at parse time; the file is now made only inside the jail, and there is
+// exactly ONE implementation of the splice and the span so the two can never
+// disagree about where an edit lands.
 
 func sha256Sum(s string) []byte {
 	h := sha256.Sum256([]byte(s))

@@ -316,6 +316,15 @@ func insideGitWorkTree(root string) bool {
 // Ignored paths (build output, caches, dep trees) are deliberately absent;
 // the dep dirs a suite actually needs come back as symlinks in copyTree.
 //
+// This is the SAME `git ls-files -z --cached --others --exclude-standard`
+// enumeration reposcan.TreeDigest keys the selection cache on — a
+// deliberate reimplementation on that side, not an import, since the
+// dependency runs the other way (reposcan does not depend on adequacy). The
+// two must keep walking in lockstep: reposcan.TreeDigest's evidence is only
+// valid for a tree a pool copy of THIS function would produce byte-for-byte
+// the same universe for, so a change to what counts as "the tree" here
+// belongs beside a matching change there, not made alone.
+//
 // Returns the repo-relative paths in git's order and their total size in
 // bytes. A path that has vanished between the listing and the stat is skipped
 // rather than fatal: an untracked file is exactly the kind of thing an editor

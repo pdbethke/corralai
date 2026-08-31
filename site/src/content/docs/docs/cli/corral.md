@@ -79,6 +79,17 @@ Usage:
                                   Local DuckDB file, no brain required:
                                   --db <path> (default $CORRALAI_SCANS_DB, else
                                   ~/.claude/corralai_scans.duckdb), --limit n, --json
+  corral verify --attest <path> [flags]
+                                  the checker for a certify --repo --attest statement: verifies
+                                  its DSSE signature (against --pub or the local certify key,
+                                  reporting who signed either way), and — opted in per flag —
+                                  recomputes the pushed warehouse rows' hash from a --db and
+                                  confirms a Rekor entry (--rekor-index, or read from --db)
+                                  matches the envelope on disk. Prints check marks and one
+                                  plain sentence per check; exits 1 only on a real mismatch.
+                                  Different from "corral certify verify", which checks a
+                                  corral certify BUILD record, a different artifact.
+                                  flags: --db <dsn>  --rekor-index <n>  --pub <hex>
   corral seal [flags]            the repo's CURRENT state as the union of still-valid verdicts,
                                   read from a certify --repo --push warehouse (many audits, one
                                   current state — not one scan's snapshot). Reads corral_seal

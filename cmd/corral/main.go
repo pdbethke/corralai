@@ -158,7 +158,7 @@ func subcommand(args []string) string {
 		return ""
 	}
 	switch args[0] {
-	case "certify", "secret", "control", "scorecard", "criticscore", "matrix", "scans", "seal", "eval", "mcp", "doctor", "demo", "verify":
+	case "certify", "secret", "control", "scorecard", "criticscore", "matrix", "models", "scans", "seal", "eval", "mcp", "doctor", "demo", "verify":
 		return args[0]
 	}
 	return ""
@@ -257,6 +257,18 @@ Usage:
                                   plus a C-PREC column: the test-critic role's execution-checked
                                   precision from criticscore adjudications);
                                   table by default, or the raw cells as indented JSON with --json
+  corral models rank [flags]      rank the models that have sat in each seat by corral's OWN recorded
+                                  evidence — a DIFFERENT metric per seat: the writer by proven gaps
+                                  per survivor attempted, the generator by valid mutants the dev
+                                  suite missed per run, the critic by precision against human
+                                  adjudication; the goal-deriver is reported as not scored rather
+                                  than given an invented number. A model below --min-runs (default 5)
+                                  is printed with its real numbers, marked insufficient, and never
+                                  preferred. DISCLOSURE, NOT SELECTION: it writes no config, changes
+                                  no default and staffs no seat — corral has no default models.
+                                  flags: --db <dsn> (a pushed warehouse instead of the local
+                                  bug-catching ledger; unreachable REFUSES, never falls back)
+                                  --seat <role>  --lang <name>  --min-runs n  --json
   corral criticscore list         list execution-checked test-critic findings still awaiting human
                                   adjudication (requires CORRAL_BRAIN — no offline mode)
   corral criticscore show <id>    print one finding in full (model, target test, evidence)
@@ -731,6 +743,11 @@ func main() {
 			defer func() { _ = cs.Close() }()
 		}
 		os.Exit(runScorecard(os.Args[2:], localScorecardReader{store: bugCatchStore, critic: localCritic}, os.Stdout))
+	case "models":
+		// Read-only disclosure over the stores certify already writes. It
+		// opens nothing writable, changes no default, and cannot influence a
+		// run — see models_rank.go.
+		os.Exit(runModels(os.Args[2:], ".", defaultRankLoader, os.Stdout, os.Stderr))
 	case "demo":
 		// The two-minute first run: a self-contained project plus the REAL
 		// certify --local, so nothing about the environment can spoil a

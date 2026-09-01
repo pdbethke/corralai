@@ -158,15 +158,30 @@ jobs:
           # could not produce a compiling Go test in three attempts
           # ("encoding/json" imported and not used) — [WRITER FAILED], 0
           # proven. The same model proved 17 Python gaps on requests the next
-          # day. The self-audit is Go, so its writer is gemini-3.6-pro: same
+          # day. The self-audit is Go, so its writer was pinned to a stronger
+          # model — but the name chosen, gemini-3.6-pro, HAS NEVER EXISTED:
+          # the served >=3.6 line is flash only (3.6-flash, 3.7-flash); the pro
+          # line stops at 3.1-pro-preview. It was pattern-matched from
+          # "3.6-flash exists, so 3.6-pro must", never checked against the API,
+          # and never executed (this workflow runs only on the `audit` label or
+          # a manual dispatch), so it sat wrong for two days and then burned two
+          # hours of runner time before failing 404 at the writer seat.
+          #
+          # gemini-3.7-flash is the newest served model at or above the floor.
+          # BE HONEST ABOUT WHAT THIS DOES NOT FIX: the reason for reaching past
+          # flash — flash failing three times to write a compiling Go test — is
+          # NOT addressed by another flash. If this run reports [WRITER FAILED]
+          # again, the answer is a cross-vendor writer (the action already takes
+          # anthropic-key), which needs that secret added. The run will say.
+          # Same
           # key, a few more cents per run, and the seat that decides whether a
           # survivor becomes a PROVEN gap gets the model that can write the
           # language. Generator and deriver stay on flash — measured fine.
-          writer-model: gemini-3.6-pro
+          writer-model: gemini-3.7-flash
           mutant-model: gemini-3.6-flash
           # Off because that is what the five replicates actually ran, not
           # because it has to be. CheckDecorrelation compares MODEL NAMES, not
-          # vendors, so `critic-model: gemini-3.6-pro` would satisfy it on this
+          # vendors, so `critic-model: gemini-3.7-flash` would satisfy it on this
           # one key — and a second provider key here (they are additive) would
           # give a genuinely cross-vendor critic. Both are untested from this
           # workflow; the critic is advisory and never gates the verdict, so

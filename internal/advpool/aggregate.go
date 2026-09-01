@@ -21,6 +21,12 @@ const MethodCoverageLines = "coverage-lines"
 // (TestSelection, Uncovered). Factored out of aggregate so a test can assert
 // the Selection-to-Verdict mapping without also supplying every scored
 // component aggregate itself requires.
+// THE ONLY PLACE A Verdict IS CONSTRUCTED. `aggregate` calls this and then
+// mutates the result; no other non-test file in the repository holds a
+// `Verdict{}` literal. Reviewers have twice reported a second construction site
+// that must be kept in sync — there is none, and adding one would recreate the
+// field-by-field-converter defect AGENTS.md names. A new scored field belongs
+// here, and its journey to the wire belongs in a propagation test.
 func verdictFromSpec(rs RunSpec) Verdict {
 	return Verdict{
 		Repo:   rs.Repo,

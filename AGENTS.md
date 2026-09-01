@@ -218,6 +218,54 @@ asserts the value survives the boundary.
 Related: never let a could-not-measure outcome render as a measured zero. A
 `COULD-NOT-GRADE` that explains itself is worth more than a number that is wrong.
 
+## Claims reviewers keep getting wrong
+
+Four independent AI reviews of this repository (2026-09-01) produced eight
+confident false claims between them. Every one had the same shape: **the
+evidence was read correctly and the state of the world was inferred wrongly** —
+which is precisely the failure this project exists to refuse. The list below is
+here so the ninth reviewer does not spend an afternoon on the same ground.
+
+Before reporting any of these, run the check named beside it.
+
+- **"`Verdict` is constructed in two places, so a new field can be dropped."**
+  There is exactly one `Verdict{}` literal in the non-test tree,
+  `internal/advpool/aggregate.go`'s `verdictFromSpec`, which `aggregate` calls
+  and then mutates. A reviewer named a `tickAggregate` function that does not
+  exist. `grep -rn 'Verdict{' --include=*.go . | grep -v _test`
+- **"GitLab and Gitea are stubs."** Both providers are complete implementations.
+  Exactly two methods return `errors.ErrUnsupported` — `ListOpenPRs` and
+  `SetCommitStatus`. The true, narrower claim: **the gate is GitHub-only.**
+- **"The workspace substrate has no signal handling."** `cmd/corral/signalctx.go`
+  cancels (never exits) so deferred restores run. What is genuinely missing is
+  crash *detection* — see `WorkspaceRunner.Verify`'s doc comment for why that
+  needs a durable journal rather than a check.
+- **"Add a fast/deep tiered mode."** It exists: the driver cancels the
+  test-writer outright when a run has no survivors. Pass 2 is already
+  conditional on Pass 1. `grep -n 'moot test-writer' internal/advpool/driver.go`
+- **"`0 proven gaps` is reported as a pass."** `TestWriterFailed` and
+  `PoolTestUnsound` are distinct verdict fields and both force `needs-review`
+  unconditionally. Whether the CLI *renders* them legibly is a fair question;
+  the scoring is not.
+- **"Pair tests to sources by parsing imports."** Pairing already uses execution
+  coverage (`evidence-paired` on the scan line), which proves a test exercises a
+  file. An import proves only that it mentions one. Import parsing is a
+  downgrade.
+- **"Run-to-run kill rates swing wildly."** The measured spread on an unchanged
+  diff is **0.85 → 0.90**, and it is documented in `CHANGELOG.md` and the
+  `--push` help. Variance is real; do not invent a magnitude for it.
+- **"`go test ./...` is red, so the repo is not green."** Check whether the
+  offending file is tracked first — `git check-ignore -v <path>`. A gitignored
+  local draft under `docs/launch/` or `docs/superpowers/` is not part of this
+  repository. (The doc gates now filter ignored paths themselves; this note is
+  for every *other* test that walks the tree.)
+
+The general rule this list is an instance of: **this repository documents its
+tradeoffs in the comment above the code that makes them.** When something looks
+like an oversight, read the doc comment on the function before reporting it —
+several of the misses above are explained ten lines from where the reviewer was
+looking.
+
 ## Documentation rules
 
 Docs are part of the product's argument, so they are held to the product's

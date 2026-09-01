@@ -85,6 +85,9 @@ func (p *giteaProvider) AuthLogin(ctx context.Context) (string, error) {
 	return p.rc.rcAuthLogin(ctx)
 }
 
+// The only two unimplemented methods on this provider; see provider_gitlab.go
+// for what that costs (the gate is GitHub-only) and what it does not mean.
+//
 // ListOpenPRs is not yet implemented for Gitea. Callers get an honest
 // errors.ErrUnsupported rather than a silent no-op.
 func (p *giteaProvider) ListOpenPRs(ctx context.Context, owner, repo, base string) ([]PRRef, error) {

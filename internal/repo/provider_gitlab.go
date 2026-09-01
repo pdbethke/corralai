@@ -293,6 +293,12 @@ func (p *gitlabProvider) AuthLogin(ctx context.Context) (string, error) {
 	return out.Username, nil
 }
 
+// THESE TWO METHODS ARE THE ONLY UNIMPLEMENTED ONES on this provider — the
+// rest (OpenPR, reviews, push credentials, pagination) is complete against the
+// REST v4 API, so "GitLab is a stub" is wrong. What IS true, and what these two
+// gaps actually cost: they are exactly what internal/gate needs, so THE GATE IS
+// GITHUB-ONLY. Same for Gitea. Say that, rather than that the forge is missing.
+//
 // ListOpenPRs is not yet implemented for GitLab. Callers get an honest
 // errors.ErrUnsupported rather than a silent no-op.
 func (p *gitlabProvider) ListOpenPRs(ctx context.Context, owner, repo, base string) ([]PRRef, error) {

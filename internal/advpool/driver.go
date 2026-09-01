@@ -739,6 +739,22 @@ type RunState struct {
 	Matrix *matrix.Result
 }
 
+// SCOPE, because reviewers read this guard as broader than it is: it compares
+// the CRITIC against the WRITER and nothing else. Two facts about what it
+// deliberately does NOT do:
+//
+//   - The mutant-generator MAY share a model with the test-writer. That
+//     correlation is benign in direction: a writer sharing lineage with the
+//     generator is BETTER at killing its mutants, which yields MORE proven gaps
+//     and MORE needs-review. It cannot manufacture a false clean, which is the
+//     only direction worth a refusal.
+//   - It compares model NAMES, not provenance. "gemini-3.7-flash" vs
+//     "gemini-3.7-pro" passes while sharing training lineage — a critic grading
+//     its own family and being recorded as independent. THAT is the real gap,
+//     and it is a live one: internal/modelcorr already MEASURES this kind of
+//     agreement (Jaccard over survivor sets) and nothing gates on it. Closing it
+//     needs a vendor field on the model registry, not a change here.
+//
 // CheckDecorrelation rejects an assignment where test-critic and test-writer
 // share a model. A test-critic judging tests written by its own model (or a
 // copy of it) is not an independent check — it is the same failure mode

@@ -9,6 +9,38 @@ still move between minor versions.
 Entries describe what changed for someone *using* the tool. For the full commit
 history of any release, `git log v0.3.4..v0.3.5`.
 
+## [v0.8.2] — 2026-09-01
+
+Declare your models once.
+
+- **A model registry.** `.corral/models.json` (or `CORRALAI_MODELS_FILE` /
+  inline `CORRALAI_MODELS`) declares the models a project may use, and seats
+  name them by alias: `--writer-model writer`. Provider is a field rather
+  than a substring of a model name, so the decorrelation disclosure can say
+  plainly when writer and critic share a vendor. Local models are
+  first-class — an entry may carry its own endpoint, so a generator can run
+  on your own hardware while a hosted model writes.
+- **`"strict": true` makes a typo cost two seconds.** A seat naming
+  something undeclared is refused before the run starts, listing the aliases
+  you declared. Without it a mistyped name falls through and dies at the
+  seat — which is how a model that has never existed burned two hours of CI
+  the night before this release.
+- **Aliases are never authoritative.** The verdict, ledger, statement and
+  cache keys all record the concrete model an alias resolved to. Renaming an
+  alias cannot move a cache key or blur a record.
+- **`corral models rank`** ranks models per seat from corral's own recorded
+  outcomes — proven gaps per survivor attempted for the writer, missed-fault
+  yield for the generator, adjudicated precision for the critic — and
+  refuses to recommend on thin evidence. It prints a ranking; it never
+  staffs a seat. The goal-deriver is reported unscored, because no honest
+  signal for it exists yet.
+- `corral scans push` sends scans the ledger already holds to a warehouse,
+  so recording first and deciding on a warehouse later no longer means
+  re-running (and paying for) everything.
+- The GitHub Action gains Marketplace branding.
+- Nothing above changes an existing invocation: concrete model names still
+  work everywhere, and a seat you do not name still refuses the run.
+
 ## [v0.8.1] — 2026-08-31
 
 The release that made a failed measurement impossible to mistake for a passing

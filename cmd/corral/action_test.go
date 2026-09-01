@@ -6,6 +6,9 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -1688,7 +1691,7 @@ func TestActionRunsOutsideActionsWithoutAStepSummary(t *testing.T) {
 	}
 }
 
-// TestDocWalkSkipsGitIgnoredFiles pins the scope fix: the gate grades the
+// TestDocsWalkSkipsGitIgnoredFiles pins the scope fix: the gate grades the
 // REPOSITORY, not the disk.
 //
 // The bug this replaces was a false FAILURE, which is why it needs its own
@@ -1705,7 +1708,7 @@ func TestActionRunsOutsideActionsWithoutAStepSummary(t *testing.T) {
 // skipped, and a tracked one plus an untracked-but-not-ignored one are BOTH
 // still graded — the latter is a doc on its way to a commit, exactly when
 // catching a bad pin is most useful.
-func TestDocWalkSkipsGitIgnoredFiles(t *testing.T) {
+func TestDocsWalkSkipsGitIgnoredFiles(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")
 	}
@@ -1739,5 +1742,91 @@ func TestDocWalkSkipsGitIgnoredFiles(t *testing.T) {
 		if _, found := docs[must]; !found {
 			t.Errorf("%s is in the repository (tracked or merely untracked) but was NOT graded — the ignore filter is dropping documents it must keep", must)
 		}
+	}
+}
+
+// docGateSelector is the `go test -run` pattern CI uses to run the
+// documentation gates on a change that touches ONLY documentation.
+//
+// It is duplicated, deliberately, in .github/workflows/deploy.yml — and
+// TestDocGatesRunOnDocsOnlyChanges below asserts the two agree, so the
+// duplication cannot rot.
+const docGateSelector = "^TestDocs"
+
+// TestDocGatesRunOnDocsOnlyChanges is the gate on the gates.
+//
+// THE BUG IT EXISTS TO PREVENT, which shipped and cost two stale tags:
+// deploy.yml classifies a change as docs-only when every changed file matches
+// `\.md$`, and then skips `go test ./...`. But the documentation gates ARE Go
+// tests. So a Markdown-only pull request was precisely the pull request on
+// which the pin-freshness gate never ran — the gate was neither missing nor
+// ignored, it was structurally unreachable by the one class of change it
+// exists to police. Documentation drifted past two releases underneath it.
+//
+// The fix is a step in deploy.yml that runs `-run "^TestDocs"` with no `if:`
+// guard. That step selects tests BY NAME, which is the hand-maintained list
+// this repo keeps getting burned by, so both halves of it are guarded here:
+//
+//  1. Every test that walks the documentation must be named for the selector.
+//     Add a doc gate called TestActionRefsResolve and CI silently stops
+//     running it; this test fails instead.
+//  2. deploy.yml must still contain the selector. Delete or rename the step
+//     and this test fails, rather than the gate going quiet.
+//
+// What it deliberately does NOT assert is the absence of an `if:` on that
+// step — YAML structure is not worth hand-parsing here, and every failure
+// mode above is already covered. Read the step's own comment before changing
+// its condition.
+func TestDocGatesRunOnDocsOnlyChanges(t *testing.T) {
+	const walker = "docsAdvertisingAnActionRef"
+	wantPrefix := strings.TrimPrefix(docGateSelector, "^")
+
+	fset := token.NewFileSet()
+	pkgs, err := parser.ParseDir(fset, ".", func(fi fs.FileInfo) bool {
+		return strings.HasSuffix(fi.Name(), "_test.go")
+	}, 0)
+	if err != nil {
+		t.Fatalf("parsing this package's tests: %v", err)
+	}
+
+	found := 0
+	for _, pkg := range pkgs {
+		for _, file := range pkg.Files {
+			for _, decl := range file.Decls {
+				fn, ok := decl.(*ast.FuncDecl)
+				if !ok || fn.Recv != nil || fn.Body == nil || !strings.HasPrefix(fn.Name.Name, "Test") {
+					continue
+				}
+				calls := false
+				ast.Inspect(fn.Body, func(n ast.Node) bool {
+					if id, ok := n.(*ast.Ident); ok && id.Name == walker {
+						calls = true
+					}
+					return !calls
+				})
+				if !calls {
+					continue
+				}
+				found++
+				if !strings.HasPrefix(fn.Name.Name, wantPrefix) {
+					t.Errorf("%s walks the documentation but is named %q — CI selects the doc gates with `-run %q`, so this test would never run on a docs-only pull request. Rename it to start with %q.",
+						walker, fn.Name.Name, docGateSelector, wantPrefix)
+				}
+			}
+		}
+	}
+	// A walk that found nothing would pass green forever — the same failure
+	// docsAdvertisingAnActionRef's own scan-set check guards against.
+	if found == 0 {
+		t.Fatalf("found no test calling %s — this gate is not looking where it thinks it is", walker)
+	}
+
+	wf := filepath.Join("..", "..", ".github", "workflows", "deploy.yml")
+	b, rerr := os.ReadFile(wf)
+	if rerr != nil {
+		t.Fatalf("reading %s: %v", wf, rerr)
+	}
+	if !strings.Contains(string(b), docGateSelector) {
+		t.Errorf("deploy.yml no longer mentions %q — the documentation gates are only reachable on a docs-only change through that step, so removing or renaming it takes them off those pull requests silently", docGateSelector)
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"sort"
 	"strings"
 
 	"github.com/pdbethke/corralai/internal/adequacy"
@@ -147,6 +148,7 @@ func (d *Driver) advanceWriterAttempt(ctx context.Context, missionID int64, run 
 	if task == nil || task.Status != queue.StatusDone {
 		return false, nil
 	}
+	a.attempts++
 
 	test := d.Validator.ParseTest(task.Result)
 	if cerr := d.Validator.CompileTest(ctx, run.rs.CodePath, run.rs.Code, test); cerr != nil {
@@ -264,6 +266,34 @@ func (d *Driver) reissueWriterSeat(missionID int64, run *runState, a *writerAtte
 		return fmt.Errorf("advpool: promote the reissued writer seat for survivor %s: %w", a.mutant.ID, perr)
 	}
 	return nil
+}
+
+// writerAttemptSpread reports the min/median/max ATTEMPT count (the first
+// try plus every repair) across a per-survivor run's terminal seats — see
+// Verdict.WriterAttempts. nil on a batched run, or a per-survivor run whose
+// fan-out never started, matching TestsPerMutantSpread's own "absent, not
+// {0,0,0}" contract: a spread over zero seats is not a measurement.
+func writerAttemptSpread(run *runState) *TestsPerMutantSpread {
+	if run.writerMode != WriterModePerSurvivor || len(run.writerOrder) == 0 {
+		return nil
+	}
+	counts := make([]int, 0, len(run.writerOrder))
+	for _, id := range run.writerOrder {
+		a, ok := run.writerAttempts[id]
+		if !ok || a.attempts == 0 {
+			continue
+		}
+		counts = append(counts, a.attempts)
+	}
+	if len(counts) == 0 {
+		return nil
+	}
+	sort.Ints(counts)
+	return &TestsPerMutantSpread{
+		Min:    counts[0],
+		Max:    counts[len(counts)-1],
+		Median: counts[len(counts)/2],
+	}
 }
 
 // finishWriterFanout folds every terminal seat into the run's verdict inputs:

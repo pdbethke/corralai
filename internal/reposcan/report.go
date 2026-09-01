@@ -122,6 +122,14 @@ type WeakFile struct {
 	// never actually attempted. 0 on a batched run and on a fully-graded
 	// fan-out, and the line prints nothing for it.
 	WriterSeatsUngraded int
+	// WriterAttempts mirrors advpool.Verdict.WriterAttempts: the min/median/
+	// max number of attempts (first try plus repairs) a per-survivor run's
+	// seats took before going terminal. Nil on a batched run or a run whose
+	// fan-out never started — a reader must print nothing rather than
+	// invent a spread over zero seats. Answers, cheaply, whether the writer
+	// phase's cost was RETRIES (a high spread here) or slow single attempts
+	// (AuthoredPass large, this spread flat at 1) — see issue #201.
+	WriterAttempts *advpool.TestsPerMutantSpread
 	// PerMutant and TestsPerMutant mirror
 	// advpool.Verdict.TestSelection.PerMutant / .TestsPerMutant: each mutant
 	// was graded by the tests that reach ITS OWN lines, not by one command
@@ -485,6 +493,7 @@ func Aggregate(owner, repo, commit string, totalFiles, candidates int, results [
 			WriterMode:          r.Verdict.WriterMode,
 			WriterCalls:         writerCallsOf(r.Verdict),
 			WriterSeatsUngraded: r.Verdict.WriterSeatsUngraded,
+			WriterAttempts:      r.Verdict.WriterAttempts,
 			// And at which GRAIN it was measured: a rate averaged over
 			// mutants that each faced a different test set is not one
 			// measurement unless the report carries the spread.

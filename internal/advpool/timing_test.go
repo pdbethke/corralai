@@ -210,6 +210,49 @@ func TestTimedOutVerdictCarriesWhatItSpent(t *testing.T) {
 	}
 }
 
+// TestTimedOutVerdictAttributesAnOpenPhase is issue #201: a run whose writer
+// fan-out was genuinely IN FLIGHT when RunDeadline fired used to report that
+// phase as "—" — the same rendering as a phase that never ran at all —
+// because timeoutVerdict only ever copied the phases that had already
+// CLOSED (endPhase already called) and left anything still open in
+// run.phaseStart untouched, at its zero value. A phase that opened and spent
+// real wall clock before the deadline hit is not "did not run"; it is
+// "ran, and did not finish" — and the invariant is that no phase that
+// consumed time may render as one that did not.
+func TestTimedOutVerdictAttributesAnOpenPhase(t *testing.T) {
+	clk := &fakeClock{t: time.Date(2026, 8, 31, 9, 0, 0, 0, time.UTC)}
+	d := &Driver{Now: clk.Now, Assign: decorrelatedAssign()}
+
+	rs := testRunSpec()
+	run := &runState{rs: rs, startedAt: clk.Now(), devScored: true, phaseStart: map[string]time.Time{}}
+	run.timing.Generation = 4 * time.Minute
+	run.timing.DevPass = 5 * time.Minute
+	// The writer fan-out opened its phase (survivors were found and the
+	// writer seat(s) were promoted) 52 minutes before the deadline fired —
+	// exactly the shape from the field defect: a per-survivor writer that
+	// compiled, failed on the unmutated code, and was reissued, all inside
+	// this still-open window.
+	d.beginPhase(run, phaseAuthored)
+	clk.advance(52 * time.Minute)
+
+	v := d.timeoutVerdict(run)
+	if !v.TimedOut {
+		t.Fatal("timeoutVerdict did not mark the verdict timed out")
+	}
+	if v.Timing.AuthoredPass != 52*time.Minute {
+		t.Errorf("Timing.AuthoredPass = %v, want 52m — the phase RAN for that long even though it never converged", v.Timing.AuthoredPass)
+	}
+	if _, open := run.phaseStart[phaseAuthored]; open {
+		t.Error("the authored phase is still open after timeoutVerdict — it must be closed so a later read cannot double-count it")
+	}
+	// Critic never opened at all (the writer never converged, so the run
+	// never got to promote the critic) — that is a genuine "did not run"
+	// and must stay zero/unmeasured.
+	if v.Timing.Critic != 0 {
+		t.Errorf("Timing.Critic = %v, want 0 — the critic phase never opened", v.Timing.Critic)
+	}
+}
+
 // TestTimingRoundTripsThroughTheVerdictJSON: the whole Verdict is marshalled
 // into the ledger's verdict_json and read back on a cache hit. A Timing that
 // serialized as Go's default (nanosecond integers under Go field names) would

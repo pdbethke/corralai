@@ -3231,11 +3231,11 @@ func printWeakFile(w io.Writer, f reposcan.WeakFile) {
 	// run's calls, which this scan did not make. The mode is a property of
 	// the verdict and stays true however it was served; the count is a cost
 	// this run did not pay.
-	calls, ungraded := f.WriterCalls, f.WriterSeatsUngraded
+	calls, ungraded, attempts := f.WriterCalls, f.WriterSeatsUngraded, f.WriterAttempts
 	if f.CacheHit {
-		calls, ungraded = 0, 0
+		calls, ungraded, attempts = 0, 0, nil
 	}
-	if line := writerModeDisclosure(f.WriterMode, calls, ungraded); line != "" {
+	if line := writerModeDisclosure(f.WriterMode, calls, ungraded, attempts); line != "" {
 		fmt.Fprintf(w, "   %s\n", line)
 	}
 	// WHERE THE MINUTES WENT. Printed through the same helper `corral scans
@@ -4886,16 +4886,25 @@ func resolveRepoName(repoDir, given string) string {
 // mode, or a verdict earned before the mode existed. Silence is the honest
 // rendering: neither spelling is true of such a row, and printing one would
 // be an invented fact about how a measurement was made.
-func writerModeDisclosure(mode string, calls, seatsUngraded int) string {
+func writerModeDisclosure(mode string, calls, seatsUngraded int, attempts *advpool.TestsPerMutantSpread) string {
 	if strings.TrimSpace(mode) == "" {
 		return ""
+	}
+	// The attempts spread, appended to whatever else this line says: how
+	// many tries (first attempt plus repairs) a per-survivor seat took
+	// before it went terminal — nil on a batched run, or when this is a
+	// cache hit (see the caller). Answers cheaply whether the writer
+	// phase's cost was retries or slow single attempts (issue #201).
+	attemptsNote := ""
+	if attempts != nil {
+		attemptsNote = fmt.Sprintf(" — %d to %d attempts per survivor, median %d", attempts.Min, attempts.Max, attempts.Median)
 	}
 	// The call count is a MEASUREMENT (the seat's own ledger row), so 0 means
 	// "no cost row for this seat", not "the writer made no calls" — a cached
 	// verdict and a pre-cost-column row both look like that. The mode is
 	// still worth saying on its own.
 	if calls <= 0 {
-		return "writer: " + mode
+		return "writer: " + mode + attemptsNote
 	}
 	unit := "calls"
 	if calls == 1 {
@@ -4906,8 +4915,8 @@ func writerModeDisclosure(mode string, calls, seatsUngraded int) string {
 	// twenty-four survivors were never actually attempted reads exactly like
 	// one where all twenty-four were.
 	if seatsUngraded > 0 {
-		return fmt.Sprintf("writer: %s (%d %s, %d seats ungraded — those survivors were never attempted, so the proven count is over the rest)",
-			mode, calls, unit, seatsUngraded)
+		return fmt.Sprintf("writer: %s (%d %s, %d seats ungraded — those survivors were never attempted, so the proven count is over the rest)%s",
+			mode, calls, unit, seatsUngraded, attemptsNote)
 	}
-	return fmt.Sprintf("writer: %s (%d %s)", mode, calls, unit)
+	return fmt.Sprintf("writer: %s (%d %s)%s", mode, calls, unit, attemptsNote)
 }

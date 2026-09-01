@@ -108,6 +108,21 @@ ROSTER_ROLE_ORDER = [
 ]
 
 
+def unattributed_ms(f):
+    """Mirrors cmd/corral/timing_line.go's unattributed-term arithmetic: the
+    gap between TotalMillis (the driver's own elapsed clock) and the sum of
+    the phases this file's line names — pool + generation + dev pass +
+    authored + critic, deliberately NOT selection (that's the scan's, not
+    this file's). None-valued (unmeasured) phases count as 0. Returns 0 when
+    there is nothing to attribute, or when Total itself is unmeasured."""
+    total = f.get("TotalMillis")
+    if not total:
+        return 0
+    parts = ("PoolMillis", "GenerationMillis", "DevPassMillis", "AuthoredPassMillis", "CriticMillis")
+    known = sum(f.get(k) or 0 for k in parts)
+    return max(0, total - known)
+
+
 def timing_line(f, n, med, mx):
     """Mirrors cmd/corral/timing_line.go's timingLine."""
     dev = duration_text(f.get("DevPassMillis"))
@@ -120,8 +135,11 @@ def timing_line(f, n, med, mx):
         "dev pass " + dev,
         "authored " + duration_text(f.get("AuthoredPassMillis")),
         "critic " + duration_text(f.get("CriticMillis")),
-        "total " + duration_text(f.get("TotalMillis")),
     ]
+    u = unattributed_ms(f)
+    if u > 0:
+        parts.append("unattributed " + duration_text(u))
+    parts.append("total " + duration_text(f.get("TotalMillis")))
     return "time: " + " · ".join(parts)
 
 
@@ -178,6 +196,7 @@ def render_table(scans):
                 "dev_pass": _dev_pass_cell(f),
                 "authored": duration_text(f.get("AuthoredPassMillis")),
                 "critic": duration_text(f.get("CriticMillis")),
+                "unattributed": duration_text(unattributed_ms(f)) if unattributed_ms(f) > 0 else "—",
                 "total": duration_text(f.get("TotalMillis")),
                 "cost": (cost_line(s["ModelCalls"], f["Path"]) or "—").removeprefix("cost: "),
                 "kill_rate": _kill_rate_cell(f),
@@ -196,6 +215,7 @@ def render_table(scans):
         ("dev pass (mutants, median, max)", "dev_pass"),
         ("authored", "authored"),
         ("critic", "critic"),
+        ("unattributed", "unattributed"),
         ("**total**", "total"),
         ("cost", "cost"),
         ("kill rate", "kill_rate"),

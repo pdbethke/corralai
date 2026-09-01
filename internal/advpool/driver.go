@@ -498,13 +498,24 @@ type Verdict struct {
 	// there is deliberately NO ledger column for it this round, so a query
 	// that wants it must read the JSON rather than find a half-populated
 	// column.
-	WriterSeatsUngraded int             `json:"writer_seats_ungraded,omitempty"`
-	RegionsTotal        int             // mutant-generator seats the run dispatched
-	RegionsProbed       int             // seats that returned usable mutants
-	DroppedRegions      []string        // seats abandoned after MaxShardRetries — the coverage shortfall
-	VacuousFindings     []queue.Finding // test-critic's designed-to-pass/vacuous flags
-	ModelsByRole        map[string]string
-	Status              string // certified | needs-review
+	WriterSeatsUngraded int `json:"writer_seats_ungraded,omitempty"`
+	// WriterAttempts is the spread of how many attempts (the first try plus
+	// every compile/compliant-failure repair) each PER-SURVIVOR writer seat
+	// took before it went terminal — the same shape as TestsPerMutant, over
+	// a different population. It exists so the next optimisation can tell
+	// apart a writer phase that cost what it cost because of RETRIES (a high
+	// median/max here) from one that cost what it cost because each seat's
+	// single attempt was itself slow (AuthoredPass large, this spread flat
+	// at 1). Nil on a batched run (one seat, one repair budget for the whole
+	// file — a single count would not be a spread) and on a run that never
+	// reached the writer at all.
+	WriterAttempts  *TestsPerMutantSpread `json:"writer_attempts,omitempty"`
+	RegionsTotal    int                   // mutant-generator seats the run dispatched
+	RegionsProbed   int                   // seats that returned usable mutants
+	DroppedRegions  []string              // seats abandoned after MaxShardRetries — the coverage shortfall
+	VacuousFindings []queue.Finding       // test-critic's designed-to-pass/vacuous flags
+	ModelsByRole    map[string]string
+	Status          string // certified | needs-review
 	// TestWriterFailed is true when the pool exhausted MaxTestWriterAttempts
 	// without producing a compiling killing test. HONESTY NOTE: when this is
 	// true, ProvenMissed==0 does NOT mean "no real gaps" — it means "gaps
@@ -785,8 +796,15 @@ type writerAttempt struct {
 	taskID  int64
 	test    string
 	repairs int
-	done    bool
-	proven  bool
+	// attempts is EVERY model result this seat has consumed, success or
+	// failure — unlike repairs, which counts only reissues and is
+	// incremented on the final, non-reissued try by ONE of the two
+	// exhaustion paths and not the other (see advanceWriterAttempt), making
+	// it an unreliable stand-in for "how many tries did this seat take".
+	// attempts is the honest count Verdict.WriterAttempts is built from.
+	attempts int
+	done     bool
+	proven   bool
 	// measured is this seat's own primaryWriterMeasured: its test genuinely
 	// graded against its survivor (baseline passed, canary killed, something
 	// scored). UNMEASURED IS NOT ZERO holds per seat exactly as it holds per
@@ -1348,6 +1366,30 @@ func (d *Driver) endPhase(run *runState, phase string) time.Duration {
 	}
 	delete(run.phaseStart, phase)
 	return d.now().Sub(start)
+}
+
+// attributeOpenPhases closes every phase still open in run.phaseStart and
+// credits it with the wall clock it spent, for a run that stops WITHOUT ever
+// reaching the ordinary tick-boundary code that closes a phase the moment it
+// converges (see the phaseAuthored/phaseCritic closes in Tick and
+// tickPoolAdequacy).
+//
+// This exists because a phase that RAN must never render as one that did
+// not: issue #201 measured a per-survivor writer fan-out running for roughly
+// an hour (compiling, failing on the unmutated code, reissued) while
+// timeoutVerdict left Timing.AuthoredPass at its zero value because
+// beginPhase had opened it but nothing had ever called endPhase — the exact
+// rendering timingLine reserves for "did not run". A phase genuinely never
+// reached (phaseStart never carries its key — e.g. the critic when the
+// writer stalled before promoting it) is untouched here and correctly stays
+// at zero.
+func (d *Driver) attributeOpenPhases(run *runState) {
+	if a := d.endPhase(run, phaseAuthored); a > 0 {
+		run.timing.AuthoredPass += a
+	}
+	if c := d.endPhase(run, phaseCritic); c > 0 {
+		run.timing.Critic += c
+	}
 }
 
 func (d *Driver) StartRun(missionID int64, rs RunSpec, sigs []repoindex.Signature) error {
@@ -2524,6 +2566,7 @@ func (d *Driver) tickAggregate(ctx context.Context, missionID int64, run *runSta
 	v.WriterMode = run.writerMode
 	v.AuthoredExtra = run.authoredExtra
 	v.WriterSeatsUngraded = run.writerSeatsUngraded()
+	v.WriterAttempts = writerAttemptSpread(run)
 	// Narrows PoolTestUnsound to "your test command never collected the
 	// authored test's file" -- set here rather than widening aggregate()'s
 	// signature, alongside the other post-aggregate diagnosis fields.
@@ -2942,6 +2985,7 @@ func (d *Driver) timeoutVerdict(run *runState) Verdict {
 	v.WriterMode = run.writerMode
 	v.AuthoredExtra = run.authoredExtra
 	v.WriterSeatsUngraded = run.writerSeatsUngraded()
+	v.WriterAttempts = writerAttemptSpread(run)
 	// Coverage fields (I-5): a run that dispatched N regions and dropped
 	// some before hitting RunDeadline must carry that shortfall on the
 	// timeout verdict too, or the CLI's RegionsTotal > 0 guard silently
@@ -2955,9 +2999,15 @@ func (d *Driver) timeoutVerdict(run *runState) Verdict {
 	// A stalled run still spent everything it spent, and it is the run an
 	// operator most needs the clock for: "which phase was it sitting in when
 	// the deadline hit" is answerable only from the phases that DID close,
-	// plus a Total that says how long it sat. Any phase still open when the
-	// deadline fired stays absent rather than being closed at an arbitrary
-	// moment and passed off as complete.
+	// PLUS whatever phase was still open — attributed here with the wall
+	// clock it actually spent, not left at the zero-value "—" that means "did
+	// not run". A phase in flight when the deadline fires is not the same
+	// claim as a phase that never started (see attributeOpenPhases): a
+	// per-survivor writer that compiled, failed on the unmutated code, and
+	// was mid-reissue when RunDeadline fired genuinely ran for however long
+	// it ran, and this is the last chance to say so before its own start
+	// time is lost.
+	d.attributeOpenPhases(run)
 	v.Timing = timingWith(v.Timing, run.timing)
 	v.Timing.Total = totalWith(v.Timing, d.now().Sub(run.startedAt))
 	v.MutantDurationMedian = run.mutantDurationMedian

@@ -608,6 +608,52 @@ func TestWriterSeatsUngradedCountsTheSeatsThatNeverGraded(t *testing.T) {
 	}
 }
 
+// TestWriterAttemptsSpreadCountsRetriesPerSurvivor pins issue #201's fifth
+// requirement: the writer's per-survivor attempt count (first try plus every
+// repair), cheaply extended off the same writerAttempts state
+// WriterSeatsUngraded already reads — so a reader can tell whether a slow
+// writer phase cost what it cost in RETRIES (this spread) or in slow single
+// attempts (AuthoredPass alone).
+func TestWriterAttemptsSpreadCountsRetriesPerSurvivor(t *testing.T) {
+	const (
+		testA   = "package target\n\nimport \"testing\"\n\nfunc TestKillsA(t *testing.T) {}\n"
+		badTest = "package target\nthis does not compile\n"
+	)
+	d, missionID, _ := fanoutRun(t, WriterModePerSurvivor,
+		map[string]string{testA: "m1"}, map[string]bool{badTest: true})
+	devTick(t, d, missionID)
+
+	v := driveFanout(t, d, missionID, map[string]string{
+		"test-writer/m1": testA,   // one clean attempt
+		"test-writer/m2": badTest, // never compiles: exhausts MaxTestWriterAttempts (3)
+		"test-writer/m3": badTest, // same
+	})
+	if v.WriterAttempts == nil {
+		t.Fatal("WriterAttempts is nil, want a spread — this is a per-survivor run whose fan-out ran")
+	}
+	if v.WriterAttempts.Min != 1 {
+		t.Errorf("WriterAttempts.Min = %d, want 1 (m1's single clean attempt)", v.WriterAttempts.Min)
+	}
+	if v.WriterAttempts.Max != MaxTestWriterAttempts {
+		t.Errorf("WriterAttempts.Max = %d, want %d (m2/m3 exhausted every retry)", v.WriterAttempts.Max, MaxTestWriterAttempts)
+	}
+}
+
+// TestWriterAttemptsSpreadAbsentForBatchedMode: a batched run has ONE seat
+// and one repair budget for the whole file — a single count is not a
+// spread, and reporting {N,N,N} would dress up one number as a measurement
+// over many survivors it never had.
+func TestWriterAttemptsSpreadAbsentForBatchedMode(t *testing.T) {
+	d, missionID, _ := fanoutRun(t, WriterModeBatched, nil, nil)
+	devTick(t, d, missionID)
+	v := driveFanout(t, d, missionID, map[string]string{
+		"test-writer": "package target\n\nfunc TestOK(t *testing.T) {}\n",
+	})
+	if v.WriterAttempts != nil {
+		t.Errorf("WriterAttempts = %+v, want nil for a batched run", v.WriterAttempts)
+	}
+}
+
 // TestScorecardAgreesAcrossModesOnASoundButUnluckyRun. The scorecard grades
 // MODELS, so the same writer behaviour must score the same in either mode: a
 // suite that graded soundly and killed nothing is a real "tried and missed" —

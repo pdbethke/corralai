@@ -25,7 +25,7 @@ invariant hiding as ordinary bugs — see "The bug shape that keeps recurring".
 
 ## Build, test, and the gates that will fail your PR
 
-Go 1.26.5 (see `go.mod`). No Makefile; use the Go toolchain directly.
+Go 1.26.6 (see `go.mod`). No Makefile; use the Go toolchain directly.
 
 ```bash
 go build ./...

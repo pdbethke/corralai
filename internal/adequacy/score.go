@@ -80,7 +80,16 @@ type scoreConfig struct {
 	// nil (the default) leaves every KilledBy empty and keeps the mutant runs
 	// on the plain, output-discarding path they have always used.
 	failureParser lang.FailureParser
+	// failFast, when set, yields the runner's stop-at-first-failure arguments
+	// for a MUTANT run's command. nil (the default) is today's behaviour.
+	failFast FailFastFor
 }
+
+// FailFastFor returns the stop-at-first-failure arguments to append to one
+// MUTANT run's command, or ok=false for a runner that has none. It is the
+// language plugin's lang.FailFaster, passed in rather than looked up here so
+// adequacy stays language-agnostic.
+type FailFastFor func(cmd []string) (args []string, ok bool)
 
 // MutantCommand is what CommandFor decides for one mutant.
 type MutantCommand struct {
@@ -132,6 +141,33 @@ func WithMutantCompileCheck(cmds [][]string) ScoreOption {
 // a guess.
 func WithFailureParser(p lang.FailureParser) ScoreOption {
 	return func(c *scoreConfig) { c.failureParser = p }
+}
+
+// WithMutantFailFast lets each MUTANT's run stop at its first failing test.
+//
+// A killed mutant needs exactly ONE failing test; scoring has always paid for
+// the whole selected set to finish anyway, on every one of the ~42 runs a file
+// costs. This is the largest per-mutant saving available that cannot move a
+// verdict: "did any selected test fail" is the same question whether the
+// runner stopped at the first failure or ran to the end, and killed_by already
+// records the FIRST failure the output named.
+//
+// THREE THINGS ARE DELIBERATELY OUT OF ITS REACH:
+//
+//   - the compliant BASELINE, which must execute everything — a suite corral
+//     certifies is a suite corral ran;
+//   - the CANARY, which is a baseline run on invalid source;
+//   - the compile gate, which is not a test run at all.
+//
+// AND IT IS PROVEN BEFORE IT IS USED. An argument the runner does not
+// recognise makes it exit non-zero, which this scorer reads as a kill — so an
+// unrecognised flag would silently take every kill rate to 1.00. Score
+// therefore re-runs the compliant baseline ONCE with the args appended and
+// only enables fail-fast if that run still passes; otherwise it is dropped and
+// Report.FailFastNote says so. One extra suite run per file, against a saving
+// proportional to the mutant count.
+func WithMutantFailFast(f FailFastFor) ScoreOption {
+	return func(c *scoreConfig) { c.failFast = f }
 }
 
 // WithConcurrency scores up to n mutants at once. The default (and anything
@@ -384,6 +420,22 @@ type Report struct {
 	// ordinary Python repos, which is why an estimate extrapolated from one
 	// repo is worthless. Recording it turns capacity planning into a query.
 	BaselineDuration time.Duration
+	// FailFast reports whether MUTANT runs actually stopped at their first
+	// failing test (see WithMutantFailFast). False both when no fail-fast was
+	// configured and when the probe below rejected it.
+	FailFast bool
+	// DuplicateMutants is how many of the graded mutants were byte-identical
+	// edits of an earlier one and so were RUN once and answered twice (see
+	// the collapse in Score). It changes no number in this report — every
+	// duplicate is still in Killed/Survived, still has its own PerMutant
+	// entry, and still counts in Total — it only says how many suite runs the
+	// set did not have to pay for. Disclosed because a reader comparing wall
+	// clock to mutant count is otherwise looking at an unexplained gap.
+	DuplicateMutants int
+	// FailFastNote explains a fail-fast that was asked for and NOT used —
+	// empty when none was asked for, and empty when it was used. It is a
+	// disclosure, not an error: the run is correct either way, just slower.
+	FailFastNote string
 	// Total is the number of mutants actually GRADED — killed + survived. It
 	// deliberately EXCLUDES Invalid, because KillRate divides by it and a
 	// mutant the compiler rejected is not part of any exam the suite sat.
@@ -678,6 +730,41 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 		perMutant = clampMutantTimeout(baseDur)
 	}
 
+	// FAIL-FAST, PROVEN BEFORE IT IS USED. The args come from the language
+	// plugin's own runner knowledge, but "the runner accepts this flag" is a
+	// fact about the TARGET's installed toolchain, not about the plugin — and
+	// a rejected flag exits non-zero, which every mutant run below would score
+	// as a kill. So the compliant baseline is re-run once with the args
+	// appended: if it still passes, the runner took the flag and a mutant's
+	// non-zero exit still means a failing test. If it does not, fail-fast is
+	// dropped for this file and the reason is disclosed. Never attempted with
+	// no mutants to score (there is nothing to save) and never applied to the
+	// baseline or the canary above, which must run everything.
+	failFast := func(cmd []string) []string { return cmd }
+	if cfg.failFast != nil && len(mutants) > 0 {
+		if args, ok := cfg.failFast(testCmd); ok {
+			probeCmd := lang.AppendFailFast(testCmd, args)
+			if len(probeCmd) == len(testCmd) {
+				rep.FailFastNote = "the test command already stops at the first failure"
+			} else {
+				pctx, pcancel := context.WithTimeout(ctx, perMutant)
+				ffPass, ffErr := runCmd(pctx, compliantCode, probeCmd)
+				pcancel()
+				switch {
+				case ffErr != nil:
+					rep.FailFastNote = fmt.Sprintf("fail-fast (%s) not used: the probe run failed: %v", strings.Join(args, " "), ffErr)
+				case !ffPass:
+					rep.FailFastNote = fmt.Sprintf("fail-fast (%s) not used: the healthy suite does not pass with it, so the runner does not accept it", strings.Join(args, " "))
+				default:
+					rep.FailFast = true
+					failFast = func(cmd []string) []string { return lang.AppendFailFast(cmd, args) }
+				}
+			}
+		} else {
+			rep.FailFastNote = "this runner has no stop-at-first-failure flag corral is sure of"
+		}
+	}
+
 	// rep.Total is NOT set from len(mutants) here: with the compile gate on,
 	// the graded count is only known once invalid mutants have been separated
 	// out (see the assignment after the assembly loop). Setting it up front is
@@ -696,6 +783,40 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 		grading       *MutantGrading
 	}
 	outcomes := make([]outcome, len(mutants))
+
+	// DUPLICATE HUNKS ARE GRADED ONCE AND ANSWERED TWICE.
+	//
+	// Two mutants with the same (span, SEARCH, REPLACE, parent) are the same
+	// edit of the same bytes: the jail would build the identical file and the
+	// suite would return the identical answer, at the cost of a second full
+	// suite run. Sharded generation produces them routinely (several seats
+	// aimed at overlapping regions; a model asked for n distinct mutations
+	// emitting one twice).
+	//
+	// THE DENOMINATOR IS NOT TOUCHED. Every duplicate still appears in
+	// Killed/Survived, still gets its own PerMutant entry with the same
+	// killed_by, and still counts in Total — it is simply not RUN a second
+	// time to be told what its twin already proved. That is what keeps this a
+	// speed change and not a measurement change: collapsing the DENOMINATOR
+	// instead would move the kill rate whenever a set contained a repeat,
+	// which is a different exam, not a faster one.
+	//
+	// Never across files by construction: every mutant here is a single-point
+	// edit of the same compliantCode.
+	repOf := make([]int, len(mutants))
+	firstSeen := make(map[MutantIdentity]int, len(mutants))
+	dupes := 0
+	for i, m := range mutants {
+		id := IdentityOf(m)
+		if j, ok := firstSeen[id]; ok {
+			repOf[i] = j
+			dupes++
+			continue
+		}
+		firstSeen[id] = i
+		repOf[i] = i
+	}
+	rep.DuplicateMutants = dupes
 
 	scoreOne := func(i int, m Mutant) {
 		// THE FILE IS MATERIALISED HERE AND NOWHERE ELSE. A mutant is its hunk;
@@ -751,6 +872,9 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 			// TestsRun 0 / Rule "" here, which is what it always got.
 			grading = &MutantGrading{}
 		}
+		// FAIL-FAST APPLIES HERE AND ONLY HERE: one mutant's own suite run.
+		// A no-op unless the probe above proved the runner takes the flag.
+		cmd = failFast(cmd)
 		mctx, cancel := context.WithTimeout(ctx, perMutant)
 		// THE measurement: the single suite run that decides this mutant's
 		// verdict. Recorded even when that run errors or times out, so a
@@ -831,6 +955,9 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 		sem := make(chan struct{}, cfg.concurrency)
 		var wg sync.WaitGroup
 		for i, m := range mutants {
+			if repOf[i] != i {
+				continue
+			}
 			wg.Add(1)
 			sem <- struct{}{}
 			go func(i int, m Mutant) {
@@ -842,8 +969,30 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 		wg.Wait()
 	} else {
 		for i, m := range mutants {
+			if repOf[i] != i {
+				continue
+			}
 			scoreOne(i, m)
 		}
+	}
+
+	// Every duplicate inherits its representative's outcome VERBATIM — the
+	// same verdict, the same killed_by, the same invalid reason — because it
+	// is the same edit and would have produced exactly that. Duration is
+	// inherited too and is the ONE field that is a claim about a run that did
+	// not happen; it is the twin's real measurement of the identical work, and
+	// mutantSpread reads a set of durations, not a bill.
+	for i := range mutants {
+		j := repOf[i]
+		if j == i {
+			continue
+		}
+		o := outcomes[j]
+		if o.grading != nil {
+			g := *o.grading
+			o.grading = &g
+		}
+		outcomes[i] = o
 	}
 
 	for i, m := range mutants {

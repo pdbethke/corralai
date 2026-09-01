@@ -33,22 +33,27 @@ type advFinding struct {
 // tags, so its keys are the Go-default CAPITALIZED field names — matched here
 // verbatim. Changing these breaks decoding.
 type advVerdict struct {
-	Repo            string            `json:"Repo"`
-	Commit          string            `json:"Commit"`
-	Lang            string            `json:"Lang"`
-	DevKillRate     float64           `json:"DevKillRate"`
-	MutantsTotal    int               `json:"MutantsTotal"`
-	MutantsInvalid  int               `json:"MutantsInvalid"`
-	Survivors       int               `json:"Survivors"`
-	ProvenMissed    int               `json:"ProvenMissed"`
-	RegionsTotal    int               `json:"RegionsTotal"`
-	RegionsProbed   int               `json:"RegionsProbed"`
-	DroppedRegions  []string          `json:"DroppedRegions"`
-	VacuousFindings []advFinding      `json:"VacuousFindings"`
-	ModelsByRole    map[string]string `json:"ModelsByRole"`
-	Status          string            `json:"Status"`
-	RecordID        int64             `json:"RecordID"`
-	RecordHead      string            `json:"RecordHead"`
+	Repo           string   `json:"Repo"`
+	Commit         string   `json:"Commit"`
+	Lang           string   `json:"Lang"`
+	DevKillRate    float64  `json:"DevKillRate"`
+	MutantsTotal   int      `json:"MutantsTotal"`
+	MutantsInvalid int      `json:"MutantsInvalid"`
+	Survivors      int      `json:"Survivors"`
+	ProvenMissed   int      `json:"ProvenMissed"`
+	RegionsTotal   int      `json:"RegionsTotal"`
+	RegionsProbed  int      `json:"RegionsProbed"`
+	DroppedRegions []string `json:"DroppedRegions"`
+	// DuplicateMutants: generated mutants that were byte-identical edits of
+	// another and were collapsed before scoring — see
+	// adequacy.DedupeMutants. Disclosed so the graded denominator is
+	// explainable.
+	DuplicateMutants int               `json:"duplicate_mutants,omitempty"`
+	VacuousFindings  []advFinding      `json:"VacuousFindings"`
+	ModelsByRole     map[string]string `json:"ModelsByRole"`
+	Status           string            `json:"Status"`
+	RecordID         int64             `json:"RecordID"`
+	RecordHead       string            `json:"RecordHead"`
 	// TestWriterFailed mirrors advpool.Verdict.TestWriterFailed: true when the
 	// pool exhausted its compile-retry budget without authoring a compiling
 	// killing test. See renderAdvVerdict for the honest readout this drives.
@@ -448,6 +453,9 @@ func renderAdvVerdict(w io.Writer, codePath string, v advVerdict) {
 		} else {
 			fmt.Fprintf(w, "  the herd authored a test for %d survivor(s) your suite missed, but it did not pass on the unmutated code — it was not scored, review these manually\n", v.Survivors)
 		}
+	}
+	if v.DuplicateMutants > 0 {
+		fmt.Fprintf(w, "  %d duplicate mutant(s) collapsed — identical hunks cost one suite run each and measure the same thing once\n", v.DuplicateMutants)
 	}
 	if v.RegionsTotal > 0 && v.RegionsProbed < v.RegionsTotal {
 		fmt.Fprintf(w, "  PARTIAL AUDIT: %d of %d regions probed — these went unprobed: %s\n",

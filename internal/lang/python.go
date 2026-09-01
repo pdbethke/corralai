@@ -1542,7 +1542,18 @@ func (pyPlugin) ForSpan(sel Selection, span LineRange) ([]string, []string, stri
 	if len(ids) == 0 {
 		return file(SpanRuleUnreached)
 	}
-	sort.Strings(ids)
+	// KILL-LIKELIEST FIRST. The evidence already knows how many of the
+	// mutated span's own lines each covering test executes; a test that runs
+	// more of the changed code is likelier to observe the change. With
+	// per-mutant fail-fast (lang.FailFaster) the average killed mutant then
+	// costs the tests up to its killer rather than the whole set.
+	//
+	// THIS CHANGES ORDER ONLY. Exactly the ids selected above are returned,
+	// which is what keeps the verdict identical: "did any selected test fail"
+	// does not depend on the sequence they ran in. The tie-break is the id, so
+	// the order is still TOTAL and deterministic — two runs of the same
+	// evidence produce the same command, which a signed record requires.
+	sortBySpanCoverage(ids, sel, span)
 	ids, _ = collapseToFilesIfTooLong(ids)
 	base := sel.Base
 	if base == nil {
@@ -1753,4 +1764,50 @@ func (pyPlugin) FirstFailure(output []byte) string {
 		return prefix + rest
 	}
 	return ""
+}
+
+// FailFastArgs is pytest's `-x` (or unittest's `--failfast`) — stop at the
+// first failing test. Recognised from the COMMAND, because a Python repo may
+// be graded by either runner and only the runner's own flag is safe to append.
+// See lang.FailFaster for why a wrong guess would inflate the kill rate.
+func (pyPlugin) FailFastArgs(testCmd []string) ([]string, bool) {
+	if len(testCmd) == 0 || cmdIsShellWrapped(testCmd) {
+		return nil, false
+	}
+	if cmdHasWord(testCmd, "pytest") {
+		return []string{"-x"}, true
+	}
+	if cmdHasWord(testCmd, "unittest") {
+		return []string{"--failfast"}, true
+	}
+	return nil, false
+}
+
+// sortBySpanCoverage orders ids by how many of span's own lines each test
+// executed, descending, tie-broken by id ascending. See ForSpan for why this
+// is safe: it reorders a set it does not change.
+func sortBySpanCoverage(ids []string, sel Selection, span LineRange) {
+	reach := make(map[string]int, len(ids))
+	for _, id := range ids {
+		n := 0
+		for _, r := range sel.Lines[id] {
+			lo, hi := r.Start, r.End
+			if lo < span.Start {
+				lo = span.Start
+			}
+			if hi > span.End {
+				hi = span.End
+			}
+			if hi >= lo {
+				n += hi - lo + 1
+			}
+		}
+		reach[id] = n
+	}
+	sort.SliceStable(ids, func(i, j int) bool {
+		if reach[ids[i]] != reach[ids[j]] {
+			return reach[ids[i]] > reach[ids[j]]
+		}
+		return ids[i] < ids[j]
+	})
 }

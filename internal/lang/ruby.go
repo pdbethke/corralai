@@ -153,3 +153,18 @@ func (rubyPlugin) ParseTestList(string) []string { return nil }
 // same-second, same-length staleness hole. See lang.Plugin.WorkspaceRunEnv's
 // doc comment.
 func (rubyPlugin) WorkspaceRunEnv() (env []string, cleanup func()) { return nil, func() {} }
+
+// FailFastArgs is rspec's `--fail-fast`. Minitest is deliberately ABSENT:
+// its own --fail-fast arrived in minitest 5.22, and an older minitest treats
+// an unknown option as an error — which the scorer would read as a kill for
+// every mutant. rspec is the one Ruby runner whose flag corral is sure of.
+// See lang.FailFaster.
+func (rubyPlugin) FailFastArgs(testCmd []string) ([]string, bool) {
+	if len(testCmd) == 0 || cmdIsShellWrapped(testCmd) {
+		return nil, false
+	}
+	if cmdHasWord(testCmd, "rspec") {
+		return []string{"--fail-fast"}, true
+	}
+	return nil, false
+}

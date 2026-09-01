@@ -231,6 +231,15 @@ type JailScorer struct {
 	// place that resolves a plugin for a run also decides whether that
 	// plugin's runner output is parseable at all.
 	FailureParser golang.FailureParser
+	// FailFast, when non-nil, lets each MUTANT's run stop at its first failing
+	// test (see adequacy.WithMutantFailFast). nil — every existing
+	// JailScorer{} literal, and the `--no-fail-fast` escape hatch — runs every
+	// selected test to completion, which is what corral always did.
+	//
+	// Passed in rather than derived from Lang here for the same reason
+	// FailureParser is: the ONE place that resolves a plugin for a run also
+	// decides whether the operator asked for this at all.
+	FailFast adequacy.FailFastFor
 }
 
 // scoreOpts is the option list every adequacy.Score call in this file shares.
@@ -242,6 +251,7 @@ func (s JailScorer) baseScoreOpts() []adequacy.ScoreOption {
 		adequacy.WithMutantTimeout(s.MutantTimeout),
 		adequacy.WithConcurrency(s.Concurrency),
 		adequacy.WithFailureParser(s.FailureParser),
+		adequacy.WithMutantFailFast(s.FailFast),
 	}
 }
 

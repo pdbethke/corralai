@@ -98,6 +98,7 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 	jailFlag := fs.String("jail", "", "sandbox backend: bwrap|container (Linux), sandbox-exec (macOS) (default: auto-detect for this OS; \"none\" is not supported — --local always sandboxes). \"container\" needs CORRALAI_EXEC_IMAGE set to a toolchain image, e.g. CORRALAI_EXEC_IMAGE=python:3.12-bookworm")
 	timeout := fs.Duration("timeout", 10*time.Minute, "give up if the run makes no progress for this long (not a hard wall-clock cap — a single slow LLM call can overshoot it)")
 	testTimeout := fs.Duration("test-timeout", 0, "hard cap on a SINGLE test-suite run in the jail (0 = auto: derived from the healthy suite's own runtime, so a mutant that makes the suite hang is killed fast instead of eating the whole --timeout). Raise it only if your suite legitimately runs long")
+	noFailFast := fs.Bool("no-fail-fast", false, noFailFastHelp)
 	poll := fs.Duration("poll", 2*time.Second, "how long to wait between drive iterations when nothing is claimable")
 	repoFlag := fs.String("repo", "", "repository (default: git remote.origin.url, else \"local\")")
 	commitFlag := fs.String("commit", "", "commit sha (default: git rev-parse HEAD, else \"local\")")
@@ -294,7 +295,8 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 		lang: strings.TrimSpace(*langFlag),
 
 		swarm: *swarmFlag, mutantTimeout: *testTimeout, timeout: *timeout,
-		poll: *poll, nMutants: *nMutants, maxShards: *maxShardsFlag,
+		noFailFast: *noFailFast,
+		poll:       *poll, nMutants: *nMutants, maxShards: *maxShardsFlag,
 
 		writerModel: *writerModel, criticModel: *criticModel,
 		mutantModel: *mutantModel, shadowModel: *shadowModelFlag,
@@ -387,11 +389,15 @@ type localAuditInput struct {
 	// place that number is decided; the pool's own probe is what may still
 	// reduce it, per file, to a number the suite can actually survive.
 	mutantConcurrency int
-	mutantTimeout     time.Duration
-	timeout           time.Duration
-	poll              time.Duration
-	nMutants          int
-	maxShards         int
+	// noFailFast turns OFF the per-mutant stop-at-first-failure flag — see
+	// noFailFastHelp for what that costs. False (the default) lets a killed
+	// mutant stop at the one failing test that killed it.
+	noFailFast    bool
+	mutantTimeout time.Duration
+	timeout       time.Duration
+	poll          time.Duration
+	nMutants      int
+	maxShards     int
 
 	// Role models. Empty means this file's stock default.
 	writerModel, criticModel, mutantModel, shadowModel string
@@ -760,7 +766,7 @@ func prepareAuditJail(ctx context.Context, in localAuditInput, plug lang.Plugin,
 		baseArgv: in.baseArgv, selection: in.selection,
 		bindDirFlag: in.bindDirs, noBindDepsFlag: in.noBindDeps, stdout: stdout,
 		seed: in.seed, substrate: in.substrate, mutantConcurrency: in.mutantConcurrency,
-		concurrency: in.concurrency, pool: in.pool,
+		concurrency: in.concurrency, pool: in.pool, noFailFast: in.noFailFast,
 	})
 	if err != nil {
 		return p, auditUsageErr("%v", err)
@@ -1651,6 +1657,8 @@ type jailWiringInput struct {
 	// substrate, that many PRIVATE TREES in the pool. See
 	// localAuditInput.mutantConcurrency.
 	mutantConcurrency int
+	// noFailFast mirrors localAuditInput.noFailFast.
+	noFailFast bool
 	// concurrency is localAuditInput.concurrency, threaded through: the
 	// workspace branch writes the probe's answer there. nil records nothing.
 	concurrency *adequacy.Disclosure
@@ -1778,6 +1786,20 @@ func buildJailWiring(ctx context.Context, in jailWiringInput) (w jailWiring, err
 	var failureParser lang.FailureParser
 	if plug, ok := lang.ByName(in.langName); ok {
 		failureParser, _ = plug.(lang.FailureParser)
+	}
+
+	// A KILLED MUTANT NEEDS ONE FAILING TEST. Resolved off the same plugin,
+	// in the same place, for the same reason: the flag belongs to the RUNNER
+	// (see lang.FailFaster), and adequacy re-proves the healthy suite still
+	// passes with it before a single mutant is graded with it. nil under
+	// --no-fail-fast, which is byte-for-byte what corral always did.
+	var failFast adequacy.FailFastFor
+	if !in.noFailFast {
+		if plug, ok := lang.ByName(in.langName); ok {
+			if _, isFF := plug.(lang.FailFaster); isFF {
+				failFast = func(cmd []string) ([]string, bool) { return lang.FailFastArgsFor(plug, cmd) }
+			}
+		}
 	}
 
 	if in.substrate == substrateWorkspace {
@@ -1917,7 +1939,7 @@ func buildJailWiring(ctx context.Context, in jailWiringInput) (w jailWiring, err
 		// has ONE tree, and a scorer told to run six mutants at once against
 		// it would queue five of them behind the borrow channel for the whole
 		// audit. The number that scores must be the number that exists.
-		w.scorer = advpool.JailScorer{Jail: pool, BaseFiles: base, MutantTimeout: in.testTimeout, DevTestPath: w.devTestKey, Concurrency: pool.Trees(), Lang: in.langName, Selection: in.selection, FailureParser: failureParser}
+		w.scorer = advpool.JailScorer{Jail: pool, BaseFiles: base, MutantTimeout: in.testTimeout, DevTestPath: w.devTestKey, Concurrency: pool.Trees(), Lang: in.langName, Selection: in.selection, FailureParser: failureParser, FailFast: failFast}
 		w.validator = advpool.JailValidator{Jail: pool, BaseFiles: base, DevTestPath: w.devTestKey}
 		w.jailEnum = advpool.JailEnumerator{Jail: pool, BaseFiles: base}
 		// w.depBinds stays nil: there is nothing to bind read-only when the
@@ -1971,7 +1993,7 @@ func buildJailWiring(ctx context.Context, in jailWiringInput) (w jailWiring, err
 		// RunSpec.Matrix, so wiring it here costs nothing when --matrix is off
 		// (the flag is the real gate).
 		enumerator := newRunEnumerator(in.iso, in.timeout, depBinds)
-		w.scorer = advpool.JailScorer{Jail: jail, BaseFiles: repoFiles, MutantTimeout: in.testTimeout, DevTestPath: w.devTestKey, Concurrency: in.mutantConcurrency, Lang: in.langName, Selection: in.selection, FailureParser: failureParser}
+		w.scorer = advpool.JailScorer{Jail: jail, BaseFiles: repoFiles, MutantTimeout: in.testTimeout, DevTestPath: w.devTestKey, Concurrency: in.mutantConcurrency, Lang: in.langName, Selection: in.selection, FailureParser: failureParser, FailFast: failFast}
 		w.validator = advpool.JailValidator{Jail: jail, BaseFiles: repoFiles, DevTestPath: w.devTestKey}
 		w.jailEnum = advpool.JailEnumerator{Jail: enumerator, BaseFiles: repoFiles}
 		if len(depBinds) > 0 {
@@ -1986,7 +2008,7 @@ func buildJailWiring(ctx context.Context, in jailWiringInput) (w jailWiring, err
 		w.devTestKey = filepath.Base(in.testPath)
 		jail := newRunJail(in.iso, in.timeout, nil)
 		enumerator := newRunEnumerator(in.iso, in.timeout, nil)
-		w.scorer = advpool.JailScorer{Jail: jail, MutantTimeout: in.testTimeout, Concurrency: in.mutantConcurrency, Lang: in.langName, Selection: in.selection, FailureParser: failureParser}
+		w.scorer = advpool.JailScorer{Jail: jail, MutantTimeout: in.testTimeout, Concurrency: in.mutantConcurrency, Lang: in.langName, Selection: in.selection, FailureParser: failureParser, FailFast: failFast}
 		w.validator = advpool.JailValidator{Jail: jail}
 		w.jailEnum = advpool.JailEnumerator{Jail: enumerator}
 	}
@@ -2119,6 +2141,7 @@ func advVerdictFromPool(v advpool.Verdict) advVerdict {
 		RecordID: v.RecordID, RecordHead: v.RecordHead,
 		RegionsTotal: v.RegionsTotal, RegionsProbed: v.RegionsProbed,
 		DroppedRegions:   v.DroppedRegions,
+		DuplicateMutants: v.DuplicateMutants,
 		TestWriterFailed: v.TestWriterFailed,
 		PoolTestUnsound:  v.PoolTestUnsound,
 		BaselineFailed:   v.BaselineFailed,
@@ -2185,3 +2208,11 @@ func renderModelSpend(w io.Writer, calls []advpool.ModelCall) {
 		fmt.Fprintln(w, line)
 	}
 }
+
+// noFailFastHelp is the ONE wording for the escape hatch, shared by
+// `certify --local` and `certify --repo` so the two can never drift.
+const noFailFastHelp = "grade every mutant with the WHOLE selected test set instead of stopping at the first failing test. " +
+	"By default a killed mutant stops at the one test that killed it (pytest -x, go test -failfast, jest --bail, phpunit --stop-on-failure), " +
+	"which is most of the per-mutant cost on a repo with a real suite; the verdict is identical either way, and the baseline always runs everything. " +
+	"COSTS: turning this off makes each killed mutant pay for its whole selected set again — on a 77s suite that is the dominant term in the audit. " +
+	"Use it only if your suite is order-dependent or flaky in a way that makes an early stop misleading."

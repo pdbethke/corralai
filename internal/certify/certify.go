@@ -56,9 +56,27 @@ type BuildRecord struct {
 	ExitCode     int
 	DurationS    float64
 	OutputDigest string
-	ProducedBy   []string
-	StartedTS    float64
-	FinishedTS   float64
+
+	// Scored, when this record certifies an ADEQUACY run rather than an
+	// ordinary build. nil for every other caller (certify_change, the brain's
+	// buildcert, a human `corral certify` submission), which is why the whole
+	// group is optional and omitted rather than zero-filled.
+	//
+	// WHY IT EXISTS. Before it, a signed `certify --local` record carried the
+	// kill rate ONLY inside OutputDigest — a sha256 over the marshalled
+	// Verdict. That digest is genuinely bound (the ledger head commits to it
+	// and certverify checks subject-digest == head), but it is an OPAQUE
+	// commitment: the --out artifact never carried the Verdict bytes, and
+	// nothing anywhere recomputes the digest. A third party could confirm the
+	// record was authentic and could NOT read or check the number the product
+	// exists to produce. Meanwhile `--repo --attest` signed killRate,
+	// survivors and provenMissed in the clear via BuildAuditAttestation — so
+	// the two signing paths gave different answers about what a signed corral
+	// record means. Field names here match that one deliberately.
+	Scored     *ScoredCertification
+	ProducedBy []string
+	StartedTS  float64
+	FinishedTS float64
 }
 
 // stepHash returns the deterministic sha256 hash (hex) of a step, computed
@@ -113,6 +131,26 @@ func VerifyLedger(steps []Step, head string) (bool, string) {
 		return false, "head does not match the ledger's last hash"
 	}
 	return true, "OK"
+}
+
+// ScoredCertification is the measured result of an adequacy run, carried in
+// the clear on the signed statement.
+//
+// KillRate is a POINTER on purpose, mirroring audit_statement.go's WeakFile:
+// an absent rate says "no rate was measured", which a zero-filled 0.0 would
+// misreport as a suite that caught nothing. The could-not-grade flags ride
+// alongside for the same reason they ride the Verdict — a provenMissed of 0
+// means "nothing was proven", never "the suite is perfect", and the flags are
+// what tell those apart.
+type ScoredCertification struct {
+	KillRate         *float64 `json:"killRate,omitempty"`
+	MutantsTotal     int      `json:"mutantsTotal"`
+	Survivors        int      `json:"survivors"`
+	ProvenMissed     int      `json:"provenMissed"`
+	TestWriterFailed bool     `json:"testWriterFailed,omitempty"`
+	PoolTestUnsound  bool     `json:"poolTestUnsound,omitempty"`
+	BaselineFailed   bool     `json:"baselineFailed,omitempty"`
+	TimedOut         bool     `json:"timedOut,omitempty"`
 }
 
 // BuildAttestation wraps a BuildRecord and a ledger head in an in-toto
@@ -170,15 +208,9 @@ func BuildAttestation(r BuildRecord, head string) map[string]any {
 						"digest":    map[string]string{"sha256": head},
 					},
 					{
-						"name":      "certification/execution",
-						"mediaType": "application/vnd.corralai.certification+json",
-						"annotations": map[string]any{
-							"command":      r.Command,
-							"exitCode":     r.ExitCode,
-							"passed":       r.ExitCode == 0,
-							"durationS":    r.DurationS,
-							"outputDigest": r.OutputDigest,
-						},
+						"name":        "certification/execution",
+						"mediaType":   "application/vnd.corralai.certification+json",
+						"annotations": certificationAnnotations(r),
 					},
 				},
 			},
@@ -375,4 +407,42 @@ func UnmarshalSteps(b []byte) ([]Step, error) {
 		}
 	}
 	return out, nil
+}
+
+// certificationAnnotations builds the execution byproduct's annotations: the
+// command/exit-code/digest set every caller has always carried, plus the
+// measured numbers when the record certifies an adequacy run.
+//
+// The scored keys are ABSENT, not zero, for a caller that has none. A record
+// for an ordinary build that announced "survivors: 0" would be claiming a
+// measurement nobody made — the fabricated-zero failure this project exists to
+// refuse, committed by its own attestation.
+func certificationAnnotations(r BuildRecord) map[string]any {
+	a := map[string]any{
+		"command":      r.Command,
+		"exitCode":     r.ExitCode,
+		"passed":       r.ExitCode == 0,
+		"durationS":    r.DurationS,
+		"outputDigest": r.OutputDigest,
+	}
+	if r.Scored == nil {
+		return a
+	}
+	if r.Scored.KillRate != nil {
+		a["killRate"] = *r.Scored.KillRate
+	}
+	a["mutantsTotal"] = r.Scored.MutantsTotal
+	a["survivors"] = r.Scored.Survivors
+	a["provenMissed"] = r.Scored.ProvenMissed
+	for k, set := range map[string]bool{
+		"testWriterFailed": r.Scored.TestWriterFailed,
+		"poolTestUnsound":  r.Scored.PoolTestUnsound,
+		"baselineFailed":   r.Scored.BaselineFailed,
+		"timedOut":         r.Scored.TimedOut,
+	} {
+		if set {
+			a[k] = true
+		}
+	}
+	return a
 }

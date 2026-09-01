@@ -1024,6 +1024,31 @@ func (s CertSigner) SignVerdict(ctx context.Context, v Verdict) (int64, string, 
 	}
 	built, head := certify.BuildLedger(steps)
 
+	// The measured numbers ride the STATEMENT, in the clear, not only inside
+	// output_digest. The digest binds them (the ledger head commits to it and
+	// certverify checks subject-digest == head) but binds them OPAQUELY: no
+	// shipped artifact carried the Verdict bytes and nothing recomputes the
+	// digest, so a third party could verify the record was authentic while
+	// being unable to read the kill rate at all. `--repo --attest` has always
+	// signed these in the clear; now both paths mean the same thing.
+	//
+	// DevScored is the discriminator, not a zero check: a run that could not
+	// grade has a REAL 0.0 that must not be signed as a measurement. Absent
+	// beats zero-filled, exactly as WeakFile.KillRate treats it.
+	scored := &certify.ScoredCertification{
+		MutantsTotal:     v.MutantsTotal,
+		Survivors:        v.Survivors,
+		ProvenMissed:     v.ProvenMissed,
+		TestWriterFailed: v.TestWriterFailed,
+		PoolTestUnsound:  v.PoolTestUnsound,
+		BaselineFailed:   v.BaselineFailed,
+		TimedOut:         v.TimedOut,
+	}
+	if v.DevScored && !v.BaselineFailed {
+		rate := v.DevKillRate
+		scored.KillRate = &rate
+	}
+
 	br := certify.BuildRecord{
 		Repo:         v.Repo,
 		Commit:       v.Commit,
@@ -1032,6 +1057,7 @@ func (s CertSigner) SignVerdict(ctx context.Context, v Verdict) (int64, string, 
 		ExitCode:     exitCode,
 		OutputDigest: digest,
 		ProducedBy:   producedBy,
+		Scored:       scored,
 	}
 	stmt := certify.BuildAttestation(br, head)
 

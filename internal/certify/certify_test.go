@@ -691,3 +691,88 @@ func TestUnmarshalStepsRejectsInvalidJSON(t *testing.T) {
 		}
 	}
 }
+
+// TestBuildAttestationSignsTheMeasuredNumbers pins the fix for a signed
+// `certify --local` record whose headline number no reader could check.
+//
+// The kill rate was carried ONLY inside output_digest — a sha256 over the
+// marshalled Verdict. That digest is genuinely bound (the ledger head commits
+// to it, and certverify checks subject-digest == head), but it is an OPAQUE
+// commitment: no shipped artifact carried the Verdict bytes and nothing
+// recomputes the digest, so a third party could confirm the record was
+// authentic and still not read the number corral exists to produce.
+// `--repo --attest` signed these in the clear all along; this makes the two
+// signing paths mean the same thing.
+func TestBuildAttestationSignsTheMeasuredNumbers(t *testing.T) {
+	rate := 0.75
+	stmt := BuildAttestation(BuildRecord{
+		Repo: "r", Commit: "c", Command: "corral/adversarial-pool",
+		OutputDigest: "sha256:deadbeef",
+		Scored: &ScoredCertification{
+			KillRate: &rate, MutantsTotal: 40, Survivors: 10,
+			ProvenMissed: 3, TestWriterFailed: true,
+		},
+	}, "head")
+
+	a := certificationByproduct(t, stmt)
+	for k, want := range map[string]any{
+		"killRate": 0.75, "mutantsTotal": 40, "survivors": 10,
+		"provenMissed": 3, "testWriterFailed": true,
+	} {
+		if got, ok := a[k]; !ok || got != want {
+			t.Errorf("annotation %q = %v (present=%v), want %v — a reader of the signed statement cannot see this number", k, got, ok, want)
+		}
+	}
+}
+
+// TestBuildAttestationOmitsNumbersNobodyMeasured is the other half, and the
+// more important one: a record for an ORDINARY build (certify_change, the
+// brain's buildcert, a human submission) has no adequacy run behind it.
+// Emitting "survivors: 0" there would sign a measurement nobody made — the
+// fabricated-zero failure this project exists to refuse, committed by its own
+// attestation. Absent, never zero-filled.
+func TestBuildAttestationOmitsNumbersNobodyMeasured(t *testing.T) {
+	stmt := BuildAttestation(BuildRecord{Repo: "r", Commit: "c", Command: "go test"}, "head")
+	a := certificationByproduct(t, stmt)
+	for _, k := range []string{"killRate", "mutantsTotal", "survivors", "provenMissed", "testWriterFailed"} {
+		if _, present := a[k]; present {
+			t.Errorf("annotation %q is present on a record with no adequacy run — a zero here is a claim about a measurement that never happened", k)
+		}
+	}
+	// The always-present set must survive the refactor.
+	for _, k := range []string{"command", "exitCode", "passed", "durationS", "outputDigest"} {
+		if _, present := a[k]; !present {
+			t.Errorf("annotation %q disappeared", k)
+		}
+	}
+}
+
+// TestBuildAttestationOmitsAnUnmeasuredKillRate: a run that could not grade
+// has a real 0.0 in the struct. Signing it as killRate 0 would report "the
+// suite caught nothing" for a run that measured nothing.
+func TestBuildAttestationOmitsAnUnmeasuredKillRate(t *testing.T) {
+	stmt := BuildAttestation(BuildRecord{
+		Repo: "r", Commit: "c",
+		Scored: &ScoredCertification{MutantsTotal: 12, BaselineFailed: true},
+	}, "head")
+	a := certificationByproduct(t, stmt)
+	if _, present := a["killRate"]; present {
+		t.Error("killRate is present with no rate measured — an absent rate says 'nothing was measured'; a zero says 'the suite caught nothing'")
+	}
+	if a["baselineFailed"] != true {
+		t.Error("baselineFailed did not ride the statement, so a reader cannot tell WHY the rate is absent")
+	}
+}
+
+func certificationByproduct(t *testing.T, stmt map[string]any) map[string]any {
+	t.Helper()
+	pred := stmt["predicate"].(map[string]any)
+	run := pred["runDetails"].(map[string]any)
+	for _, bp := range run["byproducts"].([]map[string]any) {
+		if bp["name"] == "certification/execution" {
+			return bp["annotations"].(map[string]any)
+		}
+	}
+	t.Fatal("no certification/execution byproduct on the statement")
+	return nil
+}

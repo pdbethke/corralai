@@ -229,10 +229,22 @@ here so the ninth reviewer does not spend an afternoon on the same ground.
 Before reporting any of these, run the check named beside it.
 
 - **"`Verdict` is constructed in two places, so a new field can be dropped."**
-  There is exactly one `Verdict{}` literal in the non-test tree,
-  `internal/advpool/aggregate.go`'s `verdictFromSpec`, which `aggregate` calls
-  and then mutates. A reviewer named a `tickAggregate` function that does not
-  exist. `grep -rn 'Verdict{' --include=*.go . | grep -v _test`
+  **THIS ONE IS TRUE, and it was wrongly listed here as false.** The two sites
+  are `tickAggregate` (`internal/advpool/driver.go`) and `timeoutVerdict` in the
+  same file, whose own comment says it "is the second Verdict construction site
+  in this package, and it has now been the place a field was forgotten more than
+  once." Both route through `verdictFromSpec`, which is why a `grep 'Verdict{'`
+  finds one literal and looks reassuring — the literal is shared, the field
+  ASSIGNMENTS are not. As of this writing `timeoutVerdict` carries
+  `ProvenMissed` but neither `ProvenMutantIDs` nor `AuthoredTest`: the count
+  survives the timeout, the evidence behind it does not.
+
+  The entry is left here, corrected rather than deleted, because of HOW it got
+  here: the reviewer was overruled on a `grep -rn "func tickAggregate"`, which
+  cannot match a method with a receiver. A search that cannot find the thing is
+  not evidence the thing is absent. **Grep for the bare identifier before
+  concluding a symbol does not exist**, and prefer `go doc` or a compile error
+  to a pattern you wrote yourself.
 - **"GitLab and Gitea are stubs."** Both providers are complete implementations.
   Exactly two methods return `errors.ErrUnsupported` — `ListOpenPRs` and
   `SetCommitStatus`. The true, narrower claim: **the gate is GitHub-only.**

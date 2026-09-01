@@ -21,12 +21,18 @@ const MethodCoverageLines = "coverage-lines"
 // (TestSelection, Uncovered). Factored out of aggregate so a test can assert
 // the Selection-to-Verdict mapping without also supplying every scored
 // component aggregate itself requires.
-// THE ONLY PLACE A Verdict IS CONSTRUCTED. `aggregate` calls this and then
-// mutates the result; no other non-test file in the repository holds a
-// `Verdict{}` literal. Reviewers have twice reported a second construction site
-// that must be kept in sync — there is none, and adding one would recreate the
-// field-by-field-converter defect AGENTS.md names. A new scored field belongs
-// here, and its journey to the wire belongs in a propagation test.
+// THE SHARED BASE OF BOTH Verdict CONSTRUCTION PATHS. Every Verdict starts
+// here, but TWO callers then assign scored fields onto it: `tickAggregate` (the
+// converged path) and `timeoutVerdict` (the banked-timeout path) — see the
+// latter's own comment, which records that it "has now been the place a field
+// was forgotten more than once."
+//
+// So the single `Verdict{}` literal below is REASSURING AND MISLEADING: it
+// means a grep finds one construction site while the field assignments live in
+// two, which is the field-by-field-converter defect AGENTS.md names. A new
+// scored field must be added to BOTH assignment paths, and the only durable
+// guard is a test asserting the value survives Score -> aggregate -> report ->
+// ledger -> attestation, rather than a reader noticing the second site.
 func verdictFromSpec(rs RunSpec) Verdict {
 	return Verdict{
 		Repo:   rs.Repo,

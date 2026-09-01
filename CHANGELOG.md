@@ -9,6 +9,66 @@ still move between minor versions.
 Entries describe what changed for someone *using* the tool. For the full commit
 history of any release, `git log v0.3.4..v0.3.5`.
 
+## [v0.8.1] — 2026-08-31
+
+The release that made a failed measurement impossible to mistake for a passing
+one. Coverage evidence — already collected once per scan — now decides which
+files a `--repo` scan may audit: a file with covering tests is auditable even
+when no filename pairs with it, and a file with no coverage is named honestly
+in one of three states rather than lumped under "no paired test": `uncovered —
+no test executes this file`, `imported at load time — no test exercises it
+directly`, and `no executable code`. Absence of evidence is never treated as
+evidence of absence, and only library code counts toward the headline.
+
+Proving that feature on a third-party repo exposed five defects in the
+selection layer, every one an instance of a measurement failing or being
+misread and then reported as fact:
+
+- Python instrumentation requires **pytest-cov**, not merely coverage.py.
+  Without it pytest exits 4 and prints nothing — and that empty output was
+  recorded as a *successful* run, so per-test selection was silently inert on
+  stock Python repos while corral quietly graded by the whole suite. An
+  instrumented run that printed nothing is now a failure that names its cause:
+  exit code, stderr tail, and the missing plugin.
+- That empty evidence was cached, making the blindness sticky across runs.
+  Nothing empty is cached now, and an empty cached row is treated as a miss, so
+  existing ledgers heal themselves.
+- A src-layout package installed with `pip install -e .` is measured outside
+  the repo root, so coverage dropped every source file from the report and
+  corral called a thoroughly-tested core module UNCOVERED. Instrumentation is
+  now scoped to the scan's own derived source roots.
+- A package `__init__.py` was called untested though every test imports it, and
+  an empty `__init__.py` was too.
+- `corral scans` and `corral seal` repeated the same false claim from the
+  ledger; they now distinguish the states, with an additive `import_only`
+  column.
+
+`corral seal` gains `uncovered` as a state distinct from never-audited. Every
+language but Python is untouched — only Python implements a test selector.
+
+## [v0.8.0] — 2026-08-31
+
+The stranger's path, the public record, and the sixth language.
+
+- **A cold reader can get a graded verdict on the first attempt.** A rehearsal
+  that followed the README verbatim took seven attempts; test pairing now
+  probes its candidate list for files that exist and searches conventional test
+  roots recursively, `corral doctor` probes the exact sandbox the run will use
+  (so preflight and run can no longer disagree), and the README's real-repo
+  command runs as printed — every seat named, because corral has no default
+  models.
+- **The public record.** `--attest --transparency` signs the audit statement
+  into a DSSE envelope and, opt in, uploads it to Sigstore's Rekor
+  transparency log — public and permanent. The new `corral verify` checks all
+  three rungs: the signature, the warehouse rows-hash cross-reference, and
+  public-log inclusion.
+- **PHP** joins Go, Python, Ruby, JavaScript and TypeScript: proven on
+  webmozart/assert under PHPUnit, CERTIFIED with 40 of 40 planted faults
+  killed. A PHP-specific sandbox trap (Debian's `/usr/bin/php` symlink through
+  `/etc/alternatives`) is now refused before it costs a model call.
+- The recordings gallery leads with corral auditing its own signing code —
+  NEEDS-REVIEW, gaps published on purpose.
+
 ## [v0.7.0] — 2026-08-27
 
 The release that made corral's own numbers trustworthy. A mutant the compiler

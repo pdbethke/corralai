@@ -511,7 +511,7 @@ to satisfy it, and one dishonest one:
 ```yaml
     # Two models, one key — satisfies the guard.
     writer-model: gemini-3.6-flash
-    critic-model: gemini-3.6-pro
+    critic-model: gemini-3.7-flash
 
     # Two vendors — genuine independence. Keys are additive; set both.
     gemini-key:    ${{ secrets.GEMINI_API_KEY }}

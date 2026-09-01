@@ -110,6 +110,28 @@ producing its own scan. Nothing coordinates them, and nothing needs to:
   `GITHUB_SERVER_URL`/`GITHUB_REPOSITORY`/`GITHUB_RUN_ID`
   (`cmd/corral/certify_repo_bundle.go`'s `githubRunURL`), so two jobs never
   collide on the same key even if they audit the same file the same minute.
+
+  **`scan_id` ALONE IS NOT THAT KEY, and a query that treats it as one will be
+  wrong without erroring.** It is a per-ledger sequence: every local
+  `--record` ledger starts again at 1, so the same small integers recur across
+  every ledger that has ever pushed to your warehouse. Joining
+  `corral_mutants` to `corral_scans` on `scan_id` alone — the obvious thing to
+  write — silently unions unrelated scans. Observed: a two-file scan that
+  pushed 76 mutants reported 170, having absorbed another ledger's scan 1.
+  **Join on `(repo, run_url, scan_id)`.**
+
+  One case the composite key does not cover, and it is worth knowing before
+  you point a dashboard at this: `run_url` is EMPTY for a local run, because
+  those three environment variables only exist inside Actions. So for local
+  runs the key degenerates to `(repo, scan_id)`, and two different local
+  ledgers that both audited the same repository can collide for real. In CI —
+  the case this page is about — `run_url` is always present and always
+  distinct, so the swarm is unaffected. The durable fix is a globally unique
+  scan identity rather than a sequence; `statement_sha256` already is one
+  whenever `--attest` is on.
+
+  `corral_seal` is immune either way: it partitions on `(repo, path)` ordered
+  by `ts` and never reads `scan_id` (`internal/auditpush/seal.go`).
 - The push is **append-only**, one transaction per job
   (`internal/auditpush.PushBundle`). Nothing reads-then-writes across jobs,
   so there is no lost-update race to design around.

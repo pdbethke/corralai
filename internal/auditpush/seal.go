@@ -19,6 +19,15 @@ package auditpush
 // never graded. A seal that listed the files corral REFUSED, alongside the
 // ones it scored, would be a coverage claim nobody earned.
 //
+// PARTITIONING ON (repo, path) ORDER BY ts IS LOAD-BEARING, not incidental:
+// the view must never key on scan_id. That column is a PER-LEDGER sequence —
+// every local `--record` ledger starts again at 1 — so the same small integers
+// recur across every ledger that has pushed to a given warehouse. A seal built
+// on scan_id would union unrelated scans from different operators and report
+// the result as one repository's state. The row key that IS unique is
+// (repo, run_url, scan_id); this view needs neither, because "newest row per
+// file" is a question ts answers directly. See docs/corral/actions-as-swarm.md.
+//
 // Created on every push rather than by a separate command: the view IS the
 // share an operator hands someone, and a share that has to be created by hand
 // is one nobody creates. `IF NOT EXISTS` (not `OR REPLACE`) so a warehouse

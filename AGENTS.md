@@ -49,12 +49,17 @@ and are not:
   from the binaries' own `-h` output**. Never hand-edit it; regenerate.
 - `bash scripts/sync-site-assets.sh --check` — the site's vendored replay
   player must not drift from source.
+- `bash scripts/check-licensing.sh` — every tracked `.go` file carries the
+  Elastic-2.0 SPDX header, and LICENSE/NOTICE/README still say what they must.
+  `scripts/add-spdx.sh` fixes the header half. **Two of the three gates in this
+  list run on EVERY change, docs-only included** — this one and the `^TestDocs`
+  tests — because all three of them grade Markdown as well as Go.
 
 ### CI workflows
 
 | workflow | what it does |
 |---|---|
-| `deploy.yml` (`validate`) | vet, provision language toolchains, `go test -v` with a SKIP census, the two drift checks, gosec, security gate |
+| `deploy.yml` (`validate`) | the doc gates and the licensing gate ALWAYS; then, only when something other than Markdown changed: vet, provision language toolchains, `go test -v` with a SKIP census, the drift checks, gosec, security gate |
 | `foreign-sweep.yml` (`sweep`) | `certify --repo --dry-run` over SHA-pinned third-party repos, diffed against `testdata/foreign-sweep-expected.tsv` |
 | `self-audit.yml` | corral auditing corral. Non-blocking, label-gated, all-Gemini, `top: "1"` |
 | `cla.yml`, `sbom.yml`, `scorecard.yml` | CLA, SBOM, supply-chain scorecard |

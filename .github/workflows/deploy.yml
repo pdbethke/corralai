@@ -89,6 +89,17 @@ jobs:
       # compares against the newest tag in THIS clone and skips without tags.
       - name: Documentation gates (run on every change, docs-only included)
         run: go test ./cmd/corral/ -run '^TestDocs' -count=1
+      # ALSO UNGATED, and for the same reason as the step above: this asserts
+      # the SPDX header on every tracked .go file, but ALSO that LICENSE still
+      # says Elastic 2.0, that NOTICE points at commercial licensing, and that
+      # README.md no longer advertises MIT — three Markdown-shaped invariants a
+      # docs-only change is exactly able to break.
+      #
+      # CONTRIBUTING.md has always said this "must exit 0". Nothing ran it, and
+      # it was found RED on 47 tracked files. A licensing invariant that only a
+      # contributor's discipline enforces is not enforced.
+      - name: Licensing gate (run on every change, docs-only included)
+        run: bash scripts/check-licensing.sh
       - if: steps.filter.outputs.code == 'true'
         run: go vet ./...
       - name: Provision language test toolchains (audit gate)

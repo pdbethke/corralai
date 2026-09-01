@@ -37,8 +37,8 @@ func runDemo(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("demo", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	dir := fs.String("dir", "", "where to write the demo project (default: a new temp dir, printed and kept)")
-	writer := fs.String("writer-model", "", "model for the test-writer role — REQUIRED, corral has no default models")
-	mutant := fs.String("mutant-model", "", "model for the mutant-generator role — REQUIRED, corral has no default models")
+	writer := fs.String("writer-model", "", "model for the test-writer role — REQUIRED, corral has no default models. Takes a registry alias (.corral/models.json) or a concrete model name")
+	mutant := fs.String("mutant-model", "", "model for the mutant-generator role — REQUIRED, corral has no default models. Takes a registry alias (.corral/models.json) or a concrete model name")
 	critic := fs.String("critic-model", "", `model for the test-critic role, which must differ from the writer's ("off" disables it)`)
 	if err := fs.Parse(args); err != nil {
 		return 2

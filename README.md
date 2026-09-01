@@ -296,12 +296,42 @@ scored. Corral's own `time:` line reports the phases it measures; phases that di
 run read `—`. Treat the totals above as the floor for a repeat run, not the ceiling
 for a first one.
 
-**A model registry is the next thing here.** Naming four seats on every
-command line is the visible cost of having no defaults, and it is where stale
-model names come from — see [docs/design/model-registry.md](docs/design/model-registry.md)
-for the design: declare models once, name seats by alias, with a build gate
-that refuses any model name written outside the registry and a scheduled check
-that resolves each one against its provider. Designed, not built.
+**Declare your models once — a registry.** Naming four seats on every command
+line is the visible cost of having no defaults, and it is where stale model
+names come from. Put them in `.corral/models.json` and name seats by alias:
+
+```jsonc
+{ "strict": true,
+  "fast":   { "provider": "google",    "model": "gemini-3.6-flash" },
+  "writer": { "provider": "anthropic", "model": "claude-sonnet-5" },
+  "critic": { "provider": "openai",    "model": "gpt-5" },
+  "local":  { "provider": "ollama",    "model": "qwen3.5:9b-q8_0",
+              "endpoint": "http://127.0.0.1:11434" } }
+```
+
+```bash
+corral certify --repo . --substrate workspace \
+  --derive-model fast --mutant-model local --writer-model writer --critic-model critic \
+  -- pytest
+```
+
+Seat flags still take a concrete model name, so nothing above changes if you
+prefer them, and a seat you do not name still refuses the run — the registry
+declares what is *available*, never what is chosen. `"strict": true` makes a
+mistyped alias cost two seconds instead of failing at the seat hours into a
+paid run: the run refuses and lists the aliases you declared. Local models are
+first-class, so the generator can run on your own hardware while a hosted
+model writes. `CORRALAI_MODELS_FILE` points at a file elsewhere;
+`CORRALAI_MODELS` takes the JSON inline. The verdict records the concrete
+model each seat resolved to, never the alias — an alias rename cannot move a
+cache key or blur a record. The reasoning, and what comes next, is in
+[docs/design/model-registry.md](docs/design/model-registry.md).
+
+**Which model should staff which seat?** `corral models rank` answers it from
+your own recorded runs rather than from benchmarks — proven gaps per survivor
+attempted for the writer, missed-fault yield for the generator, adjudicated
+precision for the critic — and it refuses to recommend on thin evidence. It
+prints a ranking; it never staffs a seat.
 
 The levers that bound it: `corral doctor` (below) catches environment failures for
 free before a run spends anything; `--top` bounds a whole-repo scan to the

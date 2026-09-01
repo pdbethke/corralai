@@ -302,6 +302,39 @@ Usage of certify verify:
     	Rekor instance to verify the inclusion proof against (default $CORRALAI_REKOR_URL or https://rekor.sigstore.dev)
 ```
 
+## `corral scans push` flags
+
+```
+usage: corral scans push --db <dsn> [--scan <id> | --all] [--since YYYY-MM-DD] [--dry-run]
+
+Reads from the SAME local ledger `corral scans list` reads (default:
+$CORRALAI_SCANS_DB, else ~/.claude/corralai_scans.duckdb) — set that env var to
+push from a non-default ledger.
+
+Pushes scans ALREADY in the local ledger (`certify --repo --record`) to a
+warehouse — the verb for someone who recorded for weeks before deciding they
+wanted a warehouse, so they do not have to re-run every audit to get there.
+
+The warehouse tables are APPEND-ONLY: pushing the same scan id twice adds its
+rows a second time rather than overwriting the first. --dry-run reports the
+rows a push would ADD, which is the same count whether or not this scan has
+been pushed before.
+
+Never carries source (the authored test, mutant code, the verdict blob) —
+this command has no --push-source flag, so BlankUnpushedSource withholds it
+unconditionally, even for a scan whose original run pushed source itself.
+  -all
+    	push every recorded scan (optionally narrowed by --since)
+  -db string
+    	the warehouse to push to — a DuckDB path, or md:<database> for MotherDuck (required)
+  -dry-run
+    	print exactly what would be pushed and touch nothing — neither the ledger nor the target warehouse
+  -scan string
+    	push only this one scan id (see corral scans list)
+  -since string
+    	with --all, push only scans recorded on or after this date (YYYY-MM-DD)
+```
+
 ## Environment variables
 
 ```

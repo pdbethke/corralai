@@ -285,6 +285,17 @@ scan took 14m21s (39 mutants) because the dominant cost is suite time, not file 
 or diff size. A repo whose suite takes 60–90s per invocation lands one to two orders
 of magnitude past the flask number, for that reason alone.
 
+Read those two numbers for what they are: both are **replays of a recorded mutant set
+with the critic off**, so they price the scoring loop — the part this section is
+about — and not a cold end-to-end run. A first run on the same file also pays goal
+derivation, mutant generation, and the per-survivor test-writer, and that last phase
+is the one most likely to surprise you on a slow suite: each authored test is
+compile-verified against the unmutated code and reissued when it fails, so a file
+with a dozen survivors can spend longer being *written for* than it spent being
+scored. Corral's own `time:` line reports the phases it measures; phases that did not
+run read `—`. Treat the totals above as the floor for a repeat run, not the ceiling
+for a first one.
+
 The levers that bound it: `corral doctor` (below) catches environment failures for
 free before a run spends anything; `--top` bounds a whole-repo scan to the
 highest-ranked N candidates instead of auditing every file; `--n-mutants` bounds the

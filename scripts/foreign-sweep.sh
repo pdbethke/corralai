@@ -214,5 +214,5 @@ if ! diff -u "$sorted_golden" "$OUT" > "$WORK/diff.txt"; then
   exit 1
 fi
 
-echo "foreign-sweep: all $(wc -l < "$OUT") repo(s) match the golden file" >&2
+echo "foreign-sweep: all $(wc -l < "$OUT") row(s) across ${#REPOS[@]} repo(s) match the golden file" >&2
 exit 0

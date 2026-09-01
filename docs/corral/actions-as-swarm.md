@@ -111,7 +111,19 @@ producing its own scan. Nothing coordinates them, and nothing needs to:
   (`cmd/corral/certify_repo_bundle.go`'s `githubRunURL`), so two jobs never
   collide on the same key even if they audit the same file the same minute.
 
-  **`scan_id` ALONE IS NOT THAT KEY, and a query that treats it as one will be
+  **Join on `scan_uid`.** Since schema_version 3 every row on all five grains
+  carries it: one globally unique column, derived per push from the scan's own
+  identity (repo, run URL, host, corral version, commit, substrate, ledger scan
+  id, and the push timestamp — length-prefixed, then hashed). It is derived
+  rather than random so you can recompute it from the row you are holding and
+  check it. Rows written before schema_version 3 have the column and NULL in
+  it, which is the honest value: the identity was never recorded and cannot be
+  reconstructed.
+
+  Everything below is why that column exists, and still applies to any row
+  predating it.
+
+  **`scan_id` ALONE IS NOT A KEY, and a query that treats it as one will be
   wrong without erroring.** It is a per-ledger sequence: every local
   `--record` ledger starts again at 1, so the same small integers recur across
   every ledger that has ever pushed to your warehouse. Joining
@@ -126,9 +138,8 @@ producing its own scan. Nothing coordinates them, and nothing needs to:
   runs the key degenerates to `(repo, scan_id)`, and two different local
   ledgers that both audited the same repository can collide for real. In CI —
   the case this page is about — `run_url` is always present and always
-  distinct, so the swarm is unaffected. The durable fix is a globally unique
-  scan identity rather than a sequence; `statement_sha256` already is one
-  whenever `--attest` is on.
+  distinct, so the swarm was never affected. `scan_uid` closes it for
+  everyone else, and needs no `--record` to exist.
 
   `corral_seal` is immune either way: it partitions on `(repo, path)` ordered
   by `ts` and never reads `scan_id` (`internal/auditpush/seal.go`).

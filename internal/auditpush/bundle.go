@@ -3,10 +3,13 @@
 package auditpush
 
 import (
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"fmt"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -20,30 +23,86 @@ import (
 // reader can tell a row that can answer "where did the minutes go" from one
 // that cannot. A pre-2 row has the column (added by migration) and NULL in
 // it, which is the honest value.
-const SchemaVersion = 2
+//
+// 3 adds scan_uid to all five tables: a GLOBALLY unique scan identity, so a
+// reader can join the grains without needing to know that (repo, run_url,
+// scan_id) is a composite key whose run_url half is empty off CI. Pre-3 rows
+// get the column by migration and keep NULL — honest, since the identity they
+// would need was never recorded and cannot be reconstructed.
+const SchemaVersion = 3
 
 // ScanRow is the run itself: one row per `certify --repo` invocation. It is
 // the header the other four grains hang from, and it exists because a
 // per-file number without the box, the version and the substrate that
 // produced it is a claim with no warrant.
 //
-// The key is (Repo, RunURL, ScanID), and that is deliberate: it is unique
-// PER WRITER, so twenty runners pushing at once need no coordination and can
-// never collide. A local run has RunURL "" and Host set.
+// JOIN ON ScanUID. It is one globally unique column, present on all five
+// grains, and it is the answer to everything this comment used to describe as
+// something a reader had to know beforehand.
 //
-// One case DOES repeat the key, and it is worth naming rather than
-// discovering: a local run with no --record has RunURL "" and ScanID 0, so
-// every such push to the same repo lands under ("repo", "", 0). That is
-// safe, not a bug — these tables are APPEND-ONLY and every row carries ts,
-// so the rows stack rather than overwrite and every reader (corral_seal
-// included) orders by ts. What the repeated key costs is joinability: those
-// rows cannot be tied back to a local ledger scan, because there is no
-// ledger scan to tie them to. --record is what makes the key distinguishing.
+// The legacy key is (Repo, RunURL, ScanID), unique PER WRITER, so twenty
+// runners pushing at once need no coordination and can never collide. It has
+// two sharp edges, and both have cost real readers real numbers:
+//
+//   - ScanID ALONE is not a key. It is a per-ledger sequence that restarts at
+//     1 in every local --record ledger, so the same small integers recur
+//     across every ledger that ever pushed to a warehouse. A join on it unions
+//     unrelated scans SILENTLY. Observed: a two-file scan that pushed 76
+//     mutants reported 170, having absorbed another ledger's scan 1.
+//   - RunURL is EMPTY off CI (it comes from GITHUB_SERVER_URL/REPOSITORY/
+//     RUN_ID), so for a local run the composite degenerates to (Repo, ScanID),
+//     and two local ledgers that audited the same repository can collide for
+//     real. A local run with no --record has ScanID 0 too, so every such push
+//     to one repo lands under ("repo", "", 0).
+//
+// None of that corrupts the ledger — these tables are APPEND-ONLY, every row
+// carries ts, and every reader that orders by ts (corral_seal included) is
+// unaffected. What the repeated key costs is JOINABILITY, which is exactly
+// what ScanUID restores: derived per push from the scan's own identity, so it
+// is distinct whenever two runs differ in anything, including both cases
+// above, and it needs no --record to exist.
+// scanUID derives a scan's globally unique identity from the scan itself.
+//
+// DERIVED, NOT RANDOM, for the reason everything else in this package is: a
+// value a reader cannot re-check is a value they have to trust. Re-running
+// this over a pushed row's own columns reproduces its scan_uid exactly, so the
+// identity is auditable rather than asserted.
+//
+// The inputs are what actually distinguishes two runs — the repository, the CI
+// run if there was one, the box, the corral build, the audited commit, the
+// substrate, the ledger scan id, and the start timestamp at nanosecond
+// precision. Two runs that agree on every one of those are the same run. The
+// timestamp is what makes this work where the legacy key fails: two local
+// ledgers that both push "scan 1" for the same repo did not start at the same
+// nanosecond.
+//
+// Fields are LENGTH-PREFIXED before hashing, the same guard
+// reposcan.KeyInputs.CacheKey uses, so no combination of values can collide by
+// concatenation — ("ab","c") and ("a","bc") must not produce one identity.
+//
+// 128 bits (32 hex chars) of a sha256: short enough to read in a query result,
+// far past any collision that matters for a warehouse of scans.
+func scanUID(r ScanRow, ts time.Time) string {
+	h := sha256.New()
+	for _, f := range []string{
+		r.Repo, r.RunURL, r.Host, r.CorralVersion, r.Commit, r.Substrate,
+		strconv.FormatInt(r.ScanID, 10),
+		ts.UTC().Format(time.RFC3339Nano),
+	} {
+		fmt.Fprintf(h, "%d:%s|", len(f), f)
+	}
+	return hex.EncodeToString(h.Sum(nil))[:32]
+}
+
 type ScanRow struct {
-	Repo   string
-	RunURL string
-	ScanID int64
-	Commit string
+	// ScanUID is the globally unique identity of this scan, filled in by
+	// PushBundle (never by a caller) so that no push can forget it. See
+	// scanUID for what it is derived from and why.
+	ScanUID string
+	Repo    string
+	RunURL  string
+	ScanID  int64
+	Commit  string
 	// CorralVersion is the same string `corral version` prints.
 	CorralVersion string
 	Substrate     string
@@ -236,6 +295,7 @@ func (c Counts) Total() int { return c.Scans + c.Files + c.Mutants + c.Calls + c
 
 const scansSchema = `
 CREATE TABLE IF NOT EXISTS corral_scans (
+  scan_uid         VARCHAR,
   ts               TIMESTAMPTZ NOT NULL,
   repo             VARCHAR     NOT NULL,
   run_url          VARCHAR,
@@ -265,6 +325,7 @@ CREATE TABLE IF NOT EXISTS corral_scans (
 
 const auditsSchema = `
 CREATE TABLE IF NOT EXISTS corral_audits (
+  scan_uid         VARCHAR,
   ts                 TIMESTAMPTZ NOT NULL,
   repo               VARCHAR     NOT NULL,
   commit_sha         VARCHAR     NOT NULL,
@@ -347,6 +408,7 @@ CREATE TABLE IF NOT EXISTS corral_audits (
 // label should fail loud at INSERT rather than quietly enter a leaderboard.
 const mutantsSchema = `
 CREATE TABLE IF NOT EXISTS corral_mutants (
+  scan_uid         VARCHAR,
   ts               TIMESTAMPTZ NOT NULL,
   repo             VARCHAR     NOT NULL,
   run_url          VARCHAR,
@@ -371,6 +433,7 @@ CREATE TABLE IF NOT EXISTS corral_mutants (
 
 const modelCallsSchema = `
 CREATE TABLE IF NOT EXISTS corral_model_calls (
+  scan_uid         VARCHAR,
   ts               TIMESTAMPTZ NOT NULL,
   repo             VARCHAR     NOT NULL,
   run_url          VARCHAR,
@@ -397,6 +460,7 @@ CREATE TABLE IF NOT EXISTS corral_model_calls (
 // VARCHAR perfectly well.
 const eventsSchema = `
 CREATE TABLE IF NOT EXISTS corral_events (
+  scan_uid         VARCHAR,
   ts               TIMESTAMPTZ NOT NULL,
   repo             VARCHAR     NOT NULL,
   run_url          VARCHAR,
@@ -490,6 +554,7 @@ var corralAuditsMigrationCols = []struct{ name, ddl string }{
 	{"prompt_shape", "prompt_shape VARCHAR"},
 	{"covering_tests", "covering_tests INTEGER"},
 	{"import_only", "import_only BOOLEAN"},
+	{"scan_uid", "scan_uid VARCHAR"},
 }
 
 // The other four tables are NEW at schema_version 2, so nothing predates
@@ -509,8 +574,11 @@ var (
 		// created keeps its old shape until the next push meets it.
 		{"rekor_log_index", "rekor_log_index BIGINT"},
 		{"rekor_uuid", "rekor_uuid VARCHAR"},
+		{"scan_uid", "scan_uid VARCHAR"},
 	}
-	corralMutantsMigrationCols = []struct{ name, ddl string }{}
+	corralMutantsMigrationCols = []struct{ name, ddl string }{
+		{"scan_uid", "scan_uid VARCHAR"},
+	}
 	// cached_input_tokens is additive: a warehouse an earlier corral created
 	// gets it on the next push, and its existing rows keep NULL — correct,
 	// since those runs never asked a provider to cache a prefix and never
@@ -518,8 +586,11 @@ var (
 	corralModelCallsMigrationCols = []struct{ name, ddl string }{
 		{"cached_input_tokens", "cached_input_tokens BIGINT"},
 		{"cache_write_input_tokens", "cache_write_input_tokens BIGINT"},
+		{"scan_uid", "scan_uid VARCHAR"},
 	}
-	corralEventsMigrationCols = []struct{ name, ddl string }{}
+	corralEventsMigrationCols = []struct{ name, ddl string }{
+		{"scan_uid", "scan_uid VARCHAR"},
+	}
 )
 
 // migrateTable additively brings one warehouse table up to the current
@@ -952,15 +1023,27 @@ func pushBundleOnce(target string, b Bundle) (Counts, error) {
 	now := time.Now().UTC()
 	var c Counts
 
+	// ONE identity for the whole push, derived here rather than accepted from
+	// the caller: a bundle whose grains disagreed about which scan they belong
+	// to would be worse than no identity at all, and a caller cannot forget to
+	// set what a caller never sets.
+	//
+	// `now` is the SAME value written to every row's ts column, so a reader can
+	// recompute scan_uid from the row they are holding and check it — the
+	// property that makes a derived identity better than a random one. The zero
+	// ScanRow case writes no scan row at all, and its child grains still share
+	// this uid, so they stay joinable to each other.
+	uid := scanUID(b.Scan, now)
+
 	if b.Scan != (ScanRow{}) {
 		if _, err := tx.Exec(`INSERT INTO corral_scans (
-		    ts, repo, run_url, scan_id, commit_sha, corral_version, substrate,
+		    scan_uid, ts, repo, run_url, scan_id, commit_sha, corral_version, substrate,
 		    host, cores, trees_requested, diff_base, candidates, audited, passed,
 		    total_ms, input_tokens, output_tokens, model_calls,
 		    source_pushed, statement_sha256, selection_ms, selection_reused_from,
 		    rekor_log_index, rekor_uuid, schema_version
-		  ) VALUES (`+placeholders(25)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
-			now, b.Scan.Repo, b.Scan.RunURL, b.Scan.ScanID, b.Scan.Commit,
+		  ) VALUES (`+placeholders(26)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
+			uid, now, b.Scan.Repo, b.Scan.RunURL, b.Scan.ScanID, b.Scan.Commit,
 			b.Scan.CorralVersion, b.Scan.Substrate, b.Scan.Host, b.Scan.Cores,
 			nullIfZeroInt(b.Scan.TreesRequested), b.Scan.DiffBase,
 			b.Scan.Candidates, b.Scan.Audited, b.Scan.Passed,
@@ -974,7 +1057,7 @@ func pushBundleOnce(target string, b Bundle) (Counts, error) {
 	}
 
 	for _, r := range b.Files {
-		if err := insertFileRow(tx, now, r); err != nil {
+		if err := insertFileRow(tx, uid, now, r); err != nil {
 			return Counts{}, err
 		}
 		c.Files++
@@ -986,12 +1069,12 @@ func pushBundleOnce(target string, b Bundle) (Counts, error) {
 		// that is left here is the ordinary empty-means-NULL rule.
 		code := nullIfEmpty(m.Code)
 		if _, err := tx.Exec(`INSERT INTO corral_mutants (
-		    ts, repo, run_url, scan_id, path, mutant_id, parent_sha256, outcome,
+		    scan_uid, ts, repo, run_url, scan_id, path, mutant_id, parent_sha256, outcome,
 		    invalid_reason, proven, proven_by_authored_alone, tests_run,
 		    selection_rule, duration_ms, killed_by, span_start, span_end, code,
 		    statement_sha256, schema_version
-		  ) VALUES (`+placeholders(20)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
-			now, m.Repo, m.RunURL, m.ScanID, m.Path, m.MutantID,
+		  ) VALUES (`+placeholders(21)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
+			uid, now, m.Repo, m.RunURL, m.ScanID, m.Path, m.MutantID,
 			nullIfEmpty(m.ParentSHA256), m.Outcome, nullIfEmpty(m.InvalidReason),
 			m.Proven, m.ProvenByAuthoredAlone, m.TestsRun,
 			nullIfEmpty(m.SelectionRule), m.DurationMillis, nullIfEmpty(m.KilledBy),
@@ -1004,12 +1087,12 @@ func pushBundleOnce(target string, b Bundle) (Counts, error) {
 
 	for _, mc := range b.Calls {
 		if _, err := tx.Exec(`INSERT INTO corral_model_calls (
-		    ts, repo, run_url, scan_id, path, role, model, calls, retries,
+		    scan_uid, ts, repo, run_url, scan_id, path, role, model, calls, retries,
 		    input_tokens, output_tokens, cached_input_tokens,
 		    cache_write_input_tokens, wall_ms,
 		    statement_sha256, schema_version
-		  ) VALUES (`+placeholders(16)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
-			now, mc.Repo, mc.RunURL, mc.ScanID, mc.Path, mc.Role, mc.Model,
+		  ) VALUES (`+placeholders(17)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
+			uid, now, mc.Repo, mc.RunURL, mc.ScanID, mc.Path, mc.Role, mc.Model,
 			mc.Calls, mc.Retries, mc.InputTokens, mc.OutputTokens,
 			nullIfNilInt64(mc.CachedInputTokens), nullIfNilInt64(mc.CacheWriteInputTokens),
 			mc.WallMillis,
@@ -1022,11 +1105,11 @@ func pushBundleOnce(target string, b Bundle) (Counts, error) {
 
 	for _, e := range b.Events {
 		if _, err := tx.Exec(`INSERT INTO corral_events (
-		    ts, repo, run_url, scan_id, path, seq, kind, actor, subject, model,
+		    scan_uid, ts, repo, run_url, scan_id, path, seq, kind, actor, subject, model,
 		    duration_ms, detail, statement_sha256, schema_version
-		  ) VALUES (`+placeholders(14)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
+		  ) VALUES (`+placeholders(15)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
 			// e.TS, not `now`: the tape's clock is the measurement.
-			e.TS, e.Repo, e.RunURL, e.ScanID, e.Path, e.Seq, e.Kind, e.Actor,
+			uid, e.TS, e.Repo, e.RunURL, e.ScanID, e.Path, e.Seq, e.Kind, e.Actor,
 			e.Subject, e.Model, e.DurationMillis, nullIfEmpty(e.Detail),
 			e.StatementSHA256, SchemaVersion,
 		); err != nil {
@@ -1044,7 +1127,7 @@ func pushBundleOnce(target string, b Bundle) (Counts, error) {
 // insertFileRow writes one corral_audits row. Kept as its own function only
 // because seventy columns in the middle of the transaction loop hid the four
 // rules that actually matter — the NULL-not-zero conversions below.
-func insertFileRow(tx *sql.Tx, now time.Time, r Row) error {
+func insertFileRow(tx *sql.Tx, uid string, now time.Time, r Row) error {
 	var minKill any
 	if r.MinKillRate != nil {
 		minKill = *r.MinKillRate
@@ -1075,7 +1158,7 @@ func insertFileRow(tx *sql.Tx, now time.Time, r Row) error {
 	authoredTest := nullIfEmpty(r.AuthoredTest)
 	verdictJSON := nullIfEmpty(r.VerdictJSON)
 	_, err := tx.Exec(`INSERT INTO corral_audits (
-	    ts, repo, commit_sha, path, lang,
+	    scan_uid, ts, repo, commit_sha, path, lang,
 	    kill_rate, survivors, proven_missed,
 	    timed_out, test_writer_failed, pool_test_unsound,
 	    audited, candidates, mutants_planted, models_by_role,
@@ -1094,8 +1177,8 @@ func insertFileRow(tx *sql.Tx, now time.Time, r Row) error {
 	    selection_ms, generation_ms, pool_ms, dev_pass_ms, authored_pass_ms,
 	    critic_ms, total_ms, mutant_ms_median, mutant_ms_max,
 	    authored_test, verdict_json, schema_version, prompt_shape, covering_tests, import_only
-	  ) VALUES (`+placeholders(75)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
-		now, r.Repo, r.Commit, r.Path, r.Lang,
+	  ) VALUES (`+placeholders(76)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
+		uid, now, r.Repo, r.Commit, r.Path, r.Lang,
 		killRate, r.Survivors, r.ProvenMissed,
 		r.TimedOut, r.TestWriterFailed, r.PoolTestUnsound,
 		r.Audited, r.Candidates, r.MutantsPlanted, r.ModelsByRole,

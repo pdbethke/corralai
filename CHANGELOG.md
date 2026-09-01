@@ -9,6 +9,36 @@ still move between minor versions.
 Entries describe what changed for someone *using* the tool. For the full commit
 history of any release, `git log v0.3.4..v0.3.5`.
 
+## [v0.8.3] — 2026-09-01
+
+Faster scoring, honest timing, and the gaps corral proved in its own code.
+
+- **A killed mutant needs one failing test, not a whole suite.** Scoring now
+  passes the runner's stop-at-first-failure flag on mutant runs — never on
+  the baseline, because a green baseline must execute everything or corral
+  would certify a suite it never fully ran. Where selection evidence exists,
+  the covering test most likely to kill runs first. Byte-identical duplicate
+  mutants are graded once and answered twice, with the count disclosed and
+  the denominator deliberately unchanged. `--no-fail-fast` opts out.
+  A hermetic verdict-identity test grades a recorded set down both paths and
+  asserts kill rate, survivors, and every `killed_by` agree — and that the
+  fast path really ran fewer tests, so a no-op cannot pass it.
+- **A phase that ran no longer reports as one that did not.** corral once
+  printed `total 10m32s` for a run that took 100 minutes: the per-survivor
+  writer was still open when the deadline fired, and an open phase was left
+  at zero — which renders as `—`, the marking reserved for *did not run*.
+  Open phases are now credited with the time they actually spent, any
+  residual prints as `unattributed` rather than vanishing, and the writer's
+  attempts-per-survivor spread is reported so the next optimisation knows
+  whether its cost is retries or slow single attempts.
+- **corral audited its own signing code and we kept the tests it wrote.**
+  That audit returned kill rate 0.55 — 43 of 78 planted faults killed, 35
+  survivors, 30 proven catchable. Of the 51 test functions the writer
+  produced, 18 survived triage (the rest were duplicates, implementation
+  mirrors, already-covered cases, or did not compile). Each kept test was
+  checked by breaking the line it guards and watching it fail.
+  `internal/certify` goes from 18 tests to 36.
+
 ## [v0.8.2] — 2026-09-01
 
 Declare your models once.

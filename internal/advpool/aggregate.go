@@ -189,6 +189,12 @@ func aggregate(
 	// verdict's numbers are always real measurements, never a fabricated
 	// zero — see Verdict.DevScored's doc.
 	v.DevScored = true
+	// The converged path is, by definition, pool-scored: aggregate is reached
+	// only via tickAggregate, which is itself gated on run.poolScored. Setting
+	// it here rather than leaving it to the caller keeps the two construction
+	// paths saying the same thing about the same field — the drift this
+	// function's own note warns about.
+	v.PoolScored = true
 	// The SIGNED certify/needs-review decision rests on execution-proven signals:
 	// the mutation kill-rate against the threshold, run in the jail. The
 	// test-critic's vacuous-test flags are a SECOND MODEL'S UNVERIFIED OPINION

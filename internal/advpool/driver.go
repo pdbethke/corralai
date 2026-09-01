@@ -624,6 +624,24 @@ type Verdict struct {
 	// (fabricated) 0.00 kill rate as a measurement. See timeoutVerdict and
 	// cmd/corral/certify_local_drive.go's bankableTimeoutVerdict.
 	DevScored bool
+	// PoolScored mirrors runState.poolScored, and is to ProvenMissed exactly
+	// what DevScored is to DevKillRate: the only thing that separates a
+	// MEASURED zero from a zero nobody computed.
+	//
+	// It exists because its absence threw real evidence away. A run reaches
+	// tickPoolAdequacy, converges its pool score — a genuine, execution-proven
+	// ProvenMissed — and only THEN stalls waiting on the test-critic, so
+	// RunDeadline fires and timeoutVerdict banks it. Without this flag a
+	// reader could not tell that verdict apart from one that timed out before
+	// the writer ever ran, so the renderer took the pessimistic branch and
+	// printed "(not run — pool did not converge)" over a number the jail had
+	// actually earned. Understating a gap is the safe direction, but throwing
+	// away the strongest evidence corral produces is not a good outcome.
+	//
+	// A caller must treat ProvenMissed on a TimedOut verdict as real ONLY
+	// when this is true — and, exactly as with DevScored, must never render
+	// its zero as "nothing was missed" when it is false.
+	PoolScored bool
 	// DevKilledMutants and DevSurvivedMutants are the mutant-level EVIDENCE
 	// behind DevKillRate and Survivors: which mutants the DEV suite's own
 	// tests killed, and which it did not, each carrying ParentSHA256 — the
@@ -3065,6 +3083,19 @@ func (d *Driver) timeoutVerdict(run *runState) Verdict {
 	v.Status = StatusNeedsReview
 	v.TimedOut = true
 	v.DevScored = run.devScored
+	// The pool half, for the same reason as DevScored above — and the EVIDENCE
+	// behind it, not just the count.
+	//
+	// ProvenMissed has ridden this verdict for a while; ProvenMutantIDs and
+	// AuthoredTest did not. That split is incoherent on its face: the record
+	// asserted "N survivors are provably catchable" while dropping WHICH ones
+	// and the test that proves it, so certify_repo_record's per-survivor
+	// Proven flag (derived from ProvenMutantIDs) marked every one of them
+	// unproven — a ledger row reading proven_missed=N beside zero proven
+	// survivors. One grain of a measurement is not a measurement.
+	v.PoolScored = run.poolScored
+	v.ProvenMutantIDs = run.provenIDs
+	v.AuthoredTest = run.authoredTest
 	return v
 }
 

@@ -240,9 +240,11 @@ Before reporting any of these, run the check named beside it.
   in this package, and it has now been the place a field was forgotten more than
   once." Both route through `verdictFromSpec`, which is why a `grep 'Verdict{'`
   finds one literal and looks reassuring — the literal is shared, the field
-  ASSIGNMENTS are not. As of this writing `timeoutVerdict` carries
-  `ProvenMissed` but neither `ProvenMutantIDs` nor `AuthoredTest`: the count
-  survives the timeout, the evidence behind it does not.
+  ASSIGNMENTS are not. The drift this entry was written to record —
+  `timeoutVerdict` carrying `ProvenMissed` without `ProvenMutantIDs` or
+  `AuthoredTest` — is FIXED, along with the missing `PoolScored` discriminator
+  that made the count unreadable. The two paths remain two paths, so the
+  hazard stands: a new scored field must be added to both.
 
   The entry is left here, corrected rather than deleted, because of HOW it got
   here: the reviewer was overruled on a `grep -rn "func tickAggregate"`, which

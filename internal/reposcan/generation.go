@@ -43,7 +43,12 @@ package reposcan
 // gained THIRTEEN fields, every one of which an older cached document
 // unmarshals to its zero value in silence. The behaviour half of this contract
 // is still enforced by review; the SHAPE half is now gated, below.
-const VerdictGeneration = "5"
+// "6" (2026-09-01): the Verdict gained PoolScored, the discriminator that says
+// whether ProvenMissed was MEASURED. A cached "5" verdict unmarshals it as
+// false, which reads as "the pool never scored" — turning a proven gap back
+// into an unproven one on every cache hit. Exactly the silent zero-fill the
+// comment above describes, caught by the gate below on its first outing.
+const VerdictGeneration = "6"
 
 // VerdictShapeSHA256 fingerprints advpool.Verdict's serialized shape: every
 // exported field's name, type and json tag, sorted by name and hashed.
@@ -65,4 +70,4 @@ const VerdictGeneration = "5"
 // Verdict's own FIELDS") and nothing wider. Nor can any fingerprint catch the
 // behaviour half: a scorer that computes a DIFFERENT number into the SAME
 // field is invisible here, and remains a review responsibility.
-const VerdictShapeSHA256 = "f6bf4ab5bd41ecf730f07454c13550ead73df96c8251e5226906b9443d5e6b66"
+const VerdictShapeSHA256 = "aa5ac8e7ff3118e46cbfeb37f4216bc37509832edca15638165317e939f2348c"

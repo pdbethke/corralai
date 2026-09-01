@@ -66,7 +66,7 @@ capture_help() {
 # subcommands but not their flag sets, so every flag added to `certify --local`
 # or `certify --repo` shipped undocumented — that is exactly how --local-endpoint
 # and --record-stream reached a release with zero mentions anywhere user-facing.
-CORRAL_SUBCOMMANDS=("certify --local" "certify --repo ." "certify verify")
+CORRAL_SUBCOMMANDS=("certify --local" "certify --repo ." "certify verify" "scans push")
 
 capture_sub_help() {
   local bin="$1"

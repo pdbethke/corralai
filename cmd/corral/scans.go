@@ -86,6 +86,7 @@ func runScans(args []string, open func(dsn string) (scansReader, error), stdout,
 	if len(args) == 0 {
 		fmt.Fprintln(stderr, "usage: corral scans list [--db <path>] [--limit n] [--json]")
 		fmt.Fprintln(stderr, "       corral scans show <scan-id> [--db <path>] [--json] [--evidence] [--timing]")
+		fmt.Fprintln(stderr, "       corral scans push --db <dsn> [--scan <id> | --all] [--since YYYY-MM-DD] [--dry-run]")
 		return 2
 	}
 
@@ -94,6 +95,8 @@ func runScans(args []string, open func(dsn string) (scansReader, error), stdout,
 		return runScansList(args[1:], open, stdout, stderr)
 	case "show":
 		return runScansShow(args[1:], open, stdout, stderr)
+	case "push":
+		return runScansPush(args[1:], openScanStoreForPush, pushBundle, stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "corral scans: unknown subcommand %q — want list or show\n", args[0])
 		return 2

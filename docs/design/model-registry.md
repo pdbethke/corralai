@@ -1,9 +1,10 @@
 <!-- SPDX-License-Identifier: Elastic-2.0 -->
 # The model registry — declare once, name seats by alias
 
-**Status: designed, not built.** This page exists so the design can be read
-and argued with before it ships, and so the reasoning behind today's
-verbosity is visible rather than implied.
+**Status: the registry ships in v0.8.2.** Aliases, provider-as-data, local
+entries, strict mode and resolution-recording are built. The two gates (a
+static build gate, a scheduled live check) and per-entry credentials are
+designed and not yet built — each is marked below.
 
 ## Why corral makes you type model names
 
@@ -71,6 +72,13 @@ and a hosted frontier model share no lineage, no vendor, and no training run.
 `--local-endpoint` exists today; the registry gives it a name and records
 which seat ran where.
 
+**Strict mode makes a typo cost two seconds.** A registry may declare
+`"strict": true`, and then any seat naming something that is not a declared
+alias is refused before the run starts — naming the value, the registry it
+came from, the declared aliases, and the ways out. Without it a mistyped
+alias falls through as a "concrete model name" and fails at the seat, hours
+into a paid run; that is the exact failure this page opens with.
+
 **It is not a default.** The registry declares what *may* be used; the
 operator still chooses. A seat with no alias still refuses the run, and an
 alias named `default` is refused at load — the word is a trap.
@@ -111,7 +119,35 @@ name a model the operator never chose. If a named model is unavailable the
 run refuses and says which one — the same posture as a missing goal source
 or an unreachable toolchain.
 
-## Status
+## What ships now, and what comes next
 
-Designed. Not built. The static gate is the cheapest piece and the one that
-would have prevented every incident above; it is the first slice.
+**Shipped (v0.8.2):** the declared set with file and env carriers, alias
+resolution at every seat, provider as data, local entries with endpoints,
+strict mode, and resolved-identity recording (verdict, ledger, statement and
+cache keys all carry the concrete model — an alias rename cannot move a key).
+
+**Next, in order:**
+
+1. **Per-entry credentials.** Keys are still resolved by hardcoded
+   per-provider environment lookups, which means one credential per provider
+   for the whole machine. That is not academic: an orphaned Google project
+   held the only `GEMINI_API_KEY` this repo knew about, and every run failed
+   `credits depleted` next to a funded balance until the key was traced. An
+   entry should name its own credential (`key_env`), refuse before spending
+   when it is missing, and record which credential source served the run.
+2. **Transport configuration.** Base URLs, timeouts and per-model parameters
+   are read from scattered environment variables and hardcoded defaults
+   today. They belong on the entry: code owns the protocol adapter, the
+   registry owns the instance. Three rules go with it — an unknown field is
+   an error rather than a silent no-op, anything that changes output is
+   recorded in the verdict, and a capability the provider lacks may not be
+   claimed by configuration.
+3. **The two gates.** The static gate (no vendor-shaped model name written
+   anywhere outside the registry, modelled on the Action-tag gate that keeps
+   version pins from rotting) and the live gate (every entry resolved against
+   its provider's own listing, in `corral doctor` and on a CI schedule).
+
+**Known and unfixed:** with no registry declared, an unknown model name is
+inferred as a local daemon rather than refused, so a typo'd cloud model is
+sent to Ollama instead of rejected. Strict mode closes this for projects that
+declare a registry; the general fix belongs with the live gate.

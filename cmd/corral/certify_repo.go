@@ -111,6 +111,23 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "%s: %v\n", "corral certify --repo", wmErr)
 		return 2
 	}
+
+	// The model registry (docs/design/model-registry.md): a project declares
+	// its models once in .corral/models.json and names seats by alias.
+	// ADDITIVE — with no registry nothing here emits or changes anything, and
+	// a value that is not a declared alias is still the concrete model name
+	// this flag has always accepted.
+	//
+	// Resolved HERE, before any seat value is read by the preflight, the cache
+	// key, the ledger or the signed statement, so every one of them records
+	// the CONCRETE model. An alias is a label for humans and is never
+	// authoritative.
+	seatReg, regErr := resolveSeatRegistry("corral certify --repo", *repoDir,
+		certifySeats(deriveModel, mutantModelFlag, writerModelFlag, criticModelFlag, shadowModelFlag, shadowWriterModelFlag), stderr)
+	if regErr != nil {
+		fmt.Fprintf(stderr, "corral certify --repo: %v\n", regErr)
+		return 2
+	}
 	if *scopeTestsFlag {
 		fmt.Fprintln(stderr, "corral certify --repo: --scope-tests was removed. Its paired-FILE scoping inverted verdicts (requests/adapters.py 1.00 -> 0.00). Selection is now by coverage evidence and on by default; pass --whole-suite to grade against the whole suite. See docs/design/test-selection.md")
 		return 2
@@ -546,6 +563,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 			criticModel:       *criticModelFlag,
 			shadowModel:       *shadowModelFlag,
 			shadowWriterModel: *shadowWriterModelFlag,
+			seatProviders:     seatReg.seatProviders(),
 		}, stderr); err != nil {
 			fmt.Fprintf(stderr, "corral certify --repo: %v\n", err)
 			if isAuditUsageError(err) {
@@ -805,6 +823,11 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "corral certify --repo: %v\n", lerr)
 		return 2
 	}
+	// A registry entry with a local provider carries its daemon endpoint, and
+	// it feeds the SAME role->url mechanism --local-endpoint does — one path,
+	// not two. An explicit --local-endpoint wins: it names one seat's daemon
+	// for this run, against a declaration that covers every run.
+	localEndpoints = mergeLocalEndpoints(localEndpoints, seatReg.localEndpoints())
 	if ex != nil {
 		ex.localEndpoints = localEndpoints
 	}

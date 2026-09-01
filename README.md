@@ -304,7 +304,7 @@ names come from. Put them in `.corral/models.json` and name seats by alias:
 { "strict": true,
   "fast":   { "provider": "google",    "model": "gemini-3.6-flash" },
   "writer": { "provider": "anthropic", "model": "claude-sonnet-5" },
-  "critic": { "provider": "openai",    "model": "gpt-5" },
+  "critic": { "provider": "google",    "model": "gemini-3.7-flash" },
   "local":  { "provider": "ollama",    "model": "qwen3.5:9b-q8_0",
               "endpoint": "http://127.0.0.1:11434" } }
 ```

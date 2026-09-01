@@ -13,7 +13,7 @@ writes the verdict to the run page verbatim.
 - uses: actions/checkout@v4
   with:
     fetch-depth: 0
-- uses: pdbethke/corralai@v0.8.2
+- uses: pdbethke/corralai@v0.8.3
   with:
     test-command: "go test ./..."
     anthropic-key: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -27,7 +27,7 @@ GitHub-hosted runners ship one.
 ## Pin a tag, not a branch
 
 `v0.3.0` and later carry an `action.yml`; `v0.1.0` and `v0.2.0` predate the
-action and do not. Prefer `pdbethke/corralai@v0.8.2` over `@main`, so a push to
+action and do not. Prefer `pdbethke/corralai@v0.8.3` over `@main`, so a push to
 `main` cannot change what runs in your CI, or pin the commit SHA you reviewed
 if you want a reference a re-tag also cannot move.
 
@@ -89,7 +89,7 @@ deliberate: adding a default would silently change the exit code of every
 existing caller.
 
 ```yaml
-- uses: pdbethke/corralai@v0.8.2
+- uses: pdbethke/corralai@v0.8.3
   with:
     test-command: "go test ./..."
     anthropic-key: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -288,12 +288,12 @@ execution in a jail — the critic is advisory and never gates it — so a singl
 key runs the whole thing:
 
 ```yaml
-- uses: pdbethke/corralai@v0.8.2
+- uses: pdbethke/corralai@v0.8.3
   with:
     test-command:  "pytest -q"
-    openai-key:    ${{ secrets.OPENAI_API_KEY }}
-    mutant-model:  gpt-5.1-codex
-    writer-model:  gpt-5.1-codex
+    gemini-key:    ${{ secrets.GEMINI_API_KEY }}
+    mutant-model:  gemini-3.6-flash
+    writer-model:  gemini-3.7-flash
     critic-model:  "off"
     shadow-model:  "off"
     min-kill-rate: "0.8"

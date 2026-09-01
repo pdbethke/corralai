@@ -473,7 +473,7 @@ The same adversarial audit `--local` runs is available on the brain for a wired 
 via the admin-only `start_adversarial_run` MCP tool (see [the flags reference
 below](#the-audit-flags)).
 
-**No brain required — the GitHub Action.** `pdbethke/corralai@v0.8.2` (pin the
+**No brain required — the GitHub Action.** `pdbethke/corralai@v0.8.3` (pin the
 tag, or a reviewed SHA — `@main` floats) runs `corral
 certify --repo` straight in your own CI job, on the checkout that's already
 there: no jail, no brain, no separate infra. It mutates the runner's checkout

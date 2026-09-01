@@ -116,6 +116,20 @@ anything else. The test-writer and test-critic must also be *different*
 models — corral's decorrelation guard refuses a shared model between the two
 ("nemo iudex in causa sua," no judge in their own case).
 
+**What that guard does and doesn't cover, stated plainly:** `CheckDecorrelation`
+(`internal/advpool/driver.go`) enforces exactly one thing —
+`test-critic != test-writer` by model name — and refuses the run otherwise.
+Cross-vendor seats (naming a critic from a different lab than the writer) are
+**advised**, for the reasons above, but are not required: two models from the
+same provider satisfy the guard. And the guard says nothing at all about the
+**mutant-generator** — it may share a model with the test-writer, and corral will
+not stop you. That's a real gap between the guard and the "no one may be judge in
+their own cause" framing; it matters less than it sounds because no model's
+opinion enters the signed verdict — the kill-rate is decided by your suite's exit
+code in the jail, not by what the generator or critic say. Widening the guard to
+cover generator/writer and vendor is on the list; doing so is a breaking change to
+every previously-recorded verdict, so it hasn't shipped yet.
+
 `--substrate workspace` mutates your own checkout in place instead of copying
 it into a bwrap jail — the caller (your shell, a CI runner) *is* the isolation
 boundary — which sidesteps the jail's one real limitation: a sandboxed run
@@ -253,6 +267,31 @@ execution-proven result — it only removes the second opinion. (Useful when a v
 offers just one model you're willing to run, since the critic must otherwise differ
 from the writer.) Full walkthrough of a real verdict: **[the "first audit"
 guide](https://corralai.dev/docs/first-audit/)**.
+
+### What does an audit cost?
+
+Scoring runs the audited file's real test command once per mutant, so the shape is
+
+```
+O(mutants × the target's suite runtime)
+```
+
+and the second term is the one that bites: it's a property of *your* repo, not of
+corral, and it varies by ~50× between projects. Measured on two real recorded scans
+(`docs/design/cost-model.md`, generated from the ledger, never hand-edited):
+`pallets/flask`'s suite runs in 1.46s and its scan finished in 2m16s (40 mutants);
+`psf/requests`'s suite runs in 77s — **53× slower** — and the otherwise-comparable
+scan took 14m21s (39 mutants) because the dominant cost is suite time, not file size
+or diff size. A repo whose suite takes 60–90s per invocation lands one to two orders
+of magnitude past the flask number, for that reason alone.
+
+The levers that bound it: `corral doctor` (below) catches environment failures for
+free before a run spends anything; `--top` bounds a whole-repo scan to the
+highest-ranked N candidates instead of auditing every file; `--n-mutants` bounds the
+per-shard mutant budget; and `--mutants`/`--record-mutants` let you pin a recorded
+mutant set and replay it — comparing runs, or re-grading after a fix, without paying
+for a fresh generator call. There is no cache that makes a slow suite fast; these
+bound *how many times* the suite runs, not how long each run takes.
 
 ### Before you spend a run: `corral doctor`
 

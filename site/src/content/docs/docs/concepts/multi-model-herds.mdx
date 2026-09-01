@@ -26,6 +26,24 @@ the weakest form of it, since two models from one lab share the most lineage;
 `--critic-model` plus a second vendor's key crosses a vendor boundary entirely. Bring Claude, Gemini, GPT, anything OpenAI-compatible, or a
 local model — no lock-in.
 
+**What is enforced, what is advised, and what isn't checked.** Read the
+sentence above precisely: `CheckDecorrelation` (`internal/advpool/driver.go`)
+compares exactly one pair — `test-critic` against `test-writer` — by model
+name, and refuses the run if they match. That is the *entire* rule.
+Cross-vendor separation (Sonnet writing, Gemini critiquing) is **advised**,
+not enforced: two models from the same lab satisfy the check just as well,
+which is why it's called the weakest form above rather than a loophole. And
+the **mutant-generator is not part of the check at all** — it may share a
+model with the test-writer, and often does (naming one model for both
+`--writer-model` and `--mutant-model` is a common, supported configuration).
+None of that is a defect in the verdict: the kill-rate that gates
+certification is decided by running your real suite against each mutant in a
+sandbox and reading the exit code, not by any model's opinion, so a
+correlated generator/writer pair cannot move the number it certifies on. It
+is a real gap between "decorrelated by construction" and what the code
+checks, and it's disclosed here rather than left for a reader to find in
+`driver.go`.
+
 ## A role-model policy for the hosted brain
 
 The same idea, generalized: `CORRALAI_ROLE_MODELS` maps `role=backend:model`

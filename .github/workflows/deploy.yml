@@ -1,5 +1,11 @@
 name: Deploy
 
+# Least privilege: validate only reads the repo; the self-hosted deploy job
+# builds and restarts a local service and never calls the GitHub API with an
+# elevated token.
+permissions:
+  contents: read
+
 on:
   push:
     branches: [main]
@@ -23,7 +29,7 @@ jobs:
     outputs:
       code: ${{ steps.filter.outputs.code }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0 # full history so the changed-file diff below is exact
       - name: Detect whether anything but docs changed
@@ -58,7 +64,7 @@ jobs:
           fi
           echo "non-docs changed: $code"
           echo "code=$code" >> "$GITHUB_OUTPUT"
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         if: steps.filter.outputs.code == 'true'
         with:
           go-version-file: go.mod

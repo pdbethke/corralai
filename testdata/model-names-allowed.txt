@@ -1,0 +1,160 @@
+# Allowlist for TestNoUnverifiedModelNameIsPublished (cmd/corral/model_name_gate_test.go).
+#
+# The static gate scans every tracked text file for a vendor-shaped model
+# name (gemini-*, claude-*, gpt-*, o1-*, o3-*, qwen*, llama*, mistral*,
+# mixtral*, deepseek*, gemma*, phi-*) and fails on anything not listed here.
+#
+# Format, one entry per line, pipe-delimited:
+#   <name> | <flag> | <reason>
+#
+# <flag> is one of:
+#   ok           the name may appear anywhere.
+#   prose-only   the name may appear ONLY in a position that reads as prose
+#                (not inside a fenced code block, not immediately after a
+#                model-shaped key such as `model:`/`-model `/`"model":`, and
+#                not inside a workflow `with:` block). Use this for a name
+#                that must be discussed (e.g. explaining it never existed)
+#                but must never again be typed as something to run.
+#
+# <reason> is free text. By convention it starts with one of these honest
+# categories, then the evidence:
+#   verified-served    — currently confirmed real and served by its provider;
+#                         appears where an operator would read it as "use
+#                         this". Add the date you checked.
+#   historical-record   — names what a PAST run actually used (a recorded
+#                         tape, a leaderboard/ledger fixture); not a
+#                         recommendation for a new run.
+#   test-fixture         — a literal string fed to a parser/router in a _test.go
+#                         file to exercise behavior across many name shapes,
+#                         some deliberately fake; asserts nothing about
+#                         whether the provider serves it.
+#   not-a-model          — the match is real text but is not a model name at
+#                         all (an actor label, an env-var/input name, a
+#                         software/tool name, a scratch path, a generic
+#                         family word used descriptively, a Go identifier).
+#   NEVER EXISTED         — the name was never served by its provider. Only
+#                         ever paired with the `prose-only` flag.
+#
+# To add a model: verify it against its provider's own model listing (or
+# `corral doctor`'s live gate once that lands), then add a line here dated
+# with today and the evidence, per docs/design/model-registry.md's "Adding a
+# model" section. Do not add a line to make the gate pass without doing that.
+
+# --- verified-served: current, documented, meant to be used -----------------
+gemini-3.6-flash | ok | verified-served 2026-09-01 — the project's own documented floor model (docs/design/model-registry.md, README quickstart, action docs, self-audit.yml writer/mutant/derive seats)
+gemini-3.7-flash | ok | verified-served 2026-09-01 — documented "strong" registry alias and self-audit critic seat (docs/design/model-registry.md, self-audit.yml, github-action.md)
+gemini-3.5-flash | ok | verified-served — the flash line's prior generation; still named in the demo README and UI-tour docs as a working config
+gemini-2.5-flash | ok | verified-served — named as a working `deploy/demo` OpenAI-compatible-endpoint example
+gemini-3.1-pro-preview | ok | verified-served — per docs/design/model-registry.md "the pro line stops at 3.1-pro-preview"; used as the illustrative Host.Model example in internal/brain/host.go and leaderboard.go
+gemini-embedding-001 | ok | verified-served — deploy/demo/docker-compose.yml default `CORRALAI_EMBED_MODEL`
+gemini-pro-latest | ok | verified-served — Google's rolling-alias naming convention (`-latest` suffix), exercised as an advpool routing target
+gemini-flash-latest | ok | verified-served — Google's rolling-alias naming convention (`-latest` suffix), exercised as an advpool routing target
+gemini-flash | ok | verified-served — generic reference to the real Gemini Flash family in prose describing observed tool-calling behavior (cmd/corral-agent/main.go, docs/DESIGN.md); not a pinned SKU
+claude-sonnet-5 | ok | verified-served 2026-09-01 — the project's own documented writer/mutant-generator default (README, docs/design/model-registry.md, quickstart, action docs)
+claude-haiku-4-5 | ok | verified-served 2026-09-01 — documented critic default (README, docs/corral/github-action.md, quickstart, action docs)
+claude-haiku-4-5-20251001 | ok | verified-served — dated snapshot of claude-haiku-4-5, used as the shadow-writer example in first-audit.mdx and internal/agentbackend/agentbackend.go's comment
+claude-sonnet-4-6 | ok | verified-served — named as a working `deploy/demo` Anthropic example (docker-compose.yml, README) and in agentbackend.go's comment
+claude-opus-4-8 | ok | verified-served — named in internal/agentbackend/agentbackend.go's comment listing real dated-snapshot examples alongside claude-sonnet-4-6 / claude-haiku-4-5-20251001
+gpt-5 | ok | verified-served — README's registry example for the openai-provider "critic" alias
+gpt-4o | ok | verified-served — named as a working `deploy/demo` OpenAI example
+gpt-5.1-codex | ok | verified-served — CHANGELOG.md: "OpenAI serves its Codex models — gpt-5-codex, gpt-5.1-codex, gpt-5.1-codex-mini, gpt-5.3-codex — on /v1/responses"; used in corral-harness docs and github-action.mdx
+gpt-5.1-codex-mini | ok | verified-served — same CHANGELOG.md Codex-model sentence; internal/agentbackend/responses.go routes it
+gpt-5.3-codex | ok | verified-served — same CHANGELOG.md Codex-model sentence
+gpt-5-codex | ok | verified-served — same CHANGELOG.md Codex-model sentence; internal/agentbackend/responses.go routes it
+gpt-5-mini | ok | verified-served — named alongside claude-sonnet-5/claude-haiku-4-5 in the topology.mdx screenshot alt-text as a real per-agent model label
+llama3.2:3b | ok | verified-served — named as a working `deploy/demo` local Ollama example (docker-compose.yml, README, demo-map.md)
+qwen2.5-coder:7b | ok | verified-served — the demo's own default local model (deploy/demo/README.md, docs/cli/corral-agent.md, docs/DESIGN.md "measured live")
+qwen2.5-coder:14b | ok | verified-served — named in local-models-break-things-well.mdx as an actually-run local model and in deploy/demo/docker-compose.split.yml
+qwen3.5:9b-q8_0 | ok | verified-served — README/docs/design/model-registry.md's documented "local" registry example, matches a recorded public-warehouse audit per that doc
+gemma4:12b | ok | verified-served — named in field notes as an actually-run local model, matches internal/thinkmode/thinkmode.go's probed prefix list
+
+# --- verified-served (measured): production routing code, not docs ---------
+deepseek-r1 | ok | verified-served (measured) — internal/thinkmode/thinkmode.go's `probed` list, with a recorded thinking/content measurement in the package doc comment
+gemma4 | ok | verified-served (measured) — same `probed` list and measurement comment as deepseek-r1 above; also named in CHANGELOG.md
+
+# --- historical-record: what a past/recorded run actually used --------------
+claude-3-5-sonnet | ok | historical-record — appears in the published site/src/data/recordings/corral-audits-corral.json tape as a real run's model, not a current recommendation
+gemini-3.1-pro-preview | ok | historical-record — also appears in the published more-itertools-reliable-critic recording tape (see verified-served entry above for the primary reason)
+deepseek-r1:14b | ok | historical-record — internal/ollamareq/ollamareq.go and thinkmode.go's probed-tag comment; a specific quantized tag exercised on real hardware, not asserted as currently served by any hosted API
+claude-opus | ok | historical-record / illustrative — generic "e.g. claude-opus" shorthand in jsonschema/doc-comment field descriptions (internal/brain/tasks.go, internal/buildstore/store.go, internal/rolemodel/rolemodel.go); not an exact pinned SKU, not a recommendation to run it
+gemini-3 | ok | historical-record / illustrative — same "e.g. claude-opus, gemini-3" shorthand in internal/brain/tasks.go's jsonschema doc comment
+
+# --- not-a-model: real text, but not a model name ----------------------------
+gemini-key | ok | not-a-model — the Action input / env-var name for a Gemini credential (action.yml, github-action.md), never a model identifier
+gemini-critic | ok | not-a-model — an *actor* label inside a recorded tape event (site/src/data/recordings/pool-fence-crossvendor.json); the tape's actual `"model"` field says gemini-3.5-flash
+gemini-test | ok | not-a-model — a synthetic backend-under-test id in internal/agentbackend/cache_test.go, deliberately not a real model
+claude-writer | ok | not-a-model — an *actor* label inside a recorded tape event (pool-fence-crossvendor.json) and the matching screenshot alt-text in WatchItBack.astro; describes the writer-role-run-by-Claude, not a literal model string
+claude-test | ok | not-a-model — a synthetic backend-under-test id in internal/agentbackend/cache_test.go
+claude-x | ok | not-a-model — a deliberately fake provenance string in cmd/corral/certify_repo_bundle_test.go ("derived:claude-x@v1.2.3")
+claude-1000 | ok | not-a-model — a Claude Code sandbox scratchpad path fragment (`/tmp/claude-1000/...`) baked into a Python-coverage test fixture path, internal/lang/coverage_python_test.go
+gpt-x | ok | not-a-model — a synthetic telemetry-event model id in internal/ui/ui_test.go
+gpt-pilot | ok | not-a-model — the third-party coding-agent tool "GPT Pilot", detected by name in cmd/corral-agent/main.go's local-agent scan; not a model
+llamafile | ok | not-a-model — the llamafile project/binary name, listed as a recognized local backend in internal/models/models.go
+llamacpp | ok | not-a-model — the llama.cpp project's local-provider identifier string (no separator), listed as a recognized local backend in internal/models/models.go
+llama.cpp | ok | not-a-model — the llama.cpp project name, mentioned in internal/agentbackend/agentbackend.go's backend-list comment
+llama-3b | ok | not-a-model — generic size-tier shorthand ("smarter/larger models... llama-3b" ) inside an LLM prompt template string in internal/mission/routing.go, not a pinned model id
+qwen-coder | ok | not-a-model — same generic tier-shorthand prompt string in internal/mission/routing.go
+qwen-vs-llama | ok | not-a-model — a descriptive comparison phrase in deploy/demo/docker-compose.yml ("shows a real qwen-vs-llama A-vs-B side-by-side"), not a model id
+llama | ok | not-a-model — bare vendor-family word used descriptively ("llama has no evidence...") in site/src/content/field-notes/your-tests-suck.mdx and as a Go test-fixture family alias
+qwen | ok | not-a-model — bare vendor-family word/alias, used descriptively in docs and as a literal short alias (`Model: "qwen"`) in Go test fixtures exercising family-prefix matching
+
+# --- test-fixture: literal strings feeding a parser/router in _test.go ------
+claude-3-5-sonnet | ok | test-fixture — internal/mission/staffing_model_test.go's provider/model parsing table (see historical-record entry above for its other occurrence)
+claude-haiku-4-5 | ok | test-fixture — cmd/corral-agent/structured_test.go prompt-rendering fixture (see verified-served entry above for its primary reason)
+claude-haiku-4-5-20251001 | ok | test-fixture — cmd/corral/certify_repo_shadow_writer_test.go (see verified-served entry above)
+claude-opus-4 | ok | test-fixture — internal/brain/leaderboard_test.go's Host fixture
+claude-opus-4-1 | ok | test-fixture — cmd/corral/certify_local_roles_test.go's role-assignment fixture
+claude-sonnet | ok | test-fixture — internal/buildstore/store_test.go's ProducedBy-parsing fixture
+claude-sonnet-4-6 | ok | test-fixture — cmd/corral-agent/model_test.go's "assigned model wins" fixture (see verified-served entry above for its primary reason)
+claude-sonnet-5 | ok | test-fixture — cmd/corral-agent/backend_test.go's rate-limit-handling fixture (see verified-served entry above for its primary reason)
+claude-sonnet-5x | ok | test-fixture — internal/modelrank/rank_test.go's deliberately-not-a-real-name ranking fixture
+deepseek-coder:6.7b | ok | test-fixture — internal/thinkmode/thinkmode_test.go, asserting this tag is NOT probed (different DeepSeek line)
+deepseek-r1:8b | ok | test-fixture — internal/thinkmode/thinkmode_test.go's probed-prefix table
+deepseek-v3:latest | ok | test-fixture — internal/agentbackend/thinkmode_wire_test.go and thinkmode_test.go, asserting non-probed
+gemini-3.1-pro | ok | test-fixture — internal/brain/leaderboard_test.go's Host fixture
+gemini-pro | ok | test-fixture — internal/criticscore/store_test.go's adjudication fixture
+gemma2:9b | ok | test-fixture — internal/thinkmode/thinkmode_test.go, asserting non-probed (earlier gemma line)
+gemma3:12b | ok | test-fixture — internal/thinkmode/thinkmode_test.go, asserting non-probed (earlier gemma line)
+gpt-4o-mini | ok | test-fixture — internal/brain/advpool_test.go's ShadowModel fixture
+llama3 | ok | test-fixture — internal/thinkmode/thinkmode_test.go, asserting "llama3 must not match on the 3" (prefix-boundary regression test)
+llama3.3:70b | ok | test-fixture — internal/agentbackend/thinkmode_wire_test.go and thinkmode_test.go, asserting non-probed
+mistral:7b | ok | test-fixture — internal/agentbackend/thinkmode_wire_test.go and thinkmode_test.go, asserting non-probed
+o1-preview | ok | test-fixture — internal/agentbackend/responses_test.go's model-name table (also a real, historical OpenAI model name)
+o3-mini | ok | test-fixture — internal/agentbackend/responses_test.go's model-name table (also a real, historical OpenAI model name)
+qwen2.5-coder | ok | test-fixture — internal/rolemodel/rolemodel.go's doc-comment example (family name with no tag)
+qwen2.5:32b | ok | test-fixture — internal/thinkmode/thinkmode_test.go, asserting non-probed (pre-3 line)
+qwen2.5:7b | ok | test-fixture — internal/thinkmode/thinkmode_test.go, including a registry-qualified `library/qwen2.5:7b` variant
+qwen2:7b | ok | test-fixture — internal/thinkmode/thinkmode_test.go, asserting non-probed (pre-3 line)
+qwen3 | ok | test-fixture — internal/thinkmode/thinkmode.go's doc comment listing the qwen3 family it probes for
+qwen3:14b | ok | test-fixture — internal/agentbackend/thinkmode_wire_test.go, asserting probed
+qwen3.5 | ok | test-fixture — internal/thinkmode/thinkmode.go's doc comment (family name with no tag)
+qwen3.5:9b | ok | test-fixture — internal/thinkmode/thinkmode.go's example and cmd/corral/model_registry_test.go's provider-sharing fixture (see verified-served entry for qwen3.5:9b-q8_0)
+qwen3.5:35b-a3b-q4_K_M | ok | test-fixture — internal/thinkmode/thinkmode_test.go, "full tag with quant suffix"
+qwen3.6 | ok | test-fixture — internal/thinkmode/thinkmode.go's doc comment (family name with no tag)
+qwen3.6:27b | ok | test-fixture — internal/thinkmode/thinkmode_test.go, "qwen3 line"
+qwen3.8 | ok | test-fixture — internal/thinkmode/thinkmode.go's doc comment (family name with no tag)
+qwen3.8:27b | ok | test-fixture — internal/thinkmode/thinkmode_test.go, "qwen3 line"
+qwen3-coder | ok | test-fixture — internal/thinkmode/thinkmode.go's doc comment (family name with no tag)
+qwen3-coder:30b | ok | test-fixture — internal/agentbackend/thinkmode_wire_test.go, asserting probed
+qwen3-next | ok | test-fixture — internal/thinkmode/thinkmode.go's doc comment (family name with no tag)
+qwen3-next:80b | ok | test-fixture — internal/thinkmode/thinkmode_test.go, "qwen3 line"
+qwen3-vl | ok | test-fixture — internal/thinkmode/thinkmode.go's doc comment (family name with no tag)
+qwen:110b | ok | test-fixture — internal/thinkmode/thinkmode.go's doc comment, "the original Qwen 1... is pre-3"
+qwen2.5 | ok | test-fixture — internal/thinkmode/thinkmode.go's doc comment ("harmless on qwen2.5... which have no reasoning pass"), family name with no tag
+deepseek | ok | test-fixture — comment prose in internal/thinkmode/thinkmode_test.go ("different deepseek line") and internal/mission/routing_test.go ("deepseek untested for tester")
+gemma | ok | test-fixture — comment prose in internal/thinkmode/thinkmode_test.go ("earlier gemma line, NOT probed")
+mistral | ok | not-a-model — bare vendor stem, from this gate's own pattern list ("mistral*") quoted in docs/design/model-registry.md's "how to add a model" section
+mixtral | ok | not-a-model — bare vendor stem, from this gate's own pattern list ("mixtral*") quoted in docs/design/model-registry.md's "how to add a model" section
+
+# --- not-a-model: Go identifiers that merely start with a vendor stem -------
+llamaCritic | ok | not-a-model — a Go test variable name in internal/brain/leaderboard_test.go, not a model string literal
+llamaCritic.Executions | ok | not-a-model — a Go struct field access on the llamaCritic variable above
+llamaCritic.ExecutionsOK | ok | not-a-model — a Go struct field access on the llamaCritic variable above
+llamaCritic.ExecPassRatePct | ok | not-a-model — a Go struct field access on the llamaCritic variable above
+qwenWriter | ok | not-a-model — a Go test variable name in internal/brain/leaderboard_test.go, not a model string literal
+qwenWriter.Executions | ok | not-a-model — a Go struct field access on the qwenWriter variable above
+qwenWriter.ExecutionsOK | ok | not-a-model — a Go struct field access on the qwenWriter variable above
+qwenWriter.ExecPassRatePct | ok | not-a-model — a Go struct field access on the qwenWriter variable above
+
+# --- prose-only: discussed, must never be typed as a recommendation --------
+gemini-3.6-pro | prose-only | NEVER EXISTED — the served >=3.6 line is flash only; the pro line stops at gemini-3.1-pro-preview. Appears only in post-mortem prose (docs/design/model-registry.md's "What went wrong" section, .github/workflows/self-audit.yml's writer-seat comment explaining the two-day/two-hour incident). Must fail this gate the moment it shows up in a code fence, after a `model:`/`-model`/`"model"` key, or in a workflow `with:` value.

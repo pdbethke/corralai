@@ -2,9 +2,10 @@
 # The model registry — declare once, name seats by alias
 
 **Status: the registry ships in v0.8.2.** Aliases, provider-as-data, local
-entries, strict mode and resolution-recording are built. The two gates (a
-static build gate, a scheduled live check) and per-entry credentials are
-designed and not yet built — each is marked below.
+entries, strict mode and resolution-recording are built. The repo-wide
+static gate is built (see "The static gate: how to add a model" below). The
+live gate and per-entry credentials are designed and not yet built — each is
+marked below.
 
 ## Why corral makes you type model names
 
@@ -144,8 +145,42 @@ cache keys all carry the concrete model — an alias rename cannot move a key).
    claimed by configuration.
 3. **The two gates.** The static gate (no vendor-shaped model name written
    anywhere outside the registry, modelled on the Action-tag gate that keeps
-   version pins from rotting) and the live gate (every entry resolved against
-   its provider's own listing, in `corral doctor` and on a CI schedule).
+   version pins from rotting) — **built**, see below. The live gate (every
+   entry resolved against its provider's own listing, in `corral doctor` and
+   on a CI schedule) is still design-only.
+
+### The static gate: how to add a model
+
+`TestNoUnverifiedModelNameIsPublished` (`cmd/corral/model_name_gate_test.go`)
+scans every tracked text file in the repo for a vendor-shaped model name
+(`gemini-*`, `claude-*`, `gpt-*`, `o1-*`, `o3-*`, `qwen*`, `llama*`,
+`mistral*`, `mixtral*`, `deepseek*`, `gemma*`, `phi-*`) and fails the build on
+any name that isn't in `testdata/model-names-allowed.txt`. It is the same
+mechanism as `TestDocsNeverAdvertiseAnUncutActionTag` for Action tags: over-
+matching costs one allowlist line, under-matching costs what a phantom name
+has already cost this project twice in one day (see "What went wrong" above).
+
+**To add a model name anywhere in the repo:**
+
+1. Verify it against the provider's own model listing — today that means
+   checking the provider's docs or API directly; once the live gate lands,
+   `corral doctor` will do this for a declared registry. Do not add a name
+   because it looks like it should exist (that is exactly how
+   `gemini-3.6-pro` got written down).
+2. Add a line to `testdata/model-names-allowed.txt`:
+   `<name> | ok | verified-served <today's date> — <where you checked, and
+   where the name now appears>`.
+3. Use the model. The gate re-scans on every `go test ./...`, so a later
+   retirement (or a typo introduced by search-and-replace) is caught the next
+   time CI runs, not months later.
+
+A name that must be **discussed but never run** — the shape `gemini-3.6-pro`
+is in permanently, as the worked example of this exact failure — gets
+`prose-only` instead of `ok`, and the gate additionally fails if that name
+ever appears in a fenced code block, right after a `model:`/`-model
+`/`"model":` key, or inside a workflow `with:` block. Explaining a phantom
+model in a sentence is allowed; writing it where a reader or CI would copy
+it is not.
 
 **Known and unfixed:** with no registry declared, an unknown model name is
 inferred as a local daemon rather than refused, so a typo'd cloud model is

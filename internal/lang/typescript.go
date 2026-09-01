@@ -192,3 +192,10 @@ func (tsPlugin) ParseTestList(string) []string { return nil }
 // same class of bug this method exists to close for Python. See
 // lang.Plugin.WorkspaceRunEnv's doc comment.
 func (tsPlugin) WorkspaceRunEnv() (env []string, cleanup func()) { return nil, func() {} }
+
+// FailFastArgs is the JS runners' `--bail`; see jsFailFastArgs. The stock
+// `node --experimental-strip-types --test` command has no such flag and is
+// unchanged.
+func (tsPlugin) FailFastArgs(testCmd []string) ([]string, bool) {
+	return jsFailFastArgs(testCmd)
+}

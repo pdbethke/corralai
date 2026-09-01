@@ -474,3 +474,14 @@ func (phpPlugin) ConcatTests(parts []AuthoredPart) (string, error) {
 		renameOnCollision: func(string) bool { return true },
 	}, prefix, func(headers []string) string { return strings.Join(headers, "\n") })
 }
+
+// FailFastArgs is phpunit's `--stop-on-failure`. See lang.FailFaster.
+func (phpPlugin) FailFastArgs(testCmd []string) ([]string, bool) {
+	if len(testCmd) == 0 || cmdIsShellWrapped(testCmd) {
+		return nil, false
+	}
+	if cmdHasWord(testCmd, "phpunit") {
+		return []string{"--stop-on-failure"}, true
+	}
+	return nil, false
+}

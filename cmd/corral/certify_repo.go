@@ -79,6 +79,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	transparencyFlag := fs.Bool("transparency", false, "also upload the --attest statement — SIGNED into a DSSE envelope with the local certify key — to Sigstore's public Rekor transparency log (requires --attest — there is nothing to log without one; and a usable local signing key, CORRALAI_CERTIFY_KEY_FILE — refused with exit 2 naming it if none is configured, since an unsigned entry in a public log is worthless and this never mints a fresh key just to have one). THE ENTRY IS PUBLIC AND PERMANENT: once logged it cannot be removed or edited, by anyone, including you. It carries the same statement --attest writes — the repo URL, the audited commit, per-file paths, kill rates and survivor/proven-gap counts, and the models in each role — and never the audited source itself. Fails OPEN for the UPLOAD itself: an unreachable log or a rejected entry prints one line and leaves the scan's own verdict and exit code untouched; the local statement, envelope and ledger are unaffected either way. Prints the log index and entry UUID on success, and records both in the scan ledger and, with --push, the warehouse")
 	maxProvenMissedFlag := fs.String("max-proven-missed", "", "fail the scan (exit 1) if ANY audited file has MORE than this many proven-missed gaps — survivors the pool then killed with a test it WROTE and RAN. Opt-in and unset by default. Prefer this to --min-kill-rate as a merge gate: a kill rate is a proportion of freshly generated mutants and moves between runs on unchanged code, so a threshold set near a healthy value flaps red and gets switched off. A proven-missed gap is a specific demonstrated bug the suite does not catch, established by execution, and 0 means the pool proved nothing — not that it sampled well")
 	minKillRateFlag := fs.String("min-kill-rate", "", "fail the scan (exit 1) if ANY audited file's kill rate is below this value (0.0-1.0 inclusive; a minimum, so a file exactly at the threshold passes). Opt-in: unset by default, so exit codes are unchanged unless this is given. Applies PER FILE, not to the aggregate — a well-tested file must not mask a weak one")
+	noFailFastFlag := fs.Bool("no-fail-fast", false, noFailFastHelp)
 	preflightFlag := fs.Bool("preflight", false, "run the project's test suite once with coverage instrumentation and report which source files it never executes. One extra suite run; reports coverage-grade evidence, not proof")
 	recordFlag := fs.Bool("record", false, "record every file this scan audited or rejected, and why, into the DuckDB scan ledger (default: off). A BOOL here — unlike `certify --local`'s --record, which takes a tape PATH — see --record-db for where the ledger goes. A recording failure never changes the scan's verdict or exit code")
 	mutantsFlag := fs.String("mutants", "", "REPLAY a recorded mutant set (see --record-mutants) instead of generating one: every audited file is graded against exactly the mutants in this file, and not one generator model call is made. Mutants are authored by a model, so an ordinary run re-draws the exam every time and two runs of the same audit are not two samples of one measurement — pin the set and a change to anything ELSE becomes measurable. Every selected file must appear in the set with the SAME bytes it was recorded from; a missing file or a changed one is refused (exit 2) up front, never half-replayed. Reads a corral-mutants-2 document, or an older corral-mutants-1 one, whose whole-file mutants still replay byte-for-byte.")
@@ -1071,6 +1072,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 	ex.mutantConcurrency = mutantConc
+	ex.noFailFast = *noFailFastFlag
 
 	// ex is non-nil here: it is constructed on every non-dry-run path above,
 	// and the dry run returned before this point.
@@ -3807,6 +3809,10 @@ type localExecutor struct {
 	// leftover of the jail budget that file-parallelism cannot spend. Always 1
 	// on the workspace substrate; see resolveMutantConcurrency.
 	mutantConcurrency int
+	// noFailFast is `--no-fail-fast`: grade every mutant against the whole
+	// selected set instead of stopping at the first failing test. See
+	// noFailFastHelp.
+	noFailFast bool
 
 	// presetMutants is the `--mutants` replay set, keyed by repo-relative
 	// path: a file present here is graded against exactly these mutants and
@@ -4093,6 +4099,7 @@ func (l *localExecutor) auditInputFor(j reposcan.Job) localAuditInput {
 		// because adequacy.WorkspacePool removed the shared checkout that
 		// made the pin necessary).
 		mutantConcurrency: l.mutantConcurrency,
+		noFailFast:        l.noFailFast,
 		// Where the pool's concurrency probe writes its answer for this file.
 		// A pointer because the input travels BY VALUE from here to
 		// buildJailWiring; allocated for every job so the executor can print

@@ -509,13 +509,19 @@ type Verdict struct {
 	// at 1). Nil on a batched run (one seat, one repair budget for the whole
 	// file — a single count would not be a spread) and on a run that never
 	// reached the writer at all.
-	WriterAttempts  *TestsPerMutantSpread `json:"writer_attempts,omitempty"`
-	RegionsTotal    int                   // mutant-generator seats the run dispatched
-	RegionsProbed   int                   // seats that returned usable mutants
-	DroppedRegions  []string              // seats abandoned after MaxShardRetries — the coverage shortfall
-	VacuousFindings []queue.Finding       // test-critic's designed-to-pass/vacuous flags
-	ModelsByRole    map[string]string
-	Status          string // certified | needs-review
+	WriterAttempts *TestsPerMutantSpread `json:"writer_attempts,omitempty"`
+	RegionsTotal   int                   // mutant-generator seats the run dispatched
+	RegionsProbed  int                   // seats that returned usable mutants
+	DroppedRegions []string              // seats abandoned after MaxShardRetries — the coverage shortfall
+	// DuplicateMutants is how many generated mutants were byte-identical
+	// edits of another and were collapsed before scoring — pure wasted suite
+	// runs, removed. Disclosed rather than dropped: a denominator that
+	// shrank silently is one nobody can reconcile against the generator's
+	// own output. Omitted from JSON when zero, which is the common case.
+	DuplicateMutants int             `json:"duplicate_mutants,omitempty"`
+	VacuousFindings  []queue.Finding // test-critic's designed-to-pass/vacuous flags
+	ModelsByRole     map[string]string
+	Status           string // certified | needs-review
 	// TestWriterFailed is true when the pool exhausted MaxTestWriterAttempts
 	// without producing a compiling killing test. HONESTY NOTE: when this is
 	// true, ProvenMissed==0 does NOT mean "no real gaps" — it means "gaps
@@ -1020,7 +1026,12 @@ type runState struct {
 	// partial audit is provably partial rather than silently partial. Each
 	// entry is recorded exactly once, guarded by droppedKeys.
 	droppedRegions []string
-	regionsTotal   int
+	// dupMutants is how many generated mutants were byte-identical edits of
+	// another and were collapsed before scoring (see adequacy.DedupeMutants).
+	// Disclosed on the verdict so the graded denominator can be reconciled
+	// against what the generator actually emitted.
+	dupMutants   int
+	regionsTotal int
 	// regionsProbed counts the regions that actually contributed at least one
 	// mutant to the union scored against the dev suite — NOT regionsTotal
 	// minus len(droppedRegions), which would over-report a shard that parsed
@@ -2018,6 +2029,27 @@ func (d *Driver) tickDevAdequacy(ctx context.Context, missionID int64, run *runS
 	run.regionsTotal = regionsTotal
 	run.regionsProbed = probed
 
+	// TWO IDENTICAL HUNKS ARE ONE MEASUREMENT, and scoring charges a whole
+	// suite run for each. Sharded generation aims several seats at overlapping
+	// regions and a model asked for n distinct mutations will sometimes emit
+	// the same one twice; the duplicate cannot produce a different verdict
+	// (same edit, same source), it only inflates the denominator and the wall
+	// clock. Collapsed HERE — where one file's shards are unioned and nowhere
+	// else, so nothing can ever dedupe across files — and DISCLOSED below, so
+	// the denominator stays reconcilable against the generator's own output.
+	//
+	// Idempotent per re-entry: this scan re-runs on every tick, and it
+	// recomputes `mutants` from the tasks each time rather than accumulating.
+	// COUNTED here, COLLAPSED in adequacy.Score. The scorer is where the
+	// saving is taken (it grades one of each identical hunk and attributes the
+	// answer to both, leaving Killed/Survived/Total and the kill rate exactly
+	// as they were); this is only where the fact reaches the verdict.
+	if _, dup := adequacy.DedupeMutants(mutants); dup > 0 {
+		run.dupMutants = dup
+		log.Printf("advpool: run %d: %d duplicate mutant(s) collapsed — identical hunk, one measurement",
+			missionID, run.dupMutants)
+	}
+
 	if len(mutants) == 0 {
 		// Unconditional on len(mutants): a run where every shard parsed
 		// cleanly but each produced zero mutants would otherwise sail past
@@ -2548,6 +2580,7 @@ func (d *Driver) tickAggregate(ctx context.Context, missionID int64, run *runSta
 	v.PromptShape = run.promptShape
 	v.RegionsProbed = run.regionsProbed
 	v.DroppedRegions = run.droppedRegions
+	v.DuplicateMutants = run.dupMutants
 	// The evidence behind ProvenMissed rides onto the verdict beside the count
 	// itself — set here, with the other post-aggregate fields, rather than
 	// widening aggregate()'s already-long signature.
@@ -2994,6 +3027,7 @@ func (d *Driver) timeoutVerdict(run *runState) Verdict {
 	v.RegionsTotal = run.regionsTotal
 	v.RegionsProbed = run.regionsProbed
 	v.DroppedRegions = run.droppedRegions
+	v.DuplicateMutants = run.dupMutants
 	v.PromptShape = run.promptShape
 	v.ModelsByRole = map[string]string(d.Assign)
 	// A stalled run still spent everything it spent, and it is the run an

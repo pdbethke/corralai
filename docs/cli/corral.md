@@ -188,6 +188,8 @@ Usage of certify --local:
     	PER-SHARD seeded-violation mutant budget (default 5) — this is NOT the run's total: total mutants scored scale with --max-shards (default 8) shards, and DOUBLE again if the shadow challenger is on (default). E.g. the default 5 with the default 8 shards means up to ~40 primary + ~40 shadow = ~80 full dev-suite jail executions, not 5 — --n-mutants 20 means roughly ~320
   -no-bind-deps
     	copy dependency dirs into the jail workspace instead of bind-mounting them read-only (the pre-bind behavior; subject to the workspace size cap)
+  -no-fail-fast
+    	grade every mutant with the WHOLE selected test set instead of stopping at the first failing test. By default a killed mutant stops at the one test that killed it (pytest -x, go test -failfast, jest --bail, phpunit --stop-on-failure), which is most of the per-mutant cost on a repo with a real suite; the verdict is identical either way, and the baseline always runs everything. COSTS: turning this off makes each killed mutant pay for its whole selected set again — on a 77s suite that is the dominant term in the audit. Use it only if your suite is order-dependent or flaky in a way that makes an early stop misleading.
   -out corral certify verify <file> --pubkey <hex> --allow-unanchored
     	also write the signed verdict as a self-contained record file, re-verifiable offline with corral certify verify <file> --pubkey <hex> --allow-unanchored
   -poll duration
@@ -254,6 +256,8 @@ Usage of certify --repo:
     	model for the mutant-generator role — REQUIRED, corral has no default models. Takes a registry alias (.corral/models.json) or a concrete model name
   -mutants string
     	REPLAY a recorded mutant set (see --record-mutants) instead of generating one: every audited file is graded against exactly the mutants in this file, and not one generator model call is made. Mutants are authored by a model, so an ordinary run re-draws the exam every time and two runs of the same audit are not two samples of one measurement — pin the set and a change to anything ELSE becomes measurable. Every selected file must appear in the set with the SAME bytes it was recorded from; a missing file or a changed one is refused (exit 2) up front, never half-replayed. Reads a corral-mutants-2 document, or an older corral-mutants-1 one, whose whole-file mutants still replay byte-for-byte.
+  -no-fail-fast
+    	grade every mutant with the WHOLE selected test set instead of stopping at the first failing test. By default a killed mutant stops at the one test that killed it (pytest -x, go test -failfast, jest --bail, phpunit --stop-on-failure), which is most of the per-mutant cost on a repo with a real suite; the verdict is identical either way, and the baseline always runs everything. COSTS: turning this off makes each killed mutant pay for its whole selected set again — on a 77s suite that is the dominant term in the audit. Use it only if your suite is order-dependent or flaky in a way that makes an early stop misleading.
   -no-goal-cache
     	skip the goal cache — every candidate is re-derived even when a PRIOR scan already derived a goal for the exact same bytes, model and prompt revision. Re-buys a model call per file that a content-addressed cache would otherwise have served for free; use this to isolate goal-derivation variance from a comparison, or on a scan whose operator does not want a goal receipt kept in the ledger at all. The cache lives in the same ledger --record-db names, independent of --record itself
   -no-selection-cache

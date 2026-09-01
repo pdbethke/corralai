@@ -296,6 +296,13 @@ scored. Corral's own `time:` line reports the phases it measures; phases that di
 run read `—`. Treat the totals above as the floor for a repeat run, not the ceiling
 for a first one.
 
+**A model registry is the next thing here.** Naming four seats on every
+command line is the visible cost of having no defaults, and it is where stale
+model names come from — see [docs/design/model-registry.md](docs/design/model-registry.md)
+for the design: declare models once, name seats by alias, with a build gate
+that refuses any model name written outside the registry and a scheduled check
+that resolves each one against its provider. Designed, not built.
+
 The levers that bound it: `corral doctor` (below) catches environment failures for
 free before a run spends anything; `--top` bounds a whole-repo scan to the
 highest-ranked N candidates instead of auditing every file; `--n-mutants` bounds the

@@ -60,6 +60,16 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
+	// The model registry, resolved exactly as certify resolves it — doctor
+	// exists to answer "would this run work", and it can only answer that
+	// about the CONCRETE model a seat would really use. Its refusals are the
+	// registry's, so a broken declaration is caught here for free.
+	if _, regErr := resolveSeatRegistry("corral doctor", ".",
+		certifySeats(nil, mutantModel, writerModel, criticModel, nil, nil), stderr); regErr != nil {
+		fmt.Fprintf(stderr, "corral doctor: %v\n", regErr)
+		return 2
+	}
+
 	// Everything after `--` is the test command, exactly as certify takes it.
 	cmd := fs.Args()
 

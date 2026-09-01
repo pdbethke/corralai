@@ -134,6 +134,17 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "%s: %v\n", "corral certify --local", wmErr)
 		return 2
 	}
+
+	// The model registry (docs/design/model-registry.md). Same contract as the
+	// --repo path: a declared alias resolves to its concrete model HERE, before
+	// anything else reads the value, and anything that is not a declared alias
+	// stays exactly as typed. With no registry declared this changes nothing.
+	seatReg, regErr := resolveSeatRegistry("corral certify --local", *repoDirFlag,
+		certifySeats(nil, mutantModel, writerModel, criticModel, shadowModelFlag, shadowWriterModelFlag), stderr)
+	if regErr != nil {
+		fmt.Fprintf(stderr, "corral certify --local: %v\n", regErr)
+		return 2
+	}
 	if strings.TrimSpace(*codePath) == "" {
 		fmt.Fprintln(stderr, "corral certify --local: --code is required")
 		return 2
@@ -152,6 +163,9 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "corral certify --local: %v\n", lerr)
 		return 2
 	}
+	// A local registry entry places its seat on its own daemon through the
+	// SAME role->url map --local-endpoint fills; the explicit flag wins.
+	localEndpoints = mergeLocalEndpoints(localEndpoints, seatReg.localEndpoints())
 
 	if strings.TrimSpace(*repoDirFlag) == "" && (len(bindDirFlag) > 0 || *noBindDepsFlag) {
 		fmt.Fprintln(stderr, "corral certify --local: --bind-dir/--no-bind-deps require --repo-dir (they configure how the cloned tree is seeded into the jail; a single --code file has no dependency dirs to bind or copy)")
@@ -285,6 +299,7 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 		writerModel: *writerModel, criticModel: *criticModel,
 		mutantModel: *mutantModel, shadowModel: *shadowModelFlag,
 		shadowWriterModel: *shadowWriterModelFlag,
+		seatProviders:     seatReg.seatProviders(),
 		writerMode:        writerMode,
 
 		jail: *jailFlag, checkArgv: checkArgv,
@@ -381,6 +396,13 @@ type localAuditInput struct {
 	// Role models. Empty means this file's stock default.
 	writerModel, criticModel, mutantModel, shadowModel string
 	shadowWriterModel                                  string
+
+	// seatProviders is role -> provider for the seats the model registry
+	// resolved (and, for a concrete model name, the provider inferred from it).
+	// Empty is the ordinary case and means "infer from the model name", which
+	// is what every caller did before the registry existed. Its only use today
+	// is DISCLOSURE: decorrelation still refuses on the model name alone.
+	seatProviders map[string]string
 
 	// writerMode is the resolved --writer-mode: how the writer seat attacks
 	// this file's survivors. Already validated by ResolveWriterMode at the
@@ -1027,6 +1049,22 @@ func resolveAuditRoles(in localAuditInput, stderr io.Writer) (auditRoles, error)
 	}
 	if err := advpool.CheckDecorrelation(assign); err != nil {
 		return r, auditUsageErr("%v — pass distinct --writer-model / --critic-model", err)
+	}
+
+	// Provider-aware decorrelation, DISCLOSED not enforced. The guard above
+	// compares MODEL NAMES and always has: two distinct names pass it, even
+	// when both come off the same vendor's training pipeline. That refusal is
+	// deliberately left exactly as it is — tightening it would break every
+	// single-vendor run in existence — but the fact it cannot see is now
+	// available as data (the registry declares `provider`), and a fact corral
+	// knows and does not say is the shape of bug this project exists to find.
+	//
+	// Said once, at the seam where decorrelation is decided, so the operator
+	// reads it before spending rather than inferring it from two model names
+	// afterwards.
+	if v := sharedSeatProvider(in.seatProviders, writer, critic); v != "" {
+		fmt.Fprintf(stderr, "%s: decorrelation: test-writer (%s) and test-critic (%s) are different models from the SAME provider (%s) — the critic is an independent MODEL but not an independent VENDOR. Point one seat at another provider for a cross-vendor read.\n",
+			orDefault(in.cmdName, "corral certify --local"), writer, critic, v)
 	}
 
 	// Require a provider key for whatever the operator actually named. There

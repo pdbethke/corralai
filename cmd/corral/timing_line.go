@@ -44,8 +44,22 @@ func timingLine(t advpool.Timing, n int, med, max time.Duration) string {
 		"dev pass " + dev,
 		"authored " + durationText(t.AuthoredPass),
 		"critic " + durationText(t.Critic),
-		"total " + durationText(t.Total),
 	}
+	// UNATTRIBUTED is the gap between Total (the driver's own elapsed clock)
+	// and the sum of the phases this line already named — queue latency and
+	// driver bookkeeping between phase boundaries, real time nobody's phase
+	// claims. Total has always included it (see advpool.Timing's own doc);
+	// until now nothing PRINTED it, so it read as time that simply vanished
+	// between "dev pass" and "total" for anyone doing the arithmetic by
+	// hand. Selection is excluded from the sum for the same reason Total
+	// excludes it — it is the scan's, not this file's — so it must not leak
+	// into what looks like an unattributed gap in THIS file's own clock.
+	// Never printed negative: a phase that outran Total is a measurement
+	// bug elsewhere, not a residual to report here.
+	if sum := t.Pool + t.Generation + t.DevPass + t.AuthoredPass + t.Critic; t.Total > sum {
+		parts = append(parts, "unattributed "+durationText(t.Total-sum))
+	}
+	parts = append(parts, "total "+durationText(t.Total))
 	return "   time: " + strings.Join(parts, " · ")
 }
 

@@ -24,12 +24,14 @@ import (
 // has to be named on it — including the ones that did not run, which say so
 // with an em dash rather than a 0s nobody measured.
 // The total is the FILE's own work — pool + generation + dev pass + authored
-// + critic, plus the residual between them — and deliberately NOT the 1m32s
-// selection, which is one instrumented run shared by every file of the scan
-// and is recorded once on the scan header. Selection is still NAMED on the
-// line: a readout that skipped it could not account for a phase the file's
-// audit really waited on.
-const wantTimingLine = "   time: selection 1m32s · generation 4m10s · pool 12s · dev pass 35m04s (39 mutants, median 54s, max 3m12s) · authored 1m49s · critic — · total 41m41s"
+// + critic, plus an explicit "unattributed" term for the residual between
+// them (queue latency and driver bookkeeping the phases don't individually
+// claim) — and deliberately NOT the 1m32s selection, which is one
+// instrumented run shared by every file of the scan and is recorded once on
+// the scan header. Selection is still NAMED on the line: a readout that
+// skipped it could not account for a phase the file's audit really waited
+// on.
+const wantTimingLine = "   time: selection 1m32s · generation 4m10s · pool 12s · dev pass 35m04s (39 mutants, median 54s, max 3m12s) · authored 1m49s · critic — · unattributed 26s · total 41m41s"
 
 func TestTimingLineNamesEveryPhaseOrDash(t *testing.T) {
 	got := timingLine(advpool.Timing{
@@ -56,9 +58,40 @@ func TestTimingLineDashesWhatDidNotRun(t *testing.T) {
 		DevPass:    35*time.Minute + 4*time.Second,
 		Total:      41*time.Minute + 6*time.Second,
 	}, 0, 0, 0)
-	const want = "   time: selection 1m32s · generation 4m10s · pool — · dev pass 35m04s · authored — · critic — · total 41m06s"
+	const want = "   time: selection 1m32s · generation 4m10s · pool — · dev pass 35m04s · authored — · critic — · unattributed 1m52s · total 41m06s"
 	if got != want {
 		t.Errorf("timing line:\n got %q\nwant %q", got, want)
+	}
+}
+
+// TestTimingLinePrintsUnattributedResidual is issue #201's third requirement
+// stated as an invariant: when the named phases sum to LESS than Total, the
+// gap must print as its own term rather than vanish into a total that no
+// longer matches the arithmetic a reader would do by hand.
+func TestTimingLinePrintsUnattributedResidual(t *testing.T) {
+	got := timingLine(advpool.Timing{
+		Pool: 10 * time.Second, DevPass: 5 * time.Minute, AuthoredPass: time.Minute,
+		// Total exceeds the sum of the named phases (10s+5m+1m=6m10s) by 50s
+		// — queue latency/bookkeeping between phase boundaries that no
+		// single phase claims.
+		Total: 7 * time.Minute,
+	}, 0, 0, 0)
+	const want = "   time: selection — · generation — · pool 10s · dev pass 5m00s · authored 1m00s · critic — · unattributed 50s · total 7m00s"
+	if got != want {
+		t.Errorf("timing line:\n got %q\nwant %q", got, want)
+	}
+}
+
+// TestTimingLineOmitsUnattributedWhenPhasesExplainTotal: the term must not
+// appear (or appear as a stray "0s"/"—") when the named phases already
+// account for every second of Total — the common, clean case.
+func TestTimingLineOmitsUnattributedWhenPhasesExplainTotal(t *testing.T) {
+	got := timingLine(advpool.Timing{
+		Pool: 10 * time.Second, DevPass: 5 * time.Minute, AuthoredPass: time.Minute,
+		Total: 10*time.Second + 5*time.Minute + time.Minute,
+	}, 0, 0, 0)
+	if strings.Contains(got, "unattributed") {
+		t.Errorf("timing line printed an unattributed term when the phases already sum to Total: %q", got)
 	}
 }
 

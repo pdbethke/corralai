@@ -107,4 +107,18 @@ func TestTick_NoCriticAssigned_StillConverges(t *testing.T) {
 	if m := v.ModelsByRole[RoleTestCritic]; m != "" {
 		t.Fatalf("ModelsByRole[test-critic] = %q, want empty when no critic ran", m)
 	}
+	// Timing.Critic must stay at its "did not run" zero — the critic phase
+	// never opened at all, since BuildDAG never seeded it a task. This is
+	// the genuine case cmd/corral/timing_line.go's "—" is FOR, and it must
+	// stay distinct from issue #201's "ran, and never converged" case (see
+	// TestTimedOutVerdictAttributesAnOpenPhase).
+	if v.Timing.Critic != 0 {
+		t.Errorf("Timing.Critic = %v, want 0 — no critic was ever assigned", v.Timing.Critic)
+	}
+	// The writer DID run (this is what proved the one survivor above) and
+	// must report a real duration, never the critic's own "did not run"
+	// zero.
+	if v.Timing.AuthoredPass <= 0 {
+		t.Errorf("Timing.AuthoredPass = %v, want > 0 — the writer phase demonstrably ran and proved the survivor", v.Timing.AuthoredPass)
+	}
 }

@@ -26,11 +26,20 @@ import (
 //
 // Total covers THIS FILE's own work: Pool + Generation + DevPass +
 // AuthoredPass + Critic, plus the queue latency and bookkeeping between them,
-// which is the residual worth seeing. It deliberately EXCLUDES Selection —
-// that is one instrumented run shared by every file of the scan, it lives on
-// the scan row, and charging it to each file would make `sum(total_ms)` over
-// a scan grow with the file count while measuring nothing. Summing total_ms
-// across a scan's files is sound.
+// which is the residual worth seeing — cmd/corral/timing_line.go prints that
+// residual as its own "unattributed" term rather than folding it silently
+// into Total, on the same honesty grounds as the rest of this type: a gap
+// nobody can name is not the same claim as a phase that measured zero. It
+// deliberately EXCLUDES Selection — that is one instrumented run shared by
+// every file of the scan, it lives on the scan row, and charging it to each
+// file would make `sum(total_ms)` over a scan grow with the file count while
+// measuring nothing. Summing total_ms across a scan's files is sound.
+//
+// A phase can also be OPEN — beginPhase called, no matching endPhase yet —
+// when a run stops early (RunDeadline). See driver.go's
+// Driver.attributeOpenPhases: a phase that ran and simply never converged
+// still spent real wall clock, and must never render as one that never ran
+// at all.
 type Timing struct {
 	// Selection is the scan's ONE instrumented run (see
 	// RunSpec.SelectionDuration) — SHARED BY EVERY FILE OF THE SCAN, not a

@@ -49,6 +49,7 @@ reproduce the `time:`/`cost:` lines below exactly.
 | dev pass (mutants, median, max) | 12s (40 mutants, median 1s, max 2s) | 11m25s (39 mutants, median 1m03s, max 5m00s) |
 | authored | 2m00s | 1m49s |
 | critic | — | — |
+| unattributed | 1s | 2s |
 | **total** | 2m16s | 14m21s |
 | cost | 0.5M tokens in / 1.5k out across 2 calls — test-writer 0.5M/1.5k (2 calls) | 0.1M tokens in / 1.1k out across 1 call — test-writer 0.1M/1.1k (1 call) |
 | kill rate | 0.40 (24 survivors, 5 proven missed) | 0.59 (16 survivors, 12 proven missed) |
@@ -60,6 +61,20 @@ it in the `cost` line above despite `ModelsByRole` naming it) and ran with
 `--critic-model off`. `—` is the honest rendering for "did not run", never
 `0s` — see `cmd/corral/timing_line.go`'s `unmeasured` doc, which this table's
 generator (`scripts/gen-cost-table.py`) reproduces byte-for-byte.
+
+`unattributed` is the gap between `total` and the sum of the phases above it
+(pool + generation + dev pass + authored + critic — never selection, which
+is the scan's own row, not this file's): queue latency and driver
+bookkeeping between phase boundaries that no single phase claims. It used
+to be silently absorbed into `total` with nothing on the line naming it — a
+reader doing the arithmetic by hand landed on a number `total` didn't match
+and had no way to tell that from a bug. flask's 1s and requests' 2s above
+are both genuine, small residuals of that shape. It is NOT where a phase
+that was still mid-flight when the run's wall-clock deadline fired ends up
+— issue #201's per-survivor writer fan-out, running for close to an hour
+when the deadline hit, is credited straight onto `authored` (the wall clock
+it had actually spent before the deadline, per `Driver.attributeOpenPhases`
+in `internal/advpool/driver.go`), not folded into this residual.
 
 Both the `time:` row and the `cost` row above are generated straight from
 `corral scans show <id> --timing --json`'s own output: the JSON carries

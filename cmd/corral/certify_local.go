@@ -1490,12 +1490,12 @@ func auditOneFile(ctx context.Context, in localAuditInput) (advpool.Verdict, err
 	// me / won't melt the box" bound made visible. Independent role tasks run in
 	// parallel up to this bound; it's clamped to the host's cores (auto) or the
 	// operator's --swarm budget.
-	swarm := resolveSwarm(in.swarm)
+	swarm := resolveModelConcurrency(in.swarm)
 	d.MatrixWorkers = swarm
 	if in.swarm > 0 {
-		fmt.Fprintf(stdout, "swarm: %d concurrent workers (--swarm budget)\n", swarm)
+		fmt.Fprintf(stdout, "swarm: %d concurrent model calls (--swarm budget)\n", swarm)
 	} else {
-		fmt.Fprintf(stdout, "swarm: %d concurrent workers (auto-sized to %d cores)\n", swarm, runtime.NumCPU())
+		fmt.Fprintf(stdout, "swarm: %d concurrent model calls (default; --swarm overrides)\n", swarm)
 	}
 	shards := advpool.ShardSymbols(sigs, rs.MaxShards)
 	if len(shards) > 0 {
@@ -2019,7 +2019,48 @@ func buildJailWiring(ctx context.Context, in jailWiringInput) (w jailWiring, err
 // many-core box, auto-sizing won't spawn an absurd worker count for what is,
 // today, a handful of independent role tasks. The cap lifts naturally as the
 // fan-out slices land (per-region generators, the tests×mutants matrix).
+//
+// STILL THE RIGHT NUMBER FOR JAILS, which is all resolveSwarm now sizes: a
+// concurrent jail run is a whole test suite executing, and those really are
+// bounded by the box. It is NOT the right number for model calls — see
+// resolveModelConcurrency, which is what the local driver's task pool uses now.
 const localSwarmAutoCap = 8
+
+// defaultModelConcurrency bounds how many role tasks — which are LLM CALLS —
+// the local driver runs at once.
+//
+// WHY IT IS NOT resolveSwarm. That function sizes the budget by the host's
+// cores, which is correct for jails (a concurrent jail run is a whole test
+// suite executing) and a category error for model calls: an API request does
+// not consume a core. Its cap of 8 was written when a run had "a handful of
+// independent role tasks" and said so, promising to lift "as the fan-out
+// slices land". Per-region generators landed, the matrix landed, and
+// per-survivor writer fan-out landed — and the cap did not move, so a file
+// with 13 survivors ran 13 independent LLM calls 8 at a time on a 24-core box.
+//
+// MEASURED, on afero's memmap.go replayed against a recorded mutant set so the
+// exam was identical: 1428s at 8, 1259s at 16 — 11.8% against a noise floor of
+// ~2.5% (two identical runs came in at 616.78s and 632.42s). Both proved all 13
+// survivors, so the wider pool changes the clock and not the answer, which is
+// the property that mattered before touching it.
+//
+// 16 rather than "unbounded": the real ceiling on this axis is the provider's
+// rate limit and the burst spend of a run someone may want to cancel, neither
+// of which the box knows anything about. 16 is one measured step past the old
+// cap, not an extrapolation. An operator with a wider fan-out or a more
+// generous key raises it with --swarm.
+const defaultModelConcurrency = 16
+
+// resolveModelConcurrency sizes the local driver's role-task pool: the
+// operator's --swarm budget if set, else defaultModelConcurrency.
+//
+// Deliberately NOT derived from NumCPU. See defaultModelConcurrency.
+func resolveModelConcurrency(flag int) int {
+	if flag > 0 {
+		return flag
+	}
+	return defaultModelConcurrency
+}
 
 // resolveSwarm sizes the concurrent audit swarm — the first, honest cut of the
 // resource-aware optimizer. The operator's --swarm budget wins if set; else it

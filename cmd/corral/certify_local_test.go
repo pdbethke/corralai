@@ -13,6 +13,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1624,5 +1625,57 @@ func TestTestTimeoutReachesTheScorer(t *testing.T) {
 	}
 	if got := build(0).MutantTimeout; got != 0 {
 		t.Errorf("MutantTimeout = %v, want 0 — zero must pass through UNCHANGED so the scorer derives the cap from the healthy suite's own runtime; substituting a number here would silently disable that", got)
+	}
+}
+
+// TestModelConcurrencyIsNotSizedByTheBox pins the split between two bounds that
+// were one number.
+//
+// resolveSwarm sizes a budget by the host's cores, which is right for JAILS —
+// a concurrent jail run is a whole test suite executing — and a category error
+// for MODEL CALLS, which is what the local driver's task pool actually drains.
+// Its cap of 8 was written when a run had "a handful of independent role tasks"
+// and promised to lift "as the fan-out slices land". They landed; it did not.
+// A file with 13 survivors ran 13 independent LLM calls 8 at a time on a
+// 24-core box.
+//
+// The regression this guards is subtle: someone tidying two near-identical
+// resolvers into one would silently re-tie model concurrency to NumCPU, and
+// nothing else in the suite would notice.
+func TestModelConcurrencyIsNotSizedByTheBox(t *testing.T) {
+	if got := resolveModelConcurrency(0); got != defaultModelConcurrency {
+		t.Errorf("resolveModelConcurrency(0) = %d, want %d", got, defaultModelConcurrency)
+	}
+	// The whole point: independent of the box.
+	if defaultModelConcurrency == runtime.NumCPU() || defaultModelConcurrency == runtime.NumCPU()-1 {
+		t.Errorf("defaultModelConcurrency (%d) coincides with this host's core count (%d) — if it was derived from the box, it is bounding the wrong resource",
+			defaultModelConcurrency, runtime.NumCPU())
+	}
+	// It must clear the old cap, or the fan-out is still throttled.
+	if defaultModelConcurrency <= localSwarmAutoCap {
+		t.Errorf("defaultModelConcurrency (%d) is not above the jail cap (%d) — the writer fan-out that motivated the split is still queued behind it",
+			defaultModelConcurrency, localSwarmAutoCap)
+	}
+	// An explicit budget still wins, in both directions.
+	for _, ask := range []int{1, 4, 64} {
+		if got := resolveModelConcurrency(ask); got != ask {
+			t.Errorf("resolveModelConcurrency(%d) = %d — --swarm must win, including when the operator wants FEWER concurrent calls than the default (a small rate limit, a shared key)", ask, got)
+		}
+	}
+}
+
+// TestJailBudgetIsStillSizedByTheBox is the other half: resolveSwarm keeps its
+// core-derived sizing and its cap, because --repo divides that budget between
+// files-at-once and mutants-at-once, and those are jails.
+func TestJailBudgetIsStillSizedByTheBox(t *testing.T) {
+	want := runtime.NumCPU() - 1
+	if want < 1 {
+		want = 1
+	}
+	if want > localSwarmAutoCap {
+		want = localSwarmAutoCap
+	}
+	if got := resolveSwarm(0); got != want {
+		t.Errorf("resolveSwarm(0) = %d, want %d — the JAIL budget must stay tied to the box; opening more concurrent suites than the host can run is how a scan thrashes", got, want)
 	}
 }

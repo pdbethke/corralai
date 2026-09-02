@@ -1,0 +1,75 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>corral seal</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  :root{--bg:#fbfbfa;--fg:#16181d;--dim:#666e79;--rule:#e2e5ea;--surface:#fff;--bad:#9c2b21;--warn:#8a5a00;--ok:#1f6142}
+  @media(prefers-color-scheme:dark){:root{--bg:#101216;--fg:#e6e9ed;--dim:#8b939e;--rule:#282d35;--surface:#171a1f;--bad:#e5877d;--warn:#d6a65c;--ok:#6fc49a}}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.5 ui-sans-serif,system-ui,sans-serif}
+  header{padding:2rem 1.5rem 1rem;border-bottom:1px solid var(--rule)}
+  h1{margin:0;font-size:1.4rem;font-weight:600;letter-spacing:-.01em}
+  .sub{color:var(--dim);font-size:.9rem;margin-top:.3rem}
+  main{padding:1.25rem 1.5rem 4rem}
+  .tot{display:flex;gap:2rem;flex-wrap:wrap;margin-bottom:1.25rem}
+  .tot div{min-width:7rem}
+  .n{font-size:1.8rem;font-weight:600;font-variant-numeric:tabular-nums}
+  .l{color:var(--dim);font-size:.78rem;text-transform:uppercase;letter-spacing:.08em}
+  table{width:100%;border-collapse:collapse;font-size:.9rem}
+  th{text-align:left;font-size:.72rem;text-transform:uppercase;letter-spacing:.07em;color:var(--dim);padding:.5rem .6rem;border-bottom:1px solid var(--rule)}
+  td{padding:.5rem .6rem;border-bottom:1px solid var(--rule);vertical-align:top}
+  td.num{text-align:right;font-variant-numeric:tabular-nums}
+  code{font:.86em ui-monospace,monospace}
+  .gap{color:var(--bad);font-weight:600}
+  .rate-lo{color:var(--bad)}.rate-mid{color:var(--warn)}.rate-hi{color:var(--ok)}
+  .empty,.err{padding:2rem 0;color:var(--dim)}
+  .err{color:var(--bad)}
+</style>
+<header>
+  <h1>corral seal</h1>
+  <div class="sub">The newest verdict per file, read from the local ledger. Proven gaps first &mdash; a survivor a test provably catches.</div>
+</header>
+<main>
+  <div class="tot" id="tot"></div>
+  <div id="body"><div class="empty">Loading&hellip;</div></div>
+</main>
+<script>
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const rateClass = r => r >= .8 ? 'rate-hi' : r >= .5 ? 'rate-mid' : 'rate-lo';
+const shortRepo = r => String(r).replace(/^https:\/\/github\.com\//, '');
+
+fetch('api/seal').then(async res => {
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || res.statusText);
+  return data;
+}).then(rows => {
+  const body = document.getElementById('body');
+  if (!rows || !rows.length) {
+    // "No rows" is not "no gaps" — say which one this is.
+    body.innerHTML = '<div class="empty">This ledger has no scans yet. Run <code>corral certify --repo &lt;dir&gt; --record</code> and reload.</div>';
+    return;
+  }
+  const gaps = rows.reduce((a, r) => a + (r.proven_missed || 0), 0);
+  const surv = rows.reduce((a, r) => a + (r.survivors || 0), 0);
+  const repos = new Set(rows.map(r => r.repo)).size;
+  document.getElementById('tot').innerHTML = [
+    ['proven gaps', gaps], ['survivors', surv], ['files', rows.length], ['repos', repos],
+  ].map(([l, n]) => `<div><div class="n">${n}</div><div class="l">${l}</div></div>`).join('');
+
+  body.innerHTML = `<table><thead><tr>
+      <th>repo</th><th>file</th><th class="num">kill rate</th>
+      <th class="num">survivors</th><th class="num">proven gaps</th><th>audited</th>
+    </tr></thead><tbody>` + rows.map(r => `<tr>
+      <td>${esc(shortRepo(r.repo))}</td>
+      <td><code>${esc(r.path)}</code></td>
+      <td class="num ${rateClass(r.kill_rate)}">${(r.kill_rate ?? 0).toFixed(2)}</td>
+      <td class="num">${r.survivors ?? 0}</td>
+      <td class="num ${r.proven_missed ? 'gap' : ''}">${r.proven_missed ?? 0}</td>
+      <td>${esc(String(r.ts).slice(0, 10))}</td>
+    </tr>`).join('') + '</tbody></table>';
+}).catch(e => {
+  // A failed read must never render as an empty, reassuring table.
+  document.getElementById('body').innerHTML =
+    '<div class="err">Could not read the ledger: ' + esc(e.message) + '</div>';
+});
+</script>

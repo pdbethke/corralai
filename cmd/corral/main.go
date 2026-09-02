@@ -158,7 +158,11 @@ func subcommand(args []string) string {
 		return ""
 	}
 	switch args[0] {
-	case "certify", "secret", "control", "scorecard", "criticscore", "matrix", "models", "scans", "seal", "eval", "mcp", "doctor", "demo", "verify":
+	// A HAND-MAINTAINED ALLOWLIST, and the failure mode is quiet: a name
+	// missing here is not an error, it falls through to booting the
+	// coordination server. `corral ui -h` printed the brain's usage until "ui"
+	// was added. Keep it in step with the switch below — TestEverySubcommandIsDispatchable.
+	case "certify", "secret", "control", "scorecard", "criticscore", "matrix", "models", "scans", "seal", "ui", "eval", "mcp", "doctor", "demo", "verify":
 		return args[0]
 	}
 	return ""
@@ -300,6 +304,9 @@ Usage:
                                   Different from "corral certify verify", which checks a
                                   corral certify BUILD record, a different artifact.
                                   flags: --db <dsn>  --rekor-index <n>  --pub <hex>
+  corral ui [flags]              browse that same seal in a browser: a local, read-only page over
+                                  the ledger, loopback by default. No brain, no writes — if
+                                  corral seal can answer it, this shows it.
   corral seal [flags]            the repo's CURRENT state as the union of still-valid verdicts,
                                   read from a certify --repo --push warehouse (many audits, one
                                   current state — not one scan's snapshot). Reads corral_seal
@@ -839,6 +846,15 @@ func main() {
 		// DuckDB's single-writer lock still applies — openScanStore says so
 		// when a concurrent scan holds the file.
 		os.Exit(runScans(os.Args[2:], openScanStore, os.Stdout, os.Stderr))
+	case "ui":
+		// The same reader `seal` uses, and nothing else — see runUI on why this
+		// is not internal/ui. openSealDB only ever SELECTs, so `corral ui -h`
+		// needs no store: the help guard above applies here for the same reason
+		// it applies to scorecard and criticscore.
+		if wantsHelp(os.Args[2:]) {
+			os.Exit(runUI(os.Args[2:], func(string) (sealReader, error) { return nil, nil }, os.Stdout, os.Stderr))
+		}
+		os.Exit(runUI(os.Args[2:], openSealDB, os.Stdout, os.Stderr))
 	case "seal":
 		// Also fully offline: a `--push` warehouse is any DuckDB the
 		// operator owns, and this reader only ever SELECTs from it (and, on

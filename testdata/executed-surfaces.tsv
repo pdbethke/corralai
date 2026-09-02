@@ -55,7 +55,7 @@ corral certify --local --goal	executed	test:cmd/corral/certify_adversarial_test.
 corral certify --local --jail	executed	run:2026-09-02 record 89 (--jail container)
 corral certify --local --lang	executed	test:cmd/corral/models_rank_test.go
 corral certify --local --local	executed	test:cmd/corral/jail_test.go
-corral certify --local --local-endpoint	unexecuted	
+corral certify --local --local-endpoint	executed	test:cmd/corral/local_endpoint_test.go (parseLocalEndpoints, shared by both paths)
 corral certify --local --matrix	executed	test:cmd/corral/certify_local_test.go
 corral certify --local --max-shards	executed	run:2026-09-02 record 89
 corral certify --local --mutant-model	executed	test:cmd/corral/certify_repo_writer_mode_test.go
@@ -88,13 +88,13 @@ corral certify --repo --diff-base	executed	test:cmd/corral/certify_repo_selcache
 corral certify --repo --dry-run	executed	test:cmd/corral/certify_repo_writer_mode_test.go
 corral certify --repo --goals	executed	test:cmd/corral/certify_repo_selcache_test.go
 corral certify --repo --json	executed	test:cmd/corral/models_rank_test.go
-corral certify --repo --local-endpoint	unexecuted	
+corral certify --repo --local-endpoint	executed	test:cmd/corral/local_endpoint_test.go (parseLocalEndpoints, shared by both paths)
 corral certify --repo --max-proven-missed	executed	test:cmd/corral/certify_repo_test.go (gate logic; flag parsing still unexercised)
 corral certify --repo --min-kill-rate	executed	test:cmd/corral/certify_repo_test.go
 corral certify --repo --mutant-model	executed	test:cmd/corral/certify_repo_writer_mode_test.go
 corral certify --repo --mutants	executed	test:cmd/corral/certify_repo_evidence_candidacy_test.go
-corral certify --repo --no-fail-fast	unexecuted	
-corral certify --repo --no-goal-cache	unexecuted	
+corral certify --repo --no-fail-fast	executed	test:cmd/corral/certify_failfast_flag_test.go (reaches every job's audit input); semantics in internal/adequacy/verdict_identity_test.go
+corral certify --repo --no-goal-cache	executed	test:cmd/corral/certify_repo_goalcache_test.go (TestNoGoalCacheFlagDerivesEveryTime)
 corral certify --repo --no-selection-cache	executed	test:cmd/corral/certify_repo_selcache_test.go
 corral certify --repo --owner	executed	test:cmd/corral/action_test.go
 corral certify --repo --preflight	executed	test:cmd/corral/certify_repo_test.go

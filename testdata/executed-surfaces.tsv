@@ -147,7 +147,7 @@ corral seal --repo	executed	test:cmd/corral/certify_repo_writer_mode_test.go
 corral seal --top	executed	test:cmd/corral/certify_repo_test.go
 corral verify --attest	executed	test:cmd/corral/certify_repo_transparency_test.go
 corral verify --db	executed	test:cmd/corral/models_rank_test.go
-corral verify --pub	unexecuted	
+corral verify --pub	executed	test:cmd/corral/verify_attest_test.go (right key verifies, wrong key FAILS without falling back, malformed key refused as unchecked)
 corral verify --rekor-index	executed	test:cmd/corral/verify_attest_test.go
 corral-observe --addr	executed	test:cmd/corral-observe/main_test.go (own-flags guard, binding, and pick precedence)
 corral-observe --brain	executed	test:cmd/corral-observe/main_test.go (own-flags guard, binding, and pick precedence)

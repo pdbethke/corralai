@@ -4,6 +4,7 @@ package main
 
 import (
 	"bytes"
+	"crypto/ed25519"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
@@ -519,4 +520,60 @@ func TestVerifyAttestRekorFetchErrorIsNotCheckedNotFailed(t *testing.T) {
 	if strings.Contains(out, "✗ rekor inclusion:") {
 		t.Errorf("stdout = %q, a fetch error must never print as a ✗", out)
 	}
+}
+
+// TestVerifyAttestPubFlagIsTheKeyItVerifiesAgainst covers --pub, which had no
+// test at all and sits on the path a THIRD PARTY runs to check a corral
+// record. Everything else in a signed statement is a claim; this flag decides
+// which key that claim is checked against, so it is the one surface where
+// "parses and is then ignored" would be actively dangerous — a verifier would
+// believe they had checked against the signer's published key while actually
+// checking against whatever local key they happen to hold.
+//
+// Three branches, and the middle one is the security-relevant one:
+//
+//  1. the RIGHT key verifies;
+//  2. a well-formed but WRONG key must FAIL, not silently fall back to the
+//     local key and pass;
+//  3. a malformed key must be REFUSED as unchecked, never quietly ignored.
+func TestVerifyAttestPubFlagIsTheKeyItVerifiesAgainst(t *testing.T) {
+	priv := fixtureCertifyKey(t)
+	stmtPath := signedFixtureStatement(t, "o/r", 7, "")
+	envelope, err := os.ReadFile(dsseEnvelopePathFor(stmtPath))
+	if err != nil {
+		t.Fatalf("reading the envelope: %v", err)
+	}
+	right := hex.EncodeToString(priv.Public().(ed25519.PublicKey))
+
+	// A different key, generated the same deterministic way with a different
+	// seed, so this is a genuine other signer rather than noise.
+	otherSeed := make([]byte, ed25519.SeedSize)
+	for i := range otherSeed {
+		otherSeed[i] = byte(200 - i)
+	}
+	wrong := hex.EncodeToString(ed25519.NewKeyFromSeed(otherSeed).Public().(ed25519.PublicKey))
+
+	t.Run("the right key verifies", func(t *testing.T) {
+		got := verifySignature(envelope, "corral-certify", right)
+		if !got.checked || !got.ok {
+			t.Errorf("checked=%v ok=%v detail=%q — a correct --pub must verify", got.checked, got.ok, got.detail)
+		}
+	})
+
+	t.Run("a wrong key must FAIL, not fall back", func(t *testing.T) {
+		got := verifySignature(envelope, "corral-certify", wrong)
+		if !got.checked {
+			t.Fatalf("checked=false detail=%q — --pub was given, so the check must happen", got.detail)
+		}
+		if got.ok {
+			t.Errorf("a signature verified against a key that did NOT sign it — either --pub is being ignored in favour of the local key, or the comparison is inverted. detail=%q", got.detail)
+		}
+	})
+
+	t.Run("a malformed key is refused, not ignored", func(t *testing.T) {
+		got := verifySignature(envelope, "corral-certify", "not-hex")
+		if got.checked || got.ok {
+			t.Errorf("checked=%v ok=%v — a malformed --pub must be reported as UNCHECKED. Silently falling through would let a verifier believe they checked against a published key when they checked against their own", got.checked, got.ok)
+		}
+	})
 }

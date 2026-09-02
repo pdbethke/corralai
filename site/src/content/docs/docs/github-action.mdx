@@ -291,9 +291,9 @@ key runs the whole thing:
 - uses: pdbethke/corralai@v0.8.3
   with:
     test-command:  "pytest -q"
-    openai-key:    ${{ secrets.OPENAI_API_KEY }}
-    mutant-model:  gpt-5.1-codex
-    writer-model:  gpt-5.1-codex
+    gemini-key:    ${{ secrets.GEMINI_API_KEY }}
+    mutant-model:  gemini-3.6-flash
+    writer-model:  gemini-3.7-flash
     critic-model:  "off"
     shadow-model:  "off"
     min-kill-rate: "0.8"

@@ -20,7 +20,7 @@
 //	               comma-separated list (e.g. "mutant-generator,test-writer,test-critic") to
 //	               claim any ready task in that set, or "any"/"*"/empty to
 //	               claim ANY ready task as a pure generalist
-//	AGENT_MODEL      the model driving this harness (e.g. gpt-5.1-codex); adds a
+//	AGENT_MODEL      the model driving this harness (name one your key serves); adds a
 //	               report_host step so findings attribute to it in model_comparison
 //	AGENT_BACKEND    the backend/vendor for AGENT_MODEL (e.g. openai, anthropic, gemini)
 //	AGENT_WORKSPACE  working directory for the harness (default .)
@@ -109,7 +109,7 @@ Env:
                  comma-separated list (e.g. "mutant-generator,test-writer,test-critic") to
                  claim any ready task in that set, or "any"/"*"/empty to
                  claim ANY ready task as a pure generalist
-  AGENT_MODEL      the model driving this harness (e.g. gpt-5.1-codex); adds a
+  AGENT_MODEL      the model driving this harness (name one your key serves); adds a
                  report_host step so findings attribute to it in model_comparison
   AGENT_BACKEND    the backend/vendor for AGENT_MODEL (e.g. openai, anthropic, gemini)
   AGENT_WORKSPACE  working directory for the harness (default .)

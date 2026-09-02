@@ -32,7 +32,42 @@ package reposcan
 // is invalidated wholesale by bumping this, without deleting any ledger data.
 //
 // "2" (2026-08-28): coverage-guided test selection changed what the scorer runs.
+// "3" (2026-08-29): per-mutant selection changed what the dev pass runs per mutant.
 // "4" (2026-08-30): the authored pass proves each survivor with the authored
 // test alone — a proven count can no longer come from a flaking dev test.
-// "3" (2026-08-29): per-mutant selection changed what the dev pass runs per mutant.
-const VerdictGeneration = "4"
+// "5" (2026-09-01): TEN commits of drift, caught by review rather than by a
+// gate. Since "4" the scorer, the pool and the plugins changed under it —
+// per-mutant fail-fast changed the graded command (#212), hunk-native mutants
+// changed the generator prompt AND the writer call shape (#174), coverage
+// became candidacy (#192), a sixth language landed (#188) — and Verdict itself
+// gained THIRTEEN fields, every one of which an older cached document
+// unmarshals to its zero value in silence. The behaviour half of this contract
+// is still enforced by review; the SHAPE half is now gated, below.
+// "6" (2026-09-01): the Verdict gained PoolScored, the discriminator that says
+// whether ProvenMissed was MEASURED. A cached "5" verdict unmarshals it as
+// false, which reads as "the pool never scored" — turning a proven gap back
+// into an unproven one on every cache hit. Exactly the silent zero-fill the
+// comment above describes, caught by the gate below on its first outing.
+const VerdictGeneration = "6"
+
+// VerdictShapeSHA256 fingerprints advpool.Verdict's serialized shape: every
+// exported field's name, type and json tag, sorted by name and hashed.
+//
+// IT CHANGES TOGETHER WITH VerdictGeneration ABOVE, and that is the entire
+// point. TestVerdictShapeIsPinnedToItsGeneration fails the moment a field is
+// added, removed, retyped or re-tagged, and the only way to make it pass is to
+// edit this constant — which puts a reviewer's eye directly on the line above
+// it. Generation "5" exists because thirteen fields arrived without one.
+//
+// Sorted by name, so REORDERING fields is deliberately not a change: field
+// order does not affect what encoding/json produces or accepts.
+//
+// WHAT IT DOES NOT COVER, stated plainly because a guard trusted past its
+// scope is worse than no guard: it is SHALLOW. A change inside a nested type
+// that Verdict merely holds — Timing's own fields, modelcorr.Pair's,
+// golang.AuthoredPart's — alters the serialized document without altering this
+// fingerprint. It matches the contract the comment above states ("advpool.
+// Verdict's own FIELDS") and nothing wider. Nor can any fingerprint catch the
+// behaviour half: a scorer that computes a DIFFERENT number into the SAME
+// field is invisible here, and remains a review responsibility.
+const VerdictShapeSHA256 = "aa5ac8e7ff3118e46cbfeb37f4216bc37509832edca15638165317e939f2348c"

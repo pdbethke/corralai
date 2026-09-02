@@ -124,16 +124,38 @@ func TestPushBundleWritesFiveTablesInOneTransaction(t *testing.T) {
 		}
 	}
 
-	// Every row carries schema_version 2 — the marker that says this row has
-	// the timing and usage columns at all.
+	// Every row carries the CURRENT schema_version — the marker a reader uses
+	// to tell which columns a row can possibly answer for.
+	//
+	// Asserted against the constant, not a literal: the literal was 2, and a
+	// bump made five tests fail for a reason that had nothing to do with what
+	// any of them were testing. A test that must be edited on every schema
+	// bump teaches people to edit tests during schema bumps.
 	for _, table := range []string{"corral_scans", "corral_audits", "corral_mutants", "corral_model_calls", "corral_events"} {
 		var bad int
-		if err := db.QueryRow(`SELECT count(*) FROM ` + table + ` WHERE schema_version IS DISTINCT FROM 2`).Scan(&bad); err != nil {
+		if err := db.QueryRow(`SELECT count(*) FROM `+table+` WHERE schema_version IS DISTINCT FROM ?`, SchemaVersion).Scan(&bad); err != nil {
 			t.Fatalf("schema_version on %s: %v", table, err)
 		}
 		if bad != 0 {
-			t.Errorf("%s has %d row(s) not at schema_version 2", table, bad)
+			t.Errorf("%s has %d row(s) not at schema_version %d", table, bad, SchemaVersion)
 		}
+	}
+
+	// scan_uid: one identity, on every grain, and the SAME one — a bundle
+	// whose grains disagreed about which scan they belong to would be worse
+	// than no identity at all. This is the join key readers are told to use,
+	// so "present and consistent" is the property, not "non-empty somewhere".
+	var uids int
+	if err := db.QueryRow(`SELECT count(DISTINCT scan_uid) FROM (
+	    SELECT scan_uid FROM corral_scans      UNION ALL
+	    SELECT scan_uid FROM corral_audits     UNION ALL
+	    SELECT scan_uid FROM corral_mutants    UNION ALL
+	    SELECT scan_uid FROM corral_model_calls UNION ALL
+	    SELECT scan_uid FROM corral_events)`).Scan(&uids); err != nil {
+		t.Fatalf("scan_uid across grains: %v", err)
+	}
+	if uids != 1 {
+		t.Errorf("found %d distinct scan_uid values across the five grains, want exactly 1 — the grains of one push disagree about which scan they belong to", uids)
 	}
 
 	// Nothing produces a mutant span or a timed-out count yet, and a 0 in
@@ -514,4 +536,62 @@ func TestScanRekorReceiptRoundTrips(t *testing.T) {
 			t.Errorf("rekor_uuid = %v, want NULL for a scan that was never uploaded", gotUUID.String)
 		}
 	})
+}
+
+// TestScanUIDSeparatesWhatTheLegacyKeyCannot is the point of scan_uid, stated
+// as the two cases that actually cost readers numbers.
+//
+// (repo, run_url, scan_id) is unique per WRITER, which is enough in CI and not
+// enough anywhere else. run_url is empty off CI, and scan_id restarts at 1 in
+// every local --record ledger, so two local ledgers can present the identical
+// legacy key for genuinely different scans. A reader joining on scan_id alone
+// unions them silently — observed in a real warehouse as a two-file scan that
+// pushed 76 mutants reporting 170.
+func TestScanUIDSeparatesWhatTheLegacyKeyCannot(t *testing.T) {
+	base := ScanRow{
+		Repo: "https://github.com/google/uuid", RunURL: "", ScanID: 1,
+		Commit: "2d3c2a9", CorralVersion: "v0.8.3", Substrate: "workspace", Host: "box",
+	}
+	at := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+
+	// Same scan, same inputs: the identity is stable, or it is not an identity.
+	if scanUID(base, at) != scanUID(base, at) {
+		t.Fatal("scanUID is not deterministic")
+	}
+
+	// TWO LOCAL LEDGERS, same repo, both at scan 1 — identical legacy key.
+	// Only the start instant differs, which is what makes them different runs.
+	later := at.Add(time.Nanosecond)
+	if scanUID(base, at) == scanUID(base, later) {
+		t.Error("two local ledgers pushing scan 1 for the same repo share a scan_uid — the collision scan_uid exists to prevent")
+	}
+
+	// Anything that makes it a different run makes it a different identity.
+	for name, mut := range map[string]func(ScanRow) ScanRow{
+		"repo":      func(r ScanRow) ScanRow { r.Repo = "https://github.com/spf13/afero"; return r },
+		"run_url":   func(r ScanRow) ScanRow { r.RunURL = "https://github.com/x/y/actions/runs/1"; return r },
+		"host":      func(r ScanRow) ScanRow { r.Host = "other-box"; return r },
+		"version":   func(r ScanRow) ScanRow { r.CorralVersion = "v0.8.4"; return r },
+		"commit":    func(r ScanRow) ScanRow { r.Commit = "deadbee"; return r },
+		"substrate": func(r ScanRow) ScanRow { r.Substrate = "jail"; return r },
+		"scan_id":   func(r ScanRow) ScanRow { r.ScanID = 2; return r },
+	} {
+		if scanUID(mut(base), at) == scanUID(base, at) {
+			t.Errorf("changing %s did not change the scan_uid — two distinguishable runs share one identity", name)
+		}
+	}
+}
+
+// TestScanUIDCannotCollideByConcatenation pins the length-prefixing.
+//
+// Without it, ("ab","c") and ("a","bc") hash the same, so a repo/commit pair
+// could be impersonated by a different repo/commit pair — an identity that can
+// be forged by moving a character is not an identity.
+func TestScanUIDCannotCollideByConcatenation(t *testing.T) {
+	at := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+	a := scanUID(ScanRow{Repo: "ab", RunURL: "c"}, at)
+	b := scanUID(ScanRow{Repo: "a", RunURL: "bc"}, at)
+	if a == b {
+		t.Error(`scanUID("ab","c") == scanUID("a","bc") — fields are being concatenated without length prefixes`)
+	}
 }

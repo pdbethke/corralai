@@ -624,6 +624,24 @@ type Verdict struct {
 	// (fabricated) 0.00 kill rate as a measurement. See timeoutVerdict and
 	// cmd/corral/certify_local_drive.go's bankableTimeoutVerdict.
 	DevScored bool
+	// PoolScored mirrors runState.poolScored, and is to ProvenMissed exactly
+	// what DevScored is to DevKillRate: the only thing that separates a
+	// MEASURED zero from a zero nobody computed.
+	//
+	// It exists because its absence threw real evidence away. A run reaches
+	// tickPoolAdequacy, converges its pool score — a genuine, execution-proven
+	// ProvenMissed — and only THEN stalls waiting on the test-critic, so
+	// RunDeadline fires and timeoutVerdict banks it. Without this flag a
+	// reader could not tell that verdict apart from one that timed out before
+	// the writer ever ran, so the renderer took the pessimistic branch and
+	// printed "(not run — pool did not converge)" over a number the jail had
+	// actually earned. Understating a gap is the safe direction, but throwing
+	// away the strongest evidence corral produces is not a good outcome.
+	//
+	// A caller must treat ProvenMissed on a TimedOut verdict as real ONLY
+	// when this is true — and, exactly as with DevScored, must never render
+	// its zero as "nothing was missed" when it is false.
+	PoolScored bool
 	// DevKilledMutants and DevSurvivedMutants are the mutant-level EVIDENCE
 	// behind DevKillRate and Survivors: which mutants the DEV suite's own
 	// tests killed, and which it did not, each carrying ParentSHA256 — the
@@ -739,6 +757,33 @@ type RunState struct {
 	Matrix *matrix.Result
 }
 
+// SCOPE, because reviewers read this guard as broader than it is: it compares
+// the CRITIC against the WRITER and nothing else. Two facts about what it
+// deliberately does NOT do:
+//
+//   - The mutant-generator MAY share a model with the test-writer. That
+//     correlation is benign in direction: a writer sharing lineage with the
+//     generator is BETTER at killing its mutants, which yields MORE proven gaps
+//     and MORE needs-review. It cannot manufacture a false clean, which is the
+//     only direction worth a refusal.
+//
+//   - It compares model NAMES, not provenance: "gemini-3.7-flash" vs
+//     "gemini-3.7-pro" satisfies THIS function while sharing training lineage.
+//     But corral is not blind to that, and a reviewer reading only this
+//     function has twice concluded it is. Same-vendor is DETECTED and reported
+//     in two places — certify_local.go warns at seat resolution ("different
+//     models from the SAME provider … an independent MODEL but not an
+//     independent VENDOR") and certify_adversarial.go prints it on the verdict
+//     itself ("every graded seat is %s — the same lineage planted the faults
+//     and graded the tests"). What it does not do is REFUSE.
+//
+//     That is the actual open question, and it is a product decision rather
+//     than a missing check: refusing would make a single-vendor operator unable
+//     to run at all, which is why it warns. internal/modelcorr separately
+//     MEASURES seat agreement (Jaccard over survivor sets) and also does not
+//     gate. Anyone changing this should change the warning into a refusal
+//     deliberately, not "add vendor awareness" — that already exists.
+//
 // CheckDecorrelation rejects an assignment where test-critic and test-writer
 // share a model. A test-critic judging tests written by its own model (or a
 // copy of it) is not an independent check — it is the same failure mode
@@ -3049,6 +3094,19 @@ func (d *Driver) timeoutVerdict(run *runState) Verdict {
 	v.Status = StatusNeedsReview
 	v.TimedOut = true
 	v.DevScored = run.devScored
+	// The pool half, for the same reason as DevScored above — and the EVIDENCE
+	// behind it, not just the count.
+	//
+	// ProvenMissed has ridden this verdict for a while; ProvenMutantIDs and
+	// AuthoredTest did not. That split is incoherent on its face: the record
+	// asserted "N survivors are provably catchable" while dropping WHICH ones
+	// and the test that proves it, so certify_repo_record's per-survivor
+	// Proven flag (derived from ProvenMutantIDs) marked every one of them
+	// unproven — a ledger row reading proven_missed=N beside zero proven
+	// survivors. One grain of a measurement is not a measurement.
+	v.PoolScored = run.poolScored
+	v.ProvenMutantIDs = run.provenIDs
+	v.AuthoredTest = run.authoredTest
 	return v
 }
 

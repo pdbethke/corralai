@@ -150,3 +150,52 @@ func TestMinimalEnvHasNoGitToken(t *testing.T) {
 		}
 	}
 }
+
+// TestCancelledRunNeverReadsAsAFailingTest pins the fix for the defect that a
+// Ctrl-C inflated the kill rate.
+//
+// THE CHAIN, which is why this lives in the sandbox package but is really
+// about the scorer: cmd.Cancel SIGKILLs, so a cancelled run's ExitCode is -1.
+// Before the fix, only context.DeadlineExceeded was classified, so a
+// cancellation left Err empty and TimedOut false; -1 also slipped the
+// `runErr != nil && res.ExitCode == 0` guard. RunGuarded then returned a nil
+// error, bwrapJail.RunTest reported passed=false, and adequacy.Score recorded
+// `killed: !passed` — every mutant still running when the operator pressed
+// Ctrl-C was counted as CAUGHT.
+//
+// The assertion that matters is `err != nil`: it is what routes Score to its
+// unmeasured-outcome path instead of its kill path.
+func TestCancelledRunNeverReadsAsAFailingTest(t *testing.T) {
+	opts := Options{Backend: noneIsolator{}, Workspace: t.TempDir(), Timeout: 30 * time.Second}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() { time.Sleep(150 * time.Millisecond); cancel() }()
+	res, err := RunGuarded(ctx, "sleep 10", opts)
+
+	if err == nil {
+		t.Fatalf("a cancelled run returned a nil error: RunTest would report passed=false and Score would record it as a KILLED mutant, crediting the suite with a divergence it never detected (got %+v)", res)
+	}
+	if res.Err == "" {
+		t.Errorf("Result.Err is empty on a cancelled run — RunGuarded's invariant rests on it being set")
+	}
+	if res.TimedOut {
+		t.Errorf("TimedOut is true on a CANCELLED run: that sends Score into the compliant-baseline re-probe, which exists to tell a slow box from a non-terminating mutant. Neither applies — the operator stopped the run")
+	}
+}
+
+// TestDeadlineStillClassifiesAsTimeout is the other half: widening the check to
+// every context error must not turn a genuine deadline into an ordinary
+// cancellation, or Score loses the baseline re-probe that distinguishes a
+// non-terminating mutant (a real kill) from a loaded machine (unmeasured).
+func TestDeadlineStillClassifiesAsTimeout(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+	res, err := RunGuarded(ctx, "sleep 10", Options{Backend: noneIsolator{}, Workspace: t.TempDir(), Timeout: 30 * time.Second})
+
+	if err == nil {
+		t.Fatalf("a timed-out run returned a nil error (got %+v)", res)
+	}
+	if !res.TimedOut {
+		t.Errorf("TimedOut is false on a deadline-exceeded run — Score would take the plain-error path and never run the baseline re-probe, so a genuinely non-terminating mutant would go unrecorded as a kill")
+	}
+}

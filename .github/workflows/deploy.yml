@@ -64,11 +64,42 @@ jobs:
           fi
           echo "non-docs changed: $code"
           echo "code=$code" >> "$GITHUB_OUTPUT"
+      # NOT gated on the docs-only filter: the documentation gates below are Go
+      # tests, so they need a toolchain even when nothing but Markdown changed.
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
-        if: steps.filter.outputs.code == 'true'
         with:
           go-version-file: go.mod
           cache: true
+      # THE DOCUMENTATION GATES ALWAYS RUN — no `if:`, deliberately.
+      #
+      # These assert that every `pdbethke/corralai@<ref>` in the repo names a
+      # ref that resolves, and that none of them pins an older tag than the
+      # newest one cut. They are Go tests, so the docs-only branch below used to
+      # skip them: a Markdown-only pull request was exactly the pull request on
+      # which the pin-freshness gate never ran. The gate was neither missing nor
+      # ignored — it was structurally unreachable by the one class of change it
+      # exists to police, and documentation drifted past two releases under it.
+      #
+      # The name selector is duplicated in cmd/corral/action_test.go's
+      # docGateSelector, and TestDocGatesRunOnDocsOnlyChanges asserts the two
+      # agree AND that every doc-walking test is named to match — so neither
+      # renaming a test nor deleting this step can quietly switch the gates off.
+      #
+      # fetch-depth: 0 above is load-bearing here: TestDocsPinTheNewestCutTag
+      # compares against the newest tag in THIS clone and skips without tags.
+      - name: Documentation gates (run on every change, docs-only included)
+        run: go test ./cmd/corral/ -run '^TestDocs' -count=1
+      # ALSO UNGATED, and for the same reason as the step above: this asserts
+      # the SPDX header on every tracked .go file, but ALSO that LICENSE still
+      # says Elastic 2.0, that NOTICE points at commercial licensing, and that
+      # README.md no longer advertises MIT — three Markdown-shaped invariants a
+      # docs-only change is exactly able to break.
+      #
+      # CONTRIBUTING.md has always said this "must exit 0". Nothing ran it, and
+      # it was found RED on 47 tracked files. A licensing invariant that only a
+      # contributor's discipline enforces is not enforced.
+      - name: Licensing gate (run on every change, docs-only included)
+        run: bash scripts/check-licensing.sh
       - if: steps.filter.outputs.code == 'true'
         run: go vet ./...
       - name: Provision language test toolchains (audit gate)

@@ -25,7 +25,7 @@ invariant hiding as ordinary bugs — see "The bug shape that keeps recurring".
 
 ## Build, test, and the gates that will fail your PR
 
-Go 1.26.5 (see `go.mod`). No Makefile; use the Go toolchain directly.
+Go 1.26.6 (see `go.mod`). No Makefile; use the Go toolchain directly.
 
 ```bash
 go build ./...
@@ -49,12 +49,17 @@ and are not:
   from the binaries' own `-h` output**. Never hand-edit it; regenerate.
 - `bash scripts/sync-site-assets.sh --check` — the site's vendored replay
   player must not drift from source.
+- `bash scripts/check-licensing.sh` — every tracked `.go` file carries the
+  Elastic-2.0 SPDX header, and LICENSE/NOTICE/README still say what they must.
+  `scripts/add-spdx.sh` fixes the header half. **Two of the three gates in this
+  list run on EVERY change, docs-only included** — this one and the `^TestDocs`
+  tests — because all three of them grade Markdown as well as Go.
 
 ### CI workflows
 
 | workflow | what it does |
 |---|---|
-| `deploy.yml` (`validate`) | vet, provision language toolchains, `go test -v` with a SKIP census, the two drift checks, gosec, security gate |
+| `deploy.yml` (`validate`) | the doc gates and the licensing gate ALWAYS; then, only when something other than Markdown changed: vet, provision language toolchains, `go test -v` with a SKIP census, the drift checks, gosec, security gate |
 | `foreign-sweep.yml` (`sweep`) | `certify --repo --dry-run` over SHA-pinned third-party repos, diffed against `testdata/foreign-sweep-expected.tsv` |
 | `self-audit.yml` | corral auditing corral. Non-blocking, label-gated, all-Gemini, `top: "1"` |
 | `cla.yml`, `sbom.yml`, `scorecard.yml` | CLA, SBOM, supply-chain scorecard |
@@ -217,6 +222,76 @@ asserts the value survives the boundary.
 
 Related: never let a could-not-measure outcome render as a measured zero. A
 `COULD-NOT-GRADE` that explains itself is worth more than a number that is wrong.
+
+## Claims reviewers keep getting wrong
+
+Four independent AI reviews of this repository (2026-09-01) produced eight
+confident false claims between them. Every one had the same shape: **the
+evidence was read correctly and the state of the world was inferred wrongly** —
+which is precisely the failure this project exists to refuse. The list below is
+here so the ninth reviewer does not spend an afternoon on the same ground.
+
+Before reporting any of these, run the check named beside it.
+
+- **"`Verdict` is constructed in two places, so a new field can be dropped."**
+  **THIS ONE IS TRUE, and it was wrongly listed here as false.** The two sites
+  are `tickAggregate` (`internal/advpool/driver.go`) and `timeoutVerdict` in the
+  same file, whose own comment says it "is the second Verdict construction site
+  in this package, and it has now been the place a field was forgotten more than
+  once." Both route through `verdictFromSpec`, which is why a `grep 'Verdict{'`
+  finds one literal and looks reassuring — the literal is shared, the field
+  ASSIGNMENTS are not. The drift this entry was written to record —
+  `timeoutVerdict` carrying `ProvenMissed` without `ProvenMutantIDs` or
+  `AuthoredTest` — is FIXED, along with the missing `PoolScored` discriminator
+  that made the count unreadable. The two paths remain two paths, so the
+  hazard stands: a new scored field must be added to both.
+
+  The entry is left here, corrected rather than deleted, because of HOW it got
+  here: the reviewer was overruled on a `grep -rn "func tickAggregate"`, which
+  cannot match a method with a receiver. A search that cannot find the thing is
+  not evidence the thing is absent. **Grep for the bare identifier before
+  concluding a symbol does not exist**, and prefer `go doc` or a compile error
+  to a pattern you wrote yourself.
+- **"GitLab and Gitea are stubs."** Both providers are complete implementations.
+  Exactly two methods return `errors.ErrUnsupported` — `ListOpenPRs` and
+  `SetCommitStatus`. The true, narrower claim: **the gate is GitHub-only.**
+- **"The workspace substrate has no signal handling."** `cmd/corral/signalctx.go`
+  cancels (never exits) so deferred restores run. What is genuinely missing is
+  crash *detection* — see `WorkspaceRunner.Verify`'s doc comment for why that
+  needs a durable journal rather than a check.
+- **"Add a fast/deep tiered mode."** It exists: the driver cancels the
+  test-writer outright when a run has no survivors. Pass 2 is already
+  conditional on Pass 1. `grep -n 'moot test-writer' internal/advpool/driver.go`
+- **"`0 proven gaps` is reported as a pass."** `TestWriterFailed` and
+  `PoolTestUnsound` are distinct verdict fields and both force `needs-review`
+  unconditionally. Whether the CLI *renders* them legibly is a fair question;
+  the scoring is not.
+- **"CheckDecorrelation is blind to vendors — two models from one provider
+  pass."** The FUNCTION compares names, but corral is not blind: same-vendor is
+  detected and reported twice — at seat resolution (`certify_local.go`, "an
+  independent MODEL but not an independent VENDOR") and on the verdict itself
+  (`certify_adversarial.go`, "every graded seat is google"). It WARNS rather
+  than refuses, deliberately, because refusing strands a single-vendor
+  operator. Reported as a missing capability twice; it is a product decision.
+  `grep -rn "independent VENDOR\|every graded seat is" --include=*.go .`
+- **"Pair tests to sources by parsing imports."** Pairing already uses execution
+  coverage (`evidence-paired` on the scan line), which proves a test exercises a
+  file. An import proves only that it mentions one. Import parsing is a
+  downgrade.
+- **"Run-to-run kill rates swing wildly."** The measured spread on an unchanged
+  diff is **0.85 → 0.90**, and it is documented in `CHANGELOG.md` and the
+  `--push` help. Variance is real; do not invent a magnitude for it.
+- **"`go test ./...` is red, so the repo is not green."** Check whether the
+  offending file is tracked first — `git check-ignore -v <path>`. A gitignored
+  local draft under `docs/launch/` or `docs/superpowers/` is not part of this
+  repository. (The doc gates now filter ignored paths themselves; this note is
+  for every *other* test that walks the tree.)
+
+The general rule this list is an instance of: **this repository documents its
+tradeoffs in the comment above the code that makes them.** When something looks
+like an oversight, read the doc comment on the function before reporting it —
+several of the misses above are explained ten lines from where the reviewer was
+looking.
 
 ## Documentation rules
 

@@ -4427,3 +4427,67 @@ func TestTimeoutVerdictCarriesTheCouldNotGradeFlags(t *testing.T) {
 		})
 	}
 }
+
+// TestTimeoutVerdictCarriesTheProvenEvidence is the fifth member of the
+// TestTimeoutVerdictCarries* family, and each one exists because
+// timeoutVerdict forgot a field. This is the pair it forgot next.
+//
+// THE SHAPE OF THE BUG. A run can reach tickPoolAdequacy, converge its pool
+// score — a genuine, execution-proven ProvenMissed — and only THEN stall
+// waiting on the test-critic, at which point RunDeadline fires and this
+// function banks the verdict. ProvenMissed rode along; ProvenMutantIDs and
+// AuthoredTest did not. The record therefore asserted "N survivors are
+// provably catchable" while dropping WHICH ones and the test that proves it,
+// so certify_repo_record's per-survivor Proven flag (derived from
+// ProvenMutantIDs) marked every one of them unproven — a ledger row reading
+// proven_missed=N beside zero proven survivors, contradicting itself.
+//
+// PoolScored is the discriminator that makes the count legible at all: without
+// it a reader cannot tell this verdict from one that timed out before the
+// writer ever ran, which is why the renderer printed "(not run — pool did not
+// converge)" over a measured number.
+func TestTimeoutVerdictCarriesTheProvenEvidence(t *testing.T) {
+	d := &Driver{}
+	run := &runState{
+		rs:           RunSpec{Repo: "r", Commit: "c", Lang: "go"},
+		devScored:    true,
+		poolScored:   true,
+		devKillRate:  0.6,
+		mutantsTotal: 10,
+		provenMissed: 3,
+		provenIDs:    []string{"m1", "m2", "m3"},
+		authoredTest: "func TestProof(t *testing.T) {}",
+	}
+
+	v := d.timeoutVerdict(run)
+
+	if !v.PoolScored {
+		t.Error("PoolScored = false on a run that converged its pool score — a reader cannot tell a MEASURED ProvenMissed from a zero nobody computed, and the renderer discards the number")
+	}
+	if v.ProvenMissed != 3 {
+		t.Errorf("ProvenMissed = %d, want 3", v.ProvenMissed)
+	}
+	if len(v.ProvenMutantIDs) != 3 {
+		t.Errorf("ProvenMutantIDs = %v, want 3 ids — the count survived the timeout and the EVIDENCE behind it did not, so every survivor records as unproven beside a non-zero proven_missed", v.ProvenMutantIDs)
+	}
+	if v.AuthoredTest == "" {
+		t.Error("AuthoredTest is empty — the test that PROVES the gap is the most useful thing the run produced, and it was dropped")
+	}
+}
+
+// TestTimeoutVerdictWithoutAPoolScoreClaimsNothing is the other direction, and
+// the one that keeps the fix honest: a run that timed out BEFORE the pool
+// scored must not now start reporting a zero as a measurement. PoolScored is
+// what separates the two, so it must be false here.
+func TestTimeoutVerdictWithoutAPoolScoreClaimsNothing(t *testing.T) {
+	d := &Driver{}
+	v := d.timeoutVerdict(&runState{
+		rs: RunSpec{Repo: "r", Commit: "c", Lang: "go"}, devScored: true, mutantsTotal: 10,
+	})
+	if v.PoolScored {
+		t.Error("PoolScored = true on a run that never reached pool adequacy — its ProvenMissed of 0 would be rendered as a measured 'nothing was missed'")
+	}
+	if len(v.ProvenMutantIDs) != 0 || v.AuthoredTest != "" {
+		t.Errorf("evidence appeared for a pool that never scored: ids=%v authored=%q", v.ProvenMutantIDs, v.AuthoredTest)
+	}
+}

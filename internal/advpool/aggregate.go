@@ -21,6 +21,18 @@ const MethodCoverageLines = "coverage-lines"
 // (TestSelection, Uncovered). Factored out of aggregate so a test can assert
 // the Selection-to-Verdict mapping without also supplying every scored
 // component aggregate itself requires.
+// THE SHARED BASE OF BOTH Verdict CONSTRUCTION PATHS. Every Verdict starts
+// here, but TWO callers then assign scored fields onto it: `tickAggregate` (the
+// converged path) and `timeoutVerdict` (the banked-timeout path) — see the
+// latter's own comment, which records that it "has now been the place a field
+// was forgotten more than once."
+//
+// So the single `Verdict{}` literal below is REASSURING AND MISLEADING: it
+// means a grep finds one construction site while the field assignments live in
+// two, which is the field-by-field-converter defect AGENTS.md names. A new
+// scored field must be added to BOTH assignment paths, and the only durable
+// guard is a test asserting the value survives Score -> aggregate -> report ->
+// ledger -> attestation, rather than a reader noticing the second site.
 func verdictFromSpec(rs RunSpec) Verdict {
 	return Verdict{
 		Repo:   rs.Repo,
@@ -177,6 +189,12 @@ func aggregate(
 	// verdict's numbers are always real measurements, never a fabricated
 	// zero — see Verdict.DevScored's doc.
 	v.DevScored = true
+	// The converged path is, by definition, pool-scored: aggregate is reached
+	// only via tickAggregate, which is itself gated on run.poolScored. Setting
+	// it here rather than leaving it to the caller keeps the two construction
+	// paths saying the same thing about the same field — the drift this
+	// function's own note warns about.
+	v.PoolScored = true
 	// The SIGNED certify/needs-review decision rests on execution-proven signals:
 	// the mutation kill-rate against the threshold, run in the jail. The
 	// test-critic's vacuous-test flags are a SECOND MODEL'S UNVERIFIED OPINION

@@ -6,6 +6,9 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -291,7 +294,70 @@ func docsAdvertisingAnActionRef(t *testing.T, repoRoot string) map[string]string
 	if err != nil {
 		t.Fatalf("walking %s for documentation: %v", repoRoot, err)
 	}
+	// The walk sees the DISK; the gate is about the REPOSITORY. A contributor's
+	// local draft, an uncommitted spec, or anything else .gitignore excludes is
+	// not a document this project ships, and grading it turns a private scratch
+	// file into a red suite for content that can never reach a user. That is a
+	// false failure: it fails locally while CI — which only ever checks out
+	// tracked files — stays green, so the two disagree about what "the docs"
+	// are. Untracked-but-NOT-ignored files stay in scope on purpose: those are
+	// work on its way to a commit, and catching a bad pin before it lands is
+	// the whole point of the gate.
+	for rel := range gitIgnoredDocs(t, repoRoot, out) {
+		delete(out, rel)
+	}
 	return out
+}
+
+// gitIgnoredDocs returns the subset of docs' keys that the repository's ignore
+// rules exclude, as a set of repo-relative paths.
+//
+// One `git check-ignore` process for the whole set rather than one per file:
+// the walk finds hundreds of documentation-shaped files, and this runs on every
+// invocation of the gate.
+//
+// FAILURE DIRECTION. When git cannot answer — not a repository, git missing, a
+// check-ignore error — this returns nil, so NOTHING is filtered and the gate
+// grades everything exactly as it did before this filter existed. That is the
+// loud failure: a broken filter makes the gate over-report, which someone
+// notices, instead of silently dropping documents and passing green forever.
+// The opposite default would make a filter outage indistinguishable from clean
+// docs.
+func gitIgnoredDocs(t *testing.T, repoRoot string, docs map[string]string) map[string]bool {
+	t.Helper()
+	if len(docs) == 0 {
+		return nil
+	}
+	rels := make([]string, 0, len(docs))
+	for rel := range docs {
+		rels = append(rels, rel)
+	}
+	// -z makes BOTH the stdin paths and the reported ones NUL-delimited, so a
+	// path containing a newline cannot split one entry into two.
+	cmd := exec.Command("git", "check-ignore", "-z", "--stdin")
+	cmd.Dir = repoRoot
+	cmd.Env = append(os.Environ(),
+		"GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null",
+	)
+	cmd.Stdin = strings.NewReader(strings.Join(rels, "\x00") + "\x00")
+	out, err := cmd.Output()
+	if err != nil {
+		// check-ignore exits 1 for "no path matched" — a successful answer of
+		// "none", not an error. Anything else (128: not a repository) means the
+		// question went unanswered; see FAILURE DIRECTION above.
+		var ee *exec.ExitError
+		if !errors.As(err, &ee) || ee.ExitCode() != 1 {
+			t.Logf("git check-ignore in %s: %v — grading every documentation file, ignored ones included", repoRoot, err)
+			return nil
+		}
+	}
+	ignored := map[string]bool{}
+	for _, p := range strings.Split(string(out), "\x00") {
+		if p != "" {
+			ignored[filepath.Clean(p)] = true
+		}
+	}
+	return ignored
 }
 
 // actionStep is a single composite step within action.yml's `runs.steps`.
@@ -1622,5 +1688,145 @@ func TestActionRunsOutsideActionsWithoutAStepSummary(t *testing.T) {
 	}
 	if !strings.Contains(string(out), "kill rate 0.47") {
 		t.Errorf("the report must still reach stdout when there is no summary to write to; got:\n%s", out)
+	}
+}
+
+// TestDocsWalkSkipsGitIgnoredFiles pins the scope fix: the gate grades the
+// REPOSITORY, not the disk.
+//
+// The bug this replaces was a false FAILURE, which is why it needs its own
+// test rather than a line in the gate above. docsAdvertisingAnActionRef walked
+// the filesystem, so a local `docs/launch/…` draft or an ignored spec carrying
+// a `pdbethke/corralai@latest` snippet turned every developer's `go test ./...`
+// red for a file that is not in the repository and never will be — while CI,
+// which only ever sees tracked files, stayed green. A gate whose verdict
+// depends on what happens to be lying in the working tree is not grading the
+// property it claims to grade.
+//
+// Both directions are asserted here, because dropping ignored files is only
+// safe if the gate still sees everything it is supposed to: an ignored doc is
+// skipped, and a tracked one plus an untracked-but-not-ignored one are BOTH
+// still graded — the latter is a doc on its way to a commit, exactly when
+// catching a bad pin is most useful.
+func TestDocsWalkSkipsGitIgnoredFiles(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	root := t.TempDir()
+	if out, err := runGit(t, root, "init", "-q", "."); err != nil {
+		t.Skipf("git init: %v: %s", err, out)
+	}
+	write := func(rel, body string) {
+		p := filepath.Join(root, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatalf("mkdir for %s: %v", rel, err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+			t.Fatalf("write %s: %v", rel, err)
+		}
+	}
+	write(".gitignore", "scratch/\n")
+	write("README.md", "uses: pdbethke/corralai@main\n")
+	write("scratch/draft.md", "uses: pdbethke/corralai@latest\n")
+	write("docs/new.md", "uses: pdbethke/corralai@main\n")
+	if out, err := runGit(t, root, "add", ".gitignore", "README.md"); err != nil {
+		t.Fatalf("git add: %v: %s", err, out)
+	}
+
+	docs := docsAdvertisingAnActionRef(t, root)
+
+	if _, found := docs[filepath.Join("scratch", "draft.md")]; found {
+		t.Errorf("scratch/draft.md is gitignored but was graded — the gate is reading the disk, not the repository")
+	}
+	for _, must := range []string{"README.md", filepath.Join("docs", "new.md")} {
+		if _, found := docs[must]; !found {
+			t.Errorf("%s is in the repository (tracked or merely untracked) but was NOT graded — the ignore filter is dropping documents it must keep", must)
+		}
+	}
+}
+
+// docGateSelector is the `go test -run` pattern CI uses to run the
+// documentation gates on a change that touches ONLY documentation.
+//
+// It is duplicated, deliberately, in .github/workflows/deploy.yml — and
+// TestDocGatesRunOnDocsOnlyChanges below asserts the two agree, so the
+// duplication cannot rot.
+const docGateSelector = "^TestDocs"
+
+// TestDocGatesRunOnDocsOnlyChanges is the gate on the gates.
+//
+// THE BUG IT EXISTS TO PREVENT, which shipped and cost two stale tags:
+// deploy.yml classifies a change as docs-only when every changed file matches
+// `\.md$`, and then skips `go test ./...`. But the documentation gates ARE Go
+// tests. So a Markdown-only pull request was precisely the pull request on
+// which the pin-freshness gate never ran — the gate was neither missing nor
+// ignored, it was structurally unreachable by the one class of change it
+// exists to police. Documentation drifted past two releases underneath it.
+//
+// The fix is a step in deploy.yml that runs `-run "^TestDocs"` with no `if:`
+// guard. That step selects tests BY NAME, which is the hand-maintained list
+// this repo keeps getting burned by, so both halves of it are guarded here:
+//
+//  1. Every test that walks the documentation must be named for the selector.
+//     Add a doc gate called TestActionRefsResolve and CI silently stops
+//     running it; this test fails instead.
+//  2. deploy.yml must still contain the selector. Delete or rename the step
+//     and this test fails, rather than the gate going quiet.
+//
+// What it deliberately does NOT assert is the absence of an `if:` on that
+// step — YAML structure is not worth hand-parsing here, and every failure
+// mode above is already covered. Read the step's own comment before changing
+// its condition.
+func TestDocGatesRunOnDocsOnlyChanges(t *testing.T) {
+	const walker = "docsAdvertisingAnActionRef"
+	wantPrefix := strings.TrimPrefix(docGateSelector, "^")
+
+	fset := token.NewFileSet()
+	pkgs, err := parser.ParseDir(fset, ".", func(fi fs.FileInfo) bool {
+		return strings.HasSuffix(fi.Name(), "_test.go")
+	}, 0)
+	if err != nil {
+		t.Fatalf("parsing this package's tests: %v", err)
+	}
+
+	found := 0
+	for _, pkg := range pkgs {
+		for _, file := range pkg.Files {
+			for _, decl := range file.Decls {
+				fn, ok := decl.(*ast.FuncDecl)
+				if !ok || fn.Recv != nil || fn.Body == nil || !strings.HasPrefix(fn.Name.Name, "Test") {
+					continue
+				}
+				calls := false
+				ast.Inspect(fn.Body, func(n ast.Node) bool {
+					if id, ok := n.(*ast.Ident); ok && id.Name == walker {
+						calls = true
+					}
+					return !calls
+				})
+				if !calls {
+					continue
+				}
+				found++
+				if !strings.HasPrefix(fn.Name.Name, wantPrefix) {
+					t.Errorf("%s walks the documentation but is named %q — CI selects the doc gates with `-run %q`, so this test would never run on a docs-only pull request. Rename it to start with %q.",
+						walker, fn.Name.Name, docGateSelector, wantPrefix)
+				}
+			}
+		}
+	}
+	// A walk that found nothing would pass green forever — the same failure
+	// docsAdvertisingAnActionRef's own scan-set check guards against.
+	if found == 0 {
+		t.Fatalf("found no test calling %s — this gate is not looking where it thinks it is", walker)
+	}
+
+	wf := filepath.Join("..", "..", ".github", "workflows", "deploy.yml")
+	b, rerr := os.ReadFile(wf)
+	if rerr != nil {
+		t.Fatalf("reading %s: %v", wf, rerr)
+	}
+	if !strings.Contains(string(b), docGateSelector) {
+		t.Errorf("deploy.yml no longer mentions %q — the documentation gates are only reachable on a docs-only change through that step, so removing or renaming it takes them off those pull requests silently", docGateSelector)
 	}
 }

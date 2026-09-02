@@ -10,6 +10,7 @@ package sandbox
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -180,10 +181,38 @@ func Run(ctx context.Context, command string, opts Options) Result {
 
 	runErr := runCommand(cmd)
 	res := Result{Output: buf.String()}
-	if ctx.Err() == context.DeadlineExceeded {
-		res.TimedOut = true
+	// BOTH context outcomes must be classified, not just the deadline.
+	//
+	// A CANCELLED run used to fall straight through this check and read as a
+	// clean process exit. cmd.Cancel SIGKILLs, so ProcessState.ExitCode() is
+	// -1, which then slipped the `runErr != nil && res.ExitCode == 0` guard
+	// below — leaving Err empty and TimedOut false. RunGuarded therefore
+	// returned a NIL error, bwrapJail.RunTest reported `passed = false`, and
+	// adequacy.Score recorded `killed: !passed` = TRUE. So Ctrl-C during an
+	// audit (which is how a human stops one — see cmd/corral/signalctx.go,
+	// whose whole purpose is an orderly unwind) scored every in-flight mutant
+	// as CAUGHT and INFLATED the kill rate. That is the "a failed run must not
+	// read as success" invariant RunGuarded owns, breached by the one context
+	// outcome nobody classified.
+	//
+	// Cancellation is NOT a timeout, and TimedOut stays false deliberately: a
+	// timeout sends adequacy.Score into the compliant-baseline re-probe that
+	// tells a slow box from a non-terminating mutant. There is nothing to tell
+	// apart here — the operator stopped the run — and Score's plain-error path
+	// already records the honest outcome, UNMEASURED.
+	//
+	// The race where the command completes just as the context is cancelled
+	// resolves as cancelled, exactly as the deadline branch has always
+	// resolved it: an unmeasured mutant is the safe direction, a wrongly
+	// credited kill is not.
+	if ctxErr := ctx.Err(); ctxErr != nil {
 		res.ExitCode = -1
-		res.Err = "timed out after " + opts.Timeout.String()
+		if errors.Is(ctxErr, context.DeadlineExceeded) {
+			res.TimedOut = true
+			res.Err = "timed out after " + opts.Timeout.String()
+		} else {
+			res.Err = "cancelled before the run could be graded: " + ctxErr.Error()
+		}
 		return res
 	}
 	if cmd.ProcessState != nil {
@@ -323,10 +352,16 @@ func RunInteractive(ctx context.Context, command string, opts Options, ws io.Rea
 
 	runErr := runCommand(cmd)
 	res := Result{Output: buf.String()}
-	if ctx.Err() == context.DeadlineExceeded {
-		res.TimedOut = true
+	// Same classification as Run, and load-bearing for the same reason: a
+	// cancelled run must not read as a clean process exit. See Run.
+	if ctxErr := ctx.Err(); ctxErr != nil {
 		res.ExitCode = -1
-		res.Err = "timed out after " + opts.Timeout.String()
+		if errors.Is(ctxErr, context.DeadlineExceeded) {
+			res.TimedOut = true
+			res.Err = "timed out after " + opts.Timeout.String()
+		} else {
+			res.Err = "cancelled before the run could be graded: " + ctxErr.Error()
+		}
 		return res
 	}
 	if cmd.ProcessState != nil {

@@ -105,6 +105,12 @@ type advVerdict struct {
 	// looking 0.00. renderAdvVerdict must treat TimedOut && !DevScored as
 	// COULD-NOT-GRADE, never print the zero as a measurement.
 	DevScored bool `json:"DevScored"`
+	// PoolScored mirrors advpool.Verdict.PoolScored: true once the pool's
+	// half was actually measured. It is what lets renderAdvVerdict tell a
+	// timeout that PROVED survivors catchable (and then stalled on the
+	// critic) from one that timed out before the writer ever ran — the
+	// difference between reporting an execution-proven gap and discarding it.
+	PoolScored bool `json:"PoolScored"`
 }
 
 // advStatus mirrors brain.AdvPoolStatusOut (get_adversarial_run's output).
@@ -425,8 +431,17 @@ func renderAdvVerdict(w io.Writer, codePath string, v advVerdict) {
 		// "make the tests stronger" half — test-writer, test-critic — never
 		// ran. Printing "proven_missed: 0" or "no vacuous tests flagged"
 		// here would read as a clean, converged result, which this is not.
-		fmt.Fprintln(w, "  TIMED OUT:     the pool did not converge before its deadline — the test-writer/critic never ran")
-		fmt.Fprintln(w, "  proven_missed: (not run — pool did not converge)")
+		fmt.Fprintln(w, "  TIMED OUT:     the pool did not converge before its deadline")
+		if v.PoolScored {
+			// A run CAN reach pool-adequacy, prove survivors catchable, and
+			// only then stall on the test-critic. That ProvenMissed was earned
+			// in the jail like any other, so printing "(not run)" over it
+			// discards the strongest evidence this tool produces. Say what
+			// actually did not finish instead.
+			fmt.Fprintf(w, "  proven_missed: %d (measured — the test-critic never finished)\n", v.ProvenMissed)
+		} else {
+			fmt.Fprintln(w, "  proven_missed: (not run — pool did not converge)")
+		}
 	} else {
 		fmt.Fprintf(w, "  proven_missed: %d\n", v.ProvenMissed)
 	}

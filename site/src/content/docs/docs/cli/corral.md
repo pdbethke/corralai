@@ -102,6 +102,9 @@ Usage:
                                   Different from "corral certify verify", which checks a
                                   corral certify BUILD record, a different artifact.
                                   flags: --db <dsn>  --rekor-index <n>  --pub <hex>
+  corral ui [flags]              browse that same seal in a browser: a local, read-only page over
+                                  the ledger, loopback by default. No brain, no writes — if
+                                  corral seal can answer it, this shows it.
   corral seal [flags]            the repo's CURRENT state as the union of still-valid verdicts,
                                   read from a certify --repo --push warehouse (many audits, one
                                   current state — not one scan's snapshot). Reads corral_seal
@@ -364,6 +367,18 @@ Usage of seal:
 
 ```
 corral secret: unknown secret subcommand "-h" (set|get|list|rm)
+```
+
+## `corral ui` flags
+
+```
+Usage of ui:
+  -addr string
+    	local listen address. Loopback by default ON PURPOSE: the ledger is a map of where a codebase's tests are thinnest (default "127.0.0.1:8787")
+  -db corral seal
+    	warehouse to read (default: $CORRALAI_SCANS_DB, else ~/.claude/corralai_scans.duckdb — the same resolution corral seal and `corral scans` use)
+  -print-url
+    	print the URL and exit without serving (for scripts and smoke tests)
 ```
 
 ## `corral verify` flags

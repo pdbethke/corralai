@@ -4,6 +4,7 @@ package main
 
 import (
 	"bufio"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -147,4 +148,96 @@ func exposedSurfaces(t *testing.T) map[string]bool {
 		}
 	}
 	return out
+}
+
+// userFacingDocs are the files a stranger reads BEFORE running anything: the
+// front page, the shipped knowledge corpus, the site, and the Action's own
+// contract.
+//
+// The GENERATED CLI reference is exempt wherever it lives — docs/cli/ and the
+// site's mirror of it. It documents every flag by construction, including the
+// ones nothing has run, and that is precisely its job: it is the enumeration
+// this manifest is built FROM. Exempting it is not a loophole, because it
+// makes no persuasive claim; it is a list of what exists.
+var userFacingDocs = []string{
+	"README.md",
+	"docs/corral",
+	"site/src/content/docs",
+	"action.yml",
+}
+
+// TestUnexecutedSurfacesAreNotAdvertised is the launch gate the manifest was
+// built for.
+//
+// `--jail container` was named in the README's platform table as the
+// macOS/Windows path while nothing had ever run it, and it was broken in the
+// most basic way available. The manifest answers "has anything run this?"; this
+// test is what makes the answer BINDING — a surface nobody has exercised must
+// not appear in the material that persuades someone to try corral.
+//
+// It is deliberately a ONE-WAY gate. Marking a surface `executed` requires a
+// receipt (TestClassifiedSurfacesCarryAReceipt), and only then may it be
+// advertised. So the cheap way out — flipping a row to `executed` to silence
+// this — costs a receipt someone can read, which is the whole point.
+//
+// SCOPE, stated because a gate trusted past its scope is worse than none: this
+// matches a flag's exact spelling in prose. It cannot see a capability claimed
+// in words that never name the flag ("works on macOS"), which is what the
+// platform table did. That case stays a human judgement; this closes the
+// mechanical half.
+func TestUnexecutedSurfacesAreNotAdvertised(t *testing.T) {
+	classified, _ := manifestRows(t)
+	var unexecuted []string
+	for surface, row := range classified {
+		if row.status == "unexecuted" {
+			// the flag itself, e.g. "corral certify --repo --swarm" -> "--swarm"
+			if i := strings.LastIndex(surface, " --"); i >= 0 {
+				unexecuted = append(unexecuted, surface[i+1:])
+			}
+		}
+	}
+	sort.Strings(unexecuted)
+	if len(unexecuted) == 0 {
+		return // nothing unexecuted: the gate has nothing to say
+	}
+
+	root := filepath.Join("..", "..")
+	for _, target := range userFacingDocs {
+		err := filepath.WalkDir(filepath.Join(root, target), func(path string, d fs.DirEntry, err error) error {
+			if err != nil {
+				return nil // a missing optional doc tree is not this gate's business
+			}
+			if d.IsDir() {
+				return nil
+			}
+			if strings.Contains(filepath.ToSlash(path), "/docs/cli/") {
+				return nil // the generated reference; see userFacingDocs
+			}
+			switch strings.ToLower(filepath.Ext(d.Name())) {
+			case ".md", ".mdx", ".yml", ".yaml", ".astro":
+			default:
+				return nil
+			}
+			b, rerr := os.ReadFile(path)
+			if rerr != nil {
+				return nil
+			}
+			body := string(b)
+			rel, _ := filepath.Rel(root, path)
+			for _, flag := range unexecuted {
+				// Word-bounded: `--swarm` must not match `--swarming`.
+				re := regexp.MustCompile(regexp.QuoteMeta(flag) + `($|[^a-zA-Z0-9-])`)
+				if re.MatchString(body) {
+					t.Errorf("%s advertises %s, which the manifest marks unexecuted.\n"+
+						"Either run it and record a receipt in testdata/executed-surfaces.tsv, or stop naming it where a stranger will read it first.\n"+
+						"This is the gate that `--jail container` needed: named in the README as the macOS/Windows path, never once executed, and broken.",
+						rel, flag)
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("walking %s: %v", target, err)
+		}
+	}
 }

@@ -96,7 +96,7 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 	criticModel := fs.String("critic-model", "", "model for the test-critic role, which must differ from the writer's; \"off\" disables the critic entirely (it is advisory and never gates the verdict, so a single-vendor run with only one usable model can drop it). No default")
 	mutantModel := fs.String("mutant-model", "", "model for the mutant-generator role — REQUIRED, corral has no default models. Takes a registry alias (.corral/models.json) or a concrete model name")
 	jailFlag := fs.String("jail", "", "sandbox backend: bwrap|container (Linux), sandbox-exec (macOS) (default: auto-detect for this OS; \"none\" is not supported — --local always sandboxes). \"container\" needs CORRALAI_EXEC_IMAGE set to a toolchain image, e.g. CORRALAI_EXEC_IMAGE=python:3.12-bookworm")
-	timeout := fs.Duration("timeout", 10*time.Minute, "WALL-CLOCK budget for the whole run, measured from its start — not a no-progress timer. A run still making steady progress is stopped when it exceeds this, and banks a needs-review TIMEOUT verdict: the dev kill rate and survivors survive (they were measured), the PROVING half does not. A file with many survivors needs room — 13 survivors measured at ~21-24 minutes — so raise it rather than lose the proofs. One in-flight LLM call can overshoot slightly, since the deadline is checked between ticks")
+	timeout := fs.Duration("timeout", defaultRunTimeout, "WALL-CLOCK budget for the whole run, measured from its start — not a no-progress timer. A run still making steady progress is stopped when it exceeds this, and banks a needs-review TIMEOUT verdict: the dev kill rate and survivors survive (they were measured), the PROVING half does not. A file with many survivors needs room — 13 survivors measured at ~21-24 minutes — so raise it rather than lose the proofs. One in-flight LLM call can overshoot slightly, since the deadline is checked between ticks")
 	testTimeout := fs.Duration("test-timeout", 0, "hard cap on a SINGLE test-suite run in the jail (0 = auto: derived from the healthy suite's own runtime, so a mutant that makes the suite hang is killed fast instead of eating the whole --timeout). Raise it only if your suite legitimately runs long")
 	noFailFast := fs.Bool("no-fail-fast", false, noFailFastHelp)
 	poll := fs.Duration("poll", 2*time.Second, "how long to wait between drive iterations when nothing is claimable")
@@ -2217,3 +2217,27 @@ const noFailFastHelp = "grade every mutant with the WHOLE selected test set inst
 	"which is most of the per-mutant cost on a repo with a real suite; the verdict is identical either way, and the baseline always runs everything. " +
 	"COSTS: turning this off makes each killed mutant pay for its whole selected set again — on a 77s suite that is the dominant term in the audit. " +
 	"Use it only if your suite is order-dependent or flaky in a way that makes an early stop misleading."
+
+// defaultRunTimeout is the wall-clock budget one file's run gets before it is
+// stopped and banked as a TIMEOUT verdict.
+//
+// RAISED FROM 10 MINUTES ON MEASUREMENT, not on taste. afero's memmap.go,
+// replayed against a recorded mutant set so the exam was fixed:
+//
+//	13 survivors, 13 PROVEN, 1428s at --swarm 8
+//	13 survivors, 13 PROVEN, 1259s at --swarm 16
+//	                          ~616s at the old 10m default, and the verdict
+//	                          read "proven_missed: (not run — pool did not
+//	                          converge)"
+//
+// The run was making steady, productive progress throughout. Ten minutes did
+// not save that spend — it spent it and discarded the proving half, keeping
+// only the dev kill rate. A file with MANY survivors needs the most time and
+// has the most to prove, so the old default failed hardest exactly where the
+// tool is most valuable.
+//
+// 30 minutes clears the measured case with headroom rather than fitting it
+// exactly, because a slower suite or a wider fan-out moves the number and a
+// default tuned to one observation would be its own kind of wrong. An operator
+// who wants the old behaviour still has --timeout.
+const defaultRunTimeout = 30 * time.Minute

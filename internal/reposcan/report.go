@@ -30,6 +30,17 @@ type WeakFile struct {
 	// finish — a caller must print this distinctly, never silently alongside
 	// a clean convergence.
 	TimedOut bool
+	// PoolScored mirrors advpool.Verdict.PoolScored: true once the pool half
+	// actually measured. It is what separates the two shapes of a TIMED-OUT
+	// file, which look identical in every other column: one that stalled
+	// before the writer ran and has a ProvenMissed nobody computed, and one
+	// that converged its pool score and only then stalled waiting on the
+	// critic, whose ProvenMissed is as real as any other.
+	//
+	// The --max-proven-missed gate needs the difference. Without it the gate
+	// either passes an unmeasured zero or fails a genuine measurement, and
+	// both are wrong in the direction that matters.
+	PoolScored bool
 	// TestWriterFailed mirrors advpool.Verdict.TestWriterFailed: true when
 	// this file's run exhausted its compile-retry budget without authoring
 	// a compiling killing test. HONESTY NOTE: Survivors > 0 here with
@@ -479,6 +490,7 @@ func Aggregate(owner, repo, commit string, totalFiles, candidates int, results [
 			Survivors:        r.Verdict.Survivors,
 			TimedOut:         r.Verdict.TimedOut,
 			TestWriterFailed: r.Verdict.TestWriterFailed,
+			PoolScored:       r.Verdict.PoolScored,
 			ProvenMissed:     r.Verdict.ProvenMissed,
 			PoolTestUnsound:  r.Verdict.PoolTestUnsound,
 			AuthoredTest:     r.Verdict.AuthoredTest,

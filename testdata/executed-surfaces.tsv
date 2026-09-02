@@ -34,6 +34,16 @@
 # what it did. Treat it as "someone has been here", and upgrade it to a `run:`
 # receipt or a named behavioural test when the surface matters.
 #
+# AND IT MISSES THE OPPOSITE CASE, which the first triage pass found the hard
+# way. --max-proven-missed was seeded `unexecuted` because no test passes that
+# string — while TestMaxProvenMissedFailsClosedWhenNothingCouldBeProven had
+# been calling repoScanExitCode with its value directly all along. The flag's
+# LOGIC was tested; its parsing was not. So a seeded `unexecuted` means "no
+# test passes the literal and no recorded run used it", which is narrower than
+# "nothing has ever exercised this". Read a row as a question that has been
+# ASKED, not as a measurement — and when you triage one, look for a
+# behavioural test before assuming the surface is untouched.
+#
 # Regenerate the enumeration, never this file's judgements, with
 # TestEverySurfaceIsClassified, which fails on a surface with no row and on a
 # row for a surface that no longer exists.
@@ -79,7 +89,7 @@ corral certify --repo --dry-run	executed	test:cmd/corral/certify_repo_writer_mod
 corral certify --repo --goals	executed	test:cmd/corral/certify_repo_selcache_test.go
 corral certify --repo --json	executed	test:cmd/corral/models_rank_test.go
 corral certify --repo --local-endpoint	unexecuted	
-corral certify --repo --max-proven-missed	unexecuted	
+corral certify --repo --max-proven-missed	executed	test:cmd/corral/certify_repo_test.go (gate logic; flag parsing still unexercised)
 corral certify --repo --min-kill-rate	executed	test:cmd/corral/certify_repo_test.go
 corral certify --repo --mutant-model	executed	test:cmd/corral/certify_repo_writer_mode_test.go
 corral certify --repo --mutants	executed	test:cmd/corral/certify_repo_evidence_candidacy_test.go

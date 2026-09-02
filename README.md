@@ -606,9 +606,10 @@ can be checked against something a third party can verify, and without
 what one pull request cannot: a single kill rate is a sample — the same
 unchanged diff has scored `0.85` and `0.90` — while forty of them, pushed
 across forty PRs, are a distribution you can read a trend from. `md:<db>`
-targets MotherDuck and reads its token from `motherduck_token`
-(`--motherduck-token`, or the Action's `motherduck-token` input) in the
-environment.
+targets MotherDuck and reads its token from the `motherduck_token`
+environment variable (the Action exposes it as the `motherduck-token` input).
+There is no `--motherduck-token` flag: a token on a command line lands in shell
+history and in every process listing on the box.
 
 `--push-source` additionally sends the pool's authored test and the full
 verdict JSON — never mutant code, which corral keeps at rest under no
@@ -797,9 +798,10 @@ plumbing rather than a result.**
   it into vetted memory and a versioned skill; every later run starts already warned.
   The loop watches its own efficacy — if a signature keeps recurring after promotion,
   a revision proposal reopens.
-- **Shared skills, human-gated.** Approved skills sync across the fleet via
-  `corral sync`, so what one machine's herd learns, every machine's herd can *do* —
-  but publishing to the fleet is superuser-only (a worker proposes, it can't publish).
+- **Shared skills, human-gated.** Approved skills are shared across the fleet
+  through the brain, so what one machine's herd learns, every machine's herd can
+  *do* — but publishing to the fleet is superuser-only (a worker proposes, it
+  can't publish).
   Corralai ships a [`using-corralai`](skills/using-corralai/SKILL.md) skill that
   teaches any coding agent to drive the gate.
 - **Reference RAG** — upload your own grounding material (text · URLs · **PDFs**);
@@ -810,8 +812,8 @@ plumbing rather than a result.**
 
 Nothing about a run is thrown away: every task's claim and completion, every finding
 and its resolution, every command actually run, and the event log survive
-indefinitely. `corral certify --record <file>.json` writes a replayable tape of an
-audit — the pool's reasoning beats, the task lifecycle, the findings — in the same
+indefinitely. `corral certify --local --record <file>.json` writes a replayable
+tape of an audit — the pool's reasoning beats, the task lifecycle, the findings — in the same
 `{events:[…]}` shape the corralai.dev cockpit replays. **With reasoning capture on,
 the replay streams each model's own words, verbatim,** interleaved with the commands
 they triggered (*"the retry test is flaky because the backoff refills too slowly"* →

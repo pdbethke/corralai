@@ -66,7 +66,37 @@ capture_help() {
 # subcommands but not their flag sets, so every flag added to `certify --local`
 # or `certify --repo` shipped undocumented — that is exactly how --local-endpoint
 # and --record-stream reached a release with zero mentions anywhere user-facing.
-CORRAL_SUBCOMMANDS=("certify --local" "certify --repo ." "certify verify" "scans push")
+# DERIVED from the binary's own top-level -h, not hand-listed. The hand-listed
+# version named four subcommands, and the other six with flags — demo, doctor,
+# eval, scorecard, seal, verify — shipped with 24 flags and no reference section
+# between them. Including `doctor`, which getting-started tells a new operator to
+# run first. That is the same defect the comment above describes, one level up:
+# the fix was applied to the list and the list stayed hand-maintained.
+#
+# ARGV_FOR holds the few subcommands that cannot reach their flag set from the
+# bare name — a positional the parser demands before it will print flags, or a
+# sub-subcommand. Anything absent is invoked as `corral <name> -h`. A new
+# subcommand therefore gets a section for free; only an argument-hungry one
+# needs a line here, and its absence shows up as a missing section rather than
+# as silence.
+declare -A ARGV_FOR=(
+  [certify]="certify --local"
+  [scans]="scans push"
+)
+# `certify` carries three distinct flag sets behind one name, so it is listed
+# explicitly rather than derived — deriving would document only the first.
+CORRAL_EXTRA_SUBCOMMANDS=("certify --repo ." "certify verify")
+
+derive_corral_subcommands() {
+  local names sub
+  names="$( ( cd "$WORKDIR" && ./corral -h 2>&1 ) \
+    | grep -oE '^  corral [a-z][a-z-]*' | awk '{print $2}' | sort -u )"
+  for n in $names; do
+    sub="${ARGV_FOR[$n]:-$n}"
+    echo "$sub"
+  done
+  for sub in "${CORRAL_EXTRA_SUBCOMMANDS[@]}"; do echo "$sub"; done
+}
 
 capture_sub_help() {
   local bin="$1"
@@ -95,7 +125,7 @@ gen_one() {
     echo "$help"
     echo '```'
     if [ "$b" = "corral" ]; then
-      for sub in "${CORRAL_SUBCOMMANDS[@]}"; do
+      while IFS= read -r sub; do
         # shellcheck disable=SC2086 -- deliberate word splitting: an argv prefix
         subhelp="$(capture_sub_help "$b" $sub)"
         [ -n "$subhelp" ] || continue
@@ -108,7 +138,7 @@ gen_one() {
         echo '```'
         echo "$subhelp"
         echo '```'
-      done
+      done < <(derive_corral_subcommands)
     fi
     if [ -n "$env_block" ]; then
       echo

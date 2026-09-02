@@ -224,6 +224,162 @@ Usage of certify --local:
     	model for the test-writer role — REQUIRED, corral has no default models. Takes a registry alias (.corral/models.json) or a concrete model name
 ```
 
+## `corral control` flags
+
+```
+corral control: usage: corral control seed --spec-db <path> --owner <principal> --goal <id> --target <repo-path> --code-path <flat> --test-path <flat> --test-file <path> [--kill-rate <float>]
+note: the brain must be stopped (it holds the control store open); or author via the stage_control / promote_control MCP tools while the brain runs
+```
+
+## `corral criticscore` flags
+
+```
+usage: corral criticscore list|show <id>|confirm <id> [--why ...]|refute <id> [--why ...]
+```
+
+## `corral demo` flags
+
+```
+Usage of demo:
+  -critic-model string
+    	model for the test-critic role, which must differ from the writer's ("off" disables it)
+  -dir string
+    	where to write the demo project (default: a new temp dir, printed and kept)
+  -mutant-model string
+    	model for the mutant-generator role — REQUIRED, corral has no default models. Takes a registry alias (.corral/models.json) or a concrete model name
+  -writer-model string
+    	model for the test-writer role — REQUIRED, corral has no default models. Takes a registry alias (.corral/models.json) or a concrete model name
+```
+
+## `corral doctor` flags
+
+```
+Usage of doctor:
+  -code string
+    	the source file you intend to audit (optional, enables the pairing and baseline checks)
+  -critic-model string
+    	the test-critic model whose credential to check
+  -jail string
+    	sandbox backend (default: auto-detect). "container" needs CORRALAI_EXEC_IMAGE set to a toolchain image, e.g. CORRALAI_EXEC_IMAGE=python:3.12-bookworm
+  -mutant-model string
+    	the mutant-generator model whose credential to check
+  -test string
+    	its test file (optional; otherwise inferred from the language's convention)
+  -writer-model string
+    	the test-writer model whose credential to check
+```
+
+## `corral eval` flags
+
+```
+Usage of eval:
+  -brain string
+    	brain endpoint (or $CORRAL_BRAIN)
+  -corpus string
+    	corpus manifest path (default "eval/corpus/manifest.json")
+  -iterations int
+    	iterations per target (default 1)
+  -only string
+    	comma-separated target ids (default: all)
+  -progress string
+    	resumable progress file (default "eval/.eval-progress.json")
+```
+
+## `corral matrix` flags
+
+```
+corral matrix: set CORRAL_BRAIN (and CORRALAI_BRAIN_TOKEN via `corral secret`) — matrix has no offline mode
+```
+
+## `corral models` flags
+
+```
+usage: corral models rank [--db <dsn>] [--seat <role>] [--lang <name>] [--min-runs N] [--json]
+
+  Rank the models that have sat in each seat by what corral's OWN recorded
+  evidence says about them — a different metric per seat, because the seats do
+  different jobs.
+
+  This is DISCLOSURE, NOT SELECTION. It prints a table. It writes no config,
+  changes no default, and feeds no router: corral has no default models, and a
+  ranking that quietly staffed a seat would put one back.
+```
+
+## `corral scans push` flags
+
+```
+usage: corral scans push --db <dsn> [--scan <id> | --all] [--since YYYY-MM-DD] [--dry-run]
+
+Reads from the SAME local ledger `corral scans list` reads (default:
+$CORRALAI_SCANS_DB, else ~/.claude/corralai_scans.duckdb) — set that env var to
+push from a non-default ledger.
+
+Pushes scans ALREADY in the local ledger (`certify --repo --record`) to a
+warehouse — the verb for someone who recorded for weeks before deciding they
+wanted a warehouse, so they do not have to re-run every audit to get there.
+
+The warehouse tables are APPEND-ONLY: pushing the same scan id twice adds its
+rows a second time rather than overwriting the first. --dry-run reports the
+rows a push would ADD, which is the same count whether or not this scan has
+been pushed before.
+
+Never carries source (the authored test, mutant code, the verdict blob) —
+this command has no --push-source flag, so BlankUnpushedSource withholds it
+unconditionally, even for a scan whose original run pushed source itself.
+  -all
+    	push every recorded scan (optionally narrowed by --since)
+  -db string
+    	the warehouse to push to — a DuckDB path, or md:<database> for MotherDuck (required)
+  -dry-run
+    	print exactly what would be pushed and touch nothing — neither the ledger nor the target warehouse
+  -scan string
+    	push only this one scan id (see corral scans list)
+  -since string
+    	with --all, push only scans recorded on or after this date (YYYY-MM-DD)
+```
+
+## `corral scorecard` flags
+
+```
+Usage of scorecard:
+  -json
+    	emit the raw cells as JSON
+```
+
+## `corral seal` flags
+
+```
+Usage of seal:
+  -db corral scans
+    	warehouse to read (default: $CORRALAI_SCANS_DB, else ~/.claude/corralai_scans.duckdb — the same resolution corral scans uses, since a single-operator setup ordinarily pushes to the same local file it records to)
+  -json
+    	emit the rows as JSON
+  -repo string
+    	a checkout to judge validity against: each hot file's seal row is marked live (bytes unchanged since the audit), stale (changed since), never audited, unreadable, or unknown when the row recorded no validity key to compare against. Only live counts toward coverage. Without this flag, seal prints the raw ledger with no such judgement
+  -top certify --repo
+    	how many of the repo's highest-ranked (churn x size) files count as "hot" for the coverage line — same ranking certify --repo uses to bound a scan (default 20)
+```
+
+## `corral secret` flags
+
+```
+corral secret: unknown secret subcommand "-h" (set|get|list|rm)
+```
+
+## `corral verify` flags
+
+```
+Usage of verify:
+  -attest string
+    	the --attest statement to verify (required) — the plain JSON path (its signed envelope is expected at <path>.dsse.json) or the envelope itself
+  -db string
+    	also recompute the warehouse rows' hash from this pushed DuckDB (a path, or md:<db> for MotherDuck) and compare it to the statement's claim. A VACUUMed or twice-pushed warehouse can change row order and trip a false ✗ here without tampering
+  -pub string
+    	hex-encoded Ed25519 public key to verify the signature against (default: the local certify key, CORRALAI_CERTIFY_KEY_FILE)
+  -rekor-index int
+    	also confirm this Rekor log index's entry matches the envelope (default: read the index --db recorded for this scan, if --db was given) (default -1)
+```
+
 ## `corral certify --repo` flags
 
 ```
@@ -316,39 +472,6 @@ Usage of certify verify:
     	hex-encoded Ed25519 public key to verify against
   -rekor-url string
     	Rekor instance to verify the inclusion proof against (default $CORRALAI_REKOR_URL or https://rekor.sigstore.dev)
-```
-
-## `corral scans push` flags
-
-```
-usage: corral scans push --db <dsn> [--scan <id> | --all] [--since YYYY-MM-DD] [--dry-run]
-
-Reads from the SAME local ledger `corral scans list` reads (default:
-$CORRALAI_SCANS_DB, else ~/.claude/corralai_scans.duckdb) — set that env var to
-push from a non-default ledger.
-
-Pushes scans ALREADY in the local ledger (`certify --repo --record`) to a
-warehouse — the verb for someone who recorded for weeks before deciding they
-wanted a warehouse, so they do not have to re-run every audit to get there.
-
-The warehouse tables are APPEND-ONLY: pushing the same scan id twice adds its
-rows a second time rather than overwriting the first. --dry-run reports the
-rows a push would ADD, which is the same count whether or not this scan has
-been pushed before.
-
-Never carries source (the authored test, mutant code, the verdict blob) —
-this command has no --push-source flag, so BlankUnpushedSource withholds it
-unconditionally, even for a scan whose original run pushed source itself.
-  -all
-    	push every recorded scan (optionally narrowed by --since)
-  -db string
-    	the warehouse to push to — a DuckDB path, or md:<database> for MotherDuck (required)
-  -dry-run
-    	print exactly what would be pushed and touch nothing — neither the ledger nor the target warehouse
-  -scan string
-    	push only this one scan id (see corral scans list)
-  -since string
-    	with --all, push only scans recorded on or after this date (YYYY-MM-DD)
 ```
 
 ## Environment variables

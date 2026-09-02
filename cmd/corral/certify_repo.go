@@ -2888,7 +2888,20 @@ func repoScanExitCode(r reposcan.RepoReport, nothingInScope bool, minKillRate *f
 			// clean. Failing closed is the only honest reading: a gate that
 			// passes on an unmeasured question is the failure this tool exists
 			// to find in other people's pipelines.
-			if f.Survivors > 0 && (f.TestWriterFailed || f.PoolTestUnsound) {
+			//
+			// TIMED OUT is the third way, and it was missing. The guard above
+			// fails a scan only when EVERY audited file timed out, so in a
+			// MIXED scan a file that hit its deadline before the writer ran
+			// carried ProvenMissed 0 with both flags false and passed
+			// --max-proven-missed 0 — the gate reporting a pass on a question
+			// nobody answered.
+			//
+			// PoolScored is what makes this precise rather than merely strict.
+			// A run CAN converge its pool score and only then stall on the
+			// critic, and that ProvenMissed is a real measurement the
+			// threshold comparison above already judges. Only a timeout with
+			// no pool score behind it is the unmeasured kind.
+			if f.Survivors > 0 && (f.TestWriterFailed || f.PoolTestUnsound || (f.TimedOut && !f.PoolScored)) {
 				return 1
 			}
 		}

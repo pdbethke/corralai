@@ -706,6 +706,18 @@ func main() {
 		}
 		return
 	case "scorecard":
+		// -h MUST NOT OPEN A STORE. Both stores below are created lazily by
+		// the runs that write them, so a new operator has neither — and
+		// `corral scorecard -h` answered them with a DuckDB IO error instead
+		// of usage. Asking a command what it does is the one thing that can
+		// never require state to already exist.
+		//
+		// Caught by CI: gen-cli-docs.sh captures each subcommand's real -h,
+		// and on a fresh runner the captured "help" was that error. The
+		// generated reference is host-dependent exactly when help is.
+		if wantsHelp(os.Args[2:]) {
+			os.Exit(runScorecard(os.Args[2:], nil, os.Stdout))
+		}
 		// The bugcatch DuckDB file is single-process: corral.service (the
 		// running brain) already holds it read-write, and DuckDB refuses a
 		// second concurrent open — even read-only (verified: PID conflict
@@ -769,6 +781,10 @@ func main() {
 		defer func() { _ = cs.Close() }()
 		os.Exit(runFindingsMCP(context.Background(), cs, os.Stderr))
 	case "criticscore":
+		// -h must not open a store; see the scorecard case above.
+		if wantsHelp(os.Args[2:]) {
+			os.Exit(runCriticScore(os.Args[2:], nil, nil, os.Stdout, os.Stderr))
+		}
 		// With CORRAL_BRAIN set, show/confirm/refute go through the brain's
 		// ADMIN-gated MCP tools, which need the caller's bearer identity for
 		// the isHumanAdmin check and the audit trail. Without one, they run
@@ -1802,4 +1818,21 @@ func (a *llmAdapter) Generate(ctx context.Context, system, prompt string) (strin
 
 func (a *llmAdapter) Available() bool {
 	return a.client.Available()
+}
+
+// wantsHelp reports whether argv is asking what a command does rather than
+// asking it to do something.
+//
+// It exists because a subcommand that opens its data store before parsing
+// answers `-h` with an IO error for anyone who has not run it yet — which is
+// everyone, the first time. Help is the one request that must work on a bare
+// machine.
+func wantsHelp(args []string) bool {
+	for _, a := range args {
+		switch a {
+		case "-h", "--help", "help":
+			return true
+		}
+	}
+	return false
 }

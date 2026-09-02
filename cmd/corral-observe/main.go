@@ -43,16 +43,45 @@ import (
 // version is set at build time via -ldflags "-X main.version=...".
 var version = "dev"
 
+// observeFlags is corral-observe's OWN flag set, and it is a private one on
+// purpose.
+//
+// The package-level flag.CommandLine is shared with every dependency that
+// registers on it at init, and one does: go-rod's lib/defaults adds
+//
+//	-rod string   Set the default value of options used by rod.
+//
+// which reached corral-observe's shipped -h and, from there, the generated CLI
+// reference — a third-party debug knob presented as part of corral's own
+// interface, that corral does not document, cannot support, and never chose to
+// expose. An exposed flag is a promise whether or not anyone meant it.
+//
+// A private set also gives the flags a seam a test can read, which is what
+// TestObserveExposesOnlyItsOwnFlags uses. Every flag here is bound to the
+// struct so main() has no package-level state to reason about.
+type observeOpts struct {
+	brain, token, addr string
+	open, ping, ver    bool
+}
+
+func observeFlags(o *observeOpts) *flag.FlagSet {
+	fs := flag.NewFlagSet("corral-observe", flag.ExitOnError)
+	fs.StringVar(&o.brain, "brain", "", "brain base URL, e.g. https://brain.example (or CORRAL_BRAIN)")
+	fs.StringVar(&o.token, "token", "", "read-only observer token (or CORRAL_TOKEN)")
+	fs.StringVar(&o.addr, "addr", "", "local listen address (default 127.0.0.1:8080, or CORRAL_OBSERVE_ADDR)")
+	fs.BoolVar(&o.open, "open", false, "open the console in your browser (local use)")
+	fs.BoolVar(&o.ping, "ping", false, "health self-check: probe the health endpoint and exit 0 (healthy) or 1")
+	fs.BoolVar(&o.ver, "version", false, "print version and exit")
+	return fs
+}
+
 func main() {
-	var brainFlag, tokenFlag, addrFlag string
-	var open, ping, ver bool
-	flag.StringVar(&brainFlag, "brain", "", "brain base URL, e.g. https://brain.example (or CORRAL_BRAIN)")
-	flag.StringVar(&tokenFlag, "token", "", "read-only observer token (or CORRAL_TOKEN)")
-	flag.StringVar(&addrFlag, "addr", "", "local listen address (default 127.0.0.1:8080, or CORRAL_OBSERVE_ADDR)")
-	flag.BoolVar(&open, "open", false, "open the console in your browser (local use)")
-	flag.BoolVar(&ping, "ping", false, "health self-check: probe the health endpoint and exit 0 (healthy) or 1")
-	flag.BoolVar(&ver, "version", false, "print version and exit")
-	flag.Parse()
+	var o observeOpts
+	// #nosec G104 -- ExitOnError already exits on a bad flag; the error is
+	// always nil here by construction.
+	_ = observeFlags(&o).Parse(os.Args[1:])
+	brainFlag, tokenFlag, addrFlag := o.brain, o.token, o.addr
+	open, ping, ver := o.open, o.ping, o.ver
 	if ver {
 		fmt.Println("corral-observe", version)
 		return

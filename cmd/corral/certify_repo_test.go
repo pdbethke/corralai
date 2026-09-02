@@ -4234,3 +4234,66 @@ func TestDocsPinTheNewestCutTag(t *testing.T) {
 		}
 	}
 }
+
+// TestMaxProvenMissedFailsClosedOnATimedOutFile is both the first test to
+// exercise --max-proven-missed at all and the fix for the hole in it.
+//
+// THE HOLE. repoScanExitCode fails a scan when EVERY audited file timed out
+// (TimedOut == Audited). Inside the maxProvenMissed loop it then refuses a
+// zero it cannot trust — but it enumerated only two of the three ways the pool
+// can fail to try: TestWriterFailed and PoolTestUnsound. A file that hit its
+// deadline before the writer ran carries ProvenMissed 0, TestWriterFailed
+// false and PoolTestUnsound false, so in a MIXED scan — one healthy file, one
+// timed out — it sailed through `--max-proven-missed 0` and the gate reported
+// pass on a question nobody answered.
+//
+// That is the silent-no-gate class this function already closes four other
+// ways, arriving by a fifth route, and the comment above the loop already
+// states the rule it missed: "a zero here is only trustworthy when the pool
+// actually got to try."
+//
+// A timed-out file with a NON-zero ProvenMissed is not caught here on purpose:
+// since PoolScored rides the verdict, a run can converge its pool score and
+// only then stall, and those proven gaps are real measurements. The threshold
+// comparison above handles them like any other.
+func TestMaxProvenMissedFailsClosedOnATimedOutFile(t *testing.T) {
+	zero := 0
+	for _, tc := range []struct {
+		name string
+		file reposcan.WeakFile
+		want int
+	}{
+		{
+			name: "timed out before the writer ran, survivors unproven",
+			file: reposcan.WeakFile{Path: "a.go", KillRate: 0.8, Survivors: 3, ProvenMissed: 0, TimedOut: true},
+			want: 1,
+		},
+		{
+			name: "timed out AFTER proving gaps — a real measurement",
+			file: reposcan.WeakFile{Path: "a.go", KillRate: 0.8, Survivors: 3, ProvenMissed: 0, TimedOut: true, PoolScored: true},
+			want: 0,
+		},
+		{
+			name: "clean file, nothing timed out",
+			file: reposcan.WeakFile{Path: "a.go", KillRate: 0.9, Survivors: 0, ProvenMissed: 0},
+			want: 0,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// A MIXED scan: one healthy file plus the one under test, so the
+			// all-files-timed-out guard above cannot be what catches it.
+			rep := reposcan.RepoReport{
+				Audited:  2,
+				TimedOut: map[bool]int{true: 1, false: 0}[tc.file.TimedOut],
+				Weakest: []reposcan.WeakFile{
+					{Path: "healthy.go", KillRate: 1.0},
+					tc.file,
+				},
+			}
+			if got := repoScanExitCode(rep, false, nil, &zero); got != tc.want {
+				t.Errorf("exit = %d, want %d — the gate %s", got, tc.want,
+					map[int]string{0: "passed on a question nobody answered", 1: "failed on a real measurement"}[got])
+			}
+		})
+	}
+}

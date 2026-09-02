@@ -8,7 +8,7 @@ description: Generated CLI reference for corral-observe — never hand-written; 
 ## Usage
 
 ```
-Usage of ./corral-observe:
+Usage of corral-observe:
   -addr string
     	local listen address (default 127.0.0.1:8080, or CORRAL_OBSERVE_ADDR)
   -brain string
@@ -17,8 +17,6 @@ Usage of ./corral-observe:
     	open the console in your browser (local use)
   -ping
     	health self-check: probe the health endpoint and exit 0 (healthy) or 1
-  -rod string
-    	Set the default value of options used by rod.
   -token string
     	read-only observer token (or CORRAL_TOKEN)
   -version

@@ -149,13 +149,12 @@ corral verify --attest	executed	test:cmd/corral/certify_repo_transparency_test.g
 corral verify --db	executed	test:cmd/corral/models_rank_test.go
 corral verify --pub	unexecuted	
 corral verify --rekor-index	executed	test:cmd/corral/verify_attest_test.go
-corral-observe --addr	unexecuted	
-corral-observe --brain	unexecuted	
-corral-observe --open	unexecuted	
-corral-observe --ping	unexecuted	
-corral-observe --rod	unexecuted	
-corral-observe --token	unexecuted	
-corral-observe --version	unexecuted	
-corral-top --brain	unexecuted	
+corral-observe --addr	executed	test:cmd/corral-observe/main_test.go (own-flags guard, binding, and pick precedence)
+corral-observe --brain	executed	test:cmd/corral-observe/main_test.go (own-flags guard, binding, and pick precedence)
+corral-observe --open	executed	test:cmd/corral-observe/main_test.go (own-flags guard, binding, and pick precedence)
+corral-observe --ping	executed	test:cmd/corral-observe/main_test.go (own-flags guard, binding, and pick precedence)
+corral-observe --token	executed	test:cmd/corral-observe/main_test.go (own-flags guard, binding, and pick precedence)
+corral-observe --version	executed	test:cmd/corral-observe/main_test.go (own-flags guard, binding, and pick precedence)
+corral-top --brain	executed	test:cmd/corral-top/main_test.go (envOr precedence behind the flag default)
 corral-top --interval	unexecuted	
-corral-top --token	unexecuted	
+corral-top --token	executed	test:cmd/corral-top/main_test.go (envOr precedence behind the flag default)

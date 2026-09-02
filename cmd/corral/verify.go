@@ -45,17 +45,6 @@ type certRecord struct {
 	// publicly witnessed" — a materially weaker claim; verify treats it as a
 	// failure unless the operator explicitly opts in with --allow-unanchored.
 	Anchored bool `json:"anchored,omitempty"`
-	// Verdict is the FULL scored verdict this record certifies, as the exact
-	// JSON bytes that were sha256-digested into the execution step's
-	// output_digest — so a reader can recompute that digest and check it,
-	// rather than holding a commitment nobody can open.
-	//
-	// Present only when those bytes could be reproduced and VERIFIED against
-	// the digest already in the record; see writeLocalRecordFile, which omits
-	// the field rather than write bytes that do not hash to what the record
-	// already claims. An absent verdict means "not reproducible here", never
-	// "no verdict" — the summarised numbers are on the statement either way.
-	Verdict json.RawMessage `json:"verdict,omitempty"`
 }
 
 // pubkeyFetcher fetches a brain's certify public key. The real

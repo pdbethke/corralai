@@ -1058,6 +1058,9 @@ func (s CertSigner) SignVerdict(ctx context.Context, v Verdict) (int64, string, 
 		OutputDigest: digest,
 		ProducedBy:   producedBy,
 		Scored:       scored,
+		// The bytes digest was computed over, captured HERE — the only place
+		// that can honestly claim to have them.
+		VerdictJSON: string(b),
 	}
 	stmt := certify.BuildAttestation(br, head)
 

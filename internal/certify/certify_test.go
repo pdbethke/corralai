@@ -776,3 +776,54 @@ func certificationByproduct(t *testing.T, stmt map[string]any) map[string]any {
 	t.Fatal("no certification/execution byproduct on the statement")
 	return nil
 }
+
+// TestStatementCarriesTheSignedVerdictBytes pins the half of the signing fix
+// that took three attempts to get right.
+//
+// The record needs the exact document outputDigest is the sha256 of, or the
+// digest is a commitment nobody can open. Reconstructing those bytes later —
+// re-marshalling the verdict the caller still holds — failed twice on real
+// runs, because the driver assigns RecordID, RecordHead, ChallengerAgreement
+// and at least one more field AFTER signing. So the bytes are captured where
+// they are hashed and ride the STATEMENT, which the DSSE envelope signs.
+func TestStatementCarriesTheSignedVerdictBytes(t *testing.T) {
+	const doc = `{"DevKillRate":0.625,"Survivors":3}`
+	stmt := BuildAttestation(BuildRecord{Repo: "r", Commit: "c", VerdictJSON: doc}, "head")
+
+	got, ok := namedByproduct(t, stmt, "certification/verdict")
+	if !ok {
+		t.Fatal("no certification/verdict byproduct — the record cannot substantiate its own outputDigest")
+	}
+	if got["json"] != doc {
+		t.Errorf("verdict bytes = %v, want the exact document that was digested", got["json"])
+	}
+}
+
+// TestStatementOmitsAVerdictNobodySupplied: certify_change, the brain's
+// buildcert and a human submission have no verdict. An empty byproduct there
+// would assert a document that does not exist.
+func TestStatementOmitsAVerdictNobodySupplied(t *testing.T) {
+	stmt := BuildAttestation(BuildRecord{Repo: "r", Commit: "c"}, "head")
+	if _, ok := namedByproduct(t, stmt, "certification/verdict"); ok {
+		t.Error("a verdict byproduct appeared for a record with no verdict behind it")
+	}
+	// The two that every record has must survive.
+	for _, n := range []string{"accountability/tamper-evident-ledger", "certification/execution"} {
+		if _, ok := namedByproduct(t, stmt, n); !ok {
+			t.Errorf("byproduct %q disappeared", n)
+		}
+	}
+}
+
+func namedByproduct(t *testing.T, stmt map[string]any, name string) (map[string]any, bool) {
+	t.Helper()
+	pred := stmt["predicate"].(map[string]any)
+	run := pred["runDetails"].(map[string]any)
+	for _, bp := range run["byproducts"].([]map[string]any) {
+		if bp["name"] == name {
+			a, _ := bp["annotations"].(map[string]any)
+			return a, true
+		}
+	}
+	return nil, false
+}

@@ -73,10 +73,22 @@ type BuildRecord struct {
 	// survivors and provenMissed in the clear via BuildAuditAttestation — so
 	// the two signing paths gave different answers about what a signed corral
 	// record means. Field names here match that one deliberately.
-	Scored     *ScoredCertification
-	ProducedBy []string
-	StartedTS  float64
-	FinishedTS float64
+	Scored *ScoredCertification
+
+	// VerdictJSON is the EXACT document OutputDigest is the sha256 of, so a
+	// record is self-contained: a reader recomputes the digest from these bytes
+	// instead of holding a commitment nobody can open.
+	//
+	// SET BY WHOEVER COMPUTED THE DIGEST, in the same breath. Reconstructing it
+	// later — re-marshalling the verdict the caller still holds — was tried and
+	// failed twice on real runs, because the driver keeps assigning fields
+	// (RecordID, RecordHead, ChallengerAgreement, and at least one more) AFTER
+	// signing. Enumerating those is a list that goes stale silently; capturing
+	// the bytes at the source cannot. Empty for callers with no verdict.
+	VerdictJSON string
+	ProducedBy  []string
+	StartedTS   float64
+	FinishedTS  float64
 }
 
 // stepHash returns the deterministic sha256 hash (hex) of a step, computed
@@ -201,18 +213,7 @@ func BuildAttestation(r BuildRecord, head string) map[string]any {
 					"startedOn":  r.StartedTS,
 					"finishedOn": r.FinishedTS,
 				},
-				"byproducts": []map[string]any{
-					{
-						"name":      "accountability/tamper-evident-ledger",
-						"mediaType": "application/vnd.corralai.build-ledger+json",
-						"digest":    map[string]string{"sha256": head},
-					},
-					{
-						"name":        "certification/execution",
-						"mediaType":   "application/vnd.corralai.certification+json",
-						"annotations": certificationAnnotations(r),
-					},
-				},
+				"byproducts": byproducts(r, head),
 			},
 		},
 	}
@@ -445,4 +446,35 @@ func certificationAnnotations(r BuildRecord) map[string]any {
 		}
 	}
 	return a
+}
+
+// byproducts builds the statement's byproducts: the ledger digest and the
+// execution certification every record has always carried, plus the verdict
+// document itself when the caller supplied it.
+//
+// The verdict rides the STATEMENT rather than being attached to the artifact
+// afterwards, and that is what makes it worth having: the DSSE envelope signs
+// the whole statement, so the bytes a reader hashes against outputDigest are
+// the same bytes the signature covers. An artifact-side copy would be neither.
+func byproducts(r BuildRecord, head string) []map[string]any {
+	out := []map[string]any{
+		{
+			"name":      "accountability/tamper-evident-ledger",
+			"mediaType": "application/vnd.corralai.build-ledger+json",
+			"digest":    map[string]string{"sha256": head},
+		},
+		{
+			"name":        "certification/execution",
+			"mediaType":   "application/vnd.corralai.certification+json",
+			"annotations": certificationAnnotations(r),
+		},
+	}
+	if r.VerdictJSON != "" {
+		out = append(out, map[string]any{
+			"name":        "certification/verdict",
+			"mediaType":   "application/vnd.corralai.verdict+json",
+			"annotations": map[string]any{"json": r.VerdictJSON},
+		})
+	}
+	return out
 }

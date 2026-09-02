@@ -6,7 +6,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
-	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"flag"
@@ -1570,57 +1569,5 @@ func TestAdvVerdictFromPoolCarriesAuthoredTestNotCollected(t *testing.T) {
 	})
 	if !got.AuthoredTestNotCollected {
 		t.Fatal("AuthoredTestNotCollected must survive the conversion; without it the readout falls back to the ambiguous wording")
-	}
-}
-
-// TestVerdictBytesMatchDigestOrAreOmitted pins the self-check that keeps the
-// --out record honest.
-//
-// The record now carries the full Verdict so a reader can recompute the
-// execution step's output_digest instead of holding a commitment nobody can
-// open. But the signer digests the verdict AS IT STOOD AT SIGNING TIME, and
-// the driver then writes RecordID/RecordHead onto its copy — so a naive
-// re-marshal produces different bytes. Emitting those would hand a reader an
-// artifact that fails its own check and makes an honest record look tampered
-// with, which is strictly worse than omitting it.
-//
-// Both directions are asserted, because only the pair is a guarantee: bytes
-// that match are emitted, and bytes that do not are dropped.
-func TestVerdictBytesMatchDigestOrAreOmitted(t *testing.T) {
-	signed := advpool.Verdict{Repo: "r", Commit: "c", DevKillRate: 0.5, MutantsTotal: 8, Survivors: 4}
-	b, err := json.Marshal(signed)
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
-	sum := sha256.Sum256(b)
-	steps := []map[string]any{{
-		"kind":   "execution",
-		"detail": map[string]any{"output_digest": "sha256:" + hex.EncodeToString(sum[:])},
-	}}
-
-	// The real shape: the driver has since stamped RecordID/RecordHead.
-	live := signed
-	live.RecordID, live.RecordHead = 42, "abc123"
-
-	got := verdictBytesMatchingDigest(live, steps)
-	if got == nil {
-		t.Fatal("verdict omitted for a record whose bytes DO reproduce — a reader is left with an unopenable commitment for no reason")
-	}
-	if string(got) != string(b) {
-		t.Errorf("emitted bytes are not the signed bytes:\n got %s\nwant %s", got, b)
-	}
-
-	// A field that changed after signing (standing in for any future
-	// post-signing mutation) must cause OMISSION, never a mismatched emit.
-	drifted := live
-	drifted.Survivors = 5
-	if bad := verdictBytesMatchingDigest(drifted, steps); bad != nil {
-		t.Error("emitted verdict bytes that do NOT hash to the record's own output_digest — the record would fail its own check and read as tampered")
-	}
-
-	// No digest in the steps at all: nothing to verify against, so nothing
-	// may be claimed.
-	if bad := verdictBytesMatchingDigest(live, []map[string]any{{"kind": "context"}}); bad != nil {
-		t.Error("emitted a verdict with no output_digest to check it against")
 	}
 }

@@ -5,7 +5,6 @@ package main
 import (
 	"context"
 	"crypto/ed25519"
-	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -2121,7 +2120,6 @@ func writeLocalRecordFile(path string, bs *buildstore.Store, key ed25519.Private
 		PublicKey: hex.EncodeToString(key.Public().(ed25519.PublicKey)),
 		Rekor:     rekor,
 		Anchored:  anchored,
-		Verdict:   verdictBytesMatchingDigest(v, steps),
 	}
 	data, err := json.MarshalIndent(rec, "", "  ")
 	if err != nil {
@@ -2219,50 +2217,3 @@ const noFailFastHelp = "grade every mutant with the WHOLE selected test set inst
 	"which is most of the per-mutant cost on a repo with a real suite; the verdict is identical either way, and the baseline always runs everything. " +
 	"COSTS: turning this off makes each killed mutant pay for its whole selected set again — on a 77s suite that is the dominant term in the audit. " +
 	"Use it only if your suite is order-dependent or flaky in a way that makes an early stop misleading."
-
-// verdictBytesMatchingDigest returns the exact Verdict JSON that was digested
-// into the signed record's execution step, or nil when it cannot prove it has
-// those bytes.
-//
-// WHY THIS IS NOT JUST json.Marshal(v). CertSigner.SignVerdict digests the
-// verdict as it stood AT SIGNING TIME, and the driver then writes RecordID and
-// RecordHead onto its copy from the signer's return values. Marshalling the
-// verdict we hold now therefore produces DIFFERENT bytes from the ones the
-// digest covers. Shipping those would hand a reader an artifact that looks
-// checkable, fails the check, and makes an honest record look tampered with —
-// strictly worse than omitting it.
-//
-// So the two post-signing fields are reset and the result is VERIFIED against
-// the digest the record already carries. That check, not the reset, is the
-// guarantee: if some future field is also assigned after signing, this starts
-// omitting the verdict instead of silently emitting bytes that do not match.
-// The record stays honest without anyone remembering to update this function.
-func verdictBytesMatchingDigest(v advpool.Verdict, steps []map[string]any) json.RawMessage {
-	var want string
-	for _, st := range steps {
-		if st["kind"] != "execution" {
-			continue
-		}
-		detail, ok := st["detail"].(map[string]any)
-		if !ok {
-			continue
-		}
-		if d, ok := detail["output_digest"].(string); ok {
-			want = d
-		}
-	}
-	if want == "" {
-		return nil
-	}
-
-	v.RecordID, v.RecordHead = 0, ""
-	b, err := json.Marshal(v)
-	if err != nil {
-		return nil
-	}
-	sum := sha256.Sum256(b)
-	if "sha256:"+hex.EncodeToString(sum[:]) != want {
-		return nil
-	}
-	return json.RawMessage(b)
-}

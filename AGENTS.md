@@ -266,6 +266,14 @@ Before reporting any of these, run the check named beside it.
   `PoolTestUnsound` are distinct verdict fields and both force `needs-review`
   unconditionally. Whether the CLI *renders* them legibly is a fair question;
   the scoring is not.
+- **"CheckDecorrelation is blind to vendors — two models from one provider
+  pass."** The FUNCTION compares names, but corral is not blind: same-vendor is
+  detected and reported twice — at seat resolution (`certify_local.go`, "an
+  independent MODEL but not an independent VENDOR") and on the verdict itself
+  (`certify_adversarial.go`, "every graded seat is google"). It WARNS rather
+  than refuses, deliberately, because refusing strands a single-vendor
+  operator. Reported as a missing capability twice; it is a product decision.
+  `grep -rn "independent VENDOR\|every graded seat is" --include=*.go .`
 - **"Pair tests to sources by parsing imports."** Pairing already uses execution
   coverage (`evidence-paired` on the scan line), which proves a test exercises a
   file. An import proves only that it mentions one. Import parsing is a

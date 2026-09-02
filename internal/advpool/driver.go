@@ -766,12 +766,23 @@ type RunState struct {
 //     generator is BETTER at killing its mutants, which yields MORE proven gaps
 //     and MORE needs-review. It cannot manufacture a false clean, which is the
 //     only direction worth a refusal.
-//   - It compares model NAMES, not provenance. "gemini-3.7-flash" vs
-//     "gemini-3.7-pro" passes while sharing training lineage — a critic grading
-//     its own family and being recorded as independent. THAT is the real gap,
-//     and it is a live one: internal/modelcorr already MEASURES this kind of
-//     agreement (Jaccard over survivor sets) and nothing gates on it. Closing it
-//     needs a vendor field on the model registry, not a change here.
+//
+//   - It compares model NAMES, not provenance: "gemini-3.7-flash" vs
+//     "gemini-3.7-pro" satisfies THIS function while sharing training lineage.
+//     But corral is not blind to that, and a reviewer reading only this
+//     function has twice concluded it is. Same-vendor is DETECTED and reported
+//     in two places — certify_local.go warns at seat resolution ("different
+//     models from the SAME provider … an independent MODEL but not an
+//     independent VENDOR") and certify_adversarial.go prints it on the verdict
+//     itself ("every graded seat is %s — the same lineage planted the faults
+//     and graded the tests"). What it does not do is REFUSE.
+//
+//     That is the actual open question, and it is a product decision rather
+//     than a missing check: refusing would make a single-vendor operator unable
+//     to run at all, which is why it warns. internal/modelcorr separately
+//     MEASURES seat agreement (Jaccard over survivor sets) and also does not
+//     gate. Anyone changing this should change the warning into a refusal
+//     deliberately, not "add vendor awareness" — that already exists.
 //
 // CheckDecorrelation rejects an assignment where test-critic and test-writer
 // share a model. A test-critic judging tests written by its own model (or a

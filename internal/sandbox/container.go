@@ -54,8 +54,23 @@ func (c containerIsolator) Wrap(command string, opts Options, env []string) ([]s
 		"--cap-drop=ALL",
 		"--pids-limit=512",
 		"--memory=2g",
-		"--tmpfs", "/tmp",
-		"--tmpfs", "/home/agent",
+		// exec IS REQUIRED, and its absence made this backend unable to run Go
+		// at all. Docker mounts --tmpfs noexec by default, and a Go toolchain
+		// compiles its test binary into $TMPDIR (/tmp/go-build*/…) and then
+		// EXECS it — so `go test` died with
+		//     fork/exec /tmp/go-build…/ctest.test: permission denied
+		// which reads as a broken project rather than a broken jail. Every
+		// compile-then-run toolchain has this shape (cc into a temp a.out,
+		// cargo, node-gyp), so it is not a Go quirk to special-case.
+		//
+		// It costs nothing real. noexec on /tmp is only a boundary if there is
+		// no OTHER writable+executable location, and the workspace bind below
+		// is exactly that — the mutant and its test are written there and run
+		// from there, by design. The boundary this backend actually rests on
+		// is untouched: --network=none, --read-only rootfs, --cap-drop=ALL,
+		// --pids-limit, --memory. nosuid,nodev are kept.
+		"--tmpfs", "/tmp:rw,exec,nosuid,nodev",
+		"--tmpfs", "/home/agent:rw,exec,nosuid,nodev",
 		"-e", "HOME=/home/agent",
 		// Offline jail: pin GOTOOLCHAIN=local so `go` never tries to download a
 		// go.mod-pinned toolchain (mirrors the bwrap backend). See isolator_linux.go.

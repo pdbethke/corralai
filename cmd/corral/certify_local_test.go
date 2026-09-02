@@ -1571,3 +1571,58 @@ func TestAdvVerdictFromPoolCarriesAuthoredTestNotCollected(t *testing.T) {
 		t.Fatal("AuthoredTestNotCollected must survive the conversion; without it the readout falls back to the ambiguous wording")
 	}
 }
+
+// TestTestTimeoutReachesTheScorer covers the flag's plumbing, which is the half
+// nothing asserted.
+//
+// --test-timeout is the hard cap on a SINGLE suite run in the jail, and its
+// value travels --test-timeout -> localAuditInput.mutantTimeout ->
+// jailWiringInput.testTimeout -> JailScorer.MutantTimeout. What happens WHEN a
+// run exceeds it is well covered (internal/adequacy's timeout tests classify
+// the timeout and re-probe the compliant baseline to tell a hanging mutant from
+// a slow box). What was never asserted is that the operator's number arrives at
+// all — "a flag that parses and is then dropped on the floor" being this
+// codebase's named recurring defect.
+//
+// Zero is asserted separately because it is not "no timeout": the help calls it
+// auto, derived from the healthy suite's own runtime, so passing it through
+// unchanged is what lets the scorer do that derivation.
+func TestTestTimeoutReachesTheScorer(t *testing.T) {
+	repoDir := t.TempDir()
+	// A prebuilt seed, the same shape TestBuildJailWiringUsesTheSharedSeed…
+	// uses: it keeps this test on the wiring itself rather than on tree-walking
+	// a real checkout.
+	seed := repoSeed{
+		seedDir: repoDir,
+		files: map[string]string{
+			"a.go":      "package pkg\n",
+			"a_test.go": "package pkg\n",
+			"go.mod":    "module x\n",
+		},
+		cleanup: func() {},
+	}
+	build := func(d time.Duration) advpool.JailScorer {
+		t.Helper()
+		w, err := buildJailWiring(context.Background(), jailWiringInput{
+			iso: nil, timeout: time.Minute, testTimeout: d,
+			codePath: "a.go", testPath: "a_test.go", repoDir: repoDir, langName: "go",
+			fsPath:    func(q string) string { return filepath.Join(repoDir, q) },
+			code:      []byte("package pkg\n"),
+			devTest:   []byte("package pkg\n"),
+			checkArgv: []string{"go", "test", "./..."},
+			stdout:    io.Discard,
+			seed:      &seed,
+		})
+		if err != nil {
+			t.Fatalf("buildJailWiring: %v", err)
+		}
+		return w.scorer
+	}
+
+	if got := build(90 * time.Second).MutantTimeout; got != 90*time.Second {
+		t.Errorf("MutantTimeout = %v, want 90s — the operator's --test-timeout never reached the scorer, so a suite that legitimately runs long is still killed on the derived cap", got)
+	}
+	if got := build(0).MutantTimeout; got != 0 {
+		t.Errorf("MutantTimeout = %v, want 0 — zero must pass through UNCHANGED so the scorer derives the cap from the healthy suite's own runtime; substituting a number here would silently disable that", got)
+	}
+}

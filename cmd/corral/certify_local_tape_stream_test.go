@@ -96,3 +96,37 @@ func TestRecordSinkWithoutStreamIsUnaffected(t *testing.T) {
 		t.Fatalf("events = %d, want 1", len(r.events))
 	}
 }
+
+// TestQuietSelectsWhetherBeatsEchoLive covers what --quiet actually chooses.
+//
+// The flag is one line — `if !*quietFlag { rec.live = stderr }` — so what it
+// selects is whether the sink echoes each beat as it happens. Both directions
+// matter and they fail differently: a --quiet run that still echoes defeats the
+// flag, and a DEFAULT run that stays silent is the bug the live field was added
+// for, where "a run printed four lines and then went silent" reads as a hang
+// rather than as work.
+//
+// The tape is unaffected either way — --quiet's help promises that the verdict,
+// --out and --record are untouched — so that is asserted too.
+func TestQuietSelectsWhetherBeatsEchoLive(t *testing.T) {
+	var echoed bytes.Buffer
+
+	loud := &recordSink{live: &echoed}
+	loud.add("task_claimed", "test-writer", "a.go", map[string]any{"n": 1})
+	if echoed.Len() == 0 {
+		t.Error("a sink with live set echoed nothing — without --quiet an operator watches a silent run and reads it as a hang")
+	}
+
+	echoed.Reset()
+	quiet := &recordSink{}
+	quiet.add("task_claimed", "test-writer", "a.go", map[string]any{"n": 1})
+	if echoed.Len() != 0 {
+		t.Errorf("a sink with no live writer still echoed %q — --quiet would not be quiet", echoed.String())
+	}
+
+	// Both recorded the beat: --quiet suppresses the ECHO, never the record.
+	if len(loud.events) != len(quiet.events) || len(quiet.events) == 0 {
+		t.Errorf("quiet recorded %d beats and loud recorded %d — --quiet promises the tape is unaffected",
+			len(quiet.events), len(loud.events))
+	}
+}

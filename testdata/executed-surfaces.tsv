@@ -65,17 +65,17 @@ corral certify --local --no-bind-deps	executed	test:cmd/corral/certify_local_tes
 corral certify --local --no-fail-fast	unexecuted	
 corral certify --local --out	executed	run:2026-09-02 record 89
 corral certify --local --poll	executed	test:cmd/corral/certify_adversarial_test.go
-corral certify --local --quiet	unexecuted	
+corral certify --local --quiet	executed	test:cmd/corral/certify_local_tape_stream_test.go (TestQuietSelectsWhetherBeatsEchoLive: live echo on/off, and the tape unaffected either way)
 corral certify --local --record	executed	test:cmd/corral/certify_repo_selcache_test.go
 corral certify --local --record-mutants	executed	test:cmd/corral/certify_mutants_test.go
 corral certify --local --record-stream	unexecuted	
 corral certify --local --repo	executed	test:cmd/corral/certify_repo_writer_mode_test.go
 corral certify --local --repo-dir	executed	test:cmd/corral/certify_local_test.go
 corral certify --local --shadow-model	executed	test:cmd/corral/action_test.go
-corral certify --local --shadow-writer-model	unexecuted	
+corral certify --local --shadow-writer-model	executed	test:cmd/corral/certify_local_runspec_test.go (TestResolvedChallengerModelsReachTheRunSpec: the flag reaches RunSpec.ShadowWriterModel and the shadow-writer role assignment)
 corral certify --local --swarm	executed	test:cmd/corral/certify_local_test.go (TestRunReadyTasks_ConcurrentAndBounded: N tasks at swarm B never exceed B, each runs once)
 corral certify --local --test	executed	test:cmd/corral/certify_adversarial_test.go
-corral certify --local --test-timeout	unexecuted	
+corral certify --local --test-timeout	executed	test:cmd/corral/certify_local_test.go (TestTestTimeoutReachesTheScorer: the value reaches JailScorer.MutantTimeout, and 0 passes through so the scorer derives the cap)
 corral certify --local --timeout	executed	test:cmd/corral/certify_adversarial_test.go
 corral certify --local --writer-mode	executed	test:cmd/corral/certify_repo_writer_mode_test.go
 corral certify --local --writer-model	executed	test:cmd/corral/certify_repo_writer_mode_test.go
@@ -106,7 +106,7 @@ corral certify --repo --record-mutants	executed	test:cmd/corral/certify_mutants_
 corral certify --repo --repo	executed	test:cmd/corral/certify_repo_writer_mode_test.go
 corral certify --repo --scope-tests	executed	test:cmd/corral/certify_repo_selection_test.go
 corral certify --repo --shadow-model	executed	test:cmd/corral/action_test.go
-corral certify --repo --shadow-writer-model	unexecuted	
+corral certify --repo --shadow-writer-model	executed	test:cmd/corral/certify_local_runspec_test.go (TestResolvedChallengerModelsReachTheRunSpec: the flag reaches RunSpec.ShadowWriterModel and the shadow-writer role assignment)
 corral certify --repo --substrate	executed	run:2026-09-02 md:corral_public scans 22-26 (workspace)
 corral certify --repo --swarm	executed	test:cmd/corral/certify_repo_swarm_test.go + certify_repo_mutantconc_test.go (workers x per-file <= budget, swept)
 corral certify --repo --tests	executed	test:cmd/corral/certify_repo_test.go

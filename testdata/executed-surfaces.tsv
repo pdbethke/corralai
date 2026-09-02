@@ -1,0 +1,151 @@
+# EXECUTED-SURFACE MANIFEST — every flag corral exposes, and whether anything
+# has ever run it.
+#
+# WHY IT EXISTS. `--jail container` was advertised in the README as the
+# macOS/Windows path and had never been executed once. It was broken in the
+# most basic way available: docker mounts --tmpfs noexec, Go compiles its test
+# binary into /tmp and execs it, so every run died as COULD-NOT-GRADE. A claim
+# written from intent rather than from a run is indistinguishable, on the page,
+# from one that was earned. This file is the difference.
+#
+# An exposed flag is a promise whether or not anyone documented it, so the
+# enumeration is every flag in docs/cli/*.md — which scripts/gen-cli-docs.sh
+# --check guarantees is what the binaries really print.
+#
+# COLUMNS: surface <TAB> status <TAB> receipt
+#
+#   executed    something ran it. The receipt names WHAT: `test:<file>` or
+#               `run:<date> <record or scan id>`.
+#   attested    executed, but not reproducible in CI, and the reason is not
+#               "nobody got round to it": it costs money per run (paid model
+#               seats) or it has an irreversible public side effect
+#               (--transparency writes to Sigstore Rekor, permanently).
+#               A missing macOS or Windows runner is NOT this — GitHub offers
+#               both free to public repos, so those are unexecuted with a task
+#               behind them, not a status.
+#   unexecuted  no test passes it and no recorded run used it. LEGAL, and the
+#               point: the manifest does not demand everything be proven, it
+#               demands you know. The companion rule is that nothing marked
+#               unexecuted may appear in a user-facing claim.
+#
+# WHAT A `test:` RECEIPT DOES NOT PROVE. It names a test in the owning binary's
+# package that passes this flag literal. That is a pointer to read, not proof
+# the flag's BEHAVIOUR is asserted — a test may pass a flag and never check
+# what it did. Treat it as "someone has been here", and upgrade it to a `run:`
+# receipt or a named behavioural test when the surface matters.
+#
+# Regenerate the enumeration, never this file's judgements, with
+# TestEverySurfaceIsClassified, which fails on a surface with no row and on a
+# row for a surface that no longer exists.
+corral certify --local --bind-dir	executed	test:cmd/corral/certify_local_test.go
+corral certify --local --code	executed	test:cmd/corral/certify_adversarial_test.go
+corral certify --local --commit	executed	test:cmd/corral/certify_repo_test.go
+corral certify --local --critic-model	executed	test:cmd/corral/certify_repo_writer_mode_test.go
+corral certify --local --goal	executed	test:cmd/corral/certify_adversarial_test.go
+corral certify --local --jail	executed	run:2026-09-02 record 89 (--jail container)
+corral certify --local --lang	executed	test:cmd/corral/models_rank_test.go
+corral certify --local --local	executed	test:cmd/corral/jail_test.go
+corral certify --local --local-endpoint	unexecuted	
+corral certify --local --matrix	executed	test:cmd/corral/certify_local_test.go
+corral certify --local --max-shards	executed	run:2026-09-02 record 89
+corral certify --local --mutant-model	executed	test:cmd/corral/certify_repo_writer_mode_test.go
+corral certify --local --mutants	executed	test:cmd/corral/certify_repo_evidence_candidacy_test.go
+corral certify --local --n-mutants	executed	run:2026-09-02 record 89
+corral certify --local --no-bind-deps	executed	test:cmd/corral/certify_local_test.go
+corral certify --local --no-fail-fast	unexecuted	
+corral certify --local --out	executed	run:2026-09-02 record 89
+corral certify --local --poll	executed	test:cmd/corral/certify_adversarial_test.go
+corral certify --local --quiet	unexecuted	
+corral certify --local --record	executed	test:cmd/corral/certify_repo_selcache_test.go
+corral certify --local --record-mutants	executed	test:cmd/corral/certify_mutants_test.go
+corral certify --local --record-stream	unexecuted	
+corral certify --local --repo	executed	test:cmd/corral/certify_repo_writer_mode_test.go
+corral certify --local --repo-dir	executed	test:cmd/corral/certify_local_test.go
+corral certify --local --shadow-model	executed	test:cmd/corral/action_test.go
+corral certify --local --shadow-writer-model	unexecuted	
+corral certify --local --swarm	unexecuted	
+corral certify --local --test	executed	test:cmd/corral/certify_adversarial_test.go
+corral certify --local --test-timeout	unexecuted	
+corral certify --local --timeout	executed	test:cmd/corral/certify_adversarial_test.go
+corral certify --local --writer-mode	executed	test:cmd/corral/certify_repo_writer_mode_test.go
+corral certify --local --writer-model	executed	test:cmd/corral/certify_repo_writer_mode_test.go
+corral certify --repo --all	executed	test:cmd/corral/certify_repo_test.go
+corral certify --repo --attest	executed	test:cmd/corral/certify_repo_transparency_test.go
+corral certify --repo --commit	executed	test:cmd/corral/certify_repo_test.go
+corral certify --repo --critic-model	executed	test:cmd/corral/certify_repo_writer_mode_test.go
+corral certify --repo --derive-model	executed	run:2026-09-02 md:corral_public scans 22-26
+corral certify --repo --diff-base	executed	test:cmd/corral/certify_repo_selcache_test.go
+corral certify --repo --dry-run	executed	test:cmd/corral/certify_repo_writer_mode_test.go
+corral certify --repo --goals	executed	test:cmd/corral/certify_repo_selcache_test.go
+corral certify --repo --json	executed	test:cmd/corral/models_rank_test.go
+corral certify --repo --local-endpoint	unexecuted	
+corral certify --repo --max-proven-missed	unexecuted	
+corral certify --repo --min-kill-rate	executed	test:cmd/corral/certify_repo_test.go
+corral certify --repo --mutant-model	executed	test:cmd/corral/certify_repo_writer_mode_test.go
+corral certify --repo --mutants	executed	test:cmd/corral/certify_repo_evidence_candidacy_test.go
+corral certify --repo --no-fail-fast	unexecuted	
+corral certify --repo --no-goal-cache	unexecuted	
+corral certify --repo --no-selection-cache	executed	test:cmd/corral/certify_repo_selcache_test.go
+corral certify --repo --owner	executed	test:cmd/corral/action_test.go
+corral certify --repo --preflight	executed	test:cmd/corral/certify_repo_test.go
+corral certify --repo --push	executed	run:2026-09-02 md:corral_public scans 22-26
+corral certify --repo --push-source	executed	test:cmd/corral/certify_repo_custody_test.go
+corral certify --repo --record	executed	run:2026-09-02 md:corral_public scans 22-26
+corral certify --repo --record-db	executed	run:2026-09-02 md:corral_public scans 22-26
+corral certify --repo --record-mutants	executed	test:cmd/corral/certify_mutants_test.go
+corral certify --repo --repo	executed	test:cmd/corral/certify_repo_writer_mode_test.go
+corral certify --repo --scope-tests	executed	test:cmd/corral/certify_repo_selection_test.go
+corral certify --repo --shadow-model	executed	test:cmd/corral/action_test.go
+corral certify --repo --shadow-writer-model	unexecuted	
+corral certify --repo --substrate	executed	run:2026-09-02 md:corral_public scans 22-26 (workspace)
+corral certify --repo --swarm	unexecuted	
+corral certify --repo --tests	executed	test:cmd/corral/certify_repo_test.go
+corral certify --repo --timeout	executed	test:cmd/corral/certify_adversarial_test.go
+corral certify --repo --top	executed	run:2026-09-02 md:corral_public scans 22-26
+corral certify --repo --transparency	executed	test:cmd/corral/certify_repo_transparency_test.go
+corral certify --repo --whole-suite	executed	test:cmd/corral/certify_repo_report_selection_test.go
+corral certify --repo --writer-mode	executed	test:cmd/corral/certify_repo_writer_mode_test.go
+corral certify --repo --writer-model	executed	test:cmd/corral/certify_repo_writer_mode_test.go
+corral certify verify --allow-unanchored	executed	test:cmd/corral/verify_test.go
+corral certify verify --brain	executed	test:cmd/corral/certify_adversarial_test.go
+corral certify verify --pubkey	executed	test:cmd/corral/verify_test.go
+corral certify verify --rekor-url	unexecuted	
+corral demo --critic-model	executed	test:cmd/corral/certify_repo_writer_mode_test.go
+corral demo --dir	unexecuted	
+corral demo --mutant-model	executed	test:cmd/corral/certify_repo_writer_mode_test.go
+corral demo --writer-model	executed	test:cmd/corral/certify_repo_writer_mode_test.go
+corral doctor --code	executed	test:cmd/corral/certify_adversarial_test.go
+corral doctor --critic-model	executed	test:cmd/corral/certify_repo_writer_mode_test.go
+corral doctor --jail	executed	test:cmd/corral/jail_test.go
+corral doctor --mutant-model	executed	test:cmd/corral/certify_repo_writer_mode_test.go
+corral doctor --test	executed	test:cmd/corral/certify_adversarial_test.go
+corral doctor --writer-model	executed	test:cmd/corral/certify_repo_writer_mode_test.go
+corral eval --brain	executed	test:cmd/corral/certify_adversarial_test.go
+corral eval --corpus	executed	test:cmd/corral/eval_test.go
+corral eval --iterations	executed	test:cmd/corral/eval_test.go
+corral eval --only	executed	test:cmd/corral/eval_test.go
+corral eval --progress	executed	test:cmd/corral/eval_test.go
+corral scans push --all	executed	test:cmd/corral/certify_repo_test.go
+corral scans push --db	executed	test:cmd/corral/models_rank_test.go
+corral scans push --dry-run	executed	test:cmd/corral/certify_repo_writer_mode_test.go
+corral scans push --scan	executed	test:cmd/corral/scans_push_test.go
+corral scans push --since	unexecuted	
+corral scorecard --json	executed	test:cmd/corral/models_rank_test.go
+corral seal --db	executed	test:cmd/corral/models_rank_test.go
+corral seal --json	executed	test:cmd/corral/models_rank_test.go
+corral seal --repo	executed	test:cmd/corral/certify_repo_writer_mode_test.go
+corral seal --top	executed	test:cmd/corral/certify_repo_test.go
+corral verify --attest	executed	test:cmd/corral/certify_repo_transparency_test.go
+corral verify --db	executed	test:cmd/corral/models_rank_test.go
+corral verify --pub	unexecuted	
+corral verify --rekor-index	executed	test:cmd/corral/verify_attest_test.go
+corral-observe --addr	unexecuted	
+corral-observe --brain	unexecuted	
+corral-observe --open	unexecuted	
+corral-observe --ping	unexecuted	
+corral-observe --rod	unexecuted	
+corral-observe --token	unexecuted	
+corral-observe --version	unexecuted	
+corral-top --brain	unexecuted	
+corral-top --interval	unexecuted	
+corral-top --token	unexecuted	

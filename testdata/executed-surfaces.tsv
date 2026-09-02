@@ -73,7 +73,7 @@ corral certify --local --repo	executed	test:cmd/corral/certify_repo_writer_mode_
 corral certify --local --repo-dir	executed	test:cmd/corral/certify_local_test.go
 corral certify --local --shadow-model	executed	test:cmd/corral/action_test.go
 corral certify --local --shadow-writer-model	unexecuted	
-corral certify --local --swarm	unexecuted	
+corral certify --local --swarm	executed	test:cmd/corral/certify_local_test.go (TestRunReadyTasks_ConcurrentAndBounded: N tasks at swarm B never exceed B, each runs once)
 corral certify --local --test	executed	test:cmd/corral/certify_adversarial_test.go
 corral certify --local --test-timeout	unexecuted	
 corral certify --local --timeout	executed	test:cmd/corral/certify_adversarial_test.go
@@ -108,7 +108,7 @@ corral certify --repo --scope-tests	executed	test:cmd/corral/certify_repo_select
 corral certify --repo --shadow-model	executed	test:cmd/corral/action_test.go
 corral certify --repo --shadow-writer-model	unexecuted	
 corral certify --repo --substrate	executed	run:2026-09-02 md:corral_public scans 22-26 (workspace)
-corral certify --repo --swarm	unexecuted	
+corral certify --repo --swarm	executed	test:cmd/corral/certify_repo_swarm_test.go + certify_repo_mutantconc_test.go (workers x per-file <= budget, swept)
 corral certify --repo --tests	executed	test:cmd/corral/certify_repo_test.go
 corral certify --repo --timeout	executed	test:cmd/corral/certify_adversarial_test.go
 corral certify --repo --top	executed	run:2026-09-02 md:corral_public scans 22-26
@@ -147,7 +147,7 @@ corral seal --repo	executed	test:cmd/corral/certify_repo_writer_mode_test.go
 corral seal --top	executed	test:cmd/corral/certify_repo_test.go
 corral verify --attest	executed	test:cmd/corral/certify_repo_transparency_test.go
 corral verify --db	executed	test:cmd/corral/models_rank_test.go
-corral verify --pub	unexecuted	
+corral verify --pub	executed	test:cmd/corral/verify_attest_test.go (right key verifies, wrong key FAILS without falling back, malformed key refused as unchecked)
 corral verify --rekor-index	executed	test:cmd/corral/verify_attest_test.go
 corral-observe --addr	executed	test:cmd/corral-observe/main_test.go (own-flags guard, binding, and pick precedence)
 corral-observe --brain	executed	test:cmd/corral-observe/main_test.go (own-flags guard, binding, and pick precedence)

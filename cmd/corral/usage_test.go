@@ -2,7 +2,12 @@
 
 package main
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
 
 // TestShowHelpRecognizesFlags proves -h/--help/help are recognized WITHOUT
 // starting the server — this is the fix for corral's "the generator hangs
@@ -79,5 +84,63 @@ func TestHelpNeverRequiresState(t *testing.T) {
 		if wantsHelp(args) {
 			t.Errorf("wantsHelp(%q) = true — a real invocation would be answered with usage and never run", args)
 		}
+	}
+}
+
+// TestTimeoutHelpDescribesAWallClockBudget pins a help text against the code
+// it describes.
+//
+// --timeout's help said "give up if the run makes no progress for this long
+// (not a hard wall-clock cap)". The driver checks
+// `d.Now().Sub(run.startedAt) > d.RunDeadline` — elapsed since START — and
+// advpool's own comment calls it "a wall-clock budget from run start". Those
+// are opposite claims about the same number.
+//
+// The gap is not cosmetic. An operator reading "no progress" hears a stall
+// detector and leaves the default alone; what they get is a total budget, so a
+// run making steady, productive progress is killed and banks a TIMEOUT verdict
+// that keeps the dev kill rate and DISCARDS the proving half. Measured on
+// afero's memmap.go against a recorded mutant set: 13 survivors, all 13 proven
+// in 1428s at --swarm 8, and "proven_missed: (not run — pool did not
+// converge)" under the 10-minute default. The proofs are the differentiator,
+// and the default was throwing them away on exactly the files with the most to
+// find.
+//
+// Read from the GENERATED reference rather than a copy of the string:
+// scripts/gen-cli-docs.sh --check already guarantees that file is what the
+// binaries really print, so this cannot pass against stale text.
+func TestTimeoutHelpDescribesAWallClockBudget(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("..", "..", "docs", "cli", "corral.md"))
+	if err != nil {
+		t.Fatalf("reading the generated reference: %v", err)
+	}
+	lines := strings.Split(string(b), "\n")
+
+	found := 0
+	for i, line := range lines {
+		if !strings.HasPrefix(strings.TrimSpace(line), "-timeout ") {
+			continue
+		}
+		found++
+		// The description is the indented continuation under the flag line.
+		var desc strings.Builder
+		for _, next := range lines[i+1:] {
+			if strings.TrimSpace(next) == "" || strings.HasPrefix(strings.TrimSpace(next), "-") {
+				break
+			}
+			desc.WriteString(next)
+		}
+		got := desc.String()
+		if strings.Contains(got, "no progress") {
+			t.Errorf("--timeout still describes a no-progress timer:\n%s\nThe driver measures elapsed time from run start, so this tells an operator the opposite of what happens.", got)
+		}
+		if !strings.Contains(strings.ToUpper(got), "WALL-CLOCK") {
+			t.Errorf("--timeout does not say it is a wall-clock budget:\n%s", got)
+		}
+	}
+	// certify --local and certify --repo both register one. A walk that found
+	// neither would pass green forever.
+	if found < 2 {
+		t.Fatalf("found %d -timeout flags in the generated reference, want at least 2 (--local and --repo)", found)
 	}
 }

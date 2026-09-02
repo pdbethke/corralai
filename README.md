@@ -518,7 +518,7 @@ into the GitHub Action as an input — today it's a `corral certify --repo`
 flag only.
 
 **Per-file timeout (`--timeout`, CLI only).** `certify --repo` shares
-`--local`'s own `--timeout` flag (default 10 minutes): the wall-clock budget
+`--local`'s own `--timeout` flag (default 30 minutes): the wall-clock budget
 each file's run gets before the pool is forced to a `needs-review` verdict
 instead of converging. A file whose run hits this deadline after the dev
 suite's own kill-rate was already measured is reported as **audited**, not
@@ -1025,10 +1025,12 @@ of.
   whatever file-parallelism can't spend goes to the mutant loop (the common case
   being a diff-scoped PR with one changed file, where every other worker would
   otherwise idle). No flag: it's derived from `--swarm` and reported in the scan
-  header. **Only on `--substrate jail`** — the workspace substrate mutates one
-  checkout in place with no locking, so it stays strictly sequential, and that is a
-  correctness boundary, not a tuning choice. Honest caveat: this pays in proportion
-  to how much of your audit is suite time, which on a very fast suite is not much.
+  header. On `--substrate workspace` the same budget buys PRIVATE TREES instead:
+  one file is audited at a time, and its mutants are scored concurrently in
+  separate copies of the checkout (budget/4, minimum 1), because two mutants in
+  one tree would overwrite each other. The isolation is the tree, not the
+  sequence. Honest caveat: this pays in proportion to how much of your audit is
+  suite time, which on a very fast suite is not much.
 - **A failing baseline tells you why.** If your suite doesn't pass on its own
   unmodified code, corral refuses to grade — a kill rate measured against a broken
   baseline is a fabricated number. It now prints the runner's own output alongside

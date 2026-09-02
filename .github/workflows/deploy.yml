@@ -81,7 +81,7 @@ jobs:
       # exists to police, and documentation drifted past two releases under it.
       #
       # The name selector is duplicated in cmd/corral/action_test.go's
-      # docGateSelector, and TestDocGatesRunOnDocsOnlyChanges asserts the two
+      # docGateSelector, and TestDocsGatesRunOnDocsOnlyChanges asserts the two
       # agree AND that every doc-walking test is named to match — so neither
       # renaming a test nor deleting this step can quietly switch the gates off.
       #

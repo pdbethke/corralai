@@ -45,7 +45,7 @@
 # behavioural test before assuming the surface is untouched.
 #
 # Regenerate the enumeration, never this file's judgements, with
-# TestEverySurfaceIsClassified, which fails on a surface with no row and on a
+# TestDocsEverySurfaceIsClassified, which fails on a surface with no row and on a
 # row for a surface that no longer exists.
 corral certify --local --bind-dir	executed	test:cmd/corral/certify_local_test.go
 corral certify --local --code	executed	test:cmd/corral/certify_adversarial_test.go

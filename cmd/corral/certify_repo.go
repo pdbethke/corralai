@@ -2861,6 +2861,21 @@ func repoScanExitCode(r reposcan.RepoReport, nothingInScope bool, minKillRate *f
 	if r.Audited > 0 && r.TimedOut == r.Audited {
 		return 1
 	}
+	// A scan that graded NOTHING is not a passing scan either, and this is the
+	// route that got past the check above: every audited file UNCOVERED (no
+	// test exercises it) times out nothing and grades nothing, so Audited > 0,
+	// TimedOut == 0, and with no threshold flags the function returned 0 —
+	// while printRepoReport printed "NO GRADED FILE: all N audited file(s) are
+	// UNCOVERED" on the same run. Refused for the human, green for CI.
+	//
+	// The asymmetry is what marks it as an oversight rather than a decision:
+	// WITH --min-kill-rate, an uncovered file already fails below, on the
+	// reasoning that "a withheld number must never satisfy a threshold". The
+	// same is true when no threshold was named — the absence of a threshold
+	// asks for corral's default judgement, not for a waiver.
+	if r.GradedFiles == 0 {
+		return 1
+	}
 	if minKillRate != nil {
 		for _, f := range r.Weakest {
 			// An uncovered file fails the gate BEFORE the rate is consulted.

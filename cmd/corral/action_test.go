@@ -1749,11 +1749,11 @@ func TestDocsWalkSkipsGitIgnoredFiles(t *testing.T) {
 // documentation gates on a change that touches ONLY documentation.
 //
 // It is duplicated, deliberately, in .github/workflows/deploy.yml — and
-// TestDocGatesRunOnDocsOnlyChanges below asserts the two agree, so the
+// TestDocsGatesRunOnDocsOnlyChanges below asserts the two agree, so the
 // duplication cannot rot.
 const docGateSelector = "^TestDocs"
 
-// TestDocGatesRunOnDocsOnlyChanges is the gate on the gates.
+// TestDocsGatesRunOnDocsOnlyChanges is the gate on the gates.
 //
 // THE BUG IT EXISTS TO PREVENT, which shipped and cost two stale tags:
 // deploy.yml classifies a change as docs-only when every changed file matches
@@ -1777,7 +1777,7 @@ const docGateSelector = "^TestDocs"
 // step — YAML structure is not worth hand-parsing here, and every failure
 // mode above is already covered. Read the step's own comment before changing
 // its condition.
-func TestDocGatesRunOnDocsOnlyChanges(t *testing.T) {
+func TestDocsGatesRunOnDocsOnlyChanges(t *testing.T) {
 	const walker = "docsAdvertisingAnActionRef"
 	wantPrefix := strings.TrimPrefix(docGateSelector, "^")
 

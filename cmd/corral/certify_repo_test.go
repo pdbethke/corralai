@@ -4128,14 +4128,14 @@ func TestCertifyRepoDiffBaseScopesAChangedTestToItsSource(t *testing.T) {
 // by writing a test and running it — established by execution, not sampled.
 func TestMaxProvenMissedFailsOnADemonstratedGap(t *testing.T) {
 	zero, two := 0, 2
-	clean := reposcan.RepoReport{Audited: 1, Weakest: []reposcan.WeakFile{
+	clean := reposcan.RepoReport{Audited: 1, GradedFiles: 1, Weakest: []reposcan.WeakFile{
 		{Path: "pkg/a.go", KillRate: 0.85, Survivors: 3, ProvenMissed: 0},
 	}}
 	if got := repoScanExitCode(clean, false, nil, &zero); got != 0 {
 		t.Errorf("no proven gap must pass --max-proven-missed 0, got exit %d", got)
 	}
 
-	proven := reposcan.RepoReport{Audited: 1, Weakest: []reposcan.WeakFile{
+	proven := reposcan.RepoReport{Audited: 1, GradedFiles: 1, Weakest: []reposcan.WeakFile{
 		{Path: "pkg/a.go", KillRate: 0.85, Survivors: 3, ProvenMissed: 3},
 	}}
 	if got := repoScanExitCode(proven, false, nil, &zero); got == 0 {
@@ -4166,14 +4166,14 @@ func TestMaxProvenMissedFailsClosedWhenNothingCouldBeProven(t *testing.T) {
 		{"authored test never genuinely graded", reposcan.WeakFile{
 			Path: "pkg/a.go", Survivors: 4, ProvenMissed: 0, PoolTestUnsound: true}},
 	} {
-		r := reposcan.RepoReport{Audited: 1, Weakest: []reposcan.WeakFile{tc.f}}
+		r := reposcan.RepoReport{Audited: 1, GradedFiles: 1, Weakest: []reposcan.WeakFile{tc.f}}
 		if got := repoScanExitCode(r, false, nil, &zero); got == 0 {
 			t.Errorf("%s: a 0 that means 'nothing was proven' passed the gate", tc.name)
 		}
 	}
 
 	// But a genuinely clean file — no survivors at all — must still pass.
-	clean := reposcan.RepoReport{Audited: 1, Weakest: []reposcan.WeakFile{
+	clean := reposcan.RepoReport{Audited: 1, GradedFiles: 1, Weakest: []reposcan.WeakFile{
 		{Path: "pkg/a.go", KillRate: 1.0, Survivors: 0, ProvenMissed: 0},
 	}}
 	if got := repoScanExitCode(clean, false, nil, &zero); got != 0 {
@@ -4283,8 +4283,11 @@ func TestMaxProvenMissedFailsClosedOnATimedOutFile(t *testing.T) {
 			// A MIXED scan: one healthy file plus the one under test, so the
 			// all-files-timed-out guard above cannot be what catches it.
 			rep := reposcan.RepoReport{
-				Audited:  2,
-				TimedOut: map[bool]int{true: 1, false: 0}[tc.file.TimedOut],
+				Audited: 2,
+				// Both files graded — this test is about the PROVEN-gap gate,
+				// not the nothing-was-graded one.
+				GradedFiles: 2,
+				TimedOut:    map[bool]int{true: 1, false: 0}[tc.file.TimedOut],
 				Weakest: []reposcan.WeakFile{
 					{Path: "healthy.go", KillRate: 1.0},
 					tc.file,
@@ -4293,6 +4296,47 @@ func TestMaxProvenMissedFailsClosedOnATimedOutFile(t *testing.T) {
 			if got := repoScanExitCode(rep, false, nil, &zero); got != tc.want {
 				t.Errorf("exit = %d, want %d — the gate %s", got, tc.want,
 					map[int]string{0: "passed on a question nobody answered", 1: "failed on a real measurement"}[got])
+			}
+		})
+	}
+}
+
+// TestRepoScanExitCodeFailsWhenNothingWasGraded closes the last route to a
+// false green in this function.
+//
+// repoScanExitCode's own doc comment states the rule — "a scan that measured
+// NOTHING is not a passing scan: exiting 0 would read as green in CI for a repo
+// where every single file failed to grade" — and the function then checked
+// nothingInScope, Audited == 0 and all-timed-out, but never GradedFiles. An
+// all-UNCOVERED scan (no test exercises any audited file) satisfies none of
+// those: Audited > 0, TimedOut == 0, kill rate NaN. With no threshold flags it
+// returned 0, while printRepoReport printed "NO GRADED FILE: all N audited
+// file(s) are UNCOVERED" for the human reading the same run.
+//
+// The last case is the one that keeps this honest: a scan that DID grade
+// something must still pass, or the fix trades a false green for a false red.
+func TestRepoScanExitCodeFailsWhenNothingWasGraded(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		rep  reposcan.RepoReport
+		want int
+	}{
+		{
+			name: "every audited file uncovered — nothing graded",
+			rep:  reposcan.RepoReport{Audited: 2, UncoveredFiles: 2, GradedFiles: 0},
+			want: 1,
+		},
+		{
+			name: "some graded, some uncovered",
+			rep: reposcan.RepoReport{Audited: 2, UncoveredFiles: 1, GradedFiles: 1,
+				Weakest: []reposcan.WeakFile{{Path: "a.go", KillRate: 0.9}}},
+			want: 0,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := repoScanExitCode(tc.rep, false, nil, nil); got != tc.want {
+				t.Errorf("exit = %d, want %d — %s", got, tc.want,
+					map[int]string{0: "CI goes green on a scan whose own report says NO GRADED FILE", 1: "a scan that graded a file was failed anyway"}[got])
 			}
 		})
 	}

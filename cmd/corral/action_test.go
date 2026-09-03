@@ -1773,10 +1773,16 @@ const docGateSelector = "^TestDocs"
 //  2. deploy.yml must still contain the selector. Delete or rename the step
 //     and this test fails, rather than the gate going quiet.
 //
-// What it deliberately does NOT assert is the absence of an `if:` on that
-// step — YAML structure is not worth hand-parsing here, and every failure
-// mode above is already covered. Read the step's own comment before changing
-// its condition.
+// IT ALSO ASSERTS THE STEP HAS NO `if:`. That sentence used to say the
+// opposite — "YAML structure is not worth hand-parsing here, and every failure
+// mode above is already covered" — and a cold review disproved it in one line:
+// adding `if: steps.filter.outputs.code == 'true'` to the doc-gates step
+// reproduces the exact defect this test exists to prevent, with both meta-gates
+// still green. The excuse did not hold either; gopkg.in/yaml.v3 is already a
+// direct dependency of this module.
+//
+// A comment claiming more than the code checks is worse than no comment: a
+// reviewer reads it and stops looking.
 func TestDocsGatesRunOnDocsOnlyChanges(t *testing.T) {
 	const walker = "docsAdvertisingAnActionRef"
 	wantPrefix := strings.TrimPrefix(docGateSelector, "^")
@@ -1826,7 +1832,48 @@ func TestDocsGatesRunOnDocsOnlyChanges(t *testing.T) {
 	if rerr != nil {
 		t.Fatalf("reading %s: %v", wf, rerr)
 	}
+	assertDocGateStepIsUnconditional(t, b)
 	if !strings.Contains(string(b), docGateSelector) {
 		t.Errorf("deploy.yml no longer mentions %q — the documentation gates are only reachable on a docs-only change through that step, so removing or renaming it takes them off those pull requests silently", docGateSelector)
+	}
+}
+
+// assertDocGateStepIsUnconditional parses deploy.yml and requires that every
+// step whose `run` contains the doc-gate selector carries no `if:`.
+//
+// The selector reaching the file is not enough — it can sit behind a condition,
+// or in a comment. This reads the structure, which is the only thing that
+// answers "does this run on a Markdown-only PR".
+func assertDocGateStepIsUnconditional(t *testing.T, raw []byte) {
+	t.Helper()
+	var wf struct {
+		Jobs map[string]struct {
+			Steps []struct {
+				Name string `yaml:"name"`
+				If   string `yaml:"if"`
+				Run  string `yaml:"run"`
+			} `yaml:"steps"`
+		} `yaml:"jobs"`
+	}
+	if err := yaml.Unmarshal(raw, &wf); err != nil {
+		t.Fatalf("parsing deploy.yml: %v", err)
+	}
+	found := 0
+	for jobName, job := range wf.Jobs {
+		for _, st := range job.Steps {
+			if !strings.Contains(st.Run, docGateSelector) {
+				continue
+			}
+			found++
+			if strings.TrimSpace(st.If) != "" {
+				t.Errorf("deploy.yml job %q step %q runs the doc gates behind `if: %s` — those gates police what MARKDOWN claims, and that condition is exactly what excludes a Markdown-only pull request from them",
+					jobName, st.Name, st.If)
+			}
+		}
+	}
+	// A parse that matched no step would pass forever — the same floor every
+	// other walk in this package now carries.
+	if found == 0 {
+		t.Fatalf("no deploy.yml step runs %q — the doc gates are not wired into CI at all", docGateSelector)
 	}
 }

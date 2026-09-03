@@ -100,14 +100,42 @@ declare -A ARGV_FOR=(
 CORRAL_EXTRA_SUBCOMMANDS=("certify --repo ." "certify verify")
 
 derive_corral_subcommands() {
-  local names sub
+  local names sub leaves leaf
   names="$( ( cd "$WORKDIR" && ./corral -h 2>&1 ) \
     | grep -oE '^  corral [a-z][a-z-]*' | awk '{print $2}' | sort -u )"
   for n in $names; do
     sub="${ARGV_FOR[$n]:-$n}"
     echo "$sub"
+    # SUB-SUBCOMMANDS, DERIVED from the subcommand's own usage rather than
+    # listed. `corral scans list` and `corral models rank` have their own flag
+    # sets, and neither had a reference section — so those flags were invisible
+    # to the executed-surface manifest, which reads THIS file as its
+    # enumeration. A cold review added a flag to `scans list`, advertised it in
+    # the README, and every gate stayed green.
+    #
+    # A usage block announces them: "usage: corral scans list [--db <path>]".
+    # Anything that names itself is a surface; anything that does not is not
+    # ours to guess.
+    # ONLY -h, and under a timeout. Invoking a bare subcommand to coax a usage
+    # block out of it starts `corral mcp`'s stdio server, which reads forever —
+    # it hung this generator on the first attempt. Every subcommand honours -h;
+    # that is a property this repo now tests (TestHelpNeverRequiresState).
+    leaves="$( ( cd "$WORKDIR" && timeout 20 ./corral "$n" -h 2>&1 ) \
+      | grep -oE "corral $n [a-z][a-z-]*" | awk '{print $3}' | sort -u || true )"
+    for leaf in $leaves; do
+      echo "$n $leaf"
+    done
   done
   for sub in "${CORRAL_EXTRA_SUBCOMMANDS[@]}"; do echo "$sub"; done
+}
+
+# derive_corral_subcommands_unique is what the caller consumes: the derivation
+# above can legitimately emit the same argv twice — ARGV_FOR names `scans push`
+# to reach a flag set, and the leaf derivation then finds `push` announced in
+# `corral scans`'s own usage. Two identical sections is a drift-gate failure
+# waiting to happen, and `sort -u` would reorder them; awk keeps first-seen order.
+derive_corral_subcommands_unique() {
+  derive_corral_subcommands | awk '!seen[$0]++'
 }
 
 capture_sub_help() {
@@ -150,7 +178,7 @@ gen_one() {
         echo '```'
         echo "$subhelp"
         echo '```'
-      done < <(derive_corral_subcommands)
+      done < <(derive_corral_subcommands_unique)
     fi
     if [ -n "$env_block" ]; then
       echo

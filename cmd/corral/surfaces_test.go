@@ -99,6 +99,21 @@ func TestDocsClassifiedSurfacesCarryAReceipt(t *testing.T) {
 			switch {
 			case strings.HasPrefix(r.receipt, "test:"):
 				rel := strings.TrimPrefix(strings.Fields(r.receipt)[0], "test:")
+				// os.Stat ALONE was the whole check, so `test:go.mod` passed —
+				// making the one-way property claimed below ("the cheap way out
+				// costs a receipt someone can read") false. A cold review
+				// defeated the gate exactly that way, in one line.
+				//
+				// Still NOT asserting the flag literal appears in the file: the
+				// documented meaning is a pointer to the code that exercises the
+				// surface, and a flag whose VALUE is threaded into a function is
+				// usually tested through it with the string nowhere in sight.
+				// Demanding the literal would push authors toward the weaker
+				// receipt that happens to mention it.
+				if !strings.HasSuffix(rel, "_test.go") {
+					t.Errorf("%s cites %q, which is not a _test.go file — a receipt names the TEST that exercised the surface, not any file that happens to exist", s, rel)
+					continue
+				}
 				if _, err := os.Stat(filepath.Join("..", "..", rel)); err != nil {
 					t.Errorf("%s cites %q, which does not exist — a receipt must point at something a reader can open", s, rel)
 				}
@@ -206,11 +221,81 @@ func exposedSurfaces(t *testing.T) map[string]bool {
 // ones nothing has run, and that is precisely its job: it is the enumeration
 // this manifest is built FROM. Exempting it is not a loophole, because it
 // makes no persuasive claim; it is a list of what exists.
-var userFacingDocs = []string{
-	"README.md",
-	"docs/corral",
-	"site/src/content/docs",
-	"action.yml",
+// userFacingProse walks the repository for every file a stranger might read
+// BEFORE running anything.
+//
+// A WALK, NOT A LIST, and that is the correction. This was
+// {README.md, docs/corral, site/src/content/docs, action.yml} — which missed
+// site/src/components/Quickstart.astro, the HOMEPAGE quickstart, naming both
+// `certify --local` and `certify --repo`. That is the identical mistake
+// docsAdvertisingAnActionRef records learning a hundred lines from here: the
+// same snippet also lived in site/src/components/CiGate.astro, "so corralai.dev
+// could advertise an uncut tag with CI fully green. Guard the property, not an
+// enumeration of the places it happened to hold."
+//
+// The list also survived `mv site/src/content/docs …` in silence: a root that
+// stops existing scans nothing and says nothing. A walk cannot fail that way,
+// and the caller's found-nothing floor catches it if it somehow does.
+//
+// EXEMPT by path, not by list: the generated CLI reference wherever it lives.
+// It documents every flag by construction — it is the enumeration this manifest
+// is built FROM — and makes no persuasive claim.
+func userFacingProse(t *testing.T) map[string]string {
+	t.Helper()
+	root := filepath.Join("..", "..")
+	skipDir := map[string]bool{
+		".git": true, "node_modules": true, "dist": true, ".astro": true,
+		"vendor": true, "testdata": true, ".worktrees": true, "test-results": true,
+	}
+	out := map[string]string{}
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, werr error) error {
+		if werr != nil {
+			return werr // a walk that swallows errors is a walk that reports nothing
+		}
+		if d.IsDir() {
+			if skipDir[d.Name()] {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		switch strings.ToLower(filepath.Ext(d.Name())) {
+		case ".md", ".mdx", ".astro", ".yml", ".yaml":
+		default:
+			return nil
+		}
+		rel, rerr := filepath.Rel(root, path)
+		if rerr != nil {
+			return rerr
+		}
+		if strings.Contains(filepath.ToSlash(rel), "docs/cli/") {
+			return nil
+		}
+		// CHANGELOG is HISTORY, not a promise. It records what a release did,
+		// including flags that have since been removed or never re-run, and a
+		// gate that forbids naming them would force the changelog to lie about
+		// the past.
+		if filepath.Base(rel) == "CHANGELOG.md" {
+			return nil
+		}
+		b, rerr := os.ReadFile(path)
+		if rerr != nil {
+			return rerr
+		}
+		out[rel] = string(b)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walking the repository for prose: %v", err)
+	}
+	// Gitignored files are not in the repository and cannot advertise anything
+	// to a stranger — a local draft under docs/superpowers/ is scratch. This is
+	// the same correction TestDocsWalkSkipsGitIgnoredFiles made for the action
+	// walker, reusing its filter rather than writing a second one that can
+	// drift from it.
+	for rel := range gitIgnoredDocs(t, root, out) {
+		delete(out, rel)
+	}
+	return out
 }
 
 // TestDocsUnexecutedSurfacesAreNotAdvertised is the launch gate the manifest was
@@ -270,43 +355,27 @@ func TestDocsUnexecutedSurfacesAreNotAdvertised(t *testing.T) {
 		return // nothing unexecuted: the gate has nothing to say
 	}
 
-	root := filepath.Join("..", "..")
-	for _, target := range userFacingDocs {
-		err := filepath.WalkDir(filepath.Join(root, target), func(path string, d fs.DirEntry, err error) error {
-			if err != nil {
-				return nil // a missing optional doc tree is not this gate's business
+	prose := userFacingProse(t)
+	// A found-nothing FLOOR, which this gate did not have and its sibling does.
+	// Without it, a walk that matched zero files passed forever — and a hand
+	// listed root that had been renamed did exactly that, silently.
+	if len(prose) == 0 {
+		t.Fatal("read zero prose files — this gate is not looking where it thinks it is")
+	}
+	if _, ok := prose["README.md"]; !ok {
+		t.Fatal("the walk did not reach README.md — the gate is not looking where it thinks it is")
+	}
+
+	for rel, body := range prose {
+		for _, flag := range unexecuted {
+			// Word-bounded: `--swarm` must not match `--swarming`.
+			re := regexp.MustCompile(regexp.QuoteMeta(flag) + `($|[^a-zA-Z0-9-])`)
+			if re.MatchString(body) {
+				t.Errorf("%s advertises %s, which the manifest marks unexecuted.\n"+
+					"Either run it and record a receipt in testdata/executed-surfaces.tsv, or stop naming it where a stranger will read it first.\n"+
+					"This is the gate that `--jail container` needed: named in the README as the macOS/Windows path, never once executed, and broken.",
+					rel, flag)
 			}
-			if d.IsDir() {
-				return nil
-			}
-			if strings.Contains(filepath.ToSlash(path), "/docs/cli/") {
-				return nil // the generated reference; see userFacingDocs
-			}
-			switch strings.ToLower(filepath.Ext(d.Name())) {
-			case ".md", ".mdx", ".yml", ".yaml", ".astro":
-			default:
-				return nil
-			}
-			b, rerr := os.ReadFile(path)
-			if rerr != nil {
-				return nil
-			}
-			body := string(b)
-			rel, _ := filepath.Rel(root, path)
-			for _, flag := range unexecuted {
-				// Word-bounded: `--swarm` must not match `--swarming`.
-				re := regexp.MustCompile(regexp.QuoteMeta(flag) + `($|[^a-zA-Z0-9-])`)
-				if re.MatchString(body) {
-					t.Errorf("%s advertises %s, which the manifest marks unexecuted.\n"+
-						"Either run it and record a receipt in testdata/executed-surfaces.tsv, or stop naming it where a stranger will read it first.\n"+
-						"This is the gate that `--jail container` needed: named in the README as the macOS/Windows path, never once executed, and broken.",
-						rel, flag)
-				}
-			}
-			return nil
-		})
-		if err != nil {
-			t.Fatalf("walking %s: %v", target, err)
 		}
 	}
 }

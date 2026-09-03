@@ -107,7 +107,7 @@ Go binary.**
   Local-only today; the brain-gate path (hosted `start_adversarial_run`) is the
   remaining follow-up.
 - **Multi-language** — Go, Python (pytest), Ruby (minitest/RSpec), JavaScript
-  (node:test), TypeScript (tsc + node:test), the language inferred from the code
+  (node:test), TypeScript (tsc + node:test), PHP (phpunit), the language inferred from the code
   path's extension, fail-closed on an unknown language or a failed preflight. C is next.
 - **The bug-catching scorecard + eval harness** — which model actually *catches* bugs,
   execution-proven (recall from `ProvenMissed`, never a self-report), DuckDB-native;
@@ -164,8 +164,7 @@ Go binary.**
   a whole-repo scan of this repo's 205 candidates would be roughly 37 hours, which
   is why `top` exists.
 
-  `action.yml` wraps this as `pdbethke/corralai@main` (no version tag is cut for it
-  yet — pin a commit SHA if you want immutability); it installs `corral` itself via
+  `action.yml` wraps this as `pdbethke/corralai@main` (tags are cut — `@v0.8.3` is current; pin a commit SHA for immutability against a re-tag); it installs `corral` itself via
   `go install`, using whatever Go toolchain the runner already has (never
   `actions/setup-go`, which would swap out the toolchain the audited project's own
   tests run under). Check out with `fetch-depth: 0` (required — the diff needs the merge
@@ -234,7 +233,7 @@ Go binary.**
   and 135 of grpc-go's), which the docs now say plainly rather than implying "executed"
   always means "tested" — and Python's version of that is **wider**, since every
   module-scope `def`/`class` is a counted statement, so importing a module clears it
-  outright. Ruby/JS/TS have no plugin yet. Not wired into the GitHub
+  outright. all six languages have a plugin now. Not wired into the GitHub
   Action as an input — CLI flag only for now.
 
   A **final whole-branch review** then hunted a fifth false accusation across 15

@@ -2246,10 +2246,11 @@ type coverageRunner interface {
 // disambiguator, PROVIDED exactly one candidate language's
 // lang.CoverageReporter accepts it: try every candidate language's
 // CoverageCmd(checkArgv) (skipping any that doesn't implement
-// CoverageReporter at all, e.g. Ruby/JS/TS today — see internal/lang) and
-// count how many say yes. Exactly one match is unambiguous — this is what
-// makes andrewyng/aisuite (python + typescript candidates, `-- pytest -q`)
-// resolvable: typescript has no CoverageReporter, so python is the only
+// CoverageReporter at all — see internal/lang; all six do now, but the
+// interface stays optional by design) and count how many say yes. Exactly one
+// match is unambiguous — this is what makes andrewyng/aisuite (python +
+// typescript candidates, `-- pytest -q`) resolvable: typescript's reporter
+// declines a pytest command, so python is the only
 // candidate at all, not merely the most likely one. Zero or more than one
 // match keeps the original blanket refusal: Go's CoverageCmd accepts ANY
 // non-empty argv by design (see go.go — it wraps whatever it's given
@@ -2437,7 +2438,30 @@ func (l *localExecutor) runPreflight(ctx context.Context, sources []string) repo
 		return reposcan.CoverageMap{Note: fmt.Sprintf("preflight: %v", rerr)}
 	}
 
-	var repoRoot string
+	// DEFAULT TO THE REPO'S FILESYSTEM ROOT, and let Go override it.
+	//
+	// This was `var repoRoot string` — empty for every language but Go — and
+	// that made the pre-flight INERT for ruby, javascript, typescript and php
+	// the moment they got coverage reporters. Those four report ABSOLUTE
+	// filesystem paths (Ruby's Coverage.result, V8's fileURLToPath, pcov), and
+	// corralCoverageReport skips relativisation entirely when the root is
+	// empty. Every downstream consumer — splitPreflightFindings,
+	// preflightState — keys on repo-RELATIVE paths, so nothing ever matched
+	// and every scan printed a confident "0 executed, N not measured" with
+	// Ran=true. Measured on the committed fixtures: ruby came back with 18
+	// keys, 17 of them absolute, 16 of those stdlib and gem files that the
+	// out-of-root filter never got the chance to drop.
+	//
+	// Python was unaffected only by luck: coverage.py already emits
+	// repo-relative paths. Passing it a real root is safe and strictly better
+	// — alignPyPath returns a non-absolute path unchanged regardless of root,
+	// and an ABSOLUTE python path with no root is currently a hard error.
+	//
+	// The direction of the default is the point. Empty-by-default fails
+	// SILENTLY and wrongly for any language added later; repo-root-by-default
+	// is correct for every filesystem-path reporter, so a new plugin has to
+	// opt OUT rather than remember to opt in.
+	repoRoot := l.repoDir
 	if langName == "go" {
 		// Go's coverage profile paths are import paths, not filesystem
 		// paths, on EITHER substrate — always need the module prefix to

@@ -80,7 +80,7 @@ func corralCoverageReport(stdout, header, langName, modulePath string) (executed
 		}
 	}
 	executed = make(map[string]bool)
-	sawAny := false
+	parsed := 0
 	for _, ln := range lines[hdr+1:] {
 		ln = strings.TrimSpace(ln)
 		if ln == "" {
@@ -90,7 +90,7 @@ func corralCoverageReport(stdout, header, langName, modulePath string) (executed
 		if !found || (hit != "0" && hit != "1") {
 			return nil, fmt.Errorf("lang: unparseable %s coverage report line %q (want `0 <path>` or `1 <path>`)", langName, ln)
 		}
-		sawAny = true
+		parsed++
 		rel := path
 		if root != "" {
 			r, relErr := filepath.Rel(root, path)
@@ -113,8 +113,21 @@ func corralCoverageReport(stdout, header, langName, modulePath string) (executed
 			executed[rel] = false
 		}
 	}
-	if !sawAny {
+	if parsed == 0 {
 		return nil, fmt.Errorf("lang: %s coverage report has a header but no file entries — the suite most likely never loaded an application file (a collection or import error), not a genuinely-empty result", langName)
+	}
+	// KEPT, not merely PARSED. The out-of-root filter above runs AFTER a line
+	// is counted, so a report consisting entirely of gems, stdlib or
+	// node_modules used to satisfy the "has entries" check and then return an
+	// EMPTY map with no error — which the caller reads as Ran=true and reports
+	// as a repo-wide "0 files executed". That is a claim about the repository
+	// manufactured out of a run that measured nothing in it.
+	//
+	// It is a real shape, not a hypothetical: it is what every non-Go language
+	// produced whenever the caller passed an empty root, and it is what a
+	// wrongly-rooted run produces now.
+	if len(executed) == 0 {
+		return nil, fmt.Errorf("lang: %s coverage report measured %d file(s), but NONE of them are under the repo root %q — every path was outside it (a dependency, the stdlib, or a wrong root). That is a failure to measure this repository, not a measurement that it is uncovered", langName, parsed, modulePath)
 	}
 	return executed, nil
 }
@@ -134,14 +147,21 @@ func firstLineExcerpt(s string) string {
 // languages use: run the suite with its own output pushed to STDERR so stdout
 // carries only the report, then reduce.
 //
-// The `;` and explicit rc check between the run and the reduction are
-// deliberate, and they are the same treatment goPlugin.CoverageCmd carries: a
-// suite with FAILING TESTS is the single most likely state of a repository
-// corral is auditing, and `&&` would discard the report precisely there.
-// Coverage data is complete whether the suite passed or failed. Only 0 and 1
-// fall through — anything else (a bad flag, a signal) re-raises that exit code
-// and skips the reduction, leaving stdout non-conforming, which the parser
-// turns into an error rather than a silent empty map.
+// THE REDUCTION ALWAYS RUNS, whatever the suite exited with.
+//
+// `&&` would discard the report whenever tests fail — the single most likely
+// state of a repository corral is auditing. An earlier version fixed that with
+// `case $rc in 0|1) ;; *) exit "$rc" ;; esac`, which is still wrong: `mocha`
+// exits with the NUMBER OF FAILING TESTS and `phpunit` exits 2 on errors, so
+// for two allow-listed runners the ordinary failing-suite case fell straight
+// into the re-raise and threw the report away.
+//
+// There is nothing left for the exit code to protect. Coverage data is
+// complete whether the suite passed, failed, or died on a bad flag; if the run
+// really produced nothing, the reduction emits an absent or header-only report
+// and the parser turns THAT into an error. The fail-closed direction is
+// preserved by the parser, which is where it belongs — an exit code is a poor
+// proxy for "was anything measured", and it was guessing wrong.
 func coverageRunAndReduce(setup, env string, testCmd []string, reduce string) []string {
 	quoted := make([]string, len(testCmd))
 	for i, arg := range testCmd {
@@ -149,7 +169,7 @@ func coverageRunAndReduce(setup, env string, testCmd []string, reduce string) []
 	}
 	script := `d=$(mktemp -d) && trap 'rm -rf "$d"' EXIT && ` + setup +
 		env + " " + strings.Join(quoted, " ") + " >&2" +
-		`; rc=$?; case $rc in 0|1) ;; *) exit "$rc" ;; esac; ` + reduce
+		"; " + reduce
 	return []string{"sh", "-c", script}
 }
 
@@ -176,8 +196,6 @@ func coverageRunnerNamed(testCmd []string, runners []string) bool {
 	base := strings.TrimSuffix(filepath.Base(testCmd[0]), ".cmd")
 	switch base {
 	case "sh", "bash", "dash", "zsh":
-		// Scan the script body, not the whole argv: `sh -c` puts it in the
-		// argument after -c.
 		script := ""
 		for i, a := range testCmd {
 			if a == "-c" && i+1 < len(testCmd) {
@@ -188,11 +206,11 @@ func coverageRunnerNamed(testCmd []string, runners []string) bool {
 		if script == "" {
 			return false
 		}
-		for _, r := range runners {
-			// Word-ish boundaries: "ruby" must not match "rubygems", and
-			// a bare mention inside a longer identifier is not a launch.
-			if containsRunnerToken(script, r) {
-				return true
+		for _, word := range shellCommandWords(script) {
+			for _, r := range runners {
+				if strings.TrimSuffix(filepath.Base(word), ".cmd") == r {
+					return true
+				}
 			}
 		}
 		return false
@@ -206,25 +224,107 @@ func coverageRunnerNamed(testCmd []string, runners []string) bool {
 	}
 }
 
-// containsRunnerToken reports whether script invokes runner as a word, so
-// "ruby" does not match "rubygems" and "node" does not match "nodemon".
-func containsRunnerToken(script, runner string) bool {
-	for i := 0; i+len(runner) <= len(script); i++ {
-		if script[i:i+len(runner)] != runner {
-			continue
-		}
-		if i > 0 && isRunnerWordByte(script[i-1]) {
-			continue
-		}
-		if j := i + len(runner); j < len(script) && isRunnerWordByte(script[j]) {
-			continue
-		}
-		return true
+// shellCommandWords returns the word in COMMAND POSITION for each command in a
+// shell script — the first word after the start, or after any of `; && || | (
+// newline` — skipping leading `VAR=value` assignments.
+//
+// Scanning the whole script for a runner's name, which is what this did
+// first, matches it anywhere: inside a path, inside a comment, inside another
+// tool's argument. Reproduced, all four accepted by the wrong language:
+//
+//	sh -c "pytest tests/node/"                 -> javascript claimed it
+//	sh -c "pytest --ignore=vendor/php"         -> php claimed it
+//	sh -c "cargo test # node is not used here" -> javascript claimed it
+//	sh -c "pytest tests/ruby/"                 -> ruby claimed it
+//
+// That is not cosmetic. certify_repo.go reads CoverageCmd's ok=false to decide
+// which language an operator's `--` command belongs to, so a directory named
+// `tests/node/` was enough to make a plain pytest command look like two
+// languages at once and get the pre-flight skipped as "ambiguous" — defeating
+// the exact disambiguation the allow-list exists to perform.
+//
+// This is a lexer, not a parser: it does not honour quoting, so a command
+// substitution or a quoted `;` can still split a word. That direction is safe
+// — it can only produce EXTRA candidate words, and every one of them still has
+// to equal a runner name to match. It cannot make a runner disappear.
+func shellCommandWords(script string) []string {
+	var words []string
+	seps := func(r byte) bool {
+		return r == ';' || r == '&' || r == '|' || r == '\n' || r == '(' || r == ')'
 	}
-	return false
+	i := 0
+	for i < len(script) {
+		for i < len(script) && (script[i] == ' ' || script[i] == '\t' || seps(script[i])) {
+			i++
+		}
+		if i >= len(script) {
+			break
+		}
+		// A comment runs to end of line and contains no command.
+		if script[i] == '#' {
+			for i < len(script) && script[i] != '\n' {
+				i++
+			}
+			continue
+		}
+		start := i
+		for i < len(script) && script[i] != ' ' && script[i] != '\t' && !seps(script[i]) {
+			i++
+		}
+		word := script[start:i]
+		// `FOO=bar cmd` — an assignment is not the command.
+		if eq := strings.IndexByte(word, '='); eq > 0 && !strings.ContainsAny(word[:eq], "/.") {
+			continue
+		}
+		// A shell keyword or an exec-style wrapper is TRANSPARENT: the command
+		// is the next word, not this one. rubyPlugin.TestCmd() is exactly this
+		// shape — `if grep -q RSpec "$t"; then exec rspec "$t"; else exec ruby
+		// "$t"; fi` — so without this the plugin cannot instrument its own
+		// stock command, which is the failure the repository's
+		// TestPluginStockCommandSatisfiesOwnCoverageCmd exists to catch.
+		if coverageTransparentWord[word] {
+			continue
+		}
+		words = append(words, word)
+		// Everything up to the next separator is this command's arguments.
+		for i < len(script) && !seps(script[i]) {
+			i++
+		}
+	}
+	return words
 }
 
-func isRunnerWordByte(b byte) bool {
-	return b == '_' || b == '-' || b == '.' ||
-		(b >= '0' && b <= '9') || (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z')
+// coverageTransparentWord is the set of shell keywords and command wrappers
+// that precede a command without being one. Being generous here is safe in the
+// same direction the lexer is: it can only surface MORE candidate words, and
+// each still has to equal a runner name to match.
+var coverageTransparentWord = map[string]bool{
+	"if": true, "then": true, "else": true, "elif": true, "fi": true,
+	"while": true, "until": true, "do": true, "done": true,
+	"for": true, "in": true, "case": true, "esac": true,
+	"{": true, "}": true, "!": true, "time": true,
+	"exec": true, "command": true, "builtin": true, "env": true,
+	"nohup": true, "sudo": true, "xargs": true, "eval": true,
+	// `bundle exec <runner>` is a ruby process; `bundle install` is not. Being
+	// transparent gets both right without a special case: the word AFTER it is
+	// tested against the runner list, so `exec rspec` matches and `install`
+	// matches nothing.
+	"bundle": true, "bundler": true,
+}
+
+// coverageMergeDir is the reduction for the reporters that write ONE FILE PER
+// PROCESS into "$d/cov": emit the header once, then every process's lines.
+//
+// The header is emitted HERE rather than by each process for a reason — a
+// second header line inside the stream would be parsed as a malformed entry
+// and fail the whole report. One run, one header, however many processes
+// contributed. A file reported by several of them is resolved by the parser,
+// where a hit from any process wins.
+//
+// `2>/dev/null` and the `|| true` keep an empty directory from turning into a
+// shell error: a run that measured nothing must reach the parser as a
+// header-with-no-entries, which the parser already rejects with a message
+// naming the real problem, rather than as a broken pipeline.
+func coverageMergeDir(header string) string {
+	return `printf '%s\n' ` + shellQuote(header) + `; cat "$d"/cov/* 2>/dev/null || true`
 }

@@ -1849,9 +1849,10 @@ func assertDocGateStepIsUnconditional(t *testing.T, raw []byte) {
 	var wf struct {
 		Jobs map[string]struct {
 			Steps []struct {
-				Name string `yaml:"name"`
-				If   string `yaml:"if"`
-				Run  string `yaml:"run"`
+				Name            string `yaml:"name"`
+				If              string `yaml:"if"`
+				Run             string `yaml:"run"`
+				ContinueOnError bool   `yaml:"continue-on-error"`
 			} `yaml:"steps"`
 		} `yaml:"jobs"`
 	}
@@ -1869,12 +1870,40 @@ func assertDocGateStepIsUnconditional(t *testing.T, raw []byte) {
 				t.Errorf("deploy.yml job %q step %q runs the doc gates behind `if: %s` — those gates police what MARKDOWN claims, and that condition is exactly what excludes a Markdown-only pull request from them",
 					jobName, st.Name, st.If)
 			}
+			assertStepCannotBeAdvisory(t, jobName, st.Name, st.ContinueOnError, st.Run)
 		}
 	}
 	// A parse that matched no step would pass forever — the same floor every
 	// other walk in this package now carries.
 	if found == 0 {
 		t.Fatalf("no deploy.yml step runs %q — the doc gates are not wired into CI at all", docGateSelector)
+	}
+}
+
+// assertStepCannotBeAdvisory rejects the two ways a REQUIRED CI step keeps
+// reporting green while enforcing nothing.
+//
+// Both were demonstrated against this repository, one line each, with every
+// meta-gate still passing:
+//
+//	continue-on-error: true      # the step fails, the job does not
+//	run: <the gate> || true      # the gate fails, the shell does not
+//
+// A gate that cannot fail the build is documentation. The struct these steps
+// are parsed into deliberately includes ContinueOnError for this check —
+// omitting a field is how the first version missed it entirely, since a field
+// absent from the struct is silently ignored by yaml.Unmarshal rather than
+// flagged.
+func assertStepCannotBeAdvisory(t *testing.T, jobName, stepName string, continueOnError bool, run string) {
+	t.Helper()
+	if continueOnError {
+		t.Errorf("deploy.yml job %q step %q sets `continue-on-error: true` — the step can fail and the job still passes, so this gate enforces nothing", jobName, stepName)
+	}
+	for _, swallow := range []string{"|| true", "||true", "|| :", "; true", "|| exit 0"} {
+		if strings.Contains(run, swallow) {
+			t.Errorf("deploy.yml job %q step %q swallows its own failure with %q — the gate's exit code never reaches CI, so it enforces nothing:\n%s",
+				jobName, stepName, swallow, run)
+		}
 	}
 }
 
@@ -1904,9 +1933,11 @@ func TestContainerJailIsExercisedInCI(t *testing.T) {
 	var wf struct {
 		Jobs map[string]struct {
 			Steps []struct {
-				Name string            `yaml:"name"`
-				Env  map[string]string `yaml:"env"`
-				Run  string            `yaml:"run"`
+				Name            string            `yaml:"name"`
+				If              string            `yaml:"if"`
+				Env             map[string]string `yaml:"env"`
+				Run             string            `yaml:"run"`
+				ContinueOnError bool              `yaml:"continue-on-error"`
 			} `yaml:"steps"`
 		} `yaml:"jobs"`
 	}
@@ -1922,21 +1953,66 @@ func TestContainerJailIsExercisedInCI(t *testing.T) {
 	// runtime says, which is worth having precisely because the integration
 	// tests report pass/fail without the container's own stderr. A gate that
 	// forbids explaining a failure is guarding the wrong thing.
+	// The property is that AT LEAST ONE step both sets the variable and runs
+	// the tests with -count=1 — not that every step mentioning the variable is
+	// that step, which would forbid a diagnostic step beside the real one.
+	//
+	// Everything else here is a defeat that was DEMONSTRATED against the first
+	// version of this gate, each one line, each leaving it green:
+	//
+	//   if: false                 the steps never run; this parsed no `if` at all
+	//   continue-on-error: true   they run, fail, and the job passes anyway
+	//   delete the docker step    only podman is covered; the count was >= 1
+	//   -run NoSuchPattern        `go test` exits 0 with "no tests to run"
+	//
+	// The last one is the sharpest: a substring check for "go test" and
+	// "-count=1" is satisfied by a command that deliberately selects nothing.
 	exercised := 0
 	sets := 0
+	runtimes := map[string]bool{}
 	for _, job := range wf.Jobs {
 		for _, st := range job.Steps {
 			if st.Env["CORRALAI_EXEC_IMAGE"] == "" {
 				continue
 			}
 			sets++
-			if strings.Contains(st.Run, "go test") && strings.Contains(st.Run, "-count=1") {
-				exercised++
+			if !strings.Contains(st.Run, "go test") || !strings.Contains(st.Run, "-count=1") {
+				continue
+			}
+			// `-run Container` EXACTLY. A pattern matching nothing makes
+			// `go test` exit 0 having run no test at all, which is the same
+			// vacuous pass this whole gate exists to prevent.
+			if !strings.Contains(st.Run, "-run Container") {
+				t.Errorf("deploy.yml step %q runs the container tests with a selector this gate does not recognise; it must be `-run Container` so the step cannot pass by selecting nothing:\n%s", st.Name, st.Run)
+				continue
+			}
+			// A condition that a code change does not satisfy makes the step
+			// unreachable. `if: false` is the trivial case; anything not
+			// keyed on the repository's own docs-only filter is suspect.
+			cond := strings.TrimSpace(st.If)
+			if cond != "" && !strings.Contains(cond, "steps.filter.outputs.code") {
+				t.Errorf("deploy.yml step %q is gated on `if: %s`, which an ordinary code change does not obviously satisfy — the container jail would be skipped exactly as it was when nothing set CORRALAI_EXEC_IMAGE at all", st.Name, cond)
+				continue
+			}
+			assertStepCannotBeAdvisory(t, "validate", st.Name, st.ContinueOnError, st.Run)
+			exercised++
+			if rt := st.Env["CORRALAI_EXEC_RUNTIME"]; rt != "" {
+				runtimes[rt] = true
 			}
 		}
 	}
 	if sets > 0 && exercised == 0 {
-		t.Errorf("%d CI step(s) set CORRALAI_EXEC_IMAGE but NONE of them runs `go test … -count=1`: setting the variable is not exercising the backend, and a cached result can stand in for a run that did not happen", sets)
+		t.Errorf("%d CI step(s) set CORRALAI_EXEC_IMAGE but NONE of them actually exercises the backend (needs `go test`, `-run Container`, `-count=1`, no disabling condition, and no continue-on-error)", sets)
+	}
+	// BOTH RUNTIMES, because corral picks one and the operator picks the other.
+	// isolator.go prefers podman when both are installed; README tells macOS
+	// and Windows operators to install Docker Desktop. An image built for one
+	// is invisible to the other — that cost four CI round trips, surfacing as
+	// a registry auth error that named neither runtime.
+	for _, want := range []string{"podman", "docker"} {
+		if !runtimes[want] {
+			t.Errorf("no exercising CI step pins CORRALAI_EXEC_RUNTIME=%s — that runtime's path is unexercised, which is how this backend was found completely broken in the first place", want)
+		}
 	}
 	found := exercised
 	if found == 0 {

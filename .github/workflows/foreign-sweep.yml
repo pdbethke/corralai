@@ -5,8 +5,8 @@ name: Foreign sweep
 permissions:
   contents: read
 
-# Runs scripts/foreign-sweep.sh — `certify --repo --dry-run` against 7
-# SHA-pinned foreign repos producing 8 golden rows (express is scanned twice:
+# Runs scripts/foreign-sweep.sh — `certify --repo --dry-run` against 8
+# SHA-pinned foreign repos producing 9 golden rows (express is scanned twice:
 # once by convention, once with a tenant --tests map), diffed against
 # testdata/foreign-sweep-expected.tsv (see that script's own header for why it
 # exists and what it does and does not catch).

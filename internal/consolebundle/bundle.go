@@ -20,10 +20,17 @@
 // verifies a manifest; it does not need the engine that produced one, and the
 // two symbols it actually used (BundleManifest, ReleasePubKeyHex) never did.
 //
-// So: keep this package free of corralai imports. TestClientBinariesAreCGOFree
-// enforces the consequence rather than the rule — it builds each binary the
-// README's fleet table marks CGO "no" and fails if one needs cgo, so the table
-// is a claim a run has to keep passing.
+// So: keep this package free of corralai imports.
+// TestDocsFleetTableCGOColumnIsTrue (cmd/corral/clientweight_test.go) enforces
+// the consequence rather than the rule — it builds each binary the README's
+// fleet table marks CGO "no" and fails if one needs cgo, so the table is a
+// claim a run has to keep passing.
+//
+// That name was wrong here for a day: this comment cited
+// TestClientBinariesAreCGOFree, which does not exist and never did. A comment
+// asserting a gate that is not there is worse than no comment — it is the
+// "comments claiming more than the code" failure this repository keeps paying
+// for, committed in the same change that wrote the rule down.
 package consolebundle
 
 import (

@@ -279,8 +279,8 @@ not expose (there is no `preflight` `with:` input yet — pass it by invoking
 CI today). It answers a different question than the audit above: not "how
 adequate are this repo's tests" but "which files does the suite ever touch
 at all" — useful on its own, especially for a repo where the audit's own
-test-pairing finds almost nothing (a common state for a JS/TS project, which
-this flag also cannot help with — see below).
+test-pairing finds almost nothing (a common state for a JS/TS project — the
+coverage pre-flight described below is what answers it).
 
 It runs the project's test suite **one extra time**, instrumented for
 coverage, and reports three buckets, printed only when the flag is given:
@@ -390,8 +390,11 @@ languages, the scan still declines the same way it always has. But
 project got wrong in an earlier draft of this doc — has Python **and**
 TypeScript candidates, and `-- pytest -q` is not actually ambiguous just
 because the repo has files in a language nothing here can instrument:
-TypeScript has no coverage plugin at all, so Python is the *only* candidate
-language capable of answering the question, not merely the likeliest one.
+TypeScript's reporter DECLINES a pytest command — each language's CoverageCmd
+accepts only its own runners, in command position — so Python is the *only*
+candidate that claims this command, not merely the likeliest one. (TypeScript
+did once have no reporter at all; that was the original reason, and it stopped
+being true when all six languages got one.)
 Given that command, this repo now runs the pre-flight; its TypeScript files
 simply never enter `CoverageMap.Executed` and land in "never measured" —
 the same tri-state contract every other out-of-language file already gets,

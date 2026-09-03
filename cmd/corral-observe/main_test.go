@@ -2,6 +2,18 @@
 
 package main
 
+// SURFACE CLAIMS — these are wired through the flag package into config fields, and the test drives the fields.
+//
+// testdata/executed-surfaces.tsv names this file as the receipt for the
+// flag(s) below, and TestDocsClassifiedSurfacesCarryAReceipt requires either
+// the literal or an explicit claim. This is the explicit claim: a receipt a
+// reader cannot check is not a receipt.
+//surface: --addr
+//surface: --open
+//surface: --ping
+//surface: --token
+//surface: --version
+
 import (
 	"flag"
 	"sort"

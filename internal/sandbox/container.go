@@ -119,6 +119,16 @@ func (c containerIsolator) Wrap(command string, opts Options, env []string) ([]s
 		"--cap-drop=ALL",
 		"--pids-limit=512",
 		"--memory=2g",
+		// --memory alone leaves Docker's default swap allowance, which is the
+		// SAME size again — so `--memory=2g` actually permitted 2 GiB of
+		// memory plus 2 GiB of swap (measured: memory.swap.max=2147483648).
+		// Pinning them equal makes the flag mean what it reads as.
+		"--memory-swap=2g",
+		// A dropped capability set is not the same as a promise that none can
+		// be regained: without this, a setuid binary inside the image can
+		// still raise privileges during exec. Measured before adding it:
+		// NoNewPrivs: 0.
+		"--security-opt=no-new-privileges",
 		// exec IS REQUIRED, and its absence made this backend unable to run Go
 		// at all. Docker mounts --tmpfs noexec by default, and a Go toolchain
 		// compiles its test binary into $TMPDIR (/tmp/go-build*/…) and then
@@ -128,12 +138,26 @@ func (c containerIsolator) Wrap(command string, opts Options, env []string) ([]s
 		// compile-then-run toolchain has this shape (cc into a temp a.out,
 		// cargo, node-gyp), so it is not a Go quirk to special-case.
 		//
-		// It costs nothing real. noexec on /tmp is only a boundary if there is
-		// no OTHER writable+executable location, and the workspace bind below
-		// is exactly that — the mutant and its test are written there and run
-		// from there, by design. The boundary this backend actually rests on
-		// is untouched: --network=none, --read-only rootfs, --cap-drop=ALL,
-		// --pids-limit, --memory. nosuid,nodev are kept.
+		// WHAT THIS COSTS, stated correctly. An earlier version of this comment
+		// argued it "costs nothing real" because the workspace bind is already
+		// a writable+executable location. THAT IS FALSE on this backend: the
+		// workspace is 0755/0644 owned by the HOST uid (adequacy/jail.go),
+		// the container runs as root with --cap-drop=ALL, and root without
+		// CAP_DAC_OVERRIDE cannot write a directory it does not own. Measured
+		// inside the real jail:
+		//
+		//   touch <workspace>/x        Permission denied
+		//   python -m compileall .     PermissionError on ./__pycache__
+		//   exec from /tmp             works
+		//
+		// So /tmp is the ONLY writable location, and making it executable is a
+		// real widening, not a no-op. It is accepted deliberately: without it
+		// every compile-then-run toolchain fails as a broken project rather
+		// than a broken jail, which is worse — a jail that silently cannot
+		// grade is how this backend produced vacuous passes. The boundary that
+		// actually contains an escape is untouched: --network=none,
+		// --read-only rootfs, --cap-drop=ALL, --security-opt=no-new-privileges,
+		// --pids-limit, --memory. nosuid and nodev are kept on both tmpfs.
 		"--tmpfs", "/tmp:rw,exec,nosuid,nodev",
 		"--tmpfs", "/home/agent:rw,exec,nosuid,nodev",
 		"-e", "HOME=/home/agent",
@@ -143,8 +167,21 @@ func (c containerIsolator) Wrap(command string, opts Options, env []string) ([]s
 	}
 	for _, kv := range env {
 		if i := strings.IndexByte(kv, '='); i > 0 {
-			if kv[:i] == "HOME" || kv[:i] == "GOTOOLCHAIN" {
-				continue // already pinned above
+			// PATH IS DROPPED, NOT FORWARDED. MinimalEnv always carries the
+			// host's PATH, and forwarding it REPLACES the image's — measured
+			// against golang:1.26.6, `go` disappears entirely:
+			//
+			//   with the host PATH:  GO NOT FOUND
+			//   with the image's:    /usr/local/go/bin/go
+			//
+			// It survived only because python:3.12-slim keeps python3 in
+			// /usr/bin, which the host PATH also lists — so this failed
+			// silently and image-dependently, on exactly the toolchains that
+			// install somewhere unusual. It also leaked the operator's home
+			// directory layout into an untrusted container for no benefit.
+			// The image knows where its own tools are.
+			if kv[:i] == "HOME" || kv[:i] == "GOTOOLCHAIN" || kv[:i] == "PATH" {
+				continue // already pinned above, or owned by the image
 			}
 			argv = append(argv, "-e", kv)
 		}

@@ -3,6 +3,9 @@
 package main
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -154,7 +157,17 @@ func TestDockerfilesUseAGoAtLeastTheModuleFloor(t *testing.T) {
 	root := filepath.Join("..", "..")
 	floor := goModFloor(t, root)
 
-	base := regexp.MustCompile(`(?m)^FROM\s+golang:([0-9]+(?:\.[0-9]+)*)`)
+	// A REGISTRY PREFIX AND A BUILD ARG BOTH DEFEATED THE FIRST PATTERN.
+	// `FROM docker.io/library/golang:1.26.4` and `ARG GOVER=1.26.4` +
+	// `FROM golang:${GOVER}` each miss `^FROM\s+golang:`, and the found-nothing
+	// floor is satisfied by the OTHER Dockerfiles — so the walk "found
+	// something" and passed while one image sat below the floor. That is the
+	// enumeration failure wearing a regex.
+	//
+	// So: match any registry path ending in `golang`, and capture whatever the
+	// tag is rather than only a numeric one, so a non-literal tag is REJECTED
+	// instead of skipped.
+	base := regexp.MustCompile(`(?m)^FROM\s+(?:[^\s/]+/)*golang:(\S+)`)
 	checked := 0
 
 	// THE TRACKED SET, not a filesystem walk. A plain walk descends into
@@ -176,11 +189,21 @@ func TestDockerfilesUseAGoAtLeastTheModuleFloor(t *testing.T) {
 		}
 		for _, m := range base.FindAllStringSubmatch(string(b), -1) {
 			checked++
-			if cmpVersion(parseVersion(m[1]), floor) < 0 {
+			tag := m[1]
+			// Strip a variant suffix (`1.26.6-bookworm`) but refuse anything
+			// whose version is not a literal — a `${GOVER}` cannot be compared
+			// to the floor, so it must fail rather than pass unexamined.
+			numeric := regexp.MustCompile(`^[0-9]+(?:\.[0-9]+)*`).FindString(tag)
+			if numeric == "" {
+				t.Errorf("%s builds on golang:%s — the version is not a literal, so nothing can check it against go.mod's floor of %s. Pin an explicit version.",
+					rel, tag, strings.Join(itoaAll(floor), "."))
+				continue
+			}
+			if cmpVersion(parseVersion(numeric), floor) < 0 {
 				t.Errorf("%s builds on golang:%s, but go.mod requires go >= %s.\n"+
 					"The golang images set GOTOOLCHAIN=local, so this image cannot run `go mod download` at all.\n"+
 					"Pin the base to the module floor (golang:%s...) rather than a floating minor tag.",
-					rel, m[1], strings.Join(itoaAll(floor), "."), strings.Join(itoaAll(floor), "."))
+					rel, tag, strings.Join(itoaAll(floor), "."), strings.Join(itoaAll(floor), "."))
 			}
 		}
 	}
@@ -245,4 +268,83 @@ func itoaAll(v []int) []string {
 		out[i] = strconv.Itoa(n)
 	}
 	return out
+}
+
+// EVERY DISPATCHABLE SUBCOMMAND MUST APPEAR IN `corral -h`, because that help
+// text is the root of the entire documentation chain.
+//
+// A cold reviewer added a working `corral wrangle --push-endpoint`, advertised
+// it in the README, and left every gate green — with three lines of code and no
+// entry in usageText(). The chain fails silently at its first link:
+//
+//	scripts/gen-cli-docs.sh derives subcommands from `corral -h`
+//	  -> no `## corral wrangle flags` section is generated
+//	  -> docs/cli/corral.md is byte-identical, so --check passes
+//	  -> exposedSurfaces() reads docs/cli/*.md, so the flag is never "exposed"
+//	  -> no manifest row is required
+//	  -> TestDocsUnexecutedSurfacesAreNotAdvertised has nothing to forbid
+//
+// So the derivation this repository is proud of — "the subcommand list is
+// DERIVED, not enumerated" — bottoms out in a HAND-MAINTAINED string. That is
+// the enumeration failure one level below where anyone was looking, and it is
+// the fifth time this repository has been bitten by the same shape.
+//
+// TestEverySubcommandIsDispatchable pins the other direction, and only against
+// its own hardcoded list. This pins the direction that matters for the docs:
+// what dispatches must be documented. Both are needed; neither implies the
+// other.
+func TestDocsEveryDispatchableSubcommandIsInTheHelpText(t *testing.T) {
+	names := dispatchableSubcommands(t)
+	help := usageText()
+	for _, n := range names {
+		// The help lists commands as "  corral <name> ..." — require the name
+		// to appear as a command, not merely somewhere in the prose.
+		if !strings.Contains(help, "corral "+n) {
+			t.Errorf("`corral %s` dispatches but never appears in usageText(), so `corral -h` does not list it.\n"+
+				"scripts/gen-cli-docs.sh derives the reference from that help output, so this subcommand and every "+
+				"flag it exposes are invisible to the CLI-drift gate, the executed-surface manifest and the "+
+				"advertising ban — it could be documented in the README with nothing to check it.", n)
+		}
+	}
+}
+
+// dispatchableSubcommands reads the allowlist in subcommand() by AST rather
+// than repeating it, so a name added there is covered the moment it is added.
+//
+// It is a HELPER named in this package on purpose: the meta-gate that keeps doc
+// gates reachable in CI finds them by looking for helper identifiers, and a
+// gate it cannot see is a gate CI may never run.
+func dispatchableSubcommands(t *testing.T) []string {
+	t.Helper()
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "main.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parsing main.go: %v", err)
+	}
+	var names []string
+	ast.Inspect(f, func(n ast.Node) bool {
+		fn, ok := n.(*ast.FuncDecl)
+		if !ok || fn.Name.Name != "subcommand" {
+			return true
+		}
+		ast.Inspect(fn.Body, func(m ast.Node) bool {
+			cc, ok := m.(*ast.CaseClause)
+			if !ok {
+				return true
+			}
+			for _, e := range cc.List {
+				if lit, ok := e.(*ast.BasicLit); ok && lit.Kind == token.STRING {
+					if v, err := strconv.Unquote(lit.Value); err == nil && v != "" {
+						names = append(names, v)
+					}
+				}
+			}
+			return true
+		})
+		return false
+	})
+	if len(names) == 0 {
+		t.Fatal("parsed ZERO subcommand names out of subcommand()'s allowlist — this gate is not looking where it thinks it is")
+	}
+	return names
 }

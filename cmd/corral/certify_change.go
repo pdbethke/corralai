@@ -58,6 +58,22 @@ func extractCommit(ref string) (workdir, sha string, cleanup func(), err error) 
 		cleanup()
 		return "", "", nil, fmt.Errorf("extracting archive: %w", err)
 	}
+	// DRAIN BEFORE WAIT. os/exec documents that calling Wait before all reads
+	// from a StdoutPipe have completed is incorrect, and extractTar returns as
+	// soon as tar.Next reports io.EOF — which happens at the two zero blocks
+	// that mark end-of-archive, BEFORE git has finished writing the padding it
+	// pads every archive out to. Those unread bytes leave `git archive`
+	// blocked on write and Wait blocked on the process: a deadlock, observed
+	// here as a test that hung for ten minutes with the goroutine parked in
+	// waitid at this exact line.
+	//
+	// io.Discard, not a buffer: nothing after the archive's end marker is
+	// content, and holding it would only reintroduce the unbounded-read
+	// problem the tar loop is careful about.
+	if _, derr := io.Copy(io.Discard, stdout); derr != nil {
+		cleanup()
+		return "", "", nil, fmt.Errorf("draining git archive: %w", derr)
+	}
 	if err := cmd.Wait(); err != nil {
 		cleanup()
 		return "", "", nil, fmt.Errorf("git archive: %w", err)

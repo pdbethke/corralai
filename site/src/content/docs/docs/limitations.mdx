@@ -1,16 +1,16 @@
 ---
 title: Limitations & roadmap
-description: Where corralai is honestly at (v0.7), what it deliberately does not claim, and where it's heading next.
+description: Where corralai is honestly at (v0.8.x), what it deliberately does not claim, and where it's heading next.
 ---
 
 {/* SPDX-License-Identifier: Elastic-2.0 */}
 {/* Source: ROADMAP.md + SECURITY.md ("What this does not claim"). Honest v0.x framing for a Wednesday-launch audience. */}
 
-Corralai is **v0.7** — solo-maintained and moving fast. The foundations are in
+Corralai is **v0.8.x** — solo-maintained and moving fast. The foundations are in
 place; most of what's ahead is *surfacing* them, not re-architecting. This page
 is the honest version: what it can't do yet, and what's next.
 
-## What v0.7 is
+## What v0.8.x is
 
 - **Certify by execution** works end to end: `corral certify -- <check>` and
   `corral certify --local`'s adversarial pool (mutant-generator → your suite
@@ -106,7 +106,7 @@ Operationally, v0.1 has real, named ceilings, not "coming soon" hand-waving:
   any of the six languages — you give it the path, so nothing is discovered.
   `certify --repo` must *find* the files first, pairing each source file with
   its test by naming convention, and those conventions fit some ecosystems far
-  better than others. Measured on real repos: `rubocop/rubocop` **736**
+  better than others. Measured on real repos: `rubocop/rubocop` **737**
   candidates, `gin-gonic/gin` **29**, `pallets/flask` **9** — and
   `expressjs/express` **zero**. If a repo scan of your JS/TS project reports
   `0 candidates`, that's corral's pairing limitation, **not a verdict on your

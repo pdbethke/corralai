@@ -2,15 +2,30 @@
 
 A standalone, look-don't-touch window into a running corralai brain. Hand it a
 **read-only observer token** and it serves the live swarm UI (agents, claims,
-conflicts, the activity stream) without the ability to act. Point a wall
-dashboard, an ops platform, or a demo viewer at it.
+conflicts, the activity stream) without the ability to act.
+
+**It answers on loopback only, and that is deliberate.** Every request whose
+`Host` header is not `localhost`, `127.0.0.0/8` or `::1` is refused with 403 —
+a DNS-rebinding guard, since a page on any other origin could otherwise make
+your browser drive this proxy with its token attached. So a wall dashboard, an
+ops platform or a demo viewer reaches it through an **SSH tunnel** (`ssh -L
+8080:127.0.0.1:8080 host`), or through a reverse proxy on the same machine that
+rewrites `Host` to `localhost`. Publishing the port alone is not enough, and
+the container recipe below assumes one of those in front of it. Supporting a
+real external hostname would need an explicit opt-in flag naming the host; that
+does not exist yet, and adding one loosens an authentication-adjacent boundary,
+so it is a decision rather than an omission.
 
 ## What it is
 
 `corral-observe` is a thin **credentialed reverse proxy**. It holds the observer
-token, injects it as `Authorization: Bearer …` on every request, and forwards to
-the brain's UI routes. The token lives in the observer process — never in the
-browser. The brain's swarm UI ships *inside the brain*; the observer is just the
+token and injects it as `Authorization: Bearer …` on every request. It no longer
+forwards the brain's UI routes: it fetches the console bundle once, verifies the
+manifest's Ed25519 signature and every asset's sha256 before caching them, and
+serves that bundle locally — proxying only `/api`, `/events` and `/mcp` to the
+brain. The token lives in the observer process — never in the
+browser. The console bundle originates *inside the brain* and is served to the
+observer, which verifies its signature before rendering it; the observer is just the
 safe, credentialed window onto it.
 
 Read-only is enforced **twice**, by design:

@@ -563,11 +563,16 @@ register_shutdown_function(function () {
         $ranges[$f][] = [$rf->getStartLine(), $rf->getEndLine()];
     }
 
-    $dest = getenv('CORRAL_COV_OUT');
-    if ($dest === false) { return; }
+    // ONE FILE PER PROCESS, not one shared path -- see rubyCoveragePreload
+    // for why. phpunit's paratest workers make this concurrent as well as
+    // racy, so a single shared file could also be torn mid-write. The header
+    // is emitted once by the shell reduction, never per process, because a
+    // second header inside the stream parses as a malformed entry.
+    $dir = getenv('CORRAL_COV_DIR');
+    if ($dir === false) { return; }
+    $dest = $dir . '/' . getmypid() . '-' . mt_rand() . '.txt';
     $out = @fopen($dest, 'w');
     if ($out === false) { return; }
-    fwrite($out, "` + phpCoverageHeader + `\n");
     foreach ($data as $path => $lines) {
         $bodies = isset($ranges[$path]) ? $ranges[$path] : [];
         $hit = 0; $measurable = 0;
@@ -638,12 +643,12 @@ func (phpPlugin) CoverageCmd(testCmd []string) (cmd []string, ok bool) {
 	// goes, and both leave the prepend's function_exists guard to make the
 	// actual decision. Neither is fatal, which is the property that matters —
 	// see phpCoveragePrepend for why nothing here may kill the audited suite.
-	setup := `cat > "$d/corral_prepend.php" <<'CORRAL_PHP_EOF'` + "\n" + phpCoveragePrepend + "CORRAL_PHP_EOF\n" +
+	setup := `mkdir -p "$d/cov" && cat > "$d/corral_prepend.php" <<'CORRAL_PHP_EOF'` + "\n" + phpCoveragePrepend + "CORRAL_PHP_EOF\n" +
 		`printf 'extension=pcov\npcov.enabled=1\nauto_prepend_file=%s\n' "$d/corral_prepend.php" > "$d/zz-corral.ini"` + "\n"
 	// The LEADING COLON keeps the default scan directory — without it pcov
 	// itself, and every other extension the suite relies on, stops loading.
-	env := `PHP_INI_SCAN_DIR=":$d" CORRAL_COV_OUT="$d/report"`
-	return coverageRunAndReduce(setup, env, testCmd, `cat "$d/report"`), true
+	env := `PHP_INI_SCAN_DIR=":$d" CORRAL_COV_DIR="$d/cov"`
+	return coverageRunAndReduce(setup, env, testCmd, coverageMergeDir(phpCoverageHeader)), true
 }
 
 // ParseCoverage reads the reduced report phpCoveragePrepend writes. The grammar

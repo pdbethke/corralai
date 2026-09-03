@@ -164,8 +164,20 @@ passing unit test, so here is what has actually been run, against what:
 | **Ruby** | [minitest](https://github.com/minitest/minitest) itself | 36 of 40 killed, **0.90** |
 | **PHP** | [webmozart/assert](https://github.com/webmozart/assert) under PHPUnit | **CERTIFIED**, 40 of 40 planted faults killed, 0 survivors |
 
-Go and Python are exercised hardest — Go continuously in CI, Python across
-repeated whole-repo scans. **TypeScript, JavaScript, Ruby and PHP each rest on
+**Which of these can you open for yourself?** Two. The Go row is a GitHub
+Actions run, linked from
+[docs/corral/github-action.md](docs/corral/github-action.md); the vercel/ms
+result is a published recording under `site/src/data/recordings/`. The Python,
+Ruby, PHP and private-SDK figures are maintainer-run and have no artefact in
+this repository — they are self-reports, and a project whose whole argument is
+execution over self-report should say which of its own numbers are which.
+Reproducing them is the point: every one names the repo and the runner.
+
+Go and Python are exercised hardest — Go on demand in CI, Python across
+repeated whole-repo scans. The self-audit workflow is opt-in per pull request
+(it needs the `audit` label) and is `continue-on-error`, so it is a tool the
+maintainer reaches for, not a gate that runs on every commit: of its last 100
+runs, 6 executed and 94 skipped. **TypeScript, JavaScript, Ruby and PHP each rest on
 a single third-party repository**, which is enough to show the plugin works
 and is not evidence about the ecosystem. Treat them accordingly. PHP's own
 40/40 deserves the same honesty every other row gets: a suite that killed
@@ -492,7 +504,9 @@ when any *individual* audited file scores below the threshold you set. See
 --repo --preflight` runs the project's test suite **one extra time**, with
 coverage instrumentation, and reports which source files it never touches at
 all — a whole-repo inventory for the cost of one suite run, instead of the
-~84-suite-runs-per-file the adversarial audit itself costs. It's
+~40-suite-runs-per-file the adversarial audit itself costs (the same estimate as
+above, from the same stock defaults — an earlier ~84 appeared here with no derivation
+anywhere in the tree, twelve lines from the figure it contradicted). It's
 **coverage-grade evidence, not proof**: instrumentation has blind spots
 (subprocesses, dynamic imports, native extensions), so the report separates
 what it actually knows into three buckets — files the suite **executed**,
@@ -960,8 +974,8 @@ the short version is three pillars:
 Every security core was adversarially red-teamed, and the tests ship with the repo.
 The codebase runs clean through **`gosec`** (0 findings at medium+ — every one fixed or
 adjudicated inline) and **`govulncheck`** (0 vulnerabilities reachable from corral's own
-code paths — the scan also reports 1 in an imported package and 3 in required modules
-that nothing calls, and says so), both
+code paths — it also reports a handful in imported packages and required modules that
+nothing calls, names them, and says so), both
 enforced in CI by [`scripts/check-security.sh`](scripts/check-security.sh).
 
 **Don't trust the claims — run them:** `go test ./...` and `bash scripts/check-security.sh`.
@@ -1004,7 +1018,9 @@ participates fully without installing anything beyond a config stanza.
 and that no run has proven. The container backend itself IS exercised — and was
 found completely broken the first time anyone executed it, because Docker mounts
 `--tmpfs` `noexec` and Go compiles its test binary into `/tmp` — but its
-integration tests skip without `CORRALAI_EXEC_IMAGE`, which CI does not set.
+integration tests used to skip without `CORRALAI_EXEC_IMAGE`, which nothing set — that
+is fixed: CI now builds the jail image with **both** docker and podman and runs the
+backend's integration tests twice, once pinned to each, on every code change.
 Hosted macOS and Windows runners are free for public repositories, so this is a
 task rather than a limitation.
 

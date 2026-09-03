@@ -108,6 +108,37 @@ jobs:
         # suite as the code UNDER AUDIT — the two must provision identically or
         # the audit grades a different suite than CI validates.
         run: bash scripts/ci-provision-test-toolchains.sh
+      # THE CONTAINER JAIL IS EXERCISED HERE, and it never was before.
+      #
+      # `--jail container` is what README offers macOS and Windows operators,
+      # and CORRALAI_EXEC_IMAGE appeared nowhere in this directory — so the
+      # backend's integration tests skipped on every run since they were
+      # written. That is how it stayed COMPLETELY BROKEN until someone executed
+      # it by hand: docker mounts --tmpfs noexec, Go compiles its test binary
+      # into /tmp and execs it, and every `go test` inside the jail died.
+      #
+      # The stakes are in the test's own comment: an earlier permission bug
+      # meant "every --jail container audit vacuously PASSED grading because
+      # the compliant baseline itself never ran." A vacuous pass is the worst
+      # thing this project can produce, and the test proving it fixed had never
+      # executed in CI.
+      #
+      # ubuntu-latest ships docker, so the only cost is building a small image.
+      - name: Provision the container-jail image
+        if: steps.filter.outputs.code == 'true'
+        run: |
+          docker build -t corral-ci-jail -f - . <<'DOCKERFILE'
+          FROM python:3.12-slim
+          RUN pip install --no-cache-dir pytest
+          DOCKERFILE
+      - name: Exercise the container jail (the macOS/Windows path)
+        if: steps.filter.outputs.code == 'true'
+        env:
+          CORRALAI_EXEC_IMAGE: corral-ci-jail
+        # -run Container so this step's failure names the backend rather than
+        # hiding inside the full suite below, and -count=1 so a cached result
+        # can never stand in for a run that did not happen.
+        run: go test ./internal/adequacy/ ./internal/sandbox/ -run Container -count=1 -v
       - name: Test, and census the SKIPs
         if: steps.filter.outputs.code == 'true'
         run: |

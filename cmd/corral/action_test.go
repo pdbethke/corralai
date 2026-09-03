@@ -1877,3 +1877,59 @@ func assertDocGateStepIsUnconditional(t *testing.T, raw []byte) {
 		t.Fatalf("no deploy.yml step runs %q — the doc gates are not wired into CI at all", docGateSelector)
 	}
 }
+
+// TestContainerJailIsExercisedInCI asserts that the macOS/Windows path is RUN,
+// not merely compiled.
+//
+// `--jail container` is what README offers operators without bwrap, and
+// CORRALAI_EXEC_IMAGE appeared nowhere in .github/ — so every container
+// integration test skipped on every CI run since they were written. That is how
+// the backend stayed completely broken (docker mounts --tmpfs noexec; a Go
+// toolchain compiles its test binary into /tmp and execs it) until someone ran
+// it by hand.
+//
+// The stakes are in that test's own comment: an earlier permission bug meant
+// "every --jail container audit vacuously PASSED grading because the compliant
+// baseline itself never ran". A vacuous pass is the worst output this project
+// can produce, and the test proving it fixed had never executed here.
+//
+// Structure, not string matching: a step that sets the variable in a comment,
+// or behind a condition that excludes it, would satisfy a grep and change
+// nothing.
+func TestContainerJailIsExercisedInCI(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("..", "..", ".github", "workflows", "deploy.yml"))
+	if err != nil {
+		t.Fatalf("reading deploy.yml: %v", err)
+	}
+	var wf struct {
+		Jobs map[string]struct {
+			Steps []struct {
+				Name string            `yaml:"name"`
+				Env  map[string]string `yaml:"env"`
+				Run  string            `yaml:"run"`
+			} `yaml:"steps"`
+		} `yaml:"jobs"`
+	}
+	if err := yaml.Unmarshal(b, &wf); err != nil {
+		t.Fatalf("parsing deploy.yml: %v", err)
+	}
+
+	found := 0
+	for _, job := range wf.Jobs {
+		for _, st := range job.Steps {
+			if st.Env["CORRALAI_EXEC_IMAGE"] == "" {
+				continue
+			}
+			found++
+			if !strings.Contains(st.Run, "go test") {
+				t.Errorf("step %q sets CORRALAI_EXEC_IMAGE but runs no test: %q — setting the variable is not exercising the backend", st.Name, st.Run)
+			}
+			if !strings.Contains(st.Run, "-count=1") {
+				t.Errorf("step %q must pass -count=1, or a cached result can stand in for a run that did not happen", st.Name)
+			}
+		}
+	}
+	if found == 0 {
+		t.Error("no CI step sets CORRALAI_EXEC_IMAGE, so every container-jail integration test SKIPS — the macOS/Windows path README advertises would be unexecuted again, which is exactly how it was last found broken")
+	}
+}

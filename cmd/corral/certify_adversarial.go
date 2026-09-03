@@ -111,6 +111,18 @@ type advVerdict struct {
 	// critic) from one that timed out before the writer ever ran — the
 	// difference between reporting an execution-proven gap and discarding it.
 	PoolScored bool `json:"PoolScored"`
+	// WriterSeatsUngraded mirrors advpool.Verdict.WriterSeatsUngraded: how
+	// many of a per-survivor run's writer seats never produced a test that
+	// genuinely graded.
+	//
+	// Carried because ProvenMissed is not readable without it. The field's own
+	// doc puts it plainly — "three seats unattempted changes what a 5 means" —
+	// and the two flags beside it cannot express partial failure:
+	// TestWriterFailed means NOTHING compiled anywhere, PoolTestUnsound means
+	// nothing graded anywhere, so a file where 21 of 24 seats graded carries
+	// neither. --repo has shown this since the fan-out landed; --local dropped
+	// it at the converter and printed the bare count.
+	WriterSeatsUngraded int `json:"writer_seats_ungraded,omitempty"`
 }
 
 // advStatus mirrors brain.AdvPoolStatusOut (get_adversarial_run's output).
@@ -444,6 +456,13 @@ func renderAdvVerdict(w io.Writer, codePath string, v advVerdict) {
 		}
 	} else {
 		fmt.Fprintf(w, "  proven_missed: %d\n", v.ProvenMissed)
+	}
+	if v.WriterSeatsUngraded > 0 {
+		// Printed BESIDE the count it qualifies, never instead of it: the
+		// number is real, and this says what it is a count OVER. A file where
+		// three of twenty-four seats never graded has a proven_missed that
+		// covers twenty-one survivors, not twenty-four.
+		fmt.Fprintf(w, "                 (over the graded seats only — %d writer seat(s) never produced a grading test)\n", v.WriterSeatsUngraded)
 	}
 	if v.TestWriterFailed && v.Survivors > 0 {
 		// Honesty: proven_missed=0 here does NOT mean the suite is clean — it

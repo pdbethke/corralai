@@ -2194,6 +2194,7 @@ func advVerdictFromPool(v advpool.Verdict) advVerdict {
 		TimedOut:                 v.TimedOut,
 		DevScored:                v.DevScored,
 		PoolScored:               v.PoolScored,
+		WriterSeatsUngraded:      v.WriterSeatsUngraded,
 	}
 	for _, f := range v.VacuousFindings {
 		out.VacuousFindings = append(out.VacuousFindings, advFinding{

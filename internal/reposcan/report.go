@@ -223,6 +223,12 @@ type WeakFile struct {
 	// per-mutant spread below is over. The dev-pass duration alone cannot say
 	// whether a slow file had four mutants or four hundred.
 	MutantsGraded int
+	// MutantsInvalid mirrors advpool.Verdict.MutantsInvalid: mutants the
+	// compile gate rejected before anything graded them. Carried per file so a
+	// printer can tell "the suite caught nothing" from "there was nothing to
+	// catch" — with MutantsGraded 0 and this non-zero, the exam had no
+	// questions and the 0.00 beside it is a zero denominator, not a result.
+	MutantsInvalid int
 	// MutantMillisMedian and MutantMillisMax are how long grading ONE mutant
 	// took — the middle and the worst, in milliseconds, over the mutants that
 	// were actually graded. They answer the question the file total cannot:
@@ -355,13 +361,26 @@ type RepoReport struct {
 	// versus merely un-exercised-by-a-test-directly, rather than folding a
 	// different, honest finding into the loudest one.
 	ImportOnlyFiles int
-	// GradedFiles is Audited MINUS UncoveredFiles — the denominator KillRate
-	// is actually averaged over. It is a separate number because an uncovered
-	// file was audited (corral looked at it, and found that nothing executes
-	// it) but never GRADED, so including it in the mean would publish a
-	// number no measurement supports. A printer must show this denominator
-	// whenever it differs from Audited.
+	// GradedFiles is Audited MINUS UncoveredFiles MINUS UngradableFiles — the
+	// denominator KillRate is actually averaged over. It is a separate number
+	// because an uncovered file was audited (corral looked at it, and found
+	// that nothing executes it) but never GRADED, so including it in the mean
+	// would publish a number no measurement supports. A printer must show this
+	// denominator whenever it differs from Audited.
 	GradedFiles int
+
+	// UngradableFiles is the OTHER way a file can be audited and never graded:
+	// every mutant it produced was rejected by the compile gate, so the exam
+	// had no questions on it.
+	//
+	// It needs its own counter because adequacy.Report.KillRate returns a
+	// literal 0 when Total == 0, which is indistinguishable from a suite that
+	// caught nothing. Folded into GradedFiles, one such file dragged the
+	// repository mean toward zero and printed "0.00 <path> (0 survivor(s))"
+	// with no marker — an accusation against tests that were never given
+	// anything to catch. That is the same fabricated-zero the Uncovered branch
+	// exists to prevent, arriving by a different route.
+	UngradableFiles int
 
 	Weakest     []WeakFile
 	CacheHits   int
@@ -475,12 +494,25 @@ func Aggregate(owner, repo, commit string, totalFiles, candidates int, results [
 		} else {
 			rep.WholeSuiteFiles++
 		}
-		if r.Verdict.Uncovered {
+		switch {
+		case r.Verdict.Uncovered:
 			rep.UncoveredFiles++
 			if r.Verdict.ImportOnly {
 				rep.ImportOnlyFiles++
 			}
-		} else {
+		case r.Verdict.MutantsTotal == 0 && r.Verdict.MutantsInvalid > 0:
+			// Every mutant REJECTED BY THE COMPILE GATE — the only reachable
+			// route to a zero denominator, since a generator that produced
+			// nothing returns ErrNoUsableMutants and never reaches here. The
+			// verdict carries DevKillRate 0 because KillRate() returns 0 when
+			// Total == 0, and that zero is a fabrication: nothing was graded.
+			//
+			// BOTH halves are required. Keying on MutantsTotal == 0 alone
+			// classifies any verdict that simply never set the field — an
+			// absence of evidence — as evidence of absence, which is the
+			// distinction this tool exists to hold.
+			rep.UngradableFiles++
+		default:
 			rep.GradedFiles++
 			sum += r.Verdict.DevKillRate
 		}
@@ -527,6 +559,7 @@ func Aggregate(owner, repo, commit string, totalFiles, candidates int, results [
 			Timing:             r.Verdict.Timing,
 			ModelCalls:         r.Verdict.ModelCalls,
 			MutantsGraded:      r.Verdict.MutantsTotal,
+			MutantsInvalid:     r.Verdict.MutantsInvalid,
 			MutantMillisMedian: r.Verdict.MutantDurationMedian.Milliseconds(),
 			MutantMillisMax:    r.Verdict.MutantDurationMax.Milliseconds(),
 			// The primary/challenger agreement, carried straight through —

@@ -2873,7 +2873,13 @@ func repoScanExitCode(r reposcan.RepoReport, nothingInScope bool, minKillRate *f
 	// reasoning that "a withheld number must never satisfy a threshold". The
 	// same is true when no threshold was named — the absence of a threshold
 	// asks for corral's default judgement, not for a waiver.
-	if r.GradedFiles == 0 {
+	//
+	// Keyed on POSITIVE EVIDENCE that files could not be graded, never on
+	// GradedFiles == 0 alone: the aggregator always sets these counters, but a
+	// hand-built report in a test may set none of them, and a gate that fails
+	// on an unset field is failing on the absence of evidence rather than on
+	// evidence of absence. That distinction is this tool's whole subject.
+	if r.GradedFiles == 0 && r.UncoveredFiles+r.UngradableFiles > 0 {
 		return 1
 	}
 	if minKillRate != nil {
@@ -3151,6 +3157,15 @@ func printWeakFile(w io.Writer, f reposcan.WeakFile) {
 		// was never made, when the real finding is that the file is
 		// untested outright.
 		marker = "  [UNCOVERED — no test executes this file]"
+	case f.MutantsGraded == 0 && f.MutantsInvalid > 0:
+		// The exam had no questions. Every mutant the generator produced was
+		// rejected by the compile gate, so adequacy's KillRate() returned a
+		// literal 0 on a zero denominator — a number that reads exactly like
+		// "your tests caught nothing" and means "nothing was asked of them".
+		// Same fabricated zero the UNCOVERED case above refuses, reached by a
+		// different route: there, no test runs the file; here, no mutant
+		// survived the compiler.
+		marker = "  [NO GRADABLE MUTANT — all " + strconv.Itoa(f.MutantsInvalid) + " rejected by the compile check]"
 	case f.TimedOut:
 		marker = "  [TIMED OUT — pool did not converge]"
 	case f.TestWriterFailed:

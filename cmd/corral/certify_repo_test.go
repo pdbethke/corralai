@@ -4341,3 +4341,61 @@ func TestRepoScanExitCodeFailsWhenNothingWasGraded(t *testing.T) {
 		})
 	}
 }
+
+// TestAllMutantsInvalidIsNotAGradedZero closes the last fabricated-zero route
+// in the repository mean.
+//
+// adequacy.Report.KillRate returns a literal 0 when Total == 0, and Total
+// deliberately excludes mutants the compile gate rejected. So a file whose
+// every mutant failed to build produced DevKillRate 0 — and reposcan's
+// aggregation branched only on Uncovered, so that 0 was counted as a GRADED
+// file, dragging the repo mean down and printing "0.00 <path> (0 survivor(s))"
+// with no marker. An accusation against tests that were never given anything
+// to catch.
+//
+// It is the same fabrication the Uncovered branch exists to refuse, reached by
+// a different route: there no test runs the file, here no mutant survived the
+// compiler.
+func TestAllMutantsInvalidIsNotAGradedZero(t *testing.T) {
+	rep := reposcan.Aggregate("o", "r", "c", 2, 2, []reposcan.FileResult{
+		{
+			Job:      reposcan.Job{Path: "real.go"},
+			Gradable: true,
+			Verdict:  advpool.Verdict{DevKillRate: 0.8, MutantsTotal: 10, DevScored: true},
+		},
+		{
+			Job:      reposcan.Job{Path: "nothing-compiled.go"},
+			Gradable: true,
+			// Every mutant rejected: MutantsTotal (the graded denominator) is
+			// 0, so DevKillRate is a zero nobody measured.
+			Verdict: advpool.Verdict{DevKillRate: 0, MutantsTotal: 0, MutantsInvalid: 7, DevScored: true},
+		},
+	}, nil)
+
+	if rep.UngradableFiles != 1 {
+		t.Errorf("UngradableFiles = %d, want 1 — a file whose mutants all failed to build was never graded", rep.UngradableFiles)
+	}
+	if rep.GradedFiles != 1 {
+		t.Errorf("GradedFiles = %d, want 1 — counting the ungradable file makes the mean average a number no measurement supports", rep.GradedFiles)
+	}
+	if rep.KillRate < 0.79 || rep.KillRate > 0.81 {
+		t.Errorf("KillRate = %.3f, want ~0.80 — the repo mean was dragged toward zero by a file that was never graded", rep.KillRate)
+	}
+}
+
+// TestPrintWeakFileNamesAnUngradableFile: the marker is the other half. A
+// reader seeing 0.00 must be told the exam had no questions, or they will read
+// it as a suite that caught nothing.
+func TestPrintWeakFileNamesAnUngradableFile(t *testing.T) {
+	var out bytes.Buffer
+	printWeakFile(&out, reposcan.WeakFile{
+		Path: "nothing-compiled.go", KillRate: 0, MutantsGraded: 0, MutantsInvalid: 7,
+	})
+	got := out.String()
+	if !strings.Contains(got, "NO GRADABLE MUTANT") {
+		t.Errorf("line = %q, want a marker saying the exam had no questions", got)
+	}
+	if !strings.Contains(got, "7") {
+		t.Errorf("line = %q, want the rejected-mutant count so the reader can see how much was thrown away", got)
+	}
+}

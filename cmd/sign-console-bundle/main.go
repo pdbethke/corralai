@@ -49,5 +49,51 @@ func main() {
 	}
 
 	sig := ed25519.Sign(priv, manifestBytes)
-	fmt.Print(hex.EncodeToString(sig))
+
+	// UPSERT, don't overwrite. The manifest's Version is part of the signed
+	// bytes, so one signature covers exactly one build — and a file holding
+	// only one meant the repository had to choose between a working
+	// development tree ("dev") and a working release ("vX.Y.Z"). It chose
+	// development, silently, for its entire life: every released brain served
+	// a signature no client could verify.
+	//
+	// Existing entries for OTHER versions are preserved, so signing a release
+	// does not un-sign the development tree and vice versa.
+	existing, _ := os.ReadFile(sigPath) // #nosec G304 -- fixed repo-relative path
+	fmt.Print(upsert(string(existing), version, hex.EncodeToString(sig)))
+}
+
+// sigPath is the committed signature file, relative to the repository root
+// (which is where scripts/sign-console-bundle.sh runs this).
+const sigPath = "internal/ui/console.manifest.sig"
+
+// upsert returns the signature file with version's entry set to sig, keeping
+// every other entry and their order.
+//
+// A legacy file — a bare signature with no version column — is migrated to the
+// "dev" entry it always implicitly was, so no committed signature had to be
+// regenerated to adopt the format.
+func upsert(existing, version, sig string) string {
+	var out []string
+	replaced := false
+	trimmed := strings.TrimSpace(existing)
+	if trimmed != "" && !strings.ContainsAny(trimmed, " \t\n") {
+		trimmed = "dev " + trimmed
+	}
+	for _, line := range strings.Split(trimmed, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if v, _, found := strings.Cut(line, " "); found && strings.TrimSpace(v) == version {
+			out = append(out, version+" "+sig)
+			replaced = true
+			continue
+		}
+		out = append(out, line)
+	}
+	if !replaced {
+		out = append(out, version+" "+sig)
+	}
+	return strings.Join(out, "\n") + "\n"
 }

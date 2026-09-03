@@ -236,7 +236,12 @@ func Handler(d Deps) http.Handler {
 	} else {
 		s.consoleManifestJSON = b
 	}
-	s.consoleSig = consoleManifestSig
+	// Only the signature for the version this daemon actually reports. A
+	// signature for a different build verifies against nothing and would be
+	// served as though it did.
+	if sig, ok := ConsoleSigForVersion(d.Version); ok {
+		s.consoleSig = sig
+	}
 	mux.HandleFunc("/console/manifest.json", s.consoleManifestHandler)
 	mux.HandleFunc("/console/manifest.sig", s.consoleManifestSigHandler)
 	mux.HandleFunc("GET /console/asset/{path...}", s.consoleAsset)

@@ -80,9 +80,14 @@ func main() {
 		fmt.Fprintf(os.Stderr, "verify-console-signature: building the manifest for %s: %v\n", version, err)
 		os.Exit(1)
 	}
-	raw, err := os.ReadFile("internal/ui/console.manifest.sig")
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "verify-console-signature: reading the committed signature: %v\n", err)
+	raw, ok := ui.ConsoleSigForVersion(version)
+	if !ok {
+		fmt.Fprintf(os.Stderr,
+			"verify-console-signature: the committed signature file has NO entry for version %q.\n"+
+				"Every thin client would refuse this console with \"manifest signature INVALID\".\n"+
+				"Sign it before tagging:\n"+
+				"    CORRALAI_RELEASE_KEY=<the release seed> scripts/sign-console-bundle.sh %s\n"+
+				"and commit internal/ui/console.manifest.sig.\n", version, version)
 		os.Exit(1)
 	}
 	sig, err := hex.DecodeString(strings.TrimSpace(string(raw)))

@@ -303,6 +303,15 @@ func realBundleAssets(t *testing.T) []fakeAsset {
 // ui.consoleManifestSig trims it.
 func committedManifestSig(t *testing.T) []byte {
 	t.Helper()
+	// The committed file carries ONE ENTRY PER VERSION now — the manifest's
+	// version is part of the signed bytes, so one signature covers exactly one
+	// build. Serve the entry for the version this fixture claims, which is what
+	// the real daemon does; serving the whole file hands the client something
+	// that cannot decode, and the failure looks like a bad signature rather
+	// than a fixture reading the wrong thing.
+	if sig, ok := ui.ConsoleSigForVersion(devConsoleSignedVersionForTest); ok {
+		return sig
+	}
 	raw, err := os.ReadFile(filepath.Join(repoRoot(t), "internal", "ui", "console.manifest.sig"))
 	if err != nil {
 		t.Fatalf("read internal/ui/console.manifest.sig: %v", err)

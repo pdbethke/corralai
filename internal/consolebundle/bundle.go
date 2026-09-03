@@ -160,7 +160,7 @@ func TrustAnchor() (pubHex, source string, err error) {
 		return v, TrustAnchorEnv, nil
 	}
 	if truthy(os.Getenv(DevAnchorEnv)) {
-		return DevPubKeyHex, DevAnchorEnv + " (PUBLISHED DEV KEY — anyone can forge a bundle that verifies against it)", nil
+		return DevPubKeyHex, DevAnchorEnv, nil
 	}
 	return "", "", fmt.Errorf(
 		"no console trust anchor is configured, so nothing can vouch for the HTML and JavaScript this client would render.\n"+

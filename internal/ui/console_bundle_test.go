@@ -144,12 +144,19 @@ func TestConsoleAssetEndpoint(t *testing.T) {
 // ConsoleReleasePubKeyHex over the EXACT bytes GET /console/manifest.json
 // serves when built with the same version the dev sig was signed for.
 func TestConsoleManifestSigRoundTrips(t *testing.T) {
-	if len(consoleManifestSig) == 0 {
-		t.Fatal("consoleManifestSig is empty — internal/ui/console.manifest.sig missing/empty; run scripts/sign-console-bundle.sh")
+	// The signature file carries ONE ENTRY PER VERSION now, because the
+	// manifest's version is inside the signed bytes and one signature covers
+	// exactly one build. This test is about the DEV entry — the one an
+	// unstamped `go run ./cmd/corral` needs — so it looks that entry up rather
+	// than decoding the whole file, which it did while only one entry could
+	// ever exist.
+	raw, ok := ConsoleSigForVersion(devConsoleSignedVersion)
+	if !ok || len(raw) == 0 {
+		t.Fatalf("internal/ui/console.manifest.sig has no %q entry; run scripts/sign-console-bundle.sh %s", devConsoleSignedVersion, devConsoleSignedVersion)
 	}
-	sigBytes, err := hex.DecodeString(string(consoleManifestSig))
+	sigBytes, err := hex.DecodeString(string(raw))
 	if err != nil {
-		t.Fatalf("consoleManifestSig is not valid hex: %v", err)
+		t.Fatalf("the %q signature is not valid hex: %v", devConsoleSignedVersion, err)
 	}
 	pubBytes, err := hex.DecodeString(ConsoleReleasePubKeyHex)
 	if err != nil || len(pubBytes) != ed25519.PublicKeySize {
@@ -175,8 +182,13 @@ func TestConsoleManifestSigRoundTrips(t *testing.T) {
 	if sigRec.Code != http.StatusOK {
 		t.Fatalf("manifest.sig status = %d", sigRec.Code)
 	}
-	if sigRec.Body.String() != string(consoleManifestSig) {
-		t.Error("GET /console/manifest.sig did not serve the exact embedded signature bytes")
+	// The daemon serves the entry for ITS OWN version, not the whole file. That
+	// is the point of the per-version format: the manifest's version is inside
+	// the signed bytes, so serving any other entry hands a client a signature
+	// that cannot verify — which is precisely what every released brain did
+	// while the file could hold only one.
+	if sigRec.Body.String() != string(raw) {
+		t.Errorf("GET /console/manifest.sig served %q, want the %q entry %q", sigRec.Body.String(), devConsoleSignedVersion, raw)
 	}
 }
 
@@ -189,5 +201,58 @@ func TestConsoleManifestSigMissingIs404(t *testing.T) {
 	s.consoleManifestSigHandler(rec, httptest.NewRequest(http.MethodGet, "/console/manifest.sig", nil))
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("status = %d, want 404 when no signature is configured/embedded", rec.Code)
+	}
+}
+
+// ONE FILE MUST CARRY MANY VERSIONS, because the manifest's Version is inside
+// the signed bytes and one signature therefore covers exactly one build.
+//
+// A single-entry file forces a choice between a working development tree and a
+// working release, and this repository made that choice silently, in favour of
+// development, for its entire life: every released brain served a signature no
+// thin client could verify.
+func TestConsoleSigForVersionSelectsTheRightEntry(t *testing.T) {
+	file := []byte("dev aaaa\nv0.8.4 bbbb\n# a comment\n\nv0.9.0 cccc\n")
+	for _, tc := range []struct {
+		version, want string
+		found         bool
+	}{
+		{"dev", "aaaa", true},
+		{"v0.8.4", "bbbb", true},
+		{"v0.9.0", "cccc", true},
+		{"v0.8.5", "", false},
+		{"", "", false},
+	} {
+		got, ok := consoleSigForVersionIn(file, tc.version)
+		if ok != tc.found || string(got) != tc.want {
+			t.Errorf("version %q: got (%q, %v), want (%q, %v)", tc.version, got, ok, tc.want, tc.found)
+		}
+	}
+}
+
+// A LEGACY BARE SIGNATURE STAYS VALID. The format that shipped before was a
+// single hex signature with no version column, produced only ever for "dev" —
+// so that is what it means. Requiring every existing signature to be
+// regenerated to adopt a new format would be a migration nobody would run.
+func TestConsoleSigForVersionReadsTheLegacyBareFormat(t *testing.T) {
+	bare := []byte("  deadbeef\n")
+	got, ok := consoleSigForVersionIn(bare, devConsoleSignedVersion)
+	if !ok || string(got) != "deadbeef" {
+		t.Errorf("bare file for %q: got (%q, %v), want (\"deadbeef\", true)", devConsoleSignedVersion, got, ok)
+	}
+	if _, ok := consoleSigForVersionIn(bare, "v0.8.4"); ok {
+		t.Error("a bare legacy signature must NOT be served for a release version — it was produced for \"dev\" and verifies against nothing else")
+	}
+	if _, ok := consoleSigForVersionIn([]byte("   \n"), devConsoleSignedVersion); ok {
+		t.Error("an empty file must yield no signature; the daemon 404s rather than serving nothing as something")
+	}
+}
+
+// THE COMMITTED FILE MUST STILL CARRY A dev ENTRY. Losing it would break every
+// unstamped build — `go run ./cmd/corral` — while leaving CI green, because
+// CI's own checks would happily verify whatever release entry remained.
+func TestCommittedSignatureStillCoversDev(t *testing.T) {
+	if _, ok := ConsoleSigForVersion(devConsoleSignedVersion); !ok {
+		t.Fatalf("the committed signature file has no %q entry — an ordinary `go run ./cmd/corral` would serve a console no client can verify", devConsoleSignedVersion)
 	}
 }

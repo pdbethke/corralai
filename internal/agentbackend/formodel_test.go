@@ -128,3 +128,34 @@ func TestForModelUnknownVendor(t *testing.T) {
 		t.Errorf("error %q should name the model", err.Error())
 	}
 }
+
+// TestForModelGeminiIgnoresTheOpenAIBaseURL: a cross-vendor gemini-* seat
+// followed OPENAI_BASE_URL, so an unpinned run whose gpt seats went through
+// a gateway sent its gemini seat — carrying GEMINI_API_KEY — to that
+// gateway too. The OpenAI variable names the OpenAI endpoint; Gemini's is
+// CORRALAI_GEMINI_BASE_URL (and, on the pinned MODEL_BACKEND=gemini door
+// only, the back-compat OPENAI_BASE_URL — see TestFromEnvGeminiFallbackOrder).
+func TestForModelGeminiIgnoresTheOpenAIBaseURL(t *testing.T) {
+	resetCredsMemoForTest(t)
+	keyring.MockInit()
+	t.Setenv("CORRAL_CREDS_DIR", t.TempDir())
+	t.Setenv("CREDENTIALS_DIRECTORY", "")
+	t.Setenv("GEMINI_API_KEY", "gm-test")
+	t.Setenv("CORRALAI_GEMINI_BASE_URL", "")
+	t.Setenv("OPENAI_BASE_URL", "http://127.0.0.1:18082/v1")
+	t.Setenv("MODEL_BACKEND", "")
+
+	b, err := ForModel("gemini-3.6-flash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ob := b.(*openaiBackend)
+	if strings.Contains(ob.base, "18082") {
+		t.Errorf("base = %q — the gemini seat followed OPENAI_BASE_URL, carrying the Google key with it", ob.base)
+	}
+	t.Setenv("CORRALAI_GEMINI_BASE_URL", "http://127.0.0.1:18083/v1")
+	b, _ = ForModel("gemini-3.6-flash")
+	if ob := b.(*openaiBackend); !strings.Contains(ob.base, "18083") {
+		t.Errorf("base = %q, want CORRALAI_GEMINI_BASE_URL honoured", ob.base)
+	}
+}

@@ -168,8 +168,8 @@ func reuseFixtureScanOpt(t *testing.T, root, dsn string, deriver reposcan.Derive
 	if !noGoalCache {
 		goalStore = newGoalLedgerCache(dsn)
 	}
-	gs, disclosure, code := resolveGoalSource(&errb, root, "", "test-model-x", false, len(selected),
-		func(string) (reposcan.Deriver, error) { return deriver, nil }, goalStore, noGoalCache, true)
+	gs, disclosure, code := resolveGoalSource(&errb, root, "", "test-model-x", "", false, len(selected),
+		func(string, string) (reposcan.Deriver, error) { return deriver, nil }, goalStore, noGoalCache, true)
 	if code != 0 {
 		t.Fatalf("resolveGoalSource: code=%d stderr=%s", code, errb.String())
 	}

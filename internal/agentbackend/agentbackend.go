@@ -169,7 +169,7 @@ func FromEnv() Backend {
 		// two disagreed about what "gemini" means depending on which door you
 		// came in: a cross-vendor CRITIC worked while aiming a WHOLE run at
 		// Gemini silently did not.
-		return &openaiBackend{base: geminiBase(), key: geminiKey(), model: model}
+		return &openaiBackend{base: geminiBase(true), key: geminiKey(), model: model}
 	case "openai", "openrouter":
 		// Same per-model wire choice as ForModel — a Codex model named through
 		// MODEL_BACKEND=openai must reach /responses, not /chat/completions.
@@ -229,11 +229,18 @@ func NewOllamaBackend(url, model string) Backend {
 // OpenAI variable was the only thing that made MODEL_BACKEND=gemini reach any
 // endpoint at all before this, so an operator already configured that way must
 // keep working.
-func geminiBase() string {
+//
+// The OPENAI_BASE_URL hop applies to the PINNED door only (pinned true:
+// MODEL_BACKEND=gemini, where that variable was the operator's way of
+// naming Gemini's endpoint before CORRALAI_GEMINI_BASE_URL existed). On the
+// cross-vendor door it does not: an unpinned run with OPENAI_BASE_URL set
+// for its gpt seats used to send its gemini-* seat — carrying the GOOGLE
+// key — to whatever the gpt gateway does with that name.
+func geminiBase(pinned bool) string {
 	if base := os.Getenv("CORRALAI_GEMINI_BASE_URL"); base != "" {
 		return base
 	}
-	if base := os.Getenv("OPENAI_BASE_URL"); base != "" {
+	if base := os.Getenv("OPENAI_BASE_URL"); pinned && base != "" {
 		return base
 	}
 	return "https://generativelanguage.googleapis.com/v1beta/openai"
@@ -279,7 +286,7 @@ func ForModel(model string) (Backend, error) {
 		if key == "" {
 			return nil, fmt.Errorf("agentbackend: ForModel: model %q needs a Google key — set GEMINI_API_KEY (or GOOGLE_API_KEY)", model)
 		}
-		return &openaiBackend{base: geminiBase(), key: key, model: model}, nil
+		return &openaiBackend{base: geminiBase(false), key: key, model: model}, nil
 	case hasAnyPrefix(model, "gpt-", "o1-", "o3-"):
 		key := agentSecret("OPENAI_API_KEY")
 		if key == "" {

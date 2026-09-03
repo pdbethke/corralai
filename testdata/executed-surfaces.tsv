@@ -126,7 +126,10 @@ corral demo --dir	unexecuted
 corral demo --mutant-model	executed	test:cmd/corral/certify_repo_writer_mode_test.go
 corral demo --writer-model	executed	test:cmd/corral/certify_repo_writer_mode_test.go
 corral doctor --code	executed	test:cmd/corral/certify_adversarial_test.go
-corral doctor --critic-model	executed	test:cmd/corral/certify_repo_writer_mode_test.go
+corral doctor --critic-model	executed	test:cmd/corral/doctor_test.go
+corral doctor --derive-model	executed	test:cmd/corral/doctor_test.go
+corral doctor --repo	executed	test:cmd/corral/doctor_test.go
+corral doctor --shadow-model	executed	test:cmd/corral/doctor_test.go
 corral doctor --jail	executed	test:cmd/corral/jail_test.go
 corral doctor --mutant-model	executed	test:cmd/corral/certify_repo_writer_mode_test.go
 corral doctor --test	executed	test:cmd/corral/certify_adversarial_test.go

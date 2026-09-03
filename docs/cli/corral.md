@@ -294,10 +294,16 @@ Usage of doctor:
     	the source file you intend to audit (optional, enables the pairing and baseline checks)
   -critic-model string
     	the test-critic model whose credential to check
+  -derive-model certify --repo
+    	the goal-derivation model a certify --repo run will name, if any
   -jail string
     	sandbox backend (default: auto-detect). "container" needs CORRALAI_EXEC_IMAGE set to a toolchain image, e.g. CORRALAI_EXEC_IMAGE=python:3.12-bookworm
   -mutant-model string
     	the mutant-generator model whose credential to check
+  -repo string
+    	the repository the run will audit — where its .corral/models.json registry is read from, exactly as certify reads it (default ".")
+  -shadow-model string
+    	the challenger generator model, if the run will name one — it needs a credential too
   -test string
     	its test file (optional; otherwise inferred from the language's convention)
   -writer-model string

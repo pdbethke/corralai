@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -20,19 +21,22 @@ func TestDoctorReportsMissingCredentialsPerModel(t *testing.T) {
 	t.Setenv("GEMINI_API_KEY", "")
 	t.Setenv("GOOGLE_API_KEY", "")
 	t.Setenv("OPENAI_API_KEY", "")
+	t.Setenv("MODEL_BACKEND", "")
 
-	got := checkCredentials("gemini-3.6-flash", "gemini-3.6-flash", "claude-haiku-4-5")
-	if len(got) != 2 {
-		t.Fatalf("two distinct models were assigned, want two checks, got %d: %+v", len(got), got)
-	}
+	got := checkHerd("gemini-3.6-flash", "gemini-3.6-flash", "claude-haiku-4-5", "", nil)
 	var joined string
+	ok := 0
 	for _, r := range got {
 		if r.ok {
-			t.Fatalf("no keys are set; %q must not pass", r.name)
+			ok++
 		}
 		joined += r.name + " :: " + r.detail + "\n"
 	}
-	for _, want := range []string{"gemini-3.6-flash", "claude-haiku-4-5", "mutant-generator", "test-critic"} {
+	if ok != 0 {
+		t.Fatalf("no keys are set; nothing must pass:\n%s", joined)
+	}
+	// certify's own refusal, naming the seat's vendor and the variable.
+	for _, want := range []string{"gemini-3.6-flash", "GEMINI_API_KEY"} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("expected %q named in the failures:\n%s", want, joined)
 		}
@@ -45,11 +49,61 @@ func TestDoctorReportsMissingCredentialsPerModel(t *testing.T) {
 func TestDoctorSkipsAnOffRole(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "")
 	t.Setenv("GEMINI_API_KEY", "gm")
-	got := checkCredentials("gemini-3.6-flash", "gemini-3.6-flash", "off")
+	t.Setenv("MODEL_BACKEND", "")
+	got := checkHerd("gemini-3.6-flash", "gemini-3.6-flash", "off", "", nil)
 	for _, r := range got {
-		if strings.Contains(r.name, "test-critic") {
-			t.Fatalf("an 'off' role must not be checked: %+v", r)
+		if !r.ok {
+			t.Fatalf("an all-Gemini herd with a Gemini key and the critic off must pass: %+v", r)
 		}
+	}
+}
+
+// TestDoctorAgreesWithCertifyAboutTheHerd pins the router review's finding:
+// doctor ran its own credential check (ForModel per model, no
+// MODEL_BACKEND, models de-duplicated before decorrelation) and disagreed
+// with certify in both directions. It now asks certify's own preflight.
+func TestDoctorAgreesWithCertifyAboutTheHerd(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	t.Setenv("GEMINI_API_KEY", "")
+	t.Setenv("GOOGLE_API_KEY", "")
+	t.Setenv("OPENAI_API_KEY", "")
+
+	fails := func(res []checkResult) []string {
+		var out []string
+		for _, r := range res {
+			if !r.ok {
+				out = append(out, r.name+" :: "+r.detail)
+			}
+		}
+		return out
+	}
+	// 1. An all-local herd: certify accepts it (no vendor, no key needed);
+	// doctor used to FAIL it with "cannot infer a cloud vendor".
+	t.Setenv("MODEL_BACKEND", "")
+	if f := fails(checkHerd("qwen2.5-coder:7b", "qwen2.5-coder:14b", "qwen2.5-coder:7b", "", nil)); len(f) != 0 {
+		t.Errorf("all-local herd refused by doctor, accepted by certify: %v", f)
+	}
+	// 2. A pinned gateway: certify's preflight demands no Anthropic key for
+	// a claude-* seat behind MODEL_BACKEND=openrouter; doctor demanded one.
+	t.Setenv("MODEL_BACKEND", "openrouter")
+	t.Setenv("OPENROUTER_API_KEY", "test-placeholder-not-a-real-key")
+	if f := fails(checkHerd("claude-sonnet-5", "claude-sonnet-5", "gemini-3.6-flash", "", nil)); len(f) != 0 {
+		t.Errorf("pinned-gateway herd refused by doctor, accepted by certify: %v", f)
+	}
+	// 3. writer == critic: certify refuses (decorrelation); doctor passed it,
+	// having de-duplicated the models first.
+	t.Setenv("MODEL_BACKEND", "")
+	t.Setenv("GEMINI_API_KEY", "gm")
+	f := fails(checkHerd("gemini-3.6-flash", "gemini-3.6-flash", "gemini-3.6-flash", "", nil))
+	if len(f) == 0 {
+		t.Error("writer == critic passed doctor; certify refuses it")
+	} else if !strings.Contains(strings.Join(f, "\n"), "critic") {
+		t.Errorf("refused for the wrong reason: %v", f)
+	}
+	// 4. The challenger seat is checked too: a Claude challenger on an
+	// all-Gemini herd with no Anthropic key is a refusal certify makes.
+	if f := fails(checkHerd("gemini-3.6-flash", "gemini-3.6-flash", "off", "claude-sonnet-5", nil)); len(f) == 0 {
+		t.Error("a challenger seat with no credential passed doctor; certify refuses it")
 	}
 }
 
@@ -202,5 +256,63 @@ func TestCheckToolchainPassesWhenReallyReachable(t *testing.T) {
 	got := checkToolchain(iso, []string{"sh"}, nil)
 	if !got.ok {
 		t.Fatalf("checkToolchain must pass for a genuinely reachable tool: %+v", got)
+	}
+}
+
+// TestDoctorRehearsesTheDeriveSeatAndReadsTheRepoRegistry: the derive seat
+// and the challenger were unchecked, and the registry was read from "."
+// rather than the repository the run will audit.
+func TestDoctorRehearsesTheDeriveSeatAndReadsTheRepoRegistry(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	t.Setenv("GEMINI_API_KEY", "gm")
+	t.Setenv("GOOGLE_API_KEY", "")
+	t.Setenv("OPENAI_API_KEY", "")
+	t.Setenv("MODEL_BACKEND", "")
+	t.Setenv("GITHUB_ACTIONS", "")
+	t.Setenv("CORRALAI_MODELS", "")
+	t.Setenv("CORRALAI_MODELS_FILE", "")
+
+	repo := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(repo, ".corral"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mustWrite(t, filepath.Join(repo, ".corral", "models.json"),
+		`{"fast": {"provider": "google", "model": "gemini-3.6-flash"}, "gpu": {"provider": "ollama", "model": "qwen2.5-coder:14b", "endpoint": "http://127.0.0.1:11434"}}`)
+
+	// Aliases from the run's repo resolve; the derive seat (a Claude model,
+	// no Anthropic key) is the one finding. Driven through the same
+	// registry + checks runDoctor wires for --repo, --derive-model and
+	// --shadow-model, below its fatal sandbox check.
+	//surface: --derive-model
+	//surface: --shadow-model
+	mutant, writer, critic, shadow, derive := "fast", "gpu", "off", "", "claude-sonnet-5"
+	var errOut bytes.Buffer
+	reg, err := resolveSeatRegistry("corral doctor", repo, certifySeats(&derive, &mutant, &writer, &critic, &shadow, nil), &errOut)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mutant != "gemini-3.6-flash" || writer != "qwen2.5-coder:14b" {
+		t.Fatalf("the repo's registry did not resolve the aliases: mutant=%q writer=%q\n%s", mutant, writer, errOut.String())
+	}
+	for _, r := range checkHerd(mutant, writer, critic, shadow, reg) {
+		if !r.ok {
+			t.Errorf("herd check failed: %s :: %s", r.name, r.detail)
+		}
+	}
+	dres := checkDeriveSeat(derive, reg.deriveEndpoint())
+	if len(dres) != 1 || dres[0].ok {
+		t.Errorf("a derive seat with no credential passed: %+v", dres)
+	}
+	// And a registry-placed derive seat: the registry's daemon, no key.
+	derive = "gpu"
+	reg2, err := resolveSeatRegistry("corral doctor", repo, certifySeats(&derive, nil, nil, nil, nil, nil), &errOut)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reg2.deriveEndpoint() != "http://127.0.0.1:11434" {
+		t.Errorf("derive endpoint = %q, want the registry's daemon", reg2.deriveEndpoint())
+	}
+	if dres := checkDeriveSeat(derive, reg2.deriveEndpoint()); len(dres) != 1 || !dres[0].ok {
+		t.Errorf("a registry-placed local derive seat failed: %+v", dres)
 	}
 }

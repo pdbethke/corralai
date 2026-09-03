@@ -601,7 +601,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		goalStore = newGoalLedgerCache(goalCacheDSN)
 	}
 
-	gs, disclosure, code := resolveGoalSource(stderr, *repoDir, *goalsPath, *deriveModel, *dryRun, len(selected), certifyRepoDeriver, goalStore, *noGoalCacheFlag, *recordFlag)
+	gs, disclosure, code := resolveGoalSource(stderr, *repoDir, *goalsPath, *deriveModel, seatReg.deriveEndpoint(), *dryRun, len(selected), certifyRepoDeriver, goalStore, *noGoalCacheFlag, *recordFlag)
 	if code != 0 {
 		return code
 	}
@@ -1997,10 +1997,12 @@ func changedFiles(root, baseRef string) ([]string, error) {
 	return changed, nil
 }
 
-// deriverFactory builds a Deriver for a model. Injected so the goal-source
-// wiring can be tested without a provider credential — and, more importantly,
-// without any possibility of a real model call from a unit test.
-type deriverFactory func(model string) (reposcan.Deriver, error)
+// deriverFactory builds a Deriver for a model, served at endpoint when the
+// registry placed the derive seat on a local daemon ("" otherwise). Injected
+// so the goal-source wiring can be tested without a provider credential —
+// and, more importantly, without any possibility of a real model call from
+// a unit test.
+type deriverFactory func(model, endpoint string) (reposcan.Deriver, error)
 
 // certifyRepoDeriver is the factory runCertifyRepo actually uses. A package
 // var rather than a direct call to newLLMDeriver so a test can prove a
@@ -2071,7 +2073,7 @@ func goalReceiptLine(dsn string, recordEnabled bool, fresh int) string {
 // cache already follows (see NewCachingGoalSource's doc).
 //
 // Returns the process exit code to use on failure; 0 means the source is good.
-func resolveGoalSource(stderr io.Writer, repoDir, goalsPath, deriveModel string, dryRun bool, nSelected int, newDeriver deriverFactory, store reposcan.GoalCacheStore, noGoalCache, recordEnabled bool) (reposcan.GoalSource, string, int) {
+func resolveGoalSource(stderr io.Writer, repoDir, goalsPath, deriveModel, deriveEndpoint string, dryRun bool, nSelected int, newDeriver deriverFactory, store reposcan.GoalCacheStore, noGoalCache, recordEnabled bool) (reposcan.GoalSource, string, int) {
 	// --goals takes precedence when given, so hand-written goals keep working
 	// and that path needs no provider credential at all.
 	if goalsPath != "" {
@@ -2103,7 +2105,7 @@ func resolveGoalSource(stderr io.Writer, repoDir, goalsPath, deriveModel string,
 		// closed on a missing credential, which is the right answer for a real
 		// scan — but demanding a provider key to report "0 candidates" would
 		// refuse a scan that was never going to call a model.
-		d, derr := newDeriver(deriveModel)
+		d, derr := newDeriver(deriveModel, deriveEndpoint)
 		if derr != nil {
 			fmt.Fprintf(stderr, "corral certify --repo: %v\n", derr)
 			return nil, "", 2

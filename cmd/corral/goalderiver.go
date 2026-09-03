@@ -50,15 +50,35 @@ const goalDeriverPromptDigest = "f044983472f64cacf3a7811747a17b2da099a5487c8835f
 
 type llmDeriver struct{ b agentbackend.Backend }
 
-// newLLMDeriver routes to the vendor that owns the model and fails closed when
-// that vendor's credential is absent.
+// newLLMDeriver routes to the backend that serves the model and fails closed
+// when a cloud vendor's credential is absent.
 //
-// A LOCAL (ollama) model name is served by the local daemon rather than
-// refused: goal derivation is the only seat that demanded a cloud vendor, which
-// made `certify --repo` the one mode that could not run locally — against
-// corral's own local-first claim, and for a summarizing task a local model
-// handles well. A cloud model with no credential still fails closed.
-func newLLMDeriver(model string) (reposcan.Deriver, error) {
+// THE SAME RULES AS EVERY GRADING SEAT (localChatterFor). This seat used to
+// call ForModelOrLocal directly, which ignores MODEL_BACKEND — so with the
+// operator's gateway pinned (MODEL_BACKEND=openrouter, OPENAI_BASE_URL=…),
+// the three grading seats went through the gateway and the derive seat
+// dialled the vendor directly, demanding the vendor's own key and sending
+// every candidate's SOURCE to a host the operator had pinned everything
+// away from. And a registry endpoint for this seat was printed, then
+// discarded.
+//
+// In order: endpoint (the registry placed this seat on a daemon) wins; a
+// pinned base backend serves a cloud name it fronts (its own vendor, or a
+// gateway that fronts every vendor); otherwise the vendor that owns the
+// name, or the local daemon for a local name — goal derivation was once
+// the only seat that demanded a cloud vendor, against corral's own
+// local-first claim, and a summarizing task is one a local model handles.
+func newLLMDeriver(model, endpoint string) (reposcan.Deriver, error) {
+	if endpoint != "" {
+		return llmDeriver{b: agentbackend.NewOllamaBackend(endpoint, model)}, nil
+	}
+	if v := agentbackend.VendorOf(model); v != "" && backendPinned() && (baseVendor() == "" || baseVendor() == v) {
+		base := agentbackend.FromEnv()
+		if sw, ok := base.(agentbackend.ModelSwitcher); ok {
+			return llmDeriver{b: sw.WithModel(model)}, nil
+		}
+		return llmDeriver{b: base}, nil
+	}
 	b, err := agentbackend.ForModelOrLocal(model)
 	if err != nil {
 		return nil, fmt.Errorf("goal deriver: %w", err)

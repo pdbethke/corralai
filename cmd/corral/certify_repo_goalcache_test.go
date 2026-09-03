@@ -65,8 +65,8 @@ func TestNoGoalCacheFlagDerivesEveryTime(t *testing.T) {
 	callsFor := func(store reposcan.GoalCacheStore) int {
 		calls := 0
 		var errb bytes.Buffer
-		gs, _, code := resolveGoalSource(&errb, root, "", "test-model-x", false, 1,
-			func(string) (reposcan.Deriver, error) { return countingDeriver{calls: &calls}, nil },
+		gs, _, code := resolveGoalSource(&errb, root, "", "test-model-x", "", false, 1,
+			func(string, string) (reposcan.Deriver, error) { return countingDeriver{calls: &calls}, nil },
 			store, false, true)
 		if code != 0 {
 			t.Fatalf("resolveGoalSource: code=%d stderr=%s", code, errb.String())
@@ -99,8 +99,8 @@ func TestResolveGoalSourceGoalsFilePathNeverWiresTheCache(t *testing.T) {
 	mustWrite(t, goals, `{"a.go": "hand written"}`)
 	store := newGoalLedgerCache(filepath.Join(t.TempDir(), "scans.duckdb"))
 
-	gs, disclosure, code := resolveGoalSource(&bytes.Buffer{}, root, goals, "test-model-x", false, 1,
-		func(string) (reposcan.Deriver, error) {
+	gs, disclosure, code := resolveGoalSource(&bytes.Buffer{}, root, goals, "test-model-x", "", false, 1,
+		func(string, string) (reposcan.Deriver, error) {
 			t.Fatal("the --goals path must never construct a deriver")
 			return nil, nil
 		}, store, false, true)
@@ -262,8 +262,8 @@ func TestGoalCacheNoPutWithoutRecord(t *testing.T) {
 		calls := 0
 		var errb bytes.Buffer
 		store := newGoalLedgerCache(dsn)
-		gs, _, code := resolveGoalSource(&errb, root, "", "test-model-x", false, 1,
-			func(string) (reposcan.Deriver, error) { return countingDeriver{calls: &calls}, nil },
+		gs, _, code := resolveGoalSource(&errb, root, "", "test-model-x", "", false, 1,
+			func(string, string) (reposcan.Deriver, error) { return countingDeriver{calls: &calls}, nil },
 			store, false, recordEnabled)
 		if code != 0 {
 			t.Fatalf("resolveGoalSource: code=%d stderr=%s", code, errb.String())
@@ -298,8 +298,8 @@ func TestGoalCacheGetHitsWithoutRecord(t *testing.T) {
 	calls1 := 0
 	var errb1 bytes.Buffer
 	store1 := newGoalLedgerCache(dsn)
-	gs1, _, code := resolveGoalSource(&errb1, root, "", "test-model-x", false, 1,
-		func(string) (reposcan.Deriver, error) { return countingDeriver{calls: &calls1}, nil },
+	gs1, _, code := resolveGoalSource(&errb1, root, "", "test-model-x", "", false, 1,
+		func(string, string) (reposcan.Deriver, error) { return countingDeriver{calls: &calls1}, nil },
 		store1, false, true)
 	if code != 0 {
 		t.Fatalf("resolveGoalSource (scan 1): code=%d stderr=%s", code, errb1.String())
@@ -316,8 +316,8 @@ func TestGoalCacheGetHitsWithoutRecord(t *testing.T) {
 	calls2 := 0
 	var errb2 bytes.Buffer
 	store2 := newGoalLedgerCache(dsn)
-	gs2, _, code := resolveGoalSource(&errb2, root, "", "test-model-x", false, 1,
-		func(string) (reposcan.Deriver, error) { return countingDeriver{calls: &calls2}, nil },
+	gs2, _, code := resolveGoalSource(&errb2, root, "", "test-model-x", "", false, 1,
+		func(string, string) (reposcan.Deriver, error) { return countingDeriver{calls: &calls2}, nil },
 		store2, false, false)
 	if code != 0 {
 		t.Fatalf("resolveGoalSource (scan 2): code=%d stderr=%s", code, errb2.String())

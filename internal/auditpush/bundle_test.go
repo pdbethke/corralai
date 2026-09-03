@@ -669,3 +669,56 @@ func TestSealIsOrderedByScanStartNotPushTime(t *testing.T) {
 		t.Fatalf("corral_seal shows scan %d (kill %.2f); want scan 2 (0.90), the LATEST MEASUREMENT — the re-pushed old scan won on push time", scanID, kill)
 	}
 }
+
+// THE SEAL VIEW MUST SURVIVE A MIGRATION. DuckDB pins a view's column types at
+// creation; an ADD COLUMN on the table beneath it leaves the stored view
+// unbindable, and `CREATE VIEW IF NOT EXISTS` never replaces it. Every
+// warehouse a released corral created and a newer one pushed to was in that
+// state — `corral seal` failed on all of them — and the earlier migration
+// test never pre-created the view, which is why nothing noticed. This one
+// builds the OLDER shape (fewer columns, the old view over them), pushes with
+// current code, and queries the view.
+func TestSealViewSurvivesASchemaMigration(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "old.duckdb")
+	one := 0.5
+	if _, err := PushBundle(target, Bundle{Scan: ScanRow{Repo: "o/r", ScanID: 1, Commit: "c", StatementSHA256: "s"},
+		Files: []Row{{Repo: "o/r", Commit: "c", ScanID: 1, Path: "a.go", Lang: "go", KillRate: &one, StatementSHA256: "s"}}}); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("duckdb", target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Turn it into the shape an older release left behind: fewer columns,
+	// and the view as that release created it, pinned to those columns.
+	for _, stmt := range []string{
+		"DROP VIEW corral_seal",
+		"ALTER TABLE corral_audits DROP COLUMN started_at",
+		"ALTER TABLE corral_audits DROP COLUMN import_only",
+		"ALTER TABLE corral_scans DROP COLUMN started_at",
+		"CREATE VIEW corral_seal AS SELECT * EXCLUDE rn FROM (SELECT a.*, row_number() OVER (PARTITION BY repo, path ORDER BY ts DESC) AS rn FROM corral_audits a WHERE kill_rate IS NOT NULL) WHERE rn = 1",
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatalf("%s: %v", stmt, err)
+		}
+	}
+	db.Close()
+
+	nine := 0.9
+	if _, err := PushBundle(target, Bundle{Scan: ScanRow{Repo: "o/r", ScanID: 2, Commit: "c", StatementSHA256: "s"},
+		Files: []Row{{Repo: "o/r", Commit: "c", ScanID: 2, Path: "a.go", Lang: "go", KillRate: &nine, StatementSHA256: "s"}}}); err != nil {
+		t.Fatalf("push after the schema grew: %v", err)
+	}
+	db, err = sql.Open("duckdb", target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var kill float64
+	if err := db.QueryRow("SELECT kill_rate FROM corral_seal WHERE repo = 'o/r' AND path = 'a.go'").Scan(&kill); err != nil {
+		t.Fatalf("corral_seal is unbindable after the migration — this is the state every existing warehouse was in: %v", err)
+	}
+	if kill != 0.9 {
+		t.Errorf("seal shows %.2f, want the newer 0.90", kill)
+	}
+}

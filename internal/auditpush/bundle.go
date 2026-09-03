@@ -1059,25 +1059,8 @@ func pushBundleOnce(target string, b Bundle) (Counts, error) {
 	// above did nothing and its column set is whatever that version wrote.
 	// The INSERTs below name every current column, so without this an
 	// upgrade turns a working push into a hard failure.
-	for _, m := range []struct {
-		table string
-		cols  []struct{ name, ddl string }
-	}{
-		{"corral_scans", corralScansMigrationCols},
-		{"corral_audits", corralAuditsMigrationCols},
-		{"corral_mutants", corralMutantsMigrationCols},
-		{"corral_model_calls", corralModelCallsMigrationCols},
-		{"corral_events", corralEventsMigrationCols},
-	} {
-		if err := migrateTable(db, m.table, m.cols); err != nil {
-			return Counts{}, err
-		}
-	}
-	// The seal is created here, not by a separate command, so an operator's
-	// warehouse always has it: the view IS the MotherDuck share, and a share
-	// that has to be created by hand is one nobody creates.
-	if _, err := db.Exec(SealViewDDL); err != nil {
-		return Counts{}, fmt.Errorf("auditpush: create the corral_seal view: %w", err)
+	if err := EnsureSchema(db); err != nil {
+		return Counts{}, err
 	}
 
 	tx, err := db.Begin()
@@ -1347,4 +1330,35 @@ func nullTime(t *time.Time) any {
 		return nil
 	}
 	return *t
+}
+
+// EnsureSchema brings an existing warehouse's tables up to the current column
+// set (additively — nothing is dropped or rewritten) and re-issues the seal
+// view over them. PushBundle calls it before every push; `corral seal` calls
+// it when it holds a writable handle to a warehouse an older corral wrote,
+// because a reader that assumes the current columns cannot read that file at
+// all, and a view pinned to the old columns cannot even be selected from.
+func EnsureSchema(db *sql.DB) error {
+	for _, m := range []struct {
+		table string
+		cols  []struct{ name, ddl string }
+	}{
+		{"corral_scans", corralScansMigrationCols},
+		{"corral_audits", corralAuditsMigrationCols},
+		{"corral_mutants", corralMutantsMigrationCols},
+		{"corral_model_calls", corralModelCallsMigrationCols},
+		{"corral_events", corralEventsMigrationCols},
+	} {
+		if err := migrateTable(db, m.table, m.cols); err != nil {
+			return err
+		}
+	}
+	// The seal is created here, not by a separate command, so an operator's
+	// warehouse always has it: the view IS the MotherDuck share, and a share
+	// that has to be created by hand is one nobody creates. OR REPLACE, so a
+	// view pinned to a previous column set is repaired rather than left dead.
+	if _, err := db.Exec(SealViewDDL); err != nil {
+		return fmt.Errorf("auditpush: create the corral_seal view: %w", err)
+	}
+	return nil
 }

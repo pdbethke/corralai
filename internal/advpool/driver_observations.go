@@ -37,8 +37,14 @@ func bugCatchObservations(run *runState, v Verdict) []BugCatchObservation {
 	// file's evidence N times as heavily in a scorecard whose whole purpose is
 	// to compare MODELS — the mode would move the ranking. One file, one
 	// authored suite, one soundness observation.
+	//
+	// And NOT when the provider never answered: there is no test to have
+	// been sound or unsound, and charging "one authored, zero sound" here
+	// lowered a model's PRECISION for every rate-limited afternoon. The
+	// shadow challenger already had exactly this guard (driver_shadow.go);
+	// the primary writer now has it too.
 	authored, sound := 0, 0
-	if !run.testWriterMoot {
+	if !run.testWriterMoot && !run.writerProviderFailed {
 		authored = 1
 		if graded {
 			sound = 1
@@ -71,11 +77,16 @@ func bugCatchObservations(run *runState, v Verdict) []BugCatchObservation {
 		Catches: v.ProvenMissed, Opportunities: opportunities,
 		AuthoredTests: authored, SoundTests: sound,
 	})
-	// test-critic: theater-detection (judgement, lower-confidence).
-	out = append(out, BugCatchObservation{
-		Model: v.ModelsByRole[RoleTestCritic], Role: RoleTestCritic,
-		CriticFlags: len(v.VacuousFindings),
-	})
+	// test-critic: theater-detection (judgement, lower-confidence). No row
+	// for a seat nobody staffed: --critic-model off leaves the model empty,
+	// and a row under "" was stored as "(unknown model)" — a run counted
+	// for a critic that did not exist.
+	if v.ModelsByRole[RoleTestCritic] != "" {
+		out = append(out, BugCatchObservation{
+			Model: v.ModelsByRole[RoleTestCritic], Role: RoleTestCritic,
+			CriticFlags: len(v.VacuousFindings),
+		})
+	}
 	// mutant-generator: one row PER SHARD. Never summed — see shardStat.
 	if len(run.shardStats) == 0 {
 		out = append(out, BugCatchObservation{

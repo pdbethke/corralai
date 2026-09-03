@@ -1523,8 +1523,12 @@ func TestTick_Aggregate_Certified_SignsAndFeedsLeaderboard(t *testing.T) {
 		}
 	}
 
-	if len(leaderboard.calls) != 3 {
-		t.Fatalf("expected 3 leaderboard.Record calls (one per role), got %d: %+v", len(leaderboard.calls), leaderboard.calls)
+	// Two rows, not three: the critic flagged nothing, and "flagged nothing"
+	// is not a measured outcome either way — it used to be recorded as a
+	// FAIL, which made the noisiest critic the earned one. See
+	// TestLeaderboardRewardsTheCriticForBeingRightNotForFlagging.
+	if len(leaderboard.calls) != 2 {
+		t.Fatalf("expected 2 leaderboard.Record calls (writer, generator; the critic that flagged nothing is unmeasured), got %d: %+v", len(leaderboard.calls), leaderboard.calls)
 	}
 	seenRoles := map[string]bool{}
 	for _, c := range leaderboard.calls {
@@ -1536,7 +1540,7 @@ func TestTick_Aggregate_Certified_SignsAndFeedsLeaderboard(t *testing.T) {
 			t.Fatalf("leaderboard.Record called with unexpected outcome %q for role %q", c.outcome, c.role)
 		}
 	}
-	for _, role := range []string{RoleMutantGenerator, RoleTestWriter, RoleTestCritic} {
+	for _, role := range []string{RoleMutantGenerator, RoleTestWriter} {
 		if !seenRoles[role] {
 			t.Fatalf("leaderboard was never fed for role %q", role)
 		}
@@ -4596,5 +4600,79 @@ func TestTick_WriterProviderFailure_ConvergesOnTheDevMeasurement(t *testing.T) {
 	}
 	if len(scorer.calls) != 1 {
 		t.Errorf("the pool pass must not run (there is no test): %d scorer calls, want 1 (dev)", len(scorer.calls))
+	}
+}
+
+// TestLeaderboardRewardsTheCriticForBeingRightNotForFlagging. The router's
+// critic seat is staffed from this leaderboard, and the critic's outcome
+// used to be "did it flag anything" — a finding execution then REFUTED
+// still scored a pass, and a critic that correctly found nothing scored a
+// fail. Here the critic's one whole-test finding is refuted by execution
+// (the flagged test kills every mutant), so the certified run records a
+// FAIL for the critic; and with the critic seat unstaffed no critic row is
+// recorded at all, on the leaderboard or in the scorecard.
+func TestLeaderboardRewardsTheCriticForBeingRightNotForFlagging(t *testing.T) {
+	survivors := []adequacy.Mutant{{ID: "m1", Replace: "c1"}}
+	scorer := &fakeScorer{devKillRate: 0.9, devSurvivors: survivors, poolSurvivors: nil}
+	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Replace: "c0"}, survivors[0]}}
+	d, _ := newTestDriver(t, 21, scorer, validator, 0.5)
+	d.Signer = &fakeSigner{}
+	leaderboard := &fakeLeaderboard{}
+	d.Leaderboard = leaderboard
+
+	ctx := context.Background()
+	ready := claimAllReady(t, d.Q)
+	tc, mg := ready[RoleTestCritic], ready[RoleMutantGenerator]
+	if _, err := d.Q.AddFinding(queue.Finding{
+		MissionID: 21, TaskID: tc.ID, Reporter: "test-critic", Type: "bug",
+		Severity: "high", Target: "TestAlwaysPasses",
+		Evidence: "this test asserts nothing — it can never fail",
+		Scope:    ScopeWholeTest, TestFile: "target_test.go", TestSelector: "TestAlwaysPasses",
+	}); err != nil {
+		t.Fatalf("AddFinding: %v", err)
+	}
+	mustComplete(t, d.Q, tc.ID, "flagged TestAlwaysPasses")
+	mustComplete(t, d.Q, mg.ID, "raw mutants")
+	if _, err := d.Tick(ctx, 21); err != nil {
+		t.Fatalf("Tick: %v", err)
+	}
+	tw := claimTaskByID(t, d.Q, d.runs[21].testWriterTaskID)
+	mustComplete(t, d.Q, tw.ID, "pool test source")
+	v, err := d.Tick(ctx, 21)
+	if err != nil || v == nil {
+		t.Fatalf("Tick: v=%v err=%v", v, err)
+	}
+	if v.Status != StatusCertified {
+		t.Fatalf("Status = %q, want certified (the leaderboard is only fed from a certified run)", v.Status)
+	}
+	var critic *leaderboardCall
+	for i := range leaderboard.calls {
+		if leaderboard.calls[i].role == RoleTestCritic {
+			critic = &leaderboard.calls[i]
+		}
+	}
+	if critic == nil {
+		t.Fatalf("no critic row on the leaderboard; calls = %+v", leaderboard.calls)
+	}
+	if critic.outcome != OutcomeFail {
+		t.Errorf("critic outcome = %q, want %q — its only finding was refuted by execution", critic.outcome, OutcomeFail)
+	}
+
+	// Unstaffed critic: no row anywhere.
+	assign := decorrelatedAssign()
+	assign[RoleTestCritic] = ""
+	obs := bugCatchObservations(&runState{}, Verdict{ModelsByRole: assign, VacuousFindings: nil})
+	for _, o := range obs {
+		if o.Role == RoleTestCritic {
+			t.Errorf("a scorecard row was emitted for an unstaffed critic (model %q)", o.Model)
+		}
+	}
+	lb := &fakeLeaderboard{}
+	d.Leaderboard = lb
+	d.feedLeaderboard(Verdict{ModelsByRole: assign, MutantsTotal: 1, ProvenMissed: 1}, false, nil)
+	for _, c := range lb.calls {
+		if c.role == RoleTestCritic {
+			t.Errorf("a leaderboard row was recorded for an unstaffed critic (model %q)", c.model)
+		}
 	}
 }

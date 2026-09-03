@@ -796,6 +796,16 @@ func BuildDAG(rs RunSpec, assign RoleAssignment, sigs []repoindex.Signature) []q
 			}
 			continue
 		}
+		if role.Name == RoleMutantGenerator {
+			// The unsharded whole-file seat. The challenger fans out over
+			// SHARDS and there are none, so a named challenger runs no seat
+			// here — said out loud, and dropped from the signed roster by
+			// runState.modelsByRole, rather than left looking like a
+			// challenger that was asked and produced nothing.
+			if m := strings.TrimSpace(rs.ShadowModel); m != "" {
+				log.Printf("advpool: %s has no shardable symbol surface (or --max-shards <= 1), so the challenger generator seat (%s) is SKIPPED — its yield this run is unmeasured, not zero", rs.CodePath, m)
+			}
+		}
 		specs = append(specs, queue.TaskSpec{
 			Key:         role.Name,
 			Role:        role.Name,

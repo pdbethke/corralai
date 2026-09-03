@@ -148,6 +148,21 @@ func (d *Driver) advanceWriterAttempt(ctx context.Context, missionID int64, run 
 	if task == nil || task.Status != queue.StatusDone {
 		return false, nil
 	}
+	if task.Result == WriterProviderFailedResult {
+		// The provider never answered for this seat. Not an attempt (the
+		// model never saw the prompt), not a compile failure (there is no
+		// test), and never a repair prompt — the batched path recognised
+		// this sentinel and the default per-survivor path did not, so a
+		// 429 used to be compiled, "repaired" three times with the NUL
+		// sentinel quoted back to the model as its own test, and signed as
+		// three tries. The seat is done and unmeasured; its siblings are
+		// unaffected.
+		log.Printf("advpool: %s: the test-writer's model call for survivor %s failed (unreachable, rate-limited, or a server error) — that survivor is not proven; its siblings are unaffected",
+			run.rs.CodePath, a.mutant.ID)
+		a.providerFailed = true
+		a.done = true
+		return true, nil
+	}
 	a.attempts++
 
 	test := d.Validator.ParseTest(task.Result)
@@ -342,8 +357,19 @@ func (d *Driver) finishWriterFanout(run *runState) {
 	// and they send an operator to different places. Neither is set when at
 	// least one seat graded — a file where three of four survivors were
 	// proven is not a writer failure.
+	providerFailed := 0
+	for _, id := range run.writerOrder {
+		if run.writerAttempts[id].providerFailed {
+			providerFailed++
+		}
+	}
 	switch {
 	case measured > 0:
+	case providerFailed == len(run.writerOrder):
+		run.testWriterFailed = true
+		run.writerProviderFailed = true
+		log.Printf("advpool: %s: the test-writer's model call failed for every one of the %d survivor(s) — converging on the measured dev-adequacy result without an authored test; this is the provider's failure, not the model's",
+			run.rs.CodePath, len(run.writerOrder))
 	case compiled == 0:
 		run.testWriterFailed = true
 		log.Printf("advpool: %s: no writer seat produced a compiling test for any of the %d survivor(s) — converging with proven_missed=0, which is NOT a clean suite",

@@ -529,6 +529,14 @@ type Verdict struct {
 	// run is never certified (aggregate forces needs-review whenever
 	// Survivors > 0 and ProvenMissed < Survivors — see aggregate).
 	TestWriterFailed bool
+	// WriterProviderFailed narrows TestWriterFailed to its blameless case:
+	// the writer's PROVIDER never answered (rate-limited, 5xx, unreachable —
+	// the worker hands back WriterProviderFailedResult), so no test exists
+	// to compile, score, or charge the model for. A verdict with this set
+	// still has TestWriterFailed set (nothing graded), but the scorecard
+	// records no authored test for it and no attempt is counted: an
+	// afternoon of 429s is not a property of the model.
+	WriterProviderFailed bool `json:"writer_provider_failed,omitempty"`
 	// PoolTestUnsound is true when the pool's authored test DID compile (so
 	// TestWriterFailed is false) but, when actually run against the
 	// survivors, its own report did not genuinely grade: it failed on the
@@ -871,6 +879,10 @@ type writerAttempt struct {
 	// It separates the two honest failures: testWriterFailed (nothing
 	// compiled) from poolTestUnsound (something compiled and never graded).
 	compiled bool
+	// providerFailed: this seat's provider call never answered. Not an
+	// attempt, not a compile failure, not the model's — see
+	// Verdict.WriterProviderFailed.
+	providerFailed bool
 }
 
 type runState struct {
@@ -1037,6 +1049,9 @@ type runState struct {
 	// test not authored." Carried onto the signed Verdict (TestWriterFailed) so
 	// the CLI/cockpit can say so honestly instead of implying a clean suite.
 	testWriterFailed bool
+	// writerProviderFailed narrows testWriterFailed: EVERY writer seat came
+	// back with WriterProviderFailedResult. See Verdict.WriterProviderFailed.
+	writerProviderFailed bool
 	// poolTestUnsound is set when the pool's authored test compiled (so
 	// testWriterFailed is false) but its scoring report did not genuinely
 	// grade (CompliantPass/CanaryKilled false, or Total 0) — see
@@ -2379,6 +2394,7 @@ func (d *Driver) tickPoolAdequacy(ctx context.Context, missionID int64, run *run
 		run.poolScored = true
 		run.provenMissed = 0
 		run.testWriterFailed = true
+		run.writerProviderFailed = true
 		return nil
 	}
 	writerTest := d.Validator.ParseTest(tw.Result)
@@ -2652,7 +2668,7 @@ func (d *Driver) tickAggregate(ctx context.Context, missionID int64, run *runSta
 	// execution-proven judgment (kill-rate + proven_missed), never an LLM's
 	// opinion, which can hallucinate. blockingFindingOpen remains for a future
 	// execution-verified finding path.
-	v := aggregate(run.rs, d.Assign, run.devKillRate, run.mutantsTotal, len(run.devSurvivors), run.provenMissed,
+	v := aggregate(run.rs, run.modelsByRole(d.Assign), run.devKillRate, run.mutantsTotal, len(run.devSurvivors), run.provenMissed,
 		criticFindings, d.Threshold, false, run.testWriterFailed, run.poolTestUnsound)
 	v.RegionsTotal = run.regionsTotal
 	v.PromptShape = run.promptShape
@@ -2678,6 +2694,7 @@ func (d *Driver) tickAggregate(ctx context.Context, missionID int64, run *runSta
 	v.AuthoredExtra = run.authoredExtra
 	v.WriterSeatsUngraded = run.writerSeatsUngraded()
 	v.WriterAttempts = writerAttemptSpread(run)
+	v.WriterProviderFailed = run.writerProviderFailed
 	// Narrows PoolTestUnsound to "your test command never collected the
 	// authored test's file" -- set here rather than widening aggregate()'s
 	// signature, alongside the other post-aggregate diagnosis fields.
@@ -2710,6 +2727,16 @@ func (d *Driver) tickAggregate(ctx context.Context, missionID int64, run *runSta
 	// what each mutant was really graded with.
 	applyPerMutantStats(&v, run.perMutantGraded, v.DevKilledMutants, v.DevSurvivedMutants)
 
+	// The critic's findings, adjudicated by EXECUTION where they can be
+	// (adjudicateCriticFindings) — computed once, before the leaderboard is
+	// fed, because the leaderboard used to reward the critic for FLAGGING
+	// (any finding = pass) and now rewards it for being RIGHT. Only when a
+	// sink that consumes it is wired and there is something to adjudicate.
+	var criticObs []CriticFindingObservation
+	if (d.CriticFindings != nil || d.Leaderboard != nil) && len(criticFindings) > 0 {
+		criticObs = d.adjudicateCriticFindings(ctx, missionID, run, criticFindings, v)
+	}
+
 	if d.Signer != nil {
 		recordID, head, serr := d.Signer.SignVerdict(ctx, v)
 		if serr != nil {
@@ -2722,7 +2749,7 @@ func (d *Driver) tickAggregate(ctx context.Context, missionID int64, run *runSta
 		// for anyone yet. A needs-review record is still signed (evidence), but no
 		// model gets leaderboard credit until the gate actually certified the run.
 		if d.Leaderboard != nil && v.Status == StatusCertified {
-			d.feedLeaderboard(v, run.testWriterMoot)
+			d.feedLeaderboard(v, run.testWriterMoot, criticObs)
 		}
 	}
 
@@ -2744,11 +2771,8 @@ func (d *Driver) tickAggregate(ctx context.Context, missionID int64, run *runSta
 	// matrix-vs-single-test policy lives on adjudicateCriticFindings' doc. Same
 	// RecordID!=0 guard as BugCatch (see its doc comment): a record_id=0 row is
 	// unlinkable.
-	if d.CriticFindings != nil && v.RecordID != 0 {
-		obs := d.adjudicateCriticFindings(ctx, missionID, run, criticFindings, v)
-		if len(obs) > 0 {
-			d.CriticFindings.Record(v.RecordID, v.RecordHead, obs)
-		}
+	if d.CriticFindings != nil && v.RecordID != 0 && len(criticObs) > 0 {
+		d.CriticFindings.Record(v.RecordID, v.RecordHead, criticObs)
 	}
 
 	// The in-memory agreement measurement, carried onto the verdict itself —
@@ -3085,6 +3109,7 @@ func (d *Driver) timeoutVerdict(run *runState) Verdict {
 	// ProvenMissed that looks like an ordinary graded value, dropping the
 	// caveat that explains it.
 	v.TestWriterFailed = run.testWriterFailed
+	v.WriterProviderFailed = run.writerProviderFailed
 	v.PoolTestUnsound = run.poolTestUnsound
 	v.AuthoredTestNotCollected = run.authoredTestNotCollected
 	// The writer's own disclosure, for the same reason as the flags above: a
@@ -3107,7 +3132,7 @@ func (d *Driver) timeoutVerdict(run *runState) Verdict {
 	v.DroppedRegions = run.droppedRegions
 	v.DuplicateMutants = run.dupMutants
 	v.PromptShape = run.promptShape
-	v.ModelsByRole = map[string]string(d.Assign)
+	v.ModelsByRole = run.modelsByRole(d.Assign)
 	// A stalled run still spent everything it spent, and it is the run an
 	// operator most needs the clock for: "which phase was it sitting in when
 	// the deadline hit" is answerable only from the phases that DID close,
@@ -3157,7 +3182,7 @@ func (d *Driver) timeoutVerdict(run *runState) Verdict {
 // feedLeaderboard is the gate-earned fitness feed: one (model, role,
 // outcome) call per role, derived from the CERTIFIED (Scorer-scored, gated,
 // signed) result only — never from a worker's self-report.
-func (d *Driver) feedLeaderboard(v Verdict, testWriterMoot bool) {
+func (d *Driver) feedLeaderboard(v Verdict, testWriterMoot bool, criticObs []CriticFindingObservation) {
 	outcome := func(ok bool) string {
 		if ok {
 			return OutcomePass
@@ -3168,7 +3193,8 @@ func (d *Driver) feedLeaderboard(v Verdict, testWriterMoot bool) {
 	// Skipped entirely when it never ran (a perfect dev suite left no survivors
 	// to target) — a model must never be recorded as failing a task it didn't
 	// attempt, or a strong suite would systematically penalize a good writer.
-	if !testWriterMoot {
+	// Nor when its PROVIDER never answered: that is not the model's miss.
+	if !testWriterMoot && !v.WriterProviderFailed {
 		d.Leaderboard.Record(v.ModelsByRole[RoleTestWriter], RoleTestWriter, outcome(v.ProvenMissed > 0))
 	}
 	// mutant-generator: it did its job if it produced usable (compiling) mutants
@@ -3176,8 +3202,52 @@ func (d *Driver) feedLeaderboard(v Verdict, testWriterMoot bool) {
 	// not the generator's, so a perfect suite killing them is not a generator
 	// failure.
 	d.Leaderboard.Record(v.ModelsByRole[RoleMutantGenerator], RoleMutantGenerator, outcome(v.MutantsTotal > 0))
-	// test-critic: did its findings hold (it actually flagged something)?
-	d.Leaderboard.Record(v.ModelsByRole[RoleTestCritic], RoleTestCritic, outcome(len(v.VacuousFindings) > 0))
+	// test-critic: were its findings RIGHT? This used to be "did it flag
+	// anything", which rewarded noise — a critic whose two findings were
+	// both refuted by execution scored a pass, and one that correctly
+	// flagged nothing scored a fail, so the noisiest critic became the
+	// earned one. Now: a pass needs at least one finding execution
+	// CONFIRMED; a fail is at least one REFUTED and none confirmed; a run
+	// where nothing was adjudicated (no findings, or none the jail could
+	// test) records nothing, because nothing was measured. And no row at
+	// all for a seat nobody staffed (--critic-model off leaves the model
+	// empty).
+	if strings.TrimSpace(v.ModelsByRole[RoleTestCritic]) == "" {
+		return
+	}
+	confirmed, refuted := 0, 0
+	for _, o := range criticObs {
+		switch o.Adjudication {
+		case AdjConfirmed:
+			confirmed++
+		case AdjRefuted:
+			refuted++
+		}
+	}
+	switch {
+	case confirmed > 0:
+		d.Leaderboard.Record(v.ModelsByRole[RoleTestCritic], RoleTestCritic, OutcomePass)
+	case refuted > 0:
+		d.Leaderboard.Record(v.ModelsByRole[RoleTestCritic], RoleTestCritic, OutcomeFail)
+	}
+}
+
+// modelsByRole is the roster a verdict SIGNS: the assignment, minus any
+// challenger seat this run never actually dispatched. BuildDAG emits the
+// challenger generator only inside the sharded branch, so an unsharded run
+// (MaxShards <= 1, or a file with no named symbols) with --shadow-model set
+// runs no challenger at all — and used to sign a roster naming one, while
+// the cache key and ledger carried it too. A model that was never asked is
+// not in the roster.
+func (r *runState) modelsByRole(assign RoleAssignment) map[string]string {
+	out := make(map[string]string, len(assign))
+	for k, v := range assign {
+		out[k] = v
+	}
+	if strings.TrimSpace(out[RoleMutantGeneratorShadow]) != "" && len(r.shadowStats) == 0 {
+		delete(out, RoleMutantGeneratorShadow)
+	}
+	return out
 }
 
 // isOperationalFinding reports whether f is an operational event (e.g. a

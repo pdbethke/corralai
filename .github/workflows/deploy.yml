@@ -131,6 +131,39 @@ jobs:
           FROM python:3.12-slim
           RUN pip install --no-cache-dir pytest
           DOCKERFILE
+      # A BACKEND THIS RARELY EXERCISED MUST EXPLAIN ITSELF WHEN IT FAILS.
+      # The integration tests below report pass/fail without the container's
+      # own stderr, which is fine for a regression gate and useless for a first
+      # failure on a machine you cannot log into. This reproduces the exact
+      # shape those tests use -- a 0755 workspace holding a 0644 file, bind
+      # mounted at the same path, read under --cap-drop=ALL -- and prints what
+      # the runtime actually says. It never fails the build; it is here so the
+      # next person debugging this reads a reason instead of guessing at one.
+      - name: Container jail environment (diagnostic, never fails)
+        run: |
+          set +e
+          echo "host uid:gid = $(id -u):$(id -g)   umask=$(umask)"
+          echo "TMPDIR=${TMPDIR:-<unset>}  RUNNER_TEMP=${RUNNER_TEMP:-<unset>}"
+          docker version --format '  client={{.Client.Version}} server={{.Server.Version}}' 2>&1
+          docker info --format '  rootless={{.SecurityOptions}}' 2>&1 | head -2
+          w=$(mktemp -d); chmod 755 "$w"; echo hello > "$w/marker.txt"; chmod 644 "$w/marker.txt"
+          echo "workspace: $(stat -c '%a %u:%g %n' "$w")"
+          echo "file:      $(stat -c '%a %u:%g %n' "$w/marker.txt")"
+          echo "-- as image default user (what the code does today):"
+          docker run --rm --network=none --read-only --cap-drop=ALL \
+            --tmpfs /tmp:rw,exec,nosuid,nodev -v "$w:$w" -w "$w" \
+            "$CORRALAI_EXEC_IMAGE" sh -c 'id; cat marker.txt' 2>&1 | sed 's/^/     /'
+          echo "   exit=$?"
+          echo "-- as the host uid:"
+          docker run --rm --network=none --read-only --cap-drop=ALL \
+            --user "$(id -u):$(id -g)" --tmpfs /tmp:rw,exec,nosuid,nodev \
+            -v "$w:$w" -w "$w" \
+            "$CORRALAI_EXEC_IMAGE" sh -c 'id; cat marker.txt' 2>&1 | sed 's/^/     /'
+          echo "   exit=$?"
+          rm -rf "$w"
+          exit 0
+        env:
+          CORRALAI_EXEC_IMAGE: corral-ci-jail
       - name: Exercise the container jail (the macOS/Windows path)
         if: steps.filter.outputs.code == 'true'
         env:

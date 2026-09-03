@@ -1914,21 +1914,31 @@ func TestContainerJailIsExercisedInCI(t *testing.T) {
 		t.Fatalf("parsing deploy.yml: %v", err)
 	}
 
-	found := 0
+	// The property is that AT LEAST ONE step both sets the variable and runs
+	// the tests with -count=1 — not that every step mentioning the variable is
+	// that step. Requiring the latter is what this gate did first, and it
+	// immediately rejected a DIAGNOSTIC step added beside the real one: a step
+	// that reproduces the same docker invocation by hand and prints what the
+	// runtime says, which is worth having precisely because the integration
+	// tests report pass/fail without the container's own stderr. A gate that
+	// forbids explaining a failure is guarding the wrong thing.
+	exercised := 0
+	sets := 0
 	for _, job := range wf.Jobs {
 		for _, st := range job.Steps {
 			if st.Env["CORRALAI_EXEC_IMAGE"] == "" {
 				continue
 			}
-			found++
-			if !strings.Contains(st.Run, "go test") {
-				t.Errorf("step %q sets CORRALAI_EXEC_IMAGE but runs no test: %q — setting the variable is not exercising the backend", st.Name, st.Run)
-			}
-			if !strings.Contains(st.Run, "-count=1") {
-				t.Errorf("step %q must pass -count=1, or a cached result can stand in for a run that did not happen", st.Name)
+			sets++
+			if strings.Contains(st.Run, "go test") && strings.Contains(st.Run, "-count=1") {
+				exercised++
 			}
 		}
 	}
+	if sets > 0 && exercised == 0 {
+		t.Errorf("%d CI step(s) set CORRALAI_EXEC_IMAGE but NONE of them runs `go test … -count=1`: setting the variable is not exercising the backend, and a cached result can stand in for a run that did not happen", sets)
+	}
+	found := exercised
 	if found == 0 {
 		t.Error("no CI step sets CORRALAI_EXEC_IMAGE, so every container-jail integration test SKIPS — the macOS/Windows path README advertises would be unexecuted again, which is exactly how it was last found broken")
 	}

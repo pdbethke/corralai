@@ -156,36 +156,28 @@ func TestAdvPoolAssign_AlwaysDecorrelated(t *testing.T) {
 		t.Fatalf("test-critic must differ from test-writer, got %+v", assign)
 	}
 
-	// A leaderboard where every role's best-earned model is the SAME model
-	// (a real scenario: one model dominates every cell) must still force
-	// test-critic onto something else.
+	// A leaderboard where one herd model dominates EVERY cell must still
+	// force test-critic onto something else — or off.
+	herd := advpool.RoleAssignment{
+		advpool.RoleMutantGenerator: "same-model",
+		advpool.RoleTestWriter:      "other-model",
+		advpool.RoleTestCritic:      "same-model",
+	}
 	staffing := &mission.StaffingManager{Perf: fakePerf{stats: []mission.ModelStats{
 		{Model: "same-model", Role: advpool.RoleMutantGenerator, TasksCompleted: 10, ExecPassRatePct: 99},
 		{Model: "same-model", Role: advpool.RoleTestWriter, TasksCompleted: 10, ExecPassRatePct: 99},
+		{Model: "other-model", Role: advpool.RoleTestWriter, TasksCompleted: 10, ExecPassRatePct: 50},
 		{Model: "same-model", Role: advpool.RoleTestCritic, TasksCompleted: 10, ExecPassRatePct: 99},
 	}}}
-	assign2 := advPoolAssign(staffing, nil)
+	assign2 := advPoolAssign(staffing, herd)
 	if err := advpool.CheckDecorrelation(assign2); err != nil {
 		t.Fatalf("single-dominant-model leaderboard must still decorrelate: %v (%+v)", err, assign2)
 	}
 	if assign2[advpool.RoleTestWriter] != "same-model" {
-		t.Fatalf("test-writer should take the dominant model, got %+v", assign2)
+		t.Fatalf("test-writer should take the dominant HERD model on evidence, got %+v", assign2)
 	}
 	if assign2[advpool.RoleTestCritic] == "same-model" {
 		t.Fatalf("test-critic must NOT take the writer's dominant model, got %+v", assign2)
-	}
-
-	// A leaderboard with a genuinely BETTER, distinct critic candidate must be
-	// preferred over the configured one. The configured herd is passed here
-	// because this leaderboard carries no mutant-generator evidence, and with
-	// no default models an unstaffed grading seat means no run at all.
-	staffing3 := &mission.StaffingManager{Perf: fakePerf{stats: []mission.ModelStats{
-		{Model: "writer-model", Role: advpool.RoleTestWriter, TasksCompleted: 10, ExecPassRatePct: 99},
-		{Model: "critic-model", Role: advpool.RoleTestCritic, TasksCompleted: 10, ExecPassRatePct: 95},
-	}}}
-	assign3 := advPoolAssign(staffing3, testAdvPoolHerd())
-	if assign3[advpool.RoleTestWriter] != "writer-model" || assign3[advpool.RoleTestCritic] != "critic-model" {
-		t.Fatalf("expected leaderboard-earned writer/critic models, got %+v", assign3)
 	}
 }
 
@@ -212,12 +204,87 @@ func TestAdvPoolAssign_SkipsUnknownModel(t *testing.T) {
 	if err := advpool.CheckDecorrelation(got); err != nil {
 		t.Fatalf("must stay decorrelated: %v (%+v)", err, got)
 	}
-	// Guard against over-filtering: a genuinely routable leaderboard model still wins.
-	staffing2 := &mission.StaffingManager{Perf: fakePerf{stats: []mission.ModelStats{
-		{Model: "real-model", Role: advpool.RoleMutantGenerator, TasksCompleted: 99, ExecPassRatePct: 100},
+}
+
+// TestAdvPoolAssign_TheHerdIsTheAllowlist pins the router review's findings
+// (2026-09): the leaderboard used to REPLACE every operator seat with any
+// model that had any evidence — including a model a worker's own
+// report_host self-report introduced, a retired model, or a rookie at 1/1
+// beating a veteran at 99/100 — and could staff an unconfigured brain.
+func TestAdvPoolAssign_TheHerdIsTheAllowlist(t *testing.T) {
+	herd := advpool.RoleAssignment{
+		advpool.RoleMutantGenerator: "operator-gen",
+		advpool.RoleTestWriter:      "operator-writer",
+		advpool.RoleTestCritic:      "operator-critic",
+	}
+	// 1. A model the operator never named cannot be routed to, however good.
+	foreign := &mission.StaffingManager{Perf: fakePerf{stats: []mission.ModelStats{
+		{Model: "gemini-3.5-flash", Role: advpool.RoleMutantGenerator, TasksCompleted: 100, ExecPassRatePct: 100},
+		{Model: "gemini-3.5-flash", Role: advpool.RoleTestWriter, TasksCompleted: 100, ExecPassRatePct: 100},
+		{Model: "gemini-3.5-pro", Role: advpool.RoleTestCritic, TasksCompleted: 100, ExecPassRatePct: 100},
+		{Model: "operator-writer", Role: advpool.RoleTestWriter, TasksCompleted: 100, ExecPassRatePct: 40},
 	}}}
-	if got2 := advPoolAssign(staffing2, base); got2[advpool.RoleMutantGenerator] != "real-model" {
-		t.Fatalf("a routable leaderboard model must still win: %+v", got2)
+	got := advPoolAssign(foreign, herd)
+	for role, want := range herd {
+		if got[role] != want {
+			t.Errorf("%s = %q, want the operator's %q — a model outside the herd was routed to", role, got[role], want)
+		}
+	}
+	// 2. And it cannot staff an unconfigured brain at all.
+	if got := advPoolAssign(foreign, nil); got != nil {
+		t.Errorf("an unconfigured pool was staffed from the leaderboard: %+v", got)
+	}
+	// 3. A rookie at 1/1 does not outrank a veteran: the evidence floor.
+	herd2 := advpool.RoleAssignment{
+		advpool.RoleMutantGenerator: "veteran",
+		advpool.RoleTestWriter:      "veteran",
+		advpool.RoleTestCritic:      "rookie",
+	}
+	rookie := &mission.StaffingManager{Perf: fakePerf{stats: []mission.ModelStats{
+		{Model: "rookie", Role: advpool.RoleMutantGenerator, TasksCompleted: 1, ExecPassRatePct: 100},
+		{Model: "veteran", Role: advpool.RoleMutantGenerator, TasksCompleted: 100, ExecPassRatePct: 99},
+	}}}
+	if got := advPoolAssign(rookie, herd2); got[advpool.RoleMutantGenerator] != "veteran" {
+		t.Errorf("mutant-generator = %q; one certified run re-seated the generator", got[advpool.RoleMutantGenerator])
+	}
+	// 4. With the floor met and the evidence better, a HERD model may be
+	// re-seated — that is what the leaderboard is for.
+	earned := &mission.StaffingManager{Perf: fakePerf{stats: []mission.ModelStats{
+		{Model: "rookie", Role: advpool.RoleMutantGenerator, TasksCompleted: advPoolEvidenceFloor, ExecPassRatePct: 100},
+		{Model: "veteran", Role: advpool.RoleMutantGenerator, TasksCompleted: 100, ExecPassRatePct: 60},
+	}}}
+	if got := advPoolAssign(earned, herd2); got[advpool.RoleMutantGenerator] != "rookie" {
+		t.Errorf("mutant-generator = %q; a herd model with the floor met and better evidence should win", got[advpool.RoleMutantGenerator])
+	}
+	// 5. But never over a pick that has NO evidence: unmeasured is not worse.
+	untried := &mission.StaffingManager{Perf: fakePerf{stats: []mission.ModelStats{
+		{Model: "rookie", Role: advpool.RoleMutantGenerator, TasksCompleted: 50, ExecPassRatePct: 100},
+	}}}
+	if got := advPoolAssign(untried, herd2); got[advpool.RoleMutantGenerator] != "veteran" {
+		t.Errorf("mutant-generator = %q; the operator's untried pick was demoted by a model it was never compared with", got[advpool.RoleMutantGenerator])
+	}
+}
+
+// TestParseAdvPoolModels_CriticMayBeOff: "test-critic=off" (or omitted) is
+// an unstaffed critic, not a model named "off" — which is what the brain
+// used to stamp on the critic task and send to the provider.
+func TestParseAdvPoolModels_CriticMayBeOff(t *testing.T) {
+	got, err := parseAdvPoolModels("mutant-generator=a,test-writer=b,test-critic=off")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got[advpool.RoleTestCritic] != "" {
+		t.Errorf("test-critic = %q, want empty (off)", got[advpool.RoleTestCritic])
+	}
+	got, err = parseAdvPoolModels("mutant-generator=a,test-writer=b")
+	if err != nil {
+		t.Fatalf("an omitted critic should parse: %v", err)
+	}
+	if assign := advPoolAssign(nil, got); assign == nil || assign[advpool.RoleTestCritic] != "" {
+		t.Errorf("assign = %+v, want the two grading seats staffed and no critic", assign)
+	}
+	if _, err := parseAdvPoolModels("mutant-generator=a,test-critic=c"); err == nil {
+		t.Error("a missing test-writer must be refused")
 	}
 }
 
@@ -476,9 +543,10 @@ func TestParseAdvPoolModels(t *testing.T) {
 		t.Fatalf("critic==writer must be rejected")
 	}
 
-	// Missing a role → error.
-	if _, err := parseAdvPoolModels("mutant-generator=a,test-writer=b"); err == nil {
-		t.Fatalf("missing test-critic must be rejected")
+	// Missing a GRADING role → error. (A missing critic is an unstaffed,
+	// advisory seat — see TestParseAdvPoolModels_CriticMayBeOff.)
+	if _, err := parseAdvPoolModels("test-writer=b,test-critic=c"); err == nil {
+		t.Fatalf("missing mutant-generator must be rejected")
 	}
 
 	// Unknown role key → error.

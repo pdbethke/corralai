@@ -296,13 +296,22 @@ func TestBuildLeaderboardFoldsAdvPoolOutcomes(t *testing.T) {
 
 	// The GetRoleModelStats() read path (mirrors cmd/corral/main.go's
 	// perfTracker) must expose the SAME signal: this is the thing
-	// advPoolAssign actually queries when staffing the next run.
+	// advPoolAssign actually queries when staffing the next run. The folded
+	// outcomes must be visible there as a cell with the same pass rate.
 	var stats []mission.ModelStats
 	for _, cell := range lb.Cells {
 		stats = append(stats, mission.ModelStats{Model: cell.Model, Role: cell.Role, TasksCompleted: cell.TasksCompleted, ExecPassRatePct: cell.ExecPassRatePct})
 	}
-	best := advPoolBestByRole(stats)
-	if best["test-writer"] != "qwen2.5-coder:7b" {
-		t.Errorf("best test-writer by role = %q, want qwen2.5-coder:7b (from folded advpool outcomes)", best["test-writer"])
+	seen := false
+	for _, st := range stats {
+		if st.Model == "qwen2.5-coder:7b" && st.Role == "test-writer" {
+			seen = true
+			if diff := st.ExecPassRatePct - wantPct; diff < -0.001 || diff > 0.001 {
+				t.Errorf("GetRoleModelStats pass rate = %v, want ~%v", st.ExecPassRatePct, wantPct)
+			}
+		}
+	}
+	if !seen {
+		t.Errorf("the folded advpool outcomes are not visible through GetRoleModelStats: %+v", stats)
 	}
 }

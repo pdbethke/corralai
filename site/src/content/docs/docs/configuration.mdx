@@ -81,7 +81,7 @@ injected into a push URL for one call, and never written to `.git/config`. See
 | Variable | What it is |
 | --- | --- |
 | `MODEL_BACKEND` / `OPENAI_BASE_URL` | Bring your own model — point at any OpenAI-compatible endpoint (local Ollama to frontier) |
-| `CORRALAI_ADVPOOL_MODELS` | The hosted pool's herd: `mutant-generator=<m>,test-writer=<m>,test-critic=<m>`. **Required** unless the leaderboard has earned an assignment — see below |
+| `CORRALAI_ADVPOOL_MODELS` | The hosted pool's herd: `mutant-generator=<m>,test-writer=<m>,test-critic=<m>` (`test-critic=off` or omitted leaves the critic unstaffed). **Required** — see below |
 | `CORRALAI_EMBED_URL` | Embeddings endpoint for reference RAG + semantic code search |
 | `CORRALAI_MOTHERDUCK` | Fleet-sync target (`md:<db>` or a `.duckdb` path); empty ⇒ sync off |
 | `CORRALAI_BRAIN_ID` | Tag for this brain's rows in the fleet (default: hostname) |
@@ -89,16 +89,23 @@ injected into a push URL for one call, and never written to `.git/config`. See
 **corral has no default models — anywhere.** The hosted adversarial pool used to
 cold-start on a hardcoded pair of small local models, which meant a brain nobody
 had configured still ran *something*. It no longer does: with no
-`CORRALAI_ADVPOOL_MODELS` and no leaderboard evidence, the pool logs `DISABLED —
-no models assigned` and is never registered, and a run started without an
-assignment is refused. A malformed `CORRALAI_ADVPOOL_MODELS` is refused too,
-rather than quietly falling back to something you did not choose.
+`CORRALAI_ADVPOOL_MODELS` the pool logs `DISABLED — no models assigned` and is
+never registered, and a run started without an assignment is refused. A
+malformed `CORRALAI_ADVPOOL_MODELS` is refused too, rather than quietly falling
+back to something you did not choose.
 
 The models are yours to name, from any provider you hold a key for. The only
 rule is that the **test-critic must differ from the test-writer** — that
 decorrelation is what the verdict rests on, and it is a property, not a vendor,
-so any two distinct models satisfy it. (The critic may also be left unfilled: it
-is advisory and never gates a verdict.)
+so any two distinct models satisfy it. (The critic may also be left unfilled:
+`test-critic=off`. It is advisory and never gates a verdict.)
+
+**The herd is the allowlist.** The brain's leaderboard can re-seat a role — but
+only to a model you named somewhere in the herd, only once that model has at
+least 5 completed tasks in that role, and only when it outranks your own pick on
+the same evidence. A model you never named cannot be routed to, whatever a
+worker reported about it, and the roster each run actually used is logged at
+run start.
 
 ### Secrets & keys
 

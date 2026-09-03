@@ -162,9 +162,10 @@ required on `certify --local` and `--repo`; `--critic-model` has no fallback
 (`off` disables the critic); `--derive-model` is required on `--repo` unless
 `--goals` is supplied. A run with an unnamed grading seat is refused before any
 jail, store or spend, and the refusal reports which provider credentials it can
-actually see. The brain is the same: with no `CORRALAI_ADVPOOL_MODELS` and no
-leaderboard evidence, the pool is DISABLED rather than cold-starting on
-something nobody chose.
+actually see. The brain is the same: with no `CORRALAI_ADVPOOL_MODELS` the
+pool is DISABLED rather than cold-starting on something nobody chose, and the
+leaderboard can only re-seat a role to a model the operator named in that herd
+(with an evidence floor) — never to one a worker's self-report introduced.
 
 This is deliberate. corral claims to be model-agnostic, and a binary that names
 one vendor's models when the operator named none is making an exception to that

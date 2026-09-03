@@ -68,10 +68,15 @@ func (f *fakeReportJail) RunTest(ctx context.Context, files map[string]string, c
 }
 
 // isCompileGateCmd distinguishes the compile gate from the suite run. The go
-// plugin's CompileCheck is `go vet ...`; the test command is `go test ...`.
+// plugin's CompileCheck is a build-only `go test -run ^$ …` (it was `go vet`,
+// which rejected runnable mutants); the suite run is `go test` without that
+// selector.
 func isCompileGateCmd(cmd []string) bool {
-	for _, a := range cmd {
+	for i, a := range cmd {
 		if a == "vet" {
+			return true
+		}
+		if a == "-run" && i+1 < len(cmd) && cmd[i+1] == "^$" {
 			return true
 		}
 	}

@@ -748,5 +748,15 @@ func isTestFile(p lang.Plugin, rel string) bool {
 		return true
 	}
 
+	// PHPUnit's convention is a SUFFIX with no separator: tests/CalcTest.php.
+	// None of the rules above see it, and the plugin's TestPaths cannot
+	// either — it derives the test for a SOURCE, so for a test file it
+	// proposes tests/CalcTestTest.php. Every PHP test file was therefore
+	// counted as an unpaired source, inflated "no paired test", and sat in
+	// the pre-flight's source set.
+	if strings.HasSuffix(base, "Test.php") {
+		return true
+	}
+
 	return false
 }

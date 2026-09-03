@@ -3,6 +3,7 @@
 package reposcan
 
 import (
+	"github.com/pdbethke/corralai/internal/lang"
 	"os"
 	"path/filepath"
 	"strings"
@@ -748,5 +749,25 @@ func TestEnumerateResolvesASymlinkedRoot(t *testing.T) {
 	}
 	if len(viaLink) != len(viaReal) {
 		t.Fatalf("through the symlink: %d candidate(s); through the real path: %d — the root was refused as a non-regular file", len(viaLink), len(viaReal))
+	}
+}
+
+// PHPUNIT'S TEST FILES ARE TESTS. `tests/CalcTest.php` matched no rule — every
+// other convention uses a separator (_test., test_, .spec.) and the plugin's
+// TestPaths derives the test FOR a source, proposing CalcTestTest.php for it —
+// so every PHP test file was enumerated as an unpaired source.
+func TestPHPUnitTestFilesAreRecognised(t *testing.T) {
+	php, ok := lang.ByName("php")
+	if !ok {
+		t.Fatal("no php plugin")
+	}
+	if !isTestFile(php, "tests/CalcTest.php") {
+		t.Error("tests/CalcTest.php must be a test file")
+	}
+	if isTestFile(php, "src/Calc.php") {
+		t.Error("src/Calc.php must not be a test file")
+	}
+	if isTestFile(php, "src/Latest.php") {
+		t.Error("src/Latest.php ends in 'test.php' by accident of spelling and must NOT be a test — the rule is the capitalised PHPUnit suffix")
 	}
 }

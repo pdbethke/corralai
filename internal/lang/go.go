@@ -36,11 +36,22 @@ func (goPlugin) TestCmd() []string { return []string{"go", "test", "./..."} }
 // see lang.Plugin.CompileCheck's doc comment for why the return type is a
 // sequence at all.
 func (goPlugin) CompileCheck(codePath, _ string) [][]string {
+	// `go build`, not `go vet`. vet runs analyzers `go test` never does —
+	// assign (`a = a`), unreachable, unusedresult, lostcancel, appends,
+	// shift — and those are exactly the statement-deletion, early-return and
+	// self-assignment shapes a mutant generator emits. A mutant vet rejects
+	// but the toolchain BUILDS is a runnable mutant; calling it invalid
+	// takes it out of the denominator and inflates the rate. Measured: two
+	// mutants, one killed, one a genuine survivor vet rejected — KillRate
+	// 1.00 with the gate, 0.50 without. The question this gate asks is "does
+	// it build", so that is the command it runs; the test binary is built
+	// too, because a mutant can break only the test's view of the package.
 	dir := filepath.ToSlash(filepath.Dir(codePath))
-	if dir == "." || dir == "" || dir == "/" {
-		return [][]string{{"go", "vet", "./..."}}
+	pkg := "./..."
+	if !(dir == "." || dir == "" || dir == "/") {
+		pkg = "./" + dir + "/..."
 	}
-	return [][]string{{"go", "vet", "./" + dir + "/..."}}
+	return [][]string{{"go", "test", "-count=1", "-run", "^$", pkg}}
 }
 
 // TestPaths mirrors the prior advPoolTestPath: same base name, `_test.go`

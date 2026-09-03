@@ -281,6 +281,16 @@ func runOneTask(ctx context.Context, q *queue.Store, missionID int64, workerID s
 			// than recording nothing.
 			fmt.Fprintf(progress, "certify --local: challenger seat %s failed (%v) — measurement skipped, the audit continues\n", task.Key, rerr)
 			result, findings = advpool.ShadowProviderFailedResult, nil
+		} else if task.Role == "test-writer" {
+			// THE PRIMARY WRITER FAILING TO ANSWER IS NOT A FAILED AUDIT. By
+			// the time this seat runs, the dev pass has already scored every
+			// mutant — minutes of real execution, logged as "dev's OWN tests
+			// scored N%". Returning here threw that away as COULD-NOT-GRADE.
+			// The sentinel lets the driver converge on the measurement it
+			// has, flagged as writer-failed, exactly as it does for a writer
+			// that never produced a compiling test.
+			fmt.Fprintf(progress, "certify: the test-writer's model call failed (%v) — the dev-adequacy result stands, no authored test; the file is flagged writer-failed\n", rerr)
+			result, findings = advpool.WriterProviderFailedResult, nil
 		} else {
 			return fmt.Errorf("running role %q: %w", task.Role, rerr)
 		}

@@ -189,3 +189,93 @@ func TestScoreRefusesToGradeWithACommandThatFailsOnCompliantCode(t *testing.T) {
 		t.Errorf("the reason must say what happened, got %q", rep.UnmeasuredReasons["m1"])
 	}
 }
+
+// A MUTANT THAT BUILDS AND RUNS IS A REAL MUTANT, whatever `go vet` thinks of
+// it. The compile gate was `go vet`, whose analyzers (assign, unreachable,
+// unusedresult, …) reject exactly the self-assignment, statement-deletion and
+// early-return shapes a generator emits. A mutant vet rejects but the toolchain
+// BUILDS was filed as invalid — out of the denominator, blamed on the
+// generator — and the rate went up. Measured on this fixture: one killed
+// mutant, one genuine survivor vet rejected: KillRate 1.00 with the vet gate,
+// 0.50 with a build gate. The gate is a build now, and this proves it against
+// the real toolchain.
+func TestCompileGateIsABuildNotALinter(t *testing.T) {
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go not installed")
+	}
+	root := t.TempDir()
+	write := func(name, body string) {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("go.mod", "module x\n\ngo 1.22\n")
+	code := "package x\n\nfunc Add(a, b int) int {\n\treturn a + b\n}\n"
+	write("x.go", code)
+	write("x_test.go", "package x\n\nimport \"testing\"\n\nfunc TestAdd(t *testing.T) {\n\tif Add(1, 2) != 3 {\n\t\tt.Fatal(\"add\")\n\t}\n}\n")
+
+	j := NewWorkspaceRunner(root, 120*time.Second)
+	gate := [][]string{{"go", "test", "-count=1", "-run", "^$", "./..."}}
+	mutants := []Mutant{
+		{ID: "killed", Search: "return a + b", Replace: "return a - b"},
+		// Self-assignment: `go vet` rejects it (assign), `go build` accepts
+		// it, the suite cannot see it. A genuine survivor.
+		{ID: "survivor", Search: "return a + b", Replace: "a = a\n\treturn a + b"},
+	}
+	rep, err := Score(context.Background(), j, map[string]string{}, "x.go", code, mutants, []string{"go", "test", "-count=1", "./..."},
+		WithMutantCompileCheck(gate))
+	if err != nil {
+		t.Fatalf("Score: %v", err)
+	}
+	if len(rep.Invalid) != 0 {
+		t.Fatalf("the gate rejected a mutant that BUILDS: invalid=%v reasons=%v", rep.Invalid, rep.InvalidReasons)
+	}
+	if rep.Total != 2 || len(rep.Killed) != 1 || len(rep.Survived) != 1 {
+		t.Fatalf("want 2 graded, 1 killed, 1 survived; got total=%d killed=%v survived=%v", rep.Total, rep.Killed, rep.Survived)
+	}
+}
+
+// A GATE THAT REJECTS THE UNMUTATED FILE IS A BROKEN GATE, NOT FORTY INVALID
+// MUTANTS. A pre-existing lint anywhere in the file — here a lint-only
+// complaint the toolchain still builds — zeroed the exam: every mutant
+// invalid with a reason pointing at a line no mutant touched, Total 0, and
+// the report blaming the generator. The gate is probed on the compliant file
+// first now; one that fails there is disabled for the run and the report says
+// so.
+func TestCompileGateThatRejectsCompliantCodeIsDisabled(t *testing.T) {
+	root := t.TempDir()
+	code := "x = 1\n"
+	if err := os.WriteFile(filepath.Join(root, "a.py"), []byte(code), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "test_a.py"), []byte("import a\n\ndef test_a():\n    assert a.x == 1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 not installed")
+	}
+	j := NewWorkspaceRunner(root, 60*time.Second)
+	// A "gate" that fails on everything, compliant code included.
+	gate := [][]string{{"false"}}
+	rep, err := Score(context.Background(), j, map[string]string{}, "a.py", code,
+		[]Mutant{{ID: "m", Search: "x = 1", Replace: "x = 2"}},
+		// -B: no bytecode. This test drives Score directly, bypassing the
+		// python plugin's PYTHONPYCACHEPREFIX, and Python's 1-second pyc
+		// mtime granularity otherwise serves the compliant file's bytecode
+		// for a mutant written in the same second — the staleness hole the
+		// plugin closes for real runs.
+		[]string{"python3", "-B", "-m", "pytest", "-q", "-p", "no:cacheprovider", "test_a.py"},
+		WithMutantCompileCheck(gate))
+	if err != nil {
+		t.Fatalf("Score: %v", err)
+	}
+	if rep.CompileGateNote == "" {
+		t.Fatal("a gate that rejects the compliant file must be reported as disabled")
+	}
+	if len(rep.Invalid) != 0 || rep.Total != 1 {
+		t.Fatalf("with the gate disabled every mutant must be graded by execution: invalid=%v total=%d", rep.Invalid, rep.Total)
+	}
+	if len(rep.Killed) != 1 {
+		t.Errorf("the suite catches x=2; want killed=[m], got killed=%v survived=%v", rep.Killed, rep.Survived)
+	}
+}

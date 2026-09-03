@@ -32,6 +32,20 @@ import (
 // while a fabricated row is confidently wrong.
 const ShadowProviderFailedResult = "\x00shadow-provider-call-failed\x00"
 
+// WriterProviderFailedResult is the same sentinel for the PRIMARY test-writer
+// seat: the model call itself failed (unreachable, 429, 5xx), so there is no
+// test to compile, score, or blame the model for.
+//
+// It exists because without it the driver's caller returned the transport
+// error, the whole file became "could not audit: running role test-writer:
+// model unreachable", and the dev-adequacy result — minutes of real scoring,
+// already computed and logged as "dev's OWN tests scored 50%" — was thrown
+// away as COULD-NOT-GRADE. That is the repository's dominant defect shape: a
+// measurement computed and then discarded. A writer that never answered is
+// no different, for the verdict, from a writer that never compiled; the run
+// converges with the measured kill rate, provenMissed 0, and the flag set.
+const WriterProviderFailedResult = "\x00writer-provider-call-failed\x00"
+
 // ShadowTimeBudget is the hard wall-clock cap on ALL of a run's shadow
 // measurement work, derived from the run's deadline. Shadow scoring runs real
 // jail executions of the dev suite — a second full Scorer.Score per shard — so

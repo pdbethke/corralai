@@ -484,6 +484,9 @@ type Report struct {
 	// unobservable mutant KILLED, and the driver signed it as a proven gap.
 	Unmeasured        []string
 	UnmeasuredReasons map[string]string
+	// CompileGateNote is set when the compile gate rejected the COMPLIANT
+	// file and was therefore disabled for this run — see Score.
+	CompileGateNote string
 	// PerMutant records what each GRADED mutant was actually graded with,
 	// keyed by Mutant.ID. There is one entry per mutant that reached the
 	// suite — a mutant the compile gate rejected is absent, because nothing
@@ -833,6 +836,35 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 	// one command for every survivor, and the dev pass reuses narrowings
 	// across mutants sharing a span, so this is a handful of extra runs
 	// against a suite already being run once per mutant.
+	// THE COMPILE GATE IS PROBED ON THE COMPLIANT FILE FIRST. A gate that
+	// rejects the UNMUTATED source is a broken gate for this file, not a
+	// verdict on the mutants: a pre-existing `fmt.Sprintf("x")` statement
+	// anywhere in a Go file — which `go test` runs happily — made `go vet`
+	// reject every mutant with a reason pointing at a line no mutant
+	// touched, the exam reported Total 0, and the report blamed the
+	// GENERATOR ("evidence about the generator"). That is a plausible cause
+	// of the 56-92% rejection rates seen in live audits. A gate the pristine
+	// file cannot pass is switched off for the run and the report says so;
+	// every mutant is then graded by execution, which is the measurement
+	// that matters anyway.
+	if len(cfg.mutantCompileCheck) > 0 {
+		gctx, gcancel := context.WithTimeout(ctx, perMutant)
+		for _, cmd := range cfg.mutantCompileCheck {
+			ok, out, gerr := runCmdVerbose(gctx, compliantCode, cmd)
+			if gerr != nil {
+				gcancel()
+				return Report{}, fmt.Errorf("adequacy: probing the compile gate on compliant code: %w", gerr)
+			}
+			if !ok {
+				rep.CompileGateNote = fmt.Sprintf("compile gate DISABLED for this file: %s rejects the UNMUTATED source, so it cannot judge a mutant — every mutant graded by execution instead. Gate output: %s",
+					strings.Join(cmd, " "), strings.TrimSpace(lastLines(out, 6)))
+				cfg.mutantCompileCheck = nil
+				break
+			}
+		}
+		gcancel()
+	}
+
 	commandFailsOnCompliant := map[string]string{}
 	if cfg.commandFor != nil {
 		sharedKey := strings.Join(testCmd, "\x00")

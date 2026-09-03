@@ -1012,9 +1012,14 @@ func (s CertSigner) SignVerdict(ctx context.Context, v Verdict) (int64, string, 
 			Actor:   actor,
 			Subject: "corral/adversarial-pool",
 			Detail: map[string]any{
-				"exit_code":       exitCode,
-				"ok":              exitCode == 0,
-				"duration_s":      0.0,
+				"exit_code": exitCode,
+				"ok":        exitCode == 0,
+				// THE MEASURED DURATION, OR NOTHING. This signed 0.0 — a
+				// positive claim that the pool took no time — in every
+				// record, against the repository's own NULL-not-zero rule,
+				// while the Verdict beside it carried the real phase clocks.
+				// A duration the run did not measure is omitted, not zeroed.
+				"duration_s":      signedDurationS(v.Timing),
 				"output_digest":   digest,
 				"regions_total":   v.RegionsTotal,
 				"regions_probed":  v.RegionsProbed,
@@ -1133,4 +1138,14 @@ func (s CertSigner) SignVerdict(ctx context.Context, v Verdict) (int64, string, 
 		return 0, "", err
 	}
 	return id, head, nil
+}
+
+// signedDurationS is the pool's measured wall clock in seconds, or nil when
+// the run recorded no timing at all — a zero in a signed record is an
+// assertion, and "unmeasured" is not an assertion of zero.
+func signedDurationS(t Timing) any {
+	if !t.Measured() {
+		return nil
+	}
+	return t.Total.Seconds()
 }

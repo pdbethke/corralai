@@ -121,7 +121,13 @@ func (pyPlugin) CompileCheck(codePath, testPath string) [][]string {
 	// E999 is NOT selected: ruff removed it as a selectable rule, which is why
 	// py_compile stays as the syntax gate rather than being replaced by this.
 	if ruff, err := exec.LookPath("ruff"); err == nil {
-		cmds = append(cmds, []string{ruff, "check", "--no-cache", "--select", "F821,F401,F811", codePath, testPath})
+		// F401 (unused import) is NOT here any more: a mutant that deletes
+		// the only use of an import leaves the import unused and RUNS
+		// perfectly well, and rejecting it took a runnable mutant out of
+		// the denominator. F811 (redefinition) is the same shape. Only
+		// F821 — an undefined name, which a loaded module cannot resolve —
+		// says anything about whether the mutant can run.
+		cmds = append(cmds, []string{ruff, "check", "--no-cache", "--select", "F821", codePath, testPath})
 	}
 	return cmds
 }
@@ -1682,7 +1688,31 @@ func (pyPlugin) WithAuthoredTest(sel Selection, testCmd []string, authoredTestPa
 			base = sel.Base
 		}
 	}
-	return append(append([]string{}, base...), authoredTestPath)
+	out := append(append([]string{}, base...), authoredTestPath)
+	// `--deselect` ARGS ON THE PASSED COMMAND SURVIVE THE SELECTION. When a
+	// selection exists this function rebuilds the command from sel.Cmd and
+	// discards testCmd — which is where salvageByDeselect had just put the
+	// `--deselect <failing test>` args it computed. So the salvage ran the
+	// original command, the failing authored test failed again, and the
+	// salvage reported nothing, on every Python repo with selection on (the
+	// default). Its own comments describe the opposite. The deselect args
+	// are the one thing the caller can legitimately add to a selected
+	// command, and they are carried across.
+	return append(out, deselectArgs(testCmd)...)
+}
+
+// deselectArgs returns every `--deselect <id>` pair in argv, in order.
+func deselectArgs(argv []string) []string {
+	var out []string
+	for i := 0; i < len(argv); i++ {
+		if argv[i] == "--deselect" && i+1 < len(argv) {
+			out = append(out, argv[i], argv[i+1])
+			i++
+		} else if strings.HasPrefix(argv[i], "--deselect=") {
+			out = append(out, argv[i])
+		}
+	}
+	return out
 }
 
 // argvLen approximates the length of a command line carrying args, as one

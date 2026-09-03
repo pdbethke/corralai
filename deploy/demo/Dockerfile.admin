@@ -1,6 +1,6 @@
 # corral-admin (the operator client) — used by the demo's one-shot mission seed.
 # Pure Go (no CGO), ships static on distroless.
-FROM golang:1.26 AS build
+FROM golang:1.26.6 AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download

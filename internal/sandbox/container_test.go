@@ -3,6 +3,8 @@
 package sandbox
 
 import (
+	"os"
+	"os/exec"
 	"strings"
 	"testing"
 )
@@ -57,6 +59,41 @@ func TestContainerTmpfsAllowsExec(t *testing.T) {
 	for _, must := range []string{"--network=none", "--read-only", "--cap-drop=ALL"} {
 		if !strings.Contains(joined, must) {
 			t.Errorf("argv lost %s — the isolation this backend rests on", must)
+		}
+	}
+}
+
+// TestPreflightDoesNotRejectAnImageTheChosenRuntimeHas pins the NARROWNESS of
+// the runtime-mismatch check, which is the half that could break working
+// setups.
+//
+// The check exists because a machine with both runtimes silently prefers
+// podman (isolator.go), so an image built with `docker build` is invisible and
+// the failure arrives as a registry PULL denial — which reads like an auth
+// problem and names neither the runtime corral picked nor the store the image
+// is in. That cost four CI round trips.
+//
+// But it must fire ONLY when the image is demonstrably in the OTHER runtime.
+// "Not found locally" on its own is an ordinary, supported setup — naming a
+// public image you have not pulled yet — and failing preflight for it would
+// break every operator who does that. This asserts the common case stays
+// clean: an image the chosen runtime actually has must preflight without
+// complaint.
+func TestPreflightDoesNotRejectAnImageTheChosenRuntimeHas(t *testing.T) {
+	image := os.Getenv("CORRALAI_EXEC_IMAGE")
+	if image == "" {
+		t.Skip("CORRALAI_EXEC_IMAGE not set — needs a real image in a real runtime's store")
+	}
+	for _, rt := range []string{"docker", "podman"} {
+		if _, err := exec.LookPath(rt); err != nil {
+			continue
+		}
+		if !hasImageLocally(rt, image) {
+			continue
+		}
+		c := containerIsolator{runtime: rt, image: image}
+		if err := c.Preflight(); err != nil {
+			t.Errorf("%s has image %q locally, so preflight must pass, got: %v", rt, image, err)
 		}
 	}
 }

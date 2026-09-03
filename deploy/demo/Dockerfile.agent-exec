@@ -7,7 +7,7 @@
 # their tests. bwrap is the run_command isolation boundary (see README "Real
 # execution"); run the container locked down (no host mounts, no creds, dropped
 # caps) as a second layer — defense-in-depth, not the primary jail.
-FROM golang:1.26-bookworm
+FROM golang:1.26.6-bookworm
 WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends bubblewrap nodejs \
     && rm -rf /var/lib/apt/lists/*

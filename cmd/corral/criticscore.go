@@ -150,7 +150,15 @@ func (a mcpCriticScoreAdmin) Adjudicate(ctx context.Context, id, verdict, ration
 // (internal/brain/criticscoretools.go), so a caller without admin rights
 // gets that tool's own rejection surfaced as an error here.
 func runCriticScore(args []string, lister criticScoreLister, admin criticScoreAdmin, stdout, stderr io.Writer) int {
-	if len(args) == 0 {
+	// HELP IS ANSWERED HERE, before the dispatch, and that is load-bearing: the
+	// caller's wantsHelp guard scans EVERY argument, so `criticscore list -h`
+	// takes the help path with nil collaborators — and then this switch called
+	// lister.ListPending on the nil and SEGFAULTED. The crash text was captured
+	// verbatim into the generated CLI reference, which is how it was found.
+	//
+	// A command must be able to say what it does with no store, no arguments
+	// and no collaborators wired.
+	if len(args) == 0 || wantsHelp(args) {
 		fmt.Fprintln(stderr, "usage: corral criticscore list|show <id>|confirm <id> [--why ...]|refute <id> [--why ...]")
 		return 2
 	}

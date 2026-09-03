@@ -83,7 +83,14 @@ func splitSharedDirs(v string) []string {
 }
 
 func runScans(args []string, open func(dsn string) (scansReader, error), stdout, stderr io.Writer) int {
-	if len(args) == 0 {
+	// -h PRINTS THE USAGE, like every sibling. It used to answer "unknown
+	// subcommand \"-h\"", which is wrong twice: an operator asking what a
+	// command does gets an error, and the CLI reference generator — which
+	// derives each subcommand's own leaves from its help — could not see
+	// `scans list` or `scans show` at all. Their flags were therefore absent
+	// from docs/cli, which is the enumeration the executed-surface manifest
+	// reads, so a flag added to `scans list` was invisible to every gate.
+	if len(args) == 0 || wantsHelp(args[:1]) {
 		fmt.Fprintln(stderr, "usage: corral scans list [--db <path>] [--limit n] [--json]")
 		fmt.Fprintln(stderr, "       corral scans show <scan-id> [--db <path>] [--json] [--evidence] [--timing]")
 		fmt.Fprintln(stderr, "       corral scans push --db <dsn> [--scan <id> | --all] [--since YYYY-MM-DD] [--dry-run]")
@@ -98,7 +105,7 @@ func runScans(args []string, open func(dsn string) (scansReader, error), stdout,
 	case "push":
 		return runScansPush(args[1:], openScanStoreForPush, pushBundle, stdout, stderr)
 	default:
-		fmt.Fprintf(stderr, "corral scans: unknown subcommand %q — want list or show\n", args[0])
+		fmt.Fprintf(stderr, "corral scans: unknown subcommand %q — want list, show or push\n", args[0])
 		return 2
 	}
 }

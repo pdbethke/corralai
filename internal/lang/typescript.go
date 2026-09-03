@@ -199,3 +199,27 @@ func (tsPlugin) WorkspaceRunEnv() (env []string, cleanup func()) { return nil, f
 func (tsPlugin) FailFastArgs(testCmd []string) ([]string, bool) {
 	return jsFailFastArgs(testCmd)
 }
+
+// COVERAGE FOR TYPESCRIPT — the JavaScript mechanism, unchanged.
+//
+// TypeScript delegates to jsPlugin because the instrument is the RUNTIME, not
+// the language: NODE_V8_COVERAGE records whatever Node actually executed, and
+// Node 22 strips types natively (process.features.typescript === "strip"), so
+// a .ts file run by `node --test` reports under its OWN .ts path. Verified on
+// a fixture — the reduced report named lib/calc.ts, not a transpiled artifact.
+//
+// THE LIMIT IS WORTH STATING because it is not visible from the report: this
+// holds when the runner executes the .ts source. A toolchain that compiles to
+// dist/ first and runs the JAVASCRIPT is measured accurately too — but the
+// paths it reports are the compiled ones, and no source map is consulted here,
+// so a caller pairing those against .ts sources will find nothing rather than
+// something wrong. Absent, not false: the same tri-state discipline the rest
+// of this parser keeps.
+func (tsPlugin) CoverageCmd(testCmd []string) (cmd []string, ok bool) {
+	return jsPlugin{}.CoverageCmd(testCmd)
+}
+
+// ParseCoverage reads the same reduced report jsPlugin produces.
+func (tsPlugin) ParseCoverage(stdout, modulePath string) (executed map[string]bool, err error) {
+	return jsPlugin{}.ParseCoverage(stdout, modulePath)
+}

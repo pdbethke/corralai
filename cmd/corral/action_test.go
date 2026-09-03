@@ -1773,10 +1773,16 @@ const docGateSelector = "^TestDocs"
 //  2. deploy.yml must still contain the selector. Delete or rename the step
 //     and this test fails, rather than the gate going quiet.
 //
-// What it deliberately does NOT assert is the absence of an `if:` on that
-// step — YAML structure is not worth hand-parsing here, and every failure
-// mode above is already covered. Read the step's own comment before changing
-// its condition.
+// IT ALSO ASSERTS THE STEP HAS NO `if:`. That sentence used to say the
+// opposite — "YAML structure is not worth hand-parsing here, and every failure
+// mode above is already covered" — and a cold review disproved it in one line:
+// adding `if: steps.filter.outputs.code == 'true'` to the doc-gates step
+// reproduces the exact defect this test exists to prevent, with both meta-gates
+// still green. The excuse did not hold either; gopkg.in/yaml.v3 is already a
+// direct dependency of this module.
+//
+// A comment claiming more than the code checks is worse than no comment: a
+// reviewer reads it and stops looking.
 func TestDocsGatesRunOnDocsOnlyChanges(t *testing.T) {
 	const walker = "docsAdvertisingAnActionRef"
 	wantPrefix := strings.TrimPrefix(docGateSelector, "^")
@@ -1826,7 +1832,114 @@ func TestDocsGatesRunOnDocsOnlyChanges(t *testing.T) {
 	if rerr != nil {
 		t.Fatalf("reading %s: %v", wf, rerr)
 	}
+	assertDocGateStepIsUnconditional(t, b)
 	if !strings.Contains(string(b), docGateSelector) {
 		t.Errorf("deploy.yml no longer mentions %q — the documentation gates are only reachable on a docs-only change through that step, so removing or renaming it takes them off those pull requests silently", docGateSelector)
+	}
+}
+
+// assertDocGateStepIsUnconditional parses deploy.yml and requires that every
+// step whose `run` contains the doc-gate selector carries no `if:`.
+//
+// The selector reaching the file is not enough — it can sit behind a condition,
+// or in a comment. This reads the structure, which is the only thing that
+// answers "does this run on a Markdown-only PR".
+func assertDocGateStepIsUnconditional(t *testing.T, raw []byte) {
+	t.Helper()
+	var wf struct {
+		Jobs map[string]struct {
+			Steps []struct {
+				Name string `yaml:"name"`
+				If   string `yaml:"if"`
+				Run  string `yaml:"run"`
+			} `yaml:"steps"`
+		} `yaml:"jobs"`
+	}
+	if err := yaml.Unmarshal(raw, &wf); err != nil {
+		t.Fatalf("parsing deploy.yml: %v", err)
+	}
+	found := 0
+	for jobName, job := range wf.Jobs {
+		for _, st := range job.Steps {
+			if !strings.Contains(st.Run, docGateSelector) {
+				continue
+			}
+			found++
+			if strings.TrimSpace(st.If) != "" {
+				t.Errorf("deploy.yml job %q step %q runs the doc gates behind `if: %s` — those gates police what MARKDOWN claims, and that condition is exactly what excludes a Markdown-only pull request from them",
+					jobName, st.Name, st.If)
+			}
+		}
+	}
+	// A parse that matched no step would pass forever — the same floor every
+	// other walk in this package now carries.
+	if found == 0 {
+		t.Fatalf("no deploy.yml step runs %q — the doc gates are not wired into CI at all", docGateSelector)
+	}
+}
+
+// TestContainerJailIsExercisedInCI asserts that the macOS/Windows path is RUN,
+// not merely compiled.
+//
+// `--jail container` is what README offers operators without bwrap, and
+// CORRALAI_EXEC_IMAGE appeared nowhere in .github/ — so every container
+// integration test skipped on every CI run since they were written. That is how
+// the backend stayed completely broken (docker mounts --tmpfs noexec; a Go
+// toolchain compiles its test binary into /tmp and execs it) until someone ran
+// it by hand.
+//
+// The stakes are in that test's own comment: an earlier permission bug meant
+// "every --jail container audit vacuously PASSED grading because the compliant
+// baseline itself never ran". A vacuous pass is the worst output this project
+// can produce, and the test proving it fixed had never executed here.
+//
+// Structure, not string matching: a step that sets the variable in a comment,
+// or behind a condition that excludes it, would satisfy a grep and change
+// nothing.
+func TestContainerJailIsExercisedInCI(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("..", "..", ".github", "workflows", "deploy.yml"))
+	if err != nil {
+		t.Fatalf("reading deploy.yml: %v", err)
+	}
+	var wf struct {
+		Jobs map[string]struct {
+			Steps []struct {
+				Name string            `yaml:"name"`
+				Env  map[string]string `yaml:"env"`
+				Run  string            `yaml:"run"`
+			} `yaml:"steps"`
+		} `yaml:"jobs"`
+	}
+	if err := yaml.Unmarshal(b, &wf); err != nil {
+		t.Fatalf("parsing deploy.yml: %v", err)
+	}
+
+	// The property is that AT LEAST ONE step both sets the variable and runs
+	// the tests with -count=1 — not that every step mentioning the variable is
+	// that step. Requiring the latter is what this gate did first, and it
+	// immediately rejected a DIAGNOSTIC step added beside the real one: a step
+	// that reproduces the same docker invocation by hand and prints what the
+	// runtime says, which is worth having precisely because the integration
+	// tests report pass/fail without the container's own stderr. A gate that
+	// forbids explaining a failure is guarding the wrong thing.
+	exercised := 0
+	sets := 0
+	for _, job := range wf.Jobs {
+		for _, st := range job.Steps {
+			if st.Env["CORRALAI_EXEC_IMAGE"] == "" {
+				continue
+			}
+			sets++
+			if strings.Contains(st.Run, "go test") && strings.Contains(st.Run, "-count=1") {
+				exercised++
+			}
+		}
+	}
+	if sets > 0 && exercised == 0 {
+		t.Errorf("%d CI step(s) set CORRALAI_EXEC_IMAGE but NONE of them runs `go test … -count=1`: setting the variable is not exercising the backend, and a cached result can stand in for a run that did not happen", sets)
+	}
+	found := exercised
+	if found == 0 {
+		t.Error("no CI step sets CORRALAI_EXEC_IMAGE, so every container-jail integration test SKIPS — the macOS/Windows path README advertises would be unexecuted again, which is exactly how it was last found broken")
 	}
 }

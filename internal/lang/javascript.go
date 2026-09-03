@@ -204,3 +204,80 @@ func jsFailFastArgs(testCmd []string) ([]string, bool) {
 	}
 	return nil, false
 }
+
+// COVERAGE FOR JAVASCRIPT, WITH NOTHING TO INSTALL.
+//
+// NODE_V8_COVERAGE is built into Node, so this needs no c8, no nyc, no istanbul
+// and no edit to the audited project — which matters, because the pre-flight
+// runs against a STRANGER'S repository and must not ask it to add a dev
+// dependency before corral will look at it. It is also runner-agnostic for the
+// same reason the Ruby path is: the variable is inherited by child processes,
+// so `node --test`, jest's workers, vitest, mocha and a bare `npm test` are all
+// instrumented by the same mechanism, with no per-runner plugin.
+//
+// V8 writes raw range data — megabytes for an ordinary project — so the
+// reduction runs IN NODE and only one line per file crosses to stdout. See
+// corralCoverageReport for why that boundary matters.
+const jsCoverageReduce = `const fs=require('fs'),path=require('path');
+const dir=process.argv[2];
+const state=new Map();
+let files=[];
+try{files=fs.readdirSync(dir)}catch(e){}
+for(const f of files){
+  if(!f.endsWith('.json'))continue;
+  let j;
+  try{j=JSON.parse(fs.readFileSync(path.join(dir,f),'utf8'))}catch(e){continue}
+  for(const s of (j.result||[])){
+    if(typeof s.url!=='string'||!s.url.startsWith('file://'))continue;
+    let p;
+    try{p=require('url').fileURLToPath(s.url)}catch(e){continue}
+    // node_modules is a dependency, never a candidate for audit. Dropping it
+    // here keeps the report small; the parser would drop it later anyway only
+    // if it fell outside the repo root, which a vendored dep does not.
+    if(p.includes('/node_modules/'))continue;
+    const fns=s.functions||[];
+    // A NAMED function that ran is the signal. The unnamed top-level wrapper
+    // runs merely because something REQUIRED the file, so counting it would
+    // mark every imported-but-unused module as executed — measured directly
+    // on a fixture: a required, never-called module reports its wrapper hot
+    // and every named function cold. A file with no named functions at all
+    // (a constants module, a side-effecting script) can only be judged by
+    // its wrapper, so it falls back to that.
+    const named=fns.filter(fn=>fn.functionName);
+    const hit=named.length
+      ? named.some(fn=>(fn.ranges||[]).some(r=>r.count>0))
+      : fns.some(fn=>(fn.ranges||[]).some(r=>r.count>0));
+    // Several processes (test workers) report the same file. Executed by ANY
+    // of them is executed; never downgrade a true to a false.
+    state.set(p,(state.get(p)||false)||hit);
+  }
+}
+const out=['` + jsCoverageHeader + `'];
+for(const [p,hit] of state)out.push((hit?'1 ':'0 ')+p);
+process.stdout.write(out.join('\n')+'\n');
+`
+
+// CoverageCmd wraps a JavaScript test command in V8 coverage instrumentation.
+//
+// The accepted argv[0] set is the ways a Node suite is actually launched. It
+// is a allow-list rather than "anything", because CoverageCmd's ok=false is
+// also what certify_repo.go's language disambiguation reads to decide which
+// language an operator's `--` command belongs to: returning true for every
+// command would make JavaScript match a pytest invocation.
+func (jsPlugin) CoverageCmd(testCmd []string) (cmd []string, ok bool) {
+	if len(testCmd) == 0 {
+		return nil, false
+	}
+	if !coverageRunnerNamed(testCmd, []string{"node", "npm", "npx", "yarn", "pnpm", "jest", "vitest", "mocha", "tap", "ava", "jasmine"}) {
+		return nil, false
+	}
+	setup := `cat > "$d/corral_reduce.js" <<'CORRAL_JS_EOF'` + "\n" + jsCoverageReduce + "CORRAL_JS_EOF\n"
+	env := `NODE_V8_COVERAGE="$d/cov"`
+	return coverageRunAndReduce(setup, env, testCmd, `node "$d/corral_reduce.js" "$d/cov"`), true
+}
+
+// ParseCoverage reads the reduced report jsCoverageReduce writes. The grammar
+// and its tri-state are shared with Ruby — see corralCoverageReport.
+func (jsPlugin) ParseCoverage(stdout, modulePath string) (executed map[string]bool, err error) {
+	return corralCoverageReport(stdout, jsCoverageHeader, "javascript", modulePath)
+}

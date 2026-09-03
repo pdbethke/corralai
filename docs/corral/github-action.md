@@ -354,13 +354,29 @@ limitation it exists to route around. Verified on
 `python-jsonschema/jsonschema`, which yields **0** audit candidates and 31
 Python files excluded as `no-paired-test`: the pre-flight runs.
 
-**Go and Python only.** The pre-flight is implemented for exactly two
-languages (`go test -coverpkg=./... -coverprofile=…` and `pytest`/`coverage
-run` + `coverage json`). Ruby, JavaScript, and TypeScript have no
-coverage-pre-flight plugin at all — this project does not document
-capability it hasn't built, so a scan in one of those languages reports
-`could not run: …` and names zero files, rather than guessing or silently
-doing nothing. The same fail-closed report is what you get when the coverage
+**All six languages.** The pre-flight is implemented for Go
+(`go test -coverpkg=./... -coverprofile=…`), Python (`pytest`/`coverage run` +
+`coverage json`), Ruby (the stdlib `Coverage` module via `RUBYOPT`),
+JavaScript/TypeScript (`NODE_V8_COVERAGE`, built into Node) and PHP (pcov or
+Xdebug, injected with `PHP_INI_SCAN_DIR`). None of them asks the audited project
+to install anything — no SimpleCov, no c8 or nyc, no phpunit.xml edit, no change
+to the tree under audit — because an auditor that requires a dependency before
+it will look at your repo is not much of an auditor.
+
+Ruby, Node and PHP are also more precise than Go and Python on one axis. Go and
+Python count statements, so *importing* a module can clear it; the other three
+count METHODS and NAMED FUNCTIONS, so a module that is required and never called
+comes back as `measured and never executed` rather than as covered. Measured on
+the committed fixtures: that file reports `lines_hit 2/3` and
+`methods_called 0/1`, and pcov additionally reports a hit for PHP's implicit
+include marker one line past the end of the file.
+
+**PHP carries one condition, and it is disclosed rather than worked around:** it
+is the only one of the six that needs a runtime *extension*, so a machine
+without pcov or Xdebug cannot be instrumented at all. The run then fails and the
+pre-flight says so, naming zero files.
+
+The same fail-closed report is what you get when the coverage
 tool itself isn't installed on the runner (`coverage`/`pytest-cov` missing
 from the Python environment, for example) — `--preflight` never treats "the
 tool didn't run" as "nothing is covered".

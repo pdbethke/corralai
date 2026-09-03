@@ -1,6 +1,6 @@
 # The read-only observer (corral-observe). Pure Go (no CGO) — it is just a
 # credentialed reverse proxy — so it builds static and ships on distroless.
-FROM golang:1.26 AS build
+FROM golang:1.26.6 AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download

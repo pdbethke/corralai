@@ -198,7 +198,7 @@ Go binary.**
   module proxy and so graded a *different* binary than the one under review.
 
   Docs: `docs/corral/github-action.md`.
-- **Coverage pre-flight (`--preflight`, `certify --repo`, Go and Python) — opt-in,
+- **Coverage pre-flight (`--preflight`, `certify --repo`; all six languages) — opt-in,
   CLI only.** Test-pairing finds *some* untested files by guessing paired test names;
   it finds nothing in a repo where that guess never lands (most JS/TS projects). The
   pre-flight answers a narrower, cheaper question instead: run the suite **once**,
@@ -444,13 +444,27 @@ in August 2026 reversed an assumption this roadmap previously carried.
   The catch, measured across three foreign repos: the jail could not run two of
   their suites at all (one wants a live server on a fixed port, one generates a
   TLS CA at test time), while the workspace substrate — which runs in the real
-  checkout with the real environment — handled all three and is pinned strictly
-  sequential because it mutates one tree with no locking. **So the unlock is making
-  the workspace runner concurrency-safe (per-file locking, or a per-job tree copy
-  re-priced now that it is the blocker), not making the jail more capable.**
-  Chasing foreign environments one repo at a time is the same endless tail as
-  parsing every ecosystem's test-discovery config, and is rejected for the same
-  reason.
+  checkout with the real environment — handled all three. **That unlock SHIPPED in #171:
+  the workspace substrate scores mutants concurrently in private per-job trees,
+  sized by `--swarm` (budget/4, min 1).** Measured on `psf/requests`: 48m56s
+  sequential to 17m34s at six trees, with the two mutant sets identical (39/39) —
+  which is the part that mattered, because a faster run that scores a different
+  set is not the same run. #172 followed with the tracked-symlink copy bug that
+  the first measurement had blamed on concurrency.
+  Chasing foreign environments one repo at a time remains the same endless tail
+  as parsing every ecosystem's test-discovery config, and is still rejected for
+  the same reason.
+
+  THIS PARAGRAPH SPENT DAYS SAYING THE OPPOSITE, and it is worth recording why.
+  It called the sequential runner "the blocker" and the concurrency work "the
+  unlock" after both had merged. Every outside reviewer who read this file then
+  named an already-shipped feature as corral's number-one remaining task — a
+  roadmap is the one document a reader trusts to be current, so a stale line here
+  propagates further than a stale line anywhere else. The gates walk this file,
+  but they check advertised refs and version pins; nothing mechanical notices that
+  a paragraph contradicts a merged commit. That residue is real, so: when a claim
+  here is superseded, edit it in the SAME pull request, because nothing downstream
+  will.
 
 ## Ahead — operate the gate at scale
 

@@ -3,7 +3,7 @@
 # slim debian with libstdc++ + curl (for the healthcheck).
 # Pin the build base to bookworm so the binary's glibc matches the slim runtime
 # below (golang:1.26's default base is newer and links GLIBC_2.38).
-FROM golang:1.26-bookworm AS build
+FROM golang:1.26.6-bookworm AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download

@@ -108,6 +108,59 @@ jobs:
         # suite as the code UNDER AUDIT — the two must provision identically or
         # the audit grades a different suite than CI validates.
         run: bash scripts/ci-provision-test-toolchains.sh
+      # THE CONTAINER JAIL IS EXERCISED HERE, and it never was before.
+      #
+      # `--jail container` is what README offers macOS and Windows operators,
+      # and CORRALAI_EXEC_IMAGE appeared nowhere in this directory — so the
+      # backend's integration tests skipped on every run since they were
+      # written. That is how it stayed COMPLETELY BROKEN until someone executed
+      # it by hand: docker mounts --tmpfs noexec, Go compiles its test binary
+      # into /tmp and execs it, and every `go test` inside the jail died.
+      #
+      # The stakes are in the test's own comment: an earlier permission bug
+      # meant "every --jail container audit vacuously PASSED grading because
+      # the compliant baseline itself never ran." A vacuous pass is the worst
+      # thing this project can produce, and the test proving it fixed had never
+      # executed in CI.
+      #
+      # ubuntu-latest ships BOTH runtimes, so the cost is one small image built
+      # twice. Each step runs `-run Container -count=1` so a failure names the
+      # backend rather than hiding in the full suite, and no cached result can
+      # stand in for a run that did not happen.
+      # EXERCISE BOTH RUNTIMES, because corral picks one and the operator
+      # picks the other. isolator.go prefers podman when both are installed
+      # and falls back to docker; ubuntu-latest has both, and so does any
+      # developer box with Docker Desktop and podman. Building the image with
+      # `docker build` and letting the code choose cost four CI round trips:
+      # podman could not see the image, tried to PULL it from docker.io, and
+      # was denied — which reads like a registry auth problem and says nothing
+      # about which runtime ran or where the image actually is.
+      #
+      # Both matter. podman is what corral DEFAULTS to here; docker is what
+      # README tells macOS and Windows operators to install. Testing only one
+      # leaves the other exactly as unexercised as this whole backend was
+      # before it was wired up at all.
+      - name: Build the container-jail image (both runtimes)
+        if: steps.filter.outputs.code == 'true'
+        run: |
+          cat > /tmp/corral-ci-jail.Dockerfile <<'DOCKERFILE'
+          FROM python:3.12-slim
+          RUN pip install --no-cache-dir pytest
+          DOCKERFILE
+          docker build -t corral-ci-jail -f /tmp/corral-ci-jail.Dockerfile /tmp
+          podman build -t corral-ci-jail -f /tmp/corral-ci-jail.Dockerfile /tmp
+      - name: Exercise the container jail — podman (corral's default here)
+        if: steps.filter.outputs.code == 'true'
+        run: go test ./internal/adequacy/ ./internal/sandbox/ -run Container -count=1 -v
+        env:
+          CORRALAI_EXEC_IMAGE: corral-ci-jail
+          CORRALAI_EXEC_RUNTIME: podman
+      - name: Exercise the container jail — docker (the macOS/Windows path)
+        if: steps.filter.outputs.code == 'true'
+        run: go test ./internal/adequacy/ ./internal/sandbox/ -run Container -count=1 -v
+        env:
+          CORRALAI_EXEC_IMAGE: corral-ci-jail
+          CORRALAI_EXEC_RUNTIME: docker
       - name: Test, and census the SKIPs
         if: steps.filter.outputs.code == 'true'
         run: |

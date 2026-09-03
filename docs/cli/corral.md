@@ -237,7 +237,36 @@ corral control: usage: corral control seed --spec-db <path> --owner <principal> 
 note: the brain must be stopped (it holds the control store open); or author via the stage_control / promote_control MCP tools while the brain runs
 ```
 
+## `corral control seed` flags
+
+```
+Usage of control seed:
+  -code-path string
+    	flat target filename in the jail workspace
+  -goal string
+    	goal id
+  -kill-rate float
+    	recorded adequacy kill rate (default 1)
+  -owner string
+    	control-owner principal
+  -spec-db string
+    	controlspec DuckDB path
+  -target string
+    	repo-relative target file path
+  -test-file string
+    	path to the vetted test source file
+  -test-path string
+    	flat test filename in the jail workspace
+corral control: flag: help requested
+```
+
 ## `corral criticscore` flags
+
+```
+usage: corral criticscore list|show <id>|confirm <id> [--why ...]|refute <id> [--why ...]
+```
+
+## `corral criticscore list` flags
 
 ```
 usage: corral criticscore list|show <id>|confirm <id> [--why ...]|refute <id> [--why ...]
@@ -326,6 +355,32 @@ usage: corral models rank [--db <dsn>] [--seat <role>] [--lang <name>] [--min-ru
   ranking that quietly staffed a seat would put one back.
 ```
 
+## `corral models rank` flags
+
+```
+usage: corral models rank [--db <dsn>] [--seat <role>] [--lang <name>] [--min-runs N] [--json]
+
+  Rank the models that have sat in each seat by what corral's OWN recorded
+  evidence says about them — a different metric per seat, because the seats do
+  different jobs.
+
+  This is DISCLOSURE, NOT SELECTION. It prints a table. It writes no config,
+  changes no default, and feeds no router: corral has no default models, and a
+  ranking that quietly staffed a seat would put one back.
+
+flags:
+  -db md:<db>
+    	a pushed warehouse to read instead of the local bugcatch ledger: a DuckDB file path or an md:<db> MotherDuck DSN. Unreachable is a refusal, never a quiet fall back to a different body of evidence
+  -json
+    	emit the report as JSON
+  -lang string
+    	rank only this language — needs evidence that records one (the local bugcatch ledger does not; a pushed warehouse does)
+  -min-runs int
+    	the evidence floor (default 5): a model with fewer observations in a seat is still PRINTED, with its real numbers, but marked insufficient and never preferred (default 5)
+  -seat string
+    	rank only this seat: goal-deriver, mutant-generator, test-writer or test-critic
+```
+
 ## `corral scans push` flags
 
 ```
@@ -357,6 +412,24 @@ unconditionally, even for a scan whose original run pushed source itself.
     	push only this one scan id (see corral scans list)
   -since string
     	with --all, push only scans recorded on or after this date (YYYY-MM-DD)
+```
+
+## `corral scans list` flags
+
+```
+Usage of scans list:
+  -db string
+    	path to the scan ledger (default: $CORRALAI_SCANS_DB, else ~/.claude/corralai_scans.duckdb)
+  -json
+    	emit the raw rows as JSON
+  -limit int
+    	how many scans to show, newest first (default 20)
+```
+
+## `corral scans show` flags
+
+```
+corral scans show: "-h" is not a scan id (see `corral scans list`)
 ```
 
 ## `corral scorecard` flags

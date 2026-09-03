@@ -29,7 +29,72 @@ func (c containerIsolator) Preflight() error {
 	if _, err := exec.LookPath(c.runtime); err != nil {
 		return fmt.Errorf("container backend: runtime %q not found on PATH: %w", c.runtime, err)
 	}
+	if other, ok := c.imageIsOnlyInTheOtherRuntime(); ok {
+		return fmt.Errorf("container backend: image %q is not in %s's local store, but it IS in %s's — "+
+			"corral chose %s (podman is preferred over docker; set CORRALAI_EXEC_RUNTIME to override). "+
+			"Either build the image with %s, or run with CORRALAI_EXEC_RUNTIME=%s",
+			c.image, c.runtime, other, c.runtime, c.runtime, other)
+	}
 	return nil
+}
+
+// imageIsOnlyInTheOtherRuntime reports the OTHER installed runtime when the
+// image is absent from the chosen runtime's store and present in that one.
+//
+// THIS EXACT CONFUSION COST FOUR CI ROUND TRIPS. A machine with both runtimes
+// installed — ubuntu-latest is one, and so is any developer box with Docker
+// Desktop and podman — silently prefers podman. An image built with
+// `docker build` is then invisible, and the failure surfaces as podman trying
+// to PULL it from docker.io and being denied, which reads like a registry
+// auth problem and says nothing about the runtime corral picked or the store
+// the image is actually sitting in.
+//
+// It is deliberately narrow: it fires ONLY when the image is demonstrably
+// present in the other runtime. A plain "not found locally" must NOT fail
+// preflight — pulling an image from a registry is an ordinary, supported
+// setup, and refusing it would break every operator who names a public image
+// they have not pulled yet.
+func (c containerIsolator) imageIsOnlyInTheOtherRuntime() (string, bool) {
+	if c.image == "" {
+		return "", false
+	}
+	other := "docker"
+	if c.runtime == "docker" {
+		other = "podman"
+	}
+	if _, err := exec.LookPath(other); err != nil {
+		return "", false
+	}
+	if hasImageLocally(c.runtime, c.image) {
+		return "", false
+	}
+	if !hasImageLocally(other, c.image) {
+		return "", false
+	}
+	return other, true
+}
+
+// hasImageLocally reports whether runtime's LOCAL store holds image. Any error
+// (runtime missing, daemon down, unexpected output) answers false, so this can
+// only ever add information — never turn a working setup into a failure.
+func hasImageLocally(runtime, image string) bool {
+	var cmd *exec.Cmd
+	switch runtime {
+	case "podman":
+		// #nosec G204 -- runtime is podman/docker (this switch, or the operator's
+		// own CORRALAI_EXEC_RUNTIME) and image is the operator's own
+		// CORRALAI_EXEC_IMAGE: local configuration, not remote input. Both are
+		// separate argv elements with no shell, so neither can inject a command;
+		// this is the same trust boundary Wrap already runs the audit itself
+		// under, and it only ever READS the local image store.
+		cmd = exec.Command(runtime, "image", "exists", image)
+	default:
+		// #nosec G204 -- see the podman branch above: operator-supplied runtime
+		// and image, passed as argv, read-only query.
+		cmd = exec.Command(runtime, "image", "inspect", image)
+	}
+	cmd.Stdout, cmd.Stderr = nil, nil
+	return cmd.Run() == nil
 }
 
 // Wrap builds the argv for running command inside the container. The container

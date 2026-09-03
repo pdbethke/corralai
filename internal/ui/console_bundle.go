@@ -4,73 +4,42 @@ package ui
 
 import (
 	"bytes"
-	"crypto/sha256"
 	_ "embed"
-	"encoding/hex"
 	"encoding/json"
 	"io/fs"
 	"mime"
 	"net/http"
 	"path"
-	"sort"
 	"strings"
+
+	"github.com/pdbethke/corralai/internal/consolebundle"
 )
 
-// BundleManifest is the versioned, signed description of the console SPA
-// bundle the daemon serves for thin clients (Task 1 of the daemon/client
-// architecture refactor — see docs/superpowers/specs/2026-07-10-daemon-
-// client-architecture-design.md). It is the trust anchor a thin client
-// checks (via console.manifest.sig, verified against a pinned/configured
-// release public key) before rendering the served HTML/JS as this brain's
-// console.
-type BundleManifest struct {
-	// Version is the daemon's own build version (cmd/corral's `version`
-	// var, normally set via -ldflags "-X main.version=..."). It is part of
-	// the signed bytes, so a signature only verifies against the exact
-	// release it was produced for.
-	Version string `json:"version"`
-	// Entry is always "index.html" — the SPA's boot document.
-	Entry string `json:"entry"`
-	// Assets is every file in the bundle, sorted by Path for a stable,
-	// deterministic manifest regardless of the embed FS's own walk order.
-	Assets []BundleAsset `json:"assets"`
-}
+// BundleManifest and BundleAsset are ALIASES for the leaf package's types,
+// not copies: internal/console (the clients' shared reverse proxy) reads the
+// same manifest this package serves, and it must be able to do so without
+// importing internal/ui — which would relink DuckDB, SQLite and twelve
+// tree-sitter grammars into every thin client. See internal/consolebundle's
+// package doc for what that edge cost. Aliases (not definitions) keep the
+// JSON encoding byte-identical, so the committed signature stays valid.
+type BundleManifest = consolebundle.BundleManifest
 
-// BundleAsset is one file within the console bundle: its path relative to
-// the web/ root and a hex sha256 of its content, so a client can verify
-// each asset it downloads against the signed manifest before using it.
-type BundleAsset struct {
-	Path   string `json:"path"`
-	SHA256 string `json:"sha256"`
-}
+// BundleAsset is one file within the console bundle. See BundleManifest.
+type BundleAsset = consolebundle.BundleAsset
 
-// buildManifest walks sub (normally fs.Sub(webFS, "web")) and returns the
-// manifest for version: one BundleAsset per file, hex sha256, sorted by
-// path. Computed once per Handler construction and cached — never
-// recomputed per-request.
+// buildManifest is retained as a thin call-through so this package's own
+// call sites and tests read unchanged.
 func buildManifest(sub fs.FS, version string) (BundleManifest, error) {
-	var assets []BundleAsset
-	err := fs.WalkDir(sub, ".", func(p string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			return nil
-		}
-		b, err := fs.ReadFile(sub, p)
-		if err != nil {
-			return err
-		}
-		sum := sha256.Sum256(b)
-		assets = append(assets, BundleAsset{Path: p, SHA256: hex.EncodeToString(sum[:])})
-		return nil
-	})
-	if err != nil {
-		return BundleManifest{}, err
-	}
-	sort.Slice(assets, func(i, j int) bool { return assets[i].Path < assets[j].Path })
-	return BundleManifest{Version: version, Entry: "index.html", Assets: assets}, nil
+	return consolebundle.BuildManifest(sub, version)
 }
+
+// devConsoleSignedVersion is the version the COMMITTED dev signature was
+// produced for. See consolebundle.DevSignedVersion.
+const devConsoleSignedVersion = consolebundle.DevSignedVersion
+
+// ConsoleReleasePubKeyHex is the DEV Ed25519 public key verifying the
+// committed console.manifest.sig. See consolebundle.ReleasePubKeyHex.
+const ConsoleReleasePubKeyHex = consolebundle.ReleasePubKeyHex
 
 // CanonicalManifestBytes returns the exact JSON bytes buildManifest's result
 // serializes to for version — the SAME bytes GET /console/manifest.json
@@ -96,24 +65,6 @@ func CanonicalManifestBytes(version string) ([]byte, error) {
 	}
 	return json.Marshal(m)
 }
-
-// devConsoleSignedVersion is the version string the COMMITTED dev signature
-// (console.manifest.sig, below) was produced for. It must match whatever
-// Deps.Version the daemon serves for the dev round-trip test/verification
-// to pass — "dev" mirrors cmd/corral/main.go's unbuilt-default `var version
-// = "dev"`, so an ordinary `go run ./cmd/corral` (no -ldflags) verifies
-// out of the box.
-const devConsoleSignedVersion = "dev"
-
-// ConsoleReleasePubKeyHex is the DEV Ed25519 public key (hex-encoded) that
-// verifies the committed console.manifest.sig below. This is a DEV/TEST
-// key only — its seed lives in scripts/dev-console-signing-key.hex, openly
-// committed because it signs nothing that matters beyond local dev/CI. A
-// REAL release re-signs with $CORRALAI_RELEASE_KEY (scripts/sign-console-
-// bundle.sh) and ships its OWN public key to clients out-of-band (Task 2);
-// this constant is a convenient, overridable dev default, never a
-// production trust anchor.
-const ConsoleReleasePubKeyHex = "584415516982331723bd400873056aad4b367a30b9cb087adabfe4de0f16e938"
 
 // consoleManifestSigRaw is the detached Ed25519 signature (hex text) over
 // CanonicalManifestBytes(devConsoleSignedVersion), produced by

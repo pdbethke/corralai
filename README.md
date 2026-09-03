@@ -488,7 +488,7 @@ opt-in `min-kill-rate` input (`--min-kill-rate` on the CLI) fails the run
 when any *individual* audited file scores below the threshold you set. See
 **[docs/corral/github-action.md](docs/corral/github-action.md)**.
 
-**Coverage pre-flight (`--preflight`, CLI only, Go and Python).** `certify
+**Coverage pre-flight (`--preflight`, CLI only — all six languages).** `certify
 --repo --preflight` runs the project's test suite **one extra time**, with
 coverage instrumentation, and reports which source files it never touches at
 all — a whole-repo inventory for the cost of one suite run, instead of the
@@ -499,20 +499,49 @@ what it actually knows into three buckets — files the suite **executed**,
 files it **measured and never executed** (the real finding, printed by
 name), and files it **never measured at all** (printed only as a count,
 never named — naming one would be an accusation about a file the run never
-looked at). On **both** Go and Python, "executed" can mean "imported" rather
-than "tested": Go runs `init()`/var-initializer code at import time, and in
-Python every module-scope `def` and `class` is a counted statement, so
-importing a module clears it outright — Python's exposure here is the wider
-of the two (see [docs/corral/github-action.md](docs/corral/github-action.md)
-for both measurements). Implemented for **Go and Python only** — Ruby, JS, and TS have
-no coverage-pre-flight plugin yet, so a scan in one of those languages reports
-that it could not run and names nothing, rather than guessing. A scan whose
-candidates span more than one language usually declines the same way — one
-instrumented run can't cover two — **unless** an explicit `-- <test-command>`
-unambiguously names exactly one of them (e.g. a Python+TypeScript repo with
-`-- pytest -q`: TypeScript has no coverage plugin at all, so Python is the
-only candidate, not merely the likeliest one — that repo is instrumented, its
-TypeScript files simply fall into "never measured"). Two languages that could
+looked at). **"Executed" does not mean the same thing in every language, and the difference
+is worth knowing before you act on a report.** On Go and Python it can mean
+*imported* rather than *tested*: Go runs `init()`/var-initializer code at import
+time, and in Python every module-scope `def` and `class` is a counted statement,
+so importing a module clears it outright — Python's exposure here is the wider
+of the two (see [docs/corral/github-action.md](docs/corral/github-action.md) for
+both measurements). Ruby, JavaScript, TypeScript and PHP do **not** have that
+exposure, because their reporters count *methods and named functions*, not
+lines: Ruby uses the stdlib `Coverage` module's method coverage, the Node path counts named
+functions in V8's own range data, and PHP reflects over method bodies. Measured on a fixture, a
+module that is required and never called reports `lines_hit 2/3` — indis-
+tinguishable from a file under test — and `methods_called 0/1`, which is the
+truth; those three languages report it as **measured and never executed**, which
+is the finding you want.
+
+None of these reporters asks the audited project to install anything. Ruby's `Coverage`
+is standard library, reached through `RUBYOPT` (the only window in which it can
+start before application files load), and Node's is `NODE_V8_COVERAGE`, which is
+built in — so no SimpleCov in the Gemfile, no c8 or nyc in `package.json`, and
+no edit to the tree under audit. Because both are environment variables and
+environment is inherited, one mechanism covers every way those suites are
+actually launched: `rspec`, `rake`, a bare `ruby`, `node --test`, jest's
+workers, vitest, mocha, `npm test`.
+
+**PHP works too, with one disclosed condition.** It is the only one of the six
+that cannot be instrumented with what a machine already has: PHP reports no
+coverage without a runtime extension (pcov or Xdebug). It still asks nothing of
+the audited *project* — the extension is injected through `PHP_INI_SCAN_DIR`,
+which is why `vendor/bin/phpunit` and `composer test` are instrumented as
+readily as a bare `php`, neither of which would accept a `-d` flag. Without a
+driver the run fails and the pre-flight reports that it could not run, naming
+nothing — never "nothing is covered". PHP needs the method-body treatment most
+visibly of the four: pcov reports an executed line for a file's implicit include
+marker, one past its last line, so any file that was merely required looks
+covered under a naive rule. Reflection supplies the start and end line of every
+user-defined method, so the question asked is whether a *body* ran.
+
+A scan whose candidates span more than one language usually declines the same
+way — one instrumented run can't cover two — **unless** an explicit `--
+<test-command>` unambiguously names exactly one of them. Each reporter accepts
+only its own runners for exactly this purpose (`npm test` is Node's, `pytest -q`
+is Python's), seeing through a `sh -c` wrapper to find the runner inside.
+Two languages that could
 both plausibly own the given command (e.g. Go, whose coverage command accepts
 any test invocation by design) still decline as ambiguous. Same fail-closed
 rule when the coverage tool itself is missing from the runner. Not yet wired
@@ -951,6 +980,7 @@ Corralai is a **headless server with thin client apps**, like a backup system:
 | **`corral-desktop`** | the **desktop client** — native-window (`--app` mode) launcher onto a local console | no | binary / `go install` |
 | **`corral-harness`** | the **harness-agent launcher** — loops any headless coding-agent CLI as an audit-role worker on ITS auth | no | binary / `go install` |
 | **`corral-top`** | the **terminal dashboard** — a read-only TUI over a live brain (tasks, agents, findings), for a glanceable window without a browser | no | binary / `go install` |
+| **`corral-recordings-import`** | the **recordings importer** — a maintainer tool that loads `certify --local --record` tapes into the recordings store the gallery reads; owns a database, so it carries the brain's CGO deps | yes | binary / `go install` |
 
 The observer and admin consoles share one reverse-proxy core (`internal/console`),
 parameterized read-only vs read-write.
@@ -981,9 +1011,12 @@ task rather than a limitation.
 **The jail is a Linux capability — and that's the point.** `bwrap` (bubblewrap) is
 Linux namespaces; on a bare-metal Linux host it runs **unprivileged** (one package,
 no root, no daemon). macOS and Windows have no equivalent, so exec runs inside a Linux
-environment — Docker Desktop or WSL2, or the `--jail container` fallback. The brain's
-two CGO deps (DuckDB memory, tree-sitter code index) make it the one binary that cares
-about its platform; deploy it once on a Linux host (systemd + your tunnel/proxy).
+environment — Docker Desktop or WSL2, or the `--jail container` fallback. The two CGO deps (DuckDB memory, tree-sitter code index) belong to the binaries that own a
+database — the brain and the maintainer-only recordings importer. Every CLIENT is pure Go and
+statically linked: `corral-observe` is 9.5 MB and ships on `distroless/static`. Deploy the brain
+once on a Linux host (systemd + your tunnel/proxy); the clients cross-compile anywhere with no
+C toolchain, and `TestDocsFleetTableCGOColumnIsTrue` builds every row of the table above to keep
+that column honest.
 
 ## Why Go — and why your stack doesn't have to be
 

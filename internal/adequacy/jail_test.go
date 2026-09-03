@@ -115,14 +115,21 @@ func TestJailAdapterContainerBackendCanReadOwnWorkspace(t *testing.T) {
 		t.Skipf("container backend unavailable: %v", err)
 	}
 	j := NewJail(backend, 60*time.Second)
-	pass, err := j.RunTest(context.Background(), map[string]string{
+	vj, ok := j.(VerboseJail)
+	if !ok {
+		t.Fatal("the real jail must satisfy VerboseJail — without the run's own output a failure here costs a CI round trip per hypothesis")
+	}
+	// RunTestVerbose, not RunTest: this backend runs where nobody can log in,
+	// and a failure that reports only "it did not pass" costs a CI round trip
+	// per hypothesis. It cost three. The runtime's own stderr is the evidence.
+	pass, out, err := vj.RunTestVerbose(context.Background(), map[string]string{
 		"sub/marker.txt": "hello",
 	}, []string{"cat", "sub/marker.txt"})
 	if err != nil {
-		t.Fatalf("unexpected error running the container backend: %v", err)
+		t.Fatalf("unexpected error running the container backend: %v\noutput:\n%s", err, out)
 	}
 	if !pass {
-		t.Fatalf("container could not read its own bind-mounted workspace under --cap-drop=ALL — this is exactly the cap-drop/uid-mismatch bug this test guards against")
+		t.Fatalf("container could not read its own bind-mounted workspace under --cap-drop=ALL — this is exactly the cap-drop/uid-mismatch bug this test guards against.\nCONTAINER OUTPUT:\n%s", out)
 	}
 }
 
@@ -150,18 +157,22 @@ func TestJailAdapterContainerBackendCanCompilePythonInWorkspace(t *testing.T) {
 	code := "def take(n, it):\n    return list(it)[:n]\n"
 	test := "import recipes\n\ndef test_take():\n    assert recipes.take(2, range(9)) == [0, 1]\n"
 	j := NewJail(backend, 60*time.Second)
+	vj, ok := j.(VerboseJail)
+	if !ok {
+		t.Fatal("the real jail must satisfy VerboseJail — see the sibling container test")
+	}
 	// The workspace dir the real jail creates is world-readable-but-not-writable
 	// to the container's uid — exactly the condition that made py_compile EACCES.
 	// python's CompileCheck sequence is always exactly one command (py_compile
 	// takes multiple files in a single invocation) — see lang.Plugin.CompileCheck.
-	pass, err := j.RunTest(context.Background(),
+	pass, out, err := vj.RunTestVerbose(context.Background(),
 		map[string]string{"recipes.py": code, "test_recipes.py": test},
 		p.CompileCheck("recipes.py", "test_recipes.py")[0])
 	if err != nil {
-		t.Fatalf("unexpected error running the python compile check in the container: %v", err)
+		t.Fatalf("unexpected error running the python compile check in the container: %v\noutput:\n%s", err, out)
 	}
 	if !pass {
-		t.Fatalf("py_compile falsely rejected a valid test in the container jail — the __pycache__ write EACCES bug this test guards against")
+		t.Fatalf("py_compile falsely rejected a valid test in the container jail — the __pycache__ write EACCES bug this test guards against.\nCONTAINER OUTPUT:\n%s", out)
 	}
 }
 

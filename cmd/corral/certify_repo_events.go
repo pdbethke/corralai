@@ -4,6 +4,7 @@ package main
 
 import (
 	"encoding/json"
+	"strings"
 	"sync"
 	"time"
 
@@ -192,34 +193,104 @@ var sourceBearingDetailKeys = map[string]bool{
 // on the local-run path, to a second sink that renders the same beat), so it
 // is never mutated in place.
 func redactSourceDetail(detail map[string]any) map[string]any {
-	needs := false
-	for k := range detail {
-		if sourceBearingDetailKeys[k] {
-			needs = true
-			break
-		}
-	}
-	if !needs {
-		return detail
-	}
-	out := make(map[string]any, len(detail))
-	for k, v := range detail {
-		if !sourceBearingDetailKeys[k] {
-			out[k] = v
-			continue
-		}
-		switch b := v.(type) {
-		case string:
-			out[k+"_bytes"] = len(b)
-		case []byte:
-			out[k+"_bytes"] = len(b)
-		default:
-			// Not a shape whose length means anything. Say that it was
-			// withheld rather than guess a size — or, worse, keep it.
-			out[k+"_redacted"] = true
-		}
-	}
+	out, _ := redactSourceValue(detail).(map[string]any)
 	return out
+}
+
+// sourceBearingKey matches a key against sourceBearingDetailKeys the way a
+// human reads it: case-folded, with `-` and ` ` as `_`. "Code", "devTestCode"
+// is not caught (camel case is not a spelling this codebase's emits use),
+// but "STDOUT", "dev-test-code" and "Authored_Test" are — a guard keyed on
+// exact bytes was one typo away from shipping source under a name that
+// reads, to a person, as the very name it was guarding.
+func sourceBearingKey(k string) bool {
+	if sourceBearingDetailKeys[k] {
+		return true
+	}
+	n := strings.NewReplacer("-", "_", " ", "_").Replace(strings.ToLower(k))
+	return sourceBearingDetailKeys[n]
+}
+
+// redactSourceValue walks maps AND the slices inside them: a beat that
+// nests its payload (`{"shards":[{"code":…}]}`) used to pass the top-level
+// guard untouched, because the guard looked at the top level only.
+// Copy-on-write at every level; a subtree with nothing to redact is
+// returned as-is.
+func redactSourceValue(v any) any {
+	switch t := v.(type) {
+	case map[string]any:
+		needs := false
+		for k, inner := range t {
+			if sourceBearingKey(k) || needsRedaction(inner) {
+				needs = true
+				break
+			}
+		}
+		if !needs {
+			return t
+		}
+		out := make(map[string]any, len(t))
+		for k, inner := range t {
+			if !sourceBearingKey(k) {
+				out[k] = redactSourceValue(inner)
+				continue
+			}
+			switch b := inner.(type) {
+			case string:
+				out[k+"_bytes"] = len(b)
+			case []byte:
+				out[k+"_bytes"] = len(b)
+			default:
+				// Not a shape whose length means anything. Say that it was
+				// withheld rather than guess a size — or, worse, keep it.
+				out[k+"_redacted"] = true
+			}
+		}
+		return out
+	case []any:
+		if !needsRedaction(t) {
+			return t
+		}
+		out := make([]any, len(t))
+		for i, inner := range t {
+			out[i] = redactSourceValue(inner)
+		}
+		return out
+	case []map[string]any:
+		if !needsRedaction(t) {
+			return t
+		}
+		out := make([]map[string]any, len(t))
+		for i, inner := range t {
+			out[i], _ = redactSourceValue(inner).(map[string]any)
+		}
+		return out
+	}
+	return v
+}
+
+func needsRedaction(v any) bool {
+	switch t := v.(type) {
+	case map[string]any:
+		for k, inner := range t {
+			if sourceBearingKey(k) || needsRedaction(inner) {
+				return true
+			}
+		}
+	case []any:
+		for _, inner := range t {
+			if needsRedaction(inner) {
+				return true
+			}
+		}
+	case []map[string]any:
+		for _, inner := range t {
+			if needsRedaction(inner) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // buildScanEvent turns one driver beat into a scanstore.Event: detail

@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -184,7 +185,7 @@ func TestVerifyAttestRowsHashMatch(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit %d, want 0; stdout=%s stderr=%s", code, out, errb)
 	}
-	if !strings.Contains(out, "✓ warehouse rows: the rows read back from --db hash to exactly the value the statement claims") {
+	if !strings.Contains(out, "✓ warehouse rows: the rows read back from --db (push ") || !strings.Contains(out, ") hash to exactly the value the statement claims") {
 		t.Errorf("stdout = %q, want a passing warehouse-rows line", out)
 	}
 }
@@ -212,8 +213,104 @@ func TestVerifyAttestRowsHashMismatch(t *testing.T) {
 	if code != 1 {
 		t.Fatalf("exit %d, want 1; stdout=%s stderr=%s", code, out, errb)
 	}
-	if !strings.Contains(out, "✗ warehouse rows: the rows read back from --db hash to a different value than the statement claims — note: a VACUUMed or re-pushed warehouse changes row order and can trip this without tampering; re-verify against a warehouse that has only been pushed to once") {
-		t.Errorf("stdout = %q, want a failing warehouse-rows line carrying the false-alarm caveat", out)
+	if !strings.Contains(out, "✗ warehouse rows: the rows read back from --db hash to a different value than the statement claims (1 push(es) of this scan tried: ") ||
+		!strings.Contains(out, "a VACUUMed warehouse can change row order and trip this without tampering") {
+		t.Errorf("stdout = %q, want a failing warehouse-rows line naming the pushes tried and carrying the VACUUM caveat", out)
+	}
+}
+
+// TestVerifyAttestFindsItsOwnPushAmongUnrecordedRuns: an Action run has no
+// --record, so it pushes under scan_id 0 — the SAME key as every other
+// Action run of the repo. Reading by (repo, scan_id) unioned all of them
+// into one bundle no statement ever hashed, so the second run's statement
+// (and the first's, once the second had pushed) failed check 2 against an
+// untouched warehouse. Each push has its own scan_uid and stamps the
+// statement's hash on its rows; verify locates the push by that hash.
+func TestVerifyAttestFindsItsOwnPushAmongUnrecordedRuns(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "warehouse.duckdb")
+	var stmts []string
+	for i, commit := range []string{"c0ffee01", "c0ffee02"} {
+		bundle := auditpush.Bundle{
+			Scan: auditpush.ScanRow{Repo: "o/r", ScanID: 0, Commit: commit, Audited: 1, Candidates: 1, PushedBy: auditpush.PushedByCertify,
+				RunURL: fmt.Sprintf("https://github.com/o/r/actions/runs/%d", 100+i)},
+			Files: []auditpush.Row{
+				{Repo: "o/r", ScanID: 0, Path: "pkg/a.go", Commit: commit,
+					KillRate: ptrF(0.5 + float64(i)/10), Survivors: 2 + i, Disposition: "audited", Evidence: "proven"},
+			},
+		}
+		hash, err := warehouseRowsSHA256(bundle)
+		if err != nil {
+			t.Fatalf("warehouseRowsSHA256: %v", err)
+		}
+		stmtPath := signedFixtureStatement(t, "o/r", 0, hash)
+		raw, _ := os.ReadFile(stmtPath)
+		sum := sha256.Sum256(raw)
+		// Exactly what certify --repo --attest --push does: the push carries
+		// the plain statement's hash on every row (Link.Require, since a
+		// statement was written).
+		bundle.Link = auditpush.Link{StatementSHA256: hex.EncodeToString(sum[:]), Require: true}
+		if _, err := auditpush.PushBundle(target, bundle); err != nil {
+			t.Fatalf("PushBundle %d: %v", i, err)
+		}
+		stmts = append(stmts, stmtPath)
+	}
+	for i, stmtPath := range stmts {
+		code, out, errb := runVerify(t, []string{"--attest", stmtPath, "--db", target})
+		if code != 0 || !strings.Contains(out, "✓ warehouse rows: the rows read back from --db (push ") {
+			t.Errorf("statement %d: exit %d; stdout=%s stderr=%s — want its own push found among the scan_id-0 runs", i, code, out, errb)
+		}
+	}
+}
+
+// TestVerifyAttestSaysBackfillWhenOnlyAScansPushIsThere: `corral scans
+// push` reconstructs a scan from the local ledger — passed NULL, no source,
+// no thresholds — and stamps the ORIGINAL statement's hash on the rows, so
+// the statement's warehouseRowsSha256 can never match them. verify used to
+// report that as ✗ with advice to "re-verify against a warehouse pushed
+// once". It is not a mismatch; it is a different push, and the row says so.
+func TestVerifyAttestSaysBackfillWhenOnlyAScansPushIsThere(t *testing.T) {
+	run := auditpush.Bundle{
+		Scan: auditpush.ScanRow{Repo: "o/r", ScanID: 7, Commit: "deadbeef", Audited: 1, Candidates: 1, Passed: boolPtr(true), PushedBy: auditpush.PushedByCertify},
+		Files: []auditpush.Row{
+			{Repo: "o/r", ScanID: 7, Path: "pkg/a.go", Commit: "deadbeef",
+				KillRate: ptrF(0.5), Survivors: 2, Disposition: "audited", Evidence: "proven", Passed: boolPtr(true)},
+		},
+	}
+	hash, err := warehouseRowsSHA256(run)
+	if err != nil {
+		t.Fatalf("warehouseRowsSHA256: %v", err)
+	}
+	stmtPath := signedFixtureStatement(t, "o/r", 7, hash)
+	raw, _ := os.ReadFile(stmtPath)
+	sum := sha256.Sum256(raw)
+
+	backfill := run
+	backfill.Scan.Passed = nil
+	backfill.Scan.PushedBy = auditpush.PushedByBackfill
+	backfill.Files = []auditpush.Row{run.Files[0]}
+	backfill.Files[0].Passed = nil
+	backfill.Link = auditpush.Link{ScanID: 7, StatementSHA256: hex.EncodeToString(sum[:])}
+	target := filepath.Join(t.TempDir(), "warehouse.duckdb")
+	if _, err := auditpush.PushBundle(target, backfill); err != nil {
+		t.Fatalf("PushBundle: %v", err)
+	}
+
+	code, out, errb := runVerify(t, []string{"--attest", stmtPath, "--db", target})
+	if code == 1 || strings.Contains(out, "✗ warehouse rows") {
+		t.Fatalf("exit %d; stdout=%s stderr=%s — a backfill is not a mismatch", code, out, errb)
+	}
+	if !strings.Contains(out, "· warehouse rows: not checked (the only rows in --db for this statement were written by `corral scans push` (1 backfill(s)), not by the run that signed it") {
+		t.Errorf("stdout = %q, want the not-checked line to name the backfill", out)
+	}
+
+	// And when the run's own push is ALSO there, it is the one checked.
+	run.Link = backfill.Link
+	if _, err := auditpush.PushBundle(target, run); err != nil {
+		t.Fatalf("PushBundle run: %v", err)
+	}
+	code, out, errb = runVerify(t, []string{"--attest", stmtPath, "--db", target})
+	if code != 0 || !strings.Contains(out, "✓ warehouse rows:") {
+		t.Errorf("exit %d; stdout=%s stderr=%s — want the run's own push found beside the backfill", code, out, errb)
 	}
 }
 

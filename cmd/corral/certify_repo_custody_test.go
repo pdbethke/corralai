@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -206,5 +207,42 @@ func TestWarehouseRowsSHA256UsesTheOneCustodyRule(t *testing.T) {
 	}
 	if pushedSHA == raw {
 		t.Error("--push-source hashed the same as withheld — the source it actually ships is not covered by the statement")
+	}
+}
+
+// TestRedactSourceDetailReachesNestedAndOddlySpelledKeys: the guard used
+// to look at the top level of the detail map only, by exact key. A beat
+// that nested its payload (`shards: [{code: …}]`) or spelled a key the way
+// a person reads it ("Code", "dev-test-code", "STDOUT") shipped source
+// under a name that, to a reader of the warehouse, IS the guarded name.
+// No emit does this today; the point is that the next one cannot.
+func TestRedactSourceDetailReachesNestedAndOddlySpelledKeys(t *testing.T) {
+	const src = "SENTINEL-NESTED-SOURCE-77aa"
+	in := map[string]any{
+		"path":   "pkg/a.go",
+		"Code":   src,
+		"STDOUT": src,
+		"shards": []any{
+			map[string]any{"id": 1, "dev-test-code": src},
+			map[string]any{"id": 2, "nested": map[string]any{"authored_test": src}},
+		},
+		"regions": []map[string]any{{"mutant_code": src}},
+	}
+	out := redactSourceDetail(in)
+	js, err := json.Marshal(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(js), src) {
+		t.Fatalf("source escaped the redaction: %s", js)
+	}
+	for _, want := range []string{`"Code_bytes":27`, `"STDOUT_bytes":27`, `"dev-test-code_bytes":27`, `"authored_test_bytes":27`, `"mutant_code_bytes":27`, `"path":"pkg/a.go"`, `"id":1`} {
+		if !strings.Contains(string(js), want) {
+			t.Errorf("redacted detail lacks %s: %s", want, js)
+		}
+	}
+	// Copy-on-write, at every level: the caller's map is untouched.
+	if in["Code"] != src || in["shards"].([]any)[0].(map[string]any)["dev-test-code"] != src {
+		t.Error("the caller's detail map was mutated in place")
 	}
 }

@@ -275,3 +275,65 @@ func TestTransparencyWithoutSigningKeyExitsUsageError(t *testing.T) {
 		t.Errorf("stderr = %q, want it to name CORRALAI_CERTIFY_KEY_FILE", errb.String())
 	}
 }
+
+// TestCertifyRepoSourcePushedIsStampedOnlyAfterThePushSucceeds: the
+// ledger's source_pushed used to be written as "--push-source and --push
+// were both given" BEFORE the push ran, so a push that failed left a scan
+// row swearing the source had left the box. It is a custody fact and it is
+// stamped after the fact, like the statement hash. On a runner the failed
+// push is also raised as a workflow annotation — the exit code stays the
+// verdict's, but a green job with a silent stderr line is how an operator
+// learns from a query that their warehouse is empty.
+func TestCertifyRepoSourcePushedIsStampedOnlyAfterThePushSucceeds(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "test-placeholder-not-a-real-key")
+	t.Setenv("GITHUB_ACTIONS", "true")
+
+	root := t.TempDir()
+	gitRun := gitCmd(t, root)
+	mustWrite(t, filepath.Join(root, "README.md"), "# x\n")
+	gitRun("init", "-q")
+	gitRun("add", ".")
+	gitRun("commit", "-q", "-m", "base", "--no-gpg-sign")
+	base := gitRevParseHead(t, root)
+
+	run := func(pushTarget string) (scanstore.ScanRow, string) {
+		dsn := filepath.Join(t.TempDir(), "scans.duckdb")
+		var out, errb bytes.Buffer
+		code := runCertifyRepo([]string{
+			"--repo", root, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant, "--critic-model", "off",
+			"--diff-base", base, "--substrate", substrateWorkspace,
+			"--record", "--record-db", dsn,
+			"--push", pushTarget, "--push-source",
+		}, &out, &errb)
+		if code != 0 {
+			t.Fatalf("exit %d: stdout=%s stderr=%s", code, out.String(), errb.String())
+		}
+		st, err := scanstore.Open(dsn)
+		if err != nil {
+			t.Fatalf("Open: %v", err)
+		}
+		defer st.Close()
+		scans, err := st.Scans(context.Background(), 10)
+		if err != nil || len(scans) != 1 {
+			t.Fatalf("Scans: %v (%d rows)", err, len(scans))
+		}
+		return scans[0], errb.String()
+	}
+
+	// A push that cannot succeed: the target's directory does not exist.
+	failed, errb := run(filepath.Join(t.TempDir(), "no", "such", "dir", "wh.duckdb"))
+	if failed.SourcePushed {
+		t.Errorf("push failed, yet the ledger says source_pushed=true")
+	}
+	if !strings.Contains(errb, "::warning title=corral push failed::") {
+		t.Errorf("stderr = %q, want a workflow annotation for the failed push", errb)
+	}
+
+	ok, errb := run(filepath.Join(t.TempDir(), "wh.duckdb"))
+	if !ok.SourcePushed {
+		t.Errorf("push succeeded with --push-source, yet the ledger says source_pushed=false")
+	}
+	if strings.Contains(errb, "::warning") {
+		t.Errorf("stderr = %q, an annotation on a push that succeeded", errb)
+	}
+}

@@ -1254,11 +1254,19 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		// answer from the tool whose central caveat is that audits are
 		// expensive.
 		InputTokens: inTokens, OutputTokens: outTokens, ModelCalls: modelCallCount,
-		// True only when source bytes ACTUALLY left the box: --push-source
-		// with no --push sends nothing, and a ledger row claiming otherwise
-		// would answer the custody question wrongly.
-		SourcePushed: *pushSourceFlag && strings.TrimSpace(*pushFlag) != "",
+		// True only when source bytes ACTUALLY left the box, which is not
+		// known yet: the push runs LAST, after this row is written, and can
+		// fail. Recorded false here and stamped true only after a
+		// successful push (stampSourcePushed, below), the same way the
+		// statement hash and the Rekor receipt are. It used to be written
+		// as "--push-source AND --push were given", so a run whose push
+		// failed — lock held, MotherDuck down, a bad DSN — left a ledger
+		// row swearing the source had left the box when nothing had.
+		SourcePushed: false,
 	}
+	// The custody switch the PUSH honours, distinct from the ledger's
+	// record of what happened: --push-source with no --push sends nothing.
+	pushSource := *pushSourceFlag && strings.TrimSpace(*pushFlag) != ""
 	files := buildScanFileRows(results, rep.Excluded, preflightResult, mutantsFromSHA, *repoDir, stderr)
 	mutants := buildScanMutantRows(0, results)
 	// modelCallRows was built above, before the scan row, so its totals could
@@ -1328,11 +1336,12 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	bundleRepo, bundleCommit, subjErr := auditSubject(*repoDir, rep)
 	rosterJSON, _ := json.Marshal(models())
 	bundle := buildBundle(scan, scanID, files, mutants, modelCallRows, eventRows,
-		auditpush.Link{}, scan.SourcePushed, bundleRepo, bundleCommit, githubRunURL(),
+		auditpush.Link{}, pushSource, bundleRepo, bundleCommit, githubRunURL(),
 		bundleMeta{
 			ModelsByRole: string(rosterJSON),
 			MinKillRate:  minKillRate, MaxProvenMissed: maxProvenMissed,
-			Passed: boolPtr(exitCode == 0),
+			Passed:   boolPtr(exitCode == 0),
+			PushedBy: auditpush.PushedByCertify,
 		})
 
 	// The audit statement, written after the exit code is known so `passed`
@@ -1419,9 +1428,25 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 			switch {
 			case perr != nil:
 				fmt.Fprintf(stderr, "corral certify --repo: pushing to %s: %v\n", *pushFlag, perr)
+				// The push is a side effect of the audit, not the audit;
+				// the exit code stays the verdict's. But on a runner a
+				// stderr line is scrolled past and the job is green, so
+				// the failure is ALSO raised as a workflow annotation —
+				// the operator asked for rows in a warehouse and got
+				// none, and should not learn that from a query.
+				if os.Getenv("GITHUB_ACTIONS") == "true" {
+					fmt.Fprintf(stderr, "::warning title=corral push failed::the audit ran, but pushing its rows to %s failed: %v\n", *pushFlag, perr)
+				}
 			case c.Total() > 0:
 				fmt.Fprintf(stdout, "  pushed %d scan, %d file(s), %d mutant(s), %d model-call row(s), %d event(s) to %s\n",
 					c.Scans, c.Files, c.Mutants, c.Calls, c.Events, *pushFlag)
+				// Now it is a fact. Same fail-open write as the statement
+				// hash above.
+				if pushSource && scanID != 0 && ledgerDSN != "" {
+					if uerr := stampSourcePushed(ledgerDSN, scanID); uerr != nil {
+						fmt.Fprintf(stderr, "corral certify --repo: scan %d recorded, but its source_pushed was NOT stamped: %v\n", scanID, uerr)
+					}
+				}
 			}
 		}
 	}
@@ -4902,6 +4927,14 @@ func warehouseRowsSHA256(b auditpush.Bundle) (string, error) {
 	// measurably flips this hash.
 	b.Scan.RekorLogIndex = nil
 	b.Scan.RekorUUID = ""
+	// Two more fields the PUSH stamps, not the run: scan_uid is minted
+	// inside PushBundle from the push's own timestamp, and pushed_by names
+	// the verb that wrote the row. Both are "" when this hash is computed
+	// and populated when a verifier reads the rows back, so leaving them
+	// live would fail every `corral verify --db` the moment the reader
+	// started returning them.
+	b.Scan.ScanUID = ""
+	b.Scan.PushedBy = ""
 	b.Files = append([]auditpush.Row(nil), b.Files...)
 	for i := range b.Files {
 		b.Files[i].StatementSHA256 = ""
@@ -4939,6 +4972,21 @@ func stampStatementSHA256(dsn string, scanID int64, sha string) error {
 		return err
 	}
 	if uerr := st.SetStatementSHA256(context.Background(), scanID, sha); uerr != nil {
+		_ = st.Close()
+		return uerr
+	}
+	return st.Close()
+}
+
+// stampSourcePushed mirrors stampStatementSHA256: the push is the last
+// step, so "did source leave the box on this run" is only known after the
+// scan row exists.
+func stampSourcePushed(dsn string, scanID int64) error {
+	st, err := scanstore.Open(dsn)
+	if err != nil {
+		return err
+	}
+	if uerr := st.SetSourcePushed(context.Background(), scanID, true); uerr != nil {
 		_ = st.Close()
 		return uerr
 	}

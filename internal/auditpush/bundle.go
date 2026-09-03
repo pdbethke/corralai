@@ -65,8 +65,9 @@ const SchemaVersion = 3
 //
 // DERIVED, NOT RANDOM, for the reason everything else in this package is: a
 // value a reader cannot re-check is a value they have to trust. Re-running
-// this over a pushed row's own columns reproduces its scan_uid exactly, so the
-// identity is auditable rather than asserted.
+// this over a pushed corral_scans row's own columns reproduces its scan_uid
+// exactly, so the identity is auditable rather than asserted (the scan row
+// only — see RecomputeScanUID for why the other grains cannot offer this).
 //
 // The inputs are what actually distinguishes two runs — the repository, the CI
 // run if there was one, the box, the corral build, the audited commit, the
@@ -165,7 +166,22 @@ type ScanRow struct {
 	// fabricated 0).
 	RekorLogIndex *int64
 	RekorUUID     string
+	// PushedBy names WHICH VERB wrote this row: PushedByCertify for the run
+	// itself, PushedByBackfill for `corral scans push` reconstructing a scan
+	// from the local ledger afterwards. The two are not the same rows — a
+	// backfill cannot recover the run's thresholds or outcome (passed is
+	// NULL) and never carries source — so a statement's warehouseRowsSha256,
+	// computed over the run's own push, can never match a backfill. A reader
+	// that could not tell the two apart reported that mismatch as tampering.
+	PushedBy string
 }
+
+// The two values ScanRow.PushedBy takes. "" is a row an older corral wrote,
+// before the column existed — a run's own push, in every case that shipped.
+const (
+	PushedByCertify  = "certify"
+	PushedByBackfill = "scans push"
+)
 
 // MutantRow is one mutant's fate. The warehouse table is new, so unlike the
 // local scan_mutants (whose CHECK predates this schema and cannot be altered
@@ -311,6 +327,7 @@ const scansSchema = `
 CREATE TABLE IF NOT EXISTS corral_scans (
   scan_uid         VARCHAR,
   ts               TIMESTAMPTZ NOT NULL,
+  pushed_by        VARCHAR,
   started_at       TIMESTAMPTZ,
   repo             VARCHAR     NOT NULL,
   run_url          VARCHAR,
@@ -585,6 +602,7 @@ var (
 	// where summing it over a scan counted one run once per file).
 	corralScansMigrationCols = []struct{ name, ddl string }{
 		{"started_at", "started_at TIMESTAMPTZ"},
+		{"pushed_by", "pushed_by VARCHAR"},
 		{"selection_ms", "selection_ms BIGINT"},
 		{"selection_reused_from", "selection_reused_from BIGINT"},
 		// The --transparency receipt: additive for the same reason every
@@ -889,9 +907,40 @@ func requireStatements(b Bundle) error {
 	if !b.Link.Require {
 		return nil
 	}
+	// EVERY grain, not just the file rows. The guard used to walk b.Files
+	// alone, so a push whose file rows were all absent (nothing audited;
+	// every candidate rejected) still landed its scan header, mutants,
+	// model calls and events with no statement to point back to — exactly
+	// the untraceable rows Require exists to refuse.
+	missing := func(sha, what string) error {
+		if strings.TrimSpace(sha) == "" {
+			return fmt.Errorf("auditpush: %s has no statement_sha256, but a signed statement is required", what)
+		}
+		return nil
+	}
+	if b.Scan != (ScanRow{}) {
+		if err := missing(b.Scan.StatementSHA256, fmt.Sprintf("scan row %s#%d", b.Scan.Repo, b.Scan.ScanID)); err != nil {
+			return err
+		}
+	}
 	for _, r := range b.Files {
-		if strings.TrimSpace(r.StatementSHA256) == "" {
-			return fmt.Errorf("auditpush: row %s has no statement_sha256, but a signed statement is required", r.Path)
+		if err := missing(r.StatementSHA256, "row "+r.Path); err != nil {
+			return err
+		}
+	}
+	for _, m := range b.Mutants {
+		if err := missing(m.StatementSHA256, "mutant "+m.Path+"#"+m.MutantID); err != nil {
+			return err
+		}
+	}
+	for _, c := range b.Calls {
+		if err := missing(c.StatementSHA256, "model call "+c.Path+"/"+c.Role); err != nil {
+			return err
+		}
+	}
+	for _, e := range b.Events {
+		if err := missing(e.StatementSHA256, fmt.Sprintf("event %s#%d", e.Path, e.Seq)); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -1097,8 +1146,8 @@ func pushBundleOnce(target string, b Bundle) (Counts, error) {
 		    host, cores, trees_requested, diff_base, candidates, audited, passed,
 		    total_ms, input_tokens, output_tokens, model_calls,
 		    source_pushed, statement_sha256, selection_ms, selection_reused_from,
-		    rekor_log_index, rekor_uuid, schema_version, started_at
-		  ) VALUES (`+placeholders(27)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
+		    rekor_log_index, rekor_uuid, schema_version, started_at, pushed_by
+		  ) VALUES (`+placeholders(28)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
 			uid, now, b.Scan.Repo, b.Scan.RunURL, b.Scan.ScanID, b.Scan.Commit,
 			b.Scan.CorralVersion, b.Scan.Substrate, b.Scan.Host, b.Scan.Cores,
 			nullIfZeroInt(b.Scan.TreesRequested), b.Scan.DiffBase,
@@ -1106,6 +1155,7 @@ func pushBundleOnce(target string, b Bundle) (Counts, error) {
 			b.Scan.TotalMillis, b.Scan.InputTokens, b.Scan.OutputTokens, b.Scan.ModelCalls,
 			b.Scan.SourcePushed, b.Scan.StatementSHA256, b.Scan.SelectionMillis, b.Scan.SelectionReusedFrom,
 			b.Scan.RekorLogIndex, nullIfEmpty(b.Scan.RekorUUID), SchemaVersion, nullTime(b.Scan.StartedAt),
+			nullIfEmpty(b.Scan.PushedBy),
 		); err != nil {
 			return Counts{}, fmt.Errorf("auditpush: insert scan row: %w", err)
 		}
@@ -1317,9 +1367,16 @@ func nullBool(b *bool) any {
 }
 
 // RecomputeScanUID is the reader's half of the derived-identity promise: given
-// the scan row and the ts stored beside it, it returns the scan_uid that row
-// must carry. A mismatch means the row was altered, or was written by a
-// version that hashed something the warehouse did not store.
+// the corral_scans row and the ts stored beside it, it returns the scan_uid
+// that row must carry. A mismatch means the row was altered, or was written
+// by a version that hashed something the warehouse did not store.
+//
+// THE SCAN ROW ONLY. It is the one grain that carries every input (host,
+// corral version, substrate …) and whose ts is the push time the uid was
+// minted from. The other grains carry scan_uid to be joined on: a file row
+// lacks the inputs, and an event row's ts is the beat's own time — see
+// EventRow.TS — so "recompute it from the row you are holding" is not a
+// promise those rows can keep, and the docs no longer make it for them.
 func RecomputeScanUID(r ScanRow, ts time.Time) string {
 	return scanUID(r, ts.UTC().Truncate(time.Microsecond))
 }

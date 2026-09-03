@@ -232,6 +232,10 @@ func runScansPush(args []string, open func(string) (scansPushReader, error), pus
 				// fabrication with a provenance link attached. nil is "not
 				// recorded".
 				Passed: nil,
+				// And the row says so: a verifier holding the run's own
+				// statement must not read this reconstruction as the push
+				// that statement hashed.
+				PushedBy: auditpush.PushedByBackfill,
 			})
 
 		fmt.Fprintf(stdout, "scan %d · %s · %d file(s), %d mutant(s) → %s\n",

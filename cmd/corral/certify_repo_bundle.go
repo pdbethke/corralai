@@ -55,6 +55,10 @@ type bundleMeta struct {
 	Passed          *bool // nil when the outcome is not recoverable (scans push)
 	// StartedAt is the scan's own start from the ledger; nil when unrecorded.
 	StartedAt *time.Time
+	// PushedBy is auditpush.PushedByCertify for the run's own push and
+	// auditpush.PushedByBackfill for `corral scans push` — see
+	// auditpush.ScanRow.PushedBy for why a verifier must be able to tell.
+	PushedBy string
 	// Audited and Candidates are the scan's scope: "3 files clean" reads
 	// very differently out of 4 than out of 400, and a join to find that out
 	// is a join people skip.
@@ -114,6 +118,7 @@ func buildBundle(
 			// rides through as-is: nil/"" on every scan that never uploaded
 			// (--transparency was not given, or the upload failed open).
 			RekorLogIndex: scan.RekorLogIndex, RekorUUID: scan.RekorUUID,
+			PushedBy: meta.PushedBy,
 		},
 		Files:        buildAuditRows(files, scanID, meta),
 		Mutants:      buildMutantRows(mutants, scanID, meta),

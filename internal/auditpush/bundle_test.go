@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -720,5 +721,29 @@ func TestSealViewSurvivesASchemaMigration(t *testing.T) {
 	}
 	if kill != 0.9 {
 		t.Errorf("seal shows %.2f, want the newer 0.90", kill)
+	}
+}
+
+// TestRequireStatementsCoversEveryGrain: Link.Require used to check the
+// file rows only, so a bundle with no file rows (every candidate rejected)
+// pushed its scan header, mutants, calls and events untraceable — with the
+// switch that says "refuse anything untraceable" ON.
+func TestRequireStatementsCoversEveryGrain(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "wh.duckdb")
+	for _, tc := range []struct {
+		name string
+		b    Bundle
+	}{
+		{"scan row only", Bundle{Scan: ScanRow{Repo: "o/r", ScanID: 3}}},
+		{"mutants only", Bundle{Mutants: []MutantRow{{Repo: "o/r", ScanID: 3, Path: "a.go", MutantID: "m1", Outcome: "killed"}}}},
+		{"calls only", Bundle{Calls: []ModelCallRow{{Repo: "o/r", ScanID: 3, Path: "a.go", Role: "test-writer", Model: "m"}}}},
+		{"events only", Bundle{Events: []EventRow{{Repo: "o/r", ScanID: 3, Path: "a.go", Seq: 1, Kind: "phase-start", TS: time.Now()}}}},
+	} {
+		tc.b.Link = Link{ScanID: 3, Require: true}
+		if _, err := PushBundle(target, tc.b); err == nil {
+			t.Errorf("%s: pushed with Require and no statement hash — want a refusal", tc.name)
+		} else if !strings.Contains(err.Error(), "no statement_sha256, but a signed statement is required") {
+			t.Errorf("%s: refused for the wrong reason: %v", tc.name, err)
+		}
 	}
 }

@@ -973,7 +973,8 @@ the short version is three pillars:
 
 **The console bundle needs a trust anchor you supply.** `corral-observe`,
 `corral-admin` and `corral-desktop` verify an Ed25519 signature over the console
-bundle before rendering it, against `CORRALAI_CONSOLE_PUBKEY`. There is no
+bundle before rendering it, against `CORRALAI_CONSOLE_PUBKEY` — for corralai's own brains that is the key
+published at [`deploy/console-release.pub`](deploy/console-release.pub). There is no
 default, on purpose: the development key in this repository has its private half
 committed, so treating it as a default would let anyone sign a bundle a client
 would render with the operator's session attached. `CORRALAI_CONSOLE_DEV=1`

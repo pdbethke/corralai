@@ -23,6 +23,9 @@ it unless a signature over that bundle verifies against a key **you** supply:
 
 ```sh
 export CORRALAI_CONSOLE_PUBKEY=<your release public key, hex>
+# corralai's own brains (brain.corralai.dev, the Hetzner deploy) are signed with
+# the key published at deploy/console-release.pub in this repository:
+export CORRALAI_CONSOLE_PUBKEY="$(cat deploy/console-release.pub)"
 ```
 
 There is deliberately **no default**. corralai ships a development signing key,

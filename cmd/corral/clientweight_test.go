@@ -3,6 +3,7 @@
 package main
 
 import (
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -167,7 +168,9 @@ func TestDockerfilesUseAGoAtLeastTheModuleFloor(t *testing.T) {
 	// So: match any registry path ending in `golang`, and capture whatever the
 	// tag is rather than only a numeric one, so a non-literal tag is REJECTED
 	// instead of skipped.
-	base := regexp.MustCompile(`(?m)^FROM\s+(?:[^\s/]+/)*golang:(\S+)`)
+	// `FROM --platform=$BUILDPLATFORM golang:…` and a lowercase `from` each
+	// slipped past the previous pattern; both are legal Dockerfile.
+	base := regexp.MustCompile(`(?im)^FROM\s+(?:--\S+\s+)*(?:[^\s/]+/)*golang:(\S+)`)
 	checked := 0
 
 	// THE TRACKED SET, not a filesystem walk. A plain walk descends into
@@ -180,7 +183,10 @@ func TestDockerfilesUseAGoAtLeastTheModuleFloor(t *testing.T) {
 		t.Skipf("git ls-files unavailable (not a git checkout?): %v", err)
 	}
 	for _, rel := range strings.Split(string(out), "\x00") {
-		if rel == "" || !strings.HasPrefix(filepath.Base(rel), "Dockerfile") {
+		// `observe.Dockerfile`, `Containerfile` and `Dockerfile.brain` are
+		// all image recipes; a prefix match on "Dockerfile" saw only the last.
+		name := filepath.Base(rel)
+		if rel == "" || !(strings.Contains(name, "Dockerfile") || strings.Contains(name, "Containerfile")) {
 			continue
 		}
 		b, err := os.ReadFile(filepath.Join(root, rel)) // #nosec G304 -- rel comes from git ls-files on this repository
@@ -296,10 +302,14 @@ func itoaAll(v []int) []string {
 func TestDocsEveryDispatchableSubcommandIsInTheHelpText(t *testing.T) {
 	names := dispatchableSubcommands(t)
 	help := usageText()
+	// THE GENERATOR'S OWN LINE SHAPE, not a prose mention. A reviewer put
+	// "…re-pointed with corral wrangle" in the middle of a usage sentence:
+	// `Contains(help, "corral wrangle")` was satisfied, but gen-cli-docs.sh
+	// derives sections with `^  corral [a-z-]+` and produced none, so the
+	// subcommand stayed invisible to every downstream gate with this one
+	// green. The check must match what the generator matches.
 	for _, n := range names {
-		// The help lists commands as "  corral <name> ..." — require the name
-		// to appear as a command, not merely somewhere in the prose.
-		if !strings.Contains(help, "corral "+n) {
+		if !regexp.MustCompile(`(?m)^  corral ` + regexp.QuoteMeta(n) + `\b`).MatchString(help) {
 			t.Errorf("`corral %s` dispatches but never appears in usageText(), so `corral -h` does not list it.\n"+
 				"scripts/gen-cli-docs.sh derives the reference from that help output, so this subcommand and every "+
 				"flag it exposes are invisible to the CLI-drift gate, the executed-surface manifest and the "+
@@ -333,10 +343,17 @@ func dispatchableSubcommands(t *testing.T) []string {
 				return true
 			}
 			for _, e := range cc.List {
-				if lit, ok := e.(*ast.BasicLit); ok && lit.Kind == token.STRING {
-					if v, err := strconv.Unquote(lit.Value); err == nil && v != "" {
-						names = append(names, v)
-					}
+				lit, ok := e.(*ast.BasicLit)
+				if !ok || lit.Kind != token.STRING {
+					// `case wrangleCmd:` with `const wrangleCmd = "wrangle"` is
+					// a subcommand this gate cannot read, and a reviewer used
+					// exactly that to add one invisibly. A dispatch label must
+					// be a string literal so the list is derivable.
+					t.Errorf("subcommand()'s allowlist has a non-literal case label %s — every dispatchable name must be a string literal so this gate can derive the list", types(e))
+					continue
+				}
+				if v, err := strconv.Unquote(lit.Value); err == nil && v != "" {
+					names = append(names, v)
 				}
 			}
 			return true
@@ -347,4 +364,16 @@ func dispatchableSubcommands(t *testing.T) []string {
 		t.Fatal("parsed ZERO subcommand names out of subcommand()'s allowlist — this gate is not looking where it thinks it is")
 	}
 	return names
+}
+
+// types renders an AST expression for an error message.
+func types(e ast.Expr) string {
+	switch v := e.(type) {
+	case *ast.Ident:
+		return v.Name
+	case *ast.SelectorExpr:
+		return types(v.X) + "." + v.Sel.Name
+	default:
+		return fmt.Sprintf("%T", e)
+	}
 }

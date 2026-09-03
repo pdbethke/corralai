@@ -488,7 +488,7 @@ opt-in `min-kill-rate` input (`--min-kill-rate` on the CLI) fails the run
 when any *individual* audited file scores below the threshold you set. See
 **[docs/corral/github-action.md](docs/corral/github-action.md)**.
 
-**Coverage pre-flight (`--preflight`, CLI only, Go and Python).** `certify
+**Coverage pre-flight (`--preflight`, CLI only; Go, Python, Ruby, JavaScript, TypeScript).** `certify
 --repo --preflight` runs the project's test suite **one extra time**, with
 coverage instrumentation, and reports which source files it never touches at
 all — a whole-repo inventory for the cost of one suite run, instead of the
@@ -499,20 +499,42 @@ what it actually knows into three buckets — files the suite **executed**,
 files it **measured and never executed** (the real finding, printed by
 name), and files it **never measured at all** (printed only as a count,
 never named — naming one would be an accusation about a file the run never
-looked at). On **both** Go and Python, "executed" can mean "imported" rather
-than "tested": Go runs `init()`/var-initializer code at import time, and in
-Python every module-scope `def` and `class` is a counted statement, so
-importing a module clears it outright — Python's exposure here is the wider
-of the two (see [docs/corral/github-action.md](docs/corral/github-action.md)
-for both measurements). Implemented for **Go and Python only** — Ruby, JS, and TS have
-no coverage-pre-flight plugin yet, so a scan in one of those languages reports
-that it could not run and names nothing, rather than guessing. A scan whose
-candidates span more than one language usually declines the same way — one
-instrumented run can't cover two — **unless** an explicit `-- <test-command>`
-unambiguously names exactly one of them (e.g. a Python+TypeScript repo with
-`-- pytest -q`: TypeScript has no coverage plugin at all, so Python is the
-only candidate, not merely the likeliest one — that repo is instrumented, its
-TypeScript files simply fall into "never measured"). Two languages that could
+looked at). **"Executed" does not mean the same thing in every language, and the difference
+is worth knowing before you act on a report.** On Go and Python it can mean
+*imported* rather than *tested*: Go runs `init()`/var-initializer code at import
+time, and in Python every module-scope `def` and `class` is a counted statement,
+so importing a module clears it outright — Python's exposure here is the wider
+of the two (see [docs/corral/github-action.md](docs/corral/github-action.md) for
+both measurements). Ruby, JavaScript and TypeScript do **not** have that
+exposure, because their reporters count *methods and named functions*, not
+lines: Ruby uses the stdlib `Coverage` module's method coverage, and the Node
+path counts named functions in V8's own range data. Measured on a fixture, a
+module that is required and never called reports `lines_hit 2/3` — indis-
+tinguishable from a file under test — and `methods_called 0/1`, which is the
+truth; those three languages report it as **measured and never executed**, which
+is the finding you want.
+
+Neither reporter asks the audited project to install anything. Ruby's `Coverage`
+is standard library, reached through `RUBYOPT` (the only window in which it can
+start before application files load), and Node's is `NODE_V8_COVERAGE`, which is
+built in — so no SimpleCov in the Gemfile, no c8 or nyc in `package.json`, and
+no edit to the tree under audit. Because both are environment variables and
+environment is inherited, one mechanism covers every way those suites are
+actually launched: `rspec`, `rake`, a bare `ruby`, `node --test`, jest's
+workers, vitest, mocha, `npm test`.
+
+**PHP is the one language still without it**, and for a reason that is not
+effort: PHP has no coverage without a runtime *extension* (Xdebug or pcov), so
+unlike the other five it cannot be instrumented with what a stranger's machine
+already has. A scan of a PHP repo reports that it could not run and names
+nothing, rather than guessing.
+
+A scan whose candidates span more than one language usually declines the same
+way — one instrumented run can't cover two — **unless** an explicit `--
+<test-command>` unambiguously names exactly one of them. Each reporter accepts
+only its own runners for exactly this purpose (`npm test` is Node's, `pytest -q`
+is Python's), seeing through a `sh -c` wrapper to find the runner inside.
+Two languages that could
 both plausibly own the given command (e.g. Go, whose coverage command accepts
 any test invocation by design) still decline as ambiguous. Same fail-closed
 rule when the coverage tool itself is missing from the runner. Not yet wired

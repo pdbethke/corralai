@@ -3672,17 +3672,43 @@ func TestSelectPreflightLanguageGoAndPythonBothMatchStaysAmbiguous(t *testing.T)
 
 // TestSelectPreflightLanguageNoLanguageMatchesFallsBackToTheBlanketRefusal
 // covers the zero-match case: a `--` command shaped for neither candidate
-// language's coverage instrumentation (e.g. it isn't even a pytest/`-m`
-// shape) falls back to the same "spans N languages" refusal the
-// no-checkArgv case gives, rather than a confusing "ambiguous" message
-// about zero matches.
+// language's coverage instrumentation falls back to the same "spans N
+// languages" refusal the no-checkArgv case gives, rather than a confusing
+// "ambiguous" message about zero matches.
+//
+// The argv here used to be `npm test`, chosen when TypeScript had no
+// CoverageReporter at all and so could match nothing. TypeScript has one now
+// (it delegates to the Node/V8 instrumentation), which makes `npm test` a
+// genuine single match — see the test below. A build-system command that no
+// language plugin claims keeps this path covered for what it is actually
+// about.
 func TestSelectPreflightLanguageNoLanguageMatchesFallsBackToTheBlanketRefusal(t *testing.T) {
-	langName, note := selectPreflightLanguage(map[string]bool{"python": true, "typescript": true}, []string{"npm", "test"})
+	langName, note := selectPreflightLanguage(map[string]bool{"python": true, "typescript": true}, []string{"make", "check"})
 	if langName != "" {
 		t.Fatalf("langName = %q, want \"\" (neither candidate language's CoverageCmd accepts this argv)", langName)
 	}
 	if !strings.Contains(note, "scan spans 2 languages") || strings.Contains(note, "ambiguous") {
 		t.Errorf("note = %q, want the blanket refusal, not the ambiguous-match wording", note)
+	}
+}
+
+// TestSelectPreflightLanguageResolvesNodeCommandsToTypeScript pins what the
+// Ruby/JS/TS coverage reporters bought at this seam.
+//
+// Before they existed, a mixed python+typescript scan given `-- npm test` got
+// the blanket refusal: TypeScript could not be instrumented, so no language
+// claimed the command and the pre-flight was skipped entirely. It now resolves
+// — `npm test` is a Node command, python's CoverageCmd declines it, and one
+// match is not ambiguous. This is the disambiguation the allow-list in each
+// CoverageCmd exists to make possible: a reporter that accepted any argv (as
+// goPlugin's does, deliberately) cannot participate in it.
+func TestSelectPreflightLanguageResolvesNodeCommandsToTypeScript(t *testing.T) {
+	langName, note := selectPreflightLanguage(map[string]bool{"python": true, "typescript": true}, []string{"npm", "test"})
+	if langName != "typescript" {
+		t.Fatalf("langName = %q, note = %q; want \"typescript\" (npm is a Node command and python declines it)", langName, note)
+	}
+	if note != "" {
+		t.Errorf("note = %q, want empty on a clean single match", note)
 	}
 }
 

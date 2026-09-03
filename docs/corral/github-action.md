@@ -354,13 +354,27 @@ limitation it exists to route around. Verified on
 `python-jsonschema/jsonschema`, which yields **0** audit candidates and 31
 Python files excluded as `no-paired-test`: the pre-flight runs.
 
-**Go and Python only.** The pre-flight is implemented for exactly two
-languages (`go test -coverpkg=./... -coverprofile=…` and `pytest`/`coverage
-run` + `coverage json`). Ruby, JavaScript, and TypeScript have no
-coverage-pre-flight plugin at all — this project does not document
-capability it hasn't built, so a scan in one of those languages reports
-`could not run: …` and names zero files, rather than guessing or silently
-doing nothing. The same fail-closed report is what you get when the coverage
+**Five of six languages.** The pre-flight is implemented for Go
+(`go test -coverpkg=./... -coverprofile=…`), Python (`pytest`/`coverage run` +
+`coverage json`), Ruby (the stdlib `Coverage` module via `RUBYOPT`) and
+JavaScript/TypeScript (`NODE_V8_COVERAGE`, built into Node). The last three ask
+the audited project to install NOTHING — no SimpleCov, no c8 or nyc, no edit to
+the tree under audit — because an auditor that requires a dependency before it
+will look at your repo is not much of an auditor.
+
+They are also more precise than the first two on one axis. Go and Python count
+statements, so *importing* a module can clear it; Ruby counts METHODS and the
+Node path counts NAMED FUNCTIONS, so a module that is required and never called
+comes back as `measured and never executed` rather than as covered. Measured on
+a fixture: that file reports `lines_hit 2/3` and `methods_called 0/1`.
+
+**PHP has no pre-flight**, and the reason is not effort: PHP cannot report
+coverage without a runtime extension (Xdebug or pcov), so unlike the other five
+it cannot be instrumented with what a machine already has. This project does not
+document capability it hasn't built, so a PHP scan reports `could not run: …`
+and names zero files rather than guessing or silently doing nothing.
+
+The same fail-closed report is what you get when the coverage
 tool itself isn't installed on the runner (`coverage`/`pytest-cov` missing
 from the Python environment, for example) — `--preflight` never treats "the
 tool didn't run" as "nothing is covered".

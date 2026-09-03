@@ -34,3 +34,16 @@ var _ CoverageReporter = goPlugin{}
 // pyPlugin implements CoverageReporter too; verified against a real clone of
 // pallets/flask (see the task-2 report).
 var _ CoverageReporter = pyPlugin{}
+
+// rubyPlugin implements CoverageReporter using Ruby's STDLIB `coverage`, so
+// an audited project needs no SimpleCov in its Gemfile — see
+// rubyPlugin.CoverageCmd for why RUBYOPT is the only window that works.
+var _ CoverageReporter = rubyPlugin{}
+
+// jsPlugin implements CoverageReporter using NODE_V8_COVERAGE, which is built
+// into Node — no c8, no nyc, and no dev dependency added to the audited repo.
+var _ CoverageReporter = jsPlugin{}
+
+// tsPlugin implements CoverageReporter by delegating to jsPlugin: the
+// instrument is the Node runtime, and Node strips TypeScript types natively.
+var _ CoverageReporter = tsPlugin{}

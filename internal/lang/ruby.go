@@ -168,3 +168,112 @@ func (rubyPlugin) FailFastArgs(testCmd []string) ([]string, bool) {
 	}
 	return nil, false
 }
+
+// COVERAGE FOR RUBY, WITH NO GEM TO INSTALL.
+//
+// Ruby ships `coverage` in the standard library, so this needs nothing in the
+// audited project's Gemfile — which matters, because the pre-flight runs
+// against a STRANGER'S repository and must not ask it to add a dependency
+// before corral will look at it. SimpleCov is the usual answer and is the
+// wrong one here: it wants a `require` at the top of spec_helper.rb, i.e. an
+// edit to the tree under audit.
+//
+// The trick is RUBYOPT. Ruby loads `-r` requires BEFORE the main script, which
+// is the only window in which Coverage.start can see the application files
+// load — start it any later and the files already parsed are invisible. rspec,
+// minitest, rake and a bare `ruby` invocation are all ruby processes, so one
+// mechanism covers every way a Ruby suite is actually launched.
+// rubyCoveragePreload is the script RUBYOPT loads before the suite. It writes
+// to a FILE rather than stdout, and the shell cats that file afterwards: a
+// suite's own output shares stdout, and interleaving a report into it would
+// make the report unparseable exactly when the suite is noisiest.
+const rubyCoveragePreload = `require 'coverage'
+# METHOD coverage, not just line coverage, and the difference is not academic.
+# A file that is merely REQUIRED runs its own class/def declaration lines, so
+# line coverage reports it as executed even when the suite never calls a single
+# thing in it. Measured directly on a fixture: a class that is required and
+# never used reports lines_hit 2/3 — indistinguishable from a file under test —
+# while method coverage reports methods_called 0/1, which is the truth. Since
+# this map decides which files are AUDITABLE, line coverage would nominate
+# every file anything happened to import.
+begin
+  Coverage.start(lines: true, methods: true)
+rescue ArgumentError, TypeError
+  # Rubies before 2.6 have no method coverage. Fall back rather than refuse:
+  # a coarser measurement is still worth more than none, and ParseCoverage's
+  # tri-state means a false positive here reads as "auditable", never as a
+  # gap that was proven absent.
+  Coverage.start
+end
+at_exit do
+  begin
+    res = Coverage.result
+    File.open(ENV['CORRAL_COV_OUT'], 'w') do |out|
+      out.puts %q{corral-ruby-coverage: v1}
+      res.each do |path, data|
+        if data.is_a?(Hash)
+          methods = data[:methods] || {}
+          lines = data[:lines] || []
+          # A file with no methods at all (a script, a constants file) can
+          # only be judged by its lines. A file WITH methods is judged by
+          # whether any of them ran.
+          hit = if methods.empty?
+                  lines.any? { |c| !c.nil? && c > 0 } ? 1 : 0
+                else
+                  methods.values.any? { |c| !c.nil? && c > 0 } ? 1 : 0
+                end
+          measurable = !methods.empty? || lines.any? { |c| !c.nil? }
+        else
+          lines = data
+          next unless lines.respond_to?(:any?)
+          measurable = lines.any? { |c| !c.nil? }
+          hit = lines.any? { |c| !c.nil? && c > 0 } ? 1 : 0
+        end
+        # nil marks a line that cannot be executed (blank, comment, an 'end').
+        # A file with nothing measurable is SKIPPED, not reported as
+        # never-executed: absent means "not measured", which is the honest
+        # answer for a file that had no statement to skip.
+        next unless measurable
+        out.puts "#{hit} #{path}"
+      end
+    end
+  rescue StandardError => e
+    # Never let the reporter's own failure change the suite's exit code —
+    # the caller distinguishes "could not measure" from "measured nothing",
+    # and an absent report already means the former.
+    warn "corral: ruby coverage reporter failed: #{e}"
+  end
+end
+`
+
+// CoverageCmd wraps a Ruby test command in stdlib coverage instrumentation.
+//
+// The `;` + explicit rc check between the run and the reduction is deliberate
+// and matches goPlugin.CoverageCmd: a suite with FAILING TESTS is the single
+// most likely state of a repository corral is auditing, and `&&` would discard
+// the report precisely there. Coverage data is complete whether the suite
+// passed or failed. Only 0 and 1 fall through — anything else (a bad flag, a
+// signal) re-raises, leaving stdout non-conforming, which ParseCoverage turns
+// into an error rather than a silent empty map.
+func (rubyPlugin) CoverageCmd(testCmd []string) (cmd []string, ok bool) {
+	if len(testCmd) == 0 {
+		return nil, false
+	}
+	// `bundle exec <runner>` is a ruby process; `bundle install` is not, so
+	// bundle alone is not a runner token.
+	if !coverageRunnerNamed(testCmd, []string{"ruby", "rspec", "rake", "testrb"}) {
+		if !(len(testCmd) >= 2 && filepath.Base(testCmd[0]) == "bundle" && testCmd[1] == "exec") {
+			return nil, false
+		}
+	}
+	setup := `cat > "$d/corral_cov.rb" <<'CORRAL_RB_EOF'` + "\n" + rubyCoveragePreload + "CORRAL_RB_EOF\n"
+	env := `CORRAL_COV_OUT="$d/report" RUBYOPT="-r$d/corral_cov ${RUBYOPT:-}"`
+	return coverageRunAndReduce(setup, env, testCmd, `cat "$d/report"`), true
+}
+
+// ParseCoverage reads the reduced report rubyCoveragePreload writes. The
+// grammar and its tri-state are shared with JavaScript — see
+// corralCoverageReport.
+func (rubyPlugin) ParseCoverage(stdout, modulePath string) (executed map[string]bool, err error) {
+	return corralCoverageReport(stdout, rubyCoverageHeader, "ruby", modulePath)
+}

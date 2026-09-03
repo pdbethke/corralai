@@ -262,7 +262,38 @@ const configHTML = `
 </html>
 `
 
+// usageText is what `corral-desktop -h` prints. It exists because -h did NOT
+// print anything: main() went straight to work, tried to reach a brain that was
+// not running, and printed a TIMESTAMPED connection error instead of usage.
+//
+// That made this binary's "help" non-deterministic, so scripts/gen-cli-docs.sh
+// could never have captured it — which is why the binary was quietly absent
+// from that script's hand-listed array, and why its reference page sat in
+// docs/cli/ as hand-written prose with no Usage block while the surfaces gate
+// cited that directory as generated ground truth. Omitting the broken binary
+// hid the breakage.
+//
+// Same defect `corral criticscore -h` and `corral scorecard -h` had: a command
+// that does work before it answers what it does.
+const usageText = `corral-desktop — launch the corralai console as a desktop app.
+
+Usage:
+  corral-desktop            launch, or start a local first-run configuration
+                            page when no brain is configured yet
+
+It reads its brain URL and token from the desktop config written by that
+first-run page. It takes no flags; a browser (Chrome, Chromium, Brave or Edge)
+must be installed.
+`
+
 func main() {
+	for _, a := range os.Args[1:] {
+		if a == "-h" || a == "--help" || a == "help" {
+			fmt.Print(usageText)
+			return
+		}
+	}
+
 	cfg, err := loadConfig()
 	if err != nil {
 		log.Printf("Warning: failed to load config: %v", err)

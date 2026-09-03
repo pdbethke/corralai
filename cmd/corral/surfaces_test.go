@@ -234,13 +234,35 @@ var userFacingDocs = []string{
 // mechanical half.
 func TestDocsUnexecutedSurfacesAreNotAdvertised(t *testing.T) {
 	classified, _ := manifestRows(t)
-	var unexecuted []string
+
+	// A flag is forbidden in prose only when EVERY command exposing that
+	// spelling is unexecuted.
+	//
+	// This gate matches a flag's spelling, not its owning command — a limit its
+	// SCOPE paragraph already states — so a name shared across binaries must be
+	// judged across all of them. Without this, `corral-recordings-import --db`
+	// being unexecuted made the README's documented `corral seal --db`
+	// unmentionable, and the gate's advice ("stop naming it where a stranger
+	// will read it first") would have been actively wrong. A gate that fires on
+	// a legitimate claim teaches people to route around it.
+	anyExecuted := map[string]bool{}
+	unexecutedByFlag := map[string]bool{}
 	for surface, row := range classified {
+		i := strings.LastIndex(surface, " --")
+		if i < 0 {
+			continue
+		}
+		flag := surface[i+1:]
 		if row.status == "unexecuted" {
-			// the flag itself, e.g. "corral certify --repo --swarm" -> "--swarm"
-			if i := strings.LastIndex(surface, " --"); i >= 0 {
-				unexecuted = append(unexecuted, surface[i+1:])
-			}
+			unexecutedByFlag[flag] = true
+		} else {
+			anyExecuted[flag] = true
+		}
+	}
+	var unexecuted []string
+	for flag := range unexecutedByFlag {
+		if !anyExecuted[flag] {
+			unexecuted = append(unexecuted, flag)
 		}
 	}
 	sort.Strings(unexecuted)

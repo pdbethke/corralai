@@ -35,20 +35,57 @@ func mustReadJSON(path string, out any) error {
 	return json.Unmarshal(b, out)
 }
 
-func main() {
-	dbPath := flag.String("db", "", "DuckDB path (default: CORRALAI_RECORDINGS_DB or ~/.claude/corralai_recordings.duckdb)")
-	slug := flag.String("slug", "", "recording slug")
-	missionID := flag.Int64("mission-id", 0, "mission id")
-	replayPath := flag.String("replay", "", "path to scrubbed replay json (with events[])")
-	metaPath := flag.String("meta", "", "path to metadata json")
-	flag.Parse()
+// importOpts is this binary's flag set, bound to a struct.
+//
+// A PRIVATE FlagSet, for the reason corral-observe uses one: the package-level
+// flag.CommandLine is shared with every dependency that registers on it at
+// init, and one of corral's already does — go-rod's lib/defaults adds a `-rod`
+// flag, which reached corral-observe's shipped -h until it was moved off the
+// global set. A binary should advertise its own interface and nothing else.
+type importOpts struct {
+	db, slug, replay, meta string
+	missionID              int64
+}
 
-	if strings.TrimSpace(*slug) == "" {
-		fmt.Fprintln(os.Stderr, "slug is required")
-		os.Exit(2)
+func importFlags(o *importOpts) *flag.FlagSet {
+	fs := flag.NewFlagSet("corral-recordings-import", flag.ExitOnError)
+	fs.StringVar(&o.db, "db", "", "DuckDB path (default: CORRALAI_RECORDINGS_DB or ~/.claude/corralai_recordings.duckdb)")
+	fs.StringVar(&o.slug, "slug", "", "recording slug")
+	fs.Int64Var(&o.missionID, "mission-id", 0, "mission id")
+	fs.StringVar(&o.replay, "replay", "", "path to scrubbed replay json (with events[])")
+	fs.StringVar(&o.meta, "meta", "", "path to metadata json")
+	return fs
+}
+
+// requiredMissing names the required flags the operator did not supply, in flag
+// order, or nil when the invocation is complete.
+//
+// Returns the WHOLE list rather than stopping at the first: an operator running
+// an import by hand should learn everything they still need in one go, not one
+// flag per attempt.
+func requiredMissing(o importOpts) []string {
+	var missing []string
+	for _, f := range []struct {
+		name, val string
+	}{
+		{"slug", o.slug}, {"replay", o.replay}, {"meta", o.meta},
+	} {
+		if strings.TrimSpace(f.val) == "" {
+			missing = append(missing, "--"+f.name)
+		}
 	}
-	if strings.TrimSpace(*replayPath) == "" || strings.TrimSpace(*metaPath) == "" {
-		fmt.Fprintln(os.Stderr, "replay and meta are required")
+	return missing
+}
+
+func main() {
+	var o importOpts
+	// #nosec G104 -- ExitOnError exits on a bad flag; the error is nil here.
+	_ = importFlags(&o).Parse(os.Args[1:])
+	dbPath, slug := &o.db, &o.slug
+	missionID, replayPath, metaPath := &o.missionID, &o.replay, &o.meta
+
+	if missing := requiredMissing(o); len(missing) > 0 {
+		fmt.Fprintf(os.Stderr, "corral-recordings-import: missing required flag(s): %s\n", strings.Join(missing, " "))
 		os.Exit(2)
 	}
 	path := strings.TrimSpace(*dbPath)

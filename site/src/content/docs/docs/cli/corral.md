@@ -128,6 +128,9 @@ Usage:
                                   fixtures. The fastest honest answer to "what does this do?"
                                   flags: --writer-model/--mutant-model (required; corral has no
                                          default models) --critic-model --dir
+  corral mcp                     serve corral's findings corpus over stdio MCP, so an editor
+                                  or agent can read what past audits found. READ-ONLY and
+                                  local: no brain, no writes, no network listener.
   corral doctor [flags] [-- <test cmd>]
                                   check the environment BEFORE paying for a run: does the
                                   sandbox start, is your test command's toolchain reachable
@@ -292,6 +295,21 @@ Usage of eval:
 
 ```
 corral matrix: set CORRAL_BRAIN (and CORRALAI_BRAIN_TOKEN via `corral secret`) — matrix has no offline mode
+```
+
+## `corral mcp` flags
+
+```
+corral mcp — serve corral's findings corpus over stdio MCP.
+
+Usage:
+  corral mcp
+
+Speaks the Model Context Protocol on stdin/stdout so an editor or agent can
+read what past audits found. READ-ONLY and local: no brain, no writes, no
+network listener, and no adjudication surface (see mcp_findings.go for why).
+
+Takes no flags. Reads the same local findings store `corral certify --local` writes.
 ```
 
 ## `corral models` flags

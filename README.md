@@ -480,7 +480,9 @@ there: no jail, no brain, no separate infra. It mutates the runner's checkout
 in place and grades each mutant with your own test command — the runner
 itself is the isolation boundary, so this is for CI, not a working tree you
 care about. Scoped to the PR's changed files by default (auditing every file
-on every PR is expensive — roughly 84 suite runs per file); a whole-repo run
+on every PR is expensive — an ESTIMATE of ~40 suite runs per file, from the
+stock 5 mutants x 8 shards; it is not a measured figure and doubles only if you
+name a --shadow-model); a whole-repo run
 is opt-in. By default a weak-but-gradable kill rate still exits 0 — the
 opt-in `min-kill-rate` input (`--min-kill-rate` on the CLI) fails the run
 when any *individual* audited file scores below the threshold you set. See
@@ -964,8 +966,17 @@ participates fully without installing anything beyond a config stanza.
 | **Thin client** (your coding agent + `.mcp.json`) | ✅ | ✅ | ✅ |
 | **`corral-admin`** (operator CLI) | ✅ | ✅ compiles | ✅ compiles |
 | **`corral-observe`** (read-only window) | ✅ | ✅ | ✅ |
-| **`corral certify --local`** — real exec (bwrap jail) | ✅ | via Docker (`--jail container`) | via Docker/WSL2 |
+| **`corral certify --local`** — real exec (bwrap jail) | ✅ | `--jail container` (Docker) — **not exercised in CI** | `--jail container` (Docker) or WSL2 — **not exercised in CI** |
 | **`corral` (the brain)** | ✅ first-class | ⚠️ untested | via Docker/WSL2 |
+
+**"Not exercised in CI" is meant literally.** Every workflow runs on
+`ubuntu-latest`, so the macOS and Windows rows describe a path that should work
+and that no run has proven. The container backend itself IS exercised — and was
+found completely broken the first time anyone executed it, because Docker mounts
+`--tmpfs` `noexec` and Go compiles its test binary into `/tmp` — but its
+integration tests skip without `CORRALAI_EXEC_IMAGE`, which CI does not set.
+Hosted macOS and Windows runners are free for public repositories, so this is a
+task rather than a limitation.
 
 **The jail is a Linux capability — and that's the point.** `bwrap` (bubblewrap) is
 Linux namespaces; on a bare-metal Linux host it runs **unprivileged** (one package,

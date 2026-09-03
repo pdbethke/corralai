@@ -161,3 +161,8 @@ corral-top --token	executed	test:cmd/corral-top/main_test.go (envOr precedence b
 corral ui --db	executed	run:2026-09-02 `corral ui --db md:corral_public --print-url` resolved and opened the live warehouse; test:cmd/corral/ui_test.go
 corral ui --addr	executed	run:2026-09-02 `--addr 0.0.0.0:8787` emitted the non-loopback warning; test:cmd/corral/ui_test.go (isLoopback table)
 corral ui --print-url	executed	run:2026-09-02 printed the URL and exited 0 without serving
+corral-recordings-import --db	executed	test:cmd/corral-recordings-import/main_test.go (binding, own-flags guard, and the required-flag report)
+corral-recordings-import --meta	executed	test:cmd/corral-recordings-import/main_test.go (binding, own-flags guard, and the required-flag report)
+corral-recordings-import --mission-id	executed	test:cmd/corral-recordings-import/main_test.go (binding, own-flags guard, and the required-flag report)
+corral-recordings-import --replay	executed	test:cmd/corral-recordings-import/main_test.go (binding, own-flags guard, and the required-flag report)
+corral-recordings-import --slug	executed	test:cmd/corral-recordings-import/main_test.go (binding, own-flags guard, and the required-flag report)

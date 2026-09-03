@@ -23,6 +23,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log"
 	"sort"
 	"strings"
 	"sync"
@@ -762,6 +763,19 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 			}
 		} else {
 			rep.FailFastNote = "this runner has no stop-at-first-failure flag corral is sure of"
+		}
+		// SAY IT. FailFastNote had no reader anywhere — the probe spent one
+		// extra suite run per file and its answer reached nobody, which is
+		// this repository's own named recurring defect: a real measurement
+		// computed and then dropped on the floor.
+		//
+		// A log line rather than a Verdict field: the note explains why a run
+		// is SLOWER than the operator expected, which is a thing to say while
+		// they are waiting, not a thing to sign. The verdict is identical
+		// either way — fail-fast changes the clock, not the answer, and
+		// internal/adequacy's own verdict-identity acceptance proves it.
+		if rep.FailFastNote != "" {
+			log.Printf("adequacy: %s — every mutant runs the whole suite, so this file costs more wall clock than one with fail-fast", rep.FailFastNote)
 		}
 	}
 

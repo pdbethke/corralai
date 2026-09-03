@@ -520,8 +520,29 @@ const phpCoverageHeader = "corral-php-coverage: v1"
 // filter SEGFAULTS the interpreter — found the hard way; it wants a non-empty
 // filter list, and there is nothing to filter on here.
 const phpCoveragePrepend = `<?php
+// GUARD FIRST: this file is loaded by auto_prepend_file, so it runs INSIDE the
+// operator's own test process before their code does. A fatal here does not
+// merely lose the coverage report — it kills the suite under audit and exits
+// 255, turning "corral could not measure your coverage" into "corral broke
+// your tests". An audit tool may fail to learn something; it may never damage
+// the thing it was pointed at.
+//
+// That is not hypothetical: php-pcov installs the extension but does not
+// guarantee it is ENABLED for the CLI SAPI, and a machine with the package and
+// no enabled module reaches this line with \pcov\start undefined. Degrading
+// to "write no report" is the correct outcome — the reader already treats a
+// missing report as could-not-measure, never as nothing-is-covered.
+if (!function_exists('\\pcov\\start')) { return; }
 \pcov\start();
 register_shutdown_function(function () {
+  // THE WHOLE HANDLER IS WRAPPED, for the reason the guard above exists: this
+  // runs inside the operator's test process, so any Error escaping here exits
+  // their suite 255 and reports as a broken project rather than a coverage
+  // report corral failed to produce. Reflection over a live class table is
+  // exactly the kind of code that meets a surprise on a PHP version you did
+  // not test — so it may fail, and it may not take the suite with it. The
+  // reader already treats a missing report as could-not-measure.
+  try {
     \pcov\stop();
     $data = \pcov\collect(\pcov\all);
 
@@ -568,6 +589,12 @@ register_shutdown_function(function () {
         fwrite($out, ($hit ? "1 " : "0 ") . $path . "\n");
     }
     fclose($out);
+  } catch (Throwable $e) {
+    // Deliberately silent on stdout: stdout carries the REPORT, and a
+    // diagnostic written there would be parsed as one. stderr is where the
+    // caller looks.
+    fwrite(STDERR, "corral: php coverage reporter failed: " . $e->getMessage() . "\n");
+  }
 });
 `
 

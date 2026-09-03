@@ -3,6 +3,7 @@
 package lang
 
 import (
+	"bytes"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -192,11 +193,19 @@ func TestCoverageReporterAgainstRealSuites(t *testing.T) {
 			}
 			c := exec.Command(cmd[0], cmd[1:]...)
 			c.Dir = root
+			// STDERR IS CAPTURED, and separately from stdout. The instrumented
+			// command deliberately pushes the suite's own output to stderr so
+			// stdout carries only the report — which means every reason a run
+			// could fail lives in the half a bare .Output() throws away. A
+			// failure that reports "the report was empty" without the
+			// interpreter's error costs a full CI round trip to learn nothing.
+			var stderr bytes.Buffer
+			c.Stderr = &stderr
 			stdout, runErr := c.Output()
 
 			got, err := r.ParseCoverage(string(stdout), root)
 			if err != nil {
-				t.Fatalf("ParseCoverage: %v\nrun error: %v\nstdout:\n%s", err, runErr, stdout)
+				t.Fatalf("ParseCoverage: %v\nrun error: %v\nstdout:\n%s\nSTDERR:\n%s", err, runErr, stdout, stderr.String())
 			}
 			for _, f := range tc.wantExecuted {
 				if v, ok := got[f]; !ok || !v {

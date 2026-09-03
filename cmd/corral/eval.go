@@ -54,6 +54,9 @@ func (r mcpPoolRunner) RunOne(ctx context.Context, t eval.Target) (eval.RunResul
 				// them here is what let an ungraded run's meaningless 0 average
 				// into MeanKillRate and declare a target miscalibrated.
 				BaselineFailed: v.BaselineFailed, SuiteIgnoresFile: v.SuiteIgnoresFile,
+				TimedOut:         v.TimedOut,
+				TestWriterFailed: v.TestWriterFailed, PoolTestUnsound: v.PoolTestUnsound,
+				WriterProviderFailed: v.WriterProviderFailed,
 			}, nil
 		}
 		if time.Now().After(deadline) {
@@ -92,6 +95,6 @@ func runEval(args []string, newRunner func(brainURL, corpusVersion string) eval.
 		return 1
 	}
 	fmt.Fprintln(stdout)
-	eval.WriteReport(stdout, eval.Report(m, results))
+	eval.WriteReportWithScope(stdout, eval.Report(m, results), eval.NotRun(m, results))
 	return 0
 }

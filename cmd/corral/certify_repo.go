@@ -4803,6 +4803,10 @@ func writeAuditStatement(path, repoDir string, r reposcan.RepoReport, models map
 			// Whether this file's goal was served from the goal cache — see
 			// certify.AuditedFile.GoalReused's doc.
 			GoalReused: f.GoalReused,
+			// And whether its whole VERDICT was — see
+			// certify.AuditedFile.VerdictReused's doc.
+			VerdictReused:     f.CacheHit,
+			VerdictComputedAt: reusedVerdictTime(f),
 		})
 	}
 	// Same resolution the warehouse push uses: a statement whose subject names
@@ -4964,6 +4968,16 @@ func warehouseRowsSHA256(b auditpush.Bundle) (string, error) {
 	}
 	sum := sha256.Sum256(js)
 	return hex.EncodeToString(sum[:]), nil
+}
+
+// reusedVerdictTime is when a REUSED verdict was earned, for the statement:
+// "" for a verdict this run earned (nothing to disclose) or one whose
+// origin time the cache did not carry.
+func reusedVerdictTime(f reposcan.WeakFile) string {
+	if !f.CacheHit || f.VerdictComputedAt.IsZero() {
+		return ""
+	}
+	return f.VerdictComputedAt.UTC().Format(time.RFC3339)
 }
 
 // stampStatementSHA256 opens the ledger, stamps one scan's statement hash,

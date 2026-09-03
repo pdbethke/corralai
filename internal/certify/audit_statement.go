@@ -105,6 +105,18 @@ type AuditedFile struct {
 	// actually reused, never a signed false for the ordinary case, so a
 	// verifier reading this key at all learns something.
 	GoalReused bool `json:"goalReused,omitempty"`
+	// VerdictReused discloses that this file's WHOLE verdict — kill rate,
+	// survivors, proven gaps, honesty flags — was served from the verdict
+	// cache, earned by a prior scan of byte-identical content under the same
+	// tests, models, engine and substrate, and is signed here under THIS
+	// scan's subject commit. Without it a verifier could not tell a number
+	// this run measured from one it re-signed; the stdout report and the
+	// ledger's cache_hit column said so, the signed statement did not.
+	// VerdictComputedAt is when that prior scan earned it (RFC 3339, UTC),
+	// omitted when unknown. Both omitted, never signed false/empty, on a
+	// verdict this run earned.
+	VerdictReused     bool   `json:"verdictReused,omitempty"`
+	VerdictComputedAt string `json:"verdictComputedAt,omitempty"`
 }
 
 // TestsPerMutantSpread is how many tests each graded mutant ran: the
@@ -252,6 +264,12 @@ func BuildAuditAttestation(s AuditStatement) map[string]any {
 		// flag in this predicate follows.
 		if f.GoalReused {
 			entry["goalReused"] = true
+		}
+		if f.VerdictReused {
+			entry["verdictReused"] = true
+			if f.VerdictComputedAt != "" {
+				entry["verdictComputedAt"] = f.VerdictComputedAt
+			}
 		}
 		files = append(files, entry)
 	}

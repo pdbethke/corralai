@@ -94,6 +94,10 @@ type advVerdict struct {
 	// assume TimedOut alone means the dev suite was measured. See
 	// renderAdvVerdict for the readout this drives.
 	TimedOut bool `json:"TimedOut"`
+	// WriterProviderFailed mirrors advpool.Verdict.WriterProviderFailed:
+	// the writer's provider never answered, so TestWriterFailed above is
+	// not the model's doing.
+	WriterProviderFailed bool `json:"writer_provider_failed,omitempty"`
 	// DevScored mirrors advpool.Verdict.DevScored: true once the dev
 	// suite's OWN kill-rate was actually measured against real mutants in
 	// the real jail. On a TimedOut verdict this is the ONLY thing that

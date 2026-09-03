@@ -54,7 +54,12 @@ package reposcan
 // behaviour half the comment above says no fingerprint can catch. A cached "6"
 // timeout verdict has nil where a fresh one has a real coefficient, and the
 // rule for that case is stated three paragraphs up: when unsure, bump.
-const VerdictGeneration = "7"
+// "8" (2026-09-03): the Verdict gained WriterProviderFailed (the writer's
+// provider never answered — TestWriterFailed without the model's fault), and
+// the cache now REFUSES any verdict whose writer half never graded, so a
+// cached "7" document with TestWriterFailed set would not be served either
+// way; the flag is what lets the scorecard tell the two apart.
+const VerdictGeneration = "8"
 
 // VerdictShapeSHA256 fingerprints advpool.Verdict's serialized shape: every
 // exported field's name, type and json tag, sorted by name and hashed.
@@ -76,4 +81,4 @@ const VerdictGeneration = "7"
 // Verdict's own FIELDS") and nothing wider. Nor can any fingerprint catch the
 // behaviour half: a scorer that computes a DIFFERENT number into the SAME
 // field is invisible here, and remains a review responsibility.
-const VerdictShapeSHA256 = "aa5ac8e7ff3118e46cbfeb37f4216bc37509832edca15638165317e939f2348c"
+const VerdictShapeSHA256 = "85012ca239ef8593c79d588ae43a478163eceb791beb975d67601dd75b907c8d"

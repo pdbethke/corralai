@@ -400,3 +400,95 @@ func TestRankChangesNothingItReads(t *testing.T) {
 		t.Fatalf("the scorecard changed after a rank:\nbefore %s\nafter  %s", b1, b2)
 	}
 }
+
+// TestWarehouseRankEvidenceChargesOnlyMeasuredRuns pins the review's four
+// rows: a writer-failed file (10 survivors), a graded file at 3/4, that
+// same file re-served from the verdict cache in a later scan, and a
+// timed-out file (7 survivors). The measured record is 3/4 over ONE run;
+// the warehouse path used to report 6/25 over three, charging pipeline
+// failures to the writer and counting the cache hit — a run in which the
+// writer did nothing — twice.
+func TestWarehouseRankEvidenceChargesOnlyMeasuredRuns(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "w.duckdb")
+	byRole := `{"test-writer":"w1","mutant-generator":"g1"}`
+	reused := int64(1)
+	files := []auditpush.Row{
+		{Repo: "o/r", Commit: "c", Path: "a.go", Lang: "go", Disposition: "audited", ModelsByRole: byRole, ScanID: 1,
+			Survivors: 10, ProvenMissed: 0, TestWriterFailed: true, MutantsPlanted: 12, MutantsGraded: 12},
+		{Repo: "o/r", Commit: "c", Path: "b.go", Lang: "go", Disposition: "audited", ModelsByRole: byRole, ScanID: 1,
+			Survivors: 4, ProvenMissed: 3, MutantsPlanted: 8, MutantsGraded: 8},
+		{Repo: "o/r", Commit: "c", Path: "b.go", Lang: "go", Disposition: "audited", ModelsByRole: byRole, ScanID: 2,
+			Survivors: 4, ProvenMissed: 3, MutantsPlanted: 8, MutantsGraded: 8, CacheHit: true, ReusedFromScanID: &reused},
+		{Repo: "o/r", Commit: "c", Path: "c.go", Lang: "go", Disposition: "audited", ModelsByRole: byRole, ScanID: 3,
+			Survivors: 7, ProvenMissed: 0, TimedOut: true, MutantsPlanted: 9, MutantsGraded: 9},
+	}
+	if _, err := auditpush.PushBundle(target, auditpush.Bundle{Files: files}); err != nil {
+		t.Fatalf("push: %v", err)
+	}
+	db, err := attachWarehouse(target, true)
+	if err != nil {
+		t.Fatalf("attach: %v", err)
+	}
+	defer db.Close()
+	ev, err := warehouseRankEvidence(db, target)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	catches, opps, writerRuns, genRuns := 0, 0, map[string]bool{}, map[string]bool{}
+	for _, o := range ev.Obs {
+		switch o.Role {
+		case modelrank.SeatTestWriter:
+			catches += o.Catches
+			opps += o.Opportunities
+			writerRuns[o.Run] = true
+		case modelrank.SeatMutantGenerator:
+			genRuns[o.Run] = true
+		}
+	}
+	if catches != 3 || opps != 4 || len(writerRuns) != 1 {
+		t.Errorf("writer = %d/%d over %d run(s), want 3/4 over 1 — the measured record only", catches, opps, len(writerRuns))
+	}
+	// The writer-failed file still measured the GENERATOR (its mutants were
+	// planted and graded); the cache hit and the timed-out file measured
+	// nothing this scan.
+	if len(genRuns) != 1 {
+		t.Errorf("generator runs = %v, want scan 1 only", genRuns)
+	}
+	if !strings.Contains(ev.Source, "a run is one SCAN") {
+		t.Errorf("Source = %q, want it to say what a run is here", ev.Source)
+	}
+}
+
+// TestBugcatchRankEvidenceReadsPastTheDebugCap: Observations() keeps the
+// most recent 10 000 rows, and `models rank` used to read through it, so
+// the OLDEST writer's record — here, the only one at 50/50 — vanished from
+// the ranking once the ledger passed the cap, while `corral scorecard`
+// still summed it.
+func TestBugcatchRankEvidenceReadsPastTheDebugCap(t *testing.T) {
+	store, err := bugcatch.Open(filepath.Join(t.TempDir(), "bc.duckdb"))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer store.Close()
+	ts := time.Date(2026, 8, 30, 0, 0, 0, 0, time.UTC)
+	obs := []bugcatch.Observation{{TS: ts, RecordID: 1, Model: "veteran", Role: modelrank.SeatTestWriter, Catches: 50, Opportunities: 50}}
+	for i := 2; i <= 10_001; i++ {
+		obs = append(obs, bugcatch.Observation{TS: ts, RecordID: int64(i), Model: "noise", Role: modelrank.SeatMutantGenerator, MutantsPlanted: 1})
+	}
+	if err := store.Record(context.Background(), obs); err != nil {
+		t.Fatalf("record: %v", err)
+	}
+	ev, err := bugcatchRankEvidence(context.Background(), store, nil)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	seen := false
+	for _, o := range ev.Obs {
+		if o.Model == "veteran" && o.Catches == 50 {
+			seen = true
+		}
+	}
+	if !seen {
+		t.Fatalf("the oldest writer's 50/50 record is missing from %d observation(s) — the ranking read a truncated ledger", len(ev.Obs))
+	}
+}

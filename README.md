@@ -971,6 +971,14 @@ the short version is three pillars:
   systemd credential or a `0600` key). Every log redacts secret values to a
   fingerprint. It's the GCP-ADC pattern, shipped in one binary.
 
+**The console bundle needs a trust anchor you supply.** `corral-observe`,
+`corral-admin` and `corral-desktop` verify an Ed25519 signature over the console
+bundle before rendering it, against `CORRALAI_CONSOLE_PUBKEY`. There is no
+default, on purpose: the development key in this repository has its private half
+committed, so treating it as a default would let anyone sign a bundle a client
+would render with the operator's session attached. `CORRALAI_CONSOLE_DEV=1`
+accepts that published key for local work and says so in the log.
+
 Every security core was adversarially red-teamed, and the tests ship with the repo.
 The codebase runs clean through **`gosec`** (0 findings at medium+ — every one fixed or
 adjudicated inline) and **`govulncheck`** (0 vulnerabilities reachable from corral's own

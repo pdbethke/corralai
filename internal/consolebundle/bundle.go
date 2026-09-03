@@ -36,8 +36,11 @@ package consolebundle
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"io/fs"
+	"os"
 	"sort"
+	"strings"
 )
 
 // BundleManifest is the versioned, signed description of the console SPA
@@ -105,11 +108,72 @@ func BuildManifest(sub fs.FS, version string) (BundleManifest, error) {
 // an ordinary `go run ./cmd/corral` (no -ldflags) verifies out of the box.
 const DevSignedVersion = "dev"
 
-// ReleasePubKeyHex is the DEV Ed25519 public key (hex-encoded) that verifies
-// the committed console.manifest.sig. This is a DEV/TEST key only — its seed
-// lives in scripts/dev-console-signing-key.hex, openly committed because it
-// signs nothing that matters beyond local dev and CI. A REAL release re-signs
-// with $CORRALAI_RELEASE_KEY (scripts/sign-console-bundle.sh) and ships its
-// OWN public key to clients out-of-band; this constant is a convenient,
-// overridable dev default, never a production trust anchor.
-const ReleasePubKeyHex = "584415516982331723bd400873056aad4b367a30b9cb087adabfe4de0f16e938"
+// DevPubKeyHex is the DEV Ed25519 public key, and its PRIVATE HALF IS
+// PUBLISHED: the seed sits in scripts/dev-console-signing-key.hex, committed to
+// a public repository. Anyone can sign a console bundle that verifies against
+// it.
+//
+// That is fine for what it is — a key for local development and CI, signing
+// nothing that matters — and it was catastrophic as what it had become: the
+// PINNED, ONLY, NON-OVERRIDABLE trust anchor every thin client used. A hostile
+// or compromised daemon could serve HTML and JavaScript signed with a key
+// printed in the repository, and corral-observe or corral-admin would verify
+// it, cache it, and render it same-origin with the console session — carrying
+// the operator's injected bearer to the brain. Meanwhile the verification code
+// stated that "a daemon (or a MITM) cannot supply its own key and have a client
+// trust it."
+//
+// So it is no longer a default. It is accepted ONLY when the operator asks for
+// it by name, and TrustAnchor says so out loud.
+const DevPubKeyHex = "584415516982331723bd400873056aad4b367a30b9cb087adabfe4de0f16e938"
+
+// Environment variables that select the trust anchor. These are read rather
+// than baked in because the primary install path is `go install` from source,
+// which sets no -ldflags: a build-stamped key cannot reach the binary most
+// operators actually run, so the anchor has to be configuration.
+const (
+	// TrustAnchorEnv names the release public key, hex-encoded, that this
+	// client will accept. This is the production setting.
+	TrustAnchorEnv = "CORRALAI_CONSOLE_PUBKEY"
+	// DevAnchorEnv opts in to the published DEV key. It exists so local
+	// development and CI keep working with one variable, and it is the only
+	// way to reach a key whose private half anyone can read.
+	DevAnchorEnv = "CORRALAI_CONSOLE_DEV"
+)
+
+// TrustAnchor resolves the Ed25519 public key a client will verify the console
+// manifest against, and reports where it came from.
+//
+// THERE IS NO DEFAULT, deliberately. A default anchor whose private key is
+// published is worse than no anchor at all, because it converts "unverified"
+// into "verified" — the exact inversion this project exists to refuse
+// elsewhere. Refusing is honest and actionable; trusting a published key is
+// neither.
+//
+// Order: the operator's configured key, then the published dev key if and only
+// if the operator opted in.
+func TrustAnchor() (pubHex, source string, err error) {
+	if v := strings.TrimSpace(os.Getenv(TrustAnchorEnv)); v != "" {
+		if _, decErr := hex.DecodeString(v); decErr != nil || len(v) != 64 {
+			return "", "", fmt.Errorf("%s is not a 64-character hex Ed25519 public key (got %d chars): %v", TrustAnchorEnv, len(v), decErr)
+		}
+		return v, TrustAnchorEnv, nil
+	}
+	if truthy(os.Getenv(DevAnchorEnv)) {
+		return DevPubKeyHex, DevAnchorEnv + " (PUBLISHED DEV KEY — anyone can forge a bundle that verifies against it)", nil
+	}
+	return "", "", fmt.Errorf(
+		"no console trust anchor is configured, so nothing can vouch for the HTML and JavaScript this client would render.\n"+
+			"  For a real deployment: set %s to your release public key (hex), obtained out-of-band from whoever signs your console bundle.\n"+
+			"  For local development against a dev brain: set %s=1, which accepts the key in scripts/dev-console-signing-key.hex — whose PRIVATE half is committed to this public repository, so it proves only that the bundle was signed by someone who can read GitHub.",
+		TrustAnchorEnv, DevAnchorEnv)
+}
+
+// truthy accepts the spellings an operator actually types.
+func truthy(v string) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "1", "true", "yes", "on":
+		return true
+	}
+	return false
+}

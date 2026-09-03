@@ -191,21 +191,38 @@ func fetchLimited(client *http.Client, target *url.URL, token, reqPath string, l
 }
 
 // verifyManifestSig checks the detached hex Ed25519 signature over
-// manifestBytes against the PINNED consolebundle.ReleasePubKeyHex — a
-// build-time constant external to anything the daemon serves. This is the
-// trust anchor: a daemon (or a MITM) cannot supply its own key and have a
-// client trust it.
+// manifestBytes against the CONFIGURED trust anchor — a key external to
+// anything the daemon serves, so a daemon (or a MITM) cannot supply its own and
+// have a client trust it.
+//
+// That sentence used to be false. The anchor was a hardcoded constant whose
+// PRIVATE HALF is committed to this public repository, so anyone could sign a
+// bundle that verified — and the verified bundle is HTML and JavaScript
+// rendered same-origin with the console session, carrying the operator's
+// injected bearer to the brain. The mechanism around it was sound: signature
+// checked over raw bytes before unmarshalling, per-asset sha256 before write,
+// re-hash at serve time. All of it rested on a key anyone could read.
+//
+// consolebundle.TrustAnchor now refuses rather than defaulting. A missing
+// anchor is a loud, actionable error; a published one would be a silent lie.
 func verifyManifestSig(manifestBytes, sigBytes []byte) error {
-	pubBytes, err := hex.DecodeString(consolebundle.ReleasePubKeyHex)
+	anchor, source, err := consolebundle.TrustAnchor()
+	if err != nil {
+		return err
+	}
+	if strings.HasPrefix(source, consolebundle.DevAnchorEnv) {
+		log.Printf("console: WARNING — verifying this bundle against the PUBLISHED development key (%s). Its private half is committed to corralai's public repository, so this signature proves only that someone who can read GitHub produced it. Never use this against a brain you do not fully control.", source)
+	}
+	pubBytes, err := hex.DecodeString(anchor)
 	if err != nil || len(pubBytes) != ed25519.PublicKeySize {
-		return fmt.Errorf("pinned console release public key is invalid (build/config bug): decode err=%v len=%d", err, len(pubBytes))
+		return fmt.Errorf("console trust anchor from %s is invalid: decode err=%v len=%d", source, err, len(pubBytes))
 	}
 	sig, err := hex.DecodeString(strings.TrimSpace(string(sigBytes)))
 	if err != nil || len(sig) != ed25519.SignatureSize {
 		return fmt.Errorf("signature is not valid hex of the expected size")
 	}
 	if !ed25519.Verify(ed25519.PublicKey(pubBytes), manifestBytes, sig) {
-		return fmt.Errorf("signature does not verify against the pinned release key")
+		return fmt.Errorf("signature does not verify against the console trust anchor from %s — this bundle was not signed by the key this client trusts", source)
 	}
 	return nil
 }

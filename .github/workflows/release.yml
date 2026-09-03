@@ -34,6 +34,38 @@ jobs:
           # changelog commit that triggered it.
           fetch-tags: true
 
+      # A RELEASE MUST SHIP A CONSOLE ITS CLIENTS CAN VERIFY, and until this
+      # step existed none of them did.
+      #
+      # The manifest's Version field is part of the SIGNED bytes, and the only
+      # committed signature covered "dev" — the version an unstamped build
+      # reports. `go install ...@vX` resolves a real module version, so every
+      # released brain served a manifest whose signature no client could check,
+      # and corral-observe / corral-admin refused the bundle outright:
+      #
+      #   console: fetch UI bundle: console: manifest signature INVALID
+      #
+      # Nothing caught it because nothing ever ran scripts/sign-console-bundle.sh
+      # outside a developer's shell. The signature must be COMMITTED AT THE TAG
+      # (go install builds from source, so one produced here would arrive too
+      # late), which makes this a VERIFICATION step: cut the tag from a commit
+      # whose signature is already correct for that version.
+      #
+      # It fails the release rather than warning. A release that ships an
+      # unverifiable console is discovered by an operator; a release that fails
+      # to cut is discovered by the person cutting it.
+      - name: Verify the console bundle is signed for THIS version
+        env:
+          CORRALAI_CONSOLE_PUBKEY: ${{ secrets.CORRALAI_CONSOLE_PUBKEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CORRALAI_CONSOLE_PUBKEY:-}" ]; then
+            echo "::error::No CORRALAI_CONSOLE_PUBKEY secret. Every thin client needs a release public key to verify the console bundle against, and the only key this repository ships is a DEV key whose private half is committed (see internal/consolebundle). Generate a release keypair, keep the seed out of the repo, set the public half as this secret, and re-sign with CORRALAI_RELEASE_KEY=<seed> scripts/sign-console-bundle.sh <version> before tagging."
+            exit 1
+          fi
+          go run ./cmd/verify-console-signature "${GITHUB_REF_NAME}"
+
+
       # Notes come from CHANGELOG.md's section for this exact version. A tag
       # with no changelog entry is a release nobody described, so it fails
       # rather than publishing an empty one — the point is that the page tells

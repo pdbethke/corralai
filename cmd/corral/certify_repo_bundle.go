@@ -5,6 +5,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/pdbethke/corralai/internal/auditpush"
 	"github.com/pdbethke/corralai/internal/scanstore"
@@ -51,7 +52,9 @@ type bundleMeta struct {
 	ModelsByRole    string
 	MinKillRate     *float64
 	MaxProvenMissed *int
-	Passed          bool
+	Passed          *bool // nil when the outcome is not recoverable (scans push)
+	// StartedAt is the scan's own start from the ledger; nil when unrecorded.
+	StartedAt *time.Time
 	// Audited and Candidates are the scan's scope: "3 files clean" reads
 	// very differently out of 4 than out of 400, and a join to find that out
 	// is a join people skip.
@@ -86,6 +89,7 @@ func buildBundle(
 	// second count, so a row and the scan row it belongs to can never
 	// disagree about how much of the repo was looked at.
 	meta.Audited, meta.Candidates = scan.Audited, scan.Candidates
+	meta.StartedAt = nilIfZeroTime(scan.StartedAt)
 
 	b := auditpush.Bundle{
 		Scan: auditpush.ScanRow{
@@ -94,6 +98,7 @@ func buildBundle(
 			Host: scan.Host, Cores: scan.Cores, TreesRequested: scan.TreesRequested,
 			DiffBase: scan.DiffBase, Candidates: scan.Candidates, Audited: scan.Audited,
 			Passed:      meta.Passed,
+			StartedAt:   meta.StartedAt,
 			TotalMillis: nilIfZeroMillis(scan.TotalMillis),
 			// Already nullable in the ledger, so it rides through as-is: the
 			// scan grain is where the one instrumented coverage run belongs,
@@ -150,7 +155,8 @@ func buildAuditRows(files []scanstore.File, scanID int64, meta bundleMeta) []aud
 			MutantsPlanted: f.MutantsGraded + f.MutantsInvalid,
 			ModelsByRole:   meta.ModelsByRole,
 			MinKillRate:    meta.MinKillRate, MaxProvenMissed: meta.MaxProvenMissed,
-			Passed: meta.Passed,
+			Passed:    meta.Passed,
+			StartedAt: meta.StartedAt,
 			// WHICH measurement the rate is, and at which grain.
 			TestSelection: f.TestSelection, SelectedTests: f.SelectedTests,
 			SuiteTests: f.SuiteTests, SelectionFallback: f.SelectionFallback,
@@ -278,4 +284,14 @@ func nilIfZeroMillis(v int64) *int64 {
 	}
 	ms := v
 	return &ms
+}
+
+// nilIfZeroTime is NULL for a ledger row that never recorded a start — an
+// older schema, or a scan that failed before it could stamp one — rather than
+// the Unix epoch masquerading as a measurement.
+func nilIfZeroTime(t time.Time) *time.Time {
+	if t.IsZero() {
+		return nil
+	}
+	return &t
 }

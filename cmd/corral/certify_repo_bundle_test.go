@@ -148,7 +148,7 @@ func TestBundleIsTheLedgerRowForRow(t *testing.T) {
 
 	scan := scanstore.Scan{Repo: "o/r", Commit: "deadbeef", Audited: 1, Candidates: 2}
 	b := buildBundle(scan, 11, files, nil, nil, nil, auditpush.Link{}, false,
-		"o/r", "deadbeef", "", bundleMeta{ModelsByRole: `{"writer":"m"}`, Passed: false})
+		"o/r", "deadbeef", "", bundleMeta{ModelsByRole: `{"writer":"m"}`, Passed: boolPtrT(false)})
 
 	if len(b.Files) != 2 {
 		t.Fatalf("bundle carries %d file row(s), want both dispositions", len(b.Files))
@@ -389,7 +389,7 @@ func TestAuditedParentSHAIsTheMutantsOwn(t *testing.T) {
 	_, files, mutants := twoFileLedgerRows(t)
 	scan := scanstore.Scan{Repo: "o/r", Commit: "deadbeef", Audited: 1, Candidates: 2}
 	b := buildBundle(scan, 11, files, mutants, nil, nil, auditpush.Link{}, false,
-		"o/r", "deadbeef", "", bundleMeta{Passed: false})
+		"o/r", "deadbeef", "", bundleMeta{Passed: boolPtrT(false)})
 
 	target := filepath.Join(t.TempDir(), "w.duckdb")
 	if _, err := pushBundle(target, b); err != nil {
@@ -566,7 +566,7 @@ func TestSpreadPointersDoNotAliasTheVerdict(t *testing.T) {
 func TestWarehouseRowsSHA256IsDeterministic(t *testing.T) {
 	_, files, mutants := twoFileLedgerRows(t)
 	scan := scanstore.Scan{Repo: "o/r", Commit: "deadbeef", Audited: 1, Candidates: 2}
-	meta := bundleMeta{ModelsByRole: `{"writer":"m"}`, Passed: true}
+	meta := bundleMeta{ModelsByRole: `{"writer":"m"}`, Passed: boolPtrT(true)}
 	// Every grain, not just the files: the hash covers the whole bundle, and
 	// a determinism claim that exercises one table is not the claim.
 	calls := []scanstore.ModelCall{{Path: "a.go", Role: "test-writer", Model: "w-1", Calls: 2, Retries: intPtr(1), InputTokens: 900, OutputTokens: 210, WallMillis: 4100}}
@@ -747,3 +747,6 @@ func TestVerifyRowsHashSurvivesTheRealReader(t *testing.T) {
 			signed, verified, ev.TS.Format(time.RFC3339Nano), readBack.Events[0].TS.Format(time.RFC3339Nano))
 	}
 }
+
+// boolPtrT is the test-side pointer helper for the nullable Passed column.
+func boolPtrT(b bool) *bool { return &b }

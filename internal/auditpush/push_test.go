@@ -33,7 +33,7 @@ func TestPushCreatesTheTableAndAppends(t *testing.T) {
 		Audited: 1, Candidates: 11, MutantsPlanted: 20,
 		ModelsByRole: `{"mutant-generator":"gemini-3.6-flash"}`,
 		MinKillRate:  rate(0.7), MaxProvenMissed: gaps(0),
-		Passed: false, StatementSHA256: "deadbeef",
+		Passed: boolPtrT(false), StatementSHA256: "deadbeef",
 	}})
 	if err != nil || n != 1 {
 		t.Fatalf("Push = %d, %v", n, err)

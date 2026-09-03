@@ -112,24 +112,34 @@ func readScanRow(db *sql.DB, repo string, scanID int64) (ScanRow, bool, error) {
 		host, cores, trees_requested, diff_base, candidates, audited, passed,
 		total_ms, input_tokens, output_tokens, model_calls,
 		source_pushed, statement_sha256, selection_ms, selection_reused_from,
-		rekor_log_index, rekor_uuid
+		rekor_log_index, rekor_uuid, started_at
 	   FROM corral_scans WHERE repo = ? AND scan_id = ?`, repo, scanID)
 
 	var s ScanRow
 	var cores, treesRequested sql.NullInt64
 	var totalMS, selectionMS, selectionReusedFrom, rekorLogIndex sql.NullInt64
 	var rekorUUID sql.NullString
+	var scanPassed sql.NullBool
+	var scanStarted sql.NullTime
 	if err := row.Scan(
 		&s.Repo, &s.RunURL, &s.ScanID, &s.Commit, &s.CorralVersion, &s.Substrate,
-		&s.Host, &cores, &treesRequested, &s.DiffBase, &s.Candidates, &s.Audited, &s.Passed,
+		&s.Host, &cores, &treesRequested, &s.DiffBase, &s.Candidates, &s.Audited, &scanPassed,
 		&totalMS, &s.InputTokens, &s.OutputTokens, &s.ModelCalls,
 		&s.SourcePushed, &s.StatementSHA256, &selectionMS, &selectionReusedFrom,
-		&rekorLogIndex, &rekorUUID,
+		&rekorLogIndex, &rekorUUID, &scanStarted,
 	); err != nil {
 		if err == sql.ErrNoRows {
 			return ScanRow{}, false, nil
 		}
 		return ScanRow{}, false, err
+	}
+	if scanPassed.Valid {
+		v := scanPassed.Bool
+		s.Passed = &v
+	}
+	if scanStarted.Valid {
+		t := scanStarted.Time
+		s.StartedAt = &t
 	}
 	s.Cores = int(cores.Int64)
 	s.TreesRequested = int(treesRequested.Int64)
@@ -161,7 +171,7 @@ func readFileRows(db *sql.DB, repo string, scanID int64) ([]Row, error) {
 		challenger_sufficient, goals_derived, goal_reused,
 		selection_ms, generation_ms, pool_ms, dev_pass_ms, authored_pass_ms,
 		critic_ms, total_ms, mutant_ms_median, mutant_ms_max,
-		authored_test, verdict_json, prompt_shape, covering_tests, import_only
+		authored_test, verdict_json, prompt_shape, covering_tests, import_only, started_at
 	   FROM corral_audits WHERE repo = ? AND scan_id = ?`, repo, scanID)
 	if err != nil {
 		return nil, err
@@ -189,13 +199,15 @@ func readFileRows(db *sql.DB, repo string, scanID int64) ([]Row, error) {
 		var authoredTest, verdictJSON, promptShape sql.NullString
 		var coveringTests sql.NullInt64
 		var importOnly sql.NullBool
+		var rowPassed sql.NullBool
+		var rowStarted sql.NullTime
 
 		if err := rows.Scan(
 			&r.Repo, &r.Commit, &r.Path, &r.Lang,
 			&killRate, &r.Survivors, &r.ProvenMissed,
 			&r.TimedOut, &r.TestWriterFailed, &r.PoolTestUnsound,
 			&r.Audited, &r.Candidates, &r.MutantsPlanted, &r.ModelsByRole,
-			&minKillRate, &maxProvenMissed, &r.Passed, &r.StatementSHA256, &r.RunURL,
+			&minKillRate, &maxProvenMissed, &rowPassed, &r.StatementSHA256, &r.RunURL,
 			&r.TestSelection, &r.SelectedTests, &r.SuiteTests, &r.SelectionFallback, &r.Uncovered,
 			&writerMode,
 			&r.PerMutant, &pmMin, &pmMedian, &pmMax,
@@ -209,15 +221,23 @@ func readFileRows(db *sql.DB, repo string, scanID int64) ([]Row, error) {
 			&challengerSufficient, &r.GoalsDerived, &goalReused,
 			&selectionMillis, &generationMillis, &poolMillis, &devPassMillis, &authoredPassMillis,
 			&criticMillis, &totalMillis, &mutantMillisMedian, &mutantMillisMax,
-			&authoredTest, &verdictJSON, &promptShape, &coveringTests, &importOnly,
+			&authoredTest, &verdictJSON, &promptShape, &coveringTests, &importOnly, &rowStarted,
 		); err != nil {
 			return nil, err
+		}
+		if rowStarted.Valid {
+			t := rowStarted.Time
+			r.StartedAt = &t
 		}
 
 		r.KillRate = nullFloat64(killRate)
 		r.MinKillRate = nullFloat64(minKillRate)
 		r.MaxProvenMissed = nullInt(maxProvenMissed)
 		r.WriterMode = writerMode.String
+		if rowPassed.Valid {
+			v := rowPassed.Bool
+			r.Passed = &v
+		}
 		if pmMin.Valid && pmMedian.Valid && pmMax.Valid {
 			r.TestsPerMutant = &TestsPerMutantSpread{Min: int(pmMin.Int64), Median: int(pmMedian.Int64), Max: int(pmMax.Int64)}
 		}

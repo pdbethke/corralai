@@ -39,6 +39,6 @@ package auditpush
 // attached under a different alias or opened directly.
 const SealViewDDL = `CREATE VIEW IF NOT EXISTS corral_seal AS
 SELECT * EXCLUDE rn FROM (
-  SELECT a.*, row_number() OVER (PARTITION BY repo, path ORDER BY ts DESC) AS rn
+  SELECT a.*, row_number() OVER (PARTITION BY repo, path ORDER BY coalesce(started_at, ts) DESC, ts DESC) AS rn
   FROM corral_audits a WHERE kill_rate IS NOT NULL
 ) WHERE rn = 1`

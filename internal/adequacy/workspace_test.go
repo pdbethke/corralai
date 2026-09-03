@@ -508,3 +508,27 @@ func TestWorkspaceRunnerRunTestVerboseReturnsWhenAChildOutlivesTheCommand(t *tes
 		t.Fatalf("RunTestVerbose = (%v, %v), want (false, nil): a non-zero exit is a result", ok, err)
 	}
 }
+
+// A CANCELLED BASELINE IS NOT A FAILED BASELINE. The workspace runner returned
+// ErrTestTimeout for ANY context error, and Score turns a timed-out baseline
+// into Report{CompliantPass:false} with no error — "your suite does not pass
+// unmutated". So a Ctrl-C during the baseline was recorded as BaselineFailed
+// or a flaky baseline, and in certify --local could be signed. The bwrap path
+// had already been fixed to report cancellation as its own error; this path
+// had not.
+func TestWorkspaceCancellationIsNotATimeout(t *testing.T) {
+	root := t.TempDir()
+	w := NewWorkspaceRunner(root, 30*time.Second)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // already cancelled: the run must not be graded at all
+	rep, err := Score(ctx, w, map[string]string{}, "a.txt", "x", nil, []string{"true"})
+	if err == nil {
+		t.Fatalf("a cancelled run must be an ERROR, got a report with CompliantPass=%v — that is the false 'your suite does not pass' record", rep.CompliantPass)
+	}
+	if errors.Is(err, ErrTestTimeout) {
+		t.Fatalf("cancellation was reported as a timeout: %v", err)
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("the error must carry the cancellation, got: %v", err)
+	}
+}

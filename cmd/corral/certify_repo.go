@@ -356,6 +356,11 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// with it. The diff-bound path never ranks at all, so it stays empty
 	// rather than claiming an ordering that was not applied.
 	rankSignal := ""
+	// diffChanged is the --diff-base bound, kept for the evidence pass below:
+	// a changed TEST file is in the diff but is neither a candidate nor an
+	// unpairable source, and it is the one change a suite-weakening pull
+	// request makes.
+	var diffChanged map[string]bool
 	if *diffBase != "" {
 		// In a PR the diff IS the bound: ranking and --top exist to bound what
 		// DERIVATION costs over a whole repo, and that question does not apply
@@ -369,10 +374,11 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stderr, "corral certify --repo: %v\n", cerr)
 			return 1
 		}
-		changedSet := make(map[string]bool, len(changed))
+		diffChanged = make(map[string]bool, len(changed))
 		for _, p := range changed {
-			changedSet[p] = true
+			diffChanged[p] = true
 		}
+		changedSet := diffChanged
 		var kept []reposcan.Candidate
 		for _, c := range cands {
 			// A changed TEST puts its source in scope, not just a changed
@@ -657,7 +663,21 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// files unpaired by name, all 10 covered by evidence) — so it is scoped
 	// to --diff-base specifically, where "nothing selected" really can mean
 	// "nothing to gain".
-	skipEvidence := *diffBase != "" && len(selected) == 0 && len(unpairableInDiff) == 0
+	// …EXCEPT when the diff touched a TEST. A pull request that deletes an
+	// assertion changes no source file and pairs with nothing by name, so
+	// `selected` and `unpairableInDiff` are both empty — and this skipped the
+	// only pass that could say which sources that test defends. The result
+	// was "NOTHING IN SCOPE", exit 0, on precisely the change the gate exists
+	// to catch; the comment at the scoping loop says that case was fixed,
+	// and it was, for name-pairing only.
+	diffTouchedATest := false
+	for path := range diffChanged {
+		if looksLikeATestPath(path) {
+			diffTouchedATest = true
+			break
+		}
+	}
+	skipEvidence := *diffBase != "" && len(selected) == 0 && len(unpairableInDiff) == 0 && !diffTouchedATest
 	evidenceCandidacyOK := false
 	selectionMethod := ""
 	if ex != nil && !skipEvidence {
@@ -726,6 +746,34 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		// enumExcl, computed below) equal to the number of files the walk
 		// actually found rather than double-counting a promoted file.
 		enumExcl -= promoted
+		var widenedIntoDiff []string
+		if *diffBase != "" && idxOK {
+			// THE DIFF+EVIDENCE INTERACTION, which an earlier round declined
+			// to attempt. An evidence-only candidate (TestPath == "") has no
+			// name-paired test for the scoping loop above to match against
+			// the diff, so it was never in scope — even when the diff was
+			// exactly the test that covers it. In scope now if its own path
+			// changed or ANY test file that executes it changed. The mirror
+			// case — a changed SOURCE that only evidence pairs — printed
+			// "paired by evidence" and then "NOT AUDITED: could not pair"
+			// in the same report; it is in scope by the first clause.
+			for _, c := range cands {
+				if c.TestPath != "" {
+					continue
+				}
+				if diffChanged[c.Path] || idx.CoveredByAny(c.Path, diffChanged) {
+					selected = append(selected, c)
+					widenedIntoDiff = append(widenedIntoDiff, c.Path)
+				}
+			}
+			if len(widenedIntoDiff) > 0 {
+				// The "auditing N of M" line above was printed before evidence
+				// existed, so it says 0 for exactly this case. Correct it in
+				// the same report rather than let the two disagree.
+				fmt.Fprintf(stdout, "  diff against %s, widened by evidence: +%d in scope — %s (a changed test defends these)\n",
+					*diffBase, len(widenedIntoDiff), strings.Join(widenedIntoDiff, ", "))
+			}
+		}
 		if *diffBase == "" {
 			// Ranking/--top already ran over the pairing-based candidates
 			// above; an evidence-only candidate (TestPath == "", by
@@ -736,12 +784,6 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 			// exactly the "measurement computed then discarded" shape this
 			// whole feature exists to fix.
 			//
-			// The --diff-base branch is deliberately left alone: it already
-			// scopes `selected` to the operator's own changed-file bound, and
-			// folding an evidence rescue into that bound is a deeper
-			// diff+evidence interaction this fix round does not attempt —
-			// widening above still keeps cands/excl (and therefore every
-			// summary/disclosure line) truthful either way.
 			var evidenceOnly []reposcan.Candidate
 			for _, c := range cands {
 				if c.TestPath == "" {
@@ -1290,7 +1332,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		bundleMeta{
 			ModelsByRole: string(rosterJSON),
 			MinKillRate:  minKillRate, MaxProvenMissed: maxProvenMissed,
-			Passed: exitCode == 0,
+			Passed: boolPtr(exitCode == 0),
 		})
 
 	// The audit statement, written after the exit code is known so `passed`
@@ -5028,4 +5070,22 @@ func writerModeDisclosure(mode string, calls, seatsUngraded int, attempts *advpo
 			mode, calls, unit, seatsUngraded, attemptsNote)
 	}
 	return fmt.Sprintf("writer: %s (%d %s)%s", mode, calls, unit, attemptsNote)
+}
+
+// looksLikeATestPath is the cheap, language-independent question the diff
+// bound asks before any evidence exists: could this changed file be a test?
+// It is deliberately generous — a false "yes" only costs one instrumented run,
+// while a false "no" is the false-green this exists to prevent.
+func looksLikeATestPath(rel string) bool {
+	rel = filepath.ToSlash(rel)
+	base := strings.ToLower(filepath.Base(rel))
+	for _, seg := range strings.Split(filepath.ToSlash(filepath.Dir(rel)), "/") {
+		switch seg {
+		case "test", "tests", "spec", "specs", "__tests__", "testing":
+			return true
+		}
+	}
+	return strings.HasPrefix(base, "test_") || strings.Contains(base, "_test.") ||
+		strings.Contains(base, ".test.") || strings.Contains(base, ".spec.") ||
+		strings.HasSuffix(base, "_spec.rb") || strings.HasSuffix(base, "test.php")
 }

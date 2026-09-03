@@ -715,3 +715,38 @@ func TestEnumerateNestedDependencyTreeStaysInvisible(t *testing.T) {
 		t.Error("build/gen.go should still be accounted")
 	}
 }
+
+// A SYMLINKED --repo MUST ENUMERATE WHAT THE REAL DIRECTORY DOES. The walk
+// refuses every non-regular file — right for a link INSIDE a repository,
+// which can point anywhere on the operator's disk — but it applied that rule
+// to the root itself: `--repo` given as a symlink was excluded as "."
+// (not-a-regular-file), the scan walked one file and found nothing, and with
+// --diff-base it exited 0 as "nothing in scope" on a commit that changed real
+// source. The root is the operator's choice, not the repository's.
+func TestEnumerateResolvesASymlinkedRoot(t *testing.T) {
+	real := t.TempDir()
+	if err := os.WriteFile(filepath.Join(real, "calc.go"), []byte("package p\n\nfunc F() int { return 1 }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(real, "calc_test.go"), []byte("package p\n\nimport \"testing\"\n\nfunc TestF(t *testing.T) { F() }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Skipf("cannot create a symlink here: %v", err)
+	}
+	viaReal, _, err := Enumerate(real)
+	if err != nil {
+		t.Fatal(err)
+	}
+	viaLink, _, err := Enumerate(link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(viaReal) == 0 {
+		t.Fatal("fixture yields no candidate even through the real path")
+	}
+	if len(viaLink) != len(viaReal) {
+		t.Fatalf("through the symlink: %d candidate(s); through the real path: %d — the root was refused as a non-regular file", len(viaLink), len(viaReal))
+	}
+}

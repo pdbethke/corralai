@@ -154,3 +154,26 @@ func TestMoreSpecificTestPathTieBreak(t *testing.T) {
 		t.Errorf("mostCovering = %q, want the more specific (deeper) tied path tests/unit/test_utils.py", mostCovering)
 	}
 }
+
+// A --diff-base SCAN ASKS "WHICH SOURCES DOES THIS CHANGED TEST DEFEND?", and
+// the answer is every test that executes the source, not the single
+// most-covering one. Keeping only mostCovering meant a pull request that
+// weakened the second-most-covering test changed nothing in scope.
+func TestEvidenceIndexCoveredByAnyUsesEveryCoveringTest(t *testing.T) {
+	idx := EvidenceIndex{files: map[string]evidenceFileEntry{
+		"pkg/calc.py": {
+			coveringTests: 2,
+			mostCovering:  "tests/test_calc.py",
+			coveringFiles: map[string]bool{"tests/test_calc.py": true, "tests/test_behaviour.py": true},
+		},
+	}}
+	if !idx.CoveredByAny("pkg/calc.py", map[string]bool{"tests/test_behaviour.py": true}) {
+		t.Error("a change to the SECOND covering test must put the source in scope")
+	}
+	if idx.CoveredByAny("pkg/calc.py", map[string]bool{"tests/test_other.py": true}) {
+		t.Error("a test that never executed the source must not put it in scope")
+	}
+	if idx.CoveredByAny("pkg/unknown.py", map[string]bool{"tests/test_calc.py": true}) {
+		t.Error("an unmeasured source must not be in scope by evidence")
+	}
+}

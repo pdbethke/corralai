@@ -48,7 +48,7 @@ func sampleBundle() Bundle {
 			Repo: "o/r", RunURL: "https://ci/1", ScanID: 7, Commit: "abc",
 			CorralVersion: "v9.9.9", Substrate: "workspace", Host: "box-1",
 			Cores: 24, TreesRequested: 6, DiffBase: "main",
-			Candidates: 2, Audited: 1, Passed: true,
+			Candidates: 2, Audited: 1, Passed: boolPtrT(true),
 			TotalMillis: ms(61000), InputTokens: 1200, OutputTokens: 340, ModelCalls: 7,
 		},
 		Files: []Row{
@@ -593,5 +593,79 @@ func TestScanUIDCannotCollideByConcatenation(t *testing.T) {
 	b := scanUID(ScanRow{Repo: "a", RunURL: "bc"}, at)
 	if a == b {
 		t.Error(`scanUID("ab","c") == scanUID("a","bc") — fields are being concatenated without length prefixes`)
+	}
+}
+
+// boolPtrT is the test-side pointer helper for the nullable Passed column.
+func boolPtrT(b bool) *bool { return &b }
+
+// THE DERIVED IDENTITY MUST BE RECOMPUTABLE FROM THE ROW. The uid hashed the
+// push time at NANOSECOND precision while TIMESTAMPTZ stores microseconds, so
+// the value a reader recomputed from the row never matched the one stored
+// beside it — and the comment beside scanUID, and docs/corral/actions-as-swarm.md,
+// both promised that it would. This pushes a bundle, reads the scan row and its
+// stored ts back, recomputes, and compares.
+func TestScanUIDIsRecomputableFromTheStoredRow(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "w.duckdb")
+	b := Bundle{Scan: ScanRow{Repo: "o/r", ScanID: 7, Commit: "deadbeef", Host: "h", CorralVersion: "v", Substrate: "workspace", StatementSHA256: "s"}}
+	if _, err := PushBundle(target, b); err != nil {
+		t.Fatalf("push: %v", err)
+	}
+	db, err := sql.Open("duckdb", target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var stored string
+	var ts time.Time
+	if err := db.QueryRow(`SELECT scan_uid, ts FROM corral_scans WHERE repo = 'o/r' AND scan_id = 7`).Scan(&stored, &ts); err != nil {
+		t.Fatal(err)
+	}
+	rb, err := ReadBundle(db, "o/r", 7)
+	if err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	if got := RecomputeScanUID(rb.Scan, ts); got != stored {
+		t.Fatalf("stored scan_uid %s, recomputed from the row and its stored ts %s — the identity is not derivable from what the warehouse holds", stored, got)
+	}
+}
+
+// THE SEAL IS THE LATEST MEASUREMENT, NOT THE LATEST PUSH. corral_seal picked
+// one row per (repo, path) by ts — the push time — so re-pushing an old scan
+// made its superseded verdict current: `corral seal` reported the old kill
+// rate as the file's standing, and `corral ui` served it. Ordering is by the
+// scan's own started_at now, with ts only as a tiebreak for rows written
+// before the column existed.
+func TestSealIsOrderedByScanStartNotPushTime(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "w.duckdb")
+	at := func(h int) *time.Time {
+		t := time.Date(2026, 9, 3, h, 0, 0, 0, time.UTC)
+		return &t
+	}
+	push := func(scanID int64, kill float64, started *time.Time) {
+		b := Bundle{
+			Scan:  ScanRow{Repo: "o/r", ScanID: scanID, Commit: "c", Host: "h", CorralVersion: "v", Substrate: "workspace", StatementSHA256: "s", StartedAt: started},
+			Files: []Row{{Repo: "o/r", Commit: "c", ScanID: scanID, Path: "pkg/a.go", Lang: "go", KillRate: &kill, StatementSHA256: "s", StartedAt: started}},
+		}
+		if _, err := PushBundle(target, b); err != nil {
+			t.Fatalf("push %d: %v", scanID, err)
+		}
+	}
+	push(1, 0.20, at(9))  // the old scan
+	push(2, 0.90, at(10)) // the newer scan supersedes it
+	push(1, 0.20, at(9))  // …and the old one is re-pushed LAST
+
+	db, err := sql.Open("duckdb", target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var kill float64
+	var scanID int64
+	if err := db.QueryRow(`SELECT kill_rate, scan_id FROM corral_seal WHERE repo = 'o/r' AND path = 'pkg/a.go'`).Scan(&kill, &scanID); err != nil {
+		t.Fatalf("corral_seal: %v", err)
+	}
+	if scanID != 2 || kill != 0.90 {
+		t.Fatalf("corral_seal shows scan %d (kill %.2f); want scan 2 (0.90), the LATEST MEASUREMENT — the re-pushed old scan won on push time", scanID, kill)
 	}
 }

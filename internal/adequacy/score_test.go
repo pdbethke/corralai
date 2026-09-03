@@ -6,7 +6,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
+	"time"
 )
 
 // fakeJail is a test double for Jail: it "passes" or "fails" a test run based
@@ -322,4 +324,42 @@ func (f *canaryErrJail) RunTest(ctx context.Context, files map[string]string, te
 	}
 	f.mutantRuns++
 	return false, nil
+}
+
+// unstableJail: the mutant hangs to the deadline, and the compliant code — when
+// re-probed — comes back promptly but FAILING. That is a suite that is not
+// stable right now, and it says nothing about the mutant.
+type unstableJail struct{ calls int }
+
+func (u *unstableJail) RunTest(_ context.Context, files map[string]string, _ []string) (bool, error) {
+	for _, v := range files {
+		if v == CanaryCode {
+			return false, nil
+		}
+	}
+	u.calls++
+	if u.calls == 1 {
+		return true, nil // the initial baseline passes
+	}
+	if files["a.py"] == "MUTANT" {
+		return false, fmt.Errorf("%w: simulated hang", ErrTestTimeout)
+	}
+	return false, nil // the re-probe of compliant code: returns, but fails
+}
+
+// A TIMED-OUT MUTANT IS A KILL ONLY IF THE COMPLIANT RE-PROBE PASSES. The
+// re-probe's pass/fail was discarded (`_, berr :=`), so a compliant run that
+// came back FAILING still credited the mutant with a kill. A suite that is
+// failing at that moment is evidence about the environment, not the mutant.
+func TestTimeoutReprobeMustPassToCreditAKill(t *testing.T) {
+	j := &unstableJail{}
+	rep, err := Score(context.Background(), j, map[string]string{"test_a.py": "def test(): pass\n"},
+		"a.py", "ORIGINAL", []Mutant{{ID: "m", Replace: "MUTANT"}}, []string{"pytest"},
+		WithMutantTimeout(50*time.Millisecond))
+	if err == nil {
+		t.Fatalf("want an error (the suite is unstable, nothing inferred), got a report: killed=%v survived=%v", rep.Killed, rep.Survived)
+	}
+	if !strings.Contains(err.Error(), "compliant baseline FAILED when re-run") {
+		t.Errorf("the error must say the re-probe failed, got: %v", err)
+	}
 }

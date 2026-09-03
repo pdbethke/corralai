@@ -1017,9 +1017,21 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 				//     survivor either: it is UNMEASURED, and an error is the
 				//     honest report.
 				bctx, bcancel := context.WithTimeout(ctx, perMutant)
-				_, berr := run(bctx, compliantCode)
+				bpassed, berr := run(bctx, compliantCode)
 				bcancel()
 				if berr == nil {
+					// THE RE-PROBE MUST PASS, not merely return. This read
+					// `_, berr :=` and credited a kill whenever the compliant
+					// run came back within budget — including when it came
+					// back FAILING. A suite that is failing at that moment
+					// (flaky, or the box is unhealthy) proves nothing about
+					// the mutant, and "timed out, then compliant failed" is
+					// evidence the environment is wrong, not that the mutant
+					// was caught.
+					if !bpassed {
+						outcomes[i] = outcome{err: fmt.Errorf("mutant %s: run timed out, and the compliant baseline FAILED when re-run under the same budget (%s) — the suite is not stable right now, so nothing is inferred from this mutant", m.ID, perMutant)}
+						return
+					}
 					outcomes[i] = outcome{killed: true, grading: grading}
 					return
 				}

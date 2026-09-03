@@ -333,3 +333,24 @@ func TestCollectSelectionEvidenceWithNoSourcePathsFallsBackToBareCov(t *testing.
 		t.Errorf("script must fall back to bare --cov with no sourcePaths, got:\n%s", script)
 	}
 }
+
+// AN UNPARSEABLE INSTRUMENTED RUN IS NOT EVIDENCE, AND MUST NOT BE CACHED. An
+// Index error used to fall through to Ran: true with the raw bytes attached,
+// so a run whose only output was `sh: 1: …/venv/bin/python: not found` was
+// recorded as selection evidence, cached under a key nothing the operator
+// fixes would change, and served on every later scan as "reused". The one
+// report line that could have said why never printed, because Ran was true.
+func TestCollectSelectionEvidenceRefusesUnparseableOutput(t *testing.T) {
+	py, _ := lang.ByName("python")
+	r := &fakeDetailedRunner{res: sandbox.EnumerateResult{
+		Output:   "sh: 1: /home/u/.venv/bin/python: not found\n",
+		ExitCode: 127,
+	}}
+	ev := CollectSelectionEvidence(context.Background(), r, nil, py, []string{"/home/u/.venv/bin/python", "-m", "pytest"}, nil)
+	if ev.Ran {
+		t.Fatalf("Ran = true for output the plugin cannot read — this is what got cached and served forever: %q", ev.Raw)
+	}
+	if !strings.Contains(ev.Note, "unparseable") || !strings.Contains(ev.Note, "not found") {
+		t.Errorf("the note must say the document was unparseable AND show what came back, got %q", ev.Note)
+	}
+}

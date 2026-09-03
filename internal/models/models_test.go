@@ -48,6 +48,10 @@ func TestLoadNoRegistryIsNotAnError(t *testing.T) {
 func TestLoadFromRepoFile(t *testing.T) {
 	t.Setenv(EnvInline, "")
 	t.Setenv(EnvFile, "")
+	// A developer's own shell, not a runner: on a runner the repo-local file
+	// is ignored on purpose (TestAuditedRepoCannotPickItsAuditors) — and CI
+	// itself IS a runner, which is how this test first found that out.
+	t.Setenv("GITHUB_ACTIONS", "")
 	reg, err := Load(writeRepoRegistry(t, twoEntries))
 	if err != nil {
 		t.Fatalf("Load: %v", err)
@@ -70,6 +74,7 @@ func TestLoadFromRepoFile(t *testing.T) {
 
 // Precedence: inline env beats the env file, which beats the repo file.
 func TestLoadPrecedence(t *testing.T) {
+	t.Setenv("GITHUB_ACTIONS", "")
 	root := writeRepoRegistry(t, `{"seat": {"provider": "google", "model": "from-repo-file"}}`)
 	envFile := filepath.Join(t.TempDir(), "models.json")
 	if err := os.WriteFile(envFile, []byte(`{"seat": {"provider": "google", "model": "from-env-file"}}`), 0o644); err != nil {

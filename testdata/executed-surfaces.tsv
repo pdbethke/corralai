@@ -96,6 +96,7 @@ corral certify --repo --mutants	executed	test:cmd/corral/certify_repo_evidence_c
 corral certify --repo --no-fail-fast	executed	test:cmd/corral/certify_failfast_flag_test.go (reaches every job's audit input); semantics in internal/adequacy/verdict_identity_test.go
 corral certify --repo --no-goal-cache	executed	test:cmd/corral/certify_repo_goalcache_test.go (TestNoGoalCacheFlagDerivesEveryTime)
 corral certify --repo --no-selection-cache	executed	test:cmd/corral/certify_repo_selcache_test.go
+corral certify --repo --no-verdict-cache	executed	test:cmd/corral/certify_repo_reuse_test.go
 corral certify --repo --owner	executed	test:cmd/corral/action_test.go
 corral certify --repo --preflight	executed	test:cmd/corral/certify_repo_test.go
 corral certify --repo --push	executed	run:2026-09-02 md:corral_public scans 22-26

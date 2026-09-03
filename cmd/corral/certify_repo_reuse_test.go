@@ -136,6 +136,13 @@ type reuseScanResult struct {
 // shape and collectSelectionEvidence); audit stands in for the localExecutor
 // seam neither T1 nor T2 needed — a real audit never runs.
 func reuseFixtureScan(t *testing.T, root, dsn string, deriver reposcan.Deriver, noGoalCache bool, audit func(path string) advpool.Verdict) reuseScanResult {
+	return reuseFixtureScanOpt(t, root, dsn, deriver, noGoalCache, false, audit)
+}
+
+// reuseFixtureScanOpt is reuseFixtureScan with the verdict cache switchable
+// off, the way --no-verdict-cache switches it off in runCertifyRepo: the
+// cache is addressed by DSN and an empty DSN misses every key.
+func reuseFixtureScanOpt(t *testing.T, root, dsn string, deriver reposcan.Deriver, noGoalCache, noVerdictCache bool, audit func(path string) advpool.Verdict) reuseScanResult {
 	t.Helper()
 	var out bytes.Buffer
 	var errb bytes.Buffer
@@ -208,7 +215,11 @@ func reuseFixtureScan(t *testing.T, root, dsn string, deriver reposcan.Deriver, 
 		}
 	}
 
-	results := reposcan.Scan(context.Background(), jobs, ex, newLedgerCache(dsn), 1)
+	verdictCacheDSN := dsn
+	if noVerdictCache {
+		verdictCacheDSN = ""
+	}
+	results := reposcan.Scan(context.Background(), jobs, ex, newLedgerCache(verdictCacheDSN), 1)
 	rep := reposcan.Aggregate("test-owner", "test-repo", "deadbeef", len(cands)+enumExcl, len(cands), results, excl)
 
 	files := buildScanFileRows(results, rep.Excluded, reposcan.CoverageMap{}, "", root, io.Discard)
@@ -406,6 +417,23 @@ func TestSecondScanIsNearlyFree(t *testing.T) {
 		res, ok := fileResultFor(r2b.results, p)
 		if !ok || res.CacheHit {
 			t.Errorf("scan 2b (control): %s = %+v, want CacheHit FALSE — an unstable goal moved GoalDigest even though the tree did not", p, res)
+		}
+	}
+
+	// --- scan 2c: --no-verdict-cache. Same unchanged tree, every other cache
+	// on, and yet every file is re-audited: the operator's way to redo a
+	// measurement the cache would otherwise keep serving.
+	offAudited := map[string]int{}
+	r2c := reuseFixtureScanOpt(t, root, dsn, deriver, false, true, func(path string) advpool.Verdict {
+		offAudited[path]++
+		return reuseFixtureVerdict()
+	})
+	if offAudited["pkga/a.py"] != 1 || offAudited["pkgb/b.py"] != 1 {
+		t.Errorf("scan 2c (--no-verdict-cache): audit calls = %+v, want one each — the verdict cache must be OFF", offAudited)
+	}
+	for _, p := range []string{"pkga/a.py", "pkgb/b.py"} {
+		if res, ok := fileResultFor(r2c.results, p); !ok || res.CacheHit {
+			t.Errorf("scan 2c (--no-verdict-cache): %s = %+v, want CacheHit FALSE", p, res)
 		}
 	}
 

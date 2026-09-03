@@ -92,6 +92,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 
 	recordDSNFlag := fs.String("record-db", "", "path to the scan ledger (default: $CORRALAI_SCANS_DB, else ~/.claude/corralai_scans.duckdb)")
 	noGoalCacheFlag := fs.Bool("no-goal-cache", false, "skip the goal cache — every candidate is re-derived even when a PRIOR scan already derived a goal for the exact same bytes, model and prompt revision. Re-buys a model call per file that a content-addressed cache would otherwise have served for free; use this to isolate goal-derivation variance from a comparison, or on a scan whose operator does not want a goal receipt kept in the ledger at all. The cache lives in the same ledger --record-db names, independent of --record itself")
+	noVerdictCacheFlag := fs.Bool("no-verdict-cache", false, "skip the verdict cache — every candidate is re-audited even when a PRIOR scan already earned a verdict for the exact same bytes, tests, models, engine and substrate. Re-buys the whole audit (generation, grading, the writer) per file; use this to isolate model variance from a comparison, or to redo a measurement the cache would otherwise keep serving. The cache lives in the same ledger --record-db names and is consulted independent of --record itself")
 	noSelectionCacheFlag := fs.Bool("no-selection-cache", false, "skip the selection cache — the ONE instrumented coverage run always executes, even when a PRIOR scan already ran the identical instrumented command over a byte-identical tree. Re-buys a full suite run (the single most expensive measurement a scan makes outside model calls) that a content-addressed cache would otherwise have served for free; use this to isolate selection variance from a comparison, or when the operator does not trust the tree to be unchanged. The cache lives in the same ledger --record-db names, and (like the goal cache) is consulted independent of --record itself; only WRITING a fresh hit requires --record, since a scan_id has to exist to write one against")
 	timeoutFlag := fs.Duration("timeout", defaultRunTimeout, "per-file WALL-CLOCK budget, measured from that file's run start — not a no-progress timer. A file still making steady progress is stopped when it exceeds this and banks a needs-review TIMEOUT verdict, keeping its dev kill rate and survivors but losing the PROVING half. Same default and semantics as `certify --local`'s --timeout; raise it for a file with many survivors, which needs the most room and has the most to prove. PER FILE, so it multiplies: a scan of N files with W workers can spend up to (N/W) x this in the worst case, which is what --top and --swarm are for")
 	if err := fs.Parse(flagArgs); err != nil {
@@ -1126,7 +1127,11 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	auditCtx, stopSignals := auditContext(stderr)
 	defer stopSignals()
 
-	results = reposcan.Scan(auditCtx, jobs, ex, newLedgerCache(ledgerDSN), workers)
+	verdictCacheDSN := ledgerDSN
+	if *noVerdictCacheFlag {
+		verdictCacheDSN = ""
+	}
+	results = reposcan.Scan(auditCtx, jobs, ex, newLedgerCache(verdictCacheDSN), workers)
 	rep := reposcan.Aggregate(*owner, cfg.Repo, *commit, totalFiles, len(cands), results, excl)
 
 	// The diff selected zero candidates: a docs-only (or no-paired-test-only)
@@ -2593,10 +2598,12 @@ func (l *localExecutor) resolveSelectionPlugin(sources []string) (plug lang.Plug
 
 // selectionCacheKey computes the (tree_digest, cmd_digest) pair collectSelection
 // and selectionCachePeek both key the selection cache on for plug/testCmd,
-// through the SAME instrumentation Instrument would apply before the suite
-// actually ran — the instrumentation flags are part of what produced the
-// evidence, not the operator's bare testCmd (see reposcan.TreeDigest's own
-// doc on the universe half of this key). The substrate the scan is running
+// through the SAME instrumentation collectSelectionEvidence applies before
+// the suite actually runs — source roots included, since they are derived
+// from the scan's candidate set and change the command — because the
+// instrumentation flags are part of what produced the evidence, not the
+// operator's bare testCmd (see reposcan.TreeDigest's own doc on the
+// universe half of this key). The substrate the scan is running
 // on (l.substrate) is the CALLER'S half of the key — see
 // localExecutor.selectionCache's own doc — not computed here, because it is
 // already a field, not something this method has to derive.
@@ -2606,12 +2613,10 @@ func (l *localExecutor) resolveSelectionPlugin(sources []string) (plug lang.Plug
 // tree (outside a git work tree, or a git failure) — every one of those
 // means "this scan cannot be cache-keyed", never a value worth caching
 // against.
-func (l *localExecutor) selectionCacheKey(plug lang.Plugin, testCmd []string) (treeDigest, cmdDigest string, ok bool) {
-	sel, selOK := plug.(lang.TestSelector)
-	if !selOK {
-		return "", "", false
-	}
-	cmd, cmdOK := sel.Instrument(testCmd)
+func (l *localExecutor) selectionCacheKey(plug lang.Plugin, testCmd []string, sources []string) (treeDigest, cmdDigest string, ok bool) {
+	// THE command collectSelectionEvidence runs — source roots included —
+	// never a plainer relative of it. See reposcan.InstrumentedCommand.
+	cmd, cmdOK := reposcan.InstrumentedCommand(plug, testCmd, sources)
 	if !cmdOK {
 		return "", "", false
 	}
@@ -2662,7 +2667,7 @@ func (l *localExecutor) selectionCachePeek(sources []string) (scanID int64, ok b
 	if plug == nil {
 		return 0, false
 	}
-	treeDigest, cmdDigest, keyOK := l.selectionCacheKey(plug, testCmd)
+	treeDigest, cmdDigest, keyOK := l.selectionCacheKey(plug, testCmd, sources)
 	if !keyOK {
 		return 0, false
 	}
@@ -2691,7 +2696,7 @@ func (l *localExecutor) collectSelection(ctx context.Context, sources []string) 
 	var treeDigest, cmdDigest string
 	var keyOK bool
 	if l.selectionCache != nil {
-		treeDigest, cmdDigest, keyOK = l.selectionCacheKey(plug, testCmd)
+		treeDigest, cmdDigest, keyOK = l.selectionCacheKey(plug, testCmd, sources)
 		if keyOK {
 			if raw, scanID, hit, err := l.selectionCache.SelectionCacheGet(ctx, treeDigest, cmdDigest, langName, l.substrate); err == nil && hit {
 				id := scanID

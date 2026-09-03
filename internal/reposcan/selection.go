@@ -192,6 +192,23 @@ func instrumentCmd(p lang.Plugin, sel lang.TestSelector, testCmd []string, sourc
 	return sel.Instrument(testCmd)
 }
 
+// InstrumentedCommand is THE command CollectSelectionEvidence runs for
+// (p, testCmd, sourcePaths): the plugin's instrumentation, with the source
+// roots derived from the scan's own file list where the plugin takes them.
+// Exported so a caller keying a cache on "the instrumented command that
+// produced this evidence" digests this command and not a different one —
+// the selection cache used to key on sel.Instrument(testCmd) (`--cov`)
+// while the run used InstrumentSourceRoots (`--cov=pkg_a`), so two scans of
+// one tree over different source roots shared a key, and the second was
+// served evidence collected over roots it never asked about.
+func InstrumentedCommand(p lang.Plugin, testCmd []string, sourcePaths []string) (cmd []string, ok bool) {
+	sel, selOK := p.(lang.TestSelector)
+	if !selOK {
+		return nil, false
+	}
+	return instrumentCmd(p, sel, testCmd, sourceRootsFor(p, sourcePaths))
+}
+
 // CollectSelectionEvidence runs the plugin's Instrument command once in the
 // scan's substrate. Never fatal: any refusal or failure becomes a Note,
 // because a scan that cannot select still has a real (whole-suite)

@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -308,4 +309,42 @@ func readScanSelectionRow(t *testing.T, dsn string, nth int) (id int64, selectio
 		t.Fatalf("only %d scan row(s) recorded, want at least %d", i, nth)
 	}
 	return id, selectionMS, reusedFrom
+}
+
+// TestSelectionCacheKeyDigestsTheCommandThatActuallyRuns. The key used to
+// digest sel.Instrument(testCmd) — `pytest --cov` — while the run used
+// InstrumentSourceRoots — `pytest --cov=pkg_a`. So the key's own doc ("the
+// instrumentation flags are part of what produced the evidence") was
+// false, and two scans of one tree over different source roots (pkg_a,
+// then pkg_b) shared a key: the second was served coverage collected over
+// pkg_a and every pkg_b file fell to whole-suite with the misdiagnosis
+// "never saw … did the suite run it?". The digest must be of the command
+// reposcan.InstrumentedCommand builds for THESE sources.
+func TestSelectionCacheKeyDigestsTheCommandThatActuallyRuns(t *testing.T) {
+	root, _, _ := selCacheFixture(t)
+	ex := newLocalExecutor(root, nil, substrateWorkspace, 0, io.Discard)
+	defer ex.Close()
+	py, ok := lang.ByName("python")
+	if !ok {
+		t.Fatal("no python plugin")
+	}
+	testCmd := []string{"pytest", "-q"}
+	srcA := []string{"pkg_a/a.py", "pkg_a/test_a.py"}
+	srcB := []string{"pkg_b/b.py", "pkg_b/test_b.py"}
+
+	_, dA, okA := ex.selectionCacheKey(py, testCmd, srcA)
+	_, dB, okB := ex.selectionCacheKey(py, testCmd, srcB)
+	if !okA || !okB {
+		t.Fatalf("no key: a=%v b=%v", okA, okB)
+	}
+	if dA == dB {
+		t.Errorf("two scans over different source roots share cmd_digest %s — the second would be served the first's evidence", dA)
+	}
+	ranA, _ := reposcan.InstrumentedCommand(py, testCmd, srcA)
+	if want := selectionCmdDigest(ranA); dA != want {
+		t.Errorf("cmd_digest = %s, want %s — the digest of the command that runs (%q)", dA, want, strings.Join(ranA, " "))
+	}
+	if !strings.Contains(strings.Join(ranA, " "), "pkg_a") {
+		t.Fatalf("fixture: the instrumented python command carries no source root: %q", ranA)
+	}
 }

@@ -469,6 +469,21 @@ type Report struct {
 	// could anything feed the mistake back so the model could correct it. A
 	// plain Jail leaves this empty rather than failing.
 	InvalidReasons map[string]string
+	// Unmeasured lists mutants whose GRADING COMMAND fails on the compliant
+	// code, so nothing that command says about the mutant is evidence. They
+	// are neither killed nor survived and are excluded from Total.
+	//
+	// This category exists because its absence let a proof be fabricated.
+	// The compliant baseline was proven for ONE command — the shared one —
+	// while every mutant could be graded by a DIFFERENT command that was
+	// never run against compliant code: a per-span narrowing in the dev pass,
+	// or the authored test ALONE in the proving pass. A command that fails
+	// for reasons that have nothing to do with the mutant then reads as a
+	// kill. Reproduced with real pytest: an authored file whose class is
+	// named CalcTest (pytest collects nothing, exit 5) marked a genuinely
+	// unobservable mutant KILLED, and the driver signed it as a proven gap.
+	Unmeasured        []string
+	UnmeasuredReasons map[string]string
 	// PerMutant records what each GRADED mutant was actually graded with,
 	// keyed by Mutant.ID. There is one entry per mutant that reached the
 	// suite — a mutant the compile gate rejected is absent, because nothing
@@ -790,13 +805,64 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 	// reproducible, and this ledger is signed: an ordering that depended on
 	// scheduling would make two runs of identical inputs disagree.
 	type outcome struct {
-		killed        bool
-		err           error
-		invalid       bool
-		invalidReason string
-		grading       *MutantGrading
+		killed           bool
+		err              error
+		invalid          bool
+		invalidReason    string
+		unmeasured       bool
+		unmeasuredReason string
+		grading          *MutantGrading
 	}
 	outcomes := make([]outcome, len(mutants))
+
+	// EVERY GRADING COMMAND IS PROVEN ON COMPLIANT CODE BEFORE IT MAY DECIDE
+	// ANYTHING. The shared testCmd was proven by the baseline above; a
+	// per-mutant command (WithCommandFor) was not, and a command that fails
+	// on the unmutated code cannot distinguish a mutant from itself — its
+	// non-zero exit is a fact about the command, not about the mutant.
+	//
+	// Three reproduced shapes, all real pytest, all previously counted as
+	// kills: an authored test file pytest does not collect (exit 5, "no tests
+	// ran"); an order-dependent dev test that only passes after a sibling the
+	// narrowing dropped; and `addopts = --cov-fail-under=90` in pytest.ini,
+	// which fails any subset covering less than the whole. In the proving
+	// pass each of those signed a "proven missed" the authored test never
+	// earned.
+	//
+	// One probe per DISTINCT command, not per mutant: the authored pass uses
+	// one command for every survivor, and the dev pass reuses narrowings
+	// across mutants sharing a span, so this is a handful of extra runs
+	// against a suite already being run once per mutant.
+	commandFailsOnCompliant := map[string]string{}
+	if cfg.commandFor != nil {
+		sharedKey := strings.Join(testCmd, "\x00")
+		distinct := map[string][]string{}
+		for _, m := range mutants {
+			mc := cfg.commandFor(m)
+			if len(mc.Cmd) == 0 {
+				continue
+			}
+			key := strings.Join(mc.Cmd, "\x00")
+			if key == sharedKey {
+				continue // proven by the baseline
+			}
+			distinct[key] = mc.Cmd
+		}
+		for key, cmd := range distinct {
+			pctx, pcancel := context.WithTimeout(ctx, perMutant)
+			passed, out, perr := runCmdVerbose(pctx, compliantCode, failFast(cmd))
+			pcancel()
+			if perr != nil {
+				// FAIL CLOSED, as the compile gate does: a probe that could
+				// not RUN says nothing about the command, and treating it as
+				// failed would quietly discard the exam.
+				return Report{}, fmt.Errorf("adequacy: proving grading command %v on compliant code: %w", cmd, perr)
+			}
+			if !passed {
+				commandFailsOnCompliant[key] = strings.TrimSpace(lastLines(out, 12))
+			}
+		}
+	}
 
 	// DUPLICATE HUNKS ARE GRADED ONCE AND ANSWERED TWICE.
 	//
@@ -885,6 +951,15 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 			// is timed. A caller that never set WithCommandFor still gets
 			// TestsRun 0 / Rule "" here, which is what it always got.
 			grading = &MutantGrading{}
+		}
+		if why, unsound := commandFailsOnCompliant[strings.Join(cmd, "\x00")]; unsound {
+			outcomes[i] = outcome{
+				unmeasured: true,
+				unmeasuredReason: fmt.Sprintf("the command that would grade this mutant FAILS ON THE COMPLIANT CODE, so its verdict is not evidence about the mutant (command: %s): %s",
+					strings.Join(cmd, " "), why),
+				grading: grading,
+			}
+			return
 		}
 		// FAIL-FAST APPLIES HERE AND ONLY HERE: one mutant's own suite run.
 		// A no-op unless the probe above proved the runner takes the flag.
@@ -1026,6 +1101,14 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 			}
 			continue
 		}
+		if outcomes[i].unmeasured {
+			rep.Unmeasured = append(rep.Unmeasured, m.ID)
+			if rep.UnmeasuredReasons == nil {
+				rep.UnmeasuredReasons = map[string]string{}
+			}
+			rep.UnmeasuredReasons[m.ID] = outcomes[i].unmeasuredReason
+			continue
+		}
 		if g := outcomes[i].grading; g != nil {
 			if rep.PerMutant == nil {
 				rep.PerMutant = map[string]MutantGrading{}
@@ -1069,4 +1152,14 @@ func mutantSpread(per map[string]MutantGrading) (median, max time.Duration) {
 	// tests-per-mutant spread beside it: this is a duration some mutant
 	// really took, not an average of two that nothing did.
 	return ds[len(ds)/2], ds[len(ds)-1]
+}
+
+// lastLines returns the final n lines of s — a failing command's summary is at
+// the end of its output, which is the half that explains itself.
+func lastLines(s string, n int) string {
+	lines := strings.Split(strings.TrimRight(s, "\n"), "\n")
+	if len(lines) > n {
+		lines = lines[len(lines)-n:]
+	}
+	return strings.Join(lines, "\n")
 }

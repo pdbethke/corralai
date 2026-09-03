@@ -4839,6 +4839,11 @@ func warehouseRowsSHA256(b auditpush.Bundle) (string, error) {
 	// This rule used to be spelled out twice, and two copies of a custody set
 	// is one copy that gets a field added to it and one that does not.
 	auditpush.BlankUnpushedSource(&b)
+	// And the SAME canonical form the writer stores — timestamps at the
+	// warehouse's precision and zone, NULLs where the writer refuses a value.
+	// Without this the signature covered bytes the warehouse never held, and
+	// `corral verify --db` failed on every real scan.
+	auditpush.CanonicalizeForWarehouse(&b)
 	b.Scan.StatementSHA256 = ""
 	// The --transparency receipt is blanked for the SAME reason
 	// StatementSHA256 is, one step further down the same chain: production

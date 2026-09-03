@@ -295,15 +295,36 @@ func userFacingProse(t *testing.T) map[string]string {
 		// runs anything, yet an unexecuted surface advertised there passed
 		// while the byte-identical line in README.md failed. The difference
 		// was purely the file extension.
-		case ".md", ".mdx", ".astro", ".yml", ".yaml", ".txt", ".html":
+		// `.json` because site/src/data/recordings/*.meta.json fields are
+		// RENDERED on the gallery; `.ts/.js/.mjs/.svelte` because the site's
+		// components carry copy; `Makefile` because its help header is the
+		// first thing a contributor reads. Each was demonstrated to advertise
+		// an unexecuted flag with this gate green.
+		//
+		// NOT shell scripts and NOT Dockerfiles, and the reason is recorded
+		// because the first widening included both: a script's comment
+		// describing a flag's HISTORY is not an advertisement, and Docker's
+		// own `HEALTHCHECK --interval` is not corral-top's `--interval`. A net
+		// wide enough to catch those makes accusations, and an accusing gate
+		// is one people learn to silence.
+		case ".md", ".mdx", ".astro", ".yml", ".yaml", ".txt", ".html", ".json", ".ts", ".js", ".mjs", ".svelte":
 		default:
+			if d.Name() == "Makefile" {
+				break
+			}
 			return nil
 		}
 		rel, rerr := filepath.Rel(root, path)
 		if rerr != nil {
 			return rerr
 		}
-		if strings.Contains(filepath.ToSlash(rel), "docs/cli/") {
+		// ONLY THE FILES THE GENERATOR EMITS are exempt — one per binary in
+		// cmd/, named for it. `docs/cli/overview.md` sits beside them, is
+		// hand-written, is published by Starlight, and advertised an
+		// unexecuted flag with every gate green because a directory prefix
+		// exempted the whole folder. The exemption is derived from cmd/, as
+		// the generator's own file list is.
+		if isGeneratedCLIReference(rel) {
 			return nil
 		}
 		// CHANGELOG is HISTORY, not a promise. It records what a release did,
@@ -387,7 +408,41 @@ func TestDocsUnexecutedSurfacesAreNotAdvertised(t *testing.T) {
 		}
 	}
 	sort.Strings(unexecuted)
-	if len(unexecuted) == 0 {
+	// A FLAG SHARED WITH AN EXECUTED SIBLING IS STILL UNEXECUTED ON ITS OWN
+	// COMMAND. `certify --repo --no-fail-fast` is executed, so `--no-fail-fast`
+	// alone was exempt everywhere — and `corral certify --local
+	// --no-fail-fast`, which no test has ever run, could be advertised with
+	// this gate green. So a shared flag is checked with its command's other
+	// tokens: prose that names the unexecuted command AND the flag is
+	// advertising the unexecuted surface, whatever a sibling proved.
+	type qualified struct {
+		flag    string
+		context []string
+	}
+	var shared []qualified
+	for surface, row := range classified {
+		if row.status != "unexecuted" {
+			continue
+		}
+		i := strings.LastIndex(surface, " --")
+		if i < 0 {
+			continue
+		}
+		flag := surface[i+1:]
+		if !anyExecuted[flag] {
+			continue // already in `unexecuted`, checked unqualified
+		}
+		var ctx []string
+		for _, tok := range strings.Fields(surface[:i]) {
+			if strings.HasPrefix(tok, "--") {
+				ctx = append(ctx, tok)
+			}
+		}
+		if len(ctx) > 0 {
+			shared = append(shared, qualified{flag: flag, context: ctx})
+		}
+	}
+	if len(unexecuted) == 0 && len(shared) == 0 {
 		return // nothing unexecuted: the gate has nothing to say
 	}
 
@@ -402,15 +457,39 @@ func TestDocsUnexecutedSurfacesAreNotAdvertised(t *testing.T) {
 		t.Fatal("the walk did not reach README.md — the gate is not looking where it thinks it is")
 	}
 
+	wordBounded := func(flag string) *regexp.Regexp {
+		// Word-bounded: `--swarm` must not match `--swarming`.
+		return regexp.MustCompile(regexp.QuoteMeta(flag) + `($|[^a-zA-Z0-9-])`)
+	}
 	for rel, body := range prose {
 		for _, flag := range unexecuted {
-			// Word-bounded: `--swarm` must not match `--swarming`.
-			re := regexp.MustCompile(regexp.QuoteMeta(flag) + `($|[^a-zA-Z0-9-])`)
-			if re.MatchString(body) {
+			if wordBounded(flag).MatchString(body) {
 				t.Errorf("%s advertises %s, which the manifest marks unexecuted.\n"+
 					"Either run it and record a receipt in testdata/executed-surfaces.tsv, or stop naming it where a stranger will read it first.\n"+
 					"This is the gate that `--jail container` needed: named in the README as the macOS/Windows path, never once executed, and broken.",
 					rel, flag)
+			}
+		}
+		// The shared-spelling case is judged per LINE: a line that names the
+		// unexecuted command's own tokens and the flag together is advertising
+		// that command, not the executed sibling.
+		for _, q := range shared {
+			flagRe := wordBounded(q.flag)
+			for _, line := range strings.Split(body, "\n") {
+				if !flagRe.MatchString(line) {
+					continue
+				}
+				all := true
+				for _, tok := range q.context {
+					if !wordBounded(tok).MatchString(line) {
+						all = false
+						break
+					}
+				}
+				if all {
+					t.Errorf("%s advertises %s together with %s — that command's %s is marked unexecuted; an executed sibling (a different command with the same flag) does not cover it.\n  line: %s",
+						rel, q.flag, strings.Join(q.context, " "), q.flag, strings.TrimSpace(line))
+				}
 			}
 		}
 	}
@@ -479,6 +558,18 @@ func TestDocsEveryDocPolicingTestRunsOnDocsOnlyChanges(t *testing.T) {
 			t.Errorf("marker %q names no declaration in this package — it was probably renamed, and this meta-gate has been quietly blind to every doc gate that uses it", m)
 		}
 	}
+	// Every function body in the package, by name, so a test's reads can be
+	// followed through the helpers it calls.
+	calleeBodies := map[string]*ast.BlockStmt{}
+	for _, pkg := range pkgs {
+		for _, file := range pkg.Files {
+			for _, decl := range file.Decls {
+				if fd, ok := decl.(*ast.FuncDecl); ok && fd.Recv == nil && fd.Body != nil {
+					calleeBodies[fd.Name.Name] = fd.Body
+				}
+			}
+		}
+	}
 	found := 0
 	for _, pkg := range pkgs {
 		for _, file := range pkg.Files {
@@ -487,18 +578,14 @@ func TestDocsEveryDocPolicingTestRunsOnDocsOnlyChanges(t *testing.T) {
 				if !ok || fn.Recv != nil || fn.Body == nil || !strings.HasPrefix(fn.Name.Name, "Test") {
 					continue
 				}
-				reads := false
-				ast.Inspect(fn.Body, func(n ast.Node) bool {
-					switch v := n.(type) {
-					case *ast.Ident:
-						for _, m := range markers {
-							if v.Name == m {
-								reads = true
-							}
-						}
-					}
-					return !reads
-				})
+				// TRANSITIVE, not direct. A reviewer renamed a doc gate to lose
+				// the prefix and routed its calls through two wrapper
+				// functions; the wrappers referenced the markers, the test did
+				// not, and both meta-gates stayed green while CI's selector
+				// ran the gate zero times. So a test reads the docs if any
+				// function it calls — at any depth, within this package —
+				// references a marker.
+				reads := reachesMarker(fn.Body, markers, calleeBodies, map[string]bool{})
 				if !reads {
 					continue
 				}
@@ -513,4 +600,56 @@ func TestDocsEveryDocPolicingTestRunsOnDocsOnlyChanges(t *testing.T) {
 	if found == 0 {
 		t.Fatal("found no test reading the documentation — this gate is not looking where it thinks it is")
 	}
+}
+
+// reachesMarker reports whether body references one of markers, directly or
+// through any package-level function it calls, to any depth.
+func reachesMarker(body *ast.BlockStmt, markers []string, bodies map[string]*ast.BlockStmt, visiting map[string]bool) bool {
+	if body == nil {
+		return false
+	}
+	found := false
+	ast.Inspect(body, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		id, ok := n.(*ast.Ident)
+		if !ok {
+			return true
+		}
+		for _, m := range markers {
+			if id.Name == m {
+				found = true
+				return false
+			}
+		}
+		// A call into another function in this package: follow it once.
+		if callee, ok := bodies[id.Name]; ok && !visiting[id.Name] {
+			visiting[id.Name] = true
+			if reachesMarker(callee, markers, bodies, visiting) {
+				found = true
+				return false
+			}
+		}
+		return true
+	})
+	return found
+}
+
+// isGeneratedCLIReference reports whether rel is one of the files
+// scripts/gen-cli-docs.sh emits: `<dir>/docs/cli/<binary>.md` for a binary in
+// cmd/. Derived from cmd/ so a new binary is exempt the moment it exists and a
+// hand-written neighbour never is.
+func isGeneratedCLIReference(rel string) bool {
+	rel = filepath.ToSlash(rel)
+	i := strings.LastIndex(rel, "docs/cli/")
+	if i < 0 {
+		return false
+	}
+	name := strings.TrimSuffix(rel[i+len("docs/cli/"):], ".md")
+	if name == "" || strings.Contains(name, "/") {
+		return false
+	}
+	_, err := os.Stat(filepath.Join("..", "..", "cmd", name, "main.go"))
+	return err == nil
 }

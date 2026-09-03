@@ -679,6 +679,7 @@ func PushBundle(target string, b Bundle) (Counts, error) {
 	// BlankUnpushedSource. A caller that forgets to blank a field cannot
 	// leak it, and the hasher blanks exactly the same set.
 	BlankUnpushedSource(&b)
+	CanonicalizeForWarehouse(&b)
 	if err := requireStatements(b); err != nil {
 		return Counts{}, err
 	}
@@ -778,6 +779,45 @@ func stampLink(b Bundle) Bundle {
 
 	b.Files, b.Mutants, b.Calls, b.Events = files, mutants, calls, events
 	return b
+}
+
+// CanonicalizeForWarehouse rewrites b into exactly the form the warehouse will
+// hand back, so that a hash taken BEFORE the push equals one taken AFTER.
+//
+// It exists because `corral verify --db` was failing its rows-hash check on
+// EVERY real scan, and blaming the operator's warehouse for it. The statement
+// signed a hash over the in-memory bundle, where an event's timestamp is a Go
+// time.Time — nanoseconds, in the local zone:
+//
+//	signed over:    2026-09-03T15:54:50.70062435-04:00
+//	warehouse gave: 2026-09-03T19:54:50.700624Z
+//
+// DuckDB's TIMESTAMPTZ holds microseconds in UTC, so the verifier re-hashed
+// different bytes and reported "✗ warehouse rows … hash to a different value …
+// note: a VACUUMed or re-pushed warehouse". Every real audit emits events, so
+// the check that exists to let a stranger confirm a signed number was
+// structurally unable to confirm one. The same shape hit an uncovered file:
+// the writer stores NULL for its kill rate, the hasher saw 0.
+//
+// Both writer and hasher call this, in ONE place, for the same reason
+// BlankUnpushedSource is shared: two copies of "what the warehouse holds" is
+// one copy that gets a field added to it and one that does not. The property
+// itself is pinned by TestVerifyRowsHashSurvivesTheRealReader, which pushes a
+// fully-populated bundle and re-hashes what ReadBundle returns — so a NEW
+// transform the writer introduces breaks that test by name rather than
+// breaking verification silently for every operator.
+func CanonicalizeForWarehouse(b *Bundle) {
+	for i := range b.Events {
+		b.Events[i].TS = b.Events[i].TS.UTC().Truncate(time.Microsecond)
+	}
+	for i := range b.Files {
+		// The writer refuses to store a kill rate for an uncovered file (see
+		// insertFileRow): a file the suite never reached has no rate, and a
+		// stored 0 would read as "measured, and everything survived".
+		if b.Files[i].Uncovered {
+			b.Files[i].KillRate = nil
+		}
+	}
 }
 
 // BlankUnpushedSource withholds every source-bearing field on a bundle whose

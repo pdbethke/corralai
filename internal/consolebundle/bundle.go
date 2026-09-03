@@ -157,6 +157,15 @@ func TrustAnchor() (pubHex, source string, err error) {
 		if _, decErr := hex.DecodeString(v); decErr != nil || len(v) != 64 {
 			return "", "", fmt.Errorf("%s is not a 64-character hex Ed25519 public key (got %d chars): %v", TrustAnchorEnv, len(v), decErr)
 		}
+		// THE PUBLISHED DEV KEY IS NOT A RELEASE KEY, however it arrives.
+		// Passing it through this variable made it the production anchor
+		// with no warning at all, because the warning keys on the DEV
+		// source. It is the same key with the same public seed; the only
+		// honest way to accept it is to say so, which is what the DEV opt-in
+		// exists for.
+		if strings.EqualFold(v, DevPubKeyHex) {
+			return "", "", fmt.Errorf("%s is set to the PUBLISHED development key, whose private half is committed to corralai's public repository — it is not a release key. If you mean to use it for local work, set %s=1 instead, so the client logs that it is trusting a key anyone can sign with", TrustAnchorEnv, DevAnchorEnv)
+		}
 		return v, TrustAnchorEnv, nil
 	}
 	if truthy(os.Getenv(DevAnchorEnv)) {

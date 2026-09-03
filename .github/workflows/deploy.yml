@@ -257,10 +257,37 @@ jobs:
           git pull --ff-only
           git log -1 --oneline
           echo "::endgroup::"
+          echo "::group::sign the console bundle for THIS build"
+          # THE BRAIN MUST SERVE A CONSOLE ITS CLIENTS CAN VERIFY, and until
+          # this step existed it never did. The manifest's version is inside
+          # the signed bytes; a plain `go build` VCS-stamps a version like
+          # v0.8.4-0.20260903201640-cb25ec6f06d0 that nothing has signed, so
+          # the daemon served no usable signature and every corral-observe /
+          # corral-admin refused it with "manifest signature INVALID". That
+          # was true before the per-version signature file too — a bare "dev"
+          # signature never matched a stamped version either.
+          #
+          # So the deploy signs the exact build it ships, HERE, on this box:
+          # the release seed lives in this host's systemd credstore (its
+          # primary copy is in the maintainer's pass store), and it never
+          # reaches GitHub. The version is stamped explicitly so the
+          # signature and the binary agree by construction rather than by
+          # whatever the VCS stamp happens to produce.
+          VERSION="$(git describe --tags --always --dirty)"
+          CORRALAI_RELEASE_KEY="$(sudo systemd-creds decrypt --name=corralai-console-release-key /etc/credstore.encrypted/corralai-console-release-key -)" \
+            bash scripts/sign-console-bundle.sh "$VERSION"
+          # And prove it before building anything on top of it.
+          CORRALAI_CONSOLE_PUBKEY="$(cat deploy/console-release.pub)" \
+            go run ./cmd/verify-console-signature "$VERSION"
+          echo "::endgroup::"
           echo "::group::build (CGO/duckdb)"
           # Build to a staging file while the old binary keeps running (you
           # can't overwrite a running executable — ETXTBSY), then swap.
-          CGO_ENABLED=1 go build -trimpath -o corral.new ./cmd/corral
+          CGO_ENABLED=1 go build -trimpath -ldflags "-X main.stampedVersion=$VERSION" -o corral.new ./cmd/corral
+          # The signature was embedded at build time from the working tree;
+          # do not leave the box's clone dirty with it, or the next
+          # `git pull --ff-only` fails loudly for the wrong reason.
+          git checkout -- internal/ui/console.manifest.sig
           echo "::endgroup::"
           sudo systemctl stop corral
           mv -f corral.new corral

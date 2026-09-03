@@ -92,6 +92,22 @@ func corralCoverageReport(stdout, header, langName, modulePath string) (executed
 		}
 		parsed++
 		rel := path
+		// A RELATIVE PATH IS ALREADY REPO-RELATIVE and is taken as it is —
+		// the reducers emit cwd-relative paths precisely so that no
+		// substrate needs to know a root. Only an absolute path is aligned.
+		// (alignPyPath draws the same line for coverage.py's output.)
+		if !filepath.IsAbs(path) {
+			clean := filepath.ToSlash(filepath.Clean(path))
+			if clean == "." || clean == ".." || strings.HasPrefix(clean, "../") {
+				continue
+			}
+			if hit == "1" {
+				executed[clean] = true
+			} else if _, already := executed[clean]; !already {
+				executed[clean] = false
+			}
+			continue
+		}
 		if root != "" {
 			r, relErr := filepath.Rel(root, path)
 			// Outside the repo root is a gem, a stdlib file, or something
@@ -285,6 +301,11 @@ func shellCommandWords(script string) []string {
 		if coverageTransparentWord[word] {
 			continue
 		}
+		// `>&2` splits on `&` and leaves "2" in command position. A bare
+		// number is a file descriptor, never a program.
+		if strings.Trim(word, "0123456789") == "" {
+			continue
+		}
 		words = append(words, word)
 		// Everything up to the next separator is this command's arguments.
 		for i < len(script) && !seps(script[i]) {
@@ -327,4 +348,34 @@ var coverageTransparentWord = map[string]bool{
 // naming the real problem, rather than as a broken pipeline.
 func coverageMergeDir(header string) string {
 	return `printf '%s\n' ` + shellQuote(header) + `; cat "$d"/cov/* 2>/dev/null || true`
+}
+
+// InterpretersIn returns every program a command will actually execute in
+// command position: argv[0] for a plain command, and each command-position
+// word of the script for a `sh -c` wrapper.
+//
+// It exists because the jail resolves the operator's toolchain from argv[0]
+// ONLY. Every coverage command this package builds is a `sh -c` wrapper — the
+// instrumentation has to set up a temp dir, run the suite, then reduce — so
+// argv[0] is "sh", and a Go under ~/sdk, a pyenv python, a venv, nvm's node,
+// all of them reachable for the ordinary scoring runs in the same scan, were
+// invisible to the pre-flight and to test selection. The failure surfaced as
+// "coverage report unparseable: invalid character 's'" — the 's' of
+// `sh: 1: /home/…/venv/bin/python: not found`, discarded before anyone could
+// read it.
+func InterpretersIn(argv []string) []string {
+	if len(argv) == 0 {
+		return nil
+	}
+	switch strings.TrimSuffix(filepath.Base(argv[0]), ".cmd") {
+	case "sh", "bash", "dash", "zsh":
+		for i, a := range argv {
+			if a == "-c" && i+1 < len(argv) {
+				return shellCommandWords(argv[i+1])
+			}
+		}
+		return []string{argv[0]}
+	default:
+		return []string{argv[0]}
+	}
 }

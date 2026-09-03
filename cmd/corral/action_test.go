@@ -1753,6 +1753,19 @@ func TestDocsWalkSkipsGitIgnoredFiles(t *testing.T) {
 // duplication cannot rot.
 const docGateSelector = "^TestDocs"
 
+// docGateRunLine is the exact command the doc-gate step must run. A substring
+// check on the selector was defeated by `-run '^TestDocsZZ'`.
+const docGateRunLine = "go test ./cmd/corral/ -run '^TestDocs' -count=1"
+
+// containerJailRunLine is the exact command each jail step must run, and
+// codeChangedCondition the only `if:` a gated step may carry. Both were
+// substring checks; both were defeated by one-line edits that satisfied the
+// substring and changed nothing.
+const (
+	containerJailRunLine = "go test ./internal/adequacy/ ./internal/sandbox/ -run Container -count=1 -v"
+	codeChangedCondition = "steps.filter.outputs.code == 'true'"
+)
+
 // TestDocsGatesRunOnDocsOnlyChanges is the gate on the gates.
 //
 // THE BUG IT EXISTS TO PREVENT, which shipped and cost two stale tags:
@@ -1866,6 +1879,13 @@ func assertDocGateStepIsUnconditional(t *testing.T, raw []byte) {
 				continue
 			}
 			found++
+			// EXACT, not a substring. `-run '^TestDocsZZ'` contains the
+			// selector and selects nothing; `go test` then exits 0 having run
+			// no test, and a substring check calls that the doc gates. The
+			// run line is one known command, so it is compared as one.
+			if strings.TrimSpace(st.Run) != docGateRunLine {
+				t.Errorf("deploy.yml job %q step %q must run exactly %q, got %q — anything else can select nothing and pass", jobName, st.Name, docGateRunLine, strings.TrimSpace(st.Run))
+			}
 			if strings.TrimSpace(st.If) != "" {
 				t.Errorf("deploy.yml job %q step %q runs the doc gates behind `if: %s` — those gates police what MARKDOWN claims, and that condition is exactly what excludes a Markdown-only pull request from them",
 					jobName, st.Name, st.If)
@@ -1899,11 +1919,14 @@ func assertStepCannotBeAdvisory(t *testing.T, jobName, stepName string, continue
 	if continueOnError {
 		t.Errorf("deploy.yml job %q step %q sets `continue-on-error: true` — the step can fail and the job still passes, so this gate enforces nothing", jobName, stepName)
 	}
-	for _, swallow := range []string{"|| true", "||true", "|| :", "; true", "|| exit 0"} {
-		if strings.Contains(run, swallow) {
-			t.Errorf("deploy.yml job %q step %q swallows its own failure with %q — the gate's exit code never reaches CI, so it enforces nothing:\n%s",
-				jobName, stepName, swallow, run)
-		}
+	// ANY `||` after the gate command is a fallback branch, and a gate has no
+	// legitimate one. The first version enumerated `|| true`, `|| :` and
+	// `|| exit 0`, and was defeated by `|| echo "::warning::…publishing
+	// anyway"`. An enumeration of the ways to swallow a failure is the same
+	// mistake as an enumeration of anything else.
+	if strings.Contains(run, "||") || strings.Contains(run, "; true") || strings.Contains(run, "&& true") {
+		t.Errorf("deploy.yml job %q step %q carries a fallback (`||`, `; true`) after a gate command — the gate's exit code never reaches CI, so it enforces nothing:\n%s",
+			jobName, stepName, run)
 	}
 }
 
@@ -1979,19 +2002,20 @@ func TestContainerJailIsExercisedInCI(t *testing.T) {
 			if !strings.Contains(st.Run, "go test") || !strings.Contains(st.Run, "-count=1") {
 				continue
 			}
-			// `-run Container` EXACTLY. A pattern matching nothing makes
-			// `go test` exit 0 having run no test at all, which is the same
-			// vacuous pass this whole gate exists to prevent.
-			if !strings.Contains(st.Run, "-run Container") {
-				t.Errorf("deploy.yml step %q runs the container tests with a selector this gate does not recognise; it must be `-run Container` so the step cannot pass by selecting nothing:\n%s", st.Name, st.Run)
+			// THE EXACT RUN LINE. `-run ContainerZZ` contains `-run Container`
+			// and selects nothing; `go test` exits 0 having run no test. A
+			// substring check called that exercising the jail. There is one
+			// known command; it is compared as one.
+			if strings.TrimSpace(st.Run) != containerJailRunLine {
+				t.Errorf("deploy.yml step %q must run exactly %q, got %q — anything else can select nothing and pass", st.Name, containerJailRunLine, strings.TrimSpace(st.Run))
 				continue
 			}
-			// A condition that a code change does not satisfy makes the step
-			// unreachable. `if: false` is the trivial case; anything not
-			// keyed on the repository's own docs-only filter is suspect.
+			// THE EXACT CONDITION. `if: steps.filter.outputs.code == 'never'`
+			// contains the filter's name and is never true. The one condition
+			// a code change satisfies is the one every other gated step uses.
 			cond := strings.TrimSpace(st.If)
-			if cond != "" && !strings.Contains(cond, "steps.filter.outputs.code") {
-				t.Errorf("deploy.yml step %q is gated on `if: %s`, which an ordinary code change does not obviously satisfy — the container jail would be skipped exactly as it was when nothing set CORRALAI_EXEC_IMAGE at all", st.Name, cond)
+			if cond != "" && cond != codeChangedCondition {
+				t.Errorf("deploy.yml step %q is gated on `if: %s`; the only permitted condition is %q, which a code change satisfies — anything else makes the jail unreachable exactly as it was when nothing set CORRALAI_EXEC_IMAGE at all", st.Name, cond, codeChangedCondition)
 				continue
 			}
 			assertStepCannotBeAdvisory(t, "validate", st.Name, st.ContinueOnError, st.Run)
@@ -2043,31 +2067,151 @@ func TestDocsReleaseVerifiesTheConsoleSignature(t *testing.T) {
 	}
 	var wf struct {
 		Jobs map[string]struct {
-			Steps []struct {
-				Name            string `yaml:"name"`
-				If              string `yaml:"if"`
-				Run             string `yaml:"run"`
-				ContinueOnError bool   `yaml:"continue-on-error"`
+			ContinueOnError bool `yaml:"continue-on-error"`
+			Steps           []struct {
+				Name            string            `yaml:"name"`
+				If              string            `yaml:"if"`
+				Run             string            `yaml:"run"`
+				Env             map[string]string `yaml:"env"`
+				ContinueOnError bool              `yaml:"continue-on-error"`
 			} `yaml:"steps"`
 		} `yaml:"jobs"`
 	}
 	if err := yaml.Unmarshal(raw, &wf); err != nil {
 		t.Fatalf("parsing release.yml: %v", err)
 	}
+	// THREE DEFEATS OF THE FIRST VERSION, each leaving it green:
+	//
+	//   `… || echo "::warning::publishing anyway"`   not in the swallow list
+	//   the step moved to its own job                 steps were checked, jobs were not
+	//   env CORRALAI_CONSOLE_DEV=1 + `… dev`           neither the argument nor the anchor was read
+	//
+	// So: the step must be in the SAME job that publishes, BEFORE the publish
+	// step, run the exact command with the tag's version, take its anchor
+	// from the PUBKEY secret and never from the dev opt-in, and carry no
+	// fallback and no condition.
+	const wantRun = `go run ./cmd/verify-console-signature "${GITHUB_REF_NAME}"`
 	found := 0
 	for jobName, job := range wf.Jobs {
-		for _, st := range job.Steps {
-			if !strings.Contains(st.Run, "verify-console-signature") {
-				continue
+		if job.ContinueOnError {
+			t.Errorf("release.yml job %q sets continue-on-error at the JOB level — every step in it becomes advisory", jobName)
+		}
+		verifyAt, publishAt := -1, -1
+		for i, st := range job.Steps {
+			if strings.Contains(st.Run, "verify-console-signature") {
+				verifyAt = i
+				found++
+				if lines := strings.Split(strings.TrimSpace(st.Run), "\n"); lines[len(lines)-1] != wantRun {
+					t.Errorf("release.yml step %q must END with exactly %q (the tag's own version), its last line is %q", st.Name, wantRun, lines[len(lines)-1])
+				}
+				if cond := strings.TrimSpace(st.If); cond != "" {
+					t.Errorf("release.yml step %q verifies behind `if: %s` — a condition is how this becomes unreachable for exactly the releases it protects", st.Name, cond)
+				}
+				assertStepCannotBeAdvisory(t, jobName, st.Name, st.ContinueOnError, st.Run)
+				if v := st.Env["CORRALAI_CONSOLE_PUBKEY"]; !strings.Contains(v, "secrets.CORRALAI_CONSOLE_PUBKEY") {
+					t.Errorf("release.yml step %q must take CORRALAI_CONSOLE_PUBKEY from secrets.CORRALAI_CONSOLE_PUBKEY, got %q — any other anchor is not the release key", st.Name, v)
+				}
+				if _, dev := st.Env["CORRALAI_CONSOLE_DEV"]; dev {
+					t.Errorf("release.yml step %q sets CORRALAI_CONSOLE_DEV — a release must never be verified against the PUBLISHED dev key", st.Name)
+				}
 			}
-			found++
-			if cond := strings.TrimSpace(st.If); cond != "" {
-				t.Errorf("release.yml step %q verifies the console signature behind `if: %s` — a condition is how this becomes unreachable for exactly the releases it exists to protect", st.Name, cond)
+			if strings.Contains(st.Run, "gh release create") {
+				publishAt = i
 			}
-			assertStepCannotBeAdvisory(t, jobName, st.Name, st.ContinueOnError, st.Run)
+		}
+		if publishAt >= 0 && verifyAt < 0 {
+			t.Errorf("release.yml job %q publishes a release but never verifies the console signature in the same job — a check in a different job cannot stop this one from publishing", jobName)
+		}
+		if publishAt >= 0 && verifyAt > publishAt {
+			t.Errorf("release.yml job %q verifies the console signature AFTER publishing (step %d vs %d) — the release is already out when the check fails", jobName, verifyAt, publishAt)
 		}
 	}
 	if found == 0 {
 		t.Error("no release.yml step runs verify-console-signature, so a tag can ship a console bundle whose signature every thin client refuses — which is what shipped until this gate existed")
+	}
+}
+
+// TestDeploySignsTheConsoleForTheBuildItShips asserts the Hetzner deploy
+// cannot go back to shipping a console its clients refuse.
+//
+// A plain `go build` VCS-stamps a version like
+// v0.8.4-0.20260903201640-cb25ec6f06d0, which nothing has signed, so the
+// deployed brain served no usable manifest signature and every thin client
+// refused it — before AND after the per-version signature file; a bare "dev"
+// signature never matched a stamped version either. The deploy now signs the
+// exact version it stamps, verifies against the published key, and only then
+// builds. This keeps the three parts in the same step and in that order,
+// because any one of them alone is decoration: signing without stamping signs
+// a version the binary does not report, stamping without signing ships an
+// unsigned build, and either without verifying is a promise.
+func TestDeploySignsTheConsoleForTheBuildItShips(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", ".github", "workflows", "deploy.yml"))
+	if err != nil {
+		t.Fatalf("reading deploy.yml: %v", err)
+	}
+	var wf struct {
+		Jobs map[string]struct {
+			Steps []struct {
+				Name            string `yaml:"name"`
+				Run             string `yaml:"run"`
+				ContinueOnError bool   `yaml:"continue-on-error"`
+			} `yaml:"steps"`
+		} `yaml:"jobs"`
+	}
+	if err := yaml.Unmarshal(raw, &wf); err != nil {
+		t.Fatalf("parsing deploy.yml: %v", err)
+	}
+	found := 0
+	for jobName, job := range wf.Jobs {
+		for _, st := range job.Steps {
+			if !strings.Contains(st.Run, "go build") || !strings.Contains(st.Run, "./cmd/corral\n") && !strings.Contains(st.Run, "./cmd/corral ") && !strings.HasSuffix(strings.TrimSpace(st.Run), "./cmd/corral") {
+				continue
+			}
+			if !strings.Contains(st.Run, "corral.new") {
+				continue // not the brain's deploy build
+			}
+			found++
+			// COMMANDS, NOT COMMENTS. The step's own comment says "a plain `go
+			// build` VCS-stamps…", and an index over the raw text found that
+			// before the real build. Only non-comment lines are read.
+			var cmds []string
+			for _, ln := range strings.Split(st.Run, "\n") {
+				if t := strings.TrimSpace(ln); t != "" && !strings.HasPrefix(t, "#") {
+					cmds = append(cmds, t)
+				}
+			}
+			run := strings.Join(cmds, "\n")
+			sign := strings.Index(run, "scripts/sign-console-bundle.sh \"$VERSION\"")
+			verify := strings.Index(run, "go run ./cmd/verify-console-signature \"$VERSION\"")
+			build := strings.Index(run, "go build")
+			stamp := strings.Contains(run, `-ldflags "-X main.stampedVersion=$VERSION"`)
+			switch {
+			case sign < 0:
+				t.Errorf("deploy.yml job %q step %q builds the brain without signing the console bundle for $VERSION — the deployed brain serves a console every client refuses", jobName, st.Name)
+			case verify < 0:
+				t.Errorf("deploy.yml job %q step %q signs but never verifies against deploy/console-release.pub — an unverified signature is a promise", jobName, st.Name)
+			case !stamp:
+				t.Errorf("deploy.yml job %q step %q does not stamp -X main.stampedVersion=$VERSION — the binary would report a VCS version the signature does not cover", jobName, st.Name)
+			case !(sign < verify && verify < build):
+				t.Errorf("deploy.yml job %q step %q must sign, then verify, then build (got sign@%d verify@%d build@%d)", jobName, st.Name, sign, verify, build)
+			}
+			if !strings.Contains(run, "systemd-creds decrypt --name=corralai-console-release-key") {
+				t.Errorf("deploy.yml job %q step %q must take the signing seed from the box's credstore, not from a GitHub secret or a checked-in file", jobName, st.Name)
+			}
+			// The deploy step legitimately tolerates a failing `journalctl`
+			// in its diagnostics, so the whole step is not held to the
+			// no-fallback rule — only the two lines that are gates.
+			for _, ln := range cmds {
+				if (strings.Contains(ln, "sign-console-bundle.sh") || strings.Contains(ln, "verify-console-signature")) && strings.Contains(ln, "||") {
+					t.Errorf("deploy.yml job %q step %q swallows a signing/verification failure: %s", jobName, st.Name, ln)
+				}
+			}
+			if st.ContinueOnError {
+				t.Errorf("deploy.yml job %q step %q sets continue-on-error — a failed signature verification would deploy anyway", jobName, st.Name)
+			}
+		}
+	}
+	if found == 0 {
+		t.Fatal("no deploy.yml step builds the brain (corral.new) — this gate is not looking where it thinks it is")
 	}
 }

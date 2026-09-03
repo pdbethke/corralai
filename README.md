@@ -951,6 +951,7 @@ Corralai is a **headless server with thin client apps**, like a backup system:
 | **`corral-desktop`** | the **desktop client** — native-window (`--app` mode) launcher onto a local console | no | binary / `go install` |
 | **`corral-harness`** | the **harness-agent launcher** — loops any headless coding-agent CLI as an audit-role worker on ITS auth | no | binary / `go install` |
 | **`corral-top`** | the **terminal dashboard** — a read-only TUI over a live brain (tasks, agents, findings), for a glanceable window without a browser | no | binary / `go install` |
+| **`corral-recordings-import`** | the **recordings importer** — a maintainer tool that loads `certify --local --record` tapes into the recordings store the gallery reads; owns a database, so it carries the brain's CGO deps | yes | binary / `go install` |
 
 The observer and admin consoles share one reverse-proxy core (`internal/console`),
 parameterized read-only vs read-write.
@@ -981,9 +982,12 @@ task rather than a limitation.
 **The jail is a Linux capability — and that's the point.** `bwrap` (bubblewrap) is
 Linux namespaces; on a bare-metal Linux host it runs **unprivileged** (one package,
 no root, no daemon). macOS and Windows have no equivalent, so exec runs inside a Linux
-environment — Docker Desktop or WSL2, or the `--jail container` fallback. The brain's
-two CGO deps (DuckDB memory, tree-sitter code index) make it the one binary that cares
-about its platform; deploy it once on a Linux host (systemd + your tunnel/proxy).
+environment — Docker Desktop or WSL2, or the `--jail container` fallback. The two CGO deps (DuckDB memory, tree-sitter code index) belong to the binaries that own a
+database — the brain and the maintainer-only recordings importer. Every CLIENT is pure Go and
+statically linked: `corral-observe` is 9.5 MB and ships on `distroless/static`. Deploy the brain
+once on a Linux host (systemd + your tunnel/proxy); the clients cross-compile anywhere with no
+C toolchain, and `TestDocsFleetTableCGOColumnIsTrue` builds every row of the table above to keep
+that column honest.
 
 ## Why Go — and why your stack doesn't have to be
 

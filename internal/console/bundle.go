@@ -18,7 +18,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pdbethke/corralai/internal/ui"
+	"github.com/pdbethke/corralai/internal/consolebundle"
 )
 
 // maxBundleBytes caps the total bytes fetchBundle will download for one
@@ -36,7 +36,7 @@ const bundleHTTPTimeout = 15 * time.Second
 
 // fetchBundle fetches the daemon's signed console bundle manifest, verifies
 // it (Ed25519) against the PINNED corralai release public key
-// (ui.ConsoleReleasePubKeyHex — an EXTERNAL trust anchor, never taken from
+// (consolebundle.ReleasePubKeyHex — an EXTERNAL trust anchor, never taken from
 // the daemon's own response), applies rollback protection, and caches every
 // asset under cacheRoot/console/<version>/ (sha256-verified; re-downloading
 // only what's missing or mismatched — a fully cached version does no
@@ -53,43 +53,43 @@ const bundleHTTPTimeout = 15 * time.Second
 // high-water version) -> per-asset sha256 verify. A failure at any step
 // caches nothing new for that fetch — a poisoned/forged bundle from a
 // compromised or forged daemon dies here.
-func fetchBundle(brainRaw, token, cacheRoot string, allowUnsigned bool) (string, ui.BundleManifest, error) {
+func fetchBundle(brainRaw, token, cacheRoot string, allowUnsigned bool) (string, consolebundle.BundleManifest, error) {
 	target, err := url.Parse(brainRaw)
 	if err != nil || target.Scheme == "" || target.Host == "" {
-		return "", ui.BundleManifest{}, fmt.Errorf("console: invalid brain URL %q (want e.g. https://brain.example)", brainRaw)
+		return "", consolebundle.BundleManifest{}, fmt.Errorf("console: invalid brain URL %q (want e.g. https://brain.example)", brainRaw)
 	}
 
 	client := &http.Client{Timeout: bundleHTTPTimeout}
 
 	manifestBytes, status, err := fetchLimited(client, target, token, "/console/manifest.json", metaFetchLimit)
 	if err != nil {
-		return "", ui.BundleManifest{}, fmt.Errorf("console: fetch manifest: %w", err)
+		return "", consolebundle.BundleManifest{}, fmt.Errorf("console: fetch manifest: %w", err)
 	}
 	if status != http.StatusOK {
-		return "", ui.BundleManifest{}, fmt.Errorf("console: fetch manifest: brain returned %d", status)
+		return "", consolebundle.BundleManifest{}, fmt.Errorf("console: fetch manifest: brain returned %d", status)
 	}
 
 	sigBytes, sigStatus, err := fetchLimited(client, target, token, "/console/manifest.sig", metaFetchLimit)
 	if err != nil {
-		return "", ui.BundleManifest{}, fmt.Errorf("console: fetch manifest signature: %w", err)
+		return "", consolebundle.BundleManifest{}, fmt.Errorf("console: fetch manifest signature: %w", err)
 	}
 	switch {
 	case sigStatus == http.StatusOK:
 		if err := verifyManifestSig(manifestBytes, sigBytes); err != nil {
-			return "", ui.BundleManifest{}, fmt.Errorf("console: manifest signature INVALID — refusing to render an unverified bundle: %w", err)
+			return "", consolebundle.BundleManifest{}, fmt.Errorf("console: manifest signature INVALID — refusing to render an unverified bundle: %w", err)
 		}
 	case sigStatus == http.StatusNotFound && allowUnsigned:
 		// Dev-only: the caller explicitly opted into an unsigned bundle.
 	default:
-		return "", ui.BundleManifest{}, fmt.Errorf("console: manifest is unsigned (brain returned %d for manifest.sig) — refusing to render an unverified bundle (pass --allow-unsigned-console to override for dev)", sigStatus)
+		return "", consolebundle.BundleManifest{}, fmt.Errorf("console: manifest is unsigned (brain returned %d for manifest.sig) — refusing to render an unverified bundle (pass --allow-unsigned-console to override for dev)", sigStatus)
 	}
 
-	var manifest ui.BundleManifest
+	var manifest consolebundle.BundleManifest
 	if err := json.Unmarshal(manifestBytes, &manifest); err != nil {
-		return "", ui.BundleManifest{}, fmt.Errorf("console: decode manifest: %w", err)
+		return "", consolebundle.BundleManifest{}, fmt.Errorf("console: decode manifest: %w", err)
 	}
 	if manifest.Version == "" || manifest.Entry == "" {
-		return "", ui.BundleManifest{}, fmt.Errorf("console: manifest missing version/entry")
+		return "", consolebundle.BundleManifest{}, fmt.Errorf("console: manifest missing version/entry")
 	}
 
 	if cacheRoot == "" {
@@ -97,57 +97,57 @@ func fetchBundle(brainRaw, token, cacheRoot string, allowUnsigned bool) (string,
 	}
 	consoleCacheRoot := filepath.Join(cacheRoot, "console")
 	if err := os.MkdirAll(consoleCacheRoot, 0o700); err != nil {
-		return "", ui.BundleManifest{}, fmt.Errorf("console: create cache root: %w", err)
+		return "", consolebundle.BundleManifest{}, fmt.Errorf("console: create cache root: %w", err)
 	}
 
 	if err := checkRollback(consoleCacheRoot, target.Host, manifest.Version); err != nil {
-		return "", ui.BundleManifest{}, err
+		return "", consolebundle.BundleManifest{}, err
 	}
 
 	dir := filepath.Join(consoleCacheRoot, sanitizeVersion(manifest.Version))
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return "", ui.BundleManifest{}, fmt.Errorf("console: create bundle dir: %w", err)
+		return "", consolebundle.BundleManifest{}, fmt.Errorf("console: create bundle dir: %w", err)
 	}
 
 	var total int64
 	for _, asset := range manifest.Assets {
 		if err := safeAssetPath(asset.Path); err != nil {
-			return "", ui.BundleManifest{}, fmt.Errorf("console: manifest asset %q: %w", asset.Path, err)
+			return "", consolebundle.BundleManifest{}, fmt.Errorf("console: manifest asset %q: %w", asset.Path, err)
 		}
 		local := filepath.Join(dir, filepath.FromSlash(asset.Path))
 
 		if existing, err := os.ReadFile(local); err == nil && sha256Hex(existing) == asset.SHA256 { // #nosec G304 -- local is filepath.Join(dir, asset.Path) where dir is this process's own cache dir and asset.Path was just validated by safeAssetPath (rejects "..", absolute paths, any path.Clean escape) and comes from a signature-verified manifest
 			total += int64(len(existing))
 			if total > maxBundleBytes {
-				return "", ui.BundleManifest{}, fmt.Errorf("console: bundle exceeds size cap (%d bytes)", maxBundleBytes)
+				return "", consolebundle.BundleManifest{}, fmt.Errorf("console: bundle exceeds size cap (%d bytes)", maxBundleBytes)
 			}
 			continue // already cached, verified — no network for this asset
 		}
 
 		data, status, err := fetchLimited(client, target, token, "/console/asset/"+asset.Path, maxBundleBytes)
 		if err != nil {
-			return "", ui.BundleManifest{}, fmt.Errorf("console: fetch asset %q: %w", asset.Path, err)
+			return "", consolebundle.BundleManifest{}, fmt.Errorf("console: fetch asset %q: %w", asset.Path, err)
 		}
 		if status != http.StatusOK {
-			return "", ui.BundleManifest{}, fmt.Errorf("console: fetch asset %q: brain returned %d", asset.Path, status)
+			return "", consolebundle.BundleManifest{}, fmt.Errorf("console: fetch asset %q: brain returned %d", asset.Path, status)
 		}
 		total += int64(len(data))
 		if total > maxBundleBytes {
-			return "", ui.BundleManifest{}, fmt.Errorf("console: bundle exceeds size cap (%d bytes)", maxBundleBytes)
+			return "", consolebundle.BundleManifest{}, fmt.Errorf("console: bundle exceeds size cap (%d bytes)", maxBundleBytes)
 		}
 		if sha256Hex(data) != asset.SHA256 {
-			return "", ui.BundleManifest{}, fmt.Errorf("console: asset %q failed sha256 verification — refusing to cache", asset.Path)
+			return "", consolebundle.BundleManifest{}, fmt.Errorf("console: asset %q failed sha256 verification — refusing to cache", asset.Path)
 		}
 		if err := os.MkdirAll(filepath.Dir(local), 0o700); err != nil {
-			return "", ui.BundleManifest{}, fmt.Errorf("console: create asset dir: %w", err)
+			return "", consolebundle.BundleManifest{}, fmt.Errorf("console: create asset dir: %w", err)
 		}
 		if err := os.WriteFile(local, data, 0o644); err != nil { // #nosec G306 -- 0644 is the correct, intended perm: these are public UI assets meant to be served back out over HTTP, not secret; the directory tree itself is 0700
-			return "", ui.BundleManifest{}, fmt.Errorf("console: write asset %q: %w", asset.Path, err)
+			return "", consolebundle.BundleManifest{}, fmt.Errorf("console: write asset %q: %w", asset.Path, err)
 		}
 	}
 
 	if err := writeHighWaterMark(consoleCacheRoot, target.Host, manifest.Version); err != nil {
-		return "", ui.BundleManifest{}, fmt.Errorf("console: persist rollback high-water mark: %w", err)
+		return "", consolebundle.BundleManifest{}, fmt.Errorf("console: persist rollback high-water mark: %w", err)
 	}
 
 	return dir, manifest, nil
@@ -181,12 +181,12 @@ func fetchLimited(client *http.Client, target *url.URL, token, reqPath string, l
 }
 
 // verifyManifestSig checks the detached hex Ed25519 signature over
-// manifestBytes against the PINNED ui.ConsoleReleasePubKeyHex — a
+// manifestBytes against the PINNED consolebundle.ReleasePubKeyHex — a
 // build-time constant external to anything the daemon serves. This is the
 // trust anchor: a daemon (or a MITM) cannot supply its own key and have a
 // client trust it.
 func verifyManifestSig(manifestBytes, sigBytes []byte) error {
-	pubBytes, err := hex.DecodeString(ui.ConsoleReleasePubKeyHex)
+	pubBytes, err := hex.DecodeString(consolebundle.ReleasePubKeyHex)
 	if err != nil || len(pubBytes) != ed25519.PublicKeySize {
 		return fmt.Errorf("pinned console release public key is invalid (build/config bug): decode err=%v len=%d", err, len(pubBytes))
 	}

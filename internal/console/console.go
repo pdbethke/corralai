@@ -2,14 +2,14 @@
 
 // Package console is the thin client half of the corralai daemon/client UI
 // architecture: it fetches, signature-verifies and caches the daemon's
-// versioned console bundle (internal/ui's BundleManifest), serves that
+// versioned console bundle (internal/consolebundle's BundleManifest), serves that
 // bundle locally, and forwards only /api, /events and /mcp to the daemon
 // with a server-side-injected bearer credential. The browser never sees the
 // bearer — it only ever talks to this local console.
 //
 // The bundle is the trust anchor: fetchBundle refuses to cache or serve
 // anything whose detached signature doesn't verify against the PINNED
-// corralai release public key (ui.ConsoleReleasePubKeyHex), so a
+// corralai release public key (consolebundle.ReleasePubKeyHex), so a
 // compromised or spoofed daemon cannot get arbitrary HTML/JS to run as this
 // console. Every proxied /api|/events|/mcp request additionally passes a
 // same-origin check plus a per-session secret (minted at construction, sent
@@ -46,7 +46,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pdbethke/corralai/internal/ui"
+	"github.com/pdbethke/corralai/internal/consolebundle"
 )
 
 // HealthPath is the console's own health endpoint: a real end-to-end check that
@@ -270,7 +270,7 @@ func newSessionSecret() (string, error) {
 // consoleSessionCookie) so the SPA's transports that cannot set a custom
 // header (EventSource, WebSocket) still carry it automatically — the bearer
 // itself is never rendered or sent to the browser.
-func bundleHandler(dir string, m ui.BundleManifest, sessionSecret string) http.Handler {
+func bundleHandler(dir string, m consolebundle.BundleManifest, sessionSecret string) http.Handler {
 	assets := make(map[string]string, len(m.Assets)) // path -> sha256
 	for _, a := range m.Assets {
 		assets[a.Path] = a.SHA256

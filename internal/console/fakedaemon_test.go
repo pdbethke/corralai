@@ -18,12 +18,19 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/pdbethke/corralai/internal/consolebundle"
+	// internal/ui is imported HERE, in a test only, on purpose: this fixture
+	// proves its manifest bytes are identical to the ones the real daemon
+	// serves (ui.CanonicalManifestBytes). Production code in this package must
+	// never import internal/ui — that edge is what linked DuckDB and twelve
+	// tree-sitter grammars into every thin client. A test binary may; the
+	// shipped client does not.
 	"github.com/pdbethke/corralai/internal/ui"
 )
 
 // devSeed reads the committed dev Ed25519 signing seed
 // (scripts/dev-console-signing-key.hex) — its public half is the PINNED
-// ui.ConsoleReleasePubKeyHex these tests verify against, so it's the only
+// consolebundle.ReleasePubKeyHex these tests verify against, so it's the only
 // key that can produce a signature fetchBundle will accept.
 func devSeed(t *testing.T) ed25519.PrivateKey {
 	t.Helper()
@@ -91,15 +98,15 @@ func newFakeDaemon(t *testing.T) *fakeDaemon {
 	}
 }
 
-func (d *fakeDaemon) manifest() ui.BundleManifest {
+func (d *fakeDaemon) manifest() consolebundle.BundleManifest {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	assets := make([]ui.BundleAsset, len(d.assets))
+	assets := make([]consolebundle.BundleAsset, len(d.assets))
 	for i, a := range d.assets {
 		sum := sha256.Sum256(a.data)
-		assets[i] = ui.BundleAsset{Path: a.path, SHA256: hex.EncodeToString(sum[:])}
+		assets[i] = consolebundle.BundleAsset{Path: a.path, SHA256: hex.EncodeToString(sum[:])}
 	}
-	return ui.BundleManifest{Version: d.version, Entry: "index.html", Assets: assets}
+	return consolebundle.BundleManifest{Version: d.version, Entry: "index.html", Assets: assets}
 }
 
 func (d *fakeDaemon) setVersion(v string, assets []fakeAsset) {

@@ -216,6 +216,20 @@ func baseVendor() string {
 	case "gemini":
 		return "google"
 	case "openai":
+		// MODEL_BACKEND=openai with OPENAI_BASE_URL set is the common way to
+		// name an OpenAI-COMPATIBLE gateway (LiteLLM, vLLM, a proxy) that
+		// serves any model name it is handed — and there a gemini-* critic
+		// is a call to that gateway, not to Google. Until the 2026-09 router
+		// review this happened to WORK by accident: the cross-vendor path
+		// was taken, and the Gemini backend then followed OPENAI_BASE_URL
+		// (with the Google key falling back to the OpenAI one), landing on
+		// the gateway anyway. That fallback now applies only to the pinned
+		// MODEL_BACKEND=gemini door, so the gateway reading has to be made
+		// here, on purpose: a custom base URL is a gateway; the vendor's own
+		// endpoint is the vendor.
+		if strings.TrimSpace(os.Getenv("OPENAI_BASE_URL")) != "" {
+			return ""
+		}
 		return "openai"
 	default:
 		return ""

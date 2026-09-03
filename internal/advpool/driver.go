@@ -3107,6 +3107,17 @@ func (d *Driver) timeoutVerdict(run *runState) Verdict {
 	v.PoolScored = run.poolScored
 	v.ProvenMutantIDs = run.provenIDs
 	v.AuthoredTest = run.authoredTest
+	// The challenger comparison, for the same reason as everything above it:
+	// challengerPair is a pure function of run state that already returns nil
+	// when the two seats' measured sets do not overlap, so a run that graded
+	// both sides and only THEN stalled has a real coefficient — and dropping
+	// it here recorded NULL jaccard/kappa that a reader cannot tell apart from
+	// "no challenger ran".
+	//
+	// It was the live instance of the hazard AGENTS.md records: two Verdict
+	// construction paths, one field assigned in only one of them.
+	// WriterSeatsUngraded three lines up is assigned in both; this was not.
+	v.ChallengerAgreement = challengerPair(d, run)
 	return v
 }
 

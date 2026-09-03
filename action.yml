@@ -49,7 +49,7 @@ inputs:
     required: false
     default: ""
   timeout:
-    description: "Per-file budget as a Go duration (e.g. '45m', '5h'). corral gives up on a single file's run once this has elapsed, and the default (10m) is sized for a PR author who did not choose to start an hours-long job — NOT for a whole audit. Every mutant re-runs your suite, so a converging audit of one large file on a hosted runner is measured in hours; raise this, and the job's own timeout-minutes with it, when you want the complete audit rather than a bounded sample. Leave empty to keep corral's own default."
+    description: "Per-file budget as a Go duration (e.g. '45m', '5h'). corral gives up on a single file's run once this has elapsed, and the default (30m) is sized for a PR author who did not choose to start an hours-long job — NOT for a whole audit. Every mutant re-runs your suite, so a converging audit of one large file on a hosted runner is measured in hours; raise this, and the job's own timeout-minutes with it, when you want the complete audit rather than a bounded sample. Leave empty to keep corral's own default."
     required: false
     default: ""
   anthropic-key:

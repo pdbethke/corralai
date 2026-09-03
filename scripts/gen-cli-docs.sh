@@ -15,7 +15,19 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-BINARIES=(corral corral-admin corral-agent corral-harness corral-observe corral-top)
+# DERIVED from cmd/, not hand-listed. The hand-listed version omitted
+# corral-desktop, corral-recordings-import (which registers five flags) and
+# sign-console-bundle — so docs/cli/corral-desktop.md sat in this directory as
+# HAND-WRITTEN prose with no Usage block, while cmd/corral/surfaces_test.go
+# cites this directory as its authority precisely because "--check already
+# guarantees those files are what the binaries really print". That guarantee
+# was false for one of seven.
+#
+# This is the third hand-maintained enumeration in this area to be replaced by
+# a derived one, after the subcommand list below and the dispatch allowlist in
+# main.go. A new binary now gets a reference for free.
+BINARIES=()
+for d in cmd/*/; do BINARIES+=("$(basename "$d")"); done
 CHECK=0
 [ "${1:-}" = "--check" ] && CHECK=1
 

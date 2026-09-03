@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -4490,4 +4491,54 @@ func TestTimeoutVerdictWithoutAPoolScoreClaimsNothing(t *testing.T) {
 	if len(v.ProvenMutantIDs) != 0 || v.AuthoredTest != "" {
 		t.Errorf("evidence appeared for a pool that never scored: ids=%v authored=%q", v.ProvenMutantIDs, v.AuthoredTest)
 	}
+}
+
+// TestTimeoutVerdictCarriesTheChallengerComparison is the sixth member of the
+// TestTimeoutVerdictCarries* family, and like the other five it exists because
+// timeoutVerdict forgot a field.
+//
+// ChallengerAgreement was assigned in tickAggregate and nowhere else — the live
+// instance of the two-construction-paths hazard AGENTS.md records, found by a
+// cold review. WriterSeatsUngraded, three lines away, is assigned in both.
+//
+// The absence was not benign: Verdict.ChallengerAgreement's own doc enumerates
+// the legitimate reasons for nil, and "the run timed out" is not among them, so
+// the NULL jaccard/kappa written downstream reads as "no challenger ran" rather
+// than "we dropped it". A measurement recorded as an absence.
+//
+// Both directions asserted. challengerPair already returns nil when the two
+// seats' measured sets do not overlap, so a timeout with no comparable
+// challenger must still report nil rather than a fabricated Pair.
+func TestTimeoutVerdictCarriesTheChallengerComparison(t *testing.T) {
+	d := &Driver{}
+
+	// No shadow seat ever measured: there is nothing to compare, and nil is
+	// the honest answer — the same absence a run with no challenger reports.
+	bare := d.timeoutVerdict(&runState{
+		rs: RunSpec{Repo: "r", Commit: "c", Lang: "go"}, devScored: true, mutantsTotal: 4,
+	})
+	if bare.ChallengerAgreement != nil {
+		t.Errorf("ChallengerAgreement = %+v on a run with no challenger — comparing zero mutants would put a number where the honest answer is that no comparison exists", bare.ChallengerAgreement)
+	}
+
+	// And the field is populated from the same helper the converged path uses,
+	// so the two verdicts cannot disagree about what a challenger measured.
+	if got, want := countAssignmentsOfChallengerAgreement(t), 2; got != want {
+		t.Errorf("ChallengerAgreement is assigned at %d construction site(s), want %d — a scored field must be set on BOTH the converged and the banked-timeout path, or a timeout silently drops it", got, want)
+	}
+}
+
+// countAssignmentsOfChallengerAgreement counts the assignments in driver.go.
+//
+// A source-level count rather than a behavioural assertion, deliberately: the
+// defect class here is "a new scored field added to one path and not the
+// other", and that is a property of the CODE, not of any one run. It is the
+// cheapest guard that fails when the next field is forgotten.
+func countAssignmentsOfChallengerAgreement(t *testing.T) int {
+	t.Helper()
+	b, err := os.ReadFile("driver.go")
+	if err != nil {
+		t.Fatalf("reading driver.go: %v", err)
+	}
+	return strings.Count(string(b), "v.ChallengerAgreement = challengerPair(d, run)")
 }

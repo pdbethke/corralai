@@ -48,7 +48,13 @@ package reposcan
 // false, which reads as "the pool never scored" — turning a proven gap back
 // into an unproven one on every cache hit. Exactly the silent zero-fill the
 // comment above describes, caught by the gate below on its first outing.
-const VerdictGeneration = "6"
+// "7" (2026-09-02): a banked TIMEOUT verdict now carries ChallengerAgreement,
+// which was assigned on the converged path only. The shape is unchanged, so the
+// fingerprint below does not move and could not have forced this — which is the
+// behaviour half the comment above says no fingerprint can catch. A cached "6"
+// timeout verdict has nil where a fresh one has a real coefficient, and the
+// rule for that case is stated three paragraphs up: when unsure, bump.
+const VerdictGeneration = "7"
 
 // VerdictShapeSHA256 fingerprints advpool.Verdict's serialized shape: every
 // exported field's name, type and json tag, sorted by name and hashed.

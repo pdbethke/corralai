@@ -81,7 +81,7 @@ jobs:
       # exists to police, and documentation drifted past two releases under it.
       #
       # The name selector is duplicated in cmd/corral/action_test.go's
-      # docGateSelector, and TestDocGatesRunOnDocsOnlyChanges asserts the two
+      # docGateSelector, and TestDocsGatesRunOnDocsOnlyChanges asserts the two
       # agree AND that every doc-walking test is named to match — so neither
       # renaming a test nor deleting this step can quietly switch the gates off.
       #
@@ -171,7 +171,12 @@ jobs:
       # exact failure mode this project exists to catch.
       - name: Install govulncheck
         if: steps.filter.outputs.code == 'true'
-        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+        # PINNED, for the reason the gosec pin four lines up already argues:
+        # an unpinned scanner makes the gate non-deterministic, and a new
+        # advisory or detection turning CI red with zero code changes should
+        # arrive as a reviewed bump, not as an outage. It sat at @latest
+        # directly beneath that argument.
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.7.0
       - name: Security gate
         if: steps.filter.outputs.code == 'true'
         run: bash scripts/check-security.sh

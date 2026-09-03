@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Elastic-2.0
 
 // Package certverify is the single, shared implementation of corral's
-// build-record verification: the same four checks the CLI (`corral certify
+// build-record verification: the same five checks the CLI (`corral certify
 // verify`) and, later, the web UI run against a certify record. Extracting
 // this out of cmd/corral/verify.go keeps the two surfaces from drifting —
 // one verifier, no duplicated check logic.
@@ -15,7 +15,15 @@ import (
 	"github.com/pdbethke/corralai/internal/transparency"
 )
 
-// Check is the outcome of one of the four checks VerifyRecord runs.
+// Check is the outcome of one of the five checks VerifyRecord runs.
+//
+// KNOWN STALE, deliberately: internal/ui/web/index.html still labels these "the
+// four checks" in the cockpit. That file is inside the SIGNED console bundle,
+// so editing a word in it invalidates console.manifest.sig and the console
+// refuses to render — correctly, and four tests prove it. Fixing the label
+// therefore means re-signing a release bundle, which is a release action and
+// not a comment fix. Left for the next signed release rather than silently
+// wrong here.
 type Check struct {
 	// Name identifies the check: "signature", "ledger", "subject", or
 	// "rekor".
@@ -45,7 +53,7 @@ type Record struct {
 	Anchored bool
 }
 
-// VerifyRecord runs the four checks against an EXTERNAL trust anchor (pub +
+// VerifyRecord runs the five checks against an EXTERNAL trust anchor (pub +
 // newWitness) and returns one Check per check, in order (signature, ledger,
 // subject, rekor), plus allOK = every applicable check passed.
 //

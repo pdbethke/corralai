@@ -1679,3 +1679,25 @@ func TestJailBudgetIsStillSizedByTheBox(t *testing.T) {
 		t.Errorf("resolveSwarm(0) = %d, want %d — the JAIL budget must stay tied to the box; opening more concurrent suites than the host can run is how a scan thrashes", got, want)
 	}
 }
+
+// TestLocalCertifyThresholdIsAboveZero guards a property that a comment
+// currently asserts and a literal enforces.
+//
+// advpool.aggregate decides certify-vs-needs-review on
+// `blockingFindingOpen || devKillRate < threshold || testWriterFailed ||
+// poolTestUnsound`. It never consults baselineFailed or suiteIgnoresFile,
+// because timeoutVerdict sets those AFTER aggregate returns. At threshold 0 a
+// could-not-grade run with zero survivors would therefore be CERTIFIED — a
+// signed pass on a file nothing graded.
+//
+// It is not reachable today: the only caller passes this constant, and there is
+// no flag to change it. But "not reachable" is a fact about one call site, and
+// the fail-closed reasoning in aggregate's comment reads as if it were a fact
+// about the function. This test is the difference — if someone ever exposes the
+// threshold, or sets it to 0 for a "measure everything" mode, they fail here
+// and read why, rather than shipping a certification nothing earned.
+func TestLocalCertifyThresholdIsAboveZero(t *testing.T) {
+	if localCertifyThreshold <= 0 {
+		t.Errorf("localCertifyThreshold = %v — at or below zero, `devKillRate < threshold` can never fire, and a run that could not grade (baseline failed, or the suite ignores the file) reaches aggregate with a 0 rate and no survivors and is CERTIFIED. Those flags are set after aggregate returns, so nothing else stops it.", localCertifyThreshold)
+	}
+}

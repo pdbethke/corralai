@@ -330,6 +330,9 @@ Usage:
                                   fixtures. The fastest honest answer to "what does this do?"
                                   flags: --writer-model/--mutant-model (required; corral has no
                                          default models) --critic-model --dir
+  corral mcp                     serve corral's findings corpus over stdio MCP, so an editor
+                                  or agent can read what past audits found. READ-ONLY and
+                                  local: no brain, no writes, no network listener.
   corral doctor [flags] [-- <test cmd>]
                                   check the environment BEFORE paying for a run: does the
                                   sandbox start, is your test command's toolchain reachable
@@ -777,6 +780,16 @@ func main() {
 		// are ordered the way the audit itself would hit them.
 		os.Exit(runDoctor(os.Args[2:], os.Stdout, os.Stderr))
 	case "mcp":
+		// -h HANGS WITHOUT THIS. The server reads stdio forever, so `corral mcp
+		// -h` never returned — the same failure the CLI reference generator was
+		// built to catch ("a docs generator cannot capture text a binary
+		// refuses to print"), which is why this subcommand had no reference
+		// section and no manifest rows until now. Handled before the store is
+		// opened, for the same reason as scorecard and criticscore above.
+		if wantsHelp(os.Args[2:]) {
+			fmt.Print(mcpUsage)
+			os.Exit(0)
+		}
 		// Serve the findings to a coding agent over stdio, read-only, from the
 		// same local store `certify --local` writes. See mcp_findings.go for
 		// why adjudication is deliberately absent from that surface.
@@ -1852,3 +1865,18 @@ func wantsHelp(args []string) bool {
 	}
 	return false
 }
+
+// mcpUsage is what `corral mcp -h` prints. The subcommand takes no flags: it
+// speaks MCP over stdin/stdout and is configured entirely by where the local
+// findings store lives.
+const mcpUsage = `corral mcp — serve corral's findings corpus over stdio MCP.
+
+Usage:
+  corral mcp
+
+Speaks the Model Context Protocol on stdin/stdout so an editor or agent can
+read what past audits found. READ-ONLY and local: no brain, no writes, no
+network listener, and no adjudication surface (see mcp_findings.go for why).
+
+Takes no flags. Reads the same local findings store ` + "`corral certify --local`" + ` writes.
+`

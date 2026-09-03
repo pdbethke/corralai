@@ -648,7 +648,7 @@ func (s *Server) builds(w http.ResponseWriter, r *http.Request) {
 // buildDetail is the server-VERIFIED (not independently verified — see the
 // package doc note below) detail view for a single build_records row: the
 // brain re-runs certverify.VerifyRecord against its own stored record, the
-// same four checks `corral certify verify` runs offline. This is an
+// same five checks `corral certify verify` runs offline. This is an
 // operator convenience, not a substitute for independent verification —
 // verify_command in the response always points a third party at the
 // independent path (the CLI against the published key + Rekor, not this

@@ -128,6 +128,9 @@ Usage:
                                   fixtures. The fastest honest answer to "what does this do?"
                                   flags: --writer-model/--mutant-model (required; corral has no
                                          default models) --critic-model --dir
+  corral mcp                     serve corral's findings corpus over stdio MCP, so an editor
+                                  or agent can read what past audits found. READ-ONLY and
+                                  local: no brain, no writes, no network listener.
   corral doctor [flags] [-- <test cmd>]
                                   check the environment BEFORE paying for a run: does the
                                   sandbox start, is your test command's toolchain reachable
@@ -188,7 +191,7 @@ Usage of certify --local:
   -mutants string
     	REPLAY a recorded mutant set (see --record-mutants) instead of generating one: --code is graded against exactly the mutants recorded for it, and no mutant-generator model call is made. Refused (exit 2) if the file is absent from the set or its bytes have changed since it was recorded — a mutant is a single-point edit of specific bytes, and re-applying it to different ones grades an exam nobody wrote. Reads a corral-mutants-2 document, or an older corral-mutants-1 one, whose whole-file mutants still replay byte-for-byte.
   -n-mutants --n-mutants 20
-    	PER-SHARD seeded-violation mutant budget (default 5) — this is NOT the run's total: total mutants scored scale with --max-shards (default 8) shards, and DOUBLE again if the shadow challenger is on (default). E.g. the default 5 with the default 8 shards means up to ~40 primary + ~40 shadow = ~80 full dev-suite jail executions, not 5 — --n-mutants 20 means roughly ~320
+    	PER-SHARD seeded-violation mutant budget (default 5) — this is NOT the run's total: total mutants scored scale with --max-shards (default 8) shards, and DOUBLE again if you name a --shadow-model (OFF by default, so the stock run does NOT pay this). E.g. the default 5 with the default 8 shards means up to ~40 full dev-suite jail executions, not 5 — and ~80 with a challenger named — --n-mutants 20 means roughly ~320
   -no-bind-deps
     	copy dependency dirs into the jail workspace instead of bind-mounting them read-only (the pre-bind behavior; subject to the workspace size cap)
   -no-fail-fast
@@ -292,6 +295,21 @@ Usage of eval:
 
 ```
 corral matrix: set CORRAL_BRAIN (and CORRALAI_BRAIN_TOKEN via `corral secret`) — matrix has no offline mode
+```
+
+## `corral mcp` flags
+
+```
+corral mcp — serve corral's findings corpus over stdio MCP.
+
+Usage:
+  corral mcp
+
+Speaks the Model Context Protocol on stdin/stdout so an editor or agent can
+read what past audits found. READ-ONLY and local: no brain, no writes, no
+network listener, and no adjudication surface (see mcp_findings.go for why).
+
+Takes no flags. Reads the same local findings store `corral certify --local` writes.
 ```
 
 ## `corral models` flags

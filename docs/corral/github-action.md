@@ -254,7 +254,7 @@ touched.
 ## Why scoped by default, and why whole-repo is opt-in
 
 Auditing one file runs a full adversarial herd against it — generate mutants,
-run the project's real suite against each one, repeatedly — roughly 84 suite
+run the project's real suite against each one, repeatedly — an ESTIMATE of ~40 suite
 runs per audited file, against CI's one. That's a normal cost for the three
 files a PR actually touched; it is not for every file in the repo. Leave
 `diff-base` at its default (the PR's base ref) and the action audits only
@@ -427,7 +427,7 @@ and the fix belongs in the code, not a caveat in these docs.
 | `diff-base` | no | `""` (falls back to the PR's base ref) | Audit only files changed against this ref. Left empty on a `pull_request` event, the action falls back to `origin/$GITHUB_BASE_REF` (the PR's own base). On any other event (e.g. a push to `main`), there is no base ref to fall back to, so an empty `diff-base` means a whole-repo audit. |
 | `goals` | no | `""` | Optional JSON file of per-file goals. Omitted means goals are derived per file by a model. |
 | `tests` | no | `""` | Optional JSON file mapping repo-relative **source** paths to their test files, consulted before filename convention. Needed whenever your project names tests after behaviour rather than after source files — common in JS/TS, where convention can pair *nothing* and the gate would then have no file to audit. A mapping to a file that does not exist is refused, not silently ignored. |
-| `timeout` | no | `""` (corral's own default, 10m) | Per-file budget, a Go duration. The default is sized for a PR author who did not choose to start an hours-long job, not for a whole audit: every mutant re-runs your suite, so one large file on a hosted runner is hours. Raise it (and the job's `timeout-minutes`) when you want the complete audit rather than a bounded sample. |
+| `timeout` | no | `""` (corral's own default, 30m) | Per-file budget, a Go duration. The default is sized for a PR author who did not choose to start an hours-long job, not for a whole audit: every mutant re-runs your suite, so one large file on a hosted runner is hours. Raise it (and the job's `timeout-minutes`) when you want the complete audit rather than a bounded sample. |
 | `top` | no | `""` (corral's own default bound, 25) | Audit at most this many of the highest-ranked candidate files. An audit costs roughly (mutants × your suite's **whole** runtime) **per file**, and the file count comes from the PR's diff — a number the author picks, not you. See "What one run costs" below before raising it. |
 | `min-kill-rate` | no | `""` (unset) | Fail the run (exit 1) if **any individual audited file's** kill rate is below this value. Range 0.0-1.0 inclusive; a *minimum*, so a file exactly at the value passes. Opt-in — leave empty to keep the pre-`min-kill-rate` behaviour, where a weak-but-gradable suite still exits 0. See "Failing on a weak kill rate" below. |
 | `max-proven-missed` | no | `""` (unset) | Fail the run if any audited file has *more* than this many PROVEN-MISSED gaps — survivors the herd itself then killed with a test it wrote and ran. Prefer this to `min-kill-rate` as the merge gate: a kill rate is a proportion of freshly generated mutants and moves between runs on unchanged code, while a proven gap is a specific, execution-demonstrated bug. `0` means any demonstrated gap fails the build. Fails **closed** when the herd had survivors but authored no test that graded — a `0` there means nothing was proven, not that the suite is clean. |

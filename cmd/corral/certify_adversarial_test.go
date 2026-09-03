@@ -870,3 +870,42 @@ func TestRenderAdvVerdictBaselineFailedNoHintWithoutImportError(t *testing.T) {
 		t.Fatalf("a non-import baseline failure must not print the dependency-groups hint:\n%s", out)
 	}
 }
+
+// TestLocalVerdictDisclosesUngradedWriterSeats: --local printed a bare
+// proven_missed while --repo has disclosed the seats behind it since the
+// per-survivor fan-out landed.
+//
+// The field's own doc states the stakes — "three seats unattempted changes what
+// a 5 means" — and the two flags beside it cannot express partial failure:
+// TestWriterFailed means NOTHING compiled anywhere, PoolTestUnsound means
+// nothing graded anywhere, so a file where 21 of 24 seats graded carries
+// neither. It was dropped at advVerdictFromPool, a field-by-field converter
+// carrying its own warning that it "has now dropped a field twice in one day".
+//
+// The disclosure prints BESIDE the count, never instead of it: the number is a
+// real measurement, and this says what it is a count over.
+func TestLocalVerdictDisclosesUngradedWriterSeats(t *testing.T) {
+	var withSeats, without bytes.Buffer
+	renderAdvVerdict(&withSeats, "a.go", advVerdict{
+		Repo: "r", Commit: "c", Lang: "go", DevScored: true, PoolScored: true,
+		DevKillRate: 0.7, MutantsTotal: 10, Survivors: 3, ProvenMissed: 2,
+		WriterSeatsUngraded: 3,
+	})
+	renderAdvVerdict(&without, "a.go", advVerdict{
+		Repo: "r", Commit: "c", Lang: "go", DevScored: true, PoolScored: true,
+		DevKillRate: 0.7, MutantsTotal: 10, Survivors: 3, ProvenMissed: 2,
+	})
+
+	got := withSeats.String()
+	if !strings.Contains(got, "proven_missed: 2") {
+		t.Errorf("the count itself must still print; got:\n%s", got)
+	}
+	if !strings.Contains(got, "3 writer seat(s) never produced a grading test") {
+		t.Errorf("output does not disclose the ungraded seats, so proven_missed reads as a count over every survivor:\n%s", got)
+	}
+	// 0 is the batched mode's normal value and must not print a line saying
+	// nothing happened.
+	if strings.Contains(without.String(), "never produced a grading test") {
+		t.Errorf("a run with no ungraded seats printed the disclosure anyway:\n%s", without.String())
+	}
+}

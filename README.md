@@ -480,7 +480,9 @@ there: no jail, no brain, no separate infra. It mutates the runner's checkout
 in place and grades each mutant with your own test command — the runner
 itself is the isolation boundary, so this is for CI, not a working tree you
 care about. Scoped to the PR's changed files by default (auditing every file
-on every PR is expensive — roughly 84 suite runs per file); a whole-repo run
+on every PR is expensive — an ESTIMATE of ~40 suite runs per file, from the
+stock 5 mutants x 8 shards; it is not a measured figure and doubles only if you
+name a --shadow-model); a whole-repo run
 is opt-in. By default a weak-but-gradable kill rate still exits 0 — the
 opt-in `min-kill-rate` input (`--min-kill-rate` on the CLI) fails the run
 when any *individual* audited file scores below the threshold you set. See
@@ -518,7 +520,7 @@ into the GitHub Action as an input — today it's a `corral certify --repo`
 flag only.
 
 **Per-file timeout (`--timeout`, CLI only).** `certify --repo` shares
-`--local`'s own `--timeout` flag (default 10 minutes): the wall-clock budget
+`--local`'s own `--timeout` flag (default 30 minutes): the wall-clock budget
 each file's run gets before the pool is forced to a `needs-review` verdict
 instead of converging. A file whose run hits this deadline after the dev
 suite's own kill-rate was already measured is reported as **audited**, not
@@ -606,9 +608,10 @@ can be checked against something a third party can verify, and without
 what one pull request cannot: a single kill rate is a sample — the same
 unchanged diff has scored `0.85` and `0.90` — while forty of them, pushed
 across forty PRs, are a distribution you can read a trend from. `md:<db>`
-targets MotherDuck and reads its token from `motherduck_token`
-(`--motherduck-token`, or the Action's `motherduck-token` input) in the
-environment.
+targets MotherDuck and reads its token from the `motherduck_token`
+environment variable (the Action exposes it as the `motherduck-token` input).
+There is no `--motherduck-token` flag: a token on a command line lands in shell
+history and in every process listing on the box.
 
 `--push-source` additionally sends the pool's authored test and the full
 verdict JSON — never mutant code, which corral keeps at rest under no
@@ -797,9 +800,10 @@ plumbing rather than a result.**
   it into vetted memory and a versioned skill; every later run starts already warned.
   The loop watches its own efficacy — if a signature keeps recurring after promotion,
   a revision proposal reopens.
-- **Shared skills, human-gated.** Approved skills sync across the fleet via
-  `corral sync`, so what one machine's herd learns, every machine's herd can *do* —
-  but publishing to the fleet is superuser-only (a worker proposes, it can't publish).
+- **Shared skills, human-gated.** Approved skills are shared across the fleet
+  through the brain, so what one machine's herd learns, every machine's herd can
+  *do* — but publishing to the fleet is superuser-only (a worker proposes, it
+  can't publish).
   Corralai ships a [`using-corralai`](skills/using-corralai/SKILL.md) skill that
   teaches any coding agent to drive the gate.
 - **Reference RAG** — upload your own grounding material (text · URLs · **PDFs**);
@@ -810,8 +814,8 @@ plumbing rather than a result.**
 
 Nothing about a run is thrown away: every task's claim and completion, every finding
 and its resolution, every command actually run, and the event log survive
-indefinitely. `corral certify --record <file>.json` writes a replayable tape of an
-audit — the pool's reasoning beats, the task lifecycle, the findings — in the same
+indefinitely. `corral certify --local --record <file>.json` writes a replayable
+tape of an audit — the pool's reasoning beats, the task lifecycle, the findings — in the same
 `{events:[…]}` shape the corralai.dev cockpit replays. **With reasoning capture on,
 the replay streams each model's own words, verbatim,** interleaved with the commands
 they triggered (*"the retry test is flaky because the backoff refills too slowly"* →
@@ -962,8 +966,17 @@ participates fully without installing anything beyond a config stanza.
 | **Thin client** (your coding agent + `.mcp.json`) | ✅ | ✅ | ✅ |
 | **`corral-admin`** (operator CLI) | ✅ | ✅ compiles | ✅ compiles |
 | **`corral-observe`** (read-only window) | ✅ | ✅ | ✅ |
-| **`corral certify --local`** — real exec (bwrap jail) | ✅ | via Docker (`--jail container`) | via Docker/WSL2 |
+| **`corral certify --local`** — real exec (bwrap jail) | ✅ | `--jail container` (Docker) — **not exercised in CI** | `--jail container` (Docker) or WSL2 — **not exercised in CI** |
 | **`corral` (the brain)** | ✅ first-class | ⚠️ untested | via Docker/WSL2 |
+
+**"Not exercised in CI" is meant literally.** Every workflow runs on
+`ubuntu-latest`, so the macOS and Windows rows describe a path that should work
+and that no run has proven. The container backend itself IS exercised — and was
+found completely broken the first time anyone executed it, because Docker mounts
+`--tmpfs` `noexec` and Go compiles its test binary into `/tmp` — but its
+integration tests skip without `CORRALAI_EXEC_IMAGE`, which CI does not set.
+Hosted macOS and Windows runners are free for public repositories, so this is a
+task rather than a limitation.
 
 **The jail is a Linux capability — and that's the point.** `bwrap` (bubblewrap) is
 Linux namespaces; on a bare-metal Linux host it runs **unprivileged** (one package,
@@ -1025,10 +1038,12 @@ of.
   whatever file-parallelism can't spend goes to the mutant loop (the common case
   being a diff-scoped PR with one changed file, where every other worker would
   otherwise idle). No flag: it's derived from `--swarm` and reported in the scan
-  header. **Only on `--substrate jail`** — the workspace substrate mutates one
-  checkout in place with no locking, so it stays strictly sequential, and that is a
-  correctness boundary, not a tuning choice. Honest caveat: this pays in proportion
-  to how much of your audit is suite time, which on a very fast suite is not much.
+  header. On `--substrate workspace` the same budget buys PRIVATE TREES instead:
+  one file is audited at a time, and its mutants are scored concurrently in
+  separate copies of the checkout (budget/4, minimum 1), because two mutants in
+  one tree would overwrite each other. The isolation is the tree, not the
+  sequence. Honest caveat: this pays in proportion to how much of your audit is
+  suite time, which on a very fast suite is not much.
 - **A failing baseline tells you why.** If your suite doesn't pass on its own
   unmodified code, corral refuses to grade — a kill rate measured against a broken
   baseline is a fabricated number. It now prints the runner's own output alongside

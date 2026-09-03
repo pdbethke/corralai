@@ -116,7 +116,21 @@ type ScanRow struct {
 	DiffBase       string
 	Candidates     int
 	Audited        int
-	Passed         bool
+	// Passed is NULLABLE, because `corral scans push` cannot know it. The
+	// local ledger records what was measured, not the --min-kill-rate /
+	// --max-proven-missed the run was held to or whether it breached them,
+	// so a backfill push used to write `passed=true` — "no threshold, no
+	// breach" — over a row whose ORIGINAL run recorded passed=false against
+	// min_kill_rate=0.9, and stamped the original signed statement's hash on
+	// it. A reader following that hash landed on a statement saying the
+	// opposite of the row. nil is "not recorded", and it is the only honest
+	// value a reconstruction can carry.
+	Passed *bool
+	// StartedAt is when the SCAN started, from the local ledger — not when
+	// this push ran. The seal view picked "latest per path" by ts, which is
+	// push time, so re-pushing an old scan made its superseded verdict
+	// current. nil for rows written before this column existed.
+	StartedAt *time.Time
 	// TotalMillis is the scan's own wall clock. *int64 so a run that did not
 	// time itself is NULL rather than a scan that took no time.
 	TotalMillis *int64
@@ -297,6 +311,7 @@ const scansSchema = `
 CREATE TABLE IF NOT EXISTS corral_scans (
   scan_uid         VARCHAR,
   ts               TIMESTAMPTZ NOT NULL,
+  started_at       TIMESTAMPTZ,
   repo             VARCHAR     NOT NULL,
   run_url          VARCHAR,
   scan_id          BIGINT,
@@ -327,6 +342,7 @@ const auditsSchema = `
 CREATE TABLE IF NOT EXISTS corral_audits (
   scan_uid         VARCHAR,
   ts                 TIMESTAMPTZ NOT NULL,
+  started_at         TIMESTAMPTZ,
   repo               VARCHAR     NOT NULL,
   commit_sha         VARCHAR     NOT NULL,
   path               VARCHAR     NOT NULL,
@@ -555,6 +571,7 @@ var corralAuditsMigrationCols = []struct{ name, ddl string }{
 	{"covering_tests", "covering_tests INTEGER"},
 	{"import_only", "import_only BOOLEAN"},
 	{"scan_uid", "scan_uid VARCHAR"},
+	{"started_at", "started_at TIMESTAMPTZ"},
 }
 
 // The other four tables are NEW at schema_version 2, so nothing predates
@@ -567,6 +584,7 @@ var (
 	// the one instrumented coverage run (it had been carried only per file,
 	// where summing it over a scan counted one run once per file).
 	corralScansMigrationCols = []struct{ name, ddl string }{
+		{"started_at", "started_at TIMESTAMPTZ"},
 		{"selection_ms", "selection_ms BIGINT"},
 		{"selection_reused_from", "selection_reused_from BIGINT"},
 		// The --transparency receipt: additive for the same reason every
@@ -810,7 +828,15 @@ func CanonicalizeForWarehouse(b *Bundle) {
 	for i := range b.Events {
 		b.Events[i].TS = b.Events[i].TS.UTC().Truncate(time.Microsecond)
 	}
+	if b.Scan.StartedAt != nil {
+		t := b.Scan.StartedAt.UTC().Truncate(time.Microsecond)
+		b.Scan.StartedAt = &t
+	}
 	for i := range b.Files {
+		if b.Files[i].StartedAt != nil {
+			t := b.Files[i].StartedAt.UTC().Truncate(time.Microsecond)
+			b.Files[i].StartedAt = &t
+		}
 		// The writer refuses to store a kill rate for an uncovered file (see
 		// insertFileRow): a file the suite never reached has no rate, and a
 		// stored 0 would read as "measured, and everything survived".
@@ -1073,6 +1099,13 @@ func pushBundleOnce(target string, b Bundle) (Counts, error) {
 	// property that makes a derived identity better than a random one. The zero
 	// ScanRow case writes no scan row at all, and its child grains still share
 	// this uid, so they stay joinable to each other.
+	//
+	// AT THE WAREHOUSE'S PRECISION. That sentence was false for as long as
+	// it stood: the uid hashed `now` at nanoseconds while TIMESTAMPTZ stores
+	// microseconds, so the value a reader recomputed from the row never
+	// matched the one stored beside it. Truncating here, once, before
+	// hashing and writing, is what makes the claim true.
+	now = now.UTC().Truncate(time.Microsecond)
 	uid := scanUID(b.Scan, now)
 
 	if b.Scan != (ScanRow{}) {
@@ -1081,15 +1114,15 @@ func pushBundleOnce(target string, b Bundle) (Counts, error) {
 		    host, cores, trees_requested, diff_base, candidates, audited, passed,
 		    total_ms, input_tokens, output_tokens, model_calls,
 		    source_pushed, statement_sha256, selection_ms, selection_reused_from,
-		    rekor_log_index, rekor_uuid, schema_version
-		  ) VALUES (`+placeholders(26)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
+		    rekor_log_index, rekor_uuid, schema_version, started_at
+		  ) VALUES (`+placeholders(27)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
 			uid, now, b.Scan.Repo, b.Scan.RunURL, b.Scan.ScanID, b.Scan.Commit,
 			b.Scan.CorralVersion, b.Scan.Substrate, b.Scan.Host, b.Scan.Cores,
 			nullIfZeroInt(b.Scan.TreesRequested), b.Scan.DiffBase,
-			b.Scan.Candidates, b.Scan.Audited, b.Scan.Passed,
+			b.Scan.Candidates, b.Scan.Audited, nullBool(b.Scan.Passed),
 			b.Scan.TotalMillis, b.Scan.InputTokens, b.Scan.OutputTokens, b.Scan.ModelCalls,
 			b.Scan.SourcePushed, b.Scan.StatementSHA256, b.Scan.SelectionMillis, b.Scan.SelectionReusedFrom,
-			b.Scan.RekorLogIndex, nullIfEmpty(b.Scan.RekorUUID), SchemaVersion,
+			b.Scan.RekorLogIndex, nullIfEmpty(b.Scan.RekorUUID), SchemaVersion, nullTime(b.Scan.StartedAt),
 		); err != nil {
 			return Counts{}, fmt.Errorf("auditpush: insert scan row: %w", err)
 		}
@@ -1216,13 +1249,13 @@ func insertFileRow(tx *sql.Tx, uid string, now time.Time, r Row) error {
 	    challenger_sufficient, goals_derived, goal_reused,
 	    selection_ms, generation_ms, pool_ms, dev_pass_ms, authored_pass_ms,
 	    critic_ms, total_ms, mutant_ms_median, mutant_ms_max,
-	    authored_test, verdict_json, schema_version, prompt_shape, covering_tests, import_only
-	  ) VALUES (`+placeholders(76)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
+	    authored_test, verdict_json, schema_version, prompt_shape, covering_tests, import_only, started_at
+	  ) VALUES (`+placeholders(77)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
 		uid, now, r.Repo, r.Commit, r.Path, r.Lang,
 		killRate, r.Survivors, r.ProvenMissed,
 		r.TimedOut, r.TestWriterFailed, r.PoolTestUnsound,
 		r.Audited, r.Candidates, r.MutantsPlanted, r.ModelsByRole,
-		minKill, maxGaps, r.Passed, r.StatementSHA256, r.RunURL,
+		minKill, maxGaps, nullBool(r.Passed), r.StatementSHA256, r.RunURL,
 		r.TestSelection, r.SelectedTests, r.SuiteTests, r.SelectionFallback, r.Uncovered,
 		nullIfEmpty(r.WriterMode),
 		r.PerMutant, pmMin, pmMedian, pmMax,
@@ -1243,6 +1276,7 @@ func insertFileRow(tx *sql.Tx, uid string, now time.Time, r Row) error {
 		r.AuthoredPassMillis, r.CriticMillis, r.TotalMillis,
 		r.MutantMillisMedian, r.MutantMillisMax,
 		authoredTest, verdictJSON, SchemaVersion, nullIfEmpty(r.PromptShape), r.CoveringTests, r.ImportOnly,
+		nullTime(r.StartedAt),
 	)
 	if err != nil {
 		return fmt.Errorf("auditpush: insert %s: %w", r.Path, err)
@@ -1289,4 +1323,28 @@ func nullIfNilInt64(v *int64) any {
 		return nil
 	}
 	return *v
+}
+
+// nullBool is the SQL value of a nullable Go bool: NULL when not recorded.
+func nullBool(b *bool) any {
+	if b == nil {
+		return nil
+	}
+	return *b
+}
+
+// RecomputeScanUID is the reader's half of the derived-identity promise: given
+// the scan row and the ts stored beside it, it returns the scan_uid that row
+// must carry. A mismatch means the row was altered, or was written by a
+// version that hashed something the warehouse did not store.
+func RecomputeScanUID(r ScanRow, ts time.Time) string {
+	return scanUID(r, ts.UTC().Truncate(time.Microsecond))
+}
+
+// nullTime is the SQL value of a nullable Go time: NULL when not recorded.
+func nullTime(t *time.Time) any {
+	if t == nil {
+		return nil
+	}
+	return *t
 }

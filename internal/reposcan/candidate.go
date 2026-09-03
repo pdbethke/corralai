@@ -293,6 +293,20 @@ func EnumerateWithTests(root string, tests *TestMap) ([]Candidate, []Exclusion, 
 	var cands []Candidate
 	var excl []Exclusion
 
+	// THE ROOT IS RESOLVED; only links INSIDE the tree are refused. The walk
+	// below excludes every non-regular file for a good reason — a symlink
+	// inside a repository can point anywhere on the operator's disk, and the
+	// scan auto-discovers its subjects. But that rule was applied to the root
+	// itself: `--repo` given as a symlink lstat'd as a link, was excluded as
+	// "." (not-a-regular-file), and the scan walked ONE file, found nothing,
+	// and — with --diff-base — exited 0 as "nothing in scope" on a commit
+	// that changed a real source file. The root is the operator's explicit
+	// choice, not something a repository planted; resolving it is not
+	// following a link the repo chose.
+	if resolved, rerr := filepath.EvalSymlinks(root); rerr == nil {
+		root = resolved
+	}
+
 	ignoredFiles, ignoredDirs, err := gitIgnored(root)
 	if err != nil {
 		return nil, nil, err
@@ -731,6 +745,16 @@ func isTestFile(p lang.Plugin, rel string) bool {
 
 	// spec_ prefix (Ruby: spec_foo.rb)
 	if strings.HasPrefix(base, "spec_") {
+		return true
+	}
+
+	// PHPUnit's convention is a SUFFIX with no separator: tests/CalcTest.php.
+	// None of the rules above see it, and the plugin's TestPaths cannot
+	// either — it derives the test for a SOURCE, so for a test file it
+	// proposes tests/CalcTestTest.php. Every PHP test file was therefore
+	// counted as an unpaired source, inflated "no paired test", and sat in
+	// the pre-flight's source set.
+	if strings.HasSuffix(base, "Test.php") {
 		return true
 	}
 

@@ -80,7 +80,7 @@ func oneAuditedFileBundle(scanID int64) auditpush.Bundle {
 	}}
 	return buildBundle(scan, scanID, files, nil, nil, nil,
 		auditpush.Link{}, false, "o/r", "deadbeef", "",
-		bundleMeta{ModelsByRole: `{"writer":"m"}`, Passed: true})
+		bundleMeta{ModelsByRole: `{"writer":"m"}`, Passed: boolPtrT(true)})
 }
 
 // linkageStatement mirrors the shape readStatement needs out of the written

@@ -421,3 +421,20 @@ func TestScansShow_SaysNothingAboutRekorWhenAbsent(t *testing.T) {
 		t.Errorf("a rekor line was printed for a scan with no receipt:\n%s", out.String())
 	}
 }
+
+// A THIN DENOMINATOR MUST BE SAID. 2 graded and 10 invalid, three of four
+// regions dropped, printed "1.00 … proven" with an empty NOTE: the columns were
+// recorded and never rendered, so a rate resting on almost nothing read exactly
+// like one resting on everything.
+func TestScanFileNoteDisclosesAThinDenominator(t *testing.T) {
+	f := scanstore.File{Disposition: "audited", MutantsGraded: 2, MutantsInvalid: 10, DroppedRegions: "a,b,c"}
+	note := scanFileNote(f)
+	for _, want := range []string{"thin denominator: 2 graded, 10 invalid", "3 region(s) dropped"} {
+		if !strings.Contains(note, want) {
+			t.Errorf("note %q must contain %q", note, want)
+		}
+	}
+	if got := scanFileNote(scanstore.File{Disposition: "audited", MutantsGraded: 40, MutantsInvalid: 2}); got != "" {
+		t.Errorf("a whole exam must carry no denominator note, got %q", got)
+	}
+}

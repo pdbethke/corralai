@@ -2,7 +2,10 @@
 
 package lang
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // The measured problem, from a gemini-3.6-flash audit of pallets/flask on
 // 2026-07-31 — the first run whose authored test was ever retained and could
@@ -101,5 +104,26 @@ func TestNonPythonPluginsDoNotClaimDeselection(t *testing.T) {
 		if _, claims := p.(FailureDeselector); claims {
 			t.Errorf("%s claims FailureDeselector — only implement it with a verified failure-line parser and a real deselect flag for that runner", name)
 		}
+	}
+}
+
+// THE SALVAGE'S --deselect MUST SURVIVE THE SELECTION. WithAuthoredTest rebuilds
+// the command from sel.Cmd whenever a selection exists and used to discard the
+// passed testCmd entirely — which is exactly where salvageByDeselect had put
+// the `--deselect <failing test>` it computed. Under selection (the default),
+// the salvage ran the original command, failed the same way, and reported
+// nothing; with an empty Selection the identical inputs salvaged one proof.
+func TestWithAuthoredTestCarriesDeselectAcrossASelection(t *testing.T) {
+	py, _ := ByName("python")
+	ts := py.(TestSelector)
+	sel := Selection{Base: []string{"python3", "-m", "pytest", "-q"}, Cmd: []string{"python3", "-m", "pytest", "-q", "tests/test_calc.py::test_add"}, Tests: []string{"tests/test_calc.py::test_add"}}
+	passed := []string{"python3", "-m", "pytest", "-q", "--deselect", "tests/test_corral.py::test_wrong"}
+	got := ts.WithAuthoredTest(sel, passed, "tests/test_corral.py")
+	joined := strings.Join(got, " ")
+	if !strings.Contains(joined, "--deselect tests/test_corral.py::test_wrong") {
+		t.Fatalf("the --deselect the salvage computed was discarded by the selection: %q", joined)
+	}
+	if !strings.Contains(joined, "tests/test_calc.py::test_add") {
+		t.Errorf("the selection's own tests must still be there: %q", joined)
 	}
 }

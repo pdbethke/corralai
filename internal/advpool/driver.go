@@ -2371,6 +2371,16 @@ func (d *Driver) tickPoolAdequacy(ctx context.Context, missionID int64, run *run
 	// model commonly wraps a test in ```go fences / prose. Clean it to the bare
 	// source before compiling or scoring — symmetric with ParseMutants on the
 	// mutant-generator side.
+	if tw.Result == WriterProviderFailedResult {
+		// The seat never answered. Converge on the measurement that exists
+		// rather than discard it — see WriterProviderFailedResult.
+		log.Printf("advpool: %s: the test-writer's model call failed (unreachable, rate-limited, or a server error) — %d survivor(s) found by the dev pass but not proven-killed; converging on the measured dev-adequacy result without an authored test",
+			run.rs.CodePath, len(run.devSurvivors))
+		run.poolScored = true
+		run.provenMissed = 0
+		run.testWriterFailed = true
+		return nil
+	}
 	writerTest := d.Validator.ParseTest(tw.Result)
 
 	if cerr := d.Validator.CompileTest(ctx, run.rs.CodePath, run.rs.Code, writerTest); cerr != nil {

@@ -239,10 +239,37 @@ func CollectSelectionEvidence(ctx context.Context, runner commandRunner, files m
 	// erroring just means Select will error identically per file, disclosed
 	// exactly as it always has been; only a document that parses AND turns
 	// out to measure no source file gets the more specific note.
-	if measured, mErr := sel.Index([]byte(out)); mErr == nil && !hasMeasuredSourceFile(p, measured) {
+	measured, mErr := sel.Index([]byte(out))
+	if mErr != nil {
+		// UNPARSEABLE IS NOT EVIDENCE. This used to fall through to Ran:
+		// true with the raw bytes attached, so an instrumented run whose
+		// only output was `sh: 1: …/venv/bin/python: not found` was recorded
+		// as selection evidence — then CACHED, keyed on (tree, command,
+		// plugin, substrate), none of which changes when the operator fixes
+		// their environment, and served on every later scan as "reused".
+		// The report's one line that could have said why never printed,
+		// because Ran was true. A document the plugin cannot read says
+		// nothing about any test; it is a failure to measure, with the
+		// reason and the first line of what came back.
+		return SelectionEvidence{Note: fmt.Sprintf("%s: selection evidence unparseable: %v (output began: %q)", p.Name(), mErr, firstLine(out))}
+	}
+	if !hasMeasuredSourceFile(p, measured) {
 		return SelectionEvidence{Note: pathologicalSelectionDocumentNote(p)}
 	}
 	return SelectionEvidence{Raw: []byte(out), Ran: true}
+}
+
+// firstLine is a short excerpt of a document that failed to parse — enough to
+// recognise a `command not found` where a JSON report was expected.
+func firstLine(s string) string {
+	s = strings.TrimSpace(s)
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		s = s[:i]
+	}
+	if len(s) > 120 {
+		s = s[:120] + "…"
+	}
+	return s
 }
 
 // For answers one file. A whole-suite answer is a Selection with Cmd nil

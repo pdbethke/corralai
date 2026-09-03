@@ -434,6 +434,18 @@ func authoredTestOutcome(f scanstore.File) string {
 // have to re-derive which — so the reader must actually say it.
 func scanFileNote(f scanstore.File) string {
 	note := baseScanFileNote(f)
+	// DENOMINATOR WEAKNESS IS DISCLOSED BESIDE THE RATE. A row with 2 graded
+	// and 10 invalid mutants, three of four regions dropped, printed "1.00 …
+	// proven" with an empty NOTE: mutants_invalid and dropped_regions were
+	// recorded and never rendered, so a rate that rests on almost nothing
+	// read exactly like one that rests on everything.
+	if w := denominatorNote(f); w != "" {
+		if note == "" {
+			note = w
+		} else {
+			note = note + "; " + w
+		}
+	}
 	// Reuse is disclosed ALONGSIDE the diagnosis, never instead of it: this
 	// row's numbers were not measured by the scan being read, they were served
 	// from a prior scan's cache_key match, and a reader comparing two scans
@@ -589,4 +601,18 @@ func openScanStore(dsn string) (scansReader, error) {
 		return nil, fmt.Errorf("opening the scan ledger %s: %w (a `certify --repo --record` run in another process holds it open — DuckDB is single-writer)", dsn, err)
 	}
 	return st, nil
+}
+
+// denominatorNote names a thin denominator: many mutants rejected before
+// grading, or regions the generator dropped. Empty when the exam is whole.
+func denominatorNote(f scanstore.File) string {
+	var parts []string
+	if f.MutantsInvalid > 0 && f.MutantsInvalid >= f.MutantsGraded {
+		parts = append(parts, fmt.Sprintf("thin denominator: %d graded, %d invalid", f.MutantsGraded, f.MutantsInvalid))
+	}
+	if strings.TrimSpace(f.DroppedRegions) != "" {
+		n := len(strings.Split(strings.TrimSpace(f.DroppedRegions), ","))
+		parts = append(parts, fmt.Sprintf("%d region(s) dropped, unprobed", n))
+	}
+	return strings.Join(parts, "; ")
 }

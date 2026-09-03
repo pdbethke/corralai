@@ -435,8 +435,20 @@ func (w *WorkspaceRunner) applyRunRestore(ctx context.Context, files map[string]
 	if st := cmd.ProcessState; st != nil && st.Exited() {
 		return st.ExitCode(), nil // a non-zero exit is a RESULT, not an error
 	}
-	if ctx.Err() != nil {
-		return -1, ErrTestTimeout
+	if cerr := ctx.Err(); cerr != nil {
+		// CANCELLED IS NOT TIMED OUT. Score turns a timed-out BASELINE into
+		// Report{CompliantPass: false} with no error — "your suite does not
+		// pass unmutated" — and a caller then records BaselineFailed for
+		// the file, or a flaky baseline, or in certify --local signs it.
+		// A Ctrl-C or SIGTERM during the baseline is none of those things;
+		// it is a run that was stopped, and the bwrap path already says so
+		// (sandbox.go classifies cancellation as its own error). This path
+		// did not get that fix, so the workspace substrate could write a
+		// false record on every interrupted scan.
+		if errors.Is(cerr, context.DeadlineExceeded) {
+			return -1, ErrTestTimeout
+		}
+		return -1, fmt.Errorf("adequacy: run cancelled before it could be graded: %w", cerr)
 	}
 	if runErr != nil {
 		var ee *exec.ExitError

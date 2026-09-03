@@ -245,3 +245,38 @@ func TestScansPush_RepeatPushAppends(t *testing.T) {
 		t.Errorf("corral_audits rows after two pushes of the same scan = %d, want 2 (append-only duplicates rather than dedupes)", n)
 	}
 }
+
+// A BACKFILL MUST NOT ASSERT AN OUTCOME IT DOES NOT KNOW. The local ledger
+// records what was measured — never the --min-kill-rate / --max-proven-missed
+// a run was held to, nor whether it breached them — so `scans push` used to
+// write passed=true ("no threshold, no breach") and stamp the ORIGINAL signed
+// statement's hash on the row. A reader following that hash from a re-pushed
+// row landed on a statement recording passed=false against min_kill_rate=0.9:
+// the row said the opposite of the statement it claimed as provenance.
+//
+// The only honest value a reconstruction can carry for an outcome it cannot
+// recover is NULL.
+func TestScansPush_RecordsPassedAsUnknownNotTrue(t *testing.T) {
+	ledgerDSN := seedLedger(t)
+	target := filepath.Join(t.TempDir(), "warehouse.duckdb")
+	var out, errOut bytes.Buffer
+	if code := runScansPush([]string{"--db", target, "--all"},
+		func(dsn string) (scansPushReader, error) { return scanstore.Open(ledgerDSN) },
+		auditpush.PushBundle, &out, &errOut); code != 0 {
+		t.Fatalf("exit = %d, stderr=%s", code, errOut.String())
+	}
+	db, err := sql.Open("duckdb", target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	for _, table := range []string{"corral_scans", "corral_audits"} {
+		var asserted int
+		if err := db.QueryRow("SELECT count(*) FROM " + table + " WHERE passed IS NOT NULL").Scan(&asserted); err != nil {
+			t.Fatalf("query %s: %v", table, err)
+		}
+		if asserted != 0 {
+			t.Errorf("%s: %d row(s) assert a passed outcome that a backfill cannot know — it must be NULL, never a fabricated true", table, asserted)
+		}
+	}
+}

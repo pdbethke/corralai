@@ -38,8 +38,8 @@ func TestMutantGateUsesThePluginsOwnCheck(t *testing.T) {
 		t.Fatal("the go plugin returned an empty CompileCheck sequence")
 	}
 	joined := strings.Join(cc[0], " ")
-	if !strings.Contains(joined, "go") || !strings.Contains(joined, "vet") {
-		t.Errorf("go CompileCheck = %q, expected the plugin's own vet invocation", joined)
+	if !strings.Contains(joined, "go test") || !strings.Contains(joined, "-run ^$") {
+		t.Errorf("go CompileCheck = %q, expected the plugin's own build-only invocation (go test -run ^$)", joined)
 	}
 }
 

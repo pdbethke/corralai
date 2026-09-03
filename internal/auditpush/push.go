@@ -33,6 +33,7 @@ package auditpush
 import (
 	"fmt"
 	"strings"
+	"time"
 )
 
 // Row is one audited file, as it lands in the warehouse.
@@ -64,7 +65,8 @@ type Row struct {
 	ModelsByRole    string // JSON, so a new role does not need a migration
 	MinKillRate     *float64
 	MaxProvenMissed *int
-	Passed          bool
+	Passed          *bool      // nil = not recorded; see ScanRow.Passed
+	StartedAt       *time.Time // the scan's own start; see ScanRow.StartedAt
 	// StatementSHA256 ties this row to the signed in-toto statement the run
 	// published. It is what makes the table evidence rather than self-report:
 	// any row can be traced to an attestation a third party verifies.

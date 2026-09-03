@@ -221,13 +221,17 @@ func runScansPush(args []string, open func(string) (scansPushReader, error), pus
 			row.Repo, row.Commit, "",
 			bundleMeta{
 				ModelsByRole: rosterJSON,
-				// Neither threshold is recoverable from the ledger — a
-				// scan header records what was MEASURED, not the
-				// --min-kill-rate/--max-proven-missed the run was held to
-				// (see certify_repo.go's own flags). Left nil rather than
-				// guessed, which makes Passed true honestly: with no
-				// threshold set, there is no breach to report.
-				Passed: true,
+				// Neither threshold NOR THE OUTCOME is recoverable from the
+				// ledger — a scan header records what was measured, not the
+				// --min-kill-rate/--max-proven-missed the run was held to or
+				// whether it breached them. This used to write Passed: true,
+				// reasoning "no threshold, no breach" — and a reader who
+				// followed the row's statement_sha256 back landed on a signed
+				// statement recording passed=false against min_kill_rate=0.9.
+				// A reconstruction asserting an outcome it does not know is a
+				// fabrication with a provenance link attached. nil is "not
+				// recorded".
+				Passed: nil,
 			})
 
 		fmt.Fprintf(stdout, "scan %d · %s · %d file(s), %d mutant(s) → %s\n",

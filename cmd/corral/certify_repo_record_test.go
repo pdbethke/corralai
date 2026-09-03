@@ -125,6 +125,13 @@ func TestExclusionEvidence_OnlyClaimsPairingWhenPairingWasAttempted(t *testing.T
 		// did measure this exact path.
 		{reposcan.ReasonNoLanguage, "executed", "coverage", "the preflight measured this exact path"},
 		{reposcan.ReasonNotSelected, "not-executed", "coverage", "the preflight measured this exact path"},
+		// The three reasons an INSTRUMENTED RUN produces. They fell through
+		// to "" and were labelled like a README, so the query that asks
+		// "what did the instrumented run tell us?" missed the one exclusion
+		// the instrumented run made.
+		{reposcan.ReasonUncovered, "", "coverage", "a coverage verdict: measured, never executed"},
+		{reposcan.ReasonImportOnly, "", "coverage", "a coverage verdict: loaded, no test exercises it"},
+		{reposcan.ReasonNoExecutableCode, "", "coverage", "the same instrument, on a file with nothing to cover"},
 	} {
 		t.Run(c.reason+"/"+c.preflight, func(t *testing.T) {
 			if got := exclusionEvidence(c.reason, c.preflight); got != c.want {

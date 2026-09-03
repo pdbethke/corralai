@@ -21,6 +21,11 @@ type EvidenceIndex struct {
 type evidenceFileEntry struct {
 	coveringTests int
 	mostCovering  string // the covering test FILE with the most executed lines; "" when coveringTests == 0
+	// coveringFiles is EVERY test file that executed this source, not only
+	// the most-covering one. A --diff-base scan needs the whole set: a pull
+	// request that weakens the second-most-covering test still changes what
+	// defends this file, and scoping on mostCovering alone would miss it.
+	coveringFiles map[string]bool
 	// hasStatic is true when the evidence also recorded coverage for this
 	// file OUTSIDE any test context — import/module-load time execution a
 	// selector cannot attribute to one test (see lang.FileCoverage.HasStatic).
@@ -102,9 +107,13 @@ func ParseEvidenceIndex(ev SelectionEvidence, plug lang.Plugin) (EvidenceIndex, 
 
 	files := make(map[string]evidenceFileEntry, len(raw))
 	for path, fc := range raw {
+		covering := map[string]bool{}
 		best, bestLines := "", -1
 		for testID, lines := range fc.Tests {
 			testFile := testFileFromNodeID(testID)
+			if lines > 0 {
+				covering[testFile] = true
+			}
 			if lines > bestLines || (lines == bestLines && moreSpecificTestPath(testFile, best)) {
 				best, bestLines = testFile, lines
 			}
@@ -113,7 +122,7 @@ func ParseEvidenceIndex(ev SelectionEvidence, plug lang.Plugin) (EvidenceIndex, 
 		if n == 0 {
 			best = ""
 		}
-		files[path] = evidenceFileEntry{coveringTests: n, mostCovering: best, hasStatic: fc.HasStatic, hasStatements: fc.HasStatements}
+		files[path] = evidenceFileEntry{coveringTests: n, mostCovering: best, coveringFiles: covering, hasStatic: fc.HasStatic, hasStatements: fc.HasStatements}
 	}
 	return EvidenceIndex{files: files}, true
 }
@@ -139,4 +148,21 @@ func moreSpecificTestPath(a, b string) bool {
 		return da > db
 	}
 	return a < b
+}
+
+// CoveredByAny reports whether any of the given test files executed path —
+// the question a --diff-base scan asks of a changed test: "which sources does
+// this change defend?". mostCovering answers a different question (which
+// single test to grade with) and must not stand in for this one.
+func (idx EvidenceIndex) CoveredByAny(path string, testFiles map[string]bool) bool {
+	e, ok := idx.files[path]
+	if !ok {
+		return false
+	}
+	for tf := range e.coveringFiles {
+		if testFiles[tf] {
+			return true
+		}
+	}
+	return false
 }

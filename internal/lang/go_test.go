@@ -15,13 +15,15 @@ func TestGoPluginMatchesLegacyBehavior(t *testing.T) {
 	if got := p.TestCmd(); !reflect.DeepEqual(got, []string{"go", "test", "./..."}) {
 		t.Fatalf("TestCmd() = %v", got)
 	}
-	// A file in a package dir scopes the vet to that package (not the whole
-	// module) so a monorepo audit doesn't compile unrelated cgo deps.
-	if got := p.CompileCheck("a/b.go", "a/b_test.go"); !reflect.DeepEqual(got, [][]string{{"go", "vet", "./a/..."}}) {
+	// A file in a package dir scopes the build to that package (not the whole
+	// module) so a monorepo audit doesn't compile unrelated cgo deps. It is a
+	// BUILD (`go test -run ^$`), not `go vet`: vet's analyzers rejected
+	// mutants that compile and run, taking them out of the denominator.
+	if got := p.CompileCheck("a/b.go", "a/b_test.go"); !reflect.DeepEqual(got, [][]string{{"go", "test", "-count=1", "-run", "^$", "./a/..."}}) {
 		t.Fatalf("CompileCheck(package path) = %v", got)
 	}
 	// A bare filename (single-file mode) has no package dir → whole scaffold.
-	if got := p.CompileCheck("b.go", "b_test.go"); !reflect.DeepEqual(got, [][]string{{"go", "vet", "./..."}}) {
+	if got := p.CompileCheck("b.go", "b_test.go"); !reflect.DeepEqual(got, [][]string{{"go", "test", "-count=1", "-run", "^$", "./..."}}) {
 		t.Fatalf("CompileCheck(bare file) = %v", got)
 	}
 	for in, want := range map[string]string{

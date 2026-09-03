@@ -149,7 +149,9 @@ func TestSealMarksLiveStaleAndNever(t *testing.T) {
 	got := out.String()
 	for _, want := range []string{
 		"live", "live.go",
-		"stale (file changed since 2026-08-20 10:00)", "stale.go",
+		// "(push)" because this fixture row carries no scan start: the label
+		// must say it is showing the push time, not pretend it is the audit time.
+		"stale (file changed since 2026-08-20 10:00 (push))", "stale.go",
 		"never audited", "never.go",
 		"coverage: 1 of 3 hot files carry a live verdict (33.3%)",
 	} {

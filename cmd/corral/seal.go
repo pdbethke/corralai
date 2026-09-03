@@ -34,14 +34,38 @@ const defaultSealTop = 20
 // own (see internal/auditpush/bundle.go's auditsSchema) rather than
 // reinventing a naming scheme a reader of the warehouse has to re-learn.
 type sealRow struct {
-	Repo         string    `json:"repo"`
-	Path         string    `json:"path"`
-	ParentSHA256 string    `json:"parent_sha256"`
-	KillRate     float64   `json:"kill_rate"`
-	Survivors    int       `json:"survivors"`
-	ProvenMissed int       `json:"proven_missed"`
-	Trees        int       `json:"trees"`
-	TS           time.Time `json:"ts"`
+	Repo         string  `json:"repo"`
+	Path         string  `json:"path"`
+	ParentSHA256 string  `json:"parent_sha256"`
+	KillRate     float64 `json:"kill_rate"`
+	Survivors    int     `json:"survivors"`
+	ProvenMissed int     `json:"proven_missed"`
+	Trees        int     `json:"trees"`
+	// TS is when the row was PUSHED. AuditedAt is when the scan actually
+	// ran, and is what a reader means by "when was this audited"; nil for
+	// rows written before the column existed.
+	TS        time.Time  `json:"ts"`
+	AuditedAt *time.Time `json:"audited_at,omitempty"`
+	// The honesty flags. They were in the view and dropped on the way to the
+	// terminal, so "5 survivors / 0 proven" read as "tried and proved
+	// nothing" for a file whose authored test never compiled.
+	TestWriterFailed bool `json:"test_writer_failed"`
+	PoolTestUnsound  bool `json:"pool_test_unsound"`
+	BaselineFailed   bool `json:"baseline_failed"`
+}
+
+// caveat is the one-word reason a seal row's numbers must not be read at
+// face value, or "" when they may.
+func (r sealRow) caveat() string {
+	switch {
+	case r.BaselineFailed:
+		return "BASELINE-FAILED"
+	case r.TestWriterFailed:
+		return "WRITER-FAILED"
+	case r.PoolTestUnsound:
+		return "TEST-UNSOUND"
+	}
+	return ""
 }
 
 // sealReader is the read-only surface `corral seal` needs, kept as an
@@ -85,7 +109,8 @@ type dbSealReader struct{ db *sql.DB }
 
 func (r dbSealReader) SealRows(ctx context.Context, repo string) ([]sealRow, error) {
 	q := `SELECT repo, path, COALESCE(parent_sha256, ''), kill_rate,
-	      COALESCE(survivors, 0), COALESCE(proven_missed, 0), COALESCE(trees, 0), ts
+	      COALESCE(survivors, 0), COALESCE(proven_missed, 0), COALESCE(trees, 0), ts, started_at,
+	      COALESCE(test_writer_failed, false), COALESCE(pool_test_unsound, false), COALESCE(baseline_failed, false)
 	      FROM corral_seal`
 	args := []any{}
 	if strings.TrimSpace(repo) != "" {
@@ -101,8 +126,14 @@ func (r dbSealReader) SealRows(ctx context.Context, repo string) ([]sealRow, err
 	var out []sealRow
 	for rows.Next() {
 		var r sealRow
-		if err := rows.Scan(&r.Repo, &r.Path, &r.ParentSHA256, &r.KillRate, &r.Survivors, &r.ProvenMissed, &r.Trees, &r.TS); err != nil {
+		var started sql.NullTime
+		if err := rows.Scan(&r.Repo, &r.Path, &r.ParentSHA256, &r.KillRate, &r.Survivors, &r.ProvenMissed, &r.Trees, &r.TS, &started,
+			&r.TestWriterFailed, &r.PoolTestUnsound, &r.BaselineFailed); err != nil {
 			return nil, err
+		}
+		if started.Valid {
+			t := started.Time
+			r.AuditedAt = &t
 		}
 		out = append(out, r)
 	}
@@ -354,11 +385,11 @@ func runSealWithoutRepo(st sealReader, asJSON bool, stdout, stderr io.Writer) in
 	}
 	fmt.Fprintln(stdout, "no --repo given — printing the warehouse's latest verdict per path, with NO live/stale judgement (pass --repo <dir> to compare against a checkout)")
 	tw := tabwriter.NewWriter(stdout, 0, 2, 2, ' ', 0)
-	fmt.Fprintln(tw, "REPO\tKILL\tSURVIVORS\tPROVEN\tTREES\tTS\tPATH\t")
+	fmt.Fprintln(tw, "REPO\tKILL\tSURVIVORS\tPROVEN\tTREES\tAUDITED\tCAVEAT\tPATH\t")
 	for _, r := range rows {
-		fmt.Fprintf(tw, "%s\t%.2f\t%d\t%d\t%d\t%s\t%s\t\n",
+		fmt.Fprintf(tw, "%s\t%.2f\t%d\t%d\t%d\t%s\t%s\t%s\t\n",
 			r.Repo, r.KillRate, r.Survivors, r.ProvenMissed, r.Trees,
-			r.TS.Format("2006-01-02 15:04"), r.Path)
+			r.auditedLabel(), r.caveat(), r.Path)
 	}
 	tw.Flush()
 	return 0
@@ -480,7 +511,7 @@ func runSealWithRepo(st sealReader, repoDir string, top int, asJSON bool, stdout
 			states = append(states, sealState{Path: c.Path, State: "live", Row: &rc})
 			live++
 		default:
-			states = append(states, sealState{Path: c.Path, State: fmt.Sprintf("stale (file changed since %s)", r.TS.Format("2006-01-02 15:04")), Row: &rc})
+			states = append(states, sealState{Path: c.Path, State: fmt.Sprintf("stale (file changed since %s)", rc.auditedLabel()), Row: &rc})
 		}
 	}
 
@@ -494,15 +525,15 @@ func runSealWithRepo(st sealReader, repoDir string, top int, asJSON bool, stdout
 	}
 
 	tw := tabwriter.NewWriter(stdout, 0, 2, 2, ' ', 0)
-	fmt.Fprintln(tw, "STATE\tKILL\tSURVIVORS\tPROVEN\tTREES\tAUDITED\tPATH\t")
+	fmt.Fprintln(tw, "STATE\tKILL\tSURVIVORS\tPROVEN\tTREES\tAUDITED\tCAVEAT\tPATH\t")
 	for _, s := range states {
 		if s.Row == nil {
-			fmt.Fprintf(tw, "%s\t—\t—\t—\t—\t—\t%s\t\n", s.State, s.Path)
+			fmt.Fprintf(tw, "%s\t—\t—\t—\t—\t—\t\t%s\t\n", s.State, s.Path)
 			continue
 		}
-		fmt.Fprintf(tw, "%s\t%.2f\t%d\t%d\t%d\t%s\t%s\t\n",
+		fmt.Fprintf(tw, "%s\t%.2f\t%d\t%d\t%d\t%s\t%s\t%s\t\n",
 			s.State, s.Row.KillRate, s.Row.Survivors, s.Row.ProvenMissed, s.Row.Trees,
-			s.Row.TS.Format("2006-01-02 15:04"), s.Path)
+			s.Row.auditedLabel(), s.Row.caveat(), s.Path)
 	}
 	tw.Flush()
 
@@ -583,4 +614,13 @@ func emitSealStateJSON(states []sealState, stdout io.Writer) int {
 	enc.SetIndent("", "  ")
 	_ = enc.Encode(out)
 	return 0
+}
+
+// auditedLabel is the scan's own time when recorded, else the push time
+// marked as such — a reader must be able to tell the two apart.
+func (r sealRow) auditedLabel() string {
+	if r.AuditedAt != nil {
+		return r.AuditedAt.Format("2006-01-02 15:04")
+	}
+	return r.TS.Format("2006-01-02 15:04") + " (push)"
 }

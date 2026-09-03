@@ -4563,3 +4563,38 @@ func countAssignmentsOfChallengerAgreement(t *testing.T) int {
 	}
 	return strings.Count(string(b), "v.ChallengerAgreement = challengerPair(d, run)")
 }
+
+// A WRITER THAT NEVER ANSWERED IS NOT A FAILED AUDIT. With the writer's model
+// unreachable, the caller returned the transport error, the file became
+// "could not audit: running role test-writer", and the dev-adequacy result —
+// minutes of real scoring, already computed — was discarded as
+// COULD-NOT-GRADE. The sentinel converges on the measurement that exists,
+// flagged exactly as a writer that never produced a compiling test is.
+func TestTick_WriterProviderFailure_ConvergesOnTheDevMeasurement(t *testing.T) {
+	survivors := []adequacy.Mutant{{ID: "m1", Replace: "c1"}, {ID: "m2", Replace: "c2"}}
+	scorer := &fakeScorer{devKillRate: 0.5, devSurvivors: survivors}
+	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Replace: "c0"}, survivors[0], survivors[1]}}
+	d, _ := newTestDriver(t, 2, scorer, validator, 0.1)
+
+	mg := claimByKey(t, d.Q, RoleMutantGenerator)
+	mustComplete(t, d.Q, mg.ID, "raw mutants")
+	if _, err := d.Tick(context.Background(), 2); err != nil {
+		t.Fatalf("Tick (dev-adequacy): %v", err)
+	}
+	tw := claimTaskByID(t, d.Q, d.runs[2].testWriterTaskID)
+	mustComplete(t, d.Q, tw.ID, WriterProviderFailedResult)
+
+	if _, err := d.Tick(context.Background(), 2); err != nil {
+		t.Fatalf("Tick (pool-adequacy) must not fail when the writer's provider did: %v", err)
+	}
+	run := d.runs[2]
+	if !run.poolScored || !run.testWriterFailed {
+		t.Fatalf("run must converge flagged writer-failed: poolScored=%v testWriterFailed=%v", run.poolScored, run.testWriterFailed)
+	}
+	if run.provenMissed != 0 {
+		t.Errorf("provenMissed = %d, want 0 — nothing was authored, so nothing was proven", run.provenMissed)
+	}
+	if len(scorer.calls) != 1 {
+		t.Errorf("the pool pass must not run (there is no test): %d scorer calls, want 1 (dev)", len(scorer.calls))
+	}
+}

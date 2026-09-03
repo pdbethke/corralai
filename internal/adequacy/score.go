@@ -484,6 +484,9 @@ type Report struct {
 	// unobservable mutant KILLED, and the driver signed it as a proven gap.
 	Unmeasured        []string
 	UnmeasuredReasons map[string]string
+	// CompileGateNote is set when the compile gate rejected the COMPLIANT
+	// file and was therefore disabled for this run — see Score.
+	CompileGateNote string
 	// PerMutant records what each GRADED mutant was actually graded with,
 	// keyed by Mutant.ID. There is one entry per mutant that reached the
 	// suite — a mutant the compile gate rejected is absent, because nothing
@@ -833,6 +836,35 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 	// one command for every survivor, and the dev pass reuses narrowings
 	// across mutants sharing a span, so this is a handful of extra runs
 	// against a suite already being run once per mutant.
+	// THE COMPILE GATE IS PROBED ON THE COMPLIANT FILE FIRST. A gate that
+	// rejects the UNMUTATED source is a broken gate for this file, not a
+	// verdict on the mutants: a pre-existing `fmt.Sprintf("x")` statement
+	// anywhere in a Go file — which `go test` runs happily — made `go vet`
+	// reject every mutant with a reason pointing at a line no mutant
+	// touched, the exam reported Total 0, and the report blamed the
+	// GENERATOR ("evidence about the generator"). That is a plausible cause
+	// of the 56-92% rejection rates seen in live audits. A gate the pristine
+	// file cannot pass is switched off for the run and the report says so;
+	// every mutant is then graded by execution, which is the measurement
+	// that matters anyway.
+	if len(cfg.mutantCompileCheck) > 0 {
+		gctx, gcancel := context.WithTimeout(ctx, perMutant)
+		for _, cmd := range cfg.mutantCompileCheck {
+			ok, out, gerr := runCmdVerbose(gctx, compliantCode, cmd)
+			if gerr != nil {
+				gcancel()
+				return Report{}, fmt.Errorf("adequacy: probing the compile gate on compliant code: %w", gerr)
+			}
+			if !ok {
+				rep.CompileGateNote = fmt.Sprintf("compile gate DISABLED for this file: %s rejects the UNMUTATED source, so it cannot judge a mutant — every mutant graded by execution instead. Gate output: %s",
+					strings.Join(cmd, " "), strings.TrimSpace(lastLines(out, 6)))
+				cfg.mutantCompileCheck = nil
+				break
+			}
+		}
+		gcancel()
+	}
+
 	commandFailsOnCompliant := map[string]string{}
 	if cfg.commandFor != nil {
 		sharedKey := strings.Join(testCmd, "\x00")
@@ -1017,9 +1049,21 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 				//     survivor either: it is UNMEASURED, and an error is the
 				//     honest report.
 				bctx, bcancel := context.WithTimeout(ctx, perMutant)
-				_, berr := run(bctx, compliantCode)
+				bpassed, berr := run(bctx, compliantCode)
 				bcancel()
 				if berr == nil {
+					// THE RE-PROBE MUST PASS, not merely return. This read
+					// `_, berr :=` and credited a kill whenever the compliant
+					// run came back within budget — including when it came
+					// back FAILING. A suite that is failing at that moment
+					// (flaky, or the box is unhealthy) proves nothing about
+					// the mutant, and "timed out, then compliant failed" is
+					// evidence the environment is wrong, not that the mutant
+					// was caught.
+					if !bpassed {
+						outcomes[i] = outcome{err: fmt.Errorf("mutant %s: run timed out, and the compliant baseline FAILED when re-run under the same budget (%s) — the suite is not stable right now, so nothing is inferred from this mutant", m.ID, perMutant)}
+						return
+					}
 					outcomes[i] = outcome{killed: true, grading: grading}
 					return
 				}

@@ -591,7 +591,14 @@ register_shutdown_function(function () {
         }
         // Nothing measurable means nothing to have skipped: absent, not false.
         if ($measurable === 0) { continue; }
-        fwrite($out, ($hit ? "1 " : "0 ") . $path . "\n");
+        // RELATIVE TO THE WORKING DIRECTORY — see the Ruby reducer for why
+        // an absolute path is only ever right on one substrate. Outside cwd
+        // is vendor/ or the runtime, never a candidate.
+        $cwd = getcwd();
+        if ($cwd === false) { continue; }
+        $prefix = rtrim($cwd, '/') . '/';
+        if (strncmp($path, $prefix, strlen($prefix)) !== 0) { continue; }
+        fwrite($out, ($hit ? "1 " : "0 ") . substr($path, strlen($prefix)) . "\n");
     }
     fclose($out);
   } catch (Throwable $e) {

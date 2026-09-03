@@ -54,11 +54,26 @@ func (s *canonScorer) ScoreReport(ctx context.Context, codePath, code, test stri
 	}
 	const scale = 10000
 	rep := adequacy.Report{CompliantPass: true, CanaryKilled: true, Total: scale}
-	for i := 0; i < int(math.Round(kr*scale)); i++ {
-		rep.Killed = append(rep.Killed, fmt.Sprintf("k%d", i))
-	}
+	survived := map[string]bool{}
 	for _, m := range survivors {
 		rep.Survived = append(rep.Survived, m.ID)
+		survived[m.ID] = true
+	}
+	// The REAL killed ids go in Killed, as the real scorer's do. This fake
+	// listed only synthetic "k<i>" entries there, which was fine while the
+	// driver derived "proven" by subtraction (a survivor absent from Survived)
+	// and is wrong now that proven means "present in Killed" — the change that
+	// stopped an unmeasured mutant counting as a proven gap. The synthetic
+	// entries remain only so KillRate() reproduces the scripted rate exactly;
+	// each real id displaces one of them.
+	for _, m := range mutants {
+		if !survived[m.ID] {
+			rep.Killed = append(rep.Killed, m.ID)
+		}
+	}
+	want := int(math.Round(kr * scale))
+	for i := len(rep.Killed); i < want; i++ {
+		rep.Killed = append(rep.Killed, fmt.Sprintf("k%d", i))
 	}
 	return rep, nil
 }

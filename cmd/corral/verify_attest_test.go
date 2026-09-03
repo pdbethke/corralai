@@ -577,3 +577,40 @@ func TestVerifyAttestPubFlagIsTheKeyItVerifiesAgainst(t *testing.T) {
 		}
 	})
 }
+
+// AN ENVELOPE NOBODY COULD VERIFY MUST NOT EXIT 0. `failed` was set only by a
+// check that ran and failed, so with no key, no --db and no Rekor index every
+// check printed "not checked" and the command exited 0 — and a CI step keyed on
+// that exit code accepted a forged statement. This is the same "absence of
+// evidence read as evidence" defect this repository has found in a receipt
+// check, a report parser and a release gate in one day.
+func TestVerifyAttestRefusesWhenNothingWasChecked(t *testing.T) {
+	// Sign with the fixture key, then make it unreachable: no --pub, and both
+	// env variables cleared so no local key can be found. The envelope is
+	// real and its signature is valid — the verifier simply has nothing to
+	// check it against, which is the "not checked" state, not a pass.
+	stmtPath := signedFixtureStatement(t, "o/r", 7, "")
+	if _, err := os.Stat(stmtPath + ".dsse.json"); err != nil {
+		t.Fatalf("fixture envelope not written: %v", err)
+	}
+	t.Setenv("CORRALAI_CERTIFY_KEY", "")
+	t.Setenv("CORRALAI_CERTIFY_KEY_FILE", "")
+	// And no key at the default path either: it lives under the home
+	// directory, so point HOME at an empty one. The first version of this
+	// test found a real key on the developer's workstation, the signature
+	// check RAN and failed, and the exit was a correct 1 — which is not the
+	// state this test is about.
+	t.Setenv("HOME", t.TempDir())
+
+	var stdout, stderr bytes.Buffer
+	code := runVerifyAttest([]string{"--attest", stmtPath}, &stdout, &stderr)
+	if code == 0 {
+		t.Fatalf("exit 0 with nothing verified:\n%s", stdout.String())
+	}
+	if code != 2 {
+		t.Errorf("exit = %d, want 2 (refusal), stdout:\n%s", code, stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "NOTHING was verified") {
+		t.Errorf("stderr must say nothing was checked, got: %q", stderr.String())
+	}
+}

@@ -4,6 +4,7 @@ package main
 
 import (
 	"bytes"
+	"database/sql"
 	"io"
 	"os"
 	"path/filepath"
@@ -678,5 +679,71 @@ func TestEventTimestampsAreTheEventsOwn(t *testing.T) {
 	}
 	if got[0].Equal(got[1]) {
 		t.Error("both events landed on the same ts — the tape's own clock was replaced by the push's")
+	}
+}
+
+// THE VERIFIER'S ACTUAL MOVE, not a rehearsal of it.
+//
+// TestWarehouseRowsSHA256HashesWhatIsPushed above copies the in-memory bundle
+// and patches three source fields by hand before re-hashing. That is not what
+// `corral verify --db` does — it calls auditpush.ReadBundle — and the
+// difference hid a defect for the whole life of the feature: an event's
+// timestamp is signed at Go's precision and zone (nanoseconds, local) and comes
+// back from DuckDB at the warehouse's (microseconds, UTC), so every real scan,
+// all of which carry events, failed the rows-hash check with a message blaming
+// the operator's warehouse.
+//
+// This pushes a bundle with EVERY row type populated — an event with a
+// nanosecond local-zone timestamp, an uncovered file whose kill rate the writer
+// stores as NULL — reads it back through the real reader, and re-hashes. Any
+// transform the writer introduces later breaks this test by name instead of
+// breaking verification silently for every operator.
+func TestVerifyRowsHashSurvivesTheRealReader(t *testing.T) {
+	_, files, mutants := twoFileLedgerRows(t)
+	if len(files) < 2 {
+		t.Fatal("fixture must carry at least two files so one can be uncovered")
+	}
+	// An uncovered file with a kill rate set in memory — the writer stores
+	// NULL for it, so a naive hash of the in-memory value cannot match.
+	kr := 0.0
+	files[1].KillRate = &kr
+	files[1].Uncovered = true
+
+	scan := scanstore.Scan{Repo: "o/r", Commit: "deadbeef", Audited: 1, Candidates: 2}
+	// Local zone, nanoseconds: the way production stamps a beat.
+	local := time.Date(2026, 9, 3, 15, 54, 50, 700624350, time.FixedZone("EDT", -4*3600))
+	ev := buildScanEvent(files[0].Path, 1, local, "pool_subject", "s", map[string]any{"k": "v"})
+	b := buildBundle(scan, 11, files, mutants, nil, []scanstore.Event{ev}, auditpush.Link{}, false,
+		"o/r", "deadbeef", "", bundleMeta{})
+
+	signed, err := warehouseRowsSHA256(b)
+	if err != nil {
+		t.Fatalf("hash: %v", err)
+	}
+	target := filepath.Join(t.TempDir(), "w.duckdb")
+	if _, err := pushBundle(target, b); err != nil {
+		t.Fatalf("pushBundle: %v", err)
+	}
+	db, err := sql.Open("duckdb", target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	readBack, err := auditpush.ReadBundle(db, "o/r", 11)
+	if err != nil {
+		t.Fatalf("ReadBundle: %v", err)
+	}
+	if len(readBack.Events) == 0 {
+		t.Fatal("the reader returned no events — this test is not exercising the field that was broken")
+	}
+	verified, err := warehouseRowsSHA256(readBack)
+	if err != nil {
+		t.Fatalf("re-hash: %v", err)
+	}
+	if verified != signed {
+		t.Errorf("the statement signs %s but a verifier re-hashing what ReadBundle returns gets %s.\n"+
+			"Something the writer transforms is not canonicalised before hashing — see auditpush.CanonicalizeForWarehouse.\n"+
+			"event ts signed: %s   read back: %s",
+			signed, verified, ev.TS.Format(time.RFC3339Nano), readBack.Events[0].TS.Format(time.RFC3339Nano))
 	}
 }

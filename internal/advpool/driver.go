@@ -1928,17 +1928,23 @@ func compliantFailureOutput(ctx context.Context, s Scorer, run *runState, test s
 // to diagnose without paying for another run: `certify --repo` has no tape
 // flag, so the integer was the entire surviving record of the attempt.
 func provenMutantIDs(rep adequacy.Report, mutants []adequacy.Mutant) []string {
-	stillAlive := make(map[string]struct{}, len(rep.Survived))
-	for _, id := range rep.Survived {
-		stillAlive[id] = struct{}{}
+	// POSITIVE EVIDENCE ONLY. This used to return every survivor that was
+	// NOT in rep.Survived — a subtraction that counted as "proven" any mutant
+	// the report had merely failed to grade: one whose grading command fails
+	// on the compliant code (rep.Unmeasured), or one the compile gate
+	// rejected. A gap is proven when the authored test KILLED the mutant by
+	// execution, and that is the only list this reads.
+	killedIDs := make(map[string]struct{}, len(rep.Killed))
+	for _, id := range rep.Killed {
+		killedIDs[id] = struct{}{}
 	}
-	killed := make([]string, 0, len(mutants))
+	proven := make([]string, 0, len(mutants))
 	for _, m := range mutants {
-		if _, alive := stillAlive[m.ID]; !alive {
-			killed = append(killed, m.ID)
+		if _, ok := killedIDs[m.ID]; ok {
+			proven = append(proven, m.ID)
 		}
 	}
-	return killed
+	return proven
 }
 
 // tickDevAdequacy is step 2: once mutant-generator is done, parse its
@@ -2546,11 +2552,28 @@ func (d *Driver) tickPoolAdequacy(ctx context.Context, missionID int64, run *run
 	// unmutated code, killed its canary and scored something, so its kill
 	// vector is a real observation rather than an absence of one.
 	run.primaryWriterMeasured = true
-	poolSurvivors := survivorsFrom(rep, run.devSurvivors)
-	run.provenMissed = len(run.devSurvivors) - len(poolSurvivors)
-	// The evidence behind that count — see provenMutantIDs. Derived from the
-	// SAME report, so the list can never disagree with the number.
+	// THE COUNT IS THE LENGTH OF THE EVIDENCE, never a subtraction. This was
+	// `len(devSurvivors) - len(poolSurvivors)`, which credits as proven every
+	// survivor the authored pass failed to GRADE — and the authored pass can
+	// fail to grade a survivor without any error: its command fails on the
+	// compliant code (an authored file pytest never collects exits 5; a
+	// `--cov-fail-under` in pytest.ini fails any subset), and the report now
+	// files those under Unmeasured rather than Killed. A number derived by
+	// subtraction cannot tell "killed" from "not measured"; a number that IS
+	// the length of the killed list cannot get that wrong.
 	run.provenIDs = provenMutantIDs(rep, run.devSurvivors)
+	run.provenMissed = len(run.provenIDs)
+	if len(rep.Unmeasured) > 0 {
+		// The authored test could not grade some survivors at all — its
+		// command fails on the unmutated code. That is a defect in the TEST,
+		// and the verdict must say so rather than quietly proving fewer.
+		run.poolTestUnsound = true
+		for _, id := range rep.Unmeasured {
+			log.Printf("advpool: run %d: the authored test's command FAILS ON THE COMPLIANT CODE, so survivor %s could not be graded and is NOT counted as proven: %s",
+				missionID, id, rep.UnmeasuredReasons[id])
+			break // one reason is the same reason for all of them
+		}
+	}
 	// The two failure paths above each log why they produced nothing. This one
 	// — the path that actually grades — logged nothing at all, in either
 	// direction. That asymmetry is why a real "tried and missed" (a sound,

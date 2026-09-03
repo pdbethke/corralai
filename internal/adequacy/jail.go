@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/pdbethke/corralai/internal/lang"
 	"os"
 	"path/filepath"
 	"strings"
@@ -270,12 +271,22 @@ func (j bwrapJail) runInJailCapturing(ctx context.Context, files map[string]stri
 	// compiler installed by asdf, nvm, rustup, pyenv, mise or Homebrew was
 	// invisible and the run failed with "<tool>: not found", blaming the
 	// project. Resolved from the command itself, so nothing is guessed.
-	if len(cmd) > 0 {
-		tb, terr := toolchainBindFor(cmd[0])
+	//
+	// EVERY interpreter the command runs, not argv[0]. The coverage pre-flight
+	// and test selection wrap the suite in `sh -c` (set up a temp dir, run,
+	// reduce), so argv[0] was "sh" and the operator's toolchain — reachable
+	// for the ordinary scoring runs in the SAME scan — was never bound for the
+	// instrumented ones. `corral doctor` said the toolchain was reachable
+	// inside the sandbox, which was true for the command it probed and false
+	// for the wrapped one the pre-flight actually ran.
+	seen := map[string]bool{}
+	for _, interp := range lang.InterpretersIn(cmd) {
+		tb, terr := toolchainBindFor(interp)
 		if terr != nil {
 			return sandbox.Result{}, terr
 		}
-		if tb.Host != "" {
+		if tb.Host != "" && !seen[tb.Host] {
+			seen[tb.Host] = true
 			roBinds = append(roBinds, tb)
 		}
 	}

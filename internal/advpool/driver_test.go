@@ -150,24 +150,45 @@ func (f *fakeScorer) ScoreAuthoredReport(ctx context.Context, codePath, code, te
 func devReportFrom(killRate float64, survivors, mutants []adequacy.Mutant) adequacy.Report {
 	const scale = 10000
 	rep := adequacy.Report{CompliantPass: true, CanaryKilled: true, Total: scale}
-	for i := 0; i < int(math.Round(killRate*scale)); i++ {
-		rep.Killed = append(rep.Killed, fmt.Sprintf("k%d", i))
-	}
 	byID := map[string]bool{}
 	byCode := map[string]string{}
 	for _, m := range mutants {
 		byID[m.ID] = true
 		byCode[m.Replace] = m.ID
 	}
+	survived := map[string]bool{}
 	for _, s := range survivors {
 		switch {
 		case byID[s.ID]:
 			rep.Survived = append(rep.Survived, s.ID)
+			survived[s.ID] = true
 		case byCode[s.Replace] != "":
 			rep.Survived = append(rep.Survived, byCode[s.Replace])
+			survived[byCode[s.Replace]] = true
 		default:
 			rep.Survived = append(rep.Survived, s.ID)
+			survived[s.ID] = true
 		}
+	}
+	// THE REAL KILLED IDs GO IN Killed, as the real scorer's do. This fake
+	// used to list only synthetic "k<i>" entries there, which was fine while
+	// the driver derived "proven" by SUBTRACTION (any survivor absent from
+	// Survived) and is wrong now that it derives it from POSITIVE EVIDENCE
+	// (present in Killed) — the change that stopped an unmeasured mutant
+	// counting as a proven gap. A fixture that reports a kill it cannot name
+	// is the fixture that proves the wrong thing.
+	//
+	// The synthetic entries remain only to make KillRate() reproduce the
+	// scripted rate exactly for any mutant count; each real id displaces one
+	// of them so len(Killed) is unchanged.
+	for _, m := range mutants {
+		if !survived[m.ID] {
+			rep.Killed = append(rep.Killed, m.ID)
+		}
+	}
+	want := int(math.Round(killRate * scale))
+	for i := len(rep.Killed); i < want; i++ {
+		rep.Killed = append(rep.Killed, fmt.Sprintf("k%d", i))
 	}
 	return rep
 }

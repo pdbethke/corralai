@@ -32,10 +32,16 @@ func TestVerdictCarriesTheProvenEvidence(t *testing.T) {
 		devSurvivors: mutants,
 		authoredTest: "AUTHORED-TEST-SOURCE",
 	}
+	// The report names its kills, as the real scorer's does. This fixture
+	// used to list only the survivor and let the driver INFER the kills by
+	// subtraction — the arithmetic that counted an unmeasured mutant as a
+	// proven gap. Proven now means "present in Killed", so a fixture has to
+	// say who was killed, exactly as a real report would.
 	rep := adequacy.Report{
 		CompliantPass: true,
 		CanaryKilled:  true,
 		Total:         3,
+		Killed:        []string{"m1", "m3"},
 		Survived:      []string{"m2"}, // only m2 outlived the authored test
 	}
 
@@ -71,3 +77,28 @@ func TestProvenMutantIDs_EmptyOnATriedAndMissed(t *testing.T) {
 // tickAggregate carrying it onto the Verdict) is asserted inside the existing
 // TestTick_PoolAdequacy_ScoresProvenMissed harness in driver_test.go rather
 // than rebuilt here with a second set of fakes.
+
+// AN UNMEASURED SURVIVOR IS NOT A PROVEN GAP. The old subtraction
+// (len(devSurvivors) - len(Survived)) credited as proven every survivor the
+// authored pass failed to grade — and the authored pass can fail to grade one
+// with no error at all, because its command fails on the compliant code
+// (pytest exit 5 for a file it does not collect). Reproduced with real pytest:
+// a genuinely unobservable mutant was signed as a gap the authored test proved.
+func TestUnmeasuredSurvivorsAreNotProven(t *testing.T) {
+	mutants := []adequacy.Mutant{{ID: "m1"}, {ID: "m2"}, {ID: "m3"}}
+	rep := adequacy.Report{
+		CompliantPass: true,
+		CanaryKilled:  true,
+		Total:         1,
+		Killed:        []string{"m1"},
+		Unmeasured:    []string{"m2", "m3"},
+		UnmeasuredReasons: map[string]string{
+			"m2": "the command that would grade this mutant FAILS ON THE COMPLIANT CODE",
+			"m3": "the command that would grade this mutant FAILS ON THE COMPLIANT CODE",
+		},
+	}
+	got := provenMutantIDs(rep, mutants)
+	if len(got) != 1 || got[0] != "m1" {
+		t.Fatalf("provenMutantIDs = %v, want [m1] only — m2 and m3 were never measured, and a subtraction would have called them proven", got)
+	}
+}

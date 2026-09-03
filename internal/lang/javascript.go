@@ -243,6 +243,12 @@ for(const f of files){
     // and every named function cold. A file with no named functions at all
     // (a constants module, a side-effecting script) can only be judged by
     // its wrapper, so it falls back to that.
+    // RELATIVE TO THE WORKING DIRECTORY — see the Ruby reducer for why an
+    // absolute path is only ever right on one substrate. Outside cwd is a
+    // dependency or the runtime, never a candidate.
+    const rel=path.relative(process.cwd(),p);
+    if(rel===''||rel==='..'||rel.startsWith('..'+path.sep)||path.isAbsolute(rel))continue;
+    p=rel.split(path.sep).join('/');
     const named=fns.filter(fn=>fn.functionName);
     const hit=named.length
       ? named.some(fn=>(fn.ranges||[]).some(r=>r.count>0))

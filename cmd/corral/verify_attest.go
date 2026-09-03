@@ -115,6 +115,17 @@ func runVerifyAttest(args []string, stdout, stderr io.Writer) int {
 	if failed {
 		return 1
 	}
+	// NOTHING CHECKED IS NOT A PASS. `failed` is set only by a check that ran
+	// and failed, so an envelope nobody could verify — signed by an unknown
+	// key, no --pub, no local key, no --db, no Rekor index — printed three
+	// "not checked" lines and exited 0. A CI step keyed on that exit code
+	// accepted a forged statement. `corral certify verify` already refuses
+	// with 2 in the same situation; this verifier now does the same, and
+	// says why: the absence of a failure is not the presence of a check.
+	if !sigResult.checked && !rowsResult.checked && !rekorResult.checked {
+		fmt.Fprintln(stderr, "corral verify: NOTHING was verified — no signature key (--pub or a local certify key), no --db, and no Rekor index were available, so every check above is \"not checked\". That is not a pass. Supply at least one of them.")
+		return 2
+	}
 	return 0
 }
 

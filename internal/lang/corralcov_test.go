@@ -346,3 +346,91 @@ func TestCoverageCmdMatchesOnlyCommandPosition(t *testing.T) {
 		}
 	}
 }
+
+// THE JAIL RUNS THE SUITE SOMEWHERE ELSE. On the default substrate the suite
+// executes in an ephemeral copy of the repo under /tmp, and the caller only
+// knows the ORIGINAL repo's path. A reporter that emits absolute paths is
+// therefore right on the workspace substrate and wrong on the jail: every path
+// falls outside the root the caller aligns against, and the pre-flight fails
+// with "NONE of them are under the repo root" on exactly the substrate
+// operators get by default. Fixing the root for the workspace substrate this
+// morning did not touch that.
+//
+// So the reducers emit paths RELATIVE TO THE WORKING DIRECTORY, which is
+// repo-relative on both substrates — the same thing coverage.py does, and the
+// reason Python never had this defect. This test reproduces the jail's shape:
+// copy the fixture elsewhere, run there, and parse against the ORIGINAL root.
+func TestCoverageReporterSurvivesRunningInACopyOfTheRepo(t *testing.T) {
+	for _, tc := range []struct {
+		lang, dir, tool string
+		testCmd         []string
+	}{
+		{"ruby", "ruby", "ruby", []string{"ruby", "-Ilib", "test/calc_test.rb"}},
+		{"javascript", "js", "node", []string{"node", "--test"}},
+		{"php", "php", "php", []string{"php", "test/CalcTest.php"}},
+	} {
+		t.Run(tc.lang, func(t *testing.T) {
+			if _, err := exec.LookPath(tc.tool); err != nil {
+				t.Skip(tc.tool + " not installed")
+			}
+			if tc.lang == "php" {
+				if exec.Command("php", "-r", `exit(extension_loaded("pcov") ? 0 : 1);`).Run() != nil {
+					t.Skip("php has no coverage driver")
+				}
+			}
+			original, _ := filepath.Abs(filepath.Join("testdata", "coverage", tc.dir))
+			// The "jail": a copy somewhere the original's root does not cover.
+			copyDir := filepath.Join(t.TempDir(), "corral-adequacy-jail")
+			if out, err := exec.Command("cp", "-r", original, copyDir).CombinedOutput(); err != nil {
+				t.Fatalf("copy fixture: %v\n%s", err, out)
+			}
+			p, _ := ByName(tc.lang)
+			r := p.(CoverageReporter)
+			cmd, _ := r.CoverageCmd(tc.testCmd)
+			c := exec.Command(cmd[0], cmd[1:]...)
+			c.Dir = copyDir
+			var stderr bytes.Buffer
+			c.Stderr = &stderr
+			stdout, _ := c.Output()
+
+			// Parsed against the ORIGINAL — the only root the caller has.
+			got, err := r.ParseCoverage(string(stdout), original)
+			if err != nil {
+				t.Fatalf("ParseCoverage against the original root failed — the jail substrate would report could-not-run: %v\nstderr:\n%s", err, stderr.String())
+			}
+			executed := 0
+			for k, v := range got {
+				if filepath.IsAbs(k) {
+					t.Errorf("absolute path in the map: %q — the reducer must emit cwd-relative paths", k)
+				}
+				if v {
+					executed++
+				}
+			}
+			if executed == 0 {
+				t.Fatalf("no file reported executed when run from a copy: %v", got)
+			}
+		})
+	}
+}
+
+// THE JAIL MUST BIND THE TOOLCHAIN THE WRAPPED COMMAND ACTUALLY RUNS. Every
+// coverage command here is `sh -c …`, so resolving the toolchain from argv[0]
+// bound nothing, and a Go under ~/sdk or a venv python vanished inside the
+// jail for the pre-flight while working for the scoring runs beside it.
+func TestInterpretersInSeesThroughTheWrapper(t *testing.T) {
+	for _, tc := range []struct {
+		argv []string
+		want []string
+	}{
+		{[]string{"go", "test", "./..."}, []string{"go"}},
+		{[]string{"sh", "-c", `d=$(mktemp -d); /home/u/.venv/bin/python -m pytest -q >&2; cat "$d/report"`}, []string{"mktemp", "/home/u/.venv/bin/python", "cat"}},
+		{[]string{"sh", "-c", `NODE_V8_COVERAGE="$d" node --test >&2; node "$d/reduce.js"`}, []string{"node", "node"}},
+		{[]string{"bash", "-c", `if grep -q RSpec "$t"; then exec rspec "$t"; else exec ruby "$t"; fi`}, []string{"grep", "rspec", "ruby"}},
+	} {
+		got := InterpretersIn(tc.argv)
+		if strings.Join(got, ",") != strings.Join(tc.want, ",") {
+			t.Errorf("InterpretersIn(%q) = %v, want %v", tc.argv, got, tc.want)
+		}
+	}
+}

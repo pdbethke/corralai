@@ -188,6 +188,7 @@ func (rubyPlugin) FailFastArgs(testCmd []string) ([]string, bool) {
 // suite's own output shares stdout, and interleaving a report into it would
 // make the report unparseable exactly when the suite is noisiest.
 const rubyCoveragePreload = `require 'coverage'
+require 'pathname'
 # METHOD coverage, not just line coverage, and the difference is not academic.
 # A file that is merely REQUIRED runs its own class/def declaration lines, so
 # line coverage reports it as executed even when the suite never calls a single
@@ -246,7 +247,22 @@ at_exit do
         # never-executed: absent means "not measured", which is the honest
         # answer for a file that had no statement to skip.
         next unless measurable
-        out.puts "#{hit} #{path}"
+        # RELATIVE TO THE WORKING DIRECTORY, not absolute. The suite runs in
+        # the repo on the workspace substrate and in an ephemeral copy of it
+        # on the jail substrate, and only the former is a path the caller
+        # knows. Coverage.result hands back absolute paths, so an absolute
+        # report was aligned against the repo directory — correct on one
+        # substrate and a guaranteed "NONE under the repo root" on the
+        # default one. Relative to cwd is repo-relative on both. Files
+        # outside cwd (gems, stdlib) are dropped here; they are never
+        # candidates.
+        rel = begin
+          Pathname.new(path).relative_path_from(Pathname.pwd).to_s
+        rescue ArgumentError
+          next
+        end
+        next if rel == '..' || rel.start_with?('../')
+        out.puts "#{hit} #{rel}"
       end
     end
   rescue StandardError => e

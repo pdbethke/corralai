@@ -16,6 +16,33 @@ real external hostname would need an explicit opt-in flag naming the host; that
 does not exist yet, and adding one loosens an authentication-adjacent boundary,
 so it is a decision rather than an omission.
 
+## Before it will render anything: a trust anchor
+
+`corral-observe` fetches the console bundle from the brain and refuses to render
+it unless a signature over that bundle verifies against a key **you** supply:
+
+```sh
+export CORRALAI_CONSOLE_PUBKEY=<your release public key, hex>
+```
+
+There is deliberately **no default**. corralai ships a development signing key,
+and its private half is committed to the public repository — it is meant for
+local work and CI. Defaulting to it would mean anyone could sign a console
+bundle that your client accepts and renders same-origin with your session,
+carrying your observer token. So a missing anchor is a loud error rather than a
+silent downgrade.
+
+For local development against a brain you control:
+
+```sh
+export CORRALAI_CONSOLE_DEV=1   # accepts the PUBLISHED dev key; logs a warning
+```
+
+To produce a real anchor: generate an Ed25519 keypair, keep the seed off the
+repository, sign with `CORRALAI_RELEASE_KEY=<seed> scripts/sign-console-bundle.sh <version>`,
+and hand the public half to operators out-of-band. `go run
+./cmd/verify-console-signature <version>` checks a signature before you tag.
+
 ## What it is
 
 `corral-observe` is a thin **credentialed reverse proxy**. It holds the observer

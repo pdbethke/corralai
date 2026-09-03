@@ -2019,3 +2019,55 @@ func TestContainerJailIsExercisedInCI(t *testing.T) {
 		t.Error("no CI step sets CORRALAI_EXEC_IMAGE, so every container-jail integration test SKIPS — the macOS/Windows path README advertises would be unexecuted again, which is exactly how it was last found broken")
 	}
 }
+
+// TestDocsReleaseVerifiesTheConsoleSignature asserts a release cannot ship a
+// console its own clients refuse.
+//
+// The manifest's Version is part of the SIGNED bytes, and the only committed
+// signature covered "dev" — the version an unstamped build reports — while
+// `go install ...@vX` resolves a real module version. So every released brain
+// served a manifest whose signature every thin client rejected outright, and
+// nothing anywhere noticed: no workflow, no Makefile target and no test ever
+// ran scripts/sign-console-bundle.sh, so the one artefact that had to be
+// re-cut per release was the one artefact nothing produced.
+//
+// This is the structural half of the fix. It reads the workflow rather than
+// grepping it, because a step that mentions the verifier in a comment, or runs
+// it behind `continue-on-error`, or swallows its exit code with `|| true`, all
+// satisfy a substring search and change nothing — the same three defeats that
+// were demonstrated against the container-jail gate.
+func TestDocsReleaseVerifiesTheConsoleSignature(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", ".github", "workflows", "release.yml"))
+	if err != nil {
+		t.Fatalf("reading release.yml: %v", err)
+	}
+	var wf struct {
+		Jobs map[string]struct {
+			Steps []struct {
+				Name            string `yaml:"name"`
+				If              string `yaml:"if"`
+				Run             string `yaml:"run"`
+				ContinueOnError bool   `yaml:"continue-on-error"`
+			} `yaml:"steps"`
+		} `yaml:"jobs"`
+	}
+	if err := yaml.Unmarshal(raw, &wf); err != nil {
+		t.Fatalf("parsing release.yml: %v", err)
+	}
+	found := 0
+	for jobName, job := range wf.Jobs {
+		for _, st := range job.Steps {
+			if !strings.Contains(st.Run, "verify-console-signature") {
+				continue
+			}
+			found++
+			if cond := strings.TrimSpace(st.If); cond != "" {
+				t.Errorf("release.yml step %q verifies the console signature behind `if: %s` — a condition is how this becomes unreachable for exactly the releases it exists to protect", st.Name, cond)
+			}
+			assertStepCannotBeAdvisory(t, jobName, st.Name, st.ContinueOnError, st.Run)
+		}
+	}
+	if found == 0 {
+		t.Error("no release.yml step runs verify-console-signature, so a tag can ship a console bundle whose signature every thin client refuses — which is what shipped until this gate existed")
+	}
+}

@@ -37,9 +37,14 @@ func buildManifest(sub fs.FS, version string) (BundleManifest, error) {
 // produced for. See consolebundle.DevSignedVersion.
 const devConsoleSignedVersion = consolebundle.DevSignedVersion
 
-// ConsoleReleasePubKeyHex is the DEV Ed25519 public key verifying the
-// committed console.manifest.sig. See consolebundle.ReleasePubKeyHex.
-const ConsoleReleasePubKeyHex = consolebundle.ReleasePubKeyHex
+// ConsoleReleasePubKeyHex is the DEV Ed25519 public key that verifies the
+// COMMITTED console.manifest.sig. It is used here only to check that the
+// signature in this repository matches the bundle in this repository — a
+// self-consistency check, not a trust decision.
+//
+// Clients do NOT get their anchor from here: see consolebundle.TrustAnchor,
+// which refuses to default to this key because its private half is committed.
+const ConsoleReleasePubKeyHex = consolebundle.DevPubKeyHex
 
 // CanonicalManifestBytes returns the exact JSON bytes buildManifest's result
 // serializes to for version — the SAME bytes GET /console/manifest.json

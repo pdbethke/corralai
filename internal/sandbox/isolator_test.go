@@ -99,9 +99,19 @@ func TestContainerWrap(t *testing.T) {
 	if argvHas(argv, "-e", "HOME=/root") {
 		t.Fatal("host HOME must not be forwarded as -e")
 	}
-	// PATH from env should be forwarded.
-	if !argvHas(argv, "-e", "PATH=/usr/bin") {
-		t.Fatal("expected PATH forwarded via -e")
+	// PATH MUST NOT BE FORWARDED. This test asserted the opposite, and the
+	// opposite is a bug: the host's PATH REPLACES the image's, so the image's
+	// own toolchain disappears. Measured against golang:1.26.6 —
+	//
+	//	with the host PATH forwarded:  GO NOT FOUND
+	//	with the image's own PATH:     /usr/local/go/bin/go
+	//
+	// It went unnoticed because python:3.12-slim keeps python3 in /usr/bin,
+	// which a host PATH also lists, so the defect was silent and
+	// image-dependent. Forwarding it also leaked the operator's home-directory
+	// layout into an untrusted container. The image knows where its tools are.
+	if argvHas(argv, "-e", "PATH=/usr/bin") {
+		t.Fatal("host PATH must NOT be forwarded — it overrides the image's own PATH and hides its toolchain")
 	}
 	// Command must be the final three elements.
 	n := len(argv)

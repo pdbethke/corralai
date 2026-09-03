@@ -223,3 +223,24 @@ func TestVersionLess(t *testing.T) {
 		}
 	}
 }
+
+// ONE SERVER MUST HAVE ONE ROLLBACK MARK. The high-water mark was keyed on
+// url.Host verbatim, so the same daemon addressed three harmless ways carried
+// three independent marks — and re-addressing it accepted a version already
+// rolled past. It gates only legitimately signed older releases, but the code
+// calls it TUF-style rollback protection, and a guarantee you can step around
+// by adding a dot is not that.
+func TestRollbackKeyIsStableAcrossHostSpellings(t *testing.T) {
+	canonical := hostKey("brain.example")
+	for _, alias := range []string{"brain.example:443", "BRAIN.EXAMPLE", "brain.example.", "Brain.Example:443", "brain.example.:443"} {
+		if got := hostKey(alias); got != canonical {
+			t.Errorf("hostKey(%q) = %q, want the same key as %q (%q) — a second key means the rollback mark resets", alias, got, "brain.example", canonical)
+		}
+	}
+	// A genuinely different endpoint must keep its own mark.
+	for _, other := range []string{"brain.example:8443", "other.example", "sub.brain.example"} {
+		if hostKey(other) == canonical {
+			t.Errorf("hostKey(%q) collides with brain.example — distinct endpoints must not share a rollback mark", other)
+		}
+	}
+}

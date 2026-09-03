@@ -2,6 +2,14 @@
 
 package main
 
+// SURFACE CLAIMS — the flag's VALUE is parsed into the local endpoint and the test drives that value, so the literal never appears here.
+//
+// testdata/executed-surfaces.tsv names this file as the receipt for the
+// flag(s) below, and TestDocsClassifiedSurfacesCarryAReceipt requires either
+// the literal or an explicit claim. This is the explicit claim: a receipt a
+// reader cannot check is not a receipt.
+//surface: --local-endpoint
+
 import (
 	"io"
 	"net/http"

@@ -227,3 +227,122 @@ func TestCoverageReporterAgainstRealSuites(t *testing.T) {
 		})
 	}
 }
+
+// A SUITE THAT RUNS ITS TESTS IN A SUBPROCESS MUST NOT PRODUCE A FALSE
+// FINDING. This is the regression for a shared report path.
+//
+// Ruby and PHP write their report at process shutdown. With one shared file
+// opened 'w', every process in the tree truncates it and the PARENT exits
+// LAST — so a Rakefile that shells out, or a runner that forks workers, had
+// the child's real report overwritten by the parent's. The damage is not lost
+// data: the parent LOADS the library without calling it, so its verdict for
+// that file is `0`, and corral printed a file the suite genuinely covers under
+// "measured and NEVER executed by the suite" — the only actionable list it
+// produces.
+//
+// Negative control, run before this test was written: reverting the per-process
+// filename to a single shared one makes lib/calc.rb come back present-FALSE.
+func TestCoverageReporterMergesSubprocessReports(t *testing.T) {
+	if _, err := exec.LookPath("ruby"); err != nil {
+		t.Skip("ruby not installed — this proof needs the real interpreter")
+	}
+	p, _ := ByName("ruby")
+	r := p.(CoverageReporter)
+	cmd, ok := r.CoverageCmd([]string{"ruby", "-Ilib", "run_tests.rb"})
+	if !ok {
+		t.Fatal("CoverageCmd refused the fixture's own command")
+	}
+	root, err := filepath.Abs(filepath.Join("testdata", "coverage", "ruby-subprocess"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := exec.Command(cmd[0], cmd[1:]...)
+	c.Dir = root
+	var stderr bytes.Buffer
+	c.Stderr = &stderr
+	stdout, runErr := c.Output()
+
+	got, err := r.ParseCoverage(string(stdout), root)
+	if err != nil {
+		t.Fatalf("ParseCoverage: %v\nrun error: %v\nstdout:\n%s\nSTDERR:\n%s", err, runErr, stdout, stderr.String())
+	}
+	if !got["lib/calc.rb"] {
+		t.Errorf("lib/calc.rb is executed BY THE CHILD process; got %v (present=%v).\n"+
+			"A false here means one process's report clobbered another's — the parent, which merely "+
+			"required the file, wins and the covered file is reported as never executed.\nfull map: %v",
+			got["lib/calc.rb"], func() bool { _, ok := got["lib/calc.rb"]; return ok }(), got)
+	}
+	if v, ok := got["lib/dead.rb"]; !ok || v {
+		t.Errorf("lib/dead.rb is loaded by the parent and never called: want present-FALSE, got present=%v value=%v", ok, v)
+	}
+	if _, ok := got["lib/unloaded.rb"]; ok {
+		t.Error("lib/unloaded.rb is never loaded by either process: want ABSENT")
+	}
+}
+
+// A REPORT WHOSE EVERY PATH IS OUTSIDE THE REPO IS A FAILURE TO MEASURE, NOT A
+// MEASUREMENT OF NOTHING.
+//
+// The out-of-root filter runs after a line is counted, so a report consisting
+// entirely of gems, stdlib or node_modules used to satisfy the has-entries
+// check and return an EMPTY map with no error — which the caller reads as
+// Ran=true and reports as a repo-wide "0 files executed". That is a claim about
+// the repository manufactured from a run that measured nothing in it.
+//
+// This is the exact shape every non-Go language produced while the caller was
+// passing an empty root, and the shape a wrongly-rooted run produces now.
+func TestCorralCoverageReportRefusesAnAllOutsideRootReport(t *testing.T) {
+	in := rubyCoverageHeader + "\n1 /usr/lib/ruby/3.3.0/set.rb\n0 /usr/lib/ruby/3.3.0/json.rb"
+	got, err := corralCoverageReport(in, rubyCoverageHeader, "ruby", "/repo")
+	if err == nil {
+		t.Fatalf("want an error, got a map: %v", got)
+	}
+	if got != nil {
+		t.Errorf("an error must return a NIL map, not an empty one a caller could iterate: %v", got)
+	}
+	if !strings.Contains(err.Error(), "NONE of them are under the repo root") {
+		t.Errorf("the error must say what actually happened, got: %v", err)
+	}
+}
+
+// A RUNNER NAME MUST BE IN COMMAND POSITION, not anywhere in the script.
+//
+// CoverageCmd's ok=false is how certify_repo.go decides which language an
+// operator's `--` command belongs to, so a plugin that claims a command it
+// cannot instrument makes the pre-flight either skip as "ambiguous" or
+// instrument the wrong suite. Scanning the whole script matched a runner's name
+// inside a PATH or a COMMENT: all four of the false cases below were accepted
+// by the wrong language before this was a lexer.
+func TestCoverageCmdMatchesOnlyCommandPosition(t *testing.T) {
+	cases := []struct {
+		lang string
+		argv []string
+		want bool
+	}{
+		{"javascript", []string{"sh", "-c", "pytest tests/node/"}, false},
+		{"php", []string{"sh", "-c", "pytest --ignore=vendor/php"}, false},
+		{"javascript", []string{"sh", "-c", "cargo test # node is not used here"}, false},
+		{"ruby", []string{"sh", "-c", "pytest tests/ruby/"}, false},
+		{"javascript", []string{"sh", "-c", "pytest --cov=node_modules"}, false},
+		{"ruby", []string{"sh", "-c", "bundle install"}, false},
+		{"javascript", []string{"sh", "-c", "npm test"}, true},
+		{"javascript", []string{"sh", "-c", "cd web && npx vitest run"}, true},
+		{"php", []string{"sh", "-c", "vendor/bin/phpunit --colors=never"}, true},
+		{"ruby", []string{"sh", "-c", "BUNDLE_GEMFILE=x bundle exec rspec"}, true},
+		// rubyPlugin.TestCmd()'s own shape: a dispatch script whose runner sits
+		// after `then exec`. The plugin must be able to instrument its own
+		// stock command — TestPluginStockCommandSatisfiesOwnCoverageCmd pins
+		// that too, and this pins the reason it works.
+		{"ruby", []string{"sh", "-c", `t="x"; if grep -q RSpec "$t"; then exec rspec "$t"; else exec ruby "$t"; fi`}, true},
+	}
+	for _, c := range cases {
+		p, ok := ByName(c.lang)
+		if !ok {
+			t.Fatalf("no plugin %q", c.lang)
+		}
+		_, got := p.(CoverageReporter).CoverageCmd(c.argv)
+		if got != c.want {
+			t.Errorf("%s.CoverageCmd(%q) accepted=%v, want %v", c.lang, c.argv[2], got, c.want)
+		}
+	}
+}

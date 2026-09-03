@@ -114,8 +114,37 @@ func TestDocsClassifiedSurfacesCarryAReceipt(t *testing.T) {
 					t.Errorf("%s cites %q, which is not a _test.go file — a receipt names the TEST that exercised the surface, not any file that happens to exist", s, rel)
 					continue
 				}
-				if _, err := os.Stat(filepath.Join("..", "..", rel)); err != nil {
+				body, err := os.ReadFile(filepath.Join("..", "..", rel)) // #nosec G304 -- rel comes from this repository's own committed manifest
+				if err != nil {
 					t.Errorf("%s cites %q, which does not exist — a receipt must point at something a reader can open", s, rel)
+					continue
+				}
+				// THE RECEIPT MUST CARRY INFORMATION. Existence plus a
+				// `_test.go` suffix was the whole check, so the cheap way out
+				// cost "name any of about sixty test files" — a cold reviewer
+				// re-pointed a receipt at an unrelated test and every gate
+				// stayed green. The comment above claims the receipt is
+				// something "a reader can read"; a file that never mentions
+				// the surface is not.
+				//
+				// The documented exemption is real — a flag whose VALUE is
+				// threaded into a function need not appear literally in the
+				// test that drives it — so it stays available, but it must be
+				// CLAIMED rather than assumed. A `//surface: --flag` line in
+				// the test file is a person saying "this test exercises that
+				// flag, and here is my name on it", which is exactly what an
+				// unbacked receipt was not.
+				flag := s
+				if i := strings.LastIndex(flag, " "); i >= 0 {
+					flag = flag[i+1:]
+				}
+				if strings.HasPrefix(flag, "-") &&
+					!strings.Contains(string(body), flag) &&
+					!strings.Contains(string(body), "//surface: "+flag) {
+					t.Errorf("%s cites %q, but that file never mentions %s and carries no `//surface: %s` claim.\n"+
+						"Either point at a test that names the flag, or add a `//surface: %s` comment to that test to "+
+						"state deliberately that it exercises the flag by value — a receipt a reader cannot check is not a receipt.",
+						s, rel, flag, flag, flag)
 				}
 			case strings.HasPrefix(r.receipt, "run:"):
 				// A dated run, e.g. "run:2026-09-02 record 89". The date is
@@ -259,7 +288,14 @@ func userFacingProse(t *testing.T) map[string]string {
 			return nil
 		}
 		switch strings.ToLower(filepath.Ext(d.Name())) {
-		case ".md", ".mdx", ".astro", ".yml", ".yaml":
+		// `.txt` and `.html` are here because the SIBLING walker in this same
+		// package (docsAdvertisingAnActionRef) already accepts them, and the
+		// disagreement was exploitable: site/public/llms.txt is served at
+		// corralai.dev and is written specifically to be read before anyone
+		// runs anything, yet an unexecuted surface advertised there passed
+		// while the byte-identical line in README.md failed. The difference
+		// was purely the file extension.
+		case ".md", ".mdx", ".astro", ".yml", ".yaml", ".txt", ".html":
 		default:
 			return nil
 		}
@@ -409,7 +445,40 @@ func TestDocsEveryDocPolicingTestRunsOnDocsOnlyChanges(t *testing.T) {
 	// read nothing and would drown the real signal. These are the helpers in
 	// this package that read the REPOSITORY's own documentation, so naming one
 	// is what makes a test a doc gate.
-	markers := []string{"docsAdvertisingAnActionRef", "userFacingDocs", "manifestRows", "exposedSurfaces", "docGateSelector"}
+	markers := []string{"docsAdvertisingAnActionRef", "userFacingProse", "manifestRows", "exposedSurfaces", "docGateSelector", "fleetTableRows", "dispatchableSubcommands"}
+
+	// EVERY MARKER MUST NAME SOMETHING THAT EXISTS. A marker naming a helper
+	// that has been renamed matches no test, silently shrinking what this
+	// meta-gate can see — and the found>0 floor below does not catch it,
+	// because the other markers still resolve.
+	//
+	// That is not hypothetical: this list said "userFacingDocs" for a day
+	// after the helper was renamed to userFacingProse, so the gate that exists
+	// to keep doc gates reachable had a hole in itself.
+	declared := map[string]bool{}
+	for _, pkg := range pkgs {
+		for _, file := range pkg.Files {
+			for _, decl := range file.Decls {
+				switch d := decl.(type) {
+				case *ast.FuncDecl:
+					declared[d.Name.Name] = true
+				case *ast.GenDecl:
+					for _, spec := range d.Specs {
+						if vs, ok := spec.(*ast.ValueSpec); ok {
+							for _, id := range vs.Names {
+								declared[id.Name] = true
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	for _, m := range markers {
+		if !declared[m] {
+			t.Errorf("marker %q names no declaration in this package — it was probably renamed, and this meta-gate has been quietly blind to every doc gate that uses it", m)
+		}
+	}
 	found := 0
 	for _, pkg := range pkgs {
 		for _, file := range pkg.Files {

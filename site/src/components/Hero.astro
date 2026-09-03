@@ -113,7 +113,7 @@ const pool = poolVerdict
     {pool ? (
       <p class="caption">
         {/* single line: Astro collapses a text→newline→expression boundary to ZERO chars, so keep interpolations inline */}
-        Below is a real run, replaying now: a <em>decorrelated</em> cross-vendor herd put <code>{pool.codePath}</code> to its own tests — {pool.planter} planted {pool.mutants} faults and a <em>different</em> model, {pool.critic}, graded whether the suite catches them. It caught {pool.caught}, missed {pool.survivors}. Signed <strong>{pool.statusLabel}</strong>{pool.provenMissed > 0 ? ', and the herd handed back a test that catches the gap' : ''}.
+        Below is a real run, replaying now: a <em>decorrelated</em> cross-vendor herd put <code>{pool.codePath}</code> to its own tests — {pool.planter} planted {pool.mutants} faults, and the project's <em>own</em> test suite was run against every one of them in a sandbox. No model graded anything: the suite's exit code decided, and it caught {pool.caught}, missed {pool.survivors}.{pool.critic ? ` A different model, ${pool.critic}, reviewed the run alongside it — the critic advises and is never allowed to decide.` : ''} Signed <strong>{pool.statusLabel}</strong>{pool.provenMissed > 0 ? ', and the herd handed back a test that catches the gap' : ''}.
       </p>
     ) : (
       <p class="caption">

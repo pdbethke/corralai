@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -79,9 +80,18 @@ func fetchBundle(brainRaw, token, cacheRoot string, allowUnsigned bool) (string,
 			return "", consolebundle.BundleManifest{}, fmt.Errorf("console: manifest signature INVALID — refusing to render an unverified bundle: %w", err)
 		}
 	case sigStatus == http.StatusNotFound && allowUnsigned:
-		// Dev-only: the caller explicitly opted into an unsigned bundle.
+		// Dev-only, and it must be LOUD. The design note calls this "a loud,
+		// warned, dev-only escape hatch"; it logged nothing at all, so a
+		// client running unverified code looked exactly like one running
+		// verified code.
+		log.Printf("console: WARNING — rendering an UNSIGNED bundle from %s. Nothing has verified that this HTML and JavaScript came from a corralai release; it will run same-origin with your console session. This is a development-only mode.", brainRaw)
 	default:
-		return "", consolebundle.BundleManifest{}, fmt.Errorf("console: manifest is unsigned (brain returned %d for manifest.sig) — refusing to render an unverified bundle (pass --allow-unsigned-console to override for dev)", sigStatus)
+		// The message used to end "pass --allow-unsigned-console to override
+		// for dev". No binary wires such a flag — corral-observe, corral-admin
+		// and corral-desktop all call console.New, which hardcodes
+		// allowUnsigned=false — so the only actionable sentence in the error
+		// sent the operator looking for something that does not exist.
+		return "", consolebundle.BundleManifest{}, fmt.Errorf("console: manifest is unsigned (brain returned %d for manifest.sig) — refusing to render an unverified bundle. The brain is serving no console.manifest.sig: build it with scripts/sign-console-bundle.sh, or point this client at a brain that has", sigStatus)
 	}
 
 	var manifest consolebundle.BundleManifest
@@ -236,8 +246,34 @@ func sanitizeVersion(v string) string {
 // hostKey derives a filesystem-safe, per-daemon key (for the rollback
 // high-water-mark file) from the brain's host:port.
 func hostKey(host string) string {
-	sum := sha256.Sum256([]byte(host))
+	sum := sha256.Sum256([]byte(normalizeRollbackHost(host)))
 	return hex.EncodeToString(sum[:16])
+}
+
+// normalizeRollbackHost reduces the spellings of one server to one key.
+//
+// The mark was keyed on url.Host VERBATIM, so the same daemon addressed three
+// harmless ways carried three independent high-water marks — and re-addressing
+// it was enough to accept a version already rolled past:
+//
+//	brain.example        brain.example:443       (default port written out)
+//	brain.example        BRAIN.EXAMPLE           (host names are case-insensitive)
+//	brain.example        brain.example.          (the DNS root label)
+//
+// It only ever gates a LEGITIMATELY SIGNED older release, so this is not the
+// hole the signature check is; but the comment above calls it TUF-style
+// rollback protection, and a guarantee you can step around by adding a dot is
+// not that.
+func normalizeRollbackHost(host string) string {
+	h := strings.ToLower(strings.TrimSpace(host))
+	// Strip an explicit default port for either scheme; a non-default port is
+	// a different endpoint and keeps its own mark.
+	h = strings.TrimSuffix(strings.TrimSuffix(h, ":443"), ":80")
+	// A trailing dot is the DNS root label — same name.
+	if i := strings.IndexByte(h, ':'); i >= 0 {
+		return strings.TrimSuffix(h[:i], ".") + h[i:]
+	}
+	return strings.TrimSuffix(h, ".")
 }
 
 // checkRollback enforces TUF-style rollback protection: refuse a manifest

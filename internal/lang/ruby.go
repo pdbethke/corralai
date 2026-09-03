@@ -208,8 +208,20 @@ end
 at_exit do
   begin
     res = Coverage.result
-    File.open(ENV['CORRAL_COV_OUT'], 'w') do |out|
-      out.puts %q{corral-ruby-coverage: v1}
+    # ONE FILE PER PROCESS, not one shared file.
+    #
+    # A single shared path opened 'w' is truncated by every process that
+    # inherits it, and the PARENT exits LAST — so for any suite that runs its
+    # tests in a subprocess (a Rakefile that shells out, phpunit's paratest
+    # workers), the child's real report was overwritten by the parent's nearly
+    # empty one. That does not merely lose data: a file the child executed came
+    # back as a 0, i.e. corral reported a covered file under "measured and
+    # NEVER executed by the suite", which is the only actionable list it
+    # prints. The JavaScript path never had this bug because V8 writes one JSON
+    # per process into a directory; this is that design, applied here.
+    dir = ENV['CORRAL_COV_DIR']
+    dest = File.join(dir, "#{Process.pid}-#{object_id}.txt")
+    File.open(dest, 'w') do |out|
       res.each do |path, data|
         if data.is_a?(Hash)
           methods = data[:methods] || {}
@@ -266,9 +278,9 @@ func (rubyPlugin) CoverageCmd(testCmd []string) (cmd []string, ok bool) {
 			return nil, false
 		}
 	}
-	setup := `cat > "$d/corral_cov.rb" <<'CORRAL_RB_EOF'` + "\n" + rubyCoveragePreload + "CORRAL_RB_EOF\n"
-	env := `CORRAL_COV_OUT="$d/report" RUBYOPT="-r$d/corral_cov ${RUBYOPT:-}"`
-	return coverageRunAndReduce(setup, env, testCmd, `cat "$d/report"`), true
+	setup := `mkdir -p "$d/cov" && cat > "$d/corral_cov.rb" <<'CORRAL_RB_EOF'` + "\n" + rubyCoveragePreload + "CORRAL_RB_EOF\n"
+	env := `CORRAL_COV_DIR="$d/cov" RUBYOPT="-r$d/corral_cov ${RUBYOPT:-}"`
+	return coverageRunAndReduce(setup, env, testCmd, coverageMergeDir(rubyCoverageHeader)), true
 }
 
 // ParseCoverage reads the reduced report rubyCoveragePreload writes. The

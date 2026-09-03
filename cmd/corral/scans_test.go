@@ -2,6 +2,14 @@
 
 package main
 
+// SURFACE CLAIMS — threaded into runScans as a value; the test calls runScans.
+//
+// testdata/executed-surfaces.tsv names this file as the receipt for the
+// flag(s) below, and TestDocsClassifiedSurfacesCarryAReceipt requires either
+// the literal or an explicit claim. This is the explicit claim: a receipt a
+// reader cannot check is not a receipt.
+//surface: --db
+
 import (
 	"bytes"
 	"context"

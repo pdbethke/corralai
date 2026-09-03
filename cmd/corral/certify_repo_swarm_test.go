@@ -2,6 +2,14 @@
 
 package main
 
+// SURFACE CLAIMS — the flag's VALUE is resolved into a worker/tree budget and the test drives the resolver directly.
+//
+// testdata/executed-surfaces.tsv names this file as the receipt for the
+// flag(s) below, and TestDocsClassifiedSurfacesCarryAReceipt requires either
+// the literal or an explicit claim. This is the explicit claim: a receipt a
+// reader cannot check is not a receipt.
+//surface: --swarm
+
 import (
 	"testing"
 

@@ -88,6 +88,58 @@ var consoleManifestSigRaw []byte
 // `printf`) might otherwise leave in the committed file.
 var consoleManifestSig = bytes.TrimSpace(consoleManifestSigRaw)
 
+// ConsoleSigForVersion returns the committed signature for exactly this
+// version, and reports whether one exists.
+//
+// ONE FILE, MANY VERSIONS, because the manifest's Version is part of the SIGNED
+// bytes and a single signature therefore covers exactly one build. That is not
+// a detail: the committed signature covered "dev" — what an unstamped build
+// reports — while `go install ...@vX` resolves a real module version, so every
+// RELEASED brain served a manifest whose signature every thin client refused.
+// A one-signature file forces a choice between a working development tree and a
+// working release, and the project silently chose development for its entire
+// life.
+//
+// The format is one `<version> <hex-signature>` per line. A file containing a
+// bare hex signature and nothing else is read as the "dev" entry, so the
+// format that shipped before this stays valid and no committed signature had
+// to be regenerated to introduce it.
+func ConsoleSigForVersion(version string) ([]byte, bool) {
+	return consoleSigForVersionIn(consoleManifestSig, version)
+}
+
+// consoleSigForVersionIn is the pure lookup, split out so it can be tested
+// against handcrafted files rather than only the committed one.
+func consoleSigForVersionIn(file []byte, version string) ([]byte, bool) {
+	trimmed := bytes.TrimSpace(file)
+	if len(trimmed) == 0 {
+		return nil, false
+	}
+	// Legacy shape: a bare signature, which the daemon has always served as
+	// the "dev" signature because "dev" is the only version it was ever
+	// produced for.
+	if !bytes.ContainsAny(trimmed, " \t\n") {
+		if version == devConsoleSignedVersion {
+			return trimmed, true
+		}
+		return nil, false
+	}
+	for _, line := range bytes.Split(trimmed, []byte("\n")) {
+		line = bytes.TrimSpace(line)
+		if len(line) == 0 || line[0] == '#' {
+			continue
+		}
+		v, sig, found := bytes.Cut(line, []byte(" "))
+		if !found {
+			continue
+		}
+		if string(bytes.TrimSpace(v)) == version {
+			return bytes.TrimSpace(sig), true
+		}
+	}
+	return nil, false
+}
+
 // consoleManifestHandler serves the cached manifest JSON built once at
 // Handler construction (s.consoleManifestJSON) — never recomputed
 // per-request. A nil/empty cache (buildManifest failed at startup, logged
@@ -108,6 +160,10 @@ func (s *Server) consoleManifestHandler(w http.ResponseWriter, r *http.Request) 
 // fabricates or lazily mints a signature here. A client that requires a
 // signature must then refuse the (now provably unsigned) manifest itself.
 func (s *Server) consoleManifestSigHandler(w http.ResponseWriter, r *http.Request) {
+	// The signature must match THIS daemon's version, because the version is
+	// inside the signed bytes. Serving whatever signature happens to be
+	// committed would hand clients one that cannot verify — which is exactly
+	// what every released brain did.
 	if len(s.consoleSig) == 0 {
 		http.NotFound(w, r)
 		return

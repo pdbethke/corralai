@@ -17,6 +17,18 @@
 # Usage:
 #   CORRALAI_RELEASE_KEY=<hex ed25519 seed> scripts/sign-console-bundle.sh <version>
 #
+# The file holds ONE ENTRY PER VERSION (`<version> <hex-signature>` per line),
+# and this ADDS or REPLACES only the entry for <version> — signing a release
+# never un-signs the development tree. That matters because the manifest's
+# Version is part of the signed bytes, so one signature covers exactly one
+# build: a single-entry file forced a choice between a working dev tree and a
+# working release, and the release lost, silently, for the project's whole life.
+#
+# corralai's own release seed lives in `pass corralai/console-release-key`, with
+# an encrypted backup in Hetzner's credstore. It is never a GitHub secret: CI
+# only ever VERIFIES, using the public half in CORRALAI_CONSOLE_PUBKEY, so the
+# signing key has no reason to leave a machine a human controls.
+#
 # For DEV/TEST use (no real release key available), omit
 # CORRALAI_RELEASE_KEY — this falls back to the committed dev signing key
 # (scripts/dev-console-signing-key.hex). That file is NOT a secret: it
@@ -44,5 +56,12 @@ if [ -z "$KEY_HEX" ]; then
   echo "sign-console-bundle: no \$CORRALAI_RELEASE_KEY — using the committed DEV signing key (NOT for a real release)" >&2
 fi
 
-go run ./cmd/sign-console-bundle "$VERSION" "$KEY_HEX" > internal/ui/console.manifest.sig
+# A TEMP FILE, because the tool now READS the existing signature file to
+# preserve other versions' entries — and `>` truncates its target before the
+# command ever runs, so redirecting straight at it would erase exactly what the
+# tool is trying to keep.
+tmp="$(mktemp)"
+trap 'rm -f "$tmp"' EXIT
+go run ./cmd/sign-console-bundle "$VERSION" "$KEY_HEX" > "$tmp"
+mv "$tmp" internal/ui/console.manifest.sig
 echo "sign-console-bundle: wrote internal/ui/console.manifest.sig (version=$VERSION)" >&2

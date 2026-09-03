@@ -211,7 +211,7 @@ func verifyManifestSig(manifestBytes, sigBytes []byte) error {
 		return err
 	}
 	if strings.HasPrefix(source, consolebundle.DevAnchorEnv) {
-		log.Printf("console: WARNING — verifying this bundle against the PUBLISHED development key (%s). Its private half is committed to corralai's public repository, so this signature proves only that someone who can read GitHub produced it. Never use this against a brain you do not fully control.", source)
+		log.Printf("console: WARNING — %s is set, so this bundle is verified against corralai's PUBLISHED development key, whose private half is committed to a public repository. The signature proves only that someone who can read GitHub produced it. Never use this against a brain you do not fully control.", source)
 	}
 	pubBytes, err := hex.DecodeString(anchor)
 	if err != nil || len(pubBytes) != ed25519.PublicKeySize {

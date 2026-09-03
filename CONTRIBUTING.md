@@ -45,3 +45,25 @@ that would help an agent (or a human) working in it, open a PR against
 `docs/corral/` exactly as you would for code — code review is the trust gate
 for knowledge here just as it is for code; nothing you add is auto-vetted, it's
 read via search until reviewed and merged.
+
+## Cutting a release: sign the console bundle first
+
+The console bundle's manifest is signed, and **the manifest's version is part of
+the signed bytes** — so a signature covers exactly one build. Before tagging:
+
+```sh
+CORRALAI_RELEASE_KEY="$(pass show corralai/console-release-key | head -1)" \
+  scripts/sign-console-bundle.sh v0.8.4
+CORRALAI_CONSOLE_PUBKEY=<the public half> go run ./cmd/verify-console-signature v0.8.4
+git add internal/ui/console.manifest.sig && git commit
+```
+
+Then tag. The release workflow re-runs that verification against the
+`CORRALAI_CONSOLE_PUBKEY` secret and **fails the release** if the committed
+signature does not cover the tag's version — because until that check existed,
+every released brain served a console every thin client refused with
+`manifest signature INVALID`, and nothing anywhere said so.
+
+The signing seed is in `pass corralai/console-release-key` with an encrypted
+backup in Hetzner's credstore. It is deliberately **not** a GitHub secret: CI
+only verifies, so the private key never needs to reach a runner.

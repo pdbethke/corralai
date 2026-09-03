@@ -621,8 +621,25 @@ func (phpPlugin) CoverageCmd(testCmd []string) (cmd []string, ok bool) {
 	if len(testCmd) == 0 || !phpIsRunner(testCmd) {
 		return nil, false
 	}
+	// `extension=pcov` is written even though the machine may already load it,
+	// and that redundancy is the fix for a real failure. Overriding
+	// PHP_INI_SCAN_DIR replaces the scan path, and although a LEADING COLON is
+	// documented to mean "the default directory, then this one" — and does
+	// exactly that locally — on a GitHub runner the default was not preserved:
+	// auto_prepend_file loaded from this file while pcov did not load at all,
+	// so \pcov\start was undefined inside the instrumented run even though a
+	// plain `php -r` reported the extension present. Naming the extension here
+	// makes the injected ini self-sufficient instead of dependent on which
+	// directories survived the override.
+	//
+	// Loading it twice is safe: PHP warns "Module already loaded" and carries
+	// on, and an unresolvable name warns "Unable to load dynamic library" and
+	// carries on. Both land on stderr, where the suite's own output already
+	// goes, and both leave the prepend's function_exists guard to make the
+	// actual decision. Neither is fatal, which is the property that matters —
+	// see phpCoveragePrepend for why nothing here may kill the audited suite.
 	setup := `cat > "$d/corral_prepend.php" <<'CORRAL_PHP_EOF'` + "\n" + phpCoveragePrepend + "CORRAL_PHP_EOF\n" +
-		`printf 'pcov.enabled=1\nauto_prepend_file=%s\n' "$d/corral_prepend.php" > "$d/zz-corral.ini"` + "\n"
+		`printf 'extension=pcov\npcov.enabled=1\nauto_prepend_file=%s\n' "$d/corral_prepend.php" > "$d/zz-corral.ini"` + "\n"
 	// The LEADING COLON keeps the default scan directory — without it pcov
 	// itself, and every other extension the suite relies on, stops loading.
 	env := `PHP_INI_SCAN_DIR=":$d" CORRAL_COV_OUT="$d/report"`

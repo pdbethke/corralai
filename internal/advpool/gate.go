@@ -1042,9 +1042,21 @@ func (s CertSigner) SignVerdict(ctx context.Context, v Verdict) (int64, string, 
 		TestWriterFailed: v.TestWriterFailed,
 		PoolTestUnsound:  v.PoolTestUnsound,
 		BaselineFailed:   v.BaselineFailed,
+		SuiteIgnoresFile: v.SuiteIgnoresFile,
 		TimedOut:         v.TimedOut,
 	}
-	if v.DevScored && !v.BaselineFailed {
+	// SuiteIgnoresFile is BaselineFailed's PEER, and was missing from this one
+	// guard. Its own doc says the suite "provably never compiles or imports the
+	// file under audit, so DevKillRate is meaningless" — and every other site
+	// treats the two together (the repo exit code, the verdict renderer,
+	// reposcan's disposition). Only the signing path read one and not the other,
+	// so a run reaching SuiteIgnoresFile=true with BaselineFailed=false signed
+	// "killRate": 0 over N mutants with 0 survivors: not merely unmeasured, but
+	// internally inconsistent.
+	//
+	// The rule is stated two lines up in this file's own comment: a run that
+	// could not grade has a REAL 0.0 that must not be signed as a measurement.
+	if v.DevScored && !v.BaselineFailed && !v.SuiteIgnoresFile {
 		rate := v.DevKillRate
 		scored.KillRate = &rate
 	}

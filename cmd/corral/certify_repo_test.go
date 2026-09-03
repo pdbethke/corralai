@@ -1523,14 +1523,14 @@ func TestRepoScanExitCodeNothingAuditedIsNonZero(t *testing.T) {
 	nothing := reposcan.Aggregate("o", "r", "c", 2, 1, []reposcan.FileResult{
 		{Job: reposcan.Job{Path: "a.go"}, Gradable: false, Reason: reposcan.ReasonExecutorError},
 	}, nil)
-	if got := repoScanExitCode(nothing, false, nil, nil); got == 0 {
+	if got := repoScanExitCode(nothing, false, 0, nil, nil); got == 0 {
 		t.Errorf("a scan that graded nothing must exit non-zero, got %d", got)
 	}
 
 	graded := reposcan.Aggregate("o", "r", "c", 2, 1, []reposcan.FileResult{
 		{Job: reposcan.Job{Path: "a.go"}, Gradable: true, Verdict: advpool.Verdict{DevKillRate: 0.9}},
 	}, nil)
-	if got := repoScanExitCode(graded, false, nil, nil); got != 0 {
+	if got := repoScanExitCode(graded, false, 0, nil, nil); got != 0 {
 		t.Errorf("a scan that graded something must exit 0, got %d", got)
 	}
 }
@@ -1547,7 +1547,7 @@ func TestRepoScanExitCodeAllTimedOutIsNonZero(t *testing.T) {
 		{Job: reposcan.Job{Path: "src/flask/cli.py"}, Gradable: true,
 			Verdict: advpool.Verdict{DevKillRate: 0.46, Survivors: 13, MutantsTotal: 24, TimedOut: true, DevScored: true}},
 	}, nil)
-	if got := repoScanExitCode(allTimedOut, false, nil, nil); got == 0 {
+	if got := repoScanExitCode(allTimedOut, false, 0, nil, nil); got == 0 {
 		t.Errorf("a scan whose every audited file timed out before the pool converged must exit non-zero, got %d", got)
 	}
 }
@@ -1564,7 +1564,7 @@ func TestRepoScanExitCodePartialTimeoutStillExitsZero(t *testing.T) {
 		{Job: reposcan.Job{Path: "cli.py"}, Gradable: true,
 			Verdict: advpool.Verdict{DevKillRate: 0.46, TimedOut: true, DevScored: true}},
 	}, nil)
-	if got := repoScanExitCode(mixed, false, nil, nil); got != 0 {
+	if got := repoScanExitCode(mixed, false, 0, nil, nil); got != 0 {
 		t.Errorf("a scan where NOT every audited file timed out must keep today's exit-code logic, got %d", got)
 	}
 }
@@ -1577,14 +1577,14 @@ func TestRepoScanExitCodePartialTimeoutStillExitsZero(t *testing.T) {
 // scope and none could be graded, which is a real failure to report.
 func TestRepoScanExitCodeDistinguishesEmptyScopeFromNothingGradable(t *testing.T) {
 	emptyScope := reposcan.Aggregate("o", "r", "c", 0, 0, nil, nil)
-	if got := repoScanExitCode(emptyScope, true, nil, nil); got != 0 {
+	if got := repoScanExitCode(emptyScope, true, 0, nil, nil); got != 0 {
 		t.Errorf("an empty diff scope must exit 0 (nothing to audit), got %d", got)
 	}
 
 	nothingGradable := reposcan.Aggregate("o", "r", "c", 2, 1, []reposcan.FileResult{
 		{Job: reposcan.Job{Path: "a.go"}, Gradable: false, Reason: reposcan.ReasonBaselineFailed},
 	}, nil)
-	if got := repoScanExitCode(nothingGradable, false, nil, nil); got != 1 {
+	if got := repoScanExitCode(nothingGradable, false, 0, nil, nil); got != 1 {
 		t.Errorf("a non-empty scope where nothing graded must exit 1, got %d", got)
 	}
 }
@@ -1598,7 +1598,7 @@ func TestRepoScanExitCodeMinKillRateUnsetIsExactlyTodaysBehaviour(t *testing.T) 
 	weak := reposcan.Aggregate("o", "r", "c", 1, 1, []reposcan.FileResult{
 		{Job: reposcan.Job{Path: "a.go"}, Gradable: true, Verdict: advpool.Verdict{DevKillRate: 0.0}},
 	}, nil)
-	if got := repoScanExitCode(weak, false, nil, nil); got != 0 {
+	if got := repoScanExitCode(weak, false, 0, nil, nil); got != 0 {
 		t.Errorf("min-kill-rate unset (nil) must leave a graded 0.00 file exiting 0, got %d", got)
 	}
 }
@@ -1612,7 +1612,7 @@ func TestRepoScanExitCodeMinKillRateBreachIsNonZero(t *testing.T) {
 		{Job: reposcan.Job{Path: "weak.go"}, Gradable: true, Verdict: advpool.Verdict{DevKillRate: 0.4}},
 	}, nil)
 	threshold := 0.8
-	if got := repoScanExitCode(rep, false, &threshold, nil); got != 1 {
+	if got := repoScanExitCode(rep, false, 0, &threshold, nil); got != 1 {
 		t.Errorf("one file below --min-kill-rate must fail the whole scan, got %d (a well-tested file must not mask a weak one)", got)
 	}
 }
@@ -1624,7 +1624,7 @@ func TestRepoScanExitCodeMinKillRateAtThresholdPasses(t *testing.T) {
 		{Job: reposcan.Job{Path: "a.go"}, Gradable: true, Verdict: advpool.Verdict{DevKillRate: 0.8}},
 	}, nil)
 	threshold := 0.8
-	if got := repoScanExitCode(rep, false, &threshold, nil); got != 0 {
+	if got := repoScanExitCode(rep, false, 0, &threshold, nil); got != 0 {
 		t.Errorf("a file exactly at --min-kill-rate must PASS (inclusive minimum), got %d", got)
 	}
 }
@@ -1636,7 +1636,7 @@ func TestRepoScanExitCodeMinKillRateAboveThresholdPasses(t *testing.T) {
 		{Job: reposcan.Job{Path: "a.go"}, Gradable: true, Verdict: advpool.Verdict{DevKillRate: 0.95}},
 	}, nil)
 	threshold := 0.8
-	if got := repoScanExitCode(rep, false, &threshold, nil); got != 0 {
+	if got := repoScanExitCode(rep, false, 0, &threshold, nil); got != 0 {
 		t.Errorf("a file above --min-kill-rate must pass, got %d", got)
 	}
 }
@@ -1649,7 +1649,7 @@ func TestRepoScanExitCodeMinKillRateAboveThresholdPasses(t *testing.T) {
 func TestRepoScanExitCodeNothingInScopeWinsOverMinKillRate(t *testing.T) {
 	emptyScope := reposcan.Aggregate("o", "r", "c", 0, 0, nil, nil)
 	threshold := 0.99
-	if got := repoScanExitCode(emptyScope, true, &threshold, nil); got != 0 {
+	if got := repoScanExitCode(emptyScope, true, 0, &threshold, nil); got != 0 {
 		t.Errorf("nothingInScope must win over minKillRate, got %d", got)
 	}
 }
@@ -1665,7 +1665,7 @@ func TestRepoScanExitCodeAuditedZeroWinsOverMinKillRate(t *testing.T) {
 		{Job: reposcan.Job{Path: "a.go"}, Gradable: false, Reason: reposcan.ReasonBaselineFailed},
 	}, nil)
 	threshold := 0.0
-	if got := repoScanExitCode(nothingGradable, false, &threshold, nil); got != 1 {
+	if got := repoScanExitCode(nothingGradable, false, 0, &threshold, nil); got != 1 {
 		t.Errorf("Audited==0 must still exit 1 even with a permissive minKillRate, got %d", got)
 	}
 }
@@ -4131,22 +4131,22 @@ func TestMaxProvenMissedFailsOnADemonstratedGap(t *testing.T) {
 	clean := reposcan.RepoReport{Audited: 1, GradedFiles: 1, Weakest: []reposcan.WeakFile{
 		{Path: "pkg/a.go", KillRate: 0.85, Survivors: 3, ProvenMissed: 0},
 	}}
-	if got := repoScanExitCode(clean, false, nil, &zero); got != 0 {
+	if got := repoScanExitCode(clean, false, 0, nil, &zero); got != 0 {
 		t.Errorf("no proven gap must pass --max-proven-missed 0, got exit %d", got)
 	}
 
 	proven := reposcan.RepoReport{Audited: 1, GradedFiles: 1, Weakest: []reposcan.WeakFile{
 		{Path: "pkg/a.go", KillRate: 0.85, Survivors: 3, ProvenMissed: 3},
 	}}
-	if got := repoScanExitCode(proven, false, nil, &zero); got == 0 {
+	if got := repoScanExitCode(proven, false, 0, nil, &zero); got == 0 {
 		t.Error("three demonstrated gaps passed --max-proven-missed 0")
 	}
 	// The same run clears a threshold that allows them.
 	three := 3
-	if got := repoScanExitCode(proven, false, nil, &three); got != 0 {
+	if got := repoScanExitCode(proven, false, 0, nil, &three); got != 0 {
 		t.Errorf("3 gaps must clear --max-proven-missed 3 (a maximum, inclusive), got exit %d", got)
 	}
-	if got := repoScanExitCode(proven, false, nil, &two); got == 0 {
+	if got := repoScanExitCode(proven, false, 0, nil, &two); got == 0 {
 		t.Error("3 gaps passed --max-proven-missed 2")
 	}
 }
@@ -4167,7 +4167,7 @@ func TestMaxProvenMissedFailsClosedWhenNothingCouldBeProven(t *testing.T) {
 			Path: "pkg/a.go", Survivors: 4, ProvenMissed: 0, PoolTestUnsound: true}},
 	} {
 		r := reposcan.RepoReport{Audited: 1, GradedFiles: 1, Weakest: []reposcan.WeakFile{tc.f}}
-		if got := repoScanExitCode(r, false, nil, &zero); got == 0 {
+		if got := repoScanExitCode(r, false, 0, nil, &zero); got == 0 {
 			t.Errorf("%s: a 0 that means 'nothing was proven' passed the gate", tc.name)
 		}
 	}
@@ -4176,7 +4176,7 @@ func TestMaxProvenMissedFailsClosedWhenNothingCouldBeProven(t *testing.T) {
 	clean := reposcan.RepoReport{Audited: 1, GradedFiles: 1, Weakest: []reposcan.WeakFile{
 		{Path: "pkg/a.go", KillRate: 1.0, Survivors: 0, ProvenMissed: 0},
 	}}
-	if got := repoScanExitCode(clean, false, nil, &zero); got != 0 {
+	if got := repoScanExitCode(clean, false, 0, nil, &zero); got != 0 {
 		t.Errorf("a file with no survivors must pass, got exit %d", got)
 	}
 }
@@ -4293,7 +4293,7 @@ func TestMaxProvenMissedFailsClosedOnATimedOutFile(t *testing.T) {
 					tc.file,
 				},
 			}
-			if got := repoScanExitCode(rep, false, nil, &zero); got != tc.want {
+			if got := repoScanExitCode(rep, false, 0, nil, &zero); got != tc.want {
 				t.Errorf("exit = %d, want %d — the gate %s", got, tc.want,
 					map[int]string{0: "passed on a question nobody answered", 1: "failed on a real measurement"}[got])
 			}
@@ -4334,7 +4334,7 @@ func TestRepoScanExitCodeFailsWhenNothingWasGraded(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := repoScanExitCode(tc.rep, false, nil, nil); got != tc.want {
+			if got := repoScanExitCode(tc.rep, false, 0, nil, nil); got != tc.want {
 				t.Errorf("exit = %d, want %d — %s", got, tc.want,
 					map[int]string{0: "CI goes green on a scan whose own report says NO GRADED FILE", 1: "a scan that graded a file was failed anyway"}[got])
 			}
@@ -4397,5 +4397,83 @@ func TestPrintWeakFileNamesAnUngradableFile(t *testing.T) {
 	}
 	if !strings.Contains(got, "7") {
 		t.Errorf("line = %q, want the rejected-mutant count so the reader can see how much was thrown away", got)
+	}
+}
+
+// TestUnpairableDiffFailsTheGate closes a fail-open on the change the gate is
+// most often installed to inspect.
+//
+// A diff whose changed source files cannot be paired with tests selects zero
+// candidates, so it arrives at repoScanExitCode AS nothingInScope — whose first
+// statement returned 0. Meanwhile printRepoReport printed
+//
+//	NOT AUDITED: the diff changed N source file(s) corral could not pair with a
+//	test … This is a pairing limitation, NOT a clean bill of health
+//
+// and its own comment states the rule the exit code was breaking: "'no audit was
+// needed' here would be a fail-open: the gate goes green on exactly the change it
+// was installed to inspect."
+//
+// Not a corner case. Filename pairing routinely pairs nothing on JS/TS layouts —
+// this repository's own foreign sweep pins express at 213 candidates, 0 pairs — so
+// on a TypeScript repo this was the COMMON path: honest summary, green check.
+//
+// The third case is what keeps the fix from overcorrecting: a genuinely
+// docs-only diff still passes, because that is the honest, expected outcome and
+// failing it would train people to ignore the gate.
+func TestUnpairableDiffFailsTheGate(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		nothingInScope bool
+		unpairable     int
+		want           int
+	}{
+		{"changed files that could not be paired", true, 2, 1},
+		{"docs-only diff — nothing in scope, nothing unpaired", true, 0, 0},
+		{"unpairable files reported even without the scope flag", false, 1, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rep := reposcan.RepoReport{Audited: 0}
+			if got := repoScanExitCode(rep, tc.nothingInScope, tc.unpairable, nil, nil); got != tc.want {
+				t.Errorf("exit = %d, want %d — %s", got, tc.want,
+					map[int]string{
+						0: "CI goes green on a diff whose own report says NOT AUDITED",
+						1: "a docs-only diff was failed, which trains people to ignore the gate",
+					}[got])
+			}
+		})
+	}
+}
+
+// TestSignableKillRateWithholdsAFabricatedZero: the human report and the SIGNED
+// statement must refuse the same numbers.
+//
+// printRepoReport marks a file whose every mutant was rejected by the compile
+// gate as [NO GRADABLE MUTANT], and reposcan's own comment calls that zero "a
+// fabrication: nothing was graded". signableKillRate withheld only for Uncovered,
+// so the statement carried "killRate":0 — and the --attest help promises rates
+// "WITH the honesty flags that say what a zero means", while certify.AuditedFile
+// has no flag for this state. Absence is the honest carrier.
+func TestSignableKillRateWithholdsAFabricatedZero(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		f    reposcan.WeakFile
+		want bool // want a signed rate?
+	}{
+		{"every mutant rejected by the compile check", reposcan.WeakFile{MutantsGraded: 0, MutantsInvalid: 7}, false},
+		{"uncovered", reposcan.WeakFile{Uncovered: true, MutantsGraded: 4}, false},
+		{"genuinely graded zero — the suite really caught nothing", reposcan.WeakFile{KillRate: 0, MutantsGraded: 9}, true},
+		{"ordinary graded file", reposcan.WeakFile{KillRate: 0.8, MutantsGraded: 10}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := signableKillRate(tc.f)
+			if (got != nil) != tc.want {
+				t.Errorf("signed rate present = %v, want %v — %s", got != nil, tc.want,
+					map[bool]string{
+						true:  "a zero denominator was signed as a measurement",
+						false: "a REAL measured zero was withheld, which hides the worst finding corral can make",
+					}[got != nil])
+			}
+		})
 	}
 }

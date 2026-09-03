@@ -97,6 +97,7 @@ func TestCoverageCmdRefusesForeignCommands(t *testing.T) {
 		"ruby":       {{"pytest", "-q"}, {"go", "test", "./..."}, {"npm", "test"}, {"bundle", "install"}, {}},
 		"javascript": {{"pytest", "-q"}, {"go", "test", "./..."}, {"rspec"}, {}},
 		"typescript": {{"pytest", "-q"}, {"go", "test", "./..."}, {"rspec"}, {}},
+		"php":        {{"pytest", "-q"}, {"go", "test", "./..."}, {"rspec"}, {"npm", "test"}, {}},
 	}
 	for name, cmds := range foreign {
 		p, ok := ByName(name)
@@ -148,6 +149,13 @@ func TestCoverageReporterAgainstRealSuites(t *testing.T) {
 			wantAbsent:   []string{"lib/unloaded.js"},
 		},
 		{
+			lang: "php", dir: "php", tool: "php",
+			testCmd:      []string{"php", "test/CalcTest.php"},
+			wantExecuted: []string{"lib/Calc.php"},
+			wantMeasured: []string{"lib/Dead.php"},
+			wantAbsent:   []string{"lib/Unloaded.php"},
+		},
+		{
 			lang: "typescript", dir: "ts", tool: "node",
 			testCmd:      []string{"node", "--test"},
 			wantExecuted: []string{"lib/calc.ts"},
@@ -159,6 +167,18 @@ func TestCoverageReporterAgainstRealSuites(t *testing.T) {
 		t.Run(tc.lang, func(t *testing.T) {
 			if _, err := exec.LookPath(tc.tool); err != nil {
 				t.Skipf("%s not installed — this proof needs the real interpreter", tc.tool)
+			}
+			// PHP is the one language whose coverage needs a runtime
+			// EXTENSION, so the interpreter being present is not enough. A
+			// machine with php and no pcov/Xdebug must SKIP rather than fail:
+			// the missing driver is an environment fact, not a defect in the
+			// reporter. CI installs php-pcov (see
+			// scripts/ci-provision-test-toolchains.sh) so this does run there.
+			if tc.lang == "php" {
+				probe := exec.Command("php", "-r", `exit(extension_loaded("pcov") || extension_loaded("xdebug") ? 0 : 1);`)
+				if err := probe.Run(); err != nil {
+					t.Skip("php has no coverage driver (pcov/Xdebug) — install php-pcov to run this proof")
+				}
 			}
 			p, _ := ByName(tc.lang)
 			r := p.(CoverageReporter)

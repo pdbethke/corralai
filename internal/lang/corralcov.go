@@ -35,6 +35,7 @@ import (
 const (
 	rubyCoverageHeader = "corral-ruby-coverage: v1"
 	jsCoverageHeader   = "corral-js-coverage: v1"
+	// phpCoverageHeader is declared in php.go, beside the script that writes it.
 )
 
 // corralCoverageReport parses the reduced report into CoverageReporter's

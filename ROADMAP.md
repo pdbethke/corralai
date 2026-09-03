@@ -198,7 +198,7 @@ Go binary.**
   module proxy and so graded a *different* binary than the one under review.
 
   Docs: `docs/corral/github-action.md`.
-- **Coverage pre-flight (`--preflight`, `certify --repo`; Go, Python, Ruby, JS, TS) — opt-in,
+- **Coverage pre-flight (`--preflight`, `certify --repo`; all six languages) — opt-in,
   CLI only.** Test-pairing finds *some* untested files by guessing paired test names;
   it finds nothing in a repo where that guess never lands (most JS/TS projects). The
   pre-flight answers a narrower, cheaper question instead: run the suite **once**,

@@ -488,7 +488,7 @@ opt-in `min-kill-rate` input (`--min-kill-rate` on the CLI) fails the run
 when any *individual* audited file scores below the threshold you set. See
 **[docs/corral/github-action.md](docs/corral/github-action.md)**.
 
-**Coverage pre-flight (`--preflight`, CLI only; Go, Python, Ruby, JavaScript, TypeScript).** `certify
+**Coverage pre-flight (`--preflight`, CLI only — all six languages).** `certify
 --repo --preflight` runs the project's test suite **one extra time**, with
 coverage instrumentation, and reports which source files it never touches at
 all — a whole-repo inventory for the cost of one suite run, instead of the
@@ -505,16 +505,16 @@ is worth knowing before you act on a report.** On Go and Python it can mean
 time, and in Python every module-scope `def` and `class` is a counted statement,
 so importing a module clears it outright — Python's exposure here is the wider
 of the two (see [docs/corral/github-action.md](docs/corral/github-action.md) for
-both measurements). Ruby, JavaScript and TypeScript do **not** have that
+both measurements). Ruby, JavaScript, TypeScript and PHP do **not** have that
 exposure, because their reporters count *methods and named functions*, not
-lines: Ruby uses the stdlib `Coverage` module's method coverage, and the Node
-path counts named functions in V8's own range data. Measured on a fixture, a
+lines: Ruby uses the stdlib `Coverage` module's method coverage, the Node path counts named
+functions in V8's own range data, and PHP reflects over method bodies. Measured on a fixture, a
 module that is required and never called reports `lines_hit 2/3` — indis-
 tinguishable from a file under test — and `methods_called 0/1`, which is the
 truth; those three languages report it as **measured and never executed**, which
 is the finding you want.
 
-Neither reporter asks the audited project to install anything. Ruby's `Coverage`
+None of these reporters asks the audited project to install anything. Ruby's `Coverage`
 is standard library, reached through `RUBYOPT` (the only window in which it can
 start before application files load), and Node's is `NODE_V8_COVERAGE`, which is
 built in — so no SimpleCov in the Gemfile, no c8 or nyc in `package.json`, and
@@ -523,11 +523,18 @@ environment is inherited, one mechanism covers every way those suites are
 actually launched: `rspec`, `rake`, a bare `ruby`, `node --test`, jest's
 workers, vitest, mocha, `npm test`.
 
-**PHP is the one language still without it**, and for a reason that is not
-effort: PHP has no coverage without a runtime *extension* (Xdebug or pcov), so
-unlike the other five it cannot be instrumented with what a stranger's machine
-already has. A scan of a PHP repo reports that it could not run and names
-nothing, rather than guessing.
+**PHP works too, with one disclosed condition.** It is the only one of the six
+that cannot be instrumented with what a machine already has: PHP reports no
+coverage without a runtime extension (pcov or Xdebug). It still asks nothing of
+the audited *project* — the extension is injected through `PHP_INI_SCAN_DIR`,
+which is why `vendor/bin/phpunit` and `composer test` are instrumented as
+readily as a bare `php`, neither of which would accept a `-d` flag. Without a
+driver the run fails and the pre-flight reports that it could not run, naming
+nothing — never "nothing is covered". PHP needs the method-body treatment most
+visibly of the four: pcov reports an executed line for a file's implicit include
+marker, one past its last line, so any file that was merely required looks
+covered under a naive rule. Reflection supplies the start and end line of every
+user-defined method, so the question asked is whether a *body* ran.
 
 A scan whose candidates span more than one language usually declines the same
 way — one instrumented run can't cover two — **unless** an explicit `--

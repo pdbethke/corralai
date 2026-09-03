@@ -33,6 +33,16 @@ sudo apt-get install -y python3-pytest-cov ||
 	python3 -m pip install --break-system-packages --quiet pytest-cov || true
 python3 -c "import pytest_cov" || echo "pytest-cov not available — python selection integration test will SKIP"
 
+echo "== PHP (internal/lang php plugin + its coverage reporter) =="
+# php-pcov is REQUIRED for the coverage pre-flight proof, not optional polish:
+# PHP is the one language of the six that cannot report coverage without a
+# runtime extension, so TestCoverageReporterAgainstRealSuites/php SKIPS without
+# it — and a proof that silently skips is the failure mode this repository has
+# been bitten by (the container jail's integration tests skipped in CI for
+# weeks while the backend was completely broken).
+sudo apt-get install -y php-cli php-pcov || true
+php --version || echo "php not available — php coverage proof will SKIP"
+
 echo "== Ruby (internal/lang ruby plugin) =="
 sudo apt-get install -y ruby ruby-rspec || true
 ruby --version || echo "ruby not available — ruby-in-jail test will SKIP"

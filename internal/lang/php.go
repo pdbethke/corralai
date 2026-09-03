@@ -485,3 +485,126 @@ func (phpPlugin) FailFastArgs(testCmd []string) ([]string, bool) {
 	}
 	return nil, false
 }
+
+// COVERAGE FOR PHP — pcov or Xdebug, and the extension is the honest catch.
+//
+// PHP is the one language of the six that CANNOT be instrumented with what a
+// machine already has: coverage needs a runtime extension (pcov or Xdebug), so
+// unlike Ruby's stdlib Coverage or Node's built-in NODE_V8_COVERAGE, this asks
+// something of the environment. It still asks nothing of the audited PROJECT —
+// no dev dependency, no phpunit.xml edit, no change to the tree under audit —
+// and when the extension is missing the run fails and the caller reports "could
+// not run", which is the fail-closed direction: never "nothing is covered".
+//
+// The injection is PHP_INI_SCAN_DIR, not `php -d`, and that choice is what
+// makes this runner-agnostic. A PHP suite is launched as `vendor/bin/phpunit`
+// or `composer test` far more often than as `php something`, and neither of
+// those lets you splice in `-d` flags. A LEADING COLON means "the default scan
+// directory, then this one" — dropping the colon would replace the default and
+// unload pcov itself, along with every other extension the suite needs.
+const phpCoverageHeader = "corral-php-coverage: v1"
+
+// phpCoveragePrepend is loaded by auto_prepend_file before any application
+// code, which is the only point at which pcov can see the files that follow.
+//
+// IT JUDGES METHOD BODIES, NOT LINES, for the same reason the Ruby and
+// JavaScript reporters do — and PHP needs it more visibly than either. pcov
+// reports an executed line for the file's implicit include marker (measured: a
+// 4-line file reports a hit at line 5, one past its end), so ANY file that was
+// merely required looks executed under a naive any-positive-line rule. Add
+// top-level statements and it looks executed twice over. Reflection gives the
+// start and end line of every user-defined method and function, so the
+// question becomes the right one: did any BODY in this file run?
+//
+// \pcov\collect takes \pcov\all deliberately. \pcov\inclusive with an empty
+// filter SEGFAULTS the interpreter — found the hard way; it wants a non-empty
+// filter list, and there is nothing to filter on here.
+const phpCoveragePrepend = `<?php
+\pcov\start();
+register_shutdown_function(function () {
+    \pcov\stop();
+    $data = \pcov\collect(\pcov\all);
+
+    $ranges = [];
+    foreach (get_declared_classes() as $cls) {
+        try { $rc = new ReflectionClass($cls); } catch (Throwable $e) { continue; }
+        if (!$rc->isUserDefined()) continue;
+        foreach ($rc->getMethods() as $m) {
+            $f = $m->getFileName();
+            if ($f === false) continue;
+            $ranges[$f][] = [$m->getStartLine(), $m->getEndLine()];
+        }
+    }
+    foreach (get_defined_functions()['user'] as $fn) {
+        try { $rf = new ReflectionFunction($fn); } catch (Throwable $e) { continue; }
+        $f = $rf->getFileName();
+        if ($f === false) continue;
+        $ranges[$f][] = [$rf->getStartLine(), $rf->getEndLine()];
+    }
+
+    $dest = getenv('CORRAL_COV_OUT');
+    if ($dest === false) { return; }
+    $out = @fopen($dest, 'w');
+    if ($out === false) { return; }
+    fwrite($out, "` + phpCoverageHeader + `\n");
+    foreach ($data as $path => $lines) {
+        $bodies = isset($ranges[$path]) ? $ranges[$path] : [];
+        $hit = 0; $measurable = 0;
+        if ($bodies) {
+            // Only lines INSIDE a method or function body count. pcov marks an
+            // executable-but-unexecuted line -1 and an executed one > 0.
+            foreach ($lines as $n => $c) {
+                foreach ($bodies as $r) {
+                    if ($n >= $r[0] && $n <= $r[1]) { $measurable++; if ($c > 0) { $hit = 1; } break; }
+                }
+            }
+        } else {
+            // No user-defined body at all: a plain script or a constants file,
+            // which can only be judged by whether anything in it ran.
+            foreach ($lines as $n => $c) { $measurable++; if ($c > 0) { $hit = 1; } }
+        }
+        // Nothing measurable means nothing to have skipped: absent, not false.
+        if ($measurable === 0) { continue; }
+        fwrite($out, ($hit ? "1 " : "0 ") . $path . "\n");
+    }
+    fclose($out);
+});
+`
+
+// phpIsRunner reports whether testCmd launches PHP, seeing through a `sh -c`
+// wrapper and through a VERSIONED interpreter name.
+//
+// The version suffix is why this is not a plain coverageRunnerNamed call:
+// php.go's own CompileCheck documentation records an acceptance run where the
+// operator's test command named an explicit `php8.5`, and a matcher that only
+// knew the bare token "php" would decline to instrument exactly that suite. No
+// other language's runner begins with "php", so the prefix is unambiguous.
+func phpIsRunner(testCmd []string) bool {
+	if coverageRunnerNamed(testCmd, []string{"php", "phpunit", "phpdbg", "composer", "pest", "paratest", "codecept"}) {
+		return true
+	}
+	if len(testCmd) == 0 {
+		return false
+	}
+	return strings.HasPrefix(filepath.Base(testCmd[0]), "php")
+}
+
+// CoverageCmd wraps a PHP test command in pcov instrumentation.
+func (phpPlugin) CoverageCmd(testCmd []string) (cmd []string, ok bool) {
+	if len(testCmd) == 0 || !phpIsRunner(testCmd) {
+		return nil, false
+	}
+	setup := `cat > "$d/corral_prepend.php" <<'CORRAL_PHP_EOF'` + "\n" + phpCoveragePrepend + "CORRAL_PHP_EOF\n" +
+		`printf 'pcov.enabled=1\nauto_prepend_file=%s\n' "$d/corral_prepend.php" > "$d/zz-corral.ini"` + "\n"
+	// The LEADING COLON keeps the default scan directory — without it pcov
+	// itself, and every other extension the suite relies on, stops loading.
+	env := `PHP_INI_SCAN_DIR=":$d" CORRAL_COV_OUT="$d/report"`
+	return coverageRunAndReduce(setup, env, testCmd, `cat "$d/report"`), true
+}
+
+// ParseCoverage reads the reduced report phpCoveragePrepend writes. The grammar
+// and its tri-state are shared with Ruby and JavaScript — see
+// corralCoverageReport.
+func (phpPlugin) ParseCoverage(stdout, modulePath string) (executed map[string]bool, err error) {
+	return corralCoverageReport(stdout, phpCoverageHeader, "php", modulePath)
+}

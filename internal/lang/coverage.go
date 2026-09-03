@@ -47,3 +47,10 @@ var _ CoverageReporter = jsPlugin{}
 // tsPlugin implements CoverageReporter by delegating to jsPlugin: the
 // instrument is the Node runtime, and Node strips TypeScript types natively.
 var _ CoverageReporter = tsPlugin{}
+
+// phpPlugin implements CoverageReporter via pcov (or Xdebug), injected with
+// PHP_INI_SCAN_DIR so `vendor/bin/phpunit` and `composer test` are instrumented
+// as readily as a bare `php`. PHP is the one language here that needs a runtime
+// EXTENSION — see phpPlugin.CoverageCmd for why that is disclosed rather than
+// worked around.
+var _ CoverageReporter = phpPlugin{}

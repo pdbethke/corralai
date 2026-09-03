@@ -827,3 +827,31 @@ func namedByproduct(t *testing.T, stmt map[string]any, name string) (map[string]
 	}
 	return nil, false
 }
+
+// TestSuiteIgnoresFileWithholdsTheRateAndSaysSo pins the second route by which a
+// zero denominator reached a SIGNED statement.
+//
+// Verdict.SuiteIgnoresFile means the suite provably never compiles or imports the
+// file under audit — its own doc says "DevKillRate is meaningless". Every other
+// site treats it as BaselineFailed's peer; only the signing guard read one and not
+// the other, so a run with SuiteIgnoresFile=true and BaselineFailed=false signed
+// killRate 0 over N mutants with 0 survivors. Not merely unmeasured: internally
+// inconsistent.
+//
+// Absence alone is not enough. An omitted rate with no flag beside it is a hole a
+// reader cannot interpret, so the flag rides with it — that is how the record
+// distinguishes "nothing to catch" from "caught nothing".
+func TestSuiteIgnoresFileWithholdsTheRateAndSaysSo(t *testing.T) {
+	stmt := BuildAttestation(BuildRecord{
+		Repo: "r", Commit: "c",
+		Scored: &ScoredCertification{MutantsTotal: 2, Survivors: 0, SuiteIgnoresFile: true},
+	}, "head")
+	a := certificationByproduct(t, stmt)
+
+	if _, present := a["killRate"]; present {
+		t.Errorf("killRate = %v is signed for a file the suite never exercises — a 0 over 2 mutants with 0 survivors is not a measurement, it is a contradiction", a["killRate"])
+	}
+	if a["suiteIgnoresFile"] != true {
+		t.Error("the rate is absent and nothing says WHY — a reader cannot tell an unexercised file from a missing field")
+	}
+}

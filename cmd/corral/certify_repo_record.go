@@ -144,7 +144,22 @@ func buildScanFileRows(results []reposcan.FileResult, excluded []reposcan.Exclus
 		seen[path] = true
 
 		if r.Gradable {
-			kr := r.Verdict.DevKillRate
+			// The SAME withholding rule signableKillRate applies to the signed
+			// statement, applied here so the ledger and the warehouse agree
+			// with it. signableKillRate's own doc promises exactly that — "so
+			// the two can never disagree about which numbers are real" — and
+			// they disagreed: it reads a reposcan.WeakFile and this reads a
+			// Verdict, so fixing one left the other carrying a zero the
+			// statement had just learned to refuse.
+			//
+			// Every mutant rejected by the compile gate leaves DevKillRate a
+			// literal 0 over an empty denominator. NULL is the honest column
+			// value, and the ledger already has the shape for it.
+			var krp *float64
+			if !(r.Verdict.MutantsTotal == 0 && r.Verdict.MutantsInvalid > 0) {
+				kr := r.Verdict.DevKillRate
+				krp = &kr
+			}
 			// CacheKey and VerdictJSON are written on THIS branch only — the
 			// load-bearing invariant is ledgerCache.Get's own: it hands back
 			// Gradable:true unconditionally on a hit, justified by "only
@@ -169,7 +184,7 @@ func buildScanFileRows(results []reposcan.FileResult, excluded []reposcan.Exclus
 			}
 			rows = append(rows, scanstore.File{
 				Path: path, Lang: r.Job.Lang, Disposition: "audited",
-				KillRate: &kr, Survivors: r.Verdict.Survivors, Gradable: true,
+				KillRate: krp, Survivors: r.Verdict.Survivors, Gradable: true,
 				Evidence: "proven", PreflightState: preflightState(preflight, path),
 				// TimedOut rides straight through from the verdict: a claim
 				// carries how it was earned, and a query over this ledger

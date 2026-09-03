@@ -162,7 +162,14 @@ type ScoredCertification struct {
 	TestWriterFailed bool     `json:"testWriterFailed,omitempty"`
 	PoolTestUnsound  bool     `json:"poolTestUnsound,omitempty"`
 	BaselineFailed   bool     `json:"baselineFailed,omitempty"`
-	TimedOut         bool     `json:"timedOut,omitempty"`
+	// SuiteIgnoresFile is BaselineFailed's peer: the suite provably never
+	// compiles or imports the file under audit, so its kill rate is meaningless
+	// rather than merely low. Carried so an absent killRate says WHICH kind of
+	// unmeasured it was — the flags are how a reader tells "nothing to catch"
+	// from "caught nothing", and an absence with no flag beside it is just a
+	// hole.
+	SuiteIgnoresFile bool `json:"suiteIgnoresFile,omitempty"`
+	TimedOut         bool `json:"timedOut,omitempty"`
 }
 
 // BuildAttestation wraps a BuildRecord and a ledger head in an in-toto
@@ -439,6 +446,7 @@ func certificationAnnotations(r BuildRecord) map[string]any {
 		"testWriterFailed": r.Scored.TestWriterFailed,
 		"poolTestUnsound":  r.Scored.PoolTestUnsound,
 		"baselineFailed":   r.Scored.BaselineFailed,
+		"suiteIgnoresFile": r.Scored.SuiteIgnoresFile,
 		"timedOut":         r.Scored.TimedOut,
 	} {
 		if set {

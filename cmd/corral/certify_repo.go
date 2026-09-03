@@ -1120,7 +1120,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		printPreflightReport(stdout, preflightResult, preflightSources)
 	}
 
-	exitCode := repoScanExitCode(rep, nothingInScope, minKillRate, maxProvenMissed)
+	exitCode := repoScanExitCode(rep, nothingInScope, len(unpairableInDiff), minKillRate, maxProvenMissed)
 
 	// One roster, shared by the push and the statement, so the two can never
 	// disagree about which model held which seat.
@@ -2841,7 +2841,24 @@ func printPreflightReport(w io.Writer, cm reposcan.CoverageMap, sourceFiles []st
 // against NaN is false, so a threshold check reached in that state would
 // silently never fire — checking Audited == 0 first, and returning early,
 // is what keeps that failure from being maskable by (or masking) a breach.
-func repoScanExitCode(r reposcan.RepoReport, nothingInScope bool, minKillRate *float64, maxProvenMissed *int) int {
+func repoScanExitCode(r reposcan.RepoReport, nothingInScope bool, unpairableInDiff int, minKillRate *float64, maxProvenMissed *int) int {
+	// A DIFF WHOSE CHANGED FILES COULD NOT BE PAIRED IS NOT A PASS, and it is
+	// checked BEFORE nothingInScope because it arrives AS nothingInScope: zero
+	// candidates were selected, so every later check sees an empty scan.
+	//
+	// printRepoReport already refuses to call this clean — "NOT AUDITED: … a
+	// pairing limitation, NOT a clean bill of health" — and its comment states
+	// the rule this function was breaking: "'no audit was needed' here would be
+	// a fail-open: the gate goes green on exactly the change it was installed
+	// to inspect."
+	//
+	// It is not a corner case. Filename pairing routinely pairs nothing on
+	// JS/TS layouts; the repo's own foreign sweep pins express at 213 candidates
+	// and 0 pairs. So on a TypeScript repository this WAS the common path, and
+	// the human summary said "not audited" while the check went green.
+	if unpairableInDiff > 0 {
+		return 1
+	}
 	if nothingInScope {
 		return 0
 	}
@@ -4594,6 +4611,19 @@ func moduleImportHint(suiteOutput string) string {
 // comes back as fact, and one of them is signed.
 func signableKillRate(f reposcan.WeakFile) *float64 {
 	if f.Uncovered {
+		return nil
+	}
+	// NOTHING GRADABLE is the second way a rate can be a zero denominator, and
+	// it was signed as a measurement. Every mutant rejected by the compile gate
+	// leaves adequacy.Report.KillRate returning a literal 0 — reposcan calls
+	// that "a fabrication: nothing was graded", and printRepoReport marks the
+	// line [NO GRADABLE MUTANT]. The statement carried "killRate":0 anyway.
+	//
+	// The --attest help promises kill rates "WITH the honesty flags that say
+	// what a zero means", and certify.AuditedFile has flags for TimedOut,
+	// TestWriterFailed, PoolTestUnsound and Uncovered — none for this state. So
+	// the honest carrier is absence, which the field already supports.
+	if f.MutantsGraded == 0 && f.MutantsInvalid > 0 {
 		return nil
 	}
 	kr := f.KillRate

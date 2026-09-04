@@ -93,3 +93,51 @@ func contains(s, sub string) bool {
 		return false
 	})()
 }
+
+// TestToolchainBindNeverMountsTheOperatorsCredentialDirectories pins the
+// sixth review's H2: toolchainRoot walks up to the first child of a
+// boundary, so a runner under ~/.local (pip --user, pipx), ~/.local/share
+// (gem install --user-install), ~/.config (composer global) or ~/src (an
+// absolute path into another project) resolved to that whole directory —
+// and the jail bound it read-only, keyrings and gh/gcloud credentials
+// included. A known toolchain directory still binds; ~/.local narrows to
+// bin (+lib) or the one share subtree that is a toolchain; everything else
+// under $HOME is refused with the way out.
+func TestToolchainBindNeverMountsTheOperatorsCredentialDirectories(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		t.Skip("no home directory")
+	}
+	h := func(p string) string { return filepath.Join(home, p) }
+	for _, tc := range []struct {
+		bin, want string
+		refuse    bool
+	}{
+		{h(".local/bin/pytest"), h(".local/bin"), false},
+		{h(".local/share/gem/ruby/3.3.0/bin/rspec"), h(".local/share/gem"), false},
+		{h(".local/share/pipx/venvs/x/bin/x"), h(".local/share/pipx"), false},
+		{h(".local/share/claude/bin/claude"), "", true},
+		{h(".config/composer/vendor/bin/phpunit"), "", true},
+		{h("src/repo/node_modules/.bin/jest"), "", true},
+		{h(".asdf/installs/golang/1.22/bin/go"), h(".asdf"), false},
+		{h(".nvm/versions/node/v22/bin/node"), h(".nvm"), false},
+	} {
+		root := toolchainRoot(tc.bin)
+		narrowed, refused := narrowHomeRoot(tc.bin, root)
+		got := root
+		if narrowed != "" {
+			got = narrowed
+		}
+		switch {
+		case tc.refuse && refused == "":
+			t.Errorf("%s: bound %q — the jail mounted a credential directory", tc.bin, got)
+		case !tc.refuse && refused != "":
+			t.Errorf("%s: refused (%s), want %q bound", tc.bin, refused, tc.want)
+		case !tc.refuse && got != tc.want:
+			t.Errorf("%s: bound %q, want %q", tc.bin, got, tc.want)
+		}
+		if refused == "" && (got == h(".local") || got == h(".config") || got == home) {
+			t.Errorf("%s: %q must never be bound", tc.bin, got)
+		}
+	}
+}

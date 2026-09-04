@@ -37,10 +37,18 @@ func (jsPlugin) TestCmd() []string { return []string{"node", "--test"} }
 // handed to `node --check` as a literal (nonexistent) filename — see
 // lang.Plugin.CompileCheck's doc comment and python.go's pyCachePrefixEnv
 // comment for the identical class of bug this avoids.
+//
+// `node --check` is SYNTAX only, so a mutant calling an undefined function
+// at module scope, or importing a name that does not exist, read as KILLED
+// (every test importing the file fails) — breakage any suite catches, which
+// Go's and Python's gates mark INVALID instead. The load command imports the
+// file the way a test would, dynamically so CommonJS and ESM both resolve,
+// and is probed on compliant code first like every gate command.
 func (jsPlugin) CompileCheck(codePath, testPath string) [][]string {
 	cmds := [][]string{
 		{"node", "--check", codePath},
 		{"node", "--check", testPath},
+		{"node", "-e", "import(require('path').resolve(process.argv[1])).catch(e => { console.error(String(e && e.message || e)); process.exit(1) })", "--", codePath},
 	}
 	if undef := jsUndefCheck(codePath, testPath); undef != nil {
 		cmds = append(cmds, undef)
@@ -81,13 +89,26 @@ var jsLintConfigs = []string{
 //
 // Unlike Python's ruff, this cannot be run configuration-free, which is why
 // the two languages are gated differently.
+//
+// The lint config is looked for in the REPOSITORY — the directory the code
+// path is under, walking up — not in corral's own working directory, which
+// is where os.Stat(c) looked: any --repo-dir run from elsewhere silently
+// lost the gate.
 func jsUndefCheck(codePath, testPath string) []string {
 	var haveConfig bool
-	for _, c := range jsLintConfigs {
-		if _, err := os.Stat(c); err == nil {
-			haveConfig = true
+	dir := filepath.Dir(codePath)
+	for depth := 0; depth < 8 && !haveConfig; depth++ {
+		for _, c := range jsLintConfigs {
+			if _, err := os.Stat(filepath.Join(dir, c)); err == nil {
+				haveConfig = true
+				break
+			}
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
 			break
 		}
+		dir = parent
 	}
 	if !haveConfig {
 		return nil

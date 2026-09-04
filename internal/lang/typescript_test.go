@@ -28,8 +28,8 @@ func TestTypeScriptPlugin(t *testing.T) {
 	// repo the project's own config governs and any pre-existing error anywhere
 	// fails every authored test. See TestTSCompileCheckIsScopedNotProjectWide.
 	if got := p.CompileCheck("foo.ts", "foo.test.ts"); len(got) != 1 ||
-		!reflect.DeepEqual(got[0][:2], []string{"tsc", "--noEmit"}) ||
-		got[0][len(got[0])-2] != "foo.ts" || got[0][len(got[0])-1] != "foo.test.ts" {
+		!reflect.DeepEqual(got[0][:2], []string{"sh", "-c"}) ||
+		!strings.Contains(got[0][2], "tsc -p") || !strings.Contains(got[0][2], "$PWD/foo.ts") || !strings.Contains(got[0][2], "$PWD/foo.test.ts") {
 		t.Fatalf("CompileCheck = %v", got)
 	}
 	sc := p.Scaffold()
@@ -113,10 +113,14 @@ func TestTSCompileCheckIsScopedNotProjectWide(t *testing.T) {
 		t.Fatalf("expected a single command, got %v", cmds)
 	}
 	got := strings.Join(cmds[0], " ")
-	if strings.Contains(got, "-p") || strings.Contains(got, "tsconfig.json") {
-		t.Fatalf("compile check must not run project-wide: %q", got)
+	// A project file of OUR OWN in a temp dir (-p corral-tsc.json), never the
+	// repository's tsconfig.json: that is what keeps the check scoped on
+	// tsc 5 and alive at all on tsc 6 (TS5112 refuses files on the command
+	// line beside a tsconfig).
+	if strings.Contains(got, "tsconfig.json") || !strings.Contains(got, "corral-tsc.json") {
+		t.Fatalf("compile check must run against corral's own project file, never the repository's tsconfig: %q", got)
 	}
-	for _, want := range []string{"src/client/ApiError.ts", "src/client/__tests__/ApiError.test.ts", "--noEmit", "--strict"} {
+	for _, want := range []string{"src/client/ApiError.ts", "src/client/__tests__/ApiError.test.ts", `\"noEmit\":true`, `\"strict\":true`, "corral-env.d.ts"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("expected %q in the scoped check, got %q", want, got)
 		}
@@ -128,7 +132,7 @@ func TestTSCompileCheckIsScopedNotProjectWide(t *testing.T) {
 // error on a duplicate input rather than type-check it.
 func TestTSCompileCheckNoDuplicateWhenTestIsTheCode(t *testing.T) {
 	got := strings.Join(tsPlugin{}.CompileCheck("a.ts", "a.ts")[0], " ")
-	if strings.Count(got, "a.ts") != 1 {
+	if strings.Count(got, `"$PWD/a.ts"`) != 1 && strings.Count(got, `$PWD/a.ts`) != 1 {
 		t.Fatalf("the same path must be named once, got %q", got)
 	}
 }

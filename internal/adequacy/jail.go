@@ -288,6 +288,15 @@ func (j bwrapJail) runInJailCapturing(ctx context.Context, files map[string]stri
 		if tb.Host != "" && !seen[tb.Host] {
 			seen[tb.Host] = true
 			roBinds = append(roBinds, tb)
+			// pip --user's shim in ~/.local/bin imports from ~/.local/lib;
+			// the two are bound as a pair, never their parent.
+			if filepath.Base(tb.Host) == "bin" && filepath.Base(filepath.Dir(tb.Host)) == ".local" {
+				lib := filepath.Join(filepath.Dir(tb.Host), "lib")
+				if _, err := os.Stat(lib); err == nil && !seen[lib] {
+					seen[lib] = true
+					roBinds = append(roBinds, sandbox.Bind{Host: lib, Target: lib})
+				}
+			}
 		}
 	}
 	res, err := sandbox.RunGuarded(ctx, shellJoin(cmd), sandbox.Options{

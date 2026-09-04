@@ -31,8 +31,11 @@ func TestJavaScriptPlugin(t *testing.T) {
 	// --check` only checks one file per invocation, and a bare `&&` argv
 	// element only means anything to a shell — the workspace substrate execs
 	// argv directly with no shell to interpret it.
+	// …plus a LOAD gate as the third command (syntax alone let a mutant that
+	// fails at import read as killed).
 	cc := p.CompileCheck("foo.js", "foo.test.js")
-	if !reflect.DeepEqual(cc, [][]string{{"node", "--check", "foo.js"}, {"node", "--check", "foo.test.js"}}) {
+	if len(cc) < 3 || !reflect.DeepEqual(cc[:2], [][]string{{"node", "--check", "foo.js"}, {"node", "--check", "foo.test.js"}}) ||
+		cc[2][0] != "node" || !strings.Contains(strings.Join(cc[2], " "), "import(") || cc[2][len(cc[2])-1] != "foo.js" {
 		t.Fatalf("CompileCheck = %v", cc)
 	}
 	if len(p.Scaffold()) != 0 {

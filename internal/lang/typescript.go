@@ -4,6 +4,7 @@ package lang
 
 import (
 	"path/filepath"
+	"strings"
 )
 
 func init() { Register(tsPlugin{}) }
@@ -86,27 +87,41 @@ func (tsPlugin) TestCmd() []string {
 // audited package instead of ./... — a compile gate must answer "does THIS test
 // compile", never "is this entire repository clean".
 //
-// Naming files on the command line makes tsc ignore tsconfig's file selection,
-// so the compiler options it needs are passed explicitly and mirror the
-// scaffold's. Imports of the named files are still followed and checked, so a
-// test that genuinely fails to type-check is still caught.
+// It does NOT name files on the command line either — see the body for why
+// that broke the single-file scaffold on tsc 5 and every repo on tsc 6.
 func (tsPlugin) CompileCheck(codePath, testPath string) [][]string {
-	cmd := []string{
-		"tsc", "--noEmit",
-		"--skipLibCheck",
-		"--target", "es2022",
-		"--module", "nodenext",
-		"--moduleResolution", "nodenext",
-		"--strict",
-		"--allowImportingTsExtensions",
-	}
-	if codePath != "" {
-		cmd = append(cmd, codePath)
-	}
+	// A PROJECT FILE OF OUR OWN, written to a temp directory for the
+	// duration of the check — never files named on the command line, and
+	// never the project's tsconfig. Files on the command line made tsc
+	// ignore EVERY tsconfig, including the scaffold's, so the shim the
+	// scaffold ships (corral-env.d.ts, declaring node:test / node:assert)
+	// was never loaded: every compliant single-file workspace failed the
+	// gate with TS2307, the gate reported itself DISABLED, and a mutant
+	// returning 'yes' from a boolean function was scored KILLED instead of
+	// invalid. Under TypeScript 6 the same shape fails harder — TS5112
+	// "tsconfig.json is present but will not be loaded if files are
+	// specified" — in every repo that has a tsconfig, which is every repo.
+	//
+	// The temp project lists exactly the audited file, the test, and the
+	// shim when present, with the options the scaffold assumes, so the
+	// check stays scoped (imports are still followed) and the project's own
+	// tsconfig — with its file selection and its pre-existing errors — is
+	// never consulted. Written under $TMPDIR, so nothing lands in the tree
+	// the workspace runner restores; removed on every exit path.
+	files := []string{codePath}
 	if testPath != "" && testPath != codePath {
-		cmd = append(cmd, testPath)
+		files = append(files, testPath)
 	}
-	return [][]string{cmd}
+	var quoted []string
+	for _, f := range files {
+		quoted = append(quoted, `\"$PWD/`+f+`\"`)
+	}
+	script := `d=$(mktemp -d) || exit 2; ` +
+		`extra=""; if [ -f corral-env.d.ts ]; then extra=",\"$PWD/corral-env.d.ts\""; fi; ` +
+		`printf '%s' "{\"compilerOptions\":{\"noEmit\":true,\"skipLibCheck\":true,\"target\":\"es2022\",\"module\":\"nodenext\",\"moduleResolution\":\"nodenext\",\"strict\":true,\"allowImportingTsExtensions\":true},\"files\":[` +
+		strings.Join(quoted, ",") + `$extra]}" > "$d/corral-tsc.json"; ` +
+		`tsc -p "$d/corral-tsc.json"; rc=$?; rm -rf "$d"; exit $rc`
+	return [][]string{{"sh", "-c", script}}
 }
 
 // TestPaths mirrors jsPlugin.TestPaths with the `.ts` suffix — see there for

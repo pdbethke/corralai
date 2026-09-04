@@ -30,8 +30,8 @@ func TestPHPPlugin(t *testing.T) {
 	// name is commonly a symlink through /etc/alternatives, invisible from
 	// inside the sandbox even though it resolves fine on the host.
 	cc := p.CompileCheck("Invoice.php", "InvoiceTest.php")
-	if len(cc) != 2 {
-		t.Fatalf("CompileCheck = %v, want a 2-command sequence", cc)
+	if len(cc) != 3 {
+		t.Fatalf("CompileCheck = %v, want a 3-command sequence (two lints and a load)", cc)
 	}
 	wantInterp, interpErr := phpInterpreter(nil)
 	if interpErr != nil {
@@ -133,5 +133,28 @@ func TestPHPPreflight(t *testing.T) {
 	// report an error, not a silent pass.
 	if err := p.Preflight([]string{"totally-not-a-real-binary-xyz"}); err == nil {
 		t.Fatal("Preflight with an unresolvable test command binary must fail closed")
+	}
+}
+
+// TestPHPCoverageCmdDisablesTheProjectsOwnCoverage pins the sixth review's
+// M3: a phpunit.xml that requests its own coverage report makes
+// php-code-coverage's PCOV driver \pcov\clear() before every test, so
+// corral's shutdown snapshot held nothing — a header-only report and a
+// diagnosis blaming the suite. PHPUnit's own --no-coverage is appended when
+// the runner is phpunit; a composer script is left alone.
+func TestPHPCoverageCmdDisablesTheProjectsOwnCoverage(t *testing.T) {
+	cmd, ok := phpPlugin{}.CoverageCmd([]string{"vendor/bin/phpunit", "-c", "phpunit.xml"})
+	if !ok {
+		t.Fatal("no coverage command")
+	}
+	if !strings.Contains(cmd[2], "'phpunit.xml' '--no-coverage'") {
+		t.Errorf("phpunit run must carry --no-coverage: %s", cmd[2])
+	}
+	cmd, ok = phpPlugin{}.CoverageCmd([]string{"composer", "test"})
+	if !ok {
+		t.Fatal("no coverage command for composer")
+	}
+	if strings.Contains(cmd[2], "--no-coverage") {
+		t.Errorf("a composer script must not have phpunit flags appended: %s", cmd[2])
 	}
 }

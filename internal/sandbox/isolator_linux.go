@@ -125,6 +125,16 @@ func (bwrapIsolator) Wrap(command string, opts Options, env []string) ([]string,
 		// Read-only, and only the gem root: this grants no writable state and
 		// no credentials, exactly like the toolchain in /usr it sits beside.
 		"--ro-bind-try", "/var/lib/gems", "/var/lib/gems",
+		// Debian/Ubuntu configure PHP OUTSIDE /usr too: every extension is
+		// enabled by an ini under /etc/php/<ver>/cli/conf.d, and the `php`
+		// on PATH is a symlink through /etc/alternatives. With neither
+		// bound, php inside the jail loaded "(none)" — 20 built-in modules
+		// instead of 54, no dom/mbstring/tokenizer/xml/pcov — and PHPUnit
+		// refused to start on every run while the PHP pre-flight (which
+		// probes `php -v`, which needs no extension) said it could. Both
+		// are configuration, read-only, credential-free.
+		"--ro-bind-try", "/etc/php", "/etc/php",
+		"--ro-bind-try", "/etc/alternatives", "/etc/alternatives",
 		"--proc", "/proc",
 		"--dev", "/dev",
 		"--tmpfs", "/tmp",

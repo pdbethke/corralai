@@ -220,6 +220,16 @@ func renderTestWriterRepairing(rs RunSpec, sigs []repoindex.Signature, survivors
 		// the way ImportNote's doc warns about: the model obeys the stale half.
 		fileFact += fmt.Sprintf(" Reference or import the code under test by that exact path (%q) — not by its bare base name, and not by any other name. This overrides any same-directory example shown above.", rel)
 	}
+	if strings.EqualFold(filepath.Ext(rs.CodePath), ".php") {
+		// PHPUnit 10+ loads a test class by the FILE's name: a file
+		// tests/CalcTest.php must declare exactly `CalcTest`, and any
+		// other class name is "cannot be found", exit 1, before a single
+		// assertion runs. The natural name a model reaches for (CalcTest)
+		// collides with the developer's own suite, so the file's own stem
+		// is the only name that works.
+		stem := strings.TrimSuffix(filepath.Base(authored), filepath.Ext(authored))
+		fileFact += fmt.Sprintf(" PHPUnit loads the class named after the file, so your test class MUST be named exactly %q — no other name will be run.", stem)
+	}
 	named := fmt.Sprintf("%s Your test may share the package/namespace with the developer's OWN tests, so give your test function(s) and any helpers UNIQUE names — never redeclare an identifier the existing suite may already define.\n\n%s%s%s",
 		fileFact, harnessExemplar(rs), importNote, goal)
 	named += cleanFailureRepairBlock(prevTest, cleanFailure) + compileRepairBlock(prevTest, compileErr)

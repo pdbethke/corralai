@@ -27,7 +27,8 @@ func TestRubyPlugin(t *testing.T) {
 	// means anything to a shell — the workspace substrate execs argv directly
 	// with no shell to interpret it.
 	cc := p.CompileCheck("pricing.rb", "pricing_test.rb")
-	if !reflect.DeepEqual(cc, [][]string{{"ruby", "-c", "pricing.rb"}, {"ruby", "-c", "pricing_test.rb"}}) {
+	if len(cc) != 3 || !reflect.DeepEqual(cc[:2], [][]string{{"ruby", "-c", "pricing.rb"}, {"ruby", "-c", "pricing_test.rb"}}) ||
+		cc[2][0] != "ruby" || cc[2][len(cc[2])-1] != "pricing.rb" {
 		t.Fatalf("CompileCheck = %v", cc)
 	}
 	// TestCmd MUST invoke a shell EXPLICITLY. Smuggling the script into argv[0]

@@ -829,3 +829,44 @@ func TestSealNoValidityKeyIsNotStale(t *testing.T) {
 		t.Errorf("a row with no validity key was counted as live coverage:\n%s", got)
 	}
 }
+
+// `corral seal` MUST READ A WAREHOUSE AN OLDER CORRAL WROTE. It selected
+// columns that older schemas lack and failed with `Referenced column
+// "started_at" not found`; after a newer push the view was pinned to the old
+// columns and failed differently. There was no state of a pre-existing
+// warehouse the reader could read. It now migrates through its writable
+// handle (additively) and re-creates the view before reading.
+func TestSealReadsAWarehouseAnOlderCorralWrote(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "old.duckdb")
+	kill := 0.5
+	if _, err := auditpush.PushBundle(target, auditpush.Bundle{
+		Scan:  auditpush.ScanRow{Repo: "o/r", ScanID: 1, Commit: "c", StatementSHA256: "s"},
+		Files: []auditpush.Row{{Repo: "o/r", Commit: "c", ScanID: 1, Path: "a.go", Lang: "go", KillRate: &kill, StatementSHA256: "s"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("duckdb", target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, stmt := range []string{
+		"DROP VIEW corral_seal",
+		"ALTER TABLE corral_audits DROP COLUMN started_at",
+		"ALTER TABLE corral_scans DROP COLUMN started_at",
+		"CREATE VIEW corral_seal AS SELECT * EXCLUDE rn FROM (SELECT a.*, row_number() OVER (PARTITION BY repo, path ORDER BY ts DESC) AS rn FROM corral_audits a WHERE kill_rate IS NOT NULL) WHERE rn = 1",
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatalf("%s: %v", stmt, err)
+		}
+	}
+	db.Close()
+
+	var out, errOut bytes.Buffer
+	code := runSeal([]string{"--db", target}, openSealDB, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("corral seal exit %d on an older warehouse:\n%s%s", code, out.String(), errOut.String())
+	}
+	if !strings.Contains(out.String(), "a.go") {
+		t.Errorf("the older warehouse's row must be readable, got:\n%s", out.String())
+	}
+}

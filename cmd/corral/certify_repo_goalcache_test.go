@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/pdbethke/corralai/internal/advpool"
 	"github.com/pdbethke/corralai/internal/auditpush"
@@ -64,8 +65,8 @@ func TestNoGoalCacheFlagDerivesEveryTime(t *testing.T) {
 	callsFor := func(store reposcan.GoalCacheStore) int {
 		calls := 0
 		var errb bytes.Buffer
-		gs, _, code := resolveGoalSource(&errb, root, "", "test-model-x", false, 1,
-			func(string) (reposcan.Deriver, error) { return countingDeriver{calls: &calls}, nil },
+		gs, _, code := resolveGoalSource(&errb, root, "", "test-model-x", "", false, 1,
+			func(string, string) (reposcan.Deriver, error) { return countingDeriver{calls: &calls}, nil },
 			store, false, true)
 		if code != 0 {
 			t.Fatalf("resolveGoalSource: code=%d stderr=%s", code, errb.String())
@@ -98,8 +99,8 @@ func TestResolveGoalSourceGoalsFilePathNeverWiresTheCache(t *testing.T) {
 	mustWrite(t, goals, `{"a.go": "hand written"}`)
 	store := newGoalLedgerCache(filepath.Join(t.TempDir(), "scans.duckdb"))
 
-	gs, disclosure, code := resolveGoalSource(&bytes.Buffer{}, root, goals, "test-model-x", false, 1,
-		func(string) (reposcan.Deriver, error) {
+	gs, disclosure, code := resolveGoalSource(&bytes.Buffer{}, root, goals, "test-model-x", "", false, 1,
+		func(string, string) (reposcan.Deriver, error) {
 			t.Fatal("the --goals path must never construct a deriver")
 			return nil, nil
 		}, store, false, true)
@@ -261,8 +262,8 @@ func TestGoalCacheNoPutWithoutRecord(t *testing.T) {
 		calls := 0
 		var errb bytes.Buffer
 		store := newGoalLedgerCache(dsn)
-		gs, _, code := resolveGoalSource(&errb, root, "", "test-model-x", false, 1,
-			func(string) (reposcan.Deriver, error) { return countingDeriver{calls: &calls}, nil },
+		gs, _, code := resolveGoalSource(&errb, root, "", "test-model-x", "", false, 1,
+			func(string, string) (reposcan.Deriver, error) { return countingDeriver{calls: &calls}, nil },
 			store, false, recordEnabled)
 		if code != 0 {
 			t.Fatalf("resolveGoalSource: code=%d stderr=%s", code, errb.String())
@@ -297,8 +298,8 @@ func TestGoalCacheGetHitsWithoutRecord(t *testing.T) {
 	calls1 := 0
 	var errb1 bytes.Buffer
 	store1 := newGoalLedgerCache(dsn)
-	gs1, _, code := resolveGoalSource(&errb1, root, "", "test-model-x", false, 1,
-		func(string) (reposcan.Deriver, error) { return countingDeriver{calls: &calls1}, nil },
+	gs1, _, code := resolveGoalSource(&errb1, root, "", "test-model-x", "", false, 1,
+		func(string, string) (reposcan.Deriver, error) { return countingDeriver{calls: &calls1}, nil },
 		store1, false, true)
 	if code != 0 {
 		t.Fatalf("resolveGoalSource (scan 1): code=%d stderr=%s", code, errb1.String())
@@ -315,8 +316,8 @@ func TestGoalCacheGetHitsWithoutRecord(t *testing.T) {
 	calls2 := 0
 	var errb2 bytes.Buffer
 	store2 := newGoalLedgerCache(dsn)
-	gs2, _, code := resolveGoalSource(&errb2, root, "", "test-model-x", false, 1,
-		func(string) (reposcan.Deriver, error) { return countingDeriver{calls: &calls2}, nil },
+	gs2, _, code := resolveGoalSource(&errb2, root, "", "test-model-x", "", false, 1,
+		func(string, string) (reposcan.Deriver, error) { return countingDeriver{calls: &calls2}, nil },
 		store2, false, false)
 	if code != 0 {
 		t.Fatalf("resolveGoalSource (scan 2): code=%d stderr=%s", code, errb2.String())
@@ -326,5 +327,57 @@ func TestGoalCacheGetHitsWithoutRecord(t *testing.T) {
 	}
 	if calls2 != 0 {
 		t.Errorf("scan 2 (no --record): deriver called %d time(s), want 0 — scan 1's recorded row must still be served", calls2)
+	}
+}
+
+// TestAttestationDisclosesAReusedVerdict: a file whose WHOLE verdict was
+// served from the verdict cache used to be signed under this scan's
+// subject commit with no marker at all — only stdout and the ledger's
+// cache_hit column knew. The statement now carries verdictReused (and
+// when it was earned), and never a signed false for a verdict this run
+// earned.
+func TestAttestationDisclosesAReusedVerdict(t *testing.T) {
+	dir := t.TempDir()
+	out := filepath.Join(dir, "statement.json")
+	earned := time.Date(2026, 8, 30, 9, 0, 0, 0, time.UTC)
+	rep := reposcan.RepoReport{
+		Owner: "o", Repo: "r", Commit: "abc123", Audited: 2, Candidates: 2,
+		Weakest: []reposcan.WeakFile{
+			{Path: "reused.go", KillRate: 0.5, Survivors: 1, CacheHit: true, VerdictComputedAt: earned},
+			{Path: "fresh.go", KillRate: 0.5, Survivors: 1},
+		},
+	}
+	if _, err := writeAuditStatement(out, dir, rep, map[string]string{"test-writer": "w"}, nil, nil, true, 0, auditpush.Bundle{}); err != nil {
+		t.Fatalf("writeAuditStatement: %v", err)
+	}
+	b, err := os.ReadFile(out) // #nosec G304 -- test-local path
+	if err != nil {
+		t.Fatalf("read statement: %v", err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(b, &decoded); err != nil {
+		t.Fatalf("decode statement: %v", err)
+	}
+	files, _ := decoded["predicate"].(map[string]any)["files"].([]any)
+	var reused, fresh map[string]any
+	for _, raw := range files {
+		f := raw.(map[string]any)
+		switch f["path"] {
+		case "reused.go":
+			reused = f
+		case "fresh.go":
+			fresh = f
+		}
+	}
+	if v, ok := reused["verdictReused"]; !ok || v != true {
+		t.Errorf("reused.go missing verdictReused:true: %+v", reused)
+	}
+	if v, _ := reused["verdictComputedAt"].(string); v != "2026-08-30T09:00:00Z" {
+		t.Errorf("reused.go verdictComputedAt = %q, want the time the prior scan earned it", v)
+	}
+	for _, k := range []string{"verdictReused", "verdictComputedAt"} {
+		if _, ok := fresh[k]; ok {
+			t.Errorf("fresh.go must not sign %s at all: %+v", k, fresh)
+		}
 	}
 }

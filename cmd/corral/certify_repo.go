@@ -92,6 +92,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 
 	recordDSNFlag := fs.String("record-db", "", "path to the scan ledger (default: $CORRALAI_SCANS_DB, else ~/.claude/corralai_scans.duckdb)")
 	noGoalCacheFlag := fs.Bool("no-goal-cache", false, "skip the goal cache — every candidate is re-derived even when a PRIOR scan already derived a goal for the exact same bytes, model and prompt revision. Re-buys a model call per file that a content-addressed cache would otherwise have served for free; use this to isolate goal-derivation variance from a comparison, or on a scan whose operator does not want a goal receipt kept in the ledger at all. The cache lives in the same ledger --record-db names, independent of --record itself")
+	noVerdictCacheFlag := fs.Bool("no-verdict-cache", false, "skip the verdict cache — every candidate is re-audited even when a PRIOR scan already earned a verdict for the exact same bytes, tests, models, engine and substrate. Re-buys the whole audit (generation, grading, the writer) per file; use this to isolate model variance from a comparison, or to redo a measurement the cache would otherwise keep serving. The cache lives in the same ledger --record-db names and is consulted independent of --record itself")
 	noSelectionCacheFlag := fs.Bool("no-selection-cache", false, "skip the selection cache — the ONE instrumented coverage run always executes, even when a PRIOR scan already ran the identical instrumented command over a byte-identical tree. Re-buys a full suite run (the single most expensive measurement a scan makes outside model calls) that a content-addressed cache would otherwise have served for free; use this to isolate selection variance from a comparison, or when the operator does not trust the tree to be unchanged. The cache lives in the same ledger --record-db names, and (like the goal cache) is consulted independent of --record itself; only WRITING a fresh hit requires --record, since a scan_id has to exist to write one against")
 	timeoutFlag := fs.Duration("timeout", defaultRunTimeout, "per-file WALL-CLOCK budget, measured from that file's run start — not a no-progress timer. A file still making steady progress is stopped when it exceeds this and banks a needs-review TIMEOUT verdict, keeping its dev kill rate and survivors but losing the PROVING half. Same default and semantics as `certify --local`'s --timeout; raise it for a file with many survivors, which needs the most room and has the most to prove. PER FILE, so it multiplies: a scan of N files with W workers can spend up to (N/W) x this in the worst case, which is what --top and --swarm are for")
 	if err := fs.Parse(flagArgs); err != nil {
@@ -600,7 +601,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		goalStore = newGoalLedgerCache(goalCacheDSN)
 	}
 
-	gs, disclosure, code := resolveGoalSource(stderr, *repoDir, *goalsPath, *deriveModel, *dryRun, len(selected), certifyRepoDeriver, goalStore, *noGoalCacheFlag, *recordFlag)
+	gs, disclosure, code := resolveGoalSource(stderr, *repoDir, *goalsPath, *deriveModel, seatReg.deriveEndpoint(), *dryRun, len(selected), certifyRepoDeriver, goalStore, *noGoalCacheFlag, *recordFlag)
 	if code != 0 {
 		return code
 	}
@@ -1126,7 +1127,11 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	auditCtx, stopSignals := auditContext(stderr)
 	defer stopSignals()
 
-	results = reposcan.Scan(auditCtx, jobs, ex, newLedgerCache(ledgerDSN), workers)
+	verdictCacheDSN := ledgerDSN
+	if *noVerdictCacheFlag {
+		verdictCacheDSN = ""
+	}
+	results = reposcan.Scan(auditCtx, jobs, ex, newLedgerCache(verdictCacheDSN), workers)
 	rep := reposcan.Aggregate(*owner, cfg.Repo, *commit, totalFiles, len(cands), results, excl)
 
 	// The diff selected zero candidates: a docs-only (or no-paired-test-only)
@@ -1254,11 +1259,19 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		// answer from the tool whose central caveat is that audits are
 		// expensive.
 		InputTokens: inTokens, OutputTokens: outTokens, ModelCalls: modelCallCount,
-		// True only when source bytes ACTUALLY left the box: --push-source
-		// with no --push sends nothing, and a ledger row claiming otherwise
-		// would answer the custody question wrongly.
-		SourcePushed: *pushSourceFlag && strings.TrimSpace(*pushFlag) != "",
+		// True only when source bytes ACTUALLY left the box, which is not
+		// known yet: the push runs LAST, after this row is written, and can
+		// fail. Recorded false here and stamped true only after a
+		// successful push (stampSourcePushed, below), the same way the
+		// statement hash and the Rekor receipt are. It used to be written
+		// as "--push-source AND --push were given", so a run whose push
+		// failed — lock held, MotherDuck down, a bad DSN — left a ledger
+		// row swearing the source had left the box when nothing had.
+		SourcePushed: false,
 	}
+	// The custody switch the PUSH honours, distinct from the ledger's
+	// record of what happened: --push-source with no --push sends nothing.
+	pushSource := *pushSourceFlag && strings.TrimSpace(*pushFlag) != ""
 	files := buildScanFileRows(results, rep.Excluded, preflightResult, mutantsFromSHA, *repoDir, stderr)
 	mutants := buildScanMutantRows(0, results)
 	// modelCallRows was built above, before the scan row, so its totals could
@@ -1328,11 +1341,12 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	bundleRepo, bundleCommit, subjErr := auditSubject(*repoDir, rep)
 	rosterJSON, _ := json.Marshal(models())
 	bundle := buildBundle(scan, scanID, files, mutants, modelCallRows, eventRows,
-		auditpush.Link{}, scan.SourcePushed, bundleRepo, bundleCommit, githubRunURL(),
+		auditpush.Link{}, pushSource, bundleRepo, bundleCommit, githubRunURL(),
 		bundleMeta{
 			ModelsByRole: string(rosterJSON),
 			MinKillRate:  minKillRate, MaxProvenMissed: maxProvenMissed,
-			Passed: boolPtr(exitCode == 0),
+			Passed:   boolPtr(exitCode == 0),
+			PushedBy: auditpush.PushedByCertify,
 		})
 
 	// The audit statement, written after the exit code is known so `passed`
@@ -1419,9 +1433,25 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 			switch {
 			case perr != nil:
 				fmt.Fprintf(stderr, "corral certify --repo: pushing to %s: %v\n", *pushFlag, perr)
+				// The push is a side effect of the audit, not the audit;
+				// the exit code stays the verdict's. But on a runner a
+				// stderr line is scrolled past and the job is green, so
+				// the failure is ALSO raised as a workflow annotation —
+				// the operator asked for rows in a warehouse and got
+				// none, and should not learn that from a query.
+				if os.Getenv("GITHUB_ACTIONS") == "true" {
+					fmt.Fprintf(stderr, "::warning title=corral push failed::the audit ran, but pushing its rows to %s failed: %v\n", *pushFlag, perr)
+				}
 			case c.Total() > 0:
 				fmt.Fprintf(stdout, "  pushed %d scan, %d file(s), %d mutant(s), %d model-call row(s), %d event(s) to %s\n",
 					c.Scans, c.Files, c.Mutants, c.Calls, c.Events, *pushFlag)
+				// Now it is a fact. Same fail-open write as the statement
+				// hash above.
+				if pushSource && scanID != 0 && ledgerDSN != "" {
+					if uerr := stampSourcePushed(ledgerDSN, scanID); uerr != nil {
+						fmt.Fprintf(stderr, "corral certify --repo: scan %d recorded, but its source_pushed was NOT stamped: %v\n", scanID, uerr)
+					}
+				}
 			}
 		}
 	}
@@ -1967,10 +1997,12 @@ func changedFiles(root, baseRef string) ([]string, error) {
 	return changed, nil
 }
 
-// deriverFactory builds a Deriver for a model. Injected so the goal-source
-// wiring can be tested without a provider credential — and, more importantly,
-// without any possibility of a real model call from a unit test.
-type deriverFactory func(model string) (reposcan.Deriver, error)
+// deriverFactory builds a Deriver for a model, served at endpoint when the
+// registry placed the derive seat on a local daemon ("" otherwise). Injected
+// so the goal-source wiring can be tested without a provider credential —
+// and, more importantly, without any possibility of a real model call from
+// a unit test.
+type deriverFactory func(model, endpoint string) (reposcan.Deriver, error)
 
 // certifyRepoDeriver is the factory runCertifyRepo actually uses. A package
 // var rather than a direct call to newLLMDeriver so a test can prove a
@@ -2041,7 +2073,7 @@ func goalReceiptLine(dsn string, recordEnabled bool, fresh int) string {
 // cache already follows (see NewCachingGoalSource's doc).
 //
 // Returns the process exit code to use on failure; 0 means the source is good.
-func resolveGoalSource(stderr io.Writer, repoDir, goalsPath, deriveModel string, dryRun bool, nSelected int, newDeriver deriverFactory, store reposcan.GoalCacheStore, noGoalCache, recordEnabled bool) (reposcan.GoalSource, string, int) {
+func resolveGoalSource(stderr io.Writer, repoDir, goalsPath, deriveModel, deriveEndpoint string, dryRun bool, nSelected int, newDeriver deriverFactory, store reposcan.GoalCacheStore, noGoalCache, recordEnabled bool) (reposcan.GoalSource, string, int) {
 	// --goals takes precedence when given, so hand-written goals keep working
 	// and that path needs no provider credential at all.
 	if goalsPath != "" {
@@ -2073,7 +2105,7 @@ func resolveGoalSource(stderr io.Writer, repoDir, goalsPath, deriveModel string,
 		// closed on a missing credential, which is the right answer for a real
 		// scan — but demanding a provider key to report "0 candidates" would
 		// refuse a scan that was never going to call a model.
-		d, derr := newDeriver(deriveModel)
+		d, derr := newDeriver(deriveModel, deriveEndpoint)
 		if derr != nil {
 			fmt.Fprintf(stderr, "corral certify --repo: %v\n", derr)
 			return nil, "", 2
@@ -2568,10 +2600,12 @@ func (l *localExecutor) resolveSelectionPlugin(sources []string) (plug lang.Plug
 
 // selectionCacheKey computes the (tree_digest, cmd_digest) pair collectSelection
 // and selectionCachePeek both key the selection cache on for plug/testCmd,
-// through the SAME instrumentation Instrument would apply before the suite
-// actually ran — the instrumentation flags are part of what produced the
-// evidence, not the operator's bare testCmd (see reposcan.TreeDigest's own
-// doc on the universe half of this key). The substrate the scan is running
+// through the SAME instrumentation collectSelectionEvidence applies before
+// the suite actually runs — source roots included, since they are derived
+// from the scan's candidate set and change the command — because the
+// instrumentation flags are part of what produced the evidence, not the
+// operator's bare testCmd (see reposcan.TreeDigest's own doc on the
+// universe half of this key). The substrate the scan is running
 // on (l.substrate) is the CALLER'S half of the key — see
 // localExecutor.selectionCache's own doc — not computed here, because it is
 // already a field, not something this method has to derive.
@@ -2581,12 +2615,10 @@ func (l *localExecutor) resolveSelectionPlugin(sources []string) (plug lang.Plug
 // tree (outside a git work tree, or a git failure) — every one of those
 // means "this scan cannot be cache-keyed", never a value worth caching
 // against.
-func (l *localExecutor) selectionCacheKey(plug lang.Plugin, testCmd []string) (treeDigest, cmdDigest string, ok bool) {
-	sel, selOK := plug.(lang.TestSelector)
-	if !selOK {
-		return "", "", false
-	}
-	cmd, cmdOK := sel.Instrument(testCmd)
+func (l *localExecutor) selectionCacheKey(plug lang.Plugin, testCmd []string, sources []string) (treeDigest, cmdDigest string, ok bool) {
+	// THE command collectSelectionEvidence runs — source roots included —
+	// never a plainer relative of it. See reposcan.InstrumentedCommand.
+	cmd, cmdOK := reposcan.InstrumentedCommand(plug, testCmd, sources)
 	if !cmdOK {
 		return "", "", false
 	}
@@ -2637,7 +2669,7 @@ func (l *localExecutor) selectionCachePeek(sources []string) (scanID int64, ok b
 	if plug == nil {
 		return 0, false
 	}
-	treeDigest, cmdDigest, keyOK := l.selectionCacheKey(plug, testCmd)
+	treeDigest, cmdDigest, keyOK := l.selectionCacheKey(plug, testCmd, sources)
 	if !keyOK {
 		return 0, false
 	}
@@ -2666,7 +2698,7 @@ func (l *localExecutor) collectSelection(ctx context.Context, sources []string) 
 	var treeDigest, cmdDigest string
 	var keyOK bool
 	if l.selectionCache != nil {
-		treeDigest, cmdDigest, keyOK = l.selectionCacheKey(plug, testCmd)
+		treeDigest, cmdDigest, keyOK = l.selectionCacheKey(plug, testCmd, sources)
 		if keyOK {
 			if raw, scanID, hit, err := l.selectionCache.SelectionCacheGet(ctx, treeDigest, cmdDigest, langName, l.substrate); err == nil && hit {
 				id := scanID
@@ -4773,6 +4805,10 @@ func writeAuditStatement(path, repoDir string, r reposcan.RepoReport, models map
 			// Whether this file's goal was served from the goal cache — see
 			// certify.AuditedFile.GoalReused's doc.
 			GoalReused: f.GoalReused,
+			// And whether its whole VERDICT was — see
+			// certify.AuditedFile.VerdictReused's doc.
+			VerdictReused:     f.CacheHit,
+			VerdictComputedAt: reusedVerdictTime(f),
 		})
 	}
 	// Same resolution the warehouse push uses: a statement whose subject names
@@ -4902,6 +4938,14 @@ func warehouseRowsSHA256(b auditpush.Bundle) (string, error) {
 	// measurably flips this hash.
 	b.Scan.RekorLogIndex = nil
 	b.Scan.RekorUUID = ""
+	// Two more fields the PUSH stamps, not the run: scan_uid is minted
+	// inside PushBundle from the push's own timestamp, and pushed_by names
+	// the verb that wrote the row. Both are "" when this hash is computed
+	// and populated when a verifier reads the rows back, so leaving them
+	// live would fail every `corral verify --db` the moment the reader
+	// started returning them.
+	b.Scan.ScanUID = ""
+	b.Scan.PushedBy = ""
 	b.Files = append([]auditpush.Row(nil), b.Files...)
 	for i := range b.Files {
 		b.Files[i].StatementSHA256 = ""
@@ -4928,6 +4972,16 @@ func warehouseRowsSHA256(b auditpush.Bundle) (string, error) {
 	return hex.EncodeToString(sum[:]), nil
 }
 
+// reusedVerdictTime is when a REUSED verdict was earned, for the statement:
+// "" for a verdict this run earned (nothing to disclose) or one whose
+// origin time the cache did not carry.
+func reusedVerdictTime(f reposcan.WeakFile) string {
+	if !f.CacheHit || f.VerdictComputedAt.IsZero() {
+		return ""
+	}
+	return f.VerdictComputedAt.UTC().Format(time.RFC3339)
+}
+
 // stampStatementSHA256 opens the ledger, stamps one scan's statement hash,
 // and closes it again — one more operation-scoped handle, for the same
 // reason as every other one in this function: DuckDB is single-writer per
@@ -4939,6 +4993,21 @@ func stampStatementSHA256(dsn string, scanID int64, sha string) error {
 		return err
 	}
 	if uerr := st.SetStatementSHA256(context.Background(), scanID, sha); uerr != nil {
+		_ = st.Close()
+		return uerr
+	}
+	return st.Close()
+}
+
+// stampSourcePushed mirrors stampStatementSHA256: the push is the last
+// step, so "did source leave the box on this run" is only known after the
+// scan row exists.
+func stampSourcePushed(dsn string, scanID int64) error {
+	st, err := scanstore.Open(dsn)
+	if err != nil {
+		return err
+	}
+	if uerr := st.SetSourcePushed(context.Background(), scanID, true); uerr != nil {
 		_ = st.Close()
 		return uerr
 	}

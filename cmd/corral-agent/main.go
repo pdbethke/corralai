@@ -679,7 +679,7 @@ const (
 // role bounds a SEPARATE failure mode for the shadow (mutant-generator-shadow)
 // role specifically: that seat is measurement only and must NEVER gate the
 // verdict, so an unservable challenger model (e.g. an all-ollama fleet 404ing
-// on the default claude-haiku-4-5 challenger) must not be allowed to cycle
+// on a cloud-named challenger the operator configured) must not be allowed to cycle
 // claim→404→release→reclaim forever — every such cycle consumes a worker the
 // PRIMARY shards need to converge, and tickDevAdequacy blocks until every
 // primary shard is terminal while ClaimNextAs is plain FIFO with no role

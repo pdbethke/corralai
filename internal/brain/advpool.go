@@ -271,48 +271,6 @@ func advPoolBetter(a, b mission.ModelStats) bool {
 // model stands instead.
 func routableModel(m string) bool { return m != "" && m != unknownModel }
 
-// advPoolBestByRole picks the best-earned model per role from the
-// leaderboard's stats.
-func advPoolBestByRole(stats []mission.ModelStats) map[string]string {
-	best := map[string]mission.ModelStats{}
-	for _, c := range stats {
-		if !routableModel(c.Model) {
-			continue
-		}
-		cur, ok := best[c.Role]
-		if !ok || advPoolBetter(c, cur) {
-			best[c.Role] = c
-		}
-	}
-	out := make(map[string]string, len(best))
-	for role, c := range best {
-		out[role] = c.Model
-	}
-	return out
-}
-
-// advPoolBestExcluding picks the best-earned model for role that is NOT
-// exclude — the decorrelation-enforcing pick for test-critic (must not
-// share a model with test-writer). Returns "" when no eligible candidate
-// has any evidence for role.
-func advPoolBestExcluding(stats []mission.ModelStats, role, exclude string) string {
-	var best *mission.ModelStats
-	for i := range stats {
-		c := stats[i]
-		if c.Role != role || c.Model == exclude || !routableModel(c.Model) {
-			continue
-		}
-		if best == nil || advPoolBetter(c, *best) {
-			cc := c
-			best = &cc
-		}
-	}
-	if best == nil {
-		return ""
-	}
-	return best.Model
-}
-
 // advPoolNoDistinctCritic is what the cold-start decorrelation backstop returns
 // now that there is no static model to fall back to: nothing.
 //
@@ -356,9 +314,18 @@ func parseAdvPoolModels(s string) (advpool.RoleAssignment, error) {
 		if val == "" {
 			return nil, fmt.Errorf("advpool models: empty model for role %q", role)
 		}
+		if role == advpool.RoleTestCritic {
+			// The critic is ADVISORY and may be left unfilled — the docs
+			// say so, and the CLI's --critic-model honours off/none. This
+			// path used to take "off" as a model called "off": it passed
+			// decorrelation, was stamped on the critic task, sent to the
+			// provider by the worker, and recorded on the leaderboard as a
+			// model named off.
+			val = advpool.ResolveOptionalModel(val, "")
+		}
 		out[role] = val
 	}
-	for _, r := range []string{advpool.RoleMutantGenerator, advpool.RoleTestWriter, advpool.RoleTestCritic} {
+	for _, r := range []string{advpool.RoleMutantGenerator, advpool.RoleTestWriter} {
 		if out[r] == "" {
 			return nil, fmt.Errorf("advpool models: missing role %q", r)
 		}
@@ -369,67 +336,102 @@ func parseAdvPoolModels(s string) (advpool.RoleAssignment, error) {
 	return out, nil
 }
 
-// advPoolAssign builds a decorrelation-enforced role assignment, or returns nil
-// when it has not been told what to run.
+// advPoolEvidenceFloor is how many completed tasks a model needs in a role
+// before the leaderboard may prefer it there over the seat the operator
+// named. One certified run used to be enough — a rookie at 1/1 (100%)
+// outranked a veteran at 99/100 in every seat, forever.
+const advPoolEvidenceFloor = 5
+
+// advPoolAssign builds a decorrelation-enforced role assignment from the
+// operator's herd (CORRALAI_ADVPOOL_MODELS), or returns nil when there is no
+// herd. There is no hardcoded fallback and — since the 2026-09 router review
+// — no leaderboard-supplied one either: corral has no default models, and a
+// leaderboard fed from workers' own report_host/report_execution calls (which
+// need no admin gate) must never be what decides which models audit code.
 //
-// The base mutant-generator/test-writer models come from `defaults` (the
-// operator's CORRALAI_ADVPOOL_MODELS); the leaderboard's best-earned model per
-// role overrides when it has evidence. There is no hardcoded fallback: a nil
-// return means "no herd was configured and none was earned", and the caller
-// leaves the pool off rather than running an assignment nobody chose.
+// THE HERD IS THE ALLOWLIST. The leaderboard may re-seat a role only to a
+// model the operator named SOMEWHERE in the herd, only when that model has
+// at least advPoolEvidenceFloor completed tasks in that role, and only when
+// it outranks the operator's own pick for the seat on the same evidence
+// (a pick with no evidence at all keeps its seat: unmeasured is not worse).
+// A model the operator never named cannot be routed to, whatever the
+// leaderboard says about it — which is also what keeps a retired model out:
+// it can only return if the operator types it again.
 //
-// test-critic is still forced to a model that is NOT the test-writer's, so the
+// test-critic is forced to a model that is NOT the test-writer's, so the
 // result can never fail CheckDecorrelation — but when no distinct model is
 // available it is left EMPTY (disabled) instead of reaching for a constant.
-func advPoolAssign(staffing *mission.StaffingManager, defaults advpool.RoleAssignment) advpool.RoleAssignment {
-	var mg, tw, tc string
-	if defaults != nil {
-		if m := defaults[advpool.RoleMutantGenerator]; m != "" {
-			mg = m
-		}
-		if m := defaults[advpool.RoleTestWriter]; m != "" {
-			tw = m
-		}
-		if m := defaults[advpool.RoleTestCritic]; m != "" {
-			tc = m
-		}
+func advPoolAssign(staffing *mission.StaffingManager, herd advpool.RoleAssignment) advpool.RoleAssignment {
+	if herd == nil || herd[advpool.RoleMutantGenerator] == "" || herd[advpool.RoleTestWriter] == "" {
+		return nil
 	}
-	assign := advpool.RoleAssignment{
-		advpool.RoleMutantGenerator: mg,
-		advpool.RoleTestWriter:      tw,
+	allowed := map[string]bool{}
+	for _, m := range herd {
+		if routableModel(m) {
+			allowed[m] = true
+		}
 	}
 
 	var stats []mission.ModelStats
 	if staffing != nil && staffing.Perf != nil {
-		stats = staffing.Perf.GetRoleModelStats()
+		for _, c := range staffing.Perf.GetRoleModelStats() {
+			if allowed[c.Model] && c.TasksCompleted >= advPoolEvidenceFloor {
+				stats = append(stats, c)
+			}
+		}
 	}
-	if len(stats) > 0 {
-		best := advPoolBestByRole(stats)
-		if m, ok := best[advpool.RoleMutantGenerator]; ok {
-			assign[advpool.RoleMutantGenerator] = m
+	statFor := func(role, model string) (mission.ModelStats, bool) {
+		for _, c := range stats {
+			if c.Role == role && c.Model == model {
+				return c, true
+			}
 		}
-		if m, ok := best[advpool.RoleTestWriter]; ok {
-			assign[advpool.RoleTestWriter] = m
+		return mission.ModelStats{}, false
+	}
+	// seat keeps the operator's pick unless an allowed, evidenced candidate
+	// outranks it ON EVIDENCE — a candidate is never preferred over a pick
+	// that has none.
+	seat := func(role, pick, exclude string) string {
+		cur, curOK := statFor(role, pick)
+		if !curOK {
+			return pick
 		}
+		best := cur
+		for _, c := range stats {
+			if c.Role != role || c.Model == exclude || !advPoolBetter(c, best) {
+				continue
+			}
+			best = c
+		}
+		return best.Model
 	}
 
-	critic := tc
+	assign := advpool.RoleAssignment{
+		advpool.RoleMutantGenerator: seat(advpool.RoleMutantGenerator, herd[advpool.RoleMutantGenerator], ""),
+		advpool.RoleTestWriter:      seat(advpool.RoleTestWriter, herd[advpool.RoleTestWriter], ""),
+	}
+	critic := herd[advpool.RoleTestCritic]
+	if critic != "" {
+		critic = seat(advpool.RoleTestCritic, critic, assign[advpool.RoleTestWriter])
+	}
 	if critic == assign[advpool.RoleTestWriter] {
 		critic = advPoolNoDistinctCritic
 	}
-	if m := advPoolBestExcluding(stats, advpool.RoleTestCritic, assign[advpool.RoleTestWriter]); m != "" {
-		critic = m
-	}
 	assign[advpool.RoleTestCritic] = critic
-
-	// The two GRADING seats are what a run cannot proceed without. Neither
-	// configured nor earned means nobody has said what this brain should run,
-	// and there is no constant left to reach for — so say so instead of
-	// inventing one. (The critic may legitimately be empty: it is advisory.)
-	if assign[advpool.RoleMutantGenerator] == "" || assign[advpool.RoleTestWriter] == "" {
-		return nil
-	}
 	return assign
+}
+
+// advPoolRosterString renders an assignment in a stable role order for logs.
+func advPoolRosterString(a advpool.RoleAssignment) string {
+	parts := make([]string, 0, 3)
+	for _, r := range []string{advpool.RoleMutantGenerator, advpool.RoleTestWriter, advpool.RoleTestCritic} {
+		m := a[r]
+		if m == "" {
+			m = "(off)"
+		}
+		parts = append(parts, r+"="+m)
+	}
+	return strings.Join(parts, ",")
 }
 
 // advPoolTickMaxErrors bounds how many consecutive Tick errors on the SAME
@@ -777,6 +779,11 @@ func (rt *AdvPoolRuntime) StartRun(in AdvPoolRunSpec) (int64, error) {
 		// than silently starting a run under a decorrelation bug.
 		return 0, fmt.Errorf("advpool: internal assignment failed decorrelation (bug): %w", err)
 	}
+	// Said per RUN, not once at daemon start: the leaderboard can re-seat
+	// within the herd between runs, and the only roster line used to be the
+	// one printed at startup — stale for every run after the first.
+	log.Printf("advpool: run for %s: role models %s (herd %s; re-seated within the herd where the leaderboard has >= %d completed tasks)",
+		rs.CodePath, advPoolRosterString(assign), advPoolRosterString(rt.defaults), advPoolEvidenceFloor)
 
 	mid, err := mission.CreateMission(rt.missions, nil,
 		poolDirective(rs),
@@ -932,7 +939,7 @@ func StartAdversarialPool(ctx context.Context, opts Options) (*AdvPoolRuntime, e
 		// Refuse rather than fall back. There is nothing to fall back TO, and
 		// a malformed herd is an operator mistake worth surfacing — running
 		// some other assignment would hide it behind results.
-		log.Printf("advpool: DISABLED — CORRALAI_ADVPOOL_MODELS is invalid (%v). Fix it, or unset it and let the leaderboard supply the herd", derr)
+		log.Printf("advpool: DISABLED — CORRALAI_ADVPOOL_MODELS is invalid (%v). Fix it; corral has no default models and the leaderboard cannot supply a herd", derr)
 		return nil, nil
 	}
 
@@ -943,7 +950,7 @@ func StartAdversarialPool(ctx context.Context, opts Options) (*AdvPoolRuntime, e
 		// there is nothing to start — and starting SOMETHING would be the
 		// behavior this removes. Same shape as the disabled branch above: the
 		// tool is simply never registered.
-		log.Printf("advpool: DISABLED — no models assigned. Set CORRALAI_ADVPOOL_MODELS=\"mutant-generator=<m>,test-writer=<m>,test-critic=<m>\", or let the leaderboard earn an assignment first")
+		log.Printf("advpool: DISABLED — no models assigned. Set CORRALAI_ADVPOOL_MODELS=\"mutant-generator=<m>,test-writer=<m>,test-critic=<m>\" (test-critic may be off); corral has no default models and the leaderboard cannot supply a herd")
 		return nil, nil
 	}
 	driver, err := advpool.NewDriver(opts.Queue, advpool.JailScorer{Jail: jail}, advpool.JailValidator{Jail: jail}, assign, 0.8)

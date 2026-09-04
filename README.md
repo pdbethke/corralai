@@ -336,7 +336,13 @@ first-class, so the generator can run on your own hardware while a hosted
 model writes. `CORRALAI_MODELS_FILE` points at a file elsewhere;
 `CORRALAI_MODELS` takes the JSON inline. The verdict records the concrete
 model each seat resolved to, never the alias — an alias rename cannot move a
-cache key or blur a record. The reasoning, and what comes next, is in
+cache key or blur a record. Two rules keep the registry the *operator's*:
+an alias may not be spelled like a concrete model (`"claude-sonnet-5": {…}`
+is refused — an operator who types that model gets that model), and on a CI
+runner the checkout's own `.corral/models.json` is ignored, because there the
+checkout is the change under audit and may not choose its own auditors; a
+workflow declares the registry through `CORRALAI_MODELS_FILE` or
+`CORRALAI_MODELS`. The reasoning, and what comes next, is in
 [docs/design/model-registry.md](docs/design/model-registry.md).
 
 **Which model should staff which seat?** `corral models rank` answers it from

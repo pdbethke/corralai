@@ -1916,6 +1916,16 @@ func (s *Store) SetStatementSHA256(ctx context.Context, id int64, sha string) er
 	return nil
 }
 
+// SetSourcePushed stamps whether source bytes left the box on one scan,
+// mirroring SetStatementSHA256: the push runs after the scan row exists and
+// can fail, so Record writes false and the caller stamps true on success.
+func (s *Store) SetSourcePushed(ctx context.Context, id int64, pushed bool) error {
+	if _, err := s.db.ExecContext(ctx, `UPDATE scans SET source_pushed = ? WHERE id = ?`, pushed, id); err != nil {
+		return fmt.Errorf("scanstore: SetSourcePushed for scan %d: %w", id, err)
+	}
+	return nil
+}
+
 // SetRekorReceipt stamps the Rekor upload receipt onto one scan header,
 // mirroring SetStatementSHA256: --transparency's upload happens after the
 // scan row already exists (it needs the --attest statement, which needs the

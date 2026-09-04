@@ -156,3 +156,39 @@ func TestLedgerCacheHoldsNoLockBetweenLookups(t *testing.T) {
 		t.Error("the cache is holding an open store between lookups — that IS the lock")
 	}
 }
+
+// TestLedgerCacheDoesNotServeAVerdictWhoseWriterHalfNeverGraded: only
+// TimedOut used to be refused. A writer-failed, unsound, or all-seats-
+// ungraded verdict is an artifact of its run (a 429, a model that produced
+// nothing compiling), and serving it pinned "proven_missed=0 [WRITER
+// FAILED]" — and a --max-proven-missed failure — on the file for every
+// later scan of the same content.
+func TestLedgerCacheDoesNotServeAVerdictWhoseWriterHalfNeverGraded(t *testing.T) {
+	for name, v := range map[string]advpool.Verdict{
+		"writer failed":        {TestWriterFailed: true, Survivors: 9},
+		"pool test unsound":    {PoolTestUnsound: true, Survivors: 9},
+		"every seat ungraded":  {WriterMode: advpool.WriterModePerSurvivor, Survivors: 9, WriterSeatsUngraded: 9},
+		"provider never spoke": {TestWriterFailed: true, WriterProviderFailed: true, Survivors: 2},
+	} {
+		js, err := marshalVerdict(v)
+		if err != nil {
+			t.Fatalf("marshalVerdict: %v", err)
+		}
+		path := closedCacheTestStore(t, []scanstore.File{{
+			Path: "a.go", Disposition: "audited", Gradable: true,
+			CacheKey: "K", VerdictJSON: js, ComputedAt: time.Now().UTC(),
+		}})
+		if _, ok := newLedgerCache(path).Get("acme", "K"); ok {
+			t.Errorf("%s: served from cache", name)
+		}
+	}
+	// A verdict that graded — even one that proved nothing — is served.
+	js, _ := marshalVerdict(advpool.Verdict{WriterMode: advpool.WriterModePerSurvivor, Survivors: 9, WriterSeatsUngraded: 3, ProvenMissed: 0})
+	path := closedCacheTestStore(t, []scanstore.File{{
+		Path: "a.go", Disposition: "audited", Gradable: true,
+		CacheKey: "K", VerdictJSON: js, ComputedAt: time.Now().UTC(),
+	}})
+	if _, ok := newLedgerCache(path).Get("acme", "K"); !ok {
+		t.Error("a verdict with six of nine seats graded was refused — that is a measurement")
+	}
+}

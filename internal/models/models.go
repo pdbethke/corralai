@@ -205,6 +205,9 @@ func Load(repoRoot string) (*Registry, error) {
 	if repoRoot == "" {
 		return nil, nil
 	}
+	if RepoLocalIgnored() {
+		return nil, nil
+	}
 	path := filepath.Join(repoRoot, RepoRelPath)
 	b, err := os.ReadFile(path) // #nosec G304,G703 -- a fixed relative name (.corral/models.json) under the repo root corral was already told to scan
 	if errors.Is(err, os.ErrNotExist) {
@@ -214,6 +217,51 @@ func Load(repoRoot string) (*Registry, error) {
 		return nil, fmt.Errorf("%s: cannot read the model registry: %v", path, err)
 	}
 	return Parse(b, path)
+}
+
+// RepoLocalIgnored reports whether the repo-local registry (RepoRelPath
+// under the audited root) is being IGNORED because the run is on a CI
+// runner: there, the checkout is the change under audit — a pull request's
+// head — and a file in it must not be able to say which models audit it,
+// where the source is sent, or (via "strict": true) that the run may not
+// happen at all. On a runner the registry comes from the operator's side
+// only: CORRALAI_MODELS (inline) or CORRALAI_MODELS_FILE (a path the
+// workflow, not the checkout, controls).
+//
+// Detected by GITHUB_ACTIONS=true, the same signal the Action's own steps
+// use. A developer's own shell is not a runner, and there the repo-local
+// file is theirs.
+func RepoLocalIgnored() bool {
+	return os.Getenv("GITHUB_ACTIONS") == "true"
+}
+
+// RepoLocalExists reports whether a repo-local registry is present under
+// repoRoot — so a caller that ignored it (RepoLocalIgnored) can say so
+// instead of silently running without it.
+func RepoLocalExists(repoRoot string) bool {
+	if repoRoot == "" {
+		return false
+	}
+	_, err := os.Stat(filepath.Join(repoRoot, RepoRelPath))
+	return err == nil
+}
+
+// looksLikeConcreteModel is the spelling test behind Parse's alias rule: a
+// vendor-prefixed name ("google/…", "anthropic/…") or one of the model
+// families the seat flags accept as concrete names. The prefixes mirror
+// agentbackend.VendorOf, restated here rather than imported so that this
+// package keeps its no-network, no-provider dependency shape.
+func looksLikeConcreteModel(alias string) bool {
+	a := strings.ToLower(alias)
+	if strings.Contains(a, "/") {
+		return true
+	}
+	for _, p := range []string{"claude-", "opus-", "sonnet-", "haiku-", "fable-", "gemini-", "gpt-", "o1-", "o3-"} {
+		if strings.HasPrefix(a, p) {
+			return true
+		}
+	}
+	return false
 }
 
 // Parse validates a registry document. Every fault is REFUSED, never repaired:
@@ -245,6 +293,17 @@ func Parse(data []byte, source string) (*Registry, error) {
 		// exactly the rule this project removed on purpose.
 		if strings.EqualFold(name, "default") {
 			return nil, fmt.Errorf("%s: alias %q is refused: corral has no default models, and an alias by that name invites a seat to be filled by convention rather than named — rename it to what the model IS (e.g. \"fast\", \"strong\")", source, alias)
+		}
+		// An alias may not LOOK like a concrete model name. The registry
+		// rewrites a seat's value in place, and the seat flags accept
+		// concrete names too — so an alias spelled "claude-sonnet-5" or
+		// "google/gemini-3.6-flash" would silently redirect the operator who
+		// typed exactly that model to whatever the registry says, which,
+		// when the registry lives in the repository under audit, is
+		// whoever authored the change under audit. The operator who types
+		// a model gets that model.
+		if looksLikeConcreteModel(name) {
+			return nil, fmt.Errorf("%s: alias %q is refused: it is spelled like a concrete model name, and an alias by that name would redirect an operator who typed that exact model — name the alias for what the model is FOR (e.g. \"fast\", \"strong\", \"critic\")", source, alias)
 		}
 		var e Entry
 		if err := json.Unmarshal(rm, &e); err != nil {

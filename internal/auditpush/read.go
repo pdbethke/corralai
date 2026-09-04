@@ -34,29 +34,117 @@ import (
 // returning an untouched, append-only table's rows in insertion order —
 // true for a warehouse nothing has compacted or rewritten since the push,
 // which is exactly the case `corral verify` exists to check (has THIS push
-// been altered). A warehouse an operator has VACUUMed, or that received a
-// SECOND push for the same (repo, scan_id) — the tables are append-only, so
-// a repeated push does not overwrite, it duplicates — could show a hash
+// been altered). A warehouse an operator has VACUUMed could show a hash
 // mismatch that is not evidence of tampering; see cmd/corral/verify.go's
 // print line, which says so rather than calling every mismatch forgery.
+//
+// WHICH PUSH. The tables are append-only, so a scan pushed twice — the run
+// itself and a later `corral scans push`, or two attempts of one workflow —
+// is two sets of rows, and a run with no --record pushes them all under
+// scan_id 0, where every such run of a repo shares one key. Keying a read
+// on (repo, scan_id) therefore unioned every Action push of a repo into one
+// "bundle" that no statement ever hashed. Each push stamps its OWN scan_uid
+// on every row it writes (see scanUID), so a read keyed on the uid returns
+// exactly one push. Callers locate the push they mean with LocateScans and
+// read it with ReadBundleForScan; ReadBundle (repo, scan_id) remains for
+// rows an older corral wrote with no scan_uid at all.
 func ReadBundle(db *sql.DB, repo string, scanID int64) (Bundle, error) {
-	scan, ok, err := readScanRow(db, repo, scanID)
+	scan, ok, err := readScanRow(db, "repo = ? AND scan_id = ?", repo, scanID)
 	if err != nil {
 		return Bundle{}, fmt.Errorf("auditpush: reading corral_scans: %w", err)
 	}
-	files, err := readFileRows(db, repo, scanID)
+	return readGrains(db, scan, ok, "repo = ? AND scan_id = ?", repo, scanID)
+}
+
+// ReadBundleForScan reads back the ONE push scan names — by its scan_uid,
+// or, for a row written before scan_uid existed, by (repo, scan_id) as
+// ReadBundle does.
+func ReadBundleForScan(db *sql.DB, scan ScanRow) (Bundle, error) {
+	if scan.ScanUID == "" {
+		return ReadBundle(db, scan.Repo, scan.ScanID)
+	}
+	return readGrains(db, scan, true, "scan_uid = ?", scan.ScanUID)
+}
+
+// LocateScans lists every push in the warehouse that could be the one a
+// statement describes: rows stamped with statementSHA256 (the exact key —
+// PushBundle writes the statement's own hash onto every row of a push made
+// with --attest), or, when the caller has no statement bytes to hash, rows
+// for (repo, scanID). scanID 0 is not an id (it is every run pushed without
+// --record) and is never used as a key on its own.
+//
+// Newest first, so a caller that must pick one has the latest push at the
+// head; the PushedBy field says whether each is the run's own push or a
+// later backfill.
+func LocateScans(db *sql.DB, repo string, scanID int64, statementSHA256 string) ([]ScanRow, error) {
+	if statementSHA256 != "" {
+		out, err := locateScansWhere(db, "statement_sha256 = ?", statementSHA256)
+		if err != nil || len(out) > 0 {
+			return out, err
+		}
+		// Nothing stamped with this statement: the rows may predate the
+		// stamp, or the push may have been made without --attest and the
+		// statement written afterwards. (repo, scan_id) is the next key.
+	}
+	if repo != "" && scanID != 0 {
+		return locateScansWhere(db, "repo = ? AND scan_id = ?", repo, scanID)
+	}
+	return nil, nil
+}
+
+func locateScansWhere(db *sql.DB, where string, args ...any) ([]ScanRow, error) {
+	rows, err := db.Query("SELECT scan_uid FROM corral_scans WHERE "+where+" ORDER BY ts DESC", args...) // #nosec G202 -- where is one of two constant clauses in LocateScans; every value is a bound parameter
+	if err != nil {
+		return nil, fmt.Errorf("auditpush: locating scans: %w", err)
+	}
+	var uids []sql.NullString
+	for rows.Next() {
+		var uid sql.NullString
+		if err := rows.Scan(&uid); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("auditpush: locating scans: %w", err)
+		}
+		uids = append(uids, uid)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("auditpush: locating scans: %w", err)
+	}
+	var out []ScanRow
+	for _, uid := range uids {
+		var scan ScanRow
+		var ok bool
+		var err error
+		if uid.Valid && uid.String != "" {
+			scan, ok, err = readScanRow(db, "scan_uid = ?", uid.String)
+		} else {
+			// A pre-scan_uid row: (repo, scan_id) is the only key it has.
+			scan, ok, err = readScanRow(db, where, args...)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("auditpush: reading corral_scans: %w", err)
+		}
+		if ok {
+			out = append(out, scan)
+		}
+	}
+	return out, nil
+}
+
+func readGrains(db *sql.DB, scan ScanRow, ok bool, where string, args ...any) (Bundle, error) {
+	files, err := readFileRows(db, where, args...)
 	if err != nil {
 		return Bundle{}, fmt.Errorf("auditpush: reading corral_audits: %w", err)
 	}
-	mutants, err := readMutantRows(db, repo, scanID)
+	mutants, err := readMutantRows(db, where, args...)
 	if err != nil {
 		return Bundle{}, fmt.Errorf("auditpush: reading corral_mutants: %w", err)
 	}
-	calls, err := readModelCallRows(db, repo, scanID)
+	calls, err := readModelCallRows(db, where, args...)
 	if err != nil {
 		return Bundle{}, fmt.Errorf("auditpush: reading corral_model_calls: %w", err)
 	}
-	events, err := readEventRows(db, repo, scanID)
+	events, err := readEventRows(db, where, args...)
 	if err != nil {
 		return Bundle{}, fmt.Errorf("auditpush: reading corral_events: %w", err)
 	}
@@ -106,19 +194,19 @@ func nullBoolPtr(v sql.NullBool) *bool {
 	return &b
 }
 
-func readScanRow(db *sql.DB, repo string, scanID int64) (ScanRow, bool, error) {
+func readScanRow(db *sql.DB, where string, args ...any) (ScanRow, bool, error) {
 	row := db.QueryRow(`SELECT
 		repo, run_url, scan_id, commit_sha, corral_version, substrate,
 		host, cores, trees_requested, diff_base, candidates, audited, passed,
 		total_ms, input_tokens, output_tokens, model_calls,
 		source_pushed, statement_sha256, selection_ms, selection_reused_from,
-		rekor_log_index, rekor_uuid, started_at
-	   FROM corral_scans WHERE repo = ? AND scan_id = ?`, repo, scanID)
+		rekor_log_index, rekor_uuid, started_at, pushed_by, scan_uid
+	   FROM corral_scans WHERE `+where, args...) // #nosec G202 -- where is a constant clause chosen by this package's own callers; every value is a bound parameter
 
 	var s ScanRow
 	var cores, treesRequested sql.NullInt64
 	var totalMS, selectionMS, selectionReusedFrom, rekorLogIndex sql.NullInt64
-	var rekorUUID sql.NullString
+	var rekorUUID, pushedBy, scanUID sql.NullString
 	var scanPassed sql.NullBool
 	var scanStarted sql.NullTime
 	if err := row.Scan(
@@ -126,7 +214,7 @@ func readScanRow(db *sql.DB, repo string, scanID int64) (ScanRow, bool, error) {
 		&s.Host, &cores, &treesRequested, &s.DiffBase, &s.Candidates, &s.Audited, &scanPassed,
 		&totalMS, &s.InputTokens, &s.OutputTokens, &s.ModelCalls,
 		&s.SourcePushed, &s.StatementSHA256, &selectionMS, &selectionReusedFrom,
-		&rekorLogIndex, &rekorUUID, &scanStarted,
+		&rekorLogIndex, &rekorUUID, &scanStarted, &pushedBy, &scanUID,
 	); err != nil {
 		if err == sql.ErrNoRows {
 			return ScanRow{}, false, nil
@@ -148,10 +236,12 @@ func readScanRow(db *sql.DB, repo string, scanID int64) (ScanRow, bool, error) {
 	s.SelectionReusedFrom = nullInt64(selectionReusedFrom)
 	s.RekorLogIndex = nullInt64(rekorLogIndex)
 	s.RekorUUID = rekorUUID.String
+	s.PushedBy = pushedBy.String
+	s.ScanUID = scanUID.String
 	return s, true, nil
 }
 
-func readFileRows(db *sql.DB, repo string, scanID int64) ([]Row, error) {
+func readFileRows(db *sql.DB, where string, args ...any) ([]Row, error) {
 	rows, err := db.Query(`SELECT
 		repo, commit_sha, path, lang,
 		kill_rate, survivors, proven_missed,
@@ -172,7 +262,7 @@ func readFileRows(db *sql.DB, repo string, scanID int64) ([]Row, error) {
 		selection_ms, generation_ms, pool_ms, dev_pass_ms, authored_pass_ms,
 		critic_ms, total_ms, mutant_ms_median, mutant_ms_max,
 		authored_test, verdict_json, prompt_shape, covering_tests, import_only, started_at
-	   FROM corral_audits WHERE repo = ? AND scan_id = ?`, repo, scanID)
+	   FROM corral_audits WHERE `+where, args...) // #nosec G202 -- where is a constant clause from readGrains; every value is a bound parameter
 	if err != nil {
 		return nil, err
 	}
@@ -278,13 +368,13 @@ func readFileRows(db *sql.DB, repo string, scanID int64) ([]Row, error) {
 	return out, rows.Err()
 }
 
-func readMutantRows(db *sql.DB, repo string, scanID int64) ([]MutantRow, error) {
+func readMutantRows(db *sql.DB, where string, args ...any) ([]MutantRow, error) {
 	rows, err := db.Query(`SELECT
 		repo, run_url, scan_id, path, mutant_id, parent_sha256, outcome,
 		invalid_reason, proven, proven_by_authored_alone, tests_run,
 		selection_rule, duration_ms, killed_by, span_start, span_end, code,
 		statement_sha256
-	   FROM corral_mutants WHERE repo = ? AND scan_id = ?`, repo, scanID)
+	   FROM corral_mutants WHERE `+where, args...) // #nosec G202 -- where is a constant clause from readGrains; every value is a bound parameter
 	if err != nil {
 		return nil, err
 	}
@@ -317,13 +407,13 @@ func readMutantRows(db *sql.DB, repo string, scanID int64) ([]MutantRow, error) 
 	return out, rows.Err()
 }
 
-func readModelCallRows(db *sql.DB, repo string, scanID int64) ([]ModelCallRow, error) {
+func readModelCallRows(db *sql.DB, where string, args ...any) ([]ModelCallRow, error) {
 	rows, err := db.Query(`SELECT
 		repo, run_url, scan_id, path, role, model, calls, retries,
 		input_tokens, output_tokens, cached_input_tokens,
 		cache_write_input_tokens, wall_ms,
 		statement_sha256
-	   FROM corral_model_calls WHERE repo = ? AND scan_id = ?`, repo, scanID)
+	   FROM corral_model_calls WHERE `+where, args...) // #nosec G202 -- where is a constant clause from readGrains; every value is a bound parameter
 	if err != nil {
 		return nil, err
 	}
@@ -348,11 +438,11 @@ func readModelCallRows(db *sql.DB, repo string, scanID int64) ([]ModelCallRow, e
 	return out, rows.Err()
 }
 
-func readEventRows(db *sql.DB, repo string, scanID int64) ([]EventRow, error) {
+func readEventRows(db *sql.DB, where string, args ...any) ([]EventRow, error) {
 	rows, err := db.Query(`SELECT
 		ts, repo, run_url, scan_id, path, seq, kind, actor, subject, model,
 		duration_ms, detail, statement_sha256
-	   FROM corral_events WHERE repo = ? AND scan_id = ?`, repo, scanID)
+	   FROM corral_events WHERE `+where, args...) // #nosec G202 -- where is a constant clause from readGrains; every value is a bound parameter
 	if err != nil {
 		return nil, err
 	}

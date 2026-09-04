@@ -363,6 +363,25 @@ main.go (also reproduced in the generated CLI reference).
 `
 }
 
+// learnSignalsFrom turns findings into the recurrence detector's signals —
+// the ones that are LESSONS. A finding an operator DISMISSED is a finding
+// that was wrong, and an "ops" finding (a worker could not reach its
+// model) is an event, not a defect; both used to be fed in unfiltered, so
+// three model-unreachable notices on one target opened a proposal and paid
+// for an LLM draft about a lesson nobody learned.
+func learnSignalsFrom(fs []queue.Finding, roleOf func(reporter string) string) []learn.FindingSignal {
+	signals := make([]learn.FindingSignal, 0, len(fs))
+	for _, f := range fs {
+		if f.Status == queue.FindingDismissed || f.Type == "ops" {
+			continue
+		}
+		signals = append(signals, learn.FindingSignal{
+			Type: f.Type, Target: f.Target, Role: roleOf(f.Reporter), Evidence: f.Evidence,
+		})
+	}
+	return signals
+}
+
 func envInt(k string, def int) int {
 	if v := os.Getenv(k); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
@@ -1618,16 +1637,12 @@ func main() {
 				log.Printf("learn: findings: %v", err)
 				continue
 			}
-			signals := make([]learn.FindingSignal, 0, len(fs))
-			for _, f := range fs {
-				role := ""
-				if h, ok := hostBook.Get(f.Reporter); ok {
-					role = h.Role
+			signals := learnSignalsFrom(fs, func(reporter string) string {
+				if h, ok := hostBook.Get(reporter); ok {
+					return h.Role
 				}
-				signals = append(signals, learn.FindingSignal{
-					Type: f.Type, Target: f.Target, Role: role, Evidence: f.Evidence,
-				})
-			}
+				return ""
+			})
 			lessons, err := memStore.LessonsForLearning(200)
 			if err != nil {
 				log.Printf("learn: lessons: %v", err)

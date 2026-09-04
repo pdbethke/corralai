@@ -3068,8 +3068,8 @@ func TestCertifyRepoPreflightsBeforeSpendingOnDerivation(t *testing.T) {
 func TestResolveGoalSourceDerivedPathDisclosesTheModel(t *testing.T) {
 	var errb bytes.Buffer
 	called := 0
-	gs, disclosure, code := resolveGoalSource(&errb, t.TempDir(), "", "test-model-x", false, 3,
-		func(model string) (reposcan.Deriver, error) {
+	gs, disclosure, code := resolveGoalSource(&errb, t.TempDir(), "", "test-model-x", "", false, 3,
+		func(model, _ string) (reposcan.Deriver, error) {
 			called++
 			if model != "test-model-x" {
 				t.Errorf("factory got model %q", model)
@@ -3101,8 +3101,8 @@ func TestResolveGoalSourceGoalsFileDisclosesNothingAndDerivesNothing(t *testing.
 	mustWrite(t, goals, `{"pkg/a.go": "hand written"}`)
 
 	var errb bytes.Buffer
-	gs, disclosure, code := resolveGoalSource(&errb, root, goals, "test-model-x", false, 3,
-		func(string) (reposcan.Deriver, error) {
+	gs, disclosure, code := resolveGoalSource(&errb, root, goals, "test-model-x", "", false, 3,
+		func(string, string) (reposcan.Deriver, error) {
 			t.Fatal("the --goals path must never construct a deriver")
 			return nil, nil
 		}, nil, false, true)
@@ -3118,8 +3118,8 @@ func TestResolveGoalSourceGoalsFileDisclosesNothingAndDerivesNothing(t *testing.
 // provider credential either.
 func TestResolveGoalSourceNothingSelectedNeedsNoDeriver(t *testing.T) {
 	var errb bytes.Buffer
-	gs, disclosure, code := resolveGoalSource(&errb, t.TempDir(), "", "test-model-x", false, 0,
-		func(string) (reposcan.Deriver, error) {
+	gs, disclosure, code := resolveGoalSource(&errb, t.TempDir(), "", "test-model-x", "", false, 0,
+		func(string, string) (reposcan.Deriver, error) {
 			t.Fatal("no candidate was selected; a deriver must not be built")
 			return nil, nil
 		}, nil, false, true)
@@ -3131,8 +3131,8 @@ func TestResolveGoalSourceNothingSelectedNeedsNoDeriver(t *testing.T) {
 // A missing credential is a USAGE error (exit 2), reported before any spend.
 func TestResolveGoalSourceDeriverFailureIsAUsageError(t *testing.T) {
 	var errb bytes.Buffer
-	gs, _, code := resolveGoalSource(&errb, t.TempDir(), "", "test-model-x", false, 3,
-		func(string) (reposcan.Deriver, error) { return nil, errors.New("goal deriver: no key") }, nil, false, true)
+	gs, _, code := resolveGoalSource(&errb, t.TempDir(), "", "test-model-x", "", false, 3,
+		func(string, string) (reposcan.Deriver, error) { return nil, errors.New("goal deriver: no key") }, nil, false, true)
 	if code != 2 || gs != nil {
 		t.Fatalf("code=%d gs=%v, want 2 and nil", code, gs)
 	}

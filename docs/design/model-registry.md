@@ -102,6 +102,23 @@ label, and cache keys use resolved names. Aliases without that record would
 destroy reproducibility — two runs both claiming `strong` would not be
 comparable, and a replay could not reconstruct what it graded.
 
+**The registry belongs to the operator, not to the code under audit.** A
+cold review (2026-09-03) showed the gap: the registry is read from the
+repository root, the repository root is the repository under audit
+(`certify --repo <third-party>`, the Action's checkout of a pull request's
+head), and the registry rewrites seat values in place. A change under
+review could therefore ship a `.corral/models.json` that re-pointed a
+concrete name the operator typed at a retired model, or sent the writer
+seat — and the source it is shown — to a host of its choosing, or (with
+`"strict": true`) refused the run outright. Two rules close it. An alias may
+not be spelled like a concrete model name (`claude-…`, `gemini-…`, `gpt-…`,
+anything vendor-prefixed): the operator who types a model gets that model.
+And on a CI runner (`GITHUB_ACTIONS=true`) the checkout's own registry is
+ignored, with a line on stderr saying so; the workflow declares the
+registry through `CORRALAI_MODELS_FILE` or `CORRALAI_MODELS`, which the
+checkout cannot write. A developer's own shell is not a runner, and there
+the repo-local file is theirs.
+
 ## Prior art, and the one thing we will not borrow
 
 This pattern is well established and we are not claiming to invent it.

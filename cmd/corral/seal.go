@@ -269,11 +269,15 @@ func openSealDB(dsn string) (sealReader, error) {
 		return nil, fmt.Errorf("corral seal: opening %s read-only: %w", dsn, err)
 	}
 
-	// Confirm the view is actually there to read.
-	if _, verr := db.Exec("SELECT 1 FROM corral_seal LIMIT 0"); verr != nil {
+	// Confirm the view is there AND carries the columns this reader selects.
+	// `SELECT 1` passed on a warehouse an older corral wrote — its view bound
+	// fine over its own, older columns — and the real read then failed with
+	// `Referenced column "started_at" not found`. The probe asks for exactly
+	// what SealRows asks for, so an older shape takes the repair path.
+	if _, verr := db.Exec("SELECT started_at, test_writer_failed, pool_test_unsound, baseline_failed FROM corral_seal LIMIT 0"); verr != nil {
 		if isMD {
-			// Already writable: create it where we stand.
-			if _, derr := db.Exec(auditpush.SealViewDDL); derr != nil {
+			// Already writable: migrate and create it where we stand.
+			if derr := auditpush.EnsureSchema(db); derr != nil {
 				db.Close()
 				return nil, fmt.Errorf("corral seal: %s has no corral_seal view and creating it failed: %w (the read said: %v)", dsn, derr, verr)
 			}
@@ -286,9 +290,13 @@ func openSealDB(dsn string) (sealReader, error) {
 		if werr != nil {
 			return nil, fmt.Errorf("corral seal: %s has no corral_seal view and could not be opened writable to create one: %w (the read said: %v)", dsn, werr, verr)
 		}
-		if _, derr := w.Exec(auditpush.SealViewDDL); derr != nil {
+		// Migrate, then create: a warehouse an older corral wrote lacks the
+		// columns the view names, so the view alone cannot be created over
+		// it, and a view an older corral left is pinned to the old columns
+		// and cannot be selected from. EnsureSchema does both, additively.
+		if derr := auditpush.EnsureSchema(w); derr != nil {
 			w.Close()
-			return nil, fmt.Errorf("corral seal: creating the corral_seal view in %s: %w", dsn, derr)
+			return nil, fmt.Errorf("corral seal: bringing %s up to the current schema: %w", dsn, derr)
 		}
 		w.Close()
 		db, err = attachWarehouse(dsn, true)

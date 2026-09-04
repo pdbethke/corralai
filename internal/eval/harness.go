@@ -25,12 +25,32 @@ type RunResult struct {
 	// target into MISCALIBRATED by arithmetic.
 	BaselineFailed   bool
 	SuiteIgnoresFile bool
+	// TimedOut is the third: a run that hit its wall clock signed a
+	// partial, and its 0 survivors mean "nothing graded", not "nothing
+	// survived". It used to be dropped at the CLI boundary, and a thorough
+	// target whose only run timed out after generating mutants read as
+	// CALIBRATED.
+	TimedOut bool
+	// TestWriterFailed / PoolTestUnsound / WriterProviderFailed say the
+	// writer half never graded: ProvenMissed is 0 because nothing was
+	// tried, not because nothing was catchable. The proven column is what
+	// the scorecard's headline rests on, and a report that validated the
+	// dev-suite survivors and never this column validated the wrong half.
+	TestWriterFailed     bool
+	PoolTestUnsound      bool
+	WriterProviderFailed bool
 }
 
 // Graded reports whether this run actually measured anything. A run that
 // could not be graded carries no kill rate, no survivors and no mutant tally
 // worth averaging.
-func (r RunResult) Graded() bool { return !r.BaselineFailed && !r.SuiteIgnoresFile }
+func (r RunResult) Graded() bool { return !r.BaselineFailed && !r.SuiteIgnoresFile && !r.TimedOut }
+
+// WriterGraded reports whether the writer half of this run measured
+// anything: a proven count is only evidence when it is.
+func (r RunResult) WriterGraded() bool {
+	return r.Graded() && !r.TestWriterFailed && !r.PoolTestUnsound && !r.WriterProviderFailed
+}
 
 // PoolRunner triggers ONE adversarial-pool run for a target and returns its
 // verdict. The CLI implements this over the real brain client; tests fake it.

@@ -81,6 +81,20 @@ type seatResolution struct {
 	// named and from the name-based inference otherwise. A seat whose provider
 	// cannot be determined is ABSENT, never guessed.
 	providers map[string]string
+	// deriveURL is the daemon the registry placed the DERIVE seat on, which
+	// has no advpool role and so no entry in endpoints. It used to be printed
+	// on the resolution line and then discarded: the seat was served from
+	// OLLAMA_URL, not the daemon the registry declared.
+	deriveURL string
+}
+
+// deriveEndpoint is the derive seat's daemon URL, "" when none (or no
+// registry at all — r may be nil).
+func (r *seatResolution) deriveEndpoint() string {
+	if r == nil {
+		return ""
+	}
+	return r.deriveURL
 }
 
 func (r *seatResolution) localEndpoints() map[string]string {
@@ -106,6 +120,12 @@ func resolveSeatRegistry(cmdName, repoRoot string, seats []seatFlag, stderr io.W
 		return nil, err
 	}
 	if reg.Len() == 0 {
+		if models.RepoLocalIgnored() && models.RepoLocalExists(repoRoot) {
+			// Said once, so a workflow that relied on the checkout's own
+			// registry learns why its aliases are now concrete names.
+			fmt.Fprintf(stderr, "%s: %s in the checkout is IGNORED on a CI runner — the checkout is the change under audit and may not choose its own auditors; declare the registry with %s or %s instead\n",
+				cmdName, models.RepoRelPath, models.EnvFile, models.EnvInline)
+		}
 		// No registry declared. Emit nothing at all: a repo without one must
 		// behave, byte for byte, as it did before this feature existed.
 		return nil, nil
@@ -148,6 +168,8 @@ func resolveSeatRegistry(cmdName, repoRoot string, seats []seatFlag, stderr io.W
 			if e.IsLocal() {
 				res.endpoints[s.role] = e.Endpoint
 			}
+		} else if s.flag == "derive-model" && e.IsLocal() {
+			res.deriveURL = e.Endpoint
 		}
 	}
 	if len(lines) > 0 {

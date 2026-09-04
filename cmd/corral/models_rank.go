@@ -251,18 +251,17 @@ func rankMetricCell(r modelrank.Row) string {
 // absent instead of computed as 0, which would be the positive claim "nothing
 // it planted was valid"). A pushed warehouse carries both.
 func bugcatchRankEvidence(ctx context.Context, store *bugcatch.Store, critic *criticscore.Store) (rankEvidence, error) {
-	ev := rankEvidence{Source: "the local bug-catching ledger (the same rows `corral scorecard` reports)"}
+	ev := rankEvidence{Source: "the local bug-catching ledger (the same rows `corral scorecard` reports; a run is one audited FILE)"}
 	if store != nil {
-		rows, err := store.Observations(ctx)
-		if err != nil {
-			return rankEvidence{}, err
-		}
-		for _, o := range rows {
+		// EVERY row, streamed — Observations() caps at its most recent
+		// 10 000 and would rank a ledger past that over a sample nobody
+		// chose, with the oldest writer's record the first to vanish.
+		err := store.EveryObservation(ctx, func(o bugcatch.Observation) error {
 			// Shadow seats are a decorrelation experiment running alongside
 			// the real one; their outcomes never reached a verdict, so they
 			// are not evidence about a seat's work.
 			if o.Shadow {
-				continue
+				return nil
 			}
 			ev.Obs = append(ev.Obs, modelrank.Observation{
 				Model:           o.Model,
@@ -273,6 +272,10 @@ func bugcatchRankEvidence(ctx context.Context, store *bugcatch.Store, critic *cr
 				MutantsPlanted:  o.MutantsPlanted,
 				MutantsSurvived: o.MutantsSurvived,
 			})
+			return nil
+		})
+		if err != nil {
+			return rankEvidence{}, err
 		}
 	}
 	if critic != nil {
@@ -305,11 +308,32 @@ func bugcatchRankEvidence(ctx context.Context, store *bugcatch.Store, critic *cr
 // The critic seat is absent here on purpose: adjudication lives in the local
 // criticscore store and is never pushed, so a warehouse can say nothing about
 // critic precision and this function invents nothing to fill the gap.
+//
+// WHAT COUNTS. The same rules bugCatchObservations applies on the local
+// path, because the warehouse is that ledger pushed and must not re-open
+// what the local path closed: a row served from the verdict cache
+// (cache_hit / reused_from_scan_id) is a run in which no model did
+// anything, and is skipped — it used to count its scan as a second "run"
+// and its numbers a second time; a row whose grading never happened
+// (baseline_failed, timed_out) is evidence about nothing, and is skipped;
+// a row whose WRITER half never graded (test_writer_failed,
+// pool_test_unsound) keeps its generator evidence — the mutants were
+// planted and graded — but charges the writer no opportunities, since a
+// pipeline failure is not a property of the model. Four rows that used to
+// report the writer at 6/25 over "3 runs" now report the one measured
+// record: 3/4 over 1.
+//
+// "run" here is the SCAN (one per scan_id), where the local ledger's is the
+// audited FILE (one per record_id); the Source line says which, because the
+// generator's "per run" count is a different number under the two.
 func warehouseRankEvidence(db *sql.DB, dsn string) (rankEvidence, error) {
-	ev := rankEvidence{Source: "the pushed warehouse " + dsn + " (corral_audits)"}
+	ev := rankEvidence{Source: "the pushed warehouse " + dsn + " (corral_audits; a run is one SCAN, not one audited file as in the local ledger)"}
 	rows, err := db.Query(`SELECT COALESCE(lang, ''), COALESCE(models_by_role, ''), COALESCE(scan_id, 0),
 		COALESCE(path, ''), COALESCE(survivors, 0), COALESCE(proven_missed, 0),
-		COALESCE(mutants_planted, 0), COALESCE(mutants_graded, 0), COALESCE(mutants_invalid, 0)
+		COALESCE(mutants_planted, 0), COALESCE(mutants_graded, 0), COALESCE(mutants_invalid, 0),
+		COALESCE(cache_hit, false), reused_from_scan_id IS NOT NULL,
+		COALESCE(baseline_failed, false), COALESCE(timed_out, false),
+		COALESCE(test_writer_failed, false), COALESCE(pool_test_unsound, false)
 		FROM corral_audits WHERE disposition = 'audited'`)
 	if err != nil {
 		return rankEvidence{}, fmt.Errorf("reading corral_audits from %s: %w", dsn, err)
@@ -319,9 +343,15 @@ func warehouseRankEvidence(db *sql.DB, dsn string) (rankEvidence, error) {
 		var lang, byRole, path string
 		var scanID int64
 		var survivors, proven, planted, graded, invalid int
-		if err := rows.Scan(&lang, &byRole, &scanID, &path, &survivors, &proven, &planted, &graded, &invalid); err != nil {
+		var cacheHit, reused, baselineFailed, timedOut, writerFailed, unsound bool
+		if err := rows.Scan(&lang, &byRole, &scanID, &path, &survivors, &proven, &planted, &graded, &invalid,
+			&cacheHit, &reused, &baselineFailed, &timedOut, &writerFailed, &unsound); err != nil {
 			return rankEvidence{}, fmt.Errorf("scanning corral_audits from %s: %w", dsn, err)
 		}
+		if cacheHit || reused || baselineFailed || timedOut {
+			continue
+		}
+		writerGraded := !writerFailed && !unsound
 		seats := map[string]string{}
 		if strings.TrimSpace(byRole) != "" {
 			if err := json.Unmarshal([]byte(byRole), &seats); err != nil {
@@ -343,6 +373,9 @@ func warehouseRankEvidence(db *sql.DB, dsn string) (rankEvidence, error) {
 			o := modelrank.Observation{Model: model, Role: role, Lang: lang, Run: run}
 			switch role {
 			case modelrank.SeatTestWriter:
+				if !writerGraded {
+					continue
+				}
 				o.Catches, o.Opportunities = proven, survivors
 			case modelrank.SeatMutantGenerator:
 				o.MutantsPlanted, o.MutantsGraded, o.MutantsInvalid, o.MutantsSurvived = planted, graded, invalid, survivors

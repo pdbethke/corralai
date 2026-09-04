@@ -182,7 +182,44 @@ func (s *Store) Record(ctx context.Context, obs []Observation) error {
 // observationsLimit bounds Observations to the most recent N rows so it can
 // never scan an arbitrarily large production ledger into memory — this
 // method is for ad hoc debugging and round-trip tests, not a paging API.
+// A ranking must not read through it: see EveryObservation.
 const observationsLimit = 10000
+
+// EveryObservation streams EVERY row, oldest record first, to fn — the read
+// `corral models rank` needs. It used to call Observations, whose 10 000-row
+// cap silently dropped the OLDEST rows first: past about a thousand audited
+// files, a writer's whole early record vanished from `models rank` while
+// `corral scorecard` (a SUM over the table) still showed it. A ranking over
+// a truncated ledger is a ranking over a sample nobody chose. Streaming
+// keeps the memory bound the cap existed for.
+func (s *Store) EveryObservation(ctx context.Context, fn func(Observation) error) error {
+	rows, err := s.db.QueryContext(ctx, `SELECT
+		ts, record_id, record_head, mission_id, repo, commit, model, role, source,
+		catches, opportunities, sound_tests, authored_tests,
+		critic_flags, mutants_planted, mutants_survived,
+		COALESCE(shard, 0), COALESCE(region, ''), COALESCE(region_complexity, 0), COALESCE(region_lines, 0),
+		COALESCE(test_complexity, 0), COALESCE(parse_retries, 0), COALESCE(dropped, false), COALESCE(shadow, false)
+		FROM bugcatch_observations
+		ORDER BY record_id ASC, shard ASC`)
+	if err != nil {
+		return fmt.Errorf("bugcatch: every observation: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var o Observation
+		if err := rows.Scan(&o.TS, &o.RecordID, &o.RecordHead, &o.MissionID, &o.Repo, &o.Commit, &o.Model, &o.Role, &o.Source,
+			&o.Catches, &o.Opportunities, &o.SoundTests, &o.AuthoredTests,
+			&o.CriticFlags, &o.MutantsPlanted, &o.MutantsSurvived,
+			&o.Shard, &o.Region, &o.RegionComplexity, &o.RegionLines,
+			&o.TestComplexity, &o.ParseRetries, &o.Dropped, &o.Shadow); err != nil {
+			return fmt.Errorf("bugcatch: scan observation: %w", err)
+		}
+		if err := fn(o); err != nil {
+			return err
+		}
+	}
+	return rows.Err()
+}
 
 // Observations returns the most recent rows (newest record first, capped at
 // observationsLimit), unaggregated — unlike Scorecard, which only ever

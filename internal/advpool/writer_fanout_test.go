@@ -996,3 +996,57 @@ func TestSalvageStillVoidsTheWholeFileInBatchedMode(t *testing.T) {
 		t.Errorf("wrote %d attempt rows for a salvaged batched run, want 0", len(sink.attempts))
 	}
 }
+
+// TestWriterProviderFailureIsNotTheModelsFailureInEitherMode. The worker
+// hands back WriterProviderFailedResult when the PROVIDER never answered
+// (429, 5xx, unreachable). The batched path recognised it; the per-survivor
+// path — the CLI's default — did not, and fed the NUL sentinel to the
+// compiler as if it were the model's test: three "compile failures", three
+// repair prompts carrying the sentinel, WriterAttempts {3,3,3} signed as
+// three tries the model never made, and a scorecard row charging the
+// writer one authored, zero sound — its PRECISION lowered by an afternoon
+// of rate limiting. In both modes: no attempt is counted, no authored test
+// is charged, and the verdict says the writer failed AND that it was the
+// provider.
+func TestWriterProviderFailureIsNotTheModelsFailureInEitherMode(t *testing.T) {
+	for _, mode := range []string{WriterModePerSurvivor, WriterModeBatched} {
+		t.Run(mode, func(t *testing.T) {
+			d, missionID, _ := fanoutRun(t, mode, nil, nil)
+			bc := &fakeBugCatch{}
+			d.BugCatch = bc
+			devTick(t, d, missionID)
+
+			results := map[string]string{}
+			for _, task := range writerTasks(t, d, missionID) {
+				results[seatKeyBase(task.Key)] = WriterProviderFailedResult
+			}
+			v := driveFanout(t, d, missionID, results)
+
+			if !v.TestWriterFailed {
+				t.Errorf("TestWriterFailed = false; nothing graded")
+			}
+			if !v.WriterProviderFailed {
+				t.Errorf("WriterProviderFailed = false; the provider never answered and the verdict must say so")
+			}
+			if v.ProvenMissed != 0 || v.Survivors != 3 {
+				t.Errorf("ProvenMissed/Survivors = %d/%d, want 0/3 — the dev measurement survives", v.ProvenMissed, v.Survivors)
+			}
+			if mode == WriterModePerSurvivor {
+				if v.WriterAttempts != nil && v.WriterAttempts.Max != 0 {
+					t.Errorf("WriterAttempts = %+v, want no counted attempts — the model never tried", v.WriterAttempts)
+				}
+				// No repair prompt carried the sentinel back to the model.
+				for _, task := range writerTasks(t, d, missionID) {
+					if strings.Contains(task.Instruction, "writer-provider-call-failed") {
+						t.Errorf("a repair prompt was issued carrying the provider sentinel as the model's own test")
+					}
+				}
+			}
+			obs, ok := obsFor(bc.obs, RoleTestWriter)
+			if ok && (obs.AuthoredTests != 0 || obs.SoundTests != 0 || obs.Opportunities != 0) {
+				t.Errorf("scorecard charged the writer authored/sound/opportunities = %d/%d/%d for a call that never reached the model",
+					obs.AuthoredTests, obs.SoundTests, obs.Opportunities)
+			}
+		})
+	}
+}

@@ -57,7 +57,7 @@ func runVerifyAttest(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("verify", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	attestFlag := fs.String("attest", "", "the --attest statement to verify (required) — the plain JSON path (its signed envelope is expected at <path>.dsse.json) or the envelope itself")
-	dbFlag := fs.String("db", "", "also recompute the warehouse rows' hash from this pushed DuckDB (a path, or md:<db> for MotherDuck) and compare it to the statement's claim. A VACUUMed or twice-pushed warehouse can change row order and trip a false ✗ here without tampering")
+	dbFlag := fs.String("db", "", "also recompute the warehouse rows' hash from this pushed DuckDB (a path, or md:<db> for MotherDuck) and compare it to the statement's claim. Every push of the scan the warehouse holds is tried (each has its own scan_uid); a VACUUMed warehouse can change row order and trip a false ✗ here without tampering, and rows a later `corral scans push` backfilled are reported as such, never as a mismatch")
 	rekorIndexFlag := fs.Int64("rekor-index", -1, "also confirm this Rekor log index's entry matches the envelope (default: read the index --db recorded for this scan, if --db was given)")
 	pubFlag := fs.String("pub", "", "hex-encoded Ed25519 public key to verify the signature against (default: the local certify key, CORRALAI_CERTIFY_KEY_FILE)")
 	if err := fs.Parse(args); err != nil {
@@ -99,7 +99,7 @@ func runVerifyAttest(args []string, stdout, stderr io.Writer) int {
 	}
 
 	// --- 2. Warehouse rows ---
-	rowsResult := verifyWarehouseRows(*dbFlag, stmt)
+	rowsResult := verifyWarehouseRows(*dbFlag, stmt, plainStatementSHA256(*attestFlag, envPath))
 	printCheckResult(stdout, "warehouse rows", rowsResult)
 	if rowsResult.checked && !rowsResult.ok {
 		failed = true
@@ -297,16 +297,68 @@ func statementScanIdentity(stmt map[string]any) scanIdentity {
 	return id
 }
 
+// plainStatementSHA256 is the key PushBundle stamped on every row of the
+// run's push: the sha256 of the PLAIN statement file (writeAuditStatement
+// hashes the indented JSON it wrote, not the DSSE payload, which is a
+// canonical re-encoding of the same map). It is recoverable only when the
+// plain file is beside the envelope — "" otherwise, and the lookup falls
+// back to (repo, scanId).
+func plainStatementSHA256(attestPath, envPath string) string {
+	candidates := []string{attestPath}
+	if strings.HasSuffix(envPath, dsseEnvelopeSuffix) {
+		candidates = append(candidates, strings.TrimSuffix(envPath, dsseEnvelopeSuffix))
+	}
+	for _, p := range candidates {
+		if p == envPath {
+			continue
+		}
+		b, err := os.ReadFile(p) // #nosec G304 -- derived from the operator's own --attest argument
+		if err != nil {
+			continue
+		}
+		sum := sha256.Sum256(b)
+		return hex.EncodeToString(sum[:])
+	}
+	return ""
+}
+
+// locateRunPushes finds the rows in --db that could be the push this
+// statement hashed: by the statement's own hash when the plain file was at
+// hand (exact — that hash is stamped on the push, and only on pushes made
+// with --attest), else by (repo, scanId). Each push is a separate set of
+// rows keyed by its own scan_uid, so a repo pushed under scan_id 0 by every
+// Action run, or a scan pushed twice, is not unioned into one bundle that
+// no statement ever hashed.
+//
+// Splits the result: the run's OWN pushes (which the statement's hash can
+// match) from backfills `corral scans push` wrote later (which it never
+// can: a backfill cannot recover the run's thresholds or outcome, and
+// carries no source).
+func locateRunPushes(db *sql.DB, id scanIdentity, statementSHA string) (own, backfills []auditpush.ScanRow, err error) {
+	scans, err := auditpush.LocateScans(db, id.repo, id.scanID, statementSHA)
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, sc := range scans {
+		if sc.PushedBy == auditpush.PushedByBackfill {
+			backfills = append(backfills, sc)
+		} else {
+			own = append(own, sc)
+		}
+	}
+	return own, backfills, nil
+}
+
 // verifyWarehouseRows is check 2: with --db, read the rows this scan
-// actually landed back from the warehouse (auditpush.ReadBundle) and
-// recompute their hash with THE SAME warehouseRowsSHA256
-// (cmd/corral/certify_repo.go) writeAuditStatement itself called before
-// signing — never a second, hand-rolled canonicalization. See
-// auditpush.ReadBundle's own doc for the ordering caveat this check
-// inherits: a mismatch on a warehouse an operator has VACUUMed, or that
-// received more than one push for this (repo, scan_id), is not necessarily
-// evidence of tampering.
-func verifyWarehouseRows(dbFlag string, stmt map[string]any) verifyCheckResult {
+// actually landed back from the warehouse and recompute their hash with
+// THE SAME warehouseRowsSHA256 (cmd/corral/certify_repo.go)
+// writeAuditStatement itself called before signing — never a second,
+// hand-rolled canonicalization. Every push of the scan the warehouse holds
+// is tried; ONE match is a pass, because the hash binds one push and a
+// later re-push is a second, different set of rows, not evidence against
+// the first. See auditpush.ReadBundle's own doc for the ordering caveat
+// this check inherits on a VACUUMed warehouse.
+func verifyWarehouseRows(dbFlag string, stmt map[string]any, statementSHA string) verifyCheckResult {
 	if strings.TrimSpace(dbFlag) == "" {
 		return verifyCheckResult{checked: false, detail: "no --db given"}
 	}
@@ -314,42 +366,61 @@ func verifyWarehouseRows(dbFlag string, stmt map[string]any) verifyCheckResult {
 	if id.warehouseRowsSHA256 == "" {
 		return verifyCheckResult{checked: false, detail: "the statement carries no warehouseRowsSha256 — no --push accompanied the run it was written for"}
 	}
-	if id.repo == "" || id.scanID == 0 {
-		return verifyCheckResult{checked: false, detail: "the statement names no repo/scanId to look up"}
+	if statementSHA == "" && (id.repo == "" || id.scanID == 0) {
+		return verifyCheckResult{checked: false, detail: "the plain statement file is not beside its envelope, and the statement names no repo/scanId to look up instead (scanId 0 is every run pushed without --record, not a key)"}
 	}
 
-	db, bundle, err := openAndReadBundle(dbFlag, id.repo, id.scanID)
+	db, err := openWarehouse(dbFlag)
 	if err != nil {
 		return verifyCheckResult{checked: false, detail: fmt.Sprintf("opening --db: %v", err)}
 	}
 	defer db.Close()
-	if len(bundle.Files) == 0 && bundle.Scan == (auditpush.ScanRow{}) {
+	own, backfills, lerr := locateRunPushes(db, id, statementSHA)
+	if lerr != nil {
+		return verifyCheckResult{checked: false, detail: fmt.Sprintf("reading --db: %v", lerr)}
+	}
+	if len(own) == 0 {
+		if len(backfills) > 0 {
+			return verifyCheckResult{checked: false, detail: fmt.Sprintf("the only rows in --db for this statement were written by `corral scans push` (%d backfill(s)), not by the run that signed it — a backfill reconstructs the scan from the local ledger and cannot reproduce the run's own push; verify against the warehouse the run pushed to, or trust the local ledger this backfill came from", len(backfills))}
+		}
 		return verifyCheckResult{checked: false, detail: fmt.Sprintf("no rows found in --db for repo %q scan %d — was it ever pushed there?", id.repo, id.scanID)}
 	}
 
-	got, herr := warehouseRowsSHA256(bundle)
-	if herr != nil {
-		return verifyCheckResult{checked: false, detail: fmt.Sprintf("hashing the rows read back: %v", herr)}
+	var got []string
+	for _, sc := range own {
+		bundle, rerr := auditpush.ReadBundleForScan(db, sc)
+		if rerr != nil {
+			return verifyCheckResult{checked: false, detail: fmt.Sprintf("reading --db: %v", rerr)}
+		}
+		h, herr := warehouseRowsSHA256(bundle)
+		if herr != nil {
+			return verifyCheckResult{checked: false, detail: fmt.Sprintf("hashing the rows read back: %v", herr)}
+		}
+		if h == id.warehouseRowsSHA256 {
+			return verifyCheckResult{checked: true, ok: true, detail: fmt.Sprintf("the rows read back from --db (push %s) hash to exactly the value the statement claims", sc.ScanUID)}
+		}
+		got = append(got, h[:12])
 	}
-	if got != id.warehouseRowsSHA256 {
-		return verifyCheckResult{checked: true, ok: false, detail: "the rows read back from --db hash to a different value than the statement claims — note: a VACUUMed or re-pushed warehouse changes row order and can trip this without tampering; re-verify against a warehouse that has only been pushed to once"}
+	detail := fmt.Sprintf("the rows read back from --db hash to a different value than the statement claims (%d push(es) of this scan tried: %s)", len(own), strings.Join(got, ", "))
+	if len(backfills) > 0 {
+		detail += fmt.Sprintf("; %d further backfill(s) by `corral scans push` were not tried, since a backfill can never match", len(backfills))
 	}
-	return verifyCheckResult{checked: true, ok: true, detail: "the rows read back from --db hash to exactly the value the statement claims"}
+	detail += " — note: a VACUUMed warehouse can change row order and trip this without tampering"
+	return verifyCheckResult{checked: true, ok: false, detail: detail}
 }
 
-// openAndReadBundle opens dbFlag (a plain DuckDB path or md:<db>, the same
-// targets --push accepts) and reads back the bundle for one scan.
-func openAndReadBundle(dbFlag, repo string, scanID int64) (*sql.DB, auditpush.Bundle, error) {
+// openWarehouse opens dbFlag (a plain DuckDB path or md:<db>, the same
+// targets --push accepts).
+func openWarehouse(dbFlag string) (*sql.DB, error) {
 	db, err := sql.Open("duckdb", dbFlag)
 	if err != nil {
-		return nil, auditpush.Bundle{}, err
+		return nil, err
 	}
-	b, err := auditpush.ReadBundle(db, repo, scanID)
-	if err != nil {
-		_ = db.Close()
-		return nil, auditpush.Bundle{}, err
+	if err := db.Ping(); err != nil {
+		db.Close()
+		return nil, err
 	}
-	return db, b, nil
+	return db, nil
 }
 
 // verifyRekorInclusion is check 3: with an index (given, or read from the
@@ -372,15 +443,26 @@ func verifyRekorInclusion(ctx context.Context, envelope []byte, stmt map[string]
 		if id.repo == "" || id.scanID == 0 {
 			return verifyCheckResult{checked: false, detail: "no --rekor-index given, and the statement names no repo/scanId to look one up with"}
 		}
-		db, bundle, err := openAndReadBundle(dbFlag, id.repo, id.scanID)
+		db, err := openWarehouse(dbFlag)
 		if err != nil {
 			return verifyCheckResult{checked: false, detail: fmt.Sprintf("no --rekor-index given, and opening --db to find one failed: %v", err)}
 		}
+		own, _, lerr := locateRunPushes(db, id, "")
 		_ = db.Close()
-		if bundle.Scan.RekorLogIndex == nil {
+		if lerr != nil {
+			return verifyCheckResult{checked: false, detail: fmt.Sprintf("no --rekor-index given, and reading --db to find one failed: %v", lerr)}
+		}
+		var found *int64
+		for _, sc := range own {
+			if sc.RekorLogIndex != nil {
+				found = sc.RekorLogIndex
+				break
+			}
+		}
+		if found == nil {
 			return verifyCheckResult{checked: false, detail: "no --rekor-index given, and --db recorded none for this scan (was --transparency used?)"}
 		}
-		index = *bundle.Scan.RekorLogIndex
+		index = *found
 	}
 
 	entry, err := newTransparencyLogger(rekorBaseURL()).Get(ctx, index)

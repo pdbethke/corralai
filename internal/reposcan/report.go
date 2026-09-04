@@ -213,6 +213,9 @@ type WeakFile struct {
 	// the scan totals, the `cost:` line, the ledger's timing columns and
 	// scan_model_calls) must exclude a row carrying this flag.
 	CacheHit bool
+	// VerdictComputedAt mirrors FileResult.ComputedAt: WHEN a reused
+	// verdict was earned. Zero on a verdict this run earned itself.
+	VerdictComputedAt time.Time
 	// ModelCalls mirrors advpool.Verdict.ModelCalls: what this file's audit
 	// cost, broken out by role. Carried onto the report for the same reason
 	// Timing is — so the ledger mapping and the cost line are built from the
@@ -556,6 +559,7 @@ func Aggregate(owner, repo, commit string, totalFiles, candidates int, results [
 			// rides beside them because on a reused verdict they are not
 			// this run's minutes; see WeakFile.CacheHit.
 			CacheHit:           r.CacheHit,
+			VerdictComputedAt:  r.ComputedAt,
 			Timing:             r.Verdict.Timing,
 			ModelCalls:         r.Verdict.ModelCalls,
 			MutantsGraded:      r.Verdict.MutantsTotal,

@@ -294,10 +294,16 @@ Usage of doctor:
     	the source file you intend to audit (optional, enables the pairing and baseline checks)
   -critic-model string
     	the test-critic model whose credential to check
+  -derive-model certify --repo
+    	the goal-derivation model a certify --repo run will name, if any
   -jail string
     	sandbox backend (default: auto-detect). "container" needs CORRALAI_EXEC_IMAGE set to a toolchain image, e.g. CORRALAI_EXEC_IMAGE=python:3.12-bookworm
   -mutant-model string
     	the mutant-generator model whose credential to check
+  -repo string
+    	the repository the run will audit — where its .corral/models.json registry is read from, exactly as certify reads it (default ".")
+  -shadow-model string
+    	the challenger generator model, if the run will name one — it needs a credential too
   -test string
     	its test file (optional; otherwise inferred from the language's convention)
   -writer-model string
@@ -478,8 +484,8 @@ Usage of ui:
 Usage of verify:
   -attest string
     	the --attest statement to verify (required) — the plain JSON path (its signed envelope is expected at <path>.dsse.json) or the envelope itself
-  -db string
-    	also recompute the warehouse rows' hash from this pushed DuckDB (a path, or md:<db> for MotherDuck) and compare it to the statement's claim. A VACUUMed or twice-pushed warehouse can change row order and trip a false ✗ here without tampering
+  -db corral scans push
+    	also recompute the warehouse rows' hash from this pushed DuckDB (a path, or md:<db> for MotherDuck) and compare it to the statement's claim. Every push of the scan the warehouse holds is tried (each has its own scan_uid); a VACUUMed warehouse can change row order and trip a false ✗ here without tampering, and rows a later corral scans push backfilled are reported as such, never as a mismatch
   -pub string
     	hex-encoded Ed25519 public key to verify the signature against (default: the local certify key, CORRALAI_CERTIFY_KEY_FILE)
   -rekor-index int
@@ -524,6 +530,8 @@ Usage of certify --repo:
     	skip the goal cache — every candidate is re-derived even when a PRIOR scan already derived a goal for the exact same bytes, model and prompt revision. Re-buys a model call per file that a content-addressed cache would otherwise have served for free; use this to isolate goal-derivation variance from a comparison, or on a scan whose operator does not want a goal receipt kept in the ledger at all. The cache lives in the same ledger --record-db names, independent of --record itself
   -no-selection-cache
     	skip the selection cache — the ONE instrumented coverage run always executes, even when a PRIOR scan already ran the identical instrumented command over a byte-identical tree. Re-buys a full suite run (the single most expensive measurement a scan makes outside model calls) that a content-addressed cache would otherwise have served for free; use this to isolate selection variance from a comparison, or when the operator does not trust the tree to be unchanged. The cache lives in the same ledger --record-db names, and (like the goal cache) is consulted independent of --record itself; only WRITING a fresh hit requires --record, since a scan_id has to exist to write one against
+  -no-verdict-cache
+    	skip the verdict cache — every candidate is re-audited even when a PRIOR scan already earned a verdict for the exact same bytes, tests, models, engine and substrate. Re-buys the whole audit (generation, grading, the writer) per file; use this to isolate model variance from a comparison, or to redo a measurement the cache would otherwise keep serving. The cache lives in the same ledger --record-db names and is consulted independent of --record itself
   -owner string
     	owning account for the scan (tenant identifier) (default "local")
   -preflight

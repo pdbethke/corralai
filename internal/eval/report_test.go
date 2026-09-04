@@ -17,7 +17,7 @@ func TestReportFlagsMiscalibration(t *testing.T) {
 	}}
 	res := []RunResult{
 		{TargetID: "thorough-ok", Survivors: 0, MutantsTotal: 8},
-		{TargetID: "gappy-ok", Survivors: 2},                         // has the gap → calibrated
+		{TargetID: "gappy-ok", Survivors: 2, ProvenMissed: 1},        // has the gap, and the writer PROVED it → calibrated
 		{TargetID: "gappy-BROKEN", Survivors: 0},                     // gappy but pool found NO gap → miscalibrated
 		{TargetID: "thorough-BROKEN", Survivors: 3, MutantsTotal: 8}, // thorough but riddled with survivors → miscalibrated
 	}
@@ -143,7 +143,7 @@ func TestReportExcludesUngradedRunsFromTheMeans(t *testing.T) {
 		{ID: "gappy-ok", ExpectedAdequacy: "gappy", ExpectedSurvivors: 2},
 	}}
 	res := []RunResult{
-		{TargetID: "gappy-ok", DevKillRate: 0.6, Survivors: 2, MutantsTotal: 5},
+		{TargetID: "gappy-ok", DevKillRate: 0.6, Survivors: 2, MutantsTotal: 5, ProvenMissed: 2},
 		{TargetID: "gappy-ok", DevKillRate: 0, Survivors: 0, MutantsTotal: 0, SuiteIgnoresFile: true},
 		{TargetID: "gappy-ok", DevKillRate: 0, Survivors: 0, MutantsTotal: 0, BaselineFailed: true},
 	}
@@ -200,5 +200,62 @@ func TestReportAllRunsUngradedCannotValidate(t *testing.T) {
 	}
 	if got.MeanKillRate != 0 || got.MeanSurvivors != 0 {
 		t.Errorf("means over zero graded runs must stay 0 (and must not be NaN): %+v", got)
+	}
+}
+
+// TestReportValidatesTheProvenColumnAndEveryUngradedCause pins the review's
+// three ways the report said CALIBRATED about nothing: a thorough target
+// whose only run TIMED OUT (0 survivors because nothing graded), a gappy
+// target with expected_survivors unset (MeanSurvivors >= 0 is always true),
+// and a gappy target whose known gap the writer never proved — the proven
+// column is the one the scorecard's headline rests on, and the report never
+// looked at it. Plus: a manifest target with no result is named, so a
+// subset never reads as the corpus.
+func TestReportValidatesTheProvenColumnAndEveryUngradedCause(t *testing.T) {
+	m := Manifest{CorpusVersion: "v1", Targets: []Target{
+		{ID: "thorough-timeout", ExpectedAdequacy: "thorough"},
+		{ID: "gappy-unset", ExpectedAdequacy: "gappy"},
+		{ID: "gappy-writer-failed", ExpectedAdequacy: "gappy", ExpectedSurvivors: 1},
+		{ID: "gappy-unproven", ExpectedAdequacy: "gappy", ExpectedSurvivors: 1},
+		{ID: "gappy-proven", ExpectedAdequacy: "gappy", ExpectedSurvivors: 1},
+		{ID: "never-ran", ExpectedAdequacy: "thorough"},
+	}}
+	res := []RunResult{
+		{TargetID: "thorough-timeout", Survivors: 0, MutantsTotal: 8, TimedOut: true},
+		{TargetID: "gappy-unset", Survivors: 0},
+		{TargetID: "gappy-writer-failed", Survivors: 5, ProvenMissed: 0, TestWriterFailed: true},
+		{TargetID: "gappy-unproven", Survivors: 5, ProvenMissed: 0},
+		{TargetID: "gappy-proven", Survivors: 5, ProvenMissed: 2},
+	}
+	reps := Report(m, res)
+	byID := map[string]TargetReport{}
+	for _, r := range reps {
+		byID[r.ID] = r
+	}
+	for id, wantNote := range map[string]string{
+		"thorough-timeout":    "could not be graded",
+		"gappy-unset":         "declares no expected_survivors",
+		"gappy-writer-failed": "the writer half never graded",
+		"gappy-unproven":      "never proven catchable",
+	} {
+		r := byID[id]
+		if r.Calibrated {
+			t.Errorf("%s: CALIBRATED — %q", id, r.Note)
+		} else if !strings.Contains(r.Note, wantNote) {
+			t.Errorf("%s: note = %q, want it to say %q", id, r.Note, wantNote)
+		}
+	}
+	if !byID["gappy-proven"].Calibrated {
+		t.Errorf("gappy-proven: not calibrated: %q", byID["gappy-proven"].Note)
+	}
+	if byID["gappy-writer-failed"].MeanProvenMissed != 0 || byID["gappy-writer-failed"].WriterGradedRuns != 0 {
+		t.Errorf("a writer-failed run contributed to the proven mean: %+v", byID["gappy-writer-failed"])
+	}
+
+	var buf bytes.Buffer
+	WriteReportWithScope(&buf, reps, NotRun(m, res))
+	out := buf.String()
+	if !strings.Contains(out, "5 of 6 target(s)") || !strings.Contains(out, "NOT RUN — 1 manifest target(s) have no result and are absent from every line above: never-ran") {
+		t.Errorf("the headline must say which targets ran:\n%s", out)
 	}
 }

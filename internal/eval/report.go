@@ -4,6 +4,7 @@ package eval
 import (
 	"fmt"
 	"io"
+	"strings"
 	"text/tabwriter"
 )
 
@@ -23,9 +24,28 @@ type TargetReport struct {
 	MeanKillRate     float64
 	MeanSurvivors    float64
 	MeanMutantsTotal float64
+	// MeanProvenMissed is over WriterGradedRuns — the runs whose writer
+	// half measured anything — never over runs whose 0 means "not tried".
 	MeanProvenMissed float64
+	WriterGradedRuns int
 	Calibrated       bool
 	Note             string
+}
+
+// NotRun lists the manifest targets no result named, so a report over a
+// subset can never read as a report over the corpus.
+func NotRun(m Manifest, results []RunResult) []string {
+	seen := map[string]bool{}
+	for _, r := range results {
+		seen[r.TargetID] = true
+	}
+	var out []string
+	for _, t := range m.Targets {
+		if !seen[t.ID] {
+			out = append(out, t.ID)
+		}
+	}
+	return out
 }
 
 // thoroughSurvivorTolerance: a thorough target may occasionally leave a stray
@@ -62,7 +82,10 @@ func Report(m Manifest, results []RunResult) []TargetReport {
 		rep.MeanKillRate += r.DevKillRate
 		rep.MeanSurvivors += float64(r.Survivors)
 		rep.MeanMutantsTotal += float64(r.MutantsTotal)
-		rep.MeanProvenMissed += float64(r.ProvenMissed)
+		if r.WriterGraded() {
+			rep.WriterGradedRuns++
+			rep.MeanProvenMissed += float64(r.ProvenMissed)
+		}
 	}
 	var out []TargetReport
 	for _, id := range order {
@@ -71,7 +94,9 @@ func Report(m Manifest, results []RunResult) []TargetReport {
 			rep.MeanKillRate /= float64(rep.GradedRuns)
 			rep.MeanSurvivors /= float64(rep.GradedRuns)
 			rep.MeanMutantsTotal /= float64(rep.GradedRuns)
-			rep.MeanProvenMissed /= float64(rep.GradedRuns)
+		}
+		if rep.WriterGradedRuns > 0 {
+			rep.MeanProvenMissed /= float64(rep.WriterGradedRuns)
 		}
 		t := adeq[id]
 		if rep.GradedRuns == 0 {
@@ -97,10 +122,25 @@ func Report(m Manifest, results []RunResult) []TargetReport {
 					rep.Note = fmt.Sprintf("thorough target has mean %.2f survivors — pool is inventing gaps (over-sensitive)", rep.MeanSurvivors)
 				}
 			case "gappy":
-				if rep.MeanSurvivors >= float64(t.ExpectedSurvivors) {
-					rep.Calibrated = true
-				} else {
+				switch {
+				case t.ExpectedSurvivors < 1:
+					// `MeanSurvivors >= 0` is always true; a gappy target
+					// that does not say how many gaps it has cannot be
+					// validated, and used to read as calibrated by that
+					// arithmetic.
+					rep.Note = "gappy target declares no expected_survivors — nothing to validate against"
+				case rep.MeanSurvivors < float64(t.ExpectedSurvivors):
 					rep.Note = fmt.Sprintf("gappy target has mean %.2f survivors (< expected %d) — pool MISSED a known gap (under-sensitive)", rep.MeanSurvivors, t.ExpectedSurvivors)
+				case rep.WriterGradedRuns == 0:
+					// The dev-suite half found the gap; the writer half —
+					// the column the scorecard's headline rests on — never
+					// graded in any run. That is not calibration of the
+					// signal being published.
+					rep.Note = fmt.Sprintf("gappy target's known gap was found by the dev pass, but the writer half never graded in any of %d run(s) — the proven column is unvalidated", rep.GradedRuns)
+				case rep.MeanProvenMissed < 1:
+					rep.Note = fmt.Sprintf("gappy target's known gap was never proven catchable: mean %.2f proven over %d writer-graded run(s) — the proven column, which the scorecard's headline rests on, does not confirm this gap", rep.MeanProvenMissed, rep.WriterGradedRuns)
+				default:
+					rep.Calibrated = true
 				}
 			default:
 				rep.Calibrated = true // "unknown" adequacy isn't a calibration target
@@ -111,7 +151,12 @@ func Report(m Manifest, results []RunResult) []TargetReport {
 	return out
 }
 
-func WriteReport(out io.Writer, reps []TargetReport) {
+func WriteReport(out io.Writer, reps []TargetReport) { WriteReportWithScope(out, reps, nil) }
+
+// WriteReportWithScope is WriteReport plus the manifest targets that were
+// NOT run, so the headline says "N of M target(s)" rather than letting a
+// subset read as the corpus.
+func WriteReportWithScope(out io.Writer, reps []TargetReport, notRun []string) {
 	bad := 0
 	totalRuns := 0
 	totalUngraded := 0
@@ -138,11 +183,18 @@ func WriteReport(out io.Writer, reps []TargetReport) {
 	}
 	// SCOPE must always be visible: a reader must never mistake "nothing ran"
 	// or "only some targets ran" for "the whole corpus passed."
+	scope := fmt.Sprintf("%d target(s)", len(reps))
+	if len(notRun) > 0 {
+		scope = fmt.Sprintf("%d of %d target(s)", len(reps), len(reps)+len(notRun))
+	}
 	if len(reps) == 0 || totalRuns == 0 {
 		fmt.Fprintln(out, "\nNOT EVALUATED — no runs to evaluate; this is not a pass. Do NOT treat this as CALIBRATED.")
 	} else if bad == 0 {
-		fmt.Fprintf(out, "\nCALIBRATED — %d target(s) over %d run(s) behave as their known adequacy predicts; the scorecard's signal is sound for this scope only.\n", len(reps), totalRuns)
+		fmt.Fprintf(out, "\nCALIBRATED — %s over %d run(s) behave as their known adequacy predicts; the scorecard's signal is sound for this scope only.\n", scope, totalRuns)
 	} else {
-		fmt.Fprintf(out, "\nMISCALIBRATED — %d of %d target(s) (over %d run(s)) violated their known adequacy. Do NOT publish the scorecard until resolved.\n", bad, len(reps), totalRuns)
+		fmt.Fprintf(out, "\nMISCALIBRATED — %d of %s (over %d run(s)) violated their known adequacy. Do NOT publish the scorecard until resolved.\n", bad, scope, totalRuns)
+	}
+	if len(notRun) > 0 {
+		fmt.Fprintf(out, "NOT RUN — %d manifest target(s) have no result and are absent from every line above: %s\n", len(notRun), strings.Join(notRun, ", "))
 	}
 }

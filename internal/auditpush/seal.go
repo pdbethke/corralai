@@ -37,7 +37,20 @@ package auditpush
 // first, so this resolves at creation time — and, because DuckDB stores the
 // view's body as written, it keeps resolving when the same file is later
 // attached under a different alias or opened directly.
-const SealViewDDL = `CREATE VIEW IF NOT EXISTS corral_seal AS
+//
+// CREATE OR REPLACE, NOT IF NOT EXISTS. DuckDB pins a view's output column
+// types at creation, so the additive migrations in PushBundle — every
+// `ALTER TABLE corral_audits ADD COLUMN` since v0.8.0 — made the stored view
+// unbindable ("Contents of view were altered: types don't match"), and IF NOT
+// EXISTS then never replaced it. Every warehouse a released corral created
+// and a newer corral pushed to had a dead corral_seal, `corral seal --db`
+// failed on all of them, the MotherDuck share published a view nobody could
+// SELECT from, and the ordering fix that moved "latest" from push time to the
+// scan's own start never reached a single existing file. The migration tests
+// never pre-created the view, which is exactly why this was invisible. The
+// view body is a pure function of the current schema; it is re-issued on
+// every push.
+const SealViewDDL = `CREATE OR REPLACE VIEW corral_seal AS
 SELECT * EXCLUDE rn FROM (
   SELECT a.*, row_number() OVER (PARTITION BY repo, path ORDER BY coalesce(started_at, ts) DESC, ts DESC) AS rn
   FROM corral_audits a WHERE kill_rate IS NOT NULL

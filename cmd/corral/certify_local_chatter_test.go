@@ -172,6 +172,15 @@ func TestLocalChatterForCrossVendorCriticFailsClosedWithoutKey(t *testing.T) {
 // cross-vendor critic logic, even when the critic's model name looks like a
 // different vendor's (gemini-*) — the explicit single-backend WithModel
 // behavior must be unchanged.
+//
+// This used to pass BY ACCIDENT: the cross-vendor path WAS taken for the
+// gemini critic, and the Gemini backend then followed OPENAI_BASE_URL to
+// the capture server (with the Google key falling back to the OpenAI one).
+// Since the 2026-09 router review that fallback is gone from the
+// cross-vendor door, and the property is now made true on purpose:
+// MODEL_BACKEND=openai with a custom OPENAI_BASE_URL is a gateway
+// (baseVendor returns ""), so the critic is WithModel on the pinned backend
+// and no ForModel is ever attempted — which the absent Gemini key proves.
 func TestLocalChatterForExplicitBackendNeverCrossVendorRoutes(t *testing.T) {
 	srv, reqs := captureServer(t, "openai")
 	t.Setenv("MODEL_BACKEND", "openai")

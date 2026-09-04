@@ -564,3 +564,50 @@ func TestWriterPromptCarriesTheFileOnceAndDiffs(t *testing.T) {
 		t.Fatalf("writer prompt for %d survivors of a %d-byte file is %d bytes, want < 60 KB", nSurvivors, len(code), len(got))
 	}
 }
+
+// TestUnshardedRunDoesNotSignAChallengerItNeverDispatched. The challenger
+// generator is emitted only inside BuildDAG's sharded branch, so an
+// unsharded run (MaxShards 1, or a file with no named symbols) with a
+// challenger named runs none — and the signed roster still named it, while
+// the --mutants case next door logged its skip. The DAG carries no shadow
+// seat AND the verdict's roster carries no shadow entry.
+func TestUnshardedRunDoesNotSignAChallengerItNeverDispatched(t *testing.T) {
+	assign := decorrelatedAssign()
+	assign[RoleMutantGeneratorShadow] = "challenger-x"
+	rs := testRunSpec()
+	rs.ShadowModel = "challenger-x"
+	rs.MaxShards = 1
+	for _, s := range BuildDAG(rs, assign, nil) {
+		if s.Role == RoleMutantGeneratorShadow {
+			t.Fatalf("an unsharded run emitted a challenger seat %q", s.Key)
+		}
+	}
+
+	q := newTestQueue(t)
+	d, err := NewDriver(q, &fakeScorer{devKillRate: 1}, &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Replace: "c0"}}}, assign, 0.5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.StartRun(77, rs, nil); err != nil {
+		t.Fatal(err)
+	}
+	run := d.runs[77]
+	roster := run.modelsByRole(d.Assign)
+	if _, named := roster[RoleMutantGeneratorShadow]; named {
+		t.Errorf("the roster names %s = %q for a run that dispatched no challenger", RoleMutantGeneratorShadow, roster[RoleMutantGeneratorShadow])
+	}
+	if roster[RoleMutantGenerator] != assign[RoleMutantGenerator] {
+		t.Errorf("the primary generator went missing from the roster: %v", roster)
+	}
+	// And a SHARDED run keeps it: the challenger really runs there.
+	sharded := testRunSpec()
+	sharded.ShadowModel = "challenger-x"
+	sharded.MaxShards = 4
+	sigs := []repoindex.Signature{{Name: "A", Complexity: 1, Lines: 4}, {Name: "B", Complexity: 1, Lines: 4}}
+	if err := d.StartRun(78, sharded, sigs); err != nil {
+		t.Fatal(err)
+	}
+	if got := d.runs[78].modelsByRole(d.Assign)[RoleMutantGeneratorShadow]; got != "challenger-x" {
+		t.Errorf("a sharded run dropped its real challenger from the roster (got %q)", got)
+	}
+}

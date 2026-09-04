@@ -115,8 +115,12 @@ producing its own scan. Nothing coordinates them, and nothing needs to:
   carries it: one globally unique column, derived per push from the scan's own
   identity (repo, run URL, host, corral version, commit, substrate, ledger scan
   id, and the push timestamp — length-prefixed, then hashed). It is derived
-  rather than random so you can recompute it from the row you are holding and
-  check it. Rows written before schema_version 3 have the column and NULL in
+  rather than random so it can be checked: recompute it from the
+  **`corral_scans` row** (the only grain that carries every input; its `ts` is
+  the push time) and compare. The other grains carry the column to be joined
+  on, not to be recomputed from — a `corral_audits` row has no host or corral
+  version in it, and a `corral_events` row's `ts` is the beat's own time, not
+  the push's. Rows written before schema_version 3 have the column and NULL in
   it, which is the honest value: the identity was never recorded and cannot be
   reconstructed.
 

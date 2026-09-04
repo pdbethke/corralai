@@ -14,7 +14,6 @@ import (
 
 	"github.com/pdbethke/corralai/internal/adequacy"
 	"github.com/pdbethke/corralai/internal/advpool"
-	"github.com/pdbethke/corralai/internal/agentbackend"
 	"github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/reposcan"
 	"github.com/pdbethke/corralai/internal/sandbox"
@@ -57,6 +56,9 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 	mutantModel := fs.String("mutant-model", "", "the mutant-generator model whose credential to check")
 	writerModel := fs.String("writer-model", "", "the test-writer model whose credential to check")
 	criticModel := fs.String("critic-model", "", "the test-critic model whose credential to check")
+	shadowModel := fs.String("shadow-model", "", "the challenger generator model, if the run will name one — it needs a credential too")
+	deriveModel := fs.String("derive-model", "", "the goal-derivation model a `certify --repo` run will name, if any")
+	repoDir := fs.String("repo", ".", "the repository the run will audit — where its .corral/models.json registry is read from, exactly as certify reads it")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -64,8 +66,9 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 	// exists to answer "would this run work", and it can only answer that
 	// about the CONCRETE model a seat would really use. Its refusals are the
 	// registry's, so a broken declaration is caught here for free.
-	if _, regErr := resolveSeatRegistry("corral doctor", ".",
-		certifySeats(nil, mutantModel, writerModel, criticModel, nil, nil), stderr); regErr != nil {
+	seatReg, regErr := resolveSeatRegistry("corral doctor", *repoDir,
+		certifySeats(deriveModel, mutantModel, writerModel, criticModel, shadowModel, nil), stderr)
+	if regErr != nil {
 		fmt.Fprintf(stderr, "corral doctor: %v\n", regErr)
 		return 2
 	}
@@ -80,7 +83,8 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 	if isoErr == nil {
 		results = append(results, checkToolchain(iso, cmd, nil))
 	}
-	results = append(results, checkCredentials(*mutantModel, *writerModel, *criticModel)...)
+	results = append(results, checkHerd(*mutantModel, *writerModel, *criticModel, *shadowModel, seatReg)...)
+	results = append(results, checkDeriveSeat(*deriveModel, seatReg.deriveEndpoint())...)
 	if strings.TrimSpace(*code) != "" {
 		results = append(results, checkPairing(*code, *test))
 	}
@@ -217,18 +221,28 @@ func toolchainDirHint(tool string) string {
 	return tool
 }
 
-// checkCredentials resolves the credential each assigned role needs. A key
-// alone does not move providers, so this checks per MODEL rather than asking
-// whether any key exists.
-func checkCredentials(mutant, writer, critic string) []checkResult {
-	roles := []struct{ role, model string }{
-		{advpool.RoleMutantGenerator, strings.TrimSpace(mutant)},
-		{advpool.RoleTestWriter, strings.TrimSpace(writer)},
-		{advpool.RoleTestCritic, strings.TrimSpace(critic)},
-	}
-	seen := map[string]bool{}
+// checkHerd answers "would certify accept this herd" by asking the SAME
+// preflight certify runs (resolveAuditRoles): decorrelation, the credential
+// each named seat needs under the operator's MODEL_BACKEND, the challenger
+// seat, the registry's placements. doctor used to run its own version —
+// ForModel per model, no MODEL_BACKEND, models de-duplicated before
+// decorrelation, no shadow seat — and disagreed with certify in both
+// directions: an all-local herd doctor called FAIL that certify accepted, a
+// pinned gateway doctor demanded the vendor's key for that certify did not,
+// and a writer==critic herd doctor passed that certify refused. A doctor
+// that contradicts the run it is a rehearsal for is worse than none.
+//
+// The unnamed-seat findings stay doctor's own, because certify's refusal
+// for those is one message about the run and doctor's job is one finding
+// per seat.
+func checkHerd(mutant, writer, critic, shadow string, reg *seatResolution) []checkResult {
 	var out []checkResult
-	for _, r := range roles {
+	named := true
+	for _, r := range []struct{ role, flag, model string }{
+		{advpool.RoleMutantGenerator, "mutant", strings.TrimSpace(mutant)},
+		{advpool.RoleTestWriter, "writer", strings.TrimSpace(writer)},
+		{advpool.RoleTestCritic, "critic", strings.TrimSpace(critic)},
+	} {
 		// An UNNAMED seat is the finding, not an excuse to check a model the
 		// operator never chose. doctor used to substitute claude-sonnet-5 here
 		// and then report a credential failure for it — telling someone with a
@@ -243,23 +257,45 @@ func checkCredentials(mutant, writer, critic string) []checkResult {
 					detail: "not named — the critic is advisory and may be left off"})
 				continue
 			}
+			named = false
 			out = append(out, checkResult{name: fmt.Sprintf("model for %s", r.role), detail: fmt.Sprintf(
-				"no model named. corral has no default models — pass --%s-model <model>, from whichever provider you have a key for",
-				map[string]string{advpool.RoleMutantGenerator: "mutant", advpool.RoleTestWriter: "writer"}[r.role])})
-			continue
+				"no model named. corral has no default models — pass --%s-model <model>, from whichever provider you have a key for", r.flag)})
 		}
-		if strings.EqualFold(r.model, "off") || seen[r.model] {
-			continue
-		}
-		seen[r.model] = true
-		name := fmt.Sprintf("credential for %s (%s)", r.role, r.model)
-		if _, err := agentbackend.ForModel(r.model); err != nil {
-			out = append(out, checkResult{name: name, detail: err.Error()})
-			continue
-		}
-		out = append(out, checkResult{name: name, ok: true})
 	}
-	return out
+	if !named {
+		return out
+	}
+	in := localAuditInput{
+		cmdName:     "corral doctor",
+		mutantModel: mutant, writerModel: writer, criticModel: critic, shadowModel: shadow,
+	}
+	if reg != nil {
+		in.seatProviders = reg.providers
+		in.localEndpoints = reg.endpoints
+	}
+	name := fmt.Sprintf("herd accepted by certify's own preflight (mutant-generator=%s, test-writer=%s, test-critic=%s)",
+		strings.TrimSpace(mutant), strings.TrimSpace(writer), advpool.ResolveOptionalModel(critic, "(off)"))
+	if _, err := resolveAuditRoles(in, io.Discard); err != nil {
+		out = append(out, checkResult{name: name, detail: err.Error()})
+		return out
+	}
+	return append(out, checkResult{name: name, ok: true})
+}
+
+// checkDeriveSeat rehearses the derive seat the same way certify --repo
+// constructs it (newLLMDeriver): the credential under the operator's pin,
+// or the registry's daemon. Skipped when no derive model is named — a
+// certify --local run has no such seat, and --goals replaces it on --repo.
+func checkDeriveSeat(model, endpoint string) []checkResult {
+	model = strings.TrimSpace(model)
+	if model == "" {
+		return nil
+	}
+	name := "credential for the derive seat (" + model + ")"
+	if _, err := newLLMDeriver(model, endpoint); err != nil {
+		return []checkResult{{name: name, detail: err.Error()}}
+	}
+	return []checkResult{{name: name, ok: true}}
 }
 
 // checkPairing answers the question that silently produces a useless run: does

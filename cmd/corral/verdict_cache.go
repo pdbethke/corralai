@@ -91,11 +91,7 @@ func (c *ledgerCache) Get(owner, cacheKey string) (reposcan.FileResult, bool) {
 			// Re-audit.
 			return false
 		}
-		if v.TimedOut {
-			// A banked partial from a run that hit its wall clock. That is an
-			// artifact of LOAD, not of content: the inputs have not changed,
-			// but the reason this verdict is incomplete might have. Serving
-			// it would freeze the partial forever; a re-run may converge.
+		if !verdictWorthServing(v) {
 			return false
 		}
 		out = reposcan.FileResult{
@@ -106,6 +102,33 @@ func (c *ledgerCache) Get(owner, cacheKey string) (reposcan.FileResult, bool) {
 		return true
 	})
 	return out, hit
+}
+
+// verdictWorthServing says whether a banked verdict is a MEASUREMENT of the
+// content it is keyed on, or an artifact of the run that produced it.
+//
+// TimedOut: a partial from a run that hit its wall clock — an artifact of
+// LOAD, not of content; a re-run may converge.
+//
+// TestWriterFailed / PoolTestUnsound / every writer seat ungraded: the dev
+// kill rate is real, but the writer half never graded — the provider was
+// down, the model produced nothing that compiled, the test never reached
+// the file. Each is a property of THAT RUN. Served from cache, a single
+// 429 on a --record scan pinned `proven_missed=0 [WRITER FAILED]` for the
+// file on every later scan (the same content, tests, models and engine
+// re-key to the same entry, and the cache-hit row re-records it, so the
+// newest row kept winning), and --max-proven-missed then failed every
+// subsequent scan on a measurement nobody could redo without editing the
+// file or changing a model. The rule is the same as TimedOut's: an
+// incomplete verdict is not frozen; a re-run may complete it.
+func verdictWorthServing(v advpool.Verdict) bool {
+	if v.TimedOut || v.TestWriterFailed || v.PoolTestUnsound {
+		return false
+	}
+	if v.WriterMode == advpool.WriterModePerSurvivor && v.Survivors > 0 && v.WriterSeatsUngraded >= v.Survivors {
+		return false
+	}
+	return true
 }
 
 // oldestReuse returns the earliest ComputedAt among results that were REUSED,

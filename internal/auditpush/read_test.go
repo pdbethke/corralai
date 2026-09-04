@@ -61,6 +61,15 @@ func TestReadBundleRoundTripsPushedRows(t *testing.T) {
 	// faithfully reporting what the warehouse actually holds.
 	want := original
 	BlankUnpushedSource(&want)
+	// scan_uid is minted by the PUSH (from its own timestamp), never
+	// carried in by the caller, so the read-back is the first place it
+	// exists. It must be non-empty — a reader that could not see the
+	// push's identity could not tell two pushes of one scan apart — and
+	// it is the one field the original cannot have had.
+	if got.Scan.ScanUID == "" {
+		t.Fatalf("read-back scan carries no scan_uid; the reader cannot identify the push it read")
+	}
+	got.Scan.ScanUID = ""
 
 	wantJSON, err := json.Marshal(want)
 	if err != nil {

@@ -357,6 +357,16 @@ type File struct {
 	// the whole file). "" for a row written before this column existed, or
 	// a rejected file that was never scored — never a fabricated value.
 	PromptShape string
+	// MutantBudget / MutantBudgetRule / Complexity mirror
+	// advpool.Verdict.MutantBudget: how many faults the seats were asked
+	// for, by which rule ("complexity", "explicit", "default"), and the
+	// file's summed symbol complexity the rule read. NULL on a row written
+	// before these columns, or a file that generated nothing — never a
+	// fabricated 0, since a kill rate over 8 mutants and one over 40 are
+	// different measurements.
+	MutantBudget     *int
+	MutantBudgetRule string
+	Complexity       *int
 	// AuthoredTestNotCollected mirrors advpool.Verdict.AuthoredTestNotCollected:
 	// the run proved a killing test compiled and ran, but the dev suite's own
 	// collection never picked it up, so ProvenMissed on this row is earned
@@ -538,6 +548,9 @@ var scanFilesMigrationCols = []struct{ name, ddl string }{
 	{"prompt_shape", "prompt_shape VARCHAR"},
 	{"covering_tests", "covering_tests INTEGER"},
 	{"import_only", "import_only BOOLEAN"},
+	{"mutant_budget", "mutant_budget INTEGER"},
+	{"mutant_budget_rule", "mutant_budget_rule VARCHAR"},
+	{"complexity", "complexity INTEGER"},
 }
 
 // scansMigrationCols is the same ledger at the SCAN grain. `scans` had no
@@ -693,7 +706,10 @@ func Open(dsn string) (*Store, error) {
 		writer_mode VARCHAR,
 		prompt_shape VARCHAR,
 		covering_tests INTEGER,
-		import_only BOOLEAN
+		import_only BOOLEAN,
+		mutant_budget INTEGER,
+		mutant_budget_rule VARCHAR,
+		complexity INTEGER
 	)`); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("scanstore: create scan_files table: %w", err)
@@ -1141,9 +1157,10 @@ func (s *Store) Record(ctx context.Context, scan Scan, files []File) (int64, err
 			mutant_ms_median, mutant_ms_max,
 			challenger_jaccard, challenger_kappa, challenger_sufficient, goals_derived, goal_reused,
 			per_mutant, tests_per_mutant_min, tests_per_mutant_median, tests_per_mutant_max,
-			writer_mode, prompt_shape, covering_tests, import_only
+			writer_mode, prompt_shape, covering_tests, import_only,
+			mutant_budget, mutant_budget_rule, complexity
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			id, f.Path, f.Lang, f.Disposition, f.Reason,
 			fileKillRate(f), f.Survivors, f.Gradable, f.PreflightState, f.Evidence, f.Detail, f.TimedOut, f.TestWriterFailed, f.ProvenMissed, f.PoolTestUnsound,
 			f.ProvenMutantIDs, f.AuthoredTest, f.CacheKey, f.VerdictJSON, f.ComputedAt,
@@ -1157,6 +1174,7 @@ func (s *Store) Record(ctx context.Context, scan Scan, files []File) (int64, err
 			f.ChallengerJaccard, f.ChallengerKappa, f.ChallengerSufficient, f.GoalsDerived, f.GoalReused,
 			f.PerMutant, f.TestsPerMutantMin, f.TestsPerMutantMedian, f.TestsPerMutantMax,
 			nullableString(f.WriterMode), nullableString(f.PromptShape), nullableIntPtr(f.CoveringTests), nullableBoolPtr(f.ImportOnly),
+			nullableIntPtr(f.MutantBudget), nullableString(f.MutantBudgetRule), nullableIntPtr(f.Complexity),
 		); err != nil {
 			return 0, fmt.Errorf("scanstore: insert scan_files row for %q: %w", f.Path, err)
 		}
@@ -1339,7 +1357,8 @@ func (s *Store) FilesForScan(ctx context.Context, scanID int64) ([]File, error) 
 		mutant_ms_median, mutant_ms_max,
 		challenger_jaccard, challenger_kappa, challenger_sufficient, goals_derived, goal_reused,
 		per_mutant, tests_per_mutant_min, tests_per_mutant_median, tests_per_mutant_max,
-		writer_mode, prompt_shape, covering_tests, import_only
+		writer_mode, prompt_shape, covering_tests, import_only,
+		mutant_budget, mutant_budget_rule, complexity
 		FROM scan_files WHERE scan_id = ? ORDER BY rowid`, scanID)
 	if err != nil {
 		return nil, fmt.Errorf("scanstore: files for scan %d: %w", scanID, err)
@@ -1411,6 +1430,8 @@ func (s *Store) FilesForScan(ctx context.Context, scanID int64) ([]File, error) 
 		// column existed — see File.ImportOnly's own doc for why NULL is
 		// distinct from a known false.
 		var importOnly sql.NullBool
+		var mutantBudget, complexity sql.NullInt64
+		var mutantBudgetRule sql.NullString
 		if err := rows.Scan(&f.Path, &f.Lang, &f.Disposition, &f.Reason,
 			&f.KillRate, &f.Survivors, &f.Gradable, &f.PreflightState, &f.Evidence, &detail, &timedOut, &testWriterFailed, &provenMissed, &poolTestUnsound,
 			&provenIDs, &authoredTest,
@@ -1423,7 +1444,8 @@ func (s *Store) FilesForScan(ctx context.Context, scanID int64) ([]File, error) 
 			&selectionMS, &generationMS, &poolMS, &devPassMS, &authoredPassMS, &criticMS, &totalMS,
 			&mutantMSMedian, &mutantMSMax,
 			&challengerJaccard, &challengerKappa, &challengerSufficient, &goalsDerived, &goalReused,
-			&perMutant, &tpmMin, &tpmMedian, &tpmMax, &writerMode, &promptShape, &coveringTests, &importOnly); err != nil {
+			&perMutant, &tpmMin, &tpmMedian, &tpmMax, &writerMode, &promptShape, &coveringTests, &importOnly,
+			&mutantBudget, &mutantBudgetRule, &complexity); err != nil {
 			return nil, fmt.Errorf("scanstore: scan scan_files row: %w", err)
 		}
 		f.Detail = detail.String
@@ -1509,6 +1531,9 @@ func (s *Store) FilesForScan(ctx context.Context, scanID int64) ([]File, error) 
 		f.TestsPerMutantMedian = nullCount(tpmMedian)
 		f.TestsPerMutantMax = nullCount(tpmMax)
 		f.PromptShape = promptShape.String
+		f.MutantBudget = nullCount(mutantBudget)
+		f.MutantBudgetRule = mutantBudgetRule.String
+		f.Complexity = nullCount(complexity)
 		out = append(out, f)
 	}
 	return out, rows.Err()

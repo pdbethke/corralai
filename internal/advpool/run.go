@@ -62,6 +62,17 @@ type RunSpec struct {
 	// NMutants is the PER-SHARD budget, so total mutants scale with width.
 	MaxShards int
 
+	// MutantRoundCost is a MEASURED wall-clock cost of grading one round of
+	// mutants — Concurrency.Trees of them at once — on this file's own
+	// selected command: half the workspace probe's duration (the probe runs
+	// the baseline in every tree, then the canary, so two rounds). 0 when
+	// nothing measured it (a pool of one probes nothing; the jail substrate
+	// has no pool), and then PlanShards fits nothing. Deadline is the
+	// per-file --timeout the run must converge inside. Together they let
+	// PlanShards fit the budget to the clock — see MutantBudget.Fitted.
+	MutantRoundCost time.Duration
+	Deadline        time.Duration
+
 	// ShadowModel is the CHALLENGER generator model. When set, every shard is
 	// attacked a second time by this model for a region-controlled head-to-head.
 	// Shadow mutants are parsed, scored, and recorded, but NEVER feed the

@@ -19,6 +19,7 @@ type Shard struct {
 	Symbols    []string // qualified identities from symbolIdentity, e.g. "*Engine.String" — never bare names, see symbolIdentity
 	Complexity int      // summed symbol complexity — the packing weight and the difficulty control
 	Lines      int      // summed symbol line span
+	Mutants    int      // how many mutants this seat is asked for — stamped by PlanShards, 0 from ShardSymbols alone
 }
 
 // symbolIdentity is the ONE qualified identifier used both to record a

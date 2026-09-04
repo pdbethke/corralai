@@ -254,8 +254,9 @@ touched.
 ## Why scoped by default, and why whole-repo is opt-in
 
 Auditing one file runs a full adversarial herd against it — generate mutants,
-run the project's real suite against each one, repeatedly — an ESTIMATE of ~40 suite
-runs per audited file, against CI's one. That's a normal cost for the three
+run the project's real suite against each one, repeatedly — between 5 and 40 suite
+runs per audited file (one per mutant, the count sized to the file's complexity),
+against CI's one. That's a normal cost for the three
 files a PR actually touched; it is not for every file in the repo. Leave
 `diff-base` at its default (the PR's base ref) and the action audits only
 what changed. Passing an empty `diff-base` audits the whole repository instead

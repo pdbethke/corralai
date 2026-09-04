@@ -59,7 +59,13 @@ package reposcan
 // the cache now REFUSES any verdict whose writer half never graded, so a
 // cached "7" document with TestWriterFailed set would not be served either
 // way; the flag is what lets the scorecard tell the two apart.
-const VerdictGeneration = "8"
+// "9" (2026-09-04): the Verdict gained MutantBudget, and the EXAM CHANGED —
+// a run with no explicit --n-mutants now plants a complexity-derived budget
+// (floor 5, ceiling 40) instead of a flat 5 per seat, and the authored pass
+// runs the authored test alone for its baseline and canary too. A cached "8"
+// verdict measured a different exam and must not be served as this one; its
+// zero-valued MutantBudget would also read as "generated nothing".
+const VerdictGeneration = "9"
 
 // VerdictShapeSHA256 fingerprints advpool.Verdict's serialized shape: every
 // exported field's name, type and json tag, sorted by name and hashed.
@@ -81,4 +87,4 @@ const VerdictGeneration = "8"
 // Verdict's own FIELDS") and nothing wider. Nor can any fingerprint catch the
 // behaviour half: a scorer that computes a DIFFERENT number into the SAME
 // field is invisible here, and remains a review responsibility.
-const VerdictShapeSHA256 = "85012ca239ef8593c79d588ae43a478163eceb791beb975d67601dd75b907c8d"
+const VerdictShapeSHA256 = "52af485389f731949a343febfc324a004aa1b579eb562159f02d4e61986b6f98"

@@ -147,9 +147,18 @@ func TestBuildDAGUnshardedIsByteIdenticalPrompt(t *testing.T) {
 	if got[0].Key != RoleMutantGenerator {
 		t.Errorf("key: want %q, got %q", RoleMutantGenerator, got[0].Key)
 	}
-	want := renderMutantGenerator(rs, sigs, nil)
+	// The one thing the seat adds to the spec is its budget (see
+	// PlanShards): rs.NMutants 0 means "derive", and the whole-file seat
+	// asks for the whole derived budget.
+	_, budget := PlanShards(sigs, rs)
+	budgeted := rs
+	budgeted.NMutants = budget.Total
+	want := renderMutantGenerator(budgeted, sigs, nil)
 	if got[0].Instruction != want {
 		t.Errorf("unsharded instruction must be byte-identical to renderMutantGenerator\nwant:\n%s\ngot:\n%s", want, got[0].Instruction)
+	}
+	if !strings.Contains(got[0].Instruction, fmt.Sprint(budget.Total)) || budget.Total != BudgetFloor {
+		t.Errorf("a one-function file derives the floor (%d) and the seat is asked for it: budget=%+v", BudgetFloor, budget)
 	}
 }
 

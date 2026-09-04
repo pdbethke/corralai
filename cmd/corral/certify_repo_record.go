@@ -240,7 +240,13 @@ func buildScanFileRows(results []reposcan.FileResult, excluded []reposcan.Exclus
 				// see scanstore.File.PromptShape's doc.
 				PromptShape:              r.Verdict.PromptShape,
 				AuthoredTestNotCollected: r.Verdict.AuthoredTestNotCollected,
-				BaselineFailed:           r.Verdict.BaselineFailed,
+				// What the seats were asked for, and why — see
+				// scanstore.File.MutantBudget's doc. Left NULL, not 0, when
+				// the run generated nothing (--mutants).
+				MutantBudget:     nullIfZeroIntPtr(r.Verdict.MutantBudget.Total),
+				MutantBudgetRule: r.Verdict.MutantBudget.Rule,
+				Complexity:       nullIfZeroIntPtr(r.Verdict.MutantBudget.Complexity),
+				BaselineFailed:   r.Verdict.BaselineFailed,
 				// SuiteBaselineMillis is the cost-model input: how long the
 				// dev suite's own compliant run took, in milliseconds — see
 				// scanstore.File.SuiteBaselineMillis. Like every timing
@@ -990,3 +996,12 @@ func unmeasuredOnReuse(r reposcan.FileResult, ms *int64) *int64 {
 // row also reads back as. Named for the shape it converts, the same reason
 // scanstore's own nullableIntPtr was renamed off its first caller.
 func boolPtr(v bool) *bool { return &v }
+
+// nullIfZeroIntPtr is the ledger's "unmeasured is NULL" rule for a count
+// whose zero value means "never set": a *int that is nil at 0.
+func nullIfZeroIntPtr(v int) *int {
+	if v == 0 {
+		return nil
+	}
+	return &v
+}

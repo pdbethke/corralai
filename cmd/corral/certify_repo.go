@@ -3472,6 +3472,11 @@ func printWeakFile(w io.Writer, f reposcan.WeakFile) {
 	if f.PromptShape != "" {
 		fmt.Fprintf(w, " — prompts: %s", f.PromptShape)
 	}
+	if f.MutantBudget.Total > 0 {
+		// The exam's size and why: a reader comparing two files' kill rates
+		// needs to know one sat 8 questions and the other 40.
+		fmt.Fprintf(w, "\n   mutants: %s", f.MutantBudget)
+	}
 	fmt.Fprintln(w)
 	// How many private trees scored this file at once, or why it only got
 	// one — the same wording noteConcurrency printed live during the run,
@@ -4908,6 +4913,11 @@ func writeAuditStatement(path, repoDir string, r reposcan.RepoReport, models map
 			// What a mutant-generator shard actually saw — see
 			// certify.AuditedFile.PromptShape's doc.
 			PromptShape: f.PromptShape,
+			// What the seats were asked for — see
+			// certify.AuditedFile.MutantBudget's doc.
+			MutantBudget:     f.MutantBudget.Total,
+			MutantBudgetRule: f.MutantBudget.Rule,
+			Complexity:       f.MutantBudget.Complexity,
 			// Whether this file's goal was served from the goal cache — see
 			// certify.AuditedFile.GoalReused's doc.
 			GoalReused: f.GoalReused,

@@ -433,7 +433,10 @@ CREATE TABLE IF NOT EXISTS corral_audits (
   schema_version          INTEGER,
   prompt_shape            VARCHAR,
   covering_tests          INTEGER,
-  import_only             BOOLEAN
+  import_only             BOOLEAN,
+  mutant_budget           INTEGER,
+  mutant_budget_rule      VARCHAR,
+  complexity              INTEGER
 );`
 
 // The mutant grain's outcome CHECK is the same discipline scan_files'
@@ -589,6 +592,9 @@ var corralAuditsMigrationCols = []struct{ name, ddl string }{
 	{"import_only", "import_only BOOLEAN"},
 	{"scan_uid", "scan_uid VARCHAR"},
 	{"started_at", "started_at TIMESTAMPTZ"},
+	{"mutant_budget", "mutant_budget INTEGER"},
+	{"mutant_budget_rule", "mutant_budget_rule VARCHAR"},
+	{"complexity", "complexity INTEGER"},
 }
 
 // The other four tables are NEW at schema_version 2, so nothing predates
@@ -1282,8 +1288,9 @@ func insertFileRow(tx *sql.Tx, uid string, now time.Time, r Row) error {
 	    challenger_sufficient, goals_derived, goal_reused,
 	    selection_ms, generation_ms, pool_ms, dev_pass_ms, authored_pass_ms,
 	    critic_ms, total_ms, mutant_ms_median, mutant_ms_max,
-	    authored_test, verdict_json, schema_version, prompt_shape, covering_tests, import_only, started_at
-	  ) VALUES (`+placeholders(77)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
+	    authored_test, verdict_json, schema_version, prompt_shape, covering_tests, import_only, started_at,
+	    mutant_budget, mutant_budget_rule, complexity
+	  ) VALUES (`+placeholders(80)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
 		uid, now, r.Repo, r.Commit, r.Path, r.Lang,
 		killRate, r.Survivors, r.ProvenMissed,
 		r.TimedOut, r.TestWriterFailed, r.PoolTestUnsound,
@@ -1310,6 +1317,7 @@ func insertFileRow(tx *sql.Tx, uid string, now time.Time, r Row) error {
 		r.MutantMillisMedian, r.MutantMillisMax,
 		authoredTest, verdictJSON, SchemaVersion, nullIfEmpty(r.PromptShape), r.CoveringTests, r.ImportOnly,
 		nullTime(r.StartedAt),
+		r.MutantBudget, nullIfEmpty(r.MutantBudgetRule), r.Complexity,
 	)
 	if err != nil {
 		return fmt.Errorf("auditpush: insert %s: %w", r.Path, err)

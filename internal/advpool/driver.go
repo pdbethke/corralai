@@ -579,6 +579,11 @@ type Verdict struct {
 	// suite (Method "", and Fallback says why under selection). Two
 	// verdicts with different Methods are not comparable.
 	TestSelection TestSelection
+	// MutantBudget says how many faults the generator seats were asked
+	// for and by what rule — see PlanShards. A kill rate over 8 mutants
+	// and one over 40 are different measurements; this is what tells
+	// them apart. Zero-valued on a replayed (--mutants) run.
+	MutantBudget MutantBudget
 	// Concurrency discloses how many private trees scored this file at
 	// once, or why it only got one. See the Concurrency type's doc.
 	Concurrency Concurrency
@@ -1107,6 +1112,10 @@ type runState struct {
 	// should read like the former. Empty/absent for an unsharded run's single
 	// bare-keyed task, which falls back to its Title.
 	shardSymbols map[string][]string
+	// mutantBudget is Verdict.MutantBudget: what the generator seats were
+	// asked for and why, from the SAME PlanShards call BuildDAG made. The
+	// zero value on a preset run, which generates nothing.
+	mutantBudget MutantBudget
 	// promptShape is Verdict.PromptShape, computed once at StartRun from the
 	// SAME ShardSymbols call BuildDAG made internally (mirroring
 	// shardSymbols/shardStats): "chunk" when every shard's signatures were
@@ -1497,8 +1506,14 @@ func (d *Driver) StartRun(missionID int64, rs RunSpec, sigs []repoindex.Signatur
 	// Seeding it anyway would emit per-shard telemetry for seats that never
 	// existed — a positive claim about work nobody did.
 	var shards []Shard
+	var budget MutantBudget
 	if rs.PresetMutants == nil {
-		shards = ShardSymbols(sigs, rs.MaxShards)
+		shards, budget = PlanShards(sigs, rs)
+		// Said before the first model call, so an operator watching a
+		// scan sees the exam's size — and a budget the clock cut, or an
+		// explicit one that will not fit — while there is still time to
+		// stop it.
+		log.Printf("advpool: %s: mutants: %s", rs.CodePath, budget)
 	}
 	shardSymbols := make(map[string][]string, len(shards))
 	// shardStats seeds the metrics substrate with each shard's difficulty
@@ -1565,6 +1580,7 @@ func (d *Driver) StartRun(missionID int64, rs RunSpec, sigs []repoindex.Signatur
 		droppedKeys:    map[string]bool{},
 		shardSymbols:   shardSymbols,
 		promptShape:    promptShape,
+		mutantBudget:   budget,
 		shardStats:     stats,
 		shadowStats:    shadowStats,
 		testComplexity: testComplexity,
@@ -2672,6 +2688,7 @@ func (d *Driver) tickAggregate(ctx context.Context, missionID int64, run *runSta
 		criticFindings, d.Threshold, false, run.testWriterFailed, run.poolTestUnsound)
 	v.RegionsTotal = run.regionsTotal
 	v.PromptShape = run.promptShape
+	v.MutantBudget = run.mutantBudget
 	v.RegionsProbed = run.regionsProbed
 	v.DroppedRegions = run.droppedRegions
 	v.DuplicateMutants = run.dupMutants
@@ -3132,6 +3149,7 @@ func (d *Driver) timeoutVerdict(run *runState) Verdict {
 	v.DroppedRegions = run.droppedRegions
 	v.DuplicateMutants = run.dupMutants
 	v.PromptShape = run.promptShape
+	v.MutantBudget = run.mutantBudget
 	v.ModelsByRole = run.modelsByRole(d.Assign)
 	// A stalled run still spent everything it spent, and it is the run an
 	// operator most needs the clock for: "which phase was it sitting in when

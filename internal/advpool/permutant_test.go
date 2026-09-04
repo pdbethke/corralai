@@ -423,11 +423,20 @@ func TestTimeoutVerdictCarriesPerMutantGrading(t *testing.T) {
 }
 
 // The AUTHORED pass grades survivors of the dev pass. No selected dev test
-// killed them, so the only test that can is the authored one: each survivor
-// runs the authored test ALONE, while the compliance baseline and the
-// canary keep the shared command (selection + authored path) — they are
-// questions about whether the authored test is real, not about the mutant.
-func TestScoreAuthoredReportGradesEachSurvivorWithTheAuthoredTestAlone(t *testing.T) {
+// killed them, so the only test that can is the authored one — and every
+// question the pass asks is a question about THAT test: does it pass on the
+// unmutated code, does it react to broken source, does it kill the survivor.
+// So under a selection the whole pass runs the authored test ALONE: the
+// baseline, the canary and each survivor. The shared command (the file's
+// selection + the authored path) must never appear. It used to: the baseline,
+// the canary and the positive control each ran the file's full selection per
+// seat, so on psf/requests a hub file with 146–336 covering tests paid three
+// half-minute suite runs per survivor and timed out with most survivors
+// never attempted — while the report said "proven by the authored test
+// alone". Alone also makes the canary STRONGER: with the dev tests in the
+// command, a dev test reacting to broken source satisfied it for free,
+// whether or not the authored test ever read the file.
+func TestScoreAuthoredReportRunsTheWholePassWithTheAuthoredTestAlone(t *testing.T) {
 	const codePath, code = "pkg/a.py", "x = 1\n"
 	jail := &spanRecordingJail{codePath: codePath, code: code}
 	s := repoScorer(lineSelection())
@@ -443,19 +452,14 @@ func TestScoreAuthoredReportGradesEachSurvivorWithTheAuthoredTestAlone(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	shared := []string{"python3", "-m", "pytest", "-q", "tests/test_a.py::t1", "tests/test_a.py::t2", authored}
 	alone := []string{"python3", "-m", "pytest", "-q", authored}
-	if len(jail.cmds) < 3 || !reflect.DeepEqual(jail.cmds[0], shared) {
-		t.Fatalf("the compliance baseline must run the shared authored command %v; ran %v", shared, jail.cmds)
+	if len(jail.cmds) < 4 {
+		t.Fatalf("want baseline + canary + 2 survivors (+ the positive control), ran %d: %v", len(jail.cmds), jail.cmds)
 	}
-	aloneRuns := 0
-	for _, c := range jail.cmds[1:] {
-		if reflect.DeepEqual(c, alone) {
-			aloneRuns++
+	for i, c := range jail.cmds {
+		if !reflect.DeepEqual(c, alone) {
+			t.Errorf("run %d used %v; every run of the authored pass must be the authored test alone %v", i, c, alone)
 		}
-	}
-	if aloneRuns < 2 {
-		t.Errorf("each survivor must run the authored test alone %v; commands: %v", alone, jail.cmds)
 	}
 	for _, id := range []string{"m1", "m2"} {
 		if got := rep.PerMutant[id]; got.TestsRun != 1 || got.Rule != RuleAuthoredAlone {

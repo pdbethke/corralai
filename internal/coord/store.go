@@ -250,6 +250,15 @@ func (s *Store) Despawn(name string) (bool, error) {
 	return n > 0, nil
 }
 
+// Exists reports whether an agent row is present — the revocation oracle for
+// delegation tokens (auth.Verifier.SetRevocationCheck): a despawned subagent
+// is gone from here, and its token must be dead with it. A query error reads
+// as "does not exist" — fail closed, the token is refused.
+func (s *Store) Exists(name string) bool {
+	var x int
+	return s.db.QueryRow(`SELECT 1 FROM agents WHERE name=?`, name).Scan(&x) == nil
+}
+
 // Subagents returns the direct children of an agent (one level).
 func (s *Store) Subagents(parent string) ([]Agent, error) {
 	rows, err := s.db.Query(

@@ -143,6 +143,15 @@ func registerSubagents(s *mcp.Server, store *coord.Store, opts Options) {
 				if opts.MintToken == nil {
 					return nil, out, fmt.Errorf("out-of-process subagents unavailable (delegation not enabled on this brain)")
 				}
+				// A delegation token may not mint another. The chain used to
+				// be unbounded: a worker on a two-second token spawned a
+				// grandchild with a three-year one, and the grandchild kept
+				// authenticating after its parent expired and was despawned.
+				// Credentials are minted by principals; a worker that needs a
+				// worker asks its principal for one.
+				if subagentOf(req) != "" {
+					return nil, out, fmt.Errorf("a delegation token cannot mint a delegation token: spawn out-of-process workers from the principal's own session")
+				}
 				pRoot := principal
 				if pRoot == "" {
 					pRoot = parent

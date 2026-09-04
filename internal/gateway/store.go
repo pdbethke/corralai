@@ -98,9 +98,17 @@ func (s *Store) Close() error { return s.db.Close() }
 // Register creates/updates a PERSONAL endpoint owned by `owner`. A name owned by
 // another user is rejected (no clobbering). public/owner are not changed on update
 // (only admin promotion flips public). An empty token leaves the secret untouched.
+//
+// A PROMOTED (public) endpoint is frozen to its owner: an admin promoted a
+// specific URL under a team credential, and letting the owner re-point the
+// URL afterwards — while an empty token kept the team secret — sent every
+// teammate's call_capability, Authorization header and all, to whatever host
+// the owner chose next. Changing a public endpoint is an admin act (Promote
+// it private first, or have an admin re-promote the new URL).
 func (s *Store) Register(e Endpoint, auth Auth, owner string) error {
 	var exOwner string
-	err := s.db.QueryRow(`SELECT owner FROM endpoints WHERE name=?`, e.Name).Scan(&exOwner)
+	var public int
+	err := s.db.QueryRow(`SELECT owner, public FROM endpoints WHERE name=?`, e.Name).Scan(&exOwner, &public)
 	switch {
 	case err == sql.ErrNoRows:
 		// new
@@ -116,6 +124,8 @@ func (s *Store) Register(e Endpoint, auth Auth, owner string) error {
 		return err
 	case exOwner != owner:
 		return fmt.Errorf("endpoint name %q is owned by another user", e.Name)
+	case public == 1:
+		return fmt.Errorf("endpoint %q is promoted public under a team credential and cannot be changed by its owner — ask an admin to re-promote it, or to make it private first", e.Name)
 	}
 	// update own
 	if _, err := s.db.Exec(`UPDATE endpoints SET transport=?, endpoint=?, description=?, enabled=? WHERE name=?`,

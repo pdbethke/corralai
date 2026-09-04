@@ -108,3 +108,23 @@ func TestExecutionsByMission(t *testing.T) {
 		t.Fatalf("got %v err=%v", got, err)
 	}
 }
+
+// TestVerifyFallbackTrustsOnlyTheClaimersOwnReport: the gate's self-report
+// fallback matched executions on mission + command + time only, so any
+// agent's ok:true row for the verify command satisfied another agent's
+// gate. Restricted to one agent, mallory's report no longer passes alice's.
+func TestVerifyFallbackTrustsOnlyTheClaimersOwnReport(t *testing.T) {
+	s := openTestStore(t)
+	if err := s.RecordExecution(Execution{MissionID: 7, Agent: "mallory", Command: "go test ./...", OK: true, TS: 100}); err != nil {
+		t.Fatal(err)
+	}
+	if ok, _ := s.MissionPassedVerifySinceBy(7, "go test ./...", 50, "alice"); ok {
+		t.Fatal("mallory's self-report satisfied alice's gate")
+	}
+	if ok, _ := s.MissionPassedVerifySinceBy(7, "go test ./...", 50, "mallory"); !ok {
+		t.Fatal("mallory's own report should satisfy mallory's gate")
+	}
+	if ok, _ := s.MissionPassedVerifySince(7, "go test ./...", 50); !ok {
+		t.Fatal("the mission-wide read (no agent) should still see the row")
+	}
+}

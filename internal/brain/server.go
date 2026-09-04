@@ -260,7 +260,7 @@ func NewServer(store *coord.Store, mem *memory.Store, opts Options) *mcp.Server 
 				reclaimBackoff = 0 // negative => disabled
 			}
 		}
-		registerTasks(s, store, opts.Queue, opts.TaskLeaseSeconds, reclaimBackoff, opts.Telemetry, opts.HostBook, opts.Learn, opts.Health, opts.Workspace, opts.Verify)
+		registerTasks(s, store, opts.Queue, opts.TaskLeaseSeconds, reclaimBackoff, opts.Telemetry, opts.HostBook, opts.Learn, opts.Health, opts.Workspace, opts.Verify, opts)
 	}
 	if opts.Reference != nil && opts.Embedder != nil {
 		registerReference(s, opts)

@@ -105,7 +105,9 @@ func registerAdmin(s *mcp.Server, opts Options) {
 			if opts.Principals == nil {
 				return nil, listPrincipalsOut{Principals: []principals.Principal{}}, nil
 			}
-			if !opts.isAdmin(req) {
+			// The roster is what a compromised worker would want first;
+			// isHumanAdmin keeps it from an admin's delegation tokens.
+			if !opts.isHumanAdmin(req) {
 				return nil, listPrincipalsOut{}, fmt.Errorf("forbidden: superuser only")
 			}
 			ps, err := opts.Principals.List()
@@ -169,6 +171,14 @@ func registerAdmin(s *mcp.Server, opts Options) {
 			}
 			if principal == "" {
 				return nil, observerTokenOut{}, fmt.Errorf("no principal: provide one or authenticate so I can scope the token")
+			}
+			// The token authenticates AS this principal on every read
+			// surface (and /api/me reports their is_superuser), so the
+			// string must name an allowed principal — not an arbitrary
+			// identity an admin typed, and never one that is not on the
+			// roster at all.
+			if opts.Principals != nil && !opts.Principals.Allowed(principal) {
+				return nil, observerTokenOut{}, fmt.Errorf("forbidden: %q is not an allowed principal — add_member first, then mint", principal)
 			}
 			ttl := 24 * time.Hour
 			if in.TTLSeconds > 0 {

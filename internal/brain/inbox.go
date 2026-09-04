@@ -32,7 +32,11 @@ func canInstruct(req *mcp.CallToolRequest, target string, opts Options) bool {
 	if p == "" {
 		return true
 	}
-	return opts.isAdmin(req) || inNamespace(target, p)
+	// isHumanAdmin, not isAdmin: an admin's own out-of-process worker (a
+	// delegation token that rolls up to the superuser) must not be able to
+	// push instruction text into another principal's agent. Sending an
+	// instruction is a human act.
+	return opts.isHumanAdmin(req) || inNamespace(target, p)
 }
 
 type sendInstructionIn struct {

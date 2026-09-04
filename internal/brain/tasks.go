@@ -203,7 +203,7 @@ const escalationRefusals = 5
 
 // registerTasks adds the pull-model tools: a bee claims the next ready task it
 // can serve, runs it, and completes it; list_tasks is the live work list.
-func registerTasks(s *mcp.Server, store *coord.Store, q *queue.Store, lease float64, claimBackoff time.Duration, tel *telemetry.Store, book *HostBook, ls *learn.Store, health *HealthBook, workspace string, verify VerifyFunc) {
+func registerTasks(s *mcp.Server, store *coord.Store, q *queue.Store, lease float64, claimBackoff time.Duration, tel *telemetry.Store, book *HostBook, ls *learn.Store, health *HealthBook, workspace string, verify VerifyFunc, opts Options) {
 	if lease <= 0 {
 		lease = 300
 	}
@@ -336,7 +336,10 @@ func registerTasks(s *mcp.Server, store *coord.Store, q *queue.Store, lease floa
 					passed = ok
 				} else {
 					since := int64(math.Ceil(t.ClaimedTS))
-					p, err := q.MissionPassedVerifySince(t.MissionID, t.Verify, since)
+					// The claimer's OWN report, never another agent's: the
+					// fallback matched on mission+command+time only, so any
+					// worker's ok:true row satisfied this task's gate.
+					p, err := q.MissionPassedVerifySinceBy(t.MissionID, t.Verify, since, t.ClaimedBy)
 					if err != nil {
 						return nil, completeTaskOut{}, err
 					}
@@ -470,6 +473,9 @@ func registerTasks(s *mcp.Server, store *coord.Store, q *queue.Store, lease floa
 	mcp.AddTool(s, &mcp.Tool{Name: "cancel_task",
 		Description: "Abandon a task that is no longer needed (pending/ready/claimed → cancelled). REFUSES if live tasks still depend on it (they would be stranded forever) and returns their keys — supersede_task or retarget_dependencies instead, or pass cascade:true to deliberately cancel the whole dependent subtree."},
 		func(_ context.Context, req *mcp.CallToolRequest, in cancelIn) (*mcp.CallToolResult, cancelOut, error) {
+			if !opts.isHumanAdmin(req) {
+				return nil, cancelOut{}, fmt.Errorf("forbidden: superuser only (cancelling a task steers a mission — see pause_mission)")
+			}
 			cancelled, blocked, err := q.CancelTaskGuarded(in.ID, in.Cascade)
 			if err != nil {
 				return nil, cancelOut{}, err
@@ -487,6 +493,9 @@ func registerTasks(s *mcp.Server, store *coord.Store, q *queue.Store, lease floa
 	mcp.AddTool(s, &mcp.Tool{Name: "retarget_dependencies",
 		Description: "Re-point every live task that depends on from_key to depend on to_key instead — the one-step recovery when a dependency is dead (cancelled/superseded) but another task covers it. Refuses cycles and unknown targets."},
 		func(_ context.Context, req *mcp.CallToolRequest, in retargetIn) (*mcp.CallToolResult, retargetOut, error) {
+			if !opts.isHumanAdmin(req) {
+				return nil, retargetOut{}, fmt.Errorf("forbidden: superuser only (retargeting dependencies steers a mission — see pause_mission)")
+			}
 			if in.MissionID == 0 || in.FromKey == "" || in.ToKey == "" {
 				return nil, retargetOut{}, fmt.Errorf("mission_id, from_key, to_key required")
 			}
@@ -501,6 +510,9 @@ func registerTasks(s *mcp.Server, store *coord.Store, q *queue.Store, lease floa
 	mcp.AddTool(s, &mcp.Tool{Name: "reopen_task",
 		Description: "Re-do a finished task whose premise changed (done → ready) — e.g. rebuild on a corrected foundation."},
 		func(_ context.Context, req *mcp.CallToolRequest, in taskIDIn) (*mcp.CallToolResult, okOut, error) {
+			if !opts.isHumanAdmin(req) {
+				return nil, okOut{}, fmt.Errorf("forbidden: superuser only (reopening a task steers a mission — see pause_mission)")
+			}
 			ok, err := q.ReopenTask(in.ID)
 			if ok {
 				recTask(tel, q, in.ID, "task_reopened", actorOf(req))
@@ -596,6 +608,9 @@ func registerTasks(s *mcp.Server, store *coord.Store, q *queue.Store, lease floa
 	mcp.AddTool(s, &mcp.Tool{Name: "supersede_task",
 		Description: "Replace a stale task with a reworked one (old → superseded; the replacement carries the lineage). Pending dependents are rewritten to wait on the replacement, so the plan stays valid. The role must be one the mission already staffs."},
 		func(_ context.Context, req *mcp.CallToolRequest, in taskSpecIn) (*mcp.CallToolResult, supersedeOut, error) {
+			if !opts.isHumanAdmin(req) {
+				return nil, supersedeOut{}, fmt.Errorf("forbidden: superuser only (superseding a task steers a mission — see pause_mission)")
+			}
 			if mid, err := q.MissionOfTask(in.OldID); err == nil && mid != 0 {
 				if err := checkStaffedRole(mid, in.Role); err != nil {
 					return nil, supersedeOut{}, err
@@ -615,6 +630,9 @@ func registerTasks(s *mcp.Server, store *coord.Store, q *queue.Store, lease floa
 	mcp.AddTool(s, &mcp.Tool{Name: "enqueue_task",
 		Description: "Add a new task to a running mission (rework the lead decided is needed). It joins the queue and the hive picks it up. The role must be one the mission already staffs."},
 		func(_ context.Context, req *mcp.CallToolRequest, in taskSpecIn) (*mcp.CallToolResult, okOut, error) {
+			if !opts.isHumanAdmin(req) {
+				return nil, okOut{}, fmt.Errorf("forbidden: superuser only (enqueueing work into a mission steers a mission — see pause_mission)")
+			}
 			if in.MissionID == 0 {
 				return nil, okOut{}, fmt.Errorf("mission_id required")
 			}
@@ -634,6 +652,9 @@ func registerTasks(s *mcp.Server, store *coord.Store, q *queue.Store, lease floa
 	mcp.AddTool(s, &mcp.Tool{Name: "resolve_finding",
 		Description: "Set a finding's status: addressed once you've acted on it (e.g. enqueued rework), or dismissed if it's not a real problem. Keeps the feedback loop from reprocessing it."},
 		func(_ context.Context, req *mcp.CallToolRequest, in resolveFindingIn) (*mcp.CallToolResult, okOut, error) {
+			if !opts.isHumanAdmin(req) {
+				return nil, okOut{}, fmt.Errorf("forbidden: superuser only (resolving a finding steers a mission — see pause_mission)")
+			}
 			ok, err := q.SetFindingStatus(in.ID, in.Status)
 			if ok {
 				if f, fok, _ := q.FindingByID(in.ID); fok {

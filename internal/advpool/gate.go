@@ -422,15 +422,25 @@ func (s JailScorer) ScoreAuthoredReport(ctx context.Context, codePath, code, tes
 
 	// The mutants here are SURVIVORS of the dev pass: no selected dev test
 	// killed them, so re-running those tests cannot kill them either — the
-	// only test that can is the authored one. Each survivor therefore runs
-	// the authored test ALONE, which is both cheaper (one test instead of
-	// the file's selection, per survivor) and more honest: a dev test that
-	// flaked during this pass used to count as the authored test proving a
-	// gap. The compliance baseline and the canary keep the shared command —
-	// they ask whether the authored test is real, not whether it kills.
+	// only test that can is the authored one. Under a selection the WHOLE
+	// pass therefore runs the authored test ALONE — the compliance baseline,
+	// the canary, the positive control and each survivor. Every one of them
+	// is a question about that test (does it pass on the unmutated code,
+	// does it react to broken source, does it kill), and none of them is
+	// answered any better by the file's dev tests riding along. They used
+	// to ride along on the first three: per seat, three full runs of the
+	// file's selection — 146 to 336 tests on psf/requests' hub files — so a
+	// file with thirty survivors spent twenty-five minutes proving and timed
+	// out with half of them never attempted, while the report said "proven
+	// by the authored test alone". Alone is also the stronger canary: with
+	// the dev tests in the command, any dev test reacting to broken source
+	// satisfied it for free, whether or not the authored test ever read the
+	// file. It is also more honest on the kill: a dev test that flaked
+	// during this pass used to count as the authored test proving a gap.
 	opts := s.baseScoreOpts()
 	if ts := s.selector(); ts != nil {
 		alone := ts.WithAuthoredTest(golang.Selection{Base: s.Selection.Base}, base, authoredTestPath(codePath, s.DevTestPath, s.BaseFiles))
+		cmd = alone
 		opts = append(opts, adequacy.WithCommandFor(func(adequacy.Mutant) adequacy.MutantCommand {
 			return adequacy.MutantCommand{Cmd: alone, Tests: 1, Rule: RuleAuthoredAlone}
 		}))

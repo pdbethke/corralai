@@ -33,7 +33,12 @@ func TestJailPHPLoadsItsExtensions(t *testing.T) {
 	if _, err := exec.LookPath("php"); err != nil {
 		t.Skip("no php on this box")
 	}
-	_, out, err := vj.RunTestVerbose(context.Background(), map[string]string{"x.php": "<?php echo 'x';"}, []string{"php", "-m"})
+	// Ask for the list on stdout and drop stderr: on the Hetzner runner the
+	// snmp extension, now that it loads, prints hundreds of MIB warnings at
+	// startup, which pushed `php -m`'s real output past the jail's output
+	// cap and made a passing box look like a failing one.
+	_, out, err := vj.RunTestVerbose(context.Background(), map[string]string{"x.php": "<?php echo 'x';"},
+		[]string{"sh", "-c", `php -r 'echo "Core\n" . implode("\n", get_loaded_extensions()) . "\n";' 2>/dev/null`})
 	if err != nil {
 		t.Fatalf("php is on the host PATH but did not run in the jail: %v", err)
 	}

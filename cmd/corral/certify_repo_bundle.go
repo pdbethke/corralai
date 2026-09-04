@@ -213,6 +213,10 @@ func buildAuditRows(files []scanstore.File, scanID int64, meta bundleMeta) []aud
 			MutantBudget:     f.MutantBudget,
 			MutantBudgetRule: f.MutantBudgetRule,
 			Complexity:       f.Complexity,
+			Symbols:          f.Symbols,
+			SymbolsProbed:    f.SymbolsProbed,
+			Decisions:        f.Decisions,
+			DecisionsProbed:  f.DecisionsProbed,
 		})
 	}
 	return rows

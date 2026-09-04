@@ -246,7 +246,12 @@ func buildScanFileRows(results []reposcan.FileResult, excluded []reposcan.Exclus
 				MutantBudget:     nullIfZeroIntPtr(r.Verdict.MutantBudget.Total),
 				MutantBudgetRule: r.Verdict.MutantBudget.Rule,
 				Complexity:       nullIfZeroIntPtr(r.Verdict.MutantBudget.Complexity),
-				BaselineFailed:   r.Verdict.BaselineFailed,
+				// The exam's reach — NULL, all four, when unmeasured.
+				Symbols:         examCount(r.Verdict.ExamCoverage, r.Verdict.ExamCoverage.Symbols),
+				SymbolsProbed:   examCount(r.Verdict.ExamCoverage, r.Verdict.ExamCoverage.SymbolsProbed),
+				Decisions:       examCount(r.Verdict.ExamCoverage, r.Verdict.ExamCoverage.Decisions),
+				DecisionsProbed: examCount(r.Verdict.ExamCoverage, r.Verdict.ExamCoverage.DecisionsProbed),
+				BaselineFailed:  r.Verdict.BaselineFailed,
 				// SuiteBaselineMillis is the cost-model input: how long the
 				// dev suite's own compliant run took, in milliseconds — see
 				// scanstore.File.SuiteBaselineMillis. Like every timing
@@ -641,6 +646,10 @@ func buildScanMutantRows(scanID int64, results []reposcan.FileResult) []scanstor
 				// "nothing caught it". Empty here too whenever the runner's
 				// output did not say, and stored as NULL rather than "".
 				KilledBy: m.KilledBy,
+				// WHERE the fault was — the term an exam's coverage is
+				// computed from. 0/0 (stored NULL) when the generator
+				// recorded no span.
+				SpanStart: m.Span.Start, SpanEnd: m.Span.End,
 			})
 		}
 		for _, m := range r.Verdict.DevSurvivedMutants {
@@ -658,6 +667,7 @@ func buildScanMutantRows(scanID int64, results []reposcan.FileResult) []scanstor
 				ProvenByAuthoredAlone: proven[m.ID],
 				TestsRun:              m.TestsRun, SelectionRule: m.Rule,
 				DurationMillis: millisOrNil(m.Duration),
+				SpanStart:      m.Span.Start, SpanEnd: m.Span.End,
 			})
 		}
 	}
@@ -1001,6 +1011,16 @@ func boolPtr(v bool) *bool { return &v }
 // whose zero value means "never set": a *int that is nil at 0.
 func nullIfZeroIntPtr(v int) *int {
 	if v == 0 {
+		return nil
+	}
+	return &v
+}
+
+// examCount is one ExamCoverage term for the ledger: NULL unless the
+// coverage was measured, so a file with no symbols never reads as
+// "0 of 0 probed".
+func examCount(c advpool.ExamCoverage, v int) *int {
+	if !c.Measured {
 		return nil
 	}
 	return &v

@@ -809,6 +809,19 @@ that is a deliberate act, is in
   it cannot fit. **Every verdict, ledger row and signed statement carries the
   budget and its rule** (`complexity`, `complexity-fitted`, `explicit`, `default`),
   because a kill rate over 8 mutants and one over 40 are different measurements.
+- **Confidence — two terms, never one number.** Beside every kill rate the report
+  prints what the bare rate hides: its **95% interval** over the mutants graded
+  (Wilson, because the exams are small and the rates sit near 0 and 1 — `0.62,
+  95% interval 0.30–0.86 (n=8)`), and the exam's **reach** — how many of the
+  file's symbols and decision points a fault actually landed on (`reached 8 of 8
+  symbols, 8 of 8 decision points`). Both are computed from what the ledger
+  records per mutant (its line span) and per file (its decision points), so a
+  reader with the warehouse can recompute them, and both are signed into the
+  statement. They are deliberately not blended into one index: a blend hides
+  which term is weak, and the point is to see that a 39-mutant exam which
+  reached 2 of 8 decision points covered *less* than an 8-mutant exam that
+  reached all of them. The certification gate still reads the point estimate;
+  a rule over these terms is 1.0's breaking change, not the RC's.
 - **The shadow challenger.** `--shadow-model <model>` fans a challenger
   mutant-generator seat across every region for a region-controlled,
   execution-proven head-to-head between generator models — same file, same goal,

@@ -216,8 +216,9 @@ type MutantRow struct {
 	// plugin can parse one out of the runner's output. "" when it cannot —
 	// never inferred.
 	KilledBy string
-	// SpanStart and SpanEnd are the mutated line range. NOTHING produces
-	// them yet (advpool.MutantRef carries no span), and they are 1-BASED, so
+	// SpanStart and SpanEnd are the mutated line range, from
+	// advpool.MutantRef.Span since 2026-09-04 (NULL on rows pushed before
+	// that, or a mutant whose generator recorded none). They are 1-BASED, so
 	// 0 is unambiguously "not recorded" and is written SQL NULL — line 0
 	// does not exist, and a reader jumping to it would be sent to the top of
 	// the file.
@@ -436,7 +437,11 @@ CREATE TABLE IF NOT EXISTS corral_audits (
   import_only             BOOLEAN,
   mutant_budget           INTEGER,
   mutant_budget_rule      VARCHAR,
-  complexity              INTEGER
+  complexity              INTEGER,
+  symbols                 INTEGER,
+  symbols_probed          INTEGER,
+  decisions               INTEGER,
+  decisions_probed        INTEGER
 );`
 
 // The mutant grain's outcome CHECK is the same discipline scan_files'
@@ -595,6 +600,10 @@ var corralAuditsMigrationCols = []struct{ name, ddl string }{
 	{"mutant_budget", "mutant_budget INTEGER"},
 	{"mutant_budget_rule", "mutant_budget_rule VARCHAR"},
 	{"complexity", "complexity INTEGER"},
+	{"symbols", "symbols INTEGER"},
+	{"symbols_probed", "symbols_probed INTEGER"},
+	{"decisions", "decisions INTEGER"},
+	{"decisions_probed", "decisions_probed INTEGER"},
 }
 
 // The other four tables are NEW at schema_version 2, so nothing predates
@@ -1289,8 +1298,9 @@ func insertFileRow(tx *sql.Tx, uid string, now time.Time, r Row) error {
 	    selection_ms, generation_ms, pool_ms, dev_pass_ms, authored_pass_ms,
 	    critic_ms, total_ms, mutant_ms_median, mutant_ms_max,
 	    authored_test, verdict_json, schema_version, prompt_shape, covering_tests, import_only, started_at,
-	    mutant_budget, mutant_budget_rule, complexity
-	  ) VALUES (`+placeholders(80)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
+	    mutant_budget, mutant_budget_rule, complexity,
+	    symbols, symbols_probed, decisions, decisions_probed
+	  ) VALUES (`+placeholders(84)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
 		uid, now, r.Repo, r.Commit, r.Path, r.Lang,
 		killRate, r.Survivors, r.ProvenMissed,
 		r.TimedOut, r.TestWriterFailed, r.PoolTestUnsound,
@@ -1318,6 +1328,7 @@ func insertFileRow(tx *sql.Tx, uid string, now time.Time, r Row) error {
 		authoredTest, verdictJSON, SchemaVersion, nullIfEmpty(r.PromptShape), r.CoveringTests, r.ImportOnly,
 		nullTime(r.StartedAt),
 		r.MutantBudget, nullIfEmpty(r.MutantBudgetRule), r.Complexity,
+		r.Symbols, r.SymbolsProbed, r.Decisions, r.DecisionsProbed,
 	)
 	if err != nil {
 		return fmt.Errorf("auditpush: insert %s: %w", r.Path, err)

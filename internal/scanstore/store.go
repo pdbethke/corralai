@@ -367,6 +367,14 @@ type File struct {
 	MutantBudget     *int
 	MutantBudgetRule string
 	Complexity       *int
+	// Symbols/SymbolsProbed/Decisions/DecisionsProbed mirror
+	// advpool.Verdict.ExamCoverage: how much of the file's surface the
+	// graded mutants reached. NULL when the coverage was never measured
+	// (no signatures, no mutants, or a row from before these columns).
+	Symbols         *int
+	SymbolsProbed   *int
+	Decisions       *int
+	DecisionsProbed *int
 	// AuthoredTestNotCollected mirrors advpool.Verdict.AuthoredTestNotCollected:
 	// the run proved a killing test compiled and ran, but the dev suite's own
 	// collection never picked it up, so ProvenMissed on this row is earned
@@ -551,6 +559,10 @@ var scanFilesMigrationCols = []struct{ name, ddl string }{
 	{"mutant_budget", "mutant_budget INTEGER"},
 	{"mutant_budget_rule", "mutant_budget_rule VARCHAR"},
 	{"complexity", "complexity INTEGER"},
+	{"symbols", "symbols INTEGER"},
+	{"symbols_probed", "symbols_probed INTEGER"},
+	{"decisions", "decisions INTEGER"},
+	{"decisions_probed", "decisions_probed INTEGER"},
 }
 
 // scansMigrationCols is the same ledger at the SCAN grain. `scans` had no
@@ -709,7 +721,11 @@ func Open(dsn string) (*Store, error) {
 		import_only BOOLEAN,
 		mutant_budget INTEGER,
 		mutant_budget_rule VARCHAR,
-		complexity INTEGER
+		complexity INTEGER,
+		symbols INTEGER,
+		symbols_probed INTEGER,
+		decisions INTEGER,
+		decisions_probed INTEGER
 	)`); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("scanstore: create scan_files table: %w", err)
@@ -1158,9 +1174,10 @@ func (s *Store) Record(ctx context.Context, scan Scan, files []File) (int64, err
 			challenger_jaccard, challenger_kappa, challenger_sufficient, goals_derived, goal_reused,
 			per_mutant, tests_per_mutant_min, tests_per_mutant_median, tests_per_mutant_max,
 			writer_mode, prompt_shape, covering_tests, import_only,
-			mutant_budget, mutant_budget_rule, complexity
+			mutant_budget, mutant_budget_rule, complexity,
+			symbols, symbols_probed, decisions, decisions_probed
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			id, f.Path, f.Lang, f.Disposition, f.Reason,
 			fileKillRate(f), f.Survivors, f.Gradable, f.PreflightState, f.Evidence, f.Detail, f.TimedOut, f.TestWriterFailed, f.ProvenMissed, f.PoolTestUnsound,
 			f.ProvenMutantIDs, f.AuthoredTest, f.CacheKey, f.VerdictJSON, f.ComputedAt,
@@ -1175,6 +1192,7 @@ func (s *Store) Record(ctx context.Context, scan Scan, files []File) (int64, err
 			f.PerMutant, f.TestsPerMutantMin, f.TestsPerMutantMedian, f.TestsPerMutantMax,
 			nullableString(f.WriterMode), nullableString(f.PromptShape), nullableIntPtr(f.CoveringTests), nullableBoolPtr(f.ImportOnly),
 			nullableIntPtr(f.MutantBudget), nullableString(f.MutantBudgetRule), nullableIntPtr(f.Complexity),
+			nullableIntPtr(f.Symbols), nullableIntPtr(f.SymbolsProbed), nullableIntPtr(f.Decisions), nullableIntPtr(f.DecisionsProbed),
 		); err != nil {
 			return 0, fmt.Errorf("scanstore: insert scan_files row for %q: %w", f.Path, err)
 		}
@@ -1358,7 +1376,8 @@ func (s *Store) FilesForScan(ctx context.Context, scanID int64) ([]File, error) 
 		challenger_jaccard, challenger_kappa, challenger_sufficient, goals_derived, goal_reused,
 		per_mutant, tests_per_mutant_min, tests_per_mutant_median, tests_per_mutant_max,
 		writer_mode, prompt_shape, covering_tests, import_only,
-		mutant_budget, mutant_budget_rule, complexity
+		mutant_budget, mutant_budget_rule, complexity,
+		symbols, symbols_probed, decisions, decisions_probed
 		FROM scan_files WHERE scan_id = ? ORDER BY rowid`, scanID)
 	if err != nil {
 		return nil, fmt.Errorf("scanstore: files for scan %d: %w", scanID, err)
@@ -1432,6 +1451,7 @@ func (s *Store) FilesForScan(ctx context.Context, scanID int64) ([]File, error) 
 		var importOnly sql.NullBool
 		var mutantBudget, complexity sql.NullInt64
 		var mutantBudgetRule sql.NullString
+		var symbols, symbolsProbed, decisions, decisionsProbed sql.NullInt64
 		if err := rows.Scan(&f.Path, &f.Lang, &f.Disposition, &f.Reason,
 			&f.KillRate, &f.Survivors, &f.Gradable, &f.PreflightState, &f.Evidence, &detail, &timedOut, &testWriterFailed, &provenMissed, &poolTestUnsound,
 			&provenIDs, &authoredTest,
@@ -1445,7 +1465,8 @@ func (s *Store) FilesForScan(ctx context.Context, scanID int64) ([]File, error) 
 			&mutantMSMedian, &mutantMSMax,
 			&challengerJaccard, &challengerKappa, &challengerSufficient, &goalsDerived, &goalReused,
 			&perMutant, &tpmMin, &tpmMedian, &tpmMax, &writerMode, &promptShape, &coveringTests, &importOnly,
-			&mutantBudget, &mutantBudgetRule, &complexity); err != nil {
+			&mutantBudget, &mutantBudgetRule, &complexity,
+			&symbols, &symbolsProbed, &decisions, &decisionsProbed); err != nil {
 			return nil, fmt.Errorf("scanstore: scan scan_files row: %w", err)
 		}
 		f.Detail = detail.String
@@ -1534,6 +1555,8 @@ func (s *Store) FilesForScan(ctx context.Context, scanID int64) ([]File, error) 
 		f.MutantBudget = nullCount(mutantBudget)
 		f.MutantBudgetRule = mutantBudgetRule.String
 		f.Complexity = nullCount(complexity)
+		f.Symbols, f.SymbolsProbed = nullCount(symbols), nullCount(symbolsProbed)
+		f.Decisions, f.DecisionsProbed = nullCount(decisions), nullCount(decisionsProbed)
 		out = append(out, f)
 	}
 	return out, rows.Err()
@@ -1640,10 +1663,10 @@ type Mutant struct {
 	// place: "which lines survive" is the question a reader actually has,
 	// and an opaque id cannot answer it.
 	//
-	// NOTHING produces them yet — advpool.MutantRef, which is what reaches
-	// this package, carries no span — so every row written today stores SQL
-	// NULL. They are 1-based, so 0 is unambiguously "not recorded" rather
-	// than a line.
+	// Produced since 2026-09-04 from advpool.MutantRef.Span; every row
+	// written before that stores SQL NULL, and so does a mutant whose
+	// generator recorded no span. They are 1-based, so 0 is unambiguously
+	// "not recorded" rather than a line.
 	SpanStart int
 	SpanEnd   int
 	// ProvenByAuthoredAlone marks a survivor the pool's AUTHORED test killed

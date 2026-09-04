@@ -313,6 +313,15 @@ type MutantRef struct {
 	// declines to parse — stored as SQL NULL rather than "" for exactly that
 	// reason, and never inferred from anything but the output.
 	KilledBy string
+	// Span is the mutated line range in the parent file (adequacy.Mutant.Span,
+	// 1-based; the zero range when the generator recorded none). It is what
+	// turns a mutant id into a PLACE, and the term an exam's coverage is
+	// computed from: which lines, which decision points, the faults landed
+	// on. It carries no source — a range is not a hunk — so it passes the
+	// "nothing reachable from a Verdict reaches the warehouse with code in
+	// it" rule that MutantRef exists to enforce. It was documented as
+	// "nothing produces them yet" in two ledgers for a month.
+	Span golang.LineRange
 }
 
 // toMutantRefs strips MUTANT SOURCE down to the reference scan_mutants needs:
@@ -330,7 +339,7 @@ func toMutantRefs(ms []adequacy.Mutant) []MutantRef {
 func toMutantRefsWith(ms []adequacy.Mutant, grading map[string]adequacy.MutantGrading) []MutantRef {
 	refs := make([]MutantRef, len(ms))
 	for i, m := range ms {
-		refs[i] = MutantRef{ID: m.ID, ParentSHA256: m.ParentSHA256}
+		refs[i] = MutantRef{ID: m.ID, ParentSHA256: m.ParentSHA256, Span: m.Span}
 		if g, ok := grading[m.ID]; ok {
 			refs[i].TestsRun = g.TestsRun
 			refs[i].Rule = g.Rule
@@ -584,6 +593,10 @@ type Verdict struct {
 	// and one over 40 are different measurements; this is what tells
 	// them apart. Zero-valued on a replayed (--mutants) run.
 	MutantBudget MutantBudget
+	// ExamCoverage says how much of the file the graded mutants reached —
+	// symbols and decision points with a fault on them — computed from the
+	// same spans the ledger records per mutant. See ExamCoverage.
+	ExamCoverage ExamCoverage
 	// Concurrency discloses how many private trees scored this file at
 	// once, or why it only got one. See the Concurrency type's doc.
 	Concurrency Concurrency
@@ -1116,6 +1129,10 @@ type runState struct {
 	// asked for and why, from the SAME PlanShards call BuildDAG made. The
 	// zero value on a preset run, which generates nothing.
 	mutantBudget MutantBudget
+	// exam is the file's surface (symbol and decision-point line spans),
+	// kept from StartRun's signatures so the verdict's ExamCoverage can be
+	// computed once the graded mutants are known.
+	exam examSurface
 	// promptShape is Verdict.PromptShape, computed once at StartRun from the
 	// SAME ShardSymbols call BuildDAG made internally (mirroring
 	// shardSymbols/shardStats): "chunk" when every shard's signatures were
@@ -1581,6 +1598,7 @@ func (d *Driver) StartRun(missionID int64, rs RunSpec, sigs []repoindex.Signatur
 		shardSymbols:   shardSymbols,
 		promptShape:    promptShape,
 		mutantBudget:   budget,
+		exam:           newExamSurface(sigs),
 		shardStats:     stats,
 		shadowStats:    shadowStats,
 		testComplexity: testComplexity,
@@ -2689,6 +2707,7 @@ func (d *Driver) tickAggregate(ctx context.Context, missionID int64, run *runSta
 	v.RegionsTotal = run.regionsTotal
 	v.PromptShape = run.promptShape
 	v.MutantBudget = run.mutantBudget
+	v.ExamCoverage = run.exam.coverage(v.DevKilledMutants, v.DevSurvivedMutants)
 	v.RegionsProbed = run.regionsProbed
 	v.DroppedRegions = run.droppedRegions
 	v.DuplicateMutants = run.dupMutants
@@ -3150,6 +3169,7 @@ func (d *Driver) timeoutVerdict(run *runState) Verdict {
 	v.DuplicateMutants = run.dupMutants
 	v.PromptShape = run.promptShape
 	v.MutantBudget = run.mutantBudget
+	v.ExamCoverage = run.exam.coverage(v.DevKilledMutants, v.DevSurvivedMutants)
 	v.ModelsByRole = run.modelsByRole(d.Assign)
 	// A stalled run still spent everything it spent, and it is the run an
 	// operator most needs the clock for: "which phase was it sitting in when

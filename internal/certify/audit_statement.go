@@ -106,6 +106,20 @@ type AuditedFile struct {
 	MutantBudget     int    `json:"mutantBudget,omitempty"`
 	MutantBudgetRule string `json:"mutantBudgetRule,omitempty"`
 	Complexity       int    `json:"complexity,omitempty"`
+	// KillRateLow/High: the 95% Wilson interval over the mutants graded —
+	// the sampling term a bare rate hides. Signed so a reader of the
+	// statement alone sees that 0.62 on eight mutants is 0.30–0.86. Both
+	// omitted when nothing was graded.
+	KillRateLow  float64 `json:"killRateLow,omitempty"`
+	KillRateHigh float64 `json:"killRateHigh,omitempty"`
+	// ExamSymbols/ExamSymbolsProbed/ExamDecisions/ExamDecisionsProbed: the
+	// coverage term — how much of the file's surface the mutants reached.
+	// Present only when measured (ExamMeasured), never signed as 0 of 0.
+	ExamMeasured        bool `json:"examMeasured,omitempty"`
+	ExamSymbols         int  `json:"examSymbols,omitempty"`
+	ExamSymbolsProbed   int  `json:"examSymbolsProbed,omitempty"`
+	ExamDecisions       int  `json:"examDecisions,omitempty"`
+	ExamDecisionsProbed int  `json:"examDecisionsProbed,omitempty"`
 	// GoalReused discloses that this file's goal was served from the goal
 	// cache — a PRIOR scan derived it from the same bytes, by the same
 	// model under the same prompt revision — rather than freshly derived by
@@ -270,6 +284,16 @@ func BuildAuditAttestation(s AuditStatement) map[string]any {
 			entry["mutantBudget"] = f.MutantBudget
 			entry["mutantBudgetRule"] = f.MutantBudgetRule
 			entry["complexity"] = f.Complexity
+		}
+		if f.KillRateHigh > 0 {
+			entry["killRateLow"] = f.KillRateLow
+			entry["killRateHigh"] = f.KillRateHigh
+		}
+		if f.ExamMeasured {
+			entry["examSymbols"] = f.ExamSymbols
+			entry["examSymbolsProbed"] = f.ExamSymbolsProbed
+			entry["examDecisions"] = f.ExamDecisions
+			entry["examDecisionsProbed"] = f.ExamDecisionsProbed
 		}
 		// Signed only when true: this file's goal was served from the goal
 		// cache rather than freshly derived by this scan. Never a signed

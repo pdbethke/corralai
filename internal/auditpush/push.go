@@ -216,6 +216,12 @@ type Row struct {
 	MutantBudget     *int
 	MutantBudgetRule string
 	Complexity       *int
+	// Symbols/SymbolsProbed/Decisions/DecisionsProbed mirror
+	// scanstore.File's: the exam's reach. NULL when unmeasured.
+	Symbols         *int
+	SymbolsProbed   *int
+	Decisions       *int
+	DecisionsProbed *int
 	// CoveringTests mirrors scanstore.File.CoveringTests: the number of
 	// tests the selection evidence showed execute this file. *int, and NULL
 	// for a row from a scan where the evidence never measured this file

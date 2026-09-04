@@ -64,7 +64,9 @@ package reposcan
 // (floor 5, ceiling 40) instead of a flat 5 per seat, and the authored pass
 // runs the authored test alone for its baseline and canary too. A cached "8"
 // verdict measured a different exam and must not be served as this one; its
-// zero-valued MutantBudget would also read as "generated nothing".
+// zero-valued MutantBudget would also read as "generated nothing". The same
+// generation also gained ExamCoverage (symbols and decision points the
+// mutants reached) and MutantRef.Span — the SAME change, one bump.
 const VerdictGeneration = "9"
 
 // VerdictShapeSHA256 fingerprints advpool.Verdict's serialized shape: every
@@ -87,4 +89,4 @@ const VerdictGeneration = "9"
 // Verdict's own FIELDS") and nothing wider. Nor can any fingerprint catch the
 // behaviour half: a scorer that computes a DIFFERENT number into the SAME
 // field is invisible here, and remains a review responsibility.
-const VerdictShapeSHA256 = "52af485389f731949a343febfc324a004aa1b579eb562159f02d4e61986b6f98"
+const VerdictShapeSHA256 = "93989fc4342b979e17384b0ba80fe10a8ad305544b47617dcadce812bdeac7d4"

@@ -70,6 +70,7 @@ func rubyWalk(parent *sitter.Node, src []byte, receiver string, out *[]Signature
 				// Ruby has no export marker; a leading underscore is the
 				// closest widely-used convention for "internal".
 				Exported:   !strings.HasPrefix(name, "_"),
+				Decisions:  symbolDecisions(n, src, "ruby"),
 				Complexity: symbolComplexity(n, src, "ruby"),
 				Lines:      symbolLines(n),
 			}
@@ -238,6 +239,7 @@ func curlySignature(n *sitter.Node, src []byte, lang, receiver, name string) Sig
 		// JS/TS have no export marker on the symbol itself; a leading
 		// underscore is the closest widely-used "internal" convention.
 		Exported:   !strings.HasPrefix(name, "_"),
+		Decisions:  symbolDecisions(n, src, lang),
 		Complexity: symbolComplexity(n, src, lang),
 		Lines:      symbolLines(n),
 	}

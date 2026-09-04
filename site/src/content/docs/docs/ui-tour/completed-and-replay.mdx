@@ -3,6 +3,10 @@ title: Completed + replay + agent windows
 description: Reviewing finished audit runs, replaying them step by step, and opening an individual agent's window.
 ---
 
+:::note[The brain — optional, and not read by any audit]
+This page describes the **brain**, corral's optional coordination daemon. Nothing on it is required for a verdict: `corral certify`, the GitHub Action, `verify`, `ui`, `seal` and `scans` never contact a brain. And nothing on it is read by an audit — an audit's prompts are built from the goal, the code and its symbols, never from shared memory, skills or a prior run. See [the brain, and what it is not](https://github.com/pdbethke/corralai/blob/main/docs/corral/brain.md).
+:::
+
 The Completed tab lists every finished `corral certify --local` run. Opening
 one's replay plays back the whole audit — shard claims, survivor findings,
 and jail executions — through the same control bar this site's own

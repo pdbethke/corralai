@@ -8,6 +8,10 @@ description: The ecosystem map — every host, the model driving each agent on i
     ecosystem map (host → model → jail per agent), not a task-dependency
     graph — that view is Progress. */}
 
+:::note[The brain — optional, and not read by any audit]
+This page describes the **brain**, corral's optional coordination daemon. Nothing on it is required for a verdict: `corral certify`, the GitHub Action, `verify`, `ui`, `seal` and `scans` never contact a brain. And nothing on it is read by an audit — an audit's prompts are built from the goal, the code and its symbols, never from shared memory, skills or a prior run. See [the brain, and what it is not](https://github.com/pdbethke/corralai/blob/main/docs/corral/brain.md).
+:::
+
 The Topology tab is the corral's ecosystem map: every host machine, the
 audit-role agents running on it, and — for each agent — the model backing it
 and the exec-isolation jail confining its commands. It's observability, not

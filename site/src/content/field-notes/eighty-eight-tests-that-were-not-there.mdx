@@ -118,9 +118,11 @@ like this would be misleading by construction.
 
 It does not show decorrelation. corral can measure whether two models miss the
 same mutants, but that seat only exists in single-file mode — so nothing in this
-run speaks to it. The one measured coefficient we have (Jaccard 0.750 over 13
-survivors, two frontier models) came from a different mode entirely and remains
-n=13.
+run speaks to it. [Update 2026-09-04: `certify --repo` now takes
+`--shadow-writer-model` and records the challenger's Jaccard and kappa per
+file; this run predates that and still measured nothing about it.] The one
+measured coefficient we have (Jaccard 0.750 over 13 survivors, two frontier
+models) came from a different mode entirely and remains n=13.
 
 It is also not a cross-language claim. Three Go repositories, one arm, one
 writer model. A fourth repository was dropped because it predates Go modules and

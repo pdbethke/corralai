@@ -8,15 +8,18 @@
     markdown corpus in the repo itself: <code>CORRAL.md</code> at the root as
     the entry point, <code>docs/corral/*.md</code> as the corpus. The same
     corpus serves four readers — developers read it as onboarding docs, any
-    developer's coding agent queries it conversationally, the herd itself
-    searches it before working and extends memory as it learns, and it grows
-    the way code does — through ordinary pull requests, where code review is
+    developer's coding agent queries it conversationally over the optional
+    brain, a mission worker on that brain can search it, and it grows the way
+    code does — through ordinary pull requests, where code review is
     the trust gate for knowledge exactly as it is for code.
   </p>
   <p>
     The learning loop closes the circle: skills the herd proposes and a
     human approves land in the same corpus — herd-discovered knowledge and
     developer-written knowledge accumulate in one place, under one review
-    gate, readable by humans and queryable by every agent that joins.
+    gate, readable by humans and queryable by every agent that joins the brain.
+    An audit does not read it: <code>corral certify</code> builds its prompts
+    from the goal and the code, never from the corpus — so nothing a repo ships
+    can steer its own grading.
   </p>
 </section>

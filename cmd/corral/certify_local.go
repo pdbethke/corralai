@@ -539,8 +539,9 @@ type localAuditInput struct {
 	criticScoreDB string
 	// mutantAttemptsDB is the writer-seat correlation store for this run. Same
 	// contract again: empty means no feed. The repo scan leaves it empty for
-	// the same DuckDB-contention reason AND because it exposes no
-	// --shadow-writer-model, so it can never produce a pair to record.
+	// the DuckDB-contention reason; its --shadow-writer-model pair is recorded
+	// as a per-file Jaccard/kappa on the scan ledger row instead (see
+	// certify_repo_record.go), never as per-mutant attempt rows.
 	mutantAttemptsDB string
 	openStore        func() (*buildstore.Store, ed25519.PrivateKey, error)
 

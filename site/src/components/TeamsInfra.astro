@@ -2,9 +2,13 @@
 // SPDX-License-Identifier: Elastic-2.0
 ---
 <section class="section" id="teams-infra">
-  <h2>Dev infrastructure for a fleet, not a toy for a laptop</h2>
+  <h2>The optional daemon, for a fleet</h2>
   <p>
-    Corral isn't scoped to one machine's audit brain. Approved skills and
+    Everything above runs with no server: an audit on a laptop or a CI runner,
+    rows in a DuckDB you own. The <strong>brain</strong> is the optional
+    daemon underneath a coordinated herd — remote workers, a live console, the
+    human-gated proposal loop — and nothing in it is required for a verdict or
+    read by one. If you want it: approved skills and
     guardrail hooks sync across a whole fleet — <code>corral sync</code>
     pulls every changed skill/hook, so what one machine learns, every
     machine's panel can <em>do</em>. Publishing to the fleet is superuser-only

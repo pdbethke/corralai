@@ -98,8 +98,8 @@ jailed check in Docker instead — no sudo required.
    the symbol test, and so on. On a file with several functions the generation
    **fans out**: one seat per group of functions (balanced by complexity), so
    every function is probed rather than just the one a single generator picked
-   — `--max-shards` bounds the width, and it auto-sizes to your machine
-   otherwise. A mutant that makes the suite *hang* (a broken loop bound, say)
+   — `--max-shards` bounds the width, and defaults to 8 (only `--swarm`
+   sizes itself to your machine). A mutant that makes the suite *hang* (a broken loop bound, say)
    is killed fast and counted as caught, so a non-terminating mutant can't
    stall the run.
 3. **Dev kill-rate.** The **existing** test above is run, in the jail, against
@@ -129,9 +129,12 @@ jailed check in Docker instead — no sudo required.
    **never** enters the verdict; the exam's difficulty is set by the primary
    model alone, so certification means exactly what it did before.
 
-Whatever happens, the run **converges to a signed verdict** — even if the herd
-can't author a compiling test to kill a survivor, it routes to `needs-review`
-and hands back what it found rather than spinning.
+Once the mutants exist, the run **converges to a signed verdict** — even if the
+herd can't author a compiling test to kill a survivor, or the writer's model
+call fails outright, it routes to `needs-review` and hands back what it found
+rather than spinning. The one seat that cannot be absorbed is the
+mutant-generator: if its provider fails there is no exam to grade, and the run
+exits 1 with the provider's error and no verdict.
 
 ## The verdict
 

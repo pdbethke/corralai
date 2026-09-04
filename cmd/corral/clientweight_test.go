@@ -18,7 +18,7 @@ import (
 
 // THE FLEET TABLE IS A CLAIM ABOUT EVERY BINARY, AND IT WAS WRONG ABOUT THREE.
 //
-// README.md's fleet table has a CGO column, and the prose beneath it says the
+// docs/corral/brain.md's fleet table has a CGO column, and the prose beneath it says the
 // brain's two CGO deps "make it the one binary that cares about its platform".
 // That is the architecture: the brain owns the databases, and everything else
 // is a client that reaches it over MCP/HTTP.
@@ -46,7 +46,7 @@ import (
 //
 // The TestDocs prefix is load-bearing: deploy.yml runs `-run '^TestDocs'`
 // unguarded and puts the rest of the suite behind a docs-only filter, so a
-// README-only edit to this very column reaches this test and nothing else.
+// doc-only edit to this very column reaches this test and nothing else.
 func TestDocsFleetTableCGOColumnIsTrue(t *testing.T) {
 	rows := fleetTableRows(t)
 	for _, r := range rows {
@@ -54,7 +54,7 @@ func TestDocsFleetTableCGOColumnIsTrue(t *testing.T) {
 			t.Parallel()
 			dir := filepath.Join("..", "..", "cmd", r.binary)
 			if _, err := os.Stat(dir); err != nil {
-				t.Fatalf("README's fleet table names %q, but %s does not exist: %v", r.binary, dir, err)
+				t.Fatalf("the brain doc's fleet table names %q, but %s does not exist: %v", r.binary, dir, err)
 			}
 			cmd := exec.Command("go", "build", "-o", os.DevNull, "./cmd/"+r.binary)
 			cmd.Dir = filepath.Join("..", "..")
@@ -63,15 +63,15 @@ func TestDocsFleetTableCGOColumnIsTrue(t *testing.T) {
 
 			switch {
 			case r.cgo && err == nil:
-				t.Errorf("README's fleet table says %s needs CGO (yes), but it builds fine with CGO_ENABLED=0.\n"+
+				t.Errorf("the brain doc's fleet table says %s needs CGO (yes), but it builds fine with CGO_ENABLED=0.\n"+
 					"The table is now understating what ships as a pure-Go client. Change its CGO cell to `no` —\n"+
 					"and check whether the Platforms table and the deploy/ Dockerfile for it can be simplified too.", r.binary)
 			case !r.cgo && err != nil:
-				t.Errorf("README's fleet table says %s is CGO-free (no), but CGO_ENABLED=0 cannot build it:\n%s\n"+
+				t.Errorf("the brain doc's fleet table says %s is CGO-free (no), but CGO_ENABLED=0 cannot build it:\n%s\n"+
 					"Something now reaches the engine from a client. Find the edge with:\n"+
 					"    go list -deps ./cmd/%s | grep -E 'duckdb|tree-sitter|sqlite'\n"+
 					"and sever it — a client verifies data, it does not need the engine that produced it.\n"+
-					"Do NOT fix this by editing the README to say `yes`: that ships a 115 MB reverse proxy\n"+
+					"Do NOT fix this by editing the doc to say `yes`: that ships a 115 MB reverse proxy\n"+
 					"and breaks its distroless image, which is exactly the state this gate was written for.",
 					r.binary, strings.TrimSpace(string(out)), r.binary)
 			}
@@ -79,13 +79,13 @@ func TestDocsFleetTableCGOColumnIsTrue(t *testing.T) {
 	}
 }
 
-// fleetRow is one parsed row of README.md's fleet table.
+// fleetRow is one parsed row of docs/corral/brain.md's fleet table.
 type fleetRow struct {
 	binary string
 	cgo    bool
 }
 
-// fleetTableRows parses README.md's fleet table into (binary, needs-cgo) pairs.
+// fleetTableRows parses docs/corral/brain.md's fleet table into (binary, needs-cgo) pairs.
 //
 // It is a HELPER, not an inline parse, because
 // TestDocsEveryDocPolicingTestRunsOnDocsOnlyChanges finds doc gates by looking
@@ -97,9 +97,12 @@ type fleetRow struct {
 // carries one for that reason.
 func fleetTableRows(t *testing.T) []fleetRow {
 	t.Helper()
-	b, err := os.ReadFile(filepath.Join("..", "..", "README.md"))
+	// The table lives with the daemon's documentation, not the README: the
+	// README is the first-run document and the fleet is optional (see
+	// docs/corral/brain.md's header).
+	b, err := os.ReadFile(filepath.Join("..", "..", "docs", "corral", "brain.md"))
 	if err != nil {
-		t.Fatalf("read README.md: %v", err)
+		t.Fatalf("read docs/corral/brain.md: %v", err)
 	}
 	// A row looks like: | **`corral-top`** | the ... | no | binary / `go install` |
 	row := regexp.MustCompile("(?m)^\\|\\s*\\*\\*`(corral[a-z-]*)`\\*\\*\\s*\\|([^|]*)\\|\\s*(yes|no)\\s*\\|")
@@ -108,7 +111,7 @@ func fleetTableRows(t *testing.T) []fleetRow {
 		rows = append(rows, fleetRow{binary: m[1], cgo: m[3] == "yes"})
 	}
 	if len(rows) == 0 {
-		t.Fatal("parsed ZERO rows out of README.md's fleet table — this gate is not looking where it thinks it is.\n" +
+		t.Fatal("parsed ZERO rows out of docs/corral/brain.md's fleet table — this gate is not looking where it thinks it is.\n" +
 			"Either the table moved/changed shape, or its CGO column is gone. Fix the parse; do not delete the gate.")
 	}
 	// The table describes the whole fleet, so it should account for every
@@ -131,7 +134,7 @@ func fleetTableRows(t *testing.T) []fleetRow {
 			continue
 		}
 		if !seen[e.Name()] {
-			t.Errorf("cmd/%s exists but README's fleet table never lists it, so nothing states or checks "+
+			t.Errorf("cmd/%s exists but docs/corral/brain.md's fleet table never lists it, so nothing states or checks "+
 				"whether it needs CGO. Add a row (Binary | Role | CGO | Ships as).", e.Name())
 		}
 	}

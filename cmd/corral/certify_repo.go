@@ -17,6 +17,7 @@ import (
 	"path"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -400,6 +401,28 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 			excl = append(excl, reposcan.Exclusion{Path: c.Path, Reason: reposcan.ReasonNotSelected})
 		}
 		selected = kept
+		// An EXPLICIT --top applies here too. The comment at the top of this
+		// block is right that the diff is the natural bound, and the default
+		// --top is deliberately not applied to it — but action.yml, the
+		// self-audit workflow and both docs pages told operators to set `top`
+		// "to bound what one PR can cost", and it did nothing: a 10-file PR
+		// under top=1 ran ten files against a per-file timeout. When the
+		// operator typed it, honour it, rank the diff's candidates the same
+		// way the whole-repo path ranks, and say what was cut — those files
+		// changed and were NOT audited, which the report must not let read
+		// as clean.
+		if flagWasSet(fs, "top") && !*allFlag && *topFlag > 0 && len(selected) > *topFlag {
+			ranked, rankInfo := reposcan.Rank(*repoDir, selected)
+			var cut []reposcan.Exclusion
+			selected, cut = reposcan.Select(ranked, *topFlag)
+			excl = append(excl, cut...)
+			rankSignal = rankInfo.Signal
+			fmt.Fprintf(stdout, "  --top %d: the diff put %d candidate(s) in scope; auditing the %d highest-ranked by %s and NOT auditing %d changed file(s) — they are not clean, they are unaudited:\n",
+				*topFlag, len(ranked), len(selected), rankInfo.Signal, len(cut))
+			for _, e := range cut {
+				fmt.Fprintf(stdout, "    %s (not audited: --top)\n", e.Path)
+			}
+		}
 		// Which CHANGED files corral could not pair with a test. Enumerate
 		// already excluded them as no-paired-test, before the diff bound was
 		// applied, so they never reach `cands` and a zero-candidate diff cannot
@@ -411,7 +434,17 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 				unpairableInDiff = append(unpairableInDiff, e.Path)
 			}
 		}
+		// A DELETED test is the purest way to weaken a suite, and the one
+		// the two guards above could not see: the source it defended is not
+		// in the diff, is no longer paired (its test is gone, so Enumerate
+		// excluded it as no-paired-test), and is not covered by evidence
+		// either (the test is gone). `git rm pkg/calc_test.go` therefore
+		// read as NOTHING IN SCOPE, exit 0. A source whose conventional test
+		// path the diff deleted is unpairable BECAUSE of the diff, and is
+		// reported as exactly that.
+		unpairableInDiff = append(unpairableInDiff, sourcesOrphanedByDeletedTests(*repoDir, changed, excl)...)
 		sort.Strings(unpairableInDiff)
+		unpairableInDiff = slices.Compact(unpairableInDiff)
 		fmt.Fprintf(stdout, "  diff against %s: auditing %d of %d candidate(s)\n", *diffBase, len(selected), len(cands))
 	} else {
 		// Selection precedes derivation, deliberately: bounding afterwards would
@@ -1359,6 +1392,14 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		sha, err := writeAuditStatement(*attestFlag, *repoDir, rep, models(), minKillRate, maxProvenMissed, exitCode == 0, scanID, bundle)
 		if err != nil {
 			fmt.Fprintf(stderr, "corral certify --repo: writing --attest statement: %v\n", err)
+			// On a runner a failed statement is worse than a failed push:
+			// the Action's attest step then reads the missing file as
+			// "nothing was audited" and says so in a ::notice, while the
+			// push — required to carry the statement hash — is withheld.
+			// Raise it where it will be read.
+			if os.Getenv("GITHUB_ACTIONS") == "true" {
+				fmt.Fprintf(stderr, "::warning title=corral attest failed::the audit ran, but writing the audit statement to %s failed: %v — nothing will be attested and no rows were pushed\n", *attestFlag, err)
+			}
 		} else {
 			statementSHA256 = sha
 			// Close the loop the ordering opens: the statement had to be
@@ -2907,6 +2948,44 @@ func printPreflightReport(w io.Writer, cm reposcan.CoverageMap, sourceFiles []st
 	}
 }
 
+// sourcesOrphanedByDeletedTests names the excluded sources whose paired test
+// the diff DELETED: for each changed path that looks like a test and no
+// longer exists in the checkout, every no-paired-test source whose language
+// plugin would have named that path as a test candidate. Reported through
+// the same NOT AUDITED path as a changed-but-unpairable source, because it
+// is the same condition with the more alarming cause.
+func sourcesOrphanedByDeletedTests(repoDir string, changed []string, excl []reposcan.Exclusion) []string {
+	deleted := map[string]bool{}
+	for _, path := range changed {
+		if !looksLikeATestPath(path) {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(repoDir, filepath.FromSlash(path))); os.IsNotExist(err) {
+			deleted[path] = true
+		}
+	}
+	if len(deleted) == 0 {
+		return nil
+	}
+	var out []string
+	for _, e := range excl {
+		if e.Reason != reposcan.ReasonNoPairedTest && e.Reason != reposcan.ReasonMappedTestMissing {
+			continue
+		}
+		p, ok := lang.Detect(e.Path)
+		if !ok {
+			continue
+		}
+		for _, tc := range p.TestPaths(e.Path) {
+			if deleted[tc.Path] {
+				out = append(out, e.Path)
+				break
+			}
+		}
+	}
+	return out
+}
+
 // repoScanExitCode is the scan's automated signal. A scan that measured
 // NOTHING is not a passing scan: exiting 0 would read as green in CI for a
 // repo where every single file failed to grade — the exact false-green the
@@ -3516,7 +3595,7 @@ func printRepoReport(w io.Writer, r reposcan.RepoReport, nothingInScope bool, mi
 		// on exactly the change it was installed to inspect. Filename pairing
 		// routinely finds nothing on JS/TS layouts, so this is not a corner
 		// case, and the reader is told the way out rather than left guessing.
-		fmt.Fprintf(w, "  NOT AUDITED: the diff changed %d source file(s) corral could not pair with a test, so nothing was graded. This is a pairing limitation, NOT a clean bill of health:\n", len(unpairableInDiff))
+		fmt.Fprintf(w, "  NOT AUDITED: the diff left %d source file(s) corral could not pair with a test (changed without one, or its test was DELETED), so nothing was graded. This is a pairing limitation, NOT a clean bill of health:\n", len(unpairableInDiff))
 		for _, p := range unpairableInDiff {
 			fmt.Fprintf(w, "    %s\n", p)
 		}

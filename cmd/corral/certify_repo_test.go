@@ -4147,6 +4147,96 @@ func TestCertifyRepoDiffBaseScopesAChangedTestToItsSource(t *testing.T) {
 	}
 }
 
+// TestCertifyRepoDiffBaseRefusesAPRThatDeletesATest is the sixth (Action)
+// review's first finding: the guard above covers a test that is EDITED.
+// A test that is DELETED walked around it — the source it defended is not
+// in the diff, is no longer paired (Enumerate excluded it, its test being
+// gone), and is not covered by evidence either — so `git rm pkg/a_test.go`
+// read as NOTHING IN SCOPE, exit 0, under --min-kill-rate 0.9
+// --max-proven-missed 0. The orphaned source is now reported NOT AUDITED,
+// exit 1, with the deletion named as the cause.
+func TestCertifyRepoDiffBaseRefusesAPRThatDeletesATest(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "test-placeholder-not-a-real-key")
+	root := t.TempDir()
+	gitRun := gitCmd(t, root)
+	mustWrite(t, filepath.Join(root, "pkg", "a.go"), "package pkg\n")
+	mustWrite(t, filepath.Join(root, "pkg", "a_test.go"), "package pkg\n")
+	mustWrite(t, filepath.Join(root, "pkg", "b.go"), "package pkg\n")
+	mustWrite(t, filepath.Join(root, "pkg", "b_test.go"), "package pkg\n")
+	gitRun("init", "-q")
+	gitRun("add", ".")
+	gitRun("commit", "-q", "-m", "base", "--no-gpg-sign")
+	base := gitRevParseHead(t, root)
+
+	gitRun("rm", "-q", "pkg/a_test.go")
+	gitRun("commit", "-q", "-m", "delete the tests", "--no-gpg-sign")
+
+	goals := filepath.Join(root, "goals.json")
+	mustWrite(t, goals, `{"pkg/a.go": "must not panic", "pkg/b.go": "must not panic either"}`)
+
+	var out, errb bytes.Buffer
+	code := runCertifyRepo([]string{
+		"--repo", root, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant,
+		"--critic-model", "off", "--diff-base", base, "--goals", goals, "--substrate", substrateWorkspace,
+		"--min-kill-rate", "0.9", "--max-proven-missed", "0",
+	}, &out, &errb) // not --dry-run: zero jobs means zero model calls, and the real path prints the verdict
+	if strings.Contains(out.String(), "NOTHING IN SCOPE") {
+		t.Fatalf("a PR that deleted pkg/a_test.go was reported as nothing to audit:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "NOT AUDITED") || !strings.Contains(out.String(), "pkg/a.go") || !strings.Contains(out.String(), "DELETED") {
+		t.Errorf("the orphaned source must be reported NOT AUDITED, naming the deletion:\n%s", out.String())
+	}
+	if code == 0 {
+		t.Errorf("exit 0 on a PR that deleted a test file — the gate went green on the change it exists to catch:\n%s", out.String())
+	}
+}
+
+// TestCertifyRepoDiffBaseHonoursAnExplicitTop: action.yml, the self-audit
+// workflow and both docs pages told operators to set `top` "to bound what
+// one PR can cost", and on the diff path it did nothing — a 3-file PR under
+// --top 1 audited 3. An explicit --top now bounds the diff's candidates,
+// and the files cut are printed as NOT audited, never left to read as clean.
+func TestCertifyRepoDiffBaseHonoursAnExplicitTop(t *testing.T) {
+	root := t.TempDir()
+	gitRun := gitCmd(t, root)
+	for _, n := range []string{"a", "b", "c"} {
+		mustWrite(t, filepath.Join(root, "pkg", n+".go"), "package pkg\n")
+		mustWrite(t, filepath.Join(root, "pkg", n+"_test.go"), "package pkg\n")
+	}
+	gitRun("init", "-q")
+	gitRun("add", ".")
+	gitRun("commit", "-q", "-m", "base", "--no-gpg-sign")
+	base := gitRevParseHead(t, root)
+	for _, n := range []string{"a", "b", "c"} {
+		mustWrite(t, filepath.Join(root, "pkg", n+".go"), "package pkg // changed "+n+"\n")
+	}
+	gitRun("add", ".")
+	gitRun("commit", "-q", "-m", "change all three", "--no-gpg-sign")
+	goals := filepath.Join(root, "goals.json")
+	mustWrite(t, goals, `{"pkg/a.go": "g", "pkg/b.go": "g", "pkg/c.go": "g"}`)
+
+	var out, errb bytes.Buffer
+	runCertifyRepo([]string{
+		"--repo", root, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant,
+		"--critic-model", "off", "--diff-base", base, "--goals", goals, "--dry-run", "--top", "1",
+	}, &out, &errb)
+	if !strings.Contains(out.String(), "1 job(s)") {
+		t.Errorf("--top 1 on a 3-file diff did not bound the scan to one job:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "NOT auditing 2 changed file(s)") {
+		t.Errorf("the two files cut by --top must be named as unaudited:\n%s", out.String())
+	}
+	// Without --top the diff is the bound, as before.
+	out.Reset()
+	runCertifyRepo([]string{
+		"--repo", root, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant,
+		"--critic-model", "off", "--diff-base", base, "--goals", goals, "--dry-run",
+	}, &out, &errb)
+	if !strings.Contains(out.String(), "3 job(s)") {
+		t.Errorf("without --top the diff should be the bound:\n%s", out.String())
+	}
+}
+
 // The merge gate that does not flap. A kill rate is a proportion of freshly
 // generated mutants: it moves between runs on unchanged code, so a threshold
 // set near a healthy value goes red on good work and gets switched off. A

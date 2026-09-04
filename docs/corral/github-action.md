@@ -630,10 +630,14 @@ of every existing caller of this action.
 Set `min-kill-rate` (a number from `0.0` to `1.0`) to give the gate teeth:
 
 ```yaml
-- uses: pdbethke/corralai@main
+- uses: pdbethke/corralai@v0.8.3
   with:
-    test-command: "go test ./..."
-    model-key: ${{ secrets.ANTHROPIC_API_KEY }}
+    test-command:  "go test ./..."
+    gemini-key:    ${{ secrets.GEMINI_API_KEY }}
+    mutant-model:  gemini-3.6-flash
+    writer-model:  gemini-3.6-flash
+    derive-model:  gemini-3.6-flash
+    critic-model:  "off"
     min-kill-rate: "0.7"
 ```
 

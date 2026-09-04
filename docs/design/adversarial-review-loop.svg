@@ -1,0 +1,307 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="860" viewBox="0 0 1280 860" font-family="Inter, 'Helvetica Neue', Arial, sans-serif" font-size="12">
+  <!-- SPDX-License-Identifier: Elastic-2.0 -->
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#6b7280"/>
+    </marker>
+    <marker id="arr-red" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#c0392b"/>
+    </marker>
+    <style>
+      .lane { fill: #f3f4f6; }
+      .lanelabel { font-size: 12px; font-weight: 700; letter-spacing: .08em; fill: #374151; }
+      .group { fill: #ffffff; stroke: #cbd2dc; stroke-width: 1.2; }
+      .grouptitle { font-size: 14px; font-weight: 700; fill: #1f2937; }
+      .agent { fill: #eceff3; stroke: #4b5563; stroke-width: 1.4; }
+      .code { fill: #e9f5ee; stroke: #4c9a6a; stroke-width: 1.4; }
+      .state { fill: #ffffff; stroke: #4b5563; stroke-width: 1.4; stroke-dasharray: 4 3; }
+      .surface { fill: #ffffff; stroke: #cbd2dc; stroke-width: 1.2; }
+      .arm { fill: none; stroke: #c0392b; stroke-width: 2.4; }
+      .t { font-size: 14px; font-weight: 700; fill: #1f2937; }
+      .s { font-size: 11px; fill: #4b5563; }
+      .flow { fill: none; stroke: #6b7280; stroke-width: 1.3; marker-end: url(#arr); }
+      .flowred { fill: none; stroke: #c0392b; stroke-width: 1.6; marker-end: url(#arr-red); }
+      .flowback { fill: none; stroke: #6b7280; stroke-width: 1.3; stroke-dasharray: 5 4; marker-end: url(#arr); }
+      .title { font-size: 22px; font-weight: 700; fill: #111827; }
+      .subtitle { font-size: 13px; fill: #6b7280; }
+      .key { font-size: 11px; fill: #4b5563; }
+    </style>
+  </defs>
+
+  <rect width="1280" height="860" fill="#ffffff"/>
+  <text x="24" y="40" class="title">Corral — the adversarial review loop, with a human in it</text>
+  <text x="24" y="62" class="subtitle">Cold reviewers make claims · the jail reproduces them · a third model tries to refute · a human settles the residue · every decision is a row, and the rows grade the agents</text>
+
+  <!-- LANES -->
+  <rect x="100" y="86" width="1156" height="96" rx="10" class="lane"/>
+  <text x="24" y="134" class="lanelabel">HUMAN</text>
+  <text x="24" y="150" class="key">a role inside the</text>
+  <text x="24" y="163" class="key">record, not above it</text>
+  <rect x="100" y="196" width="1156" height="356" rx="10" class="lane"/>
+  <text x="24" y="380" class="lanelabel">AGENTS</text>
+  <rect x="100" y="566" width="1156" height="104" rx="10" class="lane"/>
+  <text x="24" y="624" class="lanelabel">DATA</text>
+  <rect x="100" y="684" width="1156" height="86" rx="10" class="lane"/>
+  <text x="24" y="733" class="lanelabel">SURFACES</text>
+
+  <!-- HUMAN boxes -->
+  <g>
+    <rect x="128" y="104" width="190" height="60" rx="6" class="state"/>
+    <rect x="125" y="101" width="196" height="66" rx="8" class="arm"/>
+    <text x="140" y="126" class="t">Scope</text>
+    <text x="140" y="144" class="s">this subsystem · assume it's wrong</text>
+    <text x="140" y="157" class="s">aim where the last round didn't</text>
+  </g>
+  <g>
+    <rect x="346" y="104" width="170" height="60" rx="6" class="state"/>
+    <text x="358" y="126" class="t">Hold / triage</text>
+    <text x="358" y="144" class="s">fix the key issue · fix the rest</text>
+    <text x="358" y="157" class="s">hold on · reframe</text>
+  </g>
+  <g>
+    <rect x="544" y="104" width="228" height="60" rx="6" class="state"/>
+    <rect x="541" y="101" width="234" height="66" rx="8" class="arm"/>
+    <text x="556" y="126" class="t">Adjudicate the residue</text>
+    <text x="556" y="144" class="s">narrower-than-claimed · disputed refutation</text>
+    <text x="556" y="157" class="s">a row execution can later contradict</text>
+  </g>
+  <g>
+    <rect x="800" y="104" width="172" height="60" rx="6" class="state"/>
+    <text x="812" y="126" class="t">corral ui · seal</text>
+    <text x="812" y="144" class="s">the signed record, read back</text>
+    <text x="812" y="157" class="s">reproduced · refuted · reversed</text>
+  </g>
+  <g>
+    <rect x="1000" y="104" width="228" height="60" rx="6" class="state"/>
+    <rect x="997" y="101" width="234" height="66" rx="8" class="arm"/>
+    <text x="1012" y="126" class="t">Release</text>
+    <text x="1012" y="144" class="s">merge when green · a fix counts only</text>
+    <text x="1012" y="157" class="s">after a cold re-attack · → the PR check</text>
+  </g>
+
+  <!-- AGENTS: review round group -->
+  <rect x="120" y="212" width="470" height="326" rx="8" class="group"/>
+  <text x="134" y="234" class="grouptitle">Review round</text>
+
+  <g>
+    <rect x="134" y="250" width="200" height="56" rx="6" class="agent"/>
+    <text x="146" y="271" class="t">Reviewer</text>
+    <text x="146" y="288" class="s">cold · brief · claim + tier + script</text>
+    <text x="146" y="300" class="s">plus "checked and found sound"</text>
+  </g>
+  <g>
+    <rect x="134" y="330" width="200" height="56" rx="6" class="code"/>
+    <text x="146" y="351" class="t">Reproducer</text>
+    <text x="146" y="368" class="s">the jail runs the script at the commit</text>
+    <text x="146" y="380" class="s">holds → signed · fails → demoted</text>
+  </g>
+  <g>
+    <rect x="134" y="410" width="200" height="56" rx="6" class="agent"/>
+    <text x="146" y="431" class="t">Verifier</text>
+    <text x="146" y="448" class="s">a third model · tries to refute</text>
+    <text x="146" y="460" class="s">a grep is CODE-READ, never proof</text>
+  </g>
+  <g>
+    <rect x="370" y="250" width="200" height="56" rx="6" class="code"/>
+    <text x="382" y="271" class="t">Planner</text>
+    <text x="382" y="288" class="s">scopes covered · scopes not</text>
+    <text x="382" y="300" class="s">fix batches not yet re-attacked</text>
+  </g>
+  <g>
+    <rect x="370" y="330" width="200" height="56" rx="6" class="code"/>
+    <text x="382" y="351" class="t">Auto-adjudication</text>
+    <text x="382" y="368" class="s">reproduced / refuted by execution</text>
+    <text x="382" y="380" class="s">conservative · never overwrites a human</text>
+  </g>
+  <g>
+    <rect x="370" y="410" width="200" height="56" rx="6" class="agent"/>
+    <text x="382" y="431" class="t">Second reviewer</text>
+    <text x="382" y="448" class="s">same scope, cold · head-to-head</text>
+    <text x="382" y="460" class="s">agreement measured (modelcorr)</text>
+  </g>
+  <text x="134" y="520" class="s">Decorrelated seats · no defaults · the reviewer never fixes anything</text>
+
+  <!-- AGENTS: certify group -->
+  <rect x="612" y="212" width="360" height="326" rx="8" class="group"/>
+  <text x="626" y="234" class="grouptitle">Audit (certify — ships today)</text>
+  <g>
+    <rect x="626" y="250" width="160" height="56" rx="6" class="agent"/>
+    <text x="638" y="271" class="t">Generator</text>
+    <text x="638" y="288" class="s">plants goal-violating faults</text>
+  </g>
+  <g>
+    <rect x="798" y="250" width="160" height="56" rx="6" class="agent"/>
+    <text x="810" y="271" class="t">Writer</text>
+    <text x="810" y="288" class="s">a killing test per survivor</text>
+  </g>
+  <g>
+    <rect x="626" y="330" width="160" height="56" rx="6" class="code"/>
+    <text x="638" y="351" class="t">Jail</text>
+    <text x="638" y="368" class="s">your suite vs each fault</text>
+    <text x="638" y="380" class="s">kill rate by execution</text>
+  </g>
+  <g>
+    <rect x="798" y="330" width="160" height="56" rx="6" class="agent"/>
+    <text x="810" y="351" class="t">Critic</text>
+    <text x="810" y="368" class="s">advisory · refuted by execution</text>
+  </g>
+  <g>
+    <rect x="626" y="410" width="332" height="56" rx="6" class="code"/>
+    <text x="638" y="431" class="t">Signed verdict</text>
+    <text x="638" y="448" class="s">kill rate · survivors · proven gaps · flags · per file, per commit</text>
+    <text x="638" y="460" class="s">in-toto statement → Rekor, optional</text>
+  </g>
+  <text x="626" y="520" class="s">Same jail, same ledger — the review reuses every seam but the prompt</text>
+
+  <!-- AGENTS: scorecard -->
+  <rect x="994" y="212" width="242" height="326" rx="8" class="group"/>
+  <text x="1008" y="234" class="grouptitle">Scorecard (code)</text>
+  <g>
+    <rect x="1008" y="250" width="214" height="60" rx="6" class="code"/>
+    <text x="1020" y="271" class="t">Tester accuracy</text>
+    <text x="1020" y="288" class="s">proven catches / survivors attempted</text>
+    <text x="1020" y="301" class="s">per model · per language (today)</text>
+  </g>
+  <g>
+    <rect x="1008" y="330" width="214" height="60" rx="6" class="code"/>
+    <text x="1020" y="351" class="t">Reviewer accuracy</text>
+    <text x="1020" y="368" class="s">reproduced claims / claims made</text>
+    <text x="1020" y="381" class="s">refuted · uncited · per scope</text>
+  </g>
+  <g>
+    <rect x="1008" y="410" width="214" height="60" rx="6" class="code"/>
+    <text x="1020" y="431" class="t">Joins</text>
+    <text x="1020" y="448" class="s">one model, both roles · review vs</text>
+    <text x="1020" y="461" class="s">signed audit · reviewer vs reviewer</text>
+  </g>
+  <text x="1008" y="500" class="s">evidence floor: &lt; 5 observations is</text>
+  <text x="1008" y="514" class="s">printed, marked insufficient, never</text>
+  <text x="1008" y="528" class="s">preferred</text>
+
+  <!-- DATA boxes -->
+  <g>
+    <rect x="128" y="584" width="180" height="66" rx="6" class="state"/>
+    <text x="140" y="606" class="t">Findings</text>
+    <text x="140" y="623" class="s">claim · tier declared / recorded</text>
+    <text x="140" y="636" class="s">file:line · script · record id</text>
+  </g>
+  <g>
+    <rect x="330" y="584" width="180" height="66" rx="6" class="state"/>
+    <text x="342" y="606" class="t">Adjudications</text>
+    <text x="342" y="623" class="s">auto · verifier · human</text>
+    <text x="342" y="636" class="s">confirmed / refuted · principal · when</text>
+  </g>
+  <g>
+    <rect x="532" y="584" width="180" height="66" rx="6" class="state"/>
+    <text x="544" y="606" class="t">Refuted-claims list</text>
+    <text x="544" y="623" class="s">what reviewers get wrong, kept</text>
+    <text x="544" y="636" class="s">fed to the next reviewer</text>
+  </g>
+  <g>
+    <rect x="734" y="584" width="200" height="66" rx="6" class="state"/>
+    <text x="746" y="606" class="t">Audit rows</text>
+    <text x="746" y="623" class="s">corral_audits · corral_mutants</text>
+    <text x="746" y="636" class="s">signed · join on commit + path</text>
+  </g>
+  <g>
+    <rect x="956" y="584" width="280" height="66" rx="6" class="state"/>
+    <text x="968" y="606" class="t">Warehouse</text>
+    <text x="968" y="623" class="s">DuckDB, append-only → MotherDuck on push</text>
+    <text x="968" y="636" class="s">scan_uid joins every grain · no source leaves the box</text>
+  </g>
+
+  <!-- SURFACES -->
+  <g>
+    <rect x="128" y="700" width="200" height="54" rx="6" class="surface"/>
+    <text x="140" y="722" class="t">GitHub PR</text>
+    <text x="140" y="740" class="s">required check · summary · attestation</text>
+  </g>
+  <g>
+    <rect x="350" y="700" width="200" height="54" rx="6" class="surface"/>
+    <text x="362" y="722" class="t">corral review (CLI)</text>
+    <text x="362" y="740" class="s">the opinion, printed with its citations</text>
+  </g>
+  <g>
+    <rect x="572" y="700" width="200" height="54" rx="6" class="surface"/>
+    <text x="584" y="722" class="t">corral models rank</text>
+    <text x="584" y="740" class="s">disclosure, not selection</text>
+  </g>
+  <g>
+    <rect x="794" y="700" width="200" height="54" rx="6" class="surface"/>
+    <text x="806" y="722" class="t">Rekor</text>
+    <text x="806" y="740" class="s">public transparency log, optional</text>
+  </g>
+  <g>
+    <rect x="1016" y="700" width="220" height="54" rx="6" class="surface"/>
+    <text x="1028" y="722" class="t">MotherDuck dives</text>
+    <text x="1028" y="740" class="s">fleet questions, one GROUP BY each</text>
+  </g>
+
+  <!-- FLOWS -->
+  <!-- Scope -> Reviewer -->
+  <path d="M223,167 L223,250" class="flowred"/>
+  <!-- Hold/triage -> Planner -->
+  <path d="M431,167 C431,200 460,215 470,250" class="flowred"/>
+  <!-- Planner -> Scope (feedback) -->
+  <path d="M470,250 C470,190 270,190 270,167" class="flowback"/>
+  <!-- Reviewer -> Reproducer -> Verifier -->
+  <path d="M234,306 L234,330" class="flow"/>
+  <path d="M234,386 L234,410" class="flow"/>
+  <!-- Verifier -> Auto-adjudication -->
+  <path d="M334,438 C352,438 352,358 370,358" class="flow"/>
+  <!-- Second reviewer -> Auto-adjudication -->
+  <path d="M470,410 L470,386" class="flow"/>
+  <!-- Reproducer -> Findings -->
+  <path d="M180,386 C160,470 160,540 190,584" class="flow"/>
+  <!-- Auto-adjudication -> Adjudications -->
+  <path d="M470,386 C470,470 420,520 420,584" class="flow"/>
+  <!-- Adjudications -> Adjudicate (residue up, red) -->
+  <path d="M500,588 C598,588 598,300 598,167" class="flowred"/>
+  <!-- Adjudicate -> Adjudications (the human row, red) -->
+  <path d="M640,167 C640,420 610,560 470,584" class="flowred"/>
+  <!-- Adjudications -> Refuted list -->
+  <path d="M510,626 L532,626" class="flow"/>
+  <!-- Refuted list -> Reviewer (feedback) -->
+  <path d="M600,584 C600,556 112,556 112,400 C112,320 112,290 134,278" class="flowback"/>
+  <!-- Signed verdict -> Audit rows -->
+  <path d="M834,466 L834,584" class="flow"/>
+  <!-- Signed verdict -> Tester accuracy -->
+  <path d="M958,438 C990,438 990,280 1008,280" class="flow"/>
+  <!-- Audit rows -> Joins -->
+  <path d="M934,610 C990,610 990,440 1008,440" class="flow"/>
+  <!-- Adjudications -> Scorecard (reviewer accuracy) -->
+  <path d="M510,600 C520,556 1100,556 1115,538" class="flow"/>
+  <!-- Scorecard -> models rank -->
+  <path d="M1000,538 C1000,556 722,556 722,600 L722,700" class="flow"/>
+  <!-- Data -> Warehouse -->
+  <path d="M934,640 L956,640" class="flow"/>
+  <path d="M712,640 C730,660 900,660 956,628" class="flow"/>
+  <!-- Warehouse -> MotherDuck dives -->
+  <path d="M1096,650 L1096,700" class="flow"/>
+  <!-- Signed verdict -> Rekor -->
+  <path d="M945,466 L945,700" class="flow"/>
+  <!-- Signed verdict -> Release (red, via the gap) -->
+  <path d="M958,455 C976,455 976,300 976,190 C976,175 1000,167 1040,167" class="flowred"/>
+  <!-- Audit rows -> corral ui (feedback) -->
+  <path d="M920,584 C988,560 988,200 960,167" class="flowback"/>
+  <!-- Findings -> corral review CLI -->
+  <path d="M250,650 C250,680 430,680 450,700" class="flow"/>
+  <!-- Release -> GitHub PR: the check is the release -->
+  <path d="M1228,167 C1250,300 1250,600 1250,690 C1250,778 300,778 228,754" class="flowred"/>
+
+  <!-- KEY -->
+  <text x="24" y="806" class="lanelabel">KEY</text>
+  <rect x="100" y="794" width="18" height="14" rx="3" class="code"/>
+  <text x="124" y="805" class="key">code</text>
+  <rect x="180" y="794" width="18" height="14" rx="3" class="agent"/>
+  <text x="204" y="805" class="key">LLM agent</text>
+  <rect x="280" y="794" width="18" height="14" rx="3" class="state"/>
+  <text x="304" y="805" class="key">stored state</text>
+  <rect x="390" y="794" width="18" height="14" rx="3" class="surface"/>
+  <text x="414" y="805" class="key">surface</text>
+  <rect x="480" y="794" width="18" height="14" rx="3" class="arm"/>
+  <text x="504" y="805" class="key">you arm it — a human decision, recorded as a row</text>
+  <line x1="820" y1="801" x2="850" y2="801" class="flowback"/>
+  <text x="858" y="805" class="key">feedback into the next round</text>
+  <text x="24" y="840" class="key">Designed, not built — see docs/design/adversarial-review.md. The Audit column ships today; the review round, the reviewer rows in the scorecard and the human residue queue do not.</text>
+</svg>

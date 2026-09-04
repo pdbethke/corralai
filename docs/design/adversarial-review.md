@@ -38,6 +38,16 @@ So the thing worth building is not "AI code review." It is the discipline
 that made those five rounds worth eleven pull requests, run by the machinery
 corral already has.
 
+## The loop, drawn
+
+![The adversarial review loop, with a human in it](adversarial-review-loop.png)
+
+(`adversarial-review-loop.svg` is the source.) Four lanes: the human, the
+agents, the data, the surfaces. Red outlines are the three places a human
+arms the loop — scope, adjudication, release — and each is recorded as a
+row, because the human is a role inside the record, not above it. See
+"The human's role" below for why that clause matters.
+
 ## The shape: opinion → citations → signed reproductions
 
 A review is **prose**. It says things like "the herd is not an allowlist; a
@@ -105,6 +115,67 @@ machine's never overrides it. This is the criticscore contract today
 (`internal/criticscore`): automatic adjudication is conservative, human
 adjudication is authoritative, and a later automatic pass may not overwrite
 a human's.
+
+## The human's role
+
+The loop begs for a human, and the obvious design — the human as the final
+arbiter, the safety net under the machines — contradicts corral's own
+thesis. The thesis is that judgment fails *structurally*: the party that
+made the change is the wrong party to grade it, whether that party is a
+model or a person, and agentic testing can be exactly as myopic as human
+review when it is set up the same way. A human placed above the record, whose
+say-so ends every argument and is never itself checked, is that setup again
+with a different face. *Nemo iudex* applies to the human too.
+
+So the human gets a role, not an exemption. Five interventions, all of them
+observed this week and none of them done by a model:
+
+- **Scope.** Which subsystem, and the standing instruction: assume it is
+  wrong, aim where the last round did not. A model can propose the next
+  scope (the planner); a person names it.
+- **Hold and triage.** "Fix the key issue first." "Hold on." The priority
+  call the reviewers cannot make because they do not know what the project
+  is for.
+- **Reframe.** The trust-anchor finding was a leaked key until a person
+  said it was a default-value bug — same fact, truer sentence. Meaning is
+  not something execution settles.
+- **Adjudicate the residue.** Confirm or refute what the machine could not
+  settle: the reproduction that is genuine but narrower than its claim, the
+  refutation the reviewer disputes, the hypothesis worth a scope.
+- **Release.** The merge is a person's act, and a fix counts only after a
+  fresh seat has tried to defeat it.
+
+Two rules keep the role inside the record:
+
+1. **Every intervention is a row with a principal.** An adjudication
+   carries who made it and when. A human's dismissal of a finding is not
+   erased from the scorecard; it is the scorecard's ground truth *and* a
+   claim on the record that a later reproduction can contradict. When it
+   is contradicted, the reversal is a row too, and the human sees it in the
+   same seal the machines' reversals appear in. This is the difference
+   between authority and exemption: the human's word is final for the round
+   and reviewable forever.
+2. **The residue is budgeted.** Every security scanner ever built had a
+   human loop; it was called the findings queue, and it is where findings
+   go to die. If a person sees every claim, adjudication decays into
+   clicking within a week and the ground truth is anchored to noise.
+   Execution settles everything it can; only the residue reaches a person;
+   and the size of the residue per round is a metric the loop watches,
+   because a rising one means the machine is settling less.
+
+What this does not do is score the human the way it scores a model. A
+reversal rate over a person's adjudications is a measure of the *machine's*
+calibration against that person, and it is read that way — the same way a
+verifier's wrongly-overruled rate is a measure of the verifier. The record
+keeps humans honest by keeping their decisions visible, not by ranking them.
+
+In an organization the "who" is the expensive part: an adjudication is an
+authority act — it changes a model's score and a file's standing — and it
+needs an identity behind it, an audit trail, and a policy about who may
+reverse whom. Corral has the identity plumbing (the OIDC gate, the admin
+principals) and nothing yet that puts a principal on an adjudication row or
+makes a human's reversal itself reviewable. That is a permission model, not
+a UI, and it is the part of the loop that would take longest.
 
 ## Rounds
 
@@ -273,6 +344,8 @@ Every mechanism below is shipped and in use by `certify`:
   the seal and the dives extended to read them.
 - **A round planner** — scopes covered, scopes not, fix batches not yet
   re-attacked. Last, because a human did this well by hand all week.
+- **Principals on adjudication rows**, and a reversal that is itself a row
+  the seal shows — the permission model from "The human's role."
 
 ## What this is not
 

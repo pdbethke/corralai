@@ -1,0 +1,140 @@
+---
+title: "Grade the reviewer"
+description: "Corral grades a model's tests by execution. This week's cold reviews made something obvious that should have been obvious a year ago: a model's reviews can be graded the same way — by whether its claims reproduce, against other reviewers, and against the signed audit of the very code it reviewed. A design note, written the morning after the aha."
+pubDate: 2026-09-04
+draft: true
+---
+
+{/* SPDX-License-Identifier: Elastic-2.0 */}
+
+*Field note. This one is a design, not a report — nothing below is built
+yet, and the sentences that describe what corral does today are marked as
+such. It follows directly from
+[We put five strangers on our own code](/field-notes/the-reviewer-was-right-and-we-said-no/);
+read that first if you have not. The design itself is in the repository at
+`docs/design/adversarial-review.md`.*
+
+---
+
+## What corral measures today
+
+Corral's rule is that no agent judges its own work. In practice that has
+meant one thing: the model that writes a test is graded by execution. It is
+handed a planted bug the dev suite missed, it writes a test, the test runs
+in a jail against the mutated and unmutated code, and either the test kills
+the bug or it does not. The number is signed. Over enough files the
+scorecard says, per language, which model actually catches bugs and which
+one writes confident tests that catch nothing. That part ships.
+
+The critic — the second model that reads the tests and flags the ones that
+can never fail — is graded too, but more weakly: a critic's claim is
+*refuted* by execution when the test it called vacuous turns out to kill a
+mutant, and confirmed only when a human says so. Advisory, never gating.
+
+So corral has always had a stronger measurement of the agent that *does* the
+work than of the agent that *judges* it. That asymmetry is common. Every AI
+review tool we know of has it in the extreme: the reviewer posts findings on
+your pull request, and nothing anywhere records whether the findings were
+right.
+
+## What the strangers did
+
+Last week's reviewers were not writing tests. When one of them said the
+console's trust anchor had a default, it derived the public key from the
+committed seed and compared it to the pinned constant. When one said the
+repository under audit could choose its own auditors, it wrote a hostile
+config file, ran a dry run, and quoted the printed resolution. When one said
+the warehouse ranking charged pipeline failures to the writer, it pushed
+four rows through the real reader and showed 6 of 25 where the record said
+3 of 4.
+
+Each of those is a **reproduction**: something a stranger can rerun and get
+the same answer. And the reviewers that were wrong — eight confident false
+claims across four reviews, one of them ours — were wrong exactly where they
+skipped the reproduction and inferred. A roadmap read as shipped. A grep
+read as proof of absence.
+
+That is the whole difference between a review and an opinion, and it is
+measurable.
+
+## The aha
+
+If a reviewer's claim comes with a reproduction, then the reviewer can be
+graded the way the test-writer is: by execution. Corral's jail already runs
+arbitrary commands against a tree at a commit. Run the reproduction. It
+holds or it does not. Record which, sign the ones that held, and the
+reviewer's *precision* is a number — reproduced claims over claims made, per
+language, per subsystem — sitting in the same scorecard as its test-writing
+recall.
+
+Three things fall out of that, and none of them needs machinery corral does
+not already have.
+
+**A model's profile across roles.** The same model can sit in the
+test-writing seat on Monday and the reviewing seat on Tuesday, under the
+same name. Join the two rows and you have something nobody has measured
+from execution: whether a model that tests well also reviews well. We do
+not know the answer. We suspect they are different skills. The scorecard
+would say.
+
+**A review checked against the signed audit of the same code.** A
+reproduced finding names a file and a line at a commit. Corral has already
+signed that file at that commit — its kill rate, its survivors, the gaps a
+writer proved. Join the two and every finding lands in one of three rows.
+The finding is on a file the audit signed as weak: two independent
+measurements pointing at the same place. The finding was refuted and the
+audit signed the file as strong: the reviewer was wrong, against evidence
+that was already there. Or — the interesting one — the finding reproduced
+*and* the audit signed the file as strong. That is a suite adequate against
+every planted fault and still blind to the reviewer's scenario. It is not a
+contradiction to resolve. It is the exact place where mutation adequacy and
+correctness come apart, with both halves signed.
+
+**Reviewers checked against each other.** Two cold reviewers on the same
+subsystem are a head-to-head, the same way two mutant generators are today.
+Corral already computes agreement between the two generator seats
+(Jaccard and kappa over what they produced); the same arithmetic applies to
+findings without change. Decorrelation between reviewers becomes a measured
+number rather than an assumption about vendors.
+
+## The rule, extended
+
+Corral's tagline has been *nemo iudex in causa sua* — no one may judge their
+own cause. The version we arrived at this week is one clause longer:
+
+*No agent judges its own work, and no agent's judgment of another's work
+goes unmeasured.*
+
+The tester is graded by execution. The reviewer is graded by reproduction —
+against other reviewers, and against the signed result of the code it
+reviewed. The human adjudicates what the machine cannot settle, and the
+adjudication is a row too, because the one time this week the machine
+overruled a reviewer on its own, it was wrong.
+
+## What it would take
+
+Less than it sounds. The seats, the decorrelation rule, the jail, the
+findings table, the execution-based adjudication with human override, the
+signed records, the scorecard with its evidence floor, and the warehouse the
+rows go to all exist and are what `certify` runs on today. What does not
+exist is a reviewer brief that demands a reproduction with every claim, a
+jail runner that accepts a script instead of a test command, a third seat
+that tries to refute what reproduced, and two new rows in `models rank`.
+
+The honest caveat is cost. Each of last week's reviews was roughly two
+hundred thousand tokens and ninety tool calls of a frontier model, and there
+were five rounds. That is a release gate or a launch-week audit, not a check
+on every push. The per-push check is `certify`, which already exists.
+
+The other honest caveat is the signature. Corral would sign the
+reproductions, never the review. A review is prose — a judgment drawn from
+evidence — and a signature on a judgment is the opinion feed with a seal on
+it. Every surface that shows a review would have to show which of its
+sentences rest on a signed reproduction and which do not. That is the
+product, and it is also the only version of it we would trust.
+
+*The design is in the repository: `docs/design/adversarial-review.md`.
+Status: designed, not built. If you know of a review tool that already
+requires reproduction, keeps the reviewer's refuted claims, and scores the
+reviewer by them, we want to hear about it — those are the three properties
+we looked for and did not find.*

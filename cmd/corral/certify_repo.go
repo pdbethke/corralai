@@ -809,20 +809,43 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 			}
 		}
 		if *diffBase == "" {
-			// Ranking/--top already ran over the pairing-based candidates
-			// above; an evidence-only candidate (TestPath == "", by
-			// construction — see WidenCandidacyByEvidence) has no churn×size
-			// signal of its own to compete with, so it is ADDED here rather
-			// than reconsidered by Rank/Select. Withholding it because a
-			// ranking pass that never saw it did not choose it would be
-			// exactly the "measurement computed then discarded" shape this
-			// whole feature exists to fix.
-			//
+			// Ranking/--top ran over the pairing-based candidates above,
+			// before this evidence existed. An evidence-only candidate
+			// (TestPath == "", by construction — see
+			// WidenCandidacyByEvidence) is a file like any other to Rank —
+			// it has churn and a size — so it competes under the SAME bound
+			// rather than being appended past it: --top is the operator's
+			// cap on what the run costs, and a second door that ignores it
+			// audited 11 files on a scan that had just printed "auditing 3
+			// of 6". Ranking the union of the survivors and the newcomers
+			// gives exactly the top-N of everything (a pairing candidate the
+			// first cut dropped cannot be in the union's top-N either), so
+			// nothing a ranking pass never saw is withheld — it is simply
+			// ranked. The announce line above was printed before this
+			// evidence existed; it is corrected here, in the same report,
+			// rather than left to disagree with the job count.
 			var evidenceOnly []reposcan.Candidate
 			for _, c := range cands {
 				if c.TestPath == "" {
-					selected = append(selected, c)
 					evidenceOnly = append(evidenceOnly, c)
+				}
+			}
+			if len(evidenceOnly) > 0 {
+				union := make([]reposcan.Candidate, 0, len(selected)+len(evidenceOnly))
+				union = append(union, selected...)
+				union = append(union, evidenceOnly...)
+				reranked, _ := reposcan.Rank(*repoDir, union)
+				var cut []reposcan.Exclusion
+				selected, cut = reposcan.Select(reranked, effectiveTop)
+				excl = append(excl, cut...)
+				fmt.Fprintf(stdout, "  widened by evidence: +%d candidate(s); re-ranked by %s under the same bound, auditing %d of %d candidate(s)\n",
+					len(evidenceOnly), rankSignal, len(selected), len(cands))
+				// The top-up below replays only what is still selected.
+				evidenceOnly = evidenceOnly[:0]
+				for _, c := range selected {
+					if c.TestPath == "" {
+						evidenceOnly = append(evidenceOnly, c)
+					}
 				}
 			}
 			// --mutants was resolved ABOVE, over the pairing-based
@@ -1736,7 +1759,11 @@ func testSurfacePaths(root *os.Root, cands []reposcan.Candidate, excl []reposcan
 	}
 	for _, e := range excl {
 		switch e.Reason {
-		case reposcan.ReasonIsTest:
+		case reposcan.ReasonIsTest, reposcan.ReasonTestSupport:
+			// Test-support is in the surface by WHERE IT LIVES, so a
+			// tests/testserver/server.py — a test-tree file in a directory
+			// holding no recognized test, which the "beside a test" rule
+			// below cannot reach — is digested too.
 			paths = append(paths, e.Path)
 		case reposcan.ReasonSkippedDir:
 			if underTestdata(e.Path) && isRegularInRoot(root, e.Path) {

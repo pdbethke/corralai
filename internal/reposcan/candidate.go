@@ -66,6 +66,18 @@ const (
 	ReasonNoLanguage   = "no-language"
 	ReasonIsTest       = "is-test"
 	ReasonNoPairedTest = "no-paired-test"
+	// ReasonTestSupport marks a source file that lives under one of its
+	// language's own test roots (lang.TestRooter plus the generic "tests"
+	// default — the same set FindTest searches) without being a recognized
+	// test itself: pytest's conftest.py, spec/support/*.rb, a tests/
+	// helper module, an in-tree test server. It is the TESTS' side of the
+	// audit, graded as part of the surface (see TestSurfacePaths), and
+	// never a subject: a mutant planted in a fixture is not a bug the
+	// library ships, and an instrumented run finds hundreds of tests
+	// "covering" a conftest.py, which is exactly the evidence that promoted
+	// one into a live scan. Enumerate applies it before any pairing, and
+	// WidenCandidacyByEvidence leaves it alone.
+	ReasonTestSupport = "test-support — lives in the test tree, never a subject"
 	// ReasonAmbiguousTest marks a source file whose resolved test path is
 	// ALSO claimed by at least one other source file at the same or better
 	// specificity rank. Ordered TestPaths candidates broke the injectivity
@@ -411,6 +423,10 @@ func EnumerateWithTests(root string, tests *TestMap) ([]Candidate, []Exclusion, 
 		// differs from itself only for non-test files.
 		if isTestFile(p, rel) {
 			excl = append(excl, Exclusion{Path: rel, Reason: ReasonIsTest})
+			continue
+		}
+		if underRoots(rel, testRootsFor(p)) {
+			excl = append(excl, Exclusion{Path: rel, Reason: ReasonTestSupport})
 			continue
 		}
 		// Walk the plugin's ordered candidates and pair with the first one

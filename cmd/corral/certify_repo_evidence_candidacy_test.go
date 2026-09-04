@@ -4,6 +4,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -299,5 +300,88 @@ func TestCertifyRepoEvidenceOnlyCandidateActuallyGrades(t *testing.T) {
 	}
 	if !strings.Contains(s, "kill rate 1.00 over 1 audited file(s) (100% of 1 candidates)") {
 		t.Errorf("want a clean 1.00 kill rate over the one evidence-only candidate, graded against its covering test:\n%s", s)
+	}
+}
+
+// TestCertifyRepoTopBoundsEvidenceWidenedCandidatesToo pins the rule that
+// --top is ONE bound over everything the scan will audit, whichever door a
+// candidate came in by. The live requests scan (2026-09-04) printed "ranked
+// by churn-x-size; auditing 3 of 6 candidate(s)" under --top 3 and then
+// queued 11 jobs: the name-paired candidates were ranked and cut to three,
+// and evidence widening appended every evidence-only file after that, past
+// the bound the operator had set to cap what the run costs. The same run
+// promoted tests/conftest.py as a subject on the strength of 620 tests
+// "covering" it — a fixture is the tests' side of the audit, never graded
+// against them.
+//
+// Real pytest + coverage, models named but never called: every file is
+// ungoaled (--goals {}), so the run stops at selection and the report is
+// the whole proof.
+func TestCertifyRepoTopBoundsEvidenceWidenedCandidatesToo(t *testing.T) {
+	skipWithoutPythonCoverage(t)
+	t.Setenv("ANTHROPIC_API_KEY", "test-placeholder-not-a-real-key")
+	root := t.TempDir()
+	mustWrite(t, filepath.Join(root, "pyproject.toml"), "[tool.coverage.run]\nsource = [\"mypkg\"]\n")
+	mustWrite(t, filepath.Join(root, "mypkg", "__init__.py"), "")
+	// One name-paired candidate…
+	mustWrite(t, filepath.Join(root, "mypkg", "named.py"), "def n():\n    return 1\n")
+	mustWrite(t, filepath.Join(root, "tests", "test_named.py"), "from mypkg.named import n\n\n\ndef test_n():\n    assert n() == 1\n")
+	// …and three that only evidence can pair.
+	for _, f := range []string{"a", "b", "c"} {
+		mustWrite(t, filepath.Join(root, "mypkg", f+".py"), fmt.Sprintf("def %s():\n    return 1\n", f))
+	}
+	mustWrite(t, filepath.Join(root, "tests", "test_smoke.py"),
+		"from mypkg.a import a\nfrom mypkg.b import b\nfrom mypkg.c import c\n\n\ndef test_all():\n    assert a() + b() + c() == 3\n")
+	// A fixture every test loads: the most-covered file in the tree.
+	mustWrite(t, filepath.Join(root, "tests", "conftest.py"), "import mypkg\n")
+
+	// Every candidate goaled and replayable, so whichever one the bound
+	// keeps is graded for real without a model call — and the ones it
+	// cuts are cut by the bound, not for want of a goal.
+	files := map[string]adequacy.MutantSetEntry{}
+	goals := map[string]string{}
+	for _, f := range []string{"named", "a", "b", "c"} {
+		fn := f
+		if f == "named" {
+			fn = "n"
+		}
+		src := fmt.Sprintf("def %s():\n    return 1\n", fn)
+		files["mypkg/"+f+".py"] = adequacy.MutantSetEntry{
+			ParentSHA256: shaOf(src),
+			Mutants:      []adequacy.RecordedMutant{{ID: "m1", Replace: fmt.Sprintf("def %s():\n    return 2\n", fn)}},
+		}
+		goals["mypkg/"+f+".py"] = fn + "() must return exactly 1"
+	}
+	setPath := filepath.Join(root, "mutants.json")
+	if err := adequacy.WriteMutantSet(setPath, adequacy.MutantSetFile{Format: adequacy.MutantSetFormat, Files: files}); err != nil {
+		t.Fatal(err)
+	}
+	goalsJSON, _ := json.Marshal(goals)
+
+	var out, errb bytes.Buffer
+	code := runCertifyRepo([]string{
+		"--repo", root, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant, "--critic-model", "off",
+		"--goals", writeGoals(t, root, string(goalsJSON)), "--substrate", substrateWorkspace, "--top", "1", "--mutants", setPath,
+	}, &out, &errb)
+	s := out.String()
+	if code != 0 {
+		t.Fatalf("exit=%d, want 0 for a fully-replayed, fully-killed audit of the one file the bound kept: stdout=%s stderr=%s", code, s, errb.String())
+	}
+
+	// Four candidates exist (one by name, three by evidence); one is audited.
+	if !strings.Contains(s, "auditing 1 of 4 candidate(s)") {
+		t.Errorf("--top 1 must bound the evidence-widened candidates too, and the report must say so once, correctly:\n%s", s)
+	}
+	if !strings.Contains(s, "4 candidate(s); 1 job(s)") {
+		t.Errorf("the summary must agree with the bound: 4 candidates, 1 job:\n%s", s)
+	}
+	if !strings.Contains(s, "3 not-selected") {
+		t.Errorf("the three candidates the bound cut must be accounted as not-selected:\n%s", s)
+	}
+	if strings.Contains(s, "tests/conftest.py paired by evidence") {
+		t.Errorf("a fixture is never a subject, however many tests load it:\n%s", s)
+	}
+	if !strings.Contains(s, "1 test-support") {
+		t.Errorf("tests/conftest.py must be accounted under its own reason:\n%s", s)
 	}
 }

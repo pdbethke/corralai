@@ -2215,3 +2215,34 @@ func TestDeploySignsTheConsoleForTheBuildItShips(t *testing.T) {
 		t.Fatal("no deploy.yml step builds the brain (corral.new) — this gate is not looking where it thinks it is")
 	}
 }
+
+// TestActionTestCommandSurvivesUutilsPrintf: on uutils coreutils (Ubuntu
+// 26.04's runner image) `printf` consumes a bare `--` word as its own
+// end-of-options and honours `--help`/`--version` even after the format.
+// So `npm test -- --coverage` split to an EMPTY word where the `--` was
+// (npm then ate `--coverage` as its own flag) and `jest --version` became
+// printf's version banner as one argument — exactly the "silently grades a
+// different command than the one written" the docs promise cannot happen.
+// GNU printf did neither, so no test had ever seen it; this one runs on
+// whichever printf the box has and asserts the argv, not the printf.
+func TestActionTestCommandSurvivesUutilsPrintf(t *testing.T) {
+	a := loadActionYAML(t)
+	runStep := findStepContaining(t, a, "certify --repo")
+	for _, tc := range []struct {
+		cmd  string
+		want []string
+	}{
+		{"npm test -- --coverage", []string{"npm", "test", "--", "--coverage"}},
+		{"cargo test -- --nocapture", []string{"cargo", "test", "--", "--nocapture"}},
+		{"jest --version", []string{"jest", "--version"}},
+		{"jest --help", []string{"jest", "--help"}},
+	} {
+		out, runErr, argv := runRunCorralStep(t, runStep, t.TempDir(), tc.cmd)
+		if runErr != nil {
+			t.Fatalf("%q: run-corral step failed: %v\n%s", tc.cmd, runErr, out)
+		}
+		if strings.Join(argv, "\x1f") != strings.Join(tc.want, "\x1f") {
+			t.Errorf("test-command %q: got argv=%q, want=%q", tc.cmd, argv, tc.want)
+		}
+	}
+}

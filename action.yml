@@ -300,7 +300,15 @@ runs:
         # since the parse's own pipeline exit status is not reliably
         # observable once it feeds a NUL-delimited `mapfile` via process
         # substitution.
-        if ! printf '%s\n' "$TEST_COMMAND" | xargs -r -n1 printf '%s\0' >/dev/null; then
+        #
+        # `printf --`: on uutils coreutils (Ubuntu 26.04's runner image and
+        # ubuntu-latest after it), printf itself consumes a bare `--` as
+        # end-of-options and honours `--help`/`--version` — so `npm test --
+        # --coverage` split to an EMPTY word where the `--` was, and `jest
+        # --version` became printf's own banner. GNU printf did neither,
+        # which is why no test had ever seen it. The `--` here ends
+        # printf's options before the format, on both implementations.
+        if ! printf '%s\n' "$TEST_COMMAND" | xargs -r -n1 printf -- '%s\0' >/dev/null; then
           echo "::error::test-command could not be parsed as shell-style words (check for an unmatched quote): $TEST_COMMAND" >&2
           exit 1
         fi
@@ -311,7 +319,7 @@ runs:
         # trailing `\n` fed to xargs above is required too: without it, GNU
         # xargs drops a trailing empty-quoted argument outright rather than
         # emitting it as a zero-length one.
-        mapfile -d '' TEST_ARGV < <(printf '%s\n' "$TEST_COMMAND" | xargs -r -n1 printf '%s\0')
+        mapfile -d '' TEST_ARGV < <(printf '%s\n' "$TEST_COMMAND" | xargs -r -n1 printf -- '%s\0')
         # The load-bearing guard is HERE, over the parsed OUTPUT, not the
         # input string above — and it checks the actual invariant corral
         # needs, not a shape of the input. What makes an argv usable as a
@@ -416,7 +424,12 @@ runs:
         set -euo pipefail
         stmt="$CORRAL_ATTEST_PATH"
         if [ ! -s "$stmt" ]; then
-          echo "::notice::corral wrote no audit statement (nothing was audited), so nothing is attested."
+          # A NOTHING IN SCOPE run still writes a statement (audited: 0,
+          # files: []), so a missing file is never "nothing was audited" —
+          # it is a write that failed, and corral has already raised a
+          # ::warning naming the error. Say what this step knows: no
+          # statement, so no attestation.
+          echo "::warning title=corral attest::no audit statement was written at $stmt, so nothing is attested — see the run step's own warning for why."
           echo "present=false" >> "$GITHUB_OUTPUT"
           exit 0
         fi

@@ -15,11 +15,17 @@ writes the verdict to the run page verbatim.
     fetch-depth: 0
 - uses: pdbethke/corralai@v0.8.3
   with:
-    test-command: "go test ./..."
-    anthropic-key: ${{ secrets.ANTHROPIC_API_KEY }}
+    test-command:  "go test ./..."
+    gemini-key:    ${{ secrets.GEMINI_API_KEY }}
+    mutant-model:  gemini-3.6-flash
+    writer-model:  gemini-3.6-flash
+    derive-model:  gemini-3.6-flash
+    critic-model:  "off"
 ```
 
-That is the whole workflow. There is no `corral` for you to install — the
+That is the whole workflow: one key, one model in every seat, the advisory
+critic off. corral has no default models, so the three seats are named
+here, not assumed. There is no `corral` for you to install — the
 action's first step `go install`s it into a private `GOBIN` and puts it on
 `PATH`. The one requirement is a `go` binary already on the runner;
 GitHub-hosted runners ship one.
@@ -130,8 +136,12 @@ The bill lands on the repository that runs the workflow: your runner minutes,
 your API key. On a public repo an outside contributor's pull request would
 spend your money, once per push, for as long as they keep pushing.
 
-GitHub withholds secrets from fork pull requests, so an audit on a fork skips on
-its own — but don't rely on that alone. The specific way it gets undone is
+GitHub withholds secrets from fork pull requests, so an audit on a fork has no
+key and **goes red** (`needs a Google key`, exit 2) rather than skipping — a
+contributor sees a failed check that is your configuration, not their code.
+Guard the step with an `if:` on the head repository, as below, so a fork PR is
+skipped on purpose. And don't rely on the missing secret alone: the specific
+way it gets undone is
 someone reaching for `pull_request_target` because "fork PRs skip." **That
 trigger runs with your secrets while checking out the contributor's code, so it
 does not merely spend your key, it exposes it.** If fork PRs skipping looks like
@@ -166,9 +176,9 @@ as your role routing needs. An unset key is never exported as an empty variable,
 and no key value is ever echoed.
 
 **A key alone does not move providers.** corral routes each *role* to its own
-model and the defaults are `claude-*`, so pointing only a key at another vendor
-leaves Claude model names aimed at an endpoint where they don't exist. Set
-`derive-model`, `writer-model`, `mutant-model` and `critic-model` too. The
+model and has no default models, so a key with no seats named refuses to run,
+naming the credentials it can see. Set `derive-model`, `writer-model`,
+`mutant-model` and `critic-model` (a model, or `off`). The
 critic must differ from the writer — that decorrelation is enforced, not
 advisory — and `critic-model: off` disables it entirely, which is reasonable
 when one vendor gives you only one usable model. The critic never gates the
@@ -293,14 +303,17 @@ key runs the whole thing:
     test-command:  "pytest -q"
     gemini-key:    ${{ secrets.GEMINI_API_KEY }}
     mutant-model:  gemini-3.6-flash
-    writer-model:  gemini-3.7-flash
+    writer-model:  gemini-3.6-flash
+    derive-model:  gemini-3.6-flash
     critic-model:  "off"
     shadow-model:  "off"
     min-kill-rate: "0.8"
 ```
 
 That is a real gate. Faults get planted, your suite runs against every one of
-them in the jail, and the kill-rate either clears the bar or fails the check.
+them in a private copy of the checkout on the runner (the Action uses the
+workspace substrate, not the bwrap jail — a runner is already disposable),
+and the kill-rate either clears the bar or fails the check.
 
 **What you give up, and corral says so out loud.** With every graded seat on one
 vendor there is no independent read, and the verdict block prints:

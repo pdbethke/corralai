@@ -1,0 +1,301 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="860" viewBox="0 0 1280 860" font-family="Inter, 'Helvetica Neue', Arial, sans-serif" font-size="12">
+  <!-- SPDX-License-Identifier: Elastic-2.0 -->
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#6b7280"/>
+    </marker>
+    <marker id="arr-red" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#c0392b"/>
+    </marker>
+    <style>
+      .lane { fill: #f3f4f6; }
+      .lanelabel { font-size: 12px; font-weight: 700; letter-spacing: .08em; fill: #374151; }
+      .group { fill: #ffffff; stroke: #cbd2dc; stroke-width: 1.2; }
+      .grouptitle { font-size: 14px; font-weight: 700; fill: #1f2937; }
+      .agent { fill: #eceff3; stroke: #4b5563; stroke-width: 1.4; }
+      .code { fill: #e9f5ee; stroke: #4c9a6a; stroke-width: 1.4; }
+      .state { fill: #ffffff; stroke: #4b5563; stroke-width: 1.4; stroke-dasharray: 4 3; }
+      .surface { fill: #ffffff; stroke: #cbd2dc; stroke-width: 1.2; }
+      .arm { fill: none; stroke: #c0392b; stroke-width: 2.4; }
+      .t { font-size: 14px; font-weight: 700; fill: #1f2937; }
+      .s { font-size: 11px; fill: #4b5563; }
+      .flow { fill: none; stroke: #6b7280; stroke-width: 1.3; marker-end: url(#arr); }
+      .flowred { fill: none; stroke: #c0392b; stroke-width: 1.6; marker-end: url(#arr-red); }
+      .flowback { fill: none; stroke: #6b7280; stroke-width: 1.3; stroke-dasharray: 5 4; marker-end: url(#arr); }
+      .title { font-size: 22px; font-weight: 700; fill: #111827; }
+      .subtitle { font-size: 13px; fill: #6b7280; }
+      .key { font-size: 11px; fill: #4b5563; }
+    </style>
+  </defs>
+
+  <rect width="1280" height="860" fill="#ffffff"/>
+  <text x="24" y="40" class="title">Corral today — one model plants the bugs, another writes the test, your suite is graded by execution</text>
+  <text x="24" y="62" class="subtitle">corral certify --repo, as it ships (v0.8.3) · no default models · every number signed · every decision a row in a warehouse you own</text>
+
+  <!-- LANES -->
+  <rect x="100" y="86" width="1156" height="96" rx="10" class="lane"/>
+  <text x="24" y="134" class="lanelabel">HUMAN</text>
+  <text x="24" y="150" class="key">names every seat,</text>
+  <text x="24" y="163" class="key">owns the gate</text>
+  <rect x="100" y="196" width="1156" height="356" rx="10" class="lane"/>
+  <text x="24" y="380" class="lanelabel">AGENTS</text>
+  <rect x="100" y="566" width="1156" height="104" rx="10" class="lane"/>
+  <text x="24" y="624" class="lanelabel">DATA</text>
+  <rect x="100" y="684" width="1156" height="86" rx="10" class="lane"/>
+  <text x="24" y="733" class="lanelabel">SURFACES</text>
+
+  <!-- HUMAN boxes -->
+  <g>
+    <rect x="128" y="104" width="200" height="60" rx="6" class="state"/>
+    <rect x="125" y="101" width="206" height="66" rx="8" class="arm"/>
+    <text x="140" y="126" class="t">Name the herd</text>
+    <text x="140" y="144" class="s">mutant · writer · critic · derive models</text>
+    <text x="140" y="157" class="s">no defaults: unnamed seat, no run</text>
+  </g>
+  <g>
+    <rect x="356" y="104" width="190" height="60" rx="6" class="state"/>
+    <text x="368" y="126" class="t">Say what must hold</text>
+    <text x="368" y="144" class="s">--goals, or one derived per file</text>
+    <text x="368" y="157" class="s">judged after the fact by mutant yield</text>
+  </g>
+  <g>
+    <rect x="574" y="104" width="200" height="60" rx="6" class="state"/>
+    <rect x="571" y="101" width="206" height="66" rx="8" class="arm"/>
+    <text x="586" y="126" class="t">Set the bar</text>
+    <text x="586" y="144" class="s">--min-kill-rate · --max-proven-missed</text>
+    <text x="586" y="157" class="s">exit 1 on breach · the PR check</text>
+  </g>
+  <g>
+    <rect x="802" y="104" width="190" height="60" rx="6" class="state"/>
+    <rect x="799" y="101" width="196" height="66" rx="8" class="arm"/>
+    <text x="814" y="126" class="t">Custody</text>
+    <text x="814" y="144" class="s">--push md:… · --push-source is off</text>
+    <text x="814" y="157" class="s">no source leaves unless you say</text>
+  </g>
+  <g>
+    <rect x="1020" y="104" width="208" height="60" rx="6" class="state"/>
+    <text x="1032" y="126" class="t">Read the verdict</text>
+    <text x="1032" y="144" class="s">corral ui · seal · scans show · verify</text>
+    <text x="1032" y="157" class="s">flags travel with every number</text>
+  </g>
+
+  <!-- AGENTS: before the herd -->
+  <rect x="120" y="212" width="250" height="326" rx="8" class="group"/>
+  <text x="134" y="234" class="grouptitle">Before any model</text>
+  <g>
+    <rect x="134" y="250" width="222" height="56" rx="6" class="code"/>
+    <text x="146" y="271" class="t">Enumerate</text>
+    <text x="146" y="288" class="s">candidates · what changed (--diff-base)</text>
+    <text x="146" y="300" class="s">six languages, seven runners</text>
+  </g>
+  <g>
+    <rect x="134" y="330" width="222" height="56" rx="6" class="code"/>
+    <text x="146" y="351" class="t">Selection</text>
+    <text x="146" y="368" class="s">your suite once, with coverage on:</text>
+    <text x="146" y="380" class="s">which tests reach which file</text>
+  </g>
+  <g>
+    <rect x="134" y="410" width="222" height="56" rx="6" class="code"/>
+    <text x="146" y="431" class="t">Caches</text>
+    <text x="146" y="448" class="s">goal · selection · verdict, by content</text>
+    <text x="146" y="460" class="s">a second scan of an unchanged tree is free</text>
+  </g>
+  <text x="134" y="520" class="s">Uncovered files are said so, never scored 0</text>
+
+  <!-- AGENTS: the herd -->
+  <rect x="392" y="212" width="580" height="326" rx="8" class="group"/>
+  <text x="406" y="234" class="grouptitle">The herd — decorrelated by rule, each seat named</text>
+  <g>
+    <rect x="406" y="250" width="170" height="56" rx="6" class="agent"/>
+    <text x="418" y="271" class="t">Goal deriver</text>
+    <text x="418" y="288" class="s">one goal per file, cached</text>
+    <text x="418" y="300" class="s">optional: --goals instead</text>
+  </g>
+  <g>
+    <rect x="596" y="250" width="170" height="56" rx="6" class="agent"/>
+    <text x="608" y="271" class="t">Mutant generator</text>
+    <text x="608" y="288" class="s">plants goal-violating faults</text>
+    <text x="608" y="300" class="s">one seat per symbol shard</text>
+  </g>
+  <g>
+    <rect x="786" y="250" width="170" height="56" rx="6" class="agent"/>
+    <text x="798" y="271" class="t">Challenger</text>
+    <text x="798" y="288" class="s">--shadow-model · same shards</text>
+    <text x="798" y="300" class="s">agreement measured, never gates</text>
+  </g>
+  <g>
+    <rect x="406" y="330" width="360" height="56" rx="6" class="code"/>
+    <text x="418" y="351" class="t">Jail</text>
+    <text x="418" y="368" class="s">compile gate probed on compliant code first · your suite vs each fault ·</text>
+    <text x="418" y="380" class="s">kill rate by execution · timeouts and cancels are said, never scored</text>
+  </g>
+  <g>
+    <rect x="786" y="330" width="170" height="56" rx="6" class="agent"/>
+    <text x="798" y="351" class="t">Test writer</text>
+    <text x="798" y="368" class="s">a killing test per survivor,</text>
+    <text x="798" y="380" class="s">proven alone in the jail</text>
+  </g>
+  <g>
+    <rect x="406" y="410" width="170" height="56" rx="6" class="agent"/>
+    <text x="418" y="431" class="t">Critic</text>
+    <text x="418" y="448" class="s">a different model than the writer</text>
+    <text x="418" y="460" class="s">advisory · refuted by execution</text>
+  </g>
+  <g>
+    <rect x="596" y="410" width="360" height="56" rx="6" class="code"/>
+    <text x="608" y="431" class="t">Verdict, signed</text>
+    <text x="608" y="448" class="s">kill rate · survivors · proven gaps · honesty flags · roster · per file</text>
+    <text x="608" y="460" class="s">in-toto statement · DSSE · Rekor if asked · warehouse rows hashed in</text>
+  </g>
+  <text x="406" y="520" class="s">Provider failures are the provider's · an ungraded writer says so · proven = the killed list, never a subtraction</text>
+
+  <!-- AGENTS: scorecard -->
+  <rect x="994" y="212" width="242" height="326" rx="8" class="group"/>
+  <text x="1008" y="234" class="grouptitle">Grading the graders</text>
+  <g>
+    <rect x="1008" y="250" width="214" height="60" rx="6" class="code"/>
+    <text x="1020" y="271" class="t">Scorecard</text>
+    <text x="1020" y="288" class="s">writer: proven catches / survivors</text>
+    <text x="1020" y="301" class="s">generator: faults the suite missed</text>
+  </g>
+  <g>
+    <rect x="1008" y="330" width="214" height="60" rx="6" class="code"/>
+    <text x="1020" y="351" class="t">Critic adjudication</text>
+    <text x="1020" y="368" class="s">auto-refuted by execution</text>
+    <text x="1020" y="381" class="s">confirmed only by a person</text>
+  </g>
+  <g>
+    <rect x="1008" y="410" width="214" height="60" rx="6" class="code"/>
+    <text x="1020" y="431" class="t">models rank</text>
+    <text x="1020" y="448" class="s">per language · evidence floor of 5</text>
+    <text x="1020" y="461" class="s">disclosure, not selection</text>
+  </g>
+  <text x="1008" y="500" class="s">The herd is the allowlist: nothing</text>
+  <text x="1008" y="514" class="s">here staffs a seat you did not</text>
+  <text x="1008" y="528" class="s">name</text>
+
+  <!-- DATA -->
+  <g>
+    <rect x="128" y="584" width="210" height="66" rx="6" class="state"/>
+    <text x="140" y="606" class="t">Model registry</text>
+    <text x="140" y="623" class="s">.corral/models.json · aliases → concrete</text>
+    <text x="140" y="636" class="s">on a runner: the operator's, not the PR's</text>
+  </g>
+  <g>
+    <rect x="360" y="584" width="230" height="66" rx="6" class="state"/>
+    <text x="372" y="606" class="t">Local ledger (DuckDB)</text>
+    <text x="372" y="623" class="s">scans · files · mutants · calls · events</text>
+    <text x="372" y="636" class="s">every decision, with its reason and cost</text>
+  </g>
+  <g>
+    <rect x="612" y="584" width="200" height="66" rx="6" class="state"/>
+    <text x="624" y="606" class="t">Signed statement</text>
+    <text x="624" y="623" class="s">statement.json + .dsse.json</text>
+    <text x="624" y="636" class="s">names the scan · hashes the rows</text>
+  </g>
+  <g>
+    <rect x="834" y="584" width="402" height="66" rx="6" class="state"/>
+    <text x="846" y="606" class="t">Warehouse</text>
+    <text x="846" y="623" class="s">scans · audits · mutants · model_calls · events · the seal view</text>
+    <text x="846" y="636" class="s">append-only · scan_uid on every grain · DuckDB, or MotherDuck on --push</text>
+  </g>
+
+  <!-- SURFACES -->
+  <g>
+    <rect x="128" y="700" width="210" height="54" rx="6" class="surface"/>
+    <text x="140" y="722" class="t">GitHub Action</text>
+    <text x="140" y="740" class="s">required check · summary · attestation</text>
+  </g>
+  <g>
+    <rect x="360" y="700" width="230" height="54" rx="6" class="surface"/>
+    <text x="372" y="722" class="t">corral ui · seal · scans · verify</text>
+    <text x="372" y="740" class="s">the record read back, the hash rechecked</text>
+  </g>
+  <g>
+    <rect x="612" y="700" width="200" height="54" rx="6" class="surface"/>
+    <text x="624" y="722" class="t">Rekor</text>
+    <text x="624" y="740" class="s">public log, with --transparency</text>
+  </g>
+  <g>
+    <rect x="834" y="700" width="190" height="54" rx="6" class="surface"/>
+    <text x="846" y="722" class="t">scorecard · models rank</text>
+    <text x="846" y="740" class="s">what the record says of each seat</text>
+  </g>
+  <g>
+    <rect x="1046" y="700" width="190" height="54" rx="6" class="surface"/>
+    <text x="1058" y="722" class="t">MotherDuck dives</text>
+    <text x="1058" y="740" class="s">fleet questions, one GROUP BY each</text>
+  </g>
+
+  <!-- FLOWS -->
+  <!-- Name the herd -> the herd group -->
+  <path d="M228,167 C228,190 480,190 491,212" class="flowred"/>
+  <!-- Goals -> Goal deriver -->
+  <path d="M451,167 L451,250" class="flow"/>
+  <!-- Set the bar -> Verdict -->
+  <path d="M674,167 C674,190 776,200 776,330 L776,410" class="flowred"/>
+  <!-- Custody -> Warehouse -->
+  <path d="M897,167 C897,190 983,190 983,300 L983,560 C983,575 950,575 940,584" class="flowred"/>
+  <!-- Read the verdict <- Signed statement / ui -->
+  <path d="M712,584 C712,556 1245,556 1245,540 L1245,200 C1245,180 1230,167 1220,167" class="flowback"/>
+  <!-- Enumerate -> Selection -> Caches -->
+  <path d="M245,306 L245,330" class="flow"/>
+  <path d="M245,386 L245,410" class="flow"/>
+  <!-- Selection -> Jail (which tests reach which file) -->
+  <path d="M356,358 L406,358" class="flow"/>
+  <!-- Goal deriver -> Generator -->
+  <path d="M576,278 L596,278" class="flow"/>
+  <!-- Generator -> Jail -->
+  <path d="M681,306 L681,330" class="flow"/>
+  <!-- Challenger -> Jail -->
+  <path d="M786,290 C776,300 776,320 766,340" class="flow"/>
+  <!-- Jail -> Writer (survivors) -->
+  <path d="M766,358 L786,358" class="flow"/>
+  <!-- Writer -> Verdict -->
+  <path d="M871,386 L871,410" class="flow"/>
+  <!-- Jail -> Critic -->
+  <path d="M491,386 L491,410" class="flow"/>
+  <!-- Critic -> Verdict (advisory) -->
+  <path d="M576,438 L596,438" class="flowback"/>
+  <!-- Verdict -> Signed statement -->
+  <path d="M712,466 L712,584" class="flow"/>
+  <!-- Verdict -> Ledger -->
+  <path d="M640,466 C600,500 500,540 480,584" class="flow"/>
+  <!-- Verdict -> Scorecard -->
+  <path d="M956,430 C978,430 990,300 1008,280" class="flow"/>
+  <!-- Critic -> Critic adjudication (via the gap) -->
+  <path d="M576,452 C590,470 590,500 986,500 C1000,500 1000,380 1008,370" class="flow"/>
+  <!-- Ledger -> Warehouse (push) -->
+  <path d="M590,626 L612,626" class="flow"/>
+  <path d="M812,626 L834,626" class="flow"/>
+  <!-- Registry -> Name the herd (feedback) -->
+  <path d="M338,600 C350,556 112,556 112,400 C112,250 112,190 125,167" class="flowback"/>
+  <!-- Caches <-> Ledger -->
+  <path d="M356,438 C380,470 380,540 400,584" class="flowback"/>
+  <!-- Signed statement -> Rekor -->
+  <path d="M712,650 L712,700" class="flow"/>
+  <!-- Ledger -> ui/seal/scans/verify -->
+  <path d="M475,650 L475,700" class="flow"/>
+  <!-- Warehouse -> MotherDuck dives -->
+  <path d="M1141,650 L1141,700" class="flow"/>
+  <!-- Scorecard group -> scorecard surface -->
+  <path d="M1008,538 C1008,556 823,556 823,600 L823,680 C823,695 835,700 846,700" class="flow"/>
+  <!-- Verdict -> GitHub Action (the exit code is the check) -->
+  <path d="M600,466 L600,556 L349,556 L349,680 C349,720 345,727 338,727" class="flowred"/>
+
+  <!-- KEY -->
+  <text x="24" y="806" class="lanelabel">KEY</text>
+  <rect x="100" y="794" width="18" height="14" rx="3" class="code"/>
+  <text x="124" y="805" class="key">code</text>
+  <rect x="180" y="794" width="18" height="14" rx="3" class="agent"/>
+  <text x="204" y="805" class="key">LLM agent</text>
+  <rect x="280" y="794" width="18" height="14" rx="3" class="state"/>
+  <text x="304" y="805" class="key">stored state</text>
+  <rect x="390" y="794" width="18" height="14" rx="3" class="surface"/>
+  <text x="414" y="805" class="key">surface</text>
+  <rect x="480" y="794" width="18" height="14" rx="3" class="arm"/>
+  <text x="504" y="805" class="key">you arm it — nothing here has a default</text>
+  <line x1="760" y1="801" x2="790" y2="801" class="flowback"/>
+  <text x="798" y="805" class="key">read back, or reused</text>
+  <text x="24" y="840" class="key">Everything on this page ships in v0.8.3 and runs in the GitHub Action. Elastic-2.0 · github.com/pdbethke/corralai · the same loop, turned on corral itself, found the eleven pull requests in the field notes.</text>
+</svg>

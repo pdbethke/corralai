@@ -66,9 +66,15 @@ func (phpPlugin) CompileCheck(codePath, testPath string) [][]string {
 	if err != nil {
 		interp = "php"
 	}
+	// `php -l` is SYNTAX only; the third command loads the file the way a
+	// test's autoloader would, so `class Calc extends \App\DoesNotExist`
+	// or a top-level call to an undefined function is INVALID (as it is
+	// under Go's and Python's gates), not a kill any suite would score.
+	// Probed on compliant code first, like every gate command.
 	return [][]string{
 		{interp, "-l", codePath},
 		{interp, "-l", testPath},
+		{interp, "-r", "require $argv[1];", "--", codePath},
 	}
 }
 
@@ -433,46 +439,20 @@ var (
 // distinctly (or suffix-disambiguated) named TestCase subclasses is
 // discovered and runs every one of them.
 func (phpPlugin) ConcatTests(parts []AuthoredPart) (string, error) {
-	ns := ""
-	nsSet := false
-	flat := make([]AuthoredPart, 0, len(parts))
-	for _, part := range parts {
-		var kept []string
-		for _, line := range strings.Split(part.Source, "\n") {
-			trimmed := strings.TrimRight(line, " \t")
-			probe := strings.TrimSpace(trimmed)
-			switch {
-			case probe == "<?php":
-				// The opening tag is a SINGLETON re-emitted once, verbatim,
-				// as ConcatTests' own literal prefix below — not a
-				// de-duplicated header collected from the parts.
-				continue
-			case phpNamespaceRe.MatchString(probe):
-				name := phpNamespaceRe.FindStringSubmatch(probe)[1]
-				if nsSet && ns != name {
-					return "", fmt.Errorf("lang: authored parts disagree about the namespace declaration (%q vs %q)", ns, name)
-				}
-				ns, nsSet = name, true
-				continue
-			default:
-				kept = append(kept, trimmed)
-			}
-		}
-		flat = append(flat, AuthoredPart{MutantID: part.MutantID, Source: strings.Join(kept, "\n")})
+	// NOT MERGEABLE under PHPUnit 10 and 11, which is what ships: the
+	// runner loads ONE class per file, the one named after the file, and
+	// reports "Class X cannot be found" for a file declaring anything else
+	// — so a merged file of suffixed classes (InvoiceTest_s0m1,
+	// InvoiceTest_s0m2) ran nothing and exited 1. The earlier
+	// implementation rested on a hand-written require+reflection driver
+	// that mimicked PHPUnit 9's loader, not PHPUnit itself; the sixth
+	// review ran the real runner. A single part is returned as-is (its
+	// class already matches its file); every further proven test rides
+	// separately, each to be saved under its own class name.
+	if len(parts) == 1 {
+		return parts[0].Source, nil
 	}
-
-	prefix := "<?php"
-	if ns != "" {
-		prefix += "\n\nnamespace " + ns + ";"
-	}
-
-	return mergeParts(flat, concatSpec{
-		isHeader: func(line string) bool {
-			return phpUseRe.MatchString(line) || phpRequireRe.MatchString(line) || phpDeclareRe.MatchString(line)
-		},
-		declRes:           []*regexp.Regexp{phpClassRe, phpFuncRe},
-		renameOnCollision: func(string) bool { return true },
-	}, prefix, func(headers []string) string { return strings.Join(headers, "\n") })
+	return "", fmt.Errorf("php: PHPUnit 10+ loads one class per file, the class named after the file, so proven PHPUnit tests are not merged — save each under its own class name (%s)", parts[len(parts)-1].MutantID)
 }
 
 // FailFastArgs is phpunit's `--stop-on-failure`. See lang.FailFaster.
@@ -655,7 +635,21 @@ func (phpPlugin) CoverageCmd(testCmd []string) (cmd []string, ok bool) {
 	// The LEADING COLON keeps the default scan directory — without it pcov
 	// itself, and every other extension the suite relies on, stops loading.
 	env := `PHP_INI_SCAN_DIR=":$d" CORRAL_COV_DIR="$d/cov"`
-	return coverageRunAndReduce(setup, env, testCmd, coverageMergeDir(phpCoverageHeader)), true
+	// A phpunit.xml that requests its OWN coverage report makes
+	// php-code-coverage's PCOV driver call \pcov\clear() before every test,
+	// so the shutdown snapshot corral takes held nothing — a header-only
+	// report and a diagnosis blaming the suite. `--no-coverage` is PHPUnit's
+	// own switch for exactly that and has existed since 4.x; it changes what
+	// the suite REPORTS, never what it runs. Appended only when the runner
+	// is phpunit itself, so a `composer test` script is left alone.
+	instrumented := testCmd
+	for _, w := range testCmd {
+		if filepath.Base(w) == "phpunit" {
+			instrumented = append(append([]string{}, testCmd...), "--no-coverage")
+			break
+		}
+	}
+	return coverageRunAndReduce(setup, env, instrumented, coverageMergeDir(phpCoverageHeader)), true
 }
 
 // ParseCoverage reads the reduced report phpCoveragePrepend writes. The grammar

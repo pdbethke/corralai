@@ -169,6 +169,10 @@ func checkToolchain(iso sandbox.Isolator, cmd []string, depBinds []adequacy.DepB
 		if asSnap(err, &snap) {
 			return checkResult{name: "toolchain reachable inside the sandbox", detail: snap.Error()}
 		}
+		var unbindable adequacy.ErrUnbindableToolchain
+		if errors.As(err, &unbindable) {
+			return checkResult{name: "toolchain reachable inside the sandbox", detail: unbindable.Error()}
+		}
 		return checkResult{name: "toolchain reachable inside the sandbox", detail: fmt.Sprintf(
 			"%q could not run inside the sandbox: %v", tool, err)}
 	}

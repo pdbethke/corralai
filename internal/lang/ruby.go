@@ -54,10 +54,20 @@ func (rubyPlugin) TestCmd() []string {
 // `&&` would just be handed to `ruby -c` as a literal (nonexistent) filename
 // — see lang.Plugin.CompileCheck's doc comment and python.go's
 // pyCachePrefixEnv comment for the identical class of bug this avoids.
+//
+// `ruby -c` is SYNTAX only. A mutant that fails at LOAD — `LIMIT =
+// UNDEFINED_CONSTANT` at the top level, `class Calc < DoesNotExist` — parses
+// fine and then makes every test that requires the file fail, so it read as
+// KILLED and inflated the kill rate with breakage any suite catches. Go's
+// gate (a real compile) and Python's (ruff F821) treat the same shape as
+// INVALID; the third command here loads the file the way a test would, in
+// the same sandbox, and is probed on compliant code first like every gate
+// command (adequacy.Score disables a gate that rejects the unmutated file).
 func (rubyPlugin) CompileCheck(codePath, testPath string) [][]string {
 	return [][]string{
 		{"ruby", "-c", codePath},
 		{"ruby", "-c", testPath},
+		{"ruby", "-e", "require File.expand_path(ARGV[0])", "--", codePath},
 	}
 }
 
@@ -116,10 +126,10 @@ func (rubyPlugin) Preflight(testCmd []string) error {
 func (rubyPlugin) PromptLang() string { return "Ruby" }
 
 func (rubyPlugin) TestWriterSystem() string {
-	return `You are a TEST-WRITER. Given a security control GOAL, a target source file, and its signature surface, write ONE executable minitest test that verifies the code SATISFIES the goal.
-- Start with ` + "`require 'minitest/autorun'`" + ` and ` + "`require_relative`" + ` the target module by its file's base name (e.g. ` + "`require_relative 'pricing'`" + ` for pricing.rb).
-- Define a Minitest::Test subclass; it MUST FAIL if the goal is violated — test the goal's boundary (what a weakened implementation would pass that a compliant one must not).
-- Standard library + minitest only (no gems, no rspec). Deterministic, no network.
+	return `You are a TEST-WRITER. Given a security control GOAL, a target source file, and its signature surface, write ONE executable Ruby test that verifies the code SATISFIES the goal.
+- MATCH THE PROJECT'S HARNESS, which the developer's own test (shown to you) uses: if it is RSpec (` + "`RSpec.describe`" + `, a ` + "`_spec.rb`" + ` file), write an RSpec spec that ` + "`require`" + `s the project's spec helper the same way; otherwise write minitest — start with ` + "`require 'minitest/autorun'`" + `, ` + "`require_relative`" + ` the target module by its file's base name (e.g. ` + "`require_relative 'pricing'`" + ` for pricing.rb), and define a Minitest::Test subclass.
+- It MUST FAIL if the goal is violated — test the goal's boundary (what a weakened implementation would pass that a compliant one must not).
+- Standard library plus the project's own test framework only (no other gems). Deterministic, no network.
 Return ONLY the raw Ruby test file content — no prose, no markdown fences.`
 }
 
@@ -206,9 +216,33 @@ rescue ArgumentError, TypeError
   # gap that was proven absent.
   Coverage.start
 end
-at_exit do
+# WHOEVER CALLS Coverage.result FIRST, WE SEE THE DATA. Our at_exit is
+# registered at startup (via RUBYOPT -r), so it runs LAST — after SimpleCov's
+# own at_exit, which calls Coverage.result, which STOPS and CLEARS coverage.
+# On every project with SimpleCov in its helper our hook then found
+# "coverage measurement is not enabled" and the pre-flight was dead, with a
+# diagnosis that blamed the suite for importing nothing. Wrapping result()
+# captures the snapshot on the first call, whoever makes it, and hands the
+# caller exactly what it asked for; our own hook writes only if nothing has.
+module CorralCov
+  @written = false
+  def self.written?; @written; end
+  def self.mark!; @written = true; end
+end
+Coverage.singleton_class.prepend(Module.new do
+  def result(*args, **kw)
+    snap = begin
+      peek_result
+    rescue StandardError
+      nil
+    end
+    CorralCov.write(snap) if snap && !CorralCov.written?
+    args.empty? && kw.empty? ? super() : super
+  end
+end)
+def CorralCov.write(res)
+  CorralCov.mark!
   begin
-    res = Coverage.result
     # ONE FILE PER PROCESS, not one shared file.
     #
     # A single shared path opened 'w' is truncated by every process that
@@ -269,6 +303,14 @@ at_exit do
     # Never let the reporter's own failure change the suite's exit code —
     # the caller distinguishes "could not measure" from "measured nothing",
     # and an absent report already means the former.
+    warn "corral: ruby coverage reporter failed: #{e}"
+  end
+end
+at_exit do
+  next if CorralCov.written?
+  begin
+    CorralCov.write(Coverage.peek_result)
+  rescue StandardError => e
     warn "corral: ruby coverage reporter failed: #{e}"
   end
 end

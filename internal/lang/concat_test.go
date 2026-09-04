@@ -291,102 +291,30 @@ func TestEveryLaunchLanguageHasAConcatenator(t *testing.T) {
 	}
 }
 
-// TestPHPConcatHoistsThePHPTagAndMergesDistinctClasses: the opening `<?php`
-// tag and a shared `namespace` declaration are SINGLETONS — PHP fails to
-// parse a file with either repeated — so they must appear exactly once, with
-// `use`/`require_once` import lines hoisted and de-duplicated like every
-// other language's headers. Two parts that declare DIFFERENT class names
-// merge cleanly: PHPUnit's own directory-based collection requires() a
-// matching file and reflects on every TestCase subclass IT DECLARES, so two
-// distinctly-named classes in one file are both discovered — see the
-// fake-jail proof below.
-func TestPHPConcatHoistsThePHPTagAndMergesDistinctClasses(t *testing.T) {
-	c := concatenatorFor(t, "php")
-	out, err := c.ConcatTests([]AuthoredPart{
-		{MutantID: "s0/m1", Source: "<?php\n\nnamespace Acme\\Billing;\n\nuse PHPUnit\\Framework\\TestCase;\nrequire_once __DIR__ . '/vendor/autoload.php';\n\nclass InvoicePriceTest extends TestCase\n{\n    public function testPriceIsNeverNegative(): void\n    {\n        $this->assertGreaterThanOrEqual(0, (new Invoice(-5))->price());\n    }\n}\n"},
-		{MutantID: "s0/m2", Source: "<?php\n\nnamespace Acme\\Billing;\n\nuse PHPUnit\\Framework\\TestCase;\nrequire_once __DIR__ . '/vendor/autoload.php';\n\nclass InvoiceCurrencyTest extends TestCase\n{\n    public function testCurrencyIsUSD(): void\n    {\n        $this->assertSame('USD', (new Invoice(1))->currency());\n    }\n}\n"},
-	})
-	if err != nil {
-		t.Fatalf("ConcatTests: %v", err)
-	}
-	if n := strings.Count(out, "<?php"); n != 1 {
-		t.Errorf("<?php appears %d times, want 1:\n%s", n, out)
-	}
-	if n := strings.Count(out, "namespace Acme\\Billing;"); n != 1 {
-		t.Errorf("namespace declared %d times, want 1:\n%s", n, out)
-	}
-	if n := strings.Count(out, "use PHPUnit\\Framework\\TestCase;"); n != 1 {
-		t.Errorf("the use import appears %d times, want 1:\n%s", n, out)
-	}
-	if n := strings.Count(out, "require_once __DIR__ . '/vendor/autoload.php';"); n != 1 {
-		t.Errorf("the require_once appears %d times, want 1:\n%s", n, out)
-	}
-	if !strings.Contains(out, "class InvoicePriceTest extends TestCase") || !strings.Contains(out, "class InvoiceCurrencyTest extends TestCase") {
-		t.Errorf("both distinctly-named classes must survive intact:\n%s", out)
-	}
-	if !strings.HasPrefix(out, "<?php") {
-		t.Errorf("<?php must be the file's first bytes, got:\n%s", out)
-	}
-}
-
-// TestPHPConcatSuffixesCollidingClassNames: the writer prompt does not
-// coordinate class names across independently-authored parts, so two parts
-// naming their class identically (the common case) must not silently
-// override one proven test with another the way PHP's "cannot redeclare
-// class" fatal error would if left alone. Unlike a shared helper referenced
-// from OUTSIDE its file, an authored test's class is used only within its
-// own file (PHPUnit finds it by reflection, not by name) — so suffixing
-// every occurrence of the name, including its own internal `new self()`-free
-// self-references, is safe.
-func TestPHPConcatSuffixesCollidingClassNames(t *testing.T) {
-	c := concatenatorFor(t, "php")
-	out, err := c.ConcatTests([]AuthoredPart{
-		{MutantID: "s0/m1", Source: "<?php\n\nuse PHPUnit\\Framework\\TestCase;\n\nclass InvoiceTest extends TestCase\n{\n    public function testA(): void\n    {\n        $this->assertTrue(true);\n    }\n}\n"},
-		{MutantID: "s0/m2", Source: "<?php\n\nuse PHPUnit\\Framework\\TestCase;\n\nclass InvoiceTest extends TestCase\n{\n    public function testB(): void\n    {\n        $this->assertTrue(true);\n    }\n}\n"},
-	})
-	if err != nil {
-		t.Fatalf("ConcatTests: %v", err)
-	}
-	if strings.Contains(out, "class InvoiceTest extends TestCase") {
-		t.Errorf("the unsuffixed colliding class name survived — a real PHP file would fatal on 'cannot redeclare class':\n%s", out)
-	}
-	if !strings.Contains(out, "class InvoiceTest_s0m1 extends TestCase") || !strings.Contains(out, "class InvoiceTest_s0m2 extends TestCase") {
-		t.Errorf("colliding class names were not suffixed with their mutant ids:\n%s", out)
-	}
-	if !strings.Contains(out, "testA") || !strings.Contains(out, "testB") {
-		t.Errorf("a proven test method was lost in the merge:\n%s", out)
-	}
-}
-
-// TestPHPConcatRefusesNamespaceMismatch: only one `namespace` declaration can
-// govern a PHP file. Two parts that genuinely disagree cannot both be true at
-// once — refused, not guessed at, with the mismatching part carried out
-// separately so its proof is not dropped.
-func TestPHPConcatRefusesNamespaceMismatch(t *testing.T) {
-	parts := []AuthoredPart{
-		{MutantID: "m1", Source: "<?php\n\nnamespace Acme\\Billing;\n\nuse PHPUnit\\Framework\\TestCase;\n\nclass ATest extends TestCase\n{\n    public function testA(): void\n    {\n        $this->assertTrue(true);\n    }\n}\n"},
-		{MutantID: "m2", Source: "<?php\n\nnamespace Acme\\Refunds;\n\nuse PHPUnit\\Framework\\TestCase;\n\nclass BTest extends TestCase\n{\n    public function testB(): void\n    {\n        $this->assertTrue(true);\n    }\n}\n"},
-	}
-	if _, err := concatenatorFor(t, "php").ConcatTests(parts); err == nil {
-		t.Fatal("ConcatTests merged two parts that disagree about the namespace")
-	}
-	merged, extra := ConcatAuthored(mustPlugin(t, "php"), parts)
-	if len(extra) != 1 || extra[0].MutantID != "m2" {
-		t.Fatalf("extra = %+v, want the second (disagreeing) part carried out separately", extra)
-	}
-	if !strings.Contains(strings.ToLower(extra[0].Reason), "namespace") {
-		t.Errorf("the reason does not say what went wrong: %q", extra[0].Reason)
-	}
-	if !strings.Contains(merged, "class ATest extends TestCase") {
-		t.Errorf("the mergeable first part was lost:\n%s", merged)
-	}
-}
-
 // TestPHPHasATestConcatenator pins that php implements TestConcatenator (the
 // interface, not yet added to TestEveryLaunchLanguageHasAConcatenator's
 // list — php is not a launch language until it clears the multilang gate).
 func TestPHPHasATestConcatenator(t *testing.T) {
 	if _, ok := mustPlugin(t, "php").(TestConcatenator); !ok {
 		t.Fatal("php plugin does not implement TestConcatenator")
+	}
+}
+
+// TestPHPConcatDoesNotMergeUnderPHPUnit10 replaces three tests that asserted
+// a merge PHPUnit 10+ cannot run. The old tests rested on a hand-written
+// require+reflection driver that mimicked PHPUnit 9's loader; the sixth
+// review ran the real runner (11.5): a file declaring InvoiceTest_s0m1 and
+// InvoiceTest_s0m2 → "Class InvoiceTest cannot be found", Tests: 1, exit 1
+// — neither ran. One proven test is returned as-is; every further one rides
+// separately, with the reason on it.
+func TestPHPConcatDoesNotMergeUnderPHPUnit10(t *testing.T) {
+	one := AuthoredPart{MutantID: "s0/m1", Source: "<?php\nuse PHPUnit\\Framework\\TestCase;\nfinal class InvoiceTest extends TestCase { public function testA(): void { $this->assertTrue(true); } }\n"}
+	two := AuthoredPart{MutantID: "s0/m2", Source: "<?php\nuse PHPUnit\\Framework\\TestCase;\nfinal class InvoiceTest extends TestCase { public function testB(): void { $this->assertTrue(true); } }\n"}
+	merged, extra := ConcatAuthored(phpPlugin{}, []AuthoredPart{one, two})
+	if merged != one.Source {
+		t.Errorf("the first proven test should be handed back as-is; got %q", merged)
+	}
+	if len(extra) != 1 || extra[0].MutantID != "s0/m2" || !strings.Contains(extra[0].Reason, "PHPUnit 10+") {
+		t.Errorf("the second proven test should ride separately with the reason: %+v", extra)
 	}
 }

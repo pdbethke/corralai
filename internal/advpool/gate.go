@@ -121,20 +121,37 @@ func authoredTestPath(codePath, devTestPath string, base map[string]string) stri
 		return exists
 	}
 
+	// WHICH of the plugin's conventions the project actually uses is read
+	// off the dev test itself: when its basename contains the code stem
+	// (calc_spec.rb, test_calc.py, calc.test.js all contain "calc"), the
+	// authored name is that basename with the stem swapped for stem+marker —
+	// the same shape, in the same directory. Taking the plugin's rank-0 form
+	// unconditionally handed an RSpec project `spec/calc_corral_test.rb`,
+	// which `rspec` (pattern `*_spec.rb`) never collects — so no survivor
+	// could ever be proven there, and the positive control refused the audit
+	// blaming the operator's command. A dev test whose name does not contain
+	// the stem (a hand-mapped, unconventional pairing) falls back to the
+	// plugin's rank-0 form as before.
+	devBase := filepath.Base(devTestPath)
 	for i := 0; i < authoredTestCollisionLimit; i++ {
 		marker := authoredTestMarker
 		if i > 0 {
 			marker = fmt.Sprintf("%s%d", authoredTestMarker, i)
 		}
-		// Hand the plugin a synthetic SOURCE path (code stem + marker, sited
-		// in the dev test's directory) and take its own rank-0 test name for
-		// it — so the result matches whatever `_test.go` / `test_*.py` /
-		// `*_test.rb` / `*.test.js` shape that language's runners discover.
-		cands := p.TestPaths(filepath.Join(dir, stem+marker+ext))
-		if len(cands) == 0 {
-			return fallback
+		var pick string
+		if stem != "" && strings.Contains(devBase, stem) {
+			pick = filepath.Join(dir, strings.Replace(devBase, stem, stem+marker, 1))
+		} else {
+			// Hand the plugin a synthetic SOURCE path (code stem + marker,
+			// sited in the dev test's directory) and take its rank-0 test
+			// name for it.
+			cands := p.TestPaths(filepath.Join(dir, stem+marker+ext))
+			if len(cands) == 0 {
+				return fallback
+			}
+			pick = cands[0].Path
 		}
-		if got := filepath.ToSlash(cands[0].Path); !taken(got) {
+		if got := filepath.ToSlash(pick); !taken(got) {
 			return got
 		}
 	}

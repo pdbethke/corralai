@@ -154,8 +154,8 @@ func TestWorkspaceRunnerRunsRubyCompileCheck(t *testing.T) {
 	// The plugin's real (fixed) sequence must genuinely catch the broken
 	// test file...
 	brokenSeq := p.CompileCheck(codePath, testPath)
-	if len(brokenSeq) != 2 {
-		t.Fatalf("ruby CompileCheck sequence = %v, want exactly 2 commands (ruby -c checks one file per invocation)", brokenSeq)
+	if len(brokenSeq) < 2 {
+		t.Fatalf("ruby CompileCheck sequence = %v, want at least the two per-file syntax commands (ruby -c checks one file per invocation)", brokenSeq)
 	}
 	fixedPass, _ := runCompileCheckSequence(t, w, brokenFiles, brokenSeq)
 	if fixedPass {
@@ -223,8 +223,8 @@ func TestWorkspaceRunnerRunsJavaScriptCompileCheck(t *testing.T) {
 	// The plugin's real (fixed) two-command sequence must genuinely catch
 	// the broken test file.
 	brokenSeq := p.CompileCheck(codePath, testPath)
-	if len(brokenSeq) != 2 {
-		t.Fatalf("javascript CompileCheck sequence = %v, want exactly 2 commands (node --check checks one file per invocation)", brokenSeq)
+	if len(brokenSeq) < 2 {
+		t.Fatalf("javascript CompileCheck sequence = %v, want at least the two per-file syntax commands (node --check checks one file per invocation)", brokenSeq)
 	}
 	fixedPass, _ := runCompileCheckSequence(t, w, brokenFiles, brokenSeq)
 	if fixedPass {

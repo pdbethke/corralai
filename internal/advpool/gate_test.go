@@ -660,3 +660,24 @@ func TestAuthoredTestPathForNamesTheFile(t *testing.T) {
 		t.Errorf("AuthoredTestPathFor = %q, want a _corral-marked file in the dev test's directory", got)
 	}
 }
+
+// TestAuthoredTestPathMirrorsTheDevTestsShape pins the sixth review's H5:
+// the authored path took the plugin's rank-0 convention unconditionally, so
+// an RSpec project with spec/calc_spec.rb got spec/calc_corral_test.rb — a
+// name `rspec` (pattern *_spec.rb) never collects. No survivor could ever be
+// proven there, and the positive control then refused the audit blaming
+// the operator's command. The shape now follows the dev test.
+func TestAuthoredTestPathMirrorsTheDevTestsShape(t *testing.T) {
+	for _, tc := range []struct{ code, dev, want string }{
+		{"lib/calc.rb", "spec/calc_spec.rb", "spec/calc_corral_spec.rb"},
+		{"lib/calc.rb", "test/calc_test.rb", "test/calc_corral_test.rb"},
+		{"lib/calc.rb", "test/test_calc.rb", "test/test_calc_corral.rb"},
+		{"src/calc.js", "src/calc.test.js", "src/calc_corral.test.js"},
+		{"pkg/calc.go", "pkg/calc_test.go", "pkg/calc_corral_test.go"},
+		{"pkg/calc.py", "tests/test_calc.py", "tests/test_calc_corral.py"},
+	} {
+		if got := AuthoredTestPathFor(tc.code, tc.dev); got != tc.want {
+			t.Errorf("AuthoredTestPathFor(%q, %q) = %q, want %q", tc.code, tc.dev, got, tc.want)
+		}
+	}
+}

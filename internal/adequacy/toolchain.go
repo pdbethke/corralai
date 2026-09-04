@@ -94,9 +94,81 @@ func toolchainBindFor(cmd0 string) (sandbox.Bind, error) {
 	if root == "" {
 		return sandbox.Bind{}, nil
 	}
+	if narrowed, refused := narrowHomeRoot(real, root); refused != "" {
+		return sandbox.Bind{}, ErrUnbindableToolchain{Command: cmd0, Path: real, Root: root, Why: refused}
+	} else if narrowed != "" {
+		root = narrowed
+	}
 	// Bound at the SAME absolute path, so the operator's own PATH keeps
 	// working inside the jail without rewriting the command.
 	return sandbox.Bind{Host: root, Target: root}, nil
+}
+
+// ErrUnbindableToolchain is returned when the runner resolves to a directory
+// the jail must not mount: one that holds the operator's credentials or
+// unrelated projects, not a toolchain.
+type ErrUnbindableToolchain struct{ Command, Path, Root, Why string }
+
+func (e ErrUnbindableToolchain) Error() string {
+	return fmt.Sprintf("%q resolves to %s, and running it in the jail would bind %s read-only into the sandbox — %s. "+
+		"Install the runner under a toolchain directory (~/.asdf, ~/.pyenv, ~/.nvm, ~/.cargo, ~/sdk, /opt, /usr/local), "+
+		"give it as a repository-relative path (vendor/bin/…, node_modules/.bin/…), or use --substrate workspace",
+		e.Command, e.Path, e.Root, e.Why)
+}
+
+// homeToolchainDirs are the children of $HOME that hold TOOLCHAINS — version
+// managers and language installs — and nothing else. A runner under one of
+// these binds that directory, as before.
+var homeToolchainDirs = map[string]bool{
+	".asdf": true, ".pyenv": true, ".rbenv": true, ".nvm": true, ".nodenv": true, ".phpenv": true,
+	".goenv": true, ".gvm": true, ".cargo": true, ".rustup": true, ".volta": true, ".bun": true,
+	".deno": true, ".sdkman": true, ".jenv": true, ".pulumi": true, "sdk": true, "go": true, "gopath": true,
+	".linuxbrew": true, ".gem": true, ".rvm": true, ".rustup-toolchains": true,
+}
+
+// narrowHomeRoot decides what toolchainRoot's answer means when it lies
+// directly under $HOME. toolchainRoot walks up to the first child of a
+// boundary, so `~/.local/bin/pytest` (pip --user), `~/.local/share/gem/…/bin/
+// rspec` and `~/.config/composer/vendor/bin/phpunit` all resolved to
+// `~/.local` or `~/.config` — and the jail bound them, read-only, which put
+// `~/.local/share/keyrings`, `~/.local/share/claude`, `~/.config/gh` and
+// `~/.config/gcloud` inside the sandbox. The design comment said binding
+// $HOME "would hand the sandboxed command every credential the operator
+// owns"; those two directories are where most of them live.
+//
+// Returns (narrowed, "") to bind a narrower directory instead — for the
+// pip --user layout, `~/.local/bin` and `~/.local/lib` are what the shim
+// needs, so `~/.local/bin` is bound and the caller adds `~/.local/lib` — or
+// ("", why) to refuse. A root that is a known toolchain directory passes
+// unchanged; any other child of $HOME is refused, because the jail cannot
+// know what else is in it.
+func narrowHomeRoot(real, root string) (narrowed, refused string) {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" || filepath.Dir(root) != filepath.Clean(home) {
+		return "", ""
+	}
+	base := filepath.Base(root)
+	if homeToolchainDirs[base] {
+		return "", ""
+	}
+	switch base {
+	case ".local":
+		// pip --user / pipx: ~/.local/bin + ~/.local/lib is the toolchain;
+		// ~/.local/share is where keyrings and every desktop app's data live.
+		rel, _ := filepath.Rel(root, real)
+		if strings.HasPrefix(rel, "bin/") {
+			return filepath.Join(root, "bin"), ""
+		}
+		if strings.HasPrefix(rel, "share/gem/") || strings.HasPrefix(rel, "share/pipx/") {
+			// The one share subtree that is a toolchain: bind it alone.
+			parts := strings.SplitN(rel, "/", 3)
+			return filepath.Join(root, parts[0], parts[1]), ""
+		}
+		return "", "~/.local/share holds keyrings and application data"
+	case ".config":
+		return "", "~/.config holds credentials (gh, gcloud, composer's auth.json)"
+	}
+	return "", "it is not a toolchain directory, and the jail cannot know what else is in it"
 }
 
 // toolchainRoot walks up from a resolved binary to the directory that installs

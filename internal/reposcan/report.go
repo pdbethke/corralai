@@ -268,6 +268,9 @@ type WeakFile struct {
 	// explicit / default), with the file's summed complexity. Total 0 for a
 	// run that generated nothing (--mutants) or a row that predates it.
 	MutantBudget advpool.MutantBudget
+	// ExamCoverage mirrors advpool.Verdict.ExamCoverage: the symbols and
+	// decision points the graded mutants actually reached.
+	ExamCoverage advpool.ExamCoverage
 	// GoalReused mirrors Job.GoalReused: this file's goal was served from
 	// the goal cache — a prior scan derived it from the SAME bytes — rather
 	// than freshly derived by this scan. false for a fresh derivation, a
@@ -579,6 +582,7 @@ func Aggregate(owner, repo, commit string, totalFiles, candidates int, results [
 			PromptShape: r.Verdict.PromptShape,
 			// What the seats were asked for — see WeakFile.MutantBudget.
 			MutantBudget: r.Verdict.MutantBudget,
+			ExamCoverage: r.Verdict.ExamCoverage,
 			// Whether this file's goal was served from the goal cache —
 			// see WeakFile.GoalReused.
 			GoalReused: r.Job.GoalReused,

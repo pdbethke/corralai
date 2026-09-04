@@ -144,31 +144,42 @@ var booleanOpNode = map[string]string{
 // operator field rather than by node type, so they are counted separately;
 // Python's are their own `boolean_operator` node type and fall out of the set.
 func symbolComplexity(n *sitter.Node, src []byte, lang string) int {
+	return 1 + len(symbolDecisions(n, src, lang))
+}
+
+// symbolDecisions is the walk symbolComplexity counts: one Decision per
+// branch node, as its subtree's inclusive line span, in source order. The
+// two are ONE walk so the count and the places can never disagree.
+func symbolDecisions(n *sitter.Node, src []byte, lang string) []Decision {
 	types := branchNodeTypes[lang]
-	c := 1
+	var out []Decision
 	var walk func(*sitter.Node)
 	walk = func(node *sitter.Node) {
 		if node == nil {
 			return
 		}
 		t := node.Type()
+		counted := false
 		switch {
 		case types[t]:
-			c++
+			counted = true
 		case booleanOpNode[lang] != "" && t == booleanOpNode[lang]:
 			if op := node.ChildByFieldName("operator"); op != nil {
 				switch op.Content(src) {
 				case "&&", "||", "and", "or":
-					c++
+					counted = true
 				}
 			}
+		}
+		if counted {
+			out = append(out, Decision{Start: int(node.StartPoint().Row) + 1, End: int(node.EndPoint().Row) + 1})
 		}
 		for i := 0; i < int(node.NamedChildCount()); i++ {
 			walk(node.NamedChild(i))
 		}
 	}
 	walk(n)
-	return c
+	return out
 }
 
 // symbolLines is the inclusive line span of n.
@@ -214,7 +225,8 @@ func goCallable(n *sitter.Node, kind, receiver string, src []byte) Signature {
 	}
 	sig.Results = goResults(n.ChildByFieldName("result"), src)
 	sig.Exported = exported(sig.Name)
-	sig.Complexity = symbolComplexity(n, src, "go")
+	sig.Decisions = symbolDecisions(n, src, "go")
+	sig.Complexity = 1 + len(sig.Decisions)
 	sig.Lines = symbolLines(n)
 	return sig
 }
@@ -397,7 +409,8 @@ func pySignature(def *sitter.Node, src []byte, receiver string) Signature {
 	if rt := def.ChildByFieldName("return_type"); rt != nil {
 		sig.Results = []string{rt.Content(src)}
 	}
-	sig.Complexity = symbolComplexity(def, src, "python")
+	sig.Decisions = symbolDecisions(def, src, "python")
+	sig.Complexity = 1 + len(sig.Decisions)
 	sig.Lines = symbolLines(def)
 	return sig
 }

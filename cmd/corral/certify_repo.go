@@ -3477,6 +3477,9 @@ func printWeakFile(w io.Writer, f reposcan.WeakFile) {
 		// needs to know one sat 8 questions and the other 40.
 		fmt.Fprintf(w, "\n   mutants: %s", f.MutantBudget)
 	}
+	if line := examConfidenceLine(f); line != "" {
+		fmt.Fprintf(w, "\n   confidence: %s", line)
+	}
 	fmt.Fprintln(w)
 	// How many private trees scored this file at once, or why it only got
 	// one — the same wording noteConcurrency printed live during the run,
@@ -4876,6 +4879,16 @@ func pushableSpread(f reposcan.WeakFile) *auditpush.TestsPerMutantSpread {
 func writeAuditStatement(path, repoDir string, r reposcan.RepoReport, models map[string]string, minKillRate *float64, maxProvenMissed *int, passed bool, scanID int64, bundle auditpush.Bundle) (string, error) {
 	files := make([]certify.AuditedFile, 0, len(r.Weakest))
 	for _, f := range r.Weakest {
+		// The interval is signed only where the rate is: an uncovered
+		// file's rate is withheld (signableKillRate), and so is its band.
+		var lo, hi float64
+		if !f.Uncovered && f.MutantsGraded > 0 {
+			killed := f.MutantsGraded - f.Survivors
+			if killed < 0 {
+				killed = 0
+			}
+			lo, hi, _ = advpool.WilsonInterval(killed, f.MutantsGraded)
+		}
 		files = append(files, certify.AuditedFile{
 			Path:             f.Path,
 			KillRate:         signableKillRate(f),
@@ -4918,6 +4931,14 @@ func writeAuditStatement(path, repoDir string, r reposcan.RepoReport, models map
 			MutantBudget:     f.MutantBudget.Total,
 			MutantBudgetRule: f.MutantBudget.Rule,
 			Complexity:       f.MutantBudget.Complexity,
+			// The two confidence terms — see certify.AuditedFile's docs.
+			KillRateLow:         lo,
+			KillRateHigh:        hi,
+			ExamMeasured:        f.ExamCoverage.Measured,
+			ExamSymbols:         f.ExamCoverage.Symbols,
+			ExamSymbolsProbed:   f.ExamCoverage.SymbolsProbed,
+			ExamDecisions:       f.ExamCoverage.Decisions,
+			ExamDecisionsProbed: f.ExamCoverage.DecisionsProbed,
 			// Whether this file's goal was served from the goal cache — see
 			// certify.AuditedFile.GoalReused's doc.
 			GoalReused: f.GoalReused,
@@ -5273,4 +5294,37 @@ func looksLikeATestPath(rel string) bool {
 	return strings.HasPrefix(base, "test_") || strings.Contains(base, "_test.") ||
 		strings.Contains(base, ".test.") || strings.Contains(base, ".spec.") ||
 		strings.HasSuffix(base, "_spec.rb") || strings.HasSuffix(base, "test.php")
+}
+
+// examConfidenceLine is the two terms a bare kill rate hides, on one line:
+// the sampling term (a 95% Wilson interval over the mutants graded) and the
+// coverage term (how much of the file's surface the mutants reached). Each is
+// a fact from the row, never blended into one number — a reader can see WHICH
+// term is weak. "" when nothing was graded, and each term is silent on its
+// own when unmeasured rather than printed as a zero.
+func examConfidenceLine(f reposcan.WeakFile) string {
+	var parts []string
+	n := f.MutantsGraded
+	if n > 0 && !f.Uncovered {
+		killed := n - f.Survivors
+		if killed < 0 {
+			killed = 0
+		}
+		if lo, hi, ok := advpool.WilsonInterval(killed, n); ok {
+			parts = append(parts, fmt.Sprintf("kill rate %.2f, 95%% interval %.2f–%.2f (n=%d)", f.KillRate, lo, hi, n))
+		}
+	}
+	if c := f.ExamCoverage; c.Measured {
+		s := fmt.Sprintf("reached %d of %d symbols", c.SymbolsProbed, c.Symbols)
+		if c.Decisions > 0 {
+			s += fmt.Sprintf(", %d of %d decision points", c.DecisionsProbed, c.Decisions)
+		} else {
+			s += " (no decision points — straight-line code)"
+		}
+		if c.Unplaced > 0 {
+			s += fmt.Sprintf("; %d mutant(s) unplaced", c.Unplaced)
+		}
+		parts = append(parts, s)
+	}
+	return strings.Join(parts, " · ")
 }

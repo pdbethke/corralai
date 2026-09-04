@@ -454,7 +454,7 @@ func provenRefs(rep adequacy.Report, survivors []adequacy.Mutant) []MutantRef {
 	refs := make([]MutantRef, 0, len(ids))
 	for _, id := range ids {
 		if m, ok := byID[id]; ok {
-			refs = append(refs, MutantRef{ID: m.ID, ParentSHA256: m.ParentSHA256})
+			refs = append(refs, MutantRef{ID: m.ID, ParentSHA256: m.ParentSHA256, Span: m.Span})
 		}
 	}
 	return refs
@@ -617,7 +617,7 @@ func (d *Driver) runShadowWriterFanout(ctx context.Context, missionID int64, run
 		measured++
 		if a.proven {
 			run.shadowWriterKilled = append(run.shadowWriterKilled,
-				MutantRef{ID: a.mutant.ID, ParentSHA256: a.mutant.ParentSHA256})
+				MutantRef{ID: a.mutant.ID, ParentSHA256: a.mutant.ParentSHA256, Span: a.mutant.Span})
 		}
 	}
 	if measured == 0 {

@@ -30,6 +30,19 @@ type Signature struct {
 	Complexity int
 	// Lines is the symbol's inclusive line span (end row - start row + 1).
 	Lines int
+	// Decisions are the line spans of the branch nodes Complexity counted —
+	// every if/loop/case/catch/boolean operator in the symbol, as the
+	// inclusive 1-based line range of the node's own subtree — so
+	// len(Decisions) == Complexity-1. They are what lets an exam's coverage
+	// be computed: a decision point is PROBED when some mutant's span
+	// overlaps it. nil when unavailable (the nocgo path).
+	Decisions []Decision
+}
+
+// Decision is one decision point's inclusive 1-based line span. A fault
+// planted anywhere inside the span exercises that decision's path.
+type Decision struct {
+	Start, End int
 }
 
 // ErrUnsupportedLang is returned for a language with no signature extractor

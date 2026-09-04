@@ -100,6 +100,7 @@ func phpCallable(n *sitter.Node, src []byte, receiver string) Signature {
 		Params:     phpParams(n.ChildByFieldName("parameters"), src),
 		Line:       int(n.StartPoint().Row) + 1,
 		Exported:   phpExported(n, src),
+		Decisions:  symbolDecisions(n, src, "php"),
 		Complexity: symbolComplexity(n, src, "php"),
 		Lines:      symbolLines(n),
 	}

@@ -1701,3 +1701,24 @@ func TestLocalCertifyThresholdIsAboveZero(t *testing.T) {
 		t.Errorf("localCertifyThreshold = %v — at or below zero, `devKillRate < threshold` can never fire, and a run that could not grade (baseline failed, or the suite ignores the file) reaches aggregate with a 0 rate and no survivors and is CERTIFIED. Those flags are set after aggregate returns, so nothing else stops it.", localCertifyThreshold)
 	}
 }
+
+// TestUnnamedCriticIsRefusedNotSilentlyOff: the critic resolved "" to "off"
+// and the verdict then said "no test-critic was assigned (--critic-model
+// off)" as if the operator had chosen it — the one seat the no-defaults
+// rule forgot (seventh review, claim #9). Off is a legitimate choice; it
+// has to be typed.
+func TestUnnamedCriticIsRefusedNotSilentlyOff(t *testing.T) {
+	err := herdNotConfiguredErr("corral certify --local", "w", "m", "")
+	if err == nil {
+		t.Fatal("an unnamed critic was accepted")
+	}
+	if !strings.Contains(err.Error(), "--critic-model") || !strings.Contains(err.Error(), "off") {
+		t.Errorf("refusal does not name the seat and the off spelling: %v", err)
+	}
+	if err := herdNotConfiguredErr("corral certify --local", "w", "m", "off"); err != nil {
+		t.Errorf("an explicit off was refused: %v", err)
+	}
+	if err := herdNotConfiguredErr("corral certify --local", "w", "m", "claude-haiku-4-5"); err != nil {
+		t.Errorf("a named critic was refused: %v", err)
+	}
+}

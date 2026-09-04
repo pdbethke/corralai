@@ -532,3 +532,32 @@ func TestWorkspaceCancellationIsNotATimeout(t *testing.T) {
 		t.Errorf("the error must carry the cancellation, got: %v", err)
 	}
 }
+
+// TestWorkspaceRunnerNeverHandsTheSuiteCorralsSecrets: the workspace
+// substrate left cmd.Env nil (inherit) or appended to os.Environ(), so on a
+// runner exporting the provider keys for corral's own seats, the audited
+// repository's test script could print them. The jail already stripped
+// them; the workspace runner — the recommended path and the Action's —
+// did not. The suite keeps the environment it needs (PATH, HOME, a venv).
+func TestWorkspaceRunnerNeverHandsTheSuiteCorralsSecrets(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "zz-fake-anthropic-key")
+	t.Setenv("GEMINI_API_KEY", "zz-fake-gemini-key")
+	t.Setenv("OPENAI_API_KEY", "zz-fake-openai-key")
+	t.Setenv("motherduck_token", "zz-fake-md-token")
+	t.Setenv("MY_SUITE_NEEDS_THIS", "yes")
+	root := wsTree(t, map[string]string{"a.txt": "x\n"})
+	w := NewWorkspaceRunner(root, 0)
+
+	_, out, err := w.RunTestVerbose(context.Background(), nil, []string{"sh", "-c", "env"})
+	if err != nil {
+		t.Fatalf("RunTestVerbose: %v", err)
+	}
+	for _, secret := range []string{"zz-fake-anthropic-key", "zz-fake-gemini-key", "zz-fake-openai-key", "zz-fake-md-token"} {
+		if strings.Contains(out, secret) {
+			t.Errorf("the test command received corral's secret %q", secret)
+		}
+	}
+	if !strings.Contains(out, "MY_SUITE_NEEDS_THIS=yes") || !strings.Contains(out, "PATH=") {
+		t.Errorf("the suite lost the ordinary environment it needs:\n%s", out)
+	}
+}

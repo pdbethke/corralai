@@ -916,13 +916,22 @@ type auditRoles struct {
 // the default through the error message, and the vendor whose key happens to be
 // present is not our choice to make. It names the provider and lets the
 // operator pick from that provider's own catalogue.
-func herdNotConfiguredErr(cmdName, writer, mutant string) error {
+//
+// criticRaw is the --critic-model flag AS TYPED. An unnamed critic used to
+// resolve silently to "off", and the verdict then printed "no test-critic
+// was assigned (--critic-model off)" as if the operator had chosen it — the
+// one seat the no-defaults rule forgot. Off is a legitimate choice; it has
+// to be typed.
+func herdNotConfiguredErr(cmdName, writer, mutant, criticRaw string) error {
 	var empty []string
 	if writer == "" {
 		empty = append(empty, "--writer-model (test-writer)")
 	}
 	if mutant == "" {
 		empty = append(empty, "--mutant-model (mutant-generator)")
+	}
+	if strings.TrimSpace(criticRaw) == "" {
+		empty = append(empty, "--critic-model (test-critic — a model, or \"off\" to run without one)")
 	}
 	if len(empty) == 0 {
 		return nil
@@ -1029,7 +1038,7 @@ func resolveAuditRoles(in localAuditInput, stderr io.Writer) (auditRoles, error)
 	// operator override that collapses critic==writer must fail fast, not after
 	// opening stores and a jail.
 	writer, mutant, critic, shadow, shadowWriter := resolveRoleModels(in)
-	if err := herdNotConfiguredErr(in.cmdName, writer, mutant); err != nil {
+	if err := herdNotConfiguredErr(in.cmdName, writer, mutant, in.criticModel); err != nil {
 		return r, err
 	}
 	assign := advpool.RoleAssignment{

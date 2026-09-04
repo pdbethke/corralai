@@ -253,8 +253,11 @@ func checkHerd(mutant, writer, critic, shadow string, reg *seatResolution) []che
 		// and unnamed is treated the same as off.
 		if r.model == "" {
 			if r.role == advpool.RoleTestCritic {
-				out = append(out, checkResult{name: fmt.Sprintf("model for %s", r.role), ok: true,
-					detail: "not named — the critic is advisory and may be left off"})
+				// Off is a choice, and certify requires it typed: an
+				// unnamed critic is refused there too.
+				named = false
+				out = append(out, checkResult{name: fmt.Sprintf("model for %s", r.role), detail: fmt.Sprintf(
+					"no model named. corral has no default models — pass --%s-model <model> (it must differ from the writer's), or --%s-model off to run without the advisory critic", r.flag, r.flag)})
 				continue
 			}
 			named = false

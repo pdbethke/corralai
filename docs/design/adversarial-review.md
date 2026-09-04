@@ -137,6 +137,46 @@ marked insufficient, and never preferred. The "claims reviewers keep getting
 wrong" list stops being a hand-maintained section of `AGENTS.md` and becomes
 the refuted-citation table, fed back to the next reviewer as input.
 
+## The warehouse
+
+A review's citations are rows, and they belong in the same warehouse the
+audit rows already go to — the local DuckDB ledger by default, a `md:`
+database when the operator pushes (`docs/corral/actions-as-swarm.md`). Three
+grains, additive to the five `certify` pushes today, joined on the same
+`scan_uid`:
+
+| grain | one row per | carries |
+| --- | --- | --- |
+| `corral_reviews` | review | commit, scope, reviewer model, verifier model, statement hash |
+| `corral_findings` | claim | tier as declared, tier as recorded, `file:line`, severity, the reproduction's record id |
+| `corral_adjudications` | decision | who (auto / verifier model / human), confirmed or refuted, when |
+
+Nothing prose is stored except the claim text itself; the opinion travels as
+a document with ids in it, the way the statement does. Source never leaves
+the box: a reproduction script is stored, its stdout is stored, the tree it
+ran against is not — the same custody rule as `--push-source`.
+
+The questions this answers are the ones nobody can answer about a review
+tool today, and they are one `GROUP BY` each on a warehouse with more than
+one repository in it:
+
+- Which reviewer model's claims reproduce, per language and per scope — the
+  reviewer seat's row in `models rank`, across every repository an
+  organization audits rather than one.
+- Which claims were refuted, by whom, and how often a human reversed the
+  machine: the verifier's wrongly-overruled rate, the automatic pass's
+  false-refutation rate.
+- The time from a REPRODUCED finding to the commit that fixed it, joined to
+  the scan that proved the fix (the re-attack round's rows point at it).
+- Recurrence: the same claim on the same target across rounds or across
+  repositories — `internal/learn` already detects this over the findings
+  table locally; the warehouse makes it a fleet question.
+
+The cost discipline is unchanged: local DuckDB first, `md:` only for pushes,
+shares and the dive query itself, no automated jobs against it. A review
+that ran on a runner pushes once, at the end, under the same `--push` flag
+`certify` uses.
+
 ## What exists
 
 Every mechanism below is shipped and in use by `certify`:
@@ -176,6 +216,8 @@ Every mechanism below is shipped and in use by `certify`:
   opinion with its citations, a `--attest` statement whose predicate is the
   list of reproductions.
 - **Reviewer and verifier rows in `models rank`.**
+- **The three warehouse grains**, additive, in `internal/auditpush`, with
+  the seal and the dives extended to read them.
 - **A round planner** — scopes covered, scopes not, fix batches not yet
   re-attacked. Last, because a human did this well by hand all week.
 

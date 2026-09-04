@@ -191,8 +191,8 @@ Usage of certify --local:
     	model for the mutant-generator role — REQUIRED, corral has no default models. Takes a registry alias (.corral/models.json) or a concrete model name
   -mutants string
     	REPLAY a recorded mutant set (see --record-mutants) instead of generating one: --code is graded against exactly the mutants recorded for it, and no mutant-generator model call is made. Refused (exit 2) if the file is absent from the set or its bytes have changed since it was recorded — a mutant is a single-point edit of specific bytes, and re-applying it to different ones grades an exam nobody wrote. Reads a corral-mutants-2 document, or an older corral-mutants-1 one, whose whole-file mutants still replay byte-for-byte.
-  -n-mutants --n-mutants 20
-    	PER-SHARD seeded-violation mutant budget (default 5) — this is NOT the run's total: total mutants scored scale with --max-shards (default 8) shards, and DOUBLE again if you name a --shadow-model (OFF by default, so the stock run does NOT pay this). E.g. the default 5 with the default 8 shards means up to ~40 full dev-suite jail executions, not 5 — and ~80 with a challenger named — --n-mutants 20 means roughly ~320
+  -n-mutants --n-mutants 5
+    	PER-SEAT seeded-violation mutant budget, when you want to set the exam by hand. Unset (0), the budget is DERIVED from the file's complexity — about one fault per decision point, floor 5, ceiling 40 — and the verdict says which rule it used. Set, it is NOT the run's total: total mutants scale with --max-shards (default 8) seats, and DOUBLE again if you name a --shadow-model. E.g. --n-mutants 5 with 8 seats means up to ~40 full dev-suite executions; `--n-mutants 20` roughly ~320
   -no-bind-deps
     	copy dependency dirs into the jail workspace instead of bind-mounting them read-only (the pre-bind behavior; subject to the workspace size cap)
   -no-fail-fast

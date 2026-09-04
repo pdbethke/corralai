@@ -47,6 +47,14 @@ func Open(path string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
+	// A concurrent writer holding the lock must make a read WAIT, not fail:
+	// with the fail-closed rule below, a failed read is a refusal, and a
+	// refusal caused by a lock a few milliseconds long would be a spurious
+	// 403 on a legitimate principal.
+	if _, err := db.Exec(`PRAGMA busy_timeout = 5000`); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	if _, err := db.Exec(schema); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -98,11 +106,18 @@ func (s *Store) Seed(superusers, members []string) (int, error) {
 	return n, nil
 }
 
-// Count returns the total number of principals.
+// Count returns the total number of principals; 0 on a query error, which
+// is fine for a log line and NOT fine for an authorization decision — the
+// decisions below use count, which keeps the error.
 func (s *Store) Count() int {
-	var n int
-	_ = s.db.QueryRow(`SELECT COUNT(*) FROM principals`).Scan(&n)
+	n, _ := s.count()
 	return n
+}
+
+func (s *Store) count() (int, error) {
+	var n int
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM principals`).Scan(&n)
+	return n, err
 }
 
 // superuserCount runs the shared COUNT(*) query behind both SuperuserCount
@@ -136,17 +151,32 @@ func (s *Store) exists(email string) bool {
 }
 
 // Allowed reports whether a principal may use the brain. Empty table => open (dev).
+//
+// FAILS CLOSED. "Empty" and "the query failed" used to be the same 0, so a
+// closed handle, a locked file (a second writer on the same SQLite database
+// — this brain shares a box with a CI runner) or any I/O error granted
+// every principal access AND admin rights for as long as the error lasted.
+// A security decision that cannot be made is a refusal, never a pass.
 func (s *Store) Allowed(email string) bool {
-	if s.Count() == 0 {
+	n, err := s.count()
+	if err != nil {
+		return false
+	}
+	if n == 0 {
 		return true
 	}
 	return s.exists(email)
 }
 
 // IsSuperuser reports admin rights. No superuser configured yet => open (dev),
-// mirroring a fresh Django project before its first createsuperuser.
+// mirroring a fresh Django project before its first createsuperuser. Fails
+// closed on a query error, for the reason Allowed does.
 func (s *Store) IsSuperuser(email string) bool {
-	if s.SuperuserCount() == 0 {
+	n, err := s.superuserCount()
+	if err != nil {
+		return false
+	}
+	if n == 0 {
 		return true
 	}
 	var su int

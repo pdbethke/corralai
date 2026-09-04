@@ -107,3 +107,32 @@ func TestCreateSuperuserAndManage(t *testing.T) {
 		t.Fatal("remove failed")
 	}
 }
+
+// TestAuthorizationFailsClosedOnAQueryError: Count() and SuperuserCount()
+// returned 0 on a query error, and 0 meant "dev/open — everyone allowed,
+// everyone admin". A closed handle or a locked file therefore granted an
+// unlisted principal full admin for as long as the error lasted. A decision
+// that cannot be made is a refusal.
+func TestAuthorizationFailsClosedOnAQueryError(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "p.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CreateSuperuser("boss@x.com", "seed"); err != nil {
+		t.Fatal(err)
+	}
+	if !s.Allowed("boss@x.com") || !s.IsSuperuser("boss@x.com") || s.Allowed("mallory@x.com") || s.IsSuperuser("mallory@x.com") {
+		t.Fatal("fixture: expected boss allowed+admin, mallory neither")
+	}
+	// The simplest query error: the handle is gone.
+	_ = s.Close()
+	if s.Allowed("mallory@x.com") {
+		t.Error("Allowed(mallory) = true on a query error — the store failed OPEN")
+	}
+	if s.IsSuperuser("mallory@x.com") {
+		t.Error("IsSuperuser(mallory) = true on a query error — the store failed OPEN")
+	}
+	if s.Allowed("boss@x.com") || s.IsSuperuser("boss@x.com") {
+		t.Error("even the real superuser must be refused when the decision cannot be made")
+	}
+}

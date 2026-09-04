@@ -91,3 +91,60 @@ func TestEnableDelegationAccepts32ByteKey(t *testing.T) {
 		t.Fatalf("mint with 32-byte key should succeed: %v", err)
 	}
 }
+
+// TestDelegationTTLIsClampedAndRevocable pins two halves of the sixth
+// review's finding #3. A caller's ttl used to pass straight into the claim
+// (a worker asked for ~3 years and got it); and a despawned subagent's
+// token stayed valid because tokens are stateless HMAC blobs and nothing
+// consulted the coordination store. Now: the TTL is clamped to
+// MaxDelegationTTL, and a revocation predicate can refuse a live-looking
+// token for a subagent that no longer exists.
+func TestDelegationTTLIsClampedAndRevocable(t *testing.T) {
+	vf := delegVerifier(t)
+	tok, err := vf.MintDelegation("boss@x.com", "boss@x.com/worker", 100000000*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ti, err := vf.VerifyToken(context.Background(), tok, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if left := time.Until(ti.Expiration); left > MaxDelegationTTL+time.Minute {
+		t.Errorf("a ~3-year TTL was honoured: %s left, want <= %s", left, MaxDelegationTTL)
+	}
+
+	// Revocation: the subagent is despawned; the same token must die.
+	alive := true
+	vf.SetRevocationCheck(func(p, sub string) bool { return !(alive && sub == "boss@x.com/worker") })
+	if _, err := vf.VerifyToken(context.Background(), tok, nil); err != nil {
+		t.Fatalf("a live subagent's token was refused: %v", err)
+	}
+	alive = false
+	if _, err := vf.VerifyToken(context.Background(), tok, nil); err == nil {
+		t.Error("a despawned subagent's token still authenticates — despawn is not revocation")
+	}
+	// Observer tokens are not tied to a subagent row and stay valid.
+	obs, _ := vf.MintObserver("boss@x.com", time.Minute)
+	if _, err := vf.VerifyToken(context.Background(), obs, nil); err != nil {
+		t.Errorf("an observer token was caught by subagent revocation: %v", err)
+	}
+}
+
+// TestPickPrincipalRefusesAnEmailShapedUsernameBesideAnUnverifiedEmail: an
+// unverified email was skipped and preferred_username returned bare, so a
+// token carrying email=attacker@evil (unverified) and
+// preferred_username=boss@x.com mapped to the superuser.
+func TestPickPrincipalRefusesAnEmailShapedUsernameBesideAnUnverifiedEmail(t *testing.T) {
+	if got := pickPrincipal("attacker@evil.example", false, "boss@x.com", "app", ""); got == "boss@x.com" {
+		t.Fatalf("pickPrincipal = %q — a human-controlled username impersonated a principal", got)
+	} else if got != "client:app" {
+		t.Errorf("pickPrincipal = %q, want the machine claim", got)
+	}
+	// The two agreeing, or no email claim at all, keep the old behaviour.
+	if got := pickPrincipal("me@x.com", false, "me@x.com", "", ""); got != "me@x.com" {
+		t.Errorf("agreeing claims: %q", got)
+	}
+	if got := pickPrincipal("", false, "login@corral.id.example", "", ""); got != "login@corral.id.example" {
+		t.Errorf("username-only token: %q", got)
+	}
+}

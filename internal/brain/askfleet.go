@@ -78,7 +78,14 @@ func registerAskFleet(s *mcp.Server, opts Options) {
 			Description: "Ask a natural-language question about the whole fleet's state (missions, tasks, telemetry across all swarms). Read-only; returns a narrated answer and the raw result rows.",
 		},
 		func(ctx context.Context, req *mcp.CallToolRequest, in askFleetIn) (*mcp.CallToolResult, oracle.Answer, error) {
-			who := identity(req, in.Name)
+			// Keyed on the PRINCIPAL, never the caller-supplied name:
+			// identity() honours any name inside the caller's namespace, so
+			// rotating names bypassed the limit — fifty real LLM+DuckDB
+			// queries at limit=1/min. Unauthenticated (dev) keeps the name.
+			who, _ := actor(req)
+			if who == "" {
+				who = identity(req, in.Name)
+			}
 			if !rl.allow(who, time.Now()) {
 				return nil, oracle.Answer{}, fmt.Errorf("rate limit: max %d fleet questions/minute per principal — try again shortly", limit)
 			}

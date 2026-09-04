@@ -1431,6 +1431,9 @@ func main() {
 	// Key from CORRALAI_DELEGATION_SECRET / systemd cred, else a random ephemeral key
 	// (tokens then don't survive a restart — fine for short-lived subagents).
 	verifier.EnableDelegation(delegationKey())
+	// Despawn is revocation: a delegation token for a subagent that is no
+	// longer in the coordination store is refused, however much TTL it had.
+	verifier.SetRevocationCheck(func(_, subagent string) bool { return !store.Exists(subagent) })
 
 	// Role-model policy: map each role to its expected model for attribution +
 	// apply-on-spawn. CORRALAI_ROLE_MODELS is model NAMEs — not a secret, not scrubbed.
@@ -1777,7 +1780,17 @@ func main() {
 	replayStream := func(missionID int64) ([]brain.ReplayEvent, error) {
 		return brain.BuildReplayStream(queueStore, telStore, missionID)
 	}
-	uiHandler := verifier.Wrap(authz(ui.Handler(ui.Deps{Coord: store, Mem: memStore, Gateway: gwStore, Bus: bus, MemOwners: memOwners, Roles: princStore, Queue: queueStore, Missions: missionStore, Executions: execRing, Activity: activityRing, Hosts: hostBook, Health: healthBook, Narrator: narrator, Telemetry: telStore, Oracle: fleetOracle, RoleModels: roleModels, Staffing: staffingMgr, Learn: learnStore, Promote: proposalPromote, Reject: proposalReject, History: historyList, HistoryDetail: historyDetail, Replay: replayStream, Artifacts: artStore, TaskArtifacts: taskArtStore, BuildStore: buildStore, BugCatch: bugCatchStore, CriticScore: criticScoreStore, MatrixStore: matrixStore, CertifyPub: certifyPub, Witness: certifyWitness, Version: version})))
+	// The UI's JSON POST handlers (/api/instruct, /api/proposal/*,
+	// /api/mission/*) decode their bodies with no cap of their own; only
+	// /mcp (above) and the lookbook upload (8 MiB, in its handler) were
+	// bounded, so an authenticated non-admin could hand any other endpoint a
+	// 32 MiB body and have it buffered whole. The UI-wide cap is the larger
+	// of the MCP cap and the upload's own limit, so the upload keeps working.
+	uiMaxBody := maxBody
+	if uiMaxBody < 8<<20 {
+		uiMaxBody = 8 << 20
+	}
+	uiHandler := limit.MaxBody(uiMaxBody, verifier.Wrap(authz(ui.Handler(ui.Deps{Coord: store, Mem: memStore, Gateway: gwStore, Bus: bus, MemOwners: memOwners, Roles: princStore, Queue: queueStore, Missions: missionStore, Executions: execRing, Activity: activityRing, Hosts: hostBook, Health: healthBook, Narrator: narrator, Telemetry: telStore, Oracle: fleetOracle, RoleModels: roleModels, Staffing: staffingMgr, Learn: learnStore, Promote: proposalPromote, Reject: proposalReject, History: historyList, HistoryDetail: historyDetail, Replay: replayStream, Artifacts: artStore, TaskArtifacts: taskArtStore, BuildStore: buildStore, BugCatch: bugCatchStore, CriticScore: criticScoreStore, MatrixStore: matrixStore, CertifyPub: certifyPub, Witness: certifyWitness, Version: version}))))
 	if verifier.Enabled() {
 		log.Printf("ui: bearer-gated (view via `corral-observe`)")
 	} else {

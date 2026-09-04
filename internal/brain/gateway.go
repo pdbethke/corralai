@@ -78,7 +78,9 @@ func registerGateway(s *mcp.Server, opts Options) {
 
 	// ownerOrAdmin: the caller owns `name`, or is an admin.
 	ownerOrAdmin := func(req *mcp.CallToolRequest, name string) bool {
-		if opts.isAdmin(req) {
+		// isHumanAdmin: endpoint writes by "the admin" must come from the
+		// admin, not from a worker riding the admin's rolled-up authz.
+		if opts.isHumanAdmin(req) {
 			return true
 		}
 		who, _ := actor(req)
@@ -127,7 +129,7 @@ func registerGateway(s *mcp.Server, opts Options) {
 	// list_all_endpoints — ADMIN: every endpoint (to review personal ones for promotion).
 	mcp.AddTool(s, &mcp.Tool{Name: "list_all_endpoints", Description: "ADMIN: list every registered upstream (owner + public flag, no secrets) — review personal endpoints to promote."},
 		func(_ context.Context, req *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, endpointsOut, error) {
-			if !opts.isAdmin(req) {
+			if !opts.isHumanAdmin(req) {
 				return nil, endpointsOut{}, errAdminOnly
 			}
 			eps, err := gw.ListAll()

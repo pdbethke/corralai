@@ -343,11 +343,22 @@ func (s *Server) isSuperuser(r *http.Request) bool {
 // like proposalApprove / steer / prune. Without this a read-only observer (or
 // any authenticated non-superuser) could open role=operator and type commands
 // straight into an agent's shell. The "agent" side is the corral-agent process
-// streaming its OWN terminal (authenticated as a worker, never a superuser), so
-// it passes through — reaching the mux at all already required a valid bearer.
+// streaming its OWN terminal, and it is gated too: the bearer must not be a
+// read-only observer, and it must OWN the agent name it registers as
+// (auth.OwnsName — its own delegation name, or a name under its principal).
+// "Reaching the mux at all already required a valid bearer" was the whole
+// guard here, and a cold review showed what that let through: a read-only
+// observer token — the kind minted for a dashboard — could register as the
+// agent side for ANY agent name, and when the superuser then opened
+// role=operator and typed, the observer received the keystrokes. The
+// registry keys sessions on the query string alone, so it is this gate or
+// nothing. Any other role is refused: the registry would have created a
+// session for it.
 func (s *Server) guardTerminalWS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Query().Get("role") == "operator" {
+		q := r.URL.Query()
+		switch q.Get("role") {
+		case "operator":
 			if auth.ReadOnly(r) {
 				http.Error(w, "forbidden: read-only observer cannot take control of an agent", http.StatusForbidden)
 				return
@@ -356,6 +367,18 @@ func (s *Server) guardTerminalWS(next http.Handler) http.Handler {
 				http.Error(w, "forbidden: superuser only (interactive agent control)", http.StatusForbidden)
 				return
 			}
+		case "agent":
+			if auth.ReadOnly(r) {
+				http.Error(w, "forbidden: read-only observer cannot register as an agent's terminal", http.StatusForbidden)
+				return
+			}
+			if !auth.OwnsName(r.Context(), q.Get("agent")) {
+				http.Error(w, "forbidden: a bearer may only stream its own agent's terminal", http.StatusForbidden)
+				return
+			}
+		default:
+			http.Error(w, "bad request: role must be operator or agent", http.StatusBadRequest)
+			return
 		}
 		next.ServeHTTP(w, r)
 	})

@@ -25,8 +25,11 @@ type listMissionsOut struct {
 // findings-gate resolution path, and mid-mission human steering
 // (pause/resume/cancel). Mission creation (the former create_mission
 // build verb) is retired — missions are created via mission.CreateMission by
-// whatever slice-2 caller re-scopes that entry point. Available to any allowed
-// caller (the command surface); audited via the per-mission orchestrator.
+// whatever slice-2 caller re-scopes that entry point. READING is available to
+// any allowed caller; every MUTATION (resolve_review here, and the task and
+// finding tools in tasks.go) is isHumanAdmin-gated, because missions carry no
+// owner and an ungated mutation let any allowed principal's worker steer —
+// and certify — another principal's mission.
 func registerMissions(s *mcp.Server, store *mission.Store, q *queue.Store, mem *memory.Store, tel *telemetry.Store, opts Options) {
 	mcp.AddTool(s, &mcp.Tool{Name: "mission_status",
 		Description: "Full status of a mission: each phase, its role, status, and the agents working it."},
@@ -53,6 +56,13 @@ func registerMissions(s *mcp.Server, store *mission.Store, q *queue.Store, mem *
 	mcp.AddTool(s, &mcp.Tool{Name: "resolve_review",
 		Description: "Resolve a mission parked at needs-review: the convergence findings-gate withheld certification because an open critical/high finding never became a task. Dismiss or address those findings first (resolve_finding), then call this to certify the mission done. Refused while any blocking finding is still open — a judge may not certify a result it knows still holds a critical defect."},
 		func(_ context.Context, req *mcp.CallToolRequest, in missionIDIn) (*mcp.CallToolResult, mission.MissionView, error) {
+			// The one certification path that was not operator-guarded: a
+			// non-admin worker dismissed the verify gate's own critical
+			// finding (resolve_finding) and then certified the parked
+			// mission done here. Certifying is a human's act.
+			if !opts.isHumanAdmin(req) {
+				return nil, mission.MissionView{}, fmt.Errorf("forbidden: superuser only (certifying a parked mission is an operator action)")
+			}
 			blockSev := opts.ConvergeBlockSeverity
 			if blockSev == "" {
 				blockSev = "high" // engine default (mission.NewEngine)

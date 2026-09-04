@@ -67,7 +67,8 @@ type Verifier struct {
 	vs         []*oidc.IDTokenVerifier
 	httpClient *http.Client
 	enabled    bool
-	delegKey   []byte // HMAC key for subagent delegation tokens (nil => delegation off)
+	delegKey   []byte                                // HMAC key for subagent delegation tokens (nil => delegation off)
+	revoked    func(principal, subagent string) bool // SetRevocationCheck; nil => no revocation
 }
 
 // EnableDelegation enables minting/verification of subagent delegation tokens,
@@ -75,6 +76,14 @@ type Verifier struct {
 // on OIDC being configured (in prod, where the bearer middleware runs and verifies
 // these tokens alongside JWTs). In dev (no OIDC) auth is off and a subagent token
 // needs no verification, so this is just a no-op-until-prod key install.
+// SetRevocationCheck installs the predicate verifyDelegation consults on
+// every delegation token: revoked(principal, subagent) true means refuse.
+// The brain wires it to "the subagent no longer exists in the coordination
+// store", so despawn is revocation.
+func (vf *Verifier) SetRevocationCheck(revoked func(principal, subagent string) bool) {
+	vf.revoked = revoked
+}
+
 func (vf *Verifier) EnableDelegation(key []byte) {
 	if len(key) < 32 {
 		if len(key) > 0 {
@@ -91,12 +100,24 @@ func (vf *Verifier) sign(payload []byte) string {
 	return base64.RawURLEncoding.EncodeToString(m.Sum(nil))
 }
 
+// MaxDelegationTTL bounds every delegation token, whatever the caller asked
+// for. A worker holding a two-second token used to be able to mint a
+// grandchild good for three years, and tokens are stateless HMAC blobs — so
+// a short-lived worker compromise became a permanent principal-scoped
+// credential. The clamp is the floor; revocation (SetRevocationCheck) is the
+// rest.
+const MaxDelegationTTL = 24 * time.Hour
+
 // MintDelegation issues a TTL-bound token authenticating as subagent (identity)
 // rolling up to principal (authorization). The holder can act as the subagent but
-// never exceeds the principal's authz, and the token expires.
+// never exceeds the principal's authz, and the token expires — within
+// MaxDelegationTTL, whatever ttl says.
 func (vf *Verifier) MintDelegation(principal, subagent string, ttl time.Duration) (string, error) {
 	if len(vf.delegKey) == 0 {
 		return "", fmt.Errorf("delegation not enabled")
+	}
+	if ttl > MaxDelegationTTL {
+		ttl = MaxDelegationTTL
 	}
 	c := delegClaims{P: principal, S: subagent, E: time.Now().Add(ttl).Unix()}
 	payload, _ := json.Marshal(c)
@@ -142,6 +163,13 @@ func (vf *Verifier) verifyDelegation(token string) (*sdkauth.TokenInfo, error) {
 	if time.Now().Unix() >= c.E {
 		return nil, sdkauth.ErrInvalidToken
 	}
+	// Revocation: a despawned subagent's token is dead, however long it had
+	// left. Without this, despawn removed the coordination row and left the
+	// credential valid — there was no revocation at all. Observer tokens are
+	// not tied to a live subagent and are exempt.
+	if !c.RO && vf.revoked != nil && vf.revoked(c.P, c.S) {
+		return nil, sdkauth.ErrInvalidToken
+	}
 	// UserID is the PRINCIPAL (so the allowlist + role checks roll up); the subagent
 	// identity rides in Extra and is what coordination tools attribute work to.
 	return &sdkauth.TokenInfo{
@@ -179,6 +207,34 @@ func Subagent(ctx context.Context) bool {
 		return s != ""
 	}
 	return false
+}
+
+// SubagentName returns the coordination name a delegation token was minted
+// for (Extra["subagent"]), or "" for a human's own token or no token.
+func SubagentName(ctx context.Context) string {
+	if ti := sdkauth.TokenInfoFromContext(ctx); ti != nil && ti.Extra != nil {
+		s, _ := ti.Extra["subagent"].(string)
+		return s
+	}
+	return ""
+}
+
+// OwnsName reports whether the request's verified bearer may act AS the
+// coordination name — the rule internal/brain's identity() enforces over MCP,
+// restated for HTTP handlers that take an agent name in the query: a
+// delegation token owns exactly its own name (and names under it); a
+// human's token owns its principal and everything under `principal/`; an
+// unauthenticated request (auth disabled, dev) owns anything. It never lets
+// one principal act as another's agent.
+func OwnsName(ctx context.Context, name string) bool {
+	if sub := SubagentName(ctx); sub != "" {
+		return name == sub || strings.HasPrefix(name, sub+"/")
+	}
+	p := Principal(ctx)
+	if p == "" {
+		return true
+	}
+	return name == p || strings.HasPrefix(name, p+"/")
 }
 
 // NewVerifier builds a verifier per non-empty Pair. Empty list => disabled (dev).
@@ -232,8 +288,22 @@ func pickPrincipal(email string, emailVerified bool, preferredUsername, clientID
 		return email
 	}
 	if preferredUsername != "" && !strings.HasPrefix(preferredUsername, "client:") {
+		// An UNVERIFIED email beside an email-shaped preferred_username
+		// that names someone else is the collision this guard exists for:
+		// a token whose own email claim is attacker@evil (unverified, so
+		// skipped above) must not map to boss@x.com because a
+		// human-controlled username says so. When the two agree, or there
+		// is no email claim at all (some IdPs put the login name here), the
+		// username stands as before.
+		if email != "" && !emailVerified && strings.Contains(preferredUsername, "@") && !strings.EqualFold(preferredUsername, email) {
+			return pickMachine(clientID, azp)
+		}
 		return preferredUsername
 	}
+	return pickMachine(clientID, azp)
+}
+
+func pickMachine(clientID, azp string) string {
 	if clientID != "" {
 		return "client:" + clientID
 	}

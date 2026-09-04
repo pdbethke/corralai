@@ -118,6 +118,17 @@ func (s *Store) MissionPassedVerify(missionID int64, verify string) (bool, error
 // verify, or command starts with verify+" " (prefix with args). Empty verify is
 // "ungated" and returns true.
 func (s *Store) MissionPassedVerifySince(missionID int64, verify string, sinceTS int64) (bool, error) {
+	return s.MissionPassedVerifySinceBy(missionID, verify, sinceTS, "")
+}
+
+// MissionPassedVerifySinceBy is MissionPassedVerifySince restricted to
+// executions reported by ONE agent. The gate's self-report fallback (when
+// no Verify runner is wired) used to accept any agent's ok:true row for the
+// mission's verify command — so one principal's worker could report a green
+// run and satisfy another agent's gate. A self-report is weak evidence at
+// best; it must at least be the claimer's own. Empty agent = any (the
+// mission-wide read, for dashboards).
+func (s *Store) MissionPassedVerifySinceBy(missionID int64, verify string, sinceTS int64, agent string) (bool, error) {
 	if verify == "" {
 		return true, nil
 	}
@@ -126,12 +137,22 @@ func (s *Store) MissionPassedVerifySince(missionID int64, verify string, sinceTS
 		return true, nil
 	}
 	var ok int
-	err := s.db.QueryRow(
-		`SELECT ok FROM executions
-		 WHERE mission_id=? AND ts>=? AND (command=? OR command LIKE ?)
-		 ORDER BY ts DESC, id DESC LIMIT 1`,
-		missionID, sinceTS, verify, verify+" %",
-	).Scan(&ok)
+	var err error
+	if agent == "" {
+		err = s.db.QueryRow(
+			`SELECT ok FROM executions
+			 WHERE mission_id=? AND ts>=? AND (command=? OR command LIKE ?)
+			 ORDER BY ts DESC, id DESC LIMIT 1`,
+			missionID, sinceTS, verify, verify+" %",
+		).Scan(&ok)
+	} else {
+		err = s.db.QueryRow(
+			`SELECT ok FROM executions
+			 WHERE mission_id=? AND agent=? AND ts>=? AND (command=? OR command LIKE ?)
+			 ORDER BY ts DESC, id DESC LIMIT 1`,
+			missionID, agent, sinceTS, verify, verify+" %",
+		).Scan(&ok)
+	}
 	if err == sql.ErrNoRows {
 		return false, nil
 	}

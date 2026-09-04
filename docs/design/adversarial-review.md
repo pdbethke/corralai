@@ -137,6 +137,56 @@ marked insufficient, and never preferred. The "claims reviewers keep getting
 wrong" list stops being a hand-maintained section of `AGENTS.md` and becomes
 the refuted-citation table, fed back to the next reviewer as input.
 
+## One scorecard, two kinds of evidence
+
+The same model can sit in the writer seat on Monday and the reviewer seat
+on Tuesday, and corral records both under the same name. That makes three
+correlations possible that no single-role tool can make, and all three are
+joins over rows that already exist or are defined above.
+
+**A model's profile across roles.** The bugcatch table says how well a
+model *tests*: execution-proven catches over survivors attempted, per
+language. The findings table would say how well it *reviews*: reproduced
+claims over claims made, per language and scope. Joined on the model name,
+that is a profile — tests well and reviews badly, or the reverse — and the
+first question it answers is whether the two are the same skill. We do not
+know. Nobody does, because nobody has both numbers from execution for the
+same model on the same code.
+
+**A review against the signed audit of the same code.** A review's
+REPRODUCED finding names a `file:line` at a commit. `certify` has signed
+that file at that commit: a kill rate, its survivors, the gaps a writer
+proved. Joined on (repo, commit, path), the two records agree or they do
+not, and both cases are worth a row:
+
+- a finding on a file `certify` signed as weak — the reviewer and the
+  mutants point at the same place, two independent measurements agreeing;
+- a finding on a file `certify` signed as strong — a suite adequate against
+  planted faults but not against the reviewer's scenario. That is not a
+  contradiction to resolve, it is the most interesting row in the
+  warehouse: mutation adequacy is not correctness, and this is where the
+  difference shows up with both halves signed;
+- a strong signed audit and a refuted finding — the reviewer was wrong, on
+  the record, against evidence that was already there.
+
+The join is coarse today (path, not span — `corral_mutants.span_start` is
+defined and nothing produces it yet), and it gets sharper the day mutants
+carry their lines.
+
+**Reviewers against each other.** Two cold reviewers on the same scope are a
+head-to-head, exactly as two generators are: the challenger machinery
+(`internal/modelcorr`, Jaccard and kappa over the two seats' output) applies
+to findings without change. Decorrelation between reviewers becomes a
+measured number rather than an assumption about vendors — the same
+correction the writer/critic pair went through.
+
+The principle underneath all three is the tagline, extended: no agent
+judges its own work, *and no agent's judgment of another's work goes
+unmeasured*. A tester is graded by execution. A reviewer is graded by
+reproduction, against other reviewers, and against the signed result of the
+code it reviewed. The human adjudicates the residue, and the adjudication is
+a row too.
+
 ## The warehouse
 
 A review's citations are rows, and they belong in the same warehouse the
@@ -168,6 +218,9 @@ one repository in it:
   false-refutation rate.
 - The time from a REPRODUCED finding to the commit that fixed it, joined to
   the scan that proved the fix (the re-attack round's rows point at it).
+- The cross-role profile and the review-vs-audit join above, which need a
+  warehouse with both kinds of rows in it — one repository's ledger has too
+  few of either to clear the evidence floor.
 - Recurrence: the same claim on the same target across rounds or across
   repositories — `internal/learn` already detects this over the findings
   table locally; the warehouse makes it a fleet question.

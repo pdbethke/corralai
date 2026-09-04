@@ -1,0 +1,183 @@
+---
+title: "We put five strangers on our own code"
+description: "Eleven pull requests in three days, every one of them a defect found by a model that had never seen the repository — including a private signing key committed to a public repo and a 'proven' bug that could be fabricated. A field note on cross-model adversarial review: what it found, what it got wrong, and the one time we overruled a reviewer who was right."
+pubDate: 2026-09-04
+draft: false
+---
+
+{/* SPDX-License-Identifier: Elastic-2.0 */}
+
+*Field note. Corral's whole argument is that the model which wrote the code
+should not be the one that grades it. This week we applied that argument to
+corral itself, five times over. Companion to
+[The database found the bugs](/field-notes/the-database-found-the-bugs/) —
+that was the receipts finding the bugs; this is strangers finding them.*
+
+---
+
+## The setup
+
+Five rounds. Each round, one or more models were handed the repository at a
+named commit with no conversation history, no memory of the project, and one
+instruction: assume the code is wrong, find where, and prove it by execution.
+Not "review this" — *break this*. A finding that could not be reproduced was
+not a finding.
+
+The reviewer models were not the model that had written most of the code that
+week. That is the point, and it is the one rule we did not bend: a fresh model,
+a fresh context, aimed at a specific subsystem the previous round never
+touched. Rounds one and two at the CI gates. Round three at the gates again,
+and at a shipped feature nobody had run. Round four at the scoring engine and
+the ledger — twice, the second pass told that the morning's fixes were hours
+old and to assume they had holes. Round five at the warehouse push, the model
+router, and the learning loop.
+
+Then a different session — the one that had written the code — took every
+finding, wrote a test that failed on it, fixed it, and wrote a second test
+proving the fix could be reverted and caught. Eleven pull requests came out of
+it: #224, #225, #226, #229, #230, #231, #232, #233, #234, #235 and #236, all
+merged between 2026-09-03 and 2026-09-04.
+
+## What the strangers found
+
+**A private key in a public repository.** The console bundle a client renders
+is signed, and the client pins the signing key. The pinned key's *seed* was
+committed to the public repo as a development convenience. Anyone who could
+read GitHub could sign a bundle every client would trust and render — with the
+session's own bearer token. Nothing had been compromised; the key had simply
+never been secret, which is worse: a signature anyone can produce does not
+weaken a guarantee, it inverts it. Found by a reviewer who derived the public
+key from the committed seed and compared it to the pinned constant. Fixed in
+#230: there is no default trust anchor now. A daemon without an operator-set
+public key refuses, naming the two commands that fix it.
+
+**A "proven" bug that could be fabricated.** Corral's headline number is a
+survivor — a planted bug your tests missed — that a model-written test then
+kills *by execution*. The grading command for each survivor was never run on
+the unmutated code first. So a test file pytest does not collect (a class
+named `CalcTest` instead of `TestCalc`, a common model habit) exited 5 on
+every survivor, every survivor was marked killed, and every one was signed as a
+gap proven by execution. Reproduced on a mutant that is genuinely
+unobservable: `2*2` replaced with `2+2`. Fixed in #232: every distinct grading
+command is now proven on compliant code before it may decide anything, and the
+proven count is the length of the killed list, never a subtraction.
+
+**The deployed brain served a console every client refused.** The signed
+manifest includes the version string. The committed signature covered `dev`;
+`go install` stamps a real version. Every released brain had been serving a
+manifest every client rejected as invalid. Found in round four (#233). We had
+not noticed because nothing outside a developer's shell had ever run the
+signing script.
+
+**Eleven gate defeats in one pass.** Round three defeated six of the CI gates
+hardened that morning (#229). A second pass in round four was told those fixes
+were hours old and to assume they had gaps; it defeated eleven, each with a
+one-line edit that left CI green (#233): `-run '^TestDocsZZ'`,
+`if: … == 'never'`, `|| echo`, moving a step to another job, a prose mention
+satisfying a substring match.
+Every defeat had the same shape — the gate checked whether a string was
+*present* rather than whether the thing was *true*. What survived: an exact
+match on a known value, or a list derived from the code itself.
+
+**The audited repository could pick its auditors.** Corral reads a model
+registry from the repository root, and the repository root is the repository
+under audit. A pull request could ship a `.corral/models.json` that re-pointed
+the reviewer's typed model name at a retired one, or sent the test-writing
+seat — and the source it is shown — to a host of the author's choosing. Found
+in round five (#236). An alias may no longer be spelled like a concrete model,
+and on a CI runner the checkout's own registry is ignored, out loud.
+
+**A rate limit charged to the model.** When the test-writer's provider
+returned a 429, the default code path fed the failure sentinel to the
+compiler as if it were the model's test, "repaired" it three times by quoting
+the sentinel back to the model, signed the verdict as three failed attempts,
+and lowered that model's precision on the scorecard. An afternoon of rate
+limiting became a property of the model. Also #236.
+
+There were more. `corral verify --db` had failed on every real scan because
+timestamps were signed at nanoseconds in the local zone and read back at
+microseconds in UTC. The compile gate was a linter. The brain's leaderboard
+replaced the operator's chosen models with any model that had one good run —
+a rookie at 1 of 1 outranked a veteran at 99 of 100 in every seat. A
+warehouse ranking reported a test-writer at 6 of 25 over three runs for a
+record that had actually measured 3 of 4 over one.
+
+## The two shapes
+
+Reading eleven pull requests of findings, two shapes account for most of them.
+
+**Something proven for one input was assumed for another.** The baseline
+proved the shared test command; each survivor was graded by a different
+command nobody had proven. The signature covered the in-memory rows; the
+warehouse stored canonicalized ones. The signature covered `dev`; the binary
+said `v0.8.4`. The compile gate was proven on the mutant; nobody ran it on the
+compliant file first.
+
+**A rule enforced at one door and not the other.** The batched test-writer
+path recognized the provider-failure sentinel; the default per-survivor path
+did not. The grading seats honored the operator's pinned backend; the
+goal-derivation seat dialed the vendor directly. `corral doctor` ran its own
+herd check and disagreed with `corral certify` in both directions. The local
+scorecard skipped ungraded runs; the warehouse ranking charged them.
+
+Neither shape is visible from inside the session that wrote the code. Both are
+obvious to a stranger who reads the rule in one place and then greps for the
+other places it should hold.
+
+## What the strangers got wrong
+
+This is the part that makes the rest believable, so it stays in.
+
+Not every finding was real. One reviewer read our roadmap as a description of
+what had shipped and reported unbuilt features as broken. Another reported two
+forge providers as stubs; they are complete, and the true, narrower claim was
+that the merge gate is GitHub-only. Across four independent reviews on
+2026-09-01 we listed eight confident false claims, and every one had the same
+shape: the evidence was read correctly and the state of the world was
+inferred wrongly. We keep that list in the repository's own contributor guide
+so the next reviewer does not spend an afternoon on the same ground.
+
+And once, we were the ones who inferred wrongly. A reviewer reported that the
+verdict is constructed in two places, so a new field could be dropped from
+one. We overruled it: `grep -rn "func tickAggregate"` found nothing, so the
+function did not exist, so the claim was false. It went into the guide under
+"claims reviewers keep getting wrong."
+
+It was true. The pattern cannot match a method with a receiver. The two
+construction sites exist, the drift the reviewer predicted had already
+happened, and the entry now sits in the same guide, corrected rather than
+deleted, with the lesson attached: a search that cannot find the thing is not
+evidence the thing is absent.
+
+That is the honest accounting of cross-model review. Of the eight claims we
+listed as false, one was ours. And the one time the verifier was wrong, it was
+wrong with more confidence than any reviewer, because it had run a command.
+
+## Why it worked at all
+
+Three things, none of them clever.
+
+*The reviewer had no context.* Every finding above was invisible to the
+session that wrote the code, because that session knew what the code was
+*for*. A stranger only knows what it *does*. The private key looked like a
+fixture to us. It looked like a private key to someone who had not written the
+fixture.
+
+*Every finding had to be executed.* "This looks wrong" was not accepted. The
+reviewer had to write the test, watch it fail, and hand over the output. That
+turned the false claims into claims caught before they cost a fix, and it is why we could merge eleven pull requests in three days without
+re-litigating any of them.
+
+*Every fix had a negative control.* Revert the fix, run the test, watch it
+fail by name. Round three exists because round one's fixes had not been
+attacked; eleven of them fell. After that, no fix was considered done until
+its own test had been shown to catch its own absence.
+
+We did not plan to spend the week this way. We planned to ship. But the tool
+exists to make one claim — that the model which built the change must not be
+the one that grades it — and a week of having strangers grade our own changes
+is the only evidence for that claim we would accept from anyone else.
+
+*Corral is open source under Elastic-2.0. The eleven pull requests, the
+reviewers' findings, and the corrected entry are all in the repository's
+history.*

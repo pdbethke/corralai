@@ -2707,7 +2707,6 @@ func (d *Driver) tickAggregate(ctx context.Context, missionID int64, run *runSta
 	v.RegionsTotal = run.regionsTotal
 	v.PromptShape = run.promptShape
 	v.MutantBudget = run.mutantBudget
-	v.ExamCoverage = run.exam.coverage(v.DevKilledMutants, v.DevSurvivedMutants)
 	v.RegionsProbed = run.regionsProbed
 	v.DroppedRegions = run.droppedRegions
 	v.DuplicateMutants = run.dupMutants
@@ -2762,6 +2761,9 @@ func (d *Driver) tickAggregate(ctx context.Context, missionID int64, run *runSta
 	// says what the run intended to narrow by, and only the finished refs say
 	// what each mutant was really graded with.
 	applyPerMutantStats(&v, run.perMutantGraded, v.DevKilledMutants, v.DevSurvivedMutants)
+	// The exam's reach, from the same refs — after they are set, not before:
+	// the first cut of this line ran above them and measured nothing.
+	v.ExamCoverage = run.exam.coverage(v.DevKilledMutants, v.DevSurvivedMutants)
 
 	// The critic's findings, adjudicated by EXECUTION where they can be
 	// (adjudicateCriticFindings) — computed once, before the leaderboard is
@@ -3125,6 +3127,7 @@ func (d *Driver) timeoutVerdict(run *runState) Verdict {
 	// vector and not the other would put two grains of the same evidence in
 	// one signed record.
 	v.DevSurvivedMutants = toMutantRefsWith(run.devSurvivors, run.perMutant)
+	v.ExamCoverage = run.exam.coverage(v.DevKilledMutants, v.DevSurvivedMutants)
 	// And the same disclosure the aggregate applies, from the same refs: a
 	// run that graded per mutant and only THEN stalled measured what it
 	// measured, and the record has to say so.
@@ -3169,7 +3172,6 @@ func (d *Driver) timeoutVerdict(run *runState) Verdict {
 	v.DuplicateMutants = run.dupMutants
 	v.PromptShape = run.promptShape
 	v.MutantBudget = run.mutantBudget
-	v.ExamCoverage = run.exam.coverage(v.DevKilledMutants, v.DevSurvivedMutants)
 	v.ModelsByRole = run.modelsByRole(d.Assign)
 	// A stalled run still spent everything it spent, and it is the run an
 	// operator most needs the clock for: "which phase was it sitting in when

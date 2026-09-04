@@ -3,8 +3,11 @@
 package advpool
 
 import (
+	"context"
 	"math"
 	"testing"
+
+	"github.com/pdbethke/corralai/internal/adequacy"
 
 	golang "github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/repoindex"
@@ -73,5 +76,45 @@ func TestWilsonIntervalOnTheTwoRequestsRuns(t *testing.T) {
 	}
 	if _, _, ok := WilsonInterval(0, 0); ok {
 		t.Error("an interval over nothing is not [0, 1]")
+	}
+}
+
+// The verdict's coverage is computed from the refs the verdict carries —
+// the first cut computed it before the refs were assigned and every real
+// run measured nothing. A converged per-mutant run with spanned mutants and
+// a symbol surface must report a measured reach.
+func TestVerdictCarriesExamCoverageFromItsOwnRefs(t *testing.T) {
+	mutants := []adequacy.Mutant{
+		{ID: "m1", Replace: "c1", ParentSHA256: "p1", Span: golang.LineRange{Start: 41, End: 41}},
+		{ID: "m2", Replace: "c2", ParentSHA256: "p2", Span: golang.LineRange{Start: 2, End: 2}},
+	}
+	scorer := &recordingPerMutantScorer{fakeScorer: fakeScorer{
+		devKillRate: 0.5, devSurvivors: mutants[1:], devReported: true,
+		reportFn: func(_ context.Context, _, _, _ string, _ []adequacy.Mutant, _ string) (adequacy.Report, error) {
+			return adequacy.Report{CompliantPass: true, CanaryKilled: true, Total: 2, Killed: []string{"m1"}, Survived: []string{"m2"}}, nil
+		},
+	}}
+	validator := &fakeValidator{mutants: mutants}
+	q := newTestQueue(t)
+	d, err := NewDriver(q, scorer, validator, decorrelatedAssign(), 0.1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Two symbols: one holds line 41 and a decision spanning it; the other
+	// holds line 2 and no decision.
+	sigs := []repoindex.Signature{
+		{Name: "validate", Line: 40, Lines: 5, Complexity: 2, Decisions: []repoindex.Decision{{Start: 41, End: 42}}},
+		{Name: "helper", Line: 1, Lines: 3, Complexity: 1},
+	}
+	if err := d.StartRun(93, perMutantRunSpec(), sigs); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := q.PromoteReady(93); err != nil {
+		t.Fatal(err)
+	}
+	v := drivePoolToConvergence(t, d, 93)
+	want := ExamCoverage{Symbols: 2, SymbolsProbed: 2, Decisions: 1, DecisionsProbed: 1, Measured: true}
+	if v.ExamCoverage != want {
+		t.Fatalf("ExamCoverage = %+v, want %+v", v.ExamCoverage, want)
 	}
 }

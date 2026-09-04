@@ -98,6 +98,14 @@ type AuditedFile struct {
 	// always shows the whole file). Omitted, never signed as "", on a run
 	// that predates this disclosure.
 	PromptShape string `json:"promptShape,omitempty"`
+	// MutantBudget / MutantBudgetRule / Complexity: how many faults the
+	// generator seats were asked for, by which rule ("complexity",
+	// "explicit", "default") and the file's summed complexity. Signed
+	// because a kill rate over 8 mutants and one over 40 are different
+	// measurements. Omitted on a run that generated nothing.
+	MutantBudget     int    `json:"mutantBudget,omitempty"`
+	MutantBudgetRule string `json:"mutantBudgetRule,omitempty"`
+	Complexity       int    `json:"complexity,omitempty"`
 	// GoalReused discloses that this file's goal was served from the goal
 	// cache — a PRIOR scan derived it from the same bytes, by the same
 	// model under the same prompt revision — rather than freshly derived by
@@ -257,6 +265,11 @@ func BuildAuditAttestation(s AuditStatement) map[string]any {
 		}
 		if f.PromptShape != "" {
 			entry["promptShape"] = f.PromptShape
+		}
+		if f.MutantBudget > 0 {
+			entry["mutantBudget"] = f.MutantBudget
+			entry["mutantBudgetRule"] = f.MutantBudgetRule
+			entry["complexity"] = f.Complexity
 		}
 		// Signed only when true: this file's goal was served from the goal
 		// cache rather than freshly derived by this scan. Never a signed

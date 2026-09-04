@@ -205,11 +205,14 @@ func buildAuditRows(files []scanstore.File, scanID int64, meta bundleMeta) []aud
 			// Source. Carried on the row and then WITHHELD by the writer
 			// unless --push-source was given (auditpush.PushBundle), so a
 			// forgotten blanking here cannot leak code.
-			AuthoredTest:  f.AuthoredTest,
-			VerdictJSON:   f.VerdictJSON,
-			PromptShape:   f.PromptShape,
-			CoveringTests: f.CoveringTests,
-			ImportOnly:    f.ImportOnly,
+			AuthoredTest:     f.AuthoredTest,
+			VerdictJSON:      f.VerdictJSON,
+			PromptShape:      f.PromptShape,
+			CoveringTests:    f.CoveringTests,
+			ImportOnly:       f.ImportOnly,
+			MutantBudget:     f.MutantBudget,
+			MutantBudgetRule: f.MutantBudgetRule,
+			Complexity:       f.Complexity,
 		})
 	}
 	return rows

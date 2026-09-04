@@ -395,6 +395,11 @@ func ShardIndexFromKey(key string) (int, bool) {
 func renderMutantGeneratorShard(rs RunSpec, sigs []repoindex.Signature, sh Shard) (string, bool) {
 	shardSigs := filterSignatures(sigs, sh.Symbols)
 	aimed := rs
+	if sh.Mutants > 0 {
+		// The seat's share of the file's budget — see PlanShards. A Shard
+		// from ShardSymbols alone carries 0 and keeps rs.NMutants.
+		aimed.NMutants = sh.Mutants
+	}
 	aimed.Goal = fmt.Sprintf(
 		"%s\n\nATTACK ONLY THESE FUNCTIONS: %s. Every mutation you produce MUST edit code inside one of them. Other functions in the file are being attacked by other seats — do not mutate them, and do not report that you skipped them.",
 		rs.Goal, strings.Join(sh.Symbols, ", "))
@@ -735,7 +740,7 @@ func Roles() []Role {
 // prompt.
 func BuildDAG(rs RunSpec, assign RoleAssignment, sigs []repoindex.Signature) []queue.TaskSpec {
 	roles := Roles()
-	shards := ShardSymbols(sigs, rs.MaxShards)
+	shards, budget := PlanShards(sigs, rs)
 	specs := make([]queue.TaskSpec, 0, len(roles)+len(shards))
 	for _, role := range roles {
 		// An UNASSIGNED test-critic seeds no task at all. The critic is the one
@@ -816,11 +821,16 @@ func BuildDAG(rs RunSpec, assign RoleAssignment, sigs []repoindex.Signature) []q
 				log.Printf("advpool: %s has no shardable symbol surface (or --max-shards <= 1), so the challenger generator seat (%s) is SKIPPED — its yield this run is unmeasured, not zero", rs.CodePath, m)
 			}
 		}
+		seatSpec := rs
+		if role.Name == RoleMutantGenerator {
+			// The unsharded whole-file seat asks for the whole budget.
+			seatSpec.NMutants = budget.Total
+		}
 		specs = append(specs, queue.TaskSpec{
 			Key:         role.Name,
 			Role:        role.Name,
 			Title:       roleTitle(role.Name),
-			Instruction: role.Render(rs, sigs, nil),
+			Instruction: role.Render(seatSpec, sigs, nil),
 			DependsOn:   role.Deps,
 			Model:       assign[role.Name],
 		})

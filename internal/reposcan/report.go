@@ -263,6 +263,11 @@ type WeakFile struct {
 	// file). "" — never fabricated — for a run that predates this
 	// disclosure, or a preset (`--mutants`) run that generated nothing.
 	PromptShape string
+	// MutantBudget mirrors advpool.Verdict.MutantBudget: how many faults the
+	// generator seats were asked for and by what rule (complexity /
+	// explicit / default), with the file's summed complexity. Total 0 for a
+	// run that generated nothing (--mutants) or a row that predates it.
+	MutantBudget advpool.MutantBudget
 	// GoalReused mirrors Job.GoalReused: this file's goal was served from
 	// the goal cache — a prior scan derived it from the SAME bytes — rather
 	// than freshly derived by this scan. false for a fresh derivation, a
@@ -572,6 +577,8 @@ func Aggregate(owner, repo, commit string, totalFiles, candidates int, results [
 			Challenger: r.Verdict.ChallengerAgreement,
 			// What a generator shard actually saw — see WeakFile.PromptShape.
 			PromptShape: r.Verdict.PromptShape,
+			// What the seats were asked for — see WeakFile.MutantBudget.
+			MutantBudget: r.Verdict.MutantBudget,
 			// Whether this file's goal was served from the goal cache —
 			// see WeakFile.GoalReused.
 			GoalReused: r.Job.GoalReused,

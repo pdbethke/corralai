@@ -261,7 +261,8 @@ func readFileRows(db *sql.DB, where string, args ...any) ([]Row, error) {
 		challenger_sufficient, goals_derived, goal_reused,
 		selection_ms, generation_ms, pool_ms, dev_pass_ms, authored_pass_ms,
 		critic_ms, total_ms, mutant_ms_median, mutant_ms_max,
-		authored_test, verdict_json, prompt_shape, covering_tests, import_only, started_at
+		authored_test, verdict_json, prompt_shape, covering_tests, import_only, started_at,
+		mutant_budget, mutant_budget_rule, complexity
 	   FROM corral_audits WHERE `+where, args...) // #nosec G202 -- where is a constant clause from readGrains; every value is a bound parameter
 	if err != nil {
 		return nil, err
@@ -287,6 +288,8 @@ func readFileRows(db *sql.DB, where string, args ...any) ([]Row, error) {
 		var selectionMillis, generationMillis, poolMillis, devPassMillis, authoredPassMillis sql.NullInt64
 		var criticMillis, totalMillis, mutantMillisMedian, mutantMillisMax sql.NullInt64
 		var authoredTest, verdictJSON, promptShape sql.NullString
+		var mutantBudget, complexity sql.NullInt64
+		var mutantBudgetRule sql.NullString
 		var coveringTests sql.NullInt64
 		var importOnly sql.NullBool
 		var rowPassed sql.NullBool
@@ -312,6 +315,7 @@ func readFileRows(db *sql.DB, where string, args ...any) ([]Row, error) {
 			&selectionMillis, &generationMillis, &poolMillis, &devPassMillis, &authoredPassMillis,
 			&criticMillis, &totalMillis, &mutantMillisMedian, &mutantMillisMax,
 			&authoredTest, &verdictJSON, &promptShape, &coveringTests, &importOnly, &rowStarted,
+			&mutantBudget, &mutantBudgetRule, &complexity,
 		); err != nil {
 			return nil, err
 		}
@@ -362,6 +366,9 @@ func readFileRows(db *sql.DB, where string, args ...any) ([]Row, error) {
 		r.PromptShape = promptShape.String
 		r.CoveringTests = nullInt(coveringTests)
 		r.ImportOnly = nullBoolPtr(importOnly)
+		r.MutantBudget = nullInt(mutantBudget)
+		r.MutantBudgetRule = mutantBudgetRule.String
+		r.Complexity = nullInt(complexity)
 
 		out = append(out, r)
 	}

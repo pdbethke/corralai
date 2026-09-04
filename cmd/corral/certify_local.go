@@ -91,7 +91,7 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 	testPath := fs.String("test", "", "path of the dev's test (default: the sibling test of --code)")
 	langFlag := fs.String("lang", "", "source language (default: inferred from --code extension)")
 	goal := fs.String("goal", "", "the correctness/security goal the code must satisfy (required)")
-	nMutants := fs.Int("n-mutants", 0, "PER-SHARD seeded-violation mutant budget (default 5) — this is NOT the run's total: total mutants scored scale with --max-shards (default "+fmt.Sprint(advpool.DefaultMaxShards)+") shards, and DOUBLE again if you name a --shadow-model (OFF by default, so the stock run does NOT pay this). E.g. the default 5 with the default 8 shards means up to ~40 full dev-suite jail executions, not 5 — and ~80 with a challenger named — `--n-mutants 20` means roughly ~320")
+	nMutants := fs.Int("n-mutants", 0, "PER-SEAT seeded-violation mutant budget, when you want to set the exam by hand. Unset (0), the budget is DERIVED from the file's complexity — about one fault per decision point, floor "+fmt.Sprint(advpool.BudgetFloor)+", ceiling "+fmt.Sprint(advpool.BudgetCeiling)+" — and the verdict says which rule it used. Set, it is NOT the run's total: total mutants scale with --max-shards (default "+fmt.Sprint(advpool.DefaultMaxShards)+") seats, and DOUBLE again if you name a --shadow-model. E.g. `--n-mutants 5` with 8 seats means up to ~40 full dev-suite executions; `--n-mutants 20` roughly ~320")
 	writerModel := fs.String("writer-model", "", "model for the test-writer role — REQUIRED, corral has no default models. Takes a registry alias (.corral/models.json) or a concrete model name")
 	criticModel := fs.String("critic-model", "", "model for the test-critic role, which must differ from the writer's; \"off\" disables the critic entirely (it is advisory and never gates the verdict, so a single-vendor run with only one usable model can drop it). No default")
 	mutantModel := fs.String("mutant-model", "", "model for the mutant-generator role — REQUIRED, corral has no default models. Takes a registry alias (.corral/models.json) or a concrete model name")
@@ -1201,6 +1201,18 @@ func normalizedConcurrency(d *adequacy.Disclosure) advpool.Concurrency {
 	return advpool.Concurrency{Trees: d.Trees, Note: d.Note, Shared: d.Shared}
 }
 
+// mutantRoundCost is half the workspace probe's duration: the probe ran the
+// file's selected command in every tree at once, twice (baseline, canary),
+// so half of it is one round of Trees suite runs under the contention the
+// real dev pass will see — a measurement of what grading Trees mutants
+// costs, not an estimate. 0 whenever the probe did not run.
+func mutantRoundCost(d *adequacy.Disclosure) time.Duration {
+	if d == nil || d.Trees < 2 || d.ProbeDuration <= 0 {
+		return 0
+	}
+	return d.ProbeDuration / 2
+}
+
 // poolDuration is what the workspace substrate spent before it could score
 // anything: copying the checkout into N private trees, then probing them with
 // the baseline and the canary. Both halves come from the ONE Disclosure the
@@ -1218,9 +1230,12 @@ func poolDuration(d *adequacy.Disclosure) time.Duration {
 }
 
 func newAuditRunSpec(in localAuditInput, roles auditRoles, subj runSubject) advpool.RunSpec {
+	// 0 is not "5": it is "derive the budget from the file's complexity" —
+	// see advpool.PlanShards. Only an operator who typed --n-mutants sets
+	// the per-seat number by hand, and the verdict says which it was.
 	n := in.nMutants
-	if n <= 0 {
-		n = 5
+	if n < 0 {
+		n = 0
 	}
 	return advpool.RunSpec{
 		Repo: subj.repo, Commit: subj.commit, Goal: strings.TrimSpace(in.goal),
@@ -1256,9 +1271,16 @@ func newAuditRunSpec(in localAuditInput, roles auditRoles, subj runSubject) advp
 		// — see advpool.RunSpec.SelectionDuration.
 		SelectionDuration: in.selectionDuration,
 		PoolDuration:      poolDuration(in.concurrency),
-		NMutants:          n,
-		Lang:              subj.lang,
-		MaxShards:         resolveMaxShards(in.maxShards),
+		// The clock the budget is fitted to (advpool.PlanShards): the
+		// per-file deadline, and a MEASURED cost of one round of mutants —
+		// half the probe, which ran this file's own selected command in
+		// every tree twice. 0 when no probe ran (a pool of one, the jail),
+		// and then nothing is fitted and nothing claims to have been.
+		Deadline:        in.timeout,
+		MutantRoundCost: mutantRoundCost(in.concurrency),
+		NMutants:        n,
+		Lang:            subj.lang,
+		MaxShards:       resolveMaxShards(in.maxShards),
 		// Both challenger seats, from the SAME resolved struct the
 		// RoleAssignment was built from — so a seat that is named, paid for and
 		// recorded is also a seat the driver can actually run.
@@ -1507,7 +1529,7 @@ func auditOneFile(ctx context.Context, in localAuditInput) (advpool.Verdict, err
 	} else {
 		fmt.Fprintf(stdout, "swarm: %d concurrent model calls (default; --swarm overrides)\n", swarm)
 	}
-	shards := advpool.ShardSymbols(sigs, rs.MaxShards)
+	shards, budget := advpool.PlanShards(sigs, rs)
 	if len(shards) > 0 {
 		packed := 0
 		for _, sh := range shards {
@@ -1518,6 +1540,9 @@ func auditOneFile(ctx context.Context, in localAuditInput) (advpool.Verdict, err
 		fmt.Fprintf(stdout, "regions: 1 generator seat (whole file — no symbol surface extracted)\n")
 	} else {
 		fmt.Fprintf(stdout, "regions: 1 generator seat (whole file — too few functions to split)\n")
+	}
+	if rs.PresetMutants == nil {
+		fmt.Fprintf(stdout, "mutants: %s\n", budget)
 	}
 	// len(shards) is the shadow seat count too — one challenger per PRIMARY
 	// region, never a separate partition (see RoleMutantGeneratorShadow).

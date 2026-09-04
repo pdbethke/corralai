@@ -209,6 +209,13 @@ type Row struct {
 	// shard fell back to the whole file (including every unsharded run).
 	// "" for a row from before this disclosure existed — never fabricated.
 	PromptShape string
+	// MutantBudget / MutantBudgetRule / Complexity mirror
+	// scanstore.File's: how many faults the seats were asked for, by which
+	// rule, and the file's summed complexity. NULL for a row from before
+	// these columns or a run that generated nothing — never a fabricated 0.
+	MutantBudget     *int
+	MutantBudgetRule string
+	Complexity       *int
 	// CoveringTests mirrors scanstore.File.CoveringTests: the number of
 	// tests the selection evidence showed execute this file. *int, and NULL
 	// for a row from a scan where the evidence never measured this file

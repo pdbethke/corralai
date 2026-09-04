@@ -52,7 +52,7 @@ at signing time and verify against it offline, no such flag needed.
 Key flags: `--repo-dir <path>` audits the file in the context of a whole cloned
 repo; `--swarm N` bounds concurrent audit tasks (0 = auto-size to cores);
 `--record <file>.json` writes a replayable tape; `--max-shards` /
-`--n-mutants` control how many mutants get scored; `--shadow-model` runs a
+`--n-mutants` sets the mutant budget by hand (by default it is derived from the file's complexity and fitted to `--timeout`); `--shadow-model` runs a
 second challenger model for a scorecard-only head-to-head (never affects the
 verdict); `--matrix` re-scores every dev test alone against the run's mutants
 for a per-test adequacy readout + a safe-to-delete candidate list (costly,

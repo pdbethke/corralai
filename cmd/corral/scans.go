@@ -222,10 +222,10 @@ func runScansShow(args []string, open func(string) (scansReader, error), stdout,
 	spreads := mutantSpreads(mutants)
 
 	tw := tabwriter.NewWriter(stdout, 0, 2, 2, ' ', 0)
-	fmt.Fprintln(tw, "PATH\tDISPOSITION\tREASON\tKILL RATE\tSURVIVORS\tPROVEN\tSELECTION\tCONCURRENCY\tEVIDENCE\tNOTE\t")
+	fmt.Fprintln(tw, "PATH\tDISPOSITION\tREASON\tKILL RATE\tMUTANTS\tSURVIVORS\tPROVEN\tSELECTION\tCONCURRENCY\tEVIDENCE\tNOTE\t")
 	for _, f := range files {
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%d\t%d\t%s\t%s\t%s\t%s\t\n",
-			f.Path, f.Disposition, f.Reason, formatKillRate(f.KillRate),
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%d\t%d\t%s\t%s\t%s\t%s\t\n",
+			f.Path, f.Disposition, f.Reason, formatKillRate(f.KillRate), scanFileBudget(f),
 			f.Survivors, f.ProvenMissed, scanFileSelectionWith(f, spreads[f.Path]),
 			concurrencyDisclosure(f.Trees, f.ConcurrencyNote, splitSharedDirs(f.SharedDirs)),
 			f.Evidence, scanFileNote(f))
@@ -615,4 +615,19 @@ func denominatorNote(f scanstore.File) string {
 		parts = append(parts, fmt.Sprintf("%d region(s) dropped, unprobed", n))
 	}
 	return strings.Join(parts, "; ")
+}
+
+// scanFileBudget renders the exam's size and rule for one row — "8 (complexity)",
+// "18 (complexity-fitted)", "40 (explicit)" — or an em dash for a row that
+// recorded no budget (a replayed set, or a scan from before the column). A
+// kill rate over 8 mutants and one over 40 are different measurements, and
+// the column is what keeps a reader from ranking them as one.
+func scanFileBudget(f scanstore.File) string {
+	if f.MutantBudget == nil || *f.MutantBudget <= 0 {
+		return "—"
+	}
+	if f.MutantBudgetRule == "" {
+		return fmt.Sprint(*f.MutantBudget)
+	}
+	return fmt.Sprintf("%d (%s)", *f.MutantBudget, f.MutantBudgetRule)
 }

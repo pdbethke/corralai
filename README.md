@@ -361,8 +361,9 @@ ranking; it never staffs a seat.
 
 The levers that bound it: `corral doctor` (below) catches environment failures for
 free before a run spends anything; `--top` bounds a whole-repo scan to the
-highest-ranked N candidates instead of auditing every file; `--n-mutants` bounds the
-per-shard mutant budget; and `--mutants`/`--record-mutants` let you pin a recorded
+highest-ranked N candidates instead of auditing every file; the mutant budget is
+sized to each file's complexity and fitted to your `--timeout` from a measured
+suite cost (below), and `--n-mutants` sets it by hand; and `--mutants`/`--record-mutants` let you pin a recorded
 mutant set and replay it — comparing runs, or re-grading after a fix, without paying
 for a fresh generator call. There is no cache that makes a slow suite fast; these
 bound *how many times* the suite runs, not how long each run takes.
@@ -491,10 +492,9 @@ there: no jail, no brain, no separate infra. It mutates the runner's checkout
 in place and grades each mutant with your own test command — the runner
 itself is the isolation boundary, so this is for CI, not a working tree you
 care about. Scoped to the PR's changed files by default (auditing every file
-on every PR is expensive — an ESTIMATE of ~40 suite runs per file, from the
-stock 5 mutants x 8 shards; it is not a measured figure and doubles only if you
-name a --shadow-model); a whole-repo run
-is opt-in. By default a weak-but-gradable kill rate still exits 0 — the
+on every PR is expensive — between 5 and 40 suite runs per file, one per
+mutant, the count set by the file's complexity; it doubles only if you name a
+--shadow-model); a whole-repo run is opt-in. By default a weak-but-gradable kill rate still exits 0 — the
 opt-in `min-kill-rate` input (`--min-kill-rate` on the CLI) fails the run
 when any *individual* audited file scores below the threshold you set. See
 **[docs/corral/github-action.md](docs/corral/github-action.md)**.
@@ -503,9 +503,8 @@ when any *individual* audited file scores below the threshold you set. See
 --repo --preflight` runs the project's test suite **one extra time**, with
 coverage instrumentation, and reports which source files it never touches at
 all — a whole-repo inventory for the cost of one suite run, instead of the
-~40-suite-runs-per-file the adversarial audit itself costs (the same estimate as
-above, from the same stock defaults — an earlier ~84 appeared here with no derivation
-anywhere in the tree, twelve lines from the figure it contradicted). It's
+5-to-40-suite-runs-per-file the adversarial audit itself costs (one per mutant;
+see the budget below). It's
 **coverage-grade evidence, not proof**: instrumentation has blind spots
 (subprocesses, dynamic imports, native extensions), so the report separates
 what it actually knows into three buckets — files the suite **executed**,
@@ -793,8 +792,23 @@ that is a deliberate act, is in
 - **Sharded generation.** The file's top-level functions are bin-packed
   (complexity-balanced, deterministic) into up to `--max-shards` (default 8) generator
   seats, each attacking a different group of functions, so **every function gets
-  probed** instead of whatever one generator happened to pick. `--n-mutants` (default
-  5) is a **per-shard** budget; the default 8 shards means up to ~40 mutants scored.
+  probed** instead of whatever one generator happened to pick.
+- **The mutant budget — sized to the file, fitted to the clock.** How many faults
+  a file is planted with is derived from its **complexity**: about one per
+  decision point, floor 5, ceiling 40, split across the seats by each seat's
+  share. Before this existed the exam was flat — every seat asked for 5, so a
+  file of eight one-line wrappers got 39 faults and a file of real logic got the
+  same — and on `psf/requests` that put most of a four-hour run into files with
+  the least to get wrong (`api.py`: complexity 8, 39 mutants, 36 survivors,
+  timed out). Under `--substrate workspace` the budget is also **fitted to your
+  `--timeout`** from a *measured* cost: the concurrency probe already ran this
+  file's own selected tests in every tree, twice, so half of it is what one round
+  of mutants costs, and a budget that would not grade inside half the deadline is
+  lowered — never below the floor — under its own rule name. `--n-mutants N` sets
+  a per-seat budget by hand instead; it is never fitted, but the header warns when
+  it cannot fit. **Every verdict, ledger row and signed statement carries the
+  budget and its rule** (`complexity`, `complexity-fitted`, `explicit`, `default`),
+  because a kill rate over 8 mutants and one over 40 are different measurements.
 - **The shadow challenger.** `--shadow-model <model>` fans a challenger
   mutant-generator seat across every region for a region-controlled,
   execution-proven head-to-head between generator models — same file, same goal,

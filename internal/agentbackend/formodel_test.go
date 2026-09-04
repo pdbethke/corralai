@@ -159,3 +159,39 @@ func TestForModelGeminiIgnoresTheOpenAIBaseURL(t *testing.T) {
 		t.Errorf("base = %q, want CORRALAI_GEMINI_BASE_URL honoured", ob.base)
 	}
 }
+
+// TestOpenRouterReadsItsOwnKey: the seventh (claims) review found
+// OPENROUTER_API_KEY documented in three places and read by nothing — the
+// openrouter arm read OPENAI_API_KEY and defaulted to api.openai.com, so the
+// documented setup sent an unauthenticated request to the wrong host.
+func TestOpenRouterReadsItsOwnKey(t *testing.T) {
+	resetCredsMemoForTest(t)
+	keyring.MockInit()
+	t.Setenv("CORRAL_CREDS_DIR", t.TempDir())
+	t.Setenv("CREDENTIALS_DIRECTORY", "")
+	t.Setenv("MODEL_BACKEND", "openrouter")
+	t.Setenv("OPENROUTER_API_KEY", "sk-or-test")
+	t.Setenv("OPENAI_API_KEY", "")
+	t.Setenv("OPENAI_BASE_URL", "")
+	t.Setenv("OPENROUTER_BASE_URL", "")
+
+	b := FromEnv()
+	ob, ok := b.(*openaiBackend)
+	if !ok {
+		t.Fatalf("FromEnv() = %T, want *openaiBackend", b)
+	}
+	if ob.key != "sk-or-test" {
+		t.Errorf("key = %q, want OPENROUTER_API_KEY", ob.key)
+	}
+	if !strings.Contains(ob.base, "openrouter.ai") {
+		t.Errorf("base = %q, want OpenRouter's endpoint by default", ob.base)
+	}
+	// The older configuration keeps working.
+	t.Setenv("OPENROUTER_API_KEY", "")
+	t.Setenv("OPENAI_API_KEY", "sk-oai")
+	t.Setenv("OPENAI_BASE_URL", "http://127.0.0.1:1/v1")
+	resetCredsMemoForTest(t)
+	if ob := FromEnv().(*openaiBackend); ob.key != "sk-oai" || ob.base != "http://127.0.0.1:1/v1" {
+		t.Errorf("fallback = %q @ %q, want the OPENAI_* configuration honoured", ob.key, ob.base)
+	}
+}

@@ -401,11 +401,16 @@ func (w *WorkspaceRunner) applyRunRestore(ctx context.Context, files map[string]
 	// returns, regardless of how the command exited. See WithPerRunEnv's
 	// doc comment for why per-call freshness (not just "set once, reused")
 	// is what actually closes the hole it exists for.
+	// Never corral's own secrets. The project's suite gets the host
+	// environment it needs to run, minus every provider key and token corral
+	// holds — see sandbox.ScrubbedEnviron. Set unconditionally: a nil
+	// cmd.Env inherits the process environment whole, keys included.
+	cmd.Env = sandbox.ScrubbedEnviron()
 	if w.perRunEnv != nil {
 		extra, envCleanup := w.perRunEnv()
 		defer envCleanup()
 		if len(extra) > 0 {
-			cmd.Env = append(os.Environ(), extra...)
+			cmd.Env = append(cmd.Env, extra...)
 		}
 	}
 	// The wall-clock bound above is only a bound on the CONTEXT; without

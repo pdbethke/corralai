@@ -179,9 +179,16 @@ func FromEnv() Backend {
 		if env("MODEL_BACKEND", "") == "openai" {
 			return newOpenAIBackend(agentSecret("OPENAI_API_KEY"), model)
 		}
+		// MODEL_BACKEND=openrouter: the docs said "one OpenRouter key
+		// covers gemini + gpt + claude" and named OPENROUTER_API_KEY in
+		// three places — and nothing read it. The arm read OPENAI_API_KEY
+		// and defaulted the base to api.openai.com, so the documented setup
+		// sent an unauthenticated request to OpenAI. OpenRouter's own
+		// variable and endpoint come first; the OpenAI ones stay as the
+		// fallback for operators who configured it that way.
 		return &openaiBackend{
-			base:  openAIBase(),
-			key:   agentSecret("OPENAI_API_KEY"),
+			base:  env("OPENROUTER_BASE_URL", env("OPENAI_BASE_URL", "https://openrouter.ai/api/v1")),
+			key:   firstSecret("OPENROUTER_API_KEY", "OPENAI_API_KEY"),
 			model: model,
 		}
 	case "anthropic", "claude":
@@ -244,6 +251,16 @@ func geminiBase(pinned bool) string {
 		return base
 	}
 	return "https://generativelanguage.googleapis.com/v1beta/openai"
+}
+
+// firstSecret resolves the first non-empty credential among names.
+func firstSecret(names ...string) string {
+	for _, n := range names {
+		if v := agentSecret(n); v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 func geminiKey() string {

@@ -12,6 +12,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/pdbethke/corralai/internal/creds"
 	"io"
 	"os"
 	"os/exec"
@@ -134,6 +135,32 @@ func MinimalEnv() []string {
 		}
 	}
 	return env
+}
+
+// ScrubbedEnviron is the host environment WITHOUT corral's own secrets: every
+// provider key it knows by name (creds.CanonicalNames, plus GOOGLE_API_KEY
+// and the MotherDuck token) is dropped; everything else — PATH, HOME, GOPATH,
+// GOFLAGS, a venv, CI variables — is kept, because the audited suite needs
+// its environment to run. This is what the WORKSPACE substrate hands the
+// project's test command. The jail hands MinimalEnv; the workspace runner
+// used to hand os.Environ() whole, and on a runner that exports
+// ANTHROPIC_API_KEY/GEMINI_API_KEY for corral's own seats, a PR editing
+// `package.json`'s "test" script, a Rakefile or a phpunit bootstrap could
+// print them. Reproduced by the sixth review with `env | grep _API_KEY`.
+func ScrubbedEnviron() []string {
+	drop := map[string]bool{"GOOGLE_API_KEY": true, "motherduck_token": true, "MOTHERDUCK_TOKEN": true}
+	for _, n := range creds.CanonicalNames {
+		drop[n] = true
+	}
+	var out []string
+	for _, kv := range os.Environ() {
+		k, _, _ := strings.Cut(kv, "=")
+		if drop[k] {
+			continue
+		}
+		out = append(out, kv)
+	}
+	return out
 }
 
 // Run executes command under the isolation backend in the workspace under the guardrails.

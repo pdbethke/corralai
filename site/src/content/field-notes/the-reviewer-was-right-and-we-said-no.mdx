@@ -1,6 +1,6 @@
 ---
 title: "We put five strangers on our own code"
-description: "Eleven pull requests in three days, every one of them a defect found by a model that had never seen the repository — including a private signing key committed to a public repo and a 'proven' bug that could be fabricated. A field note on cross-model adversarial review: what it found, what it got wrong, and the one time we overruled a reviewer who was right."
+description: "Eleven pull requests in three days, every one of them a defect found by a model that had never seen the repository — including a 'proven' bug that could be fabricated and a trust anchor that shipped with a default. A field note on cross-model adversarial review: what it found, what it got wrong, and the one time we overruled a reviewer who was right."
 pubDate: 2026-09-04
 draft: false
 ---
@@ -40,17 +40,6 @@ merged between 2026-09-03 and 2026-09-04.
 
 ## What the strangers found
 
-**A private key in a public repository.** The console bundle a client renders
-is signed, and the client pins the signing key. The pinned key's *seed* was
-committed to the public repo as a development convenience. Anyone who could
-read GitHub could sign a bundle every client would trust and render — with the
-session's own bearer token. Nothing had been compromised; the key had simply
-never been secret, which is worse: a signature anyone can produce does not
-weaken a guarantee, it inverts it. Found by a reviewer who derived the public
-key from the committed seed and compared it to the pinned constant. Fixed in
-#230: there is no default trust anchor now. A daemon without an operator-set
-public key refuses, naming the two commands that fix it.
-
 **A "proven" bug that could be fabricated.** Corral's headline number is a
 survivor — a planted bug your tests missed — that a model-written test then
 kills *by execution*. The grading command for each survivor was never run on
@@ -61,6 +50,19 @@ gap proven by execution. Reproduced on a mutant that is genuinely
 unobservable: `2*2` replaced with `2+2`. Fixed in #232: every distinct grading
 command is now proven on compliant code before it may decide anything, and the
 proven count is the length of the killed list, never a subtraction.
+
+**A default trust anchor.** The console bundle a client renders is signed,
+and the client verifies the signature against a pinned public key. The
+pinned key had a *default* — a development keypair whose seed lives in the
+repository, as fixtures do — and nothing required an operator to replace it.
+So the default anchor was a key anyone holds: a reviewer derived the public
+half from the committed seed, compared it to the pinned constant, and had a
+signature every client would accept. Nothing had been compromised; a default
+had simply been trusted. Corral already had a rule for this — it has no
+default models, because a default is a choice nobody made — and had not
+applied it to its own trust anchor. Fixed in #230: there is no default now. A
+daemon with no operator-set public key refuses, naming the two commands that
+fix it.
 
 **The deployed brain served a console every client refused.** The signed
 manifest includes the version string. The committed signature covered `dev`;
@@ -159,8 +161,8 @@ Three things, none of them clever.
 
 *The reviewer had no context.* Every finding above was invisible to the
 session that wrote the code, because that session knew what the code was
-*for*. A stranger only knows what it *does*. The private key looked like a
-fixture to us. It looked like a private key to someone who had not written the
+*for*. A stranger only knows what it *does*. The default anchor looked like a
+fixture to us. It looked like a key to someone who had not written the
 fixture.
 
 *Every finding had to be executed.* "This looks wrong" was not accepted. The

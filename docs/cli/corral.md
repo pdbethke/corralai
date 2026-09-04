@@ -72,7 +72,8 @@ Usage:
                                   bug-catching ledger; unreachable REFUSES, never falls back)
                                   --seat <role>  --lang <name>  --min-runs n  --json
   corral criticscore list         list execution-checked test-critic findings still awaiting human
-                                  adjudication (requires CORRAL_BRAIN — no offline mode)
+                                  adjudication — the local store certify --local writes, or a
+                                  running brain's when CORRAL_BRAIN is set
   corral criticscore show <id>    print one finding in full (model, target test, evidence)
   corral criticscore confirm <id> record a human "confirmed" verdict — the finding was real
   corral criticscore refute <id>  record a human "refuted" verdict — the finding was wrong
@@ -553,7 +554,7 @@ Usage of certify --repo:
   -shadow-model string
     	challenger model that attacks every region a SECOND time. OFF unless named. Recorded for comparison — NEVER gates the verdict
   -shadow-writer-model string
-    	CHALLENGER test-writer: a second writer attacks the SAME survivors as the primary, so the two seats' misses can be compared (Jaccard over survivors, Cohen's kappa). Measurement only — it NEVER gates the verdict. OFF unless named. Recording the per-mutant outcomes additionally needs --mutant-attempts-db
+    	CHALLENGER test-writer: a second writer attacks the SAME survivors as the primary, so the two seats' misses can be compared (Jaccard over survivors, Cohen's kappa). Measurement only — it NEVER gates the verdict. OFF unless named. The per-file Jaccard/kappa land in the scan ledger with --record and in a warehouse with --push; the per-mutant attempt rows are not recorded on the repo path
   -substrate string
     	where the audit runs: jail (bwrap) or workspace (mutate --repo in place; the caller IS the isolation boundary, e.g. an ephemeral CI runner) (default "jail")
   -swarm int

@@ -2,23 +2,23 @@
 // SPDX-License-Identifier: Elastic-2.0
 ---
 <section class="section" id="learning-loop">
-  <h2>It learns</h2>
+  <h2>It measures its own models</h2>
   <p>
-    Every audit is graded by execution, and the results feed a
-    <strong>gate-earned leaderboard</strong>: corral tracks which model
-    actually <em>catches</em> bugs — per role, per language, measured from real
-    kill-rates and survivors, never self-reported — and routes each audit's
-    roles (fault-planter, test-critic) to the best-fit model for the job.
-    Recurring blind spots and clusters of similar lessons are swept into
-    proposals: an LLM drafts corrective guidance plus a reusable skill, and the
-    operator approves or rejects it — from a Proposals tab (a live count badge)
-    or <code>corral-admin proposals</code>. Approval promotes the guidance into
-    vetted memory and a versioned skill artifact, synced to every fleet member
-    by <code>corral sync</code> and visible in the Skills tab. From there it's
-    <em>pull</em>, not push: the herd itself searches that corpus
-    (<code>search_memory</code>) before working, the same way any agent reaches
-    for a reference. And the loop watches its own efficacy: if the same blind
-    spot keeps surviving after promotion, a revision proposal reopens for the
-    human to reconsider.
+    Every audit is graded by execution, and the record says which model did
+    what: which generator's faults survived, which writer's tests proved a gap,
+    which critic's findings a person later confirmed — per seat, per language,
+    never self-reported. <code>corral models rank</code> reads that evidence
+    back from a warehouse you pushed to and ranks the seats. It prints a
+    ranking; it never staffs one — <strong>every seat is named by you</strong>,
+    and no audit picks its own auditors.
+  </p>
+  <p>
+    The optional <strong>brain</strong> daemon carries a second loop for a
+    coordinated herd: recurring blind spots are swept into proposals, an
+    operator approves or rejects them, and approved guidance becomes vetted
+    memory and a versioned skill that a mission worker can search. That loop
+    is brain-only — <strong>nothing in it is read by an audit</strong>, and
+    corral does not yet measure whether a promoted lesson improves a later run.
+    Mechanism, not a proven effect.
   </p>
 </section>

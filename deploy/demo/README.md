@@ -106,7 +106,7 @@ corral certify --local --code path/to/file.py --goal "..." \
 `--record` writes a replayable tape (the pool's reasoning beats, the task
 lifecycle, the findings) in the same `{events:[…]}` shape the corralai.dev
 cockpit replays — scrub bar, up to 16×, real captured reasoning. See the root
-[README.md](../../README.md#watch-it-back--every-run-recorded-and-replayable)
+[docs/corral/brain.md](../../docs/corral/brain.md#watch-it-back--every-run-recorded-and-replayable)
 and the live gallery at [corralai.dev](https://corralai.dev/recordings).
 
 ### Ask the brain about the codebase (the corpus, queried)

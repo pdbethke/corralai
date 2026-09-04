@@ -12,12 +12,20 @@ description: The brain is an MCP server — certify, the gates, and the herd doi
     artifacts.go, browser.go, thought.go, activity.go, tasks.go, missions.go).
     Descriptions paraphrase each tool's own registered Description. */}
 
+:::note[The brain — optional, and not read by any audit]
+This page describes the **brain**, corral's optional coordination daemon. Nothing on it is required for a verdict: `corral certify`, the GitHub Action, `verify`, `ui`, `seal` and `scans` never contact a brain. And nothing on it is read by an audit — an audit's prompts are built from the goal, the code and its symbols, never from shared memory, skills or a prior run. See [the brain, and what it is not](https://github.com/pdbethke/corralai/blob/main/docs/corral/brain.md).
+:::
+
 The corral brain is **MCP-native**: `corral` serves `/mcp/` (and `/healthz`) on
-`$CORRALAI_ADDR`. Every audit action — certifying a build, staging a control,
-claiming and running work in the jail, reading and writing shared knowledge —
-is an MCP tool call to the brain, which records it as an attributed side
-effect. An MCP-native client (an agent, an operator's CLI, an IDE) points its
-`.mcp.json` at the brain's endpoint and gets the tools below.
+`$CORRALAI_ADDR`. Every action taken *through the brain* — ingesting a build,
+staging a control, claiming and running mission work in the jail, reading and
+writing shared knowledge — is an MCP tool call, which the brain records as an
+attributed side effect. That is the brain path only: `corral certify --local`,
+`certify --repo` and the GitHub Action never contact a brain, call none of
+these tools, and record nothing here — their record is the `--record` tape,
+the `--record`/`--push` ledger, or the `--attest` statement. An MCP-native
+client (an agent, an operator's CLI, an IDE) points its `.mcp.json` at the
+brain's endpoint and gets the tools below.
 
 Access is enforced per call: workers get the coordination + work tools;
 admin/superuser tools are gated; some (like sharing a recording) are

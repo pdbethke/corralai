@@ -22,7 +22,11 @@ Every corral audit writes its whole life into a local DuckDB file: one row
 per scan, one per file at every disposition, one per planted bug with its
 fate (`killed`/`survived`, by which test, in how many milliseconds), one per
 model call with its tokens, and the run's event stream. Not logs — *tables*.
-The difference matters, because you can't `GROUP BY` a log.
+The difference matters, because you can't `GROUP BY` a log. [Update
+2026-09-04: to be exact, this is `corral certify --repo --record` — the scan
+ledger is off unless `--record` is passed, and `certify --local` writes its
+signed verdict and scorecard stores but no scan ledger. The runs in this note
+were recorded.]
 
 Then we spent two days optimizing the tool, and the discipline we enforce on
 everything held: no change ships unless the numbers before and after come
@@ -74,7 +78,9 @@ provider. We shipped the column, not the assumption.
 
 All of this happened against a local file. But the same rows now push — in
 one transaction, linked by hash to the signed audit statement — to a
-warehouse *you* own: any DuckDB, including [MotherDuck](https://motherduck.com)
+warehouse *you* own [Update 2026-09-04: the hash link exists only when the
+scan also ran with `--attest`; without it the `statement_sha256` column is
+left empty rather than fabricated]: any DuckDB, including [MotherDuck](https://motherduck.com)
 if you want it shared. corral hosts nothing and keeps nothing. The design
 goal is blunt: one audit per pull request, forty pull requests, one place
 where "how is our test suite actually doing, and what does it cost us" is a

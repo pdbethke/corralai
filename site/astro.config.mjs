@@ -55,41 +55,48 @@ export default defineConfig({
             // First: it is the vocabulary every other page assumes, and the
             // answer to "isn't this just mutation testing?".
             { label: 'Mutants, survivors, kill rates', slug: 'docs/concepts/mutation-testing' },
-            { label: 'The task queue + verify gate', slug: 'docs/concepts/queue-and-verify' },
-            { label: 'Claims & leases', slug: 'docs/concepts/claims-and-leases' },
-            { label: 'Memory tiers + the learning loop', slug: 'docs/concepts/memory-and-learning-loop' },
-            { label: 'Mission history + replay', slug: 'docs/concepts/history-and-replay' },
             { label: 'Multi-model herds', slug: 'docs/concepts/multi-model-herds' },
-            { label: 'The knowledge corpus', slug: 'docs/concepts/knowledge-corpus' },
             { label: 'Trust & security', slug: 'docs/concepts/trust-and-security' },
           ],
         },
         { label: 'The DuckDB warehouse', slug: 'docs/warehouse' },
-        { label: 'Running it', slug: 'docs/running-it' },
         { label: 'Configuration', slug: 'docs/configuration' },
-        { label: 'MCP tools reference', slug: 'docs/mcp-tools' },
-        { label: 'Publishing recordings', slug: 'docs/publishing-recordings' },
         {
-          // The cockpit is a post-mortem instrument, not the front door: you
-          // never need it to run the gate. Kept, documented, and placed after
-          // the material someone adopting corral actually needs.
-          label: 'The UI, tab by tab (post-mortem)',
+          // The daemon is optional infrastructure: nothing in it is required
+          // for a verdict, and nothing in it is read by one. Grouped so a
+          // reader adopting the audit never has to walk through it — the
+          // "too many moving parts" a first read used to meet was mostly
+          // this group, unlabelled, interleaved with the audit's pages.
+          label: 'The brain (optional — not read by any audit)',
+          collapsed: true,
           items: [
-            { label: 'Records (default landing view)', slug: 'docs/ui-tour/records' },
-            { label: 'The corral (canvas view)', slug: 'docs/ui-tour/corral' },
-            { label: 'Progress', slug: 'docs/ui-tour/progress' },
-            { label: 'Topology', slug: 'docs/ui-tour/topology' },
-            { label: 'Memory', slug: 'docs/ui-tour/memory' },
-            { label: 'Skills', slug: 'docs/ui-tour/skills' },
-            { label: 'Proposals', slug: 'docs/ui-tour/proposals' },
-            { label: 'Completed + replay + agent windows', slug: 'docs/ui-tour/completed-and-replay' },
+            { label: 'Running it', slug: 'docs/running-it' },
+            { label: 'The task queue + verify gate', slug: 'docs/concepts/queue-and-verify' },
+            { label: 'Claims & leases', slug: 'docs/concepts/claims-and-leases' },
+            { label: 'Memory tiers + the learning loop', slug: 'docs/concepts/memory-and-learning-loop' },
+            { label: 'The knowledge corpus', slug: 'docs/concepts/knowledge-corpus' },
+            { label: 'Mission history + replay', slug: 'docs/concepts/history-and-replay' },
+            { label: 'MCP tools reference', slug: 'docs/mcp-tools' },
+            { label: 'Publishing recordings', slug: 'docs/publishing-recordings' },
+            {
+              // The cockpit is a post-mortem instrument, not the front door.
+              label: 'The UI, tab by tab (post-mortem)',
+              items: [
+                { label: 'Records (default landing view)', slug: 'docs/ui-tour/records' },
+                { label: 'The corral (canvas view)', slug: 'docs/ui-tour/corral' },
+                { label: 'Progress', slug: 'docs/ui-tour/progress' },
+                { label: 'Topology', slug: 'docs/ui-tour/topology' },
+                { label: 'Memory', slug: 'docs/ui-tour/memory' },
+                { label: 'Skills', slug: 'docs/ui-tour/skills' },
+                { label: 'Proposals', slug: 'docs/ui-tour/proposals' },
+                { label: 'Completed + replay + agent windows', slug: 'docs/ui-tour/completed-and-replay' },
+              ],
+            },
           ],
         },
         {
           // Generated mechanically by scripts/gen-cli-docs.sh from each
-          // binary's own -h output — never hand-written. Now that Task 4 has
-          // written the pages, these are real `slug` entries (not `link`),
-          // which gets Starlight's prev/next + active-link handling.
+          // binary's own -h output — never hand-written.
           label: 'CLI reference',
           items: [
             { label: 'corral', slug: 'docs/cli/corral' },

@@ -6,6 +6,10 @@ description: How agents claim files and branches without stepping on each other.
 {/* SPDX-License-Identifier: Elastic-2.0 */}
 {/* Source: docs/corral/claims-and-leases.md; internal/coord/store.go */}
 
+:::note[The brain — optional, and not read by any audit]
+This page describes the **brain**, corral's optional coordination daemon. Nothing on it is required for a verdict: `corral certify`, the GitHub Action, `verify`, `ui`, `seal` and `scans` never contact a brain. And nothing on it is read by an audit — an audit's prompts are built from the goal, the code and its symbols, never from shared memory, skills or a prior run. See [the brain, and what it is not](https://github.com/pdbethke/corralai/blob/main/docs/corral/brain.md).
+:::
+
 Before editing, an agent **claims** the paths (and, for repo-work missions,
 the branch) it's about to touch. `ClaimPaths` is the claim broker: agents
 lease paths before touching them, so concurrent agents can see — and, for

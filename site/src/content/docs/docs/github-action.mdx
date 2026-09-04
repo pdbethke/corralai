@@ -252,9 +252,10 @@ your key, your runner, your database — and any DuckDB works, so this is a
 destination rather than a lock-in.
 
 It is append-only, because a receipt you can `UPDATE` is not a receipt and
-overwriting is how a trend is lost. Every row carries the sha256 of the signed
-statement it came from and the run URL, so a row traces back to something a
-third party can verify.
+overwriting is how a trend is lost. Every row carries the run URL, and — only
+when `attest:` is also set — the sha256 of the signed statement it came from,
+so a row traces back to something a third party can verify. Without `attest:`,
+`statement_sha256` is left empty rather than fabricated.
 
 What it is for is the question a single run cannot answer. A kill rate is a
 **sample**: mutants are generated fresh each time, and the same unchanged file

@@ -49,6 +49,13 @@ is the honest version: what it can't do yet, and what's next.
   scoring (`--swarm` trees), probe + recursive test pairing, `doctor`↔`run`
   sandbox parity, and a PEP-735 dependency-group hint — all shipped, not
   roadmap.
+- **Coverage-evidence candidacy.** A library file the run's coverage evidence
+  positively measured at zero covering tests is excluded under an honest name
+  (`uncovered — no test executes this file`, `imported at load time`, `no
+  executable code`) rather than graded against nothing; a file never measured
+  keeps `no paired test`, and `--preflight` reports which source files the
+  suite never executes. The `evidence-paired · name-paired · uncovered ·
+  import-only` candidacy line on every `--repo` report is this.
 - **`time:`/`cost:`** telemetry lines on every run, so wall-clock and spend
   are visible without instrumenting anything yourself.
 - **Public transparency-log anchoring.** `corral certify --repo --attest`
@@ -139,13 +146,8 @@ From the [roadmap](https://github.com/pdbethke/corralai/blob/main/ROADMAP.md)
 (directional, not committed) — corral's arc is from a certify CLI + a merge
 gate to a full **accountability plane for AI-written code**:
 
-- **Coverage-evidence candidacy.** "Uncovered" as a first-class finding
-  alongside a proven survivor — a way to flag code a mutant never even
-  reached, not just code whose mutant went unkilled.
 - **A `--files`/`--pick` selection UI.** A way to hand-pick which files a
   `--repo` scan audits, instead of the pairing heuristic choosing for you.
-- **A PHP language plugin.** The fifth-through-sixth-language set (Go,
-  Python, Ruby, JS, TS) doesn't include PHP yet.
 - **One-command agent onboarding** and **a fleet refresh.** Independent,
   dev-driven agents joining with deterministic passive telemetry via their
   own hooks (capture by instrumentation, never self-report), and a pass over

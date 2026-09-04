@@ -86,13 +86,16 @@ corral certify verify verdict.json --pubkey "$(corral certify pubkey)" --allow-u
 `--allow-unanchored` is deliberate: a record minted off *your own* key, with no
 server, was never submitted to a public witness, so it's "signed by you, not
 third-party attested" — a weaker claim, and verify makes you say so out loud.
-Records the **brain** signs are stronger: it anchors every one to a public,
-append-only transparency log (**Sigstore Rekor**, `CORRALAI_REKOR_URL`) at signing
-time and carries the inclusion proof *inside* the record, so `corral certify verify`
-checks it **offline** against the TUF-rooted Rekor key — no round trip to the brain or
-the log — and tampering is detectable even by someone who doesn't trust the brain. A
-witness outage degrades honestly (`anchored=false`, never a fabricated proof); verify
-then refuses unless you pass `--allow-unanchored`.
+A stronger record is one a third party witnessed: `certify --repo --attest
+--transparency` logs the signed statement to **Sigstore Rekor**, a public,
+append-only log (see [the warehouse and public transparency](#in-ci--the-github-action)
+below), and the optional brain daemon anchors every record it signs the same
+way, carrying the inclusion proof *inside* the record. `corral certify verify`
+checks an anchored record against the Rekor key from Sigstore's TUF root — one
+fetch of that root, then no round trip to the log or to any server — so
+tampering is detectable by someone who trusts neither. A witness outage
+degrades honestly (`anchored=false`, never a fabricated proof); verify then
+refuses unless you pass `--allow-unanchored`.
 
 ### Audit a real repo
 
@@ -259,7 +262,7 @@ instead.**
 > auditable files**. A mapping to a file that doesn't exist is refused rather than
 > silently falling back, so a typo is visible. Both the `express` zero AND the mapped
 > result are pinned in CI so neither can be quietly papered over; see [the foreign-repo
-> sweep](#the-gate--for-a-repo-and-for-a-control-owner) below.
+> sweep](#in-ci--the-github-action) below.
 
 One key can satisfy the distinctness rule on its own — name two different models
 from the same provider (Sonnet writing and mutating, Haiku critiquing, say) — though
@@ -269,11 +272,13 @@ the critic to Gemini via the OpenAI-compatible Google endpoint, a real cross-ven
 critic, while the writer and mutant-generator stay on whatever you named — a missing
 key fails the run closed rather than silently falling back.
 
-Cross-vendor routing is **one-directional by design**: it applies to the critic, and
-only when you have *not* pinned `MODEL_BACKEND`. Setting `MODEL_BACKEND` explicitly
-means "every role on this endpoint," so pointing a whole run at one vendor and then
-naming a critic from a different one sends that model to the wrong endpoint. For a
-deliberately single-vendor run, use **`--critic-model off`**: the critic is advisory
+**Every seat routes by the model you name.** A Gemini generator, a Claude writer
+and a GPT critic each go to their own vendor's endpoint, each needing its own key,
+and a missing key refuses the run before anything is spent. The one exception is a
+pinned *gateway*: `MODEL_BACKEND=openrouter` (or `ollama`) means "every seat on
+this endpoint", and a `claude-*` name is then an OpenRouter call, never re-routed
+to Anthropic behind your back. For a deliberately single-vendor run, use
+**`--critic-model off`**: the critic is advisory
 and never gates the verdict, so dropping it changes nothing about the
 execution-proven result — it only removes the second opinion. (Useful when a vendor
 offers just one model you're willing to run, since the critic must otherwise differ
@@ -346,10 +351,13 @@ workflow declares the registry through `CORRALAI_MODELS_FILE` or
 [docs/design/model-registry.md](docs/design/model-registry.md).
 
 **Which model should staff which seat?** `corral models rank` answers it from
-your own recorded runs rather than from benchmarks — proven gaps per survivor
+evidence you recorded rather than from benchmarks — proven gaps per survivor
 attempted for the writer, missed-fault yield for the generator, adjudicated
-precision for the critic — and it refuses to recommend on thin evidence. It
-prints a ranking; it never staffs a seat.
+precision for the critic — and it refuses to recommend on thin evidence. Its
+evidence is what you gave it: by default the local ledger `certify --local`
+writes, or with `--db` a warehouse that `certify --repo --push` filled (a
+`--repo` scan that was never pushed left nothing for it to rank). It prints a
+ranking; it never staffs a seat.
 
 The levers that bound it: `corral doctor` (below) catches environment failures for
 free before a run spends anything; `--top` bounds a whole-repo scan to the
@@ -445,53 +453,38 @@ Not a slogan — the code refuses to do otherwise.
    *correlated* blind spots, because the "reviewer" shares the "builder's" failure
    modes when it's the same model. Distinctness raises the floor; it does not buy
    independence outright, and corral is the only tool we know of that **measures**
-   the difference rather than asserting it — see `--shadow-writer-model` below. Bring Claude, Gemini, GPT, anything
-   OpenAI-compatible, or a local model — no lock-in.
+   the difference rather than asserting it — see `--shadow-writer-model` below.
+   Bring Claude, Gemini, GPT, anything OpenAI-compatible, or a local model — no
+   lock-in.
 2. **The verdict is measured, not reported.** The gate **runs the actual check** —
    `go test`, the build, the control owner's tests, your suite against the mutants —
    itself, in the jail, and reads the result. A worker's "it passed" is never the
    verdict; it's a claim, and the claim is checked by execution. The correctness call
    is a deterministic bit, not a judgment.
-3. **It's built to be contained.** A model that writes and runs code is a security
-   problem, so corral starts from *"an agent can be hijacked"* and answers it
-   structurally: every command runs behind **fences** (a jail, a credential boundary,
-   trust-tiered knowledge), and because all traffic funnels through the brain, every
-   action is **recorded and attributable**. Prevention *and* forensics — see
-   **[SECURITY.md](SECURITY.md)**.
+3. **The boundary is named, and so is the record.** A model that writes and runs
+   code is a security problem, so corral says where the fence is instead of
+   implying one: `certify --local` runs every mutant in a `bwrap` jail (no network,
+   secret-free env, workspace-confined — the only mode, `--jail none` is refused);
+   `certify --repo --substrate workspace` runs your suite **unjailed, in your own
+   checkout**, and the caller — a CI runner, a throwaway tree — *is* the boundary,
+   which the scan header says out loud. Provider keys never sit in plaintext or a
+   process listing. And what a run keeps is opt-in and explicit: `--record` for the
+   local ledger, `--push` for a warehouse you own, `--attest` for a signed statement
+   a third party can check. Nothing is recorded that you did not ask for, and
+   nothing you asked for is fabricated — see **[SECURITY.md](SECURITY.md)**.
 
 The name is the metaphor, but the mechanism is **separation of duties**: the seat
 that writes a test, the seat that plants the fault, and the seat that reviews the
 suite are separate *duties*, and the machine refuses to let one model hold two of
 them where that would let an author grade himself. The **corral** is the enclosure
-those seats work in and the **fences** are the security boundaries; the brain
-coordinates and contains, it never does the work itself.
+those seats work in and the **fences** are the security boundaries.
 
 > **Where it's at:** pre-1.0, solo-maintained, tested honestly — every claim in this
 > README was run before it was written. Issues and verified-harness PRs welcome.
 
-## The gate — for a repo, and for a control owner
+## In CI — the GitHub Action
 
-Beyond the one-shot CLI, the headless **brain** daemon runs continuous gates that
-branch protection can require:
-
-- **The repo (merge) gate.** A poller watches each covered repo's open PRs; on a new
-  head commit it checks the PR out, runs the repo's declared check **in the jail**
-  (never a self-report), signs the result, and posts a `corral/gate` status.
-- **The control gate.** The same poll-and-jail pattern, but it runs the **control
-  owner's** independently-vetted tests against the PR head — not the repo's own check —
-  and posts a distinct `corral/control-gate` status. The person accountable for code
-  they didn't write sets the bar. It's separation of duties, mechanized: *a judge may
-  not certify herself.*
-- **Multi-forge primitives** (`internal/repo`) back both: clone, checkout,
-  commit/push, and PR/review calls against **GitHub, GitLab, and Gitea**, including
-  self-hosted instances (`CORRALAI_FORGES` maps a host to its type, API base, and
-  token) — each forge's token stays isolated to its own host.
-
-The same adversarial audit `--local` runs is available on the brain for a wired repo,
-via the admin-only `start_adversarial_run` MCP tool (see [the flags reference
-below](#the-audit-flags)).
-
-**No brain required — the GitHub Action.** `pdbethke/corralai@v0.8.3` (pin the
+**No brain, no server — the GitHub Action.** `pdbethke/corralai@v0.8.3` (pin the
 tag, or a reviewed SHA — `@main` floats) runs `corral
 certify --repo` straight in your own CI job, on the checkout that's already
 there: no jail, no brain, no separate infra. It mutates the runner's checkout
@@ -663,9 +656,11 @@ There is no `--motherduck-token` flag: a token on a command line lands in shell
 history and in every process listing on the box.
 
 `--push-source` additionally sends the pool's authored test and the full
-verdict JSON — never mutant code, which corral keeps at rest under no
-setting. Off by default: without it, a pushed row carries numbers, hashes,
-reasons, and model names, and no source leaves the box.
+verdict JSON — never mutant code: a pushed row never carries a hunk, under
+any setting. (Mutant hunks land on disk only where you ask for them —
+`--record-mutants`, or a `--local --record` tape.) Off by default: without
+it, a pushed row carries numbers, hashes, reasons, and model names, and no
+source leaves the box.
 
 **Public transparency (`--attest --transparency`).** When a local signing key
 is configured (`CORRALAI_CERTIFY_KEY_FILE`), `--attest` also signs the same
@@ -781,294 +776,15 @@ reaches the audit and is *then* found uncovered has its kill rate withheld and
 fails `--min-kill-rate` — a withheld number must never satisfy a threshold.
 
 **The foreign-repo sweep (CI, every PR).** `scripts/foreign-sweep.sh` runs
-`certify --repo --dry-run` — enumeration, language detection, test pairing,
-ambiguity demotion, ranking, and selection, but **no audit and no suite
-execution** — against eight SHA-pinned real-world repos nobody on this
-project wrote (nine rows: `expressjs/express` is scanned twice, with and
-without a `--tests` map), and diffs the walked/candidate/ambiguous file counts against
-the checked-in golden file `testdata/foreign-sweep-expected.tsv`. It exists
-because pointing corral at foreign repos surfaces defects the in-repo suite
-never can (a suite only ever exercises repos shaped like this one); see the
-script's own header comment for the incident that motivated it. It runs in
-`.github/workflows/foreign-sweep.yml` on every pull request and every push
-to `main` — not just after merge — and needs only network access and the Go
-toolchain (no model key, no jail, no language toolchain beyond Go).
-
-If a change legitimately moves one of these counts (a pairing improvement
-that finds candidates it used to miss, a new demotion rule, etc.), regenerate
-the golden file and commit the diff:
-
-```
-rm testdata/foreign-sweep-expected.tsv
-FOREIGN_SWEEP_BOOTSTRAP=1 bash scripts/foreign-sweep.sh   # writes a fresh golden file
-git diff testdata/foreign-sweep-expected.tsv
-```
-
-A missing golden file is refused (exit 1), not silently bootstrapped: if
-it's ever lost to a bad rebase or a careless PR, the gate must fail loudly
-rather than quietly regenerate itself against whatever the tree happens to
-produce and stay green forever. `FOREIGN_SWEEP_BOOTSTRAP=1` is the explicit
-opt-in that says "yes, I mean to write a new golden file right now."
-
-**Moving these numbers is a deliberate act, not something to do reflexively
-to make the gate pass.** The diff is the whole point — review it like a
-production change, because a golden file that silently absorbs a regression
-(a pairing rule that quietly finds *fewer* real candidates, say) is worse
-than no gate at all. `expressjs/express` is pinned to pair **zero** test
-candidates on purpose: that's a known JS/TS test-pairing limitation, not a
-bug, and if a future change makes that number nonzero, look hard at *why*
-before accepting the new golden file.
-
-That `express` pin is a **one-directional** canary: it catches JS/TS test
-pairing going from zero candidates to nonzero, but would not notice the
-JS/TS plugin being removed or `express` being dropped from language
-detection entirely — a "still zero" diff looks identical to both "still
-broken as expected" and "the whole plugin silently disappeared." `gin-gonic/gin`
-is the positive canary that covers that direction (a live, working plugin
-whose count must never go to zero). The asymmetry is inherent to pinning a
-zero and doesn't prove more than it does.
-
-## A knowledge corpus every audit can read
-
-Findings survive the context that produced them. **What is shipped is the
-mechanism, not a proven effect: corral does not yet measure whether a
-promoted lesson improves a later audit, and until it does, treat this as
-plumbing rather than a result.**
-
-- **The corpus (`CORRAL.md`).** A repo carries its working knowledge as markdown in
-  the repo itself — `CORRAL.md` at the root, `docs/corral/*.md` as the corpus. One
-  corpus, four readers: developers read it as onboarding; any developer's coding agent
-  queries it conversationally (point `.mcp.json` at the brain and ask); the herd
-  searches it before working; and it grows the way code does — through pull requests,
-  where **code review is the trust gate for knowledge exactly as it is for code**.
-  Ingested as *advisory* memory (searchable, never auto-injected), so a repo you don't
-  control can't smuggle authority in by shipping a file.
-- **Shared memory** (DuckDB, full-text + optional HNSW vector) — a multi-tier
-  searchable corpus; the source of truth is plain markdown. A finding one run learns
-  becomes available to every later run, and every *model*. Lessons are
-  **trust-tiered**: searchable, never auto-promoted into an authoritative instruction.
-- **The learning loop — the herd proposes, a human approves.** Recurring finding
-  signatures and clusters of similar lessons are swept into **skill proposals**: an
-  LLM drafts corrective guidance plus a reusable skill, the operator approves or
-  rejects it (a live **Proposals tab** or `corral-admin proposals`). Approval promotes
-  it into vetted memory and a versioned skill; every later run starts already warned.
-  The loop watches its own efficacy — if a signature keeps recurring after promotion,
-  a revision proposal reopens.
-- **Shared skills, human-gated.** Approved skills are shared across the fleet
-  through the brain, so what one machine's herd learns, every machine's herd can
-  *do* — but publishing to the fleet is superuser-only (a worker proposes, it
-  can't publish).
-  Corralai ships a [`using-corralai`](skills/using-corralai/SKILL.md) skill that
-  teaches any coding agent to drive the gate.
-- **Reference RAG** — upload your own grounding material (text · URLs · **PDFs**);
-  chunked and vector-embedded (any OpenAI-compatible embedding endpoint) for agents to
-  query. Runs on **embedded DuckDB — no Postgres, no separate vector database**.
-
-## Watch it back — every run recorded and replayable
-
-Nothing about a run is thrown away: every task's claim and completion, every finding
-and its resolution, every command actually run, and the event log survive
-indefinitely. `corral certify --local --record <file>.json` writes a replayable
-tape of an audit — the pool's reasoning beats, the task lifecycle, the findings — in the same
-`{events:[…]}` shape the corralai.dev cockpit replays. **With reasoning capture on,
-the replay streams each model's own words, verbatim,** interleaved with the commands
-they triggered (*"the retry test is flaky because the backoff refills too slowly"* →
-`go test ✗`) — so you watch the herd *think*, not just move. One scrub bar moves the
-whole cockpit — canvas, progress, files — to the same instant, at up to 16×; the
-captured reasoning is real, never synthesized, which is what turns a replay into a
-*debugger*.
-
-**See it live at [corralai.dev](https://corralai.dev).** The hero is a real recorded
-run replaying in your browser; the **recordings gallery** holds more, each labeled
-with the hardware it ran on and honest per-run analytics. And
-**[corralai.dev/warehouse](https://corralai.dev/warehouse/)** runs DuckDB itself — in
-your browser, via WebAssembly — over the real audit ledger + execution telemetry, so
-you can query the signed records with live SQL. Full docs at
-[corralai.dev/docs](https://corralai.dev/docs).
-
-## Coordinate — one brain or many
-
-- **Coordination substrate** (SQLite, transactional) — atomic exclusive path/branch
-  claims with TTL, presence, a lease/presence reaper, a completed-work log, one-call
-  `bootstrap`.
-- **Fleet analytics** (optional, MotherDuck) — runs and telemetry from many brains
-  roll up into one place, retention/compaction built in.
-- **Ask the fleet** — a natural-language oracle over that data ("what did agent X do
-  across every run? who ingested that document?"), turning the audit trail into
-  something you can query.
-- **Cross-swarm coordination** — brains hold signed (Ed25519) identities and
-  publish/read *advisory* claims through the fleet, so independent swarms avoid
-  colliding — observe, never coerce.
-- **Shared reach (the MCP gateway)** — register any service (yours, wrapped as MCP)
-  with the brain and the herd can *use* it without ever holding the key: the brain
-  proxies the call, holds the upstream secret (never returns it), SSRF-guards every
-  dial (resolve-and-pin), and appends the call to the audit ledger under the verified
-  caller. Governance is scoped to bound mischief — `register_endpoint` makes an
-  **owner-scoped** endpoint only that user can reach; only an admin's `promote_endpoint`
-  makes it team-wide (optionally swapping in a team credential); `list_capabilities` /
-  `call_capability` are the herd's use path. The same pattern as everything else:
-  *share the capability, hold the credential.*
-
-## Run anywhere
-
-- **Model-agnostic** — Ollama or any OpenAI-compatible backend (Gemini, OpenRouter,
-  Anthropic, local, …). Not wired to one LLM.
-- **Harness-agnostic** — the worker contract is nothing but MCP calls against the
-  brain (`bootstrap → claim_task → work → complete_task`, where the tasks are the
-  adversarial-audit roles — mutant-generator, test-writer, test-critic); `corral-agent`
-  is its reference implementation. **`corral-harness`** loops any headless coding-agent
-  CLI as an audit-role worker — Claude Code, Gemini CLI, Codex, GitHub Copilot CLI —
-  each bringing its own tool loop, sandbox, and **its own auth**: they run on their own
-  Pro/Max/Plus subscriptions, no API billing.
-  ```bash
-  CORRAL_BRAIN=http://localhost:9019 AGENT_NAME=Cody AGENT_ROLE=reviewer \
-  HARNESS_CMD='claude -p {prompt} --mcp-config {mcp_config} --allowedTools "mcp__corral,Read,Write,Edit,Bash" --permission-mode acceptEdits' \
-  corral-harness
-  ```
-- **Auth from day 0** — identity was designed in, not bolted on:
-  - **OIDC relying party, any provider** — point `CORRALAI_OIDC_ISSUER` at a discovery
-    URL (Keycloak, Auth0, Okta, Dex, Zitadel, …); the brain validates bearer JWTs
-    against its JWKS. Agents get tokens via `client_credentials`; humans via normal
-    login. No bespoke auth.
-  - **Principals & membership** — a member allowlist with superusers for the
-    privileged surfaces. The verified principal from the token is AUTHORITATIVE:
-    stamped over whatever name a client claims, so no agent can act as anyone else.
-  - **Signed delegation tokens** — an agent can spawn an out-of-process subagent with a
-    scoped, TTL-bound token: the subagent acts under its own identity, accountability
-    rolls up to the spawning principal, the token dies on schedule.
-  - **The human gate** — every admin write (approving a proposal, sharing memory,
-    promoting a reference) refuses a delegation token even when it rolls up to a
-    superuser: workers propose, the operator disposes. The same rule holds by
-    convention in dev mode, so an agent can't vet its own knowledge.
-  - **Read-only observer tokens** — for dashboards and demo audiences: watch the live
-    swarm, every mutating call refused.
-  - Dev mode (no issuer) runs open with the same code paths, so "works on my machine"
-    and "works with auth" don't drift apart.
-
-## Security model
-
-The headline feature, not a footnote. (The OpenSSF Scorecard badge above reads
-3.5 — it scores release signing and dependency pinning, both open items, not
-code quality; see SECURITY.md.) Full write-up in **[SECURITY.md](SECURITY.md)**;
-the short version is three pillars:
-
-- **Prevention (the fences).** Every command runs in a `bwrap` jail (no network by
-  default, workspace-confined, secret-free env). The git/forge token lives only in the
-  brain — scrubbed from the environment, never written to `.git/config`, never given
-  to an agent, never used against a forge other than its own. The "ask the fleet"
-  query runs in a locked-down DuckDB connection that can't read files or reach secrets.
-  Ingested knowledge is trust-tiered so a poisoned document can't become an
-  instruction.
-
-  This is what makes **full-auto safe**: an interactive harness gates risky commands on
-  a human click — unworkable for a dozen autonomous agents overnight. Corralai bounds
-  *what a command can touch* instead of asking *whether it may run*: the jail replaces
-  the permission prompt. (Docker is only the demo's packaging — on bare-metal Linux the
-  jail is one unprivileged `bubblewrap` package.)
-- **Detection (forensics).** Because every agent acts *through* the brain — the single
-  trusted egress — the brain records every consequential action, attributed to a
-  verified principal. Agents can't forge or erase their own trail; the subject of the
-  record doesn't control the ledger.
-- **Isolated artifact storage.** Task outputs (screenshots, files) decouple into an
-  isolated `corralai_task_artifacts.sqlite3` database. Uploads pass multiple gates:
-  the uploader must hold an active lease on the target task, magic-byte inspection
-  enforces a strict MIME allowlist (blocking executable/HTML scripts), size is capped
-  at 5 MB, and paths are sanitized against traversal.
-- **Portable, secure key storage.** Provider API keys and the worker token never sit
-  in plaintext or leak into a process listing. `corral secret set NAME` reads the value
-  from **stdin, never a CLI argument**, and the keystore resolves each secret through
-  **env var → OS keyring → an age-encrypted file** — your OS keychain on a desktop, an
-  age-encrypted store on a headless server (the identity fails closed, protected by a
-  systemd credential or a `0600` key). Every log redacts secret values to a
-  fingerprint. It's the GCP-ADC pattern, shipped in one binary.
-
-**The console bundle needs a trust anchor you supply.** `corral-observe`,
-`corral-admin` and `corral-desktop` verify an Ed25519 signature over the console
-bundle before rendering it, against `CORRALAI_CONSOLE_PUBKEY` — for corralai's own brains that is the key
-published at [`deploy/console-release.pub`](deploy/console-release.pub). There is no
-default, on purpose: the development key in this repository has its private half
-committed, so treating it as a default would let anyone sign a bundle a client
-would render with the operator's session attached. `CORRALAI_CONSOLE_DEV=1`
-accepts that published key for local work and says so in the log.
-
-Every security core was adversarially red-teamed, and the tests ship with the repo.
-The codebase runs clean through **`gosec`** (0 findings at medium+ — every one fixed or
-adjudicated inline) and **`govulncheck`** (0 vulnerabilities reachable from corral's own
-code paths — it also reports a handful in imported packages and required modules that
-nothing calls, names them, and says so), both
-enforced in CI by [`scripts/check-security.sh`](scripts/check-security.sh).
-
-**Don't trust the claims — run them:** `go test ./...` and `bash scripts/check-security.sh`.
-
-## The fleet — a daemon and its client apps
-
-Corralai is a **headless server with thin client apps**, like a backup system:
-`corral` holds the state and authority; everything else connects over MCP/HTTP.
-
-| Binary | Role | CGO | Ships as |
-|--------|------|-----|----------|
-| **`corral`** | the **brain** — MCP coordination, the gates, task queue, memory, reference RAG, repo-work + multi-forge, the fleet oracle, embedded UI; owns the databases | yes | `deploy/demo/Dockerfile.brain` |
-| **`corral-agent`** | the reference **audit-role worker** — model-agnostic, claims an adversarial-audit role (mutant-generator / test-writer / test-critic) off the queue | no | `deploy/demo/Dockerfile.agent` (distroless) |
-| **`corral-observe`** | the **observer** — read-only credentialed window onto a brain's live UI | no | `deploy/observe/Dockerfile` (distroless) |
-| **`corral-admin`** | the **operator** — privileged live console plus command verbs over MCP | no | binary / `go install` |
-| **`corral-desktop`** | the **desktop client** — native-window (`--app` mode) launcher onto a local console | no | binary / `go install` |
-| **`corral-harness`** | the **harness-agent launcher** — loops any headless coding-agent CLI as an audit-role worker on ITS auth | no | binary / `go install` |
-| **`corral-top`** | the **terminal dashboard** — a read-only TUI over a live brain (tasks, agents, findings), for a glanceable window without a browser | no | binary / `go install` |
-| **`corral-recordings-import`** | the **recordings importer** — a maintainer tool that loads `certify --local --record` tapes into the recordings store the gallery reads; owns a database, so it carries the brain's CGO deps | yes | binary / `go install` |
-
-The observer and admin consoles share one reverse-proxy core (`internal/console`),
-parameterized read-only vs read-write.
-
-## Platforms
-
-The design premise keeps your OS mostly out of the picture: **the brain lives on a
-Linux server; everything else joins it over MCP/HTTP.** A Mac or Windows developer
-participates fully without installing anything beyond a config stanza.
-
-| | Linux | macOS | Windows |
-|---|---|---|---|
-| **Thin client** (your coding agent + `.mcp.json`) | ✅ | ✅ | ✅ |
-| **`corral-admin`** (operator CLI) | ✅ | ✅ compiles | ✅ compiles |
-| **`corral-observe`** (read-only window) | ✅ | ✅ | ✅ |
-| **`corral certify --local`** — real exec (bwrap jail) | ✅ | `--jail container` (Docker) — **not exercised in CI** | `--jail container` (Docker) or WSL2 — **not exercised in CI** |
-| **`corral` (the brain)** | ✅ first-class | ⚠️ untested | via Docker/WSL2 |
-
-**"Not exercised in CI" is meant literally.** Every workflow runs on
-`ubuntu-latest`, so the macOS and Windows rows describe a path that should work
-and that no run has proven. The container backend itself IS exercised — and was
-found completely broken the first time anyone executed it, because Docker mounts
-`--tmpfs` `noexec` and Go compiles its test binary into `/tmp` — but its
-integration tests used to skip without `CORRALAI_EXEC_IMAGE`, which nothing set — that
-is fixed: CI now builds the jail image with **both** docker and podman and runs the
-backend's integration tests twice, once pinned to each, on every code change.
-Hosted macOS and Windows runners are free for public repositories, so this is a
-task rather than a limitation.
-
-**The jail is a Linux capability — and that's the point.** `bwrap` (bubblewrap) is
-Linux namespaces; on a bare-metal Linux host it runs **unprivileged** (one package,
-no root, no daemon). macOS and Windows have no equivalent, so exec runs inside a Linux
-environment — Docker Desktop or WSL2, or the `--jail container` fallback. The two CGO deps (DuckDB memory, tree-sitter code index) belong to the binaries that own a
-database — the brain and the maintainer-only recordings importer. Every CLIENT is pure Go and
-statically linked: `corral-observe` is 9.5 MB and ships on `distroless/static`. Deploy the brain
-once on a Linux host (systemd + your tunnel/proxy); the clients cross-compile anywhere with no
-C toolchain, and `TestDocsFleetTableCGOColumnIsTrue` builds every row of the table above to keep
-that column honest.
-
-## Why Go — and why your stack doesn't have to be
-
-**The substrate is Go** because a coordination brain has infrastructure-shaped
-requirements, and Go is the boring, correct answer: **one static binary per
-component** (no runtime, no virtualenv, no `node_modules` on the server); **mostly
-concurrent I/O** (dozens of agents heart-beating over MCP/HTTP+SSE is exactly what
-goroutines are for); **embedded databases without an ops bill** (SQLite + DuckDB
-compile straight in — no Postgres, no separate vector DB); and it **cross-compiles
-honestly** (the Platforms table was produced with `GOOS=darwin|windows go build`).
-
-**What corral audits is a different axis — any language the models know.** The gate
-takes any command — `go test`, `pytest`, `npm test`, `cargo test` — and refuses to
-certify until a passing run is on record. A Python-and-Svelte team never writes a line
-of Go to run, join, or benefit from the gate; Go is just what the corral fence is made
-of.
+`certify --repo --dry-run` — enumeration, pairing, ranking, selection, no
+audit and no suite execution — against eight SHA-pinned real-world repos
+nobody on this project wrote, and diffs the walked/candidate/ambiguous
+counts against a checked-in golden file. It exists because pointing corral
+at foreign repos surfaces defects the in-repo suite never can; `express` is
+pinned to pair **zero** candidates on purpose, as a one-directional canary
+for the JS/TS pairing limitation above. How to move a golden number, and why
+that is a deliberate act, is in
+**[docs/corral/foreign-sweep.md](docs/corral/foreign-sweep.md)**.
 
 ## The audit flags
 
@@ -1129,9 +845,11 @@ of.
   itself: how often a critic's findings, once a human adjudicates them
   (`corral criticscore list|show <id>|confirm <id>|refute <id>`), turn out to be real
   vs. wrong — the same "who watches the watchmen" question the gate asks of generators,
-  now asked of the critic. It's a human-gated metric on the brain path only: `--local`
-  shows the auto-adjudicated verdict on the run's tape, but persists nothing to the
-  scorecard (there's no server-side store to write to without a brain).
+  now asked of the critic. It's human-gated: `certify --local` records each
+  critic finding to a local store (`~/.claude/corralai_criticscore.duckdb`), and
+  `corral criticscore` reads it there — no brain required — so the C-PREC column
+  reflects only findings a person has confirmed or refuted. `certify --repo`
+  records nothing to it.
 - **The tests×mutants matrix (`--matrix`, opt-in).** After the primary pass, re-score
   EVERY dev test alone against the run's mutants — a per-test adequacy readout instead
   of one suite-wide kill-rate, plus a safe-to-delete candidate list (a test that caught
@@ -1142,10 +860,14 @@ of.
   Python single-file mode: the `--test` filename must follow pytest's discovery
   convention or enumeration finds nothing and the matrix is silently skipped
   (repo-dir mode unaffected).
-- **Robustness.** A non-terminating mutant is killed fast and counted (a broken loop
-  can't stall the run); `--test-timeout` overrides the auto-derived per-run cap. The
-  run always converges to a signed verdict — even when the writer seat can't author a killing
-  test for a survivor, it routes to `needs-review` rather than spinning.
+- **Robustness.** A non-terminating mutant is a kill only if the unmutated
+  baseline still passes under the same cap — otherwise it is unmeasured, never a
+  fabricated kill (a broken loop can't stall the run); `--test-timeout` overrides
+  the auto-derived per-mutant cap. A writer seat that can't author a killing test
+  for a survivor routes the file to `needs-review` rather than spinning. One thing
+  does *not* converge to a verdict: a provider that never answers the
+  mutant-generator ends the run with that error and no verdict, because a verdict
+  over zero mutants would be a number nobody measured.
 - **`--swarm N`** bounds how many audit tasks run concurrently (0 = auto-size to the
   host's cores, capped). **`--repo-dir <path>`** audits `--code` in the context of a
   whole cloned repo (the tree is seeded into the jail and the project's own test
@@ -1162,37 +884,19 @@ of.
   (copy every dep dir into the seed, subject to the size cap). A run prints `deps:
   bound N dir(s) read-only (...)` whenever anything was bound.
 
-**The audit always runs sandboxed** (`bwrap` on Linux by default; `--jail container`
-for a docker/podman fallback; `sandbox-exec` on macOS) — there is no unsandboxed
-option. On Ubuntu 24.04+, apparmor disables unprivileged user namespaces and bwrap
+**`certify --local` always runs sandboxed** (`bwrap` on Linux by default; `--jail
+container` for a docker/podman fallback) — it has no unsandboxed option. **`certify
+--repo --substrate workspace` is the unsandboxed option**, by design: it runs your
+suite in your checkout and the caller is the boundary. On Ubuntu 24.04+, apparmor disables unprivileged user namespaces and bwrap
 won't start; the CLI's error message spells out the one-line fix, or use `--jail
 container` with a toolchain image (`export CORRALAI_EXEC_IMAGE=python:3.12-bookworm`). One gotcha:
 the language toolchain has to be **jail-visible** — installed system-wide under `/usr`,
 not a `--user`/snap/pyenv install invisible to the sandboxed mount namespace.
 
-The hosted brain runs the same sharded + shadow machinery via `start_adversarial_run`
-(`max_shards` default 8, ceilinged at 20 for a hosted run; `shadow_model` defaults on
-daemon-wide via `CORRALAI_ADVPOOL_SHADOW_MODEL`, `off` to disable; the run deadline is
-widened automatically when a shadow model is set, so shadow work can never force a
-timeout `needs-review`).
-
-## Running the brain
-
-```bash
-go test ./...
-go run ./cmd/corral     # MCP /mcp/ · health /healthz · UI / · on 127.0.0.1:9019
-```
-
-Common knobs: `CORRALAI_OIDC_ISSUER`/`_AUDIENCE` (cross-machine auth) ·
-`CORRALAI_GIT_TOKEN` + `CORRALAI_FORGES` (repo-work / multi-forge) ·
-`CORRALAI_EMBED_URL` (reference RAG + vector search) · `CORRALAI_MOTHERDUCK` (fleet
-analytics + oracle) · `MODEL_BACKEND`/`OPENAI_BASE_URL` (bring your own model). See
-**[docs/DESIGN.md](docs/DESIGN.md)**.
-
 ### The jail, in detail
 
-The `corral` / `corral-agent` process is never sandboxed — only the subprocess a check
-spawns is isolated:
+The `corral` process is never sandboxed — only the subprocess a check spawns is
+isolated (under `--substrate workspace`, nothing is: see above):
 
 - **Default-deny.** Execution only runs once a backend has been resolved and
   preflighted. If the host can't isolate, execution stays disabled and returns a loud,
@@ -1211,6 +915,101 @@ spawns is isolated:
 bwrap shares the host kernel — it stops casual damage, egress, and filesystem escape,
 **not** a kernel-exploit escape. For adversarial code use a stronger backend
 (container/microVM); the pluggable `Isolator` makes that a drop-in.
+
+## Security model
+
+The headline feature, not a footnote. (The OpenSSF Scorecard badge above reads
+3.5 — it scores release signing and dependency pinning, both open items, not
+code quality; see SECURITY.md.) Full write-up in **[SECURITY.md](SECURITY.md)**;
+the short version for the audit:
+
+- **The jail (`certify --local`).** Every mutant is graded in a `bwrap` jail: no
+  network, workspace-confined, a secret-free environment (the jail is built from
+  a scrubbed environ — your provider key never reaches the suite). This is what
+  makes running a model's test unattended safe: corral bounds *what a command
+  can touch* instead of asking *whether it may run*. On bare-metal Linux the
+  jail is one unprivileged `bubblewrap` package; Docker is only a fallback.
+- **The workspace (`--repo --substrate workspace`) is not a jail**, and says so
+  in the scan header. Your suite runs in your checkout with the same scrubbed
+  environment, and the caller is the boundary — a CI runner, or a tree you can
+  throw away. It is the path for a project whose virtualenv the jail cannot see.
+- **The record is yours and opt-in.** `--record` writes a local DuckDB ledger;
+  `--push` appends to a warehouse you own; `--attest` signs a statement and
+  `--transparency` logs it publicly. Each is off unless named; a write failure
+  never changes a verdict or an exit code.
+- **Portable, secure key storage.** Provider API keys never sit
+  in plaintext or leak into a process listing. `corral secret set NAME` reads the value
+  from **stdin, never a CLI argument**, and the keystore resolves each secret through
+  **env var → OS keyring → an age-encrypted file** — your OS keychain on a desktop, an
+  age-encrypted store on a headless server (the identity fails closed, protected by a
+  systemd credential or a `0600` key). Every log redacts secret values to a
+  fingerprint. It's the GCP-ADC pattern, shipped in one binary.
+
+The daemon's own surfaces — the console bundle's trust anchor, the single
+trusted egress, artifact storage — are in
+[docs/corral/brain.md](docs/corral/brain.md#the-brains-own-security-surfaces).
+
+Every security core was adversarially red-teamed, and the tests ship with the repo.
+The codebase runs clean through **`gosec`** (0 findings at medium+ — every one fixed or
+adjudicated inline) and **`govulncheck`** (0 vulnerabilities reachable from corral's own
+code paths — it also reports a handful in imported packages and required modules that
+nothing calls, names them, and says so), both
+enforced in CI by [`scripts/check-security.sh`](scripts/check-security.sh).
+
+**Don't trust the claims — run them:** `go test ./...` and `bash scripts/check-security.sh`.
+
+## Platforms
+
+| | Linux | macOS | Windows |
+|---|---|---|---|
+| **`corral certify --local`** — real exec (bwrap jail) | ✅ | `--jail container` (Docker) — **not exercised in CI** | `--jail container` (Docker) or WSL2 — **not exercised in CI** |
+| **`corral certify --repo --substrate workspace`** (no jail) | ✅ | should work — **not exercised in CI** | should work — **not exercised in CI** |
+| **The GitHub Action** | ✅ `ubuntu-latest` | — | — |
+
+**"Not exercised in CI" is meant literally.** Every workflow runs on
+`ubuntu-latest`, so the macOS and Windows rows describe a path that should work
+and that no run has proven. The container backend itself IS exercised — and was
+found completely broken the first time anyone executed it, because Docker mounts
+`--tmpfs` `noexec` and Go compiles its test binary into `/tmp` — but its
+integration tests used to skip without `CORRALAI_EXEC_IMAGE`, which nothing set — that
+is fixed: CI now builds the jail image with **both** docker and podman and runs the
+backend's integration tests twice, once pinned to each, on every code change.
+Hosted macOS and Windows runners are free for public repositories, so this is a
+task rather than a limitation.
+
+**The jail is a Linux capability — and that's the point.** `bwrap` (bubblewrap) is
+Linux namespaces; on a bare-metal Linux host it runs **unprivileged** (one package,
+no root, no daemon). macOS and Windows have no equivalent, so exec runs inside a Linux
+environment — Docker Desktop or WSL2, or the `--jail container` fallback. `corral`
+itself carries two CGO deps (DuckDB for the ledgers, tree-sitter for the symbol
+index), which is why `go install` builds for ~25s; the optional daemon's client
+binaries are pure Go (see [the brain](#the-brain-optional-and-not-read-by-any-audit)).
+
+## Why Go — and why your stack doesn't have to be
+
+**The substrate is Go** because the audit has infrastructure-shaped requirements
+and Go is the boring, correct answer: **one static binary**, no runtime and no
+virtualenv on the machine that runs it; embedded databases without an ops bill
+(DuckDB compiles straight in); honest cross-compilation.
+
+**What corral audits is a different axis — any language the models know.** The
+audit takes your own test command — `go test`, `pytest`, `npm test`, `rspec`,
+`phpunit` — and reads its exit code. A Python-and-Svelte team never writes a line
+of Go to run, or benefit from, the audit; Go is just what the corral fence is made
+of.
+
+## The brain (optional, and not read by any audit)
+
+Corral began as a coordination daemon — a **brain** with an MCP surface, a task
+queue, shared memory, a learning loop, a live console and a fleet of client
+binaries — and the daemon still ships in the same binary (`corral` with no
+subcommand starts it). Everything above runs without it: `certify` audits
+in-process, on a laptop or a CI runner, and writes rows to a ledger you own.
+**Nothing in the brain is required for a verdict, and nothing in it is read by
+one** — an audit's prompts are built from the goal, the code and its symbols, and
+a lesson the brain has learned is not consulted by `certify`. If you want remote
+workers, a live console, or the human-gated proposal loop, it is documented,
+with those limits stated, in **[docs/corral/brain.md](docs/corral/brain.md)**.
 
 ## Credits
 

@@ -6,6 +6,10 @@ description: Dev mode vs auth-on, the demo compose profiles, and deploying a bra
 {/* SPDX-License-Identifier: Elastic-2.0 */}
 {/* Source: cmd/corral/main.go env doc block (via cross-link); deploy/demo/README.md, deploy/demo/Makefile */}
 
+:::note[The brain — optional, and not read by any audit]
+This page describes the **brain**, corral's optional coordination daemon. Nothing on it is required for a verdict: `corral certify`, the GitHub Action, `verify`, `ui`, `seal` and `scans` never contact a brain. And nothing on it is read by an audit — an audit's prompts are built from the goal, the code and its symbols, never from shared memory, skills or a prior run. See [the brain, and what it is not](https://github.com/pdbethke/corralai/blob/main/docs/corral/brain.md).
+:::
+
 ## Dev mode vs auth-on
 
 With `CORRALAI_OIDC_ISSUER` unset, the brain runs with auth disabled — any
@@ -31,18 +35,19 @@ NOT coordinating looks like), `make demo-observe` adds a read-only observer
 console, and `make demo-models` runs a two-model comparison so
 `model_comparison` has real A-vs-B data to report on.
 
-## The scorecard + critic precision (brain-path only)
+## The scorecard + critic precision
 
 `corral scorecard` shows which model actually catches bugs, execution-proven
 (recall from mutants a model's own generated tests killed — never a
 self-report) and, in a **C-PREC** column, how often that model's
 **test-critic** findings turn out to be real once a human adjudicates them.
-Both columns read the running brain's DuckDB stores over its HTTP API
-(`GET /api/bugcatch`) — set `CORRAL_BRAIN` (and a token via `corral secret`)
-to point at one; without it, `corral scorecard` falls back to opening the
-local `CORRALAI_BUGCATCH_DB` file directly, which shows recall/precision but
-**not** the C-PREC column (that join needs `CORRALAI_CRITICSCORE_DB`, and
-the offline path never has both single-process files open at once).
+With `CORRAL_BRAIN` set (and a token via `corral secret`), both columns read
+the running brain's DuckDB stores over its HTTP API (`GET /api/bugcatch`).
+Without a brain, `corral scorecard` opens the local `CORRALAI_BUGCATCH_DB`
+file directly and joins the local `CORRALAI_CRITICSCORE_DB` for C-PREC when
+that file can be opened — both are single-process DuckDB files, so a store a
+running brain holds open is skipped rather than refused, and C-PREC is left
+empty.
 
 The critic's own findings get flagged automatically the same way the rest of
 the audit works — by execution, not opinion — but the human gate has final
@@ -50,17 +55,19 @@ say: `corral criticscore list` shows findings still awaiting adjudication,
 `corral criticscore show <id>` prints one in full (model, target test,
 evidence), and `corral criticscore confirm <id>` / `refute <id>` record a
 human verdict that **permanently overrides** the auto-adjudication — a later
-automated pass can never claw a human verdict back. All four subcommands
-require a brain (`CORRAL_BRAIN`); there's no offline mode, because
-confirm/refute are admin-gated MCP tools that need the caller's
-authenticated identity for the audit trail.
+automated pass can never claw a human verdict back. With `CORRAL_BRAIN` set,
+confirm/refute go through the brain's admin-gated MCP tools, which need the
+caller's authenticated identity for the audit trail; without one, all four
+subcommands run against the local store, and the verdict is attributed to the
+local OS user.
 
-**Honesty caveat:** the critic-precision metric and its human gate are
-brain-path features only, like the rest of the bug-catching scorecard.
-`corral certify --local` still shows the critic's auto-adjudicated verdict
-on the run's own tape (nothing is hidden from you locally), but it persists
-nothing to a scorecard — there's no server-side store to write to without a
-brain running.
+`corral certify --local` feeds all of this itself: each run appends to the
+local bug-catching store, the critic-accuracy store and the writer-seat
+attempts store under `$HOME/.claude` (`CORRALAI_BUGCATCH_DB`,
+`CORRALAI_CRITICSCORE_DB`, `CORRALAI_MUTANT_ATTEMPTS_DB` override the paths),
+with no brain involved. `certify --repo` writes none of them — N
+concurrent audits must not contend on one single-process file — so the
+scorecard grows from `--local` runs or from a brain, not from repo scans.
 
 ## The tests×mutants matrix (`--matrix`, opt-in, brain-path only)
 
@@ -136,10 +143,13 @@ surprised by:
 - **Any change to any test file invalidates every file's verdict** on the
   whole-suite path. That is correct — the grading surface really did change for
   every file — but it means the hit rate is lower than the word "cache" suggests.
-- **Goals are derived per run unless you pin them.** The goal is part of the key,
-  and an LLM-derived goal is not byte-identical between runs, so **without
-  `--goals` the cache is largely inert.** If you want reuse, check your goals into
-  a file and pass `--goals`.
+- **Derived goals are cached too, but only a recorded scan writes them.** The
+  goal is part of the key. A goal derived from unchanged bytes by the same
+  `--derive-model` at the same prompt revision is served **byte-identical** from
+  the goal cache, so the key holds across runs — but that cache is only
+  written by a `--record` scan; an unrecorded scan may read what a recorded one
+  left and adds nothing. If you want reuse without `--record`, check your goals
+  into a file and pass `--goals`.
 
 Known gaps, documented here because they are wrong-hit paths rather than design:
 the file-scoped path (coverage-guided selection, or a test command naming
@@ -168,12 +178,12 @@ stderr so nothing parsing stdout — the verdict, `--out` — is affected, and
 A `certify --local` run also ends with what it consumed:
 
 ```
-model spend:   18432 in / 5120 out token(s) over 41 model call(s)
+  cost: 18.4k tokens in / 5.1k out across 41 calls — mutant-generator 12.3k/3.2k (24 calls), test-writer 6.1k/1.9k (17 calls)
 ```
 
 **Tokens, not dollars**: prices change and differ by contract, so multiply by your
 own rate. The call count is printed alongside because a provider that reports no
-usage leaves the token counts at zero, and "0 tokens over 41 calls" is a different
+usage leaves the token counts at zero, and "0 tokens in / 0 out across 41 calls" is a different
 fact from "0 over 0".
 
 ## Dependency dirs — bound read-only, never copied (`--repo-dir`)

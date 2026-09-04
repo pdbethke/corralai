@@ -274,7 +274,8 @@ Usage:
                                   bug-catching ledger; unreachable REFUSES, never falls back)
                                   --seat <role>  --lang <name>  --min-runs n  --json
   corral criticscore list         list execution-checked test-critic findings still awaiting human
-                                  adjudication (requires CORRAL_BRAIN — no offline mode)
+                                  adjudication — the local store certify --local writes, or a
+                                  running brain's when CORRAL_BRAIN is set
   corral criticscore show <id>    print one finding in full (model, target test, evidence)
   corral criticscore confirm <id> record a human "confirmed" verdict — the finding was real
   corral criticscore refute <id>  record a human "refuted" verdict — the finding was wrong

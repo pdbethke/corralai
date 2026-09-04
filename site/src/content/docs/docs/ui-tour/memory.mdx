@@ -3,6 +3,10 @@ title: Memory
 description: The tab that shows what corralai has learned and remembered across audit runs.
 ---
 
+:::note[The brain — optional, and not read by any audit]
+This page describes the **brain**, corral's optional coordination daemon. Nothing on it is required for a verdict: `corral certify`, the GitHub Action, `verify`, `ui`, `seal` and `scans` never contact a brain. And nothing on it is read by an audit — an audit's prompts are built from the goal, the code and its symbols, never from shared memory, skills or a prior run. See [the brain, and what it is not](https://github.com/pdbethke/corralai/blob/main/docs/corral/brain.md).
+:::
+
 The Memory tab lists the brain's own memory corpus — a shared corpus of
 execution-**verified** audit findings (patterns, not code) that every
 `corral certify --local` run can draw on. An entry doesn't get in by a model

@@ -5,7 +5,8 @@ description: Query corral's real audit ledger with DuckDB running in your browse
 
 {/* SPDX-License-Identifier: Elastic-2.0 */}
 
-corral stores every audit as a **signed, hash-linked record** plus per-model
+corral stores a `certify --local` audit as a **signed, hash-linked record**, and
+a `certify --repo` scan run with `--record` as ledger rows, plus per-model
 **execution telemetry** — natively in **DuckDB**. The
 [**DuckDB integration page**](/warehouse/) ("DuckDB integration" in the site nav)
 makes that layer tangible: it runs DuckDB itself, compiled to **WebAssembly, in
@@ -79,8 +80,10 @@ warehouse. Any DuckDB works, so MotherDuck is a destination rather than a
 requirement.
 
 Rows are **append-only** — overwriting is how a trend is lost — and each carries
-the sha256 of the signed statement it came from plus the run URL, so any row
-traces back to an attestation a third party can verify. The qualifier columns
+the run URL plus, only when the scan also ran with `--attest` (`attest:` in the
+Action), the sha256 of the signed statement it came from, so such a row traces
+back to an attestation a third party can verify; without `--attest` the
+`statement_sha256` column is left empty rather than fabricated. The qualifier columns
 (`timed_out`, `test_writer_failed`, `pool_test_unsound`) sit beside the numbers
 rather than in another table, because aggregation is exactly where a
 `proven_missed` of 0 that means *nothing could be proven* gets read as *clean*.

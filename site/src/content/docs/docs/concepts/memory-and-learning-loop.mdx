@@ -6,6 +6,10 @@ description: Advisory-to-vetted memory, skill proposals, and the human gate that
 {/* SPDX-License-Identifier: Elastic-2.0 */}
 {/* Source: docs/corral/memory-etiquette.md; docs/DESIGN.md P8/P9; internal/learn/store.go, internal/learn/sweep.go; site/src/components/LearningLoop.astro */}
 
+:::note[The brain — optional, and not read by any audit]
+This page describes the **brain**, corral's optional coordination daemon. Nothing on it is required for a verdict: `corral certify`, the GitHub Action, `verify`, `ui`, `seal` and `scans` never contact a brain. And nothing on it is read by an audit — an audit's prompts are built from the goal, the code and its symbols, never from shared memory, skills or a prior run. See [the brain, and what it is not](https://github.com/pdbethke/corralai/blob/main/docs/corral/brain.md).
+:::
+
 ## Memory tiers
 
 Memory entries start **advisory** — written by any agent (`add_memory`),

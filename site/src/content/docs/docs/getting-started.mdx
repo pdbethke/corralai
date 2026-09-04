@@ -69,8 +69,12 @@ test-critic reads your suite cold. You get a signed verdict — `certified` or
 `needs-review` — and can re-check it offline any time:
 
 ```bash
-corral certify verify <record>
+corral certify verify <record> --pubkey "$(corral certify pubkey)" --allow-unanchored
 ```
+
+A record's own embedded key is never a trust anchor, so `verify` refuses to run
+without `--pubkey` (or `--brain`); `--allow-unanchored` accepts a record that
+was not logged to a transparency witness.
 
 ### Before you spend a run: `corral doctor`
 
@@ -111,7 +115,7 @@ output.
 On a file with several functions the generation **fans out** — one seat per
 group of functions, so every function gets probed, not just whichever one a
 single generator happened to pick (`--max-shards N` bounds the width; the
-default auto-sizes to your machine). Name a `--shadow-model` and a
+default is 8 — only `--swarm` sizes itself to your machine). Name a `--shadow-model` and a
 **challenger model** attacks the same regions in parallel, purely to measure one
 model against another on identical ground — it's recorded for comparison and
 **never** part of the verdict (off unless named, like every seat). And a mutant
@@ -165,30 +169,25 @@ can see.
 Walk through a real verdict end to end in
 [Your first audit, in detail](/docs/first-audit/).
 
-## Running the brain
+## The brain (optional)
 
-`--local` runs the audit standalone. The brain is the coordination substrate
-the repo/control gates run inside of — worth running if you want the gate
-poller, shared memory, or the swarm UI, not required for `--local`.
-
-Against a brain you're running yourself (dev mode — no `CORRALAI_OIDC_ISSUER`
-set, so auth is off):
-
-```bash
-go run ./cmd/corral
-```
-
-Open `http://127.0.0.1:9019/` for the live corral view and the **Progress**
-tab. From another terminal, drive it with `corral-admin` — see the
-[CLI reference](/docs/cli/corral-admin/) for every verb.
+Everything on this page runs with no server. The **brain** is corral's optional
+coordination daemon — the substrate under a coordinated herd, a live console
+and the human-gated proposal loop. Nothing in it is required for a verdict, and
+nothing in it is read by an audit. If you want it, start with
+[Running it](/docs/running-it/), which says what it is and is not, or read
+[the brain, and what it is not](https://github.com/pdbethke/corralai/blob/main/docs/corral/brain.md).
 
 ## Common knobs
 
-- `CORRALAI_OIDC_ISSUER` / `CORRALAI_OIDC_AUDIENCE` — cross-machine auth
-- `CORRALAI_GIT_TOKEN` + `CORRALAI_FORGES` — repo-work / multi-forge missions
-- `CORRALAI_EMBED_URL` — reference RAG + vector search
-- `CORRALAI_MOTHERDUCK` — fleet analytics + oracle
-- `MODEL_BACKEND` / `OPENAI_BASE_URL` — bring your own model
+- `MODEL_BACKEND` / `OPENAI_BASE_URL` — pin every seat to one gateway endpoint
+  (OpenRouter, a local daemon); without it each seat routes by the model you name
+- `CORRALAI_MODELS_FILE` / `CORRALAI_MODELS` — the model registry, so seats can be
+  named by alias
+- `CORRALAI_SCANS_DB` — where `certify --repo --record` keeps its ledger
+- `CORRALAI_CERTIFY_KEY_FILE` — where the signing key seed lives (`--local` verdicts, `--attest`)
 
-See [Running it](/docs/running-it/) for the full rundown, and
-[the CLI reference](/docs/cli/corral-admin/) for every `corral-admin` verb.
+The daemon's own knobs (`CORRALAI_OIDC_ISSUER`, `CORRALAI_GIT_TOKEN`,
+`CORRALAI_MOTHERDUCK`, …) are on [Running it](/docs/running-it/); every variable
+is documented from the binary's own source comment on
+[corral's CLI page](/docs/cli/corral/).

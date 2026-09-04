@@ -1,0 +1,146 @@
+---
+title: "What is actually new here, and what is not"
+description: "Mutation testing is fifty years old and its cost problem was solved twice. A four-hour run on psf/requests made us ask whether corral is breaking new ground or re-deriving it. The honest answer is two firsts, one stance, and a lot of known ground reassembled with its receipts — and a reason the seat was empty."
+pubDate: 2026-09-04
+draft: false
+---
+
+{/* SPDX-License-Identifier: Elastic-2.0 */}
+
+*Field note. A tool whose whole argument is "prove it, don't assert it" should
+not get to call itself new without showing its work. This is the showing.*
+
+## The run that raised the question
+
+On 2026-09-04 we pointed corral at [psf/requests](https://github.com/psf/requests)
+at commit `414f051` — a real library, a real suite, nobody's fixture — with
+`gemini-3.6-flash` planting faults, deriving goals and writing tests, and
+`claude-haiku-4-5` reading the suite as the critic. It ran for four hours and
+fifteen minutes.
+
+The report is honest about what that bought: sixteen candidate files, eight
+audited, a kill rate of 0.49 over those eight, and **eleven gaps proven by
+execution** — ten of them in `auth.py`, where the pool wrote a test that
+killed all ten survivors, and one in `_internal_utils.py`. Six of the eight
+files are marked `[TIMED OUT — pool did not converge]`: each hit the thirty
+minute per-file budget, and each hit it in the same phase — not while grading
+the developer's own tests against the faults (four to eleven minutes), but
+while *authoring* tests to prove the survivors were catchable (eighteen to
+twenty-six minutes), with a third to three quarters of each file's survivors
+never attempted. Three more files could not be graded at all, because the
+suite's own baseline fails without network access; the report says so rather
+than scoring them. The whole run was 232 model calls — 1.9 million tokens
+in, of which 0.9 million were served from cache, and 69 thousand out. At any
+current flash-tier price that is pocket money. The money was never the
+constraint. The clock was.
+
+Four hours for eight files is a nightly job, not a pull-request check. That
+number made us ask a question we had been avoiding: is this slow because we
+are doing something nobody has done, or because we are re-deriving something
+people did fifteen years ago?
+
+## The half that is not new
+
+Mutation testing — plant a fault, run the tests, count what dies — is a 1970s
+idea with mature tools: PIT for Java, Stryker for JavaScript, mutmut for
+Python. The kill rate as a metric is theirs. Coverage-based test selection —
+run only the tests that execute the mutated line — is theirs too, and corral's
+version of it is a re-derivation, not an invention. Their whole engineering
+history is the problem we just hit, and they solved it more thoroughly than
+we have: PIT kills a mutant at the *first* failing test, ordered by which is
+likeliest to fail, and caches per-mutant results across runs so an unchanged
+line is never re-graded. Corral does neither yet. Both are published. The
+right move is to take them, and we will.
+
+So the cost problem is not why a tool like this was never built. Those tools
+were built. They are also rarely run, and the reason is exactly our requests
+number: a whole-repository mutation run is something a team schedules
+overnight and reads on Monday. What was built stayed niche.
+
+Signed attestations, hash-linked records and public transparency logs are not
+ours either; Sigstore's Rekor is where our statements go, and it was there
+first.
+
+## The half that is new
+
+Two things in the requests report could not have been produced by any of
+those tools, and as far as we can find, by anything else.
+
+**A gap proven by execution rather than reported.** Every mutation tool
+produces survivors and stops. A survivor is a claim: *this fault got past
+your tests*. It might be a real gap, or an equivalent mutant no test could
+ever catch, and the tool cannot tell you which. Corral's writer seat authors
+a test against each survivor, runs it on the unmutated code to prove it is
+sound, plants deliberately broken source at the test's own path to prove the
+runner actually collected it, and then runs it against the fault. Only a
+survivor killed that way is called a gap. The rest are disclosed as what they
+are — `tried and missed`, `test unsound`, or, in the requests report, `15
+seats ungraded — never attempted, so the proven count is over the rest`. That
+last sentence is one no existing tool can write, and it is the sentence the
+whole product turns on. Nobody could write it before a model could write the
+test.
+
+**A measurement of how alike two models are, instead of an assumption.** The
+second-model-as-reviewer pattern is now everywhere; every serious agent
+pipeline runs one model as a check on another. We have not found anyone who
+measures how correlated the two seats' blind spots actually are — same
+faults, same file, same commit — and publishes the number. Corral's
+`--shadow-writer-model` runs two writers against the same survivors and
+reports the Jaccard overlap of their misses. The first result,
+[0.750 over 13 survivors](/field-notes/both-models-missed-the-same-nine/)
+between frontier models from two different labs, cuts against the industry's
+working assumption: of everything either writer missed, both missed three
+quarters of it. Distinct vendors bought far less independence than people
+were pricing in. We think that number is a first of its kind. We would be
+glad to be shown an earlier one.
+
+## The stance, which is the part with no competitor
+
+There is a third thing, and it is not a feature. Corral ships with **no
+default models**: every seat is named by the operator or the run is refused.
+On a CI runner, the checkout under audit may not choose its own auditors —
+its `.corral/models.json` is ignored, out loud. The record of a run is
+hash-linked to a public log, and when the tool finds defects in itself, those
+go into the same record with the same signature: the
+[reviews](/field-notes/the-reviewer-was-right-and-we-said-no/) that found a
+fabricable "proven" gap and a published trust anchor are on this site because
+the tool's own rule applies to the tool.
+
+None of that is hard to build. It is hard to *want* to build, and this is our
+actual answer to "why not before." The people who could ship this in six
+weeks — the model vendors, the agentic-IDE companies, the test-generation
+startups — have the wrong incentive. A vendor sells the model that would be
+graded. A company that sells "we write your tests" cannot also sell "your
+tests are weak, here is the proof." The buyer who wants an unflattering,
+signed number about their own suite is a compliance-shaped buyer, and that is
+a small, slow market. *Nemo iudex in causa sua* is not only the design
+principle. It is why the seat was empty: nobody who could sit in it was
+allowed to.
+
+## What we will and will not claim
+
+Not new: mutation testing, coverage-based selection, the kill rate, signed
+attestations, transparency logs. We use them and we say so.
+
+New, to the best of our knowledge: a gap proven by an executed, collected,
+sound test, with everything unproven disclosed by name; and a published
+measurement of writer-seat decorrelation on a fixed mutant set.
+
+A stance nobody with a commercial model has a reason to take: named seats,
+no defaults, the audited code barred from picking its judges, the tool's own
+defects in the tool's own signed record.
+
+And a debt: the grading loop is fifteen years behind PIT, and the authoring
+loop — the new one, the one that timed out on requests — has no cost
+engineering at all yet, because nobody has ever had to make that phase fast.
+That is the next thing to build, and when it is built, the number that proves
+it will be a run on the same commit of the same repository, signed, beside
+this one.
+
+*The requests run: 2026-09-04, `psf/requests@414f051`, herd
+`gemini-3.6-flash` (generator, writer, goal-deriver) + `claude-haiku-4-5`
+(critic), shadow off, `--top 3 --substrate workspace`, 30-minute per-file
+timeout. 8 of 16 candidates audited, kill rate 0.49, 11 proven gaps, 6 files
+timed out, 3 baseline-failed, 2 ungoaled; 232 calls, 1.9M tokens in (0.9M
+cached), 68.6k out. The report also audited `tests/testserver/server.py` as
+a subject, which it should not have; that was fixed the same day.*

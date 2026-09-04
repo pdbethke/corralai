@@ -148,15 +148,19 @@ func TestKeyMovesWhenASharedFixtureFileIsWeakened(t *testing.T) {
 func TestTestSurfacePathsCoversTheWholeTestDirectory(t *testing.T) {
 	root := t.TempDir()
 	writeTree(t, root, map[string]string{
-		"pkg/a.py":           "def a():\n    return 1\n",
-		"tests/test_a.py":    "def test_a():\n    assert True\n",
-		"tests/conftest.py":  "import pytest\n",
-		"tests/helpers.py":   "X = 1\n",
-		"tests/golden.json":  "{}\n",
-		"src/jest.setup.js":  "module.exports = {}\n",
-		"src/a.test.js":      "test('a', () => {})\n",
-		"docs/notes.md":      "not a test\n",
-		"docs/whatever.json": "{}\n",
+		"pkg/a.py":          "def a():\n    return 1\n",
+		"tests/test_a.py":   "def test_a():\n    assert True\n",
+		"tests/conftest.py": "import pytest\n",
+		"tests/helpers.py":  "X = 1\n",
+		"tests/golden.json": "{}\n",
+		// A test-tree file in a directory that holds no recognized test:
+		// the one shape the "beside a test" rule cannot reach. It is in
+		// the surface by where it lives (reposcan.ReasonTestSupport).
+		"tests/testserver/server.py": "def serve():\n    return 0\n",
+		"src/jest.setup.js":          "module.exports = {}\n",
+		"src/a.test.js":              "test('a', () => {})\n",
+		"docs/notes.md":              "not a test\n",
+		"docs/whatever.json":         "{}\n",
 	})
 	cands, excl, err := reposcan.Enumerate(root)
 	if err != nil {
@@ -168,7 +172,7 @@ func TestTestSurfacePathsCoversTheWholeTestDirectory(t *testing.T) {
 	}
 	for _, want := range []string{
 		"tests/test_a.py", "tests/conftest.py", "tests/helpers.py", "tests/golden.json",
-		"src/a.test.js", "src/jest.setup.js",
+		"tests/testserver/server.py", "src/a.test.js", "src/jest.setup.js",
 	} {
 		if !got[want] {
 			t.Errorf("%s is missing from the test surface — changing it changes what the suite measures", want)
@@ -215,10 +219,15 @@ func TestSurfaceWideningDoesNotChangeCandidateClassification(t *testing.T) {
 			t.Fatalf("candidates = %v, want %v", gotCands, wantCands)
 		}
 	}
+	// Under the test root, a file is test-support BY ENUMERATION — that is
+	// reposcan's own rule (ReasonTestSupport), not the surface widening's:
+	// the surface only reads the classification, it never writes one.
+	// src/jest.setup.js lives beside a test but under no test root, so it
+	// keeps the name-shaped reason and stays eligible for evidence pairing.
 	wantReason := map[string]string{
-		"tests/conftest.py": reposcan.ReasonNoPairedTest,
-		"tests/helpers.py":  reposcan.ReasonNoPairedTest,
-		"tests/fixtures.py": reposcan.ReasonNoPairedTest,
+		"tests/conftest.py": reposcan.ReasonTestSupport,
+		"tests/helpers.py":  reposcan.ReasonTestSupport,
+		"tests/fixtures.py": reposcan.ReasonTestSupport,
 		"tests/golden.json": reposcan.ReasonNoLanguage,
 		"src/jest.setup.js": reposcan.ReasonNoPairedTest,
 		"tests/test_a.py":   reposcan.ReasonIsTest,

@@ -771,3 +771,67 @@ func TestPHPUnitTestFilesAreRecognised(t *testing.T) {
 		t.Error("src/Latest.php ends in 'test.php' by accident of spelling and must NOT be a test — the rule is the capitalised PHPUnit suffix")
 	}
 }
+
+// A file under the language's own test tree is the tests' side of the
+// audit, never its subject: pytest's conftest.py configures every test in
+// the suite, so an instrumented run finds hundreds of tests "covering" it —
+// and the live requests scan (2026-09-04) promoted tests/conftest.py and
+// tests/testserver/server.py into the audit on exactly that evidence, next
+// to the library the repo ships.
+func TestEnumerateTestTreeIsNeverASubject(t *testing.T) {
+	root := writeTree(t, map[string]string{
+		"src/pkg/__init__.py":        "",
+		"src/pkg/core.py":            "def f():\n    return 1\n",
+		"tests/test_core.py":         "def test_f():\n    assert True\n",
+		"tests/conftest.py":          "import pytest\n",
+		"tests/testserver/server.py": "def serve():\n    return 0\n",
+		// A helper that a naming convention WOULD pair: still the tests' side.
+		"tests/helpers.py":      "def h():\n    return 0\n",
+		"tests/test_helpers.py": "def test_h():\n    assert True\n",
+		// Ruby's roots come from the plugin, not the generic default.
+		"lib/thing.rb":            "class Thing; end\n",
+		"spec/thing_spec.rb":      "describe Thing do; end\n",
+		"spec/support/helpers.rb": "module H; end\n",
+	})
+	cands, excl, err := Enumerate(root)
+	if err != nil {
+		t.Fatalf("Enumerate: %v", err)
+	}
+	for _, c := range cands {
+		if strings.HasPrefix(c.Path, "tests/") || strings.HasPrefix(c.Path, "spec/") {
+			t.Errorf("%s is a candidate; the test tree is never a subject", c.Path)
+		}
+	}
+	reasons := map[string]string{}
+	for _, e := range excl {
+		reasons[e.Path] = e.Reason
+	}
+	for _, p := range []string{"tests/conftest.py", "tests/testserver/server.py", "tests/helpers.py", "spec/support/helpers.rb"} {
+		if reasons[p] != ReasonTestSupport {
+			t.Errorf("%s reason = %q, want %q", p, reasons[p], ReasonTestSupport)
+		}
+	}
+	// Still is-test, not test-support: the marker is the more specific claim.
+	if reasons["tests/test_core.py"] != ReasonIsTest {
+		t.Errorf("tests/test_core.py reason = %q, want is-test", reasons["tests/test_core.py"])
+	}
+	if len(cands) != 2 {
+		t.Errorf("want core.py and thing.rb as the only candidates, got %+v", cands)
+	}
+}
+
+// The evidence widening must not undo that: a test-support file measured
+// with covering tests stays excluded under its own reason.
+func TestWidenNeverPromotesTestSupport(t *testing.T) {
+	excl := []Exclusion{{Path: "tests/conftest.py", Reason: ReasonTestSupport}}
+	idx := EvidenceIndex{files: map[string]evidenceFileEntry{
+		"tests/conftest.py": {coveringTests: 620, mostCovering: "tests/test_core.py", hasStatements: true},
+	}}
+	cands, kept, promoted := WidenCandidacyByEvidence(nil, excl, idx, true)
+	if promoted != 0 || len(cands) != 0 {
+		t.Fatalf("promoted %d, cands %+v; a test-support file is never a subject", promoted, cands)
+	}
+	if len(kept) != 1 || kept[0].Reason != ReasonTestSupport {
+		t.Fatalf("kept = %+v, want the original test-support exclusion", kept)
+	}
+}

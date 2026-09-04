@@ -717,7 +717,12 @@ languages detected:
 The candidacy line (`evidence-paired · name-paired · uncovered · import-only`) is the
 v0.8.1 addition: `--dry-run` runs no suite, so `uncovered`/`evidence-paired` read 0
 and say so rather than implying a measurement — on a real run, evidence can widen
-candidacy past filename pairing (see below).
+candidacy past filename pairing (see below). Widened candidates compete under the
+same `--top` bound as everyone else: the report re-ranks and says `auditing N of M`
+once more, and N never exceeds what you asked for. Files under a language's test
+tree (`tests/conftest.py`, `spec/support/*.rb`, an in-tree test server) are
+`test-support` — part of the surface that grades, never a subject, however many
+tests load them.
 
 The JSON form carries every auditable file with its inferred test pairing and,
 for languages corral can parse symbols in, a per-file complexity measure

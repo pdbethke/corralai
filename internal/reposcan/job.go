@@ -74,7 +74,9 @@ type EmitConfig struct {
 	// yet changing one really does change what the suite measures.
 	//
 	// Two kinds, and only the first is caught by a filename marker:
-	//   - files Enumerate rejected as `is-test` (foo_test.go, spec_helper.rb).
+	//   - files Enumerate rejected as `is-test` (foo_test.go, spec_helper.rb)
+	//     or `test-support` (anything under a language's test root that is
+	//     not itself a test — see ReasonTestSupport).
 	//   - everything else living in a directory that holds a test file:
 	//     conftest.py, helpers.py, fixtures.py, jest.setup.js, golden JSON.
 	//     These match no test-filename marker, so Enumerate classifies them
@@ -88,9 +90,10 @@ type EmitConfig struct {
 	//
 	// WHAT IS STILL NOT COVERED, so a maintainer can decide how far to trust
 	// the key:
-	//   - a fixture file in a directory that holds no test file. A repo-root
-	//     conftest.py with all its tests under tests/ is the live example: it
-	//     configures every one of them and reaches no key.
+	//   - a fixture file OUTSIDE any test root, in a directory that holds no
+	//     test file. A repo-root conftest.py with all its tests under tests/
+	//     is the live example: it configures every one of them and reaches
+	//     no key. (Under a test root it is `test-support` and digested.)
 	//   - a non-regular entry under testdata (it is skipped rather than
 	//     erroring, since a scan-fatal error would be the worse failure).
 	//   - THE FILE-SCOPED PATH IGNORES THIS LIST ENTIRELY. When

@@ -177,29 +177,24 @@ func TestEnumeratePairingConventions(t *testing.T) {
 			},
 		},
 		{
-			// requests' collision: tests/test_utils.py claimed by BOTH
-			// src/requests/utils.py (flat form, rank 4 — depth 2, so still
-			// eligible) and tests/utils.py itself. tests/utils.py has no
-			// test-name marker (pre-existing on main, not introduced by this
-			// change — see the report), so it is misclassified as SOURCE
-			// rather than test, and its own sibling convention resolves to
-			// tests/test_utils.py at rank 0 — strictly better than
-			// src/requests/utils.py's rank-4 flat match. Per the
-			// strictly-better-rank rule, tests/utils.py (the pre-existing,
-			// unrelated pairing) keeps tests/test_utils.py, and
-			// src/requests/utils.py — which no longer gets to silently
-			// co-claim it — is demoted to ambiguous-test instead of being
-			// wrongly graded against a test suite that was never meant for
-			// it.
-			name: "python: requests tests/test_utils.py — pre-existing tests/utils.py misclassification wins the strict-rank tiebreak",
+			// requests' collision, resolved at the root: tests/test_utils.py
+			// was once claimed by BOTH src/requests/utils.py (flat form) and
+			// tests/utils.py, a helper module with no test-name marker that
+			// Enumerate misclassified as SOURCE — so the strict-rank rule
+			// handed the test to the helper and demoted the library file to
+			// ambiguous-test, the exact opposite of what the suite means.
+			// tests/utils.py now lives under the test tree
+			// (ReasonTestSupport) and never competes; the library file
+			// pairs with the test that was written for it.
+			name: "python: requests tests/test_utils.py — a tests/ helper module is test-support, not a rival source",
 			files: map[string]string{
 				"src/requests/utils.py": "def x(): ...\n",
 				"tests/utils.py":        "def y(): ...\n",
 				"tests/test_utils.py":   "def test_x(): pass\n",
 			},
 			wants: []want{
-				{path: "src/requests/utils.py", reason: ReasonAmbiguousTest},
-				{path: "tests/utils.py", test: "tests/test_utils.py"},
+				{path: "src/requests/utils.py", test: "tests/test_utils.py"},
+				{path: "tests/utils.py", reason: ReasonTestSupport},
 			},
 		},
 		{

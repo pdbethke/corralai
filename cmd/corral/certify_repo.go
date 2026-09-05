@@ -86,6 +86,8 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	noFailFastFlag := fs.Bool("no-fail-fast", false, noFailFastHelp)
 	preflightFlag := fs.Bool("preflight", false, "run the project's test suite once with coverage instrumentation and report which source files it never executes. One extra suite run; reports coverage-grade evidence, not proof")
 	recordFlag := fs.Bool("record", false, "record every file this scan audited or rejected, and why, into the DuckDB scan ledger (default: off). A BOOL here — unlike `certify --local`'s --record, which takes a tape PATH — see --record-db for where the ledger goes. A recording failure never changes the scan's verdict or exit code")
+	ledgerFlag := fs.String("ledger", "", "the ledger DIRECTORY this scan's entry is written to and earlier entries are read from as the prior (default: <repo>/.corral/ledger, or $CORRAL_LEDGER). One gzipped JSON entry per scan, naming the previous entry's hash, signed when a certify key is configured — the record, in plain text; DuckDB is its view (`corral verify --ledger`, `seal --db <dir>`, `models rank --db <dir>`). Make the directory a worktree of the corral/ledger branch and a laptop run and an Action run are one writer")
+	noLedgerFlag := fs.Bool("no-ledger", false, "write no ledger entry and read no prior from the default ledger directory (an explicit --prior still applies)")
 	priorFlag := fs.String("prior", "", "what earlier runs already tried, so this run plants DIFFERENT faults: a corral-mutants document (see --record-mutants), a scan ledger (.duckdb, see --record-db), or a directory holding any number of either — a document brings the hunks, a ledger the outcomes, merged per edit. Applied only to a file whose bytes are EXACTLY what the prior was recorded against; a file the prior knows under other bytes gets none, and the report says so. A run handed a prior sits a different exam from one without — the verdict, the ledger and the signed statement carry priorsApplied and the prior's digest, and the digest is in the cache key, so a repeat audit never reads as the tests changing when only the exam did")
 	mutantsFlag := fs.String("mutants", "", "REPLAY a recorded mutant set (see --record-mutants) instead of generating one: every audited file is graded against exactly the mutants in this file, and not one generator model call is made. Mutants are authored by a model, so an ordinary run re-draws the exam every time and two runs of the same audit are not two samples of one measurement — pin the set and a change to anything ELSE becomes measurable. Every selected file must appear in the set with the SAME bytes it was recorded from; a missing file or a changed one is refused (exit 2) up front, never half-replayed. Reads a corral-mutants-2 document, or an older corral-mutants-1 one, whose whole-file mutants still replay byte-for-byte.")
 	recordMutantsFlag := fs.String("record-mutants", "", "write the mutants this scan actually GRADED to this file, as a replayable corral-mutants-2 document — one entry per audited file, each mutant its SEARCH/REPLACE hunk, tied to the sha256 of the source it was derived from. Written even when the scan's gates fail: a red verdict is still a recorded exam. A v2 document re-recorded from a --mutants replay of an older corral-mutants-1 set contains that set's WHOLE-FILE entries, not hunks — the run graded what was recorded, and re-recording it does not manufacture anchors it never had")
@@ -560,6 +562,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// Skipped on a dry run, which never audits anything: demanding a jail and a
 	// provider key to print the jobs a scan WOULD emit would refuse the one
 	// invocation that costs nothing.
+	ledgerDir := ""
 	var ex *localExecutor
 	if !*dryRun {
 		// Each job runs the whole tree in a jail and grades it with the
@@ -567,6 +570,10 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		// plugin's stock recursive command is used — resolved per job, since a
 		// repo can mix languages.
 		ex = newLocalExecutor(*repoDir, checkArgv, *substrateFlag, *timeoutFlag, stdout)
+		ledgerDir = strings.TrimRight(*ledgerFlag, "/")
+		if ledgerDir == "" {
+			ledgerDir = defaultLedgerDir(*repoDir)
+		}
 		ex.wholeSuite = *wholeSuiteFlag
 		// The selection cache lives in the same ledger --record-db names,
 		// independent of --record for its Get half — see --no-selection-cache's
@@ -585,7 +592,11 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		}
 		// --prior: loaded once, resolved per file against its bytes. A path
 		// that cannot be read refuses the scan up front rather than running
-		// the unprimed exam under a primed flag.
+		// the unprimed exam under a primed flag. Unset, the prior is the
+		// ledger directory this scan will write to — what earlier runs left
+		// there — unless --no-ledger; a primed exam is disclosed on every
+		// verdict either way, so a laptop's second run is never silently
+		// different from its first.
 		if p := strings.TrimSpace(*priorFlag); p != "" {
 			lp, perr := prior.Load(p)
 			if perr != nil {
@@ -593,6 +604,14 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 				return 2
 			}
 			ex.prior = lp
+		} else if !*noLedgerFlag {
+			if entries, lerr := auditpush.ReadLedgerDir(ledgerDir); lerr == nil && len(entries) > 0 {
+				if lp, perr := prior.Load(ledgerDir); perr == nil {
+					ex.prior = lp
+					fmt.Fprintf(stdout, "  prior: %d earlier entr%s in %s — files with matching bytes sit a primed exam (--no-ledger to skip)\n",
+						len(entries), map[bool]string{true: "y", false: "ies"}[len(entries) == 1], ledgerDir)
+				}
+			}
 		}
 		ex.writerMode = writerMode
 		ex.models = auditModels{
@@ -1517,6 +1536,28 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// but it means one fail-open write turning bad silently takes the next
 	// one with it. Neither changes the exit code; see the block comment
 	// above.
+	// THE LEDGER ENTRY, by default: the record, as one signed file in the
+	// repo's own ledger directory. --push is the additional sink (a
+	// warehouse, MotherDuck, or another directory); this one needs no flag,
+	// because a run that keeps no record is a run that cannot be checked
+	// later, and "you forgot --record" was the commonest way a scan left
+	// nothing behind. Fail-open like every other write: a full disk never
+	// changes the verdict.
+	if !*noLedgerFlag && subjErr != nil {
+		// A tree with no commit is a legitimate way to run (a scratch
+		// checkout, a fixture) and not an error — said on the report, where
+		// the entry line would otherwise be, not as a failure on stderr.
+		fmt.Fprintf(stdout, "  ledger: no entry written — %v\n", subjErr)
+	}
+	if !*noLedgerFlag && subjErr == nil {
+		entryBundle := bundle
+		entryBundle.Link = auditpush.Link{ScanID: scanID, StatementSHA256: statementSHA256}
+		if c, lerr := pushBundle(ledgerDir+"/", entryBundle); lerr != nil {
+			fmt.Fprintf(stderr, "corral certify --repo: writing the ledger entry to %s: %v\n", ledgerDir, lerr)
+		} else if c.Total() > 0 {
+			fmt.Fprintf(stdout, "  ledger: entry written to %s (%d file(s), %d mutant(s)) — `corral verify --ledger %s` walks the chain\n", ledgerDir, c.Files, c.Mutants, ledgerDir)
+		}
+	}
 	if strings.TrimSpace(*pushFlag) != "" {
 		bundle.Link = auditpush.Link{ScanID: scanID, StatementSHA256: statementSHA256, Require: strings.TrimSpace(*attestFlag) != ""}
 		switch {

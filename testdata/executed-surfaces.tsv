@@ -116,6 +116,8 @@ corral certify --repo --tests	executed	test:cmd/corral/certify_repo_test.go
 corral certify --repo --timeout	executed	test:cmd/corral/certify_adversarial_test.go
 corral certify --repo --max-tokens	executed	test:cmd/corral/local_endpoint_test.go
 corral certify --repo --prior	executed	test:cmd/corral/certify_repo_evidence_candidacy_test.go
+corral certify --repo --ledger	executed	test:cmd/corral/ledger_test.go
+corral certify --repo --no-ledger	executed	test:cmd/corral/ledger_test.go
 corral certify --repo --top	executed	run:2026-09-02 md:corral_public scans 22-26
 corral certify --repo --transparency	executed	test:cmd/corral/certify_repo_transparency_test.go
 corral certify --repo --whole-suite	executed	test:cmd/corral/certify_repo_report_selection_test.go

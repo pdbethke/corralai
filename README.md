@@ -823,6 +823,21 @@ that is a deliberate act, is in
   it cannot fit. **Every verdict, ledger row and signed statement carries the
   budget and its rule** (`complexity`, `complexity-fitted`, `explicit`, `default`),
   because a kill rate over 8 mutants and one over 40 are different measurements.
+- **The ledger — the record, as text, written by default.** A `--repo` scan
+  writes its entry into `.corral/ledger/` under the repository: one gzipped
+  JSON file — the scan, its files, every mutant with its place, shape and
+  outcome, the model calls, the events — that names the previous entry's
+  hash and, when a certify key is configured, carries an Ed25519 signature
+  over its own. `corral verify --ledger .corral/ledger` walks the chain and
+  names an entry that was edited, removed or reordered. DuckDB is the view,
+  never the store: `seal --db <dir>`, `models rank --db <dir>` and `verify
+  --db <dir>` read a directory as they read a warehouse, `--push md:` sends
+  the same entries to MotherDuck, and plain DuckDB reads the files with
+  `read_json_auto('scans/*.json.gz')`. On a runner the Action writes the same
+  entries into a checkout of the `corral/ledger` branch; make your local
+  directory a worktree of that branch and a laptop run and an Action run are
+  one writer. `--ledger <dir>` moves it, `--no-ledger` skips it. Twenty-one
+  kilobytes a run, measured. ([the field note](https://corralai.dev/field-notes/the-ledger-is-just-text/))
 - **The prior (`--prior`) — the next run plants what the last one didn't.**
   Hand a run what earlier runs recorded — a `--record-mutants` document (the
   hunks), a `--record-db` ledger (the outcomes), or a directory of either — and
@@ -834,7 +849,9 @@ that is a deliberate act, is in
   none, and the report says so. **A primed exam is a different exam**: the
   verdict, both ledgers and the signed statement carry `priorsApplied` and the
   prior's digest, and the digest is in the cache key, so a repeat audit never
-  reads as the tests changing when only the exam did. With the budget sized to
+  reads as the tests changing when only the exam did. Unset, the prior is the
+  repository's own ledger — a second run on a laptop is primed by the first,
+  and says so. With the budget sized to
   the file and the reach recorded per run, successive primed runs cover the
   decision points the last one didn't — cumulative reach, computable from the
   warehouse. On a runner, the `corral/ledger` branch is where the prior lives

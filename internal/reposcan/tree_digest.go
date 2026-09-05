@@ -74,6 +74,13 @@ func TreeDigest(root string) (string, error) {
 		if rel == "" || seen[rel] {
 			continue
 		}
+		// The record is not the tree: a scan writes its ledger entry into
+		// .corral/ (untracked until committed to the ledger branch), and a
+		// digest that saw it would make every second scan a cache miss for
+		// the first scan having been recorded.
+		if rel == ".corral" || strings.HasPrefix(rel, ".corral/") {
+			continue
+		}
 		seen[rel] = true
 		paths = append(paths, rel)
 	}

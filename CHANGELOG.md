@@ -43,6 +43,14 @@ confidence; a rate too loose to be a grade no longer certifies.
 - **The writer pair is recorded whether or not its coefficient is** — what
   each writer proved of the same survivors, and the union and overlap of
   their misses, on the report line, both ledgers and the statement.
+- **The ledger is the record, written by default.** A `--repo` scan writes
+  one signed, hash-linked, gzipped JSON entry into `.corral/ledger/` under
+  the repository (`--ledger <dir>`, `--no-ledger`), and reads the entries
+  already there as its prior. `corral verify --ledger <dir>` walks the
+  chain; `corral ledger append` re-links an entry to a moved head (the
+  Action's retry loop and a laptop behind its branch). `--push <dir>/`
+  writes the same entries anywhere; `seal`/`models rank`/`verify --db`
+  accept a directory. DuckDB is the view, never the store.
 - **`--prior`: the next run plants what the last one didn't.** Hand a run
   a `--record-mutants` document, a `--record-db` ledger, or a directory of
   either, and the generator is told every edit earlier runs tried on a file

@@ -163,7 +163,7 @@ const (
 // the subject of an audit of THIS repo's tests, and letting them into the walk
 // puts vendored third-party code into the report's denominator.
 var skipDirs = map[string]bool{
-	".git": true, "node_modules": true, "vendor": true,
+	".git": true, ".corral": true, "node_modules": true, "vendor": true,
 	".venv": true, "venv": true, ".bundle": true, "testdata": true,
 	"dist": true, "build": true, "target": true, ".tox": true,
 	"site-packages": true,
@@ -189,6 +189,11 @@ var skipDirs = map[string]bool{
 // different name, not a modest build artifact.
 var invisibleDirs = map[string]bool{
 	".git": true,
+	// .corral is corral's OWN record — the ledger directory a scan writes
+	// its entry into (and reads its prior from) — not the repository's
+	// source: like .git, listing it would report the scan to itself, and
+	// digesting it would make every second scan a cache miss.
+	".corral": true,
 	// Dependency trees, by ecosystem: node, go, python (×3), ruby.
 	"node_modules": true, "vendor": true,
 	".venv": true, "venv": true, "site-packages": true, ".tox": true,

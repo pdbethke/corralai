@@ -100,7 +100,7 @@ func soleAssignedCloudModel(assign advpool.RoleAssignment) (vendor, model string
 // including the cross-vendor seats, which each get their own backend and
 // would otherwise be counted by nobody. A role absent from meters (or a nil
 // map) records nothing, the same as a nil single meter always has.
-func localChatterFor(assign advpool.RoleAssignment, meters map[string]*agentbackend.UsageMeter, endpoints map[string]string) (func(role string) agentworker.Chatter, error) {
+func localChatterFor(assign advpool.RoleAssignment, meters map[string]*agentbackend.UsageMeter, endpoints map[string]string, budget *agentbackend.TokenBudget) (func(role string) agentworker.Chatter, error) {
 	base := agentbackend.FromEnv()
 	sw, canSwitch := base.(agentbackend.ModelSwitcher)
 	bv := baseVendor()
@@ -143,7 +143,7 @@ func localChatterFor(assign advpool.RoleAssignment, meters map[string]*agentback
 			// the device. Without it every local seat shares OLLAMA_URL, one
 			// card, and one VRAM budget.
 			if url := endpoints[role]; url != "" {
-				perRole[role] = agentbackend.AsChatterMetered(agentbackend.NewOllamaBackend(url, model), meters[role])
+				perRole[role] = agentbackend.AsChatterBudgeted(agentbackend.NewOllamaBackend(url, model), meters[role], budget)
 			}
 			continue
 		}
@@ -165,7 +165,7 @@ func localChatterFor(assign advpool.RoleAssignment, meters map[string]*agentback
 		if err != nil {
 			return nil, fmt.Errorf("cross-vendor %s: %w", role, err)
 		}
-		perRole[role] = agentbackend.AsChatterMetered(cb, meters[role])
+		perRole[role] = agentbackend.AsChatterBudgeted(cb, meters[role], budget)
 	}
 
 	return func(role string) agentworker.Chatter {
@@ -173,9 +173,9 @@ func localChatterFor(assign advpool.RoleAssignment, meters map[string]*agentback
 			return c
 		}
 		if model := assign[role]; canSwitch && model != "" {
-			return agentbackend.AsChatterMetered(sw.WithModel(model), meters[role])
+			return agentbackend.AsChatterBudgeted(sw.WithModel(model), meters[role], budget)
 		}
-		return agentbackend.AsChatterMetered(base, meters[role])
+		return agentbackend.AsChatterBudgeted(base, meters[role], budget)
 	}, nil
 }
 

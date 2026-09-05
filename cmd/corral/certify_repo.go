@@ -25,6 +25,7 @@ import (
 
 	"github.com/pdbethke/corralai/internal/adequacy"
 	"github.com/pdbethke/corralai/internal/advpool"
+	"github.com/pdbethke/corralai/internal/agentbackend"
 	"github.com/pdbethke/corralai/internal/auditpush"
 	"github.com/pdbethke/corralai/internal/certify"
 	"github.com/pdbethke/corralai/internal/lang"
@@ -96,6 +97,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	noGoalCacheFlag := fs.Bool("no-goal-cache", false, "skip the goal cache — every candidate is re-derived even when a PRIOR scan already derived a goal for the exact same bytes, model and prompt revision. Re-buys a model call per file that a content-addressed cache would otherwise have served for free; use this to isolate goal-derivation variance from a comparison, or on a scan whose operator does not want a goal receipt kept in the ledger at all. The cache lives in the same ledger --record-db names, independent of --record itself")
 	noVerdictCacheFlag := fs.Bool("no-verdict-cache", false, "skip the verdict cache — every candidate is re-audited even when a PRIOR scan already earned a verdict for the exact same bytes, tests, models, engine and substrate. Re-buys the whole audit (generation, grading, the writer) per file; use this to isolate model variance from a comparison, or to redo a measurement the cache would otherwise keep serving. The cache lives in the same ledger --record-db names and is consulted independent of --record itself")
 	noSelectionCacheFlag := fs.Bool("no-selection-cache", false, "skip the selection cache — the ONE instrumented coverage run always executes, even when a PRIOR scan already ran the identical instrumented command over a byte-identical tree. Re-buys a full suite run (the single most expensive measurement a scan makes outside model calls) that a content-addressed cache would otherwise have served for free; use this to isolate selection variance from a comparison, or when the operator does not trust the tree to be unchanged. The cache lives in the same ledger --record-db names, and (like the goal cache) is consulted independent of --record itself; only WRITING a fresh hit requires --record, since a scan_id has to exist to write one against")
+	maxTokensFlag := fs.Int64("max-tokens", 0, "cap on model TOKENS for the whole SCAN, every file, input + output, every seat (0 = no cap). Checked before each call and charged after it, so one in-flight call can overshoot by its own size. Once reached: a generator seat that has not run makes its file ungradable (executor-error naming the cap), a writer or critic seat is skipped and the file flagged as it is for a provider failure — the dev kill rate already measured stands. The cost line says the cap was reached and after how many calls. Corral has bounded mutants, shards and wall clock and never money; this is the money bound")
 	timeoutFlag := fs.Duration("timeout", defaultRunTimeout, "per-file WALL-CLOCK budget, measured from that file's run start — not a no-progress timer. A file still making steady progress is stopped when it exceeds this and banks a needs-review TIMEOUT verdict, keeping its dev kill rate and survivors but losing the PROVING half. Same default and semantics as `certify --local`'s --timeout; raise it for a file with many survivors, which needs the most room and has the most to prove. PER FILE, so it multiplies: a scan of N files with W workers can spend up to (N/W) x this in the worst case, which is what --top and --swarm are for")
 	if err := fs.Parse(flagArgs); err != nil {
 		return 2
@@ -931,6 +933,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	localEndpoints = mergeLocalEndpoints(localEndpoints, seatReg.localEndpoints())
 	if ex != nil {
 		ex.localEndpoints = localEndpoints
+		ex.tokenBudget = agentbackend.NewTokenBudget(*maxTokensFlag)
 	}
 
 	cfg := reposcan.EmitConfig{
@@ -1215,6 +1218,11 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// and scan_model_calls can never disagree.
 	if line := costLine(scanModelCallTotals(results)); line != "" {
 		fmt.Fprintln(stdout, line)
+	}
+	if ex != nil {
+		if line := budgetLine(ex.tokenBudget); line != "" {
+			fmt.Fprintln(stdout, line)
+		}
 	}
 	// A distinct section, never folded into Excluded/Ungradable/the audited
 	// fraction: this is an inventory alongside the audit, not a change to
@@ -4073,6 +4081,8 @@ type localExecutor struct {
 	// localEndpoints places local seats on specific ollama daemons for every
 	// file this scan audits — one daemon per GPU. See parseLocalEndpoints.
 	localEndpoints map[string]string
+	// tokenBudget is the scan-wide --max-tokens cap, one for every file.
+	tokenBudget *agentbackend.TokenBudget
 
 	// perFileSwarm is how many workers ONE file's own audit may use. It is >1
 	// only on the workspace substrate, where resolveScanWorkers has already
@@ -4335,6 +4345,7 @@ func (l *localExecutor) auditInputFor(j reposcan.Job) localAuditInput {
 	sel := l.selectionFor(j)
 	return localAuditInput{
 		localEndpoints: l.localEndpoints,
+		tokenBudget:    l.tokenBudget,
 		repoDir:        l.repoDir,
 		codePath:       j.Path,
 		// j.TestPath is empty for an evidence-only candidate BY

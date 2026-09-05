@@ -43,6 +43,15 @@ confidence; a rate too loose to be a grade no longer certifies.
 - **The writer pair is recorded whether or not its coefficient is** — what
   each writer proved of the same survivors, and the union and overlap of
   their misses, on the report line, both ledgers and the statement.
+- **`--max-tokens`, a cap on money.** One cap across every seat of a run;
+  checked before each call, charged after; a refused call never reaches the
+  provider. Disclosed on the cost line. Ollama seats now report their tokens.
+- **`verify --db` survives columns added after the push.** The rows hash is
+  now over a sparse canonical form (version 2, recorded on the statement);
+  a v1 statement that mismatches is told why in words.
+- **A rate too loose to be a grade does not certify** — see the BREAKING
+  entry above. The `--local` verdict prints the interval, the budget, the
+  reach, and `INDICATIVE:` with the reason.
 - `--top` is one bound over every door: evidence widening competes under it
   instead of appending past it. Files under a language's test tree
   (`tests/conftest.py`, `spec/support/`) are `test-support`, never subjects.

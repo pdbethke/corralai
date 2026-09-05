@@ -150,6 +150,11 @@ func (jsPlugin) TestPaths(codePath string) []TestCandidate {
 // TestRoots names JS/TS's additional conventional test roots (beyond
 // reposcan's generic "tests" default): a same-directory __tests__ folder,
 // and the singular test/ spelling many Node projects use.
+// HarnessFiles names what jest/vitest/mocha read before any test.
+func (jsPlugin) HarnessFiles() []string {
+	return []string{"jest.config.", "jest.setup.", "vitest.config.", "vitest.setup.", ".mocharc.", "package.json"}
+}
+
 func (jsPlugin) TestRoots() []string { return []string{"__tests__", "test", "tests"} }
 
 // Preflight checks the operator's own test command's binary (e.g. a project

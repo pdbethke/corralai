@@ -1773,7 +1773,13 @@ func testSurfacePaths(root *os.Root, cands []reposcan.Candidate, excl []reposcan
 		case reposcan.ReasonNotRegularFile:
 			// Never digested — see the comment above.
 		default:
-			if testDirs[dirOf(e.Path)] {
+			// Beside a test, OR a file the runner reads before any test
+			// wherever it lives (lang.HarnessConfigurer): a repo-root
+			// conftest.py configures every test under tests/ and sits
+			// beside none of them — the one shape the "beside a test" rule
+			// could never reach, listed as open in TestSurfacePaths' doc
+			// until now.
+			if testDirs[dirOf(e.Path)] || lang.IsHarnessFile(e.Path) {
 				paths = append(paths, e.Path)
 			}
 		}

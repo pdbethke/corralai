@@ -256,6 +256,12 @@ func (pyPlugin) TreeEnv(tree string, cores int) []string {
 //
 // Ranks: 0 = sibling (both forms), 1 = full mirror, 2 = leading-segment
 // stripped, 3 = flat.
+// HarnessFiles names what pytest reads before any test: conftest.py at any
+// depth, and the ini files that carry [pytest] / [tool.pytest.ini_options].
+func (pyPlugin) HarnessFiles() []string {
+	return []string{"conftest.py", "pytest.ini", "tox.ini", "setup.cfg", "pyproject.toml"}
+}
+
 func (pyPlugin) TestPaths(codePath string) []TestCandidate {
 	dir, base, _ := splitPath(codePath)
 	name := "test_" + base + ".py"

@@ -157,6 +157,10 @@ func TestTestSurfacePathsCoversTheWholeTestDirectory(t *testing.T) {
 		// the one shape the "beside a test" rule cannot reach. It is in
 		// the surface by where it lives (reposcan.ReasonTestSupport).
 		"tests/testserver/server.py": "def serve():\n    return 0\n",
+		// A repo-root conftest.py: beside no test, under no test root, and
+		// read by every test under tests/ — reached by NAME.
+		"conftest.py":    "import pytest\n",
+		"pyproject.toml": "[tool.pytest.ini_options]\ntestpaths = ['tests']\n",
 		"src/jest.setup.js":          "module.exports = {}\n",
 		"src/a.test.js":              "test('a', () => {})\n",
 		"docs/notes.md":              "not a test\n",
@@ -173,6 +177,7 @@ func TestTestSurfacePathsCoversTheWholeTestDirectory(t *testing.T) {
 	for _, want := range []string{
 		"tests/test_a.py", "tests/conftest.py", "tests/helpers.py", "tests/golden.json",
 		"tests/testserver/server.py", "src/a.test.js", "src/jest.setup.js",
+		"conftest.py", "pyproject.toml",
 	} {
 		if !got[want] {
 			t.Errorf("%s is missing from the test surface — changing it changes what the suite measures", want)

@@ -176,6 +176,11 @@ func (phpPlugin) TestPaths(codePath string) []TestCandidate {
 // TestRoots names PHP's own additional conventional test roots (beyond
 // reposcan's generic "tests" default): the singular `test/` spelling some
 // projects use alongside the plural.
+// HarnessFiles names what PHPUnit reads before any test.
+func (phpPlugin) HarnessFiles() []string {
+	return []string{"phpunit.xml", "phpunit.xml.dist", "phpunit.dist.xml", "bootstrap.php"}
+}
+
 func (phpPlugin) TestRoots() []string { return []string{"tests", "test"} }
 
 // Preflight requires the DERIVED php interpreter (phpInterpreter — the

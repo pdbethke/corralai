@@ -273,9 +273,14 @@ runs:
         # numbers, nothing that was not already in the repository.
         if [ -n "${LEDGER_DIR:-}" ]; then
           mkdir -p "$LEDGER_DIR/mutants"
-          # Read as the prior; written as one signed JSON entry per scan
-          # (a --push to a DIRECTORY), never a database in the branch.
-          args+=(--prior "$LEDGER_DIR" --push "$LEDGER_DIR/" --record-mutants "$LEDGER_DIR/mutants/$COMMIT_SHA.json")
+          # The ledger directory: one signed JSON entry per scan written
+          # there, earlier entries read as the prior, the hunks beside it.
+          args+=(--ledger "$LEDGER_DIR" --record-mutants "$LEDGER_DIR/mutants/$COMMIT_SHA.json")
+        else
+          # No ledger checked out: a runner has nowhere for an entry to
+          # survive, so none is written — rather than one into the
+          # checkout that the job then throws away.
+          args+=(--no-ledger)
         fi
         # Role→model routing. Each is omitted when empty so corral keeps
         # ownership of its own defaults — the action must never become a second

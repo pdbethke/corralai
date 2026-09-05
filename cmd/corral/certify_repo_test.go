@@ -3428,13 +3428,15 @@ func TestCertifyRepoPreflightFlagAbsentIsByteIdenticalToBaseline(t *testing.T) {
 
 	var without, with bytes.Buffer
 	var errb1, errb2 bytes.Buffer
-	if code := runCertifyRepo([]string{"--repo", root, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant, "--critic-model", "off", "--goals", goals, "--substrate", substrateWorkspace}, &without, &errb1); code != 1 {
+	// --no-ledger on both: the second run would otherwise read the first's
+	// entry as its prior, which is a documented line but not --preflight's.
+	if code := runCertifyRepo([]string{"--repo", root, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant, "--critic-model", "off", "--goals", goals, "--substrate", substrateWorkspace, "--no-ledger"}, &without, &errb1); code != 1 {
 		// 0 jobs emitted (nothing goaled) => COULD-NOT-GRADE => exit 1. The
 		// exit code itself is not what this test is about; it just must be
 		// the SAME in both runs (checked below).
 		t.Logf("no-flag run exit %d, stderr=%s", code, errb1.String())
 	}
-	codeWith := runCertifyRepo([]string{"--repo", root, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant, "--critic-model", "off", "--goals", goals, "--substrate", substrateWorkspace, "--preflight"}, &with, &errb2)
+	codeWith := runCertifyRepo([]string{"--repo", root, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant, "--critic-model", "off", "--goals", goals, "--substrate", substrateWorkspace, "--preflight", "--no-ledger"}, &with, &errb2)
 	_ = codeWith
 
 	withStr := with.String()

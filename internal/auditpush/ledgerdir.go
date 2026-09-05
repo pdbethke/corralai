@@ -71,7 +71,10 @@ func IsLedgerDir(target string) bool {
 // Unsigned entries are legal (no key configured) and are SAID to be, by
 // every reader: a chain still orders them; only a signature says who.
 type LedgerEntry struct {
-	Format  string    `json:"format"`
+	Format string `json:"format"`
+	// Pushed is when the entry was PLACED in this directory (see
+	// AppendLedgerEntry), which is what orders the files; the run's own
+	// time is Bundle.Scan.StartedAt.
 	Pushed  time.Time `json:"pushed"`
 	ScanUID string    `json:"scan_uid"`
 	Prev    string    `json:"prev,omitempty"`
@@ -124,32 +127,58 @@ func writeLedgerFile(dir string, b Bundle, signer LedgerSigner) (Counts, error) 
 	if b.Scan.PushedBy == "" {
 		b.Scan.PushedBy = PushedByCertify
 	}
+	e := LedgerEntry{Format: LedgerFileFormat, Pushed: now, ScanUID: uid, Bundle: b}
+	if _, err := AppendLedgerEntry(dir, e, signer); err != nil {
+		return Counts{}, err
+	}
+	return Counts{Scans: boolToInt(b.Scan != (ScanRow{})), Files: len(b.Files), Mutants: len(b.Mutants), Calls: len(b.Calls), Events: len(b.Events)}, nil
+}
+
+// AppendLedgerEntry LINKS e to the directory's current head, hashes it,
+// signs it when a signer is given, and places it. It is the one way an
+// entry enters a directory — a push, and `corral ledger append` re-linking
+// an entry written elsewhere (a runner's staging dir; a laptop whose branch
+// moved under it) — so Prev is always the head at placement time, never a
+// head remembered from earlier. A chain is one writer at a time; this is
+// the verb the retry loop (fetch → append → push) runs. Returns the file's
+// name.
+func AppendLedgerEntry(dir string, e LedgerEntry, signer LedgerSigner) (string, error) {
 	scans := filepath.Join(dir, ScansSubdir)
 	if err := os.MkdirAll(scans, 0o750); err != nil {
-		return Counts{}, fmt.Errorf("auditpush: ledger dir: %w", err)
+		return "", fmt.Errorf("auditpush: ledger dir: %w", err)
 	}
 	// The link: the newest entry's hash. Read, not remembered — the
 	// directory is the state, and another writer may have appended.
 	prev := ""
 	if existing, err := ReadLedgerDir(dir); err != nil {
-		return Counts{}, err
+		return "", err
 	} else if n := len(existing); n > 0 {
 		prev = existing[n-1].Hash
 	}
-	e := LedgerEntry{Format: LedgerFileFormat, Pushed: now, ScanUID: uid, Prev: prev, Bundle: b}
+	e.Format = LedgerFileFormat
+	e.Prev = prev
+	// Pushed is PLACEMENT time — when the entry entered THIS directory —
+	// so file order and chain order agree by construction: an entry
+	// re-linked here after the head moved is newer than the head it names,
+	// whatever clock it was first written under. The run's own time is on
+	// the bundle (Scan.StartedAt); the uid keeps the identity the first
+	// push minted.
+	e.Pushed = time.Now().UTC().Truncate(time.Microsecond)
+	e.Hash, e.KeyID, e.Signature = "", "", ""
 	h, err := EntryHash(e)
 	if err != nil {
-		return Counts{}, err
+		return "", err
 	}
 	e.Hash = h
 	if signer != nil {
 		raw, _ := hex.DecodeString(h)
 		keyID, sig, err := signer.Sign(raw)
 		if err != nil {
-			return Counts{}, fmt.Errorf("auditpush: sign ledger entry: %w", err)
+			return "", fmt.Errorf("auditpush: sign ledger entry: %w", err)
 		}
 		e.KeyID, e.Signature = keyID, hex.EncodeToString(sig)
 	}
+	b, now, uid := e.Bundle, e.Pushed, e.ScanUID
 	commit := b.Scan.Commit
 	if len(commit) > 12 {
 		commit = commit[:12]
@@ -164,24 +193,40 @@ func writeLedgerFile(dir string, b Bundle, signer LedgerSigner) (Counts, error) 
 	name := fmt.Sprintf("%s-%s-%s.json.gz", now.Format("20060102T150405Z"), commit, uid[:12])
 	js, err := json.MarshalIndent(e, "", " ")
 	if err != nil {
-		return Counts{}, err
+		return "", err
 	}
 	var buf bytes.Buffer
 	zw := gzip.NewWriter(&buf)
 	if _, err := zw.Write(js); err != nil {
-		return Counts{}, err
+		return "", err
 	}
 	if err := zw.Close(); err != nil {
-		return Counts{}, err
+		return "", err
 	}
 	tmp := filepath.Join(scans, "."+name+".tmp")
 	if err := os.WriteFile(tmp, buf.Bytes(), 0o644); err != nil { // #nosec G306 -- a record the branch publishes
-		return Counts{}, fmt.Errorf("auditpush: write ledger entry: %w", err)
+		return "", fmt.Errorf("auditpush: write ledger entry: %w", err)
 	}
 	if err := os.Rename(tmp, filepath.Join(scans, name)); err != nil {
-		return Counts{}, fmt.Errorf("auditpush: place ledger entry: %w", err)
+		return "", fmt.Errorf("auditpush: place ledger entry: %w", err)
 	}
-	return Counts{Scans: boolToInt(b.Scan != (ScanRow{})), Files: len(b.Files), Mutants: len(b.Mutants), Calls: len(b.Calls), Events: len(b.Events)}, nil
+	return name, nil
+}
+
+// ReadLedgerEntry reads one entry file (plain or gzipped).
+func ReadLedgerEntry(path string) (LedgerEntry, error) {
+	raw, err := readMaybeGzip(path)
+	if err != nil {
+		return LedgerEntry{}, err
+	}
+	var e LedgerEntry
+	if err := json.Unmarshal(raw, &e); err != nil {
+		return LedgerEntry{}, fmt.Errorf("auditpush: %s: %w", filepath.Base(path), err)
+	}
+	if e.Format != LedgerFileFormat {
+		return LedgerEntry{}, fmt.Errorf("auditpush: %s: format %q, want %q", filepath.Base(path), e.Format, LedgerFileFormat)
+	}
+	return e, nil
 }
 
 func boolToInt(v bool) int {

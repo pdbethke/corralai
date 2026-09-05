@@ -547,11 +547,17 @@ over both, not the store.
           cd .corral-ledger
           git add -A
           git -c user.name=corral -c user.email=corral@users.noreply.github.com commit -qm "corral: ${{ github.sha }}" || exit 0
-          # Append-only rows make a fetch-and-retry safe: a concurrent run's
-          # push lands first, ours reapplies on top.
+          # A chain is one writer at a time. If another run pushed first,
+          # our entry names a head that is no longer the head — and a git
+          # rebase moves the commit, not the link. So the retry re-LINKS:
+          # take our entry out, fetch the branch, `corral ledger append` it
+          # (re-hash, re-sign, place at the new head), commit, push again.
           for i in 1 2 3; do
             git push origin HEAD:corral/ledger && exit 0
-            git fetch origin corral/ledger && git rebase origin/corral/ledger || exit 1
+            ours=$(git diff --name-only HEAD~1 HEAD -- scans/ | head -1)
+            cp "$ours" "$RUNNER_TEMP/entry.json.gz"
+            git reset -q --hard origin/corral/ledger 2>/dev/null; git fetch origin corral/ledger && git reset -q --hard origin/corral/ledger
+            corral ledger append "$RUNNER_TEMP/entry.json.gz" . && git add -A && git -c user.name=corral -c user.email=corral@users.noreply.github.com commit -qm "corral: ${{ github.sha }} (re-linked)"
           done
           exit 1
 ```
@@ -571,6 +577,16 @@ primed; a changed file sits the plain exam and the report says so. The
 branch grows by one small text file per run — append-only, never rewritten,
 which is the shape git holds well; when the record outgrows a branch, point
 `push` at MotherDuck too — the same entries, the same query surface, shared.
+
+**A laptop writes the same entries.** `corral certify --repo .` writes its
+entry into `.corral/ledger/` under the repository by default (`--ledger
+<dir>` to move it, `--no-ledger` to skip) and reads the entries already
+there as its prior. Make that directory a worktree of the `corral/ledger`
+branch — `git worktree add .corral/ledger corral/ledger` — and a local run
+and an Action run are one writer with two places to put the file: `git
+push` carries your entry up, the next run on either side links to it.
+If the branch moved under you, `git fetch` and `corral ledger append
+<your entry> .corral/ledger` re-links it to the new head before you push.
 
 The commit step is skipped on `pull_request` events on purpose: a fork's
 pull request must not be able to write the repository's record, and

@@ -252,6 +252,15 @@ Usage:
                                   Local DuckDB file, no brain required:
                                   --db <path> (default $CORRALAI_SCANS_DB, else
                                   ~/.claude/corralai_scans.duckdb), --limit n, --json
+  corral verify --ledger <dir>    walk a ledger directory's chain: every entry's hash against its
+                                  bytes, every link against its predecessor, every signature
+                                  against --pub or the local certify key; one line per entry,
+                                  an edited or removed entry named; unsigned said, never "verified"
+  corral ledger append <entry> <dir>
+                                  re-link an entry to <dir>'s current head (re-hash, re-sign, place)
+                                  — the verb a fetch → append → push loop runs, since a chain is
+                                  one writer at a time and a git rebase moves the commit, not the link
+  corral ledger verify <dir>      the same walk as corral verify --ledger
   corral verify --attest <path> [flags]
                                   the checker for a certify --repo --attest statement: verifies
                                   its DSSE signature (against --pub or the local certify key,
@@ -538,6 +547,8 @@ func main() {
 			return mcpPoolRunner{client: mcpAdvClient{}, brainURL: brainURL, corpusVersion: corpusVersion,
 				poll: 5 * time.Second, timeout: 15 * time.Minute}
 		}, os.Stdout, os.Stderr))
+	case "ledger":
+		os.Exit(runLedger(os.Args[2:], os.Stdout, os.Stderr))
 	case "verify":
 		// `corral verify` — the checker for a `certify --repo --attest`
 		// AUDIT statement (signature + --db warehouse rows + Rekor

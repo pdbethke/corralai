@@ -268,6 +268,9 @@ type scanIdentity struct {
 	// warehouseRowsSHA256 is "" when the statement never carried one (no
 	// warehouse push accompanied the run it was written for).
 	warehouseRowsSHA256 string
+	// rowsHashVersion is the form the signer hashed with (0 = v1, before
+	// the field existed).
+	rowsHashVersion int
 }
 
 // statementScanIdentity reads the fields BuildAuditAttestation wrote — see
@@ -293,6 +296,9 @@ func statementScanIdentity(stmt map[string]any) scanIdentity {
 	}
 	if v, ok := pred["warehouseRowsSha256"].(string); ok {
 		id.warehouseRowsSHA256 = v
+	}
+	if v, ok := pred["warehouseRowsHashVersion"].(float64); ok {
+		id.rowsHashVersion = int(v)
 	}
 	return id
 }
@@ -392,7 +398,16 @@ func verifyWarehouseRows(dbFlag string, stmt map[string]any, statementSHA string
 		if rerr != nil {
 			return verifyCheckResult{checked: false, detail: fmt.Sprintf("reading --db: %v", rerr)}
 		}
-		h, herr := warehouseRowsSHA256(bundle)
+		// Hash the rows the way the signer did. A v1 statement (no version
+		// field) hashed the full JSON of the pushing binary's structs, which
+		// this binary reproduces only if no warehouse column has been added
+		// since — said in the mismatch detail rather than left to look like
+		// tampering.
+		hash := warehouseRowsSHA256
+		if id.rowsHashVersion < 2 {
+			hash = warehouseRowsSHA256Legacy
+		}
+		h, herr := hash(bundle)
 		if herr != nil {
 			return verifyCheckResult{checked: false, detail: fmt.Sprintf("hashing the rows read back: %v", herr)}
 		}
@@ -406,6 +421,9 @@ func verifyWarehouseRows(dbFlag string, stmt map[string]any, statementSHA string
 		detail += fmt.Sprintf("; %d further backfill(s) by `corral scans push` were not tried, since a backfill can never match", len(backfills))
 	}
 	detail += " — note: a VACUUMed warehouse can change row order and trip this without tampering"
+	if id.rowsHashVersion < 2 {
+		detail += "; and this statement's hash is version 1 (the full JSON of the pushing binary's row structs), which a binary with columns added since cannot reproduce — a pre-1.0 limitation, not evidence of tampering; verify it with the corral version that pushed it"
+	}
 	return verifyCheckResult{checked: true, ok: false, detail: detail}
 }
 

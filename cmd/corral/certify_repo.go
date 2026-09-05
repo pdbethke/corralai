@@ -5002,6 +5002,12 @@ func writeAuditStatement(path, repoDir string, r reposcan.RepoReport, models map
 		Passed:              passed,
 		ScanID:              scanID,
 		WarehouseRowsSHA256: rowsSHA,
+		WarehouseRowsHashVersion: func() int {
+			if rowsSHA == "" {
+				return 0
+			}
+			return WarehouseRowsHashVersion
+		}(),
 	})
 	b, err := json.MarshalIndent(stmt, "", "  ")
 	if err != nil {
@@ -5062,7 +5068,7 @@ func writeAuditStatement(path, repoDir string, r reposcan.RepoReport, models map
 // from your warehouse". Reproducing it needs the bundle, which means the
 // pushing side. Do not upgrade the claim in a doc or a README without first
 // making the two conversions above lossless.
-func warehouseRowsSHA256(b auditpush.Bundle) (string, error) {
+func prepareRowsForHash(b auditpush.Bundle) (auditpush.Bundle, error) {
 	// The hash must cover what the WAREHOUSE receives, not what this process
 	// happens to hold. Without --push-source the writer stores SQL NULL for
 	// the source columns, so hashing them here would sign a number no
@@ -5120,7 +5126,42 @@ func warehouseRowsSHA256(b auditpush.Bundle) (string, error) {
 	}
 	// Link is deliberately NOT hashed: it holds the statement hash itself.
 	b.Link = auditpush.Link{}
-	js, err := json.Marshal(b)
+	return b, nil
+}
+
+func warehouseRowsSHA256(b auditpush.Bundle) (string, error) {
+	prepared, err := prepareRowsForHash(b)
+	if err != nil {
+		return "", err
+	}
+	// HASH VERSION 2: the SPARSE canonical form (auditpush.CanonicalSparseJSON),
+	// so a column added to the warehouse after a statement was signed — read
+	// back as a zero-valued field the pushing binary never had — does not
+	// change the bytes. Version 1 hashed the full JSON of this binary's
+	// structs, and every column addition since schema 2 broke `verify --db`
+	// on every statement pushed before it. See warehouseRowsSHA256Legacy.
+	js, err := auditpush.CanonicalSparseJSON(prepared)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(js)
+	return hex.EncodeToString(sum[:]), nil
+}
+
+// WarehouseRowsHashVersion is the version of warehouseRowsSHA256's form a
+// statement records, so a verifier hashes the rows the way the signer did.
+const WarehouseRowsHashVersion = 2
+
+// warehouseRowsSHA256Legacy is version 1: the full JSON of the bundle as
+// THIS binary's structs define it — kept so a v1 statement can still be
+// tried, with the caveat printed that it is reproducible only by a binary
+// with the same struct shape as the one that pushed it.
+func warehouseRowsSHA256Legacy(b auditpush.Bundle) (string, error) {
+	prepared, err := prepareRowsForHash(b)
+	if err != nil {
+		return "", err
+	}
+	js, err := json.Marshal(prepared)
 	if err != nil {
 		return "", err
 	}

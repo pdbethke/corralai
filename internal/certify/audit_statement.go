@@ -213,6 +213,13 @@ type AuditStatement struct {
 	// let a third party recompute the hash from the warehouse alone. See
 	// cmd/corral's warehouseRowsSHA256 for the full list.
 	WarehouseRowsSHA256 string `json:"warehouseRowsSha256,omitempty"`
+	// WarehouseRowsHashVersion says which canonical form WarehouseRowsSHA256
+	// was computed over, so a verifier hashes the rows the way the signer
+	// did: 2 is the sparse form that ignores fields a row never had; absent
+	// (statements signed before this field) is version 1, the full JSON of
+	// the pushing binary's structs, reproducible only by a binary with the
+	// same struct shape.
+	WarehouseRowsHashVersion int `json:"warehouseRowsHashVersion,omitempty"`
 }
 
 // BuildAuditAttestation renders the statement as an in-toto Statement v1.
@@ -384,6 +391,9 @@ func BuildAuditAttestation(s AuditStatement) map[string]any {
 	// this predicate follows.
 	if s.WarehouseRowsSHA256 != "" {
 		predicate["warehouseRowsSha256"] = s.WarehouseRowsSHA256
+		if s.WarehouseRowsHashVersion > 0 {
+			predicate["warehouseRowsHashVersion"] = s.WarehouseRowsHashVersion
+		}
 	}
 
 	return map[string]any{

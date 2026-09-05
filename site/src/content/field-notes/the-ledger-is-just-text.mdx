@@ -1,0 +1,161 @@
+---
+title: "The ledger is just text"
+description: "We stopped storing verdicts in a database. A corral run now writes one signed, hash-linked JSON entry into a directory — a git branch on GitHub, a folder on a laptop — and DuckDB reads the directory as a table. Twenty-one kilobytes a run, a chain you can verify with sha256, and a query engine that never owns the record. A field note on what that changes, what it borrows, and what it is not."
+pubDate: 2026-09-05
+draft: false
+---
+
+{/* SPDX-License-Identifier: Elastic-2.0 */}
+
+*Field note. This one came out of a conversation rather than a run — the
+founder thinking through where a verdict should live, one step at a time,
+and each step being right. Written the same day it was built and merged
+([#256](https://github.com/pdbethke/corralai/pull/256)).*
+
+## The question
+
+Corral runs in two places. On a laptop, `corral certify` wrote its record to
+a DuckDB file under your home directory. On a GitHub runner, it wrote the
+same record to — nowhere. The runner is a throwaway machine; when the job
+ends the file is gone, and the next run cannot know what the last one
+tried. We had built a prior — "here is what earlier runs already planted on
+this file; plant elsewhere" — and on the platform most people would run
+corral, there was nothing to feed it.
+
+GitHub offers no database. What it offers is a branch. The first cut, two
+days ago, put the DuckDB file *in* the branch, and it worked, and it was
+clumsy: a binary blob that grew with every commit, that two runs could not
+append to at once, that would need squashing on a schedule. The founder
+looked at it and said what should have been obvious: storing the whole
+database seems clumsy. It's just text, right?
+
+## What a verdict is
+
+It is. Corral already had a canonical form for one scan — we call it the
+bundle: the scan, its files, every mutant with where it landed, what kind of
+fault it was, whether it survived and which test caught it, the model calls,
+the events. It is what `--push` sends to a warehouse. It is what the signed
+statement's hash is computed over. It was always a document; we had just
+been storing it in a database.
+
+So now a run writes the document. One file per scan, into a directory the
+run is pointed at — `--push .corral-ledger/` — gzipped JSON, named by
+timestamp, commit and a unique id. On a runner, that directory is a
+checkout of an orphan branch, `corral/ledger`, committed back at the end of
+the job. On a laptop, it is a folder. Same bytes, same code, same
+signature. A local run and a GitHub run were never two systems; they are
+one writer with two places to put the file.
+
+## The chain
+
+Each entry names the hash of the entry before it. Each carries its own hash
+— sha256 over its canonical bytes — and, when the run has a signing key, an
+Ed25519 signature over that hash, under the same key that signs a `--local`
+verdict or an `--attest` statement. Edit an entry and its hash no longer
+matches. Delete one, or reorder them, and the next entry's `prev` names a
+predecessor that is not there. `corral verify --ledger <dir>` walks the
+whole chain and names the entry that fails:
+
+```
+✓ 20260905T204729Z-414f0513c338-e2b77bdf80c1.json.gz  414f0513c338  hash ok, genesis, signed by corral-certify and verified against the local certify key
+✓ 20260905T204729Z-414f0513c338-a12f699a3f8c.json.gz  414f0513c338  hash ok, link ok, signed by corral-certify and verified against the local certify key
+2 entries, chain intact
+```
+
+Those two entries are the two runs on `psf/requests` from
+[the before-and-after note](/field-notes/what-is-actually-new-here/), pushed
+into one directory. An entry that has no signature is reported as unsigned
+— never as verified. A runner has no key of its own, so the recipe attests
+each new entry through the workflow's identity instead, the keyless way a
+statement is already attested.
+
+The founder's word for this, offered carefully, was *blockchain*. It is the
+part of a blockchain that was always a good idea — an append-only log where
+every entry is signed and names its predecessor — and none of the rest.
+There is no consensus, no network, no token. One writer per directory, and
+when a stranger must be able to trust an entry, Sigstore's public
+transparency log as the outside witness, which corral already knew how to
+use. The question a reader has was never "did a thousand strangers agree";
+it is "did this run produce these rows, and has anyone touched them since".
+A chain of signatures answers that.
+
+## The engine that doesn't own the data
+
+Here is the part we think is genuinely a good use of DuckDB. The directory
+is the record. DuckDB is how you *read* it:
+
+```sql
+SELECT e.scan_uid[1:8] AS entry, m.Shape, count(*) AS planted,
+       sum(m.Outcome = 'survived') AS survived, sum(m.Proven) AS proven
+FROM read_json_auto('scans/*.json.gz') AS e, unnest(e.bundle.Mutants) AS t(m)
+GROUP BY ALL ORDER BY entry, planted DESC;
+```
+
+That query ran over the two requests entries with no corral involved at
+all, and answered a question we had only been able to ask since the shape
+column landed the same morning: the generator planted 34 negated
+conditions, 28 changed arguments and 17 changed constants on those three
+files, and requests' suite let the changed arguments through most — 10 of
+28 survived, 9 of them proven catchable by a test the pool wrote. The older
+of the two entries reports no shapes, because it was recorded before shapes
+existed; the column is null there, not zero. The record does not pretend.
+
+Inside corral, the same directory is loaded into an in-memory DuckDB with
+the warehouse's own tables, through the one code path that writes a
+warehouse, so `verify --db`, `seal --db` and `models rank --db` accept a
+directory and see exactly what they would see in a database. Point `push`
+at MotherDuck as well and the same entries land there as rows — the shared
+view of the same files. Drop any of the databases and nothing is lost;
+rebuild it from the directory and it is back. The engine is whichever one is
+nearest: embedded on a laptop, MotherDuck for a team, WebAssembly in a
+browser. None of them owns the record.
+
+## Twenty-one kilobytes
+
+An entry for a requests scan, with its events, is 548,003 bytes of
+pretty-printed JSON. Gzipped it is 21,052 — 26 times smaller — and DuckDB
+reads `.json.gz` natively, so the branch pays for the record and not for the
+whitespace. Two hundred runs on a repository the size of requests is about
+four megabytes in git, as append-only files that never change, which is the
+shape git holds well. `zcat` reads one. `git log` is its history.
+
+## What we borrowed, and what we can't find
+
+None of the pieces are ours. Signed statements about a build, witnessed by
+a public log, are in-toto and Sigstore. A hash-linked log of JSON files, one
+per commit, queried as a table, is the exact shape of Delta Lake's
+transaction log. Append-only events with rebuildable views is event
+sourcing, twenty years old. A data branch in git is how `gh-pages` and the
+benchmark actions keep their history. Verifiable ledger databases existed as
+products — immudb, Azure Confidential Ledger, and AWS QLDB, which Amazon
+retired this year; no post-mortem was published, but the migration guide
+pointed at Postgres plus a hash chain of your own, which reads as the
+property being wanted and the second database not.
+
+That last one is the lesson we took. QLDB asked people to bring their
+records to the ledger. This brings the ledger to the records: signed files
+that live where the code lives, readable by a tool people already have, or
+by `cat`. What we cannot find anywhere is the combination applied to test
+results — signed attestations as the primary storage format for a CI
+verdict, kept in the repository, hash-linked, queried in place, with the
+laptop and the runner being the same writer. CI systems keep results in
+their own databases, unsigned and theirs. We would be glad to be shown prior
+art; we looked.
+
+## What is not done
+
+The laptop still has its older ledger — `--record` writes a DuckDB with its
+own schema, and the bundle is built from it at push time. That is two
+schemas for one record, and it is the next thing to collapse: the local
+default becomes a ledger directory in the repository, the DuckDB file a
+cache, and then a laptop run and an Action run are literally one writer.
+And there is a demonstration we have not yet run, because no public
+repository has a `corral/ledger` branch yet: DuckDB can read a file straight
+off a URL, so a MotherDuck query over a raw GitHub URL of an entry should
+be a query over a repository's branch, no import, no token. We will run it
+against corralai's own branch, from the self-audit, and say what happened.
+
+*Numbers: entry sizes and the chain output from the two psf/requests runs of
+2026-09-04 (`414f0513c338`) pushed into one directory on 2026-09-05; the
+shape counts from the query above over those files. Built and merged the
+same day: [#256](https://github.com/pdbethke/corralai/pull/256).*

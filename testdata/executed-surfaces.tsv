@@ -68,7 +68,7 @@ corral certify --local --no-fail-fast	unexecuted
 corral certify --local --out	executed	run:2026-09-02 record 89
 corral certify --local --poll	executed	test:cmd/corral/certify_adversarial_test.go
 corral certify --local --quiet	executed	test:cmd/corral/certify_local_tape_stream_test.go (TestQuietSelectsWhetherBeatsEchoLive: live echo on/off, and the tape unaffected either way)
-corral certify --local --record	executed	test:cmd/corral/certify_repo_test.go (the tape-path spelling, refused on the repo path)
+corral certify --local --record	executed	test:cmd/corral/certify_local_tape_test.go
 corral certify --local --record-mutants	executed	test:cmd/corral/certify_mutants_test.go
 corral certify --local --record-stream	unexecuted	
 corral certify --local --repo	executed	test:cmd/corral/certify_repo_writer_mode_test.go
@@ -103,8 +103,6 @@ corral certify --repo --owner	executed	test:cmd/corral/action_test.go
 corral certify --repo --preflight	executed	test:cmd/corral/certify_repo_test.go
 corral certify --repo --push	executed	run:2026-09-02 md:corral_public scans 22-26
 corral certify --repo --push-source	executed	test:cmd/corral/certify_repo_custody_test.go
-corral certify --repo --record	executed	test:cmd/corral/certify_repo_test.go (retired; says so and does nothing)
-corral certify --repo --record-db	executed	test:cmd/corral/certify_repo_test.go (the old name of --cache-db)
 corral certify --repo --cache-db	executed	test:cmd/corral/certify_repo_selcache_test.go
 corral certify --repo --record-mutants	executed	test:cmd/corral/certify_mutants_test.go
 corral certify --repo --repo	executed	test:cmd/corral/certify_repo_writer_mode_test.go
@@ -178,7 +176,6 @@ corral models rank --json	executed	test:cmd/corral/models_rank_test.go (runRank)
 corral models rank --seat	executed	test:cmd/corral/models_rank_test.go (runRank)
 corral models rank --lang	executed	test:cmd/corral/models_rank_test.go (runRank)
 corral models rank --min-runs	executed	test:cmd/corral/models_rank_test.go (runRank)
-corral scans list --db	executed	test:cmd/corral/scans_test.go (runScans)
 corral scans list --ledger	executed	test:cmd/corral/scans_test.go (runScans)
 corral scans list --json	executed	test:cmd/corral/scans_test.go (runScans)
 corral scans list --limit	executed	test:cmd/corral/scans_test.go (runScans)

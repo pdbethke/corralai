@@ -372,14 +372,12 @@ func TestCertifyRepoDiffBaseNonEmptyScopeNothingGradableExitsNonZero(t *testing.
 	}
 }
 
-// TestCertifyRepoRecordAbsentIsByteIdentical proves that adding --record and
-// --record-db did not change ANY existing behaviour when --record is not
-// given: same stdout, same stderr, same exit code as before this change, and
-// — because the flag decides whether scanstore.Open is ever called at all —
-// no ledger file appears even though --record-db names a path. The dry-run
-// fixture below runs the enumerate/select/emit accounting path without a
-// jail or a model call.
-func TestCertifyRepoRecordAbsentIsByteIdentical(t *testing.T) {
+// TestCertifyRepoCacheDBAloneIsByteIdentical: naming --cache-db changes
+// nothing about a scan's output, and on a dry run — which derives no goal
+// and runs no selection pass — no cache file appears at the path named.
+// The dry-run fixture below runs the enumerate/select/emit accounting path
+// without a jail or a model call.
+func TestCertifyRepoCacheDBAloneIsByteIdentical(t *testing.T) {
 	root := t.TempDir()
 	mustWrite(t, filepath.Join(root, "pkg", "a.go"), "package pkg\n")
 	mustWrite(t, filepath.Join(root, "pkg", "a_test.go"), "package pkg\n")
@@ -394,22 +392,22 @@ func TestCertifyRepoRecordAbsentIsByteIdentical(t *testing.T) {
 	var outWithout, errWithout bytes.Buffer
 	codeWithout := runCertifyRepo(baseArgs, &outWithout, &errWithout)
 
-	dsn := filepath.Join(t.TempDir(), "would-be-scans.duckdb")
-	argsWithDBFlag := append(append([]string{}, baseArgs...), "--record-db", dsn)
+	dsn := filepath.Join(t.TempDir(), "would-be-cache.duckdb")
+	argsWithDBFlag := append(append([]string{}, baseArgs...), "--cache-db", dsn)
 	var outWithDBFlag, errWithDBFlag bytes.Buffer
 	codeWithDBFlag := runCertifyRepo(argsWithDBFlag, &outWithDBFlag, &errWithDBFlag)
 
 	if codeWithout != codeWithDBFlag {
-		t.Fatalf("exit code changed by merely naming --record-db (without --record): %d vs %d", codeWithout, codeWithDBFlag)
+		t.Fatalf("exit code changed by merely naming --cache-db: %d vs %d", codeWithout, codeWithDBFlag)
 	}
 	if outWithout.String() != outWithDBFlag.String() {
-		t.Fatalf("stdout changed by merely naming --record-db (without --record):\n--- baseline\n%s\n--- with --record-db\n%s", outWithout.String(), outWithDBFlag.String())
+		t.Fatalf("stdout changed by merely naming --cache-db:\n--- baseline\n%s\n--- with --cache-db\n%s", outWithout.String(), outWithDBFlag.String())
 	}
 	if errWithout.String() != errWithDBFlag.String() {
-		t.Fatalf("stderr changed by merely naming --record-db (without --record):\n--- baseline\n%s\n--- with --record-db\n%s", errWithout.String(), errWithDBFlag.String())
+		t.Fatalf("stderr changed by merely naming --cache-db:\n--- baseline\n%s\n--- with --cache-db\n%s", errWithout.String(), errWithDBFlag.String())
 	}
 	if _, statErr := os.Stat(dsn); !os.IsNotExist(statErr) {
-		t.Fatalf("--record-db named a path but --record was absent, yet a file exists there (stat err=%v) — no ledger may be opened when --record is off", statErr)
+		t.Fatalf("a dry run created a cache file at %s (stat err=%v)", dsn, statErr)
 	}
 }
 
@@ -824,35 +822,6 @@ func TestCertifyRepoRecordTopReflectsTheEffectiveBound(t *testing.T) {
 	}
 }
 
-// TestCertifyRepoRecordFlagIsRetiredOutLoud: --record turned on the local
-// DuckDB copy of the record, retired when the ledger directory became the
-// record. Accepted for one release so an old invocation does not exit 2 —
-// but never silently: an operator who typed it is told, once and up
-// front, what it did (nothing) and where the record is now.
-func TestCertifyRepoRecordFlagIsRetiredOutLoud(t *testing.T) {
-	root := t.TempDir()
-	mustWrite(t, filepath.Join(root, "pkg", "a.go"), "package pkg\n")
-	mustWrite(t, filepath.Join(root, "pkg", "a_test.go"), "package pkg\n")
-	goals := filepath.Join(root, "goals.json")
-	mustWrite(t, goals, `{"pkg/a.go": "must not panic"}`)
-
-	dsn := filepath.Join(t.TempDir(), "would-be-scans.duckdb")
-	var out, errb bytes.Buffer
-	code := runCertifyRepo([]string{
-		"--repo", root, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant, "--critic-model", "off", "--goals", goals, "--dry-run",
-		"--record", "--record-db", dsn,
-	}, &out, &errb)
-	if code != 0 {
-		t.Fatalf("exit %d: stdout=%s stderr=%s", code, out.String(), errb.String())
-	}
-	if !strings.Contains(errb.String(), "--record is retired and did nothing") {
-		t.Errorf("want the retirement said on stderr, got: %q", errb.String())
-	}
-	if _, statErr := os.Stat(dsn); !os.IsNotExist(statErr) {
-		t.Errorf("--record-db must create no file (it is the cache's old name, and a dry run touches no cache; stat err=%v)", statErr)
-	}
-}
-
 // TestCertifyRepoRecordUngradableEvidenceReflectsWhetherTheCheckRan proves
 // the fix for a review finding that every ungradable execution-stage
 // rejection was stamped evidence="proven", including prep-failed and
@@ -1002,20 +971,16 @@ func TestCertifyRepoRejectsFlagsAfterDashDash(t *testing.T) {
 // TestCertifyRepoRejectsStrayPositionalAfterRecordPath is the OTHER door
 // the same silent-no-gate bug walks in through — the review's finding that
 // TestCertifyRepoRejectsFlagsAfterDashDash's own `--` fix (checkArgvNoFlagCollision)
-// does NOT close. `certify --local --record <file>.json` takes --record as
-// a STRING (a replayable tape path — README.md documents it at both
-// `corral certify --record <file>.json` and `--record <file>.json`), but
-// on `certify --repo` --record is a BOOL: an operator who types what they
-// already know from the sibling subcommand,
-// `--record tape.json --min-kill-rate abc`, gets "tape.json" as an
-// unconsumed positional. Go's flag.Parse stops at the first non-flag
+// does NOT close. A BOOL flag handed a value the way a string flag takes
+// one — `--preflight tape.json --min-kill-rate abc` — leaves "tape.json"
+// as an unconsumed positional. Go's flag.Parse stops at the first non-flag
 // argument and returns — --min-kill-rate is never even LOOKED at, let
 // alone validated or applied, and nothing says so: no error (the CONTROL
 // case below, `--min-kill-rate abc` alone, IS caught — "abc" is not a
 // number), no warning, the scan runs with the merge gate silently absent.
 // fs.NArg() > 0 after a clean Parse is what catches this, independent of
 // which flag or typo produced the stray token.
-func TestCertifyRepoRejectsStrayPositionalAfterRecordPath(t *testing.T) {
+func TestCertifyRepoRejectsStrayPositionalAfterABoolFlag(t *testing.T) {
 	root := t.TempDir()
 
 	// Control: --min-kill-rate alone with a bad value IS caught today —
@@ -1027,12 +992,12 @@ func TestCertifyRepoRejectsStrayPositionalAfterRecordPath(t *testing.T) {
 		t.Fatalf("control case: exit %d, want 2 (--min-kill-rate abc alone must already be rejected): stdout=%s stderr=%s", controlCode, controlOut.String(), controlErr.String())
 	}
 
-	// The bug: same bad --min-kill-rate value, but preceded by --record
-	// given the STRING-flag way (the sibling subcommand's own spelling).
+	// The bug: same bad --min-kill-rate value, but preceded by a bool flag
+	// given the STRING-flag way.
 	var out, errb bytes.Buffer
 	code := runCertifyRepo([]string{
 		"--repo", root, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant, "--critic-model", "off", "--dry-run",
-		"--record", "tape.json", "--min-kill-rate", "abc",
+		"--preflight", "tape.json", "--min-kill-rate", "abc",
 	}, &out, &errb)
 	if code != 2 {
 		t.Fatalf("exit %d, want 2 (usage error: a stray positional must not silently swallow --min-kill-rate): stdout=%s stderr=%s", code, out.String(), errb.String())

@@ -3,7 +3,6 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"path/filepath"
 	"strings"
@@ -90,36 +89,28 @@ func TestEventsNeverCarrySourceBytes(t *testing.T) {
 				assertNoSentinel(t, "sink event "+e.Kind, e.Detail)
 			}
 
-			// 2. The LOCAL ledger.
-			ledger := filepath.Join(t.TempDir(), "scans.duckdb")
-			st, err := scanstore.Open(ledger)
-			if err != nil {
-				t.Fatalf("scanstore.Open: %v", err)
+			// 2. The LEDGER ENTRY — the record.
+			ledgerDir := filepath.Join(t.TempDir(), "ledger")
+			entry := buildBundle(scanstore.Scan{Repo: "o/r", Commit: "deadbeef"}, 0,
+				nil, nil, nil, events, auditpush.Link{}, true,
+				"o/r", "deadbeef", "", bundleMeta{})
+			entry.SourcePushed, entry.Scan.SourcePushed = true, true
+			if _, err := pushBundle(ledgerDir+"/", entry); err != nil {
+				t.Fatalf("writing the ledger entry: %v", err)
 			}
-			scanID, err := st.Record(context.Background(), scanstore.Scan{Owner: "o", Repo: "o/r"}, nil)
-			if err != nil {
-				t.Fatalf("Record: %v", err)
+			entries, err := auditpush.ReadLedgerDir(ledgerDir)
+			if err != nil || len(entries) != 1 {
+				t.Fatalf("read back %d entries (err %v), want 1", len(entries), err)
 			}
-			for i := range events {
-				events[i].ScanID = scanID
+			if len(entries[0].Bundle.Events) != len(events) {
+				t.Fatalf("the entry holds %d event(s), wrote %d", len(entries[0].Bundle.Events), len(events))
 			}
-			if err := st.RecordEvents(context.Background(), events); err != nil {
-				t.Fatalf("RecordEvents: %v", err)
+			for _, e := range entries[0].Bundle.Events {
+				assertNoSentinel(t, "ledger entry event "+e.Kind, e.Detail)
 			}
-			back, err := st.EventsForScan(context.Background(), scanID)
-			if err != nil {
-				t.Fatalf("EventsForScan: %v", err)
-			}
-			if len(back) != len(events) {
-				t.Fatalf("read back %d event(s), wrote %d", len(back), len(events))
-			}
-			for _, e := range back {
-				assertNoSentinel(t, "scan_events "+e.Kind, e.Detail)
-			}
-			_ = st.Close()
 
 			// 3. The WAREHOUSE.
-			b := buildBundle(scanstore.Scan{Repo: "o/r", Commit: "deadbeef"}, scanID,
+			b := buildBundle(scanstore.Scan{Repo: "o/r", Commit: "deadbeef"}, 0,
 				nil, nil, nil, events, auditpush.Link{}, sourcePushed,
 				"o/r", "deadbeef", "", bundleMeta{})
 			target := filepath.Join(t.TempDir(), "w.duckdb")

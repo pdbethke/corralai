@@ -22,7 +22,6 @@
 package prior
 
 import (
-	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -35,7 +34,6 @@ import (
 	"github.com/pdbethke/corralai/internal/adequacy"
 	"github.com/pdbethke/corralai/internal/auditpush"
 	"github.com/pdbethke/corralai/internal/lang"
-	"github.com/pdbethke/corralai/internal/scanstore"
 )
 
 // Tried is one edit an earlier run graded.
@@ -63,12 +61,12 @@ type Prior struct {
 	sources int
 }
 
-// Load reads a prior from source: a corral-mutants document (.json), a scan
-// ledger (.duckdb), a LEDGER DIRECTORY (the signed entries `--push <dir>/`
-// writes — outcomes, spans and shapes, and hunks when pushed with
-// --push-source), or a directory holding any number of these — every file
-// found is merged, a ledger row and a document entry for the same
-// (path, id) becoming one Tried carrying both the outcome and the hunk.
+// Load reads a prior from source: a corral-mutants document (.json), a
+// LEDGER DIRECTORY (the signed entries `certify --repo` writes — outcomes,
+// spans and shapes, and hunks when the entry carries source), or a
+// directory holding any number of these — every file found is merged, a
+// ledger row and a document entry for the same (path, id) becoming one
+// Tried carrying both the outcome and the hunk.
 func Load(source string) (*Prior, error) {
 	p := &Prior{Source: source, byPath: map[string][]Tried{}}
 	st, err := os.Stat(source)
@@ -130,8 +128,7 @@ func Load(source string) (*Prior, error) {
 			if filepath.Base(filepath.Dir(path)) == auditpush.ScansSubdir {
 				return nil // ledger entries: read above
 			}
-			switch strings.ToLower(filepath.Ext(path)) {
-			case ".json", ".duckdb":
+			if strings.ToLower(filepath.Ext(path)) == ".json" {
 				files = append(files, path)
 			}
 			return nil
@@ -143,14 +140,7 @@ func Load(source string) (*Prior, error) {
 	}
 	sort.Strings(files)
 	for _, f := range files {
-		var tried []Tried
-		var lerr error
-		switch strings.ToLower(filepath.Ext(f)) {
-		case ".json":
-			tried, lerr = fromDocument(f)
-		case ".duckdb":
-			tried, lerr = fromLedger(f)
-		}
+		tried, lerr := fromDocument(f)
 		if lerr != nil {
 			return nil, lerr
 		}
@@ -186,34 +176,6 @@ func fromDocument(path string) ([]Tried, error) {
 				Path: file, ParentSHA256: e.ParentSHA256, ID: m.ID, Span: m.Span,
 				Search: m.Search, Replace: m.Replace,
 				Shape: adequacy.ShapeOfHunk(m.Search, m.Replace),
-			})
-		}
-	}
-	return out, nil
-}
-
-func fromLedger(path string) ([]Tried, error) {
-	st, err := scanstore.Open(path)
-	if err != nil {
-		return nil, fmt.Errorf("prior: %s: %w", path, err)
-	}
-	defer st.Close()
-	ctx := context.Background()
-	scans, err := st.Scans(ctx, 1<<20) // every scan the ledger holds: a prior reads the whole record
-	if err != nil {
-		return nil, fmt.Errorf("prior: %s: %w", path, err)
-	}
-	var out []Tried
-	for _, sc := range scans {
-		ms, err := st.MutantsForScan(ctx, sc.ID)
-		if err != nil {
-			return nil, fmt.Errorf("prior: %s: scan %d: %w", path, sc.ID, err)
-		}
-		for _, m := range ms {
-			out = append(out, Tried{
-				Path: m.Path, ParentSHA256: m.ParentSHA256, ID: m.MutantID,
-				Span: lang.LineRange{Start: m.SpanStart, End: m.SpanEnd}, Shape: m.Shape,
-				Outcome: m.Outcome, KilledBy: m.KilledBy, Proven: m.Proven,
 			})
 		}
 	}

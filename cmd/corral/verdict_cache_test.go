@@ -4,6 +4,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"os"
 	"path/filepath"
@@ -177,4 +178,22 @@ func TestLedgerCacheDoesNotServeAVerdictWhoseWriterHalfNeverGraded(t *testing.T)
 	if _, ok := newLedgerCache(dir, io.Discard).Get("acme", "K"); !ok {
 		t.Error("a verdict with six of nine seats graded was refused — that is a measurement")
 	}
+}
+
+// roundTripFilesThroughTheLedger writes files as one entry the way the
+// run does and reads them back through the reader `corral scans` uses —
+// the record's round trip, for a test that pins one column of it.
+func roundTripFilesThroughTheLedger(t *testing.T, files []scanstore.File) []scanstore.File {
+	t.Helper()
+	dir := cacheTestLedger(t, files)
+	st, err := openLedgerScans(dir)
+	if err != nil {
+		t.Fatalf("open the ledger: %v", err)
+	}
+	defer st.Close()
+	back, err := st.FilesForScan(context.Background(), 1)
+	if err != nil {
+		t.Fatalf("FilesForScan: %v", err)
+	}
+	return back
 }

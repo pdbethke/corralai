@@ -13,7 +13,6 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"github.com/pdbethke/corralai/internal/auditpush"
 	"github.com/pdbethke/corralai/internal/reposcan"
 	"github.com/pdbethke/corralai/internal/scanstore"
 )
@@ -56,9 +55,6 @@ type scansReader interface {
 // "tried and missed" would not require paying for another audit to
 // interrogate. Evidence nobody can query is not evidence.
 //
-// --db still reads a pre-1.0 scans.duckdb, so the scans an older corral
-// recorded stay readable; nothing writes one any more.
-//
 // Read-only by design, like `corral matrix list`: the record is what
 // happened, and nothing a human adjudicates after the fact (contrast
 // `corral criticscore confirm/refute`, which records a human verdict).
@@ -81,8 +77,8 @@ func runScans(args []string, open func(dsn string) (scansReader, error), stdout,
 	// from docs/cli, which is the enumeration the executed-surface manifest
 	// reads, so a flag added to `scans list` was invisible to every gate.
 	if len(args) == 0 || wantsHelp(args[:1]) {
-		fmt.Fprintln(stderr, "usage: corral scans list [--ledger <dir> | --db <path>] [--limit n] [--json]")
-		fmt.Fprintln(stderr, "       corral scans show <scan-id> [--ledger <dir> | --db <path>] [--json] [--evidence] [--timing]")
+		fmt.Fprintln(stderr, "usage: corral scans list [--ledger <dir>] [--limit n] [--json]")
+		fmt.Fprintln(stderr, "       corral scans show <scan-id> [--ledger <dir>] [--json] [--evidence] [--timing]")
 		return 2
 	}
 
@@ -91,9 +87,6 @@ func runScans(args []string, open func(dsn string) (scansReader, error), stdout,
 		return runScansList(args[1:], open, stdout, stderr)
 	case "show":
 		return runScansShow(args[1:], open, stdout, stderr)
-	case "push":
-		fmt.Fprintln(stderr, "corral scans push is retired: the record is the ledger directory, and `certify --repo --push <dsn>` sends each scan's rows as it runs; `corral ledger append` moves an entry between directories")
-		return 2
 	default:
 		fmt.Fprintf(stderr, "corral scans: unknown subcommand %q — want list or show\n", args[0])
 		return 2
@@ -104,19 +97,13 @@ func runScansList(args []string, open func(string) (scansReader, error), stdout,
 	fs := flag.NewFlagSet("scans list", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	ledger := fs.String("ledger", "", ledgerReadHelp)
-	dsn := fs.String("db", "", legacyDBHelp)
 	limit := fs.Int("limit", 20, "how many scans to show, newest first")
 	asJSON := fs.Bool("json", false, "emit the raw rows as JSON")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
 
-	target, terr := scansTarget(*ledger, *dsn)
-	if terr != nil {
-		fmt.Fprintln(stderr, "corral scans list:", terr)
-		return 2
-	}
-	st, err := open(target)
+	st, err := open(scansTarget(*ledger))
 	if err != nil {
 		fmt.Fprintln(stderr, "corral scans list:", err)
 		return 1
@@ -158,7 +145,7 @@ func runScansList(args []string, open func(string) (scansReader, error), stdout,
 
 func runScansShow(args []string, open func(string) (scansReader, error), stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "usage: corral scans show <scan-id> [--ledger <dir> | --db <path>] [--json] [--evidence] [--timing]")
+		fmt.Fprintln(stderr, "usage: corral scans show <scan-id> [--ledger <dir>] [--json] [--evidence] [--timing]")
 		return 2
 	}
 	id, err := strconv.ParseInt(args[0], 10, 64)
@@ -169,20 +156,14 @@ func runScansShow(args []string, open func(string) (scansReader, error), stdout,
 	fs := flag.NewFlagSet("scans show", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	ledger := fs.String("ledger", "", ledgerReadHelp)
-	dsn := fs.String("db", "", legacyDBHelp)
 	asJSON := fs.Bool("json", false, "emit the raw rows as JSON")
 	evidence := fs.Bool("evidence", false, "also print the pool's authored test source for each audited file")
-	timing := fs.Bool("timing", false, "also print where each audited file's wall clock went, phase by phase — with --json, adds top-level selection_ms, selection_reused_from and model_calls and wraps the file array in an object ({\"files\": [...], \"selection_ms\": ..., \"selection_reused_from\": ..., \"model_calls\": [...]}) instead of emitting it bare")
+	timing := fs.Bool("timing", false, "also print where each audited file's wall clock went, phase by phase — with --json, adds top-level selection_ms, selection_reused and model_calls and wraps the file array in an object ({\"files\": [...], \"selection_ms\": ..., \"selection_reused\": ..., \"model_calls\": [...]}) instead of emitting it bare")
 	if err := fs.Parse(args[1:]); err != nil {
 		return 2
 	}
 
-	target, terr := scansTarget(*ledger, *dsn)
-	if terr != nil {
-		fmt.Fprintln(stderr, "corral scans show:", terr)
-		return 2
-	}
-	st, oerr := open(target)
+	st, oerr := open(scansTarget(*ledger))
 	if oerr != nil {
 		fmt.Fprintln(stderr, "corral scans show:", oerr)
 		return 1
@@ -276,10 +257,10 @@ func runScansShow(args []string, open func(string) (scansReader, error), stdout,
 		} else if ok && row.SelectionMillis != nil {
 			sel := time.Duration(*row.SelectionMillis) * time.Millisecond
 			fmt.Fprintf(stdout, "\nselection %s (once per scan)\n", durationText(sel))
-		} else if ok && row.SelectionReusedFrom != nil {
+		} else if ok && row.SelectionReused {
 			// This scan ran no selection pass of its own (SelectionMillis is
 			// nil above), and this is the one column that tells "reused"
-			// apart from "never ran" — see scanstore.Scan.SelectionReusedFrom.
+			// apart from "never ran" — see scanstore.Scan.SelectionReused.
 			fmt.Fprintln(stdout, "\nselection: reused — tree unchanged since an earlier scan (cached evidence)")
 		}
 		// The money half of the same readout, by the same per-file grouping:
@@ -332,15 +313,15 @@ func runScansShow(args []string, open func(string) (scansReader, error), stdout,
 type scansShowJSON struct {
 	Files       []scanstore.File `json:"files"`
 	SelectionMS *int64           `json:"selection_ms"`
-	// SelectionReusedFrom is the id of the scan whose selection evidence
-	// THIS scan reused — null when this scan ran its own selection pass
+	// SelectionReused is true when THIS scan reused an earlier scan's
+	// selection evidence — false when it ran its own selection pass
 	// (SelectionMS is set instead) or ran none at all. See
-	// scanstore.Scan.SelectionReusedFrom's own doc for why this is the only
+	// scanstore.Scan.SelectionReused's own doc for why this is the only
 	// column that tells those two cases apart; the text `--timing` readout
 	// already prints it (see the "selection: reused" line above), and this
 	// field is the same fact reaching --json.
-	SelectionReusedFrom *int64               `json:"selection_reused_from"`
-	ModelCalls          []scansShowModelCall `json:"model_calls"`
+	SelectionReused bool                 `json:"selection_reused"`
+	ModelCalls      []scansShowModelCall `json:"model_calls"`
 }
 
 // scansShowModelCall is one scan_model_calls row, snake_case and with the
@@ -383,7 +364,7 @@ func runScansShowJSONWithTiming(st scansReader, id int64, files []scanstore.File
 		fmt.Fprintln(stderr, "corral scans show: scan header unavailable:", serr)
 	} else if ok {
 		out.SelectionMS = row.SelectionMillis
-		out.SelectionReusedFrom = row.SelectionReusedFrom
+		out.SelectionReused = row.SelectionReused
 	}
 
 	calls, cerr := st.ModelCallsForScan(context.Background(), id)
@@ -586,44 +567,21 @@ func formatKillRate(k *float64) string {
 	return fmt.Sprintf("%.2f", *k)
 }
 
-const (
-	ledgerReadHelp = "the ledger directory to read (default: $CORRAL_LEDGER, else ./.corral/ledger — where `certify --repo` writes its entry for the repo you are standing in)"
-	legacyDBHelp   = "a pre-1.0 scans.duckdb to read instead of a ledger directory; nothing writes one any more"
-)
+const ledgerReadHelp = "the ledger directory to read (default: $CORRAL_LEDGER, else ./.corral/ledger — where `certify --repo` writes its entry for the repo you are standing in)"
 
-// scansTarget resolves what the reader opens: --db (an old DuckDB record)
-// wins when given, else --ledger, else the default directory. Both given
-// is a contradiction, refused rather than resolved by precedence.
-func scansTarget(ledger, dsn string) (string, error) {
-	ledger, dsn = strings.TrimSpace(ledger), strings.TrimSpace(dsn)
-	switch {
-	case ledger != "" && dsn != "":
-		return "", fmt.Errorf("--ledger and --db both given; one record at a time")
-	case dsn != "":
-		return dsn, nil
-	case ledger != "":
-		return strings.TrimRight(ledger, "/") + "/", nil
+// scansTarget is --ledger, or the default directory, always spelled with
+// a trailing separator so a directory that does not exist yet reads as an
+// empty record rather than as a file name.
+func scansTarget(ledger string) string {
+	if l := strings.TrimSpace(ledger); l != "" {
+		return strings.TrimRight(l, "/") + "/"
 	}
-	return defaultLedgerDir(".") + "/", nil
+	return defaultLedgerDir(".") + "/"
 }
 
-// openScanStore is the production opener wired into main's dispatch: a
-// directory (or a path spelled with a trailing slash — the default is, so
-// a missing default is a "nothing here yet", never a DuckDB file DuckDB
-// would create at that name) opens as the ledger view; anything else as
-// a pre-1.0 scans.duckdb.
+// openScanStore is the production opener wired into main's dispatch.
 func openScanStore(target string) (scansReader, error) {
-	if auditpush.IsLedgerDir(target) {
-		return openLedgerScans(strings.TrimRight(target, "/"))
-	}
-	st, err := scanstore.Open(target)
-	if err != nil {
-		// DuckDB holds a single-writer lock on its file, so a scan running
-		// concurrently in another process owns it. Say so plainly rather than
-		// surfacing a bare driver error.
-		return nil, fmt.Errorf("opening the scan ledger %s: %w (another process holds it open — DuckDB is single-writer)", target, err)
-	}
-	return st, nil
+	return openLedgerScans(strings.TrimRight(target, "/"))
 }
 
 // denominatorNote names a thin denominator: many mutants rejected before

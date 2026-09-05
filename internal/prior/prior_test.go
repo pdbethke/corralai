@@ -3,7 +3,6 @@
 package prior
 
 import (
-	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -14,12 +13,11 @@ import (
 	"github.com/pdbethke/corralai/internal/adequacy"
 	"github.com/pdbethke/corralai/internal/auditpush"
 	"github.com/pdbethke/corralai/internal/lang"
-	"github.com/pdbethke/corralai/internal/scanstore"
 )
 
 func shaOf(s string) string { h := sha256.Sum256([]byte(s)); return hex.EncodeToString(h[:]) }
 
-// A directory holding a mutant-set document (the hunks) and a scan ledger
+// A directory holding a mutant-set document (the hunks) and a ledger entry
 // (the outcomes) for the same run merges into one prior per edit: the
 // document says WHAT was tried, the ledger says WHAT HAPPENED. Only edits
 // recorded against the file's exact bytes are handed on.
@@ -39,22 +37,15 @@ func TestLoadMergesDocumentAndLedgerAndHonoursSameBytes(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	st, err := scanstore.Open(filepath.Join(dir, "scans.duckdb"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctx := context.Background()
-	id, err := st.Record(ctx, scanstore.Scan{Repo: "r", Commit: "c"}, []scanstore.File{{Path: "api.py", Disposition: "audited"}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := st.RecordMutants(ctx, []scanstore.Mutant{
-		{ScanID: id, Path: "api.py", MutantID: "s0/m1", ParentSHA256: sha, Outcome: "killed", KilledBy: "tests/test_api.py::test_get", SpanStart: 2, SpanEnd: 2, Shape: adequacy.ShapeConstantChanged},
-		{ScanID: id, Path: "api.py", MutantID: "s0/m2", ParentSHA256: sha, Outcome: "survived", Proven: true, SpanStart: 2, SpanEnd: 2, Shape: adequacy.ShapeReturnChanged},
+	if _, err := auditpush.PushBundle(dir, auditpush.Bundle{
+		Scan: auditpush.ScanRow{Repo: "r", Commit: "c"},
+		Mutants: []auditpush.MutantRow{
+			{Repo: "r", Path: "api.py", MutantID: "s0/m1", ParentSHA256: sha, Outcome: "killed", KilledBy: "tests/test_api.py::test_get", SpanStart: 2, SpanEnd: 2, Shape: adequacy.ShapeConstantChanged},
+			{Repo: "r", Path: "api.py", MutantID: "s0/m2", ParentSHA256: sha, Outcome: "survived", Proven: true, SpanStart: 2, SpanEnd: 2, Shape: adequacy.ShapeReturnChanged},
+		},
 	}); err != nil {
 		t.Fatal(err)
 	}
-	st.Close()
 
 	p, err := Load(dir)
 	if err != nil {

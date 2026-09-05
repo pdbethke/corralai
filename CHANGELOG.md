@@ -51,31 +51,31 @@ confidence; a rate too loose to be a grade no longer certifies.
   Action's retry loop and a laptop behind its branch). `--push <dir>/`
   writes the same entries anywhere; `seal`/`models rank`/`verify --db`
   accept a directory. DuckDB is the view, never the store.
-- **BREAKING — the local DuckDB scan ledger is retired; the ledger
-  directory is the only record.** `certify --repo` no longer writes
-  `scans`/`scan_files`/`scan_mutants`/… rows anywhere: the entry it writes
-  by default carries every grain, plus the scan-level facts the DuckDB row
-  held (`top`, `all_candidates`, `total_files`, `engine_version`,
-  `model_set`, `preflight_ran`, `finished_at`) and each file's `computed_at`
-  and `mutants_from`, as new warehouse columns (added additively on the
-  next push). `--record` is accepted for one release and does nothing, out
-  loud. `--record-db` is renamed **`--cache-db`** (old name accepted): the
-  file it names is now only a *cache* of derived goals and instrumented
-  test selections — default `~/.claude/corralai_cache.duckdb`
-  (`$CORRALAI_CACHE_DB`), so a pre-1.0 `corralai_scans.duckdb` stops being
-  read and its caches restart once. The verdict cache reads the ledger
-  directory (`--no-ledger` also disables it); the entry therefore carries
-  its verdict JSON and authored test by default — it lives beside the code
-  it quotes — while `--push` to a warehouse still withholds source unless
+- **BREAKING — the local DuckDB scan ledger is gone; the ledger
+  directory is the only record.** `certify --repo` writes no
+  `scans`/`scan_files`/`scan_mutants`/… tables anywhere, and nothing reads
+  them: the entry it writes by default carries every grain, plus the
+  scan-level facts the DuckDB row held (`top`, `all_candidates`,
+  `total_files`, `engine_version`, `model_set`, `preflight_ran`,
+  `finished_at`) and each file's `computed_at` and `mutants_from`, as new
+  warehouse columns (added additively on the next push). `--record` and
+  `--record-db` are removed; **`--cache-db`** names the one local file
+  corral keeps — a *cache* of derived goals and instrumented test
+  selections, default `~/.claude/corralai_cache.duckdb`
+  (`$CORRALAI_CACHE_DB`). The verdict cache reads the ledger directory
+  (`--no-ledger` also disables it); the entry therefore carries its
+  verdict JSON and authored test — it lives beside the code it quotes —
+  while `--push` to a warehouse still withholds source unless
   `--push-source`. `corral scans list|show` read the directory
   (`--ledger <dir>`, default `.corral/ledger`; an id is the entry's chain
-  position, oldest = 1; `--db` still reads an old `scans.duckdb`); `corral
-  scans push` is retired (`--push` at scan time, `corral ledger append`
-  between directories); `seal` and `ui` default to the directory. The
-  statement's rows hash is **version 3**: source columns and
-  `source_pushed` are never in it, so one statement verifies against both
-  the entry (source carried) and a warehouse push (withheld) — v2 and v1
-  statements still verify the way they were signed.
+  position, oldest = 1); `corral scans push` is gone (`--push` at scan
+  time, `corral ledger append` between directories); `seal` and `ui`
+  default to the directory. `selection_reused_from` (a scan id) is now
+  `selection_reused` (a boolean) on the entry, the warehouse and `scans
+  show --json --timing`. The statement's rows hash is **version 3**:
+  source columns and `source_pushed` are never in it, so one statement
+  verifies against both the entry (source carried) and a warehouse push
+  (withheld) — v2 and v1 statements still verify the way they were signed.
 - **`--prior`: the next run plants what the last one didn't.** Hand a run
   a `--record-mutants` document, a ledger directory, or a directory of
   either, and the generator is told every edit earlier runs tried on a file

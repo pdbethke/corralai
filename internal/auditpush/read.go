@@ -70,12 +70,11 @@ func ReadBundleForScan(db *sql.DB, scan ScanRow) (Bundle, error) {
 // statement describes: rows stamped with statementSHA256 (the exact key —
 // PushBundle writes the statement's own hash onto every row of a push made
 // with --attest), or, when the caller has no statement bytes to hash, rows
-// for (repo, scanID). scanID 0 is not an id (it is every run pushed without
-// --record) and is never used as a key on its own.
+// for (repo, scanID). scanID 0 is not an id (it is every current row) and
+// is never used as a key on its own.
 //
 // Newest first, so a caller that must pick one has the latest push at the
-// head; the PushedBy field says whether each is the run's own push or a
-// later backfill.
+// head.
 func LocateScans(db *sql.DB, repo string, scanID int64, statementSHA256 string) ([]ScanRow, error) {
 	if statementSHA256 != "" {
 		out, err := locateScansWhere(db, "statement_sha256 = ?", statementSHA256)
@@ -199,7 +198,7 @@ func readScanRow(db *sql.DB, where string, args ...any) (ScanRow, bool, error) {
 		repo, run_url, scan_id, commit_sha, corral_version, substrate,
 		host, cores, trees_requested, diff_base, candidates, audited, passed,
 		total_ms, input_tokens, output_tokens, model_calls,
-		source_pushed, statement_sha256, selection_ms, selection_reused_from,
+		source_pushed, statement_sha256, selection_ms, selection_reused,
 		rekor_log_index, rekor_uuid, started_at, pushed_by, scan_uid,
 		engine_version, model_set, top, all_candidates, total_files,
 		preflight_ran, preflight_note, finished_at
@@ -207,7 +206,8 @@ func readScanRow(db *sql.DB, where string, args ...any) (ScanRow, bool, error) {
 
 	var s ScanRow
 	var cores, treesRequested sql.NullInt64
-	var totalMS, selectionMS, selectionReusedFrom, rekorLogIndex sql.NullInt64
+	var totalMS, selectionMS, rekorLogIndex sql.NullInt64
+	var selectionReused sql.NullBool
 	var rekorUUID, pushedBy, scanUID sql.NullString
 	var scanPassed, allCandidates, preflightRan sql.NullBool
 	var scanStarted, scanFinished sql.NullTime
@@ -217,7 +217,7 @@ func readScanRow(db *sql.DB, where string, args ...any) (ScanRow, bool, error) {
 		&s.Repo, &s.RunURL, &s.ScanID, &s.Commit, &s.CorralVersion, &s.Substrate,
 		&s.Host, &cores, &treesRequested, &s.DiffBase, &s.Candidates, &s.Audited, &scanPassed,
 		&totalMS, &s.InputTokens, &s.OutputTokens, &s.ModelCalls,
-		&s.SourcePushed, &s.StatementSHA256, &selectionMS, &selectionReusedFrom,
+		&s.SourcePushed, &s.StatementSHA256, &selectionMS, &selectionReused,
 		&rekorLogIndex, &rekorUUID, &scanStarted, &pushedBy, &scanUID,
 		&engineVersion, &modelSet, &top, &allCandidates, &totalFiles,
 		&preflightRan, &preflightNote, &scanFinished,
@@ -239,7 +239,7 @@ func readScanRow(db *sql.DB, where string, args ...any) (ScanRow, bool, error) {
 	s.TreesRequested = int(treesRequested.Int64)
 	s.TotalMillis = nullInt64(totalMS)
 	s.SelectionMillis = nullInt64(selectionMS)
-	s.SelectionReusedFrom = nullInt64(selectionReusedFrom)
+	s.SelectionReused = selectionReused.Bool
 	s.RekorLogIndex = nullInt64(rekorLogIndex)
 	s.RekorUUID = rekorUUID.String
 	s.PushedBy = pushedBy.String

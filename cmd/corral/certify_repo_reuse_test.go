@@ -185,7 +185,7 @@ func reuseFixtureScanOpt(t *testing.T, root, dsn string, deriver reposcan.Derive
 
 	if len(selected) > 0 {
 		selectionSources := enumeratedSourcePaths(cands, excl[:enumExcl])
-		if _, hit := ex.selectionCachePeek(selectionSources); hit {
+		if ex.selectionCachePeek(selectionSources) {
 			fmt.Fprintln(&out, "  selection: reused — tree unchanged since an earlier scan (cached evidence)")
 		} else {
 			fmt.Fprintln(&out, "  selection: running the suite once with per-test coverage instrumentation…")
@@ -243,8 +243,8 @@ func reuseFixtureScanOpt(t *testing.T, root, dsn string, deriver reposcan.Derive
 		TotalFiles: len(cands) + enumExcl, Candidates: rep.Candidates, Audited: rep.Audited,
 		KillRate: killRatePtr(rep.KillRate), CacheHits: rep.CacheHits,
 		StartedAt: time.Now(), FinishedAt: time.Now(),
-		SelectionMillis:     scanSelectionMillis(ex),
-		SelectionReusedFrom: scanSelectionReusedFrom(ex),
+		SelectionMillis: scanSelectionMillis(ex),
+		SelectionReused: ex.selectionReused,
 	}
 	entry := buildBundle(scan, 0, files, nil, modelRows, scanEventRows(ex), auditpush.Link{}, true,
 		"test-owner/test-repo", "deadbeef", "", bundleMeta{})
@@ -259,7 +259,7 @@ func reuseFixtureScanOpt(t *testing.T, root, dsn string, deriver reposcan.Derive
 	id := int64(len(entries))
 	if ex.pendingSelectionPut != nil {
 		p := ex.pendingSelectionPut
-		if perr := st.SelectionCachePut(context.Background(), p.TreeDigest, p.CmdDigest, p.Plugin, p.Substrate, p.Raw, "", 0); perr != nil {
+		if perr := st.SelectionCachePut(context.Background(), p.TreeDigest, p.CmdDigest, p.Plugin, p.Substrate, p.Raw, ""); perr != nil {
 			t.Fatalf("SelectionCachePut: %v", perr)
 		}
 	}

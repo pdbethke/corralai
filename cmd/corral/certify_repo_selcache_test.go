@@ -94,12 +94,12 @@ func TestSelectionCacheReusesIdenticalTree(t *testing.T) {
 		t.Errorf("scan 1: must not claim a reuse on the very first scan:\n%s", out1.String())
 	}
 
-	scan1ID, scan1SelectionMS, scan1ReusedFrom := readScanSelectionRow(t, dsn, 1)
+	scan1ID, scan1SelectionMS, scan1Reused := readScanSelectionRow(t, dsn, 1)
 	if scan1SelectionMS == nil {
 		t.Error("scan 1: selection_ms must be non-NULL — the pass actually ran")
 	}
-	if scan1ReusedFrom != nil {
-		t.Errorf("scan 1: selection_reused_from = %v, want NULL — nothing to reuse yet", *scan1ReusedFrom)
+	if scan1Reused {
+		t.Errorf("scan 1: selection_reused = true, want false — nothing to reuse yet")
 	}
 
 	// Scan 2: the tree is UNCHANGED. Must be a HIT — no second run, the
@@ -119,12 +119,12 @@ func TestSelectionCacheReusesIdenticalTree(t *testing.T) {
 		t.Errorf("scan 2: stdout = %q, want it to contain %q", out2.String(), wantReused)
 	}
 
-	_, scan2SelectionMS, scan2ReusedFrom := readScanSelectionRow(t, dsn, 2)
+	_, scan2SelectionMS, scan2Reused := readScanSelectionRow(t, dsn, 2)
 	if scan2SelectionMS != nil {
 		t.Errorf("scan 2: selection_ms = %v, want NULL — the pass did not run THIS scan, it was reused", *scan2SelectionMS)
 	}
-	if scan2ReusedFrom == nil {
-		t.Errorf("scan 2: selection_reused_from is NULL, want set — the entry must say the evidence was reused, not merely omit the run")
+	if !scan2Reused {
+		t.Errorf("scan 2: selection_reused = false, want true — the entry must say the evidence was reused, not merely omit the run")
 	}
 	_ = scan1ID
 
@@ -276,7 +276,7 @@ func itoa(n int64) string {
 // correctness to prove Record's.
 // readScanSelectionRow reads the nth entry (1 = oldest) of the ledger
 // beside dsn — the record — through the same reader `corral scans` uses.
-func readScanSelectionRow(t *testing.T, dsn string, nth int) (id int64, selectionMS, reusedFrom *int64) {
+func readScanSelectionRow(t *testing.T, dsn string, nth int) (id int64, selectionMS *int64, reused bool) {
 	t.Helper()
 	st, err := openLedgerScans(selCacheLedger(dsn))
 	if err != nil {
@@ -290,7 +290,7 @@ func readScanSelectionRow(t *testing.T, dsn string, nth int) (id int64, selectio
 	if !ok {
 		t.Fatalf("no scan %d recorded (want at least %d entries)", nth, nth)
 	}
-	return row.ID, row.SelectionMillis, row.SelectionReusedFrom
+	return row.ID, row.SelectionMillis, row.SelectionReused
 }
 
 func TestSelectionCacheKeyDigestsTheCommandThatActuallyRuns(t *testing.T) {

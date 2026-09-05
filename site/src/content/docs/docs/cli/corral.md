@@ -93,7 +93,7 @@ Usage:
                                   when it proved nothing — that is the case worth reading.
                                   Plain files, no brain, no database:
                                   --ledger <dir> (default $CORRAL_LEDGER, else ./.corral/ledger),
-                                  --limit n, --json; --db <path> reads a pre-1.0 scans.duckdb
+                                  --limit n, --json
   corral verify --ledger <dir>    walk a ledger directory's chain: every entry's hash against its
                                   bytes, every link against its predecessor, every signature
                                   against --pub or the local certify key; one line per entry,
@@ -430,7 +430,7 @@ Usage:
                                   when it proved nothing — that is the case worth reading.
                                   Plain files, no brain, no database:
                                   --ledger <dir> (default $CORRAL_LEDGER, else ./.corral/ledger),
-                                  --limit n, --json; --db <path> reads a pre-1.0 scans.duckdb
+                                  --limit n, --json
   corral verify --ledger <dir>    walk a ledger directory's chain: every entry's hash against its
                                   bytes, every link against its predecessor, every signature
                                   against --pub or the local certify key; one line per entry,
@@ -597,7 +597,7 @@ Usage:
                                   when it proved nothing — that is the case worth reading.
                                   Plain files, no brain, no database:
                                   --ledger <dir> (default $CORRAL_LEDGER, else ./.corral/ledger),
-                                  --limit n, --json; --db <path> reads a pre-1.0 scans.duckdb
+                                  --limit n, --json
   corral verify --ledger <dir>    walk a ledger directory's chain: every entry's hash against its
                                   bytes, every link against its predecessor, every signature
                                   against --pub or the local certify key; one line per entry,
@@ -764,7 +764,7 @@ Usage:
                                   when it proved nothing — that is the case worth reading.
                                   Plain files, no brain, no database:
                                   --ledger <dir> (default $CORRAL_LEDGER, else ./.corral/ledger),
-                                  --limit n, --json; --db <path> reads a pre-1.0 scans.duckdb
+                                  --limit n, --json
   corral verify --ledger <dir>    walk a ledger directory's chain: every entry's hash against its
                                   bytes, every link against its predecessor, every signature
                                   against --pub or the local certify key; one line per entry,
@@ -907,15 +907,13 @@ flags:
 ## `corral scans push` flags
 
 ```
-corral scans push is retired: the record is the ledger directory, and `certify --repo --push <dsn>` sends each scan's rows as it runs; `corral ledger append` moves an entry between directories
+corral scans: unknown subcommand "push" — want list or show
 ```
 
 ## `corral scans list` flags
 
 ```
 Usage of scans list:
-  -db string
-    	a pre-1.0 scans.duckdb to read instead of a ledger directory; nothing writes one any more
   -json
     	emit the raw rows as JSON
   -ledger certify --repo
@@ -976,8 +974,8 @@ Usage of ui:
 Usage of verify:
   -attest string
     	the --attest statement to verify (required) — the plain JSON path (its signed envelope is expected at <path>.dsse.json) or the envelope itself
-  -db corral scans push
-    	also recompute the warehouse rows' hash from this pushed DuckDB (a path, or md:<db> for MotherDuck) and compare it to the statement's claim. Every push of the scan the warehouse holds is tried (each has its own scan_uid); a VACUUMed warehouse can change row order and trip a false ✗ here without tampering, and rows a pre-1.0 corral scans push backfilled are reported as such, never as a mismatch
+  -db string
+    	also recompute the warehouse rows' hash from this pushed DuckDB (a path, or md:<db> for MotherDuck) and compare it to the statement's claim. Every push of the scan the warehouse holds is tried (each has its own scan_uid); a VACUUMed warehouse can change row order and trip a false ✗ here without tampering
   -ledger --push <dir>/
     	walk a LEDGER DIRECTORY (the JSON entries --push <dir>/ writes, one per scan, each naming the previous entry's hash and carrying a signature): every entry's hash against its bytes, every link against its predecessor, every signature against --pub or the local certify key. One line per entry; an edited entry, a removed one, or a foreign signature is named. Instead of --attest, not with it
   -pub string
@@ -1039,15 +1037,11 @@ Usage of certify --repo:
   -preflight
     	run the project's test suite once with coverage instrumentation and report which source files it never executes. One extra suite run; reports coverage-grade evidence, not proof
   -prior string
-    	what earlier runs already tried, so this run plants DIFFERENT faults: a corral-mutants document (see --record-mutants), a ledger directory (see --ledger), a pre-1.0 scan ledger (.duckdb), or a directory holding any number of either — a document brings the hunks, a ledger the outcomes, merged per edit. Applied only to a file whose bytes are EXACTLY what the prior was recorded against; a file the prior knows under other bytes gets none, and the report says so. A run handed a prior sits a different exam from one without — the verdict, the ledger and the signed statement carry priorsApplied and the prior's digest, and the digest is in the cache key, so a repeat audit never reads as the tests changing when only the exam did
+    	what earlier runs already tried, so this run plants DIFFERENT faults: a corral-mutants document (see --record-mutants), a ledger directory (see --ledger), or a directory holding any number of either — a document brings the hunks, a ledger the outcomes, merged per edit. Applied only to a file whose bytes are EXACTLY what the prior was recorded against; a file the prior knows under other bytes gets none, and the report says so. A run handed a prior sits a different exam from one without — the verdict, the ledger and the signed statement carry priorsApplied and the prior's digest, and the digest is in the cache key, so a repeat audit never reads as the tests changing when only the exam did
   -push md:<db>
     	append this scan's per-file verdicts to a DuckDB you own — a path, or md:<db> for MotherDuck (which reads motherduck_token from the environment; the database is created on first push if it does not already exist — a MotherDuck SHARE is a read target and cannot be pushed to). corral has no hosted tier and keeps nothing: the warehouse is yours, and any DuckDB works, so this is a destination rather than a lock-in. Append-only. Every row carries the ledger's scan id (0 when --record was not given), and — traceable only with --attest — the sha256 of the signed statement it came from, so a row can be checked against something a third party can verify; without --attest, statement_sha256 is honestly empty rather than fabricated; and with --attest, a statement that FAILS to write withholds the push too, since a row that cannot name the statement it came from is not written. It answers what one pull request cannot — a single kill rate is a sample, and the same unchanged diff has scored 0.85 and 0.90; forty of them are a distribution
   -push-source
     	with --push, also send the SOURCE BYTES corral holds to your warehouse: the pool's authored test, and the full verdict JSON. Off by default because those bytes are derived from — and quote — your audited code; without this the pushed rows carry numbers, hashes, reasons and model names, and no source leaves the box. Mutant code is NOT carried, by either setting: corral does not keep mutant source at rest, so the corral_mutants.code column exists and is always NULL until something records it. The scan row records which setting was used, so the custody question is answerable from the table rather than from whoever remembers the argv
-  -record corral scans list|show
-    	RETIRED, accepted and ignored for one release: the record is the ledger directory every scan writes by default (see --ledger), so there is no separate DuckDB scan ledger to record into. corral scans list|show read the directory
-  -record-db string
-    	the old name of --cache-db; accepted for one release
   -record-mutants string
     	write the mutants this scan actually GRADED to this file, as a replayable corral-mutants-2 document — one entry per audited file, each mutant its SEARCH/REPLACE hunk, tied to the sha256 of the source it was derived from. Written even when the scan's gates fail: a red verdict is still a recorded exam. A v2 document re-recorded from a --mutants replay of an older corral-mutants-1 set contains that set's WHOLE-FILE entries, not hunks — the run graded what was recorded, and re-recording it does not manufacture anchors it never had
   -repo string

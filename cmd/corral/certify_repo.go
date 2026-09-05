@@ -85,10 +85,9 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	minKillRateFlag := fs.String("min-kill-rate", "", "fail the scan (exit 1) if ANY audited file's kill rate is below this value (0.0-1.0 inclusive; a minimum, so a file exactly at the threshold passes). Opt-in: unset by default, so exit codes are unchanged unless this is given. Applies PER FILE, not to the aggregate — a well-tested file must not mask a weak one")
 	noFailFastFlag := fs.Bool("no-fail-fast", false, noFailFastHelp)
 	preflightFlag := fs.Bool("preflight", false, "run the project's test suite once with coverage instrumentation and report which source files it never executes. One extra suite run; reports coverage-grade evidence, not proof")
-	recordFlag := fs.Bool("record", false, "RETIRED, accepted and ignored for one release: the record is the ledger directory every scan writes by default (see --ledger), so there is no separate DuckDB scan ledger to record into. `corral scans list|show` read the directory")
 	ledgerFlag := fs.String("ledger", "", "the ledger DIRECTORY this scan's entry is written to and earlier entries are read from as the prior (default: <repo>/.corral/ledger, or $CORRAL_LEDGER). One gzipped JSON entry per scan, naming the previous entry's hash, signed when a certify key is configured — the record, in plain text; DuckDB is its view (`corral verify --ledger`, `seal --db <dir>`, `models rank --db <dir>`). Make the directory a worktree of the corral/ledger branch and a laptop run and an Action run are one writer")
 	noLedgerFlag := fs.Bool("no-ledger", false, "write no ledger entry and read no prior from the default ledger directory (an explicit --prior still applies)")
-	priorFlag := fs.String("prior", "", "what earlier runs already tried, so this run plants DIFFERENT faults: a corral-mutants document (see --record-mutants), a ledger directory (see --ledger), a pre-1.0 scan ledger (.duckdb), or a directory holding any number of either — a document brings the hunks, a ledger the outcomes, merged per edit. Applied only to a file whose bytes are EXACTLY what the prior was recorded against; a file the prior knows under other bytes gets none, and the report says so. A run handed a prior sits a different exam from one without — the verdict, the ledger and the signed statement carry priorsApplied and the prior's digest, and the digest is in the cache key, so a repeat audit never reads as the tests changing when only the exam did")
+	priorFlag := fs.String("prior", "", "what earlier runs already tried, so this run plants DIFFERENT faults: a corral-mutants document (see --record-mutants), a ledger directory (see --ledger), or a directory holding any number of either — a document brings the hunks, a ledger the outcomes, merged per edit. Applied only to a file whose bytes are EXACTLY what the prior was recorded against; a file the prior knows under other bytes gets none, and the report says so. A run handed a prior sits a different exam from one without — the verdict, the ledger and the signed statement carry priorsApplied and the prior's digest, and the digest is in the cache key, so a repeat audit never reads as the tests changing when only the exam did")
 	mutantsFlag := fs.String("mutants", "", "REPLAY a recorded mutant set (see --record-mutants) instead of generating one: every audited file is graded against exactly the mutants in this file, and not one generator model call is made. Mutants are authored by a model, so an ordinary run re-draws the exam every time and two runs of the same audit are not two samples of one measurement — pin the set and a change to anything ELSE becomes measurable. Every selected file must appear in the set with the SAME bytes it was recorded from; a missing file or a changed one is refused (exit 2) up front, never half-replayed. Reads a corral-mutants-2 document, or an older corral-mutants-1 one, whose whole-file mutants still replay byte-for-byte.")
 	recordMutantsFlag := fs.String("record-mutants", "", "write the mutants this scan actually GRADED to this file, as a replayable corral-mutants-2 document — one entry per audited file, each mutant its SEARCH/REPLACE hunk, tied to the sha256 of the source it was derived from. Written even when the scan's gates fail: a red verdict is still a recorded exam. A v2 document re-recorded from a --mutants replay of an older corral-mutants-1 set contains that set's WHOLE-FILE entries, not hunks — the run graded what was recorded, and re-recording it does not manufacture anchors it never had")
 	writerModeFlag := fs.String("writer-mode", "", "how the test-writer attacks a file's survivors: `per-survivor` (the default) makes ONE call per survivor — each carrying the file once as a cacheable shared prefix plus that survivor's diff, each repaired on its own budget and each PROVEN ALONE against its own mutant — or `batched`, the original shape: one call carrying every survivor, one repair budget for the file, one proof pass over all of them. Nothing measured changes between them (a survivor is proven iff an authored test kills it alone and passes on the original, either way); what changes is that one unbuildable test no longer spends the whole file's retries and takes every other survivor down with it. The verdict, the report line, the ledger and the attestation all record which mode earned the numbers. Each survivor's proof in per-survivor mode runs its OWN compliant baseline (a compliant pass plus a canary, per seat), so a file with N survivors pays N baselines where batched paid one: on a repo whose suite takes a minute, prefer --writer-mode batched or expect N baselines' worth of wall clock.")
@@ -98,7 +97,6 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	fs.Var(&localEndpointFlag, "local-endpoint", "place a LOCAL seat on a specific ollama daemon, as <role>=<url> (repeatable; e.g. mutant-generator=http://localhost:11436). A daemon is pinned to a GPU by its own environment, so this is how two models occupy two cards at once — corral selects the DAEMON, never the device. Without it every local seat shares OLLAMA_URL, one card and one VRAM budget")
 
 	cacheDSNFlag := fs.String("cache-db", "", "path to corral's local CACHE — derived goals and instrumented test selections a later scan reuses on identical bytes (default: $CORRALAI_CACHE_DB, else ~/.claude/corralai_cache.duckdb). A cache, not a record: nothing a verdict rests on lives only here; deleting it costs a re-derivation and one coverage run, never a fact")
-	fs.StringVar(cacheDSNFlag, "record-db", "", "the old name of --cache-db; accepted for one release")
 	noGoalCacheFlag := fs.Bool("no-goal-cache", false, "skip the goal cache — every candidate is re-derived even when a PRIOR scan already derived a goal for the exact same bytes, model and prompt revision. Re-buys a model call per file that a content-addressed cache would otherwise have served for free; use this to isolate goal-derivation variance from a comparison, or on a scan whose operator does not want a goal receipt kept in the ledger at all. The cache lives in the file --cache-db names")
 	noVerdictCacheFlag := fs.Bool("no-verdict-cache", false, "skip the verdict cache — every candidate is re-audited even when a PRIOR scan already earned a verdict for the exact same bytes, tests, models, engine and substrate. Re-buys the whole audit (generation, grading, the writer) per file; use this to isolate model variance from a comparison, or to redo a measurement the cache would otherwise keep serving. The cache is the ledger directory itself (--ledger): a verdict an earlier entry recorded under the same key is served, so --no-ledger also disables it")
 	noSelectionCacheFlag := fs.Bool("no-selection-cache", false, "skip the selection cache — the ONE instrumented coverage run always executes, even when a PRIOR scan already ran the identical instrumented command over a byte-identical tree. Re-buys a full suite run (the single most expensive measurement a scan makes outside model calls) that a content-addressed cache would otherwise have served for free; use this to isolate selection variance from a comparison, or when the operator does not trust the tree to be unchanged. The cache lives in the file --cache-db names")
@@ -106,14 +104,6 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	timeoutFlag := fs.Duration("timeout", defaultRunTimeout, "per-file WALL-CLOCK budget, measured from that file's run start — not a no-progress timer. A file still making steady progress is stopped when it exceeds this and banks a needs-review TIMEOUT verdict, keeping its dev kill rate and survivors but losing the PROVING half. Same default and semantics as `certify --local`'s --timeout; raise it for a file with many survivors, which needs the most room and has the most to prove. PER FILE, so it multiplies: a scan of N files with W workers can spend up to (N/W) x this in the worst case, which is what --top and --swarm are for")
 	if err := fs.Parse(flagArgs); err != nil {
 		return 2
-	}
-	// Retired with a POINTER: --record turned on a second, DuckDB-shaped
-	// copy of the record. The ledger directory is the record now, written
-	// by default (see --ledger), so the flag has nothing left to turn on —
-	// said once, up front, so nobody waits out a scan expecting rows that
-	// were never going to be written.
-	if *recordFlag {
-		fmt.Fprintln(stderr, "corral certify --repo: --record is retired and did nothing — the record is the ledger directory (see --ledger), written by default; `corral scans list` reads it")
 	}
 	// Removed with a POINTER, not deprecated into a warning: --scope-tests
 	// picked a file's grading surface by FILENAME convention, which inverted
@@ -764,7 +754,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 			// about to start — so the announce line can say "reused" instead of
 			// "running" for a run that is never going to happen.
 			if !*wholeSuiteFlag {
-				if _, hit := ex.selectionCachePeek(selectionSources); hit {
+				if ex.selectionCachePeek(selectionSources) {
 					fmt.Fprintln(stdout, "  selection: reused — tree unchanged since an earlier scan (cached evidence)")
 				} else {
 					fmt.Fprintln(stdout, "  selection: running the suite once with per-test coverage instrumentation…")
@@ -1305,8 +1295,8 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		// would count one run once per file. NULL when no pass ran.
 		SelectionMillis: scanSelectionMillis(ex),
 		// nil unless collectSelection served a cache HIT this scan — see
-		// localExecutor.selectionReusedFrom's own doc.
-		SelectionReusedFrom: scanSelectionReusedFrom(ex),
+		// localExecutor.selectionReused's own doc.
+		SelectionReused: ex != nil && ex.selectionReused,
 		// What the scan consumed. The run already printed these to stdout and
 		// then discarded them, which is how "what did that cost me" had no
 		// answer from the tool whose central caveat is that audits are
@@ -1343,7 +1333,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// instrumented run, never THIS scan's exit code.
 	if ex != nil && ex.pendingSelectionPut != nil && ex.selectionCache != nil {
 		p := ex.pendingSelectionPut
-		if perr := ex.selectionCache.SelectionCachePut(context.Background(), p.TreeDigest, p.CmdDigest, p.Plugin, p.Substrate, p.Raw, "", scanID); perr != nil {
+		if perr := ex.selectionCache.SelectionCachePut(context.Background(), p.TreeDigest, p.CmdDigest, p.Plugin, p.Substrate, p.Raw, ""); perr != nil {
 			fmt.Fprintf(stderr, "corral certify --repo: the selection cache was NOT written: %v\n", perr)
 		}
 	}
@@ -2703,30 +2693,27 @@ func (l *localExecutor) treeDigestOnce() (digest string, ok bool) {
 // are cheap (a git ls-files plus one ledger read), and duplicating them is
 // far simpler than threading state between two calls that would otherwise
 // have to agree by construction.
-func (l *localExecutor) selectionCachePeek(sources []string) (scanID int64, ok bool) {
+func (l *localExecutor) selectionCachePeek(sources []string) bool {
 	if l.wholeSuite || l.selectionCache == nil {
-		return 0, false
+		return false
 	}
 	plug, _, testCmd, _ := l.resolveSelectionPlugin(sources)
 	if plug == nil {
-		return 0, false
+		return false
 	}
 	treeDigest, cmdDigest, keyOK := l.selectionCacheKey(plug, testCmd, sources)
 	if !keyOK {
-		return 0, false
+		return false
 	}
-	_, id, hit, err := l.selectionCache.SelectionCacheGet(context.Background(), treeDigest, cmdDigest, plug.Name(), l.substrate)
-	if err != nil || !hit {
-		return 0, false
-	}
-	return id, true
+	_, hit, err := l.selectionCache.SelectionCacheGet(context.Background(), treeDigest, cmdDigest, plug.Name(), l.substrate)
+	return err == nil && hit
 }
 
 // collectSelection runs the selector's instrumented command once for the
 // scan's language, unless --whole-suite OR a prior scan already ran the
 // IDENTICAL instrumented command over a byte-identical tree (see
 // selectionCacheKey) — in which case that scan's raw evidence is reused
-// verbatim and l.selectionReusedFrom names which scan. Any failure is a
+// verbatim and l.selectionReused says so. Any failure is a
 // Note, never fatal: the scan still has a real measurement to make.
 func (l *localExecutor) collectSelection(ctx context.Context, sources []string) reposcan.SelectionEvidence {
 	if l.wholeSuite {
@@ -2742,9 +2729,8 @@ func (l *localExecutor) collectSelection(ctx context.Context, sources []string) 
 	if l.selectionCache != nil {
 		treeDigest, cmdDigest, keyOK = l.selectionCacheKey(plug, testCmd, sources)
 		if keyOK {
-			if raw, scanID, hit, err := l.selectionCache.SelectionCacheGet(ctx, treeDigest, cmdDigest, langName, l.substrate); err == nil && hit {
-				id := scanID
-				l.selectionReusedFrom = &id
+			if raw, hit, err := l.selectionCache.SelectionCacheGet(ctx, treeDigest, cmdDigest, langName, l.substrate); err == nil && hit {
+				l.selectionReused = true
 				return reposcan.SelectionEvidence{Raw: raw, Ran: true}
 			}
 		}
@@ -4135,12 +4121,11 @@ type localExecutor struct {
 	// git failure) — a real, cached answer, not "not yet asked".
 	treeDigest         string
 	treeDigestComputed bool
-	// selectionReusedFrom is set the moment collectSelection serves a cache
-	// HIT: the id of the scan whose evidence this scan is reusing. nil on
-	// every scan that ran its own instrumented pass or ran none at all —
-	// see scanstore.Scan.SelectionReusedFrom's doc for why this is the only
-	// signal that tells "reused" apart from "never ran".
-	selectionReusedFrom *int64
+	// selectionReused is set the moment collectSelection serves a cache
+	// HIT. False on every scan that ran its own instrumented pass or ran
+	// none at all — see scanstore.Scan.SelectionReused's doc for why this is
+	// the only signal that tells "reused" apart from "never ran".
+	selectionReused bool
 	// pendingSelectionPut holds a freshly-collected MISS's raw evidence and
 	// the key it was collected under, for the recording sequence to Put once
 	// this scan's own ledger id exists — collectSelection runs long before
@@ -4415,18 +4400,6 @@ func scanSelectionMillis(ex *localExecutor) *int64 {
 		return nil
 	}
 	return millisOrNil(ex.selectionDuration)
-}
-
-// scanSelectionReusedFrom is the scan header's selection_reused_from: the id
-// of the prior scan whose coverage evidence THIS scan reused, or nil when
-// this scan ran its own pass (or ran none at all) — see
-// localExecutor.selectionReusedFrom's own doc for why this is the only
-// column that tells "reused" apart from "never ran".
-func scanSelectionReusedFrom(ex *localExecutor) *int64 {
-	if ex == nil {
-		return nil
-	}
-	return ex.selectionReusedFrom
 }
 
 // scanEventRows drains the scan's accumulated tape, or nil when ex is nil —

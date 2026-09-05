@@ -130,7 +130,7 @@ const wantScansShowJSONWithTiming = `{
     }
   ],
   "selection_ms": 92000,
-  "selection_reused_from": null,
+  "selection_reused": false,
   "model_calls": [
     {
       "path": "pkg/a.py",
@@ -280,16 +280,15 @@ func TestScansShowJSONWithoutTimingIsByteIdenticalToTheOldShape(t *testing.T) {
 	}
 }
 
-// TestScansShowJSONWithTimingCarriesSelectionReusedFrom is IMPORTANT-5's
+// TestScansShowJSONWithTimingCarriesSelectionReused is IMPORTANT-5's
 // headline case: a scan that reused a prior scan's selection evidence (so
-// SelectionMS is nil, per scanstore.Scan.SelectionReusedFrom's own doc)
-// must carry that scan's id under "selection_reused_from", not a null the
-// text readout would have disclosed but --json --timing dropped.
-func TestScansShowJSONWithTimingCarriesSelectionReusedFrom(t *testing.T) {
+// SelectionMS is nil, per scanstore.Scan.SelectionReused's own doc) must
+// say so under "selection_reused", not a false the text readout would have
+// disclosed but --json --timing dropped.
+func TestScansShowJSONWithTimingCarriesSelectionReused(t *testing.T) {
 	r := scansShowJSONFixture()
-	reusedFrom := int64(7)
 	r.scan.SelectionMillis = nil
-	r.scan.SelectionReusedFrom = &reusedFrom
+	r.scan.SelectionReused = true
 
 	var out, errOut bytes.Buffer
 	if code := runScans([]string{"show", "1", "--json", "--timing"}, openFake(r), &out, &errOut); code != 0 {
@@ -302,7 +301,7 @@ func TestScansShowJSONWithTimingCarriesSelectionReusedFrom(t *testing.T) {
 	if decoded.SelectionMS != nil {
 		t.Errorf("selection_ms = %v, want nil — the pass did not run this scan", *decoded.SelectionMS)
 	}
-	if decoded.SelectionReusedFrom == nil || *decoded.SelectionReusedFrom != 7 {
-		t.Errorf("selection_reused_from = %v, want *7", decoded.SelectionReusedFrom)
+	if !decoded.SelectionReused {
+		t.Error("selection_reused = false, want true")
 	}
 }

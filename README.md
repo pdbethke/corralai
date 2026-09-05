@@ -590,10 +590,9 @@ test — as **one signed, hash-linked, gzipped JSON entry** under the audited
 repo's `.corral/ledger/` (`--ledger <dir>` moves it, `--no-ledger` skips
 it, `$CORRAL_LEDGER` overrides the default). Plain text, ~21 KB a run; a
 git branch on a runner, a folder on a laptop; DuckDB reads it in place.
-There is no separate database to record into — the pre-1.0 `--record` /
-`--record-db` DuckDB ledger is retired, and `--cache-db` names the one
-local file that remains: a cache of derived goals and test selections,
-which nothing a verdict rests on lives in. A write failure — a full disk,
+There is no database to record into; `--cache-db` names the one local
+file corral keeps, a cache of derived goals and test selections, which
+nothing a verdict rests on lives in. A write failure — a full disk,
 an unwritable directory — never changes the scan's own verdict or exit
 code: it prints a loud line on stderr and the result stands, because this
 command's exit code is a CI merge gate and bookkeeping must never be able
@@ -613,7 +612,7 @@ corral scans show <id> --timing      # + where each file's wall clock went
 
 Plain files, no brain and no database required, read-only by design (an
 id is the entry's position in the chain, oldest first; `--ledger <dir>`
-reads another directory, `--db` a pre-1.0 `scans.duckdb`). `show` renders
+reads another directory). `show` renders
 what a bare number cannot: **why a proven-gap count of 0 is 0** — the pool
 never authored a compiling test, the test it authored never genuinely graded,
 or a perfectly sound test ran and proved nothing ("tried and missed"). Those

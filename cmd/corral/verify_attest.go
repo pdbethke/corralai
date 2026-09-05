@@ -57,7 +57,7 @@ func runVerifyAttest(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("verify", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	attestFlag := fs.String("attest", "", "the --attest statement to verify (required) — the plain JSON path (its signed envelope is expected at <path>.dsse.json) or the envelope itself")
-	dbFlag := fs.String("db", "", "also recompute the warehouse rows' hash from this pushed DuckDB (a path, or md:<db> for MotherDuck) and compare it to the statement's claim. Every push of the scan the warehouse holds is tried (each has its own scan_uid); a VACUUMed warehouse can change row order and trip a false ✗ here without tampering, and rows a pre-1.0 `corral scans push` backfilled are reported as such, never as a mismatch")
+	dbFlag := fs.String("db", "", "also recompute the warehouse rows' hash from this pushed DuckDB (a path, or md:<db> for MotherDuck) and compare it to the statement's claim. Every push of the scan the warehouse holds is tried (each has its own scan_uid); a VACUUMed warehouse can change row order and trip a false ✗ here without tampering")
 	rekorIndexFlag := fs.Int64("rekor-index", -1, "also confirm this Rekor log index's entry matches the envelope (default: read the index --db recorded for this scan, if --db was given)")
 	pubFlag := fs.String("pub", "", "hex-encoded Ed25519 public key to verify the signature against (default: the local certify key, CORRALAI_CERTIFY_KEY_FILE)")
 	ledgerFlag := fs.String("ledger", "", "walk a LEDGER DIRECTORY (the JSON entries `--push <dir>/` writes, one per scan, each naming the previous entry's hash and carrying a signature): every entry's hash against its bytes, every link against its predecessor, every signature against --pub or the local certify key. One line per entry; an edited entry, a removed one, or a foreign signature is named. Instead of --attest, not with it")
@@ -343,24 +343,8 @@ func plainStatementSHA256(attestPath, envPath string) string {
 // rows keyed by its own scan_uid, so a repo pushed under scan_id 0 by every
 // Action run, or a scan pushed twice, is not unioned into one bundle that
 // no statement ever hashed.
-//
-// Splits the result: the run's OWN pushes (which the statement's hash can
-// match) from backfills `corral scans push` wrote later (which it never
-// can: a backfill cannot recover the run's thresholds or outcome, and
-// carries no source).
-func locateRunPushes(db *sql.DB, id scanIdentity, statementSHA string) (own, backfills []auditpush.ScanRow, err error) {
-	scans, err := auditpush.LocateScans(db, id.repo, id.scanID, statementSHA)
-	if err != nil {
-		return nil, nil, err
-	}
-	for _, sc := range scans {
-		if sc.PushedBy == auditpush.PushedByBackfill {
-			backfills = append(backfills, sc)
-		} else {
-			own = append(own, sc)
-		}
-	}
-	return own, backfills, nil
+func locateRunPushes(db *sql.DB, id scanIdentity, statementSHA string) ([]auditpush.ScanRow, error) {
+	return auditpush.LocateScans(db, id.repo, id.scanID, statementSHA)
 }
 
 // verifyWarehouseRows is check 2: with --db, read the rows this scan
@@ -389,14 +373,11 @@ func verifyWarehouseRows(dbFlag string, stmt map[string]any, statementSHA string
 		return verifyCheckResult{checked: false, detail: fmt.Sprintf("opening --db: %v", err)}
 	}
 	defer db.Close()
-	own, backfills, lerr := locateRunPushes(db, id, statementSHA)
+	own, lerr := locateRunPushes(db, id, statementSHA)
 	if lerr != nil {
 		return verifyCheckResult{checked: false, detail: fmt.Sprintf("reading --db: %v", lerr)}
 	}
 	if len(own) == 0 {
-		if len(backfills) > 0 {
-			return verifyCheckResult{checked: false, detail: fmt.Sprintf("the only rows in --db for this statement were written by `corral scans push` (%d backfill(s)), not by the run that signed it — a backfill reconstructs the scan from the local ledger and cannot reproduce the run's own push; verify against the warehouse the run pushed to, or trust the local ledger this backfill came from", len(backfills))}
-		}
 		return verifyCheckResult{checked: false, detail: fmt.Sprintf("no rows found in --db for repo %q scan %d — was it ever pushed there?", id.repo, id.scanID)}
 	}
 
@@ -428,9 +409,6 @@ func verifyWarehouseRows(dbFlag string, stmt map[string]any, statementSHA string
 		got = append(got, h[:12])
 	}
 	detail := fmt.Sprintf("the rows read back from --db hash to a different value than the statement claims (%d push(es) of this scan tried: %s)", len(own), strings.Join(got, ", "))
-	if len(backfills) > 0 {
-		detail += fmt.Sprintf("; %d further backfill(s) by `corral scans push` were not tried, since a backfill can never match", len(backfills))
-	}
 	detail += " — note: a VACUUMed warehouse can change row order and trip this without tampering"
 	if id.rowsHashVersion < 2 {
 		detail += "; and this statement's hash is version 1 (the full JSON of the pushing binary's row structs), which a binary with columns added since cannot reproduce — a pre-1.0 limitation, not evidence of tampering; verify it with the corral version that pushed it"
@@ -479,7 +457,7 @@ func verifyRekorInclusion(ctx context.Context, envelope []byte, stmt map[string]
 		if err != nil {
 			return verifyCheckResult{checked: false, detail: fmt.Sprintf("no --rekor-index given, and opening --db to find one failed: %v", err)}
 		}
-		own, _, lerr := locateRunPushes(db, id, "")
+		own, lerr := locateRunPushes(db, id, "")
 		_ = db.Close()
 		if lerr != nil {
 			return verifyCheckResult{checked: false, detail: fmt.Sprintf("no --rekor-index given, and reading --db to find one failed: %v", lerr)}

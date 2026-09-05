@@ -253,7 +253,7 @@ Usage:
                                   when it proved nothing — that is the case worth reading.
                                   Plain files, no brain, no database:
                                   --ledger <dir> (default $CORRAL_LEDGER, else ./.corral/ledger),
-                                  --limit n, --json; --db <path> reads a pre-1.0 scans.duckdb
+                                  --limit n, --json
   corral verify --ledger <dir>    walk a ledger directory's chain: every entry's hash against its
                                   bytes, every link against its predecessor, every signature
                                   against --pub or the local certify key; one line per entry,

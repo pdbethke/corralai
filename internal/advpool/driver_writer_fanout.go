@@ -249,6 +249,16 @@ func (d *Driver) advanceWriterAttempt(ctx context.Context, missionID int64, run 
 	}
 	a.measured = true
 	a.proven = len(provenMutantIDs(rep, only)) > 0
+	if !a.proven {
+		// The one outcome this path never said out loud: the test compiled,
+		// passed on the unmutated code, was collected, ran against its
+		// survivor — and did not kill it. "Tried and missed" is a real
+		// measurement of the writer's ceiling on this code, and a log that
+		// names every other ending for a seat but this one left a run of
+		// "0 proven" reading as a mystery.
+		log.Printf("advpool: %s: the authored test for survivor %s ran soundly and did not kill it — tried and missed; that survivor stays unproven",
+			run.rs.CodePath, a.mutant.ID)
+	}
 	return true, nil
 }
 

@@ -115,11 +115,23 @@ type AuditedFile struct {
 	// ExamSymbols/ExamSymbolsProbed/ExamDecisions/ExamDecisionsProbed: the
 	// coverage term — how much of the file's surface the mutants reached.
 	// Present only when measured (ExamMeasured), never signed as 0 of 0.
-	ExamMeasured        bool `json:"examMeasured,omitempty"`
-	ExamSymbols         int  `json:"examSymbols,omitempty"`
-	ExamSymbolsProbed   int  `json:"examSymbolsProbed,omitempty"`
-	ExamDecisions       int  `json:"examDecisions,omitempty"`
-	ExamDecisionsProbed int  `json:"examDecisionsProbed,omitempty"`
+	ExamMeasured bool `json:"examMeasured,omitempty"`
+	// The writer pair, when a challenger writer sat: which model, what each
+	// seat proved of the same survivors, and the overlap of their misses —
+	// signed whether or not the coefficient was sufficient, with Jaccard
+	// present only when it was.
+	ChallengerModel          string  `json:"challengerModel,omitempty"`
+	ChallengerMutants        int     `json:"challengerMutants,omitempty"`
+	ChallengerSurvivedWriter int     `json:"challengerSurvivedWriter,omitempty"`
+	ChallengerSurvivedShadow int     `json:"challengerSurvivedShadow,omitempty"`
+	ChallengerUnion          int     `json:"challengerUnion,omitempty"`
+	ChallengerShared         int     `json:"challengerShared,omitempty"`
+	ChallengerJaccard        float64 `json:"challengerJaccard,omitempty"`
+	ChallengerSufficient     bool    `json:"challengerSufficient,omitempty"`
+	ExamSymbols              int     `json:"examSymbols,omitempty"`
+	ExamSymbolsProbed        int     `json:"examSymbolsProbed,omitempty"`
+	ExamDecisions            int     `json:"examDecisions,omitempty"`
+	ExamDecisionsProbed      int     `json:"examDecisionsProbed,omitempty"`
 	// GoalReused discloses that this file's goal was served from the goal
 	// cache — a PRIOR scan derived it from the same bytes, by the same
 	// model under the same prompt revision — rather than freshly derived by
@@ -288,6 +300,18 @@ func BuildAuditAttestation(s AuditStatement) map[string]any {
 		if f.KillRateHigh > 0 {
 			entry["killRateLow"] = f.KillRateLow
 			entry["killRateHigh"] = f.KillRateHigh
+		}
+		if f.ChallengerMutants > 0 {
+			entry["challengerModel"] = f.ChallengerModel
+			entry["challengerMutants"] = f.ChallengerMutants
+			entry["challengerSurvivedWriter"] = f.ChallengerSurvivedWriter
+			entry["challengerSurvivedShadow"] = f.ChallengerSurvivedShadow
+			entry["challengerUnion"] = f.ChallengerUnion
+			entry["challengerShared"] = f.ChallengerShared
+			if f.ChallengerSufficient {
+				entry["challengerJaccard"] = f.ChallengerJaccard
+				entry["challengerSufficient"] = true
+			}
 		}
 		if f.ExamMeasured {
 			entry["examSymbols"] = f.ExamSymbols

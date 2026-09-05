@@ -368,6 +368,13 @@ func buildScanFileRows(results []reposcan.FileResult, excluded []reposcan.Exclus
 				ChallengerJaccard:    challengerJaccard(r.Verdict.ChallengerAgreement),
 				ChallengerKappa:      challengerKappa(r.Verdict.ChallengerAgreement),
 				ChallengerSufficient: challengerSufficient(r.Verdict.ChallengerAgreement),
+				// The pair's counts, whether or not the coefficient was
+				// sufficient — see scanstore.File.ChallengerMutants.
+				ChallengerMutants:        pairCount(r.Verdict.ChallengerAgreement, func(p *modelcorr.Pair) int { return p.Mutants }),
+				ChallengerSurvivedWriter: pairCount(r.Verdict.ChallengerAgreement, func(p *modelcorr.Pair) int { return p.SurvivedA }),
+				ChallengerSurvivedShadow: pairCount(r.Verdict.ChallengerAgreement, func(p *modelcorr.Pair) int { return p.SurvivedB }),
+				ChallengerUnion:          pairCount(r.Verdict.ChallengerAgreement, func(p *modelcorr.Pair) int { return p.UnionSurvivors }),
+				ChallengerShared:         pairCount(r.Verdict.ChallengerAgreement, func(p *modelcorr.Pair) int { return p.SharedSurvivors }),
 				// How many goals reposcan's DERIVER produced for this file —
 				// 0 (not NULL: the column is a plain int, see
 				// scanstore.File.GoalsDerived's doc) unless this file's goal
@@ -1023,5 +1030,15 @@ func examCount(c advpool.ExamCoverage, v int) *int {
 	if !c.Measured {
 		return nil
 	}
+	return &v
+}
+
+// pairCount is one of the writer pair's counts for the ledger: NULL when no
+// pair was measured, the count otherwise — sufficient or not.
+func pairCount(p *modelcorr.Pair, get func(*modelcorr.Pair) int) *int {
+	if p == nil {
+		return nil
+	}
+	v := get(p)
 	return &v
 }

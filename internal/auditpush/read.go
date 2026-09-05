@@ -263,7 +263,8 @@ func readFileRows(db *sql.DB, where string, args ...any) ([]Row, error) {
 		critic_ms, total_ms, mutant_ms_median, mutant_ms_max,
 		authored_test, verdict_json, prompt_shape, covering_tests, import_only, started_at,
 		mutant_budget, mutant_budget_rule, complexity,
-		symbols, symbols_probed, decisions, decisions_probed
+		symbols, symbols_probed, decisions, decisions_probed,
+		challenger_mutants, challenger_survived_writer, challenger_survived_shadow, challenger_union, challenger_shared
 	   FROM corral_audits WHERE `+where, args...) // #nosec G202 -- where is a constant clause from readGrains; every value is a bound parameter
 	if err != nil {
 		return nil, err
@@ -292,6 +293,7 @@ func readFileRows(db *sql.DB, where string, args ...any) ([]Row, error) {
 		var mutantBudget, complexity sql.NullInt64
 		var mutantBudgetRule sql.NullString
 		var symbols, symbolsProbed, decisions, decisionsProbed sql.NullInt64
+		var chMutants, chSurvW, chSurvS, chUnion, chShared sql.NullInt64
 		var coveringTests sql.NullInt64
 		var importOnly sql.NullBool
 		var rowPassed sql.NullBool
@@ -319,6 +321,7 @@ func readFileRows(db *sql.DB, where string, args ...any) ([]Row, error) {
 			&authoredTest, &verdictJSON, &promptShape, &coveringTests, &importOnly, &rowStarted,
 			&mutantBudget, &mutantBudgetRule, &complexity,
 			&symbols, &symbolsProbed, &decisions, &decisionsProbed,
+			&chMutants, &chSurvW, &chSurvS, &chUnion, &chShared,
 		); err != nil {
 			return nil, err
 		}
@@ -374,6 +377,8 @@ func readFileRows(db *sql.DB, where string, args ...any) ([]Row, error) {
 		r.Complexity = nullInt(complexity)
 		r.Symbols, r.SymbolsProbed = nullInt(symbols), nullInt(symbolsProbed)
 		r.Decisions, r.DecisionsProbed = nullInt(decisions), nullInt(decisionsProbed)
+		r.ChallengerMutants, r.ChallengerSurvivedWriter, r.ChallengerSurvivedShadow = nullInt(chMutants), nullInt(chSurvW), nullInt(chSurvS)
+		r.ChallengerUnion, r.ChallengerShared = nullInt(chUnion), nullInt(chShared)
 
 		out = append(out, r)
 	}

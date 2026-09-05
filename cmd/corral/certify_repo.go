@@ -28,6 +28,7 @@ import (
 	"github.com/pdbethke/corralai/internal/auditpush"
 	"github.com/pdbethke/corralai/internal/certify"
 	"github.com/pdbethke/corralai/internal/lang"
+	"github.com/pdbethke/corralai/internal/modelcorr"
 	"github.com/pdbethke/corralai/internal/reposcan"
 	"github.com/pdbethke/corralai/internal/sandbox"
 	"github.com/pdbethke/corralai/internal/scanstore"
@@ -3480,6 +3481,9 @@ func printWeakFile(w io.Writer, f reposcan.WeakFile) {
 	if line := examConfidenceLine(f); line != "" {
 		fmt.Fprintf(w, "\n   confidence: %s", line)
 	}
+	if line := writerPairLine(f.Challenger); line != "" {
+		fmt.Fprintf(w, "\n   writers: %s", line)
+	}
 	fmt.Fprintln(w)
 	// How many private trees scored this file at once, or why it only got
 	// one — the same wording noteConcurrency printed live during the run,
@@ -4932,13 +4936,21 @@ func writeAuditStatement(path, repoDir string, r reposcan.RepoReport, models map
 			MutantBudgetRule: f.MutantBudget.Rule,
 			Complexity:       f.MutantBudget.Complexity,
 			// The two confidence terms — see certify.AuditedFile's docs.
-			KillRateLow:         lo,
-			KillRateHigh:        hi,
-			ExamMeasured:        f.ExamCoverage.Measured,
-			ExamSymbols:         f.ExamCoverage.Symbols,
-			ExamSymbolsProbed:   f.ExamCoverage.SymbolsProbed,
-			ExamDecisions:       f.ExamCoverage.Decisions,
-			ExamDecisionsProbed: f.ExamCoverage.DecisionsProbed,
+			KillRateLow:              lo,
+			KillRateHigh:             hi,
+			ExamMeasured:             f.ExamCoverage.Measured,
+			ChallengerModel:          pairField(f.Challenger, func(p *modelcorr.Pair) string { return p.ModelB }),
+			ChallengerMutants:        pairInt(f.Challenger, func(p *modelcorr.Pair) int { return p.Mutants }),
+			ChallengerSurvivedWriter: pairInt(f.Challenger, func(p *modelcorr.Pair) int { return p.SurvivedA }),
+			ChallengerSurvivedShadow: pairInt(f.Challenger, func(p *modelcorr.Pair) int { return p.SurvivedB }),
+			ChallengerUnion:          pairInt(f.Challenger, func(p *modelcorr.Pair) int { return p.UnionSurvivors }),
+			ChallengerShared:         pairInt(f.Challenger, func(p *modelcorr.Pair) int { return p.SharedSurvivors }),
+			ChallengerJaccard:        pairJaccard(f.Challenger),
+			ChallengerSufficient:     f.Challenger != nil && f.Challenger.Sufficient,
+			ExamSymbols:              f.ExamCoverage.Symbols,
+			ExamSymbolsProbed:        f.ExamCoverage.SymbolsProbed,
+			ExamDecisions:            f.ExamCoverage.Decisions,
+			ExamDecisionsProbed:      f.ExamCoverage.DecisionsProbed,
 			// Whether this file's goal was served from the goal cache — see
 			// certify.AuditedFile.GoalReused's doc.
 			GoalReused: f.GoalReused,
@@ -5327,4 +5339,44 @@ func examConfidenceLine(f reposcan.WeakFile) string {
 		parts = append(parts, s)
 	}
 	return strings.Join(parts, " · ")
+}
+
+// writerPairLine is the writer pair on one line: what each seat proved of
+// the same survivors, and the overlap of their misses when there were enough
+// misses to compute one — said as WITHHELD with the count otherwise, because
+// two writers that both proved nearly everything is a finding, and it used
+// to live only in the run log. "" when no pair was measured.
+func writerPairLine(p *modelcorr.Pair) string {
+	if p == nil || p.Mutants == 0 {
+		return ""
+	}
+	s := fmt.Sprintf("%s proved %d of %d · challenger %s proved %d of %d",
+		p.ModelA, p.Mutants-p.SurvivedA, p.Mutants, p.ModelB, p.Mutants-p.SurvivedB, p.Mutants)
+	if p.Sufficient {
+		s += fmt.Sprintf(" · both missed %d of the %d either missed (Jaccard %.3f)", p.SharedSurvivors, p.UnionSurvivors, p.Jaccard)
+	} else {
+		s += fmt.Sprintf(" · overlap of misses withheld: %d in the union, fewer than the %d a coefficient needs", p.UnionSurvivors, modelcorr.MinSurvivorUnion)
+	}
+	return s
+}
+
+func pairField(p *modelcorr.Pair, get func(*modelcorr.Pair) string) string {
+	if p == nil {
+		return ""
+	}
+	return get(p)
+}
+
+func pairInt(p *modelcorr.Pair, get func(*modelcorr.Pair) int) int {
+	if p == nil {
+		return 0
+	}
+	return get(p)
+}
+
+func pairJaccard(p *modelcorr.Pair) float64 {
+	if p == nil || !p.Sufficient {
+		return 0
+	}
+	return p.Jaccard
 }

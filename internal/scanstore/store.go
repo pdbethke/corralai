@@ -455,6 +455,18 @@ type File struct {
 	ChallengerJaccard    *float64
 	ChallengerKappa      *float64
 	ChallengerSufficient *bool
+	// The pair's COUNTS, recorded whether or not the coefficient was
+	// sufficient: how many survivors both writers faced, how many each
+	// left unproven, and the union/intersection of those misses. Two
+	// writers that both prove nearly everything have too few misses for
+	// a coefficient — and that is a finding, not a NULL. On psf/requests
+	// (2026-09-04) the shadow writer's 10 of 12 and 15 of 15 lived only in
+	// the run log. NULL when no pair was measured at all.
+	ChallengerMutants        *int
+	ChallengerSurvivedWriter *int
+	ChallengerSurvivedShadow *int
+	ChallengerUnion          *int
+	ChallengerShared         *int
 	// GoalsDerived is how many goals reposcan derived for this file. 0 means
 	// none were derived, which is a real and common answer, so this one is a
 	// plain int rather than a pointer.
@@ -563,6 +575,11 @@ var scanFilesMigrationCols = []struct{ name, ddl string }{
 	{"symbols_probed", "symbols_probed INTEGER"},
 	{"decisions", "decisions INTEGER"},
 	{"decisions_probed", "decisions_probed INTEGER"},
+	{"challenger_mutants", "challenger_mutants INTEGER"},
+	{"challenger_survived_writer", "challenger_survived_writer INTEGER"},
+	{"challenger_survived_shadow", "challenger_survived_shadow INTEGER"},
+	{"challenger_union", "challenger_union INTEGER"},
+	{"challenger_shared", "challenger_shared INTEGER"},
 }
 
 // scansMigrationCols is the same ledger at the SCAN grain. `scans` had no
@@ -725,7 +742,12 @@ func Open(dsn string) (*Store, error) {
 		symbols INTEGER,
 		symbols_probed INTEGER,
 		decisions INTEGER,
-		decisions_probed INTEGER
+		decisions_probed INTEGER,
+		challenger_mutants INTEGER,
+		challenger_survived_writer INTEGER,
+		challenger_survived_shadow INTEGER,
+		challenger_union INTEGER,
+		challenger_shared INTEGER
 	)`); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("scanstore: create scan_files table: %w", err)
@@ -1175,9 +1197,10 @@ func (s *Store) Record(ctx context.Context, scan Scan, files []File) (int64, err
 			per_mutant, tests_per_mutant_min, tests_per_mutant_median, tests_per_mutant_max,
 			writer_mode, prompt_shape, covering_tests, import_only,
 			mutant_budget, mutant_budget_rule, complexity,
-			symbols, symbols_probed, decisions, decisions_probed
+			symbols, symbols_probed, decisions, decisions_probed,
+			challenger_mutants, challenger_survived_writer, challenger_survived_shadow, challenger_union, challenger_shared
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			id, f.Path, f.Lang, f.Disposition, f.Reason,
 			fileKillRate(f), f.Survivors, f.Gradable, f.PreflightState, f.Evidence, f.Detail, f.TimedOut, f.TestWriterFailed, f.ProvenMissed, f.PoolTestUnsound,
 			f.ProvenMutantIDs, f.AuthoredTest, f.CacheKey, f.VerdictJSON, f.ComputedAt,
@@ -1193,6 +1216,7 @@ func (s *Store) Record(ctx context.Context, scan Scan, files []File) (int64, err
 			nullableString(f.WriterMode), nullableString(f.PromptShape), nullableIntPtr(f.CoveringTests), nullableBoolPtr(f.ImportOnly),
 			nullableIntPtr(f.MutantBudget), nullableString(f.MutantBudgetRule), nullableIntPtr(f.Complexity),
 			nullableIntPtr(f.Symbols), nullableIntPtr(f.SymbolsProbed), nullableIntPtr(f.Decisions), nullableIntPtr(f.DecisionsProbed),
+			nullableIntPtr(f.ChallengerMutants), nullableIntPtr(f.ChallengerSurvivedWriter), nullableIntPtr(f.ChallengerSurvivedShadow), nullableIntPtr(f.ChallengerUnion), nullableIntPtr(f.ChallengerShared),
 		); err != nil {
 			return 0, fmt.Errorf("scanstore: insert scan_files row for %q: %w", f.Path, err)
 		}
@@ -1377,7 +1401,8 @@ func (s *Store) FilesForScan(ctx context.Context, scanID int64) ([]File, error) 
 		per_mutant, tests_per_mutant_min, tests_per_mutant_median, tests_per_mutant_max,
 		writer_mode, prompt_shape, covering_tests, import_only,
 		mutant_budget, mutant_budget_rule, complexity,
-		symbols, symbols_probed, decisions, decisions_probed
+		symbols, symbols_probed, decisions, decisions_probed,
+		challenger_mutants, challenger_survived_writer, challenger_survived_shadow, challenger_union, challenger_shared
 		FROM scan_files WHERE scan_id = ? ORDER BY rowid`, scanID)
 	if err != nil {
 		return nil, fmt.Errorf("scanstore: files for scan %d: %w", scanID, err)
@@ -1452,6 +1477,7 @@ func (s *Store) FilesForScan(ctx context.Context, scanID int64) ([]File, error) 
 		var mutantBudget, complexity sql.NullInt64
 		var mutantBudgetRule sql.NullString
 		var symbols, symbolsProbed, decisions, decisionsProbed sql.NullInt64
+		var chMutants, chSurvW, chSurvS, chUnion, chShared sql.NullInt64
 		if err := rows.Scan(&f.Path, &f.Lang, &f.Disposition, &f.Reason,
 			&f.KillRate, &f.Survivors, &f.Gradable, &f.PreflightState, &f.Evidence, &detail, &timedOut, &testWriterFailed, &provenMissed, &poolTestUnsound,
 			&provenIDs, &authoredTest,
@@ -1466,7 +1492,8 @@ func (s *Store) FilesForScan(ctx context.Context, scanID int64) ([]File, error) 
 			&challengerJaccard, &challengerKappa, &challengerSufficient, &goalsDerived, &goalReused,
 			&perMutant, &tpmMin, &tpmMedian, &tpmMax, &writerMode, &promptShape, &coveringTests, &importOnly,
 			&mutantBudget, &mutantBudgetRule, &complexity,
-			&symbols, &symbolsProbed, &decisions, &decisionsProbed); err != nil {
+			&symbols, &symbolsProbed, &decisions, &decisionsProbed,
+			&chMutants, &chSurvW, &chSurvS, &chUnion, &chShared); err != nil {
 			return nil, fmt.Errorf("scanstore: scan scan_files row: %w", err)
 		}
 		f.Detail = detail.String
@@ -1557,6 +1584,8 @@ func (s *Store) FilesForScan(ctx context.Context, scanID int64) ([]File, error) 
 		f.Complexity = nullCount(complexity)
 		f.Symbols, f.SymbolsProbed = nullCount(symbols), nullCount(symbolsProbed)
 		f.Decisions, f.DecisionsProbed = nullCount(decisions), nullCount(decisionsProbed)
+		f.ChallengerMutants, f.ChallengerSurvivedWriter, f.ChallengerSurvivedShadow = nullCount(chMutants), nullCount(chSurvW), nullCount(chSurvS)
+		f.ChallengerUnion, f.ChallengerShared = nullCount(chUnion), nullCount(chShared)
 		out = append(out, f)
 	}
 	return out, rows.Err()

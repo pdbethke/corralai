@@ -159,12 +159,12 @@ func TestTestSurfacePathsCoversTheWholeTestDirectory(t *testing.T) {
 		"tests/testserver/server.py": "def serve():\n    return 0\n",
 		// A repo-root conftest.py: beside no test, under no test root, and
 		// read by every test under tests/ — reached by NAME.
-		"conftest.py":    "import pytest\n",
-		"pyproject.toml": "[tool.pytest.ini_options]\ntestpaths = ['tests']\n",
-		"src/jest.setup.js":          "module.exports = {}\n",
-		"src/a.test.js":              "test('a', () => {})\n",
-		"docs/notes.md":              "not a test\n",
-		"docs/whatever.json":         "{}\n",
+		"conftest.py":        "import pytest\n",
+		"pyproject.toml":     "[tool.pytest.ini_options]\ntestpaths = ['tests']\n",
+		"src/jest.setup.js":  "module.exports = {}\n",
+		"src/a.test.js":      "test('a', () => {})\n",
+		"docs/notes.md":      "not a test\n",
+		"docs/whatever.json": "{}\n",
 	})
 	cands, excl, err := reposcan.Enumerate(root)
 	if err != nil {

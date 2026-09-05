@@ -3,6 +3,7 @@
 package agentbackend
 
 import (
+	"errors"
 	"sync"
 	"time"
 
@@ -224,8 +225,9 @@ func (m *UsageMeter) Snapshot() ModelUsage {
 // reply — the meter is written on the way past, and a metering failure cannot
 // exist because there is nothing to fail.
 type meteredChatter struct {
-	inner Backend
-	meter *UsageMeter
+	inner  Backend
+	meter  *UsageMeter
+	budget *TokenBudget
 }
 
 // AsChatterMetered adapts b to agentworker.Chatter and records every call's
@@ -235,7 +237,18 @@ func AsChatterMetered(b Backend, meter *UsageMeter) agentworker.Chatter {
 	return meteredChatter{inner: b, meter: meter}
 }
 
+// AsChatterBudgeted is AsChatterMetered with a run-wide TokenBudget the
+// chatter consults before every call; a nil budget is no cap.
+func AsChatterBudgeted(b Backend, meter *UsageMeter, budget *TokenBudget) agentworker.Chatter {
+	return meteredChatter{inner: b, meter: meter, budget: budget}
+}
+
 func (c meteredChatter) Chat(messages []agentworker.Message, tools []any) (agentworker.Message, error) {
+	// The cap is consulted BEFORE the provider is dialled: a refused call
+	// costs nothing and reports nothing to the meter.
+	if !c.budget.Allow() {
+		return agentworker.Message{}, ErrTokenBudgetExhausted
+	}
 	// Timed around the WHOLE call, success or failure: a call that failed
 	// after the provider billed it still cost money and still held a
 	// connection open, and a ledger that only clocks successes understates
@@ -247,5 +260,92 @@ func (c meteredChatter) Chat(messages []agentworker.Message, tools []any) (agent
 	// runs up to eight seats against one backend value concurrently, and
 	// per-backend mutable state would race.
 	c.meter.AddTimed(usage, wall)
+	c.budget.Charge(usage)
 	return reply, err
+}
+
+// TokenBudget is a per-RUN cap on tokens (input + output, every seat, every
+// model) that a meteredChatter consults before each call. Corral bounded
+// mutants, shards, wall clock and concurrency and nothing in tokens: a
+// per-survivor writer on a survivor-heavy file paid N calls and nothing
+// clamped it. The cap is checked BEFORE a call and charged after it, so one
+// in-flight call can overshoot by its own size — said in the error rather
+// than pretended away; estimating a call's cost from its prompt would be a
+// guess presented as a bound.
+//
+// Shared by every seat of a run (a scan's files included), so it is
+// mutex-guarded; a nil *TokenBudget is "no cap", so every existing caller
+// keeps its behaviour.
+type TokenBudget struct {
+	mu    sync.Mutex
+	cap   int64
+	spent int64
+	// hit is set the first time a call was refused, so the disclosure can
+	// say WHEN the cap bit rather than only that it did.
+	hit      bool
+	hitCalls int64
+	calls    int64
+}
+
+// NewTokenBudget returns a budget of cap tokens; cap <= 0 returns nil (no
+// cap), so "unset" and "no cap" are the same value everywhere.
+func NewTokenBudget(cap int64) *TokenBudget {
+	if cap <= 0 {
+		return nil
+	}
+	return &TokenBudget{cap: cap}
+}
+
+// ErrTokenBudgetExhausted is returned by a metered chatter INSTEAD of
+// calling the provider once the run's spend has reached its cap. It wraps
+// nothing: no provider was contacted, no money was spent on the refused call.
+var ErrTokenBudgetExhausted = errors.New("the run's --max-tokens cap is reached; no further model call is made")
+
+// Allow reports whether one more call may be made, refusing once spent >=
+// cap. Recorded so Exhausted can say after how many calls.
+func (b *TokenBudget) Allow() bool {
+	if b == nil {
+		return true
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.spent >= b.cap {
+		if !b.hit {
+			b.hit, b.hitCalls = true, b.calls
+		}
+		return false
+	}
+	return true
+}
+
+// Charge records a completed call's usage.
+func (b *TokenBudget) Charge(u Usage) {
+	if b == nil {
+		return
+	}
+	b.mu.Lock()
+	b.spent += int64(u.InputTokens) + int64(u.OutputTokens)
+	b.calls++
+	b.mu.Unlock()
+}
+
+// Exhausted reports whether the cap ever refused a call, with the spend and
+// the call count at that moment — the disclosure a verdict carries.
+func (b *TokenBudget) Exhausted() (hit bool, cap, spent, calls int64) {
+	if b == nil {
+		return false, 0, 0, 0
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.hit, b.cap, b.spent, b.hitCalls
+}
+
+// Spent is the running total: what the cost line prints beside the cap.
+func (b *TokenBudget) Spent() int64 {
+	if b == nil {
+		return 0
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.spent
 }

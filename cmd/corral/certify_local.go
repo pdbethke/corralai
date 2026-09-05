@@ -109,6 +109,7 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 
 	recordFlag := fs.String("record", "", "write a replayable tape of the run (the pool's reasoning beats, task lifecycle, and findings) to this JSON file — the same {events:[…]} shape the corralai.dev cockpit replays")
 	swarmFlag := fs.Int("swarm", 0, "max concurrent audit workers (0 = auto-size to this host's cores). The BUDGET clamp: independent role tasks run in parallel up to this bound, so a big audit swarms without melting the box")
+	maxTokensFlag := fs.Int64("max-tokens", 0, "cap on model TOKENS for the whole run, input + output, every seat (0 = no cap). Checked before each call and charged after it, so one in-flight call can overshoot by its own size. Once reached: a generator seat that has not run makes its file ungradable (executor-error naming the cap), a writer or critic seat is skipped and the file flagged as it is for a provider failure — the dev kill rate already measured stands. The cost line says the cap was reached and after how many calls. Corral has bounded mutants, shards and wall clock and never money; this is the money bound")
 	maxShardsFlag := fs.Int("max-shards", 0, "max mutant-generator seats fanned out across the file's functions (0 = "+fmt.Sprint(advpool.DefaultMaxShards)+"). Bounds PARALLELISM only — every function is probed regardless; --n-mutants is the PER-SHARD budget")
 	shadowModelFlag := fs.String("shadow-model", "", "challenger model that attacks every region a SECOND time for a region-controlled head-to-head. OFF unless named. Recorded for comparison — NEVER gates the verdict")
 	writerModeFlag := fs.String("writer-mode", "", "how the test-writer attacks this file's survivors: `per-survivor` (the default) makes ONE call per survivor — each carrying the file once as a cacheable shared prefix plus that survivor's diff, each repaired on its own budget and each PROVEN ALONE against its own mutant — or `batched`, the original shape: one call carrying every survivor, one repair budget, one proof pass over all of them. Nothing measured changes between them (a survivor is proven iff an authored test kills it alone and passes on the original, either way); what changes is that one unbuildable test no longer spends the whole file's retries and takes every other survivor down with it. Each survivor's proof in per-survivor mode runs its OWN compliant baseline (a compliant pass plus a canary, per seat), so a file with N survivors pays N baselines where batched paid one: on a repo whose suite takes a minute, prefer --writer-mode batched or expect N baselines' worth of wall clock.")
@@ -306,6 +307,7 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 
 		jail: *jailFlag, checkArgv: checkArgv,
 		localEndpoints: localEndpoints,
+		tokenBudget:    agentbackend.NewTokenBudget(*maxTokensFlag),
 		bindDirs:       bindDirFlag, noBindDeps: *noBindDepsFlag,
 
 		repo: strings.TrimSpace(*repoFlag), commit: strings.TrimSpace(*commitFlag),
@@ -421,6 +423,10 @@ type localAuditInput struct {
 	// so this is how two models occupy two cards at once; corral selects the
 	// daemon, never the device. Empty keeps every local seat on OLLAMA_URL.
 	localEndpoints map[string]string
+	// tokenBudget is the RUN-WIDE cap on model tokens (--max-tokens),
+	// shared by every seat and, on a scan, every file; nil is no cap. See
+	// agentbackend.TokenBudget.
+	tokenBudget *agentbackend.TokenBudget
 
 	// Jail + workspace. jail empty = auto-detect this OS's backend (never
 	// unsandboxed). checkArgv is the project's own test command, required in
@@ -1144,7 +1150,7 @@ func resolveAuditRoles(in localAuditInput, stderr io.Writer) (auditRoles, error)
 	// run here — fail closed at the top, not mid-run after jails, stores and
 	// mutants are already in flight.
 	meters := auditRoleMeters(assign)
-	chatterFor, err := localChatterFor(assign, meters, in.localEndpoints)
+	chatterFor, err := localChatterFor(assign, meters, in.localEndpoints, in.tokenBudget)
 	if err != nil {
 		return r, auditUsageErr("%v", err)
 	}
@@ -1604,6 +1610,9 @@ func auditOneFile(ctx context.Context, in localAuditInput) (advpool.Verdict, err
 
 	renderAdvVerdict(stdout, in.codePath, advVerdictFromPool(*verdict))
 	renderModelSpend(stdout, verdict.ModelCalls)
+	if line := budgetLine(in.tokenBudget); line != "" {
+		fmt.Fprintln(stdout, line)
+	}
 
 	// --matrix: print the per-test adequacy summary + delete-candidate list.
 	// st.Matrix is nil unless --matrix was set AND the phase actually ran
@@ -2230,6 +2239,10 @@ func advVerdictFromPool(v advpool.Verdict) advVerdict {
 		DevScored:                v.DevScored,
 		PoolScored:               v.PoolScored,
 		WriterSeatsUngraded:      v.WriterSeatsUngraded,
+		MutantBudget:             v.MutantBudget,
+		ExamCoverage:             v.ExamCoverage,
+		ExamIndicative:           v.ExamIndicative,
+		IndicativeReason:         v.IndicativeReason,
 	}
 	for _, f := range v.VacuousFindings {
 		out.VacuousFindings = append(out.VacuousFindings, advFinding{

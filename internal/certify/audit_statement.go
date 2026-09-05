@@ -115,11 +115,29 @@ type AuditedFile struct {
 	// ExamSymbols/ExamSymbolsProbed/ExamDecisions/ExamDecisionsProbed: the
 	// coverage term — how much of the file's surface the mutants reached.
 	// Present only when measured (ExamMeasured), never signed as 0 of 0.
-	ExamMeasured        bool `json:"examMeasured,omitempty"`
-	ExamSymbols         int  `json:"examSymbols,omitempty"`
-	ExamSymbolsProbed   int  `json:"examSymbolsProbed,omitempty"`
-	ExamDecisions       int  `json:"examDecisions,omitempty"`
-	ExamDecisionsProbed int  `json:"examDecisionsProbed,omitempty"`
+	ExamMeasured bool `json:"examMeasured,omitempty"`
+	// ExamIndicative: the rate cleared the threshold but the exam was too
+	// small to certify (interval wider than the rule allows), so the file's
+	// status is needs-review for that reason and no other. Signed so a
+	// reader sees the difference between "weak" and "too few questions".
+	ExamIndicative   bool   `json:"examIndicative,omitempty"`
+	IndicativeReason string `json:"indicativeReason,omitempty"`
+	// The writer pair, when a challenger writer sat: which model, what each
+	// seat proved of the same survivors, and the overlap of their misses —
+	// signed whether or not the coefficient was sufficient, with Jaccard
+	// present only when it was.
+	ChallengerModel          string  `json:"challengerModel,omitempty"`
+	ChallengerMutants        int     `json:"challengerMutants,omitempty"`
+	ChallengerSurvivedWriter int     `json:"challengerSurvivedWriter,omitempty"`
+	ChallengerSurvivedShadow int     `json:"challengerSurvivedShadow,omitempty"`
+	ChallengerUnion          int     `json:"challengerUnion,omitempty"`
+	ChallengerShared         int     `json:"challengerShared,omitempty"`
+	ChallengerJaccard        float64 `json:"challengerJaccard,omitempty"`
+	ChallengerSufficient     bool    `json:"challengerSufficient,omitempty"`
+	ExamSymbols              int     `json:"examSymbols,omitempty"`
+	ExamSymbolsProbed        int     `json:"examSymbolsProbed,omitempty"`
+	ExamDecisions            int     `json:"examDecisions,omitempty"`
+	ExamDecisionsProbed      int     `json:"examDecisionsProbed,omitempty"`
 	// GoalReused discloses that this file's goal was served from the goal
 	// cache — a PRIOR scan derived it from the same bytes, by the same
 	// model under the same prompt revision — rather than freshly derived by
@@ -195,6 +213,13 @@ type AuditStatement struct {
 	// let a third party recompute the hash from the warehouse alone. See
 	// cmd/corral's warehouseRowsSHA256 for the full list.
 	WarehouseRowsSHA256 string `json:"warehouseRowsSha256,omitempty"`
+	// WarehouseRowsHashVersion says which canonical form WarehouseRowsSHA256
+	// was computed over, so a verifier hashes the rows the way the signer
+	// did: 2 is the sparse form that ignores fields a row never had; absent
+	// (statements signed before this field) is version 1, the full JSON of
+	// the pushing binary's structs, reproducible only by a binary with the
+	// same struct shape.
+	WarehouseRowsHashVersion int `json:"warehouseRowsHashVersion,omitempty"`
 }
 
 // BuildAuditAttestation renders the statement as an in-toto Statement v1.
@@ -289,6 +314,22 @@ func BuildAuditAttestation(s AuditStatement) map[string]any {
 			entry["killRateLow"] = f.KillRateLow
 			entry["killRateHigh"] = f.KillRateHigh
 		}
+		if f.ChallengerMutants > 0 {
+			entry["challengerModel"] = f.ChallengerModel
+			entry["challengerMutants"] = f.ChallengerMutants
+			entry["challengerSurvivedWriter"] = f.ChallengerSurvivedWriter
+			entry["challengerSurvivedShadow"] = f.ChallengerSurvivedShadow
+			entry["challengerUnion"] = f.ChallengerUnion
+			entry["challengerShared"] = f.ChallengerShared
+			if f.ChallengerSufficient {
+				entry["challengerJaccard"] = f.ChallengerJaccard
+				entry["challengerSufficient"] = true
+			}
+		}
+		if f.ExamIndicative {
+			entry["examIndicative"] = true
+			entry["indicativeReason"] = f.IndicativeReason
+		}
 		if f.ExamMeasured {
 			entry["examSymbols"] = f.ExamSymbols
 			entry["examSymbolsProbed"] = f.ExamSymbolsProbed
@@ -350,6 +391,9 @@ func BuildAuditAttestation(s AuditStatement) map[string]any {
 	// this predicate follows.
 	if s.WarehouseRowsSHA256 != "" {
 		predicate["warehouseRowsSha256"] = s.WarehouseRowsSHA256
+		if s.WarehouseRowsHashVersion > 0 {
+			predicate["warehouseRowsHashVersion"] = s.WarehouseRowsHashVersion
+		}
 	}
 
 	return map[string]any{

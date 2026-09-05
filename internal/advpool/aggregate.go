@@ -3,6 +3,7 @@
 package advpool
 
 import (
+	"fmt"
 	"sort"
 	"time"
 
@@ -169,6 +170,7 @@ func aggregate(
 	mutantsTotal, survivors, provenMissed int,
 	vacuousFindings []queue.Finding,
 	threshold float64,
+	certifyIntervalWidth float64,
 	blockingFindingOpen bool,
 	testWriterFailed bool,
 	poolTestUnsound bool,
@@ -216,6 +218,28 @@ func aggregate(
 	// against, from a different cause.
 	if blockingFindingOpen || devKillRate < threshold || testWriterFailed || poolTestUnsound {
 		v.Status = StatusNeedsReview
+	}
+	// AN EXAM TOO SMALL TO CERTIFY. A kill rate is a proportion over the
+	// mutants graded, and its 95% interval says how much the rate could move
+	// on a re-roll of the same exam: five of eight killed is 0.62 with a band
+	// of 0.31–0.86, and no reading of that band says "adequate". The rule is
+	// the band's WIDTH, not a minimum n, because width is what the reader
+	// actually needs and n alone misjudges the edges (8 of 8 is a narrower
+	// claim than 4 of 8). The point estimate still decides the rate; this
+	// decides whether the rate is a grade or an indication. The complexity
+	// budget's floor of five can never certify, which is the honest answer
+	// for a file with five decision points.
+	if v.Status == StatusCertified && mutantsTotal > 0 && certifyIntervalWidth > 0 {
+		killed := mutantsTotal - survivors
+		if killed < 0 {
+			killed = 0
+		}
+		if lo, hi, ok := WilsonInterval(killed, mutantsTotal); ok && hi-lo > certifyIntervalWidth {
+			v.Status = StatusNeedsReview
+			v.ExamIndicative = true
+			v.IndicativeReason = fmt.Sprintf("exam too small to certify: %d mutants, 95%% interval %.2f–%.2f (width %.2f, the most a certified verdict may carry is %.2f)",
+				mutantsTotal, lo, hi, hi-lo, certifyIntervalWidth)
+		}
 	}
 	return v
 }

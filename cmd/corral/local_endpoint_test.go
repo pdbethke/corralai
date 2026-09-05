@@ -11,9 +11,12 @@ package main
 //surface: --local-endpoint
 
 import (
+	"errors"
+	"github.com/pdbethke/corralai/internal/agentbackend"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -109,7 +112,7 @@ func TestLocalEndpointRoutesSeatToItsDaemon(t *testing.T) {
 	}
 	chatterFor, err := localChatterFor(assign, nil, map[string]string{
 		advpool.RoleTestWriter: writerSrv.URL,
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("localChatterFor: %v", err)
 	}
@@ -139,8 +142,51 @@ func TestLocalEndpointRefusedForCloudSeat(t *testing.T) {
 		advpool.RoleAssignment{advpool.RoleTestWriter: "gemini-3.7-flash"},
 		nil,
 		map[string]string{advpool.RoleTestWriter: "http://localhost:11436"},
+		nil,
 	)
 	if err == nil {
 		t.Fatal("endpoint on a cloud seat = nil error, want a refusal")
+	}
+}
+
+// --max-tokens is ONE cap across every seat of a run: the generator's spend
+// counts against the writer's next call. Checked before the provider is
+// dialled, so the refused call never reaches the daemon.
+func TestMaxTokensIsOneCapAcrossSeats(t *testing.T) {
+	var hits int32
+	reply := `{"model":"m","message":{"role":"assistant","content":"ok"},"done":true,"prompt_eval_count":600,"eval_count":100}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&hits, 1)
+		_, _ = io.WriteString(w, reply)
+	}))
+	defer srv.Close()
+	t.Setenv("MODEL_BACKEND", "")
+	t.Setenv("OLLAMA_URL", srv.URL)
+
+	assign := advpool.RoleAssignment{advpool.RoleMutantGenerator: "qwen3.5:9b-q8_0", advpool.RoleTestWriter: "gemma4:12b"}
+	budget := agentbackend.NewTokenBudget(1000)
+	chatterFor, err := localChatterFor(assign, nil, nil, budget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	msg := []agentworker.Message{{Role: "user", Content: "hi"}}
+	if _, err := chatterFor(advpool.RoleMutantGenerator).Chat(msg, nil); err != nil { // 700
+		t.Fatal(err)
+	}
+	if _, err := chatterFor(advpool.RoleTestWriter).Chat(msg, nil); err != nil { // 1400 — allowed, charged after
+		t.Fatal(err)
+	}
+	_, err = chatterFor(advpool.RoleTestWriter).Chat(msg, nil)
+	if !errors.Is(err, agentbackend.ErrTokenBudgetExhausted) {
+		t.Fatalf("third call across seats: err = %v, want the cap", err)
+	}
+	if got := atomic.LoadInt32(&hits); got != 2 {
+		t.Fatalf("daemon hit %d times, want 2 — the refused call must not be dialled", got)
+	}
+	if line := budgetLine(budget); !strings.Contains(line, "REACHED after 2 call(s) at 1.4k tokens") {
+		t.Errorf("budget line = %q", line)
+	}
+	if budgetLine(nil) != "" {
+		t.Error("no cap must print nothing")
 	}
 }

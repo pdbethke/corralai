@@ -382,6 +382,7 @@ func TestTimeoutVerdictCarriesPerMutantGrading(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewDriver: %v", err)
 	}
+	d.CertifyIntervalWidth = 0 // small fixture; the exam-size rule is tested on its own
 	d.Now = clk.Now
 	d.RunDeadline = 10 * time.Minute
 	if err := d.StartRun(mission, perMutantRunSpec(), nil); err != nil {

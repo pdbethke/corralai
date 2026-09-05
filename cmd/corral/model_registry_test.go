@@ -229,6 +229,7 @@ func TestLocalRegistryEntryPlacesItsSeatOnItsDaemon(t *testing.T) {
 		advpool.RoleAssignment{advpool.RoleTestWriter: s.writer, advpool.RoleMutantGenerator: s.mutant},
 		nil,
 		mergeLocalEndpoints(nil, endpoints),
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("localChatterFor: %v", err)

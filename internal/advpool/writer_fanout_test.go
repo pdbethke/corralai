@@ -114,6 +114,7 @@ func fanoutRun(t *testing.T, mode string, kills map[string]string, bad map[strin
 	if err != nil {
 		t.Fatalf("NewDriver: %v", err)
 	}
+	d.CertifyIntervalWidth = 0 // small fixture; the exam-size rule is tested on its own
 	rs := testRunSpec()
 	rs.Code = "package target\nfunc A() {}\nfunc B() {}\nfunc C() {}\n"
 	rs.WriterMode = mode

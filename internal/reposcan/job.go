@@ -90,10 +90,11 @@ type EmitConfig struct {
 	//
 	// WHAT IS STILL NOT COVERED, so a maintainer can decide how far to trust
 	// the key:
-	//   - a fixture file OUTSIDE any test root, in a directory that holds no
-	//     test file. A repo-root conftest.py with all its tests under tests/
-	//     is the live example: it configures every one of them and reaches
-	//     no key. (Under a test root it is `test-support` and digested.)
+	//   - (CLOSED 2026-09-05) a fixture file OUTSIDE any test root, beside no
+	//     test — a repo-root conftest.py. Now reached by name: every file a
+	//     plugin's lang.HarnessConfigurer names (conftest.py, pytest.ini,
+	//     jest.config.*, spec_helper.rb, phpunit.xml, …) is in the surface
+	//     wherever it lives.
 	//   - a non-regular entry under testdata (it is skipped rather than
 	//     erroring, since a scan-fatal error would be the worse failure).
 	//   - THE FILE-SCOPED PATH IGNORES THIS LIST ENTIRELY. When

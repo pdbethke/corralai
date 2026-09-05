@@ -5,6 +5,7 @@ package advpool
 import (
 	"context"
 	"math"
+	"strings"
 	"testing"
 
 	"github.com/pdbethke/corralai/internal/adequacy"
@@ -100,6 +101,7 @@ func TestVerdictCarriesExamCoverageFromItsOwnRefs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	d.CertifyIntervalWidth = 0 // small fixture; the exam-size rule is tested on its own
 	// Two symbols: one holds line 41 and a decision spanning it; the other
 	// holds line 2 and no decision.
 	sigs := []repoindex.Signature{
@@ -116,5 +118,39 @@ func TestVerdictCarriesExamCoverageFromItsOwnRefs(t *testing.T) {
 	want := ExamCoverage{Symbols: 2, SymbolsProbed: 2, Decisions: 1, DecisionsProbed: 1, Measured: true}
 	if v.ExamCoverage != want {
 		t.Fatalf("ExamCoverage = %+v, want %+v", v.ExamCoverage, want)
+	}
+}
+
+// A rate over five mutants is not a grade. 5 of 5 killed clears any
+// threshold, and its 95% interval is 0.57–1.00: too wide to certify. The
+// verdict says so, with the numbers, instead of signing CERTIFIED over five
+// decision points. 8 of 8 (0.68–1.00, width 0.32) is the narrowest small
+// exam that can; 7 of 8 (0.53–0.98) cannot.
+func TestAnExamTooSmallToCertifyIsIndicativeNotCertified(t *testing.T) {
+	rs := testRunSpec()
+	v := aggregate(rs, decorrelatedAssign(), 1.0, 5, 0, 0, nil, 0.8, MaxCertifiableIntervalWidth, false, false, false)
+	if v.Status != StatusNeedsReview || !v.ExamIndicative {
+		t.Fatalf("5 of 5: status=%q indicative=%v, want needs-review + indicative", v.Status, v.ExamIndicative)
+	}
+	if !strings.Contains(v.IndicativeReason, "5 mutants") || !strings.Contains(v.IndicativeReason, "0.57–1.00") {
+		t.Errorf("reason = %q, want the counts and the band", v.IndicativeReason)
+	}
+	v = aggregate(rs, decorrelatedAssign(), 0.875, 8, 1, 1, nil, 0.8, MaxCertifiableIntervalWidth, false, false, false)
+	if v.Status != StatusNeedsReview || !v.ExamIndicative {
+		t.Errorf("7 of 8: status=%q indicative=%v, want indicative (0.53–0.98)", v.Status, v.ExamIndicative)
+	}
+	v = aggregate(rs, decorrelatedAssign(), 1.0, 8, 0, 0, nil, 0.8, MaxCertifiableIntervalWidth, false, false, false)
+	if v.Status != StatusCertified || v.ExamIndicative {
+		t.Errorf("8 of 8: status=%q indicative=%v, want certified (0.68–1.00, width 0.32)", v.Status, v.ExamIndicative)
+	}
+	// 36 of 40 (0.90): 0.77–0.96, width 0.19 — certifies.
+	v = aggregate(rs, decorrelatedAssign(), 0.9, 40, 4, 4, nil, 0.8, MaxCertifiableIntervalWidth, false, false, false)
+	if v.Status != StatusCertified || v.ExamIndicative {
+		t.Errorf("36 of 40: status=%q indicative=%v, want certified", v.Status, v.ExamIndicative)
+	}
+	// Below threshold stays needs-review for the threshold's reason, not this one.
+	v = aggregate(rs, decorrelatedAssign(), 0.5, 8, 4, 4, nil, 0.8, MaxCertifiableIntervalWidth, false, false, false)
+	if v.Status != StatusNeedsReview || v.ExamIndicative {
+		t.Errorf("4 of 8: status=%q indicative=%v, want needs-review by threshold, not marked indicative", v.Status, v.ExamIndicative)
 	}
 }

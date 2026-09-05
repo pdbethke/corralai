@@ -38,7 +38,7 @@ func TestEachRoleHasItsOwnMeter(t *testing.T) {
 		advpool.RoleTestCritic:      "claude-opus-4-1",
 	}
 	meters := auditRoleMeters(assign)
-	chatterFor, err := localChatterFor(assign, meters, nil)
+	chatterFor, err := localChatterFor(assign, meters, nil, nil)
 	if err != nil {
 		t.Fatalf("localChatterFor: %v", err)
 	}

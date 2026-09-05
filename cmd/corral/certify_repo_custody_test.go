@@ -246,3 +246,42 @@ func TestRedactSourceDetailReachesNestedAndOddlySpelledKeys(t *testing.T) {
 		t.Error("the caller's detail map was mutated in place")
 	}
 }
+
+// Every warehouse column added since schema 2 broke `verify --db` on every
+// statement pushed before it: the hash was the full JSON of THIS binary's
+// row structs, and a row read back from an older push carries the new
+// field at its zero value. Version 2 hashes the sparse canonical form, so
+// the same rows hash alike whether or not the struct grew a field since.
+func TestWarehouseRowsHashSurvivesAColumnAddedAfterThePush(t *testing.T) {
+	kr := 0.5
+	base := auditpush.Bundle{
+		Scan:  auditpush.ScanRow{Repo: "r", ScanID: 1},
+		Files: []auditpush.Row{{Repo: "r", ScanID: 1, Path: "a.py", KillRate: &kr, Survivors: 2}},
+	}
+	before, err := warehouseRowsSHA256(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A verifier's binary that grew columns: the read-back row has them at
+	// their zero values — exactly what the pushing binary never wrote.
+	grown := base
+	grown.Files = []auditpush.Row{base.Files[0]}
+	grown.Files[0].MutantBudgetRule = ""
+	grown.Files[0].Symbols = nil
+	after, err := warehouseRowsSHA256(grown)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before != after {
+		t.Fatalf("the sparse hash must not see a zero-valued field a row never had: %s vs %s", before, after)
+	}
+	// And the legacy form is what a v1 statement was signed with — a
+	// different value, kept so an old statement can still be tried.
+	legacy, err := warehouseRowsSHA256Legacy(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if legacy == before {
+		t.Fatal("v1 and v2 must be distinguishable forms, or the version field means nothing")
+	}
+}

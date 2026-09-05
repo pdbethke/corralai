@@ -35,7 +35,7 @@ func signedFixtureStatement(t *testing.T, repo string, scanID int64, whRowsSHA s
 
 	stmt := certify.BuildAuditAttestation(certify.AuditStatement{
 		Repo: repo, Commit: "deadbeef", Audited: 1, Candidates: 1,
-		ScanID: scanID, WarehouseRowsSHA256: whRowsSHA,
+		ScanID: scanID, WarehouseRowsSHA256: whRowsSHA, WarehouseRowsHashVersion: WarehouseRowsHashVersion,
 		Files: []certify.AuditedFile{{Path: "pkg/a.go", KillRate: ptrF(0.5), Survivors: 2, ProvenMissed: 0}},
 	})
 	b, err := json.MarshalIndent(stmt, "", "  ")

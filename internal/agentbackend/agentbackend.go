@@ -521,6 +521,14 @@ func (b *ollamaBackend) WithModel(model string) Backend {
 func (b *ollamaBackend) Chat(messages []Message, tools []any) (Message, error) {
 	var out struct {
 		Message Message `json:"message"`
+		// Ollama reports usage at the top level of a non-streaming reply,
+		// not inside the message: prompt_eval_count is the input,
+		// eval_count the output. Unparsed until now, so every local seat
+		// metered as zero tokens — a cost line reading "0" for a call
+		// that ran, and a --max-tokens cap that could never bite on a
+		// local model.
+		PromptEvalCount int `json:"prompt_eval_count"`
+		EvalCount       int `json:"eval_count"`
 	}
 	body := map[string]any{
 		"model": b.model, "messages": messages, "tools": tools, "stream": false,
@@ -532,6 +540,9 @@ func (b *ollamaBackend) Chat(messages []Message, tools []any) (Message, error) {
 	// already paid for duplicated judgment at these two loops.
 	ollamareq.Decorate(body, b.model)
 	err := postJSON(b.url+"/api/chat", nil, body, &out)
+	if err == nil && (out.PromptEvalCount > 0 || out.EvalCount > 0) {
+		out.Message.Usage = Usage{InputTokens: out.PromptEvalCount, OutputTokens: out.EvalCount}
+	}
 	// A context-size rejection names a limit that is corral's own num_ctx, not
 	// the model's trained maximum, so the obvious reading is the wrong one.
 	return out.Message, ollamareq.WrapErr(err)

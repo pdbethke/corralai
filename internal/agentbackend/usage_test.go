@@ -3,6 +3,7 @@
 package agentbackend
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -163,5 +164,57 @@ func TestMeterRecordsWallAndModel(t *testing.T) {
 	}
 	if snap.Wall < 5*time.Millisecond {
 		t.Errorf("Snapshot().Wall = %v, want >= 5ms — the call was timed around a 5ms sleep", snap.Wall)
+	}
+}
+
+// fakeUsageBackend answers every Chat with a fixed reply and usage, counting
+// how often the "provider" was reached.
+type fakeUsageBackend struct {
+	reply  string
+	usage  Usage
+	onChat func()
+}
+
+func (f *fakeUsageBackend) Chat(_ []Message, _ []any) (Message, error) {
+	if f.onChat != nil {
+		f.onChat()
+	}
+	return Message{Role: "assistant", Content: f.reply, Usage: f.usage}, nil
+}
+
+// The cap refuses BEFORE dialling and charges AFTER: a call past the cap
+// costs nothing and the meter never sees it; the refusal says so with the
+// spend at that moment.
+func TestTokenBudgetRefusesBeforeTheProviderIsDialled(t *testing.T) {
+	calls := 0
+	inner := &fakeUsageBackend{reply: "ok", usage: Usage{InputTokens: 600, OutputTokens: 100}, onChat: func() { calls++ }}
+	meter := &UsageMeter{}
+	budget := NewTokenBudget(1000)
+	c := AsChatterBudgeted(inner, meter, budget)
+	if _, err := c.Chat(nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Chat(nil, nil); err != nil { // 700 spent, still under 1000
+		t.Fatal(err)
+	}
+	if _, err := c.Chat(nil, nil); !errors.Is(err, ErrTokenBudgetExhausted) { // 1400 spent
+		t.Fatalf("third call: err = %v, want ErrTokenBudgetExhausted", err)
+	}
+	if calls != 2 {
+		t.Fatalf("provider dialled %d times, want 2 — the refused call must never reach it", calls)
+	}
+	hit, cap, spent, at := budget.Exhausted()
+	if !hit || cap != 1000 || spent != 1400 || at != 2 {
+		t.Errorf("Exhausted = %v %d %d %d, want hit at 1400 of 1000 after 2 calls", hit, cap, spent, at)
+	}
+	if _, _, n := meter.Totals(); n != 2 {
+		t.Errorf("meter recorded %d calls, want 2", n)
+	}
+	// nil is no cap.
+	if _, err := AsChatterBudgeted(inner, meter, nil).Chat(nil, nil); err != nil {
+		t.Errorf("a nil budget must not refuse: %v", err)
+	}
+	if NewTokenBudget(0) != nil {
+		t.Error("a cap of 0 is 'no cap', which is nil")
 	}
 }

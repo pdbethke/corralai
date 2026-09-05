@@ -110,6 +110,11 @@ func (rubyPlugin) TestPaths(codePath string) []TestCandidate {
 // TestRoots names Ruby's own additional conventional test roots (beyond
 // reposcan's generic "tests" default): the classic lib/-vs-test/ split, and
 // its RSpec equivalent lib/-vs-spec/.
+// HarnessFiles names what RSpec/minitest read before any test.
+func (rubyPlugin) HarnessFiles() []string {
+	return []string{"spec_helper.rb", "rails_helper.rb", ".rspec", "test_helper.rb", "Rakefile"}
+}
+
 func (rubyPlugin) TestRoots() []string { return []string{"test", "spec"} }
 
 // Preflight requires only `ruby` (minitest is bundled) — or, when the

@@ -145,6 +145,9 @@ func (tsPlugin) TestPaths(codePath string) []TestCandidate {
 
 // TestRoots names TS's additional conventional test roots — mirrors
 // jsPlugin.TestRoots, see there for rationale.
+// HarnessFiles mirrors jsPlugin's: the same runners, the same files.
+func (tsPlugin) HarnessFiles() []string { return jsPlugin{}.HarnessFiles() }
+
 func (tsPlugin) TestRoots() []string { return []string{"__tests__", "test", "tests"} }
 
 // Preflight requires BOTH the test runtime AND tsc (TS genuinely needs the

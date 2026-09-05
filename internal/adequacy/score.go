@@ -36,20 +36,31 @@ import (
 // timeout (see scoreConfig.mutantTimeout / clampMutantTimeout): a floor so a
 // pathologically fast healthy suite (sub-second) still gives a mutant enough
 // room to run at all, and a ceiling so a pathologically slow healthy suite
-// doesn't turn "8x baseline" into a per-mutant wait that is itself most of
+// doesn't turn "3x baseline" into a per-mutant wait that is itself most of
 // the whole-run budget.
 const (
 	minMutantTimeout = 30 * time.Second
 	maxMutantTimeout = 5 * time.Minute
 	// mutantTimeoutMultiple is how many multiples of the healthy baseline's
-	// own wall-clock a mutant run gets before it is treated as non-terminating.
-	mutantTimeoutMultiple = 8
+	// own wall-clock a mutant run gets before it is treated as
+	// non-terminating. It was 8. PIT — fifteen years of the same problem —
+	// uses 1.25× plus a constant; 3 leaves room for the contention of six
+	// trees grading at once (the baseline is measured alone) and is still a
+	// third of what a hang used to cost: on psf/requests' models.py three
+	// hung mutants ran to the five-minute ceiling and were fifteen of the
+	// file's twenty-four dev-pass minutes. The kill is still only credited
+	// when the compliant baseline passes under the same cap (see the
+	// re-probe below), so a shorter cap cannot invent a kill on a slow box.
+	mutantTimeoutMultiple = 3
 )
 
-// clampMutantTimeout derives the per-mutant timeout from how long the
-// compliant baseline actually took to run: mutantTimeoutMultiple x that,
-// clamped to [minMutantTimeout, maxMutantTimeout]. This auto-adapts to any
-// repo's suite with no operator tuning.
+// clampMutantTimeout derives a per-mutant timeout from how long the
+// compliant run of THE SAME COMMAND took: mutantTimeoutMultiple x that,
+// clamped to [minMutantTimeout, maxMutantTimeout]. Auto-adapts to any
+// repo's suite with no operator tuning. Per command, not per file: under
+// per-mutant selection one mutant's command runs two tests and another's
+// three hundred, and a cap derived from the file's shared baseline gave the
+// two-test mutant five minutes to hang in.
 func clampMutantTimeout(baseDur time.Duration) time.Duration {
 	d := baseDur * mutantTimeoutMultiple
 	if d < minMutantTimeout {
@@ -748,6 +759,20 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 	if perMutant <= 0 {
 		perMutant = clampMutantTimeout(baseDur)
 	}
+	// capFor is the per-COMMAND cap: a narrowed command's own compliant
+	// duration (measured by the proving loop below) × the multiple, or the
+	// file-level cap when nothing narrower was measured. An explicit
+	// --test-timeout overrides both.
+	commandBaseline := map[string]time.Duration{}
+	capFor := func(cmd []string) time.Duration {
+		if cfg.mutantTimeout > 0 {
+			return cfg.mutantTimeout
+		}
+		if d, ok := commandBaseline[strings.Join(cmd, "\x00")]; ok {
+			return clampMutantTimeout(d)
+		}
+		return perMutant
+	}
 
 	// FAIL-FAST, PROVEN BEFORE IT IS USED. The args come from the language
 	// plugin's own runner knowledge, but "the runner accepts this flag" is a
@@ -882,8 +907,12 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 		}
 		for key, cmd := range distinct {
 			pctx, pcancel := context.WithTimeout(ctx, perMutant)
+			pstart := time.Now()
 			passed, out, perr := runCmdVerbose(pctx, compliantCode, failFast(cmd))
 			pcancel()
+			// The proof doubles as this command's baseline: how long its
+			// compliant run takes is what its mutants' cap is derived from.
+			commandBaseline[key] = time.Since(pstart)
 			if perr != nil {
 				// FAIL CLOSED, as the compile gate does: a probe that could
 				// not RUN says nothing about the command, and treating it as
@@ -996,7 +1025,8 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 		// FAIL-FAST APPLIES HERE AND ONLY HERE: one mutant's own suite run.
 		// A no-op unless the probe above proved the runner takes the flag.
 		cmd = failFast(cmd)
-		mctx, cancel := context.WithTimeout(ctx, perMutant)
+		mutantCap := capFor(cmd)
+		mctx, cancel := context.WithTimeout(ctx, mutantCap)
 		// THE measurement: the single suite run that decides this mutant's
 		// verdict. Recorded even when that run errors or times out, so a
 		// mutant that ate its whole budget says so.
@@ -1048,7 +1078,7 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 				//     mutant's run proves nothing. Not a kill, and not a
 				//     survivor either: it is UNMEASURED, and an error is the
 				//     honest report.
-				bctx, bcancel := context.WithTimeout(ctx, perMutant)
+				bctx, bcancel := context.WithTimeout(ctx, mutantCap)
 				bpassed, berr := run(bctx, compliantCode)
 				bcancel()
 				if berr == nil {
@@ -1061,14 +1091,14 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 					// evidence the environment is wrong, not that the mutant
 					// was caught.
 					if !bpassed {
-						outcomes[i] = outcome{err: fmt.Errorf("mutant %s: run timed out, and the compliant baseline FAILED when re-run under the same budget (%s) — the suite is not stable right now, so nothing is inferred from this mutant", m.ID, perMutant)}
+						outcomes[i] = outcome{err: fmt.Errorf("mutant %s: run timed out, and the compliant baseline FAILED when re-run under the same budget (%s) — the suite is not stable right now, so nothing is inferred from this mutant", m.ID, mutantCap)}
 						return
 					}
 					outcomes[i] = outcome{killed: true, grading: grading}
 					return
 				}
 				if errors.Is(berr, ErrTestTimeout) {
-					outcomes[i] = outcome{err: fmt.Errorf("mutant %s: run timed out AND the compliant baseline timed out under the same budget (%s) — the machine is too loaded to grade this mutant; nothing is inferred from it", m.ID, perMutant)}
+					outcomes[i] = outcome{err: fmt.Errorf("mutant %s: run timed out AND the compliant baseline timed out under the same budget (%s) — the machine is too loaded to grade this mutant; nothing is inferred from it", m.ID, mutantCap)}
 					return
 				}
 				outcomes[i] = outcome{err: berr}

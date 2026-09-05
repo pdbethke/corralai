@@ -597,6 +597,7 @@ func TestUnshardedRunDoesNotSignAChallengerItNeverDispatched(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	d.CertifyIntervalWidth = 0 // small fixture; the exam-size rule is tested on its own
 	if err := d.StartRun(77, rs, nil); err != nil {
 		t.Fatal(err)
 	}

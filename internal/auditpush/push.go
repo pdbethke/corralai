@@ -179,7 +179,14 @@ type Row struct {
 	ChallengerJaccard    *float64
 	ChallengerKappa      *float64
 	ChallengerSufficient *bool
-	GoalsDerived         int
+	// The pair's counts — see scanstore.File.ChallengerMutants. NULL when
+	// no pair was measured; recorded whether or not the coefficient was.
+	ChallengerMutants        *int
+	ChallengerSurvivedWriter *int
+	ChallengerSurvivedShadow *int
+	ChallengerUnion          *int
+	ChallengerShared         *int
+	GoalsDerived             int
 	// GoalReused mirrors scanstore.File.GoalReused: *bool, and true is the
 	// only value ever written — "not reused" and "the goal cache was never
 	// asked about this file" are different claims a stored false cannot

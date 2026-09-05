@@ -809,6 +809,17 @@ that is a deliberate act, is in
   it cannot fit. **Every verdict, ledger row and signed statement carries the
   budget and its rule** (`complexity`, `complexity-fitted`, `explicit`, `default`),
   because a kill rate over 8 mutants and one over 40 are different measurements.
+- **A cap on money (`--max-tokens`).** Corral bounded mutants, shards, wall clock
+  and concurrency and never tokens; a per-survivor writer on a survivor-heavy
+  file paid a call per survivor and nothing clamped it. `--max-tokens N` is one
+  cap across every seat of a run (every file of a scan), checked before each
+  call and charged after it, so one in-flight call can overshoot by its own
+  size. Once reached, no further model call is made: a file whose generator
+  never ran is ungradable *for that reason*, a writer or critic seat past the
+  cap is skipped and the file flagged as it is for a provider failure — the
+  dev kill rate already measured stands — and the cost line says the cap was
+  reached and after how many calls. Local (Ollama) seats now meter their tokens
+  too; they used to read as zero.
 - **Confidence — two terms, never one number.** Beside every kill rate the report
   prints what the bare rate hides: its **95% interval** over the mutants graded
   (Wilson, because the exams are small and the rates sit near 0 and 1 — `0.62,

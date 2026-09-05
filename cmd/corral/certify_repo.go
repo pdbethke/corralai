@@ -25,9 +25,11 @@ import (
 
 	"github.com/pdbethke/corralai/internal/adequacy"
 	"github.com/pdbethke/corralai/internal/advpool"
+	"github.com/pdbethke/corralai/internal/agentbackend"
 	"github.com/pdbethke/corralai/internal/auditpush"
 	"github.com/pdbethke/corralai/internal/certify"
 	"github.com/pdbethke/corralai/internal/lang"
+	"github.com/pdbethke/corralai/internal/modelcorr"
 	"github.com/pdbethke/corralai/internal/reposcan"
 	"github.com/pdbethke/corralai/internal/sandbox"
 	"github.com/pdbethke/corralai/internal/scanstore"
@@ -95,6 +97,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	noGoalCacheFlag := fs.Bool("no-goal-cache", false, "skip the goal cache — every candidate is re-derived even when a PRIOR scan already derived a goal for the exact same bytes, model and prompt revision. Re-buys a model call per file that a content-addressed cache would otherwise have served for free; use this to isolate goal-derivation variance from a comparison, or on a scan whose operator does not want a goal receipt kept in the ledger at all. The cache lives in the same ledger --record-db names, independent of --record itself")
 	noVerdictCacheFlag := fs.Bool("no-verdict-cache", false, "skip the verdict cache — every candidate is re-audited even when a PRIOR scan already earned a verdict for the exact same bytes, tests, models, engine and substrate. Re-buys the whole audit (generation, grading, the writer) per file; use this to isolate model variance from a comparison, or to redo a measurement the cache would otherwise keep serving. The cache lives in the same ledger --record-db names and is consulted independent of --record itself")
 	noSelectionCacheFlag := fs.Bool("no-selection-cache", false, "skip the selection cache — the ONE instrumented coverage run always executes, even when a PRIOR scan already ran the identical instrumented command over a byte-identical tree. Re-buys a full suite run (the single most expensive measurement a scan makes outside model calls) that a content-addressed cache would otherwise have served for free; use this to isolate selection variance from a comparison, or when the operator does not trust the tree to be unchanged. The cache lives in the same ledger --record-db names, and (like the goal cache) is consulted independent of --record itself; only WRITING a fresh hit requires --record, since a scan_id has to exist to write one against")
+	maxTokensFlag := fs.Int64("max-tokens", 0, "cap on model TOKENS for the whole SCAN, every file, input + output, every seat (0 = no cap). Checked before each call and charged after it, so one in-flight call can overshoot by its own size. Once reached: a generator seat that has not run makes its file ungradable (executor-error naming the cap), a writer or critic seat is skipped and the file flagged as it is for a provider failure — the dev kill rate already measured stands. The cost line says the cap was reached and after how many calls. Corral has bounded mutants, shards and wall clock and never money; this is the money bound")
 	timeoutFlag := fs.Duration("timeout", defaultRunTimeout, "per-file WALL-CLOCK budget, measured from that file's run start — not a no-progress timer. A file still making steady progress is stopped when it exceeds this and banks a needs-review TIMEOUT verdict, keeping its dev kill rate and survivors but losing the PROVING half. Same default and semantics as `certify --local`'s --timeout; raise it for a file with many survivors, which needs the most room and has the most to prove. PER FILE, so it multiplies: a scan of N files with W workers can spend up to (N/W) x this in the worst case, which is what --top and --swarm are for")
 	if err := fs.Parse(flagArgs); err != nil {
 		return 2
@@ -930,6 +933,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	localEndpoints = mergeLocalEndpoints(localEndpoints, seatReg.localEndpoints())
 	if ex != nil {
 		ex.localEndpoints = localEndpoints
+		ex.tokenBudget = agentbackend.NewTokenBudget(*maxTokensFlag)
 	}
 
 	cfg := reposcan.EmitConfig{
@@ -1214,6 +1218,11 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// and scan_model_calls can never disagree.
 	if line := costLine(scanModelCallTotals(results)); line != "" {
 		fmt.Fprintln(stdout, line)
+	}
+	if ex != nil {
+		if line := budgetLine(ex.tokenBudget); line != "" {
+			fmt.Fprintln(stdout, line)
+		}
 	}
 	// A distinct section, never folded into Excluded/Ungradable/the audited
 	// fraction: this is an inventory alongside the audit, not a change to
@@ -1772,7 +1781,13 @@ func testSurfacePaths(root *os.Root, cands []reposcan.Candidate, excl []reposcan
 		case reposcan.ReasonNotRegularFile:
 			// Never digested — see the comment above.
 		default:
-			if testDirs[dirOf(e.Path)] {
+			// Beside a test, OR a file the runner reads before any test
+			// wherever it lives (lang.HarnessConfigurer): a repo-root
+			// conftest.py configures every test under tests/ and sits
+			// beside none of them — the one shape the "beside a test" rule
+			// could never reach, listed as open in TestSurfacePaths' doc
+			// until now.
+			if testDirs[dirOf(e.Path)] || lang.IsHarnessFile(e.Path) {
 				paths = append(paths, e.Path)
 			}
 		}
@@ -3393,6 +3408,11 @@ func printWeakFile(w io.Writer, f reposcan.WeakFile) {
 		marker = "  [WRITER FAILED — survivor(s) not proven-killed]"
 	case f.PoolTestUnsound:
 		marker = "  [TEST UNSOUND — authored test did not genuinely grade]"
+	case f.ExamIndicative:
+		// Last, deliberately: every marker above names a failure to grade;
+		// this one names a rate that graded fine on an exam too small to
+		// certify. An indication, not a failure and not a clean result.
+		marker = "  [INDICATIVE — " + f.IndicativeReason + "]"
 	}
 	// The explicit "N proven missed" count is printed ONLY when it is
 	// trustworthy AND needed to disambiguate: TimedOut, TestWriterFailed and
@@ -3479,6 +3499,9 @@ func printWeakFile(w io.Writer, f reposcan.WeakFile) {
 	}
 	if line := examConfidenceLine(f); line != "" {
 		fmt.Fprintf(w, "\n   confidence: %s", line)
+	}
+	if line := writerPairLine(f.Challenger); line != "" {
+		fmt.Fprintf(w, "\n   writers: %s", line)
 	}
 	fmt.Fprintln(w)
 	// How many private trees scored this file at once, or why it only got
@@ -4058,6 +4081,8 @@ type localExecutor struct {
 	// localEndpoints places local seats on specific ollama daemons for every
 	// file this scan audits — one daemon per GPU. See parseLocalEndpoints.
 	localEndpoints map[string]string
+	// tokenBudget is the scan-wide --max-tokens cap, one for every file.
+	tokenBudget *agentbackend.TokenBudget
 
 	// perFileSwarm is how many workers ONE file's own audit may use. It is >1
 	// only on the workspace substrate, where resolveScanWorkers has already
@@ -4320,6 +4345,7 @@ func (l *localExecutor) auditInputFor(j reposcan.Job) localAuditInput {
 	sel := l.selectionFor(j)
 	return localAuditInput{
 		localEndpoints: l.localEndpoints,
+		tokenBudget:    l.tokenBudget,
 		repoDir:        l.repoDir,
 		codePath:       j.Path,
 		// j.TestPath is empty for an evidence-only candidate BY
@@ -4932,13 +4958,23 @@ func writeAuditStatement(path, repoDir string, r reposcan.RepoReport, models map
 			MutantBudgetRule: f.MutantBudget.Rule,
 			Complexity:       f.MutantBudget.Complexity,
 			// The two confidence terms — see certify.AuditedFile's docs.
-			KillRateLow:         lo,
-			KillRateHigh:        hi,
-			ExamMeasured:        f.ExamCoverage.Measured,
-			ExamSymbols:         f.ExamCoverage.Symbols,
-			ExamSymbolsProbed:   f.ExamCoverage.SymbolsProbed,
-			ExamDecisions:       f.ExamCoverage.Decisions,
-			ExamDecisionsProbed: f.ExamCoverage.DecisionsProbed,
+			KillRateLow:              lo,
+			KillRateHigh:             hi,
+			ExamMeasured:             f.ExamCoverage.Measured,
+			ExamIndicative:           f.ExamIndicative,
+			IndicativeReason:         f.IndicativeReason,
+			ChallengerModel:          pairField(f.Challenger, func(p *modelcorr.Pair) string { return p.ModelB }),
+			ChallengerMutants:        pairInt(f.Challenger, func(p *modelcorr.Pair) int { return p.Mutants }),
+			ChallengerSurvivedWriter: pairInt(f.Challenger, func(p *modelcorr.Pair) int { return p.SurvivedA }),
+			ChallengerSurvivedShadow: pairInt(f.Challenger, func(p *modelcorr.Pair) int { return p.SurvivedB }),
+			ChallengerUnion:          pairInt(f.Challenger, func(p *modelcorr.Pair) int { return p.UnionSurvivors }),
+			ChallengerShared:         pairInt(f.Challenger, func(p *modelcorr.Pair) int { return p.SharedSurvivors }),
+			ChallengerJaccard:        pairJaccard(f.Challenger),
+			ChallengerSufficient:     f.Challenger != nil && f.Challenger.Sufficient,
+			ExamSymbols:              f.ExamCoverage.Symbols,
+			ExamSymbolsProbed:        f.ExamCoverage.SymbolsProbed,
+			ExamDecisions:            f.ExamCoverage.Decisions,
+			ExamDecisionsProbed:      f.ExamCoverage.DecisionsProbed,
 			// Whether this file's goal was served from the goal cache — see
 			// certify.AuditedFile.GoalReused's doc.
 			GoalReused: f.GoalReused,
@@ -4983,6 +5019,12 @@ func writeAuditStatement(path, repoDir string, r reposcan.RepoReport, models map
 		Passed:              passed,
 		ScanID:              scanID,
 		WarehouseRowsSHA256: rowsSHA,
+		WarehouseRowsHashVersion: func() int {
+			if rowsSHA == "" {
+				return 0
+			}
+			return WarehouseRowsHashVersion
+		}(),
 	})
 	b, err := json.MarshalIndent(stmt, "", "  ")
 	if err != nil {
@@ -5043,7 +5085,7 @@ func writeAuditStatement(path, repoDir string, r reposcan.RepoReport, models map
 // from your warehouse". Reproducing it needs the bundle, which means the
 // pushing side. Do not upgrade the claim in a doc or a README without first
 // making the two conversions above lossless.
-func warehouseRowsSHA256(b auditpush.Bundle) (string, error) {
+func prepareRowsForHash(b auditpush.Bundle) (auditpush.Bundle, error) {
 	// The hash must cover what the WAREHOUSE receives, not what this process
 	// happens to hold. Without --push-source the writer stores SQL NULL for
 	// the source columns, so hashing them here would sign a number no
@@ -5101,7 +5143,42 @@ func warehouseRowsSHA256(b auditpush.Bundle) (string, error) {
 	}
 	// Link is deliberately NOT hashed: it holds the statement hash itself.
 	b.Link = auditpush.Link{}
-	js, err := json.Marshal(b)
+	return b, nil
+}
+
+func warehouseRowsSHA256(b auditpush.Bundle) (string, error) {
+	prepared, err := prepareRowsForHash(b)
+	if err != nil {
+		return "", err
+	}
+	// HASH VERSION 2: the SPARSE canonical form (auditpush.CanonicalSparseJSON),
+	// so a column added to the warehouse after a statement was signed — read
+	// back as a zero-valued field the pushing binary never had — does not
+	// change the bytes. Version 1 hashed the full JSON of this binary's
+	// structs, and every column addition since schema 2 broke `verify --db`
+	// on every statement pushed before it. See warehouseRowsSHA256Legacy.
+	js, err := auditpush.CanonicalSparseJSON(prepared)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(js)
+	return hex.EncodeToString(sum[:]), nil
+}
+
+// WarehouseRowsHashVersion is the version of warehouseRowsSHA256's form a
+// statement records, so a verifier hashes the rows the way the signer did.
+const WarehouseRowsHashVersion = 2
+
+// warehouseRowsSHA256Legacy is version 1: the full JSON of the bundle as
+// THIS binary's structs define it — kept so a v1 statement can still be
+// tried, with the caveat printed that it is reproducible only by a binary
+// with the same struct shape as the one that pushed it.
+func warehouseRowsSHA256Legacy(b auditpush.Bundle) (string, error) {
+	prepared, err := prepareRowsForHash(b)
+	if err != nil {
+		return "", err
+	}
+	js, err := json.Marshal(prepared)
 	if err != nil {
 		return "", err
 	}
@@ -5327,4 +5404,44 @@ func examConfidenceLine(f reposcan.WeakFile) string {
 		parts = append(parts, s)
 	}
 	return strings.Join(parts, " · ")
+}
+
+// writerPairLine is the writer pair on one line: what each seat proved of
+// the same survivors, and the overlap of their misses when there were enough
+// misses to compute one — said as WITHHELD with the count otherwise, because
+// two writers that both proved nearly everything is a finding, and it used
+// to live only in the run log. "" when no pair was measured.
+func writerPairLine(p *modelcorr.Pair) string {
+	if p == nil || p.Mutants == 0 {
+		return ""
+	}
+	s := fmt.Sprintf("%s proved %d of %d · challenger %s proved %d of %d",
+		p.ModelA, p.Mutants-p.SurvivedA, p.Mutants, p.ModelB, p.Mutants-p.SurvivedB, p.Mutants)
+	if p.Sufficient {
+		s += fmt.Sprintf(" · both missed %d of the %d either missed (Jaccard %.3f)", p.SharedSurvivors, p.UnionSurvivors, p.Jaccard)
+	} else {
+		s += fmt.Sprintf(" · overlap of misses withheld: %d in the union, fewer than the %d a coefficient needs", p.UnionSurvivors, modelcorr.MinSurvivorUnion)
+	}
+	return s
+}
+
+func pairField(p *modelcorr.Pair, get func(*modelcorr.Pair) string) string {
+	if p == nil {
+		return ""
+	}
+	return get(p)
+}
+
+func pairInt(p *modelcorr.Pair, get func(*modelcorr.Pair) int) int {
+	if p == nil {
+		return 0
+	}
+	return get(p)
+}
+
+func pairJaccard(p *modelcorr.Pair) float64 {
+	if p == nil || !p.Sufficient {
+		return 0
+	}
+	return p.Jaccard
 }

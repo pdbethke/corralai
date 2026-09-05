@@ -441,7 +441,12 @@ CREATE TABLE IF NOT EXISTS corral_audits (
   symbols                 INTEGER,
   symbols_probed          INTEGER,
   decisions               INTEGER,
-  decisions_probed        INTEGER
+  decisions_probed        INTEGER,
+  challenger_mutants          INTEGER,
+  challenger_survived_writer  INTEGER,
+  challenger_survived_shadow  INTEGER,
+  challenger_union            INTEGER,
+  challenger_shared           INTEGER
 );`
 
 // The mutant grain's outcome CHECK is the same discipline scan_files'
@@ -604,6 +609,11 @@ var corralAuditsMigrationCols = []struct{ name, ddl string }{
 	{"symbols_probed", "symbols_probed INTEGER"},
 	{"decisions", "decisions INTEGER"},
 	{"decisions_probed", "decisions_probed INTEGER"},
+	{"challenger_mutants", "challenger_mutants INTEGER"},
+	{"challenger_survived_writer", "challenger_survived_writer INTEGER"},
+	{"challenger_survived_shadow", "challenger_survived_shadow INTEGER"},
+	{"challenger_union", "challenger_union INTEGER"},
+	{"challenger_shared", "challenger_shared INTEGER"},
 }
 
 // The other four tables are NEW at schema_version 2, so nothing predates
@@ -1299,8 +1309,9 @@ func insertFileRow(tx *sql.Tx, uid string, now time.Time, r Row) error {
 	    critic_ms, total_ms, mutant_ms_median, mutant_ms_max,
 	    authored_test, verdict_json, schema_version, prompt_shape, covering_tests, import_only, started_at,
 	    mutant_budget, mutant_budget_rule, complexity,
-	    symbols, symbols_probed, decisions, decisions_probed
-	  ) VALUES (`+placeholders(84)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
+	    symbols, symbols_probed, decisions, decisions_probed,
+	    challenger_mutants, challenger_survived_writer, challenger_survived_shadow, challenger_union, challenger_shared
+	  ) VALUES (`+placeholders(89)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
 		uid, now, r.Repo, r.Commit, r.Path, r.Lang,
 		killRate, r.Survivors, r.ProvenMissed,
 		r.TimedOut, r.TestWriterFailed, r.PoolTestUnsound,
@@ -1329,6 +1340,7 @@ func insertFileRow(tx *sql.Tx, uid string, now time.Time, r Row) error {
 		nullTime(r.StartedAt),
 		r.MutantBudget, nullIfEmpty(r.MutantBudgetRule), r.Complexity,
 		r.Symbols, r.SymbolsProbed, r.Decisions, r.DecisionsProbed,
+		r.ChallengerMutants, r.ChallengerSurvivedWriter, r.ChallengerSurvivedShadow, r.ChallengerUnion, r.ChallengerShared,
 	)
 	if err != nil {
 		return fmt.Errorf("auditpush: insert %s: %w", r.Path, err)

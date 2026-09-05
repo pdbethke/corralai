@@ -62,6 +62,7 @@ func TestTick_NoCriticAssigned_StillConverges(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewDriver with no critic: %v", err)
 	}
+	d.CertifyIntervalWidth = 0 // small fixture; the exam-size rule is tested on its own
 	if err := d.StartRun(7, testRunSpec(), nil); err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}

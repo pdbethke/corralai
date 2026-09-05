@@ -102,6 +102,13 @@ func (s examSurface) coverage(refs ...[]MutantRef) ExamCoverage {
 	return c
 }
 
+// MaxCertifiableIntervalWidth is the widest 95% interval a CERTIFIED verdict
+// may carry. 0.35 lets a 40-mutant exam certify at the 0.8 threshold
+// (32 of 40: 0.65–0.89, width 0.24) and a 20-mutant one at 0.9 (18 of 20:
+// 0.70–0.97, width 0.27), and refuses 9 of 10 (0.60–0.98, width 0.38) and
+// every floor-of-five exam. See aggregate's "exam too small to certify".
+const MaxCertifiableIntervalWidth = 0.35
+
 // WilsonInterval is the 95% Wilson score interval for a kill rate of
 // killed out of graded mutants — the sampling term of a verdict's
 // confidence, the one a bare rate hides. Wilson rather than the normal

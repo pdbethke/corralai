@@ -231,6 +231,41 @@ type TestRooter interface {
 	TestRoots() []string
 }
 
+// HarnessConfigurer is the OPTIONAL interface a plugin implements to name
+// the files its test runner reads before any test runs — pytest's
+// conftest.py and its ini files, jest's config and setup files, RSpec's
+// spec_helper, PHPUnit's phpunit.xml. Such a file changes what the whole
+// suite measures from wherever it lives: a repo-root conftest.py configures
+// every test under tests/ and sits beside no test file, so the "lives in a
+// directory that holds a test" rule the cache key otherwise uses never
+// reached it. The names are matched as BASENAMES (or a basename prefix
+// ending in '.', for jest.config.js/.ts/.mjs) against every file the scan
+// enumerated, never by walking anything new.
+type HarnessConfigurer interface {
+	HarnessFiles() []string
+}
+
+// IsHarnessFile reports whether rel's basename is one any registered plugin
+// names as a harness-configuration file.
+func IsHarnessFile(rel string) bool {
+	base := rel
+	if i := strings.LastIndexAny(rel, `/\`); i >= 0 {
+		base = rel[i+1:]
+	}
+	for _, p := range registry {
+		h, ok := p.(HarnessConfigurer)
+		if !ok {
+			continue
+		}
+		for _, name := range h.HarnessFiles() {
+			if name == base || (strings.HasSuffix(name, ".") && strings.HasPrefix(base, name)) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 var registry = map[string]Plugin{}
 
 // Register adds a plugin to the registry. Called from plugin files' init().

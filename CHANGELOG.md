@@ -9,6 +9,46 @@ still move between minor versions.
 Entries describe what changed for someone *using* the tool. For the full commit
 history of any release, `git log v0.3.4..v0.3.5`.
 
+## [Unreleased] — toward 1.0.0-rc.1
+
+The exam is sized to the file, fitted to the clock, and disclosed with its
+confidence; a rate too loose to be a grade no longer certifies.
+
+- **BREAKING — a verdict cannot be CERTIFIED on an exam too small to
+  certify.** Beside every kill rate corral now prints its 95% interval
+  (Wilson, over the mutants graded). A rate that clears the threshold on an
+  interval wider than 0.35 is routed to `needs-review`, marked
+  `[INDICATIVE — …]` with the band, and signed as such: five of five killed
+  is 0.57–1.00, and no reading of that is "adequate". Previously CERTIFIED
+  verdicts on small exams do not certify under this rule; the rate itself is
+  unchanged and still printed.
+- **The mutant budget.** A file is planted with about one fault per decision
+  point (floor 5, ceiling 40 — the old default exam) instead of five per
+  generator seat regardless of what the seat held; under `--substrate
+  workspace` the budget is fitted to `--timeout` from the probe's *measured*
+  cost of one round of mutants. `--n-mutants` keeps its per-seat meaning and
+  is never fitted; the header warns when it cannot fit. Every verdict, ledger
+  row and signed statement names the budget and its rule.
+- **The exam's reach.** Each verdict says how many of the file's symbols and
+  decision points a fault actually landed on; the extractors keep every
+  decision point's line span, and mutant spans are recorded per row (they
+  were not, before). Deliberately two terms beside the interval, never one
+  blended index.
+- **The authored pass runs the authored test alone** — baseline, canary and
+  positive control too, not only the survivor run. On psf/requests a hub
+  file's proof phase went from 26 minutes and a timeout to 35 seconds.
+- **The per-mutant cap follows the command actually run**, at 3× its own
+  compliant duration instead of 8× the file's, so a hang costs seconds on a
+  two-test command instead of the five-minute ceiling.
+- **The writer pair is recorded whether or not its coefficient is** — what
+  each writer proved of the same survivors, and the union and overlap of
+  their misses, on the report line, both ledgers and the statement.
+- `--top` is one bound over every door: evidence widening competes under it
+  instead of appending past it. Files under a language's test tree
+  (`tests/conftest.py`, `spec/support/`) are `test-support`, never subjects.
+- The README is the first-run document; the brain is documented as optional
+  and not read by any audit (`docs/corral/brain.md`).
+
 ## [v0.8.3] — 2026-09-01
 
 Faster scoring, honest timing, and the gaps corral proved in its own code.

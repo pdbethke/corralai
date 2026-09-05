@@ -593,6 +593,13 @@ type Verdict struct {
 	// and one over 40 are different measurements; this is what tells
 	// them apart. Zero-valued on a replayed (--mutants) run.
 	MutantBudget MutantBudget
+	// ExamIndicative is set when the kill rate cleared the threshold but the
+	// exam was too small for the rate to be a grade — its 95% interval is
+	// wider than MaxCertifiableIntervalWidth — so Status is needs-review
+	// with IndicativeReason saying so. The rate is still real; what it
+	// cannot be is a certification.
+	ExamIndicative   bool   `json:"exam_indicative,omitempty"`
+	IndicativeReason string `json:"indicative_reason,omitempty"`
 	// ExamCoverage says how much of the file the graded mutants reached —
 	// symbols and decision points with a fault on them — computed from the
 	// same spans the ledger records per mutant. See ExamCoverage.
@@ -1328,6 +1335,13 @@ type Driver struct {
 	// below it (or with any blocking finding open) the run is routed to
 	// needs-review — the human gate never auto-certifies a weak dev suite.
 	Threshold float64
+	// CertifyIntervalWidth is the widest 95% interval a CERTIFIED verdict
+	// may carry — MaxCertifiableIntervalWidth from NewDriver, on for every
+	// real run. A rate that clears Threshold on an exam too small for the
+	// rate to be a grade is routed to needs-review with the band printed.
+	// Exposed as a field only so a test of some OTHER property can run its
+	// two-mutant fixture without the rule answering first; no CLI sets it.
+	CertifyIntervalWidth float64
 
 	// BlockSeverity is the lowest open-finding severity that forces
 	// needs-review at aggregate time (mirrors mission.Engine's
@@ -1381,12 +1395,13 @@ func NewDriver(q *queue.Store, scorer Scorer, validator Validator, assign RoleAs
 	}
 	d := &Driver{
 		Q: q, Scorer: scorer, Validator: validator, Assign: assign,
-		Threshold:       threshold,
-		BlockSeverity:   "high",
-		NoProgressTicks: 240,
-		runs:            map[int64]*runState{},
-		noProgress:      map[int64]int{},
-		lastFingerprint: map[int64]string{},
+		Threshold:            threshold,
+		CertifyIntervalWidth: MaxCertifiableIntervalWidth,
+		BlockSeverity:        "high",
+		NoProgressTicks:      240,
+		runs:                 map[int64]*runState{},
+		noProgress:           map[int64]int{},
+		lastFingerprint:      map[int64]string{},
 	}
 	if d.Now == nil {
 		d.Now = time.Now
@@ -2703,7 +2718,7 @@ func (d *Driver) tickAggregate(ctx context.Context, missionID int64, run *runSta
 	// opinion, which can hallucinate. blockingFindingOpen remains for a future
 	// execution-verified finding path.
 	v := aggregate(run.rs, run.modelsByRole(d.Assign), run.devKillRate, run.mutantsTotal, len(run.devSurvivors), run.provenMissed,
-		criticFindings, d.Threshold, false, run.testWriterFailed, run.poolTestUnsound)
+		criticFindings, d.Threshold, d.CertifyIntervalWidth, false, run.testWriterFailed, run.poolTestUnsound)
 	v.RegionsTotal = run.regionsTotal
 	v.PromptShape = run.promptShape
 	v.MutantBudget = run.mutantBudget

@@ -98,6 +98,12 @@ type advVerdict struct {
 	// the writer's provider never answered, so TestWriterFailed above is
 	// not the model's doing.
 	WriterProviderFailed bool `json:"writer_provider_failed,omitempty"`
+	// The exam's size and reach, and whether it was too small to certify —
+	// see advpool.Verdict's MutantBudget, ExamCoverage and ExamIndicative.
+	MutantBudget     advpool.MutantBudget `json:"mutant_budget,omitempty"`
+	ExamCoverage     advpool.ExamCoverage `json:"exam_coverage,omitempty"`
+	ExamIndicative   bool                 `json:"exam_indicative,omitempty"`
+	IndicativeReason string               `json:"indicative_reason,omitempty"`
 	// DevScored mirrors advpool.Verdict.DevScored: true once the dev
 	// suite's OWN kill-rate was actually measured against real mutants in
 	// the real jail. On a TimedOut verdict this is the ONLY thing that
@@ -433,6 +439,26 @@ func renderAdvVerdict(w io.Writer, codePath string, v advVerdict) {
 	}
 	fmt.Fprintf(w, "  status:        %-12s (dev suite killed %d/%d mutants)\n", status, killed, v.MutantsTotal)
 	fmt.Fprintf(w, "  dev_kill_rate: %.2f\n", v.DevKillRate)
+	if lo, hi, ok := advpool.WilsonInterval(killed, v.MutantsTotal); ok {
+		// The sampling term a bare rate hides, beside it: 5 of 8 is 0.62
+		// with a band of 0.31–0.86, and the band is what a reader needs.
+		fmt.Fprintf(w, "  95%% interval:  %.2f–%.2f (n=%d)\n", lo, hi, v.MutantsTotal)
+	}
+	if v.ExamIndicative {
+		fmt.Fprintf(w, "  INDICATIVE:    %s — needs-review for that reason, not a weak suite\n", v.IndicativeReason)
+	}
+	if v.MutantBudget.Total > 0 {
+		fmt.Fprintf(w, "  mutants:       %s\n", v.MutantBudget)
+	}
+	if c := v.ExamCoverage; c.Measured {
+		fmt.Fprintf(w, "  reach:         %d of %d symbols", c.SymbolsProbed, c.Symbols)
+		if c.Decisions > 0 {
+			fmt.Fprintf(w, ", %d of %d decision points", c.DecisionsProbed, c.Decisions)
+		} else {
+			fmt.Fprint(w, " (no decision points — straight-line code)")
+		}
+		fmt.Fprintln(w)
+	}
 	fmt.Fprintf(w, "  survivors:     %d\n", v.Survivors)
 	if v.MutantsInvalid > 0 {
 		// Never hidden. A run whose generator produced mostly unbuildable

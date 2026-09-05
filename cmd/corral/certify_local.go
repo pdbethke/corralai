@@ -2230,6 +2230,10 @@ func advVerdictFromPool(v advpool.Verdict) advVerdict {
 		DevScored:                v.DevScored,
 		PoolScored:               v.PoolScored,
 		WriterSeatsUngraded:      v.WriterSeatsUngraded,
+		MutantBudget:             v.MutantBudget,
+		ExamCoverage:             v.ExamCoverage,
+		ExamIndicative:           v.ExamIndicative,
+		IndicativeReason:         v.IndicativeReason,
 	}
 	for _, f := range v.VacuousFindings {
 		out.VacuousFindings = append(out.VacuousFindings, advFinding{

@@ -344,6 +344,9 @@ func newTestDriver(t *testing.T, missionID int64, scorer *fakeScorer, validator 
 	if err != nil {
 		t.Fatalf("NewDriver: %v", err)
 	}
+	// Two- and three-mutant fixtures: the exam-size rule would answer before
+	// the property under test does. Off here; on in every real driver.
+	d.CertifyIntervalWidth = 0
 	rs := testRunSpec()
 	if err := d.StartRun(missionID, rs, nil); err != nil {
 		t.Fatalf("StartRun: %v", err)
@@ -849,6 +852,9 @@ func newTestDriverWithSpec(t *testing.T, missionID int64, scorer Scorer, validat
 	if err != nil {
 		t.Fatalf("NewDriver: %v", err)
 	}
+	// Two- and three-mutant fixtures: the exam-size rule would answer before
+	// the property under test does. Off here; on in every real driver.
+	d.CertifyIntervalWidth = 0
 	if err := d.StartRun(missionID, rs, nil); err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -1677,6 +1683,7 @@ func TestDriverEmitsReasoningEvents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewDriver: %v", err)
 	}
+	d.CertifyIntervalWidth = 0 // small fixture; the exam-size rule is tested on its own
 	sink := &fakeEventSink{}
 	d.Events = sink
 	d.Signer = &fakeSigner{}
@@ -2112,6 +2119,7 @@ func TestRunDeadlineProducesNeedsReviewVerdict(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewDriver: %v", err)
 	}
+	d.CertifyIntervalWidth = 0 // small fixture; the exam-size rule is tested on its own
 	d.Now = clk.Now
 	d.RunDeadline = 10 * time.Minute
 	signer := &fakeSigner{}
@@ -2287,6 +2295,7 @@ func newScoredRun(t *testing.T, cfg scoredRun) (*Driver, int64) {
 	if err != nil {
 		t.Fatalf("NewDriver: %v", err)
 	}
+	d.CertifyIntervalWidth = 0 // small fixture; the exam-size rule is tested on its own
 	rs := testRunSpec()
 	if err := d.StartRun(missionID, rs, nil); err != nil {
 		t.Fatalf("StartRun: %v", err)
@@ -2427,6 +2436,7 @@ func newShardedRun(t *testing.T, missionID int64, maxShards int, scorer *fakeSco
 	if err != nil {
 		t.Fatalf("NewDriver: %v", err)
 	}
+	d.CertifyIntervalWidth = 0 // small fixture; the exam-size rule is tested on its own
 	rs, sigs := shardedRunSpec(maxShards)
 	if err := d.StartRun(missionID, rs, sigs); err != nil {
 		t.Fatalf("StartRun: %v", err)
@@ -3423,6 +3433,7 @@ func TestBugCatchRowsCarryTestComplexity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewDriver: %v", err)
 	}
+	d.CertifyIntervalWidth = 0 // small fixture; the exam-size rule is tested on its own
 	if err := d.StartRun(missionID, rs, sigs); err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -3951,6 +3962,7 @@ func TestShadowBudgetSkipsRatherThanTimingOutTheRun(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewDriver: %v", err)
 	}
+	d.CertifyIntervalWidth = 0 // small fixture; the exam-size rule is tested on its own
 	d.Now = func() time.Time { return now } // seeded BEFORE StartRun.
 	d.RunDeadline = 10 * time.Minute
 	d.Signer = &fakeSigner{}
@@ -4033,6 +4045,7 @@ func TestShadowCreditIsCappedAtBudget(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewDriver: %v", err)
 	}
+	d.CertifyIntervalWidth = 0 // small fixture; the exam-size rule is tested on its own
 	d.Now = func() time.Time { return now } // seeded BEFORE StartRun.
 	d.RunDeadline = 10 * time.Minute
 	d.Signer = &fakeSigner{}
@@ -4119,6 +4132,7 @@ func newShadowedRun(t *testing.T, missionID int64, maxShards int, shadowModel st
 	if err != nil {
 		t.Fatalf("NewDriver: %v", err)
 	}
+	d.CertifyIntervalWidth = 0 // small fixture; the exam-size rule is tested on its own
 	rs, sigs := shardedRunSpec(maxShards)
 	rs.ShadowModel = shadowModel
 	if err := d.StartRun(missionID, rs, sigs); err != nil {

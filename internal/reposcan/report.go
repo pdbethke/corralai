@@ -99,6 +99,12 @@ type WeakFile struct {
 	// here for a reason that is neither "clean" nor "tried and missed," and
 	// a caller must print it distinctly, the same way TestWriterFailed is.
 	PoolTestUnsound bool
+	// ExamIndicative / IndicativeReason mirror advpool.Verdict's: the rate
+	// cleared the threshold on an exam too small for it to be a grade, so
+	// the file is needs-review with the band printed. Neither a failure nor
+	// a clean result — an indication.
+	ExamIndicative   bool
+	IndicativeReason string
 	// SelectionMethod, SelectedTests and SuiteTests mirror
 	// advpool.Verdict.TestSelection: WHICH measurement this kill rate is —
 	// the tests coverage evidence showed execute this file (Method, e.g.
@@ -536,6 +542,8 @@ func Aggregate(owner, repo, commit string, totalFiles, candidates int, results [
 			PoolScored:       r.Verdict.PoolScored,
 			ProvenMissed:     r.Verdict.ProvenMissed,
 			PoolTestUnsound:  r.Verdict.PoolTestUnsound,
+			ExamIndicative:   r.Verdict.ExamIndicative,
+			IndicativeReason: r.Verdict.IndicativeReason,
 			AuthoredTest:     r.Verdict.AuthoredTest,
 			// Which measurement this file's rate IS, carried onto the report
 			// so the printer never has to reach back into the verdict — and

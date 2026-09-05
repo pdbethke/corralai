@@ -58,6 +58,7 @@ func newShardedRunWithSpec(t *testing.T, missionID int64, scorer *fakeScorer, va
 	if err != nil {
 		t.Fatalf("NewDriver: %v", err)
 	}
+	d.CertifyIntervalWidth = 0 // small fixture; the exam-size rule is tested on its own
 	if err := d.StartRun(missionID, rs, sigs); err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}

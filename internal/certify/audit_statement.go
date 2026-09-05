@@ -116,6 +116,12 @@ type AuditedFile struct {
 	// coverage term — how much of the file's surface the mutants reached.
 	// Present only when measured (ExamMeasured), never signed as 0 of 0.
 	ExamMeasured bool `json:"examMeasured,omitempty"`
+	// ExamIndicative: the rate cleared the threshold but the exam was too
+	// small to certify (interval wider than the rule allows), so the file's
+	// status is needs-review for that reason and no other. Signed so a
+	// reader sees the difference between "weak" and "too few questions".
+	ExamIndicative   bool   `json:"examIndicative,omitempty"`
+	IndicativeReason string `json:"indicativeReason,omitempty"`
 	// The writer pair, when a challenger writer sat: which model, what each
 	// seat proved of the same survivors, and the overlap of their misses —
 	// signed whether or not the coefficient was sufficient, with Jaccard
@@ -312,6 +318,10 @@ func BuildAuditAttestation(s AuditStatement) map[string]any {
 				entry["challengerJaccard"] = f.ChallengerJaccard
 				entry["challengerSufficient"] = true
 			}
+		}
+		if f.ExamIndicative {
+			entry["examIndicative"] = true
+			entry["indicativeReason"] = f.IndicativeReason
 		}
 		if f.ExamMeasured {
 			entry["examSymbols"] = f.ExamSymbols

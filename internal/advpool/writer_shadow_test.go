@@ -154,6 +154,7 @@ func newWriterShadowRun(t *testing.T, missionID int64, rs RunSpec, scorer Scorer
 	if err != nil {
 		t.Fatalf("NewDriver: %v", err)
 	}
+	d.CertifyIntervalWidth = 0 // small fixture; the exam-size rule is tested on its own
 	// A FROZEN clock, set before StartRun. The verdict carries the run's
 	// per-phase timing, and TestShadowWriterNeverChangesVerdict's arm 1
 	// compares two runs' digests byte for byte: on a real clock the two would

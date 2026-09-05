@@ -3394,6 +3394,11 @@ func printWeakFile(w io.Writer, f reposcan.WeakFile) {
 		marker = "  [WRITER FAILED — survivor(s) not proven-killed]"
 	case f.PoolTestUnsound:
 		marker = "  [TEST UNSOUND — authored test did not genuinely grade]"
+	case f.ExamIndicative:
+		// Last, deliberately: every marker above names a failure to grade;
+		// this one names a rate that graded fine on an exam too small to
+		// certify. An indication, not a failure and not a clean result.
+		marker = "  [INDICATIVE — " + f.IndicativeReason + "]"
 	}
 	// The explicit "N proven missed" count is printed ONLY when it is
 	// trustworthy AND needed to disambiguate: TimedOut, TestWriterFailed and
@@ -4939,6 +4944,8 @@ func writeAuditStatement(path, repoDir string, r reposcan.RepoReport, models map
 			KillRateLow:              lo,
 			KillRateHigh:             hi,
 			ExamMeasured:             f.ExamCoverage.Measured,
+			ExamIndicative:           f.ExamIndicative,
+			IndicativeReason:         f.IndicativeReason,
 			ChallengerModel:          pairField(f.Challenger, func(p *modelcorr.Pair) string { return p.ModelB }),
 			ChallengerMutants:        pairInt(f.Challenger, func(p *modelcorr.Pair) int { return p.Mutants }),
 			ChallengerSurvivedWriter: pairInt(f.Challenger, func(p *modelcorr.Pair) int { return p.SurvivedA }),

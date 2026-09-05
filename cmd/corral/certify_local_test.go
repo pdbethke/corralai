@@ -450,6 +450,11 @@ func TestDriveLocalRun_EndToEnd(t *testing.T) {
 		advpool.RoleTestCritic:      "model-critic",
 	}
 	d, err := advpool.NewDriver(q, advpool.JailScorer{Jail: jail}, advpool.JailValidator{Jail: jail}, assign, 0.5)
+	// A three-mutant fixture cannot certify under the exam-size rule (its
+	// interval is too wide); this test is about the drive, not the rule.
+	if err == nil {
+		d.CertifyIntervalWidth = 0
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -626,6 +631,11 @@ func TestDriveLocalRun_TolerateOneRecoverableTickError(t *testing.T) {
 		advpool.RoleTestCritic:      "model-critic",
 	}
 	d, err := advpool.NewDriver(q, advpool.JailScorer{Jail: jail}, advpool.JailValidator{Jail: jail}, assign, 0.5)
+	// A three-mutant fixture cannot certify under the exam-size rule (its
+	// interval is too wide); this test is about the drive, not the rule.
+	if err == nil {
+		d.CertifyIntervalWidth = 0
+	}
 	if err != nil {
 		t.Fatal(err)
 	}

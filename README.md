@@ -469,10 +469,11 @@ Not a slogan — the code refuses to do otherwise.
    `certify --repo --substrate workspace` runs your suite **unjailed, in your own
    checkout**, and the caller — a CI runner, a throwaway tree — *is* the boundary,
    which the scan header says out loud. Provider keys never sit in plaintext or a
-   process listing. And what a run keeps is opt-in and explicit: `--record` for the
-   local ledger, `--push` for a warehouse you own, `--attest` for a signed statement
-   a third party can check. Nothing is recorded that you did not ask for, and
-   nothing you asked for is fabricated — see **[SECURITY.md](SECURITY.md)**.
+   process listing. And what a run keeps is explicit: its ledger entry under the
+   audited repo's own `.corral/ledger/` (`--no-ledger` to skip it), `--push` for a
+   warehouse you own, `--attest` for a signed statement a third party can check.
+   Nothing leaves the box that you did not send, and nothing recorded is
+   fabricated — see **[SECURITY.md](SECURITY.md)**.
 
 The name is the metaphor, but the mechanism is **separation of duties**: the seat
 that writes a test, the seat that plants the fault, and the seat that reviews the
@@ -566,7 +567,7 @@ each file's run gets before the pool is forced to a `needs-review` verdict
 instead of converging. A file whose run hits this deadline after the dev
 suite's own kill-rate was already measured is reported as **audited**, not
 dropped — marked `[TIMED OUT — pool did not converge]` in the weakest-files
-list (and `timed_out` in `--record`'s ledger row) so it never reads as a
+list (and `timed_out` on its ledger row) so it never reads as a
 clean convergence. Raise it for a large file that needs more room — on the
 CLI, or through the GitHub Action's `timeout` input.
 **A scan whose only audited files are all `[TIMED OUT]` still exits non-zero**
@@ -581,28 +582,26 @@ still fails either way) — `3` is the same code an ordinary converged
 `needs-review` verdict already uses, since a banked timeout now prints a
 real (marked) verdict instead of a bare internal-failure error.
 
-**The scan ledger (`--record`, CLI only).** `certify --repo --record` keeps
-what every scan already computes and normally just prints: a row per file
-the scan audited (with its kill rate) or rejected (with a machine-stable
-reason), plus one header row per invocation, in an embedded DuckDB file
-(`--record-db <path>`, default `$CORRALAI_SCANS_DB` or
-`~/.claude/corralai_scans.duckdb`). It's opt-in and off by default, and a
-recording failure — a full disk, a locked DuckDB file — never changes the
-scan's own verdict or exit code: it prints a loud line on stderr and the
-scan's result stands, because this command's exit code is a CI merge gate
-and a ledger write must never be able to red-build a PR over bookkeeping.
-**One writer at a time**: DuckDB locks its file for the process holding it
-open, so in a parallel CI matrix only the first concurrent `--record` run
-actually lands — the rest print the same loud fail-open line and lose
-their ledger entry, though their own gate verdict is unaffected. That's
-the right trade for a merge gate (a scan's pass/fail must never depend on
-winning a file lock), but point `--record-db` at a per-job path if you
-need every matrix leg's ledger kept. `--record` here is a **bool** —
-unlike `certify --local --record <file>.json` on the sibling subcommand,
-which takes a replayable-tape *path* — so don't hand it one; `--record-db`
-is where the ledger path goes.
+**The record (the ledger directory, CLI and Action).** Every `certify
+--repo` run keeps what it computes — a row per file the scan audited (with
+its kill rate) or rejected (with a machine-stable reason), every mutant's
+fate, every model call, the run's events, the verdict JSON and the authored
+test — as **one signed, hash-linked, gzipped JSON entry** under the audited
+repo's `.corral/ledger/` (`--ledger <dir>` moves it, `--no-ledger` skips
+it, `$CORRAL_LEDGER` overrides the default). Plain text, ~21 KB a run; a
+git branch on a runner, a folder on a laptop; DuckDB reads it in place.
+There is no separate database to record into — the pre-1.0 `--record` /
+`--record-db` DuckDB ledger is retired, and `--cache-db` names the one
+local file that remains: a cache of derived goals and test selections,
+which nothing a verdict rests on lives in. A write failure — a full disk,
+an unwritable directory — never changes the scan's own verdict or exit
+code: it prints a loud line on stderr and the result stands, because this
+command's exit code is a CI merge gate and bookkeeping must never be able
+to red-build a PR. Two runs writing one directory at once is the one case
+the chain refuses by construction (a chain has one head); on a shared
+branch the Action's recipe fetches, `corral ledger append`s and pushes.
 
-**Reading it back (`corral scans`).** The ledger is only worth writing if
+**Reading it back (`corral scans`).** The record is only worth writing if
 something can query it, so:
 
 ```bash
@@ -612,7 +611,9 @@ corral scans show <id> --evidence    # + the pool's own authored test
 corral scans show <id> --timing      # + where each file's wall clock went
 ```
 
-A local DuckDB file, no brain required, read-only by design. `show` renders
+Plain files, no brain and no database required, read-only by design (an
+id is the entry's position in the chain, oldest first; `--ledger <dir>`
+reads another directory, `--db` a pre-1.0 `scans.duckdb`). `show` renders
 what a bare number cannot: **why a proven-gap count of 0 is 0** — the pool
 never authored a compiling test, the test it authored never genuinely graded,
 or a perfectly sound test ran and proved nothing ("tried and missed"). Those
@@ -641,9 +642,9 @@ scan's files is a sound number rather than one that grows with the file count.
 **The warehouse (`--push`, CLI and Action).** `certify --repo --push <path or
 md:<db>>` appends this scan's per-file verdicts to a DuckDB **you** own —
 corral has no hosted tier and keeps nothing, so any DuckDB works, and this is
-a destination rather than a lock-in. Append-only. Every row carries the local
-scan ledger's row id (`0` when `--record` wasn't given) and, traceable only
-with `--attest`, the sha256 of the signed statement it came from — so a row
+a destination rather than a lock-in. Append-only. Every row carries the run's
+`scan_uid` and, traceable only with `--attest`, the sha256 of the signed
+statement it came from — so a row
 can be checked against something a third party can verify, and without
 `--attest` that column is honestly empty rather than fabricated. It answers
 what one pull request cannot: a single kill rate is a sample — the same
@@ -840,7 +841,7 @@ that is a deliberate act, is in
   kilobytes a run, measured. ([the field note](https://corralai.dev/field-notes/the-ledger-is-just-text/))
 - **The prior (`--prior`) — the next run plants what the last one didn't.**
   Hand a run what earlier runs recorded — a `--record-mutants` document (the
-  hunks), a `--record-db` ledger (the outcomes), or a directory of either — and
+  hunks), a ledger directory (the outcomes), or a directory of either — and
   the generator is told, for each file whose bytes are **exactly** what the
   prior was recorded against, every edit already tried there: its place, its
   shape, its hunk, and what happened (*killed by test_x* — the suite watches
@@ -1018,10 +1019,11 @@ the short version for the audit:
   in the scan header. Your suite runs in your checkout with the same scrubbed
   environment, and the caller is the boundary — a CI runner, or a tree you can
   throw away. It is the path for a project whose virtualenv the jail cannot see.
-- **The record is yours and opt-in.** `--record` writes a local DuckDB ledger;
-  `--push` appends to a warehouse you own; `--attest` signs a statement and
-  `--transparency` logs it publicly. Each is off unless named; a write failure
-  never changes a verdict or an exit code.
+- **The record is yours.** Every run writes its signed entry into the audited
+  repo's own `.corral/ledger/` (`--no-ledger` to skip); `--push` appends to a
+  warehouse you own; `--attest` signs a statement and `--transparency` logs it
+  publicly. The last three are off unless named; a write failure never changes
+  a verdict or an exit code.
 - **Portable, secure key storage.** Provider API keys never sit
   in plaintext or leak into a process listing. `corral secret set NAME` reads the value
   from **stdin, never a CLI argument**, and the keystore resolves each secret through

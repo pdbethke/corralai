@@ -44,15 +44,19 @@ func selCacheFixture(t *testing.T) (root, base, goals string) {
 	return root, base, goals
 }
 
+// selCacheArgs points the run at dsn as its CACHE file and at the ledger
+// directory beside it as its record — the two files a real run keeps.
 func selCacheArgs(root, base, goals, dsn string, extra ...string) []string {
 	args := []string{
 		"--repo", root, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant, "--critic-model", "off",
 		"--diff-base", base, "--goals", goals,
 		"--substrate", substrateWorkspace,
-		"--record", "--record-db", dsn,
+		"--cache-db", dsn, "--ledger", selCacheLedger(dsn),
 	}
 	return append(args, extra...)
 }
+
+func selCacheLedger(dsn string) string { return filepath.Join(filepath.Dir(dsn), "ledger") }
 
 // TestSelectionCacheReusesIdenticalTree is the headline case from the task
 // brief: scan 1 runs the instrumented pass and Puts; scan 2 over the SAME
@@ -110,7 +114,7 @@ func TestSelectionCacheReusesIdenticalTree(t *testing.T) {
 	if calls != 1 {
 		t.Errorf("scan 2: collectSelectionEvidence called again (now %d total) — a byte-identical tree must be a cache HIT, not a re-run", calls)
 	}
-	wantReused := "selection: reused — tree unchanged since scan " + itoa(scan1ID)
+	wantReused := "selection: reused — tree unchanged since an earlier scan (cached evidence)"
 	if !strings.Contains(out2.String(), wantReused) {
 		t.Errorf("scan 2: stdout = %q, want it to contain %q", out2.String(), wantReused)
 	}
@@ -119,9 +123,10 @@ func TestSelectionCacheReusesIdenticalTree(t *testing.T) {
 	if scan2SelectionMS != nil {
 		t.Errorf("scan 2: selection_ms = %v, want NULL — the pass did not run THIS scan, it was reused", *scan2SelectionMS)
 	}
-	if scan2ReusedFrom == nil || *scan2ReusedFrom != scan1ID {
-		t.Errorf("scan 2: selection_reused_from = %v, want *%d (scan 1's id)", scan2ReusedFrom, scan1ID)
+	if scan2ReusedFrom == nil {
+		t.Errorf("scan 2: selection_reused_from is NULL, want set — the entry must say the evidence was reused, not merely omit the run")
 	}
+	_ = scan1ID
 
 	// Scan 3: ONE byte of the (already-changed, but now further edited)
 	// tracked source changes. A genuinely different question — must run
@@ -269,57 +274,25 @@ func itoa(n int64) string {
 // selection_ms and selection_reused_from directly off the ledger — bypassing
 // scanstore's own reader so this test does not depend on ScanByID's
 // correctness to prove Record's.
+// readScanSelectionRow reads the nth entry (1 = oldest) of the ledger
+// beside dsn — the record — through the same reader `corral scans` uses.
 func readScanSelectionRow(t *testing.T, dsn string, nth int) (id int64, selectionMS, reusedFrom *int64) {
 	t.Helper()
-	db, err := sql.Open("duckdb", dsn)
+	st, err := openLedgerScans(selCacheLedger(dsn))
 	if err != nil {
 		t.Fatalf("open ledger: %v", err)
 	}
-	defer db.Close()
-
-	rows, err := db.Query(`SELECT id, selection_ms, selection_reused_from FROM scans ORDER BY id ASC`)
+	defer st.Close()
+	row, ok, err := st.ScanByID(context.Background(), int64(nth))
 	if err != nil {
-		t.Fatalf("select scans: %v", err)
+		t.Fatalf("scan %d: %v", nth, err)
 	}
-	defer rows.Close()
-	i := 0
-	for rows.Next() {
-		i++
-		var rid int64
-		var ms, reused sql.NullInt64
-		if err := rows.Scan(&rid, &ms, &reused); err != nil {
-			t.Fatalf("scan row: %v", err)
-		}
-		if i == nth {
-			id = rid
-			if ms.Valid {
-				v := ms.Int64
-				selectionMS = &v
-			}
-			if reused.Valid {
-				v := reused.Int64
-				reusedFrom = &v
-			}
-		}
+	if !ok {
+		t.Fatalf("no scan %d recorded (want at least %d entries)", nth, nth)
 	}
-	if err := rows.Err(); err != nil {
-		t.Fatalf("iterate scans: %v", err)
-	}
-	if i < nth {
-		t.Fatalf("only %d scan row(s) recorded, want at least %d", i, nth)
-	}
-	return id, selectionMS, reusedFrom
+	return row.ID, row.SelectionMillis, row.SelectionReusedFrom
 }
 
-// TestSelectionCacheKeyDigestsTheCommandThatActuallyRuns. The key used to
-// digest sel.Instrument(testCmd) — `pytest --cov` — while the run used
-// InstrumentSourceRoots — `pytest --cov=pkg_a`. So the key's own doc ("the
-// instrumentation flags are part of what produced the evidence") was
-// false, and two scans of one tree over different source roots (pkg_a,
-// then pkg_b) shared a key: the second was served coverage collected over
-// pkg_a and every pkg_b file fell to whole-suite with the misdiagnosis
-// "never saw … did the suite run it?". The digest must be of the command
-// reposcan.InstrumentedCommand builds for THESE sources.
 func TestSelectionCacheKeyDigestsTheCommandThatActuallyRuns(t *testing.T) {
 	root, _, _ := selCacheFixture(t)
 	ex := newLocalExecutor(root, nil, substrateWorkspace, 0, io.Discard)

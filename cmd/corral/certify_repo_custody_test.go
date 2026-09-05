@@ -197,16 +197,34 @@ func TestWarehouseRowsSHA256UsesTheOneCustodyRule(t *testing.T) {
 		t.Error("a non-source field changed and the hash did not — the hasher is blanking more than the custody set")
 	}
 
-	// With --push-source the source IS what the warehouse receives, so it
-	// must be in the hash.
+	// v3: custody is NOT in the hash. One run writes the same rows to the
+	// ledger entry (source carried) and to a --push warehouse (withheld by
+	// default), and the one statement must verify against both — so the
+	// source fields, and the source_pushed fact about the sink, are never
+	// hashed. The ledger chain's own signature covers the full entry.
 	pushed := base
 	pushed.SourcePushed = true
+	pushed.Scan.SourcePushed = true
 	pushedSHA, err := warehouseRowsSHA256(pushed)
 	if err != nil {
 		t.Fatalf("warehouseRowsSHA256 (--push-source): %v", err)
 	}
-	if pushedSHA == raw {
-		t.Error("--push-source hashed the same as withheld — the source it actually ships is not covered by the statement")
+	if pushedSHA != raw {
+		t.Error("--push-source hashed differently from withheld — the statement would verify against one of the run's sinks and not the other")
+	}
+
+	// v2 statements still hash what their one sink received: with source
+	// pushed, the source is in the hash.
+	v2Pushed, err := warehouseRowsSHA256At(pushed, 2)
+	if err != nil {
+		t.Fatalf("warehouseRowsSHA256At v2: %v", err)
+	}
+	v2Withheld, err := warehouseRowsSHA256At(base, 2)
+	if err != nil {
+		t.Fatalf("warehouseRowsSHA256At v2: %v", err)
+	}
+	if v2Pushed == v2Withheld {
+		t.Error("a v2 statement with --push-source must hash the source it shipped, or older statements stop verifying")
 	}
 }
 

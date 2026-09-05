@@ -57,7 +57,7 @@ func runVerifyAttest(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("verify", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	attestFlag := fs.String("attest", "", "the --attest statement to verify (required) — the plain JSON path (its signed envelope is expected at <path>.dsse.json) or the envelope itself")
-	dbFlag := fs.String("db", "", "also recompute the warehouse rows' hash from this pushed DuckDB (a path, or md:<db> for MotherDuck) and compare it to the statement's claim. Every push of the scan the warehouse holds is tried (each has its own scan_uid); a VACUUMed warehouse can change row order and trip a false ✗ here without tampering, and rows a later `corral scans push` backfilled are reported as such, never as a mismatch")
+	dbFlag := fs.String("db", "", "also recompute the warehouse rows' hash from this pushed DuckDB (a path, or md:<db> for MotherDuck) and compare it to the statement's claim. Every push of the scan the warehouse holds is tried (each has its own scan_uid); a VACUUMed warehouse can change row order and trip a false ✗ here without tampering, and rows a pre-1.0 `corral scans push` backfilled are reported as such, never as a mismatch")
 	rekorIndexFlag := fs.Int64("rekor-index", -1, "also confirm this Rekor log index's entry matches the envelope (default: read the index --db recorded for this scan, if --db was given)")
 	pubFlag := fs.String("pub", "", "hex-encoded Ed25519 public key to verify the signature against (default: the local certify key, CORRALAI_CERTIFY_KEY_FILE)")
 	ledgerFlag := fs.String("ledger", "", "walk a LEDGER DIRECTORY (the JSON entries `--push <dir>/` writes, one per scan, each naming the previous entry's hash and carrying a signature): every entry's hash against its bytes, every link against its predecessor, every signature against --pub or the local certify key. One line per entry; an edited entry, a removed one, or a foreign signature is named. Instead of --attest, not with it")
@@ -381,7 +381,7 @@ func verifyWarehouseRows(dbFlag string, stmt map[string]any, statementSHA string
 		return verifyCheckResult{checked: false, detail: "the statement carries no warehouseRowsSha256 — no --push accompanied the run it was written for"}
 	}
 	if statementSHA == "" && (id.repo == "" || id.scanID == 0) {
-		return verifyCheckResult{checked: false, detail: "the plain statement file is not beside its envelope, and the statement names no repo/scanId to look up instead (scanId 0 is every run pushed without --record, not a key)"}
+		return verifyCheckResult{checked: false, detail: "the plain statement file is not beside its envelope, and the statement names no repo/scanId to look up instead (scanId is 0 on every current statement, not a key)"}
 	}
 
 	db, err := openWarehouse(dbFlag)
@@ -411,11 +411,14 @@ func verifyWarehouseRows(dbFlag string, stmt map[string]any, statementSHA string
 		// this binary reproduces only if no warehouse column has been added
 		// since — said in the mismatch detail rather than left to look like
 		// tampering.
-		hash := warehouseRowsSHA256
-		if id.rowsHashVersion < 2 {
-			hash = warehouseRowsSHA256Legacy
+		var h string
+		var herr error
+		switch {
+		case id.rowsHashVersion < 2:
+			h, herr = warehouseRowsSHA256Legacy(bundle)
+		default:
+			h, herr = warehouseRowsSHA256At(bundle, id.rowsHashVersion)
 		}
-		h, herr := hash(bundle)
 		if herr != nil {
 			return verifyCheckResult{checked: false, detail: fmt.Sprintf("hashing the rows read back: %v", herr)}
 		}

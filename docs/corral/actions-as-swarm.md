@@ -128,9 +128,10 @@ producing its own scan. Nothing coordinates them, and nothing needs to:
   predating it.
 
   **`scan_id` ALONE IS NOT A KEY, and a query that treats it as one will be
-  wrong without erroring.** It is a per-ledger sequence: every local
-  `--record` ledger starts again at 1, so the same small integers recur across
-  every ledger that has ever pushed to your warehouse. Joining
+  wrong without erroring.** It was a per-ledger sequence of the retired
+  local DuckDB record — every such ledger started again at 1, so the same
+  small integers recur across every one that ever pushed to your warehouse —
+  and it is 0 on every row a current corral pushes. Joining
   `corral_mutants` to `corral_scans` on `scan_id` alone — the obvious thing to
   write — silently unions unrelated scans. Observed: a two-file scan that
   pushed 76 mutants reported 170, having absorbed another ledger's scan 1.
@@ -143,7 +144,7 @@ producing its own scan. Nothing coordinates them, and nothing needs to:
   ledgers that both audited the same repository can collide for real. In CI —
   the case this page is about — `run_url` is always present and always
   distinct, so the swarm was never affected. `scan_uid` closes it for
-  everyone else, and needs no `--record` to exist.
+  everyone else, on every row.
 
   `corral_seal` is immune either way: it partitions on `(repo, path)` ordered
   by `ts` and never reads `scan_id` (`internal/auditpush/seal.go`).
@@ -151,8 +152,7 @@ producing its own scan. Nothing coordinates them, and nothing needs to:
   (`internal/auditpush.PushBundle`). Nothing reads-then-writes across jobs,
   so there is no lost-update race to design around.
 - DuckDB's own single-writer lock still applies to a **local file** target
-  (not MotherDuck, which serializes writes server-side) — the same caveat
-  `--record`'s local ledger already carries in the README. Twenty jobs
+  (not MotherDuck, which serializes writes server-side). Twenty jobs
   pushing to one *local* DuckDB path at once will serialize or fail-open on
   the lock; twenty jobs pushing to `md:<db>` do not have this problem.
 

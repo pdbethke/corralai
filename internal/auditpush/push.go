@@ -21,8 +21,9 @@
 //     each carries the sha256 of the signed statement it came from, so a row
 //     traces back to something a third party can verify. Without --attest
 //     there is no statement to point to, and a row's statement_sha256 is
-//     honestly empty rather than fabricated; scan_id is always the ledger's
-//     row id, or 0 when --record was not given.
+//     honestly empty rather than fabricated. scan_id was the retired local
+//     DuckDB record's row id and is 0 on every current row; the identity
+//     that joins the grains is scan_uid.
 //   - THE QUALIFIERS TRAVEL WITH THE NUMBERS. proven_missed = 0 means "nothing
 //     was proven" rather than "the suite is clean" whenever the writer failed
 //     or its test never graded. Aggregation is exactly where that distinction
@@ -189,7 +190,14 @@ type Row struct {
 	// PriorsApplied / PriorDigest mirror scanstore.File's.
 	PriorsApplied *int
 	PriorDigest   string
-	GoalsDerived  int
+	// ComputedAt is when this file's verdict was earned (a reused verdict
+	// keeps the time it was first computed, not the time it was served);
+	// MutantsFrom is the sha256 of the recorded mutant set a --mutants run
+	// replanted, empty for a freshly generated exam. Both mirror
+	// scanstore.File's, carried since the entry became the only record.
+	ComputedAt   *time.Time
+	MutantsFrom  string
+	GoalsDerived int
 	// GoalReused mirrors scanstore.File.GoalReused: *bool, and true is the
 	// only value ever written — "not reused" and "the goal cache was never
 	// asked about this file" are different claims a stored false cannot

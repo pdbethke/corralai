@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/pdbethke/corralai/internal/advpool"
+	"github.com/pdbethke/corralai/internal/auditpush"
 	"github.com/pdbethke/corralai/internal/reposcan"
 	"github.com/pdbethke/corralai/internal/scanstore"
 )
@@ -126,14 +127,10 @@ func TestBuildScanModelCallRows(t *testing.T) {
 }
 
 // TestModelCallsReachTheLedger is the round trip the brief names explicitly:
-// record a scan whose results carry ModelCalls, and ModelCallsForScan must
-// return exactly those rows back.
+// write a scan whose results carry ModelCalls as a ledger entry, and the
+// reader's ModelCallsForScan must return exactly those rows back.
 func TestModelCallsReachTheLedger(t *testing.T) {
-	st, err := scanstore.Open(filepath.Join(t.TempDir(), "scans.duckdb"))
-	if err != nil {
-		t.Fatalf("scanstore.Open: %v", err)
-	}
-	defer st.Close()
+	dir := filepath.Join(t.TempDir(), "ledger")
 
 	results := []reposcan.FileResult{
 		{
@@ -151,10 +148,16 @@ func TestModelCallsReachTheLedger(t *testing.T) {
 	scan := scanstore.Scan{Owner: "o", Repo: "r", Commit: "deadbeef"}
 	files := []scanstore.File{{Path: "pkg/a.go", Lang: "go", Disposition: "audited"}}
 
-	id, err := recordCertifyRepoScan(st, scan, files, nil, calls, nil, nil)
-	if err != nil {
-		t.Fatalf("recordCertifyRepoScan: %v", err)
+	b := buildBundle(scan, 0, files, nil, calls, nil, auditpush.Link{}, false, "o/r", "deadbeef", "", bundleMeta{})
+	if _, err := pushBundle(dir+"/", b); err != nil {
+		t.Fatalf("writing the ledger entry: %v", err)
 	}
+	st, err := openLedgerScans(dir)
+	if err != nil {
+		t.Fatalf("open the ledger: %v", err)
+	}
+	defer st.Close()
+	const id = int64(1)
 
 	got, err := st.ModelCallsForScan(context.Background(), id)
 	if err != nil {

@@ -243,15 +243,17 @@ Usage:
                                   execution-proven adequacy against a run's own mutant set, plus a
                                   safe-to-delete candidate list — populated only by runs opted in via
                                   certify --local --matrix (requires CORRAL_BRAIN — no offline mode)
-  corral scans list|show [flags]  read the scan ledger certify --repo --record writes: list
-                                  shows recent scans, show <id> their per-file dispositions —
-                                  including WHY a proven-gap count of 0 is 0 (writer failed / test
-                                  unsound / tried and missed), which the bare number cannot say.
-                                  show <id> --evidence prints the pool's own authored test, kept
-                                  even when it proved nothing — that is the case worth reading.
-                                  Local DuckDB file, no brain required:
-                                  --db <path> (default $CORRALAI_SCANS_DB, else
-                                  ~/.claude/corralai_scans.duckdb), --limit n, --json
+  corral scans list|show [flags]  read the record certify --repo writes — the ledger directory,
+                                  one signed entry per scan: list shows recent scans (an id is
+                                  the entry's position in the chain, oldest = 1), show <id>
+                                  their per-file dispositions — including WHY a proven-gap
+                                  count of 0 is 0 (writer failed / test unsound / tried and
+                                  missed), which the bare number cannot say. show <id>
+                                  --evidence prints the pool's own authored test, kept even
+                                  when it proved nothing — that is the case worth reading.
+                                  Plain files, no brain, no database:
+                                  --ledger <dir> (default $CORRAL_LEDGER, else ./.corral/ledger),
+                                  --limit n, --json; --db <path> reads a pre-1.0 scans.duckdb
   corral verify --ledger <dir>    walk a ledger directory's chain: every entry's hash against its
                                   bytes, every link against its predecessor, every signature
                                   against --pub or the local certify key; one line per entry,
@@ -287,9 +289,9 @@ Usage:
                                   which counts the live ones only.
                                   Without --repo: the warehouse's latest verdict per path, no
                                   live/stale judgement. Read-only — never writes a row.
-                                  flags: --db <dsn> (default $CORRALAI_SCANS_DB, else
-                                  ~/.claude/corralai_scans.duckdb) --repo <dir> --top n (default 20)
-                                  --json
+                                  flags: --db <dsn> (a ledger directory, a warehouse file or
+                                  md:<db>; default $CORRAL_LEDGER, else ./.corral/ledger)
+                                  --repo <dir> --top n (default 20) --json
   corral demo [flags]             a complete audit of a tiny project, in ONE command: writes a
                                   small Go package with a five-clause password rule and a test
                                   that checks only two of them, then audits it with the real
@@ -522,11 +524,10 @@ func main() {
 		}
 		os.Exit(runMatrix(os.Args[2:], newHTTPMatrixReader(brainURL, token), os.Stdout, os.Stderr))
 	case "scans":
-		// Unlike criticscore/matrix above, this needs NO brain: the scan
-		// ledger is a local DuckDB file `certify --repo --record` writes on
-		// this same machine, so the read side is deliberately offline too.
-		// DuckDB's single-writer lock still applies — openScanStore says so
-		// when a concurrent scan holds the file.
+		// Unlike criticscore/matrix above, this needs NO brain: the record
+		// is the ledger directory `certify --repo` writes on this same
+		// machine (or the branch it is a worktree of), so the read side is
+		// deliberately offline too — plain files, no lock to wait out.
 		os.Exit(runScans(os.Args[2:], openScanStore, os.Stdout, os.Stderr))
 	case "ui":
 		// The same reader `seal` uses, and nothing else — see runUI on why this

@@ -85,26 +85,35 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	minKillRateFlag := fs.String("min-kill-rate", "", "fail the scan (exit 1) if ANY audited file's kill rate is below this value (0.0-1.0 inclusive; a minimum, so a file exactly at the threshold passes). Opt-in: unset by default, so exit codes are unchanged unless this is given. Applies PER FILE, not to the aggregate — a well-tested file must not mask a weak one")
 	noFailFastFlag := fs.Bool("no-fail-fast", false, noFailFastHelp)
 	preflightFlag := fs.Bool("preflight", false, "run the project's test suite once with coverage instrumentation and report which source files it never executes. One extra suite run; reports coverage-grade evidence, not proof")
-	recordFlag := fs.Bool("record", false, "record every file this scan audited or rejected, and why, into the DuckDB scan ledger (default: off). A BOOL here — unlike `certify --local`'s --record, which takes a tape PATH — see --record-db for where the ledger goes. A recording failure never changes the scan's verdict or exit code")
+	recordFlag := fs.Bool("record", false, "RETIRED, accepted and ignored for one release: the record is the ledger directory every scan writes by default (see --ledger), so there is no separate DuckDB scan ledger to record into. `corral scans list|show` read the directory")
 	ledgerFlag := fs.String("ledger", "", "the ledger DIRECTORY this scan's entry is written to and earlier entries are read from as the prior (default: <repo>/.corral/ledger, or $CORRAL_LEDGER). One gzipped JSON entry per scan, naming the previous entry's hash, signed when a certify key is configured — the record, in plain text; DuckDB is its view (`corral verify --ledger`, `seal --db <dir>`, `models rank --db <dir>`). Make the directory a worktree of the corral/ledger branch and a laptop run and an Action run are one writer")
 	noLedgerFlag := fs.Bool("no-ledger", false, "write no ledger entry and read no prior from the default ledger directory (an explicit --prior still applies)")
-	priorFlag := fs.String("prior", "", "what earlier runs already tried, so this run plants DIFFERENT faults: a corral-mutants document (see --record-mutants), a scan ledger (.duckdb, see --record-db), or a directory holding any number of either — a document brings the hunks, a ledger the outcomes, merged per edit. Applied only to a file whose bytes are EXACTLY what the prior was recorded against; a file the prior knows under other bytes gets none, and the report says so. A run handed a prior sits a different exam from one without — the verdict, the ledger and the signed statement carry priorsApplied and the prior's digest, and the digest is in the cache key, so a repeat audit never reads as the tests changing when only the exam did")
+	priorFlag := fs.String("prior", "", "what earlier runs already tried, so this run plants DIFFERENT faults: a corral-mutants document (see --record-mutants), a ledger directory (see --ledger), a pre-1.0 scan ledger (.duckdb), or a directory holding any number of either — a document brings the hunks, a ledger the outcomes, merged per edit. Applied only to a file whose bytes are EXACTLY what the prior was recorded against; a file the prior knows under other bytes gets none, and the report says so. A run handed a prior sits a different exam from one without — the verdict, the ledger and the signed statement carry priorsApplied and the prior's digest, and the digest is in the cache key, so a repeat audit never reads as the tests changing when only the exam did")
 	mutantsFlag := fs.String("mutants", "", "REPLAY a recorded mutant set (see --record-mutants) instead of generating one: every audited file is graded against exactly the mutants in this file, and not one generator model call is made. Mutants are authored by a model, so an ordinary run re-draws the exam every time and two runs of the same audit are not two samples of one measurement — pin the set and a change to anything ELSE becomes measurable. Every selected file must appear in the set with the SAME bytes it was recorded from; a missing file or a changed one is refused (exit 2) up front, never half-replayed. Reads a corral-mutants-2 document, or an older corral-mutants-1 one, whose whole-file mutants still replay byte-for-byte.")
 	recordMutantsFlag := fs.String("record-mutants", "", "write the mutants this scan actually GRADED to this file, as a replayable corral-mutants-2 document — one entry per audited file, each mutant its SEARCH/REPLACE hunk, tied to the sha256 of the source it was derived from. Written even when the scan's gates fail: a red verdict is still a recorded exam. A v2 document re-recorded from a --mutants replay of an older corral-mutants-1 set contains that set's WHOLE-FILE entries, not hunks — the run graded what was recorded, and re-recording it does not manufacture anchors it never had")
 	writerModeFlag := fs.String("writer-mode", "", "how the test-writer attacks a file's survivors: `per-survivor` (the default) makes ONE call per survivor — each carrying the file once as a cacheable shared prefix plus that survivor's diff, each repaired on its own budget and each PROVEN ALONE against its own mutant — or `batched`, the original shape: one call carrying every survivor, one repair budget for the file, one proof pass over all of them. Nothing measured changes between them (a survivor is proven iff an authored test kills it alone and passes on the original, either way); what changes is that one unbuildable test no longer spends the whole file's retries and takes every other survivor down with it. The verdict, the report line, the ledger and the attestation all record which mode earned the numbers. Each survivor's proof in per-survivor mode runs its OWN compliant baseline (a compliant pass plus a canary, per seat), so a file with N survivors pays N baselines where batched paid one: on a repo whose suite takes a minute, prefer --writer-mode batched or expect N baselines' worth of wall clock.")
-	shadowWriterModelFlag := fs.String("shadow-writer-model", "", "CHALLENGER test-writer: a second writer attacks the SAME survivors as the primary, so the two seats' misses can be compared (Jaccard over survivors, Cohen's kappa). Measurement only — it NEVER gates the verdict. OFF unless named. The per-file Jaccard/kappa land in the scan ledger with --record and in a warehouse with --push; the per-mutant attempt rows are not recorded on the repo path")
+	shadowWriterModelFlag := fs.String("shadow-writer-model", "", "CHALLENGER test-writer: a second writer attacks the SAME survivors as the primary, so the two seats' misses can be compared (Jaccard over survivors, Cohen's kappa). Measurement only — it NEVER gates the verdict. OFF unless named. The per-file Jaccard/kappa land in the ledger entry and in a warehouse with --push; the per-mutant attempt rows are not recorded on the repo path")
 
 	var localEndpointFlag stringSlice
 	fs.Var(&localEndpointFlag, "local-endpoint", "place a LOCAL seat on a specific ollama daemon, as <role>=<url> (repeatable; e.g. mutant-generator=http://localhost:11436). A daemon is pinned to a GPU by its own environment, so this is how two models occupy two cards at once — corral selects the DAEMON, never the device. Without it every local seat shares OLLAMA_URL, one card and one VRAM budget")
 
-	recordDSNFlag := fs.String("record-db", "", "path to the scan ledger (default: $CORRALAI_SCANS_DB, else ~/.claude/corralai_scans.duckdb)")
-	noGoalCacheFlag := fs.Bool("no-goal-cache", false, "skip the goal cache — every candidate is re-derived even when a PRIOR scan already derived a goal for the exact same bytes, model and prompt revision. Re-buys a model call per file that a content-addressed cache would otherwise have served for free; use this to isolate goal-derivation variance from a comparison, or on a scan whose operator does not want a goal receipt kept in the ledger at all. The cache lives in the same ledger --record-db names, independent of --record itself")
-	noVerdictCacheFlag := fs.Bool("no-verdict-cache", false, "skip the verdict cache — every candidate is re-audited even when a PRIOR scan already earned a verdict for the exact same bytes, tests, models, engine and substrate. Re-buys the whole audit (generation, grading, the writer) per file; use this to isolate model variance from a comparison, or to redo a measurement the cache would otherwise keep serving. The cache lives in the same ledger --record-db names and is consulted independent of --record itself")
-	noSelectionCacheFlag := fs.Bool("no-selection-cache", false, "skip the selection cache — the ONE instrumented coverage run always executes, even when a PRIOR scan already ran the identical instrumented command over a byte-identical tree. Re-buys a full suite run (the single most expensive measurement a scan makes outside model calls) that a content-addressed cache would otherwise have served for free; use this to isolate selection variance from a comparison, or when the operator does not trust the tree to be unchanged. The cache lives in the same ledger --record-db names, and (like the goal cache) is consulted independent of --record itself; only WRITING a fresh hit requires --record, since a scan_id has to exist to write one against")
+	cacheDSNFlag := fs.String("cache-db", "", "path to corral's local CACHE — derived goals and instrumented test selections a later scan reuses on identical bytes (default: $CORRALAI_CACHE_DB, else ~/.claude/corralai_cache.duckdb). A cache, not a record: nothing a verdict rests on lives only here; deleting it costs a re-derivation and one coverage run, never a fact")
+	fs.StringVar(cacheDSNFlag, "record-db", "", "the old name of --cache-db; accepted for one release")
+	noGoalCacheFlag := fs.Bool("no-goal-cache", false, "skip the goal cache — every candidate is re-derived even when a PRIOR scan already derived a goal for the exact same bytes, model and prompt revision. Re-buys a model call per file that a content-addressed cache would otherwise have served for free; use this to isolate goal-derivation variance from a comparison, or on a scan whose operator does not want a goal receipt kept in the ledger at all. The cache lives in the file --cache-db names")
+	noVerdictCacheFlag := fs.Bool("no-verdict-cache", false, "skip the verdict cache — every candidate is re-audited even when a PRIOR scan already earned a verdict for the exact same bytes, tests, models, engine and substrate. Re-buys the whole audit (generation, grading, the writer) per file; use this to isolate model variance from a comparison, or to redo a measurement the cache would otherwise keep serving. The cache is the ledger directory itself (--ledger): a verdict an earlier entry recorded under the same key is served, so --no-ledger also disables it")
+	noSelectionCacheFlag := fs.Bool("no-selection-cache", false, "skip the selection cache — the ONE instrumented coverage run always executes, even when a PRIOR scan already ran the identical instrumented command over a byte-identical tree. Re-buys a full suite run (the single most expensive measurement a scan makes outside model calls) that a content-addressed cache would otherwise have served for free; use this to isolate selection variance from a comparison, or when the operator does not trust the tree to be unchanged. The cache lives in the file --cache-db names")
 	maxTokensFlag := fs.Int64("max-tokens", 0, "cap on model TOKENS for the whole SCAN, every file, input + output, every seat (0 = no cap). Checked before each call and charged after it, so one in-flight call can overshoot by its own size. Once reached: a generator seat that has not run makes its file ungradable (executor-error naming the cap), a writer or critic seat is skipped and the file flagged as it is for a provider failure — the dev kill rate already measured stands. The cost line says the cap was reached and after how many calls. Corral has bounded mutants, shards and wall clock and never money; this is the money bound")
 	timeoutFlag := fs.Duration("timeout", defaultRunTimeout, "per-file WALL-CLOCK budget, measured from that file's run start — not a no-progress timer. A file still making steady progress is stopped when it exceeds this and banks a needs-review TIMEOUT verdict, keeping its dev kill rate and survivors but losing the PROVING half. Same default and semantics as `certify --local`'s --timeout; raise it for a file with many survivors, which needs the most room and has the most to prove. PER FILE, so it multiplies: a scan of N files with W workers can spend up to (N/W) x this in the worst case, which is what --top and --swarm are for")
 	if err := fs.Parse(flagArgs); err != nil {
 		return 2
+	}
+	// Retired with a POINTER: --record turned on a second, DuckDB-shaped
+	// copy of the record. The ledger directory is the record now, written
+	// by default (see --ledger), so the flag has nothing left to turn on —
+	// said once, up front, so nobody waits out a scan expecting rows that
+	// were never going to be written.
+	if *recordFlag {
+		fmt.Fprintln(stderr, "corral certify --repo: --record is retired and did nothing — the record is the ledger directory (see --ledger), written by default; `corral scans list` reads it")
 	}
 	// Removed with a POINTER, not deprecated into a warning: --scope-tests
 	// picked a file's grading surface by FILENAME convention, which inverted
@@ -575,16 +584,12 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 			ledgerDir = defaultLedgerDir(*repoDir)
 		}
 		ex.wholeSuite = *wholeSuiteFlag
-		// The selection cache lives in the same ledger --record-db names,
-		// independent of --record for its Get half — see --no-selection-cache's
-		// own help text and collectSelection's doc for why writing a hit still
-		// needs a scan id that only --record ever assigns.
+		// The selection cache lives in the file --cache-db names. Its Get
+		// half runs here; a fresh MISS's evidence is written after the scan
+		// (see pendingSelectionPut), once the run it came from is known to
+		// have completed.
 		if !*noSelectionCacheFlag {
-			selCacheDSN := *recordDSNFlag
-			if selCacheDSN == "" {
-				selCacheDSN = defaultScanDSN()
-			}
-			ex.selectionCache = newSelectionLedgerCache(selCacheDSN)
+			ex.selectionCache = newSelectionLedgerCache(cacheDSNOr(*cacheDSNFlag))
 		}
 		ex.presetMutants = presetMutants
 		if mutantRecorder != nil {
@@ -649,27 +654,21 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 
-	// The goal cache lives in the same ledger --record-db names, resolved
-	// here so it is available BEFORE derivation — resolveGoalSource wires
-	// it into the derived path below, and derivation is where the money
-	// goes. Its READ half is unconditional: a fact recorded by an earlier,
-	// RECORDED scan is worth reusing whether or not THIS scan also
-	// records anything. Its WRITE half is gated on *recordFlag, passed to
-	// resolveGoalSource below — see NewCachingGoalSource's doc for why a
-	// scan run without --record must not itself grow the default ledger
-	// with model-derived text about the operator's source just because it
-	// happened to derive a goal.
+	// The goal cache lives in the file --cache-db names, resolved here so
+	// it is available BEFORE derivation — resolveGoalSource wires it into
+	// the derived path below, and derivation is where the money goes. Read
+	// and written unless --no-goal-cache: a derived goal is model text
+	// about the operator's own source, kept in the operator's own cache
+	// file, and the ledger entry every scan writes by default already
+	// carries more than that.
 	var goalCacheDSN string
 	var goalStore reposcan.GoalCacheStore
 	if !*noGoalCacheFlag {
-		goalCacheDSN = *recordDSNFlag
-		if goalCacheDSN == "" {
-			goalCacheDSN = defaultScanDSN()
-		}
+		goalCacheDSN = cacheDSNOr(*cacheDSNFlag)
 		goalStore = newGoalLedgerCache(goalCacheDSN)
 	}
 
-	gs, disclosure, code := resolveGoalSource(stderr, *repoDir, *goalsPath, *deriveModel, seatReg.deriveEndpoint(), *dryRun, len(selected), certifyRepoDeriver, goalStore, *noGoalCacheFlag, *recordFlag)
+	gs, disclosure, code := resolveGoalSource(stderr, *repoDir, *goalsPath, *deriveModel, seatReg.deriveEndpoint(), *dryRun, len(selected), certifyRepoDeriver, goalStore, *noGoalCacheFlag, !*noGoalCacheFlag)
 	if code != 0 {
 		return code
 	}
@@ -765,8 +764,8 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 			// about to start — so the announce line can say "reused" instead of
 			// "running" for a run that is never going to happen.
 			if !*wholeSuiteFlag {
-				if reusedFrom, hit := ex.selectionCachePeek(selectionSources); hit {
-					fmt.Fprintf(stdout, "  selection: reused — tree unchanged since scan %d\n", reusedFrom)
+				if _, hit := ex.selectionCachePeek(selectionSources); hit {
+					fmt.Fprintln(stdout, "  selection: reused — tree unchanged since an earlier scan (cached evidence)")
 				} else {
 					fmt.Fprintln(stdout, "  selection: running the suite once with per-test coverage instrumentation…")
 				}
@@ -1012,7 +1011,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		if line := goalCacheDisclosureLine(disclosure, *deriveModel, version, fresh, reused); line != "" && line != disclosure {
 			fmt.Fprintln(stdout, line)
 		}
-		if line := goalReceiptLine(goalCacheDSN, *recordFlag, fresh); line != "" {
+		if line := goalReceiptLine(goalCacheDSN, !*noGoalCacheFlag, fresh); line != "" {
 			fmt.Fprintln(stdout, line)
 		}
 	}
@@ -1085,20 +1084,6 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stderr, "corral certify --repo: %v\n", argvErr)
 			return 2
 		}
-		// --record is silently INERT on this path, never silently ignored:
-		// a dry run computes and prints a complete disposition for every
-		// file — precisely what the ledger exists to keep — but it never
-		// runs a single job (see the comment above), so there is nothing
-		// audited or execution-rejected to record yet; a --record write
-		// here would either record nothing real or misrepresent every
-		// still-pending job as a decided disposition. Silence was the one
-		// option ruled out: an operator who passed --record and sees
-		// neither a ledger write nor an explanation would reasonably
-		// assume either that the flag just did nothing, or worse, that
-		// it worked.
-		if *recordFlag {
-			fmt.Fprintln(stderr, "corral certify --repo: --record ignored — --dry-run performs no audit, so there is nothing yet to record")
-		}
 		if *jsonOut {
 			inv := buildScanInventoryAt(*repoDir, filepath.Base(*repoDir), totalFiles, rankSignal, cands, len(jobs), excl)
 			if err := writeScanInventory(jsonSink, inv); err != nil {
@@ -1136,45 +1121,6 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		}
 		fmt.Fprintf(stderr, "corral certify --repo: %v\n", argvErr)
 		return 2
-	}
-
-	// The ledger is opened PER OPERATION, never held across the scan.
-	//
-	// DuckDB is single-writer per file. This used to open one handle before
-	// the scan and hold it until the final write, so for an entire hours-long
-	// audit a concurrent `corral scans` against the same (default) DSN failed
-	// with "Conflicting lock is held" — the record of the audits already paid
-	// for went dark for the duration of the next one. Now the verdict cache
-	// opens and closes around each lookup (see ledgerCache.withStore) and the
-	// recording sequence below opens and closes around its own writes.
-	//
-	// The DSN is still RESOLVED here, and probed once by opening and
-	// immediately closing it: an unopenable ledger must be reported, and
-	// reporting it at the end of a paid scan (where it was always reported)
-	// is too late to be useful without also saying so now. --record-db alone
-	// still records nothing, silently — that behaviour is gated entirely by
-	// *recordFlag, unchanged.
-	//
-	// An unopenable DSN does not fail the scan: scanStoreErr is carried
-	// forward and reported in the --record block at the bottom, in the same
-	// place and the same words a write failure has always been reported.
-	var ledgerDSN string
-	var scanStoreErr error
-	if *recordFlag {
-		ledgerDSN = *recordDSNFlag
-		if ledgerDSN == "" {
-			ledgerDSN = defaultScanDSN()
-		}
-		st, err := scanstore.Open(ledgerDSN)
-		if err != nil {
-			scanStoreErr = err
-			// A DSN that cannot be opened must not be handed to the cache:
-			// every lookup would pay an open that cannot succeed.
-			ledgerDSN = ""
-		} else if cerr := st.Close(); cerr != nil {
-			scanStoreErr = cerr
-			ledgerDSN = ""
-		}
 	}
 
 	workers, swarmReadout := resolveScanWorkers(*swarmFlag, *substrateFlag)
@@ -1220,18 +1166,20 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// ex is non-nil here: it is constructed on every non-dry-run path above,
 	// and the dry run returned before this point.
 	//
-	// The cache is addressed by DSN and opens the ledger only for the instant
-	// of a lookup: newLedgerCache("") (no --record, or an unopenable DSN)
-	// misses every key, so this needs no extra guard — the cache is simply
-	// inactive for the run.
+	// The verdict cache IS the ledger directory: every entry written there
+	// carries each audited file's verdict under its cache key, and the
+	// cache is those entries, read once. --no-ledger reads nothing (the
+	// scan will also write nothing there), --no-verdict-cache reads nothing,
+	// and an unreadable directory is a miss on every key, said once on
+	// stderr — the cache is simply inactive for the run.
 	auditCtx, stopSignals := auditContext(stderr)
 	defer stopSignals()
 
-	verdictCacheDSN := ledgerDSN
-	if *noVerdictCacheFlag {
-		verdictCacheDSN = ""
+	verdictCacheDir := ledgerDir
+	if *noVerdictCacheFlag || *noLedgerFlag {
+		verdictCacheDir = ""
 	}
-	results = reposcan.Scan(auditCtx, jobs, ex, newLedgerCache(verdictCacheDSN), workers)
+	results = reposcan.Scan(auditCtx, jobs, ex, newLedgerCache(verdictCacheDir, stderr), workers)
 	rep := reposcan.Aggregate(*owner, cfg.Repo, *commit, totalFiles, len(cands), results, excl)
 
 	// The diff selected zero candidates: a docs-only (or no-paired-test-only)
@@ -1290,15 +1238,15 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		return m
 	}
 
-	// End-of-scan sequence: ledger record → attestation → push, in that
-	// order, because each later step needs something the one before it
-	// produces. scanID is the ledger's row id (0 when --record was not
-	// given, or when the ledger write failed — 0 is the honest value
-	// either way, never a fabricated id). statementSHA256 is the sha256 of
-	// the --attest statement writeAuditStatement wrote (empty when --attest
-	// was not given, or its write failed). Both are folded into the rows
-	// --push writes, which is why push must run last: it is the only step
-	// with nothing later depending on it.
+	// End-of-scan sequence: attestation → transparency → the ledger entry
+	// → push, in that order, because each later step needs something the
+	// one before it produces. statementSHA256 is the sha256 of the --attest
+	// statement writeAuditStatement wrote (empty when --attest was not
+	// given, or its write failed); the Rekor receipt exists only after the
+	// upload. Both are folded into the entry and the rows --push writes,
+	// which is why those run last. scanID is always 0: it was the retired
+	// local DuckDB record's row id, and the entry's identity is its
+	// scan_uid (derived, checkable) and its hash in the chain.
 	//
 	// Every one of the three writes below is FAIL-OPEN, deliberately, and
 	// this is the one place in corral where uncertainty must not fail
@@ -1311,12 +1259,12 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// exists to head off. Placed after `code` is computed, and calling
 	// nothing that can panic into the exit path below.
 	//
-	// The ledger rows are built ONCE, here, whether or not --record was
-	// given: they are also what the attestation hashes and what --push
-	// writes. Rebuilding them from the report for the push (which is what
-	// this code used to do) is how the two records came to disagree — the
-	// report path carried only the files a scan AUDITED, so the warehouse
-	// never held a row for the files corral refused.
+	// The record's rows are built ONCE, here: they are the ledger entry,
+	// what the attestation hashes and what --push writes. Rebuilding them
+	// from the report for the push (which is what this code used to do) is
+	// how two records came to disagree — the report path carried only the
+	// files a scan AUDITED, so the warehouse never held a row for the files
+	// corral refused.
 	// Built from the same per-file ModelCalls the ledger's scan_model_calls
 	// rows come from (modelCallRows, below) — never a second measurement, so
 	// the scan header's totals and the per-role grain can never disagree.
@@ -1387,57 +1335,24 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// file has finished.
 	eventRows := scanEventRows(ex)
 
-	var scanID int64
-	if *recordFlag {
-		if scanStoreErr != nil {
-			// The open failure happened earlier (above, before the scan) but
-			// is reported HERE — the same place and the same words a write
-			// failure has always been reported in, so this is not a new
-			// failure surface, just the pre-existing one's error arriving
-			// from an earlier point in the run.
-			fmt.Fprintf(stderr, "corral certify --repo: scan ledger NOT written: %v\n", scanStoreErr)
-		} else {
-			// Opened for THIS write and closed immediately: the whole point
-			// of not holding the handle across the scan (see the DSN
-			// resolution above) is that the ledger is readable by anything
-			// else in between.
-			st, err := scanstore.Open(ledgerDSN)
-			if err != nil {
-				fmt.Fprintf(stderr, "corral certify --repo: scan ledger NOT written: %v\n", err)
-			} else {
-				id, rerr := recordCertifyRepoScan(st, scan, files, mutants, modelCallRows, eventRows, stderr)
-				// A fresh MISS's raw evidence is held on the executor (see
-				// pendingSelectionPut's own doc): this is the earliest point a
-				// scan id exists to Put it against, on the SAME handle just
-				// used to record the scan — opening a second one here would
-				// pay DuckDB's single-writer lock twice for one write. Best
-				// effort, like every write in this fail-open block: a lost
-				// selection-cache row costs the NEXT scan an instrumented
-				// run, never THIS scan's exit code.
-				if rerr == nil && ex != nil && ex.pendingSelectionPut != nil {
-					p := ex.pendingSelectionPut
-					if perr := st.SelectionCachePut(context.Background(), p.TreeDigest, p.CmdDigest, p.Plugin, p.Substrate, p.Raw, "", id); perr != nil {
-						fmt.Fprintf(stderr, "corral certify --repo: scan %d recorded, but the selection cache was NOT written: %v\n", id, perr)
-					}
-				}
-				if cerr := st.Close(); cerr != nil && rerr == nil {
-					fmt.Fprintf(stderr, "corral certify --repo: scan %d recorded, but closing the ledger failed: %v\n", id, cerr)
-				}
-				if rerr != nil {
-					fmt.Fprintf(stderr, "corral certify --repo: scan ledger NOT written: %v\n", rerr)
-				} else {
-					scanID = id
-				}
-			}
+	const scanID int64 = 0
+	// A fresh selection MISS's raw evidence is held on the executor (see
+	// pendingSelectionPut's own doc) and written to the cache only now,
+	// once the run that produced it has completed. Best effort, like every
+	// write from here on: a lost cache row costs the NEXT scan an
+	// instrumented run, never THIS scan's exit code.
+	if ex != nil && ex.pendingSelectionPut != nil && ex.selectionCache != nil {
+		p := ex.pendingSelectionPut
+		if perr := ex.selectionCache.SelectionCachePut(context.Background(), p.TreeDigest, p.CmdDigest, p.Plugin, p.Substrate, p.Raw, "", scanID); perr != nil {
+			fmt.Fprintf(stderr, "corral certify --repo: the selection cache was NOT written: %v\n", perr)
 		}
 	}
 
-	// The bundle: the ledger rows, mapped to the warehouse's shape, ONCE.
-	// Built here — after the ledger write, so it carries the scan id, and
-	// before the attestation, so the statement can sign its hash — and used
-	// by both of the steps that follow. Built even when neither --attest nor
-	// --push was given, which costs a few slices and keeps the two paths from
-	// diverging.
+	// The bundle: the record's rows in the warehouse's shape, ONCE. Built
+	// before the attestation, so the statement can sign its hash, and used
+	// by every step that follows: the statement, the ledger entry, and
+	// --push. Built even when neither --attest nor --push was given, which
+	// costs a few slices and keeps the paths from diverging.
 	//
 	// A failure to resolve the repo/commit is NOT fatal here: it only means
 	// no bundle can be built, and both consumers already refuse for
@@ -1474,17 +1389,6 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 			}
 		} else {
 			statementSHA256 = sha
-			// Close the loop the ordering opens: the statement had to be
-			// written after the scan row (it names the scan id), so the row
-			// went in with this column empty. Stamp it now, or the local
-			// ledger permanently disagrees with the pushed row about whether
-			// this scan produced a statement. Fail-open like every other
-			// write in this sequence.
-			if scanID != 0 && ledgerDSN != "" {
-				if uerr := stampStatementSHA256(ledgerDSN, scanID, sha); uerr != nil {
-					fmt.Fprintf(stderr, "corral certify --repo: scan %d recorded, but its statement_sha256 was NOT stamped: %v\n", scanID, uerr)
-				}
-			}
 			bundle.Scan.StatementSHA256 = sha
 			fmt.Fprintf(stdout, "  wrote the audit statement to %s — attest it with actions/attest, verify with `gh attestation verify`\n", *attestFlag)
 
@@ -1505,15 +1409,6 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 					logIndex := entry.LogIndex
 					bundle.Scan.RekorLogIndex = &logIndex
 					bundle.Scan.RekorUUID = entry.UUID
-					// Same close-the-loop reasoning as statement_sha256
-					// above: the receipt only exists after the ledger row
-					// does, so it has to be stamped on rather than written
-					// at Record time.
-					if scanID != 0 && ledgerDSN != "" {
-						if uerr := stampRekorReceipt(ledgerDSN, scanID, &logIndex, entry.UUID); uerr != nil {
-							fmt.Fprintf(stderr, "corral certify --repo: scan %d recorded, but its rekor receipt was NOT stamped: %v\n", scanID, uerr)
-						}
-					}
 				}
 			}
 		}
@@ -1552,6 +1447,15 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	if !*noLedgerFlag && subjErr == nil {
 		entryBundle := bundle
 		entryBundle.Link = auditpush.Link{ScanID: scanID, StatementSHA256: statementSHA256}
+		// The entry carries the source it holds — the verdict JSON and the
+		// authored test — because it IS the record: the verdict cache
+		// reads the verdict back from it, and `scans show --evidence`
+		// prints the test. It lives beside the code it quotes, in the
+		// audited repo's own directory or branch, so nothing leaves the
+		// box that was not already in it. --push to a warehouse keeps its
+		// own custody switch (--push-source) and withholds by default.
+		entryBundle.SourcePushed = true
+		entryBundle.Scan.SourcePushed = true
 		if c, lerr := pushBundle(ledgerDir+"/", entryBundle); lerr != nil {
 			fmt.Fprintf(stderr, "corral certify --repo: writing the ledger entry to %s: %v\n", ledgerDir, lerr)
 		} else if c.Total() > 0 {
@@ -1580,13 +1484,6 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 			case c.Total() > 0:
 				fmt.Fprintf(stdout, "  pushed %d scan, %d file(s), %d mutant(s), %d model-call row(s), %d event(s) to %s\n",
 					c.Scans, c.Files, c.Mutants, c.Calls, c.Events, *pushFlag)
-				// Now it is a fact. Same fail-open write as the statement
-				// hash above.
-				if pushSource && scanID != 0 && ledgerDSN != "" {
-					if uerr := stampSourcePushed(ledgerDSN, scanID); uerr != nil {
-						fmt.Fprintf(stderr, "corral certify --repo: scan %d recorded, but its source_pushed was NOT stamped: %v\n", scanID, uerr)
-					}
-				}
 			}
 		}
 	}
@@ -5159,16 +5056,25 @@ func writeAuditStatement(path, repoDir string, r reposcan.RepoReport, models map
 // from your warehouse". Reproducing it needs the bundle, which means the
 // pushing side. Do not upgrade the claim in a doc or a README without first
 // making the two conversions above lossless.
-func prepareRowsForHash(b auditpush.Bundle) (auditpush.Bundle, error) {
-	// The hash must cover what the WAREHOUSE receives, not what this process
-	// happens to hold. Without --push-source the writer stores SQL NULL for
-	// the source columns, so hashing them here would sign a number no
-	// verifier could ever reproduce from the rows they can actually see — a
-	// cross-check that never checks out is worse than none.
+func prepareRowsForHash(b auditpush.Bundle, version int) (auditpush.Bundle, error) {
+	// The source columns are NEVER in the hash (v3): one run writes its rows
+	// to more than one sink under more than one custody setting — the
+	// ledger entry in the repo carries the verdict JSON and the authored
+	// test (the verdict cache reads them back), a --push to a warehouse
+	// withholds them unless --push-source — and one statement can only
+	// name one set of bytes. So the statement binds the MEASUREMENT rows,
+	// identical in every sink, and the ledger chain's own signature binds
+	// the full entry, source included. source_pushed goes with them: it is
+	// a fact about the sink, not the run.
 	//
-	// THE SAME FUNCTION THE WRITER CALLS (auditpush.PushBundle runs it too).
-	// This rule used to be spelled out twice, and two copies of a custody set
-	// is one copy that gets a field added to it and one that does not.
+	// A v2 statement hashed what its ONE sink received: blanked unless the
+	// run pushed source. Reproduced exactly, from the same custody function
+	// the writer calls, so a v2 statement keeps verifying against the
+	// warehouse it was pushed to.
+	if version >= 3 {
+		b.SourcePushed = false
+		b.Scan.SourcePushed = false
+	}
 	auditpush.BlankUnpushedSource(&b)
 	// And the SAME canonical form the writer stores — timestamps at the
 	// warehouse's precision and zone, NULLs where the writer refuses a value.
@@ -5221,7 +5127,13 @@ func prepareRowsForHash(b auditpush.Bundle) (auditpush.Bundle, error) {
 }
 
 func warehouseRowsSHA256(b auditpush.Bundle) (string, error) {
-	prepared, err := prepareRowsForHash(b)
+	return warehouseRowsSHA256At(b, WarehouseRowsHashVersion)
+}
+
+// warehouseRowsSHA256At hashes the way a given statement version's signer
+// did; the verifier picks the version from the statement.
+func warehouseRowsSHA256At(b auditpush.Bundle, version int) (string, error) {
+	prepared, err := prepareRowsForHash(b, version)
 	if err != nil {
 		return "", err
 	}
@@ -5240,15 +5152,18 @@ func warehouseRowsSHA256(b auditpush.Bundle) (string, error) {
 }
 
 // WarehouseRowsHashVersion is the version of warehouseRowsSHA256's form a
-// statement records, so a verifier hashes the rows the way the signer did.
-const WarehouseRowsHashVersion = 2
+// statement records, so a verifier hashes the rows the way the signer did:
+// 1 = full struct JSON; 2 = canonical sparse JSON, source blanked unless
+// pushed; 3 = canonical sparse JSON, source and source_pushed never in the
+// hash (see prepareRowsForHash).
+const WarehouseRowsHashVersion = 3
 
 // warehouseRowsSHA256Legacy is version 1: the full JSON of the bundle as
 // THIS binary's structs define it — kept so a v1 statement can still be
 // tried, with the caveat printed that it is reproducible only by a binary
 // with the same struct shape as the one that pushed it.
 func warehouseRowsSHA256Legacy(b auditpush.Bundle) (string, error) {
-	prepared, err := prepareRowsForHash(b)
+	prepared, err := prepareRowsForHash(b, 1)
 	if err != nil {
 		return "", err
 	}
@@ -5268,55 +5183,6 @@ func reusedVerdictTime(f reposcan.WeakFile) string {
 		return ""
 	}
 	return f.VerdictComputedAt.UTC().Format(time.RFC3339)
-}
-
-// stampStatementSHA256 opens the ledger, stamps one scan's statement hash,
-// and closes it again — one more operation-scoped handle, for the same
-// reason as every other one in this function: DuckDB is single-writer per
-// file, and a reader must never have to wait out an audit to see the audits
-// that came before it.
-func stampStatementSHA256(dsn string, scanID int64, sha string) error {
-	st, err := scanstore.Open(dsn)
-	if err != nil {
-		return err
-	}
-	if uerr := st.SetStatementSHA256(context.Background(), scanID, sha); uerr != nil {
-		_ = st.Close()
-		return uerr
-	}
-	return st.Close()
-}
-
-// stampSourcePushed mirrors stampStatementSHA256: the push is the last
-// step, so "did source leave the box on this run" is only known after the
-// scan row exists.
-func stampSourcePushed(dsn string, scanID int64) error {
-	st, err := scanstore.Open(dsn)
-	if err != nil {
-		return err
-	}
-	if uerr := st.SetSourcePushed(context.Background(), scanID, true); uerr != nil {
-		_ = st.Close()
-		return uerr
-	}
-	return st.Close()
-}
-
-// stampRekorReceipt mirrors stampStatementSHA256: open the ledger, stamp one
-// scan's --transparency receipt, close it again. logIndex is passed through
-// as the pointer it already is — nil never reaches here (the caller only
-// calls this after a successful upload), but the store's own SetRekorReceipt
-// keeps the nil-means-not-uploaded contract regardless of the caller.
-func stampRekorReceipt(dsn string, scanID int64, logIndex *int64, uuid string) error {
-	st, err := scanstore.Open(dsn)
-	if err != nil {
-		return err
-	}
-	if uerr := st.SetRekorReceipt(context.Background(), scanID, logIndex, uuid); uerr != nil {
-		_ = st.Close()
-		return uerr
-	}
-	return st.Close()
 }
 
 // pushBundle appends one recorded scan, at all five grains, to a warehouse

@@ -6,7 +6,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -24,6 +23,7 @@ import (
 	_ "github.com/marcboeker/go-duckdb/v2"
 
 	"github.com/pdbethke/corralai/internal/advpool"
+	"github.com/pdbethke/corralai/internal/auditpush"
 	"github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/reposcan"
 	"github.com/pdbethke/corralai/internal/sandbox"
@@ -454,38 +454,40 @@ func TestCertifyRepoRecordFailsOpen(t *testing.T) {
 	mustWrite(t, goals, `{"pkg/a.go": "must not panic"}`)
 
 	// flagArgs and checkArgv (everything after "--") are split BEFORE flag
-	// parsing (splitCertifyArgs): --record/--record-db must be inserted
-	// before the "--", never appended after it, or they become arguments to
-	// the "false" check command instead of flags to this command.
+	// parsing (splitCertifyArgs): --ledger must be inserted before the
+	// "--", never appended after it, or it becomes an argument to the
+	// "false" check command instead of a flag to this command.
 	flagArgs := []string{
 		"--repo", root, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant, "--critic-model", "off", "--diff-base", base, "--goals", goals,
 		"--substrate", substrateWorkspace,
 	}
 	checkCmd := []string{"--", "false"}
 
-	var outNoRecord, errNoRecord bytes.Buffer
-	wantCode := runCertifyRepo(append(append([]string{}, flagArgs...), checkCmd...), &outNoRecord, &errNoRecord)
+	var outNoLedger, errNoLedger bytes.Buffer
+	wantCode := runCertifyRepo(append(append(append([]string{}, flagArgs...), "--no-ledger"), checkCmd...), &outNoLedger, &errNoLedger)
 	if wantCode != 1 {
-		t.Fatalf("fixture precondition failed: baseline run exited %d, want 1 (COULD-NOT-GRADE) — this test cannot tell a preserved exit code from a hard-coded 0 unless the baseline itself is non-zero: stdout=%s stderr=%s", wantCode, outNoRecord.String(), errNoRecord.String())
+		t.Fatalf("fixture precondition failed: baseline run exited %d, want 1 (COULD-NOT-GRADE) — this test cannot tell a preserved exit code from a hard-coded 0 unless the baseline itself is non-zero: stdout=%s stderr=%s", wantCode, outNoLedger.String(), errNoLedger.String())
 	}
 
-	// A path inside a directory that was never created: scanstore.Open must
-	// fail (DuckDB cannot create the parent directory for its file).
-	badDSN := filepath.Join(root, "no-such-directory", "scans.duckdb")
-	recordArgs := append(append([]string{}, flagArgs...), "--record", "--record-db", badDSN)
-	recordArgs = append(recordArgs, checkCmd...)
+	// A ledger directory under a path that is a regular FILE: the entry
+	// writer's MkdirAll must fail, and nothing can be written there.
+	blocker := filepath.Join(root, "blocker")
+	mustWrite(t, blocker, "not a directory\n")
+	badDir := filepath.Join(blocker, "ledger")
+	ledgerArgs := append(append([]string{}, flagArgs...), "--ledger", badDir)
+	ledgerArgs = append(ledgerArgs, checkCmd...)
 
 	var out, errb bytes.Buffer
-	code := runCertifyRepo(recordArgs, &out, &errb)
+	code := runCertifyRepo(ledgerArgs, &out, &errb)
 
 	if code != wantCode {
-		t.Fatalf("a failed --record changed the exit code: got %d, want %d (identical to the same scan without --record)", code, wantCode)
+		t.Fatalf("a failed ledger write changed the exit code: got %d, want %d (identical to the same scan with --no-ledger)", code, wantCode)
 	}
-	if !strings.Contains(errb.String(), "scan ledger NOT written") {
+	if !strings.Contains(errb.String(), "writing the ledger entry to "+badDir) {
 		t.Errorf("want a loud fail-open line on stderr, got: %q", errb.String())
 	}
-	if _, statErr := os.Stat(badDSN); statErr == nil {
-		t.Errorf("the unopenable DSN's parent directory does not exist, yet a file was created at %s", badDSN)
+	if entries, _ := auditpush.ReadLedgerDir(badDir); len(entries) != 0 {
+		t.Errorf("an unwritable ledger directory has %d entries", len(entries))
 	}
 }
 
@@ -519,18 +521,18 @@ func TestCertifyRepoRecordRoundTripsReportedFiles(t *testing.T) {
 	goals := filepath.Join(root, "goals.json")
 	mustWrite(t, goals, `{"pkg/a.go": "must not panic"}`)
 
-	dsn := filepath.Join(t.TempDir(), "scans.duckdb")
+	ledgerDir := filepath.Join(t.TempDir(), "ledger")
 	var out, errb bytes.Buffer
 	code := runCertifyRepo([]string{
 		"--repo", root, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant, "--critic-model", "off", "--diff-base", base, "--goals", goals,
 		"--substrate", substrateWorkspace,
-		"--record", "--record-db", dsn,
+		"--ledger", ledgerDir,
 	}, &out, &errb)
 	if code != 0 {
 		t.Fatalf("exit %d: stdout=%s stderr=%s", code, out.String(), errb.String())
 	}
 	if errb.Len() != 0 {
-		t.Fatalf("recording must not fail on a writable DSN, stderr=%q", errb.String())
+		t.Fatalf("the ledger write must not fail on a writable directory, stderr=%q", errb.String())
 	}
 
 	re := regexp.MustCompile(`excluded (\S+) \((\S+)\)`)
@@ -539,18 +541,19 @@ func TestCertifyRepoRecordRoundTripsReportedFiles(t *testing.T) {
 		t.Fatalf("fixture did not print the exclusion lines this test needs (want >= 3, got %d):\n%s", len(matches), out.String())
 	}
 
-	db, err := sql.Open("duckdb", dsn)
+	// Read back through the VIEW, as any DuckDB reader would.
+	db, err := auditpush.LoadDir(ledgerDir)
 	if err != nil {
-		t.Fatalf("open recorded ledger: %v", err)
+		t.Fatalf("load the ledger: %v", err)
 	}
 	defer db.Close()
 
 	for _, m := range matches {
 		path, wantReason := m[1], m[2]
 		var disposition, gotReason string
-		row := db.QueryRow(`SELECT disposition, reason FROM scan_files WHERE path = ?`, path)
+		row := db.QueryRow(`SELECT disposition, reason FROM corral_audits WHERE path = ?`, path)
 		if err := row.Scan(&disposition, &gotReason); err != nil {
-			t.Fatalf("no scan_files row for %s (printed as excluded with reason %s): %v", path, wantReason, err)
+			t.Fatalf("no corral_audits row for %s (printed as excluded with reason %s): %v", path, wantReason, err)
 		}
 		if disposition != "rejected" {
 			t.Errorf("%s recorded with disposition %q, want %q", path, disposition, "rejected")
@@ -681,12 +684,12 @@ func TestCertifyRepoRecordCoversExecutionStageRejections(t *testing.T) {
 	goals := filepath.Join(root, "goals.json")
 	mustWrite(t, goals, `{"pkg/a.go": "must not panic"}`)
 
-	dsn := filepath.Join(t.TempDir(), "scans.duckdb")
+	ledgerDir := filepath.Join(t.TempDir(), "ledger")
 	var out, errb bytes.Buffer
 	code := runCertifyRepo([]string{
 		"--repo", root, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant, "--critic-model", "off", "--diff-base", base, "--goals", goals,
 		"--substrate", substrateWorkspace,
-		"--record", "--record-db", dsn,
+		"--ledger", ledgerDir,
 		"--", "false",
 	}, &out, &errb)
 	if code != 1 {
@@ -696,25 +699,25 @@ func TestCertifyRepoRecordCoversExecutionStageRejections(t *testing.T) {
 		t.Fatalf("fixture precondition failed: want the baseline-failed shape:\n%s", out.String())
 	}
 	if errb.Len() != 0 {
-		t.Fatalf("recording must not fail on a writable DSN, stderr=%q", errb.String())
+		t.Fatalf("the ledger write must not fail on a writable directory, stderr=%q", errb.String())
 	}
 
-	db, err := sql.Open("duckdb", dsn)
+	db, err := auditpush.LoadDir(ledgerDir)
 	if err != nil {
-		t.Fatalf("open recorded ledger: %v", err)
+		t.Fatalf("load the ledger: %v", err)
 	}
 	defer db.Close()
 
-	var scanID int64
+	var scanUID string
 	var totalFiles int
-	if err := db.QueryRow(`SELECT id, total_files FROM scans ORDER BY id DESC LIMIT 1`).Scan(&scanID, &totalFiles); err != nil {
+	if err := db.QueryRow(`SELECT scan_uid, total_files FROM corral_scans ORDER BY ts DESC LIMIT 1`).Scan(&scanUID, &totalFiles); err != nil {
 		t.Fatalf("select the recorded scan header: %v", err)
 	}
 
 	var disposition, reason string
-	row := db.QueryRow(`SELECT disposition, reason FROM scan_files WHERE scan_id = ? AND path = ?`, scanID, "pkg/a.go")
+	row := db.QueryRow(`SELECT disposition, reason FROM corral_audits WHERE scan_uid = ? AND path = ?`, scanUID, "pkg/a.go")
 	if err := row.Scan(&disposition, &reason); err != nil {
-		t.Fatalf("pkg/a.go — the ONE file this scan actually ran a check command against — has no scan_files row: %v (this is the exact regression the review caught: execution-stage rejections were recorded nowhere)", err)
+		t.Fatalf("pkg/a.go — the ONE file this scan actually ran a check command against — has no corral_audits row: %v (this is the exact regression the review caught: execution-stage rejections were recorded nowhere)", err)
 	}
 	if disposition != "rejected" || reason != reposcan.ReasonBaselineFailed {
 		t.Errorf("pkg/a.go recorded as disposition=%q reason=%q, want rejected/%s", disposition, reason, reposcan.ReasonBaselineFailed)
@@ -732,12 +735,12 @@ func TestCertifyRepoRecordCoversExecutionStageRejections(t *testing.T) {
 	// which was wrong, and nothing caught it because the only assertion was
 	// the reconciliation check, which passes for any matching pair.
 	if totalFiles != 4 {
-		t.Fatalf("scans.total_files = %d, want 4 (fixture precondition — see the comment above)", totalFiles)
+		t.Fatalf("corral_scans.total_files = %d, want 4 (fixture precondition — see the comment above)", totalFiles)
 	}
 
 	var rowCount int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM scan_files WHERE scan_id = ?`, scanID).Scan(&rowCount); err != nil {
-		t.Fatalf("count scan_files: %v", err)
+	if err := db.QueryRow(`SELECT COUNT(*) FROM corral_audits WHERE scan_uid = ?`, scanUID).Scan(&rowCount); err != nil {
+		t.Fatalf("count corral_audits: %v", err)
 	}
 	// This scan now records exactly 4 rows: a.go (rejected/baseline-failed),
 	// a_test.go (rejected/is-test), README.md (rejected/no-language),
@@ -778,12 +781,14 @@ func TestCertifyRepoRecordTopReflectsTheEffectiveBound(t *testing.T) {
 	}
 	goals := filepath.Join(root, "goals.json")
 	mustWrite(t, goals, string(goalsJSON))
+	gitRun := gitCmd(t, root)
+	gitRun("init", "-q")
+	gitRun("add", ".")
+	gitRun("commit", "-q", "-m", "base", "--no-gpg-sign")
 
-	dsn := filepath.Join(t.TempDir(), "scans.duckdb")
 	var out, errb bytes.Buffer
 	code := runCertifyRepo([]string{
 		"--repo", root, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant, "--critic-model", "off", "--goals", goals, "--dry-run",
-		"--record", "--record-db", dsn,
 	}, &out, &errb)
 	if code != 0 {
 		t.Fatalf("exit %d: stdout=%s stderr=%s", code, out.String(), errb.String())
@@ -792,50 +797,39 @@ func TestCertifyRepoRecordTopReflectsTheEffectiveBound(t *testing.T) {
 		t.Fatalf("fixture precondition failed: want all 3 goaled candidates unbounded (no --top given):\n%s", out.String())
 	}
 
-	// --dry-run never reaches the record block (see the fix for the
-	// sibling finding below), so this test drives a real
-	// (--substrate workspace, no jail/model-call-needed) run instead —
+	// --dry-run writes no entry (it audits nothing), so this test drives a
+	// real (--substrate workspace, no jail/model-call-needed) run instead —
 	// baseline fails deterministically via `-- false`, so nothing is ever
 	// actually audited, but the SELECTION (all 3, unbounded) already
-	// happened before any job ran, which is what scans.top records.
-	dsn2 := filepath.Join(t.TempDir(), "scans2.duckdb")
+	// happened before any job ran, which is what the entry's top records.
+	ledgerDir := filepath.Join(t.TempDir(), "ledger")
 	var out2, errb2 bytes.Buffer
 	code2 := runCertifyRepo([]string{
 		"--repo", root, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant, "--critic-model", "off", "--goals", goals, "--substrate", substrateWorkspace,
-		"--record", "--record-db", dsn2, "--", "false",
+		"--ledger", ledgerDir, "--", "false",
 	}, &out2, &errb2)
 	if code2 != 1 {
 		t.Fatalf("exit %d, want 1 (COULD-NOT-GRADE): stdout=%s stderr=%s", code2, out2.String(), errb2.String())
 	}
 	if errb2.Len() != 0 {
-		t.Fatalf("recording must not fail on a writable DSN, stderr=%q", errb2.String())
+		t.Fatalf("the ledger write must not fail on a writable directory, stderr=%q", errb2.String())
 	}
 
-	db, err := sql.Open("duckdb", dsn2)
-	if err != nil {
-		t.Fatalf("open recorded ledger: %v", err)
+	entries, err := auditpush.ReadLedgerDir(ledgerDir)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("ledger entries = %d (err %v), want exactly 1", len(entries), err)
 	}
-	defer db.Close()
-
-	var top int
-	if err := db.QueryRow(`SELECT top FROM scans ORDER BY id DESC LIMIT 1`).Scan(&top); err != nil {
-		t.Fatalf("select scans.top: %v", err)
-	}
-	if top != 0 {
-		t.Errorf("scans.top = %d, want 0 (unbounded — this scan applied no --top bound at all; %d would positively assert a top-%d scan that never happened, indistinguishable from a real one)", top, defaultScanTop, defaultScanTop)
+	if top := entries[0].Bundle.Scan.Top; top != 0 {
+		t.Errorf("the entry's top = %d, want 0 (unbounded — this scan applied no --top bound at all; %d would positively assert a top-%d scan that never happened, indistinguishable from a real one)", top, defaultScanTop, defaultScanTop)
 	}
 }
 
-// TestCertifyRepoRecordDryRunSaysWhyItDidNotRecord proves the fix for a
-// review finding that --record --dry-run used to be silently inert: a dry
-// run computes and prints a complete disposition for every candidate
-// (exactly the payload this ledger exists to keep) but never runs a
-// single job, so there is nothing yet to record — and before this fix,
-// nothing was SAID about that either. Silence was the one option ruled
-// out (see the fix's own comment in runCertifyRepo): an operator watching
-// --record do nothing, with no message, cannot tell "this combination is
-// a no-op" from "the write silently failed".
-func TestCertifyRepoRecordDryRunSaysWhyItDidNotRecord(t *testing.T) {
+// TestCertifyRepoRecordFlagIsRetiredOutLoud: --record turned on the local
+// DuckDB copy of the record, retired when the ledger directory became the
+// record. Accepted for one release so an old invocation does not exit 2 —
+// but never silently: an operator who typed it is told, once and up
+// front, what it did (nothing) and where the record is now.
+func TestCertifyRepoRecordFlagIsRetiredOutLoud(t *testing.T) {
 	root := t.TempDir()
 	mustWrite(t, filepath.Join(root, "pkg", "a.go"), "package pkg\n")
 	mustWrite(t, filepath.Join(root, "pkg", "a_test.go"), "package pkg\n")
@@ -851,11 +845,11 @@ func TestCertifyRepoRecordDryRunSaysWhyItDidNotRecord(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit %d: stdout=%s stderr=%s", code, out.String(), errb.String())
 	}
-	if !strings.Contains(errb.String(), "--record ignored") {
-		t.Errorf("want an explicit reason on stderr for why --record was a no-op on --dry-run, got: %q", errb.String())
+	if !strings.Contains(errb.String(), "--record is retired and did nothing") {
+		t.Errorf("want the retirement said on stderr, got: %q", errb.String())
 	}
 	if _, statErr := os.Stat(dsn); !os.IsNotExist(statErr) {
-		t.Errorf("--dry-run must still create no DB file even with --record given (stat err=%v)", statErr)
+		t.Errorf("--record-db must create no file (it is the cache's old name, and a dry run touches no cache; stat err=%v)", statErr)
 	}
 }
 
@@ -926,26 +920,26 @@ func TestCertifyRepoRecordPreflightOverlayRoundTrips(t *testing.T) {
 	goals := filepath.Join(root, "goals.json")
 	mustWrite(t, goals, `{"pkg/a.go": "must not panic"}`)
 
-	dsn := filepath.Join(t.TempDir(), "scans.duckdb")
+	ledgerDir := filepath.Join(t.TempDir(), "ledger")
 	var out, errb bytes.Buffer
 	code := runCertifyRepo([]string{
 		"--repo", root, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant, "--critic-model", "off", "--diff-base", base, "--goals", goals,
 		"--substrate", substrateWorkspace, "--preflight",
-		"--record", "--record-db", dsn,
+		"--ledger", ledgerDir,
 	}, &out, &errb)
 	if code != 0 {
 		t.Fatalf("exit %d: stdout=%s stderr=%s", code, out.String(), errb.String())
 	}
 	if errb.Len() != 0 {
-		t.Fatalf("recording must not fail on a writable DSN, stderr=%q", errb.String())
+		t.Fatalf("the ledger write must not fail on a writable directory, stderr=%q", errb.String())
 	}
 	if !strings.Contains(out.String(), "file(s) executed at least once") {
 		t.Fatalf("fixture precondition failed: --preflight did not actually run (need a working go toolchain):\n%s", out.String())
 	}
 
-	db, err := sql.Open("duckdb", dsn)
+	db, err := auditpush.LoadDir(ledgerDir)
 	if err != nil {
-		t.Fatalf("open recorded ledger: %v", err)
+		t.Fatalf("load the ledger: %v", err)
 	}
 	defer db.Close()
 
@@ -956,8 +950,8 @@ func TestCertifyRepoRecordPreflightOverlayRoundTrips(t *testing.T) {
 		{"go.mod", ""},        // not a language-detected source file
 	} {
 		var got string
-		if err := db.QueryRow(`SELECT preflight_state FROM scan_files WHERE path = ?`, tc.path).Scan(&got); err != nil {
-			t.Fatalf("%s: no scan_files row: %v", tc.path, err)
+		if err := db.QueryRow(`SELECT preflight_state FROM corral_audits WHERE path = ?`, tc.path).Scan(&got); err != nil {
+			t.Fatalf("%s: no corral_audits row: %v", tc.path, err)
 		}
 		if got != tc.want {
 			t.Errorf("%s: preflight_state = %q, want %q", tc.path, got, tc.want)
@@ -977,7 +971,7 @@ func TestCertifyRepoRecordPreflightOverlayRoundTrips(t *testing.T) {
 // failed. This must be a hard exit-2 usage error, never a warning (a
 // warning scrolls past in CI, and the failure mode is a gate that
 // silently never runs) — checked for both --min-kill-rate (the dangerous
-// one) and --record (this task's own flag).
+// one) and --ledger (where the record goes).
 func TestCertifyRepoRejectsFlagsAfterDashDash(t *testing.T) {
 	root := t.TempDir()
 	for _, tc := range []struct {
@@ -985,7 +979,7 @@ func TestCertifyRepoRejectsFlagsAfterDashDash(t *testing.T) {
 		args []string
 	}{
 		{"min-kill-rate", []string{"--repo", root, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant, "--critic-model", "off", "--dry-run", "--", "pytest", "-q", "--min-kill-rate", "0.5"}},
-		{"record", []string{"--repo", root, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant, "--critic-model", "off", "--dry-run", "--", "pytest", "-q", "--record", "--record-db", "/tmp/x.duckdb"}},
+		{"ledger", []string{"--repo", root, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant, "--critic-model", "off", "--dry-run", "--", "pytest", "-q", "--ledger", "/tmp/x"}},
 		// --timeout is new: it joins the same guard automatically (names
 		// come from fs.VisitAll, not a hardcoded list — see
 		// TestCheckArgvNoFlagCollisionDerivesNamesFromTheFlagSet) and this

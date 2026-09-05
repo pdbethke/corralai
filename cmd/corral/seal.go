@@ -156,10 +156,9 @@ func (r dbSealReader) SealRows(ctx context.Context, repo string) ([]sealRow, err
 // (auditpush.pushBundleOnce computes `now` once per bundle, see bundle.go),
 // and two separate pushes can in principle land the same timestamp too —
 // coarse clock resolution, or a test driving two PushBundle calls back to
-// back. scan_id is NOT that tiebreaker: it is the local ledger's row id and
-// reads 0 for every run pushed without --record (push.go's own doc: "scan_id
-// is always the ledger's row id, or 0 when --record was not given"), so
-// several genuinely different pushes can tie on it too. What IS monotonic
+// back. scan_id is NOT that tiebreaker: it was the retired local DuckDB
+// record's row id and reads 0 on every current push, so several genuinely
+// different pushes tie on it. What IS monotonic
 // is insertion order itself: corral_audits is APPEND ONLY — inserted, never
 // UPDATEd or DELETEd (push.go's own rule) — so DuckDB's `rowid`
 // pseudocolumn, which tracks physical insertion order, is safe to rely on
@@ -252,7 +251,7 @@ func openSealDB(dsn string) (sealReader, error) {
 	isMD := strings.HasPrefix(dsn, "md:")
 	if !isMD && !auditpush.IsLedgerDir(dsn) {
 		if _, err := os.Stat(dsn); err != nil {
-			return nil, fmt.Errorf("corral seal: no warehouse at %s — nothing has pushed to it yet (run `certify --repo --push %s` first), or --db names the wrong path; a reader does not create one", dsn, dsn)
+			return nil, fmt.Errorf("corral seal: no warehouse at %s — no scan has written a ledger entry there yet (`certify --repo` writes one by default), or --db names the wrong path; a reader does not create one", dsn)
 		}
 	}
 
@@ -349,7 +348,7 @@ func attachWarehouse(dsn string, readOnly bool) (*sql.DB, error) {
 func runSeal(args []string, open func(dsn string) (sealReader, error), stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("seal", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	dsn := fs.String("db", "", "warehouse to read (default: $CORRALAI_SCANS_DB, else ~/.claude/corralai_scans.duckdb — the same resolution `corral scans` uses, since a single-operator setup ordinarily pushes to the same local file it records to)")
+	dsn := fs.String("db", "", "what to read: a ledger directory, a warehouse file, or md:<db> (default: $CORRAL_LEDGER, else ./.corral/ledger — the same resolution `corral scans` uses)")
 	repoDir := fs.String("repo", "", "a checkout to judge validity against: each hot file's seal row is marked live (bytes unchanged since the audit), stale (changed since), never audited, unreadable, or unknown when the row recorded no validity key to compare against. Only live counts toward coverage. Without this flag, seal prints the raw ledger with no such judgement")
 	top := fs.Int("top", defaultSealTop, "how many of the repo's highest-ranked (churn x size) files count as \"hot\" for the coverage line — same ranking `certify --repo` uses to bound a scan")
 	asJSON := fs.Bool("json", false, "emit the rows as JSON")
@@ -359,7 +358,7 @@ func runSeal(args []string, open func(dsn string) (sealReader, error), stdout, s
 
 	target := strings.TrimSpace(*dsn)
 	if target == "" {
-		target = defaultScanDSN()
+		target = defaultLedgerDir(".")
 	}
 
 	st, err := open(target)

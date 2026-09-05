@@ -1,15 +1,25 @@
 // SPDX-License-Identifier: Elastic-2.0
 
-// Package scanstore is the DuckDB ledger behind `corral certify --repo`: one
-// row per invocation in `scans` (the header — provenance for the whole run)
-// and one row per walked file in `scan_files` (the disposition — audited
-// with a kill rate, or rejected with a reason). `certify --repo` already
-// computes a complete disposition for every file it walks; today it prints
-// that to stdout and discards it. This store is what keeps it, so a later
-// question ("why did file X get skipped on scan N") has an answer.
-// Mirrors internal/bugcatch's DuckDB pattern (CREATE IF NOT EXISTS on open,
-// an additive migration list applied by probing information_schema.columns,
-// parameterized SQL) and internal/buildstore's id-sequence pattern.
+// Package scanstore is two things, and the split is the point.
+//
+// It is corral's local CACHE: the goal cache and the selection cache
+// (goal_cache.go, selection_cache.go), keyed by content, in the file
+// `certify --repo --cache-db` names. Nothing a verdict rests on lives only
+// here; deleting the file costs a re-derivation and one coverage run.
+//
+// It is also the READER for the pre-1.0 scan record — the `scans`,
+// `scan_files`, `scan_mutants`, `scan_model_calls` and `scan_events`
+// tables an older corral wrote with `--record`. That record was RETIRED
+// when the ledger directory became the only one (internal/auditpush's
+// ledgerdir.go: one signed, hash-linked entry per scan, DuckDB as its
+// view); nothing in the product writes these tables any more, and
+// cmd/corral's TestNothingInTheProductWritesTheLegacyScanRecord keeps it
+// that way. The Record* methods remain so this package's own tests can
+// build fixtures for the reader, and so `corral scans --db` keeps reading
+// what was already recorded. The row types (Scan, File, Mutant, ModelCall,
+// Event) are still the in-memory shape `certify --repo` builds before
+// mapping to the bundle (cmd/corral/certify_repo_bundle.go) — one set of
+// names for one set of facts.
 package scanstore
 
 import (

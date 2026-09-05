@@ -3,55 +3,48 @@
 package main
 
 import (
-	"context"
+	"bytes"
+	"io"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/pdbethke/corralai/internal/advpool"
+	"github.com/pdbethke/corralai/internal/auditpush"
 	"github.com/pdbethke/corralai/internal/reposcan"
 	"github.com/pdbethke/corralai/internal/scanstore"
 )
 
-func nil2ctx() context.Context { return context.Background() }
-
-// cacheTestStore opens a ledger and returns it WITH its path: the cache is
-// addressed by DSN, not by an open handle, because a handle held for the
-// whole scan holds DuckDB's single-writer lock for the whole scan (see
-// ledgerCache's own doc).
-func cacheTestStore(t *testing.T) (*scanstore.Store, string) {
+// cacheTestLedger writes one ledger entry holding files, the way the run
+// writes its own (buildBundle → the directory writer, source carried), and
+// returns the directory — the state every ledgerCache read sees in
+// production.
+func cacheTestLedger(t *testing.T, files []scanstore.File) string {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "scans.duckdb")
-	s, err := scanstore.Open(path)
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
-	return s, path
+	dir := filepath.Join(t.TempDir(), "ledger")
+	writeCacheTestEntry(t, dir, files)
+	return dir
 }
 
-// closedCacheTestStore is cacheTestStore for a test that wants the ledger
-// written and then RELEASED — the state every ledgerCache lookup sees in
-// production, now that the scan does not hold the handle.
-func closedCacheTestStore(t *testing.T, files []scanstore.File) string {
+func writeCacheTestEntry(t *testing.T, dir string, files []scanstore.File) {
 	t.Helper()
-	s, path := cacheTestStore(t)
-	if _, err := s.Record(nil2ctx(), scanstore.Scan{Owner: "acme", Repo: "r"}, files); err != nil {
-		t.Fatalf("Record: %v", err)
+	b := buildBundle(scanstore.Scan{Owner: "acme", Repo: "r"}, 0, files, nil, nil, nil,
+		auditpush.Link{}, true, "acme/r", "abc", "", bundleMeta{})
+	b.SourcePushed, b.Scan.SourcePushed = true, true
+	if _, err := pushBundle(dir+"/", b); err != nil {
+		t.Fatalf("writing the ledger entry: %v", err)
 	}
-	if err := s.Close(); err != nil {
-		t.Fatalf("Close: %v", err)
-	}
-	return path
 }
 
 func TestLedgerCacheHitCarriesVerdictAndComputedAt(t *testing.T) {
 	when := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
-	path := closedCacheTestStore(t, []scanstore.File{{
+	dir := cacheTestLedger(t, []scanstore.File{{
 		Path: "a.go", Disposition: "audited", Gradable: true,
 		CacheKey: "K", VerdictJSON: `{}`, ComputedAt: when,
 	}})
-	got, ok := newLedgerCache(path).Get("acme", "K")
+	got, ok := newLedgerCache(dir, io.Discard).Get("acme", "K")
 	if !ok {
 		t.Fatal("expected a hit")
 	}
@@ -63,29 +56,61 @@ func TestLedgerCacheHitCarriesVerdictAndComputedAt(t *testing.T) {
 	}
 }
 
+// The newest entry wins for a key two entries share: a file re-audited
+// under the same key (--no-verdict-cache) must serve its LATEST verdict.
+func TestLedgerCacheServesTheNewestEntryForAKey(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "ledger")
+	older, _ := marshalVerdict(advpool.Verdict{Survivors: 9})
+	newer, _ := marshalVerdict(advpool.Verdict{Survivors: 1})
+	writeCacheTestEntry(t, dir, []scanstore.File{{Path: "a.go", Disposition: "audited", Gradable: true, CacheKey: "K", VerdictJSON: older, ComputedAt: time.Now().UTC()}})
+	writeCacheTestEntry(t, dir, []scanstore.File{{Path: "a.go", Disposition: "audited", Gradable: true, CacheKey: "K", VerdictJSON: newer, ComputedAt: time.Now().UTC()}})
+	got, ok := newLedgerCache(dir, io.Discard).Get("acme", "K")
+	if !ok || got.Verdict.Survivors != 1 {
+		t.Fatalf("got %+v ok=%v, want the newer entry's verdict (1 survivor)", got.Verdict, ok)
+	}
+}
+
 // Fail closed: unparseable JSON is a MISS, never an error and never a partial
 // verdict. Re-auditing costs money; serving a half-decoded verdict signs a
 // claim nothing measured.
 func TestLedgerCacheMissesOnUnparseableVerdict(t *testing.T) {
-	path := closedCacheTestStore(t, []scanstore.File{{
+	dir := cacheTestLedger(t, []scanstore.File{{
 		Path: "a.go", Disposition: "audited", Gradable: true,
 		CacheKey: "K", VerdictJSON: `{not json`, ComputedAt: time.Now().UTC(),
 	}})
-	if _, ok := newLedgerCache(path).Get("acme", "K"); ok {
+	if _, ok := newLedgerCache(dir, io.Discard).Get("acme", "K"); ok {
 		t.Fatal("corrupt verdict JSON produced a HIT — the cache must fail closed")
 	}
 }
 
-func TestLedgerCacheMissesOnEmptyOwnerAndNilStore(t *testing.T) {
-	_, path := cacheTestStore(t)
-	if _, ok := newLedgerCache(path).Get("", "K"); ok {
-		t.Fatal("empty owner produced a hit")
+func TestLedgerCacheMissesOnEmptyKeyNoDirAndAnUnreadableDir(t *testing.T) {
+	dir := cacheTestLedger(t, nil)
+	if _, ok := newLedgerCache(dir, io.Discard).Get("acme", ""); ok {
+		t.Fatal("an empty key produced a hit")
 	}
-	if _, ok := newLedgerCache("").Get("acme", "K"); ok {
-		t.Fatal("an unset DSN produced a hit — a cache must never be able to fail a scan")
+	if _, ok := newLedgerCache("", io.Discard).Get("acme", "K"); ok {
+		t.Fatal("no directory produced a hit — a cache must never be able to fail a scan")
 	}
-	if _, ok := newLedgerCache(filepath.Join(t.TempDir(), "nope.duckdb")).Get("acme", "K"); ok {
-		t.Fatal("a DSN that cannot be opened produced a hit — the cache fails CLOSED")
+	// A directory that does not exist is an empty ledger, not an error:
+	// the first scan of every repo starts there. Nothing on stderr.
+	var quiet bytes.Buffer
+	if _, ok := newLedgerCache(filepath.Join(t.TempDir(), "nope"), &quiet).Get("acme", "K"); ok || quiet.Len() != 0 {
+		t.Fatalf("a not-yet-existing ledger: hit=%v stderr=%q, want a silent miss", ok, quiet.String())
+	}
+	// An entry that cannot be read is said ONCE, and misses every key.
+	broken := filepath.Join(t.TempDir(), "ledger")
+	if err := os.MkdirAll(filepath.Join(broken, auditpush.ScansSubdir), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(broken, auditpush.ScansSubdir, "20260101T000000Z-abc-def.json"), []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var loud bytes.Buffer
+	if _, ok := newLedgerCache(broken, &loud).Get("acme", "K"); ok {
+		t.Fatal("an unreadable ledger produced a hit — the cache fails CLOSED")
+	}
+	if !strings.Contains(loud.String(), "no verdict will be reused") {
+		t.Fatalf("an unreadable ledger must be said on stderr, got %q", loud.String())
 	}
 }
 
@@ -97,63 +122,24 @@ func TestLedgerCacheDoesNotServeATimedOutVerdict(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshalVerdict: %v", err)
 	}
-	path := closedCacheTestStore(t, []scanstore.File{{
+	dir := cacheTestLedger(t, []scanstore.File{{
 		Path: "a.go", Disposition: "audited", Gradable: true,
 		CacheKey: "K", VerdictJSON: js, ComputedAt: time.Now().UTC(),
 	}})
-	if _, ok := newLedgerCache(path).Get("acme", "K"); ok {
+	if _, ok := newLedgerCache(dir, io.Discard).Get("acme", "K"); ok {
 		t.Fatal("a TimedOut verdict was served from cache")
 	}
 }
 
 func TestLedgerCachePutDoesNotWrite(t *testing.T) {
-	path := closedCacheTestStore(t, nil)
-	c := newLedgerCache(path)
+	dir := cacheTestLedger(t, nil)
+	c := newLedgerCache(dir, io.Discard)
 	c.Put("acme", reposcan.FileResult{Gradable: true, Job: reposcan.Job{CacheKey: "K"}})
 	if _, ok := c.Get("acme", "K"); ok {
-		t.Fatal("Put wrote a row — verdicts must reach the ledger only through Record, or the ledger gets duplicate rows")
+		t.Fatal("Put served a verdict — verdicts reach the ledger only through the run's own entry, or the record gets a second writer")
 	}
-}
-
-// TestLedgerCacheHoldsNoLockBetweenLookups is the concurrency rule the scan
-// used to break: `certify --repo --record` opened the ledger BEFORE the scan
-// and held it until the final write, and DuckDB is single-writer per file —
-// so for the entire hours-long run, `corral scans` against the same (default)
-// DSN failed outright with "Conflicting lock is held". The record of the
-// audits you have already paid for should not go dark for the duration of the
-// next one.
-//
-// The cache therefore holds a DSN, not a handle: it opens for a lookup and
-// closes immediately. Between lookups anyone can open the ledger.
-func TestLedgerCacheHoldsNoLockBetweenLookups(t *testing.T) {
-	when := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
-	path := closedCacheTestStore(t, []scanstore.File{{
-		Path: "a.go", Disposition: "audited", Gradable: true,
-		CacheKey: "K", VerdictJSON: `{}`, ComputedAt: when,
-	}})
-	c := newLedgerCache(path)
-
-	for i := 0; i < 3; i++ {
-		if _, ok := c.Get("acme", "K"); !ok {
-			t.Fatalf("lookup %d missed a verdict that is in the ledger", i)
-		}
-		// A SECOND reader — `corral scans`, in production — must be able to
-		// open the same file right now.
-		reader, err := scanstore.Open(path)
-		if err != nil {
-			t.Fatalf("after lookup %d the ledger is still locked: %v", i, err)
-		}
-		if _, err := reader.Scans(nil2ctx(), 10); err != nil {
-			t.Fatalf("after lookup %d: reading scans: %v", i, err)
-		}
-		if err := reader.Close(); err != nil {
-			t.Fatalf("closing the second reader: %v", err)
-		}
-	}
-
-	// And the cache field itself: nothing is held between operations.
-	if c.store != nil {
-		t.Error("the cache is holding an open store between lookups — that IS the lock")
+	if entries, _ := auditpush.ReadLedgerDir(dir); len(entries) != 1 {
+		t.Fatalf("Put wrote to the ledger: %d entries, want the fixture's 1", len(entries))
 	}
 }
 
@@ -174,21 +160,21 @@ func TestLedgerCacheDoesNotServeAVerdictWhoseWriterHalfNeverGraded(t *testing.T)
 		if err != nil {
 			t.Fatalf("marshalVerdict: %v", err)
 		}
-		path := closedCacheTestStore(t, []scanstore.File{{
+		dir := cacheTestLedger(t, []scanstore.File{{
 			Path: "a.go", Disposition: "audited", Gradable: true,
 			CacheKey: "K", VerdictJSON: js, ComputedAt: time.Now().UTC(),
 		}})
-		if _, ok := newLedgerCache(path).Get("acme", "K"); ok {
+		if _, ok := newLedgerCache(dir, io.Discard).Get("acme", "K"); ok {
 			t.Errorf("%s: served from cache", name)
 		}
 	}
 	// A verdict that graded — even one that proved nothing — is served.
 	js, _ := marshalVerdict(advpool.Verdict{WriterMode: advpool.WriterModePerSurvivor, Survivors: 9, WriterSeatsUngraded: 3, ProvenMissed: 0})
-	path := closedCacheTestStore(t, []scanstore.File{{
+	dir := cacheTestLedger(t, []scanstore.File{{
 		Path: "a.go", Disposition: "audited", Gradable: true,
 		CacheKey: "K", VerdictJSON: js, ComputedAt: time.Now().UTC(),
 	}})
-	if _, ok := newLedgerCache(path).Get("acme", "K"); !ok {
+	if _, ok := newLedgerCache(dir, io.Discard).Get("acme", "K"); !ok {
 		t.Error("a verdict with six of nine seats graded was refused — that is a measurement")
 	}
 }

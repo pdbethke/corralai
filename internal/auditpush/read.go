@@ -200,21 +200,27 @@ func readScanRow(db *sql.DB, where string, args ...any) (ScanRow, bool, error) {
 		host, cores, trees_requested, diff_base, candidates, audited, passed,
 		total_ms, input_tokens, output_tokens, model_calls,
 		source_pushed, statement_sha256, selection_ms, selection_reused_from,
-		rekor_log_index, rekor_uuid, started_at, pushed_by, scan_uid
+		rekor_log_index, rekor_uuid, started_at, pushed_by, scan_uid,
+		engine_version, model_set, top, all_candidates, total_files,
+		preflight_ran, preflight_note, finished_at
 	   FROM corral_scans WHERE `+where, args...) // #nosec G202 -- where is a constant clause chosen by this package's own callers; every value is a bound parameter
 
 	var s ScanRow
 	var cores, treesRequested sql.NullInt64
 	var totalMS, selectionMS, selectionReusedFrom, rekorLogIndex sql.NullInt64
 	var rekorUUID, pushedBy, scanUID sql.NullString
-	var scanPassed sql.NullBool
-	var scanStarted sql.NullTime
+	var scanPassed, allCandidates, preflightRan sql.NullBool
+	var scanStarted, scanFinished sql.NullTime
+	var engineVersion, modelSet, preflightNote sql.NullString
+	var top, totalFiles sql.NullInt64
 	if err := row.Scan(
 		&s.Repo, &s.RunURL, &s.ScanID, &s.Commit, &s.CorralVersion, &s.Substrate,
 		&s.Host, &cores, &treesRequested, &s.DiffBase, &s.Candidates, &s.Audited, &scanPassed,
 		&totalMS, &s.InputTokens, &s.OutputTokens, &s.ModelCalls,
 		&s.SourcePushed, &s.StatementSHA256, &selectionMS, &selectionReusedFrom,
 		&rekorLogIndex, &rekorUUID, &scanStarted, &pushedBy, &scanUID,
+		&engineVersion, &modelSet, &top, &allCandidates, &totalFiles,
+		&preflightRan, &preflightNote, &scanFinished,
 	); err != nil {
 		if err == sql.ErrNoRows {
 			return ScanRow{}, false, nil
@@ -238,6 +244,13 @@ func readScanRow(db *sql.DB, where string, args ...any) (ScanRow, bool, error) {
 	s.RekorUUID = rekorUUID.String
 	s.PushedBy = pushedBy.String
 	s.ScanUID = scanUID.String
+	s.EngineVersion, s.ModelSet, s.PreflightNote = engineVersion.String, modelSet.String, preflightNote.String
+	s.Top, s.TotalFiles = int(top.Int64), int(totalFiles.Int64)
+	s.AllCandidates, s.PreflightRan = allCandidates.Bool, preflightRan.Bool
+	if scanFinished.Valid {
+		t := scanFinished.Time
+		s.FinishedAt = &t
+	}
 	return s, true, nil
 }
 
@@ -265,7 +278,7 @@ func readFileRows(db *sql.DB, where string, args ...any) ([]Row, error) {
 		mutant_budget, mutant_budget_rule, complexity,
 		symbols, symbols_probed, decisions, decisions_probed,
 		challenger_mutants, challenger_survived_writer, challenger_survived_shadow, challenger_union, challenger_shared,
-		priors_applied, prior_digest
+		priors_applied, prior_digest, computed_at, mutants_from
 	   FROM corral_audits WHERE `+where, args...) // #nosec G202 -- where is a constant clause from readGrains; every value is a bound parameter
 	if err != nil {
 		return nil, err
@@ -298,6 +311,8 @@ func readFileRows(db *sql.DB, where string, args ...any) ([]Row, error) {
 		var priorsApplied sql.NullInt64
 		var priorDigest sql.NullString
 		var coveringTests sql.NullInt64
+		var mutantsFrom sql.NullString
+		var computedAt sql.NullTime
 		var importOnly sql.NullBool
 		var rowPassed sql.NullBool
 		var rowStarted sql.NullTime
@@ -325,7 +340,7 @@ func readFileRows(db *sql.DB, where string, args ...any) ([]Row, error) {
 			&mutantBudget, &mutantBudgetRule, &complexity,
 			&symbols, &symbolsProbed, &decisions, &decisionsProbed,
 			&chMutants, &chSurvW, &chSurvS, &chUnion, &chShared,
-			&priorsApplied, &priorDigest,
+			&priorsApplied, &priorDigest, &computedAt, &mutantsFrom,
 		); err != nil {
 			return nil, err
 		}
@@ -384,6 +399,11 @@ func readFileRows(db *sql.DB, where string, args ...any) ([]Row, error) {
 		r.ChallengerMutants, r.ChallengerSurvivedWriter, r.ChallengerSurvivedShadow = nullInt(chMutants), nullInt(chSurvW), nullInt(chSurvS)
 		r.ChallengerUnion, r.ChallengerShared = nullInt(chUnion), nullInt(chShared)
 		r.PriorsApplied, r.PriorDigest = nullInt(priorsApplied), priorDigest.String
+		if computedAt.Valid {
+			t := computedAt.Time
+			r.ComputedAt = &t
+		}
+		r.MutantsFrom = mutantsFrom.String
 
 		out = append(out, r)
 	}

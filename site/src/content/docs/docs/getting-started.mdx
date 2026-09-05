@@ -184,7 +184,9 @@ nothing in it is read by an audit. If you want it, start with
   (OpenRouter, a local daemon); without it each seat routes by the model you name
 - `CORRALAI_MODELS_FILE` / `CORRALAI_MODELS` — the model registry, so seats can be
   named by alias
-- `CORRALAI_SCANS_DB` — where `certify --repo --record` keeps its ledger
+- `CORRAL_LEDGER` — where `certify --repo` writes its entry and reads its prior
+  (default: the audited repo's `.corral/ledger/`)
+- `CORRALAI_CACHE_DB` — corral's local cache of derived goals and test selections
 - `CORRALAI_CERTIFY_KEY_FILE` — where the signing key seed lives (`--local` verdicts, `--attest`)
 
 The daemon's own knobs (`CORRALAI_OIDC_ISSUER`, `CORRALAI_GIT_TOKEN`,

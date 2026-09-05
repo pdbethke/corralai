@@ -250,14 +250,16 @@ Go binary.**
   discarding a usable profile whenever any test failed, and stopped a quoted or
   comment-suffixed `go.mod` module line from silently voiding the whole Go report.
 
-- **The scan ledger (`--record`, `certify --repo`) — opt-in, CLI only.**
-  `certify --repo` computes a complete disposition for every file it walks —
-  audited with a kill rate, or rejected with one of a dozen machine-stable
-  reasons — and used to print it and throw it away. `--record` keeps it: one
-  header row per invocation and one row per file, in an embedded DuckDB
-  ledger (`--record-db`, default `~/.claude/corralai_scans.duckdb` or
-  `$CORRALAI_SCANS_DB`), so "why did file X get skipped on scan N" has an
-  answer later. Fail-open, deliberately — this command's exit code is a CI
+- **The scan record (`certify --repo`).** *(Superseded: the DuckDB scan
+  ledger this item added, `--record`/`--record-db`, was retired once the
+  ledger directory became the record — see "The ledger is the record"
+  above. The dispositions, the evidence classes and the fail-open rule all
+  carried over; only the store changed.)* `certify --repo` computes a
+  complete disposition for every file it walks — audited with a kill rate,
+  or rejected with one of a dozen machine-stable reasons — and used to
+  print it and throw it away. `--record` kept it: one header row per
+  invocation and one row per file, in an embedded DuckDB ledger, so "why
+  did file X get skipped on scan N" had an answer later. Fail-open, deliberately — this command's exit code is a CI
   merge gate, so a ledger write (a full disk, a locked file under a
   concurrent writer) can never flip the scan's own verdict; it prints loudly
   on stderr and the exit code stands, checked directly against a

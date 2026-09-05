@@ -3,124 +3,104 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
+	"fmt"
+	"io"
 	"strings"
 	"time"
 
 	"github.com/pdbethke/corralai/internal/advpool"
+	"github.com/pdbethke/corralai/internal/auditpush"
 	"github.com/pdbethke/corralai/internal/reposcan"
-	"github.com/pdbethke/corralai/internal/scanstore"
 )
 
-// ledgerCache is reposcan.Cache backed by the DuckDB scan ledger: a file whose
-// every verdict-affecting input is unchanged is not re-audited.
+// ledgerCache is reposcan.Cache backed by the ledger DIRECTORY: a file
+// whose every verdict-affecting input is unchanged (the cache key —
+// reposcan.KeyInputs — covers the bytes, the tests, the models, the engine,
+// the substrate and the prior) is not re-audited; the verdict an earlier
+// entry recorded under the same key is served, marked as reused, with the
+// time it was earned.
 //
-// It FAILS CLOSED without exception. Every error path — no DSN, a ledger that
-// will not open, empty owner, query failure, verdict JSON that will not
-// unmarshal — returns a MISS. A miss costs money. A wrong hit signs a claim
-// about content that was never measured, into a tamper-evident record where
-// it is undetectable afterwards. That asymmetry decides every judgement call
-// in this file.
+// The directory is read ONCE, when the cache is built, into a map keyed by
+// cache key: a scan of N files against a ledger of M entries must not pay
+// M decompressions per file. Later entries win, which is the order
+// ReadLedgerDir returns them in (oldest push first).
 //
-// IT HOLDS A DSN, NOT A HANDLE, and that is the point. DuckDB is
-// single-writer per file, so the handle this cache used to be given was
-// opened before the scan and held until the final write — for the whole
-// hours-long run. Any concurrent `corral scans` against the same (default)
-// ledger failed outright with "Conflicting lock is held": the record of the
-// audits already paid for went dark for the duration of the next one. Open
-// per operation, close immediately; between operations the file is free.
+// It FAILS CLOSED without exception. No directory, an unreadable one, an
+// entry whose verdict JSON will not unmarshal, a verdict not worth serving
+// (timed out, writer failed, unsound pool test) — every one of these is a
+// MISS, never a served verdict. An unreadable directory is said once on
+// stderr: a cache that quietly misses every key would make the next run
+// look like a full re-audit for no visible reason.
 //
-// store is non-nil ONLY inside a lookup. Tests assert that (see
-// TestLedgerCacheHoldsNoLockBetweenLookups) — a handle left behind is the
-// lock, whatever the intent was.
+// Put is a no-op: the scan's own ledger entry, written at the end of the
+// run, is what a later scan reads. There is one write path to the record.
 type ledgerCache struct {
-	dsn   string
-	store *scanstore.Store
+	byKey map[string]cachedVerdict
 }
 
-func newLedgerCache(dsn string) *ledgerCache { return &ledgerCache{dsn: strings.TrimSpace(dsn)} }
+type cachedVerdict struct {
+	verdict    advpool.Verdict
+	computedAt time.Time
+}
 
-// withStore opens the ledger for ONE operation and closes it before
-// returning. A DSN that will not open is a miss, never an error: the cache
-// must never be able to fail a scan.
-func (c *ledgerCache) withStore(fn func(*scanstore.Store) bool) bool {
-	if c == nil || c.dsn == "" {
-		return false
+func newLedgerCache(dir string, stderr io.Writer) *ledgerCache {
+	c := &ledgerCache{byKey: map[string]cachedVerdict{}}
+	dir = strings.TrimSpace(dir)
+	if dir == "" {
+		return c
 	}
-	st, err := scanstore.Open(c.dsn)
+	entries, err := auditpush.ReadLedgerDir(dir)
 	if err != nil {
-		return false
+		fmt.Fprintf(stderr, "corral certify --repo: verdict cache: %s is unreadable, so no verdict will be reused: %v\n", dir, err)
+		return c
 	}
-	c.store = st
-	defer func() {
-		c.store = nil
-		_ = st.Close()
-	}()
-	return fn(st)
+	for _, e := range entries {
+		for _, r := range e.Bundle.Files {
+			if r.CacheKey == "" || r.VerdictJSON == "" {
+				continue
+			}
+			var v advpool.Verdict
+			if err := json.Unmarshal([]byte(r.VerdictJSON), &v); err != nil {
+				continue
+			}
+			if !verdictWorthServing(v) {
+				continue
+			}
+			at := e.Pushed
+			if r.ComputedAt != nil && !r.ComputedAt.IsZero() {
+				at = *r.ComputedAt
+			}
+			c.byKey[r.CacheKey] = cachedVerdict{verdict: v, computedAt: at}
+		}
+	}
+	return c
 }
 
-// marshalVerdict is the one spelling of how a verdict is serialized for the
-// ledger, shared by the writer and the tests so the two can never disagree
-// about the format a later Get has to parse.
-func marshalVerdict(v advpool.Verdict) (string, error) {
-	b, err := json.Marshal(v)
-	if err != nil {
-		return "", err
-	}
-	return string(b), nil
-}
-
-// Get returns a previously earned verdict for this exact content address.
+// Get serves a verdict recorded under exactly this cache key. owner is part
+// of reposcan.Cache's contract and is not a key input here: the key already
+// binds the file's bytes, and the directory is the audited repo's own.
 func (c *ledgerCache) Get(owner, cacheKey string) (reposcan.FileResult, bool) {
-	if strings.TrimSpace(owner) == "" || strings.TrimSpace(cacheKey) == "" {
+	if c == nil || strings.TrimSpace(cacheKey) == "" {
 		return reposcan.FileResult{}, false
 	}
-	var out reposcan.FileResult
-	hit := c.withStore(func(st *scanstore.Store) bool {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-
-		js, computedAt, ok, err := st.VerdictByCacheKey(ctx, owner, cacheKey)
-		if err != nil || !ok {
-			return false
-		}
-		var v advpool.Verdict
-		if err := json.Unmarshal([]byte(js), &v); err != nil {
-			// Corrupt or written by an incompatible engine generation.
-			// Re-audit.
-			return false
-		}
-		if !verdictWorthServing(v) {
-			return false
-		}
-		out = reposcan.FileResult{
-			Verdict:    v,
-			Gradable:   true, // only gradable results are ever recorded with a key
-			ComputedAt: computedAt,
-		}
-		return true
-	})
-	return out, hit
+	hit, ok := c.byKey[cacheKey]
+	if !ok {
+		return reposcan.FileResult{}, false
+	}
+	return reposcan.FileResult{
+		Verdict:    hit.verdict,
+		Gradable:   true, // only gradable results are ever recorded with a key
+		ComputedAt: hit.computedAt,
+	}, true
 }
 
-// verdictWorthServing says whether a banked verdict is a MEASUREMENT of the
-// content it is keyed on, or an artifact of the run that produced it.
-//
-// TimedOut: a partial from a run that hit its wall clock — an artifact of
-// LOAD, not of content; a re-run may converge.
-//
-// TestWriterFailed / PoolTestUnsound / every writer seat ungraded: the dev
-// kill rate is real, but the writer half never graded — the provider was
-// down, the model produced nothing that compiled, the test never reached
-// the file. Each is a property of THAT RUN. Served from cache, a single
-// 429 on a --record scan pinned `proven_missed=0 [WRITER FAILED]` for the
-// file on every later scan (the same content, tests, models and engine
-// re-key to the same entry, and the cache-hit row re-records it, so the
-// newest row kept winning), and --max-proven-missed then failed every
-// subsequent scan on a measurement nobody could redo without editing the
-// file or changing a model. The rule is the same as TimedOut's: an
-// incomplete verdict is not frozen; a re-run may complete it.
+// verdictWorthServing is the one rule for which recorded verdicts a cache
+// may serve. A verdict that timed out, whose writer failed, or whose pool
+// test was unsound was never a complete measurement; a per-survivor verdict
+// whose writer seats all went ungraded proved nothing about its survivors.
+// Serving any of them would carry the failure forward as a "reused"
+// result, indistinguishable on the report from a verdict that earned it.
 func verdictWorthServing(v advpool.Verdict) bool {
 	if v.TimedOut || v.TestWriterFailed || v.PoolTestUnsound {
 		return false
@@ -131,15 +111,9 @@ func verdictWorthServing(v advpool.Verdict) bool {
 	return true
 }
 
-// oldestReuse returns the earliest ComputedAt among results that were REUSED,
-// and whether any were.
-//
-// A CacheHits count alone is not disclosure. Continuous re-evaluation's whole
-// claim is freshness, so a report where most files were reused from weeks ago,
-// presented as a current audit, is precisely the self-flattering record this
-// tool exists to prevent. The OLDEST contributing verdict is the honest
-// summary number: it is the strongest thing that can be said about how current
-// the report is as a whole.
+// oldestReuse is the age of the oldest reused verdict in a scan's results,
+// for the report line beside the reuse count: "3 verdict(s) reused, the
+// oldest from <date>" says how stale the cheapest part of the scan is.
 func oldestReuse(results []reposcan.FileResult) (time.Time, bool) {
 	var oldest time.Time
 	found := false
@@ -154,11 +128,14 @@ func oldestReuse(results []reposcan.FileResult) (time.Time, bool) {
 	return oldest, found
 }
 
-// Put is deliberately a no-op.
-//
-// Verdicts reach the ledger through the single Record call at the end of a
-// scan, which already writes one row per file with its cache key. Writing here
-// as well would produce duplicate rows for the same audit and two sources of
-// truth that can disagree. The interface requires the method; the ledger does
-// not need it.
 func (c *ledgerCache) Put(string, reposcan.FileResult) {}
+
+// marshalVerdict is the one encoding of a verdict the record carries and
+// the cache reads back; the two must agree, so there is one function.
+func marshalVerdict(v advpool.Verdict) (string, error) {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}

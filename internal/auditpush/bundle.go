@@ -175,6 +175,21 @@ type ScanRow struct {
 	// computed over the run's own push, can never match a backfill. A reader
 	// that could not tell the two apart reported that mismatch as tampering.
 	PushedBy string
+	// The scan-grain facts that lived only in the retired local DuckDB
+	// record (scanstore.Scan) until the ledger entry became THE record:
+	// what the scan was asked to do (Top, AllCandidates, TotalFiles, the
+	// engine and model roster it ran with), whether its coverage preflight
+	// ran, and when it finished. Without them a ledger entry could not
+	// answer "was this a --top 3 run" — the question the retired store's
+	// `scans list` answered.
+	EngineVersion string
+	ModelSet      string
+	Top           int
+	AllCandidates bool
+	TotalFiles    int
+	PreflightRan  bool
+	PreflightNote string
+	FinishedAt    *time.Time
 }
 
 // The two values ScanRow.PushedBy takes. "" is a row an older corral wrote,
@@ -358,7 +373,15 @@ CREATE TABLE IF NOT EXISTS corral_scans (
   selection_reused_from BIGINT,
   rekor_log_index  BIGINT,
   rekor_uuid       VARCHAR,
-  schema_version   INTEGER
+  schema_version   INTEGER,
+  engine_version   VARCHAR,
+  model_set        VARCHAR,
+  top              INTEGER,
+  all_candidates   BOOLEAN,
+  total_files      INTEGER,
+  preflight_ran    BOOLEAN,
+  preflight_note   VARCHAR,
+  finished_at      TIMESTAMPTZ
 );`
 
 const auditsSchema = `
@@ -453,7 +476,9 @@ CREATE TABLE IF NOT EXISTS corral_audits (
   challenger_union            INTEGER,
   challenger_shared           INTEGER,
   priors_applied              INTEGER,
-  prior_digest                VARCHAR
+  prior_digest                VARCHAR,
+  computed_at                 TIMESTAMPTZ,
+  mutants_from                VARCHAR
 );`
 
 // The mutant grain's outcome CHECK is the same discipline scan_files'
@@ -625,6 +650,10 @@ var corralAuditsMigrationCols = []struct{ name, ddl string }{
 	{"challenger_shared", "challenger_shared INTEGER"},
 	{"priors_applied", "priors_applied INTEGER"},
 	{"prior_digest", "prior_digest VARCHAR"},
+	// The last two scanstore.File fields without a column, added when the
+	// ledger entry became the only record (the local DuckDB write retired).
+	{"computed_at", "computed_at TIMESTAMPTZ"},
+	{"mutants_from", "mutants_from VARCHAR"},
 }
 
 // The other four tables are NEW at schema_version 2, so nothing predates
@@ -647,6 +676,16 @@ var (
 		{"rekor_log_index", "rekor_log_index BIGINT"},
 		{"rekor_uuid", "rekor_uuid VARCHAR"},
 		{"scan_uid", "scan_uid VARCHAR"},
+		// The scan-grain facts the retired local record carried and the
+		// bundle did not — see ScanRow.EngineVersion's doc.
+		{"engine_version", "engine_version VARCHAR"},
+		{"model_set", "model_set VARCHAR"},
+		{"top", "top INTEGER"},
+		{"all_candidates", "all_candidates BOOLEAN"},
+		{"total_files", "total_files INTEGER"},
+		{"preflight_ran", "preflight_ran BOOLEAN"},
+		{"preflight_note", "preflight_note VARCHAR"},
+		{"finished_at", "finished_at TIMESTAMPTZ"},
 	}
 	corralMutantsMigrationCols = []struct{ name, ddl string }{
 		{"scan_uid", "scan_uid VARCHAR"},
@@ -1213,8 +1252,10 @@ func insertBundle(db *sql.DB, b Bundle, now time.Time, uid string) (Counts, erro
 		    host, cores, trees_requested, diff_base, candidates, audited, passed,
 		    total_ms, input_tokens, output_tokens, model_calls,
 		    source_pushed, statement_sha256, selection_ms, selection_reused_from,
-		    rekor_log_index, rekor_uuid, schema_version, started_at, pushed_by
-		  ) VALUES (`+placeholders(28)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
+		    rekor_log_index, rekor_uuid, schema_version, started_at, pushed_by,
+		    engine_version, model_set, top, all_candidates, total_files,
+		    preflight_ran, preflight_note, finished_at
+		  ) VALUES (`+placeholders(36)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
 			uid, now, b.Scan.Repo, b.Scan.RunURL, b.Scan.ScanID, b.Scan.Commit,
 			b.Scan.CorralVersion, b.Scan.Substrate, b.Scan.Host, b.Scan.Cores,
 			nullIfZeroInt(b.Scan.TreesRequested), b.Scan.DiffBase,
@@ -1223,6 +1264,9 @@ func insertBundle(db *sql.DB, b Bundle, now time.Time, uid string) (Counts, erro
 			b.Scan.SourcePushed, b.Scan.StatementSHA256, b.Scan.SelectionMillis, b.Scan.SelectionReusedFrom,
 			b.Scan.RekorLogIndex, nullIfEmpty(b.Scan.RekorUUID), SchemaVersion, nullTime(b.Scan.StartedAt),
 			nullIfEmpty(b.Scan.PushedBy),
+			nullIfEmpty(b.Scan.EngineVersion), nullIfEmpty(b.Scan.ModelSet), nullIfZeroInt(b.Scan.Top),
+			b.Scan.AllCandidates, nullIfZeroInt(b.Scan.TotalFiles),
+			b.Scan.PreflightRan, nullIfEmpty(b.Scan.PreflightNote), nullTime(b.Scan.FinishedAt),
 		); err != nil {
 			return Counts{}, fmt.Errorf("auditpush: insert scan row: %w", err)
 		}
@@ -1354,8 +1398,8 @@ func insertFileRow(tx *sql.Tx, uid string, now time.Time, r Row) error {
 	    mutant_budget, mutant_budget_rule, complexity,
 	    symbols, symbols_probed, decisions, decisions_probed,
 	    challenger_mutants, challenger_survived_writer, challenger_survived_shadow, challenger_union, challenger_shared,
-	    priors_applied, prior_digest
-	  ) VALUES (`+placeholders(91)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
+	    priors_applied, prior_digest, computed_at, mutants_from
+	  ) VALUES (`+placeholders(93)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
 		uid, now, r.Repo, r.Commit, r.Path, r.Lang,
 		killRate, r.Survivors, r.ProvenMissed,
 		r.TimedOut, r.TestWriterFailed, r.PoolTestUnsound,
@@ -1385,7 +1429,7 @@ func insertFileRow(tx *sql.Tx, uid string, now time.Time, r Row) error {
 		r.MutantBudget, nullIfEmpty(r.MutantBudgetRule), r.Complexity,
 		r.Symbols, r.SymbolsProbed, r.Decisions, r.DecisionsProbed,
 		r.ChallengerMutants, r.ChallengerSurvivedWriter, r.ChallengerSurvivedShadow, r.ChallengerUnion, r.ChallengerShared,
-		r.PriorsApplied, nullIfEmpty(r.PriorDigest),
+		r.PriorsApplied, nullIfEmpty(r.PriorDigest), nullTime(r.ComputedAt), nullIfEmpty(r.MutantsFrom),
 	)
 	if err != nil {
 		return fmt.Errorf("auditpush: insert %s: %w", r.Path, err)

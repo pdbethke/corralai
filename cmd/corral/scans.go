@@ -8,13 +8,12 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"text/tabwriter"
 	"time"
 
+	"github.com/pdbethke/corralai/internal/auditpush"
 	"github.com/pdbethke/corralai/internal/reposcan"
 	"github.com/pdbethke/corralai/internal/scanstore"
 )
@@ -44,33 +43,24 @@ type scansReader interface {
 	Close() error
 }
 
-// defaultScansDSN resolves the ledger path the same way `certify --repo
-// --record-db` documents its own default, so the reader and the writer can
-// never disagree about which file is "the ledger".
-func defaultScansDSN() string {
-	if dsn := strings.TrimSpace(os.Getenv("CORRALAI_SCANS_DB")); dsn != "" {
-		return dsn
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "corralai_scans.duckdb"
-	}
-	return filepath.Join(home, ".claude", "corralai_scans.duckdb")
-}
-
-// runScans implements `corral scans list|show` — the read side of the scan
-// ledger `certify --repo --record` writes.
+// runScans implements `corral scans list|show` — the read side of the
+// record `certify --repo` writes: the ledger directory (one signed,
+// hash-linked entry per scan; see --ledger there and internal/auditpush's
+// ledgerdir.go). A scan's id here is its POSITION in the chain, oldest
+// first, which is stable because the chain is append-only.
 //
-// It exists because that ledger was write-only in practice: every scan and
-// every per-file disposition was recorded, and nothing shipped could read them
-// back. Inspecting one meant installing a duckdb CLI (absent from the
-// production host) or writing a Go program. The gap became acute the day the
-// ledger started carrying the authored test and the ids it proved — evidence
-// specifically kept so a "tried and missed" would not require paying for
-// another audit to interrogate. Evidence nobody can query is not evidence.
+// It exists because the record was once write-only in practice: every scan
+// and every per-file disposition was recorded, and nothing shipped could
+// read them back. The gap became acute the day the record started carrying
+// the authored test and the ids it proved — evidence specifically kept so a
+// "tried and missed" would not require paying for another audit to
+// interrogate. Evidence nobody can query is not evidence.
 //
-// Read-only by design, like `corral matrix list`: a scan ledger is a record of
-// what happened, and nothing a human adjudicates after the fact (contrast
+// --db still reads a pre-1.0 scans.duckdb, so the scans an older corral
+// recorded stay readable; nothing writes one any more.
+//
+// Read-only by design, like `corral matrix list`: the record is what
+// happened, and nothing a human adjudicates after the fact (contrast
 // `corral criticscore confirm/refute`, which records a human verdict).
 // splitSharedDirs turns the ledger's comma-joined shared_dirs back into the
 // list concurrencyDisclosure renders. NULL/"" is "nothing shared" and stays
@@ -91,9 +81,8 @@ func runScans(args []string, open func(dsn string) (scansReader, error), stdout,
 	// from docs/cli, which is the enumeration the executed-surface manifest
 	// reads, so a flag added to `scans list` was invisible to every gate.
 	if len(args) == 0 || wantsHelp(args[:1]) {
-		fmt.Fprintln(stderr, "usage: corral scans list [--db <path>] [--limit n] [--json]")
-		fmt.Fprintln(stderr, "       corral scans show <scan-id> [--db <path>] [--json] [--evidence] [--timing]")
-		fmt.Fprintln(stderr, "       corral scans push --db <dsn> [--scan <id> | --all] [--since YYYY-MM-DD] [--dry-run]")
+		fmt.Fprintln(stderr, "usage: corral scans list [--ledger <dir> | --db <path>] [--limit n] [--json]")
+		fmt.Fprintln(stderr, "       corral scans show <scan-id> [--ledger <dir> | --db <path>] [--json] [--evidence] [--timing]")
 		return 2
 	}
 
@@ -103,9 +92,10 @@ func runScans(args []string, open func(dsn string) (scansReader, error), stdout,
 	case "show":
 		return runScansShow(args[1:], open, stdout, stderr)
 	case "push":
-		return runScansPush(args[1:], openScanStoreForPush, pushBundle, stdout, stderr)
+		fmt.Fprintln(stderr, "corral scans push is retired: the record is the ledger directory, and `certify --repo --push <dsn>` sends each scan's rows as it runs; `corral ledger append` moves an entry between directories")
+		return 2
 	default:
-		fmt.Fprintf(stderr, "corral scans: unknown subcommand %q — want list, show or push\n", args[0])
+		fmt.Fprintf(stderr, "corral scans: unknown subcommand %q — want list or show\n", args[0])
 		return 2
 	}
 }
@@ -113,14 +103,20 @@ func runScans(args []string, open func(dsn string) (scansReader, error), stdout,
 func runScansList(args []string, open func(string) (scansReader, error), stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("scans list", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	dsn := fs.String("db", "", "path to the scan ledger (default: $CORRALAI_SCANS_DB, else ~/.claude/corralai_scans.duckdb)")
+	ledger := fs.String("ledger", "", ledgerReadHelp)
+	dsn := fs.String("db", "", legacyDBHelp)
 	limit := fs.Int("limit", 20, "how many scans to show, newest first")
 	asJSON := fs.Bool("json", false, "emit the raw rows as JSON")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
 
-	st, err := open(scansDSNOr(*dsn))
+	target, terr := scansTarget(*ledger, *dsn)
+	if terr != nil {
+		fmt.Fprintln(stderr, "corral scans list:", terr)
+		return 2
+	}
+	st, err := open(target)
 	if err != nil {
 		fmt.Fprintln(stderr, "corral scans list:", err)
 		return 1
@@ -140,7 +136,7 @@ func runScansList(args []string, open func(string) (scansReader, error), stdout,
 		return 0
 	}
 	if len(rows) == 0 {
-		fmt.Fprintln(stdout, "no scans recorded yet — run `corral certify --repo <dir> --record` (note: --record is a BOOL that turns recording ON; --record-db only says where)")
+		fmt.Fprintln(stdout, "no scans recorded yet — `corral certify --repo <dir>` writes one entry per scan to the repo's .corral/ledger (or --ledger <dir>)")
 		return 0
 	}
 
@@ -162,7 +158,7 @@ func runScansList(args []string, open func(string) (scansReader, error), stdout,
 
 func runScansShow(args []string, open func(string) (scansReader, error), stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "usage: corral scans show <scan-id> [--db <path>] [--json] [--evidence] [--timing]")
+		fmt.Fprintln(stderr, "usage: corral scans show <scan-id> [--ledger <dir> | --db <path>] [--json] [--evidence] [--timing]")
 		return 2
 	}
 	id, err := strconv.ParseInt(args[0], 10, 64)
@@ -172,7 +168,8 @@ func runScansShow(args []string, open func(string) (scansReader, error), stdout,
 	}
 	fs := flag.NewFlagSet("scans show", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	dsn := fs.String("db", "", "path to the scan ledger (default: $CORRALAI_SCANS_DB, else ~/.claude/corralai_scans.duckdb)")
+	ledger := fs.String("ledger", "", ledgerReadHelp)
+	dsn := fs.String("db", "", legacyDBHelp)
 	asJSON := fs.Bool("json", false, "emit the raw rows as JSON")
 	evidence := fs.Bool("evidence", false, "also print the pool's authored test source for each audited file")
 	timing := fs.Bool("timing", false, "also print where each audited file's wall clock went, phase by phase — with --json, adds top-level selection_ms, selection_reused_from and model_calls and wraps the file array in an object ({\"files\": [...], \"selection_ms\": ..., \"selection_reused_from\": ..., \"model_calls\": [...]}) instead of emitting it bare")
@@ -180,7 +177,12 @@ func runScansShow(args []string, open func(string) (scansReader, error), stdout,
 		return 2
 	}
 
-	st, oerr := open(scansDSNOr(*dsn))
+	target, terr := scansTarget(*ledger, *dsn)
+	if terr != nil {
+		fmt.Fprintln(stderr, "corral scans show:", terr)
+		return 2
+	}
+	st, oerr := open(target)
 	if oerr != nil {
 		fmt.Fprintln(stderr, "corral scans show:", oerr)
 		return 1
@@ -278,7 +280,7 @@ func runScansShow(args []string, open func(string) (scansReader, error), stdout,
 			// This scan ran no selection pass of its own (SelectionMillis is
 			// nil above), and this is the one column that tells "reused"
 			// apart from "never ran" — see scanstore.Scan.SelectionReusedFrom.
-			fmt.Fprintf(stdout, "\nselection: reused — tree unchanged since scan %d\n", *row.SelectionReusedFrom)
+			fmt.Fprintln(stdout, "\nselection: reused — tree unchanged since an earlier scan (cached evidence)")
 		}
 		// The money half of the same readout, by the same per-file grouping:
 		// best-effort, like the spread above — a ledger written before
@@ -584,21 +586,42 @@ func formatKillRate(k *float64) string {
 	return fmt.Sprintf("%.2f", *k)
 }
 
-func scansDSNOr(flagVal string) string {
-	if strings.TrimSpace(flagVal) != "" {
-		return flagVal
+const (
+	ledgerReadHelp = "the ledger directory to read (default: $CORRAL_LEDGER, else ./.corral/ledger — where `certify --repo` writes its entry for the repo you are standing in)"
+	legacyDBHelp   = "a pre-1.0 scans.duckdb to read instead of a ledger directory; nothing writes one any more"
+)
+
+// scansTarget resolves what the reader opens: --db (an old DuckDB record)
+// wins when given, else --ledger, else the default directory. Both given
+// is a contradiction, refused rather than resolved by precedence.
+func scansTarget(ledger, dsn string) (string, error) {
+	ledger, dsn = strings.TrimSpace(ledger), strings.TrimSpace(dsn)
+	switch {
+	case ledger != "" && dsn != "":
+		return "", fmt.Errorf("--ledger and --db both given; one record at a time")
+	case dsn != "":
+		return dsn, nil
+	case ledger != "":
+		return strings.TrimRight(ledger, "/") + "/", nil
 	}
-	return defaultScansDSN()
+	return defaultLedgerDir(".") + "/", nil
 }
 
-// openScanStore is the production opener wired into main's dispatch.
-func openScanStore(dsn string) (scansReader, error) {
-	st, err := scanstore.Open(dsn)
+// openScanStore is the production opener wired into main's dispatch: a
+// directory (or a path spelled with a trailing slash — the default is, so
+// a missing default is a "nothing here yet", never a DuckDB file DuckDB
+// would create at that name) opens as the ledger view; anything else as
+// a pre-1.0 scans.duckdb.
+func openScanStore(target string) (scansReader, error) {
+	if auditpush.IsLedgerDir(target) {
+		return openLedgerScans(strings.TrimRight(target, "/"))
+	}
+	st, err := scanstore.Open(target)
 	if err != nil {
 		// DuckDB holds a single-writer lock on its file, so a scan running
 		// concurrently in another process owns it. Say so plainly rather than
 		// surfacing a bare driver error.
-		return nil, fmt.Errorf("opening the scan ledger %s: %w (a `certify --repo --record` run in another process holds it open — DuckDB is single-writer)", dsn, err)
+		return nil, fmt.Errorf("opening the scan ledger %s: %w (another process holds it open — DuckDB is single-writer)", target, err)
 	}
 	return st, nil
 }

@@ -36,7 +36,7 @@ import (
 // timeout (see scoreConfig.mutantTimeout / clampMutantTimeout): a floor so a
 // pathologically fast healthy suite (sub-second) still gives a mutant enough
 // room to run at all, and a ceiling so a pathologically slow healthy suite
-// doesn't turn "8x baseline" into a per-mutant wait that is itself most of
+// doesn't turn "3x baseline" into a per-mutant wait that is itself most of
 // the whole-run budget.
 const (
 	minMutantTimeout = 30 * time.Second

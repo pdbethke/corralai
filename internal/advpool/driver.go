@@ -1558,6 +1558,15 @@ func (d *Driver) StartRun(missionID int64, rs RunSpec, sigs []repoindex.Signatur
 		// explicit one that will not fit — while there is still time to
 		// stop it.
 		log.Printf("advpool: %s: mutants: %s", rs.CodePath, budget)
+		// The prior, said beside the budget: an operator watching the log
+		// should see that this file sits a primed exam before the first
+		// seat runs, not learn it from the report afterwards.
+		switch {
+		case rs.PriorsApplied > 0:
+			log.Printf("advpool: %s: prior: %d edit(s) earlier runs tried on these bytes were given to the generator (from %s, digest %s)", rs.CodePath, rs.PriorsApplied, rs.PriorSource, rs.PriorDigest)
+		case rs.PriorSource != "":
+			log.Printf("advpool: %s: prior: none applied — %s", rs.CodePath, rs.PriorSource)
+		}
 	}
 	shardSymbols := make(map[string][]string, len(shards))
 	// shardStats seeds the metrics substrate with each shard's difficulty

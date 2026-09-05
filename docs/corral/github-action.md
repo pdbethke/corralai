@@ -448,6 +448,8 @@ and the fix belongs in the code, not a caveat in these docs.
 | `goals` | no | `""` | Optional JSON file of per-file goals. Omitted means goals are derived per file by a model. |
 | `tests` | no | `""` | Optional JSON file mapping repo-relative **source** paths to their test files, consulted before filename convention. Needed whenever your project names tests after behaviour rather than after source files — common in JS/TS, where convention can pair *nothing* and the gate would then have no file to audit. A mapping to a file that does not exist is refused, not silently ignored. |
 | `timeout` | no | `""` (corral's own default, 30m) | Per-file budget, a Go duration. The default is sized for a PR author who did not choose to start an hours-long job, not for a whole audit: every mutant re-runs your suite, so one large file on a hosted runner is hours. Raise it (and the job's `timeout-minutes`) when you want the complete audit rather than a bounded sample. |
+| `max-tokens` | no | `""` (no cap) | Cap on model tokens for the whole run — input + output, every seat, every file. Checked before each call and charged after it; past the cap no further model call is made, and the cost line says so. The money bound, beside `top` (files) and `timeout` (clock). |
+| `ledger` | no | `""` | A directory inside the checkout that is the run's memory — see "The ledger branch" below. Earlier runs' mutants and outcomes there are handed to the generator as a **prior** (same-bytes files only; the report says which); this run records its scan to `<ledger>/scans.duckdb` and its graded mutants to `<ledger>/mutants/<commit>.json`. Commit the directory back to the `corral/ledger` branch after the step. |
 | `top` | no | `""` (corral's own default bound, 25) | Audit at most this many of the highest-ranked candidate files. An audit costs roughly (mutants × your suite's **whole** runtime) **per file**, and the file count comes from the PR's diff — a number the author picks, not you. See "What one run costs" below before raising it. |
 | `min-kill-rate` | no | `""` (unset) | Fail the run (exit 1) if **any individual audited file's** kill rate is below this value. Range 0.0-1.0 inclusive; a *minimum*, so a file exactly at the value passes. Opt-in — leave empty to keep the pre-`min-kill-rate` behaviour, where a weak-but-gradable suite still exits 0. See "Failing on a weak kill rate" below. |
 | `max-proven-missed` | no | `""` (unset) | Fail the run if any audited file has *more* than this many PROVEN-MISSED gaps — survivors the herd itself then killed with a test it wrote and ran. Prefer this to `min-kill-rate` as the merge gate: a kill rate is a proportion of freshly generated mutants and moves between runs on unchanged code, while a proven gap is a specific, execution-demonstrated bug. `0` means any demonstrated gap fails the build. Fails **closed** when the herd had survivors but authored no test that graded — a `0` there means nothing was proven, not that the suite is clean. |
@@ -471,6 +473,70 @@ echoes a key value, and an unset key is never exported as an empty variable
 | `critic-model` | no | `""` | Model for the test-critic role, which must **differ** from the writer's. `off` disables it entirely — it is advisory and never gates the verdict, so a single-vendor run with only one usable model can drop it. No default. |
 | `shadow-model` | no | `""` (OFF) | Challenger model that attacks every region a second time. Recorded for comparison, never gates the verdict. Off unless named. |
 | `corral-version` | no | `""` (falls back to the action's own ref, `github.action_ref`) | Which `corral` to `go install`, as a version suffix (a tag, branch, or commit). Leave it empty unless you deliberately want a different `corral` release than the action you pinned in `uses:`. |
+
+## The ledger branch — what a runner remembers
+
+A runner forgets everything when the job ends, so on its own an Action run
+cannot know what an earlier run tried. GitHub has no database to offer; what
+it has is a branch. The recipe: keep an **orphan branch `corral/ledger`** that
+holds nothing but corral's own record — a scan ledger and one mutant-set
+document per audited commit — check it out into a directory before the
+audit, hand that directory to the `ledger` input, and commit it back after.
+Zero signup: the repository's own permissions are the auth, branch
+protection keeps a fork's pull request from writing to it, and the git
+author of each commit is the principal. The files are the repository's own
+code and numbers; nothing leaves that was not already there.
+
+```yaml
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - name: Check out the ledger branch (create it on first use)
+        run: |
+          if git ls-remote --exit-code --heads origin corral/ledger >/dev/null 2>&1; then
+            git fetch --no-tags origin corral/ledger
+            git worktree add .corral-ledger origin/corral/ledger
+          else
+            git worktree add --detach .corral-ledger
+            (cd .corral-ledger && git checkout --orphan corral/ledger && git rm -rfq . && echo "corral's record — see docs/corral/github-action.md" > README.md)
+          fi
+      - uses: pdbethke/corralai@v0.8.3
+        with:
+          test-command: pytest -q
+          ledger: .corral-ledger
+          derive-model: gemini-3.6-flash
+          mutant-model: gemini-3.6-flash
+          writer-model: gemini-3.6-flash
+          critic-model: claude-haiku-4-5
+          gemini-key: ${{ secrets.GEMINI_API_KEY }}
+          anthropic-key: ${{ secrets.ANTHROPIC_API_KEY }}
+      - name: Commit the ledger back
+        if: always() && github.event_name != 'pull_request'
+        run: |
+          cd .corral-ledger
+          git add -A
+          git -c user.name=corral -c user.email=corral@users.noreply.github.com commit -qm "corral: ${{ github.sha }}" || exit 0
+          # Append-only rows make a fetch-and-retry safe: a concurrent run's
+          # push lands first, ours reapplies on top.
+          for i in 1 2 3; do
+            git push origin HEAD:corral/ledger && exit 0
+            git fetch origin corral/ledger && git rebase origin/corral/ledger || exit 1
+          done
+          exit 1
+```
+
+Two honesty notes. **A primed run sits a different exam** — the generator was
+told what survived last time and asked to plant elsewhere — so its kill rate
+is not comparable to an unprimed run's, and every verdict, ledger row and
+signed statement carries `priorsApplied` and the prior's digest. And **only a
+file whose bytes match exactly** what the prior was recorded against is
+primed; a changed file sits the plain exam and the report says so. The
+branch's binary file grows with every commit; squash it on a schedule, or
+point `push` at MotherDuck instead when the record outgrows git — it is the
+same warehouse at scale.
+
+The commit step is skipped on `pull_request` events on purpose: a fork's
+pull request must not be able to write the repository's record, and
+`GITHUB_TOKEN` on a fork PR cannot push anyway.
 
 ## Where the report shows up
 

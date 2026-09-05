@@ -4,8 +4,12 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/pdbethke/corralai/internal/lang"
+	"github.com/pdbethke/corralai/internal/scanstore"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -383,5 +387,85 @@ func TestCertifyRepoTopBoundsEvidenceWidenedCandidatesToo(t *testing.T) {
 	}
 	if !strings.Contains(s, "1 test-support") {
 		t.Errorf("tests/conftest.py must be accounted under its own reason:\n%s", s)
+	}
+}
+
+// --prior end to end on the repo path: a replayed run (no model call) is
+// handed a prior recorded on the SAME bytes for one file and on OTHER bytes
+// for another. The first is primed and says so on the report line and in
+// the ledger; the second is refused, out loud. The prior's digest is in the
+// cache key, so a primed verdict never serves an unprimed request.
+func TestCertifyRepoPriorIsAppliedOnSameBytesAndRefusedOnOthers(t *testing.T) {
+	skipWithoutPythonCoverage(t)
+	t.Setenv("ANTHROPIC_API_KEY", "test-placeholder-not-a-real-key")
+	root := t.TempDir()
+	mustWrite(t, filepath.Join(root, "pyproject.toml"), "[tool.coverage.run]\nsource = [\"mypkg\"]\n")
+	mustWrite(t, filepath.Join(root, "mypkg", "__init__.py"), "")
+	a := "def a():\n    return 1\n"
+	b := "def b():\n    return 1\n"
+	mustWrite(t, filepath.Join(root, "mypkg", "a.py"), a)
+	mustWrite(t, filepath.Join(root, "mypkg", "b.py"), b)
+	mustWrite(t, filepath.Join(root, "tests", "test_a.py"), "from mypkg.a import a\n\n\ndef test_a():\n    assert a() == 1\n")
+	mustWrite(t, filepath.Join(root, "tests", "test_b.py"), "from mypkg.b import b\n\n\ndef test_b():\n    assert b() == 1\n")
+
+	// The prior: a document from an earlier run — a.py at its CURRENT
+	// bytes, b.py at OTHER bytes.
+	priorDir := filepath.Join(root, "ledger")
+	if err := os.MkdirAll(priorDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := adequacy.WriteMutantSet(filepath.Join(priorDir, "earlier.json"), adequacy.MutantSetFile{
+		Format: adequacy.MutantSetFormat,
+		Files: map[string]adequacy.MutantSetEntry{
+			"mypkg/a.py": {ParentSHA256: shaOf(a), Mutants: []adequacy.RecordedMutant{{ID: "old/m1", Span: lang.LineRange{Start: 2, End: 2}, Search: "    return 1\n", Replace: "    return 2\n"}}},
+			"mypkg/b.py": {ParentSHA256: shaOf("def b():\n    return 0\n"), Mutants: []adequacy.RecordedMutant{{ID: "old/m1", Span: lang.LineRange{Start: 2, End: 2}, Search: "    return 0\n", Replace: "    return 9\n"}}},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// This run replays a fixed set so no model is called; the prior still
+	// resolves and is disclosed (it would shape generation on a live run).
+	setPath := filepath.Join(root, "mutants.json")
+	if err := adequacy.WriteMutantSet(setPath, adequacy.MutantSetFile{
+		Format: adequacy.MutantSetFormat,
+		Files: map[string]adequacy.MutantSetEntry{
+			"mypkg/a.py": {ParentSHA256: shaOf(a), Mutants: []adequacy.RecordedMutant{{ID: "m1", Replace: "def a():\n    return 2\n"}}},
+			"mypkg/b.py": {ParentSHA256: shaOf(b), Mutants: []adequacy.RecordedMutant{{ID: "m1", Replace: "def b():\n    return 2\n"}}},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	db := filepath.Join(root, "scans.duckdb")
+	var out, errb bytes.Buffer
+	code := runCertifyRepo([]string{
+		"--repo", root, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant, "--critic-model", "off",
+		"--goals", writeGoals(t, root, `{"mypkg/a.py": "a() must return 1", "mypkg/b.py": "b() must return 1"}`),
+		"--substrate", substrateWorkspace, "--all", "--mutants", setPath, "--prior", priorDir,
+		"--record", "--record-db", db,
+	}, &out, &errb)
+	s := out.String()
+	if code != 0 {
+		t.Fatalf("exit=%d stdout=%s stderr=%s", code, s, errb.String())
+	}
+	if !strings.Contains(s, "prior: 1 edit(s) earlier runs tried on these bytes were given to the generator") {
+		t.Errorf("a.py must be primed and say so:\n%s", s)
+	}
+	if !strings.Contains(s, "prior: none applied") || !strings.Contains(s, "refused: recorded against a different version of this file") {
+		t.Errorf("b.py's prior must be refused, out loud:\n%s", s)
+	}
+	// The ledger row carries it.
+	st, err := scanstore.Open(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	scans, _ := st.Scans(context.Background(), 1)
+	files, _ := st.FilesForScan(context.Background(), scans[0].ID)
+	primed := map[string]bool{}
+	for _, f := range files {
+		primed[f.Path] = f.PriorsApplied != nil && *f.PriorsApplied == 1 && f.PriorDigest != ""
+	}
+	if !primed["mypkg/a.py"] || primed["mypkg/b.py"] {
+		t.Errorf("ledger: a.py primed=%v b.py primed=%v, want true/false", primed["mypkg/a.py"], primed["mypkg/b.py"])
 	}
 }

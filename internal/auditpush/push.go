@@ -186,7 +186,10 @@ type Row struct {
 	ChallengerSurvivedShadow *int
 	ChallengerUnion          *int
 	ChallengerShared         *int
-	GoalsDerived             int
+	// PriorsApplied / PriorDigest mirror scanstore.File's.
+	PriorsApplied *int
+	PriorDigest   string
+	GoalsDerived  int
 	// GoalReused mirrors scanstore.File.GoalReused: *bool, and true is the
 	// only value ever written — "not reused" and "the goal cache was never
 	// asked about this file" are different claims a stored false cannot

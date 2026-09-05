@@ -4,6 +4,7 @@ package advpool
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -179,5 +180,40 @@ func TestPlanShardsFitsTheBudgetToTheDeadline(t *testing.T) {
 	_, b = PlanShards(sigs, rs)
 	if b.Rule != BudgetRuleComplexity || b.Exceeds {
 		t.Errorf("without a measured round cost the plan must not pretend to have fitted: %+v", b)
+	}
+}
+
+// A prior is a constraint the generator reads after the goal and after any
+// shard aiming, and the verdict says it was given. A spec without one
+// renders byte-for-byte as before.
+func TestPriorReachesTheGeneratorPromptAndTheVerdict(t *testing.T) {
+	sigs := []repoindex.Signature{{Name: "get", Line: 1, Lines: 2, Complexity: 1}, {Name: "post", Line: 4, Lines: 2, Complexity: 1}}
+	rs := RunSpec{Goal: "g", CodePath: "api.py", Code: "def get():\n    pass\n\ndef post():\n    pass\n", Lang: "python", MaxShards: 2}
+	plain := BuildDAG(rs, RoleAssignment{RoleMutantGenerator: "m", RoleTestWriter: "w", RoleTestCritic: "c"}, sigs)
+	rs.Prior = "ALREADY TRIED on this exact version of the file (1 edit(s) from earlier runs). Do NOT repeat these edits: line 2, constant-changed — KILLED by tests/test_api.py::test_get"
+	rs.PriorsApplied, rs.PriorDigest, rs.PriorSource = 1, "abc123", "ledger/"
+	primed := BuildDAG(rs, RoleAssignment{RoleMutantGenerator: "m", RoleTestWriter: "w", RoleTestCritic: "c"}, sigs)
+	seen := 0
+	for i, spec := range primed {
+		if spec.Role != RoleMutantGenerator {
+			if spec.Instruction != plain[i].Instruction {
+				t.Errorf("%s's prompt must not change with a prior", spec.Role)
+			}
+			continue
+		}
+		seen++
+		if !strings.Contains(spec.Instruction, "ALREADY TRIED") || !strings.Contains(spec.Instruction, "KILLED by tests/test_api.py::test_get") {
+			t.Errorf("generator seat %s did not receive the prior:\n%s", spec.Key, spec.Instruction)
+		}
+		if strings.Contains(plain[i].Instruction, "ALREADY TRIED") {
+			t.Errorf("an unprimed spec must not mention a prior")
+		}
+	}
+	if seen == 0 {
+		t.Fatal("no generator seats rendered")
+	}
+	v := verdictFromSpec(rs)
+	if v.PriorsApplied != 1 || v.PriorDigest != "abc123" || v.PriorSource != "ledger/" {
+		t.Errorf("verdict does not carry the prior's disclosure: %+v", v)
 	}
 }

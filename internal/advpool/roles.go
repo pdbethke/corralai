@@ -94,7 +94,14 @@ func langFor(rs RunSpec) golang.Plugin {
 // generator would have used.
 func renderMutantGenerator(rs RunSpec, sigs []repoindex.Signature, _ []adequacy.Mutant) string {
 	p := langFor(rs)
-	system, user := testgen.GenerateMutantsPrompt(p.MutantSystem(), rs.Goal, rs.Code, sigs, rs.NMutants)
+	goal := rs.Goal
+	if strings.TrimSpace(rs.Prior) != "" {
+		// After the goal and after any shard aiming: the prior is a
+		// constraint on WHERE and HOW to plant, read once the seat knows
+		// what to attack.
+		goal += "\n\n" + strings.TrimSpace(rs.Prior)
+	}
+	system, user := testgen.GenerateMutantsPrompt(p.MutantSystem(), goal, rs.Code, sigs, rs.NMutants)
 	return joinPrompt(system, user)
 }
 

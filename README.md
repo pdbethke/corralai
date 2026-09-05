@@ -823,6 +823,22 @@ that is a deliberate act, is in
   it cannot fit. **Every verdict, ledger row and signed statement carries the
   budget and its rule** (`complexity`, `complexity-fitted`, `explicit`, `default`),
   because a kill rate over 8 mutants and one over 40 are different measurements.
+- **The prior (`--prior`) — the next run plants what the last one didn't.**
+  Hand a run what earlier runs recorded — a `--record-mutants` document (the
+  hunks), a `--record-db` ledger (the outcomes), or a directory of either — and
+  the generator is told, for each file whose bytes are **exactly** what the
+  prior was recorded against, every edit already tried there: its place, its
+  shape, its hunk, and what happened (*killed by test_x* — the suite watches
+  this; *survived, gap already proven*; *survived, unproven*), then asked to
+  plant different faults. A file the prior knows only under other bytes gets
+  none, and the report says so. **A primed exam is a different exam**: the
+  verdict, both ledgers and the signed statement carry `priorsApplied` and the
+  prior's digest, and the digest is in the cache key, so a repeat audit never
+  reads as the tests changing when only the exam did. With the budget sized to
+  the file and the reach recorded per run, successive primed runs cover the
+  decision points the last one didn't — cumulative reach, computable from the
+  warehouse. On a runner, the `corral/ledger` branch is where the prior lives
+  (see [docs/corral/github-action.md](docs/corral/github-action.md)).
 - **A cap on money (`--max-tokens`).** Corral bounded mutants, shards, wall clock
   and concurrency and never tokens; a per-survivor writer on a survivor-heavy
   file paid a call per survivor and nothing clamped it. `--max-tokens N` is one

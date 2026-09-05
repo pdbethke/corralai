@@ -30,6 +30,7 @@ import (
 	"github.com/pdbethke/corralai/internal/certify"
 	"github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/modelcorr"
+	"github.com/pdbethke/corralai/internal/prior"
 	"github.com/pdbethke/corralai/internal/reposcan"
 	"github.com/pdbethke/corralai/internal/sandbox"
 	"github.com/pdbethke/corralai/internal/scanstore"
@@ -85,6 +86,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	noFailFastFlag := fs.Bool("no-fail-fast", false, noFailFastHelp)
 	preflightFlag := fs.Bool("preflight", false, "run the project's test suite once with coverage instrumentation and report which source files it never executes. One extra suite run; reports coverage-grade evidence, not proof")
 	recordFlag := fs.Bool("record", false, "record every file this scan audited or rejected, and why, into the DuckDB scan ledger (default: off). A BOOL here — unlike `certify --local`'s --record, which takes a tape PATH — see --record-db for where the ledger goes. A recording failure never changes the scan's verdict or exit code")
+	priorFlag := fs.String("prior", "", "what earlier runs already tried, so this run plants DIFFERENT faults: a corral-mutants document (see --record-mutants), a scan ledger (.duckdb, see --record-db), or a directory holding any number of either — a document brings the hunks, a ledger the outcomes, merged per edit. Applied only to a file whose bytes are EXACTLY what the prior was recorded against; a file the prior knows under other bytes gets none, and the report says so. A run handed a prior sits a different exam from one without — the verdict, the ledger and the signed statement carry priorsApplied and the prior's digest, and the digest is in the cache key, so a repeat audit never reads as the tests changing when only the exam did")
 	mutantsFlag := fs.String("mutants", "", "REPLAY a recorded mutant set (see --record-mutants) instead of generating one: every audited file is graded against exactly the mutants in this file, and not one generator model call is made. Mutants are authored by a model, so an ordinary run re-draws the exam every time and two runs of the same audit are not two samples of one measurement — pin the set and a change to anything ELSE becomes measurable. Every selected file must appear in the set with the SAME bytes it was recorded from; a missing file or a changed one is refused (exit 2) up front, never half-replayed. Reads a corral-mutants-2 document, or an older corral-mutants-1 one, whose whole-file mutants still replay byte-for-byte.")
 	recordMutantsFlag := fs.String("record-mutants", "", "write the mutants this scan actually GRADED to this file, as a replayable corral-mutants-2 document — one entry per audited file, each mutant its SEARCH/REPLACE hunk, tied to the sha256 of the source it was derived from. Written even when the scan's gates fail: a red verdict is still a recorded exam. A v2 document re-recorded from a --mutants replay of an older corral-mutants-1 set contains that set's WHOLE-FILE entries, not hunks — the run graded what was recorded, and re-recording it does not manufacture anchors it never had")
 	writerModeFlag := fs.String("writer-mode", "", "how the test-writer attacks a file's survivors: `per-survivor` (the default) makes ONE call per survivor — each carrying the file once as a cacheable shared prefix plus that survivor's diff, each repaired on its own budget and each PROVEN ALONE against its own mutant — or `batched`, the original shape: one call carrying every survivor, one repair budget for the file, one proof pass over all of them. Nothing measured changes between them (a survivor is proven iff an authored test kills it alone and passes on the original, either way); what changes is that one unbuildable test no longer spends the whole file's retries and takes every other survivor down with it. The verdict, the report line, the ledger and the attestation all record which mode earned the numbers. Each survivor's proof in per-survivor mode runs its OWN compliant baseline (a compliant pass plus a canary, per seat), so a file with N survivors pays N baselines where batched paid one: on a repo whose suite takes a minute, prefer --writer-mode batched or expect N baselines' worth of wall clock.")
@@ -581,6 +583,17 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		if mutantRecorder != nil {
 			ex.mutantSink = mutantRecorder.sink
 		}
+		// --prior: loaded once, resolved per file against its bytes. A path
+		// that cannot be read refuses the scan up front rather than running
+		// the unprimed exam under a primed flag.
+		if p := strings.TrimSpace(*priorFlag); p != "" {
+			lp, perr := prior.Load(p)
+			if perr != nil {
+				fmt.Fprintf(stderr, "corral certify --repo: --prior: %v\n", perr)
+				return 2
+			}
+			ex.prior = lp
+		}
 		ex.writerMode = writerMode
 		ex.models = auditModels{
 			writer: *writerModelFlag, mutant: *mutantModelFlag,
@@ -954,7 +967,15 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 			if ex == nil {
 				return ""
 			}
-			return fileSelectionKey(ex.selectionFor(reposcan.Job{Path: c.Path, TestPath: c.TestPath, Lang: c.Lang}))
+			key := fileSelectionKey(ex.selectionFor(reposcan.Job{Path: c.Path, TestPath: c.TestPath, Lang: c.Lang}))
+			// A primed exam keys apart from an unprimed one, per file: the
+			// prior's digest for THIS file's bytes, or nothing when the
+			// prior has none for them (then the file sits the plain exam
+			// and keys as it always has).
+			if d := ex.priorDigestFor(c.Path); d != "" {
+				key += "\x00prior=" + d
+			}
+			return key
 		},
 	}
 	jobs, goalExcl, err := reposcan.EmitJobs(cfg, selected, gs)
@@ -3503,6 +3524,13 @@ func printWeakFile(w io.Writer, f reposcan.WeakFile) {
 	if line := writerPairLine(f.Challenger); line != "" {
 		fmt.Fprintf(w, "\n   writers: %s", line)
 	}
+	if f.PriorsApplied > 0 {
+		// A primed exam is a different exam; the line that says so sits
+		// with the budget and the confidence, not in a footnote.
+		fmt.Fprintf(w, "\n   prior: %d edit(s) earlier runs tried on these bytes were given to the generator (from %s, digest %s) — not comparable to an unprimed run", f.PriorsApplied, f.PriorSource, f.PriorDigest)
+	} else if f.PriorSource != "" {
+		fmt.Fprintf(w, "\n   prior: none applied — %s", f.PriorSource)
+	}
 	fmt.Fprintln(w)
 	// How many private trees scored this file at once, or why it only got
 	// one — the same wording noteConcurrency printed live during the run,
@@ -4117,6 +4145,8 @@ type localExecutor struct {
 	// refused (see presetMutantsForSelection), so a nil lookup here means an
 	// ordinary generated run, never a silent half-replay.
 	presetMutants map[string][]adequacy.Mutant
+	// prior is the loaded --prior, resolved per file in newAuditRunSpec.
+	prior *prior.Prior
 
 	// mutantSink is `--record-mutants`: fed the mutants each file's dev pass
 	// actually graded. nil records nothing.
@@ -4429,6 +4459,7 @@ func (l *localExecutor) auditInputFor(j reposcan.Job) localAuditInput {
 
 		// A nil entry is an ordinary generated run — see localExecutor.presetMutants.
 		presetMutants: l.presetMutants[j.Path],
+		prior:         l.prior,
 		mutantSink:    l.mutantSink,
 		// This file's own adapter onto the scan's shared tape — see
 		// scanEventSink.forFile's doc for why every file needs its own
@@ -4963,6 +4994,8 @@ func writeAuditStatement(path, repoDir string, r reposcan.RepoReport, models map
 			ExamMeasured:             f.ExamCoverage.Measured,
 			ExamIndicative:           f.ExamIndicative,
 			IndicativeReason:         f.IndicativeReason,
+			PriorsApplied:            f.PriorsApplied,
+			PriorDigest:              f.PriorDigest,
 			ChallengerModel:          pairField(f.Challenger, func(p *modelcorr.Pair) string { return p.ModelB }),
 			ChallengerMutants:        pairInt(f.Challenger, func(p *modelcorr.Pair) int { return p.Mutants }),
 			ChallengerSurvivedWriter: pairInt(f.Challenger, func(p *modelcorr.Pair) int { return p.SurvivedA }),
@@ -5444,4 +5477,32 @@ func pairJaccard(p *modelcorr.Pair) float64 {
 		return 0
 	}
 	return p.Jaccard
+}
+
+// priorDigestFor is the --prior's fingerprint for path's CURRENT bytes — the
+// same resolution newAuditRunSpec performs, so the cache key and the verdict
+// agree on whether the file was primed. "" without a prior, or when the
+// prior knows the path only under other bytes.
+func (l *localExecutor) priorDigestFor(path string) string {
+	if l == nil || l.prior == nil {
+		return ""
+	}
+	// Read through an os.Root, like every other candidate read in this
+	// file: a path the scan enumerated cannot escape the repo, and the root
+	// makes that a property of the read rather than a promise.
+	root, err := os.OpenRoot(l.repoDir)
+	if err != nil {
+		return ""
+	}
+	defer root.Close()
+	b, err := root.ReadFile(filepath.FromSlash(path))
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(b)
+	tried, perr := l.prior.For(path, hex.EncodeToString(sum[:]))
+	if perr != nil || len(tried) == 0 {
+		return ""
+	}
+	return prior.Digest(tried)
 }

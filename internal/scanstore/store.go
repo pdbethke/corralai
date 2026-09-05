@@ -467,6 +467,11 @@ type File struct {
 	ChallengerSurvivedShadow *int
 	ChallengerUnion          *int
 	ChallengerShared         *int
+	// PriorsApplied / PriorDigest: the run was told about this many edits
+	// earlier runs tried on the same bytes — a different exam. NULL / ""
+	// when no prior was given.
+	PriorsApplied *int
+	PriorDigest   string
 	// GoalsDerived is how many goals reposcan derived for this file. 0 means
 	// none were derived, which is a real and common answer, so this one is a
 	// plain int rather than a pointer.
@@ -580,6 +585,8 @@ var scanFilesMigrationCols = []struct{ name, ddl string }{
 	{"challenger_survived_shadow", "challenger_survived_shadow INTEGER"},
 	{"challenger_union", "challenger_union INTEGER"},
 	{"challenger_shared", "challenger_shared INTEGER"},
+	{"priors_applied", "priors_applied INTEGER"},
+	{"prior_digest", "prior_digest VARCHAR"},
 }
 
 // scansMigrationCols is the same ledger at the SCAN grain. `scans` had no
@@ -749,7 +756,9 @@ func Open(dsn string) (*Store, error) {
 		challenger_survived_writer INTEGER,
 		challenger_survived_shadow INTEGER,
 		challenger_union INTEGER,
-		challenger_shared INTEGER
+		challenger_shared INTEGER,
+		priors_applied INTEGER,
+		prior_digest VARCHAR
 	)`); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("scanstore: create scan_files table: %w", err)
@@ -1202,9 +1211,10 @@ func (s *Store) Record(ctx context.Context, scan Scan, files []File) (int64, err
 			writer_mode, prompt_shape, covering_tests, import_only,
 			mutant_budget, mutant_budget_rule, complexity,
 			symbols, symbols_probed, decisions, decisions_probed,
-			challenger_mutants, challenger_survived_writer, challenger_survived_shadow, challenger_union, challenger_shared
+			challenger_mutants, challenger_survived_writer, challenger_survived_shadow, challenger_union, challenger_shared,
+			priors_applied, prior_digest
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			id, f.Path, f.Lang, f.Disposition, f.Reason,
 			fileKillRate(f), f.Survivors, f.Gradable, f.PreflightState, f.Evidence, f.Detail, f.TimedOut, f.TestWriterFailed, f.ProvenMissed, f.PoolTestUnsound,
 			f.ProvenMutantIDs, f.AuthoredTest, f.CacheKey, f.VerdictJSON, f.ComputedAt,
@@ -1221,6 +1231,7 @@ func (s *Store) Record(ctx context.Context, scan Scan, files []File) (int64, err
 			nullableIntPtr(f.MutantBudget), nullableString(f.MutantBudgetRule), nullableIntPtr(f.Complexity),
 			nullableIntPtr(f.Symbols), nullableIntPtr(f.SymbolsProbed), nullableIntPtr(f.Decisions), nullableIntPtr(f.DecisionsProbed),
 			nullableIntPtr(f.ChallengerMutants), nullableIntPtr(f.ChallengerSurvivedWriter), nullableIntPtr(f.ChallengerSurvivedShadow), nullableIntPtr(f.ChallengerUnion), nullableIntPtr(f.ChallengerShared),
+			nullableIntPtr(f.PriorsApplied), nullableString(f.PriorDigest),
 		); err != nil {
 			return 0, fmt.Errorf("scanstore: insert scan_files row for %q: %w", f.Path, err)
 		}
@@ -1406,7 +1417,8 @@ func (s *Store) FilesForScan(ctx context.Context, scanID int64) ([]File, error) 
 		writer_mode, prompt_shape, covering_tests, import_only,
 		mutant_budget, mutant_budget_rule, complexity,
 		symbols, symbols_probed, decisions, decisions_probed,
-		challenger_mutants, challenger_survived_writer, challenger_survived_shadow, challenger_union, challenger_shared
+		challenger_mutants, challenger_survived_writer, challenger_survived_shadow, challenger_union, challenger_shared,
+		priors_applied, prior_digest
 		FROM scan_files WHERE scan_id = ? ORDER BY rowid`, scanID)
 	if err != nil {
 		return nil, fmt.Errorf("scanstore: files for scan %d: %w", scanID, err)
@@ -1482,6 +1494,8 @@ func (s *Store) FilesForScan(ctx context.Context, scanID int64) ([]File, error) 
 		var mutantBudgetRule sql.NullString
 		var symbols, symbolsProbed, decisions, decisionsProbed sql.NullInt64
 		var chMutants, chSurvW, chSurvS, chUnion, chShared sql.NullInt64
+		var priorsApplied sql.NullInt64
+		var priorDigest sql.NullString
 		if err := rows.Scan(&f.Path, &f.Lang, &f.Disposition, &f.Reason,
 			&f.KillRate, &f.Survivors, &f.Gradable, &f.PreflightState, &f.Evidence, &detail, &timedOut, &testWriterFailed, &provenMissed, &poolTestUnsound,
 			&provenIDs, &authoredTest,
@@ -1497,7 +1511,8 @@ func (s *Store) FilesForScan(ctx context.Context, scanID int64) ([]File, error) 
 			&perMutant, &tpmMin, &tpmMedian, &tpmMax, &writerMode, &promptShape, &coveringTests, &importOnly,
 			&mutantBudget, &mutantBudgetRule, &complexity,
 			&symbols, &symbolsProbed, &decisions, &decisionsProbed,
-			&chMutants, &chSurvW, &chSurvS, &chUnion, &chShared); err != nil {
+			&chMutants, &chSurvW, &chSurvS, &chUnion, &chShared,
+			&priorsApplied, &priorDigest); err != nil {
 			return nil, fmt.Errorf("scanstore: scan scan_files row: %w", err)
 		}
 		f.Detail = detail.String
@@ -1590,6 +1605,7 @@ func (s *Store) FilesForScan(ctx context.Context, scanID int64) ([]File, error) 
 		f.Decisions, f.DecisionsProbed = nullCount(decisions), nullCount(decisionsProbed)
 		f.ChallengerMutants, f.ChallengerSurvivedWriter, f.ChallengerSurvivedShadow = nullCount(chMutants), nullCount(chSurvW), nullCount(chSurvS)
 		f.ChallengerUnion, f.ChallengerShared = nullCount(chUnion), nullCount(chShared)
+		f.PriorsApplied, f.PriorDigest = nullCount(priorsApplied), priorDigest.String
 		out = append(out, f)
 	}
 	return out, rows.Err()

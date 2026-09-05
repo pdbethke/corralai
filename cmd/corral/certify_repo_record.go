@@ -375,6 +375,8 @@ func buildScanFileRows(results []reposcan.FileResult, excluded []reposcan.Exclus
 				ChallengerSurvivedShadow: pairCount(r.Verdict.ChallengerAgreement, func(p *modelcorr.Pair) int { return p.SurvivedB }),
 				ChallengerUnion:          pairCount(r.Verdict.ChallengerAgreement, func(p *modelcorr.Pair) int { return p.UnionSurvivors }),
 				ChallengerShared:         pairCount(r.Verdict.ChallengerAgreement, func(p *modelcorr.Pair) int { return p.SharedSurvivors }),
+				PriorsApplied:            nullIfZeroIntPtr(r.Verdict.PriorsApplied),
+				PriorDigest:              r.Verdict.PriorDigest,
 				// How many goals reposcan's DERIVER produced for this file —
 				// 0 (not NULL: the column is a plain int, see
 				// scanstore.File.GoalsDerived's doc) unless this file's goal

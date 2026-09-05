@@ -105,6 +105,12 @@ type WeakFile struct {
 	// a clean result — an indication.
 	ExamIndicative   bool
 	IndicativeReason string
+	// PriorsApplied / PriorDigest / PriorSource mirror advpool.Verdict's:
+	// the run was told about this many edits earlier runs tried on the
+	// same bytes. A different exam from a run without; said everywhere.
+	PriorsApplied int
+	PriorDigest   string
+	PriorSource   string
 	// SelectionMethod, SelectedTests and SuiteTests mirror
 	// advpool.Verdict.TestSelection: WHICH measurement this kill rate is —
 	// the tests coverage evidence showed execute this file (Method, e.g.
@@ -544,6 +550,9 @@ func Aggregate(owner, repo, commit string, totalFiles, candidates int, results [
 			PoolTestUnsound:  r.Verdict.PoolTestUnsound,
 			ExamIndicative:   r.Verdict.ExamIndicative,
 			IndicativeReason: r.Verdict.IndicativeReason,
+			PriorsApplied:    r.Verdict.PriorsApplied,
+			PriorDigest:      r.Verdict.PriorDigest,
+			PriorSource:      r.Verdict.PriorSource,
 			AuthoredTest:     r.Verdict.AuthoredTest,
 			// Which measurement this file's rate IS, carried onto the report
 			// so the printer never has to reach back into the verdict — and

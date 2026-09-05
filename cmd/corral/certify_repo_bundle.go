@@ -222,6 +222,8 @@ func buildAuditRows(files []scanstore.File, scanID int64, meta bundleMeta) []aud
 			ChallengerSurvivedShadow: f.ChallengerSurvivedShadow,
 			ChallengerUnion:          f.ChallengerUnion,
 			ChallengerShared:         f.ChallengerShared,
+			PriorsApplied:            f.PriorsApplied,
+			PriorDigest:              f.PriorDigest,
 		})
 	}
 	return rows

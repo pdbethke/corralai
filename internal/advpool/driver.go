@@ -605,6 +605,13 @@ type Verdict struct {
 	// cannot be is a certification.
 	ExamIndicative   bool   `json:"exam_indicative,omitempty"`
 	IndicativeReason string `json:"indicative_reason,omitempty"`
+	// PriorsApplied / PriorDigest / PriorSource: the run was told about
+	// this many edits earlier runs tried on the same bytes (see RunSpec.
+	// Prior). A verdict with a prior sat a different exam from one without;
+	// this is what tells them apart. 0 / "" when none was given.
+	PriorsApplied int    `json:"priors_applied,omitempty"`
+	PriorDigest   string `json:"prior_digest,omitempty"`
+	PriorSource   string `json:"prior_source,omitempty"`
 	// ExamCoverage says how much of the file the graded mutants reached —
 	// symbols and decision points with a fault on them — computed from the
 	// same spans the ledger records per mutant. See ExamCoverage.

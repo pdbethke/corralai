@@ -222,6 +222,8 @@ func buildAuditRows(files []scanstore.File, scanID int64, meta bundleMeta) []aud
 			ChallengerSurvivedShadow: f.ChallengerSurvivedShadow,
 			ChallengerUnion:          f.ChallengerUnion,
 			ChallengerShared:         f.ChallengerShared,
+			PriorsApplied:            f.PriorsApplied,
+			PriorDigest:              f.PriorDigest,
 		})
 	}
 	return rows
@@ -238,6 +240,7 @@ func buildMutantRows(mutants []scanstore.Mutant, scanID int64, meta bundleMeta) 
 			TestsRun: m.TestsRun, SelectionRule: m.SelectionRule,
 			DurationMillis: m.DurationMillis, KilledBy: m.KilledBy,
 			SpanStart: m.SpanStart, SpanEnd: m.SpanEnd,
+			Shape: m.Shape, GeneratorModel: m.GeneratorModel,
 			// InvalidReason and Code have no ledger column: the local
 			// scan_mutants table admits only killed|survived (its CHECK
 			// predates this schema and DuckDB cannot alter one in place), and

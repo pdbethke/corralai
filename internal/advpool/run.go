@@ -73,6 +73,17 @@ type RunSpec struct {
 	MutantRoundCost time.Duration
 	Deadline        time.Duration
 
+	// Prior is the paragraph the generator reads about edits earlier runs
+	// already tried on THIS EXACT VERSION of the file (internal/prior); ""
+	// is no prior. PriorsApplied and PriorDigest are its disclosure — how
+	// many edits, under which fingerprint — carried onto the verdict, the
+	// ledgers and the statement, because a run that knows what survived
+	// last time sits a different exam. PriorSource names where it came from.
+	Prior         string
+	PriorsApplied int
+	PriorDigest   string
+	PriorSource   string
+
 	// ShadowModel is the CHALLENGER generator model. When set, every shard is
 	// attacked a second time by this model for a region-controlled head-to-head.
 	// Shadow mutants are parsed, scored, and recorded, but NEVER feed the

@@ -683,6 +683,20 @@ transparency. A real one is already in the public log — [Rekor index
 `2667058567`](https://rekor.sigstore.dev/api/v1/log/entries?logIndex=2667058567),
 from a flask audit — so you can check the claim before you install anything.
 
+Every pushed mutant row carries its **shape** — the kind of fault the hunk
+plants, read from the SEARCH → REPLACE diff itself and never from the model's
+own label (`condition-negated`, `boundary-shifted`, `constant-changed`,
+`return-changed`, `call-removed`, `exception-dropped`, `branch-removed`,
+`argument-changed`, `other`) — and the **generator model** that planted it.
+"Which shapes does this model plant, and which does this suite let through"
+is then one query:
+
+```sql
+SELECT generator_model, shape, count(*) planted,
+       sum(outcome = 'survived') survived, sum(proven) proven
+FROM corral_mutants GROUP BY ALL ORDER BY survived DESC;
+```
+
 `corral seal` (see `corral --help`) reads the warehouse's `corral_seal`
 view back — the union of every push's still-valid verdicts, not any one
 scan's snapshot. Running this Action per PR, at scale, is documented in
@@ -809,6 +823,22 @@ that is a deliberate act, is in
   it cannot fit. **Every verdict, ledger row and signed statement carries the
   budget and its rule** (`complexity`, `complexity-fitted`, `explicit`, `default`),
   because a kill rate over 8 mutants and one over 40 are different measurements.
+- **The prior (`--prior`) — the next run plants what the last one didn't.**
+  Hand a run what earlier runs recorded — a `--record-mutants` document (the
+  hunks), a `--record-db` ledger (the outcomes), or a directory of either — and
+  the generator is told, for each file whose bytes are **exactly** what the
+  prior was recorded against, every edit already tried there: its place, its
+  shape, its hunk, and what happened (*killed by test_x* — the suite watches
+  this; *survived, gap already proven*; *survived, unproven*), then asked to
+  plant different faults. A file the prior knows only under other bytes gets
+  none, and the report says so. **A primed exam is a different exam**: the
+  verdict, both ledgers and the signed statement carry `priorsApplied` and the
+  prior's digest, and the digest is in the cache key, so a repeat audit never
+  reads as the tests changing when only the exam did. With the budget sized to
+  the file and the reach recorded per run, successive primed runs cover the
+  decision points the last one didn't — cumulative reach, computable from the
+  warehouse. On a runner, the `corral/ledger` branch is where the prior lives
+  (see [docs/corral/github-action.md](docs/corral/github-action.md)).
 - **A cap on money (`--max-tokens`).** Corral bounded mutants, shards, wall clock
   and concurrency and never tokens; a per-survivor writer on a survivor-heavy
   file paid a call per survivor and nothing clamped it. `--max-tokens N` is one

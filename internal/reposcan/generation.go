@@ -68,7 +68,8 @@ package reposcan
 // generation also gained ExamCoverage (symbols and decision points the
 // mutants reached), MutantRef.Span, and ExamIndicative/IndicativeReason
 // (a rate that cleared the threshold on an exam too small to certify is
-// needs-review) — the SAME change, one bump.
+// needs-review), and PriorsApplied/PriorDigest/PriorSource (a run handed a
+// prior sat a different exam) — the SAME change, one bump.
 const VerdictGeneration = "9"
 
 // VerdictShapeSHA256 fingerprints advpool.Verdict's serialized shape: every
@@ -91,4 +92,4 @@ const VerdictGeneration = "9"
 // Verdict's own FIELDS") and nothing wider. Nor can any fingerprint catch the
 // behaviour half: a scorer that computes a DIFFERENT number into the SAME
 // field is invisible here, and remains a review responsibility.
-const VerdictShapeSHA256 = "ba0d1d0b3024de58d7014cc08f6b3f7d65b16641ec41184e2e2729a65e7189b1"
+const VerdictShapeSHA256 = "25be7f9666411ef5c610a7ae41297af4c3c6a3e9baeac34080d7d097f075bfc1"

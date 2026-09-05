@@ -59,6 +59,7 @@ corral certify --local --local-endpoint	executed	test:cmd/corral/local_endpoint_
 corral certify --local --matrix	executed	test:cmd/corral/certify_local_test.go
 corral certify --local --max-shards	executed	run:2026-09-02 record 89
 corral certify --local --max-tokens	executed	test:cmd/corral/local_endpoint_test.go
+corral certify --local --prior	executed	test:cmd/corral/certify_repo_evidence_candidacy_test.go
 corral certify --local --mutant-model	executed	test:cmd/corral/certify_repo_writer_mode_test.go
 corral certify --local --mutants	executed	test:cmd/corral/certify_repo_evidence_candidacy_test.go
 corral certify --local --n-mutants	executed	run:2026-09-02 record 89
@@ -114,6 +115,7 @@ corral certify --repo --swarm	executed	test:cmd/corral/certify_repo_swarm_test.g
 corral certify --repo --tests	executed	test:cmd/corral/certify_repo_test.go
 corral certify --repo --timeout	executed	test:cmd/corral/certify_adversarial_test.go
 corral certify --repo --max-tokens	executed	test:cmd/corral/local_endpoint_test.go
+corral certify --repo --prior	executed	test:cmd/corral/certify_repo_evidence_candidacy_test.go
 corral certify --repo --top	executed	run:2026-09-02 md:corral_public scans 22-26
 corral certify --repo --transparency	executed	test:cmd/corral/certify_repo_transparency_test.go
 corral certify --repo --whole-suite	executed	test:cmd/corral/certify_repo_report_selection_test.go

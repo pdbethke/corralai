@@ -43,6 +43,18 @@ confidence; a rate too loose to be a grade no longer certifies.
 - **The writer pair is recorded whether or not its coefficient is** — what
   each writer proved of the same survivors, and the union and overlap of
   their misses, on the report line, both ledgers and the statement.
+- **`--prior`: the next run plants what the last one didn't.** Hand a run
+  a `--record-mutants` document, a `--record-db` ledger, or a directory of
+  either, and the generator is told every edit earlier runs tried on a file
+  whose bytes match exactly — place, shape, hunk, outcome — and asked for
+  different faults. A primed exam is a different exam: `priorsApplied` and
+  the prior's digest ride on the verdict, both ledgers and the statement,
+  and the digest is in the cache key. On the Action, the `ledger` input plus
+  the `corral/ledger` branch recipe is where the prior lives.
+- **Every mutant row carries its shape and its generator.** The kind of
+  fault is read from the hunk itself (never the model's label); "which
+  shapes does this model plant, which does this suite let through" is a
+  query over `corral_mutants`.
 - **`--max-tokens`, a cap on money.** One cap across every seat of a run;
   checked before each call, charged after; a refused call never reaches the
   provider. Disclosed on the cost line. Ollama seats now report their tokens.

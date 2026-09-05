@@ -122,6 +122,12 @@ type AuditedFile struct {
 	// reader sees the difference between "weak" and "too few questions".
 	ExamIndicative   bool   `json:"examIndicative,omitempty"`
 	IndicativeReason string `json:"indicativeReason,omitempty"`
+	// PriorsApplied / PriorDigest: the generator was told about this many
+	// edits earlier runs tried on the same bytes, under this fingerprint. A
+	// signed rate from a primed exam is not comparable to an unprimed one,
+	// and the statement is where a verifier would otherwise not know.
+	PriorsApplied int    `json:"priorsApplied,omitempty"`
+	PriorDigest   string `json:"priorDigest,omitempty"`
 	// The writer pair, when a challenger writer sat: which model, what each
 	// seat proved of the same survivors, and the overlap of their misses —
 	// signed whether or not the coefficient was sufficient, with Jaccard
@@ -329,6 +335,10 @@ func BuildAuditAttestation(s AuditStatement) map[string]any {
 		if f.ExamIndicative {
 			entry["examIndicative"] = true
 			entry["indicativeReason"] = f.IndicativeReason
+		}
+		if f.PriorsApplied > 0 {
+			entry["priorsApplied"] = f.PriorsApplied
+			entry["priorDigest"] = f.PriorDigest
 		}
 		if f.ExamMeasured {
 			entry["examSymbols"] = f.ExamSymbols

@@ -48,6 +48,14 @@ inputs:
     description: "Audit at most this many of the highest-ranked candidate files, as a ceiling on what one run can cost. An audit costs roughly (mutants × your suite's whole runtime) PER FILE, and the file count comes from the PR's diff — a number the author picks, not you. On a repo whose suite takes a minute, a ten-file PR is a job measured in tens of hours, discovered only once it is running. Leave empty to keep corral's own default bound."
     required: false
     default: ""
+  max-tokens:
+    description: "Cap on model tokens for the whole run, input + output, every seat, every file (empty = no cap). Checked before each call and charged after it; once reached, no further model call is made — a file whose generator never ran is ungradable for that reason, a writer or critic seat past it is skipped and the file flagged, and the cost line says the cap was reached. corral bounds mutants, files and wall clock; this is the money bound."
+    required: false
+    default: ""
+  ledger:
+    description: "A directory INSIDE the checkout where the run keeps what it learned and reads what earlier runs learned — the zero-signup memory for a runner. Check the repo's `corral/ledger` orphan branch out into it before this step and commit it back after (see docs/corral/github-action.md, 'The ledger branch'). When set: earlier runs' recorded mutants and outcomes there are handed to the generator as a PRIOR (only for files whose bytes match exactly; the report says which), this run's scan is recorded to <ledger>/scans.duckdb, and its graded mutants to <ledger>/mutants/<commit>.json. A primed run sits a different exam and every verdict says so."
+    required: false
+    default: ""
   timeout:
     description: "Per-file budget as a Go duration (e.g. '45m', '5h'). corral gives up on a single file's run once this has elapsed, and the default (30m) is sized for a PR author who did not choose to start an hours-long job — NOT for a whole audit. Every mutant re-runs your suite, so a converging audit of one large file on a hosted runner is measured in hours; raise this, and the job's own timeout-minutes with it, when you want the complete audit rather than a bounded sample. Leave empty to keep corral's own default."
     required: false
@@ -150,6 +158,8 @@ runs:
         motherduck_token: ${{ inputs.motherduck-token }}
         TOP: ${{ inputs.top }}
         TIMEOUT: ${{ inputs.timeout }}
+        MAX_TOKENS: ${{ inputs.max-tokens }}
+        LEDGER_DIR: ${{ inputs.ledger }}
         REPO_OWNER: ${{ github.repository_owner }}
         COMMIT_SHA: ${{ github.sha }}
         TEST_COMMAND: ${{ inputs.test-command }}
@@ -256,6 +266,15 @@ runs:
         fi
         [ -n "${TOP:-}" ] && args+=(--top "$TOP")
         [ -n "${TIMEOUT:-}" ] && args+=(--timeout "$TIMEOUT")
+        [ -n "${MAX_TOKENS:-}" ] && args+=(--max-tokens "$MAX_TOKENS")
+        # The ledger directory: read as the prior, written as the record.
+        # Inside the checkout so the workflow can commit it back to the
+        # corral/ledger branch; the files are the repo's own code and
+        # numbers, nothing that was not already in the repository.
+        if [ -n "${LEDGER_DIR:-}" ]; then
+          mkdir -p "$LEDGER_DIR/mutants"
+          args+=(--prior "$LEDGER_DIR" --record --record-db "$LEDGER_DIR/scans.duckdb" --record-mutants "$LEDGER_DIR/mutants/$COMMIT_SHA.json")
+        fi
         # Role→model routing. Each is omitted when empty so corral keeps
         # ownership of its own defaults — the action must never become a second
         # place where a default model is decided.

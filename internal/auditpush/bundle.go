@@ -224,6 +224,10 @@ type MutantRow struct {
 	// the file.
 	SpanStart int
 	SpanEnd   int
+	// Shape and GeneratorModel mirror scanstore.Mutant's: the kind of
+	// fault (from the hunk) and the seat that planted it.
+	Shape          string
+	GeneratorModel string
 	// Code is the mutant's source. It IS the audited code, so it is written
 	// only when the bundle says --push-source was given.
 	Code            string
@@ -446,7 +450,9 @@ CREATE TABLE IF NOT EXISTS corral_audits (
   challenger_survived_writer  INTEGER,
   challenger_survived_shadow  INTEGER,
   challenger_union            INTEGER,
-  challenger_shared           INTEGER
+  challenger_shared           INTEGER,
+  priors_applied              INTEGER,
+  prior_digest                VARCHAR
 );`
 
 // The mutant grain's outcome CHECK is the same discipline scan_files'
@@ -470,6 +476,8 @@ CREATE TABLE IF NOT EXISTS corral_mutants (
   selection_rule   VARCHAR,
   duration_ms      BIGINT,
   killed_by        VARCHAR,
+  shape            VARCHAR,
+  generator_model  VARCHAR,
   span_start       INTEGER,
   span_end         INTEGER,
   code             VARCHAR,
@@ -614,6 +622,8 @@ var corralAuditsMigrationCols = []struct{ name, ddl string }{
 	{"challenger_survived_shadow", "challenger_survived_shadow INTEGER"},
 	{"challenger_union", "challenger_union INTEGER"},
 	{"challenger_shared", "challenger_shared INTEGER"},
+	{"priors_applied", "priors_applied INTEGER"},
+	{"prior_digest", "prior_digest VARCHAR"},
 }
 
 // The other four tables are NEW at schema_version 2, so nothing predates
@@ -639,6 +649,8 @@ var (
 	}
 	corralMutantsMigrationCols = []struct{ name, ddl string }{
 		{"scan_uid", "scan_uid VARCHAR"},
+		{"shape", "shape VARCHAR"},
+		{"generator_model", "generator_model VARCHAR"},
 	}
 	// cached_input_tokens is additive: a warehouse an earlier corral created
 	// gets it on the next push, and its existing rows keep NULL — correct,
@@ -1203,13 +1215,14 @@ func pushBundleOnce(target string, b Bundle) (Counts, error) {
 		    scan_uid, ts, repo, run_url, scan_id, path, mutant_id, parent_sha256, outcome,
 		    invalid_reason, proven, proven_by_authored_alone, tests_run,
 		    selection_rule, duration_ms, killed_by, span_start, span_end, code,
-		    statement_sha256, schema_version
-		  ) VALUES (`+placeholders(21)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
+		    statement_sha256, schema_version, shape, generator_model
+		  ) VALUES (`+placeholders(23)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
 			uid, now, m.Repo, m.RunURL, m.ScanID, m.Path, m.MutantID,
 			nullIfEmpty(m.ParentSHA256), m.Outcome, nullIfEmpty(m.InvalidReason),
 			m.Proven, m.ProvenByAuthoredAlone, m.TestsRun,
 			nullIfEmpty(m.SelectionRule), m.DurationMillis, nullIfEmpty(m.KilledBy),
 			nullIfZeroInt(m.SpanStart), nullIfZeroInt(m.SpanEnd), code, m.StatementSHA256, SchemaVersion,
+			nullIfEmpty(m.Shape), nullIfEmpty(m.GeneratorModel),
 		); err != nil {
 			return Counts{}, fmt.Errorf("auditpush: insert mutant %s/%s: %w", m.Path, m.MutantID, err)
 		}
@@ -1310,8 +1323,9 @@ func insertFileRow(tx *sql.Tx, uid string, now time.Time, r Row) error {
 	    authored_test, verdict_json, schema_version, prompt_shape, covering_tests, import_only, started_at,
 	    mutant_budget, mutant_budget_rule, complexity,
 	    symbols, symbols_probed, decisions, decisions_probed,
-	    challenger_mutants, challenger_survived_writer, challenger_survived_shadow, challenger_union, challenger_shared
-	  ) VALUES (`+placeholders(89)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
+	    challenger_mutants, challenger_survived_writer, challenger_survived_shadow, challenger_union, challenger_shared,
+	    priors_applied, prior_digest
+	  ) VALUES (`+placeholders(91)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
 		uid, now, r.Repo, r.Commit, r.Path, r.Lang,
 		killRate, r.Survivors, r.ProvenMissed,
 		r.TimedOut, r.TestWriterFailed, r.PoolTestUnsound,
@@ -1341,6 +1355,7 @@ func insertFileRow(tx *sql.Tx, uid string, now time.Time, r Row) error {
 		r.MutantBudget, nullIfEmpty(r.MutantBudgetRule), r.Complexity,
 		r.Symbols, r.SymbolsProbed, r.Decisions, r.DecisionsProbed,
 		r.ChallengerMutants, r.ChallengerSurvivedWriter, r.ChallengerSurvivedShadow, r.ChallengerUnion, r.ChallengerShared,
+		r.PriorsApplied, nullIfEmpty(r.PriorDigest),
 	)
 	if err != nil {
 		return fmt.Errorf("auditpush: insert %s: %w", r.Path, err)

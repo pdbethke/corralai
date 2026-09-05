@@ -5,11 +5,13 @@ package main
 import (
 	"context"
 	"crypto/ed25519"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/pdbethke/corralai/internal/prior"
 	"io"
 	"os"
 	"os/user"
@@ -118,6 +120,7 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 	var localEndpointFlag stringSlice
 	fs.Var(&localEndpointFlag, "local-endpoint", "place a LOCAL seat on a specific ollama daemon, as <role>=<url> (repeatable; e.g. test-writer=http://localhost:11436). A daemon is pinned to a GPU by its own environment (HIP_VISIBLE_DEVICES / CUDA_VISIBLE_DEVICES), so this is how two models occupy two cards at once — corral selects the DAEMON, never the device. Without it every local seat shares OLLAMA_URL, one card and one VRAM budget. Roles: mutant-generator, test-writer, test-critic, mutant-generator-shadow, test-writer-shadow. An unknown role, a duplicate role, a non-absolute url, or an endpoint on a seat holding a CLOUD model is refused rather than ignored")
 
+	priorFlag := fs.String("prior", "", "what earlier runs already tried, so this run plants DIFFERENT faults: a corral-mutants document (see --record-mutants), a scan ledger (.duckdb, see --record-db), or a directory holding any number of either — a document brings the hunks, a ledger the outcomes, merged per edit. Applied only to a file whose bytes are EXACTLY what the prior was recorded against; a file the prior knows under other bytes gets none, and the report says so. A run handed a prior sits a different exam from one without — the verdict, the ledger and the signed statement carry priorsApplied and the prior's digest, and the digest is in the cache key, so a repeat audit never reads as the tests changing when only the exam did")
 	mutantsFlag := fs.String("mutants", "", "REPLAY a recorded mutant set (see --record-mutants) instead of generating one: --code is graded against exactly the mutants recorded for it, and no mutant-generator model call is made. Refused (exit 2) if the file is absent from the set or its bytes have changed since it was recorded — a mutant is a single-point edit of specific bytes, and re-applying it to different ones grades an exam nobody wrote. Reads a corral-mutants-2 document, or an older corral-mutants-1 one, whose whole-file mutants still replay byte-for-byte.")
 	recordMutantsFlag := fs.String("record-mutants", "", "write the mutants this run actually GRADED to this file, as a replayable corral-mutants-2 document — each mutant its SEARCH/REPLACE hunk, tied to the sha256 of the source it is an edit of. Mutants are authored by a model, so an ordinary run re-draws the exam every time; pin the set and a later comparison measures the thing you changed instead of generator variance. Written even when the verdict is needs-review. A v2 document re-recorded from a --mutants replay of an older corral-mutants-1 set contains that set's WHOLE-FILE entries, not hunks — the run graded what was recorded, and re-recording it does not manufacture anchors it never had")
 	var bindDirFlag stringSlice
@@ -241,6 +244,19 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 	// bytes about to be graded. The check is the whole point — a mutant is a
 	// single-point edit of specific source, so replaying it against anything
 	// else grades an exam nobody wrote and nobody reviewed.
+	// --prior: loaded once, resolved per file against its bytes in
+	// newAuditRunSpec. A path that cannot be read refuses the run up front —
+	// a prior that quietly failed to load would be a run that sat the
+	// unprimed exam while its operator believed otherwise.
+	var loadedPrior *prior.Prior
+	if p := strings.TrimSpace(*priorFlag); p != "" {
+		lp, perr := prior.Load(p)
+		if perr != nil {
+			fmt.Fprintf(stderr, "corral certify --local: --prior: %v\n", perr)
+			return 2
+		}
+		loadedPrior = lp
+	}
 	var presetMutants []adequacy.Mutant
 	if p := strings.TrimSpace(*mutantsFlag); p != "" {
 		set, serr := adequacy.ReadMutantSet(p)
@@ -313,6 +329,7 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 		repo: strings.TrimSpace(*repoFlag), commit: strings.TrimSpace(*commitFlag),
 
 		presetMutants: presetMutants, mutantSink: mutantSink,
+		prior: loadedPrior,
 
 		matrix: *matrixFlag, record: rec, bugCatchDB: localBugCatchDBPath(), criticScoreDB: localCriticScoreDBPath(),
 		mutantAttemptsDB: localMutantAttemptsDBPath(),
@@ -459,6 +476,12 @@ type localAuditInput struct {
 	// bytes about to be audited — see adequacy.MutantSetFile.MutantsFor,
 	// which is the only thing that can prove it.
 	presetMutants []adequacy.Mutant
+	// prior, when non-nil, is what earlier runs tried (--prior); resolved
+	// per file against ITS bytes in newAuditRunSpec — see internal/prior.
+	prior *prior.Prior
+	// priorNote is set by newAuditRunSpec when the prior knew this path only
+	// under other bytes, so the report can say the prior was refused.
+	priorNote string
 
 	// mutantSink, when non-nil, is handed the mutants this file's dev pass
 	// actually GRADED, once. It is how `--record-mutants` accumulates a
@@ -1243,7 +1266,7 @@ func newAuditRunSpec(in localAuditInput, roles auditRoles, subj runSubject) advp
 	if n < 0 {
 		n = 0
 	}
-	return advpool.RunSpec{
+	rs := advpool.RunSpec{
 		Repo: subj.repo, Commit: subj.commit, Goal: strings.TrimSpace(in.goal),
 		CodePath: subj.codePath, Code: subj.code,
 		DevTestPath: subj.devTestPath, DevTestCode: subj.devTest,
@@ -1301,6 +1324,22 @@ func newAuditRunSpec(in localAuditInput, roles auditRoles, subj runSubject) advp
 		// nil = generate, exactly as every caller did before --mutants existed.
 		PresetMutants: in.presetMutants,
 	}
+	if in.prior != nil {
+		// SAME BYTES ONLY: a prior recorded against other bytes describes
+		// another file. Refused per file, said on the report, never applied.
+		sum := sha256.Sum256([]byte(subj.code))
+		tried, perr := in.prior.For(subj.codePath, hex.EncodeToString(sum[:]))
+		switch {
+		case errors.Is(perr, prior.ErrDifferentVersion):
+			rs.PriorSource = in.prior.Source + " (refused: recorded against a different version of this file)"
+		case len(tried) > 0:
+			rs.Prior = prior.Render(tried)
+			rs.PriorsApplied = len(tried)
+			rs.PriorDigest = prior.Digest(tried)
+			rs.PriorSource = in.prior.Source
+		}
+	}
+	return rs
 }
 
 // auditOneFile runs ONE file's complete adversarial-pool audit in-process and

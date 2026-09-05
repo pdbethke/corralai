@@ -264,7 +264,8 @@ func readFileRows(db *sql.DB, where string, args ...any) ([]Row, error) {
 		authored_test, verdict_json, prompt_shape, covering_tests, import_only, started_at,
 		mutant_budget, mutant_budget_rule, complexity,
 		symbols, symbols_probed, decisions, decisions_probed,
-		challenger_mutants, challenger_survived_writer, challenger_survived_shadow, challenger_union, challenger_shared
+		challenger_mutants, challenger_survived_writer, challenger_survived_shadow, challenger_union, challenger_shared,
+		priors_applied, prior_digest
 	   FROM corral_audits WHERE `+where, args...) // #nosec G202 -- where is a constant clause from readGrains; every value is a bound parameter
 	if err != nil {
 		return nil, err
@@ -294,6 +295,8 @@ func readFileRows(db *sql.DB, where string, args ...any) ([]Row, error) {
 		var mutantBudgetRule sql.NullString
 		var symbols, symbolsProbed, decisions, decisionsProbed sql.NullInt64
 		var chMutants, chSurvW, chSurvS, chUnion, chShared sql.NullInt64
+		var priorsApplied sql.NullInt64
+		var priorDigest sql.NullString
 		var coveringTests sql.NullInt64
 		var importOnly sql.NullBool
 		var rowPassed sql.NullBool
@@ -322,6 +325,7 @@ func readFileRows(db *sql.DB, where string, args ...any) ([]Row, error) {
 			&mutantBudget, &mutantBudgetRule, &complexity,
 			&symbols, &symbolsProbed, &decisions, &decisionsProbed,
 			&chMutants, &chSurvW, &chSurvS, &chUnion, &chShared,
+			&priorsApplied, &priorDigest,
 		); err != nil {
 			return nil, err
 		}
@@ -379,6 +383,7 @@ func readFileRows(db *sql.DB, where string, args ...any) ([]Row, error) {
 		r.Decisions, r.DecisionsProbed = nullInt(decisions), nullInt(decisionsProbed)
 		r.ChallengerMutants, r.ChallengerSurvivedWriter, r.ChallengerSurvivedShadow = nullInt(chMutants), nullInt(chSurvW), nullInt(chSurvS)
 		r.ChallengerUnion, r.ChallengerShared = nullInt(chUnion), nullInt(chShared)
+		r.PriorsApplied, r.PriorDigest = nullInt(priorsApplied), priorDigest.String
 
 		out = append(out, r)
 	}
@@ -390,7 +395,7 @@ func readMutantRows(db *sql.DB, where string, args ...any) ([]MutantRow, error) 
 		repo, run_url, scan_id, path, mutant_id, parent_sha256, outcome,
 		invalid_reason, proven, proven_by_authored_alone, tests_run,
 		selection_rule, duration_ms, killed_by, span_start, span_end, code,
-		statement_sha256
+		statement_sha256, shape, generator_model
 	   FROM corral_mutants WHERE `+where, args...) // #nosec G202 -- where is a constant clause from readGrains; every value is a bound parameter
 	if err != nil {
 		return nil, err
@@ -403,15 +408,17 @@ func readMutantRows(db *sql.DB, where string, args ...any) ([]MutantRow, error) 
 		var parentSHA256, invalidReason, selectionRule, killedBy, code sql.NullString
 		var durationMillis sql.NullInt64
 		var spanStart, spanEnd sql.NullInt64
+		var shape, generatorModel sql.NullString
 		if err := rows.Scan(
 			&m.Repo, &m.RunURL, &m.ScanID, &m.Path, &m.MutantID, &parentSHA256, &m.Outcome,
 			&invalidReason, &m.Proven, &m.ProvenByAuthoredAlone, &m.TestsRun,
 			&selectionRule, &durationMillis, &killedBy, &spanStart, &spanEnd, &code,
-			&m.StatementSHA256,
+			&m.StatementSHA256, &shape, &generatorModel,
 		); err != nil {
 			return nil, err
 		}
 		m.ParentSHA256 = parentSHA256.String
+		m.Shape, m.GeneratorModel = shape.String, generatorModel.String
 		m.InvalidReason = invalidReason.String
 		m.SelectionRule = selectionRule.String
 		m.DurationMillis = nullInt64(durationMillis)

@@ -375,6 +375,8 @@ func buildScanFileRows(results []reposcan.FileResult, excluded []reposcan.Exclus
 				ChallengerSurvivedShadow: pairCount(r.Verdict.ChallengerAgreement, func(p *modelcorr.Pair) int { return p.SurvivedB }),
 				ChallengerUnion:          pairCount(r.Verdict.ChallengerAgreement, func(p *modelcorr.Pair) int { return p.UnionSurvivors }),
 				ChallengerShared:         pairCount(r.Verdict.ChallengerAgreement, func(p *modelcorr.Pair) int { return p.SharedSurvivors }),
+				PriorsApplied:            nullIfZeroIntPtr(r.Verdict.PriorsApplied),
+				PriorDigest:              r.Verdict.PriorDigest,
 				// How many goals reposcan's DERIVER produced for this file —
 				// 0 (not NULL: the column is a plain int, see
 				// scanstore.File.GoalsDerived's doc) unless this file's goal
@@ -657,6 +659,10 @@ func buildScanMutantRows(scanID int64, results []reposcan.FileResult) []scanstor
 				// computed from. 0/0 (stored NULL) when the generator
 				// recorded no span.
 				SpanStart: m.Span.Start, SpanEnd: m.Span.End,
+				// WHAT KIND of fault, and WHO planted it: the grain "prone
+				// to" is measured at. The model is the file's generator
+				// seat; a shadow generator's mutants never reach these refs.
+				Shape: m.Shape, GeneratorModel: r.Verdict.ModelsByRole[advpool.RoleMutantGenerator],
 			})
 		}
 		for _, m := range r.Verdict.DevSurvivedMutants {
@@ -675,6 +681,7 @@ func buildScanMutantRows(scanID int64, results []reposcan.FileResult) []scanstor
 				TestsRun:              m.TestsRun, SelectionRule: m.Rule,
 				DurationMillis: millisOrNil(m.Duration),
 				SpanStart:      m.Span.Start, SpanEnd: m.Span.End,
+				Shape: m.Shape, GeneratorModel: r.Verdict.ModelsByRole[advpool.RoleMutantGenerator],
 			})
 		}
 	}

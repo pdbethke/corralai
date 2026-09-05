@@ -155,6 +155,7 @@ corral seal --repo	executed	test:cmd/corral/certify_repo_writer_mode_test.go
 corral seal --top	executed	test:cmd/corral/certify_repo_test.go
 corral verify --attest	executed	test:cmd/corral/certify_repo_transparency_test.go
 corral verify --db	executed	test:cmd/corral/models_rank_test.go
+corral verify --ledger	executed	test:cmd/corral/verify_attest_test.go (intact chain, removed entry named, --attest+--ledger refused)
 corral verify --pub	executed	test:cmd/corral/verify_attest_test.go (right key verifies, wrong key FAILS without falling back, malformed key refused as unchecked)
 corral verify --rekor-index	executed	test:cmd/corral/verify_attest_test.go
 corral-observe --addr	executed	test:cmd/corral-observe/main_test.go (own-flags guard, binding, and pick precedence)

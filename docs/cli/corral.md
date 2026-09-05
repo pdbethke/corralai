@@ -491,6 +491,8 @@ Usage of verify:
     	the --attest statement to verify (required) — the plain JSON path (its signed envelope is expected at <path>.dsse.json) or the envelope itself
   -db corral scans push
     	also recompute the warehouse rows' hash from this pushed DuckDB (a path, or md:<db> for MotherDuck) and compare it to the statement's claim. Every push of the scan the warehouse holds is tried (each has its own scan_uid); a VACUUMed warehouse can change row order and trip a false ✗ here without tampering, and rows a later corral scans push backfilled are reported as such, never as a mismatch
+  -ledger --push <dir>/
+    	walk a LEDGER DIRECTORY (the JSON entries --push <dir>/ writes, one per scan, each naming the previous entry's hash and carrying a signature): every entry's hash against its bytes, every link against its predecessor, every signature against --pub or the local certify key. One line per entry; an edited entry, a removed one, or a foreign signature is named. Instead of --attest, not with it
   -pub string
     	hex-encoded Ed25519 public key to verify the signature against (default: the local certify key, CORRALAI_CERTIFY_KEY_FILE)
   -rekor-index int

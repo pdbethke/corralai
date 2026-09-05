@@ -711,3 +711,39 @@ func TestVerifyAttestRefusesWhenNothingWasChecked(t *testing.T) {
 		t.Errorf("stderr must say nothing was checked, got: %q", stderr.String())
 	}
 }
+
+// `corral verify --ledger <dir>`: the chain, one line per entry, exit 1 the
+// moment any entry's bytes, link or signature is wrong — and an unsigned
+// entry reported as such, never as verified.
+func TestVerifyLedgerWalksTheChain(t *testing.T) {
+	dir := t.TempDir()
+	keyPath := filepath.Join(t.TempDir(), "certify.key")
+	t.Setenv("CORRALAI_CERTIFY_KEY_FILE", keyPath)
+	t.Setenv("CORRALAI_CERTIFY_KEY", "")
+	push := func(commit string) {
+		if _, err := pushBundle(dir, auditpush.Bundle{Scan: auditpush.ScanRow{Repo: "r", Commit: commit, ScanID: 1}, Files: []auditpush.Row{{Repo: "r", ScanID: 1, Path: "a.py"}}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	push("aaaa1111")
+	push("bbbb2222")
+	var out, errb bytes.Buffer
+	if code := runVerifyAttest([]string{"--ledger", dir}, &out, &errb); code != 0 {
+		t.Fatalf("intact chain: exit %d\n%s%s", code, out.String(), errb.String())
+	}
+	s := out.String()
+	if !strings.Contains(s, "genesis, signed by corral-certify and verified against the local certify key") || !strings.Contains(s, "2 entries, chain intact") {
+		t.Errorf("intact chain output:\n%s", s)
+	}
+	// Remove the first entry: the second's link names a missing predecessor.
+	names, _ := os.ReadDir(filepath.Join(dir, auditpush.ScansSubdir))
+	_ = os.Remove(filepath.Join(dir, auditpush.ScansSubdir, names[0].Name()))
+	out.Reset()
+	if code := runVerifyAttest([]string{"--ledger", dir}, &out, &errb); code != 1 || !strings.Contains(out.String(), "removed, reordered or inserted") {
+		t.Errorf("broken chain: exit %d\n%s", code, out.String())
+	}
+	// --attest and --ledger together is a usage error.
+	if code := runVerifyAttest([]string{"--ledger", dir, "--attest", "x.json"}, &out, &errb); code != 2 {
+		t.Errorf("both flags: exit %d, want 2", code)
+	}
+}

@@ -60,8 +60,16 @@ func runVerifyAttest(args []string, stdout, stderr io.Writer) int {
 	dbFlag := fs.String("db", "", "also recompute the warehouse rows' hash from this pushed DuckDB (a path, or md:<db> for MotherDuck) and compare it to the statement's claim. Every push of the scan the warehouse holds is tried (each has its own scan_uid); a VACUUMed warehouse can change row order and trip a false ✗ here without tampering, and rows a later `corral scans push` backfilled are reported as such, never as a mismatch")
 	rekorIndexFlag := fs.Int64("rekor-index", -1, "also confirm this Rekor log index's entry matches the envelope (default: read the index --db recorded for this scan, if --db was given)")
 	pubFlag := fs.String("pub", "", "hex-encoded Ed25519 public key to verify the signature against (default: the local certify key, CORRALAI_CERTIFY_KEY_FILE)")
+	ledgerFlag := fs.String("ledger", "", "walk a LEDGER DIRECTORY (the JSON entries `--push <dir>/` writes, one per scan, each naming the previous entry's hash and carrying a signature): every entry's hash against its bytes, every link against its predecessor, every signature against --pub or the local certify key. One line per entry; an edited entry, a removed one, or a foreign signature is named. Instead of --attest, not with it")
 	if err := fs.Parse(args); err != nil {
 		return 2
+	}
+	if d := strings.TrimSpace(*ledgerFlag); d != "" {
+		if strings.TrimSpace(*attestFlag) != "" {
+			fmt.Fprintln(stderr, "corral verify: --ledger walks a directory; --attest checks one statement — one or the other")
+			return 2
+		}
+		return runVerifyLedger(d, *pubFlag, stdout, stderr)
 	}
 	if fs.NArg() > 0 {
 		fmt.Fprintf(stderr, "corral verify: unexpected argument(s) %v\n", fs.Args())
@@ -430,6 +438,9 @@ func verifyWarehouseRows(dbFlag string, stmt map[string]any, statementSHA string
 // openWarehouse opens dbFlag (a plain DuckDB path or md:<db>, the same
 // targets --push accepts).
 func openWarehouse(dbFlag string) (*sql.DB, error) {
+	if auditpush.IsLedgerDir(dbFlag) {
+		return auditpush.LoadDir(strings.TrimRight(dbFlag, "/"))
+	}
 	db, err := sql.Open("duckdb", dbFlag)
 	if err != nil {
 		return nil, err
@@ -502,4 +513,70 @@ func verifyRekorInclusion(ctx context.Context, envelope []byte, stmt map[string]
 		return verifyCheckResult{checked: true, ok: false, detail: fmt.Sprintf("rekor index %d (uuid %s) does not match this envelope's hash", entry.LogIndex, entry.UUID)}
 	}
 	return verifyCheckResult{checked: true, ok: true, detail: fmt.Sprintf("rekor index %d (uuid %s) matches this envelope exactly", entry.LogIndex, entry.UUID)}
+}
+
+// runVerifyLedger is `corral verify --ledger <dir>`: the chain, entry by
+// entry. Exit 1 when any entry has a problem; 0 when every entry's hash and
+// link hold and every signature that could be checked verified — an
+// unsigned entry is reported, not failed, since the chain still orders it;
+// and a signed entry with no key to check against is "signed, unverified",
+// never "verified".
+func runVerifyLedger(dir, pubFlag string, stdout, stderr io.Writer) int {
+	var pub ed25519.PublicKey
+	pubSource := ""
+	switch {
+	case pubFlag != "":
+		decoded, err := hex.DecodeString(pubFlag)
+		if err != nil || len(decoded) != ed25519.PublicKeySize {
+			fmt.Fprintf(stderr, "corral verify: --pub is not a valid %d-byte hex-encoded Ed25519 public key\n", ed25519.PublicKeySize)
+			return 2
+		}
+		pub, pubSource = ed25519.PublicKey(decoded), "--pub"
+	default:
+		if priv, err := loadLocalCertifyKeyIfConfigured(); err == nil {
+			pub, pubSource = priv.Public().(ed25519.PublicKey), "the local certify key"
+		}
+	}
+	checks, err := auditpush.VerifyLedgerDir(strings.TrimRight(dir, "/"), pub)
+	if err != nil {
+		fmt.Fprintf(stderr, "corral verify: --ledger %s: %v\n", dir, err)
+		return 2
+	}
+	if len(checks) == 0 {
+		fmt.Fprintf(stdout, "· ledger %s: no entries\n", dir)
+		return 0
+	}
+	bad := 0
+	for _, c := range checks {
+		mark := "✓"
+		what := "hash ok, link ok"
+		if c.Genesis {
+			what = "hash ok, genesis"
+		}
+		switch {
+		case c.Problem != "":
+			mark, what = "✗", c.Problem
+			bad++
+		case c.Signed && pub != nil:
+			what += fmt.Sprintf(", signed by %s and verified against %s", orUnnamed(c.KeyID), pubSource)
+		case c.Signed:
+			what += fmt.Sprintf(", signed by %s — unverified (no --pub, no local key)", orUnnamed(c.KeyID))
+		default:
+			what += ", UNSIGNED"
+		}
+		fmt.Fprintf(stdout, "%s %s  %.12s  %s\n", mark, c.File, c.Commit, what)
+	}
+	if bad > 0 {
+		fmt.Fprintf(stdout, "%d of %d entries have a problem — the chain is not intact\n", bad, len(checks))
+		return 1
+	}
+	fmt.Fprintf(stdout, "%d entries, chain intact\n", len(checks))
+	return 0
+}
+
+func orUnnamed(keyID string) string {
+	if strings.TrimSpace(keyID) == "" {
+		return "an unnamed key"
+	}
+	return keyID
 }

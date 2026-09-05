@@ -449,7 +449,7 @@ and the fix belongs in the code, not a caveat in these docs.
 | `tests` | no | `""` | Optional JSON file mapping repo-relative **source** paths to their test files, consulted before filename convention. Needed whenever your project names tests after behaviour rather than after source files — common in JS/TS, where convention can pair *nothing* and the gate would then have no file to audit. A mapping to a file that does not exist is refused, not silently ignored. |
 | `timeout` | no | `""` (corral's own default, 30m) | Per-file budget, a Go duration. The default is sized for a PR author who did not choose to start an hours-long job, not for a whole audit: every mutant re-runs your suite, so one large file on a hosted runner is hours. Raise it (and the job's `timeout-minutes`) when you want the complete audit rather than a bounded sample. |
 | `max-tokens` | no | `""` (no cap) | Cap on model tokens for the whole run — input + output, every seat, every file. Checked before each call and charged after it; past the cap no further model call is made, and the cost line says so. The money bound, beside `top` (files) and `timeout` (clock). |
-| `ledger` | no | `""` | A directory inside the checkout that is the run's memory — see "The ledger branch" below. Earlier runs' mutants and outcomes there are handed to the generator as a **prior** (same-bytes files only; the report says which); this run records its scan to `<ledger>/scans.duckdb` and its graded mutants to `<ledger>/mutants/<commit>.json`. Commit the directory back to the `corral/ledger` branch after the step. |
+| `ledger` | no | `""` | A directory inside the checkout that is the repository's **signed ledger** — see "The ledger branch" below. This run's record is written as one JSON entry in `<ledger>/scans/` (naming the previous entry's hash, signed when a certify key is configured) and its graded mutants to `<ledger>/mutants/<commit>.json`; earlier entries are handed to the generator as a **prior** (same-bytes files only; the report says which). Commit the directory back to the `corral/ledger` branch after the step. |
 | `top` | no | `""` (corral's own default bound, 25) | Audit at most this many of the highest-ranked candidate files. An audit costs roughly (mutants × your suite's **whole** runtime) **per file**, and the file count comes from the PR's diff — a number the author picks, not you. See "What one run costs" below before raising it. |
 | `min-kill-rate` | no | `""` (unset) | Fail the run (exit 1) if **any individual audited file's** kill rate is below this value. Range 0.0-1.0 inclusive; a *minimum*, so a file exactly at the value passes. Opt-in — leave empty to keep the pre-`min-kill-rate` behaviour, where a weak-but-gradable suite still exits 0. See "Failing on a weak kill rate" below. |
 | `max-proven-missed` | no | `""` (unset) | Fail the run if any audited file has *more* than this many PROVEN-MISSED gaps — survivors the herd itself then killed with a test it wrote and ran. Prefer this to `min-kill-rate` as the merge gate: a kill rate is a proportion of freshly generated mutants and moves between runs on unchanged code, while a proven gap is a specific, execution-demonstrated bug. `0` means any demonstrated gap fails the build. Fails **closed** when the herd had survivors but authored no test that graded — a `0` there means nothing was proven, not that the suite is clean. |
@@ -479,13 +479,40 @@ echoes a key value, and an unset key is never exported as an empty variable
 A runner forgets everything when the job ends, so on its own an Action run
 cannot know what an earlier run tried. GitHub has no database to offer; what
 it has is a branch. The recipe: keep an **orphan branch `corral/ledger`** that
-holds nothing but corral's own record — a scan ledger and one mutant-set
-document per audited commit — check it out into a directory before the
-audit, hand that directory to the `ledger` input, and commit it back after.
-Zero signup: the repository's own permissions are the auth, branch
+holds nothing but corral's own record, check it out into a directory before
+the audit, hand that directory to the `ledger` input, and commit it back
+after. Zero signup: the repository's own permissions are the auth, branch
 protection keeps a fork's pull request from writing to it, and the git
 author of each commit is the principal. The files are the repository's own
 code and numbers; nothing leaves that was not already there.
+
+**What the branch holds is a signed, hash-linked ledger, in plain text.**
+Every scan is one JSON file under `scans/` — the same five grains a
+warehouse push writes (scan, files, mutants with span/shape/outcome, model
+calls, events) — that names the previous entry's hash and, when the run has
+a certify key, carries an Ed25519 signature over its own. Editing an entry
+breaks its hash; removing or reordering one breaks the next entry's link;
+`corral verify --ledger <dir>` walks the whole chain and names the entry
+that fails. It is the part of a blockchain that was always a good idea —
+an append-only log where every entry is signed and names its predecessor —
+with one writer per branch and, when a stranger must trust it, Sigstore's
+public log as the witness instead of consensus. And it is just text: `cat`
+it, diff it in a pull request, `jq` it, or read the whole branch with
+DuckDB — corral is needed to *write* an entry, never to read one. Entries
+are gzipped (a scan with its events grain is ~550 KB of text and ~21 KB on
+disk, measured on a psf/requests run) and DuckDB reads `.json.gz` natively.
+"Which shapes does the generator plant, and which does this suite let
+through", straight over the branch:
+
+```sql
+SELECT e.scan_uid[1:8] AS entry, m.Shape, count(*) AS planted,
+       sum(m.Outcome = 'survived') AS survived, sum(m.Proven) AS proven
+FROM read_json_auto('scans/*.json.gz') AS e, unnest(e.bundle.Mutants) AS t(m)
+GROUP BY ALL ORDER BY entry, planted DESC;
+``` The same entries a laptop run writes into its own
+ledger directory; a local run and an Action run are one writer with two
+places to put the file, and DuckDB (or MotherDuck) is the query surface
+over both, not the store.
 
 ```yaml
       - uses: actions/checkout@v4
@@ -509,6 +536,11 @@ code and numbers; nothing leaves that was not already there.
           critic-model: claude-haiku-4-5
           gemini-key: ${{ secrets.GEMINI_API_KEY }}
           anthropic-key: ${{ secrets.ANTHROPIC_API_KEY }}
+      - name: Attest this run's ledger entry (keyless, via the workflow's identity)
+        if: always() && github.event_name != 'pull_request'
+        uses: actions/attest@v2
+        with:
+          subject-path: .corral-ledger/scans/*.json
       - name: Commit the ledger back
         if: always() && github.event_name != 'pull_request'
         run: |
@@ -524,15 +556,21 @@ code and numbers; nothing leaves that was not already there.
           exit 1
 ```
 
-Two honesty notes. **A primed run sits a different exam** — the generator was
+Three honesty notes. **A runner has no certify key**, so its entries are
+signed only if you give it one (`CORRALAI_CERTIFY_KEY` as a secret) — the
+step above attests the entry file keylessly through the workflow's own
+identity instead, which is what `gh attestation verify` checks; the chain's
+hashes and links hold either way, and `verify --ledger` says which entries
+are unsigned rather than calling them verified. **A primed run sits a
+different exam** — the generator was
 told what survived last time and asked to plant elsewhere — so its kill rate
 is not comparable to an unprimed run's, and every verdict, ledger row and
 signed statement carries `priorsApplied` and the prior's digest. And **only a
 file whose bytes match exactly** what the prior was recorded against is
 primed; a changed file sits the plain exam and the report says so. The
-branch's binary file grows with every commit; squash it on a schedule, or
-point `push` at MotherDuck instead when the record outgrows git — it is the
-same warehouse at scale.
+branch grows by one small text file per run — append-only, never rewritten,
+which is the shape git holds well; when the record outgrows a branch, point
+`push` at MotherDuck too — the same entries, the same query surface, shared.
 
 The commit step is skipped on `pull_request` events on purpose: a fork's
 pull request must not be able to write the repository's record, and

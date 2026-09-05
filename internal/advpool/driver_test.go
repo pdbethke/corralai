@@ -3962,7 +3962,7 @@ func TestShadowBudgetSkipsRatherThanTimingOutTheRun(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewDriver: %v", err)
 	}
-	d.CertifyIntervalWidth = 0 // small fixture; the exam-size rule is tested on its own
+	d.CertifyIntervalWidth = 0              // small fixture; the exam-size rule is tested on its own
 	d.Now = func() time.Time { return now } // seeded BEFORE StartRun.
 	d.RunDeadline = 10 * time.Minute
 	d.Signer = &fakeSigner{}
@@ -4045,7 +4045,7 @@ func TestShadowCreditIsCappedAtBudget(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewDriver: %v", err)
 	}
-	d.CertifyIntervalWidth = 0 // small fixture; the exam-size rule is tested on its own
+	d.CertifyIntervalWidth = 0              // small fixture; the exam-size rule is tested on its own
 	d.Now = func() time.Time { return now } // seeded BEFORE StartRun.
 	d.RunDeadline = 10 * time.Minute
 	d.Signer = &fakeSigner{}

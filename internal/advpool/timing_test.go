@@ -52,7 +52,7 @@ func TestVerdictTimingSumsWithinTotal(t *testing.T) {
 		t.Fatalf("NewDriver: %v", err)
 	}
 	d.CertifyIntervalWidth = 0 // small fixture; the exam-size rule is tested on its own
-	d.Now = clk.Now // BEFORE StartRun: startedAt is the run's own zero.
+	d.Now = clk.Now            // BEFORE StartRun: startedAt is the run's own zero.
 	d.Signer = &fakeSigner{}
 	sink := &fakeEventSink{}
 	d.Events = sink

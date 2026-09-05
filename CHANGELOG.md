@@ -64,6 +64,12 @@ confidence; a rate too loose to be a grade no longer certifies.
 - **A rate too loose to be a grade does not certify** — see the BREAKING
   entry above. The `--local` verdict prints the interval, the budget, the
   reach, and `INDICATIVE:` with the reason.
+- **The brain is its own binary: `corral-wrangler`.** The coordination
+  daemon moved out of `cmd/corral/main.go` whole (`internal/wranglerd`);
+  `corral` with no subcommand still starts the same server for this one
+  release and says where it went, then becomes a pointer. The audit CLI and
+  the daemon no longer share a main. Deploy builds both; the brain image's
+  entrypoint is `corral-wrangler`.
 - `--top` is one bound over every door: evidence widening competes under it
   instead of appending past it. Files under a language's test tree
   (`tests/conftest.py`, `spec/support/`) are `test-support`, never subjects.

@@ -138,7 +138,9 @@ func boundaryShift(s, r string) bool {
 			return false
 		}
 	}
-	strip := func(x string) string { return strings.NewReplacer(" + 1", "", " - 1", "", "+1", "", "-1", "").Replace(x) }
+	strip := func(x string) string {
+		return strings.NewReplacer(" + 1", "", " - 1", "", "+1", "", "-1", "").Replace(x)
+	}
 	return s != r && strip(s) == strip(r) && (strings.Contains(s+r, "+ 1") || strings.Contains(s+r, "- 1") || strings.Contains(s+r, "+1") || strings.Contains(s+r, "-1"))
 }
 

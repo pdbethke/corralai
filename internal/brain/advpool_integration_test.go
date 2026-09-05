@@ -139,6 +139,11 @@ func setupIntegrationDriver(t *testing.T, scorer *canonScorer, validator *canonV
 		advpool.RoleTestCritic:      "model-critic",
 	}
 	d, err := advpool.NewDriver(q, scorer, validator, assign, threshold)
+	if err == nil {
+		// A handful-of-mutants fixture: the exam-size rule is not what this
+		// test is about (it is pinned in advpool's own tests).
+		d.CertifyIntervalWidth = 0
+	}
 	if err != nil {
 		t.Fatal(err)
 	}

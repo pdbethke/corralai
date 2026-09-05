@@ -16,6 +16,9 @@ here is hand-transcribed; the numbers are the ledger's. The two runs:
   after:  main @ d951419, 2026-09-04 17:56 local, `--top 3` honoured (3
           files), complexity budget (#247), authored pass alone (#247),
           confidence terms (#248), plus --shadow-writer-model claude-sonnet-5.
+  primed: main @ 7f49ddf, 2026-09-05 11:38 local, the after-run's herd plus
+          --prior on that run's ledger and mutant set (#251), the per-command
+          mutant cap and the exam-size rule (#250). All three files primed.
 
 Same commit of requests (414f051), same herd (gemini-3.6-flash generator /
 writer / deriver, claude-haiku-4-5 critic), same 30-minute per-file timeout.
@@ -40,6 +43,7 @@ FIXTURES = ROOT / "docs" / "design" / "fixtures"
 RUNS = [
     {"key": "before", "label": "before (main @ 925dddc)", "fixture": "before-after-requests-before.json"},
     {"key": "after", "label": "after (main @ d951419)", "fixture": "before-after-requests-after.json"},
+    {"key": "primed", "label": "primed (main @ 7f49ddf, --prior on the after-run's record)", "fixture": "before-after-requests-primed.json"},
 ]
 
 
@@ -93,6 +97,8 @@ def per_file_rows(run, d, files):
         else:
             reach = "not recorded"
         status = "timed out" if f.get("TimedOut") else "converged"
+        if f.get("PriorsApplied"):
+            status += f", primed ({f['PriorsApplied']} prior edits)"
         rows.append((f["Path"].replace("src/requests/", ""), budget_txt, rate, f.get("Survivors", 0), f.get("ProvenMissed", 0),
                      reach, duration_text(f.get("DevPassMillis")), duration_text(f.get("AuthoredPassMillis")),
                      duration_text(f.get("TotalMillis")), status))
@@ -148,7 +154,7 @@ def render():
         out.append(f"| {run['label']} | {a} | {c} of {a} | **{p}** | {pl} | {duration_text(w)} | {calls} | {abbreviate(tin)} / {abbreviate(tout)} |")
     out.append("")
     out.append("*Time in audited files* sums each audited file's own phases plus the one selection pass; the runs' clock times — "
-               "**4h15m** before, **1h20m** after, from the launcher logs — are longer by the files the scan probed and then could not grade "
+               "**4h15m** before, **1h20m** after, **1h22m** primed, from the launcher logs — are longer by the files the scan probed and then could not grade "
                "(three baseline failures before, none after) and by setup nothing attributes to a file.")
     out.append("")
     out.append("The kill rates below are **not** a before/after of requests' tests: the exam changed (the *mutants* column says how — a flat five per seat "
@@ -168,6 +174,7 @@ def render():
     # the one file both runs audited
     before_paths = {f["Path"]: f for f in loaded["before"][1]}
     after_paths = {f["Path"]: f for f in loaded["after"][1]}
+    primed_paths = {f["Path"]: f for f in loaded["primed"][1]}
     common = sorted(set(before_paths) & set(after_paths))
     if common:
         out.append("### The file both runs audited")
@@ -178,10 +185,25 @@ def render():
         out.append("| file | | mutants | kill rate (95% interval) | survivors | proven | authored phase | total | |")
         out.append("|---|---|---|---|---|---|---|---|---|")
         for p in common:
-            for key, label in (("before", "before"), ("after", "after")):
-                f = before_paths[p] if key == "before" else after_paths[p]
-                row = per_file_rows(RUNS[0 if key == "before" else 1], loaded[key][0], [f])[0]
-                out.append(f"| {row[0]} | {label} | {row[1]} | {row[2]} | {row[3]} | {row[4]} | {row[7]} | {row[8]} | {row[9]} |")
+            for idx, (key, paths) in enumerate((("before", before_paths), ("after", after_paths), ("primed", primed_paths))):
+                if p not in paths:
+                    continue
+                row = per_file_rows(RUNS[idx], loaded[key][0], [paths[p]])[0]
+                out.append(f"| {row[0]} | {key} | {row[1]} | {row[2]} | {row[3]} | {row[4]} | {row[7]} | {row[8]} | {row[9]} |")
+        out.append("")
+    # cumulative reach across the after and primed runs
+    cr = loaded["primed"][0].get("cumulative_reach") or {}
+    if cr:
+        out.append("### Cumulative reach — what the prior bought")
+        out.append("")
+        out.append("Decision points a fault landed on, per run and across both, from the recorded mutant spans of the after-run and the primed run "
+                   "against the extractor's decision spans. If the prior had done nothing, the union would sit near the larger of the two; it sits near their sum.")
+        out.append("")
+        out.append("| file | decision points | after-run reached | primed run reached | **both runs together** |")
+        out.append("|---|---|---|---|---|")
+        for path in sorted(cr):
+            c = cr[path]
+            out.append(f"| {path.replace('src/requests/', '')} | {c['decisions']} | {c['after']} | {c['primed']} | **{c['union']}** |")
         out.append("")
     # by model
     out.append("### By model")
@@ -190,7 +212,8 @@ def render():
                "writer in the *same run* — the only comparison between two models that is controlled. Its per-file outcome is on the run log "
                "(`the challenger writer … proved N of M survivor(s)`); the ledger records the pair's overlap only when the union of both writers' misses "
                "reaches the minimum the coefficient needs, and on these files it did not (both writers proved nearly everything), so the Jaccard column is "
-               "honestly empty rather than a number over two misses.")
+               "honestly empty rather than a number over two misses — until the primed run's `adapters.py`, where the two writers' misses "
+               "reached the minimum and the coefficient was computed: both missed 1 of the 5 either missed, Jaccard 0.200.")
     out.append("")
     out.append("| run | seat | model | calls | tokens in / out | model wall clock |")
     out.append("|---|---|---|---|---|---|")

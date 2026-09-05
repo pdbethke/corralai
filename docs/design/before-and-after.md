@@ -26,8 +26,9 @@ after-run also names a shadow writer.
 |---|---|---|---|---|---|---|---|
 | before (main @ 925dddc) | 8 | 2 of 8 | **11** | 255 | 3h28m | 232 | 1.9M / 68.6k |
 | after (main @ d951419) | 3 | 2 of 3 | **27** | 112 | 1h12m | 136 | 2.3M / 89.7k |
+| primed (main @ 7f49ddf, --prior on the after-run's record) | 3 | 3 of 3 | **30** | 112 | 1h14m | 117 | 2.0M / 76.8k |
 
-*Time in audited files* sums each audited file's own phases plus the one selection pass; the runs' clock times — **4h15m** before, **1h20m** after, from the launcher logs — are longer by the files the scan probed and then could not grade (three baseline failures before, none after) and by setup nothing attributes to a file.
+*Time in audited files* sums each audited file's own phases plus the one selection pass; the runs' clock times — **4h15m** before, **1h20m** after, **1h22m** primed, from the launcher logs — are longer by the files the scan probed and then could not grade (three baseline failures before, none after) and by setup nothing attributes to a file.
 
 The kill rates below are **not** a before/after of requests' tests: the exam changed (the *mutants* column says how — a flat five per seat became a complexity-derived budget), so a rate over one exam is not comparable to a rate over the other. What *is* comparable across the runs: wall clock, whether a file converged, the gaps proven by execution, and the width of each rate's 95% interval. The before-run's reach reads *not recorded* because mutant spans were not stored until #248.
 
@@ -52,6 +53,14 @@ The kill rates below are **not** a before/after of requests' tests: the exam cha
 | models.py | 40 (complexity) | 0.47 (0.33–0.63, n=40) | 21 | 0 | 35/51 symbols, 42/149 decisions | 24m02s | 5m49s | 31m37s | timed out |
 | utils.py | 40 (complexity) | 0.66 (0.49–0.79, n=35) | 12 | 12 | 29/44 symbols, 40/143 decisions | 9m56s | 5m43s | 17m26s | converged |
 
+### primed (main @ 7f49ddf, --prior on the after-run's record)
+
+| file | mutants | kill rate (95% interval) | survivors | proven | reach | dev pass | authored | total | |
+|---|---|---|---|---|---|---|---|---|---|
+| adapters.py | 40 (complexity) | 0.65 (0.49–0.78, n=37) | 13 | 8 | 13/19 symbols, 25/53 decisions | 17m07s | 3m19s | 22m03s | converged, primed (37 prior edits) |
+| models.py | 40 (complexity) | 0.69 (0.54–0.81, n=39) | 12 | 11 | 32/51 symbols, 54/149 decisions | 19m18s | 8m38s | 29m51s | converged, primed (40 prior edits) |
+| utils.py | 40 (complexity) | 0.67 (0.50–0.80, n=36) | 12 | 11 | 34/44 symbols, 43/143 decisions | 10m33s | 8m58s | 21m23s | converged, primed (35 prior edits) |
+
 ### The file both runs audited
 
 `--top 3` chose different files before and after (#244 stopped evidence widening from adding files past the bound, and stopped `tests/utils.py` from out-ranking the library file it was named after), so only these appear in both:
@@ -60,10 +69,21 @@ The kill rates below are **not** a before/after of requests' tests: the exam cha
 |---|---|---|---|---|---|---|---|---|
 | adapters.py | before | 37 (flat, 5 per seat) | 0.49 (0.33–0.64, n=37) | 19 | 0 | 18m19s | 31m37s | timed out |
 | adapters.py | after | 40 (complexity) | 0.59 (0.43–0.74, n=37) | 15 | 15 | 3m29s | 22m17s | converged |
+| adapters.py | primed | 40 (complexity) | 0.65 (0.49–0.78, n=37) | 13 | 8 | 3m19s | 22m03s | converged, primed (37 prior edits) |
+
+### Cumulative reach — what the prior bought
+
+Decision points a fault landed on, per run and across both, from the recorded mutant spans of the after-run and the primed run against the extractor's decision spans. If the prior had done nothing, the union would sit near the larger of the two; it sits near their sum.
+
+| file | decision points | after-run reached | primed run reached | **both runs together** |
+|---|---|---|---|---|
+| adapters.py | 53 | 28 | 25 | **38** |
+| models.py | 149 | 42 | 54 | **79** |
+| utils.py | 143 | 40 | 43 | **68** |
 
 ### By model
 
-Per seat, from `scan_model_calls`. The after-run adds a **shadow writer** (`claude-sonnet-5`) that attacked the *same survivors* as the primary writer in the *same run* — the only comparison between two models that is controlled. Its per-file outcome is on the run log (`the challenger writer … proved N of M survivor(s)`); the ledger records the pair's overlap only when the union of both writers' misses reaches the minimum the coefficient needs, and on these files it did not (both writers proved nearly everything), so the Jaccard column is honestly empty rather than a number over two misses.
+Per seat, from `scan_model_calls`. The after-run adds a **shadow writer** (`claude-sonnet-5`) that attacked the *same survivors* as the primary writer in the *same run* — the only comparison between two models that is controlled. Its per-file outcome is on the run log (`the challenger writer … proved N of M survivor(s)`); the ledger records the pair's overlap only when the union of both writers' misses reaches the minimum the coefficient needs, and on these files it did not (both writers proved nearly everything), so the Jaccard column is honestly empty rather than a number over two misses — until the primed run's `adapters.py`, where the two writers' misses reached the minimum and the coefficient was computed: both missed 1 of the 5 either missed, Jaccard 0.200.
 
 | run | seat | model | calls | tokens in / out | model wall clock |
 |---|---|---|---|---|---|
@@ -74,6 +94,10 @@ Per seat, from `scan_model_calls`. The after-run adds a **shadow writer** (`clau
 | after | test-critic | `claude-haiku-4-5` | 16 | 419.6k / 5.8k | 1m14s |
 | after | test-writer | `gemini-3.6-flash` | 48 | 746.4k / 8.4k | 10m54s |
 | after | test-writer-shadow | `claude-sonnet-5` | 48 | 1.0M / 65.3k | 10m50s |
+| primed | mutant-generator | `gemini-3.6-flash` | 24 | 143.4k / 9.9k | 7m25s |
+| primed | test-critic | `claude-haiku-4-5` | 15 | 437.1k / 5.7k | 1m07s |
+| primed | test-writer | `gemini-3.6-flash` | 41 | 640.8k / 7.0k | 9m29s |
+| primed | test-writer-shadow | `claude-sonnet-5` | 37 | 781.8k / 54.2k | 9m05s |
 
 <!-- before-after:end -->
 
@@ -100,6 +124,14 @@ Per seat, from `scan_model_calls`. The after-run adds a **shadow writer** (`clau
   recorded. `adapters.py` reached 28 of 53 decision points with 40 mutants —
   the ceiling — which is the case for a larger ceiling on a large file, and
   for saying so rather than calling 0.59 a grade.
+- **The primed run is the third exam.** Same commit, same herd, the
+  after-run's ledger and mutant set handed back as `--prior`: every file was
+  told the 35–40 edits already tried on its bytes and asked for different
+  ones. Three of three converged, 30 gaps proven, and the cumulative-reach
+  table says the second exam went to places the first did not — 79 of
+  `models.py`'s 149 decision points across both runs against 42 and 54 alone.
+  Its kill rates are not comparable to either earlier run's; its convergence,
+  its proven gaps and its reach are.
 - **By model is one repository's.** The shadow writer proved 10 of 12 on
   `utils.py` and 15 of 15 on `adapters.py` against the same survivors the
   primary proved 12 of 12 and 15 of 15 on; both writers missing almost

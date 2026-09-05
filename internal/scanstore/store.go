@@ -619,6 +619,8 @@ var scanMutantsMigrationCols = []struct{ name, ddl string }{
 	{"killed_by", "killed_by VARCHAR"},
 	{"span_start", "span_start INTEGER"},
 	{"span_end", "span_end INTEGER"},
+	{"shape", "shape VARCHAR"},
+	{"generator_model", "generator_model VARCHAR"},
 	{"proven_by_authored_alone", "proven_by_authored_alone BOOLEAN"},
 }
 
@@ -791,7 +793,9 @@ func Open(dsn string) (*Store, error) {
 		killed_by VARCHAR,
 		span_start INTEGER,
 		span_end INTEGER,
-		proven_by_authored_alone BOOLEAN
+		proven_by_authored_alone BOOLEAN,
+		shape VARCHAR,
+		generator_model VARCHAR
 	)`); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("scanstore: create scan_mutants table: %w", err)
@@ -1698,6 +1702,12 @@ type Mutant struct {
 	// "not recorded" rather than a line.
 	SpanStart int
 	SpanEnd   int
+	// Shape is the kind of fault (adequacy.ShapeOf, from the hunk) and
+	// GeneratorModel the seat that planted it — together the grain that
+	// makes "which shapes does this model plant, which does this suite let
+	// through" a query. NULL on rows from before these columns.
+	Shape          string
+	GeneratorModel string
 	// ProvenByAuthoredAlone marks a survivor the pool's AUTHORED test killed
 	// where the dev suite's own tests never did — the strict subset of
 	// Proven that is a demonstrated gap rather than a demonstrated kill.
@@ -1790,13 +1800,13 @@ func (s *Store) RecordMutants(ctx context.Context, ms []Mutant) error {
 	for _, m := range ms {
 		if _, err := tx.ExecContext(ctx,
 			`INSERT INTO scan_mutants (scan_id, path, mutant_id, outcome, parent_sha256, proven, tests_run, selection_rule,
-				duration_ms, killed_by, span_start, span_end, proven_by_authored_alone)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				duration_ms, killed_by, span_start, span_end, proven_by_authored_alone, shape, generator_model)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			m.ScanID, m.Path, m.MutantID, m.Outcome, m.ParentSHA256, m.Proven, m.TestsRun, m.SelectionRule,
 			// Line numbers are 1-BASED, so 0 is the one "not recorded" state
-			// — and today it is the only state: advpool.MutantRef carries no
-			// span, so nothing produces one. Line 0 does not exist, and a
-			// reader jumping to it would be sent to the top of the file.
+			// (advpool.MutantRef.Span, since 2026-09-04). Line 0 does not
+			// exist, and a reader jumping to it would be sent to the top of
+			// the file.
 			// killed_by is NULL, never '': a mutant killed by a run whose
 			// output nothing could parse — or by a TIMEOUT, where no test
 			// reported anything at all — has no killer to name, and an empty
@@ -1804,6 +1814,7 @@ func (s *Store) RecordMutants(ctx context.Context, ms []Mutant) error {
 			// Both producers' comments already said NULL; only the bind did
 			// not.
 			m.DurationMillis, nullIfEmptyString(m.KilledBy), nullablePositive(m.SpanStart), nullablePositive(m.SpanEnd), m.ProvenByAuthoredAlone,
+			nullIfEmptyString(m.Shape), nullIfEmptyString(m.GeneratorModel),
 		); err != nil {
 			return fmt.Errorf("scanstore: RecordMutants: insert %s/%s: %w", m.Path, m.MutantID, err)
 		}
@@ -1816,7 +1827,7 @@ func (s *Store) RecordMutants(ctx context.Context, ms []Mutant) error {
 func (s *Store) MutantsForScan(ctx context.Context, scanID int64) ([]Mutant, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT scan_id, path, mutant_id, outcome, parent_sha256, proven, tests_run, selection_rule,
-			duration_ms, killed_by, span_start, span_end, proven_by_authored_alone
+			duration_ms, killed_by, span_start, span_end, proven_by_authored_alone, shape, generator_model
 		 FROM scan_mutants WHERE scan_id = ? ORDER BY path, mutant_id`, scanID)
 	if err != nil {
 		return nil, fmt.Errorf("scanstore: MutantsForScan: %w", err)
@@ -1833,11 +1844,13 @@ func (s *Store) MutantsForScan(ctx context.Context, scanID int64) ([]Mutant, err
 		var durationMS, spanStart, spanEnd sql.NullInt64
 		var killedBy sql.NullString
 		var provenByAuthoredAlone sql.NullBool
+		var shape, generatorModel sql.NullString
 		if err := rows.Scan(&m.ScanID, &m.Path, &m.MutantID, &m.Outcome, &parent, &m.Proven, &testsRun, &rule,
-			&durationMS, &killedBy, &spanStart, &spanEnd, &provenByAuthoredAlone); err != nil {
+			&durationMS, &killedBy, &spanStart, &spanEnd, &provenByAuthoredAlone, &shape, &generatorModel); err != nil {
 			return nil, fmt.Errorf("scanstore: MutantsForScan: scan row: %w", err)
 		}
 		m.ParentSHA256 = parent.String
+		m.Shape, m.GeneratorModel = shape.String, generatorModel.String
 		m.TestsRun = int(testsRun.Int64)
 		m.SelectionRule = rule.String
 		m.DurationMillis = nullMillis(durationMS)

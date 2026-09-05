@@ -390,7 +390,7 @@ func readMutantRows(db *sql.DB, where string, args ...any) ([]MutantRow, error) 
 		repo, run_url, scan_id, path, mutant_id, parent_sha256, outcome,
 		invalid_reason, proven, proven_by_authored_alone, tests_run,
 		selection_rule, duration_ms, killed_by, span_start, span_end, code,
-		statement_sha256
+		statement_sha256, shape, generator_model
 	   FROM corral_mutants WHERE `+where, args...) // #nosec G202 -- where is a constant clause from readGrains; every value is a bound parameter
 	if err != nil {
 		return nil, err
@@ -403,15 +403,17 @@ func readMutantRows(db *sql.DB, where string, args ...any) ([]MutantRow, error) 
 		var parentSHA256, invalidReason, selectionRule, killedBy, code sql.NullString
 		var durationMillis sql.NullInt64
 		var spanStart, spanEnd sql.NullInt64
+		var shape, generatorModel sql.NullString
 		if err := rows.Scan(
 			&m.Repo, &m.RunURL, &m.ScanID, &m.Path, &m.MutantID, &parentSHA256, &m.Outcome,
 			&invalidReason, &m.Proven, &m.ProvenByAuthoredAlone, &m.TestsRun,
 			&selectionRule, &durationMillis, &killedBy, &spanStart, &spanEnd, &code,
-			&m.StatementSHA256,
+			&m.StatementSHA256, &shape, &generatorModel,
 		); err != nil {
 			return nil, err
 		}
 		m.ParentSHA256 = parentSHA256.String
+		m.Shape, m.GeneratorModel = shape.String, generatorModel.String
 		m.InvalidReason = invalidReason.String
 		m.SelectionRule = selectionRule.String
 		m.DurationMillis = nullInt64(durationMillis)

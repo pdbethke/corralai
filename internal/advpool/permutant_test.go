@@ -163,9 +163,11 @@ func TestVerdictCarriesPerMutantGrading(t *testing.T) {
 	// The span rides on the ref too: it is the term an exam's coverage is
 	// computed from, and both ledgers stored NULL for it for a month.
 	want := map[string]MutantRef{
-		"m1": {ID: "m1", ParentSHA256: "p1", TestsRun: 1, Rule: lang.SpanRuleLines, Span: lang.LineRange{Start: 41, End: 41}},
-		"m2": {ID: "m2", ParentSHA256: "p2", TestsRun: 2, Rule: lang.SpanRuleStatic, Span: lang.LineRange{Start: 2, End: 2}},
-		"m3": {ID: "m3", ParentSHA256: "p3", TestsRun: 2, Rule: lang.SpanRuleFile},
+		// Shape rides too: these whole-file fixtures carry no hunk, so
+		// every one is "other" — never "" (unclassified is a value).
+		"m1": {ID: "m1", ParentSHA256: "p1", TestsRun: 1, Rule: lang.SpanRuleLines, Span: lang.LineRange{Start: 41, End: 41}, Shape: adequacy.ShapeOther},
+		"m2": {ID: "m2", ParentSHA256: "p2", TestsRun: 2, Rule: lang.SpanRuleStatic, Span: lang.LineRange{Start: 2, End: 2}, Shape: adequacy.ShapeOther},
+		"m3": {ID: "m3", ParentSHA256: "p3", TestsRun: 2, Rule: lang.SpanRuleFile, Shape: adequacy.ShapeOther},
 	}
 	if !reflect.DeepEqual(byID, want) {
 		t.Errorf("mutant refs = %+v, want %+v", byID, want)

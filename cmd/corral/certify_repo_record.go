@@ -657,6 +657,10 @@ func buildScanMutantRows(scanID int64, results []reposcan.FileResult) []scanstor
 				// computed from. 0/0 (stored NULL) when the generator
 				// recorded no span.
 				SpanStart: m.Span.Start, SpanEnd: m.Span.End,
+				// WHAT KIND of fault, and WHO planted it: the grain "prone
+				// to" is measured at. The model is the file's generator
+				// seat; a shadow generator's mutants never reach these refs.
+				Shape: m.Shape, GeneratorModel: r.Verdict.ModelsByRole[advpool.RoleMutantGenerator],
 			})
 		}
 		for _, m := range r.Verdict.DevSurvivedMutants {
@@ -675,6 +679,7 @@ func buildScanMutantRows(scanID int64, results []reposcan.FileResult) []scanstor
 				TestsRun:              m.TestsRun, SelectionRule: m.Rule,
 				DurationMillis: millisOrNil(m.Duration),
 				SpanStart:      m.Span.Start, SpanEnd: m.Span.End,
+				Shape: m.Shape, GeneratorModel: r.Verdict.ModelsByRole[advpool.RoleMutantGenerator],
 			})
 		}
 	}

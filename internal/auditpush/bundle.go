@@ -224,6 +224,10 @@ type MutantRow struct {
 	// the file.
 	SpanStart int
 	SpanEnd   int
+	// Shape and GeneratorModel mirror scanstore.Mutant's: the kind of
+	// fault (from the hunk) and the seat that planted it.
+	Shape          string
+	GeneratorModel string
 	// Code is the mutant's source. It IS the audited code, so it is written
 	// only when the bundle says --push-source was given.
 	Code            string
@@ -470,6 +474,8 @@ CREATE TABLE IF NOT EXISTS corral_mutants (
   selection_rule   VARCHAR,
   duration_ms      BIGINT,
   killed_by        VARCHAR,
+  shape            VARCHAR,
+  generator_model  VARCHAR,
   span_start       INTEGER,
   span_end         INTEGER,
   code             VARCHAR,
@@ -639,6 +645,8 @@ var (
 	}
 	corralMutantsMigrationCols = []struct{ name, ddl string }{
 		{"scan_uid", "scan_uid VARCHAR"},
+		{"shape", "shape VARCHAR"},
+		{"generator_model", "generator_model VARCHAR"},
 	}
 	// cached_input_tokens is additive: a warehouse an earlier corral created
 	// gets it on the next push, and its existing rows keep NULL — correct,
@@ -1203,13 +1211,14 @@ func pushBundleOnce(target string, b Bundle) (Counts, error) {
 		    scan_uid, ts, repo, run_url, scan_id, path, mutant_id, parent_sha256, outcome,
 		    invalid_reason, proven, proven_by_authored_alone, tests_run,
 		    selection_rule, duration_ms, killed_by, span_start, span_end, code,
-		    statement_sha256, schema_version
-		  ) VALUES (`+placeholders(21)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
+		    statement_sha256, schema_version, shape, generator_model
+		  ) VALUES (`+placeholders(23)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
 			uid, now, m.Repo, m.RunURL, m.ScanID, m.Path, m.MutantID,
 			nullIfEmpty(m.ParentSHA256), m.Outcome, nullIfEmpty(m.InvalidReason),
 			m.Proven, m.ProvenByAuthoredAlone, m.TestsRun,
 			nullIfEmpty(m.SelectionRule), m.DurationMillis, nullIfEmpty(m.KilledBy),
 			nullIfZeroInt(m.SpanStart), nullIfZeroInt(m.SpanEnd), code, m.StatementSHA256, SchemaVersion,
+			nullIfEmpty(m.Shape), nullIfEmpty(m.GeneratorModel),
 		); err != nil {
 			return Counts{}, fmt.Errorf("auditpush: insert mutant %s/%s: %w", m.Path, m.MutantID, err)
 		}

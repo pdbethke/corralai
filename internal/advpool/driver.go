@@ -322,6 +322,11 @@ type MutantRef struct {
 	// it" rule that MutantRef exists to enforce. It was documented as
 	// "nothing produces them yet" in two ledgers for a month.
 	Span golang.LineRange
+	// Shape is the KIND of fault the hunk plants (adequacy.ShapeOf), read
+	// from the SEARCH → REPLACE diff and never from the model's own label.
+	// With the generator model on the same row, "which shapes does this
+	// model plant, and which does this suite let through" is a query.
+	Shape string
 }
 
 // toMutantRefs strips MUTANT SOURCE down to the reference scan_mutants needs:
@@ -339,7 +344,7 @@ func toMutantRefs(ms []adequacy.Mutant) []MutantRef {
 func toMutantRefsWith(ms []adequacy.Mutant, grading map[string]adequacy.MutantGrading) []MutantRef {
 	refs := make([]MutantRef, len(ms))
 	for i, m := range ms {
-		refs[i] = MutantRef{ID: m.ID, ParentSHA256: m.ParentSHA256, Span: m.Span}
+		refs[i] = MutantRef{ID: m.ID, ParentSHA256: m.ParentSHA256, Span: m.Span, Shape: adequacy.ShapeOf(m)}
 		if g, ok := grading[m.ID]; ok {
 			refs[i].TestsRun = g.TestsRun
 			refs[i].Rule = g.Rule

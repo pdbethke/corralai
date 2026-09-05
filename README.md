@@ -683,6 +683,20 @@ transparency. A real one is already in the public log — [Rekor index
 `2667058567`](https://rekor.sigstore.dev/api/v1/log/entries?logIndex=2667058567),
 from a flask audit — so you can check the claim before you install anything.
 
+Every pushed mutant row carries its **shape** — the kind of fault the hunk
+plants, read from the SEARCH → REPLACE diff itself and never from the model's
+own label (`condition-negated`, `boundary-shifted`, `constant-changed`,
+`return-changed`, `call-removed`, `exception-dropped`, `branch-removed`,
+`argument-changed`, `other`) — and the **generator model** that planted it.
+"Which shapes does this model plant, and which does this suite let through"
+is then one query:
+
+```sql
+SELECT generator_model, shape, count(*) planted,
+       sum(outcome = 'survived') survived, sum(proven) proven
+FROM corral_mutants GROUP BY ALL ORDER BY survived DESC;
+```
+
 `corral seal` (see `corral --help`) reads the warehouse's `corral_seal`
 view back — the union of every push's still-valid verdicts, not any one
 scan's snapshot. Running this Action per PR, at scale, is documented in

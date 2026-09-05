@@ -106,6 +106,7 @@ export default defineConfig({
             { label: 'corral-harness', slug: 'docs/cli/corral-harness' },
             { label: 'corral-observe', slug: 'docs/cli/corral-observe' },
             { label: 'corral-top', slug: 'docs/cli/corral-top' },
+            { label: 'corral-wrangler', slug: 'docs/cli/corral-wrangler' },
           ],
         },
         { label: 'Limitations & roadmap', slug: 'docs/limitations' },

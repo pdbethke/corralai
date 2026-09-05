@@ -9,6 +9,7 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 RUN CGO_ENABLED=1 go build -trimpath -o /out/corral ./cmd/corral
+RUN CGO_ENABLED=1 go build -trimpath -o /out/corral-wrangler ./cmd/corral-wrangler
 # The operator client rides along so `docker compose exec brain corral-admin …`
 # (analyze, status, review, instruct) works out of the box.
 RUN CGO_ENABLED=0 go build -trimpath -o /out/corral-admin ./cmd/corral-admin
@@ -17,6 +18,7 @@ FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates libstdc++6 curl git chromium \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=build /out/corral /usr/local/bin/corral
+COPY --from=build /out/corral-wrangler /usr/local/bin/corral-wrangler
 COPY --from=build /out/corral-admin /usr/local/bin/corral-admin
 # Seed the swarm's shared memory with the self-describing meta-entry, so a fresh
 # corpus starts non-empty and agents learn the hive-mind from the hive-mind. The
@@ -29,4 +31,4 @@ COPY deploy/demo/seed-memory/ /root/.claude/projects/default/memory/
 COPY CORRAL.md docs/corral/ /root/.claude/projects/default/memory/
 ENV CORRALAI_ADDR=0.0.0.0:9019
 EXPOSE 9019
-ENTRYPOINT ["corral"]
+ENTRYPOINT ["corral-wrangler"]

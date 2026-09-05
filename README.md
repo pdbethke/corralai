@@ -1070,8 +1070,10 @@ of.
 
 Corral began as a coordination daemon — a **brain** with an MCP surface, a task
 queue, shared memory, a learning loop, a live console and a fleet of client
-binaries — and the daemon still ships in the same binary (`corral` with no
-subcommand starts it). Everything above runs without it: `certify` audits
+binaries. It is now its own binary, **`corral-wrangler`** — the wrangler is the
+hand who manages the string of horses, and this is the coordinator for the
+agents that share a codebase (`corral` with no subcommand still starts it for
+one release, then points there). Everything above runs without it: `certify` audits
 in-process, on a laptop or a CI runner, and writes rows to a ledger you own.
 **Nothing in the brain is required for a verdict, and nothing in it is read by
 one** — an audit's prompts are built from the goal, the code and its symbols, and

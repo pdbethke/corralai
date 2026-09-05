@@ -19,8 +19,9 @@ for all of it:
    audit — as a *disclosed* input on the verdict — is designed and not built
    (see [`docs/design/adversarial-review.md`](../design/adversarial-review.md)).
 
-The daemon still ships in the same binary (`corral` with no subcommand starts
-it) and still runs corralai's own instance; it is kept as the substrate for
+The daemon is its own binary, **`corral-wrangler`** (`corral` with no
+subcommand still starts the same server for one release, then becomes a
+pointer), and still runs corralai's own instance; it is kept as the substrate for
 remote workers, a live console over a running herd, and the human-gated
 proposal loop. It is not the first thing to run, and it is not a moving part of
 the audit.
@@ -214,7 +215,8 @@ CGO column honest.)
 
 | Binary | Role | CGO | Ships as |
 |--------|------|-----|----------|
-| **`corral`** | the **brain** — MCP coordination, the gates, task queue, memory, reference RAG, repo-work + multi-forge, the fleet oracle, embedded UI; owns the databases | yes | `deploy/demo/Dockerfile.brain` |
+| **`corral-wrangler`** | the **brain** as its own binary — MCP coordination, the gates, task queue, memory, reference RAG, repo-work + multi-forge, the fleet oracle, embedded UI; owns the databases. `corral` with no subcommand still starts it for one release, then becomes a pointer | yes | `deploy/demo/Dockerfile.brain` |
+| **`corral`** | the **audit CLI** — `certify`, `verify`, `scans`, `ui`, `seal`, `models rank`, `doctor`, `secret`. Carries the ledgers' DuckDB and the symbol index's tree-sitter, hence CGO | yes | `go install` |
 | **`corral-agent`** | the reference **audit-role worker** — model-agnostic, claims an adversarial-audit role (mutant-generator / test-writer / test-critic) off the queue | no | `deploy/demo/Dockerfile.agent` (distroless) |
 | **`corral-observe`** | the **observer** — read-only credentialed window onto a brain's live UI | no | `deploy/observe/Dockerfile` (distroless) |
 | **`corral-admin`** | the **operator** — privileged live console plus command verbs over MCP | no | binary / `go install` |
@@ -237,7 +239,7 @@ participates without installing anything beyond a config stanza.
 | **Thin client** (your coding agent + `.mcp.json`) | ✅ | ✅ | ✅ |
 | **`corral-admin`** (operator CLI) | ✅ | ✅ compiles | ✅ compiles |
 | **`corral-observe`** (read-only window) | ✅ | ✅ | ✅ |
-| **`corral` (the brain)** | ✅ first-class | ⚠️ untested | via Docker/WSL2 |
+| **`corral-wrangler` (the brain)** | ✅ first-class | ⚠️ untested | via Docker/WSL2 |
 
 Every client is pure Go and statically linked: `corral-observe` is 9.5 MB and
 ships on `distroless/static`. Deploy the brain once on a Linux host (systemd +
@@ -247,7 +249,7 @@ your tunnel/proxy); the clients cross-compile anywhere with no C toolchain.
 
 ```bash
 go test ./...
-go run ./cmd/corral     # MCP /mcp/ · health /healthz · UI / · on 127.0.0.1:9019
+go run ./cmd/corral-wrangler   # MCP /mcp/ · health /healthz · UI / · on 127.0.0.1:9019
 ```
 
 Common knobs: `CORRALAI_OIDC_ISSUER`/`_AUDIENCE` (cross-machine auth) ·

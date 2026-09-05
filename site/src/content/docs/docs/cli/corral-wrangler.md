@@ -8,9 +8,25 @@ description: Generated CLI reference for corral-wrangler — never hand-written;
 ## Usage
 
 ```
-corral-wrangler — the coordination daemon (the brain), as its own binary.
+corral-wrangler — the coordinator for agents that share a codebase.
 
-  corral-wrangler            start the server on $CORRALAI_ADDR (default 127.0.0.1:9019)
+The broker, no server needed — the verbs open the daemon's own store as a
+local file ($CORRALAI_DB, default ~/.claude/corralai_coord.sqlite3), so a
+claim from the shell and a claim over MCP are the same claim; the OS user
+is the principal:
+
+  corral-wrangler register  --as <session> --task "<what you are doing>"   register / refresh, see who else is here
+  corral-wrangler heartbeat --as <session> [--task "<handoff note>"]        keep the session and its claims alive
+  corral-wrangler claim     --as <session> [--reason why] [--ttl 2h] PATH…   claim paths before editing; exit 1 if any is held
+  corral-wrangler release   --as <session> [PATH…]                          release these (no PATH = all)
+  corral-wrangler done      --as <session> --task "<summary>" [PATH…]       leave the record of what was finished, release all
+  corral-wrangler who       [--as <session> | <session>]                    a session and what it holds
+  corral-wrangler list                                                       every active session, live claim, recent completion
+  (add --json to any verb for the record as data)
+
+The daemon (MCP coordination, gates, memory, console) — the same store, served:
+
+  corral-wrangler [serve]    start the server on $CORRALAI_ADDR (default 127.0.0.1:9019)
   corral-wrangler --version  print the version
   corral-wrangler --help     this text
 

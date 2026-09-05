@@ -79,3 +79,4 @@ docs/superpowers/
 # module (internal/ imports demand it) and removes it on exit; this covers an
 # interrupted run.
 .verify-mutantset-*/
+corral-wrangler

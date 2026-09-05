@@ -64,6 +64,10 @@ confidence; a rate too loose to be a grade no longer certifies.
 - **A rate too loose to be a grade does not certify** — see the BREAKING
   entry above. The `--local` verdict prints the interval, the budget, the
   reach, and `INDICATIVE:` with the reason.
+- **`corral-wrangler register|heartbeat|claim|release|done|who|list`** — the
+  claim broker without the server: the verbs open the daemon's own
+  coordination store as a local file, the OS user is the principal, and a
+  refused claim exits 1 naming the holder so `claim … && edit` stops first.
 - **The brain is its own binary: `corral-wrangler`.** The coordination
   daemon moved out of `cmd/corral/main.go` whole (`internal/wranglerd`);
   `corral` with no subcommand still starts the same server for this one

@@ -245,6 +245,27 @@ Every client is pure Go and statically linked: `corral-observe` is 9.5 MB and
 ships on `distroless/static`. Deploy the brain once on a Linux host (systemd +
 your tunnel/proxy); the clients cross-compile anywhere with no C toolchain.
 
+## The broker, without the server
+
+The claim broker — the reason coding agents on one machine need a
+coordinator at all — is a verb of `corral-wrangler` that opens the daemon's
+own store as a local file. No listener, no IdP; the OS user is the principal:
+
+```bash
+corral-wrangler register  --as tab-3 --task "moving the parser's error path"
+corral-wrangler claim     --as tab-3 --reason "parser" internal/lang/python.go   # exit 1 if held
+corral-wrangler heartbeat --as tab-3 --task "handoff: parser done, scorer next"
+corral-wrangler done      --as tab-3 --task "parser error path moved" internal/lang/python.go
+corral-wrangler list                                                              # who is here, what they hold
+```
+
+A claim from the shell and a claim over the daemon's MCP `claim_task` are the
+same claim, because both open the same file (`$CORRALAI_DB`). The wrangler
+owns this SQLite — leases and presence, transient by nature; corral owns the
+DuckDB warehouse — the record. The review loop's seats will claim their work
+through these same verbs: a review claim is a file claim with a different
+reason.
+
 ## Running the brain
 
 ```bash

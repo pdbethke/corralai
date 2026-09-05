@@ -53,7 +53,7 @@ inputs:
     required: false
     default: ""
   ledger:
-    description: "A directory INSIDE the checkout where the run keeps what it learned and reads what earlier runs learned — the zero-signup memory for a runner. Check the repo's `corral/ledger` orphan branch out into it before this step and commit it back after (see docs/corral/github-action.md, 'The ledger branch'). When set: earlier runs' recorded mutants and outcomes there are handed to the generator as a PRIOR (only for files whose bytes match exactly; the report says which), this run's scan is recorded to <ledger>/scans.duckdb, and its graded mutants to <ledger>/mutants/<commit>.json. A primed run sits a different exam and every verdict says so."
+    description: "A directory INSIDE the checkout that is the repository's SIGNED LEDGER — the zero-signup memory for a runner. Check the repo's `corral/ledger` orphan branch out into it before this step and commit it back after (see docs/corral/github-action.md, 'The ledger branch'). When set: this run's record is written as ONE JSON entry in <ledger>/scans/ — the five grains a warehouse would receive, naming the previous entry's hash, signed when a certify key is configured — and its graded mutants (the hunks) to <ledger>/mutants/<commit>.json; earlier entries there are handed to the generator as a PRIOR (only for files whose bytes match exactly; the report says which). Plain text: readable with cat, diffable in a pull request, queryable with DuckDB; `corral verify --ledger <dir>` walks the chain. A primed run sits a different exam and every verdict says so."
     required: false
     default: ""
   timeout:
@@ -273,7 +273,9 @@ runs:
         # numbers, nothing that was not already in the repository.
         if [ -n "${LEDGER_DIR:-}" ]; then
           mkdir -p "$LEDGER_DIR/mutants"
-          args+=(--prior "$LEDGER_DIR" --record --record-db "$LEDGER_DIR/scans.duckdb" --record-mutants "$LEDGER_DIR/mutants/$COMMIT_SHA.json")
+          # Read as the prior; written as one signed JSON entry per scan
+          # (a --push to a DIRECTORY), never a database in the branch.
+          args+=(--prior "$LEDGER_DIR" --push "$LEDGER_DIR/" --record-mutants "$LEDGER_DIR/mutants/$COMMIT_SHA.json")
         fi
         # Role→model routing. Each is omitted when empty so corral keeps
         # ownership of its own defaults — the action must never become a second

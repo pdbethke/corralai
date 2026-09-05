@@ -33,6 +33,7 @@ import (
 	"strings"
 
 	"github.com/pdbethke/corralai/internal/adequacy"
+	"github.com/pdbethke/corralai/internal/auditpush"
 	"github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/scanstore"
 )
@@ -63,8 +64,10 @@ type Prior struct {
 }
 
 // Load reads a prior from source: a corral-mutants document (.json), a scan
-// ledger (.duckdb), or a directory holding any number of either — every
-// file found is merged, a ledger row and a document entry for the same
+// ledger (.duckdb), a LEDGER DIRECTORY (the signed entries `--push <dir>/`
+// writes — outcomes, spans and shapes, and hunks when pushed with
+// --push-source), or a directory holding any number of these — every file
+// found is merged, a ledger row and a document entry for the same
 // (path, id) becoming one Tried carrying both the outcome and the hunk.
 func Load(source string) (*Prior, error) {
 	p := &Prior{Source: source, byPath: map[string][]Tried{}}
@@ -72,24 +75,6 @@ func Load(source string) (*Prior, error) {
 	if err != nil {
 		return nil, fmt.Errorf("prior: %w", err)
 	}
-	var files []string
-	if st.IsDir() {
-		if err := filepath.WalkDir(source, func(path string, d os.DirEntry, err error) error {
-			if err != nil || d.IsDir() {
-				return err
-			}
-			switch strings.ToLower(filepath.Ext(path)) {
-			case ".json", ".duckdb":
-				files = append(files, path)
-			}
-			return nil
-		}); err != nil {
-			return nil, fmt.Errorf("prior: walking %s: %w", source, err)
-		}
-	} else {
-		files = []string{source}
-	}
-	sort.Strings(files)
 	merged := map[string]map[string]*Tried{} // path → id → tried
 	upsert := func(t Tried) {
 		if merged[t.Path] == nil {
@@ -115,6 +100,48 @@ func Load(source string) (*Prior, error) {
 		tt := t
 		merged[t.Path][key] = &tt
 	}
+	var files []string
+	if st.IsDir() {
+		// A ledger directory's entries first: they carry outcomes AND
+		// (with --push-source) hunks in one document each.
+		if entries, lerr := auditpush.ReadLedgerDir(source); lerr != nil {
+			return nil, lerr
+		} else if len(entries) > 0 {
+			p.sources++
+			for _, e := range entries {
+				for _, m := range e.Bundle.Mutants {
+					if m.Outcome != "killed" && m.Outcome != "survived" {
+						continue
+					}
+					t := Tried{Path: m.Path, ParentSHA256: m.ParentSHA256, ID: m.MutantID,
+						Span: lang.LineRange{Start: m.SpanStart, End: m.SpanEnd}, Shape: m.Shape,
+						Outcome: m.Outcome, KilledBy: m.KilledBy, Proven: m.Proven}
+					if m.Code != "" {
+						t.Replace = m.Code
+					}
+					upsert(t)
+				}
+			}
+		}
+		if err := filepath.WalkDir(source, func(path string, d os.DirEntry, err error) error {
+			if err != nil || d.IsDir() {
+				return err
+			}
+			if filepath.Base(filepath.Dir(path)) == auditpush.ScansSubdir {
+				return nil // ledger entries: read above
+			}
+			switch strings.ToLower(filepath.Ext(path)) {
+			case ".json", ".duckdb":
+				files = append(files, path)
+			}
+			return nil
+		}); err != nil {
+			return nil, fmt.Errorf("prior: walking %s: %w", source, err)
+		}
+	} else {
+		files = []string{source}
+	}
+	sort.Strings(files)
 	for _, f := range files {
 		var tried []Tried
 		var lerr error

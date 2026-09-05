@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"fmt"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -769,6 +770,12 @@ func PushBundle(target string, b Bundle) (Counts, error) {
 	// binary. The retry loop below cannot help with that, because there is no
 	// error to retry. Only this mutex prevents it, and losing a push silently
 	// is the one failure mode a durable record must not have.
+	if IsLedgerDir(target) {
+		// A directory is a ledger of JSON files, one per push — see
+		// ledgerdir.go. No lock: each push is its own file.
+		return writeLedgerFile(strings.TrimRight(target, "/"+string(os.PathSeparator)), b, ledgerSigner)
+	}
+
 	unlock := lockTarget(target)
 	defer unlock()
 
@@ -1149,13 +1156,38 @@ func pushBundleOnce(target string, b Bundle) (Counts, error) {
 		return Counts{}, err
 	}
 
+	now, uid := mintPush(b)
+	return insertBundle(db, b, now, uid)
+}
+
+// ledgerSigner signs ledger-directory entries; set by SetLedgerSigner from
+// the binary that holds a key. nil writes unsigned entries, which every
+// reader says out loud.
+var ledgerSigner LedgerSigner
+
+// SetLedgerSigner installs the signer directory pushes use.
+func SetLedgerSigner(s LedgerSigner) { ledgerSigner = s }
+
+// mintPush is the push's own stamp: the moment it happened and the scan_uid
+// derived from it (scanUID). Minted ONCE per push, whether the destination
+// is a warehouse or a JSON file in a ledger directory, so a bundle written
+// to a file and later loaded into a view carries the identity it was
+// pushed under, never a fresh one.
+func mintPush(b Bundle) (time.Time, string) {
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	return now, scanUID(b.Scan, now)
+}
+
+// insertBundle writes b's five grains into db (attached and USE'd, schema
+// ensured) under the given push stamp. Shared by the warehouse push and by
+// LoadDir, which replays JSON bundles into an in-memory view.
+func insertBundle(db *sql.DB, b Bundle, now time.Time, uid string) (Counts, error) {
 	tx, err := db.Begin()
 	if err != nil {
 		return Counts{}, fmt.Errorf("auditpush: begin: %w", err)
 	}
 	defer tx.Rollback() //nolint:errcheck
 
-	now := time.Now().UTC()
 	var c Counts
 
 	// ONE identity for the whole push, derived here rather than accepted from
@@ -1174,8 +1206,6 @@ func pushBundleOnce(target string, b Bundle) (Counts, error) {
 	// microseconds, so the value a reader recomputed from the row never
 	// matched the one stored beside it. Truncating here, once, before
 	// hashing and writing, is what makes the claim true.
-	now = now.UTC().Truncate(time.Microsecond)
-	uid := scanUID(b.Scan, now)
 
 	if b.Scan != (ScanRow{}) {
 		if _, err := tx.Exec(`INSERT INTO corral_scans (

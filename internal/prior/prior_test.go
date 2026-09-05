@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/pdbethke/corralai/internal/adequacy"
+	"github.com/pdbethke/corralai/internal/auditpush"
 	"github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/scanstore"
 )
@@ -99,5 +100,36 @@ func TestRenderIsBounded(t *testing.T) {
 	para := Render(tried)
 	if !strings.Contains(para, "… and 7 more.") || strings.Count(para, "\n") > MaxRendered+3 {
 		t.Errorf("unbounded paragraph:\n%s", para)
+	}
+}
+
+// A ledger directory (the Action's branch) is a prior source on its own:
+// each signed entry carries the run's mutants with outcome, span and shape.
+func TestLoadReadsALedgerDirectory(t *testing.T) {
+	dir := t.TempDir()
+	code := "def f(x):\n    return x\n"
+	sha := shaOf(code)
+	if _, err := auditpush.PushBundle(dir, auditpush.Bundle{
+		Scan: auditpush.ScanRow{Repo: "r", Commit: "c1", ScanID: 1},
+		Mutants: []auditpush.MutantRow{
+			{Repo: "r", ScanID: 1, Path: "f.py", MutantID: "m1", ParentSHA256: sha, Outcome: "killed", KilledBy: "tests/test_f.py::t", SpanStart: 2, SpanEnd: 2, Shape: "return-changed"},
+			{Repo: "r", ScanID: 1, Path: "f.py", MutantID: "m2", ParentSHA256: sha, Outcome: "survived", Proven: true, SpanStart: 2, SpanEnd: 2, Shape: "constant-changed"},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	p, err := Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tried, err := p.For("f.py", sha)
+	if err != nil || len(tried) != 2 {
+		t.Fatalf("For: %d, %v", len(tried), err)
+	}
+	para := Render(tried)
+	for _, want := range []string{"return-changed", "KILLED by tests/test_f.py::t", "constant-changed", "SURVIVED, gap already proven"} {
+		if !strings.Contains(para, want) {
+			t.Errorf("paragraph lacks %q:\n%s", want, para)
+		}
 	}
 }

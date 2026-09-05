@@ -5287,6 +5287,16 @@ func stampRekorReceipt(dsn string, scanID int64, logIndex *int64, uuid string) e
 // A thin wrapper on purpose: the mapping lives in certify_repo_bundle.go and
 // there is only one of it.
 func pushBundle(target string, b auditpush.Bundle) (auditpush.Counts, error) {
+	if auditpush.IsLedgerDir(target) {
+		// A ledger-directory entry is SIGNED when a certify key is
+		// configured (the same key --local verdicts and --attest use),
+		// and written unsigned — and said to be — when none is. On a
+		// runner with no key, the recipe attests the entry file itself
+		// (actions/attest), which is the keyless equivalent.
+		if priv, err := loadLocalCertifyKeyIfConfigured(); err == nil {
+			auditpush.SetLedgerSigner(auditpush.Ed25519LedgerSigner{KeyID: "corral-certify", Key: priv})
+		}
+	}
 	return auditpush.PushBundle(target, b)
 }
 

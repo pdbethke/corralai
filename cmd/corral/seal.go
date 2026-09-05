@@ -250,7 +250,7 @@ func (r dbSealReader) Close() error { return r.db.Close() }
 // for the next reader to be confused by.
 func openSealDB(dsn string) (sealReader, error) {
 	isMD := strings.HasPrefix(dsn, "md:")
-	if !isMD {
+	if !isMD && !auditpush.IsLedgerDir(dsn) {
 		if _, err := os.Stat(dsn); err != nil {
 			return nil, fmt.Errorf("corral seal: no warehouse at %s — nothing has pushed to it yet (run `certify --repo --push %s` first), or --db names the wrong path; a reader does not create one", dsn, dsn)
 		}
@@ -311,6 +311,12 @@ func openSealDB(dsn string) (sealReader, error) {
 // "warehouse", mirroring pushBundleOnce's own attach sequence so a seal
 // reader and a seal writer never disagree about how a target resolves.
 func attachWarehouse(dsn string, readOnly bool) (*sql.DB, error) {
+	if auditpush.IsLedgerDir(dsn) {
+		// A ledger DIRECTORY (JSON, one file per push — the Action's
+		// branch) is read as an in-memory view with the warehouse's own
+		// schema, so every reader below sees it exactly as a database.
+		return auditpush.LoadDir(strings.TrimRight(dsn, "/"))
+	}
 	db, err := sql.Open("duckdb", "")
 	if err != nil {
 		return nil, err

@@ -3,7 +3,6 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"io"
 	"math"
@@ -19,15 +18,17 @@ import (
 	"github.com/pdbethke/corralai/internal/scanstore"
 )
 
-// defaultScanDSN resolves the DuckDB scan ledger path exactly the way
-// localBugCatchDBPath (cmd/corral/certify_local_bugcatch.go) resolves its
-// own store: the CORRALAI_SCANS_DB env var, else os.UserHomeDir() falling
-// back to os/user.Current(), else ~/.claude/corralai_scans.duckdb. Kept as
-// the same resolution order deliberately — an operator who already knows
-// that pattern from the bugcatch store should not have to learn a second
-// one for this store.
-func defaultScanDSN() string {
-	if p := strings.TrimSpace(os.Getenv("CORRALAI_SCANS_DB")); p != "" {
+// defaultCacheDSN resolves corral's local cache file — derived goals and
+// instrumented test selections — the way localBugCatchDBPath
+// (cmd/corral/certify_local_bugcatch.go) resolves its own store: the
+// CORRALAI_CACHE_DB env var, else os.UserHomeDir() falling back to
+// os/user.Current(), else ~/.claude/corralai_cache.duckdb. A cache, not a
+// record: the record is the ledger directory (see defaultLedgerDir), and
+// this file held the record too until the ledger entry became the only
+// one, which is why its old name (corralai_scans.duckdb, --record-db,
+// $CORRALAI_SCANS_DB) said "scans".
+func defaultCacheDSN() string {
+	if p := strings.TrimSpace(os.Getenv("CORRALAI_CACHE_DB")); p != "" {
 		return p
 	}
 	home := ""
@@ -36,7 +37,15 @@ func defaultScanDSN() string {
 	} else if usr, err := user.Current(); err == nil {
 		home = usr.HomeDir
 	}
-	return filepath.Join(home, ".claude", "corralai_scans.duckdb")
+	return filepath.Join(home, ".claude", "corralai_cache.duckdb")
+}
+
+// cacheDSNOr is the flag's value, or the default when it is blank.
+func cacheDSNOr(flagVal string) string {
+	if v := strings.TrimSpace(flagVal); v != "" {
+		return v
+	}
+	return defaultCacheDSN()
 }
 
 // killRatePtr converts a possibly-NaN kill rate into the *float64 form
@@ -777,66 +786,6 @@ func scanModelCallTotals(results []reposcan.FileResult) []advpool.ModelCall {
 		}
 	}
 	return out
-}
-
-// recordCertifyRepoScan writes scan and files to st in one transaction.
-// st is opened, and closed, by the caller AROUND THIS CALL — not held across
-// the scan. DuckDB is single-writer per file, and a handle held for the whole
-// run locked the operator's ledger out of `corral scans` for the duration of
-// every audit (see runCertifyRepo's DSN resolution, and ledgerCache, which
-// opens per lookup for the same reason). Every error case (a failed write) is
-// returned unchanged to the caller, which is responsible for the fail-open
-// handling — this function does not print anything itself, so it stays
-// testable as a pure function of its inputs.
-//
-// scan_mutants is written separately, AFTER scan+files have already
-// committed and the scan id is known. A RecordMutants failure is logged and
-// swallowed here, not returned: the verdict is already computed and
-// recorded in scan_files above, so losing mutant detail costs analysis, not
-// correctness, and must not turn into "scan ledger NOT written" for a scan
-// that, in every way that matters, was.
-// It returns the ledger's scan id so the caller can thread it into the
-// audit statement and warehouse push that follow — the link this function's
-// own package comment set out to make traceable.
-func recordCertifyRepoScan(st *scanstore.Store, scan scanstore.Scan, files []scanstore.File, mutants []scanstore.Mutant, calls []scanstore.ModelCall, events []scanstore.Event, stderr io.Writer) (int64, error) {
-	id, err := st.Record(context.Background(), scan, files)
-	if err != nil {
-		return 0, err
-	}
-	// The mutant, model-call and event rows are built by the CALLER and
-	// stamped with the id here. They are the same slices the warehouse bundle
-	// is built from, which is the point: rebuilding them from the report a
-	// second time is how the ledger and the warehouse start disagreeing about
-	// what the scan found.
-	stampScanID(id, mutants, calls, events)
-	if err := st.RecordMutants(context.Background(), mutants); err != nil {
-		// The caller's stderr, not the global logger, for the same reason as
-		// in buildScanFileRows: fail-open still has to be LOUD where the
-		// operator is actually looking.
-		fmt.Fprintf(stderr, "corral certify --repo: scan %d recorded, but scan_mutants was NOT written: %v\n", id, err)
-	}
-	if err := st.RecordModelCalls(context.Background(), calls); err != nil {
-		fmt.Fprintf(stderr, "corral certify --repo: scan %d recorded, but scan_model_calls was NOT written: %v\n", id, err)
-	}
-	if err := st.RecordEvents(context.Background(), events); err != nil {
-		fmt.Fprintf(stderr, "corral certify --repo: scan %d recorded, but scan_events was NOT written: %v\n", id, err)
-	}
-	return id, nil
-}
-
-// stampScanID writes the ledger's assigned id onto rows the caller built
-// before that id existed. One place, so a grain cannot be forgotten: a row
-// with scan_id 0 is a row that joins to nothing.
-func stampScanID(id int64, mutants []scanstore.Mutant, calls []scanstore.ModelCall, events []scanstore.Event) {
-	for i := range mutants {
-		mutants[i].ScanID = id
-	}
-	for i := range calls {
-		calls[i].ScanID = id
-	}
-	for i := range events {
-		events[i].ScanID = id
-	}
 }
 
 // auditedParentSHA256 is the hash a graded file's own mutants carry. Every

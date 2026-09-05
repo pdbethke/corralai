@@ -262,58 +262,6 @@ func TestVerifyAttestFindsItsOwnPushAmongUnrecordedRuns(t *testing.T) {
 	}
 }
 
-// TestVerifyAttestSaysBackfillWhenOnlyAScansPushIsThere: `corral scans
-// push` reconstructs a scan from the local ledger — passed NULL, no source,
-// no thresholds — and stamps the ORIGINAL statement's hash on the rows, so
-// the statement's warehouseRowsSha256 can never match them. verify used to
-// report that as ✗ with advice to "re-verify against a warehouse pushed
-// once". It is not a mismatch; it is a different push, and the row says so.
-func TestVerifyAttestSaysBackfillWhenOnlyAScansPushIsThere(t *testing.T) {
-	run := auditpush.Bundle{
-		Scan: auditpush.ScanRow{Repo: "o/r", ScanID: 7, Commit: "deadbeef", Audited: 1, Candidates: 1, Passed: boolPtr(true), PushedBy: auditpush.PushedByCertify},
-		Files: []auditpush.Row{
-			{Repo: "o/r", ScanID: 7, Path: "pkg/a.go", Commit: "deadbeef",
-				KillRate: ptrF(0.5), Survivors: 2, Disposition: "audited", Evidence: "proven", Passed: boolPtr(true)},
-		},
-	}
-	hash, err := warehouseRowsSHA256(run)
-	if err != nil {
-		t.Fatalf("warehouseRowsSHA256: %v", err)
-	}
-	stmtPath := signedFixtureStatement(t, "o/r", 7, hash)
-	raw, _ := os.ReadFile(stmtPath)
-	sum := sha256.Sum256(raw)
-
-	backfill := run
-	backfill.Scan.Passed = nil
-	backfill.Scan.PushedBy = auditpush.PushedByBackfill
-	backfill.Files = []auditpush.Row{run.Files[0]}
-	backfill.Files[0].Passed = nil
-	backfill.Link = auditpush.Link{ScanID: 7, StatementSHA256: hex.EncodeToString(sum[:])}
-	target := filepath.Join(t.TempDir(), "warehouse.duckdb")
-	if _, err := auditpush.PushBundle(target, backfill); err != nil {
-		t.Fatalf("PushBundle: %v", err)
-	}
-
-	code, out, errb := runVerify(t, []string{"--attest", stmtPath, "--db", target})
-	if code == 1 || strings.Contains(out, "✗ warehouse rows") {
-		t.Fatalf("exit %d; stdout=%s stderr=%s — a backfill is not a mismatch", code, out, errb)
-	}
-	if !strings.Contains(out, "· warehouse rows: not checked (the only rows in --db for this statement were written by `corral scans push` (1 backfill(s)), not by the run that signed it") {
-		t.Errorf("stdout = %q, want the not-checked line to name the backfill", out)
-	}
-
-	// And when the run's own push is ALSO there, it is the one checked.
-	run.Link = backfill.Link
-	if _, err := auditpush.PushBundle(target, run); err != nil {
-		t.Fatalf("PushBundle run: %v", err)
-	}
-	code, out, errb = runVerify(t, []string{"--attest", stmtPath, "--db", target})
-	if code != 0 || !strings.Contains(out, "✓ warehouse rows:") {
-		t.Errorf("exit %d; stdout=%s stderr=%s — want the run's own push found beside the backfill", code, out, errb)
-	}
-}
-
 // TestVerifyAttestRowsHashNotCheckedWhenStatementCarriesNone: a statement
 // signed without a --push alongside it (WarehouseRowsSHA256 == "") has
 // nothing for --db to check against — not-checked, not a mismatch.

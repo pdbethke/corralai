@@ -18,8 +18,8 @@ import (
 // unlike GoalCacheStore this interface has no reason to cross a package
 // boundary at all.
 type selectionCacheStore interface {
-	SelectionCacheGet(ctx context.Context, treeDigest, cmdDigest, plugin, substrate string) (raw []byte, scanID int64, ok bool, err error)
-	SelectionCachePut(ctx context.Context, treeDigest, cmdDigest, plugin, substrate string, raw []byte, note string, scanID int64) error
+	SelectionCacheGet(ctx context.Context, treeDigest, cmdDigest, plugin, substrate string) (raw []byte, ok bool, err error)
+	SelectionCachePut(ctx context.Context, treeDigest, cmdDigest, plugin, substrate string, raw []byte, note string) error
 }
 
 // selectionLedgerCache is a selectionCacheStore backed by the same DuckDB
@@ -46,19 +46,19 @@ func newSelectionLedgerCache(dsn string) *selectionLedgerCache {
 	return &selectionLedgerCache{dsn: strings.TrimSpace(dsn)}
 }
 
-func (c *selectionLedgerCache) SelectionCacheGet(ctx context.Context, treeDigest, cmdDigest, plugin, substrate string) (raw []byte, scanID int64, ok bool, err error) {
+func (c *selectionLedgerCache) SelectionCacheGet(ctx context.Context, treeDigest, cmdDigest, plugin, substrate string) (raw []byte, ok bool, err error) {
 	if c == nil || c.dsn == "" {
-		return nil, 0, false, nil
+		return nil, false, nil
 	}
 	st, oerr := scanstore.Open(c.dsn)
 	if oerr != nil {
-		return nil, 0, false, nil
+		return nil, false, nil
 	}
 	defer func() { _ = st.Close() }()
 	return st.SelectionCacheGet(ctx, treeDigest, cmdDigest, plugin, substrate)
 }
 
-func (c *selectionLedgerCache) SelectionCachePut(ctx context.Context, treeDigest, cmdDigest, plugin, substrate string, raw []byte, note string, scanID int64) error {
+func (c *selectionLedgerCache) SelectionCachePut(ctx context.Context, treeDigest, cmdDigest, plugin, substrate string, raw []byte, note string) error {
 	if c == nil || c.dsn == "" {
 		return nil
 	}
@@ -67,5 +67,5 @@ func (c *selectionLedgerCache) SelectionCachePut(ctx context.Context, treeDigest
 		return nil //nolint:nilerr -- fail closed: a write the ledger cannot accept must not fail the scan
 	}
 	defer func() { _ = st.Close() }()
-	return st.SelectionCachePut(ctx, treeDigest, cmdDigest, plugin, substrate, raw, note, scanID)
+	return st.SelectionCachePut(ctx, treeDigest, cmdDigest, plugin, substrate, raw, note)
 }

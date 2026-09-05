@@ -4,7 +4,6 @@ package main
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -83,24 +82,10 @@ func TestWriterModeFlagRejectsAnUnknownValue(t *testing.T) {
 // column a later query needs to keep two modes' rows apart. Unset must land
 // as SQL NULL, never as one of the two spellings.
 func TestWriterModeRoundTripsThroughTheLedger(t *testing.T) {
-	st, err := scanstore.Open(filepath.Join(t.TempDir(), "s.duckdb"))
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	defer st.Close()
-	ctx := context.Background()
-
-	id, err := st.Record(ctx, scanstore.Scan{Owner: "o", Repo: "r", Commit: "c"}, []scanstore.File{
+	files := roundTripFilesThroughTheLedger(t, []scanstore.File{
 		{Path: "a.py", Disposition: "audited", Evidence: "proven", WriterMode: advpool.WriterModePerSurvivor},
 		{Path: "b.py", Disposition: "audited", Evidence: "proven"},
 	})
-	if err != nil {
-		t.Fatalf("Record: %v", err)
-	}
-	files, err := st.FilesForScan(ctx, id)
-	if err != nil {
-		t.Fatalf("FilesForScan: %v", err)
-	}
 	got := map[string]string{}
 	for _, f := range files {
 		got[f.Path] = f.WriterMode
@@ -124,25 +109,11 @@ func TestWriterModeRoundTripsThroughTheLedger(t *testing.T) {
 // mode. Recorded with DISTINCT values on purpose: two equal strings prove
 // nothing about which column holds which.
 func TestWriterModeAndPromptShapeLandOnTheirOwnColumns(t *testing.T) {
-	st, err := scanstore.Open(filepath.Join(t.TempDir(), "s.duckdb"))
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	defer st.Close()
-	ctx := context.Background()
-
-	id, err := st.Record(ctx, scanstore.Scan{Owner: "o", Repo: "r", Commit: "c"}, []scanstore.File{
+	files := roundTripFilesThroughTheLedger(t, []scanstore.File{
 		{Path: "a.py", Disposition: "audited", Evidence: "proven",
 			WriterMode: advpool.WriterModePerSurvivor, PromptShape: "chunk"},
 		{Path: "b.py", Disposition: "audited", Evidence: "proven"},
 	})
-	if err != nil {
-		t.Fatalf("Record: %v", err)
-	}
-	files, err := st.FilesForScan(ctx, id)
-	if err != nil {
-		t.Fatalf("FilesForScan: %v", err)
-	}
 	if len(files) != 2 {
 		t.Fatalf("FilesForScan returned %d rows, want 2", len(files))
 	}

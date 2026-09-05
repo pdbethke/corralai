@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/pdbethke/corralai/internal/advpool"
+	"github.com/pdbethke/corralai/internal/auditpush"
 	"github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/reposcan"
 	"github.com/pdbethke/corralai/internal/scanstore"
@@ -141,7 +142,11 @@ func reuseFixtureScan(t *testing.T, root, dsn string, deriver reposcan.Deriver, 
 
 // reuseFixtureScanOpt is reuseFixtureScan with the verdict cache switchable
 // off, the way --no-verdict-cache switches it off in runCertifyRepo: the
-// cache is addressed by DSN and an empty DSN misses every key.
+// cache reads the ledger directory and an empty directory name misses
+// every key. dsn is the CACHE file (goals, selections); the record — what
+// the verdict cache reads — is the ledger directory beside it, written
+// here exactly the way the run writes it (buildBundle → pushBundle, source
+// carried).
 func reuseFixtureScanOpt(t *testing.T, root, dsn string, deriver reposcan.Deriver, noGoalCache, noVerdictCache bool, audit func(path string) advpool.Verdict) reuseScanResult {
 	t.Helper()
 	var out bytes.Buffer
@@ -180,8 +185,8 @@ func reuseFixtureScanOpt(t *testing.T, root, dsn string, deriver reposcan.Derive
 
 	if len(selected) > 0 {
 		selectionSources := enumeratedSourcePaths(cands, excl[:enumExcl])
-		if reusedFrom, hit := ex.selectionCachePeek(selectionSources); hit {
-			fmt.Fprintf(&out, "  selection: reused — tree unchanged since scan %d\n", reusedFrom)
+		if ex.selectionCachePeek(selectionSources) {
+			fmt.Fprintln(&out, "  selection: reused — tree unchanged since an earlier scan (cached evidence)")
 		} else {
 			fmt.Fprintln(&out, "  selection: running the suite once with per-test coverage instrumentation…")
 		}
@@ -215,11 +220,12 @@ func reuseFixtureScanOpt(t *testing.T, root, dsn string, deriver reposcan.Derive
 		}
 	}
 
-	verdictCacheDSN := dsn
+	ledgerDir := filepath.Join(filepath.Dir(dsn), "ledger")
+	verdictCacheDir := ledgerDir
 	if noVerdictCache {
-		verdictCacheDSN = ""
+		verdictCacheDir = ""
 	}
-	results := reposcan.Scan(context.Background(), jobs, ex, newLedgerCache(verdictCacheDSN), 1)
+	results := reposcan.Scan(context.Background(), jobs, ex, newLedgerCache(verdictCacheDir, &errb), 1)
 	rep := reposcan.Aggregate("test-owner", "test-repo", "deadbeef", len(cands)+enumExcl, len(cands), results, excl)
 
 	files := buildScanFileRows(results, rep.Excluded, reposcan.CoverageMap{}, "", root, io.Discard)
@@ -237,16 +243,23 @@ func reuseFixtureScanOpt(t *testing.T, root, dsn string, deriver reposcan.Derive
 		TotalFiles: len(cands) + enumExcl, Candidates: rep.Candidates, Audited: rep.Audited,
 		KillRate: killRatePtr(rep.KillRate), CacheHits: rep.CacheHits,
 		StartedAt: time.Now(), FinishedAt: time.Now(),
-		SelectionMillis:     scanSelectionMillis(ex),
-		SelectionReusedFrom: scanSelectionReusedFrom(ex),
+		SelectionMillis: scanSelectionMillis(ex),
+		SelectionReused: ex.selectionReused,
 	}
-	id, rerr := recordCertifyRepoScan(st, scan, files, nil, modelRows, scanEventRows(ex), &errb)
-	if rerr != nil {
-		t.Fatalf("recordCertifyRepoScan: %v stderr=%s", rerr, errb.String())
+	entry := buildBundle(scan, 0, files, nil, modelRows, scanEventRows(ex), auditpush.Link{}, true,
+		"test-owner/test-repo", "deadbeef", "", bundleMeta{})
+	entry.SourcePushed, entry.Scan.SourcePushed = true, true
+	if _, perr := pushBundle(ledgerDir+"/", entry); perr != nil {
+		t.Fatalf("writing the ledger entry: %v stderr=%s", perr, errb.String())
 	}
+	entries, lerr := auditpush.ReadLedgerDir(ledgerDir)
+	if lerr != nil {
+		t.Fatalf("reading the ledger back: %v", lerr)
+	}
+	id := int64(len(entries))
 	if ex.pendingSelectionPut != nil {
 		p := ex.pendingSelectionPut
-		if perr := st.SelectionCachePut(context.Background(), p.TreeDigest, p.CmdDigest, p.Plugin, p.Substrate, p.Raw, "", id); perr != nil {
+		if perr := st.SelectionCachePut(context.Background(), p.TreeDigest, p.CmdDigest, p.Plugin, p.Substrate, p.Raw, ""); perr != nil {
 			t.Fatalf("SelectionCachePut: %v", perr)
 		}
 	}
@@ -385,7 +398,7 @@ func TestSecondScanIsNearlyFree(t *testing.T) {
 	if len(r2.modelRow) != 0 {
 		t.Errorf("scan 2: scan_model_calls carries %d row(s), want 0 — a reused verdict spent nothing THIS scan: %+v", len(r2.modelRow), r2.modelRow)
 	}
-	wantSelectionReused := fmt.Sprintf("  selection: reused — tree unchanged since scan %d", r1.scanID)
+	wantSelectionReused := "  selection: reused — tree unchanged since an earlier scan (cached evidence)"
 	if !strings.Contains(r2.stdout, wantSelectionReused) {
 		t.Errorf("scan 2: stdout = %q, want it to contain %q", r2.stdout, wantSelectionReused)
 	}

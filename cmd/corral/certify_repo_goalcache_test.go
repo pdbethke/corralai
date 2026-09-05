@@ -15,7 +15,6 @@ import (
 	"github.com/pdbethke/corralai/internal/advpool"
 	"github.com/pdbethke/corralai/internal/auditpush"
 	"github.com/pdbethke/corralai/internal/reposcan"
-	"github.com/pdbethke/corralai/internal/scanstore"
 )
 
 // TestGoalCacheDisclosureLineIsUnchangedWhenNothingWasReused pins the
@@ -140,20 +139,7 @@ func TestGoalReusedRoundTripsTheLedger(t *testing.T) {
 		t.Fatalf("buildScanFileRows dropped GoalReused: %+v", files[0])
 	}
 
-	dsn := filepath.Join(t.TempDir(), "scans.duckdb")
-	st, err := scanstore.Open(dsn)
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	defer st.Close()
-	scanID, err := st.Record(context.Background(), scanstore.Scan{Owner: "o", Repo: "r", Commit: "c"}, files)
-	if err != nil {
-		t.Fatalf("Record: %v", err)
-	}
-	back, err := st.FilesForScan(context.Background(), scanID)
-	if err != nil {
-		t.Fatalf("FilesForScan: %v", err)
-	}
+	back := roundTripFilesThroughTheLedger(t, files)
 	if len(back) != 1 || back[0].GoalReused == nil || !*back[0].GoalReused {
 		t.Fatalf("goal_reused did not round-trip through the ledger: %+v", back)
 	}

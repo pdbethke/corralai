@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/pdbethke/corralai/internal/lang"
-	"github.com/pdbethke/corralai/internal/scanstore"
 	"os"
 	"path/filepath"
 	"strings"
@@ -435,13 +434,17 @@ func TestCertifyRepoPriorIsAppliedOnSameBytesAndRefusedOnOthers(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	db := filepath.Join(root, "scans.duckdb")
+	gitRun := gitCmd(t, root)
+	gitRun("init", "-q")
+	gitRun("add", ".")
+	gitRun("commit", "-q", "-m", "base", "--no-gpg-sign")
+	ledgerDir := filepath.Join(t.TempDir(), "ledger")
 	var out, errb bytes.Buffer
 	code := runCertifyRepo([]string{
 		"--repo", root, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant, "--critic-model", "off",
 		"--goals", writeGoals(t, root, `{"mypkg/a.py": "a() must return 1", "mypkg/b.py": "b() must return 1"}`),
 		"--substrate", substrateWorkspace, "--all", "--mutants", setPath, "--prior", priorDir,
-		"--record", "--record-db", db,
+		"--ledger", ledgerDir,
 	}, &out, &errb)
 	s := out.String()
 	if code != 0 {
@@ -454,12 +457,15 @@ func TestCertifyRepoPriorIsAppliedOnSameBytesAndRefusedOnOthers(t *testing.T) {
 		t.Errorf("b.py's prior must be refused, out loud:\n%s", s)
 	}
 	// The ledger row carries it.
-	st, err := scanstore.Open(db)
+	st, err := openLedgerScans(ledgerDir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer st.Close()
 	scans, _ := st.Scans(context.Background(), 1)
+	if len(scans) != 1 {
+		t.Fatalf("ledger holds %d scan(s), want 1", len(scans))
+	}
 	files, _ := st.FilesForScan(context.Background(), scans[0].ID)
 	primed := map[string]bool{}
 	for _, f := range files {

@@ -41,7 +41,7 @@ var uiWeb embed.FS
 func runUI(args []string, open func(dsn string) (sealReader, error), stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("ui", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	dsn := fs.String("db", "", "warehouse to read (default: $CORRALAI_SCANS_DB, else ~/.claude/corralai_scans.duckdb — the same resolution `corral seal` and `corral scans` use)")
+	dsn := fs.String("db", "", "what to read: a ledger directory or a warehouse file (default: $CORRAL_LEDGER, else ./.corral/ledger — the same resolution `corral seal` and `corral scans` use)")
 	addr := fs.String("addr", "127.0.0.1:8787", "local listen address. Loopback by default ON PURPOSE: the ledger is a map of where a codebase's tests are thinnest")
 	once := fs.Bool("print-url", false, "print the URL and exit without serving (for scripts and smoke tests)")
 	if err := fs.Parse(args); err != nil {
@@ -50,7 +50,7 @@ func runUI(args []string, open func(dsn string) (sealReader, error), stdout, std
 
 	target := strings.TrimSpace(*dsn)
 	if target == "" {
-		target = defaultScanDSN()
+		target = defaultLedgerDir(".")
 	}
 	st, err := open(target)
 	if err != nil {

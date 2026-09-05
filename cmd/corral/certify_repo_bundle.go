@@ -110,15 +110,19 @@ func buildBundle(
 			SelectionMillis: scan.SelectionMillis,
 			// Same discipline: already nullable in the ledger, rides through
 			// as-is. nil unless THIS scan reused a prior one's evidence.
-			SelectionReusedFrom: scan.SelectionReusedFrom,
-			InputTokens:         scan.InputTokens, OutputTokens: scan.OutputTokens,
+			SelectionReused: scan.SelectionReused,
+			InputTokens:     scan.InputTokens, OutputTokens: scan.OutputTokens,
 			ModelCalls:   scan.ModelCalls,
 			SourcePushed: sourcePushed,
 			// The --transparency receipt. Already nullable in the ledger,
 			// rides through as-is: nil/"" on every scan that never uploaded
 			// (--transparency was not given, or the upload failed open).
 			RekorLogIndex: scan.RekorLogIndex, RekorUUID: scan.RekorUUID,
-			PushedBy: meta.PushedBy,
+			PushedBy:      meta.PushedBy,
+			EngineVersion: scan.EngineVersion, ModelSet: scan.ModelSet,
+			Top: scan.Top, AllCandidates: scan.AllCandidates, TotalFiles: scan.TotalFiles,
+			PreflightRan: scan.PreflightRan, PreflightNote: scan.PreflightNote,
+			FinishedAt: nilIfZeroTime(scan.FinishedAt),
 		},
 		Files:        buildAuditRows(files, scanID, meta),
 		Mutants:      buildMutantRows(mutants, scanID, meta),
@@ -224,6 +228,8 @@ func buildAuditRows(files []scanstore.File, scanID int64, meta bundleMeta) []aud
 			ChallengerShared:         f.ChallengerShared,
 			PriorsApplied:            f.PriorsApplied,
 			PriorDigest:              f.PriorDigest,
+			ComputedAt:               nilIfZeroTime(f.ComputedAt),
+			MutantsFrom:              f.MutantsFrom,
 		})
 	}
 	return rows

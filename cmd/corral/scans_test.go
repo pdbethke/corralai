@@ -13,6 +13,8 @@ package main
 import (
 	"bytes"
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -436,5 +438,76 @@ func TestScanFileNoteDisclosesAThinDenominator(t *testing.T) {
 	}
 	if got := scanFileNote(scanstore.File{Disposition: "audited", MutantsGraded: 40, MutantsInvalid: 2}); got != "" {
 		t.Errorf("a whole exam must carry no denominator note, got %q", got)
+	}
+}
+
+// TestScansListAndShowReadTheLedgerDirectory: the record is the ledger
+// directory, and `corral scans` reads it — through the REAL opener, with
+// --ledger, so the flag is exercised by value and the reverse mapping
+// (scans_ledger.go) is checked against what a real entry holds. Ids are
+// chain positions: the oldest entry is 1, and `show 1` a month later is
+// the same scan.
+func TestScansListAndShowReadTheLedgerDirectory(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "ledger")
+	writeCacheTestEntry(t, dir, []scanstore.File{
+		{Path: "pkg/a.go", Lang: "go", Disposition: "audited", Gradable: true, KillRate: ptrF(0.25), Survivors: 3,
+			ProvenMissed: 1, Evidence: "proven", MutantsGraded: 4, CacheKey: "K1", VerdictJSON: `{}`, AuthoredTest: "func TestA(t *testing.T) {}"},
+		{Path: "pkg/b.go", Lang: "go", Disposition: "rejected", Reason: "no-paired-test", Evidence: "paired"},
+	})
+	writeCacheTestEntry(t, dir, []scanstore.File{
+		{Path: "pkg/a.go", Lang: "go", Disposition: "audited", Gradable: true, KillRate: ptrF(0.75), Survivors: 1,
+			Evidence: "proven", MutantsGraded: 4, CacheKey: "K1", VerdictJSON: `{}`, CacheHit: true},
+	})
+
+	var out, errOut bytes.Buffer
+	if code := runScans([]string{"list", "--ledger", dir}, openScanStore, &out, &errOut); code != 0 {
+		t.Fatalf("list: exit = %d, stderr=%s", code, errOut.String())
+	}
+	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
+	if len(lines) != 3 {
+		t.Fatalf("list: want a header and two rows, got:\n%s", out.String())
+	}
+	// Newest first, ids are chain positions, the scan-grain kill rate and
+	// cache-hit count are derived from the file rows.
+	if !strings.HasPrefix(lines[1], "2") || !strings.Contains(lines[1], "0.75") || !strings.Contains(lines[2], "0.25") {
+		t.Errorf("list: want scan 2 (0.75) above scan 1 (0.25), got:\n%s", out.String())
+	}
+	if fields := strings.Fields(lines[1]); len(fields) < 8 || fields[6] != "1" {
+		t.Errorf("list: scan 2 must report REUSED=1 (one cache hit), got: %q", lines[1])
+	}
+
+	out.Reset()
+	if code := runScans([]string{"show", "1", "--ledger", dir, "--evidence"}, openScanStore, &out, &errOut); code != 0 {
+		t.Fatalf("show: exit = %d, stderr=%s", code, errOut.String())
+	}
+	got := out.String()
+	for _, want := range []string{"pkg/a.go", "pkg/b.go", "no-paired-test", "0.25", "func TestA(t *testing.T) {}"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("show 1: missing %q in:\n%s", want, got)
+		}
+	}
+	out.Reset()
+	if code := runScans([]string{"show", "3", "--ledger", dir}, openScanStore, &out, &errOut); code != 0 {
+		t.Fatalf("show 3: exit = %d, stderr=%s", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), "has no recorded files (unknown id?") {
+		t.Errorf("show past the chain's end must say the id is unknown, got:\n%s", out.String())
+	}
+
+	// A directory that does not exist yet is an empty record, not an
+	// error — and never a DuckDB file created at that name.
+	out.Reset()
+	empty := filepath.Join(t.TempDir(), "nope")
+	if code := runScans([]string{"list", "--ledger", empty}, openScanStore, &out, &errOut); code != 0 {
+		t.Fatalf("list (empty): exit = %d, stderr=%s", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), "no scans recorded yet") {
+		t.Errorf("list (empty): got:\n%s", out.String())
+	}
+	if _, err := os.Stat(empty); err == nil {
+		t.Errorf("a reader created %s", empty)
+	}
+	if code := runScans([]string{"list", "--ledger", dir, "--db", "x.duckdb"}, openScanStore, &out, &errOut); code != 2 {
+		t.Errorf("--ledger and --db together must be a usage error, got exit %d", code)
 	}
 }

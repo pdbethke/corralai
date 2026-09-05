@@ -51,12 +51,17 @@ func sampleBundle() Bundle {
 			Cores: 24, TreesRequested: 6, DiffBase: "main",
 			Candidates: 2, Audited: 1, Passed: boolPtrT(true),
 			TotalMillis: ms(61000), InputTokens: 1200, OutputTokens: 340, ModelCalls: 7,
+			EngineVersion: "reposcan-1", ModelSet: "w=m1;g=m2", Top: 3, AllCandidates: false,
+			TotalFiles: 40, PreflightRan: true, PreflightNote: "instrumented",
+			FinishedAt: timePtr(time.Date(2026, 9, 5, 12, 1, 0, 0, time.UTC)),
 		},
 		Files: []Row{
 			{
 				Repo: "o/r", Commit: "abc", RunURL: "https://ci/1", ScanID: 7,
 				Path: "pkg/a.go", Lang: "go", Disposition: "audited",
-				KillRate: f64(0.5), Survivors: 2, ProvenMissed: 1,
+				ComputedAt:  timePtr(time.Date(2026, 9, 5, 12, 0, 30, 0, time.UTC)),
+				MutantsFrom: "ffff",
+				KillRate:    f64(0.5), Survivors: 2, ProvenMissed: 1,
 				ParentSHA256: "aaaa", Evidence: "proven", Status: "certified",
 				MutantsGraded: 8, MutantsInvalid: 1,
 				GoalsDerived: 3, AuthoredTest: "def test_x(): pass",
@@ -747,3 +752,5 @@ func TestRequireStatementsCoversEveryGrain(t *testing.T) {
 		}
 	}
 }
+
+func timePtr(t time.Time) *time.Time { return &t }

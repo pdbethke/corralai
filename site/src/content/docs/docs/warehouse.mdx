@@ -6,7 +6,7 @@ description: Query corral's real audit ledger with DuckDB running in your browse
 {/* SPDX-License-Identifier: Elastic-2.0 */}
 
 corral stores a `certify --local` audit as a **signed, hash-linked record**, and
-a `certify --repo` scan run with `--record` as ledger rows, plus per-model
+a `certify --repo` scan as a signed ledger entry DuckDB reads in place, plus per-model
 **execution telemetry** — natively in **DuckDB**. The
 [**DuckDB integration page**](/warehouse/) ("DuckDB integration" in the site nav)
 makes that layer tangible: it runs DuckDB itself, compiled to **WebAssembly, in

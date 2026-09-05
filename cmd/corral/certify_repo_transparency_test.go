@@ -114,7 +114,7 @@ func TestTransparencyWithoutAttestExitsUsageError(t *testing.T) {
 // touched. The fixture uses an empty diff scope (base == HEAD, nothing
 // changed since), the same trick TestCertifyRepoRecordRoundTripsReportedFiles
 // uses: every candidate is excluded before any model call or jail run, so
-// this exercises the --attest/--transparency/--record wiring with zero real
+// this exercises the --attest/--transparency/--ledger wiring with zero real
 // audit cost.
 func TestCertifyRepoTransparencyStampsLedgerAndBundle(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "test-placeholder-not-a-real-key")
@@ -129,7 +129,7 @@ func TestCertifyRepoTransparencyStampsLedgerAndBundle(t *testing.T) {
 	gitRun("commit", "-q", "-m", "base", "--no-gpg-sign")
 	base := gitRevParseHead(t, root)
 
-	dsn := filepath.Join(t.TempDir(), "scans.duckdb")
+	ledgerDir := filepath.Join(t.TempDir(), "ledger")
 	attestPath := filepath.Join(t.TempDir(), "statement.json")
 
 	fake := &transparency.FakeLogger{Entry: transparency.LogEntry{LogIndex: 55, UUID: "uuid-xyz", IntegratedTime: 42}}
@@ -141,7 +141,7 @@ func TestCertifyRepoTransparencyStampsLedgerAndBundle(t *testing.T) {
 	code := runCertifyRepo([]string{
 		"--repo", root, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant, "--critic-model", "off",
 		"--diff-base", base, "--substrate", substrateWorkspace,
-		"--record", "--record-db", dsn,
+		"--ledger", ledgerDir,
 		"--attest", attestPath, "--transparency",
 	}, &out, &errb)
 	if code != 0 {
@@ -169,15 +169,8 @@ func TestCertifyRepoTransparencyStampsLedgerAndBundle(t *testing.T) {
 		t.Errorf("the plain --attest file is missing: %v", err)
 	}
 
-	st, err := scanstore.Open(dsn)
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	defer st.Close()
-	scans, err := st.Scans(context.Background(), 10)
-	if err != nil {
-		t.Fatalf("Scans: %v", err)
-	}
+	// The entry is written AFTER the upload, so it carries the receipt.
+	scans := ledgerScanRows(t, ledgerDir)
 	if len(scans) != 1 {
 		t.Fatalf("got %d scan(s), want 1", len(scans))
 	}
@@ -187,6 +180,22 @@ func TestCertifyRepoTransparencyStampsLedgerAndBundle(t *testing.T) {
 	if scans[0].RekorUUID != "uuid-xyz" {
 		t.Errorf("ledger RekorUUID = %q, want uuid-xyz", scans[0].RekorUUID)
 	}
+}
+
+// ledgerScanRows reads a ledger directory's scan rows, newest first, the
+// way `corral scans list` does.
+func ledgerScanRows(t *testing.T, dir string) []scanstore.ScanRow {
+	t.Helper()
+	st, err := openLedgerScans(dir)
+	if err != nil {
+		t.Fatalf("open the ledger: %v", err)
+	}
+	defer st.Close()
+	scans, err := st.Scans(context.Background(), 10)
+	if err != nil {
+		t.Fatalf("Scans: %v", err)
+	}
+	return scans
 }
 
 // TestCertifyRepoTransparencyFailsOpenOnUploadError pins the top-level
@@ -206,7 +215,7 @@ func TestCertifyRepoTransparencyFailsOpenOnUploadError(t *testing.T) {
 	gitRun("commit", "-q", "-m", "base", "--no-gpg-sign")
 	base := gitRevParseHead(t, root)
 
-	dsn := filepath.Join(t.TempDir(), "scans.duckdb")
+	ledgerDir := filepath.Join(t.TempDir(), "ledger")
 	attestPath := filepath.Join(t.TempDir(), "statement.json")
 
 	fake := &transparency.FakeLogger{Err: errors.New("rekor: connection refused")}
@@ -218,7 +227,7 @@ func TestCertifyRepoTransparencyFailsOpenOnUploadError(t *testing.T) {
 	code := runCertifyRepo([]string{
 		"--repo", root, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant, "--critic-model", "off",
 		"--diff-base", base, "--substrate", substrateWorkspace,
-		"--record", "--record-db", dsn,
+		"--ledger", ledgerDir,
 		"--attest", attestPath, "--transparency",
 	}, &out, &errb)
 	if code != 0 {
@@ -231,15 +240,7 @@ func TestCertifyRepoTransparencyFailsOpenOnUploadError(t *testing.T) {
 		t.Errorf("stdout = %q, must not claim a receipt on a failed upload", out.String())
 	}
 
-	st, err := scanstore.Open(dsn)
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	defer st.Close()
-	scans, err := st.Scans(context.Background(), 10)
-	if err != nil {
-		t.Fatalf("Scans: %v", err)
-	}
+	scans := ledgerScanRows(t, ledgerDir)
 	if len(scans) != 1 {
 		t.Fatalf("got %d scan(s), want 1", len(scans))
 	}
@@ -276,15 +277,16 @@ func TestTransparencyWithoutSigningKeyExitsUsageError(t *testing.T) {
 	}
 }
 
-// TestCertifyRepoSourcePushedIsStampedOnlyAfterThePushSucceeds: the
-// ledger's source_pushed used to be written as "--push-source and --push
-// were both given" BEFORE the push ran, so a push that failed left a scan
-// row swearing the source had left the box. It is a custody fact and it is
-// stamped after the fact, like the statement hash. On a runner the failed
-// push is also raised as a workflow annotation — the exit code stays the
+// TestCertifyRepoSourcePushedIsTheSinksOwnFact: source_pushed is a
+// custody fact about ONE sink. The ledger entry always carries the source
+// it holds (the verdict cache reads it back) and says so; a warehouse row
+// says whether source reached IT — true only when --push-source was given
+// AND the push succeeded, and a failed push leaves no row at all, never a
+// row swearing the source had left the box. On a runner the failed push
+// is also raised as a workflow annotation — the exit code stays the
 // verdict's, but a green job with a silent stderr line is how an operator
 // learns from a query that their warehouse is empty.
-func TestCertifyRepoSourcePushedIsStampedOnlyAfterThePushSucceeds(t *testing.T) {
+func TestCertifyRepoSourcePushedIsTheSinksOwnFact(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "test-placeholder-not-a-real-key")
 	t.Setenv("GITHUB_ACTIONS", "true")
 
@@ -296,44 +298,59 @@ func TestCertifyRepoSourcePushedIsStampedOnlyAfterThePushSucceeds(t *testing.T) 
 	gitRun("commit", "-q", "-m", "base", "--no-gpg-sign")
 	base := gitRevParseHead(t, root)
 
-	run := func(pushTarget string) (scanstore.ScanRow, string) {
-		dsn := filepath.Join(t.TempDir(), "scans.duckdb")
+	run := func(pushTarget string, extra ...string) (scanstore.ScanRow, string) {
+		ledgerDir := filepath.Join(t.TempDir(), "ledger")
 		var out, errb bytes.Buffer
-		code := runCertifyRepo([]string{
+		code := runCertifyRepo(append([]string{
 			"--repo", root, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant, "--critic-model", "off",
 			"--diff-base", base, "--substrate", substrateWorkspace,
-			"--record", "--record-db", dsn,
-			"--push", pushTarget, "--push-source",
-		}, &out, &errb)
+			"--ledger", ledgerDir,
+			"--push", pushTarget,
+		}, extra...), &out, &errb)
 		if code != 0 {
 			t.Fatalf("exit %d: stdout=%s stderr=%s", code, out.String(), errb.String())
 		}
-		st, err := scanstore.Open(dsn)
-		if err != nil {
-			t.Fatalf("Open: %v", err)
-		}
-		defer st.Close()
-		scans, err := st.Scans(context.Background(), 10)
-		if err != nil || len(scans) != 1 {
-			t.Fatalf("Scans: %v (%d rows)", err, len(scans))
+		scans := ledgerScanRows(t, ledgerDir)
+		if len(scans) != 1 {
+			t.Fatalf("ledger: %d entries, want 1", len(scans))
 		}
 		return scans[0], errb.String()
 	}
+	warehouseSourcePushed := func(target string) bool {
+		t.Helper()
+		db, err := attachWarehouse(target, true)
+		if err != nil {
+			t.Fatalf("open the warehouse: %v", err)
+		}
+		defer db.Close()
+		var v bool
+		if err := db.QueryRow(`SELECT source_pushed FROM corral_scans`).Scan(&v); err != nil {
+			t.Fatalf("read source_pushed: %v", err)
+		}
+		return v
+	}
 
 	// A push that cannot succeed: the target's directory does not exist.
-	failed, errb := run(filepath.Join(t.TempDir(), "no", "such", "dir", "wh.duckdb"))
-	if failed.SourcePushed {
-		t.Errorf("push failed, yet the ledger says source_pushed=true")
+	// The entry is still written, and still carries its own source.
+	entry, errb := run(filepath.Join(t.TempDir(), "no", "such", "dir", "wh.duckdb"), "--push-source")
+	if !entry.SourcePushed {
+		t.Errorf("the ledger entry must say it carries source; it does")
 	}
 	if !strings.Contains(errb, "::warning title=corral push failed::") {
 		t.Errorf("stderr = %q, want a workflow annotation for the failed push", errb)
 	}
 
-	ok, errb := run(filepath.Join(t.TempDir(), "wh.duckdb"))
-	if !ok.SourcePushed {
-		t.Errorf("push succeeded with --push-source, yet the ledger says source_pushed=false")
-	}
-	if strings.Contains(errb, "::warning") {
+	withheld := filepath.Join(t.TempDir(), "wh.duckdb")
+	if _, errb := run(withheld); strings.Contains(errb, "::warning") {
 		t.Errorf("stderr = %q, an annotation on a push that succeeded", errb)
+	}
+	if warehouseSourcePushed(withheld) {
+		t.Errorf("pushed without --push-source, yet the warehouse row says source_pushed=true")
+	}
+
+	shipped := filepath.Join(t.TempDir(), "wh.duckdb")
+	run(shipped, "--push-source")
+	if !warehouseSourcePushed(shipped) {
+		t.Errorf("pushed with --push-source, yet the warehouse row says source_pushed=false")
 	}
 }

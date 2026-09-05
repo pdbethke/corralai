@@ -189,9 +189,8 @@ func TestBundleIsTheLedgerRowForRow(t *testing.T) {
 		// Renamed at the boundary, and compared explicitly below.
 		"MutantsTotal": "lands in Row.MutantsPlanted",
 		// Local-only bookkeeping with no warehouse column at all.
-		"Gradable":    "implied by Disposition",
-		"ComputedAt":  "no warehouse column",
-		"MutantsFrom": "no warehouse column",
+		"Gradable":   "implied by Disposition",
+		"ComputedAt": "time.Time in the ledger, *time.Time (NULL when never earned) in the warehouse",
 	}
 
 	for _, f := range files {

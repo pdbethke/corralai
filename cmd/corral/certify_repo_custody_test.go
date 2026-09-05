@@ -3,7 +3,6 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"path/filepath"
 	"strings"
@@ -90,36 +89,28 @@ func TestEventsNeverCarrySourceBytes(t *testing.T) {
 				assertNoSentinel(t, "sink event "+e.Kind, e.Detail)
 			}
 
-			// 2. The LOCAL ledger.
-			ledger := filepath.Join(t.TempDir(), "scans.duckdb")
-			st, err := scanstore.Open(ledger)
-			if err != nil {
-				t.Fatalf("scanstore.Open: %v", err)
+			// 2. The LEDGER ENTRY — the record.
+			ledgerDir := filepath.Join(t.TempDir(), "ledger")
+			entry := buildBundle(scanstore.Scan{Repo: "o/r", Commit: "deadbeef"}, 0,
+				nil, nil, nil, events, auditpush.Link{}, true,
+				"o/r", "deadbeef", "", bundleMeta{})
+			entry.SourcePushed, entry.Scan.SourcePushed = true, true
+			if _, err := pushBundle(ledgerDir+"/", entry); err != nil {
+				t.Fatalf("writing the ledger entry: %v", err)
 			}
-			scanID, err := st.Record(context.Background(), scanstore.Scan{Owner: "o", Repo: "o/r"}, nil)
-			if err != nil {
-				t.Fatalf("Record: %v", err)
+			entries, err := auditpush.ReadLedgerDir(ledgerDir)
+			if err != nil || len(entries) != 1 {
+				t.Fatalf("read back %d entries (err %v), want 1", len(entries), err)
 			}
-			for i := range events {
-				events[i].ScanID = scanID
+			if len(entries[0].Bundle.Events) != len(events) {
+				t.Fatalf("the entry holds %d event(s), wrote %d", len(entries[0].Bundle.Events), len(events))
 			}
-			if err := st.RecordEvents(context.Background(), events); err != nil {
-				t.Fatalf("RecordEvents: %v", err)
+			for _, e := range entries[0].Bundle.Events {
+				assertNoSentinel(t, "ledger entry event "+e.Kind, e.Detail)
 			}
-			back, err := st.EventsForScan(context.Background(), scanID)
-			if err != nil {
-				t.Fatalf("EventsForScan: %v", err)
-			}
-			if len(back) != len(events) {
-				t.Fatalf("read back %d event(s), wrote %d", len(back), len(events))
-			}
-			for _, e := range back {
-				assertNoSentinel(t, "scan_events "+e.Kind, e.Detail)
-			}
-			_ = st.Close()
 
 			// 3. The WAREHOUSE.
-			b := buildBundle(scanstore.Scan{Repo: "o/r", Commit: "deadbeef"}, scanID,
+			b := buildBundle(scanstore.Scan{Repo: "o/r", Commit: "deadbeef"}, 0,
 				nil, nil, nil, events, auditpush.Link{}, sourcePushed,
 				"o/r", "deadbeef", "", bundleMeta{})
 			target := filepath.Join(t.TempDir(), "w.duckdb")
@@ -197,16 +188,34 @@ func TestWarehouseRowsSHA256UsesTheOneCustodyRule(t *testing.T) {
 		t.Error("a non-source field changed and the hash did not — the hasher is blanking more than the custody set")
 	}
 
-	// With --push-source the source IS what the warehouse receives, so it
-	// must be in the hash.
+	// v3: custody is NOT in the hash. One run writes the same rows to the
+	// ledger entry (source carried) and to a --push warehouse (withheld by
+	// default), and the one statement must verify against both — so the
+	// source fields, and the source_pushed fact about the sink, are never
+	// hashed. The ledger chain's own signature covers the full entry.
 	pushed := base
 	pushed.SourcePushed = true
+	pushed.Scan.SourcePushed = true
 	pushedSHA, err := warehouseRowsSHA256(pushed)
 	if err != nil {
 		t.Fatalf("warehouseRowsSHA256 (--push-source): %v", err)
 	}
-	if pushedSHA == raw {
-		t.Error("--push-source hashed the same as withheld — the source it actually ships is not covered by the statement")
+	if pushedSHA != raw {
+		t.Error("--push-source hashed differently from withheld — the statement would verify against one of the run's sinks and not the other")
+	}
+
+	// v2 statements still hash what their one sink received: with source
+	// pushed, the source is in the hash.
+	v2Pushed, err := warehouseRowsSHA256At(pushed, 2)
+	if err != nil {
+		t.Fatalf("warehouseRowsSHA256At v2: %v", err)
+	}
+	v2Withheld, err := warehouseRowsSHA256At(base, 2)
+	if err != nil {
+		t.Fatalf("warehouseRowsSHA256At v2: %v", err)
+	}
+	if v2Pushed == v2Withheld {
+		t.Error("a v2 statement with --push-source must hash the source it shipped, or older statements stop verifying")
 	}
 }
 

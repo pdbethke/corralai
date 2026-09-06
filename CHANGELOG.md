@@ -9,7 +9,11 @@ still move between minor versions.
 Entries describe what changed for someone *using* the tool. For the full commit
 history of any release, `git log v0.3.4..v0.3.5`.
 
-## [Unreleased] — toward 1.0.0-rc.4
+## [v1.0.0-rc.4] — 2026-09-06
+
+`corral review`: a cold model's opinion, linked to reproductions the run
+executed — the review loop's first slice, run on corral itself the day it
+was written.
 
 - **`corral review` — the review loop's first slice.** A cold reviewer
   seat (`--reviewer-model`, no default) is handed a scope of the repository

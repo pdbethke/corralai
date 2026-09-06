@@ -334,13 +334,29 @@ func dispatchableSubcommands(t *testing.T) []string {
 	if err != nil {
 		t.Fatalf("parsing main.go: %v", err)
 	}
+	// The names come from main()'s DISPATCH — the one switch that decides
+	// what runs — not from an allowlist beside it. There used to be one
+	// (subcommand() enumerated the names), and a verb missing from it fell
+	// through to booting the server while this gate, reading that same
+	// list, saw nothing wrong; `corral ledger` shipped that way in two
+	// release candidates.
 	var names []string
 	ast.Inspect(f, func(n ast.Node) bool {
 		fn, ok := n.(*ast.FuncDecl)
-		if !ok || fn.Name.Name != "subcommand" {
+		if !ok || fn.Name.Name != "main" {
 			return true
 		}
-		ast.Inspect(fn.Body, func(m ast.Node) bool {
+		var dispatch *ast.SwitchStmt
+		for _, st := range fn.Body.List {
+			if sw, ok := st.(*ast.SwitchStmt); ok {
+				dispatch = sw
+				break
+			}
+		}
+		if dispatch == nil {
+			t.Fatal("main() no longer begins with a switch — update this gate to read the new dispatch, not to pass")
+		}
+		ast.Inspect(dispatch.Body, func(m ast.Node) bool {
 			cc, ok := m.(*ast.CaseClause)
 			if !ok {
 				return true
@@ -352,7 +368,7 @@ func dispatchableSubcommands(t *testing.T) []string {
 					// a subcommand this gate cannot read, and a reviewer used
 					// exactly that to add one invisibly. A dispatch label must
 					// be a string literal so the list is derivable.
-					t.Errorf("subcommand()'s allowlist has a non-literal case label %s — every dispatchable name must be a string literal so this gate can derive the list", types(e))
+					t.Errorf("main's dispatch has a non-literal case label %s — every dispatchable name must be a string literal so this gate can derive the list", types(e))
 					continue
 				}
 				if v, err := strconv.Unquote(lit.Value); err == nil && v != "" {
@@ -364,7 +380,7 @@ func dispatchableSubcommands(t *testing.T) []string {
 		return false
 	})
 	if len(names) == 0 {
-		t.Fatal("parsed ZERO subcommand names out of subcommand()'s allowlist — this gate is not looking where it thinks it is")
+		t.Fatal("parsed ZERO subcommand names out of main's dispatch — this gate is not looking where it thinks it is")
 	}
 	return names
 }

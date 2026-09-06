@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"regexp"
 	"strings"
 	"testing"
@@ -124,20 +123,9 @@ func TestEveryDocumentedVerbIsDispatched(t *testing.T) {
 	// shape of `corral ledger`, which was documented, tested through
 	// runLedger, and in the shipped binary fell through to the server —
 	// fails here by name; so does a case label the usage does not mention.
-	src, err := os.ReadFile("main.go")
-	if err != nil {
-		t.Fatal(err)
-	}
-	body := string(src)
-	start := strings.Index(body, "switch subcommand(os.Args[1:]) {")
-	if start < 0 {
-		t.Fatal("main.go no longer dispatches on subcommand(os.Args[1:]) — update this gate to read the new shape, not to pass")
-	}
 	dispatched := map[string]bool{}
-	for _, m := range regexp.MustCompile(`(?m)^\tcase ((?:"[a-z-]+"(?:, )?)+):`).FindAllStringSubmatch(body[start:], -1) {
-		for _, name := range regexp.MustCompile(`"([a-z-]+)"`).FindAllStringSubmatch(m[1], -1) {
-			dispatched[name[1]] = true
-		}
+	for _, n := range dispatchableSubcommands(t) {
+		dispatched[n] = true
 	}
 	documented := map[string]bool{}
 	for _, m := range regexp.MustCompile(`(?m)^  corral ([a-z][a-z-]*)\b`).FindAllStringSubmatch(usageText(), -1) {

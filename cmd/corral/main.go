@@ -111,7 +111,7 @@ func env(k, def string) string {
 // by args[0] alone sidesteps that: only the subcommand name itself is
 // examined, never anything after it.
 func subcommand(args []string) string {
-	if len(args) == 0 || strings.HasPrefix(args[0], "-") {
+	if len(args) == 0 || strings.HasPrefix(args[0], "-") || args[0] == "version" || args[0] == "help" {
 		return ""
 	}
 	// The bare name, whatever it is: the switch in main decides what is

@@ -27,7 +27,10 @@ func TestSubcommandDispatchedBeforeVersionScan(t *testing.T) {
 		{[]string{"--version"}, ""},
 		{[]string{"version"}, ""},
 		{[]string{}, ""},
-		{[]string{"bogus"}, ""},
+		// An unknown word is handed back as itself: main refuses it BY
+		// NAME (exit 2), which is the whole point — it used to be "" here,
+		// and "" meant "start the server".
+		{[]string{"bogus"}, "bogus"},
 	}
 	for _, c := range cases {
 		if got := subcommand(c.args); got != c.want {

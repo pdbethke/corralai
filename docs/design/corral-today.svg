@@ -31,7 +31,7 @@
 
   <rect width="1280" height="860" fill="#faf3e6"/>
   <text x="24" y="40" class="title">Corral today — one model plants the faults, another writes the test, your suite is graded by execution</text>
-  <text x="24" y="62" class="subtitle">corral certify --repo, as it ships (v0.8.3) · no default models · every number signed · every decision a row in a warehouse you own</text>
+  <text x="24" y="62" class="subtitle">corral certify --repo, as it ships (v1.0.0-rc.1) · no default models · every number signed · every decision a signed entry in your own repository</text>
 
   <!-- LANES -->
   <rect x="100" y="86" width="1156" height="96" rx="10" class="lane"/>
@@ -184,9 +184,9 @@
   </g>
   <g>
     <rect x="360" y="584" width="230" height="66" rx="6" class="state"/>
-    <text x="372" y="606" class="t">Local ledger (DuckDB)</text>
-    <text x="372" y="623" class="s">scans · files · mutants · calls · events</text>
-    <text x="372" y="636" class="s">every decision, its reason, its cost</text>
+    <text x="372" y="606" class="t">The ledger (.corral/ledger/)</text>
+    <text x="372" y="623" class="s">one signed, hash-linked entry per scan</text>
+    <text x="372" y="636" class="s">a git branch · DuckDB reads it in place</text>
   </g>
   <g>
     <rect x="612" y="584" width="200" height="66" rx="6" class="state"/>
@@ -196,7 +196,7 @@
   </g>
   <g>
     <rect x="834" y="584" width="402" height="66" rx="6" class="state"/>
-    <text x="846" y="606" class="t">Warehouse</text>
+    <text x="846" y="606" class="t">Warehouse (the view, pushed)</text>
     <text x="846" y="623" class="s">scans · audits · mutants · model_calls · events · seal</text>
     <text x="846" y="636" class="s">append-only · scan_uid on every grain · DuckDB or MotherDuck</text>
   </g>
@@ -210,7 +210,7 @@
   <g>
     <rect x="360" y="700" width="230" height="54" rx="6" class="surface"/>
     <text x="372" y="722" class="t">ui · seal · scans · verify</text>
-    <text x="372" y="740" class="s">the record read back, hash rechecked</text>
+    <text x="372" y="740" class="s">the chain walked, every hash rechecked</text>
   </g>
   <g>
     <rect x="612" y="700" width="200" height="54" rx="6" class="surface"/>
@@ -287,5 +287,5 @@
 <line x1="24" y1="786" x2="1256" y2="786" stroke="#ddd0b3" stroke-width="1"/>
   <text x="24" y="808" class="brand">CORRAL · corralai.dev</text>
   <text x="24" y="824" class="key">Cream boxes are model seats · green are code, and ask no model anything · amber-dashed are stored · red outlines are yours, and nothing there has a default · dotted arrows: read back, or reused.</text>
-  <text x="24" y="840" class="key">Everything here ships in v0.8.3 and runs in the GitHub Action. Elastic-2.0. The same loop, turned on corral itself, found the eleven pull requests in the field notes.</text>
+  <text x="24" y="840" class="key">Everything here ships in v1.0.0-rc.1 and runs in the GitHub Action. Elastic-2.0. The same loop, turned on corral itself, found the eleven pull requests in the field notes.</text>
 </svg>

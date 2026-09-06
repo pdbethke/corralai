@@ -33,7 +33,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0      # required — see github-action.md's "fetch-depth: 0 is required"
-      - uses: pdbethke/corralai@v1.0.0-rc.3
+      - uses: pdbethke/corralai@v1.0.0-rc.4
         with:
           test-command: "python -m pytest -q"
           # diff-base left empty: on a pull_request event the action already
@@ -80,7 +80,7 @@ acceptable on a recurring basis) with an empty `diff-base` and a `top` bound
 covers the rest:
 
 ```yaml
-  - uses: pdbethke/corralai@v1.0.0-rc.3
+  - uses: pdbethke/corralai@v1.0.0-rc.4
     with:
       test-command: "python -m pytest -q"
       diff-base: ""        # whole-repo scope — see "why scoped by default"

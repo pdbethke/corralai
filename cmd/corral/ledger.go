@@ -89,8 +89,13 @@ func runLedgerAppend(args []string, stdout, stderr io.Writer) int {
 	// Same directory: the entry is already placed; re-linking it in place
 	// would be an edit of a placed entry, which is the one thing a ledger
 	// refuses. Refuse loudly instead.
+	// Both sides absolute: filepath.Rel errors on a relative base against
+	// an absolute target, and an error here used to SKIP the check — a
+	// relative --dir re-linked an entry in place. Found by `corral review`
+	// on this file, the day the verb was written.
+	absDir, _ := filepath.Abs(dir)
 	if abs, aerr := filepath.Abs(src); aerr == nil {
-		if rel, rerr := filepath.Rel(filepath.Join(dir, auditpush.ScansSubdir), abs); rerr == nil && !strings.HasPrefix(rel, "..") {
+		if rel, rerr := filepath.Rel(filepath.Join(absDir, auditpush.ScansSubdir), abs); rerr == nil && !strings.HasPrefix(rel, "..") {
 			fmt.Fprintf(stderr, "corral ledger append: %s is already an entry of %s — an entry is never re-linked in place; append a copy from elsewhere, or leave the chain as it is\n", src, dir)
 			return 2
 		}
@@ -136,7 +141,7 @@ func runLedgerRetract(args []string, stdout, stderr io.Writer) int {
 	// Go's flag parsing stops at the first positional, and the natural
 	// spelling puts --reason last; flags are moved to the front so either
 	// order works.
-	if err := fs.Parse(flagsFirst(args)); err != nil {
+	if err := fs.Parse(flagsFirst(fs, args)); err != nil {
 		return 2
 	}
 	if fs.NArg() != 2 || strings.TrimSpace(*reason) == "" {
@@ -170,14 +175,26 @@ func runLedgerCheckpoint(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-// flagsFirst reorders args so every "--name value" / "--name=value" pair
-// precedes the positionals, for a verb whose flags read naturally last.
-func flagsFirst(args []string) []string {
+// flagsFirst reorders args so every flag precedes the positionals, for a
+// verb whose flags read naturally last. It asks fs which flags are boolean
+// so `--refute <dir>` is not read as --refute=<dir>.
+func flagsFirst(fs *flag.FlagSet, args []string) []string {
+	isBool := func(name string) bool {
+		f := fs.Lookup(strings.TrimLeft(name, "-"))
+		if f == nil {
+			return false
+		}
+		b, ok := f.Value.(interface{ IsBoolFlag() bool })
+		return ok && b.IsBoolFlag()
+	}
 	var flags, positional []string
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		switch {
-		case strings.HasPrefix(a, "-") && strings.Contains(a, "="):
+		case a == "--":
+			positional = append(positional, args[i:]...)
+			return append(flags, positional...)
+		case strings.HasPrefix(a, "-") && (strings.Contains(a, "=") || isBool(a)):
 			flags = append(flags, a)
 		case strings.HasPrefix(a, "-") && i+1 < len(args):
 			flags = append(flags, a, args[i+1])

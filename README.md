@@ -799,6 +799,29 @@ for the JS/TS pairing limitation above. How to move a golden number, and why
 that is a deliberate act, is in
 **[docs/corral/foreign-sweep.md](docs/corral/foreign-sweep.md)**.
 
+## Review — a cold model's opinion, linked to reproductions it ran
+
+`corral review --scope internal/router --reviewer-model <m>` hands a scope
+of the repository at HEAD to a model that has never seen it, told to assume
+the code is wrong. What comes back is an opinion carrying findings, each
+with a tier the reviewer declared: **REPRODUCED**, with a `sh` script that
+exits 0 iff the defect is demonstrated; **CODE-READ**, a `file:line`
+argument with no execution; **HYPOTHESIS**. corral runs every REPRODUCED
+script against a detached worktree at the commit — your checkout is never
+the subject — and a script that does not hold demotes its finding to
+CODE-READ on the record, saying why. The reviewer must also list what it
+checked and found sound, so the review's coverage is legible. corral does
+not sign the opinion; it signs the entry that carries the reproductions
+(script, output, exit) as one more ledger entry beside the audits. A
+person's verdict on a finding is its own entry: `corral review adjudicate
+<dir> <hash>#R1 --confirm|--refute --reason "…"`, the newest per finding
+standing, automatic passes never writing one. Not a gate — exit 0 either
+way. Its first two runs were on corral itself (see the CHANGELOG): one
+claim refuted, one real bypass confirmed in a verb written that morning.
+The verifier seat, the reviewer's row in `models rank` and the warehouse
+grains are designed, not built:
+**[docs/design/adversarial-review.md](docs/design/adversarial-review.md)**.
+
 ## The audit flags
 
 `corral certify --local` is one command, but it fans out:

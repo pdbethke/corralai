@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/pdbethke/corralai/internal/review"
 )
 
 // A directory target writes one JSON file per push and nothing else;
@@ -351,5 +353,94 @@ func TestOldEntriesHashTheSameWithoutAKind(t *testing.T) {
 	js, _ := CanonicalSparseJSON(e)
 	if strings.Contains(string(js), `"kind"`) || strings.Contains(string(js), `"retracts"`) || strings.Contains(string(js), `"checkpoint"`) {
 		t.Fatalf("a scan entry carries a kind field in its canonical bytes: %s", js)
+	}
+}
+
+// TestReviewAndAdjudicationAreEntriesBesideTheScans: a review is one entry,
+// an adjudication of one of its findings is another that names it, the
+// chain verifies with both said in words, the newest adjudication per
+// finding stands, and an adjudication of a finding the review does not
+// have — or of a review the chain does not hold — is refused / named.
+func TestReviewAndAdjudicationAreEntriesBesideTheScans(t *testing.T) {
+	dir := t.TempDir()
+	pub, priv, _ := ed25519.GenerateKey(nil)
+	signer := Ed25519LedgerSigner{KeyID: "corral-certify", Key: priv}
+	SetLedgerSigner(signer)
+	t.Cleanup(func() { SetLedgerSigner(nil) })
+	if _, err := PushBundle(dir, Bundle{Scan: ScanRow{Repo: "r", Commit: "aaa1"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := WriteReview(dir, review.Review{Scope: "x"}, signer); err == nil {
+		t.Fatal("a review with no commit was accepted")
+	}
+	code := 0
+	r := review.Review{Repo: "r", Commit: "aaa1", Scope: "internal/x", ReviewerModel: "m", Opinion: "it trusts its callers",
+		Findings: []review.Finding{
+			{ID: "R1", Claim: "a", Declared: review.TierReproduced, Tier: review.TierReproduced, Script: "exit 0", ExitCode: &code},
+			{ID: "R2", Claim: "b", Declared: review.TierReproduced, Tier: review.TierCodeRead, Demoted: "exit 1"},
+		}, Sound: []string{"the parser"}}
+	name, err := WriteReview(dir, r, signer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(name, "-review-aaa1") {
+		t.Errorf("review file name %q", name)
+	}
+	entries, _ := ReadLedgerDir(dir)
+	rev := entries[1]
+
+	// Negative controls.
+	for _, c := range []struct{ ref, verdict, by, reason string }{
+		{rev.Hash + "#R9", VerdictConfirmed, "pdb", "no such finding"},
+		{"0000000000000000#R1", VerdictConfirmed, "pdb", "no such review"},
+		{rev.Hash + "#R1", "maybe", "pdb", "bad verdict"},
+		{rev.Hash + "#R1", VerdictConfirmed, "", "nobody decided"},
+		{rev.Hash + "#R1", VerdictConfirmed, "pdb", " "},
+		{rev.Hash, VerdictConfirmed, "pdb", "no finding id"},
+	} {
+		if _, err := WriteAdjudication(dir, c.ref, c.verdict, c.by, c.reason, signer); err == nil {
+			t.Errorf("accepted an adjudication that should be refused: %+v", c)
+		}
+	}
+
+	if _, err := WriteAdjudication(dir, rev.Hash[:16]+"#R1", VerdictRefuted, "pdb", "the script proves a narrower claim", signer); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := WriteAdjudication(dir, rev.Hash+"#R1", VerdictConfirmed, "pdb", "on a second look, it holds", signer); err != nil {
+		t.Fatal(err)
+	}
+	all, _ := ReadLedgerDir(dir)
+	if len(all) != 4 {
+		t.Fatalf("want 4 entries, got %d", len(all))
+	}
+	adj := Adjudications(all)
+	if a := adj[rev.Hash+"#R1"]; a.Verdict != VerdictConfirmed || a.By != "pdb" {
+		t.Errorf("the newest adjudication must stand: %+v", a)
+	}
+	if ScanEntries(all) == nil || len(ScanEntries(all)) != 1 {
+		t.Error("reviews and adjudications are not scans")
+	}
+	checks, err := VerifyLedgerDir(dir, pub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, c := range checks {
+		if c.Problem != "" || !c.SigOK {
+			t.Errorf("entry %d: %+v", i, c)
+		}
+	}
+	if !strings.Contains(checks[1].Note, "review of internal/x by m: 1 reproduced, 1 code-read, 0 hypothesis") {
+		t.Errorf("review note: %q", checks[1].Note)
+	}
+	if !strings.Contains(checks[3].Note, "confirmed "+rev.Hash[:12]+"#R1 by pdb") {
+		t.Errorf("adjudication note: %q", checks[3].Note)
+	}
+	// A hand-placed adjudication of a review that is not in the chain.
+	if _, err := AppendLedgerEntry(dir, LedgerEntry{Kind: KindAdjudication, Adjudication: &Adjudication{Adjudicates: "deadbeefdeadbeef#R1", Verdict: VerdictConfirmed, By: "x", Reason: "y"}}, signer); err != nil {
+		t.Fatal(err)
+	}
+	checks, _ = VerifyLedgerDir(dir, pub)
+	if last := checks[len(checks)-1]; !strings.Contains(last.Problem, "whose review is not an earlier entry") {
+		t.Errorf("must be a problem by name: %+v", last)
 	}
 }

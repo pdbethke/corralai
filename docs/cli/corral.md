@@ -109,6 +109,15 @@ Usage:
   corral ledger checkpoint <dir>  prune: one genesis naming the head it replaced (hash, count, date)
                                   stands in for everything before it; the verifier says the chain begins there
   corral ledger verify <dir>      the same walk as corral verify --ledger
+  corral review --scope <dir> --reviewer-model <m> [--repo <dir>]
+                                  a cold model reviews the scope, told to assume the code is wrong;
+                                  every REPRODUCED finding's sh script is run against a detached
+                                  worktree at HEAD (a script that does not hold demotes the finding,
+                                  out loud); the review — opinion, findings, sound list, the
+                                  reproductions — is one ledger entry beside the audits. Not a gate.
+  corral review show <dir> <hash> print a review with its adjudications applied
+  corral review adjudicate <dir> <hash>#<Rn> --confirm|--refute --reason "…"
+                                  a person's verdict on one finding, as its own entry
   corral verify --attest <path> [flags]
                                   the checker for a certify --repo --attest statement: verifies
                                   its DSSE signature (against --pub or the local certify key,
@@ -512,6 +521,63 @@ flags:
     	the evidence floor (default 5): a model with fewer observations in a seat is still PRINTED, with its real numbers, but marked insufficient and never preferred (default 5)
   -seat string
     	rank only this seat: goal-deriver, mutant-generator, test-writer or test-critic
+```
+
+## `corral review` flags
+
+```
+corral review — a cold model reviews a scope of the repository; corral runs its reproductions and records the review beside the audits.
+
+  corral review --scope <dir|file> --reviewer-model <m> [--repo <dir>] [flags]
+      The reviewer is told to assume the code is wrong. Every finding carries a tier it
+      declared — REPRODUCED (with a sh script that exits 0 iff the defect is demonstrated),
+      CODE-READ (file:line, argued), HYPOTHESIS — and the run executes every REPRODUCED
+      script against a detached worktree at HEAD. A script that does not hold demotes its
+      finding to CODE-READ on the record, out loud. The reviewer must also list what it
+      checked and found sound. The opinion is printed and carried; only the reproductions
+      are what the entry's signature vouches for. Exit 0 either way: a review is not a gate.
+      flags: --ledger <dir> (default <repo>/.corral/ledger)  --no-ledger  --timeout 60s
+             --max-bytes 200000 (how much of the scope the reviewer is shown)
+  corral review show <ledger dir> <review hash>       print a review with its adjudications applied
+  corral review adjudicate <ledger dir> <hash>#<Rn> --confirm|--refute --reason "…" [--by <who>]
+      A person's verdict on one finding, as its own entry: the newest verdict per finding
+      stands; automatic passes never write one. --by defaults to the OS user.
+
+flags of `corral review`:
+  -ledger string
+    	the ledger directory the review entry is written to (default: <repo>/.corral/ledger, or $CORRAL_LEDGER)
+  -max-bytes int
+    	how many bytes of the scope the reviewer is shown; files past the cap are listed by name and the review records them as unshown (default 200000)
+  -no-ledger
+    	print the review and write no entry
+  -repo string
+    	the checkout to review (a git repository at a commit) (default ".")
+  -reviewer-model string
+    	the reviewer seat's model — an alias from the registry or a provider model name (required; corral has no default models)
+  -scope string
+    	the directory or file under --repo to review (required)
+  -timeout duration
+    	wall-clock bound on each reproduction script (default 1m0s)
+```
+
+## `corral review adjudicate` flags
+
+```
+Usage of corral review adjudicate:
+  -by string
+    	who is deciding (default: the OS user)
+  -confirm
+    	the finding is real as stated
+  -reason string
+    	why, in your words (required)
+  -refute
+    	the finding is not real, or not as stated
+```
+
+## `corral review show` flags
+
+```
+corral review show: usage: corral review show <ledger dir> <review hash>
 ```
 
 ## `corral scans push` flags

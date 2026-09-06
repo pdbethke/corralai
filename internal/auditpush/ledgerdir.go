@@ -17,6 +17,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/pdbethke/corralai/internal/review"
 )
 
 // A LEDGER DIRECTORY is a push target that is a directory instead of a
@@ -101,6 +103,18 @@ type LedgerEntry struct {
 	// so — "chain begins at a checkpoint; N earlier entries not present"
 	// — rather than pretending the chain was always this short.
 	Checkpoint *Checkpoint `json:"checkpoint,omitempty"`
+	// Review (KindReview) is one review's record: the findings as
+	// RECORDED (reproductions run, tiers demoted where a script did not
+	// hold), the sound list, and the opinion. The entry is signed as a
+	// whole, which signs the reproductions — script, output, exit — and
+	// carries the opinion; the opinion is prose and is not what the
+	// signature vouches for. See internal/review.
+	Review *review.Review `json:"review,omitempty"`
+	// Adjudication (KindAdjudication) is a person's verdict on one finding
+	// — Adjudicates names it as <review entry hash>#<finding id> — with
+	// who decided and why. Automatic passes never write these; a later one
+	// by the same or another person is a new entry, and the newest stands.
+	Adjudication *Adjudication `json:"adjudication,omitempty"`
 	// Hash and Signature are computed over everything above.
 	Hash      string `json:"hash,omitempty"`
 	KeyID     string `json:"keyid,omitempty"`
@@ -111,9 +125,25 @@ type LedgerEntry struct {
 // every entry written before kinds existed carries, and their hashes must
 // not change.
 const (
-	KindScan       = ""
-	KindRetract    = "retract"
-	KindCheckpoint = "checkpoint"
+	KindScan         = ""
+	KindRetract      = "retract"
+	KindCheckpoint   = "checkpoint"
+	KindReview       = "review"
+	KindAdjudication = "adjudication"
+)
+
+// Adjudication is a person's verdict on one finding of a review entry.
+type Adjudication struct {
+	Adjudicates string `json:"adjudicates"` // "<review entry hash>#<finding id>"
+	Verdict     string `json:"verdict"`     // VerdictConfirmed or VerdictRefuted
+	By          string `json:"by"`          // the principal, as they named themselves
+	Reason      string `json:"reason"`
+}
+
+// The two verdicts an adjudication carries.
+const (
+	VerdictConfirmed = "confirmed"
+	VerdictRefuted   = "refuted"
 )
 
 // Checkpoint is what a KindCheckpoint entry carries about the history it
@@ -239,6 +269,13 @@ func placeEntry(dir string, e LedgerEntry, prev string, signer LedgerSigner) (st
 		middle, tail = "retract", e.Retracts
 	case KindCheckpoint:
 		middle, tail = "checkpoint", e.Checkpoint.Head
+	case KindReview:
+		middle, tail = "review", e.Review.Commit
+	case KindAdjudication:
+		// Its own hash, not the review's: two verdicts on one review can
+		// land in the same second, and a name that collided would replace
+		// the first entry rather than add the second.
+		middle, tail = "adjudication", e.Hash
 	default:
 		middle, tail = e.Bundle.Scan.Commit, e.ScanUID
 		if middle == "" {
@@ -267,6 +304,9 @@ func placeEntry(dir string, e LedgerEntry, prev string, signer LedgerSigner) (st
 	}
 	if err := zw.Close(); err != nil {
 		return "", err
+	}
+	if _, err := os.Stat(filepath.Join(scans, name)); err == nil {
+		return "", fmt.Errorf("auditpush: an entry named %s already exists — refusing to replace it", name)
 	}
 	tmp := filepath.Join(scans, "."+name+".tmp")
 	if err := os.WriteFile(tmp, buf.Bytes(), 0o644); err != nil { // #nosec G306 -- a record the branch publishes
@@ -363,12 +403,112 @@ func VerifyLedgerDir(dir string, pub ed25519.PublicKey) ([]ChainCheck, error) {
 			c.Problem = fmt.Sprintf("retracts %.12s, which is not an earlier entry of this chain", e.Retracts)
 		case e.Kind == KindRetract:
 			c.Note = fmt.Sprintf("retracts %.12s: %s", e.Retracts, e.Reason)
+		case e.Kind == KindReview && e.Review == nil:
+			c.Problem = "a review entry that carries no review"
+		case e.Kind == KindReview:
+			rep, cr, hy := e.Review.Counts()
+			c.Commit = e.Review.Commit
+			c.Note = fmt.Sprintf("review of %s by %s: %d reproduced, %d code-read, %d hypothesis", e.Review.Scope, e.Review.ReviewerModel, rep, cr, hy)
+		case e.Kind == KindAdjudication && (e.Adjudication == nil || !seen[strings.SplitN(e.Adjudication.Adjudicates, "#", 2)[0]]):
+			c.Problem = "an adjudication of a finding whose review is not an earlier entry of this chain"
+		case e.Kind == KindAdjudication:
+			c.Note = fmt.Sprintf("%s %s by %s: %s", e.Adjudication.Verdict, shortRef(e.Adjudication.Adjudicates), e.Adjudication.By, e.Adjudication.Reason)
 		}
 		out = append(out, c)
 		prevHash = e.Hash
 		seen[e.Hash] = true
 	}
 	return out, nil
+}
+
+// shortRef renders "<hash>#Rn" as "<hash12>#Rn".
+func shortRef(ref string) string {
+	h, id, _ := strings.Cut(ref, "#")
+	if len(h) > 12 {
+		h = h[:12]
+	}
+	if id == "" {
+		return h
+	}
+	return h + "#" + id
+}
+
+// WriteReview appends a KindReview entry.
+func WriteReview(dir string, r review.Review, signer LedgerSigner) (string, error) {
+	if r.Commit == "" || r.Scope == "" {
+		return "", fmt.Errorf("auditpush: a review names a commit and a scope")
+	}
+	return AppendLedgerEntry(dir, LedgerEntry{Kind: KindReview, Review: &r}, signer)
+}
+
+// FindReview resolves a review entry by its hash or an unambiguous prefix.
+func FindReview(entries []LedgerEntry, target string) (LedgerEntry, error) {
+	var found LedgerEntry
+	n := 0
+	for _, e := range entries {
+		if e.Kind != KindReview {
+			continue
+		}
+		if e.Hash == target || (len(target) >= 12 && strings.HasPrefix(e.Hash, target)) {
+			found = e
+			n++
+		}
+	}
+	switch n {
+	case 0:
+		return LedgerEntry{}, fmt.Errorf("auditpush: no review entry %q", target)
+	case 1:
+		return found, nil
+	}
+	return LedgerEntry{}, fmt.Errorf("auditpush: %q names more than one review entry", target)
+}
+
+// WriteAdjudication appends a KindAdjudication entry for one finding of a
+// review entry in dir. ref is "<review hash or prefix>#<finding id>".
+func WriteAdjudication(dir, ref, verdict, by, reason string, signer LedgerSigner) (string, error) {
+	hashPart, id, ok := strings.Cut(strings.TrimSpace(ref), "#")
+	if !ok || id == "" {
+		return "", fmt.Errorf("auditpush: an adjudication names a finding as <review hash>#<finding id>")
+	}
+	if verdict != VerdictConfirmed && verdict != VerdictRefuted {
+		return "", fmt.Errorf("auditpush: verdict must be %s or %s", VerdictConfirmed, VerdictRefuted)
+	}
+	by, reason = strings.TrimSpace(by), strings.TrimSpace(reason)
+	if by == "" || reason == "" {
+		return "", fmt.Errorf("auditpush: an adjudication names who decided and why")
+	}
+	entries, err := ReadLedgerDir(dir)
+	if err != nil {
+		return "", err
+	}
+	rev, err := FindReview(entries, hashPart)
+	if err != nil {
+		return "", err
+	}
+	known := false
+	for _, f := range rev.Review.Findings {
+		if f.ID == id {
+			known = true
+		}
+	}
+	if !known {
+		return "", fmt.Errorf("auditpush: review %.12s has no finding %q", rev.Hash, id)
+	}
+	a := &Adjudication{Adjudicates: rev.Hash + "#" + id, Verdict: verdict, By: by, Reason: reason}
+	return AppendLedgerEntry(dir, LedgerEntry{Kind: KindAdjudication, Adjudication: a}, signer)
+}
+
+// Adjudications returns, for every finding ref, the NEWEST adjudication in
+// entries — a later verdict by anyone supersedes an earlier one, and both
+// stay in the chain.
+func Adjudications(entries []LedgerEntry) map[string]Adjudication {
+	out := map[string]Adjudication{}
+	for _, e := range entries {
+		if e.Kind == KindAdjudication && e.Adjudication != nil {
+			out[e.Adjudication.Adjudicates] = *e.Adjudication
+		}
+	}
+	return out
 }
 
 // WriteRetraction appends a KindRetract entry naming target (an entry's

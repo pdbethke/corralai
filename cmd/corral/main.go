@@ -268,6 +268,15 @@ Usage:
   corral ledger checkpoint <dir>  prune: one genesis naming the head it replaced (hash, count, date)
                                   stands in for everything before it; the verifier says the chain begins there
   corral ledger verify <dir>      the same walk as corral verify --ledger
+  corral review --scope <dir> --reviewer-model <m> [--repo <dir>]
+                                  a cold model reviews the scope, told to assume the code is wrong;
+                                  every REPRODUCED finding's sh script is run against a detached
+                                  worktree at HEAD (a script that does not hold demotes the finding,
+                                  out loud); the review — opinion, findings, sound list, the
+                                  reproductions — is one ledger entry beside the audits. Not a gate.
+  corral review show <dir> <hash> print a review with its adjudications applied
+  corral review adjudicate <dir> <hash>#<Rn> --confirm|--refute --reason "…"
+                                  a person's verdict on one finding, as its own entry
   corral verify --attest <path> [flags]
                                   the checker for a certify --repo --attest statement: verifies
                                   its DSSE signature (against --pub or the local certify key,
@@ -555,6 +564,8 @@ func main() {
 		}, os.Stdout, os.Stderr))
 	case "ledger":
 		os.Exit(runLedger(os.Args[2:], os.Stdout, os.Stderr))
+	case "review":
+		os.Exit(runReview(os.Args[2:], os.Stdout, os.Stderr))
 	case "verify":
 		// `corral verify` — the checker for a `certify --repo --attest`
 		// AUDIT statement (signature + --db warehouse rows + Rekor

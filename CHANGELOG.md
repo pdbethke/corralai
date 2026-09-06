@@ -9,6 +9,29 @@ still move between minor versions.
 Entries describe what changed for someone *using* the tool. For the full commit
 history of any release, `git log v0.3.4..v0.3.5`.
 
+## [Unreleased] — toward 1.0.0-rc.4
+
+- **`corral review` — the review loop's first slice.** A cold reviewer
+  seat (`--reviewer-model`, no default) is handed a scope of the repository
+  at HEAD and told to assume the code is wrong. Every finding carries a
+  tier it declared — REPRODUCED with a `sh` script that exits 0 iff the
+  defect is demonstrated, CODE-READ, HYPOTHESIS — and the run executes
+  every REPRODUCED script against a detached worktree at the commit; a
+  script that does not hold demotes its finding to CODE-READ on the record,
+  saying why. The reviewer must list what it checked and found sound. The
+  review is one ledger entry (`kind: review`) beside the audits; the
+  opinion is printed and carried, and only the reproductions are what the
+  entry's signature vouches for. `corral review adjudicate <dir> <hash>#Rn
+  --confirm|--refute --reason` is a person's verdict as its own entry (the
+  newest per finding stands); `corral review show` prints a review with its
+  adjudications; `verify --ledger` names both kinds. Not a gate: exit 0
+  either way. The verifier seat, the statement, the scorecard rows and the
+  warehouse grains follow (docs/design/adversarial-review.md).
+- **`corral ledger append` refused nothing for a relative directory.** The
+  "never re-linked in place" check compared an absolute source against a
+  relative target and skipped itself on the error. Found by `corral review`
+  on the file, the day the verb was written.
+
 ## [v1.0.0-rc.3] — 2026-09-06
 
 `corral ledger` runs. rc.1 and rc.2 documented and tested it and never

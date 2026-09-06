@@ -21,7 +21,7 @@ package with a five-clause password rule and a test that checks only two of
 them, then audits it with the real `certify --local`:
 
 ```bash
-go install github.com/pdbethke/corralai/cmd/corral@v1.0.0-rc.3   # @latest still resolves to 0.8.x: a release candidate is a pre-release to Go
+go install github.com/pdbethke/corralai/cmd/corral@v1.0.0-rc.4   # @latest still resolves to 0.8.x: a release candidate is a pre-release to Go
 export ANTHROPIC_API_KEY=sk-ant-...     # or OPENAI_/GEMINI_/OPENROUTER_API_KEY
 
 corral demo --writer-model <model> --mutant-model <model> --critic-model <model>
@@ -486,7 +486,7 @@ those seats work in and the **fences** are the security boundaries.
 
 ## In CI — the GitHub Action
 
-**No brain, no server — the GitHub Action.** `pdbethke/corralai@v1.0.0-rc.3` (pin the
+**No brain, no server — the GitHub Action.** `pdbethke/corralai@v1.0.0-rc.4` (pin the
 tag, or a reviewed SHA — `@main` floats) runs `corral
 certify --repo` straight in your own CI job, on the checkout that's already
 there: no jail, no brain, no separate infra. It mutates the runner's checkout

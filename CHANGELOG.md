@@ -25,6 +25,9 @@ history of any release, `git log v0.3.4..v0.3.5`.
   or a retraction of an entry the chain never held, is a problem by name.
   Scan entries carry no kind field, so every existing ledger hashes exactly
   as it did.
+- **`corral` with no subcommand is a pointer, not a server.** The
+  coordination daemon is `corral-wrangler serve`; a bare `corral` exits 2
+  and says so. corralai's own unit was moved first.
 - **A harness file outside any test root is test support.** A repo-root
   `conftest.py`, a `src/jest.setup.js`, a `spec_helper.rb` beside the
   code: every file a language plugin names as something its runner reads

@@ -93,7 +93,6 @@ import (
 	"github.com/pdbethke/corralai/internal/bugcatch"
 	"github.com/pdbethke/corralai/internal/criticscore"
 	"github.com/pdbethke/corralai/internal/eval"
-	"github.com/pdbethke/corralai/internal/wranglerd"
 )
 
 func env(k, def string) string {
@@ -571,12 +570,12 @@ func main() {
 		fmt.Print(usageText())
 		return
 	}
-	// The bare binary used to BE the brain. It still starts it, for one
-	// release, so a systemd unit that invokes exactly this argv keeps
-	// working while it is moved to corral-wrangler — the daemon's own binary
-	// — and this path then becomes a pointer. See internal/wranglerd.
-	fmt.Fprintln(os.Stderr, "corral: the coordination server now lives in corral-wrangler; `corral` with no subcommand will stop starting it in the next release.")
-	wranglerd.Run(version)
+	// The bare binary used to BE the brain. It is the audit CLI; the daemon
+	// is corral-wrangler's, and a unit that still invokes this argv is told
+	// where to point (exit 2, never a silent server start). The one unit
+	// that ran it this way (corralai's own) was moved first.
+	fmt.Fprintln(os.Stderr, "corral: no subcommand. The coordination server is `corral-wrangler serve`; `corral -h` lists the audit verbs.")
+	os.Exit(2)
 }
 
 // wantsHelp reports whether argv is asking what a command does rather than

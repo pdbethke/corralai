@@ -32,6 +32,10 @@ func runLedger(args []string, stdout, stderr io.Writer) int {
 	switch args[0] {
 	case "append":
 		return runLedgerAppend(args[1:], stdout, stderr)
+	case "retract":
+		return runLedgerRetract(args[1:], stdout, stderr)
+	case "checkpoint":
+		return runLedgerCheckpoint(args[1:], stdout, stderr)
 	case "verify":
 		fs := flag.NewFlagSet("corral ledger verify", flag.ContinueOnError)
 		fs.SetOutput(stderr)
@@ -52,6 +56,12 @@ func runLedger(args []string, stdout, stderr io.Writer) int {
 const ledgerUsage = `corral ledger — the signed, hash-linked record, as a directory of entries.
 
   corral ledger append <entry.json.gz> <dir>   re-link an entry to <dir>'s current head (re-hash, re-sign, place)
+  corral ledger retract <dir> <hash> --reason "…"
+                                               append an entry retracting an earlier one: the retracted scan STAYS in
+                                               the chain (deleting it would break the next link) and stops being the
+                                               record — the view, the prior, the verdict cache and scans skip it
+  corral ledger checkpoint <dir>               PRUNE: replace every entry with one genesis naming the head it replaced
+                                               (hash, count, date); the chain restarts there and the verifier says so
   corral ledger verify <dir> [--pub <hex>]     walk the chain: every hash, link and signature, one line per entry
 
 A certify --repo run writes its entry into the repo's .corral/ledger/ by
@@ -107,4 +117,76 @@ func defaultLedgerDir(repoDir string) string {
 		return p
 	}
 	return filepath.Join(repoDir, ".corral", "ledger")
+}
+
+// ledgerSignerFromLocalKey is the signer every ledger verb writes with:
+// the local certify key when one is configured, else nil (unsigned, and
+// said to be by every reader).
+func ledgerSignerFromLocalKey() (auditpush.LedgerSigner, string) {
+	if priv, kerr := loadLocalCertifyKeyIfConfigured(); kerr == nil {
+		return auditpush.Ed25519LedgerSigner{KeyID: "corral-certify", Key: priv}, "signed by corral-certify"
+	}
+	return nil, "unsigned"
+}
+
+func runLedgerRetract(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("corral ledger retract", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	reason := fs.String("reason", "", "why, in your words — recorded verbatim on the retraction entry (required)")
+	// Go's flag parsing stops at the first positional, and the natural
+	// spelling puts --reason last; flags are moved to the front so either
+	// order works.
+	if err := fs.Parse(flagsFirst(args)); err != nil {
+		return 2
+	}
+	if fs.NArg() != 2 || strings.TrimSpace(*reason) == "" {
+		fmt.Fprintln(stderr, "corral ledger retract: usage: corral ledger retract <dir> <entry hash or prefix> --reason \"…\"")
+		return 2
+	}
+	dir, target := strings.TrimRight(fs.Arg(0), "/"), fs.Arg(1)
+	signer, signed := ledgerSignerFromLocalKey()
+	name, err := auditpush.WriteRetraction(dir, target, *reason, signer)
+	if err != nil {
+		fmt.Fprintf(stderr, "corral ledger retract: %v\n", err)
+		return 1
+	}
+	fmt.Fprintf(stdout, "retracted %.12s in %s: %s (%s) — the entry stays in the chain and is no longer the record\n", target, name, *reason, signed)
+	return 0
+}
+
+func runLedgerCheckpoint(args []string, stdout, stderr io.Writer) int {
+	if len(args) != 1 {
+		fmt.Fprintln(stderr, "corral ledger checkpoint: usage: corral ledger checkpoint <dir>")
+		return 2
+	}
+	dir := strings.TrimRight(args[0], "/")
+	signer, signed := ledgerSignerFromLocalKey()
+	name, pruned, err := auditpush.WriteCheckpoint(dir, signer)
+	if err != nil {
+		fmt.Fprintf(stderr, "corral ledger checkpoint: %v\n", err)
+		return 1
+	}
+	fmt.Fprintf(stdout, "checkpoint %s placed in %s (%s); %d earlier entries pruned — `corral verify --ledger %s` will say the chain begins here\n", name, dir, signed, pruned, dir)
+	return 0
+}
+
+// flagsFirst reorders args so every "--name value" / "--name=value" pair
+// precedes the positionals, for a verb whose flags read naturally last.
+func flagsFirst(args []string) []string {
+	var flags, positional []string
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		switch {
+		case strings.HasPrefix(a, "-") && strings.Contains(a, "="):
+			flags = append(flags, a)
+		case strings.HasPrefix(a, "-") && i+1 < len(args):
+			flags = append(flags, a, args[i+1])
+			i++
+		case strings.HasPrefix(a, "-"):
+			flags = append(flags, a)
+		default:
+			positional = append(positional, a)
+		}
+	}
+	return append(flags, positional...)
 }

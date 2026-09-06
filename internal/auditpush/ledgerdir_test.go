@@ -171,3 +171,185 @@ func gzipBytes(b []byte) []byte {
 	_ = zw.Close()
 	return buf.Bytes()
 }
+
+// TestRetractionIsAnEntryNotADeletion: a retracted scan STAYS in the chain
+// (the chain still verifies), and every reader of the record stops seeing
+// it — the view, and ScanEntries, which the prior and the verdict cache go
+// through. A retraction of something the chain never held is refused, a
+// second retraction of the same entry is refused, and a retraction with no
+// reason is refused.
+func TestRetractionIsAnEntryNotADeletion(t *testing.T) {
+	dir := t.TempDir()
+	pub, priv, _ := ed25519.GenerateKey(nil)
+	signer := Ed25519LedgerSigner{KeyID: "corral-certify", Key: priv}
+	SetLedgerSigner(signer)
+	t.Cleanup(func() { SetLedgerSigner(nil) })
+	push := func(commit string) {
+		if _, err := PushBundle(dir, Bundle{Scan: ScanRow{Repo: "r", Commit: commit}, Files: []Row{{Repo: "r", Commit: commit, Path: "a.py", Disposition: "audited"}}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	push("aaa1")
+	push("bbb2")
+	push("ccc3")
+	before, _ := ReadLedgerDir(dir)
+	bad := before[1]
+
+	// Negative controls first.
+	if _, err := WriteRetraction(dir, bad.Hash, "   ", signer); err == nil {
+		t.Fatal("a retraction with no reason was accepted")
+	}
+	if _, err := WriteRetraction(dir, "0000000000000000", "not here", signer); err == nil {
+		t.Fatal("a retraction of a hash the chain never held was accepted")
+	}
+
+	name, err := WriteRetraction(dir, bad.Hash[:16], "the environment was broken: pytest could not import the package", signer)
+	if err != nil {
+		t.Fatalf("WriteRetraction: %v", err)
+	}
+	if !strings.Contains(name, "-retract-"+bad.Hash[:12]) {
+		t.Errorf("file name %q does not say what it retracts", name)
+	}
+	if _, err := WriteRetraction(dir, bad.Hash, "again", signer); err == nil {
+		t.Fatal("a second retraction of the same entry was accepted")
+	}
+
+	// The chain: four entries, all intact, the retraction noted in words.
+	checks, err := VerifyLedgerDir(dir, pub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(checks) != 4 {
+		t.Fatalf("want 4 entries (3 scans + 1 retraction), got %d", len(checks))
+	}
+	for i, c := range checks {
+		if c.Problem != "" || !c.SigOK {
+			t.Errorf("entry %d: %+v", i, c)
+		}
+	}
+	if checks[3].Kind != KindRetract || !strings.Contains(checks[3].Note, "retracts "+bad.Hash[:12]) || !strings.Contains(checks[3].Note, "pytest could not import") {
+		t.Errorf("the retraction's note: %+v", checks[3])
+	}
+
+	// The record: readers see two scans, and never the retracted one.
+	all, _ := ReadLedgerDir(dir)
+	scans := ScanEntries(all)
+	if len(all) != 4 || len(scans) != 2 {
+		t.Fatalf("ReadLedgerDir=%d ScanEntries=%d, want 4 and 2", len(all), len(scans))
+	}
+	for _, e := range scans {
+		if e.Hash == bad.Hash {
+			t.Fatal("ScanEntries still returns the retracted entry")
+		}
+	}
+	db, err := LoadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var n int
+	if err := db.QueryRow(`SELECT count(*) FROM corral_scans WHERE commit_sha = 'bbb2'`).Scan(&n); err != nil || n != 0 {
+		t.Errorf("the view still holds the retracted scan: n=%d err=%v", n, err)
+	}
+	if err := db.QueryRow(`SELECT count(*) FROM corral_scans`).Scan(&n); err != nil || n != 2 {
+		t.Errorf("the view holds %d scans, want 2 (err %v)", n, err)
+	}
+
+	// A forged retraction — one that names a hash not in the chain, hand
+	// placed — is caught by the verifier by name.
+	forged := LedgerEntry{Kind: KindRetract, Retracts: "deadbeefdeadbeefdeadbeef", Reason: "forged"}
+	if _, err := AppendLedgerEntry(dir, forged, signer); err != nil {
+		t.Fatal(err)
+	}
+	checks, _ = VerifyLedgerDir(dir, pub)
+	if last := checks[len(checks)-1]; !strings.Contains(last.Problem, "not an earlier entry of this chain") {
+		t.Errorf("a retraction of nothing must be a problem, got %+v", last)
+	}
+}
+
+// TestCheckpointIsAGenesisThatNamesWhatItReplaced: after a checkpoint the
+// directory holds one entry naming the pruned head and count, the chain
+// verifies with that said in words, later entries link to the checkpoint,
+// and a checkpoint anywhere but first is a problem by name.
+func TestCheckpointIsAGenesisThatNamesWhatItReplaced(t *testing.T) {
+	dir := t.TempDir()
+	pub, priv, _ := ed25519.GenerateKey(nil)
+	signer := Ed25519LedgerSigner{KeyID: "corral-certify", Key: priv}
+	SetLedgerSigner(signer)
+	t.Cleanup(func() { SetLedgerSigner(nil) })
+	push := func(commit string) {
+		if _, err := PushBundle(dir, Bundle{Scan: ScanRow{Repo: "r", Commit: commit}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, _, err := WriteCheckpoint(dir, signer); err == nil {
+		t.Fatal("a checkpoint of an empty directory was accepted")
+	}
+	push("aaa1")
+	push("bbb2")
+	push("ccc3")
+	before, _ := ReadLedgerDir(dir)
+	oldHead := before[2]
+
+	name, pruned, err := WriteCheckpoint(dir, signer)
+	if err != nil {
+		t.Fatalf("WriteCheckpoint: %v", err)
+	}
+	if pruned != 3 || !strings.Contains(name, "-checkpoint-"+oldHead.Hash[:12]) {
+		t.Errorf("pruned=%d name=%q", pruned, name)
+	}
+	after, _ := ReadLedgerDir(dir)
+	if len(after) != 1 || after[0].Kind != KindCheckpoint || after[0].Prev != "" {
+		t.Fatalf("after the checkpoint: %+v", after)
+	}
+	if cp := after[0].Checkpoint; cp == nil || cp.Head != oldHead.Hash || cp.Entries != 3 || !cp.Through.Equal(oldHead.Pushed) {
+		t.Errorf("checkpoint names the wrong history: %+v", after[0].Checkpoint)
+	}
+
+	// New entries link to the checkpoint; the whole thing verifies, and
+	// the verifier says where the history went.
+	push("ddd4")
+	checks, err := VerifyLedgerDir(dir, pub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(checks) != 2 || checks[0].Problem != "" || checks[1].Problem != "" || !checks[1].LinkOK {
+		t.Fatalf("chain after checkpoint: %+v", checks)
+	}
+	if !checks[0].Genesis || checks[0].Kind != KindCheckpoint || !strings.Contains(checks[0].Note, "3 earlier entries") || !strings.Contains(checks[0].Note, oldHead.Hash[:12]) {
+		t.Errorf("the checkpoint's note: %+v", checks[0])
+	}
+	if ScanEntries(after) != nil {
+		t.Error("a checkpoint is not a scan")
+	}
+
+	// Negative control: a checkpoint cannot be appended mid-chain, and one
+	// hand placed there is a problem by name.
+	if _, err := AppendLedgerEntry(dir, LedgerEntry{Kind: KindCheckpoint, Checkpoint: &Checkpoint{Head: "x", Entries: 1}}, signer); err == nil {
+		t.Fatal("a checkpoint was appended to a chain")
+	}
+	entries, _ := ReadLedgerDir(dir)
+	if _, err := placeEntry(dir, LedgerEntry{Kind: KindCheckpoint, Checkpoint: &Checkpoint{Head: "x", Entries: 1}}, entries[len(entries)-1].Hash, signer); err != nil {
+		t.Fatal(err)
+	}
+	checks, _ = VerifyLedgerDir(dir, pub)
+	if last := checks[len(checks)-1]; !strings.Contains(last.Problem, "a checkpoint at position 3") {
+		t.Errorf("a mid-chain checkpoint must be a problem, got %+v", last)
+	}
+}
+
+// TestOldEntriesHashTheSameWithoutAKind: kinds are omitted when empty, so
+// an entry written before kinds existed re-hashes to the hash it carries.
+func TestOldEntriesHashTheSameWithoutAKind(t *testing.T) {
+	e := LedgerEntry{Format: LedgerFileFormat, ScanUID: "u", Bundle: Bundle{Scan: ScanRow{Repo: "r"}}}
+	h1, _ := EntryHash(e)
+	e.Kind = KindScan
+	h2, _ := EntryHash(e)
+	if h1 != h2 {
+		t.Fatal("KindScan changed an entry's hash — every existing ledger would stop verifying")
+	}
+	js, _ := CanonicalSparseJSON(e)
+	if strings.Contains(string(js), `"kind"`) || strings.Contains(string(js), `"retracts"`) || strings.Contains(string(js), `"checkpoint"`) {
+		t.Fatalf("a scan entry carries a kind field in its canonical bytes: %s", js)
+	}
+}

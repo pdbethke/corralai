@@ -18,11 +18,15 @@ import (
 // record a scan wrote is what its reader shows — TestScansLedgerReaderIsTheInverseOfBuildBundle
 // holds the two to each other.
 //
-// A scan's id is its position in the chain, 1 = the oldest entry. The
-// chain is append-only, so a position never changes meaning; `scans show
-// 3` a month from now is the same scan.
+// A scan's id is its position in the chain, 1 = the oldest entry,
+// counting every entry — a retraction or a checkpoint holds its position
+// too, so `scans show 3` a month from now is the same entry. Retraction
+// and checkpoint entries are not scans: list leaves them out, show names
+// what they are, and a retracted scan is listed and shown MARKED, since
+// it happened and is no longer the record.
 type ledgerScans struct {
-	entries []auditpush.LedgerEntry
+	entries   []auditpush.LedgerEntry
+	retracted map[string]auditpush.LedgerEntry
 }
 
 func openLedgerScans(dir string) (scansReader, error) {
@@ -30,23 +34,48 @@ func openLedgerScans(dir string) (scansReader, error) {
 	if err != nil {
 		return nil, fmt.Errorf("reading the ledger %s: %w", dir, err)
 	}
-	return &ledgerScans{entries: entries}, nil
+	return &ledgerScans{entries: entries, retracted: auditpush.Retracted(entries)}, nil
 }
 
 func (l *ledgerScans) Close() error { return nil }
 
+// entry returns the scan entry at a chain position; ok is false for an
+// unknown position or for an entry that is not a scan.
 func (l *ledgerScans) entry(scanID int64) (auditpush.LedgerEntry, bool) {
-	if scanID < 1 || scanID > int64(len(l.entries)) {
+	if scanID < 1 || scanID > int64(len(l.entries)) || !l.entries[scanID-1].IsScan() {
 		return auditpush.LedgerEntry{}, false
 	}
 	return l.entries[scanID-1], true
 }
 
-// Scans lists newest first, like the store it replaced.
+// EntryKind says what sits at a chain position, for a reader asked to show
+// something that is not a scan: "" for a scan or an unknown position, else
+// the kind and, for a retraction, what it retracts and why.
+func (l *ledgerScans) EntryKind(scanID int64) string {
+	if scanID < 1 || scanID > int64(len(l.entries)) {
+		return ""
+	}
+	e := l.entries[scanID-1]
+	switch e.Kind {
+	case auditpush.KindRetract:
+		return fmt.Sprintf("a retraction of entry %.12s: %s", e.Retracts, e.Reason)
+	case auditpush.KindCheckpoint:
+		if e.Checkpoint != nil {
+			return fmt.Sprintf("a checkpoint: %d earlier entries (through %s, head %.12s) were pruned before it", e.Checkpoint.Entries, e.Checkpoint.Through.UTC().Format("2006-01-02"), e.Checkpoint.Head)
+		}
+		return "a checkpoint"
+	}
+	return ""
+}
+
+// Scans lists the scan entries newest first, retracted ones marked.
 func (l *ledgerScans) Scans(_ context.Context, limit int) ([]scanstore.ScanRow, error) {
 	var out []scanstore.ScanRow
 	for i := len(l.entries) - 1; i >= 0 && (limit <= 0 || len(out) < limit); i-- {
-		out = append(out, scanRowFromEntry(l.entries[i], int64(i+1)))
+		if !l.entries[i].IsScan() {
+			continue
+		}
+		out = append(out, l.scanRow(l.entries[i], int64(i+1)))
 	}
 	return out, nil
 }
@@ -56,7 +85,15 @@ func (l *ledgerScans) ScanByID(_ context.Context, scanID int64) (scanstore.ScanR
 	if !ok {
 		return scanstore.ScanRow{}, false, nil
 	}
-	return scanRowFromEntry(e, scanID), true, nil
+	return l.scanRow(e, scanID), true, nil
+}
+
+func (l *ledgerScans) scanRow(e auditpush.LedgerEntry, id int64) scanstore.ScanRow {
+	row := scanRowFromEntry(e, id)
+	if r, gone := l.retracted[e.Hash]; gone {
+		row.Retracted, row.RetractedReason = true, r.Reason
+	}
+	return row
 }
 
 func (l *ledgerScans) FilesForScan(_ context.Context, scanID int64) ([]scanstore.File, error) {

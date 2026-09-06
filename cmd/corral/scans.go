@@ -133,11 +133,11 @@ func runScansList(args []string, open func(string) (scansReader, error), stdout,
 	// shipped, so leaving it unprinted was harmless — now a scan can be 24 of
 	// 25 files reused from three weeks ago, and a reader shown only a kill
 	// rate would take it for a fresh measurement of today's code.
-	fmt.Fprintln(tw, "ID\tWHEN\tREPO\tCOMMIT\tSUBSTRATE\tAUDITED\tREUSED\tCANDIDATES\tKILL RATE\t")
+	fmt.Fprintln(tw, "ID\tWHEN\tREPO\tCOMMIT\tSUBSTRATE\tAUDITED\tREUSED\tCANDIDATES\tKILL RATE\tNOTE\t")
 	for _, r := range rows {
-		fmt.Fprintf(tw, "%d\t%s\t%s\t%s\t%s\t%d\t%d\t%d\t%s\t\n",
+		fmt.Fprintf(tw, "%d\t%s\t%s\t%s\t%s\t%d\t%d\t%d\t%s\t%s\t\n",
 			r.ID, r.TS.Format("2006-01-02 15:04"), r.Repo, shortCommit(r.Commit),
-			r.Substrate, r.Audited, r.CacheHits, r.Candidates, formatKillRate(r.KillRate))
+			r.Substrate, r.Audited, r.CacheHits, r.Candidates, formatKillRate(r.KillRate), retractedNote(r.Scan))
 	}
 	tw.Flush()
 	return 0
@@ -174,6 +174,17 @@ func runScansShow(args []string, open func(string) (scansReader, error), stdout,
 	if ferr != nil {
 		fmt.Fprintln(stderr, "corral scans show:", ferr)
 		return 1
+	}
+	// A position that holds a retraction or a checkpoint is not a scan,
+	// and is said to be what it is rather than "no recorded files".
+	if k, ok := st.(interface{ EntryKind(int64) string }); ok && len(files) == 0 {
+		if what := k.EntryKind(id); what != "" {
+			fmt.Fprintf(stdout, "entry %d is %s — not a scan\n", id, what)
+			return 0
+		}
+	}
+	if row, ok, _ := st.ScanByID(context.Background(), id); ok && row.Retracted && !*asJSON {
+		fmt.Fprintf(stdout, "RETRACTED — %s (this scan happened and is no longer the record: the view, the prior and the verdict cache skip it)\n\n", row.RetractedReason)
 	}
 	if *asJSON {
 		if !*timing {
@@ -582,6 +593,15 @@ func scansTarget(ledger string) string {
 // openScanStore is the production opener wired into main's dispatch.
 func openScanStore(target string) (scansReader, error) {
 	return openLedgerScans(strings.TrimRight(target, "/"))
+}
+
+// retractedNote is the NOTE column of `scans list`: what a later entry said
+// about this scan, or nothing.
+func retractedNote(s scanstore.Scan) string {
+	if !s.Retracted {
+		return ""
+	}
+	return "RETRACTED: " + s.RetractedReason
 }
 
 // denominatorNote names a thin denominator: many mutants rejected before

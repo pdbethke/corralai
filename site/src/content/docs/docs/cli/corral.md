@@ -102,6 +102,12 @@ Usage:
                                   re-link an entry to <dir>'s current head (re-hash, re-sign, place)
                                   — the verb a fetch → append → push loop runs, since a chain is
                                   one writer at a time and a git rebase moves the commit, not the link
+  corral ledger retract <dir> <hash> --reason "…"
+                                  append an entry retracting an earlier one: the retracted scan stays in
+                                  the chain and stops being the record (the view, the prior, the verdict
+                                  cache and scans skip it). Deleting it would break the next link
+  corral ledger checkpoint <dir>  prune: one genesis naming the head it replaced (hash, count, date)
+                                  stands in for everything before it; the verifier says the chain begins there
   corral ledger verify <dir>      the same walk as corral verify --ledger
   corral verify --attest <path> [flags]
                                   the checker for a certify --repo --attest statement: verifies
@@ -439,6 +445,12 @@ Usage:
                                   re-link an entry to <dir>'s current head (re-hash, re-sign, place)
                                   — the verb a fetch → append → push loop runs, since a chain is
                                   one writer at a time and a git rebase moves the commit, not the link
+  corral ledger retract <dir> <hash> --reason "…"
+                                  append an entry retracting an earlier one: the retracted scan stays in
+                                  the chain and stops being the record (the view, the prior, the verdict
+                                  cache and scans skip it). Deleting it would break the next link
+  corral ledger checkpoint <dir>  prune: one genesis naming the head it replaced (hash, count, date)
+                                  stands in for everything before it; the verifier says the chain begins there
   corral ledger verify <dir>      the same walk as corral verify --ledger
   corral verify --attest <path> [flags]
                                   the checker for a certify --repo --attest statement: verifies
@@ -606,6 +618,358 @@ Usage:
                                   re-link an entry to <dir>'s current head (re-hash, re-sign, place)
                                   — the verb a fetch → append → push loop runs, since a chain is
                                   one writer at a time and a git rebase moves the commit, not the link
+  corral ledger retract <dir> <hash> --reason "…"
+                                  append an entry retracting an earlier one: the retracted scan stays in
+                                  the chain and stops being the record (the view, the prior, the verdict
+                                  cache and scans skip it). Deleting it would break the next link
+  corral ledger checkpoint <dir>  prune: one genesis naming the head it replaced (hash, count, date)
+                                  stands in for everything before it; the verifier says the chain begins there
+  corral ledger verify <dir>      the same walk as corral verify --ledger
+  corral verify --attest <path> [flags]
+                                  the checker for a certify --repo --attest statement: verifies
+                                  its DSSE signature (against --pub or the local certify key,
+                                  reporting who signed either way), and — opted in per flag —
+                                  recomputes the pushed warehouse rows' hash from a --db and
+                                  confirms a Rekor entry (--rekor-index, or read from --db)
+                                  matches the envelope on disk. Prints check marks and one
+                                  plain sentence per check; exits 1 only on a real mismatch.
+                                  Different from "corral certify verify", which checks a
+                                  corral certify BUILD record, a different artifact.
+                                  flags: --db <dsn>  --rekor-index <n>  --pub <hex>
+  corral ui [flags]              browse that same seal in a browser: a local, read-only page over
+                                  the ledger, loopback by default. No brain, no writes — if
+                                  corral seal can answer it, this shows it.
+  corral seal [flags]            the repo's CURRENT state as the union of still-valid verdicts,
+                                  read from a certify --repo --push warehouse (many audits, one
+                                  current state — not one scan's snapshot). Reads corral_seal
+                                  (latest kill-rate-bearing row per path), creating the view if
+                                  a writer never has. With --repo <dir>: judges each of the
+                                  repo's churn x size top-N ("hot") files live (bytes unchanged
+                                  since the audit), stale (changed since), never audited,
+                                  unreadable, or unknown (the row recorded no validity key) —
+                                  and prints "coverage: N of M hot files carry a live verdict",
+                                  which counts the live ones only.
+                                  Without --repo: the warehouse's latest verdict per path, no
+                                  live/stale judgement. Read-only — never writes a row.
+                                  flags: --db <dsn> (a ledger directory, a warehouse file or
+                                  md:<db>; default $CORRAL_LEDGER, else ./.corral/ledger)
+                                  --repo <dir> --top n (default 20) --json
+  corral demo [flags]             a complete audit of a tiny project, in ONE command: writes a
+                                  small Go package with a five-clause password rule and a test
+                                  that checks only two of them, then audits it with the real
+                                  certify --local. Needs a Go toolchain (you installed corral
+                                  with one) and a provider key — no venv, no database, no
+                                  fixtures. The fastest honest answer to "what does this do?"
+                                  flags: --writer-model/--mutant-model (required; corral has no
+                                         default models) --critic-model --dir
+  corral mcp                     serve corral's findings corpus over stdio MCP, so an editor
+                                  or agent can read what past audits found. READ-ONLY and
+                                  local: no brain, no writes, no network listener.
+  corral doctor [flags] [-- <test cmd>]
+                                  check the environment BEFORE paying for a run: does the
+                                  sandbox start, is your test command's toolchain reachable
+                                  INSIDE it, has every grading seat been given a model (corral
+                                  has no defaults) with a credential for it, and does the file
+                                  you named have a test corral can pair with. Every check is free — no model is ever called — and
+                                  they run in the order an audit would hit them, so the first
+                                  FAIL is the first thing to fix. Exits non-zero if any failed.
+                                  flags: --code <path> --test <path> (adds the pairing check)
+                                         --jail <backend> (default: auto-detect)
+                                         --mutant-model/--writer-model/--critic-model <name>
+                                  It does NOT check two things that need a real seeded
+                                  workspace: whether your suite passes on UNMUTATED code inside
+                                  the sandbox (the most common way an audit dies), and whether a
+                                  multi-file project needs --repo-dir.
+  corral eval [flags]             run the adversarial pool across the versioned eval corpus and
+                                  print a soundness report (does the recall metric catch known gaps?)
+                                  flags: --corpus <path> (default eval/corpus/manifest.json)
+                                         --iterations <n> (default 1)   --only <id,id,...>
+                                         --brain <url> (or $CORRAL_BRAIN)
+                                         --progress <path> (default eval/.eval-progress.json)
+  corral --version                print the build version and exit
+  corral -h                       print this help and exit
+
+Configuration is entirely environment variables — see CORRALAI_ADDR,
+CORRALAI_DB, and the rest of the // Env: block at the top of this binary's
+main.go (also reproduced in the generated CLI reference).
+```
+
+## `corral ledger checkpoint` flags
+
+```
+corral — the CorralAI brain: an OIDC-authenticated, MCP-native coordination server
+
+Usage:
+  corral                          serve /mcp/ + /healthz on $CORRALAI_ADDR
+  corral secret set|get|list|rm   manage provider keys + tokens in the secure keystore
+                                  (env → OS keyring → age-encrypted file; set reads stdin, never argv)
+  corral control seed [flags]     seed one vetted control test into the control-gate store
+                                  (--spec-db --owner --goal --target --code-path --test-path --test-file)
+  corral certify [<ref>] [--out <file>] [--net=false] [--produced-by a,b] -- <check-cmd>...
+                                  certify a change by execution: check out <ref> (default
+                                  HEAD) into a jail, run <check-cmd> there, and write a
+                                  signed, offline-verifiable record; exits with
+                                  <check-cmd>'s own exit code
+                                  signs locally (no server) unless --brain is given
+                                  flags: --produced-by a,b   --out <file>   --net=false
+                                         --repo/--commit/--branch (default: read via git)
+  corral certify --brain <url> [flags] -- <check-cmd>...
+                                  same as above, and also post the signed record to a
+                                  brain (report_build) as a tamper-evident build attestation
+  corral certify --adversarial --code <path> --goal "<text>" [--test <path>] -- <test cmd>
+                                  grade a change's own tests: fire the adversarial pool on the
+                                  brain, poll to a signed verdict
+  corral certify --repo <dir> [--top n|--all] [--goals <file>] [--dry-run] [--swarm n] [-- <test cmd>]
+                                  fan the --local audit out over a WHOLE repository: enumerate
+                                  every source file with a paired test, rank them by churn x size,
+                                  audit the top --top (default 25, --all for every one) through a
+                                  bounded swarm, and print a repo report whose kill rate is over
+                                  the AUDITED surface only, with every excluded file accounted for
+                                  by reason — including the ones the bound left out
+                                  each file's goal is DERIVED from its source by --derive-model;
+                                  --goals <file> instead takes goals from a JSON map and makes no
+                                  model call
+                                  --dry-run stops after enumeration (no jail, no LLM calls)
+                                  an explicit -- <test cmd> grades EVERY file, so it is refused
+                                  when the scan spans more than one language (omit it and each
+                                  file is graded with its own language's stock command)
+                                  the report is NOT signed yet — that lands with the sealed
+                                  repo statement
+  corral certify verify <record-file> [--pubkey <hex>|--brain <url>] [--allow-unanchored]
+                                  independently verify a --out (or report_build) record: the
+                                  Ed25519 signature, the ledger's hash chain, and that the
+                                  statement is bound to that exact ledger head — requires a
+                                  trusted key via --pubkey or --brain (a record's own
+                                  embedded public_key is never a trust anchor); prints
+                                  "verified" and exits 0, or names the failing check on
+                                  stderr and exits non-zero
+  corral certify pubkey           print the local signing pubkey (for --pubkey trust anchors)
+  corral scorecard [--json]       show the bug-catching scorecard (recall/precision per model×role,
+                                  plus a C-PREC column: the test-critic role's execution-checked
+                                  precision from criticscore adjudications);
+                                  table by default, or the raw cells as indented JSON with --json
+  corral models rank [flags]      rank the models that have sat in each seat by corral's OWN recorded
+                                  evidence — a DIFFERENT metric per seat: the writer by proven gaps
+                                  per survivor attempted, the generator by valid mutants the dev
+                                  suite missed per run, the critic by precision against human
+                                  adjudication; the goal-deriver is reported as not scored rather
+                                  than given an invented number. A model below --min-runs (default 5)
+                                  is printed with its real numbers, marked insufficient, and never
+                                  preferred. DISCLOSURE, NOT SELECTION: it writes no config, changes
+                                  no default and staffs no seat — corral has no default models.
+                                  flags: --db <dsn> (a pushed warehouse instead of the local
+                                  bug-catching ledger; unreachable REFUSES, never falls back)
+                                  --seat <role>  --lang <name>  --min-runs n  --json
+  corral criticscore list         list execution-checked test-critic findings still awaiting human
+                                  adjudication — the local store certify --local writes, or a
+                                  running brain's when CORRAL_BRAIN is set
+  corral criticscore show <id>    print one finding in full (model, target test, evidence)
+  corral criticscore confirm <id> record a human "confirmed" verdict — the finding was real
+  corral criticscore refute <id>  record a human "refuted" verdict — the finding was wrong
+                                  (confirm/refute permanently override the pool's own auto-adjudication;
+                                  this IS the human gate the critic-precision column measures)
+  corral matrix list [--json]     show the tests×mutants matrix (swarm slice 5): per-test
+                                  execution-proven adequacy against a run's own mutant set, plus a
+                                  safe-to-delete candidate list — populated only by runs opted in via
+                                  certify --local --matrix (requires CORRAL_BRAIN — no offline mode)
+  corral scans list|show [flags]  read the record certify --repo writes — the ledger directory,
+                                  one signed entry per scan: list shows recent scans (an id is
+                                  the entry's position in the chain, oldest = 1), show <id>
+                                  their per-file dispositions — including WHY a proven-gap
+                                  count of 0 is 0 (writer failed / test unsound / tried and
+                                  missed), which the bare number cannot say. show <id>
+                                  --evidence prints the pool's own authored test, kept even
+                                  when it proved nothing — that is the case worth reading.
+                                  Plain files, no brain, no database:
+                                  --ledger <dir> (default $CORRAL_LEDGER, else ./.corral/ledger),
+                                  --limit n, --json
+  corral verify --ledger <dir>    walk a ledger directory's chain: every entry's hash against its
+                                  bytes, every link against its predecessor, every signature
+                                  against --pub or the local certify key; one line per entry,
+                                  an edited or removed entry named; unsigned said, never "verified"
+  corral ledger append <entry> <dir>
+                                  re-link an entry to <dir>'s current head (re-hash, re-sign, place)
+                                  — the verb a fetch → append → push loop runs, since a chain is
+                                  one writer at a time and a git rebase moves the commit, not the link
+  corral ledger retract <dir> <hash> --reason "…"
+                                  append an entry retracting an earlier one: the retracted scan stays in
+                                  the chain and stops being the record (the view, the prior, the verdict
+                                  cache and scans skip it). Deleting it would break the next link
+  corral ledger checkpoint <dir>  prune: one genesis naming the head it replaced (hash, count, date)
+                                  stands in for everything before it; the verifier says the chain begins there
+  corral ledger verify <dir>      the same walk as corral verify --ledger
+  corral verify --attest <path> [flags]
+                                  the checker for a certify --repo --attest statement: verifies
+                                  its DSSE signature (against --pub or the local certify key,
+                                  reporting who signed either way), and — opted in per flag —
+                                  recomputes the pushed warehouse rows' hash from a --db and
+                                  confirms a Rekor entry (--rekor-index, or read from --db)
+                                  matches the envelope on disk. Prints check marks and one
+                                  plain sentence per check; exits 1 only on a real mismatch.
+                                  Different from "corral certify verify", which checks a
+                                  corral certify BUILD record, a different artifact.
+                                  flags: --db <dsn>  --rekor-index <n>  --pub <hex>
+  corral ui [flags]              browse that same seal in a browser: a local, read-only page over
+                                  the ledger, loopback by default. No brain, no writes — if
+                                  corral seal can answer it, this shows it.
+  corral seal [flags]            the repo's CURRENT state as the union of still-valid verdicts,
+                                  read from a certify --repo --push warehouse (many audits, one
+                                  current state — not one scan's snapshot). Reads corral_seal
+                                  (latest kill-rate-bearing row per path), creating the view if
+                                  a writer never has. With --repo <dir>: judges each of the
+                                  repo's churn x size top-N ("hot") files live (bytes unchanged
+                                  since the audit), stale (changed since), never audited,
+                                  unreadable, or unknown (the row recorded no validity key) —
+                                  and prints "coverage: N of M hot files carry a live verdict",
+                                  which counts the live ones only.
+                                  Without --repo: the warehouse's latest verdict per path, no
+                                  live/stale judgement. Read-only — never writes a row.
+                                  flags: --db <dsn> (a ledger directory, a warehouse file or
+                                  md:<db>; default $CORRAL_LEDGER, else ./.corral/ledger)
+                                  --repo <dir> --top n (default 20) --json
+  corral demo [flags]             a complete audit of a tiny project, in ONE command: writes a
+                                  small Go package with a five-clause password rule and a test
+                                  that checks only two of them, then audits it with the real
+                                  certify --local. Needs a Go toolchain (you installed corral
+                                  with one) and a provider key — no venv, no database, no
+                                  fixtures. The fastest honest answer to "what does this do?"
+                                  flags: --writer-model/--mutant-model (required; corral has no
+                                         default models) --critic-model --dir
+  corral mcp                     serve corral's findings corpus over stdio MCP, so an editor
+                                  or agent can read what past audits found. READ-ONLY and
+                                  local: no brain, no writes, no network listener.
+  corral doctor [flags] [-- <test cmd>]
+                                  check the environment BEFORE paying for a run: does the
+                                  sandbox start, is your test command's toolchain reachable
+                                  INSIDE it, has every grading seat been given a model (corral
+                                  has no defaults) with a credential for it, and does the file
+                                  you named have a test corral can pair with. Every check is free — no model is ever called — and
+                                  they run in the order an audit would hit them, so the first
+                                  FAIL is the first thing to fix. Exits non-zero if any failed.
+                                  flags: --code <path> --test <path> (adds the pairing check)
+                                         --jail <backend> (default: auto-detect)
+                                         --mutant-model/--writer-model/--critic-model <name>
+                                  It does NOT check two things that need a real seeded
+                                  workspace: whether your suite passes on UNMUTATED code inside
+                                  the sandbox (the most common way an audit dies), and whether a
+                                  multi-file project needs --repo-dir.
+  corral eval [flags]             run the adversarial pool across the versioned eval corpus and
+                                  print a soundness report (does the recall metric catch known gaps?)
+                                  flags: --corpus <path> (default eval/corpus/manifest.json)
+                                         --iterations <n> (default 1)   --only <id,id,...>
+                                         --brain <url> (or $CORRAL_BRAIN)
+                                         --progress <path> (default eval/.eval-progress.json)
+  corral --version                print the build version and exit
+  corral -h                       print this help and exit
+
+Configuration is entirely environment variables — see CORRALAI_ADDR,
+CORRALAI_DB, and the rest of the // Env: block at the top of this binary's
+main.go (also reproduced in the generated CLI reference).
+```
+
+## `corral ledger retract` flags
+
+```
+corral — the CorralAI brain: an OIDC-authenticated, MCP-native coordination server
+
+Usage:
+  corral                          serve /mcp/ + /healthz on $CORRALAI_ADDR
+  corral secret set|get|list|rm   manage provider keys + tokens in the secure keystore
+                                  (env → OS keyring → age-encrypted file; set reads stdin, never argv)
+  corral control seed [flags]     seed one vetted control test into the control-gate store
+                                  (--spec-db --owner --goal --target --code-path --test-path --test-file)
+  corral certify [<ref>] [--out <file>] [--net=false] [--produced-by a,b] -- <check-cmd>...
+                                  certify a change by execution: check out <ref> (default
+                                  HEAD) into a jail, run <check-cmd> there, and write a
+                                  signed, offline-verifiable record; exits with
+                                  <check-cmd>'s own exit code
+                                  signs locally (no server) unless --brain is given
+                                  flags: --produced-by a,b   --out <file>   --net=false
+                                         --repo/--commit/--branch (default: read via git)
+  corral certify --brain <url> [flags] -- <check-cmd>...
+                                  same as above, and also post the signed record to a
+                                  brain (report_build) as a tamper-evident build attestation
+  corral certify --adversarial --code <path> --goal "<text>" [--test <path>] -- <test cmd>
+                                  grade a change's own tests: fire the adversarial pool on the
+                                  brain, poll to a signed verdict
+  corral certify --repo <dir> [--top n|--all] [--goals <file>] [--dry-run] [--swarm n] [-- <test cmd>]
+                                  fan the --local audit out over a WHOLE repository: enumerate
+                                  every source file with a paired test, rank them by churn x size,
+                                  audit the top --top (default 25, --all for every one) through a
+                                  bounded swarm, and print a repo report whose kill rate is over
+                                  the AUDITED surface only, with every excluded file accounted for
+                                  by reason — including the ones the bound left out
+                                  each file's goal is DERIVED from its source by --derive-model;
+                                  --goals <file> instead takes goals from a JSON map and makes no
+                                  model call
+                                  --dry-run stops after enumeration (no jail, no LLM calls)
+                                  an explicit -- <test cmd> grades EVERY file, so it is refused
+                                  when the scan spans more than one language (omit it and each
+                                  file is graded with its own language's stock command)
+                                  the report is NOT signed yet — that lands with the sealed
+                                  repo statement
+  corral certify verify <record-file> [--pubkey <hex>|--brain <url>] [--allow-unanchored]
+                                  independently verify a --out (or report_build) record: the
+                                  Ed25519 signature, the ledger's hash chain, and that the
+                                  statement is bound to that exact ledger head — requires a
+                                  trusted key via --pubkey or --brain (a record's own
+                                  embedded public_key is never a trust anchor); prints
+                                  "verified" and exits 0, or names the failing check on
+                                  stderr and exits non-zero
+  corral certify pubkey           print the local signing pubkey (for --pubkey trust anchors)
+  corral scorecard [--json]       show the bug-catching scorecard (recall/precision per model×role,
+                                  plus a C-PREC column: the test-critic role's execution-checked
+                                  precision from criticscore adjudications);
+                                  table by default, or the raw cells as indented JSON with --json
+  corral models rank [flags]      rank the models that have sat in each seat by corral's OWN recorded
+                                  evidence — a DIFFERENT metric per seat: the writer by proven gaps
+                                  per survivor attempted, the generator by valid mutants the dev
+                                  suite missed per run, the critic by precision against human
+                                  adjudication; the goal-deriver is reported as not scored rather
+                                  than given an invented number. A model below --min-runs (default 5)
+                                  is printed with its real numbers, marked insufficient, and never
+                                  preferred. DISCLOSURE, NOT SELECTION: it writes no config, changes
+                                  no default and staffs no seat — corral has no default models.
+                                  flags: --db <dsn> (a pushed warehouse instead of the local
+                                  bug-catching ledger; unreachable REFUSES, never falls back)
+                                  --seat <role>  --lang <name>  --min-runs n  --json
+  corral criticscore list         list execution-checked test-critic findings still awaiting human
+                                  adjudication — the local store certify --local writes, or a
+                                  running brain's when CORRAL_BRAIN is set
+  corral criticscore show <id>    print one finding in full (model, target test, evidence)
+  corral criticscore confirm <id> record a human "confirmed" verdict — the finding was real
+  corral criticscore refute <id>  record a human "refuted" verdict — the finding was wrong
+                                  (confirm/refute permanently override the pool's own auto-adjudication;
+                                  this IS the human gate the critic-precision column measures)
+  corral matrix list [--json]     show the tests×mutants matrix (swarm slice 5): per-test
+                                  execution-proven adequacy against a run's own mutant set, plus a
+                                  safe-to-delete candidate list — populated only by runs opted in via
+                                  certify --local --matrix (requires CORRAL_BRAIN — no offline mode)
+  corral scans list|show [flags]  read the record certify --repo writes — the ledger directory,
+                                  one signed entry per scan: list shows recent scans (an id is
+                                  the entry's position in the chain, oldest = 1), show <id>
+                                  their per-file dispositions — including WHY a proven-gap
+                                  count of 0 is 0 (writer failed / test unsound / tried and
+                                  missed), which the bare number cannot say. show <id>
+                                  --evidence prints the pool's own authored test, kept even
+                                  when it proved nothing — that is the case worth reading.
+                                  Plain files, no brain, no database:
+                                  --ledger <dir> (default $CORRAL_LEDGER, else ./.corral/ledger),
+                                  --limit n, --json
+  corral verify --ledger <dir>    walk a ledger directory's chain: every entry's hash against its
+                                  bytes, every link against its predecessor, every signature
+                                  against --pub or the local certify key; one line per entry,
+                                  an edited or removed entry named; unsigned said, never "verified"
+  corral ledger append <entry> <dir>
+                                  re-link an entry to <dir>'s current head (re-hash, re-sign, place)
+                                  — the verb a fetch → append → push loop runs, since a chain is
+                                  one writer at a time and a git rebase moves the commit, not the link
+  corral ledger retract <dir> <hash> --reason "…"
+                                  append an entry retracting an earlier one: the retracted scan stays in
+                                  the chain and stops being the record (the view, the prior, the verdict
+                                  cache and scans skip it). Deleting it would break the next link
+  corral ledger checkpoint <dir>  prune: one genesis naming the head it replaced (hash, count, date)
+                                  stands in for everything before it; the verifier says the chain begins there
   corral ledger verify <dir>      the same walk as corral verify --ledger
   corral verify --attest <path> [flags]
                                   the checker for a certify --repo --attest statement: verifies
@@ -773,6 +1137,12 @@ Usage:
                                   re-link an entry to <dir>'s current head (re-hash, re-sign, place)
                                   — the verb a fetch → append → push loop runs, since a chain is
                                   one writer at a time and a git rebase moves the commit, not the link
+  corral ledger retract <dir> <hash> --reason "…"
+                                  append an entry retracting an earlier one: the retracted scan stays in
+                                  the chain and stops being the record (the view, the prior, the verdict
+                                  cache and scans skip it). Deleting it would break the next link
+  corral ledger checkpoint <dir>  prune: one genesis naming the head it replaced (hash, count, date)
+                                  stands in for everything before it; the verifier says the chain begins there
   corral ledger verify <dir>      the same walk as corral verify --ledger
   corral verify --attest <path> [flags]
                                   the checker for a certify --repo --attest statement: verifies

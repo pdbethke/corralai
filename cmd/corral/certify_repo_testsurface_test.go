@@ -227,14 +227,17 @@ func TestSurfaceWideningDoesNotChangeCandidateClassification(t *testing.T) {
 	// Under the test root, a file is test-support BY ENUMERATION — that is
 	// reposcan's own rule (ReasonTestSupport), not the surface widening's:
 	// the surface only reads the classification, it never writes one.
-	// src/jest.setup.js lives beside a test but under no test root, so it
-	// keeps the name-shaped reason and stays eligible for evidence pairing.
+	// src/jest.setup.js lives under no test root, but it is a harness file
+	// by name (lang.HarnessConfigurer) and enumeration classifies it as
+	// test support too — it used to keep the name-shaped no-paired-test
+	// reason and stay eligible for evidence pairing, which could have
+	// promoted a jest setup file to an audit SUBJECT on coverage evidence.
 	wantReason := map[string]string{
 		"tests/conftest.py": reposcan.ReasonTestSupport,
 		"tests/helpers.py":  reposcan.ReasonTestSupport,
 		"tests/fixtures.py": reposcan.ReasonTestSupport,
 		"tests/golden.json": reposcan.ReasonNoLanguage,
-		"src/jest.setup.js": reposcan.ReasonNoPairedTest,
+		"src/jest.setup.js": reposcan.ReasonTestSupport,
 		"tests/test_a.py":   reposcan.ReasonIsTest,
 		"src/a.test.js":     reposcan.ReasonIsTest,
 	}

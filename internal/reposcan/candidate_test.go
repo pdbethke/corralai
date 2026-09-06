@@ -792,13 +792,17 @@ func TestEnumerateTestTreeIsNeverASubject(t *testing.T) {
 		"lib/thing.rb":            "class Thing; end\n",
 		"spec/thing_spec.rb":      "describe Thing do; end\n",
 		"spec/support/helpers.rb": "module H; end\n",
+		// A harness file OUTSIDE any test root: pytest reads a repo-root
+		// conftest.py before any test. It is test support, not a source
+		// file with no paired test.
+		"conftest.py": "import pytest\n",
 	})
 	cands, excl, err := Enumerate(root)
 	if err != nil {
 		t.Fatalf("Enumerate: %v", err)
 	}
 	for _, c := range cands {
-		if strings.HasPrefix(c.Path, "tests/") || strings.HasPrefix(c.Path, "spec/") {
+		if strings.HasPrefix(c.Path, "tests/") || strings.HasPrefix(c.Path, "spec/") || c.Path == "conftest.py" {
 			t.Errorf("%s is a candidate; the test tree is never a subject", c.Path)
 		}
 	}
@@ -806,7 +810,7 @@ func TestEnumerateTestTreeIsNeverASubject(t *testing.T) {
 	for _, e := range excl {
 		reasons[e.Path] = e.Reason
 	}
-	for _, p := range []string{"tests/conftest.py", "tests/testserver/server.py", "tests/helpers.py", "spec/support/helpers.rb"} {
+	for _, p := range []string{"tests/conftest.py", "tests/testserver/server.py", "tests/helpers.py", "spec/support/helpers.rb", "conftest.py"} {
 		if reasons[p] != ReasonTestSupport {
 			t.Errorf("%s reason = %q, want %q", p, reasons[p], ReasonTestSupport)
 		}

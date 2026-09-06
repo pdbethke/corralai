@@ -600,7 +600,12 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 			}
 			ex.prior = lp
 		} else if !*noLedgerFlag {
-			if entries, lerr := auditpush.ReadLedgerDir(ledgerDir); lerr == nil && len(entries) > 0 {
+			// Retracted entries are not the record (auditpush.ScanEntries):
+			// a retracted exam must not prime the next one, or the
+			// retraction changed what a reader sees and not what the
+			// generator is told.
+			all, lerr := auditpush.ReadLedgerDir(ledgerDir)
+			if entries := auditpush.ScanEntries(all); lerr == nil && len(entries) > 0 {
 				if lp, perr := prior.Load(ledgerDir); perr == nil {
 					ex.prior = lp
 					fmt.Fprintf(stdout, "  prior: %d earlier entr%s in %s — files with matching bytes sit a primed exam (--no-ledger to skip)\n",

@@ -592,6 +592,26 @@ The commit step is skipped on `pull_request` events on purpose: a fork's
 pull request must not be able to write the repository's record, and
 `GITHUB_TOKEN` on a fork PR cannot push anyway.
 
+**Taking something back, without deleting it.** A chain cannot have an
+entry removed quietly — delete one and the next entry's link breaks, and
+`verify --ledger` names it — so the record has two verbs for the two honest
+cases. A run that should not count (a broken environment, a suite that
+did not import, a scan of the wrong commit) is **retracted**: `corral
+ledger retract .corral/ledger <hash> --reason "…"` appends an entry that
+names it and says why. The retracted scan stays in the chain — it
+happened — and stops being the record: the DuckDB view, `--prior`, the
+verdict cache and `corral scans` skip it from then on, `scans list` marks
+it `RETRACTED: <reason>`, and the verifier reports the retraction as one
+more intact entry. When a branch's history should stop being carried,
+**checkpoint** it: `corral ledger checkpoint .corral/ledger` replaces
+every entry with one genesis that names the head it replaced, how many
+entries, and through when; the chain restarts there, and the verifier says
+"chain begins at a checkpoint; N earlier entries not present" rather than
+pretending it was always that short. Neither verb rewrites an entry. The
+one case that needs a rewrite — a secret that leaked into an authored test
+inside a signed entry — is a `git` rewrite of the branch, and the chain
+will report the gap forever; a retraction beside it can say why.
+
 ## Where the report shows up
 
 The run writes corral's report to the job summary — the page you land on when

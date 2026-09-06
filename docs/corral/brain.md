@@ -215,7 +215,7 @@ CGO column honest.)
 
 | Binary | Role | CGO | Ships as |
 |--------|------|-----|----------|
-| **`corral-wrangler`** | the **brain** as its own binary — MCP coordination, the gates, task queue, memory, reference RAG, repo-work + multi-forge, the fleet oracle, embedded UI; owns the databases. `corral` with no subcommand still starts it for one release, then becomes a pointer | yes | `deploy/demo/Dockerfile.brain` |
+| **`corral-wrangler`** | the **brain** as its own binary — MCP coordination, the gates, task queue, memory, reference RAG, repo-work + multi-forge, the fleet oracle, embedded UI; owns the databases. `corral` with no subcommand exits with a pointer to it | yes | `deploy/demo/Dockerfile.brain` |
 | **`corral`** | the **audit CLI** — `certify`, `verify`, `scans`, `ui`, `seal`, `models rank`, `doctor`, `secret`. Carries the ledgers' DuckDB and the symbol index's tree-sitter, hence CGO | yes | `go install` |
 | **`corral-agent`** | the reference **audit-role worker** — model-agnostic, claims an adversarial-audit role (mutant-generator / test-writer / test-critic) off the queue | no | `deploy/demo/Dockerfile.agent` (distroless) |
 | **`corral-observe`** | the **observer** — read-only credentialed window onto a brain's live UI | no | `deploy/observe/Dockerfile` (distroless) |

@@ -290,9 +290,9 @@ jobs:
           # Build to a staging file while the old binary keeps running (you
           # can't overwrite a running executable — ETXTBSY), then swap.
           CGO_ENABLED=1 go build -trimpath -ldflags "-X main.stampedVersion=$VERSION" -o corral.new ./cmd/corral
-          # The daemon's own binary, built beside the CLI so the unit can be
-          # pointed at it (ExecStart=…/corral-wrangler); until it is, a bare
-          # `corral` still starts the same server — see internal/wranglerd.
+          # The daemon's own binary; the unit runs `corral-wrangler serve`
+          # (a drop-in, /etc/systemd/system/corral.service.d/wrangler.conf).
+          # A bare `corral` is the audit CLI and exits with a pointer.
           CGO_ENABLED=1 go build -trimpath -ldflags "-X main.stampedVersion=$VERSION" -o corral-wrangler.new ./cmd/corral-wrangler
           # The signature was embedded at build time from the working tree;
           # do not leave the box's clone dirty with it, or the next

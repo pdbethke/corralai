@@ -116,7 +116,7 @@ func TestUIRefusesToCallANonLoopbackAddressLocal(t *testing.T) {
 // the BRAIN's usage until "ui" was added to that list, with no other symptom.
 // That is the two-products problem in miniature: the default path for anything
 // unrecognised is the other product.
-func TestEveryDocumentedVerbIsDispatched(t *testing.T) {
+func TestDocsEveryDocumentedVerbIsDispatched(t *testing.T) {
 	// Derived, not enumerated: the verbs are read from the usage text
 	// (every "  corral <verb>" line) and the dispatch's case labels are read
 	// from main.go's own source. A verb documented but not dispatched — the

@@ -120,7 +120,7 @@ func subcommand(args []string) string {
 	// failure mode of a name missing from it was quiet: `corral ledger
 	// append` fell through to booting the coordination server, and the
 	// gate that was meant to catch that enumerated the same list.
-	// TestEveryDocumentedVerbIsDispatched derives the names from the usage
+	// TestDocsEveryDocumentedVerbIsDispatched derives the names from the usage
 	// text and the switch instead.
 	return args[0]
 }

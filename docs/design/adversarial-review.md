@@ -1,10 +1,21 @@
 <!-- SPDX-License-Identifier: Elastic-2.0 -->
 # Adversarial review — an opinion linked to signed reproductions
 
-**Status: designed, not built.** Written 2026-09-04, the morning after the
-fifth cold review of corral itself (PRs #224–#236). Everything in "What
-exists" is shipped and cited; everything in "What would be built" is not.
-The one-week slice at the end is the proposal.
+**Status: the one-week slice is built (2026-09-06, `corral review`); the
+rest is designed.** Written 2026-09-04, the morning after the fifth cold
+review of corral itself (PRs #224–#236). What shipped: the brief and the
+findings schema with tiers (`internal/review`), reproductions run against a
+detached worktree at the commit and demoted on the record when they do not
+hold, the review as a ledger entry (`kind: review`) beside the audits, the
+opinion printed with its findings and sound list, and a person's
+confirm/refute as its own entry (`kind: adjudication`, newest per finding
+stands). Not yet: the verifier seat, the `--attest` statement over the
+reproductions, reviewer rows in `models rank`, the warehouse grains, the
+round planner. Its first two runs were on corral itself, the day it was
+written: one finding refuted (a false claim whose script also could not
+run — demoted, then refuted on the record), one confirmed (a real bypass
+in the verb written that morning, whose script exited 0 for the wrong
+reason — the "narrower than claimed" case, adjudicated by hand).
 
 ## Where this came from
 

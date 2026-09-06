@@ -187,3 +187,14 @@ corral control seed --code-path	executed	test:cmd/corral/control_test.go (runCon
 corral control seed --test-path	executed	test:cmd/corral/control_test.go (runControl)
 corral control seed --test-file	executed	test:cmd/corral/control_test.go (runControl)
 corral control seed --kill-rate	executed	test:cmd/corral/control_test.go (runControl)
+corral review adjudicate --by	executed	test:cmd/corral/review_test.go
+corral review adjudicate --confirm	executed	test:cmd/corral/review_test.go
+corral review adjudicate --reason	executed	test:cmd/corral/review_test.go
+corral review adjudicate --refute	executed	test:cmd/corral/review_test.go
+corral review --ledger	executed	test:cmd/corral/review_test.go
+corral review --repo	executed	test:cmd/corral/review_test.go
+corral review --reviewer-model	executed	test:cmd/corral/review_test.go
+corral review --scope	executed	test:cmd/corral/review_test.go
+corral review --max-bytes	executed	run:2026-09-06 corral review --scope internal/prior (the default, 14,576 bytes shown)
+corral review --no-ledger	unexecuted	
+corral review --timeout	executed	run:2026-09-06 corral review --scope cmd/corral/ledger.go (the default, a 60s bound on a `go test` reproduction)

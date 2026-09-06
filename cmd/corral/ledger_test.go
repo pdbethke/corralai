@@ -152,6 +152,23 @@ func TestLedgerAppendRelinksToTheCurrentHead(t *testing.T) {
 	if code := runLedger([]string{"append", placed, target}, &out, &errb); code != 2 || !strings.Contains(errb.String(), "never re-linked in place") {
 		t.Errorf("re-linking a placed entry: exit %d\n%s", code, errb.String())
 	}
+	// And with the target spelled RELATIVE: filepath.Rel errored on a
+	// relative base against an absolute source and the error skipped the
+	// check, so a relative --dir re-linked in place. `corral review` found
+	// this the day the verb was written.
+	wd, _ := os.Getwd()
+	if err := os.Chdir(filepath.Dir(target)); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(wd) })
+	errb.Reset()
+	before, _ := os.ReadDir(filepath.Join(target, auditpush.ScansSubdir))
+	if code := runLedger([]string{"append", placed, filepath.Base(target)}, &out, &errb); code != 2 || !strings.Contains(errb.String(), "never re-linked in place") {
+		t.Errorf("re-linking a placed entry into a RELATIVE dir: exit %d\n%s", code, errb.String())
+	}
+	if after, _ := os.ReadDir(filepath.Join(target, auditpush.ScansSubdir)); len(after) != len(before) {
+		t.Errorf("a relative dir re-linked the entry in place: %d → %d entries", len(before), len(after))
+	}
 }
 
 // TestLedgerRetractAndCheckpointAreHonoredByEveryReader: a retraction is

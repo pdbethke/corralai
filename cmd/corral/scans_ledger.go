@@ -59,6 +59,17 @@ func (l *ledgerScans) EntryKind(scanID int64) string {
 	switch e.Kind {
 	case auditpush.KindRetract:
 		return fmt.Sprintf("a retraction of entry %.12s: %s", e.Retracts, e.Reason)
+	case auditpush.KindReview:
+		if e.Review != nil {
+			rep, cr, hy := e.Review.Counts()
+			return fmt.Sprintf("a review of %s by %s (%d reproduced, %d code-read, %d hypothesis) — `corral review show <dir> %.12s`", e.Review.Scope, e.Review.ReviewerModel, rep, cr, hy, e.Hash)
+		}
+		return "a review"
+	case auditpush.KindAdjudication:
+		if e.Adjudication != nil {
+			return fmt.Sprintf("an adjudication: %s %s by %s — %s", e.Adjudication.Verdict, e.Adjudication.Adjudicates, e.Adjudication.By, e.Adjudication.Reason)
+		}
+		return "an adjudication"
 	case auditpush.KindCheckpoint:
 		if e.Checkpoint != nil {
 			return fmt.Sprintf("a checkpoint: %d earlier entries (through %s, head %.12s) were pruned before it", e.Checkpoint.Entries, e.Checkpoint.Through.UTC().Format("2006-01-02"), e.Checkpoint.Head)

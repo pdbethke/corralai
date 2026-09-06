@@ -9,7 +9,11 @@ still move between minor versions.
 Entries describe what changed for someone *using* the tool. For the full commit
 history of any release, `git log v0.3.4..v0.3.5`.
 
-## [Unreleased] — toward 1.0.0-rc.3
+## [v1.0.0-rc.3] — 2026-09-06
+
+`corral ledger` runs. rc.1 and rc.2 documented and tested it and never
+dispatched it; the gate that let that through enumerated instead of
+derived.
 
 - **`corral ledger …` is dispatched.** In rc.1 and rc.2 the ledger verbs
   were documented and tested through their own function, and the shipped

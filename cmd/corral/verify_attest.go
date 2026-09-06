@@ -545,6 +545,9 @@ func runVerifyLedger(dir, pubFlag string, stdout, stderr io.Writer) int {
 		default:
 			what += ", UNSIGNED"
 		}
+		if c.Note != "" {
+			what += " — " + c.Note
+		}
 		fmt.Fprintf(stdout, "%s %s  %.12s  %s\n", mark, c.File, c.Commit, what)
 	}
 	if bad > 0 {

@@ -101,10 +101,12 @@ func Load(source string) (*Prior, error) {
 	var files []string
 	if st.IsDir() {
 		// A ledger directory's entries first: they carry outcomes AND
-		// (with --push-source) hunks in one document each.
-		if entries, lerr := auditpush.ReadLedgerDir(source); lerr != nil {
+		// hunks in one document each. Retracted entries are skipped
+		// (auditpush.ScanEntries): a retracted run did not happen, as far
+		// as the next exam is concerned.
+		if all, lerr := auditpush.ReadLedgerDir(source); lerr != nil {
 			return nil, lerr
-		} else if len(entries) > 0 {
+		} else if entries := auditpush.ScanEntries(all); len(entries) > 0 {
 			p.sources++
 			for _, e := range entries {
 				for _, m := range e.Bundle.Mutants {

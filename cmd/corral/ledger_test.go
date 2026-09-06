@@ -4,6 +4,7 @@ package main
 
 import (
 	"bytes"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,7 +12,10 @@ import (
 	"testing"
 
 	"github.com/pdbethke/corralai/internal/adequacy"
+	"github.com/pdbethke/corralai/internal/advpool"
 	"github.com/pdbethke/corralai/internal/auditpush"
+	"github.com/pdbethke/corralai/internal/prior"
+	"github.com/pdbethke/corralai/internal/scanstore"
 )
 
 // A repo scan writes its entry into <repo>/.corral/ledger by default, and a
@@ -147,5 +151,93 @@ func TestLedgerAppendRelinksToTheCurrentHead(t *testing.T) {
 	placed := filepath.Join(target, auditpush.ScansSubdir, tnames[0].Name())
 	if code := runLedger([]string{"append", placed, target}, &out, &errb); code != 2 || !strings.Contains(errb.String(), "never re-linked in place") {
 		t.Errorf("re-linking a placed entry: exit %d\n%s", code, errb.String())
+	}
+}
+
+// TestLedgerRetractAndCheckpointAreHonoredByEveryReader: a retraction is
+// one CLI verb, and every reader of the record sees it — `scans list`
+// marks the scan, `scans show` says so, the verdict cache stops serving
+// its verdict, the prior stops priming on it, and `verify --ledger` walks
+// the longer chain intact and names the retraction. A checkpoint then
+// prunes everything before it and the verifier says where the history
+// went.
+func TestLedgerRetractAndCheckpointAreHonoredByEveryReader(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "ledger")
+	verdict, _ := marshalVerdict(advpool.Verdict{Survivors: 4, DevKillRate: 0.5})
+	// Two scans of the same bytes under the same cache key: the second is
+	// the one a cache would serve (newest wins), and the one we retract.
+	writeCacheTestEntry(t, dir, []scanstore.File{{Path: "a.go", Disposition: "audited", Gradable: true, KillRate: ptrF(0.5), CacheKey: "K", VerdictJSON: verdict}})
+	badVerdict, _ := marshalVerdict(advpool.Verdict{Survivors: 40, DevKillRate: 0.1})
+	writeCacheTestEntry(t, dir, []scanstore.File{{Path: "a.go", Disposition: "audited", Gradable: true, KillRate: ptrF(0.1), CacheKey: "K", VerdictJSON: badVerdict}})
+	entries, _ := auditpush.ReadLedgerDir(dir)
+	bad := entries[1].Hash
+
+	if hit, ok := newLedgerCache(dir, io.Discard).Get("acme", "K"); !ok || hit.Verdict.Survivors != 40 {
+		t.Fatalf("precondition: the cache must serve the newest entry (40 survivors), got %+v ok=%v", hit.Verdict, ok)
+	}
+
+	var out, errb bytes.Buffer
+	if code := runLedger([]string{"retract", dir, bad[:16]}, &out, &errb); code != 2 {
+		t.Fatalf("a retraction without --reason must be a usage error, got %d", code)
+	}
+	if code := runLedger([]string{"retract", dir, bad[:16], "--reason", "the suite was broken: 40 survivors on a file whose tests did not import"}, &out, &errb); code != 0 {
+		t.Fatalf("retract: exit %d stderr=%s", code, errb.String())
+	}
+	if !strings.Contains(out.String(), "no longer the record") {
+		t.Errorf("retract said: %q", out.String())
+	}
+
+	// The cache serves the earlier, unretracted verdict again.
+	if hit, ok := newLedgerCache(dir, io.Discard).Get("acme", "K"); !ok || hit.Verdict.Survivors != 4 {
+		t.Errorf("after the retraction the cache must serve the earlier entry (4 survivors), got %+v ok=%v", hit.Verdict, ok)
+	}
+	// The prior sees one scan's mutants' worth of entries — here none, but
+	// the loader must not error on a retraction entry.
+	if _, err := prior.Load(dir); err != nil {
+		t.Errorf("prior.Load over a ledger with a retraction: %v", err)
+	}
+
+	// scans list marks it; show says so; the retraction's own position is
+	// named for what it is.
+	out.Reset()
+	if code := runScans([]string{"list", "--ledger", dir}, openScanStore, &out, &errb); code != 0 {
+		t.Fatalf("list: %d %s", code, errb.String())
+	}
+	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
+	if len(lines) != 3 || !strings.Contains(lines[1], "RETRACTED: the suite was broken") || strings.Contains(lines[2], "RETRACTED") {
+		t.Errorf("list must mark exactly the retracted scan:\n%s", out.String())
+	}
+	out.Reset()
+	if code := runScans([]string{"show", "2", "--ledger", dir}, openScanStore, &out, &errb); code != 0 || !strings.HasPrefix(out.String(), "RETRACTED — the suite was broken") {
+		t.Errorf("show 2: exit %d\n%s", code, out.String())
+	}
+	out.Reset()
+	if code := runScans([]string{"show", "3", "--ledger", dir}, openScanStore, &out, &errb); code != 0 || !strings.Contains(out.String(), "entry 3 is a retraction of entry "+bad[:12]) {
+		t.Errorf("show 3 (the retraction): exit %d\n%s", code, out.String())
+	}
+
+	// The chain is longer and intact, and says what happened.
+	out.Reset()
+	if code := runLedger([]string{"verify", dir}, &out, &errb); code != 0 || !strings.Contains(out.String(), "3 entries, chain intact") || !strings.Contains(out.String(), "retracts "+bad[:12]) {
+		t.Errorf("verify after retraction: exit %d\n%s%s", code, out.String(), errb.String())
+	}
+
+	// Checkpoint: one entry left, the verifier says where the three went,
+	// and the next scan links to it.
+	out.Reset()
+	if code := runLedger([]string{"checkpoint", dir}, &out, &errb); code != 0 || !strings.Contains(out.String(), "3 earlier entries pruned") {
+		t.Fatalf("checkpoint: exit %d\n%s%s", code, out.String(), errb.String())
+	}
+	writeCacheTestEntry(t, dir, []scanstore.File{{Path: "b.go", Disposition: "audited", Gradable: true, CacheKey: "K2", VerdictJSON: verdict}})
+	out.Reset()
+	if code := runLedger([]string{"verify", dir}, &out, &errb); code != 0 || !strings.Contains(out.String(), "2 entries, chain intact") || !strings.Contains(out.String(), "chain begins at a checkpoint: 3 earlier entries") {
+		t.Errorf("verify after checkpoint: exit %d\n%s%s", code, out.String(), errb.String())
+	}
+	out.Reset()
+	if code := runScans([]string{"list", "--ledger", dir}, openScanStore, &out, &errb); code != 0 || strings.Count(strings.TrimSpace(out.String()), "\n") != 1 || !strings.HasPrefix(strings.Split(out.String(), "\n")[1], "2 ") {
+		t.Errorf("list after checkpoint must show the one new scan, at chain position 2:\n%s", out.String())
+	}
+	if _, ok := newLedgerCache(dir, io.Discard).Get("acme", "K"); ok {
+		t.Error("a pruned entry's verdict was served — the checkpoint holds no rows")
 	}
 }

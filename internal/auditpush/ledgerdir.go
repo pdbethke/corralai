@@ -72,6 +72,14 @@ func IsLedgerDir(target string) bool {
 // every reader: a chain still orders them; only a signature says who.
 type LedgerEntry struct {
 	Format string `json:"format"`
+	// Kind is what the entry IS: "" (KindScan) for a run's own record —
+	// every entry ever written before kinds existed, so the field is
+	// omitted and their hashes stand — KindRetract for a judgment about an
+	// earlier entry, KindCheckpoint for a genesis that stands in for
+	// entries pruned before it. A reader that does not know a kind treats
+	// the entry as opaque: it is still in the chain, still hashed, still
+	// signed; it just is not a scan.
+	Kind string `json:"kind,omitempty"`
 	// Pushed is when the entry was PLACED in this directory (see
 	// AppendLedgerEntry), which is what orders the files; the run's own
 	// time is Bundle.Scan.StartedAt.
@@ -79,11 +87,45 @@ type LedgerEntry struct {
 	ScanUID string    `json:"scan_uid"`
 	Prev    string    `json:"prev,omitempty"`
 	Bundle  Bundle    `json:"bundle"`
+	// Retracts (KindRetract) is the Hash of the entry this one retracts,
+	// and Reason says why, in the retractor's words. The retracted entry
+	// STAYS — a bad run is still a fact — and every reader of the record
+	// (the view, the prior, the verdict cache, `scans`) skips it from then
+	// on. Deleting it instead would break the next entry's link, which is
+	// the chain doing its job.
+	Retracts string `json:"retracts,omitempty"`
+	Reason   string `json:"reason,omitempty"`
+	// Checkpoint (KindCheckpoint) stands where pruned history was: the
+	// hash of the head it replaced and how many entries, through when.
+	// A checkpoint is always a genesis (Prev == ""), and the verifier says
+	// so — "chain begins at a checkpoint; N earlier entries not present"
+	// — rather than pretending the chain was always this short.
+	Checkpoint *Checkpoint `json:"checkpoint,omitempty"`
 	// Hash and Signature are computed over everything above.
 	Hash      string `json:"hash,omitempty"`
 	KeyID     string `json:"keyid,omitempty"`
 	Signature string `json:"signature,omitempty"` // hex Ed25519 over Hash's raw bytes
 }
+
+// The entry kinds. KindScan is the empty string on purpose: it is what
+// every entry written before kinds existed carries, and their hashes must
+// not change.
+const (
+	KindScan       = ""
+	KindRetract    = "retract"
+	KindCheckpoint = "checkpoint"
+)
+
+// Checkpoint is what a KindCheckpoint entry carries about the history it
+// replaced.
+type Checkpoint struct {
+	Head    string    `json:"head"`    // the Hash of the last pruned entry
+	Entries int       `json:"entries"` // how many entries were pruned
+	Through time.Time `json:"through"` // the Pushed time of the last pruned entry
+}
+
+// IsScan reports whether the entry is a run's own record.
+func (e LedgerEntry) IsScan() bool { return e.Kind == KindScan }
 
 // ledgerFile is the historical name; kept as the alias readers use.
 type ledgerFile = LedgerEntry
@@ -143,9 +185,8 @@ func writeLedgerFile(dir string, b Bundle, signer LedgerSigner) (Counts, error) 
 // the verb the retry loop (fetch → append → push) runs. Returns the file's
 // name.
 func AppendLedgerEntry(dir string, e LedgerEntry, signer LedgerSigner) (string, error) {
-	scans := filepath.Join(dir, ScansSubdir)
-	if err := os.MkdirAll(scans, 0o750); err != nil {
-		return "", fmt.Errorf("auditpush: ledger dir: %w", err)
+	if e.Kind == KindCheckpoint {
+		return "", fmt.Errorf("auditpush: a checkpoint is a genesis and cannot be appended to a chain — see WriteCheckpoint")
 	}
 	// The link: the newest entry's hash. Read, not remembered — the
 	// directory is the state, and another writer may have appended.
@@ -154,6 +195,17 @@ func AppendLedgerEntry(dir string, e LedgerEntry, signer LedgerSigner) (string, 
 		return "", err
 	} else if n := len(existing); n > 0 {
 		prev = existing[n-1].Hash
+	}
+	return placeEntry(dir, e, prev, signer)
+}
+
+// placeEntry hashes, signs and writes e linked to prev. It is the one
+// writer of entry files: AppendLedgerEntry links to the head, and
+// WriteCheckpoint places a genesis.
+func placeEntry(dir string, e LedgerEntry, prev string, signer LedgerSigner) (string, error) {
+	scans := filepath.Join(dir, ScansSubdir)
+	if err := os.MkdirAll(scans, 0o750); err != nil {
+		return "", fmt.Errorf("auditpush: ledger dir: %w", err)
 	}
 	e.Format = LedgerFileFormat
 	e.Prev = prev
@@ -178,19 +230,32 @@ func AppendLedgerEntry(dir string, e LedgerEntry, signer LedgerSigner) (string, 
 		}
 		e.KeyID, e.Signature = keyID, hex.EncodeToString(sig)
 	}
-	b, now, uid := e.Bundle, e.Pushed, e.ScanUID
-	commit := b.Scan.Commit
-	if len(commit) > 12 {
-		commit = commit[:12]
+	// The file name: the placement time, then what the entry is about — a
+	// scan's commit and uid, a retraction's target, a checkpoint's replaced
+	// head — so a directory listing reads as the chain does.
+	middle, tail := "", ""
+	switch e.Kind {
+	case KindRetract:
+		middle, tail = "retract", e.Retracts
+	case KindCheckpoint:
+		middle, tail = "checkpoint", e.Checkpoint.Head
+	default:
+		middle, tail = e.Bundle.Scan.Commit, e.ScanUID
+		if middle == "" {
+			middle = "nocommit"
+		}
 	}
-	if commit == "" {
-		commit = "nocommit"
+	if len(middle) > 12 {
+		middle = middle[:12]
+	}
+	if len(tail) > 12 {
+		tail = tail[:12]
 	}
 	// Gzipped: an entry with its events grain is ~550 KB of text and ~21 KB
 	// compressed (measured on a psf/requests scan, 26×), and DuckDB's
 	// read_json_auto reads .json.gz natively, so the branch pays for the
 	// record and not for the whitespace. Still just text: `zcat` it.
-	name := fmt.Sprintf("%s-%s-%s.json.gz", now.Format("20060102T150405Z"), commit, uid[:12])
+	name := fmt.Sprintf("%s-%s-%s.json.gz", e.Pushed.Format("20060102T150405Z"), middle, tail)
 	js, err := json.MarshalIndent(e, "", " ")
 	if err != nil {
 		return "", err
@@ -248,6 +313,10 @@ type ChainCheck struct {
 	KeyID   string
 	Problem string // "" when nothing is wrong
 	Genesis bool
+	// Kind is the entry's kind; Note says what a retraction or checkpoint
+	// entry means for the chain, in words, when nothing is wrong with it.
+	Kind string
+	Note string
 }
 
 // VerifyLedgerDir walks the chain: every entry's hash against its bytes,
@@ -262,8 +331,9 @@ func VerifyLedgerDir(dir string, pub ed25519.PublicKey) ([]ChainCheck, error) {
 	names, _ := ledgerFileNames(dir)
 	var out []ChainCheck
 	prevHash := ""
+	seen := map[string]bool{}
 	for i, e := range entries {
-		c := ChainCheck{ScanUID: e.ScanUID, Commit: e.Bundle.Scan.Commit, KeyID: e.KeyID, Genesis: i == 0}
+		c := ChainCheck{ScanUID: e.ScanUID, Commit: e.Bundle.Scan.Commit, KeyID: e.KeyID, Genesis: i == 0, Kind: e.Kind}
 		if i < len(names) {
 			c.File = names[i]
 		}
@@ -283,11 +353,121 @@ func VerifyLedgerDir(dir string, pub ed25519.PublicKey) ([]ChainCheck, error) {
 			c.Problem = fmt.Sprintf("prev %.12s does not name the previous entry (%.12s) — an entry was removed, reordered or inserted", e.Prev, prevHash)
 		case c.Signed && pub != nil && !c.SigOK:
 			c.Problem = "signature does not verify under the given key"
+		case e.Kind == KindCheckpoint && i != 0:
+			c.Problem = fmt.Sprintf("a checkpoint at position %d — a checkpoint is a genesis and stands only at the start of a chain", i+1)
+		case e.Kind == KindCheckpoint && e.Checkpoint == nil:
+			c.Problem = "a checkpoint entry that names no replaced head"
+		case e.Kind == KindCheckpoint:
+			c.Note = fmt.Sprintf("chain begins at a checkpoint: %d earlier entries (through %s, head %.12s) are not present", e.Checkpoint.Entries, e.Checkpoint.Through.UTC().Format("2006-01-02"), e.Checkpoint.Head)
+		case e.Kind == KindRetract && !seen[e.Retracts]:
+			c.Problem = fmt.Sprintf("retracts %.12s, which is not an earlier entry of this chain", e.Retracts)
+		case e.Kind == KindRetract:
+			c.Note = fmt.Sprintf("retracts %.12s: %s", e.Retracts, e.Reason)
 		}
 		out = append(out, c)
 		prevHash = e.Hash
+		seen[e.Hash] = true
 	}
 	return out, nil
+}
+
+// WriteRetraction appends a KindRetract entry naming target (an entry's
+// full Hash, or an unambiguous prefix) with reason. The target must be an
+// entry of this chain: a retraction of something the ledger never held is
+// a claim about nothing.
+func WriteRetraction(dir, target, reason string, signer LedgerSigner) (string, error) {
+	target, reason = strings.TrimSpace(target), strings.TrimSpace(reason)
+	if reason == "" {
+		return "", fmt.Errorf("auditpush: a retraction needs a reason")
+	}
+	entries, err := ReadLedgerDir(dir)
+	if err != nil {
+		return "", err
+	}
+	var hash string
+	for _, e := range entries {
+		if e.Hash == target || (len(target) >= 12 && strings.HasPrefix(e.Hash, target)) {
+			if hash != "" {
+				return "", fmt.Errorf("auditpush: %q names more than one entry", target)
+			}
+			hash = e.Hash
+		}
+	}
+	if hash == "" {
+		return "", fmt.Errorf("auditpush: no entry %q in %s", target, dir)
+	}
+	for _, e := range entries {
+		if e.Kind == KindRetract && e.Retracts == hash {
+			return "", fmt.Errorf("auditpush: %.12s is already retracted", hash)
+		}
+	}
+	return AppendLedgerEntry(dir, LedgerEntry{Kind: KindRetract, Retracts: hash, Reason: reason}, signer)
+}
+
+// WriteCheckpoint replaces every entry in dir with one KindCheckpoint
+// genesis that names the head it stood in for. The pruned files are
+// DELETED — that is the point of a checkpoint — after the checkpoint is
+// safely placed, so a failure midway leaves a chain the verifier reports
+// (a checkpoint not at position 1), never an empty directory. Returns the
+// checkpoint's file name and how many entries were pruned.
+func WriteCheckpoint(dir string, signer LedgerSigner) (string, int, error) {
+	entries, err := ReadLedgerDir(dir)
+	if err != nil {
+		return "", 0, err
+	}
+	if len(entries) == 0 {
+		return "", 0, fmt.Errorf("auditpush: %s has no entries to checkpoint", dir)
+	}
+	head := entries[len(entries)-1]
+	names, err := ledgerFileNames(dir)
+	if err != nil {
+		return "", 0, err
+	}
+	cp := LedgerEntry{Kind: KindCheckpoint, Checkpoint: &Checkpoint{Head: head.Hash, Entries: len(entries), Through: head.Pushed}}
+	name, err := placeEntry(dir, cp, "", signer)
+	if err != nil {
+		return "", 0, err
+	}
+	for _, n := range names {
+		if n == name {
+			continue
+		}
+		if err := os.Remove(filepath.Join(dir, ScansSubdir, n)); err != nil {
+			return name, 0, fmt.Errorf("auditpush: pruning %s: %w (the checkpoint is placed; the chain will verify as broken until the pruned entries are gone)", n, err)
+		}
+	}
+	return name, len(entries), nil
+}
+
+// Retracted returns the hashes of every entry a KindRetract entry in
+// entries names.
+func Retracted(entries []LedgerEntry) map[string]LedgerEntry {
+	out := map[string]LedgerEntry{}
+	for _, e := range entries {
+		if e.Kind == KindRetract {
+			out[e.Retracts] = e
+		}
+	}
+	return out
+}
+
+// ScanEntries is the record as a reader should see it: the scan entries,
+// in chain order, with retracted ones left out. Every reader of the record
+// — the view, the prior, the verdict cache — goes through this, so a
+// retraction takes effect everywhere at once.
+func ScanEntries(entries []LedgerEntry) []LedgerEntry {
+	retracted := Retracted(entries)
+	var out []LedgerEntry
+	for _, e := range entries {
+		if !e.IsScan() {
+			continue
+		}
+		if _, gone := retracted[e.Hash]; gone {
+			continue
+		}
+		out = append(out, e)
+	}
+	return out
 }
 
 // ledgerFileNames lists entry files in push order (the same order
@@ -395,6 +575,9 @@ func LoadDir(dir string) (*sql.DB, error) {
 		db.Close()
 		return nil, err
 	}
+	// The view is the record as it stands: scan entries, retracted ones
+	// left out (ScanEntries). A retraction entry itself has no rows.
+	files = ScanEntries(files)
 	for _, f := range files {
 		if _, err := insertBundle(db, f.Bundle, f.Pushed, f.ScanUID); err != nil {
 			db.Close()

@@ -50,12 +50,13 @@ func newLedgerCache(dir string, stderr io.Writer) *ledgerCache {
 	if dir == "" {
 		return c
 	}
-	entries, err := auditpush.ReadLedgerDir(dir)
+	all, err := auditpush.ReadLedgerDir(dir)
 	if err != nil {
 		fmt.Fprintf(stderr, "corral certify --repo: verdict cache: %s is unreadable, so no verdict will be reused: %v\n", dir, err)
 		return c
 	}
-	for _, e := range entries {
+	// A retracted entry's verdicts are never served (auditpush.ScanEntries).
+	for _, e := range auditpush.ScanEntries(all) {
 		for _, r := range e.Bundle.Files {
 			if r.CacheKey == "" || r.VerdictJSON == "" {
 				continue

@@ -262,6 +262,12 @@ Usage:
                                   re-link an entry to <dir>'s current head (re-hash, re-sign, place)
                                   — the verb a fetch → append → push loop runs, since a chain is
                                   one writer at a time and a git rebase moves the commit, not the link
+  corral ledger retract <dir> <hash> --reason "…"
+                                  append an entry retracting an earlier one: the retracted scan stays in
+                                  the chain and stops being the record (the view, the prior, the verdict
+                                  cache and scans skip it). Deleting it would break the next link
+  corral ledger checkpoint <dir>  prune: one genesis naming the head it replaced (hash, count, date)
+                                  stands in for everything before it; the verifier says the chain begins there
   corral ledger verify <dir>      the same walk as corral verify --ledger
   corral verify --attest <path> [flags]
                                   the checker for a certify --repo --attest statement: verifies

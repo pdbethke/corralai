@@ -136,6 +136,12 @@ type Scan struct {
 	// statement is.
 	RekorLogIndex *int64
 	RekorUUID     string
+	// Retracted is set on a scan a later ledger entry retracted, with the
+	// retractor's reason. The scan is still listed — it happened — and is
+	// no longer the record: the view, the prior and the verdict cache skip
+	// it. A reader must be able to see both facts at once.
+	Retracted       bool
+	RetractedReason string
 }
 
 // File is one row per file per scan: what corral decided about it, and, for

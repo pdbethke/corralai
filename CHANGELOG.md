@@ -9,6 +9,34 @@ still move between minor versions.
 Entries describe what changed for someone *using* the tool. For the full commit
 history of any release, `git log v0.3.4..v0.3.5`.
 
+## [Unreleased] — toward 1.0.0-rc.2
+
+- **A ledger entry has a kind, and two new kinds: retract and checkpoint.**
+  `corral ledger retract <dir> <hash> --reason "…"` appends an entry that
+  retracts an earlier one: the retracted scan stays in the chain (deleting
+  it would break the next link, which is the chain doing its job) and stops
+  being the record — the DuckDB view, `--prior`, the verdict cache and
+  `corral scans` all skip it, `scans list` marks it `RETRACTED: <reason>`,
+  and `verify --ledger` names the retraction. `corral ledger checkpoint
+  <dir>` prunes: one genesis entry naming the replaced head, entry count
+  and date stands in for everything before it, and the verifier reports
+  "chain begins at a checkpoint; N earlier entries not present" rather
+  than a chain that was always that short. A checkpoint anywhere but first,
+  or a retraction of an entry the chain never held, is a problem by name.
+  Scan entries carry no kind field, so every existing ledger hashes exactly
+  as it did.
+- **A harness file outside any test root is test support.** A repo-root
+  `conftest.py`, a `src/jest.setup.js`, a `spec_helper.rb` beside the
+  code: every file a language plugin names as something its runner reads
+  before any test is now excluded as `test-support`, not reported as a
+  source file with no paired test — and can no longer be promoted to an
+  audit subject by coverage evidence.
+- **corral on an internal forge.** `docs/corral/internal-forge.md` (and the
+  site page beside the Action's): the same audit and the same ledger
+  branch on GitLab, Gitea, Bitbucket or Gerrit, with what stays inside the
+  perimeter and what does not stated exactly, and where the chain's trust
+  sits without keyless attestation.
+
 ## [v1.0.0-rc.1] — 2026-09-06
 
 The release candidate. The record is a signed, hash-linked ledger in the

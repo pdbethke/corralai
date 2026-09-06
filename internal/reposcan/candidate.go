@@ -434,6 +434,15 @@ func EnumerateWithTests(root string, tests *TestMap) ([]Candidate, []Exclusion, 
 			excl = append(excl, Exclusion{Path: rel, Reason: ReasonTestSupport})
 			continue
 		}
+		// A harness file outside any test root — a repo-root conftest.py —
+		// is test support too: pytest reads it before any test, and it is
+		// already in the grading surface by name (job.go). It used to be
+		// reported as a source file with no paired test, which is a
+		// different claim about it.
+		if lang.IsHarnessFile(rel) {
+			excl = append(excl, Exclusion{Path: rel, Reason: ReasonTestSupport})
+			continue
+		}
 		// Walk the plugin's ordered candidates and pair with the first one
 		// that actually exists in this repo. The list is ordered most
 		// specific first (see each plugin's TestPaths), so a sibling or

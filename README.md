@@ -21,7 +21,7 @@ package with a five-clause password rule and a test that checks only two of
 them, then audits it with the real `certify --local`:
 
 ```bash
-go install github.com/pdbethke/corralai/cmd/corral@latest
+go install github.com/pdbethke/corralai/cmd/corral@v1.0.0-rc.1   # @latest still resolves to 0.8.x: a release candidate is a pre-release to Go
 export ANTHROPIC_API_KEY=sk-ant-...     # or OPENAI_/GEMINI_/OPENROUTER_API_KEY
 
 corral demo --writer-model <model> --mutant-model <model> --critic-model <model>

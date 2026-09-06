@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -115,16 +116,43 @@ func TestUIRefusesToCallANonLoopbackAddressLocal(t *testing.T) {
 // the BRAIN's usage until "ui" was added to that list, with no other symptom.
 // That is the two-products problem in miniature: the default path for anything
 // unrecognised is the other product.
-func TestEverySubcommandIsDispatchable(t *testing.T) {
-	for _, name := range []string{
-		"certify", "secret", "control", "scorecard", "criticscore", "matrix",
-		"models", "scans", "seal", "ui", "eval", "mcp", "doctor", "demo", "verify",
-	} {
-		if got := subcommand([]string{name}); got != name {
-			t.Errorf("subcommand(%q) = %q — the name is not in the allowlist, so corral would boot the coordination server instead of running it", name, got)
+func TestDocsEveryDocumentedVerbIsDispatched(t *testing.T) {
+	// Derived, not enumerated: the verbs are read from the usage text
+	// (every "  corral <verb>" line) and the dispatch's case labels are read
+	// from main.go's own source. A verb documented but not dispatched — the
+	// shape of `corral ledger`, which was documented, tested through
+	// runLedger, and in the shipped binary fell through to the server —
+	// fails here by name; so does a case label the usage does not mention.
+	dispatched := map[string]bool{}
+	for _, n := range dispatchableSubcommands(t) {
+		dispatched[n] = true
+	}
+	documented := map[string]bool{}
+	for _, m := range regexp.MustCompile(`(?m)^  corral ([a-z][a-z-]*)\b`).FindAllStringSubmatch(usageText(), -1) {
+		documented[m[1]] = true
+	}
+	if len(dispatched) < 10 || len(documented) < 10 {
+		t.Fatalf("read %d dispatched and %d documented verbs — the parse is not covering the surface", len(dispatched), len(documented))
+	}
+	for v := range documented {
+		if !dispatched[v] {
+			t.Errorf("`corral %s` is documented in the usage text but has no case in main's dispatch — the shipped binary would refuse it (or, before the pointer, start the server)", v)
 		}
 	}
-	if got := subcommand([]string{"definitely-not-a-subcommand"}); got != "" {
-		t.Errorf("subcommand of an unknown name = %q, want \"\"", got)
+	for v := range dispatched {
+		if !documented[v] {
+			t.Errorf("main dispatches `corral %s` but the usage text never mentions it", v)
+		}
+	}
+	// And the parser itself: subcommand hands back any bare word, never a
+	// flag, and never invents one.
+	if got := subcommand([]string{"ledger", "verify", "x"}); got != "ledger" {
+		t.Errorf("subcommand = %q, want ledger", got)
+	}
+	if got := subcommand([]string{"-h"}); got != "" {
+		t.Errorf("subcommand of a flag = %q, want \"\"", got)
+	}
+	if got := subcommand(nil); got != "" {
+		t.Errorf("subcommand of nothing = %q, want \"\"", got)
 	}
 }

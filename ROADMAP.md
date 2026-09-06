@@ -164,7 +164,7 @@ Go binary.**
   a whole-repo scan of this repo's 205 candidates would be roughly 37 hours, which
   is why `top` exists.
 
-  `action.yml` wraps this as `pdbethke/corralai@main` (tags are cut — `@v1.0.0-rc.2` is current; pin a commit SHA for immutability against a re-tag); it installs `corral` itself via
+  `action.yml` wraps this as `pdbethke/corralai@main` (tags are cut — `@v1.0.0-rc.3` is current; pin a commit SHA for immutability against a re-tag); it installs `corral` itself via
   `go install`, using whatever Go toolchain the runner already has (never
   `actions/setup-go`, which would swap out the toolchain the audited project's own
   tests run under). Check out with `fetch-depth: 0` (required — the diff needs the merge

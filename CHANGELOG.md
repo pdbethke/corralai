@@ -9,10 +9,12 @@ still move between minor versions.
 Entries describe what changed for someone *using* the tool. For the full commit
 history of any release, `git log v0.3.4..v0.3.5`.
 
-## [Unreleased] — toward 1.0.0-rc.1
+## [v1.0.0-rc.1] — 2026-09-06
 
-The exam is sized to the file, fitted to the clock, and disclosed with its
-confidence; a rate too loose to be a grade no longer certifies.
+The release candidate. The record is a signed, hash-linked ledger in the
+audited repository; the exam is sized to the file, fitted to the clock, and
+disclosed with its confidence; a rate too loose to be a grade no longer
+certifies; and five rounds of strangers tried to break it first (#224–#236).
 
 - **BREAKING — a verdict cannot be CERTIFIED on an exam too small to
   certify.** Beside every kill rate corral now prints its 95% interval

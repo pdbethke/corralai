@@ -9,7 +9,10 @@ still move between minor versions.
 Entries describe what changed for someone *using* the tool. For the full commit
 history of any release, `git log v0.3.4..v0.3.5`.
 
-## [Unreleased] — toward 1.0.0-rc.2
+## [v1.0.0-rc.2] — 2026-09-06
+
+The record can be taken back without being rewritten, and the recipe runs
+on any forge.
 
 - **A ledger entry has a kind, and two new kinds: retract and checkpoint.**
   `corral ledger retract <dir> <hash> --reason "…"` appends an entry that

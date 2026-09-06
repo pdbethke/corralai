@@ -486,7 +486,7 @@ those seats work in and the **fences** are the security boundaries.
 
 ## In CI — the GitHub Action
 
-**No brain, no server — the GitHub Action.** `pdbethke/corralai@v0.8.3` (pin the
+**No brain, no server — the GitHub Action.** `pdbethke/corralai@v1.0.0-rc.1` (pin the
 tag, or a reviewed SHA — `@main` floats) runs `corral
 certify --repo` straight in your own CI job, on the checkout that's already
 there: no jail, no brain, no separate infra. It mutates the runner's checkout

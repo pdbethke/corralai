@@ -9,6 +9,20 @@ still move between minor versions.
 Entries describe what changed for someone *using* the tool. For the full commit
 history of any release, `git log v0.3.4..v0.3.5`.
 
+## [Unreleased] — toward 1.0.0-rc.3
+
+- **`corral ledger …` is dispatched.** In rc.1 and rc.2 the ledger verbs
+  were documented and tested through their own function, and the shipped
+  binary never reached them: `subcommand()` was a hand-maintained
+  allowlist that `ledger` was never added to, so `corral ledger append`
+  fell through to starting the coordination server (rc.1) or to the
+  no-subcommand pointer (rc.2). The allowlist is gone — main's own switch
+  decides, and an unknown verb is refused by name — and the gate now
+  derives every documented verb from the usage text and every dispatched
+  one from main.go's source and holds the two sets equal. Found by running
+  the installed rc.2, not by any test; the sixth time an enumeration
+  stood where a property should have.
+
 ## [v1.0.0-rc.2] — 2026-09-06
 
 The record can be taken back without being rewritten, and the recipe runs

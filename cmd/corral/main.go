@@ -111,18 +111,18 @@ func env(k, def string) string {
 // by args[0] alone sidesteps that: only the subcommand name itself is
 // examined, never anything after it.
 func subcommand(args []string) string {
-	if len(args) == 0 {
+	if len(args) == 0 || strings.HasPrefix(args[0], "-") {
 		return ""
 	}
-	switch args[0] {
-	// A HAND-MAINTAINED ALLOWLIST, and the failure mode is quiet: a name
-	// missing here is not an error, it falls through to booting the
-	// coordination server. `corral ui -h` printed the brain's usage until "ui"
-	// was added. Keep it in step with the switch below — TestEverySubcommandIsDispatchable.
-	case "certify", "secret", "control", "scorecard", "criticscore", "matrix", "models", "scans", "seal", "ui", "eval", "mcp", "doctor", "demo", "verify":
-		return args[0]
-	}
-	return ""
+	// The bare name, whatever it is: the switch in main decides what is
+	// known, and an unknown name is refused there by name. This used to be
+	// a second, hand-maintained allowlist of the same names — and the
+	// failure mode of a name missing from it was quiet: `corral ledger
+	// append` fell through to booting the coordination server, and the
+	// gate that was meant to catch that enumerated the same list.
+	// TestEveryDocumentedVerbIsDispatched derives the names from the usage
+	// text and the switch instead.
+	return args[0]
 }
 
 // showVersion reports whether the args ask for the version.
@@ -569,6 +569,10 @@ func main() {
 	if showHelp(os.Args[1:]) {
 		fmt.Print(usageText())
 		return
+	}
+	if name := subcommand(os.Args[1:]); name != "" {
+		fmt.Fprintf(os.Stderr, "corral: unknown subcommand %q — `corral -h` lists the audit verbs\n", name)
+		os.Exit(2)
 	}
 	// The bare binary used to BE the brain. It is the audit CLI; the daemon
 	// is corral-wrangler's, and a unit that still invokes this argv is told

@@ -34,10 +34,17 @@ func OutcomeOf(f Finding, adj *Adjudicated) Outcome {
 			return Outcome{Known: true, Held: false, By: "adjudication by " + adj.By}
 		}
 	}
-	// Execution: only a claim that was declared REPRODUCED was ever put
-	// to the tree. Its recorded tier is the answer — REPRODUCED means the
-	// script held and no reproduced refutation took it down.
-	if f.Declared == TierReproduced {
+	// Execution. A refutation that REPRODUCED — its script ran and exited
+	// 0 — is an outcome for a finding of ANY tier: the claim fell. (It was
+	// run and recorded for every tier but only consulted for REPRODUCED
+	// claims: review 61dc210a39fd#R2.)
+	if x := f.Refutation; x != nil && x.Verdict == VerdictRefuted && x.Tier == TierReproduced && x.ExitCode != nil && *x.ExitCode == 0 {
+		return Outcome{Known: true, Held: false, By: "execution (refutation by " + x.Model + ")"}
+	}
+	// A claim declared REPRODUCED was put to the tree — unless the harness
+	// could not run it, in which case nothing was, and there is no outcome
+	// (review 61dc210a39fd#R1).
+	if f.Declared == TierReproduced && f.Unrun == "" {
 		if f.Tier == TierReproduced {
 			return Outcome{Known: true, Held: true, By: "execution"}
 		}

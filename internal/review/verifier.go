@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -24,6 +25,9 @@ type Refutation struct {
 	Stdout   string `json:"stdout,omitempty"`
 	ExitCode *int   `json:"exit_code,omitempty"`
 	Demoted  string `json:"demoted,omitempty"`
+	// Unrun is why the harness could not run the script (see
+	// Finding.Unrun): a refutation nobody executed moves nothing.
+	Unrun string `json:"unrun,omitempty"`
 }
 
 // The verifier's two verdicts.
@@ -104,9 +108,15 @@ type verifierReply struct {
 // refutation the run can check); an unknown tier on a REFUTED verdict is
 // CODE-READ.
 func ParseRefutations(text, model string) (opinion string, byID map[string]Refutation, err error) {
-	js := extractJSON(text)
+	js := extractJSON(text, "refutations", "opinion")
 	if js == "" {
-		return "", nil, errors.New("review: the verifier's reply holds no JSON object")
+		if extractJSON(text) == "" {
+			return "", nil, errors.New("review: the verifier's reply holds no JSON object")
+		}
+		// An object, but not the verifier's shape: no verdicts. The caller
+		// keeps the reply verbatim on the record, marked unverified — a
+		// stray literal in the prose must not be read as a verdict.
+		return "", map[string]Refutation{}, nil
 	}
 	var rp verifierReply
 	if uerr := json.Unmarshal([]byte(js), &rp); uerr != nil {
@@ -124,10 +134,31 @@ func ParseRefutations(text, model string) (opinion string, byID map[string]Refut
 		} else if tier != TierReproduced {
 			tier = TierCodeRead
 		}
-		byID[strings.TrimSpace(x.ID)] = Refutation{Model: model, Verdict: verdict, Argument: strings.TrimSpace(x.Argument),
+		id := canonicalFindingID(x.ID)
+		if _, dup := byID[id]; dup {
+			// The FIRST verdict on an id stands; a second is noted by
+			// Verify, never silently overwrites (review 61dc210a39fd#R7).
+			byID[id+dupMarker] = Refutation{}
+			continue
+		}
+		byID[id] = Refutation{Model: model, Verdict: verdict, Argument: strings.TrimSpace(x.Argument),
 			Declared: tier, Tier: tier, Script: strings.TrimSpace(x.Script)}
 	}
 	return strings.TrimSpace(rp.Opinion), byID, nil
+}
+
+// dupMarker suffixes an id in the refutations map to say the verifier
+// answered it twice; Verify turns it into a note.
+const dupMarker = "\x00dup"
+
+// canonicalFindingID reads a verifier's id the way the review names them:
+// "r1", " R1 ", "1" are all R1.
+func canonicalFindingID(s string) string {
+	s = strings.ToUpper(strings.TrimSpace(s))
+	if s != "" && strings.Trim(s, "0123456789") == "" {
+		s = "R" + s
+	}
+	return s
 }
 
 // Verify attaches the verifier's refutations to the findings and runs the
@@ -140,6 +171,25 @@ func ParseRefutations(text, model string) (opinion string, byID map[string]Refut
 // The human's adjudication, if any, still outranks all of it.
 func Verify(ctx context.Context, rep Reproducer, r *Review, model, opinion string, refs map[string]Refutation) {
 	r.VerifierModel, r.VerifierOpinion = model, opinion
+	// Verdicts on ids the review does not have, and duplicates, are said
+	// on the record rather than dropped.
+	known := map[string]bool{}
+	for _, f := range r.Findings {
+		known[f.ID] = true
+	}
+	var notes []string
+	for id := range refs {
+		switch {
+		case strings.HasSuffix(id, dupMarker):
+			notes = append(notes, "a second verdict on "+strings.TrimSuffix(id, dupMarker)+" (the first stands)")
+		case !known[id]:
+			notes = append(notes, "a verdict on "+id+", which is not a finding of this review")
+		}
+	}
+	if len(notes) > 0 {
+		sort.Strings(notes)
+		r.VerifierNote = strings.Join(notes, "; ")
+	}
 	for i := range r.Findings {
 		f := &r.Findings[i]
 		x, ok := refs[f.ID]
@@ -154,7 +204,8 @@ func Verify(ctx context.Context, rep Reproducer, r *Review, model, opinion strin
 				x.Stdout = tail(out, 4000)
 				switch {
 				case err != nil:
-					x.Tier, x.Demoted = TierCodeRead, "the script could not run: "+err.Error()
+					x.Tier, x.Unrun = TierCodeRead, err.Error()
+					x.Demoted = "not run (harness): " + err.Error()
 				default:
 					x.ExitCode = &code
 					if code != 0 {
@@ -164,9 +215,20 @@ func Verify(ctx context.Context, rep Reproducer, r *Review, model, opinion strin
 			}
 		}
 		f.Refutation = &x
-		if x.Verdict == VerdictRefuted && x.Tier == TierReproduced && f.Tier == TierReproduced {
-			f.Tier = TierCodeRead
-			f.Demoted = fmt.Sprintf("refuted by %s, reproduced: %s", model, x.Argument)
+		// A refutation that reproduced takes the finding down whatever its
+		// tier: a REPRODUCED claim to CODE-READ, and a CODE-READ or
+		// HYPOTHESIS claim keeps its tier and records that it fell (the
+		// outcome rule reads the refutation; see OutcomeOf).
+		if x.Verdict == VerdictRefuted && x.Tier == TierReproduced && x.ExitCode != nil && *x.ExitCode == 0 {
+			if f.Tier == TierReproduced {
+				f.Tier = TierCodeRead
+			}
+			why := fmt.Sprintf("refuted by %s, reproduced: %s", model, x.Argument)
+			if f.Demoted != "" {
+				// A reason already on the record stays; this one joins it.
+				why = f.Demoted + "; " + why
+			}
+			f.Demoted = why
 		}
 	}
 }

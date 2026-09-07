@@ -45,6 +45,19 @@ type Reviewed struct {
 	Adjudications map[string]*Adjudicated // by finding id
 }
 
+// findingUnder reports whether a finding of a review that covers scope
+// counts toward it: a finding that names a file counts where that file
+// is; one that names no file cannot be placed more finely than its
+// review, and counts wherever the review does.
+func findingUnder(f Finding, reviewScope, scope string) bool {
+	s := strings.Trim(scope, "/")
+	file := strings.Trim(strings.TrimSpace(f.File), "/")
+	if file == "" {
+		return covers(reviewScope, scope)
+	}
+	return s == "" || s == "." || file == s || strings.HasPrefix(file, s+"/")
+}
+
 // covers reports whether a review of reviewScope speaks for scope.
 func covers(reviewScope, scope string) bool {
 	rs, s := strings.Trim(reviewScope, "/"), strings.Trim(scope, "/")
@@ -71,6 +84,12 @@ func Plan(scopes map[string]int, reviews []Reviewed, changed func(scope, sinceCo
 				st.LastReviewed, st.LastCommit, st.LastScope = r.When, r.Commit, r.Scope
 			}
 			for _, f := range r.Findings {
+				// A finding speaks for the scope its FILE is under. A
+				// parent review's finding about another child used to
+				// count here (review 61dc210a39fd#R5).
+				if !findingUnder(f, r.Scope, scope) {
+					continue
+				}
 				o := OutcomeOf(f, r.Adjudications[f.ID])
 				switch {
 				case !o.Known:

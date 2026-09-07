@@ -444,7 +444,12 @@ func printReview(w io.Writer, r review.Review, adj map[string]auditpush.Adjudica
 			if f.ExitCode != nil {
 				fmt.Fprintf(w, "%s — exit %d, output:\n%s\n", f.ID, *f.ExitCode, indent(strings.TrimSpace(f.Stdout)))
 			}
-			if f.Demoted != "" {
+			switch {
+			case f.Unrun != "":
+				// The harness failed: no outcome, nobody graded — said as such,
+				// never as a demotion.
+				fmt.Fprintf(w, "%s — NOT RUN (harness): %s — no outcome; grades nobody\n", f.ID, f.Unrun)
+			case f.Demoted != "":
 				fmt.Fprintf(w, "%s — DEMOTED to %s: %s\n", f.ID, f.Tier, f.Demoted)
 			}
 			if a, ok := adj[f.ID]; ok {
@@ -474,10 +479,16 @@ func printReview(w io.Writer, r review.Review, adj map[string]auditpush.Adjudica
 				if x.ExitCode != nil {
 					fmt.Fprintf(w, "%s — refutation exit %d, output:\n%s\n", f.ID, *x.ExitCode, indent(strings.TrimSpace(x.Stdout)))
 				}
-				if x.Demoted != "" {
+				switch {
+				case x.Unrun != "":
+					fmt.Fprintf(w, "%s — refutation NOT RUN (harness): %s — moves nothing\n", f.ID, x.Unrun)
+				case x.Demoted != "":
 					fmt.Fprintf(w, "%s — refutation DEMOTED to %s: %s\n", f.ID, x.Tier, x.Demoted)
 				}
 			}
+		}
+		if r.VerifierNote != "" {
+			fmt.Fprintf(w, "\nverifier reply, not used: %s\n", r.VerifierNote)
 		}
 	}
 	fmt.Fprintln(w, "\nchecked and found sound:")

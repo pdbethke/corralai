@@ -53,6 +53,13 @@ type Finding struct {
 	Stdout   string `json:"stdout,omitempty"`
 	ExitCode *int   `json:"exit_code,omitempty"`
 	Demoted  string `json:"demoted,omitempty"`
+	// Unrun is why the HARNESS could not run the script — the worktree
+	// gone, sh missing, a timeout — as distinct from a script that ran and
+	// did not demonstrate the claim. A finding with Unrun set was never put
+	// to the tree: it has no outcome, and grades nobody (found by review
+	// 61dc210a39fd#R1: an infrastructure failure was being charged to the
+	// reviewer as a claim that fell "by execution").
+	Unrun string `json:"unrun,omitempty"`
 	// Refutation is the verifier seat's answer, when one ran (see
 	// verifier.go). A refutation that reproduced demotes this finding.
 	Refutation *Refutation `json:"refutation,omitempty"`
@@ -82,11 +89,15 @@ type Review struct {
 	Lang string `json:"lang,omitempty"`
 	// VerifierModel and VerifierOpinion are the third seat's, empty when no
 	// verifier ran. The decorrelation rule holds: never the reviewer's model.
-	VerifierModel   string    `json:"verifier_model,omitempty"`
-	VerifierOpinion string    `json:"verifier_opinion,omitempty"`
-	Substrate       string    `json:"substrate"`
-	StartedAt       time.Time `json:"started_at"`
-	Findings        []Finding `json:"findings"`
+	VerifierModel   string `json:"verifier_model,omitempty"`
+	VerifierOpinion string `json:"verifier_opinion,omitempty"`
+	// VerifierNote says what of the verifier's reply the run could not
+	// use: a verdict on an id the review does not have, a second verdict
+	// on one it does (the first stands). Never dropped silently.
+	VerifierNote string    `json:"verifier_note,omitempty"`
+	Substrate    string    `json:"substrate"`
+	StartedAt    time.Time `json:"started_at"`
+	Findings     []Finding `json:"findings"`
 	// Sound is what the reviewer looked at and could not break. Required:
 	// absence of findings in a subsystem nobody looked at is not evidence,
 	// and this is what makes the review's scope legible.
@@ -166,6 +177,9 @@ func LoadScope(root, scope string, maxBytes int) (Scope, error) {
 		scope = ""
 	}
 	base := filepath.Join(root, scope)
+	if err := insideRoot(root, base); err != nil {
+		return Scope{}, fmt.Errorf("review: scope %q: %w", scope, err)
+	}
 	st, err := os.Stat(base)
 	if err != nil {
 		return Scope{}, fmt.Errorf("review: scope %q: %w", scope, err)
@@ -258,7 +272,9 @@ func Reproduce(ctx context.Context, rep Reproducer, r *Review) {
 		out, code, err := rep.Run(ctx, f.Script)
 		f.Stdout = tail(out, 4000)
 		if err != nil {
-			f.Tier, f.Demoted = TierCodeRead, "the script could not run: "+err.Error()
+			// Not demonstrated — but not disproved either: nothing ran.
+			f.Tier, f.Unrun = TierCodeRead, err.Error()
+			f.Demoted = "not run (harness): " + err.Error()
 			continue
 		}
 		f.ExitCode = &code
@@ -293,9 +309,9 @@ type reply struct {
 // into findings with ids and declared tiers normalised. An unknown tier is
 // recorded as HYPOTHESIS: the reviewer asserted nothing the run can check.
 func Parse(text string) (opinion string, findings []Finding, sound []string, err error) {
-	js := extractJSON(text)
+	js := extractJSON(text, "opinion", "findings", "sound")
 	if js == "" {
-		return "", nil, nil, errors.New("review: the reviewer's reply holds no JSON object")
+		return "", nil, nil, errors.New("review: the reviewer's reply holds no review object (one with an opinion, findings or sound key)")
 	}
 	var rp reply
 	if uerr := json.Unmarshal([]byte(js), &rp); uerr != nil {
@@ -323,17 +339,23 @@ func Parse(text string) (opinion string, findings []Finding, sound []string, err
 // It used to take the first '{' in the text, which is wrong the moment the
 // model writes a brace in its prose before the payload — found by `corral
 // review` on this file, and the verifier could not refute it.
-func extractJSON(text string) string {
+// extractJSON finds the reply's object: a ```json fence first, else the
+// first balanced {...} that parses AND is the requested SHAPE — carries at
+// least one of the named keys. Any parseable object used to do, so a JSON
+// literal in the prose before the payload ({"tier":"REPRODUCED"}) was
+// taken as the review and the findings behind it silently dropped (review
+// 61dc210a39fd#R3).
+func extractJSON(text string, anyKey ...string) string {
 	if i := strings.Index(text, "```json"); i >= 0 {
 		rest := text[i+len("```json"):]
 		if j := strings.Index(rest, "```"); j >= 0 {
-			if c := strings.TrimSpace(rest[:j]); json.Valid([]byte(c)) && strings.HasPrefix(c, "{") {
+			if c := strings.TrimSpace(rest[:j]); hasShape(c, anyKey) {
 				return c
 			}
 		}
 	}
 	for start := strings.Index(text, "{"); start >= 0; {
-		if c := balancedFrom(text, start); c != "" && json.Valid([]byte(c)) {
+		if c := balancedFrom(text, start); c != "" && hasShape(c, anyKey) {
 			return c
 		}
 		next := strings.Index(text[start+1:], "{")
@@ -343,6 +365,51 @@ func extractJSON(text string) string {
 		start += 1 + next
 	}
 	return ""
+}
+
+// hasShape reports whether c is a JSON object carrying one of the keys
+// (any object when no keys are named).
+func hasShape(c string, anyKey []string) bool {
+	if !strings.HasPrefix(c, "{") {
+		return false
+	}
+	var m map[string]json.RawMessage
+	if json.Unmarshal([]byte(c), &m) != nil {
+		return false
+	}
+	if len(anyKey) == 0 {
+		return true
+	}
+	for _, k := range anyKey {
+		if _, ok := m[k]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+// insideRoot refuses a path that resolves outside root — a scope with ".."
+// or through a symlink read files outside the checkout and Brief shipped
+// their bytes to the provider (review 61dc210a39fd#R4). Symlinks are
+// resolved on both sides so the comparison is of real places.
+func insideRoot(root, path string) error {
+	realRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return fmt.Errorf("repository root: %w", err)
+	}
+	realPath, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return err
+		}
+		return fmt.Errorf("resolving: %w", err)
+	}
+	realRoot, _ = filepath.Abs(realRoot)
+	realPath, _ = filepath.Abs(realPath)
+	if realPath != realRoot && !strings.HasPrefix(realPath, realRoot+string(filepath.Separator)) {
+		return fmt.Errorf("outside the repository (%s) — a scope must be inside the checkout under review", realPath)
+	}
+	return nil
 }
 
 // balancedFrom returns the {...} run beginning at start, string-aware, or

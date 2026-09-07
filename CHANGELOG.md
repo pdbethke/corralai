@@ -9,7 +9,12 @@ still move between minor versions.
 Entries describe what changed for someone *using* the tool. For the full commit
 history of any release, `git log v0.3.4..v0.3.5`.
 
-## [Unreleased] — toward 1.0.0-rc.10
+## [v1.0.0-rc.10] — 2026-09-07
+
+Twenty rounds of the review loop on corral itself in one day — 57 claims,
+44 confirmed and fixed, the rest refuted on the record. The scorer proves
+every door it grades through; the statement carries what the record says;
+retraction reaches every reader; the Action runs the review.
 
 - **Seven doors of `cmd/corral` say what the record says.** Found by a Claude
   Code reviewer on the verbs (review `8377ae6320cc`, Codex verifying; all seven

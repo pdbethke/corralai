@@ -87,3 +87,37 @@ func TestOllamaBackendWrapsContextOverflow(t *testing.T) {
 		t.Errorf("the context-overflow hint did not survive the backend's error path: %v", err)
 	}
 }
+
+// TestAnthropicReportsAReplyThatWasAllThinking: a Claude 5 model can spend
+// the entire max_tokens budget in a thinking block and return no text with
+// stop_reason max_tokens. That used to come back as an empty message and
+// no error — the seat "said nothing" — which is how a sonnet reviewer sat
+// a whole review in silence. It is an error, by name.
+func TestAnthropicReportsAReplyThatWasAllThinking(t *testing.T) {
+	var sentMax float64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		sentMax, _ = body["max_tokens"].(float64)
+		_, _ = w.Write([]byte(`{"stop_reason":"max_tokens","content":[{"type":"thinking","thinking":""}],"usage":{"input_tokens":12000,"output_tokens":4096}}`))
+	}))
+	defer srv.Close()
+	b := &anthropicBackend{base: srv.URL, key: "k", model: "claude-sonnet-5"}
+	_, err := b.Chat([]Message{{Role: "user", Content: "review this"}}, nil)
+	if err == nil || !strings.Contains(err.Error(), "produced no text") || !strings.Contains(err.Error(), "max_tokens") {
+		t.Fatalf("an all-thinking reply must be an error by name, got %v", err)
+	}
+	if sentMax < 16000 {
+		t.Errorf("max_tokens sent = %v — too small to hold a reasoning model's thinking plus its answer", sentMax)
+	}
+	// And a reply that DID say something under max_tokens is not an error:
+	// truncated text is the caller's to judge.
+	srv2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"stop_reason":"max_tokens","content":[{"type":"text","text":"{\"partial\":"}],"usage":{"output_tokens":9}}`))
+	}))
+	defer srv2.Close()
+	b2 := &anthropicBackend{base: srv2.URL, key: "k", model: "claude-sonnet-5"}
+	if m, err := b2.Chat([]Message{{Role: "user", Content: "x"}}, nil); err != nil || m.Content == "" {
+		t.Errorf("a truncated reply with text must not be an error: %v %q", err, m.Content)
+	}
+}

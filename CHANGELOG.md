@@ -37,6 +37,15 @@ history of any release, `git log v0.3.4..v0.3.5`.
   the reviewer seat on `internal/review` itself; the verifier seat, told
   to refute it, could not and said so; confirmed and fixed.
 
+- **A Claude 5 seat that thought through its whole budget returned nothing,
+  silently.** The Anthropic backend sent `max_tokens: 4096`, which bounds
+  thinking as well as text; a sonnet reviewer spent all of it in one empty
+  thinking block, the API said `stop_reason: max_tokens`, and corral read
+  an empty message as the model saying nothing. The budget is 32,000, and
+  a reply with no text that ran out of it is an error naming the model,
+  the budget and the tokens spent. Found by asking why a review had zero
+  findings.
+
 ## [v1.0.0-rc.4] — 2026-09-06
 
 `corral review`: a cold model's opinion, linked to reproductions the run

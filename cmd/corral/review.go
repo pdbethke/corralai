@@ -4,6 +4,9 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -18,6 +21,7 @@ import (
 	"github.com/pdbethke/corralai/internal/adequacy"
 	"github.com/pdbethke/corralai/internal/agentbackend"
 	"github.com/pdbethke/corralai/internal/auditpush"
+	"github.com/pdbethke/corralai/internal/certify"
 	"github.com/pdbethke/corralai/internal/review"
 )
 
@@ -68,10 +72,10 @@ const reviewUsage = `corral review — a cold model reviews a scope of the repos
 // reviewFlags is the run verb's flag set, bound in one place so -h and the
 // run agree about every flag.
 type reviewFlags struct {
-	repoDir, scope, model, verifier, ledger string
-	noLedger                                bool
-	timeout                                 time.Duration
-	maxBytes                                int
+	repoDir, scope, model, verifier, ledger, attest string
+	noLedger                                        bool
+	timeout                                         time.Duration
+	maxBytes                                        int
 }
 
 func reviewFlagSet(out io.Writer) (*flag.FlagSet, *reviewFlags) {
@@ -83,6 +87,7 @@ func reviewFlagSet(out io.Writer) (*flag.FlagSet, *reviewFlags) {
 	fs.StringVar(&f.model, "reviewer-model", "", "the reviewer seat's model — an alias from the registry or a provider model name (required; corral has no default models)")
 	fs.StringVar(&f.verifier, "verifier-model", "", "a VERIFIER seat, adversarial to the reviewer: a different model that tries to refute every finding, by the same rules — a REPRODUCED refutation (a sh script that exits 0 iff the refutation is demonstrated) that holds demotes the finding on the record; a CODE-READ refutation is carried as opinion; a search that finds nothing is never a refutation. Must not be the reviewer's model. Off unless named")
 	fs.StringVar(&f.ledger, "ledger", "", "the ledger directory the review entry is written to (default: <repo>/.corral/ledger, or $CORRAL_LEDGER)")
+	fs.StringVar(&f.attest, "attest", "", "write an in-toto statement (predicate https://corralai.dev/review/v1) to this path, and its DSSE envelope beside it when a certify key is configured: the REPRODUCTIONS — every finding's declared and recorded tier, the hash of its script and output, its exit, the verifier's refutation on the same terms — signed; the opinion bound by its hash and not carried. The ledger entry then names the statement. `corral verify --attest <path> --db <ledger dir>` recomputes the reproductions' hash from the entry")
 	fs.BoolVar(&f.noLedger, "no-ledger", false, "print the review and write no entry")
 	fs.DurationVar(&f.timeout, "timeout", time.Minute, "wall-clock bound on each reproduction script")
 	fs.IntVar(&f.maxBytes, "max-bytes", 200000, "how many bytes of the scope the reviewer is shown; files past the cap are listed by name and the review records them as unshown")
@@ -94,7 +99,7 @@ func runReviewRun(args []string, stdout, stderr io.Writer) int {
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
-	repoDir, scope, model, verifier, ledgerFlag := &f.repoDir, &f.scope, &f.model, &f.verifier, &f.ledger
+	repoDir, scope, model, verifier, ledgerFlag, attest := &f.repoDir, &f.scope, &f.model, &f.verifier, &f.ledger, &f.attest
 	noLedger, timeout, maxBytes := &f.noLedger, &f.timeout, &f.maxBytes
 	if fs.NArg() != 0 {
 		fmt.Fprintf(stderr, "corral review: unexpected argument %q\n", fs.Arg(0))
@@ -202,6 +207,22 @@ func runReviewRun(args []string, stdout, stderr io.Writer) int {
 	}
 
 	printReview(stdout, r, nil)
+
+	// The statement first: it signs the reproductions; the entry, written
+	// after, names it. Fail-open like every write after a measurement.
+	if p := strings.TrimSpace(*attest); p != "" {
+		sha, aerr := writeReviewStatement(p, r)
+		if aerr != nil {
+			fmt.Fprintf(stderr, "corral review: writing the statement to %s: %v\n", p, aerr)
+		} else {
+			r.StatementSHA256 = sha
+			signed := "unsigned (no certify key)"
+			if _, err := os.Stat(dsseEnvelopePathFor(p)); err == nil {
+				signed = "signed into " + dsseEnvelopePathFor(p)
+			}
+			fmt.Fprintf(stdout, "\nattestation: %s (sha256 %.12s…, %s) — the reproductions signed, the opinion bound by its hash\n", p, sha, signed)
+		}
+	}
 
 	if *noLedger {
 		return 0
@@ -364,6 +385,23 @@ func printReview(w io.Writer, r review.Review, adj map[string]auditpush.Adjudica
 	if r.Truncated {
 		fmt.Fprintln(w, "\nsome of the scope was NOT shown to the reviewer (--max-bytes) — nothing above is a claim about those files")
 	}
+}
+
+// writeReviewStatement writes the review's in-toto statement and, when a
+// certify key is configured, its DSSE envelope beside it. Returns the
+// plain statement's sha256.
+func writeReviewStatement(path string, r review.Review) (string, error) {
+	stmt := certify.BuildReviewAttestation(r)
+	b, err := json.MarshalIndent(stmt, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(path, b, 0o600); err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(b)
+	_, _ = writeSignedStatementEnvelope(path, stmt)
+	return hex.EncodeToString(sum[:]), nil
 }
 
 func indent(s string) string {

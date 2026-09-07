@@ -117,7 +117,10 @@ Usage:
                                   reproductions — is one ledger entry beside the audits. Not a gate.
                                   --verifier-model: a third model, never the reviewer's, tries to
                                   refute every finding by the same rules; a refutation whose script
-                                  holds demotes the finding, and is itself on the record
+                                  holds demotes the finding, and is itself on the record.
+                                  --attest <path>: the reproductions as a signed in-toto statement,
+                                  the opinion bound by its hash; the entry names the statement, and
+                                  corral verify --attest <path> --db <ledger dir> cross-checks them
   corral review show <dir> <hash> print a review with its adjudications applied
   corral review adjudicate <dir> <hash>#<Rn> --confirm|--refute --reason "…"
                                   a person's verdict on one finding, as its own entry
@@ -549,6 +552,8 @@ corral review — a cold model reviews a scope of the repository; corral runs it
       stands; automatic passes never write one. --by defaults to the OS user.
 
 flags of `corral review`:
+  -attest corral verify --attest <path> --db <ledger dir>
+    	write an in-toto statement (predicate https://corralai.dev/review/v1) to this path, and its DSSE envelope beside it when a certify key is configured: the REPRODUCTIONS — every finding's declared and recorded tier, the hash of its script and output, its exit, the verifier's refutation on the same terms — signed; the opinion bound by its hash and not carried. The ledger entry then names the statement. corral verify --attest <path> --db <ledger dir> recomputes the reproductions' hash from the entry
   -ledger string
     	the ledger directory the review entry is written to (default: <repo>/.corral/ledger, or $CORRAL_LEDGER)
   -max-bytes int
@@ -657,8 +662,8 @@ Usage of ui:
 Usage of verify:
   -attest string
     	the --attest statement to verify (required) — the plain JSON path (its signed envelope is expected at <path>.dsse.json) or the envelope itself
-  -db string
-    	also recompute the warehouse rows' hash from this pushed DuckDB (a path, or md:<db> for MotherDuck) and compare it to the statement's claim. Every push of the scan the warehouse holds is tried (each has its own scan_uid); a VACUUMed warehouse can change row order and trip a false ✗ here without tampering
+  -db corral review --attest
+    	also recompute the warehouse rows' hash from this pushed DuckDB (a path, or md:<db> for MotherDuck) and compare it to the statement's claim; for a corral review --attest statement, the ledger DIRECTORY whose entry names it, so the reproductions' hash is recomputed from the entry. Every push of the scan the warehouse holds is tried (each has its own scan_uid); a VACUUMed warehouse can change row order and trip a false ✗ here without tampering
   -ledger --push <dir>/
     	walk a LEDGER DIRECTORY (the JSON entries --push <dir>/ writes, one per scan, each naming the previous entry's hash and carrying a signature): every entry's hash against its bytes, every link against its predecessor, every signature against --pub or the local certify key. One line per entry; an edited entry, a removed one, or a foreign signature is named. Instead of --attest, not with it
   -pub string

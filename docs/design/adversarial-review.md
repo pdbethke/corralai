@@ -11,9 +11,11 @@ opinion printed with its findings and sound list, and a person's
 confirm/refute as its own entry (`kind: adjudication`, newest per finding
 stands). The verifier seat followed the same day (`--verifier-model`:
 a third model, never the reviewer's, refutes by the same rules; a
-reproduced refutation demotes the finding). Not yet: the `--attest`
-statement over the reproductions, reviewer rows in `models rank`, the
-warehouse grains, the round planner. Its first two runs were on corral itself, the day it was
+reproduced refutation demotes the finding), and `--attest`: an in-toto
+statement over the reproductions, the opinion bound by hash, the entry
+naming the statement and `verify` recomputing the hash from the entry.
+Not yet: reviewer rows in `models rank`, the warehouse grains, the round
+planner. Its first two runs were on corral itself, the day it was
 written: one finding refuted (a false claim whose script also could not
 run — demoted, then refuted on the record), one confirmed (a real bypass
 in the verb written that morning, whose script exited 0 for the wrong

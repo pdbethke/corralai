@@ -9,6 +9,21 @@ still move between minor versions.
 Entries describe what changed for someone *using* the tool. For the full commit
 history of any release, `git log v0.3.4..v0.3.5`.
 
+## [Unreleased] — toward 1.0.0-rc.8
+
+- **An agentic seat is any agent you assign, not a vendor list.** A seat
+  name is a command-line definition: `CORRALAI_AGENT_<NAME>="<command
+  line>"`, run in the disposable worktree with the brief on stdin and the
+  reply on stdout (or in `{out}`); `{dir}` is the worktree, `{model}` /
+  `{model:FLAG}` carry the pin from `<name>:<model>`. A pin the definition
+  cannot carry, a definition that demands a pin it was not given, and a
+  definition that does not split are each refused by name — corral never
+  guesses what an agent runs. `claude-code` and `codex` are defined in the
+  same form and run the same argv as before. An operator-defined agent's
+  record carries its definition beside its version, since that is what sat
+  in the seat. Corral does not confine what the command does; the
+  definition is the operator's.
+
 ## [v1.0.0-rc.7] — 2026-09-07
 
 The seats can be coding agents, and the first agentic round paid: Claude

@@ -23,7 +23,8 @@ warehouse grains are real — `corral_reviews`, `corral_findings`,
 from them. And the round planner (`corral review plan`): scopes covered
 and not, changed since their review, findings by outcome, a proposal a
 person confirms. Everything in "What would be built" is built, and the seats can be coding
-agents (`claude-code`, `codex`) under the same contract — the five cold
+agents — any agent the operator defines as a command line, `claude-code`
+and `codex` defined out of the box — under the same contract — the five cold
 reviews, as a verb. Its first two runs were on corral itself, the day it was
 written: one finding refuted (a false claim whose script also could not
 run — demoted, then refuted on the record), one confirmed (a real bypass

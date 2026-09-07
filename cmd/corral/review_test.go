@@ -472,3 +472,95 @@ func TestAgenticSeatsRunInAWorktreeWithTheBriefOnStdin(t *testing.T) {
 		t.Error("an agentic seat must be handed the file LIST, not the bytes")
 	}
 }
+
+// Any agent we assign: a seat is a command-line definition, not a vendor
+// list. An operator defines one in the environment, names it like a
+// built-in, and the record carries the definition beside the version.
+func TestAnyAgentCanBeDefinedAsASeat(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "test-placeholder-not-a-real-key")
+	root := t.TempDir()
+	gitRun := gitCmd(t, root)
+	mustWrite(t, filepath.Join(root, "pkg", "a.go"), "package pkg\n\nfunc Add(a, b int) int { return a - b }\n")
+	mustWrite(t, filepath.Join(root, "go.mod"), "module x\n\ngo 1.22\n")
+	gitRun("init", "-q")
+	gitRun("add", ".")
+	gitRun("commit", "-q", "-m", "base", "--no-gpg-sign")
+
+	bin := t.TempDir()
+	log := filepath.Join(t.TempDir(), "calls.log")
+	reply := `{"opinion":"my agent says Add subtracts","findings":[{"claim":"Add subtracts","tier":"REPRODUCED","file":"pkg/a.go","line":3,"severity":"high","script":"grep -q \"a - b\" pkg/a.go"}],"sound":["go.mod"]}`
+	script := "#!/bin/sh\n" +
+		"if [ \"$1\" = \"--version\" ]; then echo \"my-agent 0.1\"; exit 0; fi\n" +
+		"{ echo \"== my-agent cwd=$PWD argv=$*\"; cat; echo; } >> " + log + "\n" +
+		"printf '%s' '" + reply + "' > \"$5\"\n" // the reply goes to {out}, stdout stays empty
+	if err := os.WriteFile(filepath.Join(bin, "my-agent"), []byte(script), 0o755); err != nil { // #nosec G306 -- a test fixture executable
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("CORRALAI_AGENT_MY_AGENT", `my-agent review --root {dir} --out {out} {model:--using} "two words"`)
+
+	var out, errb bytes.Buffer
+	code := runReview([]string{"--repo", root, "--scope", "pkg", "--reviewer-model", "my-agent:some-model", "--no-ledger"}, &out, &errb)
+	if code != 0 {
+		t.Fatalf("exit %d: stdout=%s stderr=%s", code, out.String(), errb.String())
+	}
+	s := out.String()
+	for _, want := range []string{
+		"reviewer: my-agent:some-model [my-agent 0.1 [my-agent review --root {dir} --out {out} {model:--using} \"two words\"]]",
+		"findings: 1 reproduced, 0 code-read, 0 hypothesis",
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("stdout lacks %q:\n%s", want, s)
+		}
+	}
+	calls, _ := os.ReadFile(log)
+	c := string(calls)
+	if !strings.Contains(c, "argv=review --root ") || !strings.Contains(c, " --using some-model two words\n") || strings.Contains(c, "cwd="+root+"\n") {
+		t.Errorf("the definition must be run as written, in a worktree:\n%s", c)
+	}
+	if !strings.Contains(c, "Assume the code is WRONG") {
+		t.Errorf("the brief must go to the agent on stdin:\n%s", c)
+	}
+
+	// The refusals, by name: a pin the definition cannot carry, and a
+	// definition that demands a pin it was not given.
+	out.Reset()
+	errb.Reset()
+	t.Setenv("CORRALAI_AGENT_FIXED", "my-agent review --root {dir} --out {out}")
+	if code := runReview([]string{"--repo", root, "--scope", "pkg", "--reviewer-model", "fixed:some-model", "--no-ledger"}, &out, &errb); code != 2 || !strings.Contains(errb.String(), "agent fixed takes no model") {
+		t.Fatalf("a pin the definition cannot carry must be refused: exit %d %s", code, errb.String())
+	}
+	errb.Reset()
+	t.Setenv("CORRALAI_AGENT_PINNED", "my-agent review --root {dir} --out {out} --using {model}")
+	if code := runReview([]string{"--repo", root, "--scope", "pkg", "--reviewer-model", "pinned", "--no-ledger"}, &out, &errb); code != 2 || !strings.Contains(errb.String(), "agent pinned takes a model") {
+		t.Fatalf("a definition that demands a pin must be refused without one: exit %d %s", code, errb.String())
+	}
+	errb.Reset()
+	t.Setenv("CORRALAI_AGENT_BROKEN", `my-agent "unterminated`)
+	if code := runReview([]string{"--repo", root, "--scope", "pkg", "--reviewer-model", "broken", "--no-ledger"}, &out, &errb); code != 2 || !strings.Contains(errb.String(), "unterminated quote") {
+		t.Fatalf("a definition that does not split must be refused by name: exit %d %s", code, errb.String())
+	}
+	// An unknown name is an API model, not an agent.
+	if _, _, ok := agentSeat("gemini-3.6-flash"); ok {
+		t.Error("a provider model name is not an agentic seat")
+	}
+}
+
+func TestSplitWordsIsPOSIXEnough(t *testing.T) {
+	for in, want := range map[string][]string{
+		`a b  c`:                 {"a", "b", "c"},
+		`a "b c" 'd e' f\ g`:     {"a", "b c", "d e", "f g"},
+		`x --flag="q v" 'it''s'`: {"x", "--flag=q v", "its"},
+		``:                       nil,
+	} {
+		got, err := splitWords(in)
+		if err != nil || strings.Join(got, "|") != strings.Join(want, "|") {
+			t.Errorf("%q → %q, %v; want %q", in, got, err, want)
+		}
+	}
+	for _, bad := range []string{`a "b`, `a 'b`, `a \`} {
+		if _, err := splitWords(bad); err == nil {
+			t.Errorf("%q must not split", bad)
+		}
+	}
+}

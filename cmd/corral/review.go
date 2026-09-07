@@ -91,7 +91,7 @@ func reviewFlagSet(out io.Writer) (*flag.FlagSet, *reviewFlags) {
 	f := &reviewFlags{}
 	fs.StringVar(&f.repoDir, "repo", ".", "the checkout to review (a git repository at a commit)")
 	fs.StringVar(&f.scope, "scope", "", "the directory or file under --repo to review (required)")
-	fs.StringVar(&f.model, "reviewer-model", "", "the reviewer seat — an alias from the registry, a provider model name, or an AGENTIC seat: `claude-code`, `codex`, or either pinned to a model as `claude-code:<model>` / `codex:<model>`. An agentic seat is a coding CLI started in a disposable copy of the repository with read-only tools: it reads the whole scope itself (no --max-bytes cap) and hands back scripts, which corral runs — nothing it did itself is on the record. Required; corral has no default models")
+	fs.StringVar(&f.model, "reviewer-model", "", "the reviewer seat — an alias from the registry, a provider model name, or an AGENTIC seat: an agent NAME, pinned to a model as `<name>:<model>`. `claude-code` and `codex` are defined; ANY agent is defined the same way as CORRALAI_AGENT_<NAME>=\"<command line>\" ({dir} the worktree, {out} a reply file, {model} / {model:FLAG} the pin; the brief on stdin, the reply on stdout). An agentic seat is a coding agent started in a disposable copy of the repository: it reads the whole scope itself (no --max-bytes cap) and hands back scripts, which corral runs — nothing it did itself is on the record. Required; corral has no default models")
 	fs.StringVar(&f.verifier, "verifier-model", "", "a VERIFIER seat, adversarial to the reviewer: a different model that tries to refute every finding, by the same rules — a REPRODUCED refutation (a sh script that exits 0 iff the refutation is demonstrated) that holds demotes the finding on the record; a CODE-READ refutation is carried as opinion; a search that finds nothing is never a refutation. Must not be the reviewer's model. Off unless named")
 	fs.StringVar(&f.ledger, "ledger", "", "the ledger directory the review entry is written to (default: <repo>/.corral/ledger, or $CORRAL_LEDGER)")
 	fs.StringVar(&f.attest, "attest", "", "write an in-toto statement (predicate https://corralai.dev/review/v1) to this path, and its DSSE envelope beside it when a certify key is configured: the REPRODUCTIONS — every finding's declared and recorded tier, the hash of its script and output, its exit, the verifier's refutation on the same terms — signed; the opinion bound by its hash and not carried. The ledger entry then names the statement. `corral verify --attest <path> --db <ledger dir>` recomputes the reproductions' hash from the entry")
@@ -151,9 +151,12 @@ func runReviewRun(args []string, stdout, stderr io.Writer) int {
 	defer seatCleanup()
 	agentTimeout := 30 * time.Minute
 	seat := func(spec string) (agentbackend.Backend, string, error) {
-		if b, ok := newAgentSeat(spec, seatTree, agentTimeout); ok {
-			tool, _, _ := agentSeat(spec)
-			return b, agentVersion(tool), nil
+		if b, isAgent, err := newAgentSeat(spec, seatTree, agentTimeout); isAgent {
+			if err != nil {
+				return nil, "", err
+			}
+			name, _, _ := agentSeat(spec)
+			return b, agentVersion(name), nil
 		}
 		b, err := newReviewerBackend(spec, "")
 		return b, "", err

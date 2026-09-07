@@ -5,9 +5,13 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"github.com/pdbethke/corralai/internal/auditpush"
+	"github.com/pdbethke/corralai/internal/review"
+	"github.com/pdbethke/corralai/internal/scanstore"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -39,7 +43,7 @@ func TestUIServesTheSealAndRanksProvenGapsFirst(t *testing.T) {
 		{Repo: "r", Path: "proven.go", KillRate: 0.75, Survivors: 12, ProvenMissed: 12, TS: time.Now()},
 	}}
 	rec := httptest.NewRecorder()
-	uiHandler(st).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/seal", nil))
+	uiHandler(st, "").ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/seal", nil))
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
@@ -62,7 +66,7 @@ func TestUIServesTheSealAndRanksProvenGapsFirst(t *testing.T) {
 // claim than "the ledger could not be read". They must not look alike.
 func TestUIReportsAReadFailureRatherThanAnEmptyLedger(t *testing.T) {
 	rec := httptest.NewRecorder()
-	uiHandler(fakeSeal{err: io.ErrUnexpectedEOF}).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/seal", nil))
+	uiHandler(fakeSeal{err: io.ErrUnexpectedEOF}, "").ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/seal", nil))
 
 	if rec.Code == http.StatusOK {
 		t.Fatalf("status = 200 on a failed read — the page would render an empty table and an operator would read it as a clean codebase")
@@ -77,12 +81,12 @@ func TestUIReportsAReadFailureRatherThanAnEmptyLedger(t *testing.T) {
 // an API and a 404.
 func TestUIServesTheEmbeddedPage(t *testing.T) {
 	rec := httptest.NewRecorder()
-	uiHandler(fakeSeal{}).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	uiHandler(fakeSeal{}, "").ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d serving the page, want 200", rec.Code)
 	}
 	body := rec.Body.String()
-	for _, want := range []string{"corral seal", "api/seal"} {
+	for _, want := range []string{"The seal", "api/seal", "The chain", "api/ledger"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("the embedded page does not mention %q", want)
 		}
@@ -154,5 +158,76 @@ func TestDocsEveryDocumentedVerbIsDispatched(t *testing.T) {
 	}
 	if got := subcommand(nil); got != "" {
 		t.Errorf("subcommand of nothing = %q, want \"\"", got)
+	}
+}
+
+// TestUILedgerAPIShowsTheChainTheReviewsAndTheVerdicts: the page's second
+// half. Over a ledger directory, /api/ledger carries every entry with its
+// chain check, each review with its findings, the verifier's refutation
+// and the newest adjudication attached, and retractions; over anything
+// that is not a directory it says so instead of pretending.
+func TestUILedgerAPIShowsTheChainTheReviewsAndTheVerdicts(t *testing.T) {
+	t.Setenv("CORRALAI_CERTIFY_KEY_FILE", filepath.Join(t.TempDir(), "certify_key"))
+	dir := filepath.Join(t.TempDir(), "ledger")
+	writeCacheTestEntry(t, dir, []scanstore.File{{Path: "a.go", Disposition: "audited", Gradable: true, KillRate: ptrF(0.5)}})
+	signer, _ := ledgerSignerFromLocalKey()
+	code := 0
+	r := review.Review{Repo: "acme/r", Commit: "abc", Scope: "pkg", ReviewerModel: "rev", VerifierModel: "ver", Opinion: "it leaks",
+		Findings: []review.Finding{{ID: "R1", Claim: "leaks the key", Declared: review.TierReproduced, Tier: review.TierReproduced, Script: "exit 0", ExitCode: &code,
+			Refutation: &review.Refutation{Model: "ver", Verdict: review.VerdictStands, Argument: "could not refute"}}},
+		Sound: []string{"the parser"}}
+	if _, err := auditpush.WriteReview(dir, r, signer); err != nil {
+		t.Fatal(err)
+	}
+	entries, _ := auditpush.ReadLedgerDir(dir)
+	revHash := entries[1].Hash
+	if _, err := auditpush.WriteAdjudication(dir, revHash+"#R1", auditpush.VerdictConfirmed, "pdb", "it does", signer); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := auditpush.WriteRetraction(dir, entries[0].Hash, "wrong commit", signer); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := httptest.NewRecorder()
+	uiHandler(fakeSeal{}, dir).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/ledger", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+	}
+	var l uiLedger
+	if err := json.Unmarshal(rec.Body.Bytes(), &l); err != nil {
+		t.Fatal(err)
+	}
+	if l.Dir != dir || len(l.Entries) != 4 || l.Problems != 0 || l.Verified == "" {
+		t.Fatalf("ledger = dir %q, %d entries, %d problems, verified %q", l.Dir, len(l.Entries), l.Problems, l.Verified)
+	}
+	// Newest first: the retraction, the adjudication, the review, the scan.
+	if l.Entries[0].Kind != "retract" || l.Entries[3].Kind != "scan" || !l.Entries[3].Signed || !l.Entries[3].Verified {
+		t.Errorf("entries: %+v", l.Entries)
+	}
+	if !strings.HasPrefix(l.Entries[3].Note, "RETRACTED: wrong commit") {
+		t.Errorf("the retracted scan must say so in the chain: %+v", l.Entries[3])
+	}
+	if len(l.Reviews) != 1 || l.Reviews[0].Reviewer != "rev" || l.Reviews[0].Verifier != "ver" || l.Reviews[0].Reproduced != 1 {
+		t.Fatalf("reviews: %+v", l.Reviews)
+	}
+	f := l.Reviews[0].Findings[0]
+	if f.Refutation == nil || f.Refutation.Verdict != review.VerdictStands || f.Adjudication == nil || f.Adjudication.Verdict != auditpush.VerdictConfirmed || f.Adjudication.By != "pdb" {
+		t.Errorf("the finding must carry the verifier's answer and the person's verdict: %+v", f)
+	}
+	if len(l.Retracts) != 1 || l.Retracts[0].Reason != "wrong commit" {
+		t.Errorf("retractions: %+v", l.Retracts)
+	}
+
+	// Not a directory: the API says so rather than inventing a chain.
+	rec = httptest.NewRecorder()
+	uiHandler(fakeSeal{}, "").ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/ledger", nil))
+	if rec.Code != http.StatusOK || strings.TrimSpace(rec.Body.String()) != `{"dir":""}` {
+		t.Errorf("no directory: %d %s", rec.Code, rec.Body.String())
+	}
+	// And the page itself carries the ledger sections.
+	rec = httptest.NewRecorder()
+	uiHandler(fakeSeal{}, dir).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	if !strings.Contains(rec.Body.String(), "api/ledger") || !strings.Contains(rec.Body.String(), "The chain") {
+		t.Error("the page does not render the ledger half")
 	}
 }

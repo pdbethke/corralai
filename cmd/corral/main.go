@@ -276,7 +276,10 @@ Usage:
                                   reproductions — is one ledger entry beside the audits. Not a gate.
                                   --verifier-model: a third model, never the reviewer's, tries to
                                   refute every finding by the same rules; a refutation whose script
-                                  holds demotes the finding, and is itself on the record
+                                  holds demotes the finding, and is itself on the record.
+                                  --attest <path>: the reproductions as a signed in-toto statement,
+                                  the opinion bound by its hash; the entry names the statement, and
+                                  corral verify --attest <path> --db <ledger dir> cross-checks them
   corral review show <dir> <hash> print a review with its adjudications applied
   corral review adjudicate <dir> <hash>#<Rn> --confirm|--refute --reason "…"
                                   a person's verdict on one finding, as its own entry

@@ -821,8 +821,11 @@ claim refuted, one real bypass confirmed in a verb written that morning.
 With `--verifier-model`, a third model — never the reviewer's — is handed
 the review as recorded and tries to refute every finding by the same rules;
 a refutation whose script holds demotes the finding, and the record names
-who refuted it and how. The reviewer's row in `models rank` and the
-warehouse grains are designed, not built:
+who refuted it and how. `--attest <path>` signs the reproductions — never
+the opinion — as an in-toto statement the ledger entry names, and `corral
+verify --attest <path> --db .corral/ledger` recomputes their hash from
+the entry. The reviewer's row in `models rank` and the warehouse grains
+are designed, not built:
 **[docs/design/adversarial-review.md](docs/design/adversarial-review.md)**.
 
 ## The audit flags

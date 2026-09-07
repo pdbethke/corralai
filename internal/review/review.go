@@ -85,6 +85,12 @@ type Review struct {
 	Truncated    bool     `json:"truncated,omitempty"`
 	InputTokens  int64    `json:"input_tokens,omitempty"`
 	OutputTokens int64    `json:"output_tokens,omitempty"`
+	// StatementSHA256 is the sha256 of the --attest statement written for
+	// this review, when one was: the statement is written FIRST (it hashes
+	// the reproductions), then the entry, so the entry names the statement
+	// and the statement names the reproductions, and a reader holding
+	// either can find the other.
+	StatementSHA256 string `json:"statement_sha256,omitempty"`
 }
 
 // Counts summarises the record's tiers.

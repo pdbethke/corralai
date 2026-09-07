@@ -22,6 +22,16 @@ history of any release, `git log v0.3.4..v0.3.5`.
   with what was tried. The brief writes down the rule the fifth review
   taught: a search that finds nothing is never a refutation. A person's
   adjudication still outranks all of it.
+- **`corral review --attest <path>`: the reproductions, signed.** An in-toto
+  statement (predicate `https://corralai.dev/review/v1`) carrying, per
+  finding, the declared and recorded tier, the sha256 of its script and of
+  what it printed, its exit, and the verifier's refutation on the same
+  terms — plus `reproductionsSha256` over all of it. The opinion is bound
+  by its hash and never carried: the signature vouches for what was
+  executed, not for a judgment. The statement is written first and the
+  ledger entry then names it; `corral verify --attest <path> --db <ledger
+  dir>` finds the entry by that name and recomputes the reproductions'
+  hash, and an entry edited after signing is named as such.
 - **`corral review` could not read a reply with a brace in its prose.**
   `extractJSON` took the first `{` in the text as the payload. Found by
   the reviewer seat on `internal/review` itself; the verifier seat, told

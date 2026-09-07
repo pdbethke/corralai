@@ -57,7 +57,7 @@ func runVerifyAttest(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("verify", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	attestFlag := fs.String("attest", "", "the --attest statement to verify (required) — the plain JSON path (its signed envelope is expected at <path>.dsse.json) or the envelope itself")
-	dbFlag := fs.String("db", "", "also recompute the warehouse rows' hash from this pushed DuckDB (a path, or md:<db> for MotherDuck) and compare it to the statement's claim. Every push of the scan the warehouse holds is tried (each has its own scan_uid); a VACUUMed warehouse can change row order and trip a false ✗ here without tampering")
+	dbFlag := fs.String("db", "", "also recompute the warehouse rows' hash from this pushed DuckDB (a path, or md:<db> for MotherDuck) and compare it to the statement's claim; for a `corral review --attest` statement, the ledger DIRECTORY whose entry names it, so the reproductions' hash is recomputed from the entry. Every push of the scan the warehouse holds is tried (each has its own scan_uid); a VACUUMed warehouse can change row order and trip a false ✗ here without tampering")
 	rekorIndexFlag := fs.Int64("rekor-index", -1, "also confirm this Rekor log index's entry matches the envelope (default: read the index --db recorded for this scan, if --db was given)")
 	pubFlag := fs.String("pub", "", "hex-encoded Ed25519 public key to verify the signature against (default: the local certify key, CORRALAI_CERTIFY_KEY_FILE)")
 	ledgerFlag := fs.String("ledger", "", "walk a LEDGER DIRECTORY (the JSON entries `--push <dir>/` writes, one per scan, each naming the previous entry's hash and carrying a signature): every entry's hash against its bytes, every link against its predecessor, every signature against --pub or the local certify key. One line per entry; an edited entry, a removed one, or a foreign signature is named. Instead of --attest, not with it")
@@ -107,8 +107,16 @@ func runVerifyAttest(args []string, stdout, stderr io.Writer) int {
 	}
 
 	// --- 2. Warehouse rows ---
-	rowsResult := verifyWarehouseRows(*dbFlag, stmt, plainStatementSHA256(*attestFlag, envPath))
-	printCheckResult(stdout, "warehouse rows", rowsResult)
+	// A review statement signs reproductions, not warehouse rows: its
+	// cross-check is against the ledger entry that names it.
+	var rowsResult verifyCheckResult
+	if pt, _ := stmt["predicateType"].(string); pt == certify.ReviewPredicateType {
+		rowsResult = verifyReviewEntry(*dbFlag, stmt, plainStatementSHA256(*attestFlag, envPath))
+		printCheckResult(stdout, "ledger entry", rowsResult)
+	} else {
+		rowsResult = verifyWarehouseRows(*dbFlag, stmt, plainStatementSHA256(*attestFlag, envPath))
+		printCheckResult(stdout, "warehouse rows", rowsResult)
+	}
 	if rowsResult.checked && !rowsResult.ok {
 		failed = true
 	}
@@ -563,4 +571,43 @@ func orUnnamed(keyID string) string {
 		return "an unnamed key"
 	}
 	return keyID
+}
+
+// verifyReviewEntry is the review statement's cross-check: in the ledger
+// directory --db names, the review entry whose StatementSHA256 is this
+// statement's, whose findings re-hash (certify.ReproductionsSHA256) to
+// exactly the value the statement claims. A statement with no entry
+// naming it is not checked, not a mismatch: the entry may never have been
+// written (--no-ledger), or live elsewhere.
+func verifyReviewEntry(dbFlag string, stmt map[string]any, statementSHA string) verifyCheckResult {
+	if strings.TrimSpace(dbFlag) == "" {
+		return verifyCheckResult{checked: false, detail: "no --db given (for a review statement, the ledger directory its entry was written to)"}
+	}
+	if !auditpush.IsLedgerDir(dbFlag) {
+		return verifyCheckResult{checked: false, detail: "a review statement is checked against a ledger DIRECTORY; --db names something else"}
+	}
+	pred, _ := stmt["predicate"].(map[string]any)
+	claimed, _ := pred["reproductionsSha256"].(string)
+	if claimed == "" {
+		return verifyCheckResult{checked: false, detail: "the statement carries no reproductionsSha256"}
+	}
+	if statementSHA == "" {
+		return verifyCheckResult{checked: false, detail: "the plain statement file is not beside its envelope, so the entry that names it cannot be found"}
+	}
+	entries, err := auditpush.ReadLedgerDir(strings.TrimRight(dbFlag, "/"))
+	if err != nil {
+		return verifyCheckResult{checked: false, detail: fmt.Sprintf("reading --db: %v", err)}
+	}
+	for _, e := range entries {
+		if e.Kind != auditpush.KindReview || e.Review == nil || e.Review.StatementSHA256 != statementSHA {
+			continue
+		}
+		got := certify.ReproductionsSHA256(*e.Review)
+		if got == claimed {
+			rep, cr, hy := e.Review.Counts()
+			return verifyCheckResult{checked: true, ok: true, detail: fmt.Sprintf("entry %.12s names this statement, and its %d reproduction(s) (%d reproduced, %d code-read, %d hypothesis) hash to exactly the value the statement claims", e.Hash, len(e.Review.Findings), rep, cr, hy)}
+		}
+		return verifyCheckResult{checked: true, ok: false, detail: fmt.Sprintf("entry %.12s names this statement, but its findings hash to %.12s… where the statement claims %.12s… — the entry's reproductions were changed after the statement was signed", e.Hash, got, claimed)}
+	}
+	return verifyCheckResult{checked: false, detail: fmt.Sprintf("no review entry in %s names this statement (was it written with --no-ledger, or into another directory?)", dbFlag)}
 }

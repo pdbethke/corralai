@@ -170,3 +170,18 @@ func Verify(ctx context.Context, rep Reproducer, r *Review, model, opinion strin
 		}
 	}
 }
+
+// VerifierAgentBrief is VerifierBrief for an agentic seat: the review as
+// recorded, then the scope's file list — the seat reads the tree itself.
+func VerifierAgentBrief(r Review, files []string) string {
+	head := VerifierBrief(r, Scope{})
+	head = strings.TrimSuffix(head, fmt.Sprintf("The scope, %d file(s):\n\n", 0))
+	var b strings.Builder
+	b.WriteString(head)
+	b.WriteString("You are running inside a DISPOSABLE COPY of the repository at this commit: your working directory is that copy. Read any file you need with your file tools. Your tools are read-only on purpose: every REPRODUCED refutation is a sh SCRIPT you hand back, which corral runs and records; nothing you execute yourself counts. Return the ONE JSON object the instructions describe, and nothing else.\n\n")
+	fmt.Fprintf(&b, "The scope, %d file(s):\n", len(files))
+	for _, f := range files {
+		fmt.Fprintf(&b, "  %s\n", f)
+	}
+	return b.String()
+}

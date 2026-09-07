@@ -91,7 +91,7 @@ func reviewFlagSet(out io.Writer) (*flag.FlagSet, *reviewFlags) {
 	f := &reviewFlags{}
 	fs.StringVar(&f.repoDir, "repo", ".", "the checkout to review (a git repository at a commit)")
 	fs.StringVar(&f.scope, "scope", "", "the directory or file under --repo to review (required)")
-	fs.StringVar(&f.model, "reviewer-model", "", "the reviewer seat's model — an alias from the registry or a provider model name (required; corral has no default models)")
+	fs.StringVar(&f.model, "reviewer-model", "", "the reviewer seat — an alias from the registry, a provider model name, or an AGENTIC seat: `claude-code`, `codex`, or either pinned to a model as `claude-code:<model>` / `codex:<model>`. An agentic seat is a coding CLI started in a disposable copy of the repository with read-only tools: it reads the whole scope itself (no --max-bytes cap) and hands back scripts, which corral runs — nothing it did itself is on the record. Required; corral has no default models")
 	fs.StringVar(&f.verifier, "verifier-model", "", "a VERIFIER seat, adversarial to the reviewer: a different model that tries to refute every finding, by the same rules — a REPRODUCED refutation (a sh script that exits 0 iff the refutation is demonstrated) that holds demotes the finding on the record; a CODE-READ refutation is carried as opinion; a search that finds nothing is never a refutation. Must not be the reviewer's model. Off unless named")
 	fs.StringVar(&f.ledger, "ledger", "", "the ledger directory the review entry is written to (default: <repo>/.corral/ledger, or $CORRAL_LEDGER)")
 	fs.StringVar(&f.attest, "attest", "", "write an in-toto statement (predicate https://corralai.dev/review/v1) to this path, and its DSSE envelope beside it when a certify key is configured: the REPRODUCTIONS — every finding's declared and recorded tier, the hash of its script and output, its exit, the verifier's refutation on the same terms — signed; the opinion bound by its hash and not carried. The ledger entry then names the statement. `corral verify --attest <path> --db <ledger dir>` recomputes the reproductions' hash from the entry")
@@ -135,22 +135,44 @@ func runReviewRun(args []string, stdout, stderr io.Writer) int {
 	// The decorrelation rule, the same one the writer and the critic live
 	// under: a verifier that is the reviewer's own model would grade its
 	// own work. Checked before anything is spent.
-	if strings.TrimSpace(*verifier) != "" && strings.EqualFold(strings.TrimSpace(*verifier), strings.TrimSpace(*model)) {
-		fmt.Fprintf(stderr, "corral review: --verifier-model %s is the reviewer's own model — the verifier must be a different one (nemo iudex in causa sua)\n", *verifier)
+	if strings.TrimSpace(*verifier) != "" && strings.EqualFold(seatModelOf(*verifier), seatModelOf(*model)) {
+		fmt.Fprintf(stderr, "corral review: --verifier-model %s resolves to the reviewer's own model %s — the verifier must be a different one (nemo iudex in causa sua)\n", *verifier, seatModelOf(*model))
 		return 2
 	}
-	backend, err := newReviewerBackend(*model, "")
+	// The worktrees first: one for an agentic seat to read (it is never
+	// handed the checkout), and — after the seats have spoken — the one
+	// the reproductions run in. Two, so a seat that could write could not
+	// pre-arrange the tree its own scripts are judged in.
+	seatTree, seatCleanup, terr := newWorktree(root, commit)
+	if terr != nil {
+		fmt.Fprintf(stderr, "corral review: %v\n", terr)
+		return 1
+	}
+	defer seatCleanup()
+	agentTimeout := 30 * time.Minute
+	seat := func(spec string) (agentbackend.Backend, string, error) {
+		if b, ok := newAgentSeat(spec, seatTree, agentTimeout); ok {
+			tool, _, _ := agentSeat(spec)
+			return b, agentVersion(tool), nil
+		}
+		b, err := newReviewerBackend(spec, "")
+		return b, "", err
+	}
+	backend, reviewerTool, err := seat(*model)
 	if err != nil {
 		fmt.Fprintf(stderr, "corral review: reviewer seat: %v\n", err)
 		return 2
 	}
 	var verifierBackend agentbackend.Backend
+	verifierTool := ""
 	if strings.TrimSpace(*verifier) != "" {
-		if verifierBackend, err = newReviewerBackend(*verifier, ""); err != nil {
+		if verifierBackend, verifierTool, err = seat(*verifier); err != nil {
 			fmt.Fprintf(stderr, "corral review: verifier seat: %v\n", err)
 			return 2
 		}
 	}
+	_, _, reviewerIsAgent := agentSeat(*model)
+	_, _, verifierIsAgent := agentSeat(*verifier)
 
 	sc, err := review.LoadScope(root, *scope, *maxBytes)
 	if err != nil {
@@ -158,21 +180,31 @@ func runReviewRun(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	repoName := resolveRepoName(root, "")
-	fmt.Fprintf(stdout, "review — %s @ %.12s, scope %s: %d file(s), %d bytes shown", repoName, commit, *scope, len(sc.Files), sc.Bytes)
-	if sc.Truncated {
-		fmt.Fprintf(stdout, ", %d NOT shown (--max-bytes)", len(sc.Unshown))
+	allFiles := append(append([]string{}, sc.Files...), sc.Unshown...)
+	if reviewerIsAgent {
+		fmt.Fprintf(stdout, "review — %s @ %.12s, scope %s: %d file(s), read by the seat itself in a disposable copy (no byte cap)", repoName, commit, *scope, len(allFiles))
+	} else {
+		fmt.Fprintf(stdout, "review — %s @ %.12s, scope %s: %d file(s), %d bytes shown", repoName, commit, *scope, len(sc.Files), sc.Bytes)
+		if sc.Truncated {
+			fmt.Fprintf(stdout, ", %d NOT shown (--max-bytes)", len(sc.Unshown))
+		}
 	}
-	fmt.Fprintf(stdout, "\n  reviewer: %s (cold — it has never seen this repository)\n", *model)
+	fmt.Fprintf(stdout, "\n  reviewer: %s%s (cold — it has never seen this repository)\n", *model, toolNote(reviewerTool))
 	if verifierBackend != nil {
-		fmt.Fprintf(stdout, "  verifier: %s (adversarial to the reviewer; a different model by rule)\n", *verifier)
+		fmt.Fprintf(stdout, "  verifier: %s%s (adversarial to the reviewer; a different model by rule)\n", *verifier, toolNote(verifierTool))
 	}
 
-	r := review.Review{Repo: repoName, Commit: commit, Scope: *scope, ReviewerModel: *model, Lang: langOfScope(sc.Files),
+	r := review.Review{Repo: repoName, Commit: commit, Scope: *scope, ReviewerModel: *model, ReviewerTool: reviewerTool, Lang: langOfScope(allFiles),
 		Substrate: "workspace (a detached worktree at the commit; not a jail)", StartedAt: time.Now().UTC(),
 		FilesShown: sc.Files, BytesShown: sc.Bytes, Truncated: sc.Truncated}
+	userTurn := review.Brief(repoName, commit, *scope, sc)
+	if reviewerIsAgent {
+		userTurn = review.AgentBrief(repoName, commit, *scope, allFiles)
+		r.FilesShown, r.BytesShown, r.Truncated = allFiles, 0, false
+	}
 	reply, err := backend.Chat([]agentbackend.Message{
 		{Role: "system", Content: review.BriefSystem},
-		{Role: "user", Content: review.Brief(repoName, commit, *scope, sc)},
+		{Role: "user", Content: userTurn},
 	}, nil)
 	if err != nil {
 		fmt.Fprintf(stderr, "corral review: the reviewer seat failed: %v\n", err)
@@ -201,9 +233,13 @@ func runReviewRun(args []string, stdout, stderr io.Writer) int {
 	// demoted — and the same scope, and its own reproductions run in the
 	// same worktree.
 	if verifierBackend != nil {
+		vturn := review.VerifierBrief(r, sc)
+		if verifierIsAgent {
+			vturn = review.VerifierAgentBrief(r, allFiles)
+		}
 		vreply, verr := verifierBackend.Chat([]agentbackend.Message{
 			{Role: "system", Content: review.VerifierBriefSystem},
-			{Role: "user", Content: review.VerifierBrief(r, sc)},
+			{Role: "user", Content: vturn},
 		}, nil)
 		if verr != nil {
 			fmt.Fprintf(stderr, "corral review: the verifier seat failed: %v — the review is recorded unverified\n", verr)
@@ -220,6 +256,7 @@ func runReviewRun(args []string, stdout, stderr io.Writer) int {
 				vopinion = "(the verifier returned no verdicts on any finding; its reply, verbatim: " + tail(vreply.Content, 2000) + ")"
 				fmt.Fprintf(stderr, "corral review: the verifier %s returned no verdict on any of %d finding(s) — the review is recorded with its reply, unverified\n", *verifier, len(r.Findings))
 			}
+			r.VerifierTool = verifierTool
 			review.Verify(context.Background(), rep, &r, *verifier, vopinion, refs)
 		}
 	}
@@ -301,22 +338,39 @@ type worktreeReproducer struct {
 	runner *adequacy.WorkspaceRunner
 }
 
-func newWorktreeReproducer(root, commit string, timeout time.Duration) (review.Reproducer, func(), error) {
+// newWorktree is a detached git worktree at commit under a temp dir, and
+// the function that removes it.
+func newWorktree(root, commit string) (string, func(), error) {
 	dir, err := os.MkdirTemp("", "corral-review-")
 	if err != nil {
-		return nil, nil, err
+		return "", nil, err
 	}
 	tree := filepath.Join(dir, "tree")
 	// #nosec G204 -- fixed argv; root and commit are the operator's own checkout and its HEAD
 	if out, err := exec.Command("git", "-C", root, "worktree", "add", "--detach", tree, commit).CombinedOutput(); err != nil {
 		os.RemoveAll(dir)
-		return nil, nil, fmt.Errorf("git worktree at %.12s: %v: %s", commit, err, strings.TrimSpace(string(out)))
+		return "", nil, fmt.Errorf("git worktree at %.12s: %v: %s", commit, err, strings.TrimSpace(string(out)))
 	}
-	cleanup := func() {
+	return tree, func() {
 		_ = exec.Command("git", "-C", root, "worktree", "remove", "--force", tree).Run() // #nosec G204 -- fixed argv
 		os.RemoveAll(dir)
+	}, nil
+}
+
+func newWorktreeReproducer(root, commit string, timeout time.Duration) (review.Reproducer, func(), error) {
+	tree, cleanup, err := newWorktree(root, commit)
+	if err != nil {
+		return nil, nil, err
 	}
 	return worktreeReproducer{runner: adequacy.NewWorkspaceRunner(tree, timeout, adequacy.WithWorkspaceMaxOutput(64<<10))}, cleanup, nil
+}
+
+// toolNote renders an agentic seat's tool version beside its name.
+func toolNote(v string) string {
+	if v == "" {
+		return ""
+	}
+	return " [" + v + "]"
 }
 
 func (w worktreeReproducer) Run(ctx context.Context, script string) (string, int, error) {

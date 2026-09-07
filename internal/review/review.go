@@ -66,6 +66,11 @@ type Review struct {
 	Commit        string `json:"commit"`
 	Scope         string `json:"scope"`
 	ReviewerModel string `json:"reviewer_model"`
+	// ReviewerTool / VerifierTool name the coding CLI and its version when
+	// the seat was agentic ("2.1.263 (Claude Code)"), "" for an API seat:
+	// a row in models rank is a tool AND a version AND a model.
+	ReviewerTool string `json:"reviewer_tool,omitempty"`
+	VerifierTool string `json:"verifier_tool,omitempty"`
 	// Lang is the language most of the shown files are in, "" when mixed
 	// or unknown: the row's language dimension in `models rank`.
 	Lang string `json:"lang,omitempty"`

@@ -647,8 +647,8 @@ flags of `corral review`:
     	with --push, also send the scripts and what they printed (they quote the audited code); off by default
   -repo string
     	the checkout to review (a git repository at a commit) (default ".")
-  -reviewer-model string
-    	the reviewer seat's model — an alias from the registry or a provider model name (required; corral has no default models)
+  -reviewer-model claude-code
+    	the reviewer seat — an alias from the registry, a provider model name, or an AGENTIC seat: claude-code, `codex`, or either pinned to a model as `claude-code:<model>` / `codex:<model>`. An agentic seat is a coding CLI started in a disposable copy of the repository with read-only tools: it reads the whole scope itself (no --max-bytes cap) and hands back scripts, which corral runs — nothing it did itself is on the record. Required; corral has no default models
   -scope string
     	the directory or file under --repo to review (required)
   -timeout duration

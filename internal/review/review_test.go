@@ -193,3 +193,47 @@ func TestParseSurvivesBracesInTheProse(t *testing.T) {
 		}
 	}
 }
+
+// TestOutcomeAndGradeFollowTheOrderOfAuthority: a person's verdict outranks
+// execution; execution decides a REPRODUCED claim; a CODE-READ or
+// HYPOTHESIS claim with no verdict grades nobody; the verifier is right
+// when its verdict matches the outcome, either way round.
+func TestOutcomeAndGradeFollowTheOrderOfAuthority(t *testing.T) {
+	code := 0
+	held := Finding{Declared: TierReproduced, Tier: TierReproduced, ExitCode: &code, Refutation: &Refutation{Verdict: VerdictStands}}
+	fell := Finding{Declared: TierReproduced, Tier: TierCodeRead, Demoted: "refuted by v, reproduced", Refutation: &Refutation{Verdict: VerdictRefuted, Tier: TierReproduced}}
+	unknown := Finding{Declared: TierCodeRead, Tier: TierCodeRead, Refutation: &Refutation{Verdict: VerdictRefuted, Tier: TierCodeRead}}
+	cases := []struct {
+		name string
+		f    Finding
+		adj  *Adjudicated
+		want Graded
+	}{
+		{"held by execution, verifier stood: both right", held, nil, Graded{true, true, true, true}},
+		{"fell by reproduced refutation: reviewer wrong, verifier right", fell, nil, Graded{true, false, true, true}},
+		{"code-read, no verdict: nobody graded", unknown, nil, Graded{}},
+		{"code-read, person confirmed: reviewer right, verifier's refute wrong", unknown, &Adjudicated{Verdict: "confirmed", By: "p"}, Graded{true, true, true, false}},
+		{"execution said held, person refuted: person wins, verifier's stand wrong", held, &Adjudicated{Verdict: "refuted", By: "p"}, Graded{true, false, true, false}},
+		{"no verifier at all: reviewer graded, verifier not", Finding{Declared: TierReproduced, Tier: TierReproduced}, nil, Graded{true, true, false, false}},
+	}
+	for _, c := range cases {
+		if got := Grade(c.f, c.adj); got != c.want {
+			t.Errorf("%s: got %+v, want %+v", c.name, got, c.want)
+		}
+	}
+	if o := OutcomeOf(held, &Adjudicated{Verdict: "refuted", By: "p"}); !o.Known || o.Held || o.By != "adjudication by p" {
+		t.Errorf("adjudication must name itself: %+v", o)
+	}
+}
+
+func TestCoverageNoteNamesABlanketApproval(t *testing.T) {
+	if n := CoverageNote(Review{Sound: []string{"a", "b"}}); !strings.Contains(n, "unknown") || !strings.Contains(n, "2 item(s)") {
+		t.Errorf("no findings + 2 sound items must be unknown coverage: %q", n)
+	}
+	if n := CoverageNote(Review{Sound: []string{"a", "b", "c"}}); n != "" {
+		t.Errorf("three sound items is a review: %q", n)
+	}
+	if n := CoverageNote(Review{Findings: []Finding{{ID: "R1"}}}); n != "" {
+		t.Errorf("a finding is coverage: %q", n)
+	}
+}

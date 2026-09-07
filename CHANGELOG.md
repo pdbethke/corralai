@@ -9,6 +9,25 @@ still move between minor versions.
 Entries describe what changed for someone *using* the tool. For the full commit
 history of any release, `git log v0.3.4..v0.3.5`.
 
+## [Unreleased] — toward 1.0.0-rc.6
+
+- **The reviewer and the verifier are graded.** `corral models rank --db
+  <ledger dir>` now carries two more seats. A reviewer's row is *claims
+  that held, of those checked*; a verifier's is *verdicts that agreed with
+  the outcome*. The outcome of a finding is one rule (`internal/review`,
+  `OutcomeOf`): a person's adjudication when there is one; else execution
+  — a REPRODUCED claim's recorded tier after its script and any reproduced
+  refutation; a CODE-READ or HYPOTHESIS claim nobody adjudicated has no
+  outcome and grades nobody. A verifier is right when REFUTED met a claim
+  that did not hold or STANDS met one that did. The language dimension is
+  the scope's. The evidence floor applies as to every seat: a row below
+  `--min-runs` is printed and never preferred. Over one evening's reviews
+  of corral itself: reviewer flash 2/3, sonnet 1/3; verifier flash 3/3,
+  haiku 1/1 — all insufficient at the default floor, as they should be.
+- **A review with nothing in it says so.** No findings and fewer than
+  three items checked-and-found-sound is recorded and printed as
+  `coverage unknown … a blanket approval, not a review`.
+
 ## [v1.0.0-rc.5] — 2026-09-07
 
 The verifier seat, the reproductions signed, and the record readable in

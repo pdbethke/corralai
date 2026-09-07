@@ -85,12 +85,33 @@ type Review struct {
 	Truncated    bool     `json:"truncated,omitempty"`
 	InputTokens  int64    `json:"input_tokens,omitempty"`
 	OutputTokens int64    `json:"output_tokens,omitempty"`
+	// Coverage is the run's own note on how much the review can be said to
+	// cover: "" when the sound list and the findings between them say what
+	// was looked at, else why they do not (see CoverageNote). A review with
+	// no findings and a thin sound list is a review whose coverage is
+	// unknown — and a verifier told there is nothing to refute says so too.
+	Coverage string `json:"coverage,omitempty"`
 	// StatementSHA256 is the sha256 of the --attest statement written for
 	// this review, when one was: the statement is written FIRST (it hashes
 	// the reproductions), then the entry, so the entry names the statement
 	// and the statement names the reproductions, and a reader holding
 	// either can find the other.
 	StatementSHA256 string `json:"statement_sha256,omitempty"`
+}
+
+// MinSound is the sound list below which a review with no findings is
+// recorded as unknown coverage: three items is the least a reviewer that
+// actually looked can name.
+const MinSound = 3
+
+// CoverageNote is the rule: no findings and fewer than MinSound sound items
+// means nothing is known about what the reviewer examined. Set on the
+// review by the run and printed; never a gate.
+func CoverageNote(r Review) string {
+	if len(r.Findings) > 0 || len(r.Sound) >= MinSound {
+		return ""
+	}
+	return fmt.Sprintf("unknown: no findings and %d item(s) checked and found sound (fewer than %d) — a blanket approval, not a review; nothing here is evidence the scope is sound", len(r.Sound), MinSound)
 }
 
 // Counts summarises the record's tiers.

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/pdbethke/corralai/internal/lang"
 )
@@ -212,4 +213,37 @@ func (s MutantSetFile) MutantsFor(codePath, currentSource string) ([]Mutant, err
 		})
 	}
 	return out, nil
+}
+
+// Hunk is the wire form of one mutant's edit inside a ledger entry's
+// mutant row: the row's `code` column is the mutant's SOURCE, and a
+// single-point edit's source is its search/replace pair, not a whole file.
+// A JSON object so the two texts round-trip whatever bytes they hold.
+type Hunk struct {
+	Search  string `json:"search"`
+	Replace string `json:"replace"`
+}
+
+// EncodeHunk is the `code` value a ledger mutant row carries for an edit;
+// "" when there is no hunk to carry.
+func EncodeHunk(search, replace string) string {
+	if search == "" && replace == "" {
+		return ""
+	}
+	b, _ := json.Marshal(Hunk{Search: search, Replace: replace})
+	return string(b)
+}
+
+// DecodeHunk reads what EncodeHunk wrote; ok is false for "" and for any
+// other content (an older row that held something else), which a reader
+// must treat as "no hunk recorded", never as a hunk.
+func DecodeHunk(code string) (search, replace string, ok bool) {
+	if !strings.HasPrefix(code, "{") {
+		return "", "", false
+	}
+	var h Hunk
+	if err := json.Unmarshal([]byte(code), &h); err != nil || (h.Search == "" && h.Replace == "") {
+		return "", "", false
+	}
+	return h.Search, h.Replace, true
 }

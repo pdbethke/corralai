@@ -14,6 +14,7 @@ import (
 	"sync"
 
 	"github.com/pdbethke/corralai/internal/adequacy"
+	"github.com/pdbethke/corralai/internal/auditpush"
 )
 
 // mutantSetRecorder accumulates `--record-mutants`: one entry per audited
@@ -71,6 +72,28 @@ func (r *mutantSetRecorder) sink(codePath string, ms []adequacy.Mutant) {
 		return
 	}
 	r.files[codePath] = adequacy.MutantSetEntry{ParentSHA256: parent, Mutants: recorded}
+}
+
+// stampHunks writes each recorded mutant's hunk onto the bundle row that
+// carries its outcome, matched by (path, id) — the same two names the
+// sink and the verdict were handed for one mutant. Rows with no recorded
+// hunk (a cache hit ran no dev pass; a file the recorder skipped) are left
+// as they are.
+func (r *mutantSetRecorder) stampHunks(rows []auditpush.MutantRow) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i := range rows {
+		e, ok := r.files[rows[i].Path]
+		if !ok {
+			continue
+		}
+		for _, m := range e.Mutants {
+			if m.ID == rows[i].MutantID {
+				rows[i].Code = adequacy.EncodeHunk(m.Search, m.Replace)
+				break
+			}
+		}
+	}
 }
 
 // write flushes the accumulated set to path and returns how many files it

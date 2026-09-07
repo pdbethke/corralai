@@ -9,7 +9,11 @@ still move between minor versions.
 Entries describe what changed for someone *using* the tool. For the full commit
 history of any release, `git log v0.3.4..v0.3.5`.
 
-## [Unreleased] — toward 1.0.0-rc.7
+## [v1.0.0-rc.7] — 2026-09-07
+
+The seats can be coding agents, and the first agentic round paid: Claude
+Code reviewing and Codex verifying `internal/prior` found six defects, all
+confirmed, all fixed here; a round on `internal/brain` found a security gap.
 
 - **The prior no longer loses, disguises or misreports what was tried.** Six
   defects in `internal/prior`, all found by the first agentic review round

@@ -45,6 +45,16 @@ history of any release, `git log v0.3.4..v0.3.5`.
   a reply with no text that ran out of it is an error naming the model,
   the budget and the tokens spent. Found by asking why a review had zero
   findings.
+- **`corral ui` shows the whole record, not just the seal.** Over a ledger
+  directory the page now carries the chain — every entry newest first,
+  its kind, what it is about, its signature checked against the local
+  certify key, a retracted scan marked, a problem named — and every
+  review: the opinion, the verifier's opinion, each finding with its
+  declared and recorded tier, the reviewer's and the verifier's scripts
+  with their output (collapsed), the demotion reasons, the verifier's
+  STANDS/REFUTED argument, and the person's confirmed/refuted verdict.
+  Read fresh on every reload. Over a warehouse file the page says the
+  chain and the reviews are not there rather than rendering an empty one.
 
 ## [v1.0.0-rc.4] — 2026-09-06
 

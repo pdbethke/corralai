@@ -41,7 +41,7 @@ var uiWeb embed.FS
 func runUI(args []string, open func(dsn string) (sealReader, error), stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("ui", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	dsn := fs.String("db", "", "what to read: a ledger directory or a warehouse file (default: $CORRAL_LEDGER, else ./.corral/ledger — the same resolution `corral seal` and `corral scans` use)")
+	dsn := fs.String("db", "", "what to read: a ledger directory (the seal, the chain and the reviews) or a warehouse file / md:<db> (the seal only) — default $CORRAL_LEDGER, else ./.corral/ledger, the same resolution `corral seal` and `corral scans` use")
 	addr := fs.String("addr", "127.0.0.1:8787", "local listen address. Loopback by default ON PURPOSE: the ledger is a map of where a codebase's tests are thinnest")
 	once := fs.Bool("print-url", false, "print the URL and exit without serving (for scripts and smoke tests)")
 	if err := fs.Parse(args); err != nil {
@@ -68,7 +68,7 @@ func runUI(args []string, open func(dsn string) (sealReader, error), stdout, std
 		return 0
 	}
 
-	srv := &http.Server{Addr: *addr, Handler: uiHandler(st), ReadHeaderTimeout: 10 * time.Second}
+	srv := &http.Server{Addr: *addr, Handler: uiHandler(st, uiLedgerDir(target)), ReadHeaderTimeout: 10 * time.Second}
 	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		fmt.Fprintln(stderr, "corral ui:", err)
 		return 1
@@ -80,8 +80,25 @@ func runUI(args []string, open func(dsn string) (sealReader, error), stdout, std
 //
 // Two routes, deliberately: a UI that grows endpoints grows a schema, and this
 // one's contract is "whatever the seal view already means".
-func uiHandler(st sealReader) http.Handler {
+func uiHandler(st sealReader, ledgerDir string) http.Handler {
 	mux := http.NewServeMux()
+	// The ledger half: the chain, the reviews, the adjudications — read
+	// fresh on every request, so a verdict written from another terminal
+	// shows on reload.
+	mux.HandleFunc("/api/ledger", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if ledgerDir == "" {
+			_ = json.NewEncoder(w).Encode(map[string]any{"dir": ""})
+			return
+		}
+		l, err := readUILedger(ledgerDir)
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(l)
+	})
 	mux.HandleFunc("/api/seal", func(w http.ResponseWriter, r *http.Request) {
 		rows, err := st.SealRows(r.Context(), strings.TrimSpace(r.URL.Query().Get("repo")))
 		if err != nil {

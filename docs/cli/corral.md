@@ -135,9 +135,11 @@ Usage:
                                   Different from "corral certify verify", which checks a
                                   corral certify BUILD record, a different artifact.
                                   flags: --db <dsn>  --rekor-index <n>  --pub <hex>
-  corral ui [flags]              browse that same seal in a browser: a local, read-only page over
-                                  the ledger, loopback by default. No brain, no writes — if
-                                  corral seal can answer it, this shows it.
+  corral ui [flags]              the record in a browser, read-only, loopback by default: the seal
+                                  (newest verdict per file), the CHAIN (every entry, its kind, its
+                                  signature checked, retractions named) and the REVIEWS — each
+                                  finding with its tier, the scripts, the verifier's answer and the
+                                  person's verdict. No brain, no writes.
   corral seal [flags]            the repo's CURRENT state as the union of still-valid verdicts,
                                   read from a certify --repo --push warehouse (many audits, one
                                   current state — not one scan's snapshot). Reads corral_seal
@@ -651,7 +653,7 @@ Usage of ui:
   -addr string
     	local listen address. Loopback by default ON PURPOSE: the ledger is a map of where a codebase's tests are thinnest (default "127.0.0.1:8787")
   -db corral seal
-    	what to read: a ledger directory or a warehouse file (default: $CORRAL_LEDGER, else ./.corral/ledger — the same resolution corral seal and `corral scans` use)
+    	what to read: a ledger directory (the seal, the chain and the reviews) or a warehouse file / md:<db> (the seal only) — default $CORRAL_LEDGER, else ./.corral/ledger, the same resolution corral seal and `corral scans` use
   -print-url
     	print the URL and exit without serving (for scripts and smoke tests)
 ```

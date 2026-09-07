@@ -1,6 +1,6 @@
 <!doctype html>
 <meta charset="utf-8">
-<title>corral seal</title>
+<title>corral</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <style>
   :root{--bg:#fbfbfa;--fg:#16181d;--dim:#666e79;--rule:#e2e5ea;--surface:#fff;--bad:#9c2b21;--warn:#8a5a00;--ok:#1f6142}
@@ -24,14 +24,33 @@
   .rate-lo{color:var(--bad)}.rate-mid{color:var(--warn)}.rate-hi{color:var(--ok)}
   .empty,.err{padding:2rem 0;color:var(--dim)}
   .err{color:var(--bad)}
+  h2{font-size:1.1rem;font-weight:600;margin:2.5rem 0 .25rem;letter-spacing:-.01em}
+  .chip{display:inline-block;font-size:.72rem;text-transform:uppercase;letter-spacing:.06em;padding:.1rem .45rem;border-radius:3px;border:1px solid var(--rule);color:var(--dim);vertical-align:middle}
+  .chip.ok{color:var(--ok);border-color:var(--ok)}.chip.bad{color:var(--bad);border-color:var(--bad)}.chip.warn{color:var(--warn);border-color:var(--warn)}
+  .review{border:1px solid var(--rule);border-radius:6px;background:var(--surface);padding:1rem 1.25rem;margin:1rem 0}
+  .review .meta{color:var(--dim);font-size:.85rem;margin-bottom:.6rem}
+  .review p{margin:.5rem 0;max-width:72ch}
+  .finding{border-top:1px solid var(--rule);padding:.8rem 0}
+  .finding .claim{font-weight:600}
+  .finding .where{color:var(--dim);font-size:.85rem}
+  .finding pre{font:.8em ui-monospace,monospace;background:var(--bg);border:1px solid var(--rule);border-radius:4px;padding:.6rem .8rem;overflow-x:auto;margin:.4rem 0;white-space:pre-wrap}
+  .seat{margin:.5rem 0 .2rem;font-size:.9rem}
+  .seat b{font-weight:600}
+  .verdict{margin:.4rem 0;padding:.4rem .7rem;border-left:3px solid var(--rule);font-size:.9rem}
+  .verdict.confirmed{border-color:var(--ok)}.verdict.refuted{border-color:var(--bad)}
+  .sound{color:var(--dim);font-size:.88rem;margin:.6rem 0 0;padding-left:1.1rem}
+  details summary{cursor:pointer;color:var(--dim);font-size:.85rem}
 </style>
 <header>
-  <h1>corral seal</h1>
-  <div class="sub">The newest verdict per file, read from the local ledger. Proven gaps first &mdash; a survivor a test provably catches.</div>
+  <h1>corral</h1>
+  <div class="sub">The record, read from the ledger directory: the newest verdict per file, the chain itself, and the reviews with what each seat argued and what a person decided.</div>
 </header>
 <main>
+  <h2>The seal</h2>
+  <div class="sub" style="margin-bottom:1rem">The newest verdict per file. Proven gaps first &mdash; a survivor a test provably catches.</div>
   <div class="tot" id="tot"></div>
   <div id="body"><div class="empty">Loading&hellip;</div></div>
+  <div id="ledger"></div>
 </main>
 <script>
 const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
@@ -46,7 +65,7 @@ fetch('api/seal').then(async res => {
   const body = document.getElementById('body');
   if (!rows || !rows.length) {
     // "No rows" is not "no gaps" — say which one this is.
-    body.innerHTML = '<div class="empty">This ledger has no scans yet. Run <code>corral certify --repo &lt;dir&gt; --record</code> and reload.</div>';
+    body.innerHTML = '<div class="empty">This ledger has no scans yet. Run <code>corral certify --repo &lt;dir&gt;</code> and reload.</div>';
     return;
   }
   const gaps = rows.reduce((a, r) => a + (r.proven_missed || 0), 0);
@@ -71,5 +90,75 @@ fetch('api/seal').then(async res => {
   // A failed read must never render as an empty, reassuring table.
   document.getElementById('body').innerHTML =
     '<div class="err">Could not read the ledger: ' + esc(e.message) + '</div>';
+});
+
+// The ledger half. Everything the seal cannot show.
+const when = t => esc(String(t).replace('T', ' ').slice(0, 16));
+const chip = (cls, text) => `<span class="chip ${cls}">${esc(text)}</span>`;
+const tierChip = f => {
+  const demoted = f.tier !== f.declared;
+  const cls = f.tier === 'REPRODUCED' ? 'bad' : demoted ? 'warn' : '';
+  return chip(cls, f.tier) + (demoted ? ' <span class="where">declared ' + esc(f.declared) + '</span>' : '');
+};
+const scriptBlock = (label, script, exit, out) => {
+  if (!script) return '';
+  let h = `<details><summary>${esc(label)}${exit != null ? ' — exit ' + exit : ''}</summary><pre>${esc(script)}</pre>`;
+  if (out) h += `<pre>${esc(out)}</pre>`;
+  return h + '</details>';
+};
+const findingHTML = f => {
+  let h = `<div class="finding"><div><b>${esc(f.id)}</b> ${tierChip(f)} ${f.severity ? chip('', f.severity) : ''}
+    <span class="where">${esc(f.file || '')}${f.line ? ':' + f.line : ''}</span></div>
+    <div class="claim">${esc(f.claim)}</div>`;
+  h += scriptBlock('the reviewer\'s script', f.script, f.exit_code, f.stdout);
+  if (f.demoted) h += `<div class="seat">demoted: ${esc(f.demoted)}</div>`;
+  const x = f.refutation;
+  if (x) {
+    h += `<div class="seat"><b>verifier ${esc(x.model)}</b> — ${x.verdict === 'REFUTED' ? chip(x.tier === 'REPRODUCED' ? 'bad' : 'warn', 'refuted · ' + x.tier) : chip('', 'stands')}: ${esc(x.argument)}</div>`;
+    h += scriptBlock('the verifier\'s script', x.script, x.exit_code, x.stdout);
+    if (x.demoted) h += `<div class="seat">refutation demoted: ${esc(x.demoted)}</div>`;
+  }
+  const a = f.adjudication;
+  if (a) h += `<div class="verdict ${esc(a.verdict)}"><b>${esc(a.verdict)}</b> by ${esc(a.by)} — ${esc(a.reason)}</div>`;
+  return h + '</div>';
+};
+
+fetch('api/ledger').then(async res => {
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || res.statusText);
+  return data;
+}).then(l => {
+  const el = document.getElementById('ledger');
+  if (!l.dir) {
+    el.innerHTML = '<h2>The chain</h2><div class="empty">Not a ledger directory: <code>--db</code> named a warehouse, so there is no chain, no reviews and no adjudications here. Point <code>corral ui --db</code> at <code>.corral/ledger</code> to see them.</div>';
+    return;
+  }
+  const n = (l.entries || []).length;
+  let h = `<h2>The chain</h2><div class="sub" style="margin-bottom:1rem">${n} entr${n === 1 ? 'y' : 'ies'} in <code>${esc(l.dir)}</code> &mdash; `
+    + (l.problems ? chip('bad', l.problems + ' problem' + (l.problems > 1 ? 's' : '')) + ' the chain is not intact' : chip('ok', 'intact'))
+    + (l.verified_against ? ', signatures checked against ' + esc(l.verified_against) : ', signatures not checked (no certify key here)') + '</div>';
+  if (n) {
+    h += '<table><thead><tr><th>#</th><th>when</th><th>kind</th><th>what</th><th>signature</th></tr></thead><tbody>' + l.entries.map(e => {
+      const sig = e.problem ? chip('bad', 'problem') : !e.signed ? chip('warn', 'unsigned') : e.verified ? chip('ok', 'verified · ' + e.keyid) : chip('', 'signed · ' + e.keyid);
+      let what = '';
+      if (e.kind === 'scan') what = `<code>${esc(String(e.commit).slice(0, 12))}</code> ${esc(shortRepo(e.repo || ''))} — ${e.audited} audited, ${e.files} file rows, ${e.mutants} mutants` + (e.note ? ' <span class="gap">' + esc(e.note) + '</span>' : '');
+      else what = esc(e.note || e.problem || '');
+      return `<tr><td class="num">${e.pos}</td><td>${when(e.when)}</td><td>${esc(e.kind)}</td><td>${what}${e.problem && e.kind === 'scan' ? '<div class="err">' + esc(e.problem) + '</div>' : ''}</td><td>${sig}</td></tr>`;
+    }).join('') + '</tbody></table>';
+  }
+  const rs = l.reviews || [];
+  h += `<h2>Reviews</h2>`;
+  if (!rs.length) h += '<div class="empty">No reviews in this ledger. <code>corral review --scope &lt;dir&gt; --reviewer-model &lt;m&gt;</code> writes one.</div>';
+  h += rs.map(r => `<div class="review">
+    <div class="meta">#${r.pos} · ${when(r.when)} · <code>${esc(String(r.commit).slice(0, 12))}</code> · scope <code>${esc(r.scope)}</code> · reviewer <b>${esc(r.reviewer)}</b>${r.verifier ? ' · verifier <b>' + esc(r.verifier) + '</b>' : ''}
+      · ${r.reproduced} reproduced, ${r.code_read} code-read, ${r.hypothesis} hypothesis · ${r.files_shown} file${r.files_shown === 1 ? '' : 's'} shown${r.truncated ? ' (some not)' : ''}${r.statement_sha256 ? ' · attested' : ''}</div>
+    <p>${esc(r.opinion)}</p>
+    ${r.verifier_opinion ? '<p><b>' + esc(r.verifier) + ':</b> ' + esc(r.verifier_opinion) + '</p>' : ''}
+    ${(r.findings || []).map(findingHTML).join('')}
+    ${r.sound && r.sound.length ? '<ul class="sound">' + r.sound.map(x => '<li>' + esc(x) + '</li>').join('') + '</ul>' : '<div class="sound">The reviewer listed nothing as checked and sound — its coverage is unknown.</div>'}
+  </div>`).join('');
+  el.innerHTML = h;
+}).catch(e => {
+  document.getElementById('ledger').innerHTML = '<h2>The chain</h2><div class="err">Could not read the ledger: ' + esc(e.message) + '</div>';
 });
 </script>

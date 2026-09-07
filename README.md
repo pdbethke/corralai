@@ -824,8 +824,12 @@ a refutation whose script holds demotes the finding, and the record names
 who refuted it and how. `--attest <path>` signs the reproductions — never
 the opinion — as an in-toto statement the ledger entry names, and `corral
 verify --attest <path> --db .corral/ledger` recomputes their hash from
-the entry. The reviewer's row in `models rank` and the warehouse grains
-are designed, not built:
+the entry. `corral models rank --db .corral/ledger` grades both seats —
+the reviewer by the claims that held of those checked, the verifier by the
+verdicts that agreed with the outcome, a person's adjudication counting
+as the outcome when there is one — under the same evidence floor as every
+other seat. The warehouse grains and the round planner are designed, not
+built:
 **[docs/design/adversarial-review.md](docs/design/adversarial-review.md)**.
 
 ## The audit flags

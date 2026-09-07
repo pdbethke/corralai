@@ -186,6 +186,7 @@ func runReviewRun(args []string, stdout, stderr io.Writer) int {
 	}
 	defer cleanup()
 	review.Reproduce(context.Background(), rep, &r)
+	r.Coverage = review.CoverageNote(r)
 
 	// The verifier sees the review AS RECORDED — reproductions run, tiers
 	// demoted — and the same scope, and its own reproductions run in the
@@ -384,6 +385,9 @@ func printReview(w io.Writer, r review.Review, adj map[string]auditpush.Adjudica
 	}
 	if r.Truncated {
 		fmt.Fprintln(w, "\nsome of the scope was NOT shown to the reviewer (--max-bytes) — nothing above is a claim about those files")
+	}
+	if r.Coverage != "" {
+		fmt.Fprintf(w, "\ncoverage %s\n", r.Coverage)
 	}
 }
 

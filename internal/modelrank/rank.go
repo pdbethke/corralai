@@ -50,9 +50,16 @@ const (
 	SeatMutantGenerator = "mutant-generator"
 	SeatTestWriter      = "test-writer"
 	SeatTestCritic      = "test-critic"
+	// The review loop's two seats (internal/review). A reviewer is graded
+	// the way a test writer is — by what it claimed that HELD — and a
+	// verifier by whether its verdict on each finding agreed with the
+	// finding's final outcome; in both, a person's adjudication is the
+	// outcome when there is one, and execution is the outcome otherwise.
+	SeatReviewer = "reviewer"
+	SeatVerifier = "verifier"
 )
 
-var seatOrder = []string{SeatGoalDeriver, SeatMutantGenerator, SeatTestWriter, SeatTestCritic}
+var seatOrder = []string{SeatGoalDeriver, SeatMutantGenerator, SeatTestWriter, SeatTestCritic, SeatReviewer, SeatVerifier}
 
 // The two modes, named so a reader of --json can tell which question was
 // answered: "did the models this project DECLARED earn their seats", or "what
@@ -92,6 +99,17 @@ type Observation struct {
 	// The critic's outcome, once a human ruled on it.
 	CriticConfirmed int
 	CriticRefuted   int
+
+	// ReviewClaimsChecked / ReviewClaimsHeld (SeatReviewer): findings that
+	// reached an outcome — a script that ran, a verifier's reproduced
+	// refutation, or a person's verdict — and how many of those held.
+	// VerifierCalls / VerifierCorrect (SeatVerifier): STANDS/REFUTED
+	// verdicts on findings that reached an outcome, and how many agreed
+	// with it. A claim or a call with no outcome is not evidence either way.
+	ReviewClaimsChecked int
+	ReviewClaimsHeld    int
+	VerifierCalls       int
+	VerifierCorrect     int
 }
 
 // Options are the caller's questions, not tuning knobs. Declared maps a
@@ -171,6 +189,8 @@ type agg struct {
 	invalid, survived int
 	confirmed         int
 	refuted           int
+	checked, held     int
+	calls, correct    int
 }
 
 // Rank computes the report. It is pure: same observations in, same report out,
@@ -220,6 +240,10 @@ func Rank(obs []Observation, opt Options) Report {
 		a.survived += o.MutantsSurvived
 		a.confirmed += o.CriticConfirmed
 		a.refuted += o.CriticRefuted
+		a.checked += o.ReviewClaimsChecked
+		a.held += o.ReviewClaimsHeld
+		a.calls += o.VerifierCalls
+		a.correct += o.VerifierCorrect
 	}
 
 	byGroup := map[string][]Row{}
@@ -334,6 +358,18 @@ func rowFor(a *agg, opt Options) Row {
 		row.N = a.confirmed + a.refuted
 		row.NUnit = "adjudications"
 		row.Evidence = fmt.Sprintf("%d confirmed, %d refuted", a.confirmed, a.refuted)
+	case SeatReviewer:
+		row.MetricLabel = "claims that held, of those checked"
+		row.Metric = ratio(a.held, a.checked)
+		row.N = a.checked
+		row.NUnit = "claims checked"
+		row.Evidence = fmt.Sprintf("%d/%d claims held over %d reviews", a.held, a.checked, len(a.runs))
+	case SeatVerifier:
+		row.MetricLabel = "verdicts that agreed with the outcome"
+		row.Metric = ratio(a.correct, a.calls)
+		row.N = a.calls
+		row.NUnit = "verdicts"
+		row.Evidence = fmt.Sprintf("%d/%d verdicts agreed over %d reviews", a.correct, a.calls, len(a.runs))
 	case SeatGoalDeriver:
 		row.MetricLabel = "not scored"
 		row.Evidence = fmt.Sprintf("%d runs", len(a.runs))

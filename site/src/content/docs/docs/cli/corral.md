@@ -495,6 +495,9 @@ Takes no flags. Reads the same local findings store `corral certify --local` wri
 
 ```
 usage: corral models rank [--db <dsn>] [--seat <role>] [--lang <name>] [--min-runs N] [--json]
+  seats: goal-deriver, mutant-generator, test-writer, test-critic, and — from a ledger directory's
+  review entries — reviewer (claims that held, of those checked) and verifier (verdicts that agreed
+  with the outcome; a person's adjudication is the outcome when there is one, execution otherwise)
 
   Rank the models that have sat in each seat by what corral's OWN recorded
   evidence says about them — a different metric per seat, because the seats do
@@ -509,6 +512,9 @@ usage: corral models rank [--db <dsn>] [--seat <role>] [--lang <name>] [--min-ru
 
 ```
 usage: corral models rank [--db <dsn>] [--seat <role>] [--lang <name>] [--min-runs N] [--json]
+  seats: goal-deriver, mutant-generator, test-writer, test-critic, and — from a ledger directory's
+  review entries — reviewer (claims that held, of those checked) and verifier (verdicts that agreed
+  with the outcome; a person's adjudication is the outcome when there is one, execution otherwise)
 
   Rank the models that have sat in each seat by what corral's OWN recorded
   evidence says about them — a different metric per seat, because the seats do

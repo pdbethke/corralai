@@ -13,10 +13,13 @@ import (
 	"strings"
 	"text/tabwriter"
 
+	"github.com/pdbethke/corralai/internal/auditpush"
 	"github.com/pdbethke/corralai/internal/bugcatch"
 	"github.com/pdbethke/corralai/internal/criticscore"
+	"github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/modelrank"
 	"github.com/pdbethke/corralai/internal/models"
+	"github.com/pdbethke/corralai/internal/review"
 )
 
 // rankEvidence is one store's worth of already-attributed outcomes, plus a
@@ -57,6 +60,9 @@ func runModels(args []string, repoRoot string, load rankLoader, stdout, stderr i
 }
 
 const modelsUsage = `usage: corral models rank [--db <dsn>] [--seat <role>] [--lang <name>] [--min-runs N] [--json]
+  seats: goal-deriver, mutant-generator, test-writer, test-critic, and — from a ledger directory's
+  review entries — reviewer (claims that held, of those checked) and verifier (verdicts that agreed
+  with the outcome; a person's adjudication is the outcome when there is one, execution otherwise)
 
   Rank the models that have sat in each seat by what corral's OWN recorded
   evidence says about them — a different metric per seat, because the seats do
@@ -134,7 +140,7 @@ func runModelsRank(args []string, repoRoot string, load rankLoader, stdout, stde
 	return 0
 }
 
-var rankSeats = []string{modelrank.SeatGoalDeriver, modelrank.SeatMutantGenerator, modelrank.SeatTestWriter, modelrank.SeatTestCritic}
+var rankSeats = []string{modelrank.SeatGoalDeriver, modelrank.SeatMutantGenerator, modelrank.SeatTestWriter, modelrank.SeatTestCritic, modelrank.SeatReviewer, modelrank.SeatVerifier}
 
 func knownSeatName(s string) bool {
 	for _, k := range rankSeats {
@@ -400,7 +406,23 @@ func defaultRankLoader(dsn string) (rankEvidence, error) {
 			return rankEvidence{}, fmt.Errorf("cannot read the warehouse %s: %w — check the path or `md:` DSN (and, for MotherDuck, that motherduck_token is set); no ranking was produced, and nothing fell back to a different body of evidence", dsn, err)
 		}
 		defer db.Close()
-		return warehouseRankEvidence(db, dsn)
+		ev, err := warehouseRankEvidence(db, dsn)
+		if err != nil {
+			return ev, err
+		}
+		// A ledger DIRECTORY also holds the review loop's entries, which
+		// have no warehouse grain yet: read them from the entries.
+		if auditpush.IsLedgerDir(dsn) {
+			robs, rerr := reviewRankEvidence(strings.TrimRight(dsn, "/"))
+			if rerr != nil {
+				return rankEvidence{}, rerr
+			}
+			ev.Obs = append(ev.Obs, robs...)
+			if len(robs) > 0 {
+				ev.Source += "; reviewer and verifier seats from the directory's review and adjudication entries"
+			}
+		}
+		return ev, nil
 	}
 	store, err := bugcatch.Open(localBugCatchDBPath())
 	if err != nil {
@@ -420,4 +442,72 @@ func defaultRankLoader(dsn string) (rankEvidence, error) {
 		defer func() { _ = cs.Close() }()
 	}
 	return bugcatchRankEvidence(ctx, store, critic)
+}
+
+// reviewRankEvidence grades the reviewer and verifier seats from a ledger
+// directory's review entries and the adjudications that name them, by the
+// one rule in internal/review (Grade): a person's verdict is the outcome
+// when there is one, execution otherwise, and a claim with no outcome
+// grades nobody. One observation per finding, the review entry as the run.
+func reviewRankEvidence(dir string) ([]modelrank.Observation, error) {
+	entries, err := auditpush.ReadLedgerDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	adj := auditpush.Adjudications(entries)
+	var obs []modelrank.Observation
+	for _, e := range entries {
+		if e.Kind != auditpush.KindReview || e.Review == nil {
+			continue
+		}
+		r := e.Review
+		lang := langOfScope(r.FilesShown)
+		for _, f := range r.Findings {
+			var a *review.Adjudicated
+			if v, ok := adj[e.Hash+"#"+f.ID]; ok {
+				a = &review.Adjudicated{Verdict: v.Verdict, By: v.By}
+			}
+			g := review.Grade(f, a)
+			if g.ReviewerChecked {
+				obs = append(obs, modelrank.Observation{Model: r.ReviewerModel, Role: modelrank.SeatReviewer, Lang: lang, Run: e.Hash,
+					ReviewClaimsChecked: 1, ReviewClaimsHeld: boolToInt(g.ReviewerHeld)})
+			}
+			if g.VerifierCalled && f.Refutation != nil {
+				obs = append(obs, modelrank.Observation{Model: f.Refutation.Model, Role: modelrank.SeatVerifier, Lang: lang, Run: e.Hash,
+					VerifierCalls: 1, VerifierCorrect: boolToInt(g.VerifierCorrect)})
+			}
+		}
+	}
+	return obs, nil
+}
+
+// langOfScope is the language most of the shown files are in, "" when the
+// scope is mixed or unknown — a review's language dimension is the scope's.
+func langOfScope(files []string) string {
+	counts := map[string]int{}
+	for _, f := range files {
+		if p, ok := lang.Detect(f); ok {
+			counts[p.Name()]++
+		}
+	}
+	best, n, tie := "", 0, false
+	for name, c := range counts {
+		switch {
+		case c > n:
+			best, n, tie = name, c, false
+		case c == n:
+			tie = true
+		}
+	}
+	if tie {
+		return ""
+	}
+	return best
+}
+
+func boolToInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }

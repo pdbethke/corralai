@@ -14,8 +14,11 @@ a third model, never the reviewer's, refutes by the same rules; a
 reproduced refutation demotes the finding), and `--attest`: an in-toto
 statement over the reproductions, the opinion bound by hash, the entry
 naming the statement and `verify` recomputing the hash from the entry.
-Not yet: reviewer rows in `models rank`, the warehouse grains, the round
-planner. Its first two runs were on corral itself, the day it was
+The seats are graded (`models rank --db <ledger dir>`: reviewer = claims
+that held of those checked, verifier = verdicts that agreed with the
+outcome, the outcome being a person's adjudication else execution). Not
+yet: the warehouse grains (the review seats are read from the directory's
+entries, not from `corral_*` tables), the round planner. Its first two runs were on corral itself, the day it was
 written: one finding refuted (a false claim whose script also could not
 run — demoted, then refuted on the record), one confirmed (a real bypass
 in the verb written that morning, whose script exited 0 for the wrong

@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/pdbethke/corralai/internal/review"
 	"os"
 	"path/filepath"
 	"strings"
@@ -490,5 +491,60 @@ func TestBugcatchRankEvidenceReadsPastTheDebugCap(t *testing.T) {
 	}
 	if !seen {
 		t.Fatalf("the oldest writer's 50/50 record is missing from %d observation(s) — the ranking read a truncated ledger", len(ev.Obs))
+	}
+}
+
+// TestRankGradesTheReviewerAndTheVerifierFromTheLedger: the review loop's
+// seats become rows, from the entries. One review with three findings —
+// one held by execution and the verifier stood (both right), one refuted
+// by a reproduced refutation (reviewer wrong, verifier right), one the
+// person overruled (execution said held, the person refuted: reviewer
+// wrong, the verifier's STANDS wrong) — plus a code-read claim nobody
+// checked, which grades nobody.
+func TestRankGradesTheReviewerAndTheVerifierFromTheLedger(t *testing.T) {
+	t.Setenv("CORRALAI_CERTIFY_KEY_FILE", filepath.Join(t.TempDir(), "certify_key"))
+	dir := filepath.Join(t.TempDir(), "ledger")
+	writeCacheTestEntry(t, dir, nil) // a scan, so the directory is a ledger the warehouse reader accepts
+	signer, _ := ledgerSignerFromLocalKey()
+	code := 0
+	r := review.Review{Repo: "acme/r", Commit: "abc", Scope: "pkg", ReviewerModel: "rev-m", VerifierModel: "ver-m", FilesShown: []string{"pkg/a.go", "pkg/b.go"},
+		Findings: []review.Finding{
+			{ID: "R1", Declared: review.TierReproduced, Tier: review.TierReproduced, ExitCode: &code, Refutation: &review.Refutation{Model: "ver-m", Verdict: review.VerdictStands}},
+			{ID: "R2", Declared: review.TierReproduced, Tier: review.TierCodeRead, Demoted: "refuted by ver-m, reproduced", Refutation: &review.Refutation{Model: "ver-m", Verdict: review.VerdictRefuted, Tier: review.TierReproduced}},
+			{ID: "R3", Declared: review.TierReproduced, Tier: review.TierReproduced, ExitCode: &code, Refutation: &review.Refutation{Model: "ver-m", Verdict: review.VerdictStands}},
+			{ID: "R4", Declared: review.TierCodeRead, Tier: review.TierCodeRead, Refutation: &review.Refutation{Model: "ver-m", Verdict: review.VerdictRefuted, Tier: review.TierCodeRead}},
+		}}
+	if _, err := auditpush.WriteReview(dir, r, signer); err != nil {
+		t.Fatal(err)
+	}
+	entries, _ := auditpush.ReadLedgerDir(dir)
+	if _, err := auditpush.WriteAdjudication(dir, entries[1].Hash+"#R3", auditpush.VerdictRefuted, "pdb", "narrower than claimed", signer); err != nil {
+		t.Fatal(err)
+	}
+	obs, err := reviewRankEvidence(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rc, rh, vc, vok int
+	for _, o := range obs {
+		if o.Lang != "go" {
+			t.Errorf("the scope's language must ride on the observation: %+v", o)
+		}
+		rc += o.ReviewClaimsChecked
+		rh += o.ReviewClaimsHeld
+		vc += o.VerifierCalls
+		vok += o.VerifierCorrect
+	}
+	if rc != 3 || rh != 1 || vc != 3 || vok != 2 {
+		t.Fatalf("reviewer %d/%d checked/held, verifier %d/%d calls/correct; want 3/1 and 3/2 (R4 grades nobody)", rh, rc, vok, vc)
+	}
+	var out, errb bytes.Buffer
+	if rcode := runModels([]string{"rank", "--db", dir, "--min-runs", "1"}, t.TempDir(), defaultRankLoader, &out, &errb); rcode != 0 {
+		t.Fatalf("rank: %d %s", rcode, errb.String())
+	}
+	for _, want := range []string{"reviewer · go", "1/3 claims held over 1 reviews", "verifier · go", "2/3 verdicts agreed over 1 reviews", "reviewer and verifier seats from the directory's review and adjudication entries"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("rank output lacks %q:\n%s", want, out.String())
+		}
 	}
 }

@@ -14,6 +14,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -507,7 +508,7 @@ func TestRankGradesTheReviewerAndTheVerifierFromTheLedger(t *testing.T) {
 	writeCacheTestEntry(t, dir, nil) // a scan, so the directory is a ledger the warehouse reader accepts
 	signer, _ := ledgerSignerFromLocalKey()
 	code := 0
-	r := review.Review{Repo: "acme/r", Commit: "abc", Scope: "pkg", ReviewerModel: "rev-m", VerifierModel: "ver-m", FilesShown: []string{"pkg/a.go", "pkg/b.go"},
+	r := review.Review{Repo: "acme/r", Commit: "abc", Scope: "pkg", ReviewerModel: "rev-m", VerifierModel: "ver-m", Lang: "go", FilesShown: []string{"pkg/a.go", "pkg/b.go"},
 		Findings: []review.Finding{
 			{ID: "R1", Declared: review.TierReproduced, Tier: review.TierReproduced, ExitCode: &code, Refutation: &review.Refutation{Model: "ver-m", Verdict: review.VerdictStands}},
 			{ID: "R2", Declared: review.TierReproduced, Tier: review.TierCodeRead, Demoted: "refuted by ver-m, reproduced", Refutation: &review.Refutation{Model: "ver-m", Verdict: review.VerdictRefuted, Tier: review.TierReproduced}},
@@ -521,7 +522,14 @@ func TestRankGradesTheReviewerAndTheVerifierFromTheLedger(t *testing.T) {
 	if _, err := auditpush.WriteAdjudication(dir, entries[1].Hash+"#R3", auditpush.VerdictRefuted, "pdb", "narrower than claimed", signer); err != nil {
 		t.Fatal(err)
 	}
-	obs, err := reviewRankEvidence(dir)
+	// Through the VIEW: the directory loads as the same tables a warehouse
+	// holds, so the grains are what the rank reads either way.
+	vdb, err := auditpush.LoadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer vdb.Close()
+	obs, err := reviewRankEvidence(vdb)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -542,9 +550,64 @@ func TestRankGradesTheReviewerAndTheVerifierFromTheLedger(t *testing.T) {
 	if rcode := runModels([]string{"rank", "--db", dir, "--min-runs", "1"}, t.TempDir(), defaultRankLoader, &out, &errb); rcode != 0 {
 		t.Fatalf("rank: %d %s", rcode, errb.String())
 	}
-	for _, want := range []string{"reviewer · go", "1/3 claims held over 1 reviews", "verifier · go", "2/3 verdicts agreed over 1 reviews", "reviewer and verifier seats from the directory's review and adjudication entries"} {
+	for _, want := range []string{"reviewer · go", "1/3 claims held over 1 reviews", "verifier · go", "2/3 verdicts agreed over 1 reviews", "reviewer and verifier seats from corral_findings joined to corral_adjudications"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("rank output lacks %q:\n%s", want, out.String())
 		}
+	}
+}
+
+// TestRankReadsTheReviewSeatsFromAPushedWarehouse: the grains pushed to
+// a warehouse FILE — a review, then a person's verdict from another
+// process — rank the same as the directory's view does; the file holds
+// no scripts unless the run said --push-source.
+func TestRankReadsTheReviewSeatsFromAPushedWarehouse(t *testing.T) {
+	t.Setenv("CORRALAI_CERTIFY_KEY_FILE", filepath.Join(t.TempDir(), "certify_key"))
+	dir := filepath.Join(t.TempDir(), "ledger")
+	signer, _ := ledgerSignerFromLocalKey()
+	code := 0
+	r := review.Review{Repo: "acme/r", Commit: "abc", Scope: "pkg", ReviewerModel: "rev-m", VerifierModel: "ver-m", Lang: "go",
+		Findings: []review.Finding{
+			{ID: "R1", Claim: "x", Declared: review.TierReproduced, Tier: review.TierReproduced, Script: "grep secret", Stdout: "the secret", ExitCode: &code, Refutation: &review.Refutation{Model: "ver-m", Verdict: review.VerdictStands}},
+		}}
+	if _, err := auditpush.WriteReview(dir, r, signer); err != nil {
+		t.Fatal(err)
+	}
+	entries, _ := auditpush.ReadLedgerDir(dir)
+	wh := filepath.Join(t.TempDir(), "wh.duckdb")
+	if c, err := auditpush.PushReviewEntry(wh, entries[0], false); err != nil || c.Reviews != 1 || c.Findings != 1 {
+		t.Fatalf("push review: %+v %v", c, err)
+	}
+	if _, err := auditpush.WriteAdjudication(dir, entries[0].Hash+"#R1", auditpush.VerdictRefuted, "pdb", "no", signer); err != nil {
+		t.Fatal(err)
+	}
+	entries, _ = auditpush.ReadLedgerDir(dir)
+	if c, err := auditpush.PushReviewEntry(wh, entries[1], false); err != nil || c.Adjudications != 1 {
+		t.Fatalf("push adjudication: %+v %v", c, err)
+	}
+	db, err := attachWarehouse(wh, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var script sql.NullString
+	var scriptSHA string
+	if err := db.QueryRow(`SELECT script, script_sha256 FROM corral_findings`).Scan(&script, &scriptSHA); err != nil {
+		t.Fatal(err)
+	}
+	if script.Valid || scriptSHA == "" {
+		t.Errorf("without --push-source the script must be withheld and its hash kept: script=%v sha=%q", script, scriptSHA)
+	}
+	obs, err := reviewRankEvidence(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The person refuted a claim execution held: reviewer wrong, verifier's STANDS wrong.
+	var rh, rc, vok, vc int
+	for _, o := range obs {
+		rh, rc, vok, vc = rh+o.ReviewClaimsHeld, rc+o.ReviewClaimsChecked, vok+o.VerifierCorrect, vc+o.VerifierCalls
+	}
+	if rc != 1 || rh != 0 || vc != 1 || vok != 0 {
+		t.Errorf("reviewer %d/%d, verifier %d/%d; want 0/1 and 0/1", rh, rc, vok, vc)
 	}
 }

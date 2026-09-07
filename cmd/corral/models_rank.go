@@ -13,7 +13,6 @@ import (
 	"strings"
 	"text/tabwriter"
 
-	"github.com/pdbethke/corralai/internal/auditpush"
 	"github.com/pdbethke/corralai/internal/bugcatch"
 	"github.com/pdbethke/corralai/internal/criticscore"
 	"github.com/pdbethke/corralai/internal/lang"
@@ -410,17 +409,15 @@ func defaultRankLoader(dsn string) (rankEvidence, error) {
 		if err != nil {
 			return ev, err
 		}
-		// A ledger DIRECTORY also holds the review loop's entries, which
-		// have no warehouse grain yet: read them from the entries.
-		if auditpush.IsLedgerDir(dsn) {
-			robs, rerr := reviewRankEvidence(strings.TrimRight(dsn, "/"))
-			if rerr != nil {
-				return rankEvidence{}, rerr
-			}
-			ev.Obs = append(ev.Obs, robs...)
-			if len(robs) > 0 {
-				ev.Source += "; reviewer and verifier seats from the directory's review and adjudication entries"
-			}
+		// The review loop's seats, from the review grains — a warehouse's
+		// own tables, or the view a ledger directory loads as.
+		robs, rerr := reviewRankEvidence(db)
+		if rerr != nil {
+			return rankEvidence{}, rerr
+		}
+		ev.Obs = append(ev.Obs, robs...)
+		if len(robs) > 0 {
+			ev.Source += "; reviewer and verifier seats from corral_findings joined to corral_adjudications"
 		}
 		return ev, nil
 	}
@@ -444,41 +441,52 @@ func defaultRankLoader(dsn string) (rankEvidence, error) {
 	return bugcatchRankEvidence(ctx, store, critic)
 }
 
-// reviewRankEvidence grades the reviewer and verifier seats from a ledger
-// directory's review entries and the adjudications that name them, by the
-// one rule in internal/review (Grade): a person's verdict is the outcome
-// when there is one, execution otherwise, and a claim with no outcome
-// grades nobody. One observation per finding, the review entry as the run.
-func reviewRankEvidence(dir string) ([]modelrank.Observation, error) {
-	entries, err := auditpush.ReadLedgerDir(dir)
+// reviewRankEvidence grades the reviewer and verifier seats from the
+// review grains: one observation per finding, joined to the NEWEST
+// adjudication of that finding, graded by the one rule in internal/review
+// (Grade) — a person's verdict is the outcome when there is one,
+// execution otherwise, and a claim with no outcome grades nobody. The
+// review entry is the run.
+func reviewRankEvidence(db *sql.DB) ([]modelrank.Observation, error) {
+	rows, err := db.Query(`SELECT f.review_uid, COALESCE(r.reviewer_model, ''), COALESCE(r.lang, ''),
+	    f.declared_tier, f.tier, COALESCE(f.refutation_model, ''), COALESCE(f.refutation_verdict, ''),
+	    COALESCE(a.verdict, ''), COALESCE(a.decided_by, '')
+	  FROM corral_findings f
+	  LEFT JOIN corral_reviews r ON r.review_uid = f.review_uid
+	  LEFT JOIN (
+	    SELECT review_uid, finding_id, verdict, decided_by,
+	           row_number() OVER (PARTITION BY review_uid, finding_id ORDER BY ts DESC) AS rn
+	    FROM corral_adjudications
+	  ) a ON a.review_uid = f.review_uid AND a.finding_id = f.finding_id AND a.rn = 1`)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("reading the review grains: %w", err)
 	}
-	adj := auditpush.Adjudications(entries)
+	defer rows.Close()
 	var obs []modelrank.Observation
-	for _, e := range entries {
-		if e.Kind != auditpush.KindReview || e.Review == nil {
-			continue
+	for rows.Next() {
+		var uid, reviewer, lang, declared, tier, vModel, vVerdict, aVerdict, aBy string
+		if err := rows.Scan(&uid, &reviewer, &lang, &declared, &tier, &vModel, &vVerdict, &aVerdict, &aBy); err != nil {
+			return nil, err
 		}
-		r := e.Review
-		lang := langOfScope(r.FilesShown)
-		for _, f := range r.Findings {
-			var a *review.Adjudicated
-			if v, ok := adj[e.Hash+"#"+f.ID]; ok {
-				a = &review.Adjudicated{Verdict: v.Verdict, By: v.By}
-			}
-			g := review.Grade(f, a)
-			if g.ReviewerChecked {
-				obs = append(obs, modelrank.Observation{Model: r.ReviewerModel, Role: modelrank.SeatReviewer, Lang: lang, Run: e.Hash,
-					ReviewClaimsChecked: 1, ReviewClaimsHeld: boolToInt(g.ReviewerHeld)})
-			}
-			if g.VerifierCalled && f.Refutation != nil {
-				obs = append(obs, modelrank.Observation{Model: f.Refutation.Model, Role: modelrank.SeatVerifier, Lang: lang, Run: e.Hash,
-					VerifierCalls: 1, VerifierCorrect: boolToInt(g.VerifierCorrect)})
-			}
+		f := review.Finding{Declared: declared, Tier: tier}
+		if vVerdict != "" {
+			f.Refutation = &review.Refutation{Model: vModel, Verdict: vVerdict}
+		}
+		var adj *review.Adjudicated
+		if aVerdict != "" {
+			adj = &review.Adjudicated{Verdict: aVerdict, By: aBy}
+		}
+		g := review.Grade(f, adj)
+		if g.ReviewerChecked {
+			obs = append(obs, modelrank.Observation{Model: reviewer, Role: modelrank.SeatReviewer, Lang: lang, Run: uid,
+				ReviewClaimsChecked: 1, ReviewClaimsHeld: boolToInt(g.ReviewerHeld)})
+		}
+		if g.VerifierCalled {
+			obs = append(obs, modelrank.Observation{Model: vModel, Role: modelrank.SeatVerifier, Lang: lang, Run: uid,
+				VerifierCalls: 1, VerifierCorrect: boolToInt(g.VerifierCorrect)})
 		}
 	}
-	return obs, nil
+	return obs, rows.Err()
 }
 
 // langOfScope is the language most of the shown files are in, "" when the

@@ -705,7 +705,7 @@ func LoadDir(dir string) (*sql.DB, error) {
 		db.Close()
 		return nil, fmt.Errorf("auditpush: view attach: %w", err)
 	}
-	for _, ddl := range []string{scansSchema, auditsSchema, mutantsSchema, modelCallsSchema, eventsSchema} {
+	for _, ddl := range schemaDDL {
 		if _, err := db.Exec(ddl); err != nil {
 			db.Close()
 			return nil, fmt.Errorf("auditpush: view schema: %w", err)
@@ -716,7 +716,23 @@ func LoadDir(dir string) (*sql.DB, error) {
 		return nil, err
 	}
 	// The view is the record as it stands: scan entries, retracted ones
-	// left out (ScanEntries). A retraction entry itself has no rows.
+	// left out (ScanEntries); every review and adjudication entry into
+	// the review grains, scripts and outputs included — the directory
+	// holds them, so the view over it does.
+	for _, f := range files {
+		switch f.Kind {
+		case KindReview:
+			if _, err := insertReviewEntry(db, f, true); err != nil {
+				db.Close()
+				return nil, err
+			}
+		case KindAdjudication:
+			if err := insertAdjudicationEntry(db, f); err != nil {
+				db.Close()
+				return nil, err
+			}
+		}
+	}
 	files = ScanEntries(files)
 	for _, f := range files {
 		if _, err := insertBundle(db, f.Bundle, f.Pushed, f.ScanUID); err != nil {

@@ -28,6 +28,19 @@ history of any release, `git log v0.3.4..v0.3.5`.
   three items checked-and-found-sound is recorded and printed as
   `coverage unknown … a blanket approval, not a review`.
 
+- **The review loop's warehouse grains.** Three tables, additive to the
+  five `certify` pushes: `corral_reviews` (one per review, keyed by
+  `review_uid` = the entry's hash), `corral_findings` (one per finding —
+  declared and recorded tier, script and output as hashes always and as
+  bytes with `--push-source`, exit, demotion, the verifier's refutation on
+  the same terms) and `corral_adjudications` (one per verdict, joined on
+  `(review_uid, finding_id)`). The view over a ledger directory loads
+  them; `corral review --push <dsn>` and `review adjudicate --push <dsn>`
+  append them to a warehouse or MotherDuck; `models rank` reads the
+  reviewer and verifier seats from the grains — so `--db md:` grades the
+  seats the same way the directory does, across every repository that
+  pushes. `corral_reviews.lang` is the scope's language.
+
 ## [v1.0.0-rc.5] — 2026-09-07
 
 The verifier seat, the reproductions signed, and the record readable in

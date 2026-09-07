@@ -568,6 +568,10 @@ flags of `corral review`:
     	how many bytes of the scope the reviewer is shown; files past the cap are listed by name and the review records them as unshown (default 200000)
   -no-ledger
     	print the review and write no entry
+  -push review adjudicate --push
+    	also append the review's rows to a warehouse you own — a DuckDB path, or md:<db> — as corral_reviews and corral_findings, keyed by the entry's hash so a later review adjudicate --push joins to them. Scripts and outputs travel as hashes unless --push-source
+  -push-source
+    	with --push, also send the scripts and what they printed (they quote the audited code); off by default
   -repo string
     	the checkout to review (a git repository at a commit) (default ".")
   -reviewer-model string
@@ -588,6 +592,8 @@ Usage of corral review adjudicate:
     	who is deciding (default: the OS user)
   -confirm
     	the finding is real as stated
+  -push string
+    	also append the verdict as a corral_adjudications row to this warehouse (a DuckDB path, or md:<db>), joined to the review's rows by the entry's hash
   -reason string
     	why, in your words (required)
   -refute

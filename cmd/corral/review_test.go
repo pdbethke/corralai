@@ -63,10 +63,14 @@ func TestReviewRunsReproductionsRecordsTheEntryAndTakesAdjudications(t *testing.
 	}
 
 	ledger := filepath.Join(t.TempDir(), "ledger")
+	wh := filepath.Join(t.TempDir(), "wh.duckdb")
 	var out, errb bytes.Buffer
-	code := runReview([]string{"--repo", root, "--scope", "pkg", "--reviewer-model", "reviewer-x", "--ledger", ledger}, &out, &errb)
+	code := runReview([]string{"--repo", root, "--scope", "pkg", "--reviewer-model", "reviewer-x", "--ledger", ledger, "--push", wh, "--push-source"}, &out, &errb)
 	if code != 0 {
 		t.Fatalf("exit %d: stdout=%s stderr=%s", code, out.String(), errb.String())
+	}
+	if !strings.Contains(out.String(), "pushed 1 review, 4 finding row(s) to "+wh) {
+		t.Errorf("the push must be reported:\n%s", out.String())
 	}
 	s := out.String()
 	for _, want := range []string{
@@ -99,8 +103,26 @@ func TestReviewRunsReproductionsRecordsTheEntryAndTakesAdjudications(t *testing.
 	}
 
 	out.Reset()
-	if code := runReview([]string{"adjudicate", ledger, rev.Hash[:12] + "#R2", "--refute", "--reason", "the module file is right there", "--by", "pdb"}, &out, &errb); code != 0 {
+	if code := runReview([]string{"adjudicate", ledger, rev.Hash[:12] + "#R2", "--refute", "--reason", "the module file is right there", "--by", "pdb", "--push", wh}, &out, &errb); code != 0 {
 		t.Fatalf("adjudicate: %d %s", code, errb.String())
+	}
+	if !strings.Contains(out.String(), "pushed the verdict to "+wh) {
+		t.Errorf("the adjudication push must be reported:\n%s", out.String())
+	}
+	// The warehouse holds the review, its findings WITH source (--push-source), and the verdict.
+	wdb, werr := attachWarehouse(wh, true)
+	if werr != nil {
+		t.Fatal(werr)
+	}
+	var nr, nf, na int
+	var script string
+	_ = wdb.QueryRow(`SELECT count(*) FROM corral_reviews`).Scan(&nr)
+	_ = wdb.QueryRow(`SELECT count(*) FROM corral_findings`).Scan(&nf)
+	_ = wdb.QueryRow(`SELECT count(*) FROM corral_adjudications`).Scan(&na)
+	_ = wdb.QueryRow(`SELECT script FROM corral_findings WHERE finding_id = 'R1'`).Scan(&script)
+	wdb.Close()
+	if nr != 1 || nf != 4 || na != 1 || !strings.Contains(script, "grep") {
+		t.Errorf("warehouse: %d reviews, %d findings, %d adjudications, R1 script %q", nr, nf, na, script)
 	}
 	out.Reset()
 	if code := runReview([]string{"adjudicate", ledger, rev.Hash[:12] + "#R2", "--confirm", "--refute", "--reason", "x"}, &out, &errb); code != 2 {

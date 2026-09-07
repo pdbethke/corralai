@@ -200,3 +200,6 @@ corral review --no-ledger	unexecuted
 corral review --timeout	executed	run:2026-09-06 corral review --scope cmd/corral/ledger.go (the default, a 60s bound on a `go test` reproduction)
 corral review --verifier-model	executed	test:cmd/corral/review_test.go
 corral review --attest	executed	test:cmd/corral/review_test.go
+corral review adjudicate --push	executed	test:cmd/corral/review_test.go
+corral review --push	executed	test:cmd/corral/review_test.go
+corral review --push-source	executed	test:cmd/corral/review_test.go

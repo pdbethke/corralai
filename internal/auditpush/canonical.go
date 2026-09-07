@@ -2,7 +2,10 @@
 
 package auditpush
 
-import "encoding/json"
+import (
+	"bytes"
+	"encoding/json"
+)
 
 // CanonicalSparseJSON is the byte form the warehouse-rows hash is computed
 // over from hash version 2 on: v marshalled to JSON, then every empty value
@@ -35,6 +38,27 @@ func CanonicalSparseJSON(v any) ([]byte, error) {
 	}
 	pruned, _ := pruneEmpty(tree)
 	return json.Marshal(pruned)
+}
+
+// CanonicalFullJSON is the byte form a LEDGER ENTRY's hash is computed over
+// from corral-ledger-3 on: the entry's own JSON as written, re-marshalled
+// with sorted keys and NOTHING pruned. The sparse form is right for
+// warehouse rows, which are read back through a schema that grows; it is
+// WRONG for an entry, whose bytes are the file itself and never pass
+// through a schema — and under it `passed: false` (measured, failed) and
+// `passed` absent (never measured) hashed and signed identically, so an
+// entry could be edited from one claim to the other and still verify.
+// Found by a Claude Code reviewer, let stand by Codex (ed079ca08965#R4).
+// Numbers are kept as their literals (json.Number), so a value past 2^53
+// is hashed as written, not as the nearest float.
+func CanonicalFullJSON(raw []byte) ([]byte, error) {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	var tree any
+	if err := dec.Decode(&tree); err != nil {
+		return nil, err
+	}
+	return json.Marshal(tree)
 }
 
 // pruneEmpty returns v with every empty value removed, and whether v itself

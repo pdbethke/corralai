@@ -11,6 +11,32 @@ history of any release, `git log v0.3.4..v0.3.5`.
 
 ## [Unreleased] — toward 1.0.0-rc.8
 
+- **The ledger entry's hash is over its bytes; a retraction reaches every
+  kind; the identity derives. Format `corral-ledger-3`.** Six defects in
+  `internal/auditpush` — the record itself — found by a Claude Code reviewer
+  on the first three-seat round (Codex verifying; review `ed079ca08965`), all
+  six confirmed on adjudication. The entry hash was over the SPARSE canonical
+  form, which prunes `false` and `0`, so an entry recording *passed: false,
+  kill rate 0* and one recording *never measured* hashed and signed
+  identically — an entry could be edited from one claim to the other and
+  still verify, which falsified the one sentence the ledger exists for. From
+  format 3 the hash is over the entry's full canonical bytes as written (a
+  reader re-hashes the file, not this binary's struct), and `verify` names
+  an edit. A scan entry's `scan_uid` now derives from its row and its own
+  `pushed` time, so `RecomputeScanUID` over the entry — or the view's row —
+  reproduces it (it never did: the uid was minted from a clock the entry did
+  not carry); `verify` checks that too. A retraction now reaches reviews and
+  adjudications as it reached scans — a retracted review's rows no longer
+  load into the view or push to a warehouse. `CanonicalizeForWarehouse`
+  normalises the two timestamps added with the ledger (`finished_at`,
+  `computed_at`), which `verify --db` had been reporting as a false tamper
+  on every run that carried them. A chain check names the entry's own file
+  (two sort orders were being re-paired). A review push is one transaction.
+  Format-2 entries still read and verify under their own rules, and the
+  check says which rules those were. Review entries are named by their own
+  hash, so two reviews of one commit inside a second do not collide.
+- **The README opens with what corral is:** an auditing engine, with two
+  extensions — `certify` by execution, `review` by adversary.
 - **An agentic seat is any agent you assign, not a vendor list.** A seat
   name is a command-line definition: `CORRALAI_AGENT_<NAME>="<command
   line>"`, run in the disposable worktree with the brief on stdin and the

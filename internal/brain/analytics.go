@@ -27,8 +27,13 @@ func registerAnalytics(s *mcp.Server, opts Options) {
 		Description: "Analyze the mission event log (DuckDB): a named report (missions|agents|kinds|findings|replans|sprints|model_comparison) or an ad-hoc read-only SELECT. Returns columns + rows."},
 		func(_ context.Context, req *mcp.CallToolRequest, in analyticsIn) (*mcp.CallToolResult, analyticsOut, error) {
 			if in.SQL != "" {
-				if !opts.isAdmin(req) {
-					return nil, analyticsOut{}, fmt.Errorf("forbidden: ad-hoc SQL is superuser only")
+				// A HUMAN door, like every admin door in admin.go: a
+				// delegation token minted under a superuser passes isAdmin
+				// and could read the whole telemetry store. Found by
+				// `corral review` on this package (a reviewer's script
+				// held; the person confirmed).
+				if !opts.isHumanAdmin(req) {
+					return nil, analyticsOut{}, fmt.Errorf("forbidden: ad-hoc SQL is superuser only, and never a subagent's delegation")
 				}
 				rep, err := opts.Telemetry.Query(in.SQL)
 				if err != nil {

@@ -205,6 +205,14 @@ func runReviewRun(args []string, stdout, stderr io.Writer) int {
 		} else {
 			r.InputTokens += int64(vreply.Usage.InputTokens)
 			r.OutputTokens += int64(vreply.Usage.OutputTokens)
+			// A verifier that answered with no verdict on any finding has
+			// not verified anything, and the record must not read as if
+			// it had: its reply is kept, marked, and every finding is
+			// graded as unverified.
+			if len(refs) == 0 && len(r.Findings) > 0 {
+				vopinion = "(the verifier returned no verdicts on any finding; its reply, verbatim: " + tail(vreply.Content, 2000) + ")"
+				fmt.Fprintf(stderr, "corral review: the verifier %s returned no verdict on any of %d finding(s) — the review is recorded with its reply, unverified\n", *verifier, len(r.Findings))
+			}
 			review.Verify(context.Background(), rep, &r, *verifier, vopinion, refs)
 		}
 	}
@@ -417,6 +425,13 @@ func writeReviewStatement(path string, r review.Review) (string, error) {
 	sum := sha256.Sum256(b)
 	_, _ = writeSignedStatementEnvelope(path, stmt)
 	return hex.EncodeToString(sum[:]), nil
+}
+
+func tail(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return "…" + s[len(s)-n:]
 }
 
 func indent(s string) string {

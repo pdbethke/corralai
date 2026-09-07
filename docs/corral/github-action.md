@@ -619,6 +619,22 @@ one case that needs a rewrite — a secret that leaked into an authored test
 inside a signed entry — is a `git` rewrite of the branch, and the chain
 will report the gap forever; a retraction beside it can say why.
 
+**The auditor's report.** The same branch, read the other way: `corral
+brief --changed origin/main` (or `--scope <path>`, repeatable) renders
+what the record says is still open on the files you are about to touch —
+the newest scan's verdict on each, every fault the suite missed with the
+authored test that closes a proven gap, every review claim that stands
+with the verifier's verdict and any ruling — and counts, without listing,
+the claims that did not hold. It is for whoever writes next, a person or
+a coding agent; `--json` is the same report as one document. It reads the
+ledger only and writes nothing, and it bounds itself (`--max-items`) by
+naming the cut rather than hiding it.
+
+```bash
+git worktree add .corral-ledger corral/ledger   # once
+corral brief --ledger .corral-ledger --changed origin/main
+```
+
 ## Where the report shows up
 
 The run writes corral's report to the job summary — the page you land on when

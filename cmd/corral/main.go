@@ -288,6 +288,15 @@ Usage:
   corral review show <dir> <hash> print a review with its adjudications applied
   corral review adjudicate <dir> <hash>#<Rn> --confirm|--refute --reason "…"
                                   a person's verdict on one finding, as its own entry
+  corral brief --scope <path> [--changed <base>] [--ledger <dir>] [--json]
+                                  the auditor's report: what the record says is still OPEN on
+                                  these files, for whoever writes next — the newest scan's
+                                  verdict, each fault your tests missed (with the test that
+                                  closes a proven gap), each review claim that stands and what
+                                  a person ruled; claims that did not hold are counted, not
+                                  listed. Reads the ledger only; writes nothing. --changed
+                                  <base> takes the files changed since a ref; --max-items
+                                  bounds it and names the cut
   corral verify --attest <path> [flags]
                                   the checker for a certify --repo --attest statement: verifies
                                   its DSSE signature (against --pub or the local certify key,
@@ -579,6 +588,8 @@ func main() {
 		os.Exit(runLedger(os.Args[2:], os.Stdout, os.Stderr))
 	case "review":
 		os.Exit(runReview(os.Args[2:], os.Stdout, os.Stderr))
+	case "brief":
+		os.Exit(runBrief(os.Args[2:], os.Stdout, os.Stderr))
 	case "verify":
 		// `corral verify` — the checker for a `certify --repo --attest`
 		// AUDIT statement (signature + --db warehouse rows + Rekor

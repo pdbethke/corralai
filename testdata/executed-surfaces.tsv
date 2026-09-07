@@ -195,6 +195,12 @@ corral review --ledger	executed	test:cmd/corral/review_test.go
 corral review --repo	executed	test:cmd/corral/review_test.go
 corral review --reviewer-model	executed	test:cmd/corral/review_test.go
 corral review --scope	executed	test:cmd/corral/review_test.go
+corral brief --changed	executed	test:cmd/corral/brief_test.go
+corral brief --json	executed	test:cmd/corral/brief_test.go
+corral brief --ledger	executed	test:cmd/corral/brief_test.go
+corral brief --max-items	executed	test:cmd/corral/brief_test.go
+corral brief --repo	executed	test:cmd/corral/brief_test.go
+corral brief --scope	executed	test:cmd/corral/brief_test.go
 corral review --max-bytes	executed	run:2026-09-06 corral review --scope internal/prior (the default, 14,576 bytes shown)
 corral review --no-ledger	unexecuted	
 corral review --timeout	executed	run:2026-09-06 corral review --scope cmd/corral/ledger.go (the default, a 60s bound on a `go test` reproduction)

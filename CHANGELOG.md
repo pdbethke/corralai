@@ -9,7 +9,12 @@ still move between minor versions.
 Entries describe what changed for someone *using* the tool. For the full commit
 history of any release, `git log v0.3.4..v0.3.5`.
 
-## [Unreleased] — toward 1.0.0-rc.9
+## [v1.0.0-rc.9] — 2026-09-07
+
+The record names both parties: who wrote the change beside who judged it,
+and a committer seat that grades each — a person and an agent alike — by
+the changes that held. And `corral brief`, the auditor's report: what the
+record says is open on these files, for whoever writes next.
 
 - **`corral brief` — the auditor's report.** The record, handed back to
   whoever writes next: `corral brief --scope <path>` (repeatable) or

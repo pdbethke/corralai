@@ -9,7 +9,10 @@ still move between minor versions.
 Entries describe what changed for someone *using* the tool. For the full commit
 history of any release, `git log v0.3.4..v0.3.5`.
 
-## [Unreleased] — toward 1.0.0-rc.6
+## [v1.0.0-rc.6] — 2026-09-07
+
+The review loop closed: the reviewer and the verifier graded, and the
+three warehouse grains that carry the argument to MotherDuck.
 
 - **The reviewer and the verifier are graded.** `corral models rank --db
   <ledger dir>` now carries two more seats. A reviewer's row is *claims

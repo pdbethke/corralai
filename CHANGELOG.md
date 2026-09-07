@@ -153,6 +153,39 @@ history of any release, `git log v0.3.4..v0.3.5`.
   whose every mutant was rejected by the compile gate signs its absent kill
   rate with `noGradableMutant`, the flag that says which kind of unmeasured
   it was — the one predicate the report's marker and the statement share.
+- **Pairing, the cache key, the landing hint and churn, at their doors.**
+  Four defects in `internal/reposcan` from its first review (`28c4ae555cbc`,
+  Claude Code reviewing, Codex verifying; a fifth claim was refuted). An
+  operator-mapped `--tests` pairing was dropped from the collision grouping
+  before it formed, so a convention pairing on the same test file was left
+  alone and one test graded two sources — an explicit pairing is now a
+  claimant that is never demoted, and the convention pairing that collides
+  with it is. `CanonicalKV` — the form the model set and the audit config
+  are hashed into a verdict's cache key as — was not injective: a model name
+  carrying `,` or `=` rendered the same bytes as a different role map, and
+  `CacheKey` served one herd's verdict for another. It escapes those bytes
+  now; every key and record that never carried a delimiter is byte-identical
+  to before, so nothing cached changes form — only the ambiguous strings,
+  which had to. The most-covering test *file* is the file whose tests
+  together executed the most lines, not the file of the single biggest test.
+  Churn reads `git log … -z`, so a path git would C-quote (non-ASCII, a
+  space) matches its own history instead of ranking as churn 1 under a
+  signal that still said `churn-x-size`. The reviewer's two reproductions are
+  regression tests, inverted (`reviewed_pairing_keys_test.go`).
+- **A merged test file renames identifiers, never the inside of a string.**
+  Two defects in `internal/lang`'s test concatenator from its first review
+  (`9e3f89b00949`, Codex reviewing, Claude Code verifying). A collision
+  repair was an unscoped word-boundary replace over the whole body, so a
+  proven test asserting `equal(helper(), "helper")` came out asserting
+  against `"helper_s0m1"` — a proven test with its meaning changed. Each
+  language's spec now names its string and comment syntax and the rename
+  skips those spans. And `idSuffix` dropped every non-alphanumeric byte, so
+  mutant ids `a/b` and `a-b` both became `ab` and the merged file declared
+  the repaired name twice; the suffix is injective now — `s0/m1` renders
+  `s0_m1`, any other shape renders as an underscore plus its bytes in hex,
+  which no clean id can. A suffix a reader has seen before therefore changes:
+  `test_x_s0m1` is `test_x_s0_m1`. The reviewer's two reproductions are
+  regression tests, inverted (`reviewed_concat_test.go`).
 
 ## [v1.0.0-rc.9] — 2026-09-07
 

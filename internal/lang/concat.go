@@ -100,24 +100,33 @@ func ConcatAuthored(p Plugin, parts []AuthoredPart) (merged string, extra []Auth
 	return merged, extra
 }
 
-// idSuffix renders a mutant id as an identifier fragment: "s0/m1" becomes
-// "s0m1". Every character a language would refuse in an identifier is dropped
-// rather than replaced, so two ids that differ only in punctuation ("s0/m1"
-// and "s0-m1") cannot collapse onto the same suffix by way of a shared
-// substitute character.
+// idSuffix renders a mutant id as an identifier fragment, INJECTIVELY.
+//
+// The shape corral mints — alphanumeric runs joined by single slashes,
+// "s0/m1" — renders with each slash as an underscore: "s0_m1". Any other
+// id (a byte that is neither alphanumeric nor a slash, an empty run, a
+// leading or trailing slash) renders as "_" followed by the hex of every
+// byte, which no clean id can render to, since a clean rendering never
+// starts with an underscore. So no two ids share a suffix.
+//
+// They did: every non-alphanumeric byte was DROPPED — and the doc above
+// the old body claimed the opposite — so "a/b" and "a-b" both became "ab",
+// two distinct mutants' tests were renamed to the same declaration, and the
+// merged file declared it twice (review 9e3f89b00949#R2, Codex reviewing,
+// Claude Code verifying).
 func idSuffix(id string) string {
-	var b strings.Builder
-	for _, r := range id {
-		switch {
-		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
-			b.WriteRune(r)
-		}
+	if idCleanRe.MatchString(id) {
+		return strings.ReplaceAll(id, "/", "_")
 	}
-	if b.Len() == 0 {
-		return "x"
+	var b strings.Builder
+	b.WriteByte('_')
+	for _, c := range []byte(id) {
+		fmt.Fprintf(&b, "%02x", c)
 	}
 	return b.String()
 }
+
+var idCleanRe = regexp.MustCompile(`^[A-Za-z0-9]+(/[A-Za-z0-9]+)*$`)
 
 // concatSpec is the language-specific half of the shared merge below: which
 // top-level lines are hoisted headers, and how a top-level declaration is
@@ -143,6 +152,105 @@ type concatSpec struct {
 	// scan cannot express (JS's same-module-different-specifiers, Ruby's
 	// mixed frameworks). nil means nothing to check.
 	precheck func(parts []AuthoredPart) error
+	// literals is the language's string and comment syntax, so a collision
+	// repair renames IDENTIFIERS and never the inside of a string literal
+	// or a comment. The rename used to be an unscoped word-boundary replace
+	// over the whole body, so a proven test asserting `equal(helper(),
+	// "helper")` came out asserting against "helper_s0_m1" — a proven test
+	// with its meaning changed (review 9e3f89b00949#R1, Codex reviewing,
+	// Claude Code verifying).
+	literals literalSyntax
+}
+
+// literalSyntax names the spans a rename must not touch.
+type literalSyntax struct {
+	quotes       string   // each byte opens a string closed by the same byte; backslash escapes inside
+	tripleQuotes bool     // Python: """…""" and '''…''' are one string
+	lineComments []string // a line comment runs to end of line
+	blockComment [2]string
+}
+
+// maskedSpans returns the [start,end) byte ranges of s that are inside a
+// string literal or a comment under syn, in order.
+func maskedSpans(s string, syn literalSyntax) [][2]int {
+	var spans [][2]int
+	i := 0
+	for i < len(s) {
+		c := s[i]
+		// Comments first: a quote inside a comment opens nothing.
+		if syn.blockComment[0] != "" && strings.HasPrefix(s[i:], syn.blockComment[0]) {
+			end := strings.Index(s[i+len(syn.blockComment[0]):], syn.blockComment[1])
+			if end < 0 {
+				spans = append(spans, [2]int{i, len(s)})
+				break
+			}
+			end += i + len(syn.blockComment[0]) + len(syn.blockComment[1])
+			spans = append(spans, [2]int{i, end})
+			i = end
+			continue
+		}
+		lineComment := false
+		for _, lc := range syn.lineComments {
+			if strings.HasPrefix(s[i:], lc) {
+				end := strings.IndexByte(s[i:], '\n')
+				if end < 0 {
+					end = len(s)
+				} else {
+					end += i
+				}
+				spans = append(spans, [2]int{i, end})
+				i = end
+				lineComment = true
+				break
+			}
+		}
+		if lineComment {
+			continue
+		}
+		if strings.IndexByte(syn.quotes, c) >= 0 {
+			delim := s[i : i+1]
+			if syn.tripleQuotes && strings.HasPrefix(s[i:], delim+delim+delim) {
+				delim = delim + delim + delim
+			}
+			j := i + len(delim)
+			for j < len(s) {
+				if s[j] == '\\' {
+					j += 2
+					continue
+				}
+				if strings.HasPrefix(s[j:], delim) {
+					j += len(delim)
+					break
+				}
+				if len(delim) == 1 && s[j] == '\n' && c != '`' {
+					break // an unterminated single-line string ends at the line
+				}
+				j++
+			}
+			if j > len(s) {
+				j = len(s)
+			}
+			spans = append(spans, [2]int{i, j})
+			i = j
+			continue
+		}
+		i++
+	}
+	return spans
+}
+
+// replaceOutsideLiterals applies re → repl to s everywhere except inside
+// the spans syn masks.
+func replaceOutsideLiterals(s string, syn literalSyntax, re *regexp.Regexp, repl string) string {
+	var out strings.Builder
+	prev := 0
+	for _, sp := range maskedSpans(s, syn) {
+		out.WriteString(re.ReplaceAllString(s[prev:sp[0]], repl))
+		out.WriteString(s[sp[0]:sp[1]])
+		prev = sp[1]
+	}
+	out.WriteString(re.ReplaceAllString(s[prev:], repl))
+	return out.String()
 }
 
 // mergeParts is the shared body of every ConcatTests implementation: hoist and
@@ -228,7 +336,7 @@ func mergeParts(parts []AuthoredPart, spec concatSpec, headerPrefix string, head
 		}
 		word := regexp.MustCompile(`\b` + regexp.QuoteMeta(name) + `\b`)
 		for _, i := range owners {
-			bodies[i] = word.ReplaceAllString(bodies[i], name+"_"+idSuffix(parts[i].MutantID))
+			bodies[i] = replaceOutsideLiterals(bodies[i], spec.literals, word, name+"_"+idSuffix(parts[i].MutantID))
 		}
 	}
 
@@ -275,6 +383,7 @@ func (pyPlugin) ConcatTests(parts []AuthoredPart) (string, error) {
 		renameOnCollision: func(name string) bool {
 			return strings.HasPrefix(name, "test") || strings.HasPrefix(name, "Test")
 		},
+		literals: literalSyntax{quotes: `"'`, tripleQuotes: true, lineComments: []string{"#"}},
 	}, "", func(headers []string) string { return strings.Join(headers, "\n") })
 }
 
@@ -364,6 +473,7 @@ func (goPlugin) ConcatTests(parts []AuthoredPart) (string, error) {
 			return strings.HasPrefix(name, "Test") || strings.HasPrefix(name, "Benchmark") ||
 				strings.HasPrefix(name, "Fuzz") || strings.HasPrefix(name, "Example")
 		},
+		literals: literalSyntax{quotes: "\"'`", lineComments: []string{"//"}, blockComment: [2]string{"/*", "*/"}},
 	}, prefix, func(headers []string) string {
 		if len(headers) == 0 {
 			return ""
@@ -455,6 +565,7 @@ func jsConcatSpec() concatSpec {
 		declRes:           []*regexp.Regexp{jsFuncRe, jsBindRe, jsClassRe},
 		renameOnCollision: func(string) bool { return true },
 		precheck:          jsSpecifiersDiffer,
+		literals:          literalSyntax{quotes: "\"'`", lineComments: []string{"//"}, blockComment: [2]string{"/*", "*/"}},
 	}
 }
 
@@ -522,6 +633,7 @@ func (rubyPlugin) ConcatTests(parts []AuthoredPart) (string, error) {
 		// same reason Go's is: renaming it means rewriting call sites that
 		// are the model's own code.
 		renameOnCollision: func(name string) bool { return strings.HasPrefix(name, "test_") },
+		literals:          literalSyntax{quotes: `"'`, lineComments: []string{"#"}},
 		// A Minitest `def test_x` lives indented inside `class FooTest`, so a
 		// top-level-only scan would find no declarations at all and merge two
 		// silent overrides.

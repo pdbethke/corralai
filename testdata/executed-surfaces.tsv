@@ -203,3 +203,7 @@ corral review --attest	executed	test:cmd/corral/review_test.go
 corral review adjudicate --push	executed	test:cmd/corral/review_test.go
 corral review --push	executed	test:cmd/corral/review_test.go
 corral review --push-source	executed	test:cmd/corral/review_test.go
+corral review plan --depth	executed	test:cmd/corral/review_test.go
+corral review plan --ledger	executed	test:cmd/corral/review_test.go
+corral review plan --limit	executed	test:cmd/corral/review_test.go
+corral review plan --repo	executed	test:cmd/corral/review_test.go

@@ -831,8 +831,10 @@ as the outcome when there is one — under the same evidence floor as every
 other seat. `--push <dsn>` on `review` and `adjudicate` appends the same
 rows — `corral_reviews`, `corral_findings`, `corral_adjudications`, scripts
 withheld unless `--push-source` — to a warehouse or MotherDuck, where the
-seats rank across every repository that pushes. The round planner is
-designed, not built:
+seats rank across every repository that pushes. `corral review plan` is
+the round planner: which scopes were reviewed and when, which changed
+since (a fix batch nobody re-attacked), which never were — and a proposal
+a person confirms. The design, and the week that produced it:
 **[docs/design/adversarial-review.md](docs/design/adversarial-review.md)**.
 
 ## The audit flags

@@ -45,6 +45,8 @@ func runReview(args []string, stdout, stderr io.Writer) int {
 		return runReviewAdjudicate(args[1:], stdout, stderr)
 	case "show":
 		return runReviewShow(args[1:], stdout, stderr)
+	case "plan":
+		return runReviewPlan(args[1:], stdout, stderr)
 	}
 	return runReviewRun(args, stdout, stderr)
 }
@@ -63,6 +65,11 @@ const reviewUsage = `corral review — a cold model reviews a scope of the repos
       the same rules; a refutation whose script holds demotes the finding, and is itself recorded.
       flags: --ledger <dir> (default <repo>/.corral/ledger)  --no-ledger  --timeout 60s
              --max-bytes 200000 (how much of the scope the reviewer is shown)
+  corral review plan [--repo <dir>] [--ledger <dir>] [--depth 2]
+      The round planner: every scope of the repository, when the ledger last saw it reviewed, its
+      findings by outcome, how many of its files changed since — and a proposal for the next round:
+      never reviewed first, then changed since review (a fix batch nobody re-attacked), then the
+      stalest. No model runs; a person names the scope.
   corral review show <ledger dir> <review hash>       print a review with its adjudications applied
   corral review adjudicate <ledger dir> <hash>#<Rn> --confirm|--refute --reason "…" [--by <who>]
       A person's verdict on one finding, as its own entry: the newest verdict per finding

@@ -124,6 +124,8 @@ Usage:
                                   --attest <path>: the reproductions as a signed in-toto statement,
                                   the opinion bound by its hash; the entry names the statement, and
                                   corral verify --attest <path> --db <ledger dir> cross-checks them
+  corral review plan [--repo <dir>] the round planner: scopes reviewed and not, changed since, findings
+                                  by outcome, and a proposed next scope — a person names it
   corral review show <dir> <hash> print a review with its adjudications applied
   corral review adjudicate <dir> <hash>#<Rn> --confirm|--refute --reason "…"
                                   a person's verdict on one finding, as its own entry
@@ -620,6 +622,11 @@ corral review — a cold model reviews a scope of the repository; corral runs it
       the same rules; a refutation whose script holds demotes the finding, and is itself recorded.
       flags: --ledger <dir> (default <repo>/.corral/ledger)  --no-ledger  --timeout 60s
              --max-bytes 200000 (how much of the scope the reviewer is shown)
+  corral review plan [--repo <dir>] [--ledger <dir>] [--depth 2]
+      The round planner: every scope of the repository, when the ledger last saw it reviewed, its
+      findings by outcome, how many of its files changed since — and a proposal for the next round:
+      never reviewed first, then changed since review (a fix batch nobody re-attacked), then the
+      stalest. No model runs; a person names the scope.
   corral review show <ledger dir> <review hash>       print a review with its adjudications applied
   corral review adjudicate <ledger dir> <hash>#<Rn> --confirm|--refute --reason "…" [--by <who>]
       A person's verdict on one finding, as its own entry: the newest verdict per finding
@@ -664,6 +671,20 @@ Usage of corral review adjudicate:
     	why, in your words (required)
   -refute
     	the finding is not real, or not as stated
+```
+
+## `corral review plan` flags
+
+```
+Usage of corral review plan:
+  -depth int
+    	how many path segments make a scope (2: internal/review, cmd/corral) (default 2)
+  -ledger string
+    	the ledger directory whose review entries are the record (default: <repo>/.corral/ledger, or $CORRAL_LEDGER)
+  -limit int
+    	how many scopes to list (default 25)
+  -repo string
+    	the checkout (default ".")
 ```
 
 ## `corral review show` flags

@@ -47,7 +47,7 @@ func runReview(args []string, stdout, stderr io.Writer) int {
 
 const reviewUsage = `corral review — a cold model reviews a scope of the repository; corral runs its reproductions and records the review beside the audits.
 
-  corral review --scope <dir|file> --reviewer-model <m> [--repo <dir>] [flags]
+  corral review --scope <dir|file> --reviewer-model <m> [--verifier-model <m2>] [--repo <dir>] [flags]
       The reviewer is told to assume the code is wrong. Every finding carries a tier it
       declared — REPRODUCED (with a sh script that exits 0 iff the defect is demonstrated),
       CODE-READ (file:line, argued), HYPOTHESIS — and the run executes every REPRODUCED
@@ -55,6 +55,8 @@ const reviewUsage = `corral review — a cold model reviews a scope of the repos
       finding to CODE-READ on the record, out loud. The reviewer must also list what it
       checked and found sound. The opinion is printed and carried; only the reproductions
       are what the entry's signature vouches for. Exit 0 either way: a review is not a gate.
+      With --verifier-model, a THIRD model (never the reviewer's) tries to refute every finding by
+      the same rules; a refutation whose script holds demotes the finding, and is itself recorded.
       flags: --ledger <dir> (default <repo>/.corral/ledger)  --no-ledger  --timeout 60s
              --max-bytes 200000 (how much of the scope the reviewer is shown)
   corral review show <ledger dir> <review hash>       print a review with its adjudications applied
@@ -66,10 +68,10 @@ const reviewUsage = `corral review — a cold model reviews a scope of the repos
 // reviewFlags is the run verb's flag set, bound in one place so -h and the
 // run agree about every flag.
 type reviewFlags struct {
-	repoDir, scope, model, ledger string
-	noLedger                      bool
-	timeout                       time.Duration
-	maxBytes                      int
+	repoDir, scope, model, verifier, ledger string
+	noLedger                                bool
+	timeout                                 time.Duration
+	maxBytes                                int
 }
 
 func reviewFlagSet(out io.Writer) (*flag.FlagSet, *reviewFlags) {
@@ -79,6 +81,7 @@ func reviewFlagSet(out io.Writer) (*flag.FlagSet, *reviewFlags) {
 	fs.StringVar(&f.repoDir, "repo", ".", "the checkout to review (a git repository at a commit)")
 	fs.StringVar(&f.scope, "scope", "", "the directory or file under --repo to review (required)")
 	fs.StringVar(&f.model, "reviewer-model", "", "the reviewer seat's model — an alias from the registry or a provider model name (required; corral has no default models)")
+	fs.StringVar(&f.verifier, "verifier-model", "", "a VERIFIER seat, adversarial to the reviewer: a different model that tries to refute every finding, by the same rules — a REPRODUCED refutation (a sh script that exits 0 iff the refutation is demonstrated) that holds demotes the finding on the record; a CODE-READ refutation is carried as opinion; a search that finds nothing is never a refutation. Must not be the reviewer's model. Off unless named")
 	fs.StringVar(&f.ledger, "ledger", "", "the ledger directory the review entry is written to (default: <repo>/.corral/ledger, or $CORRAL_LEDGER)")
 	fs.BoolVar(&f.noLedger, "no-ledger", false, "print the review and write no entry")
 	fs.DurationVar(&f.timeout, "timeout", time.Minute, "wall-clock bound on each reproduction script")
@@ -91,7 +94,7 @@ func runReviewRun(args []string, stdout, stderr io.Writer) int {
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
-	repoDir, scope, model, ledgerFlag := &f.repoDir, &f.scope, &f.model, &f.ledger
+	repoDir, scope, model, verifier, ledgerFlag := &f.repoDir, &f.scope, &f.model, &f.verifier, &f.ledger
 	noLedger, timeout, maxBytes := &f.noLedger, &f.timeout, &f.maxBytes
 	if fs.NArg() != 0 {
 		fmt.Fprintf(stderr, "corral review: unexpected argument %q\n", fs.Arg(0))
@@ -111,14 +114,28 @@ func runReviewRun(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "corral review: --repo is not a git checkout at a commit — a review names the revision it reviewed")
 		return 2
 	}
-	if _, err := resolveSeatRegistry("corral review", root, []seatFlag{{flag: "reviewer-model", val: model}}, stderr); err != nil {
+	if _, err := resolveSeatRegistry("corral review", root, []seatFlag{{flag: "reviewer-model", val: model}, {flag: "verifier-model", val: verifier}}, stderr); err != nil {
 		fmt.Fprintf(stderr, "corral review: %v\n", err)
+		return 2
+	}
+	// The decorrelation rule, the same one the writer and the critic live
+	// under: a verifier that is the reviewer's own model would grade its
+	// own work. Checked before anything is spent.
+	if strings.TrimSpace(*verifier) != "" && strings.EqualFold(strings.TrimSpace(*verifier), strings.TrimSpace(*model)) {
+		fmt.Fprintf(stderr, "corral review: --verifier-model %s is the reviewer's own model — the verifier must be a different one (nemo iudex in causa sua)\n", *verifier)
 		return 2
 	}
 	backend, err := newReviewerBackend(*model, "")
 	if err != nil {
 		fmt.Fprintf(stderr, "corral review: reviewer seat: %v\n", err)
 		return 2
+	}
+	var verifierBackend agentbackend.Backend
+	if strings.TrimSpace(*verifier) != "" {
+		if verifierBackend, err = newReviewerBackend(*verifier, ""); err != nil {
+			fmt.Fprintf(stderr, "corral review: verifier seat: %v\n", err)
+			return 2
+		}
 	}
 
 	sc, err := review.LoadScope(root, *scope, *maxBytes)
@@ -132,6 +149,9 @@ func runReviewRun(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, ", %d NOT shown (--max-bytes)", len(sc.Unshown))
 	}
 	fmt.Fprintf(stdout, "\n  reviewer: %s (cold — it has never seen this repository)\n", *model)
+	if verifierBackend != nil {
+		fmt.Fprintf(stdout, "  verifier: %s (adversarial to the reviewer; a different model by rule)\n", *verifier)
+	}
 
 	r := review.Review{Repo: repoName, Commit: commit, Scope: *scope, ReviewerModel: *model,
 		Substrate: "workspace (a detached worktree at the commit; not a jail)", StartedAt: time.Now().UTC(),
@@ -161,6 +181,25 @@ func runReviewRun(args []string, stdout, stderr io.Writer) int {
 	}
 	defer cleanup()
 	review.Reproduce(context.Background(), rep, &r)
+
+	// The verifier sees the review AS RECORDED — reproductions run, tiers
+	// demoted — and the same scope, and its own reproductions run in the
+	// same worktree.
+	if verifierBackend != nil {
+		vreply, verr := verifierBackend.Chat([]agentbackend.Message{
+			{Role: "system", Content: review.VerifierBriefSystem},
+			{Role: "user", Content: review.VerifierBrief(r, sc)},
+		}, nil)
+		if verr != nil {
+			fmt.Fprintf(stderr, "corral review: the verifier seat failed: %v — the review is recorded unverified\n", verr)
+		} else if vopinion, refs, perr := review.ParseRefutations(vreply.Content, *verifier); perr != nil {
+			fmt.Fprintf(stderr, "corral review: %v — the review is recorded unverified\n--- the reply, verbatim ---\n%s\n", perr, vreply.Content)
+		} else {
+			r.InputTokens += int64(vreply.Usage.InputTokens)
+			r.OutputTokens += int64(vreply.Usage.OutputTokens)
+			review.Verify(context.Background(), rep, &r, *verifier, vopinion, refs)
+		}
+	}
 
 	printReview(stdout, r, nil)
 
@@ -249,7 +288,7 @@ func printReview(w io.Writer, r review.Review, adj map[string]auditpush.Adjudica
 	fmt.Fprintf(w, "\nfindings: %d reproduced, %d code-read, %d hypothesis\n", rep, cr, hy)
 	if len(r.Findings) > 0 {
 		tw := tabwriter.NewWriter(w, 0, 2, 2, ' ', 0)
-		fmt.Fprintln(tw, "ID\tTIER\tSEVERITY\tWHERE\tCLAIM\tADJUDICATED\t")
+		fmt.Fprintln(tw, "ID\tTIER\tSEVERITY\tWHERE\tCLAIM\tVERIFIER · HUMAN\t")
 		for _, f := range r.Findings {
 			tier := f.Tier
 			if f.Tier != f.Declared {
@@ -260,8 +299,13 @@ func printReview(w io.Writer, r review.Review, adj map[string]auditpush.Adjudica
 				where = fmt.Sprintf("%s:%d", f.File, f.Line)
 			}
 			verdict := ""
+			if x := f.Refutation; x != nil && x.Verdict == review.VerdictRefuted {
+				verdict = "refuted (" + strings.ToLower(x.Tier) + ") by " + x.Model
+			} else if x != nil {
+				verdict = "stands (" + x.Model + ")"
+			}
 			if a, ok := adj[f.ID]; ok {
-				verdict = a.Verdict + " by " + a.By
+				verdict = strings.TrimSpace(verdict + " · " + a.Verdict + " by " + a.By)
 			}
 			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t\n", f.ID, tier, f.Severity, where, f.Claim, verdict)
 		}
@@ -279,6 +323,34 @@ func printReview(w io.Writer, r review.Review, adj map[string]auditpush.Adjudica
 			}
 			if a, ok := adj[f.ID]; ok {
 				fmt.Fprintf(w, "%s — %s by %s: %s\n", f.ID, a.Verdict, a.By, a.Reason)
+			}
+		}
+	}
+	if r.VerifierModel != "" {
+		fmt.Fprintf(w, "\nverifier %s:\n%s\n", r.VerifierModel, r.VerifierOpinion)
+		for _, f := range r.Findings {
+			x := f.Refutation
+			if x == nil {
+				continue
+			}
+			switch {
+			case x.Verdict == review.VerdictStands:
+				fmt.Fprintf(w, "\n%s — STANDS: %s\n", f.ID, x.Argument)
+			default:
+				tier := x.Tier
+				if x.Tier != x.Declared {
+					tier = fmt.Sprintf("%s (declared %s)", x.Tier, x.Declared)
+				}
+				fmt.Fprintf(w, "\n%s — REFUTED [%s]: %s\n", f.ID, tier, x.Argument)
+				if x.Script != "" {
+					fmt.Fprintf(w, "%s — refutation script:\n%s\n", f.ID, indent(x.Script))
+				}
+				if x.ExitCode != nil {
+					fmt.Fprintf(w, "%s — refutation exit %d, output:\n%s\n", f.ID, *x.ExitCode, indent(strings.TrimSpace(x.Stdout)))
+				}
+				if x.Demoted != "" {
+					fmt.Fprintf(w, "%s — refutation DEMOTED to %s: %s\n", f.ID, x.Tier, x.Demoted)
+				}
 			}
 		}
 	}

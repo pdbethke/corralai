@@ -818,8 +818,11 @@ person's verdict on a finding is its own entry: `corral review adjudicate
 standing, automatic passes never writing one. Not a gate — exit 0 either
 way. Its first two runs were on corral itself (see the CHANGELOG): one
 claim refuted, one real bypass confirmed in a verb written that morning.
-The verifier seat, the reviewer's row in `models rank` and the warehouse
-grains are designed, not built:
+With `--verifier-model`, a third model — never the reviewer's — is handed
+the review as recorded and tries to refute every finding by the same rules;
+a refutation whose script holds demotes the finding, and the record names
+who refuted it and how. The reviewer's row in `models rank` and the
+warehouse grains are designed, not built:
 **[docs/design/adversarial-review.md](docs/design/adversarial-review.md)**.
 
 ## The audit flags

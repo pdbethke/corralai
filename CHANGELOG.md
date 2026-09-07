@@ -9,6 +9,24 @@ still move between minor versions.
 Entries describe what changed for someone *using* the tool. For the full commit
 history of any release, `git log v0.3.4..v0.3.5`.
 
+## [Unreleased] — toward 1.0.0-rc.5
+
+- **The verifier seat.** `corral review --verifier-model <m>`: a third
+  model, never the reviewer's (refused before anything is spent), is
+  handed the review as recorded — demotions, scripts and their output
+  included — and told to refute every finding. Its refutations carry the
+  same tiers and the same demote-only rule: a REPRODUCED refutation whose
+  script does not hold becomes CODE-READ on the record; one that holds
+  demotes the finding it refutes, with the record naming the model and the
+  argument; a CODE-READ refutation is carried as opinion; STANDS is carried
+  with what was tried. The brief writes down the rule the fifth review
+  taught: a search that finds nothing is never a refutation. A person's
+  adjudication still outranks all of it.
+- **`corral review` could not read a reply with a brace in its prose.**
+  `extractJSON` took the first `{` in the text as the payload. Found by
+  the reviewer seat on `internal/review` itself; the verifier seat, told
+  to refute it, could not and said so; confirmed and fixed.
+
 ## [v1.0.0-rc.4] — 2026-09-06
 
 `corral review`: a cold model's opinion, linked to reproductions the run

@@ -127,3 +127,69 @@ func TestLoadScopeCapsAndNamesWhatItDidNotShow(t *testing.T) {
 		t.Error("a missing scope must be an error")
 	}
 }
+
+// TestVerifyRefutesOnlyByReproductionAndNeverPromotes: a REPRODUCED
+// refutation whose script exits 0 demotes the finding it refutes; one whose
+// script fails is itself demoted to CODE-READ and moves the finding
+// nothing; a CODE-READ refutation is carried as opinion; STANDS is carried;
+// a refutation of an already-demoted finding changes nothing further.
+func TestVerifyRefutesOnlyByReproductionAndNeverPromotes(t *testing.T) {
+	code := 0
+	r := &Review{Findings: []Finding{
+		{ID: "R1", Declared: TierReproduced, Tier: TierReproduced, Script: "x", ExitCode: &code},
+		{ID: "R2", Declared: TierReproduced, Tier: TierReproduced, Script: "x", ExitCode: &code},
+		{ID: "R3", Declared: TierReproduced, Tier: TierReproduced, Script: "x", ExitCode: &code},
+		{ID: "R4", Declared: TierCodeRead, Tier: TierCodeRead},
+		{ID: "R5", Declared: TierReproduced, Tier: TierCodeRead, Demoted: "exit 1"},
+	}}
+	_, refs, err := ParseRefutations(`{"opinion":"mostly wrong","refutations":[
+	 {"id":"R1","verdict":"REFUTED","tier":"REPRODUCED","argument":"the input works","script":"holds"},
+	 {"id":"R2","verdict":"REFUTED","tier":"REPRODUCED","argument":"nope","script":"fails"},
+	 {"id":"R3","verdict":"refuted","tier":"code_read","argument":"I could not find the path"},
+	 {"id":"R4","verdict":"STANDS","argument":"tried, could not"},
+	 {"id":"R5","verdict":"REFUTED","tier":"REPRODUCED","argument":"already dead","script":"holds"}
+	]}`, "verifier-m")
+	if err != nil {
+		t.Fatal(err)
+	}
+	Verify(context.Background(), scripted{"holds": {out: "got 8", code: 0}, "fails": {code: 2}}, r, "verifier-m", "mostly wrong", refs)
+	if r.VerifierModel != "verifier-m" || r.VerifierOpinion != "mostly wrong" {
+		t.Errorf("verifier not recorded: %+v", r)
+	}
+	f := r.Findings
+	if f[0].Tier != TierCodeRead || !strings.Contains(f[0].Demoted, "refuted by verifier-m, reproduced") || f[0].Refutation.Tier != TierReproduced {
+		t.Errorf("R1 must be demoted by a reproduced refutation: %+v / %+v", f[0], f[0].Refutation)
+	}
+	if f[1].Tier != TierReproduced || f[1].Refutation.Tier != TierCodeRead || f[1].Refutation.Demoted == "" {
+		t.Errorf("R2's failed refutation must be demoted itself and move the finding nothing: %+v / %+v", f[1], f[1].Refutation)
+	}
+	if f[2].Tier != TierReproduced || f[2].Refutation.Tier != TierCodeRead || f[2].Refutation.ExitCode != nil {
+		t.Errorf("R3: a CODE-READ refutation is opinion, nothing runs, nothing moves: %+v / %+v", f[2], f[2].Refutation)
+	}
+	if f[3].Refutation.Verdict != VerdictStands || f[3].Tier != TierCodeRead {
+		t.Errorf("R4 stands: %+v", f[3].Refutation)
+	}
+	if f[4].Tier != TierCodeRead || !strings.HasPrefix(f[4].Demoted, "exit 1") {
+		t.Errorf("R5 was already CODE-READ; a refutation must not rewrite why: %+v", f[4])
+	}
+	if _, _, err := ParseRefutations("prose only", "m"); err == nil {
+		t.Error("a verifier reply with no JSON must be an error")
+	}
+}
+
+// TestParseSurvivesBracesInTheProse: the reviewer found (and the verifier
+// could not refute) that the first '{' in the text was taken as the
+// payload. Prose with braces before the object, a fenced block after
+// prose with braces, and a brace inside a JSON string all parse.
+func TestParseSurvivesBracesInTheProse(t *testing.T) {
+	for _, text := range []string{
+		"I reviewed the scope {internal/review}.\n{\"opinion\":\"o\",\"findings\":[],\"sound\":[\"x\"]}",
+		"Notes: {a} and {b}.\n```json\n{\"opinion\":\"o\",\"findings\":[],\"sound\":[\"x\"]}\n```\ndone",
+		"{\"opinion\":\"a { in a string\",\"findings\":[],\"sound\":[\"x\"]}",
+	} {
+		opinion, _, sound, err := Parse(text)
+		if err != nil || len(sound) != 1 || opinion == "" {
+			t.Errorf("Parse(%q): opinion=%q sound=%v err=%v", text, opinion, sound, err)
+		}
+	}
+}

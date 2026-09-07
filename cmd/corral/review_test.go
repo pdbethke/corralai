@@ -12,9 +12,15 @@ import (
 	"github.com/pdbethke/corralai/internal/auditpush"
 )
 
-type cannedReviewer struct{ reply string }
+type cannedReviewer struct {
+	reply string
+	saw   *string // the user turn the seat was given, for assertions
+}
 
-func (c cannedReviewer) Chat(_ []agentbackend.Message, _ []any) (agentbackend.Message, error) {
+func (c cannedReviewer) Chat(msgs []agentbackend.Message, _ []any) (agentbackend.Message, error) {
+	if c.saw != nil && len(msgs) > 1 {
+		*c.saw = msgs[1].Content
+	}
 	return agentbackend.Message{Role: "assistant", Content: c.reply}, nil
 }
 
@@ -116,5 +122,72 @@ func TestReviewRefusesWithoutASeatOrAScopeOrACommit(t *testing.T) {
 	mustWrite(t, filepath.Join(root, "a.go"), "package a\n")
 	if code := runReview([]string{"--repo", root, "--scope", ".", "--reviewer-model", "m"}, &out, &errb); code != 2 || !strings.Contains(errb.String(), "not a git checkout") {
 		t.Errorf("no commit: %d %s", code, errb.String())
+	}
+}
+
+// TestReviewVerifierSeatRefutesByReproductionAndIsDecorrelated: the
+// verifier is handed the review AS RECORDED (the demoted finding says so),
+// its REPRODUCED refutation runs in the same worktree and, holding, demotes
+// the finding; a refutation whose script fails is itself demoted and moves
+// nothing; the verifier's model may never be the reviewer's.
+func TestReviewVerifierSeatRefutesByReproductionAndIsDecorrelated(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "test-placeholder-not-a-real-key")
+	root := t.TempDir()
+	gitRun := gitCmd(t, root)
+	mustWrite(t, filepath.Join(root, "pkg", "a.go"), "package pkg\n\nfunc Add(a, b int) int { return a + b }\n")
+	mustWrite(t, filepath.Join(root, "go.mod"), "module x\n\ngo 1.22\n")
+	gitRun("init", "-q")
+	gitRun("add", ".")
+	gitRun("commit", "-q", "-m", "base", "--no-gpg-sign")
+
+	var verifierSaw string
+	orig := newReviewerBackend
+	t.Cleanup(func() { newReviewerBackend = orig })
+	newReviewerBackend = func(model, _ string) (agentbackend.Backend, error) {
+		switch model {
+		case "reviewer-x":
+			return cannedReviewer{reply: `{"opinion":"o","findings":[
+ {"claim":"Add subtracts","tier":"REPRODUCED","file":"pkg/a.go","line":3,"severity":"high","script":"grep -q 'a + b' pkg/a.go"},
+ {"claim":"go.mod is missing","tier":"REPRODUCED","file":"go.mod","line":1,"severity":"low","script":"test ! -f go.mod"},
+ {"claim":"Add has no overflow check","tier":"CODE-READ","file":"pkg/a.go","line":3,"severity":"low"}
+],"sound":[]}`}, nil
+		case "verifier-y":
+			return cannedReviewer{saw: &verifierSaw, reply: `{"opinion":"R1 is wrong; R2 the reviewer already lost; R3 stands","refutations":[
+ {"id":"R1","verdict":"REFUTED","tier":"REPRODUCED","argument":"Add adds: the source says a + b","script":"grep -q 'return a + b' pkg/a.go"},
+ {"id":"R2","verdict":"REFUTED","tier":"REPRODUCED","argument":"go.mod exists","script":"exit 3"},
+ {"id":"R3","verdict":"STANDS","argument":"true, there is no check"}
+]}`}, nil
+		}
+		t.Fatalf("unexpected seat %q", model)
+		return nil, nil
+	}
+
+	var out, errb bytes.Buffer
+	if code := runReview([]string{"--repo", root, "--scope", "pkg", "--reviewer-model", "reviewer-x", "--verifier-model", "reviewer-x", "--no-ledger"}, &out, &errb); code != 2 || !strings.Contains(errb.String(), "reviewer's own model") {
+		t.Fatalf("a verifier that is the reviewer must be refused before anything is spent: exit %d %s", code, errb.String())
+	}
+	out.Reset()
+	errb.Reset()
+	code := runReview([]string{"--repo", root, "--scope", "pkg", "--reviewer-model", "reviewer-x", "--verifier-model", "verifier-y", "--no-ledger"}, &out, &errb)
+	if code != 0 {
+		t.Fatalf("exit %d: stdout=%s stderr=%s", code, out.String(), errb.String())
+	}
+	s := out.String()
+	for _, want := range []string{
+		"verifier: verifier-y",
+		"findings: 0 reproduced, 3 code-read, 0 hypothesis", // R1 demoted by the verifier, R2 by its own script, R3 as declared
+		"R1  CODE-READ (declared REPRODUCED)",
+		"refuted (reproduced) by verifier-y",
+		"R1 — DEMOTED to CODE-READ: refuted by verifier-y, reproduced: Add adds",
+		"R2 — refutation DEMOTED to CODE-READ: the script exited 3",
+		"R3 — STANDS: true, there is no check",
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("stdout lacks %q:\n%s", want, s)
+		}
+	}
+	// The verifier saw the review as recorded: R2's demotion, and R1's script and output.
+	if !strings.Contains(verifierSaw, "R2 [CODE-READ, declared REPRODUCED") || !strings.Contains(verifierSaw, "grep -q 'a + b' pkg/a.go") {
+		t.Errorf("the verifier must be handed the record, demotions and scripts included:\n%s", verifierSaw)
 	}
 }

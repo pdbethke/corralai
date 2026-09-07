@@ -268,12 +268,15 @@ Usage:
   corral ledger checkpoint <dir>  prune: one genesis naming the head it replaced (hash, count, date)
                                   stands in for everything before it; the verifier says the chain begins there
   corral ledger verify <dir>      the same walk as corral verify --ledger
-  corral review --scope <dir> --reviewer-model <m> [--repo <dir>]
+  corral review --scope <dir> --reviewer-model <m> [--verifier-model <m2>] [--repo <dir>]
                                   a cold model reviews the scope, told to assume the code is wrong;
                                   every REPRODUCED finding's sh script is run against a detached
                                   worktree at HEAD (a script that does not hold demotes the finding,
                                   out loud); the review — opinion, findings, sound list, the
                                   reproductions — is one ledger entry beside the audits. Not a gate.
+                                  --verifier-model: a third model, never the reviewer's, tries to
+                                  refute every finding by the same rules; a refutation whose script
+                                  holds demotes the finding, and is itself on the record
   corral review show <dir> <hash> print a review with its adjudications applied
   corral review adjudicate <dir> <hash>#<Rn> --confirm|--refute --reason "…"
                                   a person's verdict on one finding, as its own entry

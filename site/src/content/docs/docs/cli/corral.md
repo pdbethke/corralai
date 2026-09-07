@@ -109,12 +109,15 @@ Usage:
   corral ledger checkpoint <dir>  prune: one genesis naming the head it replaced (hash, count, date)
                                   stands in for everything before it; the verifier says the chain begins there
   corral ledger verify <dir>      the same walk as corral verify --ledger
-  corral review --scope <dir> --reviewer-model <m> [--repo <dir>]
+  corral review --scope <dir> --reviewer-model <m> [--verifier-model <m2>] [--repo <dir>]
                                   a cold model reviews the scope, told to assume the code is wrong;
                                   every REPRODUCED finding's sh script is run against a detached
                                   worktree at HEAD (a script that does not hold demotes the finding,
                                   out loud); the review — opinion, findings, sound list, the
                                   reproductions — is one ledger entry beside the audits. Not a gate.
+                                  --verifier-model: a third model, never the reviewer's, tries to
+                                  refute every finding by the same rules; a refutation whose script
+                                  holds demotes the finding, and is itself on the record
   corral review show <dir> <hash> print a review with its adjudications applied
   corral review adjudicate <dir> <hash>#<Rn> --confirm|--refute --reason "…"
                                   a person's verdict on one finding, as its own entry
@@ -528,7 +531,7 @@ flags:
 ```
 corral review — a cold model reviews a scope of the repository; corral runs its reproductions and records the review beside the audits.
 
-  corral review --scope <dir|file> --reviewer-model <m> [--repo <dir>] [flags]
+  corral review --scope <dir|file> --reviewer-model <m> [--verifier-model <m2>] [--repo <dir>] [flags]
       The reviewer is told to assume the code is wrong. Every finding carries a tier it
       declared — REPRODUCED (with a sh script that exits 0 iff the defect is demonstrated),
       CODE-READ (file:line, argued), HYPOTHESIS — and the run executes every REPRODUCED
@@ -536,6 +539,8 @@ corral review — a cold model reviews a scope of the repository; corral runs it
       finding to CODE-READ on the record, out loud. The reviewer must also list what it
       checked and found sound. The opinion is printed and carried; only the reproductions
       are what the entry's signature vouches for. Exit 0 either way: a review is not a gate.
+      With --verifier-model, a THIRD model (never the reviewer's) tries to refute every finding by
+      the same rules; a refutation whose script holds demotes the finding, and is itself recorded.
       flags: --ledger <dir> (default <repo>/.corral/ledger)  --no-ledger  --timeout 60s
              --max-bytes 200000 (how much of the scope the reviewer is shown)
   corral review show <ledger dir> <review hash>       print a review with its adjudications applied
@@ -558,6 +563,8 @@ flags of `corral review`:
     	the directory or file under --repo to review (required)
   -timeout duration
     	wall-clock bound on each reproduction script (default 1m0s)
+  -verifier-model string
+    	a VERIFIER seat, adversarial to the reviewer: a different model that tries to refute every finding, by the same rules — a REPRODUCED refutation (a sh script that exits 0 iff the refutation is demonstrated) that holds demotes the finding on the record; a CODE-READ refutation is carried as opinion; a search that finds nothing is never a refutation. Must not be the reviewer's model. Off unless named
 ```
 
 ## `corral review adjudicate` flags

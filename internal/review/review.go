@@ -53,19 +53,26 @@ type Finding struct {
 	Stdout   string `json:"stdout,omitempty"`
 	ExitCode *int   `json:"exit_code,omitempty"`
 	Demoted  string `json:"demoted,omitempty"`
+	// Refutation is the verifier seat's answer, when one ran (see
+	// verifier.go). A refutation that reproduced demotes this finding.
+	Refutation *Refutation `json:"refutation,omitempty"`
 }
 
 // Review is the record of one review: what was reviewed, by which model,
 // on what substrate, the findings as recorded, the sound list, and the
 // opinion — the prose, which is carried and never signed on its own.
 type Review struct {
-	Repo          string    `json:"repo"`
-	Commit        string    `json:"commit"`
-	Scope         string    `json:"scope"`
-	ReviewerModel string    `json:"reviewer_model"`
-	Substrate     string    `json:"substrate"`
-	StartedAt     time.Time `json:"started_at"`
-	Findings      []Finding `json:"findings"`
+	Repo          string `json:"repo"`
+	Commit        string `json:"commit"`
+	Scope         string `json:"scope"`
+	ReviewerModel string `json:"reviewer_model"`
+	// VerifierModel and VerifierOpinion are the third seat's, empty when no
+	// verifier ran. The decorrelation rule holds: never the reviewer's model.
+	VerifierModel   string    `json:"verifier_model,omitempty"`
+	VerifierOpinion string    `json:"verifier_opinion,omitempty"`
+	Substrate       string    `json:"substrate"`
+	StartedAt       time.Time `json:"started_at"`
+	Findings        []Finding `json:"findings"`
 	// Sound is what the reviewer looked at and could not break. Required:
 	// absence of findings in a subsystem nobody looked at is not evidence,
 	// and this is what makes the review's scope legible.
@@ -270,12 +277,36 @@ func Parse(text string) (opinion string, findings []Finding, sound []string, err
 	return strings.TrimSpace(rp.Opinion), findings, rp.Sound, nil
 }
 
-// extractJSON returns the first balanced {...} object in text, fence or not.
+// extractJSON returns the JSON object in text: a fenced ```json block
+// first, else the first balanced {...} that actually parses as an object.
+// It used to take the first '{' in the text, which is wrong the moment the
+// model writes a brace in its prose before the payload — found by `corral
+// review` on this file, and the verifier could not refute it.
 func extractJSON(text string) string {
-	start := strings.Index(text, "{")
-	if start < 0 {
-		return ""
+	if i := strings.Index(text, "```json"); i >= 0 {
+		rest := text[i+len("```json"):]
+		if j := strings.Index(rest, "```"); j >= 0 {
+			if c := strings.TrimSpace(rest[:j]); json.Valid([]byte(c)) && strings.HasPrefix(c, "{") {
+				return c
+			}
+		}
 	}
+	for start := strings.Index(text, "{"); start >= 0; {
+		if c := balancedFrom(text, start); c != "" && json.Valid([]byte(c)) {
+			return c
+		}
+		next := strings.Index(text[start+1:], "{")
+		if next < 0 {
+			break
+		}
+		start += 1 + next
+	}
+	return ""
+}
+
+// balancedFrom returns the {...} run beginning at start, string-aware, or
+// "" when it never closes.
+func balancedFrom(text string, start int) string {
 	depth, inStr, esc := 0, false, false
 	for i := start; i < len(text); i++ {
 		c := text[i]

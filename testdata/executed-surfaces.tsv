@@ -198,3 +198,4 @@ corral review --scope	executed	test:cmd/corral/review_test.go
 corral review --max-bytes	executed	run:2026-09-06 corral review --scope internal/prior (the default, 14,576 bytes shown)
 corral review --no-ledger	unexecuted	
 corral review --timeout	executed	run:2026-09-06 corral review --scope cmd/corral/ledger.go (the default, a 60s bound on a `go test` reproduction)
+corral review --verifier-model	executed	test:cmd/corral/review_test.go

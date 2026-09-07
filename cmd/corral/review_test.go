@@ -397,3 +397,78 @@ func TestReviewPlanProposesAndCountsFixBatches(t *testing.T) {
 		t.Error("plan wrote to the ledger")
 	}
 }
+
+// TestAgenticSeatsRunInAWorktreeWithTheBriefOnStdin: `claude-code` and
+// `codex` seats are coding CLIs. Faked here on PATH, they must be started
+// in a disposable worktree (never the checkout), receive the brief on
+// stdin with the scope's file list (not its bytes), be pinned to the model
+// the spec names, and hand back JSON that corral parses like any seat's;
+// the tool's version is on the record; the decorrelation rule sees
+// through the tool to the model.
+func TestAgenticSeatsRunInAWorktreeWithTheBriefOnStdin(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "test-placeholder-not-a-real-key")
+	root := t.TempDir()
+	gitRun := gitCmd(t, root)
+	mustWrite(t, filepath.Join(root, "pkg", "a.go"), "package pkg\n\nfunc Add(a, b int) int { return a - b }\n")
+	mustWrite(t, filepath.Join(root, "go.mod"), "module x\n\ngo 1.22\n")
+	gitRun("init", "-q")
+	gitRun("add", ".")
+	gitRun("commit", "-q", "-m", "base", "--no-gpg-sign")
+
+	// Fake CLIs: record cwd, argv and stdin; reply with canned JSON.
+	bin := t.TempDir()
+	log := filepath.Join(t.TempDir(), "calls.log")
+	fake := func(name, reply string) {
+		script := "#!/bin/sh\n" +
+			"if [ \"$1\" = \"--version\" ]; then echo \"9.9.9 (" + name + " fake)\"; exit 0; fi\n" +
+			"{ echo \"== " + name + " cwd=$PWD argv=$*\"; cat; echo; } >> " + log + "\n" +
+			"for a in \"$@\"; do case \"$prev\" in -o) printf '%s' '" + reply + "' > \"$a\";; esac; prev=\"$a\"; done\n" +
+			"printf '%s' '" + reply + "'\n"
+		if err := os.WriteFile(filepath.Join(bin, name), []byte(script), 0o755); err != nil { // #nosec G306 -- a test fixture executable
+			t.Fatal(err)
+		}
+	}
+	fake("claude", `{"opinion":"agent says Add subtracts","findings":[{"claim":"Add subtracts","tier":"REPRODUCED","file":"pkg/a.go","line":3,"severity":"high","script":"grep -q \"a - b\" pkg/a.go"}],"sound":["go.mod"]}`)
+	fake("codex", `{"opinion":"cannot refute","refutations":[{"id":"R1","verdict":"STANDS","argument":"it does subtract"}]}`)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	var out, errb bytes.Buffer
+	if code := runReview([]string{"--repo", root, "--scope", "pkg", "--reviewer-model", "claude-code:claude-sonnet-5", "--verifier-model", "claude-sonnet-5", "--no-ledger"}, &out, &errb); code != 2 || !strings.Contains(errb.String(), "resolves to the reviewer's own model") {
+		t.Fatalf("a verifier that is the agent's own model must be refused: exit %d %s", code, errb.String())
+	}
+	out.Reset()
+	errb.Reset()
+	code := runReview([]string{"--repo", root, "--scope", "pkg", "--reviewer-model", "claude-code:claude-sonnet-5", "--verifier-model", "codex:gpt-5-codex", "--no-ledger"}, &out, &errb)
+	if code != 0 {
+		t.Fatalf("exit %d: stdout=%s stderr=%s", code, out.String(), errb.String())
+	}
+	s := out.String()
+	for _, want := range []string{
+		"read by the seat itself in a disposable copy (no byte cap)",
+		"reviewer: claude-code:claude-sonnet-5 [9.9.9 (claude fake)]",
+		"verifier: codex:gpt-5-codex [9.9.9 (codex fake)]",
+		"findings: 1 reproduced, 0 code-read, 0 hypothesis",
+		"R1 — STANDS: it does subtract",
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("stdout lacks %q:\n%s", want, s)
+		}
+	}
+	calls, _ := os.ReadFile(log)
+	c := string(calls)
+	if strings.Contains(c, "cwd="+root+"\n") || !strings.Contains(c, "cwd=") {
+		t.Errorf("the seats must run in a worktree, never the checkout:\n%s", c)
+	}
+	for _, want := range []string{
+		"== claude cwd=", "argv=-p --output-format text --tools Read,Grep,Glob --model claude-sonnet-5",
+		"DISPOSABLE COPY", "  pkg/a.go", "Assume the code is WRONG",
+		"== codex cwd=", "--sandbox read-only", "-m gpt-5-codex", "The findings, as recorded",
+	} {
+		if !strings.Contains(c, want) {
+			t.Errorf("the CLIs' calls lack %q:\n%s", want, c)
+		}
+	}
+	if strings.Contains(c, "===== pkg/a.go =====") {
+		t.Error("an agentic seat must be handed the file LIST, not the bytes")
+	}
+}

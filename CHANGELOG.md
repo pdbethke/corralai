@@ -11,6 +11,19 @@ history of any release, `git log v0.3.4..v0.3.5`.
 
 ## [Unreleased] — toward 1.0.0-rc.7
 
+- **Agentic seats: Claude Code and Codex as the reviewer or the verifier.**
+  `--reviewer-model claude-code` / `codex` (or pinned, `claude-code:<model>`,
+  `codex:<model>`) starts the coding CLI in a disposable worktree at the
+  commit with read-only tools, the brief on stdin and the scope's file
+  list — it reads the tree itself, beyond any byte cap — and its final
+  message is the reply. The contract does not move: it hands back scripts,
+  corral runs them in another copy, and nothing the agent did itself is
+  on the record. The tool and its version are recorded beside the model;
+  the decorrelation rule sees through the tool to the model. This is what
+  the five cold reviews of corral were by hand. First run, on
+  `internal/prior` (Claude Code reviewing, Codex verifying): six findings,
+  two with scripts that held, all six let stand with line references,
+  all six confirmed — on a package flash had passed with a false claim.
 - **SECURITY — the brain's ad-hoc SQL door is a human door.** `mission_analytics`
   with `sql` gated on `isAdmin`, which a delegation token minted for a
   subagent under a superuser passes; every other admin door gates on

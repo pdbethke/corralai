@@ -66,6 +66,9 @@ type Review struct {
 	Commit        string `json:"commit"`
 	Scope         string `json:"scope"`
 	ReviewerModel string `json:"reviewer_model"`
+	// Lang is the language most of the shown files are in, "" when mixed
+	// or unknown: the row's language dimension in `models rank`.
+	Lang string `json:"lang,omitempty"`
 	// VerifierModel and VerifierOpinion are the third seat's, empty when no
 	// verifier ran. The decorrelation rule holds: never the reviewer's model.
 	VerifierModel   string    `json:"verifier_model,omitempty"`

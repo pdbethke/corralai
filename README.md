@@ -828,8 +828,11 @@ the entry. `corral models rank --db .corral/ledger` grades both seats —
 the reviewer by the claims that held of those checked, the verifier by the
 verdicts that agreed with the outcome, a person's adjudication counting
 as the outcome when there is one — under the same evidence floor as every
-other seat. The warehouse grains and the round planner are designed, not
-built:
+other seat. `--push <dsn>` on `review` and `adjudicate` appends the same
+rows — `corral_reviews`, `corral_findings`, `corral_adjudications`, scripts
+withheld unless `--push-source` — to a warehouse or MotherDuck, where the
+seats rank across every repository that pushes. The round planner is
+designed, not built:
 **[docs/design/adversarial-review.md](docs/design/adversarial-review.md)**.
 
 ## The audit flags

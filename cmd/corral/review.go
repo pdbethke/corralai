@@ -72,10 +72,10 @@ const reviewUsage = `corral review — a cold model reviews a scope of the repos
 // reviewFlags is the run verb's flag set, bound in one place so -h and the
 // run agree about every flag.
 type reviewFlags struct {
-	repoDir, scope, model, verifier, ledger, attest string
-	noLedger                                        bool
-	timeout                                         time.Duration
-	maxBytes                                        int
+	repoDir, scope, model, verifier, ledger, attest, push string
+	noLedger, pushSource                                  bool
+	timeout                                               time.Duration
+	maxBytes                                              int
 }
 
 func reviewFlagSet(out io.Writer) (*flag.FlagSet, *reviewFlags) {
@@ -88,6 +88,8 @@ func reviewFlagSet(out io.Writer) (*flag.FlagSet, *reviewFlags) {
 	fs.StringVar(&f.verifier, "verifier-model", "", "a VERIFIER seat, adversarial to the reviewer: a different model that tries to refute every finding, by the same rules — a REPRODUCED refutation (a sh script that exits 0 iff the refutation is demonstrated) that holds demotes the finding on the record; a CODE-READ refutation is carried as opinion; a search that finds nothing is never a refutation. Must not be the reviewer's model. Off unless named")
 	fs.StringVar(&f.ledger, "ledger", "", "the ledger directory the review entry is written to (default: <repo>/.corral/ledger, or $CORRAL_LEDGER)")
 	fs.StringVar(&f.attest, "attest", "", "write an in-toto statement (predicate https://corralai.dev/review/v1) to this path, and its DSSE envelope beside it when a certify key is configured: the REPRODUCTIONS — every finding's declared and recorded tier, the hash of its script and output, its exit, the verifier's refutation on the same terms — signed; the opinion bound by its hash and not carried. The ledger entry then names the statement. `corral verify --attest <path> --db <ledger dir>` recomputes the reproductions' hash from the entry")
+	fs.StringVar(&f.push, "push", "", "also append the review's rows to a warehouse you own — a DuckDB path, or md:<db> — as corral_reviews and corral_findings, keyed by the entry's hash so a later `review adjudicate --push` joins to them. Scripts and outputs travel as hashes unless --push-source")
+	fs.BoolVar(&f.pushSource, "push-source", false, "with --push, also send the scripts and what they printed (they quote the audited code); off by default")
 	fs.BoolVar(&f.noLedger, "no-ledger", false, "print the review and write no entry")
 	fs.DurationVar(&f.timeout, "timeout", time.Minute, "wall-clock bound on each reproduction script")
 	fs.IntVar(&f.maxBytes, "max-bytes", 200000, "how many bytes of the scope the reviewer is shown; files past the cap are listed by name and the review records them as unshown")
@@ -99,7 +101,7 @@ func runReviewRun(args []string, stdout, stderr io.Writer) int {
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
-	repoDir, scope, model, verifier, ledgerFlag, attest := &f.repoDir, &f.scope, &f.model, &f.verifier, &f.ledger, &f.attest
+	repoDir, scope, model, verifier, ledgerFlag, attest, push := &f.repoDir, &f.scope, &f.model, &f.verifier, &f.ledger, &f.attest, &f.push
 	noLedger, timeout, maxBytes := &f.noLedger, &f.timeout, &f.maxBytes
 	if fs.NArg() != 0 {
 		fmt.Fprintf(stderr, "corral review: unexpected argument %q\n", fs.Arg(0))
@@ -158,7 +160,7 @@ func runReviewRun(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, "  verifier: %s (adversarial to the reviewer; a different model by rule)\n", *verifier)
 	}
 
-	r := review.Review{Repo: repoName, Commit: commit, Scope: *scope, ReviewerModel: *model,
+	r := review.Review{Repo: repoName, Commit: commit, Scope: *scope, ReviewerModel: *model, Lang: langOfScope(sc.Files),
 		Substrate: "workspace (a detached worktree at the commit; not a jail)", StartedAt: time.Now().UTC(),
 		FilesShown: sc.Files, BytesShown: sc.Bytes, Truncated: sc.Truncated}
 	reply, err := backend.Chat([]agentbackend.Message{
@@ -239,11 +241,20 @@ func runReviewRun(args []string, stdout, stderr io.Writer) int {
 		return 0
 	}
 	entries, _ := auditpush.ReadLedgerDir(ledgerDir)
-	hash := ""
+	var last auditpush.LedgerEntry
 	if n := len(entries); n > 0 {
-		hash = entries[n-1].Hash
+		last = entries[n-1]
 	}
-	fmt.Fprintf(stdout, "\nledger: review entry %s written to %s (%s)\n  adjudicate a finding: corral review adjudicate %s %.12s#R1 --confirm|--refute --reason \"…\"\n", name, ledgerDir, signed, ledgerDir, hash)
+	fmt.Fprintf(stdout, "\nledger: review entry %s written to %s (%s)\n  adjudicate a finding: corral review adjudicate %s %.12s#R1 --confirm|--refute --reason \"…\"\n", name, ledgerDir, signed, ledgerDir, last.Hash)
+	// The push, last and fail-open, like certify's: the same entry's rows
+	// into a warehouse, keyed by the entry's hash.
+	if p := strings.TrimSpace(*push); p != "" && last.Kind == auditpush.KindReview {
+		if c, perr := auditpush.PushReviewEntry(p, last, f.pushSource); perr != nil {
+			fmt.Fprintf(stderr, "corral review: pushing to %s: %v\n", p, perr)
+		} else {
+			fmt.Fprintf(stdout, "  pushed %d review, %d finding row(s) to %s\n", c.Reviews, c.Findings, p)
+		}
+	}
 	return 0
 }
 
@@ -451,6 +462,7 @@ func runReviewAdjudicate(args []string, stdout, stderr io.Writer) int {
 	refute := fs.Bool("refute", false, "the finding is not real, or not as stated")
 	reason := fs.String("reason", "", "why, in your words (required)")
 	by := fs.String("by", "", "who is deciding (default: the OS user)")
+	push := fs.String("push", "", "also append the verdict as a corral_adjudications row to this warehouse (a DuckDB path, or md:<db>), joined to the review's rows by the entry's hash")
 	if err := fs.Parse(flagsFirst(fs, args)); err != nil {
 		return 2
 	}
@@ -476,5 +488,15 @@ func runReviewAdjudicate(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	fmt.Fprintf(stdout, "%s: %s by %s — %s (%s, entry %s)\n", fs.Arg(1), verdict, who, *reason, signed, name)
+	if p := strings.TrimSpace(*push); p != "" {
+		entries, _ := auditpush.ReadLedgerDir(dir)
+		if n := len(entries); n > 0 {
+			if _, perr := auditpush.PushReviewEntry(p, entries[n-1], false); perr != nil {
+				fmt.Fprintf(stderr, "corral review adjudicate: pushing to %s: %v\n", p, perr)
+			} else {
+				fmt.Fprintf(stdout, "  pushed the verdict to %s\n", p)
+			}
+		}
+	}
 	return 0
 }

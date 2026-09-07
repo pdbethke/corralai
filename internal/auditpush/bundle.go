@@ -1134,53 +1134,11 @@ func attachWithAutoCreate(target string, attach func() error, createDB func(name
 }
 
 func pushBundleOnce(target string, b Bundle) (Counts, error) {
-	db, err := sql.Open("duckdb", "")
+	db, err := openWarehouseForWrite(target)
 	if err != nil {
 		return Counts{}, err
 	}
-	// ONE connection, because `USE warehouse` (below) is per-connection and
-	// database/sql would otherwise hand the next statement a fresh one still
-	// pointed at the in-memory catalog.
-	db.SetMaxOpenConns(1)
 	defer db.Close()
-
-	if strings.HasPrefix(target, "md:") {
-		if _, err := db.Exec("INSTALL motherduck; LOAD motherduck;"); err != nil {
-			return Counts{}, fmt.Errorf("auditpush: load motherduck extension: %w", err)
-		}
-	}
-	attach := func() error {
-		_, err := db.Exec(fmt.Sprintf("ATTACH '%s' AS warehouse", strings.ReplaceAll(target, "'", "''")))
-		return err
-	}
-	createDB := func(name string) error {
-		_, err := db.Exec(fmt.Sprintf(`CREATE DATABASE IF NOT EXISTS "%s"`, name))
-		return err
-	}
-	if err := attachWithAutoCreate(target, attach, createDB); err != nil {
-		return Counts{}, fmt.Errorf("auditpush: attach %q: %w", target, err)
-	}
-	// From here every statement is unqualified and lands in the operator's
-	// catalog. It also means the corral_seal view's stored body names
-	// corral_audits without a catalog prefix, so the view still resolves
-	// when the same file is later attached under a different alias.
-	if _, err := db.Exec("USE warehouse"); err != nil {
-		return Counts{}, fmt.Errorf("auditpush: use %q: %w", target, err)
-	}
-
-	for _, ddl := range []string{scansSchema, auditsSchema, mutantsSchema, modelCallsSchema, eventsSchema} {
-		if _, err := db.Exec(ddl); err != nil {
-			return Counts{}, fmt.Errorf("auditpush: create table: %w", err)
-		}
-	}
-	// A warehouse an earlier corral created already exists, so the CREATEs
-	// above did nothing and its column set is whatever that version wrote.
-	// The INSERTs below name every current column, so without this an
-	// upgrade turns a working push into a hard failure.
-	if err := EnsureSchema(db); err != nil {
-		return Counts{}, err
-	}
-
 	now, uid := mintPush(b)
 	return insertBundle(db, b, now, uid)
 }
@@ -1495,6 +1453,65 @@ func nullTime(t *time.Time) any {
 	return *t
 }
 
+// schemaDDL is every table's CREATE TABLE IF NOT EXISTS, in one place: the
+// push, the view over a ledger directory and EnsureSchema all run it.
+var schemaDDL = []string{scansSchema, auditsSchema, mutantsSchema, modelCallsSchema, eventsSchema, reviewsSchema, findingsSchema, adjudicationsSchema}
+
+// openWarehouseForWrite opens ONE connection, attaches target as
+// "warehouse" (creating a file or an md: database that does not exist yet),
+// makes it the default catalog, creates every table that is missing and
+// brings the rest up to the current columns. The caller closes it.
+func openWarehouseForWrite(target string) (*sql.DB, error) {
+	db, err := sql.Open("duckdb", "")
+	if err != nil {
+		return nil, err
+	}
+	// ONE connection, because `USE warehouse` (below) is per-connection and
+	// database/sql would otherwise hand the next statement a fresh one still
+	// pointed at the in-memory catalog.
+	db.SetMaxOpenConns(1)
+	fail := func(err error) (*sql.DB, error) {
+		db.Close()
+		return nil, err
+	}
+	if strings.HasPrefix(target, "md:") {
+		if _, err := db.Exec("INSTALL motherduck; LOAD motherduck;"); err != nil {
+			return fail(fmt.Errorf("auditpush: load motherduck extension: %w", err))
+		}
+	}
+	attach := func() error {
+		_, err := db.Exec(fmt.Sprintf("ATTACH '%s' AS warehouse", strings.ReplaceAll(target, "'", "''")))
+		return err
+	}
+	createDB := func(name string) error {
+		_, err := db.Exec(fmt.Sprintf(`CREATE DATABASE IF NOT EXISTS "%s"`, name))
+		return err
+	}
+	if err := attachWithAutoCreate(target, attach, createDB); err != nil {
+		return fail(fmt.Errorf("auditpush: attach %q: %w", target, err))
+	}
+	// From here every statement is unqualified and lands in the operator's
+	// catalog. It also means the corral_seal view's stored body names
+	// corral_audits without a catalog prefix, so the view still resolves
+	// when the same file is later attached under a different alias.
+	if _, err := db.Exec("USE warehouse"); err != nil {
+		return fail(fmt.Errorf("auditpush: use %q: %w", target, err))
+	}
+	for _, ddl := range schemaDDL {
+		if _, err := db.Exec(ddl); err != nil {
+			return fail(fmt.Errorf("auditpush: create table: %w", err))
+		}
+	}
+	// A warehouse an earlier corral created already exists, so the CREATEs
+	// above did nothing and its column set is whatever that version wrote.
+	// The INSERTs name every current column, so without this an upgrade
+	// turns a working push into a hard failure.
+	if err := EnsureSchema(db); err != nil {
+		return fail(err)
+	}
+	return db, nil
+}
+
 // EnsureSchema brings an existing warehouse's tables up to the current column
 // set (additively — nothing is dropped or rewritten) and re-issues the seal
 // view over them. PushBundle calls it before every push; `corral seal` calls
@@ -1511,6 +1528,9 @@ func EnsureSchema(db *sql.DB) error {
 		{"corral_mutants", corralMutantsMigrationCols},
 		{"corral_model_calls", corralModelCallsMigrationCols},
 		{"corral_events", corralEventsMigrationCols},
+		{"corral_reviews", corralReviewsMigrationCols},
+		{"corral_findings", corralFindingsMigrationCols},
+		{"corral_adjudications", corralAdjudicationsMigrationCols},
 	} {
 		if err := migrateTable(db, m.table, m.cols); err != nil {
 			return err

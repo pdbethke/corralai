@@ -9,6 +9,19 @@ still move between minor versions.
 Entries describe what changed for someone *using* the tool. For the full commit
 history of any release, `git log v0.3.4..v0.3.5`.
 
+## [Unreleased] — toward 1.0.0-rc.7
+
+- **`corral ledger push <dir> <dsn>`.** The directory's record — every
+  scan, review and adjudication entry — appended to a warehouse or
+  MotherDuck, skipping what the target already holds by entry hash
+  (`corral_scans.entry_hash`, new and additive; `review_uid`;
+  `corral_adjudications.entry_hash`), retracted scans left out and said,
+  retractions and checkpoints counted as chain facts. Source travels only
+  with `--push-source`; `--dry-run` plans and creates nothing, not even
+  the file. A run's own `--push` now stamps its entry's hash on the scan
+  row, so a later push of the same directory skips it. This is the
+  backfill verb `corral scans push` was for the retired record.
+
 ## [v1.0.0-rc.6] — 2026-09-07
 
 The review loop closed: the reviewer and the verifier graded, and the

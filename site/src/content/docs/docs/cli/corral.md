@@ -108,6 +108,9 @@ Usage:
                                   cache and scans skip it). Deleting it would break the next link
   corral ledger checkpoint <dir>  prune: one genesis naming the head it replaced (hash, count, date)
                                   stands in for everything before it; the verifier says the chain begins there
+  corral ledger push <dir> <dsn>  append the directory's record — scans, reviews, adjudications — to a
+                                  warehouse or md:<db>, skipping what it already holds by entry hash;
+                                  retracted scans left out; source only with --push-source; --dry-run
   corral ledger verify <dir>      the same walk as corral verify --ledger
   corral review --scope <dir> --reviewer-model <m> [--verifier-model <m2>] [--repo <dir>]
                                   a cold model reviews the scope, told to assume the code is wrong;
@@ -377,6 +380,13 @@ corral ledger — the signed, hash-linked record, as a directory of entries.
                                                record — the view, the prior, the verdict cache and scans skip it
   corral ledger checkpoint <dir>               PRUNE: replace every entry with one genesis naming the head it replaced
                                                (hash, count, date); the chain restarts there and the verifier says so
+  corral ledger push <dir> <dsn> [--push-source] [--dry-run]
+                                               append the directory's record to a warehouse you own (a DuckDB path, or
+                                               md:<db>): every scan, review and adjudication entry the target does not
+                                               already hold (by entry hash), retracted scans left out. Source — the
+                                               authored tests, verdict JSON, scripts and their output — travels only
+                                               with --push-source. A run's own --push already does this as it goes;
+                                               this is for a directory that ran without one, or a branch pulled later
   corral ledger verify <dir> [--pub <hex>]     walk the chain: every hash, link and signature, one line per entry
 
 A certify --repo run writes its entry into the repo's .corral/ledger/ by
@@ -398,6 +408,13 @@ corral ledger — the signed, hash-linked record, as a directory of entries.
                                                record — the view, the prior, the verdict cache and scans skip it
   corral ledger checkpoint <dir>               PRUNE: replace every entry with one genesis naming the head it replaced
                                                (hash, count, date); the chain restarts there and the verifier says so
+  corral ledger push <dir> <dsn> [--push-source] [--dry-run]
+                                               append the directory's record to a warehouse you own (a DuckDB path, or
+                                               md:<db>): every scan, review and adjudication entry the target does not
+                                               already hold (by entry hash), retracted scans left out. Source — the
+                                               authored tests, verdict JSON, scripts and their output — travels only
+                                               with --push-source. A run's own --push already does this as it goes;
+                                               this is for a directory that ran without one, or a branch pulled later
   corral ledger verify <dir> [--pub <hex>]     walk the chain: every hash, link and signature, one line per entry
 
 A certify --repo run writes its entry into the repo's .corral/ledger/ by
@@ -419,6 +436,41 @@ corral ledger — the signed, hash-linked record, as a directory of entries.
                                                record — the view, the prior, the verdict cache and scans skip it
   corral ledger checkpoint <dir>               PRUNE: replace every entry with one genesis naming the head it replaced
                                                (hash, count, date); the chain restarts there and the verifier says so
+  corral ledger push <dir> <dsn> [--push-source] [--dry-run]
+                                               append the directory's record to a warehouse you own (a DuckDB path, or
+                                               md:<db>): every scan, review and adjudication entry the target does not
+                                               already hold (by entry hash), retracted scans left out. Source — the
+                                               authored tests, verdict JSON, scripts and their output — travels only
+                                               with --push-source. A run's own --push already does this as it goes;
+                                               this is for a directory that ran without one, or a branch pulled later
+  corral ledger verify <dir> [--pub <hex>]     walk the chain: every hash, link and signature, one line per entry
+
+A certify --repo run writes its entry into the repo's .corral/ledger/ by
+default (--ledger <dir> to move it, --no-ledger to skip), and reads earlier
+entries there as its prior. On a runner the Action does the same into a
+checkout of the corral/ledger branch. To carry a local entry up, or a
+runner's entry past a branch that moved: fetch, `corral ledger append`, push.
+```
+
+## `corral ledger push` flags
+
+```
+corral ledger — the signed, hash-linked record, as a directory of entries.
+
+  corral ledger append <entry.json.gz> <dir>   re-link an entry to <dir>'s current head (re-hash, re-sign, place)
+  corral ledger retract <dir> <hash> --reason "…"
+                                               append an entry retracting an earlier one: the retracted scan STAYS in
+                                               the chain (deleting it would break the next link) and stops being the
+                                               record — the view, the prior, the verdict cache and scans skip it
+  corral ledger checkpoint <dir>               PRUNE: replace every entry with one genesis naming the head it replaced
+                                               (hash, count, date); the chain restarts there and the verifier says so
+  corral ledger push <dir> <dsn> [--push-source] [--dry-run]
+                                               append the directory's record to a warehouse you own (a DuckDB path, or
+                                               md:<db>): every scan, review and adjudication entry the target does not
+                                               already hold (by entry hash), retracted scans left out. Source — the
+                                               authored tests, verdict JSON, scripts and their output — travels only
+                                               with --push-source. A run's own --push already does this as it goes;
+                                               this is for a directory that ran without one, or a branch pulled later
   corral ledger verify <dir> [--pub <hex>]     walk the chain: every hash, link and signature, one line per entry
 
 A certify --repo run writes its entry into the repo's .corral/ledger/ by
@@ -440,6 +492,13 @@ corral ledger — the signed, hash-linked record, as a directory of entries.
                                                record — the view, the prior, the verdict cache and scans skip it
   corral ledger checkpoint <dir>               PRUNE: replace every entry with one genesis naming the head it replaced
                                                (hash, count, date); the chain restarts there and the verifier says so
+  corral ledger push <dir> <dsn> [--push-source] [--dry-run]
+                                               append the directory's record to a warehouse you own (a DuckDB path, or
+                                               md:<db>): every scan, review and adjudication entry the target does not
+                                               already hold (by entry hash), retracted scans left out. Source — the
+                                               authored tests, verdict JSON, scripts and their output — travels only
+                                               with --push-source. A run's own --push already does this as it goes;
+                                               this is for a directory that ran without one, or a branch pulled later
   corral ledger verify <dir> [--pub <hex>]     walk the chain: every hash, link and signature, one line per entry
 
 A certify --repo run writes its entry into the repo's .corral/ledger/ by
@@ -461,6 +520,13 @@ corral ledger — the signed, hash-linked record, as a directory of entries.
                                                record — the view, the prior, the verdict cache and scans skip it
   corral ledger checkpoint <dir>               PRUNE: replace every entry with one genesis naming the head it replaced
                                                (hash, count, date); the chain restarts there and the verifier says so
+  corral ledger push <dir> <dsn> [--push-source] [--dry-run]
+                                               append the directory's record to a warehouse you own (a DuckDB path, or
+                                               md:<db>): every scan, review and adjudication entry the target does not
+                                               already hold (by entry hash), retracted scans left out. Source — the
+                                               authored tests, verdict JSON, scripts and their output — travels only
+                                               with --push-source. A run's own --push already does this as it goes;
+                                               this is for a directory that ran without one, or a branch pulled later
   corral ledger verify <dir> [--pub <hex>]     walk the chain: every hash, link and signature, one line per entry
 
 A certify --repo run writes its entry into the repo's .corral/ledger/ by

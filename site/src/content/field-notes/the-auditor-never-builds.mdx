@@ -27,8 +27,9 @@ The honest first answer is that most of it exists. Walk it against the tree:
   `corral certify` on the pull request and writes the entry to the ledger
   branch. Exists.
 - *The reviewer reviews* — `corral review --scope <the changed files>`,
-  with a model that has never seen the repository, or with Claude Code or
-  Codex in that seat. Exists as of this week.
+  with a model that has never seen the repository, or with a coding agent
+  in that seat — any agent you assign, as a command line. Exists as of
+  this week.
 - *Passes back with the full audit* — this is the only missing leg, and it
   is a rendering, not an engine. The ledger already holds what is open on a
   path: the faults the suite missed, the gaps proven by a test, the claims
@@ -88,8 +89,9 @@ was:
   ([#278](https://github.com/pdbethke/corralai/pull/278)); the record is
   readable in a browser ([#274](https://github.com/pdbethke/corralai/pull/274))
   and in a warehouse ([#279](https://github.com/pdbethke/corralai/pull/279)).
-- The seats can be coding agents — Claude Code or Codex as the reviewer or
-  the verifier, in a disposable worktree, read-only
+- The seats can be coding agents — any agent you assign, as a command
+  line, as the reviewer or the verifier, in a disposable worktree;
+  Claude Code and Codex come defined
   ([#285](https://github.com/pdbethke/corralai/pull/285)).
 
 What it found when pointed at its own code: a JSON parser that took the

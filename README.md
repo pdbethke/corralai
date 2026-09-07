@@ -832,10 +832,12 @@ other seat. `--push <dsn>` on `review` and `adjudicate` appends the same
 rows — `corral_reviews`, `corral_findings`, `corral_adjudications`, scripts
 withheld unless `--push-source` — to a warehouse or MotherDuck, where the
 seats rank across every repository that pushes. A seat can be a coding
-agent — `--reviewer-model claude-code` or `codex`, pinned to a model with
-`claude-code:<model>` — started in a throwaway worktree with read-only
-tools; it reads the tree itself and hands back scripts, and only corral's
-run of them is the record. `corral review plan` is
+agent — any agent you assign: `--reviewer-model <name>`, pinned to a model
+as `<name>:<model>`, where a name is a command line you define as
+`CORRALAI_AGENT_<NAME>="…"` (`claude-code` and `codex` come defined) —
+started in a throwaway worktree with the brief on stdin; it reads the
+tree itself and hands back scripts, and only corral's run of them is the
+record. `corral review plan` is
 the round planner: which scopes were reviewed and when, which changed
 since (a fix batch nobody re-attacked), which never were — and a proposal
 a person confirms. The design, and the week that produced it:

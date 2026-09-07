@@ -200,6 +200,54 @@ func (s Ed25519LedgerSigner) Sign(hash []byte) (string, []byte, error) {
 	return s.KeyID, ed25519.Sign(s.Key, hash), nil
 }
 
+// EntryShapeProblem is the ONE rule for what an entry of each kind must
+// carry, used by the writer (placeEntry refuses to place what it names) and
+// by the verifier (a chain check reports it). It used to live in the
+// verbs only — WriteAdjudication, WriteRetraction, WriteReview — so an
+// entry that reached placeEntry another way (`corral ledger append` of a
+// file written elsewhere) was placed, signed and verified with no finding
+// id, an empty verdict and nobody deciding: the rule at one door and not
+// the other (review 559719120ef0#R1, Codex reviewing, Claude Code
+// verifying). "" when the entry is well-formed for its kind.
+func EntryShapeProblem(e LedgerEntry) string {
+	switch e.Kind {
+	case KindScan:
+		return ""
+	case KindRetract:
+		if strings.TrimSpace(e.Retracts) == "" || strings.TrimSpace(e.Reason) == "" {
+			return "a retraction names the entry it retracts and a reason"
+		}
+	case KindCheckpoint:
+		if e.Checkpoint == nil || e.Checkpoint.Head == "" {
+			return "a checkpoint entry that names no replaced head"
+		}
+	case KindReview:
+		if e.Review == nil {
+			return "a review entry that carries no review"
+		}
+		if strings.TrimSpace(e.Review.Commit) == "" || strings.TrimSpace(e.Review.Scope) == "" {
+			return "a review names a commit and a scope"
+		}
+	case KindAdjudication:
+		if e.Adjudication == nil {
+			return "an adjudication entry that carries no adjudication"
+		}
+		a := e.Adjudication
+		if _, id, ok := cutRef(a.Adjudicates); !ok || strings.TrimSpace(id) == "" {
+			return "an adjudication names a finding as <review hash>#<finding id>"
+		}
+		if a.Verdict != VerdictConfirmed && a.Verdict != VerdictRefuted {
+			return fmt.Sprintf("an adjudication's verdict is %s or %s, not %q", VerdictConfirmed, VerdictRefuted, a.Verdict)
+		}
+		if strings.TrimSpace(a.By) == "" || strings.TrimSpace(a.Reason) == "" {
+			return "an adjudication names who decided and why"
+		}
+	default:
+		return fmt.Sprintf("an entry of unknown kind %q", e.Kind)
+	}
+	return ""
+}
+
 // EntryHash is what Hash holds. From corral-ledger-3: sha256 over the
 // entry's FULL canonical JSON — its bytes as written (Raw, when a reader
 // set it; this binary's marshalling of e otherwise, which is what the
@@ -295,6 +343,9 @@ func AppendLedgerEntry(dir string, e LedgerEntry, signer LedgerSigner) (string, 
 // writer of entry files: AppendLedgerEntry links to the head, and
 // WriteCheckpoint places a genesis.
 func placeEntry(dir string, e LedgerEntry, prev string, signer LedgerSigner) (string, error) {
+	if p := EntryShapeProblem(e); p != "" {
+		return "", fmt.Errorf("auditpush: refusing to place %s", p)
+	}
 	scans := filepath.Join(dir, ScansSubdir)
 	if err := os.MkdirAll(scans, 0o750); err != nil {
 		return "", fmt.Errorf("auditpush: ledger dir: %w", err)
@@ -467,21 +518,19 @@ func VerifyLedgerDir(dir string, pub ed25519.PublicKey) ([]ChainCheck, error) {
 			c.Problem = "signature does not verify under the given key"
 		case e.Kind == KindCheckpoint && i != 0:
 			c.Problem = fmt.Sprintf("a checkpoint at position %d — a checkpoint is a genesis and stands only at the start of a chain", i+1)
-		case e.Kind == KindCheckpoint && e.Checkpoint == nil:
-			c.Problem = "a checkpoint entry that names no replaced head"
+		case EntryShapeProblem(e) != "":
+			c.Problem = EntryShapeProblem(e)
 		case e.Kind == KindCheckpoint:
 			c.Note = fmt.Sprintf("chain begins at a checkpoint: %d earlier entries (through %s, head %.12s) are not present", e.Checkpoint.Entries, e.Checkpoint.Through.UTC().Format("2006-01-02"), e.Checkpoint.Head)
 		case e.Kind == KindRetract && !seen[e.Retracts]:
 			c.Problem = fmt.Sprintf("retracts %.12s, which is not an earlier entry of this chain", e.Retracts)
 		case e.Kind == KindRetract:
 			c.Note = fmt.Sprintf("retracts %.12s: %s", e.Retracts, e.Reason)
-		case e.Kind == KindReview && e.Review == nil:
-			c.Problem = "a review entry that carries no review"
 		case e.Kind == KindReview:
 			rep, cr, hy := e.Review.Counts()
 			c.Commit = e.Review.Commit
 			c.Note = fmt.Sprintf("review of %s by %s: %d reproduced, %d code-read, %d hypothesis", e.Review.Scope, e.Review.ReviewerModel, rep, cr, hy)
-		case e.Kind == KindAdjudication && (e.Adjudication == nil || !seen[strings.SplitN(e.Adjudication.Adjudicates, "#", 2)[0]]):
+		case e.Kind == KindAdjudication && !seen[strings.SplitN(e.Adjudication.Adjudicates, "#", 2)[0]]:
 			c.Problem = "an adjudication of a finding whose review is not an earlier entry of this chain"
 		case e.Kind == KindAdjudication:
 			c.Note = fmt.Sprintf("%s %s by %s: %s", e.Adjudication.Verdict, shortRef(e.Adjudication.Adjudicates), e.Adjudication.By, e.Adjudication.Reason)

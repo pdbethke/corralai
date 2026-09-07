@@ -5,6 +5,7 @@ package sandbox
 import (
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -95,5 +96,40 @@ func TestPreflightDoesNotRejectAnImageTheChosenRuntimeHas(t *testing.T) {
 		if err := c.Preflight(); err != nil {
 			t.Errorf("%s has image %q locally, so preflight must pass, got: %v", rt, image, err)
 		}
+	}
+}
+
+// A PerEntry bind is one read-only mount per top-level entry on the
+// container backend too, so the parent stays writable — the bwrap backend
+// honoured the flag and this one ignored it (review f29544721ecd#R1).
+func TestContainerWrapHonoursPerEntryBinds(t *testing.T) {
+	host := t.TempDir()
+	for _, d := range []string{"lodash", ".bin", ".cache"} {
+		if err := os.MkdirAll(filepath.Join(host, d), 0o750); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ws := t.TempDir()
+	argv, err := containerIsolator{runtime: "docker", image: "node:22"}.Wrap("true", Options{
+		Workspace:     ws,
+		ReadOnlyBinds: []Bind{{Host: host, Target: filepath.Join(ws, "node_modules"), PerEntry: true}},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(argv, " ")
+	if strings.Contains(joined, host+":"+filepath.Join(ws, "node_modules")+":ro") {
+		t.Fatalf("the whole tree was mounted read-only; the workspace's node_modules would be EROFS:\n%s", joined)
+	}
+	for _, want := range []string{
+		filepath.Join(host, "lodash") + ":" + filepath.Join(ws, "node_modules", "lodash") + ":ro",
+		filepath.Join(host, ".bin") + ":" + filepath.Join(ws, "node_modules", ".bin") + ":ro",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("missing per-entry mount %s in:\n%s", want, joined)
+		}
+	}
+	if strings.Contains(joined, ".cache") {
+		t.Errorf("a dot-entry other than .bin must not be mounted: %s", joined)
 	}
 }

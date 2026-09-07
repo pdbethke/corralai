@@ -306,7 +306,6 @@ func gzipBytesFor(t *testing.T, b []byte) []byte {
 	return buf.Bytes()
 }
 
-
 // TestReviewSaysWhenTheVerifierReturnedNoVerdicts: a verifier whose reply
 // parses but carries no verdict on any finding (it happened: flash, on a
 // 450 KB brain scope) is recorded as unverified with its reply kept, and

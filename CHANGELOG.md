@@ -11,6 +11,22 @@ history of any release, `git log v0.3.4..v0.3.5`.
 
 ## [Unreleased] — toward 1.0.0-rc.7
 
+- **The prior no longer loses, disguises or misreports what was tried.** Six
+  defects in `internal/prior`, all found by the first agentic review round
+  (Claude Code reviewing, Codex verifying, `corral review --scope
+  internal/prior`), all six confirmed on adjudication. Mutant ids are
+  positional per run, so two runs' different edits at one place shared a
+  merge key and the later one was DROPPED — and one run's hunk was grafted
+  onto another run's line; the key now identifies the edit. `Digest` did not
+  hash the hunk it renders, so two priors handing the generator different
+  text shared a cache key. Edits recorded with NO parent hash were reported
+  as "a different version" (now `ErrNoVersion`, said as such). Invalid and
+  timed-out mutants were silently excluded, so the next generator re-rolled
+  them. The bounded render said "… and N more" without saying where — the
+  cut is always the file's tail, and it now names the stretch. A hunk was
+  cut mid-codepoint. The reviewer's two held reproduction scripts are now
+  regression tests, inverted (`reviewed_merge_key_test.go`,
+  `reviewed_digest_test.go`).
 - **Agentic seats: Claude Code and Codex as the reviewer or the verifier.**
   `--reviewer-model claude-code` / `codex` (or pinned, `claude-code:<model>`,
   `codex:<model>`) starts the coding CLI in a disposable worktree at the

@@ -384,7 +384,13 @@ func copyTree(root, tree string, universe []string) (shared []string, err error)
 		shared = append(shared, d)
 	}
 	for _, rel := range universe {
-		if top, _, ok := strings.Cut(filepath.ToSlash(rel), "/"); ok && linked[top] {
+		// Under a linked dir, OR the linked dir itself: a tracked top-level
+		// symlink named .venv is a universe entry with no "/", and copying
+		// it onto the link copyTree just made is EEXIST — the whole pool
+		// then fell to one tree (review 4d83ed44bab5#R1, Gemini reviewing,
+		// Claude Code verifying).
+		top, _, _ := strings.Cut(filepath.ToSlash(rel), "/")
+		if linked[top] {
 			continue
 		}
 		if cerr := copyFile(filepath.Join(root, filepath.FromSlash(rel)), filepath.Join(tree, filepath.FromSlash(rel))); cerr != nil {

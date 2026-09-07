@@ -309,7 +309,10 @@ type reply struct {
 // into findings with ids and declared tiers normalised. An unknown tier is
 // recorded as HYPOTHESIS: the reviewer asserted nothing the run can check.
 func Parse(text string) (opinion string, findings []Finding, sound []string, err error) {
-	js := extractJSON(text, "opinion", "findings", "sound")
+	// The review's shape is its FINDINGS (or sound) — an object with only
+	// an opinion key is any prose-shaped literal, and one before the
+	// payload replaced the payload (review a906b2676dca#R2).
+	js := extractJSON(text, "findings", "sound")
 	if js == "" {
 		return "", nil, nil, errors.New("review: the reviewer's reply holds no review object (one with an opinion, findings or sound key)")
 	}

@@ -82,7 +82,9 @@ CREATE TABLE IF NOT EXISTS corral_findings (
   refutation_output_sha256  VARCHAR,
   refutation_exit_code      INTEGER,
   refutation_demoted        VARCHAR,
-  schema_version            INTEGER
+  schema_version            INTEGER,
+  unrun                     VARCHAR,
+  refutation_unrun          VARCHAR
 );`
 
 const adjudicationsSchema = `
@@ -107,7 +109,12 @@ var (
 		{"committer", "committer VARCHAR"},
 		{"co_authors", "co_authors VARCHAR"},
 	}
-	corralFindingsMigrationCols      = []struct{ name, ddl string }{}
+	corralFindingsMigrationCols = []struct{ name, ddl string }{
+		// The harness marker (review.Finding.Unrun): a script the harness
+		// could not run is no outcome. A column, not a prefix of `demoted`.
+		{"unrun", "unrun VARCHAR"},
+		{"refutation_unrun", "refutation_unrun VARCHAR"},
+	}
 	corralAdjudicationsMigrationCols = []struct{ name, ddl string }{}
 )
 
@@ -155,13 +162,13 @@ func insertReviewEntry(db sqlExecer, e LedgerEntry, withSource bool) (ReviewCoun
 		    script, script_sha256, output, output_sha256, exit_code, demoted,
 		    refutation_model, refutation_verdict, refutation_declared_tier, refutation_tier, refutation_argument,
 		    refutation_script, refutation_script_sha256, refutation_output_sha256, refutation_exit_code, refutation_demoted,
-		    schema_version
-		  ) VALUES (`+placeholders(28)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count
+		    schema_version, unrun, refutation_unrun
+		  ) VALUES (`+placeholders(30)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count
 			e.Hash, e.Pushed, r.Repo, r.Commit, f.ID, f.Claim, f.Declared, f.Tier, nullIfEmpty(f.File), nullIfZeroInt(f.Line), nullIfEmpty(f.Severity),
 			src(f.Script), nullIfEmpty(sha256HexOf(f.Script)), src(f.Stdout), nullIfEmpty(sha256HexOf(f.Stdout)), f.ExitCode, nullIfEmpty(f.Demoted),
 			nullIfEmpty(x.Model), nullIfEmpty(x.Verdict), nullIfEmpty(x.Declared), nullIfEmpty(x.Tier), nullIfEmpty(x.Argument),
 			src(x.Script), nullIfEmpty(sha256HexOf(x.Script)), nullIfEmpty(sha256HexOf(x.Stdout)), x.ExitCode, nullIfEmpty(x.Demoted),
-			SchemaVersion,
+			SchemaVersion, nullIfEmpty(f.Unrun), nullIfEmpty(x.Unrun),
 		); err != nil {
 			return ReviewCounts{}, fmt.Errorf("auditpush: insert finding %s: %w", f.ID, err)
 		}

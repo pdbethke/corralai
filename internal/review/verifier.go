@@ -108,7 +108,7 @@ type verifierReply struct {
 // refutation the run can check); an unknown tier on a REFUTED verdict is
 // CODE-READ.
 func ParseRefutations(text, model string) (opinion string, byID map[string]Refutation, err error) {
-	js := extractJSON(text, "refutations", "opinion")
+	js := extractJSON(text, "refutations")
 	if js == "" {
 		if extractJSON(text) == "" {
 			return "", nil, errors.New("review: the verifier's reply holds no JSON object")

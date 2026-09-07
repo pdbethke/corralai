@@ -304,7 +304,11 @@ func canonicalEntryBytes(raw []byte) ([]byte, error) {
 // writeLedgerFile is the directory half of PushBundle: the same
 // canonicalised bundle the warehouse receives, as one signed, linked entry.
 func writeLedgerFile(dir string, b Bundle, signer LedgerSigner) (Counts, error) {
-	if b.Scan.PushedBy == "" {
+	// Stamp the verb on a scan row that EXISTS: stamping an empty row made
+	// it non-empty, and a bundle with no scan header grew a phantom
+	// corral_scans row (review e00b52bab444#R1, Gemini reviewing, Codex
+	// verifying).
+	if b.Scan != (ScanRow{}) && b.Scan.PushedBy == "" {
 		b.Scan.PushedBy = PushedByCertify
 	}
 	// The uid is minted where Pushed is stamped — placeEntry — so the two

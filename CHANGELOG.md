@@ -37,7 +37,30 @@ history of any release, `git log v0.3.4..v0.3.5`.
   REPRODUCED finding stands — after the entry is written; `never` only
   records. The agentic seats are refused on a runner by name; CI review is
   API seats through the `*-key` inputs.
-
+- **Held by execution means an exit 0 on the record; a review's shape is
+  its findings.** A REPRODUCED finding with no exit code recorded was
+  credited to the reviewer as held (an entry written by hand or by an older
+  writer); an object carrying only an `opinion` key passed the review-shape
+  check, so a stray literal still replaced the payload. Both found by a
+  Codex reviewer re-attacking the morning's fix (review `a906b2676dca`,
+  Gemini verifying). Now: no exit code, no outcome; the shape is
+  `findings` (or `sound`), the verifier's is `refutations`. The harness
+  marker is a column of the findings grain (`unrun`, `refutation_unrun`),
+  not a prefix of `demoted`, and `models rank` reads every input the
+  outcome rule needs — exit codes, markers, the refutation's tier — from
+  the grain, so a warehouse grades the same as the directory.
+- **No phantom scan row; the schema migration reaches any handle.** A
+  bundle with no scan header grew a `corral_scans` row because the writer
+  stamped `pushed_by` on the empty row; the migration probe asked for a
+  catalog named `warehouse`, so `EnsureSchema` on a plain DuckDB handle
+  found no columns and every ALTER failed. Found by a Gemini reviewer
+  (review `e00b52bab444`, Codex verifying). The probe names the current
+  catalog; a table with no columns is no table, and nothing to migrate.
+- **A tracked top-level dependency link no longer collapses the pool.** A
+  repository that tracks `.venv` as a symlink has it in the git universe
+  with no `/`; `copyTree`'s skip guard required one, tried to create the
+  link it had just made, and the whole workspace pool fell to one tree.
+  Found by a Gemini reviewer (review `4d83ed44bab5`, Claude Code verifying).
 - **One shape rule at both doors of the ledger.** An adjudication with no
   finding id, an empty verdict and nobody deciding was placed, signed and
   *verified* when it entered through `corral ledger append` instead of

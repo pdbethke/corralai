@@ -414,3 +414,32 @@ func TestPoolCopiesSymlinksAsSymlinks(t *testing.T) {
 		mustExist(t, filepath.Join(tree, "certs", "valid", "ca.crt"))
 	}
 }
+
+// Review 4d83ed44bab5#R1 (Gemini reviewing, Claude Code verifying),
+// inverted: a TRACKED top-level symlink named like a dependency directory
+// (.venv) is a universe entry with no "/"; the skip guard required one, so
+// copyTree tried to create the link it had just made, EEXIST, and the whole
+// pool fell to one tree.
+func TestCopyTreeSkipsATrackedTopLevelDepDirLink(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "real-venv"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("real-venv", filepath.Join(root, ".venv")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "a.py"), []byte("x = 1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tree := t.TempDir()
+	shared, err := copyTree(root, tree, []string{".venv", "a.py"})
+	if err != nil {
+		t.Fatalf("copyTree failed on a tracked top-level dep link: %v", err)
+	}
+	if len(shared) != 1 || shared[0] != ".venv" {
+		t.Fatalf("shared: %v", shared)
+	}
+	if _, err := os.Lstat(filepath.Join(tree, ".venv")); err != nil {
+		t.Fatalf("the link is missing from the tree: %v", err)
+	}
+}

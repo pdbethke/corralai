@@ -724,8 +724,12 @@ func migrateTable(db *sql.DB, table string, cols []struct{ name, ddl string }) e
 	if len(cols) == 0 {
 		return nil
 	}
+	// The CURRENT catalog, whatever it is called: a warehouse is ATTACHed
+	// as 'warehouse', but EnsureSchema's contract is any open handle, and a
+	// plain DuckDB database has its own name — the hardcoded name probed
+	// nothing and every ALTER then failed (review e00b52bab444#R2).
 	rows, err := db.Query(`SELECT column_name FROM duckdb_columns()
-	    WHERE database_name = 'warehouse' AND table_name = ?`, table)
+	    WHERE database_name = current_database() AND table_name = ?`, table)
 	if err != nil {
 		return fmt.Errorf("auditpush: probe existing %s columns: %w", table, err)
 	}
@@ -743,6 +747,13 @@ func migrateTable(db *sql.DB, table string, cols []struct{ name, ddl string }) e
 		return fmt.Errorf("auditpush: probe existing %s columns: %w", table, err)
 	}
 	rows.Close()
+	// No columns at all is no table: nothing to migrate — the schema DDL
+	// creates it whole. (Before the probe named the current catalog, this
+	// was also what a MIS-probed table looked like, and every ALTER then
+	// ran against columns that existed.)
+	if len(existing) == 0 {
+		return nil
+	}
 
 	for _, col := range cols {
 		if existing[col.name] {

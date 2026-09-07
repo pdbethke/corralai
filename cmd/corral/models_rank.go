@@ -462,7 +462,8 @@ func defaultRankLoader(dsn string) (rankEvidence, error) {
 // review entry is the run.
 func reviewRankEvidence(db *sql.DB) ([]modelrank.Observation, error) {
 	rows, err := db.Query(`SELECT f.review_uid, COALESCE(r.reviewer_model, ''), COALESCE(r.lang, ''),
-	    f.declared_tier, f.tier, COALESCE(f.refutation_model, ''), COALESCE(f.refutation_verdict, ''),
+	    f.declared_tier, f.tier, f.exit_code, COALESCE(f.unrun, ''),
+	    COALESCE(f.refutation_model, ''), COALESCE(f.refutation_verdict, ''), COALESCE(f.refutation_tier, ''), f.refutation_exit_code, COALESCE(f.refutation_unrun, ''),
 	    COALESCE(a.verdict, ''), COALESCE(a.decided_by, '')
 	  FROM corral_findings f
 	  LEFT JOIN corral_reviews r ON r.review_uid = f.review_uid
@@ -477,14 +478,12 @@ func reviewRankEvidence(db *sql.DB) ([]modelrank.Observation, error) {
 	defer rows.Close()
 	var obs []modelrank.Observation
 	for rows.Next() {
-		var uid, reviewer, lang, declared, tier, vModel, vVerdict, aVerdict, aBy string
-		if err := rows.Scan(&uid, &reviewer, &lang, &declared, &tier, &vModel, &vVerdict, &aVerdict, &aBy); err != nil {
+		var uid, reviewer, lang, declared, tier, unrun, vModel, vVerdict, vTier, vUnrun, aVerdict, aBy string
+		var exit, vExit sql.NullInt64
+		if err := rows.Scan(&uid, &reviewer, &lang, &declared, &tier, &exit, &unrun, &vModel, &vVerdict, &vTier, &vExit, &vUnrun, &aVerdict, &aBy); err != nil {
 			return nil, err
 		}
-		f := review.Finding{Declared: declared, Tier: tier}
-		if vVerdict != "" {
-			f.Refutation = &review.Refutation{Model: vModel, Verdict: vVerdict}
-		}
+		f := findingFromRow(declared, tier, exit, unrun, vModel, vVerdict, vTier, vExit, vUnrun)
 		var adj *review.Adjudicated
 		if aVerdict != "" {
 			adj = &review.Adjudicated{Verdict: aVerdict, By: aBy}
@@ -541,7 +540,9 @@ func committerRankEvidence(db *sql.DB) ([]modelrank.Observation, error) {
 	}
 	scans.Close()
 	rows, err := db.Query(`SELECT r.review_uid, r.commit_sha, r.author, COALESCE(r.co_authors, ''), COALESCE(r.lang, ''),
-	    f.declared_tier, f.tier, COALESCE(f.refutation_verdict, ''), COALESCE(a.verdict, '')
+	    f.declared_tier, f.tier, f.exit_code, COALESCE(f.unrun, ''),
+	    COALESCE(f.refutation_model, ''), COALESCE(f.refutation_verdict, ''), COALESCE(f.refutation_tier, ''), f.refutation_exit_code, COALESCE(f.refutation_unrun, ''),
+	    COALESCE(a.verdict, '')
 	  FROM corral_reviews r
 	  JOIN corral_findings f ON f.review_uid = r.review_uid
 	  LEFT JOIN (
@@ -561,8 +562,9 @@ func committerRankEvidence(db *sql.DB) ([]modelrank.Observation, error) {
 	byReview := map[string]*perReview{}
 	var order []string
 	for rows.Next() {
-		var uid, commit, author, co, lang, declared, tier, vVerdict, aVerdict string
-		if err := rows.Scan(&uid, &commit, &author, &co, &lang, &declared, &tier, &vVerdict, &aVerdict); err != nil {
+		var uid, commit, author, co, lang, declared, tier, unrun, vModel, vVerdict, vTier, vUnrun, aVerdict string
+		var exit, vExit sql.NullInt64
+		if err := rows.Scan(&uid, &commit, &author, &co, &lang, &declared, &tier, &exit, &unrun, &vModel, &vVerdict, &vTier, &vExit, &vUnrun, &aVerdict); err != nil {
 			return nil, err
 		}
 		pr := byReview[uid]
@@ -571,10 +573,7 @@ func committerRankEvidence(db *sql.DB) ([]modelrank.Observation, error) {
 			byReview[uid] = pr
 			order = append(order, uid)
 		}
-		f := review.Finding{Declared: declared, Tier: tier}
-		if vVerdict != "" {
-			f.Refutation = &review.Refutation{Verdict: vVerdict}
-		}
+		f := findingFromRow(declared, tier, exit, unrun, vModel, vVerdict, vTier, vExit, vUnrun)
 		var adj *review.Adjudicated
 		if aVerdict != "" {
 			adj = &review.Adjudicated{Verdict: aVerdict}
@@ -594,6 +593,27 @@ func committerRankEvidence(db *sql.DB) ([]modelrank.Observation, error) {
 		emit(pr.author, pr.co, pr.lang, pr.commit, pr.real == 0)
 	}
 	return obs, rows.Err()
+}
+
+// findingFromRow rebuilds what the outcome rule needs from a
+// corral_findings row: the tiers, the exit codes (held by execution is an
+// exit 0 ON THE RECORD — review a906b2676dca#R1), the harness markers, and
+// the refutation. A row missing a column the rule reads would grade
+// wrongly, so every input of OutcomeOf is read here and nowhere else.
+func findingFromRow(declared, tier string, exit sql.NullInt64, unrun, vModel, vVerdict, vTier string, vExit sql.NullInt64, vUnrun string) review.Finding {
+	f := review.Finding{Declared: declared, Tier: tier, Unrun: unrun}
+	if exit.Valid {
+		v := int(exit.Int64)
+		f.ExitCode = &v
+	}
+	if vVerdict != "" {
+		f.Refutation = &review.Refutation{Model: vModel, Verdict: vVerdict, Tier: vTier, Unrun: vUnrun}
+		if vExit.Valid {
+			v := int(vExit.Int64)
+			f.Refutation.ExitCode = &v
+		}
+	}
+	return f
 }
 
 // langOfScope is the language most of the shown files are in, "" when the

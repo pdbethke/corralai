@@ -45,8 +45,16 @@ func OutcomeOf(f Finding, adj *Adjudicated) Outcome {
 	// could not run it, in which case nothing was, and there is no outcome
 	// (review 61dc210a39fd#R1).
 	if f.Declared == TierReproduced && f.Unrun == "" {
+		// HELD by execution means a script ran and exited 0 — on the record,
+		// as ExitCode. A finding still marked REPRODUCED with no exit code
+		// never ran (an entry written by hand, or an older writer) and is no
+		// outcome, not a credit (review a906b2676dca#R1, Codex reviewing,
+		// Gemini verifying).
 		if f.Tier == TierReproduced {
-			return Outcome{Known: true, Held: true, By: "execution"}
+			if f.ExitCode != nil && *f.ExitCode == 0 {
+				return Outcome{Known: true, Held: true, By: "execution"}
+			}
+			return Outcome{}
 		}
 		return Outcome{Known: true, Held: false, By: "execution"}
 	}

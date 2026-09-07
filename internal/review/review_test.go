@@ -215,7 +215,10 @@ func TestOutcomeAndGradeFollowTheOrderOfAuthority(t *testing.T) {
 		{"code-read, no verdict: nobody graded", unknown, nil, Graded{}},
 		{"code-read, person confirmed: reviewer right, verifier's refute wrong", unknown, &Adjudicated{Verdict: "confirmed", By: "p"}, Graded{true, true, true, false}},
 		{"execution said held, person refuted: person wins, verifier's stand wrong", held, &Adjudicated{Verdict: "refuted", By: "p"}, Graded{true, false, true, false}},
-		{"no verifier at all: reviewer graded, verifier not", Finding{Declared: TierReproduced, Tier: TierReproduced}, nil, Graded{true, true, false, false}},
+		{"no verifier at all: reviewer graded, verifier not", Finding{Declared: TierReproduced, Tier: TierReproduced, ExitCode: &code}, nil, Graded{true, true, false, false}},
+		// REPRODUCED with no exit code on the record never ran: no outcome,
+		// no credit (review a906b2676dca#R1).
+		{"reproduced but no exit code recorded: nobody graded", Finding{Declared: TierReproduced, Tier: TierReproduced}, nil, Graded{}},
 	}
 	for _, c := range cases {
 		if got := Grade(c.f, c.adj); got != c.want {

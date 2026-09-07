@@ -1,0 +1,137 @@
+---
+title: "The auditor never builds"
+description: "On the day the seventh release candidate was cut, the builder came back as a question: Claude builds, hands the pull request to the adversarial auditor, the reviewer reviews, the audit goes back to Claude. Most of that loop already exists. We said no anyway, and the reason is the thesis: an auditor that also builds has the exact conflict corral exists to remove. A field note on the design shift of the last four days — the review loop went from a design to the front door — and on the one word that stays out of the product."
+pubDate: 2026-09-07
+draft: false
+---
+
+{/* SPDX-License-Identifier: Elastic-2.0 */}
+
+*Field note. Like [the ledger one](/field-notes/the-ledger-is-just-text/),
+this came out of a conversation while a release was cutting. It is the
+sequel to [Killing the part I was proudest of](/field-notes/retire-the-builder/),
+from July, because the thing that note deleted asked to come back.*
+
+## The question
+
+"Much as I hate to say it — do we extend corral back to a builder as well?
+A multiagent builder with the same ledger-based infrastructure." And then
+the loop, which is a good loop: "Claude builds. Passes the PR to the
+adversarial auditor. Then the reviewer reviews, passes back to Claude with
+the full audit."
+
+The honest first answer is that most of it exists. Walk it against the tree:
+
+- *Claude builds* — Claude Code, in a worktree. Exists, outside corral.
+- *Passes the PR to the adversarial auditor* — the GitHub Action runs
+  `corral certify` on the pull request and writes the entry to the ledger
+  branch. Exists.
+- *The reviewer reviews* — `corral review --scope <the changed files>`,
+  with a model that has never seen the repository, or with Claude Code or
+  Codex in that seat. Exists as of this week.
+- *Passes back with the full audit* — this is the only missing leg, and it
+  is a rendering, not an engine. The ledger already holds what is open on a
+  path: the faults the suite missed, the gaps proven by a test, the claims
+  that reproduced, the refutations, any human ruling. Handing that to
+  whoever writes the next commit is the same move the mutant generator
+  already gets from `--prior`. A day of work.
+
+So the loop the founder described does not need corral to build. It needs
+corral to hand the record back.
+
+## Why we said no anyway
+
+Because of what corral is for. The rule under everything is *nemo iudex in
+causa sua* — the one who wrote the code does not judge it. An auditor that
+also builds has that conflict, the same one the tool exists to remove. You
+can wall it off — separate seats, separate keys, the builder's entries
+judged by seats it never talks to — and then spend the product's
+credibility explaining why the wall holds, and the first time a builder
+seat and a reviewer seat share a model, the reader stops believing it.
+
+There is a market reason too, and the founder said it in one line: "once
+we start saying builder we get lost in the builder noise." The moment the
+word appears, corral is the fourth name in a list with Devin, Cursor and
+Claude Code, compared on the one axis it does not compete on. And there is
+a historical reason. The builder is the part that never shipped. The
+brain, the mission and the herd never reached a release; the audit went
+from a July decision to a release candidate.
+
+Then the founder turned it around: "but if we stake a claim to auditing and
+testing rigor." That settles it rather than reopening it. Staking that
+claim means being the party that never writes the code — so that every
+builder is a customer and none is a competitor. The more agents write
+code, the more something has to judge it that did not. That market grows
+on the builders' side, and corral never has to enter the noise to be
+needed by every name in it.
+
+What the claim obliges in return is that corral hold itself to it in
+public. It does. Every finding in the next section came from corral run on
+corral.
+
+## The shift: the review loop is the door
+
+Four days ago, [Grade the reviewer](/field-notes/grade-the-reviewer/) was a
+design note that said, correctly at the time, that nothing in it was
+built. Between the fourth release candidate and the seventh, all of it
+was:
+
+- `corral review` — a cold model reads a scope, every claim comes with a
+  script, corral runs the script in a detached worktree, and a claim whose
+  script does not demonstrate it is demoted, on the record
+  ([#269](https://github.com/pdbethke/corralai/pull/269)).
+- The verifier seat — a third model tries to refute each claim by the same
+  rules; a refutation that reproduces demotes the finding
+  ([#272](https://github.com/pdbethke/corralai/pull/272)).
+- The reviewer and the verifier are graded — two more seats in
+  `corral models rank`, from execution and adjudication only
+  ([#278](https://github.com/pdbethke/corralai/pull/278)); the record is
+  readable in a browser ([#274](https://github.com/pdbethke/corralai/pull/274))
+  and in a warehouse ([#279](https://github.com/pdbethke/corralai/pull/279)).
+- The seats can be coding agents — Claude Code or Codex as the reviewer or
+  the verifier, in a disposable worktree, read-only
+  ([#285](https://github.com/pdbethke/corralai/pull/285)).
+
+What it found when pointed at its own code: a JSON parser that took the
+first brace in prose; a guard on `corral ledger append` that a relative
+path walked around; a door into the brain's telemetry that a delegated
+token could open, found by a review of `internal/brain`
+([#284](https://github.com/pdbethke/corralai/pull/284)); and, in the first
+round with Claude Code reviewing and Codex verifying, six claims against
+the package that primes the generator with earlier runs — six confirmed on
+adjudication, six fixed, the reviewer's two reproduction scripts kept as
+regression tests ([#286](https://github.com/pdbethke/corralai/pull/286)).
+The very first round also produced a claim the verifier refuted. That
+entry is in the ledger too, and it stays.
+
+That changed what the front door is. Corral's headline was `certify`:
+plant faults, run the repository's own suite against each, measure the
+kill rate by execution. It still is the deeper claim. But it needs the
+audited repository's suite to run inside corral's jail, it costs minutes
+per file, and a reader cannot try it before lunch. A review round needs no
+suite and no jail — a key, a scope, two seats named — and the record fills
+up while you watch: the claim, the script, the exit code, the refutation,
+the ruling.
+
+They are not two products. They are two verbs on one record: the same
+signing key, the same hash-linked chain, the same graded seats, the same
+warehouse tables, the same branch in the repository. What differs is the
+entry kind. So the launch does not split. The infrastructure launches once,
+through the door a stranger can walk through, and `certify` is the same
+rule applied by a harder means.
+
+## The word that stays out
+
+"Builder" does not appear in the product. Not in the README, not in the
+docs, not in the launch post. The idea from the top of this note survives
+under its right name: the *auditor's report*. A verb of the record that
+renders what the ledger says about a set of files, for whoever writes
+next — a person, Claude Code, Codex, it does not matter, because corral is
+not the one writing. It is not built. When it is, it will be driven from a
+workflow, never from inside corral, and the record will show that the
+writer was handed the audit, so a reader can ask whether the tests came
+before the faults or after.
+
+The rule, extended one more clause: no agent judges its own work; no
+agent's judgment of another's work goes unmeasured; and the judge never
+writes the code.

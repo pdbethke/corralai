@@ -283,6 +283,8 @@ Usage:
                                   --attest <path>: the reproductions as a signed in-toto statement,
                                   the opinion bound by its hash; the entry names the statement, and
                                   corral verify --attest <path> --db <ledger dir> cross-checks them
+  corral review plan [--repo <dir>] the round planner: scopes reviewed and not, changed since, findings
+                                  by outcome, and a proposed next scope — a person names it
   corral review show <dir> <hash> print a review with its adjudications applied
   corral review adjudicate <dir> <hash>#<Rn> --confirm|--refute --reason "…"
                                   a person's verdict on one finding, as its own entry

@@ -16,6 +16,7 @@ import (
 	"github.com/pdbethke/corralai/internal/agentbackend"
 	"github.com/pdbethke/corralai/internal/auditpush"
 	"github.com/pdbethke/corralai/internal/certify"
+	"github.com/pdbethke/corralai/internal/review"
 )
 
 type cannedReviewer struct {
@@ -335,5 +336,64 @@ func TestReviewSaysWhenTheVerifierReturnedNoVerdicts(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "the verifier returned no verdicts on any finding") || !strings.Contains(out.String(), "looks fine to me") {
 		t.Errorf("the record must keep the verifier's reply, marked:\n%s", out.String())
+	}
+}
+
+// TestReviewPlanProposesAndCountsFixBatches: over a git fixture with two
+// scopes, one reviewed (a finding that held) and then changed, the plan
+// ranks the never-reviewed scope first, counts the changed files since
+// the review's commit, names the fix batch, and proposes — never runs a
+// model, never writes.
+func TestReviewPlanProposesAndCountsFixBatches(t *testing.T) {
+	t.Setenv("CORRALAI_CERTIFY_KEY_FILE", filepath.Join(t.TempDir(), "certify_key"))
+	root := t.TempDir()
+	gitRun := gitCmd(t, root)
+	mustWrite(t, filepath.Join(root, "pkg", "a.go"), "package pkg\n")
+	mustWrite(t, filepath.Join(root, "pkg", "b.go"), "package pkg\n")
+	mustWrite(t, filepath.Join(root, "other", "x.go"), "package other\n")
+	mustWrite(t, filepath.Join(root, "other", "y.go"), "package other\n")
+	mustWrite(t, filepath.Join(root, "other", "z.go"), "package other\n")
+	gitRun("init", "-q")
+	gitRun("add", ".")
+	gitRun("commit", "-q", "-m", "base", "--no-gpg-sign")
+	reviewed := gitRevParseHead(t, root)
+	ledger := filepath.Join(root, ".corral", "ledger")
+	signer, _ := ledgerSignerFromLocalKey()
+	code := 0
+	if _, err := auditpush.WriteReview(ledger, review.Review{Repo: "r", Commit: reviewed, Scope: "pkg/a.go", ReviewerModel: "m",
+		Findings: []review.Finding{{ID: "R1", Claim: "c", Declared: review.TierReproduced, Tier: review.TierReproduced, ExitCode: &code}}}, signer); err != nil {
+		t.Fatal(err)
+	}
+	// The fix lands after the review.
+	mustWrite(t, filepath.Join(root, "pkg", "a.go"), "package pkg // fixed\n")
+	gitRun("add", ".")
+	gitRun("commit", "-q", "-m", "fix", "--no-gpg-sign")
+
+	var out, errb bytes.Buffer
+	if code := runReview([]string{"plan", "--repo", root, "--ledger", ledger, "--limit", "10", "--depth", "1"}, &out, &errb); code != 0 {
+		t.Fatalf("plan: %d %s", code, errb.String())
+	}
+	s := out.String()
+	lines := strings.Split(s, "\n")
+	var other, pkg string
+	for _, l := range lines {
+		if strings.HasPrefix(l, "other ") {
+			other = l
+		}
+		if strings.HasPrefix(l, "pkg ") {
+			pkg = l
+		}
+	}
+	if other == "" || pkg == "" || strings.Index(s, "\nother ") > strings.Index(s, "\npkg ") {
+		t.Fatalf("the never-reviewed scope must rank first:\n%s", s)
+	}
+	if !strings.Contains(pkg, "1     0     0     1") || !strings.Contains(pkg, "fix batch nobody has re-attacked") || !strings.Contains(pkg, reviewed[:7]) {
+		t.Errorf("pkg's row must show the held finding, one changed file since the review's commit, and the reason:\n%s", pkg)
+	}
+	if !strings.Contains(s, "proposed next: corral review --scope other ") {
+		t.Errorf("the proposal must name the never-reviewed scope:\n%s", s)
+	}
+	if entries, _ := auditpush.ReadLedgerDir(ledger); len(entries) != 1 {
+		t.Error("plan wrote to the ledger")
 	}
 }

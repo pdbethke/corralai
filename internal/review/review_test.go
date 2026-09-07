@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestParseReadsAFencedReplyAndNormalisesTiers(t *testing.T) {
@@ -235,5 +236,52 @@ func TestCoverageNoteNamesABlanketApproval(t *testing.T) {
 	}
 	if n := CoverageNote(Review{Findings: []Finding{{ID: "R1"}}}); n != "" {
 		t.Errorf("a finding is coverage: %q", n)
+	}
+}
+
+// TestPlanRanksNeverReviewedThenChangedThenStalest: the two rules from the
+// week — aim where the last round did not, re-attack every fix batch —
+// as an order: never reviewed (biggest first), changed since review (a
+// fix batch), then reviewed and unchanged, stalest first. A file-level
+// review covers its directory; a review of a parent covers the child.
+func TestPlanRanksNeverReviewedThenChangedThenStalest(t *testing.T) {
+	code := 0
+	day := func(d int) time.Time { return time.Date(2026, 9, d, 0, 0, 0, 0, time.UTC) }
+	reviews := []Reviewed{
+		{Scope: "internal/a", Commit: "c1", When: day(1), Findings: []Finding{{ID: "R1", Declared: TierReproduced, Tier: TierReproduced, ExitCode: &code}}},
+		{Scope: "internal/b/file.go", Commit: "c2", When: day(3), Findings: []Finding{{ID: "R1", Declared: TierCodeRead, Tier: TierCodeRead}}},
+		{Scope: "cmd", Commit: "c3", When: day(2), Findings: []Finding{{ID: "R1", Declared: TierReproduced, Tier: TierCodeRead, Demoted: "x"}},
+			Adjudications: map[string]*Adjudicated{"R1": {Verdict: "confirmed", By: "p"}}},
+	}
+	changed := func(scope, since string) int {
+		if scope == "internal/a" && since == "c1" {
+			return 4
+		}
+		return 0
+	}
+	plan := Plan(map[string]int{"internal/a": 10, "internal/b": 5, "internal/never1": 3, "internal/never2": 30, "cmd/corral": 40}, reviews, changed)
+	var order []string
+	for _, s := range plan {
+		order = append(order, s.Scope)
+	}
+	want := []string{"internal/never2", "internal/never1", "internal/a", "cmd/corral", "internal/b"}
+	if strings.Join(order, ",") != strings.Join(want, ",") {
+		t.Fatalf("order = %v, want %v", order, want)
+	}
+	by := map[string]ScopeState{}
+	for _, s := range plan {
+		by[s.Scope] = s
+	}
+	if a := by["internal/a"]; a.Held != 1 || a.ChangedSince != 4 || !strings.Contains(a.Reason, "fix batch") {
+		t.Errorf("internal/a: %+v", a)
+	}
+	if b := by["internal/b"]; b.Reviews != 1 || b.Open != 1 || b.LastScope != "internal/b/file.go" || !strings.Contains(b.Reason, "awaiting") {
+		t.Errorf("a file-level review must cover its directory, with its open finding: %+v", b)
+	}
+	if c := by["cmd/corral"]; c.Reviews != 1 || c.Held != 1 || c.LastScope != "cmd" {
+		t.Errorf("a parent's review covers the child, and the person's confirmation is the outcome: %+v", c)
+	}
+	if n := by["internal/never2"]; n.Reason != "never reviewed" || n.Reviews != 0 {
+		t.Errorf("never2: %+v", n)
 	}
 }

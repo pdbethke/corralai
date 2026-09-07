@@ -35,6 +35,16 @@ history of any release, `git log v0.3.4..v0.3.5`.
   the file. A run's own `--push` now stamps its entry's hash on the scan
   row, so a later push of the same directory skips it. This is the
   backfill verb `corral scans push` was for the retired record.
+- **`corral review plan` — the round planner.** Every scope of the
+  repository (directories two deep holding source), when the ledger last
+  saw it reviewed and at what commit, its findings by outcome (held, fell,
+  awaiting a verdict), how many of its files changed since that commit —
+  and a proposal for the next round: never reviewed first (largest first),
+  then changed since review (a fix batch nobody has re-attacked), then the
+  stalest. No model runs, nothing is written, and it is a proposal: a
+  person names the scope. On corral itself it said what was true — every
+  scope reviewed that evening had since been changed by the fixes those
+  reviews prompted.
 
 ## [v1.0.0-rc.6] — 2026-09-07
 

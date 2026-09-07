@@ -20,7 +20,9 @@ outcome, the outcome being a person's adjudication else execution), and the thre
 warehouse grains are real — `corral_reviews`, `corral_findings`,
 `corral_adjudications`, loaded by the view over a directory and pushed by
 `review --push` / `adjudicate --push`, with `models rank` reading the seats
-from them. Not yet: the round planner. Its first two runs were on corral itself, the day it was
+from them. And the round planner (`corral review plan`): scopes covered
+and not, changed since their review, findings by outcome, a proposal a
+person confirms. Everything in "What would be built" is built. Its first two runs were on corral itself, the day it was
 written: one finding refuted (a false claim whose script also could not
 run — demoted, then refuted on the record), one confirmed (a real bypass
 in the verb written that morning, whose script exited 0 for the wrong

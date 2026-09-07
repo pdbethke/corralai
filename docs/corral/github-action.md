@@ -472,6 +472,11 @@ echoes a key value, and an unset key is never exported as an empty variable
 | `mutant-model` | **yes** | `""` | Model for the mutant-generator role. |
 | `critic-model` | no | `""` | Model for the test-critic role, which must **differ** from the writer's. `off` disables it entirely — it is advisory and never gates the verdict, so a single-vendor run with only one usable model can drop it. No default. |
 | `shadow-model` | no | `""` (OFF) | Challenger model that attacks every region a second time. Recorded for comparison, never gates the verdict. Off unless named. |
+| `reviewer-model` | no | `""` (off) | Also run `corral review` on the change with this model in the reviewer seat — see "The review, on a pull request" below. An API model name; the agentic seats (`claude-code`, `codex`) are refused on a runner. |
+| `verifier-model` | no | `""` (off) | With `reviewer-model`, a third model (never the reviewer's) that tries to refute every finding by the same rules. |
+| `review-scope` | no | `""` (the change itself) | What the reviewer is handed. Empty: the top-level directory of every file changed against `diff-base`, one review per directory. |
+| `review-max-scopes` | no | `"5"` | How many changed directories to review before refusing and asking for an explicit `review-scope`. |
+| `review-fail-on` | no | `"reproduced"` | `reproduced`: the step fails (exit 3, after the entry is written) when a REPRODUCED finding stands. `never`: recorded and reported, never fails the step. |
 | `corral-version` | no | `""` (falls back to the action's own ref, `github.action_ref`) | Which `corral` to `go install`, as a version suffix (a tag, branch, or commit). Leave it empty unless you deliberately want a different `corral` release than the action you pinned in `uses:`. |
 
 ## The ledger branch — what a runner remembers
@@ -829,7 +834,62 @@ threshold check, exactly as they did before this input existed. A threshold
 can only fail a run that actually produced at least one real kill-rate
 measurement.
 
+## The review, on a pull request
+
+The audit is the gate by execution. The review is the gate by adversary,
+and the same step runs it when `reviewer-model` is named:
+
+```yaml
+      - uses: pdbethke/corralai@v1.0.0-rc.9
+        with:
+          test-command: "go test ./..."
+          mutant-model: gemini-3.6-flash
+          writer-model: gemini-3.6-flash
+          critic-model: off
+          derive-model: gemini-3.6-flash
+          reviewer-model: gemini-3.6-flash
+          verifier-model: claude-haiku-4-5
+          gemini-key: ${{ secrets.GEMINI_API_KEY }}
+          anthropic-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          ledger: .corral-ledger
+```
+
+A model that has never seen the repository is handed the change and told to
+assume it is wrong: every claim comes with a script, corral runs the scripts
+in a detached worktree, a claim that does not reproduce is demoted on the
+record, the verifier tries to refute what stands, and the review is one
+signed entry in the same `ledger` directory the audit writes to — so the
+pull request's record holds both verdicts, in one chain. Each review is
+mirrored into the step summary beside the audit's report.
+
+**What "the change" is.** With `review-scope` empty, the reviewer gets the
+top-level directory of every file the pull request changed against its base
+(`diff-base`, or the PR's base branch), one review per directory, at most
+`review-max-scopes` of them; a change to root-level files alone is a review
+of the whole repository. Name `review-scope` to hand it one directory or
+file instead. There is no base on a plain push without `diff-base`, so a
+review there needs `review-scope`.
+
+**The gate.** `review-fail-on: reproduced` (the default) fails the step with
+exit 3 when a REPRODUCED finding stands at the end — its script ran and
+exited 0, and neither a reproduced refutation nor a person's adjudication
+overturned it. The entry is written and pushed before the gate fires: a
+verdict you only keep when it flatters you is not evidence. `never` records
+and reports and lets the step pass. The audit's own status wins when the
+audit failed.
+
+**Seats on a runner.** The agentic seats (`claude-code`, `codex`) are coding
+CLIs with their own subscription login, which a hosted runner does not have;
+the step refuses them by name. CI review uses API seats — a provider model
+reached through the `*-key` inputs — and the decorrelation rule still holds:
+the verifier must be a different model from the reviewer.
+
 ## Exit codes
+
+- **3** — `review-fail-on: reproduced` and a REPRODUCED finding stands at the
+  end of the review (the entry was written first). Distinct from 1 and 2 so a
+  gate can tell "the review found something that reproduced" from "the review
+  did not happen".
 
 - **0** — the scan ran and graded at least one file, and (if `min-kill-rate`
   was given) every audited file met it; or nothing was in scope at all (a

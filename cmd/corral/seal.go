@@ -602,6 +602,15 @@ func emitSealJSON(rows []sealRow, stdout io.Writer) int {
 // sealStateJSON is the --repo --json shape: snake_case, and the row's own
 // fields flattened in rather than nested, so a reader does not have to know
 // this command's internal sealState/sealRow split.
+//
+// It says what the text table says, from the same functions: "audited" is
+// the scan's own time when the row recorded one (auditedLabel's rule), and
+// "pushed" is the row's push time, always; "caveat" is caveat()'s word and
+// the three honesty flags ride beside it. A cold reviewer found the JSON
+// naming the push time "audited" and carrying no caveat at all, so a
+// machine reader was told a file audited in 2024 was audited on push day,
+// and read "kill rate 1.00, 5 survivors, 0 proven" for a file whose
+// authored test never compiled (review 8377ae6320cc, R1 and R2).
 type sealStateJSON struct {
 	State        string   `json:"state"`
 	Path         string   `json:"path"`
@@ -609,7 +618,17 @@ type sealStateJSON struct {
 	Survivors    *int     `json:"survivors"`
 	ProvenMissed *int     `json:"proven_missed"`
 	Trees        *int     `json:"trees"`
-	Audited      *string  `json:"audited"`
+	// Audited is the scan's own time (RFC 3339) when the row recorded
+	// one, else null — never the push time under this name.
+	Audited *string `json:"audited"`
+	// Pushed is when the row entered the warehouse, always.
+	Pushed *string `json:"pushed"`
+	// Caveat is the one word the text table prints, "" when the numbers
+	// may be read at face value; the flags are the reasons, individually.
+	Caveat           *string `json:"caveat"`
+	TestWriterFailed *bool   `json:"test_writer_failed"`
+	PoolTestUnsound  *bool   `json:"pool_test_unsound"`
+	BaselineFailed   *bool   `json:"baseline_failed"`
 }
 
 func emitSealStateJSON(states []sealState, stdout io.Writer) int {
@@ -617,9 +636,17 @@ func emitSealStateJSON(states []sealState, stdout io.Writer) int {
 	for _, s := range states {
 		j := sealStateJSON{State: s.State, Path: s.Path}
 		if s.Row != nil {
-			kr, sv, pm, tr := s.Row.KillRate, s.Row.Survivors, s.Row.ProvenMissed, s.Row.Trees
-			ts := s.Row.TS.Format(time.RFC3339)
-			j.KillRate, j.Survivors, j.ProvenMissed, j.Trees, j.Audited = &kr, &sv, &pm, &tr, &ts
+			r := s.Row
+			kr, sv, pm, tr := r.KillRate, r.Survivors, r.ProvenMissed, r.Trees
+			pushed := r.TS.Format(time.RFC3339)
+			j.KillRate, j.Survivors, j.ProvenMissed, j.Trees, j.Pushed = &kr, &sv, &pm, &tr, &pushed
+			if at := r.auditedAt(); at != nil {
+				a := at.Format(time.RFC3339)
+				j.Audited = &a
+			}
+			cv := r.caveat()
+			twf, ptu, bf := r.TestWriterFailed, r.PoolTestUnsound, r.BaselineFailed
+			j.Caveat, j.TestWriterFailed, j.PoolTestUnsound, j.BaselineFailed = &cv, &twf, &ptu, &bf
 		}
 		out = append(out, j)
 	}
@@ -629,11 +656,17 @@ func emitSealStateJSON(states []sealState, stdout io.Writer) int {
 	return 0
 }
 
+// auditedAt is the ONE rule for "when was this audited": the scan's own
+// time when recorded, nil otherwise. auditedLabel (the text table) and
+// emitSealStateJSON (the JSON) both go through it, so the two doors cannot
+// disagree about which time is which.
+func (r sealRow) auditedAt() *time.Time { return r.AuditedAt }
+
 // auditedLabel is the scan's own time when recorded, else the push time
 // marked as such — a reader must be able to tell the two apart.
 func (r sealRow) auditedLabel() string {
-	if r.AuditedAt != nil {
-		return r.AuditedAt.Format("2006-01-02 15:04")
+	if at := r.auditedAt(); at != nil {
+		return at.Format("2006-01-02 15:04")
 	}
 	return r.TS.Format("2006-01-02 15:04") + " (push)"
 }

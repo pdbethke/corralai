@@ -45,12 +45,14 @@ func runReviewPlan(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "corral review plan: %v\n", err)
 		return 1
 	}
-	entries, err := auditpush.ReadLedgerDir(ledgerDir)
+	rec, err := readLedgerRecord(ledgerDir)
 	if err != nil {
 		fmt.Fprintf(stderr, "corral review plan: reading %s: %v\n", ledgerDir, err)
 		return 1
 	}
-	adj := auditpush.Adjudications(entries)
+	// A withdrawn review is not coverage: the planner sees what stands.
+	entries := rec.Live
+	adj := rec.liveAdjudications()
 	var reviews []review.Reviewed
 	for _, e := range entries {
 		if e.Kind != auditpush.KindReview || e.Review == nil {

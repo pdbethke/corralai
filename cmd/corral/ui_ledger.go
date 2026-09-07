@@ -90,13 +90,17 @@ func readUILedger(dir string) (uiLedger, error) {
 	if err != nil {
 		return uiLedger{}, err
 	}
-	entries, err := auditpush.ReadLedgerDir(dir)
+	rec, err := readLedgerRecord(dir)
 	if err != nil {
 		return uiLedger{}, err
 	}
+	entries := rec.All
 	out := uiLedger{Dir: dir, Verified: verified, Checked: time.Now().UTC()}
-	adj := auditpush.Adjudications(entries)
-	retracted := auditpush.Retracted(entries)
+	adj := rec.liveAdjudications()
+	live := map[string]bool{}
+	for _, e := range rec.Live {
+		live[e.Hash] = true
+	}
 	for i, e := range entries {
 		c := auditpush.ChainCheck{}
 		if i < len(checks) {
@@ -111,16 +115,21 @@ func readUILedger(dir string) (uiLedger, error) {
 		if c.Problem != "" {
 			out.Problems++
 		}
+		// The chain shows every entry — it IS the chain — but an entry
+		// that does not stand says so, whatever its kind: a retracted
+		// review, and an adjudication of one, used to render as live.
+		if r, gone := rec.retractionOf(e); gone {
+			u.Note = "RETRACTED: " + r.Reason
+		} else if !live[e.Hash] && e.Kind == auditpush.KindAdjudication {
+			u.Note = "RETRACTED with the review it adjudicates"
+		}
 		switch e.Kind {
 		case auditpush.KindScan:
 			u.Repo, u.Audited, u.Files, u.Mutants = e.Bundle.Scan.Repo, e.Bundle.Scan.Audited, len(e.Bundle.Files), len(e.Bundle.Mutants)
-			if r, gone := retracted[e.Hash]; gone {
-				u.Note = "RETRACTED: " + r.Reason
-			}
 		case auditpush.KindRetract:
 			out.Retracts = append(out.Retracts, uiRetract{Pos: i + 1, Retracts: e.Retracts, Reason: e.Reason})
 		case auditpush.KindReview:
-			if e.Review != nil {
+			if e.Review != nil && live[e.Hash] {
 				r := *e.Review
 				rep, cr, hy := r.Counts()
 				v := uiReview{Pos: i + 1, Hash: e.Hash, When: e.Pushed, Repo: r.Repo, Commit: r.Commit, Scope: r.Scope,

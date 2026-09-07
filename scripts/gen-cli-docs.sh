@@ -93,8 +93,13 @@ capture_help() {
 # as silence.
 declare -A ARGV_FOR=(
   [certify]="certify --local"
-  [scans]="scans push"
 )
+# ARGV_FOR once named `scans push` — a verb the dispatcher had already lost.
+# The section it produced was the unknown-subcommand ERROR, the drift gate
+# compared the generator's output to itself and stayed green, and the shipped
+# reference documented a command that did not exist (review 8377ae6320cc#R4).
+# The verbs are now DERIVED from each subcommand's own usage, and a section
+# whose body is an error refuses the whole generation below.
 # `certify` carries three distinct flag sets behind one name, so it is listed
 # explicitly rather than derived — deriving would document only the first.
 CORRAL_EXTRA_SUBCOMMANDS=("certify --repo ." "certify verify")
@@ -169,6 +174,13 @@ gen_one() {
         # shellcheck disable=SC2086 -- deliberate word splitting: an argv prefix
         subhelp="$(capture_sub_help "$b" $sub)"
         [ -n "$subhelp" ] || continue
+        # A section that documents an ERROR documents a verb that does not
+        # exist. Refuse, by name, rather than ship it.
+        if printf '%s' "$subhelp" | grep -qE 'unknown subcommand|is not a scan id'; then
+          echo "gen-cli-docs: \`$b $sub -h\` answered with an error, not a usage — the reference would document a verb that does not exist:" >&2
+          printf '%s\n' "$subhelp" | sed 's/^/    /' >&2
+          exit 1
+        fi
         echo
         # The heading names the command a READER types; a positional argument
         # this script supplies only to reach the flag set (e.g. the "." in

@@ -652,11 +652,12 @@ corral review — a cold model reviews a scope of the repository; corral runs it
       script against a detached worktree at HEAD. A script that does not hold demotes its
       finding to CODE-READ on the record, out loud. The reviewer must also list what it
       checked and found sound. The opinion is printed and carried; only the reproductions
-      are what the entry's signature vouches for. Exit 0 either way: a review is not a gate.
+      are what the entry's signature vouches for. Exit 0 either way unless --fail-on reproduced,
+      which exits 3 when a REPRODUCED finding stands after the run — the record is written first.
       With --verifier-model, a THIRD model (never the reviewer's) tries to refute every finding by
       the same rules; a refutation whose script holds demotes the finding, and is itself recorded.
       flags: --ledger <dir> (default <repo>/.corral/ledger)  --no-ledger  --timeout 60s
-             --max-bytes 200000 (how much of the scope the reviewer is shown)
+             --max-bytes 200000 (how much of the scope the reviewer is shown)  --fail-on reproduced
   corral review plan [--repo <dir>] [--ledger <dir>] [--depth 2]
       The round planner: every scope of the repository, when the ledger last saw it reviewed, its
       findings by outcome, how many of its files changed since — and a proposal for the next round:
@@ -670,6 +671,8 @@ corral review — a cold model reviews a scope of the repository; corral runs it
 flags of `corral review`:
   -attest corral verify --attest <path> --db <ledger dir>
     	write an in-toto statement (predicate https://corralai.dev/review/v1) to this path, and its DSSE envelope beside it when a certify key is configured: the REPRODUCTIONS — every finding's declared and recorded tier, the hash of its script and output, its exit, the verifier's refutation on the same terms — signed; the opinion bound by its hash and not carried. The ledger entry then names the statement. corral verify --attest <path> --db <ledger dir> recomputes the reproductions' hash from the entry
+  -fail-on reproduced
+    	exit 3 when a finding STANDS at this tier after the run: reproduced (its script ran and exited 0, and no reproduced refutation or adjudication overturned it). Off by default — the record is written either way; this is the merge gate's switch, for CI
   -ledger string
     	the ledger directory the review entry is written to (default: <repo>/.corral/ledger, or $CORRAL_LEDGER)
   -max-bytes int
@@ -728,10 +731,11 @@ Usage of corral review plan:
 corral review show: usage: corral review show <ledger dir> <review hash>
 ```
 
-## `corral scans push` flags
+## `corral scans` flags
 
 ```
-corral scans: unknown subcommand "push" — want list or show
+usage: corral scans list [--ledger <dir>] [--limit n] [--json]
+       corral scans show <scan-id> [--ledger <dir>] [--json] [--evidence] [--timing]
 ```
 
 ## `corral scans list` flags
@@ -749,7 +753,15 @@ Usage of scans list:
 ## `corral scans show` flags
 
 ```
-corral scans show: "-h" is not a scan id (see `corral scans list`)
+usage: corral scans show <scan-id> [--ledger <dir>] [--json] [--evidence] [--timing]
+  -evidence
+    	also print the pool's authored test source for each audited file
+  -json
+    	emit the raw rows as JSON
+  -ledger certify --repo
+    	the ledger directory to read (default: $CORRAL_LEDGER, else ./.corral/ledger — where certify --repo writes its entry for the repo you are standing in)
+  -timing
+    	also print where each audited file's wall clock went, phase by phase — with --json, adds top-level selection_ms, selection_reused and model_calls and wraps the file array in an object ({"files": [...], "selection_ms": ..., "selection_reused": ..., "model_calls": [...]}) instead of emitting it bare
 ```
 
 ## `corral scorecard` flags

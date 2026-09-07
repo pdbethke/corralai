@@ -115,6 +115,19 @@ breaching file on its own line:
 Reach for this only once you have real timings from your own repo. A required
 check that can take hours is not a merge gate anyone will keep.
 
+## The review, on the pull request
+
+Name `reviewer-model` and the same step also runs `corral review` on the
+change: a model that has never seen the repository is handed the changed
+directories and told to assume the code is wrong; every claim comes with a
+script the step runs, a claim that does not reproduce is demoted on the
+record, a `verifier-model` tries to refute what stands, and the review is
+one signed entry in the same ledger branch as the audit. `review-fail-on:
+reproduced` (the default) fails the check with exit 3 when a reproduced
+finding stands — after the entry is written. API seats only on a runner;
+the [full reference](https://github.com/pdbethke/corralai/blob/main/docs/corral/github-action.md) has the inputs and what "the
+change" means.
+
 ## Where the verdict shows up
 
 The report goes to the job summary — the page you land on when you click the

@@ -858,7 +858,11 @@ newest scan's verdict, each fault your tests missed with the test that
 closes a proven gap, each review claim that stands and what a person
 ruled — claims that did not hold are counted, not listed. It reads the
 ledger and writes nothing; `--json` is the same report for an agent to
-read. The design, and the week that produced it:
+read. In CI, the Action runs the review on the pull request's changed
+directories when `reviewer-model` is named (`review-fail-on: reproduced`
+fails the check, exit 3, after the entry is written), into the same ledger
+branch as the audit; API seats only — the agentic seats need a login a
+runner does not have. The design, and the week that produced it:
 **[docs/design/adversarial-review.md](docs/design/adversarial-review.md)**.
 
 ## The audit flags

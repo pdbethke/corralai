@@ -100,6 +100,26 @@ inputs:
     description: "Model for the test-critic role, which must DIFFER from the writer's. 'off' disables the critic entirely — it is advisory and never gates the verdict, so a single-vendor run with only one usable model can drop it. No default: name a model or 'off'."
     required: false
     default: ""
+  reviewer-model:
+    description: "Also run `corral review` on the change, with this model in the REVIEWER seat: a cold model that has never seen the repository is told to assume the code is wrong and prove it; every claim comes with a script corral runs in a detached worktree, a claim that does not reproduce is demoted on the record, and the review is one signed entry in the same `ledger` directory the audit writes to. An API model name (a key must reach it through the *-key inputs) — the agentic seats (`claude-code`, `codex`) need a subscription login a hosted runner does not have and are refused here. Off unless named; corral has no default models."
+    required: false
+    default: ""
+  verifier-model:
+    description: "With `reviewer-model`, a third model (never the reviewer's) that tries to refute every finding by the same rules; a refutation whose script holds demotes the finding, and is itself recorded. Off unless named."
+    required: false
+    default: ""
+  review-scope:
+    description: "What the reviewer is handed: a directory or file under the checkout. Empty means the change itself — the top-level directory of every file changed against `diff-base` (the PR's base branch on a pull request), one review per directory, at most `review-max-scopes` of them; files at the repository root count as the whole repository only when nothing else changed."
+    required: false
+    default: ""
+  review-max-scopes:
+    description: "With an empty `review-scope`, how many changed top-level directories to review before refusing and asking for an explicit scope — a review per directory costs a round each."
+    required: false
+    default: "5"
+  review-fail-on:
+    description: "`reproduced` (the default): the step fails — exit 3, after the entry is written — when a REPRODUCED finding stands at the end of the review. `never`: the review is recorded and reported and never fails the step."
+    required: false
+    default: "reproduced"
   corral-version:
     description: "Which corral to install, as a `go install .../cmd/corral@<ref>` version (a tag, branch, or commit). Defaults to the ref this action itself was resolved at, so the installed binary always matches the action."
     required: false
@@ -160,6 +180,11 @@ runs:
         TIMEOUT: ${{ inputs.timeout }}
         MAX_TOKENS: ${{ inputs.max-tokens }}
         LEDGER_DIR: ${{ inputs.ledger }}
+        REVIEWER_MODEL: ${{ inputs.reviewer-model }}
+        VERIFIER_MODEL: ${{ inputs.verifier-model }}
+        REVIEW_SCOPE: ${{ inputs.review-scope }}
+        REVIEW_MAX_SCOPES: ${{ inputs.review-max-scopes }}
+        REVIEW_FAIL_ON: ${{ inputs.review-fail-on }}
         REPO_OWNER: ${{ github.repository_owner }}
         COMMIT_SHA: ${{ github.sha }}
         TEST_COMMAND: ${{ inputs.test-command }}
@@ -393,7 +418,13 @@ runs:
         # fails. $GITHUB_STEP_SUMMARY is set by the Actions runner and by
         # nothing else, so it is legitimately absent under `act`, on some
         # self-hosted setups, and when this script is run directly.
-        if [ -n "${GITHUB_STEP_SUMMARY:-}" ] && [ -f "$report" ]; then
+        #
+        # ONE renderer for every report this step mirrors (the audit's, and
+        # each review's below): the report is reproduced VERBATIM, bounded,
+        # and fenced past its longest backtick run.
+        append_summary() { # title, report file
+          local title="$1" file="$2" limit size longest fence
+          [ -n "${GITHUB_STEP_SUMMARY:-}" ] && [ -f "$file" ] || return 0
           # GitHub rejects a summary over 1MiB OUTRIGHT — an unbounded write
           # loses the whole report, not just its tail. Bound it, keeping the
           # HEAD (the verdict line is the first thing printed), and say so
@@ -401,22 +432,22 @@ runs:
           # short one, and this action already refuses to silently truncate a
           # multi-line test-command for the same reason.
           limit=900000
-          size=$(wc -c < "$report")
+          size=$(wc -c < "$file")
           # A fixed ``` fence is closed early by any line in the report that
           # itself begins with three backticks, after which the remainder
           # renders as markdown and the preformatted layout (the indentation
           # of the weakest-files list is load-bearing) is lost. Grow the fence
           # past the longest backtick run the report actually contains.
-          longest=$( { grep -o '`\+' "$report" || true; } | awk '{ if (length($0) > n) n = length($0) } END { print n+0 }' )
+          longest=$( { grep -o '`\+' "$file" || true; } | awk '{ if (length($0) > n) n = length($0) } END { print n+0 }' )
           fence='```'
           while [ "${#fence}" -le "$longest" ]; do
             fence="${fence}\`"
           done
           {
-            echo "## Corral — adversarial test audit"
+            echo "## $title"
             echo
             echo "$fence"
-            head -c "$limit" "$report"
+            head -c "$limit" "$file"
             # head -c can stop mid-line; without this the closing fence would
             # be appended to that partial line and never open its own.
             echo
@@ -426,6 +457,73 @@ runs:
               echo "_Report truncated at ${limit} of ${size} bytes to stay under GitHub's 1MiB step-summary limit. The full report is in this step's log._"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
+        }
+        append_summary "Corral — adversarial test audit" "$report"
+
+        # THE REVIEW: the change, read by a stranger. Off unless a reviewer
+        # is named. Runs after the audit whatever the audit said, into the
+        # same ledger; its own gate is --fail-on, and the step's status is
+        # the audit's when that failed, else the review's.
+        if [ -n "${REVIEWER_MODEL:-}" ]; then
+          # The agentic seats are a coding CLI with a subscription login;
+          # a hosted runner has neither. Refuse by name rather than fail
+          # deep inside the seat with "claude: not found".
+          for seat in "$REVIEWER_MODEL" "${VERIFIER_MODEL:-}"; do
+            case "${seat%%:*}" in
+              claude-code|codex)
+                echo "::error::'$seat' is an agentic seat (a coding CLI with its own login), which a hosted runner cannot run. CI review uses API seats: name a provider model (gemini-…, claude-…, gpt-…) and supply its key through the *-key inputs." >&2
+                exit 1;;
+            esac
+          done
+          scopes=()
+          if [ -n "${REVIEW_SCOPE:-}" ]; then
+            scopes+=("$REVIEW_SCOPE")
+          elif [ -n "$base" ]; then
+            # The change itself: the top-level directory of every changed
+            # file, one review each. Root-level files are the whole
+            # repository, and only when nothing else changed — a review of
+            # "." beside three directories is the same three reviews again.
+            root_changed=0
+            while IFS= read -r f; do
+              [ -n "$f" ] || continue
+              case "$f" in
+                */*) d="${f%%/*}"; case " ${scopes[*]:-} " in *" $d "*) ;; *) scopes+=("$d");; esac;;
+                *) root_changed=1;;
+              esac
+            done < <(git -C "${GITHUB_WORKSPACE:-.}" diff --name-only "$base...HEAD" -- 2>/dev/null || git -C "${GITHUB_WORKSPACE:-.}" diff --name-only "$base" HEAD --)
+            if [ "${#scopes[@]}" -eq 0 ] && [ "$root_changed" = 1 ]; then
+              scopes+=(".")
+            fi
+            if [ "${#scopes[@]}" -eq 0 ]; then
+              echo "::notice::review: nothing changed against $base — no review to run."
+            fi
+            if [ "${#scopes[@]}" -gt "${REVIEW_MAX_SCOPES:-5}" ]; then
+              echo "::error::review: the change touches ${#scopes[@]} top-level directories (${scopes[*]}), more than review-max-scopes=${REVIEW_MAX_SCOPES:-5}. Set review-scope to the directory that matters, or raise review-max-scopes — a review per directory costs a round each." >&2
+              exit 1
+            fi
+          else
+            echo "::error::review: no review-scope and no base to diff against (not a pull request and diff-base is empty) — name review-scope." >&2
+            exit 1
+          fi
+          review_status=0
+          for scope in "${scopes[@]}"; do
+            rargs=(review --repo "${GITHUB_WORKSPACE:-.}" --scope "$scope" --reviewer-model "$REVIEWER_MODEL")
+            [ -n "${VERIFIER_MODEL:-}" ] && rargs+=(--verifier-model "$VERIFIER_MODEL")
+            if [ -n "${LEDGER_DIR:-}" ]; then rargs+=(--ledger "$LEDGER_DIR"); else rargs+=(--no-ledger); fi
+            case "${REVIEW_FAIL_ON:-reproduced}" in
+              never) ;;
+              reproduced) rargs+=(--fail-on reproduced);;
+              *) echo "::error::review-fail-on must be 'reproduced' or 'never', got '${REVIEW_FAIL_ON}'." >&2; exit 1;;
+            esac
+            rreport="${RUNNER_TEMP:-/tmp}/corral-review-$(printf '%s' "$scope" | tr -c 'A-Za-z0-9._-' '_').txt"
+            s=0
+            corral "${rargs[@]}" | tee "$rreport" || s=$?
+            append_summary "Corral — review of $scope" "$rreport"
+            [ "$s" -ne 0 ] && review_status=$s
+          done
+          if [ "$status" -eq 0 ]; then
+            status=$review_status
+          fi
         fi
 
         exit "$status"

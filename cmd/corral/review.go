@@ -60,11 +60,12 @@ const reviewUsage = `corral review — a cold model reviews a scope of the repos
       script against a detached worktree at HEAD. A script that does not hold demotes its
       finding to CODE-READ on the record, out loud. The reviewer must also list what it
       checked and found sound. The opinion is printed and carried; only the reproductions
-      are what the entry's signature vouches for. Exit 0 either way: a review is not a gate.
+      are what the entry's signature vouches for. Exit 0 either way unless --fail-on reproduced,
+      which exits 3 when a REPRODUCED finding stands after the run — the record is written first.
       With --verifier-model, a THIRD model (never the reviewer's) tries to refute every finding by
       the same rules; a refutation whose script holds demotes the finding, and is itself recorded.
       flags: --ledger <dir> (default <repo>/.corral/ledger)  --no-ledger  --timeout 60s
-             --max-bytes 200000 (how much of the scope the reviewer is shown)
+             --max-bytes 200000 (how much of the scope the reviewer is shown)  --fail-on reproduced
   corral review plan [--repo <dir>] [--ledger <dir>] [--depth 2]
       The round planner: every scope of the repository, when the ledger last saw it reviewed, its
       findings by outcome, how many of its files changed since — and a proposal for the next round:
@@ -79,11 +80,17 @@ const reviewUsage = `corral review — a cold model reviews a scope of the repos
 // reviewFlags is the run verb's flag set, bound in one place so -h and the
 // run agree about every flag.
 type reviewFlags struct {
-	repoDir, scope, model, verifier, ledger, attest, push string
-	noLedger, pushSource                                  bool
-	timeout                                               time.Duration
-	maxBytes                                              int
+	repoDir, scope, model, verifier, ledger, attest, push, failOn string
+	noLedger, pushSource                                          bool
+	timeout                                                       time.Duration
+	maxBytes                                                      int
 }
+
+// reviewExitStanding is the exit code --fail-on turns a standing finding
+// into: distinct from 1 (the run could not complete) and 2 (usage), so a
+// gate can tell "the review found something that reproduced" from "the
+// review did not happen".
+const reviewExitStanding = 3
 
 func reviewFlagSet(out io.Writer) (*flag.FlagSet, *reviewFlags) {
 	fs := flag.NewFlagSet("corral review", flag.ContinueOnError)
@@ -98,6 +105,7 @@ func reviewFlagSet(out io.Writer) (*flag.FlagSet, *reviewFlags) {
 	fs.StringVar(&f.push, "push", "", "also append the review's rows to a warehouse you own — a DuckDB path, or md:<db> — as corral_reviews and corral_findings, keyed by the entry's hash so a later `review adjudicate --push` joins to them. Scripts and outputs travel as hashes unless --push-source")
 	fs.BoolVar(&f.pushSource, "push-source", false, "with --push, also send the scripts and what they printed (they quote the audited code); off by default")
 	fs.BoolVar(&f.noLedger, "no-ledger", false, "print the review and write no entry")
+	fs.StringVar(&f.failOn, "fail-on", "", "exit 3 when a finding STANDS at this tier after the run: `reproduced` (its script ran and exited 0, and no reproduced refutation or adjudication overturned it). Off by default — the record is written either way; this is the merge gate's switch, for CI")
 	fs.DurationVar(&f.timeout, "timeout", time.Minute, "wall-clock bound on each reproduction script")
 	fs.IntVar(&f.maxBytes, "max-bytes", 200000, "how many bytes of the scope the reviewer is shown; files past the cap are listed by name and the review records them as unshown")
 	return fs, f
@@ -109,6 +117,11 @@ func runReviewRun(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	repoDir, scope, model, verifier, ledgerFlag, attest, push := &f.repoDir, &f.scope, &f.model, &f.verifier, &f.ledger, &f.attest, &f.push
+	failOn := strings.ToLower(strings.TrimSpace(f.failOn))
+	if failOn != "" && failOn != "reproduced" {
+		fmt.Fprintf(stderr, "corral review: --fail-on %q is not a tier — the gate fires on `reproduced` (or is off when unset)\n", f.failOn)
+		return 2
+	}
 	noLedger, timeout, maxBytes := &f.noLedger, &f.timeout, &f.maxBytes
 	if fs.NArg() != 0 {
 		fmt.Fprintf(stderr, "corral review: unexpected argument %q\n", fs.Arg(0))
@@ -274,21 +287,41 @@ func runReviewRun(args []string, stdout, stderr io.Writer) int {
 	// The statement first: it signs the reproductions; the entry, written
 	// after, names it. Fail-open like every write after a measurement.
 	if p := strings.TrimSpace(*attest); p != "" {
-		sha, aerr := writeReviewStatement(p, r)
+		sha, envPath, signErr, aerr := writeReviewStatement(p, r)
 		if aerr != nil {
 			fmt.Fprintf(stderr, "corral review: writing the statement to %s: %v\n", p, aerr)
 		} else {
 			r.StatementSHA256 = sha
-			signed := "unsigned (no certify key)"
-			if _, err := os.Stat(dsseEnvelopePathFor(p)); err == nil {
-				signed = "signed into " + dsseEnvelopePathFor(p)
+			// "signed" is said only for an envelope THIS run wrote. It used
+			// to be decided by stat-ing the envelope path, so a leftover
+			// envelope from an earlier run announced a signature nobody
+			// produced (review 8377ae6320cc#R6).
+			signed := "signed into " + envPath
+			if signErr != nil {
+				signed = "unsigned: " + signErr.Error()
 			}
 			fmt.Fprintf(stdout, "\nattestation: %s (sha256 %.12s…, %s) — the reproductions signed, the opinion bound by its hash\n", p, sha, signed)
 		}
 	}
 
+	// The gate, decided from the record the run produced: a finding that
+	// reproduced and was not overturned stands. The entry is written and
+	// the push happens whatever the gate says — a verdict you only keep
+	// when it is flattering is not evidence.
+	exit := 0
+	if failOn == "reproduced" {
+		for _, fd := range r.Findings {
+			if o := review.OutcomeOf(fd, nil); o.Known && o.Held {
+				exit = reviewExitStanding
+				break
+			}
+		}
+		if exit != 0 {
+			fmt.Fprintf(stdout, "\ngate: a REPRODUCED finding stands — exit %d (--fail-on reproduced)\n", exit)
+		}
+	}
 	if *noLedger {
-		return 0
+		return exit
 	}
 	ledgerDir := strings.TrimRight(*ledgerFlag, "/")
 	if ledgerDir == "" {
@@ -298,7 +331,7 @@ func runReviewRun(args []string, stdout, stderr io.Writer) int {
 	name, werr := auditpush.WriteReview(ledgerDir, r, signer)
 	if werr != nil {
 		fmt.Fprintf(stderr, "corral review: writing the entry to %s: %v\n", ledgerDir, werr)
-		return 0
+		return exit
 	}
 	entries, _ := auditpush.ReadLedgerDir(ledgerDir)
 	var last auditpush.LedgerEntry
@@ -315,7 +348,7 @@ func runReviewRun(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stdout, "  pushed %d review, %d finding row(s) to %s\n", c.Reviews, c.Findings, p)
 		}
 	}
-	return 0
+	return exit
 }
 
 // newReviewerBackend is the seat's constructor; a test substitutes a fake.
@@ -509,18 +542,26 @@ func printReview(w io.Writer, r review.Review, adj map[string]auditpush.Adjudica
 // writeReviewStatement writes the review's in-toto statement and, when a
 // certify key is configured, its DSSE envelope beside it. Returns the
 // plain statement's sha256.
-func writeReviewStatement(path string, r review.Review) (string, error) {
+// writeReviewStatement writes the plain statement to path and returns its
+// sha256, the envelope path THIS call wrote (or "" with signErr saying why
+// no envelope was produced — no key, a signing failure), and any error
+// writing the plain file. A stale envelope beside path is removed first:
+// an envelope that does not belong to this statement must not survive it.
+func writeReviewStatement(path string, r review.Review) (sha, envPath string, signErr, err error) {
 	stmt := certify.BuildReviewAttestation(r)
 	b, err := json.MarshalIndent(stmt, "", "  ")
 	if err != nil {
-		return "", err
+		return "", "", nil, err
 	}
 	if err := os.WriteFile(path, b, 0o600); err != nil {
-		return "", err
+		return "", "", nil, err
+	}
+	if rmErr := os.Remove(dsseEnvelopePathFor(path)); rmErr != nil && !os.IsNotExist(rmErr) {
+		return "", "", nil, fmt.Errorf("removing the stale envelope %s: %w", dsseEnvelopePathFor(path), rmErr)
 	}
 	sum := sha256.Sum256(b)
-	_, _ = writeSignedStatementEnvelope(path, stmt)
-	return hex.EncodeToString(sum[:]), nil
+	envPath, signErr = writeSignedStatementEnvelope(path, stmt)
+	return hex.EncodeToString(sum[:]), envPath, signErr, nil
 }
 
 func tail(s string, n int) string {
@@ -544,18 +585,24 @@ func runReviewShow(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	dir := strings.TrimRight(args[0], "/")
-	entries, err := auditpush.ReadLedgerDir(dir)
+	rec, err := readLedgerRecord(dir)
 	if err != nil {
 		fmt.Fprintf(stderr, "corral review show: %v\n", err)
 		return 1
 	}
-	e, err := auditpush.FindReview(entries, args[1])
+	// Found among ALL entries — a person may need to read a withdrawn
+	// review — but a withdrawn one is announced before anything else,
+	// and its adjudications went with it.
+	e, err := auditpush.FindReview(rec.All, args[1])
 	if err != nil {
 		fmt.Fprintf(stderr, "corral review show: %v\n", err)
 		return 1
+	}
+	if ret, gone := rec.retractionOf(e); gone {
+		fmt.Fprintf(stdout, "RETRACTED %s by entry %.12s: %s\n(this review does not stand; the record below is what was withdrawn)\n\n", ret.Pushed.UTC().Format("2006-01-02 15:04"), ret.Hash, ret.Reason)
 	}
 	adj := map[string]auditpush.Adjudication{}
-	for ref, a := range auditpush.Adjudications(entries) {
+	for ref, a := range rec.liveAdjudications() {
 		if h, id, ok := strings.Cut(ref, "#"); ok && h == e.Hash {
 			adj[id] = a
 		}

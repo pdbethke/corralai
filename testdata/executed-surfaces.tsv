@@ -213,3 +213,8 @@ corral review plan --depth	executed	test:cmd/corral/review_test.go
 corral review plan --ledger	executed	test:cmd/corral/review_test.go
 corral review plan --limit	executed	test:cmd/corral/review_test.go
 corral review plan --repo	executed	test:cmd/corral/review_test.go
+corral review --fail-on	executed	test:cmd/corral/reviewed_doors_test.go
+corral scans show --evidence	executed	test:cmd/corral/scans_evidence_test.go
+corral scans show --json	executed	test:cmd/corral/scans_show_json_test.go
+corral scans show --ledger	executed	test:cmd/corral/scans_test.go
+corral scans show --timing	executed	test:cmd/corral/scans_timing_test.go

@@ -144,22 +144,29 @@ func runScansList(args []string, open func(string) (scansReader, error), stdout,
 }
 
 func runScansShow(args []string, open func(string) (scansReader, error), stdout, stderr io.Writer) int {
-	if len(args) == 0 {
-		fmt.Fprintln(stderr, "usage: corral scans show <scan-id> [--ledger <dir>] [--json] [--evidence] [--timing]")
-		return 2
-	}
-	id, err := strconv.ParseInt(args[0], 10, 64)
-	if err != nil {
-		fmt.Fprintf(stderr, "corral scans show: %q is not a scan id (see `corral scans list`)\n", args[0])
-		return 2
-	}
+	// The flag set FIRST, so `-h` reaches usage: the id used to be parsed
+	// from args[0] before any flag existed, and asking what the verb does
+	// answered `"-h" is not a scan id` (review 8377ae6320cc#R7).
 	fs := flag.NewFlagSet("scans show", flag.ContinueOnError)
 	fs.SetOutput(stderr)
+	fs.Usage = func() {
+		fmt.Fprintln(stderr, "usage: corral scans show <scan-id> [--ledger <dir>] [--json] [--evidence] [--timing]")
+		fs.PrintDefaults()
+	}
 	ledger := fs.String("ledger", "", ledgerReadHelp)
 	asJSON := fs.Bool("json", false, "emit the raw rows as JSON")
 	evidence := fs.Bool("evidence", false, "also print the pool's authored test source for each audited file")
 	timing := fs.Bool("timing", false, "also print where each audited file's wall clock went, phase by phase — with --json, adds top-level selection_ms, selection_reused and model_calls and wraps the file array in an object ({\"files\": [...], \"selection_ms\": ..., \"selection_reused\": ..., \"model_calls\": [...]}) instead of emitting it bare")
-	if err := fs.Parse(args[1:]); err != nil {
+	if err := fs.Parse(flagsFirst(fs, args)); err != nil {
+		return 2
+	}
+	if fs.NArg() == 0 {
+		fs.Usage()
+		return 2
+	}
+	id, err := strconv.ParseInt(fs.Arg(0), 10, 64)
+	if err != nil {
+		fmt.Fprintf(stderr, "corral scans show: %q is not a scan id (see `corral scans list`)\n", fs.Arg(0))
 		return 2
 	}
 

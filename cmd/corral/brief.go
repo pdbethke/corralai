@@ -145,12 +145,12 @@ func runBrief(args []string, stdout, stderr io.Writer) int {
 	if dir == "" {
 		dir = defaultLedgerDir(root)
 	}
-	entries, err := auditpush.ReadLedgerDir(dir)
+	rec, err := readLedgerRecord(dir)
 	if err != nil {
 		fmt.Fprintf(stderr, "corral brief: %v\n", err)
 		return 1
 	}
-	b := buildBrief(dir, entries, paths, f.maxItems)
+	b := buildBrief(dir, rec.All, paths, f.maxItems)
 	if f.jsonOut {
 		enc := json.NewEncoder(stdout)
 		enc.SetIndent("", "  ")

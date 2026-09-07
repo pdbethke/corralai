@@ -11,6 +11,33 @@ history of any release, `git log v0.3.4..v0.3.5`.
 
 ## [Unreleased] — toward 1.0.0-rc.10
 
+- **Seven doors of `cmd/corral` say what the record says.** Found by a Claude
+  Code reviewer on the verbs (review `8377ae6320cc`, Codex verifying; all seven
+  confirmed). A retraction now reaches every door a person looks through —
+  `corral ui` marks a retracted entry of any kind and lists only standing
+  reviews, `review show` announces a withdrawn review before printing it,
+  `review plan` never counts one as coverage — through ONE reader
+  (`readLedgerRecord`) that `brief` uses too. `seal --repo --json` names
+  the scan's own time `audited` (null when none was recorded, never the push
+  time under that name), carries `pushed` beside it, and the caveat and
+  its three honesty flags — from the same functions the text table uses.
+  `review --attest` says "signed into" only for an envelope this run wrote,
+  removes a stale one first, and reports the signer's error by name. `scans
+  show -h` reaches usage (flags first), which put its four flags on the
+  executed-surface manifest for the first time. The generated CLI reference
+  no longer documents `scans push` — a verb the dispatcher lost — with its
+  error as the body: the generator derives every verb and refuses a section
+  whose body is an error, and a docs gate checks the shipped reference.
+- **The Action runs the review.** `reviewer-model` (and `verifier-model`)
+  run `corral review` on the pull request after the audit: the changed
+  top-level directories (or `review-scope`), at most `review-max-scopes`,
+  one signed entry each in the same `ledger` directory, each report mirrored
+  into the step summary. `review-fail-on: reproduced` (default) fails the
+  step with the new `corral review --fail-on reproduced` exit 3 when a
+  REPRODUCED finding stands — after the entry is written; `never` only
+  records. The agentic seats are refused on a runner by name; CI review is
+  API seats through the `*-key` inputs.
+
 - **One shape rule at both doors of the ledger.** An adjudication with no
   finding id, an empty verdict and nobody deciding was placed, signed and
   *verified* when it entered through `corral ledger append` instead of

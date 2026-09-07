@@ -110,7 +110,7 @@ func runVerifyAttest(args []string, stdout, stderr io.Writer) int {
 	// A review statement signs reproductions, not warehouse rows: its
 	// cross-check is against the ledger entry that names it.
 	var rowsResult verifyCheckResult
-	if pt, _ := stmt["predicateType"].(string); pt == certify.ReviewPredicateType {
+	if pt, _ := stmt["predicateType"].(string); certify.IsReviewPredicate(pt) {
 		rowsResult = verifyReviewEntry(*dbFlag, stmt, plainStatementSHA256(*attestFlag, envPath))
 		printCheckResult(stdout, "ledger entry", rowsResult)
 	} else {
@@ -602,7 +602,11 @@ func verifyReviewEntry(dbFlag string, stmt map[string]any, statementSHA string) 
 		if e.Kind != auditpush.KindReview || e.Review == nil || e.Review.StatementSHA256 != statementSHA {
 			continue
 		}
-		got := certify.ReproductionsSHA256(*e.Review)
+		// Recomputed under the rule the statement's predicate version was
+		// written with: a v1 statement hashes v1 bytes, whatever this
+		// binary's current rule is.
+		pt, _ := stmt["predicateType"].(string)
+		got := certify.ReproductionsSHA256At(*e.Review, pt)
 		if got == claimed {
 			rep, cr, hy := e.Review.Counts()
 			return verifyCheckResult{checked: true, ok: true, detail: fmt.Sprintf("entry %.12s names this statement, and its %d reproduction(s) (%d reproduced, %d code-read, %d hypothesis) hash to exactly the value the statement claims", e.Hash, len(e.Review.Findings), rep, cr, hy)}

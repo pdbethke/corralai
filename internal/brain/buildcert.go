@@ -127,7 +127,7 @@ func certifyBuild(ctx context.Context, opts Options, in reportBuildIn, actor str
 		Actor:        actor,
 		Command:      in.Command,
 		ExitCode:     in.ExitCode,
-		DurationS:    in.DurationS,
+		DurationS:    certify.SecondsOrUnmeasured(in.DurationS),
 		OutputDigest: in.OutputDigest,
 		ProducedBy:   in.ProducedBy,
 	}

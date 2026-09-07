@@ -125,7 +125,7 @@ func signBuildLocally(rec buildRecord, priv ed25519.PrivateKey) (buildResult, er
 
 	stmt := certify.BuildAttestation(certify.BuildRecord{
 		Repo: rec.Repo, Commit: rec.Commit, Branch: rec.Branch, Actor: actor,
-		Command: rec.Command, ExitCode: rec.ExitCode, DurationS: rec.DurationS,
+		Command: rec.Command, ExitCode: rec.ExitCode, DurationS: certify.SecondsOrUnmeasured(rec.DurationS),
 		OutputDigest: rec.OutputDigest, ProducedBy: rec.ProducedBy,
 	}, head)
 

@@ -42,6 +42,15 @@ type AuditedFile struct {
 	TimedOut         bool `json:"timedOut,omitempty"`
 	TestWriterFailed bool `json:"testWriterFailed,omitempty"`
 	PoolTestUnsound  bool `json:"poolTestUnsound,omitempty"`
+	// NoGradableMutant: every mutant was rejected by the compile gate, so
+	// nothing was graded and KillRate is nil for THAT reason — the one
+	// reachable way a per-file entry signs an absent rate without being
+	// uncovered. An absence with no flag beside it is a hole (review
+	// 167dd45b25cc#R6); this is the flag. (BaselineFailed and
+	// SuiteIgnoresFile, ScoredCertification's other two, never reach a
+	// per-file entry: reposcan lists such files by reason and does not
+	// audit them, so there is nothing to sign.)
+	NoGradableMutant bool `json:"noGradableMutant,omitempty"`
 	// Which measurement the rate above IS — the tests coverage evidence
 	// showed execute this file (TestSelection, SelectedTests of SuiteTests),
 	// or the whole suite and why (SelectionFallback). Uncovered says no test
@@ -307,6 +316,9 @@ func BuildAuditAttestation(s AuditStatement) map[string]any {
 		}
 		if f.PoolTestUnsound {
 			entry["poolTestUnsound"] = true
+		}
+		if f.NoGradableMutant {
+			entry["noGradableMutant"] = true
 		}
 		if f.PromptShape != "" {
 			entry["promptShape"] = f.PromptShape

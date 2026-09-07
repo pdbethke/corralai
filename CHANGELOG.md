@@ -9,6 +9,21 @@ still move between minor versions.
 Entries describe what changed for someone *using* the tool. For the full commit
 history of any release, `git log v0.3.4..v0.3.5`.
 
+## [Unreleased] — toward 1.0.0-rc.9
+
+- **`corral brief` — the auditor's report.** The record, handed back to
+  whoever writes next: `corral brief --scope <path>` (repeatable) or
+  `--changed <base ref>` renders, per file, the newest scan's verdict, each
+  fault the suite missed — with its hunk when the entry carries one, and
+  the authored test that closes a proven gap — and each review claim that
+  stands, with the verifier's verdict and any adjudication; claims that did
+  not hold are counted, not listed. Retracted entries are left out and the
+  header says how many. `--json` is the same report as one document for an
+  agent to read; `--max-items` bounds it and names the cut. It reads the
+  ledger and writes nothing, and it renders nothing the entries do not
+  hold. The same move `--prior` makes for the mutant generator, made for
+  the author.
+
 ## [v1.0.0-rc.8] — 2026-09-07
 
 The record hashes what it holds: a three-seat round on `internal/auditpush`

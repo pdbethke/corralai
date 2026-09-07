@@ -129,6 +129,15 @@ Usage:
   corral review show <dir> <hash> print a review with its adjudications applied
   corral review adjudicate <dir> <hash>#<Rn> --confirm|--refute --reason "…"
                                   a person's verdict on one finding, as its own entry
+  corral brief --scope <path> [--changed <base>] [--ledger <dir>] [--json]
+                                  the auditor's report: what the record says is still OPEN on
+                                  these files, for whoever writes next — the newest scan's
+                                  verdict, each fault your tests missed (with the test that
+                                  closes a proven gap), each review claim that stands and what
+                                  a person ruled; claims that did not hold are counted, not
+                                  listed. Reads the ledger only; writes nothing. --changed
+                                  <base> takes the files changed since a ref; --max-items
+                                  bounds it and names the cut
   corral verify --attest <path> [flags]
                                   the checker for a certify --repo --attest statement: verifies
                                   its DSSE signature (against --pub or the local certify key,
@@ -198,6 +207,24 @@ Usage:
 Configuration is entirely environment variables — see CORRALAI_ADDR,
 CORRALAI_DB, and the rest of the // Env: block at the top of this binary's
 main.go (also reproduced in the generated CLI reference).
+```
+
+## `corral brief` flags
+
+```
+Usage of corral brief:
+  -changed string
+    	report on the files changed since this git ref (base...HEAD), instead of or as well as --scope
+  -json
+    	the report as one JSON document, for an agent to read
+  -ledger certify --repo
+    	the ledger directory to read (default: $CORRAL_LEDGER, else ./.corral/ledger — where certify --repo writes its entry for the repo you are standing in)
+  -max-items int
+    	at most this many items (survivors, gaps, claims) across the report; the cut is named (default 50)
+  -repo string
+    	the checkout the paths are relative to (default ".")
+  -scope value
+    	a file or directory (repo-relative) to report on; repeatable
 ```
 
 ## `corral certify --local` flags

@@ -845,7 +845,13 @@ tree itself and hands back scripts, and only corral's run of them is the
 record. `corral review plan` is
 the round planner: which scopes were reviewed and when, which changed
 since (a fix batch nobody re-attacked), which never were — and a proposal
-a person confirms. The design, and the week that produced it:
+a person confirms. `corral brief --scope <path>` (or `--changed <base>`)
+is the record handed back to whoever writes next: for each file, the
+newest scan's verdict, each fault your tests missed with the test that
+closes a proven gap, each review claim that stands and what a person
+ruled — claims that did not hold are counted, not listed. It reads the
+ledger and writes nothing; `--json` is the same report for an agent to
+read. The design, and the week that produced it:
 **[docs/design/adversarial-review.md](docs/design/adversarial-review.md)**.
 
 ## The audit flags

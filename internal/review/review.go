@@ -62,8 +62,14 @@ type Finding struct {
 // on what substrate, the findings as recorded, the sound list, and the
 // opinion — the prose, which is carried and never signed on its own.
 type Review struct {
-	Repo          string `json:"repo"`
-	Commit        string `json:"commit"`
+	Repo   string `json:"repo"`
+	Commit string `json:"commit"`
+	// The audited party: who made the commit, by name — author, committer,
+	// and the Co-authored-by trailers one per line (an agent, in code an
+	// agent helped write). Empty when the checkout could not say.
+	Author        string `json:"author,omitempty"`
+	Committer     string `json:"committer,omitempty"`
+	CoAuthors     string `json:"co_authors,omitempty"`
 	Scope         string `json:"scope"`
 	ReviewerModel string `json:"reviewer_model"`
 	// ReviewerTool / VerifierTool name the coding CLI and its version when

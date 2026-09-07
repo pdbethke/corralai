@@ -185,6 +185,10 @@ type ScanRow struct {
 	PreflightRan  bool
 	PreflightNote string
 	FinishedAt    *time.Time
+	// Identity is the audited party — who made the commit (see Identity).
+	// Empty on rows written before it was recorded, or when the checkout
+	// could not say.
+	Identity Identity
 }
 
 // PushedByCertify is the ScanRow.PushedBy of a run's own entry.
@@ -373,7 +377,10 @@ CREATE TABLE IF NOT EXISTS corral_scans (
   preflight_ran    BOOLEAN,
   preflight_note   VARCHAR,
   finished_at      TIMESTAMPTZ,
-  entry_hash       VARCHAR
+  entry_hash       VARCHAR,
+  author           VARCHAR,
+  committer        VARCHAR,
+  co_authors       VARCHAR
 );`
 
 const auditsSchema = `
@@ -679,6 +686,11 @@ var (
 		{"preflight_note", "preflight_note VARCHAR"},
 		{"finished_at", "finished_at TIMESTAMPTZ"},
 		{"entry_hash", "entry_hash VARCHAR"},
+		// The audited party, by name (Identity). co_authors is one name per
+		// line: the commit's Co-authored-by trailers, where an agent is.
+		{"author", "author VARCHAR"},
+		{"committer", "committer VARCHAR"},
+		{"co_authors", "co_authors VARCHAR"},
 	}
 	corralMutantsMigrationCols = []struct{ name, ddl string }{
 		{"scan_uid", "scan_uid VARCHAR"},
@@ -1216,8 +1228,9 @@ func insertBundle(db *sql.DB, b Bundle, now time.Time, uid string) (Counts, erro
 		    source_pushed, statement_sha256, selection_ms, selection_reused,
 		    rekor_log_index, rekor_uuid, schema_version, started_at, pushed_by,
 		    engine_version, model_set, top, all_candidates, total_files,
-		    preflight_ran, preflight_note, finished_at, entry_hash
-		  ) VALUES (`+placeholders(37)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
+		    preflight_ran, preflight_note, finished_at, entry_hash,
+		    author, committer, co_authors
+		  ) VALUES (`+placeholders(40)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
 			uid, now, b.Scan.Repo, b.Scan.RunURL, b.Scan.ScanID, b.Scan.Commit,
 			b.Scan.CorralVersion, b.Scan.Substrate, b.Scan.Host, b.Scan.Cores,
 			nullIfZeroInt(b.Scan.TreesRequested), b.Scan.DiffBase,
@@ -1229,6 +1242,7 @@ func insertBundle(db *sql.DB, b Bundle, now time.Time, uid string) (Counts, erro
 			nullIfEmpty(b.Scan.EngineVersion), nullIfEmpty(b.Scan.ModelSet), nullIfZeroInt(b.Scan.Top),
 			b.Scan.AllCandidates, nullIfZeroInt(b.Scan.TotalFiles),
 			b.Scan.PreflightRan, nullIfEmpty(b.Scan.PreflightNote), nullTime(b.Scan.FinishedAt), nullIfEmpty(b.Scan.EntryHash),
+			nullIfEmpty(b.Scan.Identity.Author), nullIfEmpty(b.Scan.Identity.Committer), nullIfEmpty(b.Scan.Identity.CoAuthors),
 		); err != nil {
 			return Counts{}, fmt.Errorf("auditpush: insert scan row: %w", err)
 		}

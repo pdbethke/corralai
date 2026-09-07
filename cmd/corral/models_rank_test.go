@@ -611,3 +611,90 @@ func TestRankReadsTheReviewSeatsFromAPushedWarehouse(t *testing.T) {
 		t.Errorf("reviewer %d/%d, verifier %d/%d; want 0/1 and 0/1", rh, rc, vok, vc)
 	}
 }
+
+// The audited party has a seat. One observation per audit of a change
+// that reached a verdict — a scan with a gate, a review with a checked
+// claim — for the author and for each co-author (an agent, in code an
+// agent helped write); the change held when the gate passed, or when no
+// checked claim did. Under the same evidence floor as every seat, and
+// nothing in the row says what to do with it.
+func TestRankGradesTheAuditedPartyFromTheLedger(t *testing.T) {
+	t.Setenv("CORRALAI_CERTIFY_KEY_FILE", filepath.Join(t.TempDir(), "certify_key"))
+	dir := filepath.Join(t.TempDir(), "ledger")
+	signer, _ := ledgerSignerFromLocalKey()
+	passed, failed := true, false
+	party := auditpush.Identity{Author: "Ada Writer", Committer: "Forge Bot", CoAuthors: "Claude Code"}
+	// Two scans with a gate (one passed, one failed), one with no gate.
+	for i, p := range []*bool{&passed, &failed, nil} {
+		b := auditpush.Bundle{Scan: auditpush.ScanRow{Repo: "acme/r", ScanID: int64(i + 1), Commit: fmt.Sprintf("c%d", i), Host: "h", Passed: p, Identity: party}}
+		if _, err := auditpush.PushBundle(dir+"/", b); err != nil {
+			t.Fatal(err)
+		}
+	}
+	code := 0
+	// A review whose one checked claim held (a real defect): the change did not.
+	r := review.Review{Repo: "acme/r", Commit: "c3", Author: party.Author, Committer: party.Committer, CoAuthors: party.CoAuthors, Scope: "pkg", ReviewerModel: "rev-m", Lang: "go",
+		Findings: []review.Finding{{ID: "R1", Declared: review.TierReproduced, Tier: review.TierReproduced, ExitCode: &code}}}
+	if _, err := auditpush.WriteReview(dir, r, signer); err != nil {
+		t.Fatal(err)
+	}
+	// A review with nothing checked: no evidence about anyone.
+	r2 := review.Review{Repo: "acme/r", Commit: "c4", Author: party.Author, Scope: "pkg", ReviewerModel: "rev-m", Lang: "go",
+		Findings: []review.Finding{{ID: "R1", Declared: review.TierHypothesis, Tier: review.TierHypothesis}}}
+	if _, err := auditpush.WriteReview(dir, r2, signer); err != nil {
+		t.Fatal(err)
+	}
+	vdb, err := auditpush.LoadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer vdb.Close()
+	obs, err := committerRankEvidence(vdb)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string][2]int{}
+	for _, o := range obs {
+		if o.Role != modelrank.SeatCommitter {
+			t.Fatalf("wrong seat: %+v", o)
+		}
+		g := got[o.Model]
+		g[0] += o.ChangesAudited
+		g[1] += o.ChangesHeld
+		got[o.Model] = g
+	}
+	// Ada: 2 gated scans (1 held) + 1 checked review (0 held) = 3 audits, 1 held. Claude Code the same (co-author of every scan and the checked review).
+	if got["Ada Writer"] != [2]int{3, 1} || got["Claude Code"] != [2]int{3, 1} {
+		t.Fatalf("audited/held per party: %v", got)
+	}
+	if _, ok := got["Forge Bot"]; ok {
+		t.Fatal("the committer of record is not the party who wrote the change")
+	}
+	var out, errb bytes.Buffer
+	if rcode := runModels([]string{"rank", "--db", dir, "--seat", "committer", "--min-runs", "1"}, t.TempDir(), defaultRankLoader, &out, &errb); rcode != 0 {
+		t.Fatalf("rank: %d %s", rcode, errb.String())
+	}
+	// Segmented by language like every seat: a scan spans the project
+	// (no language), a review carries its scope's.
+	for _, want := range []string{"Ada Writer", "Claude Code", "1/2 changes held over 2 commits", "committer · go", "0/1 changes held over 1 commits", "the committer seat from corral_scans.author/co_authors"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("rank output lacks %q:\n%s", want, out.String())
+		}
+	}
+	// A warehouse written before the party was recorded is evidence about nobody.
+	old := filepath.Join(t.TempDir(), "old.duckdb")
+	if _, err := auditpush.PushBundle(old, auditpush.Bundle{Scan: auditpush.ScanRow{Repo: "acme/r", ScanID: 1, Commit: "c", Host: "h", Passed: &passed}}); err != nil {
+		t.Fatal(err)
+	}
+	odb, err := auditpush.LoadDir(dir) // any db with the columns and no party
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer odb.Close()
+	if _, err := odb.Exec(`UPDATE corral_scans SET author = NULL; UPDATE corral_reviews SET author = NULL`); err != nil {
+		t.Fatal(err)
+	}
+	if obs, err := committerRankEvidence(odb); err != nil || len(obs) != 0 {
+		t.Fatalf("rows with no party recorded must grade nobody: %d %v", len(obs), err)
+	}
+}

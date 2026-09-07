@@ -192,12 +192,17 @@ func runReviewRun(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stdout, ", %d NOT shown (--max-bytes)", len(sc.Unshown))
 		}
 	}
+	party := auditpush.CommitIdentity(root, commit)
+	if line := partyLine(party); line != "" {
+		fmt.Fprintf(stdout, "\n  %s", line)
+	}
 	fmt.Fprintf(stdout, "\n  reviewer: %s%s (cold — it has never seen this repository)\n", *model, toolNote(reviewerTool))
 	if verifierBackend != nil {
 		fmt.Fprintf(stdout, "  verifier: %s%s (adversarial to the reviewer; a different model by rule)\n", *verifier, toolNote(verifierTool))
 	}
 
-	r := review.Review{Repo: repoName, Commit: commit, Scope: *scope, ReviewerModel: *model, ReviewerTool: reviewerTool, Lang: langOfScope(allFiles),
+	r := review.Review{Repo: repoName, Commit: commit, Author: party.Author, Committer: party.Committer, CoAuthors: party.CoAuthors,
+		Scope: *scope, ReviewerModel: *model, ReviewerTool: reviewerTool, Lang: langOfScope(allFiles),
 		Substrate: "workspace (a detached worktree at the commit; not a jail)", StartedAt: time.Now().UTC(),
 		FilesShown: sc.Files, BytesShown: sc.Bytes, Truncated: sc.Truncated}
 	userTurn := review.Brief(repoName, commit, *scope, sc)
@@ -387,6 +392,22 @@ func (w worktreeReproducer) Run(ctx context.Context, script string) (string, int
 
 // printReview renders a review, with adjudications (by finding ref) when
 // the caller has them.
+// partyLine names the audited party as the record will: who made the
+// commit under review. "" when the checkout could not say.
+func partyLine(id auditpush.Identity) string {
+	if id.IsZero() {
+		return ""
+	}
+	s := "change by " + id.Author
+	if id.Committer != "" && id.Committer != id.Author {
+		s += ", committed by " + id.Committer
+	}
+	if co := id.CoAuthorList(); len(co) > 0 {
+		s += ", with " + strings.Join(co, ", ")
+	}
+	return s
+}
+
 func printReview(w io.Writer, r review.Review, adj map[string]auditpush.Adjudication) {
 	fmt.Fprintf(w, "\n%s\n", r.Opinion)
 	rep, cr, hy := r.Counts()

@@ -23,6 +23,22 @@ history of any release, `git log v0.3.4..v0.3.5`.
   ledger and writes nothing, and it renders nothing the entries do not
   hold. The same move `--prior` makes for the mutant generator, made for
   the author.
+- **The record names the audited party.** *Nemo iudex in causa sua* names
+  two parties, and until now the record named only the judge. A scan entry
+  and a review entry now carry the commit's author, committer and
+  `Co-authored-by` trailers — by name, never an address; the trailer is
+  where an agent is, in code an agent helped write (`Claude Code`, `Codex`)
+  — and the warehouse has them as `author`, `committer`, `co_authors` (one
+  name per line) on `corral_scans` and `corral_reviews`. A checkout that
+  cannot say records nothing. `corral review` prints the party beside the
+  seats. `corral models rank --seat committer` grades each party — a
+  person and an agent the same way — by the changes that held under audit
+  (a scan that passed its gate; a review none of whose checked claims
+  held), under the same evidence floor as every seat; a row written before
+  the party was recorded is evidence about nobody. The row says what it
+  measures and nothing about what to do with it; its first use is the
+  party's own view of what the audit gave back. Additive: older entries
+  and warehouses lack the fields.
 
 ## [v1.0.0-rc.8] — 2026-09-07
 

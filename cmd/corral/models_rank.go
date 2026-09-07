@@ -13,6 +13,7 @@ import (
 	"strings"
 	"text/tabwriter"
 
+	"github.com/pdbethke/corralai/internal/auditpush"
 	"github.com/pdbethke/corralai/internal/bugcatch"
 	"github.com/pdbethke/corralai/internal/criticscore"
 	"github.com/pdbethke/corralai/internal/lang"
@@ -61,7 +62,11 @@ func runModels(args []string, repoRoot string, load rankLoader, stdout, stderr i
 const modelsUsage = `usage: corral models rank [--db <dsn>] [--seat <role>] [--lang <name>] [--min-runs N] [--json]
   seats: goal-deriver, mutant-generator, test-writer, test-critic, and — from a ledger directory's
   review entries — reviewer (claims that held, of those checked) and verifier (verdicts that agreed
-  with the outcome; a person's adjudication is the outcome when there is one, execution otherwise)
+  with the outcome; a person's adjudication is the outcome when there is one, execution otherwise),
+  and committer: the audited party — the commit's author and each Co-authored-by trailer (an
+  agent, in code an agent helped write) — by the changes that held under audit (a scan that passed
+  its gate; a review none of whose checked claims held). The record names a person and an agent
+  the same way, under the same evidence floor; what a reader does with the row is the reader's.
 
   Rank the models that have sat in each seat by what corral's OWN recorded
   evidence says about them — a different metric per seat, because the seats do
@@ -75,7 +80,7 @@ func runModelsRank(args []string, repoRoot string, load rankLoader, stdout, stde
 	fs := flag.NewFlagSet("models rank", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	dsn := fs.String("db", "", "a pushed warehouse to read instead of the local bugcatch ledger: a DuckDB file path or an `md:<db>` MotherDuck DSN. Unreachable is a refusal, never a quiet fall back to a different body of evidence")
-	seat := fs.String("seat", "", "rank only this seat: goal-deriver, mutant-generator, test-writer or test-critic")
+	seat := fs.String("seat", "", "rank only this seat: goal-deriver, mutant-generator, test-writer, test-critic, reviewer, verifier or committer")
 	lang := fs.String("lang", "", "rank only this language — needs evidence that records one (the local bugcatch ledger does not; a pushed warehouse does)")
 	minRuns := fs.Int("min-runs", modelrank.DefaultMinRuns, "the evidence floor (default 5): a model with fewer observations in a seat is still PRINTED, with its real numbers, but marked insufficient and never preferred")
 	asJSON := fs.Bool("json", false, "emit the report as JSON")
@@ -139,7 +144,7 @@ func runModelsRank(args []string, repoRoot string, load rankLoader, stdout, stde
 	return 0
 }
 
-var rankSeats = []string{modelrank.SeatGoalDeriver, modelrank.SeatMutantGenerator, modelrank.SeatTestWriter, modelrank.SeatTestCritic, modelrank.SeatReviewer, modelrank.SeatVerifier}
+var rankSeats = []string{modelrank.SeatGoalDeriver, modelrank.SeatMutantGenerator, modelrank.SeatTestWriter, modelrank.SeatTestCritic, modelrank.SeatReviewer, modelrank.SeatVerifier, modelrank.SeatCommitter}
 
 func knownSeatName(s string) bool {
 	for _, k := range rankSeats {
@@ -419,6 +424,14 @@ func defaultRankLoader(dsn string) (rankEvidence, error) {
 		if len(robs) > 0 {
 			ev.Source += "; reviewer and verifier seats from corral_findings joined to corral_adjudications"
 		}
+		cobs, cerr := committerRankEvidence(db)
+		if cerr != nil {
+			return rankEvidence{}, cerr
+		}
+		ev.Obs = append(ev.Obs, cobs...)
+		if len(cobs) > 0 {
+			ev.Source += "; the committer seat from corral_scans.author/co_authors and the reviews of each commit"
+		}
 		return ev, nil
 	}
 	store, err := bugcatch.Open(localBugCatchDBPath())
@@ -485,6 +498,96 @@ func reviewRankEvidence(db *sql.DB) ([]modelrank.Observation, error) {
 			obs = append(obs, modelrank.Observation{Model: vModel, Role: modelrank.SeatVerifier, Lang: lang, Run: uid,
 				VerifierCalls: 1, VerifierCorrect: boolToInt(g.VerifierCorrect)})
 		}
+	}
+	return obs, rows.Err()
+}
+
+// committerRankEvidence is the audited party's evidence: one observation per
+// audit of a change that reached a verdict, for the commit's author and for
+// each co-author. A scan is a verdict when it carried a gate (passed is not
+// NULL); a review is a verdict when a claim of it was checked, and the change
+// held when none of the checked claims did. Rows written before the party
+// was recorded (author NULL) are not evidence about anyone.
+func committerRankEvidence(db *sql.DB) ([]modelrank.Observation, error) {
+	var obs []modelrank.Observation
+	emit := func(author, coAuthors, lang, run string, held bool) {
+		for _, who := range append([]string{author}, auditpush.Identity{CoAuthors: coAuthors}.CoAuthorList()...) {
+			if who == "" {
+				continue
+			}
+			obs = append(obs, modelrank.Observation{Model: who, Role: modelrank.SeatCommitter, Lang: lang, Run: run,
+				ChangesAudited: 1, ChangesHeld: boolToInt(held)})
+		}
+	}
+	scans, err := db.Query(`SELECT commit_sha, author, COALESCE(co_authors, ''), passed FROM corral_scans WHERE author IS NOT NULL AND passed IS NOT NULL`)
+	if err != nil {
+		if strings.Contains(err.Error(), "author") { // a warehouse older than the column: nothing recorded
+			return nil, nil
+		}
+		return nil, fmt.Errorf("reading the scans' party: %w", err)
+	}
+	for scans.Next() {
+		var commit, author, co string
+		var passed bool
+		if err := scans.Scan(&commit, &author, &co, &passed); err != nil {
+			scans.Close()
+			return nil, err
+		}
+		emit(author, co, "", commit, passed)
+	}
+	scans.Close()
+	rows, err := db.Query(`SELECT r.review_uid, r.commit_sha, r.author, COALESCE(r.co_authors, ''), COALESCE(r.lang, ''),
+	    f.declared_tier, f.tier, COALESCE(f.refutation_verdict, ''), COALESCE(a.verdict, '')
+	  FROM corral_reviews r
+	  JOIN corral_findings f ON f.review_uid = r.review_uid
+	  LEFT JOIN (
+	    SELECT review_uid, finding_id, verdict,
+	           row_number() OVER (PARTITION BY review_uid, finding_id ORDER BY ts DESC) AS rn
+	    FROM corral_adjudications
+	  ) a ON a.review_uid = f.review_uid AND a.finding_id = f.finding_id AND a.rn = 1
+	  WHERE r.author IS NOT NULL`)
+	if err != nil {
+		return nil, fmt.Errorf("reading the reviews' party: %w", err)
+	}
+	defer rows.Close()
+	type perReview struct {
+		commit, author, co, lang string
+		checked, real            int
+	}
+	byReview := map[string]*perReview{}
+	var order []string
+	for rows.Next() {
+		var uid, commit, author, co, lang, declared, tier, vVerdict, aVerdict string
+		if err := rows.Scan(&uid, &commit, &author, &co, &lang, &declared, &tier, &vVerdict, &aVerdict); err != nil {
+			return nil, err
+		}
+		pr := byReview[uid]
+		if pr == nil {
+			pr = &perReview{commit: commit, author: author, co: co, lang: lang}
+			byReview[uid] = pr
+			order = append(order, uid)
+		}
+		f := review.Finding{Declared: declared, Tier: tier}
+		if vVerdict != "" {
+			f.Refutation = &review.Refutation{Verdict: vVerdict}
+		}
+		var adj *review.Adjudicated
+		if aVerdict != "" {
+			adj = &review.Adjudicated{Verdict: aVerdict}
+		}
+		if g := review.Grade(f, adj); g.ReviewerChecked {
+			pr.checked++
+			if g.ReviewerHeld {
+				pr.real++
+			}
+		}
+	}
+	for _, uid := range order {
+		pr := byReview[uid]
+		if pr.checked == 0 {
+			continue
+		}
+		emit(pr.author, pr.co, pr.lang, pr.commit, pr.real == 0)
 	}
 	return obs, rows.Err()
 }

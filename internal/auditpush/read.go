@@ -201,7 +201,8 @@ func readScanRow(db *sql.DB, where string, args ...any) (ScanRow, bool, error) {
 		source_pushed, statement_sha256, selection_ms, selection_reused,
 		rekor_log_index, rekor_uuid, started_at, pushed_by, scan_uid,
 		engine_version, model_set, top, all_candidates, total_files,
-		preflight_ran, preflight_note, finished_at, entry_hash
+		preflight_ran, preflight_note, finished_at, entry_hash,
+		author, committer, co_authors
 	   FROM corral_scans WHERE `+where, args...) // #nosec G202 -- where is a constant clause chosen by this package's own callers; every value is a bound parameter
 
 	var s ScanRow
@@ -212,6 +213,7 @@ func readScanRow(db *sql.DB, where string, args ...any) (ScanRow, bool, error) {
 	var scanPassed, allCandidates, preflightRan sql.NullBool
 	var scanStarted, scanFinished sql.NullTime
 	var engineVersion, modelSet, preflightNote, entryHash sql.NullString
+	var author, committer, coAuthors sql.NullString
 	var top, totalFiles sql.NullInt64
 	if err := row.Scan(
 		&s.Repo, &s.RunURL, &s.ScanID, &s.Commit, &s.CorralVersion, &s.Substrate,
@@ -221,6 +223,7 @@ func readScanRow(db *sql.DB, where string, args ...any) (ScanRow, bool, error) {
 		&rekorLogIndex, &rekorUUID, &scanStarted, &pushedBy, &scanUID,
 		&engineVersion, &modelSet, &top, &allCandidates, &totalFiles,
 		&preflightRan, &preflightNote, &scanFinished, &entryHash,
+		&author, &committer, &coAuthors,
 	); err != nil {
 		if err == sql.ErrNoRows {
 			return ScanRow{}, false, nil
@@ -248,6 +251,7 @@ func readScanRow(db *sql.DB, where string, args ...any) (ScanRow, bool, error) {
 	s.Top, s.TotalFiles = int(top.Int64), int(totalFiles.Int64)
 	s.AllCandidates, s.PreflightRan = allCandidates.Bool, preflightRan.Bool
 	s.EntryHash = entryHash.String
+	s.Identity = Identity{Author: author.String, Committer: committer.String, CoAuthors: coAuthors.String}
 	if scanFinished.Valid {
 		t := scanFinished.Time
 		s.FinishedAt = &t

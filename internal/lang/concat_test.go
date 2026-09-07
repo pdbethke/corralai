@@ -41,7 +41,7 @@ func TestPythonConcatDedupesImportsAndRenamesCollidingTests(t *testing.T) {
 	if !strings.Contains(out, "from mod import f") {
 		t.Errorf("the second part's imports were dropped:\n%s", out)
 	}
-	if !strings.Contains(out, "def test_x_s0m1(") || !strings.Contains(out, "def test_x_s0m2(") {
+	if !strings.Contains(out, "def test_x_s0_m1(") || !strings.Contains(out, "def test_x_s0_m2(") {
 		t.Errorf("colliding test names were not suffixed with their mutant ids:\n%s", out)
 	}
 	if strings.Contains(out, "def test_x(") {
@@ -171,7 +171,7 @@ func TestJavaScriptConcatDedupesImportsAndSuffixesHelpers(t *testing.T) {
 		if !strings.Contains(out, "import assert from 'node:assert';") {
 			t.Errorf("%s: the second import was dropped:\n%s", name, out)
 		}
-		if !strings.Contains(out, "function mk_s0m1(") || !strings.Contains(out, "function mk_s0m2(") {
+		if !strings.Contains(out, "function mk_s0_m1(") || !strings.Contains(out, "function mk_s0_m2(") {
 			t.Errorf("%s: the colliding helper was not suffixed:\n%s", name, out)
 		}
 		// Two tests may share a TITLE — it is a string, not a binding — so
@@ -229,7 +229,7 @@ func TestRubyConcatDedupesRequiresAndSuffixesTestDefs(t *testing.T) {
 	if !strings.Contains(out, "require_relative 'thing'") {
 		t.Errorf("the second require was dropped:\n%s", out)
 	}
-	if !strings.Contains(out, "def test_x_s0m1") || !strings.Contains(out, "def test_x_s0m2") {
+	if !strings.Contains(out, "def test_x_s0_m1") || !strings.Contains(out, "def test_x_s0_m2") {
 		t.Errorf("the colliding test defs were not suffixed — one proof silently overrides the other:\n%s", out)
 	}
 	// Reopening the same class is idiomatic Ruby and harmless once the test

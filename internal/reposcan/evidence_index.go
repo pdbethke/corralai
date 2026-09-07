@@ -108,12 +108,23 @@ func ParseEvidenceIndex(ev SelectionEvidence, plug lang.Plugin) (EvidenceIndex, 
 	files := make(map[string]evidenceFileEntry, len(raw))
 	for path, fc := range raw {
 		covering := map[string]bool{}
-		best, bestLines := "", -1
+		// mostCovering is the covering test FILE with the most executed
+		// lines of this file — SUMMED per file. It used to be the file of
+		// the single test id with the most lines, so a file whose many
+		// tests together cover far more than a rival's one big test lost
+		// the landing hint (review 28c4ae555cbc#R4, Claude Code reviewing,
+		// Codex verifying). Ties break deterministically: the more specific
+		// path, then lexical order.
+		perFile := map[string]int{}
 		for testID, lines := range fc.Tests {
 			testFile := testFileFromNodeID(testID)
 			if lines > 0 {
 				covering[testFile] = true
 			}
+			perFile[testFile] += lines
+		}
+		best, bestLines := "", -1
+		for testFile, lines := range perFile {
 			if lines > bestLines || (lines == bestLines && moreSpecificTestPath(testFile, best)) {
 				best, bestLines = testFile, lines
 			}

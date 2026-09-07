@@ -89,18 +89,23 @@ func fileChurn(root string) (map[string]int, RankInfo) {
 		}
 	}
 
-	cmd := exec.CommandContext(context.Background(), "git", "log", "--format=", "--name-only") // #nosec G204 -- fixed binary, literal args
+	// -z: NUL-separated and UNQUOTED. Without it git C-quotes any path with
+	// a non-ASCII or special byte under the default core.quotePath, so such
+	// a candidate never matched its own churn entry and ranked as churn 1
+	// under a RankInfo that still said "churn-x-size" (review
+	// 28c4ae555cbc#R5, Claude Code reviewing, Codex verifying).
+	cmd := exec.CommandContext(context.Background(), "git", "log", "--format=", "--name-only", "-z") // #nosec G204 -- fixed binary, literal args
 	cmd.Dir = root
 	out, err := cmd.Output()
-	if err != nil || len(strings.TrimSpace(string(out))) == 0 {
+	if err != nil || len(strings.Trim(string(out), "\x00\n")) == 0 {
 		return nil, RankInfo{
 			Signal: "size-only",
 			Note:   "no usable git history in this tree — ranked by source size alone",
 		}
 	}
 	churn := map[string]int{}
-	for _, line := range strings.Split(string(out), "\n") {
-		if p := strings.TrimSpace(line); p != "" {
+	for _, p := range strings.Split(string(out), "\x00") {
+		if p = strings.Trim(p, "\n"); p != "" {
 			churn[p]++
 		}
 	}

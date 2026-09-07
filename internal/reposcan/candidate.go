@@ -664,24 +664,43 @@ func isLibraryCode(path string, hasPath func(string) bool) bool {
 // is parallel to cands and produced by the same loop in Enumerate, never
 // persisted on Candidate itself.
 func demoteAmbiguousPairings(cands []Candidate, rank []int, excl []Exclusion, explicit []bool) ([]Candidate, []Exclusion) {
+	isExplicit := func(i int) bool { return i < len(explicit) && explicit[i] }
 	groups := map[string][]int{} // TestPath -> indices into cands
 	for i, c := range cands {
-		// An EXPLICIT pairing is exempt. This guard exists to catch ACCIDENTAL
-		// collisions — two sources a filename heuristic happened to point at
-		// one test — because a wrong pairing plants mutants in one file and
-		// grades them against another's tests. A tenant deliberately mapping
-		// several sources onto one suite (express: every lib file to test/) is
-		// a choice, not a collision, and demoting it would discard exactly the
-		// pairings the operator supplied on purpose.
-		if i < len(explicit) && explicit[i] {
-			continue
-		}
 		groups[c.TestPath] = append(groups[c.TestPath], i)
 	}
 
 	demoted := map[int]bool{}
 	for _, idxs := range groups {
 		if len(idxs) < 2 {
+			continue
+		}
+		// An EXPLICIT pairing is never demoted. This pass exists to catch
+		// ACCIDENTAL collisions — two sources a filename heuristic happened
+		// to point at one test — because a wrong pairing plants mutants in
+		// one file and grades them against another's tests. A tenant
+		// deliberately mapping several sources onto one suite (express:
+		// every lib file to test/) is a choice, not a collision. But an
+		// explicit pairing is still a CLAIMANT: a convention-derived pairing
+		// that lands on the same test the operator mapped another source to
+		// is exactly the accidental collision, and it used to be left alone
+		// because explicit members were dropped from the grouping before it
+		// was formed (review 28c4ae555cbc#R1, Claude Code reviewing, Codex
+		// verifying). So: a group with an explicit member keeps every
+		// explicit member and demotes every convention one.
+		hasExplicit := false
+		for _, i := range idxs {
+			if isExplicit(i) {
+				hasExplicit = true
+				break
+			}
+		}
+		if hasExplicit {
+			for _, i := range idxs {
+				if !isExplicit(i) {
+					demoted[i] = true
+				}
+			}
 			continue
 		}
 		best := rank[idxs[0]]

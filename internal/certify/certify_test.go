@@ -739,11 +739,17 @@ func TestBuildAttestationOmitsNumbersNobodyMeasured(t *testing.T) {
 			t.Errorf("annotation %q is present on a record with no adequacy run — a zero here is a claim about a measurement that never happened", k)
 		}
 	}
-	// The always-present set must survive the refactor.
-	for _, k := range []string{"command", "exitCode", "passed", "durationS", "outputDigest"} {
+	// The always-present set must survive the refactor. durationS is NOT in
+	// it: a duration nobody measured is omitted like any other number
+	// nobody measured (review 167dd45b25cc#R1) — see
+	// TestDurationIsSignedOnlyWhenMeasured.
+	for _, k := range []string{"command", "exitCode", "passed", "outputDigest"} {
 		if _, present := a[k]; !present {
 			t.Errorf("annotation %q disappeared", k)
 		}
+	}
+	if _, present := a["durationS"]; present {
+		t.Errorf("durationS is signed on a record whose caller measured no wall clock")
 	}
 }
 

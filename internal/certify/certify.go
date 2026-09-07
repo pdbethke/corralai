@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"time"
 
 	"github.com/secure-systems-lab/go-securesystemslib/dsse"
 )
@@ -48,13 +49,19 @@ type Step struct {
 // BuildRecord describes the overall build/run that a BuildAttestation
 // certifies.
 type BuildRecord struct {
-	Repo         string
-	Commit       string
-	Branch       string
-	Actor        string
-	Command      string
-	ExitCode     int
-	DurationS    float64
+	Repo     string
+	Commit   string
+	Branch   string
+	Actor    string
+	Command  string
+	ExitCode int
+	// DurationS is the command's measured wall clock in seconds, or nil
+	// when the caller measured none — the `certify --local` path builds no
+	// timer into its record, and its statement signed "durationS": 0 for
+	// every run, a claim over a signature that the audit took no time
+	// (review 167dd45b25cc#R1). nil is omitted from the annotations, like
+	// an unmeasured killRate.
+	DurationS    *float64
 	OutputDigest string
 
 	// Scored, when this record certifies an ADEQUACY run rather than an
@@ -417,6 +424,22 @@ func UnmarshalSteps(b []byte) ([]Step, error) {
 	return out, nil
 }
 
+// MeasuredSeconds is a DurationS a caller actually timed.
+func MeasuredSeconds(d time.Duration) *float64 {
+	s := d.Seconds()
+	return &s
+}
+
+// SecondsOrUnmeasured is DurationS from a document field that uses 0 for
+// "not given" (a submitted record's `duration_s,omitempty`): a positive
+// value was measured; 0 was never written and is not a measurement.
+func SecondsOrUnmeasured(s float64) *float64 {
+	if s <= 0 {
+		return nil
+	}
+	return &s
+}
+
 // certificationAnnotations builds the execution byproduct's annotations: the
 // command/exit-code/digest set every caller has always carried, plus the
 // measured numbers when the record certifies an adequacy run.
@@ -430,8 +453,10 @@ func certificationAnnotations(r BuildRecord) map[string]any {
 		"command":      r.Command,
 		"exitCode":     r.ExitCode,
 		"passed":       r.ExitCode == 0,
-		"durationS":    r.DurationS,
 		"outputDigest": r.OutputDigest,
+	}
+	if r.DurationS != nil {
+		a["durationS"] = *r.DurationS
 	}
 	if r.Scored == nil {
 		return a

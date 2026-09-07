@@ -79,6 +79,30 @@ history of any release, `git log v0.3.4..v0.3.5`.
   mutant's grading record (which command, which rule) was computed and
   dropped; it is kept. The reviewer's three reproductions are regression
   tests, inverted (`reviewed_scorer_doors_test.go`).
+- **The signed statement carries what the record says. Review predicate
+  `https://corralai.dev/review/v2`.** Six defects in `internal/certify`,
+  one shape, found by a Claude Code reviewer on the signing code's first
+  full round (review `167dd45b25cc`, Gemini verifying), all six confirmed.
+  A `certify --local` record measures no wall clock and its statement
+  signed `durationS: 0` — a claim, over a signature, that the audit took
+  no time; the duration is now optional and omitted when unmeasured, like
+  an unmeasured kill rate. The reproductions hash did not cover the
+  harness-failure marker (`unrun`) added the same morning, so the marker
+  could be added or cleared under a valid statement; v2 hashes it, and
+  hashes the reproductions as canonical JSON (sorted keys) rather than
+  this binary's struct order — the statement map now holds no Go struct,
+  which `CanonicalStatement`'s own contract required. The predicate also
+  carries the review's own coverage note (a blanket approval is attested
+  AS one), the seats' tools and versions, the language, the audited party,
+  the bytes shown and the verifier's note — everything the entry records
+  about HOW the review was made, so an agentic seat that read the whole
+  checkout is distinguishable from an API seat under a cap. v1 statements
+  still verify: `corral verify --attest` recomputes the reproductions under
+  the rule the statement's predicate version was written with, and the v1
+  rule is pinned by a test against the old bytes. A per-file audit entry
+  whose every mutant was rejected by the compile gate signs its absent kill
+  rate with `noGradableMutant`, the flag that says which kind of unmeasured
+  it was — the one predicate the report's marker and the statement share.
 
 ## [v1.0.0-rc.9] — 2026-09-07
 

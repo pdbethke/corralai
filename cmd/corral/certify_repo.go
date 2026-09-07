@@ -3360,7 +3360,7 @@ func printWeakFile(w io.Writer, f reposcan.WeakFile) {
 		// was never made, when the real finding is that the file is
 		// untested outright.
 		marker = "  [UNCOVERED — no test executes this file]"
-	case f.MutantsGraded == 0 && f.MutantsInvalid > 0:
+	case noGradableMutant(f):
 		// The exam had no questions. Every mutant the generator produced was
 		// rejected by the compile gate, so adequacy's KillRate() returned a
 		// literal 0 on a zero denominator — a number that reads exactly like
@@ -4825,11 +4825,20 @@ func signableKillRate(f reposcan.WeakFile) *float64 {
 	// what a zero means", and certify.AuditedFile has flags for TimedOut,
 	// TestWriterFailed, PoolTestUnsound and Uncovered — none for this state. So
 	// the honest carrier is absence, which the field already supports.
-	if f.MutantsGraded == 0 && f.MutantsInvalid > 0 {
+	if noGradableMutant(f) {
 		return nil
 	}
 	kr := f.KillRate
 	return &kr
+}
+
+// noGradableMutant is the compile-gate zero denominator: every mutant
+// rejected, nothing graded. ONE predicate for the two places that must
+// agree — the withheld rate and the flag that says why it is withheld
+// (certify.AuditedFile.NoGradableMutant) — so the absence never travels
+// without its reason again.
+func noGradableMutant(f reposcan.WeakFile) bool {
+	return f.MutantsGraded == 0 && f.MutantsInvalid > 0
 }
 
 // signableSpread and pushableSpread carry a file's per-mutant spread across
@@ -4887,6 +4896,7 @@ func writeAuditStatement(path, repoDir string, r reposcan.RepoReport, models map
 			TimedOut:         f.TimedOut,
 			TestWriterFailed: f.TestWriterFailed,
 			PoolTestUnsound:  f.PoolTestUnsound,
+			NoGradableMutant: noGradableMutant(f),
 			// The statement is the one artifact a third party verifies, so it
 			// must say which measurement it is signing — and must not sign a
 			// rate for a file nothing executes.

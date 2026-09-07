@@ -11,6 +11,20 @@ history of any release, `git log v0.3.4..v0.3.5`.
 
 ## [Unreleased] — toward 1.0.0-rc.7
 
+- **SECURITY — the brain's ad-hoc SQL door is a human door.** `mission_analytics`
+  with `sql` gated on `isAdmin`, which a delegation token minted for a
+  subagent under a superuser passes; every other admin door gates on
+  `isHumanAdmin`, which it does not. Such a token could read the whole
+  telemetry store. Found by `corral review --scope internal/brain`
+  (claude-sonnet-5 reviewing, 2026-09-07): its reproduction script held and
+  is now the regression test, inverted. A rule enforced at one door and
+  not the other — the fifth review's shape, caught by the loop it produced.
+- **A verifier that returns no verdicts is said, not silent.** A verifier
+  whose reply parsed but carried no verdict on any finding (flash, on a
+  450 KB scope) was recorded as if it had nothing to say; now its reply is
+  kept on the record, marked, every finding is graded unverified, and
+  stderr says so.
+
 - **`corral ledger push <dir> <dsn>`.** The directory's record — every
   scan, review and adjudication entry — appended to a warehouse or
   MotherDuck, skipping what the target already holds by entry hash

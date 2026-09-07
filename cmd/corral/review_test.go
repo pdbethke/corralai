@@ -305,3 +305,35 @@ func gzipBytesFor(t *testing.T, b []byte) []byte {
 	}
 	return buf.Bytes()
 }
+
+// TestReviewSaysWhenTheVerifierReturnedNoVerdicts: a verifier whose reply
+// parses but carries no verdict on any finding (it happened: flash, on a
+// 450 KB brain scope) is recorded as unverified with its reply kept, and
+// said on stderr — never as a silent, verified-looking review.
+func TestReviewSaysWhenTheVerifierReturnedNoVerdicts(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "test-placeholder-not-a-real-key")
+	root := t.TempDir()
+	gitRun := gitCmd(t, root)
+	mustWrite(t, filepath.Join(root, "pkg", "a.go"), "package pkg\n")
+	gitRun("init", "-q")
+	gitRun("add", ".")
+	gitRun("commit", "-q", "-m", "base", "--no-gpg-sign")
+	orig := newReviewerBackend
+	t.Cleanup(func() { newReviewerBackend = orig })
+	newReviewerBackend = func(model, _ string) (agentbackend.Backend, error) {
+		if model == "rev" {
+			return cannedReviewer{reply: `{"opinion":"o","findings":[{"claim":"c","tier":"CODE-READ","file":"pkg/a.go","line":1}],"sound":[]}`}, nil
+		}
+		return cannedReviewer{reply: `{"summary":"looks fine to me"}`}, nil
+	}
+	var out, errb bytes.Buffer
+	if code := runReview([]string{"--repo", root, "--scope", "pkg", "--reviewer-model", "rev", "--verifier-model", "ver", "--no-ledger"}, &out, &errb); code != 0 {
+		t.Fatalf("exit %d: %s", code, errb.String())
+	}
+	if !strings.Contains(errb.String(), "returned no verdict on any of 1 finding(s)") {
+		t.Errorf("stderr must say the verifier verified nothing: %q", errb.String())
+	}
+	if !strings.Contains(out.String(), "the verifier returned no verdicts on any finding") || !strings.Contains(out.String(), "looks fine to me") {
+		t.Errorf("the record must keep the verifier's reply, marked:\n%s", out.String())
+	}
+}

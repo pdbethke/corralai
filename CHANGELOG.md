@@ -9,7 +9,13 @@ still move between minor versions.
 Entries describe what changed for someone *using* the tool. For the full commit
 history of any release, `git log v0.3.4..v0.3.5`.
 
-## [Unreleased] — toward 1.0.0-rc.8
+## [v1.0.0-rc.8] — 2026-09-07
+
+The record hashes what it holds: a three-seat round on `internal/auditpush`
+found that the ledger's sparse hash let a recorded zero be edited away
+under a valid signature — format `corral-ledger-3` fixes it, with five
+more. Any agent you assign can sit in a seat; the authored test keeps its
+suffix; the prior merges by edit.
 
 - **The ledger entry's hash is over its bytes; a retraction reaches every
   kind; the identity derives. Format `corral-ledger-3`.** Six defects in

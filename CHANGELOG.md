@@ -9,7 +9,11 @@ still move between minor versions.
 Entries describe what changed for someone *using* the tool. For the full commit
 history of any release, `git log v0.3.4..v0.3.5`.
 
-## [Unreleased] — toward 1.0.0-rc.5
+## [v1.0.0-rc.5] — 2026-09-07
+
+The verifier seat, the reproductions signed, and the record readable in
+a browser — chain, reviews, the two seats' argument, and the person's
+verdict.
 
 - **The verifier seat.** `corral review --verifier-model <m>`: a third
   model, never the reviewer's (refused before anything is spent), is

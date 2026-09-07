@@ -77,6 +77,12 @@ func clampMutantTimeout(baseDur time.Duration) time.Duration {
 type ScoreOption func(*scoreConfig)
 
 type scoreConfig struct {
+	// capFloor overrides minMutantTimeout for this Score call. Unexported,
+	// test-only: the per-command cap derivation is invisible under the 30s
+	// floor unless a baseline exceeds 10s, and a test that sleeps 12s to
+	// see it is a test nobody runs.
+	capFloor time.Duration
+
 	mutantTimeout time.Duration
 	concurrency   int
 	// mutantCompileCheck is the language plugin's own CompileCheck sequence,
@@ -755,21 +761,37 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 		}
 	}
 
+	clamp := func(d time.Duration) time.Duration {
+		if cfg.capFloor > 0 {
+			if x := d * mutantTimeoutMultiple; x < cfg.capFloor {
+				return cfg.capFloor
+			} else if x < minMutantTimeout {
+				return x
+			}
+		}
+		return clampMutantTimeout(d)
+	}
 	perMutant := cfg.mutantTimeout
 	if perMutant <= 0 {
-		perMutant = clampMutantTimeout(baseDur)
+		perMutant = clamp(baseDur)
 	}
 	// capFor is the per-COMMAND cap: a narrowed command's own compliant
 	// duration (measured by the proving loop below) × the multiple, or the
 	// file-level cap when nothing narrower was measured. An explicit
 	// --test-timeout overrides both.
+	//
+	// KEYED BY THE RAW GRADING ARGV AT BOTH DOORS. The proving loop records
+	// the baseline under the raw command; the lookup used to be made with
+	// the fail-fast-decorated argv, so with WithMutantFailFast and
+	// WithCommandFor both set — which advpool/gate.go always sets — it never
+	// hit and the per-command cap silently never applied (b3307bbbb5e6#R2).
 	commandBaseline := map[string]time.Duration{}
-	capFor := func(cmd []string) time.Duration {
+	capFor := func(rawCmd []string) time.Duration {
 		if cfg.mutantTimeout > 0 {
 			return cfg.mutantTimeout
 		}
-		if d, ok := commandBaseline[strings.Join(cmd, "\x00")]; ok {
-			return clampMutantTimeout(d)
+		if d, ok := commandBaseline[strings.Join(rawCmd, "\x00")]; ok {
+			return clamp(d)
 		}
 		return perMutant
 	}
@@ -891,6 +913,16 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 	}
 
 	commandFailsOnCompliant := map[string]string{}
+	// THE CANARY IS PROVEN PER GRADING COMMAND TOO. CanaryKilled above
+	// proves that the SHARED command reaches this file; a narrowed
+	// per-mutant command was assumed to, and a narrowing that selected
+	// tests which never import the file passed on every mutant — each
+	// reported SURVIVED under CanaryKilled=true, a coverage gap that did not
+	// exist, in the default mode (b3307bbbb5e6#R1). One canary run per
+	// distinct command: a command that passes on source that cannot compile
+	// never executes the file, and its mutants are UNMEASURED, never
+	// survivors.
+	commandNeverReaches := map[string]bool{}
 	if cfg.commandFor != nil {
 		sharedKey := strings.Join(testCmd, "\x00")
 		distinct := map[string][]string{}
@@ -921,6 +953,18 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 			}
 			if !passed {
 				commandFailsOnCompliant[key] = strings.TrimSpace(lastLines(out, 12))
+				continue
+			}
+			cctx, ccancel := context.WithTimeout(ctx, perMutant)
+			cpass, cerr := runCmd(cctx, CanaryCode, cmd)
+			ccancel()
+			switch {
+			case cerr != nil && errors.Is(cerr, ErrTestTimeout):
+				// Hung on invalid source: it reacted to the file.
+			case cerr != nil:
+				return Report{}, fmt.Errorf("adequacy: proving grading command %v reaches the file: %w", cmd, cerr)
+			case cpass:
+				commandNeverReaches[key] = true
 			}
 		}
 	}
@@ -1022,10 +1066,21 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 			}
 			return
 		}
+		if commandNeverReaches[strings.Join(cmd, "\x00")] {
+			outcomes[i] = outcome{
+				unmeasured: true,
+				unmeasuredReason: fmt.Sprintf("the command that would grade this mutant PASSES ON SOURCE THAT CANNOT COMPILE, so it never executes this file and its verdict is not evidence about the mutant (command: %s)",
+					strings.Join(cmd, " ")),
+				grading: grading,
+			}
+			return
+		}
+		// The cap is looked up by the RAW command — the key the proving
+		// loop recorded — before fail-fast decorates it.
+		mutantCap := capFor(cmd)
 		// FAIL-FAST APPLIES HERE AND ONLY HERE: one mutant's own suite run.
 		// A no-op unless the probe above proved the runner takes the flag.
-		cmd = failFast(cmd)
-		mutantCap := capFor(cmd)
+		gradeCmd := failFast(cmd)
 		mctx, cancel := context.WithTimeout(ctx, mutantCap)
 		// THE measurement: the single suite run that decides this mutant's
 		// verdict. Recorded even when that run errors or times out, so a
@@ -1038,14 +1093,14 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 		)
 		if nameKiller {
 			var out []byte
-			passed, out, err = runCmdDetailed(mctx, mutantCode, cmd)
+			passed, out, err = runCmdDetailed(mctx, mutantCode, gradeCmd)
 			if err == nil && !passed {
 				// A kill, and the output is the only thing entitled to say
 				// which test made it one. "" when the summary says nothing.
 				killedBy = cfg.failureParser.FirstFailure(out)
 			}
 		} else {
-			passed, err = runCmd(mctx, mutantCode, cmd)
+			passed, err = runCmd(mctx, mutantCode, gradeCmd)
 		}
 		grading.Duration = time.Since(mstart)
 		cancel()
@@ -1065,7 +1120,7 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 				// compiler rejected as caught: crediting the tests with a
 				// divergence they never detected.
 				//
-				// Tell them apart by re-probing the COMPLIANT baseline under
+				// Tell them apart by re-probing the COMPLIANT code under
 				// the same budget, not by re-running the mutant. Re-running the
 				// mutant makes a genuine infinite loop wait twice (it must
 				// exhaust a second, larger budget before the kill is recorded),
@@ -1078,8 +1133,16 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 				//     mutant's run proves nothing. Not a kill, and not a
 				//     survivor either: it is UNMEASURED, and an error is the
 				//     honest report.
+				//
+				// WITH THE COMMAND THAT GRADED THE MUTANT, under its budget.
+				// This ran the SHARED suite under a narrowed command's cap,
+				// so a slow whole suite could not finish in a budget derived
+				// from a two-test command, and a real non-terminating mutant
+				// on a healthy box aborted the file's report as "too loaded"
+				// (b3307bbbb5e6#R3). The question is whether THIS command
+				// finishes on compliant code right now; only it can answer.
 				bctx, bcancel := context.WithTimeout(ctx, mutantCap)
-				bpassed, berr := run(bctx, compliantCode)
+				bpassed, berr := runCmd(bctx, compliantCode, gradeCmd)
 				bcancel()
 				if berr == nil {
 					// THE RE-PROBE MUST PASS, not merely return. This read
@@ -1175,6 +1238,17 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 			}
 			continue
 		}
+		// The grading record is kept for every mutant that has one — an
+		// UNMEASURED mutant's included: which command would have graded it
+		// and under which rule is what the scorer learned, and it was being
+		// computed and dropped (b3307bbbb5e6#R4). Total and the spreads never
+		// read this map's keys, so the record costs the numbers nothing.
+		if g := outcomes[i].grading; g != nil {
+			if rep.PerMutant == nil {
+				rep.PerMutant = map[string]MutantGrading{}
+			}
+			rep.PerMutant[m.ID] = *g
+		}
 		if outcomes[i].unmeasured {
 			rep.Unmeasured = append(rep.Unmeasured, m.ID)
 			if rep.UnmeasuredReasons == nil {
@@ -1182,12 +1256,6 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 			}
 			rep.UnmeasuredReasons[m.ID] = outcomes[i].unmeasuredReason
 			continue
-		}
-		if g := outcomes[i].grading; g != nil {
-			if rep.PerMutant == nil {
-				rep.PerMutant = map[string]MutantGrading{}
-			}
-			rep.PerMutant[m.ID] = *g
 		}
 		if outcomes[i].killed {
 			rep.Killed = append(rep.Killed, m.ID)

@@ -59,6 +59,26 @@ history of any release, `git log v0.3.4..v0.3.5`.
   the same afternoon (review `dcd0874fecb8`), Claude Code verifying: a fix
   that introduced a defect, caught by the next round. It slices the
   ordered list.
+- **The scorer proves every door it grades through.** Four defects in
+  `internal/adequacy/score.go` found by a Claude Code reviewer with Gemini
+  verifying (review `b3307bbbb5e6`), all confirmed on adjudication, three
+  reproduced. The canary — the fail-closed check that the suite actually
+  reaches the file — ran only with the shared test command, so under
+  per-mutant narrowed commands (the selection default) a narrowing that
+  never executed the file reported every mutant as a **survivor** under
+  `CanaryKilled=true`: a coverage gap that did not exist. The canary is now
+  proven once per distinct grading command, and a command that passes on
+  source that cannot compile leaves its mutants UNMEASURED, with the
+  reason on record. The per-command timeout was keyed by the raw argv and
+  looked up with the fail-fast argv, so with both options set — which the
+  gate always sets — it silently never applied; one key at both doors. A
+  timed-out mutant's health re-probe ran the *shared* suite under the
+  mutant's narrowed budget, so a slow suite aborted a whole file's report
+  as "too loaded" for a real non-terminating mutant on a healthy box; the
+  re-probe runs the command that graded the mutant. And an unmeasured
+  mutant's grading record (which command, which rule) was computed and
+  dropped; it is kept. The reviewer's three reproductions are regression
+  tests, inverted (`reviewed_scorer_doors_test.go`).
 
 ## [v1.0.0-rc.9] — 2026-09-07
 

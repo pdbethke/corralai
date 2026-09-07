@@ -1332,6 +1332,8 @@ func newAuditRunSpec(in localAuditInput, roles auditRoles, subj runSubject) advp
 		switch {
 		case errors.Is(perr, prior.ErrDifferentVersion):
 			rs.PriorSource = in.prior.Source + " (refused: recorded against a different version of this file)"
+		case errors.Is(perr, prior.ErrNoVersion):
+			rs.PriorSource = in.prior.Source + " (refused: recorded with no version of this file to match against)"
 		case len(tried) > 0:
 			rs.Prior = prior.Render(tried)
 			rs.PriorsApplied = len(tried)

@@ -73,12 +73,24 @@ func Load(source string) (*Prior, error) {
 	if err != nil {
 		return nil, fmt.Errorf("prior: %w", err)
 	}
-	merged := map[string]map[string]*Tried{} // path → id → tried
+	merged := map[string]map[string]*Tried{} // path → edit key → tried
+	// The key identifies the EDIT, not the mutant id: ids are positional
+	// per run ("s0/m1" is every run's first mutant of shard 0), so a key of
+	// (sha, id) folded a later run's different edit into an earlier one —
+	// dropping it, undercounting, and grafting one run's hunk onto another
+	// run's line. Found by a Claude Code reviewer, let stand by Codex. The
+	// span joins the key; two records of the SAME edit (the document's hunk
+	// row and the ledger's outcome row, same run) share it, and two runs'
+	// edits at the same place with the same positional id are told apart
+	// by their hunks when both carry one.
 	upsert := func(t Tried) {
 		if merged[t.Path] == nil {
 			merged[t.Path] = map[string]*Tried{}
 		}
-		key := t.ParentSHA256 + "\x00" + t.ID
+		key := fmt.Sprintf("%s\x00%s\x00%d-%d", t.ParentSHA256, t.ID, t.Span.Start, t.Span.End)
+		if have, ok := merged[t.Path][key]; ok && have.Search != "" && t.Search != "" && have.Search != t.Search {
+			key += "\x00" + t.Search
+		}
 		if have, ok := merged[t.Path][key]; ok {
 			// Merge: the document brings the hunk, the ledger the outcome.
 			if have.Search == "" && t.Search != "" {
@@ -110,9 +122,9 @@ func Load(source string) (*Prior, error) {
 			p.sources++
 			for _, e := range entries {
 				for _, m := range e.Bundle.Mutants {
-					if m.Outcome != "killed" && m.Outcome != "survived" {
-						continue
-					}
+					// Every planted edit was tried — an invalid or timed-out
+					// one included: the next generator must not re-roll it
+					// because it went unjudged. Render says what happened.
 					t := Tried{Path: m.Path, ParentSHA256: m.ParentSHA256, ID: m.MutantID,
 						Span: lang.LineRange{Start: m.SpanStart, End: m.SpanEnd}, Shape: m.Shape,
 						Outcome: m.Outcome, KilledBy: m.KilledBy, Proven: m.Proven}
@@ -185,8 +197,14 @@ func fromDocument(path string) ([]Tried, error) {
 }
 
 // ErrDifferentVersion is the same-bytes rule refusing: the source holds
-// edits for this path, but recorded against other bytes.
-var ErrDifferentVersion = errors.New("prior: recorded against a different version of the file")
+// edits for this path, but recorded against other bytes. ErrNoVersion is
+// the other refusal: the source holds edits for this path recorded against
+// NO bytes at all (no parent hash), which is not "a different version" and
+// must not be reported as one.
+var (
+	ErrDifferentVersion = errors.New("prior: recorded against a different version of the file")
+	ErrNoVersion        = errors.New("prior: recorded with no version of the file to match against")
+)
 
 // For returns the edits tried on path at exactly sha, sorted by line. It
 // returns ErrDifferentVersion when the source knows the path only under
@@ -200,12 +218,19 @@ func (p *Prior) For(path, sha string) ([]Tried, error) {
 		return nil, nil
 	}
 	var same []Tried
+	anyVersion := false
 	for _, t := range all {
 		if t.ParentSHA256 == sha {
 			same = append(same, t)
 		}
+		if t.ParentSHA256 != "" {
+			anyVersion = true
+		}
 	}
 	if len(same) == 0 {
+		if !anyVersion {
+			return nil, ErrNoVersion
+		}
 		return nil, ErrDifferentVersion
 	}
 	return same, nil
@@ -220,7 +245,9 @@ func Digest(tried []Tried) string {
 	}
 	h := sha256.New()
 	for _, t := range tried {
-		fmt.Fprintf(h, "%s\x00%s\x00%s\x00%d-%d\x00%s\x00%s\x00%s\x00%v\n", t.Path, t.ParentSHA256, t.ID, t.Span.Start, t.Span.End, t.Shape, t.Outcome, t.KilledBy, t.Proven)
+		// The hunk is in the hash: Render quotes it, so two priors that
+		// hand the generator different text must never share a digest.
+		fmt.Fprintf(h, "%s\x00%s\x00%s\x00%d-%d\x00%s\x00%s\x00%s\x00%v\x00%s\x00%s\n", t.Path, t.ParentSHA256, t.ID, t.Span.Start, t.Span.End, t.Shape, t.Outcome, t.KilledBy, t.Proven, t.Search, t.Replace)
 	}
 	return hex.EncodeToString(h.Sum(nil))[:16]
 }
@@ -244,7 +271,11 @@ func Render(tried []Tried) string {
 	fmt.Fprintf(&b, "ALREADY TRIED on this exact version of the file (%d edit(s) from earlier runs). Do NOT repeat these edits or their shape at the same place; plant DIFFERENT faults — other decision points, other kinds of change:\n", len(tried))
 	for i, t := range tried {
 		if i == MaxRendered {
-			fmt.Fprintf(&b, "  … and %d more.\n", len(tried)-MaxRendered)
+			// The edits are sorted by line, so the cut always drops the
+			// FILE'S TAIL; say where the undisclosed ones are, or the
+			// generator is told to plant elsewhere and pointed nowhere.
+			rest := tried[MaxRendered:]
+			fmt.Fprintf(&b, "  … and %d more, %s — not listed here, but tried; plant elsewhere in that stretch too.\n", len(rest), spanOf(rest))
 			break
 		}
 		where := "somewhere in the file"
@@ -272,6 +303,12 @@ func Render(tried []Tried) string {
 			b.WriteString(" — SURVIVED, gap already proven and on record")
 		case t.Outcome == "survived":
 			b.WriteString(" — SURVIVED, unproven")
+		case t.Outcome == "invalid":
+			b.WriteString(" — INVALID (did not compile or was not a fault); do not plant it again")
+		case t.Outcome == "timed_out":
+			b.WriteString(" — TIMED OUT under the suite; unjudged, not a gap")
+		case t.Outcome != "":
+			fmt.Fprintf(&b, " — %s", t.Outcome)
 		}
 		b.WriteString("\n")
 	}
@@ -280,8 +317,28 @@ func Render(tried []Tried) string {
 
 func oneLine(s string) string {
 	s = strings.TrimSpace(strings.Join(strings.Fields(s), " "))
-	if len(s) > 80 {
-		s = s[:77] + "…"
+	if r := []rune(s); len(r) > 80 {
+		s = string(r[:77]) + "…"
 	}
 	return s
+}
+
+// spanOf names the lines a run of edits covers, for the summary line.
+func spanOf(tried []Tried) string {
+	lo, hi := 0, 0
+	for _, t := range tried {
+		if t.Span.IsZero() {
+			continue
+		}
+		if lo == 0 || t.Span.Start < lo {
+			lo = t.Span.Start
+		}
+		if t.Span.End > hi {
+			hi = t.Span.End
+		}
+	}
+	if lo == 0 {
+		return "at unrecorded places"
+	}
+	return fmt.Sprintf("between lines %d and %d", lo, hi)
 }

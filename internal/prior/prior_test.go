@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/pdbethke/corralai/internal/adequacy"
 	"github.com/pdbethke/corralai/internal/auditpush"
@@ -89,8 +90,60 @@ func TestRenderIsBounded(t *testing.T) {
 		tried = append(tried, Tried{Span: lang.LineRange{Start: i + 1, End: i + 1}, Shape: "other", Outcome: "killed"})
 	}
 	para := Render(tried)
-	if !strings.Contains(para, "… and 7 more.") || strings.Count(para, "\n") > MaxRendered+3 {
-		t.Errorf("unbounded paragraph:\n%s", para)
+	if !strings.Contains(para, "… and 7 more, between lines 41 and 47") || strings.Count(para, "\n") > MaxRendered+3 {
+		t.Errorf("unbounded paragraph, or one that hides where the cut edits are:\n%s", para)
+	}
+}
+
+// The prior's other refusal: edits on record for the path, but recorded
+// against NO bytes — that is not "a different version" and must be told apart.
+func TestForTellsNoVersionFromDifferentVersion(t *testing.T) {
+	p := &Prior{byPath: map[string][]Tried{"a.py": {{Path: "a.py", ID: "m1", Span: lang.LineRange{Start: 1, End: 1}}}}}
+	if _, err := p.For("a.py", "abc"); !errors.Is(err, ErrNoVersion) || errors.Is(err, ErrDifferentVersion) {
+		t.Fatalf("no parent hash on record, got %v", err)
+	}
+	p.byPath["a.py"][0].ParentSHA256 = "def"
+	if _, err := p.For("a.py", "abc"); !errors.Is(err, ErrDifferentVersion) {
+		t.Fatalf("a different parent hash on record, got %v", err)
+	}
+}
+
+// Every planted edit was tried: an invalid or timed-out one is in the prior
+// (so it is not re-rolled) and Render says what became of it.
+func TestUnjudgedMutantsAreStillTried(t *testing.T) {
+	dir := t.TempDir()
+	sha := strings.Repeat("a", 64)
+	if _, err := auditpush.PushBundle(dir, auditpush.Bundle{
+		Scan: auditpush.ScanRow{Repo: "r", Commit: "c1", ScanID: 1},
+		Mutants: []auditpush.MutantRow{
+			{Repo: "r", ScanID: 1, Path: "a.py", MutantID: "s0/m1", ParentSHA256: sha, SpanStart: 3, SpanEnd: 3, Shape: "other", Outcome: "invalid"},
+			{Repo: "r", ScanID: 1, Path: "a.py", MutantID: "s0/m2", ParentSHA256: sha, SpanStart: 5, SpanEnd: 5, Shape: "other", Outcome: "timed_out"},
+			{Repo: "r", ScanID: 1, Path: "a.py", MutantID: "s0/m3", ParentSHA256: sha, SpanStart: 7, SpanEnd: 7, Shape: "other", Outcome: "killed"},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	p, err := Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tried, err := p.For("a.py", sha)
+	if err != nil || len(tried) != 3 {
+		t.Fatalf("3 planted edits, got %d (%v)", len(tried), err)
+	}
+	para := Render(tried)
+	for _, want := range []string{"INVALID", "TIMED OUT", "KILLED"} {
+		if !strings.Contains(para, want) {
+			t.Errorf("Render does not say %s:\n%s", want, para)
+		}
+	}
+}
+
+// A hunk is cut by rune, never mid-codepoint.
+func TestOneLineIsRuneSafe(t *testing.T) {
+	s := oneLine(strings.Repeat("é", 100))
+	if !utf8.ValidString(s) || utf8.RuneCountInString(s) != 78 {
+		t.Fatalf("cut mid-rune: %q", s)
 	}
 }
 

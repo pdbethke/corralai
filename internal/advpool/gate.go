@@ -139,8 +139,8 @@ func authoredTestPath(codePath, devTestPath string, base map[string]string) stri
 			marker = fmt.Sprintf("%s%d", authoredTestMarker, i)
 		}
 		var pick string
-		if stem != "" && strings.Contains(devBase, stem) {
-			pick = filepath.Join(dir, strings.Replace(devBase, stem, stem+marker, 1))
+		if marked, ok := markStem(devBase, stem, marker); ok {
+			pick = filepath.Join(dir, marked)
 		} else {
 			// Hand the plugin a synthetic SOURCE path (code stem + marker,
 			// sited in the dev test's directory) and take its rank-0 test
@@ -156,6 +156,40 @@ func authoredTestPath(codePath, devTestPath string, base map[string]string) stri
 		}
 	}
 	return fallback
+}
+
+// markStem returns devBase with marker appended to the code stem where the
+// stem appears in the NAME part of devBase as a whole token — bounded by
+// the start or end of the name or by a non-alphanumeric character — and
+// false when it does not. The extension is never searched: the stem `go`
+// occurs in every `.go` file name, and an unanchored first-occurrence
+// replace turned `foo_test.go` into `foo_test.go_corral` (no extension) and,
+// for the stem `st`, `login_test.go` into `login_test_corral.go` (no
+// `_test.go` suffix) — an authored test that is never collected, which is
+// the trap that reports `proven_missed 0` forever. Found by a gemini
+// reviewer, let stand by a Claude Code verifier (review a79b583bacea#R1).
+func markStem(devBase, stem, marker string) (string, bool) {
+	if stem == "" {
+		return "", false
+	}
+	ext := filepath.Ext(devBase)
+	name := strings.TrimSuffix(devBase, ext)
+	ident := func(c byte) bool {
+		return c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= 0x80
+	}
+	for from := 0; from <= len(name)-len(stem); {
+		i := strings.Index(name[from:], stem)
+		if i < 0 {
+			return "", false
+		}
+		i += from
+		end := i + len(stem)
+		if (i == 0 || !ident(name[i-1]) || !ident(stem[0])) && (end == len(name) || !ident(name[end]) || !ident(stem[len(stem)-1])) {
+			return name[:end] + marker + name[end:] + ext, true
+		}
+		from = i + 1
+	}
+	return "", false
 }
 
 // goScaffold is the exact go workspace scaffold/default test command kept

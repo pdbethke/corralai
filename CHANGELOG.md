@@ -37,6 +37,39 @@ history of any release, `git log v0.3.4..v0.3.5`.
   hash, so two reviews of one commit inside a second do not collide.
 - **The README opens with what corral is:** an auditing engine, with two
   extensions — `certify` by execution, `review` by adversary.
+- **The authored test keeps its suffix.** `authoredTestPath` inserted the
+  `_corral` marker by an unanchored first-occurrence replace of the code
+  file's stem, so a stem that is a substring of the test suffix or the
+  extension mangled the name: `st.go` beside `login_test.go` authored
+  `login_test_corral.go`, `go.go` beside `foo_test.go` authored
+  `foo_test.go_corral` — files no runner collects, the trap that reports
+  `proven_missed 0` forever. The stem is now matched as a whole token in
+  the name part only. Found by a gemini reviewer on `internal/advpool`,
+  let stand by a Claude Code verifier, confirmed (review a79b583bacea#R1);
+  the reviewer's reproduction is the regression test.
+- **An agentic seat may read with a shell.** The reviewer's brief told an
+  agent it "cannot run tests or commands, and must not try"; an agent whose
+  only file interface is a shell (Codex) took that literally and, twice,
+  returned a null review — recorded correctly as coverage unknown, but a
+  round spent. Both briefs now carry one paragraph: read by whatever your
+  tool provides, a file reader or a shell used only to read; do not run
+  the tests, build, or execute the code under review; the script you hand
+  back is what corral runs. Found by running the three-seat round.
+- **The ledger's mutant rows carry their hunks, and the prior merges by
+  edit in any order.** Every ledger row was bare (no search/replace), so a
+  later run's prior could not tell two runs' different edits at one place
+  apart and folded whichever arrived second into the first — order-dependent
+  (a Cursor read of #286, confirmed). The recorder that fed `--record-mutants`
+  is now always on and stamps each row's `code` with its hunk; `code` was
+  already in the custody set, so a `--push` without `--push-source` still
+  withholds it. The prior reads the hunk back, keys an edit by its hunk
+  whenever a row has one, folds a bare row into the one hunked edit at its
+  place (and keeps it separate beside several), and orders edits totally,
+  so Render and Digest never depend on the order the sources were read in.
+- **A prior recorded against no bytes is refused as such on the report.**
+  The `certify --repo` path now pins the sentence — "recorded with no
+  version of this file to match against" — beside the different-version
+  one, in the CLI test that drives both.
 - **An agentic seat is any agent you assign, not a vendor list.** A seat
   name is a command-line definition: `CORRALAI_AGENT_<NAME>="<command
   line>"`, run in the disposable worktree with the brief on stdin and the

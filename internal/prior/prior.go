@@ -73,43 +73,8 @@ func Load(source string) (*Prior, error) {
 	if err != nil {
 		return nil, fmt.Errorf("prior: %w", err)
 	}
-	merged := map[string]map[string]*Tried{} // path → edit key → tried
-	// The key identifies the EDIT, not the mutant id: ids are positional
-	// per run ("s0/m1" is every run's first mutant of shard 0), so a key of
-	// (sha, id) folded a later run's different edit into an earlier one —
-	// dropping it, undercounting, and grafting one run's hunk onto another
-	// run's line. Found by a Claude Code reviewer, let stand by Codex. The
-	// span joins the key; two records of the SAME edit (the document's hunk
-	// row and the ledger's outcome row, same run) share it, and two runs'
-	// edits at the same place with the same positional id are told apart
-	// by their hunks when both carry one.
-	upsert := func(t Tried) {
-		if merged[t.Path] == nil {
-			merged[t.Path] = map[string]*Tried{}
-		}
-		key := fmt.Sprintf("%s\x00%s\x00%d-%d", t.ParentSHA256, t.ID, t.Span.Start, t.Span.End)
-		if have, ok := merged[t.Path][key]; ok && have.Search != "" && t.Search != "" && have.Search != t.Search {
-			key += "\x00" + t.Search
-		}
-		if have, ok := merged[t.Path][key]; ok {
-			// Merge: the document brings the hunk, the ledger the outcome.
-			if have.Search == "" && t.Search != "" {
-				have.Search, have.Replace = t.Search, t.Replace
-			}
-			if have.Outcome == "" && t.Outcome != "" {
-				have.Outcome, have.KilledBy, have.Proven = t.Outcome, t.KilledBy, t.Proven
-			}
-			if have.Shape == "" {
-				have.Shape = t.Shape
-			}
-			if have.Span.IsZero() {
-				have.Span = t.Span
-			}
-			return
-		}
-		tt := t
-		merged[t.Path][key] = &tt
-	}
+	var all []Tried
+	upsert := func(t Tried) { all = append(all, t) }
 	var files []string
 	if st.IsDir() {
 		// A ledger directory's entries first: they carry outcomes AND
@@ -128,8 +93,11 @@ func Load(source string) (*Prior, error) {
 					t := Tried{Path: m.Path, ParentSHA256: m.ParentSHA256, ID: m.MutantID,
 						Span: lang.LineRange{Start: m.SpanStart, End: m.SpanEnd}, Shape: m.Shape,
 						Outcome: m.Outcome, KilledBy: m.KilledBy, Proven: m.Proven}
-					if m.Code != "" {
-						t.Replace = m.Code
+					// The hunk, when the entry carries source (the local
+					// entry always does; a pushed one only with
+					// --push-source). A row without one is a bare outcome.
+					if search, replace, ok := adequacy.DecodeHunk(m.Code); ok {
+						t.Search, t.Replace = search, replace
 					}
 					upsert(t)
 				}
@@ -163,19 +131,124 @@ func Load(source string) (*Prior, error) {
 			upsert(t)
 		}
 	}
-	for path, byID := range merged {
-		for _, t := range byID {
-			p.byPath[path] = append(p.byPath[path], *t)
-		}
-		sort.Slice(p.byPath[path], func(i, j int) bool {
-			a, b := p.byPath[path][i], p.byPath[path][j]
-			if a.Span.Start != b.Span.Start {
-				return a.Span.Start < b.Span.Start
-			}
-			return a.ID < b.ID
-		})
-	}
+	p.byPath = mergeTried(all)
 	return p, nil
+}
+
+// mergeTried folds every record of one EDIT into one Tried, whatever order
+// the records arrived in, and orders the result totally.
+//
+// The key identifies the edit, not the mutant id: ids are positional per
+// run ("s0/m1" is every run's first mutant of shard 0), so a key of (sha,
+// id) folded a later run's different edit into an earlier one — dropping
+// it, undercounting, and grafting one run's hunk onto another run's line
+// (found by a Claude Code reviewer, let stand by Codex). The span joins
+// the key, and the HUNK joins it whenever a record carries one: two runs'
+// different edits at one place never merge. A record with no hunk (a
+// pushed row without --push-source; a cache hit that ran no dev pass) is
+// folded into the one hunked edit at its (sha, id, span) when there is
+// exactly one — and kept as its own bare record when there are several,
+// because nothing says which edit it was, and a spare "tried" line costs
+// less than a lost one. A first cut merged by arrival order, so the same
+// two sources gave different priors depending on which was read first
+// (a Cursor read of the fix, confirmed by reasoning).
+func mergeTried(all []Tried) map[string][]Tried {
+	fold := func(into *Tried, t Tried) {
+		if into.Search == "" && t.Search != "" {
+			into.Search, into.Replace = t.Search, t.Replace
+		}
+		if into.Outcome == "" && t.Outcome != "" {
+			into.Outcome, into.KilledBy, into.Proven = t.Outcome, t.KilledBy, t.Proven
+		}
+		if into.Shape == "" {
+			into.Shape = t.Shape
+		}
+		if into.Span.IsZero() {
+			into.Span = t.Span
+		}
+	}
+	type group struct {
+		hunked map[string]*Tried // search+replace → the edit
+		bare   *Tried
+	}
+	base := func(t Tried) string {
+		return fmt.Sprintf("%s\x00%s\x00%s\x00%d-%d", t.Path, t.ParentSHA256, t.ID, t.Span.Start, t.Span.End)
+	}
+	groups := map[string]*group{}
+	var order []string
+	for _, t := range all {
+		k := base(t)
+		g := groups[k]
+		if g == nil {
+			g = &group{hunked: map[string]*Tried{}}
+			groups[k] = g
+			order = append(order, k)
+		}
+		if t.Search == "" {
+			if g.bare == nil {
+				tt := t
+				g.bare = &tt
+			} else {
+				fold(g.bare, t)
+			}
+			continue
+		}
+		hk := t.Search + "\x00" + t.Replace
+		if have := g.hunked[hk]; have != nil {
+			fold(have, t)
+		} else {
+			tt := t
+			g.hunked[hk] = &tt
+		}
+	}
+	out := map[string][]Tried{}
+	for _, k := range order {
+		g := groups[k]
+		if g.bare != nil && len(g.hunked) == 1 {
+			for _, h := range g.hunked {
+				fold(h, *g.bare)
+			}
+			g.bare = nil
+		}
+		for _, h := range g.hunked {
+			out[h.Path] = append(out[h.Path], *h)
+		}
+		if g.bare != nil {
+			out[g.bare.Path] = append(out[g.bare.Path], *g.bare)
+		}
+	}
+	for path := range out {
+		sort.Slice(out[path], func(i, j int) bool { return lessTried(out[path][i], out[path][j]) })
+	}
+	return out
+}
+
+// sorted is tried in lessTried order, as a copy: Render and Digest read
+// the same edits in the same order whatever order a caller holds them in.
+func sorted(tried []Tried) []Tried {
+	out := append([]Tried(nil), tried...)
+	sort.Slice(out, func(i, j int) bool { return lessTried(out[i], out[j]) })
+	return out
+}
+
+// lessTried is a total order over edits: by line, then span end, then id,
+// then parent hash, then the hunk — so Render and Digest never depend on
+// the order the sources were read in.
+func lessTried(a, b Tried) bool {
+	switch {
+	case a.Span.Start != b.Span.Start:
+		return a.Span.Start < b.Span.Start
+	case a.Span.End != b.Span.End:
+		return a.Span.End < b.Span.End
+	case a.ID != b.ID:
+		return a.ID < b.ID
+	case a.ParentSHA256 != b.ParentSHA256:
+		return a.ParentSHA256 < b.ParentSHA256
+	case a.Search != b.Search:
+		return a.Search < b.Search
+	default:
+		return a.Replace < b.Replace
+	}
 }
 
 func fromDocument(path string) ([]Tried, error) {
@@ -244,7 +317,7 @@ func Digest(tried []Tried) string {
 		return ""
 	}
 	h := sha256.New()
-	for _, t := range tried {
+	for _, t := range sorted(tried) {
 		// The hunk is in the hash: Render quotes it, so two priors that
 		// hand the generator different text must never share a digest.
 		fmt.Fprintf(h, "%s\x00%s\x00%s\x00%d-%d\x00%s\x00%s\x00%s\x00%v\x00%s\x00%s\n", t.Path, t.ParentSHA256, t.ID, t.Span.Start, t.Span.End, t.Shape, t.Outcome, t.KilledBy, t.Proven, t.Search, t.Replace)
@@ -269,7 +342,7 @@ func Render(tried []Tried) string {
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "ALREADY TRIED on this exact version of the file (%d edit(s) from earlier runs). Do NOT repeat these edits or their shape at the same place; plant DIFFERENT faults — other decision points, other kinds of change:\n", len(tried))
-	for i, t := range tried {
+	for i, t := range sorted(tried) {
 		if i == MaxRendered {
 			// The edits are sorted by line, so the cut always drops the
 			// FILE'S TAIL; say where the undisclosed ones are, or the

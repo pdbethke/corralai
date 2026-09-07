@@ -402,13 +402,17 @@ func TestCertifyRepoPriorIsAppliedOnSameBytesAndRefusedOnOthers(t *testing.T) {
 	mustWrite(t, filepath.Join(root, "mypkg", "__init__.py"), "")
 	a := "def a():\n    return 1\n"
 	b := "def b():\n    return 1\n"
+	c := "def c():\n    return 1\n"
 	mustWrite(t, filepath.Join(root, "mypkg", "a.py"), a)
 	mustWrite(t, filepath.Join(root, "mypkg", "b.py"), b)
+	mustWrite(t, filepath.Join(root, "mypkg", "c.py"), c)
 	mustWrite(t, filepath.Join(root, "tests", "test_a.py"), "from mypkg.a import a\n\n\ndef test_a():\n    assert a() == 1\n")
 	mustWrite(t, filepath.Join(root, "tests", "test_b.py"), "from mypkg.b import b\n\n\ndef test_b():\n    assert b() == 1\n")
+	mustWrite(t, filepath.Join(root, "tests", "test_c.py"), "from mypkg.c import c\n\n\ndef test_c():\n    assert c() == 1\n")
 
 	// The prior: a document from an earlier run — a.py at its CURRENT
-	// bytes, b.py at OTHER bytes.
+	// bytes, b.py at OTHER bytes, c.py at NO recorded bytes (a document
+	// with no parent hash): the two refusals are different sentences.
 	priorDir := filepath.Join(root, "ledger")
 	if err := os.MkdirAll(priorDir, 0o755); err != nil {
 		t.Fatal(err)
@@ -418,6 +422,7 @@ func TestCertifyRepoPriorIsAppliedOnSameBytesAndRefusedOnOthers(t *testing.T) {
 		Files: map[string]adequacy.MutantSetEntry{
 			"mypkg/a.py": {ParentSHA256: shaOf(a), Mutants: []adequacy.RecordedMutant{{ID: "old/m1", Span: lang.LineRange{Start: 2, End: 2}, Search: "    return 1\n", Replace: "    return 2\n"}}},
 			"mypkg/b.py": {ParentSHA256: shaOf("def b():\n    return 0\n"), Mutants: []adequacy.RecordedMutant{{ID: "old/m1", Span: lang.LineRange{Start: 2, End: 2}, Search: "    return 0\n", Replace: "    return 9\n"}}},
+			"mypkg/c.py": {Mutants: []adequacy.RecordedMutant{{ID: "old/m1", Span: lang.LineRange{Start: 2, End: 2}, Search: "    return 1\n", Replace: "    return 9\n"}}},
 		},
 	}); err != nil {
 		t.Fatal(err)
@@ -430,6 +435,7 @@ func TestCertifyRepoPriorIsAppliedOnSameBytesAndRefusedOnOthers(t *testing.T) {
 		Files: map[string]adequacy.MutantSetEntry{
 			"mypkg/a.py": {ParentSHA256: shaOf(a), Mutants: []adequacy.RecordedMutant{{ID: "m1", Replace: "def a():\n    return 2\n"}}},
 			"mypkg/b.py": {ParentSHA256: shaOf(b), Mutants: []adequacy.RecordedMutant{{ID: "m1", Replace: "def b():\n    return 2\n"}}},
+			"mypkg/c.py": {ParentSHA256: shaOf(c), Mutants: []adequacy.RecordedMutant{{ID: "m1", Replace: "def c():\n    return 2\n"}}},
 		},
 	}); err != nil {
 		t.Fatal(err)
@@ -442,7 +448,7 @@ func TestCertifyRepoPriorIsAppliedOnSameBytesAndRefusedOnOthers(t *testing.T) {
 	var out, errb bytes.Buffer
 	code := runCertifyRepo([]string{
 		"--repo", root, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant, "--critic-model", "off",
-		"--goals", writeGoals(t, root, `{"mypkg/a.py": "a() must return 1", "mypkg/b.py": "b() must return 1"}`),
+		"--goals", writeGoals(t, root, `{"mypkg/a.py": "a() must return 1", "mypkg/b.py": "b() must return 1", "mypkg/c.py": "c() must return 1"}`),
 		"--substrate", substrateWorkspace, "--all", "--mutants", setPath, "--prior", priorDir,
 		"--ledger", ledgerDir,
 	}, &out, &errb)
@@ -455,6 +461,9 @@ func TestCertifyRepoPriorIsAppliedOnSameBytesAndRefusedOnOthers(t *testing.T) {
 	}
 	if !strings.Contains(s, "prior: none applied") || !strings.Contains(s, "refused: recorded against a different version of this file") {
 		t.Errorf("b.py's prior must be refused, out loud:\n%s", s)
+	}
+	if !strings.Contains(s, "refused: recorded with no version of this file to match against") {
+		t.Errorf("c.py's prior was recorded against no bytes — that is not \"a different version\", and the report must say which:\n%s", s)
 	}
 	// The ledger row carries it.
 	st, err := openLedgerScans(ledgerDir)
@@ -471,7 +480,7 @@ func TestCertifyRepoPriorIsAppliedOnSameBytesAndRefusedOnOthers(t *testing.T) {
 	for _, f := range files {
 		primed[f.Path] = f.PriorsApplied != nil && *f.PriorsApplied == 1 && f.PriorDigest != ""
 	}
-	if !primed["mypkg/a.py"] || primed["mypkg/b.py"] {
-		t.Errorf("ledger: a.py primed=%v b.py primed=%v, want true/false", primed["mypkg/a.py"], primed["mypkg/b.py"])
+	if !primed["mypkg/a.py"] || primed["mypkg/b.py"] || primed["mypkg/c.py"] {
+		t.Errorf("ledger: a.py primed=%v b.py primed=%v c.py primed=%v, want true/false/false", primed["mypkg/a.py"], primed["mypkg/b.py"], primed["mypkg/c.py"])
 	}
 }

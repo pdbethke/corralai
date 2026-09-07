@@ -298,9 +298,12 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// the verdict cache never runs a dev pass and so never reaches the sink,
 	// and the record line has to be able to say so.
 	var results []reposcan.FileResult
-	var mutantRecorder *mutantSetRecorder
+	// Always on: the recorder is how the ledger entry's mutant rows get
+	// their hunks (stamped onto the bundle below), so a later run's prior
+	// can tell two runs' edits at one place apart. --record-mutants only
+	// decides whether the set is ALSO written as a document.
+	mutantRecorder := newMutantSetRecorder()
 	if p := strings.TrimSpace(*recordMutantsFlag); p != "" {
-		mutantRecorder = newMutantSetRecorder()
 		defer func() {
 			if *dryRun {
 				// Inert, and said so rather than left silent (the same rule
@@ -582,9 +585,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 			ex.selectionCache = newSelectionLedgerCache(cacheDSNOr(*cacheDSNFlag))
 		}
 		ex.presetMutants = presetMutants
-		if mutantRecorder != nil {
-			ex.mutantSink = mutantRecorder.sink
-		}
+		ex.mutantSink = mutantRecorder.sink
 		// --prior: loaded once, resolved per file against its bytes. A path
 		// that cannot be read refuses the scan up front rather than running
 		// the unprimed exam under a primed flag. Unset, the prior is the
@@ -1363,6 +1364,13 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 			Passed:   boolPtr(exitCode == 0),
 			PushedBy: auditpush.PushedByCertify,
 		})
+	// The hunks onto the mutant rows: `code` is the mutant's source, and
+	// the custody rule already withholds it (BlankUnpushedSource) unless
+	// the push carries source — the local ledger entry does, a --push
+	// without --push-source does not. A file served from the verdict cache
+	// ran no dev pass and has no hunk; its rows stay bare, and the prior
+	// merges a bare row into the one edit it can be.
+	mutantRecorder.stampHunks(bundle.Mutants)
 
 	// The audit statement, written after the exit code is known so `passed`
 	// records the verdict this run actually returned rather than a guess

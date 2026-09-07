@@ -88,12 +88,12 @@ func ReproductionsSHA256(r review.Review) string {
 
 // BuildReviewAttestation is the in-toto statement for one review. The
 // subject is the repository at the reviewed commit; the predicate is the
-// reproductions and the review's shape. entryHash names the ledger entry
-// the review was written as, when it was written before the statement —
-// it is "" on the run's own statement, which the entry then names back
-// (see cmd/corral's review: statement first, entry second, so the entry
-// carries the statement's hash and the statement carries the
-// reproductions').
+// reproductions and the review's shape. The statement does not name the
+// ledger entry — it is written FIRST, and the entry, written after, names
+// the statement (Review.StatementSHA256); the statement names the
+// reproductions. (An earlier draft of this comment described an entryHash
+// parameter that was never added; a sonnet reviewer caught the drift and
+// a flash verifier let the finding stand.)
 func BuildReviewAttestation(r review.Review) map[string]any {
 	rep, cr, hy := r.Counts()
 	predicate := map[string]any{

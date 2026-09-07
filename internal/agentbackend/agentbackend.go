@@ -667,8 +667,13 @@ func (b *anthropicBackend) Chat(messages []Message, tools []any) (Message, error
 	// a 400 ("temperature is deprecated for this model"), and older models are
 	// fine with the API default. Sending it broke every cross-vendor run whose
 	// writer/mutant-generator was a current Claude.
+	// max_tokens bounds THINKING too on a Claude 5 model: at 4096 a
+	// reviewer-sized prompt came back as one empty thinking block and
+	// stop_reason max_tokens — no text, no error — and corral read it as
+	// the model saying nothing. The budget is large, and running out of it
+	// without a word of text is reported below as what it is.
 	body := map[string]any{
-		"model": b.model, "max_tokens": 4096, "messages": msgs,
+		"model": b.model, "max_tokens": anthropicMaxTokens, "messages": msgs,
 	}
 	if sys.Len() > 0 {
 		// The system prompt as a CACHEABLE content block, not a bare string.
@@ -706,7 +711,8 @@ func (b *anthropicBackend) Chat(messages []Message, tools []any) (Message, error
 	}
 
 	var out struct {
-		Content []struct {
+		StopReason string `json:"stop_reason"`
+		Content    []struct {
 			Type  string          `json:"type"`
 			Text  string          `json:"text"`
 			Name  string          `json:"name"`
@@ -769,5 +775,13 @@ func (b *anthropicBackend) Chat(messages []Message, tools []any) (Message, error
 			res.ToolCalls = append(res.ToolCalls, tc)
 		}
 	}
+	if res.Content == "" && len(res.ToolCalls) == 0 && out.StopReason == "max_tokens" {
+		return res, fmt.Errorf("anthropic: %s produced no text: it spent its whole %d-token output budget (stop_reason max_tokens, %d output tokens — a reasoning model thinking past the limit); the prompt is too large for the seat, or the seat needs a larger budget", b.model, anthropicMaxTokens, out.Usage.OutputTokens)
+	}
 	return res, nil
 }
+
+// anthropicMaxTokens is the output budget every Anthropic call gets. It
+// bounds thinking as well as text on Claude 5 models, so it is sized for a
+// seat that reasons at length before it writes; see the note at the call.
+const anthropicMaxTokens = 32000

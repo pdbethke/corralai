@@ -342,12 +342,17 @@ func Render(tried []Tried) string {
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "ALREADY TRIED on this exact version of the file (%d edit(s) from earlier runs). Do NOT repeat these edits or their shape at the same place; plant DIFFERENT faults — other decision points, other kinds of change:\n", len(tried))
-	for i, t := range sorted(tried) {
+	ordered := sorted(tried)
+	for i, t := range ordered {
 		if i == MaxRendered {
 			// The edits are sorted by line, so the cut always drops the
 			// FILE'S TAIL; say where the undisclosed ones are, or the
 			// generator is told to plant elsewhere and pointed nowhere.
-			rest := tried[MaxRendered:]
+			// The tail of the ORDERED list — the caller's order is not
+			// what was listed (review dcd0874fecb8#R1: the range named
+			// was of whichever edits sat past index 40 in the caller's
+			// slice).
+			rest := ordered[MaxRendered:]
 			fmt.Fprintf(&b, "  … and %d more, %s — not listed here, but tried; plant elsewhere in that stretch too.\n", len(rest), spanOf(rest))
 			break
 		}

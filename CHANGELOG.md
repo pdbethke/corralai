@@ -32,6 +32,33 @@ history of any release, `git log v0.3.4..v0.3.5`.
   trailers fold — seen on the first entry to carry the party ("change by P,
   with P, Claude Code"). The committer seat counts one observation per
   party per audit, even for rows written before the fold.
+- **The review loop keeps score honestly.** Six defects in `internal/review`
+  found by the loop reviewing itself (a Claude Code reviewer, Codex
+  verifying; review `61dc210a39fd`), all confirmed on adjudication. A
+  reproduction the HARNESS could not run — the worktree gone, `sh`
+  missing, a timeout — was recorded like a script that ran and disagreed,
+  and the reviewer was charged for it "by execution"; it is now `unrun` on
+  the record, has no outcome, and grades nobody. A verifier's refutation
+  that reproduced against a CODE-READ claim was run, recorded, and then
+  never consulted; a refutation that reproduced is now an outcome for a
+  finding of any tier. `Parse` took the first parseable object in the
+  reply as the review, so a JSON literal in the prose dropped the findings
+  behind it; it now wants a review-shaped object or errors. A scope with
+  `..` (or a symlink) read outside the checkout and shipped the bytes to
+  the provider; `LoadScope` refuses by name. The planner counted every
+  finding of a covering review toward every scope it covers; a finding
+  now counts where its file is. A verifier's ids are read as the review
+  names them (`r1`, `1` → `R1`), the first verdict on an id stands, and an
+  unknown id or a second verdict is said on the record (`verifier_note`),
+  never dropped. `corral review` prints "NOT RUN (harness)" for the first
+  case, not a demotion.
+- **The prior's cut line names the tail it dropped.** This morning's fix
+  said where the undisclosed edits were — but sliced the caller's
+  UNSORTED list after Render began sorting a copy, so it named whichever
+  edits sat past the cut in the caller's order. Found by a Gemini reviewer
+  the same afternoon (review `dcd0874fecb8`), Claude Code verifying: a fix
+  that introduced a defect, caught by the next round. It slices the
+  ordered list.
 
 ## [v1.0.0-rc.9] — 2026-09-07
 

@@ -119,6 +119,15 @@ type LedgerEntry struct {
 	Hash      string `json:"hash,omitempty"`
 	KeyID     string `json:"keyid,omitempty"`
 	Signature string `json:"signature,omitempty"` // hex Ed25519 over Hash's raw bytes
+
+	// Raw is the entry's bytes as read from the directory, and File the
+	// name they were read from. Set by the readers, never written: from
+	// corral-ledger-3 the hash is over the bytes on disk (see EntryHash),
+	// so a verifier re-hashes what is in the file, not what this binary's
+	// struct would re-marshal — a field added to the struct later must not
+	// change an older entry's hash.
+	Raw  []byte `json:"-"`
+	File string `json:"-"`
 }
 
 // The entry kinds. KindScan is the empty string on purpose: it is what
@@ -161,7 +170,19 @@ func (e LedgerEntry) IsScan() bool { return e.Kind == KindScan }
 type ledgerFile = LedgerEntry
 
 // LedgerFileFormat is the document version a ledger entry declares.
-const LedgerFileFormat = "corral-ledger-2"
+// corral-ledger-3 (2026-09-07): the hash is over the entry's FULL canonical
+// bytes (CanonicalFullJSON), and a scan entry's scan_uid derives from the
+// scan row and the entry's own Pushed time, so RecomputeScanUID over the
+// entry reproduces it. corral-ledger-2 entries are still read and verified
+// under their own rules — sparse hash; a uid minted from a time the entry
+// does not carry — and VerifyLedgerDir says so.
+const (
+	LedgerFileFormat = "corral-ledger-3"
+	ledgerFormat2    = "corral-ledger-2"
+)
+
+// knownLedgerFormat is what a reader accepts.
+func knownLedgerFormat(f string) bool { return f == LedgerFileFormat || f == ledgerFormat2 }
 
 // LedgerSigner signs an entry's hash. cmd/corral supplies one from the
 // local certify key when it exists; nil writes an unsigned entry.
@@ -179,11 +200,31 @@ func (s Ed25519LedgerSigner) Sign(hash []byte) (string, []byte, error) {
 	return s.KeyID, ed25519.Sign(s.Key, hash), nil
 }
 
-// EntryHash is what Hash holds: sha256 over the entry's canonical sparse
-// JSON with Hash and Signature cleared.
+// EntryHash is what Hash holds. From corral-ledger-3: sha256 over the
+// entry's FULL canonical JSON — its bytes as written (Raw, when a reader
+// set it; this binary's marshalling of e otherwise, which is what the
+// writer puts on disk) with the hash, keyid and signature keys removed.
+// corral-ledger-2: sha256 over the canonical SPARSE JSON of the struct
+// with those fields cleared, as those entries were written.
 func EntryHash(e LedgerEntry) (string, error) {
-	e.Hash, e.KeyID, e.Signature = "", "", ""
-	js, err := CanonicalSparseJSON(e)
+	if e.Format == ledgerFormat2 {
+		e.Hash, e.KeyID, e.Signature, e.Raw = "", "", "", nil
+		js, err := CanonicalSparseJSON(e)
+		if err != nil {
+			return "", err
+		}
+		sum := sha256.Sum256(js)
+		return hex.EncodeToString(sum[:]), nil
+	}
+	raw := e.Raw
+	if raw == nil {
+		e.Hash, e.KeyID, e.Signature = "", "", ""
+		var err error
+		if raw, err = json.Marshal(e); err != nil {
+			return "", err
+		}
+	}
+	js, err := canonicalEntryBytes(raw)
 	if err != nil {
 		return "", err
 	}
@@ -191,15 +232,36 @@ func EntryHash(e LedgerEntry) (string, error) {
 	return hex.EncodeToString(sum[:]), nil
 }
 
+// canonicalEntryBytes is CanonicalFullJSON over an entry with the three
+// fields the hash cannot contain removed from the tree itself, so the
+// writer (which has them empty) and the reader (which has them filled)
+// hash the same bytes.
+func canonicalEntryBytes(raw []byte) ([]byte, error) {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	var tree map[string]any
+	if err := dec.Decode(&tree); err != nil {
+		return nil, fmt.Errorf("auditpush: entry is not a JSON object: %w", err)
+	}
+	delete(tree, "hash")
+	delete(tree, "keyid")
+	delete(tree, "signature")
+	full, err := json.Marshal(tree)
+	if err != nil {
+		return nil, err
+	}
+	return CanonicalFullJSON(full)
+}
+
 // writeLedgerFile is the directory half of PushBundle: the same
 // canonicalised bundle the warehouse receives, as one signed, linked entry.
 func writeLedgerFile(dir string, b Bundle, signer LedgerSigner) (Counts, error) {
-	now, uid := mintPush(b)
-	b.Scan.ScanUID = uid
 	if b.Scan.PushedBy == "" {
 		b.Scan.PushedBy = PushedByCertify
 	}
-	e := LedgerEntry{Format: LedgerFileFormat, Pushed: now, ScanUID: uid, Bundle: b}
+	// The uid is minted where Pushed is stamped — placeEntry — so the two
+	// agree by construction and a reader can derive one from the other.
+	e := LedgerEntry{Format: LedgerFileFormat, Bundle: b}
 	if _, err := AppendLedgerEntry(dir, e, signer); err != nil {
 		return Counts{}, err
 	}
@@ -246,7 +308,16 @@ func placeEntry(dir string, e LedgerEntry, prev string, signer LedgerSigner) (st
 	// the bundle (Scan.StartedAt); the uid keeps the identity the first
 	// push minted.
 	e.Pushed = time.Now().UTC().Truncate(time.Microsecond)
-	e.Hash, e.KeyID, e.Signature = "", "", ""
+	if e.IsScan() && e.Bundle.Scan != (ScanRow{}) {
+		// The uid derives from the scan row and THIS Pushed — the promise
+		// RecomputeScanUID makes — so an entry re-linked elsewhere is
+		// re-identified by that placement, and the identity stays checkable.
+		// (Under corral-ledger-2 the uid was minted from an earlier clock
+		// the entry did not carry, so it never recomputed: ed079ca08965#R2.)
+		e.ScanUID = scanUID(e.Bundle.Scan, e.Pushed)
+		e.Bundle.Scan.ScanUID = e.ScanUID
+	}
+	e.Hash, e.KeyID, e.Signature, e.Raw = "", "", "", nil
 	h, err := EntryHash(e)
 	if err != nil {
 		return "", err
@@ -269,13 +340,11 @@ func placeEntry(dir string, e LedgerEntry, prev string, signer LedgerSigner) (st
 		middle, tail = "retract", e.Retracts
 	case KindCheckpoint:
 		middle, tail = "checkpoint", e.Checkpoint.Head
-	case KindReview:
-		middle, tail = "review", e.Review.Commit
-	case KindAdjudication:
-		// Its own hash, not the review's: two verdicts on one review can
-		// land in the same second, and a name that collided would replace
-		// the first entry rather than add the second.
-		middle, tail = "adjudication", e.Hash
+	case KindReview, KindAdjudication:
+		// Its own hash: two reviews of one commit, or two verdicts on one
+		// review, can land in the same second, and a name that collided
+		// would refuse the second entry (the commit is inside the entry).
+		middle, tail = e.Kind, e.Hash
 	default:
 		middle, tail = e.Bundle.Scan.Commit, e.ScanUID
 		if middle == "" {
@@ -328,7 +397,8 @@ func ReadLedgerEntry(path string) (LedgerEntry, error) {
 	if err := json.Unmarshal(raw, &e); err != nil {
 		return LedgerEntry{}, fmt.Errorf("auditpush: %s: %w", filepath.Base(path), err)
 	}
-	if e.Format != LedgerFileFormat {
+	e.Raw, e.File = raw, filepath.Base(path)
+	if !knownLedgerFormat(e.Format) {
 		return LedgerEntry{}, fmt.Errorf("auditpush: %s: format %q, want %q", filepath.Base(path), e.Format, LedgerFileFormat)
 	}
 	return e, nil
@@ -368,15 +438,11 @@ func VerifyLedgerDir(dir string, pub ed25519.PublicKey) ([]ChainCheck, error) {
 	if err != nil {
 		return nil, err
 	}
-	names, _ := ledgerFileNames(dir)
 	var out []ChainCheck
 	prevHash := ""
 	seen := map[string]bool{}
 	for i, e := range entries {
-		c := ChainCheck{ScanUID: e.ScanUID, Commit: e.Bundle.Scan.Commit, KeyID: e.KeyID, Genesis: i == 0, Kind: e.Kind}
-		if i < len(names) {
-			c.File = names[i]
-		}
+		c := ChainCheck{ScanUID: e.ScanUID, Commit: e.Bundle.Scan.Commit, KeyID: e.KeyID, Genesis: i == 0, Kind: e.Kind, File: e.File}
 		h, herr := EntryHash(e)
 		c.HashOK = herr == nil && h == e.Hash
 		c.LinkOK = e.Prev == prevHash
@@ -386,9 +452,15 @@ func VerifyLedgerDir(dir string, pub ed25519.PublicKey) ([]ChainCheck, error) {
 			sig, _ := hex.DecodeString(e.Signature)
 			c.SigOK = ed25519.Verify(pub, raw, sig)
 		}
+		uidOK := true
+		if e.Format != ledgerFormat2 && e.IsScan() && e.Bundle.Scan != (ScanRow{}) {
+			uidOK = e.ScanUID == scanUID(e.Bundle.Scan, e.Pushed) && e.Bundle.Scan.ScanUID == e.ScanUID
+		}
 		switch {
 		case !c.HashOK:
 			c.Problem = "entry bytes do not match its hash — edited after it was written"
+		case !uidOK:
+			c.Problem = "scan_uid does not derive from the entry's scan row and pushed time — the identity was altered, or minted elsewhere"
 		case !c.LinkOK:
 			c.Problem = fmt.Sprintf("prev %.12s does not name the previous entry (%.12s) — an entry was removed, reordered or inserted", e.Prev, prevHash)
 		case c.Signed && pub != nil && !c.SigOK:
@@ -413,6 +485,10 @@ func VerifyLedgerDir(dir string, pub ed25519.PublicKey) ([]ChainCheck, error) {
 			c.Problem = "an adjudication of a finding whose review is not an earlier entry of this chain"
 		case e.Kind == KindAdjudication:
 			c.Note = fmt.Sprintf("%s %s by %s: %s", e.Adjudication.Verdict, shortRef(e.Adjudication.Adjudicates), e.Adjudication.By, e.Adjudication.Reason)
+		}
+		if e.Format == ledgerFormat2 && c.Problem == "" {
+			c.Note = strings.TrimSpace(c.Note + " · " + ledgerFormat2 + ": hashed in the sparse form (a recorded false or zero is not distinguished from an absent one) and its scan_uid is not derivable from the entry")
+			c.Note = strings.TrimPrefix(c.Note, "· ")
 		}
 		out = append(out, c)
 		prevHash = e.Hash
@@ -596,14 +672,33 @@ func Retracted(entries []LedgerEntry) map[string]LedgerEntry {
 // — the view, the prior, the verdict cache — goes through this, so a
 // retraction takes effect everywhere at once.
 func ScanEntries(entries []LedgerEntry) []LedgerEntry {
+	var out []LedgerEntry
+	for _, e := range LiveEntries(entries) {
+		if e.IsScan() {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// LiveEntries is every entry of every kind that stands: retracted entries
+// left out, and an adjudication of a retracted review left out with it.
+// A retraction used to reach scan entries only, so a retracted review's
+// rows and findings still loaded into the view and pushed to a warehouse
+// (ed079ca08965#R3); the view and the push go through this.
+func LiveEntries(entries []LedgerEntry) []LedgerEntry {
 	retracted := Retracted(entries)
 	var out []LedgerEntry
 	for _, e := range entries {
-		if !e.IsScan() {
-			continue
-		}
 		if _, gone := retracted[e.Hash]; gone {
 			continue
+		}
+		if e.Kind == KindAdjudication && e.Adjudication != nil {
+			if h, _, ok := cutRef(e.Adjudication.Adjudicates); ok {
+				if _, gone := retracted[h]; gone {
+					continue
+				}
+			}
 		}
 		out = append(out, e)
 	}
@@ -675,12 +770,17 @@ func ReadLedgerDir(dir string) ([]ledgerFile, error) {
 		if err := json.Unmarshal(raw, &f); err != nil {
 			return nil, fmt.Errorf("auditpush: %s: %w", e.Name(), err)
 		}
-		if f.Format != LedgerFileFormat {
+		if !knownLedgerFormat(f.Format) {
 			return nil, fmt.Errorf("auditpush: %s: format %q, want %q", e.Name(), f.Format, LedgerFileFormat)
 		}
+		f.Raw, f.File = raw, e.Name()
 		out = append(out, f)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Pushed.Before(out[j].Pushed) })
+	// Chain order is Pushed order; the file name rides WITH its entry
+	// (File), never re-paired by a second sort — names carry seconds,
+	// Pushed microseconds, and two entries inside one second sorted
+	// differently by each (ed079ca08965#R5).
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Pushed.Before(out[j].Pushed) })
 	return out, nil
 }
 
@@ -719,6 +819,7 @@ func LoadDir(dir string) (*sql.DB, error) {
 	// left out (ScanEntries); every review and adjudication entry into
 	// the review grains, scripts and outputs included — the directory
 	// holds them, so the view over it does.
+	files = LiveEntries(files)
 	for _, f := range files {
 		switch f.Kind {
 		case KindReview:

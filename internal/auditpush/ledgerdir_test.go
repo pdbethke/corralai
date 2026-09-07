@@ -383,11 +383,13 @@ func TestReviewAndAdjudicationAreEntriesBesideTheScans(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(name, "-review-aaa1") {
-		t.Errorf("review file name %q", name)
-	}
 	entries, _ := ReadLedgerDir(dir)
 	rev := entries[1]
+	// Named by its own hash (the commit is inside the entry): two reviews
+	// of one commit inside a second must not collide on a name.
+	if !strings.Contains(name, "-review-"+rev.Hash[:12]) {
+		t.Errorf("review file name %q for entry %s", name, rev.Hash)
+	}
 
 	// Negative controls.
 	for _, c := range []struct{ ref, verdict, by, reason string }{

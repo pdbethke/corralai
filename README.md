@@ -5,7 +5,12 @@
 [![docs](https://img.shields.io/badge/docs-corralai.dev-2f6f4e)](https://corralai.dev/docs/getting-started/)
 [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/pdbethke/corralai/badge)](https://securityscorecards.dev/viewer/?uri=github.com/pdbethke/corralai)
 
-Corral breaks your code on purpose and checks whether your tests notice. It plants faults that violate a stated guarantee, runs **your own suite** against each one in a sandbox, and reports how many it killed — measured by execution, never taken on a model's word.
+**Corral is an auditing engine.** It judges code it did not write — by execution and by adversary — onto a record nobody can edit. Accountability, paper trail, analysis, certification: everything but building. Two extensions carry the engine's rule into practice:
+
+- **`certify`** — by execution. Corral breaks your code on purpose and checks whether your tests notice: it plants faults that violate a stated guarantee, runs **your own suite** against each one in a sandbox, and reports how many it killed — measured, never taken on a model's word.
+- **`review`** — by adversary. A model that has never seen your repository is told to assume the code is wrong and prove it; every claim comes with a script corral runs, a claim that does not reproduce is demoted on the record, a second seat tries to refute what stands, and both seats are graded by what held.
+
+Both write signed, hash-linked entries into a ledger in your own repository, and every seat — the one planting faults, the one writing tests, the reviewer, the verifier — is ranked by the record it leaves. Corral never writes the code. That is what it judges.
 
 ***Nemo iudex in causa sua*** — no one may be judge in their own cause. The one who
 wrote the code doesn't get to certify it: the verdict is **measured by execution**, by

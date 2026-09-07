@@ -922,15 +922,16 @@ func CanonicalizeForWarehouse(b *Bundle) {
 	for i := range b.Events {
 		b.Events[i].TS = b.Events[i].TS.UTC().Truncate(time.Microsecond)
 	}
-	if b.Scan.StartedAt != nil {
-		t := b.Scan.StartedAt.UTC().Truncate(time.Microsecond)
-		b.Scan.StartedAt = &t
-	}
+	// EVERY timestamp the rows carry — the two added with the ledger
+	// (FinishedAt, ComputedAt) were left out, and a statement over them
+	// hashed local-zone nanoseconds the warehouse never stores, so `verify
+	// --db` reported a false mismatch on every run that carried either:
+	// the rule at one door and not the other (ed079ca08965#R1).
+	b.Scan.StartedAt = canonicalTime(b.Scan.StartedAt)
+	b.Scan.FinishedAt = canonicalTime(b.Scan.FinishedAt)
 	for i := range b.Files {
-		if b.Files[i].StartedAt != nil {
-			t := b.Files[i].StartedAt.UTC().Truncate(time.Microsecond)
-			b.Files[i].StartedAt = &t
-		}
+		b.Files[i].StartedAt = canonicalTime(b.Files[i].StartedAt)
+		b.Files[i].ComputedAt = canonicalTime(b.Files[i].ComputedAt)
 		// The writer refuses to store a kill rate for an uncovered file (see
 		// insertFileRow): a file the suite never reached has no rate, and a
 		// stored 0 would read as "measured, and everything survived".
@@ -938,6 +939,16 @@ func CanonicalizeForWarehouse(b *Bundle) {
 			b.Files[i].KillRate = nil
 		}
 	}
+}
+
+// canonicalTime is a nullable timestamp in the form the warehouse stores:
+// UTC, microseconds.
+func canonicalTime(t *time.Time) *time.Time {
+	if t == nil {
+		return nil
+	}
+	c := t.UTC().Truncate(time.Microsecond)
+	return &c
 }
 
 // BlankUnpushedSource withholds every source-bearing field on a bundle whose

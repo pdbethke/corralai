@@ -111,7 +111,7 @@ type ReviewCounts struct {
 // insertReviewEntry writes one review entry as a corral_reviews row and one
 // corral_findings row per finding. withSource decides whether scripts and
 // outputs travel as bytes or only as hashes.
-func insertReviewEntry(db *sql.DB, e LedgerEntry, withSource bool) (ReviewCounts, error) {
+func insertReviewEntry(db sqlExecer, e LedgerEntry, withSource bool) (ReviewCounts, error) {
 	r := e.Review
 	if r == nil {
 		return ReviewCounts{}, fmt.Errorf("auditpush: a review entry with no review")
@@ -161,7 +161,7 @@ func insertReviewEntry(db *sql.DB, e LedgerEntry, withSource bool) (ReviewCounts
 }
 
 // insertAdjudicationEntry writes one adjudication entry as a row.
-func insertAdjudicationEntry(db *sql.DB, e LedgerEntry) error {
+func insertAdjudicationEntry(db sqlExecer, e LedgerEntry) error {
 	a := e.Adjudication
 	if a == nil {
 		return fmt.Errorf("auditpush: an adjudication entry with no adjudication")
@@ -174,26 +174,53 @@ func insertAdjudicationEntry(db *sql.DB, e LedgerEntry) error {
 	return nil
 }
 
+// sqlExecer is what the grain inserts need: a *sql.DB, or the *sql.Tx a
+// push runs under.
+type sqlExecer interface {
+	Exec(query string, args ...any) (sql.Result, error)
+}
+
 // PushReviewEntry appends a review or adjudication entry's rows to a
 // warehouse the operator owns (a file, or md:). withSource is the custody
 // switch for a review's scripts and outputs; an adjudication carries no
-// source. Append-only, like every push.
+// source. Append-only, like every push, and ONE transaction: a review row
+// whose findings are absent is the half-landed push PushBundle's
+// transaction exists to prevent (ed079ca08965#R6).
 func PushReviewEntry(target string, e LedgerEntry, withSource bool) (ReviewCounts, error) {
 	db, err := openWarehouseForWrite(target)
 	if err != nil {
 		return ReviewCounts{}, err
 	}
 	defer db.Close()
+	return pushReviewEntryTx(db, e, withSource)
+}
+
+// pushReviewEntryTx is PushReviewEntry on an open warehouse, under a
+// transaction; the ledger push shares it.
+func pushReviewEntryTx(db *sql.DB, e LedgerEntry, withSource bool) (ReviewCounts, error) {
+	tx, err := db.Begin()
+	if err != nil {
+		return ReviewCounts{}, fmt.Errorf("auditpush: begin: %w", err)
+	}
+	var c ReviewCounts
 	switch e.Kind {
 	case KindReview:
-		return insertReviewEntry(db, e, withSource)
+		c, err = insertReviewEntry(tx, e, withSource)
 	case KindAdjudication:
-		if err := insertAdjudicationEntry(db, e); err != nil {
-			return ReviewCounts{}, err
+		if err = insertAdjudicationEntry(tx, e); err == nil {
+			c = ReviewCounts{Adjudications: 1}
 		}
-		return ReviewCounts{Adjudications: 1}, nil
+	default:
+		err = fmt.Errorf("auditpush: %q is not a review or an adjudication entry", e.Kind)
 	}
-	return ReviewCounts{}, fmt.Errorf("auditpush: %q is not a review or an adjudication entry", e.Kind)
+	if err != nil {
+		_ = tx.Rollback()
+		return ReviewCounts{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return ReviewCounts{}, fmt.Errorf("auditpush: commit: %w", err)
+	}
+	return c, nil
 }
 
 func nilIfZero(t time.Time) *time.Time {

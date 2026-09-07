@@ -56,7 +56,12 @@ func PushLedgerDir(dir, target string, withSource, dryRun bool) (PushPlan, error
 			return PushPlan{}, err
 		}
 	}
-	retracted := Retracted(entries)
+	// Retracted entries of EVERY kind stay out of a warehouse — a retracted
+	// review's rows used to push while its scan's did not (ed079ca08965#R3).
+	live := map[string]bool{}
+	for _, e := range LiveEntries(entries) {
+		live[e.Hash] = true
+	}
 	var plan PushPlan
 	for _, e := range entries {
 		switch e.Kind {
@@ -68,12 +73,12 @@ func PushLedgerDir(dir, target string, withSource, dryRun bool) (PushPlan, error
 			plan.Skipped++
 			continue
 		}
+		if !live[e.Hash] {
+			plan.Retracted++
+			continue
+		}
 		switch e.Kind {
 		case KindScan:
-			if _, gone := retracted[e.Hash]; gone {
-				plan.Retracted++
-				continue
-			}
 			plan.Scans++
 			plan.Files += len(e.Bundle.Files)
 			if dryRun {
@@ -99,7 +104,7 @@ func PushLedgerDir(dir, target string, withSource, dryRun bool) (PushPlan, error
 			if dryRun {
 				continue
 			}
-			if _, err := insertReviewEntry(db, e, withSource); err != nil {
+			if _, err := pushReviewEntryTx(db, e, withSource); err != nil {
 				return plan, err
 			}
 		case KindAdjudication:
@@ -107,7 +112,7 @@ func PushLedgerDir(dir, target string, withSource, dryRun bool) (PushPlan, error
 			if dryRun {
 				continue
 			}
-			if err := insertAdjudicationEntry(db, e); err != nil {
+			if _, err := pushReviewEntryTx(db, e, withSource); err != nil {
 				return plan, err
 			}
 		}

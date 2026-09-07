@@ -267,6 +267,9 @@ Usage:
                                   cache and scans skip it). Deleting it would break the next link
   corral ledger checkpoint <dir>  prune: one genesis naming the head it replaced (hash, count, date)
                                   stands in for everything before it; the verifier says the chain begins there
+  corral ledger push <dir> <dsn>  append the directory's record — scans, reviews, adjudications — to a
+                                  warehouse or md:<db>, skipping what it already holds by entry hash;
+                                  retracted scans left out; source only with --push-source; --dry-run
   corral ledger verify <dir>      the same walk as corral verify --ledger
   corral review --scope <dir> --reviewer-model <m> [--verifier-model <m2>] [--repo <dir>]
                                   a cold model reviews the scope, told to assume the code is wrong;

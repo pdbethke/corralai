@@ -592,6 +592,13 @@ The commit step is skipped on `pull_request` events on purpose: a fork's
 pull request must not be able to write the repository's record, and
 `GITHUB_TOKEN` on a fork PR cannot push anyway.
 
+**Carrying the branch to a warehouse.** `corral ledger push .corral/ledger
+md:<db>` appends every scan, review and adjudication the branch holds to
+a warehouse, skipping what is already there by entry hash — the way to
+fill a MotherDuck database from runs that had no `push` input, or to
+carry a branch pulled later. Source only with `--push-source`; `--dry-run`
+plans and writes nothing.
+
 **Taking something back, without deleting it.** A chain cannot have an
 entry removed quietly — delete one and the next entry's link breaks, and
 `verify --ledger` names it — so the record has two verbs for the two honest

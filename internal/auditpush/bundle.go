@@ -165,6 +165,11 @@ type ScanRow struct {
 	// review verdict written beside it) names itself here, so a reader can
 	// tell whose row it is holding.
 	PushedBy string
+	// EntryHash is the ledger entry this scan was written as, when the
+	// push knows it — `corral ledger push` always does, and a run's own
+	// --push does once its entry is placed. It is what lets a second push
+	// of the same directory skip what the warehouse already holds.
+	EntryHash string
 	// The scan-grain facts that lived only in the retired local DuckDB
 	// record (scanstore.Scan) until the ledger entry became THE record:
 	// what the scan was asked to do (Top, AllCandidates, TotalFiles, the
@@ -367,7 +372,8 @@ CREATE TABLE IF NOT EXISTS corral_scans (
   total_files      INTEGER,
   preflight_ran    BOOLEAN,
   preflight_note   VARCHAR,
-  finished_at      TIMESTAMPTZ
+  finished_at      TIMESTAMPTZ,
+  entry_hash       VARCHAR
 );`
 
 const auditsSchema = `
@@ -672,6 +678,7 @@ var (
 		{"preflight_ran", "preflight_ran BOOLEAN"},
 		{"preflight_note", "preflight_note VARCHAR"},
 		{"finished_at", "finished_at TIMESTAMPTZ"},
+		{"entry_hash", "entry_hash VARCHAR"},
 	}
 	corralMutantsMigrationCols = []struct{ name, ddl string }{
 		{"scan_uid", "scan_uid VARCHAR"},
@@ -1198,8 +1205,8 @@ func insertBundle(db *sql.DB, b Bundle, now time.Time, uid string) (Counts, erro
 		    source_pushed, statement_sha256, selection_ms, selection_reused,
 		    rekor_log_index, rekor_uuid, schema_version, started_at, pushed_by,
 		    engine_version, model_set, top, all_candidates, total_files,
-		    preflight_ran, preflight_note, finished_at
-		  ) VALUES (`+placeholders(36)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
+		    preflight_ran, preflight_note, finished_at, entry_hash
+		  ) VALUES (`+placeholders(37)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
 			uid, now, b.Scan.Repo, b.Scan.RunURL, b.Scan.ScanID, b.Scan.Commit,
 			b.Scan.CorralVersion, b.Scan.Substrate, b.Scan.Host, b.Scan.Cores,
 			nullIfZeroInt(b.Scan.TreesRequested), b.Scan.DiffBase,
@@ -1210,7 +1217,7 @@ func insertBundle(db *sql.DB, b Bundle, now time.Time, uid string) (Counts, erro
 			nullIfEmpty(b.Scan.PushedBy),
 			nullIfEmpty(b.Scan.EngineVersion), nullIfEmpty(b.Scan.ModelSet), nullIfZeroInt(b.Scan.Top),
 			b.Scan.AllCandidates, nullIfZeroInt(b.Scan.TotalFiles),
-			b.Scan.PreflightRan, nullIfEmpty(b.Scan.PreflightNote), nullTime(b.Scan.FinishedAt),
+			b.Scan.PreflightRan, nullIfEmpty(b.Scan.PreflightNote), nullTime(b.Scan.FinishedAt), nullIfEmpty(b.Scan.EntryHash),
 		); err != nil {
 			return Counts{}, fmt.Errorf("auditpush: insert scan row: %w", err)
 		}

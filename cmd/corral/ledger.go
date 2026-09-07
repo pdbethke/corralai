@@ -36,6 +36,8 @@ func runLedger(args []string, stdout, stderr io.Writer) int {
 		return runLedgerRetract(args[1:], stdout, stderr)
 	case "checkpoint":
 		return runLedgerCheckpoint(args[1:], stdout, stderr)
+	case "push":
+		return runLedgerPush(args[1:], stdout, stderr)
 	case "verify":
 		fs := flag.NewFlagSet("corral ledger verify", flag.ContinueOnError)
 		fs.SetOutput(stderr)
@@ -62,6 +64,13 @@ const ledgerUsage = `corral ledger — the signed, hash-linked record, as a dire
                                                record — the view, the prior, the verdict cache and scans skip it
   corral ledger checkpoint <dir>               PRUNE: replace every entry with one genesis naming the head it replaced
                                                (hash, count, date); the chain restarts there and the verifier says so
+  corral ledger push <dir> <dsn> [--push-source] [--dry-run]
+                                               append the directory's record to a warehouse you own (a DuckDB path, or
+                                               md:<db>): every scan, review and adjudication entry the target does not
+                                               already hold (by entry hash), retracted scans left out. Source — the
+                                               authored tests, verdict JSON, scripts and their output — travels only
+                                               with --push-source. A run's own --push already does this as it goes;
+                                               this is for a directory that ran without one, or a branch pulled later
   corral ledger verify <dir> [--pub <hex>]     walk the chain: every hash, link and signature, one line per entry
 
 A certify --repo run writes its entry into the repo's .corral/ledger/ by
@@ -206,4 +215,48 @@ func flagsFirst(fs *flag.FlagSet, args []string) []string {
 		}
 	}
 	return append(flags, positional...)
+}
+
+func runLedgerPush(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("corral ledger push", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	withSource := fs.Bool("push-source", false, "also send the source bytes the entries hold — authored tests, verdict JSON, reproduction scripts and their output; off by default, they quote the audited code")
+	dryRun := fs.Bool("dry-run", false, "say what would be pushed and write nothing")
+	if err := fs.Parse(flagsFirst(fs, args)); err != nil {
+		return 2
+	}
+	if fs.NArg() != 2 {
+		fmt.Fprintln(stderr, "corral ledger push: usage: corral ledger push <dir> <dsn> [--push-source] [--dry-run]")
+		return 2
+	}
+	dir, target := strings.TrimRight(fs.Arg(0), "/"), strings.TrimSpace(fs.Arg(1))
+	if auditpush.IsLedgerDir(target) {
+		fmt.Fprintln(stderr, "corral ledger push: the target is a directory — to move entries between directories, `corral ledger append` re-links them one at a time")
+		return 2
+	}
+	plan, err := auditpush.PushLedgerDir(dir, target, *withSource, *dryRun)
+	if err != nil {
+		fmt.Fprintf(stderr, "corral ledger push: %v\n", err)
+		return 1
+	}
+	verb := "pushed"
+	if *dryRun {
+		verb = "would push"
+	}
+	fmt.Fprintf(stdout, "%s %d scan(s) (%d file rows), %d review(s) (%d findings), %d adjudication(s) from %s to %s\n", verb, plan.Scans, plan.Files, plan.Reviews, plan.Findings, plan.Adjudications, dir, target)
+	if plan.Skipped > 0 {
+		fmt.Fprintf(stdout, "  %d entr%s already there, skipped\n", plan.Skipped, map[bool]string{true: "y", false: "ies"}[plan.Skipped == 1])
+	}
+	if plan.Retracted > 0 {
+		fmt.Fprintf(stdout, "  %d retracted scan(s) left out — not the record\n", plan.Retracted)
+	}
+	if plan.NotPushable > 0 {
+		fmt.Fprintf(stdout, "  %d retraction/checkpoint entr%s are chain facts, not rows\n", plan.NotPushable, map[bool]string{true: "y", false: "ies"}[plan.NotPushable == 1])
+	}
+	source := "source withheld (hashes only)"
+	if *withSource {
+		source = "source included (--push-source)"
+	}
+	fmt.Fprintf(stdout, "  %s; a repeat push skips what the warehouse holds by entry hash (rows an older corral pushed carry none and would repeat)\n", source)
+	return 0
 }

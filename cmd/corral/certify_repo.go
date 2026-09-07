@@ -1459,6 +1459,11 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	}
 	if strings.TrimSpace(*pushFlag) != "" {
 		bundle.Link = auditpush.Link{ScanID: scanID, StatementSHA256: statementSHA256, Require: strings.TrimSpace(*attestFlag) != ""}
+		// The entry this scan was just written as, so a later `corral
+		// ledger push` of the same directory skips it.
+		if entries, lerr := auditpush.ReadLedgerDir(ledgerDir); lerr == nil && len(entries) > 0 && !*noLedgerFlag {
+			bundle.Scan.EntryHash = entries[len(entries)-1].Hash
+		}
 		switch {
 		case subjErr != nil:
 			fmt.Fprintf(stderr, "corral certify --repo: pushing to %s: %v\n", *pushFlag, subjErr)
@@ -5083,6 +5088,10 @@ func prepareRowsForHash(b auditpush.Bundle, version int) (auditpush.Bundle, erro
 	// started returning them.
 	b.Scan.ScanUID = ""
 	b.Scan.PushedBy = ""
+	// EntryHash is stamped by whichever push knows it (a run's own --push
+	// after its entry is placed; `ledger push` always) and is a fact about
+	// the sink, not the run — never in the hash.
+	b.Scan.EntryHash = ""
 	b.Files = append([]auditpush.Row(nil), b.Files...)
 	for i := range b.Files {
 		b.Files[i].StatementSHA256 = ""

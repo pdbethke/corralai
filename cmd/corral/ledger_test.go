@@ -4,6 +4,7 @@ package main
 
 import (
 	"bytes"
+	"database/sql"
 	"io"
 	"os"
 	"os/exec"
@@ -15,6 +16,7 @@ import (
 	"github.com/pdbethke/corralai/internal/advpool"
 	"github.com/pdbethke/corralai/internal/auditpush"
 	"github.com/pdbethke/corralai/internal/prior"
+	"github.com/pdbethke/corralai/internal/review"
 	"github.com/pdbethke/corralai/internal/scanstore"
 )
 
@@ -256,5 +258,74 @@ func TestLedgerRetractAndCheckpointAreHonoredByEveryReader(t *testing.T) {
 	}
 	if _, ok := newLedgerCache(dir, io.Discard).Get("acme", "K"); ok {
 		t.Error("a pruned entry's verdict was served — the checkpoint holds no rows")
+	}
+}
+
+// TestLedgerPushMovesTheRecordAndSkipsWhatTheWarehouseHolds: a directory
+// with a scan, a retracted scan, a retraction, a review and a verdict
+// pushes as one scan, one review and one adjudication; the retracted scan
+// is left out and said; the retraction is a chain fact; a second push
+// writes nothing; --dry-run plans and writes nothing; source is withheld
+// unless --push-source; a directory target is refused.
+func TestLedgerPushMovesTheRecordAndSkipsWhatTheWarehouseHolds(t *testing.T) {
+	t.Setenv("CORRALAI_CERTIFY_KEY_FILE", filepath.Join(t.TempDir(), "certify_key"))
+	dir := filepath.Join(t.TempDir(), "ledger")
+	writeCacheTestEntry(t, dir, []scanstore.File{{Path: "a.go", Disposition: "audited", Gradable: true, KillRate: ptrF(0.5), AuthoredTest: "func TestA(t *testing.T) {}", VerdictJSON: "{}"}})
+	writeCacheTestEntry(t, dir, []scanstore.File{{Path: "b.go", Disposition: "audited", Gradable: true, KillRate: ptrF(0.1)}})
+	entries, _ := auditpush.ReadLedgerDir(dir)
+	signer, _ := ledgerSignerFromLocalKey()
+	if _, err := auditpush.WriteRetraction(dir, entries[1].Hash, "wrong commit", signer); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := auditpush.WriteReview(dir, review.Review{Repo: "acme/r", Commit: "abc", Scope: "pkg", ReviewerModel: "m", Findings: []review.Finding{{ID: "R1", Claim: "c", Declared: review.TierCodeRead, Tier: review.TierCodeRead}}}, signer); err != nil {
+		t.Fatal(err)
+	}
+	entries, _ = auditpush.ReadLedgerDir(dir)
+	if _, err := auditpush.WriteAdjudication(dir, entries[3].Hash+"#R1", auditpush.VerdictConfirmed, "pdb", "yes", signer); err != nil {
+		t.Fatal(err)
+	}
+	wh := filepath.Join(t.TempDir(), "wh.duckdb")
+
+	var out, errb bytes.Buffer
+	if code := runLedger([]string{"push", dir, wh, "--dry-run"}, &out, &errb); code != 0 || !strings.Contains(out.String(), "would push 1 scan(s) (1 file rows), 1 review(s) (1 findings), 1 adjudication(s)") {
+		t.Fatalf("dry run: exit %d\n%s%s", code, out.String(), errb.String())
+	}
+	if _, err := os.Stat(wh); err == nil {
+		t.Fatal("--dry-run created the warehouse")
+	}
+	out.Reset()
+	if code := runLedger([]string{"push", dir, wh}, &out, &errb); code != 0 {
+		t.Fatalf("push: exit %d\n%s%s", code, out.String(), errb.String())
+	}
+	for _, want := range []string{"pushed 1 scan(s) (1 file rows), 1 review(s) (1 findings), 1 adjudication(s)", "1 retracted scan(s) left out", "1 retraction/checkpoint entry are chain facts", "source withheld"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("push output lacks %q:\n%s", want, out.String())
+		}
+	}
+	db, err := attachWarehouse(wh, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var scans, audits, reviews, adjs int
+	var authored sql.NullString
+	var entryHash string
+	_ = db.QueryRow(`SELECT count(*) FROM corral_scans`).Scan(&scans)
+	_ = db.QueryRow(`SELECT count(*) FROM corral_audits`).Scan(&audits)
+	_ = db.QueryRow(`SELECT count(*) FROM corral_reviews`).Scan(&reviews)
+	_ = db.QueryRow(`SELECT count(*) FROM corral_adjudications`).Scan(&adjs)
+	_ = db.QueryRow(`SELECT authored_test FROM corral_audits`).Scan(&authored)
+	_ = db.QueryRow(`SELECT entry_hash FROM corral_scans`).Scan(&entryHash)
+	db.Close()
+	if scans != 1 || audits != 1 || reviews != 1 || adjs != 1 || authored.Valid || entryHash != entries[0].Hash {
+		t.Errorf("warehouse: scans=%d audits=%d reviews=%d adjudications=%d authored_test=%v entry_hash=%.12s", scans, audits, reviews, adjs, authored, entryHash)
+	}
+	// A second push writes nothing.
+	out.Reset()
+	if code := runLedger([]string{"push", dir, wh}, &out, &errb); code != 0 || !strings.Contains(out.String(), "pushed 0 scan(s)") || !strings.Contains(out.String(), "3 entries already there, skipped") {
+		t.Errorf("repeat push: exit %d\n%s", code, out.String())
+	}
+	// A directory target is refused.
+	if code := runLedger([]string{"push", dir, filepath.Join(t.TempDir(), "other") + "/"}, &out, &errb); code != 2 {
+		t.Errorf("a directory target must be refused, got %d", code)
 	}
 }

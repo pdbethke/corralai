@@ -60,11 +60,19 @@ func CommitIdentity(dir, commit string) Identity {
 		return Identity{}
 	}
 	id := Identity{Author: strings.TrimSpace(parts[0]), Committer: strings.TrimSpace(parts[1])}
+	// A trailer that repeats the author, or another trailer, is one party
+	// named twice — folded here, or the committer seat would count the
+	// author's change twice per audit (seen on the first entry that carried
+	// the party: "change by P, with P, Claude Code").
+	seen := map[string]bool{strings.ToLower(id.Author): true}
 	var names []string
 	for _, v := range parts[2:] {
-		if n := nameOnly(v); n != "" {
-			names = append(names, n)
+		n := nameOnly(v)
+		if n == "" || seen[strings.ToLower(n)] {
+			continue
 		}
+		seen[strings.ToLower(n)] = true
+		names = append(names, n)
 	}
 	id.CoAuthors = strings.Join(names, "\n")
 	return id

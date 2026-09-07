@@ -9,6 +9,30 @@ still move between minor versions.
 Entries describe what changed for someone *using* the tool. For the full commit
 history of any release, `git log v0.3.4..v0.3.5`.
 
+## [Unreleased] — toward 1.0.0-rc.10
+
+- **One shape rule at both doors of the ledger.** An adjudication with no
+  finding id, an empty verdict and nobody deciding was placed, signed and
+  *verified* when it entered through `corral ledger append` instead of
+  `review adjudicate` — the verbs validated, the placer did not, and the
+  verifier trusted the placer. Found by a Codex reviewer re-attacking the
+  morning's fix batch (review `559719120ef0`, Claude Code verifying).
+  `EntryShapeProblem` is now the one rule for every kind — retraction,
+  checkpoint, review, adjudication — used by the placer (refuses) and by
+  `ledger verify` (names the entry). The reviewer's reproduction is the
+  regression test, inverted.
+- **The container jail honours `PerEntry` binds.** The bwrap backend
+  mounted a per-entry bind as one read-only mount per top-level entry so the
+  parent stayed writable; the container backend mounted the whole tree
+  read-only, and toolchains that write a cache into `node_modules` hit
+  EROFS on containers only. Found by a Gemini reviewer on the jail's first
+  review (`f29544721ecd`, Codex verifying).
+- **One party is named once.** A `Co-authored-by` trailer that repeats the
+  author (a squash merge does this) folded into the author, and repeated
+  trailers fold — seen on the first entry to carry the party ("change by P,
+  with P, Claude Code"). The committer seat counts one observation per
+  party per audit, even for rows written before the fold.
+
 ## [v1.0.0-rc.9] — 2026-09-07
 
 The record names both parties: who wrote the change beside who judged it,

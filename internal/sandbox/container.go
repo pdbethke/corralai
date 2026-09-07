@@ -191,6 +191,18 @@ func (c containerIsolator) Wrap(command string, opts Options, env []string) ([]s
 		"-w", opts.Workspace,
 	)
 	for _, bnd := range opts.ReadOnlyBinds {
+		// PerEntry here as in the bwrap backend: one read-only mount per
+		// top-level entry, so the parent stays the writable workspace
+		// directory a toolchain writes its cache into. This backend mounted
+		// the whole tree read-only and Node's cache writes hit EROFS on
+		// containers only — the flag honoured at one door and not the other
+		// (review f29544721ecd#R1, Gemini reviewing, Codex verifying).
+		if bnd.PerEntry {
+			for _, e := range perEntryBinds(bnd) {
+				argv = append(argv, "-v", e.Host+":"+e.Target+":ro")
+			}
+			continue
+		}
 		argv = append(argv, "-v", bnd.Host+":"+bnd.Target+":ro")
 	}
 	argv = append(argv,

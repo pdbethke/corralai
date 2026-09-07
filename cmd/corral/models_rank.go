@@ -511,10 +511,14 @@ func reviewRankEvidence(db *sql.DB) ([]modelrank.Observation, error) {
 func committerRankEvidence(db *sql.DB) ([]modelrank.Observation, error) {
 	var obs []modelrank.Observation
 	emit := func(author, coAuthors, lang, run string, held bool) {
+		seen := map[string]bool{}
 		for _, who := range append([]string{author}, auditpush.Identity{CoAuthors: coAuthors}.CoAuthorList()...) {
-			if who == "" {
+			// One party, one observation per audit — a row written before
+			// CommitIdentity folded a repeated trailer still names it twice.
+			if who == "" || seen[strings.ToLower(who)] {
 				continue
 			}
+			seen[strings.ToLower(who)] = true
 			obs = append(obs, modelrank.Observation{Model: who, Role: modelrank.SeatCommitter, Lang: lang, Run: run,
 				ChangesAudited: 1, ChangesHeld: boolToInt(held)})
 		}

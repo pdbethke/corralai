@@ -30,7 +30,7 @@ func TestCommitIdentityNamesThePartyWithoutAddresses(t *testing.T) {
 		t.Fatal(err)
 	}
 	run("add", ".")
-	run("commit", "-q", "--no-gpg-sign", "-m", "change\n\nCo-authored-by: Claude Code <noreply@anthropic.com>\nCo-authored-by: <onlyaddr@example.test>\nCo-authored-by: Codex")
+	run("commit", "-q", "--no-gpg-sign", "-m", "change\n\nCo-authored-by: Claude Code <noreply@anthropic.com>\nCo-authored-by: <onlyaddr@example.test>\nCo-authored-by: Codex\nCo-authored-by: Ada Writer <ada@example.test>\nCo-authored-by: claude code <x@y>")
 	out, _ := exec.Command("git", "-C", dir, "rev-parse", "HEAD").Output()
 	sha := strings.TrimSpace(string(out))
 
@@ -38,6 +38,8 @@ func TestCommitIdentityNamesThePartyWithoutAddresses(t *testing.T) {
 	if id.Author != "Ada Writer" || id.Committer != "Forge Bot" {
 		t.Fatalf("author/committer: %+v", id)
 	}
+	// The author repeated as a trailer, and a trailer repeated, fold: one
+	// party is named once.
 	if got := strings.Join(id.CoAuthorList(), "|"); got != "Claude Code|onlyaddr|Codex" {
 		t.Fatalf("co-authors: %q", got)
 	}

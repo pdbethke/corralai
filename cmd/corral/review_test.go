@@ -484,7 +484,7 @@ func TestAnyAgentCanBeDefinedAsASeat(t *testing.T) {
 	mustWrite(t, filepath.Join(root, "go.mod"), "module x\n\ngo 1.22\n")
 	gitRun("init", "-q")
 	gitRun("add", ".")
-	gitRun("commit", "-q", "-m", "base", "--no-gpg-sign")
+	gitRun("commit", "-q", "-m", "base\n\nCo-authored-by: Claude Code <noreply@anthropic.com>", "--no-gpg-sign")
 
 	bin := t.TempDir()
 	log := filepath.Join(t.TempDir(), "calls.log")
@@ -508,6 +508,9 @@ func TestAnyAgentCanBeDefinedAsASeat(t *testing.T) {
 	for _, want := range []string{
 		"reviewer: my-agent:some-model [my-agent 0.1 [my-agent review --root {dir} --out {out} {model:--using} \"two words\"]]",
 		"findings: 1 reproduced, 0 code-read, 0 hypothesis",
+		// The audited party, as the record names it: author and the
+		// co-author trailer, by name, no address.
+		"change by t, with Claude Code",
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("stdout lacks %q:\n%s", want, s)

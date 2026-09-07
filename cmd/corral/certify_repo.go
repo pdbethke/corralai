@@ -1273,6 +1273,9 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	}
 	host, _ := os.Hostname()
 	finishedAt := time.Now()
+	// The audited party, from the checkout: nemo iudex names two parties,
+	// and the record names both.
+	party := auditpush.CommitIdentity(*repoDir, *commit)
 	scan := scanstore.Scan{
 		Owner: *owner, Repo: cfg.Repo, Commit: *commit,
 		Substrate: *substrateFlag, EngineVersion: version, ModelSet: cfg.ModelSet,
@@ -1281,6 +1284,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		KillRate: killRatePtr(rep.KillRate), CacheHits: rep.CacheHits,
 		PreflightRan: preflightResult.Ran, PreflightNote: preflightResult.Note,
 		StartedAt: startedAt, FinishedAt: finishedAt,
+		Author: party.Author, Committer: party.Committer, CoAuthors: party.CoAuthors,
 		// The box and the build, so a wall-clock number in this ledger can be
 		// interpreted at all. TreesRequested is the workspace substrate's
 		// resolved per-file tree count — an INTENTION; the per-file probe

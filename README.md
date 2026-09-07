@@ -833,7 +833,14 @@ the entry. `corral models rank --db .corral/ledger` grades both seats —
 the reviewer by the claims that held of those checked, the verifier by the
 verdicts that agreed with the outcome, a person's adjudication counting
 as the outcome when there is one — under the same evidence floor as every
-other seat. `--push <dsn>` on `review` and `adjudicate` appends the same
+other seat. Both entry kinds also name the **audited party** — the commit's
+author, committer and `Co-authored-by` trailers, by name, never an address
+— so the record says who wrote the change beside who judged it, and
+`models rank --seat committer` grades each party, a person or an agent
+alike, by the changes that held under audit. The first use of that row is
+the party's own: what the audit gave back about their change. Names are in
+the ledger and in a warehouse push (they are already in the git history
+beside it); corral shares nothing on its own. `--push <dsn>` on `review` and `adjudicate` appends the same
 rows — `corral_reviews`, `corral_findings`, `corral_adjudications`, scripts
 withheld unless `--push-source` — to a warehouse or MotherDuck, where the
 seats rank across every repository that pushes. A seat can be a coding

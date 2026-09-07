@@ -57,9 +57,17 @@ const (
 	// outcome when there is one, and execution is the outcome otherwise.
 	SeatReviewer = "reviewer"
 	SeatVerifier = "verifier"
+	// The audited party: whoever made the change — the commit's author, and
+	// each Co-authored-by trailer (an agent, in code an agent helped write)
+	// — graded by the changes that HELD under audit: a scan that passed the
+	// gate it was given, a review whose checked claims all fell. The record
+	// names the party the same way for a person and for an agent, under the
+	// same evidence floor; what a reader does with the row is the reader's.
+	// The first use is the party's own: what the audit gave back.
+	SeatCommitter = "committer"
 )
 
-var seatOrder = []string{SeatGoalDeriver, SeatMutantGenerator, SeatTestWriter, SeatTestCritic, SeatReviewer, SeatVerifier}
+var seatOrder = []string{SeatGoalDeriver, SeatMutantGenerator, SeatTestWriter, SeatTestCritic, SeatReviewer, SeatVerifier, SeatCommitter}
 
 // The two modes, named so a reader of --json can tell which question was
 // answered: "did the models this project DECLARED earn their seats", or "what
@@ -110,6 +118,13 @@ type Observation struct {
 	ReviewClaimsHeld    int
 	VerifierCalls       int
 	VerifierCorrect     int
+
+	// ChangesAudited / ChangesHeld (SeatCommitter): audits of the party's
+	// changes that reached a verdict — a scan with a gate, a review with a
+	// checked claim — and how many the change came through. A scan with no
+	// threshold, or a review with nothing checked, is not evidence either way.
+	ChangesAudited int
+	ChangesHeld    int
 }
 
 // Options are the caller's questions, not tuning knobs. Declared maps a
@@ -191,6 +206,7 @@ type agg struct {
 	refuted           int
 	checked, held     int
 	calls, correct    int
+	audited, came     int
 }
 
 // Rank computes the report. It is pure: same observations in, same report out,
@@ -244,6 +260,8 @@ func Rank(obs []Observation, opt Options) Report {
 		a.held += o.ReviewClaimsHeld
 		a.calls += o.VerifierCalls
 		a.correct += o.VerifierCorrect
+		a.audited += o.ChangesAudited
+		a.came += o.ChangesHeld
 	}
 
 	byGroup := map[string][]Row{}
@@ -370,6 +388,12 @@ func rowFor(a *agg, opt Options) Row {
 		row.N = a.calls
 		row.NUnit = "verdicts"
 		row.Evidence = fmt.Sprintf("%d/%d verdicts agreed over %d reviews", a.correct, a.calls, len(a.runs))
+	case SeatCommitter:
+		row.MetricLabel = "changes that held under audit"
+		row.Metric = ratio(a.came, a.audited)
+		row.N = a.audited
+		row.NUnit = "audits"
+		row.Evidence = fmt.Sprintf("%d/%d changes held over %d commits", a.came, a.audited, len(a.runs))
 	case SeatGoalDeriver:
 		row.MetricLabel = "not scored"
 		row.Evidence = fmt.Sprintf("%d runs", len(a.runs))

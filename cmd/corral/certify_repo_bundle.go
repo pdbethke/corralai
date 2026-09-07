@@ -123,6 +123,7 @@ func buildBundle(
 			Top: scan.Top, AllCandidates: scan.AllCandidates, TotalFiles: scan.TotalFiles,
 			PreflightRan: scan.PreflightRan, PreflightNote: scan.PreflightNote,
 			FinishedAt: nilIfZeroTime(scan.FinishedAt),
+			Identity:   auditpush.Identity{Author: scan.Author, Committer: scan.Committer, CoAuthors: scan.CoAuthors},
 		},
 		Files:        buildAuditRows(files, scanID, meta),
 		Mutants:      buildMutantRows(mutants, scanID, meta),

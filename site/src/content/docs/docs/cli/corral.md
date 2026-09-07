@@ -592,7 +592,11 @@ Takes no flags. Reads the same local findings store `corral certify --local` wri
 usage: corral models rank [--db <dsn>] [--seat <role>] [--lang <name>] [--min-runs N] [--json]
   seats: goal-deriver, mutant-generator, test-writer, test-critic, and — from a ledger directory's
   review entries — reviewer (claims that held, of those checked) and verifier (verdicts that agreed
-  with the outcome; a person's adjudication is the outcome when there is one, execution otherwise)
+  with the outcome; a person's adjudication is the outcome when there is one, execution otherwise),
+  and committer: the audited party — the commit's author and each Co-authored-by trailer (an
+  agent, in code an agent helped write) — by the changes that held under audit (a scan that passed
+  its gate; a review none of whose checked claims held). The record names a person and an agent
+  the same way, under the same evidence floor; what a reader does with the row is the reader's.
 
   Rank the models that have sat in each seat by what corral's OWN recorded
   evidence says about them — a different metric per seat, because the seats do
@@ -609,7 +613,11 @@ usage: corral models rank [--db <dsn>] [--seat <role>] [--lang <name>] [--min-ru
 usage: corral models rank [--db <dsn>] [--seat <role>] [--lang <name>] [--min-runs N] [--json]
   seats: goal-deriver, mutant-generator, test-writer, test-critic, and — from a ledger directory's
   review entries — reviewer (claims that held, of those checked) and verifier (verdicts that agreed
-  with the outcome; a person's adjudication is the outcome when there is one, execution otherwise)
+  with the outcome; a person's adjudication is the outcome when there is one, execution otherwise),
+  and committer: the audited party — the commit's author and each Co-authored-by trailer (an
+  agent, in code an agent helped write) — by the changes that held under audit (a scan that passed
+  its gate; a review none of whose checked claims held). The record names a person and an agent
+  the same way, under the same evidence floor; what a reader does with the row is the reader's.
 
   Rank the models that have sat in each seat by what corral's OWN recorded
   evidence says about them — a different metric per seat, because the seats do
@@ -629,7 +637,7 @@ flags:
   -min-runs int
     	the evidence floor (default 5): a model with fewer observations in a seat is still PRINTED, with its real numbers, but marked insufficient and never preferred (default 5)
   -seat string
-    	rank only this seat: goal-deriver, mutant-generator, test-writer or test-critic
+    	rank only this seat: goal-deriver, mutant-generator, test-writer, test-critic, reviewer, verifier or committer
 ```
 
 ## `corral review` flags

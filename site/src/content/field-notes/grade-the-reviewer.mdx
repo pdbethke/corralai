@@ -2,10 +2,20 @@
 title: "Grade the reviewer"
 description: "Corral grades a model's tests by execution. This week's cold reviews made something obvious that should have been obvious a year ago: a model's reviews can be graded the same way — by whether its claims reproduce, against other reviewers, and against the signed audit of the very code it reviewed. A design note, written the morning after the aha."
 pubDate: 2026-09-04
-draft: true
+draft: false
 ---
 
 {/* SPDX-License-Identifier: Elastic-2.0 */}
+
+*Status, 2026-09-08: this was the design, written 2026-09-04 when nothing in
+it existed. Everything below is built — `corral review`, the verifier seat,
+the reproductions signed, the reviewer and verifier graded, the seats as
+coding agents — and it has run on corral's own code twenty-four times; the
+record is on the `corral/ledger` branch. The note stands as written, as the
+record of what was planned before it was proved.*
+
+
+
 
 *Field note. This one is a design, not a report — nothing below is built
 yet, and the sentences that describe what corral does today are marked as

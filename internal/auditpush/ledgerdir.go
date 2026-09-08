@@ -170,24 +170,48 @@ func (e LedgerEntry) IsScan() bool { return e.Kind == KindScan }
 type ledgerFile = LedgerEntry
 
 // LedgerFileFormat is the document version a ledger entry declares.
+// corral-ledger-4 (2026-09-08): keyid — the name of WHO signed — is inside
+// the hashed bytes, so editing it breaks the hash and the signature that
+// covers it. Through corral-ledger-3 keyid was deleted before hashing and
+// never compared to the verifying key, so a placed, signed entry could have
+// its signer rewritten to any name and still verify clean: the record
+// stating a custody nobody signed for. Found by a cold review, 2026-09-08.
 // corral-ledger-3 (2026-09-07): the hash is over the entry's FULL canonical
 // bytes (CanonicalFullJSON), and a scan entry's scan_uid derives from the
 // scan row and the entry's own Pushed time, so RecomputeScanUID over the
 // entry reproduces it. corral-ledger-2 entries are still read and verified
 // under their own rules — sparse hash; a uid minted from a time the entry
 // does not carry — and VerifyLedgerDir says so.
+//
+// Older entries keep verifying under their own rules; they are not
+// rewritten, because rewriting a record to fix a record is the thing this
+// whole directory exists to make impossible. VerifyLedgerDir notes on every
+// pre-4 entry that its signer name is self-reported.
 const (
-	LedgerFileFormat = "corral-ledger-3"
+	LedgerFileFormat = "corral-ledger-4"
+	ledgerFormat3    = "corral-ledger-3"
 	ledgerFormat2    = "corral-ledger-2"
 )
 
 // knownLedgerFormat is what a reader accepts.
-func knownLedgerFormat(f string) bool { return f == LedgerFileFormat || f == ledgerFormat2 }
+func knownLedgerFormat(f string) bool {
+	return f == LedgerFileFormat || f == ledgerFormat3 || f == ledgerFormat2
+}
+
+// keyIDIsHashed reports whether this format covers keyid in the hashed
+// bytes. Pre-4 entries carry an unauthenticated signer label.
+func keyIDIsHashed(format string) bool { return format != ledgerFormat3 && format != ledgerFormat2 }
 
 // LedgerSigner signs an entry's hash. cmd/corral supplies one from the
 // local certify key when it exists; nil writes an unsigned entry.
 type LedgerSigner interface {
 	Sign(hash []byte) (keyID string, signature []byte, err error)
+	// SigningKeyID names the key BEFORE the entry is hashed. From
+	// corral-ledger-4 the signer's name is inside the hashed bytes, so it
+	// has to be known first; taking it from Sign's return value would mean
+	// hashing bytes that do not yet contain it, which is how the name came
+	// to be editable in the first place.
+	SigningKeyID() string
 }
 
 // Ed25519LedgerSigner is the stock signer.
@@ -199,6 +223,8 @@ type Ed25519LedgerSigner struct {
 func (s Ed25519LedgerSigner) Sign(hash []byte) (string, []byte, error) {
 	return s.KeyID, ed25519.Sign(s.Key, hash), nil
 }
+
+func (s Ed25519LedgerSigner) SigningKeyID() string { return s.KeyID }
 
 // EntryShapeProblem is the ONE rule for what an entry of each kind must
 // carry, used by the writer (placeEntry refuses to place what it names) and
@@ -266,13 +292,16 @@ func EntryHash(e LedgerEntry) (string, error) {
 	}
 	raw := e.Raw
 	if raw == nil {
-		e.Hash, e.KeyID, e.Signature = "", "", ""
+		e.Hash, e.Signature = "", ""
+		if !keyIDIsHashed(e.Format) {
+			e.KeyID = ""
+		}
 		var err error
 		if raw, err = json.Marshal(e); err != nil {
 			return "", err
 		}
 	}
-	js, err := canonicalEntryBytes(raw)
+	js, err := canonicalEntryBytes(raw, keyIDIsHashed(e.Format))
 	if err != nil {
 		return "", err
 	}
@@ -284,7 +313,7 @@ func EntryHash(e LedgerEntry) (string, error) {
 // fields the hash cannot contain removed from the tree itself, so the
 // writer (which has them empty) and the reader (which has them filled)
 // hash the same bytes.
-func canonicalEntryBytes(raw []byte) ([]byte, error) {
+func canonicalEntryBytes(raw []byte, keepKeyID bool) ([]byte, error) {
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.UseNumber()
 	var tree map[string]any
@@ -292,8 +321,13 @@ func canonicalEntryBytes(raw []byte) ([]byte, error) {
 		return nil, fmt.Errorf("auditpush: entry is not a JSON object: %w", err)
 	}
 	delete(tree, "hash")
-	delete(tree, "keyid")
 	delete(tree, "signature")
+	if !keepKeyID {
+		// Pre-corral-ledger-4: keyid sat outside the hash, so the signer
+		// name was editable without breaking anything. Kept for those
+		// entries only, so they still verify as written.
+		delete(tree, "keyid")
+	}
 	full, err := json.Marshal(tree)
 	if err != nil {
 		return nil, err
@@ -334,11 +368,26 @@ func AppendLedgerEntry(dir string, e LedgerEntry, signer LedgerSigner) (string, 
 	}
 	// The link: the newest entry's hash. Read, not remembered — the
 	// directory is the state, and another writer may have appended.
+	//
+	// The head's hash is RECOMPUTED before it is used as the link. Taking
+	// the stored hash on trust means a head whose bytes were edited (and
+	// whose stored hash therefore no longer describes it) is accepted as a
+	// parent, and the new entry's signature then vouches for a tampered
+	// predecessor — corral extending, and signing, a chain a verifier would
+	// already refuse. Found by a cold review, 2026-09-08 (R6).
 	prev := ""
 	if existing, err := ReadLedgerDir(dir); err != nil {
 		return "", err
 	} else if n := len(existing); n > 0 {
-		prev = existing[n-1].Hash
+		head := existing[n-1]
+		got, herr := EntryHash(head)
+		if herr != nil {
+			return "", fmt.Errorf("auditpush: the head of %s does not verify (%s): %w — refusing to append to a chain that is already broken", dir, head.File, herr)
+		}
+		if got != head.Hash {
+			return "", fmt.Errorf("auditpush: the head of %s does not verify: %s carries hash %.12s but its bytes hash to %.12s — it was edited after it was written; refusing to append, which would sign it as this entry's parent", dir, head.File, head.Hash, got)
+		}
+		prev = head.Hash
 	}
 	return placeEntry(dir, e, prev, signer)
 }
@@ -373,6 +422,13 @@ func placeEntry(dir string, e LedgerEntry, prev string, signer LedgerSigner) (st
 		e.Bundle.Scan.ScanUID = e.ScanUID
 	}
 	e.Hash, e.KeyID, e.Signature, e.Raw = "", "", "", nil
+	// The signer names itself BEFORE the hash is taken, because from
+	// corral-ledger-4 the name is part of what is hashed and signed. Set it
+	// after hashing and the name would sit outside the hash again, which is
+	// precisely the hole this format closes.
+	if signer != nil {
+		e.KeyID = signer.SigningKeyID()
+	}
 	h, err := EntryHash(e)
 	if err != nil {
 		return "", err
@@ -384,7 +440,10 @@ func placeEntry(dir string, e LedgerEntry, prev string, signer LedgerSigner) (st
 		if err != nil {
 			return "", fmt.Errorf("auditpush: sign ledger entry: %w", err)
 		}
-		e.KeyID, e.Signature = keyID, hex.EncodeToString(sig)
+		if keyID != e.KeyID {
+			return "", fmt.Errorf("auditpush: the signer named itself %q before hashing and %q when signing — the hashed bytes would not describe the key that signed them", e.KeyID, keyID)
+		}
+		e.Signature = hex.EncodeToString(sig)
 	}
 	// The file name: the placement time, then what the entry is about — a
 	// scan's commit and uid, a retraction's target, a checkpoint's replaced
@@ -543,6 +602,13 @@ func VerifyLedgerDir(dir string, pub ed25519.PublicKey) ([]ChainCheck, error) {
 			c.Note = strings.TrimSpace(c.Note + " · " + ledgerFormat2 + ": hashed in the sparse form (a recorded false or zero is not distinguished from an absent one) and its scan_uid is not derivable from the entry")
 			c.Note = strings.TrimPrefix(c.Note, "· ")
 		}
+		// Pre-corral-ledger-4 the signer NAME is not covered by the hash, so
+		// it is a label the entry asserts about itself rather than something
+		// the signature vouches for. Say so, rather than printing it as
+		// though it were established.
+		if !keyIDIsHashed(e.Format) && c.Signed && c.Problem == "" {
+			c.Note = strings.TrimPrefix(strings.TrimSpace(c.Note+" · signer name is self-reported: "+e.Format+" does not cover keyid in the hash, so it is not vouched for by the signature (the signature itself is checked)"), "· ")
+		}
 		out = append(out, c)
 		prevHash = e.Hash
 		seen[e.Hash] = true
@@ -686,6 +752,22 @@ func WriteCheckpoint(dir string, signer LedgerSigner) (string, int, error) {
 	}
 	if len(entries) == 0 {
 		return "", 0, fmt.Errorf("auditpush: %s has no entries to checkpoint", dir)
+	}
+	// A checkpoint is the one verb that DESTROYS evidence, so it is the one
+	// verb that must look at it first. Pruning without verifying launders a
+	// chain: the tampered entry is deleted and the genesis that replaces it
+	// verifies clean, with nothing left to say the record was ever broken.
+	// Signatures are not checked here (no key is in hand); hashes and links
+	// are, which is what catches edited or reordered bytes. Found by a cold
+	// review, 2026-09-08 (R1, reproduced).
+	if checks, verr := VerifyLedgerDir(dir, nil); verr != nil {
+		return "", 0, verr
+	} else {
+		for _, c := range checks {
+			if c.Problem != "" {
+				return "", 0, fmt.Errorf("auditpush: %s does not verify (%s: %s) — refusing to prune, because a checkpoint over a broken chain deletes the evidence and leaves a genesis that verifies clean", dir, c.File, c.Problem)
+			}
+		}
 	}
 	head := entries[len(entries)-1]
 	names, err := ledgerFileNames(dir)

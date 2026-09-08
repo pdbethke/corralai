@@ -11,7 +11,9 @@ description: The trust model, the human gate, observer tokens, delegation, and s
 Nothing that changes what a future audit run does — a memory promotion, a
 skill proposal, a fleet-published skill, a promoted control, a superuser
 grant — happens without a human approving it. One rule, `isHumanAdmin`,
-guards **thirteen** admin write paths (`approve_proposal`, `reject_proposal`,
+guards **every** admin write path — a count is deliberately not quoted here,
+because a number in prose goes stale the moment a path is added and then the
+page is the thing lying. Among them (`approve_proposal`, `reject_proposal`,
 `add_memory(shared=true)`, `promote_memory`, `promote_reference`, the UI's
 proposal-approve/reject endpoints, `sync_put`/`sync_delete`,
 `promote_endpoint`, and the four principal-management writes): `isAdmin`

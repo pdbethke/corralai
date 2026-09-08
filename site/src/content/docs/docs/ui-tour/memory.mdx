@@ -8,8 +8,10 @@ This page describes the **brain**, corral's optional coordination daemon. Nothin
 :::
 
 The Memory tab lists the brain's own memory corpus — a shared corpus of
-execution-**verified** audit findings (patterns, not code) that every
-`corral certify --local` run can draw on. An entry doesn't get in by a model
+execution-**verified** audit findings (patterns, not code) that a **brain
+mission worker** can search. No audit reads it — as the note above says, an
+audit's prompts are built from the goal, the code and its symbols, and
+`corral certify --local` never contacts a brain at all. An entry doesn't get in by a model
 asserting it; it gets in because a run actually caught it — a mutant a suite
 missed, a dead assertion a critic flagged and a jail confirmed was really
 inert. See [memory tiers and the learning loop](/docs/concepts/memory-and-learning-loop/)

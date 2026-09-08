@@ -43,8 +43,9 @@ commit, a failing check, or a record that was never anchored to a public
 transparency log are all real states a build can be in, and the panel says
 which one this build is in plainly.
 
-Below the chain line: the **four checks** `certverify.VerifyRecord` runs
-(signature, ledger, subject, rekor), each shown green or red with its own
+Below the chain line: the checks `certverify.VerifyRecord` runs
+(signature, ledger, statement, subject, rekor — the statement check runs only
+once the signature is good), each shown green or red with its own
 detail text; the commit's message, author, and date; and the attribution
 list (which models/agents `corral certify` recorded as producing the
 build).

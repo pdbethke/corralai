@@ -29,9 +29,13 @@ proposal at standup — even with an empty queue — and the operator approves o
 rejects it, from the Proposals tab (a live count badge, kept off the Progress
 tab so a busy sweep doesn't crowd the view) or `corral-admin proposals`.
 Approval fans the guidance out to vetted memory and a versioned skill
-artifact; the top vetted lessons are then injected into the task
-instructions of the audit runs that follow, fence-wrapped under `LESSONS
-FROM THE HERD (vetted)` and **capped at 3**.
+artifact. The injection of the top vetted lessons into a later run's task
+instructions — fence-wrapped under `LESSONS FROM THE HERD (vetted)` and
+capped at 3 — is **built but not wired**: `InjectLessons` exists and is
+covered by its tests, and no production path calls it. The hosted pool
+creates its tracking mission and starts the driver without retrieving vetted
+lessons. Nothing an audit does today is changed by an approved proposal, and
+this page will say so until that changes.
 
 The sweep re-feeds the full finding/lesson history every tick rather than
 accumulating counts, so a signature's count always reflects what's true right

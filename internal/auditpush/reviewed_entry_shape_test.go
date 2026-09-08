@@ -41,13 +41,17 @@ func TestMalformedAdjudicationIsRefusedAtBothDoors(t *testing.T) {
 	// The verifier's door: the entry written by hand, hash and signature
 	// correct, as an older binary or a foreign writer could have done.
 	malformed.Format, malformed.Prev, malformed.Pushed = LedgerFileFormat, entries[0].Hash, time.Now().UTC().Truncate(time.Microsecond)
+	// From corral-ledger-4 the signer's name is inside the hashed bytes, so
+	// a hand-written entry must name its key BEFORE hashing — setting it
+	// afterwards is the hole that format closed.
+	malformed.KeyID = "repro"
 	h, err := EntryHash(malformed)
 	if err != nil {
 		t.Fatal(err)
 	}
 	malformed.Hash = h
 	raw, _ := hex.DecodeString(h)
-	malformed.KeyID, malformed.Signature = "repro", hex.EncodeToString(ed25519.Sign(priv, raw))
+	malformed.Signature = hex.EncodeToString(ed25519.Sign(priv, raw))
 	js, _ := json.Marshal(malformed)
 	f, err := os.Create(filepath.Join(dir, ScansSubdir, "20991231T235959Z-adjudication-byhand.json.gz"))
 	if err != nil {

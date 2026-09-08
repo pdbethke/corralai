@@ -127,8 +127,30 @@ jobs:
             echo "::error::${version} has no annotated tag message. Tag with 'git tag -a' and a one-line subject — the release title comes from it, and falling back to the commit subject names releases after whatever happened to be merged last." >&2
             exit 1
           fi
-          gh release create "$version" \
-            --title "$title" \
-            --notes-file "${{ steps.notes.outputs.path }}" \
-            --latest \
-            --verify-tag
+          # A PRE-RELEASE tag must not be published as the latest stable
+          # release. --latest was unconditional, so v1.0.0-rc.11 landed as
+          # "Latest" while every earlier rc sat as "Pre-release" — the
+          # Releases page, which the docs point at, presenting a release
+          # CANDIDATE as the current release. Found twice on 2026-09-08: by
+          # hand, and by a cold review of .github/workflows (R3).
+          #
+          # Semver: anything after a '-' in the version is a pre-release
+          # identifier (v1.0.0-rc.11, v1.0.0-beta.1). A bare v1.0.0 is not.
+          case "$version" in
+            *-*) prerelease=1 ;;
+            *)   prerelease=0 ;;
+          esac
+          if [ "$prerelease" = "1" ]; then
+            echo "$version carries a pre-release identifier — publishing as a pre-release, not as latest."
+            gh release create "$version" \
+              --title "$title" \
+              --notes-file "${{ steps.notes.outputs.path }}" \
+              --prerelease \
+              --verify-tag
+          else
+            gh release create "$version" \
+              --title "$title" \
+              --notes-file "${{ steps.notes.outputs.path }}" \
+              --latest \
+              --verify-tag
+          fi

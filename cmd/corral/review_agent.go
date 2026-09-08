@@ -38,6 +38,18 @@ import (
 var builtinAgents = map[string]string{
 	"claude-code": "claude -p --output-format text --tools Read,Grep,Glob {model:--model}",
 	"codex":       "codex exec --sandbox read-only --skip-git-repo-check -C {dir} -o {out} {model:-m} -",
+	// antigravity (`agy`) takes its prompt as a FLAG VALUE, not on stdin, so
+	// the brief is read in by a shell wrapper; the model pin rides through
+	// "$@" because {model:FLAG} is only substituted as a whole word.
+	//
+	// --dangerously-skip-permissions is load-bearing and weaker than the two
+	// seats above, which are read-only (--tools Read,Grep,Glob; --sandbox
+	// read-only). Headless agy auto-DENIES every tool permission it cannot
+	// prompt for, so without it the seat returns an empty reply and reviews
+	// nothing at all. It runs in a disposable worktree and nothing it does
+	// itself reaches the record — only the scripts it hands back, which
+	// corral runs. Stated here rather than left to be discovered.
+	"antigravity": `sh -c 'agy --output-format text --sandbox --dangerously-skip-permissions --print-timeout 15m "$@" -p="$(cat)"' sh {model:--model}`,
 }
 
 // agentEnvPrefix is where the operator's own agent definitions live.
@@ -102,14 +114,32 @@ func agentVersion(name string) string {
 	if err != nil || len(argv) == 0 {
 		return ""
 	}
+	// argv[0] is the agent's binary — UNLESS the definition wraps it in a
+	// shell, which a seat must do when its CLI takes the brief as a flag
+	// value rather than on stdin (antigravity). Probing `sh --version` there
+	// would put the SHELL's version on the record as the seat's provenance:
+	// a signed entry naming the wrong thing as the reviewer. Report no
+	// version rather than a wrong one, and let the definition speak.
 	version := ""
-	if out, err := exec.Command(argv[0], "--version").Output(); err == nil { // #nosec G204 -- the operator's own agent binary, as they defined it
-		version = strings.TrimSpace(strings.SplitN(string(out), "\n", 2)[0])
+	if !isShell(argv[0]) {
+		if out, err := exec.Command(argv[0], "--version").Output(); err == nil { // #nosec G204 -- the operator's own agent binary, as they defined it
+			version = strings.TrimSpace(strings.SplitN(string(out), "\n", 2)[0])
+		}
 	}
-	if builtin {
+	if builtin && version != "" {
 		return version
 	}
 	return strings.TrimSpace(version + " [" + def + "]")
+}
+
+// isShell reports whether a definition's first word is a shell rather than
+// the agent itself, so its --version is not mistaken for the seat's.
+func isShell(prog string) bool {
+	switch filepath.Base(prog) {
+	case "sh", "bash", "zsh", "dash", "ksh", "fish":
+		return true
+	}
+	return false
 }
 
 // expandAgentArgv substitutes the placeholders. A bare {model} with no

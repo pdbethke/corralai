@@ -6,7 +6,7 @@ branding:
 
 inputs:
   test-command:
-    description: "The command that runs your tests, as a single-line invocation (e.g. 'go test ./...', 'pytest -k \"not slow\"'). Quoting is honoured; pipes, &&/||, redirection and globs are not. It must not contain a flag spelled the same as one of corral's own (--min-kill-rate, --preflight, --record, --substrate, --diff-base, --top): corral refuses with exit 2 rather than silently swallowing it, because a swallowed --min-kill-rate is a merge gate that never runs. Cypress's --record is the live collision; wrap such a command in a script."
+    description: "The command that runs your tests, as a single-line invocation (e.g. 'go test ./...', 'pytest -k \"not slow\"'). Quoting is honoured; pipes, &&/||, redirection and globs are not. It must not contain a flag spelled the same as one of corral's own (--min-kill-rate, --preflight, --substrate, --diff-base, --top, --timeout, --json among them): corral refuses with exit 2 rather than silently swallowing it, because a swallowed --min-kill-rate is a merge gate that never runs. pytest --timeout=30 (pytest-timeout) and any runner taking --json are the live collisions; Cypress's --record is NOT one, since corral --repo has no such flag. Wrap such a command in a script."
     required: true
   diff-base:
     description: "Audit only files changed against this ref. Defaults to the PR base; set empty to audit the whole repo (expensive)."

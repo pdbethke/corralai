@@ -159,6 +159,37 @@ const (
 	ReasonNoExecutableCode = "no executable code"
 )
 
+// UnauditableChangedSource reports whether an exclusion means a CHANGED
+// source file could not be audited — as opposed to one that is simply not a
+// subject (a test, a doc, a gitignored file).
+//
+// This is a PROPERTY, deliberately not a list at the call site. The merge
+// gate collected only ReasonNoPairedTest, so a changed source excluded as
+// ambiguous-test — a pairing corral refuses BECAUSE grading it would produce
+// a confident, signed, wrong verdict — was never counted, and the gate went
+// green on exactly the change it was installed to inspect. Found by a cold
+// review, 2026-09-08 (round five, R4).
+//
+// A new reason must be classified HERE, once, rather than remembered at
+// every gate that asks the question.
+func UnauditableChangedSource(reason string) bool {
+	switch reason {
+	case ReasonNoPairedTest, ReasonAmbiguousTest, ReasonNotRegularFile:
+		// The source changed and corral could not grade it: no test names
+		// it, its test is claimed by another source, or it is not a file it
+		// can read. Each is "we could not look", not "nothing to look at".
+		return true
+	case ReasonUncovered, ReasonImportOnly:
+		// Also "we could not measure it" — but these are REPORTED as
+		// uncovered by the scan itself, which the report already surfaces
+		// and the operator opted into by running with coverage. Left out so
+		// the gate does not double-report what the coverage line says.
+		return false
+	default:
+		return false
+	}
+}
+
 // skipDirs are never walked: dependency, build-output and VCS trees are not
 // the subject of an audit of THIS repo's tests, and letting them into the walk
 // puts vendored third-party code into the report's denominator.

@@ -81,6 +81,13 @@ func Load(source string) (*Prior, error) {
 		// hunks in one document each. Retracted entries are skipped
 		// (auditpush.ScanEntries): a retracted run did not happen, as far
 		// as the next exam is concerned.
+		// A tampered chain must not steer a run that has not happened yet:
+		// the prior is read straight into the generator's prompt. This is
+		// the fifth door, added when the shared guard's own doc was found
+		// claiming a coverage it did not have. (Round five, R3.)
+		if verr := auditpush.RequireIntactChain(source); verr != nil {
+			return nil, verr
+		}
 		if all, lerr := auditpush.ReadLedgerDir(source); lerr != nil {
 			return nil, lerr
 		} else if entries := auditpush.ScanEntries(all); len(entries) > 0 {

@@ -358,14 +358,23 @@ func TestUnsignedEntryInASignedChainIsAProblem(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	checks, err := VerifyLedgerDir(dir, pub)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if checks[0].Signed {
-		t.Skip("the signature was not actually removed; the fixture needs updating")
-	}
-	if checks[0].Problem == "" {
-		t.Fatal("an entry whose signature was DELETED verified clean in a chain where every other entry is signed — removing a signature must not be a way to pass")
+	// BOTH ways: with a key, and WITHOUT one. The round-four fix gated this
+	// on pub != nil, so a stripped signature still passed for anyone
+	// verifying without a key — which is most readers of a public branch.
+	// (Round five, R1.)
+	for _, tc := range []struct {
+		name string
+		key  ed25519.PublicKey
+	}{{"with a key", pub}, {"without a key", nil}} {
+		checks, err := VerifyLedgerDir(dir, tc.key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if checks[0].Signed {
+			t.Skip("the signature was not actually removed; the fixture needs updating")
+		}
+		if checks[0].Problem == "" {
+			t.Errorf("%s: an entry whose signature was DELETED verified clean in a chain where every other entry is signed — removing a signature must not be a way to pass", tc.name)
+		}
 	}
 }

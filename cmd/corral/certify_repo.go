@@ -449,7 +449,12 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		// changed is the thing we cannot read". The merge gate reports those
 		// two differently — see printRepoReport.
 		for _, e := range excl {
-			if e.Reason == reposcan.ReasonNoPairedTest && changedSet[e.Path] {
+			// The PROPERTY, not one reason: ambiguous-test is equally "the
+			// thing that changed is the thing we cannot read", and matching
+			// only no-paired-test let the gate go green on it. (Round five,
+			// R4.) reposcan.UnauditableChangedSource classifies once, so a
+			// new reason cannot be forgotten here.
+			if reposcan.UnauditableChangedSource(e.Reason) && changedSet[e.Path] {
 				unpairableInDiff = append(unpairableInDiff, e.Path)
 			}
 		}
@@ -3135,6 +3140,17 @@ func repoScanExitCode(r reposcan.RepoReport, nothingInScope bool, unpairableInDi
 			// critic, and that ProvenMissed is a real measurement the
 			// threshold comparison above already judges. Only a timeout with
 			// no pool score behind it is the unmeasured kind.
+			// The compile-gate zero denominator, which has no survivors to
+			// hang the check below on: every mutant for this file was
+			// rejected, so NOTHING was graded, so ProvenMissed 0 is not a
+			// measurement — it is the absence of one, and it passed
+			// --max-proven-missed 0 as though the question had been answered.
+			// noGradableMutant already existed and said its comment was "ONE
+			// predicate for the two places that must agree"; the gate was a
+			// third place that did not use it. (Round five, R1, reproduced.)
+			if noGradableMutant(f) {
+				return 1
+			}
 			if f.Survivors > 0 && (f.TestWriterFailed || f.PoolTestUnsound || (f.TimedOut && !f.PoolScored)) {
 				return 1
 			}
@@ -3409,7 +3425,11 @@ func printWeakFile(w io.Writer, f reposcan.WeakFile) {
 		detail = fmt.Sprintf("(%d survivor(s), %d proven missed)", f.Survivors, f.ProvenMissed)
 	}
 	rate := fmt.Sprintf("%.2f", f.KillRate)
-	if f.Uncovered {
+	// A literal 0.00 for a file where nothing was gradable is the same
+	// fabricated zero this line already refuses to print for an uncovered
+	// file: a rate of "everything survived" for a run that graded nothing.
+	// (Round five, R2, reproduced.)
+	if f.Uncovered || noGradableMutant(f) {
 		rate = "withheld"
 	}
 	fmt.Fprintf(w, "    %s  %s %s%s", rate, f.Path, detail, marker)

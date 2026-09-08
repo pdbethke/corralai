@@ -116,6 +116,19 @@ jobs:
           # The API knows: the ref reports type "tag" for an annotated tag, and
           # the tag object carries the message. No dependence on how the
           # workspace was fetched.
+          # The tag's commit must have GREEN CI. release.yml triggers on any
+          # v* tag push with no dependency on the validate workflow, so a tag
+          # placed on a commit whose checks are red — or never ran — published
+          # a release regardless. Found by a cold review, 2026-09-08 (R9).
+          tag_commit="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${version}" -q .sha)"
+          validate="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${tag_commit}/check-runs" \
+            -q '[.check_runs[] | select(.name=="validate")] | sort_by(.completed_at) | last | .conclusion' 2>/dev/null || echo "")"
+          if [ "$validate" != "success" ]; then
+            echo "::error::${version} points at ${tag_commit}, whose validate check is '${validate:-missing}'. A release is a claim that this commit passed; publishing one whose CI is red or never ran makes the Releases page say something the record does not support. Fix the commit, re-tag, and push the tag again." >&2
+            exit 1
+          fi
+          echo "validate is green on ${tag_commit}"
+
           ref_type="$(gh api "repos/${GITHUB_REPOSITORY}/git/refs/tags/${version}" -q .object.type)"
           if [ "$ref_type" != "tag" ]; then
             echo "::error::${version} is a lightweight tag. Release titles come from the tag's own message — create it with 'git tag -a ${version} -m \"<one line>\"' so the release is named after the release rather than after whatever was merged last." >&2

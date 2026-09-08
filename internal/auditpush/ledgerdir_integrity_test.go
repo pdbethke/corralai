@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 	"testing"
 )
 
@@ -167,5 +168,69 @@ func TestKeyIDIsCoveredByTheHash(t *testing.T) {
 	}
 	if after[0].Problem == "" {
 		t.Fatal("the signer name was rewritten and the verifier reported no problem")
+	}
+}
+
+// CanonicalizeForWarehouse takes *Bundle and mutates in place. A Bundle
+// copied by value still SHARES its slice backing arrays, so canonicalizing
+// a copy silently truncated the caller's event timestamps and nil'd the
+// caller's kill rates — the exact aliasing its partner BlankUnpushedSource
+// copies to avoid. (R3, reproduced.)
+func TestCanonicalizeDoesNotMutateTheCallersBundle(t *testing.T) {
+	ts := time.Date(2026, 9, 8, 1, 2, 3, 123456789, time.UTC)
+	rate := 0.5
+	orig := Bundle{
+		Events: []EventRow{{TS: ts}},
+		Files:  []Row{{Uncovered: true, KillRate: &rate}},
+	}
+	cp := orig // by value — the slices are still shared
+	CanonicalizeForWarehouse(&cp)
+
+	if !orig.Events[0].TS.Equal(ts) {
+		t.Errorf("the caller's event timestamp was truncated through the copy: %v, want %v", orig.Events[0].TS, ts)
+	}
+	if orig.Files[0].KillRate == nil {
+		t.Error("the caller's kill rate was nil'd through the copy")
+	}
+	// and the copy must still have been canonicalized
+	if cp.Events[0].TS.Nanosecond()%1000 != 0 {
+		t.Error("the copy was not canonicalized")
+	}
+}
+
+// Retracting a retraction should put the original entry back. Retracted()
+// was built over every retraction including ones already retracted, so the
+// undo was accepted and did nothing. (R7.)
+func TestRetractingARetractionRestoresTheEntry(t *testing.T) {
+	dir := t.TempDir()
+	_, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signer := Ed25519LedgerSigner{KeyID: "corral-certify", Key: priv}
+	SetLedgerSigner(signer)
+	t.Cleanup(func() { SetLedgerSigner(nil) })
+
+	if _, err := PushBundle(dir, Bundle{Scan: ScanRow{Repo: "r", Commit: "aaa1", Audited: 1}}); err != nil {
+		t.Fatal(err)
+	}
+	entries, _ := ReadLedgerDir(dir)
+	scanHash := entries[0].Hash
+
+	if _, err := WriteRetraction(dir, scanHash, "mistake", signer); err != nil {
+		t.Fatal(err)
+	}
+	entries, _ = ReadLedgerDir(dir)
+	if got := len(ScanEntries(entries)); got != 0 {
+		t.Fatalf("after retraction the scan is still in the record (%d)", got)
+	}
+	retractionHash := entries[len(entries)-1].Hash
+
+	if _, err := WriteRetraction(dir, retractionHash, "the retraction was the mistake", signer); err != nil {
+		t.Fatalf("retracting a retraction was refused: %v", err)
+	}
+	entries, _ = ReadLedgerDir(dir)
+	if got := len(ScanEntries(entries)); got != 1 {
+		t.Fatalf("retracting the retraction left the scan out of the record: %d scan entries, want 1 — a mistaken retraction cannot be undone", got)
 	}
 }

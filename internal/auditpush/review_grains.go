@@ -79,6 +79,7 @@ CREATE TABLE IF NOT EXISTS corral_findings (
   refutation_argument       VARCHAR,
   refutation_script         VARCHAR,
   refutation_script_sha256  VARCHAR,
+  refutation_output         VARCHAR,
   refutation_output_sha256  VARCHAR,
   refutation_exit_code      INTEGER,
   refutation_demoted        VARCHAR,
@@ -114,6 +115,13 @@ var (
 		// could not run is no outcome. A column, not a prefix of `demoted`.
 		{"unrun", "unrun VARCHAR"},
 		{"refutation_unrun", "refutation_unrun VARCHAR"},
+		// The verifier's stdout. Only its sha256 was stored, so a warehouse
+		// reader could see the refutation script and its exit code but never
+		// what it PRINTED — the evidence for a demotion was unrecoverable,
+		// while the reviewer's own stdout was stored in full. The custody
+		// rule is the same for both (src() withholds it unless the run
+		// pushed source). Found by a cold review, 2026-09-08 (R5).
+		{"refutation_output", "refutation_output VARCHAR"},
 	}
 	corralAdjudicationsMigrationCols = []struct{ name, ddl string }{}
 )
@@ -161,13 +169,13 @@ func insertReviewEntry(db sqlExecer, e LedgerEntry, withSource bool) (ReviewCoun
 		    review_uid, ts, repo, commit_sha, finding_id, claim, declared_tier, tier, file, line, severity,
 		    script, script_sha256, output, output_sha256, exit_code, demoted,
 		    refutation_model, refutation_verdict, refutation_declared_tier, refutation_tier, refutation_argument,
-		    refutation_script, refutation_script_sha256, refutation_output_sha256, refutation_exit_code, refutation_demoted,
+		    refutation_script, refutation_script_sha256, refutation_output, refutation_output_sha256, refutation_exit_code, refutation_demoted,
 		    schema_version, unrun, refutation_unrun
-		  ) VALUES (`+placeholders(30)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count
+		  ) VALUES (`+placeholders(31)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count
 			e.Hash, e.Pushed, r.Repo, r.Commit, f.ID, f.Claim, f.Declared, f.Tier, nullIfEmpty(f.File), nullIfZeroInt(f.Line), nullIfEmpty(f.Severity),
 			src(f.Script), nullIfEmpty(sha256HexOf(f.Script)), src(f.Stdout), nullIfEmpty(sha256HexOf(f.Stdout)), f.ExitCode, nullIfEmpty(f.Demoted),
 			nullIfEmpty(x.Model), nullIfEmpty(x.Verdict), nullIfEmpty(x.Declared), nullIfEmpty(x.Tier), nullIfEmpty(x.Argument),
-			src(x.Script), nullIfEmpty(sha256HexOf(x.Script)), nullIfEmpty(sha256HexOf(x.Stdout)), x.ExitCode, nullIfEmpty(x.Demoted),
+			src(x.Script), nullIfEmpty(sha256HexOf(x.Script)), src(x.Stdout), nullIfEmpty(sha256HexOf(x.Stdout)), x.ExitCode, nullIfEmpty(x.Demoted),
 			SchemaVersion, nullIfEmpty(f.Unrun), nullIfEmpty(x.Unrun),
 		); err != nil {
 			return ReviewCounts{}, fmt.Errorf("auditpush: insert finding %s: %w", f.ID, err)

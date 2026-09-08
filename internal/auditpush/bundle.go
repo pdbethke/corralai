@@ -942,6 +942,14 @@ func stampLink(b Bundle) Bundle {
 // transform the writer introduces breaks that test by name rather than
 // breaking verification silently for every operator.
 func CanonicalizeForWarehouse(b *Bundle) {
+	// A Bundle copied by value still SHARES its slice backing arrays, so
+	// mutating rows in place writes through to whatever the caller kept —
+	// the statement hasher canonicalized a copy and silently truncated the
+	// caller's event timestamps and nil'd its kill rates. Clone the slices
+	// this function edits, the same way BlankUnpushedSource copies rather
+	// than aliasing. Found by a cold review, 2026-09-08 (R3, reproduced).
+	b.Events = append([]EventRow(nil), b.Events...)
+	b.Files = append([]Row(nil), b.Files...)
 	for i := range b.Events {
 		b.Events[i].TS = b.Events[i].TS.UTC().Truncate(time.Microsecond)
 	}

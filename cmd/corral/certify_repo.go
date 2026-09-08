@@ -5181,7 +5181,17 @@ func warehouseRowsSHA256At(b auditpush.Bundle, version int) (string, error) {
 	// change the bytes. Version 1 hashed the full JSON of this binary's
 	// structs, and every column addition since schema 2 broke `verify --db`
 	// on every statement pushed before it. See warehouseRowsSHA256Legacy.
-	js, err := auditpush.CanonicalSparseJSON(prepared)
+	// HASH VERSION 4: the sparse form with two losses closed — numbers kept
+	// as literals (an integer past 2^53 no longer collapses to its nearest
+	// float) and array elements no longer dropped (a slice carrying an
+	// all-zero row no longer hashes the same as one without it). Versions 2
+	// and 3 keep the old form, because every statement signed under them
+	// must keep verifying. Found by a cold review, 2026-09-08 (R8, R9).
+	canonical := auditpush.CanonicalSparseJSON
+	if version >= 4 {
+		canonical = auditpush.CanonicalSparseJSONV2
+	}
+	js, err := canonical(prepared)
 	if err != nil {
 		return "", err
 	}
@@ -5193,8 +5203,11 @@ func warehouseRowsSHA256At(b auditpush.Bundle, version int) (string, error) {
 // statement records, so a verifier hashes the rows the way the signer did:
 // 1 = full struct JSON; 2 = canonical sparse JSON, source blanked unless
 // pushed; 3 = canonical sparse JSON, source and source_pushed never in the
-// hash (see prepareRowsForHash).
-const WarehouseRowsHashVersion = 3
+// hash (see prepareRowsForHash); 4 = the sparse form made injective —
+// numbers kept as literals and array elements no longer pruned, so two row
+// sets that differ only past float64 precision or only by an all-zero row
+// no longer share a hash (auditpush.CanonicalSparseJSONV2).
+const WarehouseRowsHashVersion = 4
 
 // warehouseRowsSHA256Legacy is version 1: the full JSON of the bundle as
 // THIS binary's structs define it — kept so a v1 statement can still be

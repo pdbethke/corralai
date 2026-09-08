@@ -779,13 +779,18 @@ func WriteCheckpoint(dir string, signer LedgerSigner) (string, int, error) {
 	if err != nil {
 		return "", 0, err
 	}
+	removed := 0
 	for _, n := range names {
 		if n == name {
 			continue
 		}
 		if err := os.Remove(filepath.Join(dir, ScansSubdir, n)); err != nil {
-			return name, 0, fmt.Errorf("auditpush: pruning %s: %w (the checkpoint is placed; the chain will verify as broken until the pruned entries are gone)", n, err)
+			// Report what was ACTUALLY removed. Returning 0 here told the
+			// operator "0 earlier entries pruned" for a directory already
+			// partly emptied. (R10.)
+			return name, removed, fmt.Errorf("auditpush: pruning %s after removing %d: %w (the checkpoint is placed; the chain will verify as broken until the pruned entries are gone)", n, removed, err)
 		}
+		removed++
 	}
 	return name, len(entries), nil
 }
@@ -793,11 +798,41 @@ func WriteCheckpoint(dir string, signer LedgerSigner) (string, int, error) {
 // Retracted returns the hashes of every entry a KindRetract entry in
 // entries names.
 func Retracted(entries []LedgerEntry) map[string]LedgerEntry {
-	out := map[string]LedgerEntry{}
+	// A retraction that has ITSELF been retracted is not in force, so the
+	// entry it named comes back. Without this, retracting a retraction was
+	// accepted and did nothing: a mistaken retraction was permanent, which
+	// is a one-way door the record does not otherwise have. Resolved to a
+	// fixpoint rather than in one pass, because the undo can itself be
+	// undone. Found by a cold review, 2026-09-08 (R7).
+	byHash := map[string]LedgerEntry{}
+	var retractions []LedgerEntry
 	for _, e := range entries {
+		byHash[e.Hash] = e
 		if e.Kind == KindRetract {
-			out[e.Retracts] = e
+			retractions = append(retractions, e)
 		}
+	}
+	void := map[string]bool{} // retraction hashes that are themselves retracted
+	for changed := true; changed; {
+		changed = false
+		for _, r := range retractions {
+			if void[r.Hash] {
+				continue
+			}
+			// r is in force; anything it retracts is out — including
+			// another retraction.
+			if t, ok := byHash[r.Retracts]; ok && t.Kind == KindRetract && !void[t.Hash] {
+				void[t.Hash] = true
+				changed = true
+			}
+		}
+	}
+	out := map[string]LedgerEntry{}
+	for _, e := range retractions {
+		if void[e.Hash] {
+			continue
+		}
+		out[e.Retracts] = e
 	}
 	return out
 }

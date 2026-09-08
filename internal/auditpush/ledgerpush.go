@@ -85,7 +85,14 @@ func PushLedgerDir(dir, target string, withSource, dryRun bool) (PushPlan, error
 				continue
 			}
 			b := e.Bundle
-			b.SourcePushed, b.Scan.SourcePushed = withSource, withSource
+			// --push-source can only carry source the ENTRY actually holds.
+			// This stamped withSource unconditionally, so an entry written
+			// with its source already blanked was pushed carrying the
+			// custody claim "our code left the box" for bytes that never
+			// existed in it — the row asserting a custody nobody can
+			// produce. Found by a cold review, 2026-09-08 (R4).
+			carriesSource := e.Bundle.SourcePushed
+			b.SourcePushed, b.Scan.SourcePushed = withSource && carriesSource, withSource && carriesSource
 			b.Scan.EntryHash = e.Hash
 			b = stampLink(b)
 			BlankUnpushedSource(&b)

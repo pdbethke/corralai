@@ -37,6 +37,10 @@ on:
 
 permissions:
   contents: read
+  # `attest: "true"` publishes the verdict through GitHub's attestation API,
+  # signed keylessly by this workflow's own OIDC identity.
+  id-token: write
+  attestations: write
 
 concurrency:
   # A push mid-audit makes the running audit's verdict describe code that no
@@ -112,8 +116,13 @@ jobs:
       - if: steps.key.outputs.have == 'true'
         uses: ./
         with:
-          # Audit with the corral of the commit we CHECKED OUT, not whatever
-          # `@main` resolves to. Left unpinned, `uses: ./` installs corral@main
+          # Audit with the corral of the commit UNDER REVIEW, not whatever
+          # `@main` resolves to. Note this is head.sha, which on a
+          # pull_request is NOT what actions/checkout leaves in the workspace
+          # — that is the merge ref. The binary is built from the PR's head
+          # and the tree it audits is the merge result; they are deliberately
+          # allowed to differ, and saying "the commit we checked out" was
+          # simply wrong. Found by a cold review, 2026-09-08 (R6). Left unpinned, `uses: ./` installs corral@main
           # from the Go module proxy, which caches a branch head for minutes —
           # so a run started just after a merge silently audits with the
           # PREVIOUS corral. That is not only a flake: on a pull request the
@@ -123,6 +132,19 @@ jobs:
           # workflow_dispatch, where it is the branch head.
           corral-version: ${{ github.event.pull_request.head.sha || github.sha }}
           test-command: "go test ./..."
+          # A self-audit budgeted at hours of paid model calls used to leave
+          # NOTHING behind: no statement, no attestation, no ledger entry —
+          # the verdict lived in the run log until retention closed and then
+          # the spend had bought nothing anyone could check. It publishes a
+          # signed statement through GitHub's attestation API now, which
+          # outlives the runner and verifies with `gh attestation verify`.
+          #
+          # NOT the ledger branch: this workflow runs on pull_request and
+          # workflow_dispatch only, so there is no push-to-main run that could
+          # honestly commit an entry back, and writing one into the workspace
+          # would just be thrown away with the runner. That remains open.
+          # Found by a cold review, 2026-09-08 (R7).
+          attest: "true"
           # The ceiling on what one PR can cost. corral's own default is 25
           # candidates, which at ~2h each is a job nobody meant to start; the
           # diff already narrows the candidate set, and this bounds what is

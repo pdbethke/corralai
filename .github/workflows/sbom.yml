@@ -37,6 +37,16 @@ jobs:
           retention-days: 90
 
   # On a published release, also attach the SBOM to the release assets.
+  #
+  # NOTE, and it is load-bearing: releases cut by release.yml are created
+  # with GITHUB_TOKEN, and GitHub does not start workflow runs from events a
+  # GITHUB_TOKEN raised. So this job never fires for our own releases — it
+  # fires only for a release published by hand through the UI or by a PAT.
+  # It is kept because that path is real, and because deleting it would hide
+  # the gap rather than close it; the SBOM is on every run as an artifact
+  # regardless. Closing it properly means release.yml attaching the SBOM
+  # itself, or a PAT, and neither is a launch-day change. Found by a cold
+  # review, 2026-09-08 (R2).
   attach-to-release:
     if: github.event_name == 'release'
     needs: sbom

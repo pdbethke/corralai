@@ -110,11 +110,12 @@ def main() -> int:
     kept = export(con, ledger_sql, f"{args.out}/audit_ledger.parquet")
     total = con.execute("SELECT count(*) FROM build.build_records").fetchone()[0]
     # kept is -1 when export() REFUSED (an empty query against a populated
-        # extract). Feeding the sentinel into `total - kept` printed
-        # total+1 withheld — a number describing nothing that happened.
-        # Found by a cold review, 2026-09-08 (R2).
+    # extract). Feeding the sentinel into `total - kept` prints total+1
+    # withheld — a number describing nothing that happened. The first fix
+    # guarded the stored count and left the PRINTED one beside it, which the
+    # next review reproduced: one door, again. (R2, then R1 of round four.)
     withheld["audit_ledger"] = (total - kept) if kept >= 0 else 0
-    print(f"audit_ledger:  {kept} rows exported, {total - kept} withheld (repo not on the public allowlist)")
+    print(f"audit_ledger:  {kept} rows exported, {withheld['audit_ledger']} withheld (repo not on the public allowlist)")
 
     # --- the per-seat scorecard: which model caught what, in which role -----
     catches_sql = f"""
@@ -148,7 +149,7 @@ def main() -> int:
         # total+1 withheld — a number describing nothing that happened.
         # Found by a cold review, 2026-09-08 (R2).
     withheld["bug_catches"] = (total - kept) if kept >= 0 else 0
-    print(f"bug_catches:   {kept} rows exported, {total - kept} withheld (repo not on the public allowlist)")
+    print(f"bug_catches:   {kept} rows exported, {withheld['bug_catches']} withheld (repo not on the public allowlist)")
 
     # --- the repo-scan series, already published; regenerated for parity ----
     #

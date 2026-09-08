@@ -570,6 +570,13 @@ func runVerifyLedger(dir, pubFlag, expectHead string, stdout, stderr io.Writer) 
 	// Found by a cold review, 2026-09-08 (R3).
 	fmt.Fprintf(stdout, "%d entries, chain intact\n", len(checks))
 	if head := strings.TrimSpace(expectHead); head != "" {
+		// A PREFIX is accepted — an operator holds a short hash more often
+		// than a full one — but not a short one: `--expect-head a` matches
+		// most chains and is not an anchor. (Round four, R3.)
+		if len(head) < 12 {
+			fmt.Fprintf(stderr, "corral: --expect-head %s is too short to be an anchor — give at least 12 hex characters\n", head)
+			return 2
+		}
 		got := checks[len(checks)-1]
 		if !strings.HasPrefix(got.Hash, head) {
 			fmt.Fprintf(stdout, "✗ head is %.12s, expected %s — entries were removed from the END of this chain, which the chain itself cannot detect\n", got.Hash, head)

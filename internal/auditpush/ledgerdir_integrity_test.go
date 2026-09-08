@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"crypto/ed25519"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -311,5 +312,60 @@ func TestAdjudicationMustNameAReview(t *testing.T) {
 	last := checks[len(checks)-1]
 	if last.Problem == "" {
 		t.Fatal("an adjudication naming a SCAN verified clean — the record shows a finding ruled on that never existed")
+	}
+}
+
+// Stripping a signature must not be a way to pass. VerifyLedgerDir assigned
+// a Problem only for an INVALID signature, never for a MISSING one, so with
+// a key in hand and every other entry signed, an entry whose signature was
+// deleted verified clean. (Round four, R3, reproduced.)
+func TestUnsignedEntryInASignedChainIsAProblem(t *testing.T) {
+	dir := t.TempDir()
+	pub, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	SetLedgerSigner(Ed25519LedgerSigner{KeyID: "corral-certify", Key: priv})
+	t.Cleanup(func() { SetLedgerSigner(nil) })
+
+	for _, c := range []string{"aaa1", "bbb2"} {
+		if _, err := PushBundle(dir, Bundle{Scan: ScanRow{Repo: "r", Commit: c, Audited: 1}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	entries, _ := ReadLedgerDir(dir)
+	// strip the signature from the genesis, leaving hash and links intact
+	path := filepath.Join(dir, ScansSubdir, entries[0].File)
+	raw, err := readMaybeGzip(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var tree map[string]any
+	if err := json.Unmarshal(raw, &tree); err != nil {
+		t.Fatal(err)
+	}
+	delete(tree, "signature")
+	out, _ := json.MarshalIndent(tree, "", " ")
+	var buf bytes.Buffer
+	zw := gzip.NewWriter(&buf)
+	if _, err := zw.Write(out); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, buf.Bytes(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	checks, err := VerifyLedgerDir(dir, pub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if checks[0].Signed {
+		t.Skip("the signature was not actually removed; the fixture needs updating")
+	}
+	if checks[0].Problem == "" {
+		t.Fatal("an entry whose signature was DELETED verified clean in a chain where every other entry is signed — removing a signature must not be a way to pass")
 	}
 }

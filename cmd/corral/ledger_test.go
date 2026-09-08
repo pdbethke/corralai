@@ -297,7 +297,7 @@ func TestLedgerPushMovesTheRecordAndSkipsWhatTheWarehouseHolds(t *testing.T) {
 	if code := runLedger([]string{"push", dir, wh}, &out, &errb); code != 0 {
 		t.Fatalf("push: exit %d\n%s%s", code, out.String(), errb.String())
 	}
-	for _, want := range []string{"pushed 1 scan(s) (1 file rows), 1 review(s) (1 findings), 1 adjudication(s)", "1 retracted scan(s) left out", "1 retraction/checkpoint entry are chain facts", "source withheld"} {
+	for _, want := range []string{"pushed 1 scan(s) (1 file rows), 1 review(s) (1 findings), 1 adjudication(s)", "1 retracted entry left out", "1 retraction/checkpoint entry are chain facts", "source withheld"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("push output lacks %q:\n%s", want, out.String())
 		}

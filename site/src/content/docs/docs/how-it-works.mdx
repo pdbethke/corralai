@@ -1,0 +1,247 @@
+---
+title: How it works
+description: "Corral is an auditing engine with two extensions. This page walks each flow in plain language — the audit, the review, the record they both write, and the GitHub Action that runs them on a pull request — and says at every step who does what and what is measured."
+---
+
+{/* SPDX-License-Identifier: Elastic-2.0 */}
+
+Corral is an auditing engine. It judges code it did not write — by
+execution and by adversary — onto a record nobody can edit. Accountability,
+paper trail, analysis, certification: everything but building. Two
+extensions carry that rule into practice, and both write to the same
+record.
+
+The rule under all of it: **the one who wrote the code does not judge it,
+and no self-report is ever the evidence.** Every step below either runs
+something or hands the result to a party that had nothing to do with
+producing it.
+
+## The part to know first: GitHub becomes the record
+
+A CI runner is a throwaway machine; when the job ends, whatever it learned
+is gone. GitHub itself is not a database. Corral turns the two into one
+persistent, queryable, verifiable record with nothing else running:
+
+- every verdict the Action produces — an audit, a review, a ruling — is one
+  signed, hash-linked entry committed to an orphan branch, `corral/ledger`;
+- any DuckDB reads that branch **straight from GitHub**, over HTTPS, as
+  tables — no clone, no server, no schema to adopt — and from there the
+  record is in an analytical engine: which files have been weak across every
+  scan, which model catches bugs in which language, what an audit costs per
+  file, which reviewer's claims hold, all one `GROUP BY` each; MotherDuck is
+  the same engine over every repository that pushes;
+- `corral ledger verify` walks the chain from a clean checkout, so a
+  stranger checks the record against its own signatures, not against you;
+- **the next run reads it.** A runner that starts empty is handed the
+  branch, and the earlier entries become the run's memory: every fault
+  already planted on a file's exact bytes is shown to the generator as the
+  *prior*, so it plants elsewhere instead of re-sitting the same exam; a
+  verdict for a file whose bytes have not changed is reused and marked as
+  reused; the review planner knows which scopes were reviewed, when, and
+  which changed since. Each run adds to the history the next one draws on,
+  and every verdict says whether it was primed.
+
+This is real today. From any machine with DuckDB, against corral's own
+record:
+
+```python
+import duckdb, json, urllib.request
+repo = "pdbethke/corralai"
+names = [f["name"] for f in json.load(urllib.request.urlopen(
+    f"https://api.github.com/repos/{repo}/contents/scans?ref=corral/ledger"))
+    if f["name"].endswith(".json.gz")]
+urls = [f"https://raw.githubusercontent.com/{repo}/corral/ledger/scans/{n}" for n in names]
+con = duckdb.connect(); con.execute("INSTALL httpfs; LOAD httpfs")
+print(con.sql(f"""
+  SELECT coalesce(kind, 'scan') AS kind, count(*) AS entries, min(pushed)::date AS first
+  FROM read_json_auto({urls!r}, union_by_name = true) GROUP BY 1 ORDER BY 2 DESC"""))
+```
+
+The same `read_json_auto([urls])` works from any DuckDB client. `corral
+ledger push` carries the same entries into MotherDuck when you want the view
+shared across repositories, and `corral verify --db`, `models rank --db` and
+`brief` open a checkout of the branch as the same tables. The rest of this
+page is how the entries get there and what each one means.
+
+## The audit — `corral certify`
+
+This is corral breaking your code on purpose and checking whether your tests
+notice.
+
+1. **It reads the repository, not a model's summary of it.** It lists the
+   files, pairs each with the tests that reach it, and — if you ask — runs
+   your suite once with coverage on, so it knows which tests actually
+   execute which file. A file no test reaches is reported as uncovered, never
+   scored.
+2. **A model derives the goals.** For each file under audit, one model
+   writes down what the file promises — the guarantees a change must not
+   break. You can hand it the goals instead. Either way they are written into
+   the record before any fault is planted.
+3. **A model plants faults.** A different seat is told: violate these goals.
+   It produces small edits — a flipped condition, a dropped check, a wrong
+   boundary — each one a fault that a good test should catch. Corral checks
+   that each edit compiles and actually changes behaviour; ones that do not
+   are set aside and counted as such.
+4. **Your own suite runs against every fault, in a jail.** For each planted
+   fault, corral applies it in a private copy of the tree and runs *your*
+   test command. If the suite fails, the fault is **killed**. If the suite
+   passes, the fault **survived** — a bug your tests would have shipped.
+   This is the measurement. No model is asked whether the tests are good;
+   the tests are run.
+5. **Before any of that counts, corral proves the harness.** It runs the
+   suite on the unmodified code first (the baseline must pass) and confirms
+   the suite reaches the file at all. A grading command that never executes
+   the file cannot mark its faults as survivors; they are marked unmeasured
+   and the report says why.
+6. **A second model writes a test for each survivor.** The writer seat is
+   handed the fault and asked for a test that catches it. That test is run
+   alone against the fault: if it fails on the unmodified code it is sent
+   back with the failure; if it kills the fault, the survivor becomes a
+   **proven gap** — a bug your suite misses, with the test that catches it
+   attached. If the writer cannot, the survivor stays unproven and is
+   reported as such.
+7. **A third model critiques, and never gates.** A critic — required by rule
+   to be a different model from the writer — reads the authored tests and
+   flags ones that could never fail. When execution shows a flagged test did
+   kill a fault, the critic's finding is refuted on the record. The critic's
+   opinion is advisory; it changes no number.
+8. **The verdict is signed.** Kill rate, survivors, proven gaps, which seat
+   did what, the models by name, the wall clock — per file, at a commit —
+   as an in-toto statement. With `--transparency` the signed statement is
+   also entered into Sigstore's public log, and the receipt number is on the
+   record: a stranger can verify it against the log, not against you.
+9. **One entry goes to the ledger** (below). If you set a threshold — a
+   minimum kill rate, a maximum number of proven gaps — the run exits
+   non-zero when it is breached. That exit code is what a CI check reads.
+
+What you get: for each audited file, a kill rate measured by running your
+tests, the faults they missed, and for most of those a test that would have
+caught them. What corral never claims: a kill rate for a file its harness
+could not reach, or a "proven" gap whose test did not run.
+
+## The review — `corral review`
+
+This is a stranger reading your code with instructions to break it, and a
+second stranger checking the first.
+
+1. **A cold reviewer is handed a scope.** A model that has never seen the
+   repository — an API model, or a coding agent such as Claude Code or Codex
+   running in a disposable copy of the checkout — gets the files and one
+   instruction: assume this code is wrong, find where, and prove it.
+2. **Every claim comes with a script.** A finding the reviewer calls
+   *reproduced* must include a shell script that exits 0 only if the defect
+   is demonstrated. A finding it cannot script is declared *code-read* or a
+   *hypothesis*, and stays labelled that way.
+3. **Corral runs the scripts, not the reviewer.** Each script runs in a
+   fresh worktree at the commit. A script that exits 0 keeps its claim at
+   *reproduced*. A script that does not is **demoted** to code-read, on the
+   record, with its output. A script the harness could not run at all is
+   marked *not run* and counts for nothing — it is not charged to the
+   reviewer.
+4. **A verifier tries to refute each claim.** A different model, by rule,
+   gets the findings and the same tree and argues the other side. Its
+   refutations follow the same contract: a reproduced refutation is a script
+   corral runs; one that exits 0 demotes the finding it refutes. A verifier
+   that only argues has its argument recorded as opinion.
+5. **What stands, stands as what it is.** The output says, per claim: what
+   the reviewer declared, what execution recorded, what the verifier said.
+   Five claims that stand *as read* are reported as read, not as proven. A
+   review with no findings and nothing checked is marked "coverage unknown"
+   — a blanket approval is not evidence that the code is sound.
+6. **A person can rule.** `corral review adjudicate` confirms or refutes a
+   finding, with a reason and a name. The ruling is an entry of its own and
+   becomes the outcome of record for that claim, above execution.
+7. **The reviewers are graded by the record they leave.** `corral models
+   rank` reports, per model, claims that held of those checked, and for
+   verifiers, verdicts that agreed with the outcome — from execution and
+   rulings only, never from a model's account of itself.
+8. **`corral brief` hands the record back.** For a set of files, it renders
+   what is open — survivors, proven gaps and the tests that close them,
+   claims that held, rulings — for whoever writes next. That is the auditor's
+   report; corral does not write the fix.
+
+## The record — the ledger, and the warehouse over it
+
+Both flows write to the same place, and the place is a directory of files
+in your repository.
+
+1. **Every judgment is one entry.** A scan, a review, a ruling, a
+   retraction: each is a gzipped JSON file under `.corral/ledger/scans/`,
+   readable with `zcat`. An entry holds everything the run decided — every
+   file's disposition, every fault and its fate, every model call and its
+   tokens, every finding and its outcome.
+2. **Every entry carries the hash of the one before it.** Each entry is
+   hashed over its own bytes and signed with your certify key when one is
+   configured. Edit an entry and its signature breaks; remove one and the
+   next entry's link breaks; `corral ledger verify` walks the chain and
+   names which. It is the part of a blockchain that was always useful — a
+   chain you can check — without the part that needed a network: one
+   writer per repository, and Sigstore as the outside witness when you want
+   one.
+3. **Nothing is ever edited.** A wrong entry is retracted by a later entry
+   that says so, and every reader — the view, the prior, the planner, the
+   UI — then leaves it out. Old history can be cut from the front with a
+   checkpoint entry that names what it replaced; never from the middle.
+4. **On GitHub, the directory is a branch.** `corral/ledger` is an orphan
+   branch that the Action commits to after each run and a laptop can append
+   to as well. The record travels with the repository — into a fork, a
+   self-hosted forge, an audit.
+5. **DuckDB reads it in place.** There is no database to run.
+   `corral verify --db`, `models rank --db`, `seal --db` and `brief` open
+   the directory as tables; `read_json_auto('scans/*.json.gz')` does the
+   same from any DuckDB. `corral ledger push` appends the entries to a
+   warehouse you own — a DuckDB file, or MotherDuck — which is the same
+   view, shared across every repository that pushes. Scripts and authored
+   tests stay in the ledger unless you say to push them.
+6. **The audited party is named.** Each entry records who made the commit —
+   author, committer and co-author trailers, by name — so the record says
+   who wrote the change beside who judged it. A person and an agent are
+   named the same way.
+
+## On a pull request — the GitHub Action
+
+The Action runs both flows on a pull request with nothing installed. One
+workflow file; you name the seats, because corral has no default models.
+
+1. **Check out the code and the ledger branch.** The recipe in
+   [The GitHub Action](/docs/github-action/) fetches `corral/ledger` into a
+   directory (creating the branch on first use) so the runner — a
+   throwaway machine — has the repository's memory.
+2. **The audit runs on what changed.** With `diff-base` set, corral audits
+   the files the pull request touched, in the runner's jail, with the models
+   you named through `mutant-model`, `writer-model`, `critic-model` and the
+   key inputs. `min-kill-rate` and `max-proven-missed` make the verdict a
+   required check: breach either and the step fails.
+3. **The review runs on the same change.** Set `reviewer-model` (and
+   `verifier-model`) and the Action runs `corral review` over each top-level
+   directory the pull request changed, with API seats — a coding agent cannot
+   log in on a hosted runner, and the Action says so if you name one.
+   `review-fail-on: reproduced` fails the check when a reproduced finding
+   stands; `never` records and reports without failing.
+4. **Both verdicts land in the step summary** — the same text the terminal
+   shows — and as entries in the ledger directory.
+5. **The entry is attested and the branch is committed back.** On a push to
+   the default branch the workflow attests the entry keylessly through its
+   own identity (`gh attestation verify` checks it), then commits the ledger
+   directory to `corral/ledger`. If another run pushed first, the entry is
+   re-linked to the new head rather than rebased, so the chain stays one
+   writer at a time. Pull requests from forks read the ledger and write
+   nothing.
+6. **Optionally, the rows go to your warehouse.** `push: md:<database>` with
+   a MotherDuck token appends the same entries to the shared view.
+
+What a reviewer of the pull request sees: a check that passed or failed for a
+stated, measured reason; the summary that says which faults survived and
+which claims held; and, on the branch, an entry they can verify from a clean
+clone without trusting the run that produced it.
+
+## Where to go next
+
+- [Getting started](/docs/getting-started/) — install, and one run on the
+  built-in demo.
+- [Your first audit, in detail](/docs/first-audit/) — what every line of the
+  report means.
+- [Verify a record yourself](/docs/verify-a-record/) — check a verdict
+  offline, against the log, against the ledger.
+- [The DuckDB warehouse](/docs/warehouse/) — the tables, and the questions
+  they answer.

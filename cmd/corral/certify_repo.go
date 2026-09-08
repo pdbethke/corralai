@@ -150,6 +150,16 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 
+	// The receipt must be writable BEFORE anything is spent: the directory
+	// is made now and a probe file written and removed, so a path that
+	// cannot be written refuses the run here, not after the herd has run.
+	if p := strings.TrimSpace(*attestFlag); p != "" {
+		if err := preflightWritable(p); err != nil {
+			fmt.Fprintf(stderr, "corral certify --repo: --attest %s: %v — nothing was spent\n", p, err)
+			return 2
+		}
+	}
+
 	// --transparency uploads a SIGNED envelope, never the plain statement —
 	// an unsigned entry in a public, permanent log is worthless and
 	// misleading. Refused here, before anything is spent, exactly like the
@@ -4875,6 +4885,19 @@ func pushableSpread(f reposcan.WeakFile) *auditpush.TestsPerMutantSpread {
 // Every file the report scored is carried, not only the weakest: a statement
 // that listed only the failures would be a highlight reel, and the claim a
 // reviewer is being asked to accept is about the whole audited surface.
+// preflightWritable makes path's directory and proves a file can be
+// written there, so a refusal comes before the run, not after it.
+func preflightWritable(path string) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+		return fmt.Errorf("cannot create its directory: %w", err)
+	}
+	probe := path + ".probe"
+	if err := os.WriteFile(probe, nil, 0o600); err != nil {
+		return fmt.Errorf("not writable: %w", err)
+	}
+	return os.Remove(probe)
+}
+
 func writeAuditStatement(path, repoDir string, r reposcan.RepoReport, models map[string]string, minKillRate *float64, maxProvenMissed *int, passed bool, scanID int64, bundle auditpush.Bundle) (string, error) {
 	files := make([]certify.AuditedFile, 0, len(r.Weakest))
 	for _, f := range r.Weakest {
@@ -5004,6 +5027,12 @@ func writeAuditStatement(path, repoDir string, r reposcan.RepoReport, models map
 	})
 	b, err := json.MarshalIndent(stmt, "", "  ")
 	if err != nil {
+		return "", err
+	}
+	// The receipt's directory is made if it is missing, as the ledger's is:
+	// a run that spent its budget and then could not write its receipt
+	// because `.corral/` did not exist yet was caught on camera (2026-09-08).
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		return "", err
 	}
 	if err := os.WriteFile(path, b, 0o600); err != nil {

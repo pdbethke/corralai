@@ -1,6 +1,6 @@
 #!/bin/bash
 # The certify video: one real run on flask, recorded as it happens.
-export PATH="${FLASK:-/tmp/corral-rc/flask}/.venv/bin:$PATH"
+export PATH="${FLASK:-/tmp/corral-rc/flask}/.venv/bin:$HOME/go/bin:$PATH"
 export GEMINI_API_KEY="$(pass show corralai/gemini-api-key | head -1)" ANTHROPIC_API_KEY="$(pass show corralai/anthropic-api-key | head -1)"
 cd ${FLASK:-/tmp/corral-rc/flask}
 run() { printf '\n\033[1;32m$\033[0m %s\n' "$*"; "$@"; }

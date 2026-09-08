@@ -9,6 +9,15 @@ still move between minor versions.
 Entries describe what changed for someone *using* the tool. For the full commit
 history of any release, `git log v0.3.4..v0.3.5`.
 
+## [v1.0.0-rc.11] — 2026-09-08
+
+- **The receipt's path is made, and proved writable, before anything is
+  spent.** `--attest .corral/statement.json` on a checkout with no
+  `.corral/` yet ran the whole herd and then failed to write the statement
+  (and so never reached `--transparency`). Seen on camera while recording
+  the certify video. The directory is created like the ledger's, and a
+  probe write refuses an unwritable path before the run.
+
 ## [v1.0.0-rc.10] — 2026-09-07
 
 Twenty rounds of the review loop on corral itself in one day — 57 claims,

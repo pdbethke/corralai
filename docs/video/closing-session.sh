@@ -1,6 +1,6 @@
 #!/bin/bash
 # The closing frame, shared by both videos: a stranger's check of corral's own record.
-export PATH="$HOME/go/bin:$PATH"
+export PATH="${CORRAL_REC_VENV:-/tmp/corral-rc/venv}/bin:$HOME/go/bin:$PATH"
 export motherduck_token="$(pass show corralai/motherduck-token | head -1)"
 cd "${TMPDIR:-/tmp}" && rm -rf ledger-clone
 run() { printf '\n\033[1;32m$\033[0m %s\n' "$*"; "$@"; }

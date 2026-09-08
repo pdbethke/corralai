@@ -8,8 +8,8 @@ This page describes the **brain**, corral's optional coordination daemon. Nothin
 :::
 
 The Skills tab lists the fleet's shared skills — "we share skills, not just
-memories" made visible. It fetches `/api/skills`, the same artifact store
-`corral sync` reads and writes, and shows each skill as a name, path, and
+memories" made visible. It fetches `/api/skills`, the same artifact store the brain's
+`sync_put` / `sync_delete` MCP tools read and write, and shows each skill as a name, path, and
 one-line description. This is the whole fleet's canonical set (what every
 synced member *can* use), not any one agent's private equip list — the same
 honest scope as the fleet-skills section of the agent inspector.

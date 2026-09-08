@@ -81,11 +81,17 @@ Three levers keep a run bounded:
   (default 25). The diff narrows the candidates; `top` bounds what is left.
 - **`paths:`** on the workflow — so a docs-only PR doesn't spend time printing
   `NOTHING IN SCOPE`.
-- **Leave `diff-base` at its default.** Passing it empty audits the whole
-  repository, which is a deliberate opt-in, not a default.
+- **`diff-base`** declares an empty default, and the action synthesizes a base
+  only when `GITHUB_BASE_REF` is set — that is, on a pull request. On a
+  `workflow_dispatch` or a push run there is no base to infer, so no
+  `--diff-base` is passed and the **whole repository** is audited. On a pull
+  request leave it alone; anywhere else, set it explicitly or expect a full scan.
 
-A diff that touches no auditable candidate is a legitimate pass: the action
-prints `NOTHING IN SCOPE:` and exits 0.
+A diff that touches no auditable candidate at all is a legitimate pass: the
+action prints `NOTHING IN SCOPE:` and exits 0. One exception, and it is
+deliberate: if the diff changed source files that corral could not pair with
+any test, the run exits **1** rather than 0 — "nothing could be audited"
+because nothing was reachable is a result, not a pass.
 
 ## Giving it teeth
 

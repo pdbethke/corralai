@@ -9,7 +9,7 @@ still move between minor versions.
 Entries describe what changed for someone *using* the tool. For the full commit
 history of any release, `git log v0.3.4..v0.3.5`.
 
-## [Unreleased] — toward 1.0.0-rc.11
+## [v1.0.0-rc.11] — 2026-09-08
 
 - **The receipt's path is made, and proved writable, before anything is
   spent.** `--attest .corral/statement.json` on a checkout with no

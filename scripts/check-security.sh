@@ -9,8 +9,15 @@ note() { echo "FAIL: $1"; fail=1; }
 GOSEC="$(command -v gosec 2>/dev/null || echo "$(go env GOPATH)/bin/gosec")"
 
 # 1. gofmt — every tracked .go file must be properly formatted.
-bad=$(git ls-files '*.go' | xargs gofmt -l 2>/dev/null)
-[ -n "$bad" ] && note "unformatted files:"$'\n'"$bad"
+#    The tool's ABSENCE used to read as "clean": stderr went to /dev/null and
+#    empty stdout was success, so on a machine without gofmt this gate passed
+#    over any amount of unformatted code. A gate that cannot fail is not a
+#    gate. Found by a cold review, 2026-09-08 (R7).
+command -v gofmt >/dev/null 2>&1 || note "gofmt is not installed — this gate cannot run, so it must not pass"
+if command -v gofmt >/dev/null 2>&1; then
+  bad=$(git ls-files '*.go' | xargs gofmt -l)
+  [ -n "$bad" ] && note "unformatted files:"$'\n'"$bad"
+fi
 
 # 2. gosec — zero MEDIUM+ severity issues (HIGH + MEDIUM; LOW is not gated).
 if [ -x "$GOSEC" ] || command -v "$GOSEC" &>/dev/null; then

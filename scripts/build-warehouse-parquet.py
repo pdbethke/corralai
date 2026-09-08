@@ -109,7 +109,11 @@ def main() -> int:
     """
     kept = export(con, ledger_sql, f"{args.out}/audit_ledger.parquet")
     total = con.execute("SELECT count(*) FROM build.build_records").fetchone()[0]
-    withheld["audit_ledger"] = total - kept
+    # kept is -1 when export() REFUSED (an empty query against a populated
+        # extract). Feeding the sentinel into `total - kept` printed
+        # total+1 withheld — a number describing nothing that happened.
+        # Found by a cold review, 2026-09-08 (R2).
+    withheld["audit_ledger"] = (total - kept) if kept >= 0 else 0
     print(f"audit_ledger:  {kept} rows exported, {total - kept} withheld (repo not on the public allowlist)")
 
     # --- the per-seat scorecard: which model caught what, in which role -----
@@ -139,15 +143,36 @@ def main() -> int:
     """
     kept = export(con, catches_sql, f"{args.out}/bug_catches.parquet")
     total = con.execute("SELECT count(*) FROM bugcatch.bugcatch_observations").fetchone()[0]
-    withheld["bug_catches"] = total - kept
+    # kept is -1 when export() REFUSED (an empty query against a populated
+        # extract). Feeding the sentinel into `total - kept` printed
+        # total+1 withheld — a number describing nothing that happened.
+        # Found by a cold review, 2026-09-08 (R2).
+    withheld["bug_catches"] = (total - kept) if kept >= 0 else 0
     print(f"bug_catches:   {kept} rows exported, {total - kept} withheld (repo not on the public allowlist)")
 
     # --- the repo-scan series, already published; regenerated for parity ----
-    for table in ("scans", "scan_files"):
+    #
+    # THE ALLOWLIST APPLIES HERE TOO. These two exported `SELECT *` with no
+    # PUBLIC_REPOS filter, while audit_ledger and bug_catches above were
+    # filtered — so a regeneration on a machine whose scan store holds
+    # private repos would publish their names, file paths and kill rates to
+    # a static site. It had not happened (this machine's store held only
+    # flask when the committed extract was built), which is exactly why it
+    # would have gone unnoticed. scan_files carries no repo of its own, so
+    # it is filtered through the scans that survive the allowlist. Found by
+    # a cold review, 2026-09-08 (R1, reproduced).
+    scans_sql = f"SELECT * FROM scanstore.scans WHERE short_repo(repo) IN {allow}"
+    files_sql = (
+        "SELECT f.* FROM scanstore.scan_files f "
+        "JOIN scanstore.scans s ON s.id = f.scan_id "
+        f"WHERE short_repo(s.repo) IN {allow}"
+    )
+    for table, sql in (("scans", scans_sql), ("scan_files", files_sql)):
         try:
-            kept = export(con, f"SELECT * FROM scanstore.{table}", f"{args.out}/{table}.parquet")
+            kept = export(con, sql, f"{args.out}/{table}.parquet")
             if kept >= 0:
-                print(f"{table + ':':14} {kept} rows exported")
+                total = con.execute(f"SELECT count(*) FROM scanstore.{table}").fetchone()[0]
+                print(f"{table + ':':14} {kept} rows exported, {max(total - kept, 0)} withheld (repo not on the public allowlist)")
         except duckdb.Error as exc:
             print(f"{table + ':':14} skipped ({exc})")
 

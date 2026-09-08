@@ -55,7 +55,16 @@ DENY_PATTERNS = [
 
 # Absolute paths that are safe because they're internal to the demo
 # containers, never the operator's real host filesystem.
-SAFE_PATH_PREFIXES = ('/work', '/tmp', '/root')
+# Matched as whole PATH SEGMENTS, not as string prefixes: str.startswith('/work')
+# also exempts '/workspaces/<someone>/…' and '/workdir-<host>/…', so a real
+# host path could ride out to a published recording by merely beginning with
+# a safe stem. Found by a cold review, 2026-09-08 (R4).
+SAFE_PATH_ROOTS = ('work', 'tmp', 'root')
+
+
+def _is_safe_path(p: str) -> bool:
+    parts = p.split('/')
+    return len(parts) > 1 and parts[0] == '' and parts[1] in SAFE_PATH_ROOTS
 
 IPV4_RE = re.compile(r'\b(?:\d{1,3}\.){3}\d{1,3}\b')
 PATHLIKE_RE = re.compile(r'(?:/[A-Za-z0-9._-]+){2,}')
@@ -118,7 +127,7 @@ def scan_deny(text, whoami, hostname):
             and text[m.start() - 1] == '/'
             and re.search(r'https?:$', text[max(0, m.start() - 7):m.start() - 1]) is not None
         )
-        if path.startswith('/') and not preceded_by_word and not preceded_by_url_scheme and not path.startswith(SAFE_PATH_PREFIXES):
+        if path.startswith('/') and not preceded_by_word and not preceded_by_url_scheme and not _is_safe_path(path):
             offenses.append(('absolute path outside demo-container roots', path))
     return offenses
 

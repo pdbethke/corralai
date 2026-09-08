@@ -356,6 +356,12 @@ Usage:
                                   multi-file project needs --repo-dir.
   corral eval [flags]             run the adversarial pool across the versioned eval corpus and
                                   print a soundness report (does the recall metric catch known gaps?)
+                                  NEEDS A BRAIN: this is the optional daemon's calibration
+                                  harness, not part of an audit. certify and review never
+                                  contact one. Its corpus has known defects (a target whose path
+                                  escapes the workspace; fixtures that do not implement the same
+                                  rule across languages) — treat its numbers as indicative until
+                                  those are fixed.
                                   flags: --corpus <path> (default eval/corpus/manifest.json)
                                          --iterations <n> (default 1)   --only <id,id,...>
                                          --brain <url> (or $CORRAL_BRAIN)

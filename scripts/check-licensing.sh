@@ -13,8 +13,12 @@ grep -qi 'MIT License' LICENSE 2>/dev/null && note "LICENSE still contains 'MIT 
 #    Scope to `git ls-files` (the repo), NOT `grep -r .` — the latter also
 #    traverses untracked/ignored paths such as sibling git worktrees under
 #    .claude/, producing false positives outside the repo proper.
+#    And it must be a HEADER: the check accepted the string ANYWHERE in the
+#    file, including inside a string literal, so a file could carry the
+#    identifier without being licensed by it. Only the first few lines count,
+#    and only as a comment. Found by a cold review, 2026-09-08 (R3).
 missing=$(git ls-files '*.go' | while IFS= read -r f; do
-  grep -q 'SPDX-License-Identifier: Elastic-2.0' "$f" || echo "$f"
+  head -5 "$f" | grep -qE '^[[:space:]]*(//|/\*)[[:space:]]*SPDX-License-Identifier: Elastic-2.0' || echo "$f"
 done)
 [ -n "$missing" ] && note "Go files missing SPDX header:"$'\n'"$missing"
 

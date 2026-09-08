@@ -197,6 +197,12 @@ Usage:
                                   multi-file project needs --repo-dir.
   corral eval [flags]             run the adversarial pool across the versioned eval corpus and
                                   print a soundness report (does the recall metric catch known gaps?)
+                                  NEEDS A BRAIN: this is the optional daemon's calibration
+                                  harness, not part of an audit. certify and review never
+                                  contact one. Its corpus has known defects (a target whose path
+                                  escapes the workspace; fixtures that do not implement the same
+                                  rule across languages) — treat its numbers as indicative until
+                                  those are fixed.
                                   flags: --corpus <path> (default eval/corpus/manifest.json)
                                          --iterations <n> (default 1)   --only <id,id,...>
                                          --brain <url> (or $CORRAL_BRAIN)
@@ -416,7 +422,10 @@ corral ledger — the signed, hash-linked record, as a directory of entries.
                                                authored tests, verdict JSON, scripts and their output — travels only
                                                with --push-source. A run's own --push already does this as it goes;
                                                this is for a directory that ran without one, or a branch pulled later
-  corral ledger verify <dir> [--pub <hex>]     walk the chain: every hash, link and signature, one line per entry
+  corral ledger verify [--pub <hex>] [--expect-head <hash>] <dir>
+                                               walk the chain: every hash, link and signature, one line per entry.
+                                               A chain verifies against ITSELF, so removing the newest entries leaves
+                                               the rest valid — --expect-head is the anchor from outside that catches it
 
 A certify --repo run writes its entry into the repo's .corral/ledger/ by
 default (--ledger <dir> to move it, --no-ledger to skip), and reads earlier
@@ -444,7 +453,10 @@ corral ledger — the signed, hash-linked record, as a directory of entries.
                                                authored tests, verdict JSON, scripts and their output — travels only
                                                with --push-source. A run's own --push already does this as it goes;
                                                this is for a directory that ran without one, or a branch pulled later
-  corral ledger verify <dir> [--pub <hex>]     walk the chain: every hash, link and signature, one line per entry
+  corral ledger verify [--pub <hex>] [--expect-head <hash>] <dir>
+                                               walk the chain: every hash, link and signature, one line per entry.
+                                               A chain verifies against ITSELF, so removing the newest entries leaves
+                                               the rest valid — --expect-head is the anchor from outside that catches it
 
 A certify --repo run writes its entry into the repo's .corral/ledger/ by
 default (--ledger <dir> to move it, --no-ledger to skip), and reads earlier
@@ -472,7 +484,10 @@ corral ledger — the signed, hash-linked record, as a directory of entries.
                                                authored tests, verdict JSON, scripts and their output — travels only
                                                with --push-source. A run's own --push already does this as it goes;
                                                this is for a directory that ran without one, or a branch pulled later
-  corral ledger verify <dir> [--pub <hex>]     walk the chain: every hash, link and signature, one line per entry
+  corral ledger verify [--pub <hex>] [--expect-head <hash>] <dir>
+                                               walk the chain: every hash, link and signature, one line per entry.
+                                               A chain verifies against ITSELF, so removing the newest entries leaves
+                                               the rest valid — --expect-head is the anchor from outside that catches it
 
 A certify --repo run writes its entry into the repo's .corral/ledger/ by
 default (--ledger <dir> to move it, --no-ledger to skip), and reads earlier
@@ -500,7 +515,10 @@ corral ledger — the signed, hash-linked record, as a directory of entries.
                                                authored tests, verdict JSON, scripts and their output — travels only
                                                with --push-source. A run's own --push already does this as it goes;
                                                this is for a directory that ran without one, or a branch pulled later
-  corral ledger verify <dir> [--pub <hex>]     walk the chain: every hash, link and signature, one line per entry
+  corral ledger verify [--pub <hex>] [--expect-head <hash>] <dir>
+                                               walk the chain: every hash, link and signature, one line per entry.
+                                               A chain verifies against ITSELF, so removing the newest entries leaves
+                                               the rest valid — --expect-head is the anchor from outside that catches it
 
 A certify --repo run writes its entry into the repo's .corral/ledger/ by
 default (--ledger <dir> to move it, --no-ledger to skip), and reads earlier
@@ -528,7 +546,10 @@ corral ledger — the signed, hash-linked record, as a directory of entries.
                                                authored tests, verdict JSON, scripts and their output — travels only
                                                with --push-source. A run's own --push already does this as it goes;
                                                this is for a directory that ran without one, or a branch pulled later
-  corral ledger verify <dir> [--pub <hex>]     walk the chain: every hash, link and signature, one line per entry
+  corral ledger verify [--pub <hex>] [--expect-head <hash>] <dir>
+                                               walk the chain: every hash, link and signature, one line per entry.
+                                               A chain verifies against ITSELF, so removing the newest entries leaves
+                                               the rest valid — --expect-head is the anchor from outside that catches it
 
 A certify --repo run writes its entry into the repo's .corral/ledger/ by
 default (--ledger <dir> to move it, --no-ledger to skip), and reads earlier
@@ -556,7 +577,10 @@ corral ledger — the signed, hash-linked record, as a directory of entries.
                                                authored tests, verdict JSON, scripts and their output — travels only
                                                with --push-source. A run's own --push already does this as it goes;
                                                this is for a directory that ran without one, or a branch pulled later
-  corral ledger verify <dir> [--pub <hex>]     walk the chain: every hash, link and signature, one line per entry
+  corral ledger verify [--pub <hex>] [--expect-head <hash>] <dir>
+                                               walk the chain: every hash, link and signature, one line per entry.
+                                               A chain verifies against ITSELF, so removing the newest entries leaves
+                                               the rest valid — --expect-head is the anchor from outside that catches it
 
 A certify --repo run writes its entry into the repo's .corral/ledger/ by
 default (--ledger <dir> to move it, --no-ledger to skip), and reads earlier

@@ -42,6 +42,7 @@ func runLedger(args []string, stdout, stderr io.Writer) int {
 		fs := flag.NewFlagSet("corral ledger verify", flag.ContinueOnError)
 		fs.SetOutput(stderr)
 		pub := fs.String("pub", "", "hex-encoded Ed25519 public key to verify signatures against (default: the local certify key)")
+		expectHead := fs.String("expect-head", "", "the hash this chain's newest entry must have, held from OUTSIDE the directory (a git ref, a Rekor receipt, a note). A chain verifies against itself, so removing the newest entries leaves the rest valid and no check inside can see it; this is the anchor that does")
 		if err := fs.Parse(args[1:]); err != nil {
 			return 2
 		}
@@ -49,7 +50,7 @@ func runLedger(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintln(stderr, "corral ledger verify: name one directory")
 			return 2
 		}
-		return runVerifyLedger(fs.Arg(0), *pub, stdout, stderr)
+		return runVerifyLedger(fs.Arg(0), *pub, *expectHead, stdout, stderr)
 	}
 	fmt.Fprintf(stderr, "corral ledger: unknown verb %q\n%s", args[0], ledgerUsage)
 	return 2
@@ -71,7 +72,10 @@ const ledgerUsage = `corral ledger — the signed, hash-linked record, as a dire
                                                authored tests, verdict JSON, scripts and their output — travels only
                                                with --push-source. A run's own --push already does this as it goes;
                                                this is for a directory that ran without one, or a branch pulled later
-  corral ledger verify <dir> [--pub <hex>]     walk the chain: every hash, link and signature, one line per entry
+  corral ledger verify [--pub <hex>] [--expect-head <hash>] <dir>
+                                               walk the chain: every hash, link and signature, one line per entry.
+                                               A chain verifies against ITSELF, so removing the newest entries leaves
+                                               the rest valid — --expect-head is the anchor from outside that catches it
 
 A certify --repo run writes its entry into the repo's .corral/ledger/ by
 default (--ledger <dir> to move it, --no-ledger to skip), and reads earlier

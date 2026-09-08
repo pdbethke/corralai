@@ -4573,6 +4573,18 @@ func TestTimeoutVerdictCarriesTheChallengerComparison(t *testing.T) {
 // defect class here is "a new scored field added to one path and not the
 // other", and that is a property of the CODE, not of any one run. It is the
 // cheapest guard that fails when the next field is forgotten.
+//
+// WHAT IT CANNOT SEE, and did not: the ORDER. Both assignments were present
+// and this count was 2 while tickAggregate assigned the field 41 lines AFTER
+// handing the verdict to the signer — so the signed snapshot omitted a
+// measurement the returned verdict carried, and this test passed throughout.
+// Counting where a field is written says nothing about whether the write
+// happens before the bytes are serialized.
+//
+// TestSignedVerdictCarriesTheChallengerMeasurement asserts at the actual
+// boundary, with a signer that captures what it was handed. Keep both: this
+// one catches a field added to one path, that one catches a field set too
+// late. Reported by an outside reviewer (GPT/Codex), 2026-09-08.
 func countAssignmentsOfChallengerAgreement(t *testing.T) int {
 	t.Helper()
 	b, err := os.ReadFile("driver.go")

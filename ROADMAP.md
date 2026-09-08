@@ -436,8 +436,11 @@ in August 2026 reversed an assumption this roadmap previously carried.
   and grades them against another's tests, producing a confident signed wrong
   answer. The `--tests` map (Shipped) is the current lever and it is homework, not
   a product. Coverage-derived pairing, using the preflight's own instrumented run
-  to observe which tests actually execute which files, is the honest direction:
-  execution, not filenames.
+  to observe which tests actually execute which files, SHIPPED: it is the
+  `evidence-paired` count on the report's candidacy line, and it widens
+  candidacy past filename pairing on a real run. What is left is that it needs
+  `--preflight` to have run, so a repo audited without coverage still falls
+  back to filenames — the direction is not the remaining work, the default is.
 - **Make the substrate that works go faster.** An audit costs `O(mutants × the
   TARGET's suite runtime)` — measured at 1.46s/suite on flask but ~74s on
   `psf/requests`, a 50× spread between two ordinary Python projects. Parallel

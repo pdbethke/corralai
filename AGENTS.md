@@ -25,7 +25,7 @@ invariant hiding as ordinary bugs — see "The bug shape that keeps recurring".
 
 ## Build, test, and the gates that will fail your PR
 
-Go 1.26.6 (see `go.mod`). No Makefile; use the Go toolchain directly.
+Go 1.26.6 (see `go.mod`). There IS a `Makefile` (`build`, `install`, `test`, `vet`, `tidy`, `clean`) — it wraps the version stamping — but nothing depends on it and the Go toolchain directly is equally fine.
 
 ```bash
 go build ./...
@@ -102,11 +102,16 @@ journaled, files that did not exist are removed rather than left as strays, and
 restore runs via `defer` — covering a failing command, a timeout, and a panic,
 each asserted by its own test.
 
-**The residual risk, stated exactly:** there is no SIGINT/SIGTERM handler in
-`cmd/corral`, so Ctrl-C during a `--substrate workspace` run can leave a mutant
-on disk, and nothing detects a stale mutant on the next start. That is a real
-gap on the opt-in path. It does not apply to jailed runs, which is every
-default invocation.
+**The residual risk, stated exactly:** `cmd/corral` DOES handle SIGINT/SIGTERM
+(`cmd/corral/signalctx.go`), so an interrupt unwinds rather than abandoning the
+tree. What remains is narrower: nothing detects a stale mutant left by a
+process that died without unwinding at all — a kill -9, an OOM, a runner
+reclaimed mid-step — on a `--substrate workspace` run. That is a real gap on
+the opt-in path. It does not apply to jailed runs, which is every default
+invocation.
+
+(This paragraph said there was no handler at all, for as long as it took to
+add one and not come back here. An outside reviewer found it, 2026-09-08.)
 
 So: run `--substrate workspace` only where the caller is the isolation boundary
 (CI, a scratch copy, a tree with no uncommitted work). And never audit a

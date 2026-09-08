@@ -40,6 +40,9 @@ export default defineConfig({
             { label: 'GitHub', link: 'https://github.com/pdbethke/corralai', attrs: { target: '_blank', rel: 'noopener noreferrer' } },
           ],
         },
+        // First: what it is and how each flow works, in plain language — the
+        // page a reader who has thirty seconds should land on.
+        { label: 'How it works', slug: 'docs/how-it-works' },
         { label: 'Getting started', slug: 'docs/getting-started' },
         { label: 'Your first audit, in detail', slug: 'docs/first-audit' },
         // Third, and above Concepts: the Action is how corral is actually

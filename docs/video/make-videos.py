@@ -60,9 +60,11 @@ cards=[(0.0,'one real run on flask, 1× speed — each wait on the jail or a mod
        ('budgeted by complexity','forty faults planted in app.py — each one violates a goal'),
        ('killed 25 of 40','flask\'s own suite runs against every fault, in a jail: 25 killed, 15 survived — measured by execution, never a model\'s word'),
        ('survivor writer','a second model writes a test for each survivor; each test is proven alone against its fault'),
-       ('kill rate 0.62 (','kill rate 0.62 · 14 of 15 gaps proven catchable — the verdict, signed'),
+       ('kill rate 0.','the verdict — kill rate, survivors, the gaps proven — signed'),
+       ('Rekor','and entered into Sigstore\'s public transparency log: a receipt anyone can check against the log, not against us'),
        ('ledger: entry written','one entry, on a branch in the repo'),
-       ('chain intact','the chain, verified')]
+       ('chain intact','the chain, verified'),
+       ('verify --attest','the receipt, verified')]
 out=concat_with_captions([f'{V}/opener.mp4', c_seg, cl], [(0,OP-0.1,'the architect, the builder, the inspector, the signed checklist — all the same model')]+cards_for([], [('certify',cards),('closing',CLOSING)]), f'{V}/corral-certify.mp4')
 print('certify video:', out, round(duration(out)),'s')
 

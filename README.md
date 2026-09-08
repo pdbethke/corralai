@@ -12,6 +12,8 @@
 
 Both write signed, hash-linked entries into a ledger in your own repository, and every seat — the one planting faults, the one writing tests, the reviewer, the verifier — is ranked by the record it leaves. Corral never writes the code. That is what it judges.
 
+**GitHub becomes the record.** A CI runner forgets everything when the job ends and GitHub is not a database; corral makes the two into one. Run as a GitHub Action, every verdict is a signed, hash-linked entry committed to an orphan branch, `corral/ledger` — and any DuckDB reads that branch straight from GitHub, over HTTPS, as tables — no clone, no server, nothing to run — so the record sits in an analytical engine from the first entry: the weakest files across every scan, which model catches bugs in which language, the cost per audited file, whose claims hold, one `GROUP BY` each; MotherDuck is the same engine over every repository that pushes. `corral ledger verify` walks the chain from a clean checkout, so a stranger checks the record against its own signatures, not against you — and the next run reads the branch as its memory: faults already planted become the generator's prior, unchanged files keep their verdict, the planner knows what was reviewed. [How it works](https://corralai.dev/docs/how-it-works/) has the query you can paste; corral's own record is at [`corral/ledger`](https://github.com/pdbethke/corralai/tree/corral/ledger).
+
 ***Nemo iudex in causa sua*** — no one may be judge in their own cause. The one who
 wrote the code doesn't get to certify it: the verdict is **measured by execution**, by
 a **decorrelated** party, behind a **human gate**. That maxim isn't a slogan here — it's

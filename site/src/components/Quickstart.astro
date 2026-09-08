@@ -11,16 +11,14 @@ corral certify --local --code path/to/file.go \
   --writer-model claude-sonnet-5 --mutant-model claude-sonnet-5 --critic-model claude-haiku-4-5 \
   -- go test ./...</pre>
   <p>
-    Out comes a signed verdict — <strong>certified</strong> or
-    <strong>needs-review</strong> — with the kill-rate, the survivors, and any
+    Out comes a signed verdict — <strong>certified</strong> or <strong>needs-review</strong> — with the kill-rate, the survivors, and any
     written-and-proven killing test. Re-check the record offline, anytime:
   </p>
   <pre class="code">corral certify verify record.json    # re-runs the proof — no key, no network</pre>
   <p>
     The herd runs in a bwrap jail on Linux (<code>--jail container</code> for
     docker/podman elsewhere) and grades tests in six languages — Go, Python,
-    Ruby, JavaScript, TypeScript, PHP — writing its killing test in
-    <em>your</em> project's harness, so vitest, jest, pytest, minitest and
+    Ruby, JavaScript, TypeScript, PHP — writing its killing test in <em>your</em> project's harness, so vitest, jest, pytest, minitest and
     PHPUnit work without configuration. Roles are decorrelation-<strong>enforced</strong> across
     models — the critic must differ from the writer or the run refuses — and
     each role can be pointed at a different <em>vendor</em>: a Gemini
@@ -31,8 +29,7 @@ corral certify --local --code path/to/file.go \
     hardest</strong> — Go continuously in this repo's own CI, Python across
     repeated whole-repo scans of Flask. TypeScript, JavaScript, Ruby and PHP
     each rest on a <strong>single third-party repository</strong> so far,
-    which shows the plugin works and is not evidence about the ecosystem.
-    <a href="https://github.com/pdbethke/corralai#readme">The evidence table is in the README →</a>
+    which shows the plugin works and is not evidence about the ecosystem. <a href="https://github.com/pdbethke/corralai#readme">The evidence table is in the README →</a>
   </p>
   <p>
     Ready for more than one file? Install your project's dev dependencies first —

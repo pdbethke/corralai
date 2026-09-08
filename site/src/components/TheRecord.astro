@@ -12,10 +12,8 @@
     A CI runner is a throwaway machine: it boots, it measures your code, it is
     destroyed. The usual way to keep what it learned is to stand up a database —
     a server, a schema, credentials in CI, a bill — to hold what is really just
-    an append-only list of small facts. Corral doesn't stand anything up.
-    <strong>Every verdict is committed to an orphan git branch in your own
-    repository</strong>, <code>corral/ledger</code>. It shares no history with
-    <code>main</code>, never appears in your diffs, and lives somewhere every
+    an append-only list of small facts. Corral doesn't stand anything up. <strong>Every verdict is committed to an orphan git branch in your own
+    repository</strong>, <code>corral/ledger</code>. It shares no history with <code>main</code>, never appears in your diffs, and lives somewhere every
     runner already has credentials for. GitHub stops being just CI and becomes
     the record.
   </p>
@@ -47,8 +45,7 @@ GROUP BY 1 ORDER BY 2 DESC;</code></pre>
       <p>
         The same query runs against the URLs straight off the branch, from any
         DuckDB client — the CLI, Python, R, or the WebAssembly build in a
-        browser tab. Then the questions a single run can never answer are one
-        <code>GROUP BY</code> each: which files have been weak across every
+        browser tab. Then the questions a single run can never answer are one <code>GROUP BY</code> each: which files have been weak across every
         scan, which model catches bugs in which language, what an audit costs
         per file, whose review claims held once execution checked them.
       </p>
@@ -63,8 +60,7 @@ GROUP BY 1 ORDER BY 2 DESC;</code></pre>
         the key is still ours. <code>--transparency</code> closes that gap: it
         uploads the signed statement to <strong>Sigstore's Rekor</strong>, a
         public append-only log run by people with no stake in the audit, and
-        prints the receipt. A real corral entry is
-        <a href="https://rekor.sigstore.dev/api/v1/log/entries?logIndex=2667058567" rel="noopener noreferrer">index 2667058567</a>
+        prints the receipt. A real corral entry is <a href="https://rekor.sigstore.dev/api/v1/log/entries?logIndex=2667058567" rel="noopener noreferrer">index 2667058567</a>
         — fetch it now, without asking us for anything.
       </p>
       <p class="warn">
@@ -82,8 +78,7 @@ GROUP BY 1 ORDER BY 2 DESC;</code></pre>
       <p>
         The branch is checked out <em>before</em> the audit, so a fresh machine
         arrives holding everything the repository has learned about itself.
-        Faults already planted on a file's exact bytes become the generator's
-        <strong>prior</strong>, so it plants somewhere new instead of re-sitting
+        Faults already planted on a file's exact bytes become the generator's <strong>prior</strong>, so it plants somewhere new instead of re-sitting
         the same exam. A verdict for a file whose bytes haven't changed is
         reused, and marked reused rather than re-billed. The review planner
         knows which scopes were covered and which have changed since. Every
@@ -109,8 +104,7 @@ GROUP BY 1 ORDER BY 2 DESC;</code></pre>
     <div class="tech">
       <h3>MotherDuck, when one repo isn't enough</h3>
       <p>
-        The branch is one repository's record. <code>corral ledger push</code>
-        appends the same entries to a warehouse <em>you</em> own — a plain
+        The branch is one repository's record. <code>corral ledger push</code> appends the same entries to a warehouse <em>you</em> own — a plain
         DuckDB file, or <strong>MotherDuck</strong> for the view across every
         repository that pushes. Rows are append-only, because overwriting is how
         a trend is lost. There is no hosted tier and nothing is collected: your
@@ -134,8 +128,7 @@ GROUP BY 1 ORDER BY 2 DESC;</code></pre>
   </div>
 
   <p class="foot">
-    Corral's own record is public at
-    <a href="https://github.com/pdbethke/corralai/tree/corral/ledger" rel="noopener noreferrer"><code>corral/ledger</code></a>
+    Corral's own record is public at <a href="https://github.com/pdbethke/corralai/tree/corral/ledger" rel="noopener noreferrer"><code>corral/ledger</code></a>
     — reviews, and the rulings on them, in a branch you can query without
     cloning.
   </p>

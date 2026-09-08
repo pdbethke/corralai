@@ -1,0 +1,94 @@
+---
+// SPDX-License-Identifier: Elastic-2.0
+//
+// The two videos: certify and review, each a real run on flask at 36e4a824 —
+// a repository we did not write. Self-hosted (the site keeps a
+// zero-external-requests posture), preload="none" so the homepage pays
+// nothing until someone presses play. Numbers in the captions below are read
+// off the runs themselves; see docs/video/README.md for what the pipeline
+// applies (pacing and captions, nothing else).
+---
+<section class="section wide" id="the-videos">
+  <h2>Watch it work — two real runs</h2>
+  <p class="lede">
+    Both extensions, pointed at <strong>flask</strong> at <code>36e4a824</code> — a library we did not write — and both ending on the
+    same frame: corral's own record, verified from a fresh clone. These are
+    recordings of actual runs. The pipeline applies pacing and captions and
+    nothing else; the first caption of each video says exactly what was
+    applied.
+  </p>
+
+  <div class="videos">
+    <figure class="vid">
+      <video
+        controls
+        preload="none"
+        playsinline
+        muted
+        poster="/video/corral-certify.jpg"
+        width="1920"
+        height="1080"
+      >
+        <source src="/video/corral-certify.mp4" type="video/mp4" />
+        Your browser cannot play this video. The run is also in the <a href="/recordings/">recordings gallery</a>.
+      </video>
+      <figcaption>
+        <h3><code>certify</code> — 61 seconds</h3>
+        <p>
+          Goals derived from <code>app.py</code>, then <strong>40 deliberate
+          faults</strong> planted in it and flask's <em>own</em> test suite run
+          against every one of them in a jail. It caught 25 and slept through <strong>15</strong> — a kill rate of <strong>0.62</strong>. A second
+          model then wrote a test for each survivor and ran it alone against
+          its fault: <strong>14 of the 15</strong> became demonstrated gaps,
+          bugs the suite misses with the test that catches them attached. Ends
+          with the signed verdict, the ledger entry, and the chain verified.
+        </p>
+      </figcaption>
+    </figure>
+
+    <figure class="vid">
+      <video
+        controls
+        preload="none"
+        playsinline
+        muted
+        poster="/video/corral-review.jpg"
+        width="1920"
+        height="1080"
+      >
+        <source src="/video/corral-review.mp4" type="video/mp4" />
+        Your browser cannot play this video. The run is also in the <a href="/recordings/">recordings gallery</a>.
+      </video>
+      <figcaption>
+        <h3><code>review</code> — 71 seconds</h3>
+        <p>
+          <strong>Claude Code</strong> reviews <code>src/flask/sessions.py</code> cold and <strong>Codex</strong> argues the other side. Five claims come back — and the two the
+          reviewer declared <em>reproduced</em> had scripts that did not
+          demonstrate them, so corral <strong>demoted its own reviewer</strong> on the record: 0 reproduced, 4 code-read, 1 hypothesis. Then a person
+          checks the top claim by hand — <code>session |= &#123;"a": 1&#125;</code> on an app with no secret key silently mutates the null session and
+          raises nothing — and rules it real. The defect stood; the overclaim
+          did not.
+        </p>
+      </figcaption>
+    </figure>
+  </div>
+
+  <p class="foot">
+    Both close on the same frame: a fresh clone of <code>corral/ledger</code>, <code>corral ledger verify</code>, one <code>SELECT</code> over the entries,
+    a push to MotherDuck, and the seats ranked by the record they left. <a href="/docs/how-it-works/">How it works →</a>
+  </p>
+</section>
+
+<style>
+  .lede { font-size: 1rem; }
+  .videos { display: grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); gap: 22px; margin-top: 24px; }
+  @media (max-width: 900px) { .videos { grid-template-columns: 1fr; } }
+  .vid { margin: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; display: flex; flex-direction: column; }
+  .vid video { width: 100%; height: auto; display: block; background: #262626; aspect-ratio: 16 / 9; }
+  .vid figcaption { padding: 16px 20px 18px; }
+  .vid figcaption h3 { margin: 0 0 8px; font-size: 1.02rem; color: var(--amber); }
+  .vid figcaption h3 code { background: none; padding: 0; font-size: 1em; color: inherit; }
+  .vid figcaption p { margin: 0; font-size: 0.92rem; color: var(--fg); }
+  .vid code { background: var(--sel); border-radius: 4px; padding: 1px 5px; font-size: 0.85em; }
+  .foot { margin-top: 22px; font-size: 0.9rem; color: var(--muted); }
+</style>

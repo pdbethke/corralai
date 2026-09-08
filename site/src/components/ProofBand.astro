@@ -24,11 +24,8 @@ const audits = [
     write, plus our own — and graded each suite <em>by execution</em>: plant
     goal-violating faults, run the developer's <strong>own</strong> tests against
     them in a jail, sign the kill-rate. The first two rows are the same file
-    twice: on a branch whose suite is green but thin it scored 75% and came back
-    <strong>NEEDS-REVIEW</strong>; on main, one test richer, 90% and
-    <strong>CERTIFIED</strong>. more-itertools certified at 90% too. The rest
-    fell short of the bar and were sent back with their survivors
-    <em>disclosed</em> — corral hands those to a human to judge, it doesn't rule
+    twice: on a branch whose suite is green but thin it scored 75% and came back <strong>NEEDS-REVIEW</strong>; on main, one test richer, 90% and <strong>CERTIFIED</strong>. more-itertools certified at 90% too. The rest
+    fell short of the bar and were sent back with their survivors <em>disclosed</em> — corral hands those to a human to judge, it doesn't rule
     them defects. Every verdict is a signed record you can replay and verify
     offline — pick any row.
   </p>
@@ -53,8 +50,7 @@ const audits = [
   --writer-model claude-sonnet-5 --mutant-model claude-sonnet-5 --critic-model claude-haiku-4-5 \
   -- pytest</pre>
     <p class="cta-foot">
-      Every number above is a real signed record you can verify offline —
-      <a href="/field-notes/your-tests-suck/">read the write-up →</a>
+      Every number above is a real signed record you can verify offline — <a href="/field-notes/your-tests-suck/">read the write-up →</a>
     </p>
   </div>
 </section>

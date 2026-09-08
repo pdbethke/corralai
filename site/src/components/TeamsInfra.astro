@@ -9,8 +9,7 @@
     daemon underneath a coordinated herd — remote workers, a live console, the
     human-gated proposal loop — and nothing in it is required for a verdict or
     read by one. If you want it: approved skills and
-    guardrail hooks sync across a whole fleet — <code>corral sync</code>
-    pulls every changed skill/hook, so what one machine learns, every
+    guardrail hooks sync across a whole fleet — <code>corral sync</code> pulls every changed skill/hook, so what one machine learns, every
     machine's panel can <em>do</em>. Publishing to the fleet is superuser-only
     (a worker proposes, it can't publish), and hooks are staged for human
     review rather than auto-applied, because executable guardrails should
@@ -19,8 +18,7 @@
   <p>
     Independent brains can federate their signed records, so one gate can
     re-check another's verdicts offline without ceding control to a shared
-    master. Because the record store takes a DSN, pointing it at
-    <strong>MotherDuck</strong> instead of a local DuckDB file is a config
+    master. Because the record store takes a DSN, pointing it at <strong>MotherDuck</strong> instead of a local DuckDB file is a config
     flip rather than a port — which is what makes fleet-wide analytics and an
     "ask the fleet" natural-language oracle over the audit trail an option
     rather than a rewrite. Auth was designed in from day

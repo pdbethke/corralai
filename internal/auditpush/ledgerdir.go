@@ -379,15 +379,21 @@ func AppendLedgerEntry(dir string, e LedgerEntry, signer LedgerSigner) (string, 
 	if existing, err := ReadLedgerDir(dir); err != nil {
 		return "", err
 	} else if n := len(existing); n > 0 {
-		head := existing[n-1]
-		got, herr := EntryHash(head)
-		if herr != nil {
-			return "", fmt.Errorf("auditpush: the head of %s does not verify (%s): %w — refusing to append to a chain that is already broken", dir, head.File, herr)
+		// The WHOLE chain, not just the head. Re-hashing only the head let a
+		// chain with an edited middle entry be extended and signed while the
+		// error text this would have printed spoke of "a chain that is
+		// already broken" — the check narrower than the claim it made. Caught
+		// by a second cold review of this package on the first fix.
+		checks, verr := VerifyLedgerDir(dir, nil)
+		if verr != nil {
+			return "", verr
 		}
-		if got != head.Hash {
-			return "", fmt.Errorf("auditpush: the head of %s does not verify: %s carries hash %.12s but its bytes hash to %.12s — it was edited after it was written; refusing to append, which would sign it as this entry's parent", dir, head.File, head.Hash, got)
+		for _, c := range checks {
+			if c.Problem != "" {
+				return "", fmt.Errorf("auditpush: %s does not verify (%s: %s) — refusing to append, which would sign this chain as the new entry's history", dir, c.File, c.Problem)
+			}
 		}
-		prev = head.Hash
+		prev = existing[n-1].Hash
 	}
 	return placeEntry(dir, e, prev, signer)
 }
@@ -529,6 +535,10 @@ func boolToInt(v bool) int {
 type ChainCheck struct {
 	File    string
 	ScanUID string
+	// Hash is the entry's own hash, so a caller can compare the chain's HEAD
+	// against an anchor held outside the directory. Truncation from the end
+	// leaves every surviving link valid and is invisible from within.
+	Hash    string
 	Commit  string
 	HashOK  bool // the stored Hash matches the entry's bytes
 	LinkOK  bool // Prev names the previous entry's Hash (true for a genesis entry)
@@ -555,8 +565,9 @@ func VerifyLedgerDir(dir string, pub ed25519.PublicKey) ([]ChainCheck, error) {
 	var out []ChainCheck
 	prevHash := ""
 	seen := map[string]bool{}
+	seenReview := map[string]bool{}
 	for i, e := range entries {
-		c := ChainCheck{ScanUID: e.ScanUID, Commit: e.Bundle.Scan.Commit, KeyID: e.KeyID, Genesis: i == 0, Kind: e.Kind, File: e.File}
+		c := ChainCheck{ScanUID: e.ScanUID, Hash: e.Hash, Commit: e.Bundle.Scan.Commit, KeyID: e.KeyID, Genesis: i == 0, Kind: e.Kind, File: e.File}
 		h, herr := EntryHash(e)
 		c.HashOK = herr == nil && h == e.Hash
 		c.LinkOK = e.Prev == prevHash
@@ -593,7 +604,11 @@ func VerifyLedgerDir(dir string, pub ed25519.PublicKey) ([]ChainCheck, error) {
 			rep, cr, hy := e.Review.Counts()
 			c.Commit = e.Review.Commit
 			c.Note = fmt.Sprintf("review of %s by %s: %d reproduced, %d code-read, %d hypothesis", e.Review.Scope, e.Review.ReviewerModel, rep, cr, hy)
-		case e.Kind == KindAdjudication && !seen[strings.SplitN(e.Adjudication.Adjudicates, "#", 2)[0]]:
+		case e.Kind == KindAdjudication && !seenReview[strings.SplitN(e.Adjudication.Adjudicates, "#", 2)[0]]:
+			// The target must be a REVIEW. `seen` held every entry hash, so
+			// an adjudication naming a scan — or another adjudication —
+			// passed as though a finding had been ruled on. A ruling on
+			// something that has no findings is not a ruling.
 			c.Problem = "an adjudication of a finding whose review is not an earlier entry of this chain"
 		case e.Kind == KindAdjudication:
 			c.Note = fmt.Sprintf("%s %s by %s: %s", e.Adjudication.Verdict, shortRef(e.Adjudication.Adjudicates), e.Adjudication.By, e.Adjudication.Reason)
@@ -612,6 +627,9 @@ func VerifyLedgerDir(dir string, pub ed25519.PublicKey) ([]ChainCheck, error) {
 		out = append(out, c)
 		prevHash = e.Hash
 		seen[e.Hash] = true
+		if e.Kind == KindReview {
+			seenReview[e.Hash] = true
+		}
 	}
 	return out, nil
 }
@@ -799,39 +817,31 @@ func WriteCheckpoint(dir string, signer LedgerSigner) (string, int, error) {
 // entries names.
 func Retracted(entries []LedgerEntry) map[string]LedgerEntry {
 	// A retraction that has ITSELF been retracted is not in force, so the
-	// entry it named comes back. Without this, retracting a retraction was
-	// accepted and did nothing: a mistaken retraction was permanent, which
-	// is a one-way door the record does not otherwise have. Resolved to a
-	// fixpoint rather than in one pass, because the undo can itself be
-	// undone. Found by a cold review, 2026-09-08 (R7).
-	byHash := map[string]LedgerEntry{}
-	var retractions []LedgerEntry
-	for _, e := range entries {
-		byHash[e.Hash] = e
-		if e.Kind == KindRetract {
-			retractions = append(retractions, e)
-		}
-	}
-	void := map[string]bool{} // retraction hashes that are themselves retracted
-	for changed := true; changed; {
-		changed = false
-		for _, r := range retractions {
-			if void[r.Hash] {
-				continue
-			}
-			// r is in force; anything it retracts is out — including
-			// another retraction.
-			if t, ok := byHash[r.Retracts]; ok && t.Kind == KindRetract && !void[t.Hash] {
-				void[t.Hash] = true
-				changed = true
-			}
-		}
-	}
-	out := map[string]LedgerEntry{}
-	for _, e := range retractions {
-		if void[e.Hash] {
+	// entry it named comes back — retract, undo, redo, and the record
+	// alternates. Resolved in ONE REVERSE PASS: a retraction can only name
+	// an EARLIER entry, so walking from the newest backwards means every
+	// retraction that could void this one has already been decided.
+	//
+	// The first fix for this grew a monotone "void" set forward, which is
+	// wrong because voiding is not monotone — once a retraction is voided,
+	// everything it voided comes back — and it reported the original entry
+	// as NOT retracted at odd depth >= 3. Caught by a second cold review of
+	// this package, 2026-09-08, on the fix for the first one.
+	targeted := map[string]bool{} // named by an in-force retraction seen later in the chain
+	inForce := make([]LedgerEntry, 0, len(entries))
+	for i := len(entries) - 1; i >= 0; i-- {
+		e := entries[i]
+		if e.Kind != KindRetract {
 			continue
 		}
+		if targeted[e.Hash] {
+			continue // a later, in-force retraction retracted this one
+		}
+		inForce = append(inForce, e)
+		targeted[e.Retracts] = true
+	}
+	out := map[string]LedgerEntry{}
+	for _, e := range inForce {
 		out[e.Retracts] = e
 	}
 	return out

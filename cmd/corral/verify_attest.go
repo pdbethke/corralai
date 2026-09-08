@@ -69,7 +69,7 @@ func runVerifyAttest(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintln(stderr, "corral verify: --ledger walks a directory; --attest checks one statement — one or the other")
 			return 2
 		}
-		return runVerifyLedger(d, *pubFlag, stdout, stderr)
+		return runVerifyLedger(d, *pubFlag, "", stdout, stderr)
 	}
 	if fs.NArg() > 0 {
 		fmt.Fprintf(stderr, "corral verify: unexpected argument(s) %v\n", fs.Args())
@@ -510,7 +510,7 @@ func verifyRekorInclusion(ctx context.Context, envelope []byte, stmt map[string]
 // unsigned entry is reported, not failed, since the chain still orders it;
 // and a signed entry with no key to check against is "signed, unverified",
 // never "verified".
-func runVerifyLedger(dir, pubFlag string, stdout, stderr io.Writer) int {
+func runVerifyLedger(dir, pubFlag, expectHead string, stdout, stderr io.Writer) int {
 	var pub ed25519.PublicKey
 	pubSource := ""
 	switch {
@@ -562,7 +562,23 @@ func runVerifyLedger(dir, pubFlag string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, "%d of %d entries have a problem — the chain is not intact\n", bad, len(checks))
 		return 1
 	}
+	// What "intact" does NOT cover, said out loud: a chain verifies against
+	// ITSELF, and removing a contiguous run of the NEWEST entries leaves
+	// every surviving hash and link valid. Nothing inside the directory can
+	// see that, so the anchor has to come from outside it. Saying "chain
+	// intact" and stopping implied a guarantee the check does not make.
+	// Found by a cold review, 2026-09-08 (R3).
 	fmt.Fprintf(stdout, "%d entries, chain intact\n", len(checks))
+	if head := strings.TrimSpace(expectHead); head != "" {
+		got := checks[len(checks)-1]
+		if !strings.HasPrefix(got.Hash, head) {
+			fmt.Fprintf(stdout, "✗ head is %.12s, expected %s — entries were removed from the END of this chain, which the chain itself cannot detect\n", got.Hash, head)
+			return 1
+		}
+		fmt.Fprintf(stdout, "✓ head is the expected %s — nothing was removed from the end\n", head)
+		return 0
+	}
+	fmt.Fprintln(stdout, "· intact means every entry present hashes, links and verifies. It does NOT mean none were removed from the END: dropping the newest entries leaves the rest valid, and no check inside the directory can see it. Anchor it from outside — the branch's git history, a Rekor receipt on a later entry, or `--expect-head <hash>`.")
 	return 0
 }
 

@@ -234,3 +234,82 @@ func TestRetractingARetractionRestoresTheEntry(t *testing.T) {
 		t.Fatalf("retracting the retraction left the scan out of the record: %d scan entries, want 1 — a mistaken retraction cannot be undone", got)
 	}
 }
+
+// Retraction depth. R1 of the SECOND review of this package: the first fix
+// grew a monotone "void" set, but voiding is not monotone — once a
+// retraction is itself retracted, everything it voided comes back — so at
+// odd depth >= 3 the original entry was reported as NOT retracted. Resolved
+// in one reverse pass instead: a retraction can only name an EARLIER entry,
+// so by the time the walk reaches it, every retraction that could void it
+// has been decided.
+func TestRetractionDepthAlternates(t *testing.T) {
+	dir := t.TempDir()
+	_, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signer := Ed25519LedgerSigner{KeyID: "corral-certify", Key: priv}
+	SetLedgerSigner(signer)
+	t.Cleanup(func() { SetLedgerSigner(nil) })
+
+	if _, err := PushBundle(dir, Bundle{Scan: ScanRow{Repo: "r", Commit: "aaa1", Audited: 1}}); err != nil {
+		t.Fatal(err)
+	}
+	entries, _ := ReadLedgerDir(dir)
+	target := entries[0].Hash
+
+	// depth 1 retracts, 2 restores, 3 retracts, 4 restores, …
+	for depth := 1; depth <= 5; depth++ {
+		if _, err := WriteRetraction(dir, target, "depth", signer); err != nil {
+			t.Fatalf("depth %d: %v", depth, err)
+		}
+		entries, _ = ReadLedgerDir(dir)
+		target = entries[len(entries)-1].Hash // the retraction just written
+
+		got := len(ScanEntries(entries))
+		want := 0
+		if depth%2 == 0 {
+			want = 1
+		}
+		if got != want {
+			t.Errorf("depth %d: %d scan entries in the record, want %d — an odd depth retracts, an even depth restores", depth, got, want)
+		}
+	}
+}
+
+// An adjudication rules on a FINDING, which only a review has. `seen` held
+// every entry hash, so an adjudication naming a scan passed verification as
+// though a finding had been ruled on. (Second review of this package, R4.)
+func TestAdjudicationMustNameAReview(t *testing.T) {
+	dir := t.TempDir()
+	pub, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signer := Ed25519LedgerSigner{KeyID: "corral-certify", Key: priv}
+	SetLedgerSigner(signer)
+	t.Cleanup(func() { SetLedgerSigner(nil) })
+
+	if _, err := PushBundle(dir, Bundle{Scan: ScanRow{Repo: "r", Commit: "aaa1", Audited: 1}}); err != nil {
+		t.Fatal(err)
+	}
+	entries, _ := ReadLedgerDir(dir)
+	scanHash := entries[0].Hash
+
+	// an adjudication naming the SCAN, which has no findings at all
+	_, err = AppendLedgerEntry(dir, LedgerEntry{
+		Kind:         KindAdjudication,
+		Adjudication: &Adjudication{Adjudicates: scanHash + "#R1", Verdict: "confirmed", By: "someone", Reason: "because"},
+	}, signer)
+	if err != nil {
+		return // refused at the writer's door: also correct
+	}
+	checks, verr := VerifyLedgerDir(dir, pub)
+	if verr != nil {
+		t.Fatal(verr)
+	}
+	last := checks[len(checks)-1]
+	if last.Problem == "" {
+		t.Fatal("an adjudication naming a SCAN verified clean — the record shows a finding ruled on that never existed")
+	}
+}

@@ -185,12 +185,9 @@ const replayCorpus = buildReplayCorpus(streams, cards[0]?.slug ?? '');
   <div class="section" id="analytics">
     <h2>Across the recordings</h2>
     <p class="how">
-      The cross-recording metric for audits isn't a findings table — it's the
-      <strong>bug-catching scorecard</strong>: which model actually catches bugs,
-      <em>proven by execution</em>, per (model, role). It accrues as audits run —
+      The cross-recording metric for audits isn't a findings table — it's the <strong>bug-catching scorecard</strong>: which model actually catches bugs, <em>proven by execution</em>, per (model, role). It accrues as audits run —
       a cell stays <em>provisional</em> until it has enough of them, so we don't
-      publish a confident number off a handful — and lives at
-      <code>corral scorecard</code> / <code>/api/bugcatch</code>, offline-verifiable
+      publish a confident number off a handful — and lives at <code>corral scorecard</code> / <code>/api/bugcatch</code>, offline-verifiable
       from each signed record. Fugu's routing scores come out of a trained black
       box; this comes out of a test that really ran and really killed a fault.
     </p>

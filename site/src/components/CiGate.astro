@@ -6,9 +6,7 @@
   <p>
     A principle nobody enforces is a slogan. The way corral enforces this one is
     a <strong>GitHub Action</strong>: it installs itself, audits only the files
-    a pull request actually touched, and writes the verdict to the run page
-    <em>verbatim</em> — including the lines that say what a number does
-    <em>not</em> mean. Two steps, and there is no <code>corral</code> for you to
+    a pull request actually touched, and writes the verdict to the run page <em>verbatim</em> — including the lines that say what a number does <em>not</em> mean. Two steps, and there is no <code>corral</code> for you to
     install:
   </p>
 
@@ -24,12 +22,10 @@
 
   <p>
     <code>max-proven-missed</code> rather than a kill-rate threshold, and the
-    difference matters. A kill rate is a proportion of <em>freshly generated</em>
-    faults, so it moves between runs on code nobody touched — we have watched an
+    difference matters. A kill rate is a proportion of <em>freshly generated</em> faults, so it moves between runs on code nobody touched — we have watched an
     unchanged file score 0.375 and then 0.525, and a deliberately weakened suite
     score <em>higher</em> than it had a moment earlier. Set a bar near a healthy
-    value and it reddens good work until someone switches it off. A
-    <strong>proven gap</strong> does not drift: it is a survivor the herd then
+    value and it reddens good work until someone switches it off. A <strong>proven gap</strong> does not drift: it is a survivor the herd then
     killed with a test it wrote and ran — a specific demonstrated bug your suite
     misses.
   </p>
@@ -52,14 +48,10 @@
   <div class="receipt">
     <h3>What it said about this repository</h3>
     <p>
-      We pointed it at the file that starts our own program,
-      <code>cmd/corral/main.go</code>, as a gated check on a real commit. It
-      planted <strong>40</strong> deliberate faults. Our suite caught
-      <strong>10</strong> and slept through <strong>30</strong> — a kill rate of
-      <strong>0.25</strong>. Then the test-writer authored a test we hadn't
+      We pointed it at the file that starts our own program, <code>cmd/corral/main.go</code>, as a gated check on a real commit. It
+      planted <strong>40</strong> deliberate faults. Our suite caught <strong>10</strong> and slept through <strong>30</strong> — a kill rate of <strong>0.25</strong>. Then the test-writer authored a test we hadn't
       written and used it to kill one of those survivors, so that gap is
-      demonstrated rather than alleged. The whole run took
-      <strong>11m12s</strong> on a 2-core hosted runner.
+      demonstrated rather than alleged. The whole run took <strong>11m12s</strong> on a 2-core hosted runner.
     </p>
     <p class="aside">
       That is a bad number, published by the tool that produced it, on a run we
@@ -72,8 +64,7 @@
     <div class="tech">
       <h3>Scoped to the diff, on purpose</h3>
       <p>
-        An audit costs roughly <em>(mutants × your suite's whole runtime)</em>
-        per file — it scales with how long your tests take and how many files
+        An audit costs roughly <em>(mutants × your suite's whole runtime)</em> per file — it scales with how long your tests take and how many files
         the PR touched, not with the size of the change. So the default is the
         PR's diff, <code>top</code> bounds how many files one run can spend on,
         and a whole-repo scan is something you opt into deliberately.

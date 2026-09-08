@@ -63,7 +63,7 @@ export default defineConfig({
             { label: 'Trust & security', slug: 'docs/concepts/trust-and-security' },
           ],
         },
-        { label: 'The DuckDB warehouse', slug: 'docs/warehouse' },
+        { label: 'The record — DuckDB, Rekor, MotherDuck', slug: 'docs/warehouse' },
         { label: 'Configuration', slug: 'docs/configuration' },
         {
           // The daemon is optional infrastructure: nothing in it is required

@@ -1,96 +1,111 @@
 ---
-title: The DuckDB warehouse
-description: Query corral's real audit ledger with DuckDB running in your browser — signed records + execution telemetry, live SQL, no backend.
+title: The record, and the warehouse over it
+description: "A CI runner forgets everything when the job ends, and GitHub is not a database. Corral makes the two into one: every verdict is a signed, hash-linked entry on an orphan git branch, and any DuckDB reads that branch straight from GitHub as tables — no clone, no server, nothing to run."
 ---
 
 {/* SPDX-License-Identifier: Elastic-2.0 */}
 
-corral stores a `certify --local` audit as a **signed, hash-linked record**, and
-a `certify --repo` scan as a signed ledger entry DuckDB reads in place, plus per-model
-**execution telemetry** — natively in **DuckDB**. The
-[**DuckDB integration page**](/warehouse/) ("DuckDB integration" in the site nav)
-makes that layer tangible: it runs DuckDB itself, compiled to **WebAssembly, in
-your browser**, over corral's *real* audit dataset. Real SQL, no backend.
+## The problem: a runner forgets
 
-## What you can query
+A GitHub Actions runner is a throwaway machine. It boots, it works, it is
+destroyed. Whatever it measured about your code — which faults your tests
+missed, which reviewer's claims held up, what the audit cost — dies with it.
+The log output survives for a while as text nobody queries, and then the
+retention window closes and that goes too.
 
-Four real DuckDB tables, shipped as parquet extracts and queried client-side —
-corral's own historical stores, hand-exported from the machine that produced
-them:
+So the honest state of most CI is: **it has no memory.** Every run starts from
+nothing and knows nothing about the hundred runs before it. You cannot ask
+"which files have been weak all quarter," because nothing kept the answer.
 
-- **`audit_ledger`** — the signed verdict records. Every audit is a tamper-evident,
-  hash-linked row: `repo`, `commit`, `record_head` (the signature head), `certified`
-  (the verdict), `actor`.
-- **`bug_catches`** — per-model, per-role, per-region execution telemetry: which
-  model planted or graded, `mutants_planted` / `mutants_killed` / `mutants_survived`,
-  `region_complexity`, and more.
-- **`scans`** — whole-repo scan runs: `total_files`, `candidates`, `audited`,
-  `kill_rate` per scan.
-- **`scan_files`** — every candidate file a scan considered, audited or
-  rejected, with `disposition`, `reason`, `kill_rate`, `survivors`, and
-  `proven_missed`.
+The usual fix is to stand up a database, which means a server, a schema, a
+connection string, credentials in CI, and a bill — a lot of apparatus to hold
+what is, in the end, an append-only list of small facts.
 
-The page ships **eight** preset queries — which files keep shipping demonstrated
-gaps, whether a file's kill rate is drifting or just noisy sampling, which model
-catches bugs in which role, every signed verdict by repo, every audited file's
-proven gap, one file's replicate series, the honest denominator of what a scan
-rejected and why, and the scan-level receipts — plus a **live query box** so you
-can write your own. Open [the page](/warehouse/) to see the current set; it's
-likely to keep moving.
+## The trick: the record is a git branch
 
-## It's grounded, not marketing
+Corral does not stand anything up. Every judgment it makes — an audit, a
+review, a human ruling — is written as one gzipped JSON file, and those files
+are committed to an **orphan branch in your own repository** called
+`corral/ledger`.
 
-The point is that a claim is one click from the SQL that grounds it. A
-[**`?q=<sql>`** deep-link](/warehouse/?q=SELECT%20l.repo%2C%20IF(l.certified%2C'CERTIFIED'%2C'needs-review')%20AS%20verdict%2C%20SUM(b.mutants_killed)%20AS%20killed%2C%20SUM(b.mutants_planted)%20AS%20planted%2C%20ROUND(100.0*SUM(b.mutants_killed)%2FSUM(b.mutants_planted)%2C1)%20AS%20kill_pct%20FROM%20audit_ledger%20l%20JOIN%20bug_catches%20b%20ON%20b.record_id%3Dl.id%20GROUP%20BY%201%2C2%20ORDER%20BY%20kill_pct%20DESC)
-pre-fills and runs a query, so the recordings cockpit links straight to the numbers
-behind a run. The verdicts you see (more-itertools **certified at 90%**, a Ruby
-edit-distance suite **sent back at 60%**) are the same signed records the
-[recordings](/recordings/) come from.
+An orphan branch shares no history with `main`. It never appears in your diffs,
+never touches your working tree, and cannot collide with your code. It is
+storage that happens to be versioned, sitting in a place every CI runner
+already has credentials for.
 
-## Two shapes, and which is which
+That single move solves the impermanence:
 
-The [page on this site](/warehouse/) queries corral's own historical stores —
-`audit_ledger`, `bug_catches`, `scans`, `scan_files` — hand-exported from the
-machine that produced them.
+- **The runner gets a memory.** The Action checks out `corral/ledger` before
+  the run, so a fresh machine arrives holding everything the repository has
+  ever learned about itself.
+- **The record survives the runner.** After the run, the new entry is committed
+  back. The machine is destroyed; the finding is not.
+- **It travels with the repository.** Fork it, mirror it, move to a self-hosted
+  forge, hand it to an auditor — the record goes along, because it *is* the
+  repository.
+- **There is nothing to operate.** No server, no schema migration, no secret
+  beyond the token the workflow already has.
 
-`--push` writes something newer: a five-table bundle — `corral_scans`,
-`corral_audits` (one row per audited file), `corral_mutants`, `corral_model_calls`,
-and `corral_events` — auto-created on first push, plus a `corral_seal` view that
-cross-references the pushed statement's hash against the rows it produced. Same
-subject, different shape, and everything below describes that bundle, because
-that is what you get. The published page has not been backfilled into it.
+Each entry carries the hash of the entry before it and is signed with your
+certify key when one is configured. Edit an entry and its signature breaks;
+remove one and the next entry's link breaks. `corral ledger verify` walks the
+chain from a clean checkout and names exactly which entry is wrong — so a
+stranger checks the record against its own signatures rather than against your
+word. Nothing is ever edited in place: a wrong entry is retracted by a later
+entry that says so, and every reader then leaves it out.
 
-## Getting your own
+## The payoff: any DuckDB reads it, in place
 
-The page on this site queries **our** audit data. The point is that you can have
-the same table of your own, because `certify --repo` takes a target and appends
-every run's per-file verdict to it:
+Here is the part that makes the branch worth more than a log file. Those
+entries are JSON, and DuckDB reads JSON over HTTPS. So the record is already in
+an analytical engine — from the very first entry, with nothing installed and
+nothing running.
 
-```bash
-corral certify --repo . --push md:my_database -- pytest -q
-# or a plain file, if you would rather not involve anyone
-corral certify --repo . --push ./audits.duckdb -- pytest -q
+No clone. No server. No schema to adopt. This runs right now, against corral's
+own public record:
+
+```python
+import duckdb, json, urllib.request
+
+repo = "pdbethke/corralai"
+names = [f["name"] for f in json.load(urllib.request.urlopen(
+    f"https://api.github.com/repos/{repo}/contents/scans?ref=corral/ledger"))
+    if f["name"].endswith(".json.gz")]
+urls = [f"https://raw.githubusercontent.com/{repo}/corral/ledger/scans/{n}" for n in names]
+
+con = duckdb.connect()
+con.execute("INSTALL httpfs; LOAD httpfs")
+print(con.sql(f"""
+  SELECT coalesce(kind, 'scan') AS kind, count(*) AS entries, min(pushed)::date AS first
+  FROM read_json_auto({urls!r}, union_by_name = true)
+  GROUP BY 1 ORDER BY 2 DESC"""))
 ```
 
-From the [Action](/docs/github-action/), the same thing is `push:` plus a
-`motherduck-token:` secret when the target is `md:`.
+```
+┌──────────────┬─────────┬────────────┐
+│     kind     │ entries │   first    │
+├──────────────┼─────────┼────────────┤
+│ adjudication │      59 │ 2026-09-06 │
+│ review       │      25 │ 2026-09-06 │
+│ scan         │       2 │ 2026-09-08 │
+└──────────────┴─────────┴────────────┘
+```
 
-There is no hosted tier and nothing is collected: your key, your runner, your
-warehouse. Any DuckDB works, so MotherDuck is a destination rather than a
-requirement.
+That is [corral's own
+ledger](https://github.com/pdbethke/corralai/tree/corral/ledger) as of
+2026-09-08 — audits, cold reviews, and the human rulings on them, in one
+chain. The counts grow as runs land, so treat the numbers as a snapshot and
+the *shape* as the claim: run the query yourself and the kinds will be there.
 
-Rows are **append-only** — overwriting is how a trend is lost — and each carries
-the run URL plus, only when the scan also ran with `--attest` (`attest:` in the
-Action), the sha256 of the signed statement it came from, so such a row traces
-back to an attestation a third party can verify; without `--attest` the
-`statement_sha256` column is left empty rather than fabricated. The qualifier columns
-(`timed_out`, `test_writer_failed`, `pool_test_unsound`) sit beside the numbers
-rather than in another table, because aggregation is exactly where a
-`proven_missed` of 0 that means *nothing could be proven* gets read as *clean*.
+The same `read_json_auto([urls])` works from any DuckDB client — the CLI, R,
+Java, the WebAssembly build in a browser. Locally, corral opens the directory
+as the same tables for you: `corral verify --db`, `corral models rank --db`,
+`corral seal --db` and `corral brief` all read `.corral/ledger` directly.
 
-### The queries that need a warehouse
+### The questions a single run cannot answer
 
-A single run cannot answer these, and that is the whole reason to keep the rows:
+This is the reason to keep the entries at all. Each of these is one `GROUP BY`
+over the branch:
 
 ```sql
 -- Which files keep shipping DEMONSTRATED gaps. Countable across repos, unlike
@@ -102,7 +117,7 @@ GROUP BY 1, 2
 HAVING demonstrated_gaps > 0
 ORDER BY demonstrated_gaps DESC;
 
--- Drift, or sampling? Mutants are generated fresh per run, so one number is a
+-- Drift, or sampling? Faults are generated fresh per run, so one number is a
 -- sample. A spread tells you whether a change is real.
 SELECT path, count(*) AS runs,
        round(avg(kill_rate), 2) AS mean,
@@ -116,20 +131,142 @@ SELECT repo, sum(audited) AS audited, sum(candidates) AS candidates
 FROM corral_audits GROUP BY 1;
 ```
 
-## Why in the browser
+Which model catches bugs in which language, what an audit costs per file,
+whose review claims held once execution checked them — all the same shape.
 
-The DuckDB **runtime** loads from a CDN (the WebAssembly build is larger than a
-static host's per-file cap, and loading the runtime from a CDN is standard); the
-**data** is self-hosted parquet. Because DuckDB runs client-side in a WebAssembly
-sandbox over public, read-only data, there is **no server-side SQL** — so there is
-nothing to inject into. The query runs in *your* browser, on public data, in a
-sandbox; that's precisely why the query box can be handed to anyone.
+### The next run reads it
 
-## Where it goes
+The branch is not only for you. A run that starts empty is handed the earlier
+entries and uses them:
 
-The public page proves the model on one project's data. The same schema **federates
-to MotherDuck** (a DSN flip): signed records from every dev, CI runner, and project
-into one shared, queryable warehouse — read-only shares hand a client or an auditor a
-live, verifiable slice with zero infra. See [Multi-model
-herds](/docs/concepts/multi-model-herds/) and the
-[roadmap](https://github.com/pdbethke/corralai/blob/main/ROADMAP.md).
+- every fault already planted on a file's exact bytes is shown to the generator
+  as a **prior**, so it plants somewhere new instead of re-sitting the same exam;
+- a verdict for a file whose bytes have not changed is **reused**, and marked as
+  reused rather than re-billed;
+- the review planner knows which scopes were reviewed, when, and which have
+  changed since.
+
+Every verdict says whether it was primed this way. A record that feeds the next
+run is the difference between a history and a memory.
+
+## The outside witness: Sigstore's public log
+
+Signing proves integrity — the verdict you are reading is byte-for-byte the one
+produced. It does not prove *independent* authenticity, because the key is
+still yours. A reader who distrusts you entirely gains nothing from checking a
+signature against a key you handed them.
+
+That gap is what a public transparency log closes. With `--attest` corral writes
+the verdict as an in-toto statement; when a local signing key is configured
+(`CORRALAI_CERTIFY_KEY_FILE`), it also signs that statement into a DSSE
+envelope. Adding `--transparency` uploads the envelope to **Sigstore's Rekor**,
+a public, append-only log run by people with no stake in your audit, and prints
+the receipt:
+
+```
+attestation logged: rekor index 2759598612 (uuid 108e9186e8c5677a...)
+```
+
+The index and UUID are recorded **on the ledger entry itself**, and with
+`--push`, in the warehouse. That is what makes the whole thing walkable by
+someone who trusts none of it — you can do every step of this right now, on the
+flask audit sitting on corral's branch:
+
+1. Read the entry off the branch:
+   `scans/20260908T154158Z-36e4a824f340-d65faf854374.json.gz` — the run
+   in the certify video.
+2. Find `bundle.Scan.RekorLogIndex` in it — `2759598612`, the same number
+   you watch being issued on screen.
+3. Fetch [that entry from Sigstore](https://rekor.sigstore.dev/api/v1/log/entries?logIndex=2759598612),
+   a log we do not run and cannot edit.
+4. Confirm it is this file and not another:
+
+```bash
+corral verify --attest corral-audit-statement.json --rekor-index 2759598612
+```
+
+That last step compares the envelope's own sha256 against the hash Rekor
+recorded, so a claimed log entry has to actually *be* that file. At no point
+does the check route through us.
+
+Two things to know before you use it:
+
+- **The entry is public and permanent.** Once logged it cannot be removed or
+  edited by anyone, including you. It carries the statement — repository URL,
+  audited commit, per-file paths, kill rates, survivor and proven-gap counts,
+  and the models in each role — and never the audited source itself. Decide
+  that this is what you want before the first upload, not after.
+- **It fails open.** An unreachable log or a rejected entry prints one line and
+  leaves the scan's verdict, exit code, statement, envelope and ledger entirely
+  untouched. Transparency is a witness, not a gate.
+
+`--transparency` is a CLI flag today. The Action exposes `attest` but not yet
+transparency.
+
+## Sharing it: MotherDuck
+
+The branch is one repository's record. When you want the view across many,
+`corral ledger push` appends the same entries to a warehouse **you** own — a
+plain DuckDB file, or MotherDuck:
+
+```bash
+corral certify --repo . --push md:my_database -- pytest -q
+# or a plain file, if you would rather not involve anyone
+corral certify --repo . --push ./audits.duckdb -- pytest -q
+```
+
+From the [Action](/docs/github-action/) that is `push:` plus a
+`motherduck-token:` secret when the target is `md:`. MotherDuck reads its token
+from the `motherduck_token` environment variable; there is deliberately no
+`--motherduck-token` flag, because a token on a command line lands in shell
+history.
+
+Push creates a five-table bundle on first use — `corral_scans`,
+`corral_audits` (one row per audited file), `corral_mutants`,
+`corral_model_calls` and `corral_events` — plus a `corral_seal` view that
+cross-references a pushed statement's hash against the rows it produced. Rows
+are **append-only**; overwriting is how a trend is lost. Scripts and authored
+tests stay in the ledger unless you ask for them.
+
+Each row carries the run URL and, only when the scan also ran with `--attest`,
+the sha256 of the signed statement it came from — so that row traces back to an
+attestation a third party can verify. Without `--attest` the `statement_sha256`
+column is left empty rather than fabricated. The qualifier columns
+(`timed_out`, `test_writer_failed`, `pool_test_unsound`) sit beside the numbers
+rather than in a separate table, because aggregation is exactly where a
+`proven_missed` of 0 that means *nothing could be proven* gets misread as
+*clean*.
+
+There is no hosted tier and nothing is collected: your key, your runner, your
+warehouse. Any DuckDB works, so MotherDuck is a destination rather than a
+requirement.
+
+## The browser demo, and what it actually shows
+
+The [DuckDB integration page](/warehouse/) on this site runs DuckDB itself —
+compiled to WebAssembly, in your browser — over a corral dataset, with eight
+preset queries and a live query box. A [`?q=<sql>` deep
+link](/warehouse/?q=SELECT%201) pre-fills and runs a query, so a claim can be
+one click from the SQL that grounds it.
+
+Be clear on what that page is: an **older, hand-exported extract** — parquet
+files of corral's historical stores (`audit_ledger`, `bug_catches`, `scans`,
+`scan_files`) from the machine that produced them. It predates the ledger
+branch and has not been backfilled into it. It is a good demonstration that the
+query surface is real and safe to hand to anyone; it is not the current record.
+The current record is the branch, and the snippet above reads it live.
+
+Because DuckDB there runs client-side in a WebAssembly sandbox over public,
+read-only data, there is no server-side SQL — nothing to inject into. The
+runtime loads from a CDN (the WebAssembly build exceeds a static host's
+per-file cap); the data is self-hosted parquet.
+
+## Where to go next
+
+- [How it works](/docs/how-it-works/) — the audit, the review, the record and
+  the Action, each in plain language.
+- [The GitHub Action](/docs/github-action/) — the workflow that writes the
+  branch.
+- [Verify a record yourself](/docs/verify-a-record/) — check a verdict offline,
+  against the log, against the chain.
+- [Limitations & roadmap](/docs/limitations/) — what this does not do yet.

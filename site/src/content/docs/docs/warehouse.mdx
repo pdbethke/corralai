@@ -85,9 +85,9 @@ print(con.sql(f"""
 ┌──────────────┬─────────┬────────────┐
 │     kind     │ entries │   first    │
 ├──────────────┼─────────┼────────────┤
-│ adjudication │      58 │ 2026-09-06 │
-│ review       │      24 │ 2026-09-06 │
-│ scan         │       1 │ 2026-09-08 │
+│ adjudication │      59 │ 2026-09-06 │
+│ review       │      25 │ 2026-09-06 │
+│ scan         │       2 │ 2026-09-08 │
 └──────────────┴─────────┴────────────┘
 ```
 
@@ -164,7 +164,7 @@ a public, append-only log run by people with no stake in your audit, and prints
 the receipt:
 
 ```
-attestation logged: rekor index 2759114416 (uuid 108e9186e8c5677a...)
+attestation logged: rekor index 2759598612 (uuid 108e9186e8c5677a...)
 ```
 
 The index and UUID are recorded **on the ledger entry itself**, and with
@@ -173,14 +173,16 @@ someone who trusts none of it — you can do every step of this right now, on th
 flask audit sitting on corral's branch:
 
 1. Read the entry off the branch:
-   `scans/20260908T144147Z-36e4a824f340-53e5e74c0119.json.gz`.
-2. Find `bundle.Scan.RekorLogIndex` in it — `2759114416`.
-3. Fetch [that entry from Sigstore](https://rekor.sigstore.dev/api/v1/log/entries?logIndex=2759114416),
+   `scans/20260908T154158Z-36e4a824f340-d65faf854374.json.gz` — the run
+   in the certify video.
+2. Find `bundle.Scan.RekorLogIndex` in it — `2759598612`, the same number
+   you watch being issued on screen.
+3. Fetch [that entry from Sigstore](https://rekor.sigstore.dev/api/v1/log/entries?logIndex=2759598612),
    a log we do not run and cannot edit.
 4. Confirm it is this file and not another:
 
 ```bash
-corral verify --attest corral-audit-statement.json --rekor-index 2759114416
+corral verify --attest corral-audit-statement.json --rekor-index 2759598612
 ```
 
 That last step compares the envelope's own sha256 against the hash Rekor

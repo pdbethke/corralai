@@ -33,15 +33,16 @@
         Your browser cannot play this video. The run is also in the <a href="/recordings/">recordings gallery</a>.
       </video>
       <figcaption>
-        <h3><code>certify</code> — 61 seconds</h3>
+        <h3><code>certify</code> — 56 seconds</h3>
         <p>
           Goals derived from <code>app.py</code>, then <strong>40 deliberate
           faults</strong> planted in it and flask's <em>own</em> test suite run
-          against every one of them in a jail. It caught 25 and slept through <strong>15</strong> — a kill rate of <strong>0.62</strong>. A second
+          against every one of them in a jail. It caught 29 and slept through <strong>11</strong> — a kill rate of <strong>0.72</strong>. A second
           model then wrote a test for each survivor and ran it alone against
-          its fault: <strong>14 of the 15</strong> became demonstrated gaps,
+          its fault: <strong>10 of the 11</strong> became demonstrated gaps,
           bugs the suite misses with the test that catches them attached. Ends
-          with the signed verdict, the ledger entry, and the chain verified.
+          with the signed verdict entered into Sigstore's public log (<a href="https://rekor.sigstore.dev/api/v1/log/entries?logIndex=2759598612" rel="noopener noreferrer">index 2759598612</a>,
+          the one you watch being issued) and the chain verified.
         </p>
       </figcaption>
     </figure>
@@ -60,18 +61,26 @@
         Your browser cannot play this video. The run is also in the <a href="/recordings/">recordings gallery</a>.
       </video>
       <figcaption>
-        <h3><code>review</code> — 71 seconds</h3>
+        <h3><code>review</code> — 84 seconds</h3>
         <p>
           <strong>Claude Code</strong> reviews <code>src/flask/sessions.py</code> cold and <strong>Codex</strong> argues the other side. Five claims come back — and the two the
           reviewer declared <em>reproduced</em> had scripts that did not
-          demonstrate them, so corral <strong>demoted its own reviewer</strong> on the record: 0 reproduced, 4 code-read, 1 hypothesis. Then a person
-          checks the top claim by hand — <code>session |= &#123;"a": 1&#125;</code> on an app with no secret key silently mutates the null session and
-          raises nothing — and rules it real. The defect stood; the overclaim
-          did not.
+          demonstrate them, so corral <strong>demoted its own reviewer</strong> on the record: 0 reproduced, 5 standing as read. Then a person checks the
+          top claim by hand — on an app with no secret key, <code>session["a"]=1</code> raises the documented error but <code>session |= &#123;"a": 1&#125;</code> is silently accepted and the write dropped — and rules it real. The
+          defect stood; the overclaim did not.
         </p>
       </figcaption>
     </figure>
   </div>
+
+  <p class="note">
+    <strong>One run each, not a grade.</strong> Faults are generated fresh
+    every time, so the same file scores differently on different days — this <code>app.py</code> has come back at 0.62, 0.72 and 0.75 across runs. That
+    spread is the reason corral reports a <em>proven gap</em>, which does not
+    drift, rather than asking you to gate on a kill rate, which does. Both
+    runs above are entries on the public branch; query them and you will get
+    these numbers and other runs' too.
+  </p>
 
   <p class="foot">
     Both close on the same frame: a fresh clone of <code>corral/ledger</code>, <code>corral ledger verify</code>, one <code>SELECT</code> over the entries,
@@ -90,5 +99,7 @@
   .vid figcaption h3 code { background: none; padding: 0; font-size: 1em; color: inherit; }
   .vid figcaption p { margin: 0; font-size: 0.92rem; color: var(--fg); }
   .vid code { background: var(--sel); border-radius: 4px; padding: 1px 5px; font-size: 0.85em; }
-  .foot { margin-top: 22px; font-size: 0.9rem; color: var(--muted); }
+  .note { margin-top: 22px; font-size: 0.92rem; color: var(--fg); background: var(--panel); border: 1px solid var(--line); border-left: 3px solid var(--amber); border-radius: 8px; padding: 14px 18px; }
+  .note code { background: var(--sel); border-radius: 4px; padding: 1px 5px; font-size: 0.85em; }
+  .foot { margin-top: 18px; font-size: 0.9rem; color: var(--muted); }
 </style>

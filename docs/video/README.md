@@ -6,12 +6,22 @@ real run; the pipeline applies pacing and captions and nothing else.
 
 | video | what it is | length |
 |---|---|---|
-| `corral-certify.mp4` | `certify --repo . --top 1` on flask: goals derived, forty faults planted in `app.py`, flask's own suite run against each in a jail, 25 killed / 15 survived, a test written for every survivor and proven alone against its fault, 14 of 15 proven, the signed verdict, the ledger entry, the chain verified | 61 s |
-| `corral-review.mp4` | `review --scope src/flask/sessions.py` with Claude Code reviewing and Codex verifying: five claims, two declared reproduced whose scripts did not demonstrate them (demoted on the record), five standing as read; a person checks the top claim by hand (`session \|= {"a": 1}` on an app with no secret key mutates the null session silently) and rules; `ledger verify`, `brief`, a DuckDB query over the branch | 71 s |
+| `corral-certify.mp4` | `certify --repo . --top 1` on flask: goals derived, forty faults planted in `app.py`, flask's own suite run against each in a jail, 29 killed / 11 survived, a test written for every survivor and proven alone against its fault, 10 of 11 proven, the signed verdict, its entry in Sigstore's public log (Rekor index 2759598612), the ledger entry, the chain verified | 56 s |
+| `corral-review.mp4` | `review --scope src/flask/sessions.py` with Claude Code reviewing and Codex verifying: five claims, two declared reproduced whose scripts did not demonstrate them (demoted on the record), five standing as read; a person checks the top claim by hand (`session \|= {"a": 1}` on an app with no secret key mutates the null session silently) and rules; `ledger verify`, `brief`, a DuckDB query over the branch | 84 s |
 
 Both end on the same frame: a fresh clone of `corral/ledger`, `corral ledger
 verify .`, one `SELECT` over the entries, `corral ledger push . md:corral_public`,
 and `models rank --db md:corral_public --seat reviewer`.
+
+**The runs in these videos are on the branch.** After recording, each entry is
+carried up with `corral ledger append` and pushed, so a viewer can query the
+exact numbers they just watched. Append re-hashes as it re-links, so a review
+must be appended *before* it is adjudicated — otherwise the ruling names a hash
+that is not in the chain and `ledger verify` refuses it.
+
+Captions that quote a number are derived from the cast (`scored()` in
+`make-videos.py`), never typed in: faults are generated fresh per run, so a
+hard-coded "25 of 40" goes stale the next time this is recorded. It did.
 
 ## What is real and what is applied
 

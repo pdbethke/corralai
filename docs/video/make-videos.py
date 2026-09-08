@@ -32,9 +32,22 @@ CLOSING=[  # cards on the closing segment, relative to its start
     (0.0, 'the record — corral\'s own, on a branch of its repository: a fresh clone, then verify'),
     ('chain intact', 'every entry carries the hash of the one before it — edit one, its signature breaks; remove one, the next link breaks'),
     ('SELECT', 'DuckDB reads the branch in place, as tables — no database to run'),
-    ('pushed 0 scan', 'the same entries pushed to MotherDuck: the same view, shared, scripts withheld'),
+    ('scan(s)', 'the same entries pushed to MotherDuck: the same view, shared, scripts withheld'),
     ('MODEL', 'the seats, graded by the record they leave — a claim that did not reproduce is on the record too'),
 ]
+
+def scored(name='certify'):
+    """The run's own dev-adequacy line, read back from the cast — so a caption
+    can never quote a number the recording does not show. Faults are generated
+    fresh per run, so hard-coding '25 of 40' goes stale the next time this is
+    recorded (it did, 2026-09-08)."""
+    import json as _j2, re as _re2
+    s=''.join(_j2.loads(l)[2] for i,l in enumerate(open(f'{V}/{name}.cast')) if i>0)
+    s=_re2.sub(r'\x1b\[[0-9;?]*[A-Za-z=]','',s)
+    m=_re2.search(r"scored (\d+)% \(killed (\d+) of (\d+) graded mutants, (\d+) survived", s)
+    if not m: return None
+    pct,killed,total,surv = m.groups()
+    return f"flask's own suite runs against every fault, in a jail: {killed} killed, {surv} survived — measured by execution, never a model's word"
 
 def cards_for(segments, plan):
     """plan: list of (segment name, [(cue-needle-or-seconds, text), ...]); returns absolute (start,end,text)."""
@@ -58,10 +71,10 @@ c_seg=seg('certify', 5.0, idle=3.5); cl=seg('closing', 4.0)
 cards=[(0.0,'one real run on flask, 1× speed — each wait on the jail or a model trimmed to a few seconds, nothing else cut'),
        ('goal','the goals: what this file promises, derived from the code'),
        ('budgeted by complexity','forty faults planted in app.py — each one violates a goal'),
-       ('killed 25 of 40','flask\'s own suite runs against every fault, in a jail: 25 killed, 15 survived — measured by execution, never a model\'s word'),
+       ('graded mutants', scored() or 'flask\'s own suite runs against every fault, in a jail — measured by execution, never a model\'s word'),
        ('survivor writer','a second model writes a test for each survivor; each test is proven alone against its fault'),
        ('kill rate 0.','the verdict — kill rate, survivors, the gaps proven — signed'),
-       ('Rekor','and entered into Sigstore\'s public transparency log: a receipt anyone can check against the log, not against us'),
+       ('rekor index','and entered into Sigstore\'s public transparency log: a receipt anyone can check against the log, not against us'),
        ('ledger: entry written','one entry, on a branch in the repo'),
        ('chain intact','the chain, verified'),
        ('verify --attest','the receipt, verified')]

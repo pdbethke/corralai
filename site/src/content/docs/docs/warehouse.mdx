@@ -87,13 +87,15 @@ print(con.sql(f"""
 ├──────────────┼─────────┼────────────┤
 │ adjudication │      58 │ 2026-09-06 │
 │ review       │      24 │ 2026-09-06 │
+│ scan         │       1 │ 2026-09-08 │
 └──────────────┴─────────┴────────────┘
 ```
 
-That output is the live state of [corral's own
-ledger](https://github.com/pdbethke/corralai/tree/corral/ledger) at the time of
-writing — reviews and the rulings on them. Your own branch will show `scan`
-entries too, one per `certify` run.
+That is [corral's own
+ledger](https://github.com/pdbethke/corralai/tree/corral/ledger) as of
+2026-09-08 — audits, cold reviews, and the human rulings on them, in one
+chain. The counts grow as runs land, so treat the numbers as a snapshot and
+the *shape* as the claim: run the query yourself and the kinds will be there.
 
 The same `read_json_auto([urls])` works from any DuckDB client — the CLI, R,
 Java, the WebAssembly build in a browser. Locally, corral opens the directory
@@ -162,22 +164,28 @@ a public, append-only log run by people with no stake in your audit, and prints
 the receipt:
 
 ```
-attestation logged: rekor index 2667058567 (uuid 108e9186e8c5677a...)
+attestation logged: rekor index 2759114416 (uuid 108e9186e8c5677a...)
 ```
 
-The index and UUID are recorded on the ledger entry and, with `--push`, in the
-warehouse. Anyone can then check the verdict against the log rather than
-against you:
+The index and UUID are recorded **on the ledger entry itself**, and with
+`--push`, in the warehouse. That is what makes the whole thing walkable by
+someone who trusts none of it — you can do every step of this right now, on the
+flask audit sitting on corral's branch:
+
+1. Read the entry off the branch:
+   `scans/20260908T144147Z-36e4a824f340-53e5e74c0119.json.gz`.
+2. Find `bundle.Scan.RekorLogIndex` in it — `2759114416`.
+3. Fetch [that entry from Sigstore](https://rekor.sigstore.dev/api/v1/log/entries?logIndex=2759114416),
+   a log we do not run and cannot edit.
+4. Confirm it is this file and not another:
 
 ```bash
-corral verify --attest corral-audit-statement.json --rekor-index 2667058567
+corral verify --attest corral-audit-statement.json --rekor-index 2759114416
 ```
 
-That compares the envelope's own sha256 against the hash Rekor recorded, so a
-claimed log entry has to actually *be* that file. [Index
-`2667058567`](https://rekor.sigstore.dev/api/v1/log/entries?logIndex=2667058567)
-is a real corral entry; you can fetch it right now without asking us for
-anything.
+That last step compares the envelope's own sha256 against the hash Rekor
+recorded, so a claimed log entry has to actually *be* that file. At no point
+does the check route through us.
 
 Two things to know before you use it:
 

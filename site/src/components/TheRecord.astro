@@ -60,8 +60,10 @@ GROUP BY 1 ORDER BY 2 DESC;</code></pre>
         the key is still ours. <code>--transparency</code> closes that gap: it
         uploads the signed statement to <strong>Sigstore's Rekor</strong>, a
         public append-only log run by people with no stake in the audit, and
-        prints the receipt. A real corral entry is <a href="https://rekor.sigstore.dev/api/v1/log/entries?logIndex=2667058567" rel="noopener noreferrer">index 2667058567</a>
-        — fetch it now, without asking us for anything.
+        prints the receipt, and records it on the ledger entry. The flask audit on
+        corral's own branch carries <a href="https://rekor.sigstore.dev/api/v1/log/entries?logIndex=2759114416" rel="noopener noreferrer">index 2759114416</a>
+        — read it off the entry, fetch it from Sigstore, and check it matches,
+        without asking us for anything.
       </p>
       <p class="warn">
         The entry is public and permanent: once logged it cannot be removed or
@@ -129,8 +131,8 @@ GROUP BY 1 ORDER BY 2 DESC;</code></pre>
 
   <p class="foot">
     Corral's own record is public at <a href="https://github.com/pdbethke/corralai/tree/corral/ledger" rel="noopener noreferrer"><code>corral/ledger</code></a>
-    — reviews, and the rulings on them, in a branch you can query without
-    cloning.
+    — audits, cold reviews, and the human rulings on them, in a branch you can
+    query without cloning.
   </p>
 </section>
 

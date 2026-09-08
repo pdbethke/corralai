@@ -1,0 +1,163 @@
+---
+// SPDX-License-Identifier: Elastic-2.0
+//
+// The record: the ledger branch, and the four named things that make it
+// tangible — the GitHub Action that writes it, DuckDB that reads it, Rekor
+// that witnesses it, MotherDuck that shares it. Numbers here are checked
+// against the live public branch; see docs/warehouse for the runnable query.
+---
+<section class="section" id="the-record">
+  <h2>And the runner stops forgetting</h2>
+  <p class="lede">
+    A CI runner is a throwaway machine: it boots, it measures your code, it is
+    destroyed. The usual way to keep what it learned is to stand up a database —
+    a server, a schema, credentials in CI, a bill — to hold what is really just
+    an append-only list of small facts. Corral doesn't stand anything up.
+    <strong>Every verdict is committed to an orphan git branch in your own
+    repository</strong>, <code>corral/ledger</code>. It shares no history with
+    <code>main</code>, never appears in your diffs, and lives somewhere every
+    runner already has credentials for. GitHub stops being just CI and becomes
+    the record.
+  </p>
+
+  <div class="chain">
+    <span class="link"><strong>GitHub Action</strong><em>writes the entry</em></span>
+    <span class="arrow" aria-hidden="true">→</span>
+    <span class="link"><strong>corral/ledger</strong><em>signed, hash-linked</em></span>
+    <span class="arrow" aria-hidden="true">→</span>
+    <span class="link"><strong>DuckDB</strong><em>reads it as tables</em></span>
+    <span class="arrow" aria-hidden="true">→</span>
+    <span class="link"><strong>Rekor</strong><em>witnesses it publicly</em></span>
+    <span class="arrow" aria-hidden="true">→</span>
+    <span class="link"><strong>MotherDuck</strong><em>shares it across repos</em></span>
+  </div>
+
+  <div class="tech-grid">
+    <div class="tech">
+      <h3>DuckDB reads the branch in place</h3>
+      <p>
+        Entries are gzipped JSON, and DuckDB reads JSON over HTTPS — so the
+        record is in an analytical engine from the first entry, with nothing
+        installed and nothing running. No clone, no server, no schema to adopt.
+        Point any DuckDB at the raw files:
+      </p>
+      <pre class="cmd"><code>SELECT kind, count(*) AS entries
+FROM read_json_auto('scans/*.json.gz')
+GROUP BY 1 ORDER BY 2 DESC;</code></pre>
+      <p>
+        The same query runs against the URLs straight off the branch, from any
+        DuckDB client — the CLI, Python, R, or the WebAssembly build in a
+        browser tab. Then the questions a single run can never answer are one
+        <code>GROUP BY</code> each: which files have been weak across every
+        scan, which model catches bugs in which language, what an audit costs
+        per file, whose review claims held once execution checked them.
+      </p>
+      <a href="/docs/warehouse/">The record, and the warehouse over it →</a>
+    </div>
+
+    <div class="tech">
+      <h3>Rekor witnesses it, so it isn't our word</h3>
+      <p>
+        Signing proves integrity — the verdict is byte-for-byte the one
+        produced. It does not prove <em>independent</em> authenticity, because
+        the key is still ours. <code>--transparency</code> closes that gap: it
+        uploads the signed statement to <strong>Sigstore's Rekor</strong>, a
+        public append-only log run by people with no stake in the audit, and
+        prints the receipt. A real corral entry is
+        <a href="https://rekor.sigstore.dev/api/v1/log/entries?logIndex=2667058567" rel="noopener noreferrer">index 2667058567</a>
+        — fetch it now, without asking us for anything.
+      </p>
+      <p class="warn">
+        The entry is public and permanent: once logged it cannot be removed or
+        edited, by anyone, including you. It carries the verdict — repo, commit,
+        paths, kill rates, the models in each role — and never your source. And
+        it fails open: an unreachable log prints one line and leaves the verdict
+        untouched. A witness, not a gate.
+      </p>
+      <a href="/docs/verify-a-record/">Verify one yourself →</a>
+    </div>
+
+    <div class="tech">
+      <h3>The next run reads it</h3>
+      <p>
+        The branch is checked out <em>before</em> the audit, so a fresh machine
+        arrives holding everything the repository has learned about itself.
+        Faults already planted on a file's exact bytes become the generator's
+        <strong>prior</strong>, so it plants somewhere new instead of re-sitting
+        the same exam. A verdict for a file whose bytes haven't changed is
+        reused, and marked reused rather than re-billed. The review planner
+        knows which scopes were covered and which have changed since. Every
+        verdict says whether it was primed this way.
+      </p>
+      <a href="/docs/how-it-works/">How it works →</a>
+    </div>
+
+    <div class="tech">
+      <h3>Nobody can quietly edit it</h3>
+      <p>
+        Each entry carries the hash of the one before it and is signed with your
+        certify key. Edit an entry and its signature breaks; remove one and the
+        next entry's link breaks. <code>corral ledger verify</code> walks the
+        chain from a clean checkout and names which entry is wrong — a stranger
+        checks the record against its own signatures, not against you. Nothing
+        is edited in place: a wrong entry is retracted by a later entry that
+        says so, and every reader leaves it out.
+      </p>
+      <a href="/docs/verify-a-record/">Check the chain →</a>
+    </div>
+
+    <div class="tech">
+      <h3>MotherDuck, when one repo isn't enough</h3>
+      <p>
+        The branch is one repository's record. <code>corral ledger push</code>
+        appends the same entries to a warehouse <em>you</em> own — a plain
+        DuckDB file, or <strong>MotherDuck</strong> for the view across every
+        repository that pushes. Rows are append-only, because overwriting is how
+        a trend is lost. There is no hosted tier and nothing is collected: your
+        key, your runner, your warehouse. Any DuckDB works, so MotherDuck is a
+        destination rather than a requirement.
+      </p>
+      <a href="/docs/warehouse/">Getting your own →</a>
+    </div>
+
+    <div class="tech">
+      <h3>It travels with the repository</h3>
+      <p>
+        Fork it, mirror it, move to a self-hosted GitLab or Gitea, hand it to an
+        auditor — the record goes along, because it <em>is</em> the repository.
+        Each entry also names the audited party: author, committer and
+        co-author trailers, so the record says who wrote the change beside who
+        judged it. A person and an agent are named the same way.
+      </p>
+      <a href="/docs/internal-forge/">On an internal forge →</a>
+    </div>
+  </div>
+
+  <p class="foot">
+    Corral's own record is public at
+    <a href="https://github.com/pdbethke/corralai/tree/corral/ledger" rel="noopener noreferrer"><code>corral/ledger</code></a>
+    — reviews, and the rulings on them, in a branch you can query without
+    cloning.
+  </p>
+</section>
+
+<style>
+  .lede { font-size: 1rem; }
+  .chain { display: flex; flex-wrap: wrap; align-items: stretch; gap: 8px; margin: 24px 0 4px; }
+  .chain .link { display: flex; flex-direction: column; gap: 2px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px 14px; flex: 1 1 auto; min-width: 130px; }
+  .chain .link strong { font-size: 0.9rem; color: var(--amber); }
+  .chain .link em { font-style: normal; font-size: 0.78rem; color: var(--muted); }
+  .chain .arrow { align-self: center; color: var(--muted); font-size: 0.9rem; }
+  @media (max-width: 640px) { .chain .arrow { display: none; } }
+  .tech-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 18px; margin-top: 24px; }
+  .tech { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 18px 20px; }
+  .tech h3 { margin: 0 0 8px; font-size: 1.05rem; color: var(--amber); }
+  .tech p { margin: 0 0 10px; font-size: 0.92rem; color: var(--fg); }
+  .tech p.warn { font-size: 0.86rem; color: var(--muted); border-left: 2px solid var(--line); padding-left: 12px; }
+  .tech code { background: var(--sel); border-radius: 4px; padding: 1px 5px; font-size: 0.85em; }
+  .tech a { font-size: 0.85rem; font-weight: 600; text-decoration: none; }
+  .tech a:hover { text-decoration: underline; }
+  .cmd { background: var(--sel); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; overflow-x: auto; font-size: 0.8rem; color: var(--muted); margin: 0 0 10px; }
+  .cmd code { background: none; padding: 0; font-size: inherit; }
+  .foot { margin-top: 22px; font-size: 0.9rem; color: var(--muted); }
+</style>

@@ -51,6 +51,16 @@ func IsLedgerDir(target string) bool {
 		return true
 	}
 	st, err := os.Stat(t)
+	// KNOWN, and deliberately not "fixed" here: any existing directory reads
+	// as a ledger, so a mistyped `--db /home/me` or `--db .` is not refused
+	// — it becomes a new ledger directory instead. (Round four, R5.)
+	//
+	// The narrower rule tried first — "already holds scans/, or is empty" —
+	// is WRONG: a caller legitimately writes other files into the directory
+	// before the first push (internal/prior does exactly this), so the rule
+	// refused real ledgers. Refusing a working path to catch a typo is the
+	// worse trade, and inventing a marker file on launch day is worse still.
+	// The finding stands on the record until it is done properly.
 	return err == nil && st.IsDir()
 }
 
@@ -384,14 +394,8 @@ func AppendLedgerEntry(dir string, e LedgerEntry, signer LedgerSigner) (string, 
 		// error text this would have printed spoke of "a chain that is
 		// already broken" — the check narrower than the claim it made. Caught
 		// by a second cold review of this package on the first fix.
-		checks, verr := VerifyLedgerDir(dir, nil)
-		if verr != nil {
-			return "", verr
-		}
-		for _, c := range checks {
-			if c.Problem != "" {
-				return "", fmt.Errorf("auditpush: %s does not verify (%s: %s) — refusing to append, which would sign this chain as the new entry's history", dir, c.File, c.Problem)
-			}
+		if err := RequireIntactChain(dir); err != nil {
+			return "", fmt.Errorf("%w — refusing to append, which would sign this chain as the new entry's history", err)
 		}
 		prev = existing[n-1].Hash
 	}
@@ -562,6 +566,16 @@ func VerifyLedgerDir(dir string, pub ed25519.PublicKey) ([]ChainCheck, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Whether this chain is a signed one at all: an entirely unsigned ledger
+	// is honest (no key was configured), but a single unsigned entry among
+	// signed ones is a hole, not a style.
+	anySigned := false
+	for _, e := range entries {
+		if e.Signature != "" {
+			anySigned = true
+			break
+		}
+	}
 	var out []ChainCheck
 	prevHash := ""
 	seen := map[string]bool{}
@@ -590,6 +604,15 @@ func VerifyLedgerDir(dir string, pub ed25519.PublicKey) ([]ChainCheck, error) {
 			c.Problem = fmt.Sprintf("prev %.12s does not name the previous entry (%.12s) — an entry was removed, reordered or inserted", e.Prev, prevHash)
 		case c.Signed && pub != nil && !c.SigOK:
 			c.Problem = "signature does not verify under the given key"
+		case !c.Signed && pub != nil && anySigned:
+			// A MISSING signature was never a problem, only an invalid one —
+			// so deleting a signature outright passed, in a chain where
+			// every other entry carries one. Removing evidence must not be a
+			// way to pass a check that having bad evidence fails. Judged
+			// against the chain itself: a wholly unsigned ledger (no key was
+			// ever configured) is a different, honest thing and still
+			// verifies. Found by a cold review, 2026-09-08 (round four, R3).
+			c.Problem = "unsigned, in a chain whose other entries are signed — a signature was removed, or this entry was written by something that could not sign"
 		case e.Kind == KindCheckpoint && i != 0:
 			c.Problem = fmt.Sprintf("a checkpoint at position %d — a checkpoint is a genesis and stands only at the start of a chain", i+1)
 		case EntryShapeProblem(e) != "":
@@ -757,6 +780,31 @@ func WriteRetraction(dir, target, reason string, signer LedgerSigner) (string, e
 	return AppendLedgerEntry(dir, LedgerEntry{Kind: KindRetract, Retracts: hash, Reason: reason}, signer)
 }
 
+// RequireIntactChain refuses a ledger directory that does not verify.
+//
+// It exists because the guard kept being added ONE DOOR AT A TIME. Round one
+// of a cold review found `checkpoint` pruning without verifying; round three
+// found `append` checking only the head; round four found that `push` and
+// `LoadDir` — the two doors that carry the record OUT, to a warehouse and to
+// the UI — never verified at all. Four doors, three separate fixes, and the
+// same rule. It is one function now, and every door calls it.
+//
+// Signatures are not checked here: the callers do not all hold a key, and a
+// missing key must not read as a broken chain. Hashes, links, shape and
+// ordering are, which is what catches edited, removed or reordered bytes.
+func RequireIntactChain(dir string) error {
+	checks, err := VerifyLedgerDir(dir, nil)
+	if err != nil {
+		return err
+	}
+	for _, c := range checks {
+		if c.Problem != "" {
+			return fmt.Errorf("auditpush: %s does not verify (%s: %s)", dir, c.File, c.Problem)
+		}
+	}
+	return nil
+}
+
 // WriteCheckpoint replaces every entry in dir with one KindCheckpoint
 // genesis that names the head it stood in for. The pruned files are
 // DELETED — that is the point of a checkpoint — after the checkpoint is
@@ -778,14 +826,8 @@ func WriteCheckpoint(dir string, signer LedgerSigner) (string, int, error) {
 	// Signatures are not checked here (no key is in hand); hashes and links
 	// are, which is what catches edited or reordered bytes. Found by a cold
 	// review, 2026-09-08 (R1, reproduced).
-	if checks, verr := VerifyLedgerDir(dir, nil); verr != nil {
-		return "", 0, verr
-	} else {
-		for _, c := range checks {
-			if c.Problem != "" {
-				return "", 0, fmt.Errorf("auditpush: %s does not verify (%s: %s) — refusing to prune, because a checkpoint over a broken chain deletes the evidence and leaves a genesis that verifies clean", dir, c.File, c.Problem)
-			}
-		}
+	if err := RequireIntactChain(dir); err != nil {
+		return "", 0, fmt.Errorf("%w — refusing to prune, because a checkpoint over a broken chain deletes the evidence and leaves a genesis that verifies clean", err)
 	}
 	head := entries[len(entries)-1]
 	names, err := ledgerFileNames(dir)
@@ -969,6 +1011,11 @@ func ReadLedgerDir(dir string) ([]ledgerFile, error) {
 // scan_uid and timestamp it was pushed with, so statement checks and joins
 // see the same identities a warehouse would.
 func LoadDir(dir string) (*sql.DB, error) {
+	// The record must not be SERVED from a chain that does not verify: this
+	// is what the UI, `verify --db` and every reader open. (R1, round four.)
+	if err := RequireIntactChain(dir); err != nil {
+		return nil, fmt.Errorf("%w — refusing to load a record that does not verify", err)
+	}
 	files, err := ReadLedgerDir(dir)
 	if err != nil {
 		return nil, err

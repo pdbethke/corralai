@@ -42,7 +42,7 @@ func runLedger(args []string, stdout, stderr io.Writer) int {
 		fs := flag.NewFlagSet("corral ledger verify", flag.ContinueOnError)
 		fs.SetOutput(stderr)
 		pub := fs.String("pub", "", "hex-encoded Ed25519 public key to verify signatures against (default: the local certify key)")
-		expectHead := fs.String("expect-head", "", "the hash this chain's newest entry must have, held from OUTSIDE the directory (a git ref, a Rekor receipt, a note). A chain verifies against itself, so removing the newest entries leaves the rest valid and no check inside can see it; this is the anchor that does")
+		expectHead := fs.String("expect-head", "", "the hash this chain's newest entry must have, held from OUTSIDE the directory (a git ref, a Rekor receipt, a note). A chain verifies against itself, so removing the newest entries leaves the rest valid and no check inside can see it; this is the anchor that does. A prefix is accepted, but at least 12 hex characters — a short one names too many entries to be an anchor")
 		if err := fs.Parse(args[1:]); err != nil {
 			return 2
 		}
@@ -252,7 +252,14 @@ func runLedgerPush(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, "  %d entr%s already there, skipped\n", plan.Skipped, map[bool]string{true: "y", false: "ies"}[plan.Skipped == 1])
 	}
 	if plan.Retracted > 0 {
-		fmt.Fprintf(stdout, "  %d retracted scan(s) left out — not the record\n", plan.Retracted)
+		// "entries", not "scans": PushLedgerDir counts every retracted KIND —
+		// scans, reviews and adjudications alike — so calling them scans
+		// described the number as something narrower than it is. (Round
+		// four, R7.)
+		fmt.Fprintf(stdout, "  %d retracted entr%s left out — not the record\n", plan.Retracted, map[bool]string{true: "y", false: "ies"}[plan.Retracted == 1])
+		for _, h := range plan.RetractedButPushed {
+			fmt.Fprintf(stdout, "  ! %.12s was retracted AFTER the warehouse received it — the rows are still there and a push cannot remove them; delete them yourself, or the view keeps serving what the record disowns\n", h)
+		}
 	}
 	if plan.NotPushable > 0 {
 		fmt.Fprintf(stdout, "  %d retraction/checkpoint entr%s are chain facts, not rows\n", plan.NotPushable, map[bool]string{true: "y", false: "ies"}[plan.NotPushable == 1])

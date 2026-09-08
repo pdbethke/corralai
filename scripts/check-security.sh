@@ -13,9 +13,16 @@ GOSEC="$(command -v gosec 2>/dev/null || echo "$(go env GOPATH)/bin/gosec")"
 #    empty stdout was success, so on a machine without gofmt this gate passed
 #    over any amount of unformatted code. A gate that cannot fail is not a
 #    gate. Found by a cold review, 2026-09-08 (R7).
-command -v gofmt >/dev/null 2>&1 || note "gofmt is not installed — this gate cannot run, so it must not pass"
-if command -v gofmt >/dev/null 2>&1; then
-  bad=$(git ls-files '*.go' | xargs gofmt -l)
+#    And the tool's FAILURE must not read as clean either: the first fix
+#    gated gofmt's PRESENCE and still took empty stdout as success, so a
+#    gofmt that errored (an unparseable file, a broken toolchain) passed the
+#    gate. Its exit status is checked now. (R7, then R6 of round four.)
+if ! command -v gofmt >/dev/null 2>&1; then
+  note "gofmt is not installed — this gate cannot run, so it must not pass"
+else
+  gofmt_err=$(git ls-files '*.go' | xargs gofmt -l 2>&1 >/tmp/.gofmt_out); gofmt_rc=$?
+  bad=$(cat /tmp/.gofmt_out); rm -f /tmp/.gofmt_out
+  [ "$gofmt_rc" -ne 0 ] && note "gofmt exited $gofmt_rc — the gate did not run to completion:"$'\n'"$gofmt_err"
   [ -n "$bad" ] && note "unformatted files:"$'\n'"$bad"
 fi
 

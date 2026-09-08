@@ -16,6 +16,12 @@ type PushPlan struct {
 	Retracted                     int // scan entries a later entry retracted — not the record, not pushed
 	NotPushable                   int // retractions and checkpoints: chain facts, no warehouse row
 	Files, Findings               int // rows those entries carry
+	// RetractedButPushed names entries the ledger has since retracted whose
+	// rows the warehouse ALREADY holds. Nothing here removes them — a push
+	// appends — so the operator is told which rows the view is serving that
+	// the record disowns. Silence here is the warehouse and the ledger
+	// disagreeing with nobody watching.
+	RetractedButPushed []string
 }
 
 // PushLedgerDir pushes a ledger directory's record to a warehouse the
@@ -26,6 +32,12 @@ type PushPlan struct {
 // and source follow withSource, the same custody switch --push-source is.
 // dryRun plans and writes nothing.
 func PushLedgerDir(dir, target string, withSource, dryRun bool) (PushPlan, error) {
+	// A chain that does not verify must not be carried OUT of the directory
+	// into a warehouse, where the rows lose the links that would have shown
+	// it. (R1, round four.)
+	if err := RequireIntactChain(dir); err != nil {
+		return PushPlan{}, fmt.Errorf("%w — refusing to push a record that does not verify", err)
+	}
 	entries, err := ReadLedgerDir(dir)
 	if err != nil {
 		return PushPlan{}, err
@@ -69,12 +81,24 @@ func PushLedgerDir(dir, target string, withSource, dryRun bool) (PushPlan, error
 			plan.NotPushable++
 			continue
 		}
-		if have[e.Hash] {
-			plan.Skipped++
-			continue
-		}
+		// LIVENESS FIRST. Testing `have` before `live` meant retracting a
+		// scan the warehouse had ALREADY received was a silent no-op: the
+		// entry was skipped as "already pushed" and the retraction never
+		// reached the view, which went on serving a row the record says is
+		// not the record. Found by a cold review, 2026-09-08 (round four).
 		if !live[e.Hash] {
 			plan.Retracted++
+			if have[e.Hash] {
+				// The row is already out there. Say so by name rather than
+				// counting it as routine: removing it is the operator's
+				// call, and a warehouse that silently keeps it while the
+				// ledger disowns it is the disagreement worth printing.
+				plan.RetractedButPushed = append(plan.RetractedButPushed, e.Hash)
+			}
+			continue
+		}
+		if have[e.Hash] {
+			plan.Skipped++
 			continue
 		}
 		switch e.Kind {
@@ -111,7 +135,11 @@ func PushLedgerDir(dir, target string, withSource, dryRun bool) (PushPlan, error
 			if dryRun {
 				continue
 			}
-			if _, err := pushReviewEntryTx(db, e, withSource); err != nil {
+			// Same custody rule as the scan branch above: --push-source can
+			// only carry source the ENTRY holds. Gating scans and not
+			// reviews was the identical one-door mistake, inside the fix for
+			// a one-door mistake. (R6, round four.)
+			if _, err := pushReviewEntryTx(db, e, withSource && e.Bundle.SourcePushed); err != nil {
 				return plan, err
 			}
 		case KindAdjudication:

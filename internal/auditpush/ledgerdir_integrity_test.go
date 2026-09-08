@@ -9,8 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 	"testing"
+	"time"
 )
 
 // tamperedChain writes n entries, then edits the LAST one's bytes in place

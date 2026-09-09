@@ -135,11 +135,17 @@ func PushLedgerDir(dir, target string, withSource, dryRun bool) (PushPlan, error
 			if dryRun {
 				continue
 			}
-			// Same custody rule as the scan branch above: --push-source can
-			// only carry source the ENTRY holds. Gating scans and not
-			// reviews was the identical one-door mistake, inside the fix for
-			// a one-door mistake. (R6, round four.)
-			if _, err := pushReviewEntryTx(db, e, withSource && e.Bundle.SourcePushed); err != nil {
+			// withSource DIRECTLY, and the asymmetry with the scan branch
+			// above is correct. A scan entry can be written with its source
+			// already blanked, so pushing one must not claim custody of
+			// bytes it does not hold. A REVIEW entry always carries its
+			// scripts and outputs inline (review.Finding), and WriteReview
+			// never sets Bundle.SourcePushed at all — so gating on it, as a
+			// round-four "fix" did, made the condition permanently false and
+			// silently broke --push-source for reviews. Making two branches
+			// look alike is not the same as making them right. Caught by the
+			// next review, 2026-09-08 (round five, R2).
+			if _, err := pushReviewEntryTx(db, e, withSource); err != nil {
 				return plan, err
 			}
 		case KindAdjudication:

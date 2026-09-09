@@ -358,14 +358,30 @@ func TestUnsignedEntryInASignedChainIsAProblem(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	checks, err := VerifyLedgerDir(dir, pub)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if checks[0].Signed {
-		t.Skip("the signature was not actually removed; the fixture needs updating")
-	}
-	if checks[0].Problem == "" {
-		t.Fatal("an entry whose signature was DELETED verified clean in a chain where every other entry is signed — removing a signature must not be a way to pass")
+	// BOTH ways: with a key, and WITHOUT one. The round-four fix gated this
+	// on pub != nil, so a stripped signature still passed for anyone
+	// verifying without a key — which is most readers of a public branch.
+	// (Round five, R1.)
+	for _, tc := range []struct {
+		name string
+		key  ed25519.PublicKey
+	}{{"with a key", pub}, {"without a key", nil}} {
+		checks, err := VerifyLedgerDir(dir, tc.key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if checks[0].Signed {
+			t.Skip("the signature was not actually removed; the fixture needs updating")
+		}
+		// DISCLOSED, not refused. A missing signature is indistinguishable
+		// from a removed one inside the file, and refusing broke every
+		// legitimate chain that gained a key partway — including CI's, which
+		// has no key at all. The reader is told; the chain still verifies.
+		if !strings.Contains(checks[0].Note, "UNSIGNED") {
+			t.Errorf("%s: an entry whose signature was removed carried no disclosure (note=%q) — a reader must be told which entries are unsigned", tc.name, checks[0].Note)
+		}
+		if checks[0].Problem != "" {
+			t.Errorf("%s: an unsigned entry was reported as a broken chain (%q) — that refuses a ledger written without a certify key, which is a legitimate and common state", tc.name, checks[0].Problem)
+		}
 	}
 }

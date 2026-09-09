@@ -27,11 +27,23 @@ type LanguageStat struct {
 	// folded into NoPairedTest: doing so would inflate "files with no test" and
 	// turn a well-tested repo into a scary one.
 	TestFiles int
+	// OtherExcluded is every source file this language recognises whose
+	// exclusion reason none of the buckets above names.
+	//
+	// It exists because the attribution below was an ENUMERATION of three
+	// reasons, and WidenCandidacyByEvidence REPLACES an exclusion's reason
+	// before this profile is built — so a widened file matched no case, was
+	// counted nowhere, and disappeared from Total() as well, leaving numbers
+	// that were self-consistent and wrong. A bucket for the unrecognised is
+	// what makes the accounting complete rather than tidy. Found by a cold
+	// review, 2026-09-08 — the third time an enumeration has been the defect
+	// in this repository this week.
+	OtherExcluded int
 }
 
 // Total is every file this language accounts for.
 func (s LanguageStat) Total() int {
-	return s.Auditable + s.NoPairedTest + s.Ambiguous + s.TestFiles
+	return s.Auditable + s.NoPairedTest + s.Ambiguous + s.TestFiles + s.OtherExcluded
 }
 
 // BuildLanguageProfile turns the enumeration's own results into a per-language
@@ -86,6 +98,11 @@ func BuildLanguageProfile(cands []Candidate, excl []Exclusion) []LanguageStat {
 			s.Ambiguous++
 		case ReasonIsTest:
 			s.TestFiles++
+		default:
+			// Anything else this language's source can be excluded for —
+			// including a reason WidenCandidacyByEvidence substituted after
+			// the exclusion was first recorded. Counted, never dropped.
+			s.OtherExcluded++
 		}
 		// Every other reason (not-selected, skipped-dir, not-a-regular-file,
 		// ungoaled, …) is deliberately NOT attributed here: those are scan

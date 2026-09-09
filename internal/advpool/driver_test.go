@@ -1006,8 +1006,13 @@ func TestMatrixDrivesAdjudicationAndCandidates(t *testing.T) {
 	if onB == nil {
 		t.Fatal("no observation for the TestB finding")
 	}
-	if onB.Adjudication != AdjConfirmed {
-		t.Fatalf("TestB finding Adjudication = %q, want %q (scored zero-kill, catchable via TestA)", onB.Adjudication, AdjConfirmed)
+	// Refute-only. TestB scored zero kills and the mutants were catchable via
+	// TestA — which says nothing about whether TestB can ever fail, the claim
+	// the critic actually made. This used to auto-CONFIRM, and a confirmation
+	// paid the critic seat leaderboard credit for a claim execution had not
+	// established. See matrixAdjudication.
+	if onB.Adjudication != AdjUnadjudicated {
+		t.Fatalf("TestB finding Adjudication = %q, want %q — another test's kill does not establish that THIS test can never fail", onB.Adjudication, AdjUnadjudicated)
 	}
 	if onB.Source != "auto" {
 		t.Fatalf("TestB finding Source = %q, want %q", onB.Source, "auto")
@@ -4573,6 +4578,18 @@ func TestTimeoutVerdictCarriesTheChallengerComparison(t *testing.T) {
 // defect class here is "a new scored field added to one path and not the
 // other", and that is a property of the CODE, not of any one run. It is the
 // cheapest guard that fails when the next field is forgotten.
+//
+// WHAT IT CANNOT SEE, and did not: the ORDER. Both assignments were present
+// and this count was 2 while tickAggregate assigned the field 41 lines AFTER
+// handing the verdict to the signer — so the signed snapshot omitted a
+// measurement the returned verdict carried, and this test passed throughout.
+// Counting where a field is written says nothing about whether the write
+// happens before the bytes are serialized.
+//
+// TestSignedVerdictCarriesTheChallengerMeasurement asserts at the actual
+// boundary, with a signer that captures what it was handed. Keep both: this
+// one catches a field added to one path, that one catches a field set too
+// late. Reported by an outside reviewer (GPT/Codex), 2026-09-08.
 func countAssignmentsOfChallengerAgreement(t *testing.T) int {
 	t.Helper()
 	b, err := os.ReadFile("driver.go")

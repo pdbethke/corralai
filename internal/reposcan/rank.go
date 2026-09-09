@@ -103,11 +103,51 @@ func fileChurn(root string) (map[string]int, RankInfo) {
 			Note:   "no usable git history in this tree — ranked by source size alone",
 		}
 	}
+	// git log names paths relative to the WORK TREE root; candidates are
+	// named relative to the SCAN root. Scanning a subdirectory therefore
+	// produced churn keys that could never match a candidate, every file
+	// fell to churn 1, and the ranking was size-only while RankInfo still
+	// said "churn-x-size".
+	//
+	// This is the SECOND cause found for that same false label — the first
+	// was C-quoting, fixed with -z above (review 28c4ae555cbc#R5) — so the
+	// guard below no longer trusts the cause list. Found 2026-09-08.
+	prefix := ""
+	if pfx, perr := gitShowPrefix(root); perr == nil {
+		prefix = pfx
+	}
 	churn := map[string]int{}
 	for _, p := range strings.Split(string(out), "\x00") {
-		if p = strings.Trim(p, "\n"); p != "" {
-			churn[p]++
+		p = strings.Trim(p, "\n")
+		if p == "" {
+			continue
+		}
+		if prefix != "" {
+			if !strings.HasPrefix(p, prefix) {
+				continue // outside the scanned subtree
+			}
+			p = strings.TrimPrefix(p, prefix)
+		}
+		churn[p]++
+	}
+	if len(churn) == 0 {
+		return nil, RankInfo{
+			Signal: "size-only",
+			Note:   "git history names no file inside this scan root — ranked by source size alone",
 		}
 	}
 	return churn, RankInfo{Signal: "churn-x-size"}
+}
+
+// gitShowPrefix is the scan root's path relative to the work tree root,
+// slash-terminated, or "" at the top. It is what makes a churn key
+// comparable to a candidate's path.
+func gitShowPrefix(root string) (string, error) {
+	cmd := exec.CommandContext(context.Background(), "git", "rev-parse", "--show-prefix") // #nosec G204 -- fixed binary, literal args
+	cmd.Dir = root
+	out, err := cmd.Output()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
 }

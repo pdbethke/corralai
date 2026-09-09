@@ -6,8 +6,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"os"
 	"path"
+	"strings"
 )
 
 // ReasonUngoaled marks a candidate the GoalSource declined to supply a goal
@@ -192,6 +194,17 @@ func EmitJobs(cfg EmitConfig, cands []Candidate, gs GoalSource) ([]Job, []Exclus
 			// One file is genuinely the whole grading surface here, so keying
 			// on the whole suite would throw away every verdict in the repo
 			// for a change that cannot reach them.
+			// An evidence-only candidate has no TestPath: it was widened in
+			// because coverage showed tests reach it, not because a filename
+			// paired. Digesting "" would key its verdict on nothing.
+			//
+			// The CALLER already refuses this combination — which is why this
+			// is a guard and not a bug report — but the rule belongs where
+			// the work happens, so a second caller cannot arrive without it.
+			// (Cold review, 2026-09-08.)
+			if strings.TrimSpace(c.TestPath) == "" {
+				return nil, nil, fmt.Errorf("reposcan: %s has no paired test, so file-scoped grading has nothing to key on — this candidate came from evidence, not from a pairing", c.Path)
+			}
 			testDigest, err = DigestFile(root, c.TestPath)
 			if err != nil {
 				return nil, nil, err

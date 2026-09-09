@@ -19,7 +19,15 @@ const sentinel = "⟦∎corralai-untrusted-fence-3f9ba2∎⟧"
 
 // Untrusted returns content wrapped in a labeled, provenance-tagged untrusted-data fence.
 func Untrusted(label, provenance, content string) string {
-	content = strings.ReplaceAll(content, sentinel, "[fence-token-removed]")
+	// EVERY argument, not just content. label and provenance land inside the
+	// fence too — in the preamble, before the second sentinel — and a caller
+	// derives them from ingested data: internal/brain/reference.go builds
+	// them from a corpus hit's own Source and Kind. Neutralizing one of the
+	// three let such a hit forge or close a fence through its metadata while
+	// its body was scrubbed. Found by an antigravity seat (gemini-3.1-pro),
+	// verified by codex, 2026-09-08.
+	scrub := func(s string) string { return strings.ReplaceAll(s, sentinel, "[fence-token-removed]") }
+	label, provenance, content = scrub(label), scrub(provenance), scrub(content)
 	if provenance == "" {
 		provenance = "unknown source"
 	}

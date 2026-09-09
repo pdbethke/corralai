@@ -540,8 +540,13 @@ type Verdict struct {
 	// without producing a compiling killing test. HONESTY NOTE: when this is
 	// true, ProvenMissed==0 does NOT mean "no real gaps" — it means "gaps
 	// found (Survivors > 0), killing test not authored." A testWriterFailed
-	// run is never certified (aggregate forces needs-review whenever
-	// Survivors > 0 and ProvenMissed < Survivors — see aggregate).
+	// run is never certified — aggregate names this flag directly in the
+	// needs-review condition, alongside poolTestUnsound, a kill rate under
+	// the threshold and an open blocking finding.
+	//
+	// It does NOT compare ProvenMissed against Survivors, which this comment
+	// claimed for as long as anyone reading it would have believed a guard
+	// that is not there. The flag is the guard. (Cold review, 2026-09-08.)
 	TestWriterFailed bool
 	// WriterProviderFailed narrows TestWriterFailed to its blameless case:
 	// the writer's PROVIDER never answered (rate-limited, 5xx, unreachable —
@@ -2811,6 +2816,25 @@ func (d *Driver) tickAggregate(ctx context.Context, missionID int64, run *runSta
 		criticObs = d.adjudicateCriticFindings(ctx, missionID, run, criticFindings, v)
 	}
 
+	// The in-memory agreement measurement, carried onto the verdict itself —
+	// UNGATED by RecordID/Signer, unlike every sink above: `certify --repo`
+	// signs no per-file record and wires no MutantAttempts sink, so this is
+	// the only path that measurement reaches that command's verdict at all.
+	//
+	// IT MUST BE SET BEFORE THE SIGNATURE. Verdict is passed to SignVerdict
+	// BY VALUE, so assigning this after signing — which is what happened for
+	// 41 lines — signed a snapshot without the measurement while handing the
+	// caller a verdict that had it: the report showing a number the signature
+	// does not cover. timeoutVerdict, the other construction path, already
+	// assigned it before its caller signed, so the two paths disagreed about
+	// what a signed record contains. That is the same hazard AGENTS.md
+	// records and that timeoutVerdict's own comment names: two Verdict
+	// construction paths, one field handled differently in each.
+	//
+	// Reported by an outside reviewer (GPT/Codex) against this repository,
+	// 2026-09-08, and reproduced by TestSignedVerdictCarriesTheChallengerMeasurement.
+	v.ChallengerAgreement = challengerPair(d, run)
+
 	if d.Signer != nil {
 		recordID, head, serr := d.Signer.SignVerdict(ctx, v)
 		if serr != nil {
@@ -2848,12 +2872,6 @@ func (d *Driver) tickAggregate(ctx context.Context, missionID int64, run *runSta
 	if d.CriticFindings != nil && v.RecordID != 0 && len(criticObs) > 0 {
 		d.CriticFindings.Record(v.RecordID, v.RecordHead, criticObs)
 	}
-
-	// The in-memory agreement measurement, carried onto the verdict itself —
-	// UNGATED by RecordID/Signer, unlike every sink above: `certify --repo`
-	// signs no per-file record and wires no MutantAttempts sink, so this is
-	// the only path that measurement reaches that command's verdict at all.
-	v.ChallengerAgreement = challengerPair(d, run)
 
 	// Feed both writer seats' per-mutant outcomes, pair-or-nothing, to the
 	// DURABLE store (a DIFFERENT sink, gated on RecordID!=0 same as

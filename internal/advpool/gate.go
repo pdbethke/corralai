@@ -535,7 +535,20 @@ func (s JailScorer) CompliantFailure(ctx context.Context, codePath, code, test, 
 	if !ok {
 		return ""
 	}
-	ws, cmd := s.scoreWorkspace(codePath, test, testCmd)
+	ws, base := s.scoreWorkspace(codePath, test, testCmd)
+	// The AUTHORED command, as ScoreAuthoredReport builds it three hundred
+	// lines up — not the scoring command. This took the scoring one, so under
+	// a selection the feedback described a different run from the one the
+	// authored pass performs, and a writer reading "why does your test fail"
+	// could be shown the wrong tests' output entirely.
+	//
+	// Tiered honestly: an antigravity seat declared this REPRODUCED and codex
+	// REFUTED the reproduction — with `pytest tests/`, directory discovery
+	// collects the authored file either way, so that script demonstrated
+	// nothing. The asymmetry is still real for a runner that does not
+	// auto-discover, and this is feedback text rather than a measured number,
+	// which is why it is a one-line fix and not an incident. (2026-09-08.)
+	cmd := s.authoredCmd(codePath, base)
 	if s.BaseFiles != nil {
 		ws = s.authoredWorkspace(codePath, test)
 	}

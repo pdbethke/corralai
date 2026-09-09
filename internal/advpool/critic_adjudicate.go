@@ -56,7 +56,29 @@ func matrixAdjudication(row matrix.TestAdequacy, catchable bool) string {
 	case row.Scored && row.Kills >= 1:
 		return AdjRefuted
 	case row.Scored && row.Kills == 0 && catchable:
-		return AdjConfirmed
+		// NOT a confirmation. `catchable` says some OTHER test killed the
+		// mutants; it says nothing about whether THIS test can ever fail.
+		// A test asserting different behavior legitimately kills none of
+		// these mutants without being vacuous, and the critic's claim is
+		// about the test, not about the mutant set.
+		//
+		// It mattered because this fed the LEADERBOARD: a confirmed row
+		// records OutcomePass for the critic seat (driver.go), so a critic
+		// earned gate-earned fitness from a confirmation execution had not
+		// established — in a system whose rule is that fitness comes from
+		// execution and never from an assertion.
+		//
+		// Execution can DISPROVE "this test can never fail" — it killed
+		// something — and cannot prove it. So this path is refute-only now,
+		// like the review harness, which demotes and never promotes. The
+		// consequence is deliberate and worth stating: a critic can lose
+		// standing here and cannot gain it, until there is a signal that
+		// actually bears on the claim (the mutants this test's own coverage
+		// reaches, rather than any mutant at all).
+		//
+		// Found by a cold review of internal/advpool, 2026-09-08, and let
+		// stand by its verifier.
+		return AdjUnadjudicated
 	default:
 		return AdjUnadjudicated
 	}

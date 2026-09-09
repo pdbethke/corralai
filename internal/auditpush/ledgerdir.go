@@ -604,15 +604,6 @@ func VerifyLedgerDir(dir string, pub ed25519.PublicKey) ([]ChainCheck, error) {
 			c.Problem = fmt.Sprintf("prev %.12s does not name the previous entry (%.12s) — an entry was removed, reordered or inserted", e.Prev, prevHash)
 		case c.Signed && pub != nil && !c.SigOK:
 			c.Problem = "signature does not verify under the given key"
-		case !c.Signed && pub != nil && anySigned:
-			// A MISSING signature was never a problem, only an invalid one —
-			// so deleting a signature outright passed, in a chain where
-			// every other entry carries one. Removing evidence must not be a
-			// way to pass a check that having bad evidence fails. Judged
-			// against the chain itself: a wholly unsigned ledger (no key was
-			// ever configured) is a different, honest thing and still
-			// verifies. Found by a cold review, 2026-09-08 (round four, R3).
-			c.Problem = "unsigned, in a chain whose other entries are signed — a signature was removed, or this entry was written by something that could not sign"
 		case e.Kind == KindCheckpoint && i != 0:
 			c.Problem = fmt.Sprintf("a checkpoint at position %d — a checkpoint is a genesis and stands only at the start of a chain", i+1)
 		case EntryShapeProblem(e) != "":
@@ -644,6 +635,24 @@ func VerifyLedgerDir(dir string, pub ed25519.PublicKey) ([]ChainCheck, error) {
 		// it is a label the entry asserts about itself rather than something
 		// the signature vouches for. Say so, rather than printing it as
 		// though it were established.
+		// UNSIGNED among signed entries: disclosed, NOT a failure.
+		//
+		// It was a Problem for one round. That refused a legitimate chain —
+		// one that gained a certify key partway, which is what a machine
+		// without a key produces and is exactly how CI runs — and because
+		// RequireIntactChain now guards checkpoint, append, push and
+		// LoadDir, a mixed chain became unusable at all four doors. Caught
+		// by CI, which has no key, while every local run passed because this
+		// machine has one.
+		//
+		// A missing signature and a REMOVED one are indistinguishable from
+		// inside the file, so the honest thing is to say what is true — this
+		// entry is unsigned and its neighbours are not — and let the reader
+		// judge. An over-strict fix is worse than the finding it closes; that
+		// is now twice in one day.
+		if !c.Signed && anySigned && c.Problem == "" {
+			c.Note = strings.TrimPrefix(strings.TrimSpace(c.Note+" · UNSIGNED, in a chain whose other entries are signed — it was written where no certify key was configured, or a signature was removed; the chain itself is intact either way"), "· ")
+		}
 		if !keyIDIsHashed(e.Format) && c.Signed && c.Problem == "" {
 			c.Note = strings.TrimPrefix(strings.TrimSpace(c.Note+" · signer name is self-reported: "+e.Format+" does not cover keyid in the hash, so it is not vouched for by the signature (the signature itself is checked)"), "· ")
 		}
@@ -787,7 +796,24 @@ func WriteRetraction(dir, target, reason string, signer LedgerSigner) (string, e
 // found `append` checking only the head; round four found that `push` and
 // `LoadDir` — the two doors that carry the record OUT, to a warehouse and to
 // the UI — never verified at all. Four doors, three separate fixes, and the
-// same rule. It is one function now, and every door calls it.
+// same rule.
+//
+// WHO CALLS IT, precisely — the earlier wording here said "every door",
+// which was itself false and was reproduced as a finding (round five, R3):
+//
+//   - WriteCheckpoint  — it DELETES; it must look first.
+//   - AppendLedgerEntry — a new entry signs the chain as its history.
+//   - PushLedgerDir    — carries the record out to a warehouse.
+//   - LoadDir          — serves the record to the UI and every --db reader.
+//   - prior.Load       — feeds a LATER audit's priors, so a tampered chain
+//     would steer a run that has not happened yet.
+//
+// The remaining ReadLedgerDir callers are narrow VIEWS — `scans list`, the
+// verdict cache, a review lookup — which read one field and change nothing.
+// They are not guarded, deliberately: verification is O(chain) and a listing
+// that re-hashes every entry on every invocation is a different kind of
+// wrong. `corral ledger verify` is the command that says whether the chain
+// holds, and the writers refuse to build on one that does not.
 //
 // Signatures are not checked here: the callers do not all hold a key, and a
 // missing key must not read as a broken chain. Hashes, links, shape and

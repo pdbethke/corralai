@@ -1,0 +1,157 @@
+---
+title: "Two videos, and what they do not show"
+description: "Sixty seconds of an audit and eighty of a review, both real runs on a library we did not write. This is the annotated version: what is happening in each frame, what the pipeline applied, which numbers you can check against the public record, and the three claims in the review that our own harness threw out."
+pubDate: 2026-09-09
+draft: false
+---
+
+{/* SPDX-License-Identifier: Elastic-2.0 */}
+
+*Field note. A demo is the easiest place in software to lie, because the
+viewer cannot rerun it. So here is the frame-by-frame, with every number
+traced to an entry anyone can query.*
+
+## What the videos are
+
+Two recordings, both of `pallets/flask` at `36e4a824` — a library we did not
+write, chosen because we cannot have tuned anything to it.
+
+- **`certify`, 56 seconds.** One file audited: faults planted, flask's own
+  suite run against each one, a test written for what survived.
+- **`review`, 84 seconds.** One file read cold by a coding agent told to
+  assume it is wrong, a second agent arguing the other side, and a person
+  settling one claim by hand.
+
+Both end on the same frame: the record, verified from a clean clone.
+
+## What was applied, stated first
+
+The casts are asciinema recordings of the runs, byte for byte, with the
+original timings. Nothing in them was edited. What the pipeline does:
+
+- plays at 1×, with every wait on the jail or a model **capped** — 3.5s on
+  the audit, 6s on the closing frame;
+- re-times the review's output burst, which arrives all at once after the
+  seats' five-minute silence, to one line every 0.11s so it can be read.
+  Same bytes, same order;
+- holds the last frame a few seconds, and adds captions.
+
+That is the whole list. The first caption of each video says so, because a
+demo that trims its own waits without mentioning it is already shading the
+truth.
+
+## The audit, frame by frame
+
+**It reads the repository first.** 21 candidate files, one selected under
+`--top 1`: `src/flask/app.py`. Everything excluded is named with a reason —
+`not-selected`, `gitignored`, `imported at load time — no test exercises it
+directly`. A file corral cannot reach is said out loud, never scored zero.
+
+**A model writes down what the file must guarantee.** Then a *different*
+seat is told to violate those guarantees. It produced **40 faults**, budgeted
+by the file's own complexity: 165 decision points, floor 5, ceiling 40.
+
+**Then the only part that is not a model's opinion.** Each fault is applied
+in a private copy of the tree and *flask's own test command* runs against it.
+
+> flask's own suite caught **29** and slept through **11**.
+> Kill rate **0.725**.
+
+Eleven faults that a real library's real suite did not notice.
+
+**A second model writes a test for each survivor**, and each test is run
+alone against its fault. If it fails on unmodified code it is sent back with
+the failure. **10 of the 11** became proven gaps — a bug the suite misses,
+with the test that catches it attached. One was not provable and is reported
+as such, not quietly dropped.
+
+**The verdict is signed** and entered into Sigstore's public transparency
+log. The receipt in the video is
+[Rekor index 2759598612](https://rekor.sigstore.dev/api/v1/log/entries?logIndex=2759598612),
+and it is on the ledger entry, so you can walk from the record to a log we do
+not run.
+
+## The review, frame by frame
+
+**A cold seat gets one file.** Claude Code, in a disposable copy of the
+checkout, on `src/flask/sessions.py`, with one instruction: assume this is
+wrong, find where, and prove it. Codex — never the reviewer's model, by rule
+— then argues the other side.
+
+**Five claims come back. Three of them are declared REPRODUCED.**
+
+And this is the part worth watching, because it is the part that makes the
+rest mean anything: a claim called *reproduced* must ship a script that
+exits 0 only if the defect is demonstrated. Corral runs the scripts. It does
+not read them.
+
+> All three scripts failed to demonstrate their claim.
+> Final tiers on the record: **0 reproduced, 5 code-read.**
+
+The reviewer was demoted by our own harness, in public, on the record. The
+entry on the branch carries `declared: REPRODUCED` beside `tier: CODE-READ`
+for R1, R2 and R3, so the overclaim is preserved rather than tidied away.
+
+**Then a person settles one.** The top claim: `NullSession` blocks
+`__setitem__`, `update`, `setdefault` and four more, but not the in-place
+union operator. On an app with no secret key, `session["a"] = 1` raises the
+documented error and `session |= {"a": 1}` is silently accepted and the write
+dropped. We checked that by hand, in one line, before ruling on it. The
+ruling is its own signed entry, and it is the outcome of record — above
+execution, because a person looked.
+
+The defect stood. The overclaim did not. Both are on the branch.
+
+## What you can check
+
+The record is a git branch. Any DuckDB reads it straight off GitHub:
+
+```python
+import duckdb, json, urllib.request
+repo = "pdbethke/corralai"
+names = [f["name"] for f in json.load(urllib.request.urlopen(
+    f"https://api.github.com/repos/{repo}/contents/scans?ref=corral/ledger"))
+    if f["name"].endswith(".json.gz")]
+urls = [f"https://raw.githubusercontent.com/{repo}/corral/ledger/scans/{n}" for n in names]
+con = duckdb.connect(); con.execute("INSTALL httpfs; LOAD httpfs")
+print(con.sql(f"""
+  SELECT coalesce(kind, 'scan') AS kind, count(*) AS entries
+  FROM read_json_auto({urls!r}, union_by_name = true) GROUP BY 1 ORDER BY 2 DESC"""))
+```
+
+The audit above is a `scan` entry; the review and the ruling are their own
+kinds. `corral ledger verify` walks the chain from a clean checkout.
+
+## What the videos do not show
+
+**They are not a grade for flask.** Faults are generated fresh every run, so
+a kill rate is a sample of one exam, not a property of the suite. Quoting
+0.725 as flask's number would be misreading it exactly as badly as quoting a
+single benchmark. What does not drift is a *proven gap*: a specific
+demonstrated bug with a working test attached, which is why the merge gate
+keys on that and not on a percentage.
+
+**They are one file each.** `--top 1` on a repository with 21 candidates.
+The cost model is `O(mutants × your suite's runtime)`, and that is the honest
+reason: a whole-repo audit is something you opt into deliberately.
+
+**They do not show the failures.** Both are runs that worked. Corral has a
+long list of ways a run produces no number — a suite that cannot pass on
+unmutated code, a test command that never reaches the file, a timeout before
+scoring — and each is reported as its own state rather than as a zero. You
+will not see those sixty seconds here, which is itself a limitation of
+watching a video instead of running the thing.
+
+**And the seats are named, never chosen for you.** The models in these runs
+were named on the command line. Corral ships no defaults; an unnamed seat is
+a refused run.
+
+## Why we recorded them at all
+
+Because the argument is not "trust the tool" and a video cannot make it be.
+It is: here is a run on code we did not write, here is the number our own
+suite execution produced, here is the claim our own reviewer got wrong, and
+here is the branch where all of it is signed and queryable by you.
+
+If a frame in either video disagrees with an entry on that branch, the entry
+is the record and we would like to know.

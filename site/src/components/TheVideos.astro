@@ -63,7 +63,7 @@
       <figcaption>
         <h3><code>review</code> — 84 seconds</h3>
         <p>
-          <strong>Claude Code</strong> reviews <code>src/flask/sessions.py</code> cold and <strong>Codex</strong> argues the other side. Five claims come back — and the two the
+          <strong>Claude Code</strong> reviews <code>src/flask/sessions.py</code> cold and <strong>Codex</strong> argues the other side. Five claims come back — and the three the
           reviewer declared <em>reproduced</em> had scripts that did not
           demonstrate them, so corral <strong>demoted its own reviewer</strong> on the record: 0 reproduced, 5 standing as read. Then a person checks the
           top claim by hand — on an app with no secret key, <code>session["a"]=1</code> raises the documented error but <code>session |= &#123;"a": 1&#125;</code> is silently accepted and the write dropped — and rules it real. The

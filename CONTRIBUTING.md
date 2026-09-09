@@ -58,7 +58,32 @@ CORRALAI_CONSOLE_PUBKEY=<the public half> go run ./cmd/verify-console-signature 
 git add internal/ui/console.manifest.sig && git commit
 ```
 
-Then tag. The release workflow re-runs that verification against the
+Then tag — and then bump the pins, and then RE-RUN the release workflow:
+
+```sh
+git tag -a vX.Y.Z -m "<one line>" && git push origin vX.Y.Z
+# main is now RED, on purpose: the pins still name the previous tag
+#   ...open and merge the pin-bump PR...
+gh run rerun <the release run id> --failed
+```
+
+Three gates make that order the only one that works, and the middle step
+LOOKS like a break when it is not:
+
+- `TestDocsNeverAdvertiseAnUncutActionTag` refuses a pin naming a tag that
+  does not exist yet, so pins cannot be bumped before tagging.
+- `TestDocsPinTheNewestCutTag` refuses docs that lag the newest tag, so from
+  the moment the tag is pushed until the pin bump merges, `validate` on main
+  FAILS by construction.
+- The release workflow refuses to publish a release whose commit's `validate`
+  is not green — added 2026-09-09 so a tag on red CI cannot become a release.
+
+So the tag push lands in the window where main is red, the release refuses,
+and the rerun after the pin bump is what actually publishes. That is
+deliberate; the alternative is a Releases page that can vouch for a commit
+whose tests never passed.
+
+The release workflow re-runs the console verification against the
 `CORRALAI_CONSOLE_PUBKEY` secret and **fails the release** if the committed
 signature does not cover the tag's version — because until that check existed,
 every released brain served a console every thin client refused with

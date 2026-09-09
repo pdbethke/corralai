@@ -164,7 +164,7 @@ slow"`), not a shell one-liner that chains multiple commands.
 
 **There is no `v1` tag, but there are pinnable release tags.** `v0.1.0` and
 `v0.2.0` predate the action and carry no `action.yml`; **`v0.3.0` and later do**
-(`v1.0.0-rc.11` is current). Prefer `pdbethke/corralai@v1.0.0-rc.11` over `@main` — pinning
+(`v1.0.0-rc.12` is current). Prefer `pdbethke/corralai@v1.0.0-rc.12` over `@main` — pinning
 a tag means a push to `main` cannot change what runs in your CI. Pin the commit
 SHA you reviewed (`pdbethke/corralai@<sha>`) if you want an immutable reference
 that a re-tag also cannot move. `@main` still works and tracks the newest
@@ -531,7 +531,7 @@ over both, not the store.
             git worktree add --detach .corral-ledger
             (cd .corral-ledger && git checkout --orphan corral/ledger && git rm -rfq . && echo "corral's record — see docs/corral/github-action.md" > README.md)
           fi
-      - uses: pdbethke/corralai@v1.0.0-rc.11
+      - uses: pdbethke/corralai@v1.0.0-rc.12
         with:
           test-command: pytest -q
           ledger: .corral-ledger
@@ -799,7 +799,7 @@ of every existing caller of this action.
 Set `min-kill-rate` (a number from `0.0` to `1.0`) to give the gate teeth:
 
 ```yaml
-- uses: pdbethke/corralai@v1.0.0-rc.11
+- uses: pdbethke/corralai@v1.0.0-rc.12
   with:
     test-command:  "go test ./..."
     gemini-key:    ${{ secrets.GEMINI_API_KEY }}
@@ -840,7 +840,7 @@ The audit is the gate by execution. The review is the gate by adversary,
 and the same step runs it when `reviewer-model` is named:
 
 ```yaml
-      - uses: pdbethke/corralai@v1.0.0-rc.11
+      - uses: pdbethke/corralai@v1.0.0-rc.12
         with:
           test-command: "go test ./..."
           mutant-model: gemini-3.6-flash

@@ -9,6 +9,96 @@ still move between minor versions.
 Entries describe what changed for someone *using* the tool. For the full commit
 history of any release, `git log v0.3.4..v0.3.5`.
 
+## [v1.0.0-rc.12] — 2026-09-09
+
+Seven rounds of cold review on rc.11 in one day, by three vendors' models
+(Claude Code, Codex, and an antigravity seat), every finding an entry on the
+public `corral/ledger` branch. **Upgrade from rc.11**: two of these let a
+merge gate pass on an audit that measured nothing.
+
+### The gate could say pass when nothing was measured
+
+- **`--max-proven-missed` passed a file whose every mutant the compile gate
+  rejected.** Nothing was graded, so `ProvenMissed` is 0 — bit-identical to
+  "measured, and nothing survived". `noGradableMutant` already existed and
+  its own comment called itself "ONE predicate for the two places that must
+  agree"; the gate was a third place that did not use it, and the weak-file
+  line a fourth, printing a literal `0.00` kill rate for a file it graded
+  nothing on.
+- **A changed source excluded as `ambiguous-test` was never counted as
+  unauditable**, because the gate matched `no-paired-test` alone — so a pull
+  request touching a file whose pairing corral REFUSES (grading it would
+  produce a confident, signed, wrong verdict) went green on exactly the
+  change the gate exists to inspect. Now a derived property,
+  `reposcan.UnauditableChangedSource`, classified once beside the reasons.
+
+### The record could be edited without the verifier saying so
+
+- **`corral ledger checkpoint` pruned without verifying** — the one verb that
+  destroys evidence never looked at it, so a tampered entry could be deleted
+  and the genesis left verifying clean.
+- **`append` linked to the head's stored hash without recomputing it**, so a
+  new entry extended and SIGNED a tampered predecessor; then it checked only
+  the head, so an edited middle entry still passed.
+- **`push` and `LoadDir` verified nothing at all** — the two doors that carry
+  the record out, to a warehouse and to every reader. All five doors now call
+  one `RequireIntactChain`, including `prior.Load`, which feeds a later
+  audit's priors.
+- **`keyid` — the name of who signed — sat outside the hash and was never
+  compared to the verifying key**, so rewriting it left `HashOK`, `SigOK` and
+  `Problem` untouched while `verify --ledger` printed the attacker's chosen
+  name as the signer. **corral-ledger-4** puts it inside the hashed bytes and
+  the signer names itself before hashing. Older entries verify unchanged
+  under their own rules and now carry a note that their signer name is
+  self-reported.
+- **The warehouse rows hash was not injective**: numbers went through float64
+  and empty array ELEMENTS were pruned, so two different row sets could share
+  a signed hash. Closed at rows-hash **version 4**; versions 2 and 3 keep the
+  old form byte for byte so every existing statement still verifies.
+- **Retracting a retraction did nothing**, making a mistaken retraction a
+  one-way door the record does not otherwise have.
+- **A signed verdict omitted the challenger measurement** the returned
+  verdict carried: `tickAggregate` signed and assigned it 41 lines later, and
+  `Verdict` is passed by value. Found by an outside reviewer.
+
+### Credentials and isolation
+
+- **`CORRAL_TOKEN` was not scrubbed** from the environment the workspace
+  substrate hands the audited repository's own test command. The provider
+  keys were scrubbed after an earlier review; corral's own bearer token was
+  left behind.
+- **`fence.Untrusted` neutralized the sentinel in `content` only**, while
+  `label` and `provenance` — which a caller derives from ingested corpus
+  data — were interpolated verbatim inside the fence.
+
+### Measurement
+
+- **A mutant could anchor twice and be applied once.** The uniqueness guard
+  resumed past the whole match, so a self-overlapping SEARCH ("aa" in "aaa")
+  read as unique.
+- **Ranking claimed `churn-x-size` while using neither.** `git log` names
+  paths from the work-tree root and candidates from the scan root, so
+  auditing a subdirectory matched no churn entry at all. Second cause found
+  for that same false label, so an empty churn map now reports `size-only`
+  with a reason.
+- **A test-critic could earn leaderboard credit for a claim execution never
+  established.** Auto-confirming "this test can never fail" because some
+  OTHER test killed the mutants is not evidence about this test. The path is
+  refute-only now.
+
+### Also
+
+- A third built-in review seat, `antigravity`, and `--expect-head` for
+  `ledger verify` — a chain verifies against itself, so end-truncation needs
+  an anchor from outside.
+- Four npm advisories cleared including a critical in astro, and grpc bumped
+  past GHSA-2v4p-qf9q-27wj.
+- Documentation that was false: `AGENTS.md` claimed no Makefile and no
+  SIGINT/SIGTERM handler (both exist), the ROADMAP called shipped
+  coverage-derived pairing "the honest direction", and seven claims on the
+  site — including a page telling readers every audit draws on the brain's
+  corpus, four lines under its own banner saying no audit reads it.
+
 ## [v1.0.0-rc.11] — 2026-09-08
 
 - **The receipt's path is made, and proved writable, before anything is

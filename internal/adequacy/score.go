@@ -320,7 +320,13 @@ func (m Mutant) Apply(original string) (string, error) {
 	if i < 0 {
 		return "", fmt.Errorf("adequacy: mutant %s does not anchor: its SEARCH is not in the source's bytes", m.ID)
 	}
-	if strings.Contains(original[i+len(m.Search):], m.Search) {
+	// From i+1, not i+len(SEARCH): resuming past the whole match cannot see
+	// an occurrence that OVERLAPS the first, so "aa" in "aaa" read as unique
+	// and Apply silently mutated the first of two — leaving a recorded hunk
+	// that no longer identifies which occurrence was changed. The doc above
+	// promises EXACTLY ONCE; this now enforces it. Found by an antigravity
+	// seat, let stand by claude-code, 2026-09-08.
+	if strings.Contains(original[i+1:], m.Search) {
 		return "", fmt.Errorf("adequacy: mutant %s does not anchor uniquely: its SEARCH occurs more than once", m.ID)
 	}
 	return original[:i] + m.Replace + original[i+len(m.Search):], nil

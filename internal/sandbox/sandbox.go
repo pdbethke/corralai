@@ -147,8 +147,30 @@ func MinimalEnv() []string {
 // ANTHROPIC_API_KEY/GEMINI_API_KEY for corral's own seats, a PR editing
 // `package.json`'s "test" script, a Rakefile or a phpunit bootstrap could
 // print them. Reproduced by the sixth review with `env | grep _API_KEY`.
+// CorralOwnSecrets are the credential env vars corral itself sets or reads
+// that creds.CanonicalNames does not name. One list, because the drop set
+// below was an enumeration and CORRAL_TOKEN — the BEARER TOKEN the agent
+// launcher injects (cmd/corral-agent/launcher.go) — was not in it: the
+// provider keys were scrubbed after an earlier review reproduced them with
+// `env | grep _API_KEY`, and corral's own token was left behind. The audited
+// repository's test command runs in this environment on the workspace
+// substrate. Found 2026-09-08.
+//
+// Deliberately NOT a heuristic over names containing TOKEN/KEY/SECRET: the
+// doc above promises the suite keeps its environment, and a project's own
+// API key is exactly the kind of variable its tests need.
+var CorralOwnSecrets = []string{
+	"CORRAL_TOKEN",
+	"GOOGLE_API_KEY",
+	"motherduck_token",
+	"MOTHERDUCK_TOKEN",
+}
+
 func ScrubbedEnviron() []string {
-	drop := map[string]bool{"GOOGLE_API_KEY": true, "motherduck_token": true, "MOTHERDUCK_TOKEN": true}
+	drop := map[string]bool{}
+	for _, n := range CorralOwnSecrets {
+		drop[n] = true
+	}
 	for _, n := range creds.CanonicalNames {
 		drop[n] = true
 	}

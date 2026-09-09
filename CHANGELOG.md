@@ -9,6 +9,20 @@ still move between minor versions.
 Entries describe what changed for someone *using* the tool. For the full commit
 history of any release, `git log v0.3.4..v0.3.5`.
 
+## [v1.0.0-rc.13] — 2026-09-09
+
+Same code as rc.12 plus the release-gate fix below. **rc.12 is tagged but has
+no GitHub Release**: the validate gate added that morning demanded green on
+the tag's own commit, which this project's pin order makes impossible, and a
+re-run replays the workflow file from the tag — so the fix could not reach
+it. rc.12 resolves on the Go proxy and is sound; rc.13 is the one to install.
+
+- **The release gate accepts green on the tag's commit OR on a default-branch
+  commit that contains it.** A gate no correct procedure can pass is an
+  outage, not a gate.
+- `CONTRIBUTING` documents the window where `main` is red by construction,
+  between the tag push and the pin bump.
+
 ## [v1.0.0-rc.12] — 2026-09-09
 
 Seven rounds of cold review on rc.11 in one day, by three vendors' models

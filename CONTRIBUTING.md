@@ -75,8 +75,11 @@ LOOKS like a break when it is not:
 - `TestDocsPinTheNewestCutTag` refuses docs that lag the newest tag, so from
   the moment the tag is pushed until the pin bump merges, `validate` on main
   FAILS by construction.
-- The release workflow refuses to publish a release whose commit's `validate`
-  is not green — added 2026-09-09 so a tag on red CI cannot become a release.
+- The release workflow refuses to publish a release unless `validate` is green
+  on the tag's commit OR on a default-branch commit that contains it — added
+  2026-09-09 so a tag on red CI cannot become a release. Its first version
+  demanded green on the tag's own commit, which the two gates above make
+  impossible, and it blocked rc.12 until it was corrected.
 
 So the tag push lands in the window where main is red, the release refuses,
 and the rerun after the pin bump is what actually publishes. That is

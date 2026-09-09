@@ -121,13 +121,43 @@ jobs:
           # placed on a commit whose checks are red — or never ran — published
           # a release regardless. Found by a cold review, 2026-09-08 (R9).
           tag_commit="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${version}" -q .sha)"
-          validate="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${tag_commit}/check-runs" \
-            -q '[.check_runs[] | select(.name=="validate")] | sort_by(.completed_at) | last | .conclusion' 2>/dev/null || echo "")"
+          # THE TAG'S COMMIT, OR A DESCENDANT OF IT ON THE DEFAULT BRANCH.
+          #
+          # The first version of this check demanded green on the tag's own
+          # commit, and that rule cannot be satisfied by this repository's own
+          # release procedure: TestDocsNeverAdvertiseAnUncutActionTag forbids
+          # bumping the pins before the tag exists, and TestDocsPinTheNewestCutTag
+          # fails the moment it does — so the release-content commit is RED at
+          # tag time, always, and stays red, because merging the pin bump makes
+          # a NEW commit rather than re-running the old one's checks. Cutting
+          # rc.12 into that gate is how it was found (2026-09-09).
+          #
+          # What is actually checkable, and is the claim worth making: this
+          # code passed CI as part of the default branch. So green on the tag's
+          # commit passes, and green on a default-branch commit that CONTAINS
+          # the tag passes — a tag on a commit whose CI never ran, or that was
+          # never merged, still fails.
+          check_validate() {
+            gh api "repos/${GITHUB_REPOSITORY}/commits/$1/check-runs" \
+              -q '[.check_runs[] | select(.name=="validate")] | sort_by(.completed_at) | last | .conclusion' 2>/dev/null || echo ""
+          }
+          validate="$(check_validate "$tag_commit")"
           if [ "$validate" != "success" ]; then
-            echo "::error::${version} points at ${tag_commit}, whose validate check is '${validate:-missing}'. A release is a claim that this commit passed; publishing one whose CI is red or never ran makes the Releases page say something the record does not support. Fix the commit, re-tag, and push the tag again." >&2
-            exit 1
+            head_sha="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_REPOSITORY##*/}" -q .sha 2>/dev/null || gh api "repos/${GITHUB_REPOSITORY}/branches/main" -q .commit.sha)"
+            contains="$(gh api "repos/${GITHUB_REPOSITORY}/compare/${tag_commit}...${head_sha}" -q .status 2>/dev/null || echo "")"
+            head_validate="$(check_validate "$head_sha")"
+            if [ "$contains" != "ahead" ] && [ "$contains" != "identical" ]; then
+              echo "::error::${version} points at ${tag_commit}, whose validate is '${validate:-missing}', and that commit is not an ancestor of main (compare says '${contains:-unknown}'). A release is a claim that this code passed CI on the default branch." >&2
+              exit 1
+            fi
+            if [ "$head_validate" != "success" ]; then
+              echo "::error::${version} points at ${tag_commit} (validate '${validate:-missing}') and main at ${head_sha} is '${head_validate:-missing}'. Neither is green, so there is no commit to stand behind this release. Fix main, then re-run this workflow." >&2
+              exit 1
+            fi
+            echo "validate is green on main (${head_sha}), which contains ${tag_commit} — publishing"
+          else
+            echo "validate is green on ${tag_commit}"
           fi
-          echo "validate is green on ${tag_commit}"
 
           ref_type="$(gh api "repos/${GITHUB_REPOSITORY}/git/refs/tags/${version}" -q .object.type)"
           if [ "$ref_type" != "tag" ]; then

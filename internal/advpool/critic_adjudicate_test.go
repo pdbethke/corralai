@@ -71,7 +71,10 @@ func TestMatrixAdjudication(t *testing.T) {
 		want      string
 	}{
 		{"scored kills>=1 -> refuted", sc(true, 2), true, AdjRefuted},
-		{"scored kills==0 catchable -> confirmed", sc(true, 0), true, AdjConfirmed},
+		// Refute-only: another test killing the mutants does not establish
+		// that THIS test can never fail, and a confirmation here paid the
+		// critic seat leaderboard credit for it.
+		{"scored kills==0 catchable -> UNadjudicated (refute-only)", sc(true, 0), true, AdjUnadjudicated},
 		{"scored kills==0 NOT catchable -> unadjudicated (guardrail)", sc(true, 0), false, AdjUnadjudicated},
 		{"not scored -> unadjudicated", sc(false, 0), true, AdjUnadjudicated},
 	}

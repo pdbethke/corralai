@@ -1006,8 +1006,13 @@ func TestMatrixDrivesAdjudicationAndCandidates(t *testing.T) {
 	if onB == nil {
 		t.Fatal("no observation for the TestB finding")
 	}
-	if onB.Adjudication != AdjConfirmed {
-		t.Fatalf("TestB finding Adjudication = %q, want %q (scored zero-kill, catchable via TestA)", onB.Adjudication, AdjConfirmed)
+	// Refute-only. TestB scored zero kills and the mutants were catchable via
+	// TestA — which says nothing about whether TestB can ever fail, the claim
+	// the critic actually made. This used to auto-CONFIRM, and a confirmation
+	// paid the critic seat leaderboard credit for a claim execution had not
+	// established. See matrixAdjudication.
+	if onB.Adjudication != AdjUnadjudicated {
+		t.Fatalf("TestB finding Adjudication = %q, want %q — another test's kill does not establish that THIS test can never fail", onB.Adjudication, AdjUnadjudicated)
 	}
 	if onB.Source != "auto" {
 		t.Fatalf("TestB finding Source = %q, want %q", onB.Source, "auto")

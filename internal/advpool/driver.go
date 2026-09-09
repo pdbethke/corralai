@@ -540,8 +540,13 @@ type Verdict struct {
 	// without producing a compiling killing test. HONESTY NOTE: when this is
 	// true, ProvenMissed==0 does NOT mean "no real gaps" — it means "gaps
 	// found (Survivors > 0), killing test not authored." A testWriterFailed
-	// run is never certified (aggregate forces needs-review whenever
-	// Survivors > 0 and ProvenMissed < Survivors — see aggregate).
+	// run is never certified — aggregate names this flag directly in the
+	// needs-review condition, alongside poolTestUnsound, a kill rate under
+	// the threshold and an open blocking finding.
+	//
+	// It does NOT compare ProvenMissed against Survivors, which this comment
+	// claimed for as long as anyone reading it would have believed a guard
+	// that is not there. The flag is the guard. (Cold review, 2026-09-08.)
 	TestWriterFailed bool
 	// WriterProviderFailed narrows TestWriterFailed to its blameless case:
 	// the writer's PROVIDER never answered (rate-limited, 5xx, unreachable —

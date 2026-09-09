@@ -124,7 +124,7 @@
 
   <!-- AGENTS: certify group -->
   <rect x="612" y="212" width="360" height="326" rx="8" class="group"/>
-  <text x="626" y="234" class="grouptitle">Audit (certify — ships today)</text>
+  <text x="626" y="234" class="grouptitle">Audit (certify)</text>
   <g>
     <rect x="626" y="250" width="160" height="56" rx="6" class="agent"/>
     <text x="638" y="271" class="t">Generator</text>
@@ -293,5 +293,5 @@
 <line x1="24" y1="786" x2="1256" y2="786" stroke="#ddd0b3" stroke-width="1"/>
   <text x="24" y="808" class="brand">CORRAL · corralai.dev</text>
   <text x="24" y="824" class="key">Cream boxes are model seats · green are code · amber-dashed are stored · red outlines are the three places a person arms the loop, each recorded as a row · dotted arrows feed the next round.</text>
-  <text x="24" y="840" class="key">Designed, not built — docs/design/adversarial-review.md. The Audit column ships today; the review round, the reviewer rows and the residue queue do not.</text>
+  <text x="24" y="840" class="key">All of it ships in v1.0.0-rc.13 — corral review, the reproductions, the verifier seat, the rulings. Seven rounds of it on corral itself, 2026-09-08, are entries on the public corral/ledger branch.</text>
 </svg>

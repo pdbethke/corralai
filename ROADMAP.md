@@ -1,23 +1,102 @@
 <!-- SPDX-License-Identifier: Elastic-2.0 -->
 # Corralai Roadmap
 
-> **Directional, not committed.** Solo-maintained and moving fast (v0.1). This is
-> where corral is heading and *why*. No dates — priorities shift with what real use
-> surfaces.
+> **Directional, not committed.** Solo-maintained and moving fast
+> (v1.0.0-rc.13). This is where corral is heading and *why*. No dates —
+> priorities shift with what real use surfaces.
 
-Corral's arc is from a **certify CLI + a merge gate** to a full **accountability
-plane for AI-written code**: the place a team proves — by execution, not opinion —
-that a change is fit, and holds a signed, queryable record of what actually ran. The
-foundation is in place (certify-by-execution, the jail + human gate, the attributed
-ledger, the learning loop, durable replay, embedded DuckDB, MCP). Most of what's
-ahead is **surfacing and federating** that foundation, not re-architecting it.
+**Corral is an auditing engine.** It judges code it did not write — by execution
+and by adversary — onto a record nobody can edit. Accountability, paper trail,
+analysis, certification: everything but building. Two extensions carry that rule
+into practice, and both write to the same record:
 
-A guiding invariant runs through all of it: **the brain's API is the boundary —
-writes go through it, reads share the analytical store read-only, every kind of
-sharing lends the *capability* and holds the *credential*, and the core stays one
-Go binary.**
+- **`corral certify`** plants faults in the code and runs *your* suite against
+  each one. The kill rate is an exit code, not an opinion.
+- **`corral review`** hands a scope to a coding agent that has never seen the
+  repository, told to assume the code is wrong. Every claim it calls reproduced
+  must ship a script that exits 0 only if the defect is demonstrated, and corral
+  runs the script rather than believing the claim.
+
+A guiding invariant runs through all of it: **the one who wrote the code does not
+judge it, and no self-report is ever the evidence.** Every step either runs
+something or hands the result to a party that had nothing to do with producing
+it — and the answer lands on a record the audited party does not own.
+
+**What changed in September 2026, and why much of the detail below reads
+older than the two bullets above.** This roadmap was written when a hosted
+**brain** was the boundary every capability passed through. It is not any
+more. `certify` and then `review` overtook it: the brain's state moved to the
+ledger (below), its features became entries and verbs, and the daemon plus its
+rendering clients are now **frozen as an optional Tier-2** — shipped, supported,
+and no longer on the path any of this runs through. The Shipped section still
+describes brain-era work in brain-era terms because that work did ship and the
+history is worth keeping; read "the brain" there as "the optional daemon", and
+see **The record** and **The review** immediately below for what actually
+carries the product now.
 
 ## Shipped
+
+**The record — GitHub becomes the store.**
+- **The ledger is the record.** A CI runner is a throwaway machine: when the job
+  ends, whatever it measured is gone, and GitHub is not a database. Corral turns
+  the two into one. Every verdict — an audit, a review, a human ruling — is one
+  gzipped JSON entry committed to an **orphan branch**, `corral/ledger`, each
+  entry carrying the hash of the one before it and signed with the certify key.
+  The branch shares no history with `main`, never appears in a diff, and lives
+  somewhere every runner already has credentials for. No server, no schema to
+  adopt, no bill.
+- **DuckDB reads it in place.** Any DuckDB opens the branch straight off GitHub
+  over HTTPS as tables (`read_json_auto` + `httpfs`) — no clone, nothing running
+  — so which files keep shipping demonstrated gaps, which model catches which
+  kind of bug, and what an audit costs per file are one `GROUP BY` each.
+  Honestly bounded: it is **unindexed and every query reads every file**, which
+  is fine at one entry per audit and is the reason `ledger push` exists — the
+  same rows go to a DuckDB file or to **MotherDuck** (`md:`) when the view needs
+  to span repositories. DuckDB and MotherDuck are the *view*; the branch is the
+  store.
+- **Anyone can check it, including against us.** `corral ledger verify` walks the
+  chain from a clean checkout, so a stranger verifies the record against its own
+  signatures rather than against our word. The signed statement is also entered
+  into **Sigstore Rekor**, and the log index rides on the entry, so the walk ends
+  in a transparency log corral does not run. `RequireIntactChain` is one shared
+  guard and the doors that append, delete, push, load, or prime a later run all
+  call it — a rule that took four doors and three cold-review rounds to arrive at
+  as one function.
+- **The next run reads it.** A runner that starts empty is handed the branch and
+  the earlier entries become the run's memory: faults already planted on a file's
+  exact bytes are shown to the generator as a **prior**, so it plants elsewhere
+  instead of re-sitting the same exam; a verdict for unchanged bytes is reused
+  and *marked* as reused; the review planner knows which scopes were reviewed and
+  which changed since. Every verdict discloses whether it was primed.
+- **Reading it back** — `corral scans list|show --ledger`, `corral verify --db`,
+  `corral models rank --db` and `corral brief <scope>` all open a checkout of the
+  branch as the same tables. *(This supersedes the local `--record` DuckDB scan
+  ledger described further down; `--cache-db` is the only local file left.)*
+
+**The review — a stranger reads your code.**
+- **`corral review --scope`.** A coding agent that has never seen the repository
+  gets a disposable copy of the checkout and one instruction: assume this is
+  wrong, find where, and prove it. Claims come back **tiered**, and the tier is
+  not the reviewer's to award — a claim called *reproduced* must ship a script
+  that exits 0 only if the defect is demonstrated, corral runs it in a detached
+  worktree, and the harness is **demote-only**: it can take a tier away, never
+  grant one. A reviewer that overclaims is recorded overclaiming, with
+  `declared:` beside `tier:` on the entry.
+- **A second seat argues the other side**, never the reviewer's own model, and a
+  **verifier** seat rules on what the challenger disputes. Agent seats are named
+  by the operator (`CORRALAI_AGENT_<NAME>`, with `{dir}`/`{out}`/`{model}`
+  placeholders); Claude Code, Codex and Antigravity have built-in seats. There
+  are no default models — an unnamed seat is a refused run.
+- **A person outranks both.** An adjudication is its own signed entry and is the
+  outcome of record, above execution, because a human looked. Reviews, findings
+  and adjudications are ledger entry kinds and warehouse tables, so `models rank`
+  grades a reviewer by claims that held of those checked and a verifier by
+  verdicts that matched the outcome — every number from execution or a human
+  ruling, never a model's account of itself.
+- **Run on corral itself, repeatedly.** Seven rounds over 2026-09-08/09 found,
+  among others, two ways the merge gate could report a pass on an audit that had
+  measured nothing. Those reviews — including three claims a reviewer declared
+  reproduced whose scripts did not hold up — are entries on the public branch.
 
 **Certify by execution.**
 - **`corral certify -- <check>`** — one line in a pipeline runs the check *itself*
@@ -170,7 +249,7 @@ Go binary.**
   tests run under). Check out with `fetch-depth: 0` (required — the diff needs the merge
   base), and one step audits the PR's diff in the runner that's already there.
   **`--min-kill-rate` (opt-in, `min-kill-rate` on the Action) gives the gate teeth**:
-  unset, a file that grades at 0.00 still exits 0 (today's behaviour, unchanged); set,
+  unset, a file that grades at 0.00 still exits 0 (today's behavior, unchanged); set,
   ANY audited file scoring below it fails the scan (exit 1) — checked per file against
   `reposcan.RepoReport.Weakest`, never the aggregate, so one well-tested file can't mask
   a weak one.
@@ -290,7 +369,7 @@ Go binary.**
   headline percentage — 6 of 130 walked is 4%, 6 of 6 candidates is 100%, and
   neither is the truth, so every term of the funnel is reported instead.
 - **`--tests`: the tenant maps their own suite.** Pairing is convention-based,
-  which cannot work on a project that names tests after behaviour rather than
+  which cannot work on a project that names tests after behavior rather than
   after source files — `expressjs/express` tests `lib/response.js` from
   `test/res.send.js`, and no filename rule derives `response → res`. A rule
   loose enough to try would pair the WRONG files, which plants mutants in one
@@ -350,6 +429,13 @@ Go binary.**
   lines above it in the same file, for months, unnoticed.
 
 **The substrate.**
+
+*Most of this block is **Tier-2 and frozen**: it shipped, it is supported, and
+`certify` and `review` no longer run through any of it. The engine is one Go
+binary and the record is a git branch; a daemon is something you may run, not
+something corral needs. Kept here because it shipped and the history is worth
+keeping — not as a description of the path the product takes today.*
+
 - **Multi-model, multi-forge; the `bwrap` + container jail; the attributed action
   ledger** — every consequential action recorded and attributed to a verified
   principal; the subject of the record doesn't control the ledger.
@@ -416,7 +502,12 @@ exactly the engine that can *attest* and *federate*.
   network's execution-proven experience, not from zero. Value prop: *corral makes your
   local tests stronger by pulling from a shared corpus of verified, signed findings.*
   Patterns, never code; execution-proven, human-gated, attributable — a data flywheel
-  made of facts, not opaque weights.
+  made of facts, not opaque weights. **Not near, and deliberately so:** today no
+  audit reads shared memory or skills at all, and the docs say so plainly. An
+  auditor that carries opinions in from elsewhere is harder to check than one that
+  starts from the code in front of it, so the bar for this is a signed,
+  execution-proven pattern that a reader can trace — never a corpus the audit
+  quietly consults.
 - **The swarm's remaining slices** — the resource-aware optimizer (size the fan-out
   from execution-proven yield × host resources) and per-region/per-complexity-band
   model effectiveness (the tests × mutants matrix itself SHIPPED — see above), plus
@@ -431,7 +522,7 @@ in August 2026 reversed an assumption this roadmap previously carried.
   **9** auditable candidates: 153 aren't a language corral reads, 27 are tests, and
   **47 are source files whose tests convention could not pair**. That last number is
   the addressable one. Pairing is filename convention, which cannot work on a
-  project that names tests after behaviour rather than after source files — and a
+  project that names tests after behavior rather than after source files — and a
   looser rule is strictly worse, because a wrong pairing plants faults in one file
   and grades them against another's tests, producing a confident signed wrong
   answer. The `--tests` map (Shipped) is the current lever and it is homework, not
@@ -470,6 +561,14 @@ in August 2026 reversed an assumption this roadmap previously carried.
   here is superseded, edit it in the SAME pull request, because nothing downstream
   will.
 
+  **And then it happened again, to the whole document.** That rule was written
+  here and enforced nowhere, so through September 2026 this file went on opening
+  on "(v0.1)" and naming the hosted brain as the guiding invariant, while
+  `certify` and `review` overtook the brain, the ledger branch became the record,
+  and v1.0.0-rc.13 shipped on both. Someone reading the roadmap to find out what
+  corral is would have missed the two things it now leads with. Same defect,
+  larger blast radius: a rule stated in one place and enforced at no door.
+
 ## Ahead — operate the gate at scale
 
 The reviewer's seat moves from *author* to *assessor*: set the model mix, watch the
@@ -493,11 +592,14 @@ board, approve the merges.
 - **Memory hygiene.** The shared corpus stays *fresh*, not merely growing.
 
 ## The through-line
-Every capability above is the **same pattern** — brain-mediated, human-gated,
-attributed, *share the capability and hold the credential* — and increasingly just a
-query over one attributed ledger. The moat isn't any single UI; it's the data model
-underneath all of them. Competitors can clone a dashboard; they can't retroactively
-have recorded years of attributed, execution-proven, multi-model audit runs.
+Every capability above is the **same pattern** — judged by a party that did not
+produce the thing, human-gated, attributed, and written to a record the audited
+party does not own. Increasingly it is all just a query over one signed, hash-linked
+ledger that happens to live on a git branch. The moat isn't any single UI, and it
+isn't the mutation technique, which is decades old and well served by PIT, mutmut
+and Stryker. It is that the answers are *execution-proven, attributed, and kept* —
+including the ones that were wrong. A record that only keeps what was confirmed is
+a highlight reel.
 
 ---
 *Want to shape this? Issues and verified-harness PRs are welcome — see the

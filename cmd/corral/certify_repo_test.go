@@ -4572,3 +4572,71 @@ func TestLooksLikeATestPath(t *testing.T) {
 		}
 	}
 }
+
+// TestDocsNeverDescribeCorralAsAnOlderSeries is the gate for the drift that
+// actually happened: ROADMAP.md opened on "moving fast (v0.1)" for the whole of
+// September 2026, while v1.0.0-rc.13 was cut and shipped.
+//
+// TestDocsPinTheNewestCutTag above already catches a stale PIN — a ref a reader
+// would install. It cannot catch this, because "(v0.1)" is not a ref: it is
+// corral describing ITSELF, in prose, in the one document a reader trusts to be
+// current. A version string only a human reads is still a version string.
+//
+// The property, not an enumeration of files: NO tracked doc may describe corral
+// as a vMAJOR series older than the newest cut tag's major. That is deliberately
+// the weakest true rule — it says nothing about minors or patches, so a doc may
+// legitimately discuss v0.4.0 as history ("off unless named since v0.4.0") or
+// name an older tag in a changelog entry. What it refuses is the present-tense
+// self-description, which is the only form that misleads.
+func TestDocsNeverDescribeCorralAsAnOlderSeries(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	repoRoot := filepath.Join("..", "..")
+	out, err := runGit(t, repoRoot, "tag", "-l", "v*", "--sort=-v:refname")
+	if err != nil || strings.TrimSpace(out) == "" {
+		t.Skipf("no tags in this clone (shallow/tagless): %v", err)
+	}
+	newest := strings.Fields(out)[0]
+	var newestMajor int
+	if _, err := fmt.Sscanf(newest, "v%d", &newestMajor); err != nil {
+		t.Fatalf("cannot read a major version out of the newest tag %q: %v", newest, err)
+	}
+
+	// The shape this is about: corral saying what IT currently is, in prose.
+	// "(v0.1)", "corral is v0.7", "currently v0.3.6" — a bare tag in a
+	// changelog or a historical aside is not this and must stay legal.
+	// The gap deliberately ALLOWS newlines: this gate's first draft excluded
+	// them, and the header it exists to police wraps between "moving fast" and
+	// "(v1.0.0-rc.13)" — so it matched nothing, passed on the correct string
+	// AND on a restored "(v0.1)", and was caught only by its negative control.
+	// It still excludes "." so a match cannot cross a sentence boundary.
+	selfDesc := regexp.MustCompile(`(?i)(?:moving fast|currently|corral is|we are)[^.]{0,40}?\(?\bv(\d+)\.(\d+)`)
+
+	files, err := runGit(t, repoRoot, "ls-files", "*.md", "*.mdx")
+	if err != nil {
+		t.Fatalf("git ls-files: %v", err)
+	}
+	seen := 0
+	for _, f := range strings.Fields(files) {
+		body, err := os.ReadFile(filepath.Join(repoRoot, f))
+		if err != nil {
+			continue
+		}
+		seen++
+		for _, m := range selfDesc.FindAllStringSubmatch(string(body), -1) {
+			var major int
+			if _, err := fmt.Sscanf(m[1], "%d", &major); err != nil {
+				continue
+			}
+			if major < newestMajor {
+				t.Errorf("%s describes corral as %s.%s but %s is cut — a reader takes the roadmap for the current state of the project, so a stale self-version here misleads further than anywhere else: %q",
+					f, "v"+m[1], m[2], newest, strings.TrimSpace(m[0]))
+			}
+		}
+	}
+	// FLOOR: a walk that silently matched nothing would pass forever.
+	if seen < 10 {
+		t.Fatalf("walked only %d markdown files — the walk is broken, not the docs clean", seen)
+	}
+}

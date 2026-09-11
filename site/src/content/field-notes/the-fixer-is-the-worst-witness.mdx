@@ -1,0 +1,202 @@
+---
+title: "The fixer is the worst witness"
+description: "Seven rounds of cold review on corral in one day. The findings were real, but the pattern underneath them is the useful part: a rule enforced at one door and not the others — and round after round, the thing it kept catching was my own fix for the previous round."
+pubDate: 2026-09-11
+draft: false
+---
+
+{/* SPDX-License-Identifier: Elastic-2.0 */}
+
+*Field note. Corral's whole claim is that the party who wrote something is
+the wrong party to certify it. This is what happened when that claim was
+turned on the person fixing corral.*
+
+## The setup
+
+Over 2026-09-08 and 09-09, before the last release, I ran seven rounds of
+cold review on corral itself. Three different coding agents took the
+reviewer seat across those rounds, always with a second, different model
+arguing the other side. Every finding — confirmed, refuted, or demoted when
+its reproduction script did not hold up — is a signed entry on a public
+branch.
+
+(Round numbers below are this series. [An earlier
+note](/field-notes/the-reviewer-was-right-and-we-said-no/) counts a
+different one.)
+
+The findings were real and some were bad. A merge gate that could report a
+pass on an audit that had measured nothing. A record that could be pruned
+and re-signed without the verifier objecting. My own bearer token left in
+the environment handed to an audited repository's test command, after an
+earlier round had made me scrub every model provider's key out of that same
+environment.
+
+Those are in the changelog. This note is about the thing the changelog
+cannot show, which only appears when you read the rounds in order.
+
+## One door at a time
+
+Corral's ledger is a hash-linked chain of signed entries. Several pieces of
+code touch it, and each of them ought to refuse a chain that does not
+verify. Here is how that rule actually arrived:
+
+- **Round one** found `checkpoint` — the one verb that *deletes* entries —
+  pruning without ever verifying the chain first. So a tampered entry could
+  be removed and the genesis that replaced it would verify clean. I fixed
+  `checkpoint`.
+- **Round three** found `append` checking only the head entry, while the
+  error message it would print spoke of "a chain that is already broken."
+  The check was narrower than its own claim. I fixed `append`.
+- **Round four** found that `push` and `LoadDir` — the two doors that carry
+  the record *out*, to a warehouse and to every reader including the UI —
+  verified nothing at all.
+
+Four doors. Three separate fixes. One rule. Each time, I fixed the door I
+was shown.
+
+It is one function now, `RequireIntactChain`, and the doors call it. Writing
+that function is not the interesting part. The interesting part is that it
+took an adversary three rounds to drag it out of me, and that at each step I
+believed I had finished.
+
+Round five then found that the comment I had written on that function —
+claiming "every door calls it" — was itself false, because other readers of
+the ledger did not call it. That finding is why the comment now *names* the
+five doors it does guard, and says why the narrow read-only views are
+deliberately left out.
+
+## Three of my own fixes, incomplete in the same way
+
+Round four's most useful result was not a bug in corral. It was bugs in my
+own earlier fixes, all the identical shape:
+
+- The **`gofmt` gate** in `scripts/check-security.sh`. Its first version took
+  empty stdout as success, so on a machine without `gofmt` the gate passed
+  every time. I fixed that by gating on the tool's *presence* — and still
+  took empty stdout as success, so a `gofmt` that **errored**, on an
+  unparseable file or a broken toolchain, went on passing. Absence and
+  failure are two doors. I had shut one.
+- **Withholding a rate corral cannot honestly compute.** A file no test
+  executes must print `[UNCOVERED]` and *withhold* the number rather than
+  report 0.00, because a zero there reads as a measurement. Fixed. But a
+  paired, import-only file — a package `__init__.py`, say — is the same
+  situation for a different reason, and it still printed the zero.
+- **Custody.** `--push-source` governs whether a run ships the audited bytes
+  to your warehouse. The audit rows honored it. The **event tape** did not:
+  the driver's `pool_subject` beat carries the whole audited file, the sink
+  JSON-encodes a beat's entire detail map into one column, and that column
+  was written with no `--push-source` guard anywhere on the path. Every
+  audited file's source landed in the operator's warehouse regardless of the
+  flag. One rule, two sinks, enforced at one.
+
+A one-door mistake inside the fix for a one-door mistake. I was not being
+careless. I was doing the thing everybody does, which is to fix the instance
+and feel finished.
+
+## Twice, my fix was worse than the finding
+
+A reviewer pointed out that `IsLedgerDir` treats any existing directory as a
+ledger, so a mistyped `--db .` quietly becomes one. True. I wrote a narrower
+rule — a ledger is a directory that already holds `scans/`, or is empty —
+and it refused *real* ledgers, because callers legitimately write other
+files into the directory before the first push. Reverted, with the finding
+left standing on the record.
+
+Then I made "unsigned, in a chain whose other entries are signed" a hard
+failure. That sounds obviously right: removing a signature must not be a way
+to pass a check that a bad signature fails. But a ledger written where no
+certify key is configured is ordinary, not evidence of tampering, and a
+missing signature is indistinguishable from a removed one from inside the
+file. My rule punished the honest case to catch a case it could not actually
+identify — and because the shared guard now sat on four doors, it made such
+a chain unusable at all of them.
+
+CI caught that one, and only because CI has no signing key while my machine
+does. Every local run passed.
+
+That is twice in one day that an over-strict fix of mine was worse than the
+finding it closed. The rule I took from it is in the code now: **when a check
+cannot distinguish the bad case from a common good one, disclose instead of
+refuse.**
+
+## And a test that could not fail
+
+Closing the bearer-token leak, I wrote a test asserting that every
+credential corral knows about is scrubbed from the environment handed to an
+audited repository. It passed.
+
+It derived its expectations from the very list it was testing. Delete an
+entry from the list and the test stops checking for it — and still passes. A
+green assertion over nothing, which is precisely the defect this entire
+project exists to find, written by its author, in the fix for a credential
+leak.
+
+A negative control caught it: I removed the guard to confirm the test would
+fail, and it did not. The expectations are named explicitly now, with the
+derived set kept as a weaker second assertion.
+
+## The release gate I built that made releases impossible
+
+One more, because it is the most complete version of the pattern.
+
+A reviewer noted that a tag on a commit with red CI would still publish a
+release. I added a gate: the release workflow refuses unless `validate` is
+green on the tag's commit.
+
+Two other gates in this repository already guarantee that the release
+commit's CI is red at tag time — one refuses documentation that names a tag
+which does not exist yet, the other refuses documentation that lags the
+newest tag — so between pushing a tag and merging the pin bump, `main` is
+red by construction. My new gate therefore refused every release. And a
+re-run replays the workflow file *from the tag*, so the fix could not reach
+the tag that needed it.
+
+The result is a version tagged and resolvable on the Go proxy with no
+release page, and a note in the changelog explaining why. The gate now
+accepts green on the tag's commit *or* on a default-branch commit that
+contains it, and the repository's contributing guide documents the red
+window it creates.
+
+A gate that no correct procedure can pass is not a gate. It is an outage.
+
+## What this is actually about
+
+Corral's argument is that the party who wrote the code is the wrong party to
+certify it — not because they are careless, but because they are *inside*
+the thing. They know what they meant. They see the instance they fixed,
+not the class.
+
+I spent a day being the strongest possible evidence for that argument.
+Every one of the mistakes above was made by someone who had just read the
+finding, understood it, and was actively trying to fix exactly that class of
+defect. Knowing the pattern by name — it is written in this repository's own
+notes, and had bitten repeatedly before this week — did not stop me from
+producing several more instances of it in an afternoon.
+
+What worked was not care. It was an adversary with no investment in my
+having already finished, running again after each fix.
+
+That is the whole product, and I would rather show it costing me something
+than assert it.
+
+## The uncomfortable part
+
+Most of the findings above are about corral's internals. The ones that
+actually matter are not: a merge gate that could report a pass on an audit
+that had measured nothing is corral saying something false about somebody
+else's code. Two of those were found — a file whose every planted fault the
+compile gate rejected has zero proven gaps, which is bit-identical to
+"measured, and nothing survived"; and a changed file whose test pairing
+corral deliberately refuses was never counted as unaudited, so a pull
+request went green on exactly the change the gate exists to inspect.
+
+Both surfaced in round five, after four rounds had drifted into auditing my
+own patches, and they surfaced the moment I pointed the reviewer at the
+user-facing surface instead. That is a lesson about where to aim an
+adversary, and it is the reason the rounds did not stop at four.
+
+Every review in this note, including the claims that were wrong and the
+three a verifier demoted when their scripts did not demonstrate them, is an
+entry on [the public
+branch](https://github.com/pdbethke/corralai/tree/corral/ledger). A record
+that only keeps what was confirmed is a highlight reel.

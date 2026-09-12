@@ -58,13 +58,23 @@ func (p *Poller) Tick(ctx context.Context) error {
 				continue
 			}
 			for _, pr := range prs {
-				_, ok, err := p.Store.GetBySHA(pol.Repo, pr.HeadSHA)
+				// Keyed on the POLICY'S CONTEXT, not the head alone: two
+				// policies on one repo each owe the forge their own status,
+				// and a head-only key let the first one run silence the
+				// second forever. (R3.)
+				prev, ok, err := p.Store.GetByHead(pol.Repo, pr.HeadSHA, pol.Context)
 				if err != nil {
-					log.Printf("gate: poller: dedupe lookup %s@%s: %v", pol.Repo, pr.HeadSHA, err)
+					log.Printf("gate: poller: dedupe lookup %s@%s ctx %s: %v", pol.Repo, pr.HeadSHA, pol.Context, err)
 					continue
 				}
-				if ok {
-					continue // already gated — dedupe by head SHA
+				// A row whose verdict never reached the forge is NOT done: the
+				// post failed and nothing would ever retry it, so the check
+				// sat pending until a new commit arrived. (R4.)
+				if ok && prev.StatusPosted {
+					continue // already gated under this context, and the forge has the verdict
+				}
+				if ok && !prev.StatusPosted {
+					log.Printf("gate: poller: %s@%s ctx %s was gated but its status never posted — re-delivering", pol.Repo, pr.HeadSHA, pol.Context)
 				}
 				if err := p.Run(ctx, repoURL, pol, pr); err != nil {
 					log.Printf("gate: poller: run %s#%d@%s: %v", pol.Repo, pr.Number, pr.HeadSHA, err)

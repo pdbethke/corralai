@@ -130,7 +130,14 @@ func (r *controlRunner) Run(ctx context.Context, repoURL string, p gate.Policy, 
 		return r.fail(ctx, repoURL, p, pr, target, "error", "sign (gave up after retries): "+err.Error())
 	}
 	delete(r.attempts, key) // signed OK — clear any prior transient-failure count
-	if err := r.RunStore.Save(gate.Run{Repo: p.Repo, HeadSHA: pr.HeadSHA, PR: pr.Number, Passed: res.Pass, RecordID: recordID, RanAt: r.Now()}); err != nil {
+	// Context and StatusPosted are both required now that the poller dedupes
+	// per status context and retries a verdict that never reached the forge.
+	// StatusPosted is true here because PostControlGate above both signs AND
+	// posts, so a nil error means the forge has the verdict — this is the
+	// SECOND door on that rule, found by grepping every Save caller while
+	// fixing the first one. Without it the control gate would have re-run its
+	// jail on every tick, forever. (Cold review 2026-09-12, R3/R4.)
+	if err := r.RunStore.Save(gate.Run{Repo: p.Repo, HeadSHA: pr.HeadSHA, PR: pr.Number, Passed: res.Pass, Context: p.Context, StatusPosted: true, RecordID: recordID, RanAt: r.Now()}); err != nil {
 		log.Printf("control-gate: save dedupe %s@%s: %v", p.Repo, pr.HeadSHA, err)
 	}
 	return nil

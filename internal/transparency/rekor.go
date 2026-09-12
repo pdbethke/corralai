@@ -213,19 +213,27 @@ func (w *rekorWitness) toEntry(le models.LogEntryAnon) (Entry, error) {
 //  1. the Merkle inclusion proof and its checkpoint signature verify under the
 //     TUF-rooted Rekor public key,
 //  2. the Signed Entry Timestamp verifies under that same key, and
-//  3. the entry's stored DSSE payload hash equals sha256(the envelope payload).
+//  3. the entry's stored DSSE payload hash equals sha256(the envelope payload),
+//     and
+//  4. every signature the envelope carries appears in the signature set the
+//     entry recorded — because step 3 alone accepts a replacement envelope
+//     signed by a different key over the same payload.
 //
 // Any mismatch returns (false, reason). It never calls back to the Rekor
 // instance, so a compromised instance cannot influence the result.
+//
+// The one thing it does NOT promise: for an entry kind whose body shape this
+// package cannot read, step 4 is skipped and the returned reason says so. The
+// binding is then payload-only, which is weaker — never silently so.
 func (w *rekorWitness) VerifyInclusion(entry Entry, dsseEnvelope []byte) (bool, string) {
 	logIDBytes, err := hex.DecodeString(entry.LogID)
 	if err != nil {
 		return false, "log ID is not valid hex"
 	}
 
-	var proof models.InclusionProof
-	if err := json.Unmarshal(entry.InclusionProof, &proof); err != nil {
-		return false, "inclusion proof is not well-formed"
+	proof, err := parseInclusionProof(entry.InclusionProof)
+	if err != nil {
+		return false, err.Error()
 	}
 
 	// Reconstruct the log entry via the protobuf representation, which keeps
@@ -242,7 +250,7 @@ func (w *rekorWitness) VerifyInclusion(entry Entry, dsseEnvelope []byte) (bool, 
 		LogID:          &logID,
 		LogIndex:       &logIndex,
 		Verification: &models.LogEntryAnonVerification{
-			InclusionProof:       &proof,
+			InclusionProof:       proof,
 			SignedEntryTimestamp: strfmt.Base64(entry.SET),
 		},
 	}
@@ -292,10 +300,132 @@ func (w *rekorWitness) VerifyInclusion(entry Entry, dsseEnvelope []byte) (bool, 
 		return false, "log entry does not wrap the given envelope (payload hash mismatch)"
 	}
 
-	if len(entry.SET) > 0 {
-		return true, "rekor inclusion proof and SET verified against the TUF trust root"
+	// 4. The payload hash alone does NOT bind the entry to this envelope: a
+	// replacement envelope signed by a different key over the SAME payload
+	// passes step 3 while its signature was never logged. So compare the
+	// signatures the log actually recorded against the ones this envelope
+	// carries. (Cold review 2026-09-12, R2.)
+	//
+	// Signature bytes are the right thing to compare and envelopeHash is not:
+	// a hash over the envelope JSON is byte-identity, so any re-serialization
+	// — a different key order, different spacing — would refuse a record that
+	// is perfectly good. Signatures are opaque base64 and survive that.
+	checked, covered := loggedSignaturesCover(entry.Body, dsseEnvelope)
+	if checked && !covered {
+		return false, "log entry does not wrap the given envelope (a signature it carries was never logged)"
 	}
-	return true, "rekor inclusion proof verified against the TUF trust root (no SET present)"
+
+	suffix := ""
+	if !checked {
+		// The body is a shape whose signature set we cannot locate. Say so
+		// rather than refuse: the body is covered by the Merkle proof already
+		// verified in step 1, so this is a weaker binding, not a forged one —
+		// and a check that cannot tell a bad case from a legitimate one must
+		// disclose instead of failing closed on both.
+		suffix = "; signatures not compared (unrecognized entry body shape)"
+	}
+	if len(entry.SET) > 0 {
+		return true, "rekor inclusion proof and SET verified against the TUF trust root" + suffix
+	}
+	return true, "rekor inclusion proof verified against the TUF trust root (no SET present)" + suffix
+}
+
+// loggedSignaturesCover reports whether every signature the given DSSE
+// envelope carries also appears in the signature set the Rekor body recorded.
+//
+// checked is false when no signature set could be located in either input —
+// an entry kind whose body this does not know how to read (intoto, a future
+// type), or an envelope with no signatures at all. The caller discloses that
+// rather than refusing, because refusing would break entry kinds that are
+// legitimate; see the note at the call site.
+//
+// body is the raw, canonicalized Rekor entry body, whose bytes are hashed into
+// the Merkle leaf, so its contents are already covered by the inclusion proof.
+func loggedSignaturesCover(body, dsseEnvelope []byte) (checked, covered bool) {
+	var logged struct {
+		Spec struct {
+			Signatures []struct {
+				Signature string `json:"signature"`
+			} `json:"signatures"`
+		} `json:"spec"`
+	}
+	if err := json.Unmarshal(body, &logged); err != nil {
+		return false, false
+	}
+	var env struct {
+		Signatures []struct {
+			Sig string `json:"sig"`
+		} `json:"signatures"`
+	}
+	if err := json.Unmarshal(dsseEnvelope, &env); err != nil {
+		return false, false
+	}
+	if len(logged.Spec.Signatures) == 0 || len(env.Signatures) == 0 {
+		return false, false
+	}
+
+	// Compare the DECODED bytes: the log stores standard base64 and a DSSE
+	// envelope may use either alphabet, so comparing the strings would refuse
+	// a good record over an encoding difference.
+	inLog := make(map[string]bool, len(logged.Spec.Signatures))
+	for _, s := range logged.Spec.Signatures {
+		if raw, ok := decodeBase64Either(s.Signature); ok {
+			inLog[string(raw)] = true
+		}
+	}
+	if len(inLog) == 0 {
+		return false, false
+	}
+	for _, s := range env.Signatures {
+		raw, ok := decodeBase64Either(s.Sig)
+		if !ok {
+			return true, false
+		}
+		if !inLog[string(raw)] {
+			return true, false
+		}
+	}
+	return true, true
+}
+
+// decodeBase64Either decodes standard or URL-safe base64, the same tolerance
+// envelopePayloadSHA256 already applies to a DSSE payload.
+func decodeBase64Either(s string) ([]byte, bool) {
+	if raw, err := base64.StdEncoding.DecodeString(s); err == nil {
+		return raw, true
+	}
+	if raw, err := base64.URLEncoding.DecodeString(s); err == nil {
+		return raw, true
+	}
+	return nil, false
+}
+
+// parseInclusionProof unmarshals a stored inclusion proof AND requires it to
+// be complete.
+//
+// A proof that UNMARSHALS is not a proof that is COMPLETE: `{}` parses into a
+// zero models.InclusionProof whose RootHash, TreeSize, LogIndex, Hashes and
+// Checkpoint are all nil, and tle.GenerateTransparencyLogEntry dereferences
+// RootHash — so a malformed `rekor` field in a record used to PANIC inside
+// VerifyInclusion instead of failing the check, taking `certify verify` down
+// with it. No caller recovers: the only recover() in the tree is in
+// internal/mission, and certverify calls VerifyInclusion directly.
+// (Cold review 2026-09-12, R1 — reproduced by the reviewer's own script.)
+//
+// It calls the swagger model's OWN required-field validation rather than
+// nil-checking the fields that happen to panic today. The rule is "the proof
+// is complete"; enumerating today's three dereferences is the
+// gate-that-lists-instead-of-deriving mistake this repository has already made
+// six times.
+func parseInclusionProof(raw []byte) (*models.InclusionProof, error) {
+	var proof models.InclusionProof
+	if err := json.Unmarshal(raw, &proof); err != nil {
+		return nil, errors.New("inclusion proof is not well-formed")
+	}
+	if err := proof.Validate(strfmt.Default); err != nil {
+		return nil, fmt.Errorf("inclusion proof is incomplete: %v", err)
+	}
+	return &proof, nil
 }
 
 // envelopePayloadSHA256 decodes a DSSE envelope's base64 payload and returns

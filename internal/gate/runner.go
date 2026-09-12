@@ -77,6 +77,17 @@ func (r *Runner) Run(ctx context.Context, repoURL string, p Policy, pr PRRef) er
 	target := r.RecordURL(p.Repo, pr.HeadSHA)
 	_ = r.Status.SetCommitStatus(ctx, repoURL, pr.HeadSHA, p.Context, "pending", target, "corral gate running")
 
+	// A POLICY WITH NO COMMAND MUST NEVER PASS. ParsePolicies refuses one,
+	// but a Policy built programmatically (brain Options.GatePolicies) is not
+	// parsed: an empty CheckCmd reached the jail as `sh -c ""`, which exits 0,
+	// and the gate posted "success" for a check that ran nothing — a green on
+	// a question nobody asked. The rule belongs at the door that ACTS on the
+	// policy, not only at the one that parses it.
+	// (Cold review 2026-09-12, R6.)
+	if len(p.CheckCmd) == 0 || strings.TrimSpace(strings.Join(p.CheckCmd, " ")) == "" {
+		return r.fail(ctx, repoURL, p, pr, target, "error", "policy has no check command — refusing to report a result for a check that would run nothing")
+	}
+
 	dest, err := os.MkdirTemp("", "corral-gate-")
 	if err != nil {
 		return r.fail(ctx, repoURL, p, pr, target, "error", "workspace: "+err.Error())
@@ -104,14 +115,34 @@ func (r *Runner) Run(ctx context.Context, repoURL string, p Policy, pr PRRef) er
 	}
 
 	passed := exit == 0
-	if err := r.Store.Save(Run{Repo: p.Repo, HeadSHA: pr.HeadSHA, PR: pr.Number, Passed: passed, RecordID: recordID, RanAt: r.Now()}); err != nil {
+	// A FAILED Save USED TO BE LOGGED AND IGNORED, and then "success" was
+	// posted anyway — contradicting this type's own documented invariant
+	// ("success ONLY when checkout, sign AND store all succeeded"). Worse, with
+	// no dedupe row the poller re-ran the jail and re-certified on every tick,
+	// appending a new signed record each time, forever, while the status
+	// target_url pointed at a record that could not be looked up.
+	//
+	// So a store failure is now a fail-closed exit like any other. That does
+	// mean a full disk blocks a merge whose tests actually passed — which is
+	// the correct direction for a REQUIRED check, and is what the invariant
+	// above already promised. (Cold review 2026-09-12, R1 — reproduced.)
+	if err := r.Store.Save(Run{Repo: p.Repo, HeadSHA: pr.HeadSHA, PR: pr.Number, Passed: passed, Context: p.Context, RecordID: recordID, RanAt: r.Now()}); err != nil {
 		log.Printf("gate: save dedupe %s@%s: %v", p.Repo, pr.HeadSHA, err)
+		return r.fail(ctx, repoURL, p, pr, target, "error", "store: "+err.Error()+" — the run is not recorded, so its result is not reported")
 	}
 	state := "failure"
 	if passed {
 		state = "success"
 	}
-	return r.Status.SetCommitStatus(ctx, repoURL, pr.HeadSHA, p.Context, state, target, gateDesc(passed))
+	// R4: the verdict is delivered BEFORE the row is marked delivered, and the
+	// row is only marked once the forge has it — see Store.MarkPosted.
+	if err := r.Status.SetCommitStatus(ctx, repoURL, pr.HeadSHA, p.Context, state, target, gateDesc(passed)); err != nil {
+		return err
+	}
+	if err := r.Store.MarkPosted(p.Repo, pr.HeadSHA, p.Context); err != nil {
+		log.Printf("gate: marking %s@%s delivered: %v", p.Repo, pr.HeadSHA, err)
+	}
+	return nil
 }
 
 // fail is the single path for every internal-error exit: it always stores

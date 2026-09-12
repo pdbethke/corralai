@@ -38,9 +38,15 @@ func TestPollerGatesNewHeadOnce(t *testing.T) {
 		Policies: []Policy{{Repo: "o/r", Base: []string{"main"}, Context: "corral/gate", CheckCmd: []string{"true"}}},
 		List:     &fakeLister{prs: []PRRef{{Number: 1, HeadSHA: "abc", Base: "main"}}},
 		Store:    store,
+		// The fake stands in for a runner that ran AND delivered its status,
+		// so it must record both — Context, because dedupe is per status
+		// context, and StatusPosted, because an undelivered verdict is work
+		// the poller deliberately retries. A fake that skips them is claiming
+		// a delivery it did not make.
 		Run: func(ctx context.Context, repoURL string, pol Policy, pr PRRef) error {
 			runs++
-			return store.Save(Run{Repo: pol.Repo, HeadSHA: pr.HeadSHA, PR: pr.Number, RanAt: time.Unix(0, 0)})
+			return store.Save(Run{Repo: pol.Repo, HeadSHA: pr.HeadSHA, PR: pr.Number,
+				Context: pol.Context, StatusPosted: true, RanAt: time.Unix(0, 0)})
 		},
 	}
 	_ = p.Tick(context.Background())
@@ -80,7 +86,8 @@ func TestPollerRunsEachNewHeadAcrossPolicies(t *testing.T) {
 		Store: store,
 		Run: func(ctx context.Context, repoURL string, pol Policy, pr PRRef) error {
 			ran = append(ran, pol.Repo+"@"+pr.HeadSHA)
-			return store.Save(Run{Repo: pol.Repo, HeadSHA: pr.HeadSHA, PR: pr.Number, RanAt: time.Unix(0, 0)})
+			return store.Save(Run{Repo: pol.Repo, HeadSHA: pr.HeadSHA, PR: pr.Number,
+				Context: pol.Context, StatusPosted: true, RanAt: time.Unix(0, 0)})
 		},
 	}
 	if err := p.Tick(context.Background()); err != nil {

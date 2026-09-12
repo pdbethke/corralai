@@ -35,10 +35,28 @@ type Policy struct {
 // runner (Task 4) executed the gate — set by the caller, never by the store,
 // so Store stays clock-free and deterministic under test.
 type Run struct {
-	Repo     string
-	HeadSHA  string
-	PR       int
-	Passed   bool
-	RecordID int64
-	RanAt    time.Time
+	Repo    string
+	HeadSHA string
+	PR      int
+	Passed  bool
+	// Context is the commit-status context this run reported under, and it is
+	// part of the row's IDENTITY. Dedupe was keyed on (Repo, HeadSHA) alone,
+	// so two policies for one repo under different contexts — which the config
+	// documentation invites and configurable contexts imply — collapsed into
+	// one row: whichever policy ran first stored it, and the poller then
+	// skipped the SECOND policy on every head forever. Its check never ran and
+	// its status was never posted, so if that context was a required check the
+	// pull request was blocked indefinitely.
+	// (Cold review 2026-09-12, R3 — reproduced.)
+	Context string
+	// StatusPosted records that the verdict actually REACHED the forge. The
+	// row used to be written before the status post, so a post that failed
+	// (forge 5xx, rate limit, a context cancelled at shutdown) was never
+	// retried: the head counted as gated and kept whatever the forge last
+	// saw, usually "pending", until someone pushed a new commit. The poller
+	// now treats an undelivered row as work still to do.
+	// (Cold review 2026-09-12, R4 — reproduced.)
+	StatusPosted bool
+	RecordID     int64
+	RanAt        time.Time
 }

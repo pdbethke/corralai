@@ -2,8 +2,11 @@
 
 package gate
 
-import "strconv"
-import "strings"
+import (
+	"regexp"
+	"strconv"
+	"strings"
+)
 
 // ParsePolicies parses CORRALAI_GATE_POLICIES: semicolon-separated policy
 // entries, each a comma-separated list of key=value pairs —
@@ -44,14 +47,32 @@ var policyFields = []string{"repo", "base", "context", "net", "timeout"}
 
 // strayFieldAfterCmd returns the name of a known policy field that appears
 // after cmd= (where it would be swallowed into the command verbatim), or "".
+//
+// It tolerates whitespace on BOTH sides of the comma and around the '='. The
+// first version matched the single spelling ","+f+"=" exactly, so the spaced
+// form an operator is at least as likely to write — "cmd=make test, base=release"
+// — sailed through and silently widened the policy to every base branch, which
+// is the very defect the check was added for. One spelling guarded, the other
+// left open. (Cold review round three, 2026-09-12, R2 — reproduced, high,
+// against my own fix for the round-two R8.)
 func strayFieldAfterCmd(cmdVal string) string {
 	for _, f := range policyFields {
-		if strings.Contains(cmdVal, ","+f+"=") {
+		if strayFieldRE[f].MatchString(cmdVal) {
 			return f
 		}
 	}
 	return ""
 }
+
+// strayFieldRE is derived from policyFields, so a key added there is covered
+// without a second edit — the rule this repo keeps relearning.
+var strayFieldRE = func() map[string]*regexp.Regexp {
+	m := make(map[string]*regexp.Regexp, len(policyFields))
+	for _, f := range policyFields {
+		m[f] = regexp.MustCompile(`,\s*` + regexp.QuoteMeta(f) + `\s*=`)
+	}
+	return m
+}()
 
 func ParsePolicies(raw string) (policies []Policy, bad []string) {
 	raw = strings.TrimSpace(raw)
@@ -72,6 +93,9 @@ func ParsePolicies(raw string) (policies []Policy, bad []string) {
 	// have it silently welded onto the previous command. cmd parsing fails
 	// loudly, so both fragments are reported and NEITHER policy is accepted.
 	frags := strings.Split(raw, ";")
+	// prevPolicy is the index in policies produced by the PREVIOUS fragment,
+	// or -1. Tracked by position so a truncated entry is identified exactly.
+	prevPolicy := -1
 	for i, entry := range frags {
 		entry = strings.TrimSpace(entry)
 		if entry == "" {
@@ -79,13 +103,29 @@ func ParsePolicies(raw string) (policies []Policy, bad []string) {
 		}
 		// A fragment with no key=value at all cannot be a policy entry; if the
 		// one before it declared a cmd=, this is that command's missing tail.
-		if i > 0 && !strings.Contains(entry, "=") && strings.Contains(frags[i-1], "cmd=") {
+		// The test for "this fragment is a continuation, not a policy" is
+		// whether it declares repo= — the field a policy REQUIRES — and not
+		// whether it contains an '=' anywhere.
+		//
+		// The first version of this guard asked `!strings.Contains(entry, "=")`,
+		// which any ordinary second command defeats: "go test -tags=integration
+		// ./..." contains '=', so the fragment looked like a policy entry, the
+		// truncation went unnoticed, and the weaker command was accepted again.
+		// A guard keyed on an INCIDENTAL character instead of the declared
+		// schema is the same mistake as enumerating where a property holds.
+		// (Cold review round three, 2026-09-12, R1 — reproduced, high, against
+		// my own fix for the round-two R2.)
+		if i > 0 && !strings.Contains(entry, "repo=") && strings.Contains(frags[i-1], "cmd=") {
 			bad = append(bad, entry+" (a ';' inside cmd= truncated the previous entry's command — the entry before this one was NOT applied; remove the ';' or express the steps as one command)")
-			// Drop the truncated policy we just accepted, if we accepted it.
-			if n := len(policies); n > 0 && strings.Contains(frags[i-1], policies[n-1].Repo) {
+			// Drop the truncated policy, identified by INDEX rather than by
+			// matching its repo string: `strings.Contains(frags[i-1], repo)`
+			// was another guess, and it failed whenever two entries shared a
+			// repo or a repo name appeared inside a command.
+			if prevPolicy >= 0 && prevPolicy == len(policies)-1 {
 				bad = append(bad, strings.TrimSpace(frags[i-1])+" (command truncated at ';')")
-				policies = policies[:n-1]
+				policies = policies[:prevPolicy]
 			}
+			prevPolicy = -1
 			continue
 		}
 
@@ -119,6 +159,7 @@ func ParsePolicies(raw string) (policies []Policy, bad []string) {
 			// (Cold review 2026-09-12, R8.)
 			if stray := strayFieldAfterCmd(cmdVal); stray != "" {
 				bad = append(bad, entry+" ("+stray+"= appears after cmd=, which takes the rest of the entry verbatim; move it before cmd=)")
+				prevPolicy = -1
 				continue
 			}
 			if fields := strings.Fields(cmdVal); len(fields) > 0 {
@@ -177,12 +218,15 @@ func ParsePolicies(raw string) (policies []Policy, bad []string) {
 
 		if badField != "" {
 			bad = append(bad, entry+" ("+badField+")")
+			prevPolicy = -1
 			continue
 		}
 		if !repoSeen || !cmdSeen {
 			bad = append(bad, entry)
+			prevPolicy = -1
 			continue
 		}
+		prevPolicy = len(policies)
 		policies = append(policies, pol)
 	}
 	return policies, bad

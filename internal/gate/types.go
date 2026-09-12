@@ -2,7 +2,10 @@
 
 package gate
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 // DefaultGateTimeout is the jail deadline a policy gets when it doesn't
 // declare its own TimeoutS (or declares <=0). 10 minutes comfortably covers
@@ -59,4 +62,40 @@ type Run struct {
 	StatusPosted bool
 	RecordID     int64
 	RanAt        time.Time
+}
+
+// DefaultStatusContext is the commit-status context a policy reports under
+// when it does not name one. It is defined HERE, next to the field, because
+// three call sites used to each decide for themselves whether to substitute
+// it — and one of them (Runner.Run) did not, so the forge and the store
+// disagreed about which check had spoken.
+const DefaultStatusContext = "corral/gate"
+
+// normalized returns the policy with its defaults applied, so every consumer
+// sees identical values. Call it ONCE, at the top of the code that acts on a
+// policy; do not scatter the defaults.
+func (p Policy) normalized() Policy {
+	if strings.TrimSpace(p.Context) == "" {
+		p.Context = DefaultStatusContext
+	}
+	return p
+}
+
+// effectiveTimeout is the jail deadline this policy actually gets.
+//
+// It must never return a value <= 0. time.Duration(TimeoutS)*time.Second
+// OVERFLOWS int64 for a large TimeoutS — 9223372036854775807 lands on exactly
+// 0s, which is why a reproduction expecting a negative duration failed and was
+// demoted, while the defect it described was real: the sandbox turns any
+// deadline <= 0 into its own 60s default, the outcome DefaultGateTimeout's
+// comment calls out as blocking merges on any real command.
+//
+// ParsePolicies also bounds timeout=, and that is not redundant: the parser
+// tells the OPERATOR their value is wrong, which this cannot do. This is the
+// floor under a Policy that never went through the parser at all.
+func (p Policy) effectiveTimeout() time.Duration {
+	if p.TimeoutS <= 0 || p.TimeoutS > maxGateTimeoutS {
+		return DefaultGateTimeout
+	}
+	return time.Duration(p.TimeoutS) * time.Second
 }

@@ -1,0 +1,172 @@
+---
+title: "A ledger, not a log"
+description: "Corral stores every verdict as a signed, hash-linked file on an orphan git branch, and any DuckDB reads it in place. The pattern is not new — an existing GitHub Action has kept benchmark history on a branch for years. This is what the chain buys over that, what it costs, and the honest state of extracting it."
+pubDate: 2026-09-12
+draft: false
+---
+
+{/* SPDX-License-Identifier: Elastic-2.0 */}
+
+*Field note. The most-asked question about corral is not about auditing. It is
+"wait, you store it where?" So here is the storage idea on its own, including
+the part where somebody else got there first.*
+
+## The problem, which is not interesting
+
+A CI runner boots, measures something about your code, and is destroyed.
+Whatever it learned dies with it. Artifact retention closes the window, and
+then even the logs are gone.
+
+The usual fix is to stand up a database: a server, a schema, a connection
+string, credentials in CI, a bill. That is a lot of apparatus to hold what is
+really an append-only list of small facts.
+
+## The move, which is not new
+
+Corral stands nothing up. Every verdict — an audit, a review, a human ruling —
+is written as one gzipped JSON file and committed to an **orphan branch** in
+the repository itself, `corral/ledger`. An orphan branch shares no history with
+`main`, never appears in a diff, and lives somewhere every CI runner already
+has credentials for. Then any DuckDB reads it straight off GitHub over HTTPS as
+tables, with no clone and nothing running.
+
+**This idea is not ours.** `benchmark-action/github-action-benchmark` has been
+doing branch-as-storage for years: it commits benchmark results to `gh-pages`,
+keeps history in `dev/bench/data.js`, and flags regressions across commits.
+Thousands of repositories use it. If you want the pattern validated by
+adoption rather than by argument, that is your evidence, and we found it after
+building ours.
+
+So the honest question is not whether a branch can be a database. It is what
+the difference between their storage and ours actually buys.
+
+## A log rewrites. A ledger appends.
+
+That Action keeps **one aggregate file and rewrites it every run**. Ours writes
+**one file per entry and never touches an existing one**, and each entry
+carries the hash of the entry before it.
+
+The distinction is not stylistic. A rewritten file has no integrity: anyone
+with push access can edit a number in `data.js`, and nothing anywhere detects
+it. That is fine for bundle size. It is fatal for us, because corral's entire
+claim is that **the party being audited must not be able to edit its own
+verdicts** — the record is worth nothing if the subject of it controls it.
+
+So four things differ, and they all follow from appending rather than
+rewriting:
+
+- **The chain.** Edit an entry and its own hash stops matching; remove one and
+  the next entry's link breaks. `corral ledger verify` walks it from a clean
+  clone and names the entry that is wrong.
+- **Signatures.** Each entry is signed with the certify key, so a stranger
+  checks the record against its own cryptography rather than against our word.
+- **An outside witness.** The signed statement also goes into Sigstore's public
+  transparency log, and the log index rides on the entry — so the walk ends in
+  a log we do not run. Drop the branch to lose an unflattering verdict and the
+  receipt is still sitting somewhere you do not control.
+- **No schema to adopt.** Entries are JSON objects; `read_json_auto(..., union_by_name = true)`
+  handles them changing shape over time. There is no renderer to fit into, so
+  the analytical surface is whatever SQL you feel like writing.
+
+## The part we did not expect: the record joins to the code
+
+This is the property that has turned out to matter most, and it is the one you
+only get by putting the record *in the repository it describes*.
+
+Every row carries a commit SHA, which is a **foreign key into the source
+tree**. So a finding can be joined to `git blame`.
+
+We used that this week to answer a question we could not otherwise have
+answered honestly. Two rounds of adversarial review ran back to back, the
+second re-attacking the first's fixes, and the obvious worry was whether the
+loop was fixing real defects or just churning. Blaming each finding's own
+`file:line` at the commit its round reviewed settles it: if the previous fix
+authored that line, the finding is churn; if the line predates it, the finding
+is drain.
+
+> Round two: 10 findings, **all 10 pre-existing**, every one authored two
+> months earlier.
+> Round three: 13 findings, 8 pre-existing and **5 created by round two's own
+> fix** — and those five were more severe than the eight.
+
+No warehouse can do that join, because no warehouse sits next to the code's
+history. It cost one `git blame` loop over rows we already had.
+
+The same property gives two things we have not built yet and should:
+**staleness**, because a verdict is bound to a file's content hash and git
+knows how many commits have landed on that file since; and **cost prediction**,
+because the per-call token and latency rows are already there, so a dry run
+could price an audit from this repository's own history instead of guessing.
+
+## What it costs
+
+**It is unindexed, and every query reads every file.** That works because an
+entry is one per *audit*, not one per event. Today the whole record is **106
+entries, 386 KB, averaging 3.7 KB each** — about 37 MB projected at ten
+thousand audits. Benchmarks, by contrast, are one per benchmark per commit per
+platform, which is the assumption this design rests on, violated. If your facts
+arrive per-event, this is the wrong shape and a real database is the right one.
+
+**Enumerating the branch is one GitHub API call outside the query engine.**
+Fine interactively; it is the seam a larger deployment would feel first.
+
+**It grows one commit per verdict, and the only shrink verb is honest about
+itself.** `corral ledger checkpoint` replaces every entry with a single genesis
+naming the head it stood in for, and afterwards `verify` says *the chain begins
+here*. You traded history for size and the record admits it. Push the rows to a
+warehouse before you prune — the branch is the verifiable record, a warehouse
+is the durable one.
+
+**And deleting the branch is not deletion.** Objects already pushed stay
+reachable by SHA until they are collected, and forks outlive the rewrite. Treat
+a published entry as published.
+
+## Should this be its own tool?
+
+Probably, eventually, and not today.
+
+The mechanism is small — entry identity, a hash chain, signatures, and the
+checkpoint and retraction semantics. Nothing in that list mentions auditing.
+It would serve coverage, bundle size, flaky-test rates, dependency drift, build
+cost: anything a runner measures and then forgets.
+
+But we are not going to claim the extraction is nearly done, because we
+measured it and it is not. The package is 7,887 lines, and the file holding the
+chain mentions *scan* 88 times, *review* 76 and *adjudication* 54. The
+mechanics are generic; the vocabulary and the payload are thoroughly ours. That
+is a real piece of work, not a rename, and saying otherwise would be the kind
+of unverified claim this project exists to catch.
+
+There is also a reason to be slow about it. For corral the tamper-evidence is
+load-bearing, because our subject would have a motive to edit the record. For
+most things a runner measures, nobody's adversary is forging their own coverage
+history — and once you remove the chain and the signatures, what is left is
+"append JSON to an orphan branch and query it with DuckDB," which is a good
+README rather than a tool. The differentiated part may be the part the general
+audience does not need.
+
+So this note is the contribution for now. If you want the pattern, it is
+described above and the prior art is linked; if you want the tamper-evident
+version, the branch is [right
+here](https://github.com/pdbethke/corralai/tree/corral/ledger/scans) with 106
+entries on it, and `corral ledger verify` will tell you whether we have been
+editing it.
+
+## Try the query
+
+Against our record, from any machine with DuckDB:
+
+```python
+import duckdb, json, urllib.request
+repo = "pdbethke/corralai"
+names = [f["name"] for f in json.load(urllib.request.urlopen(
+    f"https://api.github.com/repos/{repo}/contents/scans?ref=corral/ledger"))
+    if f["name"].endswith(".json.gz")]
+urls = [f"https://raw.githubusercontent.com/{repo}/corral/ledger/scans/{n}" for n in names]
+con = duckdb.connect(); con.execute("INSTALL httpfs; LOAD httpfs")
+print(con.sql(f"""
+  SELECT coalesce(kind, 'scan') AS kind, count(*) AS entries
+  FROM read_json_auto({urls!r}, union_by_name = true) GROUP BY 1 ORDER BY 2 DESC"""))
+```
+
+Nothing is running on our side to answer that. That is the whole point.

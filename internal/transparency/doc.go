@@ -12,8 +12,18 @@
 //     TUF-rooted trust root. This is the brain's own accountability chain
 //     (internal/brain, Options.Witness, wired in cmd/corral/main.go) — a
 //     build attestation is anchored the moment it is signed, and a later
-//     `corral certify verify` re-checks the inclusion proof without
-//     touching the network again. Entry carries the full inclusion-proof
+//     `corral certify verify` re-checks the inclusion proof WITHOUT ASKING
+//     REKOR — the proof, the SET and the body all travel in the record, so
+//     the log is never consulted about its own entry, which is the property
+//     that matters: a compromised Rekor cannot change the answer.
+//
+//     It is NOT offline. Building the witness calls root.FetchTrustedRoot()
+//     for the TUF trust root, and sigstore-go's default CacheValidity of 0
+//     makes that an online refresh, so verification needs the network. The
+//     earlier wording here said "without touching the network again", which
+//     was false and read as an air-gap promise this does not make.
+//     (Cold review round three, 2026-09-12, R6.) Entry carries the full
+//     inclusion-proof
 //     material a verifier needs (LogIndex, LogID, IntegratedTime,
 //     InclusionProof, SET, Body).
 //

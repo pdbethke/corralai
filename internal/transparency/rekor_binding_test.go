@@ -3,7 +3,6 @@
 package transparency
 
 import (
-	"encoding/base64"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -80,7 +79,15 @@ func TestVerifyInclusionRejectsAnIncompleteProof(t *testing.T) {
 					t.Fatalf("VerifyInclusion PANICKED on proof %s: %v — it must return (false, reason)", tc.proof, p)
 				}
 			}()
-			ok, detail := w.VerifyInclusion(Entry{LogID: "00", InclusionProof: []byte(tc.proof)}, []byte(`{}`))
+			// A SET is supplied because it is now REQUIRED and checked
+			// first (round three, R1); without one these cases would be
+			// refused for the missing SET before the proof is ever read,
+			// and this test would silently stop testing the proof.
+			ok, detail := w.VerifyInclusion(Entry{
+				LogID:          "00",
+				InclusionProof: []byte(tc.proof),
+				SET:            []byte("a signed entry timestamp"),
+			}, []byte(`{}`))
 			if ok {
 				t.Fatalf("accepted an incomplete inclusion proof %s", tc.proof)
 			}
@@ -113,133 +120,8 @@ func TestProofValidationItselfRejectsTheZeroValue(t *testing.T) {
 	}
 }
 
-// TestLoggedSignaturesCover is R2: the payload hash alone does not bind an
-// entry to an envelope.
-//
-// THE DEFECT: step 3 compared only the DSSE payload hash, while the comment
-// above it claimed the check confirms the entry "wraps THIS envelope". It did
-// not — nothing compared the logged signatures — so a replacement envelope
-// signed by a DIFFERENT key over the same payload reused the original
-// inclusion proof, with its own signature never having been logged. The
-// verifier narrowed the practical harm (certverify checks a pinned Ed25519 key
-// first) but could not refute the claim, and any other caller inherits it.
-//
-// The body shape here is copied from corral's OWN entry in the public log,
-// Rekor index 2759598612: kind dsse, apiVersion 0.0.1, spec.signatures[] with
-// base64 `signature` and `verifier`.
-func TestLoggedSignaturesCover(t *testing.T) {
-	sigA := base64.StdEncoding.EncodeToString([]byte("signature-from-the-real-key"))
-	sigB := base64.StdEncoding.EncodeToString([]byte("signature-from-a-different-key"))
-
-	body := func(sigs ...string) []byte {
-		type s struct {
-			Signature string `json:"signature"`
-		}
-		var list []s
-		for _, x := range sigs {
-			list = append(list, s{x})
-		}
-		b, err := json.Marshal(map[string]any{
-			"apiVersion": "0.0.1",
-			"kind":       "dsse",
-			"spec":       map[string]any{"signatures": list},
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		return b
-	}
-	env := func(sigs ...string) []byte {
-		type s struct {
-			Sig string `json:"sig"`
-		}
-		var list []s
-		for _, x := range sigs {
-			list = append(list, s{x})
-		}
-		b, err := json.Marshal(map[string]any{"payload": "cGF5bG9hZA==", "signatures": list})
-		if err != nil {
-			t.Fatal(err)
-		}
-		return b
-	}
-
-	for _, tc := range []struct {
-		name        string
-		body, env   []byte
-		wantChecked bool
-		wantCovered bool
-		why         string
-	}{
-		{
-			name: "THE ATTACK: same payload, a signature that was never logged",
-			body: body(sigA), env: env(sigB),
-			wantChecked: true, wantCovered: false,
-			why: "this is R2 — it must be refused, and before the fix it was accepted",
-		},
-		{
-			name: "the honest case: the signature that was logged",
-			body: body(sigA), env: env(sigA),
-			wantChecked: true, wantCovered: true,
-			why: "a real record must keep verifying — an over-strict fix is worse than the finding",
-		},
-		{
-			name: "a signature ADDED after anchoring",
-			body: body(sigA), env: env(sigA, sigB),
-			wantChecked: true, wantCovered: false,
-			why: "the log vouches for sigA only; sigB rides along unlogged",
-		},
-		{
-			name:        "URL-safe base64 on one side",
-			body:        body(base64.StdEncoding.EncodeToString([]byte{0xfb, 0xff, 0xbf})),
-			env:         env(base64.URLEncoding.EncodeToString([]byte{0xfb, 0xff, 0xbf})),
-			wantChecked: true, wantCovered: true,
-			why: "the same bytes in the other alphabet must not read as a mismatch",
-		},
-		{
-			name:        "an entry body shape with no signature set (intoto, or a future kind)",
-			body:        []byte(`{"apiVersion":"0.0.2","kind":"intoto","spec":{"content":{}}}`),
-			env:         env(sigA),
-			wantChecked: false,
-			why:         "NOT refused — checked=false, so the caller discloses a weaker binding instead of breaking a legitimate entry kind",
-		},
-		{
-			name: "a body that is not JSON at all",
-			body: []byte("\x00\x01not json"), env: env(sigA),
-			wantChecked: false,
-			why:         "unreadable is not forged: the body is already covered by the Merkle proof",
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			checked, covered := loggedSignaturesCover(tc.body, tc.env)
-			if checked != tc.wantChecked {
-				t.Errorf("checked = %v, want %v — %s", checked, tc.wantChecked, tc.why)
-			}
-			if tc.wantChecked && covered != tc.wantCovered {
-				t.Errorf("covered = %v, want %v — %s", covered, tc.wantCovered, tc.why)
-			}
-		})
-	}
-}
-
-// TestLoggedSignaturesCoverIsNotVacuous is the negative control for R2's fix.
-// The comparison must be able to say NO: if some edit made it always report
-// covered (or always report checked=false, which the caller treats as "do not
-// refuse"), every case above would still pass while the hole was wide open.
-func TestLoggedSignaturesCoverIsNotVacuous(t *testing.T) {
-	logged := base64.StdEncoding.EncodeToString([]byte("logged"))
-	forged := base64.StdEncoding.EncodeToString([]byte("forged"))
-	body := []byte(`{"kind":"dsse","spec":{"signatures":[{"signature":"` + logged + `"}]}}`)
-
-	checked, covered := loggedSignaturesCover(body, []byte(`{"signatures":[{"sig":"`+forged+`"}]}`))
-	if !checked {
-		t.Fatal("checked=false on a well-formed dsse body — the caller would NOT refuse, so the fix is inert")
-	}
-	if covered {
-		t.Fatal("an unlogged signature reported as covered — the fix is inert")
-	}
-	okChecked, okCovered := loggedSignaturesCover(body, []byte(`{"signatures":[{"sig":"`+logged+`"}]}`))
-	if !okChecked || !okCovered {
-		t.Fatalf("the logged signature was not recognized (checked=%v covered=%v) — the comparison cannot tell yes from no", okChecked, okCovered)
-	}
-}
+// The round-two tests that stood here exercised loggedSignaturesCover, whose
+// contract round three refuted: it funnelled a MALFORMED ENVELOPE — attacker
+// input — into the same "disclose, do not refuse" path as an unreadable log
+// body. Tests that assert a wrong contract are worse than no tests, so they
+// are replaced rather than patched. See coldreview3_test.go in this package.

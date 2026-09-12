@@ -13,6 +13,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/go-openapi/strfmt"
 	"github.com/sigstore/rekor/pkg/client"
@@ -161,11 +162,19 @@ func (w *rekorWitness) fetchEntryByUUID(ctx context.Context, rc *genclient.Rekor
 	}
 	le, ok := resp.Payload[uuid]
 	if !ok {
-		// The map may be keyed by the full entry ID; take the sole element.
-		for _, v := range resp.Payload {
-			le = v
-			ok = true
-			break
+		// The map may be keyed by the full entry ID rather than the UUID, so
+		// a single element is taken — but ONLY when there is exactly one.
+		// Ranging over the map and breaking took an ARBITRARY element in map
+		// order, which for a response carrying several would silently return
+		// an entry that is not the one asked for.
+		// (Cold review round three, 2026-09-12, R7.)
+		if len(resp.Payload) == 1 {
+			for _, v := range resp.Payload {
+				le = v
+				ok = true
+			}
+		} else if len(resp.Payload) > 1 {
+			return models.LogEntryAnon{}, fmt.Errorf("transparency: rekor returned %d entries for %s and none keyed by that UUID — refusing to guess which is the one", len(resp.Payload), uuid)
 		}
 	}
 	if !ok {
@@ -212,7 +221,10 @@ func (w *rekorWitness) toEntry(le models.LogEntryAnon) (Entry, error) {
 // inclusion proof for dsseEnvelope:
 //  1. the Merkle inclusion proof and its checkpoint signature verify under the
 //     TUF-rooted Rekor public key,
-//  2. the Signed Entry Timestamp verifies under that same key, and
+//  2. the Signed Entry Timestamp is PRESENT and verifies under that same key —
+//     without it the global log index and the integrated time are
+//     unauthenticated and freely editable, and the TUF key's validity window
+//     is never checked,
 //  3. the entry's stored DSSE payload hash equals sha256(the envelope payload),
 //     and
 //  4. every signature the envelope carries appears in the signature set the
@@ -229,6 +241,23 @@ func (w *rekorWitness) VerifyInclusion(entry Entry, dsseEnvelope []byte) (bool, 
 	logIDBytes, err := hex.DecodeString(entry.LogID)
 	if err != nil {
 		return false, "log ID is not valid hex"
+	}
+
+	// A MISSING SIGNED ENTRY TIMESTAMP IS FATAL, and checked first.
+	//
+	// The Merkle proof covers the leaf and the IN-TREE index; it does not
+	// cover the global LogIndex or IntegratedTime. Only the SET does. So while
+	// the SET was optional, anyone holding a real record could delete it and
+	// then edit both to anything, and `certify verify` printed the invented
+	// values as "verified (publicly witnessed <time>, Rekor #N)". The TUF key
+	// validity-window check lives only inside VerifySET and went with it.
+	//
+	// Requiring it rejects nothing legitimate — Rekor returns a SET on every
+	// entry (this project's own, log index 2759598612, carries 96 bytes).
+	// (Cold review round three, 2026-09-12, R1 — reproduced, high, and
+	// pre-existing since 2026-07-10.)
+	if len(entry.SET) == 0 {
+		return false, "no signed entry timestamp: the log index and integrated time are unauthenticated, so this entry cannot be said to be publicly witnessed"
 	}
 
 	proof, err := parseInclusionProof(entry.InclusionProof)
@@ -279,11 +308,27 @@ func (w *rekorWitness) VerifyInclusion(entry Entry, dsseEnvelope []byte) (bool, 
 		return false, fmt.Sprintf("inclusion proof did not verify: %v", err)
 	}
 
-	// 2. Signed Entry Timestamp.
-	if len(entry.SET) > 0 {
-		if err := tlog.VerifySET(tlogEntry, w.rekorLogs); err != nil {
-			return false, fmt.Sprintf("signed entry timestamp did not verify: %v", err)
-		}
+	// 2. Signed Entry Timestamp — REQUIRED, not "checked if present"
+	//    (the presence half of this rule is enforced at the top of the
+	//    function, so a missing SET is refused before any work and with a
+	//    reason a reader can act on).
+	//
+	// Treating it as optional meant an attacker holding a real record could
+	// DELETE the SET and then edit the entry's IntegratedTime and global
+	// LogIndex to anything at all, because nothing else authenticates them:
+	// the Merkle proof in step 1 covers the leaf and the in-tree index, not
+	// the global index or the timestamp. `certify verify` then printed the
+	// invented values as "verified (publicly witnessed <time>, Rekor #N)".
+	// The TUF key's validity-window check lives only inside VerifySET, so
+	// skipping the step skipped that too.
+	//
+	// Requiring it rejects nothing legitimate: Rekor returns a SET on every
+	// entry (verified against this project's own entry, log index 2759598612,
+	// where it is 96 bytes), and an entry without one was never witnessed in
+	// the sense the CLI claims. (Cold review round three, 2026-09-12, R1 —
+	// reproduced, high, and pre-existing since 2026-07-10.)
+	if err := tlog.VerifySET(tlogEntry, w.rekorLogs); err != nil {
+		return false, fmt.Sprintf("signed entry timestamp did not verify: %v", err)
 	}
 
 	// 3. Confirm the logged entry actually wraps THIS envelope by comparing
@@ -300,92 +345,178 @@ func (w *rekorWitness) VerifyInclusion(entry Entry, dsseEnvelope []byte) (bool, 
 		return false, "log entry does not wrap the given envelope (payload hash mismatch)"
 	}
 
-	// 4. The payload hash alone does NOT bind the entry to this envelope: a
-	// replacement envelope signed by a different key over the SAME payload
-	// passes step 3 while its signature was never logged. So compare the
-	// signatures the log actually recorded against the ones this envelope
-	// carries. (Cold review 2026-09-12, R2.)
+	// 4. BIND THE ENTRY TO THIS EXACT ENVELOPE.
 	//
-	// Signature bytes are the right thing to compare and envelopeHash is not:
-	// a hash over the envelope JSON is byte-identity, so any re-serialization
-	// — a different key order, different spacing — would refuse a record that
-	// is perfectly good. Signatures are opaque base64 and survive that.
-	checked, covered := loggedSignaturesCover(entry.Body, dsseEnvelope)
-	if checked && !covered {
-		return false, "log entry does not wrap the given envelope (a signature it carries was never logged)"
+	// The payload hash alone does not: a replacement envelope signed by a
+	// different key over the same payload passes step 3. Two bindings are
+	// tried, strongest first, and the failure modes are kept distinguishable.
+	bind, reason := bindEntryToEnvelope(entry.Body, dsseEnvelope)
+	switch bind {
+	case bindMismatch:
+		return false, "log entry does not wrap the given envelope (" + reason + ")"
+	case bindMalformedEnvelope:
+		// THE ENVELOPE IS ATTACKER INPUT. The previous version funnelled this
+		// into the same "disclose, do not refuse" path as an unreadable LOG
+		// body, so adding one non-string `sig` element — or sending no
+		// signatures at all — turned a refused never-logged signature into
+		// ok=true, while the reason string said "unrecognized entry body
+		// shape" about a body that had read perfectly. The refusal existed for
+		// a well-formed envelope and was missing for a malformed one.
+		// (Cold review round three, 2026-09-12, R2 — reproduced.)
+		return false, "the given envelope is malformed (" + reason + ")"
 	}
 
 	suffix := ""
-	if !checked {
-		// The body is a shape whose signature set we cannot locate. Say so
-		// rather than refuse: the body is covered by the Merkle proof already
-		// verified in step 1, so this is a weaker binding, not a forged one —
-		// and a check that cannot tell a bad case from a legitimate one must
-		// disclose instead of failing closed on both.
-		suffix = "; signatures not compared (unrecognized entry body shape)"
+	if bind == bindNotComparable {
+		// Only this case discloses: the LOG's body is a shape this package
+		// cannot read, which is legitimate for an entry kind it does not know.
+		// The body is covered by the Merkle proof verified in step 1, so this
+		// is a weaker binding rather than a forged one.
+		suffix = "; envelope bound by payload hash only (" + reason + ")"
 	}
-	if len(entry.SET) > 0 {
-		return true, "rekor inclusion proof and SET verified against the TUF trust root" + suffix
-	}
-	return true, "rekor inclusion proof verified against the TUF trust root (no SET present)" + suffix
+	return true, "rekor inclusion proof and SET verified against the TUF trust root" + suffix
 }
 
-// loggedSignaturesCover reports whether every signature the given DSSE
-// envelope carries also appears in the signature set the Rekor body recorded.
+// bindResult says how strongly a Rekor entry was tied to a given envelope.
+type bindResult int
+
+const (
+	bindOK                bindResult = iota // the entry demonstrably wraps this envelope
+	bindMismatch                            // it demonstrably wraps a DIFFERENT one — refuse
+	bindMalformedEnvelope                   // the ENVELOPE could not be read — refuse, it is attacker input
+	bindNotComparable                       // the LOG BODY is a kind we cannot read — disclose
+)
+
+// bindEntryToEnvelope ties a Rekor entry body to the envelope presented for
+// verification, strongest binding first.
 //
-// checked is false when no signature set could be located in either input —
-// an entry kind whose body this does not know how to read (intoto, a future
-// type), or an envelope with no signatures at all. The caller discloses that
-// rather than refusing, because refusing would break entry kinds that are
-// legitimate; see the note at the call site.
+//  1. envelopeHash. Rekor's dsse type stores sha256 of the envelope bytes AS
+//     SUBMITTED, and Anchor submits the same bytes the record then stores
+//     verbatim (brain/buildcert.go passes one `envelope` variable to both), so
+//     this comparison is exact and safe. An earlier version of this code
+//     skipped it on the theory that JSON re-serialization would break it —
+//     that theory was wrong, and a review refuted it by reading Rekor's own
+//     source. (Round three, R3.)
+//  2. the signature set, for an entry that records signatures but no envelope
+//     hash.
 //
-// body is the raw, canonicalized Rekor entry body, whose bytes are hashed into
-// the Merkle leaf, so its contents are already covered by the inclusion proof.
-func loggedSignaturesCover(body, dsseEnvelope []byte) (checked, covered bool) {
-	var logged struct {
+// The ENVELOPE failing to parse is never "not comparable": it is attacker
+// input and must refuse. Only the LOG's body being an unreadable kind is
+// disclosable. (Round three, R2.)
+func bindEntryToEnvelope(body, dsseEnvelope []byte) (bindResult, string) {
+	envSigs, envOK := envelopeSignatures(dsseEnvelope)
+	if !envOK {
+		return bindMalformedEnvelope, "its signatures could not be read"
+	}
+	if len(envSigs) == 0 {
+		// Rekor never logs a zero-signature dsse envelope, so this cannot be
+		// the envelope that was logged.
+		return bindMalformedEnvelope, "it carries no signatures"
+	}
+
+	logged, ok := loggedBody(body)
+	if !ok {
+		return bindNotComparable, "the log entry body is not a shape this build can read"
+	}
+	if logged.envelopeHash != "" {
+		sum := sha256.Sum256(dsseEnvelope)
+		if !strings.EqualFold(logged.envelopeHash, hex.EncodeToString(sum[:])) {
+			return bindMismatch, "envelope hash mismatch"
+		}
+		return bindOK, ""
+	}
+	if len(logged.signatures) == 0 {
+		return bindNotComparable, "the log entry records neither an envelope hash nor any signature"
+	}
+	inLog := make(map[string]bool, len(logged.signatures))
+	for _, sig := range logged.signatures {
+		if raw, ok := decodeBase64Either(sig); ok {
+			inLog[string(raw)] = true
+		}
+	}
+	for _, sig := range envSigs {
+		raw, ok := decodeBase64Either(sig)
+		if !ok || !inLog[string(raw)] {
+			return bindMismatch, "a signature it carries was never logged"
+		}
+	}
+	return bindOK, ""
+}
+
+// loggedEntryBody is the part of a Rekor entry body this package compares.
+type loggedEntryBody struct {
+	envelopeHash string
+	signatures   []string
+}
+
+// loggedBody reads the signature material out of a Rekor entry body, for every
+// kind whose layout is known.
+//
+// intoto v0.0.2 is handled as well as dsse v0.0.1, because sigstore-go returns
+// a payload hash for BOTH — so an intoto entry passed step 3 and then skipped
+// step 4 entirely, leaving the never-logged-signature hole open for any intoto
+// entry anyone had logged over the same payload. The stated reason for
+// skipping ("we cannot tell a bad case from a legitimate one") was simply
+// false for that kind: intoto records its signatures, just at a different
+// path. (Round three, R4.)
+func loggedBody(body []byte) (loggedEntryBody, bool) {
+	var raw struct {
+		Kind string `json:"kind"`
 		Spec struct {
+			// dsse v0.0.1
+			EnvelopeHash struct {
+				Value string `json:"value"`
+			} `json:"envelopeHash"`
 			Signatures []struct {
 				Signature string `json:"signature"`
 			} `json:"signatures"`
+			// intoto v0.0.2
+			Content struct {
+				Envelope struct {
+					Signatures []struct {
+						Sig string `json:"sig"`
+					} `json:"signatures"`
+				} `json:"envelope"`
+			} `json:"content"`
 		} `json:"spec"`
 	}
-	if err := json.Unmarshal(body, &logged); err != nil {
-		return false, false
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return loggedEntryBody{}, false
 	}
+	out := loggedEntryBody{envelopeHash: raw.Spec.EnvelopeHash.Value}
+	for _, s := range raw.Spec.Signatures {
+		if s.Signature != "" {
+			out.signatures = append(out.signatures, s.Signature)
+		}
+	}
+	for _, s := range raw.Spec.Content.Envelope.Signatures {
+		if s.Sig != "" {
+			out.signatures = append(out.signatures, s.Sig)
+		}
+	}
+	if out.envelopeHash == "" && len(out.signatures) == 0 {
+		return loggedEntryBody{}, false
+	}
+	return out, true
+}
+
+// envelopeSignatures reads a DSSE envelope's signatures. ok is false when the
+// envelope cannot be parsed AT ALL or its signatures are not the shape DSSE
+// defines — a non-string `sig`, say. The caller REFUSES on that; it is
+// attacker input, not an unknown-but-legitimate format.
+func envelopeSignatures(dsseEnvelope []byte) (sigs []string, ok bool) {
 	var env struct {
 		Signatures []struct {
 			Sig string `json:"sig"`
 		} `json:"signatures"`
 	}
 	if err := json.Unmarshal(dsseEnvelope, &env); err != nil {
-		return false, false
-	}
-	if len(logged.Spec.Signatures) == 0 || len(env.Signatures) == 0 {
-		return false, false
-	}
-
-	// Compare the DECODED bytes: the log stores standard base64 and a DSSE
-	// envelope may use either alphabet, so comparing the strings would refuse
-	// a good record over an encoding difference.
-	inLog := make(map[string]bool, len(logged.Spec.Signatures))
-	for _, s := range logged.Spec.Signatures {
-		if raw, ok := decodeBase64Either(s.Signature); ok {
-			inLog[string(raw)] = true
-		}
-	}
-	if len(inLog) == 0 {
-		return false, false
+		return nil, false
 	}
 	for _, s := range env.Signatures {
-		raw, ok := decodeBase64Either(s.Sig)
-		if !ok {
-			return true, false
-		}
-		if !inLog[string(raw)] {
-			return true, false
-		}
+		sigs = append(sigs, s.Sig)
 	}
-	return true, true
+	return sigs, true
 }
 
 // decodeBase64Either decodes standard or URL-safe base64, the same tolerance

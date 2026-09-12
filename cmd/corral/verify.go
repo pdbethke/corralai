@@ -257,6 +257,17 @@ func runCertifyVerify(args []string, fetch pubkeyFetcher, newWitness witnessFact
 		return 1
 	}
 	integrated := time.Unix(entry.IntegratedTime, 0).UTC().Format(time.RFC3339)
+	// The rekor check's own detail is printed on SUCCESS too, not only on
+	// failure. VerifyInclusion promises that a weaker binding is disclosed and
+	// "never silently so", and that promise was being kept inside the package
+	// and dropped at this door: the CLI printed its own summary line and the
+	// suffixes never reached anyone. A caveat only the code can see is not a
+	// disclosure. (Cold review round three, 2026-09-12, R5.)
 	fmt.Fprintf(stdout, "verified (publicly witnessed %s, Rekor #%d)\n", integrated, entry.LogIndex)
+	for _, c := range checks {
+		if c.Name == "rekor" && c.OK && c.Detail != "" {
+			fmt.Fprintf(stdout, "  rekor: %s\n", c.Detail)
+		}
+	}
 	return 0
 }

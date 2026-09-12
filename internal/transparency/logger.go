@@ -202,6 +202,19 @@ func (r *rekorLogger) Get(ctx context.Context, logIndex int64) (LogEntry, error)
 	if err := json.Unmarshal(bodyBytes, &parsed); err != nil {
 		return LogEntry{}, fmt.Errorf("transparency: parsing entry body: %w", err)
 	}
+	// SAY WHAT IS ACTUALLY WRONG. A non-dsse entry parses into a zero
+	// dsseEntryBody and yielded EnvelopeSHA256 "" with no error at all, so
+	// `corral verify` reported a HASH MISMATCH — which reads as tampering —
+	// when the real problem was an index pointing at a different kind of
+	// entry entirely. An honest error here is the difference between "someone
+	// edited your record" and "you gave me the wrong number".
+	// (Cold review round three, 2026-09-12, R8.)
+	if parsed.Spec.EnvelopeHash.Value == "" {
+		return LogEntry{}, fmt.Errorf("transparency: rekor entry %s is not a dsse entry (no envelope hash in its body) — this index points at a different kind of entry, not at a tampered one", uuid)
+	}
+	if le.LogIndex != nil && *le.LogIndex != logIndex {
+		return LogEntry{}, fmt.Errorf("transparency: asked for log index %d and rekor returned %d", logIndex, *le.LogIndex)
+	}
 
 	return LogEntry{
 		LogIndex:       *le.LogIndex,

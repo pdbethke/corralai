@@ -293,6 +293,14 @@ sha>` — resolved by blaming its site against the prior fix commits. Then the
 churn ratio is a `GROUP BY` on the branch like everything else, and the
 stopping rule below is enforceable instead of a promise.
 
+The question this raises — whether a given model is any good at *fixing*, as
+opposed to writing — has no execution-proven answer today, and corral turns out
+to already own the answer key: every held REPRODUCED finding carries a script
+that exits 0 only while the defect is present. [fix-eval.md](fix-eval.md) is
+the design that follows, including why the tempting retrospective version
+(mining `Co-Authored-By` trailers against `git blame`) produces a table nobody
+should believe.
+
 ### The stopping rule this produces
 
 **If a round's churn share exceeds the previous round's, stop fixing in

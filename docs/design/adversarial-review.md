@@ -216,6 +216,97 @@ Two rules from the week, both mechanical:
   negative-control rule: every gate test must fail when the gate is
   reverted.
 
+## Is the loop converging? Measure it, don't assert it
+
+On 2026-09-12 two rounds ran back to back on `internal/transparency` and
+`internal/gate`, both scopes the ledger had never seen. Round three then
+re-attacked round two's fix batch. That pair is the first evidence in this
+project good enough to ask whether the loop drains defects or manufactures
+them, so the numbers are recorded here rather than remembered.
+
+The method is `git blame` on each finding's own `file:line`, at the commit the
+round reviewed. If the defective line was authored by the previous round's fix
+commit, that finding is **churn**; if it predates it, the finding is **drain**.
+
+| | findings | pre-existing (drain) | created by the previous fix (churn) |
+|---|---|---|---|
+| **Round two** — first look at both scopes | 10 | **10** (all authored 2026-07-10 → 07-12) | 0, necessarily |
+| **Round three** — re-attack of round two's fixes | 13 | **8** | **5 (38%)** |
+
+Two results matter more than the ratio.
+
+**The churn is more severe than the drain.** Round three's five self-inflicted
+findings were 3 high and 2 medium, with no lows. Its eight pre-existing ones
+were 1 high, 2 medium and 5 low. Fixing ten things in one commit introduced
+three high-severity regressions, and all five were the SAME shape — a rule
+keyed on an incidental character instead of the declared schema, or applied at
+one door and not its sibling. The shape is named in this repository's own
+notes. Knowing it did not prevent five more instances in an afternoon.
+
+**The drain is real and the reviewer is genuinely exploring.** Round three's
+single most valuable finding — a stored Rekor entry whose SET can be deleted,
+letting its timestamp and log index be edited while `certify verify` still
+prints them as "verified (publicly witnessed …)" — is pre-existing since
+2026-07-10 and had survived every earlier round. Three of the eight
+pre-existing findings were in files round two never opened, so the reviewer is
+not merely orbiting the last diff.
+
+### What follows, per round of evidence
+
+**From round two — scope coverage is not a boolean.** Ten findings in two
+scopes, then eight more in the same two scopes one round later. A pass finds a
+subset, not the set. `review plan` currently treats a reviewed scope as done
+and orders the rest by file count; yield predicts yield, so a scope that
+produced findings should be re-offered ahead of an unreviewed one, and
+"reviewed" should carry a coverage fraction rather than a checkmark. Both
+rounds here were aimed by a person overriding that ordering.
+
+**From round three — the review seat is blind on purpose, and it now costs
+more than it saves.** `internal/prior` already does this job for `certify`: it
+tells the generator which edits were tried on a file's exact bytes, and every
+primed verdict discloses that it sits a different exam. Nothing equivalent
+exists for `review`. A reviewer told what this scope yielded before, what was
+refuted, and **which lines the last fix touched** would attack the 38% of
+defects that now live in the diff. It must inherit `prior`'s honesty rule:
+opt-in, disclosed on the entry, and its rates not comparable to a cold seat's.
+
+**From R5's demotion — build the refuted-claims channel.** R5 was declared
+REPRODUCED and demoted to CODE-READ by the harness: its script expected a
+negative duration, and the int64 overflow lands on exactly `0s`. The verifier
+then noted the claim held anyway, because zero triggers the same fallback. That
+correction currently dies on the record. Feeding demoted and refuted claims to
+the next reviewer is the one learning channel this document already described
+and the code has never had.
+
+**From the shape of the five — gate only what is really detectable.** Most of
+the one-door class cannot be caught statically and should not be claimed. Two
+of these five can: a `PRIMARY KEY` whose column list omits a column added by a
+migration in the same file (round three's R3, exactly), and a default constant
+substituted in more than one function instead of through a single normalizer
+(round three's R4, which is why `Policy.normalized()` exists).
+
+**From the ratio itself — put an origin on the finding.** `corral_findings`
+already carries `file`, `line` and `commit_sha`, so every number in the table
+above is computable from the record without a person running `git blame`. A
+finding should carry its **origin** — `pre-existing`, or `introduced-by <fix
+sha>` — resolved by blaming its site against the prior fix commits. Then the
+churn ratio is a `GROUP BY` on the branch like everything else, and the
+stopping rule below is enforceable instead of a promise.
+
+### The stopping rule this produces
+
+**If a round's churn share exceeds the previous round's, stop fixing in
+batches.** Fix one finding, re-attack cold, then take the next. Round two
+merged ten fixes at once and three of them were high-severity regressions;
+that is the specific practice the evidence indicts, not the loop.
+
+And the gap it exposes is structural. Corral's rule is that **the auditor never
+builds**, so the fix step has no seat, no grading and no record — while 38% of
+this round's defects, and all three of its worst, were created there. The churn
+is happening precisely where the instrumentation stops. Giving a finding an
+origin is the smallest change that puts a number on that without handing the
+auditor a builder.
+
 ## The scorecard
 
 Nothing about the prose is scored. The **citations** are:

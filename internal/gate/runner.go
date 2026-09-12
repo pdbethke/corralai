@@ -74,6 +74,20 @@ type Runner struct {
 
 // Run gates one PR head. Fail-closed: success is posted ONLY on a real exit-0.
 func (r *Runner) Run(ctx context.Context, repoURL string, p Policy, pr PRRef) error {
+	// NORMALIZE THE POLICY FIRST, so every later use — the status posts, the
+	// store row, the fail-closed path — reads the SAME values.
+	//
+	// Two defaults had been applied only in the places that happened to need
+	// them: Store.Save substituted "corral/gate" for an empty Context while
+	// Run posted the empty string straight to the forge (which then files it
+	// under its own default context), so the status and the dedupe row
+	// disagreed about which check had reported; and the timeout bound added to
+	// ParsePolicies did nothing for a Policy built programmatically, leaving
+	// the int64 overflow reachable here. Both are the same mistake: a rule
+	// applied at the door that PARSES a policy and not at the door that ACTS
+	// on one. (Cold review round three, 2026-09-12, R4 and R5.)
+	p = p.normalized()
+
 	target := r.RecordURL(p.Repo, pr.HeadSHA)
 	_ = r.Status.SetCommitStatus(ctx, repoURL, pr.HeadSHA, p.Context, "pending", target, "corral gate running")
 
@@ -98,10 +112,7 @@ func (r *Runner) Run(ctx context.Context, repoURL string, p Policy, pr PRRef) er
 		return r.fail(ctx, repoURL, p, pr, target, "error", "checkout: "+err.Error())
 	}
 
-	timeout := DefaultGateTimeout
-	if p.TimeoutS > 0 {
-		timeout = time.Duration(p.TimeoutS) * time.Second
-	}
+	timeout := p.effectiveTimeout()
 	exit, output, runErr := r.Jail.Run(ctx, strings.Join(p.CheckCmd, " "), dest, p.AllowNet, timeout)
 	if runErr != nil {
 		return r.fail(ctx, repoURL, p, pr, target, "error", "jail: "+runErr.Error())

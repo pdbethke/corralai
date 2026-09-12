@@ -10,6 +10,7 @@ package gate
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 
 	_ "github.com/marcboeker/go-duckdb/v2"
 )
@@ -39,13 +40,25 @@ func OpenStore(dsn string) (*Store, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("gate: creating gate_runs table: %w", err)
 	}
-	// A store created before the cold review of 2026-09-12 has neither column
-	// and is keyed on (repo, head_sha) alone. Add what is missing rather than
-	// refusing to open: an operator's existing gate must keep working, and the
-	// old rows are still valid dedupe entries. The PRIMARY KEY cannot be
-	// widened in place, which is fine — the old key is strictly narrower, so
-	// those rows keep deduping, just without per-context granularity until
-	// they age out with their heads.
+	// A store created before 2026-09-12 has neither column and is keyed on
+	// (repo, head_sha) alone. Add what is missing rather than refusing to
+	// open: an operator's existing gate must keep working.
+	//
+	// THE COMMENT THAT USED TO BE HERE WAS FALSE. It said the legacy PRIMARY
+	// KEY "cannot be widened in place, which is fine — the old key is strictly
+	// narrower, so those rows keep deduping". It is not fine. Save uses INSERT
+	// OR REPLACE, so under the narrow key two policies on the SAME head
+	// OVERWRITE each other: the second context's row replaces the first's,
+	// GetByHead then misses the row it just wrote for the other context, and
+	// the poller re-runs both policies on every tick, forever. That is a worse
+	// failure than the one the context column was added to fix, and it was
+	// shipped on the strength of a sentence I wrote asserting it was safe.
+	// (Cold review round three, 2026-09-12, R3 — reproduced, high.)
+	//
+	// So the key is genuinely widened: DuckDB cannot ALTER a PRIMARY KEY, and
+	// migrateKey below rebuilds the table when duckdb_constraints() shows the
+	// old shape. It is conditional and idempotent — a store already on the
+	// wide key is untouched.
 	//
 	// The ALTERs carry NO constraints on purpose: DuckDB refuses "Adding
 	// columns with constraints not yet supported", and it refuses at PARSE
@@ -69,7 +82,63 @@ func OpenStore(dsn string) (*Store, error) {
 			return nil, fmt.Errorf("gate: migrating gate_runs: %w", err)
 		}
 	}
+	if err := migrateKey(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	return &Store{db: db}, nil
+}
+
+// migrateKey widens gate_runs' PRIMARY KEY to (repo, head_sha, context) when
+// it is still the legacy (repo, head_sha).
+//
+// DuckDB cannot ALTER a PRIMARY KEY, so the table is rebuilt: create the right
+// shape, copy every row, swap. It reads the CURRENT key out of
+// duckdb_constraints() rather than guessing from a version marker, so it is
+// idempotent and a store already on the wide key costs one cheap query.
+//
+// Rows that collided under the narrow key are already lost — one overwrote the
+// other before this ran — and no migration can invent them back. They are
+// re-gated when their heads next appear, which is the correct outcome.
+func migrateKey(db *sql.DB) error {
+	var cols string
+	err := db.QueryRow(`SELECT list_aggregate(constraint_column_names, 'string_agg', ',')
+		FROM duckdb_constraints()
+		WHERE table_name = 'gate_runs' AND constraint_type = 'PRIMARY KEY'`).Scan(&cols)
+	if err == sql.ErrNoRows {
+		return nil // no primary key at all: nothing to widen
+	}
+	if err != nil {
+		return fmt.Errorf("gate: reading gate_runs primary key: %w", err)
+	}
+	if strings.Contains(cols, "context") {
+		return nil // already wide
+	}
+	stmts := []string{
+		`CREATE TABLE gate_runs_wide (
+			repo VARCHAR NOT NULL,
+			head_sha VARCHAR NOT NULL,
+			context VARCHAR NOT NULL DEFAULT 'corral/gate',
+			pr INTEGER NOT NULL,
+			passed BOOLEAN NOT NULL,
+			status_posted BOOLEAN NOT NULL DEFAULT FALSE,
+			record_id BIGINT NOT NULL,
+			ran_at TIMESTAMP NOT NULL,
+			PRIMARY KEY (repo, head_sha, context)
+		)`,
+		`INSERT INTO gate_runs_wide
+		 SELECT repo, head_sha, coalesce(context, 'corral/gate'), pr, passed,
+		        coalesce(status_posted, TRUE), record_id, ran_at
+		 FROM gate_runs`,
+		`DROP TABLE gate_runs`,
+		`ALTER TABLE gate_runs_wide RENAME TO gate_runs`,
+	}
+	for _, st := range stmts {
+		if _, err := db.Exec(st); err != nil {
+			return fmt.Errorf("gate: widening gate_runs primary key: %w", err)
+		}
+	}
+	return nil
 }
 
 // Close closes the underlying database.

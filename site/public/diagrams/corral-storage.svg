@@ -1,0 +1,274 @@
+<svg role="img" aria-label="How corral stores a verdict: the run produces a signed verdict, which is committed as one gzipped JSON entry to the orphan git branch corral/ledger and anchored in Sigstore Rekor; DuckDB then reads that branch in place over HTTPS, or corral ledger push sends the same rows to a local DuckDB file or to MotherDuck as eight tables and one view." xmlns="http://www.w3.org/2000/svg" width="1280" height="880" viewBox="0 0 1280 880" font-family="ui-monospace, SFMono-Regular, Menlo, 'Cascadia Code', 'Fira Code', monospace" font-size="12">
+  <!-- SPDX-License-Identifier: Elastic-2.0 -->
+  <defs>
+    <marker id="sarr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#241f18"/>
+    </marker>
+    <marker id="sarr-red" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#b8341f"/>
+    </marker>
+    <marker id="sarr-grey" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#8a8170"/>
+    </marker>
+    <style>
+      .lane { fill: #f2e9d6; }
+      .lanelabel { font-size: 11px; font-weight: 700; letter-spacing: .12em; fill: #8f5e08; }
+      .group { fill: #faf3e6; stroke: #ddd0b3; stroke-width: 1.2; }
+      .grouptitle { font-size: 12px; font-weight: 700; fill: #241f18; letter-spacing: .02em; }
+      .agent { fill: #faf3e6; stroke: #241f18; stroke-width: 1.5; }
+      .code { fill: #e4efe6; stroke: #3f7a52; stroke-width: 1.5; }
+      .state { fill: #fff8ea; stroke: #8f5e08; stroke-width: 1.4; stroke-dasharray: 5 3; }
+      .surface { fill: #faf3e6; stroke: #ddd0b3; stroke-width: 1.2; }
+      .arm { fill: none; stroke: #b8341f; stroke-width: 2.4; }
+      .t { font-size: 12px; font-weight: 700; fill: #241f18; }
+      .s { font-size: 8.8px; fill: #6b6152; }
+      .flow { fill: none; stroke: #241f18; stroke-width: 1.3; marker-end: url(#sarr); }
+      .flowred { fill: none; stroke: #b8341f; stroke-width: 1.6; marker-end: url(#sarr-red); }
+      .flowback { fill: none; stroke: #8a8170; stroke-width: 1.2; stroke-dasharray: 5 4; marker-end: url(#sarr-grey); }
+      .title { font-size: 20px; font-weight: 700; fill: #241f18; }
+      .subtitle { font-size: 11px; fill: #6b6152; }
+      .key { font-size: 9.5px; fill: #6b6152; }
+      .brand { font-size: 11px; font-weight: 700; fill: #8f5e08; letter-spacing: .14em; }
+      .edge { font-size: 8.6px; fill: #6b6152; }
+      .edgered { font-size: 8.6px; fill: #b8341f; }
+    </style>
+  </defs>
+
+  <text x="24" y="40" class="title">Where a verdict goes — the branch is the store, DuckDB and MotherDuck are the view</text>
+  <text x="24" y="62" class="subtitle">corral v1.0.0-rc.13 · a CI runner is destroyed when the job ends, so the record is committed to an orphan git branch · nothing is stood up, nothing is rewritten, and the view is rebuildable from the store at any time</text>
+
+  <!-- LANES -->
+  <rect x="100" y="86" width="1156" height="92" rx="10" class="lane"/>
+  <text x="24" y="126" class="lanelabel">THE RUN</text>
+  <text x="24" y="142" class="key">dies when the</text>
+  <text x="24" y="155" class="key">job ends</text>
+
+  <rect x="100" y="192" width="1156" height="216" rx="10" class="lane"/>
+  <text x="24" y="288" class="lanelabel">THE STORE</text>
+  <text x="24" y="304" class="key">durable ·</text>
+  <text x="24" y="317" class="key">append-only ·</text>
+  <text x="24" y="330" class="key">verifiable</text>
+
+  <rect x="100" y="422" width="1156" height="216" rx="10" class="lane"/>
+  <text x="24" y="518" class="lanelabel">THE VIEW</text>
+  <text x="24" y="534" class="key">rebuildable</text>
+  <text x="24" y="547" class="key">from the store</text>
+
+  <rect x="100" y="652" width="1156" height="92" rx="10" class="lane"/>
+  <text x="24" y="692" class="lanelabel">QUESTIONS</text>
+  <text x="24" y="708" class="key">one GROUP BY</text>
+  <text x="24" y="721" class="key">each</text>
+
+  <!-- ============ LANE 1: THE RUN ============ -->
+  <g>
+    <rect x="128" y="98" width="230" height="64" rx="6" class="agent"/>
+    <text x="140" y="120" class="t">corral certify</text>
+    <text x="140" y="138" class="s">plants goal-violating faults,</text>
+    <text x="140" y="151" class="s">runs YOUR suite against each</text>
+  </g>
+  <g>
+    <rect x="382" y="98" width="230" height="64" rx="6" class="agent"/>
+    <text x="394" y="120" class="t">corral review</text>
+    <text x="394" y="138" class="s">cold agent · every reproduced</text>
+    <text x="394" y="151" class="s">claim ships a script we run</text>
+  </g>
+  <g>
+    <rect x="636" y="98" width="230" height="64" rx="6" class="state"/>
+    <rect x="633" y="95" width="236" height="70" rx="8" class="arm"/>
+    <text x="648" y="120" class="t">Human ruling</text>
+    <text x="648" y="138" class="s">the outcome of record — above</text>
+    <text x="648" y="151" class="s">execution, because a person looked</text>
+  </g>
+  <g>
+    <rect x="890" y="98" width="230" height="64" rx="6" class="state"/>
+    <text x="902" y="120" class="t">The next run</text>
+    <text x="902" y="138" class="s">starts empty, is handed the branch,</text>
+    <text x="902" y="151" class="s">and plants where it has not yet</text>
+  </g>
+
+  <!-- ============ LANE 2: THE STORE ============ -->
+  <g>
+    <rect x="128" y="214" width="240" height="64" rx="6" class="code"/>
+    <text x="140" y="236" class="t">Signed verdict</text>
+    <text x="140" y="254" class="s">in-toto · DSSE · rows hashed in</text>
+    <text x="140" y="267" class="s">written as ONE gzipped JSON file</text>
+  </g>
+
+  <rect x="392" y="200" width="456" height="104" rx="8" class="group"/>
+  <text x="406" y="220" class="grouptitle">corral/ledger — an orphan branch: no shared history with main, never in a diff</text>
+  <g>
+    <rect x="406" y="234" width="126" height="54" rx="6" class="state"/>
+    <text x="416" y="254" class="t">entry n-2</text>
+    <text x="416" y="271" class="s">prev_hash →</text>
+  </g>
+  <g>
+    <rect x="546" y="234" width="126" height="54" rx="6" class="state"/>
+    <text x="556" y="254" class="t">entry n-1</text>
+    <text x="556" y="271" class="s">prev_hash →</text>
+  </g>
+  <g>
+    <rect x="686" y="234" width="148" height="54" rx="6" class="state"/>
+    <text x="696" y="254" class="t">entry n (head)</text>
+    <text x="696" y="271" class="s">signed · certify key</text>
+  </g>
+  <path d="M532,261 L546,261" class="flow"/>
+  <path d="M672,261 L686,261" class="flow"/>
+
+  <g>
+    <rect x="870" y="214" width="250" height="64" rx="6" class="state"/>
+    <text x="882" y="236" class="t">Measured, today</text>
+    <text x="882" y="254" class="s">104 entries · 382 KB total · 3.6 KB avg</text>
+    <text x="882" y="267" class="s">≈ 37 MB projected at 10,000 audits</text>
+  </g>
+
+  <g>
+    <rect x="128" y="320" width="240" height="64" rx="6" class="code"/>
+    <text x="140" y="342" class="t">corral ledger verify</text>
+    <text x="140" y="360" class="s">walks the chain from a CLEAN clone</text>
+    <text x="140" y="373" class="s">a stranger checks it, not your word</text>
+  </g>
+  <g>
+    <rect x="392" y="320" width="246" height="64" rx="6" class="code"/>
+    <rect x="389" y="317" width="252" height="70" rx="8" class="arm"/>
+    <text x="404" y="342" class="t">corral ledger checkpoint</text>
+    <text x="404" y="360" class="s">prune every entry to one genesis</text>
+    <text x="404" y="373" class="s">verify then says: chain begins here</text>
+  </g>
+  <g>
+    <rect x="664" y="320" width="184" height="64" rx="6" class="surface"/>
+    <text x="676" y="342" class="t">Sigstore Rekor</text>
+    <text x="676" y="360" class="s">public transparency log</text>
+    <text x="676" y="373" class="s">index rides on the entry</text>
+  </g>
+  <g>
+    <rect x="870" y="320" width="250" height="64" rx="6" class="surface"/>
+    <text x="882" y="342" class="t">Deleting it is not deletion</text>
+    <text x="882" y="360" class="s">objects stay reachable by SHA; forks</text>
+    <text x="882" y="373" class="s">outlive it — and Rekor keeps the receipt</text>
+  </g>
+
+  <!-- ============ LANE 3: THE VIEW ============ -->
+  <rect x="120" y="436" width="440" height="188" rx="8" class="group"/>
+  <text x="134" y="456" class="grouptitle">Read in place — nothing running</text>
+  <g>
+    <rect x="134" y="474" width="190" height="60" rx="6" class="code"/>
+    <text x="146" y="496" class="t">Any DuckDB client</text>
+    <text x="146" y="514" class="s">CLI · Python · WASM</text>
+    <text x="146" y="527" class="s">no clone, no server</text>
+  </g>
+  <g>
+    <rect x="348" y="474" width="198" height="60" rx="6" class="code"/>
+    <text x="360" y="496" class="t">read_json_auto</text>
+    <text x="360" y="514" class="s">+ httpfs, straight off GitHub</text>
+    <text x="360" y="527" class="s">union_by_name = true</text>
+  </g>
+  <path d="M324,504 L348,504" class="flow"/>
+  <text x="134" y="556" class="s">Unindexed: every query reads every file. Fine at one entry</text>
+  <text x="134" y="570" class="s">per AUDIT — not per event. This is the honest ceiling.</text>
+  <text x="134" y="592" class="s">Enumerating the branch is one GitHub API call, outside</text>
+  <text x="134" y="606" class="s">the query engine — the seam a larger deployment feels first.</text>
+
+  <rect x="584" y="436" width="652" height="188" rx="8" class="group"/>
+  <text x="598" y="456" class="grouptitle">Push — a warehouse you own, when the view must span repositories</text>
+  <g>
+    <rect x="598" y="474" width="200" height="60" rx="6" class="code"/>
+    <text x="610" y="496" class="t">corral ledger push</text>
+    <text x="610" y="514" class="s">the destination is a DSN —</text>
+    <text x="610" y="527" class="s">same verb either way</text>
+  </g>
+  <g>
+    <rect x="822" y="462" width="190" height="52" rx="6" class="state"/>
+    <text x="834" y="482" class="t">./audits.duckdb</text>
+    <text x="834" y="499" class="s">a local file you own</text>
+  </g>
+  <g>
+    <rect x="822" y="530" width="190" height="52" rx="6" class="state"/>
+    <text x="834" y="550" class="t">md:my_database</text>
+    <text x="834" y="567" class="s">MotherDuck · all repos</text>
+  </g>
+  <g>
+    <rect x="1036" y="466" width="186" height="112" rx="6" class="state"/>
+    <text x="1046" y="486" class="t">8 tables + 1 view</text>
+    <text x="1046" y="503" class="s">corral_scans · corral_audits</text>
+    <text x="1046" y="516" class="s">corral_mutants · corral_events</text>
+    <text x="1046" y="529" class="s">corral_model_calls · corral_reviews</text>
+    <text x="1046" y="542" class="s">corral_findings · corral_adjudications</text>
+    <text x="1046" y="558" class="s">corral_seal — cross-checks a signed</text>
+    <text x="1046" y="571" class="s">hash against the rows it produced</text>
+  </g>
+  <path d="M798,496 C808,496 812,488 822,488" class="flow"/>
+  <path d="M798,512 C808,512 812,556 822,556" class="flow"/>
+  <path d="M1012,488 C1022,488 1026,500 1036,504" class="flow"/>
+  <path d="M1012,556 C1022,556 1026,544 1036,540" class="flow"/>
+  <text x="598" y="556" class="s">Identical schema on both destinations.</text>
+  <text x="598" y="570" class="s">Rows are append-only: overwriting is</text>
+  <text x="598" y="584" class="s">how a trend is lost — and a trend is</text>
+  <text x="598" y="598" class="s">the entire reason to keep them.</text>
+  <text x="704" y="616" class="s">Push BEFORE you prune — the branch is the verifiable record, the warehouse is the durable one.</text>
+
+  <!-- ============ LANE 4: QUESTIONS ============ -->
+  <g>
+    <rect x="128" y="664" width="212" height="64" rx="6" class="surface"/>
+    <text x="140" y="686" class="t">Which files keep</text>
+    <text x="140" y="702" class="t">shipping proven gaps</text>
+    <text x="140" y="719" class="s">across every scan, not one run</text>
+  </g>
+  <g>
+    <rect x="362" y="664" width="212" height="64" rx="6" class="surface"/>
+    <text x="374" y="686" class="t">Did the kill rate move,</text>
+    <text x="374" y="702" class="t">or just resample</text>
+    <text x="374" y="719" class="s">faults are fresh each run</text>
+  </g>
+  <g>
+    <rect x="596" y="664" width="212" height="64" rx="6" class="surface"/>
+    <text x="608" y="686" class="t">corral models rank</text>
+    <text x="608" y="703" class="s">every seat graded from execution</text>
+    <text x="608" y="716" class="s">or a human ruling — never self-report</text>
+  </g>
+  <g>
+    <rect x="830" y="664" width="200" height="64" rx="6" class="surface"/>
+    <text x="842" y="686" class="t">corral brief &lt;scope&gt;</text>
+    <text x="842" y="703" class="s">the auditor's report on a scope,</text>
+    <text x="842" y="716" class="s">read back out of the record</text>
+  </g>
+  <g>
+    <rect x="1052" y="664" width="184" height="64" rx="6" class="surface"/>
+    <text x="1064" y="686" class="t">What an audit costs</text>
+    <text x="1064" y="703" class="s">tokens and latency per call,</text>
+    <text x="1064" y="716" class="s">per file, per seat</text>
+  </g>
+
+  <!-- ============ FLOWS ============ -->
+  <!-- producers -> verdict -->
+  <path d="M243,162 L243,214" class="flow"/>
+  <path d="M497,162 C497,186 392,188 372,214" class="flow"/>
+  <text x="398" y="184" class="edge">every verdict, one entry</text>
+  <!-- human ruling -> straight down into the chain: a ruling is its own entry -->
+  <path d="M751,165 L751,200" class="flowred"/>
+  <text x="757" y="185" class="edgered">its own signed entry</text>
+  <!-- verdict -> the branch -->
+  <path d="M368,250 L392,250" class="flow"/>
+  <!-- the chain -> Rekor -->
+  <path d="M780,304 C772,310 764,314 756,320" class="flow"/>
+  <!-- verify reads the chain -->
+  <path d="M256,320 C256,300 372,296 392,278" class="flowback"/>
+  <!-- checkpoint prunes the chain -->
+  <path d="M515,317 L515,304" class="flowred"/>
+  <text x="523" y="316" class="edgered">prune</text>
+  <!-- the branch -> priors -> the next run -->
+  <path d="M848,246 C902,246 1005,214 1005,165" class="flowback"/>
+  <text x="862" y="206" class="edge">priors: faults already planted on these exact bytes</text>
+  <!-- the branch -> read in place -->
+  <path d="M420,304 C398,312 378,330 378,436" class="flow"/>
+  <!-- the branch -> push -->
+  <path d="M700,304 C688,312 652,330 652,436" class="flow"/>
+  <!-- read in place -> questions -->
+  <path d="M234,624 L234,664" class="flow"/>
+  <!-- tables -> questions -->
+  <path d="M1129,578 C1129,610 1140,640 1144,664" class="flow"/>
+
+  <line x1="24" y1="806" x2="1256" y2="806" stroke="#ddd0b3" stroke-width="1"/>
+  <text x="24" y="828" class="brand">CORRAL · corralai.dev</text>
+  <text x="24" y="844" class="key">Cream boxes are model seats · green are code, and ask no model anything · amber-dashed are stored · red outlines are yours, and nothing there happens without you · dotted arrows are read back, never written.</text>
+  <text x="24" y="860" class="key">Every number on this diagram was read from the live branch on 2026-09-11: github.com/pdbethke/corralai/tree/corral/ledger/scans · Elastic-2.0 · one Go binary · no hosted tier.</text>
+</svg>

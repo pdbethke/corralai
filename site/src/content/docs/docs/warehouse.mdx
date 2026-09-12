@@ -5,6 +5,18 @@ description: "A CI runner forgets everything when the job ends, and GitHub is no
 
 {/* SPDX-License-Identifier: Elastic-2.0 */}
 
+<figure style="margin:0 0 2rem;border:1px solid var(--sl-color-gray-5);border-radius:0.5rem;overflow:hidden;background:#faf3e6">
+  <a href="/diagrams/corral-storage.svg" style="display:block">
+    <img
+      src="/diagrams/corral-storage.svg"
+      alt="How corral stores a verdict. Four lanes: THE RUN (corral certify, corral review and a human ruling, all of which die when the job ends); THE STORE (a signed verdict written as one gzipped JSON entry into the hash-linked orphan branch corral/ledger, with corral ledger verify walking the chain, corral ledger checkpoint pruning it, and Sigstore Rekor holding the receipt); THE VIEW (any DuckDB reading the branch in place over HTTPS with read_json_auto and httpfs, or corral ledger push sending the same rows to a local audits.duckdb file or to MotherDuck, creating eight tables and one view); and QUESTIONS (which files keep shipping proven gaps, whether a kill rate moved or resampled, corral models rank, corral brief, and what an audit costs). A dashed arrow carries priors from the branch back to the next run."
+      style="display:block;width:100%;height:auto"
+      loading="eager"
+      decoding="async"
+    />
+  </a>
+</figure>
+
 ## The problem: a runner forgets
 
 A GitHub Actions runner is a throwaway machine. It boots, it works, it is

@@ -999,11 +999,14 @@ CORRALAI_BRAIN_TOKEN       `corral certify`'s bearer token to authenticate to a 
                            from CORRALAI_BRAIN_KEY above (that's an Ed25519 IDENTITY SEED, not a bearer token — do not reuse it)
 CORRALAI_REKOR_URL         Sigstore Rekor instance report_build anchors signed build attestations to (default https://rekor.sigstore.dev);
                            `corral certify verify` checks the same default unless --rekor-url overrides it
-CORRALAI_GATE_POLICY_<NAME> repo merge gate: ONE policy per variable, "repo=owner/name,base=main,net=false,timeout=600,cmd=go test ./..." — cmd= is last and takes the rest of the value verbatim, semicolons and newlines included;
-                           cmd= MUST be the last field — everything after it is the command verbatim (commas
-                           allowed, never split) so "cmd=go test -run A,B ./..." isn't silently truncated;
+CORRALAI_GATE_POLICY_<NAME> repo merge gate: ONE policy per variable, "repo=owner/name,base=main,net=false,timeout=600,cmd=go test ./...";
+                           cmd= MUST be last — everything after it is the command VERBATIM to the end of the
+                           value: commas, semicolons, quotes and newlines included, so nothing can truncate it
+                           into a weaker command that exits 0 and posts a wrongful success;
                            timeout= is seconds, defaults to gate.DefaultGateTimeout (600s) when omitted;
-                           empty => the repo gate is OFF (no poller starts); GitHub-only for v1
+                           no such variable => the repo gate is OFF (no poller starts); GitHub-only for v1.
+                           Replaces CORRALAI_GATE_POLICIES, which is REFUSED: its ";" separator collided with
+                           commands containing ";"
 CORRALAI_GATE_DB           repo gate dedupe/index store DuckDB path (default ~/.claude/corralai_gate.duckdb)
 CORRALAI_GATE_POLL_SECONDS how often (seconds) the repo gate polls covered repos for new PR heads (default 120)
 CORRALAI_GATE_EXEC_BACKEND / _EXEC_UNSAFE_HOST  same jail backend used by the independent verify-gate (see below);

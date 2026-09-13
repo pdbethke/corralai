@@ -71,7 +71,7 @@ func (j jailAdapter) Run(ctx context.Context, command, workspace string, network
 //
 // opts.GatePolicies == nil/empty is the feature's OFF switch: StartGate is
 // a complete no-op (nil, nil) — zero behavior change for a brain that
-// doesn't set CORRALAI_GATE_POLICIES.
+// sets no CORRALAI_GATE_POLICY_<NAME>.
 //
 // opts.GateBackend == nil DISABLES gating even when policies ARE
 // configured: this is the fail-closed contract carried up from
@@ -83,11 +83,11 @@ func StartGate(ctx context.Context, opts Options) (*gate.Store, error) {
 		return nil, nil
 	}
 	if opts.GateBackend == nil {
-		log.Printf("gate: DISABLED — CORRALAI_GATE_POLICIES is set (%d polic(ies)) but no sandbox isolation backend is available; refusing to run PR checks unsandboxed (set CORRALAI_GATE_EXEC_BACKEND)", len(opts.GatePolicies))
+		log.Printf("gate: DISABLED — %d gate polic(ies) are configured but no sandbox isolation backend is available; refusing to run PR checks unsandboxed (set CORRALAI_GATE_EXEC_BACKEND)", len(opts.GatePolicies))
 		return nil, nil
 	}
 	if opts.Repo == nil {
-		log.Printf("gate: DISABLED — CORRALAI_GATE_POLICIES is set but no repo.Engine is configured (Options.Repo is nil)")
+		log.Printf("gate: DISABLED — a gate policy is configured but no repo.Engine is configured (Options.Repo is nil)")
 		return nil, nil
 	}
 

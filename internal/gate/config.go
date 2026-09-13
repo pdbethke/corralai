@@ -4,68 +4,53 @@ package gate
 
 import (
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 )
 
-// ParsePolicies parses CORRALAI_GATE_POLICIES: semicolon-separated policy
-// entries, each a comma-separated list of key=value pairs —
-// "repo=owner/name,base=main,net=false,timeout=600,cmd=go test ./...". An
-// empty raw string yields (nil, nil): the merge-gate feature's off switch. A
-// malformed entry (missing the required repo= or cmd=) is skipped and
-// reported in bad rather than aborting the whole parse — one bad entry in
-// an operator's env var must not silently disable every other repo's gate
-// (degrade-never-block, same directive as the poller).
+// PolicyEnvPrefix is where a merge-gate policy lives: ONE policy per
+// environment variable, named CORRALAI_GATE_POLICY_<NAME>, mirroring the
+// CORRALAI_AGENT_<NAME> convention the review seats already use.
 //
-// cmd= MUST be the LAST field in an entry. Everything from "cmd=" to the end
-// of the entry is the command VERBATIM — commas included, never
-// comma-split — so a check like "go test -run A,B ./..." isn't silently
-// truncated to "go test -run A" (a truncated cmd is a WEAKER command that
-// could exit 0 and post a wrongful "success"; this is the one
-// operator-reachable path that could manufacture a green gate, so cmd
-// parsing fails loudly rather than guessing). An entry with no cmd= at all
-// is malformed (reported in bad), never silently accepted with an
-// empty/default command.
+// WHY ONE VARIABLE PER POLICY. The previous format packed every policy into a
+// single ";"-separated CORRALAI_GATE_POLICIES, and a command is allowed to
+// contain a ";" — so the entry separator and the command's own syntax
+// collided. Three separate guards were written against that collision and a
+// cold reviewer defeated all three:
 //
-// base= may repeat within an entry (space or "|"-joined isn't supported —
-// only the last base= wins per entry today; multi-base policies are
-// expressed as multiple semicolon-separated entries sharing a repo). An
-// omitted base= means "all bases" (Policy.Base == nil). An omitted
-// context defaults to "corral/gate". An omitted net= defaults to false
-// (no network — fail-closed default, matching the runner's own posture).
-// An omitted (or non-numeric) timeout= leaves Policy.TimeoutS at 0, which
-// the runner turns into DefaultGateTimeout.
+//	round two   split on ';' before isolating cmd=, so "go vet ./... ; go test
+//	            ./..." was accepted as the WEAKER "go vet ./..."
+//	round three keyed the guard on the absence of '=', defeated by any command
+//	            containing a flag like -tags=integration
+//	round four  keyed it on the absence of "repo=", defeated by a command
+//	            containing "repo=" incidentally: "true; env repo=x false"
+//
+// Every one of those let a truncated, weaker command post a wrongful success,
+// which is the worst thing this package can do. The fourth attempt is not
+// another guard. Giving each policy its own variable means the OPERATING
+// SYSTEM supplies the separator, and a ";" inside a command can no longer
+// collide with anything. The ambiguity is removed rather than policed.
+const PolicyEnvPrefix = "CORRALAI_GATE_POLICY_"
+
+// LegacyPolicyEnv is the retired single-variable format. It is not parsed —
+// it is REFUSED, loudly, by ParsePolicyEnv. Supporting both would mean two
+// parsers for one rule, and a rule living at two doors is the defect this
+// package has produced fifteen findings' worth of; see PolicyEnvPrefix.
+const LegacyPolicyEnv = "CORRALAI_GATE_POLICIES"
+
 // maxGateTimeoutS bounds timeout= well below the point where
 // time.Duration(n)*time.Second overflows int64 (~292 years), while leaving
 // room for any real check: 24 hours.
 const maxGateTimeoutS = 24 * 60 * 60
 
-// policyFields are the keys ParsePolicies understands. strayFieldAfterCmd
-// derives its check from this list rather than repeating it, so a key added
-// here is covered without a second edit.
+// policyFields are the keys a policy understands. strayFieldAfterCmd derives
+// its check from this list rather than repeating it, so a key added here is
+// covered without a second edit.
 var policyFields = []string{"repo", "base", "context", "net", "timeout"}
 
-// strayFieldAfterCmd returns the name of a known policy field that appears
-// after cmd= (where it would be swallowed into the command verbatim), or "".
-//
-// It tolerates whitespace on BOTH sides of the comma and around the '='. The
-// first version matched the single spelling ","+f+"=" exactly, so the spaced
-// form an operator is at least as likely to write — "cmd=make test, base=release"
-// — sailed through and silently widened the policy to every base branch, which
-// is the very defect the check was added for. One spelling guarded, the other
-// left open. (Cold review round three, 2026-09-12, R2 — reproduced, high,
-// against my own fix for the round-two R8.)
-func strayFieldAfterCmd(cmdVal string) string {
-	for _, f := range policyFields {
-		if strayFieldRE[f].MatchString(cmdVal) {
-			return f
-		}
-	}
-	return ""
-}
-
-// strayFieldRE is derived from policyFields, so a key added there is covered
-// without a second edit — the rule this repo keeps relearning.
+// strayFieldRE is derived from policyFields and tolerates whitespace on both
+// sides of the comma and the '='.
 var strayFieldRE = func() map[string]*regexp.Regexp {
 	m := make(map[string]*regexp.Regexp, len(policyFields))
 	for _, f := range policyFields {
@@ -74,160 +59,171 @@ var strayFieldRE = func() map[string]*regexp.Regexp {
 	return m
 }()
 
-func ParsePolicies(raw string) (policies []Policy, bad []string) {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return nil, nil
+// ParsePolicyEnv reads every CORRALAI_GATE_POLICY_<NAME> out of environ (the
+// os.Environ() form, "KEY=VALUE") and returns the policies in a DETERMINISTIC
+// order — sorted by variable name.
+//
+// The sort is not cosmetic. Ranging a map and taking what comes is the exact
+// non-determinism that produced two findings in this repository within a day
+// (an arbitrary Rekor entry chosen on a UUID miss, and the same again in the
+// logger). Policies decide which check runs against a pull request; they are
+// not allowed to arrive in a different order on different runs.
+//
+// A malformed policy is reported in bad and SKIPPED, never fatal: one bad
+// variable must not silently disable every other repo's gate
+// (degrade-never-block, the same directive the poller follows). Because each
+// policy now has its own variable, a bad one is isolated by construction —
+// under the old format a single stray character could take its neighbours
+// with it.
+func ParsePolicyEnv(environ []string) (policies []Policy, bad []string) {
+	if legacy := envValue(environ, LegacyPolicyEnv); legacy != "" {
+		bad = append(bad, LegacyPolicyEnv+" is no longer supported and was IGNORED — its ';' separator collided with commands containing ';', which silently ran a weaker check and posted success. Set one "+PolicyEnvPrefix+"<NAME> per policy instead; each value is the same text between the old ';' separators")
 	}
-	// THE SEMICOLON IS THE SAME DEFECT THE COMMA NOTE ABOVE GUARDS AGAINST.
-	// cmd= runs to the end of its ENTRY, and entries are ';'-separated, so a
-	// command containing ';' — "cmd=go vet ./... ; go test ./..." under sh -c
-	// — was split here BEFORE cmd= was isolated: the first half was accepted
-	// as a complete policy carrying the WEAKER command, and only the orphaned
-	// tail was reported. That is precisely the "truncated cmd manufactures a
-	// green gate" path this file claims to prevent, arriving through the other
-	// delimiter. (Cold review 2026-09-12, R2 — reproduced, high.)
-	//
-	// It is refused rather than repaired. Re-joining the fragments would be
-	// guessing: an operator who simply forgot repo= on a second entry would
-	// have it silently welded onto the previous command. cmd parsing fails
-	// loudly, so both fragments are reported and NEITHER policy is accepted.
-	frags := strings.Split(raw, ";")
-	// prevPolicy is the index in policies produced by the PREVIOUS fragment,
-	// or -1. Tracked by position so a truncated entry is identified exactly.
-	prevPolicy := -1
-	for i, entry := range frags {
-		entry = strings.TrimSpace(entry)
-		if entry == "" {
+
+	type named struct{ name, val string }
+	var found []named
+	for _, kv := range environ {
+		key, val, ok := strings.Cut(kv, "=")
+		if !ok || !strings.HasPrefix(key, PolicyEnvPrefix) {
 			continue
 		}
-		// A fragment with no key=value at all cannot be a policy entry; if the
-		// one before it declared a cmd=, this is that command's missing tail.
-		// The test for "this fragment is a continuation, not a policy" is
-		// whether it declares repo= — the field a policy REQUIRES — and not
-		// whether it contains an '=' anywhere.
-		//
-		// The first version of this guard asked `!strings.Contains(entry, "=")`,
-		// which any ordinary second command defeats: "go test -tags=integration
-		// ./..." contains '=', so the fragment looked like a policy entry, the
-		// truncation went unnoticed, and the weaker command was accepted again.
-		// A guard keyed on an INCIDENTAL character instead of the declared
-		// schema is the same mistake as enumerating where a property holds.
-		// (Cold review round three, 2026-09-12, R1 — reproduced, high, against
-		// my own fix for the round-two R2.)
-		if i > 0 && !strings.Contains(entry, "repo=") && strings.Contains(frags[i-1], "cmd=") {
-			bad = append(bad, entry+" (a ';' inside cmd= truncated the previous entry's command — the entry before this one was NOT applied; remove the ';' or express the steps as one command)")
-			// Drop the truncated policy, identified by INDEX rather than by
-			// matching its repo string: `strings.Contains(frags[i-1], repo)`
-			// was another guess, and it failed whenever two entries shared a
-			// repo or a repo name appeared inside a command.
-			if prevPolicy >= 0 && prevPolicy == len(policies)-1 {
-				bad = append(bad, strings.TrimSpace(frags[i-1])+" (command truncated at ';')")
-				policies = policies[:prevPolicy]
-			}
-			prevPolicy = -1
+		name := strings.TrimPrefix(key, PolicyEnvPrefix)
+		if name == "" {
+			bad = append(bad, key+" has no name after the prefix")
 			continue
 		}
+		found = append(found, named{name, val})
+	}
+	sort.Slice(found, func(i, j int) bool { return found[i].name < found[j].name })
 
-		// cmd= must be the last field: split the entry at "cmd=" so the
-		// tail (the command) is captured verbatim, commas and all, instead
-		// of being torn apart by the generic comma-split below.
-		var head, cmdVal string
-		cmdSeen := false
-		switch {
-		case strings.HasPrefix(entry, "cmd="):
-			cmdVal = entry[len("cmd="):]
-			cmdSeen = true
-		case strings.Contains(entry, ",cmd="):
-			idx := strings.Index(entry, ",cmd=")
-			head = entry[:idx]
-			cmdVal = entry[idx+len(",cmd="):]
-			cmdSeen = true
-		}
-		cmdVal = strings.TrimSpace(cmdVal)
-
-		pol := Policy{Context: "corral/gate"}
-		var repoSeen bool
-		var badField string
-		if cmdSeen {
-			// A POLICY FIELD PLACED AFTER cmd= was swallowed into the command
-			// rather than reported: "repo=o/r,cmd=make test,base=release" was
-			// accepted with CheckCmd ["make","test,base=release"] AND Base nil,
-			// which gates every base instead of one — a wider policy than the
-			// operator wrote, silently, with nothing in bad. The doc says cmd=
-			// must be LAST and that parsing fails loudly; now it does.
-			// (Cold review 2026-09-12, R8.)
-			if stray := strayFieldAfterCmd(cmdVal); stray != "" {
-				bad = append(bad, entry+" ("+stray+"= appears after cmd=, which takes the rest of the entry verbatim; move it before cmd=)")
-				prevPolicy = -1
-				continue
-			}
-			if fields := strings.Fields(cmdVal); len(fields) > 0 {
-				pol.CheckCmd = fields
-			} else {
-				cmdSeen = false // "cmd=" with an empty/whitespace-only tail is not a real command
-			}
-		}
-
-		for _, kv := range strings.Split(head, ",") {
-			kv = strings.TrimSpace(kv)
-			if kv == "" {
-				continue
-			}
-			key, val, ok := strings.Cut(kv, "=")
-			if !ok {
-				continue
-			}
-			key = strings.TrimSpace(key)
-			val = strings.TrimSpace(val)
-			switch key {
-			case "repo":
-				pol.Repo = val
-				repoSeen = val != ""
-			case "base":
-				if val != "" {
-					pol.Base = []string{val}
-				}
-			case "context":
-				if val != "" {
-					pol.Context = val
-				}
-			case "net":
-				pol.AllowNet = val == "true" || val == "1"
-			case "timeout":
-				// A huge timeout= parsed fine and then OVERFLOWED in
-				// time.Duration(n)*time.Second to a negative duration, which
-				// the sandbox turns into its own 60s default — the exact
-				// outcome DefaultGateTimeout's comment says blocks merges,
-				// reached silently. Bound it and say so.
-				// (Cold review 2026-09-12, R7.)
-				if n, err := strconv.Atoi(val); err == nil {
-					switch {
-					case n < 0:
-						badField = "timeout=" + val + " is negative"
-					case n > maxGateTimeoutS:
-						badField = "timeout=" + val + "s exceeds the maximum " + strconv.Itoa(maxGateTimeoutS) + "s"
-					default:
-						pol.TimeoutS = n
-					}
-				} else if val != "" {
-					badField = "timeout=" + val + " is not a number"
-				}
-			}
-		}
-
-		if badField != "" {
-			bad = append(bad, entry+" ("+badField+")")
-			prevPolicy = -1
+	for _, f := range found {
+		pol, reason := ParsePolicy(f.val)
+		if reason != "" {
+			bad = append(bad, PolicyEnvPrefix+f.name+": "+reason)
 			continue
 		}
-		if !repoSeen || !cmdSeen {
-			bad = append(bad, entry)
-			prevPolicy = -1
-			continue
-		}
-		prevPolicy = len(policies)
 		policies = append(policies, pol)
 	}
 	return policies, bad
+}
+
+// envValue returns the value of key in an os.Environ()-shaped slice, or "".
+func envValue(environ []string, key string) string {
+	for _, kv := range environ {
+		if k, v, ok := strings.Cut(kv, "="); ok && k == key {
+			return v
+		}
+	}
+	return ""
+}
+
+// ParsePolicy parses ONE policy value: a comma-separated list of key=value
+// pairs — "repo=owner/name,base=main,net=false,timeout=600,cmd=go test ./..."
+// — returning a non-empty reason when it is malformed.
+//
+// cmd= MUST BE LAST, and everything after it is the command VERBATIM to the
+// end of the value: commas, semicolons, quotes, newlines and all. There is no
+// entry separator left to collide with, so the command needs no escaping and
+// corral needs no heuristic to find its end.
+//
+// A field written after cmd= would be swallowed into the command — which once
+// produced a policy gating EVERY base branch when the operator had named one —
+// so it is reported rather than absorbed. An empty or whitespace-only command
+// is malformed: it would reach the jail as `sh -c ""`, exit 0, and post a
+// success for a check that ran nothing.
+//
+// base= may repeat; only the last wins. An omitted base= means "all bases"
+// (Policy.Base == nil). An omitted context= is defaulted at the door that ACTS
+// on the policy (Policy.normalized), never here, so the forge and the store
+// can never disagree about which check spoke. An omitted net= defaults to
+// false — no network, matching the runner's fail-closed posture.
+func ParsePolicy(raw string) (Policy, string) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return Policy{}, "empty"
+	}
+
+	// Split the value at cmd= so the command is captured whole.
+	var head, cmdVal string
+	cmdSeen := false
+	switch {
+	case strings.HasPrefix(raw, "cmd="):
+		cmdVal, cmdSeen = raw[len("cmd="):], true
+	case strings.Contains(raw, ",cmd="):
+		i := strings.Index(raw, ",cmd=")
+		head, cmdVal, cmdSeen = raw[:i], raw[i+len(",cmd="):], true
+	}
+	if !cmdSeen {
+		return Policy{}, "no cmd= (a policy with no command would report a result for a check that never ran)"
+	}
+	if stray := strayFieldAfterCmd(cmdVal); stray != "" {
+		return Policy{}, stray + "= appears after cmd=, which takes the rest of the value verbatim; move it before cmd="
+	}
+	// TrimSpace, NOT strings.Fields. Splitting the command into fields and
+	// rejoining them with spaces destroyed newlines and would have mangled
+	// quoted arguments: "true # comment\nfalse" collapsed onto one line and
+	// the failing step vanished behind the comment. The command is one string
+	// from here to the jail.
+	cmd := strings.TrimSpace(cmdVal)
+	if cmd == "" {
+		return Policy{}, "cmd= is empty"
+	}
+
+	pol := Policy{CheckCmd: cmd}
+	var repoSeen bool
+	for _, kv := range strings.Split(head, ",") {
+		kv = strings.TrimSpace(kv)
+		if kv == "" {
+			continue
+		}
+		key, val, ok := strings.Cut(kv, "=")
+		if !ok {
+			return Policy{}, "field " + strconv.Quote(kv) + " is not key=value"
+		}
+		key, val = strings.TrimSpace(key), strings.TrimSpace(val)
+		switch key {
+		case "repo":
+			pol.Repo = val
+			repoSeen = val != ""
+		case "base":
+			if val != "" {
+				pol.Base = []string{val}
+			}
+		case "context":
+			if val != "" {
+				pol.Context = val
+			}
+		case "net":
+			pol.AllowNet = val == "true" || val == "1"
+		case "timeout":
+			n, err := strconv.Atoi(val)
+			switch {
+			case err != nil:
+				return Policy{}, "timeout=" + val + " is not a number"
+			case n < 0:
+				return Policy{}, "timeout=" + val + " is negative"
+			case n > maxGateTimeoutS:
+				return Policy{}, "timeout=" + val + "s exceeds the maximum " + strconv.Itoa(maxGateTimeoutS) + "s"
+			default:
+				pol.TimeoutS = n
+			}
+		default:
+			return Policy{}, "unknown field " + strconv.Quote(key) + " (known: " + strings.Join(policyFields, ", ") + ", cmd)"
+		}
+	}
+	if !repoSeen {
+		return Policy{}, "no repo="
+	}
+	return pol, ""
+}
+
+// strayFieldAfterCmd returns the name of a known policy field that appears
+// after cmd= (where it would be swallowed into the command verbatim), or "".
+func strayFieldAfterCmd(cmdVal string) string {
+	for _, f := range policyFields {
+		if strayFieldRE[f].MatchString(cmdVal) {
+			return f
+		}
+	}
+	return ""
 }

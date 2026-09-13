@@ -286,7 +286,7 @@ type Options struct {
 	Witness transparency.Witness
 
 	// GatePolicies declares which repos/branches the merge gate (repo-gate
-	// control plane) covers — parsed from CORRALAI_GATE_POLICIES. Empty/nil
+	// control plane) covers — parsed from CORRALAI_GATE_POLICY_<NAME>. Empty/nil
 	// is the feature's off switch: StartGate is then a complete no-op and
 	// no poller ever starts (zero behavior change for existing brains).
 	GatePolicies []gate.Policy

@@ -98,7 +98,7 @@ func (r *Runner) Run(ctx context.Context, repoURL string, p Policy, pr PRRef) er
 	// a question nobody asked. The rule belongs at the door that ACTS on the
 	// policy, not only at the one that parses it.
 	// (Cold review 2026-09-12, R6.)
-	if len(p.CheckCmd) == 0 || strings.TrimSpace(strings.Join(p.CheckCmd, " ")) == "" {
+	if strings.TrimSpace(p.CheckCmd) == "" {
 		return r.fail(ctx, repoURL, p, pr, target, "error", "policy has no check command — refusing to report a result for a check that would run nothing")
 	}
 
@@ -113,14 +113,14 @@ func (r *Runner) Run(ctx context.Context, repoURL string, p Policy, pr PRRef) er
 	}
 
 	timeout := p.effectiveTimeout()
-	exit, output, runErr := r.Jail.Run(ctx, strings.Join(p.CheckCmd, " "), dest, p.AllowNet, timeout)
+	exit, output, runErr := r.Jail.Run(ctx, p.CheckCmd, dest, p.AllowNet, timeout)
 	if runErr != nil {
 		return r.fail(ctx, repoURL, p, pr, target, "error", "jail: "+runErr.Error())
 	}
 	sum := sha256.Sum256([]byte(output))
 	digest := "sha256:" + hex.EncodeToString(sum[:])
 
-	recordID, _, certErr := r.Certify.Certify(ctx, p.Repo, pr.HeadSHA, strings.Join(p.CheckCmd, " "), exit, digest)
+	recordID, _, certErr := r.Certify.Certify(ctx, p.Repo, pr.HeadSHA, p.CheckCmd, exit, digest)
 	if certErr != nil {
 		return r.fail(ctx, repoURL, p, pr, target, "error", "sign: "+certErr.Error())
 	}

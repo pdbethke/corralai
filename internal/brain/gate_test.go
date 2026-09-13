@@ -186,7 +186,7 @@ func TestGateRunHandlerUnknownSHAIs404(t *testing.T) {
 // startup failure).
 func TestStartGateNilBackendDisablesGating(t *testing.T) {
 	store, err := StartGate(context.Background(), Options{
-		GatePolicies: []gate.Policy{{Repo: "o/r", CheckCmd: []string{"true"}}},
+		GatePolicies: []gate.Policy{{Repo: "o/r", CheckCmd: "true"}},
 		GateBackend:  nil,
 		GateDB:       filepath.Join(t.TempDir(), "gate.db"),
 	})
@@ -198,7 +198,7 @@ func TestStartGateNilBackendDisablesGating(t *testing.T) {
 	}
 }
 
-// TestStartGateEmptyPoliciesIsOff: no CORRALAI_GATE_POLICIES configured
+// TestStartGateEmptyPoliciesIsOff: no CORRALAI_GATE_POLICY_<NAME> configured
 // means the feature is off — StartGate must be a complete no-op.
 func TestStartGateEmptyPoliciesIsOff(t *testing.T) {
 	store, err := StartGate(context.Background(), Options{})

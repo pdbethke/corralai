@@ -6,7 +6,6 @@ import (
 	"context"
 	"path/filepath"
 	"slices"
-	"strings"
 	"testing"
 	"time"
 )
@@ -20,72 +19,6 @@ import (
 
 // --- FAMILY ONE: the gate reports a result for a check it did not run ---
 
-// TestSemicolonInCmdNeverYieldsAWeakerPolicy is R2, the high-severity one.
-//
-// THE DEFECT: ParsePolicies split the raw value on ';' BEFORE isolating cmd=.
-// A shell command containing a semicolon — "cmd=go vet ./... ; go test ./..."
-// under sh -c — was therefore torn in half: the first fragment parsed as a
-// COMPLETE, VALID policy carrying only "go vet ./...", and just the orphaned
-// tail landed in bad. The operator declared two steps, the gate ran one, and
-// posted success. The file's own doc comment says cmd parsing exists to stop
-// exactly this, having guarded the comma and not the semicolon.
-func TestSemicolonInCmdNeverYieldsAWeakerPolicy(t *testing.T) {
-	pol, bad := ParsePolicies("repo=o/r,cmd=go vet ./... ; go test ./...")
-
-	for _, p := range pol {
-		cmd := strings.Join(p.CheckCmd, " ")
-		if !strings.Contains(cmd, "go test") {
-			t.Errorf("accepted a policy whose command is %q — the operator wrote two steps and this runs one, then posts success", cmd)
-		}
-	}
-	if len(pol) != 0 {
-		t.Errorf("accepted %d policy/policies from an entry whose command was truncated; it must be refused, not repaired by guesswork", len(pol))
-	}
-	if len(bad) == 0 {
-		t.Fatal("nothing reported in bad — the truncation was silent, which is the whole defect")
-	}
-	joined := strings.Join(bad, " | ")
-	if !strings.Contains(joined, ";") {
-		t.Errorf("bad = %q never mentions the ';' that caused this, so the operator cannot act on it", joined)
-	}
-}
-
-// TestCmdWithCommasStillWorks is the companion control: the comma case the
-// file always handled must keep working, or this fix traded one truncation for
-// a refusal of good policies.
-func TestCmdWithCommasStillWorks(t *testing.T) {
-	pol, bad := ParsePolicies("repo=o/r,base=main,cmd=go test -run A,B ./...")
-	if len(pol) != 1 {
-		t.Fatalf("policies = %d, want 1 (bad=%v) — a command containing commas is legal and documented", len(pol), bad)
-	}
-	if got := strings.Join(pol[0].CheckCmd, " "); got != "go test -run A,B ./..." {
-		t.Errorf("CheckCmd = %q, want the command verbatim", got)
-	}
-}
-
-// TestFieldAfterCmdIsReportedNotSwallowed is R8.
-//
-// THE DEFECT: cmd= takes the rest of the entry verbatim, so a policy field
-// written after it was absorbed into the command. "cmd=make test,base=release"
-// produced CheckCmd ["make","test,base=release"] AND Base nil — a policy that
-// gates EVERY base rather than the one named, silently, with nothing in bad.
-// A wider policy than the operator wrote is the same class of wrong as a
-// weaker command.
-func TestFieldAfterCmdIsReportedNotSwallowed(t *testing.T) {
-	for _, field := range []string{"base=release", "context=corral/other", "net=true", "timeout=30", "repo=other/repo"} {
-		t.Run(field, func(t *testing.T) {
-			pol, bad := ParsePolicies("repo=o/r,cmd=make test," + field)
-			if len(pol) != 0 {
-				t.Errorf("accepted a policy with %q after cmd=: CheckCmd=%v Base=%v — the field was swallowed and the policy is not what was written",
-					field, pol[0].CheckCmd, pol[0].Base)
-			}
-			if len(bad) == 0 {
-				t.Fatalf("%q after cmd= was accepted silently; the doc promises cmd parsing fails loudly", field)
-			}
-		})
-	}
-}
-
 // TestRunnerRefusesAPolicyWithNoCommand is R6.
 //
 // THE DEFECT: ParsePolicies refuses an entry with no cmd=, but a Policy built
@@ -96,12 +29,12 @@ func TestFieldAfterCmdIsReportedNotSwallowed(t *testing.T) {
 func TestRunnerRefusesAPolicyWithNoCommand(t *testing.T) {
 	for _, tc := range []struct {
 		name string
-		cmd  []string
+		cmd  string
 	}{
-		{"nil", nil},
-		{"empty slice", []string{}},
-		{"one empty string", []string{""}},
-		{"whitespace only", []string{"  ", "\t"}},
+		{"empty", ""},
+		{"spaces", "   "},
+		{"a tab", "\t"},
+		{"a newline", "\n"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			store, err := OpenStore(filepath.Join(t.TempDir(), "g.db"))
@@ -127,50 +60,6 @@ func TestRunnerRefusesAPolicyWithNoCommand(t *testing.T) {
 			}
 			if !slices.Contains(status.states, "error") && !slices.Contains(status.states, "failure") {
 				t.Errorf("posted neither error nor failure; states seen: %v", status.states)
-			}
-		})
-	}
-}
-
-// TestTimeoutIsBoundedRatherThanOverflowing is R7.
-//
-// THE DEFECT: a huge timeout= parsed fine with strconv.Atoi, and then
-// time.Duration(n)*time.Second overflowed int64 into a NEGATIVE duration. The
-// sandbox turns any deadline <= 0 into its own 60s default — which is the
-// precise outcome DefaultGateTimeout's comment says "permanently blocks merge
-// on any real-world command" — and nothing was reported.
-func TestTimeoutIsBoundedRatherThanOverflowing(t *testing.T) {
-	for _, tc := range []struct {
-		name  string
-		value string
-		want  bool // accepted?
-	}{
-		{"overflowing", "9223372036854775807", false},
-		{"absurd but parseable", "999999999999", false},
-		{"negative", "-1", false},
-		{"not a number", "soon", false},
-		{"the maximum", "86400", true},
-		{"an ordinary ten minutes", "600", true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			pol, bad := ParsePolicies("repo=o/r,timeout=" + tc.value + ",cmd=go test ./...")
-			if tc.want {
-				if len(pol) != 1 {
-					t.Fatalf("a legitimate timeout=%s was refused (bad=%v)", tc.value, bad)
-				}
-				// The effective duration must be positive, or the sandbox
-				// silently substitutes its own 60s and we are back to the bug.
-				if d := time.Duration(pol[0].TimeoutS) * time.Second; d <= 0 {
-					t.Errorf("timeout=%s yields a non-positive duration %v", tc.value, d)
-				}
-				return
-			}
-			if len(pol) != 0 {
-				d := time.Duration(pol[0].TimeoutS) * time.Second
-				t.Errorf("accepted timeout=%s, giving duration %v — a value <= 0 becomes the sandbox's 60s default and blocks merges", tc.value, d)
-			}
-			if len(bad) == 0 {
-				t.Errorf("timeout=%s was rejected silently, with nothing for the operator to read", tc.value)
 			}
 		})
 	}
@@ -203,7 +92,7 @@ func TestStoreFailureNeverPostsSuccess(t *testing.T) {
 		Now:       func() time.Time { return time.Unix(0, 0) },
 	}
 	_ = r.Run(context.Background(), "http://forge/o/r",
-		Policy{Repo: "o/r", Context: "corral/gate", CheckCmd: []string{"true"}}, PRRef{Number: 1, HeadSHA: "abc"})
+		Policy{Repo: "o/r", Context: "corral/gate", CheckCmd: "true"}, PRRef{Number: 1, HeadSHA: "abc"})
 
 	if slices.Contains(status.states, "success") {
 		t.Fatal("posted success while the run could not be recorded — the documented fail-closed invariant says otherwise, and the poller would re-certify this head forever")
@@ -228,8 +117,8 @@ func TestDedupeIsPerStatusContext(t *testing.T) {
 	ran := map[string]int{}
 	p := &Poller{
 		Policies: []Policy{
-			{Repo: "o/r", Base: []string{"main"}, Context: "corral/lint", CheckCmd: []string{"lint"}},
-			{Repo: "o/r", Base: []string{"main"}, Context: "corral/test", CheckCmd: []string{"test"}},
+			{Repo: "o/r", Base: []string{"main"}, Context: "corral/lint", CheckCmd: "lint"},
+			{Repo: "o/r", Base: []string{"main"}, Context: "corral/test", CheckCmd: "test"},
 		},
 		List:  &fakeLister{prs: []PRRef{{Number: 1, HeadSHA: "abc", Base: "main"}}},
 		Store: store,
@@ -285,7 +174,7 @@ func TestAnUndeliveredVerdictIsRetried(t *testing.T) {
 
 	runs := 0
 	p := &Poller{
-		Policies: []Policy{{Repo: "o/r", Base: []string{"main"}, Context: "corral/gate", CheckCmd: []string{"true"}}},
+		Policies: []Policy{{Repo: "o/r", Base: []string{"main"}, Context: "corral/gate", CheckCmd: "true"}},
 		List:     &fakeLister{prs: []PRRef{{Number: 1, HeadSHA: "abc", Base: "main"}}},
 		Store:    store,
 		Run: func(ctx context.Context, repoURL string, pol Policy, pr PRRef) error {
@@ -338,3 +227,12 @@ func TestMarkPostedIsNotVacuous(t *testing.T) {
 		t.Error("a row appeared under a context that was never saved")
 	}
 }
+
+// The semicolon and stray-field tests that stood here policed an ambiguity
+// that NO LONGER EXISTS: policies now live one per CORRALAI_GATE_POLICY_<NAME>
+// variable, so the entry separator is the operating system's and a ';' inside
+// a command cannot collide with it. Three guards were written against that
+// collision and a cold reviewer defeated all three (rounds two, three and
+// four). The fourth answer was to remove the ambiguity rather than police it.
+// The replacement tests are in config_test.go, and they assert the inverse:
+// a command containing ';' must now survive VERBATIM.

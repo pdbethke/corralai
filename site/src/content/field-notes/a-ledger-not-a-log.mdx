@@ -101,8 +101,8 @@ could price an audit from this repository's own history instead of guessing.
 ## What it costs
 
 **It is unindexed, and every query reads every file.** That works because an
-entry is one per *audit*, not one per event. Today the whole record is **106
-entries, 386 KB, averaging 3.7 KB each** — about 37 MB projected at ten
+entry is one per *audit*, not one per event. Today the whole record is **108
+entries, 402 KB, averaging 3.8 KB each** — about 38 MB projected at ten
 thousand audits. Benchmarks, by contrast, are one per benchmark per commit per
 platform, which is the assumption this design rests on, violated. If your facts
 arrive per-event, this is the wrong shape and a real database is the right one.

@@ -57,7 +57,7 @@
 //	                           from CORRALAI_BRAIN_KEY above (that's an Ed25519 IDENTITY SEED, not a bearer token — do not reuse it)
 //	CORRALAI_REKOR_URL         Sigstore Rekor instance report_build anchors signed build attestations to (default https://rekor.sigstore.dev);
 //	                           `corral certify verify` checks the same default unless --rekor-url overrides it
-//	CORRALAI_GATE_POLICIES     repo merge gate: ";"-separated policies "repo=owner/name,base=main,net=false,timeout=600,cmd=go test ./...";
+//	CORRALAI_GATE_POLICY_<NAME> repo merge gate: ONE policy per variable, "repo=owner/name,base=main,net=false,timeout=600,cmd=go test ./..." — cmd= is last and takes the rest of the value verbatim, semicolons and newlines included;
 //	                           cmd= MUST be the last field — everything after it is the command verbatim (commas
 //	                           allowed, never split) so "cmd=go test -run A,B ./..." isn't silently truncated;
 //	                           timeout= is seconds, defaults to gate.DefaultGateTimeout (600s) when omitted;

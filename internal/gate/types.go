@@ -21,10 +21,17 @@ const DefaultGateTimeout = 600 * time.Second
 // it. Later tasks (the poller, the runner) consume this; Task 2 only
 // defines the shape.
 type Policy struct {
-	Repo     string
-	Base     []string
-	Context  string
-	CheckCmd []string
+	Repo    string
+	Base    []string
+	Context string
+	// CheckCmd is the command as ONE STRING, handed to the jail's `sh -c`
+	// unchanged. It was once a []string produced by strings.Fields and
+	// rejoined with spaces at two call sites, which destroyed newlines — so
+	// "true # comment\nfalse" collapsed onto one line and the failing step
+	// disappeared behind the comment — and would have mangled any quoted
+	// argument containing a space. Splitting a shell command and hoping the
+	// rejoin is faithful is not a thing to do.
+	CheckCmd string
 	AllowNet bool
 	// TimeoutS is the jail deadline in seconds. 0 (unset) means "use
 	// DefaultGateTimeout" — see Runner.Run, which computes the effective

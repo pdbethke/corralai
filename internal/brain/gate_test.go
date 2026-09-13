@@ -186,7 +186,7 @@ func TestGateRunHandlerUnknownSHAIs404(t *testing.T) {
 // startup failure).
 func TestStartGateNilBackendDisablesGating(t *testing.T) {
 	store, err := StartGate(context.Background(), Options{
-		GatePolicies: []gate.Policy{{Repo: "o/r", CheckCmd: []string{"true"}}},
+		GatePolicies: []gate.Policy{{Repo: "o/r", CheckCmd: "true"}},
 		GateBackend:  nil,
 		GateDB:       filepath.Join(t.TempDir(), "gate.db"),
 	})

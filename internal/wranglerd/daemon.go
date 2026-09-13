@@ -658,14 +658,20 @@ func Run(version string) {
 		log.Printf("verify-gate: NO isolation backend (%v); gated completion falls back to worker-reported executions — set CORRALAI_GATE_EXEC_BACKEND", gerr)
 	}
 
-	// Repo gate (merge gate): CORRALAI_GATE_POLICIES declares which repos
-	// get an independent, jailed check run against every new open-PR head.
-	// Empty var => feature off (ParsePolicies returns nil, nil). Malformed
-	// entries are logged and skipped — one bad entry must not take down
-	// every other repo's gate (degrade-never-block).
-	gatePolicies, badGatePolicies := gate.ParsePolicies(os.Getenv("CORRALAI_GATE_POLICIES"))
+	// Repo gate (merge gate): one CORRALAI_GATE_POLICY_<NAME> per repo that
+	// gets an independent, jailed check run against every new open-PR head.
+	// No such variable => feature off. A malformed policy is logged and
+	// skipped — one bad variable must not take down every other repo's gate
+	// (degrade-never-block) — and each policy having its own variable means a
+	// bad one is isolated by construction.
+	//
+	// The retired CORRALAI_GATE_POLICIES is reported here, not parsed: a
+	// ';' inside a command collided with its ';' separator and silently ran a
+	// weaker check. See gate.PolicyEnvPrefix for the three guards that failed
+	// before the format was changed instead.
+	gatePolicies, badGatePolicies := gate.ParsePolicyEnv(os.Environ())
 	for _, bad := range badGatePolicies {
-		log.Printf("gate: malformed CORRALAI_GATE_POLICIES entry (skipped): %q", bad)
+		log.Printf("gate: policy skipped: %s", bad)
 	}
 	gateDB := env("CORRALAI_GATE_DB", filepath.Join(home, ".claude", "corralai_gate.duckdb"))
 

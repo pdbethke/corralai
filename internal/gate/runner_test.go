@@ -69,7 +69,7 @@ func (f *fakeStatusPoster) SetCommitStatus(ctx context.Context, repoURL, sha, co
 }
 
 func testPolicy() Policy {
-	return Policy{Repo: "o/r", Base: []string{"main"}, Context: "corral/gate", CheckCmd: []string{"go", "test", "./..."}, AllowNet: false}
+	return Policy{Repo: "o/r", Base: []string{"main"}, Context: "corral/gate", CheckCmd: "go test ./...", AllowNet: false}
 }
 
 func testPR() PRRef {

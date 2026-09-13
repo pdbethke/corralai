@@ -35,7 +35,7 @@ func TestPollerGatesNewHeadOnce(t *testing.T) {
 
 	var runs int
 	p := &Poller{
-		Policies: []Policy{{Repo: "o/r", Base: []string{"main"}, Context: "corral/gate", CheckCmd: []string{"true"}}},
+		Policies: []Policy{{Repo: "o/r", Base: []string{"main"}, Context: "corral/gate", CheckCmd: "true"}},
 		List:     &fakeLister{prs: []PRRef{{Number: 1, HeadSHA: "abc", Base: "main"}}},
 		Store:    store,
 		// The fake stands in for a runner that ran AND delivered its status,
@@ -72,8 +72,8 @@ func TestPollerRunsEachNewHeadAcrossPolicies(t *testing.T) {
 	var ran []string
 	p := &Poller{
 		Policies: []Policy{
-			{Repo: "o/a", Base: []string{"main"}, Context: "corral/gate", CheckCmd: []string{"true"}},
-			{Repo: "o/b", Base: []string{"main"}, Context: "corral/gate", CheckCmd: []string{"true"}},
+			{Repo: "o/a", Base: []string{"main"}, Context: "corral/gate", CheckCmd: "true"},
+			{Repo: "o/b", Base: []string{"main"}, Context: "corral/gate", CheckCmd: "true"},
 		},
 		// Route by policy repo via a small dispatcher list, since Poller.List
 		// is a single PRLister shared across policies in production (the
@@ -127,7 +127,7 @@ func TestPollerListErrorLoggedNeverCrashes(t *testing.T) {
 
 	var runs int
 	p := &Poller{
-		Policies: []Policy{{Repo: "o/r", Base: []string{"main"}, Context: "corral/gate", CheckCmd: []string{"true"}}},
+		Policies: []Policy{{Repo: "o/r", Base: []string{"main"}, Context: "corral/gate", CheckCmd: "true"}},
 		List:     &fakeLister{err: errors.New("forge unavailable")},
 		Store:    store,
 		Run: func(ctx context.Context, repoURL string, pol Policy, pr PRRef) error {
@@ -152,7 +152,7 @@ func TestPollerLoopHonorsCancellation(t *testing.T) {
 	t.Cleanup(func() { _ = store.Close() })
 
 	p := &Poller{
-		Policies: []Policy{{Repo: "o/r", Base: []string{"main"}, Context: "corral/gate", CheckCmd: []string{"true"}}},
+		Policies: []Policy{{Repo: "o/r", Base: []string{"main"}, Context: "corral/gate", CheckCmd: "true"}},
 		List:     &fakeLister{},
 		Store:    store,
 		Run:      func(ctx context.Context, repoURL string, pol Policy, pr PRRef) error { return nil },

@@ -212,7 +212,7 @@ carries the product now.
   and posts `corral/gate = pass|fail` — a status branch protection **requires**, so a
   red or missing verdict blocks the merge. Fail-closed (a `success` is only ever posted
   on a real exit-0), and the gated SHA is provably the merged SHA. v1 is GitHub +
-  opt-in (`CORRALAI_GATE_POLICIES`).
+  opt-in (one `CORRALAI_GATE_POLICY_<NAME>` per repo).
 - **The control gate.** The merge gate runs the *repo's own* check; the control gate
   runs the **control owner's independently-vetted tests** against each PR head — the
   person accountable for code they didn't write sets the bar, and the author can't

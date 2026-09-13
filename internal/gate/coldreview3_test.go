@@ -7,7 +7,6 @@ import (
 	"database/sql"
 	"path/filepath"
 	"slices"
-	"strings"
 	"testing"
 	"time"
 )
@@ -21,93 +20,6 @@ import (
 // Three were high severity. The inputs below are the reviewer's own, verbatim
 // where it supplied them, because a test written from my paraphrase of a
 // finding is a test written by the person who missed it.
-
-// TestSemicolonGuardIsNotDefeatedByAnEqualsSign is round three's R1.
-//
-// MY BUG: the round-two guard asked `!strings.Contains(entry, "=")` to decide
-// whether a fragment was a continuation of a truncated command. Any ordinary
-// second command defeats that — "go test -tags=integration ./..." contains an
-// '=' — so the fragment read as a policy entry, the truncation went unnoticed
-// again, and the weaker command was accepted. I guarded a real case and left
-// the common one open.
-//
-// The rule is now keyed on repo=, the field a policy REQUIRES.
-func TestSemicolonGuardIsNotDefeatedByAnEqualsSign(t *testing.T) {
-	for _, tail := range []string{
-		"go test -tags=integration ./...", // the reviewer's own input
-		"GOFLAGS=-mod=mod go test ./...",
-		"make check VAR=1",
-		"go test ./...", // no '=' at all: the case round two did catch
-	} {
-		t.Run(tail, func(t *testing.T) {
-			pol, bad := ParsePolicies("repo=o/r,cmd=go vet ./... ; " + tail)
-			if len(pol) != 0 {
-				t.Errorf("accepted %d policy/policies with command %q — the operator wrote two steps and this gate runs one, then posts success",
-					len(pol), strings.Join(pol[0].CheckCmd, " "))
-			}
-			if len(bad) == 0 {
-				t.Fatal("the truncation was silent")
-			}
-		})
-	}
-}
-
-// TestTwoRealEntriesSharingARepoStillParse is the control for R1's fix. The
-// guard drops the PRECEDING policy when it sees a continuation, and it used to
-// identify that policy with `strings.Contains(frags[i-1], policies[n-1].Repo)`
-// — another guess, which misfires when two entries share a repo. It is keyed
-// on the fragment's index now, and legitimate multi-entry values must survive.
-func TestTwoRealEntriesSharingARepoStillParse(t *testing.T) {
-	pol, bad := ParsePolicies("repo=o/r,context=corral/lint,cmd=golangci-lint run;repo=o/r,context=corral/test,cmd=go test ./...")
-	if len(pol) != 2 {
-		t.Fatalf("policies = %d, want 2 (bad=%v) — two contexts on one repo is the documented multi-policy shape", len(pol), bad)
-	}
-	if pol[0].Context == pol[1].Context {
-		t.Errorf("both policies came back with context %q", pol[0].Context)
-	}
-	if got := strings.Join(pol[1].CheckCmd, " "); got != "go test ./..." {
-		t.Errorf("second command = %q, want it intact", got)
-	}
-}
-
-// TestStrayFieldAfterCmdToleratesWhitespace is round three's R2.
-//
-// MY BUG: strayFieldAfterCmd matched the single spelling ","+f+"=" exactly. An
-// operator writing the spaced form — "cmd=make test, base=release", which is at
-// least as natural — slipped through, the field was absorbed into the command,
-// and Base stayed nil: a policy gating EVERY base branch rather than the one
-// named. One spelling guarded, the other left open, in the fix for a finding
-// about exactly that.
-func TestStrayFieldAfterCmdToleratesWhitespace(t *testing.T) {
-	for _, entry := range []string{
-		"repo=o/r,cmd=make test, base=release", // the reviewer's own input
-		"repo=o/r,cmd=make test ,base=release",
-		"repo=o/r,cmd=make test , base = release",
-		"repo=o/r,cmd=make test,\tcontext=corral/other",
-		"repo=o/r,cmd=make test,  timeout=30",
-	} {
-		t.Run(entry, func(t *testing.T) {
-			pol, bad := ParsePolicies(entry)
-			if len(pol) != 0 {
-				t.Errorf("accepted a policy whose Base is %v and command is %q — a WIDER policy than was written, silently",
-					pol[0].Base, strings.Join(pol[0].CheckCmd, " "))
-			}
-			if len(bad) == 0 {
-				t.Fatal("a policy field after cmd= was swallowed with nothing reported")
-			}
-		})
-	}
-}
-
-// TestACommandContainingACommaEqualsPairStillParses is the control: the fix
-// must not start refusing commands that legitimately contain ",<word>=" where
-// the word is not a policy field.
-func TestACommandContainingACommaEqualsPairStillParses(t *testing.T) {
-	pol, bad := ParsePolicies("repo=o/r,cmd=go test -ldflags=-X main.v=1,other=2 ./...")
-	if len(pol) != 1 {
-		t.Fatalf("policies = %d, want 1 (bad=%v) — 'other' is not a policy field and must not trip the guard", len(pol), bad)
-	}
-}
 
 // TestLegacyKeyIsWidenedNotLeftAlone is round three's R3, and the one I am
 // least comfortable about, because I shipped it on the strength of a sentence
@@ -212,7 +124,7 @@ func TestRunnerPostsAndRecordsTheSameContext(t *testing.T) {
 	}
 	// A Policy with NO Context, as brain Options.GatePolicies may build it.
 	if err := r.Run(context.Background(), "http://forge/o/r",
-		Policy{Repo: "o/r", CheckCmd: []string{"true"}}, PRRef{Number: 1, HeadSHA: "abc"}); err != nil {
+		Policy{Repo: "o/r", CheckCmd: "true"}, PRRef{Number: 1, HeadSHA: "abc"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -273,7 +185,7 @@ func TestTheRunnerActuallyUsesTheBoundedTimeout(t *testing.T) {
 		Now:       func() time.Time { return time.Unix(0, 0) },
 	}
 	_ = r.Run(context.Background(), "http://forge/o/r",
-		Policy{Repo: "o/r", Context: "corral/gate", CheckCmd: []string{"true"}, TimeoutS: 9223372036854775807},
+		Policy{Repo: "o/r", Context: "corral/gate", CheckCmd: "true", TimeoutS: 9223372036854775807},
 		PRRef{Number: 1, HeadSHA: "abc"})
 
 	if jail.lastTimeout <= 0 {

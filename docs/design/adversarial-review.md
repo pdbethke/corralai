@@ -232,6 +232,21 @@ commit, that finding is **churn**; if it predates it, the finding is **drain**.
 |---|---|---|---|
 | **Round two** — first look at both scopes | 10 | **10** (all authored 2026-07-10 → 07-12) | 0, necessarily |
 | **Round three** — re-attack of round two's fixes | 13 | **8** | **5 (38%)** |
+| **Round four** — re-attack of round three's fixes | 9 | **4** | **5 (56%)** |
+
+Round four ran on 2026-09-13 with the seats rotated once more, so each scope
+had by then been reviewed by all three models and none had reviewed its own
+review. Its practice was different on purpose — the high-severity finding was
+fixed alone first, and every guard was checked for its sibling door before
+committing — and the churn share still rose. Read the absolutes, not the
+share: **churn stayed flat at 5 while drain halved, 8 → 4.** The share rose
+because the backlog was emptying. At a constant five introduced against
+roughly four removed per round the loop does not converge; it is a treadmill,
+and that number is what ended the batch-and-re-attack practice on these two
+packages. Round four's nine were fixed on 2026-09-15 one finding per commit,
+with a negative control run against the pre-fix tree for every test, and two
+of the nine were retired by changing the policy format rather than by a fourth
+guard (see "gate only what is really detectable" below).
 
 Two results matter more than the ratio.
 

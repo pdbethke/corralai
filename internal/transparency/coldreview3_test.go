@@ -122,10 +122,12 @@ func TestIntotoSignaturesAreCompared(t *testing.T) {
 	forged := base64.StdEncoding.EncodeToString([]byte("forged sig"))
 	intoto := []byte(`{"kind":"intoto","apiVersion":"0.0.2","spec":{"content":{"envelope":{"signatures":[{"sig":"` + logged + `"}]}}}}`)
 
-	if got, why := bindEntryToEnvelope(intoto, []byte(`{"signatures":[{"sig":"`+logged+`"}]}`)); got != bindOK {
+	// The envelopes carry a payload because an envelope without one is
+	// malformed (round four, R3); this test is about the signature set.
+	if got, why := bindEntryToEnvelope(intoto, []byte(`{"payload":"cA==","signatures":[{"sig":"`+logged+`"}]}`)); got != bindOK {
 		t.Errorf("the logged intoto signature was not accepted: %v (%s)", got, why)
 	}
-	if got, _ := bindEntryToEnvelope(intoto, []byte(`{"signatures":[{"sig":"`+forged+`"}]}`)); got != bindMismatch {
+	if got, _ := bindEntryToEnvelope(intoto, []byte(`{"payload":"cA==","signatures":[{"sig":"`+forged+`"}]}`)); got != bindMismatch {
 		t.Errorf("bind = %v, want bindMismatch — an unlogged signature verified against an intoto entry", got)
 	}
 }

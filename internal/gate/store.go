@@ -149,10 +149,7 @@ func (s *Store) Close() error { return s.db.Close() }
 // (the runner, Task 4) is responsible for stamping it, which keeps this
 // store deterministic under test.
 func (s *Store) Save(r Run) error {
-	ctxName := r.Context
-	if ctxName == "" {
-		ctxName = "corral/gate"
-	}
+	ctxName := normalizeContext(r.Context)
 	_, err := s.db.Exec(
 		`INSERT OR REPLACE INTO gate_runs (repo, head_sha, context, pr, passed, status_posted, record_id, ran_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -189,9 +186,7 @@ func (s *Store) GetBySHA(repo, sha string) (Run, bool, error) {
 // under different contexts and each owes the forge its own status.
 // (Cold review 2026-09-12, R3.)
 func (s *Store) GetByHead(repo, sha, statusCtx string) (Run, bool, error) {
-	if statusCtx == "" {
-		statusCtx = "corral/gate"
-	}
+	statusCtx = normalizeContext(statusCtx)
 	r := Run{Repo: repo, HeadSHA: sha, Context: statusCtx}
 	err := s.db.QueryRow(
 		`SELECT pr, passed, coalesce(status_posted, TRUE), record_id, ran_at FROM gate_runs
@@ -211,9 +206,7 @@ func (s *Store) GetByHead(repo, sha, statusCtx string) (Run, bool, error) {
 // so a status post lost to a forge outage is retried on the next tick instead
 // of leaving the pull request pending forever. (Cold review 2026-09-12, R4.)
 func (s *Store) MarkPosted(repo, sha, statusCtx string) error {
-	if statusCtx == "" {
-		statusCtx = "corral/gate"
-	}
+	statusCtx = normalizeContext(statusCtx)
 	if _, err := s.db.Exec(
 		`UPDATE gate_runs SET status_posted = TRUE
 		 WHERE repo = ? AND head_sha = ? AND coalesce(context, 'corral/gate') = ?`,

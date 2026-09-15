@@ -82,10 +82,28 @@ const DefaultStatusContext = "corral/gate"
 // sees identical values. Call it ONCE, at the top of the code that acts on a
 // policy; do not scatter the defaults.
 func (p Policy) normalized() Policy {
-	if strings.TrimSpace(p.Context) == "" {
-		p.Context = DefaultStatusContext
-	}
+	p.Context = normalizeContext(p.Context)
 	return p
+}
+
+// normalizeContext is THE rule for what a policy's status context means:
+// trimmed, and the default when nothing is left. Policy.normalized, the
+// store's Save/GetByHead/MarkPosted and the poller's dedupe lookup all call
+// it — one function, so a new door cannot hold a different idea of the
+// default.
+//
+// Three doors held three ideas: the runner normalized whitespace to the
+// default, the store defaulted only the empty string, and the poller used
+// the context as written. A programmatic Policy with Context "   " was saved
+// under corral/gate, looked up under "   ", missed on every tick, and the
+// head was re-run and re-certified forever. (Round four, 2026-09-13, R3 — a
+// defect in round two's fix.)
+func normalizeContext(c string) string {
+	c = strings.TrimSpace(c)
+	if c == "" {
+		return DefaultStatusContext
+	}
+	return c
 }
 
 // effectiveTimeout is the jail deadline this policy actually gets.

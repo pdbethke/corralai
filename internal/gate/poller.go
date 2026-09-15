@@ -46,6 +46,9 @@ func repoURLFor(p Policy) string {
 // starve the others (design directive: degrade, never block/crash).
 func (p *Poller) Tick(ctx context.Context) error {
 	for _, pol := range p.Policies {
+		// The SAME normalization the runner applies, so the dedupe lookup
+		// asks for the row under the context the runner saved it under.
+		pol = pol.normalized()
 		bases := pol.Base
 		if len(bases) == 0 {
 			bases = []string{""}

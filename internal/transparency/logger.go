@@ -13,6 +13,7 @@ import (
 
 	"github.com/sigstore/rekor/pkg/client"
 	"github.com/sigstore/rekor/pkg/generated/client/entries"
+	"github.com/sigstore/rekor/pkg/generated/models"
 	rekortypes "github.com/sigstore/rekor/pkg/types"
 	rekordsse "github.com/sigstore/rekor/pkg/types/dsse"
 	// Registers the dsse v0.0.1 entry type so rekortypes can build it —
@@ -168,26 +169,31 @@ func (r *rekorLogger) Get(ctx context.Context, logIndex int64) (LogEntry, error)
 		return LogEntry{}, fmt.Errorf("transparency: fetching entry at index %d: %w", logIndex, err)
 	}
 
-	var uuid string
-	var found bool
-	var le = struct {
-		LogIndex       *int64
-		IntegratedTime *int64
-		Body           any
-	}{}
-	for u, entry := range resp.Payload {
-		uuid = u
-		le.LogIndex = entry.LogIndex
-		le.IntegratedTime = entry.IntegratedTime
-		le.Body = entry.Body
-		found = true
-		break
-	}
-	if !found {
-		return LogEntry{}, fmt.Errorf("transparency: no entry found at index %d", logIndex)
+	return logEntryFromResponse(resp.Payload, logIndex)
+}
+
+// logEntryFromResponse reads the entry Rekor returned for logIndex.
+//
+// The one element is taken through soleEntry — the same function
+// fetchEntryByUUID uses — because this loop used to range the map and break,
+// taking an arbitrary element in map order. That was fixed in rekor.go in
+// round three and left here, unchanged, twelve lines from code edited the
+// same day. (Round four, 2026-09-13, R6.)
+//
+// The index is compared BEFORE the body is read. The dsse-kind check had
+// been placed ahead of it, so an entry from a different index was reported
+// as "not a dsse entry" — a misleading error introduced while fixing a
+// misleading error. (Round four, R5.)
+func logEntryFromResponse(payload models.LogEntry, logIndex int64) (LogEntry, error) {
+	uuid, le, err := soleEntry(payload)
+	if err != nil {
+		return LogEntry{}, fmt.Errorf("transparency: entry at index %d: %w", logIndex, err)
 	}
 	if le.LogIndex == nil || le.IntegratedTime == nil {
 		return LogEntry{}, errors.New("transparency: rekor entry missing index or integrated time")
+	}
+	if *le.LogIndex != logIndex {
+		return LogEntry{}, fmt.Errorf("transparency: asked for log index %d and rekor returned %d", logIndex, *le.LogIndex)
 	}
 
 	bodyStr, ok := le.Body.(string)
@@ -211,9 +217,6 @@ func (r *rekorLogger) Get(ctx context.Context, logIndex int64) (LogEntry, error)
 	// (Cold review round three, 2026-09-12, R8.)
 	if parsed.Spec.EnvelopeHash.Value == "" {
 		return LogEntry{}, fmt.Errorf("transparency: rekor entry %s is not a dsse entry (no envelope hash in its body) — this index points at a different kind of entry, not at a tampered one", uuid)
-	}
-	if le.LogIndex != nil && *le.LogIndex != logIndex {
-		return LogEntry{}, fmt.Errorf("transparency: asked for log index %d and rekor returned %d", logIndex, *le.LogIndex)
 	}
 
 	return LogEntry{

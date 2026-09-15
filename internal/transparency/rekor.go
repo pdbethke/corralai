@@ -160,27 +160,41 @@ func (w *rekorWitness) fetchEntryByUUID(ctx context.Context, rc *genclient.Rekor
 	if err != nil {
 		return models.LogEntryAnon{}, fmt.Errorf("transparency: fetching entry %s: %w", uuid, err)
 	}
-	le, ok := resp.Payload[uuid]
-	if !ok {
-		// The map may be keyed by the full entry ID rather than the UUID, so
-		// a single element is taken — but ONLY when there is exactly one.
-		// Ranging over the map and breaking took an ARBITRARY element in map
-		// order, which for a response carrying several would silently return
-		// an entry that is not the one asked for.
-		// (Cold review round three, 2026-09-12, R7.)
-		if len(resp.Payload) == 1 {
-			for _, v := range resp.Payload {
-				le = v
-				ok = true
-			}
-		} else if len(resp.Payload) > 1 {
-			return models.LogEntryAnon{}, fmt.Errorf("transparency: rekor returned %d entries for %s and none keyed by that UUID — refusing to guess which is the one", len(resp.Payload), uuid)
-		}
+	if le, ok := resp.Payload[uuid]; ok {
+		return le, nil
 	}
-	if !ok {
-		return models.LogEntryAnon{}, fmt.Errorf("transparency: entry %s not found on refetch", uuid)
+	// The map may be keyed by the full entry ID rather than the UUID, so the
+	// single element is taken — but ONLY when there is exactly one.
+	_, le, err := soleEntry(resp.Payload)
+	if err != nil {
+		return models.LogEntryAnon{}, fmt.Errorf("transparency: refetching entry %s: %w", uuid, err)
 	}
 	return le, nil
+}
+
+// errSeveralEntries is returned by soleEntry when a response holds more than
+// one entry and the caller has no key to pick by.
+var errSeveralEntries = errors.New("rekor returned several entries — refusing to guess which is the one")
+
+// soleEntry returns the ONE entry in a Rekor response, keyed as Rekor keyed
+// it, or an error when the response holds none or several.
+//
+// This is the only place that takes an element out of a Rekor response map
+// without a key. Ranging over the map and breaking took an ARBITRARY element
+// in map order; that was found and fixed in fetchEntryByUUID (round three,
+// R7) and then found again, unchanged, in the logger's Get twelve lines from
+// code edited the same day (round four, R6). A second copy of the rule was
+// the defect, so there is one function and both doors call it.
+func soleEntry(payload models.LogEntry) (string, models.LogEntryAnon, error) {
+	switch len(payload) {
+	case 0:
+		return "", models.LogEntryAnon{}, errors.New("rekor returned no entry")
+	case 1:
+		for u, v := range payload {
+			return u, v, nil
+		}
+	}
+	return "", models.LogEntryAnon{}, fmt.Errorf("%w (%d)", errSeveralEntries, len(payload))
 }
 
 // toEntry converts a Rekor LogEntryAnon into the package's transport-neutral
@@ -191,6 +205,16 @@ func (w *rekorWitness) toEntry(le models.LogEntryAnon) (Entry, error) {
 	}
 	if le.Verification == nil || le.Verification.InclusionProof == nil {
 		return Entry{}, errors.New("transparency: rekor entry missing inclusion proof")
+	}
+	// The SET is required HERE, at the door that builds an Entry, for the
+	// same reason VerifyInclusion requires it at the door that checks one:
+	// without it the log index and integrated time are unauthenticated.
+	// Requiring it only in the verifier let Anchor hand back an Entry that
+	// its own verifier would refuse, and the caller learned that later, from
+	// a less specific error. (Round four, 2026-09-13, R2 — pre-existing since
+	// 2026-07-10.)
+	if len(le.Verification.SignedEntryTimestamp) == 0 {
+		return Entry{}, errors.New("transparency: rekor entry has no signed entry timestamp — its log index and integrated time would be unauthenticated, and VerifyInclusion refuses exactly that")
 	}
 
 	bodyStr, ok := le.Body.(string)
@@ -404,11 +428,11 @@ const (
 // input and must refuse. Only the LOG's body being an unreadable kind is
 // disclosable. (Round three, R2.)
 func bindEntryToEnvelope(body, dsseEnvelope []byte) (bindResult, string) {
-	envSigs, envOK := envelopeSignatures(dsseEnvelope)
-	if !envOK {
-		return bindMalformedEnvelope, "its signatures could not be read"
+	env, err := parseEnvelope(dsseEnvelope)
+	if err != nil {
+		return bindMalformedEnvelope, err.Error()
 	}
-	if len(envSigs) == 0 {
+	if len(env.sigs) == 0 {
 		// Rekor never logs a zero-signature dsse envelope, so this cannot be
 		// the envelope that was logged.
 		return bindMalformedEnvelope, "it carries no signatures"
@@ -428,24 +452,51 @@ func bindEntryToEnvelope(body, dsseEnvelope []byte) (bindResult, string) {
 	if len(logged.signatures) == 0 {
 		return bindNotComparable, "the log entry records neither an envelope hash nor any signature"
 	}
-	inLog := make(map[string]bool, len(logged.signatures))
-	for _, sig := range logged.signatures {
-		if raw, ok := decodeBase64Either(sig); ok {
-			inLog[string(raw)] = true
+
+	// SIGNATURE-SET EQUALITY, not containment. The previous check asked only
+	// whether every signature the envelope CARRIES was logged, so an envelope
+	// with signatures stripped down to a subset of the logged set passed, and
+	// so did one with its payloadType rewritten — neither is an envelope Rekor
+	// ever saw. Both directions are checked, and the payload type when the
+	// log recorded one. (Round four, 2026-09-13, R1 — high; a defect in round
+	// three's fix.)
+	if logged.payloadType != "" && logged.payloadType != env.payloadType {
+		return bindMismatch, "payload type mismatch"
+	}
+	inLog := decodedSet(logged.signatures)
+	inEnv := decodedSet(env.sigs)
+	for raw := range inEnv {
+		if !inLog[raw] {
+			return bindMismatch, "a signature it carries was never logged"
 		}
 	}
-	for _, sig := range envSigs {
-		raw, ok := decodeBase64Either(sig)
-		if !ok || !inLog[string(raw)] {
-			return bindMismatch, "a signature it carries was never logged"
+	for raw := range inLog {
+		if !inEnv[raw] {
+			return bindMismatch, "a logged signature is missing from it"
 		}
 	}
 	return bindOK, ""
 }
 
+// decodedSet decodes each base64 signature and returns the set of raw bytes;
+// a string that is not base64 in either alphabet is kept verbatim so that it
+// can only ever match itself.
+func decodedSet(sigs []string) map[string]bool {
+	set := make(map[string]bool, len(sigs))
+	for _, sig := range sigs {
+		if raw, ok := decodeBase64Either(sig); ok {
+			set[string(raw)] = true
+		} else {
+			set["\x00undecodable:"+sig] = true
+		}
+	}
+	return set
+}
+
 // loggedEntryBody is the part of a Rekor entry body this package compares.
 type loggedEntryBody struct {
 	envelopeHash string
+	payloadType  string
 	signatures   []string
 }
 
@@ -473,7 +524,8 @@ func loggedBody(body []byte) (loggedEntryBody, bool) {
 			// intoto v0.0.2
 			Content struct {
 				Envelope struct {
-					Signatures []struct {
+					PayloadType string `json:"payloadType"`
+					Signatures  []struct {
 						Sig string `json:"sig"`
 					} `json:"signatures"`
 				} `json:"envelope"`
@@ -483,7 +535,10 @@ func loggedBody(body []byte) (loggedEntryBody, bool) {
 	if err := json.Unmarshal(body, &raw); err != nil {
 		return loggedEntryBody{}, false
 	}
-	out := loggedEntryBody{envelopeHash: raw.Spec.EnvelopeHash.Value}
+	out := loggedEntryBody{
+		envelopeHash: raw.Spec.EnvelopeHash.Value,
+		payloadType:  raw.Spec.Content.Envelope.PayloadType,
+	}
 	for _, s := range raw.Spec.Signatures {
 		if s.Signature != "" {
 			out.signatures = append(out.signatures, s.Signature)
@@ -500,23 +555,60 @@ func loggedBody(body []byte) (loggedEntryBody, bool) {
 	return out, true
 }
 
-// envelopeSignatures reads a DSSE envelope's signatures. ok is false when the
-// envelope cannot be parsed AT ALL or its signatures are not the shape DSSE
-// defines — a non-string `sig`, say. The caller REFUSES on that; it is
-// attacker input, not an unknown-but-legitimate format.
-func envelopeSignatures(dsseEnvelope []byte) (sigs []string, ok bool) {
+// parsedEnvelope is the part of a DSSE envelope this package reads.
+type parsedEnvelope struct {
+	payload     []byte
+	payloadType string
+	sigs        []string
+}
+
+// parseEnvelope is THE envelope parser. Every question asked of an envelope —
+// its payload hash, its signatures, its payload type — goes through it, so
+// there is one definition of a readable envelope and no two doors can hold a
+// different one.
+//
+// There used to be three parsers, one per field, each with its own idea of
+// "valid": the hash door hashed a MISSING payload to sha256("") without
+// complaint (round four, R3), and the signature door counted a signature
+// object with no `sig` as a valid empty signature and so reported "tampered"
+// for what was "unreadable" (round four, R4). The envelope is attacker input;
+// whatever is not the shape DSSE defines is refused here, once.
+func parseEnvelope(raw []byte) (parsedEnvelope, error) {
 	var env struct {
-		Signatures []struct {
-			Sig string `json:"sig"`
+		Payload     *string `json:"payload"`
+		PayloadType string  `json:"payloadType"`
+		Signatures  []struct {
+			Sig *string `json:"sig"`
 		} `json:"signatures"`
 	}
-	if err := json.Unmarshal(dsseEnvelope, &env); err != nil {
+	if err := json.Unmarshal(raw, &env); err != nil {
+		return parsedEnvelope{}, errors.New("it is not a DSSE envelope this build can read")
+	}
+	if env.Payload == nil || *env.Payload == "" {
+		return parsedEnvelope{}, errors.New("it has no payload")
+	}
+	payload, ok := decodeBase64Either(*env.Payload)
+	if !ok {
+		return parsedEnvelope{}, errors.New("its payload is not base64")
+	}
+	out := parsedEnvelope{payload: payload, payloadType: env.PayloadType}
+	for i, s := range env.Signatures {
+		if s.Sig == nil || *s.Sig == "" {
+			return parsedEnvelope{}, fmt.Errorf("signature %d has no sig", i)
+		}
+		out.sigs = append(out.sigs, *s.Sig)
+	}
+	return out, nil
+}
+
+// envelopeSignatures reads a DSSE envelope's signatures through parseEnvelope.
+// ok is false when the envelope is malformed; the caller REFUSES on that.
+func envelopeSignatures(dsseEnvelope []byte) (sigs []string, ok bool) {
+	env, err := parseEnvelope(dsseEnvelope)
+	if err != nil {
 		return nil, false
 	}
-	for _, s := range env.Signatures {
-		sigs = append(sigs, s.Sig)
-	}
-	return sigs, true
+	return env.sigs, true
 }
 
 // decodeBase64Either decodes standard or URL-safe base64, the same tolerance
@@ -559,23 +651,16 @@ func parseInclusionProof(raw []byte) (*models.InclusionProof, error) {
 	return &proof, nil
 }
 
-// envelopePayloadSHA256 decodes a DSSE envelope's base64 payload and returns
-// its SHA-256, matching how Rekor's dsse type stores the payload hash.
+// envelopePayloadSHA256 returns the SHA-256 of a DSSE envelope's decoded
+// payload, matching how Rekor's dsse type stores the payload hash. It reads
+// the envelope through parseEnvelope, so a missing or empty payload is an
+// error rather than the hash of nothing.
 func envelopePayloadSHA256(dsseEnvelope []byte) ([32]byte, error) {
-	var env struct {
-		Payload string `json:"payload"`
-	}
-	if err := json.Unmarshal(dsseEnvelope, &env); err != nil {
+	env, err := parseEnvelope(dsseEnvelope)
+	if err != nil {
 		return [32]byte{}, err
 	}
-	payload, err := base64.StdEncoding.DecodeString(env.Payload)
-	if err != nil {
-		payload, err = base64.URLEncoding.DecodeString(env.Payload)
-		if err != nil {
-			return [32]byte{}, err
-		}
-	}
-	return sha256.Sum256(payload), nil
+	return sha256.Sum256(env.payload), nil
 }
 
 // marshalPublicKeyPEM encodes an Ed25519 public key as a PKIX PEM block, the

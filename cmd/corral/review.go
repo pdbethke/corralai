@@ -47,6 +47,8 @@ func runReview(args []string, stdout, stderr io.Writer) int {
 		return runReviewShow(args[1:], stdout, stderr)
 	case "plan":
 		return runReviewPlan(args[1:], stdout, stderr)
+	case "recheck":
+		return runReviewRecheck(args[1:], stdout, stderr)
 	}
 	return runReviewRun(args, stdout, stderr)
 }
@@ -75,6 +77,11 @@ const reviewUsage = `corral review — a cold model reviews a scope of the repos
   corral review adjudicate <ledger dir> <hash>#<Rn> --confirm|--refute --reason "…" [--by <who>]
       A person's verdict on one finding, as its own entry: the newest verdict per finding
       stands; automatic passes never write one. --by defaults to the OS user.
+  corral review recheck <ledger dir> <hash>#<Rn> [--repo <dir>] [--timeout 1m] [--json]
+      Re-run one finding's recorded script against the CURRENT HEAD of --repo, in a disposable
+      worktree: still-reproduces (exit 0), no-longer-reproduces (any other exit), or could-not-run
+      (a harness error, a timeout, exit 126/127). Writes nothing; quote it in an adjudication's
+      --reason to put it on the record. Exit 0 when it ran, 3 when it could not.
 `
 
 // reviewFlags is the run verb's flag set, bound in one place so -h and the

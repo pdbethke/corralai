@@ -40,22 +40,58 @@
   .verdict.confirmed{border-color:var(--ok)}.verdict.refuted{border-color:var(--bad)}
   .sound{color:var(--dim);font-size:.88rem;margin:.6rem 0 0;padding-left:1.1rem}
   details summary{cursor:pointer;color:var(--dim);font-size:.85rem}
+  .queue .item{border:1px solid var(--rule);border-radius:6px;background:var(--surface);padding:.9rem 1.1rem;margin:.75rem 0}
+  .queue textarea{width:100%;min-height:4.5rem;font:inherit;padding:.4rem;border:1px solid var(--rule);border-radius:4px;background:var(--bg);color:var(--fg)}
+  .queue button{font:inherit;padding:.3rem .8rem;border:1px solid var(--rule);border-radius:4px;background:var(--surface);color:var(--fg);cursor:pointer;margin-right:.4rem}
+  .queue button.confirm{border-color:var(--ok);color:var(--ok)}.queue button.refute{border-color:var(--bad);color:var(--bad)}
+  .queue pre{white-space:pre-wrap;font:.8rem ui-monospace,monospace;background:var(--bg);border:1px solid var(--rule);padding:.5rem;border-radius:4px;max-height:14rem;overflow:auto}
+  .writebar{padding:.6rem 1.5rem;border-bottom:1px solid var(--rule);font-size:.88rem}
 </style>
 <header>
   <h1>corral</h1>
   <div class="sub">The record, read from the ledger directory: the newest verdict per file, the chain itself, and the reviews with what each seat argued and what a person decided.</div>
 </header>
+<div id="writebar" class="writebar" hidden></div>
 <main>
   <h2>The seal</h2>
   <div class="sub" style="margin-bottom:1rem">The newest verdict per file. Proven gaps first &mdash; a survivor a test provably catches.</div>
   <div class="tot" id="tot"></div>
   <div id="body"><div class="empty">Loading&hellip;</div></div>
+  <div id="lastwrite" class="sub" hidden></div>
+  <section id="verdicts" class="queue" hidden></section>
   <div id="ledger"></div>
 </main>
 <script>
 const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const rateClass = r => r >= .8 ? 'rate-hi' : r >= .5 ? 'rate-mid' : 'rate-lo';
 const shortRepo = r => String(r).replace(/^https:\/\/github\.com\//, '');
+
+// THE LAUNCH TOKEN. It arrives in the URL fragment (never sent to the
+// server), is kept for this tab only, and leaves the address bar at once.
+const TOKEN = (() => {
+  const m = /[#&]t=([0-9a-f]{64})/.exec(location.hash);
+  if (m) {
+    sessionStorage.setItem('corral-ui-token', m[1]);
+    history.replaceState(null, '', location.pathname + location.search);
+  }
+  return sessionStorage.getItem('corral-ui-token') || '';
+})();
+
+const write = (path, body) => fetch(path, {
+  method: 'POST',
+  headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer ' + TOKEN},
+  body: JSON.stringify(body),
+}).then(async res => {
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || res.statusText);
+  return data;
+});
+
+const loadLedger = () => fetch('api/ledger').then(async res => {
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || res.statusText);
+  return data;
+});
 
 fetch('api/seal').then(async res => {
   const data = await res.json();
@@ -161,4 +197,127 @@ fetch('api/ledger').then(async res => {
 }).catch(e => {
   document.getElementById('ledger').innerHTML = '<h2>The chain</h2><div class="err">Could not read the ledger: ' + esc(e.message) + '</div>';
 });
+
+// THE VERDICT QUEUE — write mode only. Every action runs a corral command on
+// the server; this page shows what it said and changes nothing itself.
+const renderVerdicts = l => {
+  const sec = document.getElementById('verdicts');
+  // No ledger directory means nothing was read: hide the queue rather than
+  // render "Nothing is waiting for a verdict" as if a ledger said so.
+  if (!l.write || !TOKEN || !l.dir) { sec.hidden = true; return; }
+  const pending = [], open = [];
+  for (const r of (l.reviews || [])) for (const f of (r.findings || [])) {
+    const item = {r, f, ref: String(r.hash).slice(0, 12) + '#' + f.id};
+    if (!f.adjudication) pending.push(item);
+    else if (f.adjudication.verdict === 'confirmed') open.push(item);
+  }
+  const card = ({r, f, ref}) => `<div class="item" data-ref="${esc(ref)}" data-hash="${esc(String(r.hash).slice(0, 12))}"
+      data-verifier="${f.refutation ? esc(r.verifier + ' ' + f.refutation.verdict) : ''}">
+    <div class="meta"><code>${esc(ref)}</code> · ${esc(f.tier)} · ${esc(f.severity || '')} · <code>${esc(f.file || '')}${f.line ? ':' + f.line : ''}</code>
+      · reviewer <b>${esc(r.reviewer)}</b>${r.verifier ? ' · verifier <b>' + esc(r.verifier) + '</b>' : ''}</div>
+    <p>${esc(f.claim)}</p>
+    ${f.refutation ? '<div class="sub"><b>verifier:</b> ' + esc(f.refutation.verdict) + ' — ' + esc(f.refutation.argument || '') + '</div>' : ''}
+    ${f.script ? '<details><summary>script (exit ' + esc(String(f.exit_code ?? '—')) + ' at review time)</summary><pre>' + esc(f.script) + '</pre><pre>' + esc(f.stdout || '') + '</pre></details>'
+               : '<div class="sub">no script: judge from the code at <code>' + esc(f.file || '?') + ':' + esc(String(f.line || '?')) + '</code> (commit <code>' + esc(String(r.commit).slice(0, 12)) + '</code>)</div>'}
+    <div class="recheck sub"></div><div class="cites sub"></div>
+    ${f.script ? '<button class="do-recheck">Re-run on HEAD</button>' : ''}
+    <textarea placeholder="your reason (required)"></textarea>
+    <div><button class="confirm">Confirm</button><button class="refute">Refute</button><span class="result sub"></span></div>
+  </div>`;
+  sec.innerHTML = `<h2>Needs your verdict</h2><div class="sub">${pending.length} finding${pending.length === 1 ? '' : 's'} with no human verdict. Every button runs a <code>corral review</code> command on this machine.</div>`
+    + (pending.length ? pending.map(card).join('') : '<div class="empty">Nothing is waiting for a verdict.</div>')
+    + `<h2>Confirmed — open unless a recheck says otherwise</h2>`
+    + (open.length ? open.map(({r, f, ref}) => `<div class="item" data-ref="${esc(ref)}" data-hash="${esc(String(r.hash).slice(0, 12))}">
+        <code>${esc(ref)}</code> — ${esc(f.claim)}<div class="recheck sub"></div><div class="cites sub"></div>
+        ${f.script ? '<button class="do-recheck">Re-run on HEAD</button>' : '<span class="sub">no script: judge from the code</span>'}</div>`).join('')
+      : '<div class="empty">None.</div>');
+  sec.hidden = false;
+  for (const el of sec.querySelectorAll('.item[data-ref]')) wireItem(el);
+};
+
+const suggest = el => {
+  const parts = [];
+  if (el.dataset.verifier) parts.push('verifier ' + el.dataset.verifier);
+  const rc = el.dataset.recheck;
+  if (rc) parts.push(rc);
+  const cites = el.dataset.cites;
+  if (cites) parts.push(cites + ' (cited by a commit message, not verified)');
+  const ta = el.querySelector('textarea');
+  if (!ta.value.trim() && parts.length) ta.value = parts.join('; ');
+};
+
+const wireItem = el => {
+  const ref = el.dataset.ref;
+  fetch('api/cited?hash=' + encodeURIComponent(el.dataset.hash)).then(async r => {
+    const cs = await r.json().catch(() => null);
+    if (!r.ok) {
+      el.querySelector('.cites').innerHTML = 'could not check citations: ' + esc((cs && cs.error) || r.statusText);
+      return;
+    }
+    if (!Array.isArray(cs) || !cs.length) return;
+    const txt = cs.map(c => c.commit + ' "' + c.subject + '"').join(', ');
+    el.querySelector('.cites').innerHTML = 'named in: ' + esc(txt) + ' — <i>cited by a commit message, not verified</i>';
+    el.dataset.cites = 'named in ' + txt;
+  }).catch(e => { el.querySelector('.cites').innerHTML = 'could not check citations: ' + esc(e.message); });
+  const rb = el.querySelector('.do-recheck');
+  if (rb) rb.onclick = () => {
+    rb.disabled = true;
+    el.querySelector('.recheck').textContent = 'running the script against HEAD…';
+    write('api/recheck', {ref}).then(res => {
+      const code = res.exit_code === undefined ? '' : ' (exit ' + res.exit_code + ')';
+      el.querySelector('.recheck').innerHTML = '<b>' + esc(res.outcome) + '</b> at <code>' + esc(String(res.commit).slice(0, 12)) + '</code>' + esc(code)
+        + (res.reason ? ' — ' + esc(res.reason) : '') + (res.output ? '<pre>' + esc(res.output) + '</pre>' : '');
+      el.dataset.recheck = 'recheck at ' + String(res.commit).slice(0, 12) + ': ' + res.outcome + code;
+      if (el.querySelector('textarea')) suggest(el);
+    }).catch(e => { el.querySelector('.recheck').innerHTML = '<span class="err">' + esc(e.message) + '</span>'; })
+      .finally(() => { rb.disabled = false; });
+  };
+  for (const [cls, verdict] of [['confirm', 'confirm'], ['refute', 'refute']]) {
+    const btn = el.querySelector('button.' + cls);
+    if (!btn) continue; // the still-open list offers a recheck, not a second verdict
+    btn.onclick = () => {
+      const reason = el.querySelector('textarea').value.trim();
+      const out = el.querySelector('.result');
+      if (!reason) { out.innerHTML = '<span class="err">a reason is required</span>'; return; }
+      out.textContent = 'running corral review adjudicate…';
+      const confirmBtn = el.querySelector('button.confirm'), refuteBtn = el.querySelector('button.refute');
+      if (confirmBtn) confirmBtn.disabled = true;
+      if (refuteBtn) refuteBtn.disabled = true;
+      // Only a failed WRITE re-enables the buttons. Once the verdict is
+      // recorded, a failed reload must not offer a second signed verdict.
+      write('api/adjudicate', {ref, verdict, reason})
+        .then(res => {
+          const lw = document.getElementById('lastwrite');
+          lw.textContent = ref + ': ' + res.output;
+          lw.hidden = false;
+          return loadLedger().then(renderVerdicts).catch(e => {
+            out.innerHTML = '<span class="err">verdict recorded; reload the page to refresh (' + esc(e.message) + ')</span>';
+          });
+        }, e => {
+          out.innerHTML = '<span class="err">' + esc(e.message) + '</span>';
+          if (confirmBtn) confirmBtn.disabled = false;
+          if (refuteBtn) refuteBtn.disabled = false;
+        });
+    };
+  }
+};
+
+if (TOKEN) {
+  write('api/whoami', {}).then(me => {
+    const bar = document.getElementById('writebar');
+    bar.innerHTML = 'WRITE mode — verdicts are recorded as <b>' + esc(me.by) + '</b>; rechecks run against <code>' + esc(me.repo) + '</code>.';
+    bar.hidden = false;
+    // A ledger read failure here is not a write-mode failure: whoami
+    // succeeded, so say what actually failed.
+    return loadLedger().then(renderVerdicts).catch(e => {
+      const sec = document.getElementById('verdicts');
+      sec.innerHTML = '<h2>Needs your verdict</h2><div class="err">Could not read the ledger: ' + esc(e.message) + '. Reload the page to try again.</div>';
+      sec.hidden = false;
+    });
+  }, e => {
+    const bar = document.getElementById('writebar');
+    bar.innerHTML = '<span class="err">Write mode unavailable: ' + esc(e.message) + '. Open the URL <code>corral ui --write</code> printed.</span>';
+    bar.hidden = false;
+  });
+}
 </script>

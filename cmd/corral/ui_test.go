@@ -221,7 +221,7 @@ func TestUILedgerAPIShowsTheChainTheReviewsAndTheVerdicts(t *testing.T) {
 	// Not a directory: the API says so rather than inventing a chain.
 	rec = httptest.NewRecorder()
 	uiHandler(fakeSeal{}, "").ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/ledger", nil))
-	if rec.Code != http.StatusOK || strings.TrimSpace(rec.Body.String()) != `{"dir":""}` {
+	if rec.Code != http.StatusOK || strings.TrimSpace(rec.Body.String()) != `{"dir":"","write":false}` {
 		t.Errorf("no directory: %d %s", rec.Code, rec.Body.String())
 	}
 	// And the page itself carries the ledger sections.

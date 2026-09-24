@@ -117,6 +117,12 @@ So: run `--substrate workspace` only where the caller is the isolation boundary
 (CI, a scratch copy, a tree with no uncommitted work). And never audit a
 repository belonging to someone who has not agreed to it.
 
+**`corral ui --write` is a person's tool, never an agent's.** It prints a
+launch-token URL that lets the page adjudicate findings in the operator's
+name. An agent must never start it, open it or read its URL: the token is the
+only thing distinguishing the person from any other local process, and it is
+no stronger than the terminal it was printed in.
+
 ## Running an audit: the traps, in the order you will hit them
 
 Every one of these cost real runs, and none of them announce themselves.

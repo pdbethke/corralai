@@ -179,6 +179,9 @@ func uiHandlerWith(st sealReader, ledgerDir string, wr *uiWriter) http.Handler {
 			}
 			writeJSON(w, http.StatusOK, map[string]string{"by": by, "repo": wr.repo})
 		}))
+		mux.HandleFunc("/api/recheck", wr.guard(wr.recheck))
+		mux.HandleFunc("/api/adjudicate", wr.guard(wr.adjudicate))
+		mux.HandleFunc("/api/cited", wr.cited) // a read: Host-gated by hostGate, no token
 	}
 	mux.Handle("/", http.FileServer(http.FS(sub)))
 	return hostGate(wr, mux)

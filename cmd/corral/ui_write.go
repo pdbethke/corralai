@@ -11,13 +11,16 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
 	"os/exec"
+	"regexp"
 	"runtime"
 	"strings"
 	"sync"
+	"time"
 )
 
 // uiWriter is what `corral ui --write` adds to the read-only page: the
@@ -151,4 +154,95 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+// uiRefRE is the only shape a finding ref may take before it becomes an
+// argv element. The CLI parses flags anywhere in its arguments, so a ref
+// like "--push=md:x#R1" would otherwise be read as a flag.
+var uiRefRE = regexp.MustCompile(`^[0-9a-f]{12,64}#R[0-9]+$`)
+
+// uiHexRE bounds the hash /api/cited greps for.
+var uiHexRE = regexp.MustCompile(`^[0-9a-f]{12,64}$`)
+
+func readBody(r *http.Request, v any) error {
+	return json.NewDecoder(io.LimitReader(r.Body, 64<<10)).Decode(v)
+}
+
+// recheck runs `corral review recheck --json` and returns its measurement.
+// could-not-run is a 200: it is a result the page shows, not a failure.
+func (u *uiWriter) recheck(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Ref string `json:"ref"`
+	}
+	if err := readBody(r, &in); err != nil || !uiRefRE.MatchString(in.Ref) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "ref must look like <hash>#R<n>"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Minute)
+	defer cancel()
+	out, errOut, code, err := u.cli(ctx, "review", "recheck", u.ledgerDir, in.Ref, "--repo", u.repo, "--json")
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if code != 0 && code != 3 {
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": strings.TrimSpace(errOut)})
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = io.WriteString(w, out)
+}
+
+// adjudicate runs `corral review adjudicate`. Serialized: the chain has
+// one head, and two verdicts written at once would both try to link to it.
+func (u *uiWriter) adjudicate(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Ref     string `json:"ref"`
+		Verdict string `json:"verdict"`
+		Reason  string `json:"reason"`
+	}
+	if err := readBody(r, &in); err != nil || !uiRefRE.MatchString(in.Ref) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "ref must look like <hash>#R<n>"})
+		return
+	}
+	flag := map[string]string{"confirm": "--confirm", "refute": "--refute"}[in.Verdict]
+	if flag == "" || strings.TrimSpace(in.Reason) == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "a verdict (confirm or refute) and a reason are both required"})
+		return
+	}
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	out, errOut, code, err := u.cli(r.Context(), "review", "adjudicate", u.ledgerDir, in.Ref, flag, "--reason", in.Reason)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if code != 0 {
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": strings.TrimSpace(errOut)})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"output": strings.TrimSpace(out)})
+}
+
+// cited lists commits in the repo whose message names a review hash. It is
+// a citation, not a verification: the page labels it that way.
+func (u *uiWriter) cited(w http.ResponseWriter, r *http.Request) {
+	h := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("hash")))
+	if !uiHexRE.MatchString(h) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "hash must be 12-64 hex characters"})
+		return
+	}
+	// #nosec G204,G702 -- fixed argv; repo is the operator's --repo, h is validated hex (uiHexRE), never a shell
+	out, err := exec.CommandContext(r.Context(), "git", "-C", u.repo, "log", "--format=%h\t%s", "--fixed-strings", "--grep="+h[:12]).Output()
+	if err != nil {
+		writeJSON(w, http.StatusOK, []map[string]string{})
+		return
+	}
+	cites := []map[string]string{}
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if c, s, ok := strings.Cut(line, "\t"); ok {
+			cites = append(cites, map[string]string{"commit": c, "subject": s})
+		}
+	}
+	writeJSON(w, http.StatusOK, cites)
 }

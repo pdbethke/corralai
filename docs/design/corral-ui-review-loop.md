@@ -55,8 +55,9 @@ The front end stays the single vanilla `cmd/corral/uiweb/index.html`.
 
 **Launch token.** `--write` generates a 256-bit random token, held in memory
 only (never on disk, gone when the process exits). It prints
-`http://127.0.0.1:8787/#t=<token>` and opens the browser (`--no-open`
-suppresses that). The token is in the `#fragment` because browsers never send
+`http://127.0.0.1:8787/#t=<token>` and opens the browser (a flag suppresses
+that, once its own run has a receipt — see the executed-surface manifest).
+The token is in the `#fragment` because browsers never send
 the fragment to the server, so it cannot reach an access log or a `Referer`
 header. The page moves it into the tab's `sessionStorage`, strips it from the
 address bar, and sends it as `Authorization: Bearer <token>` on every write.

@@ -19,6 +19,7 @@ import (
 
 type uiLedger struct {
 	Dir      string      `json:"dir"`
+	Write    bool        `json:"write"` // the server was started with --write
 	Entries  []uiEntry   `json:"entries"`
 	Problems int         `json:"problems"`
 	Reviews  []uiReview  `json:"reviews"`

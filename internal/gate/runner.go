@@ -173,3 +173,24 @@ func gateDesc(passed bool) string {
 	}
 	return "corral gate failed"
 }
+
+// Redeliver posts a verdict that was already SIGNED and SAVED but never
+// reached the forge, from its stored row, then marks it delivered. It runs
+// nothing and signs nothing: the verdict and its record already exist, and
+// only the post failed. The poller calls it instead of Run for such a row,
+// because Run would append a new signed record on every retry. (Review of
+// main at 6951ca4c, 2026-09-15, R2.)
+func (r *Runner) Redeliver(ctx context.Context, repoURL string, p Policy, pr PRRef, prev Run) error {
+	p = p.normalized()
+	state := "failure"
+	if prev.Passed {
+		state = "success"
+	}
+	if err := r.Status.SetCommitStatus(ctx, repoURL, pr.HeadSHA, p.Context, state, r.RecordURL(p.Repo, pr.HeadSHA), gateDesc(prev.Passed)); err != nil {
+		return err
+	}
+	if err := r.Store.MarkPosted(p.Repo, pr.HeadSHA, p.Context); err != nil {
+		log.Printf("gate: marking %s@%s delivered: %v", p.Repo, pr.HeadSHA, err)
+	}
+	return nil
+}

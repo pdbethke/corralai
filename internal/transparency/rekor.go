@@ -230,6 +230,16 @@ func (w *rekorWitness) toEntry(le models.LogEntryAnon) (Entry, error) {
 	if err != nil {
 		return Entry{}, fmt.Errorf("transparency: serializing inclusion proof: %w", err)
 	}
+	// A PRESENT PROOF IS NOT A COMPLETE ONE. The nil check above let an empty
+	// proof through, so Anchor returned success and the build recorded
+	// anchored=true for an entry VerifyInclusion refuses as incomplete — the
+	// SET's round-four defect again, for the proof. Held here by the SAME
+	// function VerifyInclusion calls, so the two doors cannot disagree about
+	// what complete means. (Review of main at 6951ca4c, 2026-09-15, R1 —
+	// reproduced; ledger entry a2a3af29d0c0.)
+	if _, perr := parseInclusionProof(proofBytes); perr != nil {
+		return Entry{}, fmt.Errorf("transparency: rekor entry's %v — VerifyInclusion refuses exactly that, so it cannot be recorded as anchored", perr)
+	}
 
 	return Entry{
 		LogIndex:       *le.LogIndex,

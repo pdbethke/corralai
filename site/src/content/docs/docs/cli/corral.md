@@ -1004,6 +1004,9 @@ CORRALAI_GATE_POLICY_<NAME> repo merge gate: ONE policy per variable, "repo=owne
                            value: commas, semicolons, quotes and newlines included, so nothing can truncate it
                            into a weaker command that exits 0 and posts a wrongful success;
                            timeout= is seconds, defaults to gate.DefaultGateTimeout (600s) when omitted;
+                           two policies that would answer the same pull request under the same context=
+                           (default corral/gate) are REFUSED — the second would never run — so give one
+                           a distinct context=;
                            no such variable => the repo gate is OFF (no poller starts); GitHub-only for v1.
                            Replaces CORRALAI_GATE_POLICIES, which is REFUSED: its ";" separator collided with
                            commands containing ";"

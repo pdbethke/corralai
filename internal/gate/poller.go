@@ -26,6 +26,13 @@ type Poller struct {
 	// Run gates one PR head (repoURL, the owning Policy, the PR). In
 	// production this is (*gate.Runner).Run; tests inject a fake.
 	Run func(ctx context.Context, repoURL string, p Policy, pr PRRef) error
+	// Redeliver re-posts a verdict that was SIGNED but never reached the
+	// forge, from its stored row, without running or signing anything. In
+	// production this is (*gate.Runner).Redeliver. nil means a signed but
+	// undelivered verdict is logged and left for the next tick, never
+	// re-run: re-running it would sign a new record every tick for as long
+	// as the forge refused the post.
+	Redeliver func(ctx context.Context, repoURL string, p Policy, pr PRRef, prev Run) error
 	// Interval is how often Loop calls Tick. <=0 => Loop defaults to 1 minute.
 	Interval time.Duration
 }
@@ -45,10 +52,21 @@ func repoURLFor(p Policy) string {
 // logged loudly and never abort the pass — one bad repo/policy must not
 // starve the others (design directive: degrade, never block/crash).
 func (p *Poller) Tick(ctx context.Context) error {
+	var acting []Policy
 	for _, pol := range p.Policies {
 		// The SAME normalization the runner applies, so the dedupe lookup
 		// asks for the row under the context the runner saved it under.
 		pol = pol.normalized()
+		// The rule ParsePolicyEnv states is held HERE too, at the door that
+		// acts on policies: a Policy built programmatically never passes
+		// through the parser, and two policies answering one pull request
+		// under one status would leave the second silently never run.
+		// (Review of main at 6951ca4c, 2026-09-15, R1.)
+		if i := sharesAStatusWith(acting, pol); i >= 0 {
+			log.Printf("gate: poller: SKIPPING a policy for %s: it would report under status %q on the same pull requests as an earlier policy, so only one could ever run — give one a distinct context", pol.Repo, pol.Context)
+			continue
+		}
+		acting = append(acting, pol)
 		bases := pol.Base
 		if len(bases) == 0 {
 			bases = []string{""}
@@ -78,6 +96,24 @@ func (p *Poller) Tick(ctx context.Context) error {
 				}
 				if ok && !prev.StatusPosted {
 					log.Printf("gate: poller: %s@%s ctx %s was gated but its status never posted — re-delivering", pol.Repo, pr.HeadSHA, pol.Context)
+					// A SIGNED VERDICT IS RE-POSTED, NEVER RE-RUN. Calling Run
+					// here re-checked-out, re-ran the jail and appended a NEW
+					// signed record on every tick for as long as the post
+					// failed, so a permanent refusal (403, 422) became an
+					// unbounded re-certify loop. Only a row with no record —
+					// a fail-closed run cut short, which is what this retry
+					// was built for — is run again. (Review of main at
+					// 6951ca4c, 2026-09-15, R2 — reproduced.)
+					if prev.RecordID != 0 {
+						if p.Redeliver == nil {
+							log.Printf("gate: poller: %s@%s ctx %s has a signed verdict (record %d) and no redelivery path — leaving it; it will not be re-signed", pol.Repo, pr.HeadSHA, pol.Context, prev.RecordID)
+							continue
+						}
+						if err := p.Redeliver(ctx, repoURL, pol, pr, prev); err != nil {
+							log.Printf("gate: poller: re-delivering %s#%d@%s (record %d): %v", pol.Repo, pr.Number, pr.HeadSHA, prev.RecordID, err)
+						}
+						continue
+					}
 				}
 				if err := p.Run(ctx, repoURL, pol, pr); err != nil {
 					log.Printf("gate: poller: run %s#%d@%s: %v", pol.Repo, pr.Number, pr.HeadSHA, err)

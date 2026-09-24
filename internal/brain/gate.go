@@ -120,11 +120,12 @@ func StartGate(ctx context.Context, opts Options) (*gate.Store, error) {
 		interval = 2 * time.Minute
 	}
 	poller := &gate.Poller{
-		Policies: opts.GatePolicies,
-		List:     opts.Repo,
-		Store:    store,
-		Run:      runner.Run,
-		Interval: interval,
+		Policies:  opts.GatePolicies,
+		List:      opts.Repo,
+		Store:     store,
+		Run:       runner.Run,
+		Redeliver: runner.Redeliver,
+		Interval:  interval,
 	}
 
 	log.Printf("gate: ENABLED — %d polic(ies) configured, polling every %s", len(opts.GatePolicies), interval)

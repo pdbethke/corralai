@@ -71,6 +71,14 @@ func runUI(args []string, open func(dsn string) (sealReader, error), stdout, std
 			fmt.Fprintf(stderr, "corral ui: --write refused on %s: write mode is loopback only (127.0.0.1, [::1] or localhost)\n", *addr)
 			return 2
 		}
+		// Write mode is a verdict queue read from a ledger directory. With
+		// none (a warehouse, md:, or an absent default) the page would read
+		// "0 findings … Nothing is waiting for a verdict" — could-not-read
+		// shown as a measured zero. Refuse instead.
+		if uiLedgerDir(target) == "" {
+			fmt.Fprintf(stderr, "corral ui: --write needs a ledger directory; %s is not one\n", target)
+			return 2
+		}
 		hosts, herr := uiAllowedHosts(*addr)
 		if herr != nil {
 			fmt.Fprintln(stderr, "corral ui:", herr)

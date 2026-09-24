@@ -202,7 +202,9 @@ fetch('api/ledger').then(async res => {
 // the server; this page shows what it said and changes nothing itself.
 const renderVerdicts = l => {
   const sec = document.getElementById('verdicts');
-  if (!l.write || !TOKEN) { sec.hidden = true; return; }
+  // No ledger directory means nothing was read: hide the queue rather than
+  // render "Nothing is waiting for a verdict" as if a ledger said so.
+  if (!l.write || !TOKEN || !l.dir) { sec.hidden = true; return; }
   const pending = [], open = [];
   for (const r of (l.reviews || [])) for (const f of (r.findings || [])) {
     const item = {r, f, ref: String(r.hash).slice(0, 12) + '#' + f.id};
@@ -281,14 +283,17 @@ const wireItem = el => {
       const confirmBtn = el.querySelector('button.confirm'), refuteBtn = el.querySelector('button.refute');
       if (confirmBtn) confirmBtn.disabled = true;
       if (refuteBtn) refuteBtn.disabled = true;
+      // Only a failed WRITE re-enables the buttons. Once the verdict is
+      // recorded, a failed reload must not offer a second signed verdict.
       write('api/adjudicate', {ref, verdict, reason})
         .then(res => {
           const lw = document.getElementById('lastwrite');
           lw.textContent = ref + ': ' + res.output;
           lw.hidden = false;
-          return loadLedger().then(renderVerdicts);
-        })
-        .catch(e => {
+          return loadLedger().then(renderVerdicts).catch(e => {
+            out.innerHTML = '<span class="err">verdict recorded; reload the page to refresh (' + esc(e.message) + ')</span>';
+          });
+        }, e => {
           out.innerHTML = '<span class="err">' + esc(e.message) + '</span>';
           if (confirmBtn) confirmBtn.disabled = false;
           if (refuteBtn) refuteBtn.disabled = false;
@@ -302,8 +307,14 @@ if (TOKEN) {
     const bar = document.getElementById('writebar');
     bar.innerHTML = 'WRITE mode — verdicts are recorded as <b>' + esc(me.by) + '</b>; rechecks run against <code>' + esc(me.repo) + '</code>.';
     bar.hidden = false;
-    return loadLedger().then(renderVerdicts);
-  }).catch(e => {
+    // A ledger read failure here is not a write-mode failure: whoami
+    // succeeded, so say what actually failed.
+    return loadLedger().then(renderVerdicts).catch(e => {
+      const sec = document.getElementById('verdicts');
+      sec.innerHTML = '<h2>Needs your verdict</h2><div class="err">Could not read the ledger: ' + esc(e.message) + '. Reload the page to try again.</div>';
+      sec.hidden = false;
+    });
+  }, e => {
     const bar = document.getElementById('writebar');
     bar.innerHTML = '<span class="err">Write mode unavailable: ' + esc(e.message) + '. Open the URL <code>corral ui --write</code> printed.</span>';
     bar.hidden = false;

@@ -31,11 +31,31 @@ func TestUIWriteRefusesANonLoopbackAddress(t *testing.T) {
 	}
 }
 
+// --write with no ledger directory is refused. Before, a --db naming a
+// warehouse (or an absent default ./.corral/ledger) served a page reading
+// "0 findings … Nothing is waiting for a verdict": could-not-read rendered as
+// a measured zero.
+func TestUIWriteRefusesATargetThatIsNotALedgerDirectory(t *testing.T) {
+	var out, errb bytes.Buffer
+	target := filepath.Join(t.TempDir(), "warehouse.duckdb")
+	code := runUI([]string{"--write", "--addr", "127.0.0.1:8787", "--db", target, "--print-url"}, func(string) (sealReader, error) { return fakeSeal{}, nil }, &out, &errb)
+	if code != 2 {
+		t.Fatalf("exit %d, want 2; stdout: %s stderr: %s", code, out.String(), errb.String())
+	}
+	want := "corral ui: --write needs a ledger directory; " + target + " is not one"
+	if !strings.Contains(errb.String(), want) {
+		t.Errorf("stderr should say %q: %s", want, errb.String())
+	}
+	if strings.Contains(out.String(), "#t=") {
+		t.Errorf("no token URL may be printed for a refused --write: %s", out.String())
+	}
+}
+
 // The URL carries the token in the fragment, and the token appears nowhere
 // else in what the command prints.
 func TestUIWritePrintsATokenURLAndNothingElseCarriesTheToken(t *testing.T) {
 	var out, errb bytes.Buffer
-	code := runUI([]string{"--write", "--addr", "127.0.0.1:8787", "--print-url"}, func(string) (sealReader, error) { return fakeSeal{}, nil }, &out, &errb)
+	code := runUI([]string{"--write", "--addr", "127.0.0.1:8787", "--db", t.TempDir(), "--print-url"}, func(string) (sealReader, error) { return fakeSeal{}, nil }, &out, &errb)
 	if code != 0 {
 		t.Fatalf("exit %d: %s", code, errb.String())
 	}
@@ -55,7 +75,7 @@ func TestUIWritePrintsTheResolvedRepo(t *testing.T) {
 	//surface: --repo
 	var out, errb bytes.Buffer
 	dir := t.TempDir()
-	code := runUI([]string{"--write", "--addr", "127.0.0.1:8787", "--repo", dir, "--print-url"}, func(string) (sealReader, error) { return fakeSeal{}, nil }, &out, &errb)
+	code := runUI([]string{"--write", "--addr", "127.0.0.1:8787", "--db", t.TempDir(), "--repo", dir, "--print-url"}, func(string) (sealReader, error) { return fakeSeal{}, nil }, &out, &errb)
 	if code != 0 {
 		t.Fatalf("exit %d: %s", code, errb.String())
 	}
@@ -434,6 +454,15 @@ func TestUIPageHandlesTheTokenOnlyTheWaySpecified(t *testing.T) {
 		// check, not a DOM simulation — it does not prove the disable fires
 		// only on the right element or only once.
 		`id="lastwrite"`, `.disabled = true`,
+		// A failed reload AFTER a recorded verdict says so and leaves the
+		// buttons disabled; a ledger read failure after whoami is not called
+		// "Write mode unavailable"; and with no ledger directory the queue is
+		// hidden rather than reading "Nothing is waiting". Also string
+		// presence only: these prove the text and the guard exist in the
+		// page, not which promise branch reaches them.
+		`verdict recorded; reload the page to refresh`,
+		`Could not read the ledger: ' + esc(e.message) + '. Reload the page`,
+		`!l.write || !TOKEN || !l.dir`,
 	} {
 		if !strings.Contains(page, must) {
 			t.Errorf("page is missing %q", must)

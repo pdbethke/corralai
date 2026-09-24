@@ -57,6 +57,7 @@
   <div class="sub" style="margin-bottom:1rem">The newest verdict per file. Proven gaps first &mdash; a survivor a test provably catches.</div>
   <div class="tot" id="tot"></div>
   <div id="body"><div class="empty">Loading&hellip;</div></div>
+  <div id="lastwrite" class="sub" hidden></div>
   <section id="verdicts" class="queue" hidden></section>
   <div id="ledger"></div>
 </main>
@@ -277,9 +278,21 @@ const wireItem = el => {
       const out = el.querySelector('.result');
       if (!reason) { out.innerHTML = '<span class="err">a reason is required</span>'; return; }
       out.textContent = 'running corral review adjudicate…';
+      const confirmBtn = el.querySelector('button.confirm'), refuteBtn = el.querySelector('button.refute');
+      if (confirmBtn) confirmBtn.disabled = true;
+      if (refuteBtn) refuteBtn.disabled = true;
       write('api/adjudicate', {ref, verdict, reason})
-        .then(res => { out.textContent = res.output; return loadLedger().then(renderVerdicts); })
-        .catch(e => { out.innerHTML = '<span class="err">' + esc(e.message) + '</span>'; });
+        .then(res => {
+          const lw = document.getElementById('lastwrite');
+          lw.textContent = ref + ': ' + res.output;
+          lw.hidden = false;
+          return loadLedger().then(renderVerdicts);
+        })
+        .catch(e => {
+          out.innerHTML = '<span class="err">' + esc(e.message) + '</span>';
+          if (confirmBtn) confirmBtn.disabled = false;
+          if (refuteBtn) refuteBtn.disabled = false;
+        });
     };
   }
 };

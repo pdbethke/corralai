@@ -428,6 +428,12 @@ func TestUIPageHandlesTheTokenOnlyTheWaySpecified(t *testing.T) {
 		`location.hash`, `sessionStorage`, `history.replaceState`, `'Authorization': 'Bearer '`,
 		`id="verdicts"`, `api/recheck`, `api/adjudicate`, `api/cited`, `cited by a commit message, not verified`,
 		`could not check citations`,
+		// A double-click, or Confirm then Refute before the re-render, must
+		// not send two adjudications: both verdict buttons on the card are
+		// disabled the moment a click is accepted. This is a string-presence
+		// check, not a DOM simulation — it does not prove the disable fires
+		// only on the right element or only once.
+		`id="lastwrite"`, `.disabled = true`,
 	} {
 		if !strings.Contains(page, must) {
 			t.Errorf("page is missing %q", must)

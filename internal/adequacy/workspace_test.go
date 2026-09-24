@@ -561,3 +561,53 @@ func TestWorkspaceRunnerNeverHandsTheSuiteCorralsSecrets(t *testing.T) {
 		t.Errorf("the suite lost the ordinary environment it needs:\n%s", out)
 	}
 }
+
+// A restore that fails must never be reported as a clean run. The command
+// here replaces the overlaid file with a directory, so writing the original
+// bytes back cannot succeed; before this was fixed RunTest returned
+// pass=true, err=nil and left the directory where the source file had been
+// (an outside Codex review, 2026-09-23). The run's result is not evidence
+// about anything once the tree it ran in cannot be put back.
+func TestWorkspaceRunnerReportsARestoreItCouldNotComplete(t *testing.T) {
+	root := wsTree(t, map[string]string{"a.txt": "ORIGINAL\n"})
+	w := NewWorkspaceRunner(root, 30*time.Second)
+
+	pass, err := w.RunTest(context.Background(), map[string]string{"a.txt": "MUTANT\n"},
+		[]string{"sh", "-c", "rm a.txt && mkdir a.txt"})
+	if err == nil {
+		t.Fatalf("RunTest returned no error although a.txt could not be restored (pass=%v)", pass)
+	}
+	if pass {
+		t.Fatal("RunTest reported a pass although the tree was left unrestored")
+	}
+	if !strings.Contains(err.Error(), "a.txt") {
+		t.Errorf("the error should name the path it could not restore, got: %v", err)
+	}
+}
+
+// A path that is a symlink to a file that does not exist looked like an
+// absent path: the overlay wrote THROUGH it (creating the target), and the
+// restore then removed the symlink and left the target holding mutant bytes,
+// on a run that reported pass=true, err=nil (corral review, codex:gpt-6-astra,
+// 2026-09-24, R2). The runner now refuses to overlay through a dangling
+// symlink, and the tree is left exactly as it was.
+func TestWorkspaceRunnerRefusesToOverlayThroughADanglingSymlink(t *testing.T) {
+	root := t.TempDir()
+	link := filepath.Join(root, "source.txt")
+	if err := os.Symlink("target.txt", link); err != nil {
+		t.Fatal(err)
+	}
+	w := NewWorkspaceRunner(root, 30*time.Second)
+
+	pass, err := w.RunTest(context.Background(), map[string]string{"source.txt": "MUTANT\n"},
+		[]string{"sh", "-c", "true"})
+	if err == nil || pass {
+		t.Fatalf("RunTest(pass=%v, err=%v): want a refusal for a dangling symlink", pass, err)
+	}
+	if got, lerr := os.Readlink(link); lerr != nil || got != "target.txt" {
+		t.Errorf("the symlink was not left as it was: readlink=%q err=%v", got, lerr)
+	}
+	if _, serr := os.Lstat(filepath.Join(root, "target.txt")); !os.IsNotExist(serr) {
+		t.Errorf("target.txt should still not exist, got stat err %v", serr)
+	}
+}

@@ -3,6 +3,7 @@
 package gate
 
 import (
+	"fmt"
 	"regexp"
 	"sort"
 	"strconv"
@@ -96,15 +97,61 @@ func ParsePolicyEnv(environ []string) (policies []Policy, bad []string) {
 	}
 	sort.Slice(found, func(i, j int) bool { return found[i].name < found[j].name })
 
+	var accepted []string // variable name of each entry in policies
 	for _, f := range found {
 		pol, reason := ParsePolicy(f.val)
 		if reason != "" {
 			bad = append(bad, PolicyEnvPrefix+f.name+": "+reason)
 			continue
 		}
+		// TWO POLICIES MAY NOT ANSWER ONE PULL REQUEST UNDER ONE STATUS. The
+		// poller dedupes on (repo, head, context), so the second of two such
+		// policies was skipped on every head, forever, while the first one's
+		// status stood in for a check that never ran. Refused here, loudly,
+		// with the first by name kept — the same deterministic order the
+		// poller would have used, now stated instead of silent. (Review of
+		// main at 6951ca4c, 2026-09-15, R1 — high, reproduced; ledger entry
+		// 8be2189163b0.)
+		if i := sharesAStatusWith(policies, pol); i >= 0 {
+			bad = append(bad, fmt.Sprintf("%s%s: would report on the same pull requests of %s under the same status context %q as %s%s, and only one of them would ever run — give one a distinct context=",
+				PolicyEnvPrefix, f.name, pol.Repo, normalizeContext(pol.Context), PolicyEnvPrefix, accepted[i]))
+			continue
+		}
 		policies = append(policies, pol)
+		accepted = append(accepted, f.name)
 	}
 	return policies, bad
+}
+
+// sharesAStatusWith returns the index of the first policy in ps that would
+// post p's status on some pull request p also covers, or -1. That takes the
+// same repo, the same normalized context, and base sets that can both match
+// one pull request: an unset base means every base, so it overlaps any.
+func sharesAStatusWith(ps []Policy, p Policy) int {
+	ctx := normalizeContext(p.Context)
+	for i, q := range ps {
+		if q.Repo != p.Repo || normalizeContext(q.Context) != ctx {
+			continue
+		}
+		if basesOverlap(q.Base, p.Base) {
+			return i
+		}
+	}
+	return -1
+}
+
+func basesOverlap(a, b []string) bool {
+	if len(a) == 0 || len(b) == 0 {
+		return true
+	}
+	for _, x := range a {
+		for _, y := range b {
+			if x == y {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // envValue returns the value of key in an os.Environ()-shaped slice, or "".

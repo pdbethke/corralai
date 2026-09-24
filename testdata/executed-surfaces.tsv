@@ -221,3 +221,6 @@ corral scans show --evidence	executed	test:cmd/corral/scans_evidence_test.go
 corral scans show --json	executed	test:cmd/corral/scans_show_json_test.go
 corral scans show --ledger	executed	test:cmd/corral/scans_test.go
 corral scans show --timing	executed	test:cmd/corral/scans_timing_test.go
+corral review recheck --repo	executed	test:cmd/corral/review_recheck_test.go
+corral review recheck --timeout	executed	test:cmd/corral/review_recheck_test.go
+corral review recheck --json	executed	test:cmd/corral/review_recheck_test.go

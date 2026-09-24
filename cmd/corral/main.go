@@ -294,6 +294,8 @@ Usage:
   corral review show <dir> <hash> print a review with its adjudications applied
   corral review adjudicate <dir> <hash>#<Rn> --confirm|--refute --reason "…"
                                   a person's verdict on one finding, as its own entry
+  corral review recheck <dir> <hash>#<Rn>
+                                  re-run a finding's reproduction on HEAD: still, no longer, or could not run
   corral brief --scope <path> [--changed <base>] [--ledger <dir>] [--json]
                                   the auditor's report: what the record says is still OPEN on
                                   these files, for whoever writes next — the newest scan's

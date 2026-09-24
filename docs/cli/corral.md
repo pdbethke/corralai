@@ -129,6 +129,8 @@ Usage:
   corral review show <dir> <hash> print a review with its adjudications applied
   corral review adjudicate <dir> <hash>#<Rn> --confirm|--refute --reason "…"
                                   a person's verdict on one finding, as its own entry
+  corral review recheck <dir> <hash>#<Rn>
+                                  re-run a finding's reproduction on HEAD: still, no longer, or could not run
   corral brief --scope <path> [--changed <base>] [--ledger <dir>] [--json]
                                   the auditor's report: what the record says is still OPEN on
                                   these files, for whoever writes next — the newest scan's
@@ -691,6 +693,11 @@ corral review — a cold model reviews a scope of the repository; corral runs it
   corral review adjudicate <ledger dir> <hash>#<Rn> --confirm|--refute --reason "…" [--by <who>]
       A person's verdict on one finding, as its own entry: the newest verdict per finding
       stands; automatic passes never write one. --by defaults to the OS user.
+  corral review recheck <ledger dir> <hash>#<Rn> [--repo <dir>] [--timeout 1m] [--json]
+      Re-run one finding's recorded script against the CURRENT HEAD of --repo, in a disposable
+      worktree: still-reproduces (exit 0), no-longer-reproduces (any other exit), or could-not-run
+      (a harness error, a timeout, exit 126/127). Writes nothing; quote it in an adjudication's
+      --reason to put it on the record. Exit 0 when it ran, 3 when it could not.
 
 flags of `corral review`:
   -attest corral verify --attest <path> --db <ledger dir>
@@ -747,6 +754,18 @@ Usage of corral review plan:
     	how many scopes to list (default 25)
   -repo string
     	the checkout (default ".")
+```
+
+## `corral review recheck` flags
+
+```
+Usage of corral review recheck:
+  -json
+    	print the result as one JSON object
+  -repo string
+    	the checkout whose HEAD the script runs against, in a disposable worktree (default ".")
+  -timeout duration
+    	wall-clock bound on the script (default 1m0s)
 ```
 
 ## `corral review show` flags

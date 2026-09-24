@@ -1,6 +1,6 @@
 ---
 name: using-corralai
-description: "Use when driving or querying a corralai brain — the audit-by-execution gate for software change. Covers `corral certify --local` (mutation-score a change's own tests), `corral certify <ref> -- <cmd>` (certify a change by its declared check), the repo gate + control gate, the tests×mutants matrix (`--matrix` / `corral matrix`), the model scorecard + critic precision (`corral scorecard` / `corral criticscore`), querying the shared knowledge corpus (`search_memory`), and the CLI (corral / corral-admin / corral-agent / corral-harness / corral-observe / corral-top). Invoke whenever the user mentions corral, certify, the audit, the gate, the herd, or wants to run/observe/steer a corralai brain."
+description: "Use when operating or querying a running corralai BRAIN (the optional daemon): the repo gate and control gate, `corral certify --brain`, the tests×mutants matrix, fleet skill proposals, `search_memory`, or the corral-admin / corral-agent / corral-harness / corral-observe / corral-top binaries. For auditing a test suite, reading or checking corral findings, or wiring corral into an agent, use the `corral` skill instead."
 ---
 
 # Using corralai

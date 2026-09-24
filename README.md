@@ -806,6 +806,36 @@ for the JS/TS pairing limitation above. How to move a golden number, and why
 that is a deliberate act, is in
 **[docs/corral/foreign-sweep.md](docs/corral/foreign-sweep.md)**.
 
+## In your coding agent — the `corral` skill
+
+[`skills/corral/`](skills/corral/SKILL.md) is an
+[Agent Skills](https://agentskills.io) folder that teaches a coding agent to
+use corral the way corral uses a model: read the record, check every claim by
+running something, and leave the verdicts to a person. Copy it to where your
+agent loads skills (for Claude Code, `.claude/skills/corral/` in the repo or
+`~/.claude/skills/corral/`). To let the agent read findings over MCP as well,
+add this to `.mcp.json`:
+
+```json
+{ "mcpServers": { "corral": { "command": "corral", "args": ["mcp"] } } }
+```
+
+The skill teaches four things agents got wrong without it:
+- **Finding the record at all.** Without the skill, every agent looked in
+  git history and asked the user where the findings were.
+- **Checking a critic finding against its own claim.** "Cannot fail" is
+  disproved by any bug that turns the test red. Without the skill, agents
+  confirmed the claim from a bug the test missed.
+- **Undoing planted bugs without `git checkout`.** Checkout also wipes the
+  user's uncommitted work.
+- **Handing adjudication back to a person.** The critic's precision score
+  would otherwise measure the agent.
+
+**What has been run:** Claude Code 2.1.280 in headless mode (Sonnet 5), against
+a small Python fixture, three repetitions per scenario, before and after the
+skill. It has not yet been run in other Agent Skills clients (Codex, Cursor,
+Gemini CLI, Hermes Agent, OpenClaw), so no support for them is claimed.
+
 ## Review — a cold model's opinion, linked to reproductions it ran
 
 `corral review --scope internal/router --reviewer-model <m>` hands a scope

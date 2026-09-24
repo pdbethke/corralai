@@ -46,7 +46,7 @@ func runUI(args []string, open func(dsn string) (sealReader, error), stdout, std
 	dsn := fs.String("db", "", "what to read: a ledger directory (the seal, the chain and the reviews) or a warehouse file / md:<db> (the seal only) — default $CORRAL_LEDGER, else ./.corral/ledger, the same resolution `corral seal` and `corral scans` use")
 	addr := fs.String("addr", "127.0.0.1:8787", "local listen address. Loopback by default ON PURPOSE: the ledger is a map of where a codebase's tests are thinnest")
 	once := fs.Bool("print-url", false, "print the URL and exit without serving (for scripts and smoke tests)")
-	write := fs.Bool("write", false, "let this page WRITE: adjudicate findings and recheck them, by running corral's own subcommands. Loopback only; prints a one-time URL carrying a launch token — whoever has that URL can write verdicts in your name. Agents must never start this")
+	write := fs.Bool("write", false, "let this page WRITE: adjudicate findings and recheck them, by running corral's own subcommands. Loopback only; prints a URL carrying a launch token valid until the server exits — anyone with that URL can write verdicts in your name. Opening the browser puts the URL, token included, on a command line other local processes can read (use --no-open to avoid that). Agents must never start this")
 	noOpen := fs.Bool("no-open", false, "with --write, print the URL but do not open a browser")
 	repoDir := fs.String("repo", ".", "with --write, the checkout a finding's reproduction is rechecked against (its HEAD, in a disposable worktree)")
 	if err := fs.Parse(args); err != nil {
@@ -88,7 +88,7 @@ func runUI(args []string, open func(dsn string) (sealReader, error), stdout, std
 		}
 		writer = &uiWriter{token: tok, hosts: hosts, repo: absRepo, ledgerDir: uiLedgerDir(target), cli: corralSubprocess}
 		url += "/#t=" + tok
-		fmt.Fprintf(stdout, "corral ui: WRITE mode, reading %s — open (this URL carries the launch token; anyone with it can write verdicts in your name):\n  %s\n", target, url)
+		fmt.Fprintf(stdout, "corral ui: WRITE mode, reading %s — open (this URL carries the launch token; anyone with it can write verdicts in your name):\n  %s\n  rechecks run against %s\n", target, url, absRepo)
 	} else {
 		if !isLoopback(*addr) {
 			fmt.Fprintf(stderr, "corral ui: WARNING serving on %s, which is not loopback — the ledger names repositories, file paths and their weakest files\n", *addr)

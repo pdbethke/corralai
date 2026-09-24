@@ -831,7 +831,7 @@ Usage of ui:
   -repo string
     	with --write, the checkout a finding's reproduction is rechecked against (its HEAD, in a disposable worktree) (default ".")
   -write
-    	let this page WRITE: adjudicate findings and recheck them, by running corral's own subcommands. Loopback only; prints a one-time URL carrying a launch token — whoever has that URL can write verdicts in your name. Agents must never start this
+    	let this page WRITE: adjudicate findings and recheck them, by running corral's own subcommands. Loopback only; prints a URL carrying a launch token valid until the server exits — anyone with that URL can write verdicts in your name. Opening the browser puts the URL, token included, on a command line other local processes can read (use --no-open to avoid that). Agents must never start this
 ```
 
 ## `corral verify` flags

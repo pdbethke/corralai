@@ -34,8 +34,12 @@ import (
 // process to whoever launched this server. An agent that launches
 // `corral ui --write` itself, or reads the launching terminal, can write —
 // no weaker than today, when any local agent can run `corral review
-// adjudicate`, and no proof of a human either. See docs/design/
-// corral-ui-review-loop.md.
+// adjudicate`, and no proof of a human either. Opening the browser widens
+// that further: the token-bearing URL is passed to the opener (and possibly
+// a cold-started browser) as a command-line argument, so any other local
+// process can read it from /proc/<pid>/cmdline or `ps` while that process
+// runs. `--no-open` avoids that; printing the URL to a terminal does not
+// have the same exposure. See docs/design/corral-ui-review-loop.md.
 type uiWriter struct {
 	token     string
 	hosts     map[string]bool // lower-cased Host header values this server answers to

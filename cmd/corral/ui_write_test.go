@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -41,9 +42,35 @@ func TestUIWritePrintsATokenURLAndNothingElseCarriesTheToken(t *testing.T) {
 	}
 }
 
+// --repo names the checkout rechecks run against; runUI resolves it to an
+// absolute path and prints it, so an operator can see what a verdict written
+// through this server will actually run against.
+func TestUIWritePrintsTheResolvedRepo(t *testing.T) {
+	//surface: --repo
+	var out, errb bytes.Buffer
+	dir := t.TempDir()
+	code := runUI([]string{"--write", "--addr", "127.0.0.1:8787", "--repo", dir, "--print-url"}, func(string) (sealReader, error) { return fakeSeal{}, nil }, &out, &errb)
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, errb.String())
+	}
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), abs) {
+		t.Errorf("stdout should name the resolved repo %q: %s", abs, out.String())
+	}
+	m := regexp.MustCompile(`http://127\.0\.0\.1:8787/#t=([0-9a-f]{64})`).FindStringSubmatch(out.String())
+	if m == nil {
+		t.Fatalf("no token URL in stdout: %s", out.String())
+	}
+	if strings.Count(out.String(), m[1]) != 1 || strings.Contains(errb.String(), m[1]) {
+		t.Errorf("the token must still appear exactly once, in the URL")
+	}
+}
+
 func testWriter(t *testing.T, addr string) *uiWriter {
 	t.Helper()
-	//surface: --repo
 	hosts, err := uiAllowedHosts(addr)
 	if err != nil {
 		t.Fatal(err)

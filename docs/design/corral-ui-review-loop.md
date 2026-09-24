@@ -80,10 +80,14 @@ not change.
 process" to "whoever launched this server". An agent that launches
 `corral ui --write` itself, or reads the launching terminal, can write. That
 is no weaker than today (any local agent can already run
-`corral review adjudicate`), but it is not proof of a human either. This
-paragraph goes in the `-h` text and the docs. To close the agent side,
-`skills/corral/SKILL.md` and `AGENTS.md` gain an explicit rule: **agents
-never start `corral ui --write`.**
+`corral review adjudicate`), but it is not proof of a human either. Opening
+the browser widens that further: the token-bearing URL is passed to the
+opener — and possibly a cold-started browser — as a command-line argument,
+so any other local process can read it (`/proc/<pid>/cmdline`, `ps`) while
+that process runs; the flag that suppresses the open (see the executed-surface
+manifest) avoids that. This paragraph goes in the `-h`
+text and the docs. To close the agent side, `skills/corral/SKILL.md` and
+`AGENTS.md` gain an explicit rule: **agents never start `corral ui --write`.**
 
 ## 2. Triage and adjudicate
 

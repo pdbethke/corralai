@@ -54,8 +54,8 @@ The front end stays the single vanilla `cmd/corral/uiweb/index.html`.
 
 **Launch token.** `--write` generates a 256-bit random token, held in memory
 only (never on disk, gone when the process exits). It prints
-`http://127.0.0.1:8787/#t=<token>` and opens the browser (a flag suppresses
-that, once its own run has a receipt — see the executed-surface manifest).
+`http://127.0.0.1:8787/#t=<token>` and opens the browser (`--no-open`
+suppresses that).
 The token is in the `#fragment` because browsers never send
 the fragment to the server, so it cannot reach an access log or a `Referer`
 header. The page moves it into the tab's `sessionStorage`, strips it from the
@@ -65,7 +65,9 @@ The server compares it in constant time.
 **Guards on every request:**
 
 - `--write` with a non-loopback `--addr` is a hard error.
-- `Host` must be `127.0.0.1:<port>` or `localhost:<port>` (DNS rebinding).
+- `Host` must be the listen address itself — `127.0.0.1:<port>`, or
+  `[::1]:<port>` when `--addr` binds the IPv6 loopback — or
+  `localhost:<port>` (DNS rebinding).
 - Every write must carry an `Origin` equal to the server's own (cross-site
   posts). The server sends no CORS headers.
 - Read endpoints (`/api/ledger`, `/api/seal`) keep their current behaviour
@@ -83,18 +85,18 @@ is no weaker than today (any local agent can already run
 the browser widens that further: the token-bearing URL is passed to the
 opener — and possibly a cold-started browser — as a command-line argument,
 so any other local process can read it (`/proc/<pid>/cmdline`, `ps`) while
-that process runs; the flag that suppresses the open (see the executed-surface
-manifest) avoids that. This paragraph goes in the `-h`
+that process runs; `--no-open` avoids that. This paragraph goes in the `-h`
 text and the docs. To close the agent side, `skills/corral/SKILL.md` and
 `AGENTS.md` gain an explicit rule: **agents never start `corral ui --write`.**
 
 ## 2. Triage and adjudicate
 
 **Needs your verdict.** Every finding across every review with no human
-adjudication, newest review first, grouped by review. Each item leads with
-the claim, file:line, tier, severity, reviewer, verifier and the verifier's
-answer; a reproduced finding also shows its script, exit code and recorded
-output.
+adjudication, as one flat list, newest review first (not grouped by review; each
+card names its review by hash). Each card shows the finding's ref, tier,
+severity, file:line, reviewer, verifier and the verifier's answer, then the
+claim; a finding with a script also shows the script, its exit code at
+review time and the recorded output.
 
 **Does it still reproduce: by execution.** The UI never shows "fixed" on the
 strength of a commit message. A reproduced finding gets a **Re-run on HEAD**
@@ -114,7 +116,8 @@ It writes nothing to the ledger. A person who wants the result on the record
 quotes it in their reason.
 
 Code-read and hypothesis findings have no script. They show "no script: judge
-from the code" and a link to file:line at the review's commit.
+from the code at file:line (commit …)" — the location and the review's commit
+as text, not a link.
 
 **Verdict form.** Confirm / Refute, a required reason, and an editable
 suggestion built only from evidence: the recheck result if there is one, the
@@ -127,9 +130,11 @@ Submitting runs `corral review adjudicate` as a subprocess. The UI shows the
 CLI's own output and reloads the ledger. On error it shows the CLI's message
 verbatim and changes nothing.
 
-**Confirmed, still open.** Confirmed findings whose recheck still reproduces,
-or that have no script, sit in their own list: the input to the next fix
-batch.
+**Confirmed — open unless a recheck says otherwise.** Every confirmed
+finding sits in its own list, the input to the next fix batch. The list is
+not filtered by recheck: nothing is rechecked until someone asks. Each card
+with a script has its own **Re-run on HEAD** button, and the result shows on
+that card; a card with no script says "no script: judge from the code".
 
 ## 3. Publish
 

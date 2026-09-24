@@ -178,7 +178,13 @@ func (u *uiWriter) recheck(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "ref must look like <hash>#R<n>"})
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Minute)
+	// context.WithoutCancel: a client disconnect must not SIGKILL this
+	// child. exec.CommandContext kills with SIGKILL on cancel, and a
+	// killed recheck never runs its deferred `git worktree remove`,
+	// leaving a stale worktree registered against the operator's real
+	// repo. The bound is still 5 minutes — a dropped client just stops
+	// seeing the answer, it does not grant the child forever.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 5*time.Minute)
 	defer cancel()
 	out, errOut, code, err := u.cli(ctx, "review", "recheck", u.ledgerDir, in.Ref, "--repo", u.repo, "--json")
 	if err != nil {
@@ -212,7 +218,14 @@ func (u *uiWriter) adjudicate(w http.ResponseWriter, r *http.Request) {
 	}
 	u.mu.Lock()
 	defer u.mu.Unlock()
-	out, errOut, code, err := u.cli(r.Context(), "review", "adjudicate", u.ledgerDir, in.Ref, flag, "--reason", in.Reason)
+	// context.WithoutCancel, same reasoning as recheck: a client
+	// disconnect must not SIGKILL a write that holds u.mu — the verdict
+	// could land in the ledger while this handler reports failure. Bounded
+	// to 1 minute (not recheck's 5): this holds the lock, so it must not
+	// be able to block every other adjudication forever.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), time.Minute)
+	defer cancel()
+	out, errOut, code, err := u.cli(ctx, "review", "adjudicate", u.ledgerDir, in.Ref, flag, "--reason", in.Reason)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -233,9 +246,18 @@ func (u *uiWriter) cited(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// #nosec G204,G702 -- fixed argv; repo is the operator's --repo, h is validated hex (uiHexRE), never a shell
-	out, err := exec.CommandContext(r.Context(), "git", "-C", u.repo, "log", "--format=%h\t%s", "--fixed-strings", "--grep="+h[:12]).Output()
+	cmd := exec.CommandContext(r.Context(), "git", "-C", u.repo, "log", "--format=%h\t%s", "--fixed-strings", "--grep="+h[:12])
+	out, err := cmd.Output()
 	if err != nil {
-		writeJSON(w, http.StatusOK, []map[string]string{})
+		// A git failure ("could not check") must not render as "no
+		// citations" — an empty [] here would silently pass as a clean
+		// answer on a repo that is not even a checkout.
+		msg := err.Error()
+		var ee *exec.ExitError
+		if errors.As(err, &ee) && len(strings.TrimSpace(string(ee.Stderr))) > 0 {
+			msg = strings.TrimSpace(string(ee.Stderr))
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": msg})
 		return
 	}
 	cites := []map[string]string{}

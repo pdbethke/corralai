@@ -331,3 +331,89 @@ func TestUICitedListsCommitsNamingTheReviewAndLabelsNothingFixed(t *testing.T) {
 		t.Error("the citation endpoint must not assert a fix")
 	}
 }
+
+// A client disconnect cancels r.Context(), but exec.CommandContext kills
+// its child with SIGKILL on cancel. If the child's context were derived
+// directly from r.Context(), a dropped client would kill an in-flight
+// recheck (never running its deferred `git worktree remove`, leaving a
+// stale worktree registered against the real repo) or an in-flight
+// adjudicate (which could still have written the verdict before dying,
+// leaving the UI reporting failure for a change that landed). The child
+// must run on a context detached from the request, with its own bound.
+func TestUICancelledRequestDoesNotCancelTheRecheckChild(t *testing.T) {
+	repo, ledger, hash := recheckFixture(t, map[string]string{"R1": "true"})
+	w := testWriter(t, "127.0.0.1:8787")
+	w.repo, w.ledgerDir = repo, ledger
+	var sawDone, hasDeadline bool
+	w.cli = func(ctx context.Context, args ...string) (string, string, int, error) {
+		_, hasDeadline = ctx.Deadline()
+		select {
+		case <-ctx.Done():
+			sawDone = true
+		default:
+		}
+		return `{"ref":"x","outcome":"still-reproduces"}`, "", 0, nil
+	}
+	h := uiHandlerWith(fakeSeal{}, ledger, w)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // the request context is already cancelled before the handler ever runs
+	body, _ := json.Marshal(map[string]string{"ref": hash + "#R1"})
+	req := writeReq("/api/recheck", string(body)).WithContext(ctx)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if sawDone {
+		t.Error("a cancelled request context cancelled the recheck CLI child")
+	}
+	if !hasDeadline {
+		t.Error("the recheck child's context should still carry its own deadline")
+	}
+}
+
+func TestUICancelledRequestDoesNotCancelTheAdjudicateChild(t *testing.T) {
+	repo, ledger, hash := recheckFixture(t, map[string]string{"R1": "true"})
+	w := testWriter(t, "127.0.0.1:8787")
+	w.repo, w.ledgerDir = repo, ledger
+	var sawDone, hasDeadline bool
+	w.cli = func(ctx context.Context, args ...string) (string, string, int, error) {
+		_, hasDeadline = ctx.Deadline()
+		select {
+		case <-ctx.Done():
+			sawDone = true
+		default:
+		}
+		return "ok", "", 0, nil
+	}
+	h := uiHandlerWith(fakeSeal{}, ledger, w)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // the request context is already cancelled before the handler ever runs
+	body, _ := json.Marshal(map[string]string{"ref": hash + "#R1", "verdict": "confirm", "reason": "r"})
+	req := writeReq("/api/adjudicate", string(body)).WithContext(ctx)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if sawDone {
+		t.Error("a cancelled request context cancelled the adjudicate CLI child")
+	}
+	if !hasDeadline {
+		t.Error("the adjudicate child's context should still carry its own deadline")
+	}
+}
+
+// A git failure ("could not check") must not render as "no citations" — an
+// empty [] would silently pass a repo that is not even a checkout as
+// "nothing cites this review".
+func TestUICitedReturnsAnErrorWhenGitFails(t *testing.T) {
+	_, ledger, hash := recheckFixture(t, map[string]string{"R1": "true"})
+	notARepo := t.TempDir()
+	_, h := writerOver(t, notARepo, ledger)
+	r := httptest.NewRequest(http.MethodGet, "/api/cited?hash="+hash, nil)
+	r.Host = "127.0.0.1:8787"
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, r)
+	if rec.Code == http.StatusOK {
+		t.Fatalf("status %d: want a non-200 when git fails", rec.Code)
+	}
+	var out map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil || strings.TrimSpace(out["error"]) == "" {
+		t.Fatalf("status %d body %s: want a non-empty error", rec.Code, rec.Body.String())
+	}
+}

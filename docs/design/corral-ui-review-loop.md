@@ -1,12 +1,11 @@
 <!-- SPDX-License-Identifier: Elastic-2.0 -->
 # `corral ui` runs the review loop: design
 
-**Status: designed, not built (2026-09-24).** Nothing described here exists
-yet. In particular `corral ui --write` and `corral review recheck` are
-proposed, not shipped. Written the day after a full review round was
-carried through by hand: an outside review, a `corral review` round, three
-fix PRs, ten adjudications and two pushes to `corral/ledger`, each step
-typed in a terminal.
+**Status: sections 1 and 2 built (write authority, recheck, adjudicate);
+sections 3 (publish) and 4 (run a round) designed, not built.** Written the
+day after a full review round was carried through by hand: an outside
+review, a `corral review` round, three fix PRs, ten adjudications and two
+pushes to `corral/ledger`, each step typed in a terminal.
 
 ## Intent
 

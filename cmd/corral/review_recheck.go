@@ -3,11 +3,11 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -97,13 +97,28 @@ func runReviewRecheck(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "corral review recheck: %s is not a git checkout\n", root)
 		return 2
 	}
+	if reason := recheckAncestry(root, e.Review.Commit); reason != "" {
+		res.Outcome, res.Reason = recheckUnrun, reason
+		return printRecheck(stdout, res, *asJSON)
+	}
+	// auditContext, not context.Background: `corral ui` runs this as a
+	// child, and a Ctrl-C there reaches the whole process group. With the
+	// default SIGINT handling this process died before the deferred cleanup
+	// ran, leaving a stale worktree registered in the operator's repo. The
+	// signal-aware context turns the first interrupt into a cancellation, so
+	// the script is stopped, the result is could-not-run (a canceled run is
+	// never a measurement), and the worktree is removed on the way out. It is
+	// taken before the worktree exists and released after it is removed
+	// (defers run in reverse), so cleanup itself runs under the handler.
+	ctx, stop := auditContext(stderr)
+	defer stop()
 	rep, cleanup, werr := newWorktreeReproducer(root, res.Commit, *timeout)
 	if werr != nil {
 		res.Outcome, res.Reason = recheckUnrun, werr.Error()
 		return printRecheck(stdout, res, *asJSON)
 	}
 	defer cleanup()
-	out, code, rerr := rep.Run(context.Background(), f.Script)
+	out, code, rerr := rep.Run(ctx, f.Script)
 	res.Output = tail(out, 4000)
 	switch {
 	case rerr != nil:
@@ -124,6 +139,27 @@ func runReviewRecheck(args []string, stdout, stderr io.Writer) int {
 		res.ExitCode, res.Outcome = &code, recheckGone
 	}
 	return printRecheck(stdout, res, *asJSON)
+}
+
+// recheckAncestry returns why HEAD of root is not a place the finding can be
+// rechecked, or "" when it is. A script run against a checkout that does not
+// contain the reviewed commit ran against unrelated code: its non-zero exit
+// would read as no-longer-reproduces while measuring nothing about the
+// finding. So HEAD must descend from the reviewed commit, and a review that
+// names no commit cannot be rechecked at all.
+func recheckAncestry(root, reviewed string) string {
+	reviewed = strings.TrimSpace(reviewed)
+	if reviewed == "" {
+		return "the review records no reviewed commit, so there is no code this HEAD can be compared against"
+	}
+	if strings.HasPrefix(reviewed, "-") {
+		return fmt.Sprintf("the review's recorded commit %q is not a commit", reviewed)
+	}
+	// #nosec G204 -- fixed argv; root is the operator's own --repo path and reviewed is a commit hash read from the operator's own signed ledger, passed after the subcommand as a revision, never as an option
+	if err := exec.Command("git", "-C", root, "merge-base", "--is-ancestor", reviewed, "HEAD").Run(); err != nil {
+		return fmt.Sprintf("HEAD of %s does not descend from the reviewed commit %.12s (or that commit is absent from this checkout) — the script would run against unrelated code, not a result", root, reviewed)
+	}
+	return ""
 }
 
 func printRecheck(w io.Writer, res recheckResult, asJSON bool) int {

@@ -10,7 +10,10 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/pdbethke/corralai/internal/auditpush"
 	"github.com/pdbethke/corralai/internal/review"
@@ -19,6 +22,13 @@ import (
 // recheckFixture is a git checkout with one committed file and a ledger
 // holding one review whose findings carry the given scripts.
 func recheckFixture(t *testing.T, scripts map[string]string) (repo, ledger, hash string) {
+	t.Helper()
+	return recheckFixtureCommit(t, scripts, nil)
+}
+
+// recheckFixtureCommit is recheckFixture with the review's recorded Commit
+// chosen by commitOf (nil: the fixture repo's HEAD).
+func recheckFixtureCommit(t *testing.T, scripts map[string]string, commitOf func(repo string) string) (repo, ledger, hash string) {
 	t.Helper()
 	t.Setenv("CORRALAI_CERTIFY_KEY_FILE", filepath.Join(t.TempDir(), "certify_key"))
 	repo = t.TempDir()
@@ -40,7 +50,11 @@ func recheckFixture(t *testing.T, scripts map[string]string) (repo, ledger, hash
 		ids = append(ids, id)
 	}
 	sort.Strings(ids)
-	r := review.Review{Repo: "acme/r", Commit: gitHeadCommit(repo), Scope: "pkg", ReviewerModel: "rev", Opinion: "o"}
+	commit := gitHeadCommit(repo)
+	if commitOf != nil {
+		commit = commitOf(repo)
+	}
+	r := review.Review{Repo: "acme/r", Commit: commit, Scope: "pkg", ReviewerModel: "rev", Opinion: "o"}
 	zero := 0
 	for _, id := range ids {
 		r.Findings = append(r.Findings, review.Finding{ID: id, Claim: "c " + id, Declared: review.TierReproduced, Tier: review.TierReproduced, Script: scripts[id], ExitCode: &zero})
@@ -126,5 +140,117 @@ func TestReviewRecheckRefusesAFindingWithNoScript(t *testing.T) {
 	}
 	if !bytes.Contains(errb.Bytes(), []byte("no script")) {
 		t.Errorf("stderr should say there is no script: %s", errb.String())
+	}
+}
+
+// gitRepoWithMarker is an unrelated git checkout that also has a committed
+// marker.txt, so `test -f marker.txt` would pass in it.
+func gitRepoWithMarker(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "other.txt"), []byte("x\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{
+		{"init", "-q"},
+		{"add", "other.txt"},
+		{"-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "-m", "unrelated"},
+	} {
+		if out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, out)
+		}
+	}
+	return dir
+}
+
+// A checkout that does not contain the reviewed commit is not "the fix": the
+// script ran against unrelated code, so its exit says nothing about the
+// finding. Before this check, an unrelated repo reported no-longer-reproduces.
+func TestReviewRecheckRefusesACheckoutThatDoesNotDescendFromTheReviewedCommit(t *testing.T) {
+	_, ledger, hash := recheckFixture(t, map[string]string{"R1": "test -f marker.txt"})
+	other := gitRepoWithMarker(t)
+	var out, errb bytes.Buffer
+	code := runReview([]string{"recheck", ledger, hash + "#R1", "--repo", other, "--json"}, &out, &errb)
+	if code != 3 {
+		t.Fatalf("exit %d, want 3; stdout: %s stderr: %s", code, out.String(), errb.String())
+	}
+	var res recheckResult
+	if err := json.Unmarshal(out.Bytes(), &res); err != nil {
+		t.Fatalf("not JSON: %v: %s", err, out.String())
+	}
+	if res.Outcome != recheckUnrun {
+		t.Fatalf("outcome %q, want %q (%+v)", res.Outcome, recheckUnrun, res)
+	}
+	if !strings.Contains(res.Reason, "does not descend") {
+		t.Errorf("reason should say HEAD does not descend from the reviewed commit: %q", res.Reason)
+	}
+}
+
+// auditpush.WriteReview refuses a review with no commit, so an empty Commit
+// cannot reach recheck through a well-formed ledger; the guard is defensive,
+// and is tested at the helper.
+func TestRecheckAncestryRefusesAnEmptyReviewedCommit(t *testing.T) {
+	repo, _, _ := recheckFixture(t, map[string]string{"R1": "true"})
+	if reason := recheckAncestry(repo, ""); !strings.Contains(reason, "no reviewed commit") {
+		t.Fatalf("want a reason naming the missing commit, got %q", reason)
+	}
+	if reason := recheckAncestry(repo, gitHeadCommit(repo)); reason != "" {
+		t.Fatalf("HEAD descends from itself; got %q", reason)
+	}
+}
+
+// An interrupt during a recheck must unwind: the script is stopped, the
+// outcome is could-not-run (a canceled run measured nothing), and the
+// disposable worktree is removed rather than left registered in the
+// operator's repo. Before the recheck took a signal-aware context, the first
+// SIGTERM killed the process outright — here, the test binary itself.
+func TestReviewRecheckUnwindsOnInterrupt(t *testing.T) {
+	started := filepath.Join(t.TempDir(), "started")
+	repo, ledger, hash := recheckFixture(t, map[string]string{"R1": "touch " + started + " && exec sleep 30"})
+	type result struct {
+		code int
+		out  string
+	}
+	done := make(chan result, 1)
+	go func() {
+		var out, errb bytes.Buffer
+		code := runReview([]string{"recheck", ledger, hash + "#R1", "--repo", repo, "--json", "--timeout", "40s"}, &out, &errb)
+		done <- result{code, out.String()}
+	}()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		if _, err := os.Stat(started); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the script never started")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if err := syscall.Kill(syscall.Getpid(), syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	var r result
+	select {
+	case r = <-done:
+	case <-time.After(20 * time.Second):
+		t.Fatal("the recheck did not unwind after the interrupt")
+	}
+	if r.code != 3 {
+		t.Fatalf("exit %d, want 3: %s", r.code, r.out)
+	}
+	var res recheckResult
+	if err := json.Unmarshal([]byte(r.out), &res); err != nil {
+		t.Fatalf("not JSON: %v: %s", err, r.out)
+	}
+	if res.Outcome != recheckUnrun {
+		t.Fatalf("outcome %q, want %q", res.Outcome, recheckUnrun)
+	}
+	list, err := exec.Command("git", "-C", repo, "worktree", "list", "--porcelain").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := strings.Count(string(list), "worktree "); n != 1 {
+		t.Fatalf("%d worktrees registered after the interrupt, want only the main checkout:\n%s", n, list)
 	}
 }

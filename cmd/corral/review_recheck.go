@@ -108,6 +108,13 @@ func runReviewRecheck(args []string, stdout, stderr io.Writer) int {
 	switch {
 	case rerr != nil:
 		res.Outcome, res.Reason = recheckUnrun, rerr.Error()
+	case code < 0:
+		// A negative code (WorkspaceRunner's convention, see
+		// internal/adequacy/workspace.go around st.Exited()) means the
+		// process never exited normally — killed by a signal, or never
+		// finished — not that the defect is gone. Reporting it as
+		// no-longer-reproduces would let a crash pass as a fix.
+		res.Outcome, res.Reason = recheckUnrun, "the script did not exit normally: killed by a signal, or never finished — not a result"
 	case code == 126 || code == 127:
 		res.ExitCode = &code
 		res.Outcome, res.Reason = recheckUnrun, fmt.Sprintf("the script exited %d: a command was not found or not executable — a missing toolchain, not a result", code)

@@ -80,6 +80,7 @@ func TestReviewRecheckReportsTheThreeOutcomesAndWritesNothing(t *testing.T) {
 		"R2": "test -f gone.txt",           // no longer true
 		"R3": "no-such-command-corral-xyz", // exit 127: a missing tool, not a result
 		"R4": "sleep 5",                    // exceeds --timeout
+		"R5": "kill -9 $$",                 // killed by a signal, never exits normally
 	})
 	before := dirDigest(t, ledger)
 	for _, tc := range []struct {
@@ -91,6 +92,7 @@ func TestReviewRecheckReportsTheThreeOutcomesAndWritesNothing(t *testing.T) {
 		{"R2", recheckGone, 0, nil},
 		{"R3", recheckUnrun, 3, nil},
 		{"R4", recheckUnrun, 3, []string{"--timeout", "1s"}},
+		{"R5", recheckUnrun, 3, nil},
 	} {
 		t.Run(tc.id, func(t *testing.T) {
 			var out, errb bytes.Buffer

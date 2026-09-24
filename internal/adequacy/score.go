@@ -994,11 +994,26 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 	//
 	// Never across files by construction: every mutant here is a single-point
 	// edit of the same compliantCode.
+	//
+	// A duplicate is the same edit GRADED THE SAME WAY. Under WithCommandFor
+	// two identical edits can be assigned different commands, and those are
+	// two measurements: keyed on the edit alone, a mutant that survived its
+	// own command inherited its twin's kill, and the kill rate could only
+	// move up from that error (corral review, codex:gpt-6-astra, R1).
+	type dedupeKey struct {
+		edit MutantIdentity
+		cmd  string
+	}
 	repOf := make([]int, len(mutants))
-	firstSeen := make(map[MutantIdentity]int, len(mutants))
+	firstSeen := make(map[dedupeKey]int, len(mutants))
 	dupes := 0
 	for i, m := range mutants {
-		id := IdentityOf(m)
+		id := dedupeKey{edit: IdentityOf(m)}
+		if cfg.commandFor != nil {
+			if mc := cfg.commandFor(m); len(mc.Cmd) > 0 {
+				id.cmd = strings.Join(mc.Cmd, "\x00")
+			}
+		}
 		if j, ok := firstSeen[id]; ok {
 			repOf[i] = j
 			dupes++

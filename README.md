@@ -946,8 +946,10 @@ runner does not have. The design, and the week that produced it:
   statement. They are deliberately not blended into one index: a blend hides
   which term is weak, and the point is to see that a 39-mutant exam which
   reached 2 of 8 decision points covered *less* than an 8-mutant exam that
-  reached all of them. The certification gate still reads the point estimate;
-  a rule over these terms is 1.0's breaking change, not the RC's.
+  reached all of them. The point estimate still decides the rate, but the
+  interval now gates certification: a rate that clears the threshold on an
+  interval wider than 0.35 is routed to `needs-review` and marked
+  `[INDICATIVE — …]`. Reach is reported and signed, not gated.
 - **The shadow challenger.** `--shadow-model <model>` fans a challenger
   mutant-generator seat across every region for a region-controlled,
   execution-proven head-to-head between generator models — same file, same goal,

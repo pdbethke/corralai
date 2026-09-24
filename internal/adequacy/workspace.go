@@ -250,10 +250,10 @@ func mkdirAllTracking(root *os.Root, dir string) ([]string, error) {
 // This is the single place the crash-safety guarantee is written: RunTest
 // and Enumerate both call it, so a failing command, a timeout, or a panic in
 // either method restores the tree the same way.
-func (w *WorkspaceRunner) applyFiles(files map[string]string) (restore func(), err error) {
+func (w *WorkspaceRunner) applyFiles(files map[string]string) (restore func() error, err error) {
 	root, rerr := os.OpenRoot(w.root)
 	if rerr != nil {
-		return func() {}, fmt.Errorf("adequacy: opening workspace %s: %w", w.root, rerr)
+		return func() error { return nil }, fmt.Errorf("adequacy: opening workspace %s: %w", w.root, rerr)
 	}
 
 	keys := make([]string, 0, len(files))
@@ -266,28 +266,56 @@ func (w *WorkspaceRunner) applyFiles(files map[string]string) (restore func(), e
 
 	var fileLedger []savedFile
 	var dirsCreated []string // shallow-to-deep creation order
-	restore = func() {
+	// restore REPORTS what it could not put back. It used to discard every
+	// error, so a command that replaced an overlaid file with a directory
+	// left the directory in place on a run that still read pass=true,
+	// err=nil (an outside Codex review, 2026-09-23). A file restore that
+	// fails means the tree the next run sees is not the tree under audit,
+	// and the caller must say so rather than return the run's result.
+	restore = func() error {
 		defer func() { _ = root.Close() }()
+		var errs []error
 		// Reverse order, so nested creations unwind cleanly.
 		for i := len(fileLedger) - 1; i >= 0; i-- {
 			s := fileLedger[i]
 			if s.existed {
-				_ = root.WriteFile(s.rel, s.original, 0o600)
+				if werr := root.WriteFile(s.rel, s.original, 0o600); werr != nil {
+					errs = append(errs, fmt.Errorf("adequacy: restoring %s: %w", s.rel, werr))
+				}
 				continue
 			}
-			_ = root.Remove(s.rel)
+			// Already gone is restored: the command may delete a file it was
+			// handed, and absent is exactly the state to put back.
+			if rerr := root.Remove(s.rel); rerr != nil && !os.IsNotExist(rerr) {
+				errs = append(errs, fmt.Errorf("adequacy: removing %s, which this run created: %w", s.rel, rerr))
+			}
 		}
 		// Deepest directory first; Remove no-ops (returns an error we
 		// discard) if anything else left the directory non-empty — a stray
-		// directory is a smaller failure than deleting data we didn't write.
+		// directory is a smaller failure than deleting data we didn't write,
+		// and an empty directory changes no file the audit reads.
 		for i := len(dirsCreated) - 1; i >= 0; i-- {
 			_ = root.Remove(dirsCreated[i])
 		}
+		return errors.Join(errs...)
 	}
 
 	for _, rel := range keys {
 		if filepath.IsAbs(rel) {
 			return restore, fmt.Errorf("adequacy: workspace path %q is absolute", rel)
+		}
+		// A DANGLING SYMLINK IS NOT AN ABSENT FILE. ReadFile follows the link
+		// and reports not-exist, so the path was treated as new: the write
+		// went THROUGH the link and created its target, and the restore then
+		// removed the link and left the target holding mutant bytes (corral
+		// review, codex:gpt-6-astra, R2). Refused before anything is written,
+		// so the tree is left exactly as it was. A symlink to a file that
+		// exists still round-trips: its target's bytes are what is saved and
+		// written back.
+		if fi, lerr := root.Lstat(rel); lerr == nil && fi.Mode()&os.ModeSymlink != 0 {
+			if _, serr := root.Stat(rel); serr != nil && os.IsNotExist(serr) {
+				return restore, fmt.Errorf("adequacy: workspace path %q is a symlink to a file that does not exist; refusing to overlay through it", rel)
+			}
 		}
 		orig, rerr := root.ReadFile(rel)
 		existed := rerr == nil
@@ -379,13 +407,21 @@ func (w *WorkspaceRunner) RunTestDetailed(ctx context.Context, files map[string]
 // The returned int is the command's exit code (0 for success), or -1 when
 // the process did not exit normally at all (a timeout, or the command could
 // not be run) — the caller never mistakes -1 for a genuine exit(-1).
-func (w *WorkspaceRunner) applyRunRestore(ctx context.Context, files map[string]string, cmdArgv []string, stdout, stderr io.Writer) (int, error) {
+func (w *WorkspaceRunner) applyRunRestore(ctx context.Context, files map[string]string, cmdArgv []string, stdout, stderr io.Writer) (code int, err error) {
 	if len(cmdArgv) == 0 {
 		return -1, errors.New("adequacy: workspace runner needs a command")
 	}
 
 	restore, err := w.applyFiles(files)
-	defer restore()
+	// A restore that could not complete OVERRIDES whatever the run returned:
+	// a pass measured in a tree that cannot be put back is not a result, and
+	// the next mutant would be graded against the wrong source.
+	defer func() {
+		if rerr := restore(); rerr != nil {
+			code = -1
+			err = errors.Join(err, rerr)
+		}
+	}()
 	if err != nil {
 		return -1, err
 	}

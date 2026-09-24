@@ -6,6 +6,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/pdbethke/corralai/internal/lang"
 )
@@ -109,4 +110,40 @@ func ids(ms []Mutant) []string {
 		out[i] = m.ID
 	}
 	return out
+}
+
+// Identical edits graded by DIFFERENT commands are different measurements.
+// Score's dedupe keyed on the edit alone, so a mutant that survived its own
+// selected command inherited its twin's kill (corral review,
+// codex:gpt-6-astra, 2026-09-24, R1). The kill rate could only ever move up
+// from that error, never down.
+func TestScoreDoesNotShareAVerdictAcrossDifferentGradingCommands(t *testing.T) {
+	root := t.TempDir()
+	j := NewWorkspaceRunner(root, 30*time.Second)
+	strict := []string{"sh", "-c", `set -e; . ./value.sh; test "$v" -eq 1`}
+	loose := []string{"sh", "-c", `set -e; . ./value.sh; test "$v" -ge 1`}
+	mutants := []Mutant{
+		{ID: "strict", Search: "v=1", Replace: "v=2"},
+		{ID: "loose", Search: "v=1", Replace: "v=2"},
+	}
+	selectCmd := WithCommandFor(func(m Mutant) MutantCommand {
+		if m.ID == "loose" {
+			return MutantCommand{Cmd: loose, Tests: 1}
+		}
+		return MutantCommand{Cmd: strict, Tests: 1}
+	})
+
+	rep, err := Score(context.Background(), j, nil, "value.sh", "v=1\n", mutants, strict, selectCmd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !rep.CompliantPass || !rep.CanaryKilled {
+		t.Fatalf("fixture did not grade: %+v", rep)
+	}
+	if strings.Join(rep.Survived, ",") != "loose" || strings.Join(rep.Killed, ",") != "strict" {
+		t.Errorf("killed=%v survived=%v: want strict killed and loose SURVIVED under its own command", rep.Killed, rep.Survived)
+	}
+	if rep.DuplicateMutants != 0 {
+		t.Errorf("DuplicateMutants=%d: an edit graded by a different command is not a duplicate", rep.DuplicateMutants)
+	}
 }

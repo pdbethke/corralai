@@ -417,3 +417,25 @@ func TestUICitedReturnsAnErrorWhenGitFails(t *testing.T) {
 		t.Fatalf("status %d body %s: want a non-empty error", rec.Code, rec.Body.String())
 	}
 }
+
+// The page must take the token from the fragment, keep it per tab, strip it
+// from the address bar, and send it only as a Bearer header.
+func TestUIPageHandlesTheTokenOnlyTheWaySpecified(t *testing.T) {
+	rec := httptest.NewRecorder()
+	uiHandler(fakeSeal{}, "").ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	page := rec.Body.String()
+	for _, must := range []string{
+		`location.hash`, `sessionStorage`, `history.replaceState`, `'Authorization': 'Bearer '`,
+		`id="verdicts"`, `api/recheck`, `api/adjudicate`, `api/cited`, `cited by a commit message, not verified`,
+		`could not check citations`,
+	} {
+		if !strings.Contains(page, must) {
+			t.Errorf("page is missing %q", must)
+		}
+	}
+	for _, mustNot := range []string{`localStorage`, `?t=`} {
+		if strings.Contains(page, mustNot) {
+			t.Errorf("page must not use %q (the token outlives the tab / reaches the server)", mustNot)
+		}
+	}
+}

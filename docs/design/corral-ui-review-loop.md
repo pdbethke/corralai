@@ -54,8 +54,14 @@ The front end stays the single vanilla `cmd/corral/uiweb/index.html`.
 
 **Launch token.** `--write` generates a 256-bit random token, held in memory
 only (never on disk, gone when the process exits). It prints
-`http://127.0.0.1:8787/#t=<token>` and opens the browser (`--no-open`
-suppresses that).
+`http://127.0.0.1:8787/#t=<token>` and does not open a browser: printing is
+the default because it is the flow that works everywhere (a desktop terminal
+makes the link clickable, and over SSH or in a container there is no browser
+to open) and because a printed URL never reaches a process's command line.
+`--open` opts in to opening it. Over SSH, tunnel the SAME port on both ends
+(`ssh -L 8787:127.0.0.1:8787 host`): the browser then sends
+`Host: localhost:8787`, which the guard accepts, whereas a different local
+port (`-L 9000:…`) sends `localhost:9000` and every request is refused.
 The token is in the `#fragment` because browsers never send
 the fragment to the server, so it cannot reach an access log or a `Referer`
 header. The page moves it into the tab's `sessionStorage`, strips it from the
@@ -81,12 +87,12 @@ not change.
 process" to "whoever launched this server". An agent that launches
 `corral ui --write` itself, or reads the launching terminal, can write. That
 is no weaker than today (any local agent can already run
-`corral review adjudicate`), but it is not proof of a human either. Opening
-the browser widens that further: the token-bearing URL is passed to the
-opener — and possibly a cold-started browser — as a command-line argument,
-so any other local process can read it (`/proc/<pid>/cmdline`, `ps`) while
-that process runs; `--no-open` avoids that. This paragraph goes in the `-h`
-text and the docs. To close the agent side, `skills/corral/SKILL.md` and
+`corral review adjudicate`), but it is not proof of a human either. By
+default the URL is only printed, so the token stays off every command line.
+`--open` widens the limit: it passes the token-bearing URL to the opener —
+and possibly a cold-started browser — as a command-line argument, which any
+other local process can read (`/proc/<pid>/cmdline`, `ps`) while it runs.
+This paragraph goes in the `-h` text and the docs. To close the agent side, `skills/corral/SKILL.md` and
 `AGENTS.md` gain an explicit rule: **agents never start `corral ui --write`.**
 
 ## 2. Triage and adjudicate

@@ -165,7 +165,7 @@ corral-top --interval	unexecuted
 corral-top --token	executed	test:cmd/corral-top/main_test.go (envOr precedence behind the flag default)
 corral ui --db	executed	run:2026-09-02 `corral ui --db md:corral_public --print-url` resolved and opened the live warehouse; test:cmd/corral/ui_test.go
 corral ui --addr	executed	run:2026-09-02 `--addr 0.0.0.0:8787` emitted the non-loopback warning; test:cmd/corral/ui_test.go (isLoopback table)
-corral ui --no-open	executed	run:2026-09-24 corral ui --write --no-open printed the URL and served without launching a browser
+corral ui --open	executed	test:cmd/corral/ui_write_test.go
 corral ui --print-url	executed	run:2026-09-02 printed the URL and exited 0 without serving
 corral ui --repo	executed	test:cmd/corral/ui_write_test.go
 corral ui --write	executed	test:cmd/corral/ui_write_test.go

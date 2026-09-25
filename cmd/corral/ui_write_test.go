@@ -474,3 +474,62 @@ func TestUIPageHandlesTheTokenOnlyTheWaySpecified(t *testing.T) {
 		}
 	}
 }
+
+// stubServeAndOpen replaces the listener and the browser opener for one test,
+// so runUI can be driven past --print-url without binding a port or launching
+// anything. It records every URL the opener was handed.
+func stubServeAndOpen(t *testing.T) *[]string {
+	t.Helper()
+	var opened []string
+	prevServe, prevOpen := uiServe, uiOpenBrowser
+	uiServe = func(*http.Server) error { return nil }
+	uiOpenBrowser = func(u string) error { opened = append(opened, u); return nil }
+	t.Cleanup(func() { uiServe, uiOpenBrowser = prevServe, prevOpen })
+	return &opened
+}
+
+// Printing the URL is the default: nothing is handed to a browser opener, so
+// the token never appears on any process's command line. It works the same
+// on a desktop, over SSH and in a container.
+func TestUIWritePrintsTheURLAndOpensNothingByDefault(t *testing.T) {
+	opened := stubServeAndOpen(t)
+	var out, errb bytes.Buffer
+	code := runUI([]string{"--write", "--addr", "127.0.0.1:8787", "--db", t.TempDir()}, func(string) (sealReader, error) { return fakeSeal{}, nil }, &out, &errb)
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, errb.String())
+	}
+	if len(*opened) != 0 {
+		t.Fatalf("the default opened a browser with %q; it must only print the URL", *opened)
+	}
+	if !regexp.MustCompile(`#t=[0-9a-f]{64}`).MatchString(out.String()) {
+		t.Fatalf("the token URL was not printed: %s", out.String())
+	}
+}
+
+// --open opts in to the desktop convenience, and hands the opener exactly the
+// printed token URL.
+func TestUIWriteOpenHandsTheOpenerTheTokenURL(t *testing.T) {
+	//surface: --open
+	opened := stubServeAndOpen(t)
+	var out, errb bytes.Buffer
+	code := runUI([]string{"--write", "--open", "--addr", "127.0.0.1:8787", "--db", t.TempDir()}, func(string) (sealReader, error) { return fakeSeal{}, nil }, &out, &errb)
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, errb.String())
+	}
+	if len(*opened) != 1 || !regexp.MustCompile(`^http://127\.0\.0\.1:8787/#t=[0-9a-f]{64}$`).MatchString((*opened)[0]) {
+		t.Fatalf("opener got %q, want exactly the token URL once", *opened)
+	}
+	if !strings.Contains(out.String(), (*opened)[0]) {
+		t.Errorf("the URL handed to the opener must be the one printed")
+	}
+}
+
+// --no-open is gone: printing is the default, so the flag would do nothing.
+// An unknown flag fails parsing rather than being silently accepted.
+func TestUIWriteNoOpenFlagIsGone(t *testing.T) {
+	stubServeAndOpen(t)
+	var out, errb bytes.Buffer
+	if code := runUI([]string{"--write", "--no-open", "--db", t.TempDir()}, func(string) (sealReader, error) { return fakeSeal{}, nil }, &out, &errb); code != 2 {
+		t.Fatalf("exit %d, want 2 for an unknown flag", code)
+	}
+}

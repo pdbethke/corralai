@@ -46,8 +46,8 @@ func runUI(args []string, open func(dsn string) (sealReader, error), stdout, std
 	dsn := fs.String("db", "", "what to read: a ledger directory (the seal, the chain and the reviews) or a warehouse file / md:<db> (the seal only) — default $CORRAL_LEDGER, else ./.corral/ledger, the same resolution `corral seal` and `corral scans` use")
 	addr := fs.String("addr", "127.0.0.1:8787", "local listen address. Loopback by default ON PURPOSE: the ledger is a map of where a codebase's tests are thinnest")
 	once := fs.Bool("print-url", false, "print the URL and exit without serving (for scripts and smoke tests)")
-	write := fs.Bool("write", false, "let this page WRITE: adjudicate findings and recheck them, by running corral's own subcommands. Loopback only; prints a URL carrying a launch token valid until the server exits — anyone with that URL can write verdicts in your name. Opening the browser puts the URL, token included, on a command line other local processes can read (use --no-open to avoid that). Agents must never start this")
-	noOpen := fs.Bool("no-open", false, "with --write, print the URL but do not open a browser")
+	write := fs.Bool("write", false, "let this page WRITE: adjudicate findings and recheck them, by running corral's own subcommands. Loopback only; prints a URL carrying a launch token valid until the server exits — anyone with that URL can write verdicts in your name. The URL is printed, never opened, so the token stays off every process's command line; over SSH, tunnel the same port on both ends (ssh -L 8787:127.0.0.1:8787). Agents must never start this")
+	openBrowser := fs.Bool("open", false, "with --write, also open the URL in a browser. A convenience for a desktop: it hands the URL, token included, to the opener as a command-line argument, which other local processes can read while it runs")
 	repoDir := fs.String("repo", ".", "with --write, the checkout a finding's reproduction is rechecked against (its HEAD, in a disposable worktree)")
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -106,14 +106,14 @@ func runUI(args []string, open func(dsn string) (sealReader, error), stdout, std
 	if *once {
 		return 0
 	}
-	if writer != nil && !*noOpen {
+	if writer != nil && *openBrowser {
 		if oerr := uiOpenBrowser(url); oerr != nil {
 			fmt.Fprintf(stderr, "corral ui: could not open a browser (%v) — open the URL above yourself\n", oerr)
 		}
 	}
 
 	srv := &http.Server{Addr: *addr, Handler: uiHandlerWith(st, uiLedgerDir(target), writer), ReadHeaderTimeout: 10 * time.Second}
-	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+	if err := uiServe(srv); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		fmt.Fprintln(stderr, "corral ui:", err)
 		return 1
 	}
@@ -226,3 +226,7 @@ func isLoopback(addr string) bool {
 	}
 	return strings.EqualFold(host, "localhost")
 }
+
+// uiServe runs the server. A variable so tests can drive runUI past
+// --print-url without binding a port.
+var uiServe = func(srv *http.Server) error { return srv.ListenAndServe() }

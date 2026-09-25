@@ -843,14 +843,14 @@ Usage of ui:
     	local listen address. Loopback by default ON PURPOSE: the ledger is a map of where a codebase's tests are thinnest (default "127.0.0.1:8787")
   -db corral seal
     	what to read: a ledger directory (the seal, the chain and the reviews) or a warehouse file / md:<db> (the seal only) — default $CORRAL_LEDGER, else ./.corral/ledger, the same resolution corral seal and `corral scans` use
-  -no-open
-    	with --write, print the URL but do not open a browser
+  -open
+    	with --write, also open the URL in a browser. A convenience for a desktop: it hands the URL, token included, to the opener as a command-line argument, which other local processes can read while it runs
   -print-url
     	print the URL and exit without serving (for scripts and smoke tests)
   -repo string
     	with --write, the checkout a finding's reproduction is rechecked against (its HEAD, in a disposable worktree) (default ".")
   -write
-    	let this page WRITE: adjudicate findings and recheck them, by running corral's own subcommands. Loopback only; prints a URL carrying a launch token valid until the server exits — anyone with that URL can write verdicts in your name. Opening the browser puts the URL, token included, on a command line other local processes can read (use --no-open to avoid that). Agents must never start this
+    	let this page WRITE: adjudicate findings and recheck them, by running corral's own subcommands. Loopback only; prints a URL carrying a launch token valid until the server exits — anyone with that URL can write verdicts in your name. The URL is printed, never opened, so the token stays off every process's command line; over SSH, tunnel the same port on both ends (ssh -L 8787:127.0.0.1:8787). Agents must never start this
 ```
 
 ## `corral verify` flags

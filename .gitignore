@@ -4,6 +4,8 @@ build/
 dist/
 # Root-built binaries (go build ./cmd/<x> drops these here)
 /corral
+# go build ./scripts/... drops this one here the same way
+/ledgersite
 /corral-agent
 /corral-observe
 /corral-admin
@@ -80,3 +82,8 @@ docs/superpowers/
 # interrupted run.
 .verify-mutantset-*/
 corral-wrangler
+
+# The rendered ledger record — generated from the corral/ledger branch at
+# site build time by scripts/gen-ledger-site.sh. Derived, never committed: it
+# changes when the LEDGER advances, not when this repo does.
+site/public/ledger/

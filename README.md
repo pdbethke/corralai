@@ -811,10 +811,22 @@ that is a deliberate act, is in
 [`skills/corral/`](skills/corral/SKILL.md) is an
 [Agent Skills](https://agentskills.io) folder that teaches a coding agent to
 use corral the way corral uses a model: read the record, check every claim by
-running something, and leave the verdicts to a person. Copy it to where your
-agent loads skills (for Claude Code, `.claude/skills/corral/` in the repo or
-`~/.claude/skills/corral/`). To let the agent read findings over MCP as well,
-add this to `.mcp.json`:
+running something, and leave the verdicts to a person.
+
+**Claude Code — install it as a plugin.** Two commands, which install the skill
+and wire the findings MCP server together, so there is no `.mcp.json` to edit:
+
+```bash
+claude plugin marketplace add pdbethke/corralai
+claude plugin install corral@corralai
+```
+
+`corral` itself must be on your `PATH`: the plugin runs the CLI you already
+installed, it does not ship one.
+
+**Any other Agent Skills client.** Copy the folder to where your agent loads
+skills (`~/.claude/skills/corral/`, or `.claude/skills/corral/` in the repo).
+To let the agent read findings over MCP as well, add this to `.mcp.json`:
 
 ```json
 { "mcpServers": { "corral": { "command": "corral", "args": ["mcp"] } } }
@@ -833,8 +845,14 @@ The skill teaches four things agents got wrong without it:
 
 **What has been run:** Claude Code 2.1.280 in headless mode (Sonnet 5), against
 a small Python fixture, three repetitions per scenario, before and after the
-skill. It has not yet been run in other Agent Skills clients (Codex, Cursor,
-Gemini CLI, Hermes Agent, OpenClaw), so no support for them is claimed.
+skill. The two install commands above were run on Claude Code 2.1.284 on Linux
+from a clean config directory — the marketplace added from this repository, the
+plugin installed and reported enabled, the inventory showing one skill and one
+MCP server, and `corral mcp` answering `tools/list` over stdio with
+`list_audit_findings` and `get_audit_finding`. They have not been run on macOS
+or Windows, nor in Cowork, and the skill has not yet been run in other Agent
+Skills clients (Codex, Cursor, Gemini CLI, Hermes Agent, OpenClaw), so no
+support for any of those is claimed.
 
 ## Review — a cold model's opinion, linked to reproductions it ran
 

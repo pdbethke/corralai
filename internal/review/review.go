@@ -84,6 +84,23 @@ type Review struct {
 	// a row in models rank is a tool AND a version AND a model.
 	ReviewerTool string `json:"reviewer_tool,omitempty"`
 	VerifierTool string `json:"verifier_tool,omitempty"`
+	// ReviewerModelResolved / VerifierModelResolved report whether the model
+	// field beside them names an actual MODEL, or merely the tool that ran
+	// one. An agentic seat given without a pin ("claude-code", "antigravity")
+	// records the AGENT in the model field — which is correct for the
+	// decorrelation rule, because that rule compares seats, and wrong as a
+	// model: nothing downstream can say whether Sonnet or Opus answered.
+	//
+	// Any per-model comparison MUST filter on these. A tool name sitting in
+	// a model column is a could-not-measure, and without this field it reads
+	// as a measurement — the defect this repository keeps rediscovering.
+	//
+	// Absent on every entry written before these fields existed, which reads
+	// as false: unresolved. That is the safe default and it is why the field
+	// is stated positively. Entries are hashed over their bytes on disk (see
+	// auditpush.EntryHash), so adding them does not disturb an older hash.
+	ReviewerModelResolved bool `json:"reviewer_model_resolved,omitempty"`
+	VerifierModelResolved bool `json:"verifier_model_resolved,omitempty"`
 	// Lang is the language most of the shown files are in, "" when mixed
 	// or unknown: the row's language dimension in `models rank`.
 	Lang string `json:"lang,omitempty"`

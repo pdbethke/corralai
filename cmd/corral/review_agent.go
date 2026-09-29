@@ -94,6 +94,22 @@ func seatModelOf(spec string) string {
 	return strings.TrimSpace(spec)
 }
 
+// seatNamesAModel reports whether spec identifies an actual MODEL, or only
+// the tool that ran one. An API seat is its own model name. An agentic seat
+// is one only when pinned (`agent:model`); unpinned, the CLI chooses its own
+// model and corral is not told which, so the record must not claim to know.
+//
+// This is deliberately NOT seatModelOf's question. That one asks "what does
+// the decorrelation rule compare", and answering "the agent" is right there —
+// two unpinned claude-code seats ARE correlated. This one asks "may a
+// per-model analysis use this row", where the same answer is a no.
+func seatNamesAModel(spec string) bool {
+	if _, model, ok := agentSeat(spec); ok {
+		return model != ""
+	}
+	return strings.TrimSpace(spec) != ""
+}
+
 // agentBackend runs the agent's command once per Chat.
 type agentBackend struct {
 	name, model, dir string

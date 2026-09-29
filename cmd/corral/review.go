@@ -220,10 +220,28 @@ func runReviewRun(args []string, stdout, stderr io.Writer) int {
 	if verifierBackend != nil {
 		fmt.Fprintf(stdout, "  verifier: %s%s (adversarial to the reviewer; a different model by rule)\n", *verifier, toolNote(verifierTool))
 	}
+	// Say it NOW, not when someone queries the record months later and finds
+	// a tool name where a model belongs. An unpinned agentic seat lets the
+	// CLI pick its own model and never tells us which, so the row cannot
+	// carry a per-model comparison — and that is unrecoverable afterwards.
+	var unpinned []string
+	if !seatNamesAModel(*model) {
+		unpinned = append(unpinned, "--reviewer-model "+*model)
+	}
+	if verifierBackend != nil && !seatNamesAModel(*verifier) {
+		unpinned = append(unpinned, "--verifier-model "+*verifier)
+	}
+	if len(unpinned) > 0 {
+		fmt.Fprintf(stdout, "  note: %s name(s) a TOOL, not a model — the CLI picks its own and does not report it,\n"+
+			"        so this entry is recorded model-unresolved and cannot feed a per-model comparison.\n"+
+			"        Pin it (%s:<model>) if this round is meant to be data.\n",
+			strings.Join(unpinned, " and "), strings.SplitN(*model, ":", 2)[0])
+	}
 
 	r := review.Review{Repo: repoName, Commit: commit, Author: party.Author, Committer: party.Committer, CoAuthors: party.CoAuthors,
 		Scope: *scope, ReviewerModel: *model, ReviewerTool: reviewerTool, Lang: langOfScope(allFiles),
-		Substrate: "workspace (a detached worktree at the commit; not a jail)", StartedAt: time.Now().UTC(),
+		ReviewerModelResolved: seatNamesAModel(*model),
+		Substrate:             "workspace (a detached worktree at the commit; not a jail)", StartedAt: time.Now().UTC(),
 		FilesShown: sc.Files, BytesShown: sc.Bytes, Truncated: sc.Truncated}
 	userTurn := review.Brief(repoName, commit, *scope, sc)
 	if reviewerIsAgent {
@@ -285,6 +303,7 @@ func runReviewRun(args []string, stdout, stderr io.Writer) int {
 				fmt.Fprintf(stderr, "corral review: the verifier %s returned no verdict on any of %d finding(s) — the review is recorded with its reply, unverified\n", *verifier, len(r.Findings))
 			}
 			r.VerifierTool = verifierTool
+			r.VerifierModelResolved = seatNamesAModel(*verifier)
 			review.Verify(context.Background(), rep, &r, *verifier, vopinion, refs)
 		}
 	}

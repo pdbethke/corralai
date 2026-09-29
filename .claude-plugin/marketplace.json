@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-marketplace.json",
+  "name": "corralai",
+  "description": "corral: prove your tests would catch it. An auditing engine that plants faults in your code, runs your own test suite against each one in a sandbox, and records what the tests missed.",
+  "owner": {
+    "name": "Peter D. Bethke",
+    "url": "https://corralai.dev"
+  },
+  "plugins": [
+    {
+      "name": "corral",
+      "displayName": "corral",
+      "source": "./skills/corral",
+      "description": "Teaches your agent to run corral audits, read corral's findings over MCP, check every claim by running something, and leave the verdicts to a person. Needs the corral CLI on PATH.",
+      "author": {
+        "name": "Peter D. Bethke",
+        "url": "https://corralai.dev"
+      },
+      "homepage": "https://corralai.dev",
+      "repository": "https://github.com/pdbethke/corralai",
+      "license": "Elastic-2.0",
+      "category": "testing",
+      "keywords": ["testing", "mutation-testing", "test-quality", "code-review", "auditing", "mcp"],
+      "mcpServers": {
+        "corral": {
+          "command": "corral",
+          "args": ["mcp"]
+        }
+      }
+    }
+  ]
+}

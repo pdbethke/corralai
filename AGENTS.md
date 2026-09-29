@@ -186,6 +186,18 @@ claim. We run Claude; we do not make anyone else.
 when on. It used to default to a Claude model and be on, which quietly kept an
 Anthropic seat alive through an otherwise all-Gemini run.
 
+**`review` can run on a SUBSCRIPTION; `certify` cannot.** `cmd/corral/review_agent.go`
+drives agentic CLIs as seats — `claude-code`, `codex`, `antigravity` — in
+`agent:model` form (`--reviewer-model codex:gpt-6-astra`, or a bare `codex` for
+the tool's default model). Those bring their own auth, so a review round costs
+nothing per token on a Pro/Max/Plus plan. `certify --local` / `--repo` resolve
+seats through `internal/agentbackend` instead, which knows only **anthropic,
+openai, gemini, ollama, openrouter** — all key-based. So "run it on the
+subscription we already pay for" is true of `review` and NOT of `certify`, and
+the README's Pro/Max line is about the (frozen) brain's harness. `ollama` is
+`MODEL_BACKEND`'s default and is local and free, which is the zero-cost way to
+run `certify` seats.
+
 **A key alone does not move providers.** Each role resolves its own backend from
 its own model name; a Gemini model name with only an Anthropic key configured is
 a 404 from Anthropic, not a Gemini call. Set the role models *and* the matching
@@ -328,7 +340,23 @@ standard.
 - `internal/lang/` — language plugins
 - `site/` — the Astro/Starlight site (`npm run build` in `site/`)
 - `docs/corral/` — the public knowledge corpus that ships to users
-- `scripts/` — the gates; read the header comment before changing one
+- `scripts/` — the gates; read the header comment before changing one. Internal
+  build tooling goes here and **never in `cmd/`**: `scripts/gen-cli-docs.sh`
+  derives its binary list from `cmd/*/` and publishes a public CLI reference page
+  for each, so a tool placed there ships a doc page for something no user runs.
+- **`corral/ledger` — a BRANCH, not a directory.** The record is not in the
+  worktree: it is 100+ signed, hash-linked, gzipped JSON entries under `scans/`
+  on its own branch. Read it without disturbing your checkout:
+  `git fetch origin corral/ledger && git archive origin/corral/ledger | tar -x -C <tmp>`.
+  Every rule about what the record MEANS lives in `internal/auditpush` —
+  `VerifyLedgerDir` (chain + signatures), `Adjudications`, `Retracted`,
+  `LiveEntries`, `ReadLedgerEntry`. Do not re-derive any of them; `ReadLedgerDir`
+  returns an unexported type, so walk `scans/*.json.gz` yourself and parse each
+  with `ReadLedgerEntry`.
+- `scripts/ledgersite/` + `scripts/gen-ledger-site.sh` — renders that branch as
+  the public record page into `site/public/ledger/` (gitignored; generated at
+  site-deploy time). Needs **only Go and git** — no key, no jail, no bwrap — so it
+  runs in the container environments where corral itself cannot start.
 - `private/` — **gitignored, never committed.** Machine-specific operator notes for
   whoever's box you're on (host setup, local GPU/model plans). This repo is public;
   nothing host-specific goes in a tracked path. If `private/local-gpu-plan.md` exists,

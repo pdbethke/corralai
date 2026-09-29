@@ -97,6 +97,16 @@ jobs:
         # never gets out of the gate.
         working-directory: site
         run: npx playwright install --with-deps chromium
+      - name: Render the ledger record
+        # The record lives on its own branch, which the checkout above does not
+        # fetch, so pull it explicitly and render it into site/public/ledger
+        # (copied verbatim into dist by Astro). Deliberately NOT guarded with
+        # `|| true`: a site that quietly ships without the record looks
+        # identical to one whose record is empty, and this project's whole
+        # argument is that those two must never render the same.
+        run: |
+          git fetch --depth=1 origin corral/ledger
+          bash scripts/gen-ledger-site.sh
       - name: Build + smoke-test the site
         working-directory: site
         run: npm run test:e2e

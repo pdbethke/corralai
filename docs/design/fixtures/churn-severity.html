@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Churn severity</title>
+<style>
+:root{
+  color-scheme: light;
+  --surface-1:#fcfcfb; --text-primary:#0b0b0b; --text-secondary:#52514e; --text-muted:#78766f;
+  --series-1:#eb6834;  /* introduced by the fix */
+  --series-2:#2a78d6;  /* already present */
+  --grid:#e6e4dd;
+}
+@media (prefers-color-scheme:dark){:root:where(:not([data-theme="light"])){
+  color-scheme: dark;
+  --surface-1:#1a1a19; --text-primary:#fff; --text-secondary:#c3c2b7; --text-muted:#9c988c;
+  --series-1:#d95926; --series-2:#3987e5; --grid:#302e27;
+}}
+:root[data-theme="dark"]{
+  color-scheme: dark;
+  --surface-1:#1a1a19; --text-primary:#fff; --text-secondary:#c3c2b7; --text-muted:#9c988c;
+  --series-1:#d95926; --series-2:#3987e5; --grid:#302e27;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--surface-1,#fcfcfb)}
+.viz-root{background:var(--surface-1);padding:38px 44px 30px;max-width:940px;margin:0 auto;
+  font:15px/1.5 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:var(--text-primary)}
+h1{font-size:1.6rem;line-height:1.25;margin:0 0 6px;letter-spacing:-.01em}
+.sub{color:var(--text-secondary);margin:0 0 26px;font-size:.98rem;max-width:78ch}
+.legend{display:flex;gap:20px;margin:0 0 22px;font-size:.9rem;color:var(--text-secondary)}
+.key{display:flex;align-items:center;gap:8px}
+.swatch{width:12px;height:12px;border-radius:3px;flex:none}
+.rows{display:grid;gap:20px}
+.row{display:grid;grid-template-columns:74px 1fr;align-items:center;gap:16px}
+.sev{text-align:right;font-size:.95rem;color:var(--text-secondary);font-variant-numeric:tabular-nums}
+.pair{display:grid;gap:2px}           /* 2px surface gap between adjacent bars */
+.track{position:relative;height:22px}
+.bar{height:22px;border-radius:0 4px 4px 0;min-width:2px}  /* 4px rounded data-end */
+.zero{height:22px;display:flex;align-items:center}
+.val{position:absolute;top:0;height:22px;display:flex;align-items:center;
+  padding-left:9px;font-size:.88rem;color:var(--text-secondary);font-variant-numeric:tabular-nums}
+.axis{display:grid;grid-template-columns:74px 1fr;gap:16px;margin-top:18px}
+.ticks{position:relative;height:18px;border-top:1px solid var(--grid)}
+.tick{position:absolute;top:4px;transform:translateX(-50%);font-size:.78rem;color:var(--text-muted);
+  font-variant-numeric:tabular-nums}
+.note{margin:24px 0 0;font-size:.82rem;color:var(--text-muted);max-width:92ch;line-height:1.55}
+</style></head>
+<body><div class="viz-root">
+
+<h1>The defects the fix introduced skewed severe</h1>
+<p class="sub">Round three of a cross-vendor adversarial review of corral's own code. Every finding
+carries a script that exits&nbsp;0 only if the defect reproduces, and the tool ran it.</p>
+
+<div class="legend">
+  <span class="key"><span class="swatch" style="background:var(--series-1)"></span>Introduced by round two's fix — 5</span>
+  <span class="key"><span class="swatch" style="background:var(--series-2)"></span>Already present — 8</span>
+</div>
+
+<div class="rows">
+  <div class="row"><div class="sev">High</div><div class="pair">
+    <div class="track"><div class="bar" style="width:60%;background:var(--series-1)"></div><span class="val" style="left:60%">3</span></div>
+    <div class="track"><div class="bar" style="width:20%;background:var(--series-2)"></div><span class="val" style="left:20%">1</span></div>
+  </div></div>
+  <div class="row"><div class="sev">Medium</div><div class="pair">
+    <div class="track"><div class="bar" style="width:40%;background:var(--series-1)"></div><span class="val" style="left:40%">2</span></div>
+    <div class="track"><div class="bar" style="width:40%;background:var(--series-2)"></div><span class="val" style="left:40%">2</span></div>
+  </div></div>
+  <div class="row"><div class="sev">Low</div><div class="pair">
+    <div class="track"><div class="zero"></div><span class="val" style="left:0">0</span></div>
+    <div class="track"><div class="bar" style="width:100%;background:var(--series-2)"></div><span class="val" style="left:100%">5</span></div>
+  </div></div>
+</div>
+
+<div class="axis"><div></div><div class="ticks">
+  <span class="tick" style="left:0">0</span>
+  <span class="tick" style="left:20%">1</span>
+  <span class="tick" style="left:40%">2</span>
+  <span class="tick" style="left:60%">3</span>
+  <span class="tick" style="left:80%">4</span>
+  <span class="tick" style="left:100%">5</span>
+</div></div>
+
+<p class="note"><strong>Read it as a shape, not a statistic.</strong> 13 findings in one round on one
+codebase — directional, not definitive. The five self-inflicted defects were 3&nbsp;high and 2&nbsp;medium
+with no lows; the eight pre-existing ones were 1&nbsp;high, 2&nbsp;medium and 5&nbsp;low. The fix traded
+mild defects for severe ones. Counts are raw, never percentages, because a percentage of five would
+flatter it.</p>
+
+</div></body></html>

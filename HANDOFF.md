@@ -1,10 +1,126 @@
-# Handoff — 2026-09-30
+# Handoff — 2026-10-01 (supersedes 2026-09-30, kept below)
 
 Working note from a long session. Snapshot of what landed, what was *measured*,
 what I got *wrong*, and what is actually blocking. Not a permanent doc — delete
 or fold into the design docs freely.
 
-Base: `main` @ `08f9d1f`.
+Base: `main` @ `08f9d1f`. Open: PR #354.
+
+## Pick up on your own machine (Warp)
+
+Everything below is pushed. Nothing lives only in the cloud container.
+
+```bash
+cd ~/PycharmProjects/corralai
+git fetch origin
+git checkout docs/handoff-2026-09-30          # this note
+git log --oneline origin/docs/lead-with-the-refusal -1   # PR #354, in flight
+```
+
+To keep working with an agent there, run `claude remote-control` in that folder
+(or use the Claude Desktop app); the session then shows up in the Claude Code
+app. A fresh session should read this file first.
+
+**What your machine can do that the cloud container could not** — each of
+these was blocked here, and each one gates a decision below:
+
+| blocked in the container | why it matters |
+|---|---|
+| `docs.warp.dev`, `www.warp.dev` (egress policy) | verify the two Oz claims below before saying anything public about Warp |
+| bwrap / a docker daemon | run `certify` end to end; the container could only prove `review` *starts* |
+| `claude` / `codex` CLIs | run a whole `corral review` round, not just to the seat boundary |
+| Chromium 1228 (container had 1194) | the site's Playwright ran here only via an uncommitted config override |
+
+## Since 2026-09-30
+
+### Positioning — PR #354, open
+
+**"Everyone is building build harnesses. Corral is the one that refuses to
+build."** Stated precisely, because a reader will push back in one reply:
+corral **never authors the code it judges** — the faults it plants are probes,
+discarded once scored; the tests it writes are evidence, each proven against
+its own fault and **handed back** (not thrown away).
+
+#354 puts that in the README H1 and first paragraph, the page `<title>` and
+meta description, and the hero `<h1>`. **It reverses a test-pinned decision**
+(`'the hero leads with the house question'`): the house question is demoted to
+open the hero's lead, not deleted, and the one pin becomes two so neither line
+can drift. Full e2e: **76 passed, 2 skipped, 0 failed** (the skips are
+pre-existing conditional ones in `recordings.spec.ts`).
+
+The thinking that produced the line, briefly: corral is an **auditor**, not an
+evaluator; its sharpest buyer question is already in `fix-eval.md` — *"which
+model should be allowed to touch THIS code"*; vendors could use it for
+version-over-version regression and as **verifiable rewards** (an oracle that
+exits 0 iff the defect is present is a reward function), at the cost that
+data trained on stops being clean evaluation data.
+
+### Seat selection — took over the parallel session; DECISION PENDING
+
+That session designed Thompson-sampling and Fugu-style-judge seat selection. It
+pushed nothing. Picking it up turned up a prior decision it had missed:
+
+- **`model-ranking.md`: "Disclosure, never selection."** Born of a production
+  incident: *performance statistics overrode the configured model list and
+  re-selected a retired model, permanently … the routing was "earned", which is
+  precisely why nobody looked at it.*
+- **The brain already re-seats verdict roles** (`advpool.go:352`) — greedy,
+  fenced by the herd allowlist and an evidence floor.
+
+Verified in code: the **shadow seat never gates** (`driver.go:179`); shadow
+rows are flagged (`bugcatch_observations.shadow`); the **local scorecard
+records no language** (no `lang` column — `model-ranking.md` says so too).
+
+Proposal: **(a) Thompson in the shadow seat only.** Verdict seats stay
+operator-named; the judge *proposes* a lineup, per run, reusing
+`internal/mission/routing.go`'s `Sense → Judge → Clamp`. The shadow seat is the
+randomized comparison arm that has to exist from day one, and it already
+exists. Thompson also addresses the incident's mechanism — greedy routing that
+never re-tests an early winner.
+Alternative **(b)**: also replace the brain's greedy verdict re-seater with
+Thompson, every fence kept. Touches verdict seats, so it needs an explicit call.
+
+**Not yet written as a design doc** — waiting on (a) vs (b). Slice one either
+way: add `lang` to `bugcatch_observations`.
+
+### Warp / Oz
+
+Oz is Warp's cloud orchestration for coding agents (Claude Code, Codex, Warp
+Agent), triggered from webhooks, cron, Slack or CI. A build harness. `oz-for-oss`
+describes agents that triage, spec, open PRs and *review* PRs — review as an
+agent's opinion — and **no verification of output correctness**: no tests run
+against agent output, no regression detection, no measured comparison, no
+tamper-evident record. "Auditable" appears to mean observability.
+
+The angle: corral is the **step after** Oz, not a competitor — Oz builds, corral
+judges, and Oz drives the same CLIs corral's `review` already seats.
+**Unverified** (docs blocked here): whether the Oz control plane itself is open
+source, or only the client and `oz-for-oss`; and whether "auditable" includes
+any verification step. Check both before relying on either.
+
+### A lesson worth keeping
+
+The site's first e2e run reported **26 failed** — every one a browser that
+could not launch (version mismatch), so the new pins had not run at all. A
+summary that says "2 passed" is not a pass. Read the full counts.
+
+## Blocking, in order
+
+1. **Post the churn finding.** Still not done; still needs no build.
+2. **Correct PR #350's body** — `corral doctor` exits 1 correctly; my claim it
+   exits 0 was `$?` read after a pipe.
+3. **Merge or revise #354.**
+4. **Decide seat selection (a) or (b)**, then add `lang` to the scorecard.
+5. **The write-capable seat** (#340) — the only missing fix-eval component.
+6. **Verify the Oz claims** from your machine.
+7. **Publish the ledger's public key.**
+8. 2 dependabot alerts on `main` (1 high, 1 moderate).
+
+---
+
+# Handoff — 2026-09-30
+
+Base at the time: `main` @ `08f9d1f`.
 
 ## Merged this session
 

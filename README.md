@@ -1,9 +1,11 @@
-# Corral — prove your tests would catch it
+# Corral — the harness that refuses to build
 
 [![CI](https://github.com/pdbethke/corralai/actions/workflows/deploy.yml/badge.svg?branch=main)](https://github.com/pdbethke/corralai/actions/workflows/deploy.yml)
 [![License: Elastic 2.0](https://img.shields.io/badge/license-Elastic--2.0-e8a838)](LICENSE)
 [![docs](https://img.shields.io/badge/docs-corralai.dev-2f6f4e)](https://corralai.dev/docs/getting-started/)
 [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/pdbethke/corralai/badge)](https://securityscorecards.dev/viewer/?uri=github.com/pdbethke/corralai)
+
+**Everyone is building build harnesses. Corral is the one that refuses to build.** It never authors the code it judges: the faults it plants are probes, discarded once scored, and the tests it writes are evidence — each proven against its own fault and handed back to you.
 
 **Corral is an auditing engine.** It judges code it did not write — by execution and by adversary — onto a record nobody can edit. Accountability, paper trail, analysis, certification: everything but building. Two extensions carry the engine's rule into practice:
 

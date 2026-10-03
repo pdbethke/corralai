@@ -35,9 +35,21 @@ test('the same-model comic opens the hero', async ({ page }) => {
   await expect(comic).toHaveAttribute('alt', /same frontier model/);
 });
 
-test('the hero leads with the house question', async ({ page }) => {
+// The hero LEADS with the refusal: corral is the harness that does not build.
+// This replaced the house question as the h1 on 2026-10-01, a deliberate
+// repositioning rather than a copy tweak, so it is pinned the same way the
+// house question was — an h1 that drifts by accident is the failure this guards.
+test('the hero leads with the refusal', async ({ page }) => {
   await page.goto('/');
-  await expect(page.locator('#hero h1')).toContainText('Would you trust your house');
+  await expect(page.locator('#hero h1')).toContainText('Corral is the one that refuses to build');
+});
+
+// The house question was demoted from the h1, not deleted: it is the same
+// argument (no one may be judge in their own cause) made concrete, and it now
+// opens the lead. Pinned so a later edit cannot quietly drop it.
+test('the hero keeps the house question in the lead', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.locator('#hero p.lead')).toContainText('Would you trust your house');
 });
 
 // Pin: the hero's default recording is now corral-audits-corral (corral

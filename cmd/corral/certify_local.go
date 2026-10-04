@@ -31,6 +31,7 @@ import (
 	"github.com/pdbethke/corralai/internal/repoindex"
 	"github.com/pdbethke/corralai/internal/reposcan"
 	"github.com/pdbethke/corralai/internal/sandbox"
+	"github.com/pdbethke/corralai/internal/shadowpool"
 )
 
 // THERE ARE NO DEFAULT MODELS. Not here, not anywhere on the audit path.
@@ -136,6 +137,26 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 	writerMode, wmErr := advpool.ResolveWriterMode(*writerModeFlag)
 	if wmErr != nil {
 		fmt.Fprintf(stderr, "%s: %v\n", "corral certify --local", wmErr)
+		return 2
+	}
+
+	// The shadow draw happens HERE, before the registry resolves any seat, so
+	// the drawn member — as typed — is resolved exactly like a named one.
+	drawLang := strings.TrimSpace(*langFlag)
+	if drawLang == "" {
+		if p, ok := lang.Detect(*codePath); ok {
+			drawLang = p.Name()
+		}
+	}
+	if drawLang == "" && (strings.TrimSpace(*shadow.pool) != "" || strings.TrimSpace(*shadow.writerPool) != "") {
+		fmt.Fprintln(stderr, "corral certify --local: a shadow pool reads history for --code's language, and it cannot be detected — pass --lang")
+		return 2
+	}
+	shadowSels, drawErr := drawShadowSeats("corral certify --local", *repoDirFlag, drawLang, shadow,
+		map[string]string{advpool.RoleMutantGenerator: *mutantModel, advpool.RoleTestWriter: *writerModel},
+		localBugCatchDBPath(), stderr)
+	if drawErr != nil {
+		fmt.Fprintf(stderr, "corral certify --local: %v\n", drawErr)
 		return 2
 	}
 
@@ -317,6 +338,7 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 		writerModel: *writerModel, criticModel: *criticModel,
 		mutantModel: *mutantModel, shadowModel: *shadow.model,
 		shadowWriterModel: *shadow.writerModel,
+		shadowSelection:   shadowSels,
 		seatProviders:     seatReg.seatProviders(),
 		writerMode:        writerMode,
 
@@ -420,6 +442,11 @@ type localAuditInput struct {
 	// Role models. Empty means this file's stock default.
 	writerModel, criticModel, mutantModel, shadowModel string
 	shadowWriterModel                                  string
+
+	// shadowSelection is the pool draw that filled a challenger seat (empty
+	// when every challenger was named or off), carried onto the RunSpec so the
+	// verdict and the signed record say which member ran and why.
+	shadowSelection []shadowpool.Selection
 
 	// seatProviders is role -> provider for the seats the model registry
 	// resolved (and, for a concrete model name, the provider inferred from it).
@@ -1314,6 +1341,7 @@ func newAuditRunSpec(in localAuditInput, roles auditRoles, subj runSubject) advp
 		// recorded is also a seat the driver can actually run.
 		ShadowModel:       roles.shadow,
 		ShadowWriterModel: roles.shadowWriter,
+		ShadowSelection:   in.shadowSelection,
 		// HOW the writer attacks. The CLI's default is per-survivor; an
 		// EMPTY value here means batched, which is what a caller outside the
 		// CLI (the brain, a test) gets — see RunSpec.WriterMode.

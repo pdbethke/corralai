@@ -74,7 +74,10 @@ corral certify --local --record-stream	unexecuted
 corral certify --local --repo	executed	test:cmd/corral/certify_repo_writer_mode_test.go
 corral certify --local --repo-dir	executed	test:cmd/corral/certify_local_test.go
 corral certify --local --shadow-model	executed	test:cmd/corral/action_test.go
+corral certify --local --shadow-pool	executed	test:cmd/corral/shadow_draw_test.go (TestEveryDoorDrawsFromItsPoolFlags: the flag reaches the draw and the draw is printed)
+corral certify --local --shadow-seed	executed	test:cmd/corral/shadow_draw_test.go (TestEveryDoorDrawsFromItsPoolFlags: the printed seed is the one passed)
 corral certify --local --shadow-writer-model	executed	test:cmd/corral/certify_local_runspec_test.go (TestResolvedChallengerModelsReachTheRunSpec: the flag reaches RunSpec.ShadowWriterModel and the shadow-writer role assignment)
+corral certify --local --shadow-writer-pool	executed	test:cmd/corral/shadow_draw_test.go (TestEveryDoorDrawsFromItsPoolFlags)
 corral certify --local --swarm	executed	test:cmd/corral/certify_local_test.go (TestRunReadyTasks_ConcurrentAndBounded: N tasks at swarm B never exceed B, each runs once)
 corral certify --local --test	executed	test:cmd/corral/certify_adversarial_test.go
 corral certify --local --test-timeout	executed	test:cmd/corral/certify_local_test.go (TestTestTimeoutReachesTheScorer: the value reaches JailScorer.MutantTimeout, and 0 passes through so the scorer derives the cap)
@@ -108,7 +111,10 @@ corral certify --repo --record-mutants	executed	test:cmd/corral/certify_mutants_
 corral certify --repo --repo	executed	test:cmd/corral/certify_repo_writer_mode_test.go
 corral certify --repo --scope-tests	executed	test:cmd/corral/certify_repo_selection_test.go
 corral certify --repo --shadow-model	executed	test:cmd/corral/action_test.go
+corral certify --repo --shadow-pool	executed	test:cmd/corral/shadow_draw_test.go (TestEveryDoorDrawsFromItsPoolFlags)
+corral certify --repo --shadow-seed	executed	test:cmd/corral/shadow_draw_test.go (TestEveryDoorDrawsFromItsPoolFlags)
 corral certify --repo --shadow-writer-model	executed	test:cmd/corral/certify_local_runspec_test.go (TestResolvedChallengerModelsReachTheRunSpec: the flag reaches RunSpec.ShadowWriterModel and the shadow-writer role assignment)
+corral certify --repo --shadow-writer-pool	executed	test:cmd/corral/shadow_draw_test.go (TestEveryDoorDrawsFromItsPoolFlags)
 corral certify --repo --substrate	executed	run:2026-09-02 md:corral_public scans 22-26 (workspace)
 corral certify --repo --swarm	executed	test:cmd/corral/certify_repo_swarm_test.go + certify_repo_mutantconc_test.go (workers x per-file <= budget, swept)
 corral certify --repo --tests	executed	test:cmd/corral/certify_repo_test.go
@@ -137,6 +143,10 @@ corral doctor --repo	executed	test:cmd/corral/doctor_test.go
 corral doctor --shadow-model	executed	test:cmd/corral/doctor_test.go
 corral doctor --jail	executed	test:cmd/corral/jail_test.go
 corral doctor --mutant-model	executed	test:cmd/corral/certify_repo_writer_mode_test.go
+corral doctor --shadow-pool	executed	test:cmd/corral/shadow_draw_test.go (TestDoctorValidatesShadowPools)
+corral doctor --shadow-seed	executed	test:cmd/corral/shadow_draw_test.go (TestDoctorValidatesShadowPools: parsed and refused without a pool, never drawn)
+corral doctor --shadow-writer-model	executed	test:cmd/corral/shadow_draw_test.go (TestDoctorValidatesShadowPools: parsed at the door; its credential check is TestDoctorChecksTheChallengerWriterSeat)
+corral doctor --shadow-writer-pool	executed	test:cmd/corral/shadow_draw_test.go (TestDoctorValidatesShadowPools)
 corral doctor --test	executed	test:cmd/corral/certify_adversarial_test.go
 corral doctor --writer-model	executed	test:cmd/corral/certify_repo_writer_mode_test.go
 corral eval --brain	executed	test:cmd/corral/certify_adversarial_test.go

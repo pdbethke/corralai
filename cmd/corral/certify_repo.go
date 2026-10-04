@@ -34,6 +34,7 @@ import (
 	"github.com/pdbethke/corralai/internal/reposcan"
 	"github.com/pdbethke/corralai/internal/sandbox"
 	"github.com/pdbethke/corralai/internal/scanstore"
+	"github.com/pdbethke/corralai/internal/shadowpool"
 )
 
 // defaultScanTop bounds a scan by default. Provisional: large enough to be
@@ -117,6 +118,18 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	writerMode, wmErr := advpool.ResolveWriterMode(*writerModeFlag)
 	if wmErr != nil {
 		fmt.Fprintf(stderr, "%s: %v\n", "corral certify --repo", wmErr)
+		return 2
+	}
+
+	// The shadow draw happens HERE, before the registry resolves any seat, so
+	// the drawn member — as typed — is resolved exactly like a named one. A
+	// scan spans languages and draws ONCE for all of them, so it reads the
+	// scorecard's record across every language.
+	shadowSels, drawErr := drawShadowSeats("corral certify --repo", *repoDir, shadowpool.LangAny, shadow,
+		map[string]string{advpool.RoleMutantGenerator: *mutantModelFlag, advpool.RoleTestWriter: *writerModelFlag},
+		localBugCatchDBPath(), stderr)
+	if drawErr != nil {
+		fmt.Fprintf(stderr, "corral certify --repo: %v\n", drawErr)
 		return 2
 	}
 
@@ -632,7 +645,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		ex.models = auditModels{
 			writer: *writerModelFlag, mutant: *mutantModelFlag,
 			critic: *criticModelFlag, shadow: *shadow.model,
-			shadowWriter: *shadow.writerModel,
+			shadowWriter: *shadow.writerModel, shadowSelection: shadowSels,
 		}
 		// Deferred, not called at the end: a panic mid-scan must still release
 		// the staging dirs the shared seeds created. Deferred here so it also
@@ -4074,7 +4087,13 @@ func resolveMutantConcurrency(budget int, substrate string, workers, jobs int) i
 // Every field is empty unless the operator passed the flag; empty means
 // "apply auditRoles' own default", so a scan that names none is byte-identical
 // to before.
-type auditModels struct{ writer, mutant, critic, shadow, shadowWriter string }
+type auditModels struct {
+	writer, mutant, critic, shadow, shadowWriter string
+	// shadowSelection is the scan's ONE pool draw (empty when every
+	// challenger was named or off), carried into every file's RunSpec so each
+	// verdict says which member ran and why.
+	shadowSelection []shadowpool.Selection
+}
 
 type localExecutor struct {
 	// models are the per-role overrides threaded into every job's
@@ -4429,6 +4448,7 @@ func (l *localExecutor) auditInputFor(j reposcan.Job) localAuditInput {
 		criticModel:       l.models.critic,
 		shadowModel:       l.models.shadow,
 		shadowWriterModel: l.models.shadowWriter,
+		shadowSelection:   l.models.shadowSelection,
 		writerMode:        l.writerMode,
 
 		// A nil entry is an ordinary generated run — see localExecutor.presetMutants.

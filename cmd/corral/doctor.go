@@ -62,6 +62,13 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
+	// Every member of every challenger pool, checked exactly as certify checks
+	// it before its draw — but never drawn: doctor answers "would this run
+	// work", and a pool works only if EVERY member could be the one drawn.
+	// Run before the registry resolves the seats, as certify runs it.
+	poolNamed := strings.TrimSpace(*shadow.pool) != "" || strings.TrimSpace(*shadow.writerPool) != ""
+	poolErr := validateShadowPools("corral doctor", *repoDir, shadow, nil, stderr)
+
 	// The model registry, resolved exactly as certify resolves it — doctor
 	// exists to answer "would this run work", and it can only answer that
 	// about the CONCRETE model a seat would really use. Its refusals are the
@@ -77,6 +84,14 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 	cmd := fs.Args()
 
 	var results []checkResult
+	// First, not beside the herd: it reads no sandbox, so the sandbox's fatal
+	// failure must not hide it — a pool with a bad member is a refusal at
+	// certify's door whatever the host can run.
+	if poolErr != nil {
+		results = append(results, checkResult{name: "shadow pool", detail: poolErr.Error()})
+	} else if poolNamed {
+		results = append(results, checkResult{name: "shadow pool", ok: true})
+	}
 	iso, isoErr := sandbox.Resolve(sandbox.Config{Backend: strings.TrimSpace(*backend)})
 	results = append(results, checkSandbox(iso, isoErr))
 

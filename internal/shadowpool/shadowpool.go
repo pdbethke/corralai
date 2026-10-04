@@ -13,6 +13,7 @@ package shadowpool
 
 import (
 	"fmt"
+	"hash/fnv"
 	"math"
 	"math/rand/v2"
 	"strconv"
@@ -77,7 +78,7 @@ func ParsePool(flagName, value string) ([]string, error) {
 // largest sample; ties go to the earlier candidate. history is keyed by
 // CONCRETE model name, because that is what the scorecard records.
 func Draw(role, lang string, cands []Candidate, history map[string]Counts, historyRead bool, rows int, seed uint64) Selection {
-	rng := rand.New(rand.NewPCG(seed, seed^0x9e3779b97f4a7c15)) // #nosec G404 -- not security: a reproducible draw from a recorded seed
+	rng := rand.New(rand.NewPCG(seed, seed^roleStream(role))) // #nosec G404 -- not security: a reproducible draw from a recorded seed
 	sel := Selection{Role: role, Lang: lang, Seed: FormatSeed(seed), History: HistoryNotRead}
 	if historyRead {
 		sel.History, sel.HistoryRows = HistoryRead, rows
@@ -108,6 +109,17 @@ func Draw(role, lang string, cands []Candidate, history map[string]Counts, histo
 		sel.Members = append(sel.Members, m)
 	}
 	return sel
+}
+
+// roleStream mixes the role into the RNG stream. A run records ONE seed and
+// draws every shadow seat from it; seeded from the seed alone, two seats
+// with equal priors and equal-size pools consumed the same stream and chose
+// the same index every run. The role is in the record beside the seed, so
+// replay stays exact.
+func roleStream(role string) uint64 {
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(role))
+	return h.Sum64()
 }
 
 // Drawn returns the selection for role, if that seat was drawn.

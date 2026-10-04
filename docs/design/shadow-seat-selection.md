@@ -211,13 +211,19 @@ challenger drawn from a pool of 3: gemini-3.6-flash (α=12 β=31, sampled 0.29) 
   every member on the flat prior, and the record says **`history: not
   read`**. This is a could-not-measure, and it is labelled as one: it must
   never render as members with zero evidence.
-- **If the store opens but holds no rows for this language,** the record
-  says `history: 0 rows for <lang>`. That is a measured zero, and it is
-  reported as one.
+- **If the store opens but holds no rows about the pool's members for this
+  language,** the record says `history: 0 rows for <lang>`. That is a
+  measured zero, and it is reported as one. The count is rows about the
+  MEMBERS only: the seat's roles also hold the primary's record, which is not
+  evidence behind this draw. (It counted every model's rows until the final
+  branch review, 2026-10-04, so two never-run members could read "214 rows".)
 
 **The seed** comes from `crypto/rand` and is recorded. A `--shadow-seed`
 flag accepts it back, so a reviewer can reproduce the exact draw from the
-record. It is an ordinary documented flag, because the CLI reference is
+record. One run records one seed for both seats, and each seat's stream
+mixes in its role, so the generator and writer draws are not coupled — with
+the seed alone, two seats with equal priors and equal-size pools picked the
+same index every run. It is an ordinary documented flag, because the CLI reference is
 generated from `-h` and a flag cannot be hidden from it. Passing
 `--shadow-seed` without a pool is refused rather than silently ignored.
 

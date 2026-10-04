@@ -90,3 +90,36 @@ func TestDrawClampsImpossibleCounts(t *testing.T) {
 		t.Fatalf("b (successes > trials): α,β = %v,%v want 5,1", sel.Members[1].Alpha, sel.Members[1].Beta)
 	}
 }
+
+// One run records ONE seed and draws both shadow seats from it. Seeded from
+// the seed alone, two seats with equal priors and equal-size pools sampled
+// the same stream and picked the same INDEX every run — the generator and
+// writer draws were coupled. The role is mixed into the stream, and replay
+// from the one recorded seed is still exact per role.
+func TestDrawDecouplesRolesSharingASeed(t *testing.T) {
+	gen := []Candidate{{"g0", "g0"}, {"g1", "g1"}, {"g2", "g2"}}
+	wri := []Candidate{{"w0", "w0"}, {"w1", "w1"}, {"w2", "w2"}}
+	idx := func(sel Selection) int {
+		for i, m := range sel.Members {
+			if m.Model == sel.Chosen {
+				return i
+			}
+		}
+		return -1
+	}
+	differ := 0
+	for seed := uint64(0); seed < 500; seed++ {
+		g := Draw("mutant-generator-shadow", "go", gen, nil, true, 0, seed)
+		w := Draw("test-writer-shadow", "go", wri, nil, true, 0, seed)
+		if idx(g) != idx(w) {
+			differ++
+		}
+		if again := Draw("test-writer-shadow", "go", wri, nil, true, 0, seed); again.Chosen != w.Chosen || again.Members[0].Sample != w.Members[0].Sample {
+			t.Fatalf("seed %d: the same (seed, role) did not reproduce its draw", seed)
+		}
+	}
+	// Independent uniform draws over 3 differ about 2/3 of the time.
+	if differ < 250 {
+		t.Fatalf("the two seats chose different indices on %d of 500 seeds; independent draws differ on ~333", differ)
+	}
+}

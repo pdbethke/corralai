@@ -215,9 +215,11 @@ challenger drawn from a pool of 3: gemini-3.6-flash (α=12 β=31, sampled 0.29) 
   says `history: 0 rows for <lang>`. That is a measured zero, and it is
   reported as one.
 
-**The seed** comes from `crypto/rand` and is recorded. A hidden
-`--shadow-seed` flag accepts it back, so a reviewer can reproduce the exact
-draw from the record.
+**The seed** comes from `crypto/rand` and is recorded. A `--shadow-seed`
+flag accepts it back, so a reviewer can reproduce the exact draw from the
+record. It is an ordinary documented flag, because the CLI reference is
+generated from `-h` and a flag cannot be hidden from it. Passing
+`--shadow-seed` without a pool is refused rather than silently ignored.
 
 ## Tests
 
@@ -248,6 +250,12 @@ draw from the record.
 - The LLM judge (`internal/mission/routing.go`, Sense → Judge → Clamp)
   proposing a lineup. Proposing without seating changes nothing that runs.
 - Per-file draws in `certify --repo`.
+- **`certify --repo` adding to the history it reads.** The repo path writes
+  no scorecard rows at all, deliberately: concurrent audits must not contend
+  on one single-process DuckDB file. A repo run's draw therefore reads the
+  history `certify --local` runs built, and adds nothing to it. Closing that
+  needs the repo path to batch its rows after the fan-out, and it is the
+  first follow-up worth doing.
 - Recency decay or an evidence floor on the posterior.
 - Reading history from the ledger or a pushed warehouse instead of the
   local store.

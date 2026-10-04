@@ -149,8 +149,12 @@ func defaultGateRecordURL(repoName, sha, statusContext string) string {
 // and no repo/sha echo beyond what the caller already supplied in the
 // query — the credential boundary keeps forge credentials brain-side only.
 //
-// passed is true only when EVERY check on the head passed, and contexts lists
-// each check with its own result and record. record_id is the record when the
+// passed is true only when every check that has REPORTED for the head passed,
+// and contexts lists each of them with its own result. A check still running,
+// or one whose result was never stored, has no row and is not listed: this
+// endpoint knows what was recorded, not which policies apply to the head. The
+// per-status links name their check (&context=), so the link the forge shows
+// beside each status answers for exactly that check. record_id is the record when the
 // answer is one check's (a status link names its context, or the head has
 // only one check), and is omitted when several checks answer together: there
 // is no single record to point at, and 0 is never a real one. (Review
@@ -162,10 +166,15 @@ type gateRunResponse struct {
 	Contexts []gateRunContextRow `json:"contexts"`
 }
 
+// gateRunContextRow is one check's answer. pr is per check because one head
+// can sit in two pull requests (the same branch against main and against
+// release), each answered by its own policy; record_id is omitted for a check
+// that signed nothing (a fail-closed row), since 0 is never a real record.
 type gateRunContextRow struct {
 	Context  string `json:"context"`
 	Passed   bool   `json:"passed"`
-	RecordID int64  `json:"record_id"`
+	PR       int    `json:"pr"`
+	RecordID int64  `json:"record_id,omitempty"`
 }
 
 // GateRunHandler serves GET /api/gate/run?repo=&sha=[&context=], reading
@@ -205,7 +214,7 @@ func GateRunHandler(store *gate.Store) http.HandlerFunc {
 		resp := gateRunResponse{Passed: true, PR: runs[0].PR}
 		for _, run := range runs {
 			resp.Passed = resp.Passed && run.Passed
-			resp.Contexts = append(resp.Contexts, gateRunContextRow{Context: run.Context, Passed: run.Passed, RecordID: run.RecordID})
+			resp.Contexts = append(resp.Contexts, gateRunContextRow{Context: run.Context, Passed: run.Passed, PR: run.PR, RecordID: run.RecordID})
 		}
 		if len(runs) == 1 {
 			resp.RecordID = runs[0].RecordID

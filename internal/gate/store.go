@@ -165,7 +165,8 @@ func gateRunsKeyIsWide(db *sql.DB) (wide, ok bool, err error) {
 	var cols string
 	err = db.QueryRow(`SELECT list_aggregate(constraint_column_names, 'string_agg', ',')
 		FROM duckdb_constraints()
-		WHERE table_name = 'gate_runs' AND constraint_type = 'PRIMARY KEY'`).Scan(&cols)
+		WHERE table_name = 'gate_runs' AND constraint_type = 'PRIMARY KEY'
+		  AND database_name = current_database() AND schema_name = current_schema()`).Scan(&cols)
 	if err == sql.ErrNoRows {
 		return false, false, nil
 	}
@@ -196,7 +197,11 @@ func gateRunsKeyIsWide(db *sql.DB) (wide, ok bool, err error) {
 func recoverInterruptedMigration(db *sql.DB) error {
 	has := func(name string) (bool, error) {
 		var n int
-		err := db.QueryRow(`SELECT count(*) FROM duckdb_tables() WHERE table_name = ?`, name).Scan(&n)
+		// Scoped to this store's own database and schema: on an md: DSN every
+		// database in the account is attached, and a same-named table in
+		// another one must not steer this repair.
+		err := db.QueryRow(`SELECT count(*) FROM duckdb_tables()
+			WHERE table_name = ? AND database_name = current_database() AND schema_name = current_schema()`, name).Scan(&n)
 		return n > 0, err
 	}
 	leftover, err := has("gate_runs_wide")

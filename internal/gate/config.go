@@ -50,22 +50,31 @@ const maxGateTimeoutS = 24 * 60 * 60
 // covered without a second edit.
 var policyFields = []string{"repo", "base", "context", "net", "timeout"}
 
-// strayFieldRE is derived from policyFields. It tolerates whitespace on both
-// sides of the separator and the '=', matches the field name in ANY case, and
-// treats a NEWLINE as a separator as well as a comma. It used to match only a
-// comma followed by the lowercase name, so "cmd=true,Base=release" and
-// "cmd=true\nbase=release" were swallowed into the command and the policy
-// gated every base while the operator had named one — the outcome this guard
-// exists to report. (Review 8be2189163b0, R6.)
+// strayFieldRE is derived from policyFields and tolerates whitespace on both
+// sides of the separator and the '='. It used to match only a comma followed
+// by the lowercase name, so "cmd=true,Base=release" and "cmd=true\nbase=release"
+// were swallowed into the command and the policy gated every base while the
+// operator had named one — the outcome this guard exists to report. (Review
+// 8be2189163b0, R6.) It now matches:
 //
-// The opposite error is accepted on purpose: a legitimate command that
-// contains ",base=" inside a quoted argument is refused. That refusal is loud
-// and fails closed — the operator rewords the command — whereas a missed
-// stray field is silent and fails OPEN.
+//   - after a COMMA, in ANY case. No shell line starts with ",Base=", so a
+//     comma-led field name is a misplaced field whatever its case.
+//   - at the start of a LINE, in LOWERCASE only — the spelling a policy field
+//     is written in. A multi-line script legitimately assigns shell variables
+//     on their own lines, and an uppercase BASE= or TIMEOUT= there is the
+//     script's, not the policy's; matching those too refused working policies
+//     on upgrade, which an adversarial review of this fix caught before merge.
+//
+// Two errors are accepted on purpose, and both are LOUD — the policy is
+// refused and named — where the miss this guards against was silent and
+// failed OPEN: a quoted ",base=" inside a legitimate command, and a lowercase
+// shell assignment such as "timeout=30" on its own line. The operator rewords
+// the command; nothing is gated against the wrong base.
 var strayFieldRE = func() map[string]*regexp.Regexp {
 	m := make(map[string]*regexp.Regexp, len(policyFields))
 	for _, f := range policyFields {
-		m[f] = regexp.MustCompile(`(?i)[,\n]\s*` + regexp.QuoteMeta(f) + `\s*=`)
+		q := regexp.QuoteMeta(f)
+		m[f] = regexp.MustCompile(`(?i:,\s*` + q + `\s*=)|\n[ \t]*` + q + `[ \t]*=`)
 	}
 	return m
 }()
@@ -201,7 +210,7 @@ func envValue(environ []string, key string) string {
 // on the policy (Policy.normalized), never here, so the forge and the store
 // can never disagree about which check spoke. An omitted net= defaults to
 // false — no network, matching the runner's fail-closed posture — and a net=
-// that is not a boolean (strconv.ParseBool) is refused, never defaulted.
+// that is not exactly true, false, 1 or 0 is refused, never defaulted.
 func ParsePolicy(raw string) (Policy, string) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -255,16 +264,25 @@ func ParsePolicy(raw string) (Policy, string) {
 				pol.Context = val
 			}
 		case "net":
-			// Refused, not defaulted, when it is not a boolean — the same
-			// rule timeout= follows. It used to map every value but "true"
-			// and "1" to no-network, silently, so net=yes produced a gate
-			// that failed every network-needing check with nothing pointing
-			// at the policy. (Review 8be2189163b0, R4.)
-			b, err := strconv.ParseBool(val)
-			if err != nil {
-				return Policy{}, "net=" + val + " is not true or false"
+			// Exactly true/1 or false/0; anything else is refused, the rule
+			// timeout= follows. It used to map every value but "true" and "1"
+			// to no-network, silently, so net=yes produced a gate that failed
+			// every network-needing check with nothing pointing at the
+			// policy. (Review 8be2189163b0, R4.)
+			//
+			// NOT strconv.ParseBool: it also accepts "TRUE", "True" and "t",
+			// which USED to mean no network — so it would have opened the
+			// jail's network to untrusted pull-request code for policies that
+			// had it closed. The fix must never widen the jail; its worst
+			// case is a logged refusal.
+			switch val {
+			case "true", "1":
+				pol.AllowNet = true
+			case "false", "0":
+				pol.AllowNet = false
+			default:
+				return Policy{}, "net=" + val + " is not one of true, false, 1, 0"
 			}
-			pol.AllowNet = b
 		case "timeout":
 			n, err := strconv.Atoi(val)
 			switch {

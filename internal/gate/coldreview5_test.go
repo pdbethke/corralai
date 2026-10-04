@@ -4,6 +4,7 @@ package gate
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"path/filepath"
 	"strings"
@@ -146,13 +147,17 @@ func TestRunnerRedeliverPostsTheStoredVerdict(t *testing.T) {
 	status := &fakeStatusPoster{}
 	cert := &fakeCertifier{}
 	r := &Runner{Status: status, Store: store, Certify: cert,
-		RecordURL: func(repo, sha, _ string) string { return "/r/" + sha }, Now: func() time.Time { return time.Unix(1, 0) }}
+		RecordURL: func(repo, sha, statusContext string) string { return "/r/" + sha + "/" + statusContext }, Now: func() time.Time { return time.Unix(1, 0) }}
 
 	if err := r.Redeliver(context.Background(), "https://github.com/o/r", testPolicy(), PRRef{Number: 1, HeadSHA: "abc", Base: "main"}, prev); err != nil {
 		t.Fatal(err)
 	}
 	if len(status.states) != 1 || status.states[0] != "failure" {
 		t.Fatalf("posted %v: want exactly the stored verdict, failure", status.states)
+	}
+	// The redelivered status links to ITS check too, not just Run's. (R7.)
+	if status.targets[0] != "/r/abc/corral/gate" {
+		t.Fatalf("redelivered status links to %q; it must name its own check", status.targets[0])
 	}
 	if cert.calls != 0 {
 		t.Fatalf("Redeliver signed %d record(s); it must sign none", cert.calls)
@@ -237,13 +242,18 @@ func TestASpaceBeforeCmdIsStillACommand(t *testing.T) {
 // operator who wrote net=yes got a gate that failed every network-needing
 // check with nothing pointing at the policy.
 func TestNetRefusesAValueItDoesNotUnderstand(t *testing.T) {
-	for raw, want := range map[string]bool{"true": true, "1": true, "True": true, "TRUE": true, "false": false, "0": false, "False": false} {
+	for raw, want := range map[string]bool{"true": true, "1": true, "false": false, "0": false} {
 		pol, reason := ParsePolicy("repo=o/r,net=" + raw + ",cmd=true")
 		if reason != "" || pol.AllowNet != want {
 			t.Errorf("net=%s: got AllowNet=%v reason=%q, want %v", raw, pol.AllowNet, reason, want)
 		}
 	}
-	for _, raw := range []string{"yes", "on", "no", "off", "enabled", ""} {
+	// NOTHING may gain the network it did not have before this fix. "TRUE",
+	// "True", "t" and "T" used to mean NO network (only "true" and "1" did
+	// not); strconv.ParseBool would have flipped them to network-ON for
+	// untrusted pull-request code. They are refused instead: the worst case
+	// of the fix is a logged refusal, never a wider jail.
+	for _, raw := range []string{"yes", "on", "no", "off", "enabled", "", "TRUE", "True", "t", "T", "F", "FALSE"} {
 		_, reason := ParsePolicy("repo=o/r,net=" + raw + ",cmd=true")
 		if !strings.Contains(reason, "net=") {
 			t.Errorf("net=%q was accepted (reason %q); an unrecognized value must be refused, naming net=", raw, reason)
@@ -262,10 +272,25 @@ func TestAStrayFieldIsCaughtInAnyCaseAndAfterANewline(t *testing.T) {
 		"repo=o/r,cmd=true,Base=release",
 		"repo=o/r,cmd=true, BASE = release",
 		"repo=o/r,cmd=true\nbase=release",
-		"repo=o/r,cmd=true\n  Timeout=5",
+		"repo=o/r,cmd=true\r\nbase=release",
+		"repo=o/r,cmd=true\n  timeout=5",
 	} {
 		if _, reason := ParsePolicy(raw); !strings.Contains(reason, "after cmd=") {
 			t.Errorf("ParsePolicy(%q) reason = %q, want the stray-field refusal", raw, reason)
+		}
+	}
+	// A multi-line script whose lines assign SHELL variables that share a
+	// field's name in another case is a legitimate command, not a misplaced
+	// field: on its own line the guard matches only the lowercase spelling a
+	// policy field is written in. (The comma form, which no shell line takes,
+	// matches any case.)
+	for _, raw := range []string{
+		"repo=o/r,cmd=set -e\nBASE=origin/main\ngit diff $BASE",
+		"repo=o/r,cmd=make\nTIMEOUT=30 ./slow.sh",
+		"repo=o/r,cmd=export NET=1\nrun",
+	} {
+		if _, reason := ParsePolicy(raw); reason != "" {
+			t.Errorf("ParsePolicy(%q) refused (%q); an uppercase shell variable on its own line is part of the command", raw, reason)
 		}
 	}
 	// A field NAME inside a word is not a field: "rebase=" and "basename"
@@ -406,4 +431,37 @@ func TestEachStatusLinksToItsOwnCheck(t *testing.T) {
 			t.Fatalf("status %d (%s) links to %q; it must link to its own check", i, status.states[i], target)
 		}
 	}
+}
+
+// TestAMigrationInterruptedBeforeRenameIsFinished: the crash came after DROP
+// gate_runs and before RENAME, and THIS binary is the first to open the store
+// since. Every row lives only in gate_runs_wide and there is no gate_runs at
+// all; the repair finishes the swap.
+func TestAMigrationInterruptedBeforeRenameIsFinished(t *testing.T) {
+	dsn := filepath.Join(t.TempDir(), "interrupted-rename.db")
+	raw, err := sql.Open("duckdb", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.Exec(`CREATE TABLE gate_runs_wide (repo VARCHAR NOT NULL, head_sha VARCHAR NOT NULL,
+		context VARCHAR NOT NULL DEFAULT 'corral/gate', pr INTEGER NOT NULL, passed BOOLEAN NOT NULL,
+		status_posted BOOLEAN NOT NULL DEFAULT FALSE, record_id BIGINT NOT NULL, ran_at TIMESTAMP NOT NULL,
+		PRIMARY KEY (repo, head_sha, context))`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.Exec(`INSERT INTO gate_runs_wide VALUES ('o/r', 'abc', 'corral/gate', 7, true, true, 41, TIMESTAMP '2026-09-01 00:00:00')`); err != nil {
+		t.Fatal(err)
+	}
+	_ = raw.Close()
+
+	s, err := OpenStore(dsn)
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	defer s.Close()
+	if run, ok, _ := s.GetByHead("o/r", "abc", ""); !ok || run.RecordID != 41 {
+		t.Fatalf("the swap must be finished with the rows intact: %+v ok=%v", run, ok)
+	}
+	assertNoTable(t, s, "gate_runs_wide")
+	assertWideKey(t, s)
 }

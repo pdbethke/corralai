@@ -234,7 +234,8 @@ type gateRunBody struct {
 	Contexts []struct {
 		Context  string `json:"context"`
 		Passed   bool   `json:"passed"`
-		RecordID int64  `json:"record_id"`
+		PR       int    `json:"pr"`
+		RecordID *int64 `json:"record_id"`
 	} `json:"contexts"`
 }
 
@@ -264,8 +265,9 @@ func TestGateRunWithoutAContextPassesOnlyIfEveryCheckPassed(t *testing.T) {
 	if got.Passed {
 		t.Fatalf("passed=true while corral/lint failed: the head was NOT gated green (%+v)", got)
 	}
-	if len(got.Contexts) != 2 || got.Contexts[0].Context != "corral/lint" || got.Contexts[0].Passed || got.Contexts[0].RecordID != 41 ||
-		got.Contexts[1].Context != "corral/test" || !got.Contexts[1].Passed || got.Contexts[1].RecordID != 42 {
+	if len(got.Contexts) != 2 || got.Contexts[0].Context != "corral/lint" || got.Contexts[0].Passed || got.Contexts[0].RecordID == nil || *got.Contexts[0].RecordID != 41 ||
+		got.Contexts[1].Context != "corral/test" || !got.Contexts[1].Passed || got.Contexts[1].RecordID == nil || *got.Contexts[1].RecordID != 42 ||
+		got.Contexts[0].PR != 5 || got.Contexts[1].PR != 5 {
 		t.Fatalf("every check must be listed with its own result and record: %+v", got.Contexts)
 	}
 	if got.RecordID != 0 {
@@ -299,5 +301,23 @@ func TestTheDefaultStatusLinkNamesItsCheck(t *testing.T) {
 	}
 	if got := defaultGateRecordURL("o/r", "abc", ""); strings.Contains(got, "context=") {
 		t.Fatalf("no context, no context parameter: %q", got)
+	}
+}
+
+// TestAnUnsignedCheckHasNoRecordID: a fail-closed row (no record signed) must
+// not show "record_id": 0 per check — 0 is never a real record, and the
+// top-level field already omits it for that reason.
+func TestAnUnsignedCheckHasNoRecordID(t *testing.T) {
+	store, err := gate.OpenStore(filepath.Join(t.TempDir(), "gate.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if err := store.Save(gate.Run{Repo: "o/r", HeadSHA: "abc", Context: "corral/lint", PR: 5, Passed: false, StatusPosted: true, RanAt: time.Unix(10, 0)}); err != nil {
+		t.Fatal(err)
+	}
+	got := getGateRun(t, store, "repo=o/r&sha=abc")
+	if len(got.Contexts) != 1 || got.Contexts[0].RecordID != nil {
+		t.Fatalf("an unsigned check must carry no record_id: %+v", got.Contexts)
 	}
 }

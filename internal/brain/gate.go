@@ -136,22 +136,53 @@ func StartGate(ctx context.Context, opts Options) (*gate.Store, error) {
 // defaultGateRecordURL builds the /api/gate/run status target_url for a
 // (repo, sha), shared by StartGate and StartControlGate so their default
 // wiring can never drift.
-func defaultGateRecordURL(repoName, sha string) string {
-	return "/api/gate/run?repo=" + url.QueryEscape(repoName) + "&sha=" + url.QueryEscape(sha)
+func defaultGateRecordURL(repoName, sha, statusContext string) string {
+	u := "/api/gate/run?repo=" + url.QueryEscape(repoName) + "&sha=" + url.QueryEscape(sha)
+	if statusContext != "" {
+		u += "&context=" + url.QueryEscape(statusContext)
+	}
+	return u
 }
 
 // gateRunResponse is the JSON shape /api/gate/run returns for a known
 // (repo, sha). It deliberately carries no forge token, no command output,
 // and no repo/sha echo beyond what the caller already supplied in the
 // query — the credential boundary keeps forge credentials brain-side only.
+//
+// passed is true only when every check that has REPORTED for the head passed,
+// and contexts lists each of them with its own result. A check still running,
+// or one whose result was never stored, has no row and is not listed: this
+// endpoint knows what was recorded, not which policies apply to the head. The
+// per-status links name their check (&context=), so the link the forge shows
+// beside each status answers for exactly that check. record_id is the record when the
+// answer is one check's (a status link names its context, or the head has
+// only one check), and is omitted when several checks answer together: there
+// is no single record to point at, and 0 is never a real one. (Review
+// 8be2189163b0, R7: the endpoint used to report whichever check ran last.)
 type gateRunResponse struct {
-	Passed   bool  `json:"passed"`
-	PR       int   `json:"pr"`
-	RecordID int64 `json:"record_id"`
+	Passed   bool                `json:"passed"`
+	PR       int                 `json:"pr"`
+	RecordID int64               `json:"record_id,omitempty"`
+	Contexts []gateRunContextRow `json:"contexts"`
 }
 
-// GateRunHandler serves GET /api/gate/run?repo=&sha=, reading store's
-// dedupe/index row. Mount it behind the SAME auth wrapper the brain wraps
+// gateRunContextRow is one check's answer. pr is per check because one head
+// can sit in two pull requests (the same branch against main and against
+// release), each answered by its own policy; record_id is omitted for a check
+// that signed nothing (a fail-closed row), since 0 is never a real record.
+type gateRunContextRow struct {
+	Context  string `json:"context"`
+	Passed   bool   `json:"passed"`
+	PR       int    `json:"pr"`
+	RecordID int64  `json:"record_id,omitempty"`
+}
+
+// GateRunHandler serves GET /api/gate/run?repo=&sha=[&context=], reading
+// store's dedupe/index rows. With context= it answers for that one check (the
+// link on a status names its own); without, for every check that has reported
+// for the head. It serves the MERGE gate's store only: a control-gate link
+// names a context this store never holds and gets a 404, never a borrowed
+// answer. Mount it behind the SAME auth wrapper the brain wraps
 // every other /api/* route in (see cmd/corral/main.go) — this handler
 // itself performs no authentication or authorization.
 func GateRunHandler(store *gate.Store) http.HandlerFunc {
@@ -162,17 +193,36 @@ func GateRunHandler(store *gate.Store) http.HandlerFunc {
 			http.Error(w, "repo and sha query params are required", http.StatusBadRequest)
 			return
 		}
-		run, ok, err := store.GetBySHA(repoName, sha)
+		var runs []gate.Run
+		var err error
+		if statusCtx := r.URL.Query().Get("context"); statusCtx != "" {
+			var run gate.Run
+			var ok bool
+			run, ok, err = store.GetByHead(repoName, sha, statusCtx)
+			if ok {
+				runs = []gate.Run{run}
+			}
+		} else {
+			runs, err = store.ListBySHA(repoName, sha)
+		}
 		if err != nil {
 			log.Printf("gate: /api/gate/run: lookup %s@%s: %v", repoName, sha, err)
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
 		}
-		if !ok {
+		if len(runs) == 0 {
 			http.NotFound(w, r)
 			return
 		}
+		resp := gateRunResponse{Passed: true, PR: runs[0].PR}
+		for _, run := range runs {
+			resp.Passed = resp.Passed && run.Passed
+			resp.Contexts = append(resp.Contexts, gateRunContextRow{Context: run.Context, Passed: run.Passed, PR: run.PR, RecordID: run.RecordID})
+		}
+		if len(runs) == 1 {
+			resp.RecordID = runs[0].RecordID
+		}
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(gateRunResponse{Passed: run.Passed, PR: run.PR, RecordID: run.RecordID})
+		_ = json.NewEncoder(w).Encode(resp)
 	}
 }

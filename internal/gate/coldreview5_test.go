@@ -4,6 +4,7 @@ package gate
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"path/filepath"
 	"strings"
@@ -13,7 +14,7 @@ import (
 
 // A review of main at 6951ca4c, 2026-09-15 (reviewer claude-code:
 // claude-fable-5-1, verifier codex:gpt-6-astra), entry 8be2189163b0 on the
-// ledger. R1 and R2 are here; R3–R7 are still open.
+// ledger. All seven findings are here: R1 and R2 (fixed in #347), and R3–R7.
 
 // TestTwoPoliciesCannotShareOneStatus is R1 (high).
 //
@@ -146,13 +147,17 @@ func TestRunnerRedeliverPostsTheStoredVerdict(t *testing.T) {
 	status := &fakeStatusPoster{}
 	cert := &fakeCertifier{}
 	r := &Runner{Status: status, Store: store, Certify: cert,
-		RecordURL: func(repo, sha string) string { return "/r/" + sha }, Now: func() time.Time { return time.Unix(1, 0) }}
+		RecordURL: func(repo, sha, statusContext string) string { return "/r/" + sha + "/" + statusContext }, Now: func() time.Time { return time.Unix(1, 0) }}
 
 	if err := r.Redeliver(context.Background(), "https://github.com/o/r", testPolicy(), PRRef{Number: 1, HeadSHA: "abc", Base: "main"}, prev); err != nil {
 		t.Fatal(err)
 	}
 	if len(status.states) != 1 || status.states[0] != "failure" {
 		t.Fatalf("posted %v: want exactly the stored verdict, failure", status.states)
+	}
+	// The redelivered status links to ITS check too, not just Run's. (R7.)
+	if status.targets[0] != "/r/abc/corral/gate" {
+		t.Fatalf("redelivered status links to %q; it must name its own check", status.targets[0])
 	}
 	if cert.calls != 0 {
 		t.Fatalf("Redeliver signed %d record(s); it must sign none", cert.calls)
@@ -191,4 +196,272 @@ func TestThePollerHoldsTheSharedStatusRuleToo(t *testing.T) {
 	if strings.Join(ran, ",") != "first" {
 		t.Fatalf("ran %v: want only the first of two policies sharing one status", ran)
 	}
+}
+
+// TestASpaceBeforeCmdIsStillACommand is R3 (low, reproduced).
+//
+// THE DEFECT: ParsePolicy found the command only by the exact substrings
+// "cmd=" and ",cmd=", while every other field — and the stray-field guard —
+// tolerated whitespace after the comma. "repo=o/r, cmd=true" was refused as
+// "no cmd=", and that repo's gate was off apart from one log line.
+func TestASpaceBeforeCmdIsStillACommand(t *testing.T) {
+	for _, raw := range []string{
+		"repo=o/r, cmd=true",
+		"repo=o/r ,cmd=true",
+		"repo=o/r,cmd = true",
+		"  cmd =true,still the command",
+	} {
+		pol, reason := ParsePolicy(raw)
+		if reason != "" && !strings.Contains(raw, "still the command") {
+			t.Errorf("ParsePolicy(%q) refused: %s", raw, reason)
+			continue
+		}
+		if raw == "  cmd =true,still the command" {
+			// cmd= first: everything after it is the command, verbatim.
+			if reason != "no repo=" {
+				t.Errorf("ParsePolicy(%q) = %q, want the no-repo refusal (the command took the rest)", raw, reason)
+			}
+			continue
+		}
+		if pol.CheckCmd != "true" || pol.Repo != "o/r" {
+			t.Errorf("ParsePolicy(%q) = %+v, want repo o/r and command \"true\"", raw, pol)
+		}
+	}
+	// The FIRST cmd= wins and the rest is verbatim, even when the command
+	// itself contains ", cmd=".
+	pol, reason := ParsePolicy("repo=o/r, cmd=echo a, cmd=b")
+	if reason != "" || pol.CheckCmd != "echo a, cmd=b" {
+		t.Fatalf("first cmd= must win: got %+v, %q", pol, reason)
+	}
+}
+
+// TestNetRefusesAValueItDoesNotUnderstand is R4 (low, code-read).
+//
+// THE DEFECT: net= mapped every value other than "true" and "1" to
+// no-network, silently. timeout= refuses a bad value; net= did not, so an
+// operator who wrote net=yes got a gate that failed every network-needing
+// check with nothing pointing at the policy.
+func TestNetRefusesAValueItDoesNotUnderstand(t *testing.T) {
+	for raw, want := range map[string]bool{"true": true, "1": true, "false": false, "0": false} {
+		pol, reason := ParsePolicy("repo=o/r,net=" + raw + ",cmd=true")
+		if reason != "" || pol.AllowNet != want {
+			t.Errorf("net=%s: got AllowNet=%v reason=%q, want %v", raw, pol.AllowNet, reason, want)
+		}
+	}
+	// NOTHING may gain the network it did not have before this fix. "TRUE",
+	// "True", "t" and "T" used to mean NO network (only "true" and "1" did
+	// not); strconv.ParseBool would have flipped them to network-ON for
+	// untrusted pull-request code. They are refused instead: the worst case
+	// of the fix is a logged refusal, never a wider jail.
+	for _, raw := range []string{"yes", "on", "no", "off", "enabled", "", "TRUE", "True", "t", "T", "F", "FALSE"} {
+		_, reason := ParsePolicy("repo=o/r,net=" + raw + ",cmd=true")
+		if !strings.Contains(reason, "net=") {
+			t.Errorf("net=%q was accepted (reason %q); an unrecognized value must be refused, naming net=", raw, reason)
+		}
+	}
+}
+
+// TestAStrayFieldIsCaughtAfterACommaInAnyCaseAndAtALineStartInLowercase is R6 (low, code-read).
+//
+// THE DEFECT: the guard matched only a comma followed by a LOWERCASE field
+// name, so "cmd=true,Base=release" and "cmd=true\nbase=release" were
+// swallowed into the command and the policy gated every base while the
+// operator named one — the exact outcome the guard exists to report.
+func TestAStrayFieldIsCaughtAfterACommaInAnyCaseAndAtALineStartInLowercase(t *testing.T) {
+	for _, raw := range []string{
+		"repo=o/r,cmd=true,Base=release",
+		"repo=o/r,cmd=true, BASE = release",
+		"repo=o/r,cmd=true\nbase=release",
+		"repo=o/r,cmd=true\r\nbase=release",
+		"repo=o/r,cmd=true\n  timeout=5",
+	} {
+		if _, reason := ParsePolicy(raw); !strings.Contains(reason, "after cmd=") {
+			t.Errorf("ParsePolicy(%q) reason = %q, want the stray-field refusal", raw, reason)
+		}
+	}
+	// A multi-line script whose lines assign SHELL variables that share a
+	// field's name in another case is a legitimate command, not a misplaced
+	// field: on its own line the guard matches only the lowercase spelling a
+	// policy field is written in. (The comma form, which no shell line takes,
+	// matches any case.)
+	for _, raw := range []string{
+		"repo=o/r,cmd=set -e\nBASE=origin/main\ngit diff $BASE",
+		"repo=o/r,cmd=make\nTIMEOUT=30 ./slow.sh",
+		"repo=o/r,cmd=export NET=1\nrun",
+	} {
+		if _, reason := ParsePolicy(raw); reason != "" {
+			t.Errorf("ParsePolicy(%q) refused (%q); an uppercase shell variable on its own line is part of the command", raw, reason)
+		}
+	}
+	// A field NAME inside a word is not a field: "rebase=" and "basename"
+	// must not trip the guard.
+	for _, raw := range []string{
+		"repo=o/r,cmd=git rebase=x",
+		"repo=o/r,cmd=echo basename",
+	} {
+		if _, reason := ParsePolicy(raw); reason != "" {
+			t.Errorf("ParsePolicy(%q) refused (%q); a field name inside a word is not a stray field", raw, reason)
+		}
+	}
+}
+
+// R5 (low, hypothesis — its structure confirmed by the founder's ruling): the
+// key migration ran CREATE / INSERT / DROP / RENAME as four separately
+// committed statements, so a crash between them left the store in a state the
+// next OpenStore could not recover from. It now runs in one transaction, and
+// OpenStore repairs either state an interrupted migration from an older
+// binary may already have left on disk. Each test builds that state by hand.
+
+// TestAMigrationInterruptedAfterCreateIsRetried: the crash came after
+// CREATE gate_runs_wide (and possibly its INSERT), before DROP. The narrow
+// table still holds every row; the leftover copy used to make every later
+// OpenStore fail on "gate_runs_wide already exists", disabling the gate.
+func TestAMigrationInterruptedAfterCreateIsRetried(t *testing.T) {
+	dsn := filepath.Join(t.TempDir(), "interrupted-create.db")
+	legacy, err := openRawLegacyStore(t, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := legacy.Exec(`INSERT INTO gate_runs (repo, head_sha, pr, passed, record_id, ran_at)
+		VALUES ('o/r', 'abc', 7, true, 41, TIMESTAMP '2026-09-01 00:00:00')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := legacy.Exec(`CREATE TABLE gate_runs_wide (repo VARCHAR, head_sha VARCHAR, context VARCHAR,
+		pr INTEGER, passed BOOLEAN, status_posted BOOLEAN, record_id BIGINT, ran_at TIMESTAMP)`); err != nil {
+		t.Fatal(err)
+	}
+	_ = legacy.Close()
+
+	s, err := OpenStore(dsn)
+	if err != nil {
+		t.Fatalf("OpenStore after an interrupted migration must recover, got: %v", err)
+	}
+	defer s.Close()
+	run, ok, err := s.GetByHead("o/r", "abc", "")
+	if err != nil || !ok || run.RecordID != 41 || run.PR != 7 {
+		t.Fatalf("the narrow table's row must survive the retried migration: %+v ok=%v err=%v", run, ok, err)
+	}
+	assertNoTable(t, s, "gate_runs_wide")
+	assertWideKey(t, s)
+}
+
+// TestAMigrationInterruptedAfterDropKeepsItsHistory: the crash came after
+// DROP gate_runs, before RENAME. Every row lived only in gate_runs_wide, and
+// the next OpenStore created a fresh, empty, already-wide gate_runs — so
+// migrateKey saw a wide key, returned, and the whole dedupe history sat
+// orphaned: every open head re-gated and re-certified. The repair merges the
+// orphan back, keeping any row the live table wrote since (it is newer).
+func TestAMigrationInterruptedAfterDropKeepsItsHistory(t *testing.T) {
+	dsn := filepath.Join(t.TempDir(), "interrupted-drop.db")
+	s, err := OpenStore(dsn) // the fresh, wide, live table an older binary created
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A row the live table wrote AFTER the crash, for a head the orphan also holds.
+	if err := s.Save(Run{Repo: "o/r", HeadSHA: "abc", PR: 7, Passed: false, StatusPosted: true, RecordID: 99, RanAt: time.Unix(2000, 0)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.Exec(`CREATE TABLE gate_runs_wide (repo VARCHAR NOT NULL, head_sha VARCHAR NOT NULL,
+		context VARCHAR NOT NULL DEFAULT 'corral/gate', pr INTEGER NOT NULL, passed BOOLEAN NOT NULL,
+		status_posted BOOLEAN NOT NULL DEFAULT FALSE, record_id BIGINT NOT NULL, ran_at TIMESTAMP NOT NULL,
+		PRIMARY KEY (repo, head_sha, context))`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.Exec(`INSERT INTO gate_runs_wide VALUES
+		('o/r', 'abc', 'corral/gate', 7, true, true, 41, TIMESTAMP '2026-09-01 00:00:00'),
+		('o/r', 'def', 'corral/gate', 8, true, true, 42, TIMESTAMP '2026-09-01 00:00:00')`); err != nil {
+		t.Fatal(err)
+	}
+	_ = s.Close()
+
+	s, err = OpenStore(dsn)
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	defer s.Close()
+	if run, ok, _ := s.GetByHead("o/r", "def", ""); !ok || run.RecordID != 42 {
+		t.Fatalf("the orphaned history must be merged back: def -> %+v ok=%v", run, ok)
+	}
+	if run, ok, _ := s.GetByHead("o/r", "abc", ""); !ok || run.RecordID != 99 {
+		t.Fatalf("a row the live table wrote since the crash must win over the orphan's: abc -> %+v ok=%v", run, ok)
+	}
+	assertNoTable(t, s, "gate_runs_wide")
+}
+
+func assertNoTable(t *testing.T, s *Store, name string) {
+	t.Helper()
+	var n int
+	if err := s.db.QueryRow(`SELECT count(*) FROM duckdb_tables() WHERE table_name = ?`, name).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Fatalf("table %s still exists after recovery", name)
+	}
+}
+
+func assertWideKey(t *testing.T, s *Store) {
+	t.Helper()
+	var cols string
+	if err := s.db.QueryRow(`SELECT list_aggregate(constraint_column_names, 'string_agg', ',')
+		FROM duckdb_constraints() WHERE table_name = 'gate_runs' AND constraint_type = 'PRIMARY KEY'`).Scan(&cols); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(cols, "context") {
+		t.Fatalf("gate_runs key is %q, want it widened to include context", cols)
+	}
+}
+
+// TestEachStatusLinksToItsOwnCheck is R7's runner half: every status the
+// runner posts links to a record URL built WITH that status's context, so the
+// link on check A cannot open check B's result.
+func TestEachStatusLinksToItsOwnCheck(t *testing.T) {
+	status := &fakeStatusPoster{}
+	r := newTestRunner(t, &fakeCheckouter{}, &fakeJail{exitCode: 0, output: "ok"}, &fakeCertifier{recordID: 42, head: "h"}, status)
+	r.RecordURL = func(repo, sha, statusContext string) string { return "/run/" + sha + "/" + statusContext }
+	pol := testPolicy()
+	pol.Context = "corral/lint"
+	if err := r.Run(context.Background(), "https://github.com/o/r", pol, testPR()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(status.targets) == 0 {
+		t.Fatal("no status was posted")
+	}
+	for i, target := range status.targets {
+		if target != "/run/deadbeef/corral/lint" {
+			t.Fatalf("status %d (%s) links to %q; it must link to its own check", i, status.states[i], target)
+		}
+	}
+}
+
+// TestAMigrationInterruptedBeforeRenameIsFinished: the crash came after DROP
+// gate_runs and before RENAME, and THIS binary is the first to open the store
+// since. Every row lives only in gate_runs_wide and there is no gate_runs at
+// all; the repair finishes the swap.
+func TestAMigrationInterruptedBeforeRenameIsFinished(t *testing.T) {
+	dsn := filepath.Join(t.TempDir(), "interrupted-rename.db")
+	raw, err := sql.Open("duckdb", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.Exec(`CREATE TABLE gate_runs_wide (repo VARCHAR NOT NULL, head_sha VARCHAR NOT NULL,
+		context VARCHAR NOT NULL DEFAULT 'corral/gate', pr INTEGER NOT NULL, passed BOOLEAN NOT NULL,
+		status_posted BOOLEAN NOT NULL DEFAULT FALSE, record_id BIGINT NOT NULL, ran_at TIMESTAMP NOT NULL,
+		PRIMARY KEY (repo, head_sha, context))`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.Exec(`INSERT INTO gate_runs_wide VALUES ('o/r', 'abc', 'corral/gate', 7, true, true, 41, TIMESTAMP '2026-09-01 00:00:00')`); err != nil {
+		t.Fatal(err)
+	}
+	_ = raw.Close()
+
+	s, err := OpenStore(dsn)
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	defer s.Close()
+	if run, ok, _ := s.GetByHead("o/r", "abc", ""); !ok || run.RecordID != 41 {
+		t.Fatalf("the swap must be finished with the rows intact: %+v ok=%v", run, ok)
+	}
+	assertNoTable(t, s, "gate_runs_wide")
+	assertWideKey(t, s)
 }

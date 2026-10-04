@@ -34,11 +34,11 @@ func (f fakeCert) Certify(_ context.Context, _, _, _ string, _ int, _ string) (i
 	return 1, "head", f.err
 }
 
-type postCall struct{ state, ctx, desc string }
+type postCall struct{ state, ctx, desc, target string }
 type fakePoster struct{ calls []postCall }
 
-func (f *fakePoster) SetCommitStatus(_ context.Context, _, _, context, state, _, desc string) error {
-	f.calls = append(f.calls, postCall{state: state, ctx: context, desc: desc})
+func (f *fakePoster) SetCommitStatus(_ context.Context, _, _, context, state, target, desc string) error {
+	f.calls = append(f.calls, postCall{state: state, ctx: context, desc: desc, target: target})
 	return nil
 }
 func (f *fakePoster) last() postCall { return f.calls[len(f.calls)-1] }
@@ -76,7 +76,7 @@ func seedRunner(t *testing.T, reader fileReader, cert controlgate.Certifier, pos
 		Spec:            spec,
 		Jail:            fakeJail{},
 		RunStore:        runStore,
-		Record:          func(_, sha string) string { return "/rec/" + sha },
+		Record:          func(_, sha, statusContext string) string { return "/rec/" + sha + "/" + statusContext },
 		Now:             func() time.Time { return time.Unix(1_700_000_000, 0).UTC() },
 		attempts:        make(map[string]int),
 		MaxCertAttempts: controlCertMaxAttempts,
@@ -183,7 +183,7 @@ func TestControlRunner_CertifyError_BoundedRetry(t *testing.T) {
 			t.Fatalf("attempt 1 must stay pending (no terminal status), got %+v", c)
 		}
 	}
-	if _, ok, _ := r.RunStore.GetBySHA("o/r", "abc"); ok {
+	if runs, err := r.RunStore.ListBySHA("o/r", "abc"); err != nil || len(runs) != 0 {
 		t.Fatal("attempt 1 must NOT record the SHA (retry next poll)")
 	}
 
@@ -193,7 +193,7 @@ func TestControlRunner_CertifyError_BoundedRetry(t *testing.T) {
 	if got := poster.last(); got.state != "error" {
 		t.Fatalf("attempt 2 (at cap) must post a terminal error, got %+v", got)
 	}
-	if _, ok, _ := r.RunStore.GetBySHA("o/r", "abc"); !ok {
+	if runs, err := r.RunStore.ListBySHA("o/r", "abc"); err != nil || len(runs) == 0 {
 		t.Fatal("attempt 2 (at cap) must record the SHA so the poller stops re-running")
 	}
 }
@@ -224,5 +224,26 @@ func TestStartControlGate_OffSwitches(t *testing.T) {
 	opts := Options{ControlPolicies: []controlgate.ControlPolicy{{Repo: "o/r", Owner: "x", Lang: "go"}}}
 	if rs, cs, _ := StartControlGate(context.Background(), opts); rs != nil || cs != nil {
 		t.Fatal("nil GateBackend must disable the control gate")
+	}
+}
+
+// TestControlGateStatusLinksToItsOwnCheck: the control gate's status links,
+// like the merge gate's, name their own check. Without the context its link
+// opened the merge gate's combined answer for the head — which could read
+// passed:true while the control gate had failed. (Review 8be2189163b0, R7,
+// found at this second door by the adversarial review of the R7 fix.)
+func TestControlGateStatusLinksToItsOwnCheck(t *testing.T) {
+	poster := &fakePoster{}
+	reader := fakeReader{files: map[string]string{"internal/auth/login.go": "package control\n// head ok"}}
+	r, spec := seedRunner(t, reader, fakeCert{}, poster)
+	defer spec.Close()
+	vet(t, spec, "owner@x", "g1", "internal/auth/login.go", "package control\n// clean", "login.go")
+	if err := r.Run(context.Background(), "https://github.com/o/r", policy(), pr()); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range poster.calls {
+		if c.target != "/rec/abc/corral/control-gate" {
+			t.Fatalf("status %s links to %q; it must link to its own check", c.state, c.target)
+		}
 	}
 }

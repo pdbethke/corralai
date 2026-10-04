@@ -47,7 +47,7 @@ func TestRunnerRefusesAPolicyWithNoCommand(t *testing.T) {
 			status := &fakeStatusPoster{}
 			r := &Runner{
 				Checkout: &fakeCheckouter{}, Jail: jail, Certify: &fakeCertifier{recordID: 1}, Status: status, Store: store,
-				RecordURL: func(repo, sha string) string { return "http://x" },
+				RecordURL: func(repo, sha, _ string) string { return "http://x" },
 				Now:       func() time.Time { return time.Unix(0, 0) },
 			}
 			_ = r.Run(context.Background(), "http://forge/o/r", Policy{Repo: "o/r", Context: "corral/gate", CheckCmd: tc.cmd}, PRRef{Number: 1, HeadSHA: "abc"})
@@ -88,7 +88,7 @@ func TestStoreFailureNeverPostsSuccess(t *testing.T) {
 	r := &Runner{
 		Checkout: &fakeCheckouter{}, Jail: &fakeJail{exitCode: 0, output: "ok"},
 		Certify: &fakeCertifier{recordID: 1}, Status: status, Store: store,
-		RecordURL: func(repo, sha string) string { return "http://x" },
+		RecordURL: func(repo, sha, _ string) string { return "http://x" },
 		Now:       func() time.Time { return time.Unix(0, 0) },
 	}
 	_ = r.Run(context.Background(), "http://forge/o/r",

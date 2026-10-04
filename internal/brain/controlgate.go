@@ -50,7 +50,7 @@ type controlRunner struct {
 	Spec     *controlspec.Store
 	Jail     adequacy.Jail
 	RunStore *gate.Store
-	Record   func(repo, sha string) string
+	Record   func(repo, sha, statusContext string) string
 	Now      func() time.Time
 	// attempts counts consecutive certify failures per "repo@sha" so the runner
 	// can give up after MaxCertAttempts. It is in-memory, reset on restart; a
@@ -67,7 +67,7 @@ func (r *controlRunner) Run(ctx context.Context, repoURL string, p gate.Policy, 
 	if !ok {
 		return fmt.Errorf("controlgate: no control policy for repo %q", p.Repo)
 	}
-	target := r.Record(p.Repo, pr.HeadSHA)
+	target := r.Record(p.Repo, pr.HeadSHA, p.Context)
 	_ = r.Status.SetCommitStatus(ctx, repoURL, pr.HeadSHA, p.Context, "pending", target, "corral control-gate running")
 
 	dest, err := os.MkdirTemp("", "corral-control-")
@@ -113,7 +113,7 @@ func (r *controlRunner) Run(ctx context.Context, repoURL string, p gate.Policy, 
 		RepoURL:   repoURL,
 		HeadSHA:   pr.HeadSHA,
 		Context:   p.Context,
-		RecordURL: func(sha string) string { return r.Record(p.Repo, sha) },
+		RecordURL: func(sha string) string { return r.Record(p.Repo, sha, p.Context) },
 	}
 	key := p.Repo + "@" + pr.HeadSHA
 	recordID, err := controlgate.PostControlGate(ctx, r.Cert, r.Status, req, res)
@@ -216,16 +216,19 @@ func StartControlGate(ctx context.Context, opts Options) (*gate.Store, *controls
 	}
 
 	runner := &controlRunner{
-		byRepo:          byRepo,
-		Base:            base,
-		TestCmd:         testCmd,
-		Checkout:        opts.Repo,
-		Reader:          opts.Repo,
-		Cert:            certifierAdapter{opts: opts},
-		Status:          opts.Repo,
-		Spec:            spec,
-		Jail:            adequacy.NewJail(opts.GateBackend, gate.DefaultGateTimeout),
-		RunStore:        runStore,
+		byRepo:   byRepo,
+		Base:     base,
+		TestCmd:  testCmd,
+		Checkout: opts.Repo,
+		Reader:   opts.Repo,
+		Cert:     certifierAdapter{opts: opts},
+		Status:   opts.Repo,
+		Spec:     spec,
+		Jail:     adequacy.NewJail(opts.GateBackend, gate.DefaultGateTimeout),
+		RunStore: runStore,
+		// Its links name their own check, like the merge gate's: without the
+		// context, the link opened the merge gate's combined answer for the
+		// head. (Review 8be2189163b0, R7, at this second door.)
 		Record:          record,
 		Now:             time.Now,
 		attempts:        make(map[string]int),

@@ -57,14 +57,16 @@ func (f *fakeCertifier) Certify(ctx context.Context, repo, commit, command strin
 // fakeStatusPoster is a StatusPoster test double that records every posted
 // state, so tests can assert "success" was never among them.
 type fakeStatusPoster struct {
-	states []string
-	descs  []string
-	err    error
+	states  []string
+	descs   []string
+	targets []string
+	err     error
 }
 
 func (f *fakeStatusPoster) SetCommitStatus(ctx context.Context, repoURL, sha, context, state, targetURL, description string) error {
 	f.states = append(f.states, state)
 	f.descs = append(f.descs, description)
+	f.targets = append(f.targets, targetURL)
 	return f.err
 }
 
@@ -89,7 +91,7 @@ func newTestRunner(t *testing.T, checkout *fakeCheckouter, jail *fakeJail, cert 
 		Certify:   cert,
 		Status:    status,
 		Store:     store,
-		RecordURL: func(repo, sha string) string { return "http://x/api/gate/run?repo=" + repo + "&sha=" + sha },
+		RecordURL: func(repo, sha, _ string) string { return "http://x/api/gate/run?repo=" + repo + "&sha=" + sha },
 		Now:       func() time.Time { return time.Unix(1000, 0) },
 	}
 }
@@ -115,7 +117,7 @@ func TestRunnerPassPostsSuccessAndStores(t *testing.T) {
 		t.Fatalf("expected final status 'success', got %v", status.states)
 	}
 
-	run, ok, err := r.Store.GetBySHA("o/r", "deadbeef")
+	run, ok, err := r.Store.GetByHead("o/r", "deadbeef", "")
 	if err != nil || !ok {
 		t.Fatalf("expected stored run: ok=%v err=%v", ok, err)
 	}
@@ -147,7 +149,7 @@ func TestRunnerFailPostsFailure(t *testing.T) {
 		}
 	}
 
-	run, ok, err := r.Store.GetBySHA("o/r", "deadbeef")
+	run, ok, err := r.Store.GetByHead("o/r", "deadbeef", "")
 	if err != nil || !ok {
 		t.Fatalf("expected stored run: ok=%v err=%v", ok, err)
 	}
@@ -189,7 +191,7 @@ func TestRunnerCheckoutErrorNeverPostsSuccess(t *testing.T) {
 		t.Fatalf("certifier must never run when checkout fails, but was called %d times", cert.calls)
 	}
 
-	run, ok, err := r.Store.GetBySHA("o/r", "deadbeef")
+	run, ok, err := r.Store.GetByHead("o/r", "deadbeef", "")
 	if err != nil || !ok {
 		t.Fatalf("expected a stored (failed) run: ok=%v err=%v", ok, err)
 	}

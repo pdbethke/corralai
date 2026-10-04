@@ -1049,6 +1049,9 @@ CORRALAI_GATE_POLICY_<NAME> repo merge gate: ONE policy per variable, "repo=owne
                            value: commas, semicolons, quotes and newlines included, so nothing can truncate it
                            into a weaker command that exits 0 and posts a wrongful success;
                            timeout= is seconds, defaults to gate.DefaultGateTimeout (600s) when omitted;
+                           net= is exactly true, false, 1 or 0 — anything else refuses the policy;
+                           a field written after cmd= (",<field>=" in any case, or a lowercase "<field>="
+                           at the start of a line) refuses the policy rather than vanishing into the command;
                            two policies that would answer the same pull request under the same context=
                            (default corral/gate) are REFUSED — the second would never run — so give one
                            a distinct context=;

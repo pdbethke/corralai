@@ -26,6 +26,14 @@ func OpenStore(dsn string) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("gate: open: %w", err)
 	}
+	// Before anything else touches gate_runs: an older binary's key
+	// migration could be interrupted between its statements and leave a
+	// state the code below would either fail on or silently orphan. Repair
+	// it first. (Review 8be2189163b0, R5.)
+	if err := recoverInterruptedMigration(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS gate_runs (
 		repo VARCHAR NOT NULL,
 		head_sha VARCHAR NOT NULL,
@@ -100,20 +108,27 @@ func OpenStore(dsn string) (*Store, error) {
 // Rows that collided under the narrow key are already lost — one overwrote the
 // other before this ran — and no migration can invent them back. They are
 // re-gated when their heads next appear, which is the correct outcome.
+//
+// The four statements run in ONE transaction. They used to be four separately
+// committed statements, so a crash between them left either a stale
+// gate_runs_wide (every later open failed on "already exists", disabling the
+// gate) or every row stranded in gate_runs_wide beside a fresh, empty table
+// (the dedupe history orphaned, every open head re-gated and re-certified).
+// recoverInterruptedMigration repairs either state an older binary may
+// already have left. (Review 8be2189163b0, R5.)
 func migrateKey(db *sql.DB) error {
-	var cols string
-	err := db.QueryRow(`SELECT list_aggregate(constraint_column_names, 'string_agg', ',')
-		FROM duckdb_constraints()
-		WHERE table_name = 'gate_runs' AND constraint_type = 'PRIMARY KEY'`).Scan(&cols)
-	if err == sql.ErrNoRows {
-		return nil // no primary key at all: nothing to widen
-	}
+	wide, ok, err := gateRunsKeyIsWide(db)
 	if err != nil {
-		return fmt.Errorf("gate: reading gate_runs primary key: %w", err)
+		return err
 	}
-	if strings.Contains(cols, "context") {
-		return nil // already wide
+	if !ok || wide {
+		return nil // no primary key at all, or already wide: nothing to widen
 	}
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("gate: widening gate_runs primary key: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // a no-op after Commit
 	stmts := []string{
 		`CREATE TABLE gate_runs_wide (
 			repo VARCHAR NOT NULL,
@@ -134,9 +149,102 @@ func migrateKey(db *sql.DB) error {
 		`ALTER TABLE gate_runs_wide RENAME TO gate_runs`,
 	}
 	for _, st := range stmts {
-		if _, err := db.Exec(st); err != nil {
+		if _, err := tx.Exec(st); err != nil {
 			return fmt.Errorf("gate: widening gate_runs primary key: %w", err)
 		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("gate: widening gate_runs primary key: %w", err)
+	}
+	return nil
+}
+
+// gateRunsKeyIsWide reports whether gate_runs' primary key includes context.
+// ok is false when the table has no primary key at all.
+func gateRunsKeyIsWide(db *sql.DB) (wide, ok bool, err error) {
+	var cols string
+	err = db.QueryRow(`SELECT list_aggregate(constraint_column_names, 'string_agg', ',')
+		FROM duckdb_constraints()
+		WHERE table_name = 'gate_runs' AND constraint_type = 'PRIMARY KEY'
+		  AND database_name = current_database() AND schema_name = current_schema()`).Scan(&cols)
+	if err == sql.ErrNoRows {
+		return false, false, nil
+	}
+	if err != nil {
+		return false, false, fmt.Errorf("gate: reading gate_runs primary key: %w", err)
+	}
+	return strings.Contains(cols, "context"), true, nil
+}
+
+// recoverInterruptedMigration repairs what an interrupted key migration from
+// an older, non-transactional binary can leave on disk. gate_runs_wide exists
+// only mid-migration, so its presence at open means one was cut short, and
+// WHERE it was cut decides the repair:
+//
+//   - gate_runs is gone: the crash came after DROP and before RENAME. The rows
+//     live only in gate_runs_wide — finish the swap.
+//   - gate_runs still has the NARROW key: the crash came after CREATE (and
+//     perhaps INSERT), before DROP. The narrow table still holds every row, so
+//     the partial copy is discarded and migrateKey runs the whole thing again.
+//   - gate_runs already has the WIDE key: the crash came after DROP, and the
+//     next open created a fresh table that has been in use since. The orphan
+//     is merged back with INSERT OR IGNORE — a row the live table wrote since
+//     is newer and wins — and only then dropped. Dropping it unmerged would
+//     throw away the very history this repair exists to keep.
+//
+// It runs in one transaction, so the repair cannot itself be interrupted into
+// a new state.
+func recoverInterruptedMigration(db *sql.DB) error {
+	has := func(name string) (bool, error) {
+		var n int
+		// Scoped to this store's own database and schema: on an md: DSN every
+		// database in the account is attached, and a same-named table in
+		// another one must not steer this repair.
+		err := db.QueryRow(`SELECT count(*) FROM duckdb_tables()
+			WHERE table_name = ? AND database_name = current_database() AND schema_name = current_schema()`, name).Scan(&n)
+		return n > 0, err
+	}
+	leftover, err := has("gate_runs_wide")
+	if err != nil {
+		return fmt.Errorf("gate: checking for an interrupted migration: %w", err)
+	}
+	if !leftover {
+		return nil
+	}
+	live, err := has("gate_runs")
+	if err != nil {
+		return fmt.Errorf("gate: checking for an interrupted migration: %w", err)
+	}
+	var stmts []string
+	switch {
+	case !live:
+		stmts = []string{`ALTER TABLE gate_runs_wide RENAME TO gate_runs`}
+	default:
+		wide, _, err := gateRunsKeyIsWide(db)
+		if err != nil {
+			return err
+		}
+		if wide {
+			stmts = append(stmts, `INSERT OR IGNORE INTO gate_runs
+				(repo, head_sha, context, pr, passed, status_posted, record_id, ran_at)
+				SELECT repo, head_sha, coalesce(context, 'corral/gate'), pr, passed,
+				       coalesce(status_posted, TRUE), record_id, ran_at
+				FROM gate_runs_wide`)
+		}
+		stmts = append(stmts, `DROP TABLE gate_runs_wide`)
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("gate: repairing an interrupted migration: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // a no-op after Commit
+	for _, st := range stmts {
+		if _, err := tx.Exec(st); err != nil {
+			return fmt.Errorf("gate: repairing an interrupted migration: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("gate: repairing an interrupted migration: %w", err)
 	}
 	return nil
 }
@@ -160,30 +268,39 @@ func (s *Store) Save(r Run) error {
 	return nil
 }
 
-// GetBySHA looks up the gate run for (repo, sha), returning (Run{}, false,
-// nil) when no such row exists.
-func (s *Store) GetBySHA(repo, sha string) (Run, bool, error) {
-	var r Run
-	r.Repo = repo
-	r.HeadSHA = sha
-	err := s.db.QueryRow(
+// ListBySHA returns every check's run for (repo, sha), one per context,
+// ordered by context — empty when the head was never gated.
+//
+// It replaces GetBySHA, which returned whichever context's row had the latest
+// ran_at: with two policies on one repo, "was this head gated?" came back
+// passed=true for a head whose other check had failed, depending only on which
+// finished last. A head with several checks has several answers, and a caller
+// asking about the head must see all of them. (Review 8be2189163b0, R7.)
+func (s *Store) ListBySHA(repo, sha string) ([]Run, error) {
+	rows, err := s.db.Query(
 		`SELECT pr, passed, coalesce(context, 'corral/gate'), coalesce(status_posted, TRUE),
 		        record_id, ran_at FROM gate_runs
-		 WHERE repo = ? AND head_sha = ? ORDER BY ran_at DESC LIMIT 1`,
-		repo, sha).Scan(&r.PR, &r.Passed, &r.Context, &r.StatusPosted, &r.RecordID, &r.RanAt)
-	if err == sql.ErrNoRows {
-		return Run{}, false, nil
-	}
+		 WHERE repo = ? AND head_sha = ? ORDER BY coalesce(context, 'corral/gate')`,
+		repo, sha)
 	if err != nil {
-		return Run{}, false, fmt.Errorf("gate: get by sha: %w", err)
+		return nil, fmt.Errorf("gate: list by sha: %w", err)
 	}
-	return r, true, nil
+	defer rows.Close()
+	var out []Run
+	for rows.Next() {
+		r := Run{Repo: repo, HeadSHA: sha}
+		if err := rows.Scan(&r.PR, &r.Passed, &r.Context, &r.StatusPosted, &r.RecordID, &r.RanAt); err != nil {
+			return nil, fmt.Errorf("gate: list by sha: %w", err)
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
 }
 
 // GetByHead looks up the gate run for (repo, sha, statusCtx) — the full key.
-// GetBySHA is kept for the read endpoint, which asks "was this head gated at
-// all"; the POLLER must use this one, because two policies on one repo report
-// under different contexts and each owes the forge its own status.
+// The poller uses it, because two policies on one repo report under different
+// contexts and each owes the forge its own status; the read endpoint uses it
+// when a status's link names its context, and ListBySHA when it does not.
 // (Cold review 2026-09-12, R3.)
 func (s *Store) GetByHead(repo, sha, statusCtx string) (Run, bool, error) {
 	statusCtx = normalizeContext(statusCtx)

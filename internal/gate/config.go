@@ -51,14 +51,46 @@ const maxGateTimeoutS = 24 * 60 * 60
 var policyFields = []string{"repo", "base", "context", "net", "timeout"}
 
 // strayFieldRE is derived from policyFields and tolerates whitespace on both
-// sides of the comma and the '='.
+// sides of the separator and the '='. It used to match only a comma followed
+// by the lowercase name, so "cmd=true,Base=release" and "cmd=true\nbase=release"
+// were swallowed into the command and the policy gated every base while the
+// operator had named one — the outcome this guard exists to report. (Review
+// 8be2189163b0, R6.) It now matches:
+//
+//   - after a COMMA, in ANY case. No shell line starts with ",Base=", so a
+//     comma-led field name is a misplaced field whatever its case.
+//   - at the start of a LINE, in LOWERCASE only — the spelling a policy field
+//     is written in. A multi-line script legitimately assigns shell variables
+//     on their own lines, and an uppercase BASE= or TIMEOUT= there is the
+//     script's, not the policy's; matching those too refused working policies
+//     on upgrade, which an adversarial review of this fix caught before merge.
+//
+// Two errors are accepted on purpose, and both are LOUD — the policy is
+// refused and named — where the miss this guards against was silent and
+// failed OPEN: a quoted ",base=" inside a legitimate command, and a lowercase
+// shell assignment such as "timeout=30" on its own line. The operator rewords
+// the command; nothing is gated against the wrong base.
+//
+// One miss remains, SILENT, and is the price of not refusing shell scripts: a
+// field written on its own line in a case other than lowercase ("\nBase=x")
+// is indistinguishable from a shell variable and is kept as part of the
+// command. Policy fields are documented lowercase; this is the one spelling
+// the guard cannot tell from a script.
 var strayFieldRE = func() map[string]*regexp.Regexp {
 	m := make(map[string]*regexp.Regexp, len(policyFields))
 	for _, f := range policyFields {
-		m[f] = regexp.MustCompile(`,\s*` + regexp.QuoteMeta(f) + `\s*=`)
+		q := regexp.QuoteMeta(f)
+		m[f] = regexp.MustCompile(`(?i:,\s*` + q + `\s*=)|\n[ \t]*` + q + `[ \t]*=`)
 	}
 	return m
 }()
+
+// cmdFieldRE finds the FIRST cmd= that begins a field: at the start of the
+// value or after a comma, with the same whitespace tolerance every other
+// field gets. It used to be the exact substrings "cmd=" and ",cmd=", so
+// "repo=o/r, cmd=true" was refused as having no command and that repo's gate
+// was off apart from a log line. (Review 8be2189163b0, R3.)
+var cmdFieldRE = regexp.MustCompile(`(^|,)\s*cmd\s*=`)
 
 // ParsePolicyEnv reads every CORRALAI_GATE_POLICY_<NAME> out of environ (the
 // os.Environ() form, "KEY=VALUE") and returns the policies in a DETERMINISTIC
@@ -183,7 +215,8 @@ func envValue(environ []string, key string) string {
 // (Policy.Base == nil). An omitted context= is defaulted at the door that ACTS
 // on the policy (Policy.normalized), never here, so the forge and the store
 // can never disagree about which check spoke. An omitted net= defaults to
-// false — no network, matching the runner's fail-closed posture.
+// false — no network, matching the runner's fail-closed posture — and a net=
+// that is not exactly true, false, 1 or 0 is refused, never defaulted.
 func ParsePolicy(raw string) (Policy, string) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -192,15 +225,11 @@ func ParsePolicy(raw string) (Policy, string) {
 
 	// Split the value at cmd= so the command is captured whole.
 	var head, cmdVal string
-	cmdSeen := false
-	switch {
-	case strings.HasPrefix(raw, "cmd="):
-		cmdVal, cmdSeen = raw[len("cmd="):], true
-	case strings.Contains(raw, ",cmd="):
-		i := strings.Index(raw, ",cmd=")
-		head, cmdVal, cmdSeen = raw[:i], raw[i+len(",cmd="):], true
+	loc := cmdFieldRE.FindStringIndex(raw)
+	if loc != nil {
+		head, cmdVal = raw[:loc[0]], raw[loc[1]:]
 	}
-	if !cmdSeen {
+	if loc == nil {
 		return Policy{}, "no cmd= (a policy with no command would report a result for a check that never ran)"
 	}
 	if stray := strayFieldAfterCmd(cmdVal); stray != "" {
@@ -241,7 +270,25 @@ func ParsePolicy(raw string) (Policy, string) {
 				pol.Context = val
 			}
 		case "net":
-			pol.AllowNet = val == "true" || val == "1"
+			// Exactly true/1 or false/0; anything else is refused, the rule
+			// timeout= follows. It used to map every value but "true" and "1"
+			// to no-network, silently, so net=yes produced a gate that failed
+			// every network-needing check with nothing pointing at the
+			// policy. (Review 8be2189163b0, R4.)
+			//
+			// NOT strconv.ParseBool: it also accepts "TRUE", "True" and "t",
+			// which USED to mean no network — so it would have opened the
+			// jail's network to untrusted pull-request code for policies that
+			// had it closed. The fix must never widen the jail; its worst
+			// case is a logged refusal.
+			switch val {
+			case "true", "1":
+				pol.AllowNet = true
+			case "false", "0":
+				pol.AllowNet = false
+			default:
+				return Policy{}, "net=" + val + " is not one of true, false, 1, 0"
+			}
 		case "timeout":
 			n, err := strconv.Atoi(val)
 			switch {

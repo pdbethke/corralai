@@ -11,6 +11,43 @@ history of any release, `git log v0.3.4..v0.3.5`.
 
 ## [Unreleased]
 
+### The merge gate: five findings from a recorded review, fixed
+
+Ledger entry `8be2189163b0`, findings R3–R7, all adjudicated confirmed.
+
+- **`net=` is exactly `true`, `false`, `1` or `0`, or the policy is refused.**
+  It used to map every value but `true`/`1` to no-network, silently, so
+  `net=yes` produced a gate that failed every network-needing check. Every
+  other spelling — `yes`, `on`, an empty value, and also `TRUE`, `True`, `t` —
+  is now refused with a reason, as `timeout=` already was. Nothing gains
+  network access it did not have: those spellings used to mean *no network*,
+  and they are refused rather than reinterpreted. **A policy that used one is
+  now off, with a log line naming it.**
+- **`cmd=` is found with the same whitespace tolerance as every other field**,
+  so `repo=o/r, cmd=true` is a policy again rather than "no cmd=".
+- **A field written after `cmd=` is caught in more spellings**: after a comma
+  in any case (`,Base=release`), and at the start of a line in lowercase
+  (`base=release`). Before, only `,base=` was caught, and the rest were
+  swallowed into the command, so the policy gated every base. An uppercase
+  shell variable on its own line (`BASE=origin/main`) is still part of the
+  command. **A multi-line command with a lowercase `timeout=`, `base=`,
+  `net=`, `repo=` or `context=` assignment at the start of a line is now
+  refused** — rename the variable.
+- **The gate store's one-time key migration is transactional**, and opening a
+  store repairs either state an interrupted migration from an older binary can
+  leave — one used to disable the gate, the other to lose its dedupe history.
+- **`/api/gate/run` answers per check.** Every status's link — the merge
+  gate's and the control gate's — now names its check (`&context=`). For a
+  merge-gate check the endpoint answers for that one. The control gate's own
+  results have no read endpoint yet, so its link now returns 404 — where it
+  used to open the merge gate's answer for the head, which could read passed
+  while the control gate had failed. Without a context it reports `passed` only
+  when every check that has **reported** for the head passed, with a
+  `contexts` list of each check's result, pull request and record; it used to
+  report whichever check finished last. A check still running has no row and
+  is not listed. `record_id` is omitted when several checks answer together
+  and for a check that signed nothing.
+
 ### Challenger seats can be drawn from a pool
 
 Built and unit-tested; not yet exercised end to end against a real repository.

@@ -9,6 +9,22 @@ still move between minor versions.
 Entries describe what changed for someone *using* the tool. For the full commit
 history of any release, `git log v0.3.4..v0.3.5`.
 
+## [v1.0.0-rc.15] — 2026-10-04
+
+Same code as rc.14 plus the release-gate fix below. **rc.14 is tagged and on
+the Go proxy but has no GitHub Release**: its publish step reached a path in
+the release gate that had never worked, and a re-run replays the workflow
+from the tag, so the fix could not reach it. rc.14 installs and is sound;
+rc.15 is the one with a Release page.
+
+- **The release gate's "contained in the default branch" path works.** It
+  read the branch head through a lookup that always failed and captured the
+  API's error body as the commit, so a release whose own commit was red (the
+  normal case, between the tag and the pin bump) could never publish.
+- **A tag on a commit that was never merged is refused**, even when that
+  commit's own CI is green. It used to publish, while the workflow's comment
+  promised otherwise.
+
 ## [v1.0.0-rc.14] — 2026-10-04
 
 Everything since rc.13: four more rounds of cold review on the merge gate and

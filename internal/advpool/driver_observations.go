@@ -2,7 +2,11 @@
 
 package advpool
 
-import "sort"
+import (
+	"sort"
+
+	"github.com/pdbethke/corralai/internal/shadowpool"
+)
 
 // bugCatchObservations derives each seat's execution-proven contribution
 // from the run state + the signed verdict. Catches = ProvenMissed only — no
@@ -193,6 +197,9 @@ func bugCatchObservations(run *runState, v Verdict) []BugCatchObservation {
 	}
 	for i := range out {
 		out[i].Lang = run.rs.Lang
+		if out[i].Shadow {
+			_, out[i].ShadowDrawn = shadowpool.Drawn(run.rs.ShadowSelection, out[i].Role)
+		}
 	}
 	return out
 }

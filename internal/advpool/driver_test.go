@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"fmt"
+	"github.com/pdbethke/corralai/internal/shadowpool"
 	"log"
 	"math"
 	"os"
@@ -4705,5 +4706,18 @@ func TestLeaderboardRewardsTheCriticForBeingRightNotForFlagging(t *testing.T) {
 		if c.role == RoleTestCritic {
 			t.Errorf("a leaderboard row was recorded for an unstaffed critic (model %q)", c.model)
 		}
+	}
+}
+
+// ShadowSelection must survive the timed-out construction path too —
+// timeoutVerdict is where a field has been forgotten more than once.
+func TestTimeoutVerdictCarriesTheShadowSelection(t *testing.T) {
+	d := &Driver{}
+	v := d.timeoutVerdict(&runState{rs: RunSpec{
+		Repo: "r", Commit: "c", Lang: "go",
+		ShadowSelection: []shadowpool.Selection{{Role: RoleTestWriterShadow, Chosen: "c", Seed: "0x01"}},
+	}})
+	if len(v.ShadowSelection) != 1 || v.ShadowSelection[0].Chosen != "c" {
+		t.Fatalf("ShadowSelection did not survive this construction path: %+v", v.ShadowSelection)
 	}
 }

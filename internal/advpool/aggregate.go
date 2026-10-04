@@ -36,10 +36,11 @@ const MethodCoverageLines = "coverage-lines"
 // ledger -> attestation, rather than a reader noticing the second site.
 func verdictFromSpec(rs RunSpec) Verdict {
 	return Verdict{
-		Repo:          rs.Repo,
-		Commit:        rs.Commit,
-		Lang:          rs.Lang,
-		PriorsApplied: rs.PriorsApplied, PriorDigest: rs.PriorDigest, PriorSource: rs.PriorSource,
+		Repo:            rs.Repo,
+		Commit:          rs.Commit,
+		Lang:            rs.Lang,
+		ShadowSelection: rs.ShadowSelection,
+		PriorsApplied:   rs.PriorsApplied, PriorDigest: rs.PriorDigest, PriorSource: rs.PriorSource,
 		TestSelection: TestSelection{
 			Method: rs.Selection.Method, Selected: len(rs.Selection.Tests),
 			Of: rs.Selection.Of, Fallback: rs.Selection.Fallback,

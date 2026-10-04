@@ -7,6 +7,7 @@
 package advpool
 
 import (
+	"github.com/pdbethke/corralai/internal/shadowpool"
 	"time"
 
 	"github.com/pdbethke/corralai/internal/adequacy"
@@ -101,6 +102,14 @@ type RunSpec struct {
 	// by default is nothing but a comparison nobody asked for — whereas a
 	// default would silently spend tokens and force a vendor.
 	ShadowWriterModel string
+
+	// ShadowSelection discloses each shadow seat whose model was DRAWN from
+	// an operator-named pool (docs/design/shadow-seat-selection.md): the
+	// pool, each member's posterior and sample, the seed. Empty when every
+	// challenger was named by hand. It is disclosure only — the drawn model
+	// is already in ShadowModel / ShadowWriterModel, and nothing here may
+	// influence a verdict seat.
+	ShadowSelection []shadowpool.Selection
 
 	// WriterMode is HOW the writer seat attacks the survivors:
 	// WriterModePerSurvivor fans out into one call per survivor, each proven

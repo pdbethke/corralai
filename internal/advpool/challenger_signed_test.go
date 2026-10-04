@@ -4,6 +4,7 @@ package advpool
 
 import (
 	"context"
+	"github.com/pdbethke/corralai/internal/shadowpool"
 	"testing"
 )
 
@@ -53,5 +54,26 @@ func TestSignedVerdictCarriesTheChallengerMeasurement(t *testing.T) {
 	}
 	if *sig.got.ChallengerAgreement != *returned.ChallengerAgreement {
 		t.Errorf("signed measurement %+v != returned %+v", sig.got.ChallengerAgreement, returned.ChallengerAgreement)
+	}
+}
+
+// ShadowSelection must survive BOTH verdict construction paths. This is the
+// converged one (tickAggregate); the timed-out one is in driver_test.go.
+func TestShadowSelectionSurvivesTickAggregate(t *testing.T) {
+	rs := newTestRunSpec(t)
+	rs.ShadowWriterModel = "challenger-model"
+	rs.ShadowSelection = []shadowpool.Selection{{Role: RoleTestWriterShadow, Chosen: "c", Seed: "0x01"}}
+
+	missionID := writerShadowNextMissionID
+	writerShadowNextMissionID++
+	d := newWriterShadowRun(t, missionID, rs, &writerShadowScorer{}, &fakeValidator{mutants: writerShadowMutants()})
+	sig := &capturingSigner{}
+	d.Signer = sig
+
+	v := driveWriterShadow(t, d, missionID)
+	for name, got := range map[string]Verdict{"returned": v, "signed": sig.got} {
+		if len(got.ShadowSelection) != 1 || got.ShadowSelection[0].Chosen != "c" {
+			t.Fatalf("ShadowSelection did not survive this construction path (%s): %+v", name, got.ShadowSelection)
+		}
 	}
 }

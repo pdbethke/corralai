@@ -3,6 +3,7 @@
 package advpool
 
 import (
+	"github.com/pdbethke/corralai/internal/shadowpool"
 	"testing"
 
 	"github.com/pdbethke/corralai/internal/adequacy"
@@ -75,5 +76,24 @@ func TestBugCatchObservationsChallengerWriterUnmeasuredIsDropped(t *testing.T) {
 	}
 	if !seen {
 		t.Fatal("no challenger writer row at all for a staffed, unmeasured seat")
+	}
+}
+
+func TestBugCatchObservationsMarkDrawnShadowRows(t *testing.T) {
+	run := obsRun()
+	run.shadowWriterMeasured = true
+	run.rs.ShadowWriterModel = "challenger"
+	run.rs.ShadowSelection = []shadowpool.Selection{{Role: RoleTestWriterShadow, Chosen: "challenger"}}
+	drawn := 0
+	for _, o := range bugCatchObservations(run, obsVerdict()) {
+		if o.ShadowDrawn != (o.Role == RoleTestWriterShadow) {
+			t.Fatalf("row %s: ShadowDrawn=%v; only the drawn seat's rows may carry it", o.Role, o.ShadowDrawn)
+		}
+		if o.ShadowDrawn {
+			drawn++
+		}
+	}
+	if drawn == 0 {
+		t.Fatal("fixture: no drawn-seat row was produced")
 	}
 }

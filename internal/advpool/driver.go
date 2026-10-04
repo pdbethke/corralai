@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/pdbethke/corralai/internal/shadowpool"
 	"log"
 	"sort"
 	"strings"
@@ -773,6 +774,11 @@ type Verdict struct {
 	// callers must still check Pair.Sufficient before reading Jaccard and
 	// Pair.KappaDefined before reading Kappa, exactly as modelcorr documents.
 	ChallengerAgreement *modelcorr.Pair
+
+	// ShadowSelection is RunSpec.ShadowSelection, carried by verdictFromSpec
+	// onto BOTH construction paths. JSON-tagged, so CertSigner's digest of
+	// the verdict covers it on the --local path with no further copying.
+	ShadowSelection []shadowpool.Selection `json:"shadow_selection,omitempty"`
 	// PromptShape discloses what a mutant-generator shard actually SAW:
 	// "chunk" when every shard of this run showed only its own symbols'
 	// bodies (see advpool's shardCode), "file" when even one shard fell back

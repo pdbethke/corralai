@@ -148,14 +148,25 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 
 	// The shadow draw happens HERE, before the registry resolves any seat, so
 	// the drawn member — as typed — is resolved exactly like a named one.
+	pooled := strings.TrimSpace(*shadow.pool) != "" || strings.TrimSpace(*shadow.writerPool) != ""
 	drawLang := strings.TrimSpace(*langFlag)
+	if drawLang != "" && pooled {
+		// Refused HERE, before the draw reads the store: an unknown name
+		// would otherwise print a measured "0 row(s)" for a language corral
+		// does not have, and only then be refused below.
+		if _, ok := lang.ByName(drawLang); !ok {
+			fmt.Fprintf(stderr, "corral certify --local: unknown --lang %q\n", drawLang)
+			return 2
+		}
+	}
 	if drawLang == "" {
 		if p, ok := lang.Detect(*codePath); ok {
 			drawLang = p.Name()
 		}
 	}
-	if drawLang == "" && (strings.TrimSpace(*shadow.pool) != "" || strings.TrimSpace(*shadow.writerPool) != "") {
-		fmt.Fprintln(stderr, "corral certify --local: a shadow pool reads history for --code's language, and it cannot be detected — pass --lang")
+	if drawLang == "" && pooled {
+		// Can precede the --code-required refusal, so it names both fixes.
+		fmt.Fprintln(stderr, "corral certify --local: a shadow pool reads history for the audited file's language, and it cannot be detected — pass --lang (or --code)")
 		return 2
 	}
 	shadowSels, drawErr := drawShadowSeats("corral certify --local", *repoDirFlag, drawLang, shadow,

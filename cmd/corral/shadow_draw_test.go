@@ -340,3 +340,26 @@ func TestCertifyRepoDryRunValidatesPoolsButDoesNotDraw(t *testing.T) {
 		}
 	}
 }
+
+// An invalid --lang is refused BEFORE the draw. It used to reach the store
+// first and print a measured "0 row(s) for golang" — a number about a
+// language corral does not have — and only then be refused.
+func TestCertifyLocalRefusesUnknownLangBeforeTheDraw(t *testing.T) {
+	t.Setenv("CORRALAI_BUGCATCH_DB", filepath.Join(t.TempDir(), "bc.duckdb"))
+	var errb bytes.Buffer
+	rc := runCertifyLocal([]string{"--lang", "golang", "--shadow-pool", "localmodel-a:1,localmodel-b:1"}, &bytes.Buffer{}, &errb)
+	if rc != 2 || !strings.Contains(errb.String(), `unknown --lang "golang"`) {
+		t.Fatalf("rc %d, want the unknown --lang refusal:\n%s", rc, errb.String())
+	}
+	if strings.Contains(errb.String(), "challenger drawn") || strings.Contains(errb.String(), "row(s)") {
+		t.Errorf("a draw ran for a language that does not exist:\n%s", errb.String())
+	}
+
+	// No --lang and no --code: the language cannot be detected, and this
+	// refusal comes before the --code-required one, so it names both fixes.
+	errb.Reset()
+	rc = runCertifyLocal([]string{"--shadow-pool", "localmodel-a:1,localmodel-b:1"}, &bytes.Buffer{}, &errb)
+	if rc != 2 || !strings.Contains(errb.String(), "pass --lang (or --code)") {
+		t.Fatalf("rc %d, want the undetectable-language refusal naming --lang and --code:\n%s", rc, errb.String())
+	}
+}

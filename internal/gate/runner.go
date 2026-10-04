@@ -64,9 +64,12 @@ type Runner struct {
 	Certify  Certifier
 	Status   StatusPoster
 	Store    *Store
-	// RecordURL builds the status target_url for a (repo, sha) -> the
-	// /api/gate/run link (Task 5 wires the real endpoint).
-	RecordURL func(repo, sha string) string
+	// RecordURL builds the status target_url for one status: the
+	// /api/gate/run link for (repo, sha) AND the status's own context. The
+	// context is not decoration — every status belongs to one check, and a
+	// link without it could open another check's result. (Review
+	// 8be2189163b0, R7.)
+	RecordURL func(repo, sha, statusContext string) string
 	// Now is an injected clock; the runner never calls time.Now() itself so
 	// RanAt stays deterministic under test.
 	Now func() time.Time
@@ -88,7 +91,7 @@ func (r *Runner) Run(ctx context.Context, repoURL string, p Policy, pr PRRef) er
 	// on one. (Cold review round three, 2026-09-12, R4 and R5.)
 	p = p.normalized()
 
-	target := r.RecordURL(p.Repo, pr.HeadSHA)
+	target := r.RecordURL(p.Repo, pr.HeadSHA, p.Context)
 	_ = r.Status.SetCommitStatus(ctx, repoURL, pr.HeadSHA, p.Context, "pending", target, "corral gate running")
 
 	// A POLICY WITH NO COMMAND MUST NEVER PASS. ParsePolicies refuses one,
@@ -186,7 +189,7 @@ func (r *Runner) Redeliver(ctx context.Context, repoURL string, p Policy, pr PRR
 	if prev.Passed {
 		state = "success"
 	}
-	if err := r.Status.SetCommitStatus(ctx, repoURL, pr.HeadSHA, p.Context, state, r.RecordURL(p.Repo, pr.HeadSHA), gateDesc(prev.Passed)); err != nil {
+	if err := r.Status.SetCommitStatus(ctx, repoURL, pr.HeadSHA, p.Context, state, r.RecordURL(p.Repo, pr.HeadSHA, p.Context), gateDesc(prev.Passed)); err != nil {
 		return err
 	}
 	if err := r.Store.MarkPosted(p.Repo, pr.HeadSHA, p.Context); err != nil {

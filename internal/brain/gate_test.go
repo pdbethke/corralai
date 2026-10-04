@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -204,5 +205,99 @@ func TestStartGateEmptyPoliciesIsOff(t *testing.T) {
 	store, err := StartGate(context.Background(), Options{})
 	if err != nil || store != nil {
 		t.Fatalf("StartGate with no policies: store=%v err=%v, want (nil, nil)", store, err)
+	}
+}
+
+// R7 from the review of 6951ca4c (ledger entry 8be2189163b0): GetBySHA
+// returned whichever context's row ran LAST, so with two policies on one repo
+// the endpoint answered passed=true for a head whose other check failed,
+// depending only on which finished second. The link the forge shows on each
+// status also carried no context, so a status for one check could open the
+// other check's result.
+
+func saveTwoContexts(t *testing.T, store *gate.Store) {
+	t.Helper()
+	// The FAILING check ran first; the passing one ran last — the order that
+	// made the old endpoint say "passed".
+	if err := store.Save(gate.Run{Repo: "o/r", HeadSHA: "abc", Context: "corral/lint", PR: 5, Passed: false, StatusPosted: true, RecordID: 41, RanAt: time.Unix(10, 0)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save(gate.Run{Repo: "o/r", HeadSHA: "abc", Context: "corral/test", PR: 5, Passed: true, StatusPosted: true, RecordID: 42, RanAt: time.Unix(20, 0)}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+type gateRunBody struct {
+	Passed   bool  `json:"passed"`
+	PR       int   `json:"pr"`
+	RecordID int64 `json:"record_id"`
+	Contexts []struct {
+		Context  string `json:"context"`
+		Passed   bool   `json:"passed"`
+		RecordID int64  `json:"record_id"`
+	} `json:"contexts"`
+}
+
+func getGateRun(t *testing.T, store *gate.Store, query string) gateRunBody {
+	t.Helper()
+	w := httptest.NewRecorder()
+	GateRunHandler(store)(w, httptest.NewRequest(http.MethodGet, "/api/gate/run?"+query, nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET %s: status %d, body %s", query, w.Code, w.Body.String())
+	}
+	var got gateRunBody
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("bad JSON: %v (%s)", err, w.Body.String())
+	}
+	return got
+}
+
+func TestGateRunWithoutAContextPassesOnlyIfEveryCheckPassed(t *testing.T) {
+	store, err := gate.OpenStore(filepath.Join(t.TempDir(), "gate.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	saveTwoContexts(t, store)
+
+	got := getGateRun(t, store, "repo=o/r&sha=abc")
+	if got.Passed {
+		t.Fatalf("passed=true while corral/lint failed: the head was NOT gated green (%+v)", got)
+	}
+	if len(got.Contexts) != 2 || got.Contexts[0].Context != "corral/lint" || got.Contexts[0].Passed || got.Contexts[0].RecordID != 41 ||
+		got.Contexts[1].Context != "corral/test" || !got.Contexts[1].Passed || got.Contexts[1].RecordID != 42 {
+		t.Fatalf("every check must be listed with its own result and record: %+v", got.Contexts)
+	}
+	if got.RecordID != 0 {
+		t.Fatalf("with two checks there is no single record; record_id must be absent, got %d", got.RecordID)
+	}
+}
+
+func TestGateRunForOneContextAnswersForThatCheck(t *testing.T) {
+	store, err := gate.OpenStore(filepath.Join(t.TempDir(), "gate.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	saveTwoContexts(t, store)
+
+	got := getGateRun(t, store, "repo=o/r&sha=abc&context=corral%2Flint")
+	if got.Passed || got.RecordID != 41 || len(got.Contexts) != 1 || got.Contexts[0].Context != "corral/lint" {
+		t.Fatalf("the lint status's link must open the lint result: %+v", got)
+	}
+	w := httptest.NewRecorder()
+	GateRunHandler(store)(w, httptest.NewRequest(http.MethodGet, "/api/gate/run?repo=o/r&sha=abc&context=corral%2Fnope", nil))
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("an unknown context must 404, not borrow another check's result: %d", w.Code)
+	}
+}
+
+func TestTheDefaultStatusLinkNamesItsCheck(t *testing.T) {
+	got := defaultGateRecordURL("o/r", "abc", "corral/lint")
+	if !strings.Contains(got, "context=corral%2Flint") {
+		t.Fatalf("defaultGateRecordURL = %q; a status's link must name its own check", got)
+	}
+	if got := defaultGateRecordURL("o/r", "abc", ""); strings.Contains(got, "context=") {
+		t.Fatalf("no context, no context parameter: %q", got)
 	}
 }

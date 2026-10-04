@@ -308,9 +308,9 @@ type Options struct {
 	GatePollInterval time.Duration
 
 	// GateRecordURL builds the /api/gate/run link the gate runner posts as
-	// a commit status's target_url. nil => a relative-path default
-	// ("/api/gate/run?repo=...&sha=...").
-	GateRecordURL func(repo, sha string) string
+	// a commit status's target_url, for that status's own context. nil => a
+	// relative-path default ("/api/gate/run?repo=...&sha=...&context=...").
+	GateRecordURL func(repo, sha, statusContext string) string
 
 	// Control gate (v1 run+post): the control owner's vetted tests, run against
 	// each PR head and posted as a distinct corral/control-gate required check.

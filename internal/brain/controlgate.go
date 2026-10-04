@@ -216,17 +216,19 @@ func StartControlGate(ctx context.Context, opts Options) (*gate.Store, *controls
 	}
 
 	runner := &controlRunner{
-		byRepo:          byRepo,
-		Base:            base,
-		TestCmd:         testCmd,
-		Checkout:        opts.Repo,
-		Reader:          opts.Repo,
-		Cert:            certifierAdapter{opts: opts},
-		Status:          opts.Repo,
-		Spec:            spec,
-		Jail:            adequacy.NewJail(opts.GateBackend, gate.DefaultGateTimeout),
-		RunStore:        runStore,
-		Record:          record,
+		byRepo:   byRepo,
+		Base:     base,
+		TestCmd:  testCmd,
+		Checkout: opts.Repo,
+		Reader:   opts.Repo,
+		Cert:     certifierAdapter{opts: opts},
+		Status:   opts.Repo,
+		Spec:     spec,
+		Jail:     adequacy.NewJail(opts.GateBackend, gate.DefaultGateTimeout),
+		RunStore: runStore,
+		// The control gate posts statuses the gate store never holds, so
+		// its links keep the context-free form they always had.
+		Record:          func(repo, sha string) string { return record(repo, sha, "") },
 		Now:             time.Now,
 		attempts:        make(map[string]int),
 		MaxCertAttempts: controlCertMaxAttempts,

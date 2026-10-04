@@ -183,7 +183,7 @@ func TestControlRunner_CertifyError_BoundedRetry(t *testing.T) {
 			t.Fatalf("attempt 1 must stay pending (no terminal status), got %+v", c)
 		}
 	}
-	if _, ok, _ := r.RunStore.GetBySHA("o/r", "abc"); ok {
+	if runs, _ := r.RunStore.ListBySHA("o/r", "abc"); len(runs) != 0 {
 		t.Fatal("attempt 1 must NOT record the SHA (retry next poll)")
 	}
 
@@ -193,7 +193,7 @@ func TestControlRunner_CertifyError_BoundedRetry(t *testing.T) {
 	if got := poster.last(); got.state != "error" {
 		t.Fatalf("attempt 2 (at cap) must post a terminal error, got %+v", got)
 	}
-	if _, ok, _ := r.RunStore.GetBySHA("o/r", "abc"); !ok {
+	if runs, _ := r.RunStore.ListBySHA("o/r", "abc"); len(runs) == 0 {
 		t.Fatal("attempt 2 (at cap) must record the SHA so the poller stops re-running")
 	}
 }

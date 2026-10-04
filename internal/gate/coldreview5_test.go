@@ -146,7 +146,7 @@ func TestRunnerRedeliverPostsTheStoredVerdict(t *testing.T) {
 	status := &fakeStatusPoster{}
 	cert := &fakeCertifier{}
 	r := &Runner{Status: status, Store: store, Certify: cert,
-		RecordURL: func(repo, sha string) string { return "/r/" + sha }, Now: func() time.Time { return time.Unix(1, 0) }}
+		RecordURL: func(repo, sha, _ string) string { return "/r/" + sha }, Now: func() time.Time { return time.Unix(1, 0) }}
 
 	if err := r.Redeliver(context.Background(), "https://github.com/o/r", testPolicy(), PRRef{Number: 1, HeadSHA: "abc", Base: "main"}, prev); err != nil {
 		t.Fatal(err)
@@ -383,5 +383,27 @@ func assertWideKey(t *testing.T, s *Store) {
 	}
 	if !strings.Contains(cols, "context") {
 		t.Fatalf("gate_runs key is %q, want it widened to include context", cols)
+	}
+}
+
+// TestEachStatusLinksToItsOwnCheck is R7's runner half: every status the
+// runner posts links to a record URL built WITH that status's context, so the
+// link on check A cannot open check B's result.
+func TestEachStatusLinksToItsOwnCheck(t *testing.T) {
+	status := &fakeStatusPoster{}
+	r := newTestRunner(t, &fakeCheckouter{}, &fakeJail{exitCode: 0, output: "ok"}, &fakeCertifier{recordID: 42, head: "h"}, status)
+	r.RecordURL = func(repo, sha, statusContext string) string { return "/run/" + sha + "/" + statusContext }
+	pol := testPolicy()
+	pol.Context = "corral/lint"
+	if err := r.Run(context.Background(), "https://github.com/o/r", pol, testPR()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(status.targets) == 0 {
+		t.Fatal("no status was posted")
+	}
+	for i, target := range status.targets {
+		if target != "/run/deadbeef/corral/lint" {
+			t.Fatalf("status %d (%s) links to %q; it must link to its own check", i, status.states[i], target)
+		}
 	}
 }

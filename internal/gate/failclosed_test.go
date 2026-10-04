@@ -35,7 +35,7 @@ func TestFailClosed(t *testing.T) {
 		t.Fatalf("expected posted description 'boom', got %v", status.descs)
 	}
 
-	run, ok, err := store.GetBySHA("o/r", pr.HeadSHA)
+	run, ok, err := store.GetByHead("o/r", pr.HeadSHA, "")
 	if err != nil || !ok {
 		t.Fatalf("expected a stored run: ok=%v err=%v", ok, err)
 	}

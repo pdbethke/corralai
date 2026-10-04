@@ -263,30 +263,39 @@ func (s *Store) Save(r Run) error {
 	return nil
 }
 
-// GetBySHA looks up the gate run for (repo, sha), returning (Run{}, false,
-// nil) when no such row exists.
-func (s *Store) GetBySHA(repo, sha string) (Run, bool, error) {
-	var r Run
-	r.Repo = repo
-	r.HeadSHA = sha
-	err := s.db.QueryRow(
+// ListBySHA returns every check's run for (repo, sha), one per context,
+// ordered by context — empty when the head was never gated.
+//
+// It replaces GetBySHA, which returned whichever context's row had the latest
+// ran_at: with two policies on one repo, "was this head gated?" came back
+// passed=true for a head whose other check had failed, depending only on which
+// finished last. A head with several checks has several answers, and a caller
+// asking about the head must see all of them. (Review 8be2189163b0, R7.)
+func (s *Store) ListBySHA(repo, sha string) ([]Run, error) {
+	rows, err := s.db.Query(
 		`SELECT pr, passed, coalesce(context, 'corral/gate'), coalesce(status_posted, TRUE),
 		        record_id, ran_at FROM gate_runs
-		 WHERE repo = ? AND head_sha = ? ORDER BY ran_at DESC LIMIT 1`,
-		repo, sha).Scan(&r.PR, &r.Passed, &r.Context, &r.StatusPosted, &r.RecordID, &r.RanAt)
-	if err == sql.ErrNoRows {
-		return Run{}, false, nil
-	}
+		 WHERE repo = ? AND head_sha = ? ORDER BY coalesce(context, 'corral/gate')`,
+		repo, sha)
 	if err != nil {
-		return Run{}, false, fmt.Errorf("gate: get by sha: %w", err)
+		return nil, fmt.Errorf("gate: list by sha: %w", err)
 	}
-	return r, true, nil
+	defer rows.Close()
+	var out []Run
+	for rows.Next() {
+		r := Run{Repo: repo, HeadSHA: sha}
+		if err := rows.Scan(&r.PR, &r.Passed, &r.Context, &r.StatusPosted, &r.RecordID, &r.RanAt); err != nil {
+			return nil, fmt.Errorf("gate: list by sha: %w", err)
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
 }
 
 // GetByHead looks up the gate run for (repo, sha, statusCtx) — the full key.
-// GetBySHA is kept for the read endpoint, which asks "was this head gated at
-// all"; the POLLER must use this one, because two policies on one repo report
-// under different contexts and each owes the forge its own status.
+// The poller uses it, because two policies on one repo report under different
+// contexts and each owes the forge its own status; the read endpoint uses it
+// when a status's link names its context, and ListBySHA when it does not.
 // (Cold review 2026-09-12, R3.)
 func (s *Store) GetByHead(repo, sha, statusCtx string) (Run, bool, error) {
 	statusCtx = normalizeContext(statusCtx)

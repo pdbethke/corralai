@@ -471,7 +471,7 @@ echoes a key value, and an unset key is never exported as an empty variable
 | `writer-model` | **yes** | `""` | Model for the test-writer role — the half that authors a test to prove a survivor is a real gap. |
 | `mutant-model` | **yes** | `""` | Model for the mutant-generator role. |
 | `critic-model` | no | `""` | Model for the test-critic role, which must **differ** from the writer's. `off` disables it entirely — it is advisory and never gates the verdict, so a single-vendor run with only one usable model can drop it. No default. |
-| `shadow-model` | no | `""` (OFF) | Challenger model that attacks every region a second time. Recorded for comparison, never gates the verdict. Off unless named. |
+| `shadow-model` | no | `""` (OFF) | Challenger model that attacks every region a second time. Recorded for comparison, never gates the verdict. Off unless named. The CLI also takes `--shadow-pool`, a comma-separated pool drawn from per run; the action does not expose it as an input. |
 | `reviewer-model` | no | `""` (off) | Also run `corral review` on the change with this model in the reviewer seat — see "The review, on a pull request" below. An API model name; the agentic seats (`claude-code`, `codex`) are refused on a runner. |
 | `verifier-model` | no | `""` (off) | With `reviewer-model`, a third model (never the reviewer's) that tries to refute every finding by the same rules. |
 | `review-scope` | no | `""` (the change itself) | What the reviewer is handed. Empty: the top-level directory of every file changed against `diff-base`, one review per directory. |

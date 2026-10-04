@@ -115,7 +115,7 @@ output.
 On a file with several functions the generation **fans out** — one seat per
 group of functions, so every function gets probed, not just whichever one a
 single generator happened to pick (`--max-shards N` bounds the width; the
-default is 8 — only `--swarm` sizes itself to your machine). Name a `--shadow-model` and a
+default is 8 — only `--swarm` sizes itself to your machine). Name a `--shadow-model` (or a `--shadow-pool` of them, one drawn per run) and a
 **challenger model** attacks the same regions in parallel, purely to measure one
 model against another on identical ground — it's recorded for comparison and
 **never** part of the verdict (off unless named, like every seat). And a mutant

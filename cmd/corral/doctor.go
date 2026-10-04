@@ -56,18 +56,31 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 	mutantModel := fs.String("mutant-model", "", "the mutant-generator model whose credential to check")
 	writerModel := fs.String("writer-model", "", "the test-writer model whose credential to check")
 	criticModel := fs.String("critic-model", "", "the test-critic model whose credential to check")
-	shadowModel := fs.String("shadow-model", "", "the challenger generator model, if the run will name one — it needs a credential too")
+	shadow := registerShadowSeatFlags(fs, shadowSeatHelp{
+		model:       "the challenger generator model, if the run will name one — it needs a credential too",
+		pool:        "the challenger generator POOL a certify run will draw from (comma-separated). doctor draws nothing: it checks the pool exactly as certify does before its draw — at least two members, no duplicates, every member resolvable and holding a credential, not combined with --shadow-model",
+		writerModel: "the challenger WRITER model, if the run will name one — doctor checks its credential too",
+		writerPool:  "the challenger WRITER pool a certify run will draw from. doctor draws nothing: it checks the pool exactly as --shadow-pool's is checked",
+		seed:        "the --shadow-seed a certify run will replay. doctor draws nothing: it checks the seed parses and that a pool is named for it to replay",
+	})
 	deriveModel := fs.String("derive-model", "", "the goal-derivation model a `certify --repo` run will name, if any")
 	repoDir := fs.String("repo", ".", "the repository the run will audit — where its .corral/models.json registry is read from, exactly as certify reads it")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
+	// Every member of every challenger pool, checked exactly as certify checks
+	// it before its draw — but never drawn: doctor answers "would this run
+	// work", and a pool works only if EVERY member could be the one drawn.
+	// Run before the registry resolves the seats, as certify runs it.
+	poolNamed := strings.TrimSpace(*shadow.pool) != "" || strings.TrimSpace(*shadow.writerPool) != ""
+	poolErr := validateShadowPools("corral doctor", *repoDir, shadow, nil, true, stderr)
+
 	// The model registry, resolved exactly as certify resolves it — doctor
 	// exists to answer "would this run work", and it can only answer that
 	// about the CONCRETE model a seat would really use. Its refusals are the
 	// registry's, so a broken declaration is caught here for free.
 	seatReg, regErr := resolveSeatRegistry("corral doctor", *repoDir,
-		certifySeats(deriveModel, mutantModel, writerModel, criticModel, shadowModel, nil), stderr)
+		certifySeats(deriveModel, mutantModel, writerModel, criticModel, shadow.model, shadow.writerModel), stderr)
 	if regErr != nil {
 		fmt.Fprintf(stderr, "corral doctor: %v\n", regErr)
 		return 2
@@ -77,13 +90,21 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 	cmd := fs.Args()
 
 	var results []checkResult
+	// First, not beside the herd: it reads no sandbox, so the sandbox's fatal
+	// failure must not hide it — a pool with a bad member is a refusal at
+	// certify's door whatever the host can run.
+	if poolErr != nil {
+		results = append(results, checkResult{name: "shadow pool", detail: poolErr.Error()})
+	} else if poolNamed {
+		results = append(results, checkResult{name: "shadow pool", ok: true})
+	}
 	iso, isoErr := sandbox.Resolve(sandbox.Config{Backend: strings.TrimSpace(*backend)})
 	results = append(results, checkSandbox(iso, isoErr))
 
 	if isoErr == nil {
 		results = append(results, checkToolchain(iso, cmd, nil))
 	}
-	results = append(results, checkHerd(*mutantModel, *writerModel, *criticModel, *shadowModel, seatReg)...)
+	results = append(results, checkHerd(*mutantModel, *writerModel, *criticModel, *shadow.model, *shadow.writerModel, seatReg)...)
 	results = append(results, checkDeriveSeat(*deriveModel, seatReg.deriveEndpoint())...)
 	if strings.TrimSpace(*code) != "" {
 		results = append(results, checkPairing(*code, *test))
@@ -239,7 +260,7 @@ func toolchainDirHint(tool string) string {
 // The unnamed-seat findings stay doctor's own, because certify's refusal
 // for those is one message about the run and doctor's job is one finding
 // per seat.
-func checkHerd(mutant, writer, critic, shadow string, reg *seatResolution) []checkResult {
+func checkHerd(mutant, writer, critic, shadow, shadowWriter string, reg *seatResolution) []checkResult {
 	var out []checkResult
 	named := true
 	for _, r := range []struct{ role, flag, model string }{
@@ -274,7 +295,7 @@ func checkHerd(mutant, writer, critic, shadow string, reg *seatResolution) []che
 	}
 	in := localAuditInput{
 		cmdName:     "corral doctor",
-		mutantModel: mutant, writerModel: writer, criticModel: critic, shadowModel: shadow,
+		mutantModel: mutant, writerModel: writer, criticModel: critic, shadowModel: shadow, shadowWriterModel: shadowWriter,
 	}
 	if reg != nil {
 		in.seatProviders = reg.providers

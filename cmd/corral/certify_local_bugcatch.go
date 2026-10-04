@@ -104,6 +104,7 @@ func (s localBugCatchSink) Record(recordID int64, recordHead string, obs []advpo
 			CriticFlags: o.CriticFlags, MutantsPlanted: o.MutantsPlanted, MutantsSurvived: o.MutantsSurvived,
 			Shard: o.Shard, Region: o.Region, RegionComplexity: o.RegionComplexity, RegionLines: o.RegionLines,
 			TestComplexity: o.TestComplexity, ParseRetries: o.ParseRetries, Dropped: o.Dropped, Shadow: o.Shadow,
+			Lang: o.Lang, ShadowDrawn: o.ShadowDrawn,
 		})
 	}
 	if err := s.store.Record(context.Background(), rows); err != nil {

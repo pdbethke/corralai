@@ -7,6 +7,8 @@ import (
 
 	"github.com/pdbethke/corralai/internal/adequacy"
 	"github.com/pdbethke/corralai/internal/advpool"
+	"github.com/pdbethke/corralai/internal/reposcan"
+	"github.com/pdbethke/corralai/internal/shadowpool"
 )
 
 // THE SEAM THAT HAD NO COVERAGE. resolveRoleModels resolved
@@ -55,6 +57,36 @@ func TestResolvedChallengerModelsReachTheRunSpec(t *testing.T) {
 	}
 	if rs.ShadowModel != "gemini-3.5-flash" {
 		t.Errorf("RunSpec.ShadowModel = %q, want the resolved flag", rs.ShadowModel)
+	}
+}
+
+// The --repo draw is made once, on auditModels, and copied twice more before
+// it reaches the RunSpec (auditInputFor, then newAuditRunSpec). A dropped copy
+// would leave every other test green, so assert the value ARRIVES.
+func TestRepoShadowSelectionReachesTheRunSpec(t *testing.T) {
+	t.Setenv("MODEL_BACKEND", "")
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	t.Setenv("GEMINI_API_KEY", "gm-test")
+	t.Setenv("GOOGLE_API_KEY", "")
+	t.Setenv("OPENAI_API_KEY", "")
+
+	ex := newLocalExecutor(t.TempDir(), []string{"go", "test", "./..."}, "jail", 0, nil)
+	ex.models = auditModels{
+		writer: "gemini-3.6-flash", mutant: "gemini-3.6-flash", critic: "off",
+		shadow:          "gemini-3.5-flash",
+		shadowSelection: []shadowpool.Selection{{Role: "mutant", Lang: "go", Chosen: "c"}},
+	}
+	in := ex.auditInputFor(reposcan.Job{Path: "a.go", TestPath: "a_test.go", Lang: "go"})
+	roles, err := resolveAuditRoles(in, nil)
+	if err != nil {
+		t.Fatalf("resolveAuditRoles: %v", err)
+	}
+	rs := newAuditRunSpec(in, roles, runSubject{
+		repo: "r", commit: "c", codePath: "a.go", code: "package a",
+		devTestPath: "a_test.go", devTest: "package a", lang: "go",
+	})
+	if len(rs.ShadowSelection) != 1 || rs.ShadowSelection[0].Chosen != "c" {
+		t.Errorf("RunSpec.ShadowSelection = %+v, want the models' draw (Chosen c)", rs.ShadowSelection)
 	}
 }
 

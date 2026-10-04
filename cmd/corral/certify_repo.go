@@ -34,6 +34,7 @@ import (
 	"github.com/pdbethke/corralai/internal/reposcan"
 	"github.com/pdbethke/corralai/internal/sandbox"
 	"github.com/pdbethke/corralai/internal/scanstore"
+	"github.com/pdbethke/corralai/internal/shadowpool"
 )
 
 // defaultScanTop bounds a scan by default. Provisional: large enough to be
@@ -69,7 +70,13 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	criticModelFlag := fs.String("critic-model", "", "model for the test-critic role, which must differ from the writer's; \"off\" disables the critic entirely (it is advisory and never gates the verdict, so a single-vendor run with only one usable model can drop it). No default")
 	scopeTestsFlag := fs.Bool("scope-tests", false, "REMOVED — see --whole-suite. Selection by coverage evidence is now the default")
 	wholeSuiteFlag := fs.Bool("whole-suite", false, "grade every mutant against the project's WHOLE suite instead of the tests that demonstrably execute each file (the default, from one instrumented run per scan). Costs O(mutants x whole-suite runtime) per file and answers a different question — 'did ANY test catch it' rather than 'do this file's tests test it'. The verdict records which was used")
-	shadowModelFlag := fs.String("shadow-model", "", "challenger model that attacks every region a SECOND time. OFF unless named. Recorded for comparison — NEVER gates the verdict")
+	shadow := registerShadowSeatFlags(fs, shadowSeatHelp{
+		model:       "challenger model that attacks every region a SECOND time. OFF unless named. Recorded for comparison — NEVER gates the verdict",
+		pool:        "a comma-separated POOL of challenger generator models; the scan DRAWS one ONCE, for every file it audits, by Thompson sampling over the scorecard's record pooled across every recorded language (a scan spans languages; the record says lang \"any\"), and each file's signed entry says which, with every member's posterior. Every member is checked for a credential before the draw; --dry-run checks the pool's shape and draws nothing. Mutually exclusive with --shadow-model. OFF unless named; NEVER gates the verdict",
+		writerModel: "CHALLENGER test-writer: a second writer attacks the SAME survivors as the primary, so the two seats' misses can be compared (Jaccard over survivors, Cohen's kappa). Measurement only — it NEVER gates the verdict. OFF unless named. The per-file Jaccard/kappa land in the ledger entry and in a warehouse with --push; the per-mutant attempt rows are not recorded on the repo path",
+		writerPool:  "a comma-separated POOL of challenger WRITER models, drawn once per scan exactly as --shadow-pool is. Mutually exclusive with --shadow-writer-model. OFF unless named; NEVER gates the verdict",
+		seed:        shadowSeedReplayHelp,
+	})
 	owner := fs.String("owner", "local", "owning account for the scan (tenant identifier)")
 	commit := fs.String("commit", "", "commit SHA the report is bound to")
 	swarmFlag := fs.Int("swarm", 0, "max concurrent audit workers (0 = auto-size to this host's cores); on --substrate workspace it also sizes the private trees that score one file's mutants at once (budget/4, min 1), so --swarm 4 is one tree")
@@ -91,7 +98,6 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	mutantsFlag := fs.String("mutants", "", "REPLAY a recorded mutant set (see --record-mutants) instead of generating one: every audited file is graded against exactly the mutants in this file, and not one generator model call is made. Mutants are authored by a model, so an ordinary run re-draws the exam every time and two runs of the same audit are not two samples of one measurement — pin the set and a change to anything ELSE becomes measurable. Every selected file must appear in the set with the SAME bytes it was recorded from; a missing file or a changed one is refused (exit 2) up front, never half-replayed. Reads a corral-mutants-2 document, or an older corral-mutants-1 one, whose whole-file mutants still replay byte-for-byte.")
 	recordMutantsFlag := fs.String("record-mutants", "", "write the mutants this scan actually GRADED to this file, as a replayable corral-mutants-2 document — one entry per audited file, each mutant its SEARCH/REPLACE hunk, tied to the sha256 of the source it was derived from. Written even when the scan's gates fail: a red verdict is still a recorded exam. A v2 document re-recorded from a --mutants replay of an older corral-mutants-1 set contains that set's WHOLE-FILE entries, not hunks — the run graded what was recorded, and re-recording it does not manufacture anchors it never had")
 	writerModeFlag := fs.String("writer-mode", "", "how the test-writer attacks a file's survivors: `per-survivor` (the default) makes ONE call per survivor — each carrying the file once as a cacheable shared prefix plus that survivor's diff, each repaired on its own budget and each PROVEN ALONE against its own mutant — or `batched`, the original shape: one call carrying every survivor, one repair budget for the file, one proof pass over all of them. Nothing measured changes between them (a survivor is proven iff an authored test kills it alone and passes on the original, either way); what changes is that one unbuildable test no longer spends the whole file's retries and takes every other survivor down with it. The verdict, the report line, the ledger and the attestation all record which mode earned the numbers. Each survivor's proof in per-survivor mode runs its OWN compliant baseline (a compliant pass plus a canary, per seat), so a file with N survivors pays N baselines where batched paid one: on a repo whose suite takes a minute, prefer --writer-mode batched or expect N baselines' worth of wall clock.")
-	shadowWriterModelFlag := fs.String("shadow-writer-model", "", "CHALLENGER test-writer: a second writer attacks the SAME survivors as the primary, so the two seats' misses can be compared (Jaccard over survivors, Cohen's kappa). Measurement only — it NEVER gates the verdict. OFF unless named. The per-file Jaccard/kappa land in the ledger entry and in a warehouse with --push; the per-mutant attempt rows are not recorded on the repo path")
 
 	var localEndpointFlag stringSlice
 	fs.Var(&localEndpointFlag, "local-endpoint", "place a LOCAL seat on a specific ollama daemon, as <role>=<url> (repeatable; e.g. mutant-generator=http://localhost:11436). A daemon is pinned to a GPU by its own environment, so this is how two models occupy two cards at once — corral selects the DAEMON, never the device. Without it every local seat shares OLLAMA_URL, one card and one VRAM budget")
@@ -121,6 +127,29 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 
+	// The shadow draw happens HERE, before the registry resolves any seat, so
+	// the drawn member — as typed — is resolved exactly like a named one. A
+	// scan spans languages and draws ONCE for all of them, so it reads the
+	// scorecard's record across every language.
+	//
+	// --dry-run audits nothing, so it draws nothing: it VALIDATES the pools
+	// (a malformed one is refused here exactly as a real run refuses it) but
+	// prints no draw, opens no scorecard and — like every other seat on the
+	// free inventory — demands no member's credential.
+	shadowPrimary := map[string]string{advpool.RoleMutantGenerator: *mutantModelFlag, advpool.RoleTestWriter: *writerModelFlag}
+	var shadowSels []shadowpool.Selection
+	var drawErr error
+	if *dryRun {
+		drawErr = validateShadowPools("corral certify --repo", *repoDir, shadow, shadowPrimary, false, stderr)
+	} else {
+		shadowSels, drawErr = drawShadowSeats("corral certify --repo", *repoDir, shadowpool.LangAny, shadow,
+			shadowPrimary, localBugCatchDBPath(), stderr)
+	}
+	if drawErr != nil {
+		fmt.Fprintf(stderr, "corral certify --repo: %v\n", drawErr)
+		return 2
+	}
+
 	// The model registry (docs/design/model-registry.md): a project declares
 	// its models once in .corral/models.json and names seats by alias.
 	// ADDITIVE — with no registry nothing here emits or changes anything, and
@@ -132,7 +161,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// the CONCRETE model. An alias is a label for humans and is never
 	// authoritative.
 	seatReg, regErr := resolveSeatRegistry("corral certify --repo", *repoDir,
-		certifySeats(deriveModel, mutantModelFlag, writerModelFlag, criticModelFlag, shadowModelFlag, shadowWriterModelFlag), stderr)
+		certifySeats(deriveModel, mutantModelFlag, writerModelFlag, criticModelFlag, shadow.model, shadow.writerModel), stderr)
 	if regErr != nil {
 		fmt.Fprintf(stderr, "corral certify --repo: %v\n", regErr)
 		return 2
@@ -632,8 +661,8 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		ex.writerMode = writerMode
 		ex.models = auditModels{
 			writer: *writerModelFlag, mutant: *mutantModelFlag,
-			critic: *criticModelFlag, shadow: *shadowModelFlag,
-			shadowWriter: *shadowWriterModelFlag,
+			critic: *criticModelFlag, shadow: *shadow.model,
+			shadowWriter: *shadow.writerModel, shadowSelection: shadowSels,
 		}
 		// Deferred, not called at the end: a panic mid-scan must still release
 		// the staging dirs the shared seeds created. Deferred here so it also
@@ -653,8 +682,8 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 			writerModel:       *writerModelFlag,
 			mutantModel:       *mutantModelFlag,
 			criticModel:       *criticModelFlag,
-			shadowModel:       *shadowModelFlag,
-			shadowWriterModel: *shadowWriterModelFlag,
+			shadowModel:       *shadow.model,
+			shadowWriterModel: *shadow.writerModel,
 			seatProviders:     seatReg.seatProviders(),
 		}, stderr); err != nil {
 			fmt.Fprintf(stderr, "corral certify --repo: %v\n", err)
@@ -717,8 +746,8 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		writerModel:       *writerModelFlag,
 		mutantModel:       *mutantModelFlag,
 		criticModel:       *criticModelFlag,
-		shadowModel:       *shadowModelFlag,
-		shadowWriterModel: *shadowWriterModelFlag,
+		shadowModel:       *shadow.model,
+		shadowWriterModel: *shadow.writerModel,
 	})
 	modelSet := modelSetKey(rmWriter, rmMutant, rmCritic, rmShadow, rmShadowWriter)
 
@@ -4075,7 +4104,13 @@ func resolveMutantConcurrency(budget int, substrate string, workers, jobs int) i
 // Every field is empty unless the operator passed the flag; empty means
 // "apply auditRoles' own default", so a scan that names none is byte-identical
 // to before.
-type auditModels struct{ writer, mutant, critic, shadow, shadowWriter string }
+type auditModels struct {
+	writer, mutant, critic, shadow, shadowWriter string
+	// shadowSelection is the scan's ONE pool draw (empty when every
+	// challenger was named or off), carried into every file's RunSpec so each
+	// verdict says which member ran and why.
+	shadowSelection []shadowpool.Selection
+}
 
 type localExecutor struct {
 	// models are the per-role overrides threaded into every job's
@@ -4430,6 +4465,7 @@ func (l *localExecutor) auditInputFor(j reposcan.Job) localAuditInput {
 		criticModel:       l.models.critic,
 		shadowModel:       l.models.shadow,
 		shadowWriterModel: l.models.shadowWriter,
+		shadowSelection:   l.models.shadowSelection,
 		writerMode:        l.writerMode,
 
 		// A nil entry is an ordinary generated run — see localExecutor.presetMutants.
@@ -4982,6 +5018,7 @@ func writeAuditStatement(path, repoDir string, r reposcan.RepoReport, models map
 			IndicativeReason:         f.IndicativeReason,
 			PriorsApplied:            f.PriorsApplied,
 			PriorDigest:              f.PriorDigest,
+			ShadowSelection:          f.ShadowSelection,
 			ChallengerModel:          pairField(f.Challenger, func(p *modelcorr.Pair) string { return p.ModelB }),
 			ChallengerMutants:        pairInt(f.Challenger, func(p *modelcorr.Pair) int { return p.Mutants }),
 			ChallengerSurvivedWriter: pairInt(f.Challenger, func(p *modelcorr.Pair) int { return p.SurvivedA }),

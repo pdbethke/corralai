@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/pdbethke/corralai/internal/shadowpool"
 	"log"
 	"path/filepath"
 	"slices"
@@ -1064,7 +1065,11 @@ func (s CertSigner) SignVerdict(ctx context.Context, v Verdict) (int64, string, 
 			// unmarked entry here would read to a record's audience as a model
 			// that helped SET the certification, so say plainly that it did
 			// not.
-			entry += " (non-gating)"
+			if sel, ok := shadowpool.Drawn(v.ShadowSelection, role); ok {
+				entry += fmt.Sprintf(" (non-gating, drawn from a pool of %d)", len(sel.Members))
+			} else {
+				entry += " (non-gating)"
+			}
 		}
 		producedBy = append(producedBy, entry)
 	}

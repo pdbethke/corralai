@@ -7,6 +7,7 @@ import (
 	"crypto/ed25519"
 	"encoding/json"
 	"errors"
+	"github.com/pdbethke/corralai/internal/shadowpool"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -679,5 +680,36 @@ func TestAuthoredTestPathMirrorsTheDevTestsShape(t *testing.T) {
 		if got := AuthoredTestPathFor(tc.code, tc.dev); got != tc.want {
 			t.Errorf("AuthoredTestPathFor(%q, %q) = %q, want %q", tc.code, tc.dev, got, tc.want)
 		}
+	}
+}
+
+func TestSignVerdictMarksADrawnChallengerSeat(t *testing.T) {
+	bs, err := buildstore.Open(filepath.Join(t.TempDir(), "build.duckdb"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { bs.Close() })
+	_, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, _, err := CertSigner{Key: priv, Store: bs}.SignVerdict(context.Background(), Verdict{
+		Repo: "example/repo", Commit: "deadbeef03", Status: StatusCertified,
+		ModelsByRole: RoleAssignment{
+			RoleMutantGenerator:       "model-gen",
+			RoleMutantGeneratorShadow: "challenger-model",
+		},
+		ShadowSelection: []shadowpool.Selection{{Role: RoleMutantGeneratorShadow, Members: make([]shadowpool.Member, 3)}},
+	})
+	if err != nil {
+		t.Fatalf("SignVerdict: %v", err)
+	}
+	rec, found, err := bs.Get(id)
+	if err != nil || !found {
+		t.Fatalf("bs.Get(%d): found=%v err=%v", id, found, err)
+	}
+	blob, _ := json.Marshal(rec)
+	if !strings.Contains(string(blob), RoleMutantGeneratorShadow+":challenger-model (non-gating, drawn from a pool of 3)") {
+		t.Errorf("a drawn seat must say so in the signed record, got:\n%s", blob)
 	}
 }

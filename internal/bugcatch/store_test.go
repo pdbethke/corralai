@@ -311,4 +311,111 @@ func TestMigrationUpgradesPreExistingDatabase(t *testing.T) {
 	if *legacyRow != wantLegacy {
 		t.Fatalf("legacy round-tripped observation = %+v, want %+v", *legacyRow, wantLegacy)
 	}
+	if legacyRow.Lang != "" || legacyRow.ShadowDrawn {
+		t.Fatalf("legacy row must read back with no language and no draw, got lang=%q shadow_drawn=%v", legacyRow.Lang, legacyRow.ShadowDrawn)
+	}
+	var nulls int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM bugcatch_observations WHERE lang IS NULL`).Scan(&nulls); err != nil {
+		t.Fatal(err)
+	}
+	if nulls < 1 {
+		t.Fatalf("the legacy row's lang must be NULL after migration; NULL rows = %d", nulls)
+	}
+}
+
+// TestLangAndShadowDrawnRoundTrip pins slice one: a row's language and
+// whether its shadow seat was drawn survive Record -> read, and an unknown
+// language is stored as NULL rather than an empty string.
+func TestLangAndShadowDrawnRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	s, err := Open(filepath.Join(t.TempDir(), "bc.duckdb"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	in := []Observation{
+		{TS: time.Unix(1, 0).UTC(), RecordID: 1, Model: "m", Role: "test-writer", Source: "pool", Lang: "go", Shadow: true, ShadowDrawn: true},
+		{TS: time.Unix(1, 0).UTC(), RecordID: 2, Model: "m", Role: "test-writer", Source: "pool"},
+	}
+	if err := s.Record(ctx, in); err != nil {
+		t.Fatal(err)
+	}
+	var got []Observation
+	if err := s.EveryObservation(ctx, func(o Observation) error { got = append(got, o); return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].Lang != "go" || !got[0].ShadowDrawn || got[1].Lang != "" || got[1].ShadowDrawn {
+		t.Fatalf("round trip lost lang/shadow_drawn: %+v", got)
+	}
+	var nulls int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM bugcatch_observations WHERE lang IS NULL`).Scan(&nulls); err != nil {
+		t.Fatal(err)
+	}
+	if nulls != 1 {
+		t.Fatalf("an unknown language must be stored NULL, never ''; NULL rows = %d", nulls)
+	}
+}
+
+func TestEvidenceFiltersRoleLangAndDropped(t *testing.T) {
+	ctx := context.Background()
+	s, err := Open(filepath.Join(t.TempDir(), "bc.duckdb"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ts := time.Unix(1, 0).UTC()
+	rows := []Observation{
+		{TS: ts, RecordID: 1, Model: "a", Role: "test-writer", Lang: "go", Catches: 2, Opportunities: 5},
+		{TS: ts, RecordID: 2, Model: "a", Role: "test-writer-shadow", Lang: "go", Catches: 1, Opportunities: 1, Shadow: true},
+		{TS: ts, RecordID: 3, Model: "a", Role: "test-writer", Lang: "python", Catches: 9, Opportunities: 9},
+		{TS: ts, RecordID: 4, Model: "a", Role: "test-writer", Lang: "go", Catches: 0, Opportunities: 7, Dropped: true},
+		{TS: ts, RecordID: 5, Model: "a", Role: "test-writer", Catches: 9, Opportunities: 9}, // NULL lang
+		{TS: ts, RecordID: 6, Model: "a", Role: "mutant-generator", Lang: "go", MutantsPlanted: 4, MutantsSurvived: 1},
+	}
+	if err := s.Record(ctx, rows); err != nil {
+		t.Fatal(err)
+	}
+	ev, n, err := s.Evidence(ctx, []string{"test-writer", "test-writer-shadow"}, "go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 2 || ev["a"] != (Evidence{Catches: 3, Opportunities: 6, Rows: 2}) {
+		t.Fatalf("go writer evidence = %+v over %d rows, want 3/6 over 2", ev["a"], n)
+	}
+	ev, n, err = s.Evidence(ctx, []string{"test-writer"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 2 || ev["a"] != (Evidence{Catches: 11, Opportunities: 14, Rows: 2}) {
+		t.Fatalf("any-language writer evidence = %+v over %d rows, want 11/14 over 2 (NULL lang and dropped excluded)", ev["a"], n)
+	}
+}
+
+// Each model's own row count rides on its Evidence: a caller that draws
+// among SOME of the models must be able to say how many rows were about
+// THOSE models, not every model in the roles (the shadow draw once printed
+// a primary's 214 rows as history for two never-run pool members).
+func TestEvidenceCountsRowsPerModel(t *testing.T) {
+	ctx := context.Background()
+	s, err := Open(filepath.Join(t.TempDir(), "bc.duckdb"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ts := time.Unix(1, 0).UTC()
+	if err := s.Record(ctx, []Observation{
+		{TS: ts, RecordID: 1, Model: "a", Role: "test-writer", Lang: "go", Catches: 1, Opportunities: 2},
+		{TS: ts, RecordID: 2, Model: "b", Role: "test-writer", Lang: "go", Catches: 1, Opportunities: 2},
+		{TS: ts, RecordID: 3, Model: "b", Role: "test-writer", Lang: "go", Catches: 1, Opportunities: 2},
+		{TS: ts, RecordID: 4, Model: "b", Role: "test-writer", Lang: "go", Catches: 1, Opportunities: 2},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ev, n, err := s.Evidence(ctx, []string{"test-writer"}, "go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 4 || ev["a"].Rows != 1 || ev["b"].Rows != 3 {
+		t.Fatalf("rows: total %d, a %d, b %d; want 4, 1, 3", n, ev["a"].Rows, ev["b"].Rows)
+	}
 }

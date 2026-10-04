@@ -162,6 +162,38 @@ func bugCatchObservations(run *runState, v Verdict) []BugCatchObservation {
 			Shadow: true,
 		})
 	}
+	// The challenger writer's row. It used to have none: its per-mutant
+	// outcomes went only to the mutant_attempts store, so the scorecard (and
+	// any posterior over it) never learned what a challenger writer proved.
+	// The filters are the agreement statistic's own (shadowSeatMeasured), so
+	// the row and the Jaccard count the same survivors.
+	if run.rs.ShadowWriterModel != "" && len(run.devSurvivors) > 0 {
+		killed := make(map[string]bool, len(run.shadowWriterKilled))
+		for _, m := range run.shadowWriterKilled {
+			killed[m.ID] = true
+		}
+		catches, opps := 0, 0
+		for _, m := range run.devSurvivors {
+			if !run.shadowSeatMeasured(m.ID) {
+				continue
+			}
+			opps++
+			if killed[m.ID] {
+				catches++
+			}
+		}
+		out = append(out, BugCatchObservation{
+			Model: run.rs.ShadowWriterModel, Role: RoleTestWriterShadow,
+			Catches: catches, Opportunities: opps,
+			// Staffed and never measured is a seat that did not finish, not a
+			// seat that caught nothing.
+			Dropped: opps == 0,
+			Shadow:  true,
+		})
+	}
+	for i := range out {
+		out[i].Lang = run.rs.Lang
+	}
 	return out
 }
 

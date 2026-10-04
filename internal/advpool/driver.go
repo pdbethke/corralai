@@ -177,6 +177,12 @@ type BugCatchObservation struct {
 	ParseRetries     int
 	Dropped          bool
 	Shadow           bool // set by Task 6; a shadow seat NEVER gates
+	// Lang is the run's language (RunSpec.Lang), stamped on every row by
+	// bugCatchObservations — the sinks never have to know it.
+	Lang string
+	// ShadowDrawn: this shadow row's model was drawn from a pool
+	// (RunSpec.ShadowSelection), not named by hand. False on non-shadow rows.
+	ShadowDrawn bool
 }
 
 // BugCatchSink is the optional per-run bug-catching feed (nil ⇒ no-op),

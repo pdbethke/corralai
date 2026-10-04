@@ -23,7 +23,7 @@ func TestDoctorReportsMissingCredentialsPerModel(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "")
 	t.Setenv("MODEL_BACKEND", "")
 
-	got := checkHerd("gemini-3.6-flash", "gemini-3.6-flash", "claude-haiku-4-5", "", nil)
+	got := checkHerd("gemini-3.6-flash", "gemini-3.6-flash", "claude-haiku-4-5", "", "", nil)
 	var joined string
 	ok := 0
 	for _, r := range got {
@@ -50,7 +50,7 @@ func TestDoctorSkipsAnOffRole(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "")
 	t.Setenv("GEMINI_API_KEY", "gm")
 	t.Setenv("MODEL_BACKEND", "")
-	got := checkHerd("gemini-3.6-flash", "gemini-3.6-flash", "off", "", nil)
+	got := checkHerd("gemini-3.6-flash", "gemini-3.6-flash", "off", "", "", nil)
 	for _, r := range got {
 		if !r.ok {
 			t.Fatalf("an all-Gemini herd with a Gemini key and the critic off must pass: %+v", r)
@@ -80,21 +80,21 @@ func TestDoctorAgreesWithCertifyAboutTheHerd(t *testing.T) {
 	// 1. An all-local herd: certify accepts it (no vendor, no key needed);
 	// doctor used to FAIL it with "cannot infer a cloud vendor".
 	t.Setenv("MODEL_BACKEND", "")
-	if f := fails(checkHerd("qwen2.5-coder:7b", "qwen2.5-coder:14b", "qwen2.5-coder:7b", "", nil)); len(f) != 0 {
+	if f := fails(checkHerd("qwen2.5-coder:7b", "qwen2.5-coder:14b", "qwen2.5-coder:7b", "", "", nil)); len(f) != 0 {
 		t.Errorf("all-local herd refused by doctor, accepted by certify: %v", f)
 	}
 	// 2. A pinned gateway: certify's preflight demands no Anthropic key for
 	// a claude-* seat behind MODEL_BACKEND=openrouter; doctor demanded one.
 	t.Setenv("MODEL_BACKEND", "openrouter")
 	t.Setenv("OPENROUTER_API_KEY", "test-placeholder-not-a-real-key")
-	if f := fails(checkHerd("claude-sonnet-5", "claude-sonnet-5", "gemini-3.6-flash", "", nil)); len(f) != 0 {
+	if f := fails(checkHerd("claude-sonnet-5", "claude-sonnet-5", "gemini-3.6-flash", "", "", nil)); len(f) != 0 {
 		t.Errorf("pinned-gateway herd refused by doctor, accepted by certify: %v", f)
 	}
 	// 3. writer == critic: certify refuses (decorrelation); doctor passed it,
 	// having de-duplicated the models first.
 	t.Setenv("MODEL_BACKEND", "")
 	t.Setenv("GEMINI_API_KEY", "gm")
-	f := fails(checkHerd("gemini-3.6-flash", "gemini-3.6-flash", "gemini-3.6-flash", "", nil))
+	f := fails(checkHerd("gemini-3.6-flash", "gemini-3.6-flash", "gemini-3.6-flash", "", "", nil))
 	if len(f) == 0 {
 		t.Error("writer == critic passed doctor; certify refuses it")
 	} else if !strings.Contains(strings.Join(f, "\n"), "critic") {
@@ -102,7 +102,7 @@ func TestDoctorAgreesWithCertifyAboutTheHerd(t *testing.T) {
 	}
 	// 4. The challenger seat is checked too: a Claude challenger on an
 	// all-Gemini herd with no Anthropic key is a refusal certify makes.
-	if f := fails(checkHerd("gemini-3.6-flash", "gemini-3.6-flash", "off", "claude-sonnet-5", nil)); len(f) == 0 {
+	if f := fails(checkHerd("gemini-3.6-flash", "gemini-3.6-flash", "off", "claude-sonnet-5", "", nil)); len(f) == 0 {
 		t.Error("a challenger seat with no credential passed doctor; certify refuses it")
 	}
 }
@@ -294,7 +294,7 @@ func TestDoctorRehearsesTheDeriveSeatAndReadsTheRepoRegistry(t *testing.T) {
 	if mutant != "gemini-3.6-flash" || writer != "qwen2.5-coder:14b" {
 		t.Fatalf("the repo's registry did not resolve the aliases: mutant=%q writer=%q\n%s", mutant, writer, errOut.String())
 	}
-	for _, r := range checkHerd(mutant, writer, critic, shadow, reg) {
+	for _, r := range checkHerd(mutant, writer, critic, shadow, "", reg) {
 		if !r.ok {
 			t.Errorf("herd check failed: %s :: %s", r.name, r.detail)
 		}
@@ -314,5 +314,25 @@ func TestDoctorRehearsesTheDeriveSeatAndReadsTheRepoRegistry(t *testing.T) {
 	}
 	if dres := checkDeriveSeat(derive, reg2.deriveEndpoint()); len(dres) != 1 || !dres[0].ok {
 		t.Errorf("a registry-placed local derive seat failed: %+v", dres)
+	}
+}
+
+// TestDoctorChecksTheChallengerWriterSeat: doctor accepts --shadow-writer-model
+// so it can rehearse that seat's credential. A flag accepted and never read is
+// the defect; an all-Gemini herd with a Claude challenger WRITER and no
+// Anthropic key is a refusal certify makes, so doctor must fail it too.
+func TestDoctorChecksTheChallengerWriterSeat(t *testing.T) {
+	t.Setenv("MODEL_BACKEND", "")
+	t.Setenv("GEMINI_API_KEY", "gm")
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	res := checkHerd("gemini-3.6-flash", "gemini-3.6-flash", "off", "", "claude-sonnet-5", nil)
+	failed := false
+	for _, r := range res {
+		if !r.ok {
+			failed = true
+		}
+	}
+	if !failed {
+		t.Errorf("a challenger writer with no credential passed doctor: %+v", res)
 	}
 }

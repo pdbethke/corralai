@@ -56,7 +56,7 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 	mutantModel := fs.String("mutant-model", "", "the mutant-generator model whose credential to check")
 	writerModel := fs.String("writer-model", "", "the test-writer model whose credential to check")
 	criticModel := fs.String("critic-model", "", "the test-critic model whose credential to check")
-	shadowModel := fs.String("shadow-model", "", "the challenger generator model, if the run will name one — it needs a credential too")
+	shadow := registerShadowSeatFlags(fs, "the challenger generator model, if the run will name one — it needs a credential too", "challenger WRITER model that authors a second suite against the SAME mutant set for a mutant-controlled head-to-head. OFF unless named. Recorded for correlation — NEVER gates the verdict")
 	deriveModel := fs.String("derive-model", "", "the goal-derivation model a `certify --repo` run will name, if any")
 	repoDir := fs.String("repo", ".", "the repository the run will audit — where its .corral/models.json registry is read from, exactly as certify reads it")
 	if err := fs.Parse(args); err != nil {
@@ -67,7 +67,7 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 	// about the CONCRETE model a seat would really use. Its refusals are the
 	// registry's, so a broken declaration is caught here for free.
 	seatReg, regErr := resolveSeatRegistry("corral doctor", *repoDir,
-		certifySeats(deriveModel, mutantModel, writerModel, criticModel, shadowModel, nil), stderr)
+		certifySeats(deriveModel, mutantModel, writerModel, criticModel, shadow.model, shadow.writerModel), stderr)
 	if regErr != nil {
 		fmt.Fprintf(stderr, "corral doctor: %v\n", regErr)
 		return 2
@@ -83,7 +83,7 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 	if isoErr == nil {
 		results = append(results, checkToolchain(iso, cmd, nil))
 	}
-	results = append(results, checkHerd(*mutantModel, *writerModel, *criticModel, *shadowModel, seatReg)...)
+	results = append(results, checkHerd(*mutantModel, *writerModel, *criticModel, *shadow.model, *shadow.writerModel, seatReg)...)
 	results = append(results, checkDeriveSeat(*deriveModel, seatReg.deriveEndpoint())...)
 	if strings.TrimSpace(*code) != "" {
 		results = append(results, checkPairing(*code, *test))
@@ -239,7 +239,7 @@ func toolchainDirHint(tool string) string {
 // The unnamed-seat findings stay doctor's own, because certify's refusal
 // for those is one message about the run and doctor's job is one finding
 // per seat.
-func checkHerd(mutant, writer, critic, shadow string, reg *seatResolution) []checkResult {
+func checkHerd(mutant, writer, critic, shadow, shadowWriter string, reg *seatResolution) []checkResult {
 	var out []checkResult
 	named := true
 	for _, r := range []struct{ role, flag, model string }{
@@ -274,7 +274,7 @@ func checkHerd(mutant, writer, critic, shadow string, reg *seatResolution) []che
 	}
 	in := localAuditInput{
 		cmdName:     "corral doctor",
-		mutantModel: mutant, writerModel: writer, criticModel: critic, shadowModel: shadow,
+		mutantModel: mutant, writerModel: writer, criticModel: critic, shadowModel: shadow, shadowWriterModel: shadowWriter,
 	}
 	if reg != nil {
 		in.seatProviders = reg.providers

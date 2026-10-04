@@ -113,9 +113,8 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 	swarmFlag := fs.Int("swarm", 0, "max concurrent audit workers (0 = auto-size to this host's cores). The BUDGET clamp: independent role tasks run in parallel up to this bound, so a big audit swarms without melting the box")
 	maxTokensFlag := fs.Int64("max-tokens", 0, "cap on model TOKENS for the whole run, input + output, every seat (0 = no cap). Checked before each call and charged after it, so one in-flight call can overshoot by its own size. Once reached: a generator seat that has not run makes its file ungradable (executor-error naming the cap), a writer or critic seat is skipped and the file flagged as it is for a provider failure — the dev kill rate already measured stands. The cost line says the cap was reached and after how many calls. Corral has bounded mutants, shards and wall clock and never money; this is the money bound")
 	maxShardsFlag := fs.Int("max-shards", 0, "max mutant-generator seats fanned out across the file's functions (0 = "+fmt.Sprint(advpool.DefaultMaxShards)+"). Bounds PARALLELISM only — every function is probed regardless; --n-mutants is the PER-SHARD budget")
-	shadowModelFlag := fs.String("shadow-model", "", "challenger model that attacks every region a SECOND time for a region-controlled head-to-head. OFF unless named. Recorded for comparison — NEVER gates the verdict")
+	shadow := registerShadowSeatFlags(fs, "challenger model that attacks every region a SECOND time for a region-controlled head-to-head. OFF unless named. Recorded for comparison — NEVER gates the verdict", "challenger WRITER model that authors a second suite against the SAME mutant set for a mutant-controlled head-to-head. OFF unless named. Recorded for correlation — NEVER gates the verdict")
 	writerModeFlag := fs.String("writer-mode", "", "how the test-writer attacks this file's survivors: `per-survivor` (the default) makes ONE call per survivor — each carrying the file once as a cacheable shared prefix plus that survivor's diff, each repaired on its own budget and each PROVEN ALONE against its own mutant — or `batched`, the original shape: one call carrying every survivor, one repair budget, one proof pass over all of them. Nothing measured changes between them (a survivor is proven iff an authored test kills it alone and passes on the original, either way); what changes is that one unbuildable test no longer spends the whole file's retries and takes every other survivor down with it. Each survivor's proof in per-survivor mode runs its OWN compliant baseline (a compliant pass plus a canary, per seat), so a file with N survivors pays N baselines where batched paid one: on a repo whose suite takes a minute, prefer --writer-mode batched or expect N baselines' worth of wall clock.")
-	shadowWriterModelFlag := fs.String("shadow-writer-model", "", "challenger WRITER model that authors a second suite against the SAME mutant set for a mutant-controlled head-to-head. OFF unless named. Recorded for correlation — NEVER gates the verdict")
 	matrixFlag := fs.Bool("matrix", false, "opt into the tests×mutants matrix: after the primary pass, re-score EVERY dev test ALONE against the run's mutants — a per-test adequacy readout + a delete-candidate list, instead of one dev-suite-wide number. COSTLY: T tests × M mutants extra jail runs (T×M, on top of the primary pass), so leave off by default on a big suite")
 	var localEndpointFlag stringSlice
 	fs.Var(&localEndpointFlag, "local-endpoint", "place a LOCAL seat on a specific ollama daemon, as <role>=<url> (repeatable; e.g. test-writer=http://localhost:11436). A daemon is pinned to a GPU by its own environment (HIP_VISIBLE_DEVICES / CUDA_VISIBLE_DEVICES), so this is how two models occupy two cards at once — corral selects the DAEMON, never the device. Without it every local seat shares OLLAMA_URL, one card and one VRAM budget. Roles: mutant-generator, test-writer, test-critic, mutant-generator-shadow, test-writer-shadow. An unknown role, a duplicate role, a non-absolute url, or an endpoint on a seat holding a CLOUD model is refused rather than ignored")
@@ -145,7 +144,7 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 	// anything else reads the value, and anything that is not a declared alias
 	// stays exactly as typed. With no registry declared this changes nothing.
 	seatReg, regErr := resolveSeatRegistry("corral certify --local", *repoDirFlag,
-		certifySeats(nil, mutantModel, writerModel, criticModel, shadowModelFlag, shadowWriterModelFlag), stderr)
+		certifySeats(nil, mutantModel, writerModel, criticModel, shadow.model, shadow.writerModel), stderr)
 	if regErr != nil {
 		fmt.Fprintf(stderr, "corral certify --local: %v\n", regErr)
 		return 2
@@ -316,8 +315,8 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 		poll:       *poll, nMutants: *nMutants, maxShards: *maxShardsFlag,
 
 		writerModel: *writerModel, criticModel: *criticModel,
-		mutantModel: *mutantModel, shadowModel: *shadowModelFlag,
-		shadowWriterModel: *shadowWriterModelFlag,
+		mutantModel: *mutantModel, shadowModel: *shadow.model,
+		shadowWriterModel: *shadow.writerModel,
 		seatProviders:     seatReg.seatProviders(),
 		writerMode:        writerMode,
 

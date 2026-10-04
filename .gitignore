@@ -4,6 +4,7 @@ build/
 dist/
 # Root-built binaries (go build ./cmd/<x> drops these here)
 /corral
+/cmd/corral/corral
 # go build ./scripts/... drops this one here the same way
 /ledgersite
 /corral-agent

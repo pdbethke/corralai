@@ -133,30 +133,61 @@ jobs:
           # rc.12 into that gate is how it was found (2026-09-09).
           #
           # What is actually checkable, and is the claim worth making: this
-          # code passed CI as part of the default branch. So green on the tag's
-          # commit passes, and green on a default-branch commit that CONTAINS
-          # the tag passes — a tag on a commit whose CI never ran, or that was
-          # never merged, still fails.
-          check_validate() {
-            gh api "repos/${GITHUB_REPOSITORY}/commits/$1/check-runs" \
-              -q '[.check_runs[] | select(.name=="validate")] | sort_by(.completed_at) | last | .conclusion' 2>/dev/null || echo ""
+          # code passed CI as part of the default branch. So the tag's commit
+          # must be ON the default branch, always, and then green on the tag's
+          # commit passes, or green on the default branch's head (which
+          # contains it) passes. A tag on a commit whose CI never ran, or that
+          # was never merged, fails.
+          #
+          # api_q prints a query's result, or NOTHING when the call fails.
+          # `gh api … -q … 2>/dev/null || echo ""` is NOT that: on an HTTP
+          # error gh prints the error JSON to STDOUT, which -q does not filter
+          # and 2>/dev/null does not catch, so the command substitution
+          # captured the error body AND the fallback's output as one value.
+          # That is how head_sha became '{"message":"No commit found for SHA:
+          # corralai",…}<sha>' — the lookup asked for a commit named after the
+          # repository — the compare URL was garbage, and the "contained in
+          # main" path below failed on every release that reached it. It had
+          # never once worked: rc.13 published through the other branch. Found
+          # cutting rc.14, which therefore has no Release page; rc.15 carries
+          # this. (2026-10-04)
+          api_q() {
+            local out
+            if out="$(gh api "$1" -q "$2" 2>/dev/null)"; then
+              printf '%s' "$out"
+            fi
           }
+          check_validate() {
+            api_q "repos/${GITHUB_REPOSITORY}/commits/$1/check-runs" \
+              '[.check_runs[] | select(.name=="validate")] | sort_by(.completed_at) | last | .conclusion'
+          }
+          # CONTAINMENT FIRST, on every path. The tag's commit must be on the
+          # default branch whatever its own CI says: the first version of this
+          # gate published any tag whose own commit was green, so a green
+          # commit on a branch that was never merged passed, while the comment
+          # above promised it "still fails". Executing this gate against a
+          # real unmerged commit is what showed it. (2026-10-04)
+          default_branch="$(api_q "repos/${GITHUB_REPOSITORY}" .default_branch)"
+          head_sha="$(api_q "repos/${GITHUB_REPOSITORY}/branches/${default_branch:-main}" .commit.sha)"
+          if [ -z "$head_sha" ]; then
+            echo "::error::${version}: could not read the head of ${default_branch:-main} from the API, so nothing can be checked for containing ${tag_commit}. Re-run this workflow." >&2
+            exit 1
+          fi
+          contains="$(api_q "repos/${GITHUB_REPOSITORY}/compare/${tag_commit}...${head_sha}" .status)"
+          if [ "$contains" != "ahead" ] && [ "$contains" != "identical" ]; then
+            echo "::error::${version} points at ${tag_commit}, which is not on ${default_branch:-main} at ${head_sha} (compare says '${contains:-unreadable}'). A release is a claim that this code passed CI on the default branch." >&2
+            exit 1
+          fi
           validate="$(check_validate "$tag_commit")"
-          if [ "$validate" != "success" ]; then
-            head_sha="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_REPOSITORY##*/}" -q .sha 2>/dev/null || gh api "repos/${GITHUB_REPOSITORY}/branches/main" -q .commit.sha)"
-            contains="$(gh api "repos/${GITHUB_REPOSITORY}/compare/${tag_commit}...${head_sha}" -q .status 2>/dev/null || echo "")"
-            head_validate="$(check_validate "$head_sha")"
-            if [ "$contains" != "ahead" ] && [ "$contains" != "identical" ]; then
-              echo "::error::${version} points at ${tag_commit}, whose validate is '${validate:-missing}', and that commit is not an ancestor of main (compare says '${contains:-unknown}'). A release is a claim that this code passed CI on the default branch." >&2
-              exit 1
-            fi
-            if [ "$head_validate" != "success" ]; then
-              echo "::error::${version} points at ${tag_commit} (validate '${validate:-missing}') and main at ${head_sha} is '${head_validate:-missing}'. Neither is green, so there is no commit to stand behind this release. Fix main, then re-run this workflow." >&2
-              exit 1
-            fi
-            echo "validate is green on main (${head_sha}), which contains ${tag_commit} — publishing"
+          if [ "$validate" = "success" ]; then
+            echo "validate is green on ${tag_commit}, which is on ${default_branch:-main}"
           else
-            echo "validate is green on ${tag_commit}"
+            head_validate="$(check_validate "$head_sha")"
+            if [ "$head_validate" != "success" ]; then
+              echo "::error::${version} points at ${tag_commit} (validate '${validate:-missing}') and ${default_branch:-main} at ${head_sha} is '${head_validate:-missing}'. Neither is green, so there is no commit to stand behind this release. Fix ${default_branch:-main}, then re-run this workflow." >&2
+              exit 1
+            fi
+            echo "validate is green on ${default_branch:-main} (${head_sha}), which contains ${tag_commit} — publishing"
           fi
 
           ref_type="$(gh api "repos/${GITHUB_REPOSITORY}/git/refs/tags/${version}" -q .object.type)"

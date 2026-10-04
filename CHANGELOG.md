@@ -15,10 +15,12 @@ history of any release, `git log v0.3.4..v0.3.5`.
 
 Built and unit-tested; not yet exercised end to end against a real repository.
 
-- **Every scorecard row now says its language, and the challenger writer has a
-  row.** `corral scorecard` gains `lang` and `shadow_drawn` columns and a
-  `test-writer-shadow` line, so a challenger's record is kept per language and
-  separately from the seat that gates.
+- **The scorecard's store now records each row's language and whether its
+  challenger was drawn from a pool** (`lang` and `shadow_drawn` columns of the
+  bug-catching observations; rows from before carry no language). `corral
+  scorecard` itself keeps its columns and gains a `test-writer-shadow` line
+  wherever a challenger writer sat, so that record is kept apart from the seat
+  that gates.
 - **`--shadow-pool` and `--shadow-writer-pool`** (on `certify --local`,
   `certify --repo` and `doctor`) take a comma-separated pool of challenger
   models; each run draws one by Thompson sampling over the scorecard's record.

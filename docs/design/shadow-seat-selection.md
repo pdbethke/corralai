@@ -1,8 +1,8 @@
 <!-- SPDX-License-Identifier: Elastic-2.0 -->
 # Shadow-seat selection — the challenger is drawn, the verdict is not
 
-**Status: built (2026-10-04), on branch docs/shadow-seat-selection.** Today an operator names at most
-one challenger per shadow seat, by hand, and the scorecard learns about
+**Status: built (2026-10-04).** Before this change, an operator named at most
+one challenger per shadow seat, by hand, and the scorecard learned about
 exactly the models someone thought to type. This note lets an operator name
 a *pool* of challengers instead, and has each run draw one by Thompson
 sampling over the evidence the scorecard already holds. The draw touches the

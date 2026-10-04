@@ -132,7 +132,7 @@ The two sources differ here, and the report says which it is reading:
 
 | source | how it is read | language | critic precision |
 | --- | --- | --- | --- |
-| the local bug-catching ledger (default) | the same rows `corral scorecard` reports | **not recorded** — every row is across all languages | joined from the local adjudication store |
+| the local bug-catching ledger (default) | the same rows `corral scorecard` reports | recorded per row from the shadow-seat change on (older rows have none); `corral models rank` does not split by it yet, so a rank over this ledger is still across all languages | joined from the local adjudication store |
 | a pushed warehouse (`--db <dsn>`) | `corral_audits`, the table `corral seal` and `corral verify --db` read | recorded per file | **absent** — adjudication is local and never pushed |
 
 `--lang` against evidence that records no language **refuses**, rather than

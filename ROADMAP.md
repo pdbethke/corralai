@@ -2,7 +2,7 @@
 # Corralai Roadmap
 
 > **Directional, not committed.** Solo-maintained and moving fast
-> (v1.0.0-rc.14). This is where corral is heading and *why*. No dates —
+> (v1.0.0-rc.15). This is where corral is heading and *why*. No dates —
 > priorities shift with what real use surfaces.
 
 **Corral is an auditing engine.** It judges code it did not write — by execution
@@ -243,7 +243,7 @@ carries the product now.
   a whole-repo scan of this repo's 205 candidates would be roughly 37 hours, which
   is why `top` exists.
 
-  `action.yml` wraps this as `pdbethke/corralai@main` (tags are cut — `@v1.0.0-rc.14` is current; pin a commit SHA for immutability against a re-tag); it installs `corral` itself via
+  `action.yml` wraps this as `pdbethke/corralai@main` (tags are cut — `@v1.0.0-rc.15` is current; pin a commit SHA for immutability against a re-tag); it installs `corral` itself via
   `go install`, using whatever Go toolchain the runner already has (never
   `actions/setup-go`, which would swap out the toolchain the audited project's own
   tests run under). Check out with `fetch-depth: 0` (required — the diff needs the merge

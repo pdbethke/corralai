@@ -12,6 +12,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 
 	_ "github.com/marcboeker/go-duckdb/v2"
@@ -305,4 +306,52 @@ func (s *Store) Scorecard(ctx context.Context) ([]Cell, error) {
 		out = append(out, c)
 	}
 	return out, rows.Err()
+}
+
+// Evidence is one model's summed record in a set of roles — the counts the
+// shadow-seat draw turns into a Beta posterior. Writers read
+// Catches/Opportunities; generators read Survived/Planted.
+type Evidence struct{ Catches, Opportunities, Survived, Planted int }
+
+// Evidence sums every row in roles for lang, per model, and reports how many
+// rows it read. lang == "" means every RECORDED language: a row whose
+// language was never recorded (NULL) is evidence about no language and is
+// never counted. Dropped rows are excluded: a seat that did not finish has
+// zeros nobody measured.
+func (s *Store) Evidence(ctx context.Context, roles []string, lang string) (map[string]Evidence, int, error) {
+	if len(roles) == 0 {
+		return nil, 0, fmt.Errorf("bugcatch: evidence: no roles")
+	}
+	args := make([]any, 0, len(roles)+1)
+	for _, r := range roles {
+		args = append(args, r)
+	}
+	langCond := "lang IS NOT NULL"
+	if lang != "" {
+		langCond = "lang = ?"
+		args = append(args, lang)
+	}
+	// #nosec G202 -- only placeholders are concatenated
+	q := `SELECT model, COUNT(*), SUM(catches), SUM(opportunities), SUM(mutants_survived), SUM(mutants_planted)
+		FROM bugcatch_observations
+		WHERE role IN (?` + strings.Repeat(",?", len(roles)-1) + `) AND ` + langCond + `
+		AND NOT COALESCE(dropped, false)
+		GROUP BY model`
+	rows, err := s.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, 0, fmt.Errorf("bugcatch: evidence: %w", err)
+	}
+	defer rows.Close()
+	out := map[string]Evidence{}
+	total := 0
+	for rows.Next() {
+		var m string
+		var n int
+		var e Evidence
+		if err := rows.Scan(&m, &n, &e.Catches, &e.Opportunities, &e.Survived, &e.Planted); err != nil {
+			return nil, 0, fmt.Errorf("bugcatch: evidence scan: %w", err)
+		}
+		out[m], total = e, total+n
+	}
+	return out, total, rows.Err()
 }

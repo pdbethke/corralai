@@ -355,3 +355,38 @@ func TestLangAndShadowDrawnRoundTrip(t *testing.T) {
 		t.Fatalf("an unknown language must be stored NULL, never ''; NULL rows = %d", nulls)
 	}
 }
+
+func TestEvidenceFiltersRoleLangAndDropped(t *testing.T) {
+	ctx := context.Background()
+	s, err := Open(filepath.Join(t.TempDir(), "bc.duckdb"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ts := time.Unix(1, 0).UTC()
+	rows := []Observation{
+		{TS: ts, RecordID: 1, Model: "a", Role: "test-writer", Lang: "go", Catches: 2, Opportunities: 5},
+		{TS: ts, RecordID: 2, Model: "a", Role: "test-writer-shadow", Lang: "go", Catches: 1, Opportunities: 1, Shadow: true},
+		{TS: ts, RecordID: 3, Model: "a", Role: "test-writer", Lang: "python", Catches: 9, Opportunities: 9},
+		{TS: ts, RecordID: 4, Model: "a", Role: "test-writer", Lang: "go", Catches: 0, Opportunities: 7, Dropped: true},
+		{TS: ts, RecordID: 5, Model: "a", Role: "test-writer", Catches: 9, Opportunities: 9}, // NULL lang
+		{TS: ts, RecordID: 6, Model: "a", Role: "mutant-generator", Lang: "go", MutantsPlanted: 4, MutantsSurvived: 1},
+	}
+	if err := s.Record(ctx, rows); err != nil {
+		t.Fatal(err)
+	}
+	ev, n, err := s.Evidence(ctx, []string{"test-writer", "test-writer-shadow"}, "go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 2 || ev["a"] != (Evidence{Catches: 3, Opportunities: 6}) {
+		t.Fatalf("go writer evidence = %+v over %d rows, want 3/6 over 2", ev["a"], n)
+	}
+	ev, n, err = s.Evidence(ctx, []string{"test-writer"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 2 || ev["a"] != (Evidence{Catches: 11, Opportunities: 14}) {
+		t.Fatalf("any-language writer evidence = %+v over %d rows, want 11/14 over 2 (NULL lang and dropped excluded)", ev["a"], n)
+	}
+}

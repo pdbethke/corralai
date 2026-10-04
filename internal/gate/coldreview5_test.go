@@ -279,3 +279,109 @@ func TestAStrayFieldIsCaughtInAnyCaseAndAfterANewline(t *testing.T) {
 		}
 	}
 }
+
+// R5 (low, hypothesis — its structure confirmed by the founder's ruling): the
+// key migration ran CREATE / INSERT / DROP / RENAME as four separately
+// committed statements, so a crash between them left the store in a state the
+// next OpenStore could not recover from. It now runs in one transaction, and
+// OpenStore repairs either state an interrupted migration from an older
+// binary may already have left on disk. Each test builds that state by hand.
+
+// TestAMigrationInterruptedAfterCreateIsRetried: the crash came after
+// CREATE gate_runs_wide (and possibly its INSERT), before DROP. The narrow
+// table still holds every row; the leftover copy used to make every later
+// OpenStore fail on "gate_runs_wide already exists", disabling the gate.
+func TestAMigrationInterruptedAfterCreateIsRetried(t *testing.T) {
+	dsn := filepath.Join(t.TempDir(), "interrupted-create.db")
+	legacy, err := openRawLegacyStore(t, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := legacy.Exec(`INSERT INTO gate_runs (repo, head_sha, pr, passed, record_id, ran_at)
+		VALUES ('o/r', 'abc', 7, true, 41, TIMESTAMP '2026-09-01 00:00:00')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := legacy.Exec(`CREATE TABLE gate_runs_wide (repo VARCHAR, head_sha VARCHAR, context VARCHAR,
+		pr INTEGER, passed BOOLEAN, status_posted BOOLEAN, record_id BIGINT, ran_at TIMESTAMP)`); err != nil {
+		t.Fatal(err)
+	}
+	_ = legacy.Close()
+
+	s, err := OpenStore(dsn)
+	if err != nil {
+		t.Fatalf("OpenStore after an interrupted migration must recover, got: %v", err)
+	}
+	defer s.Close()
+	run, ok, err := s.GetByHead("o/r", "abc", "")
+	if err != nil || !ok || run.RecordID != 41 || run.PR != 7 {
+		t.Fatalf("the narrow table's row must survive the retried migration: %+v ok=%v err=%v", run, ok, err)
+	}
+	assertNoTable(t, s, "gate_runs_wide")
+	assertWideKey(t, s)
+}
+
+// TestAMigrationInterruptedAfterDropKeepsItsHistory: the crash came after
+// DROP gate_runs, before RENAME. Every row lived only in gate_runs_wide, and
+// the next OpenStore created a fresh, empty, already-wide gate_runs — so
+// migrateKey saw a wide key, returned, and the whole dedupe history sat
+// orphaned: every open head re-gated and re-certified. The repair merges the
+// orphan back, keeping any row the live table wrote since (it is newer).
+func TestAMigrationInterruptedAfterDropKeepsItsHistory(t *testing.T) {
+	dsn := filepath.Join(t.TempDir(), "interrupted-drop.db")
+	s, err := OpenStore(dsn) // the fresh, wide, live table an older binary created
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A row the live table wrote AFTER the crash, for a head the orphan also holds.
+	if err := s.Save(Run{Repo: "o/r", HeadSHA: "abc", PR: 7, Passed: false, StatusPosted: true, RecordID: 99, RanAt: time.Unix(2000, 0)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.Exec(`CREATE TABLE gate_runs_wide (repo VARCHAR NOT NULL, head_sha VARCHAR NOT NULL,
+		context VARCHAR NOT NULL DEFAULT 'corral/gate', pr INTEGER NOT NULL, passed BOOLEAN NOT NULL,
+		status_posted BOOLEAN NOT NULL DEFAULT FALSE, record_id BIGINT NOT NULL, ran_at TIMESTAMP NOT NULL,
+		PRIMARY KEY (repo, head_sha, context))`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.Exec(`INSERT INTO gate_runs_wide VALUES
+		('o/r', 'abc', 'corral/gate', 7, true, true, 41, TIMESTAMP '2026-09-01 00:00:00'),
+		('o/r', 'def', 'corral/gate', 8, true, true, 42, TIMESTAMP '2026-09-01 00:00:00')`); err != nil {
+		t.Fatal(err)
+	}
+	_ = s.Close()
+
+	s, err = OpenStore(dsn)
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	defer s.Close()
+	if run, ok, _ := s.GetByHead("o/r", "def", ""); !ok || run.RecordID != 42 {
+		t.Fatalf("the orphaned history must be merged back: def -> %+v ok=%v", run, ok)
+	}
+	if run, ok, _ := s.GetByHead("o/r", "abc", ""); !ok || run.RecordID != 99 {
+		t.Fatalf("a row the live table wrote since the crash must win over the orphan's: abc -> %+v ok=%v", run, ok)
+	}
+	assertNoTable(t, s, "gate_runs_wide")
+}
+
+func assertNoTable(t *testing.T, s *Store, name string) {
+	t.Helper()
+	var n int
+	if err := s.db.QueryRow(`SELECT count(*) FROM duckdb_tables() WHERE table_name = ?`, name).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Fatalf("table %s still exists after recovery", name)
+	}
+}
+
+func assertWideKey(t *testing.T, s *Store) {
+	t.Helper()
+	var cols string
+	if err := s.db.QueryRow(`SELECT list_aggregate(constraint_column_names, 'string_agg', ',')
+		FROM duckdb_constraints() WHERE table_name = 'gate_runs' AND constraint_type = 'PRIMARY KEY'`).Scan(&cols); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(cols, "context") {
+		t.Fatalf("gate_runs key is %q, want it widened to include context", cols)
+	}
+}

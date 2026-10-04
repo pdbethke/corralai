@@ -26,6 +26,14 @@ func OpenStore(dsn string) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("gate: open: %w", err)
 	}
+	// Before anything else touches gate_runs: an older binary's key
+	// migration could be interrupted between its statements and leave a
+	// state the code below would either fail on or silently orphan. Repair
+	// it first. (Review 8be2189163b0, R5.)
+	if err := recoverInterruptedMigration(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS gate_runs (
 		repo VARCHAR NOT NULL,
 		head_sha VARCHAR NOT NULL,
@@ -100,20 +108,27 @@ func OpenStore(dsn string) (*Store, error) {
 // Rows that collided under the narrow key are already lost — one overwrote the
 // other before this ran — and no migration can invent them back. They are
 // re-gated when their heads next appear, which is the correct outcome.
+//
+// The four statements run in ONE transaction. They used to be four separately
+// committed statements, so a crash between them left either a stale
+// gate_runs_wide (every later open failed on "already exists", disabling the
+// gate) or every row stranded in gate_runs_wide beside a fresh, empty table
+// (the dedupe history orphaned, every open head re-gated and re-certified).
+// recoverInterruptedMigration repairs either state an older binary may
+// already have left. (Review 8be2189163b0, R5.)
 func migrateKey(db *sql.DB) error {
-	var cols string
-	err := db.QueryRow(`SELECT list_aggregate(constraint_column_names, 'string_agg', ',')
-		FROM duckdb_constraints()
-		WHERE table_name = 'gate_runs' AND constraint_type = 'PRIMARY KEY'`).Scan(&cols)
-	if err == sql.ErrNoRows {
-		return nil // no primary key at all: nothing to widen
-	}
+	wide, ok, err := gateRunsKeyIsWide(db)
 	if err != nil {
-		return fmt.Errorf("gate: reading gate_runs primary key: %w", err)
+		return err
 	}
-	if strings.Contains(cols, "context") {
-		return nil // already wide
+	if !ok || wide {
+		return nil // no primary key at all, or already wide: nothing to widen
 	}
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("gate: widening gate_runs primary key: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // a no-op after Commit
 	stmts := []string{
 		`CREATE TABLE gate_runs_wide (
 			repo VARCHAR NOT NULL,
@@ -134,9 +149,97 @@ func migrateKey(db *sql.DB) error {
 		`ALTER TABLE gate_runs_wide RENAME TO gate_runs`,
 	}
 	for _, st := range stmts {
-		if _, err := db.Exec(st); err != nil {
+		if _, err := tx.Exec(st); err != nil {
 			return fmt.Errorf("gate: widening gate_runs primary key: %w", err)
 		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("gate: widening gate_runs primary key: %w", err)
+	}
+	return nil
+}
+
+// gateRunsKeyIsWide reports whether gate_runs' primary key includes context.
+// ok is false when the table has no primary key at all.
+func gateRunsKeyIsWide(db *sql.DB) (wide, ok bool, err error) {
+	var cols string
+	err = db.QueryRow(`SELECT list_aggregate(constraint_column_names, 'string_agg', ',')
+		FROM duckdb_constraints()
+		WHERE table_name = 'gate_runs' AND constraint_type = 'PRIMARY KEY'`).Scan(&cols)
+	if err == sql.ErrNoRows {
+		return false, false, nil
+	}
+	if err != nil {
+		return false, false, fmt.Errorf("gate: reading gate_runs primary key: %w", err)
+	}
+	return strings.Contains(cols, "context"), true, nil
+}
+
+// recoverInterruptedMigration repairs what an interrupted key migration from
+// an older, non-transactional binary can leave on disk. gate_runs_wide exists
+// only mid-migration, so its presence at open means one was cut short, and
+// WHERE it was cut decides the repair:
+//
+//   - gate_runs is gone: the crash came after DROP and before RENAME. The rows
+//     live only in gate_runs_wide — finish the swap.
+//   - gate_runs still has the NARROW key: the crash came after CREATE (and
+//     perhaps INSERT), before DROP. The narrow table still holds every row, so
+//     the partial copy is discarded and migrateKey runs the whole thing again.
+//   - gate_runs already has the WIDE key: the crash came after DROP, and the
+//     next open created a fresh table that has been in use since. The orphan
+//     is merged back with INSERT OR IGNORE — a row the live table wrote since
+//     is newer and wins — and only then dropped. Dropping it unmerged would
+//     throw away the very history this repair exists to keep.
+//
+// It runs in one transaction, so the repair cannot itself be interrupted into
+// a new state.
+func recoverInterruptedMigration(db *sql.DB) error {
+	has := func(name string) (bool, error) {
+		var n int
+		err := db.QueryRow(`SELECT count(*) FROM duckdb_tables() WHERE table_name = ?`, name).Scan(&n)
+		return n > 0, err
+	}
+	leftover, err := has("gate_runs_wide")
+	if err != nil {
+		return fmt.Errorf("gate: checking for an interrupted migration: %w", err)
+	}
+	if !leftover {
+		return nil
+	}
+	live, err := has("gate_runs")
+	if err != nil {
+		return fmt.Errorf("gate: checking for an interrupted migration: %w", err)
+	}
+	var stmts []string
+	switch {
+	case !live:
+		stmts = []string{`ALTER TABLE gate_runs_wide RENAME TO gate_runs`}
+	default:
+		wide, _, err := gateRunsKeyIsWide(db)
+		if err != nil {
+			return err
+		}
+		if wide {
+			stmts = append(stmts, `INSERT OR IGNORE INTO gate_runs
+				(repo, head_sha, context, pr, passed, status_posted, record_id, ran_at)
+				SELECT repo, head_sha, coalesce(context, 'corral/gate'), pr, passed,
+				       coalesce(status_posted, TRUE), record_id, ran_at
+				FROM gate_runs_wide`)
+		}
+		stmts = append(stmts, `DROP TABLE gate_runs_wide`)
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("gate: repairing an interrupted migration: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // a no-op after Commit
+	for _, st := range stmts {
+		if _, err := tx.Exec(st); err != nil {
+			return fmt.Errorf("gate: repairing an interrupted migration: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("gate: repairing an interrupted migration: %w", err)
 	}
 	return nil
 }

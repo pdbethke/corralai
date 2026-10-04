@@ -2,6 +2,8 @@
 
 package certify
 
+import "github.com/pdbethke/corralai/internal/shadowpool"
+
 // The audit statement — the receipt a team can hand to someone who was not
 // there.
 //
@@ -137,6 +139,9 @@ type AuditedFile struct {
 	// and the statement is where a verifier would otherwise not know.
 	PriorsApplied int    `json:"priorsApplied,omitempty"`
 	PriorDigest   string `json:"priorDigest,omitempty"`
+	// ShadowSelection: a challenger seat drawn from a pool, with every
+	// member's posterior and the seed that replays the draw.
+	ShadowSelection []shadowpool.Selection `json:"shadowSelection,omitempty"`
 	// The writer pair, when a challenger writer sat: which model, what each
 	// seat proved of the same survivors, and the overlap of their misses —
 	// signed whether or not the coefficient was sufficient, with Jaccard
@@ -351,6 +356,9 @@ func BuildAuditAttestation(s AuditStatement) map[string]any {
 		if f.PriorsApplied > 0 {
 			entry["priorsApplied"] = f.PriorsApplied
 			entry["priorDigest"] = f.PriorDigest
+		}
+		if len(f.ShadowSelection) > 0 {
+			entry["shadowSelection"] = f.ShadowSelection
 		}
 		if f.ExamMeasured {
 			entry["examSymbols"] = f.ExamSymbols

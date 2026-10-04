@@ -5001,6 +5001,7 @@ func writeAuditStatement(path, repoDir string, r reposcan.RepoReport, models map
 			IndicativeReason:         f.IndicativeReason,
 			PriorsApplied:            f.PriorsApplied,
 			PriorDigest:              f.PriorDigest,
+			ShadowSelection:          f.ShadowSelection,
 			ChallengerModel:          pairField(f.Challenger, func(p *modelcorr.Pair) string { return p.ModelB }),
 			ChallengerMutants:        pairInt(f.Challenger, func(p *modelcorr.Pair) int { return p.Mutants }),
 			ChallengerSurvivedWriter: pairInt(f.Challenger, func(p *modelcorr.Pair) int { return p.SurvivedA }),

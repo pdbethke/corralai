@@ -10,6 +10,7 @@ import (
 	"github.com/pdbethke/corralai/internal/advpool"
 	"github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/modelcorr"
+	"github.com/pdbethke/corralai/internal/shadowpool"
 )
 
 // maxUngradableDetailsPerReason bounds how many sample detail lines
@@ -111,6 +112,9 @@ type WeakFile struct {
 	PriorsApplied int
 	PriorDigest   string
 	PriorSource   string
+	// ShadowSelection mirrors advpool.Verdict's: which challenger was DRAWN,
+	// from which pool, on what evidence. Signed with the file, never summed.
+	ShadowSelection []shadowpool.Selection
 	// SelectionMethod, SelectedTests and SuiteTests mirror
 	// advpool.Verdict.TestSelection: WHICH measurement this kill rate is —
 	// the tests coverage evidence showed execute this file (Method, e.g.
@@ -553,6 +557,7 @@ func Aggregate(owner, repo, commit string, totalFiles, candidates int, results [
 			PriorsApplied:    r.Verdict.PriorsApplied,
 			PriorDigest:      r.Verdict.PriorDigest,
 			PriorSource:      r.Verdict.PriorSource,
+			ShadowSelection:  r.Verdict.ShadowSelection,
 			AuthoredTest:     r.Verdict.AuthoredTest,
 			// Which measurement this file's rate IS, carried onto the report
 			// so the printer never has to reach back into the verdict — and

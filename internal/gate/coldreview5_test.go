@@ -13,7 +13,7 @@ import (
 
 // A review of main at 6951ca4c, 2026-09-15 (reviewer claude-code:
 // claude-fable-5-1, verifier codex:gpt-6-astra), entry 8be2189163b0 on the
-// ledger. R1 and R2 are here; R3–R7 are still open.
+// ledger. All seven findings are here: R1 and R2 (fixed in #347), and R3–R7.
 
 // TestTwoPoliciesCannotShareOneStatus is R1 (high).
 //
@@ -190,5 +190,92 @@ func TestThePollerHoldsTheSharedStatusRuleToo(t *testing.T) {
 	_ = p.Tick(context.Background())
 	if strings.Join(ran, ",") != "first" {
 		t.Fatalf("ran %v: want only the first of two policies sharing one status", ran)
+	}
+}
+
+// TestASpaceBeforeCmdIsStillACommand is R3 (low, reproduced).
+//
+// THE DEFECT: ParsePolicy found the command only by the exact substrings
+// "cmd=" and ",cmd=", while every other field — and the stray-field guard —
+// tolerated whitespace after the comma. "repo=o/r, cmd=true" was refused as
+// "no cmd=", and that repo's gate was off apart from one log line.
+func TestASpaceBeforeCmdIsStillACommand(t *testing.T) {
+	for _, raw := range []string{
+		"repo=o/r, cmd=true",
+		"repo=o/r ,cmd=true",
+		"repo=o/r,cmd = true",
+		"  cmd =true,still the command",
+	} {
+		pol, reason := ParsePolicy(raw)
+		if reason != "" && !strings.Contains(raw, "still the command") {
+			t.Errorf("ParsePolicy(%q) refused: %s", raw, reason)
+			continue
+		}
+		if raw == "  cmd =true,still the command" {
+			// cmd= first: everything after it is the command, verbatim.
+			if reason != "no repo=" {
+				t.Errorf("ParsePolicy(%q) = %q, want the no-repo refusal (the command took the rest)", raw, reason)
+			}
+			continue
+		}
+		if pol.CheckCmd != "true" || pol.Repo != "o/r" {
+			t.Errorf("ParsePolicy(%q) = %+v, want repo o/r and command \"true\"", raw, pol)
+		}
+	}
+	// The FIRST cmd= wins and the rest is verbatim, even when the command
+	// itself contains ", cmd=".
+	pol, reason := ParsePolicy("repo=o/r, cmd=echo a, cmd=b")
+	if reason != "" || pol.CheckCmd != "echo a, cmd=b" {
+		t.Fatalf("first cmd= must win: got %+v, %q", pol, reason)
+	}
+}
+
+// TestNetRefusesAValueItDoesNotUnderstand is R4 (low, code-read).
+//
+// THE DEFECT: net= mapped every value other than "true" and "1" to
+// no-network, silently. timeout= refuses a bad value; net= did not, so an
+// operator who wrote net=yes got a gate that failed every network-needing
+// check with nothing pointing at the policy.
+func TestNetRefusesAValueItDoesNotUnderstand(t *testing.T) {
+	for raw, want := range map[string]bool{"true": true, "1": true, "True": true, "TRUE": true, "false": false, "0": false, "False": false} {
+		pol, reason := ParsePolicy("repo=o/r,net=" + raw + ",cmd=true")
+		if reason != "" || pol.AllowNet != want {
+			t.Errorf("net=%s: got AllowNet=%v reason=%q, want %v", raw, pol.AllowNet, reason, want)
+		}
+	}
+	for _, raw := range []string{"yes", "on", "no", "off", "enabled", ""} {
+		_, reason := ParsePolicy("repo=o/r,net=" + raw + ",cmd=true")
+		if !strings.Contains(reason, "net=") {
+			t.Errorf("net=%q was accepted (reason %q); an unrecognized value must be refused, naming net=", raw, reason)
+		}
+	}
+}
+
+// TestAStrayFieldIsCaughtInAnyCaseAndAfterANewline is R6 (low, code-read).
+//
+// THE DEFECT: the guard matched only a comma followed by a LOWERCASE field
+// name, so "cmd=true,Base=release" and "cmd=true\nbase=release" were
+// swallowed into the command and the policy gated every base while the
+// operator named one — the exact outcome the guard exists to report.
+func TestAStrayFieldIsCaughtInAnyCaseAndAfterANewline(t *testing.T) {
+	for _, raw := range []string{
+		"repo=o/r,cmd=true,Base=release",
+		"repo=o/r,cmd=true, BASE = release",
+		"repo=o/r,cmd=true\nbase=release",
+		"repo=o/r,cmd=true\n  Timeout=5",
+	} {
+		if _, reason := ParsePolicy(raw); !strings.Contains(reason, "after cmd=") {
+			t.Errorf("ParsePolicy(%q) reason = %q, want the stray-field refusal", raw, reason)
+		}
+	}
+	// A field NAME inside a word is not a field: "rebase=" and "basename"
+	// must not trip the guard.
+	for _, raw := range []string{
+		"repo=o/r,cmd=git rebase=x",
+		"repo=o/r,cmd=echo basename",
+	} {
+		if _, reason := ParsePolicy(raw); reason != "" {
+			t.Errorf("ParsePolicy(%q) refused (%q); a field name inside a word is not a stray field", raw, reason)
+		}
 	}
 }

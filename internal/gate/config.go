@@ -50,15 +50,32 @@ const maxGateTimeoutS = 24 * 60 * 60
 // covered without a second edit.
 var policyFields = []string{"repo", "base", "context", "net", "timeout"}
 
-// strayFieldRE is derived from policyFields and tolerates whitespace on both
-// sides of the comma and the '='.
+// strayFieldRE is derived from policyFields. It tolerates whitespace on both
+// sides of the separator and the '=', matches the field name in ANY case, and
+// treats a NEWLINE as a separator as well as a comma. It used to match only a
+// comma followed by the lowercase name, so "cmd=true,Base=release" and
+// "cmd=true\nbase=release" were swallowed into the command and the policy
+// gated every base while the operator had named one — the outcome this guard
+// exists to report. (Review 8be2189163b0, R6.)
+//
+// The opposite error is accepted on purpose: a legitimate command that
+// contains ",base=" inside a quoted argument is refused. That refusal is loud
+// and fails closed — the operator rewords the command — whereas a missed
+// stray field is silent and fails OPEN.
 var strayFieldRE = func() map[string]*regexp.Regexp {
 	m := make(map[string]*regexp.Regexp, len(policyFields))
 	for _, f := range policyFields {
-		m[f] = regexp.MustCompile(`,\s*` + regexp.QuoteMeta(f) + `\s*=`)
+		m[f] = regexp.MustCompile(`(?i)[,\n]\s*` + regexp.QuoteMeta(f) + `\s*=`)
 	}
 	return m
 }()
+
+// cmdFieldRE finds the FIRST cmd= that begins a field: at the start of the
+// value or after a comma, with the same whitespace tolerance every other
+// field gets. It used to be the exact substrings "cmd=" and ",cmd=", so
+// "repo=o/r, cmd=true" was refused as having no command and that repo's gate
+// was off apart from a log line. (Review 8be2189163b0, R3.)
+var cmdFieldRE = regexp.MustCompile(`(^|,)\s*cmd\s*=`)
 
 // ParsePolicyEnv reads every CORRALAI_GATE_POLICY_<NAME> out of environ (the
 // os.Environ() form, "KEY=VALUE") and returns the policies in a DETERMINISTIC
@@ -183,7 +200,8 @@ func envValue(environ []string, key string) string {
 // (Policy.Base == nil). An omitted context= is defaulted at the door that ACTS
 // on the policy (Policy.normalized), never here, so the forge and the store
 // can never disagree about which check spoke. An omitted net= defaults to
-// false — no network, matching the runner's fail-closed posture.
+// false — no network, matching the runner's fail-closed posture — and a net=
+// that is not a boolean (strconv.ParseBool) is refused, never defaulted.
 func ParsePolicy(raw string) (Policy, string) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -192,15 +210,11 @@ func ParsePolicy(raw string) (Policy, string) {
 
 	// Split the value at cmd= so the command is captured whole.
 	var head, cmdVal string
-	cmdSeen := false
-	switch {
-	case strings.HasPrefix(raw, "cmd="):
-		cmdVal, cmdSeen = raw[len("cmd="):], true
-	case strings.Contains(raw, ",cmd="):
-		i := strings.Index(raw, ",cmd=")
-		head, cmdVal, cmdSeen = raw[:i], raw[i+len(",cmd="):], true
+	loc := cmdFieldRE.FindStringIndex(raw)
+	if loc != nil {
+		head, cmdVal = raw[:loc[0]], raw[loc[1]:]
 	}
-	if !cmdSeen {
+	if loc == nil {
 		return Policy{}, "no cmd= (a policy with no command would report a result for a check that never ran)"
 	}
 	if stray := strayFieldAfterCmd(cmdVal); stray != "" {
@@ -241,7 +255,16 @@ func ParsePolicy(raw string) (Policy, string) {
 				pol.Context = val
 			}
 		case "net":
-			pol.AllowNet = val == "true" || val == "1"
+			// Refused, not defaulted, when it is not a boolean — the same
+			// rule timeout= follows. It used to map every value but "true"
+			// and "1" to no-network, silently, so net=yes produced a gate
+			// that failed every network-needing check with nothing pointing
+			// at the policy. (Review 8be2189163b0, R4.)
+			b, err := strconv.ParseBool(val)
+			if err != nil {
+				return Policy{}, "net=" + val + " is not true or false"
+			}
+			pol.AllowNet = b
 		case "timeout":
 			n, err := strconv.Atoi(val)
 			switch {

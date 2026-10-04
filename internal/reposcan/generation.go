@@ -72,11 +72,16 @@ package reposcan
 // prior sat a different exam) — the SAME change, one bump.
 // "10" (2026-10-04): the Verdict gained ShadowSelection — a challenger seat
 // DRAWN from an operator-named pool, with each member's posterior and the
-// seed that replays the draw (docs/design/shadow-seat-selection.md). A cached
-// "9" document unmarshals it as nil, which would present a drawn challenger's
-// run as a hand-named one, so it must not be served as a "10" measurement.
+// seed that replays the draw (docs/design/shadow-seat-selection.md). The
+// bump is for the Verdict's SHAPE: shape and generation change together
+// (VerdictShapeSHA256 below), so a cached "9" document is re-measured once
+// rather than served under a generation whose fields it never had.
 // The scorecard's challenger-writer row and lang column landed in the same
 // change; the bump itself is for the Verdict shape.
+// (Corrected 2026-10-04, final branch review: this entry first said a "9"
+// document "would present a drawn challenger's run as a hand-named one".
+// No "9" verdict was ever drawn — pools did not exist — and a served verdict
+// already shows how it was measured, so that reason was false.)
 const VerdictGeneration = "10"
 
 // VerdictShapeSHA256 fingerprints advpool.Verdict's serialized shape: every

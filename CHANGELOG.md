@@ -21,15 +21,20 @@ Built and unit-tested; not yet exercised end to end against a real repository.
   scorecard` itself keeps its columns and gains a `test-writer-shadow` line
   wherever a challenger writer sat, so that record is kept apart from the seat
   that gates.
-- **`--shadow-pool` and `--shadow-writer-pool`** (on `certify --local`,
-  `certify --repo` and `doctor`) take a comma-separated pool of challenger
-  models; each run draws one by Thompson sampling over the scorecard's record.
-  `--shadow-seed` replays a recorded draw. The draw touches only the two shadow
-  seats and never gates a verdict. The drawn model, the pool and the seed are
-  signed into the record (`Verdict.ShadowSelection`; `shadowSelection` in each
-  `--repo` statement entry), `producedBy` reads `(non-gating, drawn from a pool
-  of N)`, and a stderr line names each drawn seat. `--repo` draws once per scan
-  from history pooled across languages and writes no scorecard rows.
+- **`--shadow-pool` and `--shadow-writer-pool`** take a comma-separated pool
+  of challenger models. On `certify --local` and `certify --repo` each run
+  draws one by Thompson sampling over the scorecard's record; `doctor` takes
+  the same flags and only validates them — it never draws. `--shadow-seed`
+  replays a recorded draw. The draw touches only the two shadow seats and
+  never gates a verdict. The drawn model, the pool and the seed are signed
+  into the record (`Verdict.ShadowSelection`, which the `--local` signature
+  covers; `shadowSelection` in each `--repo` statement entry), a selection is signed only for a seat
+  the signed roster names (a challenger drawn and never dispatched is in
+  neither), and a stderr line names each drawn seat. On the `--local`
+  signed record, `producedBy` also reads `(non-gating, drawn from a pool of
+  N)`. `--repo` draws once per scan from history pooled across languages,
+  writes no scorecard rows, and on `--dry-run` validates the pools without
+  drawing.
 - `doctor` gains `--shadow-writer-model` and now checks credentials for it.
 - **One-time cache miss.** `reposcan.VerdictGeneration` moves from 9 to 10
   because the verdict gained a field, so verdicts cached before this change

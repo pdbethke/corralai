@@ -77,3 +77,39 @@ func TestShadowSelectionSurvivesTickAggregate(t *testing.T) {
 		}
 	}
 }
+
+// A challenger DRAWN and then never seated (here: the generator, on an
+// unsharded run that dispatches no challenger) must not sign its selection.
+// modelsByRole already drops that seat from the roster — "a model that was
+// never asked is not in the roster" — and a selection naming a seat the
+// roster omits is the same rule kept at one door and not the other. The
+// seated writer's selection stays.
+func TestTickAggregateSignsOnlySeatedSelections(t *testing.T) {
+	rs := newTestRunSpec(t)
+	rs.ShadowWriterModel = "challenger-model"
+	rs.ShadowSelection = []shadowpool.Selection{
+		{Role: RoleMutantGeneratorShadow, Chosen: "drawn-gen", Seed: "0x01"},
+		{Role: RoleTestWriterShadow, Chosen: "c", Seed: "0x01"},
+	}
+	missionID := writerShadowNextMissionID
+	writerShadowNextMissionID++
+	d := newWriterShadowRun(t, missionID, rs, &writerShadowScorer{}, &fakeValidator{mutants: writerShadowMutants()})
+	// Production puts a drawn generator in the assignment; this run is
+	// unsharded, so it never dispatches it.
+	d.Assign[RoleMutantGeneratorShadow] = "drawn-gen"
+	sig := &capturingSigner{}
+	d.Signer = sig
+
+	v := driveWriterShadow(t, d, missionID)
+	for name, got := range map[string]Verdict{"returned": v, "signed": sig.got} {
+		if _, named := got.ModelsByRole[RoleMutantGeneratorShadow]; named {
+			t.Fatalf("fixture (%s): the unseated generator is in the roster, so this test cannot see the filter", name)
+		}
+		if _, ok := shadowpool.Drawn(got.ShadowSelection, RoleMutantGeneratorShadow); ok {
+			t.Errorf("%s verdict signs a selection for %s, a seat its roster omits: %+v", name, RoleMutantGeneratorShadow, got.ShadowSelection)
+		}
+		if sel, ok := shadowpool.Drawn(got.ShadowSelection, RoleTestWriterShadow); !ok || sel.Chosen != "c" {
+			t.Errorf("%s verdict lost the SEATED writer's selection: %+v", name, got.ShadowSelection)
+		}
+	}
+}

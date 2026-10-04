@@ -4711,13 +4711,38 @@ func TestLeaderboardRewardsTheCriticForBeingRightNotForFlagging(t *testing.T) {
 
 // ShadowSelection must survive the timed-out construction path too —
 // timeoutVerdict is where a field has been forgotten more than once.
+// The seat must be in the roster: a selection is signed only for a seat the
+// signed roster names (TestTimeoutVerdictSignsOnlySeatedSelections).
 func TestTimeoutVerdictCarriesTheShadowSelection(t *testing.T) {
-	d := &Driver{}
+	d := &Driver{Assign: RoleAssignment{RoleTestWriterShadow: "c"}}
 	v := d.timeoutVerdict(&runState{rs: RunSpec{
 		Repo: "r", Commit: "c", Lang: "go",
 		ShadowSelection: []shadowpool.Selection{{Role: RoleTestWriterShadow, Chosen: "c", Seed: "0x01"}},
 	}})
 	if len(v.ShadowSelection) != 1 || v.ShadowSelection[0].Chosen != "c" {
 		t.Fatalf("ShadowSelection did not survive this construction path: %+v", v.ShadowSelection)
+	}
+}
+
+// The timed-out path drops a drawn-but-never-dispatched challenger's
+// selection exactly as the converged one does: the roster and the selection
+// come from one helper, so the two cannot disagree on either path.
+func TestTimeoutVerdictSignsOnlySeatedSelections(t *testing.T) {
+	d := &Driver{Assign: RoleAssignment{RoleMutantGeneratorShadow: "drawn-gen", RoleTestWriterShadow: "c"}}
+	v := d.timeoutVerdict(&runState{rs: RunSpec{
+		Repo: "r", Commit: "c", Lang: "go",
+		ShadowSelection: []shadowpool.Selection{
+			{Role: RoleMutantGeneratorShadow, Chosen: "drawn-gen", Seed: "0x01"},
+			{Role: RoleTestWriterShadow, Chosen: "c", Seed: "0x01"},
+		},
+	}}) // no shadowStats: the challenger generator never ran
+	if _, named := v.ModelsByRole[RoleMutantGeneratorShadow]; named {
+		t.Fatal("fixture: the unseated generator is in the roster, so this test cannot see the filter")
+	}
+	if _, ok := shadowpool.Drawn(v.ShadowSelection, RoleMutantGeneratorShadow); ok {
+		t.Errorf("the timeout verdict signs a selection for a seat its roster omits: %+v", v.ShadowSelection)
+	}
+	if sel, ok := shadowpool.Drawn(v.ShadowSelection, RoleTestWriterShadow); !ok || sel.Chosen != "c" {
+		t.Errorf("the timeout verdict lost the SEATED writer's selection: %+v", v.ShadowSelection)
 	}
 }

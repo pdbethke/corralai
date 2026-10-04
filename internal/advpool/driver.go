@@ -776,8 +776,10 @@ type Verdict struct {
 	ChallengerAgreement *modelcorr.Pair
 
 	// ShadowSelection is RunSpec.ShadowSelection, carried by verdictFromSpec
-	// onto BOTH construction paths. JSON-tagged, so CertSigner's digest of
-	// the verdict covers it on the --local path with no further copying.
+	// onto BOTH construction paths and then narrowed, on both, by
+	// signedSeats to the seats the signed roster names: a challenger drawn
+	// and never dispatched is in neither. JSON-tagged, so CertSigner's digest
+	// of the verdict covers it on the --local path with no further copying.
 	ShadowSelection []shadowpool.Selection `json:"shadow_selection,omitempty"`
 	// PromptShape discloses what a mutant-generator shard actually SAW:
 	// "chunk" when every shard of this run showed only its own symbols'
@@ -2755,8 +2757,10 @@ func (d *Driver) tickAggregate(ctx context.Context, missionID int64, run *runSta
 	// execution-proven judgment (kill-rate + proven_missed), never an LLM's
 	// opinion, which can hallucinate. blockingFindingOpen remains for a future
 	// execution-verified finding path.
-	v := aggregate(run.rs, run.modelsByRole(d.Assign), run.devKillRate, run.mutantsTotal, len(run.devSurvivors), run.provenMissed,
+	roster, seatedSelection := run.signedSeats(d.Assign)
+	v := aggregate(run.rs, roster, run.devKillRate, run.mutantsTotal, len(run.devSurvivors), run.provenMissed,
 		criticFindings, d.Threshold, d.CertifyIntervalWidth, false, run.testWriterFailed, run.poolTestUnsound)
+	v.ShadowSelection = seatedSelection
 	v.RegionsTotal = run.regionsTotal
 	v.PromptShape = run.promptShape
 	v.MutantBudget = run.mutantBudget
@@ -3238,7 +3242,7 @@ func (d *Driver) timeoutVerdict(run *runState) Verdict {
 	v.DuplicateMutants = run.dupMutants
 	v.PromptShape = run.promptShape
 	v.MutantBudget = run.mutantBudget
-	v.ModelsByRole = run.modelsByRole(d.Assign)
+	v.ModelsByRole, v.ShadowSelection = run.signedSeats(d.Assign)
 	// A stalled run still spent everything it spent, and it is the run an
 	// operator most needs the clock for: "which phase was it sitting in when
 	// the deadline hit" is answerable only from the phases that DID close,
@@ -3336,6 +3340,23 @@ func (d *Driver) feedLeaderboard(v Verdict, testWriterMoot bool, criticObs []Cri
 	case refuted > 0:
 		d.Leaderboard.Record(v.ModelsByRole[RoleTestCritic], RoleTestCritic, OutcomeFail)
 	}
+}
+
+// signedSeats is the roster a verdict signs AND the pool draws it discloses,
+// returned together so the two cannot disagree. A challenger drawn and then
+// never dispatched (an unsharded run, no shardable region) is dropped from
+// the roster by modelsByRole; its selection must go with it, or the record
+// would say a seat was drawn for a run the roster says it never sat in.
+// Both verdict construction sites call this, never modelsByRole alone.
+func (r *runState) signedSeats(assign RoleAssignment) (map[string]string, []shadowpool.Selection) {
+	roster := r.modelsByRole(assign)
+	var sels []shadowpool.Selection
+	for _, sel := range r.rs.ShadowSelection {
+		if strings.TrimSpace(roster[sel.Role]) != "" {
+			sels = append(sels, sel)
+		}
+	}
+	return roster, sels
 }
 
 // modelsByRole is the roster a verdict SIGNS: the assignment, minus any

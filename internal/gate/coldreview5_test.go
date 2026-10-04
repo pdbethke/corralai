@@ -261,13 +261,13 @@ func TestNetRefusesAValueItDoesNotUnderstand(t *testing.T) {
 	}
 }
 
-// TestAStrayFieldIsCaughtInAnyCaseAndAfterANewline is R6 (low, code-read).
+// TestAStrayFieldIsCaughtAfterACommaInAnyCaseAndAtALineStartInLowercase is R6 (low, code-read).
 //
 // THE DEFECT: the guard matched only a comma followed by a LOWERCASE field
 // name, so "cmd=true,Base=release" and "cmd=true\nbase=release" were
 // swallowed into the command and the policy gated every base while the
 // operator named one — the exact outcome the guard exists to report.
-func TestAStrayFieldIsCaughtInAnyCaseAndAfterANewline(t *testing.T) {
+func TestAStrayFieldIsCaughtAfterACommaInAnyCaseAndAtALineStartInLowercase(t *testing.T) {
 	for _, raw := range []string{
 		"repo=o/r,cmd=true,Base=release",
 		"repo=o/r,cmd=true, BASE = release",

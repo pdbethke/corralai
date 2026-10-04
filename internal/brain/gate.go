@@ -179,7 +179,10 @@ type gateRunContextRow struct {
 
 // GateRunHandler serves GET /api/gate/run?repo=&sha=[&context=], reading
 // store's dedupe/index rows. With context= it answers for that one check (the
-// link on a status names its own); without, for every check on the head. Mount it behind the SAME auth wrapper the brain wraps
+// link on a status names its own); without, for every check that has reported
+// for the head. It serves the MERGE gate's store only: a control-gate link
+// names a context this store never holds and gets a 404, never a borrowed
+// answer. Mount it behind the SAME auth wrapper the brain wraps
 // every other /api/* route in (see cmd/corral/main.go) — this handler
 // itself performs no authentication or authorization.
 func GateRunHandler(store *gate.Store) http.HandlerFunc {

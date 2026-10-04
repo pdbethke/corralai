@@ -70,6 +70,12 @@ var policyFields = []string{"repo", "base", "context", "net", "timeout"}
 // failed OPEN: a quoted ",base=" inside a legitimate command, and a lowercase
 // shell assignment such as "timeout=30" on its own line. The operator rewords
 // the command; nothing is gated against the wrong base.
+//
+// One miss remains, SILENT, and is the price of not refusing shell scripts: a
+// field written on its own line in a case other than lowercase ("\nBase=x")
+// is indistinguishable from a shell variable and is kept as part of the
+// command. Policy fields are documented lowercase; this is the one spelling
+// the guard cannot tell from a script.
 var strayFieldRE = func() map[string]*regexp.Regexp {
 	m := make(map[string]*regexp.Regexp, len(policyFields))
 	for _, f := range policyFields {

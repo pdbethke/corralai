@@ -37,8 +37,11 @@ Ledger entry `8be2189163b0`, findings R3–R7, all adjudicated confirmed.
   store repairs either state an interrupted migration from an older binary can
   leave — one used to disable the gate, the other to lose its dedupe history.
 - **`/api/gate/run` answers per check.** Every status's link — the merge
-  gate's and the control gate's — now names its check (`&context=`), and the
-  endpoint answers for that one. Without a context it reports `passed` only
+  gate's and the control gate's — now names its check (`&context=`). For a
+  merge-gate check the endpoint answers for that one. The control gate's own
+  results have no read endpoint yet, so its link now returns 404 — where it
+  used to open the merge gate's answer for the head, which could read passed
+  while the control gate had failed. Without a context it reports `passed` only
   when every check that has **reported** for the head passed, with a
   `contexts` list of each check's result, pull request and record; it used to
   report whichever check finished last. A check still running has no row and

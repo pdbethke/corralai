@@ -55,6 +55,12 @@ would recommend a critic nobody has checked.
 
 **`goal-deriver` — not scored.** See the last section.
 
+**Shadow seats — not ranked.** An observation from a shadow seat is ignored by
+this command rather than folded into a seat it was not graded for. The
+shadow-seat draw ([shadow-seat-selection.md](shadow-seat-selection.md)) reads
+those same rows the other way round, on purpose: it seats nothing that gates,
+and a challenger whose own draws never counted would never move off its prior.
+
 ## Thin evidence is a data point, not a ranking
 
 **`n` is always the metric's own denominator**, and the table names its unit:

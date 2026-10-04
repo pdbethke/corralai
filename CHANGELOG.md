@@ -9,6 +9,30 @@ still move between minor versions.
 Entries describe what changed for someone *using* the tool. For the full commit
 history of any release, `git log v0.3.4..v0.3.5`.
 
+## [Unreleased]
+
+### Challenger seats can be drawn from a pool
+
+Built and unit-tested; not yet exercised end to end against a real repository.
+
+- **Every scorecard row now says its language, and the challenger writer has a
+  row.** `corral scorecard` gains `lang` and `shadow_drawn` columns and a
+  `test-writer-shadow` line, so a challenger's record is kept per language and
+  separately from the seat that gates.
+- **`--shadow-pool` and `--shadow-writer-pool`** (on `certify --local`,
+  `certify --repo` and `doctor`) take a comma-separated pool of challenger
+  models; each run draws one by Thompson sampling over the scorecard's record.
+  `--shadow-seed` replays a recorded draw. The draw touches only the two shadow
+  seats and never gates a verdict. The drawn model, the pool and the seed are
+  signed into the record (`Verdict.ShadowSelection`; `shadowSelection` in each
+  `--repo` statement entry), `producedBy` reads `(non-gating, drawn from a pool
+  of N)`, and a stderr line names each drawn seat. `--repo` draws once per scan
+  from history pooled across languages and writes no scorecard rows.
+- `doctor` gains `--shadow-writer-model` and now checks credentials for it.
+- **One-time cache miss.** `reposcan.VerdictGeneration` moves from 9 to 10
+  because the verdict gained a field, so verdicts cached before this change
+  are re-measured once.
+
 ## [v1.0.0-rc.13] — 2026-09-09
 
 Same code as rc.12 plus the release-gate fix below. **rc.12 is tagged but has

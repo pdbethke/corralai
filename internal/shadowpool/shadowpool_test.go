@@ -77,3 +77,16 @@ func TestSeedRoundTrip(t *testing.T) {
 		t.Fatal("ParseSeed accepted garbage")
 	}
 }
+
+func TestDrawClampsImpossibleCounts(t *testing.T) {
+	sel := Draw("r", "go",
+		[]Candidate{{"a", "a"}, {"b", "b"}},
+		map[string]Counts{"a": {Successes: -3, Trials: 2}, "b": {Successes: 9, Trials: 4}},
+		true, 2, 42)
+	if sel.Members[0].Alpha != 1 || sel.Members[0].Beta != 3 {
+		t.Fatalf("a (negative successes): α,β = %v,%v want 1,3", sel.Members[0].Alpha, sel.Members[0].Beta)
+	}
+	if sel.Members[1].Alpha != 5 || sel.Members[1].Beta != 1 {
+		t.Fatalf("b (successes > trials): α,β = %v,%v want 5,1", sel.Members[1].Alpha, sel.Members[1].Beta)
+	}
+}

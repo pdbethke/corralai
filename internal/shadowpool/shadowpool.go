@@ -85,11 +85,19 @@ func Draw(role, lang string, cands []Candidate, history map[string]Counts, histo
 	best := -1.0
 	for _, c := range cands {
 		h := history[c.Concrete]
-		fail := h.Trials - h.Successes
-		if fail < 0 {
-			fail = 0
+		trials := h.Trials
+		if trials < 0 {
+			trials = 0
 		}
-		m := Member{Model: c.Typed, Alpha: 1 + float64(h.Successes), Beta: 1 + float64(fail)}
+		successes := h.Successes
+		if successes < 0 {
+			successes = 0
+		}
+		if successes > trials {
+			successes = trials
+		}
+		fail := trials - successes
+		m := Member{Model: c.Typed, Alpha: 1 + float64(successes), Beta: 1 + float64(fail)}
 		if c.Concrete != c.Typed {
 			m.Concrete = c.Concrete
 		}

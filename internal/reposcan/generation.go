@@ -70,7 +70,14 @@ package reposcan
 // (a rate that cleared the threshold on an exam too small to certify is
 // needs-review), and PriorsApplied/PriorDigest/PriorSource (a run handed a
 // prior sat a different exam) — the SAME change, one bump.
-const VerdictGeneration = "9"
+// "10" (2026-10-04): the Verdict gained ShadowSelection — a challenger seat
+// DRAWN from an operator-named pool, with each member's posterior and the
+// seed that replays the draw (docs/design/shadow-seat-selection.md). A cached
+// "9" document unmarshals it as nil, which would present a drawn challenger's
+// run as a hand-named one, so it must not be served as a "10" measurement.
+// The scorecard's challenger-writer row and lang column landed in the same
+// change; the bump itself is for the Verdict shape.
+const VerdictGeneration = "10"
 
 // VerdictShapeSHA256 fingerprints advpool.Verdict's serialized shape: every
 // exported field's name, type and json tag, sorted by name and hashed.
@@ -92,4 +99,4 @@ const VerdictGeneration = "9"
 // Verdict's own FIELDS") and nothing wider. Nor can any fingerprint catch the
 // behaviour half: a scorer that computes a DIFFERENT number into the SAME
 // field is invisible here, and remains a review responsibility.
-const VerdictShapeSHA256 = "25be7f9666411ef5c610a7ae41297af4c3c6a3e9baeac34080d7d097f075bfc1"
+const VerdictShapeSHA256 = "3f363801929d0a2c61c646c5cf067d064a30fa155973f580014c6131101c4295"

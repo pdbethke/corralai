@@ -70,7 +70,13 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	criticModelFlag := fs.String("critic-model", "", "model for the test-critic role, which must differ from the writer's; \"off\" disables the critic entirely (it is advisory and never gates the verdict, so a single-vendor run with only one usable model can drop it). No default")
 	scopeTestsFlag := fs.Bool("scope-tests", false, "REMOVED — see --whole-suite. Selection by coverage evidence is now the default")
 	wholeSuiteFlag := fs.Bool("whole-suite", false, "grade every mutant against the project's WHOLE suite instead of the tests that demonstrably execute each file (the default, from one instrumented run per scan). Costs O(mutants x whole-suite runtime) per file and answers a different question — 'did ANY test catch it' rather than 'do this file's tests test it'. The verdict records which was used")
-	shadow := registerShadowSeatFlags(fs, "challenger model that attacks every region a SECOND time. OFF unless named. Recorded for comparison — NEVER gates the verdict", "CHALLENGER test-writer: a second writer attacks the SAME survivors as the primary, so the two seats' misses can be compared (Jaccard over survivors, Cohen's kappa). Measurement only — it NEVER gates the verdict. OFF unless named. The per-file Jaccard/kappa land in the ledger entry and in a warehouse with --push; the per-mutant attempt rows are not recorded on the repo path")
+	shadow := registerShadowSeatFlags(fs, shadowSeatHelp{
+		model:       "challenger model that attacks every region a SECOND time. OFF unless named. Recorded for comparison — NEVER gates the verdict",
+		pool:        "a comma-separated POOL of challenger generator models; the scan DRAWS one ONCE, for every file it audits, by Thompson sampling over the scorecard's record pooled across every recorded language (a scan spans languages; the record says lang \"any\"), and each file's signed entry says which, with every member's posterior. Every member is checked for a credential before the draw; --dry-run checks the pool's shape and draws nothing. Mutually exclusive with --shadow-model. OFF unless named; NEVER gates the verdict",
+		writerModel: "CHALLENGER test-writer: a second writer attacks the SAME survivors as the primary, so the two seats' misses can be compared (Jaccard over survivors, Cohen's kappa). Measurement only — it NEVER gates the verdict. OFF unless named. The per-file Jaccard/kappa land in the ledger entry and in a warehouse with --push; the per-mutant attempt rows are not recorded on the repo path",
+		writerPool:  "a comma-separated POOL of challenger WRITER models, drawn once per scan exactly as --shadow-pool is. Mutually exclusive with --shadow-writer-model. OFF unless named; NEVER gates the verdict",
+		seed:        shadowSeedReplayHelp,
+	})
 	owner := fs.String("owner", "local", "owning account for the scan (tenant identifier)")
 	commit := fs.String("commit", "", "commit SHA the report is bound to")
 	swarmFlag := fs.Int("swarm", 0, "max concurrent audit workers (0 = auto-size to this host's cores); on --substrate workspace it also sizes the private trees that score one file's mutants at once (budget/4, min 1), so --swarm 4 is one tree")
@@ -125,9 +131,20 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// the drawn member — as typed — is resolved exactly like a named one. A
 	// scan spans languages and draws ONCE for all of them, so it reads the
 	// scorecard's record across every language.
-	shadowSels, drawErr := drawShadowSeats("corral certify --repo", *repoDir, shadowpool.LangAny, shadow,
-		map[string]string{advpool.RoleMutantGenerator: *mutantModelFlag, advpool.RoleTestWriter: *writerModelFlag},
-		localBugCatchDBPath(), stderr)
+	//
+	// --dry-run audits nothing, so it draws nothing: it VALIDATES the pools
+	// (a malformed one is refused here exactly as a real run refuses it) but
+	// prints no draw, opens no scorecard and — like every other seat on the
+	// free inventory — demands no member's credential.
+	shadowPrimary := map[string]string{advpool.RoleMutantGenerator: *mutantModelFlag, advpool.RoleTestWriter: *writerModelFlag}
+	var shadowSels []shadowpool.Selection
+	var drawErr error
+	if *dryRun {
+		drawErr = validateShadowPools("corral certify --repo", *repoDir, shadow, shadowPrimary, false, stderr)
+	} else {
+		shadowSels, drawErr = drawShadowSeats("corral certify --repo", *repoDir, shadowpool.LangAny, shadow,
+			shadowPrimary, localBugCatchDBPath(), stderr)
+	}
 	if drawErr != nil {
 		fmt.Fprintf(stderr, "corral certify --repo: %v\n", drawErr)
 		return 2

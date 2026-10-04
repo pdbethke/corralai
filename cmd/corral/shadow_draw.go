@@ -45,8 +45,12 @@ func shadowPoolSeats(f *shadowSeatFlags) []shadowPoolSeat {
 // drawn: a member that only failed when drawn would make a command pass ten
 // times and fail on the eleventh. The seed is parsed here too, so doctor
 // refuses exactly what certify would.
-func validateShadowPools(cmdName, repoRoot string, f *shadowSeatFlags, primary map[string]string, stderr io.Writer) error {
-	cands, err := shadowCandidates(cmdName, repoRoot, f, primary, stderr)
+//
+// checkCredentials is false only for certify --repo --dry-run, the free
+// inventory, which demands no key for any seat: a malformed pool is still
+// refused there, but a member's missing credential is a run's problem.
+func validateShadowPools(cmdName, repoRoot string, f *shadowSeatFlags, primary map[string]string, checkCredentials bool, stderr io.Writer) error {
+	cands, err := shadowCandidates(cmdName, repoRoot, f, primary, checkCredentials, stderr)
 	if err != nil {
 		return err
 	}
@@ -72,7 +76,7 @@ func shadowSeed(text string, pooled bool) (seed uint64, given bool, err error) {
 	return seed, true, nil
 }
 
-func shadowCandidates(cmdName, repoRoot string, f *shadowSeatFlags, primary map[string]string, stderr io.Writer) (map[string][]shadowpool.Candidate, error) {
+func shadowCandidates(cmdName, repoRoot string, f *shadowSeatFlags, primary map[string]string, checkCredentials bool, stderr io.Writer) (map[string][]shadowpool.Candidate, error) {
 	out := map[string][]shadowpool.Candidate{}
 	for _, s := range shadowPoolSeats(f) {
 		pool := strings.TrimSpace(*s.pool)
@@ -99,8 +103,10 @@ func shadowCandidates(cmdName, repoRoot string, f *shadowSeatFlags, primary map[
 			if _, err := resolveSeatRegistry(cmdName, repoRoot, []seatFlag{{flag: s.poolFlag, role: s.role, val: &concrete}}, io.Discard); err != nil {
 				return nil, fmt.Errorf("--%s member %q: %v", s.poolFlag, typed, err)
 			}
-			if err := shadowMemberRunnable(concrete); err != nil {
-				return nil, fmt.Errorf("--%s member %q cannot run: %v — every member is checked before the draw, so fix or remove it", s.poolFlag, typed, err)
+			if checkCredentials {
+				if err := shadowMemberRunnable(concrete); err != nil {
+					return nil, fmt.Errorf("--%s member %q cannot run: %v — every member is checked before the draw, so fix or remove it", s.poolFlag, typed, err)
+				}
 			}
 			if primaryModel != "" && strings.TrimSpace(primaryModel) == concrete {
 				fmt.Fprintf(stderr, "%s: warning: --%s member %q is the %s's own model — if it is drawn, the head-to-head compares a model against itself\n", cmdName, s.poolFlag, typed, s.base)
@@ -112,7 +118,7 @@ func shadowCandidates(cmdName, repoRoot string, f *shadowSeatFlags, primary map[
 }
 
 func drawShadowSeats(cmdName, repoRoot, lang string, f *shadowSeatFlags, primary map[string]string, storePath string, stderr io.Writer) ([]shadowpool.Selection, error) {
-	cands, err := shadowCandidates(cmdName, repoRoot, f, primary, stderr)
+	cands, err := shadowCandidates(cmdName, repoRoot, f, primary, true, stderr)
 	if err != nil {
 		return nil, err
 	}

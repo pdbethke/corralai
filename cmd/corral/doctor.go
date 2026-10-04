@@ -56,7 +56,13 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 	mutantModel := fs.String("mutant-model", "", "the mutant-generator model whose credential to check")
 	writerModel := fs.String("writer-model", "", "the test-writer model whose credential to check")
 	criticModel := fs.String("critic-model", "", "the test-critic model whose credential to check")
-	shadow := registerShadowSeatFlags(fs, "the challenger generator model, if the run will name one — it needs a credential too", "challenger WRITER model that authors a second suite against the SAME mutant set for a mutant-controlled head-to-head. OFF unless named. Recorded for correlation — NEVER gates the verdict")
+	shadow := registerShadowSeatFlags(fs, shadowSeatHelp{
+		model:       "the challenger generator model, if the run will name one — it needs a credential too",
+		pool:        "the challenger generator POOL a certify run will draw from (comma-separated). doctor draws nothing: it checks the pool exactly as certify does before its draw — at least two members, no duplicates, every member resolvable and holding a credential, not combined with --shadow-model",
+		writerModel: "the challenger WRITER model, if the run will name one — doctor checks its credential too",
+		writerPool:  "the challenger WRITER pool a certify run will draw from. doctor draws nothing: it checks the pool exactly as --shadow-pool's is checked",
+		seed:        "the --shadow-seed a certify run will replay. doctor draws nothing: it checks the seed parses and that a pool is named for it to replay",
+	})
 	deriveModel := fs.String("derive-model", "", "the goal-derivation model a `certify --repo` run will name, if any")
 	repoDir := fs.String("repo", ".", "the repository the run will audit — where its .corral/models.json registry is read from, exactly as certify reads it")
 	if err := fs.Parse(args); err != nil {
@@ -67,7 +73,7 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 	// work", and a pool works only if EVERY member could be the one drawn.
 	// Run before the registry resolves the seats, as certify runs it.
 	poolNamed := strings.TrimSpace(*shadow.pool) != "" || strings.TrimSpace(*shadow.writerPool) != ""
-	poolErr := validateShadowPools("corral doctor", *repoDir, shadow, nil, stderr)
+	poolErr := validateShadowPools("corral doctor", *repoDir, shadow, nil, true, stderr)
 
 	// The model registry, resolved exactly as certify resolves it — doctor
 	// exists to answer "would this run work", and it can only answer that

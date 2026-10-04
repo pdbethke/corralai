@@ -13,12 +13,24 @@ type shadowSeatFlags struct {
 	model, pool, writerModel, writerPool, seed *string
 }
 
-func registerShadowSeatFlags(fs *flag.FlagSet, modelHelp, writerHelp string) *shadowSeatFlags {
+// shadowSeatHelp is each flag's usage text. Every door supplies all five,
+// because what a pool flag DOES differs by door — certify --local draws per
+// run from one language's record, certify --repo draws once per scan from
+// every language's, and doctor draws nothing — and one shared sentence was
+// false at two of the three.
+type shadowSeatHelp struct {
+	model, pool, writerModel, writerPool, seed string
+}
+
+func registerShadowSeatFlags(fs *flag.FlagSet, h shadowSeatHelp) *shadowSeatFlags {
 	return &shadowSeatFlags{
-		model:       fs.String("shadow-model", "", modelHelp),
-		pool:        fs.String("shadow-pool", "", "a comma-separated POOL of challenger generator models; each run DRAWS one by Thompson sampling over the scorecard's record for this language, and the record says which, with every member's posterior. Every member is checked for a credential before the draw. Mutually exclusive with --shadow-model. OFF unless named; NEVER gates the verdict"),
-		writerModel: fs.String("shadow-writer-model", "", writerHelp),
-		writerPool:  fs.String("shadow-writer-pool", "", "a comma-separated POOL of challenger WRITER models, drawn per run exactly as --shadow-pool is. Mutually exclusive with --shadow-writer-model. OFF unless named; NEVER gates the verdict"),
-		seed:        fs.String("shadow-seed", "", "replay a recorded pool draw: the seed the record printed (0x…). Refused without --shadow-pool or --shadow-writer-pool"),
+		model:       fs.String("shadow-model", "", h.model),
+		pool:        fs.String("shadow-pool", "", h.pool),
+		writerModel: fs.String("shadow-writer-model", "", h.writerModel),
+		writerPool:  fs.String("shadow-writer-pool", "", h.writerPool),
+		seed:        fs.String("shadow-seed", "", h.seed),
 	}
 }
+
+// shadowSeedReplayHelp is --shadow-seed's text at the two doors that draw.
+const shadowSeedReplayHelp = "replay a recorded pool draw: the seed the record printed (0x…). Refused without --shadow-pool or --shadow-writer-pool"

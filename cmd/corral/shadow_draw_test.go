@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -296,5 +297,46 @@ func TestDrawShadowSeatsPooledReadsEveryRecordedLanguage(t *testing.T) {
 	}
 	if m := sel.Members[0]; m.Alpha != 4 || m.Beta != 2 {
 		t.Fatalf("pooled posterior α=%v β=%v, want 4,2 (go + python, the NULL-lang row excluded)", m.Alpha, m.Beta)
+	}
+}
+
+// --dry-run is the free inventory: no key, no jail, no money. A pool used to
+// be DRAWN there — demanding every member's credential, printing a draw for
+// an audit that never runs, and creating the scorecard file. It is now
+// validated (a malformed pool is still refused) and nothing else.
+func TestCertifyRepoDryRunValidatesPoolsButDoesNotDraw(t *testing.T) {
+	db := filepath.Join(t.TempDir(), "bc.duckdb")
+	t.Setenv("CORRALAI_BUGCATCH_DB", db)
+	orig := shadowMemberRunnable
+	t.Cleanup(func() { shadowMemberRunnable = orig })
+	shadowMemberRunnable = func(m string) error { return fmt.Errorf("no credential for %s", m) }
+
+	var out, errb bytes.Buffer
+	rc := runCertifyRepo([]string{"--repo", t.TempDir(), "--dry-run",
+		"--shadow-pool", "localmodel-a:1,localmodel-b:1", "--shadow-writer-pool", "localmodel-c:1,localmodel-d:1", "--shadow-seed", "0x2a"}, &out, &errb)
+	if rc != 0 {
+		t.Fatalf("a dry run with a well-formed pool and no credentials: rc %d\n%s", rc, errb.String())
+	}
+	if strings.Contains(errb.String(), "challenger drawn") {
+		t.Errorf("a dry run printed a draw for an audit that never runs:\n%s", errb.String())
+	}
+	if _, err := os.Stat(db); err == nil {
+		t.Errorf("a dry run created the scorecard store %s", db)
+	}
+
+	for _, c := range []struct{ name, want string }{
+		{"pool of one", "at least two"},
+		{"seed with no pool", "no draw to replay"},
+	} {
+		args := []string{"--repo", t.TempDir(), "--dry-run"}
+		if c.name == "pool of one" {
+			args = append(args, "--shadow-pool", "localmodel-a:1")
+		} else {
+			args = append(args, "--shadow-seed", "0x1")
+		}
+		var errb bytes.Buffer
+		if rc := runCertifyRepo(args, &bytes.Buffer{}, &errb); rc != 2 || !strings.Contains(errb.String(), c.want) {
+			t.Errorf("%s: a dry run must still refuse a malformed pool: rc %d\n%s", c.name, rc, errb.String())
+		}
 	}
 }

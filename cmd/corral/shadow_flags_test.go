@@ -3,6 +3,8 @@
 package main
 
 import (
+	"bytes"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -53,6 +55,70 @@ func TestKnownDoorsUseTheHelper(t *testing.T) {
 		}
 		if !strings.Contains(string(b), "registerShadowSeatFlags(") {
 			t.Errorf("%s does not call registerShadowSeatFlags", f)
+		}
+	}
+}
+
+// flagUsage returns one flag's usage text as a door prints it under -h — the
+// text the generated CLI reference is built from.
+func flagUsage(t *testing.T, run func([]string, io.Writer, io.Writer) int, name string) string {
+	t.Helper()
+	var out, errb bytes.Buffer
+	run([]string{"-h"}, &out, &errb)
+	text := out.String() + errb.String()
+	i := strings.Index(text, "\n  -"+name+" ")
+	if i < 0 {
+		t.Fatalf("-h output has no -%s:\n%s", name, text)
+	}
+	rest := text[i+1:]
+	if j := strings.Index(rest[1:], "\n  -"); j >= 0 {
+		rest = rest[:j+1]
+	}
+	return rest
+}
+
+// Each door's help says what THAT door does with a pool. The shared text
+// claimed a per-language history under certify --repo (which pools every
+// language) and a draw under doctor (which only validates), and doctor's
+// --shadow-writer-model help described authoring a suite, which doctor never
+// does — it checks the credential.
+func TestShadowFlagHelpIsTrueAtEachDoor(t *testing.T) {
+	type claim struct {
+		flag        string
+		must, never []string
+	}
+	doors := []struct {
+		name   string
+		run    func([]string, io.Writer, io.Writer) int
+		claims []claim
+	}{
+		{"certify --local", runCertifyLocal, []claim{
+			{"shadow-pool", []string{"language"}, nil},
+		}},
+		{"certify --repo", runCertifyRepo, []claim{
+			{"shadow-pool", []string{"ONCE", "across every recorded language", "--dry-run"}, []string{"for this language"}},
+			{"shadow-writer-pool", []string{"once per scan"}, nil},
+		}},
+		{"doctor", runDoctor, []claim{
+			{"shadow-pool", []string{"draws nothing", "credential"}, []string{"each run DRAWS", "Thompson"}},
+			{"shadow-writer-pool", []string{"draws nothing"}, []string{"drawn per run"}},
+			{"shadow-writer-model", []string{"credential"}, []string{"authors a second suite"}},
+			{"shadow-seed", []string{"draws nothing"}, nil},
+		}},
+	}
+	for _, d := range doors {
+		for _, c := range d.claims {
+			help := flagUsage(t, d.run, c.flag)
+			for _, w := range c.must {
+				if !strings.Contains(help, w) {
+					t.Errorf("%s -%s help lacks %q:\n%s", d.name, c.flag, w, help)
+				}
+			}
+			for _, w := range c.never {
+				if strings.Contains(help, w) {
+					t.Errorf("%s -%s help says %q, which is false at this door:\n%s", d.name, c.flag, w, help)
+				}
+			}
 		}
 	}
 }

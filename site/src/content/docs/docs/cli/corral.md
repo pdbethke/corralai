@@ -294,7 +294,7 @@ Usage of certify --local:
   -shadow-model string
     	challenger model that attacks every region a SECOND time for a region-controlled head-to-head. OFF unless named. Recorded for comparison — NEVER gates the verdict
   -shadow-pool string
-    	a comma-separated POOL of challenger generator models; each run DRAWS one by Thompson sampling over the scorecard's record for this language, and the record says which, with every member's posterior. Every member is checked for a credential before the draw. Mutually exclusive with --shadow-model. OFF unless named; NEVER gates the verdict
+    	a comma-separated POOL of challenger generator models; each run DRAWS one by Thompson sampling over the scorecard's record for the audited file's language (--lang, or detected from --code), and the record says which, with every member's posterior. Every member is checked for a credential before the draw. Mutually exclusive with --shadow-model. OFF unless named; NEVER gates the verdict
   -shadow-seed string
     	replay a recorded pool draw: the seed the record printed (0x…). Refused without --shadow-pool or --shadow-writer-pool
   -shadow-writer-model string
@@ -390,13 +390,13 @@ Usage of doctor:
   -shadow-model string
     	the challenger generator model, if the run will name one — it needs a credential too
   -shadow-pool string
-    	a comma-separated POOL of challenger generator models; each run DRAWS one by Thompson sampling over the scorecard's record for this language, and the record says which, with every member's posterior. Every member is checked for a credential before the draw. Mutually exclusive with --shadow-model. OFF unless named; NEVER gates the verdict
+    	the challenger generator POOL a certify run will draw from (comma-separated). doctor draws nothing: it checks the pool exactly as certify does before its draw — at least two members, no duplicates, every member resolvable and holding a credential, not combined with --shadow-model
   -shadow-seed string
-    	replay a recorded pool draw: the seed the record printed (0x…). Refused without --shadow-pool or --shadow-writer-pool
+    	the --shadow-seed a certify run will replay. doctor draws nothing: it checks the seed parses and that a pool is named for it to replay
   -shadow-writer-model string
-    	challenger WRITER model that authors a second suite against the SAME mutant set for a mutant-controlled head-to-head. OFF unless named. Recorded for correlation — NEVER gates the verdict
+    	the challenger WRITER model, if the run will name one — doctor checks its credential too
   -shadow-writer-pool string
-    	a comma-separated POOL of challenger WRITER models, drawn per run exactly as --shadow-pool is. Mutually exclusive with --shadow-writer-model. OFF unless named; NEVER gates the verdict
+    	the challenger WRITER pool a certify run will draw from. doctor draws nothing: it checks the pool exactly as --shadow-pool's is checked
   -test string
     	its test file (optional; otherwise inferred from the language's convention)
   -writer-model string
@@ -950,13 +950,13 @@ Usage of certify --repo:
   -shadow-model string
     	challenger model that attacks every region a SECOND time. OFF unless named. Recorded for comparison — NEVER gates the verdict
   -shadow-pool string
-    	a comma-separated POOL of challenger generator models; each run DRAWS one by Thompson sampling over the scorecard's record for this language, and the record says which, with every member's posterior. Every member is checked for a credential before the draw. Mutually exclusive with --shadow-model. OFF unless named; NEVER gates the verdict
+    	a comma-separated POOL of challenger generator models; the scan DRAWS one ONCE, for every file it audits, by Thompson sampling over the scorecard's record pooled across every recorded language (a scan spans languages; the record says lang "any"), and each file's signed entry says which, with every member's posterior. Every member is checked for a credential before the draw; --dry-run checks the pool's shape and draws nothing. Mutually exclusive with --shadow-model. OFF unless named; NEVER gates the verdict
   -shadow-seed string
     	replay a recorded pool draw: the seed the record printed (0x…). Refused without --shadow-pool or --shadow-writer-pool
   -shadow-writer-model string
     	CHALLENGER test-writer: a second writer attacks the SAME survivors as the primary, so the two seats' misses can be compared (Jaccard over survivors, Cohen's kappa). Measurement only — it NEVER gates the verdict. OFF unless named. The per-file Jaccard/kappa land in the ledger entry and in a warehouse with --push; the per-mutant attempt rows are not recorded on the repo path
   -shadow-writer-pool string
-    	a comma-separated POOL of challenger WRITER models, drawn per run exactly as --shadow-pool is. Mutually exclusive with --shadow-writer-model. OFF unless named; NEVER gates the verdict
+    	a comma-separated POOL of challenger WRITER models, drawn once per scan exactly as --shadow-pool is. Mutually exclusive with --shadow-writer-model. OFF unless named; NEVER gates the verdict
   -substrate string
     	where the audit runs: jail (bwrap) or workspace (mutate --repo in place; the caller IS the isolation boundary, e.g. an ephemeral CI runner) (default "jail")
   -swarm int

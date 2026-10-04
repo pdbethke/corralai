@@ -379,14 +379,43 @@ func TestEvidenceFiltersRoleLangAndDropped(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n != 2 || ev["a"] != (Evidence{Catches: 3, Opportunities: 6}) {
+	if n != 2 || ev["a"] != (Evidence{Catches: 3, Opportunities: 6, Rows: 2}) {
 		t.Fatalf("go writer evidence = %+v over %d rows, want 3/6 over 2", ev["a"], n)
 	}
 	ev, n, err = s.Evidence(ctx, []string{"test-writer"}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n != 2 || ev["a"] != (Evidence{Catches: 11, Opportunities: 14}) {
+	if n != 2 || ev["a"] != (Evidence{Catches: 11, Opportunities: 14, Rows: 2}) {
 		t.Fatalf("any-language writer evidence = %+v over %d rows, want 11/14 over 2 (NULL lang and dropped excluded)", ev["a"], n)
+	}
+}
+
+// Each model's own row count rides on its Evidence: a caller that draws
+// among SOME of the models must be able to say how many rows were about
+// THOSE models, not every model in the roles (the shadow draw once printed
+// a primary's 214 rows as history for two never-run pool members).
+func TestEvidenceCountsRowsPerModel(t *testing.T) {
+	ctx := context.Background()
+	s, err := Open(filepath.Join(t.TempDir(), "bc.duckdb"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ts := time.Unix(1, 0).UTC()
+	if err := s.Record(ctx, []Observation{
+		{TS: ts, RecordID: 1, Model: "a", Role: "test-writer", Lang: "go", Catches: 1, Opportunities: 2},
+		{TS: ts, RecordID: 2, Model: "b", Role: "test-writer", Lang: "go", Catches: 1, Opportunities: 2},
+		{TS: ts, RecordID: 3, Model: "b", Role: "test-writer", Lang: "go", Catches: 1, Opportunities: 2},
+		{TS: ts, RecordID: 4, Model: "b", Role: "test-writer", Lang: "go", Catches: 1, Opportunities: 2},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ev, n, err := s.Evidence(ctx, []string{"test-writer"}, "go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 4 || ev["a"].Rows != 1 || ev["b"].Rows != 3 {
+		t.Fatalf("rows: total %d, a %d, b %d; want 4, 1, 3", n, ev["a"].Rows, ev["b"].Rows)
 	}
 }

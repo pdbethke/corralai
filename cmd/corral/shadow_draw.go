@@ -149,9 +149,19 @@ func drawShadowSeats(cmdName, repoRoot, lang string, f *shadowSeatFlags, primary
 		}
 		hist, rows, read := map[string]shadowpool.Counts{}, 0, false
 		if openErr == nil {
-			ev, n, err := store.Evidence(context.Background(), []string{s.base, s.role}, storeLang)
+			ev, _, err := store.Evidence(context.Background(), []string{s.base, s.role}, storeLang)
 			if err == nil {
-				read, rows = true, n
+				// Rows about THIS pool's members only: the roles also hold
+				// the primary's record (and any other model's), which is not
+				// evidence behind this draw and must not be signed as such.
+				read = true
+				members := map[string]bool{}
+				for _, c := range cs {
+					if !members[c.Concrete] {
+						members[c.Concrete] = true
+						rows += ev[c.Concrete].Rows
+					}
+				}
 				for m, e := range ev {
 					if s.base == advpool.RoleTestWriter {
 						hist[m] = shadowpool.Counts{Successes: e.Catches, Trials: e.Opportunities}

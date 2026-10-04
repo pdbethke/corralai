@@ -311,7 +311,10 @@ func (s *Store) Scorecard(ctx context.Context) ([]Cell, error) {
 // Evidence is one model's summed record in a set of roles — the counts the
 // shadow-seat draw turns into a Beta posterior. Writers read
 // Catches/Opportunities; generators read Survived/Planted.
-type Evidence struct{ Catches, Opportunities, Survived, Planted int }
+// Evidence is one model's summed record. Rows is how many rows were summed
+// for THAT model: a caller drawing among some of the models reports rows
+// about those, never the total across every model in the roles.
+type Evidence struct{ Catches, Opportunities, Survived, Planted, Rows int }
 
 // Evidence sums every row in roles for lang, per model, and reports how many
 // rows it read. lang == "" means every RECORDED language: a row whose
@@ -346,12 +349,11 @@ func (s *Store) Evidence(ctx context.Context, roles []string, lang string) (map[
 	total := 0
 	for rows.Next() {
 		var m string
-		var n int
 		var e Evidence
-		if err := rows.Scan(&m, &n, &e.Catches, &e.Opportunities, &e.Survived, &e.Planted); err != nil {
+		if err := rows.Scan(&m, &e.Rows, &e.Catches, &e.Opportunities, &e.Survived, &e.Planted); err != nil {
 			return nil, 0, fmt.Errorf("bugcatch: evidence scan: %w", err)
 		}
-		out[m], total = e, total+n
+		out[m], total = e, total+e.Rows
 	}
 	return out, total, rows.Err()
 }

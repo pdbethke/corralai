@@ -209,3 +209,92 @@ func TestDrawShadowSeatsWarnsMemberEqualsAliasedPrimary(t *testing.T) {
 		t.Fatalf("err=%v stderr=%q", err, errb.String())
 	}
 }
+
+// history_rows is signed and printed as the evidence behind THIS draw, so it
+// counts rows about the pool's members only. A primary's rows sit in the same
+// roles the draw reads; counting them made two never-run members on a flat
+// prior read "history 214 row(s)".
+func TestDrawShadowSeatsHistoryRowsCountOnlyPoolMembers(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "bc.duckdb")
+	s, err := bugcatch.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ts := time.Unix(1, 0).UTC()
+	if err := s.Record(context.Background(), []bugcatch.Observation{
+		{TS: ts, RecordID: 1, Model: "primary-model:1", Role: "test-writer", Lang: "go", Catches: 3, Opportunities: 4},
+		{TS: ts, RecordID: 2, Model: "primary-model:1", Role: "test-writer", Lang: "go", Catches: 3, Opportunities: 4},
+		{TS: ts, RecordID: 3, Model: "localmodel-a:1", Role: "test-writer-shadow", Lang: "go", Catches: 1, Opportunities: 2, Shadow: true},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	var errb bytes.Buffer
+	sels, err := drawShadowSeats("corral certify --local", t.TempDir(), "go", flagsWith("", "", "", "localmodel-a:1,localmodel-b:1", "0x1"), nil, path, &errb)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sels[0].HistoryRows != 1 {
+		t.Fatalf("history_rows = %d, want 1 (the primary's 2 rows are not about any pool member)", sels[0].HistoryRows)
+	}
+	if !strings.Contains(errb.String(), "history 1 row(s) for go") {
+		t.Fatalf("printed history must match the signed count: %q", errb.String())
+	}
+}
+
+// The generator's history is SURVIVED over PLANTED — a challenger generator
+// succeeds when its mutants survive. Draw clamps successes to trials, so a
+// swapped mapping would not crash; it would quietly invert the posterior.
+func TestDrawShadowSeatsGeneratorHistoryIsSurvivedOverPlanted(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "bc.duckdb")
+	s, err := bugcatch.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ts := time.Unix(1, 0).UTC()
+	if err := s.Record(context.Background(), []bugcatch.Observation{
+		{TS: ts, RecordID: 1, Model: "localmodel-a:1", Role: "mutant-generator", Lang: "go", MutantsPlanted: 10, MutantsSurvived: 3, Catches: 9, Opportunities: 9},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	sels, err := drawShadowSeats("corral certify --local", t.TempDir(), "go", flagsWith("", "localmodel-a:1,localmodel-b:1", "", "", "0x1"), nil, path, &bytes.Buffer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m := sels[0].Members[0]; m.Alpha != 4 || m.Beta != 8 {
+		t.Fatalf("generator posterior α=%v β=%v, want 4,8 (1+3 survived, 1+7 killed of 10 planted)", m.Alpha, m.Beta)
+	}
+}
+
+// A pooled draw (LangAny, the --repo scan) reads every RECORDED language and
+// never a row whose language was never recorded. "any" is a label for the
+// record, not a value in the store: passed through, it would query
+// lang = 'any', find nothing, and sign a measured zero.
+func TestDrawShadowSeatsPooledReadsEveryRecordedLanguage(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "bc.duckdb")
+	s, err := bugcatch.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ts := time.Unix(1, 0).UTC()
+	if err := s.Record(context.Background(), []bugcatch.Observation{
+		{TS: ts, RecordID: 1, Model: "localmodel-a:1", Role: "test-writer", Lang: "go", Catches: 1, Opportunities: 2},
+		{TS: ts, RecordID: 2, Model: "localmodel-a:1", Role: "test-writer", Lang: "python", Catches: 2, Opportunities: 2},
+		{TS: ts, RecordID: 3, Model: "localmodel-a:1", Role: "test-writer", Catches: 50, Opportunities: 50}, // NULL lang
+	}); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	sels, err := drawShadowSeats("corral certify --repo", t.TempDir(), shadowpool.LangAny, flagsWith("", "", "", "localmodel-a:1,localmodel-b:1", "0x1"), nil, path, &bytes.Buffer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel := sels[0]
+	if sel.Lang != shadowpool.LangAny || sel.History != shadowpool.HistoryRead || sel.HistoryRows != 2 {
+		t.Fatalf("pooled selection %+v, want lang any, read, 2 rows", sel)
+	}
+	if m := sel.Members[0]; m.Alpha != 4 || m.Beta != 2 {
+		t.Fatalf("pooled posterior α=%v β=%v, want 4,2 (go + python, the NULL-lang row excluded)", m.Alpha, m.Beta)
+	}
+}

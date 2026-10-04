@@ -11,6 +11,31 @@ history of any release, `git log v0.3.4..v0.3.5`.
 
 ## [Unreleased]
 
+### The merge gate: five findings from a recorded review, fixed
+
+Ledger entry `8be2189163b0`, findings R3–R7, all adjudicated confirmed.
+
+- **`net=` takes a boolean or the policy is refused.** It used to map every
+  value but `true`/`1` to no-network, silently, so `net=yes` produced a gate
+  that failed every network-needing check. `true`/`false`/`1`/`0` (any case)
+  still work; anything else (`yes`, `on`, an empty value) is now refused with
+  a reason, as `timeout=` already was — **a policy that relied on the silent
+  default is now off, with a log line naming it.**
+- **`cmd=` is found with the same whitespace tolerance as every other field**,
+  so `repo=o/r, cmd=true` is a policy again rather than "no cmd=".
+- **A field written after `cmd=` is caught in any case and after a newline**,
+  not only as `,base=`; before, `,Base=release` was swallowed into the command
+  and the policy gated every base.
+- **The gate store's one-time key migration is transactional**, and opening a
+  store repairs either state an interrupted migration from an older binary can
+  leave — one used to disable the gate, the other to lose its dedupe history.
+- **`/api/gate/run` answers per check.** A status's link now names its check
+  (`&context=`), and the endpoint answers for that one. Without a context it
+  reports `passed` only when **every** check on the head passed, with a
+  `contexts` list of each check's result and record; it used to report
+  whichever check finished last. `record_id` is omitted when several checks
+  answer together.
+
 ### Challenger seats can be drawn from a pool
 
 Built and unit-tested; not yet exercised end to end against a real repository.

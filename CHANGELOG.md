@@ -9,7 +9,41 @@ still move between minor versions.
 Entries describe what changed for someone *using* the tool. For the full commit
 history of any release, `git log v0.3.4..v0.3.5`.
 
-## [Unreleased]
+## [v1.0.0-rc.14] — 2026-10-04
+
+Everything since rc.13: four more rounds of cold review on the merge gate and
+the transparency log, each finding an entry on the public `corral/ledger`
+branch; challenger seats drawn from a pool; a write mode for `corral ui`; and
+an Agent Skill. **Read "Breaking" before upgrading** — three changes can turn
+a configured gate or a habitual command into a refusal, and one makes every
+cached verdict miss once.
+
+### Breaking
+
+- **Gate policies are one per variable: `CORRALAI_GATE_POLICY_<NAME>`.**
+  `CORRALAI_GATE_POLICIES` (several policies in one variable, separated by
+  `;`) is retired and **refused** — not parsed and not ignored, because a
+  silently ignored gate is no gate. Three successive guards against a `;`
+  inside `cmd=` were each defeated by a cold reviewer, each time letting a
+  truncated, weaker command post a success; with one policy per variable the
+  operating system supplies the separator and the ambiguity is gone. A
+  command is now one string from the parser to the jail, so newlines and
+  quoting survive. Policies are applied in variable-name order.
+  `gate.Policy.CheckCmd` is now a `string` (it was `[]string`), which breaks
+  Go code that builds `brain.Options.GatePolicies` directly.
+- **Two policies that would answer the same pull request under the same
+  status are refused** (both omitting `context=` on one repo, for example).
+  The second used to be skipped on every head while the first one's status
+  stood in for it. Set `context=` to tell them apart.
+- **`corral ui --write` prints its URL and no longer opens a browser unless
+  asked: `--open` opts in, and `--no-open` is removed** (an unknown flag
+  now). Opening put the launch token on a process command line.
+- **The gate's policy parser is stricter** — see "The merge gate", below:
+  `net=` must be exactly `true`, `false`, `1` or `0`, and a lowercase field
+  assignment at the start of a line in `cmd=` refuses the policy.
+- **One-time cache miss**: `reposcan.VerdictGeneration` is now 10 (see
+  "Challenger seats"), so every verdict cached before this release is
+  re-measured once.
 
 ### The merge gate: five findings from a recorded review, fixed
 
@@ -76,6 +110,61 @@ Built and unit-tested; not yet exercised end to end against a real repository.
 - **One-time cache miss.** `reposcan.VerdictGeneration` moves from 9 to 10
   because the verdict gained a field, so verdicts cached before this change
   are re-measured once.
+
+### The merge gate and the transparency log: four more review rounds
+
+All of these were found by a model reviewing code it did not write and
+survived a model from another vendor trying to refute them; several are in
+fixes made the day before. Ledger entries carry each one.
+
+- **The gate could post a result for a check it did not run** — a `;` or a
+  misplaced field truncating or widening the command, an empty command
+  exiting 0, a timeout overflowing to the sandbox's 60-second default. Each
+  is refused now, at the door that acts on a policy as well as the one that
+  parses it.
+- **Verdicts that never reached the forge are tracked.** A failed status post
+  used to be either lost or "retried" by re-running and **re-signing** the
+  check on every tick; a signed verdict whose post failed is now re-posted
+  from the stored row and signs nothing new.
+- **Two policies on one repo each keep their own row and status** (the dedupe
+  key includes the context, and the store migration that widens it is
+  transactional and repairs an interrupted one).
+- **`certify verify` refuses a Rekor record whose Signed Entry Timestamp is
+  missing.** Without the SET, the log index and integration time a record
+  claimed were unauthenticated and could be edited, and verify printed them
+  as witnessed. Also: a malformed inclusion proof no longer panics the
+  verifier; the logged envelope is bound by its hash and by set-equality of
+  its signatures; an empty inclusion proof no longer records
+  `anchored=true`.
+
+### Measurement
+
+- **A workspace restore that fails, or cannot be trusted, is no longer a
+  pass.** A test command that replaced an overlaid file with a directory, or
+  an overlay through a dangling symlink, left mutant bytes behind on
+  `pass=true`; both are refused or reported now.
+- **Identical edits graded by different commands are scored separately.**
+  Collapsing them let a mutant inherit its twin's kill, which can only raise
+  a kill rate.
+- **`corral review` records whether a seat named a model or only the tool
+  that ran one** (`ReviewerModelResolved`, `VerifierModelResolved`), and
+  says so on stdout, so a per-model analysis can filter rather than average
+  over rows that name a CLI.
+
+### For people and agents reading the record
+
+- **`corral ui --write`**: a write mode behind a launch token (loopback
+  only, Host- and Origin-checked) that rechecks a finding's reproduction on
+  `HEAD` with `corral review recheck` and records a verdict through the CLI.
+  Plain `corral ui` is unchanged.
+- **A `corral` Agent Skill** (`skills/corral/SKILL.md`) for coding agents:
+  where the record is, why a critic's unverified finding is not a fact, and
+  how to check one without touching the user's work. It installs from a
+  Claude Code plugin marketplace in this repository, which also wires the
+  read-only findings server, `corral mcp`.
+- **The ledger renders as a public page** on the site, with each review's
+  executed scripts, their output and exit codes, and the four execution
+  outcomes kept apart.
 
 ## [v1.0.0-rc.13] — 2026-09-09
 

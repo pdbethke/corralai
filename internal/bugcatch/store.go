@@ -30,6 +30,8 @@ var bugcatchObservationsMigrationCols = []struct{ name, ddl string }{
 	{"parse_retries", "parse_retries INTEGER"},
 	{"dropped", "dropped BOOLEAN"},
 	{"shadow", "shadow BOOLEAN"},
+	{"lang", "lang VARCHAR"},
+	{"shadow_drawn", "shadow_drawn BOOLEAN"},
 }
 
 type Store struct{ db *sql.DB }
@@ -66,6 +68,13 @@ type Observation struct {
 	ParseRetries     int
 	Dropped          bool
 	Shadow           bool
+	// Lang is the run's language plugin name. "" means the run predates the
+	// column (or its language was never known): it is written as NULL, and a
+	// NULL-language row is evidence about no language.
+	Lang string
+	// ShadowDrawn marks a shadow row whose model was DRAWN from a pool
+	// (docs/design/shadow-seat-selection.md) rather than named by hand.
+	ShadowDrawn bool
 }
 
 type Cell struct {
@@ -94,7 +103,8 @@ func Open(dsn string) (*Store, error) {
 		catches INTEGER, opportunities INTEGER, sound_tests INTEGER, authored_tests INTEGER,
 		critic_flags INTEGER, mutants_planted INTEGER, mutants_survived INTEGER,
 		shard INTEGER, region VARCHAR, region_complexity INTEGER, region_lines INTEGER,
-		test_complexity INTEGER, parse_retries INTEGER, dropped BOOLEAN, shadow BOOLEAN
+		test_complexity INTEGER, parse_retries INTEGER, dropped BOOLEAN, shadow BOOLEAN,
+		lang VARCHAR, shadow_drawn BOOLEAN
 	)`); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("bugcatch: create table: %w", err)
@@ -166,17 +176,40 @@ func (s *Store) Record(ctx context.Context, obs []Observation) error {
 			catches, opportunities, sound_tests, authored_tests,
 			critic_flags, mutants_planted, mutants_survived,
 			shard, region, region_complexity, region_lines,
-			test_complexity, parse_retries, dropped, shadow
-		) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			test_complexity, parse_retries, dropped, shadow,
+			lang, shadow_drawn
+		) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 			o.TS, o.RecordID, o.RecordHead, o.MissionID, o.Repo, o.Commit, model, o.Role, o.Source,
 			o.Catches, o.Opportunities, o.SoundTests, o.AuthoredTests,
 			o.CriticFlags, o.MutantsPlanted, o.MutantsSurvived,
 			o.Shard, o.Region, o.RegionComplexity, o.RegionLines,
-			o.TestComplexity, o.ParseRetries, o.Dropped, o.Shadow); err != nil {
+			o.TestComplexity, o.ParseRetries, o.Dropped, o.Shadow,
+			sql.NullString{String: o.Lang, Valid: o.Lang != ""}, o.ShadowDrawn); err != nil {
 			return fmt.Errorf("bugcatch: insert: %w", err)
 		}
 	}
 	return tx.Commit()
+}
+
+// observationCols is the ONE projection both readers use, so a column added
+// here cannot reach one reader and not the other. The additive columns are
+// COALESCE'd to their zero value because a legacy row holds NULL there.
+const observationCols = `ts, record_id, record_head, mission_id, repo, commit, model, role, source,
+		catches, opportunities, sound_tests, authored_tests,
+		critic_flags, mutants_planted, mutants_survived,
+		COALESCE(shard, 0), COALESCE(region, ''), COALESCE(region_complexity, 0), COALESCE(region_lines, 0),
+		COALESCE(test_complexity, 0), COALESCE(parse_retries, 0), COALESCE(dropped, false), COALESCE(shadow, false),
+		COALESCE(lang, ''), COALESCE(shadow_drawn, false)`
+
+func scanObservation(rows *sql.Rows) (Observation, error) {
+	var o Observation
+	err := rows.Scan(&o.TS, &o.RecordID, &o.RecordHead, &o.MissionID, &o.Repo, &o.Commit, &o.Model, &o.Role, &o.Source,
+		&o.Catches, &o.Opportunities, &o.SoundTests, &o.AuthoredTests,
+		&o.CriticFlags, &o.MutantsPlanted, &o.MutantsSurvived,
+		&o.Shard, &o.Region, &o.RegionComplexity, &o.RegionLines,
+		&o.TestComplexity, &o.ParseRetries, &o.Dropped, &o.Shadow,
+		&o.Lang, &o.ShadowDrawn)
+	return o, err
 }
 
 // observationsLimit bounds Observations to the most recent N rows so it can
@@ -193,25 +226,15 @@ const observationsLimit = 10000
 // a truncated ledger is a ranking over a sample nobody chose. Streaming
 // keeps the memory bound the cap existed for.
 func (s *Store) EveryObservation(ctx context.Context, fn func(Observation) error) error {
-	rows, err := s.db.QueryContext(ctx, `SELECT
-		ts, record_id, record_head, mission_id, repo, commit, model, role, source,
-		catches, opportunities, sound_tests, authored_tests,
-		critic_flags, mutants_planted, mutants_survived,
-		COALESCE(shard, 0), COALESCE(region, ''), COALESCE(region_complexity, 0), COALESCE(region_lines, 0),
-		COALESCE(test_complexity, 0), COALESCE(parse_retries, 0), COALESCE(dropped, false), COALESCE(shadow, false)
-		FROM bugcatch_observations
+	rows, err := s.db.QueryContext(ctx, "SELECT "+observationCols+` FROM bugcatch_observations
 		ORDER BY record_id ASC, shard ASC`)
 	if err != nil {
 		return fmt.Errorf("bugcatch: every observation: %w", err)
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var o Observation
-		if err := rows.Scan(&o.TS, &o.RecordID, &o.RecordHead, &o.MissionID, &o.Repo, &o.Commit, &o.Model, &o.Role, &o.Source,
-			&o.Catches, &o.Opportunities, &o.SoundTests, &o.AuthoredTests,
-			&o.CriticFlags, &o.MutantsPlanted, &o.MutantsSurvived,
-			&o.Shard, &o.Region, &o.RegionComplexity, &o.RegionLines,
-			&o.TestComplexity, &o.ParseRetries, &o.Dropped, &o.Shadow); err != nil {
+		o, err := scanObservation(rows)
+		if err != nil {
 			return fmt.Errorf("bugcatch: scan observation: %w", err)
 		}
 		if err := fn(o); err != nil {
@@ -233,13 +256,7 @@ func (s *Store) EveryObservation(ctx context.Context, fn func(Observation) error
 // field's zero value here so a legacy row reads back cleanly instead of
 // failing to scan (int/bool destinations reject a raw NULL).
 func (s *Store) Observations(ctx context.Context) ([]Observation, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT
-		ts, record_id, record_head, mission_id, repo, commit, model, role, source,
-		catches, opportunities, sound_tests, authored_tests,
-		critic_flags, mutants_planted, mutants_survived,
-		COALESCE(shard, 0), COALESCE(region, ''), COALESCE(region_complexity, 0), COALESCE(region_lines, 0),
-		COALESCE(test_complexity, 0), COALESCE(parse_retries, 0), COALESCE(dropped, false), COALESCE(shadow, false)
-		FROM bugcatch_observations
+	rows, err := s.db.QueryContext(ctx, "SELECT "+observationCols+` FROM bugcatch_observations
 		ORDER BY record_id DESC, shard ASC
 		LIMIT ?`, observationsLimit)
 	if err != nil {
@@ -248,12 +265,8 @@ func (s *Store) Observations(ctx context.Context) ([]Observation, error) {
 	defer rows.Close()
 	var out []Observation
 	for rows.Next() {
-		var o Observation
-		if err := rows.Scan(&o.TS, &o.RecordID, &o.RecordHead, &o.MissionID, &o.Repo, &o.Commit, &o.Model, &o.Role, &o.Source,
-			&o.Catches, &o.Opportunities, &o.SoundTests, &o.AuthoredTests,
-			&o.CriticFlags, &o.MutantsPlanted, &o.MutantsSurvived,
-			&o.Shard, &o.Region, &o.RegionComplexity, &o.RegionLines,
-			&o.TestComplexity, &o.ParseRetries, &o.Dropped, &o.Shadow); err != nil {
+		o, err := scanObservation(rows)
+		if err != nil {
 			return nil, fmt.Errorf("bugcatch: scan observation: %w", err)
 		}
 		out = append(out, o)

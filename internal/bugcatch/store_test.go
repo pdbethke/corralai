@@ -311,4 +311,47 @@ func TestMigrationUpgradesPreExistingDatabase(t *testing.T) {
 	if *legacyRow != wantLegacy {
 		t.Fatalf("legacy round-tripped observation = %+v, want %+v", *legacyRow, wantLegacy)
 	}
+	if legacyRow.Lang != "" || legacyRow.ShadowDrawn {
+		t.Fatalf("legacy row must read back with no language and no draw, got lang=%q shadow_drawn=%v", legacyRow.Lang, legacyRow.ShadowDrawn)
+	}
+	var nulls int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM bugcatch_observations WHERE lang IS NULL`).Scan(&nulls); err != nil {
+		t.Fatal(err)
+	}
+	if nulls < 1 {
+		t.Fatalf("the legacy row's lang must be NULL after migration; NULL rows = %d", nulls)
+	}
+}
+
+// TestLangAndShadowDrawnRoundTrip pins slice one: a row's language and
+// whether its shadow seat was drawn survive Record -> read, and an unknown
+// language is stored as NULL rather than an empty string.
+func TestLangAndShadowDrawnRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	s, err := Open(filepath.Join(t.TempDir(), "bc.duckdb"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	in := []Observation{
+		{TS: time.Unix(1, 0).UTC(), RecordID: 1, Model: "m", Role: "test-writer", Source: "pool", Lang: "go", Shadow: true, ShadowDrawn: true},
+		{TS: time.Unix(1, 0).UTC(), RecordID: 2, Model: "m", Role: "test-writer", Source: "pool"},
+	}
+	if err := s.Record(ctx, in); err != nil {
+		t.Fatal(err)
+	}
+	var got []Observation
+	if err := s.EveryObservation(ctx, func(o Observation) error { got = append(got, o); return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].Lang != "go" || !got[0].ShadowDrawn || got[1].Lang != "" || got[1].ShadowDrawn {
+		t.Fatalf("round trip lost lang/shadow_drawn: %+v", got)
+	}
+	var nulls int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM bugcatch_observations WHERE lang IS NULL`).Scan(&nulls); err != nil {
+		t.Fatal(err)
+	}
+	if nulls != 1 {
+		t.Fatalf("an unknown language must be stored NULL, never ''; NULL rows = %d", nulls)
+	}
 }

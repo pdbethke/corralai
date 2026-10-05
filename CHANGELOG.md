@@ -9,6 +9,18 @@ still move between minor versions.
 Entries describe what changed for someone *using* the tool. For the full commit
 history of any release, `git log v0.3.4..v0.3.5`.
 
+## [Unreleased]
+
+- **A repo scan records what goal derivation spent.** The goal-deriver was
+  the one seat in `certify --repo` whose token usage corral read past and
+  dropped, so a scan's cost left out one call per candidate file, including
+  every file the deriver answered NONE for, which is never audited and so
+  never appears anywhere else. Each call that reached the provider is now a
+  `goal-deriver` row in the scan's model calls, against the file it was asked
+  about: in the signed ledger entry, in the warehouse with `--push`, and on
+  the end-of-scan `cost:` line. A goal-cache hit makes no call and adds no
+  row; a call that failed reported nothing and is not recorded as zero.
+
 ## [v1.0.0-rc.15] — 2026-10-04
 
 Same code as rc.14 plus the release-gate fix below. **rc.14 is tagged and on

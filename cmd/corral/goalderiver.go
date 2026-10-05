@@ -5,10 +5,14 @@ package main
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/pdbethke/corralai/internal/agentbackend"
 	"github.com/pdbethke/corralai/internal/reposcan"
+	"github.com/pdbethke/corralai/internal/scanstore"
 )
 
 // goalDeriverSystem asks for ONE property, in the register corral's mutant
@@ -48,7 +52,83 @@ const GoalPromptRev = "gp1"
 // longer matches what it asks.
 const goalDeriverPromptDigest = "f044983472f64cacf3a7811747a17b2da099a5487c8835f8f3811e369ec0c14d"
 
-type llmDeriver struct{ b agentbackend.Backend }
+// roleGoalDeriver names the derive seat's rows in scan_model_calls and on the
+// end-of-scan cost line. The seat has no advpool role (it runs before the
+// pool, once per candidate file), so it carries its own name.
+const roleGoalDeriver = "goal-deriver"
+
+// llmDeriver asks one model for a file's goal. usage, when set, records what
+// every call that reached the provider spent, by candidate path. It used to
+// read the reply's content and drop its Usage, so a repo scan's recorded cost
+// silently left out one call per candidate file, the one seat in the scan
+// whose spend nothing measured.
+type llmDeriver struct {
+	b     agentbackend.Backend
+	model string
+	usage *deriveUsage
+}
+
+// usageReporter is implemented by a deriver that records its spend; a test
+// double or an unmetered deriver simply does not, and contributes no rows.
+type usageReporter interface {
+	modelCallRows() []scanstore.ModelCall
+}
+
+// deriveUsage is the per-path record of the deriver's calls. Derivation can
+// run concurrently across candidates, so it is guarded.
+type deriveUsage struct {
+	mu     sync.Mutex
+	byPath map[string]*scanstore.ModelCall
+}
+
+func newMeteredDeriver(b agentbackend.Backend, model string) reposcan.Deriver {
+	return llmDeriver{b: b, model: model, usage: &deriveUsage{byPath: map[string]*scanstore.ModelCall{}}}
+}
+
+// add records one call that reached the provider. A failed call is never
+// passed here: it reported nothing, and a zero would read as measured.
+func (u *deriveUsage) add(path, model string, got agentbackend.Usage, wall time.Duration) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	row, ok := u.byPath[path]
+	if !ok {
+		row = &scanstore.ModelCall{Path: path, Role: roleGoalDeriver, Model: model}
+		u.byPath[path] = row
+	}
+	row.Calls++
+	row.InputTokens += int64(got.InputTokens)
+	row.OutputTokens += int64(got.OutputTokens)
+	row.CachedInputTokens = addCacheCount(row.CachedInputTokens, got.CachedInputTokens)
+	row.CacheWriteInputTokens = addCacheCount(row.CacheWriteInputTokens, got.CacheWriteInputTokens)
+	row.WallMillis += wall.Milliseconds()
+}
+
+// deriverSet is every deriver one scan built; its rows are all of theirs.
+type deriverSet []reposcan.Deriver
+
+func (s deriverSet) modelCallRows() []scanstore.ModelCall {
+	var out []scanstore.ModelCall
+	for _, d := range s {
+		if r, ok := d.(usageReporter); ok {
+			out = append(out, r.modelCallRows()...)
+		}
+	}
+	return out
+}
+
+func (d llmDeriver) modelCallRows() []scanstore.ModelCall {
+	if d.usage == nil {
+		return nil
+	}
+	d.usage.mu.Lock()
+	defer d.usage.mu.Unlock()
+	out := make([]scanstore.ModelCall, 0, len(d.usage.byPath))
+	for _, r := range d.usage.byPath {
+		out = append(out, *r)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Path < out[j].Path })
+	return out
+}
 
 // newLLMDeriver routes to the backend that serves the model and fails closed
 // when a cloud vendor's credential is absent.
@@ -70,20 +150,20 @@ type llmDeriver struct{ b agentbackend.Backend }
 // local-first claim, and a summarizing task is one a local model handles.
 func newLLMDeriver(model, endpoint string) (reposcan.Deriver, error) {
 	if endpoint != "" {
-		return llmDeriver{b: agentbackend.NewOllamaBackend(endpoint, model)}, nil
+		return newMeteredDeriver(agentbackend.NewOllamaBackend(endpoint, model), model), nil
 	}
 	if v := agentbackend.VendorOf(model); v != "" && backendPinned() && (baseVendor() == "" || baseVendor() == v) {
 		base := agentbackend.FromEnv()
 		if sw, ok := base.(agentbackend.ModelSwitcher); ok {
-			return llmDeriver{b: sw.WithModel(model)}, nil
+			return newMeteredDeriver(sw.WithModel(model), model), nil
 		}
-		return llmDeriver{b: base}, nil
+		return newMeteredDeriver(base, model), nil
 	}
 	b, err := agentbackend.ForModelOrLocal(model)
 	if err != nil {
 		return nil, fmt.Errorf("goal deriver: %w", err)
 	}
-	return llmDeriver{b: b}, nil
+	return newMeteredDeriver(b, model), nil
 }
 
 // goalDeriverUserTemplate is the format string Derive fills in with the
@@ -101,6 +181,7 @@ const goalDeriverUserTemplate = "File: %s\nLanguage: %s\n\n%s"
 
 func (d llmDeriver) Derive(ctx context.Context, c reposcan.Candidate, source string) (string, bool, error) {
 	user := fmt.Sprintf(goalDeriverUserTemplate, c.Path, c.Lang, source)
+	start := time.Now()
 	reply, err := d.b.Chat([]agentbackend.Message{
 		{Role: "system", Content: goalDeriverSystem},
 		{Role: "user", Content: user},
@@ -109,6 +190,9 @@ func (d llmDeriver) Derive(ctx context.Context, c reposcan.Candidate, source str
 		// Transport/provider failure — the caller turns this into
 		// derive-failed, never ungoaled.
 		return "", false, err
+	}
+	if d.usage != nil {
+		d.usage.add(c.Path, d.model, reply.Usage, time.Since(start))
 	}
 	text := strings.TrimSpace(reply.Content)
 	if text == "" || strings.EqualFold(text, "NONE") {

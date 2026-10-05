@@ -708,7 +708,18 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		goalStore = newGoalLedgerCache(goalCacheDSN)
 	}
 
-	gs, disclosure, code := resolveGoalSource(stderr, *repoDir, *goalsPath, *deriveModel, seatReg.deriveEndpoint(), *dryRun, len(selected), certifyRepoDeriver, goalStore, *noGoalCacheFlag, !*noGoalCacheFlag)
+	// Every deriver the scan builds is kept, so what each one spent reaches
+	// the scan's record and its cost line (scanModelCallRowsWith). Keeping
+	// only the last would drop an earlier one's spend silently.
+	var scanDerivers deriverSet
+	keepDeriver := func(model, endpoint string) (reposcan.Deriver, error) {
+		d, err := certifyRepoDeriver(model, endpoint)
+		if err == nil && d != nil {
+			scanDerivers = append(scanDerivers, d)
+		}
+		return d, err
+	}
+	gs, disclosure, code := resolveGoalSource(stderr, *repoDir, *goalsPath, *deriveModel, seatReg.deriveEndpoint(), *dryRun, len(selected), keepDeriver, goalStore, *noGoalCacheFlag, !*noGoalCacheFlag)
 	if code != 0 {
 		return code
 	}
@@ -1244,7 +1255,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// expensive. Built from the SAME per-file ModelCalls that feed the
 	// ledger and warehouse below — never a second measurement — so this line
 	// and scan_model_calls can never disagree.
-	if line := costLine(scanModelCallTotals(results)); line != "" {
+	if line := costLine(scanModelCallTotalsWith(results, scanDerivers)); line != "" {
 		fmt.Fprintln(stdout, line)
 	}
 	if ex != nil {
@@ -1308,7 +1319,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// Built from the same per-file ModelCalls the ledger's scan_model_calls
 	// rows come from (modelCallRows, below) — never a second measurement, so
 	// the scan header's totals and the per-role grain can never disagree.
-	modelCallRows := buildScanModelCallRows(results)
+	modelCallRows := scanModelCallRowsWith(results, scanDerivers)
 	var inTokens, outTokens, modelCallCount int64
 	for _, c := range modelCallRows {
 		inTokens += c.InputTokens

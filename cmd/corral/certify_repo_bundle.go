@@ -185,7 +185,7 @@ func buildAuditRows(files []scanstore.File, scanID int64, meta bundleMeta) []aud
 			MutantsGraded: f.MutantsGraded, MutantsInvalid: f.MutantsInvalid,
 			MutantsTimedOut: f.MutantsTimedOut,
 			RegionsTotal:    f.RegionsTotal, RegionsProbed: f.RegionsProbed,
-			DroppedRegions: f.DroppedRegions, VacuousFindings: f.VacuousFindings,
+			DroppedRegions: f.DroppedRegions, VacuousFindings: f.VacuousFindings, CriticIncomplete: f.CriticIncomplete,
 			AuthoredTestNotCollected: f.AuthoredTestNotCollected,
 			BaselineFailed:           f.BaselineFailed,
 			// The ledger stores this as a plain int64 (it predates the

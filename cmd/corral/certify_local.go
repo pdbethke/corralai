@@ -2328,6 +2328,7 @@ func advVerdictFromPool(v advpool.Verdict) advVerdict {
 		ExamCoverage:             v.ExamCoverage,
 		ExamIndicative:           v.ExamIndicative,
 		IndicativeReason:         v.IndicativeReason,
+		CriticIncomplete:         v.CriticIncomplete,
 	}
 	for _, f := range v.VacuousFindings {
 		out.VacuousFindings = append(out.VacuousFindings, advFinding{

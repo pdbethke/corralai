@@ -909,3 +909,38 @@ func TestLocalVerdictDisclosesUngradedWriterSeats(t *testing.T) {
 		t.Errorf("a run with no ungraded seats printed the disclosure anyway:\n%s", without.String())
 	}
 }
+
+// A critic whose review was cut short must not read as clean or complete.
+// With no findings it used to print "no vacuous tests flagged"; with some it
+// printed a count that read as the whole list. The verdict says it is
+// incomplete now, and so does the line.
+func TestVerdictSaysTheCriticReviewWasIncomplete(t *testing.T) {
+	for _, n := range []int{0, 2} {
+		v := advVerdict{
+			Status: "certified", DevScored: true,
+			MutantsTotal: 5, Survivors: 1, DevKillRate: 0.8,
+			ModelsByRole:     map[string]string{advpool.RoleTestCritic: "claude-haiku-4-5"},
+			CriticIncomplete: true,
+		}
+		for i := 0; i < n; i++ {
+			v.VacuousFindings = append(v.VacuousFindings, advFinding{Target: "TestX"})
+		}
+		var buf bytes.Buffer
+		renderAdvVerdict(&buf, "pkg/thing.py", v)
+		got := buf.String()
+		if strings.Contains(got, "no vacuous tests flagged") {
+			t.Errorf("%d findings: an incomplete review printed as clean:\n%s", n, got)
+		}
+		if !strings.Contains(got, "INCOMPLETE") {
+			t.Errorf("%d findings: the critic line does not say the review was incomplete:\n%s", n, got)
+		}
+	}
+}
+
+// The flag survives the conversion from the pool's verdict to what the CLI
+// renders: a field-by-field converter is where values go missing.
+func TestCriticIncompleteSurvivesTheConversion(t *testing.T) {
+	if !advVerdictFromPool(advpool.Verdict{CriticIncomplete: true}).CriticIncomplete {
+		t.Fatal("advVerdictFromPool dropped CriticIncomplete")
+	}
+}

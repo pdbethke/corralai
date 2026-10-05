@@ -11,6 +11,20 @@ history of any release, `git log v0.3.4..v0.3.5`.
 
 ## [Unreleased]
 
+- **The test-critic's findings are no longer silently capped, and a review
+  cut short says so.** The critic's loop read one tool call per reply and
+  stopped after six replies, so a suite with more vacuous tests than that
+  reported at most six findings, under a canned summary that read as a
+  complete review. Every tool call in a reply now counts. A review that still
+  runs out of steps before concluding, or a run that times out before the
+  critic's findings are read, is marked `critic_incomplete` on the verdict,
+  in the `--repo` ledger row and the warehouse, beside the findings count it
+  qualifies. The CLI prints the critic line as INCOMPLETE, never as "no
+  vacuous tests flagged". The critic stays advisory; no status changes.
+- **One-time cache miss.** `reposcan.VerdictGeneration` moves from 10 to 11,
+  because the verdict gained `CriticIncomplete`. Verdicts cached before this
+  release are re-measured once.
+
 - **A repo scan records what goal derivation spent.** The goal-deriver was
   the one seat in `certify --repo` whose token usage corral read past and
   dropped, so a scan's cost left out one call per candidate file, including

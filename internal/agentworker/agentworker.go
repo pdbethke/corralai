@@ -91,6 +91,13 @@ func isPoolCriticRole(role string) bool { return role == "test-critic" }
 // cmd/corral-agent's constant of the same name (the general path is 15).
 const critFreeformSteps = 6
 
+// CriticIncompletePrefix starts the critic's recorded result when its review
+// was cut short: it used every step without concluding, so findings it had
+// not yet filed are missing. The driver reads it off the completed task and
+// carries it onto the verdict (advpool.Verdict.CriticIncomplete). Without it,
+// a capped review recorded a canned summary and read as complete.
+const CriticIncompletePrefix = "\x00critic-incomplete\x00"
+
 // RunRole executes ONE advpool role task with a single model and returns the
 // raw result (for structured roles: mutant-generator / test-writer — the
 // caller re-parses) or the filed findings (for test-critic). No queue, no
@@ -211,8 +218,11 @@ Task: ` + instruction
 		if err != nil {
 			return "", nil, err
 		}
-		callName, args, ok := extractCall(m)
-		if !ok {
+		// EVERY tool call in the reply counts. Reading only the first meant
+		// one finding per round trip, so the step cap was a cap on findings:
+		// a suite with more vacuous tests than steps lost the rest silently.
+		calls := extractCalls(m)
+		if len(calls) == 0 {
 			// Collapse whitespace to a single line but do NOT truncate: this
 			// summary is the critic's recorded RESULT, and a drill-down modal
 			// (which scrolls) shows it in full — a mid-word "…" cut lost the
@@ -222,28 +232,58 @@ Task: ` + instruction
 			}
 			return last, findings, nil
 		}
-		if args == nil {
-			args = map[string]any{}
-		}
-		var nudge string
-		switch callName {
-		case "report_finding":
-			findings = append(findings, findingFromArgs(args))
-			nudge = `{"ok":true}`
-		case "report_thought":
-			thoughts++
-			nudge = `{"ok":true}`
-			if thoughts >= 2 {
-				nudge = "You have reflected enough. Now call report_finding for each vacuous test (or none if the tests are sound), then reply with a one-line summary to finish."
+		for _, call := range calls {
+			args := call.args
+			if args == nil {
+				args = map[string]any{}
 			}
-		default:
-			nudge = fmt.Sprintf(`{"error":"unknown tool %q"}`, callName)
+			var nudge string
+			switch call.name {
+			case "report_finding":
+				findings = append(findings, findingFromArgs(args))
+				nudge = `{"ok":true}`
+			case "report_thought":
+				thoughts++
+				nudge = `{"ok":true}`
+				if thoughts >= 2 {
+					nudge = "You have reflected enough. Now call report_finding for each vacuous test (or none if the tests are sound), then reply with a one-line summary to finish."
+				}
+			default:
+				nudge = fmt.Sprintf(`{"error":"unknown tool %q"}`, call.name)
+			}
+			messages = append(messages,
+				Message{Role: "assistant", Content: assistantEcho(m.Content, call.name, args)},
+				Message{Role: "user", Content: fmt.Sprintf("[result of %s] %s", call.name, nudge)})
 		}
-		messages = append(messages,
-			Message{Role: "assistant", Content: assistantEcho(m.Content, callName, args)},
-			Message{Role: "user", Content: fmt.Sprintf("[result of %s] %s", callName, nudge)})
 	}
-	return last, findings, nil
+	// Every step was used and the critic never concluded, so findings it had
+	// not filed yet are missing. Say so rather than record a canned summary
+	// that reads as a complete review.
+	return fmt.Sprintf("%sthe critic used all %d steps without concluding, so its findings may be incomplete (%d filed)", CriticIncompletePrefix, critFreeformSteps, len(findings)), findings, nil
+}
+
+// toolCall is one extracted call: its name and decoded arguments.
+type toolCall struct {
+	name string
+	args map[string]any
+}
+
+// extractCalls returns every tool call in a reply: each native ToolCall, or,
+// for a model that writes its call into the content, the one extractCall
+// finds there.
+func extractCalls(m Message) []toolCall {
+	if len(m.ToolCalls) > 0 {
+		out := make([]toolCall, 0, len(m.ToolCalls))
+		for _, tc := range m.ToolCalls {
+			name, args, _ := extractCall(Message{ToolCalls: []ToolCall{tc}})
+			out = append(out, toolCall{name: name, args: args})
+		}
+		return out
+	}
+	if name, args, ok := extractCall(m); ok {
+		return []toolCall{{name: name, args: args}}
+	}
+	return nil
 }
 
 // findingFromArgs builds a queue.Finding from a report_finding tool call's

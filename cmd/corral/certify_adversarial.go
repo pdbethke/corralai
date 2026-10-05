@@ -48,8 +48,11 @@ type advVerdict struct {
 	// another and were collapsed before scoring — see
 	// adequacy.DedupeMutants. Disclosed so the graded denominator is
 	// explainable.
-	DuplicateMutants int               `json:"duplicate_mutants,omitempty"`
-	VacuousFindings  []advFinding      `json:"VacuousFindings"`
+	DuplicateMutants int          `json:"duplicate_mutants,omitempty"`
+	VacuousFindings  []advFinding `json:"VacuousFindings"`
+	// CriticIncomplete mirrors advpool.Verdict's: the critic's review was cut
+	// short, so VacuousFindings is a lower bound, not the whole list.
+	CriticIncomplete bool              `json:"critic_incomplete,omitempty"`
 	ModelsByRole     map[string]string `json:"ModelsByRole"`
 	Status           string            `json:"Status"`
 	RecordID         int64             `json:"RecordID"`
@@ -536,6 +539,12 @@ func renderAdvVerdict(w io.Writer, codePath string, v advVerdict) {
 		// reporting a pass, which is precisely the failure this tool exists to
 		// measure in other people's pipelines. Say nothing ran.
 		fmt.Fprintln(w, "  critic review: not run — no test-critic was assigned (--critic-model off)")
+	} else if v.CriticIncomplete && len(v.VacuousFindings) == 0 {
+		// Cut short before it concluded: an empty list here is NOT a clean
+		// review, and printing "no vacuous tests flagged" would say one was.
+		fmt.Fprintln(w, "  critic review: INCOMPLETE — the critic was cut short before concluding and filed nothing; this is not a clean review")
+	} else if v.CriticIncomplete {
+		fmt.Fprintf(w, "  critic review: %d test(s) flagged before the critic was cut short — INCOMPLETE, there may be more; UNVERIFIED (a second model's opinion, not execution-proven; check before acting)\n", len(v.VacuousFindings))
 	} else if len(v.VacuousFindings) == 0 {
 		fmt.Fprintln(w, "  critic review: no vacuous tests flagged")
 	} else {

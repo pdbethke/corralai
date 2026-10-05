@@ -82,7 +82,15 @@ package reposcan
 // document "would present a drawn challenger's run as a hand-named one".
 // No "9" verdict was ever drawn — pools did not exist — and a served verdict
 // already shows how it was measured, so that reason was false.)
-const VerdictGeneration = "10"
+// "11" (2026-10-05): the Verdict gained CriticIncomplete. The critic's loop
+// read one tool call per reply and stopped after six replies, so a suite with
+// more vacuous tests than that reported at most six findings, recorded under a
+// canned summary that read as a complete review; and a timed-out verdict never
+// read the critic's findings at all. Both now say the review is incomplete. A
+// cached "10" document unmarshals the field as false, which would present a
+// possibly-truncated count as complete, and shape and generation change
+// together in any case.
+const VerdictGeneration = "11"
 
 // VerdictShapeSHA256 fingerprints advpool.Verdict's serialized shape: every
 // exported field's name, type and json tag, sorted by name and hashed.
@@ -104,4 +112,4 @@ const VerdictGeneration = "10"
 // Verdict's own FIELDS") and nothing wider. Nor can any fingerprint catch the
 // behaviour half: a scorer that computes a DIFFERENT number into the SAME
 // field is invisible here, and remains a review responsibility.
-const VerdictShapeSHA256 = "3f363801929d0a2c61c646c5cf067d064a30fa155973f580014c6131101c4295"
+const VerdictShapeSHA256 = "4c5dca3b35dff82b06f02ef90f15a8bd382246d9e66bba111f707d03c564bc24"

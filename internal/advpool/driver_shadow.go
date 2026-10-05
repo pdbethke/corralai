@@ -32,6 +32,12 @@ import (
 // while a fabricated row is confidently wrong.
 const ShadowProviderFailedResult = "\x00shadow-provider-call-failed\x00"
 
+// criticIncompletePrefix starts a critic task's result when its review was cut
+// short (agentworker.CriticIncompletePrefix writes it; the two are kept equal
+// by TestCriticIncompleteMarkerMatchesTheLoops, since advpool does not import
+// agentworker). The driver carries it onto Verdict.CriticIncomplete.
+const criticIncompletePrefix = "\x00critic-incomplete\x00"
+
 // WriterProviderFailedResult is the same sentinel for the PRIMARY test-writer
 // seat: the model call itself failed (unreachable, 429, 5xx), so there is no
 // test to compile, score, or blame the model for.

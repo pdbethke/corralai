@@ -541,6 +541,13 @@ type Verdict struct {
 	// own output. Omitted from JSON when zero, which is the common case.
 	DuplicateMutants int             `json:"duplicate_mutants,omitempty"`
 	VacuousFindings  []queue.Finding // test-critic's designed-to-pass/vacuous flags
+	// CriticIncomplete says the critic was seated and its review did NOT fully
+	// reach this verdict: it used every step without concluding, so findings it
+	// had not filed are missing (the loop's criticIncompletePrefix), or the run
+	// timed out before its findings were read. VacuousFindings is then a lower
+	// bound, never a complete count. False when no critic was seated. The
+	// critic stays advisory: this changes no status.
+	CriticIncomplete bool `json:"critic_incomplete,omitempty"`
 	ModelsByRole     map[string]string
 	Status           string // certified | needs-review
 	// TestWriterFailed is true when the pool exhausted MaxTestWriterAttempts
@@ -2725,6 +2732,7 @@ func (d *Driver) tickAggregate(ctx context.Context, missionID int64, run *runSta
 	criticEnabled := strings.TrimSpace(d.Assign[RoleTestCritic]) != ""
 
 	var criticFindings []queue.Finding
+	criticIncomplete := false
 	if criticEnabled {
 		tc, err := d.taskByKey(missionID, RoleTestCritic)
 		if err != nil {
@@ -2739,6 +2747,7 @@ func (d *Driver) tickAggregate(ctx context.Context, missionID int64, run *runSta
 			return nil, fmt.Errorf("advpool: load findings: %w", ferr)
 		}
 		criticFindings = filterCriticFindings(findings, tc.ID)
+		criticIncomplete = strings.HasPrefix(tc.Result, criticIncompletePrefix)
 		// The wait is over: everything from the pool score to this moment is
 		// what having a critic cost the run. Closed only on the path that
 		// actually READ the critic's findings — the early return above
@@ -2761,6 +2770,7 @@ func (d *Driver) tickAggregate(ctx context.Context, missionID int64, run *runSta
 	v := aggregate(run.rs, roster, run.devKillRate, run.mutantsTotal, len(run.devSurvivors), run.provenMissed,
 		criticFindings, d.Threshold, d.CertifyIntervalWidth, false, run.testWriterFailed, run.poolTestUnsound)
 	v.ShadowSelection = seatedSelection
+	v.CriticIncomplete = criticIncomplete
 	v.RegionsTotal = run.regionsTotal
 	v.PromptShape = run.promptShape
 	v.MutantBudget = run.mutantBudget
@@ -3182,6 +3192,10 @@ func (d *Driver) timeoutVerdict(run *runState) Verdict {
 	// construction site in this package, and it has now been the place a
 	// field was forgotten more than once.
 	v := verdictFromSpec(run.rs)
+	// This path never reads the critic's findings, so with a critic seated
+	// its review did not reach this verdict: say so, rather than let an empty
+	// VacuousFindings read as a critic that found nothing.
+	v.CriticIncomplete = strings.TrimSpace(d.Assign[RoleTestCritic]) != ""
 	v.DevKillRate = run.devKillRate
 	v.BaselineDuration = run.baselineDuration
 	v.MutantsTotal = run.mutantsTotal

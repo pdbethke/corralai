@@ -59,9 +59,13 @@ func sampleBundle() Bundle {
 			{
 				Repo: "o/r", Commit: "abc", RunURL: "https://ci/1", ScanID: 7,
 				Path: "pkg/a.go", Lang: "go", Disposition: "audited",
-				ComputedAt:  timePtr(time.Date(2026, 9, 5, 12, 0, 30, 0, time.UTC)),
-				MutantsFrom: "ffff",
-				KillRate:    f64(0.5), Survivors: 2, ProvenMissed: 1,
+				// A critic cut short: the round trip must keep the flag that
+				// qualifies VacuousFindings, or a reader of the warehouse
+				// sees a truncated count as complete.
+				CriticIncomplete: true,
+				ComputedAt:       timePtr(time.Date(2026, 9, 5, 12, 0, 30, 0, time.UTC)),
+				MutantsFrom:      "ffff",
+				KillRate:         f64(0.5), Survivors: 2, ProvenMissed: 1,
 				ParentSHA256: "aaaa", Evidence: "proven", Status: "certified",
 				MutantsGraded: 8, MutantsInvalid: 1,
 				GoalsDerived: 3, AuthoredTest: "def test_x(): pass",

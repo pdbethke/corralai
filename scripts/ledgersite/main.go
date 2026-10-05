@@ -120,6 +120,9 @@ func main() {
 		return
 	}
 	v := buildView(entries, checks, pub != nil)
+	if pub != nil {
+		v.PubKeyHex = hex.EncodeToString(pub)
+	}
 	if err := writeSite(*out, v); err != nil {
 		fmt.Fprintf(os.Stderr, "ledgersite: writing site: %v\n", err)
 		os.Exit(1)

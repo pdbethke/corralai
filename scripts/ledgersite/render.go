@@ -93,6 +93,10 @@ type EntryView struct {
 type SiteView struct {
 	Generated     time.Time
 	LedgerEntries int
+	// PubKeyHex is the key the signatures were checked against, printed in
+	// the "verify it yourself" command so a reader can run the same check.
+	// Empty when the page was rendered without one.
+	PubKeyHex     string
 	Reviews       []EntryView
 	Adjudications int
 	Retracted     int

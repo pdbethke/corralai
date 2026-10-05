@@ -66,6 +66,31 @@ stranger checks the record against its own signatures rather than against your
 word. Nothing is ever edited in place: a wrong entry is retracted by a later
 entry that says so, and every reader then leaves it out.
 
+### Check corral's own record
+
+Hash and link integrity need no key. Signatures need the key that made them,
+and corral's is published: it is the one line in
+[`LEDGER_PUBKEY`](https://github.com/pdbethke/corralai/blob/main/LEDGER_PUBKEY)
+at the root of the repository.
+
+```sh
+git clone --branch corral/ledger --single-branch \
+  https://github.com/pdbethke/corralai.git corral-ledger
+corral ledger verify --pub 909429443700441a9f662c07c5f1b7110333fd7fb94fb21e8991e40f2cb6dc09 corral-ledger
+```
+
+Leave out `--pub` and corral uses *your* local certify key if you have one.
+That key did not sign this record, so every entry fails, which is the right
+answer to the question you asked, just not the useful one. With no local key,
+it checks no signatures at all and says so.
+
+The key does not rest on this page's say-so. The same key signs the
+statements corral enters into Sigstore Rekor, and Rekor entry
+[2759598612](https://search.sigstore.dev/?logIndex=2759598612), integrated on
+2026-09-08, records it. So you can check the key against a public log that
+corral does not run, and that log has held it since before this page
+published it.
+
 ## The payoff: any DuckDB reads it, in place
 
 Here is the part that makes the branch worth more than a log file. Those

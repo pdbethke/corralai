@@ -156,13 +156,19 @@ the verifier is never the reviewer's model. What actually ran:</p>
 <pre>git clone {{if .RepoURL}}{{.RepoURL}}.git{{else}}&lt;repo&gt;{{end}} corralai
 cd corralai
 git fetch origin corral/ledger
-git checkout corral/ledger      # 121 gzipped JSON entries under scans/
+git checkout corral/ledger      # {{.LedgerEntries}} gzipped JSON entries under scans/
 
-# walk the chain: every hash against its bytes, every link against its predecessor
-corral ledger verify .</pre>
-<p class="small">To check the <em>signatures</em> as well, pass the ledger's published Ed25519 public
+# walk the chain: every hash against its bytes, every link against its predecessor{{if .PubKeyHex}},
+# and every signature against the ledger's published key{{end}}
+corral ledger verify{{if .PubKeyHex}} --pub {{.PubKeyHex}}{{end}} .</pre>
+{{if .PubKeyHex}}<p class="small">That key is the repository's published <code>LEDGER_PUBKEY</code>, and it is the
+key this page checked the signatures against. Leave out <code>--pub</code> and corral uses <em>your</em> local
+certify key if you have one, which did not sign this record, or checks no signatures at all if you
+do not. Hash and link integrity need no
+key: any reader can confirm from the files alone that no entry was edited and none removed from the
+middle.</p>{{else}}<p class="small">To check the <em>signatures</em> as well, pass the ledger's published Ed25519 public
 key (<code>--pub &lt;hex&gt;</code>). Hash and link integrity need no key: any reader can confirm from
-the files alone that no entry was edited and none removed from the middle.</p>
+the files alone that no entry was edited and none removed from the middle.</p>{{end}}
 
 <footer>
 <p>Generated {{stamp .Generated}} from {{.LedgerEntries}} entries on <code>corral/ledger</code>.

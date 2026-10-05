@@ -438,6 +438,7 @@ CREATE TABLE IF NOT EXISTS corral_audits (
   regions_probed          INTEGER,
   dropped_regions         VARCHAR,
   vacuous_findings        INTEGER,
+  critic_incomplete       BOOLEAN,
   authored_test_not_collected BOOLEAN,
   baseline_failed         BOOLEAN,
   suite_baseline_ms       BIGINT,
@@ -609,6 +610,7 @@ var corralAuditsMigrationCols = []struct{ name, ddl string }{
 	{"regions_probed", "regions_probed INTEGER"},
 	{"dropped_regions", "dropped_regions VARCHAR"},
 	{"vacuous_findings", "vacuous_findings INTEGER"},
+	{"critic_incomplete", "critic_incomplete BOOLEAN"},
 	{"authored_test_not_collected", "authored_test_not_collected BOOLEAN"},
 	{"baseline_failed", "baseline_failed BOOLEAN"},
 	{"suite_baseline_ms", "suite_baseline_ms BIGINT"},
@@ -1383,7 +1385,7 @@ func insertFileRow(tx *sql.Tx, uid string, now time.Time, r Row) error {
 	    disposition, reason, preflight_state, evidence, detail, status,
 	    cache_hit, reused_from_scan_id, cache_key, parent_sha256,
 	    mutants_graded, mutants_invalid, mutants_timed_out,
-	    regions_total, regions_probed, dropped_regions, vacuous_findings,
+	    regions_total, regions_probed, dropped_regions, vacuous_findings, critic_incomplete,
 	    authored_test_not_collected, baseline_failed, suite_baseline_ms,
 	    proven_mutant_ids, challenger_jaccard, challenger_kappa,
 	    challenger_sufficient, goals_derived, goal_reused,
@@ -1394,7 +1396,7 @@ func insertFileRow(tx *sql.Tx, uid string, now time.Time, r Row) error {
 	    symbols, symbols_probed, decisions, decisions_probed,
 	    challenger_mutants, challenger_survived_writer, challenger_survived_shadow, challenger_union, challenger_shared,
 	    priors_applied, prior_digest, computed_at, mutants_from
-	  ) VALUES (`+placeholders(93)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
+	  ) VALUES (`+placeholders(94)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
 		uid, now, r.Repo, r.Commit, r.Path, r.Lang,
 		killRate, r.Survivors, r.ProvenMissed,
 		r.TimedOut, r.TestWriterFailed, r.PoolTestUnsound,
@@ -1412,7 +1414,7 @@ func insertFileRow(tx *sql.Tx, uid string, now time.Time, r Row) error {
 		nullIfEmpty(r.Detail), nullIfEmpty(r.Status),
 		r.CacheHit, r.ReusedFromScanID, nullIfEmpty(r.CacheKey), nullIfEmpty(r.ParentSHA256),
 		r.MutantsGraded, r.MutantsInvalid, r.MutantsTimedOut,
-		r.RegionsTotal, r.RegionsProbed, nullIfEmpty(r.DroppedRegions), r.VacuousFindings,
+		r.RegionsTotal, r.RegionsProbed, nullIfEmpty(r.DroppedRegions), r.VacuousFindings, r.CriticIncomplete,
 		r.AuthoredTestNotCollected, r.BaselineFailed, r.SuiteBaselineMillis,
 		nullIfEmpty(r.ProvenMutantIDs), r.ChallengerJaccard, r.ChallengerKappa,
 		r.ChallengerSufficient, r.GoalsDerived, r.GoalReused,

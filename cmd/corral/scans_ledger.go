@@ -227,7 +227,7 @@ func fileFromRow(r auditpush.Row) scanstore.File {
 		CacheKey: r.CacheKey, VerdictJSON: r.VerdictJSON, ModelsByRole: r.ModelsByRole,
 		MutantsTotal: r.MutantsPlanted,
 		RegionsTotal: r.RegionsTotal, RegionsProbed: r.RegionsProbed, DroppedRegions: r.DroppedRegions,
-		VacuousFindings: r.VacuousFindings, Status: r.Status, PromptShape: r.PromptShape,
+		VacuousFindings: r.VacuousFindings, CriticIncomplete: r.CriticIncomplete, Status: r.Status, PromptShape: r.PromptShape,
 		MutantBudget: r.MutantBudget, MutantBudgetRule: r.MutantBudgetRule, Complexity: r.Complexity,
 		Symbols: r.Symbols, SymbolsProbed: r.SymbolsProbed, Decisions: r.Decisions, DecisionsProbed: r.DecisionsProbed,
 		AuthoredTestNotCollected: r.AuthoredTestNotCollected, BaselineFailed: r.BaselineFailed,

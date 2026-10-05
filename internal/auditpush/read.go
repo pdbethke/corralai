@@ -274,6 +274,9 @@ func readFileRows(db *sql.DB, where string, args ...any) ([]Row, error) {
 		cache_hit, reused_from_scan_id, cache_key, parent_sha256,
 		mutants_graded, mutants_invalid, mutants_timed_out,
 		regions_total, regions_probed, dropped_regions, vacuous_findings,
+		-- a row written before the column existed holds NULL: it cannot say
+		-- whether its critic was cut short, and reads as not marked
+		coalesce(critic_incomplete, false),
 		authored_test_not_collected, baseline_failed, suite_baseline_ms,
 		proven_mutant_ids, challenger_jaccard, challenger_kappa,
 		challenger_sufficient, goals_derived, goal_reused,
@@ -335,7 +338,7 @@ func readFileRows(db *sql.DB, where string, args ...any) ([]Row, error) {
 			&r.Disposition, &reason, &r.PreflightState, &r.Evidence, &detail, &status,
 			&r.CacheHit, &reusedFromScanID, &cacheKey, &parentSHA256,
 			&r.MutantsGraded, &r.MutantsInvalid, &mutantsTimedOut,
-			&r.RegionsTotal, &r.RegionsProbed, &droppedRegions, &r.VacuousFindings,
+			&r.RegionsTotal, &r.RegionsProbed, &droppedRegions, &r.VacuousFindings, &r.CriticIncomplete,
 			&r.AuthoredTestNotCollected, &r.BaselineFailed, &suiteBaselineMillis,
 			&provenMutantIDs, &challengerJaccard, &challengerKappa,
 			&challengerSufficient, &r.GoalsDerived, &goalReused,

@@ -163,6 +163,9 @@ type Row struct {
 	RegionsProbed   int
 	DroppedRegions  string
 	VacuousFindings int
+	// CriticIncomplete qualifies VacuousFindings: the critic's review was cut
+	// short, so the count is a lower bound (scanstore.File's field).
+	CriticIncomplete bool `json:",omitempty"`
 	// AuthoredTestNotCollected and BaselineFailed are the two qualifiers
 	// that turn a clean-looking number into a meaningless one. They travel
 	// with the number, on the row, for the reason this package's doc gives:

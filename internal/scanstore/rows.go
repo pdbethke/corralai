@@ -340,6 +340,11 @@ type File struct {
 	// VacuousFindings is the COUNT of advpool.Verdict.VacuousFindings —
 	// test-critic's designed-to-pass/vacuous flags on this file's run.
 	VacuousFindings int
+	// CriticIncomplete is advpool.Verdict.CriticIncomplete: the critic's
+	// review was cut short, so VacuousFindings is a lower bound. It travels
+	// on the row beside the count it qualifies. omitempty keeps `corral scans
+	// show --json` byte-identical for every row it does not apply to.
+	CriticIncomplete bool `json:",omitempty"`
 	// Status is advpool.Verdict.Status ("certified" | "needs-review").
 	Status string
 	// PromptShape mirrors advpool.Verdict.PromptShape: "chunk" when every

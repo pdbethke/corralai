@@ -127,6 +127,11 @@ func renderTestCritic(rs RunSpec, _ []repoindex.Signature, _ []adequacy.Mutant) 
 	return b.String()
 }
 
+// CriticInstruction is the test-critic's production instruction for rs,
+// exported so scripts/criticbench sends the experiment exactly what the
+// driver sends, rather than a copy of the prompt that could drift from it.
+func CriticInstruction(rs RunSpec) string { return renderTestCritic(rs, nil, nil) }
+
 // renderTestWriter uses testgen's proven WriteTest prompt, targeted at the
 // survivors the dev's tests missed: the goal is augmented with the
 // surviving mutants so the worker's model writes a test that kills what the

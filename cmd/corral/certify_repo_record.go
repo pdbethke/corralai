@@ -10,6 +10,7 @@ import (
 	"os/user"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/pdbethke/corralai/internal/advpool"
 	"github.com/pdbethke/corralai/internal/lang"
@@ -786,6 +787,44 @@ func scanModelCallTotals(results []reposcan.FileResult) []advpool.ModelCall {
 		}
 	}
 	return out
+}
+
+// scanModelCallRowsWith is buildScanModelCallRows plus the goal-deriver's
+// rows when the scan's deriver recorded any: the ONE set of rows the ledger
+// entry, the warehouse and the scan header's totals are built from.
+func scanModelCallRowsWith(results []reposcan.FileResult, d any) []scanstore.ModelCall {
+	rows := buildScanModelCallRows(results)
+	if r, ok := d.(usageReporter); ok {
+		rows = append(rows, r.modelCallRows()...)
+	}
+	return rows
+}
+
+// scanModelCallTotalsWith is scanModelCallTotals with the goal-deriver's total
+// first, summed from the same rows scanModelCallRowsWith records, so the
+// cost line and the record cannot disagree about the deriver. It is added
+// here rather than through scanModelCallTotals because that function keeps
+// only rosterRoleOrder's roles and would drop this one silently.
+func scanModelCallTotalsWith(results []reposcan.FileResult, d any) []advpool.ModelCall {
+	var out []advpool.ModelCall
+	if r, ok := d.(usageReporter); ok {
+		var t *advpool.ModelCall
+		for _, row := range r.modelCallRows() {
+			if t == nil {
+				t = &advpool.ModelCall{Role: row.Role, Model: row.Model}
+			}
+			t.Calls += row.Calls
+			t.InputTokens += row.InputTokens
+			t.OutputTokens += row.OutputTokens
+			t.CachedInputTokens = addCacheCount(t.CachedInputTokens, row.CachedInputTokens)
+			t.CacheWriteInputTokens = addCacheCount(t.CacheWriteInputTokens, row.CacheWriteInputTokens)
+			t.Wall += time.Duration(row.WallMillis) * time.Millisecond
+		}
+		if t != nil {
+			out = append(out, *t)
+		}
+	}
+	return append(out, scanModelCallTotals(results)...)
 }
 
 // auditedParentSHA256 is the hash a graded file's own mutants carry. Every

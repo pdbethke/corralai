@@ -1,0 +1,157 @@
+---
+title: "For every season, churn"
+description: "Corral's review loop finds real defects, and the fixes for them keep producing new ones. We measured the ratio, changed how we fix, and then watched it happen again this week, in a merge-gate fix and in a release-gate fix that had sat untested for 25 days."
+pubDate: 2026-10-05
+draft: true
+---
+
+{/* SPDX-License-Identifier: Elastic-2.0 */}
+
+*Field note. A review loop either drains a codebase of defects or churns it,
+replacing the ones it removes with ones its fixes introduce. You cannot tell
+which from the inside, so we counted.*
+
+## The question
+
+Corral reviews itself. A model reads a scope it did not write, makes claims,
+and backs each one with a script that corral runs. When a verifier seat is
+set, a model from another vendor tries to refute each claim, and a person
+rules on what survives. Every
+step is an entry on [the public ledger](/ledger/). Then someone fixes what was
+found, and the next round goes again.
+
+The obvious worry about a loop like that is that it never ends: each fix is
+new code, and new code has defects. The useful question is not whether the
+fixes introduce defects (they do) but whether they introduce them faster than
+the reviews remove them.
+
+## How we counted
+
+For every finding in a round, run `git blame` on its own file and line at the
+commit the round reviewed. If the defective line was written by the previous
+round's fix, the finding is **churn**. If it predates that fix, it is
+**drain**: a defect that was already there, finally found.
+
+We did this for three consecutive rounds on two packages, the merge gate and
+the transparency log, in September:
+
+| round | findings | drain (already there) | churn (made by the last fix) |
+|---|---|---|---|
+| two: first look at both packages | 10 | 10 | 0, necessarily |
+| three: aimed at round two's fixes | 13 | 8 | 5 |
+| four: aimed at round three's fixes | 9 | 4 | 5 |
+
+The table and the method are in the repository, in
+`docs/design/adversarial-review.md`, under "Is the loop converging?".
+
+Read the absolutes, not the share. Churn held flat at five while drain halved,
+eight to four. Five defects in, about four out, per round, is not a loop that
+converges. It is a treadmill.
+
+Two details made it worse than the ratio. Round three's five self-inflicted
+findings were three high-severity and two medium, with no lows; its eight
+pre-existing ones were mostly low. And all five had the same shape: a rule
+keyed on an incidental character instead of the declared schema, or a rule
+enforced at one door and not its sibling. That shape is named in this
+repository's own notes. Knowing its name did not prevent five more of it in an
+afternoon.
+
+## What changed
+
+The batch went first. Round four's nine findings were fixed one per commit,
+each with a test that was run against the unfixed code to prove it fails
+there. Two of the nine were not fixed at all in the usual sense. Three
+successive guards against a semicolon inside a gate policy's command had each
+been defeated by a reviewer, each time letting a weaker command post a
+success. The fourth answer was to change the format so the ambiguity could
+not exist: one policy per environment variable, with the operating system
+supplying the separator. You cannot churn a guard that is not there.
+
+None of this stopped the fixes from being wrong. What it changed is *when*
+they were caught.
+
+## This week, again
+
+On October 4 we fixed the last five findings from a September review of the
+merge gate: small parser edge cases, a store migration that was not atomic,
+and a read endpoint that reported whichever check had finished last. Each was
+fixed test-first, and every test failed on the old code. The whole suite was
+green.
+
+Then a separate reviewer went over the fix branch before it merged, told to
+look for what the fixes broke. It was a fresh agent with no stake in the
+fixes being finished, though, to be exact about it, the same model family as
+the one that wrote them, not another vendor. It found four important defects
+in them. Two were
+changes an operator would only have discovered after upgrading:
+
+- **One widened a sandbox.** The fix made `net=` refuse values it did not
+  understand, using Go's standard boolean parser. That parser also accepts
+  `TRUE`, `True` and `t`, which the old code had read as *no network*. The
+  fix would have opened the network to untrusted pull-request code for every
+  policy written that way.
+- **One switched gates off.** The fix caught a misplaced field after the
+  command in any letter case and at the start of any line. That also caught
+  ordinary multi-line scripts with a line like `BASE=origin/main`, so those
+  repositories' gates would have been refused after the upgrade.
+
+The other two were the familiar shape: the read endpoint was fixed at one door
+and not the other, and the endpoint's documentation claimed more than its
+code could know. All four were fixed, and a re-review of *that* found one more
+false sentence, in the changelog, before anything reached `main`.
+
+The churn did not go away. It moved earlier, from the next round to before
+the merge, which is the only place it is cheap.
+
+## And a fix that had never run
+
+The release workflow has a gate: it refuses to publish unless CI was green.
+The [last field note on this](/field-notes/the-fixer-is-the-worst-witness/)
+told how that gate, as first written, refused every release, and ended with
+the fix: also accept green CI on a later commit that contains the tag.
+
+That fix had a defect from the day it merged, September 9. To find the later
+commit, it asked GitHub's API for a commit named after the repository, which
+always fails, and then fell back to the right lookup. But when that command
+fails, it prints its error to standard output, so the shell captured the error
+text *and* the fallback's answer as a single value. The check built from it
+was garbage and always refused. Nobody noticed for 25 days, because the one
+release in between had published through the gate's other branch, so the
+broken path never ran. On October 4, cutting the next release candidate, it ran for
+the first time and refused a release that should have passed.
+
+The fix for the fix was then run against the live API before it merged, and
+running it found a second hole. A tag on a commit that had never been merged
+would publish, as long as that commit's own CI was green, even though the
+workflow's comment said it "still fails". The gate now requires that every
+release commit be on the default branch, on every path.
+
+There is a correction in this one too, and it belongs here. We expected the
+next release to publish through the repaired path and prove it. It didn't.
+That release went out through the other branch again, because its tag landed
+after its CI had already passed. So the repaired path has been run against the
+real API, but not yet inside a real release. Until it is, it is a fix we
+believe in, not one we have watched work.
+
+## What follows
+
+Churn is not a failure of care. Every defect above was written by someone who
+had just read the finding, understood it, and was trying to fix exactly that
+class of mistake. A fix is new code, and it needs the same adversary as
+everything else, before it merges rather than after. A path that has never
+executed is not tested, whatever the tests around it say.
+
+The practical next step is to make the ratio cheap to watch. The warehouse's
+findings table already carries each finding's file, line and commit, so its
+origin, either already there or made by an earlier fix, could be computed
+from the record instead of by someone running `git blame` by hand. That is
+designed and not built.
+
+One caveat on the evidence. The September rounds are `corral review` entries
+on the ledger. This week's pre-merge reviews were not. They ran as reviewers
+inside a coding session, and what they found is recorded in the commit
+messages of [#359](https://github.com/pdbethke/corralai/pull/359), not as
+signed entries. The release-gate holes were found by running the gate, and
+are recorded in [#362](https://github.com/pdbethke/corralai/pull/362).
+That is a gap between how we ask others to work and how we worked this week,
+and it is on the list.

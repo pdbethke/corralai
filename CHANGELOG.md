@@ -11,6 +11,12 @@ history of any release, `git log v0.3.4..v0.3.5`.
 
 ## [Unreleased]
 
+## [v1.0.0-rc.17] — 2026-10-06
+
+- **One-time cache miss.** `reposcan.VerdictGeneration` moves from 12 (rc.16)
+  to 14 across the two changes below, because a cached verdict's critic count
+  may have come from a critic that answered off-shape or skipped tests. Every
+  verdict cached before this release is re-measured once.
 - **The test-critic asks for its answer shape, not just in its prompt.** The
   typed critic now sends its schema through each provider's own
   constrained-output field: `format` on Ollama, `response_format` on
@@ -34,9 +40,6 @@ history of any release, `git log v0.3.4..v0.3.5`.
   less output; a local qwen3.6:35b-a3b now judges every test but caught 47
   to 49 of 63, against 57 to 61 when it could list only what it flagged, and
   raised more false flags.
-- **One-time cache miss.** `reposcan.VerdictGeneration` moves from 12 to 14
-  across these two changes, because a cached verdict's critic count may have
-  come from a critic that answered off-shape or skipped tests.
 
 ## [v1.0.0-rc.16] — 2026-10-06
 

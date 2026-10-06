@@ -634,6 +634,32 @@ in both directions. With 3 runs per mode this is a measured drop, not an
 explained one; the likeliest reading is that a forced verdict on every test
 works against the critic's own "flag only if certain" rule.
 
+## 9. One schema per file does not fit a large file (2026-10-06)
+
+A paid `certify --repo` run on flask (`src/flask/app.py` @ 36e4a824,
+gemini-3.8-flash for mutants and writer, claude-haiku-4-5 as critic) showed
+the critic seat making 9 calls on 294,849 input tokens: it had fallen to the
+loop. The paired test file, `tests/test_basic.py`, declares about 90 tests,
+so section 8's keyed schema carried about 90 required names. Probed directly,
+with schema-only requests:
+
+| provider | names accepted | names refused |
+|---|---|---|
+| claude-haiku-4-5 (`output_config.format`) | 20 | 40, 60, 90 ("The compiled grammar is too large") |
+| gemini-3.8-flash (`response_format`, strict) | 10 (with `::` in names), 20, 40 | 90 (a bare 400) |
+
+The name format was not the cause; size was. The critic now judges a list
+longer than 20 in batches of at most 20 (`criticBatchSize`). On the same
+flask files, called through the production seat:
+
+| model | calls | input tokens | output tokens | judged | flagged |
+|---|---|---|---|---|---|
+| claude-haiku-4-5 | 5 | 186,775 | 4,315 | 90 in 5 batches | 0 |
+| gemini-3.8-flash | 5 | 167,597 | 4,139 | 90 in 5 batches | 1 |
+
+Each batch re-sends the code and the whole test file, so input grows with
+the number of batches; on this file that was still well under the loop's.
+
 ## What this does not show
 
 - Two models answered the cloud runs and the local runs: gemini-3.8-flash and

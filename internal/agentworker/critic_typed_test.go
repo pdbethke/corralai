@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -310,5 +311,101 @@ func TestTypedJudgedTestsReadsAKeyedAnswer(t *testing.T) {
 	got, err := TypedJudgedTests(`{"tests":{"TestB":{"verdict":"sound","reason":"x"},"TestA":{"verdict":"vacuous","reason":"y"}}}`)
 	if err != nil || strings.Join(got, ",") != "TestA,TestB" {
 		t.Fatalf("got %v, %v", got, err)
+	}
+}
+
+// batchChatter answers each typed call with exactly the names its schema
+// requires, flagging the ones in vacuous, and records each call's required
+// list. skip drops one name from every answer, the way a model that loses
+// count of a long list does.
+type batchChatter struct {
+	vacuous  map[string]bool
+	required [][]string
+	skip     bool
+	loopDone bool
+}
+
+func (c *batchChatter) Chat(_ []Message, tools []any) (Message, error) {
+	var rf ResponseFormat
+	ok := len(tools) == 1
+	if ok {
+		rf, ok = tools[0].(ResponseFormat)
+	}
+	if !ok {
+		// The loop (its own tools, not a format), after the typed path gave
+		// up: conclude at once.
+		c.loopDone = true
+		return Message{Role: "assistant", Content: "no vacuous tests"}, nil
+	}
+	req := rf.Schema["properties"].(map[string]any)["tests"].(map[string]any)["required"].([]any)
+	var names []string
+	ans := map[string]any{}
+	for i, r := range req {
+		n := r.(string)
+		names = append(names, n)
+		if c.skip && i == 0 {
+			continue
+		}
+		v := "sound"
+		if c.vacuous[n] {
+			v = "vacuous"
+		}
+		ans[n] = map[string]any{"verdict": v, "reason": "x"}
+	}
+	c.required = append(c.required, names)
+	b, _ := json.Marshal(map[string]any{"tests": ans})
+	return Message{Role: "assistant", Content: string(b)}, nil
+}
+
+func manyTests(n int) []string {
+	out := make([]string, n)
+	for i := range out {
+		out[i] = fmt.Sprintf("TestCase%02d", i)
+	}
+	return out
+}
+
+// A list longer than criticBatchSize is judged in batches, each its own
+// keyed schema: both providers measured refuse one schema with every name of
+// a 90-test file ("compiled grammar is too large" on Anthropic past 20
+// names, a 400 on Gemini at 90). Every test is still judged once, and the
+// findings of all batches come back.
+func TestTypedCriticJudgesALongListInBatches(t *testing.T) {
+	names := manyTests(45)
+	instr := "critique tests\n\n" + CriticTestListBlock("p/p_test.go", names)
+	c := &batchChatter{vacuous: map[string]bool{"TestCase03": true, "TestCase44": true}}
+	out, findings, err := RunRole(context.Background(), c, "test-critic", instr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.required) != 3 || len(c.required[0]) != criticBatchSize || len(c.required[1]) != criticBatchSize || len(c.required[2]) != 5 {
+		t.Fatalf("want batches of %d, %d and 5, got %d batches: %v", criticBatchSize, criticBatchSize, len(c.required), c.required)
+	}
+	var all []string
+	for _, b := range c.required {
+		all = append(all, b...)
+	}
+	if strings.Join(all, ",") != strings.Join(names, ",") {
+		t.Fatal("every listed test must be judged exactly once, in order")
+	}
+	if len(findings) != 2 || strings.HasPrefix(out, CriticIncompletePrefix) || c.loopDone {
+		t.Fatalf("both batches' findings, no loop: %q %+v", out, findings)
+	}
+	if !strings.Contains(out, "3 batch") {
+		t.Fatalf("the result says how the review was split: %q", out)
+	}
+}
+
+// A batch that will not answer completely sends the file to the loop, as a
+// single unbatched answer would.
+func TestTypedCriticBatchThatSkipsFallsBackToTheLoop(t *testing.T) {
+	instr := "critique tests\n\n" + CriticTestListBlock("p/p_test.go", manyTests(25))
+	c := &batchChatter{skip: true}
+	out, _, err := RunRole(context.Background(), c, "test-critic", instr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !c.loopDone || !strings.Contains(out, "tool loop") {
+		t.Fatalf("a batch that keeps skipping must hand the file to the loop: %q", out)
 	}
 }

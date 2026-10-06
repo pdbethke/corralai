@@ -76,25 +76,60 @@ func CriticTestListBlock(testFile string, names []string) string {
 // criticTestList reads the block CriticTestListBlock wrote, or "", nil when
 // the instruction has none.
 func criticTestList(instruction string) (string, []string) {
+	_, _, file, names := criticTestListSpan(instruction)
+	return file, names
+}
+
+// criticTestListSpan locates the list block: its byte range in instruction,
+// the file it names and the tests it lists. start is -1 when there is none.
+func criticTestListSpan(instruction string) (start, end int, file string, names []string) {
 	i := strings.Index(instruction, criticListHeader)
 	if i < 0 {
-		return "", nil
+		return -1, -1, "", nil
 	}
 	rest := instruction[i+len(criticListHeader):]
 	nl := strings.IndexByte(rest, '\n')
 	if nl < 0 {
-		return "", nil
+		return -1, -1, "", nil
 	}
-	file := strings.TrimSuffix(rest[:nl], ":")
-	var names []string
-	for _, line := range strings.Split(rest[nl+1:], "\n") {
-		n, ok := strings.CutPrefix(line, "- ")
-		if !ok {
+	file = strings.TrimSuffix(rest[:nl], ":")
+	end = i + len(criticListHeader) + nl + 1
+	for _, line := range strings.SplitAfter(instruction[end:], "\n") {
+		n, ok := strings.CutPrefix(strings.TrimSuffix(line, "\n"), "- ")
+		if !ok || !strings.HasSuffix(line, "\n") {
 			break
 		}
 		names = append(names, n)
+		end += len(line)
 	}
-	return file, names
+	return i, end, file, names
+}
+
+// criticBatchSize is the most tests one typed call is asked to judge by name.
+// A keyed schema carries one required property per test, and providers cap
+// how large a constrained-output schema may compile to: measured 2026-10-06,
+// claude-haiku-4-5 accepted 20 names and refused 40 ("The compiled grammar is
+// too large"), and gemini-3.8-flash accepted 40 and refused 90 with a bare
+// 400. flask's tests/test_basic.py declares about 90 tests, so one schema per
+// file failed on both, and the critic fell to the loop. 20 is the largest
+// size measured to pass on both.
+const criticBatchSize = 20
+
+// criticBatches splits the task into one instruction per batch of at most
+// criticBatchSize listed tests, each carrying the whole code and test file
+// but listing only its own tests. A task with no list, or a short one, is a
+// single batch, unchanged.
+func criticBatches(instruction string) []string {
+	start, end, file, names := criticTestListSpan(instruction)
+	if start < 0 || len(names) <= criticBatchSize {
+		return []string{instruction}
+	}
+	var out []string
+	for i := 0; i < len(names); i += criticBatchSize {
+		j := min(i+criticBatchSize, len(names))
+		out = append(out, instruction[:start]+CriticTestListBlock(file, names[i:j])+instruction[end:])
+	}
+	return out
 }
 
 // keyedFormat is the answer schema when the tests are known: an object with
@@ -142,14 +177,37 @@ func keyedFormat(names []string) ResponseFormat {
 // review, the same rule the loop follows when it runs out of steps.
 func RunCriticTyped(model Chatter, instruction string) (string, []queue.Finding, error) {
 	constrained := true
-	out, findings, perr, err := typedCall(model, instruction, &constrained)
-	if err != nil {
-		return "", nil, err
+	batches := criticBatches(instruction)
+	var all []queue.Finding
+	judged := 0
+	for i, b := range batches {
+		out, findings, perr, err := typedCall(model, b, &constrained)
+		if err != nil {
+			return "", nil, err
+		}
+		if perr != nil {
+			return fmt.Sprintf("%sthe typed critic's answer%s did not parse (%v), so no review was recorded", CriticIncompletePrefix, batchLabel(i, len(batches)), perr), nil, nil
+		}
+		if len(batches) == 1 {
+			return out, findings, nil
+		}
+		all = append(all, findings...)
+		_, names := criticTestList(b)
+		judged += len(names)
 	}
-	if perr != nil {
-		return fmt.Sprintf("%sthe typed critic's answer did not parse (%v), so no review was recorded", CriticIncompletePrefix, perr), nil, nil
+	return batchSummary(judged, len(batches), len(all)), all, nil
+}
+
+// batchLabel names a batch in a message, or nothing for an unbatched task.
+func batchLabel(i, n int) string {
+	if n == 1 {
+		return ""
 	}
-	return out, findings, nil
+	return fmt.Sprintf(" for batch %d of %d", i+1, n)
+}
+
+func batchSummary(judged, batches, flagged int) string {
+	return fmt.Sprintf("typed critic judged %d test(s) in %d batches, %d flagged", judged, batches, flagged)
 }
 
 // typedCall makes one typed critic call, constrained to criticFormat while
@@ -184,23 +242,50 @@ func typedCall(model Chatter, instruction string, constrained *bool) (string, []
 // that is itself cut short keeps CriticIncompletePrefix at the front, where
 // the driver reads it.
 func runCritic(model Chatter, instruction string) (string, []queue.Finding, error) {
-	var perrs []string
 	constrained := true
-	for attempt := 0; attempt < 2; attempt++ {
-		out, findings, perr, err := typedCall(model, instruction, &constrained)
-		if err != nil {
-			return "", nil, err
+	batches := criticBatches(instruction)
+	var all []queue.Finding
+	judged := 0
+	for i, b := range batches {
+		var perrs []string
+		done := false
+		for attempt := 0; attempt < 2 && !done; attempt++ {
+			out, findings, perr, err := typedCall(model, b, &constrained)
+			if err != nil {
+				return "", nil, err
+			}
+			if perr != nil {
+				perrs = append(perrs, perr.Error())
+				continue
+			}
+			if len(batches) == 1 {
+				return out, findings, nil
+			}
+			all = append(all, findings...)
+			_, names := criticTestList(b)
+			judged += len(names)
+			done = true
 		}
-		if perr == nil {
-			return out, findings, nil
+		if !done {
+			// One batch that will not answer is the file's review not
+			// happening: the loop reviews the whole file, and the batches
+			// already answered are not kept beside it as if they were a
+			// review of their own.
+			note := fmt.Sprintf("the typed critic's answer%s did not parse twice (%s), so the tool loop reviewed instead: ", batchLabel(i, len(batches)), strings.Join(perrs, "; "))
+			return runLoopWithNote(model, instruction, note)
 		}
-		perrs = append(perrs, perr.Error())
 	}
+	return batchSummary(judged, len(batches), len(all)), all, nil
+}
+
+// runLoopWithNote runs the loop over the whole task and prefixes its result
+// with note, keeping CriticIncompletePrefix at the front, where the driver
+// reads it, when the loop itself is cut short.
+func runLoopWithNote(model Chatter, instruction, note string) (string, []queue.Finding, error) {
 	out, findings, err := runCriticLoop(model, instruction)
 	if err != nil {
 		return "", nil, err
 	}
-	note := fmt.Sprintf("the typed critic's answer did not parse twice (%s), so the tool loop reviewed instead: ", strings.Join(perrs, "; "))
 	if rest, cut := strings.CutPrefix(out, CriticIncompletePrefix); cut {
 		return CriticIncompletePrefix + note + rest, findings, nil
 	}

@@ -1,0 +1,61 @@
+---
+// SPDX-License-Identifier: Elastic-2.0
+// The field-notes rail: the newest notes in a column on the right of the
+// front page and of every note page, so the notes are in view wherever a
+// reader is. The page around it decides where it goes on a narrow screen
+// (see .with-rail in global.css); the rail itself only lists.
+//
+// exclude leaves out the note being read. On a narrow screen only the first
+// three items show: the rail there is a pointer, not the whole list.
+import { publishedNotes, fmtDate } from '../lib/fieldNotes';
+
+interface Props { exclude?: string; limit?: number }
+const { exclude, limit = 8 } = Astro.props;
+const notes = (await publishedNotes()).filter((n) => n.id !== exclude).slice(0, limit);
+---
+<aside class="fn-rail" aria-labelledby="fn-rail-title">
+  <h2 id="fn-rail-title">Field notes</h2>
+  <ol>
+    {notes.map((n) => (
+      <li>
+        <a href={`/field-notes/${n.id}/`}>
+          <time datetime={n.data.pubDate.toISOString()}>{fmtDate(n.data.pubDate)}</time>
+          <span>{n.data.title}</span>
+        </a>
+      </li>
+    ))}
+  </ol>
+  <p class="fn-rail-all"><a href="/field-notes/">All field notes →</a></p>
+</aside>
+
+<style>
+  .fn-rail {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-left: 3px solid var(--amber);
+    border-radius: 6px;
+    padding: 18px 18px 14px;
+    align-self: start;
+  }
+  .fn-rail h2 {
+    font-size: 12px; letter-spacing: .08em; text-transform: uppercase;
+    color: var(--amber); margin: 0 0 12px;
+  }
+  .fn-rail ol { list-style: none; margin: 0; padding: 0; }
+  .fn-rail li + li { border-top: 1px solid var(--line); }
+  .fn-rail li a { display: block; padding: 10px 0; text-decoration: none; color: var(--fg); }
+  .fn-rail li a:hover span, .fn-rail li a:focus-visible span { color: var(--amber); text-decoration: underline; }
+  .fn-rail time { display: block; font-size: 12px; color: var(--muted); margin-bottom: 2px; }
+  .fn-rail span { display: block; font-size: 15px; font-weight: 600; line-height: 1.3; }
+  .fn-rail-all { margin: 10px 0 0; font-size: 14px; font-weight: 600; }
+  .fn-rail-all a { text-decoration: none; }
+
+  /* Wide screens: a sticky column below the sticky header. */
+  @media (min-width: 1180px) {
+    .fn-rail { position: sticky; top: 76px; max-height: calc(100vh - 96px); overflow-y: auto; }
+  }
+  /* Narrow screens: a pointer, three notes long. */
+  @media (max-width: 1179.98px) {
+    .fn-rail li:nth-child(n + 4) { display: none; }
+  }
+</style>

@@ -51,10 +51,7 @@ test('front page, narrow: the rail follows the hero, three notes long', async ({
   expect(r!.y).toBeGreaterThanOrEqual(hero!.y + hero!.height - 1);
   expect(r!.y + r!.height).toBeLessThanOrEqual(next!.y + 1);
   await expect(rail.locator('li:visible')).toHaveCount(3);
-  // The front page already scrolls sideways at this width (the skin <select>
-  // and two code blocks, measured before the rail existed), so this checks
-  // only that the rail adds nothing to it.
-  expect(r!.x + r!.width, 'the rail fits the screen').toBeLessThanOrEqual(NARROW.width);
+  await noSideScroll(page);
 });
 
 test('note page, wide: the rail sits beside the note and leaves the note out', async ({ page }) => {

@@ -35,7 +35,7 @@
   </defs>
 
   <text x="24" y="40" class="title">Where a verdict goes — the branch is the store, DuckDB and MotherDuck are the view</text>
-  <text x="24" y="62" class="subtitle">corral v1.0.0-rc.17 · a CI runner is destroyed when the job ends, so the record is committed to an orphan git branch · nothing is stood up, nothing is rewritten, and the view is rebuildable from the store at any time</text>
+  <text x="24" y="62" class="subtitle">corral v1.0.0-rc.18 · a CI runner is destroyed when the job ends, so the record is committed to an orphan git branch · nothing is stood up, nothing is rewritten, and the view is rebuildable from the store at any time</text>
 
   <!-- LANES -->
   <rect x="100" y="86" width="1156" height="92" rx="10" class="lane"/>

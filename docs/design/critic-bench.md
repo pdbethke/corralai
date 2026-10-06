@@ -238,10 +238,190 @@ retry. Input: loop 765,863 tokens, typed 204,258. Output: loop 9,917, typed
 23,862, because a typed answer gives a verdict for every test. One loop run
 errored, and the bench did not record why.
 
+## 6. The same planted files on local models, with the schema enforced (2026-10-06)
+
+From this run on, the typed critic sends its schema through the provider's
+constrained-output field (Ollama's `format`). Modes `typed` and `seat` only
+(`-modes typed,seat`); the loop was measured in section 5. 3 runs.
+
+### qwen3.6:35b-a3b
+
+| fixture | mode | right | missed | false | flags on unplanted tests | incomplete runs | errors | distinct answers | tests judged (fewest of runs / in file) | calls | input tokens | output tokens |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| reposcan/selection.go (planted) | typed | 8 | 1 | 0 | 1 | 0 | 0 | 3 | 2 / 20 | 3 | 26013 | 1149 |
+| reposcan/selection.go (planted) | seat | 5 | 4 | 0 | 3 | 0 | 0 | 3 | 3 / 20 | 3 | 26013 | 3063 |
+| reposcan/cachekey.go (planted) | typed | 9 | 0 | 0 | 0 | 0 | 0 | 1 | 3 / 17 | 3 | 19437 | 878 |
+| reposcan/cachekey.go (planted) | seat | 9 | 0 | 0 | 0 | 0 | 0 | 1 | 3 / 17 | 3 | 19437 | 816 |
+| attest/attest.go (planted) | typed | 9 | 0 | 0 | 0 | 0 | 0 | 1 | 3 / 12 | 3 | 15432 | 938 |
+| attest/attest.go (planted) | seat | 9 | 0 | 0 | 0 | 0 | 0 | 1 | 3 / 12 | 3 | 15432 | 901 |
+| reposcan/report.go (planted) | typed | 9 | 0 | 0 | 0 | 0 | 0 | 1 | 3 / 17 | 3 | 43536 | 921 |
+| reposcan/report.go (planted) | seat | 9 | 0 | 0 | 0 | 0 | 0 | 1 | 3 / 17 | 3 | 43536 | 954 |
+| egress/scan.go (planted) | typed | 8 | 1 | 0 | 2 | 0 | 0 | 3 | 2 / 15 | 3 | 27240 | 985 |
+| egress/scan.go (planted) | seat | 7 | 2 | 0 | 1 | 0 | 0 | 2 | 2 / 15 | 3 | 27240 | 811 |
+| models/models.go (planted) | typed | 9 | 0 | 0 | 0 | 0 | 0 | 1 | 3 / 12 | 3 | 24777 | 991 |
+| models/models.go (planted) | seat | 9 | 0 | 0 | 0 | 0 | 0 | 1 | 3 / 12 | 3 | 24777 | 1105 |
+| adequacy/jail.go (planted) | typed | 9 | 0 | 0 | 0 | 0 | 0 | 1 | 3 / 17 | 3 | 36987 | 913 |
+| adequacy/jail.go (planted) | seat | 9 | 0 | 0 | 0 | 0 | 0 | 1 | 3 / 17 | 3 | 36987 | 962 |
+| test | typed | seat |
+|---|---|---|
+| TestSelectionEvidenceEmptyDocumentFallsBack | 0 | 1 |
+| TestSelectionEvidenceEmptyOutputIsNotRan | 1 | 0 |
+| TestSelectionEvidenceEmptyOutputNamesMissingPytestCov | 3 | 2 |
+| TestSelectionEvidenceEmptyOutputWithoutDetailedContractIsStillNotRan | 0 | 1 |
+| TestSelectionEvidenceNoSelectorIsWholeSuiteDisclosed | 2 | 2 |
+| TestSelectionEvidencePathologicalDocumentFallsBack | 0 | 1 |
+| TestSourceRootsForDerivesDotForRootLevelSources | 3 | 1 |
+| test | typed | seat |
+|---|---|---|
+| TestCacheKeyIsUnambiguous | 3 | 3 |
+| TestCacheKeySeparatesSubstrates | 3 | 3 |
+| TestCacheKeyStableForIdenticalInputs | 3 | 3 |
+| test | typed | seat |
+|---|---|---|
+| TestKeyFilePerm | 3 | 3 |
+| TestLoadOrCreateKeyFromFile | 3 | 3 |
+| TestLoadOrCreateKeyPersistFailureIsLoud | 3 | 3 |
+| test | typed | seat |
+|---|---|---|
+| TestAggregateMarksPoolTestUnsoundFiles | 3 | 3 |
+| TestAggregateNeverReportsMoreAuditedThanCandidates | 3 | 3 |
+| TestAggregateScoresOverAuditedSurfaceOnly | 3 | 3 |
+| test | typed | seat |
+|---|---|---|
+| TestScanText_CatchesDashDashAdjacencyVariant | 1 | 1 |
+| TestScanText_CatchesPlusPlusContentSpoof | 3 | 3 |
+| TestScanText_IgnoresFileHeaderAndContext | 3 | 3 |
+| TestScanText_RealFileHeaderNotScannedAsContent | 1 | 0 |
+| TestScan_MissingFileSkippedNotFatal | 2 | 1 |
+| test | typed | seat |
+|---|---|---|
+| TestLoadNoRegistryIsNotAnError | 3 | 3 |
+| TestLookupUnknownAliasIsNotAnError | 3 | 3 |
+| TestStrictModeIsOffByDefaultAndReadFromTheDocument | 3 | 3 |
+| test | typed | seat |
+|---|---|---|
+| TestJailAdapterExitMapping | 3 | 3 |
+| TestJailAdapterNilBackendErrors | 3 | 3 |
+| TestShellJoinQuotesMetacharacters | 3 | 3 |
+
+### qwen2.5-coder:7b
+
+| fixture | mode | right | missed | false | flags on unplanted tests | incomplete runs | errors | distinct answers | tests judged (fewest of runs / in file) | calls | input tokens | output tokens |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| reposcan/selection.go (planted) | typed | 5 | 4 | 0 | 29 | 1 | 0 | 3 | 14 / 20 | 4 | 24618 | 5132 |
+| reposcan/selection.go (planted) | seat | 6 | 3 | 0 | 36 | 0 | 0 | 1 | 14 / 20 | 3 | 24618 | 3256 |
+| reposcan/cachekey.go (planted) | typed | 7 | 2 | 0 | 2 | 0 | 0 | 2 | 3 / 17 | 3 | 18033 | 706 |
+| reposcan/cachekey.go (planted) | seat | 7 | 2 | 0 | 2 | 0 | 0 | 2 | 3 / 17 | 3 | 18033 | 706 |
+| attest/attest.go (planted) | typed | 6 | 3 | 0 | 0 | 0 | 0 | 1 | 2 / 12 | 3 | 14574 | 454 |
+| attest/attest.go (planted) | seat | 5 | 4 | 0 | 1 | 0 | 0 | 3 | 1 / 12 | 3 | 14574 | 517 |
+| reposcan/report.go (planted) | typed | 9 | 0 | 0 | 42 | 0 | 0 | 1 | 17 / 17 | 3 | 41772 | 4075 |
+| reposcan/report.go (planted) | seat | 9 | 0 | 0 | 42 | 0 | 0 | 1 | 17 / 17 | 3 | 41772 | 4143 |
+| egress/scan.go (planted) | typed | 3 | 6 | 0 | 0 | 0 | 0 | 1 | 1 / 15 | 3 | 25653 | 253 |
+| egress/scan.go (planted) | seat | 4 | 5 | 0 | 3 | 0 | 0 | 3 | 1 / 15 | 3 | 25653 | 575 |
+| models/models.go (planted) | typed | 4 | 5 | 0 | 1 | 0 | 0 | 3 | 1 / 12 | 3 | 23325 | 470 |
+| models/models.go (planted) | seat | 6 | 3 | 0 | 0 | 0 | 0 | 1 | 2 / 12 | 3 | 23325 | 484 |
+| adequacy/jail.go (planted) | typed | 7 | 2 | 0 | 31 | 0 | 0 | 2 | 4 / 17 | 3 | 35205 | 3092 |
+| adequacy/jail.go (planted) | seat | 9 | 0 | 0 | 42 | 0 | 0 | 1 | 17 / 17 | 3 | 35205 | 4107 |
+| test | typed | seat |
+|---|---|---|
+| TestCollectSelectionEvidenceRefusesUnparseableOutput | 2 | 3 |
+| TestCollectSelectionEvidenceThreadsSourceRootsIntoInstrument | 2 | 3 |
+| TestCollectSelectionEvidenceWithNoSourcePathsFallsBackToBareCov | 2 | 3 |
+| TestSelectionEvidenceEmptyDocumentFallsBack | 1 | 0 |
+| TestSelectionEvidenceEmptyOutputIsNotRan | 1 | 0 |
+| TestSelectionEvidenceEmptyOutputNamesMissingPytestCov | 1 | 0 |
+| TestSelectionEvidenceEmptyOutputWithoutDetailedContractIsStillNotRan | 1 | 0 |
+| TestSelectionEvidenceForNarrowsFromRecordedEvidence | 2 | 3 |
+| TestSelectionEvidenceGoodDocumentIsUnchanged | 1 | 0 |
+| TestSelectionEvidenceInstrumentRefusalIsDisclosed | 2 | 3 |
+| TestSelectionEvidenceNoSelectorIsWholeSuiteDisclosed | 2 | 3 |
+| TestSelectionEvidencePathologicalDocumentFallsBack | 1 | 0 |
+| TestSelectionEvidenceRunFailureIsDisclosedPerFile | 2 | 3 |
+| TestSelectionEvidenceZeroValueIsDisclosedWholeSuite | 2 | 3 |
+| TestSourceRootsForDedupsAndSorts | 2 | 3 |
+| TestSourceRootsForDerivesDotForRootLevelSources | 2 | 3 |
+| TestSourceRootsForDerivesFlatPackage | 2 | 3 |
+| TestSourceRootsForDerivesSrcLayout | 2 | 3 |
+| TestSourceRootsForEmptyWhenNothingQualifies | 2 | 3 |
+| TestSourceRootsForIgnoresOtherLanguages | 2 | 3 |
+| test | typed | seat |
+|---|---|---|
+| TestCacheKeyIsUnambiguous | 3 | 3 |
+| TestCacheKeySeparatesSubstrates | 1 | 1 |
+| TestCacheKeyStableForIdenticalInputs | 3 | 3 |
+| TestDigestDirIsUnambiguous | 2 | 2 |
+| test | typed | seat |
+|---|---|---|
+| TestKeyFilePerm | 3 | 3 |
+| TestLoadOrCreateKeyFromFile | 3 | 1 |
+| TestLoadOrCreateKeyPersistFailureIsLoud | 0 | 1 |
+| TestLoadOrCreateKeyPersistFailureReadOnlyDir | 0 | 1 |
+| test | typed | seat |
+|---|---|---|
+| TestAggregateBooksPrepFailed | 3 | 3 |
+| TestAggregateBooksUngoaledFromExclusionsNotSubtraction | 3 | 3 |
+| TestAggregateCarriesProvenMissedThrough | 3 | 3 |
+| TestAggregateCarriesUngradableDetailThrough | 3 | 3 |
+| TestAggregateCountsCacheHits | 3 | 3 |
+| TestAggregateCountsUngoaledCandidatesInTheDenominator | 3 | 3 |
+| TestAggregateDoesNotFoldNotSelectedIntoUngradable | 3 | 3 |
+| TestAggregateExcludesTimedOutFilesFromProvenMissedRollup | 3 | 3 |
+| TestAggregateFoldsDeriveFailedIntoUngradable | 3 | 3 |
+| TestAggregateFoldsSourceTooLargeIntoUngradable | 3 | 3 |
+| TestAggregateMarksPoolTestUnsoundFiles | 3 | 3 |
+| TestAggregateMarksTestWriterFailedFiles | 3 | 3 |
+| TestAggregateMarksTimedOutFiles | 3 | 3 |
+| TestAggregateNeverReportsMoreAuditedThanCandidates | 3 | 3 |
+| TestAggregateNothingAuditedIsNotZeroScore | 3 | 3 |
+| TestAggregateRanksWeakestFirst | 3 | 3 |
+| TestAggregateScoresOverAuditedSurfaceOnly | 3 | 3 |
+| test | typed | seat |
+|---|---|---|
+| TestScanText_CatchesDashDashAdjacencyVariant | 0 | 2 |
+| TestScanText_CatchesPlusPlusContentSpoof | 3 | 3 |
+| TestScanText_IgnoresFileHeaderAndContext | 0 | 1 |
+| TestScanText_RealFileHeaderNotScannedAsContent | 0 | 1 |
+| test | typed | seat |
+|---|---|---|
+| TestLoadNoRegistryIsNotAnError | 3 | 3 |
+| TestLoadRefusesMissingEnvFile | 1 | 0 |
+| TestLookupUnknownAliasIsNotAnError | 1 | 3 |
+| test | typed | seat |
+|---|---|---|
+| TestEnvWithDepBinPaths | 2 | 3 |
+| TestEnvWithDepBinPathsIgnoresNonDepBinds | 2 | 3 |
+| TestJailAdapterBwrapWorkspaceStaysLockedDown | 2 | 3 |
+| TestJailAdapterContainerBackendCanCompilePythonInWorkspace | 2 | 3 |
+| TestJailAdapterContainerBackendCanReadOwnWorkspace | 2 | 3 |
+| TestJailAdapterExitMapping | 2 | 3 |
+| TestJailAdapterNilBackendErrors | 2 | 3 |
+| TestJailAdapterTimeoutNeverReadsAsPassed | 2 | 3 |
+| TestJailAdapterWritesFilesIntoWorkspace | 2 | 3 |
+| TestJailRefusesSymlinkedDepBind | 2 | 3 |
+| TestJailResolvesDepBindsToWorkspaceTarget | 2 | 3 |
+| TestJailWithMaxOutputSetsSandboxOption | 2 | 3 |
+| TestJailWithoutMaxOutputLeavesSandboxDefault | 2 | 3 |
+| TestShellJoinQuotesMetacharacters | 3 | 3 |
+| TestShellSplitMatchesFieldsOnSimpleCommands | 3 | 3 |
+| TestShellSplitRoundTripsShellJoin | 3 | 3 |
+| TestShellSplitUnterminatedQuoteDoesNotLoseInput | 3 | 3 |
+
+Totals over 63 planted tests per mode: 35B typed 61, seat 57, with 3 and 4
+flags on tests nobody planted; 7B typed 41, seat 46, with 105 and 126. The
+35B returned no unparseable answer; the 7B one, on the largest file. The
+seat never retried, so its difference from typed alone is variance.
+
+Under the schema the 35B listed only the tests it flagged (2 or 3 of 12 to
+20 per file), not every test, so "a verdict for every test" no longer held,
+though its flags were right. There is no unconstrained 35B run on the
+planted files, so apart from parsing this does not show what the schema
+changed in its accuracy.
+
 ## What this does not show
 
 - Two models answered the cloud runs and the local runs: gemini-3.8-flash and
-  qwen3.6:35b-a3b (plus the 7B). Other models are unmeasured.
+  qwen3.6:35b-a3b (plus the 7B). Other models are unmeasured. The schema has
+  not been measured on a cloud model.
 - Planting makes one kind of vacuous test, a test whose checks were deleted.
   Tautologies, self-comparisons and dead branches appear only in the
   hand-written fixtures.

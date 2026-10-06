@@ -1,0 +1,172 @@
+---
+title: "The price of a complete answer"
+description: "We made corral's test-critic hand its answer to a schema, and then made it judge every test by name. On a cloud model both changes were free. On a local model the first one let it quietly skip most of the tests, and the fix for that cost it accuracy. We shipped the fix anyway. Here is the measurement and the reasoning."
+pubDate: 2026-10-06
+draft: true
+---
+
+{/* SPDX-License-Identifier: Elastic-2.0 */}
+
+*Field note. A follow-up to [One question per test](/field-notes/one-question-per-test/).
+Every number below is in
+[`docs/design/critic-bench.md`](https://github.com/pdbethke/corralai/blob/main/docs/design/critic-bench.md),
+sections 6 to 8, as the bench printed it.*
+
+## Where we left it
+
+The last note ended on a gap. corral's test-critic answers one typed
+question per test (`sound`, `vacuous` or `dead_check`), but it only
+*described* that shape in its prompt and parsed strictly afterwards. Every
+parse failure we had measured was a model answering outside the shape. The
+local-model world has had the fix for a long time: Ollama has constrained
+output to a JSON schema since December 2024. corral did not use it. We said
+that was the obvious next step.
+
+We took it, and then a second step we had not planned, because the first
+one exposed something.
+
+## Step one: ask for the shape, don't just describe it
+
+Every provider corral talks to can hold an answer to a schema, each in its
+own field:
+
+| provider | field |
+|---|---|
+| Ollama | `format` |
+| OpenAI-compatible (Gemini, OpenAI, OpenRouter) | `response_format`, strict |
+| OpenAI Responses API | `text.format` |
+| Anthropic | `output_config.format` |
+
+Two details are worth recording.
+
+**Anthropic is not a forced tool call.** The old trick for getting JSON out
+of a Claude model was to force it to call a tool whose input was your
+schema. On current Claude models that is now an error: forcing a tool
+returns a 400. Structured outputs are the supported route, so that is what
+corral sends.
+
+**The schema rides where nothing can drop it.** Between a critic seat and
+the provider sits a wrapper that meters tokens and enforces the run's token
+budget, and wrappers like it accumulate. A new optional capability on a
+separate interface is dropped silently by the first wrapper that does not
+implement it. That is the
+defect this codebase has repeated more than any other: a rule at one door
+and not the next. So the schema travels inside an argument every wrapper
+already passes through untouched, and a test sends it through the same
+wrapper certify uses and checks the request each provider actually
+receives.
+
+A provider that refuses a constrained request, such as an older server or a
+model without the feature, gets one plain call instead. Nobody loses their
+critic to a missing feature.
+
+## What the schema did on a local model
+
+We ran the same bench as last time: 21 vacuous tests planted in seven of
+corral's own test files, each proven by execution, 3 runs per mode, 63
+planted tests per mode.
+
+| qwen3.6:35b-a3b, local, schema enforced | typed | seat |
+|---|---|---|
+| planted tests caught | 61 of 63 | 57 of 63 |
+| tests flagged that were not planted | 3 | 4 |
+| answers that did not parse | 0 | 0 |
+
+On the cloud model (gemini-3.8-flash) the schema changed nothing that
+mattered: 63 of 63, no false flags, every run identical. On the local 35B
+model it looked like the free critic we were hoping for: within a few
+tests of the cloud model, on a GPU on a desk, at no cost per token.
+
+The smaller local model, qwen2.5-coder:7b, is not a critic. The schema
+fixed its parsing, but it caught 41 and 46 of 63 and flagged more than a
+hundred sound tests, every test in two of the files.
+
+## What the counter caught
+
+Before this change, worried about exactly this, we had made the bench count
+how many of a file's tests each typed answer actually judged, because an
+answer that skips tests parses cleanly and reads as a complete review.
+
+Under the schema, the 35B model was judging **2 or 3 tests per file, out of
+12 to 20.** It had stopped listing the sound tests. It listed only the ones
+it flagged. Its flags were right, which is why the accuracy numbers above
+looked fine, but "a verdict for every test" no longer held, and nothing in
+the review said so. Gemini, under the same schema, kept listing every test,
+so this was the model's habit, not the schema's.
+
+That is the shape of failure this project exists to refuse: a measurement
+that is quietly incomplete and reads as whole.
+
+## Step two: hand it the list, and require every name
+
+So the critic now gets the test file's tests by name, and the schema
+requires a verdict for each one.
+
+The list has to come from the source, not from running anything, because
+the critic's task is written when the audit is planned, before any command
+runs. For Go it comes from Go's own parser and the `go test` naming rule.
+For Python a scanner emits the same node ids pytest would. The other four
+languages return no list and keep the old answer. That means "unknown",
+never "no tests".
+
+With a list, the answer is an object keyed by test name, every name
+required. A provider that honours the schema cannot skip a test. An answer
+that skips one or invents one anyway is treated as no answer: it is asked
+for again, then handed to the old loop, and the recorded result names what
+was missing. A flagged test's file and selector now come from the list, not
+from the model's memory of them.
+
+## The price
+
+| same 63 planted tests, schema enforced | caught (typed / seat) | flags on unplanted tests | tests judged |
+|---|---|---|---|
+| gemini-3.8-flash, no list | 63 / 63 | 0 / 0 | all |
+| gemini-3.8-flash, with list | 63 / 63 | 0 / 0 | all |
+| qwen3.6:35b-a3b, no list | 61 / 57 | 3 / 4 | 2 or 3 per file |
+| qwen3.6:35b-a3b, with list | 47 / 49 | 14 / 24 | all |
+
+On Gemini the list was better than free. Same accuracy, completeness now
+guaranteed by the provider, and about 38% less output, because a keyed
+answer does not repeat each test's name, file and selector.
+
+On the local model it cost real accuracy. It now judges every test on every
+run, but it caught 47 and 49 of 63 instead of 61 and 57, raised four to six
+times as many false flags, and agreed with itself less from run to run.
+Allowed to name only what it was sure of, it was selective. Made to rule on
+every test, it made more wrong calls in both directions.
+
+We have not proven why. Three runs per mode is a measurement, not an
+explanation. The likeliest reading is that a forced verdict on every test
+works against the critic's own instruction to flag only what it is certain
+of.
+
+## Why we shipped it anyway
+
+Because the alternative was a record that could lie by omission. A critic
+that silently judges three tests out of twenty, under a result that reads as
+a full review, is a measurement nobody took presented as one somebody did.
+corral's rule is that a claim is worth nothing until something executed it,
+and its records are signed. A gap like that is worse than a lower number
+that is honestly complete.
+
+The cost lands on one configuration: a mid-sized local model in the critic
+seat. The realistic default, a cloud model, got better and cheaper. And the
+critic stays advisory either way: none of this can move a verdict.
+
+## What it does not show
+
+- **Small samples.** Three runs per mode, on 21 planted tests in seven
+  files.
+- **One cloud model, two local ones.** Others are unmeasured.
+- **One kind of planted test, in Go.** Planting deletes a test's checks. The
+  Python lister is tested, not benched.
+- **Why the 35B got worse.** Measured, not explained.
+
+## What changes for you
+
+Nothing to configure. These changes are on `main` and ship in the next
+release candidate. Every verdict cached by rc.16 is re-measured once,
+because the generation that keys the cache moves from 12 to 14. If you run
+the critic on a local model, the bench above is the honest picture of what
+it can do: measure your own with
+`go run ./scripts/criticbench -model <your-model> -runs 3 -plant 3 -files <your files>`.

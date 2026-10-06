@@ -14,6 +14,7 @@ import TeamsInfra from '../components/TeamsInfra.astro';
 import Quickstart from '../components/Quickstart.astro';
 import SiteFooter from '../components/SiteFooter.astro';
 import Header from '../components/Header.astro';
+import FieldNotesRail from '../components/FieldNotesRail.astro';
 
 const title = 'Corral — the harness that refuses to build';
 const description = 'Everyone is building build harnesses. Corral is the one that refuses to build. It is an auditing engine: it judges code it did not write — by execution and by adversary — onto a record nobody can edit. Two extensions: certify plants faults and runs your own tests against them; review hands your code to a stranger who must prove every claim, and to a second who argues the other side. Every verdict is a signed entry on a branch in your repository; run as a GitHub Action, GitHub becomes the record, and any DuckDB reads it straight from the branch.';
@@ -48,7 +49,10 @@ const url = 'https://corralai.dev/';
 </head>
 <body>
   <Header active="home" />
-  <Hero />
+  <div class="with-rail">
+  <div class="rail-lead"><Hero /></div>
+  <FieldNotesRail />
+  <div class="rail-main">
   <TheVideos />
   <CiGate />
   <TheRecord />
@@ -59,6 +63,8 @@ const url = 'https://corralai.dev/';
   <KnowledgeCorpus />
   <TeamsInfra />
   <WatchItBack />
+  </div>
+  </div>
   <SiteFooter />
 </body>
 </html>

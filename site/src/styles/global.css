@@ -134,3 +134,18 @@ h1, h2, h3 { color: var(--fg); }
 .cockpit-findings .frow.hi { font-weight: 600; }
 .cockpit-findings .fsev { font-weight: 700; }
 
+
+/* Two columns: the page's own content, and the field-notes rail on the right
+   (components/FieldNotesRail.astro), from the top of the page. A page with a
+   lead block (the front page's hero) puts it in .rail-lead, first in the DOM,
+   so that below 1180px the order is lead, rail, content; a note page has no
+   lead and puts the rail after its content. */
+.with-rail { max-width: 1240px; margin: 0 auto; }
+.with-rail > .fn-rail { margin: 24px 20px 0; }
+@media (min-width: 1180px) {
+  .with-rail { display: grid; grid-template-columns: minmax(0, 1fr) 280px; column-gap: 28px; padding: 0 20px; }
+  .with-rail > .rail-lead { grid-column: 1; grid-row: 1; min-width: 0; }
+  .with-rail > .rail-main { grid-column: 1; min-width: 0; }
+  .with-rail > .rail-lead + .fn-rail + .rail-main { grid-row: 2; }
+  .with-rail > .fn-rail { grid-column: 2; grid-row: 1 / span 2; margin: 40px 0; }
+}

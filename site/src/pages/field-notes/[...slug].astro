@@ -6,6 +6,8 @@
 import '../../styles/global.css';
 import Header from '../../components/Header.astro';
 import SiteFooter from '../../components/SiteFooter.astro';
+import FieldNotesRail from '../../components/FieldNotesRail.astro';
+import { fmtDate } from '../../lib/fieldNotes';
 import { getCollection, render } from 'astro:content';
 
 export async function getStaticPaths() {
@@ -16,9 +18,8 @@ export async function getStaticPaths() {
 const { note } = Astro.props;
 const { Content } = await render(note);
 
-const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const d = note.data.pubDate;
-const dateStr = `${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
+const dateStr = fmtDate(d);
 
 const url = `https://corralai.dev/field-notes/${note.id}/`;
 const title = `${note.data.title} — Corralai field notes`;
@@ -48,7 +49,8 @@ const title = `${note.data.title} — Corralai field notes`;
 </head>
 <body>
   <Header active="notes" />
-  <main class="note-wrap">
+  <div class="with-rail">
+  <main class="note-wrap rail-main">
     <p class="note-back"><a href="/field-notes/">← Field notes</a></p>
     <article class="note">
       <header class="note-head">
@@ -60,6 +62,8 @@ const title = `${note.data.title} — Corralai field notes`;
       </div>
     </article>
   </main>
+  <FieldNotesRail exclude={note.id} />
+  </div>
   <SiteFooter />
 </body>
 </html>

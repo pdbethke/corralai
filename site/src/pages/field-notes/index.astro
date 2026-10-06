@@ -6,20 +6,14 @@
 import '../../styles/global.css';
 import Header from '../../components/Header.astro';
 import SiteFooter from '../../components/SiteFooter.astro';
-import { getCollection } from 'astro:content';
+import { publishedNotes, fmtDate } from '../../lib/fieldNotes';
 import { Image } from 'astro:assets';
 // Shep + the herd, title band cropped off (the baked-in "Corral AI" lockup lived
 // there). Optimized to webp at build time — a local asset, no external request.
 import bannerImg from '../../assets/field-notes/mind-the-herd.jpg';
 
-const notes = (await getCollection('fieldNotes', ({ data }) => !data.draft)).sort(
-  (a, b) => b.data.pubDate.getTime() - a.data.pubDate.getTime(),
-);
-
-// A stable, locale-independent date string (no Intl locale drift across the
-// build host) — "8 Jul 2026".
-const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-const fmt = (d: Date) => `${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
+const notes = await publishedNotes();
+const fmt = fmtDate;
 
 const title = 'Field notes — Corralai';
 const description = 'Notes from the corral: where we think out loud about multi-agent orchestration, model composition, and the fences that make it safe.';

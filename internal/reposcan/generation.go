@@ -98,7 +98,12 @@ package reposcan
 // produced, and on the bench the two disagree (the loop missed tests the
 // typed critic caught and flagged sound tests it did not), so it is
 // re-measured once rather than served as this generation's review.
-const VerdictGeneration = "12"
+// "13" (2026-10-06): the typed critic now asks its provider to hold the
+// answer to its schema (agentworker.ResponseFormat), so a model that used to
+// answer off-shape, and fall back to a retry or the loop, now answers in
+// shape. The Verdict's shape is unchanged; the critic count a "12" verdict
+// carries may have come from the fallback path, so it is re-measured once.
+const VerdictGeneration = "13"
 
 // VerdictShapeSHA256 fingerprints advpool.Verdict's serialized shape: every
 // exported field's name, type and json tag, sorted by name and hashed.

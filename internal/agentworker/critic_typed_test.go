@@ -156,15 +156,16 @@ func (c *errChatter) Chat([]Message, []any) (Message, error) {
 	return Message{}, errors.New("provider down")
 }
 
-// A provider error is not an unparseable answer: it is returned, not retried
-// and not handed to the loop, exactly as the loop returned one.
+// A provider error is not an unparseable answer: after the constrained call
+// it gets one plain call (a provider may not support constrained output), and
+// if that fails too it is returned, never handed to the loop.
 func TestRunRoleCriticReturnsAProviderError(t *testing.T) {
 	c := &errChatter{}
 	if _, _, err := RunRole(context.Background(), c, "test-critic", "critique tests"); err == nil {
 		t.Fatal("a provider error must be returned")
 	}
-	if c.calls != 1 {
-		t.Fatalf("a provider error is not retried; Chat was called %d times", c.calls)
+	if c.calls != 2 {
+		t.Fatalf("a provider error gets one plain call after the constrained one, and nothing more; Chat was called %d times", c.calls)
 	}
 }
 
@@ -178,5 +179,67 @@ func TestTypedJudgedTestsListsEveryJudgedTest(t *testing.T) {
 	}
 	if _, err := TypedJudgedTests("the tests look fine"); err == nil {
 		t.Fatal("an unparseable answer must be an error")
+	}
+}
+
+type toolsChatter struct {
+	reply string
+	tools [][]any
+}
+
+func (c *toolsChatter) Chat(_ []Message, tools []any) (Message, error) {
+	c.tools = append(c.tools, tools)
+	return Message{Role: "assistant", Content: c.reply}, nil
+}
+
+// The typed critic asks the provider to hold its answer to the schema: the
+// call carries exactly one ResponseFormat, whose verdict field is the closed
+// set of three, so a backend that supports constrained output cannot return
+// anything else.
+func TestTypedCriticAsksForItsSchema(t *testing.T) {
+	c := &toolsChatter{reply: `{"tests":[{"test":"TestA","verdict":"sound","reason":"ok","test_file":"a_test.go","test_selector":"TestA"}]}`}
+	if _, _, err := RunRole(context.Background(), c, "test-critic", "critique tests"); err != nil {
+		t.Fatal(err)
+	}
+	if len(c.tools) != 1 || len(c.tools[0]) != 1 {
+		t.Fatalf("want one call carrying one ResponseFormat, got %#v", c.tools)
+	}
+	rf, ok := c.tools[0][0].(ResponseFormat)
+	if !ok || rf.Name == "" {
+		t.Fatalf("the call's tools are not a named ResponseFormat: %#v", c.tools[0][0])
+	}
+	b, _ := json.Marshal(rf.Schema)
+	if !strings.Contains(string(b), `"enum":["sound","vacuous","dead_check"]`) || !strings.Contains(string(b), `"additionalProperties":false`) {
+		t.Fatalf("schema must close the verdict set and every object: %s", b)
+	}
+}
+
+// schemaErrChatter refuses any call that carries a schema, the way a model
+// or server without constrained output answers one, and serves a plain call.
+type schemaErrChatter struct{ calls, schemaCalls int }
+
+func (c *schemaErrChatter) Chat(_ []Message, tools []any) (Message, error) {
+	c.calls++
+	if len(tools) > 0 {
+		c.schemaCalls++
+		return Message{}, errors.New("400: response_format is not supported for this model")
+	}
+	return Message{Role: "assistant", Content: `{"tests":[{"test":"TestB","verdict":"vacuous","reason":"asserts nothing","test_file":"b_test.go","test_selector":"TestB"}]}`}, nil
+}
+
+// A provider that cannot constrain its output still gets a typed review: the
+// constrained call's error is answered with one plain call, not with a dead
+// critic.
+func TestTypedCriticWithoutConstrainedOutputStillReviews(t *testing.T) {
+	c := &schemaErrChatter{}
+	out, findings, err := RunRole(context.Background(), c, "test-critic", "critique tests")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.schemaCalls != 1 || c.calls != 2 {
+		t.Fatalf("want one constrained call then one plain call, got %d calls (%d constrained)", c.calls, c.schemaCalls)
+	}
+	if len(findings) != 1 || strings.HasPrefix(out, CriticIncompletePrefix) {
+		t.Fatalf("the plain call's answer is the review: %q %+v", out, findings)
 	}
 }

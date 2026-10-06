@@ -14,6 +14,9 @@ type fixture struct {
 	// vacuous tests still pass and every other test fails
 	// (TestFixtureAnswerKeysAreExecuted).
 	broken string
+	// unkeyed marks a real file (realFixture) with no answer key: nothing in
+	// it is scored right or missed.
+	unkeyed bool
 }
 
 var fixtures = []fixture{

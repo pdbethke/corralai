@@ -56,6 +56,7 @@ type result struct {
 	calls               int64
 	in, out             int64
 	incomplete          bool
+	unkeyed             bool
 	err                 string
 }
 
@@ -92,13 +93,18 @@ func grade(f fixture, findings []queue.Finding) (flagged []string, right, missed
 		}
 		seen[hit] = true
 		flagged = append(flagged, hit)
+		if f.unkeyed {
+			continue
+		}
 		if truth[hit] {
 			right++
 		} else {
 			fals++
 		}
 	}
-	missed = len(f.vacuous) - right
+	if !f.unkeyed {
+		missed = len(f.vacuous) - right
+	}
 	sort.Strings(flagged)
 	return flagged, right, missed, fals
 }
@@ -108,10 +114,23 @@ func main() {
 	url := flag.String("url", envOr("OLLAMA_URL", "http://127.0.0.1:11434"), "ollama base URL")
 	runs := flag.Int("runs", 5, "runs per fixture per mode")
 	out := flag.String("out", "", "write the markdown report here as well as to stdout")
+	files := flag.String("files", "", "comma-separated real Go source files to bench INSTEAD of the keyed fixtures; each needs its _test.go beside it, and has no answer key")
 	flag.Parse()
 	if *model == "" || *runs < 1 {
 		fmt.Fprintln(os.Stderr, "criticbench: -model is required and -runs must be at least 1")
 		os.Exit(2)
+	}
+	bench := fixtures
+	if *files != "" {
+		bench = nil
+		for _, p := range strings.Split(*files, ",") {
+			f, err := realFixture(strings.TrimSpace(p))
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "criticbench:", err)
+				os.Exit(2)
+			}
+			bench = append(bench, f)
+		}
 	}
 	backend := agentbackend.NewOllamaBackend(*url, *model)
 	if agentbackend.VendorOf(*model) != "" {
@@ -123,7 +142,7 @@ func main() {
 		backend = b
 	}
 	var results []result
-	for _, f := range fixtures {
+	for _, f := range bench {
 		instr := advpool.CriticInstruction(advpool.RunSpec{
 			Goal: f.goal, CodePath: f.codePath, Code: f.code, DevTestPath: f.testPath, DevTestCode: f.tests,
 		})
@@ -132,7 +151,7 @@ func main() {
 				meter := &agentbackend.UsageMeter{}
 				summary, findings, err := m.run(agentbackend.AsChatterMetered(backend, meter), instr)
 				in, o, calls := meter.Totals()
-				r := result{fixture: f.name, mode: m.name, calls: calls, in: in, out: o,
+				r := result{fixture: f.name, mode: m.name, unkeyed: f.unkeyed, calls: calls, in: in, out: o,
 					incomplete: strings.HasPrefix(summary, agentworker.CriticIncompletePrefix)}
 				if err != nil {
 					r.err = err.Error()
@@ -190,12 +209,23 @@ func render(model string, runs int, results []result) string {
 		}
 		sets[k][strings.Join(r.flagged, ",")] = true
 	}
+	unkeyed := map[string]bool{}
+	for _, r := range results {
+		if r.unkeyed {
+			unkeyed[r.fixture] = true
+		}
+	}
 	for _, k := range order {
 		a := agg[k]
-		fmt.Fprintf(&b, "| %s | %s | %d | %d | %d | %d | %d | %d | %d | %d | %d |\n",
-			k.f, k.m, a.right, a.missed, a.fals, inc[k], errs[k], len(sets[k]), a.calls, a.in, a.out)
+		right, missed := fmt.Sprint(a.right), fmt.Sprint(a.missed)
+		if unkeyed[k.f] {
+			right, missed = "no key", "no key"
+		}
+		fmt.Fprintf(&b, "| %s | %s | %s | %s | %d | %d | %d | %d | %d | %d | %d |\n",
+			k.f, k.m, right, missed, a.fals, inc[k], errs[k], len(sets[k]), a.calls, a.in, a.out)
 	}
-	b.WriteString("\nright/missed/false are summed over the runs, against an answer key checked by execution (TestFixtureAnswerKeysAreExecuted).\n")
+	b.WriteString("\nright/missed/false are summed over the runs, against an answer key checked by execution (TestFixtureAnswerKeysAreExecuted). A real file has no key: only a flag naming a test that is not in the file counts as false there.\n")
+	writeAgreement(&b, results, runs)
 	return b.String()
 }
 
@@ -204,4 +234,60 @@ func envOr(k, def string) string {
 		return v
 	}
 	return def
+}
+
+// writeAgreement lists, for each real (unkeyed) file, every test any mode
+// flagged and how many of its runs flagged it. With no key this is what a
+// person adjudicates: where the modes agree, where one stands alone.
+func writeAgreement(b *strings.Builder, results []result, runs int) {
+	type key struct{ f, test string }
+	count := map[key]map[string]int{}
+	var files, modeNames []string
+	seenFile, seenMode := map[string]bool{}, map[string]bool{}
+	for _, r := range results {
+		if !r.unkeyed {
+			continue
+		}
+		if !seenFile[r.fixture] {
+			seenFile[r.fixture] = true
+			files = append(files, r.fixture)
+		}
+		if !seenMode[r.mode] {
+			seenMode[r.mode] = true
+			modeNames = append(modeNames, r.mode)
+		}
+		for _, t := range r.flagged {
+			k := key{r.fixture, t}
+			if count[k] == nil {
+				count[k] = map[string]int{}
+			}
+			count[k][r.mode]++
+		}
+	}
+	if len(files) == 0 {
+		return
+	}
+	fmt.Fprintf(b, "\n## Flagged tests on real files (runs out of %d that flagged each)\n", runs)
+	for _, f := range files {
+		var tests []string
+		for k := range count {
+			if k.f == f {
+				tests = append(tests, k.test)
+			}
+		}
+		sort.Strings(tests)
+		fmt.Fprintf(b, "\n### %s\n\n", f)
+		if len(tests) == 0 {
+			b.WriteString("No mode flagged any test.\n")
+			continue
+		}
+		fmt.Fprintf(b, "| test | %s |\n|---|%s\n", strings.Join(modeNames, " | "), strings.Repeat("---|", len(modeNames)))
+		for _, t := range tests {
+			cells := make([]string, len(modeNames))
+			for i, m := range modeNames {
+				cells[i] = fmt.Sprint(count[key{f, t}][m])
+			}
+			fmt.Fprintf(b, "| %s | %s |\n", t, strings.Join(cells, " | "))
+		}
+	}
 }

@@ -11,23 +11,25 @@ history of any release, `git log v0.3.4..v0.3.5`.
 
 ## [Unreleased]
 
+## [v1.0.0-rc.16] — 2026-10-06
+
+- **One-time cache miss.** `reposcan.VerdictGeneration` moves from 10 (rc.15)
+  to 12: the verdict gained `CriticIncomplete`, and the critic that produces
+  a verdict's critic count changed (both below). Every verdict cached before
+  this release is re-measured once.
 - **The test-critic judges every test in one typed call.** It used to work
   through a tool-calling loop, filing one finding per call and re-sending the
   code and tests on every step. It now returns a verdict for every test
   (`sound`, `vacuous` or `dead_check`, with a reason) in one JSON answer. An
   answer that does not parse is asked for once more; if the second does not
   parse either, the old loop runs, and the critic's recorded result says so.
-  On a local bench (`scripts/criticbench`, qwen3.6:35b-a3b, 20 tests whose
-  answer keys were checked by execution, 5 runs each) the typed critic caught
-  45 of 45 planted vacuous tests to the loop's 40, flagged no sound test to the
-  loop's 2, and used 5.5 times less input. On gemini-3.8-flash it caught 45
-  of 45 to the loop's 27, with no false alarm from either, on 4 times less
-  input, and never needed the retry. That is a small bench of 20 tests, not a
-  real suite. The critic stays advisory; no status changes.
-- **One-time cache miss.** `reposcan.VerdictGeneration` moves from 11 to 12,
-  because a cached verdict's critic count came from the loop. Verdicts cached
-  before this release are re-measured once.
-
+  Measured with `scripts/criticbench` against answer keys checked by
+  execution: on 21 vacuous tests planted in 7 of corral's own test files
+  (gemini-3.8-flash, 3 runs each, 63 per mode) the new critic caught 63 and
+  the loop 36, neither flagged a test that was not planted, and the new one
+  used 3.7 times less input. On small hand-written fixtures it caught 45 of
+  45 on gemini-3.8-flash and on a local qwen3.6:35b-a3b, to the loop's 27 and
+  40. The critic stays advisory; no status changes.
 - **The test-critic's findings are no longer silently capped, and a review
   cut short says so.** The critic's loop read one tool call per reply and
   stopped after six replies, so a suite with more vacuous tests than that
@@ -38,10 +40,6 @@ history of any release, `git log v0.3.4..v0.3.5`.
   in the `--repo` ledger row and the warehouse, beside the findings count it
   qualifies. The CLI prints the critic line as INCOMPLETE, never as "no
   vacuous tests flagged". The critic stays advisory; no status changes.
-- **One-time cache miss.** `reposcan.VerdictGeneration` moves from 10 to 11,
-  because the verdict gained `CriticIncomplete`. Verdicts cached before this
-  release are re-measured once.
-
 - **A repo scan records what goal derivation spent.** The goal-deriver was
   the one seat in `certify --repo` whose token usage corral read past and
   dropped, so a scan's cost left out one call per candidate file, including
@@ -51,6 +49,11 @@ history of any release, `git log v0.3.4..v0.3.5`.
   about: in the signed ledger entry, in the warehouse with `--push`, and on
   the end-of-scan `cost:` line. A goal-cache hit makes no call and adds no
   row; a call that failed reported nothing and is not recorded as zero.
+- **corral's own ledger can be verified by anyone.** The public key that
+  signs the entries on the `corral/ledger` branch is published as
+  `LEDGER_PUBKEY` at the repository root (the same key is anchored in Sigstore
+  Rekor), so `corral verify --ledger <dir> --pub $(cat LEDGER_PUBKEY)` checks
+  every signature without trusting us for the key.
 
 ## [v1.0.0-rc.15] — 2026-10-04
 

@@ -109,13 +109,15 @@ const CriticIncompletePrefix = "\x00critic-incomplete\x00"
 // mutants/tests itself (the brain-side Validator does; parsing here would
 // duplicate and risk diverging from that logic).
 //
-// For test-critic this replicates runCriticLoop's tool-calling findings
-// loop, with one necessary translation: cmd/corral-agent's loop reports
-// findings by calling out to a live brain over MCP (which assigns them a
-// mission/task scope and a database id); RunRole has no brain to call, so it
-// files them directly as queue.Finding values (MissionID/TaskID left at 0 —
-// queue.Finding documents 0 as "standalone") and returns them to the caller
-// instead of sending them anywhere.
+// For test-critic this is runCritic: the typed critic (one call, every
+// test's verdict in a fixed JSON shape), asked once more if its answer does
+// not parse, and runCriticLoop's tool-calling findings loop only if that
+// fails too. The loop keeps one necessary translation from cmd/corral-agent's:
+// that one reports findings by calling out to a live brain over MCP (which
+// assigns them a mission/task scope and a database id); RunRole has no brain
+// to call, so both paths file them directly as queue.Finding values
+// (MissionID/TaskID left at 0 — queue.Finding documents 0 as "standalone")
+// and return them to the caller instead of sending them anywhere.
 func RunRole(ctx context.Context, model Chatter, role, instruction string) (result string, findings []queue.Finding, err error) {
 	return RunRoleWithSystem(ctx, model, role, "", instruction)
 }
@@ -132,8 +134,8 @@ func RunRole(ctx context.Context, model Chatter, role, instruction string) (resu
 // Folded into the user message — which is what joinPrompt used to do — the
 // request carries no system field at all and there is nothing to mark.
 //
-// Only the structured fast path reads the system half today. The critic's own
-// loop supplies its own system prompt (see runCriticLoop), so a system half on
+// Only the structured fast path reads the system half today. The critic
+// supplies its own system prompt (see runCritic), so a system half on
 // a critic task would be a second, competing one; it is ignored rather than
 // concatenated, and no caller sets one.
 func RunRoleWithSystem(ctx context.Context, model Chatter, role, system, instruction string) (result string, findings []queue.Finding, err error) {
@@ -153,7 +155,7 @@ func RunRoleWithSystem(ctx context.Context, model Chatter, role, system, instruc
 		return m.Content, nil, nil
 	}
 	if isPoolCriticRole(role) {
-		summary, findings, err := runCriticLoop(model, instruction)
+		summary, findings, err := runCritic(model, instruction)
 		if err != nil {
 			return "", nil, err
 		}

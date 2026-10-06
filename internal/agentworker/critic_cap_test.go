@@ -3,7 +3,6 @@
 package agentworker
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -52,9 +51,9 @@ func TestCriticFindingsAreNeverSilentlyCapped(t *testing.T) {
 		{"ten, one per reply: the cap bites, and says so", 10, 1, false, true},
 	} {
 		fake := &findingsChatter{vacuous: tc.vacuous, perCall: tc.perCall}
-		out, findings, err := RunRole(context.Background(), fake, "test-critic", "critique tests:\n<the test source>")
+		out, findings, err := runCriticLoop(fake, "critique tests:\n<the test source>")
 		if err != nil {
-			t.Fatalf("%s: RunRole: %v", tc.name, err)
+			t.Fatalf("%s: runCriticLoop: %v", tc.name, err)
 		}
 		if tc.wantAll && len(findings) != tc.vacuous {
 			t.Errorf("%s: %d of %d findings came back", tc.name, len(findings), tc.vacuous)

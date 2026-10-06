@@ -90,7 +90,15 @@ package reposcan
 // cached "10" document unmarshals the field as false, which would present a
 // possibly-truncated count as complete, and shape and generation change
 // together in any case.
-const VerdictGeneration = "11"
+// "12" (2026-10-05): the critic seat changed from a tool loop to a typed
+// single-call review (agentworker.runCritic), retried once on an answer that
+// does not parse and falling back to the loop after that. The Verdict's shape
+// is unchanged, so the fingerprint below cannot force this; it is the
+// behaviour half. A cached "11" verdict carries a critic count the loop
+// produced, and on the bench the two disagree (the loop missed tests the
+// typed critic caught and flagged sound tests it did not), so it is
+// re-measured once rather than served as this generation's review.
+const VerdictGeneration = "12"
 
 // VerdictShapeSHA256 fingerprints advpool.Verdict's serialized shape: every
 // exported field's name, type and json tag, sorted by name and hashed.

@@ -11,6 +11,12 @@ history of any release, `git log v0.3.4..v0.3.5`.
 
 ## [Unreleased]
 
+## [v1.0.0-rc.18] — 2026-10-06
+
+rc.17 plus one fix, for a regression rc.17 introduced on large test files.
+
+- **One-time cache miss.** `reposcan.VerdictGeneration` moves from 14 (rc.17)
+  to 15. Every verdict cached before this release is re-measured once.
 - **A test file with more than 20 tests no longer sends the critic to the
   loop.** rc.17's test list put every test's name in one answer schema, and
   providers cap how large such a schema may be: Claude Haiku refused 40 names
@@ -22,7 +28,6 @@ history of any release, `git log v0.3.4..v0.3.5`.
   retry; on the same file it judged all 90 tests in 5 calls, on Claude Haiku
   and on Gemini. A batch that still will not answer sends the whole file to
   the loop, as before.
-- **One-time cache miss.** `reposcan.VerdictGeneration` moves from 14 to 15.
 
 ## [v1.0.0-rc.17] — 2026-10-06
 

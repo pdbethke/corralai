@@ -199,6 +199,9 @@ func (tsPlugin) ListTestsCmd(string) ([]string, bool) { return nil, false }
 
 func (tsPlugin) ParseTestList(string) []string { return nil }
 
+// TestNamesInSource: no static lister for this language yet; nil is "unknown".
+func (tsPlugin) TestNamesInSource(string, string) []string { return nil }
+
 // WorkspaceRunEnv is a no-op. TestCmd uses Node's native `--experimental-
 // strip-types`, an in-memory transform with no persistent on-disk cache
 // keyed off source metadata — so THIS plugin's own scoring path has no

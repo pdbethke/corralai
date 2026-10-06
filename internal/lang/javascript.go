@@ -199,6 +199,9 @@ func (jsPlugin) ListTestsCmd(string) ([]string, bool) { return nil, false }
 
 func (jsPlugin) ParseTestList(string) []string { return nil }
 
+// TestNamesInSource: no static lister for this language yet; nil is "unknown".
+func (jsPlugin) TestNamesInSource(string, string) []string { return nil }
+
 // WorkspaceRunEnv is a no-op. TestCmd runs Node's builtin test runner
 // directly against source (no separate persistent compile-cache step), so
 // there is no analog of python.go's __pycache__ hole in THIS plugin's own

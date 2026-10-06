@@ -243,3 +243,72 @@ func TestTypedCriticWithoutConstrainedOutputStillReviews(t *testing.T) {
 		t.Fatalf("the plain call's answer is the review: %q %+v", out, findings)
 	}
 }
+
+// The block the driver writes into the critic's task is the block the critic
+// reads back: one helper writes it and one parses it.
+func TestCriticTestListRoundTrips(t *testing.T) {
+	instr := "critique tests\n\n" + CriticTestListBlock("p/p_test.go", []string{"TestA", "TestB"}) + "\nmore text"
+	file, names := criticTestList(instr)
+	if file != "p/p_test.go" || strings.Join(names, ",") != "TestA,TestB" {
+		t.Fatalf("got %q %v", file, names)
+	}
+	if CriticTestListBlock("p", nil) != "" {
+		t.Fatal("no names, no block")
+	}
+	if f, n := criticTestList("critique tests"); f != "" || n != nil {
+		t.Fatalf("no block reads as no list, got %q %v", f, n)
+	}
+}
+
+// Handed a list, the critic asks for an answer keyed by test name with every
+// name required, so a provider that honours the schema cannot skip a test;
+// each finding names its test by the listed selector and file.
+func TestTypedCriticWithAListRequiresEveryTest(t *testing.T) {
+	instr := "critique tests\n\n" + CriticTestListBlock("p/p_test.go", []string{"TestA", "TestB"})
+	c := &toolsChatter{reply: `{"tests":{"TestA":{"verdict":"sound","reason":"checks the sum"},"TestB":{"verdict":"vacuous","reason":"asserts nothing"}}}`}
+	out, findings, err := RunRole(context.Background(), c, "test-critic", instr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rf := c.tools[0][0].(ResponseFormat)
+	b, _ := json.Marshal(rf.Schema)
+	if !strings.Contains(string(b), `"required":["TestA","TestB"]`) {
+		t.Fatalf("every listed test must be required by the schema: %s", b)
+	}
+	if strings.HasPrefix(out, CriticIncompletePrefix) || len(findings) != 1 {
+		t.Fatalf("a complete keyed answer is the review: %q %+v", out, findings)
+	}
+	if f := findings[0]; f.Target != "TestB" || f.TestSelector != "TestB" || f.TestFile != "p/p_test.go" || f.Scope != "whole-test" {
+		t.Fatalf("finding = %+v", f)
+	}
+}
+
+// A keyed answer that skips a listed test, or names one that is not listed,
+// is not a review: it is retried, then handed to the loop, and the recorded
+// result names what was missing.
+func TestTypedCriticWithAListRejectsAnIncompleteAnswer(t *testing.T) {
+	instr := "critique tests\n\n" + CriticTestListBlock("p/p_test.go", []string{"TestA", "TestB"})
+	fake := &fakeChatter{scripted: []Message{
+		{Role: "assistant", Content: `{"tests":{"TestA":{"verdict":"vacuous","reason":"x"}}}`},
+		{Role: "assistant", Content: `{"tests":{"TestA":{"verdict":"sound","reason":"x"},"TestB":{"verdict":"sound","reason":"x"},"TestGhost":{"verdict":"vacuous","reason":"x"}}}`},
+		{Role: "assistant", Content: "no vacuous tests"},
+	}}
+	out, findings, err := RunRole(context.Background(), fake, "test-critic", instr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "tool loop") || !strings.Contains(out, "TestB") || !strings.Contains(out, "TestGhost") {
+		t.Fatalf("the result must say the loop reviewed and why: %q", out)
+	}
+	if len(findings) != 0 {
+		t.Fatalf("the skipping answer's finding must not survive: %+v", findings)
+	}
+}
+
+// The bench reads a keyed answer's judged tests too.
+func TestTypedJudgedTestsReadsAKeyedAnswer(t *testing.T) {
+	got, err := TypedJudgedTests(`{"tests":{"TestB":{"verdict":"sound","reason":"x"},"TestA":{"verdict":"vacuous","reason":"y"}}}`)
+	if err != nil || strings.Join(got, ",") != "TestA,TestB" {
+		t.Fatalf("got %v, %v", got, err)
+	}
+}

@@ -20,9 +20,18 @@ history of any release, `git log v0.3.4..v0.3.5`.
   refuses a constrained request (an older server, a model without the
   feature) gets one plain call instead, so no seat loses its critic. The
   critic stays advisory; no status changes.
-- **One-time cache miss.** `reposcan.VerdictGeneration` moves from 12 to 13,
-  because a cached verdict's critic count may have come from the fallback
-  path this change mostly retires.
+- **The test-critic must judge every test, by name (Go and Python).** The
+  critic's task now lists the tests the file declares, read from source
+  (Go with its own parser, Python with a scanner that emits pytest node ids),
+  and the answer schema requires one verdict per listed name. Under a
+  provider that honours the schema the critic cannot skip a test; an answer
+  that skips one, or names one that is not in the file, is retried and then
+  handed to the loop, and the recorded result names what was missing. A
+  flagged test's selector and file now come from the list, not from the
+  model. Other languages keep the unkeyed answer.
+- **One-time cache miss.** `reposcan.VerdictGeneration` moves from 12 to 14
+  across these two changes, because a cached verdict's critic count may have
+  come from a critic that answered off-shape or skipped tests.
 
 ## [v1.0.0-rc.16] — 2026-10-06
 

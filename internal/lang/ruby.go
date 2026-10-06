@@ -162,6 +162,9 @@ func (rubyPlugin) ListTestsCmd(string) ([]string, bool) { return nil, false }
 
 func (rubyPlugin) ParseTestList(string) []string { return nil }
 
+// TestNamesInSource: no static lister for this language yet; nil is "unknown".
+func (rubyPlugin) TestNamesInSource(string, string) []string { return nil }
+
 // WorkspaceRunEnv is a no-op: MRI has no persistent, mtime/size-keyed
 // bytecode cache next to a .rb source file by default (unlike CPython's
 // __pycache__) — nothing here is exposed to the workspace substrate's

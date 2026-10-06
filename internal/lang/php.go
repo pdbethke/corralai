@@ -338,6 +338,9 @@ func (phpPlugin) ListTestsCmd(string) ([]string, bool) { return nil, false }
 
 func (phpPlugin) ParseTestList(string) []string { return nil }
 
+// TestNamesInSource: no static lister for this language yet; nil is "unknown".
+func (phpPlugin) TestNamesInSource(string, string) []string { return nil }
+
 // WorkspaceRunEnv is a no-op: PHP's opcache is not, by default, a
 // persistent bytecode cache keyed off a source file's (mtime, size) sitting
 // next to that source the way CPython's __pycache__ is — the class of hole

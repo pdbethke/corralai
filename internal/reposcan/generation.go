@@ -103,7 +103,13 @@ package reposcan
 // answer off-shape, and fall back to a retry or the loop, now answers in
 // shape. The Verdict's shape is unchanged; the critic count a "12" verdict
 // carries may have come from the fallback path, so it is re-measured once.
-const VerdictGeneration = "13"
+// "14" (2026-10-06): for Go and Python the critic is now handed the test
+// file's tests by name (lang.Plugin.TestNamesInSource) and must judge every
+// one: the schema requires each name, and an answer that skips or invents
+// one is retried, then handed to the loop. A local model that listed only
+// the tests it flagged under "13" now cannot. Shape unchanged; behaviour
+// bump.
+const VerdictGeneration = "14"
 
 // VerdictShapeSHA256 fingerprints advpool.Verdict's serialized shape: every
 // exported field's name, type and json tag, sorted by name and hashed.

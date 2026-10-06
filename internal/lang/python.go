@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -995,6 +996,54 @@ func normalizePyRepoRoot(modulePath string) string {
 		return "/"
 	}
 	return clean
+}
+
+var (
+	pyTopTest   = regexp.MustCompile(`^(?:async\s+)?def\s+(test\w*)\s*\(`)
+	pyTestClass = regexp.MustCompile(`^class\s+(Test\w*)\s*[(:]`)
+	pyMethod    = regexp.MustCompile(`^(\s+)(?:async\s+)?def\s+(test\w*)\s*\(`)
+)
+
+// TestNamesInSource scans the file line by line for what pytest collects by
+// default: top-level test_* functions, and test_* methods directly inside a
+// top-level Test* class, as path::name and path::Class::name node ids. It is
+// a scanner, not a parser: a function nested inside a test, or a method of a
+// class not named Test*, is not listed, and parametrized cases are listed
+// once under their function's id, which pytest accepts as a selector for
+// all of them.
+func (pyPlugin) TestNamesInSource(testPath, src string) []string {
+	var out []string
+	class, classIndent := "", ""
+	for _, line := range strings.Split(src, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		if line[0] != ' ' && line[0] != '\t' {
+			// Any top-level statement ends the class before it.
+			class, classIndent = "", ""
+			if m := pyTestClass.FindStringSubmatch(line); m != nil {
+				class = m[1]
+			} else if m := pyTopTest.FindStringSubmatch(line); m != nil {
+				out = append(out, testPath+"::"+m[1])
+			}
+			continue
+		}
+		if class == "" {
+			continue
+		}
+		indent := line[:len(line)-len(strings.TrimLeft(line, " \t"))]
+		if classIndent == "" {
+			classIndent = indent
+		}
+		if indent != classIndent {
+			continue
+		}
+		if m := pyMethod.FindStringSubmatch(line); m != nil {
+			out = append(out, testPath+"::"+class+"::"+m[2])
+		}
+	}
+	return out
 }
 
 func (pyPlugin) ParseTestList(output string) []string {

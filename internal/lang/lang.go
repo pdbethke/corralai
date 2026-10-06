@@ -132,6 +132,13 @@ type Plugin interface {
 	// ParseTestList extracts SingleTestCmd-compatible selectors from the output
 	// of ListTestsCmd, in emission order. Pure.
 	ParseTestList(output string) []string
+	// TestNamesInSource lists the tests a test file declares, read from its
+	// source without running anything, as SingleTestCmd-compatible selectors
+	// in file order (the same form ParseTestList yields). It exists for the
+	// test-critic, whose task is written before any command runs: handed the
+	// list, the critic must judge every named test. nil means this language
+	// cannot list statically, never that the file has no tests. Pure.
+	TestNamesInSource(testPath, src string) []string
 	// WorkspaceRunEnv returns extra "VAR=value" environment assignments to
 	// apply to ONE scoring run (a single baseline, canary, mutant, or
 	// authored-test invocation) on the WORKSPACE substrate — where the

@@ -39,7 +39,7 @@ func TestRunRole_MutantGenerator_ReturnsRawText(t *testing.T) {
 
 	result, findings, err := RunRole(context.Background(), fake, "mutant-generator", "generate mutants for foo.go")
 	if err != nil {
-		t.Fatalf("RunRole: %v", err)
+		t.Fatalf("runCriticLoop: %v", err)
 	}
 	if result != canned {
 		t.Errorf("result = %q, want raw canned text %q", result, canned)
@@ -68,7 +68,7 @@ func TestRunRole_MutantGeneratorShadow_ReturnsRawText(t *testing.T) {
 
 	result, findings, err := RunRole(context.Background(), fake, "mutant-generator-shadow", "generate mutants for foo.go (challenger seat)")
 	if err != nil {
-		t.Fatalf("RunRole: %v", err)
+		t.Fatalf("runCriticLoop: %v", err)
 	}
 	if result != canned {
 		t.Errorf("result = %q, want raw canned text %q", result, canned)
@@ -87,7 +87,7 @@ func TestRunRole_TestWriter_ReturnsRawText(t *testing.T) {
 
 	result, findings, err := RunRole(context.Background(), fake, "test-writer", "write a killing test for the surviving mutants")
 	if err != nil {
-		t.Fatalf("RunRole: %v", err)
+		t.Fatalf("runCriticLoop: %v", err)
 	}
 	if result != canned {
 		t.Errorf("result = %q, want raw canned text %q", result, canned)
@@ -116,9 +116,9 @@ func TestRunRole_TestCritic_ReturnsParsedFindings(t *testing.T) {
 		{Role: "assistant", Content: "reviewed the dev tests; filed 1 finding"},
 	}}
 
-	result, findings, err := RunRole(context.Background(), fake, "test-critic", "dev tests:\n<the test source>")
+	result, findings, err := runCriticLoop(fake, "dev tests:\n<the test source>")
 	if err != nil {
-		t.Fatalf("RunRole: %v", err)
+		t.Fatalf("runCriticLoop: %v", err)
 	}
 	if result != "reviewed the dev tests; filed 1 finding" {
 		t.Errorf("result = %q", result)
@@ -155,9 +155,9 @@ func TestRunRole_TestCritic_ReturnsParsedScope(t *testing.T) {
 		{Role: "assistant", Content: "reviewed the dev tests; filed 1 finding"},
 	}}
 
-	_, findings, err := RunRole(context.Background(), fake, "test-critic", "dev tests:\n<the test source>")
+	_, findings, err := runCriticLoop(fake, "dev tests:\n<the test source>")
 	if err != nil {
-		t.Fatalf("RunRole: %v", err)
+		t.Fatalf("runCriticLoop: %v", err)
 	}
 	if len(findings) != 1 {
 		t.Fatalf("findings = %v, want exactly 1", findings)
@@ -173,9 +173,9 @@ func TestRunRole_TestCritic_NoFindings_WhenTestsAreSound(t *testing.T) {
 		{Role: "assistant", Content: "the tests are sound; no findings"},
 	}}
 
-	result, findings, err := RunRole(context.Background(), fake, "test-critic", "dev tests:\n<solid tests>")
+	result, findings, err := runCriticLoop(fake, "dev tests:\n<solid tests>")
 	if err != nil {
-		t.Fatalf("RunRole: %v", err)
+		t.Fatalf("runCriticLoop: %v", err)
 	}
 	if result != "the tests are sound; no findings" {
 		t.Errorf("result = %q", result)
@@ -258,9 +258,9 @@ func (b *alwaysThoughtChatter) Chat(messages []Message, tools []any) (Message, e
 func TestCriticLoopBoundsReportThought(t *testing.T) {
 	fake := &alwaysThoughtChatter{}
 
-	_, _, err := RunRole(context.Background(), fake, "test-critic", "critique tests:\n<the test source>")
+	_, _, err := runCriticLoop(fake, "critique tests:\n<the test source>")
 	if err != nil {
-		t.Fatalf("RunRole: %v", err)
+		t.Fatalf("runCriticLoop: %v", err)
 	}
 
 	if fake.calls > critFreeformSteps {

@@ -29,18 +29,21 @@ func TestIsPoolCriticRole(t *testing.T) {
 	}
 }
 
+// contentBackend answers every call with the same content and no tool call.
+type contentBackend struct{ content string }
+
+func (b *contentBackend) Chat(messages []omsg, tools []any) (omsg, error) {
+	return omsg{Role: "assistant", Content: b.content}, nil
+}
+
 // TestRunTaskCriticForwardsFindingsToBrain verifies the wiring this call site
-// now owns: agentworker.RunRole runs the critic loop and hands back findings
+// now owns: agentworker.RunRole runs the critic and hands back findings
 // in-process (it has no brain to call), so runTask itself must forward each
 // one to the brain via report_finding — otherwise the pool driver's verdict
-// would never see what the critic found.
+// would never see what the critic found. The critic answers typed here; the
+// loop fallback files findings the same way, and agentworker tests both.
 func TestRunTaskCriticForwardsFindingsToBrain(t *testing.T) {
-	backend := &scriptedBackend{calls: []otoolcal{
-		toolCall("report_finding", map[string]any{
-			"type": "bug", "severity": "high", "target": "TestFoo",
-			"evidence": "asserts nothing", "suggested_action": "assert on the result",
-		}),
-	}}
+	backend := &contentBackend{content: `{"tests":[{"test":"TestFoo","verdict":"vacuous","reason":"asserts nothing"},{"test":"TestBar","verdict":"sound","reason":"checks the sum"}]}`}
 	var reported []map[string]any
 	brain := func(tool string, args map[string]any) string {
 		if tool == "report_finding" {
@@ -64,7 +67,7 @@ func TestRunTaskCriticForwardsFindingsToBrain(t *testing.T) {
 	if f["mission_id"] != int64(42) || f["task_id"] != int64(7) {
 		t.Errorf("report_finding must be scoped to the claimed mission/task; got %+v", f)
 	}
-	if f["type"] != "bug" || f["severity"] != "high" || f["target"] != "TestFoo" {
+	if f["type"] != "vacuous_test" || f["target"] != "TestFoo" || f["evidence"] != "asserts nothing" {
 		t.Errorf("report_finding must carry the critic's finding fields verbatim; got %+v", f)
 	}
 }

@@ -1,0 +1,238 @@
+---
+title: "One question per test"
+description: "corral's test-critic used to hold a conversation: read the tests, file findings one tool call at a time, stop when done. In v1.0.0-rc.16 it answers one typed question per test instead: a framing TypeSafe's Jev made loud, on a pattern the local-model community has used for a long time. On vacuous tests planted in seven of our own test files it caught 63 of 63 to the loop's 36, on about a quarter of the input. Here is the decision model, where it came from, how we measured it, and what the measurement does not show."
+pubDate: 2026-10-06
+draft: false
+---
+
+{/* SPDX-License-Identifier: Elastic-2.0 */}
+
+*Field note. Released in v1.0.0-rc.16. Every number below is in
+[`docs/design/critic-bench.md`](https://github.com/pdbethke/corralai/blob/main/docs/design/critic-bench.md),
+as the bench printed it.*
+
+## What the critic is for
+
+When corral audits a file, one of its seats is a test-critic. A model reads
+the code and the developer's own tests and says which tests can never fail:
+a test that calls the code and checks nothing, compares a value with itself,
+or asserts inside a branch that never runs. Its opinion is advisory. It
+cannot move a verdict, and where execution can check a finding (a test the
+critic calls vacuous that kills a planted bug is plainly not), execution
+overrules it.
+
+Advisory is not the same as unimportant. In a codebase where an agent wrote
+a thousand green tests in an afternoon, the tests that cannot fail are the
+ones worth knowing about.
+
+## How it used to work: a conversation
+
+Until this release the critic ran as a small agent. It got the code and the
+tests, two tools (`report_finding` and `report_thought`), and up to six
+turns. Each vacuous test it noticed became one tool call. When it had
+nothing more to say, it wrote a one-line summary and stopped.
+
+That shape has costs that are easy to miss:
+
+- **Every turn re-sends everything.** The code and the tests go back to the
+  model on each of up to six turns, so a long review pays for the same input
+  several times.
+- **The model decides when it is done.** A critic that files three findings
+  and concludes has reviewed "the file", as far as the record can tell,
+  whether or not it looked at the other seventeen tests.
+- **A cap can hide.** While mapping this, we found the loop read only one
+  tool call per reply and stopped after six replies, so a file with ten
+  vacuous tests reported at most six, under a canned summary that read as a
+  complete review. That was fixed separately (#368), and a review cut short
+  is now marked `critic_incomplete` wherever its count appears.
+
+## The idea we borrowed: a decision, not a generation
+
+In September, TypeSafe released Jev, which they describe as the first of "a
+new class of frontier models built to make fast, structured decisions that
+software can use directly." The model is "unstructured state in, typed
+probabilistic decisions out": the "possible outputs and structure are
+defined in advance," and the model picks among them instead of writing text.
+(TypeSafe, ["Introducing System One models and
+Jev"](https://typesafe.ai/blog/introducing-system-one-models-and-jev),
+Diogo Almeida, 2026-09-15.)
+
+We did not adopt Jev. corral has no default models and stays
+model-agnostic, so whatever we changed had to work with any model an
+operator names. What we took was the framing. It made us ask, of every model
+call corral makes, whether the call is really **generation** (the answer is
+new text that only the model can write) or really a **decision** (the answer
+is one of a few options known in advance, dressed up as prose).
+
+We went through every call on the `certify` and `review` paths. Most of them
+are genuinely generation:
+
+- the **mutant generator** writes code edits that violate the goal;
+- the **test writer** writes a test that kills a surviving mutant, and that
+  test, executed, is the proof;
+- the **reviewer** writes claims and the scripts that reproduce them.
+
+None of those can be a menu. The **critic** was the clearest exception. Its
+real output was always a label per test, sound or vacuous, with a scope. The
+tool calls, the turns and the summary were packaging around a decision.
+
+## None of this is new, and that is fine
+
+Jev made the framing loud, but the local-model community had been doing the
+mechanics for a long time. Ollama added schema-constrained output in
+December 2024: "Ollama now supports structured outputs making it possible to
+constrain a model's output to a specific format defined by a JSON schema"
+(Ollama, ["Structured outputs"](https://ollama.com/blog/structured-outputs),
+2024-12-06). Within days of Jev's launch, r/LocalLLaMA had threads titled
+["I literally built the Jev architecture one year back and completely
+open-sourced
+it"](https://www.reddit.com/r/LocalLLaMA/comments/1wijo3e/i_literally_built_the_jev_architecture_one_year/)
+(2026-09-17) and ["Jev isn't new tech. Its marketing targets people who
+think AI started with
+LLMs."](https://www.reddit.com/r/LocalLLaMA/comments/1woe70t/jev_isnt_new_tech_its_marketing_targets_people/)
+(2026-09-23), the second arguing that probabilities over a fixed set of
+choices is ordinary classifier behavior. Others posted Jev-style setups on
+local Qwen models.
+
+We are not taking a side on what is new in Jev. For us the point is simpler:
+asking a model to choose from answers you defined in advance is a
+well-trodden pattern, and a tool that claims to be model-agnostic should use
+the version of it that works with any model. That is what we did, and only
+partly. Our critic asks for the shape in its prompt and then parses the
+answer strictly. It does **not** yet use Ollama's schema-constrained output,
+or any provider's equivalent, to make an off-schema answer impossible in the
+first place. Every parse failure in the measurements below was an answer that did not
+fit the shape, so that is the obvious next step.
+
+## The new decision model
+
+The critic now asks the model one question per test, all in a single call,
+and fixes the answer's shape in advance:
+
+```json
+{"tests": [
+  {"test": "TestWithdrawTautology", "verdict": "vacuous",
+   "reason": "compares the balance with itself",
+   "test_file": "wallet/wallet_test.go", "test_selector": "TestWithdrawTautology"}
+]}
+```
+
+Each `verdict` must be one of three values:
+
+- `sound`: the test can fail;
+- `vacuous`: the whole test can never fail;
+- `dead_check`: one check inside it can never fail, while the test still
+  asserts something real.
+
+The rest of the rules are about what happens when the answer is wrong-shaped,
+because the model is still a general-purpose model, not a decision model,
+and it can answer in prose:
+
+- **The parse is strict.** Every entry must name a test and use one of the
+  three verdicts. Anything else is not a review.
+- **An answer that does not parse is asked for once more.** On a 7B local
+  model the typed answer failed to parse 2 times in 5 on one fixture, and a
+  second ask costs far less than the loop.
+- **If the second answer does not parse either, the old loop runs**, and the
+  critic's recorded result says the loop produced the review. If that loop
+  is cut short too, the review is marked incomplete. It is never recorded as
+  clean.
+- **A provider error is not an answer.** It is returned as it always was,
+  not retried and not handed to the loop.
+
+What Jev offers that we did not get: calibrated probabilities on each
+answer, and a model that cannot produce text outside the schema. Our critic
+can still name a test that does not exist. The bench counts that as a false
+alarm, and in these runs it did not happen.
+
+## How we measured it
+
+A critic is hard to grade on real code, because nobody knows the right
+answer. So the bench, `scripts/criticbench`, grades only against answers
+that execution has checked.
+
+**Hand-written fixtures.** Three small Go files with 20 tests between them,
+9 of them deliberately vacuous. A test confirms the key: against the real
+code every test passes, and against broken code exactly the vacuous ones
+still pass.
+
+| fixtures, 5 runs per mode | loop | typed |
+|---|---|---|
+| gemini-3.8-flash: vacuous tests caught | 27 of 45 | 45 of 45 |
+| qwen3.6:35b-a3b (local): vacuous tests caught | 40 of 45 | 45 of 45 |
+| qwen3.6:35b-a3b: sound tests flagged | 2 | 0 |
+
+**Our own files, as they stand.** Five corral source files and their tests,
+11 to 24 tests each. No mode flagged anything. That run told us the typed
+call works on full-size files, and nothing about accuracy, because there was
+nothing to find.
+
+**Our own files, with vacuous tests planted.** So we made something to find.
+The bench takes a real test file and makes three of its tests vacuous by
+deleting every line through which they can fail. A test that hands `t` to a
+helper is left alone, since deleting its own checks would not make it
+vacuous. Each planted test is then proven: re-read to confirm no failure
+call is left, and compiled and run, without touching the file on disk, to
+confirm it passes.
+
+| 7 corral files, 3 planted each, 3 runs, gemini-3.8-flash | loop | typed alone | seat (what certify runs) |
+|---|---|---|---|
+| planted tests caught | 36 of 63 | 60 of 63 | 63 of 63 |
+| tests flagged that were not planted | 0 | 0 | 0 |
+| input tokens | 765,863 | 204,258 | 204,258 |
+| output tokens | 9,917 | 23,862 | 25,765 |
+
+The typed critic gave a verdict for every test in every file, on every run.
+
+## What we got wrong on the way
+
+Four corrections, kept here because each one would have flattered the
+result:
+
+- **The first result measured the wrong thing.** On the 7B local model,
+  typed caught 40 of 45 and the loop 3. That model barely calls tools: it
+  answered in prose and filed nothing. The gap measured tool calling, not
+  the design, which is why the tool-capable 35B and a cloud model were run
+  next.
+- **The bench nearly graded the new critic twice.** Its "loop" column called
+  the same entry point certify uses. Once that entry point became the typed
+  critic, the "loop" column would have been the typed critic under another
+  name. A test written for that case failed, and the loop is now benched
+  directly.
+- **The first planting gave itself away.** It rebuilt each edited test from
+  a syntax tree, which reformatted the code around every planted spot. A
+  reader, or a model, could find the planted tests by their odd line breaks.
+  Planting now deletes lines and touches nothing else, and a test holds it
+  to that.
+- **The seat's lead over typed alone is not the retry.** The seat never
+  retried in that run. 63 against 60 is run-to-run variation.
+
+## What it does not show
+
+- **Two models.** The cloud runs used gemini-3.8-flash and the local runs
+  qwen3.6:35b-a3b. Other models are unmeasured.
+- **One kind of planted test.** Planting makes tests whose checks were
+  deleted. Tautologies, self-comparisons and dead branches appear only in
+  the small hand-written fixtures.
+- **No price.** The typed critic spends about a quarter of the loop's input
+  and about 2.4 times its output, because it writes a verdict for every
+  test. Which way that nets out in money depends on the provider's prices,
+  and we have not priced it.
+- **Still advisory.** None of this lets the critic move a verdict.
+
+## What changes for you
+
+Upgrade to v1.0.0-rc.16. If you run `certify`, the critic seat is now the
+typed critic; nothing to configure. Every verdict cached before rc.16 is
+re-measured once, because the generation that keys the cache moved from 10
+to 12.
+
+To measure it on your own model:
+
+```sh
+go run ./scripts/criticbench -model <your-model> -runs 5
+```
+
+The same question, decision or generation, is worth asking of the review
+verifier, whose real output is mostly a label per finding. That one we have
+mapped, not changed.

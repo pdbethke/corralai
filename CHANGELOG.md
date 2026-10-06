@@ -28,7 +28,12 @@ history of any release, `git log v0.3.4..v0.3.5`.
   that skips one, or names one that is not in the file, is retried and then
   handed to the loop, and the recorded result names what was missing. A
   flagged test's selector and file now come from the list, not from the
-  model. Other languages keep the unkeyed answer.
+  model. Other languages keep the unkeyed answer. Measured on vacuous tests
+  planted in seven of corral's own files (`docs/design/critic-bench.md` §8):
+  gemini-3.8-flash still caught 63 of 63 with no false flags, on about 38%
+  less output; a local qwen3.6:35b-a3b now judges every test but caught 47
+  to 49 of 63, against 57 to 61 when it could list only what it flagged, and
+  raised more false flags.
 - **One-time cache miss.** `reposcan.VerdictGeneration` moves from 12 to 14
   across these two changes, because a cached verdict's critic count may have
   come from a critic that answered off-shape or skipped tests.

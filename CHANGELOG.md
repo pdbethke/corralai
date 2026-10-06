@@ -11,6 +11,19 @@ history of any release, `git log v0.3.4..v0.3.5`.
 
 ## [Unreleased]
 
+- **A test file with more than 20 tests no longer sends the critic to the
+  loop.** rc.17's test list put every test's name in one answer schema, and
+  providers cap how large such a schema may be: Claude Haiku refused 40 names
+  ("compiled grammar is too large") and Gemini refused 90. On a real file
+  (flask's `tests/test_basic.py`, about 90 tests) the critic's schema was
+  refused, its unconstrained answer missed names, and it fell back to the
+  tool loop: 9 calls and about 295k input tokens. The critic now judges such
+  a file in batches of at most 20 named tests, each with its own schema and
+  retry; on the same file it judged all 90 tests in 5 calls, on Claude Haiku
+  and on Gemini. A batch that still will not answer sends the whole file to
+  the loop, as before.
+- **One-time cache miss.** `reposcan.VerdictGeneration` moves from 14 to 15.
+
 ## [v1.0.0-rc.17] — 2026-10-06
 
 - **One-time cache miss.** `reposcan.VerdictGeneration` moves from 12 (rc.16)

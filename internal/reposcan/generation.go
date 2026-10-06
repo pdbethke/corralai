@@ -109,7 +109,12 @@ package reposcan
 // one is retried, then handed to the loop. A local model that listed only
 // the tests it flagged under "13" now cannot. Shape unchanged; behaviour
 // bump.
-const VerdictGeneration = "14"
+// "15" (2026-10-06): a test file with more than 20 tests is now judged in
+// batches of at most 20 names per call. Under "14" one keyed schema carried
+// every name, which both providers refuse past their grammar limits, so on a
+// large file the critic fell to the loop; its count came from a different
+// path than a "15" critic's. Shape unchanged; behaviour bump.
+const VerdictGeneration = "15"
 
 // VerdictShapeSHA256 fingerprints advpool.Verdict's serialized shape: every
 // exported field's name, type and json tag, sorted by name and hashed.

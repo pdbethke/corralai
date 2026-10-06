@@ -417,11 +417,77 @@ though its flags were right. There is no unconstrained 35B run on the
 planted files, so apart from parsing this does not show what the schema
 changed in its accuracy.
 
+## 7. The same planted files on gemini-3.8-flash, with the schema enforced (2026-10-06)
+
+Gemini's OpenAI-compatible endpoint takes the schema as `response_format`
+with `strict: true`. Modes `typed` and `seat`, 3 runs.
+
+| fixture | mode | right | missed | false | flags on unplanted tests | incomplete runs | errors | distinct answers | tests judged (fewest of runs / in file) | calls | input tokens | output tokens |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| reposcan/selection.go (planted) | typed | 9 | 0 | 0 | 0 | 0 | 0 | 1 | 20 / 20 | 3 | 27879 | 4898 |
+| reposcan/selection.go (planted) | seat | 9 | 0 | 0 | 0 | 0 | 0 | 1 | 20 / 20 | 3 | 27879 | 5115 |
+| reposcan/cachekey.go (planted) | typed | 9 | 0 | 0 | 0 | 0 | 0 | 1 | 17 / 17 | 3 | 20829 | 3617 |
+| reposcan/cachekey.go (planted) | seat | 9 | 0 | 0 | 0 | 0 | 0 | 1 | 17 / 17 | 3 | 20829 | 3193 |
+| attest/attest.go (planted) | typed | 9 | 0 | 0 | 0 | 0 | 0 | 1 | 12 / 12 | 3 | 16299 | 2523 |
+| attest/attest.go (planted) | seat | 9 | 0 | 0 | 0 | 0 | 0 | 1 | 12 / 12 | 3 | 16299 | 2802 |
+| reposcan/report.go (planted) | typed | 9 | 0 | 0 | 0 | 0 | 0 | 1 | 17 / 17 | 3 | 44667 | 3382 |
+| reposcan/report.go (planted) | seat | 9 | 0 | 0 | 0 | 0 | 0 | 1 | 17 / 17 | 3 | 44667 | 3394 |
+| egress/scan.go (planted) | typed | 9 | 0 | 0 | 0 | 0 | 0 | 1 | 15 / 15 | 3 | 28770 | 3828 |
+| egress/scan.go (planted) | seat | 9 | 0 | 0 | 0 | 0 | 0 | 1 | 15 / 15 | 3 | 28770 | 4232 |
+| models/models.go (planted) | typed | 9 | 0 | 0 | 0 | 0 | 0 | 1 | 12 / 12 | 3 | 26304 | 2225 |
+| models/models.go (planted) | seat | 9 | 0 | 0 | 0 | 0 | 0 | 1 | 12 / 12 | 3 | 26304 | 2811 |
+| adequacy/jail.go (planted) | typed | 9 | 0 | 0 | 0 | 0 | 0 | 1 | 17 / 17 | 3 | 39510 | 4255 |
+| adequacy/jail.go (planted) | seat | 9 | 0 | 0 | 0 | 0 | 0 | 1 | 17 / 17 | 3 | 39510 | 4769 |
+| test | typed | seat |
+|---|---|---|
+| TestSelectionEvidenceEmptyOutputNamesMissingPytestCov | 3 | 3 |
+| TestSelectionEvidenceNoSelectorIsWholeSuiteDisclosed | 3 | 3 |
+| TestSourceRootsForDerivesDotForRootLevelSources | 3 | 3 |
+| test | typed | seat |
+|---|---|---|
+| TestCacheKeyIsUnambiguous | 3 | 3 |
+| TestCacheKeySeparatesSubstrates | 3 | 3 |
+| TestCacheKeyStableForIdenticalInputs | 3 | 3 |
+| test | typed | seat |
+|---|---|---|
+| TestKeyFilePerm | 3 | 3 |
+| TestLoadOrCreateKeyFromFile | 3 | 3 |
+| TestLoadOrCreateKeyPersistFailureIsLoud | 3 | 3 |
+| test | typed | seat |
+|---|---|---|
+| TestAggregateMarksPoolTestUnsoundFiles | 3 | 3 |
+| TestAggregateNeverReportsMoreAuditedThanCandidates | 3 | 3 |
+| TestAggregateScoresOverAuditedSurfaceOnly | 3 | 3 |
+| test | typed | seat |
+|---|---|---|
+| TestScanText_CatchesPlusPlusContentSpoof | 3 | 3 |
+| TestScanText_IgnoresFileHeaderAndContext | 3 | 3 |
+| TestScan_MissingFileSkippedNotFatal | 3 | 3 |
+| test | typed | seat |
+|---|---|---|
+| TestLoadNoRegistryIsNotAnError | 3 | 3 |
+| TestLookupUnknownAliasIsNotAnError | 3 | 3 |
+| TestStrictModeIsOffByDefaultAndReadFromTheDocument | 3 | 3 |
+| test | typed | seat |
+|---|---|---|
+| TestJailAdapterExitMapping | 3 | 3 |
+| TestJailAdapterNilBackendErrors | 3 | 3 |
+| TestShellJoinQuotesMetacharacters | 3 | 3 |
+
+Both modes caught all 63 planted tests, flagged no other test, gave the same
+answer on every run, and judged every test in every file: unlike the 35B in
+section 6, Gemini kept listing the sound tests under the schema. Compared
+with section 5 (the same files, no schema), the typed call alone went from
+60 to 63; section 5 already put a 3-test gap between typed and seat down to
+run-to-run variance, so this is not evidence the schema improved accuracy.
+Input was identical (204,258 tokens per mode); output was 24,728 (typed) and
+26,316 (seat).
+
 ## What this does not show
 
 - Two models answered the cloud runs and the local runs: gemini-3.8-flash and
   qwen3.6:35b-a3b (plus the 7B). Other models are unmeasured. The schema has
-  not been measured on a cloud model.
+  been measured on one cloud model, gemini-3.8-flash.
 - Planting makes one kind of vacuous test, a test whose checks were deleted.
   Tautologies, self-comparisons and dead branches appear only in the
   hand-written fixtures.

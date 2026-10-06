@@ -1,14 +1,20 @@
 // SPDX-License-Identifier: Elastic-2.0
 
-// criticbench compares the test-critic's two modes on suites with KNOWN
-// answers: the production tool loop (agentworker.RunRole) and the typed
-// single call (agentworker.RunCriticTyped). Each mode judges each fixture
+// criticbench compares the test-critic's modes on suites with KNOWN answers:
+// the tool loop (agentworker.RunCriticLoop), the typed single call
+// (agentworker.RunCriticTyped), and the seat certify runs (agentworker.RunRole:
+// typed, retried once, the loop as fallback). Each mode judges each fixture
 // -runs times through a metered model; findings are graded against the
 // fixture's answer key, which TestFixtureAnswerKeysAreExecuted checks by
 // running the tests. Internal tooling: it lives in scripts/, not cmd/, so no
 // user-facing CLI page is generated for it.
 //
 //	go run ./scripts/criticbench -model qwen2.5-coder:7b -runs 5 -out report.md
+//	go run ./scripts/criticbench -model gemini-3.8-flash -runs 5 -out report.md
+//
+// A model name agentbackend.VendorOf recognises goes to that cloud vendor
+// (and spends money, against that vendor's key); anything else is served by
+// the local ollama daemon.
 package main
 
 import (
@@ -31,11 +37,15 @@ type mode struct {
 	run  func(agentworker.Chatter, string) (string, []queue.Finding, error)
 }
 
+// modes: the tool loop alone, the typed call alone (one attempt, so its raw
+// parse rate shows), and the seat certify runs (typed, retried once, the loop
+// as fallback).
 var modes = []mode{
-	{"loop", func(c agentworker.Chatter, in string) (string, []queue.Finding, error) {
+	{"loop", agentworker.RunCriticLoop},
+	{"typed", agentworker.RunCriticTyped},
+	{"seat", func(c agentworker.Chatter, in string) (string, []queue.Finding, error) {
 		return agentworker.RunRole(context.Background(), c, advpool.RoleTestCritic, in)
 	}},
-	{"typed", agentworker.RunCriticTyped},
 }
 
 // result is one critic run on one fixture.
@@ -94,7 +104,7 @@ func grade(f fixture, findings []queue.Finding) (flagged []string, right, missed
 }
 
 func main() {
-	model := flag.String("model", "", "the critic model (required), served by the local ollama daemon")
+	model := flag.String("model", "", "the critic model (required): a cloud model name goes to its vendor, anything else to the local ollama daemon")
 	url := flag.String("url", envOr("OLLAMA_URL", "http://127.0.0.1:11434"), "ollama base URL")
 	runs := flag.Int("runs", 5, "runs per fixture per mode")
 	out := flag.String("out", "", "write the markdown report here as well as to stdout")
@@ -104,6 +114,14 @@ func main() {
 		os.Exit(2)
 	}
 	backend := agentbackend.NewOllamaBackend(*url, *model)
+	if agentbackend.VendorOf(*model) != "" {
+		b, err := agentbackend.ForModel(*model)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "criticbench:", err)
+			os.Exit(2)
+		}
+		backend = b
+	}
 	var results []result
 	for _, f := range fixtures {
 		instr := advpool.CriticInstruction(advpool.RunSpec{

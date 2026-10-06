@@ -22,8 +22,9 @@ import (
 // per tool call; this sends them once. On the bench (2026-10-05,
 // qwen3.6:35b-a3b, 5 runs per fixture) it caught 45 of 45 planted vacuous
 // tests to the loop's 40, raised no false alarm to the loop's 2, and used
-// 5.5x less input. That is a local model on 20 tests, not a cloud seat on a
-// real suite.
+// 5.5x less input. On gemini-3.8-flash the same day it caught 45 of 45 to the
+// loop's 27, with no false alarm from either, on 4x less input. That is 20
+// tests, not a real suite.
 //
 // An answer that does not parse into the shape is a review that did not
 // happen: it returns CriticIncompletePrefix and no findings, never a clean
@@ -72,6 +73,13 @@ func runCritic(model Chatter, instruction string) (string, []queue.Finding, erro
 		return CriticIncompletePrefix + note + rest, findings, nil
 	}
 	return note + out, findings, nil
+}
+
+// RunCriticLoop runs the tool loop alone, with no typed call before it. The
+// critic seat reaches the loop only as a fallback; scripts/criticbench needs
+// it on its own to grade it against the typed critic.
+func RunCriticLoop(model Chatter, instruction string) (string, []queue.Finding, error) {
+	return runCriticLoop(model, instruction)
 }
 
 // criticTypedOnce makes the one typed call. err is the provider's; perr says

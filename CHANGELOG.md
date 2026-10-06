@@ -20,9 +20,10 @@ history of any release, `git log v0.3.4..v0.3.5`.
   On a local bench (`scripts/criticbench`, qwen3.6:35b-a3b, 20 tests whose
   answer keys were checked by execution, 5 runs each) the typed critic caught
   45 of 45 planted vacuous tests to the loop's 40, flagged no sound test to the
-  loop's 2, and used 5.5 times less input. That is one local model on a small
-  bench; it has not yet been measured on a cloud seat or a real suite. The
-  critic stays advisory; no status changes.
+  loop's 2, and used 5.5 times less input. On gemini-3.8-flash it caught 45
+  of 45 to the loop's 27, with no false alarm from either, on 4 times less
+  input, and never needed the retry. That is a small bench of 20 tests, not a
+  real suite. The critic stays advisory; no status changes.
 - **One-time cache miss.** `reposcan.VerdictGeneration` moves from 11 to 12,
   because a cached verdict's critic count came from the loop. Verdicts cached
   before this release are re-measured once.

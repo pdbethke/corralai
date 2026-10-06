@@ -5,6 +5,7 @@ package agentworker
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -48,6 +49,79 @@ var criticFormat = ResponseFormat{Name: "critic_verdicts", Schema: map[string]an
 	}},
 }}
 
+// criticListHeader opens the block that hands the critic the tests it must
+// judge. CriticTestListBlock writes it and criticTestList reads it back, so
+// the driver and the worker cannot disagree about its shape.
+const criticListHeader = "TESTS TO JUDGE, each exactly once, keyed by this exact name, in file "
+
+// CriticTestListBlock is the block the driver appends to the critic's task
+// when the test file's language can list its tests statically
+// (lang.Plugin.TestNamesInSource). With it, the typed critic asks for an
+// answer keyed by test name with every name required, so a provider that
+// honours the schema cannot skip a test, and an answer that does skip one, or
+// names one that is not there, does not parse. No names, no block: the
+// critic then answers in the unkeyed shape, as before.
+func CriticTestListBlock(testFile string, names []string) string {
+	if len(names) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString(criticListHeader + testFile + ":\n")
+	for _, n := range names {
+		b.WriteString("- " + n + "\n")
+	}
+	return b.String()
+}
+
+// criticTestList reads the block CriticTestListBlock wrote, or "", nil when
+// the instruction has none.
+func criticTestList(instruction string) (string, []string) {
+	i := strings.Index(instruction, criticListHeader)
+	if i < 0 {
+		return "", nil
+	}
+	rest := instruction[i+len(criticListHeader):]
+	nl := strings.IndexByte(rest, '\n')
+	if nl < 0 {
+		return "", nil
+	}
+	file := strings.TrimSuffix(rest[:nl], ":")
+	var names []string
+	for _, line := range strings.Split(rest[nl+1:], "\n") {
+		n, ok := strings.CutPrefix(line, "- ")
+		if !ok {
+			break
+		}
+		names = append(names, n)
+	}
+	return file, names
+}
+
+// keyedFormat is the answer schema when the tests are known: an object with
+// one required property per listed test, so skipping a test is outside the
+// schema rather than a judgement the model may quietly make.
+func keyedFormat(names []string) ResponseFormat {
+	verdict := map[string]any{
+		"type": "object", "additionalProperties": false, "required": []any{"verdict", "reason"},
+		"properties": map[string]any{
+			"verdict": map[string]any{"type": "string", "enum": []any{"sound", "vacuous", "dead_check"}},
+			"reason":  map[string]any{"type": "string"},
+		},
+	}
+	props := map[string]any{}
+	req := make([]any, len(names))
+	for i, n := range names {
+		props[n] = verdict
+		req[i] = n
+	}
+	return ResponseFormat{Name: "critic_verdicts_by_test", Schema: map[string]any{
+		"type": "object", "additionalProperties": false, "required": []any{"tests"},
+		"properties": map[string]any{"tests": map[string]any{
+			"type": "object", "additionalProperties": false, "required": req, "properties": props,
+		}},
+	}}
+}
+
 // RunCriticTyped is the critic as ONE typed decision instead of a tool loop:
 // the same instruction the loop gets, answered with every test's verdict in a
 // fixed shape, in a single call. It is the pool's critic seat (see runCritic,
@@ -86,13 +160,13 @@ func RunCriticTyped(model Chatter, instruction string) (string, []queue.Finding,
 // *constrained is cleared so a retry does not ask again.
 func typedCall(model Chatter, instruction string, constrained *bool) (string, []queue.Finding, error, error) {
 	if *constrained {
-		out, findings, perr, err := criticTypedOnce(model, instruction, []any{criticFormat})
+		out, findings, perr, err := criticTypedOnce(model, instruction, true)
 		if err == nil {
 			return out, findings, perr, nil
 		}
 		*constrained = false
 	}
-	return criticTypedOnce(model, instruction, nil)
+	return criticTypedOnce(model, instruction, false)
 }
 
 // runCritic is the pool's critic seat: the typed critic, asked once more if
@@ -141,15 +215,31 @@ func RunCriticLoop(model Chatter, instruction string) (string, []queue.Finding, 
 }
 
 // criticTypedOnce makes the one typed call. err is the provider's; perr says
-// the answer arrived and did not parse.
-func criticTypedOnce(model Chatter, instruction string, tools []any) (out string, findings []queue.Finding, perr, err error) {
+// the answer arrived and did not parse, or skipped or invented a listed test.
+// constrained asks the provider to hold the answer to its schema: keyed by
+// test name when the instruction carries a test list, the unkeyed array
+// otherwise.
+func criticTypedOnce(model Chatter, instruction string, constrained bool) (out string, findings []queue.Finding, perr, err error) {
+	testFile, names := criticTestList(instruction)
+	shape := `{"tests":[{"test":"<test name>","verdict":"sound|vacuous|dead_check","reason":"<one sentence>","test_file":"<repo-relative path>","test_selector":"<runnable selector for that one test>"}]}`
+	every := "List every test exactly once."
+	format := criticFormat
+	if len(names) > 0 {
+		shape = `{"tests":{"<listed test name>":{"verdict":"sound|vacuous|dead_check","reason":"<one sentence>"}}}`
+		every = "Give one entry for EVERY test in the TESTS TO JUDGE list, keyed by its exact name, and no other key."
+		format = keyedFormat(names)
+	}
 	sys := `You are a TEST CRITIC in an adversarial audit. Judge EVERY test in the developer's test file below, then answer with ONLY this JSON and nothing else:
 
-{"tests":[{"test":"<test name>","verdict":"sound|vacuous|dead_check","reason":"<one sentence>","test_file":"<repo-relative path>","test_selector":"<runnable selector for that one test>"}]}
+` + shape + `
 
-verdict is "vacuous" when the WHOLE test can never fail, "dead_check" when one check inside it can never fail while the test still asserts something real, and "sound" otherwise. List every test exactly once.
+verdict is "vacuous" when the WHOLE test can never fail, "dead_check" when one check inside it can never fail while the test still asserts something real, and "sound" otherwise. ` + every + `
 
 Task: ` + instruction
+	var tools []any
+	if constrained {
+		tools = []any{format}
+	}
 	m, err := model.Chat([]Message{
 		{Role: "system", Content: sys},
 		{Role: "user", Content: "Judge every test now. Reply with the JSON only."},
@@ -157,7 +247,7 @@ Task: ` + instruction
 	if err != nil {
 		return "", nil, nil, err
 	}
-	verdicts, perr := parseTypedVerdicts(m.Content)
+	verdicts, perr := parseTypedVerdicts(m.Content, names)
 	if perr != nil {
 		return "", nil, perr, nil
 	}
@@ -171,12 +261,18 @@ Task: ` + instruction
 		default:
 			continue
 		}
-		findings = append(findings, queue.Finding{
+		f := queue.Finding{
 			Type: "vacuous_test", Severity: "medium",
 			Target: v.Test, Evidence: v.Reason, Scope: scope,
 			TestFile: v.TestFile, TestSelector: v.TestSelector,
 			Status: queue.FindingOpen, CreatedTS: float64(time.Now().Unix()),
-		})
+		}
+		if len(names) > 0 {
+			// The listed name IS the runnable selector, and the file is the
+			// one the list came from: neither is left to the model.
+			f.TestSelector, f.TestFile = v.Test, testFile
+		}
+		findings = append(findings, f)
 	}
 	return fmt.Sprintf("typed critic judged %d test(s), %d flagged", len(verdicts), len(findings)), findings, nil, nil
 }
@@ -186,7 +282,7 @@ Task: ` + instruction
 // which compares the count with the tests actually in the file: an answer
 // that judges only some of them parses cleanly and reads as a complete review.
 func TypedJudgedTests(content string) ([]string, error) {
-	verdicts, err := parseTypedVerdicts(content)
+	verdicts, err := parseTypedVerdicts(content, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -205,11 +301,14 @@ type typedVerdict struct {
 	TestSelector string `json:"test_selector"`
 }
 
-// parseTypedVerdicts reads the typed answer strictly: a JSON object with a
-// non-empty tests list, every entry naming a test and one of the three
-// verdicts. Anything else is an error, because a half-understood answer
-// recorded as a review would be a measurement nobody took.
-func parseTypedVerdicts(content string) ([]typedVerdict, error) {
+// parseTypedVerdicts reads the typed answer strictly: a JSON object whose
+// tests are either the unkeyed array or an object keyed by test name, every
+// entry naming a test and one of the three verdicts. When want lists the
+// tests, the answer must be keyed and hold exactly those names: one skipped
+// or invented is an error naming it. Anything else is an error, because a
+// half-understood answer recorded as a review would be a measurement nobody
+// took.
+func parseTypedVerdicts(content string, want []string) ([]typedVerdict, error) {
 	raw := strings.TrimSpace(content)
 	if mt := fence.FindStringSubmatch(raw); mt != nil {
 		raw = mt[1]
@@ -221,15 +320,66 @@ func parseTypedVerdicts(content string) ([]typedVerdict, error) {
 		}
 	}
 	var doc struct {
-		Tests []typedVerdict `json:"tests"`
+		Tests json.RawMessage `json:"tests"`
 	}
 	if err := json.Unmarshal([]byte(raw), &doc); err != nil {
 		return nil, fmt.Errorf("not the expected JSON: %w", err)
 	}
-	if len(doc.Tests) == 0 {
+	var verdicts []typedVerdict
+	keyed := false
+	switch t := strings.TrimSpace(string(doc.Tests)); {
+	case strings.HasPrefix(t, "["):
+		if err := json.Unmarshal(doc.Tests, &verdicts); err != nil {
+			return nil, fmt.Errorf("not the expected JSON: %w", err)
+		}
+	case strings.HasPrefix(t, "{"):
+		keyed = true
+		var byName map[string]typedVerdict
+		if err := json.Unmarshal(doc.Tests, &byName); err != nil {
+			return nil, fmt.Errorf("not the expected JSON: %w", err)
+		}
+		order := want
+		if len(order) == 0 {
+			for n := range byName {
+				order = append(order, n)
+			}
+			sort.Strings(order)
+		}
+		for _, n := range order {
+			if v, ok := byName[n]; ok {
+				v.Test = n
+				verdicts = append(verdicts, v)
+			}
+		}
+		if len(want) > 0 {
+			listed := map[string]bool{}
+			var missing, extra []string
+			for _, n := range want {
+				listed[n] = true
+				if _, ok := byName[n]; !ok {
+					missing = append(missing, n)
+				}
+			}
+			for n := range byName {
+				if !listed[n] {
+					extra = append(extra, n)
+				}
+			}
+			sort.Strings(extra)
+			if len(missing) > 0 || len(extra) > 0 {
+				return nil, fmt.Errorf("judged %d of %d listed tests (missing %v, not listed %v)", len(want)-len(missing), len(want), missing, extra)
+			}
+		}
+	default:
 		return nil, fmt.Errorf("no tests judged")
 	}
-	for _, v := range doc.Tests {
+	if len(want) > 0 && !keyed {
+		return nil, fmt.Errorf("the tests were listed, so the answer must be keyed by test name")
+	}
+	if len(verdicts) == 0 {
+		return nil, fmt.Errorf("no tests judged")
+	}
+	for _, v := range verdicts {
 		if strings.TrimSpace(v.Test) == "" {
 			return nil, fmt.Errorf("a verdict names no test")
 		}
@@ -239,5 +389,5 @@ func parseTypedVerdicts(content string) ([]typedVerdict, error) {
 			return nil, fmt.Errorf("test %q has verdict %q, not sound, vacuous or dead_check", v.Test, v.Verdict)
 		}
 	}
-	return doc.Tests, nil
+	return verdicts, nil
 }

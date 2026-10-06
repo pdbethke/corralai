@@ -70,6 +70,9 @@ func TestCoverageCountsJudgedTestsInTheFile(t *testing.T) {
 	if !ok || judged != 2 {
 		t.Fatalf("judged %d ok %v; want 2 true", judged, ok)
 	}
+	if judged, ok := coverage(f, `{"tests":{"TestA":{"verdict":"sound","reason":"x"},"TestC":{"verdict":"vacuous","reason":"y"}}}`); !ok || judged != 2 {
+		t.Fatalf("a keyed answer: judged %d ok %v; want 2 true", judged, ok)
+	}
 	if _, ok := coverage(f, "filed 2 findings"); ok {
 		t.Fatal("a reply that is not a typed answer has no coverage")
 	}

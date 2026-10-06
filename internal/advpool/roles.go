@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/pdbethke/corralai/internal/adequacy"
+	"github.com/pdbethke/corralai/internal/agentworker"
 	golang "github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/queue"
 	"github.com/pdbethke/corralai/internal/repoindex"
@@ -124,6 +125,13 @@ func renderTestCritic(rs RunSpec, _ []repoindex.Signature, _ []adequacy.Mutant) 
 	b.WriteString("Flag ONLY a test that is DEMONSTRABLY vacuous: it asserts nothing, its assertion is tautological (true regardless of the implementation), or it could not fail even if the code were broken in a way that violates the goal. Reason strictly from the CODE ABOVE — never guess a function's signature or behavior. If the code shows a call or argument is valid, it IS valid; do not flag a test for it.\n\n")
 	b.WriteString("Do NOT flag a test merely because it is narrow, checks one case, exercises an implementation detail, uses a mock, or does not fully cover the documented behavior — those are normal, not vacuous. If you are not certain a test is vacuous, do NOT flag it. Many suites have zero vacuous tests, and reporting none is the correct answer.\n\n")
 	b.WriteString("For each test you are certain is vacuous, file one finding: name the test and state exactly why it cannot fail. Also set scope to \"whole-test\" if the ENTIRE test can never fail, or \"dead-check\" if only a specific check inside it is dead while the test still asserts something real; set test_file to the repo-relative path of the file holding the flagged test, and test_selector to the exact runnable selector for that single test (e.g. path::Class::test_name for pytest, TestName for go). If none qualify, file nothing.\n")
+	// The tests the file declares, when its language can list them from
+	// source: the typed critic then must judge every one of them, by name
+	// (agentworker.CriticTestListBlock). The block is written here, where
+	// the language is known, because the worker that reads it is not told.
+	if block := agentworker.CriticTestListBlock(rs.DevTestPath, langFor(rs).TestNamesInSource(rs.DevTestPath, rs.DevTestCode)); block != "" {
+		b.WriteString("\n" + block)
+	}
 	return b.String()
 }
 

@@ -483,6 +483,157 @@ run-to-run variance, so this is not evidence the schema improved accuracy.
 Input was identical (204,258 tokens per mode); output was 24,728 (typed) and
 26,316 (seat).
 
+## 8. The same planted files with the test list, schema enforced (2026-10-06)
+
+From this run on, the critic is handed the file's tests by name
+(`lang.Plugin.TestNamesInSource`) and the schema requires a verdict for each
+(`agentworker.CriticTestListBlock`, the keyed answer). Modes `typed` and
+`seat`, 3 runs.
+
+### gemini-3.8-flash
+
+| fixture | mode | right | missed | false | flags on unplanted tests | incomplete runs | errors | distinct answers | tests judged (fewest of runs / in file) | calls | input tokens | output tokens |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| reposcan/selection.go (planted) | typed | 9 | 0 | 0 | 0 | 0 | 0 | 1 | 20 / 20 | 3 | 28626 | 3053 |
+| reposcan/selection.go (planted) | seat | 9 | 0 | 0 | 0 | 0 | 0 | 1 | 20 / 20 | 3 | 28626 | 3044 |
+| reposcan/cachekey.go (planted) | typed | 9 | 0 | 0 | 0 | 0 | 0 | 1 | 17 / 17 | 3 | 21369 | 2225 |
+| reposcan/cachekey.go (planted) | seat | 9 | 0 | 0 | 0 | 0 | 0 | 1 | 17 / 17 | 3 | 21369 | 1950 |
+| attest/attest.go (planted) | typed | 9 | 0 | 0 | 0 | 0 | 0 | 1 | 12 / 12 | 3 | 16662 | 1307 |
+| attest/attest.go (planted) | seat | 9 | 0 | 0 | 0 | 0 | 0 | 1 | 12 / 12 | 3 | 16662 | 1104 |
+| reposcan/report.go (planted) | typed | 9 | 0 | 0 | 0 | 0 | 0 | 1 | 17 / 17 | 3 | 45279 | 2602 |
+| reposcan/report.go (planted) | seat | 9 | 0 | 0 | 0 | 0 | 0 | 1 | 17 / 17 | 3 | 45279 | 2625 |
+| egress/scan.go (planted) | typed | 9 | 0 | 0 | 0 | 0 | 0 | 1 | 15 / 15 | 3 | 29343 | 2086 |
+| egress/scan.go (planted) | seat | 9 | 0 | 0 | 0 | 0 | 0 | 1 | 15 / 15 | 3 | 29343 | 2310 |
+| models/models.go (planted) | typed | 9 | 0 | 0 | 0 | 0 | 0 | 1 | 12 / 12 | 3 | 26691 | 1586 |
+| models/models.go (planted) | seat | 9 | 0 | 0 | 0 | 0 | 0 | 1 | 12 / 12 | 3 | 26691 | 1764 |
+| adequacy/jail.go (planted) | typed | 9 | 0 | 0 | 0 | 0 | 0 | 1 | 17 / 17 | 3 | 40137 | 2526 |
+| adequacy/jail.go (planted) | seat | 9 | 0 | 0 | 0 | 0 | 0 | 1 | 17 / 17 | 3 | 40137 | 2627 |
+| test | typed | seat |
+|---|---|---|
+| TestSelectionEvidenceEmptyOutputNamesMissingPytestCov | 3 | 3 |
+| TestSelectionEvidenceNoSelectorIsWholeSuiteDisclosed | 3 | 3 |
+| TestSourceRootsForDerivesDotForRootLevelSources | 3 | 3 |
+| test | typed | seat |
+|---|---|---|
+| TestCacheKeyIsUnambiguous | 3 | 3 |
+| TestCacheKeySeparatesSubstrates | 3 | 3 |
+| TestCacheKeyStableForIdenticalInputs | 3 | 3 |
+| test | typed | seat |
+|---|---|---|
+| TestKeyFilePerm | 3 | 3 |
+| TestLoadOrCreateKeyFromFile | 3 | 3 |
+| TestLoadOrCreateKeyPersistFailureIsLoud | 3 | 3 |
+| test | typed | seat |
+|---|---|---|
+| TestAggregateMarksPoolTestUnsoundFiles | 3 | 3 |
+| TestAggregateNeverReportsMoreAuditedThanCandidates | 3 | 3 |
+| TestAggregateScoresOverAuditedSurfaceOnly | 3 | 3 |
+| test | typed | seat |
+|---|---|---|
+| TestScanText_CatchesPlusPlusContentSpoof | 3 | 3 |
+| TestScanText_IgnoresFileHeaderAndContext | 3 | 3 |
+| TestScan_MissingFileSkippedNotFatal | 3 | 3 |
+| test | typed | seat |
+|---|---|---|
+| TestLoadNoRegistryIsNotAnError | 3 | 3 |
+| TestLookupUnknownAliasIsNotAnError | 3 | 3 |
+| TestStrictModeIsOffByDefaultAndReadFromTheDocument | 3 | 3 |
+| test | typed | seat |
+|---|---|---|
+| TestJailAdapterExitMapping | 3 | 3 |
+| TestJailAdapterNilBackendErrors | 3 | 3 |
+| TestShellJoinQuotesMetacharacters | 3 | 3 |
+
+### qwen3.6:35b-a3b
+
+| fixture | mode | right | missed | false | flags on unplanted tests | incomplete runs | errors | distinct answers | tests judged (fewest of runs / in file) | calls | input tokens | output tokens |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| reposcan/selection.go (planted) | typed | 2 | 7 | 0 | 0 | 0 | 0 | 2 | 20 / 20 | 3 | 26817 | 4638 |
+| reposcan/selection.go (planted) | seat | 4 | 5 | 0 | 3 | 0 | 0 | 2 | 20 / 20 | 3 | 26817 | 4860 |
+| reposcan/cachekey.go (planted) | typed | 5 | 4 | 0 | 1 | 0 | 0 | 2 | 17 / 17 | 3 | 19980 | 3186 |
+| reposcan/cachekey.go (planted) | seat | 7 | 2 | 0 | 1 | 0 | 0 | 3 | 17 / 17 | 3 | 19980 | 3354 |
+| attest/attest.go (planted) | typed | 8 | 1 | 0 | 4 | 0 | 0 | 3 | 12 / 12 | 3 | 15795 | 2321 |
+| attest/attest.go (planted) | seat | 8 | 1 | 0 | 0 | 0 | 0 | 2 | 12 / 12 | 3 | 15795 | 2100 |
+| reposcan/report.go (planted) | typed | 9 | 0 | 0 | 0 | 0 | 0 | 1 | 17 / 17 | 3 | 44154 | 3150 |
+| reposcan/report.go (planted) | seat | 8 | 1 | 0 | 0 | 0 | 0 | 2 | 17 / 17 | 3 | 44154 | 3162 |
+| egress/scan.go (planted) | typed | 5 | 4 | 0 | 5 | 0 | 0 | 3 | 15 / 15 | 3 | 27807 | 3460 |
+| egress/scan.go (planted) | seat | 5 | 4 | 0 | 17 | 0 | 0 | 3 | 15 / 15 | 3 | 27807 | 3951 |
+| models/models.go (planted) | typed | 9 | 0 | 0 | 2 | 0 | 0 | 2 | 12 / 12 | 3 | 25179 | 2477 |
+| models/models.go (planted) | seat | 8 | 1 | 0 | 0 | 0 | 0 | 2 | 12 / 12 | 3 | 25179 | 2815 |
+| adequacy/jail.go (planted) | typed | 9 | 0 | 0 | 2 | 0 | 0 | 2 | 17 / 17 | 3 | 37641 | 4071 |
+| adequacy/jail.go (planted) | seat | 9 | 0 | 0 | 3 | 0 | 0 | 3 | 17 / 17 | 3 | 37641 | 3824 |
+| test | typed | seat |
+|---|---|---|
+| TestCollectSelectionEvidenceRefusesUnparseableOutput | 0 | 1 |
+| TestCollectSelectionEvidenceThreadsSourceRootsIntoInstrument | 0 | 1 |
+| TestSelectionEvidenceEmptyOutputWithoutDetailedContractIsStillNotRan | 0 | 1 |
+| TestSelectionEvidenceNoSelectorIsWholeSuiteDisclosed | 0 | 1 |
+| TestSourceRootsForDerivesDotForRootLevelSources | 2 | 3 |
+| test | typed | seat |
+|---|---|---|
+| TestCacheKeyChangesWhenAnyFieldChanges | 1 | 1 |
+| TestCacheKeyIsUnambiguous | 1 | 2 |
+| TestCacheKeySeparatesSubstrates | 1 | 2 |
+| TestCacheKeyStableForIdenticalInputs | 3 | 3 |
+| test | typed | seat |
+|---|---|---|
+| TestKeyFilePerm | 3 | 3 |
+| TestLoadOrCreateKeyFromFile | 3 | 3 |
+| TestLoadOrCreateKeyFromSeed | 3 | 0 |
+| TestLoadOrCreateKeyPersistFailureIsLoud | 2 | 2 |
+| TestLoadOrCreateKeyPersistFailureReadOnlyDir | 1 | 0 |
+| test | typed | seat |
+|---|---|---|
+| TestAggregateMarksPoolTestUnsoundFiles | 3 | 3 |
+| TestAggregateNeverReportsMoreAuditedThanCandidates | 3 | 2 |
+| TestAggregateScoresOverAuditedSurfaceOnly | 3 | 3 |
+| test | typed | seat |
+|---|---|---|
+| TestGovulnEnv | 3 | 3 |
+| TestScanSecrets_LongLineNotSilentlyAborted | 2 | 2 |
+| TestScanSecrets_OverSizeFileSurfaced | 0 | 1 |
+| TestScanText_CatchesDashDashAdjacencyVariant | 0 | 3 |
+| TestScanText_CatchesHistoryOnlySecret | 0 | 1 |
+| TestScanText_CatchesPlusPlusContentSpoof | 2 | 3 |
+| TestScanText_IgnoresFileHeaderAndContext | 2 | 1 |
+| TestScanText_LongLineSurfacesUnscannedRemainder | 0 | 1 |
+| TestScanText_RealFileHeaderNotScannedAsContent | 0 | 1 |
+| TestScan_CleanChangeSetPasses | 0 | 1 |
+| TestScan_LicenseAdvisory | 0 | 1 |
+| TestScan_MissingFileSkippedNotFatal | 1 | 1 |
+| TestScan_OnlyScansChangedFiles | 0 | 1 |
+| TestScan_PlantedAWSKeyBlocks | 0 | 1 |
+| TestScan_PlantedPrivateKeyBlocks | 0 | 1 |
+| test | typed | seat |
+|---|---|---|
+| TestAuditedRepoCannotPickItsAuditors | 1 | 0 |
+| TestLoadFromRepoFile | 1 | 0 |
+| TestLoadNoRegistryIsNotAnError | 3 | 3 |
+| TestLookupUnknownAliasIsNotAnError | 3 | 2 |
+| TestStrictModeIsOffByDefaultAndReadFromTheDocument | 3 | 3 |
+| test | typed | seat |
+|---|---|---|
+| TestEnvWithDepBinPaths | 1 | 2 |
+| TestEnvWithDepBinPathsIgnoresNonDepBinds | 1 | 0 |
+| TestJailAdapterExitMapping | 3 | 3 |
+| TestJailAdapterNilBackendErrors | 3 | 3 |
+| TestJailWithoutMaxOutputLeavesSandboxDefault | 0 | 1 |
+| TestShellJoinQuotesMetacharacters | 3 | 3 |
+
+**Gemini:** 63 of 63 in both modes, no other flags, the same answer every
+run, every test judged, as in section 7, on 15,385 output tokens for the
+typed call against 24,728 there, because a keyed answer does not repeat each
+test's name, file and selector. The list added 3,849 input tokens per mode.
+
+**35B:** every test in every file was judged, on every run, where in section
+6 it judged 2 or 3 per file; no answer failed to parse and none was retried.
+But it caught 47 (typed) and 49 (seat) of 63, against 61 and 57 in section
+6, and flagged 14 and 24 tests nobody planted, against 3 and 4, with less
+agreement between runs. Made to rule on every test, it makes more wrong calls
+in both directions. With 3 runs per mode this is a measured drop, not an
+explained one; the likeliest reading is that a forced verdict on every test
+works against the critic's own "flag only if certain" rule.
+
 ## What this does not show
 
 - Two models answered the cloud runs and the local runs: gemini-3.8-flash and

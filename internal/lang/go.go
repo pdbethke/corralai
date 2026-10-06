@@ -4,10 +4,15 @@ package lang
 
 import (
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 func init() { Register(goPlugin{}) }
@@ -395,6 +400,49 @@ func (goPlugin) TreeEnv(tree string, cores int) []string {
 		flags = existing + " " + flags
 	}
 	return []string{"GOMAXPROCS=" + n, "GOFLAGS=" + flags}
+}
+
+// TestNamesInSource parses the file with go/parser and keeps exactly what
+// `go test` would run: top-level funcs named Test plus a name that does not
+// begin with a lower-case letter, taking one *testing.T. TestMain takes a
+// *testing.M and is excluded by that rule. Unparseable source lists nothing.
+func (goPlugin) TestNamesInSource(testPath, src string) []string {
+	f, err := parser.ParseFile(token.NewFileSet(), testPath, src, 0)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, d := range f.Decls {
+		fn, ok := d.(*ast.FuncDecl)
+		if !ok || fn.Recv != nil || !isGoTestName(fn.Name.Name) || fn.Type.Params == nil || len(fn.Type.Params.List) != 1 {
+			continue
+		}
+		p := fn.Type.Params.List[0]
+		star, ok := p.Type.(*ast.StarExpr)
+		if !ok || len(p.Names) > 1 {
+			continue
+		}
+		if sel, ok := star.X.(*ast.SelectorExpr); ok && sel.Sel.Name == "T" {
+			if pkg, ok := sel.X.(*ast.Ident); ok && pkg.Name == "testing" {
+				out = append(out, fn.Name.Name)
+			}
+		}
+	}
+	return out
+}
+
+// isGoTestName is the go tool's rule: "Test", then either nothing or a rune
+// that is not a lower-case letter.
+func isGoTestName(name string) bool {
+	if !strings.HasPrefix(name, "Test") {
+		return false
+	}
+	rest := name[len("Test"):]
+	if rest == "" {
+		return true
+	}
+	r, _ := utf8.DecodeRuneInString(rest)
+	return !unicode.IsLower(r)
 }
 
 func (goPlugin) ParseTestList(output string) []string {

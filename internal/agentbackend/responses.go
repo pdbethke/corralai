@@ -138,8 +138,14 @@ func (b *responsesBackend) Chat(messages []Message, tools []any) (Message, error
 		"model": b.model,
 		"input": responsesInput(messages),
 	}
+	tools, rf := splitFormat(tools)
 	if rt := responsesTools(tools); len(rt) > 0 {
 		body["tools"] = rt
+	}
+	if rf != nil {
+		body["text"] = map[string]any{"format": map[string]any{
+			"type": "json_schema", "name": rf.Name, "schema": rf.Schema, "strict": true,
+		}}
 	}
 	if err := postJSON(b.base+"/responses", hdr, body, &out); err != nil {
 		return Message{}, err

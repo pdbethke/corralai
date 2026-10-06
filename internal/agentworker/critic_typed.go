@@ -11,6 +11,43 @@ import (
 	"github.com/pdbethke/corralai/internal/queue"
 )
 
+// ResponseFormat asks a backend to constrain its answer to Schema, a JSON
+// Schema, by whatever means its provider offers (Ollama's format, the
+// OpenAI-compatible response_format, the Responses API's text.format,
+// Anthropic's output_config.format). It travels as the only element of a
+// Chat call's tools rather than through a new method, because every wrapper
+// between a seat and its backend already forwards tools untouched: a
+// capability carried on a separate interface is dropped by the first
+// wrapper that does not implement it, and nothing says so.
+//
+// Every object in Schema must set additionalProperties false and list all
+// its properties as required; the strictest providers refuse anything else.
+type ResponseFormat struct {
+	Name   string
+	Schema map[string]any
+}
+
+// criticFormat is the typed critic's answer shape as a schema: the same
+// shape its prompt describes and parseTypedVerdicts enforces, so a provider
+// that honours it cannot return a verdict outside the three.
+var criticFormat = ResponseFormat{Name: "critic_verdicts", Schema: map[string]any{
+	"type": "object", "additionalProperties": false, "required": []any{"tests"},
+	"properties": map[string]any{"tests": map[string]any{
+		"type": "array",
+		"items": map[string]any{
+			"type": "object", "additionalProperties": false,
+			"required": []any{"test", "verdict", "reason", "test_file", "test_selector"},
+			"properties": map[string]any{
+				"test":          map[string]any{"type": "string"},
+				"verdict":       map[string]any{"type": "string", "enum": []any{"sound", "vacuous", "dead_check"}},
+				"reason":        map[string]any{"type": "string"},
+				"test_file":     map[string]any{"type": "string"},
+				"test_selector": map[string]any{"type": "string"},
+			},
+		},
+	}},
+}}
+
 // RunCriticTyped is the critic as ONE typed decision instead of a tool loop:
 // the same instruction the loop gets, answered with every test's verdict in a
 // fixed shape, in a single call. It is the pool's critic seat (see runCritic,
@@ -30,7 +67,8 @@ import (
 // happen: it returns CriticIncompletePrefix and no findings, never a clean
 // review, the same rule the loop follows when it runs out of steps.
 func RunCriticTyped(model Chatter, instruction string) (string, []queue.Finding, error) {
-	out, findings, perr, err := criticTypedOnce(model, instruction)
+	constrained := true
+	out, findings, perr, err := typedCall(model, instruction, &constrained)
 	if err != nil {
 		return "", nil, err
 	}
@@ -40,22 +78,42 @@ func RunCriticTyped(model Chatter, instruction string) (string, []queue.Finding,
 	return out, findings, nil
 }
 
+// typedCall makes one typed critic call, constrained to criticFormat while
+// *constrained holds. A provider error on a constrained call is answered with
+// one plain call, because a model or server without constrained output
+// refuses the request rather than ignoring the schema, and that must not
+// leave a seat with no critic. The plain call's outcome stands, and
+// *constrained is cleared so a retry does not ask again.
+func typedCall(model Chatter, instruction string, constrained *bool) (string, []queue.Finding, error, error) {
+	if *constrained {
+		out, findings, perr, err := criticTypedOnce(model, instruction, []any{criticFormat})
+		if err == nil {
+			return out, findings, perr, nil
+		}
+		*constrained = false
+	}
+	return criticTypedOnce(model, instruction, nil)
+}
+
 // runCritic is the pool's critic seat: the typed critic, asked once more if
 // its answer does not parse, and the tool loop only if the second answer
 // does not parse either. The bench saw a 7B model's typed answer fail to
 // parse 2 times in 5 on one fixture, and a second ask is far cheaper than the
 // loop, which re-sends the code and tests on every step.
 //
-// A provider error is returned as it is, not retried and not handed to the
-// loop: it is not an answer, and the loop would be calling the same provider.
+// Each call asks the provider to hold the answer to criticFormat. A provider
+// error on that call gets one plain call (see typedCall); an error on the
+// plain call is returned as it is, never handed to the loop: it is not an
+// answer, and the loop would be calling the same provider.
 //
 // The recorded result says which path produced the review. A loop fallback
 // that is itself cut short keeps CriticIncompletePrefix at the front, where
 // the driver reads it.
 func runCritic(model Chatter, instruction string) (string, []queue.Finding, error) {
 	var perrs []string
+	constrained := true
 	for attempt := 0; attempt < 2; attempt++ {
-		out, findings, perr, err := criticTypedOnce(model, instruction)
+		out, findings, perr, err := typedCall(model, instruction, &constrained)
 		if err != nil {
 			return "", nil, err
 		}
@@ -84,7 +142,7 @@ func RunCriticLoop(model Chatter, instruction string) (string, []queue.Finding, 
 
 // criticTypedOnce makes the one typed call. err is the provider's; perr says
 // the answer arrived and did not parse.
-func criticTypedOnce(model Chatter, instruction string) (out string, findings []queue.Finding, perr, err error) {
+func criticTypedOnce(model Chatter, instruction string, tools []any) (out string, findings []queue.Finding, perr, err error) {
 	sys := `You are a TEST CRITIC in an adversarial audit. Judge EVERY test in the developer's test file below, then answer with ONLY this JSON and nothing else:
 
 {"tests":[{"test":"<test name>","verdict":"sound|vacuous|dead_check","reason":"<one sentence>","test_file":"<repo-relative path>","test_selector":"<runnable selector for that one test>"}]}
@@ -95,7 +153,7 @@ Task: ` + instruction
 	m, err := model.Chat([]Message{
 		{Role: "system", Content: sys},
 		{Role: "user", Content: "Judge every test now. Reply with the JSON only."},
-	}, nil)
+	}, tools)
 	if err != nil {
 		return "", nil, nil, err
 	}

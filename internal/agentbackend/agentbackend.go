@@ -137,6 +137,26 @@ func chatConverting(b Backend, messages []agentworker.Message, tools []any) (age
 	return out, m.Usage, nil
 }
 
+// splitFormat separates an agentworker.ResponseFormat from the real tools in
+// a Chat call. A caller asks for constrained output by passing the format as
+// a tools element (see agentworker.ResponseFormat for why it rides there);
+// each backend sends it as its provider's own constrained-output field and
+// never as a tool. One helper, so the four backends cannot disagree about
+// which element is the format.
+func splitFormat(tools []any) ([]any, *agentworker.ResponseFormat) {
+	var rf *agentworker.ResponseFormat
+	var rest []any
+	for _, t := range tools {
+		if f, ok := t.(agentworker.ResponseFormat); ok {
+			f := f
+			rf = &f
+			continue
+		}
+		rest = append(rest, t)
+	}
+	return rest, rf
+}
+
 // ModelSwitcher is an optional capability: backends that can serve more than
 // one model implement it so a caller can honor a task's gate-earned Model
 // assignment for the duration of one task, without changing the Backend
@@ -530,9 +550,14 @@ func (b *ollamaBackend) Chat(messages []Message, tools []any) (Message, error) {
 		PromptEvalCount int `json:"prompt_eval_count"`
 		EvalCount       int `json:"eval_count"`
 	}
+	tools, rf := splitFormat(tools)
 	body := map[string]any{
 		"model": b.model, "messages": messages, "tools": tools, "stream": false,
 		"options": map[string]any{"temperature": 0.2},
+	}
+	if rf != nil {
+		// Ollama's structured outputs: the schema IS the format field.
+		body["format"] = rf.Schema
 	}
 	// One decorator owns corral's Ollama request options (num_ctx, and the
 	// think-suppression that keeps a reasoning model from returning empty
@@ -588,9 +613,16 @@ func (b *openaiBackend) Chat(messages []Message, tools []any) (Message, error) {
 	if b.key != "" {
 		hdr["Authorization"] = "Bearer " + b.key
 	}
-	if err := postJSON(b.base+"/chat/completions", hdr, map[string]any{
+	tools, rf := splitFormat(tools)
+	body := map[string]any{
 		"model": b.model, "messages": messages, "tools": tools, "temperature": 0.2,
-	}, &out); err != nil {
+	}
+	if rf != nil {
+		body["response_format"] = map[string]any{"type": "json_schema", "json_schema": map[string]any{
+			"name": rf.Name, "schema": rf.Schema, "strict": true,
+		}}
+	}
+	if err := postJSON(b.base+"/chat/completions", hdr, body, &out); err != nil {
 		return Message{}, err
 	}
 	usage := Usage{InputTokens: out.Usage.PromptTokens, OutputTokens: out.Usage.CompletionTokens}
@@ -652,6 +684,7 @@ func (b *anthropicBackend) Chat(messages []Message, tools []any) (Message, error
 	}
 	// Convert the OpenAI-style function tools to Anthropic's {name, description,
 	// input_schema} shape (input_schema IS the function's JSON-schema parameters).
+	tools, rf := splitFormat(tools)
 	var atools []map[string]any
 	for _, t := range tools {
 		tm, _ := t.(map[string]any)
@@ -708,6 +741,11 @@ func (b *anthropicBackend) Chat(messages []Message, tools []any) (Message, error
 	}
 	if len(atools) > 0 {
 		body["tools"] = atools
+	}
+	if rf != nil {
+		// Structured outputs, not a forced tool call: current Claude models
+		// answer tool_choice "tool" or "any" with a 400.
+		body["output_config"] = map[string]any{"format": map[string]any{"type": "json_schema", "schema": rf.Schema}}
 	}
 
 	var out struct {

@@ -36,3 +36,18 @@ func TestLoopModeMeasuresTheLoop(t *testing.T) {
 	}
 	t.Fatal("no loop mode")
 }
+
+// -modes keeps only the named modes, in the bench's own order, and refuses a
+// name it does not know rather than benching nothing.
+func TestSelectModes(t *testing.T) {
+	got, err := selectModes("seat,typed")
+	if err != nil || len(got) != 2 || got[0].name != "typed" || got[1].name != "seat" {
+		t.Fatalf("got %v, %v", got, err)
+	}
+	if all, err := selectModes(""); err != nil || len(all) != len(modes) {
+		t.Fatalf("empty means every mode: %v %v", all, err)
+	}
+	if _, err := selectModes("typed,lop"); err == nil {
+		t.Fatal("an unknown mode must be refused")
+	}
+}

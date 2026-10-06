@@ -11,6 +11,19 @@ history of any release, `git log v0.3.4..v0.3.5`.
 
 ## [Unreleased]
 
+- **The test-critic asks for its answer shape, not just in its prompt.** The
+  typed critic now sends its schema through each provider's own
+  constrained-output field: `format` on Ollama, `response_format` on
+  OpenAI-compatible endpoints (Gemini, OpenAI, OpenRouter), `text.format` on
+  the Responses API, and `output_config.format` on Anthropic. A model that
+  honours it cannot answer outside the three verdicts. A provider that
+  refuses a constrained request (an older server, a model without the
+  feature) gets one plain call instead, so no seat loses its critic. The
+  critic stays advisory; no status changes.
+- **One-time cache miss.** `reposcan.VerdictGeneration` moves from 12 to 13,
+  because a cached verdict's critic count may have come from the fallback
+  path this change mostly retires.
+
 ## [v1.0.0-rc.16] — 2026-10-06
 
 - **One-time cache miss.** `reposcan.VerdictGeneration` moves from 10 (rc.15)

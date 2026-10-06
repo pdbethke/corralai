@@ -49,6 +49,29 @@ var modes = []mode{
 	}},
 }
 
+// selectModes keeps the modes named in a comma-separated list, in the order
+// of modes; an empty list is every mode, and an unknown name is an error.
+func selectModes(list string) ([]mode, error) {
+	if strings.TrimSpace(list) == "" {
+		return modes, nil
+	}
+	want := map[string]bool{}
+	for _, n := range strings.Split(list, ",") {
+		want[strings.TrimSpace(n)] = true
+	}
+	var out []mode
+	for _, m := range modes {
+		if want[m.name] {
+			out = append(out, m)
+			delete(want, m.name)
+		}
+	}
+	for n := range want {
+		return nil, fmt.Errorf("unknown mode %q (have loop, typed, seat)", n)
+	}
+	return out, nil
+}
+
 // result is one critic run on one fixture.
 type result struct {
 	fixture, mode       string
@@ -131,11 +154,17 @@ func main() {
 	runs := flag.Int("runs", 5, "runs per fixture per mode")
 	out := flag.String("out", "", "write the markdown report here as well as to stdout")
 	files := flag.String("files", "", "comma-separated real Go source files to bench INSTEAD of the keyed fixtures; each needs its _test.go beside it, and has no answer key")
+	modeList := flag.String("modes", "", "comma-separated modes to run (loop, typed, seat); empty runs all three")
 	show := flag.String("show", "", "with -files: write each benched test file (planted, if -plant) into this directory and exit without calling a model")
 	plant := flag.Int("plant", 0, "with -files: plant this many vacuous tests in each file's test file (in memory, checked with go test -overlay) and key on them")
 	flag.Parse()
 	if (*model == "" && *show == "") || *runs < 1 {
 		fmt.Fprintln(os.Stderr, "criticbench: -model is required and -runs must be at least 1")
+		os.Exit(2)
+	}
+	runModes, err := selectModes(*modeList)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "criticbench:", err)
 		os.Exit(2)
 	}
 	bench := fixtures
@@ -179,7 +208,7 @@ func main() {
 		instr := advpool.CriticInstruction(advpool.RunSpec{
 			Goal: f.goal, CodePath: f.codePath, Code: f.code, DevTestPath: f.testPath, DevTestCode: f.tests,
 		})
-		for _, m := range modes {
+		for _, m := range runModes {
 			for i := 0; i < *runs; i++ {
 				meter := &agentbackend.UsageMeter{}
 				rec := &recorder{inner: agentbackend.AsChatterMetered(backend, meter)}

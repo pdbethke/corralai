@@ -123,6 +123,22 @@ Task: ` + instruction
 	return fmt.Sprintf("typed critic judged %d test(s), %d flagged", len(verdicts), len(findings)), findings, nil, nil
 }
 
+// TypedJudgedTests returns the name of every test a typed critic answer
+// judged, read with the critic's own parser. It is for scripts/criticbench,
+// which compares the count with the tests actually in the file: an answer
+// that judges only some of them parses cleanly and reads as a complete review.
+func TypedJudgedTests(content string) ([]string, error) {
+	verdicts, err := parseTypedVerdicts(content)
+	if err != nil {
+		return nil, err
+	}
+	names := make([]string, len(verdicts))
+	for i, v := range verdicts {
+		names[i] = v.Test
+	}
+	return names, nil
+}
+
 type typedVerdict struct {
 	Test         string `json:"test"`
 	Verdict      string `json:"verdict"`

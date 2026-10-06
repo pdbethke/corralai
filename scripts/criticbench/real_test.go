@@ -60,3 +60,29 @@ func TestGradeUnkeyedCountsOnlyNamesNotInTheFile(t *testing.T) {
 		t.Fatalf("flagged %v right %d missed %d false %d; want [TestA] 0 0 1", flagged, right, missed, fals)
 	}
 }
+
+// coverage counts the file's tests a typed answer judged; a name that is not
+// in the file, or judged twice, adds nothing, and an answer that is not typed
+// (a loop's last reply) has no coverage to report.
+func TestCoverageCountsJudgedTestsInTheFile(t *testing.T) {
+	f := fixture{all: []string{"TestA", "TestB", "TestC"}}
+	judged, ok := coverage(f, `{"tests":[{"test":"TestA","verdict":"sound"},{"test":"TestA","verdict":"sound"},{"test":"TestGhost","verdict":"sound"},{"test":"TestC","verdict":"vacuous"}]}`)
+	if !ok || judged != 2 {
+		t.Fatalf("judged %d ok %v; want 2 true", judged, ok)
+	}
+	if _, ok := coverage(f, "filed 2 findings"); ok {
+		t.Fatal("a reply that is not a typed answer has no coverage")
+	}
+}
+
+// The recorder keeps the last reply the critic received, which is the answer
+// coverage reads.
+func TestRecorderKeepsTheLastReply(t *testing.T) {
+	r := &recorder{inner: &typedAnswer{}}
+	if _, err := r.Chat(nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(r.last, "TestB") {
+		t.Fatalf("last = %q", r.last)
+	}
+}

@@ -22,6 +22,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -57,6 +58,9 @@ type result struct {
 	in, out             int64
 	incomplete          bool
 	unkeyed             bool
+	planted             bool
+	other               int // flags on unplanted tests of a planted file
+	judged              int // tests the typed answer judged; -1 when it ended on no typed answer
 	err                 string
 }
 
@@ -66,6 +70,14 @@ var testName = regexp.MustCompile(`Test[A-Za-z0-9_]+`)
 // TestSelector) and scores it against the answer key. A finding naming no
 // test in the file is a false alarm: it flagged something that is not there.
 func grade(f fixture, findings []queue.Finding) (flagged []string, right, missed, fals int) {
+	flagged, right, missed, fals, _ = gradeFull(f, findings)
+	return flagged, right, missed, fals
+}
+
+// gradeFull is grade plus other: on a planted file, flags on tests in the
+// file that were not planted. Nobody keyed those, so they are neither right
+// nor false.
+func gradeFull(f fixture, findings []queue.Finding) (flagged []string, right, missed, fals, other int) {
 	inFile := map[string]bool{}
 	for _, n := range f.all {
 		inFile[n] = true
@@ -96,6 +108,10 @@ func grade(f fixture, findings []queue.Finding) (flagged []string, right, missed
 		if f.unkeyed {
 			continue
 		}
+		if f.planted && !truth[hit] {
+			other++
+			continue
+		}
 		if truth[hit] {
 			right++
 		} else {
@@ -106,7 +122,7 @@ func grade(f fixture, findings []queue.Finding) (flagged []string, right, missed
 		missed = len(f.vacuous) - right
 	}
 	sort.Strings(flagged)
-	return flagged, right, missed, fals
+	return flagged, right, missed, fals, other
 }
 
 func main() {
@@ -115,8 +131,10 @@ func main() {
 	runs := flag.Int("runs", 5, "runs per fixture per mode")
 	out := flag.String("out", "", "write the markdown report here as well as to stdout")
 	files := flag.String("files", "", "comma-separated real Go source files to bench INSTEAD of the keyed fixtures; each needs its _test.go beside it, and has no answer key")
+	show := flag.String("show", "", "with -files: write each benched test file (planted, if -plant) into this directory and exit without calling a model")
+	plant := flag.Int("plant", 0, "with -files: plant this many vacuous tests in each file's test file (in memory, checked with go test -overlay) and key on them")
 	flag.Parse()
-	if *model == "" || *runs < 1 {
+	if (*model == "" && *show == "") || *runs < 1 {
 		fmt.Fprintln(os.Stderr, "criticbench: -model is required and -runs must be at least 1")
 		os.Exit(2)
 	}
@@ -124,13 +142,28 @@ func main() {
 	if *files != "" {
 		bench = nil
 		for _, p := range strings.Split(*files, ",") {
-			f, err := realFixture(strings.TrimSpace(p))
+			load := realFixture
+			if *plant > 0 {
+				load = func(src string) (fixture, error) { return plantVacuous(src, *plant) }
+			}
+			f, err := load(strings.TrimSpace(p))
 			if err != nil {
 				fmt.Fprintln(os.Stderr, "criticbench:", err)
 				os.Exit(2)
 			}
 			bench = append(bench, f)
 		}
+	}
+	if *show != "" {
+		for _, f := range bench {
+			out := filepath.Join(*show, strings.ReplaceAll(strings.TrimSuffix(f.name, " (planted)"), "/", "_")+"_test.go")
+			if err := os.WriteFile(out, []byte(f.tests), 0o600); err != nil {
+				fmt.Fprintln(os.Stderr, "criticbench:", err)
+				os.Exit(1)
+			}
+			fmt.Printf("%s: planted %v -> %s\n", f.name, f.vacuous, out)
+		}
+		return
 	}
 	backend := agentbackend.NewOllamaBackend(*url, *model)
 	if agentbackend.VendorOf(*model) != "" {
@@ -149,22 +182,32 @@ func main() {
 		for _, m := range modes {
 			for i := 0; i < *runs; i++ {
 				meter := &agentbackend.UsageMeter{}
-				summary, findings, err := m.run(agentbackend.AsChatterMetered(backend, meter), instr)
+				rec := &recorder{inner: agentbackend.AsChatterMetered(backend, meter)}
+				summary, findings, err := m.run(rec, instr)
 				in, o, calls := meter.Totals()
-				r := result{fixture: f.name, mode: m.name, unkeyed: f.unkeyed, calls: calls, in: in, out: o,
-					incomplete: strings.HasPrefix(summary, agentworker.CriticIncompletePrefix)}
+				r := result{fixture: f.name, mode: m.name, unkeyed: f.unkeyed, planted: f.planted, calls: calls, in: in, out: o,
+					incomplete: strings.HasPrefix(summary, agentworker.CriticIncompletePrefix), judged: -1}
+				if m.name != "loop" {
+					if j, ok := coverage(f, rec.last); ok {
+						r.judged = j
+					}
+				}
 				if err != nil {
 					r.err = err.Error()
 				} else {
-					r.flagged, r.right, r.missed, r.fals = grade(f, findings)
+					r.flagged, r.right, r.missed, r.fals, r.other = gradeFull(f, findings)
 				}
-				fmt.Fprintf(os.Stderr, "%s/%s run %d: flagged %v (right %d, missed %d, false %d), %d calls, %d in / %d out%s\n",
-					f.name, m.name, i+1, r.flagged, r.right, r.missed, r.fals, r.calls, r.in, r.out, map[bool]string{true: ", INCOMPLETE", false: ""}[r.incomplete])
+				fmt.Fprintf(os.Stderr, "%s/%s run %d: flagged %v (right %d, missed %d, false %d), judged %d of %d, %d calls, %d in / %d out%s\n",
+					f.name, m.name, i+1, r.flagged, r.right, r.missed, r.fals, r.judged, len(f.all), r.calls, r.in, r.out, map[bool]string{true: ", INCOMPLETE", false: ""}[r.incomplete])
 				results = append(results, r)
 			}
 		}
 	}
-	report := render(*model, *runs, results)
+	total := map[string]int{}
+	for _, f := range bench {
+		total[f.name] = len(f.all)
+	}
+	report := render(*model, *runs, results, total)
 	fmt.Print(report)
 	if *out != "" {
 		if err := os.WriteFile(*out, []byte(report), 0o600); err != nil {
@@ -177,15 +220,16 @@ func main() {
 // render totals each (fixture, mode) over its runs. Stability is the number
 // of DISTINCT flagged sets across the runs: 1 means every run gave the same
 // answer. Raw counts throughout, never percentages, at this sample size.
-func render(model string, runs int, results []result) string {
+func render(model string, runs int, results []result, total map[string]int) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# criticbench: %s, %d run(s) per fixture per mode\n\n", model, runs)
-	b.WriteString("| fixture | mode | right | missed | false | incomplete runs | errors | distinct answers | calls | input tokens | output tokens |\n|---|---|---|---|---|---|---|---|---|---|---|\n")
+	b.WriteString("| fixture | mode | right | missed | false | flags on unplanted tests | incomplete runs | errors | distinct answers | tests judged (fewest of runs / in file) | calls | input tokens | output tokens |\n|---|---|---|---|---|---|---|---|---|---|---|---|---|\n")
 	type key struct{ f, m string }
 	var order []key
 	agg := map[key]*result{}
 	sets := map[key]map[string]bool{}
 	inc, errs := map[key]int{}, map[key]int{}
+	minJudged := map[key]int{}
 	for _, r := range results {
 		k := key{r.fixture, r.mode}
 		if agg[k] == nil {
@@ -197,11 +241,17 @@ func render(model string, runs int, results []result) string {
 		a.right += r.right
 		a.missed += r.missed
 		a.fals += r.fals
+		a.other += r.other
 		a.calls += r.calls
 		a.in += r.in
 		a.out += r.out
 		if r.incomplete {
 			inc[k]++
+		}
+		if r.judged >= 0 {
+			if v, ok := minJudged[k]; !ok || r.judged < v {
+				minJudged[k] = r.judged
+			}
 		}
 		if r.err != "" {
 			errs[k]++
@@ -209,10 +259,13 @@ func render(model string, runs int, results []result) string {
 		}
 		sets[k][strings.Join(r.flagged, ",")] = true
 	}
-	unkeyed := map[string]bool{}
+	unkeyed, planted := map[string]bool{}, map[string]bool{}
 	for _, r := range results {
 		if r.unkeyed {
 			unkeyed[r.fixture] = true
+		}
+		if r.planted {
+			planted[r.fixture] = true
 		}
 	}
 	for _, k := range order {
@@ -221,10 +274,18 @@ func render(model string, runs int, results []result) string {
 		if unkeyed[k.f] {
 			right, missed = "no key", "no key"
 		}
-		fmt.Fprintf(&b, "| %s | %s | %s | %s | %d | %d | %d | %d | %d | %d | %d |\n",
-			k.f, k.m, right, missed, a.fals, inc[k], errs[k], len(sets[k]), a.calls, a.in, a.out)
+		judged := "n/a"
+		if v, ok := minJudged[k]; ok {
+			judged = fmt.Sprintf("%d / %d", v, total[k.f])
+		}
+		other := "n/a"
+		if planted[k.f] {
+			other = fmt.Sprint(a.other)
+		}
+		fmt.Fprintf(&b, "| %s | %s | %s | %s | %d | %s | %d | %d | %d | %s | %d | %d | %d |\n",
+			k.f, k.m, right, missed, a.fals, other, inc[k], errs[k], len(sets[k]), judged, a.calls, a.in, a.out)
 	}
-	b.WriteString("\nright/missed/false are summed over the runs, against an answer key checked by execution (TestFixtureAnswerKeysAreExecuted). A real file has no key: only a flag naming a test that is not in the file counts as false there.\n")
+	b.WriteString("\nright/missed/false are summed over the runs, against an answer key checked by execution (TestFixtureAnswerKeysAreExecuted). A real file has no key: only a flag naming a test that is not in the file counts as false there. A planted file is keyed on its planted tests only; flags on its other tests are counted apart.\n")
 	writeAgreement(&b, results, runs)
 	return b.String()
 }
@@ -245,7 +306,7 @@ func writeAgreement(b *strings.Builder, results []result, runs int) {
 	var files, modeNames []string
 	seenFile, seenMode := map[string]bool{}, map[string]bool{}
 	for _, r := range results {
-		if !r.unkeyed {
+		if !r.unkeyed && !r.planted {
 			continue
 		}
 		if !seenFile[r.fixture] {

@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/pdbethke/corralai/internal/agentworker"
 )
 
 var goTestFunc = regexp.MustCompile(`(?m)^func (Test[A-Za-z0-9_]+)\(`)
@@ -40,4 +42,41 @@ func realFixture(src string) (fixture, error) {
 		codePath: src, code: string(code), testPath: testPath, tests: string(tests),
 		all: all, unkeyed: true,
 	}, nil
+}
+
+// recorder passes calls through and keeps the last reply, so the bench can
+// read the typed answer a mode ended on.
+type recorder struct {
+	inner agentworker.Chatter
+	last  string
+}
+
+func (r *recorder) Chat(messages []agentworker.Message, tools []any) (agentworker.Message, error) {
+	m, err := r.inner.Chat(messages, tools)
+	if err == nil {
+		r.last = m.Content
+	}
+	return m, err
+}
+
+// coverage counts how many of the file's tests the typed answer in last
+// judged. ok is false when last is not a typed answer (the loop's, or a
+// fallback's), which has no per-test list to count.
+func coverage(f fixture, last string) (judged int, ok bool) {
+	names, err := agentworker.TypedJudgedTests(last)
+	if err != nil {
+		return 0, false
+	}
+	inFile := map[string]bool{}
+	for _, n := range f.all {
+		inFile[n] = true
+	}
+	seen := map[string]bool{}
+	for _, n := range names {
+		if inFile[n] && !seen[n] {
+			seen[n] = true
+			judged++
+		}
+	}
+	return judged, true
 }

@@ -167,3 +167,16 @@ func TestRunRoleCriticReturnsAProviderError(t *testing.T) {
 		t.Fatalf("a provider error is not retried; Chat was called %d times", c.calls)
 	}
 }
+
+// TypedJudgedTests reads the same strict shape the critic does and returns
+// every test the answer judged, so a bench can compare it with the file's own
+// count; an answer that does not parse is an error, not an empty list.
+func TestTypedJudgedTestsListsEveryJudgedTest(t *testing.T) {
+	got, err := TypedJudgedTests("```json\n" + `{"tests":[{"test":"TestA","verdict":"sound"},{"test":"TestB","verdict":"vacuous"}]}` + "\n```")
+	if err != nil || strings.Join(got, ",") != "TestA,TestB" {
+		t.Fatalf("got %v, %v; want [TestA TestB]", got, err)
+	}
+	if _, err := TypedJudgedTests("the tests look fine"); err == nil {
+		t.Fatal("an unparseable answer must be an error")
+	}
+}

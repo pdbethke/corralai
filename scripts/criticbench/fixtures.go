@@ -17,6 +17,10 @@ type fixture struct {
 	// unkeyed marks a real file (realFixture) with no answer key: nothing in
 	// it is scored right or missed.
 	unkeyed bool
+	// planted marks a real file whose vacuous tests were planted
+	// (plantVacuous): only the planted tests are keyed, so a flag on any
+	// other test is counted apart, never as right or false.
+	planted bool
 }
 
 var fixtures = []fixture{

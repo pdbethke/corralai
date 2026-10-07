@@ -258,7 +258,7 @@ from the `motherduck_token` environment variable; there is deliberately no
 `--motherduck-token` flag, because a token on a command line lands in shell
 history.
 
-Push creates a five-table bundle on first use — `corral_scans`,
+A `certify` push creates a five-table bundle on first use (a `review` push adds `corral_reviews`, `corral_findings` and `corral_adjudications`) — `corral_scans`,
 `corral_audits` (one row per audited file), `corral_mutants`,
 `corral_model_calls` and `corral_events` — plus a `corral_seal` view that
 cross-references a pushed statement's hash against the rows it produced. Rows

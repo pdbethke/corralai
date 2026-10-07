@@ -101,8 +101,10 @@ notice.
    attached. If the writer cannot, the survivor stays unproven and is
    reported as such.
 7. **A third model critiques, and never gates.** A critic — required by rule
-   to be a different model from the writer — reads the authored tests and
-   flags ones that could never fail. When execution shows a flagged test did
+   to be a different model from the writer — reads your own test file next to
+   the code and returns a verdict per test: sound, vacuous (it could never
+   fail), or a dead check. For Go and Python it is handed every test name and
+   must judge each one. When execution shows a flagged test did
    kill a fault, the critic's finding is refuted on the record. The critic's
    opinion is advisory; it changes no number.
 8. **The verdict is signed.** Kill rate, survivors, proven gaps, which seat

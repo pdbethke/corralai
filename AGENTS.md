@@ -62,6 +62,8 @@ and are not:
 | `deploy.yml` (`validate`) | the doc gates and the licensing gate ALWAYS; then, only when something other than Markdown changed: vet, provision language toolchains, `go test -v` with a SKIP census, the drift checks, gosec, security gate |
 | `foreign-sweep.yml` (`sweep`) | `certify --repo --dry-run` over SHA-pinned third-party repos, diffed against `testdata/foreign-sweep-expected.tsv` |
 | `self-audit.yml` | corral auditing corral. Non-blocking, label-gated, all-Gemini, `top: "1"` |
+| `release.yml` | on a `v*` tag: refuses a tag on an unmerged commit, verifies the console signature for the tag's version, publishes the GitHub Release once `validate` is green on the tag's commit or on a `main` that contains it |
+| `deploy-site.yml` | on `site/**` changes: site tests, Playwright, then deploys corralai.dev to Cloudflare Pages |
 | `cla.yml`, `sbom.yml`, `scorecard.yml` | CLA, SBOM, supply-chain scorecard |
 
 The test step runs `go test ./... -v` **on purpose**: plain `go test` never
@@ -194,7 +196,7 @@ nothing per token on a Pro/Max/Plus plan. `certify --local` / `--repo` resolve
 seats through `internal/agentbackend` instead, which knows only **anthropic,
 openai, gemini, ollama, openrouter** — all key-based. So "run it on the
 subscription we already pay for" is true of `review` and NOT of `certify`, and
-the README's Pro/Max line is about the (frozen) brain's harness. `ollama` is
+the Pro/Max line in `docs/corral/brain.md` is about the (frozen) brain's harness. `ollama` is
 `MODEL_BACKEND`'s default and is local and free, which is the zero-cost way to
 run `certify` seats.
 
@@ -212,8 +214,10 @@ of "decorrelated" and not its point. Prefer genuinely different vendors.
 ## Adding or changing a language plugin
 
 Plugins live in `internal/lang/` (`go.go`, `python.go`, `ruby.go`,
-`javascript.go`, `typescript.go`). A plugin declares detection, test-path
-convention, test command, compile check, and the role system prompts.
+`javascript.go`, `typescript.go`, `php.go`). A plugin declares detection, test-path
+convention, test command, compile check, the role system prompts, and
+`TestNamesInSource` (the static test list the critic must judge; Go and Python
+only, nil elsewhere).
 
 Two rules, both learned expensively:
 

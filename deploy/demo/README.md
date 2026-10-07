@@ -99,7 +99,8 @@ This Compose demo doesn't seed a build-and-review loop to replay — for that,
 run the real audit and record it:
 
 ```bash
-corral certify --local --code path/to/file.py --goal "..." \
+corral certify --local --repo-dir . --code path/to/file.py --goal "..." \
+  --writer-model <model> --mutant-model <model> --critic-model <model|off> \
   --record run.json -- python -m pytest
 ```
 

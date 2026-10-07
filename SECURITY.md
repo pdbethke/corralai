@@ -1,18 +1,75 @@
 # Security Model
 
-Corralai runs autonomous AI agents that write and change code. Its security posture starts
-from one assumption:
+corral audits code it did not write, so it **runs untrusted code by design**: your test
+suite against deliberately broken copies of your code, tests a model wrote, and, in
+`corral review`, reproduction scripts a model wrote. A model can also be steered by text
+inside the code it reads (a prompt injection in a comment or a test). The posture starts
+from that:
 
-> **An agent can be hijacked.** A model can be steered by a prompt injection — in a ticket, a
-> web page, an ingested PDF, a code comment, another agent's output. So corralai does not rely
-> on the agent behaving. It relies on a hijacked agent being unable to do damage, and on every
-> action being attributable after the fact.
+> **Nothing a model says is trusted, and nothing a model wrote runs unconfined without
+> you choosing that.** A verdict is decided by execution, and every result is signed.
 
-That is the whole design: **contain, and observe.** Two pillars.
+## What runs where
 
----
+| What runs | Where | Network | Your model keys in its environment |
+|---|---|---|---|
+| `certify` (default): your suite against each mutant, and the written tests | a disposable copy of your tree in a `bwrap` sandbox (container or `sandbox-exec` elsewhere); project dependency dirs bound read-only | none | no |
+| `certify --repo --substrate workspace` | your checkout, in place (you, or the CI runner, are the isolation boundary) | yes | no (scrubbed) |
+| `corral review`: the reviewer's and verifier's reproduction scripts | a detached git worktree at the reviewed commit, **not a sandbox** | yes | no (scrubbed) |
+| an agentic review seat (Claude Code, Codex, …) | that agent, started in a disposable copy of the repository | the agent's own | the agent's own |
 
-## Pillar 1 — Prevention (containment)
+Two of those rows are not sandboxed, and that is stated here because it is easy to miss:
+
+- **`--substrate workspace` mutates your real checkout.** Use it on a CI runner, a scratch
+  clone, or a tree with no uncommitted work. Restores run on a failing command, a timeout, a
+  panic and an interrupt (SIGINT/SIGTERM); a process killed outright (kill -9, out of
+  memory) can leave a mutant behind, and nothing detects it.
+- **`corral review` runs model-written scripts with your user's permissions**, on your
+  filesystem and network (in a throwaway worktree, with model keys removed from their
+  environment). Run it where that is acceptable: a CI runner, a container, a machine you do
+  not mind a script touching. The scripts are recorded in the ledger, so what ran is never
+  hidden.
+
+## Why a hijacked model cannot change a verdict
+
+- **The kill rate is your suite's exit code**, run against each planted fault. No model
+  reports it, so no injected instruction can raise it.
+- **A proven gap is execution too:** a written test counts only if it fails with the fault in
+  and passes on your real code, both run.
+- **The critic is advisory.** Its opinion is recorded as unverified and never moves a status.
+  Its answer is held to a fixed schema where the provider supports one, and parsed
+  strictly either way, so it can say only *sound*, *vacuous* or *dead check*.
+- **Review claims are demoted unless their script reproduces**, and a second seat tries to
+  refute what stands; both seats are graded by what held.
+
+## The record
+
+- Every `certify --repo` and `review` run writes a **signed (Ed25519), hash-linked** entry to a
+  ledger directory, by default `.corral/ledger`, and in CI to the orphan branch
+  `corral/ledger`. An edited, removed or re-ordered entry breaks the chain;
+  `corral verify --ledger <dir> --pub <key>` names it. The key that signs corral's own ledger
+  is published as `LEDGER_PUBKEY` and anchored in Sigstore Rekor.
+- `certify --repo --attest --transparency` logs the signed statement to **Rekor**, a public,
+  append-only log, so a record can be checked by someone who trusts neither you nor us.
+  `corral certify verify` refuses an unanchored record unless you pass `--allow-unanchored`.
+- A record's own embedded key is never a trust anchor: verification takes the key from you.
+
+## Keys and cost
+
+- Model keys come from the environment or corral's keystore (`corral secret`: OS keyring, then
+  an age-encrypted file; `set` reads stdin, never argv). They are removed from the
+  environment of anything corral runs.
+- **A run spends money.** `--max-tokens` caps a run's tokens across every seat. In the GitHub
+  Action, a pull request from a fork runs with your key unless you require approval for fork
+  workflows; the Action docs say how.
+
+## The optional daemon (`corral-wrangler`, frozen)
+
+No audit needs or reads the daemon. For those who run it, its model is the one below: it
+coordinates a herd of agents and assumes any agent can be hijacked, so it relies on
+containment and on every action being attributable.
+
+### Prevention (containment)
 
 The blast radius of a compromised agent is bounded by construction, not by trust.
 
@@ -52,7 +109,7 @@ The blast radius of a compromised agent is bounded by construction, not by trust
   per-IP and per-principal rate limits, a scoped read-only observer token, and OIDC + a
   per-principal authorization allowlist.
 
-## Pillar 2 — Detection (forensics)
+### Detection (forensics)
 
 Because **all** agent traffic funnels through the brain (the single trusted egress), the brain
 is the forensic authority.
@@ -132,6 +189,8 @@ Honesty is part of the model.
   by advisory-only semantics, TTLs, and revocation, not prevented.
 - **It assumes a single trust domain.** Cross-swarm coordination assumes all participating swarms
   belong to one owner; it is not multi-tenant isolation.
+- **`corral review` and `--substrate workspace` are not sandboxed** (see "What runs where");
+  `certify`'s default substrate is.
 - **It has not been battle-tested at scale.** The properties are proven by design review and the
   adversarial tests above; they have not (yet) survived a hostile production adversary.
 

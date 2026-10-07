@@ -10,14 +10,19 @@ on:
 # that decision), so it is a supply-chain exposure at worst, not a live
 # injection path. `actions: write` was unused — contributor-assistant only
 # needs to read the PR, write the signature commit, comment, and set a status.
+#
+# The grants sit on the job, not the workflow, so a job added later starts
+# read-only rather than inheriting them.
 permissions:
-  contents: write
-  pull-requests: write
-  statuses: write
+  contents: read
 
 jobs:
   CLAAssistant:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      statuses: write
     steps:
       - name: "CLA Assistant"
         if: (github.event.comment.body == 'recheck' || github.event.comment.body == 'I have read the CLA Document and I hereby sign the CLA') || github.event_name == 'pull_request_target'

@@ -28,20 +28,55 @@ test('scrubbing the replay bar updates the position label', async ({ page }) => 
   await expect(page.locator('#replay-label')).toHaveText(new RegExp(`^${Math.floor(max / 2)} / ${max}$`));
 });
 
-test('the same-model comic opens the hero', async ({ page }) => {
+// The hero LEADS with what a developer gets: the bugs their tests miss, and
+// a proven test for each. This replaced the refusal as the h1 on 2026-10-07,
+// a deliberate repositioning, so it is pinned: an h1 that drifts by accident
+// is the failure this guards.
+test('the hero leads with the proven missing tests', async ({ page }) => {
+  await page.goto('/');
+  const h1 = page.locator('#hero h1');
+  await expect(h1).toContainText('Your tests pass.');
+  await expect(h1).toContainText('the tests that catch them');
+  await expect(page.locator('#hero .ctas .cta').first()).toHaveAttribute('href', '/docs/getting-started/');
+});
+
+// The exhibit is one real pair from the hero tape: a bug that survived the
+// suite, and the test corral wrote that catches it. Both are read from the
+// tape at build time, so this reads the tape too and checks the page shows
+// exactly what the run recorded, never a hand-typed copy.
+test('the hero exhibit shows a real surviving bug and the test written for it, from the tape', async ({ page }) => {
+  const fs = await import('node:fs');
+  const meta = JSON.parse(fs.readFileSync('src/data/recordings/corral-audits-corral.meta.json', 'utf-8'));
+  const tape = JSON.parse(fs.readFileSync('src/data/recordings/corral-audits-corral.json', 'utf-8'));
+  const id: string = meta.hero_exhibit.survivor;
+  const verdict = tape.events.find((e: any) => e.kind === 'pool_verdict').detail;
+  const test = tape.events.find((e: any) => e.kind === 'task_done' && e.subject === `test-writer/${id}`).detail.result as string;
+  const testName = /func (Test\w+)/.exec(test)![1];
+  await page.goto('/');
+  const ex = page.locator('#hero .exhibit');
+  await expect(ex).toBeVisible();
+  await expect(ex.locator('.ex-test')).toContainText(`func ${testName}(`);
+  await expect(ex.locator('.ex-bug .add')).toContainText('return stmt, true, nil');
+  await expect(ex.locator('.ex-numbers')).toContainText(`${verdict.mutants_total} bugs planted`);
+  await expect(ex.locator('.ex-numbers')).toContainText(`${verdict.survivors} slipped past our tests`);
+  await expect(ex.locator('.ex-numbers')).toContainText(`${verdict.proven_missed} now have a test`);
+  await expect(ex.locator(`a[href*="/pull/${meta.hero_exhibit.landed}"]`)).toHaveCount(1);
+  // What "proven" means, said on the page: the suite passed with the bug in,
+  // and the written test fails with it and passes without it.
+  await expect(ex.locator('.ex-bug .ex-result')).toContainText('our own tests still passed');
+  await expect(ex.locator('.ex-test .ex-result')).toContainText('Fails with the bug in. Passes on the real code.');
+});
+
+// The comic and the refusal are the reason why, so they follow the exhibit.
+test('the same-model comic and the refusal follow the exhibit', async ({ page }) => {
   await page.goto('/');
   const comic = page.locator('#hero img.hero-comic');
   await expect(comic).toBeVisible();
   await expect(comic).toHaveAttribute('alt', /same frontier model/);
-});
-
-// The hero LEADS with the refusal: corral is the harness that does not build.
-// This replaced the house question as the h1 on 2026-10-01, a deliberate
-// repositioning rather than a copy tweak, so it is pinned the same way the
-// house question was — an h1 that drifts by accident is the failure this guards.
-test('the hero leads with the refusal', async ({ page }) => {
-  await page.goto('/');
-  await expect(page.locator('#hero h1')).toContainText('Corral is the one that refuses to build');
+  const ex = await page.locator('#hero .exhibit').boundingBox();
+  const c = await comic.boundingBox();
+  expect(c!.y).toBeGreaterThan(ex!.y + ex!.height - 1);
+  await expect(page.locator('#hero .why h2')).toContainText('Corral is the one that refuses to build');
 });
 
 // The house question was demoted from the h1, not deleted: it is the same

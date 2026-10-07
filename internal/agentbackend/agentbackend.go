@@ -510,6 +510,13 @@ func postJSON(url string, hdr map[string]string, body, out any) error {
 			// was pulled. Wrap so callers use errors.Is(err, ErrModelUnreachable).
 			return fmt.Errorf("%w: %w", ErrModelUnreachable, e)
 		}
+		if resp.StatusCode >= 400 && resp.StatusCode < 500 && resp.StatusCode != http.StatusTooManyRequests {
+			// The provider refused the request itself (a schema too large to
+			// compile, a field it does not take). Marked so a caller can tell
+			// that apart from a rate limit or a server fault, which a retry of
+			// a different request would not fix either but a wait might.
+			return fmt.Errorf("%w: %w", agentworker.ErrRequestRejected, e)
+		}
 		return e
 	}
 	return json.NewDecoder(resp.Body).Decode(out)

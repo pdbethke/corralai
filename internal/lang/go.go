@@ -411,6 +411,20 @@ func (goPlugin) TestNamesInSource(testPath, src string) []string {
 	if err != nil {
 		return nil
 	}
+	// The name the file imports "testing" under: usually "testing", an alias
+	// if it renames it, "." for a dot import (then the type is a bare T).
+	tname := ""
+	for _, im := range f.Imports {
+		if im.Path.Value == `"testing"` {
+			tname = "testing"
+			if im.Name != nil {
+				tname = im.Name.Name
+			}
+		}
+	}
+	if tname == "" || tname == "_" {
+		return nil
+	}
 	var out []string
 	for _, d := range f.Decls {
 		fn, ok := d.(*ast.FuncDecl)
@@ -422,8 +436,13 @@ func (goPlugin) TestNamesInSource(testPath, src string) []string {
 		if !ok || len(p.Names) > 1 {
 			continue
 		}
-		if sel, ok := star.X.(*ast.SelectorExpr); ok && sel.Sel.Name == "T" {
-			if pkg, ok := sel.X.(*ast.Ident); ok && pkg.Name == "testing" {
+		switch x := star.X.(type) {
+		case *ast.SelectorExpr:
+			if pkg, ok := x.X.(*ast.Ident); ok && x.Sel.Name == "T" && pkg.Name == tname {
+				out = append(out, fn.Name.Name)
+			}
+		case *ast.Ident:
+			if tname == "." && x.Name == "T" {
 				out = append(out, fn.Name.Name)
 			}
 		}

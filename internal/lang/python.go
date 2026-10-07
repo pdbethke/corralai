@@ -1006,15 +1006,36 @@ var (
 
 // TestNamesInSource scans the file line by line for what pytest collects by
 // default: top-level test_* functions, and test_* methods directly inside a
-// top-level Test* class, as path::name and path::Class::name node ids. It is
-// a scanner, not a parser: a function nested inside a test, or a method of a
-// class not named Test*, is not listed, and parametrized cases are listed
-// once under their function's id, which pytest accepts as a selector for
-// all of them.
+// top-level Test* class, as path::name and path::Class::name node ids, each
+// once (a test defined twice is one test to pytest). It is a scanner, not a
+// parser, but it tracks enough of Python's lexical state to read structure
+// only where structure is: a line that starts inside a triple-quoted string
+// (a docstring's column-0 line, a def inside a module string) or inside open
+// brackets (a class whose bases span lines) is skipped. A function nested
+// inside a test, or a method of a class not named Test*, is not listed, and
+// parametrized cases are listed once under their function's id, which pytest
+// accepts as a selector for all of them.
+//
+// The list is a promise the critic is held to: since the critic must judge
+// exactly the listed tests, a test this misses cannot be flagged at all, and
+// one it invents is a selector that runs nothing.
 func (pyPlugin) TestNamesInSource(testPath, src string) []string {
 	var out []string
+	seen := map[string]bool{}
+	add := func(n string) {
+		if !seen[n] {
+			seen[n] = true
+			out = append(out, n)
+		}
+	}
 	class, classIndent := "", ""
+	lx := pyLexer{}
 	for _, line := range strings.Split(src, "\n") {
+		structural := lx.atCode()
+		lx.scan(line)
+		if !structural {
+			continue
+		}
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
 			continue
@@ -1025,7 +1046,7 @@ func (pyPlugin) TestNamesInSource(testPath, src string) []string {
 			if m := pyTestClass.FindStringSubmatch(line); m != nil {
 				class = m[1]
 			} else if m := pyTopTest.FindStringSubmatch(line); m != nil {
-				out = append(out, testPath+"::"+m[1])
+				add(testPath + "::" + m[1])
 			}
 			continue
 		}
@@ -1040,10 +1061,55 @@ func (pyPlugin) TestNamesInSource(testPath, src string) []string {
 			continue
 		}
 		if m := pyMethod.FindStringSubmatch(line); m != nil {
-			out = append(out, testPath+"::"+class+"::"+m[2])
+			add(testPath + "::" + class + "::" + m[2])
 		}
 	}
 	return out
+}
+
+// pyLexer carries the lexical state that crosses line boundaries: an open
+// triple-quoted string and the depth of open brackets. Single-quoted strings
+// and comments end with their line.
+type pyLexer struct {
+	triple string // the open triple quote, or ""
+	depth  int
+}
+
+// atCode reports whether the next line starts as code a statement can begin
+// in: outside any string and any open bracket.
+func (l *pyLexer) atCode() bool { return l.triple == "" && l.depth == 0 }
+
+func (l *pyLexer) scan(line string) {
+	for i := 0; i < len(line); i++ {
+		if l.triple != "" {
+			if strings.HasPrefix(line[i:], l.triple) {
+				i += 2
+				l.triple = ""
+			}
+			continue
+		}
+		switch c := line[i]; c {
+		case '#':
+			return
+		case '"', '\'':
+			if q := line[i : i+min(3, len(line)-i)]; q == strings.Repeat(string(c), 3) {
+				l.triple = q
+				i += 2
+				continue
+			}
+			for i++; i < len(line) && line[i] != c; i++ {
+				if line[i] == '\\' {
+					i++
+				}
+			}
+		case '(', '[', '{':
+			l.depth++
+		case ')', ']', '}':
+			if l.depth > 0 {
+				l.depth--
+			}
+		}
+	}
 }
 
 func (pyPlugin) ParseTestList(output string) []string {

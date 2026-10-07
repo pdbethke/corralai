@@ -176,10 +176,23 @@ func showHelp(args []string) bool {
 // already documented in this file's top-of-file doc comment (kept there as
 // the single source of truth scripts/gen-cli-docs.sh extracts from).
 func usageText() string {
-	return `corral — the CorralAI brain: an OIDC-authenticated, MCP-native coordination server
+	return `corral — finds the bugs your tests miss, and hands you the tests that catch them
+
+Start here:
+  corral demo --writer-model <m> --mutant-model <m> --critic-model <m>
+                                  audit a small bundled Go package end to end (2 minutes)
+  corral doctor [flags] [-- <test cmd>]
+                                  check sandbox, toolchain and keys for free before a paid run
+  corral certify --repo . --dry-run
+                                  list what corral can audit in this repo (no key, no money)
+  corral certify --repo . --top 3 --max-tokens 3000000 <seats> -- <test cmd>
+                                  audit the top 3 files; proven missing tests print at the end
+  There are no default models: name --writer-model, --mutant-model, --critic-model and,
+  for --repo, --derive-model. https://corralai.dev/docs/getting-started/
 
 Usage:
-  corral                          serve /mcp/ + /healthz on $CORRALAI_ADDR
+  corral                          serve the optional daemon (the brain): /mcp/ + /healthz on
+                                  $CORRALAI_ADDR. No audit needs it.
   corral secret set|get|list|rm   manage provider keys + tokens in the secure keystore
                                   (env → OS keyring → age-encrypted file; set reads stdin, never argv)
   corral control seed [flags]     seed one vetted control test into the control-gate store

@@ -86,3 +86,54 @@ func TestOtherLanguagesListNothing(t *testing.T) {
 		}
 	}
 }
+
+// The review's cases: a class whose bases span lines, a method that follows a
+// docstring with a column-0 line, a test-looking def inside a module string,
+// and a test defined twice (pytest collects it once). The scanner must list
+// exactly what pytest would collect, because the critic is held to the list.
+func TestPythonTestNamesInSourceSurvivesStringsAndContinuations(t *testing.T) {
+	py, _ := ByName("python")
+	src := "import pytest\n" +
+		"\n" +
+		"SAMPLE = \"\"\"\n" +
+		"def test_ghost():\n" +
+		"    pass\n" +
+		"\"\"\"\n" +
+		"\n" +
+		"class TestMulti(\n" +
+		"    object,\n" +
+		"):\n" +
+		"    def test_one(self):\n" +
+		"        assert 1\n" +
+		"\n" +
+		"class TestDoc:\n" +
+		"    def test_a(self):\n" +
+		"        '''\n" +
+		"text at column zero\n" +
+		"        '''\n" +
+		"\n" +
+		"    def test_b(self):\n" +
+		"        assert 1\n" +
+		"\n" +
+		"@pytest.mark.slow\n" +
+		"def test_dup():\n" +
+		"    assert 1\n" +
+		"\n" +
+		"def test_dup():\n" +
+		"    assert 2\n"
+	got := py.TestNamesInSource("t.py", src)
+	want := []string{"t.py::TestMulti::test_one", "t.py::TestDoc::test_a", "t.py::TestDoc::test_b", "t.py::test_dup"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %v\nwant %v", got, want)
+	}
+}
+
+// Go: a test file that imports testing under another name still declares
+// tests, and the go tool runs them.
+func TestGoTestNamesInSourceHonoursATestingAlias(t *testing.T) {
+	g, _ := ByName("go")
+	src := "package p\n\nimport tt \"testing\"\n\nfunc TestAlias(t *tt.T) {}\nfunc TestNot(t *testing.T) {}\n"
+	if got := g.TestNamesInSource("p_test.go", src); !reflect.DeepEqual(got, []string{"TestAlias"}) {
+		t.Fatalf("got %v, want [TestAlias]", got)
+	}
+}

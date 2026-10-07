@@ -144,3 +144,33 @@ func TestTimeoutHelpDescribesAWallClockBudget(t *testing.T) {
 		t.Fatalf("found %d -timeout flags in the generated reference, want at least 2 (--local and --repo)", found)
 	}
 }
+
+// A stranger's first `corral -h` must describe the tool they installed: the
+// audit CLI. It used to open "the CorralAI brain: an OIDC-authenticated,
+// MCP-native coordination server", which is the optional daemon, and told a
+// newcomer they had installed a server. The first line says what corral does,
+// a "Start here" block names the commands a first run needs before anything
+// else, and bare `corral` is labelled as the daemon it starts.
+func TestUsageLeadsWithTheAudit(t *testing.T) {
+	out := usageText()
+	first := strings.SplitN(out, "\n", 2)[0]
+	if strings.Contains(first, "brain") || !strings.Contains(first, "tests miss") {
+		t.Fatalf("first line must describe the audit, not the daemon: %q", first)
+	}
+	start := strings.Index(out, "Start here:")
+	if start < 0 {
+		t.Fatal("no Start here block")
+	}
+	for _, cmd := range []string{"corral demo", "corral doctor", "corral certify --repo . --dry-run", "corral certify --repo ."} {
+		i := strings.Index(out[start:], cmd)
+		if i < 0 {
+			t.Errorf("Start here lacks %q", cmd)
+		}
+	}
+	if secret := strings.Index(out, "corral secret"); secret >= 0 && secret < start {
+		t.Error("Start here must come before the full command list")
+	}
+	if !strings.Contains(out, "optional daemon") {
+		t.Error("bare `corral` must be labelled as the optional daemon")
+	}
+}

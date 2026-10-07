@@ -150,7 +150,7 @@ slow"`), not a shell one-liner that chains multiple commands.
 - uses: actions/checkout@v4
   with:
     fetch-depth: 0
-- uses: pdbethke/corralai@v1.0.0-rc.18
+- uses: pdbethke/corralai@v1.0.0-rc.19
   with:
     test-command: "go test ./..."
     anthropic-key: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -176,7 +176,7 @@ need before the corral step:
   with:
     python-version: "3.12"
 - run: pip install -e ".[dev]" pytest pytest-cov   # pytest-cov lets corral pick tests per file
-- uses: pdbethke/corralai@v1.0.0-rc.18
+- uses: pdbethke/corralai@v1.0.0-rc.19
   with:
     test-command: "python -m pytest -q"
     gemini-key: ${{ secrets.GEMINI_API_KEY }}
@@ -196,7 +196,7 @@ below.
 
 **There is no `v1` tag, but there are pinnable release tags.** `v0.1.0` and
 `v0.2.0` predate the action and carry no `action.yml`; **`v0.3.0` and later do**
-(`v1.0.0-rc.18` is current). Prefer `pdbethke/corralai@v1.0.0-rc.18` over `@main` — pinning
+(`v1.0.0-rc.19` is current). Prefer `pdbethke/corralai@v1.0.0-rc.19` over `@main` — pinning
 a tag means a push to `main` cannot change what runs in your CI. Pin the commit
 SHA you reviewed (`pdbethke/corralai@<sha>`) if you want an immutable reference
 that a re-tag also cannot move. `@main` still works and tracks the newest
@@ -563,7 +563,7 @@ over both, not the store.
             git worktree add --detach .corral-ledger
             (cd .corral-ledger && git checkout --orphan corral/ledger && git rm -rfq . && echo "corral's record — see docs/corral/github-action.md" > README.md)
           fi
-      - uses: pdbethke/corralai@v1.0.0-rc.18
+      - uses: pdbethke/corralai@v1.0.0-rc.19
         with:
           test-command: pytest -q
           ledger: .corral-ledger
@@ -831,7 +831,7 @@ of every existing caller of this action.
 Set `min-kill-rate` (a number from `0.0` to `1.0`) to give the gate teeth:
 
 ```yaml
-- uses: pdbethke/corralai@v1.0.0-rc.18
+- uses: pdbethke/corralai@v1.0.0-rc.19
   with:
     test-command:  "go test ./..."
     gemini-key:    ${{ secrets.GEMINI_API_KEY }}
@@ -872,7 +872,7 @@ The audit is the gate by execution. The review is the gate by adversary,
 and the same step runs it when `reviewer-model` is named:
 
 ```yaml
-      - uses: pdbethke/corralai@v1.0.0-rc.18
+      - uses: pdbethke/corralai@v1.0.0-rc.19
         with:
           test-command: "go test ./..."
           mutant-model: gemini-3.6-flash

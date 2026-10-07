@@ -90,26 +90,82 @@ const pool = poolVerdict
       recordId: poolVerdict.record_id,
     }
   : null;
+
+// The front-page exhibit: one real pair from the tape — a bug that survived
+// the project's own suite, and the test the writer seat wrote that catches it.
+// meta.hero_exhibit names the survivor (and the PR that later landed the test
+// in the suite); everything shown is read from the tape here, never typed in.
+// The pair was also proven by hand on 2026-10-07: the test passes on the real
+// certify.go and fails with the mutant applied.
+const exhibitMeta = meta.hero_exhibit;
+function exhibitFor(id: string) {
+  const [shard, mut] = id.split('/');
+  const shardOut = events.find((e: any) => e?.kind === 'task_done' && e?.subject === `mutant-generator/${shard.slice(1)}`)?.detail?.result;
+  const testOut = events.find((e: any) => e?.kind === 'task_done' && e?.subject === `test-writer/${id}`)?.detail?.result;
+  if (!shardOut || !testOut) return null;
+  // Mutant ids are assigned m1, m2, … in parse order (internal/testgen/parse.go).
+  const blocks = shardOut.split(/===MUTATION_\d+===/).filter((b: string) => b.includes('<<<<<<< SEARCH'));
+  const block = blocks[Number(mut.slice(1)) - 1];
+  if (!block) return null;
+  const search = block.split('<<<<<<< SEARCH\n')[1].split('\n=======\n')[0].split('\n');
+  const replace = block.split('\n=======\n')[1].split('\n>>>>>>> REPLACE')[0].split('\n');
+  let pre = 0;
+  while (pre < search.length && pre < replace.length && search[pre] === replace[pre]) pre++;
+  let post = 0;
+  while (post < search.length - pre && post < replace.length - pre && search[search.length - 1 - post] === replace[replace.length - 1 - post]) post++;
+  const diff = [
+    ...search.slice(0, pre).map((t: string) => ({ k: 'ctx', t })),
+    ...search.slice(pre, search.length - post).map((t: string) => ({ k: 'del', t })),
+    ...replace.slice(pre, replace.length - post).map((t: string) => ({ k: 'add', t })),
+    ...search.slice(search.length - post).map((t: string) => ({ k: 'ctx', t })),
+  ];
+  const i = testOut.indexOf('func Test');
+  return { diff, test: (i >= 0 ? testOut.slice(i) : testOut).trim() };
+}
+const exhibit = exhibitMeta && pool ? exhibitFor(exhibitMeta.survivor) : null;
 ---
 <section id="hero">
   <div class="hero-copy hero-top">
+    <h1>Your tests pass. Corral finds the bugs they miss — and hands you the tests that catch them.</h1>
+    <p class="hero-sub">It plants bugs in your code and runs your own test suite against each one. For every bug that slips through, it writes a test and runs it, keeping only tests that fail on the bug and pass on your real code. Proven, not suggested.</p>
+    <div class="ctas">
+      <a class="cta" href="/docs/getting-started/">Run it on your repo</a>
+      <a class="cta secondary" href="https://github.com/pdbethke/corralai">View on GitHub</a>
+      <a class="cta secondary" id="watch-demo-cta" href="#" style="display:none">Watch the demo</a>
+    </div>
+    {exhibit && pool && (
+      <figure class="exhibit">
+        <figcaption>From a real run, on corral's own signing code</figcaption>
+        <div class="ex-panels">
+          <div class="ex-bug">
+            <p class="ex-label">The bug our tests missed <code>{pool.codePath}</code></p>
+            <pre>{exhibit.diff.map((l: any) => <span class={l.k}>{(l.k === 'del' ? '- ' : l.k === 'add' ? '+ ' : '  ') + l.t.replace(/^\t+/, (m: string) => '  '.repeat(m.length))}{'\n'}</span>)}</pre>
+            {exhibitMeta.plain && <p class="ex-plain">{exhibitMeta.plain}</p>}
+            <p class="ex-result ex-bad">With this bug in, our own tests still passed.</p>
+          </div>
+          <div class="ex-test">
+            <p class="ex-label">The test corral wrote{pool.writer ? ` (${pool.writer})` : ''}</p>
+            <pre>{exhibit.test.replace(/\t/g, '  ')}</pre>
+            <p class="ex-result ex-good">Fails with the bug in. Passes on the real code.</p>
+          </div>
+        </div>
+        <p class="ex-numbers">{pool.mutants} bugs planted · {pool.survivors} slipped past our tests · {pool.provenMissed} now have a test that catches them. We merged this one the next day (<a href={`https://github.com/pdbethke/corralai/pull/${exhibitMeta.landed}`}>#{exhibitMeta.landed}</a>).</p>
+      </figure>
+    )}
+    <div class="why">
     <Image
       src={comicImg}
       alt="Comic: a couple hires an architect, a builder, and an inspector for their house — every one labeled 'same frontier model'. The checklist of tests all pass; the house collapses. Caption: ALL THE SAME MODEL."
       class="hero-comic"
-      loading="eager"
-      fetchpriority="high"
+      loading="lazy"
       widths={[688, 1376]}
       sizes="(max-width: 900px) 92vw, 820px"
     />
-    <h1>Everyone is building build harnesses. Corral is the one that refuses to build.</h1>
+    <h2>Why: everyone is building build harnesses. Corral is the one that refuses to build.</h2>
     <p class="latin"><em>Nemo iudex in causa sua</em> — no one may be judge in their own cause.</p>
     <p class="lead">Would you trust your house if the same person architected it, built it, inspected it, and certified it? Corral is an auditing engine. It judges code it did not write — by execution and by adversary — onto a record nobody can edit. Accountability, paper trail, analysis, certification: everything but building.</p>
     <p class="pitch">Two extensions carry the rule: <strong>certify</strong> breaks your code on purpose and runs your own tests against every fault; <strong>review</strong> hands your code to a model that has never seen it and makes every claim prove itself by script, with a second model arguing the other side. Both write signed, hash-linked entries to a branch in your repository — run as a GitHub Action, GitHub becomes the record, and any DuckDB reads it straight from the branch.</p>
-    <div class="ctas">
-      <a class="cta" href="/docs/how-it-works/">How it works</a>
-      <a class="cta secondary" href="https://github.com/pdbethke/corralai">View on GitHub</a>
-      <a class="cta secondary" id="watch-demo-cta" href="#" style="display:none">Watch the demo</a>
+    <p class="why-more"><a href="/docs/how-it-works/">How it works →</a></p>
     </div>
     {pool ? (
       <p class="caption">
@@ -238,6 +294,32 @@ const pool = poolVerdict
   .hero-comic { display: block; width: 100%; max-width: 820px; height: auto; margin: 0 auto 26px; border-radius: 10px; border: 1px solid rgba(120, 100, 60, .35); box-shadow: 0 8px 28px rgba(0, 0, 0, .18); }
   .hero-bottom { padding-top: 26px; padding-bottom: 8px; }
   .hero-copy h1 { font-size: 2.1rem; line-height: 1.22; margin: 0 0 8px; color: var(--amber); }
+  .hero-sub { font-size: 1.15rem; color: var(--fg); max-width: 720px; margin: 0 auto 20px; line-height: 1.5; }
+  /* The exhibit: one real surviving bug and the test written for it, read
+     from the tape. Code panels use the same tokens as the rest of the page. */
+  .exhibit { margin: 28px auto 34px; max-width: 860px; text-align: left; }
+  .exhibit figcaption { text-align: center; font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--amber); font-weight: 700; margin-bottom: 12px; }
+  .ex-panels { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr); gap: 14px; }
+  .ex-panels > div { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; min-width: 0; }
+  .ex-label { margin: 0 0 8px; font-size: 13px; font-weight: 700; color: var(--fg); }
+  .ex-label code { font-weight: 400; color: var(--muted); font-size: 12px; }
+  .exhibit pre { margin: 0; font-size: 12px; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 340px; overflow-y: auto; color: var(--fg); background: none; }
+  .ex-panels > div { display: flex; flex-direction: column; }
+  .ex-test > pre { flex: 1; }
+  .ex-result { margin-top: auto !important; padding-top: 10px; }
+  .ex-plain { margin: 10px 0 0; font-size: 13px; color: var(--fg); line-height: 1.45; }
+  .ex-result { margin: 10px 0 0; font-size: 13px; font-weight: 700; }
+  .ex-bad { color: var(--red); }
+  .ex-good { color: var(--green); }
+  .ex-bug pre span { display: block; }
+  .ex-bug .del { color: var(--red); }
+  .ex-bug .add { color: var(--green); font-weight: 700; }
+  .ex-bug .ctx { color: var(--muted); }
+  .ex-numbers { text-align: center; margin: 14px 0 0; font-size: 0.98rem; color: var(--fg); }
+  .why { border-top: 1px solid var(--line); padding-top: 30px; margin-top: 8px; }
+  .why h2 { font-size: 1.45rem; line-height: 1.25; margin: 0 0 8px; color: var(--amber); }
+  .why-more { margin: 4px 0 14px; font-weight: 600; }
+  @media (max-width: 720px) { .ex-panels { grid-template-columns: 1fr; } }
   /* the Latin original of the maxim, under its translation */
   .latin { color: var(--muted); font-size: 1.05rem; letter-spacing: 0.02em; margin: 0 0 16px; }
   /* Product cockpit chrome that's dead/broken on a static replay (cockpitView

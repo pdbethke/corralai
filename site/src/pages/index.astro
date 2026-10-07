@@ -16,9 +16,9 @@ import SiteFooter from '../components/SiteFooter.astro';
 import Header from '../components/Header.astro';
 import FieldNotesRail from '../components/FieldNotesRail.astro';
 
-const title = 'Corral — the harness that refuses to build';
-const description = 'Everyone is building build harnesses. Corral is the one that refuses to build. It is an auditing engine: it judges code it did not write — by execution and by adversary — onto a record nobody can edit. Two extensions: certify plants faults and runs your own tests against them; review hands your code to a stranger who must prove every claim, and to a second who argues the other side. Every verdict is a signed entry on a branch in your repository; run as a GitHub Action, GitHub becomes the record, and any DuckDB reads it straight from the branch.';
-const ogTitle = 'Corral — prove your tests would catch it';
+const title = 'Corral — the bugs your tests miss, and the tests that catch them';
+const description = 'Corral plants bugs in your code and runs your own test suite against each one. For every bug that slips through, it writes a test and runs it, keeping only tests that fail on the bug and pass on your real code: the tests your suite is missing, proven by execution. Every verdict is a signed entry in your repository; run it as a GitHub Action.';
+const ogTitle = 'Your tests pass. Corral finds the bugs they miss.';
 const url = 'https://corralai.dev/';
 ---
 <html lang="en">

@@ -4,6 +4,7 @@ package agentworker
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -49,6 +50,15 @@ var criticFormat = ResponseFormat{Name: "critic_verdicts", Schema: map[string]an
 	}},
 }}
 
+// ErrRequestRejected marks a provider error that rejected the request
+// itself: a 4xx other than 404 (no such model) and 429 (rate limited). The
+// backends wrap it (agentbackend.postJSON). For a constrained critic call it
+// is the one error that means "this provider will not take this schema", so
+// it is the only one answered with a plain call; a rate limit, a 5xx or a
+// timeout is returned as it is, because re-sending a large prompt without the
+// schema would cost a second call and fix nothing.
+var ErrRequestRejected = errors.New("the provider rejected the request")
+
 // criticListHeader opens the block that hands the critic the tests it must
 // judge. CriticTestListBlock writes it and criticTestList reads it back, so
 // the driver and the worker cannot disagree about its shape.
@@ -67,7 +77,14 @@ func CriticTestListBlock(testFile string, names []string) string {
 	}
 	var b strings.Builder
 	b.WriteString(criticListHeader + testFile + ":\n")
+	seen := map[string]bool{}
 	for _, n := range names {
+		// A name listed twice is one test; listing it twice would put it in
+		// the schema's required set twice and flag it twice.
+		if seen[n] {
+			continue
+		}
+		seen[n] = true
 		b.WriteString("- " + n + "\n")
 	}
 	return b.String()
@@ -83,7 +100,10 @@ func criticTestList(instruction string) (string, []string) {
 // criticTestListSpan locates the list block: its byte range in instruction,
 // the file it names and the tests it lists. start is -1 when there is none.
 func criticTestListSpan(instruction string) (start, end int, file string, names []string) {
-	i := strings.Index(instruction, criticListHeader)
+	// The LAST copy: the block is appended after the code and the test file,
+	// and either of those may contain the header text itself (a self-audit of
+	// this very file does), which must not be read as the list.
+	i := strings.LastIndex(instruction, criticListHeader)
 	if i < 0 {
 		return -1, -1, "", nil
 	}
@@ -176,11 +196,11 @@ func keyedFormat(names []string) ResponseFormat {
 // happen: it returns CriticIncompletePrefix and no findings, never a clean
 // review, the same rule the loop follows when it runs out of steps.
 func RunCriticTyped(model Chatter, instruction string) (string, []queue.Finding, error) {
-	constrained := true
 	batches := criticBatches(instruction)
 	var all []queue.Finding
 	judged := 0
 	for i, b := range batches {
+		constrained := true
 		out, findings, perr, err := typedCall(model, b, &constrained)
 		if err != nil {
 			return "", nil, err
@@ -219,8 +239,8 @@ func batchSummary(judged, batches, flagged int) string {
 func typedCall(model Chatter, instruction string, constrained *bool) (string, []queue.Finding, error, error) {
 	if *constrained {
 		out, findings, perr, err := criticTypedOnce(model, instruction, true)
-		if err == nil {
-			return out, findings, perr, nil
+		if !errors.Is(err, ErrRequestRejected) {
+			return out, findings, perr, err
 		}
 		*constrained = false
 	}
@@ -242,11 +262,13 @@ func typedCall(model Chatter, instruction string, constrained *bool) (string, []
 // that is itself cut short keeps CriticIncompletePrefix at the front, where
 // the driver reads it.
 func runCritic(model Chatter, instruction string) (string, []queue.Finding, error) {
-	constrained := true
 	batches := criticBatches(instruction)
 	var all []queue.Finding
 	judged := 0
 	for i, b := range batches {
+		// Per batch: a schema one batch's provider refused may still fit the
+		// next batch, whose list (and so schema) is smaller.
+		constrained := true
 		var perrs []string
 		done := false
 		for attempt := 0; attempt < 2 && !done; attempt++ {

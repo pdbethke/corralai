@@ -157,16 +157,16 @@ func (c *errChatter) Chat([]Message, []any) (Message, error) {
 	return Message{}, errors.New("provider down")
 }
 
-// A provider error is not an unparseable answer: after the constrained call
-// it gets one plain call (a provider may not support constrained output), and
-// if that fails too it is returned, never handed to the loop.
+// A provider error is not an unparseable answer: it is returned, never handed
+// to the loop. Only a rejected request gets a plain call (see
+// TestTypedCriticDropsTheSchemaOnlyForARejectedBatch).
 func TestRunRoleCriticReturnsAProviderError(t *testing.T) {
 	c := &errChatter{}
 	if _, _, err := RunRole(context.Background(), c, "test-critic", "critique tests"); err == nil {
 		t.Fatal("a provider error must be returned")
 	}
-	if c.calls != 2 {
-		t.Fatalf("a provider error gets one plain call after the constrained one, and nothing more; Chat was called %d times", c.calls)
+	if c.calls != 1 {
+		t.Fatalf("a provider error that is not a rejection is returned at once; Chat was called %d times", c.calls)
 	}
 }
 
@@ -223,7 +223,7 @@ func (c *schemaErrChatter) Chat(_ []Message, tools []any) (Message, error) {
 	c.calls++
 	if len(tools) > 0 {
 		c.schemaCalls++
-		return Message{}, errors.New("400: response_format is not supported for this model")
+		return Message{}, fmt.Errorf("400: response_format is not supported for this model: %w", ErrRequestRejected)
 	}
 	return Message{Role: "assistant", Content: `{"tests":[{"test":"TestB","verdict":"vacuous","reason":"asserts nothing","test_file":"b_test.go","test_selector":"TestB"}]}`}, nil
 }
@@ -407,5 +407,84 @@ func TestTypedCriticBatchThatSkipsFallsBackToTheLoop(t *testing.T) {
 	}
 	if !c.loopDone || !strings.Contains(out, "tool loop") {
 		t.Fatalf("a batch that keeps skipping must hand the file to the loop: %q", out)
+	}
+}
+
+// The list block is read from the END of the task: the code or test file
+// under review can itself contain the header (a self-audit of this very
+// file does), and the first copy must not win.
+func TestCriticTestListReadsTheLastBlock(t *testing.T) {
+	body := "CODE UNDER REVIEW:\n" + criticListHeader + "fake.go:\n- TestBogus\n\nmore code\n\n"
+	instr := body + CriticTestListBlock("p/p_test.go", []string{"TestA", "TestB"})
+	file, names := criticTestList(instr)
+	if file != "p/p_test.go" || strings.Join(names, ",") != "TestA,TestB" {
+		t.Fatalf("got %q %v; the last block is the list", file, names)
+	}
+	if b := criticBatches(body + CriticTestListBlock("p/p_test.go", manyTests(25))); len(b) != 2 || !strings.HasPrefix(b[0], body) {
+		t.Fatal("batching must replace the last block and leave the reviewed source intact")
+	}
+}
+
+// A name listed twice is one test: listed once, judged once, flagged once.
+func TestCriticTestListBlockDropsDuplicates(t *testing.T) {
+	_, names := criticTestList(CriticTestListBlock("p.py", []string{"p.py::test_a", "p.py::test_b", "p.py::test_a"}))
+	if strings.Join(names, ",") != "p.py::test_a,p.py::test_b" {
+		t.Fatalf("got %v", names)
+	}
+}
+
+// rejectOnceChatter refuses the first constrained call as a REJECTED request,
+// then answers every call (constrained or not) with the names it is asked for.
+type rejectOnceChatter struct {
+	batchChatter
+	rejected bool
+	plain    int
+}
+
+func (c *rejectOnceChatter) Chat(m []Message, tools []any) (Message, error) {
+	if len(tools) == 1 {
+		if _, ok := tools[0].(ResponseFormat); ok && !c.rejected {
+			c.rejected = true
+			return Message{}, fmt.Errorf("400 Bad Request: grammar too large: %w", ErrRequestRejected)
+		}
+	}
+	if len(tools) == 0 {
+		c.plain++
+		return Message{Role: "assistant", Content: `{"tests":{` + strings.Join(func() []string {
+			var out []string
+			for i := 0; i < criticBatchSize; i++ {
+				out = append(out, fmt.Sprintf(`"TestCase%02d":{"verdict":"sound","reason":"x"}`, i))
+			}
+			return out
+		}(), ",") + `}}`}, nil
+	}
+	return c.batchChatter.Chat(m, tools)
+}
+
+// Only a request the provider REJECTED (a 4xx that is not a rate limit)
+// drops the schema, and only for that batch: the next batch asks for it again.
+func TestTypedCriticDropsTheSchemaOnlyForARejectedBatch(t *testing.T) {
+	c := &rejectOnceChatter{}
+	instr := "critique tests\n\n" + CriticTestListBlock("p/p_test.go", manyTests(25))
+	if _, _, err := RunRole(context.Background(), c, "test-critic", instr); err != nil {
+		t.Fatal(err)
+	}
+	if c.plain != 1 {
+		t.Fatalf("want one plain call for the rejected batch, got %d", c.plain)
+	}
+	if len(c.required) != 1 || len(c.required[0]) != 5 {
+		t.Fatalf("the second batch must ask for its schema again: %v", c.required)
+	}
+}
+
+// A rate limit, a 5xx or a timeout is not a rejection of the schema: it is
+// returned as it is, with no plain re-send of a large prompt.
+func TestTypedCriticReturnsATransientErrorWithoutAPlainResend(t *testing.T) {
+	c := &errChatter{}
+	if _, _, err := RunRole(context.Background(), c, "test-critic", "critique tests"); err == nil {
+		t.Fatal("a provider error must be returned")
+	}
+	if c.calls != 1 {
+		t.Fatalf("a transient error is not re-sent without the schema; Chat was called %d times", c.calls)
 	}
 }

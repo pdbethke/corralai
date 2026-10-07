@@ -114,7 +114,14 @@ package reposcan
 // every name, which both providers refuse past their grammar limits, so on a
 // large file the critic fell to the loop; its count came from a different
 // path than a "15" critic's. Shape unchanged; behaviour bump.
-const VerdictGeneration = "15"
+// "16" (2026-10-07): the test list the critic must judge changed for Python
+// (a scanner that tracks strings and brackets now finds tests it missed and
+// stops inventing ones inside strings) and for Go (a renamed "testing"
+// import), a test defined twice is listed once, and a transient provider
+// error no longer drops the answer schema for the rest of a review. A "15"
+// critic count may have come from a list that forbade judging real tests, or
+// counted one twice. Shape unchanged; behaviour bump.
+const VerdictGeneration = "16"
 
 // VerdictShapeSHA256 fingerprints advpool.Verdict's serialized shape: every
 // exported field's name, type and json tag, sorted by name and hashed.

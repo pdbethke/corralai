@@ -11,6 +11,33 @@ history of any release, `git log v0.3.4..v0.3.5`.
 
 ## [Unreleased]
 
+- **The critic's test list no longer leaves real tests unjudged.** Since rc.17
+  the critic must judge exactly the tests listed for it, so a test missing from
+  the list could not be flagged at all, while the review still read as
+  complete. A project review found three ways that happened, and all three are
+  fixed:
+  - **Python:** the scanner lost track of a class whose bases span several
+    lines, and of methods after a docstring with a line at column 0. It also
+    listed `def test_*` lines inside module strings as tests. It now tracks
+    strings and open brackets.
+  - **Duplicates:** a test defined twice, which pytest collects once, was
+    listed twice and flagged twice.
+  - **Go:** a test file that imports `testing` under another name listed
+    nothing.
+
+  Separately, the critic read its list from the first copy of the list's
+  header in its task, which the audited source itself can contain. It now
+  reads the last.
+- **A rate limit no longer drops the critic's answer schema.** Any provider
+  error on a constrained call used to switch the schema off for the rest of
+  the review and re-send the prompt without it. Now only a request the
+  provider rejected (a 4xx other than 404 or 429) gets a plain call, and only
+  for that batch. A rate limit, server error or timeout is returned as it is.
+- **`corral -h` describes the audit tool.** It used to open by describing the
+  optional daemon. It now leads with a "Start here" block: `demo`, `doctor`,
+  `certify --repo . --dry-run`, then a capped `certify --repo`.
+- **One-time cache miss.** `reposcan.VerdictGeneration` moves from 15 to 16.
+
 ## [v1.0.0-rc.18] — 2026-10-06
 
 rc.17 plus one fix, for a regression rc.17 introduced on large test files.

@@ -4,6 +4,7 @@ package agentbackend
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -115,5 +116,29 @@ func TestAnthropicSendsTheSchemaAsOutputConfigFormat(t *testing.T) {
 	}
 	if m.Content != `{"v":"a"}` {
 		t.Fatalf("content = %q", m.Content)
+	}
+}
+
+// A provider's 4xx that is not 404 (no such model) or 429 (rate limited) is a
+// rejection of the request itself, and is marked so the critic can tell "this
+// provider will not take this schema" from a transient failure.
+func TestPostJSONMarksARejectedRequest(t *testing.T) {
+	for _, c := range []struct {
+		code     int
+		rejected bool
+	}{{400, true}, {413, true}, {422, true}, {429, false}, {500, false}, {503, false}, {404, false}} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(c.code)
+			_, _ = w.Write([]byte(`{"error":"x"}`))
+		}))
+		var out map[string]any
+		err := postJSON(srv.URL, nil, map[string]any{}, &out)
+		srv.Close()
+		if err == nil {
+			t.Fatalf("%d: want an error", c.code)
+		}
+		if got := errors.Is(err, agentworker.ErrRequestRejected); got != c.rejected {
+			t.Errorf("%d: rejected = %v, want %v (%v)", c.code, got, c.rejected, err)
+		}
 	}
 }

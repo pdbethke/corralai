@@ -5,6 +5,7 @@ package advpool
 import (
 	"context"
 	"errors"
+	"github.com/pdbethke/corralai/internal/agentworker"
 	"log"
 	"strings"
 	"time"
@@ -33,10 +34,11 @@ import (
 const ShadowProviderFailedResult = "\x00shadow-provider-call-failed\x00"
 
 // criticIncompletePrefix starts a critic task's result when its review was cut
-// short (agentworker.CriticIncompletePrefix writes it; the two are kept equal
-// by TestCriticIncompleteMarkerMatchesTheLoops, since advpool does not import
-// agentworker). The driver carries it onto Verdict.CriticIncomplete.
-const criticIncompletePrefix = "\x00critic-incomplete\x00"
+// short. It IS agentworker.CriticIncompletePrefix: advpool imports
+// agentworker now (roles.go writes the critic's test list with it), so the
+// marker has one definition rather than two kept equal by a test. The driver
+// carries it onto Verdict.CriticIncomplete.
+const criticIncompletePrefix = agentworker.CriticIncompletePrefix
 
 // WriterProviderFailedResult is the same sentinel for the PRIMARY test-writer
 // seat: the model call itself failed (unreachable, 429, 5xx), so there is no

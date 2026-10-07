@@ -105,8 +105,8 @@ exactly what the token exists to prevent.
      a lone file.
    - Whole repo: `corral certify --repo . --dry-run` first (free, lists what
      would be audited), then add `--derive-model <m>` (or `--goals <file>`) plus
-     the three seats. `--repo` has **no** `--max-tokens`: bound it with a small
-     `--top` and tell the user it is uncapped.
+     the three seats. Cap the spend with `--max-tokens <n>` (the whole scan, every
+     seat) and keep `--top` small on a first run.
 5. **Test command rules:**
    - Scope it to a directory (`python3 -m pytest tests`), never one test file.
      corral adds its own test file beside yours, and a command pinned to one

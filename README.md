@@ -1,9 +1,11 @@
-# Corral — the harness that refuses to build
+# Corral — the bugs your tests miss, and the tests that catch them
 
 [![CI](https://github.com/pdbethke/corralai/actions/workflows/deploy.yml/badge.svg?branch=main)](https://github.com/pdbethke/corralai/actions/workflows/deploy.yml)
 [![License: Elastic 2.0](https://img.shields.io/badge/license-Elastic--2.0-e8a838)](LICENSE)
 [![docs](https://img.shields.io/badge/docs-corralai.dev-2f6f4e)](https://corralai.dev/docs/getting-started/)
 [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/pdbethke/corralai/badge)](https://securityscorecards.dev/viewer/?uri=github.com/pdbethke/corralai)
+
+**Your tests pass. Corral finds the bugs they miss — and hands you the tests that catch them.** It plants bugs in your code and runs your own test suite against each one. For every bug that slips through, it writes a test and runs it, keeping only tests that fail on the bug and pass on your real code. Proven, not suggested. Run on its own signing code, corral planted 78 bugs; 35 slipped past our own tests, and it wrote tests proving 30 of them were real gaps. We merged those tests the next day ([#210](https://github.com/pdbethke/corralai/pull/210)); [corralai.dev](https://corralai.dev/) shows one of them beside the bug it catches.
 
 **Everyone is building build harnesses. Corral is the one that refuses to build.** It never authors the code it judges: the faults it plants are probes, discarded once scored, and the tests it writes are evidence — each proven against its own fault and handed back to you.
 
@@ -80,9 +82,13 @@ actually test anything, or do they just pass?* — and answers it by execution:
   kills is a **proven** gap. Zero proven gaps means *nothing was proven this run* —
   never *your tests are fine*. ([why that distinction is the whole
   point](#when-corral-proves-a-gap-and-when-it-proves-nothing))
-- A **test-critic** — always a *different* model, enforced — reads your
-  suite cold and flags vacuous, designed-to-pass tests. Its opinion is carried as
-  **unverified advice; it never gates the verdict.**
+- A **test-critic** — always a *different* model, enforced — reads your test
+  file next to the code and returns one verdict per test: sound, vacuous (it can
+  never fail), or a dead check inside an otherwise real test. The answer is held
+  to a schema by the provider; for Go and Python the critic is handed every test
+  name and must judge each one, in batches of 20. A review cut short is reported
+  as INCOMPLETE, never as clean. Its opinion is carried as **unverified advice;
+  it never gates the verdict.**
 
 You get a signed verdict — `certified` or `needs-review` — printed and written to a
 local, tamper-evident ledger. `--out` also writes it as a self-contained file you
@@ -108,6 +114,13 @@ refuses unless you pass `--allow-unanchored`.
 
 ### Audit a real repo
 
+**Start free.** Enumeration needs no key, no sandbox and no money, and tells you
+in seconds which files corral can audit and which have no paired test:
+
+```bash
+corral certify --repo . --dry-run
+```
+
 Install your project's dev dependencies first — the suite must pass for you
 before corral can plant bugs against it. For Python, per-test selection needs
 `pytest-cov` specifically (not `coverage` alone — pytest exits 4 with no
@@ -115,11 +128,19 @@ output if the plugin is missing, and corral reports that rather than grading
 blind); without it corral grades by the whole suite and says so. Then:
 
 ```bash
-corral certify --repo . --substrate workspace \
-  --writer-model <model> --mutant-model <model> --critic-model <model> \
-  --derive-model <model> \
+corral certify --repo . --top 3 --max-tokens 3000000 \
+  --writer-model gemini-3.8-flash --mutant-model gemini-3.8-flash \
+  --derive-model gemini-3.8-flash --critic-model claude-haiku-4-5 \
   -- <your test command>       # e.g. -- python -m pytest, or -- npm test
 ```
+
+The model names are an example — what we run, not a default. `--top 3` audits the
+three highest-ranked files and `--max-tokens` caps the whole run's spend. For
+scale, one measured run on flask's `src/flask/app.py` with those seats took about
+six minutes and 0.5M input tokens, and proved 9 of 9 surviving bugs catchable. Each
+proven test is printed at the end of the report with "add it to your suite", and
+`corral scans show <id> --evidence` prints it again later; corral does not write
+it into your repository or open a pull request.
 
 That's four seats, not three: a repo scan derives a goal per file, so
 `--derive-model` is required whenever you're not supplying `--goals`
@@ -142,11 +163,15 @@ code in the jail, not by what the generator or critic say. Widening the guard to
 cover generator/writer and vendor is on the list; doing so is a breaking change to
 every previously-recorded verdict, so it hasn't shipped yet.
 
-`--substrate workspace` mutates your own checkout in place instead of copying
-it into a bwrap jail — the caller (your shell, a CI runner) *is* the isolation
-boundary — which sidesteps the jail's one real limitation: a sandboxed run
-can't see a project virtualenv or any other host-local toolchain state, only
-what's on `PATH` inside the jail. Pairing a source file with its test now
+By default the scan runs in the sandbox, on a copy of your tree; dependency
+directories inside the project (`.venv`, `venv`, `node_modules`, `vendor`,
+`.bundle`) are bound into it read-only, so a virtualenv that lives in the project
+works. What the sandbox cannot see is toolchain state under your home directory
+(`pip install --user`, pyenv, a virtualenv outside the project).
+`--substrate workspace` instead mutates your own checkout in place — the caller
+(your shell, a CI runner) *is* the isolation boundary. **Commit or stash first,
+or use a scratch clone:** a process killed outright (kill -9, out of memory) can
+leave a mutant behind, and nothing detects it. Pairing a source file with its test now
 searches `tests/**` (and each language's conventional test roots) for a file
 that actually exists rather than guessing a filename, so most
 conventionally-laid-out repos pair without any extra step. The exception is a
@@ -233,10 +258,9 @@ corral certify --local \
   -- python -m pytest
 ```
 
-It runs inside a jail that cannot see a project virtualenv or any other
-host-local toolchain state — fine for a self-contained file, but **for a repo
-with a virtualenv, use the `--repo --substrate workspace` path above
-instead.**
+It runs inside a jail. A virtualenv inside the project (`./.venv` or `./venv`)
+is bound into it read-only when you pass `--repo-dir`; one under your home
+directory, or a `pip install --user`, is invisible there.
 
 > **Whole-repo scanning is not equally strong across those languages.** `certify
 > --local` audits any single file you name, in any of them — you give it the path,
@@ -898,7 +922,7 @@ withheld unless `--push-source` — to a warehouse or MotherDuck, where the
 seats rank across every repository that pushes. A seat can be a coding
 agent — any agent you assign: `--reviewer-model <name>`, pinned to a model
 as `<name>:<model>`, where a name is a command line you define as
-`CORRALAI_AGENT_<NAME>="…"` (`claude-code` and `codex` come defined) —
+`CORRALAI_AGENT_<NAME>="…"` (`claude-code`, `codex` and `antigravity` come defined) —
 started in a throwaway worktree with the brief on stdin; it reads the
 tree itself and hands back scripts, and only corral's run of them is the
 record. `corral review plan` is

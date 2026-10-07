@@ -1,6 +1,6 @@
 ---
 title: Getting started
-description: Install corralai and run your first audit with corral certify --local.
+description: Install corral and run it on your own repository — the bugs your tests miss, and the tests that catch them.
 ---
 
 {/* SPDX-License-Identifier: Elastic-2.0 */}
@@ -20,12 +20,51 @@ cd corralai
 go build ./...
 ```
 
+## Run it on your repo
+
+Two commands. The first is free — no key, no sandbox, no money — and tells you in
+seconds which files corral can audit and which have no paired test:
+
+```bash
+cd your-repo
+corral certify --repo . --dry-run
+```
+
+Then audit the three highest-ranked files, with a cap on what the run may spend:
+
+```bash
+export GEMINI_API_KEY=...        # and ANTHROPIC_API_KEY for the critic below
+corral certify --repo . --top 3 --max-tokens 3000000 \
+  --writer-model gemini-3.8-flash --mutant-model gemini-3.8-flash \
+  --derive-model gemini-3.8-flash --critic-model claude-haiku-4-5 \
+  -- python -m pytest -q         # your own test command: npm test, go test ./..., …
+```
+
+- **Those model names are an example, not a default — corral has none.** Name any
+  models you hold keys for. The one rule: the critic must be a different model
+  from the writer. One provider is enough (for example two different Anthropic
+  models), and `--critic-model off` drops the critic, which is advisory anyway.
+- **Your suite has to pass first.** Install the project's dev dependencies. A
+  virtualenv inside the project (`./.venv`) is bound into the sandbox read-only;
+  one under your home directory is not. For Python, add `pytest-cov` so corral
+  can pick the tests that cover each file.
+- **What it costs, measured once:** flask's `src/flask/app.py` with these seats
+  took about six minutes and 0.5M input tokens, and proved 9 of 9 surviving bugs
+  catchable. Your files and suite will differ; `--max-tokens` is the hard cap.
+- **Where the proven tests appear:** at the end of the report, each with "add it to
+  your suite". `corral scans show <id> --evidence` prints them again later. corral
+  does not edit your repository or open a pull request.
+
+`corral doctor` (below) checks your sandbox, toolchain and keys for free before
+the first paid run. To run it on every pull request instead, see
+[the GitHub Action](/docs/github-action/).
+
 ## See it work first: `corral demo`
 
 One command, no setup beyond a provider key:
 
 ```bash
-corral demo --writer-model <model> --mutant-model <model> --critic-model <model>
+corral demo --writer-model claude-sonnet-5 --mutant-model claude-sonnet-5 --critic-model claude-haiku-4-5
 ```
 
 It writes a small Go package with a five-clause password rule and a test that checks
@@ -44,7 +83,7 @@ execution**, not opinion — is one command, off your own key, no daemon:
 ```bash
 export ANTHROPIC_API_KEY=sk-ant-...   # or OPENAI_/GEMINI_/OPENROUTER_API_KEY
 
-corral certify --local \
+corral certify --local --repo-dir . \
   --code path/to/your/file.go \
   --goal "what this code must guarantee" \
   --writer-model claude-sonnet-5 \
@@ -89,6 +128,7 @@ to fix:
 ```bash
 corral doctor --code path/to/your/file.go \
   --writer-model claude-sonnet-5 --mutant-model claude-sonnet-5 \
+  --critic-model claude-haiku-4-5 \
   -- go test ./...
 ```
 

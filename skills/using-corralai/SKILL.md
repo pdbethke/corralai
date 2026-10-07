@@ -38,8 +38,9 @@ test-critic must differ from the test-writer.
 - The suite runs against every mutant, **in a jail**; the kill-rate is the
   adequacy score — measured, never reported.
 - A test-writer authors a compiling test that kills whatever the suite missed.
-- A test-critic (always a *different*, decorrelation-enforced model) flags
-  vacuous tests as **unverified advice — it never gates the verdict.**
+- A test-critic (always a *different*, decorrelation-enforced model) returns a
+  verdict per test — sound, vacuous, or a dead check — as **unverified advice;
+  it never gates the verdict.** A review cut short is reported as INCOMPLETE.
 
 Output is a signed verdict (`certified` or `needs-review`), printed and written
 to a local tamper-evident ledger; `--out` also writes a self-contained file

@@ -5,16 +5,18 @@
 Entry point to corralai's own developer-doc corpus — the convention any repo
 audited with corralai can adopt.
 
-Corralai is a coordinated multi-agent, multi-model **audit gate**: a headless
-**brain** (`cmd/corral`) certifies a change **by execution** — it runs the check
-in a jail, measures the result itself (never a self-report), and signs a
-tamper-evident record — while a herd of (possibly different) models shares a
-persistent, searchable memory (`internal/memory`) the whole time. See
-[README.md](README.md).
+Corralai is a multi-model **audit engine**: the `corral` CLI (`cmd/corral`)
+certifies a change **by execution** — it runs the check in a jail, measures the
+result itself (never a self-report), and signs a tamper-evident record — and
+`corral review` makes every claim prove itself by script. `certify` and `review`
+read only the repository and its ledger. The optional daemon (`corral-wrangler`,
+frozen) keeps a persistent, searchable memory (`internal/memory`) for its herd.
+See [README.md](README.md).
 
 ## Where the herd's knowledge lives
 
-Two kinds of knowledge feed a run:
+Two kinds of knowledge feed a daemon run (an audit with `corral certify` reads
+neither):
 
 - **Vetted memory** — lessons and guidance the herd itself discovered and a
   human promoted (`internal/learn`, `internal/brain/learn.go`). This is

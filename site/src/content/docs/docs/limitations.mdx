@@ -1,6 +1,6 @@
 ---
 title: Limitations & roadmap
-description: Where corralai is honestly at (v0.8.x), what it deliberately does not claim, and where it's heading next.
+description: Where corralai is honestly at, what it deliberately does not claim, and where it's heading next.
 ---
 
 {/* SPDX-License-Identifier: Elastic-2.0 */}
@@ -10,7 +10,7 @@ Corralai is **v1.0.0-rc.18** — solo-maintained and moving fast. The foundation
 place; most of what's ahead is *surfacing* them, not re-architecting. This page
 is the honest version: what it can't do yet, and what's next.
 
-## What v0.8.x is
+## What it is today
 
 - **Certify by execution** works end to end: `corral certify -- <check>` and
   `corral certify --local`'s adversarial pool (mutant-generator → your suite
@@ -31,12 +31,13 @@ is the honest version: what it can't do yet, and what's next.
   The evidence table is in the README.
 - The **jail** (`bwrap`/container/`sandbox-exec`), the **human gate** on
   admin actions and merges, and a fully **attributed action ledger**.
-- The **learning loop** (findings → human-approved skills), **shared memory /
-  `search_memory`**, and durable **history + replay** — the recordings you
-  can watch on this site are real exported runs.
+- Durable **history + replay** — the recordings you can watch on this site are
+  real exported runs. The optional daemon (`corral-wrangler`, frozen) carries
+  the learning loop and shared memory; no `certify` or `review` run reads them.
 - Embedded **DuckDB analytics** and optional **MotherDuck** fleet sync —
-  `--push md:<db>` auto-creates the five-table `corral_scans`/`corral_audits`/
-  `corral_mutants`/`corral_model_calls`/`corral_events` bundle plus a
+  `certify --push md:<db>` auto-creates the five-table `corral_scans`/`corral_audits`/
+  `corral_mutants`/`corral_model_calls`/`corral_events` bundle (a `review` push
+  adds `corral_reviews`, `corral_findings` and `corral_adjudications`) plus a
   `corral_seal` view that cross-references the pushed statement's hash
   against the rows themselves — plus a public **[DuckDB integration
   page](/warehouse/)** that runs DuckDB in your browser (WebAssembly) over the
@@ -96,7 +97,7 @@ page and `SECURITY.md`):
   design review and adversarial tests, not (yet) by a hostile production
   adversary.
 
-Operationally, v0.1 has real, named ceilings, not "coming soon" hand-waving:
+Operationally, the current release has real, named ceilings, not "coming soon" hand-waving:
 
 - **One active adversarial-pool run at a time, per hosted brain.**
   `start_adversarial_run` refuses a second run while one is active — a
@@ -137,8 +138,8 @@ Operationally, v0.1 has real, named ceilings, not "coming soon" hand-waving:
   `start_adversarial_run` fan-out are real, tested code paths, but with no
   workers connected to a given deployment they have nothing to fan out to —
   dormant until workers are pointed at it, not a missing feature.
-- **Single-operator.** Many-runs-at-once, budget caps, and mid-run steering
-  are roadmap items, not shipped features.
+- **Single-operator.** Many-runs-at-once and mid-run steering are roadmap
+  items. A token cap (`--max-tokens`) has shipped; there is no dollar cap.
 
 ## Where it's heading
 

@@ -128,8 +128,9 @@ carries the product now.
   *disclosed, unadjudicated* until a compiling test actually kills it — corral never
   calls an unproven survivor a real bug), **feeding the compiler's own error back on a
   non-compiling attempt so it corrects rather than blindly repeats**, and a decorrelated
-  **test-critic** flags vacuous/designed-to-pass tests as **unverified advice that never
-  gates** — and because it never gates, it can be turned off entirely
+  **test-critic** returns one verdict per test (sound, vacuous, or a dead check; for Go
+  and Python it is handed every test name and must judge each) as **unverified advice
+  that never gates** — and because it never gates, it can be turned off entirely
   (`--critic-model off`), which a deliberately single-vendor run needs whenever that
   vendor offers only one model worth running (the critic must otherwise differ from the
   writer). A run with no critic reports no advisory review at all, rather than an empty
@@ -586,8 +587,8 @@ board, approve the merges.
   into the jail.
 
 ## Ahead — ready for teams
-- **Cost governance.** Per-audit / role / model cost, budget caps, pre-flight
-  estimates.
+- **Cost governance.** A token cap (`--max-tokens`) and per-role token spend have
+  shipped; still ahead: dollar estimates before a run, and caps per role or model.
 - **Concurrency & multi-tenancy.** Many audits at once — scheduled, isolated, fair.
 - **Memory hygiene.** The shared corpus stays *fresh*, not merely growing.
 

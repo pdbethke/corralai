@@ -150,7 +150,7 @@ slow"`), not a shell one-liner that chains multiple commands.
 - uses: actions/checkout@v4
   with:
     fetch-depth: 0
-- uses: pdbethke/corralai@main
+- uses: pdbethke/corralai@v1.0.0-rc.18
   with:
     test-command: "go test ./..."
     anthropic-key: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -160,7 +160,39 @@ slow"`), not a shell one-liner that chains multiple commands.
     writer-model: claude-sonnet-5
     mutant-model: claude-sonnet-5
     critic-model: claude-haiku-4-5
+    top: "3"                 # audit the three highest-ranked files
+    max-tokens: "3000000"    # a hard cap on the run's spend, every seat
 ```
+
+**A Python or JavaScript project needs its dependencies on the runner first.**
+The action runs your suite on the runner itself, so install what your tests
+need before the corral step:
+
+```yaml
+- uses: actions/checkout@v4
+  with:
+    fetch-depth: 0
+- uses: actions/setup-python@v5
+  with:
+    python-version: "3.12"
+- run: pip install -e ".[dev]" pytest pytest-cov   # pytest-cov lets corral pick tests per file
+- uses: pdbethke/corralai@v1.0.0-rc.18
+  with:
+    test-command: "python -m pytest -q"
+    gemini-key: ${{ secrets.GEMINI_API_KEY }}
+    derive-model: gemini-3.8-flash
+    writer-model: gemini-3.8-flash
+    mutant-model: gemini-3.8-flash
+    critic-model: gemini-3.7-flash
+    top: "3"
+    max-tokens: "3000000"
+```
+
+For JavaScript, use `actions/setup-node`, run `npm ci`, and set
+`test-command: "npm test"`. **On a public repository, a pull request from a
+fork spends your model key** unless you require approval for fork workflows;
+see [who pays](#who-pays-and-how-not-to-pay-for-a-strangers-pull-request)
+below.
 
 **There is no `v1` tag, but there are pinnable release tags.** `v0.1.0` and
 `v0.2.0` predate the action and carry no `action.yml`; **`v0.3.0` and later do**

@@ -118,8 +118,10 @@ jailed check in Docker instead — no sudo required.
    the jail confirms the test kills the mutant, *that* survivor is now a
    **proven**, catchable gap — not a fluke of the harness — and the test is
    handed back for you to add.
-5. **Test-critic.** A decorrelated critic model reads the dev's test file cold
-   and flags what it would have said in review: the suite never tries an
+5. **Test-critic.** A decorrelated critic model reads the dev's test file next
+   to the code and returns a verdict per test (sound, vacuous, or a dead check);
+   for Go and Python it is handed every test name and must judge each one. It
+   flags what it would have said in review: the suite never tries an
    *invalid* password that's the right length. Its findings are carried as an
    **unverified** second opinion — advisory, never gating the signed verdict,
    which is execution-proven only.

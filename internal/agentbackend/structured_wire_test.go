@@ -119,14 +119,17 @@ func TestAnthropicSendsTheSchemaAsOutputConfigFormat(t *testing.T) {
 	}
 }
 
-// A provider's 4xx that is not 404 (no such model) or 429 (rate limited) is a
-// rejection of the request itself, and is marked so the critic can tell "this
-// provider will not take this schema" from a transient failure.
+// A provider's 400, 413 or 422 is a rejection of the request's content, and is
+// marked so the critic can tell "this provider will not take this schema" from
+// a failure the same prompt without its schema would hit again: a bad key
+// (401, 403), a timeout (408), a rate limit (429), a missing model (404) or a
+// server fault. Answering any of those with a plain call spends a second large
+// prompt to learn nothing.
 func TestPostJSONMarksARejectedRequest(t *testing.T) {
 	for _, c := range []struct {
 		code     int
 		rejected bool
-	}{{400, true}, {413, true}, {422, true}, {429, false}, {500, false}, {503, false}, {404, false}} {
+	}{{400, true}, {413, true}, {422, true}, {401, false}, {403, false}, {408, false}, {409, false}, {429, false}, {500, false}, {503, false}, {404, false}} {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(c.code)
 			_, _ = w.Write([]byte(`{"error":"x"}`))

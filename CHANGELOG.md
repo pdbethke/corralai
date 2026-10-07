@@ -11,6 +11,20 @@ history of any release, `git log v0.3.4..v0.3.5`.
 
 ## [Unreleased]
 
+- **One-time cache miss.** `reposcan.VerdictGeneration` moves from 16 (rc.19)
+  to 17. Every verdict cached before this change is re-measured once.
+- **A Python test file with an escaped triple quote no longer loses tests
+  from the critic's list.** A `\"""` inside a triple-quoted string closed the
+  string early in the scanner, so every test defined after it was left off the
+  list while the review still read as complete. The scanner now honours the
+  backslash. It also lists nothing, instead of the tests found so far, when it
+  ends inside a string or an open bracket: the critic then answers in the
+  unkeyed shape rather than being held to a list known to be short.
+- **A bad API key no longer costs the critic a second large prompt.** Only a
+  400, 413 or 422 is read as "this provider will not take this schema" and
+  answered with a plain call. A 401, 403 or 408 fails the plain call the same
+  way, so it is returned as it is.
+
 ## [v1.0.0-rc.19] — 2026-10-07
 
 Fixes from a review of the whole project: the critic's test list, its answer

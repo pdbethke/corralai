@@ -121,7 +121,16 @@ package reposcan
 // error no longer drops the answer schema for the rest of a review. A "15"
 // critic count may have come from a list that forbade judging real tests, or
 // counted one twice. Shape unchanged; behaviour bump.
-const VerdictGeneration = "16"
+// "17" (2026-10-07): two more ways the critic's work was cut short without
+// saying so. The Python scanner now honours a backslash inside a triple-quoted
+// string (an escaped triple quote used to close it early and drop every test
+// after it from the list), and lists nothing when it ends inside a string or
+// an open bracket instead of an undercount. And a 401, 403 or 408 from a
+// provider no longer sends the critic's plain re-ask (which spent a second
+// large prompt to hit the same refusal); only 400, 413 and 422 do. A "16"
+// critic count may have been held to a list that was missing real tests.
+// Shape unchanged; behaviour bump.
+const VerdictGeneration = "17"
 
 // VerdictShapeSHA256 fingerprints advpool.Verdict's serialized shape: every
 // exported field's name, type and json tag, sorted by name and hashed.

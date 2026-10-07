@@ -1019,6 +1019,13 @@ var (
 // The list is a promise the critic is held to: since the critic must judge
 // exactly the listed tests, a test this misses cannot be flagged at all, and
 // one it invents is a selector that runs nothing.
+//
+// A scan that ends inside a string or an open bracket lists NOTHING (nil, the
+// "no list" answer), never the tests found before it went wrong. Python
+// source that is valid ends outside both, so such an ending means the scanner
+// lost its place (or the file is not valid Python), and every line after the
+// point it lost it was skipped as "not code": a list built that way is a
+// confident undercount, which the critic would be held to as if complete.
 func (pyPlugin) TestNamesInSource(testPath, src string) []string {
 	var out []string
 	seen := map[string]bool{}
@@ -1064,12 +1071,17 @@ func (pyPlugin) TestNamesInSource(testPath, src string) []string {
 			add(testPath + "::" + class + "::" + m[2])
 		}
 	}
+	if !lx.atCode() {
+		return nil
+	}
 	return out
 }
 
 // pyLexer carries the lexical state that crosses line boundaries: an open
 // triple-quoted string and the depth of open brackets. Single-quoted strings
-// and comments end with their line.
+// and comments end with their line. A backslash escapes the character after
+// it in every kind of string (raw ones too: r"""\"""" does not end at the
+// escaped quote), so \""" inside a triple-quoted string does not close it.
 type pyLexer struct {
 	triple string // the open triple quote, or ""
 	depth  int
@@ -1082,6 +1094,10 @@ func (l *pyLexer) atCode() bool { return l.triple == "" && l.depth == 0 }
 func (l *pyLexer) scan(line string) {
 	for i := 0; i < len(line); i++ {
 		if l.triple != "" {
+			if line[i] == '\\' {
+				i++ // the escaped character cannot start the closing quote
+				continue
+			}
 			if strings.HasPrefix(line[i:], l.triple) {
 				i += 2
 				l.triple = ""

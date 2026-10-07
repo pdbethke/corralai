@@ -11,6 +11,14 @@ history of any release, `git log v0.3.4..v0.3.5`.
 
 ## [Unreleased]
 
+## [v1.0.0-rc.19] — 2026-10-07
+
+Fixes from a review of the whole project: the critic's test list, its answer
+schema under a rate limit, and a help screen that described the wrong tool.
+The documentation was corrected separately, and lives on the site.
+
+- **One-time cache miss.** `reposcan.VerdictGeneration` moves from 15 (rc.18)
+  to 16. Every verdict cached before this release is re-measured once.
 - **The critic's test list no longer leaves real tests unjudged.** Since rc.17
   the critic must judge exactly the tests listed for it, so a test missing from
   the list could not be flagged at all, while the review still read as
@@ -36,7 +44,6 @@ history of any release, `git log v0.3.4..v0.3.5`.
 - **`corral -h` describes the audit tool.** It used to open by describing the
   optional daemon. It now leads with a "Start here" block: `demo`, `doctor`,
   `certify --repo . --dry-run`, then a capped `certify --repo`.
-- **One-time cache miss.** `reposcan.VerdictGeneration` moves from 15 to 16.
 
 ## [v1.0.0-rc.18] — 2026-10-06
 

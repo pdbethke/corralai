@@ -4,6 +4,8 @@ package main
 
 import (
 	"context"
+	"crypto/ed25519"
+	"encoding/hex"
 	"encoding/json"
 	"github.com/pdbethke/corralai/internal/auditpush"
 	"github.com/pdbethke/corralai/internal/review"
@@ -171,6 +173,12 @@ func TestUILedgerAPIShowsTheChainTheReviewsAndTheVerdicts(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "ledger")
 	writeCacheTestEntry(t, dir, []scanstore.File{{Path: "a.go", Disposition: "audited", Gradable: true, KillRate: ptrF(0.5)}})
 	signer, _ := ledgerSignerFromLocalKey()
+	// The UI verifies against an EXPLICIT key only; hand it the one that signed.
+	lk, kerr := loadLocalCertifyKeyIfConfigured()
+	if kerr != nil {
+		t.Fatal(kerr)
+	}
+	t.Setenv(auditpush.LedgerPubKeyEnv, hex.EncodeToString(lk.Public().(ed25519.PublicKey)))
 	code := 0
 	r := review.Review{Repo: "acme/r", Commit: "abc", Scope: "pkg", ReviewerModel: "rev", VerifierModel: "ver", Opinion: "it leaks",
 		Findings: []review.Finding{{ID: "R1", Claim: "leaks the key", Declared: review.TierReproduced, Tier: review.TierReproduced, Script: "exit 0", ExitCode: &code,
@@ -229,5 +237,31 @@ func TestUILedgerAPIShowsTheChainTheReviewsAndTheVerdicts(t *testing.T) {
 	uiHandler(fakeSeal{}, dir).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
 	if !strings.Contains(rec.Body.String(), "api/ledger") || !strings.Contains(rec.Body.String(), "The chain") {
 		t.Error("the page does not render the ledger half")
+	}
+}
+
+// The UI is a third door onto "which key checks the ledger": with a local
+// certify key configured and no explicit key it must NOT claim verification
+// against the local key, and a malformed explicit key is an error.
+func TestUILedgerNeverVerifiesAgainstTheLocalKeyImplicitly(t *testing.T) {
+	t.Setenv("CORRALAI_CERTIFY_KEY_FILE", filepath.Join(t.TempDir(), "certify_key"))
+	t.Setenv(auditpush.LedgerPubKeyEnv, "")
+	dir := filepath.Join(t.TempDir(), "ledger")
+	writeCacheTestEntry(t, dir, []scanstore.File{{Path: "a.go", Disposition: "audited", Gradable: true, KillRate: ptrF(0.5)}})
+	u, err := readUILedger(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u.Verified != "" || strings.Contains(u.Verified, "local") {
+		t.Fatalf("verified against %q with no explicit key", u.Verified)
+	}
+	for _, e := range u.Entries {
+		if e.Verified {
+			t.Fatalf("entry reported verified with no key: %+v", e)
+		}
+	}
+	t.Setenv(auditpush.LedgerPubKeyEnv, "garbage")
+	if _, err := readUILedger(dir); err == nil || !strings.Contains(err.Error(), auditpush.LedgerPubKeyEnv) {
+		t.Fatalf("garbage key must be an error naming the variable, got %v", err)
 	}
 }

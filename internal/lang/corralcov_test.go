@@ -434,3 +434,24 @@ func TestInterpretersInSeesThroughTheWrapper(t *testing.T) {
 		}
 	}
 }
+
+// Both corralcov detectors ask "is this argv a shell -c wrapper?" and must
+// give the same answer as preflight does, for every shell spelling: a
+// `/usr/bin/bash -e -c` or `dash -c` wrapper is still seen through, and the
+// script's own runner (not the shell) is what gets matched.
+func TestShellWrapperSpellingsSeenThroughByCorralcov(t *testing.T) {
+	runners := []string{"pytest"}
+	for _, argv := range [][]string{
+		{"sh", "-c", "pytest -q"},
+		{"/bin/sh", "-c", "pytest -q"},
+		{"/usr/bin/bash", "-e", "-c", "pytest -q"},
+		{"dash", "-c", "pytest -q"},
+	} {
+		if !coverageRunnerNamed(argv, runners) {
+			t.Errorf("coverageRunnerNamed(%q) = false, want true: the wrapped runner is pytest", argv)
+		}
+		if got := InterpretersIn(argv); strings.Join(got, ",") != "pytest" {
+			t.Errorf("InterpretersIn(%q) = %v, want [pytest]", argv, got)
+		}
+	}
+}

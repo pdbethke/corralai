@@ -90,7 +90,7 @@ func runModelsRank(args []string, repoRoot string, load rankLoader, stdout, stde
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
-		return 2
+		return flagParseExit(err)
 	}
 	if s := strings.TrimSpace(*seat); s != "" && !knownSeatName(s) {
 		fmt.Fprintf(stderr, "corral models rank: --seat %q is not a seat — it must be one of: %s\n", s, strings.Join(rankSeats, ", "))

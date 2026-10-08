@@ -158,8 +158,15 @@ func runCriticScore(args []string, lister criticScoreLister, admin criticScoreAd
 	//
 	// A command must be able to say what it does with no store, no arguments
 	// and no collaborators wired.
-	if len(args) == 0 || wantsHelp(args) {
-		fmt.Fprintln(stderr, "usage: corral criticscore list|show <id>|confirm <id> [--why ...]|refute <id> [--why ...]")
+	//
+	// A help request exits 0; a bare `criticscore` is misuse and stays 2.
+	const usage = "usage: corral criticscore list|show <id>|confirm <id> [--why ...]|refute <id> [--why ...]"
+	if verbWantsHelp(args) {
+		fmt.Fprintln(stderr, usage)
+		return 0
+	}
+	if len(args) == 0 {
+		fmt.Fprintln(stderr, usage)
 		return 2
 	}
 	ctx := context.Background()
@@ -215,7 +222,7 @@ func runCriticScore(args []string, lister criticScoreLister, admin criticScoreAd
 		fs.SetOutput(stderr)
 		why := fs.String("why", "", "why this verdict was reached — the evidence you actually checked")
 		if err := fs.Parse(args[2:]); err != nil {
-			return 2
+			return flagParseExit(err)
 		}
 		msg, err := admin.Adjudicate(ctx, args[1], verdict, strings.TrimSpace(*why))
 		if err != nil {

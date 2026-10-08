@@ -106,7 +106,11 @@ jobs:
         # argument is that those two must never render the same.
         run: |
           git fetch --depth=1 origin corral/ledger
-          bash scripts/gen-ledger-site.sh
+          # The deployed page checks corral's own record against the key the
+          # repository publishes — passed EXPLICITLY, so the trust decision
+          # lives here, in review, not inferred inside the renderer.
+          test -s LEDGER_PUBKEY || { echo "LEDGER_PUBKEY is missing or empty — refusing to publish an unchecked ledger page" >&2; exit 1; }
+          CORRALAI_LEDGER_PUBKEY="$(tr -d '[:space:]' < LEDGER_PUBKEY)" bash scripts/gen-ledger-site.sh
       - name: Build + smoke-test the site
         working-directory: site
         run: npm run test:e2e

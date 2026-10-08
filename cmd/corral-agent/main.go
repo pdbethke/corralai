@@ -27,6 +27,7 @@ import (
 	"github.com/pdbethke/corralai/internal/agentrole"
 	"github.com/pdbethke/corralai/internal/agentworker"
 	"github.com/pdbethke/corralai/internal/brainclient"
+	"github.com/pdbethke/corralai/internal/buildinfo"
 	"github.com/pdbethke/corralai/internal/sandbox"
 	"golang.org/x/net/websocket"
 	"net/http"
@@ -142,13 +143,15 @@ var callish = regexp.MustCompile(`(?s)\b([a-zA-Z_][a-zA-Z0-9_]*)\s*\(\s*(\{.*\})
 
 type ticket struct{ id, title, hint string }
 
-// version is set at build time via -ldflags "-X main.version=...".
-var version = "dev"
+// stampedVersion is what -ldflags "-X main.stampedVersion=..." writes (the one
+// build line every binary shares); buildinfo.Version turns it into the version
+// reported, falling back to the module version of a `go install` build.
+var stampedVersion = "dev"
 
 func main() {
 	for _, a := range os.Args[1:] {
 		if a == "--version" || a == "-version" || a == "version" || a == "-v" {
-			fmt.Println("corral-agent", version)
+			fmt.Println("corral-agent", buildinfo.Version(stampedVersion))
 			return
 		}
 		if a == "-h" || a == "--help" || a == "help" {

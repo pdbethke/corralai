@@ -138,8 +138,8 @@ func MinimalEnv() []string {
 }
 
 // ScrubbedEnviron is the host environment WITHOUT corral's own secrets: every
-// provider key it knows by name (creds.CanonicalNames, plus GOOGLE_API_KEY
-// and the MotherDuck token) is dropped; everything else — PATH, HOME, GOPATH,
+// provider key it knows by name (creds.CanonicalNames, which includes
+// GOOGLE_API_KEY via creds.Providers, plus the MotherDuck token) is dropped; everything else — PATH, HOME, GOPATH,
 // GOFLAGS, a venv, CI variables — is kept, because the audited suite needs
 // its environment to run. This is what the WORKSPACE substrate hands the
 // project's test command. The jail hands MinimalEnv; the workspace runner
@@ -161,7 +161,6 @@ func MinimalEnv() []string {
 // API key is exactly the kind of variable its tests need.
 var CorralOwnSecrets = []string{
 	"CORRAL_TOKEN",
-	"GOOGLE_API_KEY",
 	"motherduck_token",
 	"MOTHERDUCK_TOKEN",
 }

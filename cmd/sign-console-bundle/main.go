@@ -29,6 +29,12 @@ import (
 )
 
 func main() {
+	// A help request is answered on stdout with exit 0, like every other
+	// binary here: scripts/gen-cli-docs.sh refuses any -h that exits non-zero.
+	if len(os.Args) == 2 && (os.Args[1] == "-h" || os.Args[1] == "--help" || os.Args[1] == "help") {
+		fmt.Println("usage: sign-console-bundle <version> <hex-ed25519-seed>")
+		return
+	}
 	if len(os.Args) != 3 {
 		fmt.Fprintln(os.Stderr, "usage: sign-console-bundle <version> <hex-ed25519-seed>")
 		os.Exit(1)

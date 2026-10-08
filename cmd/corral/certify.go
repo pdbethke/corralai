@@ -399,7 +399,7 @@ func runCertify(args []string, run cmdRunner, post buildPoster, jail jailRunner,
 	branchFlag := fs.String("branch", "", "branch (default: git rev-parse --abbrev-ref HEAD)")
 	netFlag := fs.Bool("net", true, "allow network inside the jail for the check (use --net=false to lock down; standalone path only)")
 	if err := fs.Parse(flagArgs); err != nil {
-		return 2
+		return flagParseExit(err)
 	}
 	// A trailing positional (after all flags) also counts as the ref, so
 	// `corral certify --out x -- cmd HEAD` style isn't required — but the

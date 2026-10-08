@@ -209,9 +209,7 @@ func coverageRunnerNamed(testCmd []string, runners []string) bool {
 	if len(testCmd) == 0 {
 		return false
 	}
-	base := strings.TrimSuffix(filepath.Base(testCmd[0]), ".cmd")
-	switch base {
-	case "sh", "bash", "dash", "zsh":
+	if cmdIsShellWrapped(testCmd) {
 		script := ""
 		for i, a := range testCmd {
 			if a == "-c" && i+1 < len(testCmd) {
@@ -230,14 +228,14 @@ func coverageRunnerNamed(testCmd []string, runners []string) bool {
 			}
 		}
 		return false
-	default:
-		for _, r := range runners {
-			if base == r {
-				return true
-			}
-		}
-		return false
 	}
+	base := strings.TrimSuffix(filepath.Base(testCmd[0]), ".cmd")
+	for _, r := range runners {
+		if base == r {
+			return true
+		}
+	}
+	return false
 }
 
 // shellCommandWords returns the word in COMMAND POSITION for each command in a
@@ -367,15 +365,12 @@ func InterpretersIn(argv []string) []string {
 	if len(argv) == 0 {
 		return nil
 	}
-	switch strings.TrimSuffix(filepath.Base(argv[0]), ".cmd") {
-	case "sh", "bash", "dash", "zsh":
+	if cmdIsShellWrapped(argv) {
 		for i, a := range argv {
 			if a == "-c" && i+1 < len(argv) {
 				return shellCommandWords(argv[i+1])
 			}
 		}
-		return []string{argv[0]}
-	default:
-		return []string{argv[0]}
 	}
+	return []string{argv[0]}
 }

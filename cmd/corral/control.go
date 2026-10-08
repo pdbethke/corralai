@@ -3,6 +3,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -19,9 +20,14 @@ import (
 // Promote (vets), the same candidate→vetted human-gate path a control owner
 // uses — never a back door around vetting.
 func runControl(args []string, out io.Writer) error {
+	const usage = "usage: corral control seed --spec-db <path> --owner <principal> --goal <id> --target <repo-path> --code-path <flat> --test-path <flat> --test-file <path> [--kill-rate <float>]\n" +
+		"note: the brain must be stopped (it holds the control store open); or author via the stage_control / promote_control MCP tools while the brain runs"
+	if len(args) > 0 && wantsHelp(args[:1]) {
+		fmt.Fprintln(out, usage)
+		return nil
+	}
 	if len(args) == 0 || args[0] != "seed" {
-		return fmt.Errorf("usage: corral control seed --spec-db <path> --owner <principal> --goal <id> --target <repo-path> --code-path <flat> --test-path <flat> --test-file <path> [--kill-rate <float>]\n" +
-			"note: the brain must be stopped (it holds the control store open); or author via the stage_control / promote_control MCP tools while the brain runs")
+		return fmt.Errorf("%s", usage)
 	}
 	fs := flag.NewFlagSet("control seed", flag.ContinueOnError)
 	specDB := fs.String("spec-db", "", "controlspec DuckDB path")
@@ -33,6 +39,11 @@ func runControl(args []string, out io.Writer) error {
 	testFile := fs.String("test-file", "", "path to the vetted test source file")
 	killRate := fs.Float64("kill-rate", 1.0, "recorded adequacy kill rate")
 	if err := fs.Parse(args[1:]); err != nil {
+		// -h: the flag package already printed the flag set; that is an
+		// answer, not a failure (see flagParseExit).
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
 		return err
 	}
 	if *specDB == "" || *owner == "" || *goal == "" || *target == "" || *codePath == "" || *testPath == "" || *testFile == "" {

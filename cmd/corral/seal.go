@@ -353,7 +353,7 @@ func runSeal(args []string, open func(dsn string) (sealReader, error), stdout, s
 	top := fs.Int("top", defaultSealTop, "how many of the repo's highest-ranked (churn x size) files count as \"hot\" for the coverage line — same ranking `certify --repo` uses to bound a scan")
 	asJSON := fs.Bool("json", false, "emit the rows as JSON")
 	if err := fs.Parse(args); err != nil {
-		return 2
+		return flagParseExit(err)
 	}
 
 	target := strings.TrimSpace(*dsn)

@@ -3,7 +3,6 @@
 package main
 
 import (
-	"crypto/ed25519"
 	"strings"
 	"time"
 
@@ -79,13 +78,14 @@ type uiFinding struct {
 }
 
 // readUILedger builds the ledger view: one walk of the chain (the same
-// VerifyLedgerDir the CLI runs, against the local certify key when there
-// is one), then the reviews with adjudications applied.
+// VerifyLedgerDir the CLI runs, against the key auditpush.ResolveLedgerPubKey
+// names — explicit only, never the local certify key), then the reviews with
+// adjudications applied. A malformed key is returned as an error, which the
+// handler reports like any other ledger error.
 func readUILedger(dir string) (uiLedger, error) {
-	var pub ed25519.PublicKey
-	verified := ""
-	if priv, err := loadLocalCertifyKeyIfConfigured(); err == nil {
-		pub, verified = priv.Public().(ed25519.PublicKey), "the local certify key"
+	pub, verified, err := auditpush.ResolveLedgerPubKey("")
+	if err != nil {
+		return uiLedger{}, err
 	}
 	checks, err := auditpush.VerifyLedgerDir(dir, pub)
 	if err != nil {

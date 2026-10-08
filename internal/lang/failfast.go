@@ -51,23 +51,6 @@ func cmdHasWord(cmd []string, name string) bool {
 	return false
 }
 
-// cmdIsShellWrapped reports the `sh -c '<script>'` shape, where argv is not
-// the runner's argv at all and nothing may be appended to it.
-func cmdIsShellWrapped(cmd []string) bool {
-	if len(cmd) == 0 {
-		return false
-	}
-	switch filepath.Base(cmd[0]) {
-	case "sh", "bash", "zsh", "dash":
-		for _, a := range cmd[1:] {
-			if a == "-c" {
-				return true
-			}
-		}
-	}
-	return false
-}
-
 // AppendFailFast appends args to cmd, unless there is nothing to append, the
 // command is shell-wrapped, or a flag from args is already present (an
 // operator who wrote -x themselves must not get a second one).

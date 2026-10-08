@@ -129,7 +129,7 @@ func runCertifyVerify(args []string, fetch pubkeyFetcher, newWitness witnessFact
 	rekorURLFlag := fs.String("rekor-url", "", "Rekor instance to verify the inclusion proof against (default $CORRALAI_REKOR_URL or "+defaultRekorURL+")")
 	allowUnanchored := fs.Bool("allow-unanchored", false, "accept a signed-but-not-publicly-witnessed record (weaker: no third-party transparency guarantee)")
 	if err := fs.Parse(args); err != nil {
-		return 2
+		return flagParseExit(err)
 	}
 	rest := fs.Args()
 	if len(rest) != 1 {

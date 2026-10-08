@@ -112,13 +112,8 @@ func firstExecutableToken(testCmd []string) (string, bool) {
 	// and choose between rspec and ruby, so it invokes a shell explicitly rather
 	// than smuggling the script into argv[0] (which broke the workspace
 	// substrate, where argv is exec'd directly).
-	if len(testCmd) > 1 {
-		switch strings.TrimSpace(testCmd[0]) {
-		case "sh", "bash", "zsh":
-			if strings.TrimSpace(testCmd[1]) == "-c" {
-				return "", false
-			}
-		}
+	if cmdIsShellWrapped(testCmd) {
+		return "", false
 	}
 	for _, tok := range stripLeadingEnvAssignments(testCmd) {
 		trimmed := strings.TrimSpace(tok)

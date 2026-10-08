@@ -41,10 +41,10 @@ func runLedger(args []string, stdout, stderr io.Writer) int {
 	case "verify":
 		fs := flag.NewFlagSet("corral ledger verify", flag.ContinueOnError)
 		fs.SetOutput(stderr)
-		pub := fs.String("pub", "", "hex-encoded Ed25519 public key to verify signatures against (default: the local certify key)")
+		pub := fs.String("pub", "", "hex-encoded Ed25519 public key to verify signatures against (default: $CORRALAI_LEDGER_PUBKEY; with neither, signatures are NOT CHECKED — the local certify key is never used)")
 		expectHead := fs.String("expect-head", "", "the hash this chain's newest entry must have, held from OUTSIDE the directory (a git ref, a Rekor receipt, a note). A chain verifies against itself, so removing the newest entries leaves the rest valid and no check inside can see it; this is the anchor that does. A prefix is accepted, but at least 12 hex characters — a short one names too many entries to be an anchor")
 		if err := fs.Parse(args[1:]); err != nil {
-			return 2
+			return flagParseExit(err)
 		}
 		if fs.NArg() != 1 {
 			fmt.Fprintln(stderr, "corral ledger verify: name one directory")
@@ -155,7 +155,7 @@ func runLedgerRetract(args []string, stdout, stderr io.Writer) int {
 	// spelling puts --reason last; flags are moved to the front so either
 	// order works.
 	if err := fs.Parse(flagsFirst(fs, args)); err != nil {
-		return 2
+		return flagParseExit(err)
 	}
 	if fs.NArg() != 2 || strings.TrimSpace(*reason) == "" {
 		fmt.Fprintln(stderr, "corral ledger retract: usage: corral ledger retract <dir> <entry hash or prefix> --reason \"…\"")
@@ -227,7 +227,7 @@ func runLedgerPush(args []string, stdout, stderr io.Writer) int {
 	withSource := fs.Bool("push-source", false, "also send the source bytes the entries hold — authored tests, verdict JSON, reproduction scripts and their output; off by default, they quote the audited code")
 	dryRun := fs.Bool("dry-run", false, "say what would be pushed and write nothing")
 	if err := fs.Parse(flagsFirst(fs, args)); err != nil {
-		return 2
+		return flagParseExit(err)
 	}
 	if fs.NArg() != 2 {
 		fmt.Fprintln(stderr, "corral ledger push: usage: corral ledger push <dir> <dsn> [--push-source] [--dry-run]")

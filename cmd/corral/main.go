@@ -91,15 +91,17 @@ package main
 
 import (
 	"context"
+	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
-	"runtime/debug"
 	"strings"
 	"time"
 
 	"github.com/pdbethke/corralai/internal/bugcatch"
+	"github.com/pdbethke/corralai/internal/buildinfo"
 	"github.com/pdbethke/corralai/internal/criticscore"
 	"github.com/pdbethke/corralai/internal/eval"
 )
@@ -277,7 +279,8 @@ Usage:
                                   --limit n, --json
   corral verify --ledger <dir>    walk a ledger directory's chain: every entry's hash against its
                                   bytes, every link against its predecessor, every signature
-                                  against --pub or the local certify key; one line per entry,
+                                  against --pub, else $CORRALAI_LEDGER_PUBKEY, else NOT CHECKED
+                                  (never the local certify key); one line per entry,
                                   an edited or removed entry named; unsigned said, never "verified"
   corral ledger append <entry> <dir>
                                   re-link an entry to <dir>'s current head (re-hash, re-sign, place)
@@ -399,9 +402,9 @@ main.go (also reproduced in the generated CLI reference).
 `
 }
 
-// version is set at build time via -ldflags "-X main.version=...", and falls
-// back to the module version Go embeds in the binary — see resolveVersion.
-var version = resolveVersion(stampedVersion, debug.ReadBuildInfo)
+// version is the build's reported version: the -ldflags stamp if any, else the
+// module version Go embeds for a `go install` — see buildinfo.Version.
+var version = buildinfo.Version(stampedVersion)
 
 // stampedVersion is what -ldflags "-X main.stampedVersion=..." writes. It stays
 // "dev" for any build that does not pass it, which includes the one that
@@ -409,30 +412,6 @@ var version = resolveVersion(stampedVersion, debug.ReadBuildInfo)
 // the README and the one every first-time reader uses. Before this, every such
 // user's `corral version` said "dev" and no bug report could name a build.
 var stampedVersion = "dev"
-
-// resolveVersion prefers an explicitly stamped version (a release build knows
-// more than the module graph, and may be building from a checkout rather than
-// a tagged module), then the module version Go records in the binary for a
-// `go install <module>@<version>`.
-//
-// "(devel)" — what a local `go build` reports — is NOT a version and must never
-// be printed as one; it, an empty string, and unavailable build info all fall
-// back to "dev", which is exactly today's behaviour for a developer in-tree.
-func resolveVersion(stamped string, readBuildInfo func() (*debug.BuildInfo, bool)) string {
-	if stamped != "" && stamped != "dev" {
-		return stamped
-	}
-	bi, ok := readBuildInfo()
-	if !ok || bi == nil {
-		return "dev"
-	}
-	switch v := bi.Main.Version; v {
-	case "", "(devel)":
-		return "dev"
-	default:
-		return v
-	}
-}
 
 func main() {
 	// Dispatch known subcommands BEFORE the version/help scan — see
@@ -539,7 +518,7 @@ func main() {
 		os.Exit(runFindingsMCP(context.Background(), cs, os.Stderr))
 	case "criticscore":
 		// -h must not open a store; see the scorecard case above.
-		if wantsHelp(os.Args[2:]) {
+		if verbWantsHelp(os.Args[2:]) {
 			os.Exit(runCriticScore(os.Args[2:], nil, nil, os.Stdout, os.Stderr))
 		}
 		// With CORRAL_BRAIN set, show/confirm/refute go through the brain's
@@ -573,22 +552,7 @@ func main() {
 		}
 		os.Exit(runCriticScore(os.Args[2:], newHTTPCriticScoreLister(brainURL, token), mcpCriticScoreAdmin{brainURL: brainURL}, os.Stdout, os.Stderr))
 	case "matrix":
-		// Same reasoning as criticscore above: the matrix store is a
-		// single-process DuckDB file the running brain already holds
-		// read-write, and matrix data only exists at all from a brain-run
-		// (or a --local run's own signed ledger, which this command does
-		// not read) — no offline mode.
-		brainURL := strings.TrimSpace(os.Getenv("CORRAL_BRAIN"))
-		if brainURL == "" {
-			fmt.Fprintln(os.Stderr, "corral matrix: set CORRAL_BRAIN (and CORRALAI_BRAIN_TOKEN via `corral secret`) — matrix has no offline mode")
-			os.Exit(1)
-		}
-		token, err := brainToken()
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "corral matrix:", err)
-			os.Exit(1)
-		}
-		os.Exit(runMatrix(os.Args[2:], newHTTPMatrixReader(brainURL, token), os.Stdout, os.Stderr))
+		os.Exit(runMatrixCommand(os.Args[2:], os.Getenv, os.Stdout, os.Stderr))
 	case "scans":
 		// Unlike criticscore/matrix above, this needs NO brain: the record
 		// is the ledger directory `certify --repo` writes on this same
@@ -664,6 +628,25 @@ func wantsHelp(args []string) bool {
 	return false
 }
 
+// verbWantsHelp is true when the verb or the argument right after it is a help
+// token. It deliberately does NOT scan every argument: `criticscore confirm X
+// --why help` is an adjudication whose reason happens to be the word "help",
+// and reading it as a help request exited 0 having adjudicated nothing — a
+// silent success on a no-op in a tool that records human verdicts. A leaf
+// flag's -h (`list --json -h`) is the flag package's to answer (flagParseExit).
+//
+// This is the ONE predicate for verb-style commands: criticscore and matrix
+// both ask it from their dispatch AND from their run function. They used to
+// ask different questions (every argument vs the first), so `matrix list help`
+// passed the dispatch guard and then reached the run function with a nil reader.
+func verbWantsHelp(args []string) bool {
+	n := len(args)
+	if n > 2 {
+		n = 2
+	}
+	return wantsHelp(args[:n])
+}
+
 // mcpUsage is what `corral mcp -h` prints. The subcommand takes no flags: it
 // speaks MCP over stdin/stdout and is configured entirely by where the local
 // findings store lives.
@@ -678,3 +661,45 @@ network listener, and no adjudication surface (see mcp_findings.go for why).
 
 Takes no flags. Reads the same local findings store ` + "`corral certify --local`" + ` writes.
 `
+
+// runMatrixCommand is the `matrix` dispatch, lifted out of main so a test can
+// drive it with a fake environment.
+//
+// The matrix store is a single-process DuckDB file the running brain already
+// holds read-write, and matrix data only exists at all from a brain-run (or a
+// --local run's own signed ledger, which this command does not read) — no
+// offline mode. Same reasoning as criticscore.
+//
+// The brain is required LAZILY: runMatrix is handed a reader factory and calls
+// it only after the arguments have parsed, so a help request anywhere (the
+// verb position, or a leaf `-h` among the flags) is answered with no brain, no
+// token and no keystore. The generated CLI reference captures every
+// subcommand's real -h, and a help that needs a brain documents the
+// missing-brain error instead. A dispatch-time help predicate cannot do this:
+// it sees only the first arguments, and `list --json -h` hides -h behind a flag.
+func runMatrixCommand(args []string, env func(string) string, stdout, stderr io.Writer) int {
+	return runMatrix(args, func() (matrixReader, error) {
+		brainURL := strings.TrimSpace(env("CORRAL_BRAIN"))
+		if brainURL == "" {
+			return nil, errors.New("set CORRAL_BRAIN (and CORRALAI_BRAIN_TOKEN via `corral secret`) — matrix has no offline mode")
+		}
+		token, err := brainToken()
+		if err != nil {
+			return nil, err
+		}
+		return newHTTPMatrixReader(brainURL, token), nil
+	}, stdout, stderr)
+}
+
+// flagParseExit maps a failed flag.Parse to an exit status. -h makes the flag
+// package print usage and return flag.ErrHelp; that is a successful answer to
+// a question, not a usage error, so it exits 0. Everything else is a genuine
+// misuse and stays 2. One function, because ~25 subcommands each returned a
+// literal 2 here and scripts/gen-cli-docs.sh (which refuses any -h that exits
+// non-zero) found every one of them.
+func flagParseExit(err error) int {
+	if errors.Is(err, flag.ErrHelp) {
+		return 0
+	}
+	return 2
+}

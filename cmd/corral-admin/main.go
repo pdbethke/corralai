@@ -38,12 +38,15 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pdbethke/corralai/internal/buildinfo"
 	"github.com/pdbethke/corralai/internal/console"
 	"github.com/pdbethke/corralai/internal/pdftext"
 )
 
-// version is set at build time via -ldflags "-X main.version=...".
-var version = "dev"
+// stampedVersion is what -ldflags "-X main.stampedVersion=..." writes (the one
+// build line every binary shares); buildinfo.Version turns it into the version
+// reported, falling back to the module version of a `go install` build.
+var stampedVersion = "dev"
 
 func main() {
 	log.SetFlags(0)
@@ -79,7 +82,7 @@ func main() {
 	case "proposals":
 		cmdProposals(rest)
 	case "version", "--version", "-v":
-		fmt.Println("corral-admin", version)
+		fmt.Println("corral-admin", buildinfo.Version(stampedVersion))
 	case "-h", "--help", "help":
 		usage()
 	default:

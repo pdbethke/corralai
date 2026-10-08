@@ -71,7 +71,25 @@ capture_help() {
   # --check would always report drift even with zero code changes. Running
   # from inside WORKDIR and invoking "./$bin" pins os.Args[0] to a constant
   # "./$bin" regardless of where the temp dir landed.
-  ( cd "$WORKDIR" && "./$bin" -h 2>&1 ) || true
+  #
+  # The exit status is the binary's own, never a pipe stage's: `2>&1` is a
+  # redirection, not a pipe, so `$?` here is the binary's. A -h that exits
+  # non-zero is a help that FAILED, and what it printed is an error, not a
+  # usage — the caller refuses rather than publishing it. (Bare `corral`
+  # exiting 2 with a pointer is deliberate and is not invoked here: the
+  # generator always passes -h.)
+  ( cd "$WORKDIR" && "./$bin" -h 2>&1 )
+}
+
+# refuse_failed_help <label> <output> aborts the generation. Any non-zero -h
+# exit refuses; there is deliberately NO list of error phrases to match, since
+# an enumeration of the errors a help can print is exactly the gate that
+# misses the next one (it missed `unknown secret subcommand` and matrix's
+# missing-brain message, and both were published as flag references).
+refuse_failed_help() {
+  echo "gen-cli-docs: \`$1 -h\` exited non-zero — a help that fails documents an error, not a usage:" >&2
+  printf '%s\n' "$2" | sed 's/^/    /' >&2
+  exit 1
 }
 
 # SUBCOMMANDS whose FLAGS are worth documenting. The top-level `-h` lists the
@@ -148,13 +166,14 @@ capture_sub_help() {
   shift
   # Same stdout+stderr merge and same ./$bin invocation as capture_help, for the
   # same determinism reason: os.Args[0] must not carry the temp dir.
-  ( cd "$WORKDIR" && "./$bin" "$@" -h 2>&1 ) || true
+  # Returns the binary's exit status (see capture_help); callers refuse non-zero.
+  ( cd "$WORKDIR" && "./$bin" "$@" -h 2>&1 )
 }
 
 gen_one() {
   local b="$1" out="$2"
   local help env_block
-  help="$(capture_help "$b")"
+  help="$(capture_help "$b")" || refuse_failed_help "$b" "$help"
   env_block="$(extract_env_block "cmd/$b/main.go")"
   {
     echo "---"
@@ -172,15 +191,8 @@ gen_one() {
     if [ "$b" = "corral" ]; then
       while IFS= read -r sub; do
         # shellcheck disable=SC2086 -- deliberate word splitting: an argv prefix
-        subhelp="$(capture_sub_help "$b" $sub)"
+        subhelp="$(capture_sub_help "$b" $sub)" || refuse_failed_help "$b $sub" "$subhelp"
         [ -n "$subhelp" ] || continue
-        # A section that documents an ERROR documents a verb that does not
-        # exist. Refuse, by name, rather than ship it.
-        if printf '%s' "$subhelp" | grep -qE 'unknown subcommand|is not a scan id'; then
-          echo "gen-cli-docs: \`$b $sub -h\` answered with an error, not a usage — the reference would document a verb that does not exist:" >&2
-          printf '%s\n' "$subhelp" | sed 's/^/    /' >&2
-          exit 1
-        fi
         echo
         # The heading names the command a READER types; a positional argument
         # this script supplies only to reach the flag set (e.g. the "." in

@@ -11,6 +11,50 @@ history of any release, `git log v0.3.4..v0.3.5`.
 
 ## [Unreleased]
 
+- **`corral-admin`, `corral-observe` and `corral-agent` stop printing `dev` for an installed build.** Only `corral` and `corral-wrangler` knew to fall back to the module version Go embeds, so `go install …@v1.0.0-rc.19` of the other three still reported `dev`. All five now resolve their version through one function in `internal/buildinfo`, and a test fails if a binary that prints a version does not.
+- **The missing-model message sees keys saved with `corral secret`.** The
+  "credentials visible here" line probed environment variables only, so a key
+  stored in the keyring or the encrypted file read as "none" to the person who
+  had just saved it. It now resolves through the same store a run uses, from one
+  provider table in `internal/creds` (which also gained `GOOGLE_API_KEY` in the
+  env scrubs). It prints env-var names and vendors, never a value.
+- **`corral matrix -h` prints usage without a brain, and `-h` exits 0 everywhere in `corral`.**
+  `matrix -h` read `CORRAL_BRAIN` first, so with no brain it printed the
+  missing-brain error, and the generated CLI reference published that error as
+  matrix's flags. Every other subcommand that answered `-h` with exit 2 (or 1,
+  for `secret`, `control` and `sign-console-bundle`) now exits 0, and
+  `scripts/gen-cli-docs.sh` refuses any `-h` that exits non-zero.
+  `corral-wrangler register -h` still exits 2. `corral matrix list help` and
+  `corral matrix list -- -h` no longer crash: one help predicate now decides it.
+- **`corral secret set|get|rm|list -h` print usage, and dash-led secret names are
+  refused.** `secret list -h` used to list your stored secret names, and
+  `set -h` stored a secret called `-h`. Names never begin with `-`, so one that
+  does is a mistyped flag and is refused.
+- **A `/bin/sh -c` or `dash -c` test command gets the toolchain preflight.** The
+  command is checked against the language's stock toolchain (`go`, `node`,
+  `ruby`, …), not against whatever the wrapped script itself runs, so a host
+  without that toolchain is now refused up front rather than failing inside the
+  jail.
+- **The public ledger page includes plain `.json` entries, in chain order.** The
+  page renderer now reads the ledger directory through `auditpush.ReadLedgerDir`,
+  the same reader the CLI verifies with.
+- **A credential-store error no longer hides a key that is set.** The
+  missing-model message kept only what it had found before the first unreadable
+  name; it now probes every provider and says "none found" with the store error,
+  not "no provider credential is set".
+- **`--attest` no longer leaves a mismatched envelope, and `review --attest`
+  creates its directory.** A keyless `--attest` run after a keyed one used to
+  leave a DSSE envelope signed for the previous statement beside the new one;
+  it is now removed. `review --attest` into a directory that did not exist yet
+  failed; it now creates it, as `certify --repo --attest` already did.
+- **Breaking: `corral verify --ledger`, `corral ledger verify` and `corral ui` no longer
+  verify against the local certify key implicitly.** Pass `--pub` or set
+  `CORRALAI_LEDGER_PUBKEY`; with neither, signed entries read as signed,
+  unverified, and signatures are not checked. The CLI and the public ledger
+  page now resolve the key identically, so the machine's owner and a stranger
+  reach the same verdict on the same record. A malformed key is refused (exit
+  2), not downgraded. The site renderer no longer falls back to the committed
+  `LEDGER_PUBKEY` file on its own; the deploy workflow passes it explicitly.
 - **One-time cache miss.** `reposcan.VerdictGeneration` moves from 16 (rc.19)
   to 17. Every verdict cached before this change is re-measured once.
 - **A Python test file with an escaped triple quote no longer loses tests

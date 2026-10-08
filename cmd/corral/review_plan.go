@@ -29,7 +29,7 @@ func runReviewPlan(args []string, stdout, stderr io.Writer) int {
 	depth := fs.Int("depth", 2, "how many path segments make a scope (2: internal/review, cmd/corral)")
 	limit := fs.Int("limit", 25, "how many scopes to list")
 	if err := fs.Parse(args); err != nil {
-		return 2
+		return flagParseExit(err)
 	}
 	root, err := filepath.Abs(*repoDir)
 	if err != nil {

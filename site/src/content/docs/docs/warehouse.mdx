@@ -79,10 +79,11 @@ git clone --branch corral/ledger --single-branch \
 corral ledger verify --pub 909429443700441a9f662c07c5f1b7110333fd7fb94fb21e8991e40f2cb6dc09 corral-ledger
 ```
 
-Leave out `--pub` and corral uses *your* local certify key if you have one.
-That key did not sign this record, so every entry fails, which is the right
-answer to the question you asked, just not the useful one. With no local key,
-it checks no signatures at all and says so.
+Leave out `--pub` and corral looks for the key in `CORRALAI_LEDGER_PUBKEY`.
+With neither, it checks no signatures at all and says so: the entries read as
+signed, unverified, which is neither a pass nor a failure. corral never
+reaches for your local certify key to check a ledger, so you and a stranger
+get the same answer from the same record.
 
 The key does not rest on this page's say-so. The same key signs the
 statements corral enters into Sigstore Rekor, and Rekor entry

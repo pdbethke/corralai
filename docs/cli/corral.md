@@ -109,7 +109,8 @@ Usage:
                                   --limit n, --json
   corral verify --ledger <dir>    walk a ledger directory's chain: every entry's hash against its
                                   bytes, every link against its predecessor, every signature
-                                  against --pub or the local certify key; one line per entry,
+                                  against --pub, else $CORRALAI_LEDGER_PUBKEY, else NOT CHECKED
+                                  (never the local certify key); one line per entry,
                                   an edited or removed entry named; unsigned said, never "verified"
   corral ledger append <entry> <dir>
                                   re-link an entry to <dir>'s current head (re-hash, re-sign, place)
@@ -331,7 +332,7 @@ Usage of certify --local:
 ## `corral control` flags
 
 ```
-corral control: usage: corral control seed --spec-db <path> --owner <principal> --goal <id> --target <repo-path> --code-path <flat> --test-path <flat> --test-file <path> [--kill-rate <float>]
+usage: corral control seed --spec-db <path> --owner <principal> --goal <id> --target <repo-path> --code-path <flat> --test-path <flat> --test-file <path> [--kill-rate <float>]
 note: the brain must be stopped (it holds the control store open); or author via the stage_control / promote_control MCP tools while the brain runs
 ```
 
@@ -355,7 +356,6 @@ Usage of control seed:
     	path to the vetted test source file
   -test-path string
     	flat test filename in the jail workspace
-corral control: flag: help requested
 ```
 
 ## `corral criticscore` flags
@@ -621,7 +621,15 @@ runner's entry past a branch that moved: fetch, `corral ledger append`, push.
 ## `corral matrix` flags
 
 ```
-corral matrix: set CORRAL_BRAIN (and CORRALAI_BRAIN_TOKEN via `corral secret`) — matrix has no offline mode
+usage: corral matrix list [--json]
+```
+
+## `corral matrix list` flags
+
+```
+Usage of matrix list:
+  -json
+    	emit the raw rows as JSON
 ```
 
 ## `corral mcp` flags
@@ -859,7 +867,13 @@ Usage of seal:
 ## `corral secret` flags
 
 ```
-corral secret: unknown secret subcommand "-h" (set|get|list|rm)
+usage: corral secret set|get|list|rm <NAME>  (set reads the value from stdin — never a CLI arg)
+```
+
+## `corral secret set` flags
+
+```
+usage: corral secret set <NAME>  (value read from stdin — never a CLI arg)
 ```
 
 ## `corral ui` flags
@@ -889,9 +903,9 @@ Usage of verify:
   -db corral review --attest
     	also recompute the warehouse rows' hash from this pushed DuckDB (a path, or md:<db> for MotherDuck) and compare it to the statement's claim; for a corral review --attest statement, the ledger DIRECTORY whose entry names it, so the reproductions' hash is recomputed from the entry. Every push of the scan the warehouse holds is tried (each has its own scan_uid); a VACUUMed warehouse can change row order and trip a false ✗ here without tampering
   -ledger --push <dir>/
-    	walk a LEDGER DIRECTORY (the JSON entries --push <dir>/ writes, one per scan, each naming the previous entry's hash and carrying a signature): every entry's hash against its bytes, every link against its predecessor, every signature against --pub or the local certify key. One line per entry; an edited entry, a removed one, or a foreign signature is named. Instead of --attest, not with it
+    	walk a LEDGER DIRECTORY (the JSON entries --push <dir>/ writes, one per scan, each naming the previous entry's hash and carrying a signature): every entry's hash against its bytes, every link against its predecessor, every signature against --pub, else $CORRALAI_LEDGER_PUBKEY, else NOT CHECKED (the local certify key is never used to verify a ledger). One line per entry; an edited entry, a removed one, or a foreign signature is named. Instead of --attest, not with it
   -pub string
-    	hex-encoded Ed25519 public key to verify the signature against (default: the local certify key, CORRALAI_CERTIFY_KEY_FILE)
+    	hex-encoded Ed25519 public key to verify against. With --attest: default the local certify key (CORRALAI_CERTIFY_KEY_FILE). With --ledger: default $CORRALAI_LEDGER_PUBKEY, else signatures are NOT CHECKED — the local certify key is never used for a ledger
   -rekor-index int
     	also confirm this Rekor log index's entry matches the envelope (default: read the index --db recorded for this scan, if --db was given) (default -1)
 ```

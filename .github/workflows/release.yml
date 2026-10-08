@@ -60,14 +60,13 @@ jobs:
       # unverifiable console is discovered by an operator; a release that fails
       # to cut is discovered by the person cutting it.
       - name: Verify the console bundle is signed for THIS version
-        env:
-          CORRALAI_CONSOLE_PUBKEY: ${{ secrets.CORRALAI_CONSOLE_PUBKEY }}
         run: |
           set -euo pipefail
-          if [ -z "${CORRALAI_CONSOLE_PUBKEY:-}" ]; then
-            echo "::error::No CORRALAI_CONSOLE_PUBKEY secret. Every thin client needs a release public key to verify the console bundle against, and the only key this repository ships is a DEV key whose private half is committed (see internal/consolebundle). Generate a release keypair, keep the seed out of the repo, set the public half as this secret, and re-sign with CORRALAI_RELEASE_KEY=<seed> scripts/sign-console-bundle.sh <version> before tagging."
-            exit 1
-          fi
+          # One source for the release key: the committed public half, the
+          # same file deploy.yml verifies against. A copy in a secret could be
+          # rotated alone, and then a release and a deploy would disagree.
+          key="$(cat deploy/console-release.pub)"
+          export CORRALAI_CONSOLE_PUBKEY="$key"
           go run ./cmd/verify-console-signature "${GITHUB_REF_NAME}"
 
 

@@ -76,10 +76,15 @@ func runScans(args []string, open func(dsn string) (scansReader, error), stdout,
 	// `scans list` or `scans show` at all. Their flags were therefore absent
 	// from docs/cli, which is the enumeration the executed-surface manifest
 	// reads, so a flag added to `scans list` was invisible to every gate.
+	//
+	// Exit 0 for a help request, 2 for a bare `scans` (misuse).
 	if len(args) == 0 || wantsHelp(args[:1]) {
 		fmt.Fprintln(stderr, "usage: corral scans list [--ledger <dir>] [--limit n] [--json]")
 		fmt.Fprintln(stderr, "       corral scans show <scan-id> [--ledger <dir>] [--json] [--evidence] [--timing]")
-		return 2
+		if len(args) == 0 {
+			return 2
+		}
+		return 0
 	}
 
 	switch args[0] {
@@ -100,7 +105,7 @@ func runScansList(args []string, open func(string) (scansReader, error), stdout,
 	limit := fs.Int("limit", 20, "how many scans to show, newest first")
 	asJSON := fs.Bool("json", false, "emit the raw rows as JSON")
 	if err := fs.Parse(args); err != nil {
-		return 2
+		return flagParseExit(err)
 	}
 
 	st, err := open(scansTarget(*ledger))
@@ -158,7 +163,7 @@ func runScansShow(args []string, open func(string) (scansReader, error), stdout,
 	evidence := fs.Bool("evidence", false, "also print the pool's authored test source for each audited file")
 	timing := fs.Bool("timing", false, "also print where each audited file's wall clock went, phase by phase — with --json, adds top-level selection_ms, selection_reused and model_calls and wraps the file array in an object ({\"files\": [...], \"selection_ms\": ..., \"selection_reused\": ..., \"model_calls\": [...]}) instead of emitting it bare")
 	if err := fs.Parse(flagsFirst(fs, args)); err != nil {
-		return 2
+		return flagParseExit(err)
 	}
 	if fs.NArg() == 0 {
 		fs.Usage()

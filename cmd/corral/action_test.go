@@ -2108,8 +2108,13 @@ func TestDocsReleaseVerifiesTheConsoleSignature(t *testing.T) {
 					t.Errorf("release.yml step %q verifies behind `if: %s` — a condition is how this becomes unreachable for exactly the releases it protects", st.Name, cond)
 				}
 				assertStepCannotBeAdvisory(t, jobName, st.Name, st.ContinueOnError, st.Run)
-				if v := st.Env["CORRALAI_CONSOLE_PUBKEY"]; !strings.Contains(v, "secrets.CORRALAI_CONSOLE_PUBKEY") {
-					t.Errorf("release.yml step %q must take CORRALAI_CONSOLE_PUBKEY from secrets.CORRALAI_CONSOLE_PUBKEY, got %q — any other anchor is not the release key", st.Name, v)
+				// The anchor is the committed public half deploy.yml also reads,
+				// not a secret: a second copy could be rotated alone.
+				if _, ok := st.Env["CORRALAI_CONSOLE_PUBKEY"]; ok {
+					t.Errorf("release.yml step %q sets CORRALAI_CONSOLE_PUBKEY in env — the release key must come from deploy/console-release.pub, the same file deploy verifies against", st.Name)
+				}
+				if !strings.Contains(st.Run, "cat deploy/console-release.pub") {
+					t.Errorf("release.yml step %q must take its anchor from deploy/console-release.pub, the same file deploy.yml reads", st.Name)
 				}
 				if _, dev := st.Env["CORRALAI_CONSOLE_DEV"]; dev {
 					t.Errorf("release.yml step %q sets CORRALAI_CONSOLE_DEV — a release must never be verified against the PUBLISHED dev key", st.Name)

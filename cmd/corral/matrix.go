@@ -76,7 +76,18 @@ func (r *httpMatrixReader) Matrix(ctx context.Context) ([]matrixstore.Row, []mat
 // delete-candidate list (tests that caught none of them). There is no write
 // subcommand — the matrix is pure telemetry from --matrix/matrix-opted-in
 // runs, never a gate a human adjudicates the way criticscore's findings are.
-func runMatrix(args []string, reader matrixReader, stdout, stderr io.Writer) int {
+func runMatrix(args []string, newReader func() (matrixReader, error), stdout, stderr io.Writer) int {
+	// A help request is answered, not refused: usage goes to stdout and the
+	// exit is 0. A bare `matrix` (or an unknown verb) is misuse and stays 2.
+	//
+	// `list -h` is left to the flag package below so the generated CLI
+	// reference documents --json; `list help` (a positional the flag package
+	// would accept) is caught right after the parse. Either way the reader is
+	// only built after both, so help never needs a brain.
+	if verbWantsHelp(args) && args[0] != "list" {
+		fmt.Fprintln(stdout, "usage: corral matrix list [--json]")
+		return 0
+	}
 	if len(args) == 0 || args[0] != "list" {
 		fmt.Fprintln(stderr, "usage: corral matrix list [--json]")
 		return 2
@@ -85,9 +96,18 @@ func runMatrix(args []string, reader matrixReader, stdout, stderr io.Writer) int
 	fs.SetOutput(stderr)
 	asJSON := fs.Bool("json", false, "emit the raw rows as JSON")
 	if err := fs.Parse(args[1:]); err != nil {
-		return 2
+		return flagParseExit(err)
+	}
+	if verbWantsHelp(args) {
+		fmt.Fprintln(stdout, "usage: corral matrix list [--json]")
+		return 0
 	}
 
+	reader, err := newReader()
+	if err != nil {
+		fmt.Fprintln(stderr, "corral matrix:", err)
+		return 1
+	}
 	rows, candidates, err := reader.Matrix(context.Background())
 	if err != nil {
 		fmt.Fprintln(stderr, "corral matrix list:", err)

@@ -39,7 +39,7 @@ func TestMatrixListTableRendersRowsAndDeleteCandidates(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	if rc := runMatrix([]string{"list"}, f, &out, &out); rc != 0 {
+	if rc := runMatrix([]string{"list"}, func() (matrixReader, error) { return f, nil }, &out, &out); rc != 0 {
 		t.Fatalf("rc=%d: %s", rc, out.String())
 	}
 	got := out.String()
@@ -64,7 +64,7 @@ func TestMatrixListJSONEmitsRawRows(t *testing.T) {
 		},
 	}
 	var out bytes.Buffer
-	if rc := runMatrix([]string{"list", "--json"}, f, &out, &out); rc != 0 {
+	if rc := runMatrix([]string{"list", "--json"}, func() (matrixReader, error) { return f, nil }, &out, &out); rc != 0 {
 		t.Fatalf("rc=%d: %s", rc, out.String())
 	}
 	if !strings.Contains(out.String(), `"TestSelector": "TestFoo"`) {

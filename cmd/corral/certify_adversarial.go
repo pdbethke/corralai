@@ -254,7 +254,7 @@ func runCertifyAdversarial(args []string, client advPoolClient, run cmdRunner, s
 	repoFlag := fs.String("repo", "", "repository (default: git remote.origin.url)")
 	commitFlag := fs.String("commit", "", "commit sha (default: git rev-parse HEAD)")
 	if err := fs.Parse(flagArgs); err != nil {
-		return 2
+		return flagParseExit(err)
 	}
 
 	if strings.TrimSpace(*codePath) == "" {

@@ -75,7 +75,7 @@ func runEval(args []string, newRunner func(brainURL, corpusVersion string) eval.
 	brainURL := fs.String("brain", os.Getenv("CORRAL_BRAIN"), "brain endpoint (or $CORRAL_BRAIN)")
 	progress := fs.String("progress", "eval/.eval-progress.json", "resumable progress file")
 	if err := fs.Parse(args); err != nil {
-		return 2
+		return flagParseExit(err)
 	}
 	m, err := eval.Load(*corpus)
 	if err != nil {

@@ -66,7 +66,7 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 	deriveModel := fs.String("derive-model", "", "the goal-derivation model a `certify --repo` run will name, if any")
 	repoDir := fs.String("repo", ".", "the repository the run will audit — where its .corral/models.json registry is read from, exactly as certify reads it")
 	if err := fs.Parse(args); err != nil {
-		return 2
+		return flagParseExit(err)
 	}
 	// Every member of every challenger pool, checked exactly as certify checks
 	// it before its draw — but never drawn: doctor answers "would this run

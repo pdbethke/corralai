@@ -59,10 +59,10 @@ func runVerifyAttest(args []string, stdout, stderr io.Writer) int {
 	attestFlag := fs.String("attest", "", "the --attest statement to verify (required) — the plain JSON path (its signed envelope is expected at <path>.dsse.json) or the envelope itself")
 	dbFlag := fs.String("db", "", "also recompute the warehouse rows' hash from this pushed DuckDB (a path, or md:<db> for MotherDuck) and compare it to the statement's claim; for a `corral review --attest` statement, the ledger DIRECTORY whose entry names it, so the reproductions' hash is recomputed from the entry. Every push of the scan the warehouse holds is tried (each has its own scan_uid); a VACUUMed warehouse can change row order and trip a false ✗ here without tampering")
 	rekorIndexFlag := fs.Int64("rekor-index", -1, "also confirm this Rekor log index's entry matches the envelope (default: read the index --db recorded for this scan, if --db was given)")
-	pubFlag := fs.String("pub", "", "hex-encoded Ed25519 public key to verify the signature against (default: the local certify key, CORRALAI_CERTIFY_KEY_FILE)")
-	ledgerFlag := fs.String("ledger", "", "walk a LEDGER DIRECTORY (the JSON entries `--push <dir>/` writes, one per scan, each naming the previous entry's hash and carrying a signature): every entry's hash against its bytes, every link against its predecessor, every signature against --pub or the local certify key. One line per entry; an edited entry, a removed one, or a foreign signature is named. Instead of --attest, not with it")
+	pubFlag := fs.String("pub", "", "hex-encoded Ed25519 public key to verify against. With --attest: default the local certify key (CORRALAI_CERTIFY_KEY_FILE). With --ledger: default $CORRALAI_LEDGER_PUBKEY, else signatures are NOT CHECKED — the local certify key is never used for a ledger")
+	ledgerFlag := fs.String("ledger", "", "walk a LEDGER DIRECTORY (the JSON entries `--push <dir>/` writes, one per scan, each naming the previous entry's hash and carrying a signature): every entry's hash against its bytes, every link against its predecessor, every signature against --pub, else $CORRALAI_LEDGER_PUBKEY, else NOT CHECKED (the local certify key is never used to verify a ledger). One line per entry; an edited entry, a removed one, or a foreign signature is named. Instead of --attest, not with it")
 	if err := fs.Parse(args); err != nil {
-		return 2
+		return flagParseExit(err)
 	}
 	if d := strings.TrimSpace(*ledgerFlag); d != "" {
 		if strings.TrimSpace(*attestFlag) != "" {
@@ -511,20 +511,13 @@ func verifyRekorInclusion(ctx context.Context, envelope []byte, stmt map[string]
 // and a signed entry with no key to check against is "signed, unverified",
 // never "verified".
 func runVerifyLedger(dir, pubFlag, expectHead string, stdout, stderr io.Writer) int {
-	var pub ed25519.PublicKey
-	pubSource := ""
-	switch {
-	case pubFlag != "":
-		decoded, err := hex.DecodeString(pubFlag)
-		if err != nil || len(decoded) != ed25519.PublicKeySize {
-			fmt.Fprintf(stderr, "corral verify: --pub is not a valid %d-byte hex-encoded Ed25519 public key\n", ed25519.PublicKeySize)
-			return 2
-		}
-		pub, pubSource = ed25519.PublicKey(decoded), "--pub"
-	default:
-		if priv, err := loadLocalCertifyKeyIfConfigured(); err == nil {
-			pub, pubSource = priv.Public().(ed25519.PublicKey), "the local certify key"
-		}
+	// The key is explicit or absent — never inferred. The local certify key
+	// is deliberately NOT a fallback here: it would make the machine's owner
+	// and a stranger reach different verdicts on the same record.
+	pub, pubSource, err := auditpush.ResolveLedgerPubKey(pubFlag)
+	if err != nil {
+		fmt.Fprintf(stderr, "corral verify: %v\n", err)
+		return 2
 	}
 	checks, err := auditpush.VerifyLedgerDir(strings.TrimRight(dir, "/"), pub)
 	if err != nil {
@@ -549,7 +542,7 @@ func runVerifyLedger(dir, pubFlag, expectHead string, stdout, stderr io.Writer) 
 		case c.Signed && pub != nil:
 			what += fmt.Sprintf(", signed by %s and verified against %s", orUnnamed(c.KeyID), pubSource)
 		case c.Signed:
-			what += fmt.Sprintf(", signed by %s — unverified (no --pub, no local key)", orUnnamed(c.KeyID))
+			what += fmt.Sprintf(", signed by %s — unverified, signature NOT CHECKED (no --pub, no %s)", orUnnamed(c.KeyID), auditpush.LedgerPubKeyEnv)
 		default:
 			what += ", UNSIGNED"
 		}

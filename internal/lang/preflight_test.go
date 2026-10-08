@@ -272,3 +272,19 @@ func TestPythonPreflightProbeDoesNotLeakProcesses(t *testing.T) {
 		}
 	}
 }
+
+// `/bin/sh -c '…'` and `dash -c '…'` hide the real toolchain exactly as
+// `sh -c` does; preflight must refuse to treat the shell as the program and
+// fall back to the language's own toolchain check, for every shell spelling.
+func TestPreflightSeesThroughEveryShellWrapperSpelling(t *testing.T) {
+	for _, argv := range [][]string{
+		{"sh", "-c", "pytest"},
+		{"/bin/sh", "-c", "pytest"},
+		{"/usr/bin/bash", "-e", "-c", "pytest"},
+		{"dash", "-c", "pytest"},
+	} {
+		if prog, ok := firstExecutableToken(argv); ok {
+			t.Errorf("%q: preflight would check %q (a shell) instead of the toolchain", argv, prog)
+		}
+	}
+}

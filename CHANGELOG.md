@@ -11,6 +11,7 @@ history of any release, `git log v0.3.4..v0.3.5`.
 
 ## [Unreleased]
 
+- **`corral-admin`, `corral-observe` and `corral-agent` stop printing `dev` for an installed build.** Only `corral` and `corral-wrangler` knew to fall back to the module version Go embeds, so `go install …@v1.0.0-rc.19` of the other three still reported `dev`. All five now resolve their version through one function in `internal/buildinfo`, and a test fails if a binary that prints a version does not.
 - **The missing-model message sees keys saved with `corral secret`.** The
   "credentials visible here" line probed environment variables only, so a key
   stored in the keyring or the encrypted file read as "none" to the person who

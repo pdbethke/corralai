@@ -96,8 +96,8 @@ package main
 import (
 	"fmt"
 	"os"
-	"runtime/debug"
 
+	"github.com/pdbethke/corralai/internal/buildinfo"
 	"github.com/pdbethke/corralai/internal/wranglerd"
 )
 
@@ -112,19 +112,19 @@ func main() {
 			fmt.Print(usage)
 			return
 		case "-version", "--version", "version":
-			fmt.Println("corral-wrangler", resolveVersion(stampedVersion))
+			fmt.Println("corral-wrangler", buildinfo.Version(stampedVersion))
 			return
 		case "register", "heartbeat", "claim", "release", "done", "who", "list":
 			os.Exit(runBroker(os.Args[1], os.Args[2:], os.Stdout, os.Stderr))
 		case "serve":
-			wranglerd.Run(resolveVersion(stampedVersion))
+			wranglerd.Run(buildinfo.Version(stampedVersion))
 			return
 		default:
 			fmt.Fprintf(os.Stderr, "corral-wrangler: unknown command %q\n%s", os.Args[1], usage)
 			os.Exit(2)
 		}
 	}
-	wranglerd.Run(resolveVersion(stampedVersion))
+	wranglerd.Run(buildinfo.Version(stampedVersion))
 }
 
 const usage = `corral-wrangler — the coordinator for agents that share a codebase.
@@ -154,17 +154,3 @@ binary's source header (cmd/corral-wrangler/main.go) and on the generated
 CLI reference page. Nothing here is required for a corral certify verdict,
 and nothing here is read by one — see docs/corral/brain.md.
 `
-
-func resolveVersion(stamped string) string {
-	if stamped != "" && stamped != "dev" {
-		return stamped
-	}
-	if bi, ok := debug.ReadBuildInfo(); ok && bi != nil {
-		switch v := bi.Main.Version; v {
-		case "", "(devel)":
-		default:
-			return v
-		}
-	}
-	return "dev"
-}

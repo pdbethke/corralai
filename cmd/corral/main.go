@@ -97,11 +97,11 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"runtime/debug"
 	"strings"
 	"time"
 
 	"github.com/pdbethke/corralai/internal/bugcatch"
+	"github.com/pdbethke/corralai/internal/buildinfo"
 	"github.com/pdbethke/corralai/internal/criticscore"
 	"github.com/pdbethke/corralai/internal/eval"
 )
@@ -402,9 +402,9 @@ main.go (also reproduced in the generated CLI reference).
 `
 }
 
-// version is set at build time via -ldflags "-X main.version=...", and falls
-// back to the module version Go embeds in the binary — see resolveVersion.
-var version = resolveVersion(stampedVersion, debug.ReadBuildInfo)
+// version is the build's reported version: the -ldflags stamp if any, else the
+// module version Go embeds for a `go install` — see buildinfo.Version.
+var version = buildinfo.Version(stampedVersion)
 
 // stampedVersion is what -ldflags "-X main.stampedVersion=..." writes. It stays
 // "dev" for any build that does not pass it, which includes the one that
@@ -412,30 +412,6 @@ var version = resolveVersion(stampedVersion, debug.ReadBuildInfo)
 // the README and the one every first-time reader uses. Before this, every such
 // user's `corral version` said "dev" and no bug report could name a build.
 var stampedVersion = "dev"
-
-// resolveVersion prefers an explicitly stamped version (a release build knows
-// more than the module graph, and may be building from a checkout rather than
-// a tagged module), then the module version Go records in the binary for a
-// `go install <module>@<version>`.
-//
-// "(devel)" — what a local `go build` reports — is NOT a version and must never
-// be printed as one; it, an empty string, and unavailable build info all fall
-// back to "dev", which is exactly today's behaviour for a developer in-tree.
-func resolveVersion(stamped string, readBuildInfo func() (*debug.BuildInfo, bool)) string {
-	if stamped != "" && stamped != "dev" {
-		return stamped
-	}
-	bi, ok := readBuildInfo()
-	if !ok || bi == nil {
-		return "dev"
-	}
-	switch v := bi.Main.Version; v {
-	case "", "(devel)":
-		return "dev"
-	default:
-		return v
-	}
-}
 
 func main() {
 	// Dispatch known subcommands BEFORE the version/help scan — see

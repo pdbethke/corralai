@@ -37,11 +37,14 @@ import (
 	"os"
 	"time"
 
+	"github.com/pdbethke/corralai/internal/buildinfo"
 	"github.com/pdbethke/corralai/internal/console"
 )
 
-// version is set at build time via -ldflags "-X main.version=...".
-var version = "dev"
+// stampedVersion is what -ldflags "-X main.stampedVersion=..." writes (the one
+// build line every binary shares); buildinfo.Version turns it into the version
+// reported, falling back to the module version of a `go install` build.
+var stampedVersion = "dev"
 
 // observeFlags is corral-observe's OWN flag set, and it is a private one on
 // purpose.
@@ -83,7 +86,7 @@ func main() {
 	brainFlag, tokenFlag, addrFlag := o.brain, o.token, o.addr
 	open, ping, ver := o.open, o.ping, o.ver
 	if ver {
-		fmt.Println("corral-observe", version)
+		fmt.Println("corral-observe", buildinfo.Version(stampedVersion))
 		return
 	}
 

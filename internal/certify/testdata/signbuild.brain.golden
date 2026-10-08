@@ -1,0 +1,108 @@
+{
+  "canonical": "{\"_type\":\"https://in-toto.io/Statement/v1\",\"predicate\":{\"buildDefinition\":{\"buildType\":\"https://corralai.dev/certify/v1\",\"externalParameters\":{\"branch\":\"\",\"command\":\"make test\",\"commit\":\"deadbeef\",\"repo\":\"o/n\"},\"internalParameters\":{\"actor\":\"ci-principal\"},\"resolvedDependencies\":[{\"uri\":\"model:m1\"},{\"uri\":\"model:m2\"}]},\"runDetails\":{\"builder\":{\"builderDependencies\":[{\"uri\":\"model:m1\"},{\"uri\":\"model:m2\"}],\"id\":\"https://corralai.dev/certify\"},\"byproducts\":[{\"digest\":{\"sha256\":\"c5f2140f166bf0bcd655a2f9168045fbfc31cbd4c0e344dc443d1426d83c9719\"},\"mediaType\":\"application/vnd.corralai.build-ledger+json\",\"name\":\"accountability/tamper-evident-ledger\"},{\"annotations\":{\"command\":\"make test\",\"exitCode\":0,\"outputDigest\":\"\",\"passed\":true},\"mediaType\":\"application/vnd.corralai.certification+json\",\"name\":\"certification/execution\"}],\"metadata\":{\"finishedOn\":0,\"startedOn\":0}}},\"predicateType\":\"https://slsa.dev/provenance/v1\",\"subject\":[{\"digest\":{\"sha256\":\"c5f2140f166bf0bcd655a2f9168045fbfc31cbd4c0e344dc443d1426d83c9719\"},\"name\":\"o/n@deadbeef\"}]}",
+  "envelope": "{\"payloadType\":\"application/vnd.in-toto+json\",\"payload\":\"eyJfdHlwZSI6Imh0dHBzOi8vaW4tdG90by5pby9TdGF0ZW1lbnQvdjEiLCJwcmVkaWNhdGUiOnsiYnVpbGREZWZpbml0aW9uIjp7ImJ1aWxkVHlwZSI6Imh0dHBzOi8vY29ycmFsYWkuZGV2L2NlcnRpZnkvdjEiLCJleHRlcm5hbFBhcmFtZXRlcnMiOnsiYnJhbmNoIjoiIiwiY29tbWFuZCI6Im1ha2UgdGVzdCIsImNvbW1pdCI6ImRlYWRiZWVmIiwicmVwbyI6Im8vbiJ9LCJpbnRlcm5hbFBhcmFtZXRlcnMiOnsiYWN0b3IiOiJjaS1wcmluY2lwYWwifSwicmVzb2x2ZWREZXBlbmRlbmNpZXMiOlt7InVyaSI6Im1vZGVsOm0xIn0seyJ1cmkiOiJtb2RlbDptMiJ9XX0sInJ1bkRldGFpbHMiOnsiYnVpbGRlciI6eyJidWlsZGVyRGVwZW5kZW5jaWVzIjpbeyJ1cmkiOiJtb2RlbDptMSJ9LHsidXJpIjoibW9kZWw6bTIifV0sImlkIjoiaHR0cHM6Ly9jb3JyYWxhaS5kZXYvY2VydGlmeSJ9LCJieXByb2R1Y3RzIjpbeyJkaWdlc3QiOnsic2hhMjU2IjoiYzVmMjE0MGYxNjZiZjBiY2Q2NTVhMmY5MTY4MDQ1ZmJmYzMxY2JkNGMwZTM0NGRjNDQzZDE0MjZkODNjOTcxOSJ9LCJtZWRpYVR5cGUiOiJhcHBsaWNhdGlvbi92bmQuY29ycmFsYWkuYnVpbGQtbGVkZ2VyK2pzb24iLCJuYW1lIjoiYWNjb3VudGFiaWxpdHkvdGFtcGVyLWV2aWRlbnQtbGVkZ2VyIn0seyJhbm5vdGF0aW9ucyI6eyJjb21tYW5kIjoibWFrZSB0ZXN0IiwiZXhpdENvZGUiOjAsIm91dHB1dERpZ2VzdCI6IiIsInBhc3NlZCI6dHJ1ZX0sIm1lZGlhVHlwZSI6ImFwcGxpY2F0aW9uL3ZuZC5jb3JyYWxhaS5jZXJ0aWZpY2F0aW9uK2pzb24iLCJuYW1lIjoiY2VydGlmaWNhdGlvbi9leGVjdXRpb24ifV0sIm1ldGFkYXRhIjp7ImZpbmlzaGVkT24iOjAsInN0YXJ0ZWRPbiI6MH19fSwicHJlZGljYXRlVHlwZSI6Imh0dHBzOi8vc2xzYS5kZXYvcHJvdmVuYW5jZS92MSIsInN1YmplY3QiOlt7ImRpZ2VzdCI6eyJzaGEyNTYiOiJjNWYyMTQwZjE2NmJmMGJjZDY1NWEyZjkxNjgwNDVmYmZjMzFjYmQ0YzBlMzQ0ZGM0NDNkMTQyNmQ4M2M5NzE5In0sIm5hbWUiOiJvL25AZGVhZGJlZWYifV19\",\"signatures\":[{\"keyid\":\"brain\",\"sig\":\"NEc06vPir9A30pYr7KgmHNYYuuclC0X1R/xsMkmPdx1vckxI8kWGMxj7KKRA/cQtbNel+ljKJWMVuCpXtZGMBQ==\"}]}",
+  "head": "c5f2140f166bf0bcd655a2f9168045fbfc31cbd4c0e344dc443d1426d83c9719",
+  "statement": {
+    "_type": "https://in-toto.io/Statement/v1",
+    "predicate": {
+      "buildDefinition": {
+        "buildType": "https://corralai.dev/certify/v1",
+        "externalParameters": {
+          "branch": "",
+          "command": "make test",
+          "commit": "deadbeef",
+          "repo": "o/n"
+        },
+        "internalParameters": {
+          "actor": "ci-principal"
+        },
+        "resolvedDependencies": [
+          {
+            "uri": "model:m1"
+          },
+          {
+            "uri": "model:m2"
+          }
+        ]
+      },
+      "runDetails": {
+        "builder": {
+          "builderDependencies": [
+            {
+              "uri": "model:m1"
+            },
+            {
+              "uri": "model:m2"
+            }
+          ],
+          "id": "https://corralai.dev/certify"
+        },
+        "byproducts": [
+          {
+            "digest": {
+              "sha256": "c5f2140f166bf0bcd655a2f9168045fbfc31cbd4c0e344dc443d1426d83c9719"
+            },
+            "mediaType": "application/vnd.corralai.build-ledger+json",
+            "name": "accountability/tamper-evident-ledger"
+          },
+          {
+            "annotations": {
+              "command": "make test",
+              "exitCode": 0,
+              "outputDigest": "",
+              "passed": true
+            },
+            "mediaType": "application/vnd.corralai.certification+json",
+            "name": "certification/execution"
+          }
+        ],
+        "metadata": {
+          "finishedOn": 0,
+          "startedOn": 0
+        }
+      }
+    },
+    "predicateType": "https://slsa.dev/provenance/v1",
+    "subject": [
+      {
+        "digest": {
+          "sha256": "c5f2140f166bf0bcd655a2f9168045fbfc31cbd4c0e344dc443d1426d83c9719"
+        },
+        "name": "o/n@deadbeef"
+      }
+    ]
+  },
+  "steps": [
+    {
+      "actor": "ci-principal",
+      "detail": {
+        "branch": "",
+        "commit": "deadbeef",
+        "repo": "o/n"
+      },
+      "hash": "fec8958d3b4d106e523d67e9e52c042adf6867e929cb7809018b9a4f8ed2f8c9",
+      "kind": "context",
+      "model": "",
+      "prev": "0000000000000000000000000000000000000000000000000000000000000000",
+      "seq": 0,
+      "subject": "o/n@deadbeef",
+      "ts": 0
+    },
+    {
+      "actor": "ci-principal",
+      "detail": {
+        "duration_s": 0,
+        "exit_code": 0,
+        "ok": true,
+        "output_digest": ""
+      },
+      "hash": "c5f2140f166bf0bcd655a2f9168045fbfc31cbd4c0e344dc443d1426d83c9719",
+      "kind": "execution",
+      "model": "",
+      "prev": "fec8958d3b4d106e523d67e9e52c042adf6867e929cb7809018b9a4f8ed2f8c9",
+      "seq": 1,
+      "subject": "make test",
+      "ts": 0
+    }
+  ]
+}

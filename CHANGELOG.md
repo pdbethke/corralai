@@ -11,6 +11,12 @@ history of any release, `git log v0.3.4..v0.3.5`.
 
 ## [Unreleased]
 
+- **`corral matrix -h` prints usage without a brain, and `-h` exits 0 everywhere.**
+  `matrix -h` read `CORRAL_BRAIN` first, so with no brain it printed the
+  missing-brain error, and the generated CLI reference published that error as
+  matrix's flags. Every other subcommand that answered `-h` with exit 2 (or 1,
+  for `secret`, `control` and `sign-console-bundle`) now exits 0, and
+  `scripts/gen-cli-docs.sh` refuses any `-h` that exits non-zero.
 - **`--attest` no longer leaves a mismatched envelope, and `review --attest`
   creates its directory.** A keyless `--attest` run after a keyed one used to
   leave a DSSE envelope signed for the previous statement beside the new one;

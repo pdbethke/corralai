@@ -91,6 +91,8 @@ package main
 
 import (
 	"context"
+	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -574,22 +576,7 @@ func main() {
 		}
 		os.Exit(runCriticScore(os.Args[2:], newHTTPCriticScoreLister(brainURL, token), mcpCriticScoreAdmin{brainURL: brainURL}, os.Stdout, os.Stderr))
 	case "matrix":
-		// Same reasoning as criticscore above: the matrix store is a
-		// single-process DuckDB file the running brain already holds
-		// read-write, and matrix data only exists at all from a brain-run
-		// (or a --local run's own signed ledger, which this command does
-		// not read) — no offline mode.
-		brainURL := strings.TrimSpace(os.Getenv("CORRAL_BRAIN"))
-		if brainURL == "" {
-			fmt.Fprintln(os.Stderr, "corral matrix: set CORRAL_BRAIN (and CORRALAI_BRAIN_TOKEN via `corral secret`) — matrix has no offline mode")
-			os.Exit(1)
-		}
-		token, err := brainToken()
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "corral matrix:", err)
-			os.Exit(1)
-		}
-		os.Exit(runMatrix(os.Args[2:], newHTTPMatrixReader(brainURL, token), os.Stdout, os.Stderr))
+		os.Exit(runMatrixCommand(os.Args[2:], os.Getenv, os.Stdout, os.Stderr))
 	case "scans":
 		// Unlike criticscore/matrix above, this needs NO brain: the record
 		// is the ledger directory `certify --repo` writes on this same
@@ -679,3 +666,44 @@ network listener, and no adjudication surface (see mcp_findings.go for why).
 
 Takes no flags. Reads the same local findings store ` + "`corral certify --local`" + ` writes.
 `
+
+// runMatrixCommand is the `matrix` dispatch, lifted out of main so a test can
+// drive it with a fake environment.
+//
+// The matrix store is a single-process DuckDB file the running brain already
+// holds read-write, and matrix data only exists at all from a brain-run (or a
+// --local run's own signed ledger, which this command does not read) — no
+// offline mode. Same reasoning as criticscore.
+//
+// -h is answered BEFORE the brain is consulted, as scorecard and criticscore
+// do: the generated CLI reference captures every subcommand's real -h, and a
+// help that needs a brain documents the missing-brain error instead.
+func runMatrixCommand(args []string, env func(string) string, stdout, stderr io.Writer) int {
+	if wantsHelp(args) {
+		return runMatrix(args, nil, stdout, stderr)
+	}
+	brainURL := strings.TrimSpace(env("CORRAL_BRAIN"))
+	if brainURL == "" {
+		fmt.Fprintln(stderr, "corral matrix: set CORRAL_BRAIN (and CORRALAI_BRAIN_TOKEN via `corral secret`) — matrix has no offline mode")
+		return 1
+	}
+	token, err := brainToken()
+	if err != nil {
+		fmt.Fprintln(stderr, "corral matrix:", err)
+		return 1
+	}
+	return runMatrix(args, newHTTPMatrixReader(brainURL, token), stdout, stderr)
+}
+
+// flagParseExit maps a failed flag.Parse to an exit status. -h makes the flag
+// package print usage and return flag.ErrHelp; that is a successful answer to
+// a question, not a usage error, so it exits 0. Everything else is a genuine
+// misuse and stays 2. One function, because ~25 subcommands each returned a
+// literal 2 here and scripts/gen-cli-docs.sh (which refuses any -h that exits
+// non-zero) found every one of them.
+func flagParseExit(err error) int {
+	if errors.Is(err, flag.ErrHelp) {
+		return 0
+	}
+	return 2
+}

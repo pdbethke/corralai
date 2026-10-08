@@ -62,7 +62,7 @@ func runVerifyAttest(args []string, stdout, stderr io.Writer) int {
 	pubFlag := fs.String("pub", "", "hex-encoded Ed25519 public key to verify against. With --attest: default the local certify key (CORRALAI_CERTIFY_KEY_FILE). With --ledger: default $CORRALAI_LEDGER_PUBKEY, else signatures are NOT CHECKED — the local certify key is never used for a ledger")
 	ledgerFlag := fs.String("ledger", "", "walk a LEDGER DIRECTORY (the JSON entries `--push <dir>/` writes, one per scan, each naming the previous entry's hash and carrying a signature): every entry's hash against its bytes, every link against its predecessor, every signature against --pub, else $CORRALAI_LEDGER_PUBKEY, else NOT CHECKED (the local certify key is never used to verify a ledger). One line per entry; an edited entry, a removed one, or a foreign signature is named. Instead of --attest, not with it")
 	if err := fs.Parse(args); err != nil {
-		return 2
+		return flagParseExit(err)
 	}
 	if d := strings.TrimSpace(*ledgerFlag); d != "" {
 		if strings.TrimSpace(*attestFlag) != "" {

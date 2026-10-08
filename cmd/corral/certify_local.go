@@ -133,7 +133,7 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 	fs.Var(&bindDirFlag, "bind-dir", "extra repo-relative dependency dir to mount read-only into the jail instead of copying it into the workspace (repeatable; node_modules/vendor/.venv/venv/.bundle are auto-detected) — --repo-dir mode only")
 	noBindDepsFlag := fs.Bool("no-bind-deps", false, "copy dependency dirs into the jail workspace instead of bind-mounting them read-only (the pre-bind behavior; subject to the workspace size cap)")
 	if err := fs.Parse(flagArgs); err != nil {
-		return 2
+		return flagParseExit(err)
 	}
 
 	// Validated here, before anything is spent: the mode changes how many

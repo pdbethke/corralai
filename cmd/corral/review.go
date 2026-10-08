@@ -118,7 +118,7 @@ func reviewFlagSet(out io.Writer) (*flag.FlagSet, *reviewFlags) {
 func runReviewRun(args []string, stdout, stderr io.Writer) int {
 	fs, f := reviewFlagSet(stderr)
 	if err := fs.Parse(args); err != nil {
-		return 2
+		return flagParseExit(err)
 	}
 	repoDir, scope, model, verifier, ledgerFlag, attest, push := &f.repoDir, &f.scope, &f.model, &f.verifier, &f.ledger, &f.attest, &f.push
 	failOn := strings.ToLower(strings.TrimSpace(f.failOn))
@@ -589,6 +589,10 @@ func indent(s string) string {
 func runReviewShow(args []string, stdout, stderr io.Writer) int {
 	if len(args) != 2 {
 		fmt.Fprintln(stderr, "corral review show: usage: corral review show <ledger dir> <review hash>")
+		// A help request is answered, not refused (see flagParseExit).
+		if wantsHelp(args) {
+			return 0
+		}
 		return 2
 	}
 	dir := strings.TrimRight(args[0], "/")
@@ -629,7 +633,7 @@ func runReviewAdjudicate(args []string, stdout, stderr io.Writer) int {
 	by := fs.String("by", "", "who is deciding (default: the OS user)")
 	push := fs.String("push", "", "also append the verdict as a corral_adjudications row to this warehouse (a DuckDB path, or md:<db>), joined to the review's rows by the entry's hash")
 	if err := fs.Parse(flagsFirst(fs, args)); err != nil {
-		return 2
+		return flagParseExit(err)
 	}
 	if fs.NArg() != 2 || *confirm == *refute || strings.TrimSpace(*reason) == "" {
 		fmt.Fprintln(stderr, "corral review adjudicate: usage: corral review adjudicate <ledger dir> <review hash>#<Rn> --confirm|--refute --reason \"…\" [--by <who>]")

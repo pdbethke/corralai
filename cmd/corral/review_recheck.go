@@ -50,7 +50,7 @@ func runReviewRecheck(args []string, stdout, stderr io.Writer) int {
 	timeout := fs.Duration("timeout", time.Minute, "wall-clock bound on the script")
 	asJSON := fs.Bool("json", false, "print the result as one JSON object")
 	if err := fs.Parse(flagsFirst(fs, args)); err != nil {
-		return 2
+		return flagParseExit(err)
 	}
 	usage := "corral review recheck: usage: corral review recheck <ledger dir> <review hash>#<Rn> [--repo <dir>] [--timeout 1m] [--json]"
 	if fs.NArg() != 2 {

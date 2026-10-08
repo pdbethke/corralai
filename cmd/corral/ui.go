@@ -50,7 +50,7 @@ func runUI(args []string, open func(dsn string) (sealReader, error), stdout, std
 	openBrowser := fs.Bool("open", false, "with --write, also open the URL in a browser. A convenience for a desktop: it hands the URL, token included, to the opener as a command-line argument, which other local processes can read while it runs")
 	repoDir := fs.String("repo", ".", "with --write, the checkout a finding's reproduction is rechecked against (its HEAD, in a disposable worktree)")
 	if err := fs.Parse(args); err != nil {
-		return 2
+		return flagParseExit(err)
 	}
 
 	target := strings.TrimSpace(*dsn)

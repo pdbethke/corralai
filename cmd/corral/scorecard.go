@@ -108,7 +108,7 @@ func runScorecard(args []string, store scorecardReader, stdout io.Writer) int {
 	fs := flag.NewFlagSet("scorecard", flag.ContinueOnError)
 	asJSON := fs.Bool("json", false, "emit the raw cells as JSON")
 	if err := fs.Parse(args); err != nil {
-		return 2
+		return flagParseExit(err)
 	}
 	cells, err := store.Scorecard(context.Background())
 	if err != nil {

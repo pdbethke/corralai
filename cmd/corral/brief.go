@@ -121,7 +121,7 @@ func runBrief(args []string, stdout, stderr io.Writer) int {
 	fs.BoolVar(&f.jsonOut, "json", false, "the report as one JSON document, for an agent to read")
 	fs.IntVar(&f.maxItems, "max-items", 50, "at most this many items (survivors, gaps, claims) across the report; the cut is named")
 	if err := fs.Parse(flagsFirst(fs, args)); err != nil {
-		return 2
+		return flagParseExit(err)
 	}
 	if len(f.scopes) == 0 && strings.TrimSpace(f.changed) == "" {
 		fmt.Fprintln(stderr, "corral brief: name what to report on — --scope <path> (repeatable) and/or --changed <base ref>")

@@ -41,7 +41,7 @@ func runDemo(args []string, stdout, stderr io.Writer) int {
 	mutant := fs.String("mutant-model", "", "model for the mutant-generator role — REQUIRED, corral has no default models. Takes a registry alias (.corral/models.json) or a concrete model name")
 	critic := fs.String("critic-model", "", `model for the test-critic role, which must differ from the writer's ("off" disables it)`)
 	if err := fs.Parse(args); err != nil {
-		return 2
+		return flagParseExit(err)
 	}
 
 	if strings.TrimSpace(*writer) == "" || strings.TrimSpace(*mutant) == "" {

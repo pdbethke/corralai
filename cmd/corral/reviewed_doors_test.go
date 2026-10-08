@@ -208,7 +208,8 @@ func TestAttestSaysSignedOnlyForItsOwnEnvelope(t *testing.T) {
 func TestScansShowHelpReachesUsage(t *testing.T) {
 	var out, errb bytes.Buffer
 	code := runScansShow([]string{"-h"}, func(string) (scansReader, error) { t.Fatal("must not open a store"); return nil, nil }, &out, &errb)
-	if code != 2 || !strings.Contains(errb.String(), "usage: corral scans show") || !strings.Contains(errb.String(), "-evidence") {
+	// Exit 0: asking for help succeeds (flagParseExit); the pin used to say 2.
+	if code != 0 || !strings.Contains(errb.String(), "usage: corral scans show") || !strings.Contains(errb.String(), "-evidence") {
 		t.Fatalf("-h must print usage and the flags: exit %d\n%s", code, errb.String())
 	}
 	if strings.Contains(errb.String(), "is not a scan id") {

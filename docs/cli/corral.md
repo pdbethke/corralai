@@ -332,7 +332,7 @@ Usage of certify --local:
 ## `corral control` flags
 
 ```
-corral control: usage: corral control seed --spec-db <path> --owner <principal> --goal <id> --target <repo-path> --code-path <flat> --test-path <flat> --test-file <path> [--kill-rate <float>]
+usage: corral control seed --spec-db <path> --owner <principal> --goal <id> --target <repo-path> --code-path <flat> --test-path <flat> --test-file <path> [--kill-rate <float>]
 note: the brain must be stopped (it holds the control store open); or author via the stage_control / promote_control MCP tools while the brain runs
 ```
 
@@ -356,7 +356,6 @@ Usage of control seed:
     	path to the vetted test source file
   -test-path string
     	flat test filename in the jail workspace
-corral control: flag: help requested
 ```
 
 ## `corral criticscore` flags
@@ -622,7 +621,15 @@ runner's entry past a branch that moved: fetch, `corral ledger append`, push.
 ## `corral matrix` flags
 
 ```
-corral matrix: set CORRAL_BRAIN (and CORRALAI_BRAIN_TOKEN via `corral secret`) — matrix has no offline mode
+usage: corral matrix list [--json]
+```
+
+## `corral matrix list` flags
+
+```
+Usage of matrix list:
+  -json
+    	emit the raw rows as JSON
 ```
 
 ## `corral mcp` flags
@@ -860,7 +867,7 @@ Usage of seal:
 ## `corral secret` flags
 
 ```
-corral secret: unknown secret subcommand "-h" (set|get|list|rm)
+usage: corral secret <set|get|list|rm> <NAME>  (set reads the value from stdin — never a CLI arg)
 ```
 
 ## `corral ui` flags

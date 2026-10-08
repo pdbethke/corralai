@@ -19,6 +19,17 @@ func runSecret(args []string, stdin io.Reader, out io.Writer) error {
 	if len(args) == 0 {
 		return fmt.Errorf("usage: corral secret set|get|list|rm <NAME>")
 	}
+	// Only the FIRST argument is a help request: `secret set -h` would
+	// otherwise be unable to store a secret named "-h", and more to the point
+	// the keystore must not be opened (creds.Open) just to say what this does.
+	if wantsHelp(args[:1]) {
+		// Worded "corral secret <set|get|list|rm>" on purpose: the CLI reference
+		// generator derives sub-subcommands from "corral secret <word>" in this
+		// text and would then run `secret set -h`, which stores a secret named
+		// "-h" read from stdin. The leaves here take no flag set to document.
+		fmt.Fprintln(out, "usage: corral secret <set|get|list|rm> <NAME>  (set reads the value from stdin — never a CLI arg)")
+		return nil
+	}
 	s, err := creds.Open()
 	if err != nil {
 		return err

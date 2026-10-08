@@ -77,6 +77,12 @@ func (r *httpMatrixReader) Matrix(ctx context.Context) ([]matrixstore.Row, []mat
 // subcommand — the matrix is pure telemetry from --matrix/matrix-opted-in
 // runs, never a gate a human adjudicates the way criticscore's findings are.
 func runMatrix(args []string, reader matrixReader, stdout, stderr io.Writer) int {
+	// A help request is answered, not refused: usage goes to stdout and the
+	// exit is 0. A bare `matrix` (or an unknown verb) is misuse and stays 2.
+	if len(args) > 0 && wantsHelp(args[:1]) {
+		fmt.Fprintln(stdout, "usage: corral matrix list [--json]")
+		return 0
+	}
 	if len(args) == 0 || args[0] != "list" {
 		fmt.Fprintln(stderr, "usage: corral matrix list [--json]")
 		return 2
@@ -85,7 +91,7 @@ func runMatrix(args []string, reader matrixReader, stdout, stderr io.Writer) int
 	fs.SetOutput(stderr)
 	asJSON := fs.Bool("json", false, "emit the raw rows as JSON")
 	if err := fs.Parse(args[1:]); err != nil {
-		return 2
+		return flagParseExit(err)
 	}
 
 	rows, candidates, err := reader.Matrix(context.Background())

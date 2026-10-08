@@ -11,6 +11,11 @@ history of any release, `git log v0.3.4..v0.3.5`.
 
 ## [Unreleased]
 
+- **`--attest` no longer leaves a mismatched envelope, and `review --attest`
+  creates its directory.** A keyless `--attest` run after a keyed one used to
+  leave a DSSE envelope signed for the previous statement beside the new one;
+  it is now removed. `review --attest` into a directory that did not exist yet
+  failed; it now creates it, as `certify --repo --attest` already did.
 - **Breaking: `corral verify --ledger`, `corral ledger verify` and `corral ui` no longer
   verify against the local certify key implicitly.** Pass `--pub` or set
   `CORRALAI_LEDGER_PUBKEY`; with neither, signed entries read as signed,

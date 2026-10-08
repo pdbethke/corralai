@@ -5,11 +5,15 @@ package main
 import (
 	"context"
 	"crypto/ed25519"
+	"crypto/sha256"
 	"crypto/x509"
+	"encoding/hex"
+	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/pdbethke/corralai/internal/certify"
@@ -103,15 +107,15 @@ func transparencyPublicKeyPEM() ([]byte, error) {
 // writeAuditStatement built, before it was marshaled to the plain JSON file)
 // into a DSSE envelope (application/vnd.in-toto+json) using the local
 // certify key, and writes it to stmtPath's envelope path. It is the ONE
-// function that produces this envelope, so writeAuditStatement's
-// best-effort call and any direct test of the signing behavior exercise
-// identical logic — see TestWriteSignedStatementEnvelopeIsGoldenStructure.
+// function that produces this envelope, so writeStatement's call and any direct test of the signing
+// behavior exercise identical logic — see TestWriteSignedStatementEnvelopeIsGoldenStructure.
 //
 // Returns an error (never partial output) when no key is configured
 // (loadLocalCertifyKeyIfConfigured), when signing fails, or when the write
-// fails. writeAuditStatement treats all of these as non-fatal to the PLAIN
-// file it already wrote; --transparency's own early guard is what actually
-// gates a run on key availability, before any of this work runs.
+// fails. writeStatement treats all of these as non-fatal to the PLAIN
+// file it already wrote and hands the error back: each caller decides (an
+// audit stays silent, a review reports it). --transparency's own early guard is
+// what actually gates a run on key availability, before any of this work runs.
 func writeSignedStatementEnvelope(stmtPath string, stmt map[string]any) (string, error) {
 	priv, err := loadLocalCertifyKeyIfConfigured()
 	if err != nil {
@@ -126,6 +130,38 @@ func writeSignedStatementEnvelope(stmtPath string, stmt map[string]any) (string,
 		return "", fmt.Errorf("writing the DSSE envelope to %s: %w", envPath, err)
 	}
 	return envPath, nil
+}
+
+// writeStatement is the ONE writer of an in-toto statement and its DSSE
+// envelope, for audits and reviews alike. The two used to be separate and
+// each held half the fixes: one made the directory (2026-09-08), the other
+// removed an envelope that no longer matched. Order matters: the stale
+// envelope goes BEFORE signing, so a failed or keyless sign leaves no
+// envelope rather than a wrong one.
+//
+// The plain bytes are json.MarshalIndent(stmt, "", "  ") with no trailing
+// newline — the form both callers produced before they were merged, and the
+// form whose sha256 the signed ledger already carries. Do not change it.
+//
+// signErr is returned, not acted on: a review reports it; an audit stays
+// silent, because an ordinary --attest run has no local key by design.
+func writeStatement(path string, stmt map[string]any) (sha, envPath string, signErr, err error) {
+	b, err := json.MarshalIndent(stmt, "", "  ")
+	if err != nil {
+		return "", "", nil, err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+		return "", "", nil, err
+	}
+	if err := os.WriteFile(path, b, 0o600); err != nil {
+		return "", "", nil, err
+	}
+	if rmErr := os.Remove(dsseEnvelopePathFor(path)); rmErr != nil && !os.IsNotExist(rmErr) {
+		return "", "", nil, fmt.Errorf("removing the stale envelope %s: %w", dsseEnvelopePathFor(path), rmErr)
+	}
+	sum := sha256.Sum256(b)
+	envPath, signErr = writeSignedStatementEnvelope(path, stmt)
+	return hex.EncodeToString(sum[:]), envPath, signErr, nil
 }
 
 // uploadToTransparencyLog is --transparency's whole job, factored out of

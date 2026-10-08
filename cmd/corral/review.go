@@ -4,9 +4,6 @@ package main
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -565,29 +562,13 @@ func printReview(w io.Writer, r review.Review, adj map[string]auditpush.Adjudica
 	}
 }
 
-// writeReviewStatement writes the review's in-toto statement and, when a
-// certify key is configured, its DSSE envelope beside it. Returns the
-// plain statement's sha256.
 // writeReviewStatement writes the plain statement to path and returns its
 // sha256, the envelope path THIS call wrote (or "" with signErr saying why
 // no envelope was produced — no key, a signing failure), and any error
 // writing the plain file. A stale envelope beside path is removed first:
 // an envelope that does not belong to this statement must not survive it.
 func writeReviewStatement(path string, r review.Review) (sha, envPath string, signErr, err error) {
-	stmt := certify.BuildReviewAttestation(r)
-	b, err := json.MarshalIndent(stmt, "", "  ")
-	if err != nil {
-		return "", "", nil, err
-	}
-	if err := os.WriteFile(path, b, 0o600); err != nil {
-		return "", "", nil, err
-	}
-	if rmErr := os.Remove(dsseEnvelopePathFor(path)); rmErr != nil && !os.IsNotExist(rmErr) {
-		return "", "", nil, fmt.Errorf("removing the stale envelope %s: %w", dsseEnvelopePathFor(path), rmErr)
-	}
-	sum := sha256.Sum256(b)
-	envPath, signErr = writeSignedStatementEnvelope(path, stmt)
-	return hex.EncodeToString(sum[:]), envPath, signErr, nil
+	return writeStatement(path, certify.BuildReviewAttestation(r))
 }
 
 func tail(s string, n int) string {

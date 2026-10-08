@@ -5093,35 +5093,15 @@ func writeAuditStatement(path, repoDir string, r reposcan.RepoReport, models map
 			return WarehouseRowsHashVersion
 		}(),
 	})
-	b, err := json.MarshalIndent(stmt, "", "  ")
-	if err != nil {
-		return "", err
-	}
-	// The receipt's directory is made if it is missing, as the ledger's is:
-	// a run that spent its budget and then could not write its receipt
-	// because `.corral/` did not exist yet was caught on camera (2026-09-08).
-	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
-		return "", err
-	}
-	if err := os.WriteFile(path, b, 0o600); err != nil {
-		return "", err
-	}
-	sum := sha256.Sum256(b)
-
-	// Best-effort: sign the SAME statement into a DSSE envelope beside the
-	// plain file, when a local signing key is actually available (see
-	// loadLocalCertifyKeyIfConfigured — this never silently provisions a
-	// fresh key). Never fatal to the plain write above, and never reported
-	// here: an ordinary --attest run has no local key by design (its
-	// consumer is GitHub's KEYLESS actions/attest) and must keep producing
-	// exactly the file it produces today, with nothing new on stderr. A
-	// --transparency run's own guard (runCertifyRepo) already refused the
-	// whole invocation earlier, loudly, if a key was required and
-	// unavailable — so by the time a --transparency run reaches this line,
-	// this call always succeeds.
-	_, _ = writeSignedStatementEnvelope(path, stmt)
-
-	return hex.EncodeToString(sum[:]), nil
+	// The receipt's directory is made if it is missing, and a stale envelope
+	// is removed, both inside writeStatement. Signing there is best-effort
+	// and silent HERE: an ordinary --attest run has no local key by design
+	// (its consumer is GitHub's KEYLESS actions/attest) and must produce
+	// nothing new on stderr. A --transparency run's own guard
+	// (runCertifyRepo) already refused the whole invocation earlier if a key
+	// was required and unavailable.
+	sha, _, _, err := writeStatement(path, stmt)
+	return sha, err
 }
 
 // warehouseRowsSHA256 is the hex sha256 of the bundle's canonical JSON, with

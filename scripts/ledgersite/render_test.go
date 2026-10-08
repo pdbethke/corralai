@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -60,8 +61,12 @@ func read(t *testing.T, p string) string {
 }
 
 // The site must see exactly what the ledger's own reader sees: plain .json
-// entries included, chain (Pushed) order — never a walker of its own, which
-// is how the copy this replaced came to drop every uncompressed entry.
+// entries included, and chain (Pushed) order — never file-name order. Names
+// carry seconds and Pushed microseconds, so two entries inside one second
+// sorted differently by each (ed079ca08965#R5). The fixture makes that
+// disagreement total: the files are renamed so name order is the REVERSE of
+// push order, and the expected order comes from how the entries were
+// appended, not from asking the reader under test.
 func TestSiteLoadsWhatTheLedgerReaderLoads(t *testing.T) {
 	dir := t.TempDir()
 	for i := 1; i <= 3; i++ {
@@ -71,34 +76,60 @@ func TestSiteLoadsWhatTheLedgerReaderLoads(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	// Rewrite one entry uncompressed, as an older writer could have left it.
-	gz, _ := filepath.Glob(filepath.Join(dir, auditpush.ScansSubdir, "*.json.gz"))
-	if len(gz) != 3 {
-		t.Fatalf("setup: want 3 gzipped entries, got %d", len(gz))
+	scans := filepath.Join(dir, auditpush.ScansSubdir)
+	gz, err := filepath.Glob(filepath.Join(scans, "*.json.gz"))
+	if err != nil || len(gz) != 3 {
+		t.Fatalf("setup: want 3 gzipped entries, got %d (err %v)", len(gz), err)
 	}
-	raw := mustGunzip(t, gz[1])
-	if err := os.WriteFile(strings.TrimSuffix(gz[1], ".gz"), raw, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Remove(gz[1]); err != nil {
-		t.Fatal(err)
+	sort.Strings(gz) // names are push-ordered as written: gz[0] is ScanID 1
+	// Reverse the names (entry 1 sorts last) and leave the middle entry
+	// uncompressed, as an older writer could have.
+	renamed := []string{"c.json.gz", "b.json", "a.json.gz"}
+	for k, old := range gz {
+		raw := mustGunzip(t, old)
+		if err := os.Remove(old); err != nil {
+			t.Fatal(err)
+		}
+		dst := filepath.Join(scans, renamed[k])
+		if strings.HasSuffix(dst, ".gz") {
+			writeGzip(t, dst, raw)
+		} else if err := os.WriteFile(dst, raw, 0o600); err != nil {
+			t.Fatal(err)
+		}
 	}
 
-	want, err := auditpush.ReadLedgerDir(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
 	got, err := loadEntries(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != len(want) {
-		t.Fatalf("site loaded %d entries, the ledger reader %d — the site is dropping entries", len(got), len(want))
+	if len(got) != 3 {
+		t.Fatalf("site loaded %d entries, want 3 — the site is dropping entries", len(got))
 	}
-	for i := range want {
-		if got[i].File != want[i].File {
-			t.Fatalf("entry %d: site %s, ledger %s — order differs", i, got[i].File, want[i].File)
+	for i, e := range got {
+		if e.Bundle.Scan.ScanID != int64(i+1) {
+			t.Fatalf("position %d holds scan %d (file %s), want scan %d — not chain order", i, e.Bundle.Scan.ScanID, e.File, i+1)
 		}
+		if i > 0 && e.Pushed.Before(got[i-1].Pushed) {
+			t.Fatalf("entry %d was pushed before entry %d", i, i-1)
+		}
+	}
+}
+
+func writeGzip(t *testing.T, path string, raw []byte) {
+	t.Helper()
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600) // #nosec G304 -- a path the test itself builds
+	if err != nil {
+		t.Fatal(err)
+	}
+	zw := gzip.NewWriter(f)
+	if _, err := zw.Write(raw); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
 	}
 }
 

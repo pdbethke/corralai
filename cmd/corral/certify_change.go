@@ -108,43 +108,18 @@ func loadLocalCertifyKey() (ed25519.PrivateKey, error) {
 // "corral-certify"; anchoring is never done here (Anchored=false).
 func signBuildLocally(rec buildRecord, priv ed25519.PrivateKey) (buildResult, error) {
 	const actor = "corral-certify"
-	steps := []certify.Step{
-		{
-			Kind: "context", Actor: actor, Subject: rec.Repo + "@" + rec.Commit,
-			Detail: map[string]any{"repo": rec.Repo, "commit": rec.Commit, "branch": rec.Branch},
-		},
-		{
-			Kind: "execution", Actor: actor, Subject: rec.Command,
-			Detail: map[string]any{
-				"exit_code": rec.ExitCode, "ok": rec.ExitCode == 0,
-				"duration_s": rec.DurationS, "output_digest": rec.OutputDigest,
-			},
-		},
-	}
-	built, head := certify.BuildLedger(steps)
-
-	stmt := certify.BuildAttestation(certify.BuildRecord{
+	sb, err := certify.SignBuild(certify.BuildRecord{
 		Repo: rec.Repo, Commit: rec.Commit, Branch: rec.Branch, Actor: actor,
-		Command: rec.Command, ExitCode: rec.ExitCode, DurationS: certify.SecondsOrUnmeasured(rec.DurationS),
+		Command: rec.Command, ExitCode: rec.ExitCode,
 		OutputDigest: rec.OutputDigest, ProducedBy: rec.ProducedBy,
-	}, head)
-
-	envelope, err := certify.SignDSSE(stmt, priv, "corral-certify")
+	}, rec.DurationS, priv, actor)
 	if err != nil {
-		return buildResult{}, fmt.Errorf("signing statement: %w", err)
-	}
-	stepsJSON, err := certify.MarshalSteps(built)
-	if err != nil {
-		return buildResult{}, fmt.Errorf("marshaling steps: %w", err)
-	}
-	var stepsOut []map[string]any
-	if err := json.Unmarshal(stepsJSON, &stepsOut); err != nil {
-		return buildResult{}, fmt.Errorf("decoding steps: %w", err)
+		return buildResult{}, err
 	}
 	pub := priv.Public().(ed25519.PublicKey)
 	return buildResult{
-		ID: 0, Head: head, Signature: string(envelope), Statement: stmt,
-		PublicKey: hex.EncodeToString(pub), Steps: stepsOut, Anchored: false,
+		ID: 0, Head: sb.Head, Signature: string(sb.Envelope), Statement: sb.Statement,
+		PublicKey: hex.EncodeToString(pub), Steps: sb.Steps, Anchored: false,
 	}, nil
 }
 

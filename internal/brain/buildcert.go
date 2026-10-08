@@ -95,69 +95,20 @@ func registerBuildCert(s *mcp.Server, opts Options) {
 // the gate runner (Task 4) can call it directly, in-process, with no MCP
 // round-trip — the two callers must produce byte-identical records.
 func certifyBuild(ctx context.Context, opts Options, in reportBuildIn, actor string) (reportBuildOut, error) {
-	steps := []certify.Step{
-		{
-			Kind:    "context",
-			Actor:   actor,
-			Subject: in.Repo + "@" + in.Commit,
-			Detail: map[string]any{
-				"repo":   in.Repo,
-				"commit": in.Commit,
-				"branch": in.Branch,
-			},
-		},
-		{
-			Kind:    "execution",
-			Actor:   actor,
-			Subject: in.Command,
-			Detail: map[string]any{
-				"exit_code":     in.ExitCode,
-				"ok":            in.ExitCode == 0,
-				"duration_s":    in.DurationS,
-				"output_digest": in.OutputDigest,
-			},
-		},
-	}
-	built, head := certify.BuildLedger(steps)
-
-	br := certify.BuildRecord{
+	sb, err := certify.SignBuild(certify.BuildRecord{
 		Repo:         in.Repo,
 		Commit:       in.Commit,
 		Branch:       in.Branch,
 		Actor:        actor,
 		Command:      in.Command,
 		ExitCode:     in.ExitCode,
-		DurationS:    certify.SecondsOrUnmeasured(in.DurationS),
 		OutputDigest: in.OutputDigest,
 		ProducedBy:   in.ProducedBy,
-	}
-	stmt := certify.BuildAttestation(br, head)
-
-	// Sign the FULL canonical statement (not just the head) as a DSSE
-	// envelope: a head-only signature leaves the predicate
-	// (repo/commit/command/exit code) freely editable in storage
-	// without invalidating the signature. The envelope embeds its
-	// own copy of the canonical statement bytes it signed, so a
-	// later VerifyDSSE call checks the identical bytes the
-	// signature covers with no separate canonical-bytes column to
-	// keep in sync.
-	envelope, err := certify.SignDSSE(stmt, opts.CertifyKey, "brain")
+	}, in.DurationS, opts.CertifyKey, "brain")
 	if err != nil {
-		return reportBuildOut{}, fmt.Errorf("report_build: signing statement: %w", err)
+		return reportBuildOut{}, fmt.Errorf("report_build: %w", err)
 	}
-	canonical, err := certify.CanonicalStatement(stmt)
-	if err != nil {
-		return reportBuildOut{}, fmt.Errorf("report_build: canonicalizing statement: %w", err)
-	}
-
-	stepsJSON, err := certify.MarshalSteps(built)
-	if err != nil {
-		return reportBuildOut{}, fmt.Errorf("report_build: marshaling steps: %w", err)
-	}
-	var stepsOut []map[string]any
-	if err := json.Unmarshal(stepsJSON, &stepsOut); err != nil {
-		return reportBuildOut{}, fmt.Errorf("report_build: decoding steps for response: %w", err)
-	}
+	head, stmt, envelope, canonical, stepsJSON, stepsOut := sb.Head, sb.Statement, sb.Envelope, sb.Canonical, sb.StepsJSON, sb.Steps
 
 	// Anchor the signed envelope to the transparency witness — an
 	// ADDITIONAL trustless guarantee (a public, third-party-checkable

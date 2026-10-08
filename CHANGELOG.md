@@ -30,9 +30,11 @@ history of any release, `git log v0.3.4..v0.3.5`.
   refused.** `secret list -h` used to list your stored secret names, and
   `set -h` stored a secret called `-h`. Names never begin with `-`, so one that
   does is a mistyped flag and is refused.
-- **A `/bin/sh -c` or `dash -c` test command gets the toolchain preflight.** A
-  host without the toolchain is now refused up front rather than failing inside
-  the jail.
+- **A `/bin/sh -c` or `dash -c` test command gets the toolchain preflight.** The
+  command is checked against the language's stock toolchain (`go`, `node`,
+  `ruby`, …), not against whatever the wrapped script itself runs, so a host
+  without that toolchain is now refused up front rather than failing inside the
+  jail.
 - **The public ledger page includes plain `.json` entries, in chain order.** The
   page renderer now reads the ledger directory through `auditpush.ReadLedgerDir`,
   the same reader the CLI verifies with.

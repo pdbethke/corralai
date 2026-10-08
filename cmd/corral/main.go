@@ -670,24 +670,25 @@ Takes no flags. Reads the same local findings store ` + "`corral certify --local
 // --local run's own signed ledger, which this command does not read) — no
 // offline mode. Same reasoning as criticscore.
 //
-// -h is answered BEFORE the brain is consulted, as scorecard and criticscore
-// do: the generated CLI reference captures every subcommand's real -h, and a
-// help that needs a brain documents the missing-brain error instead.
+// The brain is required LAZILY: runMatrix is handed a reader factory and calls
+// it only after the arguments have parsed, so a help request anywhere (the
+// verb position, or a leaf `-h` among the flags) is answered with no brain, no
+// token and no keystore. The generated CLI reference captures every
+// subcommand's real -h, and a help that needs a brain documents the
+// missing-brain error instead. A dispatch-time help predicate cannot do this:
+// it sees only the first arguments, and `list --json -h` hides -h behind a flag.
 func runMatrixCommand(args []string, env func(string) string, stdout, stderr io.Writer) int {
-	if verbWantsHelp(args) {
-		return runMatrix(args, nil, stdout, stderr)
-	}
-	brainURL := strings.TrimSpace(env("CORRAL_BRAIN"))
-	if brainURL == "" {
-		fmt.Fprintln(stderr, "corral matrix: set CORRAL_BRAIN (and CORRALAI_BRAIN_TOKEN via `corral secret`) — matrix has no offline mode")
-		return 1
-	}
-	token, err := brainToken()
-	if err != nil {
-		fmt.Fprintln(stderr, "corral matrix:", err)
-		return 1
-	}
-	return runMatrix(args, newHTTPMatrixReader(brainURL, token), stdout, stderr)
+	return runMatrix(args, func() (matrixReader, error) {
+		brainURL := strings.TrimSpace(env("CORRAL_BRAIN"))
+		if brainURL == "" {
+			return nil, errors.New("set CORRAL_BRAIN (and CORRALAI_BRAIN_TOKEN via `corral secret`) — matrix has no offline mode")
+		}
+		token, err := brainToken()
+		if err != nil {
+			return nil, err
+		}
+		return newHTTPMatrixReader(brainURL, token), nil
+	}, stdout, stderr)
 }
 
 // flagParseExit maps a failed flag.Parse to an exit status. -h makes the flag

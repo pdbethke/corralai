@@ -38,6 +38,41 @@ func TestMatrixHelpNeedsNoBrain(t *testing.T) {
 	}
 }
 
+// A leaf flag's -h anywhere among the leaf's flags is the flag package's to
+// answer, and answering it must not need a brain or a token: the dispatch used
+// to read only the first two arguments, saw `list --json`, and demanded a brain
+// before the parse ever ran.
+func TestMatrixLeafFlagHelpNeedsNoBrain(t *testing.T) {
+	// brainToken reads the keystore; keep it empty and private to the test.
+	t.Setenv("CORRAL_CREDS_DIR", t.TempDir())
+	t.Setenv("CORRALAI_BRAIN_TOKEN", "")
+	envs := map[string]func(string) string{
+		"unset": func(string) string { return "" },
+		"set-no-token": func(k string) string {
+			if k == "CORRAL_BRAIN" {
+				return "http://127.0.0.1:9"
+			}
+			return ""
+		},
+	}
+	for name, env := range envs {
+		for _, args := range [][]string{{"list", "--json", "-h"}, {"list", "-json", "--help"}} {
+			var out, errb bytes.Buffer
+			code := runMatrixCommand(args, env, &out, &errb)
+			all := out.String() + errb.String()
+			if code != 0 {
+				t.Errorf("[%s] matrix %v exited %d, want 0:\n%s", name, args, code, all)
+			}
+			if !strings.Contains(all, "-json") {
+				t.Errorf("[%s] matrix %v did not document -json:\n%s", name, args, all)
+			}
+			if strings.Contains(all, "CORRAL_BRAIN") || strings.Contains(all, "BRAIN_TOKEN") {
+				t.Errorf("[%s] matrix %v answered help with a brain error:\n%s", name, args, all)
+			}
+		}
+	}
+}
+
 // `list -- -h` is NOT a help request (-h after `--` is a positional), so with
 // no brain it is refused like any real invocation. What it must never do is
 // reach runMatrix with a nil reader and panic, which it did.

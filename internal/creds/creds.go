@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"filippo.io/age"
 	"github.com/zalando/go-keyring"
@@ -20,13 +21,39 @@ import (
 
 var errReadOnly = errors.New("creds: backend is read-only")
 
+// Provider names one model vendor's credential: the env var it is stored
+// under (which is also its secret name in every backend) and the vendor it
+// belongs to. This table is the ONE home of "which secrets are provider API
+// keys"; CanonicalNames, the env scrubs and the missing-model message all
+// derive from it rather than keeping their own copies — the message's copy
+// once probed os.Getenv alone and told a user who had run `corral secret set`
+// that they had no key.
+type Provider struct{ Env, Vendor string }
+
+// Providers lists every provider credential corral recognises. GOOGLE_API_KEY
+// is a second spelling of the Gemini key (agentbackend accepts either), so
+// Google appears twice on purpose.
+var Providers = []Provider{
+	{"ANTHROPIC_API_KEY", "Anthropic"},
+	{"OPENAI_API_KEY", "OpenAI"},
+	{"GEMINI_API_KEY", "Google"},
+	{"GOOGLE_API_KEY", "Google"},
+	{"OPENROUTER_API_KEY", "OpenRouter"},
+}
+
 // CanonicalNames are the provider/token secrets corral knows by convention,
-// named after their env var so an env override is transparent. Exported so
-// callers outside the package (e.g. cmd/corral-agent's env-scrub) can act on
-// the same list without duplicating it.
-var CanonicalNames = []string{
-	"OPENAI_API_KEY", "GEMINI_API_KEY", "ANTHROPIC_API_KEY",
-	"OPENROUTER_API_KEY", "CORRALAI_BRAIN_KEY", "CORRALAI_BRAIN_TOKEN",
+// named after their env var so an env override is transparent: every Providers
+// entry plus the brain's own credentials. Exported so callers outside the
+// package (e.g. cmd/corral-agent's env-scrub) can act on the same list without
+// duplicating it.
+var CanonicalNames = canonicalNames()
+
+func canonicalNames() []string {
+	out := make([]string, 0, len(Providers)+2)
+	for _, p := range Providers {
+		out = append(out, p.Env)
+	}
+	return append(out, "CORRALAI_BRAIN_KEY", "CORRALAI_BRAIN_TOKEN")
 }
 
 // backend is one storage tier of the chain.
@@ -53,6 +80,25 @@ func (s *Store) Get(name string) (string, bool, error) {
 		}
 	}
 	return "", false, nil
+}
+
+// PresentProviders returns each provider whose credential resolves, to a
+// non-empty value, through the whole chain (env, keyring, file) — the same
+// resolution a run itself performs. It reports names and vendors only, never a
+// value, so its result is safe to print. The first backend error is returned
+// rather than read as "absent": an unreadable store is not an empty one.
+func (s *Store) PresentProviders() ([]Provider, error) {
+	var out []Provider
+	for _, p := range Providers {
+		v, ok, err := s.Get(p.Env)
+		if err != nil {
+			return out, err
+		}
+		if ok && strings.TrimSpace(v) != "" {
+			out = append(out, p)
+		}
+	}
+	return out, nil
 }
 
 // Set writes to the first writable backend in the chain.

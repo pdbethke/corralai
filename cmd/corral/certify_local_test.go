@@ -27,11 +27,13 @@ import (
 	"github.com/pdbethke/corralai/internal/buildstore"
 	"github.com/pdbethke/corralai/internal/certify"
 	"github.com/pdbethke/corralai/internal/certverify"
+	"github.com/pdbethke/corralai/internal/creds"
 	"github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/matrix"
 	"github.com/pdbethke/corralai/internal/queue"
 	"github.com/pdbethke/corralai/internal/sandbox"
 	"github.com/pdbethke/corralai/internal/transparency"
+	"github.com/zalando/go-keyring"
 )
 
 // blockingChatter tracks how many Chat calls overlap in time, so a test can
@@ -1730,5 +1732,42 @@ func TestUnnamedCriticIsRefusedNotSilentlyOff(t *testing.T) {
 	}
 	if err := herdNotConfiguredErr("corral certify --local", "w", "m", "claude-haiku-4-5"); err != nil {
 		t.Errorf("a named critic was refused: %v", err)
+	}
+}
+
+// TestMissingModelMessageSeesKeysSavedWithCorralSecret: the message probed
+// os.Getenv alone, so a key stored with `corral secret set` (keyring/file
+// backend) was reported as "none" to the very person who followed the docs.
+// It must also never print the secret's value — only the name and vendor.
+func TestMissingModelMessageSeesKeysSavedWithCorralSecret(t *testing.T) {
+	// The mock keyring is process-global: wipe it afterwards, or the stored
+	// key leaks into every later test that expects no Anthropic credential.
+	keyring.MockInit()
+	t.Cleanup(keyring.MockInit)
+	t.Setenv("CORRAL_CREDS_DIR", t.TempDir())
+	for _, n := range []string{"ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY", "OPENROUTER_API_KEY"} {
+		t.Setenv(n, "")
+	}
+	const fake = "sk-ant-RECOGNIZABLE-FAKE-VALUE"
+	st, err := creds.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Set("ANTHROPIC_API_KEY", fake); err != nil {
+		t.Fatal(err)
+	}
+	err = herdNotConfiguredErr("corral certify --local", "", "", "off")
+	if err == nil {
+		t.Fatal("empty seats accepted")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "ANTHROPIC_API_KEY (Anthropic)") {
+		t.Errorf("a stored key is invisible to the message:\n%s", msg)
+	}
+	if strings.Contains(msg, "none") {
+		t.Errorf("message claims no credential although one is stored:\n%s", msg)
+	}
+	if strings.Contains(msg, fake) || strings.Contains(msg, "RECOGNIZABLE") {
+		t.Errorf("message leaks the secret value:\n%s", msg)
 	}
 }

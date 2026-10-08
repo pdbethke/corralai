@@ -139,3 +139,52 @@ func TestOpenChainEnvOverridesStored(t *testing.T) {
 		t.Fatalf("env must override stored, got %q", v)
 	}
 }
+
+// TestPresentProvidersResolvesTheWholeChain: the missing-model message used
+// to probe os.Getenv alone, so a key saved with `corral secret set` read as
+// "none". PresentProviders must see a key held by ANY backend, report each
+// provider once per env name, and never carry a value.
+func TestPresentProvidersResolvesTheWholeChain(t *testing.T) {
+	for _, p := range Providers {
+		t.Setenv(p.Env, "")
+	}
+	stored := newMem()
+	stored.m["ANTHROPIC_API_KEY"] = "sk-ant-recognizable-fake"
+	stored.m["OPENAI_API_KEY"] = "" // present-but-empty is absent
+	s := newStore(envBackend{}, stored)
+
+	got, err := s.PresentProviders()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []Provider{{"ANTHROPIC_API_KEY", "Anthropic"}}
+	if len(got) != 1 || got[0] != want[0] {
+		t.Fatalf("PresentProviders = %v, want %v", got, want)
+	}
+	t.Setenv("GOOGLE_API_KEY", "g")
+	got, _ = s.PresentProviders()
+	if len(got) != 2 || got[1].Env != "GOOGLE_API_KEY" {
+		t.Fatalf("env-held key not seen alongside the stored one: %v", got)
+	}
+}
+
+// TestCanonicalNamesCoverEveryProvider: CanonicalNames is derived from the
+// provider table, so a provider added there is scrubbed and resolvable without
+// a second edit — and nothing CanonicalNames held before was dropped.
+func TestCanonicalNamesCoverEveryProvider(t *testing.T) {
+	have := map[string]bool{}
+	for _, n := range CanonicalNames {
+		have[n] = true
+	}
+	for _, p := range Providers {
+		if !have[p.Env] {
+			t.Errorf("CanonicalNames lacks provider %s", p.Env)
+		}
+	}
+	for _, n := range []string{"OPENAI_API_KEY", "GEMINI_API_KEY", "ANTHROPIC_API_KEY",
+		"OPENROUTER_API_KEY", "CORRALAI_BRAIN_KEY", "CORRALAI_BRAIN_TOKEN", "GOOGLE_API_KEY"} {
+		if !have[n] {
+			t.Errorf("CanonicalNames lost %s", n)
+		}
+	}
+}

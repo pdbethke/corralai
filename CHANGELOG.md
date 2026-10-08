@@ -11,6 +11,12 @@ history of any release, `git log v0.3.4..v0.3.5`.
 
 ## [Unreleased]
 
+- **The missing-model message sees keys saved with `corral secret`.** The
+  "credentials visible here" line probed environment variables only, so a key
+  stored in the keyring or the encrypted file read as "none" to the person who
+  had just saved it. It now resolves through the same store a run uses, from one
+  provider table in `internal/creds` (which also gained `GOOGLE_API_KEY` in the
+  env scrubs). It prints env-var names and vendors, never a value.
 - **`corral matrix -h` prints usage without a brain, and `-h` exits 0 everywhere.**
   `matrix -h` read `CORRAL_BRAIN` first, so with no brain it printed the
   missing-brain error, and the generated CLI reference published that error as

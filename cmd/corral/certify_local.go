@@ -26,6 +26,7 @@ import (
 	"github.com/pdbethke/corralai/internal/agentbackend"
 	"github.com/pdbethke/corralai/internal/agentworker"
 	"github.com/pdbethke/corralai/internal/buildstore"
+	"github.com/pdbethke/corralai/internal/creds"
 	"github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/queue"
 	"github.com/pdbethke/corralai/internal/repoindex"
@@ -1011,24 +1012,30 @@ func herdNotConfiguredErr(cmdName, writer, mutant, criticRaw string) error {
 	}
 	cmd := orDefault(cmdName, "corral certify --local")
 
+	// Resolved through the credential store's whole chain, not os.Getenv: a key
+	// saved with `corral secret set` lives in the keyring or the age file, and
+	// an env-only probe told its owner they had none. Only the env-var name and
+	// vendor are printed, never a value.
 	var seen []string
-	for _, probe := range []struct{ env, provider string }{
-		{"ANTHROPIC_API_KEY", "Anthropic"},
-		{"OPENAI_API_KEY", "OpenAI"},
-		{"GEMINI_API_KEY", "Google"},
-		{"GOOGLE_API_KEY", "Google"},
-		{"OPENROUTER_API_KEY", "OpenRouter"},
-	} {
-		if strings.TrimSpace(os.Getenv(probe.env)) != "" {
-			seen = append(seen, fmt.Sprintf("%s (%s)", probe.env, probe.provider))
+	var storeNote string
+	if st, err := creds.Open(); err != nil {
+		storeNote = fmt.Sprintf(" (credential store unreadable: %v)", err)
+	} else {
+		present, perr := st.PresentProviders()
+		for _, p := range present {
+			seen = append(seen, fmt.Sprintf("%s (%s)", p.Env, p.Vendor))
+		}
+		if perr != nil {
+			storeNote = fmt.Sprintf(" (credential store partly unreadable: %v)", perr)
 		}
 	}
-	creds := "none — no provider credential is set in this environment"
+	credLine := "none — no provider credential is set in this environment"
 	if len(seen) > 0 {
-		creds = strings.Join(seen, ", ")
+		credLine = strings.Join(seen, ", ")
 	}
+	credLine += storeNote
 	if b := strings.TrimSpace(os.Getenv("MODEL_BACKEND")); b != "" {
-		creds += fmt.Sprintf("; MODEL_BACKEND=%s", b)
+		credLine += fmt.Sprintf("; MODEL_BACKEND=%s", b)
 	}
 
 	return auditUsageErr(
@@ -1040,7 +1047,7 @@ func herdNotConfiguredErr(cmdName, writer, mutant, criticRaw string) error {
 			"the only rule is that the critic must differ from the writer (that is the decorrelation the verdict rests on);\n"+
 			"--critic-model off drops the critic entirely — it is advisory and never gates the verdict.\n"+
 			"`corral doctor` checks a herd, and its credentials, for free before you spend anything",
-		strings.Join(empty, " and "), creds, cmd)
+		strings.Join(empty, " and "), credLine, cmd)
 }
 
 // resolveRoleModels is the naming half of resolveAuditRoles: it applies the

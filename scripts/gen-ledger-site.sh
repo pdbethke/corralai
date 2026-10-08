@@ -7,12 +7,13 @@
 #
 # Signatures are checked against --pubkey <hex> or CORRALAI_LEDGER_PUBKEY —
 # explicitly, never inferred from a file. With neither the page says signatures
-# were NOT CHECKED.
+# were NOT CHECKED. The environment variable is left for ledgersite to read
+# itself, so a malformed one is refused naming the true source.
 set -euo pipefail
 
 BRANCH="${CORRALAI_LEDGER_BRANCH:-corral/ledger}"
 OUT="${1:-site/public/ledger}"
-PUBKEY="${CORRALAI_LEDGER_PUBKEY:-}"
+PUBKEY=""
 if [ "${2:-}" = "--pubkey" ] && [ -n "${3:-}" ]; then PUBKEY="$3"; fi
 
 cd "$(dirname "$0")/.."

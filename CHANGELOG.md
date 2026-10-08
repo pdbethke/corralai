@@ -11,8 +11,8 @@ history of any release, `git log v0.3.4..v0.3.5`.
 
 ## [Unreleased]
 
-- **Breaking: `corral verify --ledger` (and `corral ledger verify`) no longer
-  verifies against the local certify key implicitly.** Pass `--pub` or set
+- **Breaking: `corral verify --ledger`, `corral ledger verify` and `corral ui` no longer
+  verify against the local certify key implicitly.** Pass `--pub` or set
   `CORRALAI_LEDGER_PUBKEY`; with neither, signed entries read as signed,
   unverified, and signatures are not checked. The CLI and the public ledger
   page now resolve the key identically, so the machine's owner and a stranger

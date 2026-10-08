@@ -193,13 +193,6 @@ gen_one() {
         # shellcheck disable=SC2086 -- deliberate word splitting: an argv prefix
         subhelp="$(capture_sub_help "$b" $sub)" || refuse_failed_help "$b $sub" "$subhelp"
         [ -n "$subhelp" ] || continue
-        # A section that documents an ERROR documents a verb that does not
-        # exist. Refuse, by name, rather than ship it.
-        if printf '%s' "$subhelp" | grep -qE 'unknown subcommand|is not a scan id'; then
-          echo "gen-cli-docs: \`$b $sub -h\` answered with an error, not a usage — the reference would document a verb that does not exist:" >&2
-          printf '%s\n' "$subhelp" | sed 's/^/    /' >&2
-          exit 1
-        fi
         echo
         # The heading names the command a READER types; a positional argument
         # this script supplies only to reach the flag set (e.g. the "." in

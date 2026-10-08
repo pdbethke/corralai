@@ -19,16 +19,38 @@ func runSecret(args []string, stdin io.Reader, out io.Writer) error {
 	if len(args) == 0 {
 		return fmt.Errorf("usage: corral secret set|get|list|rm <NAME>")
 	}
-	// Only the FIRST argument is a help request: `secret set -h` would
-	// otherwise be unable to store a secret named "-h", and more to the point
-	// the keystore must not be opened (creds.Open) just to say what this does.
+	// HELP AND NAME CHECKS COME BEFORE THE KEYSTORE AND BEFORE STDIN. A help
+	// token is honoured as the first argument (`secret -h`) and as the argument
+	// right after a leaf (`secret set -h`, `get -h`, `rm -h`); before this,
+	// `secret set -h` stored a secret named "-h" read from stdin, `get -h`
+	// looked one up and `rm -h` removed one. The generator's leaf derivation
+	// runs `secret set -h`, so that was also a way for doc generation to write
+	// to a keystore.
+	//
+	// A secret NAME that begins with "-" is refused outright rather than made
+	// storable through some escape: names are env-var names
+	// (ANTHROPIC_API_KEY, CORRALAI_BRAIN_TOKEN — the env backend is first in the
+	// chain), which can never begin with "-", so the only thing such a name can
+	// be is a mistyped flag. Refusing it also keeps `secret set --force` from
+	// silently storing a secret called "--force". creds itself does not validate
+	// names; this is the CLI's door, and it is the only one.
 	if wantsHelp(args[:1]) {
-		// Worded "corral secret <set|get|list|rm>" on purpose: the CLI reference
-		// generator derives sub-subcommands from "corral secret <word>" in this
-		// text and would then run `secret set -h`, which stores a secret named
-		// "-h" read from stdin. The leaves here take no flag set to document.
-		fmt.Fprintln(out, "usage: corral secret <set|get|list|rm> <NAME>  (set reads the value from stdin — never a CLI arg)")
+		fmt.Fprintln(out, "usage: corral secret set|get|list|rm <NAME>  (set reads the value from stdin — never a CLI arg)")
 		return nil
+	}
+	switch args[0] {
+	case "set", "get", "rm":
+		if len(args) >= 2 && wantsHelp(args[1:2]) {
+			if args[0] == "set" {
+				fmt.Fprintln(out, "usage: corral secret set <NAME>  (value read from stdin — never a CLI arg)")
+			} else {
+				fmt.Fprintf(out, "usage: corral secret %s <NAME>\n", args[0])
+			}
+			return nil
+		}
+		if len(args) == 2 && strings.HasPrefix(args[1], "-") {
+			return fmt.Errorf("%q is not a secret name (names are env-var style, e.g. ANTHROPIC_API_KEY, and never begin with \"-\") — usage: corral secret %s <NAME>", args[1], args[0])
+		}
 	}
 	s, err := creds.Open()
 	if err != nil {

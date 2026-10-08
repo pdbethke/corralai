@@ -867,7 +867,13 @@ Usage of seal:
 ## `corral secret` flags
 
 ```
-usage: corral secret <set|get|list|rm> <NAME>  (set reads the value from stdin — never a CLI arg)
+usage: corral secret set|get|list|rm <NAME>  (set reads the value from stdin — never a CLI arg)
+```
+
+## `corral secret set` flags
+
+```
+usage: corral secret set <NAME>  (value read from stdin — never a CLI arg)
 ```
 
 ## `corral ui` flags

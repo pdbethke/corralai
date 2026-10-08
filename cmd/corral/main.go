@@ -542,7 +542,7 @@ func main() {
 		os.Exit(runFindingsMCP(context.Background(), cs, os.Stderr))
 	case "criticscore":
 		// -h must not open a store; see the scorecard case above.
-		if wantsHelp(os.Args[2:]) {
+		if criticScoreWantsHelp(os.Args[2:]) {
 			os.Exit(runCriticScore(os.Args[2:], nil, nil, os.Stdout, os.Stderr))
 		}
 		// With CORRAL_BRAIN set, show/confirm/refute go through the brain's

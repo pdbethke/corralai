@@ -149,6 +149,20 @@ func (a mcpCriticScoreAdmin) Adjudicate(ctx context.Context, id, verdict, ration
 // plain read; show/confirm/refute go through the ADMIN-gated MCP tools
 // (internal/brain/criticscoretools.go), so a caller without admin rights
 // gets that tool's own rejection surfaced as an error here.
+// criticScoreWantsHelp is true when the verb or the argument right after it is
+// a help token. It deliberately does NOT scan every argument: `confirm X --why
+// help` is an adjudication whose reason happens to be the word "help", and
+// reading it as a help request exited 0 having adjudicated nothing — a silent
+// success on a no-op in a tool that records human verdicts. main.go's pre-store
+// guard uses the same predicate so the two cannot disagree.
+func criticScoreWantsHelp(args []string) bool {
+	n := len(args)
+	if n > 2 {
+		n = 2
+	}
+	return wantsHelp(args[:n])
+}
+
 func runCriticScore(args []string, lister criticScoreLister, admin criticScoreAdmin, stdout, stderr io.Writer) int {
 	// HELP IS ANSWERED HERE, before the dispatch, and that is load-bearing: the
 	// caller's wantsHelp guard scans EVERY argument, so `criticscore list -h`
@@ -161,7 +175,7 @@ func runCriticScore(args []string, lister criticScoreLister, admin criticScoreAd
 	//
 	// A help request exits 0; a bare `criticscore` is misuse and stays 2.
 	const usage = "usage: corral criticscore list|show <id>|confirm <id> [--why ...]|refute <id> [--why ...]"
-	if wantsHelp(args) {
+	if criticScoreWantsHelp(args) {
 		fmt.Fprintln(stderr, usage)
 		return 0
 	}

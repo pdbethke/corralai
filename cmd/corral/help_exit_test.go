@@ -6,6 +6,8 @@ import (
 	"bytes"
 	"errors"
 	"flag"
+	"io"
+	"os"
 	"strings"
 	"testing"
 )
@@ -78,5 +80,57 @@ func TestControlSeedHelpIsNotAnError(t *testing.T) {
 	var out bytes.Buffer
 	if err := runControl([]string{"seed", "-h"}, &out); err != nil {
 		t.Errorf("control seed -h returned %v", err)
+	}
+}
+
+// tripwireReader fails the test if anything reads stdin.
+type tripwireReader struct{ t *testing.T }
+
+func (r tripwireReader) Read([]byte) (int, error) {
+	r.t.Helper()
+	r.t.Error("secret read stdin on a help/bad-name request")
+	return 0, io.EOF
+}
+
+// A help token after a leaf is a help request, and a name that begins with "-"
+// is refused: neither may read stdin or touch the keystore. `secret set -h`
+// used to store a secret named "-h".
+func TestSecretLeafHelpAndDashNamesTouchNothing(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("CORRAL_CREDS_DIR", dir)
+	for _, leaf := range []string{"set", "get", "rm"} {
+		var out bytes.Buffer
+		if err := runSecret([]string{leaf, "-h"}, tripwireReader{t}, &out); err != nil {
+			t.Errorf("secret %s -h returned %v, want a usage answer", leaf, err)
+		}
+		if !strings.Contains(out.String(), "usage: corral secret "+leaf) {
+			t.Errorf("secret %s -h printed %q", leaf, out.String())
+		}
+		for _, name := range []string{"-x", "--force"} {
+			if err := runSecret([]string{leaf, name}, tripwireReader{t}, &bytes.Buffer{}); err == nil {
+				t.Errorf("secret %s %s was accepted; a name beginning with - is a mistyped flag", leaf, name)
+			}
+		}
+	}
+	if ents, _ := os.ReadDir(dir); len(ents) != 0 {
+		t.Errorf("the keystore directory was written to: %v", ents)
+	}
+}
+
+// `confirm X --why help` is an adjudication whose reason is the word "help".
+// It must run (and here, fail loudly via the admin fake), never exit 0 as help.
+func TestCriticScoreWhyHelpIsNotAHelpRequest(t *testing.T) {
+	admin := &fakeCriticAdmin{adjErr: errBoom}
+	var out, errOut bytes.Buffer
+	if rc := runCriticScore([]string{"confirm", "42:5", "--why", "help"}, fakeCriticLister{}, admin, &out, &errOut); rc == 0 {
+		t.Fatalf("exit 0 with nothing adjudicated:\n%s%s", out.String(), errOut.String())
+	}
+	if criticScoreWantsHelp([]string{"confirm", "42:5", "--why", "help"}) {
+		t.Fatal("a --why value was read as a help token")
+	}
+	for _, a := range [][]string{{"-h"}, {"list", "-h"}, {"show", "--help"}, {"confirm", "-h"}} {
+		if !criticScoreWantsHelp(a) {
+			t.Errorf("%v not recognised as help", a)
+		}
 	}
 }

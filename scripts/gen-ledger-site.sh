@@ -5,12 +5,9 @@
 # materializes it into a temp dir with `git archive` — no checkout, nothing
 # touched in the working tree — and renders it with scripts/ledgersite.
 #
-# Signatures are checked against, in order: --pubkey <hex>, CORRALAI_LEDGER_PUBKEY,
-# or the repository's published LEDGER_PUBKEY file. With none of them the page
-# says signatures were NOT CHECKED, which is neither a pass nor a failure — the
-# same standard `corral verify` holds. LEDGER_PUBKEY is the default so the
-# deployed page checks corral's own record without the workflow having to be
-# told twice where the key lives.
+# Signatures are checked against --pubkey <hex> or CORRALAI_LEDGER_PUBKEY —
+# explicitly, never inferred from a file. With neither the page says signatures
+# were NOT CHECKED.
 set -euo pipefail
 
 BRANCH="${CORRALAI_LEDGER_BRANCH:-corral/ledger}"
@@ -19,9 +16,6 @@ PUBKEY="${CORRALAI_LEDGER_PUBKEY:-}"
 if [ "${2:-}" = "--pubkey" ] && [ -n "${3:-}" ]; then PUBKEY="$3"; fi
 
 cd "$(dirname "$0")/.."
-if [ -z "$PUBKEY" ] && [ -f LEDGER_PUBKEY ]; then
-  PUBKEY="$(tr -d '[:space:]' < LEDGER_PUBKEY)"
-fi
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 

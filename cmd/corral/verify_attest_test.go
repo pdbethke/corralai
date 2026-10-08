@@ -675,23 +675,64 @@ func TestVerifyLedgerWalksTheChain(t *testing.T) {
 	}
 	push("aaaa1111")
 	push("bbbb2222")
+	priv, err := loadLocalCertifyKeyIfConfigured()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pubHex := hex.EncodeToString(priv.Public().(ed25519.PublicKey))
 	var out, errb bytes.Buffer
-	if code := runVerifyAttest([]string{"--ledger", dir}, &out, &errb); code != 0 {
+	if code := runVerifyAttest([]string{"--ledger", dir, "--pub", pubHex}, &out, &errb); code != 0 {
 		t.Fatalf("intact chain: exit %d\n%s%s", code, out.String(), errb.String())
 	}
 	s := out.String()
-	if !strings.Contains(s, "genesis, signed by corral-certify and verified against the local certify key") || !strings.Contains(s, "2 entries, chain intact") {
+	if !strings.Contains(s, "genesis, signed by corral-certify and verified against the --pub flag") || !strings.Contains(s, "2 entries, chain intact") {
 		t.Errorf("intact chain output:\n%s", s)
 	}
 	// Remove the first entry: the second's link names a missing predecessor.
 	names, _ := os.ReadDir(filepath.Join(dir, auditpush.ScansSubdir))
 	_ = os.Remove(filepath.Join(dir, auditpush.ScansSubdir, names[0].Name()))
 	out.Reset()
-	if code := runVerifyAttest([]string{"--ledger", dir}, &out, &errb); code != 1 || !strings.Contains(out.String(), "removed, reordered or inserted") {
+	if code := runVerifyAttest([]string{"--ledger", dir, "--pub", pubHex}, &out, &errb); code != 1 || !strings.Contains(out.String(), "removed, reordered or inserted") {
 		t.Errorf("broken chain: exit %d\n%s", code, out.String())
 	}
 	// --attest and --ledger together is a usage error.
 	if code := runVerifyAttest([]string{"--ledger", dir, "--attest", "x.json"}, &out, &errb); code != 2 {
 		t.Errorf("both flags: exit %d, want 2", code)
+	}
+}
+
+// Explicit-only: a configured local certify key must NOT be used to verify a
+// ledger implicitly — a stranger and the owner must reach the same verdict.
+func TestVerifyLedgerNeverUsesTheLocalKeyImplicitly(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("CORRALAI_CERTIFY_KEY_FILE", filepath.Join(t.TempDir(), "certify.key"))
+	t.Setenv("CORRALAI_CERTIFY_KEY", "")
+	t.Setenv(auditpush.LedgerPubKeyEnv, "")
+	if _, err := pushBundle(dir, auditpush.Bundle{Scan: auditpush.ScanRow{Repo: "r", Commit: "aaaa1111", ScanID: 1}, Files: []auditpush.Row{{Repo: "r", ScanID: 1, Path: "a.py"}}}); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	_ = runVerifyLedger(dir, "", "", &out, &errb)
+	if strings.Contains(out.String(), "local certify key") {
+		t.Fatalf("verify used the local key implicitly:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "unverified") {
+		t.Fatalf("with no explicit key a signed entry must read as signed, unverified:\n%s", out.String())
+	}
+}
+
+// A garbage CORRALAI_LEDGER_PUBKEY is a refusal, never a quiet downgrade to
+// "unverified": an operator who set the variable meant to check.
+func TestVerifyLedgerRefusesGarbageEnvKey(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("CORRALAI_CERTIFY_KEY_FILE", filepath.Join(t.TempDir(), "certify.key"))
+	t.Setenv("CORRALAI_CERTIFY_KEY", "")
+	t.Setenv(auditpush.LedgerPubKeyEnv, "garbage")
+	var out, errb bytes.Buffer
+	if code := runVerifyLedger(dir, "", "", &out, &errb); code != 2 {
+		t.Fatalf("exit = %d, want 2\n%s%s", code, out.String(), errb.String())
+	}
+	if !strings.Contains(errb.String(), auditpush.LedgerPubKeyEnv) {
+		t.Fatalf("stderr must name %s, got %q", auditpush.LedgerPubKeyEnv, errb.String())
 	}
 }

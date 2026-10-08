@@ -11,6 +11,14 @@ history of any release, `git log v0.3.4..v0.3.5`.
 
 ## [Unreleased]
 
+- **Breaking: `corral verify --ledger` (and `corral ledger verify`) no longer
+  verifies against the local certify key implicitly.** Pass `--pub` or set
+  `CORRALAI_LEDGER_PUBKEY`; with neither, signed entries read as signed,
+  unverified, and signatures are not checked. The CLI and the public ledger
+  page now resolve the key identically, so the machine's owner and a stranger
+  reach the same verdict on the same record. A malformed key is refused (exit
+  2), not downgraded. The site renderer no longer falls back to the committed
+  `LEDGER_PUBKEY` file on its own; the deploy workflow passes it explicitly.
 - **One-time cache miss.** `reposcan.VerdictGeneration` moves from 16 (rc.19)
   to 17. Every verdict cached before this change is re-measured once.
 - **A Python test file with an escaped triple quote no longer loses tests

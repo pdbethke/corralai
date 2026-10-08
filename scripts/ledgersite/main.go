@@ -16,7 +16,6 @@
 package main
 
 import (
-	"crypto/ed25519"
 	"encoding/hex"
 	"flag"
 	"fmt"
@@ -29,7 +28,7 @@ import (
 func main() {
 	ledger := flag.String("ledger", "", "the ledger directory (a checkout of the ledger branch)")
 	out := flag.String("out", "", "directory to write the static site into (index.html + entry/<hash>.html)")
-	pubHex := flag.String("pubkey", "", "hex Ed25519 public key to verify signatures against; omitted means signatures are NOT checked and the page says so")
+	pubHex := flag.String("pubkey", "", "hex Ed25519 public key to verify signatures against; else $CORRALAI_LEDGER_PUBKEY; with neither, signatures are NOT checked and the page says so")
 	flag.Parse()
 
 	if *ledger == "" {
@@ -43,14 +42,12 @@ func main() {
 
 	// A missing key is NOT a failed check: it means unchecked, and every
 	// surface has to keep those apart rather than render unchecked as bad.
-	var pub ed25519.PublicKey
-	if *pubHex != "" {
-		b, err := hex.DecodeString(*pubHex)
-		if err != nil || len(b) != ed25519.PublicKeySize {
-			fmt.Fprintf(os.Stderr, "ledgersite: -pubkey is not a hex Ed25519 public key\n")
-			os.Exit(2)
-		}
-		pub = ed25519.PublicKey(b)
+	// A key that is SET but malformed is a refusal, so a typo in the deploy
+	// cannot quietly publish a page that checked nothing.
+	pub, _, err := auditpush.ResolveLedgerPubKey(*pubHex)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ledgersite: %v\n", err)
+		os.Exit(2)
 	}
 
 	entries, err := loadEntries(*ledger)
@@ -66,7 +63,7 @@ func main() {
 
 	fmt.Printf("entries read:      %d\n", len(entries))
 	fmt.Printf("chain checks:      %d\n", len(checks))
-	fmt.Printf("signatures:        %s\n", map[bool]string{true: "checked against -pubkey", false: "NOT CHECKED (no -pubkey given)"}[pub != nil])
+	fmt.Printf("signatures:        %s\n", map[bool]string{true: "checked against the explicit key", false: "NOT CHECKED (no -pubkey, no CORRALAI_LEDGER_PUBKEY)"}[pub != nil])
 
 	live := auditpush.LiveEntries(entries)
 	retracted := auditpush.Retracted(entries)

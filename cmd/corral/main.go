@@ -277,7 +277,8 @@ Usage:
                                   --limit n, --json
   corral verify --ledger <dir>    walk a ledger directory's chain: every entry's hash against its
                                   bytes, every link against its predecessor, every signature
-                                  against --pub or the local certify key; one line per entry,
+                                  against --pub, else $CORRALAI_LEDGER_PUBKEY, else NOT CHECKED
+                                  (never the local certify key); one line per entry,
                                   an edited or removed entry named; unsigned said, never "verified"
   corral ledger append <entry> <dir>
                                   re-link an entry to <dir>'s current head (re-hash, re-sign, place)

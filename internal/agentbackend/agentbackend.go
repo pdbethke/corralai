@@ -510,7 +510,7 @@ func postJSON(url string, hdr map[string]string, body, out any) error {
 			// was pulled. Wrap so callers use errors.Is(err, ErrModelUnreachable).
 			return fmt.Errorf("%w: %w", ErrModelUnreachable, e)
 		}
-		if resp.StatusCode >= 400 && resp.StatusCode < 500 && resp.StatusCode != http.StatusTooManyRequests {
+		if requestRejectedStatus(resp.StatusCode) {
 			// The provider refused the request itself (a schema too large to
 			// compile, a field it does not take). Marked so a caller can tell
 			// that apart from a rate limit or a server fault, which a retry of
@@ -520,6 +520,24 @@ func postJSON(url string, hdr map[string]string, body, out any) error {
 		return e
 	}
 	return json.NewDecoder(resp.Body).Decode(out)
+}
+
+// requestRejectedStatus reports whether an HTTP status says the provider
+// refused THIS REQUEST'S CONTENT: 400 (measured: gemini answers a schema past
+// its grammar limit with a bare 400), 413 (too large) and 422 (unprocessable;
+// not measured, listed as the standard status for a well-formed request the
+// server will not process). It is an allow-list, not "any 4xx", because the
+// callers answer it by re-sending the same prompt WITHOUT its schema, which
+// only helps when the schema was the problem. A 401 or 403 (a bad, expired or
+// unauthorised key), a 408 or any other 4xx is the same failure on the plain
+// call, and would cost a second large prompt to learn it. 404 and 429 are
+// classified before and apart from this (no such model; rate limited).
+func requestRejectedStatus(code int) bool {
+	switch code {
+	case http.StatusBadRequest, http.StatusRequestEntityTooLarge, http.StatusUnprocessableEntity:
+		return true
+	}
+	return false
 }
 
 // oneline collapses a possibly-multiline error/response body into a single

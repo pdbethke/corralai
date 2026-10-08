@@ -128,6 +128,42 @@ func TestPythonTestNamesInSourceSurvivesStringsAndContinuations(t *testing.T) {
 	}
 }
 
+// A backslash escapes the character after it inside a triple-quoted string,
+// so \""" does not close it. Without that the lexer closed the string early,
+// read the real closing quotes as a NEW opening one, and skipped every line
+// after it as "not code": test_after was dropped with nothing to say so, and
+// the critic is held to the list as if it were complete.
+func TestPythonTestNamesInSourceHonoursAnEscapedTripleQuote(t *testing.T) {
+	py, _ := ByName("python")
+	for name, src := range map[string]string{
+		"escaped double triple quote":  "def test_before():\n    s = \"\"\"x \\\"\"\" y\"\"\"\n\ndef test_after():\n    pass\n",
+		"escaped single triple quote":  "def test_before():\n    s = '''x \\''' y'''\n\ndef test_after():\n    pass\n",
+		"raw string":                   "def test_before():\n    s = r\"\"\"x \\\"\"\" y\"\"\"\n\ndef test_after():\n    pass\n",
+		"escaped backslash then close": "def test_before():\n    s = \"\"\"x \\\\\"\"\"\n\ndef test_after():\n    pass\n",
+	} {
+		want := []string{"t.py::test_before", "t.py::test_after"}
+		if got := py.TestNamesInSource("t.py", src); !reflect.DeepEqual(got, want) {
+			t.Errorf("%s: got %v, want %v", name, got, want)
+		}
+	}
+}
+
+// A scan that ends inside a string or an open bracket lists nothing. The
+// tests it found before it lost its place are an undercount, and an undercount
+// handed to the critic reads as a complete review; nil is "no list", which the
+// critic answers in the unkeyed shape.
+func TestPythonTestNamesInSourceListsNothingWhenTheScanIsUnsettled(t *testing.T) {
+	py, _ := ByName("python")
+	for name, src := range map[string]string{
+		"unterminated triple quote": "def test_a():\n    pass\n\nX = \"\"\"never closed\n\ndef test_b():\n    pass\n",
+		"unclosed bracket":          "def test_a():\n    pass\n\nX = foo(\n\ndef test_b():\n    pass\n",
+	} {
+		if got := py.TestNamesInSource("t.py", src); got != nil {
+			t.Errorf("%s: got %v, want nil", name, got)
+		}
+	}
+}
+
 // Go: a test file that imports testing under another name still declares
 // tests, and the go tool runs them.
 func TestGoTestNamesInSourceHonoursATestingAlias(t *testing.T) {

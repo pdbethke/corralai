@@ -50,8 +50,9 @@ var criticFormat = ResponseFormat{Name: "critic_verdicts", Schema: map[string]an
 	}},
 }}
 
-// ErrRequestRejected marks a provider error that rejected the request
-// itself: a 4xx other than 404 (no such model) and 429 (rate limited). The
+// ErrRequestRejected marks a provider error that rejected the request's
+// content: a 400, 413 or 422. Not a 401 or 403 (a bad key fails the plain
+// call the same way), nor a 404 (no such model) or 429 (rate limited). The
 // backends wrap it (agentbackend.postJSON). For a constrained critic call it
 // is the one error that means "this provider will not take this schema", so
 // it is the only one answered with a plain call; a rate limit, a 5xx or a

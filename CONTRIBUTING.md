@@ -86,9 +86,10 @@ and the rerun after the pin bump is what actually publishes. That is
 deliberate; the alternative is a Releases page that can vouch for a commit
 whose tests never passed.
 
-The release workflow re-runs the console verification against the
-`CORRALAI_CONSOLE_PUBKEY` secret and **fails the release** if the committed
-signature does not cover the tag's version — because until that check existed,
+The release workflow re-runs the console verification against the committed
+[`deploy/console-release.pub`](deploy/console-release.pub), the same file the
+deploy verifies against, and **fails the release** if the committed signature
+does not cover the tag's version — because until that check existed,
 every released brain served a console every thin client refused with
 `manifest signature INVALID`, and nothing anywhere said so.
 

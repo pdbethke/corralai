@@ -26,8 +26,9 @@
 #
 # corralai's own release seed lives in `pass corralai/console-release-key`, with
 # an encrypted backup in Hetzner's credstore. It is never a GitHub secret: CI
-# only ever VERIFIES, using the public half in CORRALAI_CONSOLE_PUBKEY, so the
-# signing key has no reason to leave a machine a human controls.
+# only ever VERIFIES, using the committed public half deploy/console-release.pub
+# (the same file deploy.yml reads), so the signing key has no reason to leave a
+# machine a human controls.
 #
 # For DEV/TEST use (no real release key available), omit
 # CORRALAI_RELEASE_KEY — this falls back to the committed dev signing key

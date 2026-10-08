@@ -3,6 +3,7 @@
 package creds
 
 import (
+	"errors"
 	"sort"
 	"strings"
 	"testing"
@@ -165,6 +166,43 @@ func TestPresentProvidersResolvesTheWholeChain(t *testing.T) {
 	got, _ = s.PresentProviders()
 	if len(got) != 2 || got[1].Env != "GOOGLE_API_KEY" {
 		t.Fatalf("env-held key not seen alongside the stored one: %v", got)
+	}
+}
+
+// failingBackend errors for the names in bad and holds nothing otherwise.
+type failingBackend struct {
+	memBackend
+	bad map[string]bool
+}
+
+func (b *failingBackend) get(n string) (string, bool, error) {
+	if b.bad[n] {
+		return "", false, errors.New("store unreadable")
+	}
+	return b.memBackend.get(n)
+}
+
+// TestPresentProvidersKeepsProbingAfterAStoreError: a real run resolves each
+// name separately, so one unreadable name must not hide a key that a later
+// provider holds in the environment. The error is still returned.
+func TestPresentProvidersKeepsProbingAfterAStoreError(t *testing.T) {
+	for _, p := range Providers {
+		t.Setenv(p.Env, "")
+	}
+	last := Providers[len(Providers)-1]
+	t.Setenv(last.Env, "x")
+	bad := map[string]bool{}
+	for _, p := range Providers[:len(Providers)-1] {
+		bad[p.Env] = true
+	}
+	fb := &failingBackend{memBackend: *newMem(), bad: bad}
+	s := newStore(envBackend{}, fb)
+	got, err := s.PresentProviders()
+	if err == nil {
+		t.Fatal("store error was swallowed")
+	}
+	if len(got) != 1 || got[0] != last {
+		t.Fatalf("PresentProviders = %v, want [%v] despite the store error", got, last)
 	}
 }
 

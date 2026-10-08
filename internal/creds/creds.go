@@ -87,18 +87,25 @@ func (s *Store) Get(name string) (string, bool, error) {
 // resolution a run itself performs. It reports names and vendors only, never a
 // value, so its result is safe to print. The first backend error is returned
 // rather than read as "absent": an unreadable store is not an empty one.
+//
+// It keeps probing after an error, because a run resolves each name on its own:
+// one unreadable name must not hide an env-held key for a provider later in the
+// table, which the run itself WOULD find. Every error is joined into the one
+// returned, alongside every provider that did resolve.
 func (s *Store) PresentProviders() ([]Provider, error) {
 	var out []Provider
+	var errs []error
 	for _, p := range Providers {
 		v, ok, err := s.Get(p.Env)
 		if err != nil {
-			return out, err
+			errs = append(errs, err)
+			continue
 		}
 		if ok && strings.TrimSpace(v) != "" {
 			out = append(out, p)
 		}
 	}
-	return out, nil
+	return out, errors.Join(errs...)
 }
 
 // Set writes to the first writable backend in the chain.

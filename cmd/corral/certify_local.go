@@ -1030,6 +1030,11 @@ func herdNotConfiguredErr(cmdName, writer, mutant, criticRaw string) error {
 		}
 	}
 	credLine := "none — no provider credential is set in this environment"
+	if storeNote != "" {
+		// An unreadable store means we could not look everywhere, which is not
+		// the same as nothing being set.
+		credLine = "none found"
+	}
 	if len(seen) > 0 {
 		credLine = strings.Join(seen, ", ")
 	}

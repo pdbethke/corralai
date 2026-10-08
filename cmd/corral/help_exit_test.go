@@ -6,8 +6,11 @@ import (
 	"bytes"
 	"errors"
 	"flag"
+	"fmt"
 	"io"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -19,7 +22,7 @@ import (
 // sentence and PUBLISHED it as matrix's flag reference.
 func TestMatrixHelpNeedsNoBrain(t *testing.T) {
 	noBrain := func(string) string { return "" }
-	for _, args := range [][]string{{"-h"}, {"--help"}, {"help"}, {"list", "-h"}} {
+	for _, args := range [][]string{{"-h"}, {"--help"}, {"help"}, {"list", "-h"}, {"list", "help"}} {
 		var out, errb bytes.Buffer
 		code := runMatrixCommand(args, noBrain, &out, &errb)
 		all := out.String() + errb.String()
@@ -31,6 +34,23 @@ func TestMatrixHelpNeedsNoBrain(t *testing.T) {
 		}
 		if strings.Contains(all, "CORRAL_BRAIN") {
 			t.Errorf("matrix %v answered a help request with the missing-brain error:\n%s", args, all)
+		}
+	}
+}
+
+// `list -- -h` is NOT a help request (-h after `--` is a positional), so with
+// no brain it is refused like any real invocation. What it must never do is
+// reach runMatrix with a nil reader and panic, which it did.
+func TestMatrixDashDashHelpDoesNotPanic(t *testing.T) {
+	var out, errb bytes.Buffer
+	code := runMatrixCommand([]string{"list", "--", "-h"}, func(string) string { return "" }, &out, &errb)
+	if code == 0 {
+		t.Errorf("exit 0 for a non-help invocation with no brain:\n%s%s", out.String(), errb.String())
+	}
+	// Called directly with a nil reader, as the old dispatch did.
+	for _, a := range [][]string{{"list", "help"}, {"list", "-h"}} {
+		if code := runMatrix(a, nil, &out, &errb); code != 0 {
+			t.Errorf("runMatrix(%v, nil) = %d, want 0", a, code)
 		}
 	}
 }
@@ -112,6 +132,11 @@ func TestSecretLeafHelpAndDashNamesTouchNothing(t *testing.T) {
 			}
 		}
 	}
+	// `list -h` printed the stored secret NAMES instead of usage.
+	var lout bytes.Buffer
+	if err := runSecret([]string{"list", "-h"}, tripwireReader{t}, &lout); err != nil || !strings.Contains(lout.String(), "usage: corral secret list") {
+		t.Errorf("secret list -h = %v, %q; want usage", err, lout.String())
+	}
 	if ents, _ := os.ReadDir(dir); len(ents) != 0 {
 		t.Errorf("the keystore directory was written to: %v", ents)
 	}
@@ -125,12 +150,76 @@ func TestCriticScoreWhyHelpIsNotAHelpRequest(t *testing.T) {
 	if rc := runCriticScore([]string{"confirm", "42:5", "--why", "help"}, fakeCriticLister{}, admin, &out, &errOut); rc == 0 {
 		t.Fatalf("exit 0 with nothing adjudicated:\n%s%s", out.String(), errOut.String())
 	}
-	if criticScoreWantsHelp([]string{"confirm", "42:5", "--why", "help"}) {
+	if verbWantsHelp([]string{"confirm", "42:5", "--why", "help"}) {
 		t.Fatal("a --why value was read as a help token")
 	}
 	for _, a := range [][]string{{"-h"}, {"list", "-h"}, {"show", "--help"}, {"confirm", "-h"}} {
-		if !criticScoreWantsHelp(a) {
+		if !verbWantsHelp(a) {
 			t.Errorf("%v not recognised as help", a)
 		}
+	}
+}
+
+// TestGenCLIDocsRefusesAFailedHelp drives the REAL scripts/gen-cli-docs.sh
+// against a stub binary whose -h exits 2 and prints an error. refuse_failed_help
+// had no test that it fires; the generator would otherwise have published the
+// error as the binary's flag reference (it did, for matrix and secret).
+//
+// The script cd's to its own parent's parent and derives its binaries from
+// cmd/*/, so the test builds a tiny throwaway module holding a copy of the
+// script and one stub command: no function is sourced out of the script, the
+// whole capture-and-refuse path runs as shipped. The control (-h exits 0)
+// proves the refusal is caused by the exit status, not by the stub's shape.
+func TestGenCLIDocsRefusesAFailedHelp(t *testing.T) {
+	script, err := os.ReadFile("../../scripts/gen-cli-docs.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := func(helpExit int) (string, int) {
+		root := t.TempDir()
+		write := func(rel, body string, mode os.FileMode) {
+			p := filepath.Join(root, rel)
+			if err := os.MkdirAll(filepath.Dir(p), 0o750); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(p, []byte(body), mode); err != nil {
+				t.Fatal(err)
+			}
+		}
+		write("go.mod", "module stubmod\n\ngo 1.21\n", 0o600)
+		write("scripts/gen-cli-docs.sh", string(script), 0o700)
+		write("cmd/stub/main.go", fmt.Sprintf(`package main
+
+import (
+	"fmt"
+	"os"
+)
+
+func main() {
+	fmt.Fprintln(os.Stderr, "stub: simulated help")
+	os.Exit(%d)
+}
+`, helpExit), 0o600)
+		cmd := exec.Command("bash", "scripts/gen-cli-docs.sh")
+		cmd.Dir = root
+		out, err := cmd.CombinedOutput()
+		code := 0
+		if ee := (*exec.ExitError)(nil); errors.As(err, &ee) {
+			code = ee.ExitCode()
+		} else if err != nil {
+			t.Fatal(err)
+		}
+		return string(out), code
+	}
+
+	out, code := run(2)
+	if code == 0 {
+		t.Fatalf("gen-cli-docs.sh exited 0 although the binary's -h exited 2:\n%s", out)
+	}
+	if !strings.Contains(out, "exited non-zero") {
+		t.Errorf("no refusal message in the output:\n%s", out)
+	}
+	if out, code := run(0); code != 0 {
+		t.Fatalf("control: a -h that exits 0 was refused (code %d):\n%s", code, out)
 	}
 }

@@ -354,9 +354,12 @@ standard.
   `git fetch origin corral/ledger && git archive origin/corral/ledger | tar -x -C <tmp>`.
   Every rule about what the record MEANS lives in `internal/auditpush` —
   `VerifyLedgerDir` (chain + signatures), `Adjudications`, `Retracted`,
-  `LiveEntries`, `ReadLedgerEntry`. Do not re-derive any of them; `ReadLedgerDir`
-  returns an unexported type, so walk `scans/*.json.gz` yourself and parse each
-  with `ReadLedgerEntry`.
+  `LiveEntries`, `ReadLedgerEntry`. Do not re-derive any of them; read the
+  directory with `auditpush.ReadLedgerDir`. (This paragraph used to say
+  `ReadLedgerDir` returns an unexported type and to walk `scans/*.json.gz`
+  yourself. That was wrong — its element type is an alias of the exported
+  `LedgerEntry` — and it told agents to rebuild the reader that
+  `scripts/ledgersite` now shares with the CLI.)
 - `scripts/ledgersite/` + `scripts/gen-ledger-site.sh` — renders that branch as
   the public record page into `site/public/ledger/` (gitignored; generated at
   site-deploy time). Needs **only Go and git** — no key, no jail, no bwrap — so it

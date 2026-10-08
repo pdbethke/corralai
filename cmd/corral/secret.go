@@ -39,16 +39,18 @@ func runSecret(args []string, stdin io.Reader, out io.Writer) error {
 		return nil
 	}
 	switch args[0] {
-	case "set", "get", "rm":
+	case "set", "get", "rm", "list":
 		if len(args) >= 2 && wantsHelp(args[1:2]) {
 			if args[0] == "set" {
 				fmt.Fprintln(out, "usage: corral secret set <NAME>  (value read from stdin — never a CLI arg)")
+			} else if args[0] == "list" {
+				fmt.Fprintln(out, "usage: corral secret list")
 			} else {
 				fmt.Fprintf(out, "usage: corral secret %s <NAME>\n", args[0])
 			}
 			return nil
 		}
-		if len(args) == 2 && strings.HasPrefix(args[1], "-") {
+		if args[0] != "list" && len(args) == 2 && strings.HasPrefix(args[1], "-") {
 			return fmt.Errorf("%q is not a secret name (names are env-var style, e.g. ANTHROPIC_API_KEY, and never begin with \"-\") — usage: corral secret %s <NAME>", args[1], args[0])
 		}
 	}

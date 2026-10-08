@@ -18,12 +18,28 @@ history of any release, `git log v0.3.4..v0.3.5`.
   had just saved it. It now resolves through the same store a run uses, from one
   provider table in `internal/creds` (which also gained `GOOGLE_API_KEY` in the
   env scrubs). It prints env-var names and vendors, never a value.
-- **`corral matrix -h` prints usage without a brain, and `-h` exits 0 everywhere.**
+- **`corral matrix -h` prints usage without a brain, and `-h` exits 0 everywhere in `corral`.**
   `matrix -h` read `CORRAL_BRAIN` first, so with no brain it printed the
   missing-brain error, and the generated CLI reference published that error as
   matrix's flags. Every other subcommand that answered `-h` with exit 2 (or 1,
   for `secret`, `control` and `sign-console-bundle`) now exits 0, and
   `scripts/gen-cli-docs.sh` refuses any `-h` that exits non-zero.
+  `corral-wrangler register -h` still exits 2. `corral matrix list help` and
+  `corral matrix list -- -h` no longer crash: one help predicate now decides it.
+- **`corral secret set|get|rm|list -h` print usage, and dash-led secret names are
+  refused.** `secret list -h` used to list your stored secret names, and
+  `set -h` stored a secret called `-h`. Names never begin with `-`, so one that
+  does is a mistyped flag and is refused.
+- **A `/bin/sh -c` or `dash -c` test command gets the toolchain preflight.** A
+  host without the toolchain is now refused up front rather than failing inside
+  the jail.
+- **The public ledger page includes plain `.json` entries, in chain order.** The
+  page renderer now reads the ledger directory through `auditpush.ReadLedgerDir`,
+  the same reader the CLI verifies with.
+- **A credential-store error no longer hides a key that is set.** The
+  missing-model message kept only what it had found before the first unreadable
+  name; it now probes every provider and says "none found" with the store error,
+  not "no provider credential is set".
 - **`--attest` no longer leaves a mismatched envelope, and `review --attest`
   creates its directory.** A keyless `--attest` run after a keyed one used to
   leave a DSSE envelope signed for the previous statement beside the new one;

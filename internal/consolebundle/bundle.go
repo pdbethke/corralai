@@ -50,7 +50,7 @@ import (
 // brain's console.
 type BundleManifest struct {
 	// Version is the daemon's own build version (cmd/corral's `version`
-	// var, normally set via -ldflags "-X main.version=..."). It is part of
+	// var, stamped via -ldflags "-X main.stampedVersion=..."). It is part of
 	// the signed bytes, so a signature only verifies against the exact
 	// release it was produced for.
 	Version string `json:"version"`

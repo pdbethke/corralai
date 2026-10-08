@@ -518,7 +518,7 @@ func main() {
 		os.Exit(runFindingsMCP(context.Background(), cs, os.Stderr))
 	case "criticscore":
 		// -h must not open a store; see the scorecard case above.
-		if criticScoreWantsHelp(os.Args[2:]) {
+		if verbWantsHelp(os.Args[2:]) {
 			os.Exit(runCriticScore(os.Args[2:], nil, nil, os.Stdout, os.Stderr))
 		}
 		// With CORRAL_BRAIN set, show/confirm/refute go through the brain's
@@ -628,6 +628,25 @@ func wantsHelp(args []string) bool {
 	return false
 }
 
+// verbWantsHelp is true when the verb or the argument right after it is a help
+// token. It deliberately does NOT scan every argument: `criticscore confirm X
+// --why help` is an adjudication whose reason happens to be the word "help",
+// and reading it as a help request exited 0 having adjudicated nothing — a
+// silent success on a no-op in a tool that records human verdicts. A leaf
+// flag's -h (`list --json -h`) is the flag package's to answer (flagParseExit).
+//
+// This is the ONE predicate for verb-style commands: criticscore and matrix
+// both ask it from their dispatch AND from their run function. They used to
+// ask different questions (every argument vs the first), so `matrix list help`
+// passed the dispatch guard and then reached the run function with a nil reader.
+func verbWantsHelp(args []string) bool {
+	n := len(args)
+	if n > 2 {
+		n = 2
+	}
+	return wantsHelp(args[:n])
+}
+
 // mcpUsage is what `corral mcp -h` prints. The subcommand takes no flags: it
 // speaks MCP over stdin/stdout and is configured entirely by where the local
 // findings store lives.
@@ -655,7 +674,7 @@ Takes no flags. Reads the same local findings store ` + "`corral certify --local
 // do: the generated CLI reference captures every subcommand's real -h, and a
 // help that needs a brain documents the missing-brain error instead.
 func runMatrixCommand(args []string, env func(string) string, stdout, stderr io.Writer) int {
-	if wantsHelp(args) {
+	if verbWantsHelp(args) {
 		return runMatrix(args, nil, stdout, stderr)
 	}
 	brainURL := strings.TrimSpace(env("CORRAL_BRAIN"))

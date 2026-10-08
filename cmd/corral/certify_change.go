@@ -102,7 +102,7 @@ func loadLocalCertifyKey() (ed25519.PrivateKey, error) {
 
 // signBuildLocally turns a raw build record into a signed, self-verifying
 // buildResult using the local key — the same ledger/attestation/DSSE recipe
-// as internal/brain.certifyBuild, so a locally-signed record is
+// as the brain's (both are certify.SignBuild), so a locally-signed record is
 // indistinguishable in shape from a brain-signed one and verifies with the
 // same certverify.VerifyRecord path. Actor is the fixed local principal
 // "corral-certify"; anchoring is never done here (Anchored=false).

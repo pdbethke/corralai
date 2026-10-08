@@ -44,14 +44,14 @@ func TestSignBuildIsTheRecipeBothCallersUsed(t *testing.T) {
 				t.Fatal(err)
 			}
 			golden := filepath.Join("testdata", "signbuild."+tc.name+".golden")
-			if os.Getenv("CORRAL_UPDATE_GOLDEN") != "" {
+			if os.Getenv("UPDATE_GOLDEN") != "" {
 				if err := os.WriteFile(golden, append(gotJSON, '\n'), 0o600); err != nil {
 					t.Fatal(err)
 				}
 			}
 			want, err := os.ReadFile(golden)
 			if err != nil {
-				t.Fatalf("golden missing (regenerate deliberately with CORRAL_UPDATE_GOLDEN=1): %v", err)
+				t.Fatalf("golden missing (regenerate deliberately with UPDATE_GOLDEN=1): %v", err)
 			}
 			if !bytes.Equal(append(gotJSON, '\n'), want) {
 				t.Fatalf("SignBuild drifted from the bytes both callers signed before it existed:\n%s\nwant:\n%s", gotJSON, want)

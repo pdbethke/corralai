@@ -3,11 +3,15 @@
 package main
 
 import (
+	"compress/gzip"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/pdbethke/corralai/internal/auditpush"
 )
 
 // TestTheVerifyCommandCarriesThePublishedKey: the page told a stranger to
@@ -53,4 +57,65 @@ func read(t *testing.T, p string) string {
 		t.Fatal(err)
 	}
 	return string(b)
+}
+
+// The site must see exactly what the ledger's own reader sees: plain .json
+// entries included, chain (Pushed) order — never a walker of its own, which
+// is how the copy this replaced came to drop every uncompressed entry.
+func TestSiteLoadsWhatTheLedgerReaderLoads(t *testing.T) {
+	dir := t.TempDir()
+	for i := 1; i <= 3; i++ {
+		b := auditpush.Bundle{Scan: auditpush.ScanRow{Repo: "r", Commit: "abcdef1234567890", ScanID: int64(i), CorralVersion: "vtest"}}
+		// A nil signer writes an unsigned entry, which still chains.
+		if _, err := auditpush.AppendLedgerEntry(dir, auditpush.LedgerEntry{Bundle: b}, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Rewrite one entry uncompressed, as an older writer could have left it.
+	gz, _ := filepath.Glob(filepath.Join(dir, auditpush.ScansSubdir, "*.json.gz"))
+	if len(gz) != 3 {
+		t.Fatalf("setup: want 3 gzipped entries, got %d", len(gz))
+	}
+	raw := mustGunzip(t, gz[1])
+	if err := os.WriteFile(strings.TrimSuffix(gz[1], ".gz"), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(gz[1]); err != nil {
+		t.Fatal(err)
+	}
+
+	want, err := auditpush.ReadLedgerDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := loadEntries(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != len(want) {
+		t.Fatalf("site loaded %d entries, the ledger reader %d — the site is dropping entries", len(got), len(want))
+	}
+	for i := range want {
+		if got[i].File != want[i].File {
+			t.Fatalf("entry %d: site %s, ledger %s — order differs", i, got[i].File, want[i].File)
+		}
+	}
+}
+
+func mustGunzip(t *testing.T, path string) []byte {
+	t.Helper()
+	f, err := os.Open(path) // #nosec G304 -- a path the test itself just wrote
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	zr, err := gzip.NewReader(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := io.ReadAll(zr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
 }

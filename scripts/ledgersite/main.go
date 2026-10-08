@@ -21,7 +21,6 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"path/filepath"
 	"sort"
 
 	"github.com/pdbethke/corralai/internal/auditpush"
@@ -130,22 +129,9 @@ func main() {
 	fmt.Printf("wrote:             %s (index.html + %d entry pages)\n", *out, len(v.Reviews))
 }
 
-// loadEntries reads every entry file in the ledger's scans/ directory.
-// ReadLedgerDir is not usable from outside the package (it returns an
-// unexported type), so the walk is here and the per-file parse is theirs.
+// loadEntries is the ledger's own reader: same accepted names (.json and
+// .json.gz, never a dot-temp file), same chain order (Pushed). A second
+// walker here once disagreed with it on both.
 func loadEntries(dir string) ([]auditpush.LedgerEntry, error) {
-	paths, err := filepath.Glob(filepath.Join(dir, "scans", "*.json.gz"))
-	if err != nil {
-		return nil, err
-	}
-	sort.Strings(paths) // filenames lead with an RFC3339 stamp, so this is chronological
-	var out []auditpush.LedgerEntry
-	for _, p := range paths {
-		e, err := auditpush.ReadLedgerEntry(p)
-		if err != nil {
-			return nil, fmt.Errorf("%s: %w", filepath.Base(p), err)
-		}
-		out = append(out, e)
-	}
-	return out, nil
+	return auditpush.ReadLedgerDir(dir)
 }

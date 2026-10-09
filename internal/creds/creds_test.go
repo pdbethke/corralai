@@ -226,3 +226,25 @@ func TestCanonicalNamesCoverEveryProvider(t *testing.T) {
 		}
 	}
 }
+
+// Review b3e2ec973c76#R1: Open's own contract is that a missing store is not
+// an error. With nowhere to put the file store (no CORRAL_CREDS_DIR, no
+// XDG_CONFIG_HOME, no HOME) an environment credential must still resolve;
+// only a lookup that actually reaches the file tier reports why it cannot.
+func TestOpenResolvesEnvironmentWithNoConfigDir(t *testing.T) {
+	keyring.MockInit()
+	t.Setenv("CORRAL_CREDS_DIR", "")
+	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Setenv("HOME", "")
+	t.Setenv("OPENAI_API_KEY", "fake-env-credential")
+	s, err := Open()
+	if err != nil {
+		t.Fatalf("Open refused an environment-only operator: %v", err)
+	}
+	if v, ok, err := s.Get("OPENAI_API_KEY"); err != nil || !ok || v != "fake-env-credential" {
+		t.Fatalf("env credential not resolved: v=%q ok=%v err=%v", v, ok, err)
+	}
+	if _, _, err := s.Get("NOT_IN_ENV_OR_KEYRING"); err == nil {
+		t.Fatal("a lookup that reaches the file tier must say it has no directory, not read as absent")
+	}
+}

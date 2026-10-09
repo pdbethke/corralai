@@ -11,6 +11,41 @@ history of any release, `git log v0.3.4..v0.3.5`.
 
 ## [Unreleased]
 
+- **Go 1.26.9, golang.org/x/net 0.60.0.** Standard-library advisories in
+  `net/http` (GO-2026-6617, -6613, -6612, fixed in go1.26.9) and the matching
+  `x/net` HTTP/2 advisory are reachable from corral's own call paths, so the
+  module floor and the Dockerfiles move up. `go install` on an older 1.26
+  fetches the newer toolchain automatically unless `GOTOOLCHAIN=local`.
+- **Signed build records stop claiming zero.** A build signed by `corral certify`
+  or the brain's `report_build` with no duration no longer signs
+  `"duration_s": 0` in its execution step (the statement already omitted it),
+  and no record signs `startedOn: 0` / `finishedOn: 0` — a claim the build ran
+  at the Unix epoch. Unrecorded values are omitted. A step's `ts` stays 0,
+  meaning "not recorded": changing it would break the hash of every record
+  already signed. A NaN or infinite duration is now an error, not a crash.
+- **`--transparency` never creates a signing key.** A `CORRALAI_CERTIFY_KEY_FILE`
+  naming a file that does not exist is refused (exit 2, naming the path)
+  instead of creating a new key and signing a permanent public log entry with
+  it. `corral certify` and `review --attest` still create the configured key
+  on a first run, as before.
+- **A failed `--transparency` log entry is raised on a runner, with its real
+  cause.** Every way the upload can fail now emits a `::warning` annotation,
+  like a failed statement write or push, and a signing failure is reported as
+  itself rather than as a missing envelope file. If a stale envelope cannot be
+  removed, no statement is left at the `--attest` path for the Action to attest.
+- **A blank ledger key is refused.** `--pub ' '` or a whitespace-only
+  `CORRALAI_LEDGER_PUBKEY` used to read as "no key" (signatures NOT CHECKED),
+  and a blank `--pub` fell through to the environment's key. Both are now
+  malformed-key errors (exit 2). An empty `CORRALAI_LEDGER_PUBKEY=` is still
+  unset.
+- **An environment key resolves with no `HOME`.** With no `CORRAL_CREDS_DIR`,
+  `XDG_CONFIG_HOME` or `HOME`, the credential store refused to open at all, so
+  a key in the environment could not be read. Now only a lookup that reaches
+  the file store fails, and it says to set `CORRAL_CREDS_DIR`.
+- **`corral ui` pairs each ledger entry with its own signature check.** Checks
+  were matched by position across two reads of the directory; they are now
+  matched by hash, and an entry the check did not cover is shown as a problem.
+  A retracted legacy entry keeps its "signer name is self-reported" caveat.
 - **`corral-admin`, `corral-observe` and `corral-agent` stop printing `dev` for an installed build.** Only `corral` and `corral-wrangler` knew to fall back to the module version Go embeds, so `go install …@v1.0.0-rc.19` of the other three still reported `dev`. All five now resolve their version through one function in `internal/buildinfo`, and a test fails if a binary that prints a version does not.
 - **The missing-model message sees keys saved with `corral secret`.** The
   "credentials visible here" line probed environment variables only, so a key

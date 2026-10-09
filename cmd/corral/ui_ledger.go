@@ -102,11 +102,9 @@ func readUILedger(dir string) (uiLedger, error) {
 	for _, e := range rec.Live {
 		live[e.Hash] = true
 	}
+	paired := checksByEntry(entries, checks)
 	for i, e := range entries {
-		c := auditpush.ChainCheck{}
-		if i < len(checks) {
-			c = checks[i]
-		}
+		c := paired[i]
 		kind := e.Kind
 		if kind == auditpush.KindScan {
 			kind = "scan"
@@ -120,9 +118,9 @@ func readUILedger(dir string) (uiLedger, error) {
 		// that does not stand says so, whatever its kind: a retracted
 		// review, and an adjudication of one, used to render as live.
 		if r, gone := rec.retractionOf(e); gone {
-			u.Note = "RETRACTED: " + r.Reason
+			u.Note = withNote(u.Note, "RETRACTED: "+r.Reason)
 		} else if !live[e.Hash] && e.Kind == auditpush.KindAdjudication {
-			u.Note = "RETRACTED with the review it adjudicates"
+			u.Note = withNote(u.Note, "RETRACTED with the review it adjudicates")
 		}
 		switch e.Kind {
 		case auditpush.KindScan:
@@ -159,6 +157,40 @@ func readUILedger(dir string) (uiLedger, error) {
 		out.Reviews[i], out.Reviews[j] = out.Reviews[j], out.Reviews[i]
 	}
 	return out, nil
+}
+
+// checksByEntry pairs each entry with the check VerifyLedgerDir made of it,
+// by hash. The two come from two reads of the directory (verification reads
+// it itself), and pairing them by position let a concurrent change attach
+// one entry's signature check to another entry's bytes, or render an entry
+// appended between the reads as "unsigned" with no problem counted (review
+// 786e8a0c675e#R1). An entry no check names was not verified, and says so.
+func checksByEntry(entries []auditpush.LedgerEntry, checks []auditpush.ChainCheck) []auditpush.ChainCheck {
+	byHash := make(map[string]auditpush.ChainCheck, len(checks))
+	for _, c := range checks {
+		byHash[c.Hash] = c
+	}
+	out := make([]auditpush.ChainCheck, len(entries))
+	for i, e := range entries {
+		c, ok := byHash[e.Hash]
+		if !ok {
+			c = auditpush.ChainCheck{Hash: e.Hash, Problem: "not verified: the ledger changed while it was read — reload"}
+		}
+		out[i] = c
+	}
+	return out
+}
+
+// withNote adds a standing note (a retraction) to the verifier's note
+// rather than replacing it: the verifier's caveat — a legacy entry's
+// self-reported signer name — qualifies the "verified" chip beside it, and
+// overwriting it left the chip unqualified on exactly the retracted legacy
+// entries (review 786e8a0c675e#R2).
+func withNote(verifierNote, note string) string {
+	if verifierNote == "" {
+		return note
+	}
+	return note + " · " + verifierNote
 }
 
 // uiLedgerDir is the directory the UI was pointed at, "" when --db named a

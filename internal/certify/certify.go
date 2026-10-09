@@ -35,7 +35,14 @@ const slsaProvenanceV1 = "https://slsa.dev/provenance/v1"
 // Step is one entry in a build ledger: a single recorded event (context,
 // execution, review, etc.) in a corral certify run.
 type Step struct {
-	Seq     int            `json:"seq"`
+	Seq int `json:"seq"`
+	// TS is when the step was recorded, in Unix seconds — and 0, meaning
+	// "not recorded", in every step any signer has written so far. It cannot
+	// become omitempty: stepHash marshals this struct, so dropping the key
+	// would change the hash of every step already signed and break every
+	// existing record's chain. 0 is read as unrecorded, never as the epoch
+	// (review f5015cf48e54#R2 fixed the statement's times; this is the half
+	// a frozen hash format keeps).
 	TS      float64        `json:"ts"`
 	Kind    string         `json:"kind"`
 	Actor   string         `json:"actor"`
@@ -94,8 +101,13 @@ type BuildRecord struct {
 	// the bytes at the source cannot. Empty for callers with no verdict.
 	VerdictJSON string
 	ProducedBy  []string
-	StartedTS   float64
-	FinishedTS  float64
+	// StartedTS / FinishedTS are when the run began and ended, as Unix
+	// seconds, or 0 when the caller recorded no time — and no caller does
+	// yet: a submitted build record carries none, and an audit's clocks are
+	// durations, not instants. 0 is omitted from the statement, never signed
+	// as the Unix epoch (review f5015cf48e54#R2).
+	StartedTS  float64
+	FinishedTS float64
 }
 
 // stepHash returns the deterministic sha256 hash (hex) of a step, computed
@@ -223,10 +235,7 @@ func BuildAttestation(r BuildRecord, head string) map[string]any {
 					"id":                  "https://corralai.dev/certify",
 					"builderDependencies": resolvedDeps,
 				},
-				"metadata": map[string]any{
-					"startedOn":  r.StartedTS,
-					"finishedOn": r.FinishedTS,
-				},
+				"metadata":   runTimes(r),
 				"byproducts": byproducts(r, head),
 			},
 		},
@@ -438,6 +447,20 @@ func SecondsOrUnmeasured(s float64) *float64 {
 		return nil
 	}
 	return &s
+}
+
+// runTimes is the statement's runDetails.metadata: each time the caller
+// recorded, and nothing for one it did not. A zero here was a signed claim
+// that the build ran at the Unix epoch.
+func runTimes(r BuildRecord) map[string]any {
+	md := map[string]any{}
+	if r.StartedTS > 0 {
+		md["startedOn"] = r.StartedTS
+	}
+	if r.FinishedTS > 0 {
+		md["finishedOn"] = r.FinishedTS
+	}
+	return md
 }
 
 // certificationAnnotations builds the execution byproduct's annotations: the

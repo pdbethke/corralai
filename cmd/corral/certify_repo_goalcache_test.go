@@ -175,7 +175,7 @@ func TestAttestationCarriesGoalReusedOnlyWhenTrue(t *testing.T) {
 			{Path: "fresh.go", KillRate: 0.5, Survivors: 1, GoalReused: false},
 		},
 	}
-	if _, err := writeAuditStatement(out, dir, rep, map[string]string{"test-writer": "w"}, nil, nil, true, 0, auditpush.Bundle{}); err != nil {
+	if _, _, err := writeAuditStatement(out, dir, rep, map[string]string{"test-writer": "w"}, nil, nil, true, 0, auditpush.Bundle{}); err != nil {
 		t.Fatalf("writeAuditStatement: %v", err)
 	}
 	b, err := os.ReadFile(out) // #nosec G304 -- test-local path
@@ -333,7 +333,7 @@ func TestAttestationDisclosesAReusedVerdict(t *testing.T) {
 			{Path: "fresh.go", KillRate: 0.5, Survivors: 1},
 		},
 	}
-	if _, err := writeAuditStatement(out, dir, rep, map[string]string{"test-writer": "w"}, nil, nil, true, 0, auditpush.Bundle{}); err != nil {
+	if _, _, err := writeAuditStatement(out, dir, rep, map[string]string{"test-writer": "w"}, nil, nil, true, 0, auditpush.Bundle{}); err != nil {
 		t.Fatalf("writeAuditStatement: %v", err)
 	}
 	b, err := os.ReadFile(out) // #nosec G304 -- test-local path

@@ -22,12 +22,17 @@ const LedgerPubKeyEnv = "CORRALAI_LEDGER_PUBKEY"
 // once reached different verdicts on the same record. A malformed key from
 // either source is an error, not a fallthrough: whoever set it meant to
 // check, and a quiet downgrade to "unverified" would hide that they did not.
+//
+// "Set" means non-empty BEFORE trimming: an empty value is how a CI file or a
+// shell clears a variable, so it is unset; a value of only whitespace was
+// typed by someone and is malformed (review e5fd4c8d1b50#R1 — it used to read
+// as unset, and a blank --pub fell through to the environment's key).
 func ResolveLedgerPubKey(flagHex string) (ed25519.PublicKey, string, error) {
-	if v := strings.TrimSpace(flagHex); v != "" {
-		return parseLedgerPubKey(v, "the --pub flag")
+	if flagHex != "" {
+		return parseLedgerPubKey(strings.TrimSpace(flagHex), "the --pub flag")
 	}
-	if v := strings.TrimSpace(os.Getenv(LedgerPubKeyEnv)); v != "" {
-		return parseLedgerPubKey(v, LedgerPubKeyEnv)
+	if v := os.Getenv(LedgerPubKeyEnv); v != "" {
+		return parseLedgerPubKey(strings.TrimSpace(v), LedgerPubKeyEnv)
 	}
 	return nil, "", nil
 }

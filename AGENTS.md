@@ -25,7 +25,7 @@ invariant hiding as ordinary bugs — see "The bug shape that keeps recurring".
 
 ## Build, test, and the gates that will fail your PR
 
-Go 1.26.6 (see `go.mod`). There IS a `Makefile` (`build`, `install`, `test`, `vet`, `tidy`, `clean`) — it wraps the version stamping — but nothing depends on it and the Go toolchain directly is equally fine.
+Go 1.26.9 (see `go.mod`). There IS a `Makefile` (`build`, `install`, `test`, `vet`, `tidy`, `clean`) — it wraps the version stamping — but nothing depends on it and the Go toolchain directly is equally fine.
 
 ```bash
 go build ./...

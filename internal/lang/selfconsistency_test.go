@@ -6,11 +6,6 @@ import (
 	"testing"
 )
 
-// sortedPluginNames returns the registry's keys in a stable order so test
-// output (and any t.Run subtests) is deterministic across runs, since
-// registry iteration order is not.
-func sortedPluginNames() []string { return pluginNames() }
-
 // TestPluginStockCommandSatisfiesOwnPreflight is the self-consistency
 // property this file exists to pin: for every registered plugin,
 // p.Preflight(p.TestCmd()) must agree with p.Preflight(nil) — a plugin
@@ -26,7 +21,7 @@ func sortedPluginNames() []string { return pluginNames() }
 // than asserted on — this must pass on a bare host and in CI, neither of
 // which is guaranteed to have every language toolchain installed.
 func TestPluginStockCommandSatisfiesOwnPreflight(t *testing.T) {
-	for _, name := range sortedPluginNames() {
+	for _, name := range pluginNames() {
 		p := registry[name]
 		t.Run(name, func(t *testing.T) {
 			nilErr := p.Preflight(nil)
@@ -48,7 +43,7 @@ func TestPluginStockCommandSatisfiesOwnPreflight(t *testing.T) {
 // command is likewise inconsistent with itself, for the same reason a
 // plugin whose stock command fails its own preflight is.
 func TestPluginStockCommandSatisfiesOwnCoverageCmd(t *testing.T) {
-	for _, name := range sortedPluginNames() {
+	for _, name := range pluginNames() {
 		p := registry[name]
 		cr, ok := p.(CoverageReporter)
 		if !ok {
@@ -91,7 +86,7 @@ func TestPluginStockCommandSatisfiesOwnCoverageCmd(t *testing.T) {
 // with no language toolchains installed) — only that the ARGV SHAPE itself
 // carries no shell-only meaning.
 func TestPluginCompileCheckIsDirectlyExecutable(t *testing.T) {
-	for _, name := range sortedPluginNames() {
+	for _, name := range pluginNames() {
 		p := registry[name]
 		t.Run(name, func(t *testing.T) {
 			seq := p.CompileCheck("code.ext", "test.ext")

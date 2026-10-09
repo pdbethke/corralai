@@ -64,7 +64,7 @@ func sourceExt(rules []pairing.Rule) (string, bool) {
 // agree with pairingtest.PrincipledMerge over the same rules' raw forms
 // (pairingtest.RawForms).
 func TestDedupeMatchesPrincipledRuleForShippedPlugins(t *testing.T) {
-	names := sortedPluginNames()
+	names := pluginNames()
 	if len(names) == 0 {
 		t.Fatal("empty registry — property was not actually exercised")
 	}

@@ -384,9 +384,10 @@ func FindTest(p lang.Plugin, root, codePath string) (SearchResult, error) {
 // every file), since bestSearchMatch needs to range over it in an order the
 // map itself does not offer for free.
 //
-// Returns the resolved path, its Rank (0 for a convention hit, SearchRank
-// for a search hit — see SearchRank's doc comment for why that value must
-// never compete with a real convention rank), and whether the recursive
+// Returns the resolved path, its Rank (the matching candidate's own
+// pairing.Candidate Rank for a convention hit, SearchRank for a search hit —
+// see SearchRank's doc comment for why that value must never compete with a
+// real convention rank), and whether the recursive
 // fallback is what found it. tp == "" means neither stage found anything.
 func findInUniverse(p lang.Plugin, codePath string, present map[string]bool, presentList []string) (tp string, rank int, viaSearch bool) {
 	rules := p.TestRules()

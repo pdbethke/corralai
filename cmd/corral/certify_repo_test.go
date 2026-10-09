@@ -4558,7 +4558,8 @@ func TestSignableKillRateWithholdsAFabricatedZero(t *testing.T) {
 // pairing.MightBeTest is the cheap pre-evidence question the --diff-base bound
 // asks: could this changed file be a test? Generous on purpose — a false yes
 // costs one instrumented run, a false no is the false green.
-func TestLooksLikeATestPath(t *testing.T) {
+func TestMightBeTest(t *testing.T) {
+	mightBeTest := mightBeTestPredicate()
 	for _, tc := range []struct {
 		path string
 		want bool

@@ -791,8 +791,9 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// to catch; the comment at the scoping loop says that case was fixed,
 	// and it was, for name-pairing only.
 	diffTouchedATest := false
+	mightBeTest := mightBeTestPredicate()
 	for path := range diffChanged {
-		if pairing.MightBeTest(lang.AllTestRules(), path) {
+		if mightBeTest(path) {
 			diffTouchedATest = true
 			break
 		}
@@ -3005,6 +3006,19 @@ func printPreflightReport(w io.Writer, cm reposcan.CoverageMap, sourceFiles []st
 	}
 }
 
+// mightBeTestPredicate returns the --diff-base bound's "could this changed
+// file be a test?" — pairing.MightBeTest over every registered language's
+// rules, which replaced looksLikeATestPath in Round B1 (see MightBeTest's doc
+// for why the question is generous: a false yes costs one instrumented run, a
+// false no is a false green). It returns a function rather than answering
+// per path so a loop over a diff builds lang.AllTestRules once, not once per
+// changed file, without a package-level cache to go stale; every caller,
+// including the might-be-test characterization golden, asks through it.
+func mightBeTestPredicate() func(path string) bool {
+	all := lang.AllTestRules()
+	return func(path string) bool { return pairing.MightBeTest(all, path) }
+}
+
 // sourcesOrphanedByDeletedTests names the excluded sources whose paired test
 // the diff DELETED: for each changed path that looks like a test and no
 // longer exists in the checkout, every no-paired-test source whose language
@@ -3013,8 +3027,9 @@ func printPreflightReport(w io.Writer, cm reposcan.CoverageMap, sourceFiles []st
 // is the same condition with the more alarming cause.
 func sourcesOrphanedByDeletedTests(repoDir string, changed []string, excl []reposcan.Exclusion) []string {
 	deleted := map[string]bool{}
+	mightBeTest := mightBeTestPredicate()
 	for _, path := range changed {
-		if !pairing.MightBeTest(lang.AllTestRules(), path) {
+		if !mightBeTest(path) {
 			continue
 		}
 		if _, err := os.Stat(filepath.Join(repoDir, filepath.FromSlash(path))); os.IsNotExist(err) {

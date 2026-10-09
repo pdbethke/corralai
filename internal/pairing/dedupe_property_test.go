@@ -1,19 +1,19 @@
 // SPDX-License-Identifier: Elastic-2.0
 
-package lang
+package pairing
 
 import (
 	"path/filepath"
 	"testing"
 )
 
-// This file pins, as a property, the invariant dedupeCandidates documents but
+// This file pins, as a property, the invariant Dedupe documents but
 // does not enforce: today, "attribute the least-specific (max) rank among
 // colliding non-sibling forms" and the principled "attribute the STRONGEST
 // (min) rank among forms that actually assert real directory evidence" agree
 // for every shipped plugin — because no shipped plugin's TestPaths can
 // currently produce a collision group that mixes a non-vacuous, non-sibling
-// form with a weaker one. See dedupeCandidates' doc comment in convention.go.
+// form with a weaker one. See Dedupe' doc comment in convention.go.
 //
 // The principled rule, restated for this file: a raw (pre-dedupe) candidate
 // asserts real directory evidence unless it is a sibling (which is ALWAYS
@@ -30,7 +30,7 @@ import (
 //
 // rawForm is this file's OWN model of a plugin's pre-dedupe candidate list —
 // deliberately reimplemented per plugin below rather than obtained by
-// instrumenting dedupeCandidates itself, so the equivalence check in
+// instrumenting Dedupe itself, so the equivalence check in
 // TestDedupeMatchesPrincipledRuleForShippedPlugins is not "compare production
 // to itself."
 type rawForm struct {
@@ -42,9 +42,9 @@ type rawForm struct {
 
 // principledMerge independently implements the principled rule described
 // above: sibling wins outright; otherwise min-of-non-vacuous; otherwise (all
-// vacuous) max. Ordering matches dedupeCandidates: each surviving path keeps
+// vacuous) max. Ordering matches Dedupe: each surviving path keeps
 // the position of its FIRST occurrence in cands.
-func principledMerge(cands []rawForm) []TestCandidate {
+func principledMerge(cands []rawForm) []Candidate {
 	firstIdx := map[string]int{}
 	var order []string
 	siblingAny := map[string]bool{}
@@ -73,7 +73,7 @@ func principledMerge(cands []rawForm) []TestCandidate {
 		}
 	}
 
-	out := make([]TestCandidate, len(order))
+	out := make([]Candidate, len(order))
 	for i, p := range order {
 		var rank int
 		switch {
@@ -84,7 +84,7 @@ func principledMerge(cands []rawForm) []TestCandidate {
 		default:
 			rank = maxRank[p]
 		}
-		out[i] = TestCandidate{Path: p, Rank: rank}
+		out[i] = Candidate{Path: p, Rank: rank}
 	}
 	return out
 }
@@ -92,7 +92,7 @@ func principledMerge(cands []rawForm) []TestCandidate {
 // --- Per-plugin raw (pre-dedupe) form generators. ---
 //
 // Each mirrors the corresponding plugin's TestPaths body EXACTLY (same
-// forms, same order, same ranks) but stops short of calling dedupeCandidates
+// forms, same order, same ranks) but stops short of calling Dedupe
 // and instead tags each raw candidate with Sibling/Vacuous so
 // principledMerge can be applied independently. Only the already-existing,
 // non-dedupe helpers (splitPath / joinDir / stripFirstSegment / dirDepth)
@@ -180,12 +180,14 @@ var corpusDirs = []string{
 
 var corpusBases = []string{"foo", "utils", "x", "conf", "artifact_store"}
 
-func candidatesEqual(a, b []TestCandidate) bool {
+func candidatesEqual(a, b []Candidate) bool {
 	if len(a) != len(b) {
 		return false
 	}
 	for i := range a {
-		if a[i] != b[i] {
+		// Shape is deliberately not compared: the property under test is the
+		// merged PATH and RANK; principledMerge does not model Shape.
+		if a[i].Path != b[i].Path || a[i].Rank != b[i].Rank {
 			return false
 		}
 	}
@@ -194,21 +196,50 @@ func candidatesEqual(a, b []TestCandidate) bool {
 
 // TestDedupeMatchesPrincipledRuleForShippedPlugins is the equivalence check.
 // For every shipped plugin, across the whole corpus, production's
-// dedupeCandidates (reached through the real TestPaths) must agree with this
+// Dedupe (reached through the real TestPaths) must agree with this
 // file's INDEPENDENTLY implemented principled merge. This is the property
-// the comment on dedupeCandidates in convention.go now documents.
+// the comment on Dedupe in convention.go now documents.
 func TestDedupeMatchesPrincipledRuleForShippedPlugins(t *testing.T) {
+	// ADAPTATION (Round B1): the original reached Dedupe through each lang
+	// plugin's TestPaths. Those plugins are not importable from here (lang
+	// will import pairing, not the reverse), so each plugin's convention is
+	// restated below as the []Rule it declares, and Candidates (which calls
+	// Dedupe) stands in for TestPaths. Same forms, same order, same ranks as
+	// the *RawForms models above.
+	pyRules := []Rule{
+		{Shape: Sibling, Name: "test_{base}.py", Rank: 0},
+		{Shape: Sibling, Name: "{base}_test.py", Rank: 0},
+		{Shape: ParallelTree, Name: "test_{base}.py", Dir: "tests", KeepLeading: true, Rank: 1},
+		{Shape: ParallelTree, Name: "test_{base}.py", Dir: "tests", Rank: 2},
+		{Shape: FlatRoot, Name: "test_{base}.py", Dir: "tests", MaxDepth: 2, Rank: 3},
+	}
+	jsFamilyRules := func(ext string) []Rule {
+		return []Rule{
+			{Shape: Sibling, Name: "{base}.test." + ext, Rank: 0},
+			{Shape: Sibling, Name: "{base}.spec." + ext, Rank: 0},
+			{Shape: BesideDir, Name: "{base}.test." + ext, Dir: "__tests__", Rank: 1},
+			{Shape: ParallelTree, Name: "{base}.test." + ext, Dir: "test", Rank: 2},
+			{Shape: ParallelTree, Name: "{base}.test." + ext, Dir: "tests", Rank: 2},
+		}
+	}
+	rubyRules := []Rule{
+		{Shape: Sibling, Name: "{base}_test.rb", Rank: 0},
+		{Shape: ParallelTree, Name: "{base}_test.rb", Dir: "test", Rank: 1},
+		{Shape: ParallelTree, Name: "{base}_spec.rb", Dir: "spec", Rank: 1},
+		{Shape: ParallelTree, Name: "test_{base}.rb", Dir: "test", Rank: 2},
+	}
+	goRules := []Rule{{Shape: Sibling, Name: "{base}_test.go", Rank: 0}}
 	plugins := []struct {
 		name      string
 		ext       string
 		raw       func(string) []rawForm
-		testPaths func(string) []TestCandidate
+		testPaths func(string) []Candidate
 	}{
-		{"python", "py", pythonRawForms, pyPlugin{}.TestPaths},
-		{"javascript", "js", javascriptRawForms, jsPlugin{}.TestPaths},
-		{"typescript", "ts", typescriptRawForms, tsPlugin{}.TestPaths},
-		{"ruby", "rb", rubyRawForms, rubyPlugin{}.TestPaths},
-		{"go", "go", goRawForms, goPlugin{}.TestPaths},
+		{"python", "py", pythonRawForms, func(p string) []Candidate { return Candidates(pyRules, p) }},
+		{"javascript", "js", javascriptRawForms, func(p string) []Candidate { return Candidates(jsFamilyRules("js"), p) }},
+		{"typescript", "ts", typescriptRawForms, func(p string) []Candidate { return Candidates(jsFamilyRules("ts"), p) }},
+		{"ruby", "rb", rubyRawForms, func(p string) []Candidate { return Candidates(rubyRules, p) }},
+		{"go", "go", goRawForms, func(p string) []Candidate { return Candidates(goRules, p) }},
 	}
 
 	for _, p := range plugins {
@@ -239,14 +270,15 @@ func TestDedupeMatchesPrincipledRuleForShippedPlugins(t *testing.T) {
 // non-sibling candidate carrying real directory evidence (a literal "x"
 // path segment that never degenerates) which string-collides with a
 // WEAKER, vacuous form of the same source. Its TestPaths calls the REAL
-// production dedupeCandidates, exactly as every shipped plugin does.
+// production Dedupe, exactly as every shipped plugin does.
 type violatorPlugin struct{}
 
-func (violatorPlugin) TestPaths(codePath string) []TestCandidate {
+// TestPaths keeps the original method name so the test below reads unchanged.
+func (violatorPlugin) TestPaths(codePath string) []Candidate {
 	_, base, _ := splitPath(codePath)
-	strong := TestCandidate{Path: filepath.Join("spec", "x", "test_"+base+".ext"), Rank: 1}
-	weak := TestCandidate{Path: filepath.Join("spec", "x", "test_"+base+".ext"), Rank: 4}
-	return dedupeCandidates([]TestCandidate{strong, weak})
+	strong := Candidate{Path: filepath.Join("spec", "x", "test_"+base+".ext"), Rank: 1}
+	weak := Candidate{Path: filepath.Join("spec", "x", "test_"+base+".ext"), Rank: 4}
+	return Dedupe([]Candidate{strong, weak})
 }
 
 // violatorRawForms is this file's model of the SAME two candidates, tagged
@@ -262,7 +294,7 @@ func violatorRawForms(codePath string) []rawForm {
 }
 
 // TestSyntheticViolatorIsDetected proves the equivalence check has teeth: it
-// is not a tautology that only ever passes. dedupeCandidates' max-with-
+// is not a tautology that only ever passes. Dedupe' max-with-
 // sibling-exemption rule UNDERSTATES the violator's strong (Rank 1, real
 // evidence) claim to Rank 4 (dragged down by the weaker, vacuous collider) —
 // exactly the "inflated/understated rank crosses into a different source's
@@ -271,7 +303,7 @@ func violatorRawForms(codePath string) []rawForm {
 // reposcan.demoteAmbiguousPairings, which is a MISPAIRING, not an honest
 // demotion. The principled rule (independently computed here) instead keeps
 // the strong claim's Rank 1. If a real future plugin ever does this,
-// production's dedupeCandidates result and this file's principled computation
+// production's Dedupe result and this file's principled computation
 // diverge — this test asserts that divergence is real and gets caught, not
 // papered over.
 func TestSyntheticViolatorIsDetected(t *testing.T) {
@@ -288,7 +320,7 @@ func TestSyntheticViolatorIsDetected(t *testing.T) {
 	// collider's Rank 4; the principled rule keeps it at Rank 1.
 	wantPath := filepath.Join("spec", "x", "test_x.ext")
 	if len(got) != 1 || got[0].Path != wantPath || got[0].Rank != 4 {
-		t.Fatalf("production dedupeCandidates(violator) = %+v, want [{%s 4}]", got, wantPath)
+		t.Fatalf("production Dedupe(violator) = %+v, want [{%s 4}]", got, wantPath)
 	}
 	if len(principled) != 1 || principled[0].Path != wantPath || principled[0].Rank != 1 {
 		t.Fatalf("principledMerge(violator) = %+v, want [{%s 1}]", principled, wantPath)
@@ -298,11 +330,11 @@ func TestSyntheticViolatorIsDetected(t *testing.T) {
 // --- The sibling exemption is load-bearing in both directions. ---
 //
 // dedupeWithoutSiblingExemption is a LOCAL, test-only reimplementation of
-// dedupeCandidates with the `if minRank[p] == 0 { rank = 0 }` line deleted —
+// Dedupe with the `if minRank[p] == 0 { rank = 0 }` line deleted —
 // i.e. pure "attribute the max rank among every colliding candidate,
 // sibling or not." It exists only to demonstrate the exemption changes
 // behavior on a real collision shape; production code is untouched.
-func dedupeWithoutSiblingExemption(cands []TestCandidate) []TestCandidate {
+func dedupeWithoutSiblingExemption(cands []Candidate) []Candidate {
 	firstIdx := map[string]int{}
 	maxRank := map[string]int{}
 	var order []string
@@ -317,9 +349,9 @@ func dedupeWithoutSiblingExemption(cands []TestCandidate) []TestCandidate {
 			maxRank[c.Path] = c.Rank
 		}
 	}
-	out := make([]TestCandidate, len(order))
+	out := make([]Candidate, len(order))
 	for i, p := range order {
-		out[i] = TestCandidate{Path: p, Rank: maxRank[p]}
+		out[i] = Candidate{Path: p, Rank: maxRank[p]}
 	}
 	return out
 }
@@ -329,7 +361,7 @@ func dedupeWithoutSiblingExemption(cands []TestCandidate) []TestCandidate {
 // internal/reposcan/candidate_pairing_test.go (tests/utils.py: a source file
 // that lives IN the parallel test root itself, whose sibling form
 // string-collides with its own degenerate stripped/flat forms) and shows
-// that dedupeCandidates (WITH the exemption) and
+// that Dedupe (WITH the exemption) and
 // dedupeWithoutSiblingExemption (without it) disagree on it — i.e. deleting
 // the exemption is not a no-op. The same asymmetry is what
 // internal/lang/convention_test.go pins directly at the unit level (the
@@ -341,12 +373,12 @@ func dedupeWithoutSiblingExemption(cands []TestCandidate) []TestCandidate {
 // misclassification wins the strict-rank tiebreak" subcase pins end-to-end.
 func TestSiblingExemptionIsLoadBearing(t *testing.T) {
 	raw := pythonRawForms("tests/utils.py")
-	var cands []TestCandidate
+	var cands []Candidate
 	for _, r := range raw {
-		cands = append(cands, TestCandidate{Path: r.Path, Rank: r.Rank})
+		cands = append(cands, Candidate{Path: r.Path, Rank: r.Rank})
 	}
 
-	withExemption := dedupeCandidates(cands)
+	withExemption := Dedupe(cands)
 	withoutExemption := dedupeWithoutSiblingExemption(cands)
 
 	if candidatesEqual(withExemption, withoutExemption) {

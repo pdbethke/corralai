@@ -23,5 +23,10 @@
   "devDependencies": {
     "@duckdb/node-api": "1.5.4-r.1",
     "@playwright/test": "1.61.1"
+  },
+  "overrides": {
+    "@expressive-code/core": {
+      "postcss-nested": "^7.0.2"
+    }
   }
 }

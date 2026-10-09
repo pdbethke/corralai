@@ -3,6 +3,7 @@
 package lang
 
 import (
+	"path/filepath"
 	"testing"
 
 	"github.com/pdbethke/corralai/internal/pairing"
@@ -31,6 +32,47 @@ func TestEveryRuleRankAgreesWithItsShape(t *testing.T) {
 			if r.Shape != pairing.Sibling && r.Rank <= 0 {
 				t.Errorf("%s rule %d (%+v): a non-Sibling rule must have Rank > 0 — Rank 0 is the sibling rank, so this rule's Rank was probably forgotten", name, i, r)
 			}
+		}
+	}
+}
+
+// TestEveryCandidateIsATestAndNoSourceIs is the round trip pairing.IsTest
+// depends on (see pairing.Rule's doc): IsTest reads every rule's Name as a
+// "this file IS a test" pattern, which is only right while each Name carries
+// a test marker beyond {base} and the extension. So, for every registered
+// plugin and every source in the property corpus (none of whose base names
+// carries a marker): the source itself is NOT a test, and every candidate the
+// plugin derives for it IS one. A Rust-style rule whose Name is just
+// "{base}.rs" under tests/ fails the first half — it makes src/lib.rs a test,
+// silently removing real code from the audit (Round B1 final review, I2).
+func TestEveryCandidateIsATestAndNoSourceIs(t *testing.T) {
+	for _, name := range pluginNames() {
+		p := registry[name]
+		rules := p.TestRules()
+		ext, ok := sourceExt(rules)
+		if !ok {
+			t.Fatalf("plugin %q declares no Sibling rule, so its source extension cannot be derived", name)
+		}
+		checked := 0
+		for _, dir := range corpusDirs {
+			for _, base := range corpusBases {
+				src := filepath.ToSlash(filepath.Join(dir, base+ext))
+				if !p.Detect(src) {
+					t.Fatalf("%s does not detect corpus path %q", name, src)
+				}
+				if pairing.IsTest(rules, src) {
+					t.Errorf("%s: IsTest(%q) = true — a source with no test marker was classified as a test, so it would never be audited; some rule's Name has no marker beyond {base} and the extension", name, src)
+				}
+				for _, c := range pairing.Candidates(rules, src) {
+					if cp := filepath.ToSlash(c.Path); !pairing.IsTest(rules, cp) {
+						t.Errorf("%s: candidate %q for %q is not IsTest — the plugin would pair a source with a file it does not itself recognize as a test", name, cp, src)
+					}
+				}
+				checked++
+			}
+		}
+		if checked == 0 {
+			t.Fatalf("%s: empty corpus — property was not actually exercised", name)
 		}
 	}
 }

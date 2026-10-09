@@ -39,6 +39,21 @@ const DefaultRoot = "tests"
 // file's base name: {base} matches any run of characters (including none),
 // and {ext} matches a dot followed by anything. {ext} is only meaningful
 // there; Candidates never substitutes it.
+//
+// INVARIANT: every Name must carry a test marker beyond {base} and the
+// extension — the test_ in test_{base}.py, the .test in {base}.test.js, the
+// Test in {base}Test.php. IsTest reads EVERY rule's Name, whatever its Shape,
+// as "a file with this name IS a test", so a Name that is only {base} plus an
+// extension matches every source of the language: a Rust-style
+// tests/{base}.rs rule would make src/lib.rs a test, and IsTest's yes removes
+// a file from the audit — real code silently unaudited (Round B1 final
+// review). The reading is deliberate rather than an accident of
+// implementation: it is what lets IsTest recognize a parallel-tree test
+// without knowing which source it belongs to. A language whose tests differ
+// from its sources only by directory therefore needs a new Shape whose Name
+// IsTest does not read, not a rule here. lang's
+// TestEveryCandidateIsATestAndNoSourceIs enforces the invariant for every
+// registered plugin by round trip: no source is a test, every candidate is.
 type Rule struct {
 	Shape       Shape
 	Name        string
@@ -249,19 +264,15 @@ var Generic = []Rule{
 // candidates cannot see it, since for a test file they propose
 // tests/CalcTestTest.php, and before the marker existed every PHP test was
 // counted as an unpaired source) plus every Name in Generic. Matching is
-// case-sensitive: src/Latest.php is not a PHPUnit test.
+// case-sensitive: src/Latest.php is not a PHPUnit test. It is correct only
+// under Rule's marker invariant.
 //
-// The fixed-point check (does rel appear in ITS OWN candidate list) is a
-// cheap belt-and-braces for a rule set that is someday idempotent on an
-// already-test path — no current one is (`foo_test.go`'s own conventions
-// produce `foo_test_test.go`, `test_test_foo.py`, etc, never `foo_test.go`
-// itself), so it never fires today either.
+// It once also asked whether rel appears among its OWN candidates (a
+// "fixed point"). That check is gone: any candidate's base name is its rule's
+// Name with {base} filled in, which the Name pattern already matches, so it
+// could never add a yes — and for a future shape whose candidate IS the
+// source (an inline test module) it would have called every source a test.
 func IsTest(rules []Rule, rel string) bool {
-	for _, c := range Candidates(rules, rel) {
-		if filepath.ToSlash(c.Path) == rel {
-			return true
-		}
-	}
 	base := filepath.Base(rel)
 	return nameMatches(rules, base, false) || nameMatches(Generic, base, false)
 }

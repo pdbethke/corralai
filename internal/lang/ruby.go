@@ -106,6 +106,11 @@ func (rubyPlugin) TestRules() []pairing.Rule {
 		// what a file *named* `test_foo` would pair to under form (1), so a
 		// collision here should lose to a suffix match rather than race it.
 		{Shape: pairing.ParallelTree, Name: "test_{base}.rb", Dir: "test", Rank: 2},
+		// RSpec's PREFIX form (spec/spec_helper.rb, spec_foo.rb). Recognized
+		// as a test, never derived as a candidate: it is Ruby's, so it lives
+		// here rather than in pairing.Generic, where it would also call
+		// tasks/spec_runner.rake a possible test (see Generic's doc).
+		{Shape: pairing.Recognize, Name: "spec_{base}.rb"},
 	}
 }
 

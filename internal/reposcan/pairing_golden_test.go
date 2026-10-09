@@ -55,7 +55,7 @@ func pairingCandidates(p lang.Plugin, path string) []pairing.Candidate {
 	return pairing.Candidates(p.TestRules(), path)
 }
 func pairingRoots(p lang.Plugin) []string           { return pairing.Roots(p.TestRules()) }
-func pairingIsTest(p lang.Plugin, path string) bool { return isTestFile(p, path) }
+func pairingIsTest(p lang.Plugin, path string) bool { return pairing.IsTest(p.TestRules(), path) }
 
 type corpusRow struct{ repo, path string }
 

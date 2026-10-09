@@ -459,7 +459,7 @@ func EnumerateWithTests(root string, tests *TestMap) ([]Candidate, []Exclusion, 
 		// A file that IS the sibling test of some source file is not itself
 		// a subject. Detected structurally: its own conventional test path
 		// differs from itself only for non-test files.
-		if isTestFile(p, rel) {
+		if pairing.IsTest(p.TestRules(), rel) {
 			excl = append(excl, Exclusion{Path: rel, Reason: ReasonIsTest})
 			continue
 		}
@@ -776,70 +776,4 @@ func demoteAmbiguousPairings(cands []Candidate, rank []int, excl []Exclusion, ex
 		kept = append(kept, c)
 	}
 	return kept, excl
-}
-
-// isTestFile reports whether rel is itself a test file, detected by the
-// naming markers the five language plugins use. The markers are the real
-// check and do NOT depend on the shape of the candidate list at all — a parallel-tree
-// test like tests/agents/test_artifact_store.py is caught by the "test_"
-// prefix marker exactly like a sibling test_artifact_store.py would be, so
-// widening the candidates from one path to an ordered list changes nothing
-// here.
-//
-// The fixed-point check below (does rel appear in ITS OWN candidate list) is
-// a cheap belt-and-braces for a plugin that is someday idempotent on an
-// already-test path — no current plugin is (`foo_test.go`'s own conventions
-// produce `foo_test_test.go`, `test_test_foo.py`, etc, never `foo_test.go`
-// itself), so this never fires today either.
-func isTestFile(p lang.Plugin, rel string) bool {
-	for _, tp := range pairing.Candidates(p.TestRules(), rel) {
-		if filepath.ToSlash(tp.Path) == rel {
-			return true
-		}
-	}
-
-	// Check against the basename only to avoid directory-component matches.
-	base := filepath.Base(rel)
-
-	// _test. suffix (Go: foo_test.go, Ruby minitest: foo_test.rb)
-	if strings.Contains(base, "_test.") {
-		return true
-	}
-
-	// test_ prefix (Python: test_foo.py, Ruby: test_foo.rb)
-	if strings.HasPrefix(base, "test_") {
-		return true
-	}
-
-	// _spec. suffix (Ruby RSpec: foo_spec.rb, JavaScript: foo_spec.js, TypeScript: foo_spec.ts)
-	if strings.Contains(base, "_spec.") {
-		return true
-	}
-
-	// .test. suffix (JavaScript: foo.test.js, TypeScript: foo.test.ts)
-	if strings.Contains(base, ".test.") {
-		return true
-	}
-
-	// .spec. suffix (JavaScript: foo.spec.js, TypeScript: foo.spec.ts)
-	if strings.Contains(base, ".spec.") {
-		return true
-	}
-
-	// spec_ prefix (Ruby: spec_foo.rb)
-	if strings.HasPrefix(base, "spec_") {
-		return true
-	}
-
-	// PHPUnit's convention is a SUFFIX with no separator: tests/CalcTest.php.
-	// None of the rules above see it, and the plugin's candidates cannot
-	// either — it derives the test for a SOURCE, so for a test file it
-	// proposes tests/CalcTestTest.php. Every PHP test file was therefore
-	// counted as an unpaired source, inflated "no paired test", and sat in
-	// the pre-flight's source set.
-	if strings.HasSuffix(base, "Test.php") {
-		return true
-	}
-
-	return false
 }

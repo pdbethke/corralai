@@ -792,7 +792,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// and it was, for name-pairing only.
 	diffTouchedATest := false
 	for path := range diffChanged {
-		if looksLikeATestPath(path) {
+		if pairing.MightBeTest(lang.AllTestRules(), path) {
 			diffTouchedATest = true
 			break
 		}
@@ -1706,7 +1706,7 @@ func auditConfigKey(wholeSuite bool, method string, checkArgv []string, mutantsF
 // data. Weaken a fixture in any of them and every file's key used to stay put:
 // HIT, and the ledger repeats a kill rate for a suite that genuinely got worse.
 //
-// The widening is deliberately confined to the SURFACE. isTestFile still
+// The widening is deliberately confined to the SURFACE. pairing.IsTest still
 // decides which files are audit CANDIDATES and is untouched — widening that
 // would change what gets audited, a far larger blast radius than the cache.
 //
@@ -3014,7 +3014,7 @@ func printPreflightReport(w io.Writer, cm reposcan.CoverageMap, sourceFiles []st
 func sourcesOrphanedByDeletedTests(repoDir string, changed []string, excl []reposcan.Exclusion) []string {
 	deleted := map[string]bool{}
 	for _, path := range changed {
-		if !looksLikeATestPath(path) {
+		if !pairing.MightBeTest(lang.AllTestRules(), path) {
 			continue
 		}
 		if _, err := os.Stat(filepath.Join(repoDir, filepath.FromSlash(path))); os.IsNotExist(err) {
@@ -5399,24 +5399,6 @@ func writerModeDisclosure(mode string, calls, seatsUngraded int, attempts *advpo
 			mode, calls, unit, seatsUngraded, attemptsNote)
 	}
 	return fmt.Sprintf("writer: %s (%d %s)%s", mode, calls, unit, attemptsNote)
-}
-
-// looksLikeATestPath is the cheap, language-independent question the diff
-// bound asks before any evidence exists: could this changed file be a test?
-// It is deliberately generous — a false "yes" only costs one instrumented run,
-// while a false "no" is the false-green this exists to prevent.
-func looksLikeATestPath(rel string) bool {
-	rel = filepath.ToSlash(rel)
-	base := strings.ToLower(filepath.Base(rel))
-	for _, seg := range strings.Split(filepath.ToSlash(filepath.Dir(rel)), "/") {
-		switch seg {
-		case "test", "tests", "spec", "specs", "__tests__", "testing":
-			return true
-		}
-	}
-	return strings.HasPrefix(base, "test_") || strings.Contains(base, "_test.") ||
-		strings.Contains(base, ".test.") || strings.Contains(base, ".spec.") ||
-		strings.HasSuffix(base, "_spec.rb") || strings.HasSuffix(base, "test.php")
 }
 
 // examConfidenceLine is the two terms a bare kill rate hides, on one line:

@@ -72,3 +72,53 @@ func TestFlatRootDepthBound(t *testing.T) {
 		t.Fatalf("depth 3 must not: %v", got)
 	}
 }
+
+// TestIsTestIsStrictMightBeTestIsGenerous pins the two questions apart. IsTest
+// removes a file from the audit, so a directory alone never makes a file a
+// test (a fixture under specs/ is not one). MightBeTest bounds a diff before
+// any evidence exists, so the same fixture IS a possible test: a false yes
+// there costs one instrumented run, a false no is a false green.
+func TestIsTestIsStrictMightBeTestIsGenerous(t *testing.T) {
+	py := []Rule{{Shape: Sibling, Name: "test_{base}.py"}}
+	all := [][]Rule{py}
+	for _, c := range []struct {
+		rel        string
+		is, mighty bool
+	}{
+		{"pkg/test_mod.py", true, true},
+		{"pkg/mod.py", false, false},
+		{"specs/fixtures/data.json", false, true}, // Review Focus 5
+		{"testing/helpers.go", false, true},       // Review Focus 5
+		{"lib/foo_spec.rb", true, true},           // a Generic marker, any language
+	} {
+		if got := IsTest(py, c.rel); got != c.is {
+			t.Errorf("IsTest(%q) = %v, want %v", c.rel, got, c.is)
+		}
+		if got := MightBeTest(all, c.rel); got != c.mighty {
+			t.Errorf("MightBeTest(%q) = %v, want %v", c.rel, got, c.mighty)
+		}
+	}
+}
+
+// TestGenericMarkersKeepTheOldChecksExactly pins the pattern semantics the
+// characterization goldens forced: "{base}_test{ext}" is a substring check
+// (foo_test.bar.go), the test_ prefix needs no extension, {ext} is never
+// optional (a PyInstaller .spec is not a test), and only MightBeTest folds case.
+func TestGenericMarkersKeepTheOldChecksExactly(t *testing.T) {
+	for _, c := range []struct {
+		rel        string
+		is, mighty bool
+	}{
+		{"pkg/foo_test.bar.go", true, true},
+		{"scripts/test_runner", true, true},
+		{"packaging/server.spec", false, false},
+		{"pkg/Test_Foo.py", false, true},
+	} {
+		if got := IsTest(nil, c.rel); got != c.is {
+			t.Errorf("IsTest(%q) = %v, want %v", c.rel, got, c.is)
+		}
+		if got := MightBeTest(nil, c.rel); got != c.mighty {
+			t.Errorf("MightBeTest(%q) = %v, want %v", c.rel, got, c.mighty)
+		}
+	}
+}

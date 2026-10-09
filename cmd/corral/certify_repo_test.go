@@ -4555,7 +4555,7 @@ func TestSignableKillRateWithholdsAFabricatedZero(t *testing.T) {
 	}
 }
 
-// looksLikeATestPath is the cheap pre-evidence question the --diff-base bound
+// pairing.MightBeTest is the cheap pre-evidence question the --diff-base bound
 // asks: could this changed file be a test? Generous on purpose — a false yes
 // costs one instrumented run, a false no is the false green.
 func TestLooksLikeATestPath(t *testing.T) {
@@ -4567,8 +4567,8 @@ func TestLooksLikeATestPath(t *testing.T) {
 		{"src/__tests__/calc.test.ts", true}, {"lib/calc_test.go", true}, {"tests/CalcTest.php", true},
 		{"pkg/calc.py", false}, {"lib/calc.js", false}, {"README.md", false}, {"internal/testing_helpers.go", false},
 	} {
-		if got := looksLikeATestPath(tc.path); got != tc.want {
-			t.Errorf("looksLikeATestPath(%q) = %v, want %v", tc.path, got, tc.want)
+		if got := mightBeTest(tc.path); got != tc.want {
+			t.Errorf("MightBeTest(%q) = %v, want %v", tc.path, got, tc.want)
 		}
 	}
 }

@@ -9,6 +9,7 @@
 package lang
 
 import (
+	"sort"
 	"strings"
 
 	"github.com/pdbethke/corralai/internal/pairing"
@@ -230,6 +231,29 @@ var registry = map[string]Plugin{}
 
 // Register adds a plugin to the registry. Called from plugin files' init().
 func Register(p Plugin) { registry[p.Name()] = p }
+
+// pluginNames is the registry's keys in sorted order. Map iteration is random,
+// and anything derived from "every plugin" that a caller compares, prints or
+// hashes must not depend on it.
+func pluginNames() []string {
+	names := make([]string, 0, len(registry))
+	for name := range registry {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// AllTestRules is every registered language's TestRules, in plugin-name
+// order — derived from the registry, never a hand list, so a new language's
+// conventions reach pairing.MightBeTest the moment it registers.
+func AllTestRules() [][]pairing.Rule {
+	var out [][]pairing.Rule
+	for _, name := range pluginNames() {
+		out = append(out, registry[name].TestRules())
+	}
+	return out
+}
 
 // ByName resolves a plugin by its language name. Fail-closed: (nil,false)
 // for anything not registered.

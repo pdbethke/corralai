@@ -12,6 +12,7 @@
 package pairing
 
 import (
+	"path"
 	"path/filepath"
 	"strings"
 )
@@ -24,7 +25,7 @@ const (
 	BesideDir    Shape = "beside-dir"    // <dir>/<Dir>/<Name>; Dir is also a search root
 	ParallelTree Shape = "parallel-tree" // <Dir>/<sub>/<Name> (or <Dir>/<dir>/<Name> with KeepLeading)
 	FlatRoot     Shape = "flat-root"     // <Dir>/<Name>, only within MaxDepth
-	Recognize    Shape = "recognize"     // never a candidate or a root; read by IsTest only
+	Recognize    Shape = "recognize"     // never a candidate or a root; read by IsTest and MightBeTest only
 )
 
 // DefaultRoot is searched for every language, before any root a rule names.
@@ -32,6 +33,12 @@ const DefaultRoot = "tests"
 
 // Rule is one convention. Name may contain {base} (the source's file name
 // without its extension), replaced literally, once.
+//
+// Read in the other direction — by IsTest and MightBeTest, asking whether a
+// path IS a test rather than where one would be — Name is a pattern over a
+// file's base name: {base} matches any run of characters (including none),
+// and {ext} matches a dot followed by anything. {ext} is only meaningful
+// there; Candidates never substitutes it.
 type Rule struct {
 	Shape       Shape
 	Name        string
@@ -189,4 +196,160 @@ func dirDepth(dir string) int {
 		return 0
 	}
 	return len(strings.Split(filepath.ToSlash(dir), "/"))
+}
+
+// Generic is the language-independent test markers corral has always applied
+// (reposcan.isTestFile and cmd/corral looksLikeATestPath, merged in Round B1).
+// Name templates may use {ext} for "any extension". Dir-only entries are the
+// directory names that make a path a POSSIBLE test (MightBeTest only).
+//
+// It is package data, the one place cross-language markers live, so they are
+// not copied into six languages' rules. Each entry is the old substring or
+// prefix check it replaces, restated as a pattern: "{base}_test{ext}" is
+// "the base name contains _test." (it matches foo_test.bar.go, as the
+// substring check did). The prefix marker is "test_{base}" with no {ext},
+// because the check it replaces was a bare prefix: {base} already spans the
+// extension of test_foo.py, and leaving {ext} off keeps the old yes for an
+// extension-less test_runner script in a diff. {ext} cannot simply be made
+// optional everywhere instead — "{base}.spec" would then call a PyInstaller
+// coworker-server.spec a possible test, which the golden pins as no.
+//
+// A marker one language owns is NOT here; it is declared in that language's
+// rules, where IsTest reads it for that language only: PHPUnit's
+// "{base}Test.php" (php.go) and RSpec's prefix "spec_{base}.rb" (ruby.go). The
+// prefix is the one marker the two old functions disagreed on — isTestFile
+// applied it to every language, looksLikeATestPath to none — and the
+// characterization golden fixes both answers (spec/spec_helper.rb IS a Ruby
+// test; tasks/spec_runner.rake is NOT a possible test), which a Generic entry
+// cannot satisfy and a Ruby rule does.
+var Generic = []Rule{
+	{Shape: Recognize, Name: "{base}_test{ext}"}, // Go foo_test.go, minitest foo_test.rb
+	{Shape: Recognize, Name: "test_{base}"},      // Python test_foo.py, Ruby test_foo.rb
+	{Shape: Recognize, Name: "{base}_spec{ext}"}, // RSpec foo_spec.rb, foo_spec.js, foo_spec.ts
+	{Shape: Recognize, Name: "{base}.test{ext}"}, // foo.test.js, foo.test.ts
+	{Shape: Recognize, Name: "{base}.spec{ext}"}, // foo.spec.js, foo.spec.ts
+	{Shape: Recognize, Dir: "test"}, {Shape: Recognize, Dir: "tests"},
+	{Shape: Recognize, Dir: "spec"}, {Shape: Recognize, Dir: "specs"},
+	{Shape: Recognize, Dir: "__tests__"}, {Shape: Recognize, Dir: "testing"},
+}
+
+// IsTest reports whether rel is itself a test file under one language's
+// rules: the STRICT question. Its answer removes a file from the audit, so a
+// false yes silently skips auditing real code — which is why a directory
+// alone never makes a file a test here (a conftest.py or a fixture under
+// tests/ is test SUPPORT, accounted separately by reposcan, never a test).
+//
+// The name patterns are the real check, and they do NOT depend on the shape
+// of the candidate list at all: a parallel-tree test like
+// tests/agents/test_artifact_store.py is caught by "test_{base}" exactly
+// like a sibling test_artifact_store.py would be, so widening the candidates
+// from one path to an ordered list changes nothing here. The patterns are
+// every Name in rules (so PHPUnit's separator-less suffix, tests/CalcTest.php,
+// is recognized from the PHP plugin's own "{base}Test.php" — the plugin's
+// candidates cannot see it, since for a test file they propose
+// tests/CalcTestTest.php, and before the marker existed every PHP test was
+// counted as an unpaired source) plus every Name in Generic. Matching is
+// case-sensitive: src/Latest.php is not a PHPUnit test.
+//
+// The fixed-point check (does rel appear in ITS OWN candidate list) is a
+// cheap belt-and-braces for a rule set that is someday idempotent on an
+// already-test path — no current one is (`foo_test.go`'s own conventions
+// produce `foo_test_test.go`, `test_test_foo.py`, etc, never `foo_test.go`
+// itself), so it never fires today either.
+func IsTest(rules []Rule, rel string) bool {
+	for _, c := range Candidates(rules, rel) {
+		if filepath.ToSlash(c.Path) == rel {
+			return true
+		}
+	}
+	base := filepath.Base(rel)
+	return nameMatches(rules, base, false) || nameMatches(Generic, base, false)
+}
+
+// MightBeTest is the cheap, language-independent question the diff bound asks
+// before any evidence exists: could this changed file be a test? It is the
+// GENEROUS question over the same data IsTest reads — a false "yes" only costs
+// one instrumented run, while a false "no" is the false-green this exists to
+// prevent.
+//
+// So it says yes when IsTest says yes for any language in all, when any
+// directory segment of rel is a Dir some rule (or Generic) names, or when rel's
+// LOWERCASED base name matches any lowercased Name pattern — CalcTest.php,
+// calctest.php and Test_Foo.py all might be tests. It takes every language's
+// rules rather than one because a changed file is asked about before anyone
+// knows which language claims it (README.md and a fixture under specs/ are
+// asked too).
+func MightBeTest(all [][]Rule, rel string) bool {
+	rel = filepath.ToSlash(rel)
+	sets := append([][]Rule{Generic}, all...)
+	for _, rules := range all {
+		if IsTest(rules, rel) {
+			return true
+		}
+	}
+	dirs := map[string]bool{}
+	for _, rules := range sets {
+		for _, r := range rules {
+			if d := strings.Trim(filepath.ToSlash(r.Dir), "/"); d != "" {
+				dirs[d] = true
+			}
+		}
+	}
+	for _, seg := range strings.Split(path.Dir(rel), "/") {
+		if dirs[seg] {
+			return true
+		}
+	}
+	base := strings.ToLower(path.Base(rel))
+	for _, rules := range sets {
+		if nameMatches(rules, base, true) {
+			return true
+		}
+	}
+	return false
+}
+
+// nameMatches reports whether base matches any rule's Name pattern ({base} =
+// any characters, {ext} = a dot then any characters). With fold, the pattern
+// is lowercased first; the caller lowercases base.
+func nameMatches(rules []Rule, base string, fold bool) bool {
+	for _, r := range rules {
+		if r.Name == "" {
+			continue
+		}
+		name := r.Name
+		if fold {
+			name = strings.ToLower(name)
+		}
+		if ok, err := path.Match(namePattern(name), base); err == nil && ok {
+			return true
+		}
+	}
+	return false
+}
+
+// namePattern turns a Name template into a path.Match pattern: every literal
+// character that path.Match treats specially is escaped, {base} becomes "*"
+// and {ext} becomes ".*". A base name never contains "/", so "*" spanning
+// any run of characters is exactly the substring/prefix checks Generic
+// replaced.
+func namePattern(name string) string {
+	var b strings.Builder
+	for i := 0; i < len(name); {
+		switch {
+		case strings.HasPrefix(name[i:], "{base}"):
+			b.WriteString("*")
+			i += len("{base}")
+		case strings.HasPrefix(name[i:], "{ext}"):
+			b.WriteString(".*")
+			i += len("{ext}")
+		default:
+			if strings.ContainsRune(`*?[]\`, rune(name[i])) {
+				b.WriteByte('\\')
+			}
+			b.WriteByte(name[i])
+			i++
+		}
+	}
+	return b.String()
 }

@@ -3,21 +3,13 @@
 package lang
 
 import (
-	"sort"
 	"testing"
 )
 
 // sortedPluginNames returns the registry's keys in a stable order so test
 // output (and any t.Run subtests) is deterministic across runs, since
 // registry iteration order is not.
-func sortedPluginNames() []string {
-	names := make([]string, 0, len(registry))
-	for name := range registry {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	return names
-}
+func sortedPluginNames() []string { return pluginNames() }
 
 // TestPluginStockCommandSatisfiesOwnPreflight is the self-consistency
 // property this file exists to pin: for every registered plugin,

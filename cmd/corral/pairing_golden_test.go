@@ -9,6 +9,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/pdbethke/corralai/internal/lang"
+	"github.com/pdbethke/corralai/internal/pairing"
 )
 
 // TestMightBeTestGolden pins the diff bound's generous "could this be a test?"
@@ -50,4 +53,4 @@ func TestMightBeTestGolden(t *testing.T) {
 }
 
 // mightBeTest is the one seam Task 4 re-points.
-func mightBeTest(path string) bool { return looksLikeATestPath(path) }
+func mightBeTest(path string) bool { return pairing.MightBeTest(lang.AllTestRules(), path) }

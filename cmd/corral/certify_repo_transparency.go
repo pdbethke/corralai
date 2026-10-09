@@ -88,6 +88,27 @@ func loadLocalCertifyKeyIfConfigured() (ed25519.PrivateKey, error) {
 	return loadLocalCertifyKey()
 }
 
+// loadExistingCertifyKey is --transparency's guard: the key that will sign
+// into a public, permanent log must already exist. It is
+// loadLocalCertifyKeyIfConfigured minus that function's one bootstrap — a
+// CORRALAI_CERTIFY_KEY_FILE naming a missing file, which `corral certify`
+// and `corral review --attest` treat as a deliberate first run. Here it is a
+// typo or an unprovisioned CI secret, and minting would sign the entry with
+// an identity nobody holds the other half of; --transparency's help promises
+// it "never mints a fresh key just to have one", and this is what keeps that
+// true (review e1608f971235#R1). The guard runs before any work, so by the
+// time the envelope is signed the key it names exists and nothing is minted.
+func loadExistingCertifyKey() (ed25519.PrivateKey, error) {
+	if strings.TrimSpace(os.Getenv("CORRALAI_CERTIFY_KEY")) == "" {
+		if p := strings.TrimSpace(os.Getenv("CORRALAI_CERTIFY_KEY_FILE")); p != "" {
+			if _, err := os.Stat(p); err != nil { // #nosec G703 -- the operator's own key path, only stat'd: nothing is read, created or written here
+				return nil, fmt.Errorf("CORRALAI_CERTIFY_KEY_FILE names %s, which does not exist (%w) — --transparency never creates a signing key; create it deliberately first", p, err)
+			}
+		}
+	}
+	return loadLocalCertifyKeyIfConfigured()
+}
+
 // transparencyPublicKeyPEM returns the PEM-encoded public half of the SAME
 // local certify key writeSignedStatementEnvelope signs with, for
 // --transparency's upload to hand Rekor alongside the envelope bytes.
@@ -145,6 +166,13 @@ func writeSignedStatementEnvelope(stmtPath string, stmt map[string]any) (string,
 //
 // signErr is returned, not acted on: a review reports it; an audit stays
 // silent, because an ordinary --attest run has no local key by design.
+//
+// A stale envelope that cannot be removed fails the write with NOTHING left
+// at path: not the new statement, and not an old one. The Action attests
+// whatever statement it finds, so a file left behind by a write that
+// reported failure was attested while the run said "nothing will be
+// attested" (review e1608f971235#R3 — the plain file used to be written
+// before the removal was tried).
 func writeStatement(path string, stmt map[string]any) (sha, envPath string, signErr, err error) {
 	b, err := json.MarshalIndent(stmt, "", "  ")
 	if err != nil {
@@ -153,11 +181,14 @@ func writeStatement(path string, stmt map[string]any) (sha, envPath string, sign
 	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		return "", "", nil, err
 	}
+	if rmErr := os.Remove(dsseEnvelopePathFor(path)); rmErr != nil && !os.IsNotExist(rmErr) {
+		if oldErr := os.Remove(path); oldErr != nil && !os.IsNotExist(oldErr) {
+			return "", "", nil, fmt.Errorf("removing the stale envelope %s: %w — and the old statement at %s could not be removed either, so it may still be attested: %v", dsseEnvelopePathFor(path), rmErr, path, oldErr)
+		}
+		return "", "", nil, fmt.Errorf("removing the stale envelope %s: %w", dsseEnvelopePathFor(path), rmErr)
+	}
 	if err := os.WriteFile(path, b, 0o600); err != nil {
 		return "", "", nil, err
-	}
-	if rmErr := os.Remove(dsseEnvelopePathFor(path)); rmErr != nil && !os.IsNotExist(rmErr) {
-		return "", "", nil, fmt.Errorf("removing the stale envelope %s: %w", dsseEnvelopePathFor(path), rmErr)
 	}
 	sum := sha256.Sum256(b)
 	envPath, signErr = writeSignedStatementEnvelope(path, stmt)
@@ -179,14 +210,43 @@ func writeStatement(path string, stmt map[string]any) (sha, envPath string, sign
 func uploadToTransparencyLog(ctx context.Context, logger transparency.Logger, envelopePath string, pubKeyPEM []byte, stdout, stderr io.Writer) (transparency.LogEntry, bool) {
 	envelope, err := os.ReadFile(envelopePath) // #nosec G304 -- envelopePath is derived from the operator's own --attest path, just written by this same process
 	if err != nil {
-		fmt.Fprintf(stderr, "corral certify --repo: --transparency: reading the signed envelope at %s: %v\n", envelopePath, err)
+		transparencyFailed(stderr, fmt.Errorf("reading the signed envelope at %s: %w", envelopePath, err))
 		return transparency.LogEntry{}, false
 	}
 	entry, err := logger.Upload(ctx, envelope, pubKeyPEM)
 	if err != nil {
-		fmt.Fprintf(stderr, "corral certify --repo: --transparency: uploading to rekor: %v\n", err)
+		transparencyFailed(stderr, fmt.Errorf("uploading to rekor: %w", err))
 		return transparency.LogEntry{}, false
 	}
 	fmt.Fprintf(stdout, "  attestation logged: rekor index %d (uuid %s)\n", entry.LogIndex, entry.UUID)
 	return entry, true
+}
+
+// logStatementToTransparency is --transparency's step after the statement is
+// written: report a sign failure as itself, else load the public key and
+// upload the envelope. It used to sit inline in runCertifyRepo, where the
+// sign error had already been dropped by writeAuditStatement — so a failed
+// envelope write surfaced only as "no such file" on the read that followed
+// (review e1608f971235#R4). Fails OPEN like uploadToTransparencyLog: never
+// an exit code, always a line, and on a runner an annotation.
+func logStatementToTransparency(attestPath string, signErr error, stdout, stderr io.Writer) (transparency.LogEntry, bool) {
+	if signErr != nil {
+		transparencyFailed(stderr, fmt.Errorf("the statement was not signed, so there is nothing to log: %w", signErr))
+		return transparency.LogEntry{}, false
+	}
+	pubKeyPEM, err := transparencyPublicKeyPEM()
+	if err != nil {
+		transparencyFailed(stderr, err)
+		return transparency.LogEntry{}, false
+	}
+	return uploadToTransparencyLog(context.Background(), newTransparencyLogger(rekorBaseURL()), dsseEnvelopePathFor(attestPath), pubKeyPEM, stdout, stderr)
+}
+
+// transparencyFailed is every --transparency failure's one report: the
+// stderr line, and on a runner the workflow annotation a failed statement
+// write and a failed push already raise (review e1608f971235#R2 — this door
+// printed only the line, and the job went green with NULL receipt columns).
+func transparencyFailed(stderr io.Writer, err error) {
+	fmt.Fprintf(stderr, "corral certify --repo: --transparency: %v\n", err)
+	runnerWarning(stderr, "corral transparency failed", "the audit ran, but its statement was not logged to the public transparency log: %v", err)
 }

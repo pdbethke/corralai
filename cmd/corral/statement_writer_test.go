@@ -60,7 +60,7 @@ func TestWriteAuditStatementUsesTheOneWriterAndKeepsItsBytes(t *testing.T) {
 	if err := os.WriteFile(stale, []byte(`{"stale":true}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	sha, err := writeAuditStatement(att, dir, oneAuditedFileReport(), map[string]string{"writer": "m"}, nil, nil, true, 0, oneAuditedFileBundle(0))
+	sha, _, err := writeAuditStatement(att, dir, oneAuditedFileReport(), map[string]string{"writer": "m"}, nil, nil, true, 0, oneAuditedFileBundle(0))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -37,3 +37,19 @@ func TestResolveLedgerPubKeyRefusesGarbageLoudly(t *testing.T) {
 		t.Fatalf("bad env must be an error naming the env var, got %v", err)
 	}
 }
+
+// Review e5fd4c8d1b50#R1: a key that is SET but blank is not "no key". The
+// doc above ResolveLedgerPubKey says whoever set a key meant to check; a
+// blank one used to read as unset and downgrade to NOT CHECKED, and a blank
+// --pub fell through to the environment's key.
+func TestResolveLedgerPubKeyRefusesASetButBlankKey(t *testing.T) {
+	a, _, _ := ed25519.GenerateKey(nil)
+	t.Setenv(LedgerPubKeyEnv, hex.EncodeToString(a))
+	if pub, _, err := ResolveLedgerPubKey("  "); err == nil || !strings.Contains(err.Error(), "--pub") {
+		t.Fatalf("a blank --pub must be refused, not fall through to the environment: pub=%x err=%v", pub, err)
+	}
+	t.Setenv(LedgerPubKeyEnv, " \t")
+	if pub, _, err := ResolveLedgerPubKey(""); err == nil || !strings.Contains(err.Error(), LedgerPubKeyEnv) {
+		t.Fatalf("a blank %s must be refused, not read as unset: pub=%x err=%v", LedgerPubKeyEnv, pub, err)
+	}
+}

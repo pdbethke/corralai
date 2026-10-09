@@ -6,6 +6,7 @@ import (
 	"crypto/ed25519"
 	"encoding/json"
 	"fmt"
+	"math"
 )
 
 // SignedBuild is a build record turned into its signed, self-verifying parts.
@@ -32,13 +33,28 @@ type SignedBuild struct {
 // other is only as good as the next edit to one of them; one function keeps
 // it by construction. rec.Actor is the principal named in the ledger steps.
 //
-// rawDurationS is the un-normalized duration the execution STEP records,
-// while the signed statement carries SecondsOrUnmeasured of it (an unmeasured
-// run is omitted, not claimed as zero seconds). Both callers hold a float64,
-// so the parameter is that type; SignBuild sets rec.DurationS itself so the
-// two representations cannot disagree.
+// rawDurationS is the duration as both callers hold it — a document field
+// where 0 means "not given". SignBuild normalizes it ONCE, with
+// SecondsOrUnmeasured, and both the statement and the execution step carry
+// the result: a measured duration on both, an unmeasured one on neither.
+// The step used to carry the raw value, so the hash-linked record the
+// statement's subject digest commits to still signed "duration_s": 0 after
+// the statement stopped (review f5015cf48e54#R1). SignBuild sets rec.DurationS
+// itself so the two cannot disagree. A value JSON cannot carry (NaN, ±Inf) is
+// refused, not left to panic inside BuildLedger (f5015cf48e54#R4).
 func SignBuild(rec BuildRecord, rawDurationS float64, priv ed25519.PrivateKey, keyID string) (SignedBuild, error) {
+	if math.IsNaN(rawDurationS) || math.IsInf(rawDurationS, 0) {
+		return SignedBuild{}, fmt.Errorf("duration %v is not a number a signed record can carry", rawDurationS)
+	}
 	rec.DurationS = SecondsOrUnmeasured(rawDurationS)
+	execution := map[string]any{
+		"exit_code":     rec.ExitCode,
+		"ok":            rec.ExitCode == 0,
+		"output_digest": rec.OutputDigest,
+	}
+	if rec.DurationS != nil {
+		execution["duration_s"] = *rec.DurationS
+	}
 	steps := []Step{
 		{
 			Kind:    "context",
@@ -54,12 +70,7 @@ func SignBuild(rec BuildRecord, rawDurationS float64, priv ed25519.PrivateKey, k
 			Kind:    "execution",
 			Actor:   rec.Actor,
 			Subject: rec.Command,
-			Detail: map[string]any{
-				"exit_code":     rec.ExitCode,
-				"ok":            rec.ExitCode == 0,
-				"duration_s":    rawDurationS,
-				"output_digest": rec.OutputDigest,
-			},
+			Detail:  execution,
 		},
 	}
 	built, head := BuildLedger(steps)

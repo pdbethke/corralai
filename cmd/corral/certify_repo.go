@@ -195,9 +195,9 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// guard above: without a usable local signing key there is nothing this
 	// run could sign, and --transparency must not silently upload an
 	// unsigned artifact, nor silently mint a fresh signing identity just to
-	// have something to sign with (see loadLocalCertifyKeyIfConfigured).
+	// have something to sign with (see loadExistingCertifyKey).
 	if *transparencyFlag {
-		if _, kerr := loadLocalCertifyKeyIfConfigured(); kerr != nil {
+		if _, kerr := loadExistingCertifyKey(); kerr != nil {
 			fmt.Fprintf(stderr, "corral certify --repo: --transparency needs a local signing key to sign the statement before it can be logged — set CORRALAI_CERTIFY_KEY_FILE: %v\n", kerr)
 			return 2
 		}
@@ -1438,7 +1438,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// --record was not given or its write failed).
 	var statementSHA256 string
 	if strings.TrimSpace(*attestFlag) != "" {
-		sha, err := writeAuditStatement(*attestFlag, *repoDir, rep, models(), minKillRate, maxProvenMissed, exitCode == 0, scanID, bundle)
+		sha, signErr, err := writeAuditStatement(*attestFlag, *repoDir, rep, models(), minKillRate, maxProvenMissed, exitCode == 0, scanID, bundle)
 		if err != nil {
 			fmt.Fprintf(stderr, "corral certify --repo: writing --attest statement: %v\n", err)
 			// On a runner a failed statement is worse than a failed push:
@@ -1446,9 +1446,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 			// "nothing was audited" and says so in a ::notice, while the
 			// push — required to carry the statement hash — is withheld.
 			// Raise it where it will be read.
-			if os.Getenv("GITHUB_ACTIONS") == "true" {
-				fmt.Fprintf(stderr, "::warning title=corral attest failed::the audit ran, but writing the audit statement to %s failed: %v — nothing will be attested and no rows were pushed\n", *attestFlag, err)
-			}
+			runnerWarning(stderr, "corral attest failed", "the audit ran, but writing the audit statement to %s failed: %v — nothing will be attested and no rows were pushed", *attestFlag, err)
 		} else {
 			statementSHA256 = sha
 			bundle.Scan.StatementSHA256 = sha
@@ -1463,11 +1461,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 			// upload failure never changes exitCode, only prints and leaves
 			// both receipt columns NULL.
 			if *transparencyFlag {
-				pubKeyPEM, pkerr := transparencyPublicKeyPEM()
-				if pkerr != nil {
-					fmt.Fprintf(stderr, "corral certify --repo: --transparency: %v\n", pkerr)
-				} else if entry, ok := uploadToTransparencyLog(context.Background(),
-					newTransparencyLogger(rekorBaseURL()), dsseEnvelopePathFor(*attestFlag), pubKeyPEM, stdout, stderr); ok {
+				if entry, ok := logStatementToTransparency(*attestFlag, signErr, stdout, stderr); ok {
 					logIndex := entry.LogIndex
 					bundle.Scan.RekorLogIndex = &logIndex
 					bundle.Scan.RekorUUID = entry.UUID
@@ -1545,9 +1539,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 				// the failure is ALSO raised as a workflow annotation —
 				// the operator asked for rows in a warehouse and got
 				// none, and should not learn that from a query.
-				if os.Getenv("GITHUB_ACTIONS") == "true" {
-					fmt.Fprintf(stderr, "::warning title=corral push failed::the audit ran, but pushing its rows to %s failed: %v\n", *pushFlag, perr)
-				}
+				runnerWarning(stderr, "corral push failed", "the audit ran, but pushing its rows to %s failed: %v", *pushFlag, perr)
 			case c.Total() > 0:
 				fmt.Fprintf(stdout, "  pushed %d scan, %d file(s), %d mutant(s), %d model-call row(s), %d event(s) to %s\n",
 					c.Scans, c.Files, c.Mutants, c.Calls, c.Events, *pushFlag)
@@ -4965,7 +4957,11 @@ func preflightWritable(path string) error {
 	return os.Remove(probe)
 }
 
-func writeAuditStatement(path, repoDir string, r reposcan.RepoReport, models map[string]string, minKillRate *float64, maxProvenMissed *int, passed bool, scanID int64, bundle auditpush.Bundle) (string, error) {
+// writeAuditStatement writes the --attest statement for a scan and returns
+// its sha256. signErr is the envelope's sign error, returned and never printed here: a
+// plain --attest run has no local key by design and must stay quiet, while
+// --transparency needs the real cause (review e1608f971235#R4).
+func writeAuditStatement(path, repoDir string, r reposcan.RepoReport, models map[string]string, minKillRate *float64, maxProvenMissed *int, passed bool, scanID int64, bundle auditpush.Bundle) (sha string, signErr error, err error) {
 	files := make([]certify.AuditedFile, 0, len(r.Weakest))
 	for _, f := range r.Weakest {
 		// The interval is signed only where the rate is: an uncovered
@@ -5056,7 +5052,7 @@ func writeAuditStatement(path, repoDir string, r reposcan.RepoReport, models map
 	// nothing — and two copies of this logic would drift.
 	repo, commit, err := auditSubject(repoDir, r)
 	if err != nil {
-		return "", fmt.Errorf("refusing to write an audit statement: %w", err)
+		return "", nil, fmt.Errorf("refusing to write an audit statement: %w", err)
 	}
 
 	// The WHOLE bundle this scan would push (or did, if --push also ran) —
@@ -5071,7 +5067,7 @@ func writeAuditStatement(path, repoDir string, r reposcan.RepoReport, models map
 	// back.
 	rowsSHA, err := warehouseRowsSHA256(bundle)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 
 	stmt := certify.BuildAuditAttestation(certify.AuditStatement{
@@ -5100,8 +5096,8 @@ func writeAuditStatement(path, repoDir string, r reposcan.RepoReport, models map
 	// nothing new on stderr. A --transparency run's own guard
 	// (runCertifyRepo) already refused the whole invocation earlier if a key
 	// was required and unavailable.
-	sha, _, _, err := writeStatement(path, stmt)
-	return sha, err
+	sha, _, signErr, err = writeStatement(path, stmt)
+	return sha, signErr, err
 }
 
 // warehouseRowsSHA256 is the hex sha256 of the bundle's canonical JSON, with

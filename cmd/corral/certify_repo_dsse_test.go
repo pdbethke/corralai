@@ -3,11 +3,13 @@
 package main
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"encoding/hex"
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/secure-systems-lab/go-securesystemslib/dsse"
@@ -137,5 +139,27 @@ func TestLoadLocalCertifyKeyIfConfiguredRejectsACorruptFile(t *testing.T) {
 
 	if _, err := loadLocalCertifyKeyIfConfigured(); err == nil {
 		t.Fatal("want an error for a corrupt configured key file, got nil")
+	}
+}
+
+// Review e1608f971235#R1: a CORRALAI_CERTIFY_KEY_FILE that names a missing
+// file is a typo or an unprovisioned secret, not a request for a new
+// identity. --transparency's help promises it "never mints a fresh key just
+// to have one"; its guard used the bootstrapping loader, so a key was created
+// at the configured path and would have signed into a public, permanent log.
+// The guard now refuses before any work, and nothing appears on disk.
+func TestTransparencyRefusesAConfiguredKeyFileThatDoesNotExist(t *testing.T) {
+	t.Setenv("CORRALAI_CERTIFY_KEY", "")
+	t.Setenv("HOME", t.TempDir())
+	missing := filepath.Join(t.TempDir(), "typo", "corral_key.txt")
+	t.Setenv("CORRALAI_CERTIFY_KEY_FILE", missing)
+
+	var out, errb bytes.Buffer
+	code := runCertifyRepo([]string{"--attest", filepath.Join(t.TempDir(), "statement.json"), "--transparency"}, &out, &errb)
+	if code != 2 || !strings.Contains(errb.String(), missing) {
+		t.Fatalf("want exit 2 naming %s, got %d: %s", missing, code, errb.String())
+	}
+	if _, statErr := os.Stat(missing); statErr == nil {
+		t.Fatal("a key was minted at the configured-but-missing path")
 	}
 }

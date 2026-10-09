@@ -146,7 +146,7 @@ func TestAttestationCarriesTheWriterMode(t *testing.T) {
 			WriterMode: advpool.WriterModePerSurvivor, WriterCalls: 2,
 		}},
 	}
-	if _, err := writeAuditStatement(out, dir, rep, map[string]string{"test-writer": "w"}, nil, nil, true, 0, auditpush.Bundle{}); err != nil {
+	if _, _, err := writeAuditStatement(out, dir, rep, map[string]string{"test-writer": "w"}, nil, nil, true, 0, auditpush.Bundle{}); err != nil {
 		t.Fatalf("writeAuditStatement: %v", err)
 	}
 	raw, err := os.ReadFile(out) //nolint:gosec // test-owned temp path

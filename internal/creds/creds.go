@@ -209,20 +209,39 @@ func keyringUsable() bool {
 
 // Open builds the default resolution chain: environment → OS keyring → age file.
 // A missing store is not an error (an unconfigured operator simply has no secrets).
+//
+// Nor is a missing PLACE for one. With no CORRAL_CREDS_DIR, XDG_CONFIG_HOME or
+// HOME (a bare container, a stripped CI step) the file tier has no directory,
+// and Open used to fail outright — so a key sitting in the environment could
+// not be read (review b3e2ec973c76#R1). The file tier is now the one that
+// fails, and only when a lookup actually reaches it: an env or keyring hit
+// never touches it, and a miss says why the file could not be consulted
+// rather than reading as "absent".
 func Open() (*Store, error) {
-	dir, err := credsDir()
-	if err != nil {
-		return nil, err
-	}
 	chain := []backend{envBackend{}}
 	if keyringUsable() {
 		chain = append(chain, newKeyring("corral"))
+	}
+	dir, err := credsDir()
+	if err != nil {
+		return newStore(append(chain, noFileTier{fmt.Errorf("the credential file store has no directory (set CORRAL_CREDS_DIR): %w", err)})...), nil
 	}
 	chain = append(chain, newAgeFileLazy(filepath.Join(dir, "creds.age"), func() (*age.X25519Identity, error) {
 		return resolveIdentity(dir)
 	}))
 	return newStore(chain...), nil
 }
+
+// noFileTier stands where the age file would be when there is nowhere to put
+// it: every operation reports why, so nothing reads its absence as "no such
+// secret" and nothing is written to a guessed location.
+type noFileTier struct{ err error }
+
+func (n noFileTier) get(string) (string, bool, error) { return "", false, n.err }
+func (n noFileTier) set(string, string) error         { return n.err }
+func (n noFileTier) remove(string) error              { return n.err }
+func (n noFileTier) names() ([]string, error)         { return nil, n.err }
+func (noFileTier) writable() bool                     { return true }
 
 // envBackend reads canonical secrets from the process environment. Read-only.
 type envBackend struct{}

@@ -118,8 +118,7 @@ func TestTransparencyWithoutAttestExitsUsageError(t *testing.T) {
 // audit cost.
 func TestCertifyRepoTransparencyStampsLedgerAndBundle(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "test-placeholder-not-a-real-key")
-	certKeyPath := filepath.Join(t.TempDir(), "certify_key")
-	t.Setenv("CORRALAI_CERTIFY_KEY_FILE", certKeyPath)
+	fixtureCertifyKey(t) // a configured key must EXIST: --transparency never mints one (e1608f971235#R1)
 
 	root := t.TempDir()
 	gitRun := gitCmd(t, root)
@@ -204,8 +203,7 @@ func ledgerScanRows(t *testing.T, dir string) []scanstore.ScanRow {
 // scan's — NULL, never a fabricated value.
 func TestCertifyRepoTransparencyFailsOpenOnUploadError(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "test-placeholder-not-a-real-key")
-	certKeyPath := filepath.Join(t.TempDir(), "certify_key")
-	t.Setenv("CORRALAI_CERTIFY_KEY_FILE", certKeyPath)
+	fixtureCertifyKey(t) // a configured key must EXIST: --transparency never mints one (e1608f971235#R1)
 
 	root := t.TempDir()
 	gitRun := gitCmd(t, root)
@@ -352,5 +350,81 @@ func TestCertifyRepoSourcePushedIsTheSinksOwnFact(t *testing.T) {
 	run(shipped, "--push-source")
 	if !warehouseSourcePushed(shipped) {
 		t.Errorf("pushed with --push-source, yet the warehouse row says source_pushed=false")
+	}
+}
+
+// Review e1608f971235#R3: when the stale envelope cannot be removed, nothing
+// may be left for the Action to attest — neither the new plain statement
+// (it used to be written first) nor an old one at the same path.
+func TestWriteStatementLeavesNothingToAttestWhenTheStaleEnvelopeStays(t *testing.T) {
+	t.Setenv("CORRALAI_CERTIFY_KEY", "")
+	t.Setenv("CORRALAI_CERTIFY_KEY_FILE", "")
+	t.Setenv("HOME", t.TempDir())
+	path := filepath.Join(t.TempDir(), "statement.json")
+	mustWrite(t, path, `{"old":"statement"}`)
+	// A non-empty directory where the envelope goes: os.Remove cannot take it.
+	mustWrite(t, filepath.Join(dsseEnvelopePathFor(path), "keep"), "x")
+
+	sha, _, _, err := writeStatement(path, map[string]any{"new": "statement"})
+	if err == nil || sha != "" {
+		t.Fatalf("want an error and no hash, got sha=%q err=%v", sha, err)
+	}
+	if _, statErr := os.Stat(path); statErr == nil {
+		b, _ := os.ReadFile(path)
+		t.Fatalf("a statement was left for the Action to attest after the write failed: %s", b)
+	}
+}
+
+// Review e1608f971235#R4: an audit's --attest stays quiet about a missing
+// key, but the sign error is returned to the caller rather than dropped, so
+// --transparency can say why there is no envelope.
+func TestWriteAuditStatementReturnsTheSignError(t *testing.T) {
+	t.Setenv("CORRALAI_CERTIFY_KEY", "")
+	corrupt := filepath.Join(t.TempDir(), "corrupt_key")
+	mustWrite(t, corrupt, "not a valid seed")
+	t.Setenv("CORRALAI_CERTIFY_KEY_FILE", corrupt)
+	dir := t.TempDir()
+	att := filepath.Join(t.TempDir(), "statement.json")
+
+	sha, signErr, err := writeAuditStatement(att, dir, oneAuditedFileReport(), map[string]string{"writer": "m"}, nil, nil, true, 0, oneAuditedFileBundle(0))
+	if err != nil || sha == "" {
+		t.Fatalf("the plain statement must still be written: sha=%q err=%v", sha, err)
+	}
+	if signErr == nil {
+		t.Fatal("the sign error was dropped")
+	}
+}
+
+// Reviews e1608f971235#R2 and #R4 at the --transparency door: a sign error
+// is reported as itself (not as "no such file" on the envelope), and every
+// way the requested public log entry fails is raised as a workflow
+// annotation on a runner — as a failed statement write and a failed push
+// already were — because a green job with one stderr line is how an operator
+// learns from a NULL column that nothing was logged.
+func TestTransparencyFailuresAreNamedAndRaisedOnARunner(t *testing.T) {
+	t.Setenv("GITHUB_ACTIONS", "true")
+
+	var out, errb bytes.Buffer
+	if _, ok := logStatementToTransparency(filepath.Join(t.TempDir(), "s.json"), errors.New("disk full writing the envelope"), &out, &errb); ok {
+		t.Fatal("a sign failure reported a log entry")
+	}
+	if !strings.Contains(errb.String(), "disk full writing the envelope") || !strings.Contains(errb.String(), "::warning title=corral transparency failed::") {
+		t.Fatalf("the sign error must be named and raised: %q", errb.String())
+	}
+
+	fixtureCertifyKey(t)
+	path := filepath.Join(t.TempDir(), "s.json")
+	mustWrite(t, dsseEnvelopePathFor(path), `{"payload":"x"}`)
+	orig := newTransparencyLogger
+	t.Cleanup(func() { newTransparencyLogger = orig })
+	newTransparencyLogger = func(string) transparency.Logger {
+		return &transparency.FakeLogger{Err: errors.New("rekor: connection refused")}
+	}
+	errb.Reset()
+	if _, ok := logStatementToTransparency(path, nil, &out, &errb); ok {
+		t.Fatal("a failed upload reported a log entry")
+	}
+	if !strings.Contains(errb.String(), "::warning title=corral transparency failed::") || !strings.Contains(errb.String(), "connection refused") {
+		t.Fatalf("a failed upload must be raised with its cause: %q", errb.String())
 	}
 }

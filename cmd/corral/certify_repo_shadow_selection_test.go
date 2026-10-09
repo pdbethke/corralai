@@ -25,7 +25,7 @@ func signedFileEntries(t *testing.T, results []reposcan.FileResult) map[string]m
 	dir := t.TempDir()
 	out := filepath.Join(dir, "statement.json")
 	rep := reposcan.Aggregate("o", "r", "abc123", len(results), len(results), results, nil)
-	if _, err := writeAuditStatement(out, dir, rep, map[string]string{"test-writer": "w"}, nil, nil, true, 0, auditpush.Bundle{}); err != nil {
+	if _, _, err := writeAuditStatement(out, dir, rep, map[string]string{"test-writer": "w"}, nil, nil, true, 0, auditpush.Bundle{}); err != nil {
 		t.Fatalf("writeAuditStatement: %v", err)
 	}
 	b, err := os.ReadFile(out) // #nosec G304 -- test-local path

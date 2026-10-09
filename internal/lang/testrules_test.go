@@ -22,8 +22,17 @@ import (
 // Rank is still a wrong Rank — this is where it is caught.
 func TestEveryRuleRankAgreesWithItsShape(t *testing.T) {
 	for _, name := range pluginNames() {
-		for i, r := range registry[name].TestRules() {
-			if r.Shape == pairing.Recognize {
+		rules := registry[name].TestRules()
+		ext, ok := sourceExt(rules)
+		if !ok {
+			t.Fatalf("plugin %q declares no Sibling rule, so its source extension cannot be derived", name)
+		}
+		for i, r := range rules {
+			// Whether a Shape produces candidates is pairing's shapeTable's
+			// call, not this test's: ask it, through a top-level source every
+			// candidate-producing Shape answers for (depth 0 is within any
+			// FlatRoot's MaxDepth).
+			if len(pairing.Candidates([]pairing.Rule{r}, "x"+ext)) == 0 {
 				continue // never a candidate, so it has no rank to agree with
 			}
 			if r.Shape == pairing.Sibling && r.Rank != 0 {

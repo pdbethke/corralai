@@ -1,17 +1,33 @@
 // SPDX-License-Identifier: Elastic-2.0
 
-// Package pairing is the one place corral decides which file tests which.
+// Package pairing decides, from each language's declared rules, where a
+// source file's test may live (Candidates), which directories a search for one
+// walks (Roots), and whether a file is a test (IsTest, strict) or might be one
+// (MightBeTest, generous).
 //
 // It used to be six hand-written TestPaths (one per language plugin), three
 // TestRoots restating their directories, and two is-test inverses
 // (reposcan.isTestFile, cmd/corral looksLikeATestPath) that had already drifted
 // apart. A language now DECLARES its conventions as []Rule — data, not code —
-// and everything about pairing is derived from that one declaration
-// (DRY audit 2026-10-08, Round B1). A new language adds rules, or a new Shape
-// here; it never adds a pairing function.
+// and everything above is derived from that one declaration (DRY audit
+// 2026-10-08, Round B1). A new language adds rules, or a new Shape in
+// shapeTable; it never adds a pairing function.
+//
+// It is NOT yet the only place corral decides which file tests which. The
+// stage-2 search — what happens when no candidate exists on disk — still
+// lives in internal/reposcan/findtest.go: searchBasenames, bestSearchMatch,
+// pathStemScore, and normalizeSeg with its own hand-kept list of test affixes
+// (test_, spec_, _test, _spec) that Generic does not feed. The two-stage
+// algorithm itself is written twice there, as FindTest (over a fresh git
+// listing) and findInUniverse (over Enumerate's universe). Round B1b moves
+// all of it here as one algorithm, with normalizeSeg's affixes derived from
+// Generic — golden first: the corpus golden gains a "found test" column
+// captured from today's untouched search code before a line of it moves,
+// because moving unpinned code is what this round's own contract forbids.
 package pairing
 
 import (
+	"fmt"
 	"path"
 	"path/filepath"
 	"strings"
@@ -27,6 +43,86 @@ const (
 	FlatRoot     Shape = "flat-root"     // <Dir>/<Name>, only within MaxDepth
 	Recognize    Shape = "recognize"     // never a candidate or a root; read by IsTest and MightBeTest only
 )
+
+// shapeTraits is everything a Shape means to the readers of a Rule. Each
+// field is one question a reader asks, so a reader never switches on a Shape
+// itself — it asks the table.
+type shapeTraits struct {
+	// candidate builds the rule's test path from the source's directory and
+	// the rule's Name with {base} filled in; ok=false means "not for this
+	// source" (FlatRoot past MaxDepth). nil means the Shape never produces a
+	// candidate (Recognize). Read by Candidates.
+	candidate func(r Rule, dir, name string) (p string, ok bool)
+	// searchRoot: the rule's Dir is a top-level directory the stage-2 search
+	// walks. Read by Roots.
+	searchRoot bool
+	// testDir: the rule's Dir names a directory whose files MIGHT be tests.
+	// Read by MightBeTest.
+	testDir bool
+	// nameMarksTest: the rule's Name is a "this file IS a test" pattern (see
+	// Rule's marker invariant). Read by IsTest and MightBeTest.
+	nameMarksTest bool
+}
+
+// shapeTable is the ONE place a Shape's semantics live. They used to be
+// spread across two switches (Candidates, Roots) plus MightBeTest reading Dir
+// from every rule, and Candidates' switch silently skipped a Shape it did not
+// know — a rule applied at one door and not the others (Round B1 final
+// review). A new Shape is now one entry here; TestEveryShapeHasTraits fails
+// for a declared Shape without one, and traitsOf panics on an undeclared one.
+var shapeTable = map[Shape]shapeTraits{
+	Sibling: {
+		candidate:     func(_ Rule, dir, name string) (string, bool) { return joinDir(dir, name), true },
+		nameMarksTest: true,
+	},
+	BesideDir: {
+		candidate:     func(r Rule, dir, name string) (string, bool) { return filepath.Join(dir, r.Dir, name), true },
+		searchRoot:    true,
+		testDir:       true,
+		nameMarksTest: true,
+	},
+	ParallelTree: {
+		candidate: func(r Rule, dir, name string) (string, bool) {
+			sub := stripFirstSegment(dir)
+			if r.KeepLeading {
+				sub = dir
+			}
+			return filepath.Join(r.Dir, sub, name), true
+		},
+		searchRoot:    true,
+		testDir:       true,
+		nameMarksTest: true,
+	},
+	FlatRoot: {
+		candidate: func(r Rule, dir, name string) (string, bool) {
+			if dirDepth(dir) > r.MaxDepth {
+				return "", false
+			}
+			return filepath.Join(r.Dir, name), true
+		},
+		searchRoot:    true,
+		testDir:       true,
+		nameMarksTest: true,
+	},
+	Recognize: {
+		testDir:       true,
+		nameMarksTest: true,
+	},
+}
+
+// traitsOf is the only way to read shapeTable. An unknown Shape is a
+// programming error — a Rule literal naming a Shape nobody declared — so it
+// panics, as stepHash does for its own can't-happen case, rather than
+// skipping the rule: a skipped rule is a convention silently not applied,
+// which is the failure the table exists to end, and every Rule is a literal
+// in a plugin, so any test that touches that plugin's rules finds it.
+func traitsOf(s Shape) shapeTraits {
+	t, ok := shapeTable[s]
+	if !ok {
+		panic(fmt.Sprintf("pairing: unknown Shape %q — every Shape needs a shapeTable entry (programming error)", string(s)))
+	}
+	return t
+}
 
 // DefaultRoot is searched for every language, before any root a rule names.
 const DefaultRoot = "tests"
@@ -96,25 +192,12 @@ func Candidates(rules []Rule, codePath string) []Candidate {
 	dir, base, _ := splitPath(codePath)
 	var out []Candidate
 	for _, r := range rules {
-		name := strings.Replace(r.Name, "{base}", base, 1)
-		var p string
-		switch r.Shape {
-		case Sibling:
-			p = joinDir(dir, name)
-		case BesideDir:
-			p = filepath.Join(dir, r.Dir, name)
-		case ParallelTree:
-			sub := stripFirstSegment(dir)
-			if r.KeepLeading {
-				sub = dir
-			}
-			p = filepath.Join(r.Dir, sub, name)
-		case FlatRoot:
-			if dirDepth(dir) > r.MaxDepth {
-				continue
-			}
-			p = filepath.Join(r.Dir, name)
-		default:
+		build := traitsOf(r.Shape).candidate
+		if build == nil {
+			continue
+		}
+		p, ok := build(r, dir, strings.Replace(r.Name, "{base}", base, 1))
+		if !ok {
 			continue
 		}
 		out = append(out, Candidate{Path: p, Rank: r.Rank, Shape: r.Shape})
@@ -123,7 +206,7 @@ func Candidates(rules []Rule, codePath string) []Candidate {
 }
 
 // Roots is the top-level directories a search walks for these rules:
-// DefaultRoot, then every Dir a BesideDir/ParallelTree/FlatRoot rule names,
+// DefaultRoot, then every Dir a searchRoot Shape's rule names (shapeTable),
 // trimmed of slashes, deduplicated, in order. (The six languages' TestRoots
 // restated exactly these directories; deriving them removes the restatement.)
 //
@@ -140,9 +223,7 @@ func Roots(rules []Rule) []string {
 	out := []string{DefaultRoot}
 	seen := map[string]bool{DefaultRoot: true}
 	for _, r := range rules {
-		switch r.Shape {
-		case BesideDir, ParallelTree, FlatRoot:
-		default:
+		if !traitsOf(r.Shape).searchRoot {
 			continue
 		}
 		d := strings.Trim(filepath.ToSlash(r.Dir), "/")
@@ -301,6 +382,9 @@ func MightBeTest(all [][]Rule, rel string) bool {
 	dirs := map[string]bool{}
 	for _, rules := range sets {
 		for _, r := range rules {
+			if !traitsOf(r.Shape).testDir {
+				continue
+			}
 			if d := strings.Trim(filepath.ToSlash(r.Dir), "/"); d != "" {
 				dirs[d] = true
 			}
@@ -320,12 +404,12 @@ func MightBeTest(all [][]Rule, rel string) bool {
 	return false
 }
 
-// nameMatches reports whether base matches any rule's Name pattern ({base} =
+// nameMatches reports whether base matches any nameMarksTest rule's Name pattern ({base} =
 // any characters, {ext} = a dot then any characters). With fold, the pattern
 // is lowercased first; the caller lowercases base.
 func nameMatches(rules []Rule, base string, fold bool) bool {
 	for _, r := range rules {
-		if r.Name == "" {
+		if !traitsOf(r.Shape).nameMarksTest || r.Name == "" {
 			continue
 		}
 		name := r.Name

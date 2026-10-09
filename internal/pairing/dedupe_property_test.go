@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/pairing"
 	"github.com/pdbethke/corralai/internal/pairing/pairingtest"
 )
@@ -36,8 +37,8 @@ func sourceBase(codePath string) string {
 	return b[:len(b)-len(filepath.Ext(b))]
 }
 
-// TestPaths keeps the original method name so the test below reads unchanged.
-func (violatorPlugin) TestPaths(codePath string) []pairing.Candidate {
+// Candidates is the violator's deduped candidate list for codePath.
+func (violatorPlugin) Candidates(codePath string) []pairing.Candidate {
 	base := sourceBase(codePath)
 	strong := pairing.Candidate{Path: filepath.Join("spec", "x", "test_"+base+".ext"), Rank: 1}
 	weak := pairing.Candidate{Path: filepath.Join("spec", "x", "test_"+base+".ext"), Rank: 4}
@@ -71,7 +72,7 @@ func violatorRawForms(codePath string) []pairingtest.RawForm {
 // papered over.
 func TestSyntheticViolatorIsDetected(t *testing.T) {
 	codePath := "irrelevant/x.ext" // violatorPlugin ignores the directory entirely by construction
-	got := violatorPlugin{}.TestPaths(codePath)
+	got := violatorPlugin{}.Candidates(codePath)
 	principled := pairingtest.PrincipledMerge(violatorRawForms(codePath))
 
 	if pairingtest.SameMerge(got, principled) {
@@ -135,18 +136,19 @@ func dedupeWithoutSiblingExemption(cands []pairing.Candidate) []pairing.Candidat
 // "python: requests tests/test_utils.py — pre-existing tests/utils.py
 // misclassification wins the strict-rank tiebreak" subcase pins end-to-end.
 //
-// cands is the raw, pre-dedupe list Python's rules produce for tests/utils.py
-// (a fixture of that one collision, pinned in lang's
-// TestPythonCandidatesOrder family and the reposcan golden — not a restated
-// rule set): both siblings, the full mirror, and the stripped and flat forms,
-// which degenerate onto the sibling's own string because "tests" strips to "".
+// cands is the raw, pre-dedupe list Python's REAL TestRules produce for
+// tests/utils.py, derived exactly as lang's property test derives it
+// (pairingtest.RawForms): both siblings, the full mirror, and the stripped and
+// flat forms, which degenerate onto the sibling's own string because "tests"
+// strips to "".
 func TestSiblingExemptionIsLoadBearing(t *testing.T) {
-	cands := []pairing.Candidate{
-		{Path: "tests/test_utils.py", Rank: 0},       // sibling test_{base}.py
-		{Path: "tests/utils_test.py", Rank: 0},       // sibling {base}_test.py
-		{Path: "tests/tests/test_utils.py", Rank: 1}, // full mirror
-		{Path: "tests/test_utils.py", Rank: 2},       // stripped: "tests" -> ""
-		{Path: "tests/test_utils.py", Rank: 3},       // flat
+	py, ok := lang.ByName("python")
+	if !ok {
+		t.Fatal("python plugin not registered")
+	}
+	var cands []pairing.Candidate
+	for _, r := range pairingtest.RawForms(py.TestRules(), "tests/utils.py") {
+		cands = append(cands, pairing.Candidate{Path: r.Path, Rank: r.Rank})
 	}
 
 	withExemption := pairing.Dedupe(cands)

@@ -13,7 +13,11 @@
 // drift apart exactly the way the six TestPaths did.
 package pairingtest
 
-import "github.com/pdbethke/corralai/internal/pairing"
+import (
+	"path/filepath"
+
+	"github.com/pdbethke/corralai/internal/pairing"
+)
 
 // RawForm is one PRE-dedupe candidate, tagged with the two facts the
 // principled rule reads.
@@ -22,6 +26,34 @@ type RawForm struct {
 	Rank    int
 	Sibling bool // same-directory match: intrinsically real evidence, always.
 	Vacuous bool // non-sibling form whose directory component is empty: asserts nothing.
+}
+
+// RawForms is a rule set's pre-dedupe candidate list for codePath, derived
+// generically from the declared rules: each rule run alone (a one-element
+// Dedupe is the identity) yields that rule's raw form, in rule order. Nothing
+// here restates any language's convention — callers pass a plugin's real
+// TestRules.
+//
+// Tags: a Sibling-shaped form is real same-directory evidence. Any other form
+// is Vacuous exactly when the directory between its root and its file name
+// has degenerated to empty — when the candidate IS <Dir>/<name> — which is
+// the condition the per-language models this replaced spelled out by hand
+// (Python's mirror with dir == "", every stripped form with sub == "",
+// __tests__ with dir == "", the flat form always).
+func RawForms(rules []pairing.Rule, codePath string) []RawForm {
+	var out []RawForm
+	for _, r := range rules {
+		for _, c := range pairing.Candidates([]pairing.Rule{r}, codePath) {
+			sibling := r.Shape == pairing.Sibling
+			out = append(out, RawForm{
+				Path:    c.Path,
+				Rank:    c.Rank,
+				Sibling: sibling,
+				Vacuous: !sibling && c.Path == filepath.Join(r.Dir, filepath.Base(c.Path)),
+			})
+		}
+	}
+	return out
 }
 
 // PrincipledMerge is the principled rule, implemented independently of

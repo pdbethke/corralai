@@ -4,7 +4,6 @@ package lang
 
 import (
 	"path/filepath"
-	"sort"
 	"testing"
 
 	"github.com/pdbethke/corralai/internal/pairing"
@@ -26,33 +25,6 @@ import (
 // the rules exist to end. The synthetic violator proving the check can fail
 // stays beside Dedupe, in internal/pairing.
 
-// rawForms is a plugin's pre-dedupe candidate list, derived generically from
-// its declared rules: each rule run alone (a one-element Dedupe is the
-// identity) yields that rule's raw form, in rule order. Nothing here restates
-// any language's convention.
-//
-// Tags: a Sibling-shaped form is real same-directory evidence. Any other form
-// is Vacuous exactly when the directory between its root and its file name
-// has degenerated to empty — when the candidate IS <Dir>/<name> — which is
-// the condition each per-language model this replaced spelled out by hand
-// (Python's mirror with dir == "", every stripped form with sub == "",
-// __tests__ with dir == "", the flat form always).
-func rawForms(rules []pairing.Rule, codePath string) []pairingtest.RawForm {
-	var out []pairingtest.RawForm
-	for _, r := range rules {
-		for _, c := range pairing.Candidates([]pairing.Rule{r}, codePath) {
-			sibling := r.Shape == pairing.Sibling
-			out = append(out, pairingtest.RawForm{
-				Path:    c.Path,
-				Rank:    c.Rank,
-				Sibling: sibling,
-				Vacuous: !sibling && c.Path == filepath.Join(r.Dir, filepath.Base(c.Path)),
-			})
-		}
-	}
-	return out
-}
-
 // corpusDirs spans several path vocabularies at depths 0 through 3,
 // including sources that live UNDER a parallel test root (tests/x, test/a,
 // spec/a) — the one family that mixes a Rank-0 sibling match with weaker
@@ -73,24 +45,26 @@ var corpusDirs = []string{
 
 var corpusBases = []string{"foo", "utils", "x", "conf", "artifact_store"}
 
-// corpusExt is the source extension each shipped plugin detects, so the
-// corpus is built from paths the plugin would really be handed. A plugin
-// missing here fails the test rather than going unchecked.
-var corpusExt = map[string]string{
-	"go": ".go", "python": ".py", "ruby": ".rb", "php": ".php",
-	"javascript": ".js", "typescript": ".ts",
+// sourceExt is the source extension a plugin's corpus paths use, read from
+// its own declaration — the extension of its first Sibling rule's Name — so
+// no hand-kept language list can go stale. The caller's p.Detect check is
+// what proves the derived extension is one the plugin really claims.
+func sourceExt(rules []pairing.Rule) (string, bool) {
+	for _, r := range rules {
+		if r.Shape == pairing.Sibling {
+			return filepath.Ext(r.Name), true
+		}
+	}
+	return "", false
 }
 
 // TestDedupeMatchesPrincipledRuleForShippedPlugins is the equivalence check.
 // For every registered plugin, across the whole corpus, production's
 // pairing.Candidates (and so Dedupe) over the plugin's real TestRules must
-// agree with pairingtest.PrincipledMerge over the same rules' raw forms.
+// agree with pairingtest.PrincipledMerge over the same rules' raw forms
+// (pairingtest.RawForms).
 func TestDedupeMatchesPrincipledRuleForShippedPlugins(t *testing.T) {
-	names := make([]string, 0, len(registry))
-	for name := range registry {
-		names = append(names, name)
-	}
-	sort.Strings(names)
+	names := sortedPluginNames()
 	if len(names) == 0 {
 		t.Fatal("empty registry — property was not actually exercised")
 	}
@@ -98,11 +72,11 @@ func TestDedupeMatchesPrincipledRuleForShippedPlugins(t *testing.T) {
 	for _, name := range names {
 		p := registry[name]
 		t.Run(name, func(t *testing.T) {
-			ext, ok := corpusExt[name]
-			if !ok {
-				t.Fatalf("no corpus extension for plugin %q — add it to corpusExt so its rules are checked", name)
-			}
 			rules := p.TestRules()
+			ext, ok := sourceExt(rules)
+			if !ok {
+				t.Fatalf("plugin %q declares no Sibling rule, so its source extension cannot be derived and its rules go unchecked", name)
+			}
 			checked := 0
 			for _, dir := range corpusDirs {
 				for _, base := range corpusBases {
@@ -110,7 +84,7 @@ func TestDedupeMatchesPrincipledRuleForShippedPlugins(t *testing.T) {
 					if !p.Detect(codePath) {
 						t.Fatalf("%s does not detect corpus path %q", name, codePath)
 					}
-					want := pairingtest.PrincipledMerge(rawForms(rules, codePath))
+					want := pairingtest.PrincipledMerge(pairingtest.RawForms(rules, codePath))
 					got := pairing.Candidates(rules, codePath)
 					if !pairingtest.SameMerge(want, got) {
 						t.Errorf("%s: Candidates(%q) = %+v, principled rule wants %+v", name, codePath, got, want)

@@ -24,8 +24,8 @@ import (
 type RawForm struct {
 	Path    string
 	Rank    int
-	Sibling bool // same-directory match: intrinsically real evidence, always.
-	Vacuous bool // non-sibling form whose directory component is empty: asserts nothing.
+	Shape   pairing.Shape // a Sibling is a same-directory match: intrinsically real evidence, always.
+	Vacuous bool          // non-sibling form whose directory component is empty: asserts nothing.
 }
 
 // RawForms is a rule set's pre-dedupe candidate list for codePath, derived
@@ -44,12 +44,11 @@ func RawForms(rules []pairing.Rule, codePath string) []RawForm {
 	var out []RawForm
 	for _, r := range rules {
 		for _, c := range pairing.Candidates([]pairing.Rule{r}, codePath) {
-			sibling := r.Shape == pairing.Sibling
 			out = append(out, RawForm{
 				Path:    c.Path,
 				Rank:    c.Rank,
-				Sibling: sibling,
-				Vacuous: !sibling && c.Path == filepath.Join(r.Dir, filepath.Base(c.Path)),
+				Shape:   r.Shape,
+				Vacuous: r.Shape != pairing.Sibling && c.Path == filepath.Join(r.Dir, filepath.Base(c.Path)),
 			})
 		}
 	}
@@ -85,14 +84,15 @@ func PrincipledMerge(cands []RawForm) []pairing.Candidate {
 			firstIdx[c.Path] = len(order)
 			order = append(order, c.Path)
 		}
-		if c.Sibling {
+		sibling := c.Shape == pairing.Sibling
+		if sibling {
 			siblingAny[c.Path] = true
 		}
 		if !haveAny[c.Path] || c.Rank > maxRank[c.Path] {
 			maxRank[c.Path] = c.Rank
 		}
 		haveAny[c.Path] = true
-		if !c.Sibling && !c.Vacuous {
+		if !sibling && !c.Vacuous {
 			if !haveNonVacuous[c.Path] || c.Rank < minNonVacuousRank[c.Path] {
 				minNonVacuousRank[c.Path] = c.Rank
 				haveNonVacuous[c.Path] = true

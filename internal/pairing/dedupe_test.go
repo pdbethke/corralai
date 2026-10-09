@@ -10,7 +10,8 @@ import "testing"
 // candidate happened to survive dedup. Two colliding non-sibling forms must
 // be attributed the LEAST specific (highest) of their ranks; a sibling
 // (Rank 0) collision must NEVER be devalued by a coincidental collision with
-// a weaker form from the same source.
+// a weaker form from the same source. Sibling-ness is the candidate's Shape
+// (TestDedupeSiblingIsAShapeNotARank), so the sibling rows below say so.
 func TestDedupeAttributesLeastSpecificRank(t *testing.T) {
 	cases := []struct {
 		name string
@@ -50,20 +51,22 @@ func TestDedupeAttributesLeastSpecificRank(t *testing.T) {
 				// tests/utils.py): sibling (rank 0, genuinely same-directory
 				// evidence), and its own stripped/flat forms coincidentally
 				// produce the identical string.
-				{Path: "tests/test_utils.py", Rank: 0},
-				{Path: "tests/test_utils.py", Rank: 2},
-				{Path: "tests/test_utils.py", Rank: 3},
+				{Path: "tests/test_utils.py", Rank: 0, Shape: Sibling},
+				{Path: "tests/test_utils.py", Rank: 2, Shape: ParallelTree},
+				{Path: "tests/test_utils.py", Rank: 3, Shape: FlatRoot},
 			},
-			want: []Candidate{{Path: "tests/test_utils.py", Rank: 0}},
+			want: []Candidate{{Path: "tests/test_utils.py", Rank: 0, Shape: Sibling}},
 		},
 		{
 			name: "sibling wins regardless of listed order",
 			in: []Candidate{
-				{Path: "p", Rank: 3},
-				{Path: "p", Rank: 0},
-				{Path: "p", Rank: 2},
+				{Path: "p", Rank: 3, Shape: FlatRoot},
+				{Path: "p", Rank: 0, Shape: Sibling},
+				{Path: "p", Rank: 2, Shape: ParallelTree},
 			},
-			want: []Candidate{{Path: "p", Rank: 0}},
+			// Rank 0 because a Sibling is among them; Shape is the first
+			// occurrence's, as Dedupe documents.
+			want: []Candidate{{Path: "p", Rank: 0, Shape: FlatRoot}},
 		},
 		{
 			name: "position of the surviving entry is the FIRST occurrence, independent of rank",
@@ -92,5 +95,24 @@ func TestDedupeAttributesLeastSpecificRank(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestDedupeSiblingIsAShapeNotARank is the final-review I1 case, reproduced
+// exactly: a ParallelTree rule that forgot its Rank (so it is Rank 0) collides
+// with a Rank-3 FlatRoot on foo.py. Sibling strength is a claim about WHERE the
+// test sits (the source's own directory), which only a Sibling rule makes; a
+// zero Rank is just the integer's default. Before the fix Dedupe read "Rank 0"
+// as "sibling" and handed the forgetful rule's vacuous tests/test_foo.py the
+// strongest rank there is.
+func TestDedupeSiblingIsAShapeNotARank(t *testing.T) {
+	rules := []Rule{
+		{Shape: ParallelTree, Name: "test_{base}.py", Dir: "tests"}, // Rank forgotten
+		{Shape: FlatRoot, Name: "test_{base}.py", Dir: "tests", MaxDepth: 2, Rank: 3},
+	}
+	got := Candidates(rules, "foo.py")
+	want := []Candidate{{Path: "tests/test_foo.py", Rank: 3, Shape: ParallelTree}}
+	if len(got) != 1 || got[0] != want[0] {
+		t.Fatalf("Candidates(foo.py) = %+v, want %+v — a non-Sibling rule's zero Rank must not buy sibling strength", got, want)
 	}
 }

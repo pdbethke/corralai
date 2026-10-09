@@ -94,7 +94,7 @@ func TestSyntheticViolatorIsDetected(t *testing.T) {
 // --- The sibling exemption is load-bearing in both directions. ---
 //
 // dedupeWithoutSiblingExemption is a LOCAL, test-only reimplementation of
-// Dedupe with the `if minRank[p] == 0 { rank = 0 }` line deleted —
+// Dedupe with the `if sibling[p] { rank = 0 }` line deleted —
 // i.e. pure "attribute the max rank among every colliding candidate,
 // sibling or not." It exists only to demonstrate the exemption changes
 // behavior on a real collision shape; production code is untouched.
@@ -148,7 +148,7 @@ func TestSiblingExemptionIsLoadBearing(t *testing.T) {
 	}
 	var cands []pairing.Candidate
 	for _, r := range pairingtest.RawForms(py.TestRules(), "tests/utils.py") {
-		cands = append(cands, pairing.Candidate{Path: r.Path, Rank: r.Rank})
+		cands = append(cands, pairing.Candidate{Path: r.Path, Rank: r.Rank, Shape: r.Shape})
 	}
 
 	withExemption := pairing.Dedupe(cands)

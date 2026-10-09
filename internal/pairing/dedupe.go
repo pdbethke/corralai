@@ -4,10 +4,22 @@ package pairing
 
 // Dedupe drops duplicate paths, keeping each surviving entry at
 // the POSITION of its first (most specific) occurrence, and attributing it a
-// Rank computed as follows: if ANY candidate producing that path is Rank 0
-// (sibling — same directory as the source), the merged entry keeps Rank 0;
-// otherwise it takes the LEAST specific (maximum) Rank among every candidate
-// that produced that path.
+// Rank computed as follows: if ANY candidate producing that path is a
+// Sibling-shaped candidate (same directory as the source), the merged entry
+// gets Rank 0; otherwise it takes the LEAST specific (maximum) Rank among
+// every candidate that produced that path.
+//
+// What decides "sibling" is the candidate's Shape, not its Rank. Until the
+// Round B1 final review it was `minRank == 0`, which was the same thing only
+// because every shipped Sibling rule has Rank 0 and every other rule a
+// positive one. A rule that merely forgot its Rank is Rank 0 too, and the
+// reviewer showed what that bought: a rank-less ParallelTree rule colliding
+// with a Rank-3 FlatRoot on foo.py merged to Rank 0 — sibling strength for a
+// vacuous tests/test_foo.py (TestDedupeSiblingIsAShapeNotARank). Shape is what
+// the rule actually declares about WHERE the test sits; a zero is just the
+// integer's default. The two still cannot drift silently: lang's
+// TestEveryRuleRankAgreesWithItsShape holds every registered plugin to
+// "Sibling ⇔ Rank 0".
 //
 // Two things are going on, and they pull in different directions:
 //
@@ -35,8 +47,9 @@ package pairing
 // tests/test_utils.py string-collides with its own degenerate
 // leading-segment-stripped and flat forms, purely because "tests" strips to
 // "") must not have its genuine same-directory pairing devalued by that
-// coincidence. Hence the asymmetry: Rank 0 always wins the merge; only among
-// candidates that are ALL non-sibling does "least specific" apply.
+// coincidence. Hence the asymmetry: a Sibling always wins the merge, at Rank
+// 0; only among candidates that are ALL non-sibling does "least specific"
+// apply.
 //
 // INVARIANT a future plugin must not break (guarded by the property test
 // TestDedupeMatchesPrincipledRuleForShippedPlugins in
@@ -61,21 +74,20 @@ package pairing
 // loudly the day that becomes possible, rather than let it mispair silently.
 func Dedupe(cands []Candidate) []Candidate {
 	firstIdx := make(map[string]int, len(cands))
-	minRank := make(map[string]int, len(cands))
 	maxRank := make(map[string]int, len(cands))
+	sibling := make(map[string]bool, len(cands))
 	shape := make(map[string]Shape, len(cands))
 	var order []string
 	for _, c := range cands {
+		if c.Shape == Sibling {
+			sibling[c.Path] = true
+		}
 		if _, ok := firstIdx[c.Path]; !ok {
 			firstIdx[c.Path] = len(order)
 			order = append(order, c.Path)
 			shape[c.Path] = c.Shape
-			minRank[c.Path] = c.Rank
 			maxRank[c.Path] = c.Rank
 			continue
-		}
-		if c.Rank < minRank[c.Path] {
-			minRank[c.Path] = c.Rank
 		}
 		if c.Rank > maxRank[c.Path] {
 			maxRank[c.Path] = c.Rank
@@ -84,7 +96,7 @@ func Dedupe(cands []Candidate) []Candidate {
 	out := make([]Candidate, len(order))
 	for i, p := range order {
 		rank := maxRank[p]
-		if minRank[p] == 0 {
+		if sibling[p] {
 			rank = 0
 		}
 		// A merged entry keeps the Shape of its first occurrence.

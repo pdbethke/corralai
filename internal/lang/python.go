@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pdbethke/corralai/internal/pairing"
 	"github.com/pdbethke/corralai/internal/sandbox"
 )
 
@@ -218,7 +219,13 @@ func (pyPlugin) TreeEnv(tree string, cores int) []string {
 	return []string{"PYTHONPATH=" + strings.Join(paths, string(os.PathListSeparator))}
 }
 
-// TestPaths returns pytest-convention candidates for codePath, most specific
+// HarnessFiles names what pytest reads before any test: conftest.py at any
+// depth, and the ini files that carry [pytest] / [tool.pytest.ini_options].
+func (pyPlugin) HarnessFiles() []string {
+	return []string{"conftest.py", "pytest.ini", "tox.ini", "setup.cfg", "pyproject.toml"}
+}
+
+// TestRules declares pytest's conventions for a source file, most specific
 // (least likely to collide with a DIFFERENT source file's test) first:
 //
 //  1. sibling test_foo.py    — same directory, pytest's own preferred prefix.
@@ -247,37 +254,25 @@ func (pyPlugin) TreeEnv(tree string, cores int) []string {
 //     ambiguous-test demotion for the property that holds unconditionally.
 //
 // For a shallow codePath (dir has zero or one path segment), several of
-// these forms coincide as STRINGS; dedupeCandidates collapses them to one
+// these forms coincide as STRINGS; pairing.Dedupe collapses them to one
 // entry and attributes it the LEAST specific (highest) Rank among the
 // colliding forms — never the rank of whichever form happened to be listed
 // first — so that two different sources whose match carries equally little
 // real directory evidence always compare as EQUALLY ranked, regardless of
-// how each of them individually arrived at that string. See TestCandidate
-// and dedupeCandidates for why that distinction is load-bearing.
+// how each of them individually arrived at that string. See
+// pairing.Candidate and pairing.Dedupe for why that distinction is
+// load-bearing.
 //
 // Ranks: 0 = sibling (both forms), 1 = full mirror, 2 = leading-segment
 // stripped, 3 = flat.
-// HarnessFiles names what pytest reads before any test: conftest.py at any
-// depth, and the ini files that carry [pytest] / [tool.pytest.ini_options].
-func (pyPlugin) HarnessFiles() []string {
-	return []string{"conftest.py", "pytest.ini", "tox.ini", "setup.cfg", "pyproject.toml"}
-}
-
-func (pyPlugin) TestPaths(codePath string) []TestCandidate {
-	dir, base, _ := splitPath(codePath)
-	name := "test_" + base + ".py"
-	altName := base + "_test.py"
-
-	out := []TestCandidate{
-		{Path: joinDir(dir, name), Rank: 0},
-		{Path: joinDir(dir, altName), Rank: 0},
-		{Path: filepath.Join("tests", dir, name), Rank: 1},
-		{Path: filepath.Join("tests", stripFirstSegment(dir), name), Rank: 2},
+func (pyPlugin) TestRules() []pairing.Rule {
+	return []pairing.Rule{
+		{Shape: pairing.Sibling, Name: "test_{base}.py"},
+		{Shape: pairing.Sibling, Name: "{base}_test.py"},
+		{Shape: pairing.ParallelTree, Name: "test_{base}.py", Dir: "tests", KeepLeading: true, Rank: 1},
+		{Shape: pairing.ParallelTree, Name: "test_{base}.py", Dir: "tests", Rank: 2},
+		{Shape: pairing.FlatRoot, Name: "test_{base}.py", Dir: "tests", MaxDepth: 2, Rank: 3},
 	}
-	if dirDepth(dir) <= 2 {
-		out = append(out, TestCandidate{Path: filepath.Join("tests", name), Rank: 3})
-	}
-	return dedupeCandidates(out)
 }
 
 // pytestPreflightProbe derives, from the operator's own test command
@@ -492,7 +487,12 @@ func (pyPlugin) ImportPath(codePath string, exists func(path string) bool) (stri
 	if exists == nil {
 		return "", false
 	}
-	dir, base, ext := splitPath(codePath)
+	ext := filepath.Ext(codePath)
+	base := strings.TrimSuffix(filepath.Base(codePath), ext)
+	dir := filepath.Dir(codePath)
+	if dir == "." {
+		dir = "" // a top-level module: no package directories to walk
+	}
 	if ext != ".py" || !isPythonIdentifier(base) {
 		return "", false
 	}

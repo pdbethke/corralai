@@ -30,6 +30,7 @@ import (
 	"github.com/pdbethke/corralai/internal/certify"
 	"github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/modelcorr"
+	"github.com/pdbethke/corralai/internal/pairing"
 	"github.com/pdbethke/corralai/internal/prior"
 	"github.com/pdbethke/corralai/internal/reposcan"
 	"github.com/pdbethke/corralai/internal/sandbox"
@@ -3032,7 +3033,7 @@ func sourcesOrphanedByDeletedTests(repoDir string, changed []string, excl []repo
 		if !ok {
 			continue
 		}
-		for _, tc := range p.TestPaths(e.Path) {
+		for _, tc := range pairing.Candidates(p.TestRules(), e.Path) {
 			if deleted[tc.Path] {
 				out = append(out, e.Path)
 				break
@@ -3201,7 +3202,7 @@ const maxListedExclusions = 20
 // printSearchPairings discloses every candidate whose test pairing came from
 // the recursive fallback (reposcan.Candidate.ViaSearch) rather than from the
 // language plugin's own naming convention — a test that EXISTS but that no
-// TestPaths candidate predicted. Silent otherwise: the vast majority of a
+// pairing candidate predicted. Silent otherwise: the vast majority of a
 // scan's candidates pair by convention, and printing a line per file there
 // would just repeat what the "%d candidate(s)" count already says.
 // candidacySummaryLine is the design's own required line: how many

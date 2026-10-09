@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/pdbethke/corralai/internal/lang"
+	"github.com/pdbethke/corralai/internal/pairing"
 	"github.com/pdbethke/corralai/internal/sandbox"
 )
 
@@ -35,7 +36,7 @@ func (stubPlugin) Detect(string) bool                                  { return 
 func (stubPlugin) Scaffold() map[string]string                         { return nil }
 func (stubPlugin) TestCmd() []string                                   { return nil }
 func (stubPlugin) CompileCheck(string, string) [][]string              { return nil }
-func (stubPlugin) TestPaths(string) []lang.TestCandidate               { return nil }
+func (stubPlugin) TestRules() []pairing.Rule                           { return nil }
 func (stubPlugin) Preflight([]string) error                            { return nil }
 func (stubPlugin) PromptLang() string                                  { return "" }
 func (stubPlugin) TestWriterSystem() string                            { return "" }

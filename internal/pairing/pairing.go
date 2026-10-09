@@ -42,6 +42,25 @@ type Rule struct {
 }
 
 // Candidate is one place a test may live, ranked most specific first.
+//
+// Rank is its EVIDENTIARY rank: how much real directory context the
+// candidate's own construction encodes, NOT its position in the returned
+// slice. Rank is what a cross-source ambiguity check (reposcan's
+// demoteAmbiguousPairings) compares — a plain slice index would conflate "how
+// specific is this match" with "how many earlier candidates happened to
+// collapse onto the same string for THIS source", which are different things:
+// a zero-directory-evidence match (e.g. Python's flat tests/test_foo.py) can
+// arise from the mirror, stripped, OR flat form depending on how shallow the
+// source is, and MUST rank identically (as the least specific of whichever
+// forms produced it) no matter which one it was, or two equally-uninformative
+// matches from different-depth sources would never tie and the safer "demote
+// both" outcome would never fire. Dedupe enforces exactly that attribution
+// when candidates collapse.
+//
+// Rank is comparable ACROSS languages (all start at 0 = sibling, the most
+// specific a rule set can offer) but is otherwise language-defined; reposcan
+// only ever compares ranks between candidates for the SAME resolved test
+// path, never across different paths.
 type Candidate struct {
 	Path  string
 	Rank  int
@@ -85,6 +104,16 @@ func Candidates(rules []Rule, codePath string) []Candidate {
 // DefaultRoot, then every Dir a BesideDir/ParallelTree/FlatRoot rule names,
 // trimmed of slashes, deduplicated, in order. (The six languages' TestRoots
 // restated exactly these directories; deriving them removes the restatement.)
+//
+// They are the fallback for a repo whose test layout matches none of the
+// Candidates derived from the source path alone (e.g. pallets/itsdangerous:
+// `src/itsdangerous/signer.py` pairs with
+// `tests/test_itsdangerous/test_signer.py`, one directory level deeper than
+// any convention-derived mirror). The search over them (reposcan.FindTest)
+// scores MATCHES by shared path context with the source, not by which root
+// produced them, and never walks a directory the repository's own .gitignore
+// excludes — so a root named here is never itself a way to widen the search
+// into `node_modules` or `.venv`.
 func Roots(rules []Rule) []string {
 	out := []string{DefaultRoot}
 	seen := map[string]bool{DefaultRoot: true}
@@ -106,8 +135,9 @@ func Roots(rules []Rule) []string {
 
 // splitPath decomposes codePath into its directory (empty string for a
 // top-level file — never "."), its base name WITHOUT extension, and its
-// extension (including the leading dot). Shared by every non-Go plugin's
-// TestPaths, since the parallel-tree and sibling forms all start here.
+// extension (including the leading dot). Candidates starts every Shape here:
+// the sibling, beside-dir, parallel-tree and flat-root forms all derive from
+// this one decomposition.
 func splitPath(codePath string) (dir, base, ext string) {
 	ext = filepath.Ext(codePath)
 	b := filepath.Base(codePath)

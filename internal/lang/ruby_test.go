@@ -6,6 +6,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/pdbethke/corralai/internal/pairing"
 )
 
 func TestRubyPlugin(t *testing.T) {
@@ -16,11 +18,11 @@ func TestRubyPlugin(t *testing.T) {
 	if !p.Detect("app/pricing.rb") || p.Detect("app/pricing.py") {
 		t.Fatal("Detect must match .rb only")
 	}
-	if got := p.TestPaths("app/pricing.rb")[0]; got.Path != "app/pricing_test.rb" || got.Rank != 0 {
-		t.Fatalf("TestPaths()[0] = %+v, want {app/pricing_test.rb, 0}", got)
+	if got := pairing.Candidates(p.TestRules(), "app/pricing.rb")[0]; got.Path != "app/pricing_test.rb" || got.Rank != 0 {
+		t.Fatalf("Candidates()[0] = %+v, want {app/pricing_test.rb, 0}", got)
 	}
-	if got := p.TestPaths("pricing.rb")[0]; got.Path != "pricing_test.rb" || got.Rank != 0 {
-		t.Fatalf("TestPaths()[0] = %+v, want {pricing_test.rb, 0}", got)
+	if got := pairing.Candidates(p.TestRules(), "pricing.rb")[0]; got.Path != "pricing_test.rb" || got.Rank != 0 {
+		t.Fatalf("Candidates()[0] = %+v, want {pricing_test.rb, 0}", got)
 	}
 	// A two-command SEQUENCE, not a single `&&`-joined argv element: `ruby -c`
 	// only checks one file per invocation, and a bare `&&` argv element only
@@ -53,20 +55,20 @@ func TestRubyPlugin(t *testing.T) {
 	}
 }
 
-// TestRubyTestPathsOrder pins the ordered-candidate-list contract for the
+// TestRubyCandidatesOrder pins the ordered-candidate-list contract for the
 // lib/ vs test/ (or spec/) layout: sibling first, then the leading directory
 // (conventionally "lib") replaced by test/, then the RSpec equivalent.
-func TestRubyTestPathsOrder(t *testing.T) {
+func TestRubyCandidatesOrder(t *testing.T) {
 	p, _ := ByName("ruby")
 	cases := []struct {
 		name string
 		in   string
-		want []TestCandidate
+		want []pairing.Candidate
 	}{
 		{
 			name: "top-level file",
 			in:   "pricing.rb",
-			want: []TestCandidate{
+			want: []pairing.Candidate{
 				{Path: "pricing_test.rb", Rank: 0},
 				{Path: "test/pricing_test.rb", Rank: 1},
 				{Path: "spec/pricing_spec.rb", Rank: 1},
@@ -76,7 +78,7 @@ func TestRubyTestPathsOrder(t *testing.T) {
 		{
 			name: "single-segment lib dir",
 			in:   "lib/foo.rb",
-			want: []TestCandidate{
+			want: []pairing.Candidate{
 				{Path: "lib/foo_test.rb", Rank: 0},
 				{Path: "test/foo_test.rb", Rank: 1},
 				{Path: "spec/foo_spec.rb", Rank: 1},
@@ -89,7 +91,7 @@ func TestRubyTestPathsOrder(t *testing.T) {
 			// suffix forms above pair 0 of 24 files, the prefix form pairs 4.
 			name: "nested lib dir, minitest prefix form",
 			in:   "lib/minitest/server.rb",
-			want: []TestCandidate{
+			want: []pairing.Candidate{
 				{Path: "lib/minitest/server_test.rb", Rank: 0},
 				{Path: "test/minitest/server_test.rb", Rank: 1},
 				{Path: "spec/minitest/server_spec.rb", Rank: 1},
@@ -99,7 +101,7 @@ func TestRubyTestPathsOrder(t *testing.T) {
 		{
 			name: "lib/<pkg> layout",
 			in:   "lib/mypkg/foo.rb",
-			want: []TestCandidate{
+			want: []pairing.Candidate{
 				{Path: "lib/mypkg/foo_test.rb", Rank: 0},
 				{Path: "test/mypkg/foo_test.rb", Rank: 1},
 				{Path: "spec/mypkg/foo_spec.rb", Rank: 1},
@@ -109,13 +111,13 @@ func TestRubyTestPathsOrder(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := p.TestPaths(c.in)
+			got := pairing.Candidates(p.TestRules(), c.in)
 			if len(got) != len(c.want) {
-				t.Fatalf("TestPaths(%q) = %+v, want %+v", c.in, got, c.want)
+				t.Fatalf("Candidates(%q) = %+v, want %+v", c.in, got, c.want)
 			}
 			for i := range got {
-				if got[i] != c.want[i] {
-					t.Errorf("TestPaths(%q)[%d] = %+v, want %+v\nfull got=%+v", c.in, i, got[i], c.want[i], got)
+				if got[i].Path != c.want[i].Path || got[i].Rank != c.want[i].Rank {
+					t.Errorf("Candidates(%q)[%d] = %+v, want %+v\nfull got=%+v", c.in, i, got[i], c.want[i], got)
 				}
 			}
 		})

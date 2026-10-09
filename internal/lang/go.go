@@ -13,6 +13,8 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/pdbethke/corralai/internal/pairing"
 )
 
 func init() { Register(goPlugin{}) }
@@ -59,17 +61,12 @@ func (goPlugin) CompileCheck(codePath, _ string) [][]string {
 	return [][]string{{"go", "test", "-count=1", "-run", "^$", pkg}}
 }
 
-// TestPaths mirrors the prior advPoolTestPath: same base name, `_test.go`
+// TestRules mirrors the prior advPoolTestPath: same base name, `_test.go`
 // suffix, same directory. Go's convention IS the sibling file — there is no
-// parallel-tree or flat convention to add, so this is a single-element list.
-func (goPlugin) TestPaths(codePath string) []TestCandidate {
-	ext := filepath.Ext(codePath)
-	base := strings.TrimSuffix(codePath, ext)
-	dir := filepath.Dir(codePath)
-	if dir == "." {
-		return []TestCandidate{{Path: base + "_test.go", Rank: 0}}
-	}
-	return []TestCandidate{{Path: filepath.Join(dir, filepath.Base(base)+"_test.go"), Rank: 0}}
+// parallel-tree or flat convention to add, so this is a single rule, and its
+// search roots are just pairing.DefaultRoot.
+func (goPlugin) TestRules() []pairing.Rule {
+	return []pairing.Rule{{Shape: pairing.Sibling, Name: "{base}_test.go"}}
 }
 
 // Preflight checks the operator's own test command's binary (e.g. a

@@ -792,7 +792,7 @@ func prepareAuditJail(ctx context.Context, in localAuditInput, plug lang.Plugin,
 		tp = res.Path
 		if res.ViaSearch {
 			// The plugin's own naming convention never found this — every
-			// TestPaths candidate came up empty, and this is the ONE line
+			// pairing candidate came up empty, and this is the ONE line
 			// that discloses the pairing came from somewhere else instead of
 			// silently presenting it as though it were the expected sibling.
 			fmt.Fprintf(stdout, "  paired by search: %s\n", tp)

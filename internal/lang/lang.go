@@ -8,32 +8,11 @@
 // system prompts. Everything else in the gate is language-neutral.
 package lang
 
-import "strings"
+import (
+	"strings"
 
-// TestCandidate is one plausible test-file location for a source file,
-// carrying its evidentiary Rank: how much real directory context the
-// candidate's own construction encodes, NOT its position in the returned
-// slice. Rank is what a cross-source ambiguity check (reposcan's
-// demoteAmbiguousPairings) compares — a plain slice index would conflate "how
-// specific is this match" with "how many earlier candidates happened to
-// collapse onto the same string for THIS source", which are different
-// things: a zero-directory-evidence match (e.g. Python's flat
-// tests/test_foo.py) can arise from the mirror, stripped, OR flat form
-// depending on how shallow the source is, and MUST rank identically
-// (as the least specific of whichever forms produced it) no matter which one
-// it was, or two equally-uninformative matches from different-depth sources
-// would never tie and the safer "demote both" outcome would never fire. See
-// dedupeCandidates, which enforces exactly that attribution when candidates
-// collapse.
-//
-// Rank is comparable ACROSS plugins (all start at 0 = sibling, the most
-// specific a plugin can offer) but is otherwise plugin-defined; reposcan
-// only ever compares ranks between candidates for the SAME resolved
-// TestPath, never across different paths.
-type TestCandidate struct {
-	Path string
-	Rank int
-}
+	"github.com/pdbethke/corralai/internal/pairing"
+)
 
 // Plugin is everything the audit gate needs to grade one self-contained
 // source file + its test suite in a given language.
@@ -61,17 +40,18 @@ type Plugin interface {
 	// gate that silently reports "compiles" without invoking a single
 	// command is exactly the failure class this type exists to prevent.
 	CompileCheck(codePath, testPath string) [][]string
-	// TestPaths returns the plausible test-file locations for codePath,
-	// ordered most specific (least likely to accidentally match a DIFFERENT
-	// source file's test) first, each carrying its evidentiary Rank (see
-	// TestCandidate). A caller that wants "the" conventional test path —
-	// e.g. to name a freshly-authored test — uses TestPaths(codePath)[0].Path,
-	// which is always the same sibling convention the old single-valued
-	// TestPath used to return. A caller PAIRING against an existing repo
-	// (reposcan) walks the whole list and takes the first entry that exists
-	// on disk, using its Rank (not its position) to resolve cross-source
-	// collisions.
-	TestPaths(codePath string) []TestCandidate
+	// TestRules DECLARES this language's test-file conventions, most specific
+	// (least likely to accidentally match a DIFFERENT source file's test)
+	// first. Everything about pairing is derived from this one declaration by
+	// internal/pairing: pairing.Candidates(p.TestRules(), codePath) is the
+	// ordered, ranked candidate list (its [0].Path is the sibling convention
+	// a freshly-authored test is named after), and pairing.Roots(p.TestRules())
+	// is the set of top-level directories a recursive fallback search walks.
+	// A caller PAIRING against an existing repo (reposcan) walks the candidate
+	// list and takes the first entry that exists on disk, using its Rank (not
+	// its position) to resolve cross-source collisions. Rule order is
+	// load-bearing: it is both the candidate order and the root order.
+	TestRules() []pairing.Rule
 	// Preflight checks the toolchain the jail is about to grade with — fail
 	// CLOSED, never a guess. testCmd, when non-empty, is the OPERATOR's own
 	// `-- <cmd>` (or advpool run spec TestCmd) argv: it is an assertion of
@@ -209,33 +189,6 @@ type Plugin interface {
 //     so N trees each using every core is N-times oversubscribed.
 type TreeEnver interface {
 	TreeEnv(tree string, cores int) []string
-}
-
-// TestRooter is an OPTIONAL plugin extension naming the top-level
-// directories a RECURSIVE test search should look under when NONE of
-// TestPaths' own candidates exists on disk — the fallback for a repo whose
-// test layout does not match any convention TestPaths derives from the
-// source path alone (e.g. pallets/itsdangerous: `src/itsdangerous/signer.py`
-// pairs with `tests/test_itsdangerous/test_signer.py`, one directory level
-// deeper than any convention-derived mirror). A plugin with no
-// implementation gets the generic default (see reposcan's testRootsFor) —
-// "tests" alone — which is right for every language whose only real
-// parallel-tree convention already spells that name; only a language with
-// an ADDITIONAL well-known root (Ruby's `test`/`spec`, JS/TS's `__tests__`)
-// needs to implement this.
-//
-// Search stays BOUNDED and safe by construction: the caller (reposcan)
-// never walks a directory the repository's own .gitignore excludes — see
-// FindTest's doc comment — so naming a root here is never itself a way to
-// widen the search into `node_modules` or `.venv`.
-type TestRooter interface {
-	// TestRoots returns the top-level directories to search recursively,
-	// most-specific-need-not-apply — FindTest scores MATCHES by shared path
-	// context with codePath, not by which root produced them. Empty means
-	// "no roots of my own"; reposcan still applies its generic default in
-	// that case, so this is additive, never a way to opt OUT of the
-	// fallback.
-	TestRoots() []string
 }
 
 // HarnessConfigurer is the OPTIONAL interface a plugin implements to name

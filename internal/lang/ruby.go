@@ -4,6 +4,8 @@ package lang
 
 import (
 	"path/filepath"
+
+	"github.com/pdbethke/corralai/internal/pairing"
 )
 
 func init() { Register(rubyPlugin{}) }
@@ -71,7 +73,7 @@ func (rubyPlugin) CompileCheck(codePath, testPath string) [][]string {
 	}
 }
 
-// TestPaths covers Ruby's three common test-file conventions, framework-
+// TestRules covers Ruby's three common test-file conventions, framework-
 // neutral (content, not the name, selects minitest vs rspec at run time),
 // most specific first:
 //
@@ -90,32 +92,27 @@ func (rubyPlugin) CompileCheck(codePath, testPath string) [][]string {
 // form: Ruby's lib/-vs-test/ (or lib/-vs-spec/) split is a single well-known
 // convention, not a family of layouts, so there is no comparably plausible
 // second parallel-tree shape to hedge against.
-func (rubyPlugin) TestPaths(codePath string) []TestCandidate {
-	dir, base, _ := splitPath(codePath)
-	sub := stripFirstSegment(dir)
-
-	out := []TestCandidate{
-		{Path: joinDir(dir, base+"_test.rb"), Rank: 0},
-		{Path: filepath.Join("test", sub, base+"_test.rb"), Rank: 1},
-		{Path: filepath.Join("spec", sub, base+"_spec.rb"), Rank: 1},
+//
+// The parallel-tree rules also name Ruby's own conventional search roots
+// (beyond pairing.DefaultRoot "tests"): the classic lib/-vs-test/ split, and
+// its RSpec equivalent lib/-vs-spec/.
+func (rubyPlugin) TestRules() []pairing.Rule {
+	return []pairing.Rule{
+		{Shape: pairing.Sibling, Name: "{base}_test.rb"},
+		{Shape: pairing.ParallelTree, Name: "{base}_test.rb", Dir: "test", Rank: 1},
+		{Shape: pairing.ParallelTree, Name: "{base}_spec.rb", Dir: "spec", Rank: 1},
 		// The PREFIX form, minitest's own house style. Rank 2 — strictly less
 		// specific than the suffix forms above, because `test_foo.rb` is also
 		// what a file *named* `test_foo` would pair to under form (1), so a
 		// collision here should lose to a suffix match rather than race it.
-		{Path: filepath.Join("test", sub, "test_"+base+".rb"), Rank: 2},
+		{Shape: pairing.ParallelTree, Name: "test_{base}.rb", Dir: "test", Rank: 2},
 	}
-	return dedupeCandidates(out)
 }
 
-// TestRoots names Ruby's own additional conventional test roots (beyond
-// reposcan's generic "tests" default): the classic lib/-vs-test/ split, and
-// its RSpec equivalent lib/-vs-spec/.
 // HarnessFiles names what RSpec/minitest read before any test.
 func (rubyPlugin) HarnessFiles() []string {
 	return []string{"spec_helper.rb", "rails_helper.rb", ".rspec", "test_helper.rb", "Rakefile"}
 }
-
-func (rubyPlugin) TestRoots() []string { return []string{"test", "spec"} }
 
 // Preflight requires only `ruby` (minitest is bundled) — or, when the
 // operator named an explicit test command (e.g. `bundle exec rspec`, or an

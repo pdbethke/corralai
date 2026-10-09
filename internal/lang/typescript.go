@@ -5,6 +5,8 @@ package lang
 import (
 	"path/filepath"
 	"strings"
+
+	"github.com/pdbethke/corralai/internal/pairing"
 )
 
 func init() { Register(tsPlugin{}) }
@@ -124,31 +126,13 @@ func (tsPlugin) CompileCheck(codePath, testPath string) [][]string {
 	return [][]string{{"sh", "-c", script}}
 }
 
-// TestPaths mirrors jsPlugin.TestPaths with the `.ts` suffix — see there for
-// the ordering rationale (sibling .test/.spec, __tests__/, then a
+// TestRules is jsFamilyRules with the `.ts` suffix — see there for the
+// ordering rationale (sibling .test/.spec, __tests__/, then a
 // leading-segment-stripped parallel test/ or tests/ tree).
-func (tsPlugin) TestPaths(codePath string) []TestCandidate {
-	dir, base, _ := splitPath(codePath)
-	sub := stripFirstSegment(dir)
-	testName := base + ".test.ts"
-	specName := base + ".spec.ts"
+func (tsPlugin) TestRules() []pairing.Rule { return jsFamilyRules(".ts") }
 
-	out := []TestCandidate{
-		{Path: joinDir(dir, testName), Rank: 0},
-		{Path: joinDir(dir, specName), Rank: 0},
-		{Path: filepath.Join(dir, "__tests__", testName), Rank: 1},
-		{Path: filepath.Join("test", sub, testName), Rank: 2},
-		{Path: filepath.Join("tests", sub, testName), Rank: 2},
-	}
-	return dedupeCandidates(out)
-}
-
-// TestRoots names TS's additional conventional test roots — mirrors
-// jsPlugin.TestRoots, see there for rationale.
 // HarnessFiles mirrors jsPlugin's: the same runners, the same files.
 func (tsPlugin) HarnessFiles() []string { return jsPlugin{}.HarnessFiles() }
-
-func (tsPlugin) TestRoots() []string { return []string{"__tests__", "test", "tests"} }
 
 // Preflight requires BOTH the test runtime AND tsc (TS genuinely needs the
 // compiler; unlike JS this is a hard dependency, preflighted fail-closed).

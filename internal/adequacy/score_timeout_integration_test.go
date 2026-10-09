@@ -9,6 +9,7 @@ import (
 
 	"github.com/pdbethke/corralai/internal/adequacy"
 	"github.com/pdbethke/corralai/internal/lang"
+	"github.com/pdbethke/corralai/internal/pairing"
 	"github.com/pdbethke/corralai/internal/sandbox"
 )
 
@@ -59,7 +60,7 @@ func TestScoreJSNonTerminatingMutantIsKilledFast(t *testing.T) {
 	mutants := []adequacy.Mutant{
 		{ID: "m-infinite-loop", Replace: "function maybeLoop(n){ while (true) {} }\nmodule.exports = { maybeLoop };\n"},
 	}
-	tp := js.TestPaths(codePath)[0].Path
+	tp := pairing.Candidates(js.TestRules(), codePath)[0].Path
 	test := "const { test } = require('node:test');\nconst assert = require('node:assert');\nconst { maybeLoop } = require('./loopmod.js');\ntest('maybe loop', () => {\n  assert.strictEqual(maybeLoop(1), 1);\n});\n"
 
 	start := time.Now()

@@ -40,7 +40,9 @@ package pairing
 //
 // INVARIANT a future plugin must not break (guarded by the property test
 // TestDedupeMatchesPrincipledRuleForShippedPlugins in
-// dedupe_property_test.go): "attribute the max (least-specific) rank among
+// internal/lang/dedupe_property_test.go, which runs every registered
+// plugin's real TestRules against pairingtest.PrincipledMerge):
+// "attribute the max (least-specific) rank among
 // colliding non-sibling forms" is only correct because every shipped
 // plugin's non-sibling forms are, whenever they collide with something
 // weaker, VACUOUS at that collision — their directory component degenerated

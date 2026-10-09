@@ -90,7 +90,7 @@ func killRatePtr(v float64) *float64 {
 //     not-selected). These are decided by filename pairing or bookkeeping,
 //     never by running anything, so evidence is "paired" for the ones a
 //     pairing was actually ATTEMPTED for and "" for the ones rejected before
-//     TestPaths was ever called (see exclusionEvidence, which used to stamp
+//     its pairing candidates were derived (see exclusionEvidence, which used to stamp
 //     "paired" on all of them indiscriminately) — unless
 //     the coverage pre-flight (a SEPARATE, independent inventory over the
 //     same enumerated source set — see runPreflight) also measured this
@@ -517,7 +517,7 @@ func ungradableEvidence(reason string) string {
 // actually attempted for this file? This function used to answer "yes"
 // unconditionally, stamping "paired" on every exclusion — including a
 // .editorconfig rejected as no-language, which no plugin ever claimed and
-// TestPaths was never called for. That is a false evidence claim, in the one
+// pairing was never attempted for. That is a false evidence claim, in the one
 // column whose whole purpose is to keep proof and guesswork apart, and it was
 // written into every scan this ledger has ever recorded. It was invisible
 // until `corral scans` could SELECT it — a write-only store hides its own
@@ -530,7 +530,7 @@ func ungradableEvidence(reason string) string {
 //
 // The split follows internal/reposcan/candidate.go's own ordering, not
 // taste. Pairing was NOT attempted for:
-//   - no-language (:215) — no plugin matched, so TestPaths is never reached
+//   - no-language (:215) — no plugin matched, so pairing is never reached
 //   - is-test (:222) — the file IS a test, excluded before pairing
 //   - not-a-regular-file, skipped-dir, gitignored — walk-time, earlier
 //     still, before language detection even runs

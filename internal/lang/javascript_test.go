@@ -6,6 +6,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/pdbethke/corralai/internal/pairing"
 )
 
 func TestJavaScriptPlugin(t *testing.T) {
@@ -21,8 +23,8 @@ func TestJavaScriptPlugin(t *testing.T) {
 	if p.Detect("a.ts") {
 		t.Fatal("must not detect .ts")
 	}
-	if got := p.TestPaths("pkg/foo.js")[0]; got.Path != "pkg/foo.test.js" || got.Rank != 0 {
-		t.Fatalf("TestPaths()[0] = %+v", got)
+	if got := pairing.Candidates(p.TestRules(), "pkg/foo.js")[0]; got.Path != "pkg/foo.test.js" || got.Rank != 0 {
+		t.Fatalf("Candidates()[0] = %+v", got)
 	}
 	if got := p.TestCmd(); !reflect.DeepEqual(got, []string{"node", "--test"}) {
 		t.Fatalf("TestCmd = %v", got)
@@ -49,20 +51,20 @@ func TestJavaScriptPlugin(t *testing.T) {
 	}
 }
 
-// TestJavaScriptTestPathsOrder pins the ordered-candidate-list contract:
+// TestJavaScriptCandidatesOrder pins the ordered-candidate-list contract:
 // sibling .test/.spec, then a same-dir __tests__/ folder, then a
 // leading-segment-stripped parallel test/ or tests/ tree.
-func TestJavaScriptTestPathsOrder(t *testing.T) {
+func TestJavaScriptCandidatesOrder(t *testing.T) {
 	p, _ := ByName("javascript")
 	cases := []struct {
 		name string
 		in   string
-		want []TestCandidate
+		want []pairing.Candidate
 	}{
 		{
 			name: "top-level file",
 			in:   "foo.js",
-			want: []TestCandidate{
+			want: []pairing.Candidate{
 				{Path: "foo.test.js", Rank: 0}, {Path: "foo.spec.js", Rank: 0}, {Path: "__tests__/foo.test.js", Rank: 1},
 				{Path: "test/foo.test.js", Rank: 2}, {Path: "tests/foo.test.js", Rank: 2},
 			},
@@ -70,7 +72,7 @@ func TestJavaScriptTestPathsOrder(t *testing.T) {
 		{
 			name: "single-segment dir",
 			in:   "pkg/foo.js",
-			want: []TestCandidate{
+			want: []pairing.Candidate{
 				{Path: "pkg/foo.test.js", Rank: 0}, {Path: "pkg/foo.spec.js", Rank: 0}, {Path: "pkg/__tests__/foo.test.js", Rank: 1},
 				{Path: "test/foo.test.js", Rank: 2}, {Path: "tests/foo.test.js", Rank: 2},
 			},
@@ -78,7 +80,7 @@ func TestJavaScriptTestPathsOrder(t *testing.T) {
 		{
 			name: "src/ layout",
 			in:   "src/pkg/foo.js",
-			want: []TestCandidate{
+			want: []pairing.Candidate{
 				{Path: "src/pkg/foo.test.js", Rank: 0}, {Path: "src/pkg/foo.spec.js", Rank: 0}, {Path: "src/pkg/__tests__/foo.test.js", Rank: 1},
 				{Path: "test/pkg/foo.test.js", Rank: 2}, {Path: "tests/pkg/foo.test.js", Rank: 2},
 			},
@@ -86,13 +88,13 @@ func TestJavaScriptTestPathsOrder(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := p.TestPaths(c.in)
+			got := pairing.Candidates(p.TestRules(), c.in)
 			if len(got) != len(c.want) {
-				t.Fatalf("TestPaths(%q) = %+v, want %+v", c.in, got, c.want)
+				t.Fatalf("Candidates(%q) = %+v, want %+v", c.in, got, c.want)
 			}
 			for i := range got {
-				if got[i] != c.want[i] {
-					t.Errorf("TestPaths(%q)[%d] = %+v, want %+v\nfull got=%+v", c.in, i, got[i], c.want[i], got)
+				if got[i].Path != c.want[i].Path || got[i].Rank != c.want[i].Rank {
+					t.Errorf("Candidates(%q)[%d] = %+v, want %+v\nfull got=%+v", c.in, i, got[i], c.want[i], got)
 				}
 			}
 		})

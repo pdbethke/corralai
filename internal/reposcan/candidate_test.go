@@ -754,7 +754,7 @@ func TestEnumerateResolvesASymlinkedRoot(t *testing.T) {
 
 // PHPUNIT'S TEST FILES ARE TESTS. `tests/CalcTest.php` matched no rule — every
 // other convention uses a separator (_test., test_, .spec.) and the plugin's
-// TestPaths derives the test FOR a source, proposing CalcTestTest.php for it —
+// TestRules derive the test FOR a source, proposing CalcTestTest.php for it —
 // so every PHP test file was enumerated as an unpaired source.
 func TestPHPUnitTestFilesAreRecognised(t *testing.T) {
 	php, ok := lang.ByName("php")

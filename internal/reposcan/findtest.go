@@ -13,49 +13,25 @@ import (
 	"strings"
 
 	"github.com/pdbethke/corralai/internal/lang"
+	"github.com/pdbethke/corralai/internal/pairing"
 )
 
 // SearchRank is the Rank a via-search pairing carries into
 // demoteAmbiguousPairings: strictly less specific (a higher number) than any
-// rank a shipped plugin's own TestPaths ever hands out (today's max is 3,
+// rank a shipped plugin's own TestRules ever hand out (today's max is 3,
 // Python's flat form) — a fuzzy recursive match is weaker evidence than ANY
 // convention-list hit, by construction, so it must never out-rank one in a
 // cross-source collision.
 const SearchRank = 100
 
-// searchTestRoot is reposcan's own default fallback for a plugin that
-// implements no lang.TestRooter of its own — see that interface's doc
-// comment. Merged additively with whatever the plugin names, never a
-// replacement for it.
-const searchTestRoot = "tests"
-
-// testRootsFor returns the top-level directories FindTest searches
-// recursively for p: the generic "tests" default, plus whatever p's own
-// lang.TestRooter (if implemented) adds — deduplicated, order-stable.
-func testRootsFor(p lang.Plugin) []string {
-	roots := []string{searchTestRoot}
-	seen := map[string]bool{searchTestRoot: true}
-	if r, ok := p.(lang.TestRooter); ok {
-		for _, extra := range r.TestRoots() {
-			extra = strings.Trim(filepath.ToSlash(extra), "/")
-			if extra == "" || seen[extra] {
-				continue
-			}
-			seen[extra] = true
-			roots = append(roots, extra)
-		}
-	}
-	return roots
-}
-
-// searchBasenames collects the distinct basenames p's own TestPaths
+// searchBasenames collects the distinct basenames p's own pairing
 // candidates use — "test the conventional NAME, search a WIDER set of
 // directories for it" rather than inventing a second, independently
-// maintained naming rule that could drift from TestPaths'. For itsdangerous
-// this is exactly {"test_signer.py", "signer_test.py"}: the same two names
-// pyPlugin.TestPaths already tries as siblings, just no longer confined to
-// the directories TestPaths itself derives.
-func searchBasenames(cands []lang.TestCandidate) map[string]bool {
+// maintained naming rule that could drift from the declared rules. For
+// itsdangerous this is exactly {"test_signer.py", "signer_test.py"}: the same
+// two names pyPlugin's sibling rules already produce, just no longer confined
+// to the directories the rules themselves derive.
+func searchBasenames(cands []pairing.Candidate) map[string]bool {
 	out := map[string]bool{}
 	for _, c := range cands {
 		if c.Path == "" {
@@ -160,7 +136,7 @@ func normalizeSegs(segs []string) []string {
 // matches with a directory that shares nothing real with the source's own,
 // and the pre-existing depth-bounded convention list already refuses
 // exactly this shape of match for the identical reason (see pyPlugin.
-// TestPaths' flat-form doc comment). Among files that DO clear the bar, the
+// TestRules' flat-form doc comment). Among files that DO clear the bar, the
 // one with the highest score wins; ties break on the shallower path, then
 // lexicographically, so the result is deterministic.
 func bestSearchMatch(codePath string, roots []string, basenames map[string]bool, universe []string) (string, bool) {
@@ -200,10 +176,10 @@ type SearchResult struct {
 	// "" when nothing was found.
 	Path string
 	// ViaSearch is true when Path came from the recursive fallback rather
-	// than p's own ordered TestPaths candidates — the fact the "paired by
+	// than p's own ordered pairing candidates — the fact the "paired by
 	// search" disclosure is built on.
 	ViaSearch bool
-	// Tried is every TestPaths candidate FindTest checked for existence, in
+	// Tried is every pairing candidate FindTest checked for existence, in
 	// order — named in a not-found error so the operator sees exactly what
 	// was already ruled out, not just that something failed.
 	Tried []string
@@ -334,15 +310,16 @@ func pathUnderSkippedDir(rel string) bool {
 // FindTest resolves the test file for codePath under root, in two strictly
 // ordered stages:
 //
-//  1. p's own TestPaths(codePath) candidates, IN ORDER — the first one that
-//     exists on disk under root wins. This is unchanged from every caller's
-//     prior behavior (they used to take TestPaths[0] unconditionally, or
+//  1. p's own pairing.Candidates(p.TestRules(), codePath), IN ORDER — the
+//     first one that exists on disk under root wins. This is unchanged from
+//     every caller's prior behavior (they used to take the rank-0 candidate
+//     unconditionally, or
 //     Enumerate's own present-map probe); FindTest just does the same probe
 //     as a named, reusable step. A conventionally-mirrored file is paired
 //     here and NEVER reaches stage 2.
 //  2. Only when NONE of those candidates exists: a recursive search of p's
-//     conventional test roots (testRootsFor) for one of the SAME basenames
-//     TestPaths already tries (searchBasenames), picking the most specific
+//     conventional test roots (pairing.Roots) for one of the SAME basenames
+//     the candidates already try (searchBasenames), picking the most specific
 //     match (bestSearchMatch) when more than one qualifies.
 //
 // The search universe for stage 2 is gitVisibleFiles(root): the repository's
@@ -354,7 +331,8 @@ func pathUnderSkippedDir(rel string) bool {
 // build a "here is everywhere I looked" error instead of leaving an operator
 // to guess a second and third time — see certify_local.go's use.
 func FindTest(p lang.Plugin, root, codePath string) (SearchResult, error) {
-	cands := p.TestPaths(codePath)
+	rules := p.TestRules()
+	cands := pairing.Candidates(rules, codePath)
 
 	var res SearchResult
 	for _, c := range cands {
@@ -379,7 +357,7 @@ func FindTest(p lang.Plugin, root, codePath string) (SearchResult, error) {
 		}
 	}
 
-	res.Roots = testRootsFor(p)
+	res.Roots = pairing.Roots(rules)
 	basenames := searchBasenames(cands)
 	if len(basenames) == 0 {
 		return res, nil
@@ -411,14 +389,15 @@ func FindTest(p lang.Plugin, root, codePath string) (SearchResult, error) {
 // never compete with a real convention rank), and whether the recursive
 // fallback is what found it. tp == "" means neither stage found anything.
 func findInUniverse(p lang.Plugin, codePath string, present map[string]bool, presentList []string) (tp string, rank int, viaSearch bool) {
-	cands := p.TestPaths(codePath)
+	rules := p.TestRules()
+	cands := pairing.Candidates(rules, codePath)
 	for _, c := range cands {
 		cp := filepath.ToSlash(c.Path)
 		if cp != "" && present[cp] {
 			return cp, c.Rank, false
 		}
 	}
-	roots := testRootsFor(p)
+	roots := pairing.Roots(rules)
 	basenames := searchBasenames(cands)
 	if len(basenames) == 0 {
 		return "", 0, false

@@ -17,6 +17,7 @@ import (
 	"github.com/pdbethke/corralai/internal/buildstore"
 	"github.com/pdbethke/corralai/internal/certify"
 	golang "github.com/pdbethke/corralai/internal/lang"
+	"github.com/pdbethke/corralai/internal/pairing"
 	"github.com/pdbethke/corralai/internal/sandbox"
 )
 
@@ -358,12 +359,13 @@ func (emptySeqPlugin) CompileCheck(_, _ string) [][]string {
 	return nil // the exact shape this test guards against
 }
 
-// TestPaths must yield at least one candidate: advPoolTestPath indexes
-// TestPaths(codePath)[0] unconditionally (mirroring every real plugin's own
-// contract), so an empty slice here would panic before CompileTest ever
-// gets to the empty-CompileCheck-sequence check this test exists to prove.
-func (emptySeqPlugin) TestPaths(p string) []golang.TestCandidate {
-	return []golang.TestCandidate{{Path: p + ".test", Rank: 0}}
+// TestRules must yield at least one candidate: advPoolTestPath indexes
+// pairing.Candidates(p.TestRules(), codePath)[0] unconditionally (mirroring
+// every real plugin's own contract), so a rule set yielding nothing here
+// would panic before CompileTest ever gets to the empty-CompileCheck-sequence
+// check this test exists to prove. A Sibling rule always yields one.
+func (emptySeqPlugin) TestRules() []pairing.Rule {
+	return []pairing.Rule{{Shape: pairing.Sibling, Name: "{base}.test"}}
 }
 func (emptySeqPlugin) Preflight([]string) error                            { return nil }
 func (emptySeqPlugin) PromptLang() string                                  { return "" }

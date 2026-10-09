@@ -9,6 +9,7 @@ import (
 
 	"github.com/pdbethke/corralai/internal/adequacy"
 	"github.com/pdbethke/corralai/internal/lang"
+	"github.com/pdbethke/corralai/internal/pairing"
 	"github.com/pdbethke/corralai/internal/sandbox"
 )
 
@@ -45,7 +46,7 @@ func TestScoreJSKillsAndSurvives(t *testing.T) {
 	mutants := []adequacy.Mutant{
 		{ID: "m1", Replace: "module.exports = { isEven: () => true };\n"},
 	}
-	tp := js.TestPaths(codePath)[0].Path // evenmod.test.js
+	tp := pairing.Candidates(js.TestRules(), codePath)[0].Path // evenmod.test.js
 
 	// Thorough suite: checks both the true and false branches, so it kills
 	// the always-true mutant.

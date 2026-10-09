@@ -22,6 +22,7 @@ import (
 	"github.com/pdbethke/corralai/internal/buildstore"
 	"github.com/pdbethke/corralai/internal/certify"
 	golang "github.com/pdbethke/corralai/internal/lang"
+	"github.com/pdbethke/corralai/internal/pairing"
 	"github.com/pdbethke/corralai/internal/testgen"
 	"github.com/pdbethke/corralai/internal/transparency"
 )
@@ -45,7 +46,7 @@ func pluginFor(codePath string) (golang.Plugin, error) {
 // unresolvable path still behaves exactly as before.
 func advPoolTestPath(codePath string) string {
 	if p, err := pluginFor(codePath); err == nil {
-		return p.TestPaths(codePath)[0].Path
+		return pairing.Candidates(p.TestRules(), codePath)[0].Path
 	}
 	ext := filepath.Ext(codePath)
 	base := strings.TrimSuffix(codePath, ext)
@@ -58,7 +59,7 @@ func advPoolTestPath(codePath string) string {
 
 // authoredTestMarker distinguishes the pool's authored test file from the
 // dev's own test living in the same directory. Deliberately part of the STEM
-// (not the extension or a prefix) so each plugin's own TestPaths convention
+// (not the extension or a prefix) so each plugin's own TestRules convention
 // still wraps it into a discovery-matching name — `_corral` survives into
 // tests/test_cli_corral.py, login_corral_test.go, pricing_corral_test.rb and
 // foo_corral.test.js alike.
@@ -146,7 +147,7 @@ func authoredTestPath(codePath, devTestPath string, base map[string]string) stri
 			// Hand the plugin a synthetic SOURCE path (code stem + marker,
 			// sited in the dev test's directory) and take its rank-0 test
 			// name for it.
-			cands := p.TestPaths(filepath.Join(dir, stem+marker+ext))
+			cands := pairing.Candidates(p.TestRules(), filepath.Join(dir, stem+marker+ext))
 			if len(cands) == 0 {
 				return fallback
 			}

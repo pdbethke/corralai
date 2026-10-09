@@ -6,6 +6,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+
+	"github.com/pdbethke/corralai/internal/pairing"
 )
 
 func init() { Register(jsPlugin{}) }
@@ -119,10 +121,12 @@ func jsUndefCheck(codePath, testPath string) []string {
 	return nil
 }
 
-// TestPaths covers the common Node/JS test-file conventions, most specific
-// first. All forms use a literal `.js` suffix regardless of the source
-// file's own extension (.js/.mjs/.cjs) — that mirrors the prior single-path
-// behavior, which always emitted `.test.js`.
+// jsFamilyRules is the ONE declaration of the common Node/JS test-file
+// conventions, shared by JavaScript and TypeScript (which differ only in the
+// literal suffix ext, ".js" or ".ts"), most specific first. Every form uses
+// that literal suffix regardless of the source file's own extension
+// (.js/.mjs/.cjs) — that mirrors the prior single-path behavior, which always
+// emitted `.test.js`.
 //
 //  1. sibling foo.test.js         — same directory as the source.
 //  2. sibling foo.spec.js         — same directory, alternate suffix.
@@ -131,31 +135,27 @@ func jsUndefCheck(codePath, testPath string) []string {
 //  4. test/<subpath>/foo.test.js  — parallel tree, leading directory
 //     replaced by `test` (mirrors the `src/` -> `test/` layout).
 //  5. tests/<subpath>/foo.test.js — the `tests` (plural) spelling of (4).
-func (jsPlugin) TestPaths(codePath string) []TestCandidate {
-	dir, base, _ := splitPath(codePath)
-	sub := stripFirstSegment(dir)
-	testName := base + ".test.js"
-	specName := base + ".spec.js"
-
-	out := []TestCandidate{
-		{Path: joinDir(dir, testName), Rank: 0},
-		{Path: joinDir(dir, specName), Rank: 0},
-		{Path: filepath.Join(dir, "__tests__", testName), Rank: 1},
-		{Path: filepath.Join("test", sub, testName), Rank: 2},
-		{Path: filepath.Join("tests", sub, testName), Rank: 2},
+//
+// The beside-dir and parallel-tree rules also name JS/TS's search roots
+// (beyond pairing.DefaultRoot "tests"): a same-directory __tests__ folder,
+// and the singular test/ spelling many Node projects use.
+func jsFamilyRules(ext string) []pairing.Rule {
+	return []pairing.Rule{
+		{Shape: pairing.Sibling, Name: "{base}.test" + ext},
+		{Shape: pairing.Sibling, Name: "{base}.spec" + ext},
+		{Shape: pairing.BesideDir, Name: "{base}.test" + ext, Dir: "__tests__", Rank: 1},
+		{Shape: pairing.ParallelTree, Name: "{base}.test" + ext, Dir: "test", Rank: 2},
+		{Shape: pairing.ParallelTree, Name: "{base}.test" + ext, Dir: "tests", Rank: 2},
 	}
-	return dedupeCandidates(out)
 }
 
-// TestRoots names JS/TS's additional conventional test roots (beyond
-// reposcan's generic "tests" default): a same-directory __tests__ folder,
-// and the singular test/ spelling many Node projects use.
+// TestRules is jsFamilyRules with the `.js` suffix.
+func (jsPlugin) TestRules() []pairing.Rule { return jsFamilyRules(".js") }
+
 // HarnessFiles names what jest/vitest/mocha read before any test.
 func (jsPlugin) HarnessFiles() []string {
 	return []string{"jest.config.", "jest.setup.", "vitest.config.", "vitest.setup.", ".mocharc.", "package.json"}
 }
-
-func (jsPlugin) TestRoots() []string { return []string{"__tests__", "test", "tests"} }
 
 // Preflight checks the operator's own test command's binary (e.g. a project
 // script or a node version manager's shim not on PATH under "node") when one

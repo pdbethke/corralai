@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/pdbethke/corralai/internal/lang"
+	"github.com/pdbethke/corralai/internal/pairing"
 )
 
 // TestPairingGolden is Round B1's contract: for every real path in the corpus
@@ -48,11 +49,13 @@ func TestPairingGolden(t *testing.T) {
 	}
 }
 
-// The three seams the golden reads through. Each is ONE line, and Task 3/4
+// The three seams the golden reads through. Each is ONE call, and Task 3/4
 // re-point exactly these lines at internal/pairing; the loop above never changes.
-func pairingCandidates(p lang.Plugin, path string) []lang.TestCandidate { return p.TestPaths(path) }
-func pairingRoots(p lang.Plugin) []string                               { return testRootsFor(p) }
-func pairingIsTest(p lang.Plugin, path string) bool                     { return isTestFile(p, path) }
+func pairingCandidates(p lang.Plugin, path string) []pairing.Candidate {
+	return pairing.Candidates(p.TestRules(), path)
+}
+func pairingRoots(p lang.Plugin) []string           { return pairing.Roots(p.TestRules()) }
+func pairingIsTest(p lang.Plugin, path string) bool { return isTestFile(p, path) }
 
 type corpusRow struct{ repo, path string }
 

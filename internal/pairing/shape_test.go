@@ -101,3 +101,20 @@ func TestUnknownShapeFailsLoudly(t *testing.T) {
 		})
 	}
 }
+
+// TestOnlySiblingIsSameDir: Dedupe's "a sibling always wins the merge" reads
+// the sameDir trait, and the trait must mean exactly one thing — a candidate
+// in the source's own directory. Two Shapes claiming it would hand a second
+// kind of candidate sibling strength, the vacuous-evidence bug Dedupe's essay
+// records.
+func TestOnlySiblingIsSameDir(t *testing.T) {
+	var got []Shape
+	for s, tr := range shapeTable {
+		if tr.sameDir {
+			got = append(got, s)
+		}
+	}
+	if len(got) != 1 || got[0] != Sibling {
+		t.Errorf("Shapes with sameDir = %v, want exactly [%s]", got, Sibling)
+	}
+}

@@ -21,27 +21,27 @@ func TestDedupeAttributesLeastSpecificRank(t *testing.T) {
 		{
 			name: "no collision: distinct paths pass through unchanged",
 			in: []Candidate{
-				{Path: "a", Rank: 0},
-				{Path: "b", Rank: 1},
+				{Path: "a", Rank: 0, Shape: FlatRoot},
+				{Path: "b", Rank: 1, Shape: FlatRoot},
 			},
 			want: []Candidate{
-				{Path: "a", Rank: 0},
-				{Path: "b", Rank: 1},
+				{Path: "a", Rank: 0, Shape: FlatRoot},
+				{Path: "b", Rank: 1, Shape: FlatRoot},
 			},
 		},
 		{
 			name: "mirror/stripped/flat collision (all non-sibling): attribute the WORST (highest) rank",
 			in: []Candidate{
-				{Path: "tests/x.py", Rank: 1}, // mirror, listed first
-				{Path: "tests/x.py", Rank: 2}, // stripped, degenerates onto the same string
-				{Path: "tests/x.py", Rank: 3}, // flat, degenerates onto the same string
+				{Path: "tests/x.py", Rank: 1, Shape: FlatRoot}, // mirror, listed first
+				{Path: "tests/x.py", Rank: 2, Shape: FlatRoot}, // stripped, degenerates onto the same string
+				{Path: "tests/x.py", Rank: 3, Shape: FlatRoot}, // flat, degenerates onto the same string
 			},
 			// Must NOT keep rank 1 (the earliest-listed form) — that was
 			// exactly the bug: a demo file's degenerate "stripped" match
 			// (rank 2) beating a genuine "flat" match (rank 3) from a
 			// different, deeper source, because 2 < 3 even though NEITHER
 			// carries real directory evidence.
-			want: []Candidate{{Path: "tests/x.py", Rank: 3}},
+			want: []Candidate{{Path: "tests/x.py", Rank: 3, Shape: FlatRoot}},
 		},
 		{
 			name: "sibling collides with a degenerate lower-specificity form: sibling (rank 0) wins, never demoted",
@@ -71,15 +71,15 @@ func TestDedupeAttributesLeastSpecificRank(t *testing.T) {
 		{
 			name: "position of the surviving entry is the FIRST occurrence, independent of rank",
 			in: []Candidate{
-				{Path: "a", Rank: 0},
-				{Path: "shared", Rank: 1},
-				{Path: "shared", Rank: 3}, // collides with the entry above; "shared" keeps its position 1
-				{Path: "b", Rank: 0},
+				{Path: "a", Rank: 0, Shape: FlatRoot},
+				{Path: "shared", Rank: 1, Shape: FlatRoot},
+				{Path: "shared", Rank: 3, Shape: FlatRoot}, // collides with the entry above; "shared" keeps its position 1
+				{Path: "b", Rank: 0, Shape: FlatRoot},
 			},
 			want: []Candidate{
-				{Path: "a", Rank: 0},
-				{Path: "shared", Rank: 3},
-				{Path: "b", Rank: 0},
+				{Path: "a", Rank: 0, Shape: FlatRoot},
+				{Path: "shared", Rank: 3, Shape: FlatRoot},
+				{Path: "b", Rank: 0, Shape: FlatRoot},
 			},
 		},
 	}

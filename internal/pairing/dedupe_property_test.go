@@ -40,8 +40,8 @@ func sourceBase(codePath string) string {
 // Candidates is the violator's deduped candidate list for codePath.
 func (violatorPlugin) Candidates(codePath string) []pairing.Candidate {
 	base := sourceBase(codePath)
-	strong := pairing.Candidate{Path: filepath.Join("spec", "x", "test_"+base+".ext"), Rank: 1}
-	weak := pairing.Candidate{Path: filepath.Join("spec", "x", "test_"+base+".ext"), Rank: 4}
+	strong := pairing.Candidate{Path: filepath.Join("spec", "x", "test_"+base+".ext"), Rank: 1, Shape: pairing.FlatRoot}
+	weak := pairing.Candidate{Path: filepath.Join("spec", "x", "test_"+base+".ext"), Rank: 4, Shape: pairing.FlatRoot}
 	return pairing.Dedupe([]pairing.Candidate{strong, weak})
 }
 
@@ -115,7 +115,7 @@ func dedupeWithoutSiblingExemption(cands []pairing.Candidate) []pairing.Candidat
 	}
 	out := make([]pairing.Candidate, len(order))
 	for i, p := range order {
-		out[i] = pairing.Candidate{Path: p, Rank: maxRank[p]}
+		out[i] = pairing.Candidate{Path: p, Rank: maxRank[p], Shape: pairing.FlatRoot}
 	}
 	return out
 }

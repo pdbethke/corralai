@@ -106,14 +106,14 @@ func TestBuildScanMutantRows(t *testing.T) {
 // returned "".
 //
 // The split follows internal/reposcan/candidate.go's own ordering, not taste:
-// no-language (:215) and is-test (:222) are decided BEFORE TestPaths is called
+// no-language (:215) and is-test (:222) are decided BEFORE pairing is attempted
 // (:232), while no-paired-test (:241) and ambiguous-test are decided from its
 // result. not-a-regular-file and skipped-dir are walk-time, earlier still.
 func TestExclusionEvidence_OnlyClaimsPairingWhenPairingWasAttempted(t *testing.T) {
 	for _, c := range []struct {
 		reason, preflight, want, why string
 	}{
-		{reposcan.ReasonNoLanguage, "", "", "no plugin matched, so TestPaths was never called"},
+		{reposcan.ReasonNoLanguage, "", "", "no plugin matched, so pairing was never attempted"},
 		{reposcan.ReasonIsTest, "", "", "the file IS a test — excluded before pairing"},
 		{reposcan.ReasonNotRegularFile, "", "", "rejected at walk time, before language detection"},
 		{reposcan.ReasonSkippedDir, "", "", "rejected at walk time, before language detection"},

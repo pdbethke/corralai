@@ -16,7 +16,7 @@ import (
 // level deeper than any convention-derived mirror
 // (tests/test_itsdangerous/test_signer.py — the directory itself carries a
 // test_ prefix). Before the recursive fallback existed, corral's own
-// TestPaths candidates all missed and the file was excluded as
+// convention candidates all missed and the file was excluded as
 // no-paired-test — the #1 stumble both `--repo` and `--local` hit on the
 // real pallets/itsdangerous repo.
 func TestEnumeratePairsItsdangerousShape(t *testing.T) {
@@ -77,13 +77,13 @@ func TestFindTestItsdangerousShape(t *testing.T) {
 // TestFindTestPrefersSiblingOverNested pins the binding constraint that
 // nothing measured changes for an already-pairable file: when BOTH a sibling
 // (convention list) and a plausible nested/search match exist, the sibling
-// — found by the existing, unmodified TestPaths priority — wins, and the
+// — found by the existing, unmodified convention priority — wins, and the
 // recursive fallback never even runs.
 func TestFindTestPrefersSiblingOverNested(t *testing.T) {
 	root := writeTree(t, map[string]string{
 		"pkg/thing.py":             "x = 1\n",
 		"pkg/test_thing.py":        "def test_sibling(): pass\n", // rank 0: sibling
-		"tests/pkg/test_thing.py":  "def test_mirror(): pass\n",  // would ALSO satisfy TestPaths' own rank-1 mirror form
+		"tests/pkg/test_thing.py":  "def test_mirror(): pass\n",  // would ALSO satisfy the rules' own rank-1 mirror form
 		"tests/deep/test_thing.py": "def test_deep(): pass\n",    // would only ever be found by the recursive fallback
 	})
 	p, ok := lang.ByName("python")

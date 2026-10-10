@@ -61,7 +61,7 @@ func TestPrepareAuditJailErrorListsWhereItLooked(t *testing.T) {
 
 // TestPrepareAuditJailFindsTestByRecursiveSearch is the itsdangerous-shaped
 // fixture end to end through `--local`'s own --test-default resolution: the
-// real test sits one directory level deeper than any convention TestPaths
+// real test sits one directory level deeper than any convention TestRules
 // derives (tests/test_itsdangerous/test_signer.py, not
 // tests/itsdangerous/test_signer.py), and FindTest's recursive fallback must
 // still find it and disclose the pairing on stdout.

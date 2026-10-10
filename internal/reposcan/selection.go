@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/pdbethke/corralai/internal/lang"
+	"github.com/pdbethke/corralai/internal/pairing"
 	"github.com/pdbethke/corralai/internal/sandbox"
 )
 
@@ -127,14 +128,14 @@ func pathologicalSelectionDocumentNote(p lang.Plugin) string {
 
 // hasMeasuredSourceFile reports whether measured — one instrumented run's
 // full per-file readout (lang.TestSelector.Index) — contains at least one
-// file that is not itself a test, by the SAME markers isTestFile uses for
+// file that is not itself a test, by the SAME markers pairing.IsTest uses for
 // candidacy. Zero means the document is unusable (see
 // pathologicalSelectionDocumentNote): a document that measured nothing but
 // its own test files cannot answer "does a test cover this SOURCE file" for
 // any file that matters.
 func hasMeasuredSourceFile(p lang.Plugin, measured map[string]lang.FileCoverage) bool {
 	for path := range measured {
-		if !isTestFile(p, path) {
+		if !pairing.IsTest(p.TestRules(), path) {
 			return true
 		}
 	}
@@ -165,7 +166,7 @@ func sourceRootsFor(p lang.Plugin, sourcePaths []string) []string {
 		if !ok || detected.Name() != p.Name() {
 			continue
 		}
-		if isTestFile(p, path) {
+		if pairing.IsTest(p.TestRules(), path) {
 			continue
 		}
 		root := "."

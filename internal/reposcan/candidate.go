@@ -16,6 +16,7 @@ import (
 	"strings"
 
 	"github.com/pdbethke/corralai/internal/lang"
+	"github.com/pdbethke/corralai/internal/pairing"
 )
 
 // Candidate is one source file that can be audited, paired with the test
@@ -26,7 +27,7 @@ type Candidate struct {
 	Lang     string
 	// ViaSearch is true when TestPath was found by the recursive fallback
 	// (findInUniverse's second stage) rather than by the plugin's own
-	// ordered TestPaths candidates — a test that EXISTS but that no
+	// ordered pairing candidates — a test that EXISTS but that no
 	// filename convention predicted. Carried through unchanged whenever a
 	// Candidate is copied (demoteAmbiguousPairings, --diff/--top
 	// selection), so a later reader (the JSON inventory, the human report)
@@ -67,8 +68,9 @@ const (
 	ReasonIsTest       = "is-test"
 	ReasonNoPairedTest = "no-paired-test"
 	// ReasonTestSupport marks a source file that lives under one of its
-	// language's own test roots (lang.TestRooter plus the generic "tests"
-	// default — the same set FindTest searches) without being a recognized
+	// language's own test roots (pairing.Roots of its TestRules, which
+	// always includes the generic "tests" default — the same set FindTest
+	// searches) without being a recognized
 	// test itself: pytest's conftest.py, spec/support/*.rb, a tests/
 	// helper module, an in-tree test server. It is the TESTS' side of the
 	// audit, graded as part of the surface (see TestSurfacePaths), and
@@ -80,7 +82,7 @@ const (
 	ReasonTestSupport = "test-support — lives in the test tree, never a subject"
 	// ReasonAmbiguousTest marks a source file whose resolved test path is
 	// ALSO claimed by at least one other source file at the same or better
-	// specificity rank. Ordered TestPaths candidates broke the injectivity
+	// specificity rank. Ordered pairing candidates broke the injectivity
 	// the old single-path design had for free (one source, one test, no two
 	// sources could ever name the same test) — this reason is the repair:
 	// a wrong pairing plants mutants in one file and grades them against a
@@ -420,11 +422,11 @@ func EnumerateWithTests(root string, tests *TestMap) ([]Candidate, []Exclusion, 
 
 	// rank tracks, per candidate (parallel to cands, before the ambiguity
 	// pass below), the EVIDENTIARY specificity of the match — each plugin's
-	// own TestCandidate.Rank, NOT the position at which it was found in the
-	// (deduped) TestPaths list. Position and rank can diverge: for a shallow
-	// source several differently-specific forms can collapse onto the same
-	// string, and dedupeCandidates attributes that surviving entry the LEAST
-	// specific of the colliding forms' ranks — see lang.TestCandidate for why
+	// own pairing.Candidate.Rank, NOT the position at which it was found in
+	// the (deduped) candidate list. Position and rank can diverge: for a
+	// shallow source several differently-specific forms can collapse onto the
+	// same string, and pairing.Dedupe attributes that surviving entry the
+	// LEAST specific of the colliding forms' ranks — see pairing.Candidate for why
 	// using position instead let two equally-uninformative matches from
 	// different-depth sources dodge the ambiguity check entirely. rank only
 	// exists to resolve cross-source collisions below and is discarded once
@@ -457,11 +459,11 @@ func EnumerateWithTests(root string, tests *TestMap) ([]Candidate, []Exclusion, 
 		// A file that IS the sibling test of some source file is not itself
 		// a subject. Detected structurally: its own conventional test path
 		// differs from itself only for non-test files.
-		if isTestFile(p, rel) {
+		if pairing.IsTest(p.TestRules(), rel) {
 			excl = append(excl, Exclusion{Path: rel, Reason: ReasonIsTest})
 			continue
 		}
-		if underRoots(rel, testRootsFor(p)) {
+		if underRoots(rel, pairing.Roots(p.TestRules())) {
 			excl = append(excl, Exclusion{Path: rel, Reason: ReasonTestSupport})
 			continue
 		}
@@ -476,7 +478,7 @@ func EnumerateWithTests(root string, tests *TestMap) ([]Candidate, []Exclusion, 
 		}
 		// Walk the plugin's ordered candidates and pair with the first one
 		// that actually exists in this repo. The list is ordered most
-		// specific first (see each plugin's TestPaths), so a sibling or
+		// specific first (see each plugin's TestRules), so a sibling or
 		// full-directory-mirror test wins over a same-named test that could
 		// plausibly belong to a different source file.
 		tp := ""
@@ -497,10 +499,10 @@ func EnumerateWithTests(root string, tests *TestMap) ([]Candidate, []Exclusion, 
 			tp, tpRank, explicit = mapped, 0, true
 		} else {
 			// The plugin's own ordered candidates first — a test that EXISTS
-			// under the exact convention TestPaths predicts keeps absolute
-			// priority, unchanged from before findInUniverse existed. Only
-			// when NONE of them exists does the recursive fallback run (see
-			// findInUniverse and lang.TestRooter): a test that exists but
+			// under the exact convention the plugin's rules predict keeps
+			// absolute priority, unchanged from before findInUniverse existed.
+			// Only when NONE of them exists does the recursive fallback run
+			// (see findInUniverse and pairing.Roots): a test that exists but
 			// that no filename convention predicted still beats no pairing
 			// at all.
 			tp, tpRank, viaSearch = findInUniverse(p, rel, present, presentList)
@@ -664,7 +666,7 @@ func isLibraryCode(path string, hasPath func(string) bool) bool {
 
 // demoteAmbiguousPairings enforces, as a global property (not a per-plugin
 // heuristic), that one test file grades exactly one source file. The
-// per-plugin TestPaths ordering minimizes collisions but cannot rule them
+// per-plugin rule ordering minimizes collisions but cannot rule them
 // out — two sources can each legitimately resolve to the SAME test path
 // (observed on real repos: flask's tests/test_views.py matched THREE
 // distinct source files; tests/test_blueprints.py matched two). Signing a
@@ -688,7 +690,7 @@ func isLibraryCode(path string, hasPath func(string) bool) bool {
 //     happens to land on the right file some fraction of the time is not.
 //
 // rank[i] is the evidentiary specificity (lower = more specific) of the
-// plugin's own lang.TestCandidate that resolved cands[i].TestPath — NOT its
+// plugin's own pairing.Candidate that resolved cands[i].TestPath — NOT its
 // position in Enumerate's search loop, which would conflate "how specific is
 // this match" with "how many earlier, more-specific-looking candidates
 // happened to collapse onto the same string for this particular source". It
@@ -774,69 +776,4 @@ func demoteAmbiguousPairings(cands []Candidate, rank []int, excl []Exclusion, ex
 		kept = append(kept, c)
 	}
 	return kept, excl
-}
-
-// isTestFile reports whether rel is itself a test file, detected by the
-// naming markers the five language plugins use. The markers are the real
-// check and do NOT depend on the shape of TestPaths at all — a parallel-tree
-// test like tests/agents/test_artifact_store.py is caught by the "test_"
-// prefix marker exactly like a sibling test_artifact_store.py would be, so
-// widening TestPaths from one path to an ordered list changes nothing here.
-//
-// The fixed-point check below (does rel appear in ITS OWN TestPaths list) is
-// a cheap belt-and-braces for a plugin that is someday idempotent on an
-// already-test path — no current plugin is (`foo_test.go`'s own conventions
-// produce `foo_test_test.go`, `test_test_foo.py`, etc, never `foo_test.go`
-// itself), so this never fires today either.
-func isTestFile(p lang.Plugin, rel string) bool {
-	for _, tp := range p.TestPaths(rel) {
-		if filepath.ToSlash(tp.Path) == rel {
-			return true
-		}
-	}
-
-	// Check against the basename only to avoid directory-component matches.
-	base := filepath.Base(rel)
-
-	// _test. suffix (Go: foo_test.go, Ruby minitest: foo_test.rb)
-	if strings.Contains(base, "_test.") {
-		return true
-	}
-
-	// test_ prefix (Python: test_foo.py, Ruby: test_foo.rb)
-	if strings.HasPrefix(base, "test_") {
-		return true
-	}
-
-	// _spec. suffix (Ruby RSpec: foo_spec.rb, JavaScript: foo_spec.js, TypeScript: foo_spec.ts)
-	if strings.Contains(base, "_spec.") {
-		return true
-	}
-
-	// .test. suffix (JavaScript: foo.test.js, TypeScript: foo.test.ts)
-	if strings.Contains(base, ".test.") {
-		return true
-	}
-
-	// .spec. suffix (JavaScript: foo.spec.js, TypeScript: foo.spec.ts)
-	if strings.Contains(base, ".spec.") {
-		return true
-	}
-
-	// spec_ prefix (Ruby: spec_foo.rb)
-	if strings.HasPrefix(base, "spec_") {
-		return true
-	}
-
-	// PHPUnit's convention is a SUFFIX with no separator: tests/CalcTest.php.
-	// None of the rules above see it, and the plugin's TestPaths cannot
-	// either — it derives the test for a SOURCE, so for a test file it
-	// proposes tests/CalcTestTest.php. Every PHP test file was therefore
-	// counted as an unpaired source, inflated "no paired test", and sat in
-	// the pre-flight's source set.
-	if strings.HasSuffix(base, "Test.php") {
-		return true
-	}
-
-	return false
 }

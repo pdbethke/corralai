@@ -5,6 +5,8 @@ package lang
 import (
 	"strings"
 	"testing"
+
+	"github.com/pdbethke/corralai/internal/pairing"
 )
 
 func TestPythonPlugin(t *testing.T) {
@@ -15,11 +17,11 @@ func TestPythonPlugin(t *testing.T) {
 	if !p.Detect("app/pricing.py") || p.Detect("app/pricing.go") {
 		t.Fatal("Detect must match .py only")
 	}
-	if got := p.TestPaths("app/pricing.py")[0]; got.Path != "app/test_pricing.py" || got.Rank != 0 {
-		t.Fatalf("TestPaths()[0] = %+v, want {app/test_pricing.py, 0}", got)
+	if got := pairing.Candidates(p.TestRules(), "app/pricing.py")[0]; got.Path != "app/test_pricing.py" || got.Rank != 0 {
+		t.Fatalf("Candidates()[0] = %+v, want {app/test_pricing.py, 0}", got)
 	}
-	if got := p.TestPaths("pricing.py")[0]; got.Path != "test_pricing.py" || got.Rank != 0 {
-		t.Fatalf("TestPaths()[0] = %+v, want {test_pricing.py, 0}", got)
+	if got := pairing.Candidates(p.TestRules(), "pricing.py")[0]; got.Path != "test_pricing.py" || got.Rank != 0 {
+		t.Fatalf("Candidates()[0] = %+v, want {test_pricing.py, 0}", got)
 	}
 	tc := p.TestCmd()
 	if len(tc) != 4 || (tc[0] != "python3" && tc[0] != "python") || tc[1] != "-m" || tc[2] != "pytest" || tc[3] != "-q" {
@@ -56,12 +58,12 @@ func TestPythonPlugin(t *testing.T) {
 	}
 }
 
-// TestPythonTestPathsOrder pins the ordered-candidate-list contract: most
+// TestPythonCandidatesOrder pins the ordered-candidate-list contract: most
 // specific (least likely to collide with a different source file) first,
 // AND pins each candidate's Rank — the evidentiary specificity a
-// cross-source collision check actually compares (see lang.TestCandidate).
+// cross-source collision check actually compares (see pairing.Candidate).
 // Rank is NOT always equal to list position: when several forms collapse
-// onto the same string, dedupeCandidates attributes the surviving entry the
+// onto the same string, pairing.Dedupe attributes the surviving entry the
 // LEAST specific (highest) rank among the colliding forms, which several
 // cases below exercise explicitly (a naive "position in the deduped slice"
 // rank would instead vary with how many forms happened to collide, which is
@@ -70,17 +72,17 @@ func TestPythonPlugin(t *testing.T) {
 //
 // The aisuite/agents/artifact_store.py case is the real shape measured
 // against github.com/andrewyng/aisuite — the whole reason this seam exists.
-func TestPythonTestPathsOrder(t *testing.T) {
+func TestPythonCandidatesOrder(t *testing.T) {
 	p, _ := ByName("python")
 	cases := []struct {
 		name string
 		in   string
-		want []TestCandidate
+		want []pairing.Candidate
 	}{
 		{
 			name: "top-level file",
 			in:   "pricing.py",
-			want: []TestCandidate{
+			want: []pairing.Candidate{
 				{Path: "test_pricing.py", Rank: 0},
 				{Path: "pricing_test.py", Rank: 0},
 				// mirror, stripped, AND flat all degenerate to this same
@@ -93,7 +95,7 @@ func TestPythonTestPathsOrder(t *testing.T) {
 		{
 			name: "sibling dir, single segment",
 			in:   "app/pricing.py",
-			want: []TestCandidate{
+			want: []pairing.Candidate{
 				{Path: "app/test_pricing.py", Rank: 0},
 				{Path: "app/pricing_test.py", Rank: 0},
 				{Path: "tests/app/test_pricing.py", Rank: 1}, // full mirror — distinct, not collapsed
@@ -106,7 +108,7 @@ func TestPythonTestPathsOrder(t *testing.T) {
 		{
 			name: "aisuite shape: package/subdir",
 			in:   "aisuite/agents/artifact_store.py",
-			want: []TestCandidate{
+			want: []pairing.Candidate{
 				{Path: "aisuite/agents/test_artifact_store.py", Rank: 0},
 				{Path: "aisuite/agents/artifact_store_test.py", Rank: 0},
 				{Path: "tests/aisuite/agents/test_artifact_store.py", Rank: 1}, // full mirror
@@ -117,7 +119,7 @@ func TestPythonTestPathsOrder(t *testing.T) {
 		{
 			name: "src/ layout",
 			in:   "src/pkg/foo.py",
-			want: []TestCandidate{
+			want: []pairing.Candidate{
 				{Path: "src/pkg/test_foo.py", Rank: 0},
 				{Path: "src/pkg/foo_test.py", Rank: 0},
 				{Path: "tests/src/pkg/test_foo.py", Rank: 1}, // full mirror
@@ -135,7 +137,7 @@ func TestPythonTestPathsOrder(t *testing.T) {
 			// entry here is what removes that collision at the source.
 			name: "deep dir (>2 segments) excludes the flat fallback",
 			in:   "examples/celery/src/task_app/views.py",
-			want: []TestCandidate{
+			want: []pairing.Candidate{
 				{Path: "examples/celery/src/task_app/test_views.py", Rank: 0},
 				{Path: "examples/celery/src/task_app/views_test.py", Rank: 0},
 				{Path: "tests/examples/celery/src/task_app/test_views.py", Rank: 1},
@@ -145,13 +147,13 @@ func TestPythonTestPathsOrder(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := p.TestPaths(c.in)
+			got := pairing.Candidates(p.TestRules(), c.in)
 			if len(got) != len(c.want) {
-				t.Fatalf("TestPaths(%q) = %+v (len %d), want %+v (len %d)", c.in, got, len(got), c.want, len(c.want))
+				t.Fatalf("Candidates(%q) = %+v (len %d), want %+v (len %d)", c.in, got, len(got), c.want, len(c.want))
 			}
 			for i := range got {
-				if got[i] != c.want[i] {
-					t.Errorf("TestPaths(%q)[%d] = %+v, want %+v\nfull got=%+v", c.in, i, got[i], c.want[i], got)
+				if got[i].Path != c.want[i].Path || got[i].Rank != c.want[i].Rank {
+					t.Errorf("Candidates(%q)[%d] = %+v, want %+v\nfull got=%+v", c.in, i, got[i], c.want[i], got)
 				}
 			}
 		})

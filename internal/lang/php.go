@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pdbethke/corralai/internal/pairing"
 	"github.com/pdbethke/corralai/internal/sandbox"
 )
 
@@ -152,7 +153,7 @@ func phpInterpreterAndProbe(testCmd []string) (interp, probe string, err error) 
 	return real, "php", nil
 }
 
-// TestPaths covers PHPUnit's dominant naming convention — a `Test` SUFFIX on
+// TestRules covers PHPUnit's dominant naming convention — a `Test` SUFFIX on
 // the class/file name, PSR-4's own convention — most specific first:
 //
 //  1. sibling FooTest.php       — same directory as the source.
@@ -160,28 +161,22 @@ func phpInterpreterAndProbe(testCmd []string) (interp, probe string, err error) 
 //     <subpath> is dir with its leading component (conventionally `src`)
 //     replaced by `tests` rather than nested under it.
 //  3. test/<subpath>/FooTest.php  — the singular spelling some projects use.
-func (phpPlugin) TestPaths(codePath string) []TestCandidate {
-	dir, base, _ := splitPath(codePath)
-	sub := stripFirstSegment(dir)
-	testName := base + "Test.php"
-
-	out := []TestCandidate{
-		{Path: joinDir(dir, testName), Rank: 0},
-		{Path: filepath.Join("tests", sub, testName), Rank: 1},
-		{Path: filepath.Join("test", sub, testName), Rank: 1},
+//
+// The parallel-tree rules also name PHP's search roots: pairing.DefaultRoot
+// "tests", plus the singular `test/` spelling some projects use alongside
+// the plural.
+func (phpPlugin) TestRules() []pairing.Rule {
+	return []pairing.Rule{
+		{Shape: pairing.Sibling, Name: "{base}Test.php"},
+		{Shape: pairing.ParallelTree, Name: "{base}Test.php", Dir: "tests", Rank: 1},
+		{Shape: pairing.ParallelTree, Name: "{base}Test.php", Dir: "test", Rank: 1},
 	}
-	return dedupeCandidates(out)
 }
 
-// TestRoots names PHP's own additional conventional test roots (beyond
-// reposcan's generic "tests" default): the singular `test/` spelling some
-// projects use alongside the plural.
 // HarnessFiles names what PHPUnit reads before any test.
 func (phpPlugin) HarnessFiles() []string {
 	return []string{"phpunit.xml", "phpunit.xml.dist", "phpunit.dist.xml", "bootstrap.php"}
 }
-
-func (phpPlugin) TestRoots() []string { return []string{"tests", "test"} }
 
 // Preflight requires the DERIVED php interpreter (phpInterpreter — the
 // operator's own testCmd argv[0] when it already names a php variant, else

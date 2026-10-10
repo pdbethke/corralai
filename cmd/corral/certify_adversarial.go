@@ -17,6 +17,7 @@ import (
 	"github.com/pdbethke/corralai/internal/agentbackend"
 	"github.com/pdbethke/corralai/internal/brainclient"
 	"github.com/pdbethke/corralai/internal/lang"
+	"github.com/pdbethke/corralai/internal/pairing"
 )
 
 // advFinding is the subset of a queue.Finding the verdict render shows. The
@@ -293,7 +294,7 @@ func runCertifyAdversarial(args []string, client advPoolClient, run cmdRunner, s
 
 	tp := strings.TrimSpace(*testPath)
 	if tp == "" {
-		tp = plug.TestPaths(*codePath)[0].Path
+		tp = pairing.Candidates(plug.TestRules(), *codePath)[0].Path
 	}
 
 	code, err := os.ReadFile(*codePath) // #nosec G304 -- operator-supplied path to the file under review

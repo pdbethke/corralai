@@ -1,75 +1,25 @@
 // SPDX-License-Identifier: Elastic-2.0
 
-package lang
+package pairing
 
-import (
-	"path/filepath"
-	"strings"
-)
-
-// splitPath decomposes codePath into its directory (empty string for a
-// top-level file — never "."), its base name WITHOUT extension, and its
-// extension (including the leading dot). Shared by every non-Go plugin's
-// TestPaths, since the parallel-tree and sibling forms all start here.
-func splitPath(codePath string) (dir, base, ext string) {
-	ext = filepath.Ext(codePath)
-	b := filepath.Base(codePath)
-	base = strings.TrimSuffix(b, ext)
-	dir = filepath.Dir(codePath)
-	if dir == "." {
-		dir = ""
-	}
-	return dir, base, ext
-}
-
-// joinDir joins dir and name, treating an empty dir as "no directory"
-// (plain name) rather than filepath.Join's "./name".
-func joinDir(dir, name string) string {
-	if dir == "" {
-		return name
-	}
-	return filepath.Join(dir, name)
-}
-
-// stripFirstSegment removes the leading path component of a dir, e.g.
-// "aisuite/agents" -> "agents", "agents" -> "", "" -> "". This is how a
-// source file under one top-level directory (a package name, or a `src/`
-// layout) maps onto a parallel test tree: real-world convention REPLACES the
-// leading directory rather than nesting the whole original path under
-// `tests/` (`aisuite/agents/artifact_store.py` pairs with
-// `tests/agents/test_artifact_store.py`, not
-// `tests/aisuite/agents/test_artifact_store.py`).
-func stripFirstSegment(dir string) string {
-	if dir == "" {
-		return ""
-	}
-	parts := strings.SplitN(filepath.ToSlash(dir), "/", 2)
-	if len(parts) == 2 {
-		return filepath.FromSlash(parts[1])
-	}
-	return ""
-}
-
-// dirDepth returns the number of path segments in dir (0 for a top-level
-// file). Used to bound how far a "no directory context at all" flat-tree
-// test candidate is allowed to reach: a flat candidate is a plausible
-// convention for a shallow source but a collision magnet for a deep one
-// (e.g. `examples/javascript/js_example/views.py`, 3 segments deep, would
-// otherwise generate the same flat candidate as a genuine top-level
-// `src/flask/views.py`).
-func dirDepth(dir string) int {
-	if dir == "" {
-		return 0
-	}
-	return len(strings.Split(filepath.ToSlash(dir), "/"))
-}
-
-// dedupeCandidates drops duplicate paths, keeping each surviving entry at
+// Dedupe drops duplicate paths, keeping each surviving entry at
 // the POSITION of its first (most specific) occurrence, and attributing it a
-// Rank computed as follows: if ANY candidate producing that path is Rank 0
-// (sibling — same directory as the source), the merged entry keeps Rank 0;
-// otherwise it takes the LEAST specific (maximum) Rank among every candidate
-// that produced that path.
+// Rank computed as follows: if ANY candidate producing that path is a
+// Sibling-shaped candidate (same directory as the source), the merged entry
+// gets Rank 0; otherwise it takes the LEAST specific (maximum) Rank among
+// every candidate that produced that path.
+//
+// What decides "sibling" is the candidate's Shape, not its Rank. Until the
+// Round B1 final review it was `minRank == 0`, which was the same thing only
+// because every shipped Sibling rule has Rank 0 and every other rule a
+// positive one. A rule that merely forgot its Rank is Rank 0 too, and the
+// reviewer showed what that bought: a rank-less ParallelTree rule colliding
+// with a Rank-3 FlatRoot on foo.py merged to Rank 0 — sibling strength for a
+// vacuous tests/test_foo.py (TestDedupeSiblingIsAShapeNotARank). Shape is what
+// the rule actually declares about WHERE the test sits; a zero is just the
+// integer's default. The two still cannot drift silently: lang's
+// TestEveryRuleRankAgreesWithItsShape holds every registered plugin to
+// "Sibling ⇔ Rank 0".
 //
 // Two things are going on, and they pull in different directions:
 //
@@ -97,12 +47,15 @@ func dirDepth(dir string) int {
 // tests/test_utils.py string-collides with its own degenerate
 // leading-segment-stripped and flat forms, purely because "tests" strips to
 // "") must not have its genuine same-directory pairing devalued by that
-// coincidence. Hence the asymmetry: Rank 0 always wins the merge; only among
-// candidates that are ALL non-sibling does "least specific" apply.
+// coincidence. Hence the asymmetry: a Sibling always wins the merge, at Rank
+// 0; only among candidates that are ALL non-sibling does "least specific"
+// apply.
 //
 // INVARIANT a future plugin must not break (guarded by the property test
 // TestDedupeMatchesPrincipledRuleForShippedPlugins in
-// dedupe_property_test.go): "attribute the max (least-specific) rank among
+// internal/lang/dedupe_property_test.go, which runs every registered
+// plugin's real TestRules against pairingtest.PrincipledMerge):
+// "attribute the max (least-specific) rank among
 // colliding non-sibling forms" is only correct because every shipped
 // plugin's non-sibling forms are, whenever they collide with something
 // weaker, VACUOUS at that collision — their directory component degenerated
@@ -119,33 +72,35 @@ func dirDepth(dir string) int {
 // merge in that case is the MIN (strongest) rank among the non-vacuous
 // colliding forms, not the max. The property test above exists to fail
 // loudly the day that becomes possible, rather than let it mispair silently.
-func dedupeCandidates(cands []TestCandidate) []TestCandidate {
+func Dedupe(cands []Candidate) []Candidate {
 	firstIdx := make(map[string]int, len(cands))
-	minRank := make(map[string]int, len(cands))
 	maxRank := make(map[string]int, len(cands))
+	sibling := make(map[string]bool, len(cands))
+	shape := make(map[string]Shape, len(cands))
 	var order []string
 	for _, c := range cands {
+		if c.Shape == Sibling {
+			sibling[c.Path] = true
+		}
 		if _, ok := firstIdx[c.Path]; !ok {
 			firstIdx[c.Path] = len(order)
 			order = append(order, c.Path)
-			minRank[c.Path] = c.Rank
+			shape[c.Path] = c.Shape
 			maxRank[c.Path] = c.Rank
 			continue
-		}
-		if c.Rank < minRank[c.Path] {
-			minRank[c.Path] = c.Rank
 		}
 		if c.Rank > maxRank[c.Path] {
 			maxRank[c.Path] = c.Rank
 		}
 	}
-	out := make([]TestCandidate, len(order))
+	out := make([]Candidate, len(order))
 	for i, p := range order {
 		rank := maxRank[p]
-		if minRank[p] == 0 {
+		if sibling[p] {
 			rank = 0
 		}
-		out[i] = TestCandidate{Path: p, Rank: rank}
+		// A merged entry keeps the Shape of its first occurrence.
+		out[i] = Candidate{Path: p, Rank: rank, Shape: shape[p]}
 	}
 	return out
 }

@@ -77,7 +77,7 @@ fi
 #                      planted faults killed, 0 survivors) via `certify --local
 #                      --repo-dir`. Its own sibling tests/ tree pairs
 #                      src/Assert.php -> tests/AssertTest.php by the same
-#                      Test-suffix convention the php plugin's TestPaths uses.
+#                      Test-suffix convention the php plugin's TestRules declare.
 #
 # A repo with a map at testdata/foreign-sweep-tests/<name>.json is scanned a
 # SECOND time with --tests, recorded as a separate `<name>+tests` row against

@@ -9,6 +9,7 @@ import (
 
 	"github.com/pdbethke/corralai/internal/adequacy"
 	"github.com/pdbethke/corralai/internal/lang"
+	"github.com/pdbethke/corralai/internal/pairing"
 	"github.com/pdbethke/corralai/internal/sandbox"
 )
 
@@ -45,7 +46,7 @@ func TestScoreRubyKillsAndSurvives(t *testing.T) {
 	mutants := []adequacy.Mutant{
 		{ID: "m1", Replace: "def is_even(n)\n  true\nend\n"},
 	}
-	tp := rb.TestPaths(codePath)[0].Path // evenmod_test.rb
+	tp := pairing.Candidates(rb.TestRules(), codePath)[0].Path // evenmod_test.rb
 
 	// Thorough suite: checks both the true and false branches, so it kills
 	// the always-even mutant.

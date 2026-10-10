@@ -30,6 +30,7 @@ import (
 	"github.com/pdbethke/corralai/internal/certify"
 	"github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/modelcorr"
+	"github.com/pdbethke/corralai/internal/pairing"
 	"github.com/pdbethke/corralai/internal/prior"
 	"github.com/pdbethke/corralai/internal/reposcan"
 	"github.com/pdbethke/corralai/internal/sandbox"
@@ -790,8 +791,9 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// to catch; the comment at the scoping loop says that case was fixed,
 	// and it was, for name-pairing only.
 	diffTouchedATest := false
+	mightBeTest := mightBeTestPredicate()
 	for path := range diffChanged {
-		if looksLikeATestPath(path) {
+		if mightBeTest(path) {
 			diffTouchedATest = true
 			break
 		}
@@ -1705,7 +1707,7 @@ func auditConfigKey(wholeSuite bool, method string, checkArgv []string, mutantsF
 // data. Weaken a fixture in any of them and every file's key used to stay put:
 // HIT, and the ledger repeats a kill rate for a suite that genuinely got worse.
 //
-// The widening is deliberately confined to the SURFACE. isTestFile still
+// The widening is deliberately confined to the SURFACE. pairing.IsTest still
 // decides which files are audit CANDIDATES and is untouched — widening that
 // would change what gets audited, a far larger blast radius than the cache.
 //
@@ -3004,6 +3006,19 @@ func printPreflightReport(w io.Writer, cm reposcan.CoverageMap, sourceFiles []st
 	}
 }
 
+// mightBeTestPredicate returns the --diff-base bound's "could this changed
+// file be a test?" — pairing.MightBeTest over every registered language's
+// rules, which replaced looksLikeATestPath in Round B1 (see MightBeTest's doc
+// for why the question is generous: a false yes costs one instrumented run, a
+// false no is a false green). It returns a function rather than answering
+// per path so a loop over a diff builds lang.AllTestRules once, not once per
+// changed file, without a package-level cache to go stale; every caller,
+// including the might-be-test characterization golden, asks through it.
+func mightBeTestPredicate() func(path string) bool {
+	all := lang.AllTestRules()
+	return func(path string) bool { return pairing.MightBeTest(all, path) }
+}
+
 // sourcesOrphanedByDeletedTests names the excluded sources whose paired test
 // the diff DELETED: for each changed path that looks like a test and no
 // longer exists in the checkout, every no-paired-test source whose language
@@ -3012,8 +3027,9 @@ func printPreflightReport(w io.Writer, cm reposcan.CoverageMap, sourceFiles []st
 // is the same condition with the more alarming cause.
 func sourcesOrphanedByDeletedTests(repoDir string, changed []string, excl []reposcan.Exclusion) []string {
 	deleted := map[string]bool{}
+	mightBeTest := mightBeTestPredicate()
 	for _, path := range changed {
-		if !looksLikeATestPath(path) {
+		if !mightBeTest(path) {
 			continue
 		}
 		if _, err := os.Stat(filepath.Join(repoDir, filepath.FromSlash(path))); os.IsNotExist(err) {
@@ -3032,7 +3048,7 @@ func sourcesOrphanedByDeletedTests(repoDir string, changed []string, excl []repo
 		if !ok {
 			continue
 		}
-		for _, tc := range p.TestPaths(e.Path) {
+		for _, tc := range pairing.Candidates(p.TestRules(), e.Path) {
 			if deleted[tc.Path] {
 				out = append(out, e.Path)
 				break
@@ -3201,7 +3217,7 @@ const maxListedExclusions = 20
 // printSearchPairings discloses every candidate whose test pairing came from
 // the recursive fallback (reposcan.Candidate.ViaSearch) rather than from the
 // language plugin's own naming convention — a test that EXISTS but that no
-// TestPaths candidate predicted. Silent otherwise: the vast majority of a
+// pairing candidate predicted. Silent otherwise: the vast majority of a
 // scan's candidates pair by convention, and printing a line per file there
 // would just repeat what the "%d candidate(s)" count already says.
 // candidacySummaryLine is the design's own required line: how many
@@ -5398,24 +5414,6 @@ func writerModeDisclosure(mode string, calls, seatsUngraded int, attempts *advpo
 			mode, calls, unit, seatsUngraded, attemptsNote)
 	}
 	return fmt.Sprintf("writer: %s (%d %s)%s", mode, calls, unit, attemptsNote)
-}
-
-// looksLikeATestPath is the cheap, language-independent question the diff
-// bound asks before any evidence exists: could this changed file be a test?
-// It is deliberately generous — a false "yes" only costs one instrumented run,
-// while a false "no" is the false-green this exists to prevent.
-func looksLikeATestPath(rel string) bool {
-	rel = filepath.ToSlash(rel)
-	base := strings.ToLower(filepath.Base(rel))
-	for _, seg := range strings.Split(filepath.ToSlash(filepath.Dir(rel)), "/") {
-		switch seg {
-		case "test", "tests", "spec", "specs", "__tests__", "testing":
-			return true
-		}
-	}
-	return strings.HasPrefix(base, "test_") || strings.Contains(base, "_test.") ||
-		strings.Contains(base, ".test.") || strings.Contains(base, ".spec.") ||
-		strings.HasSuffix(base, "_spec.rb") || strings.HasSuffix(base, "test.php")
 }
 
 // examConfidenceLine is the two terms a bare kill rate hides, on one line:

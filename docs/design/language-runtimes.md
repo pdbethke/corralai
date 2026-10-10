@@ -44,7 +44,7 @@ depends what was installed" is not an acceptable answer.
 ## What is NOT the problem
 
 **The plugin interface is fine.** `lang.Plugin` already carries `CompileCheck`,
-`TestPaths`, `Preflight`, `WorkspaceRunEnv` and the role prompts. Adding ruff and
+`TestRules`, `Preflight`, `WorkspaceRunEnv` and the role prompts. Adding ruff and
 oxlint took a few lines each and needed no interface change. Nothing here argues
 for replacing that seam.
 

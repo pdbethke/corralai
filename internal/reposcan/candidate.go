@@ -463,7 +463,7 @@ func EnumerateWithTests(root string, tests *TestMap) ([]Candidate, []Exclusion, 
 			excl = append(excl, Exclusion{Path: rel, Reason: ReasonIsTest})
 			continue
 		}
-		if underRoots(rel, pairing.Roots(p.TestRules())) {
+		if pairing.UnderRoots(rel, pairing.Roots(p.TestRules())) {
 			excl = append(excl, Exclusion{Path: rel, Reason: ReasonTestSupport})
 			continue
 		}

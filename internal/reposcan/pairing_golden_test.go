@@ -101,3 +101,49 @@ func firstGoldenDiff(want, got []byte) string {
 	}
 	return "same lines, different bytes"
 }
+
+// TestSearchGolden pins what the two-stage resolution answers — convention
+// hit, search hit, or nothing — for every plugin-detected corpus path, with
+// that path's own repository as the universe (skip-dirs removed, as Enumerate
+// does). Captured from the search code Round B1b moves, BEFORE it moved; a
+// diff after B1b means the move changed behaviour.
+func TestSearchGolden(t *testing.T) {
+	byRepo := map[string][]string{}
+	for _, r := range pairingCorpus(t) {
+		if !pathUnderSkippedDir(r.path) {
+			byRepo[r.repo] = append(byRepo[r.repo], r.path)
+		}
+	}
+	var b bytes.Buffer
+	for _, r := range pairingCorpus(t) {
+		p, ok := lang.Detect(r.path)
+		if !ok || pathUnderSkippedDir(r.path) {
+			continue
+		}
+		list := byRepo[r.repo]
+		present := make(map[string]bool, len(list))
+		for _, f := range list {
+			present[f] = true
+		}
+		tp, rank, via := searchResolve(p, r.path, present, list)
+		fmt.Fprintf(&b, "%s\t%s\t%s\t%d\t%v\n", r.repo, r.path, tp, rank, via)
+	}
+	golden := filepath.Join("testdata", "search.golden.tsv")
+	if os.Getenv("UPDATE_GOLDEN") != "" {
+		if err := os.WriteFile(golden, b.Bytes(), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want, err := os.ReadFile(golden) // #nosec G304 -- fixed testdata path
+	if err != nil {
+		t.Fatalf("golden missing (generate deliberately with UPDATE_GOLDEN=1): %v", err)
+	}
+	if !bytes.Equal(b.Bytes(), want) {
+		t.Fatalf("search resolution changed — %s", firstGoldenDiff(want, b.Bytes()))
+	}
+}
+
+// searchResolve is the one seam Round B1b re-points.
+func searchResolve(p lang.Plugin, codePath string, present map[string]bool, presentList []string) (string, int, bool) {
+	return findInUniverse(p, codePath, present, presentList)
+}

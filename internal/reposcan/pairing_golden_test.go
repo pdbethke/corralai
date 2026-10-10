@@ -143,7 +143,11 @@ func TestSearchGolden(t *testing.T) {
 	}
 }
 
-// searchResolve is the one seam Round B1b re-points.
+// searchResolve is the seam TestSearchGolden calls through. It was set up so
+// Round B1b could re-point it at the moved search; in the end B1b did not
+// need to, because findInUniverse kept its signature and became a thin
+// adapter over pairing.Resolve — so this golden ran the same function name
+// before and after the move, which is what made it a gate on the move.
 func searchResolve(p lang.Plugin, codePath string, present map[string]bool, presentList []string) (string, int, bool) {
 	return findInUniverse(p, codePath, present, presentList)
 }

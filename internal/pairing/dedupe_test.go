@@ -32,16 +32,17 @@ func TestDedupeAttributesLeastSpecificRank(t *testing.T) {
 		{
 			name: "mirror/stripped/flat collision (all non-sibling): attribute the WORST (highest) rank",
 			in: []Candidate{
-				{Path: "tests/x.py", Rank: 1, Shape: FlatRoot}, // mirror, listed first
-				{Path: "tests/x.py", Rank: 2, Shape: FlatRoot}, // stripped, degenerates onto the same string
-				{Path: "tests/x.py", Rank: 3, Shape: FlatRoot}, // flat, degenerates onto the same string
+				{Path: "tests/x.py", Rank: 1, Shape: ParallelTree}, // mirror, listed first
+				{Path: "tests/x.py", Rank: 2, Shape: ParallelTree}, // stripped, degenerates onto the same string
+				{Path: "tests/x.py", Rank: 3, Shape: FlatRoot},     // flat, degenerates onto the same string
 			},
 			// Must NOT keep rank 1 (the earliest-listed form) — that was
 			// exactly the bug: a demo file's degenerate "stripped" match
 			// (rank 2) beating a genuine "flat" match (rank 3) from a
 			// different, deeper source, because 2 < 3 even though NEITHER
 			// carries real directory evidence.
-			want: []Candidate{{Path: "tests/x.py", Rank: 3, Shape: FlatRoot}},
+			// The merged entry keeps the first occurrence's Shape.
+			want: []Candidate{{Path: "tests/x.py", Rank: 3, Shape: ParallelTree}},
 		},
 		{
 			name: "sibling collides with a degenerate lower-specificity form: sibling (rank 0) wins, never demoted",

@@ -21,6 +21,14 @@ package pairing
 // TestEveryRuleRankAgreesWithItsShape holds every registered plugin to
 // "Sibling ⇔ Rank 0".
 //
+// PRECONDITION: every Candidate carries a Shape. An empty (or unknown) Shape
+// panics, via traitsOf. That is deliberate — fail loudly: a candidate whose
+// sibling-ness cannot be decided must not be guessed, because guessing "not a
+// sibling" silently demotes a real same-directory pairing and guessing
+// "sibling" hands Rank 0 to a path with no such evidence; either is a
+// mispairing nobody would see. Candidates always sets Shape, so only a
+// hand-built slice (a test fixture) can violate this.
+//
 // Two things are going on, and they pull in different directions:
 //
 //  1. Candidates naturally collide when a source file has a shallow

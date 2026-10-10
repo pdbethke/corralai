@@ -13,17 +13,39 @@
 // 2026-10-08, Round B1). A new language adds rules, or a new Shape in
 // shapeTable; it never adds a pairing function.
 //
-// It is now the ONE place corral decides which file tests which: the
-// candidates, the search roots, both test questions, and the two-stage
-// resolution (Resolve: candidates that exist on disk first, then the search
-// over Roots scored by shared path context, ranked by SearchRank). That
-// algorithm used to be written twice in internal/reposcan, as FindTest over a
-// fresh git listing and findInUniverse over Enumerate's universe; it is one
-// function here, fed by Sources{Exists, Universe}. internal/reposcan supplies
-// only I/O: gitVisibleFiles, walkSkippingBuildDirs, pathUnderSkippedDir, and
-// the os.Stat probe inside FindTest's Exists closure. Nothing there decides.
+// It is the one place a source's test is RESOLVED by convention or search,
+// and the one place those conventions are declared: the candidates, the
+// search roots, both test questions, and the two-stage resolution (Resolve:
+// candidates that exist on disk first, then the search over Roots scored by
+// shared path context, ranked by SearchRank). That algorithm used to be
+// written twice in internal/reposcan, as FindTest over a fresh git listing
+// and findInUniverse over Enumerate's universe; it is one function here, fed
+// by Sources{Exists, Universe}, and those two are now I/O adapters that
+// supply only the disk and the listing (gitVisibleFiles,
+// walkSkippingBuildDirs, pathUnderSkippedDir, FindTest's os.Stat probe).
 //
-// The directory affixes the search normalizes away (TestDirAffixes: prefixes
+// It is NOT yet the only place corral picks a test path. Three callers still
+// make their own choice from pairing's data rather than asking Resolve, and
+// all three predate Round B1b:
+//
+//   - cmd/corral/certify_adversarial.go: the --adversarial default test path
+//     is Candidates(...)[0].Path, taken without Resolve, so it never checks
+//     the disk and never searches — certify --local resolves the same file
+//     differently.
+//   - internal/advpool/gate.go: advPoolTestPath takes Candidates(...)[0], and
+//     when no plugin resolves falls back to a hand-written base+"_test.go";
+//     the authored-test path picker further down uses the same [0] idiom.
+//   - internal/reposcan/candidate.go: demoteAmbiguousPairings applies
+//     pairing's Rank semantics itself to choose between sources competing
+//     for one test.
+//
+// Round B1c removes them: one "primary candidate" answer for the [0] sites,
+// the --adversarial default routed through Resolve (a user-visible change, so
+// its own PR and CHANGELOG line), and the _test.go fallback moved here or
+// deleted. Until then, "pairing decides" is true of resolution, not of every
+// caller.
+//
+// The directory affixes the search normalizes away (testDirAffixes: prefixes
 // test_ and spec_, suffixes _test and _spec) are DECLARED, not derived from
 // Generic. An earlier plan derived them; it was dropped on purpose. Generic
 // holds FILE-name markers (with {ext}, dotted .test/.spec, and Ruby's spec_
@@ -382,10 +404,11 @@ func IsTest(rules []Rule, rel string) bool {
 // Name pattern — CalcTest.php, calctest.php and Test_Foo.py all might be tests.
 // (It used to ask IsTest per language first; that was redundant, because the
 // case-folded name match below runs over the same rules and already answers
-// every case IsTest answers yes to — TestIsTestImpliesMightBeTest holds it.) It takes every language's
-// rules rather than one because a changed file is asked about before anyone
-// knows which language claims it (README.md and a fixture under specs/ are
-// asked too).
+// every case IsTest answers yes to — cmd/corral's
+// TestIsTestImpliesMightBeTest holds it.) It takes every language's rules
+// rather than one because a changed file is asked about before anyone knows
+// which language claims it (README.md and a fixture under specs/ are asked
+// too).
 func MightBeTest(all [][]Rule, rel string) bool {
 	rel = filepath.ToSlash(rel)
 	sets := append([][]Rule{Generic}, all...)
@@ -414,9 +437,9 @@ func MightBeTest(all [][]Rule, rel string) bool {
 	return false
 }
 
-// nameMatches reports whether base matches any nameMarksTest rule's Name pattern ({base} =
-// any characters, {ext} = a dot then any characters). With fold, the pattern
-// is lowercased first; the caller lowercases base.
+// nameMatches reports whether base matches any nameMarksTest rule's Name
+// pattern ({base} = any characters, {ext} = a dot then any characters). With
+// fold, the pattern is lowercased first; the caller lowercases base.
 func nameMatches(rules []Rule, base string, fold bool) bool {
 	for _, r := range rules {
 		if !traitsOf(r.Shape).nameMarksTest || r.Name == "" {

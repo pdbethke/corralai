@@ -24,6 +24,7 @@ func TestNormalizeSegPin(t *testing.T) {
 		"tests":         "tests",
 		"foo":           "foo",
 		"test_test_foo": "test_foo",
+		"test_foo_spec": "foo_spec",
 	}
 	for in, want := range cases {
 		if got := normalizeSeg(in); got != want {

@@ -17,28 +17,11 @@ import (
 )
 
 // SearchResult is FindTest's outcome: what it tried, where it looked, and
-// what (if anything) it found.
-type SearchResult struct {
-	// Path is the resolved test path, root-relative and slash-separated.
-	// "" when nothing was found.
-	Path string
-	// ViaSearch is true when Path came from the recursive fallback rather
-	// than p's own ordered pairing candidates — the fact the "paired by
-	// search" disclosure is built on.
-	ViaSearch bool
-	// Tried is every pairing candidate FindTest checked for existence, in
-	// order — named in a not-found error so the operator sees exactly what
-	// was already ruled out, not just that something failed.
-	Tried []string
-	// Roots is the set of conventional test directories the recursive
-	// fallback searched (only populated when the fallback actually ran —
-	// i.e. every Tried candidate was absent).
-	Roots []string
-	// Found reports whether Path is usable. Path == "" and Found == false
-	// coincide today, but Found makes the zero value unambiguous rather
-	// than relying on a caller to remember Path == "" means "not found".
-	Found bool
-}
+// what (if anything) it found. It IS pairing.Resolution (an alias, so the
+// field docs live there): a struct copy with a field-by-field converter used
+// to sit here, and it had already dropped Rank — the converter that fails
+// open on whatever field nobody remembered to add.
+type SearchResult = pairing.Resolution
 
 // gitVisibleFiles enumerates every file the repository at root considers its
 // own — git's tracked files plus untracked-but-not-ignored ones — as
@@ -179,7 +162,7 @@ func pathUnderSkippedDir(rel string) bool {
 // build a "here is everywhere I looked" error instead of leaving an operator
 // to guess a second and third time — see certify_local.go's use.
 func FindTest(p lang.Plugin, root, codePath string) (SearchResult, error) {
-	r, err := pairing.Resolve(p.TestRules(), codePath, pairing.Sources{
+	return pairing.Resolve(p.TestRules(), codePath, pairing.Sources{
 		Exists: func(cp string) bool {
 			full := cp
 			// Guard, not a fix for a live bug: every caller today either passes
@@ -195,13 +178,6 @@ func FindTest(p lang.Plugin, root, codePath string) (SearchResult, error) {
 		},
 		Universe: func() ([]string, error) { return gitVisibleFiles(root) },
 	})
-	return SearchResult{
-		Path:      r.Path,
-		ViaSearch: r.ViaSearch,
-		Tried:     r.Tried,
-		Roots:     r.Roots,
-		Found:     r.Found,
-	}, err
 }
 
 // findInUniverse is Enumerate's own use of the same two-stage rule, over a
@@ -215,9 +191,9 @@ func FindTest(p lang.Plugin, root, codePath string) (SearchResult, error) {
 // order the map itself does not offer for free.
 //
 // Returns the resolved path, its Rank (the matching candidate's own
-// pairing.Candidate Rank for a convention hit, pairing.SearchRank for a search
-// hit — see pairing.SearchRank's doc comment for why that value must never compete with a
-// real convention rank), and whether the recursive
+// pairing.Candidate Rank for a convention hit, pairing.SearchRank for a
+// search hit — see pairing.SearchRank's doc comment for why that value must
+// never compete with a real convention rank), and whether the recursive
 // fallback is what found it. tp == "" means neither stage found anything.
 func findInUniverse(p lang.Plugin, codePath string, present map[string]bool, presentList []string) (tp string, rank int, viaSearch bool) {
 	// Universe cannot fail here: presentList is already in hand, so the error

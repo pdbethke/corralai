@@ -89,3 +89,29 @@ func TestNormalizeSegLeavesABareAffixAlone(t *testing.T) {
 		t.Errorf("itsdangerous shape: %q", got)
 	}
 }
+
+// A Resolution carries the winning candidate's own Rank AND Shape through the
+// boundary — a field-by-field converter (the old reposcan.SearchResult copy)
+// dropped Rank; this pins that neither label is lost again. A search hit
+// carries SearchRank and ViaSearch, and no Shape: no rule paired it.
+func TestResolveCarriesRankAndShapeOfTheWinner(t *testing.T) {
+	rules := []Rule{
+		{Shape: Sibling, Name: "test_{base}.py"},
+		{Shape: ParallelTree, Name: "test_{base}.py", Dir: "tests", Rank: 1},
+	}
+	hit, err := Resolve(rules, "pkg/mod.py", Sources{
+		Exists:   func(rel string) bool { return rel == "tests/test_mod.py" },
+		Universe: func() ([]string, error) { return nil, nil },
+	})
+	if err != nil || !hit.Found || hit.ViaSearch || hit.Rank != 1 || hit.Shape != ParallelTree {
+		t.Fatalf("stage-1 hit: res=%+v err=%v; want Rank 1, Shape %q", hit, err, ParallelTree)
+	}
+
+	found, err := Resolve(rules, "pkg/mod.py", Sources{
+		Exists:   func(string) bool { return false },
+		Universe: func() ([]string, error) { return []string{"tests/unit/pkg/test_mod.py"}, nil },
+	})
+	if err != nil || !found.Found || !found.ViaSearch || found.Rank != SearchRank || found.Shape != "" {
+		t.Fatalf("search hit: res=%+v err=%v; want SearchRank, ViaSearch, empty Shape", found, err)
+	}
+}

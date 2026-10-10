@@ -15,11 +15,13 @@ import (
 // cross-source collision.
 const SearchRank = 100
 
-// TestDirAffixes: the prefixes and suffixes a test DIRECTORY may add to the
+// testDirAffixes: the prefixes and suffixes a test DIRECTORY may add to the
 // source directory it mirrors (itsdangerous → test_itsdangerous). A directory
 // convention, deliberately not derived from Generic's file-name markers — see
-// the B1b plan's decision record.
-var TestDirAffixes = struct{ Prefixes, Suffixes []string }{
+// the B1b plan's decision record. Unexported on purpose: nothing outside
+// pairing reads it, and an exported mutable var would let any importer change
+// what every search normalizes.
+var testDirAffixes = struct{ Prefixes, Suffixes []string }{
 	Prefixes: []string{"test_", "spec_"},
 	Suffixes: []string{"_test", "_spec"},
 }
@@ -35,16 +37,39 @@ type Sources struct {
 	Universe func() ([]string, error)
 }
 
-// Resolution is Resolve's whole answer. Field meanings are SearchResult's,
-// moved here: Tried and Roots are populated even on a miss so a caller can
-// say everywhere it looked.
+// Resolution is Resolve's whole answer: what it tried, where it looked, and
+// what (if anything) it found. reposcan exposes it as SearchResult (a type
+// alias, not a copy — a field-by-field converter once sat between the two and
+// had already dropped Rank, the bug shape AGENTS.md names).
 type Resolution struct {
-	Path      string
-	Rank      int // the candidate's Rank for a convention hit; SearchRank for a search hit
+	// Path is the resolved test path, root-relative and slash-separated.
+	// "" when nothing was found.
+	Path string
+	// Rank is the winning candidate's own Rank for a convention hit, and
+	// SearchRank for a search hit — see SearchRank for why the latter must
+	// never compete with a real convention rank.
+	Rank int
+	// Shape is the Shape of the rule whose candidate paired the file on a
+	// convention hit; "" on a search hit or a miss, because no rule paired
+	// it. The Rust plan needs this label on the scan line ("paired by
+	// parallel-tree"), so it is carried here rather than re-derived later.
+	Shape Shape
+	// ViaSearch is true when Path came from the stage-2 search rather than
+	// the ordered candidates — the fact the "paired by search" disclosure is
+	// built on.
 	ViaSearch bool
-	Tried     []string
-	Roots     []string
-	Found     bool
+	// Tried is every candidate checked for existence, in order — named in a
+	// not-found error so the operator sees exactly what was already ruled
+	// out, not just that something failed. Populated even on a miss.
+	Tried []string
+	// Roots is the set of conventional test directories the search walked
+	// (populated only when stage 2 ran, i.e. every Tried candidate was
+	// absent) — so a caller can say everywhere it looked.
+	Roots []string
+	// Found reports whether Path is usable. Path == "" and Found == false
+	// coincide today, but Found makes the zero value unambiguous rather than
+	// relying on a caller to remember that Path == "" means "not found".
+	Found bool
 }
 
 // Resolve finds the test file for codePath in two strictly ordered stages,
@@ -53,7 +78,7 @@ type Resolution struct {
 // each of which used to carry its own copy of this logic):
 //
 //  1. Candidates(rules, codePath), IN ORDER — the first one src.Exists
-//     accepts wins, with that candidate's Rank. A conventionally-mirrored
+//     accepts wins, with that candidate's Rank and Shape. A conventionally-mirrored
 //     file is paired here and NEVER reaches stage 2, so src.Universe is never
 //     called for it.
 //  2. Only when NONE of those candidates exists: a search of src.Universe()
@@ -75,6 +100,7 @@ func Resolve(rules []Rule, codePath string, src Sources) (Resolution, error) {
 		if src.Exists(cp) {
 			res.Path = cp
 			res.Rank = c.Rank
+			res.Shape = c.Shape
 			res.Found = true
 			return res, nil
 		}
@@ -173,12 +199,12 @@ func segments(dir string) []string {
 // changes" would also erase a segment that is GENUINELY named e.g. "spec"
 // on its own, which normalizeSeg must leave alone.
 func normalizeSeg(s string) string {
-	for _, pre := range TestDirAffixes.Prefixes {
+	for _, pre := range testDirAffixes.Prefixes {
 		if strings.HasPrefix(s, pre) && s != pre {
 			return s[len(pre):]
 		}
 	}
-	for _, suf := range TestDirAffixes.Suffixes {
+	for _, suf := range testDirAffixes.Suffixes {
 		if strings.HasSuffix(s, suf) && s != suf {
 			return s[:len(s)-len(suf)]
 		}

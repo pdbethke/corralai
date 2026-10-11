@@ -126,7 +126,7 @@ func init() {
 			containers: jsFamilyContainers,
 			methods:    jsFamilyMethods,
 			extract:    extractCurlySignatures,
-			branches:   jsBranchNodes,
+			branches:   jsFamilyBranches,
 			boolOp:     jsFamilyBoolOp,
 		},
 		"javascript": {
@@ -135,7 +135,7 @@ func init() {
 			containers: jsFamilyContainers,
 			methods:    jsFamilyMethods,
 			extract:    extractCurlySignatures,
-			branches:   jsBranchNodes,
+			branches:   jsFamilyBranches,
 			boolOp:     jsFamilyBoolOp,
 		},
 		"rust": {
@@ -291,13 +291,10 @@ var jsFamilyMethods = map[string]string{"method_definition": "method"}
 
 const jsFamilyBoolOp = "binary_expression"
 
-// jsBranchNodes is shared by javascript and typescript: the TS grammar is a
-// superset of JS and names these nodes identically, so duplicating the table
-// would only create an opportunity for the two to drift.
-//
-// switch_default is deliberately absent — a default arm is the fall-through,
-// not an independent decision, and neither eslint nor gocyclo counts it.
-var jsBranchNodes = map[string]bool{
+// jsFamilyBranches — switch_default is deliberately absent: a default arm is
+// the fall-through, not an independent decision, and neither eslint nor
+// gocyclo counts it.
+var jsFamilyBranches = map[string]bool{
 	"if_statement":       true,
 	"for_statement":      true,
 	"for_in_statement":   true,

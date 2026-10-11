@@ -126,8 +126,8 @@ func (goPlugin) Preamble(code string) string {
 	return strings.Join(lines[:end], "\n")
 }
 
-// MutantSystem is the EXACT string previously named genMutantsSystem in
-// internal/testgen/testgen.go — moved here unchanged.
+// MutantSystem is the shared mutant-generator prompt (mutantSystem) with Go's
+// two differences filled in; it was once genMutantsSystem in internal/testgen.
 func (goPlugin) MutantSystem() string {
 	return mutantSystem("signature and package (a drop-in replacement that compiles)", "compile errors")
 }

@@ -11,6 +11,9 @@ history of any release, `git log v0.3.4..v0.3.5`.
 
 ## [Unreleased]
 
+- **Repo-search indexing treats `.cjs` files as JavaScript**, as the
+  JavaScript plugin already did when auditing them. Nothing else about which
+  files are indexed or audited changes.
 - **`certify --adversarial` finds the test `certify --local` finds.** With no
   `--test`, it used to take the language's first naming convention without
   checking the file existed, so on a repository whose tests live elsewhere

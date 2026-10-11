@@ -115,3 +115,30 @@ func TestResolveCarriesRankAndShapeOfTheWinner(t *testing.T) {
 		t.Fatalf("search hit: res=%+v err=%v; want SearchRank, ViaSearch, empty Shape", found, err)
 	}
 }
+
+// TestBestClaim pins the collision policy: the single strictly-lowest rank
+// wins; any tie for the lowest — including SearchRank against SearchRank —
+// has no winner.
+func TestBestClaim(t *testing.T) {
+	cases := []struct {
+		ranks  []int
+		winner int
+		ok     bool
+	}{
+		{nil, -1, false},
+		{[]int{2}, 0, true},
+		{[]int{0, 3}, 0, true},
+		{[]int{3, 0, 3}, 1, true},
+		{[]int{SearchRank, 2}, 1, true},
+		{[]int{1, 1}, -1, false},
+		{[]int{0, 0, 2}, -1, false},
+		{[]int{2, 1, 1, 1}, -1, false},
+		{[]int{SearchRank, SearchRank}, -1, false},
+	}
+	for _, c := range cases {
+		w, ok := BestClaim(c.ranks)
+		if w != c.winner || ok != c.ok {
+			t.Errorf("BestClaim(%v) = %d, %v; want %d, %v", c.ranks, w, ok, c.winner, c.ok)
+		}
+	}
+}

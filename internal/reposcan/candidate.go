@@ -677,17 +677,10 @@ func isLibraryCode(path string, hasPath func(string) bool) bool {
 //
 //   - Group the just-resolved candidates by TestPath.
 //   - A group of size 1 is untouched — no collision.
-//   - In a group of size >1, if exactly one member has a STRICTLY better
-//     (lower) specificity rank than every other member, it is kept — a
-//     sibling or full-directory-mirror match outranks a same-named test that
-//     merely happens to also resolve via a less specific form for some other
-//     file — and every other member is demoted.
-//   - If the best rank is TIED across two or more members, ALL of them are
-//     demoted. This does lose a correct pairing sometimes (a genuine
-//     sibling match demoted because an unrelated file's own sibling match
-//     collides implausibly) — that is the intended trade: an accounted
-//     ReasonAmbiguousTest exclusion is honest; a coin-flip pairing that
-//     happens to land on the right file some fraction of the time is not.
+//   - In a group of size >1, pairing.BestClaim decides by rank: exactly one
+//     strictly-most-specific member is kept and the rest demoted; a tie for
+//     most specific demotes the whole group (BestClaim's doc says why that
+//     trade is intended).
 //
 // rank[i] is the evidentiary specificity (lower = more specific) of the
 // plugin's own pairing.Candidate that resolved cands[i].TestPath — NOT its
@@ -736,29 +729,19 @@ func demoteAmbiguousPairings(cands []Candidate, rank []int, excl []Exclusion, ex
 			}
 			continue
 		}
-		best := rank[idxs[0]]
-		for _, i := range idxs[1:] {
-			if rank[i] < best {
-				best = rank[i]
-			}
+		claims := make([]int, len(idxs))
+		for k, i := range idxs {
+			claims[k] = rank[i]
 		}
-		var atBest []int
-		for _, i := range idxs {
-			if rank[i] == best {
-				atBest = append(atBest, i)
-			}
-		}
-		if len(atBest) == 1 {
-			// Exactly one strictly-best claimant: keep it, demote the rest.
-			for _, i := range idxs {
-				if i != atBest[0] {
+		if w, ok := pairing.BestClaim(claims); ok {
+			for k, i := range idxs {
+				if k != w {
 					demoted[i] = true
 				}
 			}
 			continue
 		}
-		// Tied for best (or, degenerately, every member shares one rank):
-		// no safe winner — demote the whole group.
+		// No safe winner (see pairing.BestClaim): demote the whole group.
 		for _, i := range idxs {
 			demoted[i] = true
 		}

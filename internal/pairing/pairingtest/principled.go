@@ -84,6 +84,9 @@ func PrincipledMerge(cands []RawForm) []pairing.Candidate {
 			firstIdx[c.Path] = len(order)
 			order = append(order, c.Path)
 		}
+		// Deliberately reads Shape == Sibling, not pairing's sameDir trait:
+		// this is the independent oracle for Dedupe, so it must not share
+		// Dedupe's source of truth.
 		sibling := c.Shape == pairing.Sibling
 		if sibling {
 			siblingAny[c.Path] = true

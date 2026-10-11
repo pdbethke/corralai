@@ -16,182 +16,12 @@ import (
 	"github.com/pdbethke/corralai/internal/pairing"
 )
 
-// SearchRank is the Rank a via-search pairing carries into
-// demoteAmbiguousPairings: strictly less specific (a higher number) than any
-// rank a shipped plugin's own TestRules ever hand out (today's max is 3,
-// Python's flat form) — a fuzzy recursive match is weaker evidence than ANY
-// convention-list hit, by construction, so it must never out-rank one in a
-// cross-source collision.
-const SearchRank = 100
-
-// searchBasenames collects the distinct basenames p's own pairing
-// candidates use — "test the conventional NAME, search a WIDER set of
-// directories for it" rather than inventing a second, independently
-// maintained naming rule that could drift from the declared rules. For
-// itsdangerous this is exactly {"test_signer.py", "signer_test.py"}: the same
-// two names pyPlugin's sibling rules already produce, just no longer confined
-// to the directories the rules themselves derive.
-func searchBasenames(cands []pairing.Candidate) map[string]bool {
-	out := map[string]bool{}
-	for _, c := range cands {
-		if c.Path == "" {
-			continue
-		}
-		out[filepath.Base(filepath.ToSlash(c.Path))] = true
-	}
-	return out
-}
-
-// underRoots reports whether f (a root-relative, slash-separated path) sits
-// under one of roots — checked as a TOP-LEVEL first path component, matching
-// "tests/**" style conventions rather than a substring match that could fire
-// on an unrelated directory that merely contains the word "test".
-func underRoots(f string, roots []string) bool {
-	first, _, ok := strings.Cut(f, "/")
-	if !ok {
-		return false
-	}
-	for _, r := range roots {
-		if first == r {
-			return true
-		}
-	}
-	return false
-}
-
-// pathStemScore counts how many trailing NORMALIZED path segments a and b
-// share, comparing from the end of each — the evidence bestSearchMatch
-// requires before it will trust a basename-only hit at all (see there for
-// why zero is not enough), and, among matches that clear that bar, the
-// "most-specific match wins" tie breaker: a match whose own directory
-// echoes more of codePath's directory is better evidence than one that
-// shares less of it.
-func pathStemScore(a, b []string) int {
-	n := 0
-	for i, j := len(a)-1, len(b)-1; i >= 0 && j >= 0; i, j = i-1, j-1 {
-		if a[i] != b[j] {
-			break
-		}
-		n++
-	}
-	return n
-}
-
-// segments splits a slash-separated directory path into its components; "."
-// (filepath.Dir's answer for a top-level file) and "" both mean "no
-// directory" and yield an empty slice, never a single "." element that would
-// never legitimately match anything.
-func segments(dir string) []string {
-	dir = filepath.ToSlash(dir)
-	if dir == "" || dir == "." {
-		return nil
-	}
-	return strings.Split(dir, "/")
-}
-
-// normalizeSeg strips ONE conventional test-directory affix from a single
-// path segment — a leading test_/spec_ or a trailing _test/_spec — so a
-// directory named to mirror its source but ALSO carrying the language's own
-// test-marker prefix (pallets/itsdangerous: the source package is
-// `itsdangerous`, its test directory is `test_itsdangerous`, not
-// `itsdangerous`) still compares equal to the source's own directory name.
-// It is deliberately a single strip, not a loop: "stripping until nothing
-// changes" would also erase a segment that is GENUINELY named e.g. "spec"
-// on its own, which normalizeSeg must leave alone.
-func normalizeSeg(s string) string {
-	for _, pre := range []string{"test_", "spec_"} {
-		if strings.HasPrefix(s, pre) && s != pre {
-			return s[len(pre):]
-		}
-	}
-	for _, suf := range []string{"_test", "_spec"} {
-		if strings.HasSuffix(s, suf) && s != suf {
-			return s[:len(s)-len(suf)]
-		}
-	}
-	return s
-}
-
-// normalizeSegs applies normalizeSeg across a whole path-segment slice.
-func normalizeSegs(segs []string) []string {
-	out := make([]string, len(segs))
-	for i, s := range segs {
-		out[i] = normalizeSeg(s)
-	}
-	return out
-}
-
-// bestSearchMatch scans universe (root-relative, slash-separated candidate
-// paths — already filtered to whatever this caller considers "visible",
-// e.g. NEVER a gitignored file) for the file that best pairs with codePath:
-// it must sit under one of roots, carry one of basenames, AND share at
-// least one NORMALIZED trailing directory segment with codePath's own
-// directory (pathStemScore > 0) — a basename match with ZERO directory
-// correlation is deliberately refused outright, never just ranked low. Two
-// pinned regression fixtures are why: aisuite/agents_extra/artifact_store.py
-// must NOT steal aisuite/agents/'s own tests/agents/test_artifact_store.py
-// just because the basenames coincide, and flask's deep example apps
-// (examples/celery/src/task_app/views.py, 4 segments) must NOT collide with
-// src/flask's own top-level tests/test_views.py — both are basename
-// matches with a directory that shares nothing real with the source's own,
-// and the pre-existing depth-bounded convention list already refuses
-// exactly this shape of match for the identical reason (see pyPlugin.
-// TestRules' flat-form doc comment). Among files that DO clear the bar, the
-// one with the highest score wins; ties break on the shallower path, then
-// lexicographically, so the result is deterministic.
-func bestSearchMatch(codePath string, roots []string, basenames map[string]bool, universe []string) (string, bool) {
-	srcSegs := normalizeSegs(segments(filepath.Dir(filepath.ToSlash(codePath))))
-
-	var best string
-	bestScore := 0
-	var bestSegs []string
-	for _, f := range universe {
-		f = filepath.ToSlash(f)
-		if !underRoots(f, roots) || !basenames[filepath.Base(f)] {
-			continue
-		}
-		segs := normalizeSegs(segments(filepath.Dir(f)))
-		score := pathStemScore(segs, srcSegs)
-		if score == 0 {
-			continue
-		}
-		switch {
-		case best == "":
-			best, bestScore, bestSegs = f, score, segs
-		case score > bestScore:
-			best, bestScore, bestSegs = f, score, segs
-		case score == bestScore:
-			if len(segs) < len(bestSegs) || (len(segs) == len(bestSegs) && f < best) {
-				best, bestSegs = f, segs
-			}
-		}
-	}
-	return best, best != ""
-}
-
 // SearchResult is FindTest's outcome: what it tried, where it looked, and
-// what (if anything) it found.
-type SearchResult struct {
-	// Path is the resolved test path, root-relative and slash-separated.
-	// "" when nothing was found.
-	Path string
-	// ViaSearch is true when Path came from the recursive fallback rather
-	// than p's own ordered pairing candidates — the fact the "paired by
-	// search" disclosure is built on.
-	ViaSearch bool
-	// Tried is every pairing candidate FindTest checked for existence, in
-	// order — named in a not-found error so the operator sees exactly what
-	// was already ruled out, not just that something failed.
-	Tried []string
-	// Roots is the set of conventional test directories the recursive
-	// fallback searched (only populated when the fallback actually ran —
-	// i.e. every Tried candidate was absent).
-	Roots []string
-	// Found reports whether Path is usable. Path == "" and Found == false
-	// coincide today, but Found makes the zero value unambiguous rather
-	// than relying on a caller to remember Path == "" means "not found".
-	Found bool
-}
+// what (if anything) it found. It IS pairing.Resolution (an alias, so the
+// field docs live there): a struct copy with a field-by-field converter used
+// to sit here, and it had already dropped Rank — the converter that fails
+// open on whatever field nobody remembered to add.
+type SearchResult = pairing.Resolution
 
 // gitVisibleFiles enumerates every file the repository at root considers its
 // own — git's tracked files plus untracked-but-not-ignored ones — as
@@ -319,8 +149,9 @@ func pathUnderSkippedDir(rel string) bool {
 //     here and NEVER reaches stage 2.
 //  2. Only when NONE of those candidates exists: a recursive search of p's
 //     conventional test roots (pairing.Roots) for one of the SAME basenames
-//     the candidates already try (searchBasenames), picking the most specific
-//     match (bestSearchMatch) when more than one qualifies.
+//     the candidates already try, picking the most specific match when more
+//     than one qualifies. Both stages are pairing.Resolve; FindTest only
+//     supplies the disk (os.Stat) and the listing (gitVisibleFiles).
 //
 // The search universe for stage 2 is gitVisibleFiles(root): the repository's
 // own tracked-plus-untracked-but-not-ignored files, so a gitignored
@@ -331,47 +162,22 @@ func pathUnderSkippedDir(rel string) bool {
 // build a "here is everywhere I looked" error instead of leaving an operator
 // to guess a second and third time — see certify_local.go's use.
 func FindTest(p lang.Plugin, root, codePath string) (SearchResult, error) {
-	rules := p.TestRules()
-	cands := pairing.Candidates(rules, codePath)
-
-	var res SearchResult
-	for _, c := range cands {
-		cp := filepath.ToSlash(c.Path)
-		if cp == "" {
-			continue
-		}
-		res.Tried = append(res.Tried, cp)
-		full := cp
-		// Guard, not a fix for a live bug: every caller today either passes
-		// root == "" (doctor.go, checkPairing) or a repo-relative cp that is
-		// never absolute, so this never actually joins in practice. It exists
-		// so a FUTURE non-empty-root caller with an absolute candidate path
-		// can't silently get a mis-joined path out of Stat.
-		if root != "" && !filepath.IsAbs(cp) {
-			full = filepath.Join(root, cp)
-		}
-		if fi, err := os.Stat(full); err == nil && fi.Mode().IsRegular() {
-			res.Path = cp
-			res.Found = true
-			return res, nil
-		}
-	}
-
-	res.Roots = pairing.Roots(rules)
-	basenames := searchBasenames(cands)
-	if len(basenames) == 0 {
-		return res, nil
-	}
-	universe, err := gitVisibleFiles(root)
-	if err != nil {
-		return res, err
-	}
-	if found, ok := bestSearchMatch(codePath, res.Roots, basenames, universe); ok {
-		res.Path = found
-		res.ViaSearch = true
-		res.Found = true
-	}
-	return res, nil
+	return pairing.Resolve(p.TestRules(), codePath, pairing.Sources{
+		Exists: func(cp string) bool {
+			full := cp
+			// Guard, not a fix for a live bug: every caller today either passes
+			// root == "" (doctor.go, checkPairing) or a repo-relative cp that is
+			// never absolute, so this never actually joins in practice. It exists
+			// so a FUTURE non-empty-root caller with an absolute candidate path
+			// can't silently get a mis-joined path out of Stat.
+			if root != "" && !filepath.IsAbs(cp) {
+				full = filepath.Join(root, cp)
+			}
+			fi, err := os.Stat(full)
+			return err == nil && fi.Mode().IsRegular()
+		},
+		Universe: func() ([]string, error) { return gitVisibleFiles(root) },
+	})
 }
 
 // findInUniverse is Enumerate's own use of the same two-stage rule, over a
@@ -381,30 +187,23 @@ func FindTest(p lang.Plugin, root, codePath string) (SearchResult, error) {
 // paid for that walk once, for the entire repo, and re-running it per file
 // would turn an O(files) scan into an O(files²) one. presentList is
 // present's keys as a slice (built once by the caller and reused across
-// every file), since bestSearchMatch needs to range over it in an order the
-// map itself does not offer for free.
+// every file), since pairing.Resolve's search needs to range over it in an
+// order the map itself does not offer for free.
 //
 // Returns the resolved path, its Rank (the matching candidate's own
-// pairing.Candidate Rank for a convention hit, SearchRank for a search hit —
-// see SearchRank's doc comment for why that value must never compete with a
-// real convention rank), and whether the recursive
+// pairing.Candidate Rank for a convention hit, pairing.SearchRank for a
+// search hit — see pairing.SearchRank's doc comment for why that value must
+// never compete with a real convention rank), and whether the recursive
 // fallback is what found it. tp == "" means neither stage found anything.
 func findInUniverse(p lang.Plugin, codePath string, present map[string]bool, presentList []string) (tp string, rank int, viaSearch bool) {
-	rules := p.TestRules()
-	cands := pairing.Candidates(rules, codePath)
-	for _, c := range cands {
-		cp := filepath.ToSlash(c.Path)
-		if cp != "" && present[cp] {
-			return cp, c.Rank, false
-		}
-	}
-	roots := pairing.Roots(rules)
-	basenames := searchBasenames(cands)
-	if len(basenames) == 0 {
+	// Universe cannot fail here: presentList is already in hand, so the error
+	// Resolve returns is always nil and there is nothing to surface.
+	r, _ := pairing.Resolve(p.TestRules(), codePath, pairing.Sources{
+		Exists:   func(cp string) bool { return present[cp] },
+		Universe: func() ([]string, error) { return presentList, nil },
+	})
+	if !r.Found {
 		return "", 0, false
 	}
-	if found, ok := bestSearchMatch(codePath, roots, basenames, presentList); ok {
-		return found, SearchRank, true
-	}
-	return "", 0, false
+	return r.Path, r.Rank, r.ViaSearch
 }

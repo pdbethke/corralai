@@ -9,7 +9,7 @@ package pairing
 // gets Rank 0; otherwise it takes the LEAST specific (maximum) Rank among
 // every candidate that produced that path.
 //
-// What decides "sibling" is the candidate's Shape, not its Rank. Until the
+// What decides "sibling" is the candidate's Shape (its sameDir trait), not its Rank. Until the
 // Round B1 final review it was `minRank == 0`, which was the same thing only
 // because every shipped Sibling rule has Rank 0 and every other rule a
 // positive one. A rule that merely forgot its Rank is Rank 0 too, and the
@@ -20,6 +20,14 @@ package pairing
 // integer's default. The two still cannot drift silently: lang's
 // TestEveryRuleRankAgreesWithItsShape holds every registered plugin to
 // "Sibling ⇔ Rank 0".
+//
+// PRECONDITION: every Candidate carries a Shape. An empty (or unknown) Shape
+// panics, via traitsOf. That is deliberate — fail loudly: a candidate whose
+// sibling-ness cannot be decided must not be guessed, because guessing "not a
+// sibling" silently demotes a real same-directory pairing and guessing
+// "sibling" hands Rank 0 to a path with no such evidence; either is a
+// mispairing nobody would see. Candidates always sets Shape, so only a
+// hand-built slice (a test fixture) can violate this.
 //
 // Two things are going on, and they pull in different directions:
 //
@@ -79,7 +87,7 @@ func Dedupe(cands []Candidate) []Candidate {
 	shape := make(map[string]Shape, len(cands))
 	var order []string
 	for _, c := range cands {
-		if c.Shape == Sibling {
+		if traitsOf(c.Shape).sameDir {
 			sibling[c.Path] = true
 		}
 		if _, ok := firstIdx[c.Path]; !ok {

@@ -13,17 +13,47 @@
 // 2026-10-08, Round B1). A new language adds rules, or a new Shape in
 // shapeTable; it never adds a pairing function.
 //
-// It is NOT yet the only place corral decides which file tests which. The
-// stage-2 search — what happens when no candidate exists on disk — still
-// lives in internal/reposcan/findtest.go: searchBasenames, bestSearchMatch,
-// pathStemScore, and normalizeSeg with its own hand-kept list of test affixes
-// (test_, spec_, _test, _spec) that Generic does not feed. The two-stage
-// algorithm itself is written twice there, as FindTest (over a fresh git
-// listing) and findInUniverse (over Enumerate's universe). Round B1b moves
-// all of it here as one algorithm, with normalizeSeg's affixes derived from
-// Generic — golden first: the corpus golden gains a "found test" column
-// captured from today's untouched search code before a line of it moves,
-// because moving unpinned code is what this round's own contract forbids.
+// It is the one place a source's test is RESOLVED by convention or search,
+// and the one place those conventions are declared: the candidates, the
+// search roots, both test questions, and the two-stage resolution (Resolve:
+// candidates that exist on disk first, then the search over Roots scored by
+// shared path context, ranked by SearchRank). That algorithm used to be
+// written twice in internal/reposcan, as FindTest over a fresh git listing
+// and findInUniverse over Enumerate's universe; it is one function here, fed
+// by Sources{Exists, Universe}, and those two are now I/O adapters that
+// supply only the disk and the listing (gitVisibleFiles,
+// walkSkippingBuildDirs, pathUnderSkippedDir, FindTest's os.Stat probe).
+//
+// It is NOT yet the only place corral picks a test path. Three callers still
+// make their own choice from pairing's data rather than asking Resolve, and
+// all three predate Round B1b:
+//
+//   - cmd/corral/certify_adversarial.go: the --adversarial default test path
+//     is Candidates(...)[0].Path, taken without Resolve, so it never checks
+//     the disk and never searches — certify --local resolves the same file
+//     differently.
+//   - internal/advpool/gate.go: advPoolTestPath takes Candidates(...)[0], and
+//     when no plugin resolves falls back to a hand-written base+"_test.go";
+//     the authored-test path picker further down uses the same [0] idiom.
+//   - internal/reposcan/candidate.go: demoteAmbiguousPairings applies
+//     pairing's Rank semantics itself to choose between sources competing
+//     for one test.
+//
+// Round B1c removes them: one "primary candidate" answer for the [0] sites,
+// the --adversarial default routed through Resolve (a user-visible change, so
+// its own PR and CHANGELOG line), and the _test.go fallback moved here or
+// deleted. Until then, "pairing decides" is true of resolution, not of every
+// caller.
+//
+// The directory affixes the search normalizes away (testDirAffixes: prefixes
+// test_ and spec_, suffixes _test and _spec) are DECLARED, not derived from
+// Generic. An earlier plan derived them; it was dropped on purpose. Generic
+// holds FILE-name markers (with {ext}, dotted .test/.spec, and Ruby's spec_
+// now living in Ruby's rules), so deriving directory affixes from them would
+// either drop spec_ or start normalizing directories like foo.test and fooTest
+// — a behaviour change the corpus golden cannot see. A directory affix is a
+// different convention ("this directory mirrors a source directory"), not a
+// restatement of the file one, so it is its own declaration.
 package pairing
 
 import (
@@ -62,6 +92,10 @@ type shapeTraits struct {
 	// nameMarksTest: the rule's Name is a "this file IS a test" pattern (see
 	// Rule's marker invariant). Read by IsTest and MightBeTest.
 	nameMarksTest bool
+	// sameDir: a candidate of this Shape sits in the source's OWN directory —
+	// the strongest evidence a pairing can carry. True for Sibling only
+	// (TestOnlySiblingIsSameDir). Read by Dedupe.
+	sameDir bool
 }
 
 // shapeTable is the ONE place a Shape's semantics live. They used to be
@@ -74,6 +108,7 @@ var shapeTable = map[Shape]shapeTraits{
 	Sibling: {
 		candidate:     func(_ Rule, dir, name string) (string, bool) { return joinDir(dir, name), true },
 		nameMarksTest: true,
+		sameDir:       true,
 	},
 	BesideDir: {
 		candidate:     func(r Rule, dir, name string) (string, bool) { return filepath.Join(dir, r.Dir, name), true },
@@ -364,21 +399,19 @@ func IsTest(rules []Rule, rel string) bool {
 // one instrumented run, while a false "no" is the false-green this exists to
 // prevent.
 //
-// So it says yes when IsTest says yes for any language in all, when any
-// directory segment of rel is a Dir some rule (or Generic) names, or when rel's
-// LOWERCASED base name matches any lowercased Name pattern — CalcTest.php,
-// calctest.php and Test_Foo.py all might be tests. It takes every language's
-// rules rather than one because a changed file is asked about before anyone
-// knows which language claims it (README.md and a fixture under specs/ are
-// asked too).
+// So it says yes when any directory segment of rel is a Dir some rule (or
+// Generic) names, or when rel's LOWERCASED base name matches any lowercased
+// Name pattern — CalcTest.php, calctest.php and Test_Foo.py all might be tests.
+// (It used to ask IsTest per language first; that was redundant, because the
+// case-folded name match below runs over the same rules and already answers
+// every case IsTest answers yes to — cmd/corral's
+// TestIsTestImpliesMightBeTest holds it.) It takes every language's rules
+// rather than one because a changed file is asked about before anyone knows
+// which language claims it (README.md and a fixture under specs/ are asked
+// too).
 func MightBeTest(all [][]Rule, rel string) bool {
 	rel = filepath.ToSlash(rel)
 	sets := append([][]Rule{Generic}, all...)
-	for _, rules := range all {
-		if IsTest(rules, rel) {
-			return true
-		}
-	}
 	dirs := map[string]bool{}
 	for _, rules := range sets {
 		for _, r := range rules {
@@ -404,9 +437,9 @@ func MightBeTest(all [][]Rule, rel string) bool {
 	return false
 }
 
-// nameMatches reports whether base matches any nameMarksTest rule's Name pattern ({base} =
-// any characters, {ext} = a dot then any characters). With fold, the pattern
-// is lowercased first; the caller lowercases base.
+// nameMatches reports whether base matches any nameMarksTest rule's Name
+// pattern ({base} = any characters, {ext} = a dot then any characters). With
+// fold, the pattern is lowercased first; the caller lowercases base.
 func nameMatches(rules []Rule, base string, fold bool) bool {
 	for _, r := range rules {
 		if !traitsOf(r.Shape).nameMarksTest || r.Name == "" {

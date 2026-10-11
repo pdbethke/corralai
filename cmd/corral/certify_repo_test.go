@@ -3680,6 +3680,27 @@ func TestPickPreflightLanguageDifferentInstrumentationDeclinesAsAmbiguous(t *tes
 	}
 }
 
+// TestPickPreflightLanguagePartlyEqualInstrumentationDeclines: when two of
+// three matching languages would run the same instrumented command and the
+// third would run a different one, it is still a choice between runs —
+// allEqual must compare every match, not stop at the first agreeing pair —
+// so the pre-flight declines and the note names all three.
+func TestPickPreflightLanguagePartlyEqualInstrumentationDeclines(t *testing.T) {
+	reps := map[string]lang.CoverageReporter{
+		"alpha": fakeReporter{[]string{"cov", "t"}},
+		"beta":  fakeReporter{[]string{"cov", "t"}},
+		"gamma": fakeReporter{[]string{"gamma-cov", "t"}},
+	}
+	lookup := func(n string) (lang.CoverageReporter, bool) { r, ok := reps[n]; return r, ok }
+	got, note := pickPreflightLanguage([]string{"alpha", "beta", "gamma"}, []string{"t"}, lookup)
+	if got != "" {
+		t.Fatalf("got %q, want a decline", got)
+	}
+	if !strings.Contains(note, "ambiguous, skipped") || !strings.Contains(note, "(alpha, beta, gamma) — ambiguous") {
+		t.Errorf("note = %q, want the ambiguous-decline message naming all three matches", note)
+	}
+}
+
 // TestPickPreflightLanguageSameInstrumentationTakesFirstSorted: identical
 // instrumented argv is one run; the first name in the sorted input wins.
 func TestPickPreflightLanguageSameInstrumentationTakesFirstSorted(t *testing.T) {

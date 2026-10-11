@@ -586,10 +586,16 @@ A scan whose candidates span more than one language usually declines the same
 way — one instrumented run can't cover two — **unless** an explicit `--
 <test-command>` unambiguously names exactly one of them. Each reporter accepts
 only its own runners for exactly this purpose (`npm test` is Node's, `pytest -q`
-is Python's), seeing through a `sh -c` wrapper to find the runner inside.
-Two languages that could
-both plausibly own the given command (e.g. Go, whose coverage command accepts
-any test invocation by design) still decline as ambiguous. Same fail-closed
+is Python's, `go test ./...` is Go's). The Ruby, JavaScript, TypeScript and PHP
+reporters instrument through the environment, so they also see through a `sh
+-c` wrapper to find the runner inside. Python's and Go's add arguments to the
+runner's own command line, which in a wrapper would reach `sh` instead, so they
+claim only an unwrapped command: Python a `pytest …` or `<interpreter> -m
+<module> …`, Go a `go test …` or `gotestsum … -- …`. Go claims nothing else —
+`make test`, or `gotestsum` without `--`, never passes the coverage flags to `go
+test`. Languages that would run the identical instrumented command are one run,
+not a choice: JavaScript and TypeScript share theirs. Any other command claimed
+by more than one language still declines as ambiguous. Same fail-closed
 rule when the coverage tool itself is missing from the runner. Not yet wired
 into the GitHub Action as an input — today it's a `corral certify --repo`
 flag only.

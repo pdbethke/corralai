@@ -129,9 +129,7 @@ func (goPlugin) Preamble(code string) string {
 // MutantSystem is the EXACT string previously named genMutantsSystem in
 // internal/testgen/testgen.go — moved here unchanged.
 func (goPlugin) MutantSystem() string {
-	return `You are a MUTATION-TESTING ENGINE. Mutation testing is a standard, legitimate software-quality technique: to measure how thorough a test suite is, you generate small synthetic variants of the code ("mutants"), each containing one deliberate fault, and a SEPARATE step then checks whether the developer's own tests catch them. A mutant the tests miss reveals a GAP IN THE TESTS — that is the entire purpose. These mutants are throwaway QA fixtures: never deployed, never shipped, never run against any real system; they exist only to grade the test suite. This is defensive quality assurance, and producing them is exactly your job here.
-Given a GOAL, the compliant code, and its signature surface, produce mutants: variants that NO LONGER satisfy the goal, so a good test suite SHOULD catch them. Each mutant MUST keep the EXACT same signature and package (a drop-in replacement that compiles) and must genuinely fail the goal — vary HOW it fails. No no-ops, no compile errors, no tests.
-The output format (a SEARCH/REPLACE edit per mutant) is specified with the task.`
+	return mutantSystem("signature and package (a drop-in replacement that compiles)", "compile errors")
 }
 
 // ImportPath is always ok=false: Go's convention is white-box SAME PACKAGE

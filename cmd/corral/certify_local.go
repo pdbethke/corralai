@@ -683,6 +683,38 @@ func noTestFoundErr(codePath string, res reposcan.SearchResult) string {
 	return strings.TrimRight(b.String(), "\n")
 }
 
+// noTestFound is a FindTest miss as an error: its text is noTestFoundErr's,
+// and its type lets a caller tell "nothing to pair" (the operator's to fix —
+// a usage error) from "the search itself failed".
+type noTestFound struct{ msg string }
+
+func (e noTestFound) Error() string { return e.msg }
+
+// resolveDevTest is the ONE way a certify command finds the developer's test
+// when the operator named none: reposcan.FindTest (pairing.Resolve over the
+// disk under root), a noTestFound naming everywhere it looked, and the
+// "paired by search" disclosure when no naming convention found it.
+// certify --local and certify --adversarial both call it, so the two cannot
+// pair one file two different ways — they did until B1c, when --adversarial
+// took the rank-0 candidate without checking it existed.
+func resolveDevTest(plug lang.Plugin, root, codePath string, stdout io.Writer) (string, error) {
+	res, err := reposcan.FindTest(plug, root, codePath)
+	if err != nil {
+		return "", fmt.Errorf("searching for a test for %s: %w", codePath, err)
+	}
+	if !res.Found {
+		return "", noTestFound{msg: noTestFoundErr(codePath, res)}
+	}
+	if res.ViaSearch {
+		// The plugin's own naming convention never found this — every
+		// pairing candidate came up empty, and this is the ONE line that
+		// discloses the pairing came from somewhere else instead of silently
+		// presenting it as though it were the expected sibling.
+		fmt.Fprintf(stdout, "  paired by search: %s\n", res.Path)
+	}
+	return res.Path, nil
+}
+
 // isAuditUsageError reports whether err is an auditOneFile usage error (exit
 // 2 rather than exit 1). Anything else — including a nil-safe non-audit error
 // — is an internal failure.
@@ -782,21 +814,15 @@ func prepareAuditJail(ctx context.Context, in localAuditInput, plug lang.Plugin,
 		if searchRoot == "" {
 			searchRoot = "."
 		}
-		res, ferr := reposcan.FindTest(plug, searchRoot, in.codePath)
-		if ferr != nil {
-			return p, auditErr("searching for a test for %s: %v", in.codePath, ferr)
+		found, err := resolveDevTest(plug, searchRoot, in.codePath, stdout)
+		var nf noTestFound
+		switch {
+		case errors.As(err, &nf):
+			return p, auditUsageErr("%s", nf.msg)
+		case err != nil:
+			return p, auditErr("%v", err)
 		}
-		if !res.Found {
-			return p, auditUsageErr("%s", noTestFoundErr(in.codePath, res))
-		}
-		tp = res.Path
-		if res.ViaSearch {
-			// The plugin's own naming convention never found this — every
-			// pairing candidate came up empty, and this is the ONE line
-			// that discloses the pairing came from somewhere else instead of
-			// silently presenting it as though it were the expected sibling.
-			fmt.Fprintf(stdout, "  paired by search: %s\n", tp)
-		}
+		tp = found
 	}
 	devTest, err := os.ReadFile(fsPath(tp)) // #nosec G304 -- operator-supplied (or convention/search-derived) test path
 	if err != nil {

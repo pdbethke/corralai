@@ -9,6 +9,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -942,5 +943,65 @@ func TestVerdictSaysTheCriticReviewWasIncomplete(t *testing.T) {
 func TestCriticIncompleteSurvivesTheConversion(t *testing.T) {
 	if !advVerdictFromPool(advpool.Verdict{CriticIncomplete: true}).CriticIncomplete {
 		t.Fatal("advVerdictFromPool dropped CriticIncomplete")
+	}
+}
+
+// TestAdversarialFindsTestBySearch is the user-visible half of B1c: on an
+// itsdangerous-shaped tree the rank-0 sibling does not exist, and the default
+// --adversarial test path used to be that nonexistent sibling (exit 2,
+// "reading test ... no such file"). It now resolves exactly as certify --local
+// does: the stage-2 search finds tests/test_itsdangerous/test_signer.py, and
+// discloses the search the same way.
+func TestAdversarialFindsTestBySearch(t *testing.T) {
+	dir := t.TempDir()
+	for rel, body := range map[string]string{
+		"src/itsdangerous/signer.py":             "def sign(x):\n    return x\n",
+		"tests/test_itsdangerous/test_signer.py": "def test_sign():\n    assert True\n",
+	} {
+		full := filepath.Join(dir, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Chdir(dir)
+	f := &fakeAdvClient{runID: 7, statuses: []advStatus{certifiedStatus()}}
+	var out, errBuf bytes.Buffer
+	args := []string{"--adversarial", "--brain", "http://b", "--code", "src/itsdangerous/signer.py", "--goal", "g", "--poll", "1ms", "--", "python3", "-m", "pytest"}
+	if rc := runCertifyAdversarial(args, f, gitStubRunner{}, noSleep, &out, &errBuf); rc != 0 {
+		t.Fatalf("exit = %d, want 0; stderr=%s", rc, errBuf.String())
+	}
+	if want := "tests/test_itsdangerous/test_signer.py"; f.spec.DevTestPath != want {
+		t.Fatalf("DevTestPath = %q, want %q", f.spec.DevTestPath, want)
+	}
+	if !strings.Contains(f.spec.DevTestCode, "def test_sign") {
+		t.Fatalf("DevTestCode not the found test's bytes: %q", f.spec.DevTestCode)
+	}
+	if !strings.Contains(out.String(), "paired by search: tests/test_itsdangerous/test_signer.py") {
+		t.Fatalf("no search disclosure on stdout:\n%s", out.String())
+	}
+}
+
+// TestAdversarialNoTestNamesWhereItLooked: a miss says everywhere corral
+// looked (the same text certify --local prints), not a bare open error on
+// one guessed sibling.
+func TestAdversarialNoTestNamesWhereItLooked(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "lonely.py"), []byte("x = 1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(dir)
+	var out, errBuf bytes.Buffer
+	args := []string{"--adversarial", "--brain", "http://b", "--code", "lonely.py", "--goal", "g", "--poll", "1ms", "--", "python3", "-m", "pytest"}
+	if rc := runCertifyAdversarial(args, &fakeAdvClient{}, gitStubRunner{}, noSleep, &out, &errBuf); rc != 2 {
+		t.Fatalf("exit = %d, want 2; stderr=%s", rc, errBuf.String())
+	}
+	s := errBuf.String()
+	for _, want := range []string{"no test found for lonely.py", "Looked for:", "test_lonely.py", "recursively"} {
+		if !strings.Contains(s, want) {
+			t.Errorf("stderr missing %q:\n%s", want, s)
+		}
 	}
 }

@@ -11,6 +11,14 @@ history of any release, `git log v0.3.4..v0.3.5`.
 
 ## [Unreleased]
 
+- **`certify --adversarial` finds the test `certify --local` finds.** With no
+  `--test`, it used to take the language's first naming convention without
+  checking the file existed, so on a repository whose tests live elsewhere
+  (pallets/itsdangerous: `tests/test_itsdangerous/test_signer.py`) it failed
+  reading a sibling that was never there. It now resolves the test the same
+  way `--local` does: every convention, then a search of the test
+  directories, disclosed as `paired by search:`. When nothing is found, it
+  says everywhere it looked.
 - **Go 1.26.9, golang.org/x/net 0.60.0.** Standard-library advisories in
   `net/http` (GO-2026-6617, -6613, -6612, fixed in go1.26.9) and the matching
   `x/net` HTTP/2 advisory are reachable from corral's own call paths, so the

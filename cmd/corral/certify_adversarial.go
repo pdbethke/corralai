@@ -17,7 +17,6 @@ import (
 	"github.com/pdbethke/corralai/internal/agentbackend"
 	"github.com/pdbethke/corralai/internal/brainclient"
 	"github.com/pdbethke/corralai/internal/lang"
-	"github.com/pdbethke/corralai/internal/pairing"
 )
 
 // advFinding is the subset of a queue.Finding the verdict render shows. The
@@ -294,7 +293,14 @@ func runCertifyAdversarial(args []string, client advPoolClient, run cmdRunner, s
 
 	tp := strings.TrimSpace(*testPath)
 	if tp == "" {
-		tp = pairing.Candidates(plug.TestRules(), *codePath)[0].Path
+		// The same resolution certify --local uses (resolveDevTest), rooted
+		// at the working directory, which is what --code is relative to.
+		found, err := resolveDevTest(plug, ".", *codePath, stdout)
+		if err != nil {
+			fmt.Fprintf(stderr, "corral certify --adversarial: %v\n", err)
+			return 2
+		}
+		tp = found
 	}
 
 	code, err := os.ReadFile(*codePath) // #nosec G304 -- operator-supplied path to the file under review
@@ -302,7 +308,7 @@ func runCertifyAdversarial(args []string, client advPoolClient, run cmdRunner, s
 		fmt.Fprintf(stderr, "corral certify --adversarial: reading --code %s: %v\n", *codePath, err)
 		return 2
 	}
-	devTest, err := os.ReadFile(tp) // #nosec G304 -- operator-supplied (or sibling-derived) test path
+	devTest, err := os.ReadFile(tp) // #nosec G304 -- operator-supplied (or convention/search-derived) test path
 	if err != nil {
 		fmt.Fprintf(stderr, "corral certify --adversarial: reading test %s: %v (pass --test to override)\n", tp, err)
 		return 2

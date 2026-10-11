@@ -40,15 +40,19 @@ func pluginFor(codePath string) (golang.Plugin, error) {
 
 // advPoolTestPath names the synthetic test file a candidate test is written
 // to in the jail workspace: pairing.Primary over the code file's own plugin's
-// TestRules. A file no plugin claims (or whose plugin yields no candidate) is
-// named by Go's rules instead, because advPoolBase gives such a file the Go
-// scaffold — the test name and the scaffold must agree on one language.
+// TestRules. A file no plugin claims is named by Go's rules instead, matching
+// advPoolBase, which gives such a file the Go scaffold — the test name and the
+// scaffold must agree on one language. A claimed plugin that yields no
+// candidate is unreachable today (every shipped plugin has a Sibling rule) and
+// would also fall back to Go's name.
 func advPoolTestPath(codePath string) string {
 	if p, err := pluginFor(codePath); err == nil {
 		if c, ok := pairing.Primary(p.TestRules(), codePath); ok {
 			return c.Path
 		}
 	}
+	// Neither discarded ok can be false: Go is always registered, and its
+	// single Sibling rule always yields a candidate.
 	goPlug, _ := golang.ByName("go")
 	c, _ := pairing.Primary(goPlug.TestRules(), codePath)
 	return c.Path

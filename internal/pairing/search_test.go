@@ -130,6 +130,7 @@ func TestBestClaim(t *testing.T) {
 		{[]int{0, 3}, 0, true},
 		{[]int{3, 0, 3}, 1, true},
 		{[]int{SearchRank, 2}, 1, true},
+		{[]int{1, 1, 0}, 2, true},
 		{[]int{1, 1}, -1, false},
 		{[]int{0, 0, 2}, -1, false},
 		{[]int{2, 1, 1, 1}, -1, false},

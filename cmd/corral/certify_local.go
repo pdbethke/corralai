@@ -92,7 +92,7 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	_ = fs.Bool("local", false, "run the adversarial pool in-process (this mode)")
 	codePath := fs.String("code", "", "path of the code under review (required)")
-	testPath := fs.String("test", "", "path of the dev's test (default: the sibling test of --code)")
+	testPath := fs.String("test", "", "path of the dev's test (default: resolved by the language's test conventions, then a search of its test directories)")
 	langFlag := fs.String("lang", "", "source language (default: inferred from --code extension)")
 	goal := fs.String("goal", "", "the correctness/security goal the code must satisfy (required)")
 	nMutants := fs.Int("n-mutants", 0, "PER-SEAT seeded-violation mutant budget, when you want to set the exam by hand. Unset (0), the budget is DERIVED from the file's complexity — about one fault per decision point, floor "+fmt.Sprint(advpool.BudgetFloor)+", ceiling "+fmt.Sprint(advpool.BudgetCeiling)+" — and the verdict says which rule it used. Set, it is NOT the run's total: total mutants scale with --max-shards (default "+fmt.Sprint(advpool.DefaultMaxShards)+") seats, and DOUBLE again if you name a --shadow-model. E.g. `--n-mutants 5` with 8 seats means up to ~40 full dev-suite executions; `--n-mutants 20` roughly ~320")

@@ -1005,3 +1005,25 @@ func TestAdversarialNoTestNamesWhereItLooked(t *testing.T) {
 		}
 	}
 }
+
+// TestAdversarialMissingCodeReportsTheCodeNotTheTest pins the order of the
+// reads: a typo'd --code must be reported as the unreadable file it is, not
+// as "no test found" after a walk of the tree for the test of a file that
+// does not exist (certify --local reads --code first, and says the same).
+func TestAdversarialMissingCodeReportsTheCodeNotTheTest(t *testing.T) {
+	t.Chdir(t.TempDir())
+	f := &fakeAdvClient{}
+	var out, errBuf bytes.Buffer
+	args := []string{"--adversarial", "--brain", "http://b", "--code", "nope/fence.go", "--goal", "g", "--", "go", "test", "./..."}
+	rc := runCertifyAdversarial(args, f, gitStubRunner{}, noSleep, &out, &errBuf)
+	if rc != 2 {
+		t.Fatalf("exit = %d, want 2; stderr=%s", rc, errBuf.String())
+	}
+	s := errBuf.String()
+	if !strings.Contains(s, "reading --code") {
+		t.Fatalf("stderr missing 'reading --code': %s", s)
+	}
+	if strings.Contains(s, "no test found") {
+		t.Fatalf("stderr reports a missing test for a missing --code: %s", s)
+	}
+}

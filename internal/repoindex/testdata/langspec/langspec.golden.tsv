@@ -116,16 +116,37 @@ sig	helper	method	Shop	true	32	3	[{33 33} {33 33}]
 sig	initialize	method	Cart	true	38	1	[]
 sig	size	method	Cart	true	42	2	[{43 43}]
 == rust.rs (rust) chunk err=<nil>
-chunk			1-2
-chunk	Cart	struct	3-5
-chunk			6-6
-chunk	Cart	impl	7-7
-chunk	new	method	8-10
-chunk			11-11
-chunk	size	method	12-17
-chunk			18-19
-chunk	total	function	20-26
-sig err=repoindex: no signature extractor for language
+chunk			1-42
+chunk	ReadBytesExt	impl	43-43
+chunk			44-55
+chunk	session_focus_url	function	56-61
+chunk			62-62
+chunk	add_session_focus_env_vars	function	63-73
+chunk			74-90
+chunk	Square	struct	91-91
+chunk	Circle	struct	92-92
+chunk			93-93
+chunk	Shape	impl	94-94
+chunk	area	method	95-97
+chunk			98-99
+chunk	Shape	impl	100-100
+chunk	area	method	101-103
+chunk			104-105
+chunk	classify	function	106-112
+chunk			113-113
+chunk	scale	function	114-116
+chunk			117-128
+sig err=<nil>
+sig	read_u8	method	ReadBytesExt	true	19	1	[]
+sig	read_i8	method	ReadBytesExt	true	26	1	[]
+sig	read_u16_into	method	ReadBytesExt	true	33	1	[]
+sig	session_focus_url	func		true	56	1	[]
+sig	add_session_focus_env_vars	func		true	63	1	[]
+sig	name	method	Shape	true	86	1	[]
+sig	area	method	Square	true	95	1	[]
+sig	area	method	Circle	true	101	1	[]
+sig	classify	func		true	106	4	[{108 108} {109 109} {110 110}]
+sig	scale	func		true	114	2	[{115 115}]
 == typescript.ts (typescript) chunk err=<nil>
 chunk			1-2
 chunk	Item	interface	3-5

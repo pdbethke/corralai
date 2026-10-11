@@ -18,6 +18,8 @@ import (
 	"github.com/smacker/go-tree-sitter/ruby"
 	"github.com/smacker/go-tree-sitter/rust"
 	typescript "github.com/smacker/go-tree-sitter/typescript/typescript"
+
+	"github.com/pdbethke/corralai/internal/pairing"
 )
 
 // langSpec is everything repoindex knows about parsing one language. It used
@@ -64,6 +66,12 @@ type langSpec struct {
 	// Python has none because its `boolean_operator` IS its own node type and
 	// falls out of its branches set. "" if none.
 	boolOp string
+
+	// modules reads the test modules a source file declares in itself, for
+	// languages whose tests may live in the file under audit (Rust's
+	// `#[cfg(test)] mod tests`). nil → TestModules answers nil: the language
+	// pairs by filename alone.
+	modules func(root *sitter.Node, src []byte) []pairing.TestModule
 }
 
 // langSpecs holds one row per language repoindex can parse. It is filled in
@@ -152,6 +160,20 @@ func init() {
 			containers: map[string]bool{"impl_item": true},
 			// Inside declaration_list of impl_item: function_item nodes.
 			methods: map[string]string{"function_item": "method"},
+			extract: func(text, _ string) ([]Signature, error) { return extractRustSignatures(text) },
+			// match_arm, not match_expression: one decision per arm, as PHP's
+			// case_statement does. `else` is the fall-through, not a decision,
+			// and `loop` has no condition (its exits are the breaks and ifs it
+			// contains); `?` is left out so the number stays comparable to the
+			// other rows' explicit-branch counts.
+			branches: map[string]bool{
+				"if_expression":    true, // also `if let`, and `else if` (an if inside the else)
+				"while_expression": true, // also `while let`
+				"for_expression":   true,
+				"match_arm":        true,
+			},
+			boolOp:  "binary_expression",
+			modules: rustTestModules,
 		},
 		"java": {
 			grammar: java.GetLanguage,

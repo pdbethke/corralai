@@ -132,10 +132,28 @@ chunk			98-99
 chunk	Shape	impl	100-100
 chunk	area	method	101-103
 chunk			104-105
-chunk	classify	function	106-112
-chunk			113-113
-chunk	scale	function	114-116
-chunk			117-128
+chunk	Square	impl	106-106
+chunk	new	method	107-109
+chunk			110-115
+chunk	Make	impl	116-116
+chunk	new	method	117-119
+chunk			120-121
+chunk	Square	impl	122-122
+chunk	fmt	method	123-125
+chunk			126-127
+chunk	Square	impl	128-128
+chunk	fmt	method	129-131
+chunk			132-133
+chunk	Circle	impl	134-134
+chunk	from	method	135-137
+chunk			138-139
+chunk	Circle	impl	140-140
+chunk	from	method	141-143
+chunk			144-145
+chunk	classify	function	146-152
+chunk			153-153
+chunk	scale	function	154-156
+chunk			157-168
 sig err=<nil>
 sig	read_u8	method	ReadBytesExt	true	19	1	[]
 sig	read_i8	method	ReadBytesExt	true	26	1	[]
@@ -143,10 +161,16 @@ sig	read_u16_into	method	ReadBytesExt	true	33	1	[]
 sig	session_focus_url	func		true	56	1	[]
 sig	add_session_focus_env_vars	func		true	63	1	[]
 sig	name	method	Shape	true	86	1	[]
-sig	area	method	Square	true	95	1	[]
-sig	area	method	Circle	true	101	1	[]
-sig	classify	func		true	106	4	[{108 108} {109 109} {110 110}]
-sig	scale	func		true	114	2	[{115 115}]
+sig	area	method	<Square as Shape>	true	95	1	[]
+sig	area	method	<Circle as Shape>	true	101	1	[]
+sig	new	method	Square	true	107	1	[]
+sig	new	method	<Square as Make>	true	117	1	[]
+sig	fmt	method	<Square as fmt::Display>	true	123	1	[]
+sig	fmt	method	<Square as fmt::Debug>	true	129	1	[]
+sig	from	method	<Circle as From<i32>>	true	135	1	[]
+sig	from	method	<Circle as From<f64>>	true	141	1	[]
+sig	classify	func		true	146	4	[{148 148} {149 149} {150 150}]
+sig	scale	func		true	154	2	[{155 155}]
 == typescript.ts (typescript) chunk err=<nil>
 chunk			1-2
 chunk	Item	interface	3-5

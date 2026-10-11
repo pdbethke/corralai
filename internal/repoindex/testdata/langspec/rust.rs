@@ -103,6 +103,46 @@ impl Shape for Circle {
     }
 }
 
+impl Square {
+    pub fn new(side: f64) -> Self {
+        Square(side)
+    }
+}
+
+pub trait Make {
+    fn new() -> Self;
+}
+
+impl Make for Square {
+    fn new() -> Self {
+        Square(1.0)
+    }
+}
+
+impl fmt::Display for Square {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl fmt::Debug for Square {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "Square({})", self.0)
+    }
+}
+
+impl From<i32> for Circle {
+    fn from(n: i32) -> Self {
+        Circle(n as f64)
+    }
+}
+
+impl From<f64> for Circle {
+    fn from(n: f64) -> Self {
+        Circle(n)
+    }
+}
+
 pub fn classify(n: i32) -> &'static str {
     match n {
         0 => "zero",

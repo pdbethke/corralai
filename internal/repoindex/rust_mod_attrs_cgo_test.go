@@ -78,9 +78,9 @@ func TestRustSameNamedFnInTwoImplsAreTwoSymbols(t *testing.T) {
 		t.Fatal(err)
 	}
 	by := sigByIdentity(sigs)
-	sq, c := by["Square.area"], by["Circle.area"]
+	sq, c := by["<Square as Shape>.area"], by["<Circle as Shape>.area"]
 	if sq.Name == "" || c.Name == "" {
-		t.Fatalf("Square.area / Circle.area missing from %v", by)
+		t.Fatalf("trait-impl area symbols missing from %v", by)
 	}
 	if sq.Line == c.Line {
 		t.Fatalf("both impls' area resolved to one symbol at line %d", sq.Line)
@@ -93,6 +93,33 @@ func TestRustSameNamedFnInTwoImplsAreTwoSymbols(t *testing.T) {
 	}
 	if n != 2 {
 		t.Fatalf("%d symbols named area, want 2 (the bodiless trait declaration must be skipped)", n)
+	}
+}
+
+// TestRustSameTypeImplsAreDistinctIdentities: Display/Debug fmt, From<A>/From<B>
+// from, and an inherent new beside a trait new all share one TYPE and one fn
+// name; symbolIdentity (Receiver + "." + Name) must still tell them apart.
+func TestRustSameTypeImplsAreDistinctIdentities(t *testing.T) {
+	sigs, err := ExtractSignatures(rustFixture(t), "rust")
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]bool{}
+	for _, s := range sigs {
+		id := s.Receiver + "." + s.Name
+		if seen[id] {
+			t.Errorf("two symbols share identity %q", id)
+		}
+		seen[id] = true
+	}
+	for _, id := range []string{
+		"<Square as fmt::Display>.fmt", "<Square as fmt::Debug>.fmt",
+		"<Circle as From<i32>>.from", "<Circle as From<f64>>.from",
+		"Square.new", "<Square as Make>.new",
+	} {
+		if !seen[id] {
+			t.Errorf("missing identity %q; have %v", id, seen)
+		}
 	}
 }
 
@@ -112,13 +139,13 @@ func TestRustExtractsTheCallableSurface(t *testing.T) {
 	if _, ok := by[".zero"]; ok {
 		t.Error("a fn inside #[cfg(test)] mod tests was extracted")
 	}
-	if k := by["Square.area"].Kind; k != "method" {
+	if k := by["<Square as Shape>.area"].Kind; k != "method" {
 		t.Errorf("Square.area kind = %q, want method", k)
 	}
 	if k := by[".classify"].Kind; k != "func" {
 		t.Errorf("classify kind = %q, want func", k)
 	}
-	if !by[".session_focus_url"].Exported || by["Square.area"].Exported != true {
+	if !by[".session_focus_url"].Exported || by["<Square as Shape>.area"].Exported != true {
 		t.Errorf("exported: pub(crate) free fn and a trait-impl method are both visible outside the file")
 	}
 	if got := by[".classify"].Results; len(got) != 1 || got[0] != "&'static str" {

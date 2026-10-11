@@ -20,12 +20,16 @@ import (
 // extractRustSignatures collects free functions and the methods of impl and
 // trait blocks, attributing each method to its enclosing type.
 //
-// Receiver is the impl's TYPE (`impl Shape for Square` → "Square") or, for a
-// trait's default method, the trait's name. advpool.symbolIdentity is
-// Receiver + "." + Name, so two impl blocks that each define `area` stay two
-// symbols (the rider from the PHP review). Known limit: two impls of
-// different generic traits for ONE type (`impl From<A> for X` and
-// `impl From<B> for X`, each with `from`) still share an identity.
+// Receiver is the impl's TYPE for an inherent impl (`impl Square` → "Square"),
+// the trait's name for a trait's default method, and Rust's own
+// qualified-path form for a trait impl (`impl Shape for Square` →
+// "<Square as Shape>", trait generics included: "<X as From<A>>").
+// advpool.symbolIdentity is Receiver + "." + Name and its only consumer, so
+// the qualified form is what keeps `impl Display for X { fn fmt }` apart from
+// `impl Debug for X { fn fmt }`, `From<A>` apart from `From<B>`, and an
+// inherent `new` apart from a trait's `new`. Type-only receivers collapsed all
+// of those into one symbol, which shard dedupe and proven-gap accounting then
+// treated as one function. Nothing reads Receiver as a bare type name.
 //
 // A function_signature_item — a trait method declaration with no body — is
 // skipped: there is nothing to mutate, and counting one would hand a shard a
@@ -60,9 +64,9 @@ func rustWalkItems(list *sitter.Node, src []byte, out *[]Signature) {
 		case "function_item":
 			*out = append(*out, rustCallable(n, src, ""))
 		case "impl_item":
-			rustMethods(n, "type", src, out)
+			rustMethods(n, rustImplReceiver(n, src), src, out)
 		case "trait_item":
-			rustMethods(n, "name", src, out)
+			rustMethods(n, fieldText(n, "name", src), src, out)
 		case "mod_item":
 			if rustAttrs(n, src).cfgTest {
 				continue
@@ -72,10 +76,18 @@ func rustWalkItems(list *sitter.Node, src []byte, out *[]Signature) {
 	}
 }
 
-// rustMethods appends the bodied functions of an impl or trait. recvField is
-// the field naming the receiver: an impl's `type`, a trait's `name`.
-func rustMethods(container *sitter.Node, recvField string, src []byte, out *[]Signature) {
-	receiver := fieldText(container, recvField, src)
+// rustImplReceiver names an impl block: its type, or `<Type as Trait>` when
+// it implements a trait (see extractRustSignatures for why).
+func rustImplReceiver(impl *sitter.Node, src []byte) string {
+	typ := fieldText(impl, "type", src)
+	if tr := fieldText(impl, "trait", src); tr != "" {
+		return "<" + typ + " as " + tr + ">"
+	}
+	return typ
+}
+
+// rustMethods appends the bodied functions of an impl or trait under receiver.
+func rustMethods(container *sitter.Node, receiver string, src []byte, out *[]Signature) {
 	body := container.ChildByFieldName("body")
 	if body == nil {
 		return

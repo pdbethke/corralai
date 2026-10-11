@@ -2,50 +2,74 @@
 
 package sandbox
 
-import "testing"
+import (
+	"slices"
+	"strings"
+	"testing"
+)
 
-// pinHostEnv is a host env that tries to override every pin, plus a PATH the
-// container must drop and a key that must be forwarded untouched.
-var pinHostEnv = []string{"HOME=/root", "GOTOOLCHAIN=auto", "PATH=/host/bin", "KEEP=1"}
+// hostileHostEnv is a host env that tries to override every pin — derived
+// from pinnedEnv, so a new pin is attacked without editing this file — plus a
+// PATH (the container drops it, bwrap forwards it) and a key that must be
+// forwarded untouched.
+func hostileHostEnv() []string {
+	env := []string{"PATH=/host/bin", "KEEP=1"}
+	for _, p := range pinnedEnv {
+		env = append(env, p.Key+"="+hostileValue(p.Key))
+	}
+	return env
+}
 
-// countPair counts how often key,value appear adjacent after flag in argv; for
-// the container, pass flag "-e" and the joined "k=v" as value with key "".
-func countAfter(argv []string, flag string, rest ...string) int {
-	n := 0
-	for i := 0; i+1+len(rest) <= len(argv); i++ {
+func hostileValue(key string) string { return "hostile-" + key }
+
+// envSettings collects every environment assignment in a wrapped argv, keyed
+// by variable name, in argv order. The container form is `-e K=V` (flag "-e",
+// one following argument); the bwrap form is `--setenv K V` (flag
+// "--setenv", two following arguments).
+func envSettings(argv []string, flag string) map[string][]string {
+	out := map[string][]string{}
+	for i := 0; i < len(argv); i++ {
 		if argv[i] != flag {
 			continue
 		}
-		ok := true
-		for j, r := range rest {
-			if argv[i+1+j] != r {
-				ok = false
+		switch flag {
+		case "-e":
+			if i+1 < len(argv) {
+				k, v, _ := strings.Cut(argv[i+1], "=")
+				out[k] = append(out[k], v)
+			}
+		case "--setenv":
+			if i+2 < len(argv) {
+				out[argv[i+1]] = append(out[argv[i+1]], argv[i+2])
 			}
 		}
-		if ok {
-			n++
+	}
+	return out
+}
+
+// assertPinsHold: every pinnedEnv key is set exactly once, to its pinned
+// value, and no host value for it survives.
+func assertPinsHold(t *testing.T, got map[string][]string) {
+	t.Helper()
+	for _, p := range pinnedEnv {
+		if vs := got[p.Key]; !slices.Equal(vs, []string{p.Value}) {
+			t.Errorf("%s set to %q, want exactly [%q]", p.Key, vs, p.Value)
 		}
 	}
-	return n
 }
 
 func TestContainerWrapReadsPinnedEnv(t *testing.T) {
-	argv, err := containerIsolator{runtime: "docker", image: "img"}.Wrap("true", Options{Workspace: "/w"}, pinHostEnv)
+	argv, err := containerIsolator{runtime: "docker", image: "img"}.Wrap("true", Options{Workspace: "/w"}, hostileHostEnv())
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, p := range pinnedEnv {
-		if got := countAfter(argv, "-e", p.Key+"="+p.Value); got != 1 {
-			t.Errorf("pin %s=%s appears %d times, want 1", p.Key, p.Value, got)
-		}
+	got := envSettings(argv, "-e")
+	assertPinsHold(t, got)
+	if _, ok := got["PATH"]; ok {
+		t.Error("the host PATH must not reach the container")
 	}
-	for _, bad := range []string{"HOME=/root", "GOTOOLCHAIN=auto", "PATH=/host/bin"} {
-		if countAfter(argv, "-e", bad) != 0 {
-			t.Errorf("%s must not reach the container", bad)
-		}
-	}
-	if countAfter(argv, "-e", "KEEP=1") != 1 {
-		t.Error("KEEP=1 must be forwarded")
+	if !slices.Equal(got["KEEP"], []string{"1"}) {
+		t.Errorf("KEEP = %q, want forwarded once as 1", got["KEEP"])
 	}
 }
 

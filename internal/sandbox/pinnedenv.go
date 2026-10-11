@@ -3,10 +3,15 @@
 package sandbox
 
 // pinnedEnv is every environment variable the jail SETS rather than inherits:
-// each backend strips these keys from the host env it forwards and sets the
-// pinned value instead. One table, read by both backends, so a pin added for
-// one toolchain (Rust's offline flag is next) cannot reach the bwrap jail and
-// miss the container one. The pins live here, not on the language plugins,
+// the bwrap and container backends strip these keys from the host env they
+// forward and set the pinned value instead. One table, read by both of those
+// backends, so a pin added for one toolchain (Rust's offline flag is next)
+// cannot reach the bwrap jail and miss the container one.
+//
+// The darwin sandbox-exec backend (isolator_darwin.go) neither strips nor
+// pins these keys: it passes through the environment it is handed —
+// MinimalEnv by default, which does not carry GOTOOLCHAIN, so `go` there
+// falls back to its default of `auto`. That is a known gap, not fixed here. The pins live here, not on the language plugins,
 // because internal/lang imports this package and because an isolation
 // property must not depend on which packages a binary happens to link —
 // corral-agent links sandbox without lang.

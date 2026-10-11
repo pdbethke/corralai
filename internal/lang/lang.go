@@ -279,12 +279,23 @@ func AllTestRules() [][]pairing.Rule {
 
 // AllDependencyDirs is every registered language's DependencyDirs,
 // deduplicated by name (vendor is both Go's and PHP's) and sorted — derived
-// from the registry, never a hand list. When two languages declare the same
-// name, RunWrites is true if either says so (the safe reading).
+// from the registry, never a hand list. The merge rule is mergeDependencyDirs'.
 func AllDependencyDirs() []DepDir {
-	byName := map[string]DepDir{}
+	var decls [][]DepDir
 	for _, name := range Names() {
-		for _, d := range registry[name].DependencyDirs() {
+		decls = append(decls, registry[name].DependencyDirs())
+	}
+	return mergeDependencyDirs(decls)
+}
+
+// mergeDependencyDirs deduplicates declarations by name and sorts them. When
+// two declarations share a name, RunWrites is true if either says so: the
+// safe reading, because a directory some run writes into must never be shared
+// read-only or linked between trees.
+func mergeDependencyDirs(decls [][]DepDir) []DepDir {
+	byName := map[string]DepDir{}
+	for _, ds := range decls {
+		for _, d := range ds {
 			if prev, ok := byName[d.Name]; ok {
 				d.RunWrites = d.RunWrites || prev.RunWrites
 			}
@@ -333,6 +344,22 @@ const defaultPreambleLines = 40
 // vendored). Languages whose dependencies already live in the tree
 // (node_modules, .venv) do not implement it — those trees are bound from
 // their DependencyDirs instead.
+//
+// The contract, because the command runs on the HOST, with network, OUTSIDE
+// the jail, against a copy of a repository corral does not trust:
+//
+//   - argv is fixed literals chosen by the plugin. It is never built from the
+//     repository's contents (file names, manifest fields, config values);
+//     repoDir is for deciding ok (os.Stat checks), not for composing argv.
+//   - The command must not execute repository-controlled code or
+//     configuration: no build scripts, install hooks, plugins or task
+//     runners the repository can define. `go mod vendor` qualifies — it
+//     downloads and copies modules and runs none of their code; a package
+//     manager's install step that runs lifecycle scripts does not.
+//
+// The caller (cmd/corral's ensureVendored) runs it with corral's own secrets
+// scrubbed from the environment, which limits what a contract breach could
+// read but does not make one safe.
 type Vendorer interface {
 	VendorCmd(repoDir string) (argv []string, ok bool)
 }

@@ -6,7 +6,12 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
+
+	"github.com/pdbethke/corralai/internal/creds"
+	"github.com/pdbethke/corralai/internal/sandbox"
 )
 
 // TestEnsureVendoredNoOps pins the three cases that must NOT stage a copy or
@@ -131,5 +136,36 @@ func TestVendorAutoBindsExactlyParallelToNodeModulesAndVenv(t *testing.T) {
 				t.Errorf("shouldBind(%q, backend=%q) = %v, want %v — vendor/ must track node_modules/.venv exactly", name, backend, got, want)
 			}
 		}
+	}
+}
+
+// TestVendorCommandEnvDropsCorralSecrets: the vendoring command runs on the
+// HOST, with network, against a copy of an untrusted repository, so none of
+// corral's own secrets may reach it — while the variables a toolchain needs to
+// fetch dependencies must. The secret list is derived from the scrub's own
+// sources, so a secret added there is checked here without editing this test.
+// A nil Env would mean "inherit everything", so it is asserted non-nil.
+func TestVendorCommandEnvDropsCorralSecrets(t *testing.T) {
+	secrets := append(append([]string{}, sandbox.CorralOwnSecrets...), creds.CanonicalNames...)
+	for _, k := range secrets {
+		t.Setenv(k, "leaked-"+k)
+	}
+	t.Setenv("GOPROXY", "https://proxy.example")
+
+	cmd := vendorCommand([]string{"go", "mod", "vendor"}, "/staging")
+	if cmd.Env == nil {
+		t.Fatal("vendorCommand left Env nil, which inherits the whole host environment")
+	}
+	if cmd.Dir != "/staging" {
+		t.Errorf("Dir = %q, want /staging", cmd.Dir)
+	}
+	for _, kv := range cmd.Env {
+		k, _, _ := strings.Cut(kv, "=")
+		if slices.Contains(secrets, k) {
+			t.Errorf("%s reached the vendoring command", k)
+		}
+	}
+	if !slices.Contains(cmd.Env, "GOPROXY=https://proxy.example") {
+		t.Error("GOPROXY must reach the vendoring command: it fetches dependencies")
 	}
 }

@@ -78,3 +78,19 @@ func TestCompositionsAreFresh(t *testing.T) {
 		t.Error("NotReviewed shares its map between calls")
 	}
 }
+
+// No directory a run writes into is shared: derived from the plugins'
+// declarations, so a new RunWrites dir is checked without editing this test.
+// A shared RunWrites dir would be N pool trees writing through one link into
+// the operator's checkout, or a read-only bind the suite fails to write.
+func TestSharedDependenciesExcludeRunWrites(t *testing.T) {
+	shared := SharedDependencies()
+	for _, d := range lang.AllDependencyDirs() {
+		if d.RunWrites && shared[d.Name] {
+			t.Errorf("%q is declared RunWrites but SharedDependencies() includes it", d.Name)
+		}
+		if !d.RunWrites && !shared[d.Name] {
+			t.Errorf("%q is a read-only dependency dir but SharedDependencies() lacks it", d.Name)
+		}
+	}
+}

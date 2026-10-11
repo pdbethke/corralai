@@ -4,7 +4,10 @@
 
 package sandbox
 
-import "testing"
+import (
+	"slices"
+	"testing"
+)
 
 func TestBwrapWrapNetOffByDefault(t *testing.T) {
 	argv, err := (bwrapIsolator{}).Wrap("echo hi", Options{Workspace: "/workspace"}, []string{"PATH=/usr/bin"})
@@ -140,22 +143,16 @@ func TestBwrapWrapPinsGoToolchainLocal(t *testing.T) {
 // TestBwrapWrapReadsPinnedEnv: every pinnedEnv row is set exactly once, no host
 // value for a pinned key survives, and (unlike the container) PATH is forwarded.
 func TestBwrapWrapReadsPinnedEnv(t *testing.T) {
-	argv, err := (bwrapIsolator{}).Wrap("true", Options{Workspace: "/w"}, pinHostEnv)
+	argv, err := (bwrapIsolator{}).Wrap("true", Options{Workspace: "/w"}, hostileHostEnv())
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, p := range pinnedEnv {
-		if got := countAfter(argv, "--setenv", p.Key, p.Value); got != 1 {
-			t.Errorf("pin %s=%s appears %d times, want 1", p.Key, p.Value, got)
-		}
+	got := envSettings(argv, "--setenv")
+	assertPinsHold(t, got)
+	if !slices.Equal(got["KEEP"], []string{"1"}) {
+		t.Errorf("KEEP = %q, want forwarded once as 1", got["KEEP"])
 	}
-	if argvHas(argv, "--setenv", "HOME", "/root") || argvHas(argv, "--setenv", "GOTOOLCHAIN", "auto") {
-		t.Error("host value for a pinned key leaked")
-	}
-	if !argvHas(argv, "--setenv", "KEEP", "1") {
-		t.Error("KEEP=1 must be forwarded")
-	}
-	if !argvHas(argv, "--setenv", "PATH", "/host/bin") {
-		t.Error("bwrap forwards PATH")
+	if !slices.Equal(got["PATH"], []string{"/host/bin"}) {
+		t.Errorf("PATH = %q, bwrap forwards the host PATH", got["PATH"])
 	}
 }

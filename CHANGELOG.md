@@ -11,6 +11,14 @@ history of any release, `git log v0.3.4..v0.3.5`.
 
 ## [Unreleased]
 
+- **Every directory walk agrees on what is not your source.** `corral
+  review` now also skips `venv`, `.bundle`, `site-packages`, `.tox` and
+  `target` when it loads and plans scopes, and no longer skips a
+  directory named `site` (that was corral's own website, applied to every
+  repository). The jail and the workspace pool also bind or link a
+  top-level `site-packages` read-only, like `.venv`. What `certify --repo`
+  scans and accounts for is unchanged.
+
 - **The coverage pre-flight runs on mixed-language repositories when the
   `--` command names a language.** Go's coverage instrumentation used to
   claim every command, so a repository with Go and Python files given

@@ -17,6 +17,7 @@ import (
 
 	"github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/pairing"
+	"github.com/pdbethke/corralai/internal/treedirs"
 )
 
 // Candidate is one source file that can be audited, paired with the test
@@ -195,43 +196,12 @@ func UnauditableChangedSource(reason string) bool {
 // skipDirs are never walked: dependency, build-output and VCS trees are not
 // the subject of an audit of THIS repo's tests, and letting them into the walk
 // puts vendored third-party code into the report's denominator.
-var skipDirs = map[string]bool{
-	".git": true, ".corral": true, "node_modules": true, "vendor": true,
-	".venv": true, "venv": true, ".bundle": true, "testdata": true,
-	"dist": true, "build": true, "target": true, ".tox": true,
-	"site-packages": true,
-}
+var skipDirs = treedirs.NeverWalked()
 
-// invisibleDirs are skipped WITHOUT accounting. Two kinds of tree qualify,
-// for the same reason:
-//
-//   - .git is not source at all — listing its objects would swamp the report.
-//   - DEPENDENCY trees are not THIS repo's source either; they are
-//     third-party code the audit has no business grading, and they are
-//     enormous. node_modules alone is routinely tens of thousands of files;
-//     a Python virtualenv's site-packages is comparable. Enumerating them
-//     buries the handful of entries a reader actually needs in a report that
-//     gets signed and anchored.
-//
-// BUILD OUTPUT (dist, build, target) stays ACCOUNTED: those trees are small
-// and derived from this repo, so a reader benefits from seeing the scan chose
-// not to look there.
-//
-// .tox is classified as a dependency tree rather than build output because a
-// tox environment contains full virtualenvs — it is site-packages wearing a
-// different name, not a modest build artifact.
-var invisibleDirs = map[string]bool{
-	".git": true,
-	// .corral is corral's OWN record — the ledger directory a scan writes
-	// its entry into (and reads its prior from) — not the repository's
-	// source: like .git, listing it would report the scan to itself, and
-	// digesting it would make every second scan a cache miss.
-	".corral": true,
-	// Dependency trees, by ecosystem: node, go, python (×3), ruby.
-	"node_modules": true, "vendor": true,
-	".venv": true, "venv": true, "site-packages": true, ".tox": true,
-	".bundle": true,
-}
+// invisibleDirs are skipped WITHOUT accounting: tooling and dependency
+// trees. Why each qualifies, and why build output stays accounted, is on
+// treedirs.Unaccounted.
+var invisibleDirs = treedirs.Unaccounted()
 
 // subtreeFiles enumerates the regular files under dir as exclusions carrying
 // reason, keyed repo-relative to root. Non-regular entries (symlinks, devices)

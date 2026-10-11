@@ -67,6 +67,16 @@ func Dependencies() map[string]bool {
 // that cannot import its own dependencies fails for a reason that has
 // nothing to do with the mutant, and no mutant is ever written into them.
 //
+// Two consumers rely on that, for reasons of their own mechanics:
+//
+//   - The jail binds these read-only instead of copying them into the seed,
+//     which keeps them out of the 64 MiB seed cap.
+//   - The workspace pool symlinks them into every private tree. They are
+//     git-ignored, so they are not in the universe the pool copies, yet must
+//     still be reachable from every tree; they are large build products, so
+//     they are linked rather than copied; and no mutant is ever written into
+//     them, which is what makes one shared link safe.
+//
 // .tox is NOT shared. tox creates, updates and reuses its environments
 // inside .tox as part of running the suite, so a shared .tox would be N trees
 // writing to one directory at once (cross-tree interference on the very

@@ -15,6 +15,7 @@ import (
 	"github.com/pdbethke/corralai/internal/auditpush"
 	"github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/review"
+	"github.com/pdbethke/corralai/internal/treedirs"
 )
 
 // runReviewPlan implements `corral review plan`: the scopes of the
@@ -109,7 +110,7 @@ func runReviewPlan(args []string, stdout, stderr io.Writer) int {
 // least one source file a language plugin recognises, with their file
 // counts. The usual skip list applies.
 func repoScopes(root string, depth int) (map[string]int, error) {
-	skip := map[string]bool{".git": true, "node_modules": true, "vendor": true, ".corral": true, "testdata": true, "dist": true, "build": true, ".venv": true, "__pycache__": true, "site": true}
+	skip := treedirs.NotReviewed()
 	scopes := map[string]int{}
 	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {

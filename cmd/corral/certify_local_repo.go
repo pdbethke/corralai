@@ -15,6 +15,7 @@ import (
 
 	"github.com/pdbethke/corralai/internal/adequacy"
 	"github.com/pdbethke/corralai/internal/lang"
+	"github.com/pdbethke/corralai/internal/treedirs"
 )
 
 // repoSeed is everything about a repo's jail workspace that does NOT depend on
@@ -90,7 +91,7 @@ func ensureVendored(cmdName, repoDir, langName string, out io.Writer) (string, f
 	}
 	joined := strings.Join(argv, " ")
 	fmt.Fprintf(out, "%s: vendoring dependencies (%s) so the offline jail can resolve them…\n", cmdName, joined)
-	cmd := exec.CommandContext(context.Background(), argv[0], argv[1:]...) // #nosec G204 -- argv comes from a plugin's fixed literal, not user input
+	cmd := exec.CommandContext(context.Background(), argv[0], argv[1:]...) // #nosec G204 G702 -- argv comes from a plugin's fixed literal, not user input
 	cmd.Dir = tmp
 	if b, verr := cmd.CombinedOutput(); verr != nil {
 		cleanup()
@@ -176,21 +177,11 @@ type loadOpts struct {
 }
 
 // depDirNames are directory basenames auto-detected as dependency trees:
-// large, vendor-managed, and irrelevant to the mutant/text seed — binding
-// them read-only instead of copying keeps them out of the 64 MiB cap.
-//
-// "vendor" already covers TWO languages under the one basename: it named
-// Go's own module vendor dir first, and Composer's PHP dependency tree
-// (`composer install`'s target, holding vendor/bin/phpunit) lands at the
-// exact same repo-relative name — no separate PHP entry was needed here,
-// only the one below.
-var depDirNames = map[string]bool{
-	"node_modules": true,
-	"vendor":       true,
-	".venv":        true,
-	"venv":         true,
-	".bundle":      true,
-}
+// large, vendor-managed, and irrelevant to the mutant/text seed. The set is
+// treedirs' SharedDependencies (the plugins declare the names); binding them
+// read-only instead of copying is this consumer's mechanism, and its reason
+// is on that function.
+var depDirNames = treedirs.SharedDependencies()
 
 // shouldBind reports whether the dir at rel (base name name) should be
 // bind-mounted read-only rather than copied. Auto-detected dep dirs and

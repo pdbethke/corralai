@@ -10,6 +10,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/pdbethke/corralai/internal/treedirs"
 )
 
 const maxReadBytes = 256 * 1024
@@ -63,7 +65,10 @@ func (e *Engine) ReadFile(dir, path string) (string, error) {
 	return string(b), nil
 }
 
-func skip(name string) bool { return name == ".git" || name == "node_modules" || name == "vendor" }
+// notRead is what the reader never loads: tooling and dependency trees.
+var notRead = treedirs.NotRead()
+
+func skip(name string) bool { return notRead[name] }
 
 func (e *Engine) Tree(dir, subdir string) ([]string, error) {
 	root, err := safeJoin(dir, subdir)

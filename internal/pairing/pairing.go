@@ -240,6 +240,20 @@ func Candidates(rules []Rule, codePath string) []Candidate {
 	return Dedupe(out)
 }
 
+// Primary is the NAMING answer: the one candidate a new test for codePath is
+// called, which is the first of Candidates(rules, codePath) in rule order. It
+// never consults the disk. A caller looking for the test that already exists
+// asks Resolve; a caller about to WRITE a test file (advpool's synthetic and
+// authored tests) asks Primary. ok is false when no rule yields a candidate —
+// the case Candidates(...)[0] used to answer with a panic.
+func Primary(rules []Rule, codePath string) (Candidate, bool) {
+	cands := Candidates(rules, codePath)
+	if len(cands) == 0 {
+		return Candidate{}, false
+	}
+	return cands[0], true
+}
+
 // Roots is the top-level directories a search walks for these rules:
 // DefaultRoot, then every Dir a searchRoot Shape's rule names (shapeTable),
 // trimmed of slashes, deduplicated, in order. (The six languages' TestRoots

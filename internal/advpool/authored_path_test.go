@@ -205,3 +205,21 @@ func wsKeys(m map[string]string) []string {
 	}
 	return out
 }
+
+// TestAdvPoolTestPath_UnknownLanguageIsGoName pins the name a file no plugin
+// claims is given: Go's sibling convention, because advPoolBase hands such a
+// file the Go scaffold. Captured against the hand-written base+"_test.go"
+// fallback before B1c replaced it with pairing.Primary over Go's own rules —
+// so the two must agree string for string.
+func TestAdvPoolTestPath_UnknownLanguageIsGoName(t *testing.T) {
+	for code, want := range map[string]string{
+		"weird.unknownext":     "weird_test.go",
+		"a/b/weird.unknownext": "a/b/weird_test.go",
+		"noext":                "noext_test.go",
+		"deep/dir/Makefile.in": "deep/dir/Makefile_test.go",
+	} {
+		if got := advPoolTestPath(code); got != want {
+			t.Errorf("advPoolTestPath(%q) = %q, want %q", code, got, want)
+		}
+	}
+}

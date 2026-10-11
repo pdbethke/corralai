@@ -4,7 +4,10 @@
 
 package sandbox
 
-import "testing"
+import (
+	"slices"
+	"testing"
+)
 
 func TestBwrapWrapNetOffByDefault(t *testing.T) {
 	argv, err := (bwrapIsolator{}).Wrap("echo hi", Options{Workspace: "/workspace"}, []string{"PATH=/usr/bin"})
@@ -134,5 +137,22 @@ func TestBwrapWrapPinsGoToolchainLocal(t *testing.T) {
 	}
 	if argvHas(argv, "--setenv", "GOTOOLCHAIN", "auto") {
 		t.Fatal("host GOTOOLCHAIN=auto must not leak into the jail")
+	}
+}
+
+// TestBwrapWrapReadsPinnedEnv: every pinnedEnv row is set exactly once, no host
+// value for a pinned key survives, and (unlike the container) PATH is forwarded.
+func TestBwrapWrapReadsPinnedEnv(t *testing.T) {
+	argv, err := (bwrapIsolator{}).Wrap("true", Options{Workspace: "/w"}, hostileHostEnv())
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := envSettings(argv, "--setenv")
+	assertPinsHold(t, got)
+	if !slices.Equal(got["KEEP"], []string{"1"}) {
+		t.Errorf("KEEP = %q, want forwarded once as 1", got["KEEP"])
+	}
+	if !slices.Equal(got["PATH"], []string{"/host/bin"}) {
+		t.Errorf("PATH = %q, bwrap forwards the host PATH", got["PATH"])
 	}
 }

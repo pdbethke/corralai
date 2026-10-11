@@ -11,6 +11,24 @@ history of any release, `git log v0.3.4..v0.3.5`.
 
 ## [Unreleased]
 
+- **The directory walkers that skip dependency trees now share one
+  definition, declared by the language plugins.** `corral review`'s scope
+  loading and planning, the repository reader the brain and the gate use,
+  the jail's read-only dependency binds, the workspace pool's dependency
+  links and `certify --repo`'s scan all read it. `corral review` now also
+  skips `venv`, `.bundle`, `site-packages`, `.tox` and `target`, and no
+  longer skips a directory named `site` (that was corral's own website,
+  applied to every repository). The repository reader now also skips
+  `.corral`, `.venv`, `venv`, `.bundle`, `site-packages` and `.tox`. The
+  jail now bind-mounts a `site-packages` directory at any depth read-only
+  instead of copying it into the seed (under bwrap, and under the
+  container backend when the directory is world-readable, the same rule as
+  `.venv`), and the workspace pool links a top-level `site-packages` into
+  every tree, like `.venv`. What `certify --repo` scans and accounts for
+  is unchanged. The jail seed and the vendoring staging copy do not use
+  the shared definition: apart from the binds above, neither skips any
+  directory but `.git`.
+
 - **The coverage pre-flight runs on mixed-language repositories when the
   `--` command names a language.** Go's coverage instrumentation used to
   claim every command, so a repository with Go and Python files given

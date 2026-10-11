@@ -1051,3 +1051,13 @@ func TestWriterProviderFailureIsNotTheModelsFailureInEitherMode(t *testing.T) {
 		})
 	}
 }
+
+// TestAuthoredRecordFallsBackToHashForAnUnregisteredLanguage: a stale verdict
+// can name a language no plugin registers; its record keeps the `#` separator
+// rather than failing, as it did before the marker became a plugin fact.
+func TestAuthoredRecordFallsBackToHashForAnUnregisteredLanguage(t *testing.T) {
+	v := Verdict{Lang: "cobol", AuthoredTest: "a", AuthoredExtra: []golang.AuthoredPart{{MutantID: "m2", Source: "b"}}}
+	if rec := v.AuthoredRecord(); !strings.Contains(rec, "# --- corral: separate test file (unmergeable) — m2 ---") {
+		t.Errorf("unregistered language did not fall back to #:\n%s", rec)
+	}
+}

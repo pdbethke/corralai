@@ -22,6 +22,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/pdbethke/corralai/internal/treedirs"
 )
 
 // The tiers, as the design names them. Declared by the reviewer; RECORDED by
@@ -185,7 +187,7 @@ type Scope struct {
 }
 
 // skipDir is the tree a reviewer never needs and a brief cannot afford.
-var skipDir = map[string]bool{".git": true, "node_modules": true, "vendor": true, ".corral": true, "testdata": true, "dist": true, "build": true, ".venv": true, "__pycache__": true}
+var skipDir = treedirs.NotReviewed()
 
 // LoadScope walks root/scope and reads what fits.
 func LoadScope(root, scope string, maxBytes int) (Scope, error) {

@@ -160,10 +160,10 @@ func (c containerIsolator) Wrap(command string, opts Options, env []string) ([]s
 		// --pids-limit, --memory. nosuid and nodev are kept on both tmpfs.
 		"--tmpfs", "/tmp:rw,exec,nosuid,nodev",
 		"--tmpfs", "/home/agent:rw,exec,nosuid,nodev",
-		"-e", "HOME=/home/agent",
-		// Offline jail: pin GOTOOLCHAIN=local so `go` never tries to download a
-		// go.mod-pinned toolchain (mirrors the bwrap backend). See isolator_linux.go.
-		"-e", "GOTOOLCHAIN=local",
+	}
+	// The jail's own env pins (HOME, GOTOOLCHAIN, ...): see pinnedEnv.
+	for _, p := range pinnedEnv {
+		argv = append(argv, "-e", p.Key+"="+p.Value)
 	}
 	for _, kv := range env {
 		if i := strings.IndexByte(kv, '='); i > 0 {
@@ -180,7 +180,7 @@ func (c containerIsolator) Wrap(command string, opts Options, env []string) ([]s
 			// install somewhere unusual. It also leaked the operator's home
 			// directory layout into an untrusted container for no benefit.
 			// The image knows where its own tools are.
-			if kv[:i] == "HOME" || kv[:i] == "GOTOOLCHAIN" || kv[:i] == "PATH" {
+			if isPinned(kv[:i]) || kv[:i] == "PATH" {
 				continue // already pinned above, or owned by the image
 			}
 			argv = append(argv, "-e", kv)

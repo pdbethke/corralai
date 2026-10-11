@@ -9,11 +9,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/pdbethke/corralai/internal/sandbox"
+	"github.com/pdbethke/corralai/internal/treedirs"
 )
 
 // Disclosure is what the verdict and the report say about concurrency: how
@@ -61,20 +63,20 @@ type Disclosure struct {
 // so the pool downgrades to the checkout itself and says so.
 const maxUniverseBytes = 2 << 30 // 2 GiB
 
-// symlinkedDepDirs are dependency trees that are ignored by git (so they are
-// not in the universe to copy) but MUST still be reachable from every tree:
-// a suite that cannot import its own dependencies fails for a reason that has
-// nothing to do with the mutant. They are symlinked, not copied — they are
-// large, they are build products, and no mutant is ever written into them.
-//
-// Every entry has to satisfy that last clause: the RUN must not write into
-// it. That is why .tox is NOT here. tox creates, updates and reuses its
-// environments inside .tox as part of running the suite, so a shared .tox
-// would be N trees writing to one directory at once (cross-tree interference
-// on the very isolation this pool exists to provide) AND a write through the
-// link into the operator's real checkout. A tox suite in a tree simply
-// rebuilds its own .tox, which is slower and correct.
-var symlinkedDepDirs = []string{"node_modules", "vendor", ".venv", "venv", ".bundle"}
+// symlinkedDepDirs are the dependency trees every pool tree gets a link to
+// rather than a copy: treedirs' SharedDependencies, sorted because a map has
+// no order and Disclosure.Shared reports them in this one. Why those and not
+// .tox (a run writes into it) is on that function.
+var symlinkedDepDirs = sortedKeys(treedirs.SharedDependencies())
+
+func sortedKeys(m map[string]bool) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
 
 // WorkspacePool is a Jail backed by N private copies of one checkout. Each
 // RunTest borrows a free tree, applies the files there, runs, restores, and

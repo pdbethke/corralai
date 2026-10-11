@@ -355,3 +355,9 @@ func (rubyPlugin) CoverageCmd(testCmd []string) (cmd []string, ok bool) {
 func (rubyPlugin) ParseCoverage(stdout, modulePath string) (executed map[string]bool, err error) {
 	return corralCoverageReport(stdout, rubyCoverageHeader, "ruby", modulePath)
 }
+
+// LineComment is the ruby line-comment marker.
+func (rubyPlugin) LineComment() string { return "#" }
+
+// DependencyDirs is Bundler's local install directory.
+func (rubyPlugin) DependencyDirs() []DepDir { return []DepDir{{Name: ".bundle"}} }

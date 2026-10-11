@@ -574,3 +574,26 @@ func goTestShaped(testCmd []string) bool {
 	}
 	return false
 }
+
+// LineComment is the go line-comment marker.
+func (goPlugin) LineComment() string { return "//" }
+
+// VendorCmd: a Go module not already carrying vendor/ is vendored with
+// `go mod vendor`, so the offline jail resolves its external modules from
+// the tree instead of the operator's module cache.
+func (goPlugin) VendorCmd(repoDir string) ([]string, bool) {
+	if _, err := os.Stat(filepath.Join(repoDir, "go.mod")); err != nil {
+		return nil, false
+	}
+	if fi, err := os.Stat(filepath.Join(repoDir, "vendor")); err == nil && fi.IsDir() {
+		return nil, false
+	}
+	return []string{"go", "mod", "vendor"}, true
+}
+
+// DependencyDirs is Go's module vendor directory (`go mod vendor`).
+//
+// "vendor" covers TWO languages under the one basename: it named Go's own
+// module vendor dir first, and Composer's PHP dependency tree lands at the
+// exact same repo-relative name (see the php plugin).
+func (goPlugin) DependencyDirs() []DepDir { return []DepDir{{Name: "vendor"}} }

@@ -35,6 +35,8 @@ func (p stubPlugin) Name() string                                      { return 
 func (stubPlugin) Detect(string) bool                                  { return false }
 func (stubPlugin) Scaffold() map[string]string                         { return nil }
 func (stubPlugin) TestCmd() []string                                   { return nil }
+func (stubPlugin) LineComment() string                                 { return "#" }
+func (stubPlugin) DependencyDirs() []lang.DepDir                       { return nil }
 func (stubPlugin) CompileCheck(string, string) [][]string              { return nil }
 func (stubPlugin) TestRules() []pairing.Rule                           { return nil }
 func (stubPlugin) Preflight([]string) error                            { return nil }

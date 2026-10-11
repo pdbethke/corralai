@@ -15,6 +15,15 @@ import (
 	"github.com/pdbethke/corralai/internal/pairing"
 )
 
+// DepDir is one dependency directory a language installs.
+type DepDir struct {
+	Name string
+	// RunWrites is true when running the test suite writes INTO the
+	// directory (tox creates and reuses its environments in .tox), so it
+	// can never be shared read-only or symlinked across trees.
+	RunWrites bool
+}
+
 // Plugin is everything the audit gate needs to grade one self-contained
 // source file + its test suite in a given language.
 type Plugin interface {
@@ -22,6 +31,17 @@ type Plugin interface {
 	Detect(codePath string) bool // by file extension
 	Scaffold() map[string]string // base workspace files (go.mod / none)
 	TestCmd() []string           // default recursive test command
+	// LineComment is the language's line-comment marker ("//" or "#"). It is
+	// a fact about the language, declared once here so every place that
+	// writes a comment into audited-language text (the authored-test record's
+	// separator, the shard preamble's elision line) agrees.
+	LineComment() string
+	// DependencyDirs are the directory basenames this language's package
+	// manager installs third-party code into. They are not the repository's
+	// own source, so every tree walker skips them; RunWrites says whether a
+	// test RUN writes into the directory (which decides whether trees may
+	// share it). internal/treedirs composes the walkers' sets from these.
+	DependencyDirs() []DepDir
 	// CompileCheck returns a SEQUENCE of commands that together syntax/type
 	// check the authored test: run each in order, stop at the first
 	// non-zero exit (i.e. treat the sequence as chained by `&&`), and
@@ -257,6 +277,39 @@ func AllTestRules() [][]pairing.Rule {
 	return out
 }
 
+// AllDependencyDirs is every registered language's DependencyDirs,
+// deduplicated by name (vendor is both Go's and PHP's) and sorted — derived
+// from the registry, never a hand list. The merge rule is mergeDependencyDirs'.
+func AllDependencyDirs() []DepDir {
+	var decls [][]DepDir
+	for _, name := range Names() {
+		decls = append(decls, registry[name].DependencyDirs())
+	}
+	return mergeDependencyDirs(decls)
+}
+
+// mergeDependencyDirs deduplicates declarations by name and sorts them. When
+// two declarations share a name, RunWrites is true if either says so: the
+// safe reading, because a directory some run writes into must never be shared
+// read-only or linked between trees.
+func mergeDependencyDirs(decls [][]DepDir) []DepDir {
+	byName := map[string]DepDir{}
+	for _, ds := range decls {
+		for _, d := range ds {
+			if prev, ok := byName[d.Name]; ok {
+				d.RunWrites = d.RunWrites || prev.RunWrites
+			}
+			byName[d.Name] = d
+		}
+	}
+	out := make([]DepDir, 0, len(byName))
+	for _, d := range byName {
+		out = append(out, d)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
+}
+
 // ByName resolves a plugin by its language name. Fail-closed: (nil,false)
 // for anything not registered.
 func ByName(name string) (Plugin, bool) {
@@ -282,6 +335,34 @@ func Detect(codePath string) (Plugin, bool) {
 // header (the package/imports a shard's sliced view needs to still read as
 // plausible code).
 const defaultPreambleLines = 40
+
+// Vendorer is an OPTIONAL plugin extension for a language whose dependencies
+// live OUTSIDE the repository (a module cache the offline jail cannot see):
+// VendorCmd names the command that, run on the HOST with network, in a
+// throwaway copy of repoDir, makes them part of the tree. ok is false when
+// nothing needs vendoring (not a project of this language, or already
+// vendored). Languages whose dependencies already live in the tree
+// (node_modules, .venv) do not implement it — those trees are bound from
+// their DependencyDirs instead.
+//
+// The contract, because the command runs on the HOST, with network, OUTSIDE
+// the jail, against a copy of a repository corral does not trust:
+//
+//   - argv is fixed literals chosen by the plugin. It is never built from the
+//     repository's contents (file names, manifest fields, config values);
+//     repoDir is for deciding ok (os.Stat checks), not for composing argv.
+//   - The command must not execute repository-controlled code or
+//     configuration: no build scripts, install hooks, plugins or task
+//     runners the repository can define. `go mod vendor` qualifies — it
+//     downloads and copies modules and runs none of their code; a package
+//     manager's install step that runs lifecycle scripts does not.
+//
+// The caller (cmd/corral's ensureVendored) runs it with corral's own secrets
+// scrubbed from the environment, which limits what a contract breach could
+// read but does not make one safe.
+type Vendorer interface {
+	VendorCmd(repoDir string) (argv []string, ok bool)
+}
 
 // Preambler is an OPTIONAL plugin extension: a language whose package/import
 // header corral can reliably locate returns it verbatim, so a mutant-

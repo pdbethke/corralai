@@ -1807,7 +1807,7 @@ type jailWiringInput struct {
 	codePath       string
 	testPath       string
 	repoDir        string
-	langName       string // resolved language plugin name — drives Go dep vendoring
+	langName       string // resolved language plugin name — drives dependency vendoring
 	fsPath         func(string) string
 	code           []byte
 	devTest        []byte
@@ -1914,8 +1914,8 @@ type jailWiring struct {
 	codeKey    string
 	devTestKey string
 	depBinds   []adequacy.DepBind
-	// cleanup releases any temp staging dir created for Go dep vendoring
-	// (see ensureGoVendored). Always non-nil; a no-op when nothing was staged.
+	// cleanup releases any temp staging dir created for dependency vendoring
+	// (see ensureVendored). Always non-nil; a no-op when nothing was staged.
 	// The caller MUST defer it after the run completes — the jail bind-mounts
 	// vendor/ from the staged copy, so it has to outlive scoring.
 	cleanup func()

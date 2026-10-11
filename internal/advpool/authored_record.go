@@ -27,7 +27,7 @@ func (v Verdict) AuthoredRecord() string {
 	if len(v.AuthoredExtra) == 0 {
 		return v.AuthoredTest
 	}
-	c := recordCommentMarker(v.Lang)
+	c := recordComment(v.Lang)
 	var b strings.Builder
 	b.WriteString(strings.TrimRight(v.AuthoredTest, "\n"))
 	for _, p := range v.AuthoredExtra {
@@ -44,14 +44,14 @@ func (v Verdict) AuthoredRecord() string {
 	return b.String()
 }
 
-// recordCommentMarker is the line-comment syntax of the audited language, so
-// the separator above is a comment in the file it separates rather than a
-// syntax error in the middle of it. `#` is the fallback because it is right
-// for python and ruby and harmless as a label anywhere corral does not know.
-func recordCommentMarker(langName string) string {
-	switch langName {
-	case "go", "javascript", "typescript", "php":
-		return "//"
+// recordComment is the line-comment marker of the audited language, so the
+// separator above is a comment in the file it separates rather than a syntax
+// error in the middle of it. `#` is the fallback for a name no plugin
+// registers (a stale verdict): it is right for python and ruby and harmless
+// as a label anywhere corral does not know.
+func recordComment(langName string) string {
+	if p, ok := golang.ByName(langName); ok {
+		return p.LineComment()
 	}
 	return "#"
 }

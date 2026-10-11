@@ -314,3 +314,13 @@ func (jsPlugin) CoverageCmd(testCmd []string) (cmd []string, ok bool) {
 func (jsPlugin) ParseCoverage(stdout, modulePath string) (executed map[string]bool, err error) {
 	return corralCoverageReport(stdout, jsCoverageHeader, "javascript", modulePath)
 }
+
+// LineComment is the javascript line-comment marker.
+func (jsPlugin) LineComment() string { return "//" }
+
+// jsFamilyDependencyDirs is the ONE declaration of the Node dependency tree,
+// shared by the javascript and typescript plugins.
+func jsFamilyDependencyDirs() []DepDir { return []DepDir{{Name: "node_modules"}} }
+
+// DependencyDirs is the Node dependency tree.
+func (jsPlugin) DependencyDirs() []DepDir { return jsFamilyDependencyDirs() }

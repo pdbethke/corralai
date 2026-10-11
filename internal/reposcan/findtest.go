@@ -165,11 +165,10 @@ func FindTest(p lang.Plugin, root, codePath string) (SearchResult, error) {
 	return pairing.Resolve(p.TestRules(), codePath, pairing.Sources{
 		Exists: func(cp string) bool {
 			full := cp
-			// Guard, not a fix for a live bug: every caller today either passes
-			// root == "" (doctor.go, checkPairing) or a repo-relative cp that is
-			// never absolute, so this never actually joins in practice. It exists
-			// so a FUTURE non-empty-root caller with an absolute candidate path
-			// can't silently get a mis-joined path out of Stat.
+			// Live guard: certify --local and certify --adversarial pass
+			// root "." with whatever --code the operator gave, and an absolute
+			// --code yields absolute candidate paths. Joining those onto the
+			// root would stat a mis-joined path, so they are used as given.
 			if root != "" && !filepath.IsAbs(cp) {
 				full = filepath.Join(root, cp)
 			}

@@ -318,7 +318,7 @@ Usage of certify --local:
   -swarm int
     	max concurrent audit workers (0 = auto-size to this host's cores). The BUDGET clamp: independent role tasks run in parallel up to this bound, so a big audit swarms without melting the box
   -test string
-    	path of the dev's test (default: the sibling test of --code)
+    	path of the dev's test (default: resolved by the language's test conventions, then a search of its test directories)
   -test-timeout duration
     	hard cap on a SINGLE test-suite run in the jail (0 = auto: derived from the healthy suite's own runtime, so a mutant that makes the suite hang is killed fast instead of eating the whole --timeout). Raise it only if your suite legitimately runs long
   -timeout duration

@@ -92,7 +92,7 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	_ = fs.Bool("local", false, "run the adversarial pool in-process (this mode)")
 	codePath := fs.String("code", "", "path of the code under review (required)")
-	testPath := fs.String("test", "", "path of the dev's test (default: the sibling test of --code)")
+	testPath := fs.String("test", "", "path of the dev's test (default: resolved by the language's test conventions, then a search of its test directories)")
 	langFlag := fs.String("lang", "", "source language (default: inferred from --code extension)")
 	goal := fs.String("goal", "", "the correctness/security goal the code must satisfy (required)")
 	nMutants := fs.Int("n-mutants", 0, "PER-SEAT seeded-violation mutant budget, when you want to set the exam by hand. Unset (0), the budget is DERIVED from the file's complexity — about one fault per decision point, floor "+fmt.Sprint(advpool.BudgetFloor)+", ceiling "+fmt.Sprint(advpool.BudgetCeiling)+" — and the verdict says which rule it used. Set, it is NOT the run's total: total mutants scale with --max-shards (default "+fmt.Sprint(advpool.DefaultMaxShards)+") seats, and DOUBLE again if you name a --shadow-model. E.g. `--n-mutants 5` with 8 seats means up to ~40 full dev-suite executions; `--n-mutants 20` roughly ~320")
@@ -683,6 +683,38 @@ func noTestFoundErr(codePath string, res reposcan.SearchResult) string {
 	return strings.TrimRight(b.String(), "\n")
 }
 
+// noTestFound is a FindTest miss as an error: its text is noTestFoundErr's,
+// and its type lets a caller tell "nothing to pair" (the operator's to fix —
+// a usage error) from "the search itself failed".
+type noTestFound struct{ msg string }
+
+func (e noTestFound) Error() string { return e.msg }
+
+// resolveDevTest is the ONE way a certify command finds the developer's test
+// when the operator named none: reposcan.FindTest (pairing.Resolve over the
+// disk under root), a noTestFound naming everywhere it looked, and the
+// "paired by search" disclosure when no naming convention found it.
+// certify --local and certify --adversarial both call it, so the two cannot
+// pair one file two different ways — they did until B1c, when --adversarial
+// took the rank-0 candidate without checking it existed.
+func resolveDevTest(plug lang.Plugin, root, codePath string, stdout io.Writer) (string, error) {
+	res, err := reposcan.FindTest(plug, root, codePath)
+	if err != nil {
+		return "", fmt.Errorf("searching for a test for %s: %w", codePath, err)
+	}
+	if !res.Found {
+		return "", noTestFound{msg: noTestFoundErr(codePath, res)}
+	}
+	if res.ViaSearch {
+		// The plugin's own naming convention never found this — every
+		// pairing candidate came up empty, and this is the ONE line that
+		// discloses the pairing came from somewhere else instead of silently
+		// presenting it as though it were the expected sibling.
+		fmt.Fprintf(stdout, "  paired by search: %s\n", res.Path)
+	}
+	return res.Path, nil
+}
+
 // isAuditUsageError reports whether err is an auditOneFile usage error (exit
 // 2 rather than exit 1). Anything else — including a nil-safe non-audit error
 // — is an internal failure.
@@ -782,21 +814,15 @@ func prepareAuditJail(ctx context.Context, in localAuditInput, plug lang.Plugin,
 		if searchRoot == "" {
 			searchRoot = "."
 		}
-		res, ferr := reposcan.FindTest(plug, searchRoot, in.codePath)
-		if ferr != nil {
-			return p, auditErr("searching for a test for %s: %v", in.codePath, ferr)
+		found, err := resolveDevTest(plug, searchRoot, in.codePath, stdout)
+		var nf noTestFound
+		switch {
+		case errors.As(err, &nf):
+			return p, auditUsageErr("%s", nf.msg)
+		case err != nil:
+			return p, auditErr("%v", err)
 		}
-		if !res.Found {
-			return p, auditUsageErr("%s", noTestFoundErr(in.codePath, res))
-		}
-		tp = res.Path
-		if res.ViaSearch {
-			// The plugin's own naming convention never found this — every
-			// pairing candidate came up empty, and this is the ONE line
-			// that discloses the pairing came from somewhere else instead of
-			// silently presenting it as though it were the expected sibling.
-			fmt.Fprintf(stdout, "  paired by search: %s\n", tp)
-		}
+		tp = found
 	}
 	devTest, err := os.ReadFile(fsPath(tp)) // #nosec G304 -- operator-supplied (or convention/search-derived) test path
 	if err != nil {

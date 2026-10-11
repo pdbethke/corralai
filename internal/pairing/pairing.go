@@ -24,26 +24,20 @@
 // supply only the disk and the listing (gitVisibleFiles,
 // walkSkippingBuildDirs, pathUnderSkippedDir, FindTest's os.Stat probe).
 //
-// It is NOT yet the only place corral picks a test path. Three callers still
-// make their own choice from pairing's data rather than asking Resolve, and
-// all three predate Round B1b:
-//
-//   - cmd/corral/certify_adversarial.go: the --adversarial default test path
-//     is Candidates(...)[0].Path, taken without Resolve, so it never checks
-//     the disk and never searches — certify --local resolves the same file
-//     differently.
-//   - internal/advpool/gate.go: advPoolTestPath takes Candidates(...)[0], and
-//     when no plugin resolves falls back to a hand-written base+"_test.go";
-//     the authored-test path picker further down uses the same [0] idiom.
-//   - internal/reposcan/candidate.go: demoteAmbiguousPairings applies
-//     pairing's Rank semantics itself to choose between sources competing
-//     for one test.
-//
-// Round B1c removes them: one "primary candidate" answer for the [0] sites,
-// the --adversarial default routed through Resolve (a user-visible change, so
-// its own PR and CHANGELOG line), and the _test.go fallback moved here or
-// deleted. Until then, "pairing decides" is true of resolution, not of every
-// caller.
+// Every caller asks pairing; none but one makes its own choice from pairing's
+// data. The one remaining direct reader of Candidates is
+// sourcesOrphanedByDeletedTests (cmd/corral/certify_repo.go), which uses it as
+// a membership check over the convention candidates, not a pick: a test that
+// was paired by search rather than by convention and is then deleted is
+// therefore not reported as orphaning its source.
+// The three questions have one function each: Primary names a test corral is
+// about to write (advpool's synthetic and authored tests), Resolve finds the
+// test that already exists (reposcan.FindTest and findInUniverse, and through
+// FindTest both certify --local and certify --adversarial), and BestClaim
+// settles which of several sources resolving to one test keeps it
+// (reposcan.demoteAmbiguousPairings, which owns only the grouping and the
+// explicit-pairing exemption). Round B1c made that true; before it, three
+// callers indexed Candidates(...)[0] or compared Ranks themselves.
 //
 // The directory affixes the search normalizes away (testDirAffixes: prefixes
 // test_ and spec_, suffixes _test and _spec) are DECLARED, not derived from
@@ -238,6 +232,20 @@ func Candidates(rules []Rule, codePath string) []Candidate {
 		out = append(out, Candidate{Path: p, Rank: r.Rank, Shape: r.Shape})
 	}
 	return Dedupe(out)
+}
+
+// Primary is the NAMING answer: the one candidate a new test for codePath is
+// called, which is the first of Candidates(rules, codePath) in rule order. It
+// never consults the disk. A caller looking for the test that already exists
+// asks Resolve; a caller about to WRITE a test file (advpool's synthetic and
+// authored tests) asks Primary. ok is false when no rule yields a candidate —
+// the case Candidates(...)[0] used to answer with a panic.
+func Primary(rules []Rule, codePath string) (Candidate, bool) {
+	cands := Candidates(rules, codePath)
+	if len(cands) == 0 {
+		return Candidate{}, false
+	}
+	return cands[0], true
 }
 
 // Roots is the top-level directories a search walks for these rules:

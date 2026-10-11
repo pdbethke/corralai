@@ -17,7 +17,6 @@ import (
 	"github.com/pdbethke/corralai/internal/agentbackend"
 	"github.com/pdbethke/corralai/internal/brainclient"
 	"github.com/pdbethke/corralai/internal/lang"
-	"github.com/pdbethke/corralai/internal/pairing"
 )
 
 // advFinding is the subset of a queue.Finding the verdict render shows. The
@@ -246,7 +245,7 @@ func runCertifyAdversarial(args []string, client advPoolClient, run cmdRunner, s
 	_ = fs.Bool("adversarial", false, "run the adversarial testing pool (this mode)")
 	brainURL := fs.String("brain", os.Getenv("CORRAL_BRAIN"), "brain MCP endpoint (or $CORRAL_BRAIN)")
 	codePath := fs.String("code", "", "repo-relative path of the code under review (required)")
-	testPath := fs.String("test", "", "repo-relative path of the dev's test (default: the _test.go sibling of --code)")
+	testPath := fs.String("test", "", "repo-relative path of the dev's test (default: resolved by the language's test conventions, then a search of its test directories, as in certify --local)")
 	langFlag := fs.String("lang", "", "source language (default: inferred from --code extension)")
 	goal := fs.String("goal", "", "the correctness/security goal the code must satisfy (required)")
 	nMutants := fs.Int("n-mutants", 0, "how many seeded-violation mutants (default 5, brain clamps to 20)")
@@ -292,17 +291,28 @@ func runCertifyAdversarial(args []string, client advPoolClient, run cmdRunner, s
 		plug = p
 	}
 
-	tp := strings.TrimSpace(*testPath)
-	if tp == "" {
-		tp = pairing.Candidates(plug.TestRules(), *codePath)[0].Path
-	}
-
+	// --code is read before the test is resolved, as certify --local does: a
+	// typo'd --code is reported as the unreadable file it is, not as a missing
+	// test for a file that does not exist.
 	code, err := os.ReadFile(*codePath) // #nosec G304 -- operator-supplied path to the file under review
 	if err != nil {
 		fmt.Fprintf(stderr, "corral certify --adversarial: reading --code %s: %v\n", *codePath, err)
 		return 2
 	}
-	devTest, err := os.ReadFile(tp) // #nosec G304 -- operator-supplied (or sibling-derived) test path
+
+	tp := strings.TrimSpace(*testPath)
+	if tp == "" {
+		// The same resolution certify --local uses (resolveDevTest), rooted
+		// at the working directory, which is what --code is relative to.
+		found, err := resolveDevTest(plug, ".", *codePath, stdout)
+		if err != nil {
+			fmt.Fprintf(stderr, "corral certify --adversarial: %v\n", err)
+			return 2
+		}
+		tp = found
+	}
+
+	devTest, err := os.ReadFile(tp) // #nosec G304 -- operator-supplied (or convention/search-derived) test path
 	if err != nil {
 		fmt.Fprintf(stderr, "corral certify --adversarial: reading test %s: %v (pass --test to override)\n", tp, err)
 		return 2

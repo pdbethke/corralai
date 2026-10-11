@@ -15,6 +15,33 @@ import (
 // cross-source collision.
 const SearchRank = 100
 
+// BestClaim settles a collision: several sources whose resolutions landed on
+// ONE test path, each with the Rank its resolution carried (a convention
+// candidate's Rank, or SearchRank). Lower is more specific. It returns the
+// index of the single claimant strictly more specific than every other one,
+// and (-1, false) when the lowest rank is shared or there are no claimants —
+// a tie has no safe winner, so every claimant loses. That loses a correct
+// pairing sometimes; it is the intended trade, because a coin-flip pairing
+// signs one file's verdict with another file's tests.
+//
+// Ranks are only comparable between claimants of the SAME test path (see
+// Candidate); the caller does the grouping.
+func BestClaim(ranks []int) (winner int, ok bool) {
+	winner = -1
+	for i, r := range ranks {
+		switch {
+		case winner == -1 || r < ranks[winner]:
+			winner, ok = i, true
+		case r == ranks[winner]:
+			ok = false
+		}
+	}
+	if !ok {
+		return -1, false
+	}
+	return winner, true
+}
+
 // testDirAffixes: the prefixes and suffixes a test DIRECTORY may add to the
 // source directory it mirrors (itsdangerous → test_itsdangerous). A directory
 // convention, deliberately not derived from Generic's file-name markers — see

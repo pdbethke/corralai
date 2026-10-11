@@ -38,23 +38,24 @@ func pluginFor(codePath string) (golang.Plugin, error) {
 	return p, nil
 }
 
-// advPoolTestPath derives the synthetic test-file name a candidate test is
-// written to in the jail workspace from the code file's own path via the
-// resolved language plugin's own convention. Falls back to the legacy go
-// convention (same base name, `_test.go` suffix, same directory) when no
-// plugin resolves — kept identical to the prior implementation so an
-// unresolvable path still behaves exactly as before.
+// advPoolTestPath names the synthetic test file a candidate test is written
+// to in the jail workspace: pairing.Primary over the code file's own plugin's
+// TestRules. A file no plugin claims is named by Go's rules instead, matching
+// advPoolBase, which gives such a file the Go scaffold — the test name and the
+// scaffold must agree on one language. A claimed plugin that yields no
+// candidate is unreachable today (every shipped plugin has a Sibling rule) and
+// would also fall back to Go's name.
 func advPoolTestPath(codePath string) string {
 	if p, err := pluginFor(codePath); err == nil {
-		return pairing.Candidates(p.TestRules(), codePath)[0].Path
+		if c, ok := pairing.Primary(p.TestRules(), codePath); ok {
+			return c.Path
+		}
 	}
-	ext := filepath.Ext(codePath)
-	base := strings.TrimSuffix(codePath, ext)
-	dir := filepath.Dir(codePath)
-	if dir == "." {
-		return base + "_test.go"
-	}
-	return filepath.Join(dir, filepath.Base(base)+"_test.go")
+	// Neither discarded ok can be false: Go is always registered, and its
+	// single Sibling rule always yields a candidate.
+	goPlug, _ := golang.ByName("go")
+	c, _ := pairing.Primary(goPlug.TestRules(), codePath)
+	return c.Path
 }
 
 // authoredTestMarker distinguishes the pool's authored test file from the
@@ -145,13 +146,13 @@ func authoredTestPath(codePath, devTestPath string, base map[string]string) stri
 			pick = filepath.Join(dir, marked)
 		} else {
 			// Hand the plugin a synthetic SOURCE path (code stem + marker,
-			// sited in the dev test's directory) and take its rank-0 test
-			// name for it.
-			cands := pairing.Candidates(p.TestRules(), filepath.Join(dir, stem+marker+ext))
-			if len(cands) == 0 {
+			// sited in the dev test's directory) and take its primary test
+			// name for it (pairing.Primary).
+			c, ok := pairing.Primary(p.TestRules(), filepath.Join(dir, stem+marker+ext))
+			if !ok {
 				return fallback
 			}
-			pick = cands[0].Path
+			pick = c.Path
 		}
 		if got := filepath.ToSlash(pick); !taken(got) {
 			return got

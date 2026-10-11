@@ -122,3 +122,25 @@ func TestGenericMarkersKeepTheOldChecksExactly(t *testing.T) {
 		}
 	}
 }
+
+// TestPrimary pins that Primary is exactly "the first candidate, in rule
+// order" — the naming answer — and that it reports an empty rule set instead
+// of panicking the way Candidates(...)[0] did.
+func TestPrimary(t *testing.T) {
+	rules := []Rule{
+		{Shape: Sibling, Name: "test_{base}.py", Rank: 0},
+		{Shape: ParallelTree, Dir: "tests", Name: "test_{base}.py", Rank: 1},
+	}
+	for _, code := range []string{"pkg/mod.py", "mod.py", "a/b/c/mod.py"} {
+		got, ok := Primary(rules, code)
+		if !ok {
+			t.Fatalf("Primary(%q) ok = false, want true", code)
+		}
+		if want := Candidates(rules, code)[0]; got != want {
+			t.Errorf("Primary(%q) = %+v, want Candidates[0] %+v", code, got, want)
+		}
+	}
+	if got, ok := Primary(nil, "pkg/mod.py"); ok || got != (Candidate{}) {
+		t.Errorf("Primary(nil rules) = %+v, %v; want zero Candidate, false", got, ok)
+	}
+}

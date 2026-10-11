@@ -15,6 +15,15 @@ import (
 	"github.com/pdbethke/corralai/internal/pairing"
 )
 
+// DepDir is one dependency directory a language installs.
+type DepDir struct {
+	Name string
+	// RunWrites is true when running the test suite writes INTO the
+	// directory (tox creates and reuses its environments in .tox), so it
+	// can never be shared read-only or symlinked across trees.
+	RunWrites bool
+}
+
 // Plugin is everything the audit gate needs to grade one self-contained
 // source file + its test suite in a given language.
 type Plugin interface {
@@ -27,6 +36,12 @@ type Plugin interface {
 	// writes a comment into audited-language text (the authored-test record's
 	// separator, the shard preamble's elision line) agrees.
 	LineComment() string
+	// DependencyDirs are the directory basenames this language's package
+	// manager installs third-party code into. They are not the repository's
+	// own source, so every tree walker skips them; RunWrites says whether a
+	// test RUN writes into the directory (which decides whether trees may
+	// share it). internal/treedirs composes the walkers' sets from these.
+	DependencyDirs() []DepDir
 	// CompileCheck returns a SEQUENCE of commands that together syntax/type
 	// check the authored test: run each in order, stop at the first
 	// non-zero exit (i.e. treat the sequence as chained by `&&`), and
@@ -259,6 +274,28 @@ func AllTestRules() [][]pairing.Rule {
 	for _, name := range Names() {
 		out = append(out, registry[name].TestRules())
 	}
+	return out
+}
+
+// AllDependencyDirs is every registered language's DependencyDirs,
+// deduplicated by name (vendor is both Go's and PHP's) and sorted — derived
+// from the registry, never a hand list. When two languages declare the same
+// name, RunWrites is true if either says so (the safe reading).
+func AllDependencyDirs() []DepDir {
+	byName := map[string]DepDir{}
+	for _, name := range Names() {
+		for _, d := range registry[name].DependencyDirs() {
+			if prev, ok := byName[d.Name]; ok {
+				d.RunWrites = d.RunWrites || prev.RunWrites
+			}
+			byName[d.Name] = d
+		}
+	}
+	out := make([]DepDir, 0, len(byName))
+	for _, d := range byName {
+		out = append(out, d)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
 }
 

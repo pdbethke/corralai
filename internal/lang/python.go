@@ -1979,3 +1979,17 @@ func sortBySpanCoverage(ids []string, sel Selection, span LineRange) {
 
 // LineComment is the python line-comment marker.
 func (pyPlugin) LineComment() string { return "#" }
+
+// DependencyDirs are Python's installed-package trees. .tox is a dependency
+// tree rather than build output because a tox environment contains full
+// virtualenvs — it is site-packages wearing a different name. It is the one
+// whose RUN writes into it: tox creates, updates and reuses its environments
+// inside .tox as part of running the suite.
+func (pyPlugin) DependencyDirs() []DepDir {
+	return []DepDir{
+		{Name: ".venv"},
+		{Name: "venv"},
+		{Name: "site-packages"},
+		{Name: ".tox", RunWrites: true},
+	}
+}

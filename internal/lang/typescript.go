@@ -229,3 +229,6 @@ func (tsPlugin) ParseCoverage(stdout, modulePath string) (executed map[string]bo
 
 // LineComment is the typescript line-comment marker.
 func (tsPlugin) LineComment() string { return "//" }
+
+// DependencyDirs is the Node dependency tree, shared with javascript.
+func (tsPlugin) DependencyDirs() []DepDir { return jsFamilyDependencyDirs() }

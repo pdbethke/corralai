@@ -662,3 +662,7 @@ func (phpPlugin) ParseCoverage(stdout, modulePath string) (executed map[string]b
 
 // LineComment is the php line-comment marker.
 func (phpPlugin) LineComment() string { return "//" }
+
+// DependencyDirs is Composer's install target (holding vendor/bin/phpunit) —
+// the same repo-relative basename as Go's vendor directory.
+func (phpPlugin) DependencyDirs() []DepDir { return []DepDir{{Name: "vendor"}} }

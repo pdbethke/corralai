@@ -358,3 +358,6 @@ func (rubyPlugin) ParseCoverage(stdout, modulePath string) (executed map[string]
 
 // LineComment is the ruby line-comment marker.
 func (rubyPlugin) LineComment() string { return "#" }
+
+// DependencyDirs is Bundler's local install directory.
+func (rubyPlugin) DependencyDirs() []DepDir { return []DepDir{{Name: ".bundle"}} }

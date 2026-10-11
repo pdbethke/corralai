@@ -590,3 +590,10 @@ func (goPlugin) VendorCmd(repoDir string) ([]string, bool) {
 	}
 	return []string{"go", "mod", "vendor"}, true
 }
+
+// DependencyDirs is Go's module vendor directory (`go mod vendor`).
+//
+// "vendor" covers TWO languages under the one basename: it named Go's own
+// module vendor dir first, and Composer's PHP dependency tree lands at the
+// exact same repo-relative name (see the php plugin).
+func (goPlugin) DependencyDirs() []DepDir { return []DepDir{{Name: "vendor"}} }

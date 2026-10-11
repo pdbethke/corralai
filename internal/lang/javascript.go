@@ -317,3 +317,10 @@ func (jsPlugin) ParseCoverage(stdout, modulePath string) (executed map[string]bo
 
 // LineComment is the javascript line-comment marker.
 func (jsPlugin) LineComment() string { return "//" }
+
+// jsFamilyDependencyDirs is the ONE declaration of the Node dependency tree,
+// shared by the javascript and typescript plugins.
+func jsFamilyDependencyDirs() []DepDir { return []DepDir{{Name: "node_modules"}} }
+
+// DependencyDirs is the Node dependency tree.
+func (jsPlugin) DependencyDirs() []DepDir { return jsFamilyDependencyDirs() }

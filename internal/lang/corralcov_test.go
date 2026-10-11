@@ -118,11 +118,12 @@ func TestCoverageCmdRefusesForeignCommands(t *testing.T) {
 
 	// Derived: every CoverageReporter must also refuse every OTHER
 	// registered plugin's stock test command. The one exception is
-	// javascript↔typescript: typescript.go's CoverageCmd delegates to
-	// jsPlugin's, so each accepts the other's — the ambiguity the DRY
-	// audit records as its own Tier-2 finding ("JS+TS identical
-	// CoverageCmd makes mixed repos ambiguous"). Named here so it is
-	// visible, not fixed here.
+	// javascript<->typescript: typescript.go delegates CoverageCmd (and
+	// ParseCoverage) to jsPlugin, so each accepts the other's stock command.
+	// That is harmless: cmd/corral's selectPreflightLanguage compares what
+	// each matching language would actually run and treats identical
+	// instrumentation as one run, so the overlap never wrongly instruments
+	// the wrong suite or makes a mixed JS/TS repository ambiguous.
 	sharedCoverage := map[[2]string]bool{
 		{"javascript", "typescript"}: true,
 		{"typescript", "javascript"}: true,

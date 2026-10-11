@@ -2420,42 +2420,64 @@ type coverageRunner interface {
 // == "").
 //
 // With an explicit checkArgv, the operator's own command IS the
-// disambiguator, PROVIDED exactly one candidate language's
-// lang.CoverageReporter accepts it: try every candidate language's
-// CoverageCmd(checkArgv) (skipping any that doesn't implement
-// CoverageReporter at all — see internal/lang; all six do now, but the
-// interface stays optional by design) and count how many say yes. Exactly one
-// match is unambiguous — this is what makes andrewyng/aisuite (python +
-// typescript candidates, `-- pytest -q`) resolvable: typescript's reporter
-// declines a pytest command, so python is the only
-// candidate at all, not merely the most likely one. Zero or more than one
-// match keeps the original refusal.
+// disambiguator: try every candidate language's lang.CoverageReporter
+// (skipping any that doesn't implement it at all — see internal/lang; all six
+// do now, but the interface stays optional by design) and see what each
+// would run.
+//   - Exactly one match is unambiguous — this is what makes andrewyng/aisuite
+//     (python + typescript candidates, `-- pytest -q`) resolvable:
+//     typescript's reporter declines a pytest command, so python is the only
+//     candidate at all, not merely the most likely one.
+//   - Several matches that would run the SAME instrumented command are one
+//     run, not a choice between runs (javascript and typescript share theirs);
+//     the first in sorted order is taken.
+//   - Anything else — no match, or matches that instrument differently —
+//     declines.
 func selectPreflightLanguage(langs map[string]bool, checkArgv []string) (langName string, note string) {
 	names := make([]string, 0, len(langs))
 	for n := range langs {
 		names = append(names, n)
 	}
 	sort.Strings(names)
+	return pickPreflightLanguage(names, checkArgv, func(n string) (lang.CoverageReporter, bool) {
+		plug, ok := lang.ByName(n)
+		if !ok {
+			return nil, false
+		}
+		reporter, ok := plug.(lang.CoverageReporter)
+		return reporter, ok // no CoverageReporter for this language at all — never a match
+	})
+}
 
+// pickPreflightLanguage is selectPreflightLanguage's decision, separated from
+// the registry so every branch is testable: names sorted, reporter looks a
+// name up.
+func pickPreflightLanguage(names []string, checkArgv []string, reporter func(string) (lang.CoverageReporter, bool)) (langName string, note string) {
 	if len(checkArgv) > 0 {
 		var matches []string
+		var instrumented [][]string
 		for _, n := range names {
-			plug, ok := lang.ByName(n)
+			r, ok := reporter(n)
 			if !ok {
 				continue
 			}
-			reporter, ok := plug.(lang.CoverageReporter)
-			if !ok {
-				continue // no CoverageReporter for this language at all — never a match
-			}
-			if _, ok := reporter.CoverageCmd(checkArgv); ok {
+			if cmd, ok := r.CoverageCmd(checkArgv); ok {
 				matches = append(matches, n)
+				instrumented = append(instrumented, cmd)
 			}
 		}
 		if len(matches) == 1 {
 			return matches[0], ""
 		}
 		if len(matches) > 1 {
+			if allEqual(instrumented) {
+				// Every matching language would run the SAME instrumented
+				// command (javascript and typescript share theirs), so this is
+				// one run, not a choice between runs: take the first, in sorted
+				// order. Files of the others are reported by the pre-flight's
+				// tri-state like any file the run did or did not measure.
+				return matches[0], ""
+			}
 			return "", fmt.Sprintf(
 				"preflight: scan spans %d languages (%s) and the `--` test command matches more than one of them's coverage instrumentation (%s) — ambiguous, skipped",
 				len(names), strings.Join(names, ", "), strings.Join(matches, ", "))
@@ -2467,6 +2489,16 @@ func selectPreflightLanguage(langs map[string]bool, checkArgv []string) (langNam
 	return "", fmt.Sprintf(
 		"preflight: scan spans %d languages (%s) — one instrumented suite run cannot cover more than one, skipped",
 		len(names), strings.Join(names, ", "))
+}
+
+// allEqual reports whether every argv equals the first.
+func allEqual(argvs [][]string) bool {
+	for _, a := range argvs[1:] {
+		if !slices.Equal(a, argvs[0]) {
+			return false
+		}
+	}
+	return true
 }
 
 // preflightLanguages derives the language set the pre-flight may instrument

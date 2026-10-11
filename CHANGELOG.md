@@ -11,6 +11,16 @@ history of any release, `git log v0.3.4..v0.3.5`.
 
 ## [Unreleased]
 
+- **The coverage pre-flight runs on mixed-language repositories when the
+  `--` command names a language.** Go's coverage instrumentation used to
+  claim every command, so a repository with Go and Python files given
+  `-- pytest -q` declined the pre-flight as ambiguous; it now claims only
+  commands that pass its flags to `go test` (`go test …`, `gotestsum -- …`)
+  and the Python run goes ahead. A repository with both JavaScript and
+  TypeScript files no longer declines either: both instrument the command
+  identically, so it is one run. A Go suite run through `make test` or
+  `gotestsum` without `--` was never instrumented (the appended flags do
+  not reach `go test`); the pre-flight now says so instead of failing.
 - **Repo-search indexing treats `.cjs` files as JavaScript**, as the
   JavaScript plugin already did when auditing them. Nothing else about which
   files are indexed or audited changes.

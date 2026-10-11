@@ -136,3 +136,26 @@ func TestBwrapWrapPinsGoToolchainLocal(t *testing.T) {
 		t.Fatal("host GOTOOLCHAIN=auto must not leak into the jail")
 	}
 }
+
+// TestBwrapWrapReadsPinnedEnv: every pinnedEnv row is set exactly once, no host
+// value for a pinned key survives, and (unlike the container) PATH is forwarded.
+func TestBwrapWrapReadsPinnedEnv(t *testing.T) {
+	argv, err := (bwrapIsolator{}).Wrap("true", Options{Workspace: "/w"}, pinHostEnv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range pinnedEnv {
+		if got := countAfter(argv, "--setenv", p.Key, p.Value); got != 1 {
+			t.Errorf("pin %s=%s appears %d times, want 1", p.Key, p.Value, got)
+		}
+	}
+	if argvHas(argv, "--setenv", "HOME", "/root") || argvHas(argv, "--setenv", "GOTOOLCHAIN", "auto") {
+		t.Error("host value for a pinned key leaked")
+	}
+	if !argvHas(argv, "--setenv", "KEEP", "1") {
+		t.Error("KEEP=1 must be forwarded")
+	}
+	if !argvHas(argv, "--setenv", "PATH", "/host/bin") {
+		t.Error("bwrap forwards PATH")
+	}
+}

@@ -1,0 +1,39 @@
+package shop
+
+import "errors"
+
+// Cart holds line items.
+type Cart struct {
+	Items []int
+}
+
+// Total sums the cart, skipping negatives, with every branch shape Go has.
+func Total(c *Cart, ch chan int, v interface{}) (int, error) {
+	sum := 0
+	for _, it := range c.Items {
+		if it < 0 && sum > 0 {
+			continue
+		}
+		sum += it
+	}
+	switch {
+	case sum > 100:
+		sum -= 10
+	case sum == 0 || len(c.Items) == 0:
+		return 0, errors.New("empty")
+	}
+	switch v.(type) {
+	case string:
+		sum++
+	}
+	select {
+	case n := <-ch:
+		sum += n
+	default:
+	}
+	return sum, nil
+}
+
+func (c *Cart) add(n int) {
+	c.Items = append(c.Items, n)
+}

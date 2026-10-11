@@ -67,3 +67,20 @@ func TestLangSpecGolden(t *testing.T) {
 		t.Fatalf("parsing output changed; regenerate to a scratch path and diff against %s", path)
 	}
 }
+
+// TestNoExtractorIsAnErrorNotEmpty: a language with a grammar row but no
+// signature extractor must refuse, never return an empty surface a caller
+// would read as "this file has no functions".
+func TestNoExtractorIsAnErrorNotEmpty(t *testing.T) {
+	for name, s := range langSpecs {
+		if s.extract != nil {
+			continue
+		}
+		if sigs, err := ExtractSignatures("x", name); err != ErrUnsupportedLang || sigs != nil {
+			t.Errorf("ExtractSignatures(_, %q) = %v, %v; want nil, ErrUnsupportedLang", name, sigs, err)
+		}
+	}
+	if _, err := ExtractSignatures("x", "cobol"); err != ErrUnsupportedLang {
+		t.Errorf("unknown language: err = %v, want ErrUnsupportedLang", err)
+	}
+}

@@ -134,7 +134,7 @@ interface Shape {
 
 // TestNewLanguagesMeasureComplexity pins that every newly-supported language
 // actually MEASURES complexity rather than returning the floor. A missing
-// branchNodeTypes entry yields a silent 1 for every symbol — "this code is
+// langSpecs branches entry yields a silent 1 for every symbol — "this code is
 // trivial" where the truth is "never measured", which is the shape this project
 // guards against everywhere else.
 func TestNewLanguagesMeasureComplexity(t *testing.T) {

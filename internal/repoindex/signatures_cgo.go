@@ -12,18 +12,12 @@ import (
 	sitter "github.com/smacker/go-tree-sitter"
 )
 
+// extractSignatures dispatches to lang's extractor in its langSpecs row. A
+// language with no extractor refuses with ErrUnsupportedLang rather than
+// returning an empty surface a caller would read as "no functions".
 func extractSignatures(text, lang string) ([]Signature, error) {
-	switch lang {
-	case "go":
-		return extractGoSignatures(text)
-	case "python":
-		return extractPythonSignatures(text)
-	case "ruby":
-		return extractRubySignatures(text)
-	case "javascript", "typescript":
-		return extractCurlySignatures(text, lang)
-	case "php":
-		return extractPHPSignatures(text)
+	if s, ok := langSpecs[lang]; ok && s.extract != nil {
+		return s.extract(text, lang)
 	}
 	return nil, ErrUnsupportedLang
 }
@@ -50,94 +44,6 @@ func exported(name string) bool {
 	return false
 }
 
-// branchNodeTypes are the per-language tree-sitter node types that introduce an
-// independent execution path through a symbol. Counting them (plus the boolean
-// operators handled below) yields a cyclomatic-style complexity.
-//
-// Deliberately per-language: a "case_clause" in Python and an "expression_case"
-// in Go are the same concept under different grammar names, so a shared set
-// would silently under-count one language and make its symbols look easy.
-var branchNodeTypes = map[string]map[string]bool{
-	"go": {
-		"if_statement":       true,
-		"for_statement":      true,
-		"expression_case":    true,
-		"type_case":          true,
-		"communication_case": true,
-		"select_statement":   true,
-	},
-	"ruby": {
-		"if":     true,
-		"unless": true,
-		"while":  true,
-		"until":  true,
-		"for":    true,
-		// `when`, not `case`: counting the case statement AND each of its
-		// branches would charge one extra path per switch, which is not what
-		// gocyclo/radon/eslint do.
-		"when":        true,
-		"rescue":      true,
-		"conditional": true, // a ? b : c
-	},
-	"javascript": jsBranchNodes,
-	"typescript": jsBranchNodes,
-	"python": {
-		"if_statement":           true,
-		"elif_clause":            true,
-		"for_statement":          true,
-		"while_statement":        true,
-		"except_clause":          true,
-		"case_clause":            true,
-		"conditional_expression": true,
-		"boolean_operator":       true, // `and` / `or`
-	},
-	"php": {
-		"if_statement":                 true,
-		"else_if_clause":               true,
-		"foreach_statement":            true,
-		"while_statement":              true,
-		"do_statement":                 true,
-		"catch_clause":                 true,
-		"case_statement":               true,
-		"match_conditional_expression": true,
-		"conditional_expression":       true, // a ? b : c
-		// default_statement / match_default_expression are deliberately
-		// absent — the default arm is the fall-through, not an independent
-		// decision, mirroring how the JS extractor treats switch_default.
-	},
-}
-
-// jsBranchNodes is shared by javascript and typescript: the TS grammar is a
-// superset of JS and names these nodes identically, so duplicating the table
-// would only create an opportunity for the two to drift.
-//
-// switch_default is deliberately absent — a default arm is the fall-through,
-// not an independent decision, and neither eslint nor gocyclo counts it.
-var jsBranchNodes = map[string]bool{
-	"if_statement":       true,
-	"for_statement":      true,
-	"for_in_statement":   true,
-	"while_statement":    true,
-	"do_statement":       true,
-	"switch_case":        true,
-	"catch_clause":       true,
-	"ternary_expression": true,
-}
-
-// booleanOpNode names, per language, the node type whose `operator` field must
-// be inspected for && / || (and Ruby's and/or). These are ordinary binary
-// expressions rather than distinct node types, so they cannot live in
-// branchNodeTypes: counting every binary expression would charge arithmetic as
-// a branch. Python is absent because its `boolean_operator` IS its own node
-// type and falls out of the set above.
-var booleanOpNode = map[string]string{
-	"go":         "binary_expression",
-	"javascript": "binary_expression",
-	"typescript": "binary_expression",
-	"ruby":       "binary",
-	"php":        "binary_expression",
-}
-
 // symbolComplexity walks n's subtree counting branch nodes, returning the
 // cyclomatic-style complexity (minimum 1 — a straight-line symbol has exactly
 // one path). Go's `&&`/`||` are binary_expression nodes distinguished by their
@@ -151,7 +57,8 @@ func symbolComplexity(n *sitter.Node, src []byte, lang string) int {
 // branch node, as its subtree's inclusive line span, in source order. The
 // two are ONE walk so the count and the places can never disagree.
 func symbolDecisions(n *sitter.Node, src []byte, lang string) []Decision {
-	types := branchNodeTypes[lang]
+	spec := langSpecs[lang]
+	types := spec.branches
 	var out []Decision
 	var walk func(*sitter.Node)
 	walk = func(node *sitter.Node) {
@@ -163,7 +70,7 @@ func symbolDecisions(n *sitter.Node, src []byte, lang string) []Decision {
 		switch {
 		case types[t]:
 			counted = true
-		case booleanOpNode[lang] != "" && t == booleanOpNode[lang]:
+		case spec.boolOp != "" && t == spec.boolOp:
 			if op := node.ChildByFieldName("operator"); op != nil {
 				switch op.Content(src) {
 				case "&&", "||", "and", "or":

@@ -133,12 +133,46 @@ func TestCoverageCmdRefusesForeignCommands(t *testing.T) {
 	// python+go scan given `-- pytest -q` matches both and declines rather
 	// than guess. So go is exempt as a reporter here, never as a command.
 	acceptsAnyCommand := map[string]bool{"go": true}
-	for _, name := range pluginNames() {
+	// An exemption that is no longer needed hides the next real overlap
+	// behind it, so each one must still describe what the code does.
+	for pair := range sharedCoverage {
+		r, ok := registry[pair[0]].(CoverageReporter)
+		if !ok {
+			t.Errorf("sharedCoverage exempts %s, which is not a registered CoverageReporter — the exemption is stale and must be deleted", pair[0])
+			continue
+		}
+		if _, ok := r.CoverageCmd(registry[pair[1]].TestCmd()); !ok {
+			t.Errorf("sharedCoverage exempts %s accepting %s's stock command, but it refuses it — the exemption is stale and must be deleted", pair[0], pair[1])
+		}
+	}
+	for name := range acceptsAnyCommand {
+		r, ok := registry[name].(CoverageReporter)
+		if !ok {
+			t.Errorf("acceptsAnyCommand exempts %s, which is not a registered CoverageReporter — the exemption is stale and must be deleted", name)
+			continue
+		}
+		acceptsOne := false
+		for _, other := range Names() {
+			if other == name {
+				continue
+			}
+			if _, ok := r.CoverageCmd(registry[other].TestCmd()); ok {
+				acceptsOne = true
+				break
+			}
+		}
+		if !acceptsOne {
+			t.Errorf("acceptsAnyCommand exempts %s, but it refuses every other plugin's stock command — the exemption is stale and must be deleted", name)
+		}
+	}
+	checked := 0
+	for _, name := range Names() {
 		r, ok := registry[name].(CoverageReporter)
 		if !ok || acceptsAnyCommand[name] {
 			continue
 		}
-		for _, other := range pluginNames() {
+		checked++
+		for _, other := range Names() {
 			if other == name || sharedCoverage[[2]string{name, other}] {
 				continue
 			}
@@ -146,6 +180,9 @@ func TestCoverageCmdRefusesForeignCommands(t *testing.T) {
 				t.Errorf("%s's CoverageCmd accepts %s's stock test command %q — it would instrument the wrong suite", name, other, registry[other].TestCmd())
 			}
 		}
+	}
+	if checked < 2 {
+		t.Errorf("checked %d CoverageReporters, want at least 2 — the derived walk covered nothing worth the name", checked)
 	}
 }
 

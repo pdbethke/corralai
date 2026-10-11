@@ -285,7 +285,7 @@ func TestRubyConcatRefusesMixedFrameworks(t *testing.T) {
 // language fails here until it implements one — the hand list this replaced
 // skipped php, which implements it.
 func TestEveryLanguageHasAConcatenator(t *testing.T) {
-	for _, name := range pluginNames() {
+	for _, name := range Names() {
 		if _, ok := registry[name].(TestConcatenator); !ok {
 			t.Errorf("%s has no TestConcatenator — the default writer mode cannot hand its operators one file", name)
 		}

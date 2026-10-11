@@ -232,10 +232,12 @@ var registry = map[string]Plugin{}
 // Register adds a plugin to the registry. Called from plugin files' init().
 func Register(p Plugin) { registry[p.Name()] = p }
 
-// pluginNames is the registry's keys in sorted order. Map iteration is random,
+// Names is the registry's keys in sorted order. Map iteration is random,
 // and anything derived from "every plugin" that a caller compares, prints or
-// hashes must not depend on it.
-func pluginNames() []string {
+// hashes must not depend on it. Exported so a package that keeps its own
+// per-language table (repoindex's langSpecs) can assert it covers every
+// registered plugin rather than a list someone remembered to update.
+func Names() []string {
 	names := make([]string, 0, len(registry))
 	for name := range registry {
 		names = append(names, name)
@@ -249,7 +251,7 @@ func pluginNames() []string {
 // conventions reach pairing.MightBeTest the moment it registers.
 func AllTestRules() [][]pairing.Rule {
 	var out [][]pairing.Rule
-	for _, name := range pluginNames() {
+	for _, name := range Names() {
 		out = append(out, registry[name].TestRules())
 	}
 	return out

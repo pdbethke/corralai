@@ -14,7 +14,7 @@ import (
 // Generated deliberately with UPDATE_GOLDEN=1; a missing golden fails.
 func TestMutantSystemGolden(t *testing.T) {
 	var b strings.Builder
-	for _, name := range pluginNames() {
+	for _, name := range Names() {
 		b.WriteString("=== " + name + "\n")
 		b.WriteString(registry[name].MutantSystem())
 		b.WriteString("\n")

@@ -21,7 +21,7 @@ import (
 // than asserted on — this must pass on a bare host and in CI, neither of
 // which is guaranteed to have every language toolchain installed.
 func TestPluginStockCommandSatisfiesOwnPreflight(t *testing.T) {
-	for _, name := range pluginNames() {
+	for _, name := range Names() {
 		p := registry[name]
 		t.Run(name, func(t *testing.T) {
 			nilErr := p.Preflight(nil)
@@ -43,7 +43,7 @@ func TestPluginStockCommandSatisfiesOwnPreflight(t *testing.T) {
 // command is likewise inconsistent with itself, for the same reason a
 // plugin whose stock command fails its own preflight is.
 func TestPluginStockCommandSatisfiesOwnCoverageCmd(t *testing.T) {
-	for _, name := range pluginNames() {
+	for _, name := range Names() {
 		p := registry[name]
 		cr, ok := p.(CoverageReporter)
 		if !ok {
@@ -86,7 +86,7 @@ func TestPluginStockCommandSatisfiesOwnCoverageCmd(t *testing.T) {
 // with no language toolchains installed) — only that the ARGV SHAPE itself
 // carries no shell-only meaning.
 func TestPluginCompileCheckIsDirectlyExecutable(t *testing.T) {
-	for _, name := range pluginNames() {
+	for _, name := range Names() {
 		p := registry[name]
 		t.Run(name, func(t *testing.T) {
 			seq := p.CompileCheck("code.ext", "test.ext")

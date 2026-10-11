@@ -21,7 +21,7 @@ import (
 // strength. Dedupe no longer reads a zero Rank as "sibling", but a forgotten
 // Rank is still a wrong Rank — this is where it is caught.
 func TestEveryRuleRankAgreesWithItsShape(t *testing.T) {
-	for _, name := range pluginNames() {
+	for _, name := range Names() {
 		rules := registry[name].TestRules()
 		ext, ok := sourceExt(rules)
 		if !ok {
@@ -55,7 +55,7 @@ func TestEveryRuleRankAgreesWithItsShape(t *testing.T) {
 // "{base}.rs" under tests/ fails the first half — it makes src/lib.rs a test,
 // silently removing real code from the audit (Round B1 final review, I2).
 func TestEveryCandidateIsATestAndNoSourceIs(t *testing.T) {
-	for _, name := range pluginNames() {
+	for _, name := range Names() {
 		p := registry[name]
 		rules := p.TestRules()
 		ext, ok := sourceExt(rules)

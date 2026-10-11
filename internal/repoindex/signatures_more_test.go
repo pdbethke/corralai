@@ -132,29 +132,48 @@ interface Shape {
 	}
 }
 
-// TestNewLanguagesMeasureComplexity pins that every newly-supported language
-// actually MEASURES complexity rather than returning the floor. A missing
-// langSpecs branches entry yields a silent 1 for every symbol — "this code is
-// trivial" where the truth is "never measured", which is the shape this project
-// guards against everywhere else.
+// TestNewLanguagesMeasureComplexity pins that every language with a signature
+// extractor actually MEASURES complexity rather than returning the floor. A
+// missing langSpecs branches entry yields a silent 1 for every symbol — "this
+// code is trivial" where the truth is "never measured", which is the shape
+// this project guards against everywhere else. The languages come from
+// langSpecs (every row with an extractor), so a new extractor without a
+// branch-heavy sample here fails rather than going unchecked.
 func TestNewLanguagesMeasureComplexity(t *testing.T) {
-	for _, c := range []struct{ lang, src string }{
-		{"ruby", "def f(a)\n  if a\n    a.each { |x| return 1 if x }\n  end\n  0\nend\n"},
-		{"javascript", "function f(a){ if(a){ for(const x of a){ if(x) return 1 } } return 0 }"},
-		{"typescript", "function f(a: number[]): number { if(a){ for(const x of a){ if(x) return 1 } } return 0 }"},
-	} {
-		sigs, err := ExtractSignatures(c.src, c.lang)
+	branchy := map[string]string{
+		"go":         "package p\nfunc F(a []int) int { if a != nil { for _, x := range a { if x > 0 { return 1 } } }; return 0 }\n",
+		"python":     "def f(a):\n    if a:\n        for x in a:\n            if x:\n                return 1\n    return 0\n",
+		"ruby":       "def f(a)\n  if a\n    a.each { |x| return 1 if x }\n  end\n  0\nend\n",
+		"javascript": "function f(a){ if(a){ for(const x of a){ if(x) return 1 } } return 0 }",
+		"typescript": "function f(a: number[]): number { if(a){ for(const x of a){ if(x) return 1 } } return 0 }",
+		"php":        "<?php\nfunction f($a) { if ($a) { foreach ($a as $x) { if ($x) { return 1; } } } return 0; }\n",
+	}
+	checked := 0
+	for lang, spec := range langSpecs {
+		if spec.extract == nil {
+			continue
+		}
+		src, ok := branchy[lang]
+		if !ok {
+			t.Errorf("%s has a signature extractor but no branch-heavy sample here — add one", lang)
+			continue
+		}
+		checked++
+		sigs, err := ExtractSignatures(src, lang)
 		if err != nil {
-			t.Errorf("%s: %v", c.lang, err)
+			t.Errorf("%s: %v", lang, err)
 			continue
 		}
 		if len(sigs) == 0 {
-			t.Errorf("%s: no signatures extracted", c.lang)
+			t.Errorf("%s: no signatures extracted", lang)
 			continue
 		}
 		if sigs[0].Complexity <= 1 {
-			t.Errorf("%s: complexity = %d for a branch-heavy function, want > 1 — the node set is not matching", c.lang, sigs[0].Complexity)
+			t.Errorf("%s: complexity = %d for a branch-heavy function, want > 1 — the node set is not matching", lang, sigs[0].Complexity)
 		}
+	}
+	if checked < 6 {
+		t.Errorf("checked %d extractor languages, want at least 6 — the walk covered less than it used to", checked)
 	}
 }
 

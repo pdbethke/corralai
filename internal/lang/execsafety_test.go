@@ -26,7 +26,7 @@ import (
 // shell-join wraps it in another sh -c, which nests harmlessly.
 func TestStockTestCmdsAreExecSafe(t *testing.T) {
 	// Every registered plugin, derived — a hand list here skipped php.
-	for _, name := range pluginNames() {
+	for _, name := range Names() {
 		p := registry[name]
 		cmd := p.TestCmd()
 		if len(cmd) == 0 {

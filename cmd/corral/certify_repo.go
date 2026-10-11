@@ -2429,11 +2429,7 @@ type coverageRunner interface {
 // typescript candidates, `-- pytest -q`) resolvable: typescript's reporter
 // declines a pytest command, so python is the only
 // candidate at all, not merely the most likely one. Zero or more than one
-// match keeps the original blanket refusal: Go's CoverageCmd accepts ANY
-// non-empty argv by design (see go.go — it wraps whatever it's given
-// without inspecting shape), so a genuinely mixed python+go scan given `--
-// pytest -q` still declines rather than guess which language the operator
-// meant, exactly as before this function existed.
+// match keeps the original refusal.
 func selectPreflightLanguage(langs map[string]bool, checkArgv []string) (langName string, note string) {
 	names := make([]string, 0, len(langs))
 	for n := range langs {

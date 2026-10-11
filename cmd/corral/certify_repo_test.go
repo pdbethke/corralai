@@ -3615,19 +3615,18 @@ func TestSelectPreflightLanguageResolvesAisuiteShape(t *testing.T) {
 	}
 }
 
-// TestSelectPreflightLanguageGoAndPythonBothMatchStaysAmbiguous pins the
-// boundary F5 must NOT cross: goPlugin.CoverageCmd accepts ANY non-empty
-// argv by design (it never inspects shape), so a scan spanning go AND
-// python, given `-- pytest -q`, has TWO languages whose CoverageCmd
-// accepts it — genuinely ambiguous, and must still decline rather than
-// guess which one the operator meant.
-func TestSelectPreflightLanguageGoAndPythonBothMatchStaysAmbiguous(t *testing.T) {
+// TestSelectPreflightLanguageGoAndPythonResolvesToPython: goPlugin.CoverageCmd
+// claims only commands that pass its flags to `go test` (goTestShaped), so a
+// scan spanning go AND python, given `-- pytest -q`, has exactly ONE language
+// whose CoverageCmd accepts it. It used to decline as ambiguous because Go
+// accepted every non-empty argv.
+func TestSelectPreflightLanguageGoAndPythonResolvesToPython(t *testing.T) {
 	langName, note := selectPreflightLanguage(map[string]bool{"python": true, "go": true}, []string{"pytest", "-q"})
-	if langName != "" {
-		t.Fatalf("langName = %q, want \"\" (go's CoverageCmd accepts any argv, so this is genuinely ambiguous)", langName)
+	if langName != "python" {
+		t.Fatalf("langName = %q, note = %q; want \"python\" (go's CoverageCmd no longer claims a pytest command)", langName, note)
 	}
-	if !strings.Contains(note, "ambiguous") {
-		t.Errorf("note = %q, want it to say ambiguous", note)
+	if note != "" {
+		t.Errorf("note = %q, want empty on a resolved language", note)
 	}
 }
 

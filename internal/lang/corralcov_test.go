@@ -127,12 +127,6 @@ func TestCoverageCmdRefusesForeignCommands(t *testing.T) {
 		{"javascript", "typescript"}: true,
 		{"typescript", "javascript"}: true,
 	}
-	// go's CoverageCmd wraps ANY non-empty argv by design (go.go: an
-	// operator's gotestsum or `make test` wrapper is still a go suite), and
-	// certify_repo.go's selectPreflightLanguage relies on that — a mixed
-	// python+go scan given `-- pytest -q` matches both and declines rather
-	// than guess. So go is exempt as a reporter here, never as a command.
-	acceptsAnyCommand := map[string]bool{"go": true}
 	// An exemption that is no longer needed hides the next real overlap
 	// behind it, so each one must still describe what the code does.
 	for pair := range sharedCoverage {
@@ -145,30 +139,10 @@ func TestCoverageCmdRefusesForeignCommands(t *testing.T) {
 			t.Errorf("sharedCoverage exempts %s accepting %s's stock command, but it refuses it — the exemption is stale and must be deleted", pair[0], pair[1])
 		}
 	}
-	for name := range acceptsAnyCommand {
-		r, ok := registry[name].(CoverageReporter)
-		if !ok {
-			t.Errorf("acceptsAnyCommand exempts %s, which is not a registered CoverageReporter — the exemption is stale and must be deleted", name)
-			continue
-		}
-		acceptsOne := false
-		for _, other := range Names() {
-			if other == name {
-				continue
-			}
-			if _, ok := r.CoverageCmd(registry[other].TestCmd()); ok {
-				acceptsOne = true
-				break
-			}
-		}
-		if !acceptsOne {
-			t.Errorf("acceptsAnyCommand exempts %s, but it refuses every other plugin's stock command — the exemption is stale and must be deleted", name)
-		}
-	}
 	checked := 0
 	for _, name := range Names() {
 		r, ok := registry[name].(CoverageReporter)
-		if !ok || acceptsAnyCommand[name] {
+		if !ok {
 			continue
 		}
 		checked++

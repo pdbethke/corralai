@@ -6,6 +6,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/pdbethke/corralai/internal/lang"
 )
 
 func TestLangForExt(t *testing.T) {
@@ -14,10 +16,27 @@ func TestLangForExt(t *testing.T) {
 		"z.js": "javascript", "z.jsx": "javascript", "r.rs": "rust", "README.md": "", "noext": "",
 		// case-insensitive (Task-2 carry-over)
 		"foo.GO": "go", "bar.PY": "python", "baz.TS": "typescript",
+		"lib/legacy.cjs": "javascript", // the JS plugin audits .cjs; the indexer did not know it
+		"pkg/MOD.PY":     "python",     // case-insensitive, as before
+		"src/App.tsx":    "typescript", // grammar-only extension, still repoindex's own
+		"src/main.rs":    "rust",       // no plugin yet: repoindex's own map
 	}
 	for path, want := range cases {
 		if got := langForExt(path); got != want {
 			t.Errorf("langForExt(%q)=%q want %q", path, got, want)
+		}
+	}
+}
+
+// TestOwnExtensionsAreNotPluginClaimed: repoindex's own extension map is
+// only for what no plugin audits. An extension a plugin claims comes from
+// lang.Detect, so the two can never disagree — and when a plugin for a
+// grammar-only language registers (Rust), this fails until its row's
+// extension leaves the own map.
+func TestOwnExtensionsAreNotPluginClaimed(t *testing.T) {
+	for ext := range ownExtLang {
+		if p, ok := lang.Detect("x" + ext); ok {
+			t.Errorf("ownExtLang has %q, but plugin %q claims it — delete it from ownExtLang", ext, p.Name())
 		}
 	}
 }

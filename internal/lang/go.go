@@ -9,6 +9,7 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"unicode"
@@ -153,11 +154,13 @@ func (goPlugin) ListTestsCmd(testPath string) ([]string, bool) {
 	return []string{"go", "test", "-list", ".*", "./..."}, true
 }
 
-// CoverageCmd wraps the project's own test command so a coverage profile
-// ends up on stdout after ONE run. `-coverprofile=/dev/stdout` was the
-// obvious first attempt but is NOT safe: verified against corral's own
-// suite, it interleaves and corrupts the profile whenever more than one
-// package's test binary flushes to the shared fd (`go test ./... -p 1
+// goCoverageReduceScript is the second half of the pipeline that
+// goPlugin.CoverageCmd builds. The first half wraps a `go test` command (see
+// goTestShaped for exactly which shapes) so a coverage profile ends up on
+// stdout after ONE run. `-coverprofile=/dev/stdout` was the obvious first
+// attempt but is NOT safe: verified against corral's own suite, it
+// interleaves and corrupts the profile whenever more than one package's
+// test binary flushes to the shared fd (`go test ./... -p 1
 // -coverprofile=/dev/stdout` still corrupted — the race is between the `go
 // test` parent's own summary line and a child binary's profile flush, not
 // package parallelism). Writing to a real temporary file and `cat`-ing it
@@ -235,8 +238,12 @@ const goCoverageReduceScript = `awk '` +
 	// past the colon-prefixed path and the trailing count.
 	`END{for(p in seen) print p":0,0 1 "(p in any?1:0)}' "$f"`
 
+// CoverageCmd appends -coverpkg/-coverprofile to testCmd, so it claims only a
+// command those flags can reach: see goTestShaped. Any other command is
+// declined (ok=false) rather than wrapped, because a wrapped command that
+// never forwards the flags exits non-zero with no profile.
 func (goPlugin) CoverageCmd(testCmd []string) (cmd []string, ok bool) {
-	if len(testCmd) == 0 {
+	if !goTestShaped(testCmd) {
 		return nil, false
 	}
 	quoted := make([]string, len(testCmd))
@@ -510,11 +517,60 @@ func (goPlugin) FailFastArgs(testCmd []string) ([]string, bool) {
 	if len(testCmd) < 2 || cmdIsShellWrapped(testCmd) {
 		return nil, false
 	}
-	if filepath.Base(testCmd[0]) != "go" && filepath.Base(testCmd[0]) != "go.exe" {
+	if !isGoBinary(testCmd[0]) {
 		return nil, false
 	}
 	if testCmd[1] != "test" {
 		return nil, false
 	}
 	return []string{"-failfast"}, true
+}
+
+// isGoBinary reports whether argv0 names the go command: base name go or
+// go.exe. A versioned toolchain wrapper from golang.org/dl (`go1.26.9`) is
+// NOT recognised, so a command run through one gets no -failfast and no
+// coverage instrumentation — unchanged behaviour, never a wrong flag.
+func isGoBinary(argv0 string) bool {
+	base := filepath.Base(argv0)
+	return base == "go" || base == "go.exe"
+}
+
+// goTestShaped reports whether testCmd hands trailing flags to `go test`, so
+// the -coverpkg/-coverprofile CoverageCmd appends actually reach it: `go ...
+// test ...` (argv[0] passes isGoBinary and the first non-flag argument, after
+// skipping -C's value, is test), or `gotestsum ... -- ...`, which forwards
+// everything after -- to go test. Measured 2026-10-11: `make test`, bare
+// `gotestsum` and `gotestsum --format x` exit 2/3 without writing a profile,
+// so claiming them made every mixed-language pre-flight decline as
+// ambiguous and every pure-Go one fail its run.
+//
+// A command containing -args (or --args) is refused in either shape: go test
+// hands everything after it to the test binary, so the appended flags would
+// never reach go test. Measured 2026-10-11 on go1.26.9: `go test ./... -args
+// -v -coverprofile=f` exits 1 and writes no profile.
+func goTestShaped(testCmd []string) bool {
+	if len(testCmd) == 0 {
+		return false
+	}
+	if slices.Contains(testCmd, "-args") || slices.Contains(testCmd, "--args") {
+		return false
+	}
+	if isGoBinary(testCmd[0]) {
+		for i := 1; i < len(testCmd); i++ {
+			a := testCmd[i]
+			if a == "-C" {
+				i++
+				continue
+			}
+			if strings.HasPrefix(a, "-") {
+				continue
+			}
+			return a == "test"
+		}
+		return false
+	}
+	if filepath.Base(testCmd[0]) == "gotestsum" {
+		return slices.Contains(testCmd[1:], "--")
+	}
+	return false
 }

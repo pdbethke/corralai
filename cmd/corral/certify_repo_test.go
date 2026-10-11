@@ -3615,19 +3615,100 @@ func TestSelectPreflightLanguageResolvesAisuiteShape(t *testing.T) {
 	}
 }
 
-// TestSelectPreflightLanguageGoAndPythonBothMatchStaysAmbiguous pins the
-// boundary F5 must NOT cross: goPlugin.CoverageCmd accepts ANY non-empty
-// argv by design (it never inspects shape), so a scan spanning go AND
-// python, given `-- pytest -q`, has TWO languages whose CoverageCmd
-// accepts it — genuinely ambiguous, and must still decline rather than
-// guess which one the operator meant.
-func TestSelectPreflightLanguageGoAndPythonBothMatchStaysAmbiguous(t *testing.T) {
+// TestSelectPreflightLanguageGoAndPythonResolvesToPython: goPlugin.CoverageCmd
+// claims only commands that pass its flags to `go test` (goTestShaped), so a
+// scan spanning go AND python, given `-- pytest -q`, has exactly ONE language
+// whose CoverageCmd accepts it. It used to decline as ambiguous because Go
+// accepted every non-empty argv.
+func TestSelectPreflightLanguageGoAndPythonResolvesToPython(t *testing.T) {
 	langName, note := selectPreflightLanguage(map[string]bool{"python": true, "go": true}, []string{"pytest", "-q"})
-	if langName != "" {
-		t.Fatalf("langName = %q, want \"\" (go's CoverageCmd accepts any argv, so this is genuinely ambiguous)", langName)
+	if langName != "python" {
+		t.Fatalf("langName = %q, note = %q; want \"python\" (go's CoverageCmd no longer claims a pytest command)", langName, note)
 	}
-	if !strings.Contains(note, "ambiguous") {
-		t.Errorf("note = %q, want it to say ambiguous", note)
+	if note != "" {
+		t.Errorf("note = %q, want empty on a resolved language", note)
+	}
+	// The operator's own command names the language both ways round, and a
+	// command no language instruments declines.
+	langs := map[string]bool{"go": true, "python": true}
+	if got, note := selectPreflightLanguage(langs, []string{"go", "test", "./..."}); got != "go" {
+		t.Errorf("go test: got (%q, %q), want go", got, note)
+	}
+	if got, _ := selectPreflightLanguage(langs, []string{"make", "test"}); got != "" {
+		t.Errorf("make test: got %q, want a decline — no language instruments it", got)
+	}
+}
+
+// TestSelectPreflightLanguageIdenticalInstrumentationIsOneRun: javascript
+// and typescript instrument a command identically (typescript.go delegates
+// CoverageCmd and ParseCoverage to jsPlugin), so one run serves both — a
+// mixed JS/TS repository used to be declined as ambiguous.
+func TestSelectPreflightLanguageIdenticalInstrumentationIsOneRun(t *testing.T) {
+	got, note := selectPreflightLanguage(map[string]bool{"javascript": true, "typescript": true}, []string{"node", "--test"})
+	if got != "javascript" || note != "" {
+		t.Fatalf("got (%q, %q), want (\"javascript\", \"\")", got, note)
+	}
+}
+
+// fakeReporter is a test-only lang.CoverageReporter that accepts every
+// command and instruments it as the fixed argv it was built with, so the
+// decision between reporters is testable without a shipped plugin pair that
+// accepts the same command differently.
+type fakeReporter struct{ instrumented []string }
+
+func (f fakeReporter) CoverageCmd([]string) ([]string, bool) { return f.instrumented, true }
+func (f fakeReporter) ParseCoverage(string, string) (map[string]bool, error) {
+	return nil, nil
+}
+
+// TestPickPreflightLanguageDifferentInstrumentationDeclinesAsAmbiguous: two
+// languages that accept the command but would run it DIFFERENTLY are a real
+// choice between runs, and one pre-flight run cannot make it. No shipped
+// plugin pair reaches this branch, so it is exercised with fakes.
+func TestPickPreflightLanguageDifferentInstrumentationDeclinesAsAmbiguous(t *testing.T) {
+	reps := map[string]lang.CoverageReporter{
+		"alpha": fakeReporter{[]string{"alpha-cov", "t"}},
+		"beta":  fakeReporter{[]string{"beta-cov", "t"}},
+	}
+	lookup := func(n string) (lang.CoverageReporter, bool) { r, ok := reps[n]; return r, ok }
+	got, note := pickPreflightLanguage([]string{"alpha", "beta"}, []string{"t"}, lookup)
+	if got != "" {
+		t.Fatalf("got %q, want a decline", got)
+	}
+	if !strings.Contains(note, "ambiguous, skipped") || !strings.Contains(note, "alpha, beta") {
+		t.Errorf("note = %q, want the ambiguous-decline message naming both", note)
+	}
+}
+
+// TestPickPreflightLanguagePartlyEqualInstrumentationDeclines: when two of
+// three matching languages would run the same instrumented command and the
+// third would run a different one, it is still a choice between runs —
+// allEqual must compare every match, not stop at the first agreeing pair —
+// so the pre-flight declines and the note names all three.
+func TestPickPreflightLanguagePartlyEqualInstrumentationDeclines(t *testing.T) {
+	reps := map[string]lang.CoverageReporter{
+		"alpha": fakeReporter{[]string{"cov", "t"}},
+		"beta":  fakeReporter{[]string{"cov", "t"}},
+		"gamma": fakeReporter{[]string{"gamma-cov", "t"}},
+	}
+	lookup := func(n string) (lang.CoverageReporter, bool) { r, ok := reps[n]; return r, ok }
+	got, note := pickPreflightLanguage([]string{"alpha", "beta", "gamma"}, []string{"t"}, lookup)
+	if got != "" {
+		t.Fatalf("got %q, want a decline", got)
+	}
+	if !strings.Contains(note, "ambiguous, skipped") || !strings.Contains(note, "(alpha, beta, gamma) — ambiguous") {
+		t.Errorf("note = %q, want the ambiguous-decline message naming all three matches", note)
+	}
+}
+
+// TestPickPreflightLanguageSameInstrumentationTakesFirstSorted: identical
+// instrumented argv is one run; the first name in the sorted input wins.
+func TestPickPreflightLanguageSameInstrumentationTakesFirstSorted(t *testing.T) {
+	same := fakeReporter{[]string{"cov", "t"}}
+	lookup := func(string) (lang.CoverageReporter, bool) { return same, true }
+	got, note := pickPreflightLanguage([]string{"alpha", "beta"}, []string{"t"}, lookup)
+	if got != "alpha" || note != "" {
+		t.Fatalf("got (%q, %q), want (\"alpha\", \"\")", got, note)
 	}
 }
 

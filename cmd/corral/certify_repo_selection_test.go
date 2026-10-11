@@ -117,3 +117,27 @@ func TestFileSelectionKeyCoversTheSelectedTests(t *testing.T) {
 		t.Errorf("uncovered key = %q", k)
 	}
 }
+
+// TestResolveSelectionPluginMixedGoPythonReachesPython pins a consequence of
+// goPlugin.CoverageCmd claiming only `go test`-shaped commands: the language
+// choice it feeds is also TEST SELECTION's (resolveSelectionPlugin drives
+// collectSelection, selectionCachePeek and the evidence-based candidacy
+// widening). A repository with Go and Python sources given `-- pytest -q`
+// used to resolve no plugin — the scan graded against the whole suite — and
+// now resolves python, whose instrumented selection command is what runs.
+// Asserted at the two seams that need no substrate: the resolution itself,
+// and reposcan.InstrumentedCommand, THE command collectSelectionEvidence runs.
+func TestResolveSelectionPluginMixedGoPythonReachesPython(t *testing.T) {
+	ex := &localExecutor{checkArgv: []string{"pytest", "-q"}}
+	sources := []string{"cmd/tool/main.go", "pkg/lib.py"}
+	plug, langName, testCmd, note := ex.resolveSelectionPlugin(sources)
+	if plug == nil || langName != "python" {
+		t.Fatalf("resolveSelectionPlugin = (%v, %q, %q, %q); want the python plugin", plug, langName, testCmd, note)
+	}
+	if strings.Join(testCmd, " ") != "pytest -q" {
+		t.Errorf("testCmd = %q, want the operator's own `pytest -q`", testCmd)
+	}
+	if _, ok := reposcan.InstrumentedCommand(plug, testCmd, sources); !ok {
+		t.Errorf("python refused to instrument `pytest -q` for selection; the selection run would not happen")
+	}
+}

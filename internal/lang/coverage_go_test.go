@@ -280,3 +280,52 @@ func TestGoCoverageCmdStillReportsWhenTestsFail(t *testing.T) {
 		t.Errorf("unused.go = (%v, measured=%v), want measured-and-never-executed", v, measured)
 	}
 }
+
+// TestGoCoverageCmdClaimsOnlyInstrumentableCommands: goPlugin.CoverageCmd
+// appends `-coverpkg=./... -coverprofile=…` to the command it is handed, so
+// it may claim only a command that passes those flags to `go test`.
+// Measured 2026-10-11 (see the plan's evidence table): `go test …` and
+// `gotestsum -- …` write a profile; `make test`, bare `gotestsum` and
+// `gotestsum --format x` exit 2/3 with none. Claiming those made every mixed
+// Go repository's pre-flight decline as ambiguous.
+func TestGoCoverageCmdClaimsOnlyInstrumentableCommands(t *testing.T) {
+	accept := [][]string{
+		{"go", "test", "./..."},
+		{"go", "test", "-v", "./..."},
+		{"/usr/local/go/bin/go", "test", "./..."},
+		{"go.exe", "test", "./..."},
+		{"go", "-C", "sub", "test", "./..."},
+		{"gotestsum", "--", "./..."},
+		{"gotestsum", "--format", "testname", "--", "-v", "./..."},
+	}
+	refuse := [][]string{
+		{},
+		{"make", "test"},
+		{"gotestsum"},
+		{"gotestsum", "--format", "testname"},
+		{"go", "vet", "./..."},
+		{"go", "build", "./..."},
+		{"go"},
+		{"sh", "-c", "go test ./..."},
+		// Everything after -args (or --args) goes to the test binary, so
+		// the appended -coverprofile never reaches go test. Measured
+		// 2026-10-11, go1.26.9: both spellings exit 1 with no profile.
+		{"go", "test", "./...", "-args", "-v"},
+		{"go", "test", "./...", "--args", "-v"},
+		// gotestsum forwards everything after -- to go test, so the same
+		// rule follows; not run (gotestsum was not installed).
+		{"gotestsum", "--", "./...", "-args", "-v"},
+		{"python3", "-m", "pytest", "-q"},
+		{"node", "--test"},
+	}
+	for _, c := range accept {
+		if _, ok := (goPlugin{}).CoverageCmd(c); !ok {
+			t.Errorf("CoverageCmd(%q) refused; it passes the coverage flags to go test", c)
+		}
+	}
+	for _, c := range refuse {
+		if _, ok := (goPlugin{}).CoverageCmd(c); ok {
+			t.Errorf("CoverageCmd(%q) accepted; the appended coverage flags cannot reach go test", c)
+		}
+	}
+}

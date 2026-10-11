@@ -431,11 +431,15 @@ being true when all six languages got one.)
 Given that command, this repo now runs the pre-flight; its TypeScript files
 simply never enter `CoverageMap.Executed` and land in "never measured" —
 the same tri-state contract every other out-of-language file already gets,
-never a name, never an accusation. Two languages that could both plausibly
-own the given command (concretely: Go, whose `CoverageCmd` accepts any
-non-empty test invocation by design, paired with any other language and
-almost any `--` command) still decline as genuinely ambiguous — this is a
-narrowing of the refusal, not its removal.
+never a name, never an accusation. Go's `CoverageCmd` claims only `go test
+…` and `gotestsum … -- …` — the shapes that pass its coverage flags to `go
+test` — so a repo with Go and Python files given `-- pytest -q` runs the
+Python pre-flight the same way. Languages that would run the identical
+instrumented command are one run, not a choice: JavaScript and TypeScript
+share theirs, so a repo with both runs the pre-flight. A command claimed by
+more than one language that would instrument it differently still declines
+as genuinely ambiguous — this is a narrowing of the refusal, not its
+removal.
 
 **Cost: one suite run, but "one run" is not "instant".** The design's claim
 is O(1) in the number of source *files* — one instrumented invocation

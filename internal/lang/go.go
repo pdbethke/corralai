@@ -577,3 +577,16 @@ func goTestShaped(testCmd []string) bool {
 
 // LineComment is the go line-comment marker.
 func (goPlugin) LineComment() string { return "//" }
+
+// VendorCmd: a Go module not already carrying vendor/ is vendored with
+// `go mod vendor`, so the offline jail resolves its external modules from
+// the tree instead of the operator's module cache.
+func (goPlugin) VendorCmd(repoDir string) ([]string, bool) {
+	if _, err := os.Stat(filepath.Join(repoDir, "go.mod")); err != nil {
+		return nil, false
+	}
+	if fi, err := os.Stat(filepath.Join(repoDir, "vendor")); err == nil && fi.IsDir() {
+		return nil, false
+	}
+	return []string{"go", "mod", "vendor"}, true
+}

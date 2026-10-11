@@ -14,6 +14,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/pdbethke/corralai/internal/adequacy"
+	"github.com/pdbethke/corralai/internal/lang"
 )
 
 // repoSeed is everything about a repo's jail workspace that does NOT depend on
@@ -30,8 +31,8 @@ type repoSeed struct {
 }
 
 // buildRepoSeed performs the scan-invariant half of jail preparation: provision
-// external Go deps for the offline jail (a no-op for other languages,
-// non-modules, and already-vendored repos), then load the tree.
+// external deps for a language whose plugin vendors them, for the offline jail
+// (a no-op for other languages, non-projects, and already-vendored repos), then load the tree.
 //
 // cleanup is ALWAYS non-nil so callers can defer it unconditionally, and it
 // releases the vendor staging dir when one was created.
@@ -40,7 +41,7 @@ type repoSeed struct {
 // "corral certify --repo"); it prefixes the prep messages and errors so a --repo
 // operator is never told about a command they never invoked.
 func buildRepoSeed(cmdName, repoDir, langName, backendName string, bindDirs []string, noBindDeps bool, out io.Writer) (repoSeed, error) {
-	seedDir, cleanup, verr := ensureGoVendored(cmdName, repoDir, langName, out)
+	seedDir, cleanup, verr := ensureVendored(cmdName, repoDir, langName, out)
 	if verr != nil {
 		return repoSeed{cleanup: func() {}}, verr
 	}
@@ -52,27 +53,31 @@ func buildRepoSeed(cmdName, repoDir, langName, backendName string, bindDirs []st
 	return repoSeed{seedDir: seedDir, files: files, binds: binds, cleanup: cleanup}, nil
 }
 
-// ensureGoVendored makes external Go modules resolvable inside the OFFLINE audit
-// jail. The jail has no network by design (the code under audit can't phone
-// home), and a repo's external deps live in the operator's module cache, which
-// is (a) incomplete for a full build and (b) deliberately NOT mounted into the
-// jail. So for a Go module that isn't already vendored, this stages a throwaway
-// copy of the repo and runs `go mod vendor` in it (network available HERE, on
-// the host, before the jail runs) — the jailed build then resolves everything
-// from vendor/ with no network and no access to the operator's cache. The
-// operator's real working tree is never modified; the copy is removed by the
-// returned cleanup. It's a no-op for non-Go code, a non-module dir, or a repo
-// that already carries vendor/ (which loadRepoFiles bind-mounts as-is).
-func ensureGoVendored(cmdName, repoDir, langName string, out io.Writer) (string, func(), error) {
+// ensureVendored makes a language's external dependencies resolvable inside the
+// OFFLINE audit jail. The jail has no network by design (the code under audit
+// can't phone home), and a repo's external deps may live in the operator's
+// module cache, which is (a) incomplete for a full build and (b) deliberately
+// NOT mounted into the jail. So for a language whose plugin implements
+// lang.Vendorer and says the repo needs it, this stages a throwaway copy of the
+// repo and runs the plugin's vendoring command in it (network available HERE,
+// on the host, before the jail runs) — the jailed build then resolves
+// everything from the tree with no network and no access to the operator's
+// cache. The operator's real working tree is never modified; the copy is
+// removed by the returned cleanup. It's a no-op for an unknown language, a
+// plugin that does not vendor, or a repo the plugin says needs nothing.
+func ensureVendored(cmdName, repoDir, langName string, out io.Writer) (string, func(), error) {
 	noop := func() {}
-	if langName != "go" {
+	p, known := lang.ByName(langName)
+	if !known {
 		return repoDir, noop, nil
 	}
-	if _, err := os.Stat(filepath.Join(repoDir, "go.mod")); err != nil {
-		return repoDir, noop, nil // not a module — nothing to vendor
+	v, ok := p.(lang.Vendorer)
+	if !ok {
+		return repoDir, noop, nil
 	}
-	if fi, err := os.Stat(filepath.Join(repoDir, "vendor")); err == nil && fi.IsDir() {
-		return repoDir, noop, nil // already vendored — the jail bind-mounts it
+	argv, needed := v.VendorCmd(repoDir)
+	if !needed || len(argv) == 0 {
+		return repoDir, noop, nil
 	}
 	tmp, err := os.MkdirTemp("", "corral-vendor-")
 	if err != nil {
@@ -83,12 +88,13 @@ func ensureGoVendored(cmdName, repoDir, langName string, out io.Writer) (string,
 		cleanup()
 		return "", noop, fmt.Errorf("%s: staging repo copy for vendoring: %w", cmdName, cerr)
 	}
-	fmt.Fprintf(out, "%s: vendoring Go dependencies (go mod vendor) so the offline jail can resolve them…\n", cmdName)
-	cmd := exec.CommandContext(context.Background(), "go", "mod", "vendor")
+	joined := strings.Join(argv, " ")
+	fmt.Fprintf(out, "%s: vendoring dependencies (%s) so the offline jail can resolve them…\n", cmdName, joined)
+	cmd := exec.CommandContext(context.Background(), argv[0], argv[1:]...) // #nosec G204 -- argv comes from a plugin's fixed literal, not user input
 	cmd.Dir = tmp
 	if b, verr := cmd.CombinedOutput(); verr != nil {
 		cleanup()
-		return "", noop, fmt.Errorf("%s: `go mod vendor` failed — the offline jail can't resolve this repo's external deps without it: %v\n%s", cmdName, verr, strings.TrimSpace(string(b)))
+		return "", noop, fmt.Errorf("%s: `%s` failed — the offline jail can't resolve this repo's external deps without it: %v\n%s", cmdName, joined, verr, strings.TrimSpace(string(b)))
 	}
 	return tmp, cleanup, nil
 }

@@ -288,6 +288,18 @@ func Detect(codePath string) (Plugin, bool) {
 // plausible code).
 const defaultPreambleLines = 40
 
+// Vendorer is an OPTIONAL plugin extension for a language whose dependencies
+// live OUTSIDE the repository (a module cache the offline jail cannot see):
+// VendorCmd names the command that, run on the HOST with network, in a
+// throwaway copy of repoDir, makes them part of the tree. ok is false when
+// nothing needs vendoring (not a project of this language, or already
+// vendored). Languages whose dependencies already live in the tree
+// (node_modules, .venv) do not implement it — those trees are bound from
+// their DependencyDirs instead.
+type Vendorer interface {
+	VendorCmd(repoDir string) (argv []string, ok bool)
+}
+
 // Preambler is an OPTIONAL plugin extension: a language whose package/import
 // header corral can reliably locate returns it verbatim, so a mutant-
 // generator shard shown only ITS OWN symbols (see advpool's shard-chunking)

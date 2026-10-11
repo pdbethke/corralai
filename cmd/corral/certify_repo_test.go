@@ -1219,7 +1219,7 @@ func TestNewLocalExecutorSkipsTheSeedCacheForWorkspaceSubstrate(t *testing.T) {
 	// Load-bearing, not just cosmetic: drive a real Execute and prove no
 	// seed ever reaches either seam, and a job is gradable — this is the
 	// exact path that used to fail closed with ReasonPrepFailed when
-	// ensureGoVendored errored.
+	// ensureVendored errored.
 	ex.newBaseline = func(_ context.Context, in localAuditInput) (reposcan.BaselineRunner, func(), error) {
 		if in.seed != nil {
 			t.Error("workspace substrate must never receive a shared seed")

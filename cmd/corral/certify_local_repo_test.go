@@ -9,19 +9,19 @@ import (
 	"testing"
 )
 
-// TestEnsureGoVendoredNoOps pins the three cases that must NOT stage a copy or
+// TestEnsureVendoredNoOps pins the three cases that must NOT stage a copy or
 // run `go mod vendor`: non-Go code, a Go dir that isn't a module, and a repo
 // that already carries vendor/ (which the jail bind-mounts as-is).
-func TestEnsureGoVendoredNoOps(t *testing.T) {
+func TestEnsureVendoredNoOps(t *testing.T) {
 	dir := t.TempDir()
 
-	got, cleanup, err := ensureGoVendored("corral certify --local", dir, "python", io.Discard)
+	got, cleanup, err := ensureVendored("corral certify --local", dir, "python", io.Discard)
 	if err != nil || got != dir {
 		t.Fatalf("non-Go must be a no-op: got=%s err=%v", got, err)
 	}
 	cleanup()
 
-	got, cleanup, err = ensureGoVendored("corral certify --local", dir, "go", io.Discard)
+	got, cleanup, err = ensureVendored("corral certify --local", dir, "go", io.Discard)
 	if err != nil || got != dir {
 		t.Fatalf("Go without go.mod must be a no-op: got=%s err=%v", got, err)
 	}
@@ -33,7 +33,7 @@ func TestEnsureGoVendoredNoOps(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(dir, "vendor"), 0o750); err != nil {
 		t.Fatal(err)
 	}
-	got, cleanup, err = ensureGoVendored("corral certify --local", dir, "go", io.Discard)
+	got, cleanup, err = ensureVendored("corral certify --local", dir, "go", io.Discard)
 	if err != nil || got != dir {
 		t.Fatalf("already-vendored repo must be a no-op: got=%s err=%v", got, err)
 	}

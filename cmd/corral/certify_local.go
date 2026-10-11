@@ -1915,7 +1915,7 @@ type jailWiring struct {
 	devTestKey string
 	depBinds   []adequacy.DepBind
 	// cleanup releases any temp staging dir created for Go dep vendoring
-	// (see ensureGoVendored). Always non-nil; a no-op when nothing was staged.
+	// (see ensureVendored). Always non-nil; a no-op when nothing was staged.
 	// The caller MUST defer it after the run completes — the jail bind-mounts
 	// vendor/ from the staged copy, so it has to outlive scoring.
 	cleanup func()

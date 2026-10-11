@@ -293,6 +293,7 @@ func TestGoCoverageCmdClaimsOnlyInstrumentableCommands(t *testing.T) {
 		{"go", "test", "./..."},
 		{"go", "test", "-v", "./..."},
 		{"/usr/local/go/bin/go", "test", "./..."},
+		{"go.exe", "test", "./..."},
 		{"go", "-C", "sub", "test", "./..."},
 		{"gotestsum", "--", "./..."},
 		{"gotestsum", "--format", "testname", "--", "-v", "./..."},
@@ -306,6 +307,14 @@ func TestGoCoverageCmdClaimsOnlyInstrumentableCommands(t *testing.T) {
 		{"go", "build", "./..."},
 		{"go"},
 		{"sh", "-c", "go test ./..."},
+		// Everything after -args (or --args) goes to the test binary, so
+		// the appended -coverprofile never reaches go test. Measured
+		// 2026-10-11, go1.26.9: both spellings exit 1 with no profile.
+		{"go", "test", "./...", "-args", "-v"},
+		{"go", "test", "./...", "--args", "-v"},
+		// gotestsum forwards everything after -- to go test, so the same
+		// rule follows; not run (gotestsum was not installed).
+		{"gotestsum", "--", "./...", "-args", "-v"},
 		{"python3", "-m", "pytest", "-q"},
 		{"node", "--test"},
 	}

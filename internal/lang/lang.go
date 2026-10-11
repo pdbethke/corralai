@@ -22,6 +22,11 @@ type Plugin interface {
 	Detect(codePath string) bool // by file extension
 	Scaffold() map[string]string // base workspace files (go.mod / none)
 	TestCmd() []string           // default recursive test command
+	// LineComment is the language's line-comment marker ("//" or "#"). It is
+	// a fact about the language, declared once here so every place that
+	// writes a comment into audited-language text (the authored-test record's
+	// separator, the shard preamble's elision line) agrees.
+	LineComment() string
 	// CompileCheck returns a SEQUENCE of commands that together syntax/type
 	// check the authored test: run each in order, stop at the first
 	// non-zero exit (i.e. treat the sequence as chained by `&&`), and

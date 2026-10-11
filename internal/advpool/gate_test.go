@@ -355,6 +355,7 @@ func (emptySeqPlugin) Name() string                { return "emptyseqstub" }
 func (emptySeqPlugin) Detect(p string) bool        { return filepath.Ext(p) == ".emptyseqstub" }
 func (emptySeqPlugin) Scaffold() map[string]string { return nil }
 func (emptySeqPlugin) TestCmd() []string           { return []string{"true"} }
+func (emptySeqPlugin) LineComment() string         { return "#" }
 func (emptySeqPlugin) CompileCheck(_, _ string) [][]string {
 	return nil // the exact shape this test guards against
 }

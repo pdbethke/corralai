@@ -1976,3 +1976,6 @@ func sortBySpanCoverage(ids []string, sel Selection, span LineRange) {
 		return ids[i] < ids[j]
 	})
 }
+
+// LineComment is the python line-comment marker.
+func (pyPlugin) LineComment() string { return "#" }

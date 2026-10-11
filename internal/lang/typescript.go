@@ -226,3 +226,6 @@ func (tsPlugin) CoverageCmd(testCmd []string) (cmd []string, ok bool) {
 func (tsPlugin) ParseCoverage(stdout, modulePath string) (executed map[string]bool, err error) {
 	return jsPlugin{}.ParseCoverage(stdout, modulePath)
 }
+
+// LineComment is the typescript line-comment marker.
+func (tsPlugin) LineComment() string { return "//" }

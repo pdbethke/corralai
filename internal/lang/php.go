@@ -659,3 +659,6 @@ func (phpPlugin) CoverageCmd(testCmd []string) (cmd []string, ok bool) {
 func (phpPlugin) ParseCoverage(stdout, modulePath string) (executed map[string]bool, err error) {
 	return corralCoverageReport(stdout, phpCoverageHeader, "php", modulePath)
 }
+
+// LineComment is the php line-comment marker.
+func (phpPlugin) LineComment() string { return "//" }

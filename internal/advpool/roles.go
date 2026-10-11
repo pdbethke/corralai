@@ -458,20 +458,6 @@ func ShardIsChunked(sigs []repoindex.Signature, sh Shard) bool {
 	return signaturesChunkable(filterSignatures(sigs, sh.Symbols))
 }
 
-// commentPrefix is the line-comment token to render the elision separator
-// in, so it reads as a comment (never code) in the language a shard's slice
-// is shown in. Best-effort for a language not listed: "//" is wrong for
-// some, but the separator never touches an anchor, so a wrong comment
-// character costs nothing but cosmetics.
-func commentPrefix(lang string) string {
-	switch lang {
-	case "python", "ruby":
-		return "#"
-	default:
-		return "//"
-	}
-}
-
 // shardCode returns the code shown to one generator shard: the language's
 // Preamble (see lang.PreambleFor) followed by the union of shardSigs' own
 // [Line, Line+Lines) ranges (1-indexed, half-open — repoindex.Signature.Line
@@ -525,7 +511,7 @@ func shardCode(p golang.Plugin, code string, shardSigs []repoindex.Signature) (s
 	if preamble != "" {
 		preambleLines = len(strings.Split(preamble, "\n"))
 	}
-	cprefix := commentPrefix(p.Name())
+	cprefix := p.LineComment()
 
 	var b strings.Builder
 	if preamble != "" {

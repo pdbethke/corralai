@@ -574,3 +574,6 @@ func goTestShaped(testCmd []string) bool {
 	}
 	return false
 }
+
+// LineComment is the go line-comment marker.
+func (goPlugin) LineComment() string { return "//" }

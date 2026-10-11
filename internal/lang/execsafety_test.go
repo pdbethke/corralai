@@ -25,11 +25,9 @@ import (
 // is correct on both substrates: the workspace execs sh, and the jail's
 // shell-join wraps it in another sh -c, which nests harmlessly.
 func TestStockTestCmdsAreExecSafe(t *testing.T) {
-	for _, name := range []string{"go", "python", "ruby", "javascript", "typescript"} {
-		p, ok := ByName(name)
-		if !ok {
-			t.Fatalf("plugin %q not registered", name)
-		}
+	// Every registered plugin, derived — a hand list here skipped php.
+	for _, name := range Names() {
+		p := registry[name]
 		cmd := p.TestCmd()
 		if len(cmd) == 0 {
 			t.Errorf("%s: TestCmd is empty", name)

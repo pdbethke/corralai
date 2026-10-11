@@ -279,24 +279,16 @@ func TestRubyConcatRefusesMixedFrameworks(t *testing.T) {
 	}
 }
 
-// TestEveryLaunchLanguageHasAConcatenator: the default writer mode returns N
+// TestEveryLanguageHasAConcatenator: the default writer mode returns N
 // separately-proven files, so a language with no concatenator hands its
-// operators nothing merged at all. These five are the languages corral claims
-// to audit.
-func TestEveryLaunchLanguageHasAConcatenator(t *testing.T) {
-	for _, name := range []string{"go", "python", "javascript", "typescript", "ruby"} {
-		if _, ok := mustPlugin(t, name).(TestConcatenator); !ok {
+// operators nothing merged at all. Derived from the registry, so a new
+// language fails here until it implements one — the hand list this replaced
+// skipped php, which implements it.
+func TestEveryLanguageHasAConcatenator(t *testing.T) {
+	for _, name := range Names() {
+		if _, ok := registry[name].(TestConcatenator); !ok {
 			t.Errorf("%s has no TestConcatenator — the default writer mode cannot hand its operators one file", name)
 		}
-	}
-}
-
-// TestPHPHasATestConcatenator pins that php implements TestConcatenator (the
-// interface, not yet added to TestEveryLaunchLanguageHasAConcatenator's
-// list — php is not a launch language until it clears the multilang gate).
-func TestPHPHasATestConcatenator(t *testing.T) {
-	if _, ok := mustPlugin(t, "php").(TestConcatenator); !ok {
-		t.Fatal("php plugin does not implement TestConcatenator")
 	}
 }
 

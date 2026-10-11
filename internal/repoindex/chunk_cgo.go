@@ -30,7 +30,7 @@ func chunkSymbols(text, lang string) ([]LineChunk, error) {
 	defer tree.Close()
 	root := tree.RootNode()
 
-	dts := defTypes(lang)
+	dts := langSpecs[lang].defs
 
 	// Collect flat, document-ordered list of spans (containers expanded inline).
 	var allSpans []defSpan
@@ -79,7 +79,7 @@ func chunkSymbols(text, lang string) ([]LineChunk, error) {
 		cStart := int(spanNode.StartPoint().Row) + 1
 		cEnd := int(spanNode.EndPoint().Row) + 1
 
-		if isContainer(lang, node.Type()) {
+		if langSpecs[lang].containers[node.Type()] {
 			methods := findMethodsInContainer(node, lang, src)
 			switch {
 			case len(methods) > 0 && methods[0].start > cStart:
@@ -221,7 +221,7 @@ func extractName(n *sitter.Node, src []byte) string {
 }
 
 func findMethodsInContainer(node *sitter.Node, lang string, src []byte) []defSpan {
-	mTypes := methodDefTypes(lang)
+	mTypes := langSpecs[lang].methods
 	if len(mTypes) == 0 {
 		return nil
 	}

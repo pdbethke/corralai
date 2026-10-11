@@ -115,6 +115,38 @@ func TestCoverageCmdRefusesForeignCommands(t *testing.T) {
 			}
 		}
 	}
+
+	// Derived: every CoverageReporter must also refuse every OTHER
+	// registered plugin's stock test command. The one exception is
+	// javascript↔typescript: typescript.go's CoverageCmd delegates to
+	// jsPlugin's, so each accepts the other's — the ambiguity the DRY
+	// audit records as its own Tier-2 finding ("JS+TS identical
+	// CoverageCmd makes mixed repos ambiguous"). Named here so it is
+	// visible, not fixed here.
+	sharedCoverage := map[[2]string]bool{
+		{"javascript", "typescript"}: true,
+		{"typescript", "javascript"}: true,
+	}
+	// go's CoverageCmd wraps ANY non-empty argv by design (go.go: an
+	// operator's gotestsum or `make test` wrapper is still a go suite), and
+	// certify_repo.go's selectPreflightLanguage relies on that — a mixed
+	// python+go scan given `-- pytest -q` matches both and declines rather
+	// than guess. So go is exempt as a reporter here, never as a command.
+	acceptsAnyCommand := map[string]bool{"go": true}
+	for _, name := range pluginNames() {
+		r, ok := registry[name].(CoverageReporter)
+		if !ok || acceptsAnyCommand[name] {
+			continue
+		}
+		for _, other := range pluginNames() {
+			if other == name || sharedCoverage[[2]string{name, other}] {
+				continue
+			}
+			if _, ok := r.CoverageCmd(registry[other].TestCmd()); ok {
+				t.Errorf("%s's CoverageCmd accepts %s's stock test command %q — it would instrument the wrong suite", name, other, registry[other].TestCmd())
+			}
+		}
+	}
 }
 
 // THE LIVE PROOF. A parser test cannot tell you the instrumentation works;

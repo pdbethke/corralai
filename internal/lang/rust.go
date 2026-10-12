@@ -109,13 +109,10 @@ func (rustPlugin) ImportPath(string, func(string) bool) (string, bool) { return 
 // parent with `use super::*;`, which needs no per-task correction.
 func (rustPlugin) ImportNote(string, bool) string { return "" }
 
-// SingleTestCmd, ListTestsCmd and ParseTestList stay ok=false/nil, and that is
-// a limit of the Plugin interface, not of the runner row: none of the three is
-// handed the operator's test command, so a stateless plugin cannot know
-// whether the baseline runs under libtest or nextest, and answering for the
-// wrong runner would score single tests under a harness the suite does not
-// use. rustRunner(testCmd).singleTest and .listCmd hold the real answers for
-// the caller that has the command.
+// SingleTestCmd, ListTestsCmd and ParseTestList stay ok=false/nil: the Plugin
+// interface never hands these methods the operator's test command, so a
+// stateless plugin cannot tell libtest from nextest, and answering for one
+// runner would be wrong for the other.
 func (rustPlugin) SingleTestCmd(string, string) ([]string, bool) { return nil, false }
 
 func (rustPlugin) ListTestsCmd(string) ([]string, bool) { return nil, false }
@@ -123,12 +120,14 @@ func (rustPlugin) ListTestsCmd(string) ([]string, bool) { return nil, false }
 func (rustPlugin) ParseTestList(string) []string { return nil }
 
 // FirstFailure names the first test the runner's own summary reported as
-// failing. FailureParser is handed output alone, so the grammar is read off
-// the output (rustGrammarOf), never guessed from a command it does not have.
-// Output the grammar does not recognise — a build failure, a runner corral
-// does not understand — names nothing, which is the contract's "" (see
-// FailureParser); the interface has no way to say "unrecognised" apart from
-// "no failure", and parseRustRun's Recognised is where that distinction lives.
+// failing, for the killed_by label (internal/adequacy/score.go). GRADING IS BY
+// EXIT CODE; this only labels, so "" means "no label", never a grade: it is
+// returned for a passing run and equally for output the grammar does not
+// recognise (a build failure, another runner's text).
+//
+// The id differs by runner: libtest gives the test path (`tests::name`),
+// nextest gives `<binary-id> <name>`. FailureParser is handed output alone, so
+// the grammar is read off the output (rustGrammarOf), not off a command.
 func (rustPlugin) FirstFailure(output []byte) string {
 	run := parseRustRun(rustGrammarOf(output), output)
 	if len(run.Failures) == 0 {

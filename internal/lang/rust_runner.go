@@ -23,64 +23,29 @@ const (
 // parser come to disagree about which runner the suite uses.
 type runnerRow struct {
 	grammar rustGrammar
-	// singleTest runs exactly one test (sel is the name the runner lists).
-	singleTest func(testPath, sel string) []string
-	// listCmd enumerates the tests without running them.
-	listCmd []string
 	// preflightBin is the binary that must be on PATH.
 	preflightBin string
-	// profileNote is the scan-line disclosure for this runner, given whether
-	// the repository carries `.config/nextest.toml`; "" when nothing to say.
-	profileNote func(hasNextestConfig bool) string
 }
 
+// The nextest.toml disclosure (cargo test ignores the project's nextest
+// profiles) lands with the landing task, where a scan line exists to carry it.
 func rustRunner(testCmd []string) runnerRow {
 	if cmdHasWord(testCmd, "nextest") || cmdHasWord(testCmd, "cargo-nextest") {
 		bin := "cargo-nextest"
 		if len(testCmd) > 0 && filepath.Base(testCmd[0]) == "cargo-nextest" {
 			bin = testCmd[0]
 		}
-		return runnerRow{
-			grammar: rustGrammarNextest,
-			singleTest: func(_, sel string) []string {
-				return []string{"cargo", "nextest", "run", "-E", "test(=" + sel + ")"}
-			},
-			listCmd:      []string{"cargo", "nextest", "list", "--message-format", "oneline"},
-			preflightBin: bin,
-			profileNote:  func(bool) string { return "" },
-		}
+		return runnerRow{grammar: rustGrammarNextest, preflightBin: bin}
 	}
-	return runnerRow{
-		grammar: rustGrammarLibtest,
-		singleTest: func(testPath, sel string) []string {
-			cmd := []string{"cargo", "test"}
-			// cargo's integration tests are one binary per tests/*.rs file;
-			// naming it keeps the run from compiling and filtering every other.
-			if dir, file := filepath.Split(filepath.ToSlash(testPath)); strings.HasPrefix(dir, "tests/") {
-				cmd = append(cmd, "--test", strings.TrimSuffix(file, ".rs"))
-			}
-			return append(cmd, "--", "--exact", sel)
-		},
-		listCmd:      []string{"cargo", "test", "--", "--list", "--format", "terse"},
-		preflightBin: preflightBin(testCmd, "cargo"),
-		profileNote: func(hasConfig bool) string {
-			if !hasConfig {
-				return ""
-			}
-			return "this project has .config/nextest.toml but the test command is `cargo test`: the project's nextest profiles were not applied"
-		},
-	}
+	return runnerRow{grammar: rustGrammarLibtest, preflightBin: preflightBin(testCmd, "cargo")}
 }
 
 // rustRun is what one parse of a runner's output established.
 type rustRun struct {
-	// Recognised is false when the output carries none of the grammar's
-	// summary: a build failure, an empty capture, the other runner's text.
-	// Such a run is COULD-NOT-GRADE; it must never be read as a pass or as a
-	// measured zero.
-	Recognised bool
 	// Failures are the failing tests' ids in the order the summary names
-	// them, each once. libtest: the test path. nextest: "<binary-id> <name>".
+	// them, each once. The id differs by runner: libtest gives the test path
+	// (`tests::name`), nextest gives `<binary-id> <name>` (the binary id keeps
+	// same-named tests in different binaries apart).
 	Failures []string
 	// Flaky are tests nextest passed only on a retry. They are graded as
 	// passed (the exit code is 0) and are listed so they can be disclosed.
@@ -98,9 +63,8 @@ func rustGrammarOf(output []byte) rustGrammar {
 
 // parseRustRun is the one parse function; the grammar picks the markers.
 //
-//	libtest: a `test result: ` line makes the output recognised, and each
-//	         `---- <name> stdout ----` block names a failure.
-//	nextest: a `Summary [` line makes it recognised; `FAIL [ t ] <binary-id>
+//	libtest: each `---- <name> stdout ----` block names a failure.
+//	nextest: `FAIL [ t ] <binary-id>
 //	         <name>` lines name failures (the retry lines, `TRY n FAIL`, do not:
 //	         a test that failed once and passed on retry is FLAKY), and
 //	         `FLAKY n/m [ t ] <binary-id> <name>` lines name flaky tests.
@@ -117,18 +81,12 @@ func parseRustRun(g rustGrammar, output []byte) rustRun {
 		line = strings.TrimSpace(line)
 		switch g {
 		case rustGrammarLibtest:
-			if strings.HasPrefix(line, "test result: ") {
-				run.Recognised = true
-			}
 			if rest, ok := strings.CutPrefix(line, "---- "); ok {
 				if name, ok := strings.CutSuffix(rest, " stdout ----"); ok {
 					add(&run.Failures, strings.TrimSpace(name))
 				}
 			}
 		case rustGrammarNextest:
-			if strings.HasPrefix(line, "Summary [") {
-				run.Recognised = true
-			}
 			if rest, ok := strings.CutPrefix(line, "FAIL "); ok {
 				add(&run.Failures, nextestTestID(rest))
 			} else if rest, ok := strings.CutPrefix(line, "FLAKY "); ok {

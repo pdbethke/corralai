@@ -1,0 +1,12 @@
+   Compiling fuzzy_match v0.1.0 (/tmp/claude-1000/-home-pdbethke-PycharmProjects-corralai/81284ed5-c06a-4f9d-9cfc-4b897eee1dbf/scratchpad/warp-cap/crates/fuzzy_match)
+error[E0425]: cannot find value `not_defined_anywhere` in this scope
+   --> crates/fuzzy_match/src/lib.rs:156:28
+    |
+156 |     query.contains('*') || not_defined_anywhere
+    |                            ^^^^^^^^^^^^^^^^^^^^ not found in this scope
+
+For more information about this error, try `rustc --explain E0425`.
+error: could not compile `fuzzy_match` (lib test) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `fuzzy_match` (lib) due to 1 previous error
+error: command `/home/pdbethke/.rustup/toolchains/1.92.0-x86_64-unknown-linux-gnu/bin/cargo '--color=auto' test --no-run --message-format json-render-diagnostics --package fuzzy_match` exited with code 101

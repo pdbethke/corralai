@@ -1,0 +1,836 @@
+    Updating crates.io index
+     Locking 16 packages to latest compatible versions
+      Adding quickcheck v0.9.2 (available: v1.1.0)
+      Adding rand v0.7.3 (available: v0.10.3)
+ Downloading crates ...
+  Downloaded getrandom v0.1.16
+  Downloaded rand_core v0.5.1
+  Downloaded rand_chacha v0.2.2
+  Downloaded quickcheck v0.9.2
+  Downloaded rand v0.7.3
+  Downloaded zerocopy v0.8.62
+   Compiling libc v0.2.190
+   Compiling zerocopy v0.8.62
+   Compiling getrandom v0.1.16
+   Compiling cfg-if v1.0.5
+   Compiling byteorder v1.5.0 (/tmp/claude-1000/-home-pdbethke-PycharmProjects-corralai/81284ed5-c06a-4f9d-9cfc-4b897eee1dbf/scratchpad/byteorder-cap)
+   Compiling rand_core v0.5.1
+   Compiling ppv-lite86 v0.2.21
+   Compiling rand_chacha v0.2.2
+   Compiling rand v0.7.3
+   Compiling quickcheck v0.9.2
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.67s
+     Running unittests src/lib.rs (target/debug/deps/byteorder-fb1015e6e57065f7)
+
+running 680 tests
+test stdtests::prop_ext_f32::little_endian ... ok
+test stdtests::prop_ext_f32::big_endian ... ok
+test stdtests::prop_ext_f32::native_endian ... ok
+test stdtests::prop_ext_f64::big_endian ... ok
+test stdtests::prop_ext_i16::big_endian ... ok
+test stdtests::prop_ext_f64::native_endian ... ok
+test stdtests::prop_ext_i16::native_endian ... ok
+test stdtests::prop_ext_f64::little_endian ... ok
+test stdtests::prop_ext_i16::little_endian ... ok
+test stdtests::prop_ext_i32::big_endian ... ok
+test stdtests::prop_ext_i128::big_endian ... ok
+test stdtests::prop_ext_i128::little_endian ... ok
+test stdtests::prop_ext_i32::native_endian ... ok
+test stdtests::prop_ext_i128::native_endian ... ok
+test stdtests::prop_ext_i32::little_endian ... ok
+test stdtests::prop_ext_i64::big_endian ... ok
+test stdtests::prop_ext_i64::little_endian ... ok
+test stdtests::prop_ext_i64::native_endian ... ok
+test stdtests::prop_ext_int128_10::big_endian ... ok
+test stdtests::prop_ext_int128_10::little_endian ... ok
+test stdtests::prop_ext_int128_10::native_endian ... ok
+test stdtests::prop_ext_int128_11::big_endian ... ok
+test stdtests::prop_ext_int128_11::little_endian ... ok
+test stdtests::prop_ext_int128_11::native_endian ... ok
+test stdtests::prop_ext_int128_12::little_endian ... ok
+test stdtests::prop_ext_int128_13::big_endian ... ok
+test stdtests::prop_ext_int128_12::big_endian ... ok
+test stdtests::prop_ext_int128_12::native_endian ... ok
+test stdtests::prop_ext_int128_13::little_endian ... ok
+test stdtests::prop_ext_int128_14::little_endian ... ok
+test stdtests::prop_ext_int128_14::big_endian ... ok
+test stdtests::prop_ext_int128_13::native_endian ... ok
+test stdtests::prop_ext_int128_15::big_endian ... ok
+test stdtests::prop_ext_int128_15::native_endian ... ok
+test stdtests::prop_ext_int128_16::big_endian ... ok
+test stdtests::prop_ext_int128_16::little_endian ... ok
+test stdtests::prop_ext_int128_14::native_endian ... ok
+test stdtests::prop_ext_int128_15::little_endian ... ok
+test stdtests::prop_ext_int128_16::native_endian ... ok
+test stdtests::prop_ext_int128_1::big_endian ... ok
+test stdtests::prop_ext_int128_1::little_endian ... ok
+test stdtests::prop_ext_int128_2::little_endian ... ok
+test stdtests::prop_ext_int128_1::native_endian ... ok
+test stdtests::prop_ext_int128_3::big_endian ... ok
+test stdtests::prop_ext_int128_3::little_endian ... ok
+test stdtests::prop_ext_int128_2::native_endian ... ok
+test stdtests::prop_ext_int128_2::big_endian ... ok
+test stdtests::prop_ext_int128_3::native_endian ... ok
+test stdtests::prop_ext_int128_4::little_endian ... ok
+test stdtests::prop_ext_int128_4::big_endian ... ok
+test stdtests::prop_ext_int128_5::little_endian ... ok
+test stdtests::prop_ext_int128_4::native_endian ... ok
+test stdtests::prop_ext_int128_5::big_endian ... ok
+test stdtests::prop_ext_int128_5::native_endian ... ok
+test stdtests::prop_ext_int128_6::little_endian ... ok
+test stdtests::prop_ext_int128_6::native_endian ... ok
+test stdtests::prop_ext_int128_6::big_endian ... ok
+test stdtests::prop_ext_int128_7::big_endian ... ok
+test stdtests::prop_ext_int128_7::little_endian ... ok
+test stdtests::prop_ext_int128_7::native_endian ... ok
+test stdtests::prop_ext_int128_8::big_endian ... ok
+test stdtests::prop_ext_int128_8::little_endian ... ok
+test stdtests::prop_ext_int128_8::native_endian ... ok
+test stdtests::prop_ext_int128_9::big_endian ... ok
+test stdtests::prop_ext_int_1::big_endian ... ok
+test stdtests::prop_ext_int_1::little_endian ... ok
+test stdtests::prop_ext_int128_9::little_endian ... ok
+test stdtests::prop_ext_int_2::big_endian ... ok
+test stdtests::prop_ext_int_1::native_endian ... ok
+test stdtests::prop_ext_int_2::native_endian ... ok
+test stdtests::prop_ext_int128_9::native_endian ... ok
+test stdtests::prop_ext_int_2::little_endian ... ok
+test stdtests::prop_ext_int_3::big_endian ... ok
+test stdtests::prop_ext_int_3::little_endian ... ok
+test stdtests::prop_ext_int_3::native_endian ... ok
+test stdtests::prop_ext_int_4::big_endian ... ok
+test stdtests::prop_ext_int_4::little_endian ... ok
+test stdtests::prop_ext_int_4::native_endian ... ok
+test stdtests::prop_ext_int_5::big_endian ... ok
+test stdtests::prop_ext_int_5::little_endian ... ok
+test stdtests::prop_ext_int_5::native_endian ... ok
+test stdtests::prop_ext_int_6::big_endian ... ok
+test stdtests::prop_ext_int_6::little_endian ... ok
+test stdtests::prop_ext_int_6::native_endian ... ok
+test stdtests::prop_ext_int_7::little_endian ... ok
+test stdtests::prop_ext_int_7::big_endian ... ok
+test stdtests::prop_ext_int_7::native_endian ... ok
+test stdtests::prop_ext_int_8::big_endian ... ok
+test stdtests::prop_ext_int_8::little_endian ... ok
+test stdtests::prop_ext_int_8::native_endian ... ok
+test stdtests::prop_ext_u16::big_endian ... ok
+test stdtests::prop_ext_u16::little_endian ... ok
+test stdtests::prop_ext_u128::big_endian ... ok
+test stdtests::prop_ext_u16::native_endian ... ok
+test stdtests::prop_ext_u32::big_endian ... ok
+test stdtests::prop_ext_u128::little_endian ... ok
+test stdtests::prop_ext_u32::little_endian ... ok
+test stdtests::prop_ext_u32::native_endian ... ok
+test stdtests::prop_ext_u128::native_endian ... ok
+test stdtests::prop_ext_u64::big_endian ... ok
+test stdtests::prop_ext_u64::little_endian ... ok
+test stdtests::prop_ext_u64::native_endian ... ok
+test stdtests::prop_ext_uint128_10::big_endian ... ok
+test stdtests::prop_ext_uint128_10::little_endian ... ok
+test stdtests::prop_ext_uint128_10::native_endian ... ok
+test stdtests::prop_ext_uint128_11::big_endian ... ok
+test stdtests::prop_ext_uint128_11::little_endian ... ok
+test stdtests::prop_ext_uint128_11::native_endian ... ok
+test stdtests::prop_ext_uint128_12::big_endian ... ok
+test stdtests::prop_ext_uint128_12::little_endian ... ok
+test stdtests::prop_ext_uint128_12::native_endian ... ok
+test stdtests::prop_ext_uint128_13::little_endian ... ok
+test stdtests::prop_ext_uint128_13::native_endian ... ok
+test stdtests::prop_ext_uint128_14::big_endian ... ok
+test stdtests::prop_ext_uint128_13::big_endian ... ok
+test stdtests::prop_ext_uint128_14::native_endian ... ok
+test stdtests::prop_ext_uint128_14::little_endian ... ok
+test stdtests::prop_ext_uint128_15::little_endian ... ok
+test stdtests::prop_ext_uint128_15::big_endian ... ok
+test stdtests::prop_ext_uint128_15::native_endian ... ok
+test stdtests::prop_ext_uint128_16::little_endian ... ok
+test stdtests::prop_ext_uint128_16::native_endian ... ok
+test stdtests::prop_ext_uint128_16::big_endian ... ok
+test stdtests::prop_ext_uint128_1::big_endian ... ok
+test stdtests::prop_ext_uint128_1::little_endian ... ok
+test stdtests::prop_ext_uint128_1::native_endian ... ok
+test stdtests::prop_ext_uint128_2::little_endian ... ok
+test stdtests::prop_ext_uint128_2::big_endian ... ok
+test stdtests::prop_ext_uint128_2::native_endian ... ok
+test stdtests::prop_ext_uint128_3::big_endian ... ok
+test stdtests::prop_ext_uint128_3::little_endian ... ok
+test stdtests::prop_ext_uint128_3::native_endian ... ok
+test stdtests::prop_ext_uint128_4::big_endian ... ok
+test stdtests::prop_ext_uint128_4::little_endian ... ok
+test stdtests::prop_ext_uint128_4::native_endian ... ok
+test stdtests::prop_ext_uint128_5::big_endian ... ok
+test stdtests::prop_ext_uint128_5::little_endian ... ok
+test stdtests::prop_ext_uint128_6::little_endian ... ok
+test stdtests::prop_ext_uint128_5::native_endian ... ok
+test stdtests::prop_ext_uint128_6::native_endian ... ok
+test stdtests::prop_ext_uint128_6::big_endian ... ok
+test stdtests::prop_ext_uint128_7::little_endian ... ok
+test stdtests::prop_ext_uint128_7::big_endian ... ok
+test stdtests::prop_ext_uint128_7::native_endian ... ok
+test stdtests::prop_ext_uint128_8::big_endian ... ok
+test stdtests::prop_ext_uint128_8::little_endian ... ok
+test stdtests::prop_ext_uint128_8::native_endian ... ok
+test stdtests::prop_ext_uint_1::big_endian ... ok
+test stdtests::prop_ext_uint128_9::big_endian ... ok
+test stdtests::prop_ext_uint_1::little_endian ... ok
+test stdtests::prop_ext_uint128_9::little_endian ... ok
+test stdtests::prop_ext_uint_1::native_endian ... ok
+test stdtests::prop_ext_uint128_9::native_endian ... ok
+test stdtests::prop_ext_uint_2::big_endian ... ok
+test stdtests::prop_ext_uint_2::native_endian ... ok
+test stdtests::prop_ext_uint_2::little_endian ... ok
+test stdtests::prop_ext_uint_3::big_endian ... ok
+test stdtests::prop_ext_uint_3::little_endian ... ok
+test stdtests::prop_ext_uint_3::native_endian ... ok
+test stdtests::prop_ext_uint_4::big_endian ... ok
+test stdtests::prop_ext_uint_4::little_endian ... ok
+test stdtests::prop_ext_uint_4::native_endian ... ok
+test stdtests::prop_ext_uint_5::big_endian ... ok
+test stdtests::prop_ext_uint_5::little_endian ... ok
+test stdtests::prop_ext_uint_5::native_endian ... ok
+test stdtests::prop_ext_uint_6::big_endian ... ok
+test stdtests::prop_ext_uint_6::little_endian ... ok
+test stdtests::prop_ext_uint_6::native_endian ... ok
+test stdtests::prop_ext_uint_7::little_endian ... ok
+test stdtests::prop_ext_uint_7::native_endian ... ok
+test stdtests::prop_ext_uint_7::big_endian ... ok
+test stdtests::prop_ext_uint_8::big_endian ... ok
+test stdtests::prop_ext_uint_8::little_endian ... ok
+test stdtests::prop_ext_uint_8::native_endian ... ok
+test stdtests::prop_slice_f32::big_endian ... ok
+test stdtests::prop_slice_f32::little_endian ... ok
+test stdtests::prop_slice_f32::native_endian ... ok
+test stdtests::prop_slice_i16::little_endian ... ok
+test stdtests::prop_slice_i16::native_endian ... ok
+test stdtests::prop_slice_i16::big_endian ... ok
+test stdtests::prop_slice_f64::big_endian ... ok
+test stdtests::prop_slice_f64::little_endian ... ok
+test stdtests::prop_slice_f64::native_endian ... ok
+test stdtests::prop_slice_u16::big_endian ... ok
+test stdtests::prop_slice_i32::big_endian ... ok
+test stdtests::prop_slice_i32::little_endian ... ok
+test stdtests::prop_slice_i32::native_endian ... ok
+test stdtests::prop_slice_i128::big_endian ... ok
+test test::prop_f32::big_endian ... ok
+test test::prop_f32::little_endian ... ok
+test test::prop_f32::native_endian ... ok
+test test::prop_f64::big_endian ... ok
+test stdtests::prop_slice_i64::little_endian ... ok
+test stdtests::prop_slice_i128::native_endian ... ok
+test stdtests::prop_slice_i128::little_endian ... ok
+test test::prop_i16::big_endian ... ok
+test test::prop_i16::little_endian ... ok
+test test::prop_i128::big_endian ... ok
+test stdtests::prop_slice_i64::native_endian ... ok
+test stdtests::prop_slice_i64::big_endian ... ok
+test test::prop_i128::little_endian ... ok
+test test::prop_f64::little_endian ... ok
+test stdtests::prop_slice_u16::little_endian ... ok
+test stdtests::prop_slice_u128::big_endian ... ok
+test stdtests::prop_slice_u16::native_endian ... ok
+test stdtests::prop_slice_u128::native_endian ... ok
+test stdtests::prop_slice_u128::little_endian ... ok
+test test::prop_f64::native_endian ... ok
+test stdtests::prop_slice_u32::big_endian ... ok
+test stdtests::prop_slice_u32::native_endian ... ok
+test test::prop_i16::native_endian ... ok
+test stdtests::prop_slice_u32::little_endian ... ok
+test test::prop_i24::big_endian ... ok
+test test::prop_i24::little_endian ... ok
+test test::prop_i24::native_endian ... ok
+test test::prop_i32::big_endian ... ok
+test test::prop_i32::little_endian ... ok
+test test::prop_i32::native_endian ... ok
+test test::prop_i48::big_endian ... ok
+test test::prop_i48::little_endian ... ok
+test test::prop_i128::native_endian ... ok
+test test::prop_i48::native_endian ... ok
+test test::prop_i64::big_endian ... ok
+test test::prop_i64::little_endian ... ok
+test stdtests::prop_slice_u64::little_endian ... ok
+test test::prop_i64::native_endian ... ok
+test stdtests::prop_slice_u64::native_endian ... ok
+test stdtests::prop_slice_u64::big_endian ... ok
+test test::prop_int128_10::big_endian ... ok
+test test::prop_int128_10::little_endian ... ok
+test test::prop_int128_10::native_endian ... ok
+test test::prop_int128_11::big_endian ... ok
+test test::prop_int128_11::little_endian ... ok
+test test::prop_int128_12::little_endian ... ok
+test test::prop_int128_11::native_endian ... ok
+test test::prop_int128_12::big_endian ... ok
+test test::prop_int128_12::native_endian ... ok
+test test::prop_int128_13::little_endian ... ok
+test test::prop_int128_13::native_endian ... ok
+test test::prop_int128_13::big_endian ... ok
+test test::prop_int128_14::big_endian ... ok
+test test::prop_int128_14::native_endian ... ok
+test test::prop_int128_14::little_endian ... ok
+test test::prop_int128_15::big_endian ... ok
+test test::prop_int128_15::little_endian ... ok
+test test::prop_int128_15::native_endian ... ok
+test test::prop_int128_16::big_endian ... ok
+test test::prop_int128_1::big_endian ... ok
+test test::prop_int128_16::little_endian ... ok
+test test::prop_int128_1::little_endian ... ok
+test test::prop_int128_16::native_endian ... ok
+test test::prop_int128_1::native_endian ... ok
+test test::prop_int128_2::big_endian ... ok
+test test::prop_int128_2::little_endian ... ok
+test test::prop_int128_2::native_endian ... ok
+test test::prop_int128_3::big_endian ... ok
+test test::prop_int128_3::little_endian ... ok
+test test::prop_int128_3::native_endian ... ok
+test test::prop_int128_4::big_endian ... ok
+test test::prop_int128_4::little_endian ... ok
+test test::prop_int128_4::native_endian ... ok
+test test::prop_int128_5::big_endian ... ok
+test test::prop_int128_6::big_endian ... ok
+test test::prop_int128_5::little_endian ... ok
+test test::prop_int128_6::little_endian ... ok
+test test::prop_int128_5::native_endian ... ok
+test test::prop_int128_6::native_endian ... ok
+test test::prop_int128_7::big_endian ... ok
+test test::prop_int128_7::little_endian ... ok
+test test::prop_int128_7::native_endian ... ok
+test test::prop_int128_8::big_endian ... ok
+test test::prop_int128_8::little_endian ... ok
+test test::prop_int128_8::native_endian ... ok
+test test::prop_int_1::big_endian ... ok
+test test::prop_int_1::little_endian ... ok
+test test::prop_int128_9::big_endian ... ok
+test test::prop_int128_9::little_endian ... ok
+test test::prop_int128_9::native_endian ... ok
+test test::prop_int_1::native_endian ... ok
+test test::prop_int_2::big_endian ... ok
+test test::prop_int_2::little_endian ... ok
+test test::prop_int_2::native_endian ... ok
+test test::prop_int_3::big_endian ... ok
+test test::prop_int_3::little_endian ... ok
+test test::prop_int_3::native_endian ... ok
+test test::prop_int_4::big_endian ... ok
+test test::prop_int_4::little_endian ... ok
+test test::prop_int_4::native_endian ... ok
+test test::prop_int_5::big_endian ... ok
+test test::prop_int_5::little_endian ... ok
+test test::prop_int_5::native_endian ... ok
+test test::prop_int_6::big_endian ... ok
+test test::prop_int_6::little_endian ... ok
+test test::prop_int_6::native_endian ... ok
+test test::prop_int_7::big_endian ... ok
+test test::prop_int_7::native_endian ... ok
+test test::prop_int_7::little_endian ... ok
+test test::prop_int_8::big_endian ... ok
+test test::prop_int_8::little_endian ... ok
+test test::prop_int_8::native_endian ... ok
+test test::prop_u16::big_endian ... ok
+test test::prop_u16::little_endian ... ok
+test test::prop_u128::big_endian ... ok
+test test::prop_u16::native_endian ... ok
+test test::prop_u24::big_endian ... ok
+test test::prop_u128::little_endian ... ok
+test test::prop_u24::little_endian ... ok
+test test::prop_u128::native_endian ... ok
+test test::prop_u24::native_endian ... ok
+test test::prop_u32::big_endian ... ok
+test test::prop_u32::native_endian ... ok
+test test::prop_u32::little_endian ... ok
+test test::prop_u48::big_endian ... ok
+test test::prop_u48::little_endian ... ok
+test test::prop_u48::native_endian ... ok
+test test::prop_u64::big_endian ... ok
+test test::prop_u64::little_endian ... ok
+test test::prop_u64::native_endian ... ok
+test test::prop_uint128_10::big_endian ... ok
+test test::prop_uint128_10::little_endian ... ok
+test test::prop_uint128_10::native_endian ... ok
+test test::prop_uint128_11::big_endian ... ok
+test test::prop_uint128_11::little_endian ... ok
+test test::prop_uint128_11::native_endian ... ok
+test test::prop_uint128_12::native_endian ... ok
+test test::prop_uint128_12::big_endian ... ok
+test test::prop_uint128_12::little_endian ... ok
+test test::prop_uint128_13::big_endian ... ok
+test test::prop_uint128_13::native_endian ... ok
+test test::prop_uint128_13::little_endian ... ok
+test test::prop_uint128_14::big_endian ... ok
+test test::prop_uint128_14::native_endian ... ok
+test test::prop_uint128_14::little_endian ... ok
+test test::prop_uint128_15::big_endian ... ok
+test test::prop_uint128_15::little_endian ... ok
+test test::prop_uint128_15::native_endian ... ok
+test test::prop_uint128_16::little_endian ... ok
+test test::prop_uint128_16::big_endian ... ok
+test test::prop_uint128_1::big_endian ... ok
+test test::prop_uint128_16::native_endian ... ok
+test test::prop_uint128_1::little_endian ... ok
+test test::prop_uint128_1::native_endian ... ok
+test test::prop_uint128_2::big_endian ... ok
+test test::prop_uint128_2::native_endian ... ok
+test test::prop_uint128_3::big_endian ... ok
+test test::prop_uint128_2::little_endian ... ok
+test test::prop_uint128_3::little_endian ... ok
+test test::prop_uint128_3::native_endian ... ok
+test test::prop_uint128_4::big_endian ... ok
+test test::prop_uint128_4::little_endian ... ok
+test test::prop_uint128_4::native_endian ... ok
+test test::prop_uint128_5::big_endian ... ok
+test test::prop_uint128_5::native_endian ... ok
+test test::prop_uint128_5::little_endian ... ok
+test test::prop_uint128_6::native_endian ... ok
+test test::prop_uint128_6::little_endian ... ok
+test test::prop_uint128_6::big_endian ... ok
+test test::prop_uint128_7::big_endian ... ok
+test test::prop_uint128_7::little_endian ... ok
+test test::prop_uint128_7::native_endian ... ok
+test test::prop_uint128_8::big_endian ... ok
+test test::prop_uint_1::big_endian ... ok
+test test::prop_uint128_9::little_endian ... ok
+test test::prop_uint128_9::big_endian ... ok
+test test::prop_uint128_8::little_endian ... ok
+test test::prop_uint_1::little_endian ... ok
+test test::prop_uint_1::native_endian ... ok
+test test::prop_uint_2::big_endian ... ok
+test test::prop_uint128_8::native_endian ... ok
+test test::prop_uint128_9::native_endian ... ok
+test test::prop_uint_2::native_endian ... ok
+test test::prop_uint_2::little_endian ... ok
+test test::prop_uint_3::big_endian ... ok
+test test::prop_uint_3::little_endian ... ok
+test test::prop_uint_3::native_endian ... ok
+test test::prop_uint_4::big_endian ... ok
+test test::prop_uint_4::little_endian ... ok
+test test::prop_uint_4::native_endian ... ok
+test test::prop_uint_5::big_endian ... ok
+test test::prop_uint_5::little_endian ... ok
+test test::prop_uint_6::big_endian ... ok
+test test::prop_uint_5::native_endian ... ok
+test test::prop_uint_6::little_endian ... ok
+test test::prop_uint_7::big_endian ... ok
+test test::prop_uint_6::native_endian ... ok
+test test::prop_uint_7::little_endian ... ok
+test test::regression173_array_impl ... ok
+test test::prop_uint_7::native_endian ... ok
+test test::prop_uint_8::big_endian ... ok
+test test::slice_len_too_big_i128::read_big_endian - should panic ... ok
+test test::slice_len_too_big_i128::read_little_endian - should panic ... ok
+test test::slice_len_too_big_i128::read_native_endian - should panic ... ok
+test test::prop_uint_8::little_endian ... ok
+test test::prop_uint_8::native_endian ... ok
+test test::slice_len_too_big_i128::write_big_endian - should panic ... ok
+test test::slice_len_too_big_i128::write_little_endian - should panic ... ok
+test test::slice_len_too_big_i128::write_native_endian - should panic ... ok
+test test::slice_len_too_big_i16::read_big_endian - should panic ... ok
+test test::slice_len_too_big_i16::read_little_endian - should panic ... ok
+test test::slice_len_too_big_i16::read_native_endian - should panic ... ok
+test test::slice_len_too_big_i16::write_big_endian - should panic ... ok
+test test::slice_len_too_big_i16::write_little_endian - should panic ... ok
+test test::slice_len_too_big_i16::write_native_endian - should panic ... ok
+test test::slice_len_too_big_i32::read_big_endian - should panic ... ok
+test test::slice_len_too_big_i32::read_little_endian - should panic ... ok
+test test::slice_len_too_big_i32::read_native_endian - should panic ... ok
+test test::slice_len_too_big_i32::write_big_endian - should panic ... ok
+test test::slice_len_too_big_i32::write_little_endian - should panic ... ok
+test test::slice_len_too_big_i32::write_native_endian - should panic ... ok
+test test::slice_len_too_big_i64::read_big_endian - should panic ... ok
+test test::slice_len_too_big_i64::read_little_endian - should panic ... ok
+test test::slice_len_too_big_i64::read_native_endian - should panic ... ok
+test test::slice_len_too_big_i64::write_big_endian - should panic ... ok
+test test::slice_len_too_big_i64::write_little_endian - should panic ... ok
+test test::slice_len_too_big_i64::write_native_endian - should panic ... ok
+test test::slice_len_too_big_u128::read_big_endian - should panic ... ok
+test test::slice_len_too_big_u128::read_little_endian - should panic ... ok
+test test::slice_len_too_big_u128::read_native_endian - should panic ... ok
+test test::slice_len_too_big_u128::write_big_endian - should panic ... ok
+test test::slice_len_too_big_u128::write_little_endian - should panic ... ok
+test test::slice_len_too_big_u128::write_native_endian - should panic ... ok
+test test::slice_len_too_big_u16::read_big_endian - should panic ... ok
+test test::slice_len_too_big_u16::read_little_endian - should panic ... ok
+test test::slice_len_too_big_u16::read_native_endian - should panic ... ok
+test test::slice_len_too_big_u16::write_big_endian - should panic ... ok
+test test::slice_len_too_big_u16::write_little_endian - should panic ... ok
+test test::slice_len_too_big_u16::write_native_endian - should panic ... ok
+test test::slice_len_too_big_u32::read_big_endian - should panic ... ok
+test test::slice_len_too_big_u32::read_little_endian - should panic ... ok
+test test::slice_len_too_big_u32::read_native_endian - should panic ... ok
+test test::slice_len_too_big_u32::write_big_endian - should panic ... ok
+test test::slice_len_too_big_u32::write_little_endian - should panic ... ok
+test test::slice_len_too_big_u32::write_native_endian - should panic ... ok
+test test::slice_len_too_big_u64::read_big_endian - should panic ... ok
+test test::slice_len_too_big_u64::read_little_endian - should panic ... ok
+test test::slice_len_too_big_u64::read_native_endian - should panic ... ok
+test test::slice_len_too_big_u64::write_big_endian - should panic ... ok
+test test::slice_len_too_big_u64::write_little_endian - should panic ... ok
+test test::slice_len_too_big_u64::write_native_endian - should panic ... ok
+test test::slice_len_too_small_i128::read_big_endian - should panic ... ok
+test test::slice_len_too_small_i128::read_little_endian - should panic ... ok
+test test::slice_len_too_small_i128::read_native_endian - should panic ... ok
+test test::slice_len_too_small_i128::write_big_endian - should panic ... ok
+test test::slice_len_too_small_i128::write_little_endian - should panic ... ok
+test test::slice_len_too_small_i128::write_native_endian - should panic ... ok
+test test::slice_len_too_small_i16::read_big_endian - should panic ... ok
+test test::slice_len_too_small_i16::read_little_endian - should panic ... ok
+test test::slice_len_too_small_i16::read_native_endian - should panic ... ok
+test test::slice_len_too_small_i16::write_big_endian - should panic ... ok
+test test::slice_len_too_small_i16::write_little_endian - should panic ... ok
+test test::slice_len_too_small_i16::write_native_endian - should panic ... ok
+test test::slice_len_too_small_i32::read_big_endian - should panic ... ok
+test test::slice_len_too_small_i32::read_little_endian - should panic ... ok
+test test::slice_len_too_small_i32::read_native_endian - should panic ... ok
+test test::slice_len_too_small_i32::write_big_endian - should panic ... ok
+test test::slice_len_too_small_i32::write_little_endian - should panic ... ok
+test test::slice_len_too_small_i32::write_native_endian - should panic ... ok
+test test::slice_len_too_small_i64::read_big_endian - should panic ... ok
+test test::slice_len_too_small_i64::read_little_endian - should panic ... ok
+test test::slice_len_too_small_i64::read_native_endian - should panic ... ok
+test test::slice_len_too_small_i64::write_big_endian - should panic ... ok
+test test::slice_len_too_small_i64::write_little_endian - should panic ... ok
+test test::slice_len_too_small_i64::write_native_endian - should panic ... ok
+test test::slice_len_too_small_u128::read_big_endian - should panic ... ok
+test test::slice_len_too_small_u128::read_little_endian - should panic ... ok
+test test::slice_len_too_small_u128::read_native_endian - should panic ... ok
+test test::slice_len_too_small_u128::write_big_endian - should panic ... ok
+test test::slice_len_too_small_u128::write_little_endian - should panic ... ok
+test test::slice_len_too_small_u128::write_native_endian - should panic ... ok
+test test::slice_len_too_small_u16::read_big_endian - should panic ... ok
+test test::slice_len_too_small_u16::read_little_endian - should panic ... ok
+test test::slice_len_too_small_u16::write_big_endian - should panic ... ok
+test test::slice_len_too_small_u16::write_little_endian - should panic ... ok
+test test::slice_len_too_small_u16::write_native_endian - should panic ... ok
+test test::slice_len_too_small_u32::read_big_endian - should panic ... ok
+test test::slice_len_too_small_u32::read_little_endian - should panic ... ok
+test test::slice_len_too_small_u32::read_native_endian - should panic ... ok
+test test::slice_len_too_small_u32::write_big_endian - should panic ... ok
+test test::slice_len_too_small_u32::write_little_endian - should panic ... ok
+test test::slice_len_too_small_u32::write_native_endian - should panic ... ok
+test test::slice_len_too_small_u64::read_big_endian - should panic ... ok
+test test::slice_len_too_small_u64::read_little_endian - should panic ... ok
+test test::slice_len_too_small_u64::read_native_endian - should panic ... ok
+test test::slice_len_too_small_u64::write_big_endian - should panic ... ok
+test test::slice_len_too_small_u64::write_little_endian - should panic ... ok
+test test::slice_len_too_small_u64::write_native_endian - should panic ... ok
+test test::small_f32::read_big_endian - should panic ... ok
+test test::small_f32::read_little_endian - should panic ... ok
+test test::small_f32::read_native_endian - should panic ... ok
+test test::small_f32::write_big_endian - should panic ... ok
+test test::small_f32::write_little_endian - should panic ... ok
+test test::small_f32::write_native_endian - should panic ... ok
+test test::small_f64::read_big_endian - should panic ... ok
+test test::small_f64::read_little_endian - should panic ... ok
+test test::small_f64::read_native_endian - should panic ... ok
+test test::small_f64::write_big_endian - should panic ... ok
+test test::small_f64::write_little_endian - should panic ... ok
+test test::small_f64::write_native_endian - should panic ... ok
+test test::small_i128::read_big_endian - should panic ... ok
+test test::small_i128::read_little_endian - should panic ... ok
+test test::small_i128::read_native_endian - should panic ... ok
+test test::small_i128::write_big_endian - should panic ... ok
+test test::small_i128::write_little_endian - should panic ... ok
+test test::small_i128::write_native_endian - should panic ... ok
+test test::small_i16::read_big_endian - should panic ... ok
+test test::small_i16::read_little_endian - should panic ... ok
+test test::small_i16::read_native_endian - should panic ... ok
+test test::small_i16::write_big_endian - should panic ... ok
+test test::small_i16::write_little_endian - should panic ... ok
+test test::small_i16::write_native_endian - should panic ... ok
+test test::small_i32::read_big_endian - should panic ... ok
+test test::small_i32::read_little_endian - should panic ... ok
+test test::small_i32::read_native_endian - should panic ... ok
+test test::small_i32::write_big_endian - should panic ... ok
+test test::small_i32::write_little_endian - should panic ... ok
+test test::small_i32::write_native_endian - should panic ... ok
+test test::small_i64::read_big_endian - should panic ... ok
+test test::small_i64::read_little_endian - should panic ... ok
+test test::small_i64::read_native_endian - should panic ... ok
+test test::small_i64::write_big_endian - should panic ... ok
+test test::small_i64::write_little_endian - should panic ... ok
+test test::small_i64::write_native_endian - should panic ... ok
+test test::small_int128_10::read_big_endian - should panic ... ok
+test test::small_int128_10::read_little_endian - should panic ... ok
+test test::small_int128_10::read_native_endian - should panic ... ok
+test test::small_int128_11::read_big_endian - should panic ... ok
+test test::small_int128_11::read_little_endian - should panic ... ok
+test test::small_int128_11::read_native_endian - should panic ... ok
+test test::small_int128_12::read_big_endian - should panic ... ok
+test test::small_int128_12::read_little_endian - should panic ... ok
+test test::small_int128_12::read_native_endian - should panic ... ok
+test test::small_int128_13::read_big_endian - should panic ... ok
+test test::small_int128_13::read_little_endian - should panic ... ok
+test test::small_int128_13::read_native_endian - should panic ... ok
+test test::small_int128_14::read_big_endian - should panic ... ok
+test test::small_int128_14::read_little_endian - should panic ... ok
+test test::small_int128_14::read_native_endian - should panic ... ok
+test test::small_int128_15::read_big_endian - should panic ... ok
+test test::small_int128_15::read_little_endian - should panic ... ok
+test test::small_int128_15::read_native_endian - should panic ... ok
+test test::small_int128_1::read_big_endian - should panic ... ok
+test test::small_int128_1::read_little_endian - should panic ... ok
+test test::small_int128_1::read_native_endian - should panic ... ok
+test test::small_int128_2::read_big_endian - should panic ... ok
+test test::small_int128_2::read_little_endian - should panic ... ok
+test test::small_int128_2::read_native_endian - should panic ... ok
+test test::small_int128_3::read_big_endian - should panic ... ok
+test test::small_int128_3::read_little_endian - should panic ... ok
+test test::small_int128_3::read_native_endian - should panic ... ok
+test test::small_int128_4::read_big_endian - should panic ... ok
+test test::small_int128_4::read_little_endian - should panic ... ok
+test test::small_int128_4::read_native_endian - should panic ... ok
+test test::small_int128_5::read_big_endian - should panic ... ok
+test test::small_int128_5::read_little_endian - should panic ... ok
+test test::small_int128_5::read_native_endian - should panic ... ok
+test test::small_int128_6::read_big_endian - should panic ... ok
+test test::small_int128_6::read_little_endian - should panic ... ok
+test test::small_int128_6::read_native_endian - should panic ... ok
+test test::small_int128_7::read_big_endian - should panic ... ok
+test test::small_int128_7::read_little_endian - should panic ... ok
+test test::small_int128_7::read_native_endian - should panic ... ok
+test test::small_int128_8::read_big_endian - should panic ... ok
+test test::small_int128_8::read_little_endian - should panic ... ok
+test test::small_int128_8::read_native_endian - should panic ... ok
+test test::small_int128_9::read_big_endian - should panic ... ok
+test test::small_int128_9::read_little_endian - should panic ... ok
+test test::small_int128_9::read_native_endian - should panic ... ok
+test test::small_int_1::read_big_endian - should panic ... ok
+test test::small_int_1::read_little_endian - should panic ... ok
+test test::small_int_1::read_native_endian - should panic ... ok
+test test::slice_len_too_small_u16::read_native_endian - should panic ... ok
+test test::small_int_2::read_big_endian - should panic ... ok
+test test::small_int_2::read_little_endian - should panic ... ok
+test test::small_int_2::read_native_endian - should panic ... ok
+test test::small_int_3::read_big_endian - should panic ... ok
+test test::small_int_3::read_little_endian - should panic ... ok
+test test::small_int_3::read_native_endian - should panic ... ok
+test test::small_int_4::read_big_endian - should panic ... ok
+test test::small_int_4::read_little_endian - should panic ... ok
+test test::small_int_4::read_native_endian - should panic ... ok
+test test::small_int_5::read_big_endian - should panic ... ok
+test test::small_int_5::read_little_endian - should panic ... ok
+test test::small_int_5::read_native_endian - should panic ... ok
+test test::small_int_6::read_big_endian - should panic ... ok
+test test::small_int_6::read_little_endian - should panic ... ok
+test test::small_int_6::read_native_endian - should panic ... ok
+test test::small_int_7::read_big_endian - should panic ... ok
+test test::small_int_7::read_little_endian - should panic ... ok
+test test::small_int_7::read_native_endian - should panic ... ok
+test test::small_u128::read_big_endian - should panic ... ok
+test test::small_u128::read_little_endian - should panic ... ok
+test test::small_u128::read_native_endian - should panic ... ok
+test test::small_u128::write_big_endian - should panic ... ok
+test test::small_u128::write_little_endian - should panic ... ok
+test test::small_u128::write_native_endian - should panic ... ok
+test test::small_u16::read_big_endian - should panic ... ok
+test test::small_u16::read_little_endian - should panic ... ok
+test test::small_u16::read_native_endian - should panic ... ok
+test test::small_u16::write_big_endian - should panic ... ok
+test test::small_u16::write_little_endian - should panic ... ok
+test test::small_u16::write_native_endian - should panic ... ok
+test test::small_u32::read_big_endian - should panic ... ok
+test test::small_u32::read_little_endian - should panic ... ok
+test test::small_u32::read_native_endian - should panic ... ok
+test test::small_u32::write_big_endian - should panic ... ok
+test test::small_u32::write_little_endian - should panic ... ok
+test test::small_u32::write_native_endian - should panic ... ok
+test test::small_u64::read_big_endian - should panic ... ok
+test test::small_u64::read_little_endian - should panic ... ok
+test test::small_u64::read_native_endian - should panic ... ok
+test test::small_u64::write_big_endian - should panic ... ok
+test test::small_u64::write_native_endian - should panic ... ok
+test test::small_u64::write_little_endian - should panic ... ok
+test test::small_uint128_10::read_big_endian - should panic ... ok
+test test::small_uint128_10::read_little_endian - should panic ... ok
+test test::small_uint128_10::read_native_endian - should panic ... ok
+test test::small_uint128_11::read_big_endian - should panic ... ok
+test test::small_uint128_11::read_little_endian - should panic ... ok
+test test::small_uint128_11::read_native_endian - should panic ... ok
+test test::small_uint128_12::read_big_endian - should panic ... ok
+test test::small_uint128_12::read_little_endian - should panic ... ok
+test test::small_uint128_12::read_native_endian - should panic ... ok
+test test::small_uint128_13::read_big_endian - should panic ... ok
+test test::small_uint128_13::read_little_endian - should panic ... ok
+test test::small_uint128_13::read_native_endian - should panic ... ok
+test test::small_uint128_14::read_big_endian - should panic ... ok
+test test::small_uint128_14::read_little_endian - should panic ... ok
+test test::small_uint128_14::read_native_endian - should panic ... ok
+test test::small_uint128_15::read_big_endian - should panic ... ok
+test test::small_uint128_15::read_little_endian - should panic ... ok
+test test::small_uint128_15::read_native_endian - should panic ... ok
+test test::small_uint128_1::read_big_endian - should panic ... ok
+test test::small_uint128_1::read_little_endian - should panic ... ok
+test test::small_uint128_1::read_native_endian - should panic ... ok
+test test::small_uint128_2::read_big_endian - should panic ... ok
+test test::small_uint128_2::read_little_endian - should panic ... ok
+test test::small_uint128_2::read_native_endian - should panic ... ok
+test test::small_uint128_3::read_big_endian - should panic ... ok
+test test::small_uint128_3::read_little_endian - should panic ... ok
+test test::small_uint128_3::read_native_endian - should panic ... ok
+test test::small_uint128_4::read_big_endian - should panic ... ok
+test test::small_uint128_4::read_little_endian - should panic ... ok
+test test::small_uint128_4::read_native_endian - should panic ... ok
+test test::small_uint128_5::read_big_endian - should panic ... ok
+test test::small_uint128_5::read_little_endian - should panic ... ok
+test test::small_uint128_5::read_native_endian - should panic ... ok
+test test::small_uint128_6::read_big_endian - should panic ... ok
+test test::small_uint128_6::read_little_endian - should panic ... ok
+test test::small_uint128_6::read_native_endian - should panic ... ok
+test test::small_uint128_7::read_big_endian - should panic ... ok
+test test::small_uint128_7::read_little_endian - should panic ... ok
+test test::small_uint128_7::read_native_endian - should panic ... ok
+test test::small_uint128_8::read_big_endian - should panic ... ok
+test test::small_uint128_8::read_little_endian - should panic ... ok
+test test::small_uint128_8::read_native_endian - should panic ... ok
+test test::small_uint128_9::read_big_endian - should panic ... ok
+test test::small_uint128_9::read_little_endian - should panic ... ok
+test test::small_uint128_9::read_native_endian - should panic ... ok
+test test::small_uint_1::read_big_endian - should panic ... ok
+test test::small_uint_1::read_little_endian - should panic ... ok
+test test::small_uint_1::read_native_endian - should panic ... ok
+test test::small_uint_2::read_big_endian - should panic ... ok
+test test::small_uint_2::read_little_endian - should panic ... ok
+test test::small_uint_2::read_native_endian - should panic ... ok
+test test::small_uint_3::read_big_endian - should panic ... ok
+test test::small_uint_3::read_little_endian - should panic ... ok
+test test::small_uint_3::read_native_endian - should panic ... ok
+test test::small_uint_4::read_big_endian - should panic ... ok
+test test::small_uint_4::read_little_endian - should panic ... ok
+test test::small_uint_4::read_native_endian - should panic ... ok
+test test::small_uint_5::read_big_endian - should panic ... ok
+test test::small_uint_5::read_little_endian - should panic ... ok
+test test::small_uint_5::read_native_endian - should panic ... ok
+test test::small_uint_6::read_big_endian - should panic ... ok
+test test::small_uint_6::read_little_endian - should panic ... ok
+test test::small_uint_6::read_native_endian - should panic ... ok
+test test::small_uint_7::read_big_endian - should panic ... ok
+test test::small_uint_7::read_little_endian - should panic ... ok
+test test::small_uint_7::read_native_endian - should panic ... ok
+test test::uint_bigger_buffer ... ok
+
+test result: ok. 680 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+   Doc-tests byteorder
+
+running 122 tests
+test src/io.rs - io::ReadBytesExt::read_u16_into (line 552) ... ok
+test src/io.rs - io::ReadBytesExt::read_i64_into (line 807) ... ok
+test src/io.rs - io::ReadBytesExt::read_i64 (line 339) ... ok
+test src/io.rs - io::ReadBytesExt::read_f32_into (line 887) ... ok
+test src/io.rs - io::ReadBytesExt::read_i32_into (line 772) ... ok
+test src/io.rs - io::ReadBytesExt::read_i16 (line 130) ... ok
+test src/io.rs - io::ReadBytesExt::read_f32 (line 487) ... ok
+test src/io.rs - io::ReadBytesExt::read_i128 (line 394) ... ok
+test src/io.rs - io::ReadBytesExt::read_f64_into (line 972) ... ok
+test src/io.rs - io::ReadBytesExt::read_f64_into_unchecked (line 1023) ... ok
+test src/io.rs - io::ReadBytesExt (line 18) ... ok
+test src/io.rs - io::ReadBytesExt::read_i16_into (line 737) ... ok
+test src/io.rs - io::ReadBytesExt::read_i32 (line 235) ... ok
+test src/io.rs - io::ReadBytesExt::read_i8 (line 76) ... ok
+test src/io.rs - io::ReadBytesExt::read_f32_into_unchecked (line 932) ... ok
+test src/io.rs - io::ReadBytesExt::read_i48 (line 287) ... ok
+test src/io.rs - io::ReadBytesExt::read_int (line 445) ... ok
+test src/io.rs - io::ReadBytesExt::read_i8_into (line 706) ... ok
+test src/io.rs - io::ReadBytesExt::read_u16 (line 103) ... ok
+test src/io.rs - io::ReadBytesExt::read_i24 (line 183) ... ok
+test src/io.rs - io::ReadBytesExt::read_i128_into (line 845) ... ok
+test src/io.rs - io::ReadBytesExt::read_f64 (line 518) ... ok
+test src/io.rs - io::ReadBytesExt::read_u128 (line 365) ... ok
+test src/io.rs - io::ReadBytesExt::read_u128_into (line 660) ... ok
+test src/io.rs - io::ReadBytesExt::read_u24 (line 157) ... ok
+test src/io.rs - io::ReadBytesExt::read_u48 (line 261) ... ok
+test src/io.rs - io::ReadBytesExt::read_u32_into (line 587) ... ok
+test src/io.rs - io::WriteBytesExt (line 1061) ... ok
+test src/io.rs - io::WriteBytesExt::write_f64 (line 1560) ... ok
+test src/io.rs - io::ReadBytesExt::read_u64 (line 313) ... ok
+test src/io.rs - io::ReadBytesExt::read_u32 (line 209) ... ok
+test src/io.rs - io::WriteBytesExt::write_i64 (line 1385) ... ok
+test src/io.rs - io::ReadBytesExt::read_u8 (line 46) ... ok
+test src/io.rs - io::ReadBytesExt::read_u64_into (line 622) ... ok
+test src/io.rs - io::WriteBytesExt::write_f32 (line 1531) ... ok
+test src/io.rs - io::WriteBytesExt::write_i24 (line 1223) ... ok
+test src/io.rs - io::WriteBytesExt::write_i32 (line 1277) ... ok
+test src/io.rs - io::WriteBytesExt::write_i8 (line 1117) ... ok
+test src/io.rs - io::WriteBytesExt::write_i48 (line 1331) ... ok
+test src/io.rs - io::WriteBytesExt::write_int (line 1469) ... ok
+test src/io.rs - io::ReadBytesExt::read_uint (line 420) ... ok
+test src/io.rs - io::WriteBytesExt::write_i16 (line 1169) ... ok
+test src/io.rs - io::WriteBytesExt::write_u48 (line 1304) ... ok
+test src/io.rs - io::WriteBytesExt::write_u64 (line 1358) ... ok
+test src/io.rs - io::WriteBytesExt::write_u16 (line 1142) ... ok
+test src/io.rs - io::WriteBytesExt::write_u24 (line 1196) ... ok
+test src/io.rs - io::WriteBytesExt::write_u32 (line 1250) ... ok
+test src/io.rs - io::WriteBytesExt::write_u8 (line 1089) ... ok
+test src/lib.rs - ByteOrder (line 154) ... ok
+test src/lib.rs - ByteOrder::from_slice_i128 (line 1718) ... ok
+test src/lib.rs - ByteOrder::from_slice_u128 (line 1624) ... ok
+test src/lib.rs - ByteOrder::from_slice_i16 (line 1643) ... ok
+test src/lib.rs - (line 22) ... ok
+test src/io.rs - io::WriteBytesExt::write_uint (line 1433) ... ok
+test src/lib.rs - ByteOrder::from_slice_i32 (line 1668) ... ok
+test src/lib.rs - ByteOrder::from_slice_u32 (line 1586) ... ok
+test src/lib.rs - ByteOrder (line 144) ... ok
+test src/lib.rs - (line 35) ... ok
+test src/lib.rs - ByteOrder::from_slice_u16 (line 1567) ... ok
+test src/lib.rs - ByteOrder::from_slice_i64 (line 1693) ... ok
+test src/lib.rs - BigEndian (line 1757) ... ok
+test src/lib.rs - ByteOrder::read_f64_into (line 1209) ... ok
+test src/lib.rs - ByteOrder::read_f32 (line 668) ... ok
+test src/lib.rs - ByteOrder::from_slice_u64 (line 1605) ... ok
+test src/lib.rs - ByteOrder::read_f32_into_unchecked (line 1181) ... ok
+test src/lib.rs - ByteOrder::read_f64 (line 691) ... ok
+test src/lib.rs - ByteOrder::read_f32_into (line 1147) ... ok
+test src/lib.rs - ByteOrder::read_f64_into_unchecked (line 1244) ... ok
+test src/lib.rs - ByteOrder::read_i128 (line 600) ... ok
+test src/lib.rs - ByteOrder::read_i24 (line 512) ... ok
+test src/lib.rs - ByteOrder::read_i48 (line 556) ... ok
+test src/lib.rs - ByteOrder::read_i128_into (line 1117) ... ok
+test src/lib.rs - ByteOrder::read_int (line 623) ... ok
+test src/lib.rs - ByteOrder::read_i32 (line 534) ... ok
+test src/lib.rs - ByteOrder::read_i16 (line 490) ... ok
+test src/lib.rs - ByteOrder::read_u128 (line 273) ... ok
+test src/lib.rs - ByteOrder::read_i16_into (line 1030) ... ok
+test src/lib.rs - ByteOrder::read_u64 (line 254) ... ok
+test src/lib.rs - ByteOrder::read_i64 (line 578) ... ok
+test src/lib.rs - ByteOrder::read_i64_into (line 1088) ... ok
+test src/lib.rs - ByteOrder::read_int128 (line 646) ... ok
+test src/lib.rs - ByteOrder::read_i32_into (line 1059) ... ok
+test src/lib.rs - ByteOrder::read_uint (line 293) ... ok
+test src/lib.rs - ByteOrder::read_u16_into (line 938) ... ok
+test src/lib.rs - ByteOrder::read_u24 (line 193) ... ok
+test src/lib.rs - ByteOrder::read_u128_into (line 1007) ... ok
+test src/lib.rs - ByteOrder::read_u48 (line 233) ... ok
+test src/lib.rs - ByteOrder::read_u32 (line 214) ... ok
+test src/lib.rs - ByteOrder::write_f32 (line 892) ... ok
+test src/lib.rs - ByteOrder::read_uint128 (line 313) ... ok
+test src/lib.rs - ByteOrder::write_f32_into (line 1510) ... ok
+test src/lib.rs - ByteOrder::read_u32_into (line 961) ... ok
+test src/lib.rs - ByteOrder::read_u64_into (line 984) ... ok
+test src/lib.rs - ByteOrder::write_i16 (line 714) ... ok
+test src/lib.rs - ByteOrder::write_i24 (line 736) ... ok
+test src/lib.rs - ByteOrder::write_f64 (line 915) ... ok
+test src/lib.rs - ByteOrder::write_i128_into (line 1481) ... ok
+test src/lib.rs - ByteOrder::write_i128 (line 824) ... ok
+test src/lib.rs - ByteOrder::write_f64_into (line 1539) ... ok
+test src/lib.rs - ByteOrder::write_i32_into (line 1425) ... ok
+test src/lib.rs - ByteOrder::write_int128 (line 870) ... ok
+test src/lib.rs - ByteOrder::write_i64 (line 802) ... ok
+test src/lib.rs - ByteOrder::write_i32 (line 758) ... ok
+test src/lib.rs - ByteOrder::write_i48 (line 780) ... ok
+test src/lib.rs - ByteOrder::write_i16_into (line 1397) ... ok
+test src/lib.rs - ByteOrder::write_u128 (line 431) ... ok
+test src/lib.rs - ByteOrder::write_int (line 847) ... ok
+test src/lib.rs - ByteOrder::write_i64_into (line 1453) ... ok
+test src/lib.rs - ByteOrder::write_u128_into (line 1340) ... ok
+test src/lib.rs - ByteOrder::write_u32 (line 372) ... ok
+test src/lib.rs - ByteOrder::write_u24 (line 351) ... ok
+test src/lib.rs - ByteOrder::write_u16_into (line 1271) ... ok
+test src/lib.rs - ByteOrder::write_u16 (line 332) ... ok
+test src/lib.rs - ByteOrder::write_u48 (line 391) ... ok
+test src/lib.rs - ByteOrder::write_i8_into (line 1369) ... ok
+test src/lib.rs - ByteOrder::write_uint (line 451) ... ok
+test src/lib.rs - ByteOrder::write_u64 (line 412) ... ok
+test src/lib.rs - ByteOrder::write_u32_into (line 1294) ... ok
+test src/lib.rs - NetworkEndian (line 1823) ... ok
+test src/lib.rs - LittleEndian (line 1787) ... ok
+test src/lib.rs - ByteOrder::write_uint128 (line 471) ... ok
+test src/lib.rs - ByteOrder::write_u64_into (line 1317) ... ok
+
+test result: ok. 122 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.93s
+

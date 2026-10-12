@@ -1,0 +1,73 @@
+# Provenance of every .txt beside this file. Real runs; nothing hand-written.
+command:  cargo nextest run -p fuzzy_match      (flaky.txt: ... --retries 1)   stdout+stderr merged, no color: piped
+cargo:    cargo 1.92.0 (344c4567c 2025-10-21), toolchain pinned by the repo's rust-toolchain.toml
+nextest:  cargo-nextest 0.9.148 (cd1d6d546 2026-10-07)
+source:   warpdotdev/warp (committed HEAD of the founder's fork, cloned --no-hardlinks to a scratch dir) SHA 325d4d4701b41feb272487e89a6cf02bfba9f194, crate crates/fuzzy_match (tests via #[path = "fuzzy_tests.rs"])
+trimmed:  nothing. Paths in the output are the scratch clone's.
+pass.txt           the unmodified crate
+fail.txt           planted: contains_wildcards drops the '?' arm (an assert! fails)
+panic.txt          planted: a #[test] that unwraps None
+compile_error.txt  planted: an undefined identifier in contains_wildcards (no Summary line is printed)
+flaky.txt          planted: a test that panics iff a temp-dir marker file is absent (first attempt), run with --retries 1 -> FLAKY 2/2, exit 0
+--- planted diffs ---
+## fail
+diff --git a/crates/fuzzy_match/src/lib.rs b/crates/fuzzy_match/src/lib.rs
+index 7ff6a92f2..93a133886 100644
+--- a/crates/fuzzy_match/src/lib.rs
++++ b/crates/fuzzy_match/src/lib.rs
+@@ -153,7 +153,7 @@ fn match_internal(text: &str, query: &str, matcher: SkimMatcherV2) -> Option<Fuz
+ /// assert!(!contains_wildcards("test"));
+ /// ```
+ pub fn contains_wildcards(query: &str) -> bool {
+-    query.contains('*') || query.contains('?')
++    query.contains('*')
+ }
+ 
+ /// Performs pattern matching with wildcard support (* and ?) on text and query strings.
+## panic
+diff --git a/crates/fuzzy_match/src/fuzzy_tests.rs b/crates/fuzzy_match/src/fuzzy_tests.rs
+index 0e0b0e653..96b3480a0 100644
+--- a/crates/fuzzy_match/src/fuzzy_tests.rs
++++ b/crates/fuzzy_match/src/fuzzy_tests.rs
+@@ -371,3 +371,9 @@ fn test_ignore_spaces_single_word_query() {
+     );
+     assert_eq!(regular_result.score, space_ignoring_result.score);
+ }
++
++#[test]
++fn planted_panic() {
++    let v: Option<u16> = None;
++    v.unwrap();
++}
+## compile
+diff --git a/crates/fuzzy_match/src/lib.rs b/crates/fuzzy_match/src/lib.rs
+index 7ff6a92f2..c0569df10 100644
+--- a/crates/fuzzy_match/src/lib.rs
++++ b/crates/fuzzy_match/src/lib.rs
+@@ -153,7 +153,7 @@ fn match_internal(text: &str, query: &str, matcher: SkimMatcherV2) -> Option<Fuz
+ /// assert!(!contains_wildcards("test"));
+ /// ```
+ pub fn contains_wildcards(query: &str) -> bool {
+-    query.contains('*') || query.contains('?')
++    query.contains('*') || not_defined_anywhere
+ }
+ 
+ /// Performs pattern matching with wildcard support (* and ?) on text and query strings.
+## flaky
+diff --git a/crates/fuzzy_match/src/fuzzy_tests.rs b/crates/fuzzy_match/src/fuzzy_tests.rs
+index 0e0b0e653..ced5cbc27 100644
+--- a/crates/fuzzy_match/src/fuzzy_tests.rs
++++ b/crates/fuzzy_match/src/fuzzy_tests.rs
+@@ -371,3 +371,12 @@ fn test_ignore_spaces_single_word_query() {
+     );
+     assert_eq!(regular_result.score, space_ignoring_result.score);
+ }
++
++#[test]
++fn planted_flaky() {
++    let marker = std::env::temp_dir().join("corral_planted_flaky_marker");
++    if !marker.exists() {
++        std::fs::write(&marker, b"x").unwrap();
++        panic!("planted: fails on the first attempt only");
++    }
++}

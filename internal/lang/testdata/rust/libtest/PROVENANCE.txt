@@ -1,0 +1,56 @@
+# Provenance of every .txt beside this file. Real runs; nothing hand-written.
+command:  cargo test        (stdout+stderr merged, no color: piped)
+cargo:    cargo 1.90.0 (840b83a10 2025-07-30)   rustc 1.90.0 (1159e78c4 2025-09-14)
+source:   https://github.com/BurntSushi/byteorder  SHA 5a82625fae462e8ba64cec8146b24a372b4d75c6 (a scratch copy; never the clean clone)
+trimmed:  nothing. Paths in the output are the scratch copy's.
+pass.txt           the unmodified crate
+fail.txt           planted: BigEndian::read_u16 uses from_le_bytes (quickcheck properties fail; 4 tests)
+panic.txt          planted: a #[test] that unwraps None
+compile_error.txt  planted: an undefined identifier in BigEndian::read_u16
+--- planted diffs ---
+## fail
+diff --git a/src/lib.rs b/src/lib.rs
+index d4af68f..85eb7c5 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -1890,7 +1890,7 @@ macro_rules! write_slice {
+ impl ByteOrder for BigEndian {
+     #[inline]
+     fn read_u16(buf: &[u8]) -> u16 {
+-        u16::from_be_bytes(buf[..2].try_into().unwrap())
++        u16::from_le_bytes(buf[..2].try_into().unwrap())
+     }
+ 
+     #[inline]
+## panic
+diff --git a/src/lib.rs b/src/lib.rs
+index d4af68f..fb3b797 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -2243,6 +2243,12 @@ impl ByteOrder for LittleEndian {
+ 
+ #[cfg(test)]
+ mod test {
++    #[test]
++    fn planted_panic() {
++        let v: Option<u16> = None;
++        v.unwrap();
++    }
++
+     use quickcheck::{Arbitrary, Gen, QuickCheck, StdGen, Testable};
+     use rand::{thread_rng, Rng};
+ 
+## compile
+diff --git a/src/lib.rs b/src/lib.rs
+index d4af68f..98ecc0f 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -1890,7 +1890,7 @@ macro_rules! write_slice {
+ impl ByteOrder for BigEndian {
+     #[inline]
+     fn read_u16(buf: &[u8]) -> u16 {
+-        u16::from_be_bytes(buf[..2].try_into().unwrap())
++        u16::from_be_bytes(buf[..2].try_into().unwrap()) + not_defined_anywhere
+     }
+ 
+     #[inline]

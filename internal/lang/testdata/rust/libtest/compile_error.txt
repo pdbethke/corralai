@@ -1,0 +1,11 @@
+   Compiling byteorder v1.5.0 (/tmp/claude-1000/-home-pdbethke-PycharmProjects-corralai/81284ed5-c06a-4f9d-9cfc-4b897eee1dbf/scratchpad/byteorder-cap)
+error[E0425]: cannot find value `not_defined_anywhere` in this scope
+    --> src/lib.rs:1893:60
+     |
+1893 |         u16::from_be_bytes(buf[..2].try_into().unwrap()) + not_defined_anywhere
+     |                                                            ^^^^^^^^^^^^^^^^^^^^ not found in this scope
+
+For more information about this error, try `rustc --explain E0425`.
+error: could not compile `byteorder` (lib) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `byteorder` (lib test) due to 1 previous error

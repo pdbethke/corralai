@@ -15,6 +15,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
+	"sort"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -4720,5 +4722,36 @@ func TestDocsNeverDescribeCorralAsAnOlderSeries(t *testing.T) {
 	// FLOOR: a walk that silently matched nothing would pass forever.
 	if seen < 10 {
 		t.Fatalf("walked only %d markdown files — the walk is broken, not the docs clean", seen)
+	}
+}
+
+// TestOrphanCheckSeesDeletedRustTests: a Rust source's test is the file its
+// own module declaration loads, which no naming convention derives — so an
+// orphan check that consulted only pairing.Candidates never saw it, and a PR
+// deleting crates/warp_core/src/app_id_tests.rs dropped app_id.rs out of the
+// audit with no disclosure (a rule at one door and not the other). It now
+// asks what Resolve itself tries, content-derived paths included. The second
+// case is a #[path] target with no test marker at all, which the old
+// MightBeTest pre-filter would also have discarded.
+func TestOrphanCheckSeesDeletedRustTests(t *testing.T) {
+	root := t.TempDir()
+	mustWrite(t, filepath.Join(root, "crates", "warp_core", "src", "app_id.rs"),
+		"pub struct AppId;\n\n#[cfg(test)]\n#[path = \"app_id_tests.rs\"]\nmod tests;\n")
+	mustWrite(t, filepath.Join(root, "src", "a", "b.rs"),
+		"pub fn b() {}\n\n#[cfg(test)]\n#[path = \"../elsewhere/x.rs\"]\nmod tests;\n")
+	mustWrite(t, filepath.Join(root, "src", "plain.rs"), "pub fn p() {}\n")
+	excl := []reposcan.Exclusion{
+		{Path: "crates/warp_core/src/app_id.rs", Reason: reposcan.ReasonNoPairedTest},
+		{Path: "src/a/b.rs", Reason: reposcan.ReasonNoPairedTest},
+		{Path: "src/plain.rs", Reason: reposcan.ReasonNoPairedTest},
+	}
+	changed := []string{"crates/warp_core/src/app_id_tests.rs", "src/elsewhere/x.rs"}
+	got, err := sourcesOrphanedByDeletedTests(root, changed, excl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sort.Strings(got)
+	if want := []string{"crates/warp_core/src/app_id.rs", "src/a/b.rs"}; !slices.Equal(got, want) {
+		t.Fatalf("orphaned = %v, want %v", got, want)
 	}
 }

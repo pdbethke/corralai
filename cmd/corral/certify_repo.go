@@ -496,7 +496,12 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		// read as NOTHING IN SCOPE, exit 0. A source whose conventional test
 		// path the diff deleted is unpairable BECAUSE of the diff, and is
 		// reported as exactly that.
-		unpairableInDiff = append(unpairableInDiff, sourcesOrphanedByDeletedTests(*repoDir, changed, excl)...)
+		orphaned, oerr := sourcesOrphanedByDeletedTests(*repoDir, changed, excl)
+		if oerr != nil {
+			fmt.Fprintf(stderr, "corral certify --repo: %v\n", oerr)
+			return 1
+		}
+		unpairableInDiff = append(unpairableInDiff, orphaned...)
 		sort.Strings(unpairableInDiff)
 		unpairableInDiff = slices.Compact(unpairableInDiff)
 		fmt.Fprintf(stdout, "  diff against %s: auditing %d of %d candidate(s)\n", *diffBase, len(selected), len(cands))
@@ -3048,24 +3053,31 @@ func mightBeTestPredicate() func(path string) bool {
 }
 
 // sourcesOrphanedByDeletedTests names the excluded sources whose paired test
-// the diff DELETED: for each changed path that looks like a test and no
-// longer exists in the checkout, every no-paired-test source whose language
-// plugin would have named that path as a test candidate. Reported through
-// the same NOT AUDITED path as a changed-but-unpairable source, because it
-// is the same condition with the more alarming cause.
-func sourcesOrphanedByDeletedTests(repoDir string, changed []string, excl []reposcan.Exclusion) []string {
+// the diff DELETED: for each changed path that no longer exists in the
+// checkout, every no-paired-test source whose own resolution would have
+// checked that path (reposcan.ResolutionPaths — the convention candidates
+// AND what the source's own declarations load). Reported through the same
+// NOT AUDITED path as a changed-but-unpairable source, because it is the
+// same condition with the more alarming cause.
+//
+// It asks what Resolve tries, not pairing.Candidates: a Rust source's test is
+// the file its `#[path]`/`mod tests;` declaration loads, which no naming
+// convention derives, so a Candidates-only check let a PR delete
+// app_id_tests.rs and drop app_id.rs out of the audit with no disclosure. For
+// the same reason there is no MightBeTest pre-filter on the deleted paths any
+// more: a #[path] target may carry no test marker at all (src/elsewhere/x.rs),
+// and for every other language a path some resolution checks is a candidate,
+// which the registry round trip already holds to be a possible test. The
+// error is a source that could not be read for its declarations.
+func sourcesOrphanedByDeletedTests(repoDir string, changed []string, excl []reposcan.Exclusion) ([]string, error) {
 	deleted := map[string]bool{}
-	mightBeTest := mightBeTestPredicate()
 	for _, path := range changed {
-		if !mightBeTest(path) {
-			continue
-		}
 		if _, err := os.Stat(filepath.Join(repoDir, filepath.FromSlash(path))); os.IsNotExist(err) {
 			deleted[path] = true
 		}
 	}
 	if len(deleted) == 0 {
-		return nil
+		return nil, nil
 	}
 	var out []string
 	for _, e := range excl {
@@ -3076,14 +3088,18 @@ func sourcesOrphanedByDeletedTests(repoDir string, changed []string, excl []repo
 		if !ok {
 			continue
 		}
-		for _, tc := range pairing.Candidates(p.TestRules(), e.Path) {
-			if deleted[tc.Path] {
+		tried, err := reposcan.ResolutionPaths(p, repoDir, e.Path)
+		if err != nil {
+			return nil, fmt.Errorf("checking whether the diff deleted %s's test: %w", e.Path, err)
+		}
+		for _, tp := range tried {
+			if deleted[tp] {
 				out = append(out, e.Path)
 				break
 			}
 		}
 	}
-	return out
+	return out, nil
 }
 
 // repoScanExitCode is the scan's automated signal. A scan that measured

@@ -33,12 +33,15 @@
 // is still one shapeTable entry; pairing still does no parsing (the
 // declarations arrive as TestModule values, read by repoindex).
 //
-// Every caller asks pairing; none but one makes its own choice from pairing's
-// data. The one remaining direct reader of Candidates is
-// sourcesOrphanedByDeletedTests (cmd/corral/certify_repo.go), which uses it as
-// a membership check over the convention candidates, not a pick: a test that
-// was paired by search rather than by convention and is then deleted is
-// therefore not reported as orphaning its source.
+// Every caller asks pairing; none makes its own choice from pairing's data.
+// sourcesOrphanedByDeletedTests (cmd/corral/certify_repo.go) used to read
+// Candidates directly as a membership check, which was blind to every
+// content-derived path (a deleted Rust #[path] target orphaned its source
+// silently); it now reads Resolve's own Tried, through
+// reposcan.ResolutionPaths. It is still a membership check over what a
+// resolution tries, not over the search: a test that was paired by search
+// rather than by convention or declaration and is then deleted is therefore
+// not reported as orphaning its source.
 // The three questions have one function each: Primary names a test corral is
 // about to write (advpool's synthetic and authored tests), Resolve finds the
 // test that already exists (reposcan.FindTest and findInUniverse, and through

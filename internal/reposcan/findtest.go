@@ -239,3 +239,23 @@ func findInUniverse(p lang.Plugin, codePath string, present map[string]bool, pre
 	}
 	return r.Path, r.Rank, r.ViaSearch, nil
 }
+
+// ResolutionPaths is every path pairing.Resolve checks for codePath, in
+// order: the paths the source's own test-module declarations load (Rust),
+// then the convention candidates. It is Resolve's own Tried with every check
+// answered "absent" and no search — so the list cannot drift from what a
+// resolution actually tries, which a second enumeration over
+// pairing.Candidates already had (it never saw a content-derived path). The
+// orphan check reads it to ask "did the diff delete the test this source
+// would have paired to?".
+func ResolutionPaths(p lang.Plugin, root, codePath string) ([]string, error) {
+	res, err := pairing.Resolve(p.TestRules(), codePath, pairing.Sources{
+		Exists:      func(string) bool { return false },
+		Universe:    func() ([]string, error) { return nil, nil },
+		TestModules: diskTestModules(p, root),
+	})
+	if err != nil {
+		return nil, err
+	}
+	return res.Tried, nil
+}

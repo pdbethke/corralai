@@ -675,19 +675,29 @@ func noTestFoundErr(codePath string, res reposcan.SearchResult) string {
 	return strings.TrimRight(fmt.Sprintf("no test found for %s (pass --test to override). ", codePath)+whereItLooked(res), "\n")
 }
 
-// whereItLooked renders a FindTest miss's Tried and Roots — the part of a
-// "no test found" message that saves the operator a guess — for
-// noTestFoundErr and doctor's pairing check alike. A miss with neither is
-// a file that declares no test of its own (a Rust source with no test
-// module) in a language that derives no test file name from a path: there
-// was nothing to look for, and it says so rather than print an empty list
-// or claim a search that never ran.
+// whereItLooked renders a FindTest miss's Tried, RefusedOutsideRoot and
+// Roots — the part of a "no test found" message that saves the operator a
+// guess — for noTestFoundErr and doctor's pairing check alike. A miss with
+// none of them is a file that declares no test of its own (a Rust source
+// with no test module) in a language that derives no test file name from a
+// path: there was nothing to look for, and it says so rather than print an
+// empty list or claim a search that never ran. A file whose declared test
+// path was refused for leaving the repository DID declare one, so that is
+// said instead (final review m6).
 func whereItLooked(res reposcan.SearchResult) string {
-	if len(res.Tried) == 0 && len(res.Roots) == 0 {
+	if len(res.Tried) == 0 && len(res.Roots) == 0 && len(res.RefusedOutsideRoot) == 0 {
 		return "Nothing to look for: the file declares no test of its own, and its language derives no test file name from its path.\n"
 	}
 	var b strings.Builder
-	b.WriteString("Looked for:\n")
+	if len(res.RefusedOutsideRoot) > 0 {
+		b.WriteString("Refused, never read — the file declares its test here, but the path is outside the repository root:\n")
+		for _, r := range res.RefusedOutsideRoot {
+			fmt.Fprintf(&b, "  %s\n", r)
+		}
+	}
+	if len(res.Tried) > 0 {
+		b.WriteString("Looked for:\n")
+	}
 	for _, t := range res.Tried {
 		fmt.Fprintf(&b, "  %s\n", t)
 	}

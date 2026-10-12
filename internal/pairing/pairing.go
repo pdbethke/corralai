@@ -121,6 +121,10 @@ type shapeTraits struct {
 	// which is how it keeps Rule's marker invariant. Read by IsTest (through
 	// DirMarksTest).
 	dirMarksTest bool
+	// confined: the Shape's paths are named by the SOURCE (a repository-
+	// controlled declaration), not derived by corral, so each must stay
+	// inside Sources.Root or it is refused (insideRoot). Read by Resolve.
+	confined bool
 }
 
 // labelled is one path a content Shape derived, and the Label a resolution
@@ -189,6 +193,7 @@ var shapeTable = map[Shape]shapeTraits{
 	Declared: {
 		content:     true,
 		fromModules: declaredModule,
+		confined:    true,
 	},
 	TestDir: {
 		searchRoot:   true,
@@ -230,10 +235,10 @@ func inlineModule(src string, mods []TestModule) []labelled {
 //
 // lib.rs and main.rs stand for every crate root here: pairing sees paths, not
 // Cargo.toml, so a crate root under another name (src/bin/tool.rs, build.rs)
-// is read as a non-mod-rs file. A path that cleans to outside the root (a
-// leading ../) is not a pairing and is not offered; an absolute source path
-// (certify --local given an absolute --code) has no root to escape, so its
-// joins are kept.
+// is read as a non-mod-rs file. Every path is offered, cleaned: whether it
+// stays inside the repository is Resolve's question (the Shape is confined,
+// see insideRoot), answered once for a relative and an absolute source alike
+// and reported when it says no.
 func declaredModule(src string, mods []TestModule) []labelled {
 	src = filepath.ToSlash(src)
 	dir := path.Dir(src)
@@ -244,11 +249,7 @@ func declaredModule(src string, mods []TestModule) []labelled {
 	}
 	var out []labelled
 	add := func(p, label string) {
-		p = path.Clean(p)
-		if p == ".." || strings.HasPrefix(p, "../") {
-			return
-		}
-		out = append(out, labelled{path: p, label: label})
+		out = append(out, labelled{path: path.Clean(p), label: label})
 	}
 	for _, m := range mods {
 		switch {

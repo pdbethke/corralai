@@ -27,7 +27,8 @@ import (
 // before any jail, store or spend: advpool.Driver.StartRun, the brain's
 // AdvPoolRuntime.StartRun (certify --adversarial and eval reach the pool
 // there), certify --local's resolveAuditPlugin (which certify --repo's
-// jobs also route through). certify --repo asks earlier still:
+// jobs also route through), and the certify --adversarial client and
+// doctor, before either reads a file. certify --repo asks earlier still:
 // reposcan.Enumerate excludes such a file before pairing, so it is never a
 // candidate, a --top slot, a selection language or a reason to prepare a
 // jail.

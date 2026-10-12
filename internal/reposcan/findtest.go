@@ -162,8 +162,14 @@ func pathUnderSkippedDir(rel string) bool {
 // Tried and Roots are populated even on a miss, specifically so a caller can
 // build a "here is everywhere I looked" error instead of leaving an operator
 // to guess a second and third time — see certify_local.go's use.
+//
+// root is also the directory a source's own declared test path must stay
+// inside (pairing.Sources.Root): the doors that take an operator's --code as
+// typed pass ".", the directory that --code is relative to — and the one an
+// absolute --code is held to. RefusedOutsideRoot names what that refused.
 func FindTest(p lang.Plugin, root, codePath string) (SearchResult, error) {
 	return pairing.Resolve(p.TestRules(), codePath, pairing.Sources{
+		Root: root,
 		Exists: func(cp string) bool {
 			fi, err := os.Stat(underRoot(root, cp))
 			return err == nil && fi.Mode().IsRegular()
@@ -216,7 +222,9 @@ func diskTestModules(p lang.Plugin, root string) func(rel string) ([]pairing.Tes
 //
 // modules is the Sources.TestModules to resolve with: diskTestModules over
 // the scan's root in production, and a paths-only stand-in in the search
-// golden, whose corpus has paths but no file contents.
+// golden, whose corpus has paths but no file contents. root is the scan's
+// root on disk, which a source's declared test path must stay inside
+// (pairing.Sources.Root); "" in the golden, which has no disk.
 //
 // Returns the resolved path, its Rank (the matching candidate's own
 // pairing.Candidate Rank for a convention hit, pairing.SearchRank for a
@@ -225,8 +233,9 @@ func diskTestModules(p lang.Plugin, root string) func(rel string) ([]pairing.Tes
 // fallback is what found it. tp == "" means neither stage found anything.
 // The error is modules' (a source that could not be read): Universe cannot
 // fail here, because presentList is already in hand.
-func findInUniverse(p lang.Plugin, codePath string, present map[string]bool, presentList []string, modules func(string) ([]pairing.TestModule, error)) (tp string, rank int, viaSearch bool, err error) {
+func findInUniverse(p lang.Plugin, root, codePath string, present map[string]bool, presentList []string, modules func(string) ([]pairing.TestModule, error)) (tp string, rank int, viaSearch bool, err error) {
 	r, err := pairing.Resolve(p.TestRules(), codePath, pairing.Sources{
+		Root:        root,
 		Exists:      func(cp string) bool { return present[cp] },
 		Universe:    func() ([]string, error) { return presentList, nil },
 		TestModules: modules,
@@ -250,6 +259,7 @@ func findInUniverse(p lang.Plugin, codePath string, present map[string]bool, pre
 // would have paired to?".
 func ResolutionPaths(p lang.Plugin, root, codePath string) ([]string, error) {
 	res, err := pairing.Resolve(p.TestRules(), codePath, pairing.Sources{
+		Root:        root,
 		Exists:      func(string) bool { return false },
 		Universe:    func() ([]string, error) { return nil, nil },
 		TestModules: diskTestModules(p, root),

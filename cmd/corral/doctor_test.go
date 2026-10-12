@@ -336,3 +336,56 @@ func TestDoctorChecksTheChallengerWriterSeat(t *testing.T) {
 		t.Errorf("a challenger writer with no credential passed doctor: %+v", res)
 	}
 }
+
+// TestDoctorPairingReportsALandingRefusal: doctor printed `[ok] … found
+// src/lib.rs by convention (inline)` for a file every audit refuses (final
+// review I4). It pairs; it cannot be audited yet, and doctor says both.
+func TestDoctorPairingReportsALandingRefusal(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src", "lib.rs")
+	if err := os.MkdirAll(filepath.Dir(src), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeFile(src, "pub fn f() {}\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn t() {}\n}\n"); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(dir)
+	got := checkPairing("src/lib.rs", "")
+	if got.ok {
+		t.Fatalf("doctor passed a file every audit refuses: %+v", got)
+	}
+	if !strings.Contains(got.detail, "src/lib.rs (inline)") || !strings.Contains(got.detail, "test landing is not built") {
+		t.Fatalf("want 'pairs to src/lib.rs (inline), but …landing…', got: %s", got.detail)
+	}
+}
+
+// TestDoctorPairingSaysADeclaredTestWasRefusedOutsideTheRoot: an absolute
+// --code whose #[path] leaves the repository paired to the host file
+// ("[ok] found …/outside/secret.txt"); confined, the miss then said "Nothing
+// to look for: the file declares no test of its own" — false, it declared
+// one (final review I4, m6). It says the declaration was refused and why.
+func TestDoctorPairingSaysADeclaredTestWasRefusedOutsideTheRoot(t *testing.T) {
+	base := t.TempDir()
+	repo := filepath.Join(base, "repo")
+	src := filepath.Join(repo, "src", "lib.rs")
+	secret := filepath.Join(base, "outside", "secret.txt")
+	for _, d := range []string{filepath.Dir(src), filepath.Dir(secret)} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := writeFile(src, "pub fn f() {}\n\n#[cfg(test)]\n#[path = \"../../outside/secret.txt\"]\nmod tests;\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeFile(secret, "host secret\n"); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(repo)
+	got := checkPairing(src, "")
+	if got.ok || strings.Contains(got.detail, "secret.txt by convention") {
+		t.Fatalf("doctor paired to a file outside the repository: %+v", got)
+	}
+	if strings.Contains(got.detail, "Nothing to look for") || !strings.Contains(got.detail, "outside the repository root") || !strings.Contains(got.detail, "secret.txt") {
+		t.Fatalf("want the refused declaration named, got: %s", got.detail)
+	}
+}

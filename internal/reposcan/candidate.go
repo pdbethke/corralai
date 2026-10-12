@@ -510,7 +510,7 @@ func EnumerateWithTests(root string, tests *TestMap) ([]Candidate, []Exclusion, 
 			// that no filename convention predicted still beats no pairing
 			// at all.
 			var ferr error
-			tp, tpRank, viaSearch, ferr = findInUniverse(p, rel, present, presentList, diskTestModules(p, root))
+			tp, tpRank, viaSearch, ferr = findInUniverse(p, root, rel, present, presentList, diskTestModules(p, root))
 			if ferr != nil {
 				return nil, nil, fmt.Errorf("pairing %s: %w", rel, ferr)
 			}

@@ -155,7 +155,7 @@ func TestSearchGolden(t *testing.T) {
 // file's own declarations pair is pinned over real files instead, in
 // internal/pairing's declared_test.go.
 func searchResolve(p lang.Plugin, codePath string, present map[string]bool, presentList []string) (string, int, bool) {
-	tp, rank, via, err := findInUniverse(p, codePath, present, presentList, noDeclaredModules)
+	tp, rank, via, err := findInUniverse(p, "", codePath, present, presentList, noDeclaredModules)
 	if err != nil {
 		panic(err) // noDeclaredModules cannot fail
 	}

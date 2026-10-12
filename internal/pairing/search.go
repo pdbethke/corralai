@@ -70,6 +70,13 @@ var testDirAffixes = struct{ Prefixes, Suffixes []string }{
 // source unpaired. nil is allowed only when no rule has a content Shape;
 // Resolve refuses otherwise.
 type Sources struct {
+	// Root is the directory on disk the paths Resolve is given are under:
+	// the repository root for a scan, the working directory for a door that
+	// takes the operator's --code as typed. Every path a source's own
+	// declaration names (a Declared shape) must stay inside it — see
+	// insideRoot. "" means no root is known: a relative path is then held to
+	// its own lexical root only, and an absolute one is refused.
+	Root        string
 	Exists      func(rel string) bool
 	Universe    func() ([]string, error)
 	TestModules func(rel string) ([]TestModule, error)
@@ -106,6 +113,12 @@ type Resolution struct {
 	// not-found error so the operator sees exactly what was already ruled
 	// out, not just that something failed. Populated even on a miss.
 	Tried []string
+	// RefusedOutsideRoot is every path a source's own test-module
+	// declaration named that resolves outside Sources.Root (lexically, or
+	// through a symlink), and so was never checked. Not in Tried: nothing
+	// was looked for there. Reported so a miss can say the file DID declare
+	// a test, and why it was not used, instead of "declares no test".
+	RefusedOutsideRoot []string
 	// Roots is the set of conventional test directories the search walked
 	// (populated only when stage 2 ran, i.e. every Tried candidate was
 	// absent AND there was a basename to search for) — so a caller can say
@@ -161,7 +174,12 @@ func Resolve(rules []Rule, codePath string, src Sources) (Resolution, error) {
 			return res, fmt.Errorf("reading the test modules %s declares: %w", codePath, err)
 		}
 		for _, r := range content {
-			for _, l := range traitsOf(r.Shape).fromModules(codePath, mods) {
+			tr := traitsOf(r.Shape)
+			for _, l := range tr.fromModules(codePath, mods) {
+				if tr.confined && !insideRoot(src.Root, l.path) {
+					res.RefusedOutsideRoot = append(res.RefusedOutsideRoot, l.path)
+					continue
+				}
 				res.Tried = append(res.Tried, l.path)
 				if src.Exists(l.path) {
 					res.Path, res.Rank, res.Shape, res.Label, res.Found = l.path, r.Rank, r.Shape, l.label, true

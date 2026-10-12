@@ -62,27 +62,17 @@ func TestScopeAuditInputIsIdentityForALanguageWithoutAScoper(t *testing.T) {
 	}
 }
 
-// certify --adversarial fixes the command on the client, where the checkout is,
-// before the brain (which has none) ever sees it.
-func TestAdversarialDoorSendsTheScopedCommand(t *testing.T) {
-	repo := rustRepo(t)
-	if err := os.WriteFile(filepath.Join(repo, "src", "lib.rs"), []byte("pub fn f() {}\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	t.Chdir(repo)
-	f := &fakeAdvClient{runID: 7, statuses: []advStatus{certifiedStatus()}}
-	var out, errBuf strings.Builder
-	args := []string{"--adversarial", "--brain", "http://b", "--code", "src/lib.rs", "--test", "src/lib.rs", "--goal", "g", "--poll", "1ms", "--", "cargo", "test"}
-	if rc := runCertifyAdversarial(args, f, gitStubRunner{}, noSleep, &out, &errBuf); rc != 0 {
-		t.Fatalf("exit %d: %s", rc, errBuf.String())
-	}
-	if f.spec.TestCmd != "cargo test -p leaf" {
-		t.Errorf("the brain was sent %q, want the scoped command", f.spec.TestCmd)
-	}
-}
-
-func TestAdversarialDoorRefusesWhenTheCrateCannotBeNamed(t *testing.T) {
-	repo := t.TempDir() // no Cargo.toml
+// certify --adversarial fixes the command on the client, where the checkout
+// is, before the brain (which has none) ever sees it — and it refuses a file
+// whose test landing is not built BEFORE that, before any read (final review
+// I4). In Rust part 1 every .rs file is refused, so the door's scoping is
+// unreachable for Rust here, exactly as it is behind certify --local's
+// resolveAuditPlugin; scopeAuditInput itself is held by the tests above. This
+// pins the order: a repository where scoping would fail ("no Cargo.toml")
+// gets the landing refusal, and nothing is sent. When the landing for a
+// Declared file exists (7a), this door gets its scoped-command test back.
+func TestAdversarialDoorRefusesTheLandingBeforeScoping(t *testing.T) {
+	repo := t.TempDir() // no Cargo.toml: scoping would refuse too
 	if err := os.MkdirAll(filepath.Join(repo, "src"), 0o750); err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +86,7 @@ func TestAdversarialDoorRefusesWhenTheCrateCannotBeNamed(t *testing.T) {
 	if rc := runCertifyAdversarial(args, f, gitStubRunner{}, noSleep, &out, &errBuf); rc != 2 {
 		t.Fatalf("exit %d, want 2", rc)
 	}
-	if f.spec.TestCmd != "" || !strings.Contains(errBuf.String(), "no Cargo.toml") {
+	if f.spec.TestCmd != "" || !strings.Contains(errBuf.String(), "test landing is not built") || strings.Contains(errBuf.String(), "no Cargo.toml") {
 		t.Errorf("spec=%q stderr=%s", f.spec.TestCmd, errBuf.String())
 	}
 }

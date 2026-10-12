@@ -77,3 +77,43 @@ func normKey(k string) string {
 	}
 	return strings.Join(segs, ".")
 }
+
+// StringValue is the plain quoted-string value of key in table, read with the
+// same line-based reading TablesDeclared uses (a dotted key `package.name =`
+// and a `[package]` header's `name =` are the same key). ok is false when the
+// key is absent or its value is not a single-line quoted string — an inline
+// table such as `{ workspace = true }` is not one — so a caller decides what
+// "no name" means and never receives a guess.
+func StringValue(text, table, key string) (string, bool) {
+	want := normKey(table) + "." + normKey(key)
+	cur := ""
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimSpace(stripComment(line))
+		switch {
+		case line == "":
+			continue
+		case strings.HasPrefix(line, "[[") && strings.HasSuffix(line, "]]"):
+			cur = normKey(line[2 : len(line)-2])
+		case strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]"):
+			cur = normKey(line[1 : len(line)-1])
+		default:
+			k, v, isKV := strings.Cut(line, "=")
+			if !isKV {
+				continue
+			}
+			full := normKey(k)
+			if cur != "" {
+				full = cur + "." + full
+			}
+			if full != want {
+				continue
+			}
+			v = strings.TrimSpace(v)
+			if len(v) >= 2 && (v[0] == '"' || v[0] == '\'') && v[len(v)-1] == v[0] {
+				return v[1 : len(v)-1], true
+			}
+			return "", false
+		}
+	}
+	return "", false
+}

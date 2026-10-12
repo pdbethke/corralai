@@ -23,3 +23,26 @@ func TestTablesDeclared(t *testing.T) {
 		t.Errorf("unrelated tables reported crates-io: %v", got)
 	}
 }
+
+func TestStringValue(t *testing.T) {
+	cases := []struct {
+		name, text, table, key, want string
+		ok                           bool
+	}{
+		{"package name", "[package]\nname = \"warp_core\"\nversion = \"0.1.0\"\n", "package", "name", "warp_core", true},
+		{"single quotes and a comment", "[package]\nname = 'x-y' # the crate\n", "package", "name", "x-y", true},
+		{"a dotted key opens the table", "package.name = \"dotted\"\n", "package", "name", "dotted", true},
+		{"a quoted table header", "[\"package\"]\nname = \"q\"\n", "package", "name", "q", true},
+		{"same key in another table is not the answer", "[dependencies]\nname = \"dep\"\n", "package", "name", "", false},
+		{"a key after the table closed is not in it", "[package]\nversion = \"1\"\n[lib]\nname = \"libname\"\n", "package", "name", "", false},
+		{"a non-string value is not a string", "[package]\nname = { workspace = true }\n", "package", "name", "", false},
+		{"a virtual manifest has no package", "[workspace]\nmembers = [\"a\"]\n", "package", "name", "", false},
+		{"a # inside the string is kept", "[package]\nname = \"a#b\"\n", "package", "name", "a#b", true},
+	}
+	for _, c := range cases {
+		got, ok := StringValue(c.text, c.table, c.key)
+		if ok != c.ok || got != c.want {
+			t.Errorf("%s: got (%q,%v), want (%q,%v)", c.name, got, ok, c.want, c.ok)
+		}
+	}
+}

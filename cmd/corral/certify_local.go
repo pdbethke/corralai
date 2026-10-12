@@ -790,6 +790,29 @@ func resolveAuditPlugin(in localAuditInput) (lang.Plugin, error) {
 	return plug, nil
 }
 
+// scopeAuditInput is the ONE place a file's audit commands are scoped to the
+// unit that owns the file (lang.ScopeTestCmd: a Rust file is graded as its
+// crate, not the whole workspace). It returns a COPY of in whose checkArgv —
+// the baseline's command — and baseArgv — the scored runs' — are both scoped,
+// because a baseline measured on one unit and mutants scored on another would
+// certify nothing. Every path that fixes a per-file command takes the input
+// from here: auditOneFile, baselineRunnerFor, and certify --adversarial's
+// client side. A refusal is a usage error, raised before any spend.
+func scopeAuditInput(in localAuditInput, plug lang.Plugin) (localAuditInput, error) {
+	var err error
+	if len(in.checkArgv) > 0 {
+		if in.checkArgv, err = lang.ScopeTestCmd(plug, in.repoDir, in.codePath, in.checkArgv); err != nil {
+			return in, auditUsageErr("%v", err)
+		}
+	}
+	if len(in.baseArgv) > 0 {
+		if in.baseArgv, err = lang.ScopeTestCmd(plug, in.repoDir, in.codePath, in.baseArgv); err != nil {
+			return in, auditUsageErr("%v", err)
+		}
+	}
+	return in, nil
+}
+
 // auditJailPrep is the jail-side of one file's audit: the resolved test path,
 // the code + dev-test bytes, and the jail-backed scorer/validator/enumerator
 // wiring. cleanup releases any Go-vendor staging dir and is always non-nil.
@@ -972,6 +995,9 @@ func baselineRunnerFor(ctx context.Context, in localAuditInput) (reposcan.Baseli
 	noop := func() {}
 	plug, err := resolveAuditPlugin(in)
 	if err != nil {
+		return nil, noop, err
+	}
+	if in, err = scopeAuditInput(in, plug); err != nil {
 		return nil, noop, err
 	}
 	timeout := in.timeout
@@ -1485,6 +1511,9 @@ func auditOneFile(ctx context.Context, in localAuditInput) (advpool.Verdict, err
 
 	plug, err := resolveAuditPlugin(in)
 	if err != nil {
+		return zero, err
+	}
+	if in, err = scopeAuditInput(in, plug); err != nil {
 		return zero, err
 	}
 

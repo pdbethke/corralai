@@ -331,6 +331,18 @@ func runCertifyAdversarial(args []string, client advPoolClient, run cmdRunner, s
 		}
 	}
 
+	// The command is fixed HERE, on the client, because only this side has the
+	// checkout (the brain receives the code as a string): a language whose
+	// runner grades more than a file is scoped to the unit that owns it before
+	// the brain is asked to run anything. The working directory is the repo
+	// root, as resolveDevTest above assumes for --code.
+	scoped, err := scopeAuditInput(localAuditInput{repoDir: ".", codePath: *codePath, checkArgv: checkArgv}, plug)
+	if err != nil {
+		fmt.Fprintf(stderr, "corral certify --adversarial: %v\n", err)
+		return 2
+	}
+	checkArgv = scoped.checkArgv
+
 	spec := advStartSpec{
 		Repo: repo, Commit: commit, Goal: strings.TrimSpace(*goal),
 		CodePath: *codePath, Code: string(code),

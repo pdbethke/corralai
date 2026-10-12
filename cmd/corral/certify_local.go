@@ -683,14 +683,14 @@ func noTestFoundErr(codePath string, res reposcan.SearchResult) string {
 // path: there was nothing to look for, and it says so rather than print an
 // empty list or claim a search that never ran. A file whose declared test
 // path was refused for leaving the repository DID declare one, so that is
-// said instead (final review m6).
+// said instead.
 func whereItLooked(res reposcan.SearchResult) string {
 	if len(res.Tried) == 0 && len(res.Roots) == 0 && len(res.RefusedOutsideRoot) == 0 {
 		return "Nothing to look for: the file declares no test of its own, and its language derives no test file name from its path.\n"
 	}
 	var b strings.Builder
 	if len(res.RefusedOutsideRoot) > 0 {
-		b.WriteString("Refused, never read — the file declares its test here, but the path is outside the repository root:\n")
+		b.WriteString("Refused, never read — the file declares its test here, but the path is outside the audit root (the repository, or the working directory when --code is given without --repo-dir):\n")
 		for _, r := range res.RefusedOutsideRoot {
 			fmt.Fprintf(&b, "  %s\n", r)
 		}

@@ -38,10 +38,11 @@ history of any release, `git log v0.3.4..v0.3.5`.
   both to the brain, which then refused; it now refuses before reading
   anything. `doctor` used to report such a file `[ok]`; it now says it
   pairs but cannot be audited yet.
-- **A source file cannot name a test outside the repository.** A Rust
+- **A source file cannot name a test outside the audit root.** A Rust
   `#[path = "…"]` test-module declaration is followed only while it stays
-  inside the repository root (the working directory, for a `--code` given
-  on the command line, absolute or not), checked after resolving symlinks.
+  inside the audit root: the repository for `certify --repo` and
+  `--repo-dir`, but the WORKING DIRECTORY for a `--code` given on the
+  command line without `--repo-dir` (absolute or not), checked after resolving symlinks.
   One that leaves it is never read, and the "no test found" message names
   it as refused rather than saying the file declares no test.
 - **`go mod vendor` now runs inside the sandbox, never on the host.** When a

@@ -385,7 +385,7 @@ func TestDoctorPairingSaysADeclaredTestWasRefusedOutsideTheRoot(t *testing.T) {
 	if got.ok || strings.Contains(got.detail, "secret.txt by convention") {
 		t.Fatalf("doctor paired to a file outside the repository: %+v", got)
 	}
-	if strings.Contains(got.detail, "Nothing to look for") || !strings.Contains(got.detail, "outside the repository root") || !strings.Contains(got.detail, "secret.txt") {
+	if strings.Contains(got.detail, "Nothing to look for") || !strings.Contains(got.detail, "outside the audit root") || !strings.Contains(got.detail, "secret.txt") {
 		t.Fatalf("want the refused declaration named, got: %s", got.detail)
 	}
 }

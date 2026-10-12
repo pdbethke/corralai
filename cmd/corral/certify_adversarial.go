@@ -294,8 +294,7 @@ func runCertifyAdversarial(args []string, client advPoolClient, run cmdRunner, s
 	// itself (its language's test landing is not built) is refused here, on
 	// the client, not only at the brain. Held at the brain alone, the client
 	// first resolved the dev test, read both files and uploaded them — and a
-	// repository's #[path] could make that upload a host file (final review
-	// I4). The same predicate every other audit door asks.
+	// repository's #[path] could make that upload a host file. The same predicate every other audit door asks.
 	if err := lang.CheckTestLanding(*codePath); err != nil {
 		fmt.Fprintf(stderr, "corral certify --adversarial: %v\n", err)
 		return 2

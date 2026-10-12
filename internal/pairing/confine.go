@@ -14,7 +14,7 @@ import (
 // audited repository is untrusted, and a `#[path = "../../outside/x"]` it
 // ships would otherwise have corral read a file of the operator's choosing,
 // seed it into the jail, show it to the models and, on certify
-// --adversarial, upload it as the developer's test (final review I4).
+// --adversarial, upload it as the developer's test.
 //
 //   - A relative p that cleans to "../…" leaves any root, known or not.
 //   - With no root (""), a relative p is held to that lexical rule only (it

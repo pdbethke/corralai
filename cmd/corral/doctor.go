@@ -337,13 +337,11 @@ func checkPairing(code, test string) checkResult {
 	}
 	// The same refusal every audit door makes before any jail, store or
 	// spend. A file that pairs but cannot be audited is not "[ok]": doctor
-	// used to pass one every certify command then refused (final review I4).
+	// used to pass one every certify command then refused.
 	landing := lang.CheckTestLanding(code)
+	// Called only when landing != nil.
 	paired := func(how string) checkResult {
-		if landing != nil {
-			return checkResult{name: name, detail: fmt.Sprintf("pairs to %s, but cannot be audited yet: %v", how, landing)}
-		}
-		return checkResult{name: name, ok: true, detail: how}
+		return checkResult{name: name, detail: fmt.Sprintf("pairs to %s, but cannot be audited yet: %v", how, landing)}
 	}
 	if t := strings.TrimSpace(test); t != "" {
 		if _, err := os.Stat(t); err != nil {

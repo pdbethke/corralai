@@ -106,3 +106,62 @@ func TestStandaloneRustPrefixKeepsItsLib(t *testing.T) {
 		t.Errorf("binds = %+v: rustc's lib/ is not reachable", binds)
 	}
 }
+
+// TestUvLocalBinIsNotACargoHome (S2): uv's standalone installer writes
+// ~/.local/bin/env beside uv. ~/.local/bin is a directory of programs, not a
+// cargo home, so uv and a pip --user pytest bind it as before.
+func TestUvLocalBinIsNotACargoHome(t *testing.T) {
+	home := t.TempDir()
+	layout(t, home, map[string]string{
+		".local/bin/uv":     "#!/bin/sh\n",
+		".local/bin/pytest": "#!/bin/sh\n",
+		".local/bin/env":    "#!/bin/sh\n",
+	})
+	t.Setenv("HOME", home)
+	t.Setenv("CARGO_HOME", "")
+	t.Setenv("PATH", filepath.Join(home, ".local", "bin")+":/usr/bin:/bin")
+	for _, cmd := range []string{"uv", "pytest"} {
+		binds, err := toolchainBindsFor(cmd)
+		if err != nil || !hasBind(binds, filepath.Join(home, ".local", "bin")) {
+			t.Errorf("%s: binds=%+v err=%v, want ~/.local/bin bound", cmd, binds, err)
+		}
+	}
+}
+
+// TestOperatorCargoHomeWithStrayLibNarrowsToBin (S5): ~/.cargo is the
+// operator's CARGO_HOME by definition, and that precedes the lib/ rule: a
+// stray lib/ does not turn it into a prefix bound whole with its registry
+// token and checkouts.
+func TestOperatorCargoHomeWithStrayLibNarrowsToBin(t *testing.T) {
+	home := t.TempDir()
+	layout(t, home, map[string]string{
+		".cargo/bin/cargo-nextest":         "#!/bin/sh\n",
+		".cargo/lib/stray.so":              "",
+		".cargo/config.toml":               "[registries.priv]\ntoken = \"secret\"\n",
+		".cargo/git/checkouts/priv/lib.rs": "// private\n",
+	})
+	t.Setenv("HOME", home)
+	t.Setenv("CARGO_HOME", "")
+	t.Setenv("PATH", filepath.Join(home, ".cargo", "bin")+":/usr/bin:/bin")
+	binds, err := toolchainBindsFor("cargo-nextest")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(binds) != 1 || binds[0].Host != filepath.Join(home, ".cargo", "bin") {
+		t.Errorf("binds = %+v, want exactly ~/.cargo/bin", binds)
+	}
+}
+
+// TestRustupHomeRefusesACargoHome (S6): RUSTUP_HOME pointed at a cargo home
+// would bind it whole, exposing everything the cargo-home rule hides. It is
+// refused, even when that cargo home holds nothing but bin/ today.
+func TestRustupHomeRefusesACargoHome(t *testing.T) {
+	home := t.TempDir()
+	layout(t, home, map[string]string{".cargo/bin/rustup": "#!/bin/sh\n"})
+	t.Setenv("HOME", home)
+	t.Setenv("CARGO_HOME", "")
+	t.Setenv("RUSTUP_HOME", filepath.Join(home, ".cargo"))
+	if rh, err := rustupHome("cargo"); err == nil {
+		t.Errorf("RUSTUP_HOME=~/.cargo -> %q, want refused", rh)
+	}
+}

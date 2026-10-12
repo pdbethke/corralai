@@ -120,3 +120,27 @@ func TestBwrapMasksFollowSymlinkedEntries(t *testing.T) {
 		t.Errorf("a masked entry was readable:\n%s", res.Output)
 	}
 }
+
+// TestBwrapStartsWithADistroCargoInUsrBin (S1, real bwrap): a regular
+// /usr/bin/cargo beside /usr/bin/env masks nothing — the jail starts and runs
+// the other programs in /usr/bin.
+func TestBwrapStartsWithADistroCargoInUsrBin(t *testing.T) {
+	iso, err := Resolve(Config{Backend: "bwrap"})
+	if err != nil {
+		t.Skipf("SKIP: bwrap unavailable: %v", err)
+	}
+	usr := standInUsr(t)
+	t.Setenv("CARGO_HOME", "")
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("PATH", filepath.Join(usr, "bin")+":/usr/bin:/bin")
+	old := wholeBoundTrees
+	wholeBoundTrees = []string{usr}
+	t.Cleanup(func() { wholeBoundTrees = old })
+
+	res := Run(context.Background(), "sh "+filepath.Join(usr, "bin", "ls")+"; echo STARTED", Options{
+		Workspace: t.TempDir(), Backend: iso, ReadOnlyBinds: []Bind{{Host: usr, Target: usr}},
+	})
+	if res.ExitCode != 0 || !strings.Contains(res.Output, "LS-RUNS") || !strings.Contains(res.Output, "STARTED") {
+		t.Errorf("the jail must start and run /usr/bin programs; exit=%d out=%q", res.ExitCode, res.Output)
+	}
+}

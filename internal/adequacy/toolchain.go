@@ -71,10 +71,11 @@ func (e ErrSnapToolchain) Error() string {
 // the ledger, which can be public. So:
 //
 //   - a cargo home (sandbox.IsCargoHome: the operator's CARGO_HOME, or a
-//     directory carrying cargo's own markers — never an install prefix with
-//     lib/) is ALWAYS bound as its bin/ alone, plus the rustup home when bin/
-//     holds a rustup proxy, whichever of its binaries was named (a symlinked
-//     or hard-linked proxy, cargo-nextest, anything `cargo install`ed);
+//     directory with a bin/ child carrying cargo's own markers — never an
+//     install prefix with lib/) is ALWAYS bound as its bin/ alone, plus
+//     the rustup home when bin/ holds a rustup proxy, whichever of its
+//     binaries was named (a symlinked or hard-linked proxy, cargo-nextest,
+//     anything `cargo install`ed);
 //   - any other root holding a credentials store (RubyGems' ~/.gem) is
 //     narrowed to the one child directory the binary lives in;
 //   - a root that cannot be narrowed safely is refused, with the reason.
@@ -175,6 +176,8 @@ func childOnPath(root, real string) string {
 // jail mounts anyway. It is a bind root like any other, so it goes through
 // the same home-directory rule (narrowHomeRoot): RUSTUP_HOME=~/.config is
 // refused, never bound, because ~/.config holds gh, gcloud and composer auth.
+// A RUSTUP_HOME that is a cargo home (sandbox.IsCargoHome) is refused too:
+// binding it whole would expose everything the cargo-home rule hides.
 // Inside the jail the proxy finds it only through RUSTUP_HOME, which the
 // jail does not set yet (Task 4's pin); the bind is what that pin will use.
 func rustupHome(cmd0 string) (string, error) {
@@ -201,6 +204,9 @@ func rustupHome(cmd0 string) (string, error) {
 	}
 	if _, refused := narrowHomeRoot(probe, root); refused != "" {
 		return refuse(refused)
+	}
+	if sandbox.IsCargoHome(rh) {
+		return refuse("it is a cargo home, of which only bin/ may be bound")
 	}
 	if len(sandbox.SecretEntries(rh)) > 0 {
 		return refuse("it holds a credentials store or a cargo home")

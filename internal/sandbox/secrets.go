@@ -44,13 +44,19 @@ func CredentialStoreIn(dir string) string {
 
 // cargoMarkers are files and directories only cargo (or rustup's installer)
 // writes into a CARGO_HOME: `cargo install`'s ledgers, the package-cache
-// lock, the registry cache, and rustup's env script. bin/cargo or bin/rustup
-// alone is NOT one — every install prefix has a bin/, and a standalone Rust
-// install, /usr/local or Homebrew's prefix can hold bin/cargo.
-var cargoMarkers = []string{".crates.toml", ".crates2.json", ".package-cache", "registry", "env"}
+// lock, the registry cache, and rustup's own proxy. bin/cargo alone is NOT
+// one — every install prefix has a bin/, and a standalone Rust install,
+// /usr/local or Homebrew's prefix can hold bin/cargo. A generic name is never
+// one either: rustup's `env` script shares its name with /usr/bin/env and
+// with the env file uv's installer writes into ~/.local/bin, and a rustup
+// home already carries bin/rustup.
+var cargoMarkers = []string{".crates.toml", ".crates2.json", ".package-cache", "registry", "bin/rustup"}
 
-// OperatorCargoHome is the operator's CARGO_HOME: $CARGO_HOME, else
-// ~/.cargo, cleaned. "" when neither can be determined.
+// OperatorCargoHome is the operator's CARGO_HOME: $CARGO_HOME made absolute,
+// else ~/.cargo. "" when neither can be determined. The ONE reading of the
+// variable; every consumer goes through it. A CARGO_HOME set to a broad
+// directory (/usr/share, ~/sdk) is honored as declared — an operator
+// misconfiguration that fails closed (more is hidden, never less).
 func OperatorCargoHome() string {
 	if ch := os.Getenv("CARGO_HOME"); ch != "" {
 		if abs, err := filepath.Abs(ch); err == nil {
@@ -70,22 +76,29 @@ func OperatorCargoHome() string {
 // never finish, so it is judged by what it IS, not by its file names: of a
 // cargo home, a jail may see bin/ and nothing else.
 //
-//   - A directory with lib/ is an install PREFIX (/usr/local, Homebrew's
-//     prefix and Cellar kegs, a standalone /opt/rust holding rustc's
-//     libraries) and is NEVER a cargo home, whatever its bin/ holds. A cargo
-//     home has no lib/.
 //   - The operator's own CARGO_HOME (OperatorCargoHome) is one by
-//     definition — including the distribution-cargo layout where ~/.cargo
-//     holds only `cargo install`ed tools.
-//   - Any other directory is one only when it carries a cargo marker
-//     (cargoMarkers).
+//     definition, whatever else it holds — including the distribution-cargo
+//     layout where ~/.cargo holds only `cargo install`ed tools, and a stray
+//     lib/. This comes first: the operator's declaration can only narrow
+//     what is bound, never widen it.
+//   - Any other directory with lib/ is an install PREFIX (/usr, /usr/local,
+//     Homebrew's prefix and Cellar kegs, a standalone /opt/rust holding
+//     rustc's libraries) and is NEVER a cargo home, whatever its bin/ holds.
+//   - Any other directory is one only when it is shaped like one — it has a
+//     bin/ directory — AND carries a cargo marker (cargoMarkers). A directory
+//     of programs (/usr/bin, ~/.local/bin) has no bin/ child, so nothing in
+//     it can make it a cargo home.
 func IsCargoHome(dir string) bool {
 	dir = filepath.Clean(dir)
-	if fi, err := os.Stat(filepath.Join(dir, "lib")); err == nil && fi.IsDir() { // #nosec G703 -- existence check only on a toolchain path the operator's own PATH/env resolved
-		return false
-	}
 	if dir == OperatorCargoHome() {
 		return true
+	}
+	isDir := func(rel string) bool {
+		fi, err := os.Stat(filepath.Join(dir, rel)) // #nosec G703 -- existence check only on a toolchain path the operator's own PATH/env resolved
+		return err == nil && fi.IsDir()
+	}
+	if isDir("lib") || !isDir("bin") {
+		return false
 	}
 	for _, m := range cargoMarkers {
 		if _, err := os.Lstat(filepath.Join(dir, m)); err == nil { // #nosec G703 -- existence check only, see above
@@ -149,8 +162,8 @@ var wholeBoundTrees = []string{"/usr", "/opt/homebrew"}
 // it instead.
 func secretMasks(trees []string) []mask {
 	var roots []string
-	if ch := os.Getenv("CARGO_HOME"); ch != "" {
-		roots = append(roots, filepath.Clean(ch))
+	if os.Getenv("CARGO_HOME") != "" {
+		roots = append(roots, OperatorCargoHome())
 	}
 	if p, err := exec.LookPath("cargo"); err == nil {
 		if real, rerr := filepath.EvalSymlinks(p); rerr == nil {

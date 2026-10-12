@@ -110,7 +110,7 @@ func TestAnInstallPrefixIsNeverACargoHome(t *testing.T) {
 func TestCargoHomeMarkers(t *testing.T) {
 	t.Setenv("CARGO_HOME", "")
 	t.Setenv("HOME", t.TempDir())
-	for marker, isDir := range map[string]bool{".crates.toml": false, ".crates2.json": false, ".package-cache": false, "registry": true, "env": false} {
+	for marker, isDir := range map[string]bool{".crates.toml": false, ".crates2.json": false, ".package-cache": false, "registry": true, "bin/rustup": false} {
 		d := t.TempDir()
 		if err := os.MkdirAll(filepath.Join(d, "bin"), 0o755); err != nil {
 			t.Fatal(err)
@@ -140,5 +140,103 @@ func TestCargoHomeMarkers(t *testing.T) {
 	t.Setenv("CARGO_HOME", op)
 	if !IsCargoHome(op) {
 		t.Error("the operator's CARGO_HOME is a cargo home by definition")
+	}
+}
+
+// standInUsr lays out a stand-in for /usr the way a distribution with a
+// packaged cargo does: /usr/bin/cargo is a regular file beside env (which
+// every Linux /usr/bin has), sh-runnable programs, and lib/.
+func standInUsr(t *testing.T) string {
+	t.Helper()
+	usr := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(usr, "lib"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for rel, body := range map[string]string{
+		"bin/cargo": "#!/bin/sh\n",
+		"bin/env":   "#!/bin/sh\n",
+		"bin/ls":    "echo LS-RUNS\n",
+	} {
+		p := filepath.Join(usr, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return usr
+}
+
+// TestUsrBinIsNeverACargoHome (S1): a distribution's /usr/bin holds cargo and
+// env, has no lib/ and no bin/ child. It is a directory of programs, not a
+// cargo home: nothing in it, or in /usr, is masked.
+func TestUsrBinIsNeverACargoHome(t *testing.T) {
+	usr := standInUsr(t)
+	t.Setenv("CARGO_HOME", "")
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("PATH", filepath.Join(usr, "bin")+":/usr/bin:/bin")
+	if IsCargoHome(filepath.Join(usr, "bin")) || IsCargoHome(usr) {
+		t.Error("/usr/bin and /usr are never cargo homes")
+	}
+	if got := CargoHomeOf(filepath.Join(usr, "bin", "cargo")); got != "" {
+		t.Errorf("CargoHomeOf(/usr/bin/cargo) = %q, want none", got)
+	}
+	if got := secretMasks([]string{usr}); len(got) != 0 {
+		t.Errorf("masks = %+v, want none", got)
+	}
+}
+
+// TestCargoHomeNeedsBinAndACargoMarker (S1, S2): outside the operator's own
+// CARGO_HOME a marker is evidence only in a directory shaped like a cargo
+// home — one with a bin/ child. A generic `env` file (uv's installer writes
+// ~/.local/bin/env) is not cargo's.
+func TestCargoHomeNeedsBinAndACargoMarker(t *testing.T) {
+	t.Setenv("CARGO_HOME", "")
+	t.Setenv("HOME", t.TempDir())
+	noBin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(noBin, ".crates.toml"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if IsCargoHome(noBin) {
+		t.Error("a marker without a bin/ child does not make a cargo home")
+	}
+	envOnly := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(envOnly, "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(envOnly, "env"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if IsCargoHome(envOnly) {
+		t.Error("an env file is not a cargo marker")
+	}
+}
+
+// TestOperatorCargoHomePrecedesLib (S5): the operator's own CARGO_HOME is a
+// cargo home even with a stray lib/ — the declaration narrows, never widens.
+func TestOperatorCargoHomePrecedesLib(t *testing.T) {
+	op := t.TempDir()
+	for _, d := range []string{"bin", "lib"} {
+		if err := os.MkdirAll(filepath.Join(op, d), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("CARGO_HOME", op)
+	if !IsCargoHome(op) {
+		t.Error("the operator's CARGO_HOME is a cargo home whatever else it holds")
+	}
+}
+
+// TestSecretMasksReadCargoHomeThroughOperatorCargoHome (S4): a relative
+// CARGO_HOME is resolved the one way OperatorCargoHome resolves it, so the
+// mask walk finds it.
+func TestSecretMasksReadCargoHomeThroughOperatorCargoHome(t *testing.T) {
+	usr, ch := fakeSystemCargoHome(t)
+	t.Chdir(filepath.Dir(ch))
+	t.Setenv("CARGO_HOME", filepath.Base(ch))
+	t.Setenv("PATH", "/nonexistent")
+	if got := secretMasks([]string{usr}); len(got) == 0 {
+		t.Error("a relative CARGO_HOME inside /usr was not masked")
 	}
 }

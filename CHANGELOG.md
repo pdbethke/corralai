@@ -11,6 +11,30 @@ history of any release, `git log v0.3.4..v0.3.5`.
 
 ## [Unreleased]
 
+- **`go mod vendor` now runs inside the sandbox, never on the host.** When a
+  Go module has no `vendor/`, corral vendors a throwaway copy before the
+  audit. That step used to run directly on your machine; it now runs in the
+  same isolation backend as the audit (bwrap by default), with network
+  access for that one step only — the graded runs stay offline. What you
+  will notice:
+  - It needs a working sandbox. Without one, corral refuses and says to
+    vendor the module yourself; it never falls back to the host.
+  - It starts from an empty module cache every time, so it downloads every
+    dependency; your own `GOPATH`/`GOMODCACHE` are not used.
+  - Proxy settings (`HTTP(S)_PROXY`, `NO_PROXY`) and `GOPROXY`, `GOSUMDB`,
+    `GONOSUMDB`, `GOPRIVATE`, `GONOPROXY`, `GOINSECURE` and `GOFLAGS` are
+    passed through. Your git and netrc credentials are not, so a private
+    module that needs them can no longer be vendored by corral: vendor it
+    yourself first.
+  - `GOTOOLCHAIN` is `local`, as in every graded run: a `go.mod` that needs
+    a newer Go than the installed one fails here, with Go's own message,
+    instead of downloading a toolchain.
+  - The throwaway copy lives under your user cache directory
+    (`~/.cache/corral/vendor` on Linux), not the system temporary directory.
+    This fixes a bug: a `go.work` file in the temporary directory — which
+    any local user can create — made every Go vendoring step fail with
+    "cannot be run in workspace mode".
+
 - **The directory walkers that skip dependency trees now share one
   definition, declared by the language plugins.** `corral review`'s scope
   loading and planning, the repository reader the brain and the gate use,
@@ -27,7 +51,8 @@ history of any release, `git log v0.3.4..v0.3.5`.
   every tree, like `.venv`. What `certify --repo` scans and accounts for
   is unchanged. The jail seed and the vendoring staging copy do not use
   the shared definition: apart from the binds above, neither skips any
-  directory but `.git`.
+  directory but `.git` and cargo's build output (a `target` directory with
+  a `Cargo.toml` beside it).
 
 - **The coverage pre-flight runs on mixed-language repositories when the
   `--` command names a language.** Go's coverage instrumentation used to

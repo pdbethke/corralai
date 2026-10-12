@@ -9,28 +9,28 @@ import (
 	"testing"
 )
 
-// TestGoVendorCmd pins when the Go plugin asks for vendoring: a module with no
+// TestGoVendor pins when the Go plugin asks for vendoring: a module with no
 // vendor/ only. It never runs the command; it only names it.
-func TestGoVendorCmd(t *testing.T) {
+func TestGoVendor(t *testing.T) {
 	var v Vendorer = goPlugin{}
 
 	mod := t.TempDir()
 	if err := os.WriteFile(filepath.Join(mod, "go.mod"), []byte("module x\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	argv, ok := v.VendorCmd(mod)
-	if !ok || !slices.Equal(argv, []string{"go", "mod", "vendor"}) {
-		t.Fatalf("module without vendor/: got %v, %v", argv, ok)
+	step, ok := v.Vendor(mod)
+	if !ok || !slices.Equal(step.Argv, []string{"go", "mod", "vendor"}) || step.StdoutAppend != "" {
+		t.Fatalf("module without vendor/: got %+v, %v", step, ok)
 	}
 
 	if err := os.MkdirAll(filepath.Join(mod, "vendor"), 0o750); err != nil {
 		t.Fatal(err)
 	}
-	if argv, ok := v.VendorCmd(mod); ok || argv != nil {
-		t.Fatalf("already vendored: got %v, %v", argv, ok)
+	if step, ok := v.Vendor(mod); ok || step.Argv != nil {
+		t.Fatalf("already vendored: got %+v, %v", step, ok)
 	}
 
-	if argv, ok := v.VendorCmd(t.TempDir()); ok || argv != nil {
-		t.Fatalf("no go.mod: got %v, %v", argv, ok)
+	if step, ok := v.Vendor(t.TempDir()); ok || step.Argv != nil {
+		t.Fatalf("no go.mod: got %+v, %v", step, ok)
 	}
 }

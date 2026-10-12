@@ -578,17 +578,16 @@ func goTestShaped(testCmd []string) bool {
 // LineComment is the go line-comment marker.
 func (goPlugin) LineComment() string { return "//" }
 
-// VendorCmd: a Go module not already carrying vendor/ is vendored with
+// Vendor: a Go module not already carrying vendor/ is vendored with
 // `go mod vendor`, so the offline jail resolves its external modules from
-// the tree instead of the operator's module cache.
-func (goPlugin) VendorCmd(repoDir string) ([]string, bool) {
+// the tree instead of the operator's module cache. Done is the vendor/
+// directory itself — the same check this made before the step had a
+// done-marker — so a tree that carries one is used as it is.
+func (goPlugin) Vendor(repoDir string) (VendorStep, bool) {
 	if _, err := os.Stat(filepath.Join(repoDir, "go.mod")); err != nil {
-		return nil, false
+		return VendorStep{}, false
 	}
-	if fi, err := os.Stat(filepath.Join(repoDir, "vendor")); err == nil && fi.IsDir() {
-		return nil, false
-	}
-	return []string{"go", "mod", "vendor"}, true
+	return StepUnlessDone(repoDir, VendorStep{Argv: []string{"go", "mod", "vendor"}, Done: "vendor"})
 }
 
 // DependencyDirs is Go's module vendor directory (`go mod vendor`).

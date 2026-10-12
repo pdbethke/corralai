@@ -4405,7 +4405,6 @@ func newLocalExecutor(repoDir string, checkArgv []string, substrate string, time
 	// scan was never going to use. The jail substrate (including the "" zero
 	// value — today's shipped default) keeps the exact preflight behaviour
 	// below: a bwrap-less host still fails, with the same message.
-	backendName := ""
 	if substrate != substrateWorkspace {
 		// Resolve the sandbox ONCE for the whole scan: the backend name is an
 		// input to the seed (it decides which dep dirs can be bind-mounted
@@ -4420,7 +4419,6 @@ func newLocalExecutor(repoDir string, checkArgv []string, substrate string, time
 			l.jailErr = err
 		} else {
 			l.iso = iso
-			backendName = iso.Name()
 		}
 	}
 	// The seed is jail preparation — a tree copy, `go mod vendor`, a full
@@ -4442,7 +4440,7 @@ func newLocalExecutor(repoDir string, checkArgv []string, substrate string, time
 			if l.jailErr != nil {
 				return repoSeed{cleanup: func() {}}, l.jailErr
 			}
-			return buildRepoSeed("corral certify --repo", repoDir, langName, backendName, nil, false, l.progress)
+			return buildRepoSeed("corral certify --repo", repoDir, langName, l.iso, nil, false, l.progress)
 		})
 	}
 	return l

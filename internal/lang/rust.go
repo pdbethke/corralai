@@ -3,7 +3,9 @@
 package lang
 
 import (
+	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/pdbethke/corralai/internal/pairing"
 )
@@ -40,7 +42,51 @@ func (rustPlugin) LineComment() string { return "//" }
 // seed's skip of target/ is declared separately, by BuildDirs.
 func (rustPlugin) DependencyDirs() []DepDir { return []DepDir{{Name: "vendor"}} }
 
-// BuildDirs is cargo's default build directory: `target` beside a
+// cargoVendoredSource is the source name `cargo vendor` prints in the
+// replacement config it asks to be appended. A cargo config that already
+// names it was produced by an earlier `cargo vendor`.
+const cargoVendoredSource = `"vendored-sources"`
+
+// cargoConfigFile is the repo-relative config file cargo reads for the
+// crate's own directory: the legacy extensionless `.cargo/config` when it
+// exists — cargo then IGNORES config.toml, with a warning (measured, cargo
+// 1.90) — else `.cargo/config.toml`.
+func cargoConfigFile(repoDir string) string {
+	if fi, err := os.Stat(filepath.Join(repoDir, ".cargo", "config")); err == nil && fi.Mode().IsRegular() {
+		return ".cargo/config"
+	}
+	return ".cargo/config.toml"
+}
+
+// Vendor: a crate is vendored with `cargo vendor --locked vendor`, whose
+// stdout — the source-replacement config pointing crates-io and every git
+// dependency at vendor/ — is appended to the config file cargo will read.
+//
+// --locked because the audit grades the dependency versions the repository
+// pinned, never a fresh resolution: a crate with no Cargo.lock (or a stale
+// one) fails here with cargo's own "needs to be updated but --locked was
+// passed", which ensureVendored surfaces verbatim. That is the honest
+// outcome — ok=false would run the audit unvendored and fail later, in the
+// offline jail, for a reason the operator could not see.
+//
+// Done is empty because cargo's "already vendored" is not a path: a vendor/
+// directory is just as often C sources a -sys crate carries, and a
+// .cargo/config.toml just as often holds aliases. It is the config naming
+// cargo vendor's own source, which this checks itself. Any OTHER existing
+// [source.crates-io] is refused at append time (see VendorStep.StdoutAppend),
+// never merged into: the file is the operator's, not corral's.
+func (rustPlugin) Vendor(repoDir string) (VendorStep, bool) {
+	if _, err := os.Stat(filepath.Join(repoDir, "Cargo.toml")); err != nil {
+		return VendorStep{}, false
+	}
+	cfg := cargoConfigFile(repoDir)
+	if b, err := os.ReadFile(filepath.Join(repoDir, filepath.FromSlash(cfg))); err == nil && strings.Contains(string(b), cargoVendoredSource) { // #nosec G304 -- one of two fixed names under the repo dir; only searched, never executed or echoed
+		return VendorStep{}, false
+	}
+	return VendorStep{Argv: []string{"cargo", "vendor", "--locked", "vendor"}, StdoutAppend: cfg}, true
+}
+
+// BuildDirs is cargo's default build directory:`target` beside a
 // Cargo.toml, which is cargo's own definition of it. The marker keeps a
 // directory merely named target (somebody's package) in the jail seed.
 // A build.target-dir or CARGO_TARGET_DIR that moves it elsewhere is not

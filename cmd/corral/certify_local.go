@@ -2152,7 +2152,7 @@ func buildJailWiring(ctx context.Context, in jailWiringInput) (w jailWiring, err
 			// langs, non-modules, or already-vendored repos). Seed from the
 			// returned dir.
 			var serr error
-			seed, serr = buildRepoSeed("corral certify --local", in.repoDir, in.langName, in.iso.Name(), in.bindDirFlag, in.noBindDepsFlag, in.stdout)
+			seed, serr = buildRepoSeed("corral certify --local", in.repoDir, in.langName, in.iso, in.bindDirFlag, in.noBindDepsFlag, in.stdout)
 			if serr != nil {
 				return w, serr
 			}

@@ -1114,7 +1114,9 @@ runner does not have. The design, and the week that produced it:
   bulk of a checkout's size and irrelevant to the mutant/text seed, so binding keeps
   them off the 64 MiB workspace cap. Dependencies must already be **present**
   (vendored/installed, the same way CI expects them) — corral binds what's there, it
-  never installs anything. `--bind-dir <path>` (repeatable, repo-relative) binds
+  never installs anything into your checkout. The one step it runs for you is `go mod
+  vendor` for a Go module with no `vendor/`: in a throwaway copy, inside the sandbox,
+  with network access for that step only. `--bind-dir <path>` (repeatable, repo-relative) binds
   additional dirs the same way; `--no-bind-deps` restores the pre-bind behavior
   (copy every dep dir into the seed, subject to the size cap). A run prints `deps:
   bound N dir(s) read-only (...)` whenever anything was bound.

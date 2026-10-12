@@ -198,7 +198,9 @@ text cap and off the mutant/test-writer's context.
 
 **Dependencies must already be present** — vendored or installed, the same
 way CI expects a checkout to arrive. Corral binds what's already there; it
-never installs anything on your behalf.
+never installs anything into your checkout. The one step it runs for you is
+`go mod vendor`, for a Go module with no `vendor/`: in a throwaway copy,
+inside the sandbox, with network access for that step only.
 
 - `--bind-dir <path>` (repeatable, repo-relative) binds additional dirs the
   same way, for dependency trees the auto-detected set doesn't cover.

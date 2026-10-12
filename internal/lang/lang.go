@@ -364,6 +364,45 @@ type Vendorer interface {
 	VendorCmd(repoDir string) (argv []string, ok bool)
 }
 
+// BuildDir is a directory a language's build tool writes its output into,
+// identified the way the tool itself defines it: a basename (Name) AND a
+// marker file (Marker) in the same parent directory. cargo's default build
+// directory is `target` beside the Cargo.toml it was built from — not any
+// directory called target.
+//
+// Both halves are required. A basename alone is what treedirs' language-
+// neutral buildOutput list is, and that list is right for the walkers that
+// only need to know what is not worth GRADING; a walker that seeds the jail
+// cannot use it, because a basename-only skip of `build` would drop a real
+// Python package of that name from the workspace and fail the suite for a
+// reason that has nothing to do with the mutant.
+type BuildDir struct {
+	Name   string // directory basename, e.g. "target"
+	Marker string // file that must exist beside it, e.g. "Cargo.toml"
+}
+
+// BuildDirer is an OPTIONAL plugin extension for a language whose build tool
+// writes large output INSIDE the repository tree. The tree copies that seed
+// the jail (cmd/corral's loadRepoFiles and the vendoring stage copy) skip a
+// declared BuildDir: it is derived from the source, routinely gigabytes, and
+// nothing the audit reads — the jailed run rebuilds it. Languages whose
+// build output lives outside the tree, or is small, do not implement it.
+type BuildDirer interface {
+	BuildDirs() []BuildDir
+}
+
+// AllBuildDirs is every registered plugin's BuildDirs, in Names() order —
+// derived from the registry, never a hand list.
+func AllBuildDirs() []BuildDir {
+	var out []BuildDir
+	for _, name := range Names() {
+		if b, ok := registry[name].(BuildDirer); ok {
+			out = append(out, b.BuildDirs()...)
+		}
+	}
+	return out
+}
+
 // Preambler is an OPTIONAL plugin extension: a language whose package/import
 // header corral can reliably locate returns it verbatim, so a mutant-
 // generator shard shown only ITS OWN symbols (see advpool's shard-chunking)

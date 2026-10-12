@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"strings"
 	"unicode/utf8"
@@ -119,8 +120,9 @@ func vendorCommand(argv []string, dir string) *exec.Cmd {
 	return cmd
 }
 
-// copyTreeSkipGit recursively copies src into an existing dst, skipping .git and
-// any symlink (never following one out of the tree). It stages a throwaway copy
+// copyTreeSkipGit recursively copies src into an existing dst, skipping .git,
+// every language-declared build directory (isBuildDir), and any symlink
+// (never following one out of the tree). It stages a throwaway copy
 // of a repo for a plugin's vendoring command so the operator's real working
 // tree is untouched.
 // Reads go through os.Root so a symlink can't escape src (gosec G122 / TOCTOU),
@@ -137,7 +139,7 @@ func copyTreeSkipGit(src, dst string) error {
 		}
 		target := filepath.Join(dst, filepath.FromSlash(rel))
 		if d.IsDir() {
-			if d.Name() == ".git" {
+			if d.Name() == ".git" || isBuildDir(r.FS(), rel, d.Name()) {
 				return fs.SkipDir
 			}
 			if rel == "." {
@@ -163,6 +165,35 @@ func copyTreeSkipGit(src, dst string) error {
 		}
 		return out.Close()
 	})
+}
+
+// buildDirs is every language's declared build directory, composed from the
+// registry (lang.AllBuildDirs) — the language whose tool writes the directory
+// is the one that knows its name and its marker.
+var buildDirs = lang.AllBuildDirs()
+
+// isBuildDir reports whether the directory at rel (basename name) is a
+// language-declared build directory: its basename matches a lang.BuildDir AND
+// that declaration's marker file exists beside it. Both seed walkers ask it —
+// the jail seed and the vendoring stage copy — because a build directory is
+// derived output, routinely gigabytes, that the jailed run rebuilds.
+//
+// This deliberately does not use treedirs.NeverWalked: that set also holds
+// fixtures (testdata, which a suite reads) and dependency dirs (bound
+// read-only as DepBinds), and its build-output entries are basenames alone,
+// which would drop real source sharing the name (a Python package called
+// build). fsys is the walk's os.Root view, so the marker check cannot follow
+// a symlink out of the tree.
+func isBuildDir(fsys fs.FS, rel, name string) bool {
+	for _, b := range buildDirs {
+		if name != b.Name {
+			continue
+		}
+		if fi, err := fs.Stat(fsys, path.Join(path.Dir(rel), b.Marker)); err == nil && fi.Mode().IsRegular() {
+			return true
+		}
+	}
+	return false
 }
 
 // stringSlice is a minimal repeatable-string flag.Value (cmd/corral has no
@@ -256,7 +287,7 @@ func worldReadableDir(dir string) bool {
 // workspace — plus the dependency dirs (treedirs.SharedDependencies, and any
 // --bind-dir entries) it detected and excluded from that seed so they can be
 // bind-mounted read-only instead of copied. It skips
-// .git, files over 1 MiB (data/fixtures, not source), and anything that
+// .git, every language-declared build directory (isBuildDir), files over 1 MiB (data/fixtures, not source), and anything that
 // isn't valid UTF-8 (binaries the text-only jail can't carry), and caps the
 // total so a huge checkout can't blow up the workspace. The keys are exactly
 // the paths a mutant overlay and the project's own test command reference
@@ -326,7 +357,7 @@ func loadRepoFiles(root string, opts loadOpts) (map[string]string, []adequacy.De
 			return err
 		}
 		if d.IsDir() {
-			if d.Name() == ".git" {
+			if d.Name() == ".git" || isBuildDir(r.FS(), rel, d.Name()) {
 				return fs.SkipDir
 			}
 			if rel != "." && shouldBind(rel, d.Name(), opts) {

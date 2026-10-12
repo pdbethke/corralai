@@ -36,8 +36,20 @@ func (rustPlugin) LineComment() string { return "//" }
 // skips but still ACCOUNTS in the report, and declaring it a dependency would
 // silently move it to the unaccounted set for every repository
 // (TestEnumerateSkipsBuildOutputDirs). Whether the workspace pool must treat
-// target/ as run-written belongs to the task that runs cargo there.
+// target/ as run-written belongs to the task that runs cargo there. The jail
+// seed's skip of target/ is declared separately, by BuildDirs.
 func (rustPlugin) DependencyDirs() []DepDir { return []DepDir{{Name: "vendor"}} }
+
+// BuildDirs is cargo's default build directory: `target` beside a
+// Cargo.toml, which is cargo's own definition of it. The marker keeps a
+// directory merely named target (somebody's package) in the jail seed.
+// A build.target-dir or CARGO_TARGET_DIR that moves it elsewhere is not
+// followed: the default is what a checkout carries in practice, and a
+// build directory this misses costs seed size (at worst the seed cap's
+// refusal), never a wrong verdict.
+func (rustPlugin) BuildDirs() []BuildDir {
+	return []BuildDir{{Name: "target", Marker: "Cargo.toml"}}
+}
 
 // CompileCheck builds the test targets without running them. cargo compiles
 // a crate, not a file, so there is no narrower honest scope to name here

@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 
@@ -167,29 +166,18 @@ func TestEnsureVendoredRefusesAnExistingCratesIoSource(t *testing.T) {
 	}
 }
 
-// TestTOMLTablesDeclared pins the forms the refusal recognises.
-func TestTOMLTablesDeclared(t *testing.T) {
-	for _, tc := range []struct{ text, want string }{
-		{"[source.crates-io]\n", "source.crates-io"},
-		{"[ source . \"crates-io\" ] # mirror\n", "source.crates-io"},
-		{"source.crates-io.replace-with = \"m\"\n", "source.crates-io"},
-		{"[source]\ncrates-io.replace-with = \"m\"\n", "source.crates-io"},
-	} {
-		if got := tomlTablesDeclared(tc.text); !slices.Contains(got, tc.want) {
-			t.Errorf("tomlTablesDeclared(%q) = %v, want it to contain %q", tc.text, got, tc.want)
-		}
-	}
-	if got := tomlTablesDeclared("[alias]\nb = \"build\"\n[source.mirror]\nregistry = \"x\"\n"); slices.Contains(got, "source.crates-io") {
-		t.Errorf("unrelated tables reported crates-io: %v", got)
-	}
-}
-
-// TestVendoringIgnoresPlantedParentConfig is the walk-up regression, end to
-// end in a real bwrap jail with the real `go mod vendor`: a go.work planted
-// in os.TempDir and another in the parent of corral's cache dir must not be
-// seen. Before this, staging under /tmp made `go mod vendor` refuse with
-// "cannot be run in workspace mode". A module with no requirements needs no
-// network, so the test does not depend on a module proxy.
+// TestVendoringIgnoresPlantedParentConfig proves the JAIL wall against
+// configuration walk-up, end to end with bwrap and the real `go mod vendor`:
+// a go.work planted in os.TempDir and another in the parent of corral's cache
+// dir (the staging root's own ancestor, which a host-side run WOULD find) are
+// not seen, because the jail mounts none of the staging path's host parents.
+// It cannot tell the two walls apart — the jail alone would pass it even with
+// staging back under TMPDIR — so the second wall, the staging location, is
+// pinned separately by TestEnsureVendoredRunsTheStepInTheSandboxWithNetwork.
+// The failure it guards was measured on the old host path: a go.work in the
+// temp dir made `go mod vendor` refuse ("cannot be run in workspace mode"). A
+// module with no requirements needs no network, so the test does not depend
+// on a module proxy.
 func TestVendoringIgnoresPlantedParentConfig(t *testing.T) {
 	if _, err := exec.LookPath("go"); err != nil {
 		t.Skip("SKIP: go not on PATH")
@@ -208,5 +196,19 @@ func TestVendoringIgnoresPlantedParentConfig(t *testing.T) {
 	defer cleanup()
 	if err != nil {
 		t.Fatalf("a planted parent go.work reached the vendoring step: %v", err)
+	}
+}
+
+// TestEnsureVendoredRefusesTheContainerBackend: measured with rootful docker
+// under container.go's flags, container root (no CAP_DAC_OVERRIDE) can
+// neither read the 0700 staging copy nor create vendor/ in it, so the step
+// failed with a shell permission error that read as a broken module. It is
+// refused up front instead, saying what to do.
+func TestEnsureVendoredRefusesTheContainerBackend(t *testing.T) {
+	isolateStagingDirs(t)
+	_, cleanup, err := ensureVendored("corral certify --local", goModule(t), "go", namedIsolator("container"), io.Discard)
+	cleanup()
+	if err == nil || !strings.Contains(err.Error(), "container backend") || !strings.Contains(err.Error(), "--jail bwrap") {
+		t.Fatalf("want an up-front refusal naming the container backend and --jail bwrap, got %v", err)
 	}
 }

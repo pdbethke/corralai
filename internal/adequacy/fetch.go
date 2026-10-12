@@ -37,8 +37,31 @@ const fetchMaxStdout = 1 << 20
 // manager over a repository corral does not trust, and package managers read
 // repository-controlled configuration that names programs (cargo runs a
 // repo-shipped credential provider; rustup runs a repo-named toolchain). In
-// the jail such a program sees no $HOME, no host environment beyond
-// sandbox.FetchEnv, and writes nowhere but dir and a tmpfs.
+// the jail such a program sees the jail's tmpfs HOME, not the operator's: of
+// the operator's home directory only the staging path's parents and the
+// toolchain binds exist there, and no toolchain bind ever covers a
+// credentials store (toolchainBindsFor). Its environment is
+// sandbox.FetchEnv, and it writes nowhere but dir and a tmpfs. A rustup
+// proxy cannot download a repository-named toolchain: FetchEnv pins
+// RUSTUP_AUTO_INSTALL=0 (rustup >= 1.28).
+//
+// What the step CAN still reach — the residual risk, stated exactly:
+//
+//   - Linux (bwrap): --share-net puts the step in the HOST's network
+//     namespace. Every service listening on the host's loopback, and every
+//     abstract unix socket (measured: @/tmp/.X11-unix/X0 connects), is
+//     reachable from repository-controlled code. On a self-hosted runner,
+//     loopback is where internal services live. Isolating it (a user-mode
+//     network such as pasta or slirp4netns, or binding only a resolver) is
+//     an open question for the founder, not solved here.
+//   - Everywhere: the proxy variables in FetchEnv are forwarded verbatim, so
+//     a credential embedded in a proxy URL reaches the step.
+//   - macOS (sandbox-exec): Network adds (allow network*) and a blanket
+//     (allow mach-lookup), so the step can talk to any mach service the
+//     user's session exposes.
+//   - The container backend is never used for this step: cmd/corral's
+//     ensureVendored refuses it (its root cannot read or write the staging
+//     copy).
 //
 // Everything that differs from a graded run lives here and nowhere else:
 // Network is true and the environment is sandbox.FetchEnv. The toolchain

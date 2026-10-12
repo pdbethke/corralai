@@ -19,6 +19,7 @@ import (
 	"github.com/pdbethke/corralai/internal/adequacy"
 	"github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/sandbox"
+	"github.com/pdbethke/corralai/internal/tomllite"
 	"github.com/pdbethke/corralai/internal/treedirs"
 )
 
@@ -115,6 +116,15 @@ func ensureVendored(cmdName, repoDir, langName string, iso sandbox.Isolator, out
 	if iso == nil || iso.Name() == "none" {
 		return "", noop, fmt.Errorf("%s: this repo's dependencies must be vendored (`%s`) for the offline jail, and vendoring runs only inside an isolation backend — never on the host — because the package manager reads configuration the repository controls. Make a sandbox available (bubblewrap on Linux), or vendor the repository yourself before auditing it", cmdName, joined)
 	}
+	if iso.Name() == "container" {
+		// Measured with rootful docker under container.go's flags: container
+		// root has no CAP_DAC_OVERRIDE, so it can neither read the 0700
+		// staging copy nor create vendor/ in it, and the step died with a
+		// shell permission error that read as a broken module. Refused up
+		// front until the container backend can run the step as the host
+		// uid.
+		return "", noop, fmt.Errorf("%s: this repo's dependencies must be vendored (`%s`) for the offline jail, and vendoring is not supported under the container backend yet. Commit vendor/ yourself (run `%s` and commit the result), or use --jail bwrap", cmdName, joined, joined)
+	}
 	tmp, err := vendorStagingDir()
 	if err != nil {
 		return "", noop, fmt.Errorf("%s: vendor staging dir: %w", cmdName, err)
@@ -193,8 +203,8 @@ func appendVendorConfig(stageDir, rel, stdout string) error {
 	if rerr != nil && !errors.Is(rerr, fs.ErrNotExist) {
 		return rerr
 	}
-	declared := tomlTablesDeclared(string(existing))
-	for _, t := range tomlTablesDeclared(stdout) {
+	declared := tomllite.TablesDeclared(string(existing))
+	for _, t := range tomllite.TablesDeclared(stdout) {
 		if slices.Contains(declared, t) {
 			return fmt.Errorf("%s already declares [%s]; vendoring needs to add its own [%s], and corral will not rewrite a configuration file it does not own. Remove that table, or vendor the repository yourself before auditing it", filepath.ToSlash(rel), t, t)
 		}
@@ -215,69 +225,6 @@ func appendVendorConfig(stageDir, rel, stdout string) error {
 		return err
 	}
 	return f.Close()
-}
-
-// tomlTablesDeclared is every table a TOML text opens, normalised (segments
-// unquoted, spaces dropped): `[source."crates-io"]` and
-// `source.crates-io.replace-with = …` both declare source.crates-io. Line-
-// based on purpose — it decides only whether to refuse, so a miss costs the
-// toolchain's own rejection, never a silent merge.
-func tomlTablesDeclared(text string) []string {
-	var out []string
-	cur := "" // the table the following keys belong to
-	for _, line := range strings.Split(text, "\n") {
-		line = strings.TrimSpace(stripTOMLComment(line))
-		switch {
-		case line == "":
-			continue
-		case strings.HasPrefix(line, "[[") && strings.HasSuffix(line, "]]"):
-			cur = normTOMLKey(line[2 : len(line)-2]) // an array of tables is never a duplicate
-		case strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]"):
-			cur = normTOMLKey(line[1 : len(line)-1])
-			out = append(out, cur)
-		default:
-			k, _, isKV := strings.Cut(line, "=")
-			if !isKV {
-				continue
-			}
-			key := normTOMLKey(k)
-			if cur != "" {
-				key = cur + "." + key
-			}
-			segs := strings.Split(key, ".")
-			for n := 2; n < len(segs); n++ { // a dotted key a.b.c opens table a.b (a is opened by its own header or key)
-				out = append(out, strings.Join(segs[:n], "."))
-			}
-		}
-	}
-	return out
-}
-
-// stripTOMLComment drops a trailing # comment, ignoring a # inside a quoted
-// string.
-func stripTOMLComment(line string) string {
-	var quote rune
-	for i, r := range line {
-		switch {
-		case quote != 0 && r == quote:
-			quote = 0
-		case quote == 0 && (r == '"' || r == '\''):
-			quote = r
-		case quote == 0 && r == '#':
-			return line[:i]
-		}
-	}
-	return line
-}
-
-// normTOMLKey normalises a dotted TOML key: each segment trimmed and
-// unquoted, rejoined with ".".
-func normTOMLKey(k string) string {
-	segs := strings.Split(k, ".")
-	for i, sg := range segs {
-		segs[i] = strings.Trim(strings.TrimSpace(sg), `"'`)
-	}
-	return strings.Join(segs, ".")
 }
 
 // copyTreeSkipGit recursively copies src into an existing dst, skipping .git,

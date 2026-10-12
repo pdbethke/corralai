@@ -55,22 +55,35 @@ func (e ErrSnapToolchain) Error() string {
 		e.Command, e.Path, e.Command)
 }
 
-// toolchainBindFor resolves cmd0 on the HOST and returns the read-only bind the
-// jail needs in order to run it, or a zero Bind when the binary already lives
+// toolchainBindsFor resolves cmd0 on the HOST and returns the read-only binds
+// the jail needs in order to run it, or none when the binary already lives
 // under a path the jail mounts anyway (/usr, which covers apt and /usr/local).
 //
-// A command that cannot be resolved at all returns a zero Bind and no error:
+// A command that cannot be resolved at all returns no binds and no error:
 // the jail will fail on its own with the runner's real message, which is a
 // better diagnosis than a guess from here. That is deliberate — this function
 // exists to REMOVE a misleading failure, not to add one.
-func toolchainBindFor(cmd0 string) (sandbox.Bind, error) {
+//
+// No bind ever covers a credentials store (credentialStores). Two of the
+// toolchain roots below keep one beside the toolchain: rustup's ~/.cargo
+// holds `cargo login`'s token, RubyGems' ~/.gem holds the push key. Every
+// jail reads these binds — the networked vendoring step, which runs
+// repository-controlled programs, and the graded runs, whose output reaches
+// the ledger, which can be public — so such a root is narrowed to the one
+// child directory the binary lives in (~/.cargo/bin, ~/.gem/ruby), and a
+// root that cannot be narrowed safely is refused. A rustup proxy is ALWAYS
+// narrowed this way, credentials file or not: CARGO_HOME is where `cargo
+// login` will write one, and its git/checkouts already hold private git
+// dependencies' sources; the proxy needs only its bin directory and the
+// rustup home.
+func toolchainBindsFor(cmd0 string) ([]sandbox.Bind, error) {
 	cmd0 = strings.TrimSpace(cmd0)
 	if cmd0 == "" {
-		return sandbox.Bind{}, nil
+		return nil, nil
 	}
 	p, err := exec.LookPath(cmd0)
 	if err != nil {
-		return sandbox.Bind{}, nil
+		return nil, nil
 	}
 	real, err := filepath.EvalSymlinks(p)
 	if err != nil {
@@ -82,26 +95,98 @@ func toolchainBindFor(cmd0 string) (sandbox.Bind, error) {
 	// with an explanation rather than binding /snap and failing later for a
 	// reason the operator cannot act on.
 	if strings.HasPrefix(p, "/snap/") || real == "/usr/bin/snap" || strings.HasPrefix(real, "/snap/") {
-		return sandbox.Bind{}, ErrSnapToolchain{Command: cmd0, Path: p}
+		return nil, ErrSnapToolchain{Command: cmd0, Path: p}
 	}
 
 	// Already inside what the jail mounts.
 	if strings.HasPrefix(real, "/usr/") {
-		return sandbox.Bind{}, nil
+		return nil, nil
 	}
 
 	root := toolchainRoot(real)
 	if root == "" {
-		return sandbox.Bind{}, nil
+		return nil, nil
 	}
 	if narrowed, refused := narrowHomeRoot(real, root); refused != "" {
-		return sandbox.Bind{}, ErrUnbindableToolchain{Command: cmd0, Path: real, Root: root, Why: refused}
+		return nil, ErrUnbindableToolchain{Command: cmd0, Path: real, Root: root, Why: refused}
 	} else if narrowed != "" {
 		root = narrowed
 	}
+	rustup := filepath.Base(real) == "rustup"
+	if store := credentialStoreIn(root); store != "" || rustup {
+		child := childOnPath(root, real)
+		if child == "" || credentialStoreIn(child) != "" {
+			why := "it holds a credentials store (" + store + ") and the toolchain cannot be bound without it"
+			if store == "" {
+				why = "a rustup proxy must be bound by its bin directory, never the whole CARGO_HOME, and it is not in one"
+			}
+			return nil, ErrUnbindableToolchain{Command: cmd0, Path: real, Root: root, Why: why}
+		}
+		root = child
+	}
 	// Bound at the SAME absolute path, so the operator's own PATH keeps
 	// working inside the jail without rewriting the command.
-	return sandbox.Bind{Host: root, Target: root}, nil
+	binds := []sandbox.Bind{{Host: root, Target: root}}
+	if rh := rustupHomeFor(real); rh != "" && rh != root {
+		binds = append(binds, sandbox.Bind{Host: rh, Target: rh})
+	}
+	return binds, nil
+}
+
+// credentialStores are the file names toolchains keep secrets under inside
+// their own install root: cargo's credentials.toml (and the extensionless
+// legacy credentials it still reads), RubyGems' credentials. Matched by name
+// directly in a candidate bind root.
+var credentialStores = []string{"credentials.toml", "credentials"}
+
+// credentialStoreIn names the credentials store directly inside dir, or "".
+func credentialStoreIn(dir string) string {
+	for _, n := range credentialStores {
+		if _, err := os.Lstat(filepath.Join(dir, n)); err == nil { // #nosec G703 -- existence check only; dir comes from the operator's own PATH resolution, and nothing is opened
+			return filepath.Join(dir, n)
+		}
+	}
+	return ""
+}
+
+// childOnPath is the child of root that real lives under (root/bin for
+// root/bin/cargo), or "" when real sits directly in root.
+func childOnPath(root, real string) string {
+	rel, err := filepath.Rel(root, real)
+	if err != nil || rel == "." || strings.HasPrefix(rel, "..") {
+		return ""
+	}
+	first, rest, _ := strings.Cut(rel, string(filepath.Separator))
+	if rest == "" {
+		return ""
+	}
+	return filepath.Join(root, first)
+}
+
+// rustupHomeFor is the rustup home a rustup proxy needs beside its own bin
+// directory (the proxy is a symlink to the rustup binary; the toolchains it
+// dispatches to live in RUSTUP_HOME, default ~/.rustup), or "" when real is
+// not rustup or that home is not a bindable directory. Inside the jail the
+// proxy finds it only through RUSTUP_HOME, which the jail does not set yet
+// (Task 4's pin); the bind is what that pin will point at.
+func rustupHomeFor(real string) string {
+	if filepath.Base(real) != "rustup" {
+		return ""
+	}
+	rh := os.Getenv("RUSTUP_HOME")
+	if rh == "" {
+		home, err := os.UserHomeDir()
+		if err != nil || home == "" {
+			return ""
+		}
+		rh = filepath.Join(home, ".rustup")
+	}
+	rh = filepath.Clean(rh)
+	fi, err := os.Stat(rh) // #nosec G703 -- stat only; rh is the operator's RUSTUP_HOME or ~/.rustup
+	if err != nil || !fi.IsDir() || toolchainBoundaries()[rh] || credentialStoreIn(rh) != "" {
+		return ""
+	}
+	return rh
 }
 
 // ErrUnbindableToolchain is returned when the runner resolves to a directory

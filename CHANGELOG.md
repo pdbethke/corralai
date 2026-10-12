@@ -19,22 +19,41 @@ history of any release, `git log v0.3.4..v0.3.5`.
   will notice:
   - It needs a working sandbox. Without one, corral refuses and says to
     vendor the module yourself; it never falls back to the host.
+  - It is refused under `--jail container`, which used to work: the
+    container's root user can neither read the staging copy nor write
+    `vendor/` into it. Commit `vendor/` yourself, or use `--jail bwrap`.
   - It starts from an empty module cache every time, so it downloads every
     dependency; your own `GOPATH`/`GOMODCACHE` are not used.
-  - Proxy settings (`HTTP(S)_PROXY`, `NO_PROXY`) and `GOPROXY`, `GOSUMDB`,
-    `GONOSUMDB`, `GOPRIVATE`, `GONOPROXY`, `GOINSECURE` and `GOFLAGS` are
-    passed through. Your git and netrc credentials are not, so a private
-    module that needs them can no longer be vendored by corral: vendor it
-    yourself first.
-  - `GOTOOLCHAIN` is `local`, as in every graded run: a `go.mod` that needs
-    a newer Go than the installed one fails here, with Go's own message,
-    instead of downloading a toolchain.
+  - Passed through: the proxy variables (`HTTP_PROXY`, `HTTPS_PROXY`,
+    `NO_PROXY`, `ALL_PROXY`, in either case) and Go's module settings
+    (`GOPROXY`, `GOSUMDB`, `GONOSUMDB`, `GONOSUMCHECK`, `GOPRIVATE`,
+    `GONOPROXY`, `GOINSECURE`, `GOFLAGS`). Your git and netrc credentials
+    are not, so a private module that needs them can no longer be vendored
+    by corral: vendor it yourself first.
+  - On Linux backends `GOTOOLCHAIN` is `local`, as in every graded run: a
+    `go.mod` that needs a newer Go than the installed one fails here, with
+    Go's own message, instead of downloading a toolchain. The macOS backend
+    does not pin it, so there `go` may still download one.
+  - What the vendoring step can reach, exactly: on Linux it shares the
+    host's network, so services listening on the host's loopback and
+    abstract unix sockets are reachable from it; proxy variables are passed
+    as they are, including any credential inside a proxy URL; on macOS the
+    step may also look up any mach service. Of your home directory it can
+    read only its own staging copy and the toolchain it runs.
   - The throwaway copy lives under your user cache directory
     (`~/.cache/corral/vendor` on Linux), not the system temporary directory.
     This fixes a bug: a `go.work` file in the temporary directory — which
     any local user can create — made every Go vendoring step fail with
     "cannot be run in workspace mode".
-
+- **The sandbox no longer mounts a toolchain directory that holds a
+  credentials store.** A toolchain installed under `~/.cargo` (rustup) or
+  `~/.gem` was mounted whole, read-only, into every sandboxed run — with
+  `cargo login`'s `credentials.toml` or RubyGems' `credentials` inside it,
+  where the audited code could read it and print it into the record. Now
+  only the directory the runner lives in is mounted (`~/.cargo/bin`, or
+  `~/.gem/ruby`), plus rustup's own toolchain directory for a rustup
+  `cargo`. A layout that cannot be narrowed that way is refused with a
+  message, before the run.
 - **The directory walkers that skip dependency trees now share one
   definition, declared by the language plugins.** `corral review`'s scope
   loading and planning, the repository reader the brain and the gate use,

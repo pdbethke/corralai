@@ -48,3 +48,17 @@ func TestFetchEnvCarriesRoutesNotLocationsOrSecrets(t *testing.T) {
 		}
 	}
 }
+
+// TestFetchEnvDisablesRustupAutoInstall: in the networked step a repository's
+// rust-toolchain.toml must not make the rustup proxy download and run a
+// toolchain of the repository's choosing. RUSTUP_AUTO_INSTALL=0 (rustup
+// >= 1.28; measured on 1.28.2: "toolchain '1.80.0-…' is not installed"
+// instead of "syncing channel updates") turns that into a refusal. The
+// operator's own value never overrides it.
+func TestFetchEnvDisablesRustupAutoInstall(t *testing.T) {
+	t.Setenv("RUSTUP_AUTO_INSTALL", "1")
+	env := FetchEnv()
+	if !slices.Contains(env, "RUSTUP_AUTO_INSTALL=0") || slices.Contains(env, "RUSTUP_AUTO_INSTALL=1") {
+		t.Errorf("FetchEnv must pin RUSTUP_AUTO_INSTALL=0; got %v", env)
+	}
+}

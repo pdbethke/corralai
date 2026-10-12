@@ -155,10 +155,19 @@ var fetchVars = []string{
 	"GOPROXY", "GOSUMDB", "GONOSUMDB", "GONOSUMCHECK", "GOPRIVATE", "GONOPROXY", "GOINSECURE", "GOFLAGS",
 }
 
-// FetchEnv is MinimalEnv plus fetchVars: the environment for the ONE kind of
-// jailed command that has the network — a lang.Vendorer step fetching a
-// repository's dependencies (see adequacy.RunFetchStep). Graded runs never
-// use it: they get MinimalEnv and no network.
+// fetchPins are set, never inherited, in the networked step.
+//
+// RUSTUP_AUTO_INSTALL=0: a rustup proxy otherwise DOWNLOADS and runs whatever
+// toolchain the repository's rust-toolchain.toml names, and in this step it
+// has the network to do it. Disabled, the proxy refuses ("toolchain '…' is
+// not installed"). The variable exists from rustup 1.28 (measured on 1.28.2);
+// an older rustup ignores it and would still install.
+var fetchPins = []string{"RUSTUP_AUTO_INSTALL=0"}
+
+// FetchEnv is MinimalEnv plus fetchVars plus fetchPins: the environment for
+// the ONE kind of jailed command that has the network — a lang.Vendorer step
+// fetching a repository's dependencies (see adequacy.RunFetchStep). Graded
+// runs never use it: they get MinimalEnv and no network.
 func FetchEnv() []string {
 	env := MinimalEnv()
 	for _, k := range fetchVars {
@@ -166,7 +175,7 @@ func FetchEnv() []string {
 			env = append(env, k+"="+v)
 		}
 	}
-	return env
+	return append(env, fetchPins...)
 }
 
 // ScrubbedEnviron is the host environment WITHOUT corral's own secrets: every

@@ -311,11 +311,14 @@ func toolchainBinds(cmd []string) ([]sandbox.Bind, error) {
 	var binds []sandbox.Bind
 	seen := map[string]bool{}
 	for _, interp := range lang.InterpretersIn(cmd) {
-		tb, terr := toolchainBindFor(interp)
+		tbs, terr := toolchainBindsFor(interp)
 		if terr != nil {
 			return nil, terr
 		}
-		if tb.Host != "" && !seen[tb.Host] {
+		for _, tb := range tbs {
+			if seen[tb.Host] {
+				continue
+			}
 			seen[tb.Host] = true
 			binds = append(binds, tb)
 			// pip --user's shim in ~/.local/bin imports from ~/.local/lib;

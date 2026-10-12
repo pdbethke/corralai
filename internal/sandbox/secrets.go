@@ -42,19 +42,68 @@ func CredentialStoreIn(dir string) string {
 	return ""
 }
 
-// IsCargoHome reports whether dir is a CARGO_HOME: it holds cargo's bin/ with
-// a rustup proxy or cargo in it. A cargo home keeps far more than credentials
-// beside its bin/ — registry tokens in config.toml, private git checkouts in
-// git/, cargo-binstall's binstall.toml — under names a list will never
-// finish, so it is judged by its layout, not by its file names: of a cargo
-// home, a jail may see bin/ and nothing else.
+// cargoMarkers are files and directories only cargo (or rustup's installer)
+// writes into a CARGO_HOME: `cargo install`'s ledgers, the package-cache
+// lock, the registry cache, and rustup's env script. bin/cargo or bin/rustup
+// alone is NOT one — every install prefix has a bin/, and a standalone Rust
+// install, /usr/local or Homebrew's prefix can hold bin/cargo.
+var cargoMarkers = []string{".crates.toml", ".crates2.json", ".package-cache", "registry", "env"}
+
+// OperatorCargoHome is the operator's CARGO_HOME: $CARGO_HOME, else
+// ~/.cargo, cleaned. "" when neither can be determined.
+func OperatorCargoHome() string {
+	if ch := os.Getenv("CARGO_HOME"); ch != "" {
+		if abs, err := filepath.Abs(ch); err == nil {
+			return abs
+		}
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return ""
+	}
+	return filepath.Join(home, ".cargo")
+}
+
+// IsCargoHome reports whether dir is a CARGO_HOME. A cargo home keeps far
+// more than credentials beside its bin/ — registry tokens in config.toml,
+// private git checkouts in git/, binstall.toml — under names a list will
+// never finish, so it is judged by what it IS, not by its file names: of a
+// cargo home, a jail may see bin/ and nothing else.
+//
+//   - A directory with lib/ is an install PREFIX (/usr/local, Homebrew's
+//     prefix and Cellar kegs, a standalone /opt/rust holding rustc's
+//     libraries) and is NEVER a cargo home, whatever its bin/ holds. A cargo
+//     home has no lib/.
+//   - The operator's own CARGO_HOME (OperatorCargoHome) is one by
+//     definition — including the distribution-cargo layout where ~/.cargo
+//     holds only `cargo install`ed tools.
+//   - Any other directory is one only when it carries a cargo marker
+//     (cargoMarkers).
 func IsCargoHome(dir string) bool {
-	for _, n := range []string{"rustup", "cargo"} {
-		if fi, err := os.Lstat(filepath.Join(dir, "bin", n)); err == nil && !fi.IsDir() { // #nosec G703 -- existence check only, see CredentialStoreIn
+	dir = filepath.Clean(dir)
+	if fi, err := os.Stat(filepath.Join(dir, "lib")); err == nil && fi.IsDir() { // #nosec G703 -- existence check only on a toolchain path the operator's own PATH/env resolved
+		return false
+	}
+	if dir == OperatorCargoHome() {
+		return true
+	}
+	for _, m := range cargoMarkers {
+		if _, err := os.Lstat(filepath.Join(dir, m)); err == nil { // #nosec G703 -- existence check only, see above
 			return true
 		}
 	}
 	return false
+}
+
+// CargoHomeOf is the nearest ancestor of path that IsCargoHome, or "". The
+// one walk both consumers use to find the cargo home a binary belongs to.
+func CargoHomeOf(path string) string {
+	for d := filepath.Dir(filepath.Clean(path)); d != "/" && d != "." && d != filepath.Dir(d); d = filepath.Dir(d) {
+		if IsCargoHome(d) {
+			return d
+		}
+	}
+	return ""
 }
 
 // SecretEntries is what of the toolchain root dir a jail must never see:
@@ -107,29 +156,44 @@ func secretMasks(trees []string) []mask {
 		if real, rerr := filepath.EvalSymlinks(p); rerr == nil {
 			p = real
 		}
-		for d := filepath.Dir(p); d != "/" && d != "."; d = filepath.Dir(d) {
-			if IsCargoHome(d) {
-				roots = append(roots, d)
-				break
-			}
+		if ch := CargoHomeOf(p); ch != "" {
+			roots = append(roots, ch)
 		}
 	}
 	seen := map[string]bool{}
 	var out []mask
 	for _, root := range roots {
-		if seen[root] || !insideAny(root, trees) {
+		if seen[root] || !insideAny(root, trees) || len(SecretEntries(root)) == 0 {
 			continue
 		}
 		seen[root] = true
 		for _, s := range SecretEntries(root) {
-			fi, err := os.Lstat(s) // #nosec G703 -- type check only, see CredentialStoreIn
-			if err != nil {
-				continue
+			if m, ok := maskFor(s, trees); ok && !seen[m.Path] {
+				seen[m.Path] = true
+				out = append(out, m)
 			}
-			out = append(out, mask{Path: s, Dir: fi.IsDir()})
 		}
 	}
 	return out
+}
+
+// maskFor is the mask covering entry, classified by what it RESOLVES to: an
+// isolator mounts a file over a file and a tmpfs over a directory, and the
+// wrong one makes the jail unstartable. A symlinked entry is masked at its
+// target when that target lies inside a whole-bound tree; a target outside
+// every such tree, or a dangling link, is skipped — it is not reachable
+// through the tree, and bwrap cannot create a mountpoint for it on a
+// read-only mount.
+func maskFor(entry string, trees []string) (mask, bool) {
+	target, err := filepath.EvalSymlinks(entry)
+	if err != nil || !insideAny(target, trees) {
+		return mask{}, false
+	}
+	fi, err := os.Stat(target) // #nosec G703 -- type check only, see CredentialStoreIn
+	if err != nil {
+		return mask{}, false
+	}
+	return mask{Path: target, Dir: fi.IsDir()}, true
 }
 
 // insideAny reports whether p lies strictly inside one of trees.

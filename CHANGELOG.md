@@ -54,12 +54,19 @@ history of any release, `git log v0.3.4..v0.3.5`.
   `cargo login`'s `credentials.toml`, registry tokens in `config.toml`,
   private git checkouts and RubyGems' `credentials` inside it, where the
   audited code could read them and print them into the record. Now:
-  - of a cargo home, only `bin/` is mounted (plus rustup's toolchain
+  - a cargo home is mounted as its `bin/` alone (plus rustup's toolchain
     directory when `bin/` holds rustup), whichever of its programs runs the
-    suite and whether or not you have run `cargo login`;
+    suite and whether or not you have run `cargo login`. A cargo home is
+    your `CARGO_HOME` (`~/.cargo` when unset), or any directory holding one
+    of cargo's own files (`.crates.toml`, `.crates2.json`, `.package-cache`,
+    `registry/`, or rustup's `env`). A directory with a `lib/` is an install
+    prefix, never a cargo home: `/usr/local`, Homebrew's prefix or a
+    standalone Rust install are mounted as before;
   - of `~/.gem`, only the directory the runner lives in;
-  - a cargo home inside `/usr` (the official Rust container image puts one
-    at `/usr/local/cargo`) is covered in every sandbox except `bin/`;
+  - a cargo home inside `/usr` (and, on macOS, `/opt/homebrew`), found
+    through `CARGO_HOME` or the `cargo` on your `PATH` — the official Rust
+    container image puts one at `/usr/local/cargo` — is hidden in every
+    sandbox except its `bin/`;
   - a `RUSTUP_HOME` that is not a toolchain directory (for example
     `~/.config`) is refused with a message instead of mounted.
 - **The directory walkers that skip dependency trees now share one

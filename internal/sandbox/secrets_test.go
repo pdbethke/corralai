@@ -76,3 +76,69 @@ func TestSecretMasksIgnoreACargoHomeOutsideTheTree(t *testing.T) {
 		t.Errorf("masks = %+v, want none", got)
 	}
 }
+
+// TestAnInstallPrefixIsNeverACargoHome (R1): /usr/local with a standalone
+// cargo in bin/, plus lib/, go/ and Debian's man -> share/man symlink, is an
+// install prefix. Nothing in it is masked.
+func TestAnInstallPrefixIsNeverACargoHome(t *testing.T) {
+	usr := t.TempDir()
+	local := filepath.Join(usr, "local")
+	for _, d := range []string{"bin", "lib/python3/dist-packages", "go/bin", "share/man"} {
+		if err := os.MkdirAll(filepath.Join(local, d), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(local, "bin", "cargo"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("share/man", filepath.Join(local, "man")); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CARGO_HOME", "")
+	t.Setenv("PATH", filepath.Join(local, "bin")+":/usr/bin:/bin")
+	if IsCargoHome(local) {
+		t.Error("a directory with lib/ is an install prefix, never a cargo home")
+	}
+	if got := secretMasks([]string{usr}); len(got) != 0 {
+		t.Errorf("masks = %+v, want none", got)
+	}
+}
+
+// TestCargoHomeMarkers: outside the operator's own CARGO_HOME, a directory is
+// a cargo home only when it carries one of cargo's (or rustup's) own markers
+// — never by bin/cargo alone.
+func TestCargoHomeMarkers(t *testing.T) {
+	t.Setenv("CARGO_HOME", "")
+	t.Setenv("HOME", t.TempDir())
+	for marker, isDir := range map[string]bool{".crates.toml": false, ".crates2.json": false, ".package-cache": false, "registry": true, "env": false} {
+		d := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(d, "bin"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if isDir {
+			if err := os.Mkdir(filepath.Join(d, marker), 0o755); err != nil {
+				t.Fatal(err)
+			}
+		} else if err := os.WriteFile(filepath.Join(d, marker), nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if !IsCargoHome(d) {
+			t.Errorf("%s marks a cargo home", marker)
+		}
+	}
+	bare := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(bare, "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bare, "bin", "cargo"), nil, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if IsCargoHome(bare) {
+		t.Error("bin/cargo alone does not make a cargo home")
+	}
+	op := t.TempDir()
+	t.Setenv("CARGO_HOME", op)
+	if !IsCargoHome(op) {
+		t.Error("the operator's CARGO_HOME is a cargo home by definition")
+	}
+}

@@ -70,8 +70,9 @@ func (e ErrSnapToolchain) Error() string {
 // repository-controlled programs, and the graded runs, whose output reaches
 // the ledger, which can be public. So:
 //
-//   - a cargo home (sandbox.IsCargoHome — judged by layout, never by file
-//     name) is ALWAYS bound as its bin/ alone, plus the rustup home when bin/
+//   - a cargo home (sandbox.IsCargoHome: the operator's CARGO_HOME, or a
+//     directory carrying cargo's own markers — never an install prefix with
+//     lib/) is ALWAYS bound as its bin/ alone, plus the rustup home when bin/
 //     holds a rustup proxy, whichever of its binaries was named (a symlinked
 //     or hard-linked proxy, cargo-nextest, anything `cargo install`ed);
 //   - any other root holding a credentials store (RubyGems' ~/.gem) is
@@ -113,12 +114,17 @@ func toolchainBindsFor(cmd0 string) ([]sandbox.Bind, error) {
 	} else if narrowed != "" {
 		root = narrowed
 	}
+	ch := sandbox.CargoHomeOf(real)
+	if ch != "" && ch != root && !strings.HasPrefix(ch, root+string(filepath.Separator)) {
+		ch = "" // a cargo home ABOVE the toolchain root is not what this bind would expose
+	}
 	switch {
-	case sandbox.IsCargoHome(root):
-		// A cargo home is narrowed by its LAYOUT, whatever binary was named
+	case ch != "":
+		// A cargo home is narrowed by what it IS, whatever binary was named
 		// and whether or not a credentials file exists yet: beside bin/ it
 		// keeps registry tokens in config.toml, private checkouts in git/,
 		// binstall.toml — names no list finishes (sandbox.IsCargoHome).
+		root = ch
 		bin := filepath.Join(root, "bin")
 		if childOnPath(root, real) != bin {
 			return nil, ErrUnbindableToolchain{Command: cmd0, Path: real, Root: root,

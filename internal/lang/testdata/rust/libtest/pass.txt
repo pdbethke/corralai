@@ -13,7 +13,7 @@
    Compiling zerocopy v0.8.62
    Compiling getrandom v0.1.16
    Compiling cfg-if v1.0.5
-   Compiling byteorder v1.5.0 (/tmp/claude-1000/-home-pdbethke-PycharmProjects-corralai/81284ed5-c06a-4f9d-9cfc-4b897eee1dbf/scratchpad/byteorder-cap)
+   Compiling byteorder v1.5.0 (/work/byteorder-cap)
    Compiling rand_core v0.5.1
    Compiling ppv-lite86 v0.2.21
    Compiling rand_chacha v0.2.2

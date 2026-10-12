@@ -1,4 +1,4 @@
-   Compiling byteorder v1.5.0 (/tmp/claude-1000/-home-pdbethke-PycharmProjects-corralai/81284ed5-c06a-4f9d-9cfc-4b897eee1dbf/scratchpad/byteorder-cap)
+   Compiling byteorder v1.5.0 (/work/byteorder-cap)
 error[E0425]: cannot find value `not_defined_anywhere` in this scope
     --> src/lib.rs:1893:60
      |

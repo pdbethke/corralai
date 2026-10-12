@@ -16,13 +16,17 @@ const (
 	rustGrammarNextest                    // `cargo nextest run`
 )
 
-// runnerRow is the ONE runner decision for a Rust audit, made once from the
-// operator's test command with cmdHasWord and read by everything that runs a
-// test. Nothing else re-tests argv for "nextest": two places answering the
-// same question is how a preflight, a single-test selector and a failure
-// parser come to disagree about which runner the suite uses.
+// runnerRow is the ONE runner decision made from the operator's test command
+// with cmdHasWord: which binary must be on PATH (read by Preflight). Nothing
+// else re-tests argv for "nextest": two places answering the same question is
+// how a preflight and a test selector come to disagree about which runner the
+// suite uses.
+//
+// The output grammar is deliberately NOT on the row. Its one production
+// reader, FirstFailure, is handed the output and never the command, so it
+// reads the grammar off the output (rustGrammarOf); a grammar field here was
+// read only by tests, which is a value production never consults.
 type runnerRow struct {
-	grammar rustGrammar
 	// preflightBin is the binary that must be on PATH.
 	preflightBin string
 }
@@ -35,9 +39,9 @@ func rustRunner(testCmd []string) runnerRow {
 		if len(testCmd) > 0 && filepath.Base(testCmd[0]) == "cargo-nextest" {
 			bin = testCmd[0]
 		}
-		return runnerRow{grammar: rustGrammarNextest, preflightBin: bin}
+		return runnerRow{preflightBin: bin}
 	}
-	return runnerRow{grammar: rustGrammarLibtest, preflightBin: preflightBin(testCmd, "cargo")}
+	return runnerRow{preflightBin: preflightBin(testCmd, "cargo")}
 }
 
 // rustRun is what one parse of a runner's output established.

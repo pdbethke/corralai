@@ -3,7 +3,10 @@ command:  cargo nextest run -p fuzzy_match      (flaky.txt: ... --retries 1)   s
 cargo:    cargo 1.92.0 (344c4567c 2025-10-21), toolchain pinned by the repo's rust-toolchain.toml
 nextest:  cargo-nextest 0.9.148 (cd1d6d546 2026-10-07)
 source:   warpdotdev/warp (committed HEAD of the founder's fork, cloned --no-hardlinks to a scratch dir) SHA 325d4d4701b41feb272487e89a6cf02bfba9f194, crate crates/fuzzy_match (tests via #[path = "fuzzy_tests.rs"])
-trimmed:  nothing. Paths in the output are the scratch clone's.
+trimmed:  nothing removed. Machine paths REDACTED after capture (this repository is public), mechanically, with
+          sed -e 's#<session scratch dir>/#/work/#g' -e 's#/home/<user>/.cargo/#~/.cargo/#g' -e 's#/home/<user>/.rustup/#~/.rustup/#g'
+          so the scratch copy reads as /work/warp-cap and the operator's cargo and rustup homes as ~/.cargo and ~/.rustup.
+          Every other byte is as captured; the parsers read only FAIL/FLAKY/---- lines, which carry no path.
 pass.txt           the unmodified crate
 fail.txt           planted: contains_wildcards drops the '?' arm (an assert! fails)
 panic.txt          planted: a #[test] that unwraps None

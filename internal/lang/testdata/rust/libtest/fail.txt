@@ -1,4 +1,4 @@
-   Compiling byteorder v1.5.0 (/tmp/claude-1000/-home-pdbethke-PycharmProjects-corralai/81284ed5-c06a-4f9d-9cfc-4b897eee1dbf/scratchpad/byteorder-cap)
+   Compiling byteorder v1.5.0 (/work/byteorder-cap)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.44s
      Running unittests src/lib.rs (target/debug/deps/byteorder-fb1015e6e57065f7)
 
@@ -688,23 +688,23 @@ failures:
 
 ---- stdtests::prop_ext_i16::big_endian stdout ----
 
-thread 'stdtests::prop_ext_i16::big_endian' panicked at /home/pdbethke/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/quickcheck-0.9.2/src/tester.rs:178:28:
+thread 'stdtests::prop_ext_i16::big_endian' panicked at ~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/quickcheck-0.9.2/src/tester.rs:178:28:
 [quickcheck] TEST FAILED. Arguments: (1)
 note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
 
 ---- stdtests::prop_ext_u16::big_endian stdout ----
 
-thread 'stdtests::prop_ext_u16::big_endian' panicked at /home/pdbethke/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/quickcheck-0.9.2/src/tester.rs:178:28:
+thread 'stdtests::prop_ext_u16::big_endian' panicked at ~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/quickcheck-0.9.2/src/tester.rs:178:28:
 [quickcheck] TEST FAILED. Arguments: (1)
 
 ---- test::prop_i16::big_endian stdout ----
 
-thread 'test::prop_i16::big_endian' panicked at /home/pdbethke/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/quickcheck-0.9.2/src/tester.rs:178:28:
+thread 'test::prop_i16::big_endian' panicked at ~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/quickcheck-0.9.2/src/tester.rs:178:28:
 [quickcheck] TEST FAILED. Arguments: (1)
 
 ---- test::prop_u16::big_endian stdout ----
 
-thread 'test::prop_u16::big_endian' panicked at /home/pdbethke/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/quickcheck-0.9.2/src/tester.rs:178:28:
+thread 'test::prop_u16::big_endian' panicked at ~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/quickcheck-0.9.2/src/tester.rs:178:28:
 [quickcheck] TEST FAILED. Arguments: (1)
 
 

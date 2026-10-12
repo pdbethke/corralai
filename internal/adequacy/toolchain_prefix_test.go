@@ -56,8 +56,8 @@ func TestDistroCargoInstalledToolsNarrowToBin(t *testing.T) {
 }
 
 // TestBrewPrefixWithRustStillBindsItsRunners (R3): a Homebrew-shaped prefix
-// (~/.linuxbrew here; /opt/homebrew on macOS) that has rust installed is an
-// install prefix — it has lib/ — never a cargo home. Its other runners
+// (~/.linuxbrew here; /opt/homebrew on macOS) that has rust installed is not
+// CARGO_HOME or ~/.cargo, so it is never a cargo home. Its other runners
 // (node, resolving into Cellar/) and its cargo still bind the prefix.
 func TestBrewPrefixWithRustStillBindsItsRunners(t *testing.T) {
 	home := t.TempDir()
@@ -129,9 +129,8 @@ func TestUvLocalBinIsNotACargoHome(t *testing.T) {
 }
 
 // TestOperatorCargoHomeWithStrayLibNarrowsToBin (S5): ~/.cargo is the
-// operator's CARGO_HOME by definition, and that precedes the lib/ rule: a
-// stray lib/ does not turn it into a prefix bound whole with its registry
-// token and checkouts.
+// operator's cargo home by definition, whatever it holds: a stray lib/ does
+// not make it something bound whole with its registry token and checkouts.
 func TestOperatorCargoHomeWithStrayLibNarrowsToBin(t *testing.T) {
 	home := t.TempDir()
 	layout(t, home, map[string]string{

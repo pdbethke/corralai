@@ -11,6 +11,39 @@ history of any release, `git log v0.3.4..v0.3.5`.
 
 ## [Unreleased]
 
+- **`certify --repo` now recognises `.rs` files and reports them as not
+  audited yet.** corral cannot audit Rust today: a test for a Rust file
+  would be written over the file itself, because its tests live inside it.
+  Each `.rs` source is listed as `test-landing-not-built`, never as a
+  candidate, and the language profile shows it as
+  `N not auditable yet (test landing not built)`. It never takes a `--top`
+  slot, never counts as a second language for the selection and coverage
+  pre-flight passes (a Python repository with a Rust extension keeps its
+  Python test selection), and never makes corral prepare a sandbox or
+  download Rust dependencies.
+- **On `--diff-base`, a changed `.rs` file does not fail the gate.** It is
+  treated as a changed file in a language corral does not audit, and is
+  named in the scan output:
+  `changed but not audited: <path> (test-landing-not-built — …)`. A pull
+  request that changes only Rust code, or only a Rust test, reports
+  NOTHING IN SCOPE and exits 0 — that change was not audited, and the line
+  above says so.
+- **`certify --local` and `certify --adversarial` print how they paired the
+  test, for every language:** a new `  paired by <label>: <path>` line
+  (`sibling`, `parallel-tree`, `flat-root`, … or `search`), where only a
+  search used to be disclosed. `corral doctor`'s pairing line gains the
+  same label in parentheses.
+- **`certify --adversarial` and `corral doctor` refuse a `.rs` file up
+  front.** `--adversarial` used to read the file and its test and send
+  both to the brain, which then refused; it now refuses before reading
+  anything. `doctor` used to report such a file `[ok]`; it now says it
+  pairs but cannot be audited yet.
+- **A source file cannot name a test outside the repository.** A Rust
+  `#[path = "…"]` test-module declaration is followed only while it stays
+  inside the repository root (the working directory, for a `--code` given
+  on the command line, absolute or not), checked after resolving symlinks.
+  One that leaves it is never read, and the "no test found" message names
+  it as refused rather than saying the file declares no test.
 - **`go mod vendor` now runs inside the sandbox, never on the host.** When a
   Go module has no `vendor/`, corral vendors a throwaway copy before the
   audit. That step used to run directly on your machine; it now runs in the
@@ -62,9 +95,13 @@ history of any release, `git log v0.3.4..v0.3.5`.
     one, so `/usr/bin`, `/usr/local`, `~/.local/bin`, Debian's
     `/usr/share/cargo`, Homebrew's prefix and its kegs (the `rustup` keg
     included) and a standalone Rust install are mounted as before. The cost:
-    a second cargo home that `CARGO_HOME` does not name — an image's
-    `/usr/local/cargo` with `CARGO_HOME` unset — is treated as an ordinary
-    toolchain directory, so set `CARGO_HOME` to the one your suite uses;
+    a second cargo home that `CARGO_HOME` does not name gets none of this.
+    Inside `/usr` (or `/opt/homebrew` on macOS) — an image's
+    `/usr/local/cargo` with `CARGO_HOME` unset — **nothing** in it is
+    hidden: not `credentials.toml`, not registry tokens in `config.toml`,
+    not `git/` checkouts. Anywhere else it is mounted like any other
+    toolchain directory, which hides only its credentials file. Set
+    `CARGO_HOME` to the cargo home your suite uses;
   - of `~/.gem`, only the directory the runner lives in;
   - your `CARGO_HOME` inside `/usr` (and, on macOS, `/opt/homebrew`) — the
     official Rust container image sets it to `/usr/local/cargo` — is hidden

@@ -2,7 +2,10 @@
 command:  cargo test        (stdout+stderr merged, no color: piped)
 cargo:    cargo 1.90.0 (840b83a10 2025-07-30)   rustc 1.90.0 (1159e78c4 2025-09-14)
 source:   https://github.com/BurntSushi/byteorder  SHA 5a82625fae462e8ba64cec8146b24a372b4d75c6 (a scratch copy; never the clean clone)
-trimmed:  nothing. Paths in the output are the scratch copy's.
+trimmed:  nothing removed. Machine paths REDACTED after capture (this repository is public), mechanically, with
+          sed -e 's#<session scratch dir>/#/work/#g' -e 's#/home/<user>/.cargo/#~/.cargo/#g' -e 's#/home/<user>/.rustup/#~/.rustup/#g'
+          so the scratch copy reads as /work/byteorder-cap and the operator's cargo and rustup homes as ~/.cargo and ~/.rustup.
+          Every other byte is as captured; the parsers read only FAIL/FLAKY/---- lines, which carry no path.
 pass.txt           the unmodified crate
 fail.txt           planted: BigEndian::read_u16 uses from_le_bytes (quickcheck properties fail; 4 tests)
 panic.txt          planted: a #[test] that unwraps None

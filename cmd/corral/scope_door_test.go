@@ -70,7 +70,7 @@ func TestScopeAuditInputIsIdentityForALanguageWithoutAScoper(t *testing.T) {
 // resolveAuditPlugin; scopeAuditInput itself is held by the tests above. This
 // pins the order: a repository where scoping would fail ("no Cargo.toml")
 // gets the landing refusal, and nothing is sent. When the landing for a
-// Declared file exists (7a), this door gets its scoped-command test back.
+// Declared file exists, this door gets its scoped-command test back.
 func TestAdversarialDoorRefusesTheLandingBeforeScoping(t *testing.T) {
 	repo := t.TempDir() // no Cargo.toml: scoping would refuse too
 	if err := os.MkdirAll(filepath.Join(repo, "src"), 0o750); err != nil {

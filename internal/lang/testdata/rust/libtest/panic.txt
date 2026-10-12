@@ -1,4 +1,4 @@
-   Compiling byteorder v1.5.0 (/tmp/claude-1000/-home-pdbethke-PycharmProjects-corralai/81284ed5-c06a-4f9d-9cfc-4b897eee1dbf/scratchpad/byteorder-cap)
+   Compiling byteorder v1.5.0 (/work/byteorder-cap)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 1.24s
      Running unittests src/lib.rs (target/debug/deps/byteorder-fb1015e6e57065f7)
 

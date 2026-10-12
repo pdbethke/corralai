@@ -219,6 +219,18 @@ func TestScopeTestCmdOnlyScopesCargoRunners(t *testing.T) {
 	}
 }
 
+// A command that names no program at all (only a VAR=value prefix) used to be
+// refused as running ".": filepath.Base of an empty program. It says there is
+// no program instead (final review m3).
+func TestScopeTestCmdRefusesACommandWithNoProgram(t *testing.T) {
+	repo := t.TempDir()
+	writeManifest(t, repo, "Cargo.toml", pkgToml)
+	_, err := ScopeTestCmd(rustPlugin{}, repo, "src/lib.rs", []string{"RUST_LOG=1"})
+	if err == nil || strings.Contains(err.Error(), `"."`) || !strings.Contains(err.Error(), "no program") || !strings.Contains(err.Error(), "-p <crate>") {
+		t.Errorf("got %v, want a refusal saying the command names no program", err)
+	}
+}
+
 // A manifest with no [package] below a package root does not end the walk.
 func TestScopeTestCmdContinuesPastAPackagelessManifest(t *testing.T) {
 	repo := t.TempDir()

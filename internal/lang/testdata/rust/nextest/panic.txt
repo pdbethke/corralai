@@ -1,4 +1,4 @@
-   Compiling fuzzy_match v0.1.0 (/tmp/claude-1000/-home-pdbethke-PycharmProjects-corralai/81284ed5-c06a-4f9d-9cfc-4b897eee1dbf/scratchpad/warp-cap/crates/fuzzy_match)
+   Compiling fuzzy_match v0.1.0 (/work/warp-cap/crates/fuzzy_match)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.52s
 ────────────
  Nextest run ID 7c13bcbb-734e-42f4-a759-30e549035c2f with nextest profile: default

@@ -178,7 +178,8 @@ func childOnPath(root, real string) string {
 // A RUSTUP_HOME that is a cargo home (sandbox.IsCargoHome) is refused too:
 // binding it whole would expose everything the cargo-home rule hides.
 // Inside the jail the proxy finds it only through RUSTUP_HOME, which the
-// jail does not set yet (Task 4's pin); the bind is what that pin will use.
+// jail does not set yet; the bind is what setting RUSTUP_HOME in the jail
+// will point at.
 func rustupHome(cmd0 string) (string, error) {
 	rh := os.Getenv("RUSTUP_HOME")
 	if rh == "" {
@@ -208,7 +209,7 @@ func rustupHome(cmd0 string) (string, error) {
 		return refuse("it is a cargo home, of which only bin/ may be bound")
 	}
 	if len(sandbox.SecretEntries(rh)) > 0 {
-		return refuse("it holds a credentials store or a cargo home")
+		return refuse("it holds a credentials store")
 	}
 	return rh, nil
 }

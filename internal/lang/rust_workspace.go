@@ -63,7 +63,11 @@ func (rustPlugin) ScopeCmd(repoDir, codePath string, testCmd []string) ([]string
 	// it as its own argument, so only a command whose program IS cargo (or
 	// cargo-nextest, the other binary rustRunner accepts) is rewritten; the
 	// program is found the way rustRunner finds it, past any VAR=value prefix.
-	if bin := filepath.Base(preflightBin(testCmd, "")); bin != "cargo" && bin != "cargo-nextest" {
+	prog := preflightBin(testCmd, "")
+	if prog == "" {
+		return nil, fmt.Errorf("%s: the test command names no program corral could find, so corral cannot add the crate to grade; name it yourself with `-p <crate>` inside the command", codePath)
+	}
+	if bin := filepath.Base(prog); bin != "cargo" && bin != "cargo-nextest" {
 		return nil, fmt.Errorf("%s: the test command runs %q, not cargo directly, so corral cannot add the crate to grade; name it yourself with `-p <crate>` inside the command", codePath, bin)
 	}
 	crate, err := owningCrate(repoDir, codePath)

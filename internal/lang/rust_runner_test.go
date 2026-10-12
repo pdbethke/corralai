@@ -19,7 +19,8 @@ func rustCapture(t *testing.T, runner, name string) []byte {
 }
 
 // The captures are real runs (see PROVENANCE.txt beside them). Each is parsed
-// by the SAME function, handed only the grammar the runner row names.
+// by the SAME function, handed the grammar production reads off the output
+// (rustGrammarOf) — which must be the capture's own runner's.
 func TestParseRustRun_Captures(t *testing.T) {
 	cases := []struct {
 		runner, name string
@@ -38,11 +39,19 @@ func TestParseRustRun_Captures(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.runner+"/"+c.name, func(t *testing.T) {
-			cmd := []string{"cargo", "test"}
+			out := rustCapture(t, c.runner, c.name)
+			want := rustGrammarLibtest
 			if c.runner == "nextest" {
-				cmd = []string{"cargo", "nextest", "run"}
+				want = rustGrammarNextest
 			}
-			got := parseRustRun(rustRunner(cmd).grammar, rustCapture(t, c.runner, c.name))
+			g := rustGrammarOf(out)
+			// A compile error stops nextest before it prints anything of its
+			// own, so its output carries no nextest marker and reads as
+			// libtest's — which names no failure either, the right answer.
+			if g != want && c.name != "compile_error" {
+				t.Fatalf("rustGrammarOf = %v, want %v", g, want)
+			}
+			got := parseRustRun(g, out)
 			if !reflect.DeepEqual(got.Failures, c.failures) {
 				t.Fatalf("Failures = %q, want %q", got.Failures, c.failures)
 			}
@@ -67,19 +76,17 @@ func TestParseRustRun_WrongGrammarNamesNothing(t *testing.T) {
 
 func TestRustRunner_ChosenOnceFromTheCommand(t *testing.T) {
 	for _, c := range []struct {
-		cmd     []string
-		grammar rustGrammar
-		pre     string
+		cmd []string
+		pre string
 	}{
-		{nil, rustGrammarLibtest, "cargo"},
-		{[]string{"cargo", "test"}, rustGrammarLibtest, "cargo"},
-		{[]string{"cargo", "nextest", "run", "-p", "x"}, rustGrammarNextest, "cargo-nextest"},
-		{[]string{"/home/u/.cargo/bin/cargo-nextest", "nextest", "run"}, rustGrammarNextest, "/home/u/.cargo/bin/cargo-nextest"},
-		{[]string{"/home/u/.cargo/bin/cargo", "test"}, rustGrammarLibtest, "/home/u/.cargo/bin/cargo"},
+		{nil, "cargo"},
+		{[]string{"cargo", "test"}, "cargo"},
+		{[]string{"cargo", "nextest", "run", "-p", "x"}, "cargo-nextest"},
+		{[]string{"/home/u/.cargo/bin/cargo-nextest", "nextest", "run"}, "/home/u/.cargo/bin/cargo-nextest"},
+		{[]string{"/home/u/.cargo/bin/cargo", "test"}, "/home/u/.cargo/bin/cargo"},
 	} {
-		row := rustRunner(c.cmd)
-		if row.grammar != c.grammar || row.preflightBin != c.pre {
-			t.Errorf("%v: grammar %v bin %q, want %v %q", c.cmd, row.grammar, row.preflightBin, c.grammar, c.pre)
+		if row := rustRunner(c.cmd); row.preflightBin != c.pre {
+			t.Errorf("%v: bin %q, want %q", c.cmd, row.preflightBin, c.pre)
 		}
 	}
 }

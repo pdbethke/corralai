@@ -89,8 +89,9 @@ func TestSecretMasksIgnoreACargoHomeOutsideTheTree(t *testing.T) {
 }
 
 // TestAnInstallPrefixIsNeverACargoHome (R1): /usr/local with a standalone
-// cargo in bin/, plus lib/, go/ and Debian's man -> share/man symlink, is an
-// install prefix. Nothing in it is masked.
+// cargo in bin/, plus lib/, go/ and Debian's man -> share/man symlink, is not
+// the operator's CARGO_HOME (nor ~/.cargo), so it is not a cargo home — a
+// cargo home is exactly what cargo defines. Nothing in it is masked.
 func TestAnInstallPrefixIsNeverACargoHome(t *testing.T) {
 	usr := t.TempDir()
 	local := filepath.Join(usr, "local")
@@ -108,7 +109,7 @@ func TestAnInstallPrefixIsNeverACargoHome(t *testing.T) {
 	t.Setenv("CARGO_HOME", "")
 	t.Setenv("PATH", filepath.Join(local, "bin")+":/usr/bin:/bin")
 	if IsCargoHome(local) {
-		t.Error("a directory with lib/ is an install prefix, never a cargo home")
+		t.Error("a directory that is neither CARGO_HOME nor ~/.cargo is never a cargo home")
 	}
 	if got := secretMasks([]string{usr}); len(got) != 0 {
 		t.Errorf("masks = %+v, want none", got)
@@ -171,8 +172,9 @@ func TestOperatorCargoHomeIsComparedResolved(t *testing.T) {
 
 // TestDebianAndInstallRootsAreNotCargoHomes (M2, M3): Debian's
 // /usr/share/cargo (bin/cargo wrapper, registry/ of packaged crates) and a
-// /usr/local that `cargo install --root /usr/local` wrote .crates.toml into,
-// with no lib/, are toolchain directories: nothing in either is masked.
+// /usr/local that `cargo install --root /usr/local` wrote .crates.toml into
+// are toolchain directories, not cargo homes — neither is CARGO_HOME or
+// ~/.cargo, and no marker makes one: nothing in either is masked.
 func TestDebianAndInstallRootsAreNotCargoHomes(t *testing.T) {
 	usr := t.TempDir()
 	for _, f := range []string{"share/cargo/bin/cargo", "share/cargo/registry/serde-1.0/lib.rs", "local/bin/cargo", "local/.crates.toml", "local/share/ca/cert.pem"} {
@@ -220,8 +222,8 @@ func standInUsr(t *testing.T) string {
 }
 
 // TestUsrBinIsNeverACargoHome (S1): a distribution's /usr/bin holds cargo and
-// env, has no lib/ and no bin/ child. It is a directory of programs, not a
-// cargo home: nothing in it, or in /usr, is masked.
+// env. Neither it nor /usr is CARGO_HOME or ~/.cargo, so neither is a cargo
+// home: nothing in it, or in /usr, is masked.
 func TestUsrBinIsNeverACargoHome(t *testing.T) {
 	usr := standInUsr(t)
 	t.Setenv("CARGO_HOME", "")
@@ -238,9 +240,10 @@ func TestUsrBinIsNeverACargoHome(t *testing.T) {
 	}
 }
 
-// TestOperatorCargoHomePrecedesLib (S5): the operator's own CARGO_HOME is a
-// cargo home even with a stray lib/ — the declaration narrows, never widens.
-func TestOperatorCargoHomePrecedesLib(t *testing.T) {
+// TestOperatorCargoHomeIsOneWhateverItHolds (S5): the operator's own
+// CARGO_HOME is a cargo home by definition, a stray lib/ included — nothing
+// it holds can make it something else.
+func TestOperatorCargoHomeIsOneWhateverItHolds(t *testing.T) {
 	op := t.TempDir()
 	for _, d := range []string{"bin", "lib"} {
 		if err := os.MkdirAll(filepath.Join(op, d), 0o755); err != nil {

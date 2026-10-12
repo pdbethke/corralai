@@ -3,7 +3,6 @@
 package pairing
 
 import (
-	"errors"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -120,23 +119,6 @@ func TestOnlySiblingIsSameDir(t *testing.T) {
 	}
 }
 
-// rustRules is Rust's rule list restated for this package's internal tests
-// (pairing cannot import lang). declared_test.go reads the REAL plugin's
-// rules through lang and checks them against fixture trees; this copy only
-// has to exercise the Shapes.
-var rustRules = []Rule{
-	{Shape: Declared, Rank: 0},
-	{Shape: Inline, Rank: 0},
-	{Shape: Recognize, Name: "{base}_tests.rs"},
-	{Shape: Recognize, Name: "tests.rs"},
-	{Shape: TestDir, Dir: "tests"},
-}
-
-// modules is a Sources.TestModules over a fixed answer per path.
-func modules(by map[string][]TestModule) func(string) ([]TestModule, error) {
-	return func(rel string) ([]TestModule, error) { return by[rel], nil }
-}
-
 // Fail closed: a content rule asks what the source declares, and a caller
 // that cannot say must get an error — never a silent skip of the rule, which
 // would pair (or not pair) every Rust file by the other rules alone with
@@ -154,145 +136,6 @@ func TestResolveContentRuleWithoutTestModulesFailsClosed(t *testing.T) {
 		if touched {
 			t.Errorf("%s: Resolve consulted the disk before refusing", s)
 		}
-	}
-}
-
-// A content rule cannot read the source: that is the caller's error to
-// surface, never "this file declares no test module".
-func TestResolveSurfacesTestModulesError(t *testing.T) {
-	_, err := Resolve(rustRules, "src/lib.rs", Sources{
-		Exists:      func(string) bool { return true },
-		Universe:    func() ([]string, error) { return nil, nil },
-		TestModules: func(string) ([]TestModule, error) { return nil, errors.New("permission denied") },
-	})
-	if err == nil || !strings.Contains(err.Error(), "permission denied") {
-		t.Fatalf("err = %v, want the read error", err)
-	}
-}
-
-// A source with no test module does not pair to itself, and since Rust
-// derives no named candidate there is no basename to search for: nothing
-// is listed as tried, and no search is claimed (Review Focus 1).
-func TestResolveRustSourceWithNoModuleIsAMiss(t *testing.T) {
-	listed := false
-	res, err := Resolve(rustRules, "src/plain.rs", Sources{
-		Exists:      func(string) bool { return true },
-		Universe:    func() ([]string, error) { listed = true; return []string{"tests/plain.rs", "src/plain.rs"}, nil },
-		TestModules: modules(nil),
-	})
-	if err != nil || res.Found || res.Path != "" || res.Label != "" || res.Shape != "" {
-		t.Fatalf("res=%+v err=%v, want a miss", res, err)
-	}
-	if listed || len(res.Roots) != 0 {
-		t.Fatalf("a search with no basename to look for ran or was reported: listed=%v roots=%v", listed, res.Roots)
-	}
-}
-
-func TestResolveInlineLabelsTheSourceItself(t *testing.T) {
-	res, err := Resolve(rustRules, "src/lib.rs", Sources{
-		Exists:      func(rel string) bool { return rel == "src/lib.rs" },
-		Universe:    func() ([]string, error) { return nil, nil },
-		TestModules: modules(map[string][]TestModule{"src/lib.rs": {{Name: "tests", Inline: true, CfgTest: true}}}),
-	})
-	if err != nil || !res.Found || res.Path != "src/lib.rs" || res.Shape != Inline || res.Label != "inline" || res.Rank != 0 {
-		t.Fatalf("res=%+v err=%v", res, err)
-	}
-}
-
-// Declared's paths, by rustc's rule. Each row is one module declaration in
-// the source; the path is tried with Exists, and both the hit and the label
-// are asserted.
-func TestResolveDeclaredFollowsRustc(t *testing.T) {
-	for _, tc := range []struct {
-		name, code string
-		mod        TestModule
-		want       string // "" = a miss
-		label      string
-		tried      []string
-	}{
-		{"path attr, non-mod.rs file: beside the declaring file", "crates/warp_core/src/app_id.rs",
-			TestModule{Name: "tests", PathAttr: "app_id_tests.rs", CfgTest: true},
-			"crates/warp_core/src/app_id_tests.rs", "path-attr", nil},
-		{"path attr with ../ is cleaned", "crates/warp_cli/src/local_control/mod.rs",
-			TestModule{Name: "tests", PathAttr: "../local_control_tests.rs", CfgTest: true},
-			"crates/warp_cli/src/local_control_tests.rs", "path-attr", nil},
-		{"default module of a non-mod.rs file: <stem>/<name>.rs", "src/bar.rs",
-			TestModule{Name: "tests", CfgTest: true}, "src/bar/tests.rs", "default-module", nil},
-		{"default module of mod.rs: beside it", "src/foo/mod.rs",
-			TestModule{Name: "tests", CfgTest: true}, "src/foo/tests.rs", "default-module", nil},
-		{"default module of lib.rs: beside it", "src/lib.rs",
-			TestModule{Name: "tests"}, "src/tests.rs", "default-module", nil},
-		{"default module of main.rs: beside it", "main.rs",
-			TestModule{Name: "test"}, "test.rs", "default-module", nil},
-		{"default module may be <name>/mod.rs", "src/baz.rs",
-			TestModule{Name: "tests"}, "src/baz/tests/mod.rs", "default-module", nil},
-		{"missing #[path] target is a miss, listed in Tried", "src/missing.rs",
-			TestModule{Name: "tests", PathAttr: "missing_tests.rs"}, "", "", []string{"src/missing_tests.rs"}},
-		{"#[path] escaping the root is never a pairing", "src/escape.rs",
-			TestModule{Name: "tests", PathAttr: "../../outside_tests.rs"}, "", "", nil},
-		{"an inline module is not Declared's", "src/inl.rs",
-			TestModule{Name: "tests", Inline: true, PathAttr: "ignored.rs"}, "src/inl.rs", "inline", nil},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			exists := map[string]bool{tc.code: true}
-			if tc.want != "" {
-				exists[tc.want] = true
-			}
-			res, err := Resolve(rustRules, tc.code, Sources{
-				Exists:      func(rel string) bool { return exists[rel] },
-				Universe:    func() ([]string, error) { return nil, nil },
-				TestModules: modules(map[string][]TestModule{tc.code: {tc.mod}}),
-			})
-			if err != nil {
-				t.Fatal(err)
-			}
-			if res.Path != tc.want || res.Found != (tc.want != "") || res.Label != tc.label {
-				t.Fatalf("got path=%q found=%v label=%q, want path=%q label=%q (res=%+v)", res.Path, res.Found, res.Label, tc.want, tc.label, res)
-			}
-			if tc.tried != nil && strings.Join(res.Tried, ",") != strings.Join(tc.tried, ",") {
-				t.Fatalf("Tried = %v, want %v", res.Tried, tc.tried)
-			}
-			for _, p := range res.Tried {
-				if strings.HasPrefix(p, "../") {
-					t.Fatalf("Tried lists a path outside the root: %v", res.Tried)
-				}
-			}
-		})
-	}
-}
-
-// Primary's answer for Rust is the source itself: a new test is written into
-// the file's own test module, never into a guessed file name.
-func TestPrimaryForRustIsTheSource(t *testing.T) {
-	c, ok := Primary(rustRules, "src/net/conn.rs")
-	if !ok || c.Path != "src/net/conn.rs" || c.Shape != Inline {
-		t.Fatalf("Primary = %+v, %v", c, ok)
-	}
-}
-
-// TestDir: a directory alone makes a file a test, at any depth (a workspace
-// member's tests/), while a src/ file is never one by name (Review Focus 2).
-func TestTestDirMarksTestsAndOnlyThem(t *testing.T) {
-	for rel, want := range map[string]bool{
-		"tests/integration.rs":                    true,
-		"crates/integration/tests/integration.rs": true,
-		"crates/warp_core/src/app_id_tests.rs":    true,
-		"src/foo/tests.rs":                        true,
-		"src/lib.rs":                              false,
-		"src/main.rs":                             false,
-		"src/testing_utils.rs":                    false,
-		"crates/warp_core/src/app_id.rs":          false,
-		"src/foo/mod.rs":                          false,
-	} {
-		if got := IsTest(rustRules, rel); got != want {
-			t.Errorf("IsTest(%q) = %v, want %v", rel, got, want)
-		}
-		if want && !MightBeTest([][]Rule{rustRules}, rel) {
-			t.Errorf("MightBeTest(%q) = false for a test", rel)
-		}
-	}
-	if got := Roots(rustRules); strings.Join(got, ",") != "tests" {
-		t.Errorf("Roots = %v, want [tests]", got)
 	}
 }
 

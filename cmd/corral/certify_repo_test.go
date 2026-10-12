@@ -4737,7 +4737,7 @@ func TestDocsNeverDescribeCorralAsAnOlderSeries(t *testing.T) {
 // The exclusions are supplied by hand: while Rust's test landing is not
 // built, Enumerate excludes every .rs source as test-landing-not-built, never
 // no-paired-test, so a real scan does not reach this check with a Rust source
-// yet. The mechanism is held here so the landing (7a) inherits it working.
+// yet. The mechanism is held here so the Rust landing inherits it working.
 func TestOrphanCheckSeesDeletedRustTests(t *testing.T) {
 	root := t.TempDir()
 	mustWrite(t, filepath.Join(root, "crates", "warp_core", "src", "app_id.rs"),

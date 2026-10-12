@@ -82,8 +82,20 @@ func resolved(p string) string {
 //
 // The cost, accepted: a second cargo home that CARGO_HOME does not name (an
 // image's /usr/local/cargo with CARGO_HOME unset, a CARGO_HOME exported only
-// in another shell) is treated as an ordinary toolchain directory and is not
-// narrowed to its bin/.
+// in another shell) gets no cargo-home treatment, and what that exposes
+// depends on where it sits:
+//
+//   - inside a tree an isolator mounts whole (/usr; on macOS also
+//     /opt/homebrew) NOTHING in it is hidden — not credentials.toml, not
+//     registry tokens in config.toml, not git/ checkouts — because
+//     toolchainBindsFor binds nothing there and secretMasks masks only
+//     OperatorCargoHome;
+//   - elsewhere it is bound like any other toolchain root, which hides only
+//     its credentials store (CredentialStoreIn): config.toml tokens and git/
+//     are still visible.
+//
+// The remedy is the operator's: set CARGO_HOME to the cargo home the suite
+// uses.
 func IsCargoHome(dir string) bool {
 	op := OperatorCargoHome()
 	return op != "" && dir != "" && resolved(dir) == resolved(op)

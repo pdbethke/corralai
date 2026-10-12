@@ -335,28 +335,47 @@ func checkPairing(code, test string) checkResult {
 		return checkResult{name: name, detail: fmt.Sprintf(
 			"no language plugin claims %q — corral infers the language from the extension", code)}
 	}
+	// The same refusal every audit door makes before any jail, store or
+	// spend. A file that pairs but cannot be audited is not "[ok]": doctor
+	// used to pass one every certify command then refused.
+	landing := lang.CheckTestLanding(code)
+	// Called only when landing != nil.
+	paired := func(how string) checkResult {
+		return checkResult{name: name, detail: fmt.Sprintf("pairs to %s, but cannot be audited yet: %v", how, landing)}
+	}
 	if t := strings.TrimSpace(test); t != "" {
 		if _, err := os.Stat(t); err != nil {
 			return checkResult{name: name, detail: fmt.Sprintf("--test %q does not exist", t)}
 		}
+		if landing != nil {
+			return paired(t + " (--test)")
+		}
 		return checkResult{name: name, ok: true}
 	}
-	res, ferr := reposcan.FindTest(p, "", code)
+	// Rooted at the working directory, as certify --local and
+	// --adversarial resolve an operator's --code: that is also the root a
+	// file's own declared test path is held to (pairing.Sources.Root).
+	res, ferr := reposcan.FindTest(p, ".", code)
 	if ferr != nil {
 		return checkResult{name: name, detail: fmt.Sprintf("searching for a test for %q: %v", code, ferr)}
 	}
 	if res.Found {
 		if res.ViaSearch {
+			if landing != nil {
+				return paired(res.Path + " (search)")
+			}
 			return checkResult{name: name, ok: true, detail: "paired by search: " + res.Path}
 		}
-		return checkResult{name: name, ok: true, detail: "found " + res.Path + " by convention"}
+		if landing != nil {
+			return paired(res.Path + " (" + res.Label + ")")
+		}
+		return checkResult{name: name, ok: true, detail: "found " + res.Path + " by convention (" + res.Label + ")"}
 	}
-	detail := fmt.Sprintf("no test found for %q by convention. Looked for:\n", code)
-	for _, t := range res.Tried {
-		detail += "  " + t + "\n"
-	}
-	if len(res.Roots) > 0 {
-		detail += fmt.Sprintf("and searched %s recursively for a matching basename\n", strings.Join(res.Roots, ", "))
+	detail := fmt.Sprintf("no test found for %q by convention. ", code) + whereItLooked(res)
+	if landing != nil {
+		// Naming --test or a convention would send the operator after a
+		// test that cannot help: the refusal is about the code path.
+		return checkResult{name: name, detail: detail + fmt.Sprintf("It could not be audited yet either way: %v", landing)}
 	}
 	detail += "Pass --test <path> explicitly. Conventions vary — a JS/TS project using __tests__/ " +
 		"or naming tests after behavior rather than after the source file will never pair automatically."

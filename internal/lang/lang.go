@@ -9,6 +9,8 @@
 package lang
 
 import (
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -338,30 +340,100 @@ const defaultPreambleLines = 40
 
 // Vendorer is an OPTIONAL plugin extension for a language whose dependencies
 // live OUTSIDE the repository (a module cache the offline jail cannot see):
-// VendorCmd names the command that, run on the HOST with network, in a
-// throwaway copy of repoDir, makes them part of the tree. ok is false when
-// nothing needs vendoring (not a project of this language, or already
-// vendored). Languages whose dependencies already live in the tree
-// (node_modules, .venv) do not implement it — those trees are bound from
-// their DependencyDirs instead.
+// Vendor names the step that, run with network in a throwaway copy of
+// repoDir, makes them part of the tree. ok is false when nothing needs
+// vendoring (not a project of this language, or already vendored).
+// Languages whose dependencies already live in the tree (node_modules,
+// .venv) do not implement it — those trees are bound from their
+// DependencyDirs instead.
 //
-// The contract, because the command runs on the HOST, with network, OUTSIDE
-// the jail, against a copy of a repository corral does not trust:
+// The step runs INSIDE the audit's sandbox, with network (cmd/corral's
+// ensureVendored via adequacy.RunFetchStep), never on the host. That is not
+// a nicety: a package manager reads repository-controlled configuration, and
+// some of it names programs — `cargo vendor` runs a credential provider the
+// repository ships, and a rustup proxy runs a toolchain the repository names
+// — so no fixed argv can promise the step runs nothing the repository
+// controls. The jail is what makes that acceptable.
 //
-//   - argv is fixed literals chosen by the plugin. It is never built from the
+// The contract that remains:
+//
+//   - Argv is fixed literals chosen by the plugin. It is never built from the
 //     repository's contents (file names, manifest fields, config values);
-//     repoDir is for deciding ok (os.Stat checks), not for composing argv.
-//   - The command must not execute repository-controlled code or
-//     configuration: no build scripts, install hooks, plugins or task
-//     runners the repository can define. `go mod vendor` qualifies — it
-//     downloads and copies modules and runs none of their code; a package
-//     manager's install step that runs lifecycle scripts does not.
-//
-// The caller (cmd/corral's ensureVendored) runs it with corral's own secrets
-// scrubbed from the environment, which limits what a contract breach could
-// read but does not make one safe.
+//     repoDir is for deciding ok and for choosing among the plugin's own
+//     fixed paths (Done, StdoutAppend), never for composing Argv.
 type Vendorer interface {
-	VendorCmd(repoDir string) (argv []string, ok bool)
+	Vendor(repoDir string) (step VendorStep, ok bool)
+}
+
+// VendorStep is one vendoring step: the command, how a tree that is already
+// vendored is recognised, and where the command's stdout goes.
+type VendorStep struct {
+	// Argv is the command, run in the root of the staging copy.
+	Argv []string
+	// Done is the repo-relative path whose presence means the tree is already
+	// vendored, so the step is skipped (see StepUnlessDone). Empty when the
+	// language's "already vendored" is not a bare path — the plugin then
+	// decides it itself, and says how on its Vendor method.
+	Done string
+	// StdoutAppend, when non-empty, is a repo-relative file the step's stdout
+	// is appended to, created if absent: the step prints configuration the
+	// toolchain must then read (cargo vendor's source replacement). The
+	// output is TOML tables, the one implementer's format, and the append
+	// refuses a table the file already declares rather than write a
+	// duplicate the toolchain would reject.
+	StdoutAppend string
+}
+
+// StepUnlessDone returns (step, true) unless step.Done names a path that
+// exists under repoDir, in which case the tree is already vendored and the
+// answer is (VendorStep{}, false). The one reading of Done, shared by every
+// Vendorer.
+func StepUnlessDone(repoDir string, step VendorStep) (VendorStep, bool) {
+	if step.Done != "" {
+		if _, err := os.Stat(filepath.Join(repoDir, filepath.FromSlash(step.Done))); err == nil {
+			return VendorStep{}, false
+		}
+	}
+	return step, true
+}
+
+// BuildDir is a directory a language's build tool writes its output into,
+// identified the way the tool itself defines it: a basename (Name) AND a
+// marker file (Marker) in the same parent directory. cargo's default build
+// directory is `target` beside the Cargo.toml it was built from — not any
+// directory called target.
+//
+// Both halves are required. A basename alone is what treedirs' language-
+// neutral buildOutput list is, and that list is right for the walkers that
+// only need to know what is not worth GRADING; a walker that seeds the jail
+// cannot use it, because a basename-only skip of `build` would drop a real
+// Python package of that name from the workspace and fail the suite for a
+// reason that has nothing to do with the mutant.
+type BuildDir struct {
+	Name   string // directory basename, e.g. "target"
+	Marker string // file that must exist beside it, e.g. "Cargo.toml"
+}
+
+// BuildDirer is an OPTIONAL plugin extension for a language whose build tool
+// writes large output INSIDE the repository tree. The tree copies that seed
+// the jail (cmd/corral's loadRepoFiles and the vendoring stage copy) skip a
+// declared BuildDir: it is derived from the source, routinely gigabytes, and
+// nothing the audit reads — the jailed run rebuilds it. Languages whose
+// build output lives outside the tree, or is small, do not implement it.
+type BuildDirer interface {
+	BuildDirs() []BuildDir
+}
+
+// AllBuildDirs is every registered plugin's BuildDirs, in Names() order —
+// derived from the registry, never a hand list.
+func AllBuildDirs() []BuildDir {
+	var out []BuildDir
+	for _, name := range Names() {
+		if b, ok := registry[name].(BuildDirer); ok {
+			out = append(out, b.BuildDirs()...)
+		}
+	}
+	return out
 }
 
 // Preambler is an OPTIONAL plugin extension: a language whose package/import

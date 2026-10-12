@@ -81,7 +81,7 @@ func TestEveryShapeHasTraits(t *testing.T) {
 // programming error, and each reader of the table must say so rather than
 // skip the rule — a skipped rule is a convention silently not applied.
 func TestUnknownShapeFailsLoudly(t *testing.T) {
-	bogus := []Rule{{Shape: "inline", Name: "{base}_x.rs", Dir: "tests", Rank: 1}}
+	bogus := []Rule{{Shape: "no-such-shape", Name: "{base}_x.rs", Dir: "tests", Rank: 1}}
 	for name, call := range map[string]func(){
 		"Candidates":  func() { Candidates(bogus, "src/lib.rs") },
 		"Roots":       func() { Roots(bogus) },
@@ -93,7 +93,7 @@ func TestUnknownShapeFailsLoudly(t *testing.T) {
 				if r == nil {
 					t.Fatalf("%s accepted an unknown Shape without complaint", name)
 				}
-				if msg, _ := r.(string); !strings.Contains(msg, `"inline"`) {
+				if msg, _ := r.(string); !strings.Contains(msg, `"no-such-shape"`) {
 					t.Fatalf("%s panicked with %v; want a message naming the Shape", name, r)
 				}
 			}()
@@ -116,5 +116,38 @@ func TestOnlySiblingIsSameDir(t *testing.T) {
 	}
 	if len(got) != 1 || got[0] != Sibling {
 		t.Errorf("Shapes with sameDir = %v, want exactly [%s]", got, Sibling)
+	}
+}
+
+// Fail closed: a content rule asks what the source declares, and a caller
+// that cannot say must get an error — never a silent skip of the rule, which
+// would pair (or not pair) every Rust file by the other rules alone with
+// nothing to show the content rules never ran (the rule-at-one-door shape).
+func TestResolveContentRuleWithoutTestModulesFailsClosed(t *testing.T) {
+	for _, s := range []Shape{Inline, Declared} {
+		touched := false
+		_, err := Resolve([]Rule{{Shape: s}}, "src/lib.rs", Sources{
+			Exists:   func(string) bool { touched = true; return true },
+			Universe: func() ([]string, error) { touched = true; return nil, nil },
+		})
+		if err == nil || !strings.Contains(err.Error(), "TestModules") {
+			t.Errorf("%s: err = %v, want a fail-closed error naming TestModules", s, err)
+		}
+		if touched {
+			t.Errorf("%s: Resolve consulted the disk before refusing", s)
+		}
+	}
+}
+
+// Content and dirMarksTest are each the property of exactly the Shapes that
+// need them, so no older Shape changes meaning by gaining one.
+func TestNewTraitsBelongToTheNewShapes(t *testing.T) {
+	for s, tr := range shapeTable {
+		if tr.content != (s == Inline || s == Declared) {
+			t.Errorf("%s: content = %v", s, tr.content)
+		}
+		if tr.dirMarksTest != (s == TestDir) {
+			t.Errorf("%s: dirMarksTest = %v", s, tr.dirMarksTest)
+		}
 	}
 }

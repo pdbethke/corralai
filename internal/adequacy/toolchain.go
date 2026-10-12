@@ -55,22 +55,37 @@ func (e ErrSnapToolchain) Error() string {
 		e.Command, e.Path, e.Command)
 }
 
-// toolchainBindFor resolves cmd0 on the HOST and returns the read-only bind the
-// jail needs in order to run it, or a zero Bind when the binary already lives
+// toolchainBindsFor resolves cmd0 on the HOST and returns the read-only binds
+// the jail needs in order to run it, or none when the binary already lives
 // under a path the jail mounts anyway (/usr, which covers apt and /usr/local).
 //
-// A command that cannot be resolved at all returns a zero Bind and no error:
+// A command that cannot be resolved at all returns no binds and no error:
 // the jail will fail on its own with the runner's real message, which is a
 // better diagnosis than a guess from here. That is deliberate — this function
 // exists to REMOVE a misleading failure, not to add one.
-func toolchainBindFor(cmd0 string) (sandbox.Bind, error) {
+//
+// No bind ever covers a toolchain root's secrets, as sandbox.SecretEntries
+// defines them (the same rule the isolators mask whole-mounted trees with).
+// Every jail reads these binds — the networked vendoring step, which runs
+// repository-controlled programs, and the graded runs, whose output reaches
+// the ledger, which can be public. So:
+//
+//   - a cargo home (sandbox.IsCargoHome: exactly the operator's CARGO_HOME,
+//     else ~/.cargo, symlinks resolved) is ALWAYS bound as its bin/ alone,
+//     plus the rustup home when bin/ holds a rustup proxy, whichever of its
+//     binaries was named (a symlinked or hard-linked proxy, cargo-nextest,
+//     anything `cargo install`ed);
+//   - any other root holding a credentials store (RubyGems' ~/.gem) is
+//     narrowed to the one child directory the binary lives in;
+//   - a root that cannot be narrowed safely is refused, with the reason.
+func toolchainBindsFor(cmd0 string) ([]sandbox.Bind, error) {
 	cmd0 = strings.TrimSpace(cmd0)
 	if cmd0 == "" {
-		return sandbox.Bind{}, nil
+		return nil, nil
 	}
 	p, err := exec.LookPath(cmd0)
 	if err != nil {
-		return sandbox.Bind{}, nil
+		return nil, nil
 	}
 	real, err := filepath.EvalSymlinks(p)
 	if err != nil {
@@ -82,26 +97,121 @@ func toolchainBindFor(cmd0 string) (sandbox.Bind, error) {
 	// with an explanation rather than binding /snap and failing later for a
 	// reason the operator cannot act on.
 	if strings.HasPrefix(p, "/snap/") || real == "/usr/bin/snap" || strings.HasPrefix(real, "/snap/") {
-		return sandbox.Bind{}, ErrSnapToolchain{Command: cmd0, Path: p}
+		return nil, ErrSnapToolchain{Command: cmd0, Path: p}
 	}
 
 	// Already inside what the jail mounts.
 	if strings.HasPrefix(real, "/usr/") {
-		return sandbox.Bind{}, nil
+		return nil, nil
 	}
 
 	root := toolchainRoot(real)
 	if root == "" {
-		return sandbox.Bind{}, nil
+		return nil, nil
 	}
 	if narrowed, refused := narrowHomeRoot(real, root); refused != "" {
-		return sandbox.Bind{}, ErrUnbindableToolchain{Command: cmd0, Path: real, Root: root, Why: refused}
+		return nil, ErrUnbindableToolchain{Command: cmd0, Path: real, Root: root, Why: refused}
 	} else if narrowed != "" {
 		root = narrowed
 	}
+	ch := sandbox.CargoHomeOf(real)
+	if ch != "" && ch != root && !strings.HasPrefix(ch, root+string(filepath.Separator)) {
+		ch = "" // a cargo home ABOVE the toolchain root is not what this bind would expose
+	}
+	switch {
+	case ch != "":
+		// A cargo home is narrowed by what it IS, whatever binary was named
+		// and whether or not a credentials file exists yet: beside bin/ it
+		// keeps registry tokens in config.toml, private checkouts in git/,
+		// binstall.toml — names no list finishes (sandbox.IsCargoHome).
+		root = ch
+		bin := filepath.Join(root, "bin")
+		if childOnPath(root, real) != bin {
+			return nil, ErrUnbindableToolchain{Command: cmd0, Path: real, Root: root,
+				Why: "it is a cargo home, and only its bin/ may be bound; the runner is not in bin/"}
+		}
+		binds := []sandbox.Bind{{Host: bin, Target: bin}}
+		if _, err := os.Lstat(filepath.Join(bin, "rustup")); err == nil { // #nosec G703 -- existence check only
+			rh, rerr := rustupHome(cmd0)
+			if rerr != nil {
+				return nil, rerr
+			}
+			if rh != "" {
+				binds = append(binds, sandbox.Bind{Host: rh, Target: rh})
+			}
+		}
+		return binds, nil
+	case sandbox.CredentialStoreIn(root) != "":
+		store := sandbox.CredentialStoreIn(root)
+		child := childOnPath(root, real)
+		if child == "" || sandbox.CredentialStoreIn(child) != "" {
+			return nil, ErrUnbindableToolchain{Command: cmd0, Path: real, Root: root,
+				Why: "it holds a credentials store (" + store + ") and the toolchain cannot be bound without it"}
+		}
+		root = child
+	}
 	// Bound at the SAME absolute path, so the operator's own PATH keeps
 	// working inside the jail without rewriting the command.
-	return sandbox.Bind{Host: root, Target: root}, nil
+	return []sandbox.Bind{{Host: root, Target: root}}, nil
+}
+
+// childOnPath is the child of root that real lives under (root/bin for
+// root/bin/cargo), or "" when real sits directly in root.
+func childOnPath(root, real string) string {
+	rel, err := filepath.Rel(root, real)
+	if err != nil || rel == "." || strings.HasPrefix(rel, "..") {
+		return ""
+	}
+	first, rest, _ := strings.Cut(rel, string(filepath.Separator))
+	if rest == "" {
+		return ""
+	}
+	return filepath.Join(root, first)
+}
+
+// rustupHome is the rustup home a rustup proxy needs beside its bin/ (the
+// toolchains it dispatches to live in RUSTUP_HOME, default ~/.rustup), or ""
+// when there is none to bind: no such directory, or one under /usr, which the
+// jail mounts anyway. It is a bind root like any other, so it goes through
+// the same home-directory rule (narrowHomeRoot): RUSTUP_HOME=~/.config is
+// refused, never bound, because ~/.config holds gh, gcloud and composer auth.
+// A RUSTUP_HOME that is a cargo home (sandbox.IsCargoHome) is refused too:
+// binding it whole would expose everything the cargo-home rule hides.
+// Inside the jail the proxy finds it only through RUSTUP_HOME, which the
+// jail does not set yet; the bind is what setting RUSTUP_HOME in the jail
+// will point at.
+func rustupHome(cmd0 string) (string, error) {
+	rh := os.Getenv("RUSTUP_HOME")
+	if rh == "" {
+		home, err := os.UserHomeDir()
+		if err != nil || home == "" {
+			return "", nil
+		}
+		rh = filepath.Join(home, ".rustup")
+	}
+	rh = filepath.Clean(rh)
+	fi, err := os.Stat(rh) // #nosec G703 -- stat only; rh is the operator's RUSTUP_HOME or ~/.rustup
+	if err != nil || !fi.IsDir() || strings.HasPrefix(rh, "/usr/") {
+		return "", nil
+	}
+	refuse := func(why string) (string, error) {
+		return "", ErrUnbindableToolchain{Command: cmd0, Path: rh, Root: rh, Why: "it is the rustup home, and " + why}
+	}
+	probe := filepath.Join(rh, "toolchains")
+	root := toolchainRoot(probe)
+	if root == "" {
+		return refuse("it is, or sits directly in, a directory the jail must never bind")
+	}
+	if _, refused := narrowHomeRoot(probe, root); refused != "" {
+		return refuse(refused)
+	}
+	if sandbox.IsCargoHome(rh) {
+		return refuse("it is a cargo home, of which only bin/ may be bound")
+	}
+	if len(sandbox.SecretEntries(rh)) > 0 {
+		return refuse("it holds a credentials store")
+	}
+	return rh, nil
 }
 
 // ErrUnbindableToolchain is returned when the runner resolves to a directory
@@ -159,7 +269,7 @@ func narrowHomeRoot(real, root string) (narrowed, refused string) {
 		if strings.HasPrefix(rel, "bin/") {
 			return filepath.Join(root, "bin"), ""
 		}
-		if strings.HasPrefix(rel, "share/gem/") || strings.HasPrefix(rel, "share/pipx/") {
+		if strings.HasPrefix(rel, "share/gem/") || strings.HasPrefix(rel, "share/pipx/") || strings.HasPrefix(rel, "share/rustup/") {
 			// The one share subtree that is a toolchain: bind it alone.
 			parts := strings.SplitN(rel, "/", 3)
 			return filepath.Join(root, parts[0], parts[1]), ""

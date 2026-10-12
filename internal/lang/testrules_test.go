@@ -25,7 +25,7 @@ func TestEveryRuleRankAgreesWithItsShape(t *testing.T) {
 		rules := registry[name].TestRules()
 		ext, ok := sourceExt(rules)
 		if !ok {
-			t.Fatalf("plugin %q declares no Sibling rule, so its source extension cannot be derived", name)
+			t.Fatalf("plugin %q declares no rule Name with an extension, so its source extension cannot be derived", name)
 		}
 		for i, r := range rules {
 			// Whether a Shape produces candidates is pairing's shapeTable's
@@ -35,10 +35,14 @@ func TestEveryRuleRankAgreesWithItsShape(t *testing.T) {
 			if len(pairing.Candidates([]pairing.Rule{r}, "x"+ext)) == 0 {
 				continue // never a candidate, so it has no rank to agree with
 			}
-			if r.Shape == pairing.Sibling && r.Rank != 0 {
-				t.Errorf("%s rule %d (%+v): a Sibling rule must be Rank 0, the most specific rank there is", name, i, r)
+			// A content Shape's candidate is what the source itself declares
+			// (an inline test module is the source; pairing.Shape.Content),
+			// which is at least as specific as a sibling: Rank 0 as well.
+			zeroRank := r.Shape == pairing.Sibling || r.Shape.Content()
+			if zeroRank && r.Rank != 0 {
+				t.Errorf("%s rule %d (%+v): a Sibling or content rule must be Rank 0, the most specific rank there is", name, i, r)
 			}
-			if r.Shape != pairing.Sibling && r.Rank <= 0 {
+			if !zeroRank && r.Rank <= 0 {
 				t.Errorf("%s rule %d (%+v): a non-Sibling rule must have Rank > 0 — Rank 0 is the sibling rank, so this rule's Rank was probably forgotten", name, i, r)
 			}
 		}
@@ -54,13 +58,25 @@ func TestEveryRuleRankAgreesWithItsShape(t *testing.T) {
 // plugin derives for it IS one. A Rust-style rule whose Name is just
 // "{base}.rs" under tests/ fails the first half — it makes src/lib.rs a test,
 // silently removing real code from the audit (Round B1 final review, I2).
+//
+// Two refinements arrived with Rust, both read from pairing rather than
+// restated here, and both applied to every plugin alike (no exemption):
+//
+//   - A corpus path under a directory a TestDir rule declares (cargo's
+//     tests/) IS a test by that directory, so the first half asks that the
+//     NAME never makes a source a test: IsTest must equal DirMarksTest.
+//     Every pre-Rust plugin declares no TestDir, so for them this is the
+//     original "IsTest is false".
+//   - A content Shape's candidate is the source itself (an inline test
+//     module lives in the file it tests), so it must equal the source, and is
+//     not asked to be a test file.
 func TestEveryCandidateIsATestAndNoSourceIs(t *testing.T) {
 	for _, name := range Names() {
 		p := registry[name]
 		rules := p.TestRules()
 		ext, ok := sourceExt(rules)
 		if !ok {
-			t.Fatalf("plugin %q declares no Sibling rule, so its source extension cannot be derived", name)
+			t.Fatalf("plugin %q declares no rule Name with an extension, so its source extension cannot be derived", name)
 		}
 		checked := 0
 		for _, dir := range corpusDirs {
@@ -69,11 +85,18 @@ func TestEveryCandidateIsATestAndNoSourceIs(t *testing.T) {
 				if !p.Detect(src) {
 					t.Fatalf("%s does not detect corpus path %q", name, src)
 				}
-				if pairing.IsTest(rules, src) {
-					t.Errorf("%s: IsTest(%q) = true — a source with no test marker was classified as a test, so it would never be audited; some rule's Name has no marker beyond {base} and the extension", name, src)
+				if pairing.IsTest(rules, src) != pairing.DirMarksTest(rules, src) {
+					t.Errorf("%s: IsTest(%q) = %v but DirMarksTest = %v — a source with no test marker was classified by its NAME, so it would never be audited; some rule's Name has no marker beyond {base} and the extension", name, src, pairing.IsTest(rules, src), pairing.DirMarksTest(rules, src))
 				}
 				for _, c := range pairing.Candidates(rules, src) {
-					if cp := filepath.ToSlash(c.Path); !pairing.IsTest(rules, cp) {
+					cp := filepath.ToSlash(c.Path)
+					if c.Shape.Content() {
+						if cp != src {
+							t.Errorf("%s: content candidate %q for %q is not the source itself", name, cp, src)
+						}
+						continue
+					}
+					if !pairing.IsTest(rules, cp) {
 						t.Errorf("%s: candidate %q for %q is not IsTest — the plugin would pair a source with a file it does not itself recognize as a test", name, cp, src)
 					}
 				}

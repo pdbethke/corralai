@@ -3,6 +3,7 @@
 package pairing
 
 import (
+	"fmt"
 	"path/filepath"
 	"strings"
 )
@@ -59,9 +60,26 @@ var testDirAffixes = struct{ Prefixes, Suffixes []string }{
 // to what the caller considers visible) and is called at most once, and only
 // when stage 1 misses — a repository where listing fails still pairs by
 // convention (Review Focus 2).
+//
+// TestModules reads the test modules the source at rel declares in itself
+// (repoindex.TestModules over the file's bytes; pairing does no parsing). It
+// is called at most once per Resolve, and only for rules with a content
+// Shape — so languages without one never pay for the read. A read failure is
+// its error, never an empty answer: "could not read the file" and "the file
+// declares no test" are different claims, and only the second may leave a
+// source unpaired. nil is allowed only when no rule has a content Shape;
+// Resolve refuses otherwise.
 type Sources struct {
-	Exists   func(rel string) bool
-	Universe func() ([]string, error)
+	// Root is the directory on disk the paths Resolve is given are under:
+	// the repository root for a scan, the working directory for a door that
+	// takes the operator's --code as typed. Every path a source's own
+	// declaration names (a Declared shape) must stay inside it — see
+	// insideRoot. "" means no root is known: a relative path is then held to
+	// its own lexical root only, and an absolute one is refused.
+	Root        string
+	Exists      func(rel string) bool
+	Universe    func() ([]string, error)
+	TestModules func(rel string) ([]TestModule, error)
 }
 
 // Resolution is Resolve's whole answer: what it tried, where it looked, and
@@ -78,9 +96,15 @@ type Resolution struct {
 	Rank int
 	// Shape is the Shape of the rule whose candidate paired the file on a
 	// convention hit; "" on a search hit or a miss, because no rule paired
-	// it. The Rust plan needs this label on the scan line ("paired by
-	// parallel-tree"), so it is carried here rather than re-derived later.
+	// it.
 	Shape Shape
+	// Label is how the pairing was made, for the scan line: the Shape's name
+	// for an ordinary convention hit ("sibling", "parallel-tree"), "inline"
+	// for a source holding its own test module, "path-attr" or
+	// "default-module" for the file a Declared module loads; "" on a search
+	// hit or a miss. It is set only here, in Resolve, so a caller prints it
+	// rather than re-deriving it from Shape.
+	Label string
 	// ViaSearch is true when Path came from the stage-2 search rather than
 	// the ordered candidates — the fact the "paired by search" disclosure is
 	// built on.
@@ -89,9 +113,16 @@ type Resolution struct {
 	// not-found error so the operator sees exactly what was already ruled
 	// out, not just that something failed. Populated even on a miss.
 	Tried []string
+	// RefusedOutsideRoot is every path a source's own test-module
+	// declaration named that resolves outside Sources.Root (lexically, or
+	// through a symlink), and so was never checked. Not in Tried: nothing
+	// was looked for there. Reported so a miss can say the file DID declare
+	// a test, and why it was not used, instead of "declares no test".
+	RefusedOutsideRoot []string
 	// Roots is the set of conventional test directories the search walked
 	// (populated only when stage 2 ran, i.e. every Tried candidate was
-	// absent) — so a caller can say everywhere it looked.
+	// absent AND there was a basename to search for) — so a caller can say
+	// everywhere it looked, and never claims a search that did not happen.
 	Roots []string
 	// Found reports whether Path is usable. Path == "" and Found == false
 	// coincide today, but Found makes the zero value unambiguous rather than
@@ -104,20 +135,66 @@ type Resolution struct {
 // listing, and its findInUniverse over Enumerate's already-walked universe —
 // each of which used to carry its own copy of this logic):
 //
-//  1. Candidates(rules, codePath), IN ORDER — the first one src.Exists
-//     accepts wins, with that candidate's Rank and Shape. A conventionally-mirrored
-//     file is paired here and NEVER reaches stage 2, so src.Universe is never
-//     called for it.
-//  2. Only when NONE of those candidates exists: a search of src.Universe()
-//     under Roots(rules) for one of the SAME basenames the candidates already
+//  1. What the source DECLARES, then the convention candidates.
+//     a. Every content rule, in rule order: the paths its Shape derives from
+//     src.TestModules(codePath) — an inline module (the source itself), or
+//     the file a `mod` declaration loads — the first src.Exists accepts
+//     wins. These come before every pure candidate whatever their rule
+//     position, because a source that names its own test is stronger
+//     evidence than any naming convention can be.
+//     b. Candidates(rules, codePath), IN ORDER, skipping content Shapes'
+//     candidates (step a answered for them) — the first one src.Exists
+//     accepts wins, with that candidate's Rank and Shape. A
+//     conventionally-mirrored file is paired here and NEVER reaches stage
+//     2, so src.Universe is never called for it.
+//  2. Only when NONE of those exists: a search of src.Universe() under
+//     Roots(rules) for one of the SAME basenames the pure candidates already
 //     try (searchBasenames), picking the most specific match
-//     (bestSearchMatch). A hit carries SearchRank and ViaSearch.
+//     (bestSearchMatch). A hit carries SearchRank and ViaSearch. With no
+//     pure candidate there is no basename, so there is no search — and Roots
+//     stays empty, so nobody reports one.
 //
-// The error is src.Universe's, and only ever surfaces after a stage-1 miss.
+// The errors: a content rule with nil src.TestModules (fail closed, before
+// any I/O), src.TestModules' own, and src.Universe's after a stage-1 miss.
 func Resolve(rules []Rule, codePath string, src Sources) (Resolution, error) {
-	cands := Candidates(rules, codePath)
+	var content []Rule
+	for _, r := range rules {
+		if traitsOf(r.Shape).content {
+			content = append(content, r)
+		}
+	}
+	if len(content) > 0 && src.TestModules == nil {
+		return Resolution{}, fmt.Errorf("pairing: %s is resolved by what it declares (a %s rule), but this caller supplied no Sources.TestModules to read it — refusing rather than skipping the rule", codePath, content[0].Shape)
+	}
 
 	var res Resolution
+	if len(content) > 0 {
+		mods, err := src.TestModules(codePath)
+		if err != nil {
+			return res, fmt.Errorf("reading the test modules %s declares: %w", codePath, err)
+		}
+		for _, r := range content {
+			tr := traitsOf(r.Shape)
+			for _, l := range tr.fromModules(codePath, mods) {
+				if tr.confined && !insideRoot(src.Root, l.path) {
+					res.RefusedOutsideRoot = append(res.RefusedOutsideRoot, l.path)
+					continue
+				}
+				res.Tried = append(res.Tried, l.path)
+				if src.Exists(l.path) {
+					res.Path, res.Rank, res.Shape, res.Label, res.Found = l.path, r.Rank, r.Shape, l.label, true
+					return res, nil
+				}
+			}
+		}
+	}
+
+	var cands []Candidate
+	for _, c := range Candidates(rules, codePath) {
+		if !traitsOf(c.Shape).content {
+			cands = append(cands, c)
+		}
+	}
 	for _, c := range cands {
 		cp := filepath.ToSlash(c.Path)
 		if cp == "" {
@@ -128,16 +205,17 @@ func Resolve(rules []Rule, codePath string, src Sources) (Resolution, error) {
 			res.Path = cp
 			res.Rank = c.Rank
 			res.Shape = c.Shape
+			res.Label = string(c.Shape)
 			res.Found = true
 			return res, nil
 		}
 	}
 
-	res.Roots = Roots(rules)
 	basenames := searchBasenames(cands)
 	if len(basenames) == 0 {
 		return res, nil
 	}
+	res.Roots = Roots(rules)
 	universe, err := src.Universe()
 	if err != nil {
 		return res, err

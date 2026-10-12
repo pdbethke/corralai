@@ -672,15 +672,39 @@ func auditErr(format string, a ...any) error {
 // before ever learning where corral had actually looked. This message is the
 // third guess made unnecessary.
 func noTestFoundErr(codePath string, res reposcan.SearchResult) string {
+	return strings.TrimRight(fmt.Sprintf("no test found for %s (pass --test to override). ", codePath)+whereItLooked(res), "\n")
+}
+
+// whereItLooked renders a FindTest miss's Tried, RefusedOutsideRoot and
+// Roots — the part of a "no test found" message that saves the operator a
+// guess — for noTestFoundErr and doctor's pairing check alike. A miss with
+// none of them is a file that declares no test of its own (a Rust source
+// with no test module) in a language that derives no test file name from a
+// path: there was nothing to look for, and it says so rather than print an
+// empty list or claim a search that never ran. A file whose declared test
+// path was refused for leaving the repository DID declare one, so that is
+// said instead.
+func whereItLooked(res reposcan.SearchResult) string {
+	if len(res.Tried) == 0 && len(res.Roots) == 0 && len(res.RefusedOutsideRoot) == 0 {
+		return "Nothing to look for: the file declares no test of its own, and its language derives no test file name from its path.\n"
+	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "no test found for %s (pass --test to override). Looked for:\n", codePath)
+	if len(res.RefusedOutsideRoot) > 0 {
+		b.WriteString("Refused, never read — the file declares its test here, but the path is outside the audit root (the repository, or the working directory when --code is given without --repo-dir):\n")
+		for _, r := range res.RefusedOutsideRoot {
+			fmt.Fprintf(&b, "  %s\n", r)
+		}
+	}
+	if len(res.Tried) > 0 {
+		b.WriteString("Looked for:\n")
+	}
 	for _, t := range res.Tried {
 		fmt.Fprintf(&b, "  %s\n", t)
 	}
 	if len(res.Roots) > 0 {
 		fmt.Fprintf(&b, "and searched %s recursively for a matching basename\n", strings.Join(res.Roots, ", "))
 	}
-	return strings.TrimRight(b.String(), "\n")
+	return b.String()
 }
 
 // noTestFound is a FindTest miss as an error: its text is noTestFoundErr's,
@@ -692,8 +716,11 @@ func (e noTestFound) Error() string { return e.msg }
 
 // resolveDevTest is the ONE way a certify command finds the developer's test
 // when the operator named none: reposcan.FindTest (pairing.Resolve over the
-// disk under root), a noTestFound naming everywhere it looked, and the
-// "paired by search" disclosure when no naming convention found it.
+// disk under root), a noTestFound naming everywhere it looked, and a
+// "paired by <how>" line saying how it was found — "search" when no naming
+// convention found it, else the Resolution's Label ("sibling",
+// "parallel-tree", or for Rust "inline", "path-attr", "default-module"; an
+// inline pairing means the tests are IN the audited file).
 // certify --local and certify --adversarial both call it, so the two cannot
 // pair one file two different ways — they did until B1c, when --adversarial
 // took the rank-0 candidate without checking it existed.
@@ -711,6 +738,8 @@ func resolveDevTest(plug lang.Plugin, root, codePath string, stdout io.Writer) (
 		// discloses the pairing came from somewhere else instead of silently
 		// presenting it as though it were the expected sibling.
 		fmt.Fprintf(stdout, "  paired by search: %s\n", res.Path)
+	} else {
+		fmt.Fprintf(stdout, "  paired by %s: %s\n", res.Label, res.Path)
 	}
 	return res.Path, nil
 }
@@ -753,6 +782,12 @@ func resolveAuditPlugin(in localAuditInput) (lang.Plugin, error) {
 		}
 		plug = p
 	}
+	// Before preflight, jail or spend: a file whose test would be written
+	// over the file itself (its language's test landing is not built) cannot
+	// be audited. certify --repo's jobs route through here too.
+	if err := lang.CheckTestLanding(in.codePath); err != nil {
+		return nil, auditUsageErr("%v", err)
+	}
 	// in.checkArgv is the operator's own `-- <cmd>` when one was given (both
 	// certify --local's own flag and certify --repo's per-job testCmd route
 	// through this same field, see localExecutor.Execute) — it names exactly
@@ -763,6 +798,29 @@ func resolveAuditPlugin(in localAuditInput) (lang.Plugin, error) {
 		return nil, auditErr("%s toolchain unavailable — refusing to grade: %v", plug.Name(), err)
 	}
 	return plug, nil
+}
+
+// scopeAuditInput is the ONE place a file's audit commands are scoped to the
+// unit that owns the file (lang.ScopeTestCmd: a Rust file is graded as its
+// crate, not the whole workspace). It returns a COPY of in whose checkArgv —
+// the baseline's command — and baseArgv — the scored runs' — are both scoped,
+// because a baseline measured on one unit and mutants scored on another would
+// certify nothing. Every path that fixes a per-file command takes the input
+// from here: auditOneFile, baselineRunnerFor, and certify --adversarial's
+// client side. A refusal is a usage error, raised before any spend.
+func scopeAuditInput(in localAuditInput, plug lang.Plugin) (localAuditInput, error) {
+	var err error
+	if len(in.checkArgv) > 0 {
+		if in.checkArgv, err = lang.ScopeTestCmd(plug, in.repoDir, in.codePath, in.checkArgv); err != nil {
+			return in, auditUsageErr("%v", err)
+		}
+	}
+	if len(in.baseArgv) > 0 {
+		if in.baseArgv, err = lang.ScopeTestCmd(plug, in.repoDir, in.codePath, in.baseArgv); err != nil {
+			return in, auditUsageErr("%v", err)
+		}
+	}
+	return in, nil
 }
 
 // auditJailPrep is the jail-side of one file's audit: the resolved test path,
@@ -947,6 +1005,9 @@ func baselineRunnerFor(ctx context.Context, in localAuditInput) (reposcan.Baseli
 	noop := func() {}
 	plug, err := resolveAuditPlugin(in)
 	if err != nil {
+		return nil, noop, err
+	}
+	if in, err = scopeAuditInput(in, plug); err != nil {
 		return nil, noop, err
 	}
 	timeout := in.timeout
@@ -1460,6 +1521,9 @@ func auditOneFile(ctx context.Context, in localAuditInput) (advpool.Verdict, err
 
 	plug, err := resolveAuditPlugin(in)
 	if err != nil {
+		return zero, err
+	}
+	if in, err = scopeAuditInput(in, plug); err != nil {
 		return zero, err
 	}
 
@@ -2127,7 +2191,7 @@ func buildJailWiring(ctx context.Context, in jailWiringInput) (w jailWiring, err
 			// langs, non-modules, or already-vendored repos). Seed from the
 			// returned dir.
 			var serr error
-			seed, serr = buildRepoSeed("corral certify --local", in.repoDir, in.langName, in.iso.Name(), in.bindDirFlag, in.noBindDepsFlag, in.stdout)
+			seed, serr = buildRepoSeed("corral certify --local", in.repoDir, in.langName, in.iso, in.bindDirFlag, in.noBindDepsFlag, in.stdout)
 			if serr != nil {
 				return w, serr
 			}

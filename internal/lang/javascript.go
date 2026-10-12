@@ -3,7 +3,6 @@
 package lang
 
 import (
-	"os"
 	"os/exec"
 	"path/filepath"
 
@@ -97,21 +96,7 @@ var jsLintConfigs = []string{
 // is where os.Stat(c) looked: any --repo-dir run from elsewhere silently
 // lost the gate.
 func jsUndefCheck(codePath, testPath string) []string {
-	var haveConfig bool
-	dir := filepath.Dir(codePath)
-	for depth := 0; depth < 8 && !haveConfig; depth++ {
-		for _, c := range jsLintConfigs {
-			if _, err := os.Stat(filepath.Join(dir, c)); err == nil {
-				haveConfig = true
-				break
-			}
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			break
-		}
-		dir = parent
-	}
+	_, haveConfig := nearestAncestorWith(filepath.Dir(codePath), jsLintConfigs, 8)
 	if !haveConfig {
 		return nil
 	}

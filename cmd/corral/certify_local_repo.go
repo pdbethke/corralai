@@ -4,18 +4,22 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
 	"os"
-	"os/exec"
+	"path"
 	"path/filepath"
+	"slices"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/pdbethke/corralai/internal/adequacy"
 	"github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/sandbox"
+	"github.com/pdbethke/corralai/internal/tomllite"
 	"github.com/pdbethke/corralai/internal/treedirs"
 )
 
@@ -37,16 +41,24 @@ type repoSeed struct {
 // (a no-op for other languages, non-projects, and already-vendored repos),
 // then load the tree.
 //
+// iso is the audit's resolved isolation backend: the vendoring step runs in
+// it (with network), and its Name decides which dependency dirs can be
+// bind-mounted rather than copied.
+//
 // cleanup is ALWAYS non-nil so callers can defer it unconditionally, and it
 // releases the vendor staging dir when one was created.
 //
 // cmdName is the command the operator actually ran ("corral certify --local" or
 // "corral certify --repo"); it prefixes the prep messages and errors so a --repo
 // operator is never told about a command they never invoked.
-func buildRepoSeed(cmdName, repoDir, langName, backendName string, bindDirs []string, noBindDeps bool, out io.Writer) (repoSeed, error) {
-	seedDir, cleanup, verr := ensureVendored(cmdName, repoDir, langName, out)
+func buildRepoSeed(cmdName, repoDir, langName string, iso sandbox.Isolator, bindDirs []string, noBindDeps bool, out io.Writer) (repoSeed, error) {
+	seedDir, cleanup, verr := ensureVendored(cmdName, repoDir, langName, iso, out)
 	if verr != nil {
 		return repoSeed{cleanup: func() {}}, verr
+	}
+	backendName := ""
+	if iso != nil {
+		backendName = iso.Name()
 	}
 	files, binds, lerr := loadRepoFiles(seedDir, buildLoadOpts(backendName, bindDirs, noBindDeps))
 	if lerr != nil {
@@ -56,19 +68,37 @@ func buildRepoSeed(cmdName, repoDir, langName, backendName string, bindDirs []st
 	return repoSeed{seedDir: seedDir, files: files, binds: binds, cleanup: cleanup}, nil
 }
 
+// vendorTimeout bounds one vendoring step. It downloads a repository's whole
+// dependency set into an empty cache (the jail's tmpfs HOME starts empty
+// every time), which for a large Rust workspace is minutes, not seconds; a
+// step still running at twenty is stuck, not slow.
+const vendorTimeout = 20 * time.Minute
+
 // ensureVendored makes a language's external dependencies resolvable inside the
 // OFFLINE audit jail. The jail has no network by design (the code under audit
 // can't phone home), and a repo's external deps may live in the operator's
 // module cache, which is (a) incomplete for a full build and (b) deliberately
 // NOT mounted into the jail. So for a language whose plugin implements
 // lang.Vendorer and says the repo needs it, this stages a throwaway copy of the
-// repo and runs the plugin's vendoring command in it (network available HERE,
-// on the host, before the jail runs) — the jailed build then resolves
-// everything from the tree with no network and no access to the operator's
-// cache. The operator's real working tree is never modified; the copy is
-// removed by the returned cleanup. It's a no-op for an unknown language, a
-// plugin that does not vendor, or a repo the plugin says needs nothing.
-func ensureVendored(cmdName, repoDir, langName string, out io.Writer) (string, func(), error) {
+// repo and runs the plugin's vendoring step in it — INSIDE iso, with network
+// (adequacy.RunFetchStep) — and the graded runs then resolve everything from
+// the tree with no network and no access to the operator's cache.
+//
+// The step never runs on the host. A package manager reads repository-
+// controlled configuration that can name programs (measured: cargo vendor
+// runs a credential provider the repository ships), so the jail is the only
+// boundary that holds; with no isolation backend, or with backend "none"
+// (which IS the host), vendoring refuses rather than fall back.
+//
+// The staging copy lives in a corral-owned directory (vendorStagingDir), not
+// os.TempDir: toolchains discover configuration by walking UP from their
+// working directory (go.work, .cargo/config.toml), and a shared /tmp lets any
+// local user plant one there.
+//
+// The operator's real working tree is never modified; the copy is removed by
+// the returned cleanup. It's a no-op for an unknown language, a plugin that
+// does not vendor, or a repo the plugin says needs nothing.
+func ensureVendored(cmdName, repoDir, langName string, iso sandbox.Isolator, out io.Writer) (string, func(), error) {
 	noop := func() {}
 	p, known := lang.ByName(langName)
 	if !known {
@@ -78,11 +108,24 @@ func ensureVendored(cmdName, repoDir, langName string, out io.Writer) (string, f
 	if !ok {
 		return repoDir, noop, nil
 	}
-	argv, needed := v.VendorCmd(repoDir)
-	if !needed || len(argv) == 0 {
+	step, needed := v.Vendor(repoDir)
+	if !needed || len(step.Argv) == 0 {
 		return repoDir, noop, nil
 	}
-	tmp, err := os.MkdirTemp("", "corral-vendor-")
+	joined := strings.Join(step.Argv, " ")
+	if iso == nil || iso.Name() == "none" {
+		return "", noop, fmt.Errorf("%s: this repo's dependencies must be vendored (`%s`) for the offline jail, and vendoring runs only inside an isolation backend — never on the host — because the package manager reads configuration the repository controls. Make a sandbox available (bubblewrap on Linux), or vendor the repository yourself before auditing it", cmdName, joined)
+	}
+	if iso.Name() == "container" {
+		// Measured with rootful docker under container.go's flags: container
+		// root has no CAP_DAC_OVERRIDE, so it can neither read the 0700
+		// staging copy nor create vendor/ in it, and the step died with a
+		// shell permission error that read as a broken module. Refused up
+		// front until the container backend can run the step as the host
+		// uid.
+		return "", noop, fmt.Errorf("%s: this repo's dependencies must be vendored (`%s`) for the offline jail, and vendoring is not supported under the container backend yet. Commit vendor/ yourself (run `%s` and commit the result), or use --jail bwrap", cmdName, joined, joined)
+	}
+	tmp, err := vendorStagingDir()
 	if err != nil {
 		return "", noop, fmt.Errorf("%s: vendor staging dir: %w", cmdName, err)
 	}
@@ -91,36 +134,102 @@ func ensureVendored(cmdName, repoDir, langName string, out io.Writer) (string, f
 		cleanup()
 		return "", noop, fmt.Errorf("%s: staging repo copy for vendoring: %w", cmdName, cerr)
 	}
-	joined := strings.Join(argv, " ")
-	fmt.Fprintf(out, "%s: vendoring dependencies (%s) so the offline jail can resolve them…\n", cmdName, joined)
-	if b, verr := vendorCommand(argv, tmp).CombinedOutput(); verr != nil {
+	fmt.Fprintf(out, "%s: vendoring dependencies (%s) inside the %s sandbox, with network, so the offline jail can resolve them…\n", cmdName, joined, iso.Name())
+	stdout, res, rerr := adequacy.RunFetchStep(context.Background(), iso, tmp, step.Argv, vendorTimeout)
+	if rerr == nil && res.ExitCode != 0 {
+		rerr = fmt.Errorf("exit status %d", res.ExitCode)
+	}
+	if rerr != nil {
 		cleanup()
-		return "", noop, fmt.Errorf("%s: `%s` failed — the offline jail can't resolve this repo's external deps without it: %v\n%s", cmdName, joined, verr, strings.TrimSpace(string(b)))
+		return "", noop, fmt.Errorf("%s: `%s` failed — the offline jail can't resolve this repo's external deps without it: %v\n%s", cmdName, joined, rerr, strings.TrimSpace(res.Output))
+	}
+	if step.StdoutAppend != "" {
+		if aerr := appendVendorConfig(tmp, step.StdoutAppend, stdout); aerr != nil {
+			cleanup()
+			return "", noop, fmt.Errorf("%s: after `%s`: %w", cmdName, joined, aerr)
+		}
 	}
 	return tmp, cleanup, nil
 }
 
-// vendorCommand builds the plugin's vendoring command to run in the staging
-// copy dir. It runs on the HOST, with network, outside the jail, against a copy
-// of a repository corral does not trust, so its environment is
-// sandbox.ScrubbedEnviron: corral's own secrets (provider API keys,
-// CORRAL_TOKEN, the MotherDuck token) are dropped, and everything a toolchain
-// needs to fetch dependencies (PATH, HOME, GOPATH, GOPROXY, GOFLAGS, proxy
-// settings) is kept. A separate function so a test can assert the environment
-// without running anything.
-func vendorCommand(argv []string, dir string) *exec.Cmd {
-	// Why the G204/G702 taint is false: the taint gosec traces is repoDir,
-	// and it never reaches argv: repoDir is passed to VendorCmd only for its os.Stat checks
-	// and becomes the staging copy that is this command's working directory.
-	// argv is the plugin's fixed literal (lang.Vendorer's contract).
-	cmd := exec.CommandContext(context.Background(), argv[0], argv[1:]...) // #nosec G204 G702 -- argv is a plugin literal; repoDir reaches only cmd.Dir (see above)
-	cmd.Dir = dir
-	cmd.Env = sandbox.ScrubbedEnviron()
-	return cmd
+// vendorStagingDir creates a fresh staging directory under corral's own
+// cache directory (os.UserCacheDir()/corral/vendor), never os.TempDir.
+//
+// Why: go and cargo both look for configuration in every PARENT of their
+// working directory — go.work, .cargo/config.toml. Under a shared /tmp,
+// any local user can plant one: measured, a go.work in the temp directory
+// made every `go mod vendor` refuse ("cannot be run in workspace mode"). The
+// jail already hides the host's parents from the step, so this is the second
+// wall, not the only one; it also keeps a multi-gigabyte dependency copy off
+// a tmpfs /tmp. There is no fallback to os.TempDir when the cache directory
+// cannot be determined — a refusal is better than the walk-up it exists to
+// avoid.
+func vendorStagingDir() (string, error) {
+	cache, err := os.UserCacheDir()
+	if err != nil {
+		return "", fmt.Errorf("no user cache directory to stage in (set XDG_CACHE_HOME or HOME): %w", err)
+	}
+	base := filepath.Join(cache, "corral", "vendor")
+	if err := os.MkdirAll(base, 0o700); err != nil {
+		return "", err
+	}
+	return os.MkdirTemp(base, "stage-")
 }
 
-// copyTreeSkipGit recursively copies src into an existing dst, skipping .git and
-// any symlink (never following one out of the tree). It stages a throwaway copy
+// appendVendorConfig appends a vendoring step's stdout to rel inside the
+// staging tree (lang.VendorStep.StdoutAppend), creating it if absent.
+//
+// It REFUSES, naming the table, when the file already declares a TOML table
+// the output declares: cargo rejects a config with a duplicated table
+// ("duplicate key"), and corral will not merge into a configuration file it
+// does not own — merging means rewriting the operator's file, and passing a
+// second config with --config means editing the operator's test command.
+// Recognised: [table] headers, quoted or spaced segments, and dotted keys that
+// open the same table. An inline table (`source = { … }`) is not; cargo then
+// rejects the file in the jail with its own message.
+//
+// Every access goes through an os.Root over the staging dir: the step that
+// just ran is untrusted, and a .cargo that became a symlink must not turn
+// this write into one outside the copy.
+func appendVendorConfig(stageDir, rel, stdout string) error {
+	root, err := os.OpenRoot(stageDir)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = root.Close() }()
+	rel = filepath.FromSlash(rel)
+
+	existing, rerr := root.ReadFile(rel)
+	if rerr != nil && !errors.Is(rerr, fs.ErrNotExist) {
+		return rerr
+	}
+	declared := tomllite.TablesDeclared(string(existing))
+	for _, t := range tomllite.TablesDeclared(stdout) {
+		if slices.Contains(declared, t) {
+			return fmt.Errorf("%s already declares [%s]; vendoring needs to add its own [%s], and corral will not rewrite a configuration file it does not own. Remove that table, or vendor the repository yourself before auditing it", filepath.ToSlash(rel), t, t)
+		}
+	}
+	if err := root.MkdirAll(filepath.Dir(rel), 0o750); err != nil {
+		return err
+	}
+	f, err := root.OpenFile(rel, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	sep := ""
+	if len(existing) > 0 && !strings.HasSuffix(string(existing), "\n") {
+		sep = "\n"
+	}
+	if _, err := io.WriteString(f, sep+stdout); err != nil {
+		_ = f.Close()
+		return err
+	}
+	return f.Close()
+}
+
+// copyTreeSkipGit recursively copies src into an existing dst, skipping .git,
+// every language-declared build directory (isBuildDir), and any symlink
+// (never following one out of the tree). It stages a throwaway copy
 // of a repo for a plugin's vendoring command so the operator's real working
 // tree is untouched.
 // Reads go through os.Root so a symlink can't escape src (gosec G122 / TOCTOU),
@@ -137,7 +246,7 @@ func copyTreeSkipGit(src, dst string) error {
 		}
 		target := filepath.Join(dst, filepath.FromSlash(rel))
 		if d.IsDir() {
-			if d.Name() == ".git" {
+			if d.Name() == ".git" || isBuildDir(r.FS(), rel, d.Name()) {
 				return fs.SkipDir
 			}
 			if rel == "." {
@@ -163,6 +272,35 @@ func copyTreeSkipGit(src, dst string) error {
 		}
 		return out.Close()
 	})
+}
+
+// buildDirs is every language's declared build directory, composed from the
+// registry (lang.AllBuildDirs) — the language whose tool writes the directory
+// is the one that knows its name and its marker.
+var buildDirs = lang.AllBuildDirs()
+
+// isBuildDir reports whether the directory at rel (basename name) is a
+// language-declared build directory: its basename matches a lang.BuildDir AND
+// that declaration's marker file exists beside it. Both seed walkers ask it —
+// the jail seed and the vendoring stage copy — because a build directory is
+// derived output, routinely gigabytes, that the jailed run rebuilds.
+//
+// This deliberately does not use treedirs.NeverWalked: that set also holds
+// fixtures (testdata, which a suite reads) and dependency dirs (bound
+// read-only as DepBinds), and its build-output entries are basenames alone,
+// which would drop real source sharing the name (a Python package called
+// build). fsys is the walk's os.Root view, so the marker check cannot follow
+// a symlink out of the tree.
+func isBuildDir(fsys fs.FS, rel, name string) bool {
+	for _, b := range buildDirs {
+		if name != b.Name {
+			continue
+		}
+		if fi, err := fs.Stat(fsys, path.Join(path.Dir(rel), b.Marker)); err == nil && fi.Mode().IsRegular() {
+			return true
+		}
+	}
+	return false
 }
 
 // stringSlice is a minimal repeatable-string flag.Value (cmd/corral has no
@@ -256,7 +394,7 @@ func worldReadableDir(dir string) bool {
 // workspace — plus the dependency dirs (treedirs.SharedDependencies, and any
 // --bind-dir entries) it detected and excluded from that seed so they can be
 // bind-mounted read-only instead of copied. It skips
-// .git, files over 1 MiB (data/fixtures, not source), and anything that
+// .git, every language-declared build directory (isBuildDir), files over 1 MiB (data/fixtures, not source), and anything that
 // isn't valid UTF-8 (binaries the text-only jail can't carry), and caps the
 // total so a huge checkout can't blow up the workspace. The keys are exactly
 // the paths a mutant overlay and the project's own test command reference
@@ -326,7 +464,7 @@ func loadRepoFiles(root string, opts loadOpts) (map[string]string, []adequacy.De
 			return err
 		}
 		if d.IsDir() {
-			if d.Name() == ".git" {
+			if d.Name() == ".git" || isBuildDir(r.FS(), rel, d.Name()) {
 				return fs.SkipDir
 			}
 			if rel != "." && shouldBind(rel, d.Name(), opts) {

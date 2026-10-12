@@ -840,3 +840,65 @@ func TestWidenNeverPromotesTestSupport(t *testing.T) {
 		t.Fatalf("kept = %+v, want the original test-support exclusion", kept)
 	}
 }
+
+// TestEnumerateClassifiesALandingRefusedFileBeforePairing: a file whose
+// language has no test landing yet (lang.CheckTestLanding — today every .rs
+// source, whose test would be written over the file itself) is excluded by
+// Enumerate as test-landing-not-built, paired or not, and is never a
+// candidate. Classified here, once, because every scan-wide decision
+// downstream reads cands: --top ranking, the selection and pre-flight source
+// list, the "auditing N of M" count. A refused file that stayed a candidate
+// took a --top slot from an auditable Python file and made a Python+Rust repo
+// "span two languages", switching Python's selection off (final review I1/I2).
+func TestEnumerateClassifiesALandingRefusedFileBeforePairing(t *testing.T) {
+	root := writeTree(t, map[string]string{
+		"calc.py":      "def add(a, b):\n    return a + b\n",
+		"test_calc.py": "from calc import add\n\ndef test_add():\n    assert add(1, 2) == 3\n",
+		"src/lib.rs":   "pub fn f() {}\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn t() {}\n}\n",
+		"src/plain.rs": "pub fn p() {}\n",
+		"tests/it.rs":  "#[test]\nfn it() {}\n",
+	})
+	cands, excl, err := Enumerate(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cands) != 1 || cands[0].Path != "calc.py" {
+		t.Fatalf("candidates = %+v, want only calc.py", cands)
+	}
+	reasons := map[string]string{}
+	for _, e := range excl {
+		reasons[e.Path] = e.Reason
+	}
+	for _, p := range []string{"src/lib.rs", "src/plain.rs"} {
+		if reasons[p] != ReasonTestLandingNotBuilt {
+			t.Errorf("%s excluded as %q, want %q", p, reasons[p], ReasonTestLandingNotBuilt)
+		}
+	}
+	if reasons["tests/it.rs"] != ReasonIsTest {
+		t.Errorf("tests/it.rs excluded as %q, want %q (a test file is still a test file)", reasons["tests/it.rs"], ReasonIsTest)
+	}
+
+	var rust LanguageStat
+	for _, s := range BuildLanguageProfile(cands, excl) {
+		if s.Lang == "rust" {
+			rust = s
+		}
+	}
+	if rust.LandingNotBuilt != 2 || rust.Auditable != 0 || rust.NoPairedTest != 0 {
+		t.Errorf("rust profile = %+v, want 2 landing-not-built, 0 auditable, 0 no-paired-test", rust)
+	}
+}
+
+// TestALandingRefusedChangeIsNotAnUnauditableChangedSource: on the diff path a
+// refused-landing file is treated exactly as a file in a language corral does
+// not audit (ReasonNoLanguage): disclosed, never a NOT AUDITED that fails the
+// gate. Founder ruling for Rust part 1 — before this branch .rs was invisible,
+// and failing every mixed-repo PR that touches one punishes users for a
+// language corral cannot audit yet.
+func TestALandingRefusedChangeIsNotAnUnauditableChangedSource(t *testing.T) {
+	if UnauditableChangedSource(ReasonTestLandingNotBuilt) != UnauditableChangedSource(ReasonNoLanguage) {
+		t.Fatalf("UnauditableChangedSource(%q) = %v, want the same as %q (%v)",
+			ReasonTestLandingNotBuilt, UnauditableChangedSource(ReasonTestLandingNotBuilt),
+			ReasonNoLanguage, UnauditableChangedSource(ReasonNoLanguage))
+	}
+}

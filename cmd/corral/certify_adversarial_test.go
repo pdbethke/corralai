@@ -1027,3 +1027,27 @@ func TestAdversarialMissingCodeReportsTheCodeNotTheTest(t *testing.T) {
 		t.Fatalf("stderr reports a missing test for a missing --code: %s", s)
 	}
 }
+
+// TestAdversarialRefusesALandingRefusedFileBeforeReadingIt: the landing
+// refusal was held only at the brain, so the client resolved the dev test,
+// read both files and uploaded them before the brain said no — and, with an
+// absolute --code, a repository's #[path] could name a host file to upload
+// (final review I4). The client now asks lang.CheckTestLanding right after
+// the plugin resolves, before any read: a --code that does not even exist is
+// refused for the landing, not reported unreadable, and nothing is sent.
+func TestAdversarialRefusesALandingRefusedFileBeforeReadingIt(t *testing.T) {
+	code := filepath.Join(t.TempDir(), "src", "lib.rs") // never created
+	f := &fakeAdvClient{runID: 7, statuses: []advStatus{certifiedStatus()}}
+	var out, errBuf bytes.Buffer
+	args := []string{"--adversarial", "--brain", "http://b", "--code", code, "--goal", "g", "--poll", "1ms", "--", "cargo", "test"}
+	rc := runCertifyAdversarial(args, f, gitStubRunner{}, noSleep, &out, &errBuf)
+	if rc != 2 {
+		t.Fatalf("exit = %d, want 2; stderr=%s", rc, errBuf.String())
+	}
+	if !strings.Contains(errBuf.String(), "test landing is not built") || strings.Contains(errBuf.String(), "reading --code") {
+		t.Fatalf("want the landing refusal before any read, got:\n%s", errBuf.String())
+	}
+	if f.spec.Code != "" || f.spec.DevTestCode != "" || strings.Contains(out.String(), "paired by") {
+		t.Fatalf("a refused file was resolved or sent: spec=%+v stdout=%s", f.spec, out.String())
+	}
+}

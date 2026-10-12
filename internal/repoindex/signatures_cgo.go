@@ -10,6 +10,8 @@ import (
 	"unicode"
 
 	sitter "github.com/smacker/go-tree-sitter"
+
+	"github.com/pdbethke/corralai/internal/pairing"
 )
 
 // extractSignatures dispatches to lang's extractor in its langSpecs row. A
@@ -20,6 +22,21 @@ func extractSignatures(text, lang string) ([]Signature, error) {
 		return s.extract(text, lang)
 	}
 	return nil, ErrUnsupportedLang
+}
+
+// testModules dispatches to the modules reader in lang's langSpecs row; a
+// language without one answers nil (it pairs by filename alone).
+func testModules(lang string, src []byte) []pairing.TestModule {
+	spec, ok := langSpecs[lang]
+	if !ok || spec.modules == nil {
+		return nil
+	}
+	tree, _, err := parseTS(string(src), lang)
+	if err != nil {
+		return nil
+	}
+	defer tree.Close()
+	return spec.modules(tree.RootNode(), src)
 }
 
 func parseTS(text, lang string) (*sitter.Tree, []byte, error) {

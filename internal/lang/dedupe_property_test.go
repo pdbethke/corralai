@@ -46,13 +46,16 @@ var corpusDirs = []string{
 var corpusBases = []string{"foo", "utils", "x", "conf", "artifact_store"}
 
 // sourceExt is the source extension a plugin's corpus paths use, read from
-// its own declaration — the extension of its first Sibling rule's Name — so
-// no hand-kept language list can go stale. The caller's p.Detect check is
-// what proves the derived extension is one the plugin really claims.
+// its own declaration — the extension of the first rule Name that has one —
+// so no hand-kept language list can go stale. The caller's p.Detect check is
+// what proves the derived extension is one the plugin really claims. (It read
+// the first Sibling rule until Rust, which has no Sibling: a Rust file is
+// only paired to a test the file itself declares. Every earlier plugin's
+// first named rule IS its Sibling, so their answers are unchanged.)
 func sourceExt(rules []pairing.Rule) (string, bool) {
 	for _, r := range rules {
-		if r.Shape == pairing.Sibling {
-			return filepath.Ext(r.Name), true
+		if ext := filepath.Ext(r.Name); ext != "" {
+			return ext, true
 		}
 	}
 	return "", false
@@ -75,7 +78,7 @@ func TestDedupeMatchesPrincipledRuleForShippedPlugins(t *testing.T) {
 			rules := p.TestRules()
 			ext, ok := sourceExt(rules)
 			if !ok {
-				t.Fatalf("plugin %q declares no Sibling rule, so its source extension cannot be derived and its rules go unchecked", name)
+				t.Fatalf("plugin %q declares no rule Name with an extension, so its source extension cannot be derived and its rules go unchecked", name)
 			}
 			checked := 0
 			for _, dir := range corpusDirs {

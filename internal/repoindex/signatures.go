@@ -2,7 +2,11 @@
 
 package repoindex
 
-import "errors"
+import (
+	"errors"
+
+	"github.com/pdbethke/corralai/internal/pairing"
+)
 
 type Param struct {
 	Name string
@@ -53,4 +57,12 @@ var ErrUnsupportedLang = errors.New("repoindex: no signature extractor for langu
 // implementation is build-tagged: tree-sitter under cgo, a stub otherwise.
 func ExtractSignatures(text, lang string) ([]Signature, error) {
 	return extractSignatures(text, lang)
+}
+
+// TestModules returns the test modules src declares in itself, for a language
+// whose row has a modules reader (Rust); every other language answers nil.
+// Build-tagged like ExtractSignatures: the parse needs the grammar, so a
+// no-cgo build answers nil.
+func TestModules(lang string, src []byte) []pairing.TestModule {
+	return testModules(lang, src)
 }

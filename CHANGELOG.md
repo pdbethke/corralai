@@ -11,6 +11,105 @@ history of any release, `git log v0.3.4..v0.3.5`.
 
 ## [Unreleased]
 
+- **`certify --repo` now recognises `.rs` files and reports them as not
+  audited yet.** corral cannot audit Rust today: a test for a Rust file
+  would be written over the file itself, because its tests live inside it.
+  Each `.rs` source is listed as `test-landing-not-built`, never as a
+  candidate, and the language profile shows it as
+  `N not auditable yet (test landing not built)`. It never takes a `--top`
+  slot, never counts as a second language for the selection and coverage
+  pre-flight passes (a Python repository with a Rust extension keeps its
+  Python test selection), and never makes corral prepare a sandbox or
+  download Rust dependencies.
+- **On `--diff-base`, a changed `.rs` file does not fail the gate.** It is
+  treated as a changed file in a language corral does not audit, and is
+  named in the scan output:
+  `changed but not audited: <path> (test-landing-not-built — …)`. A pull
+  request that changes only Rust code, or only a Rust test, reports
+  NOTHING IN SCOPE and exits 0 — that change was not audited, and the line
+  above says so.
+- **`certify --local` and `certify --adversarial` print how they paired the
+  test, for every language:** a new `  paired by <label>: <path>` line
+  (`sibling`, `parallel-tree`, `flat-root`, … or `search`), where only a
+  search used to be disclosed. `corral doctor`'s pairing line gains the
+  same label in parentheses.
+- **`certify --adversarial` and `corral doctor` refuse a `.rs` file up
+  front.** `--adversarial` used to read the file and its test and send
+  both to the brain, which then refused; it now refuses before reading
+  anything. `doctor` used to report such a file `[ok]`; it now says it
+  pairs but cannot be audited yet.
+- **A source file cannot name a test outside the audit root.** A Rust
+  `#[path = "…"]` test-module declaration is followed only while it stays
+  inside the audit root: the repository for `certify --repo` and
+  `--repo-dir`, but the WORKING DIRECTORY for a `--code` given on the
+  command line without `--repo-dir` (absolute or not), checked after resolving symlinks.
+  One that leaves it is never read, and the "no test found" message names
+  it as refused rather than saying the file declares no test.
+- **`go mod vendor` now runs inside the sandbox, never on the host.** When a
+  Go module has no `vendor/`, corral vendors a throwaway copy before the
+  audit. That step used to run directly on your machine; it now runs in the
+  same isolation backend as the audit (bwrap by default), with network
+  access for that one step only — the graded runs stay offline. What you
+  will notice:
+  - It needs a working sandbox. Without one, corral refuses and says to
+    vendor the module yourself; it never falls back to the host.
+  - It is refused under `--jail container`, which used to work: the
+    container's root user can neither read the staging copy nor write
+    `vendor/` into it. Commit `vendor/` yourself, or use `--jail bwrap`.
+  - It starts from an empty module cache every time, so it downloads every
+    dependency; your own `GOPATH`/`GOMODCACHE` are not used.
+  - Passed through: the proxy variables (`HTTP_PROXY`, `HTTPS_PROXY`,
+    `NO_PROXY`, `ALL_PROXY`, in either case) and Go's module settings
+    (`GOPROXY`, `GOSUMDB`, `GONOSUMDB`, `GONOSUMCHECK`, `GOPRIVATE`,
+    `GONOPROXY`, `GOINSECURE`, `GOFLAGS`). Your git and netrc credentials
+    are not, so a private module that needs them can no longer be vendored
+    by corral: vendor it yourself first.
+  - On Linux backends `GOTOOLCHAIN` is `local`, as in every graded run: a
+    `go.mod` that needs a newer Go than the installed one fails here, with
+    Go's own message, instead of downloading a toolchain. The macOS backend
+    does not pin it, so there `go` may still download one.
+  - What the vendoring step can reach, exactly: on Linux it shares the
+    host's network, so services listening on the host's loopback and
+    abstract unix sockets are reachable from it; proxy variables are passed
+    as they are, including any credential inside a proxy URL; on macOS the
+    step may also look up any mach service. Of your home directory it can
+    read only its own staging copy and the toolchain it runs. With rustup
+    older than 1.28, a repository's `rust-toolchain.toml` can still make
+    rustup download and run the toolchain it names during this step
+    (inside the sandbox); 1.28 and later refuse.
+  - The throwaway copy lives under your user cache directory
+    (`~/.cache/corral/vendor` on Linux), not the system temporary directory.
+    This fixes a bug: a `go.work` file in the temporary directory — which
+    any local user can create — made every Go vendoring step fail with
+    "cannot be run in workspace mode".
+- **The sandbox no longer exposes a toolchain's secrets.** A toolchain
+  installed under `~/.cargo` (rustup, or anything `cargo install`ed) or
+  `~/.gem` was mounted whole, read-only, into every sandboxed run — with
+  `cargo login`'s `credentials.toml`, registry tokens in `config.toml`,
+  private git checkouts and RubyGems' `credentials` inside it, where the
+  audited code could read them and print them into the record. Now:
+  - a cargo home is mounted as its `bin/` alone (plus rustup's toolchain
+    directory when `bin/` holds rustup), whichever of its programs runs the
+    suite and whether or not you have run `cargo login`. A cargo home is
+    exactly what cargo defines: your `CARGO_HOME`, or `~/.cargo` when it is
+    unset (followed through a symlink), whatever it holds. Nothing else is
+    one, so `/usr/bin`, `/usr/local`, `~/.local/bin`, Debian's
+    `/usr/share/cargo`, Homebrew's prefix and its kegs (the `rustup` keg
+    included) and a standalone Rust install are mounted as before. The cost:
+    a second cargo home that `CARGO_HOME` does not name gets none of this.
+    Inside `/usr` (or `/opt/homebrew` on macOS) — an image's
+    `/usr/local/cargo` with `CARGO_HOME` unset — **nothing** in it is
+    hidden: not `credentials.toml`, not registry tokens in `config.toml`,
+    not `git/` checkouts. Anywhere else it is mounted like any other
+    toolchain directory, which hides only its credentials file. Set
+    `CARGO_HOME` to the cargo home your suite uses;
+  - of `~/.gem`, only the directory the runner lives in;
+  - your `CARGO_HOME` inside `/usr` (and, on macOS, `/opt/homebrew`) — the
+    official Rust container image sets it to `/usr/local/cargo` — is hidden
+    in every sandbox except its `bin/`;
+  - a `RUSTUP_HOME` that is not a toolchain directory (for example
+    `~/.config`), or that is a cargo home, is refused with a message
+    instead of mounted.
 - **The directory walkers that skip dependency trees now share one
   definition, declared by the language plugins.** `corral review`'s scope
   loading and planning, the repository reader the brain and the gate use,
@@ -27,7 +126,8 @@ history of any release, `git log v0.3.4..v0.3.5`.
   every tree, like `.venv`. What `certify --repo` scans and accounts for
   is unchanged. The jail seed and the vendoring staging copy do not use
   the shared definition: apart from the binds above, neither skips any
-  directory but `.git`.
+  directory but `.git` and cargo's build output (a `target` directory with
+  a `Cargo.toml` beside it).
 
 - **The coverage pre-flight runs on mixed-language repositories when the
   `--` command names a language.** Go's coverage instrumentation used to

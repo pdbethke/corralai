@@ -137,6 +137,47 @@ func MinimalEnv() []string {
 	return env
 }
 
+// fetchVars are the host variables that decide HOW a dependency fetch reaches
+// the network — HTTP proxies and Go's module-proxy settings — and nothing
+// else. They carry routes, not credentials: a token in a proxy URL is the
+// operator's to put there, and a private module's git or netrc credentials
+// are deliberately NOT forwarded (the jail cannot see $HOME, and the fetch
+// runs on behalf of a repository corral does not trust).
+//
+// Deliberately absent: every variable that names a HOST location (GOPATH,
+// GOMODCACHE, GOCACHE, CARGO_HOME, RUSTUP_HOME). Those directories are not
+// mounted in the jail, so forwarding them would point the toolchain at a path
+// that does not exist there; unset, the toolchain defaults under the jail's
+// own tmpfs HOME, which is exactly the throwaway cache a fetch should use.
+var fetchVars = []string{
+	"HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "ALL_PROXY",
+	"http_proxy", "https_proxy", "no_proxy", "all_proxy",
+	"GOPROXY", "GOSUMDB", "GONOSUMDB", "GONOSUMCHECK", "GOPRIVATE", "GONOPROXY", "GOINSECURE", "GOFLAGS",
+}
+
+// fetchPins are set, never inherited, in the networked step.
+//
+// RUSTUP_AUTO_INSTALL=0: a rustup proxy otherwise DOWNLOADS and runs whatever
+// toolchain the repository's rust-toolchain.toml names, and in this step it
+// has the network to do it. Disabled, the proxy refuses ("toolchain '…' is
+// not installed"). The variable exists from rustup 1.28 (measured on 1.28.2);
+// an older rustup ignores it and would still install.
+var fetchPins = []string{"RUSTUP_AUTO_INSTALL=0"}
+
+// FetchEnv is MinimalEnv plus fetchVars plus fetchPins: the environment for
+// the ONE kind of jailed command that has the network — a lang.Vendorer step
+// fetching a repository's dependencies (see adequacy.RunFetchStep). Graded
+// runs never use it: they get MinimalEnv and no network.
+func FetchEnv() []string {
+	env := MinimalEnv()
+	for _, k := range fetchVars {
+		if v, ok := os.LookupEnv(k); ok {
+			env = append(env, k+"="+v)
+		}
+	}
+	return append(env, fetchPins...)
+}
+
 // ScrubbedEnviron is the host environment WITHOUT corral's own secrets: every
 // provider key it knows by name (creds.CanonicalNames, which includes
 // GOOGLE_API_KEY via creds.Providers, plus the MotherDuck token) is dropped; everything else — PATH, HOME, GOPATH,

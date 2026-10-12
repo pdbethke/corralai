@@ -266,39 +266,11 @@ func (j bwrapJail) runInJailCapturing(ctx context.Context, files map[string]stri
 	if berr != nil {
 		return sandbox.Result{}, berr
 	}
-	// Make the operator's OWN toolchain reachable. The jail mounts /usr, which
-	// covers a distribution package and /usr/local — and nothing else, so a
-	// compiler installed by asdf, nvm, rustup, pyenv, mise or Homebrew was
-	// invisible and the run failed with "<tool>: not found", blaming the
-	// project. Resolved from the command itself, so nothing is guessed.
-	//
-	// EVERY interpreter the command runs, not argv[0]. The coverage pre-flight
-	// and test selection wrap the suite in `sh -c` (set up a temp dir, run,
-	// reduce), so argv[0] was "sh" and the operator's toolchain — reachable
-	// for the ordinary scoring runs in the SAME scan — was never bound for the
-	// instrumented ones. `corral doctor` said the toolchain was reachable
-	// inside the sandbox, which was true for the command it probed and false
-	// for the wrapped one the pre-flight actually ran.
-	seen := map[string]bool{}
-	for _, interp := range lang.InterpretersIn(cmd) {
-		tb, terr := toolchainBindFor(interp)
-		if terr != nil {
-			return sandbox.Result{}, terr
-		}
-		if tb.Host != "" && !seen[tb.Host] {
-			seen[tb.Host] = true
-			roBinds = append(roBinds, tb)
-			// pip --user's shim in ~/.local/bin imports from ~/.local/lib;
-			// the two are bound as a pair, never their parent.
-			if filepath.Base(tb.Host) == "bin" && filepath.Base(filepath.Dir(tb.Host)) == ".local" {
-				lib := filepath.Join(filepath.Dir(tb.Host), "lib")
-				if _, err := os.Stat(lib); err == nil && !seen[lib] {
-					seen[lib] = true
-					roBinds = append(roBinds, sandbox.Bind{Host: lib, Target: lib})
-				}
-			}
-		}
+	tbs, terr := toolchainBinds(cmd)
+	if terr != nil {
+		return sandbox.Result{}, terr
 	}
+	roBinds = append(roBinds, tbs...)
 	res, err := sandbox.RunGuarded(ctx, shellJoin(cmd), sandbox.Options{
 		Workspace:     dir,
 		Backend:       j.backend,
@@ -316,6 +288,51 @@ func (j bwrapJail) runInJailCapturing(ctx context.Context, files map[string]stri
 		return res, err
 	}
 	return res, nil
+}
+
+// toolchainBinds is the read-only binds that make cmd's own toolchain
+// reachable inside the jail — one per interpreter the command runs. Shared by
+// every jailed run (graded runs and the vendoring fetch step) so the two can
+// never disagree about which toolchain the jail can see.
+func toolchainBinds(cmd []string) ([]sandbox.Bind, error) {
+	// Make the operator's OWN toolchain reachable. The jail mounts /usr, which
+	// covers a distribution package and /usr/local — and nothing else, so a
+	// compiler installed by asdf, nvm, rustup, pyenv, mise or Homebrew was
+	// invisible and the run failed with "<tool>: not found", blaming the
+	// project. Resolved from the command itself, so nothing is guessed.
+	//
+	// EVERY interpreter the command runs, not argv[0]. The coverage pre-flight
+	// and test selection wrap the suite in `sh -c` (set up a temp dir, run,
+	// reduce), so argv[0] was "sh" and the operator's toolchain — reachable
+	// for the ordinary scoring runs in the SAME scan — was never bound for the
+	// instrumented ones. `corral doctor` said the toolchain was reachable
+	// inside the sandbox, which was true for the command it probed and false
+	// for the wrapped one the pre-flight actually ran.
+	var binds []sandbox.Bind
+	seen := map[string]bool{}
+	for _, interp := range lang.InterpretersIn(cmd) {
+		tbs, terr := toolchainBindsFor(interp)
+		if terr != nil {
+			return nil, terr
+		}
+		for _, tb := range tbs {
+			if seen[tb.Host] {
+				continue
+			}
+			seen[tb.Host] = true
+			binds = append(binds, tb)
+			// pip --user's shim in ~/.local/bin imports from ~/.local/lib;
+			// the two are bound as a pair, never their parent.
+			if filepath.Base(tb.Host) == "bin" && filepath.Base(filepath.Dir(tb.Host)) == ".local" {
+				lib := filepath.Join(filepath.Dir(tb.Host), "lib")
+				if _, err := os.Stat(lib); err == nil && !seen[lib] {
+					seen[lib] = true
+					binds = append(binds, sandbox.Bind{Host: lib, Target: lib})
+				}
+			}
+		}
+	}
+	return binds, nil
 }
 
 // RunTest reports whether testCmd exited 0 inside the jail.

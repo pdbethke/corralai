@@ -496,10 +496,26 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		// read as NOTHING IN SCOPE, exit 0. A source whose conventional test
 		// path the diff deleted is unpairable BECAUSE of the diff, and is
 		// reported as exactly that.
-		unpairableInDiff = append(unpairableInDiff, sourcesOrphanedByDeletedTests(*repoDir, changed, excl)...)
+		orphaned, oerr := sourcesOrphanedByDeletedTests(*repoDir, changed, excl)
+		if oerr != nil {
+			fmt.Fprintf(stderr, "corral certify --repo: %v\n", oerr)
+			return 1
+		}
+		unpairableInDiff = append(unpairableInDiff, orphaned...)
 		sort.Strings(unpairableInDiff)
 		unpairableInDiff = slices.Compact(unpairableInDiff)
 		fmt.Fprintf(stdout, "  diff against %s: auditing %d of %d candidate(s)\n", *diffBase, len(selected), len(cands))
+		// A changed file corral recognises but cannot audit YET (its test
+		// landing is not built) is ruled to be treated as a changed file in a
+		// language corral does not audit: it never fails the gate on its own
+		// (reposcan.UnauditableChangedSource). Unlike a README, it is code
+		// the reader may expect to have been audited, so it is named, with
+		// the reason, rather than left to the exclusion list.
+		for _, e := range excl {
+			if e.Reason == reposcan.ReasonTestLandingNotBuilt && changedSet[e.Path] {
+				fmt.Fprintf(stdout, "    changed but not audited: %s (%s%s)\n", e.Path, e.Reason, reasonGloss(e.Reason))
+			}
+		}
 	} else {
 		// Selection precedes derivation, deliberately: bounding afterwards would
 		// pay for a goal on every candidate in order to audit 25 of them.
@@ -793,7 +809,13 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	diffTouchedATest := false
 	mightBeTest := mightBeTestPredicate()
 	for path := range diffChanged {
-		if mightBeTest(path) {
+		// A changed test in a language whose landing is not built is treated
+		// as the scan treats a file in a language it does not audit: no
+		// instrumented run can attribute it (no such language's sources are
+		// candidates or selection sources — see Enumerate), so running the
+		// OTHER language's suite for it would cost a suite run and find
+		// nothing.
+		if mightBeTest(path) && lang.CheckTestLanding(path) == nil {
 			diffTouchedATest = true
 			break
 		}
@@ -2638,6 +2660,12 @@ func (l *localExecutor) runPreflight(ctx context.Context, sources []string) repo
 		testCmd = plug.TestCmd()
 	}
 
+	// Asked BEFORE scanRunner, for the reason collectSelection gives: jail
+	// preparation is the expensive part, and a language with no coverage
+	// instrumentation would get only this note after paying for it.
+	if _, note := reposcan.PreflightCommand(plug, testCmd); note != "" {
+		return reposcan.CoverageMap{Note: note}
+	}
 	runner, files, rerr := l.scanRunner(langName, plug, preflightMaxOutput, preflightTimeout)
 	if rerr != nil {
 		return reposcan.CoverageMap{Note: fmt.Sprintf("preflight: %v", rerr)}
@@ -2835,6 +2863,13 @@ func (l *localExecutor) collectSelection(ctx context.Context, sources []string) 
 		}
 	}
 
+	// Asked BEFORE scanRunner, which prepares the jail seed (a tree copy and,
+	// for a language that vendors, a networked dependency fetch): a plugin
+	// that cannot instrument this command would get only this note after
+	// paying for all of it.
+	if _, note := reposcan.SelectionCommand(plug, testCmd, sources); note != "" {
+		return reposcan.SelectionEvidence{Note: note}
+	}
 	runner, files, err := l.scanRunner(langName, plug, selectionMaxOutput, selectionTimeout)
 	if err != nil {
 		return reposcan.SelectionEvidence{Note: fmt.Sprintf("selection: %v", err)}
@@ -3048,24 +3083,31 @@ func mightBeTestPredicate() func(path string) bool {
 }
 
 // sourcesOrphanedByDeletedTests names the excluded sources whose paired test
-// the diff DELETED: for each changed path that looks like a test and no
-// longer exists in the checkout, every no-paired-test source whose language
-// plugin would have named that path as a test candidate. Reported through
-// the same NOT AUDITED path as a changed-but-unpairable source, because it
-// is the same condition with the more alarming cause.
-func sourcesOrphanedByDeletedTests(repoDir string, changed []string, excl []reposcan.Exclusion) []string {
+// the diff DELETED: for each changed path that no longer exists in the
+// checkout, every no-paired-test source whose own resolution would have
+// checked that path (reposcan.ResolutionPaths — the convention candidates
+// AND what the source's own declarations load). Reported through the same
+// NOT AUDITED path as a changed-but-unpairable source, because it is the
+// same condition with the more alarming cause.
+//
+// It asks what Resolve tries, not pairing.Candidates: a Rust source's test is
+// the file its `#[path]`/`mod tests;` declaration loads, which no naming
+// convention derives, so a Candidates-only check let a PR delete
+// app_id_tests.rs and drop app_id.rs out of the audit with no disclosure. For
+// the same reason there is no MightBeTest pre-filter on the deleted paths any
+// more: a #[path] target may carry no test marker at all (src/elsewhere/x.rs),
+// and for every other language a path some resolution checks is a candidate,
+// which the registry round trip already holds to be a possible test. The
+// error is a source that could not be read for its declarations.
+func sourcesOrphanedByDeletedTests(repoDir string, changed []string, excl []reposcan.Exclusion) ([]string, error) {
 	deleted := map[string]bool{}
-	mightBeTest := mightBeTestPredicate()
 	for _, path := range changed {
-		if !mightBeTest(path) {
-			continue
-		}
 		if _, err := os.Stat(filepath.Join(repoDir, filepath.FromSlash(path))); os.IsNotExist(err) {
 			deleted[path] = true
 		}
 	}
 	if len(deleted) == 0 {
-		return nil
+		return nil, nil
 	}
 	var out []string
 	for _, e := range excl {
@@ -3076,14 +3118,18 @@ func sourcesOrphanedByDeletedTests(repoDir string, changed []string, excl []repo
 		if !ok {
 			continue
 		}
-		for _, tc := range pairing.Candidates(p.TestRules(), e.Path) {
-			if deleted[tc.Path] {
+		tried, err := reposcan.ResolutionPaths(p, repoDir, e.Path)
+		if err != nil {
+			return nil, fmt.Errorf("checking whether the diff deleted %s's test: %w", e.Path, err)
+		}
+		for _, tp := range tried {
+			if deleted[tp] {
 				out = append(out, e.Path)
 				break
 			}
 		}
 	}
-	return out
+	return out, nil
 }
 
 // repoScanExitCode is the scan's automated signal. A scan that measured
@@ -3712,6 +3758,8 @@ func reasonGloss(reason string) string {
 		return " — the workspace could not be prepared for this file"
 	case reposcan.ReasonMappedTestMissing:
 		return " — the --tests map names a test file that does not exist"
+	case reposcan.ReasonTestLandingNotBuilt:
+		return " — corral cannot audit this language's files yet: its test landing is not built, so a test for this file would be written over the file itself"
 	}
 	return ""
 }
@@ -4362,7 +4410,6 @@ func newLocalExecutor(repoDir string, checkArgv []string, substrate string, time
 	// scan was never going to use. The jail substrate (including the "" zero
 	// value — today's shipped default) keeps the exact preflight behaviour
 	// below: a bwrap-less host still fails, with the same message.
-	backendName := ""
 	if substrate != substrateWorkspace {
 		// Resolve the sandbox ONCE for the whole scan: the backend name is an
 		// input to the seed (it decides which dep dirs can be bind-mounted
@@ -4377,7 +4424,6 @@ func newLocalExecutor(repoDir string, checkArgv []string, substrate string, time
 			l.jailErr = err
 		} else {
 			l.iso = iso
-			backendName = iso.Name()
 		}
 	}
 	// The seed is jail preparation — a tree copy, `go mod vendor`, a full
@@ -4399,7 +4445,7 @@ func newLocalExecutor(repoDir string, checkArgv []string, substrate string, time
 			if l.jailErr != nil {
 				return repoSeed{cleanup: func() {}}, l.jailErr
 			}
-			return buildRepoSeed("corral certify --repo", repoDir, langName, backendName, nil, false, l.progress)
+			return buildRepoSeed("corral certify --repo", repoDir, langName, l.iso, nil, false, l.progress)
 		})
 	}
 	return l
@@ -4843,7 +4889,12 @@ func printLanguageProfile(w io.Writer, profile []reposcan.LanguageStat) {
 	fmt.Fprintln(w, "  languages detected:")
 	for _, s := range profile {
 		fmt.Fprintf(w, "    %-12s %3d source file(s): %d auditable, %d with no paired test",
-			s.Lang, s.Auditable+s.NoPairedTest+s.Ambiguous, s.Auditable, s.NoPairedTest)
+			s.Lang, s.Auditable+s.NoPairedTest+s.Ambiguous+s.LandingNotBuilt, s.Auditable, s.NoPairedTest)
+		if s.LandingNotBuilt > 0 {
+			// Neither "auditable" nor "no paired test" is true of these: the
+			// file may well have a test; corral cannot write one for it yet.
+			fmt.Fprintf(w, ", %d not auditable yet (test landing not built)", s.LandingNotBuilt)
+		}
 		if s.Ambiguous > 0 {
 			// Called out separately because this is where corral KNOWS it is
 			// uncertain — the right place to ask a human rather than guess.

@@ -1543,6 +1543,11 @@ func (d *Driver) attributeOpenPhases(run *runState) {
 }
 
 func (d *Driver) StartRun(missionID int64, rs RunSpec, sigs []repoindex.Signature) error {
+	// Before anything is enqueued: a file whose test would be written over
+	// the file itself (no test landing for its language yet) is never run.
+	if err := golang.CheckTestLanding(rs.CodePath); err != nil {
+		return fmt.Errorf("advpool: %w", err)
+	}
 	d.mu.Lock()
 	_, exists := d.runs[missionID]
 	d.mu.Unlock()

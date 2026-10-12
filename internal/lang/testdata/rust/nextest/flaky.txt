@@ -1,0 +1,61 @@
+   Compiling fuzzy_match v0.1.0 (/work/warp-cap/crates/fuzzy_match)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.57s
+────────────
+ Nextest run ID 8796fd64-c0f9-4fb7-815a-c67e30db1680 with nextest profile: default
+    Starting 34 tests across 1 binary
+        PASS [   0.006s] ( 1/34) fuzzy_match tests::test_case_insensitive_fuzzy_match_search
+        PASS [   0.007s] ( 2/34) fuzzy_match tests::test_ignore_spaces_case_insensitive
+        PASS [   0.007s] ( 3/34) fuzzy_match tests::test_ignore_spaces_partial_match
+        PASS [   0.007s] ( 4/34) fuzzy_match tests::test_multibyte_char_fuzzy_match_indices
+        PASS [   0.007s] ( 5/34) fuzzy_match tests::test_contains_wildcards
+        PASS [   0.007s] ( 6/34) fuzzy_match tests::test_fuzzy_match_still_works
+        PASS [   0.006s] ( 7/34) fuzzy_match tests::test_ignore_spaces_only_spaces_query
+        PASS [   0.008s] ( 8/34) fuzzy_match tests::test_debug_ui_pattern
+  TRY 1 FAIL [   0.008s] (─────) fuzzy_match tests::planted_flaky
+  stdout ───
+
+    running 1 test
+    test tests::planted_flaky ... FAILED
+
+    failures:
+
+    failures:
+        tests::planted_flaky
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 33 filtered out; finished in 0.00s
+
+  stderr ───
+
+    thread 'tests::planted_flaky' (2332406) panicked at crates/fuzzy_match/src/fuzzy_tests.rs:380:9:
+    planted: fails on the first attempt only
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+        PASS [   0.008s] ( 9/34) fuzzy_match tests::test_ignore_spaces_basic_functionality
+        PASS [   0.008s] (10/34) fuzzy_match tests::test_ignore_spaces_exact_match_with_spaces
+        PASS [   0.012s] (11/34) fuzzy_match tests::test_empty_query_fuzzy_match_search
+        PASS [   0.013s] (12/34) fuzzy_match tests::test_ignore_spaces_empty_query
+        PASS [   0.007s] (13/34) fuzzy_match tests::test_wildcard_escape_special_chars
+        PASS [   0.007s] (14/34) fuzzy_match tests::test_wildcard_pattern_case_insensitive
+        PASS [   0.008s] (15/34) fuzzy_match tests::test_ui_star_pattern
+        PASS [   0.008s] (16/34) fuzzy_match tests::test_ui_star_partial_patterns
+        PASS [   0.016s] (17/34) fuzzy_match tests::test_ignore_spaces_no_match
+        PASS [   0.008s] (18/34) fuzzy_match tests::test_wildcard_pattern_star
+        PASS [   0.011s] (19/34) fuzzy_match tests::test_simple_fuzzy_match_indices
+        PASS [   0.018s] (20/34) fuzzy_match tests::test_ignore_spaces_leading_trailing_spaces
+        PASS [   0.011s] (21/34) fuzzy_match tests::test_wildcard_pattern_exact_match
+  TRY 2 PASS [   0.007s] (22/34) fuzzy_match tests::planted_flaky
+        PASS [   0.011s] (23/34) fuzzy_match tests::test_wildcard_pattern_no_match
+        PASS [   0.019s] (24/34) fuzzy_match tests::test_ignore_spaces_scattered_match
+        PASS [   0.019s] (25/34) fuzzy_match tests::test_partial_suffix_patterns
+        PASS [   0.012s] (26/34) fuzzy_match tests::test_wildcard_pattern_complex
+        PASS [   0.012s] (27/34) fuzzy_match tests::test_wildcard_pattern_question_mark
+        PASS [   0.009s] (28/34) fuzzy_match tests::test_no_match_query_fuzzy_match_search
+        PASS [   0.020s] (29/34) fuzzy_match tests::test_ignore_spaces_single_word_query
+        PASS [   0.007s] (30/34) fuzzy_match tests::test_prefix_star_patterns
+        PASS [   0.021s] (31/34) fuzzy_match tests::test_ignore_spaces_symbol_matching
+        PASS [   0.021s] (32/34) fuzzy_match tests::test_ignore_spaces_tabs_and_newlines
+        PASS [   0.021s] (33/34) fuzzy_match tests::test_ignore_spaces_multiple_spaces
+        PASS [   0.013s] (34/34) fuzzy_match tests::test_ignore_spaces_vs_regular_matching
+────────────
+     Summary [   0.023s] 34 tests run: 34 passed (1 flaky), 0 skipped
+   FLAKY 2/2 [   0.007s] (22/34) fuzzy_match tests::planted_flaky

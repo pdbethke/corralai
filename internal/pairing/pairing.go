@@ -20,16 +20,28 @@
 // shared path context, ranked by SearchRank). That algorithm used to be
 // written twice in internal/reposcan, as FindTest over a fresh git listing
 // and findInUniverse over Enumerate's universe; it is one function here, fed
-// by Sources{Exists, Universe}, and those two are now I/O adapters that
-// supply only the disk and the listing (gitVisibleFiles,
-// walkSkippingBuildDirs, pathUnderSkippedDir, FindTest's os.Stat probe).
+// by Sources{Exists, Universe, TestModules}, and those two are now I/O
+// adapters that supply only the disk, the listing and the file's declared
+// test modules (gitVisibleFiles, walkSkippingBuildDirs, pathUnderSkippedDir,
+// FindTest's os.Stat probe, reposcan's diskTestModules).
 //
-// Every caller asks pairing; none but one makes its own choice from pairing's
-// data. The one remaining direct reader of Candidates is
-// sourcesOrphanedByDeletedTests (cmd/corral/certify_repo.go), which uses it as
-// a membership check over the convention candidates, not a pick: a test that
-// was paired by search rather than by convention and is then deleted is
-// therefore not reported as orphaning its source.
+// Most Shapes are PATH shapes: where a test sits follows from the source's
+// path alone. Rust added CONTENT shapes (Inline, Declared), whose answer is
+// what the source declares — `mod tests { }` in the file, or
+// `#[path = "x_tests.rs"] mod tests;` naming another — because in Rust that
+// declaration, not a file name, is what makes a file a module's test. Each
+// is still one shapeTable entry; pairing still does no parsing (the
+// declarations arrive as TestModule values, read by repoindex).
+//
+// Every caller asks pairing; none makes its own choice from pairing's data.
+// sourcesOrphanedByDeletedTests (cmd/corral/certify_repo.go) used to read
+// Candidates directly as a membership check, which was blind to every
+// content-derived path (a deleted Rust #[path] target orphaned its source
+// silently); it now reads Resolve's own Tried, through
+// reposcan.ResolutionPaths. It is still a membership check over what a
+// resolution tries, not over the search: a test that was paired by search
+// rather than by convention or declaration and is then deleted is therefore
+// not reported as orphaning its source.
 // The three questions have one function each: Primary names a test corral is
 // about to write (advpool's synthetic and authored tests), Resolve finds the
 // test that already exists (reposcan.FindTest and findInUniverse, and through
@@ -66,6 +78,9 @@ const (
 	ParallelTree Shape = "parallel-tree" // <Dir>/<sub>/<Name> (or <Dir>/<dir>/<Name> with KeepLeading)
 	FlatRoot     Shape = "flat-root"     // <Dir>/<Name>, only within MaxDepth
 	Recognize    Shape = "recognize"     // never a candidate or a root; read by IsTest and MightBeTest only
+	Inline       Shape = "inline"        // the source itself, when it declares an inline test module (content)
+	Declared     Shape = "declared"      // the file the source's own `mod` declaration loads (content; no pure candidate)
+	TestDir      Shape = "test-dir"      // any file under a <Dir> path segment IS a test; Dir is also a search root
 )
 
 // shapeTraits is everything a Shape means to the readers of a Rule. Each
@@ -73,10 +88,11 @@ const (
 // itself — it asks the table.
 type shapeTraits struct {
 	// candidate builds the rule's test path from the source's directory and
-	// the rule's Name with {base} filled in; ok=false means "not for this
+	// the rule's Name with {base} filled in (src is the source path itself,
+	// for the one Shape whose candidate it is); ok=false means "not for this
 	// source" (FlatRoot past MaxDepth). nil means the Shape never produces a
-	// candidate (Recognize). Read by Candidates.
-	candidate func(r Rule, dir, name string) (p string, ok bool)
+	// candidate (Recognize, Declared, TestDir). Read by Candidates.
+	candidate func(r Rule, src, dir, name string) (p string, ok bool)
 	// searchRoot: the rule's Dir is a top-level directory the stage-2 search
 	// walks. Read by Roots.
 	searchRoot bool
@@ -90,7 +106,30 @@ type shapeTraits struct {
 	// the strongest evidence a pairing can carry. True for Sibling only
 	// (TestOnlySiblingIsSameDir). Read by Dedupe.
 	sameDir bool
+	// content: the Shape is answered by what the SOURCE declares about its
+	// own tests (Sources.TestModules), not by a path alone. Resolve tries a
+	// content rule before every pure candidate, and refuses to run without
+	// a TestModules reader rather than skip the rule. Read by Resolve.
+	content bool
+	// fromModules derives a content Shape's test paths from the modules the
+	// source declares, each with the Label it resolves under, in the order
+	// to try them; nil for a non-content Shape. Read by Resolve.
+	fromModules func(src string, mods []TestModule) []labelled
+	// dirMarksTest: a file with a path segment equal to the rule's Dir IS a
+	// test, whatever its name — cargo's tests/ holds integration tests named
+	// like any source (tests/parser.rs). Name is not read for such a rule,
+	// which is how it keeps Rule's marker invariant. Read by IsTest (through
+	// DirMarksTest).
+	dirMarksTest bool
+	// confined: the Shape's paths are named by the SOURCE (a repository-
+	// controlled declaration), not derived by corral, so each must stay
+	// inside Sources.Root or it is refused (insideRoot). Read by Resolve.
+	confined bool
 }
+
+// labelled is one path a content Shape derived, and the Label a resolution
+// through it carries ("inline", "path-attr", "default-module").
+type labelled struct{ path, label string }
 
 // shapeTable is the ONE place a Shape's semantics live. They used to be
 // spread across two switches (Candidates, Roots) plus MightBeTest reading Dir
@@ -100,18 +139,18 @@ type shapeTraits struct {
 // for a declared Shape without one, and traitsOf panics on an undeclared one.
 var shapeTable = map[Shape]shapeTraits{
 	Sibling: {
-		candidate:     func(_ Rule, dir, name string) (string, bool) { return joinDir(dir, name), true },
+		candidate:     func(_ Rule, _, dir, name string) (string, bool) { return joinDir(dir, name), true },
 		nameMarksTest: true,
 		sameDir:       true,
 	},
 	BesideDir: {
-		candidate:     func(r Rule, dir, name string) (string, bool) { return filepath.Join(dir, r.Dir, name), true },
+		candidate:     func(r Rule, _, dir, name string) (string, bool) { return filepath.Join(dir, r.Dir, name), true },
 		searchRoot:    true,
 		testDir:       true,
 		nameMarksTest: true,
 	},
 	ParallelTree: {
-		candidate: func(r Rule, dir, name string) (string, bool) {
+		candidate: func(r Rule, _, dir, name string) (string, bool) {
 			sub := stripFirstSegment(dir)
 			if r.KeepLeading {
 				sub = dir
@@ -123,7 +162,7 @@ var shapeTable = map[Shape]shapeTraits{
 		nameMarksTest: true,
 	},
 	FlatRoot: {
-		candidate: func(r Rule, dir, name string) (string, bool) {
+		candidate: func(r Rule, _, dir, name string) (string, bool) {
 			if dirDepth(dir) > r.MaxDepth {
 				return "", false
 			}
@@ -137,6 +176,93 @@ var shapeTable = map[Shape]shapeTraits{
 		testDir:       true,
 		nameMarksTest: true,
 	},
+	// Inline's candidate is the source itself, so Primary names the source
+	// and an authored test lands in its own test module. As a CONTENT Shape
+	// it resolves only when the source declares an inline test module; a
+	// source without one never pairs to itself (rustPlugin's Review Focus 1).
+	// Its Name is never read, so IsTest cannot call a source a test through
+	// it — the case IsTest's doc anticipated when it dropped the fixed point.
+	Inline: {
+		candidate:   func(_ Rule, src, _, _ string) (string, bool) { return src, true },
+		content:     true,
+		fromModules: inlineModule,
+	},
+	// Declared has no pure candidate: without the source's own `mod`
+	// declaration there is no test to name. It resolves the file that
+	// declaration loads, by rustc's rule (declaredModule).
+	Declared: {
+		content:     true,
+		fromModules: declaredModule,
+		confined:    true,
+	},
+	TestDir: {
+		searchRoot:   true,
+		testDir:      true,
+		dirMarksTest: true,
+	},
+}
+
+// Content reports whether s is resolved from what a source declares about
+// its own tests (Sources.TestModules) rather than from a path alone. A
+// content Shape's candidate, when it has one, is the source itself.
+func (s Shape) Content() bool { return traitsOf(s).content }
+
+// inlineModule is Inline's fromModules: the source itself, when any module
+// it declares has its body in the file.
+func inlineModule(src string, mods []TestModule) []labelled {
+	for _, m := range mods {
+		if m.Inline {
+			return []labelled{{path: filepath.ToSlash(src), label: "inline"}}
+		}
+	}
+	return nil
+}
+
+// declaredModule is Declared's fromModules: for each out-of-line module
+// (`mod tests;`) the source declares, the file rustc loads for it.
+//
+//   - With #[path = "p"], p joined to the DECLARING FILE's directory. For a
+//     path attribute that is not inside an inline module block, the Rust
+//     Reference ("Modules", the path attribute) makes it relative to the
+//     directory the source file is located in — for mod.rs/lib.rs/main.rs
+//     and for any other file alike — so src/a/b.rs with
+//     #[path = "../elsewhere/x.rs"] loads src/elsewhere/x.rs. Labelled
+//     "path-attr".
+//   - Without it, rustc's default module file: <dir>/<stem>/<name>.rs (or
+//     <name>/mod.rs) for a non-mod-rs file, and <dir>/<name>.rs (or
+//     <name>/mod.rs) beside mod.rs, lib.rs and main.rs. Labelled
+//     "default-module".
+//
+// lib.rs and main.rs stand for every crate root here: pairing sees paths, not
+// Cargo.toml, so a crate root under another name (src/bin/tool.rs, build.rs)
+// is read as a non-mod-rs file. Every path is offered, cleaned: whether it
+// stays inside the repository is Resolve's question (the Shape is confined,
+// see insideRoot), answered once for a relative and an absolute source alike
+// and reported when it says no.
+func declaredModule(src string, mods []TestModule) []labelled {
+	src = filepath.ToSlash(src)
+	dir := path.Dir(src)
+	stem := strings.TrimSuffix(path.Base(src), path.Ext(src))
+	modDir := path.Join(dir, stem)
+	if b := path.Base(src); b == "mod.rs" || b == "lib.rs" || b == "main.rs" {
+		modDir = dir
+	}
+	var out []labelled
+	add := func(p, label string) {
+		out = append(out, labelled{path: path.Clean(p), label: label})
+	}
+	for _, m := range mods {
+		switch {
+		case m.Inline:
+			continue // Inline's, not Declared's
+		case m.PathAttr != "":
+			add(path.Join(dir, filepath.ToSlash(m.PathAttr)), "path-attr")
+		default:
+			add(path.Join(modDir, m.Name+".rs"), "default-module")
+			add(path.Join(modDir, m.Name, "mod.rs"), "default-module")
+		}
+	}
+	return out
 }
 
 // traitsOf is the only way to read shapeTable. An unknown Shape is a
@@ -176,9 +302,12 @@ const DefaultRoot = "tests"
 // implementation: it is what lets IsTest recognize a parallel-tree test
 // without knowing which source it belongs to. A language whose tests differ
 // from its sources only by directory therefore needs a new Shape whose Name
-// IsTest does not read, not a rule here. lang's
+// IsTest does not read, not a rule here — which is what TestDir is (its Dir
+// marks the test; it has no Name), and why Inline and Declared, whose
+// candidates are not test-named files, carry no Name either. lang's
 // TestEveryCandidateIsATestAndNoSourceIs enforces the invariant for every
-// registered plugin by round trip: no source is a test, every candidate is.
+// registered plugin by round trip: no source is a test by its name, every
+// pure candidate is one, and a content candidate is the source itself.
 type Rule struct {
 	Shape       Shape
 	Name        string
@@ -225,7 +354,7 @@ func Candidates(rules []Rule, codePath string) []Candidate {
 		if build == nil {
 			continue
 		}
-		p, ok := build(r, dir, strings.Replace(r.Name, "{base}", base, 1))
+		p, ok := build(r, codePath, dir, strings.Replace(r.Name, "{base}", base, 1))
 		if !ok {
 			continue
 		}
@@ -376,7 +505,10 @@ var Generic = []Rule{
 // rules: the STRICT question. Its answer removes a file from the audit, so a
 // false yes silently skips auditing real code — which is why a directory
 // alone never makes a file a test here (a conftest.py or a fixture under
-// tests/ is test SUPPORT, accounted separately by reposcan, never a test).
+// tests/ is test SUPPORT, accounted separately by reposcan, never a test),
+// with one declared exception: a language whose toolchain itself treats a
+// directory as tests says so with a TestDir rule (DirMarksTest), and only
+// that language's IsTest reads it.
 //
 // The name patterns are the real check, and they do NOT depend on the shape
 // of the candidate list at all: a parallel-tree test like
@@ -391,6 +523,13 @@ var Generic = []Rule{
 // case-sensitive: src/Latest.php is not a PHPUnit test. It is correct only
 // under Rule's marker invariant.
 //
+// What IsTest cannot see is a test named by its source alone: Rust's
+// #[path = "../elsewhere/x.rs"] can load a test module under any name, and
+// x.rs carries no marker and sits in no test directory. Such a file is
+// resolved as a test (Resolve, Declared) but not recognized as one here, so
+// it stays an auditable source — the safe direction, since a false yes would
+// silently remove real code from the audit.
+//
 // It once also asked whether rel appears among its OWN candidates (a
 // "fixed point"). That check is gone: any candidate's base name is its rule's
 // Name with {base} filled in, which the Name pattern already matches, so it
@@ -398,7 +537,37 @@ var Generic = []Rule{
 // source (an inline test module) it would have called every source a test.
 func IsTest(rules []Rule, rel string) bool {
 	base := filepath.Base(rel)
-	return nameMatches(rules, base, false) || nameMatches(Generic, base, false)
+	return nameMatches(rules, base, false) || nameMatches(Generic, base, false) || DirMarksTest(rules, rel)
+}
+
+// DirMarksTest reports whether rel sits under a directory one of rules
+// declares to hold only tests (a dirMarksTest Shape: Rust's TestDir "tests").
+// Any path segment counts, not only the first: a cargo workspace member's
+// integration tests live at crates/<member>/tests/. It is the one way IsTest
+// answers yes without a name marker, and it is exported so the registry-wide
+// round trip (lang's TestEveryCandidateIsATestAndNoSourceIs) can tell a test
+// by directory from a source wrongly called a test by its name.
+//
+// Unlike Generic's directory entries (MightBeTest only), this is the STRICT
+// answer, so only a language whose toolchain treats the directory as tests —
+// cargo compiles every tests/*.rs as an integration test crate — declares one.
+func DirMarksTest(rules []Rule, rel string) bool {
+	dirs := path.Dir(filepath.ToSlash(rel))
+	for _, r := range rules {
+		if !traitsOf(r.Shape).dirMarksTest {
+			continue
+		}
+		d := strings.Trim(filepath.ToSlash(r.Dir), "/")
+		if d == "" {
+			continue
+		}
+		for _, seg := range strings.Split(dirs, "/") {
+			if seg == d {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // MightBeTest is the cheap, language-independent question the diff bound asks

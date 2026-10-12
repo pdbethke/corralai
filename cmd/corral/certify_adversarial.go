@@ -290,6 +290,15 @@ func runCertifyAdversarial(args []string, client advPoolClient, run cmdRunner, s
 		}
 		plug = p
 	}
+	// Before ANY read: a file whose test would be written over the file
+	// itself (its language's test landing is not built) is refused here, on
+	// the client, not only at the brain. Held at the brain alone, the client
+	// first resolved the dev test, read both files and uploaded them — and a
+	// repository's #[path] could make that upload a host file. The same predicate every other audit door asks.
+	if err := lang.CheckTestLanding(*codePath); err != nil {
+		fmt.Fprintf(stderr, "corral certify --adversarial: %v\n", err)
+		return 2
+	}
 
 	// --code is read before the test is resolved, as certify --local does: a
 	// typo'd --code is reported as the unreadable file it is, not as a missing
@@ -330,6 +339,18 @@ func runCertifyAdversarial(args []string, client advPoolClient, run cmdRunner, s
 			commit = v
 		}
 	}
+
+	// The command is fixed HERE, on the client, because only this side has the
+	// checkout (the brain receives the code as a string): a language whose
+	// runner grades more than a file is scoped to the unit that owns it before
+	// the brain is asked to run anything. The working directory is the repo
+	// root, as resolveDevTest above assumes for --code.
+	scoped, err := scopeAuditInput(localAuditInput{repoDir: ".", codePath: *codePath, checkArgv: checkArgv}, plug)
+	if err != nil {
+		fmt.Fprintf(stderr, "corral certify --adversarial: %v\n", err)
+		return 2
+	}
+	checkArgv = scoped.checkArgv
 
 	spec := advStartSpec{
 		Repo: repo, Commit: commit, Goal: strings.TrimSpace(*goal),

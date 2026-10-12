@@ -57,19 +57,11 @@ type CoverageMap struct {
 // for Python (to relativize absolute paths), the module import prefix for
 // Go.
 func Preflight(ctx context.Context, runner commandRunner, files map[string]string, p lang.Plugin, testCmd []string, repoRoot string) CoverageMap {
-	reporter, ok := p.(lang.CoverageReporter)
-	if !ok {
-		return CoverageMap{
-			Note: fmt.Sprintf("%s: no coverage instrumentation available for this language", p.Name()),
-		}
+	cmd, note := PreflightCommand(p, testCmd)
+	if note != "" {
+		return CoverageMap{Note: note}
 	}
-
-	cmd, ok := reporter.CoverageCmd(testCmd)
-	if !ok {
-		return CoverageMap{
-			Note: fmt.Sprintf("%s: no coverage instrumentation for test command %v", p.Name(), testCmd),
-		}
-	}
+	reporter := p.(lang.CoverageReporter) // PreflightCommand returned a command, so p is one
 
 	stdout, err := runner.Enumerate(ctx, files, cmd)
 	if err != nil {
@@ -110,4 +102,22 @@ func Preflight(ctx context.Context, runner commandRunner, files map[string]strin
 	}
 
 	return CoverageMap{Executed: executed, Ran: true}
+}
+
+// PreflightCommand is the coverage command Preflight would run for
+// (p, testCmd), or the reason there is none: note is empty exactly when cmd
+// is usable. Exported so a caller can ask BEFORE preparing the substrate the
+// command would run in — jail preparation is a tree copy and a networked
+// dependency fetch, and paying for it for a language with no coverage
+// instrumentation bought only the note.
+func PreflightCommand(p lang.Plugin, testCmd []string) (cmd []string, note string) {
+	reporter, ok := p.(lang.CoverageReporter)
+	if !ok {
+		return nil, fmt.Sprintf("%s: no coverage instrumentation available for this language", p.Name())
+	}
+	cmd, ok = reporter.CoverageCmd(testCmd)
+	if !ok {
+		return nil, fmt.Sprintf("%s: no coverage instrumentation for test command %v", p.Name(), testCmd)
+	}
+	return cmd, ""
 }

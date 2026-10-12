@@ -14,6 +14,7 @@ import (
 
 	"github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/pairing"
+	"github.com/pdbethke/corralai/internal/repoindex"
 )
 
 // SearchResult is FindTest's outcome: what it tried, where it looked, and
@@ -161,22 +162,52 @@ func pathUnderSkippedDir(rel string) bool {
 // Tried and Roots are populated even on a miss, specifically so a caller can
 // build a "here is everywhere I looked" error instead of leaving an operator
 // to guess a second and third time — see certify_local.go's use.
+//
+// root is also the directory a source's own declared test path must stay
+// inside (pairing.Sources.Root): the doors that take an operator's --code as
+// typed pass ".", the directory that --code is relative to — and the one an
+// absolute --code is held to. RefusedOutsideRoot names what that refused.
 func FindTest(p lang.Plugin, root, codePath string) (SearchResult, error) {
 	return pairing.Resolve(p.TestRules(), codePath, pairing.Sources{
+		Root: root,
 		Exists: func(cp string) bool {
-			full := cp
-			// Live guard: certify --local and certify --adversarial pass
-			// root "." with whatever --code the operator gave, and an absolute
-			// --code yields absolute candidate paths. Joining those onto the
-			// root would stat a mis-joined path, so they are used as given.
-			if root != "" && !filepath.IsAbs(cp) {
-				full = filepath.Join(root, cp)
-			}
-			fi, err := os.Stat(full)
+			fi, err := os.Stat(underRoot(root, cp))
 			return err == nil && fi.Mode().IsRegular()
 		},
-		Universe: func() ([]string, error) { return gitVisibleFiles(root) },
+		Universe:    func() ([]string, error) { return gitVisibleFiles(root) },
+		TestModules: diskTestModules(p, root),
 	})
+}
+
+// underRoot is the on-disk path of a root-relative slash path. Live guard:
+// certify --local and certify --adversarial pass root "." with whatever
+// --code the operator gave, and an absolute --code yields absolute candidate
+// paths. Joining those onto the root would stat a mis-joined path, so they
+// are used as given.
+func underRoot(root, rel string) string {
+	if root == "" || filepath.IsAbs(rel) {
+		return rel
+	}
+	return filepath.Join(root, filepath.FromSlash(rel))
+}
+
+// diskTestModules is the Sources.TestModules both adapters (FindTest and
+// findInUniverse) hand pairing.Resolve: the source file's bytes under root,
+// parsed by repoindex for the test modules p's language declares in itself.
+// pairing calls it only for a language with a content rule (Rust), so no
+// other language's scan reads a single extra file.
+//
+// A read error is RETURNED, never mapped to "no modules": a file that could
+// not be read has not been shown to declare no test, and treating it so
+// would report a real source as unpaired for a reason that is not true.
+func diskTestModules(p lang.Plugin, root string) func(rel string) ([]pairing.TestModule, error) {
+	return func(rel string) ([]pairing.TestModule, error) {
+		src, err := os.ReadFile(underRoot(root, rel)) // #nosec G304 -- a source file the scan itself enumerated (or the operator's own --code), under the operator's root
+		if err != nil {
+			return nil, err
+		}
+		return repoindex.TestModules(p.Name(), src), nil
+	}
 }
 
 // findInUniverse is Enumerate's own use of the same two-stage rule, over a
@@ -189,20 +220,52 @@ func FindTest(p lang.Plugin, root, codePath string) (SearchResult, error) {
 // every file), since pairing.Resolve's search needs to range over it in an
 // order the map itself does not offer for free.
 //
+// modules is the Sources.TestModules to resolve with: diskTestModules over
+// the scan's root in production, and a paths-only stand-in in the search
+// golden, whose corpus has paths but no file contents. root is the scan's
+// root on disk, which a source's declared test path must stay inside
+// (pairing.Sources.Root); "" in the golden, which has no disk.
+//
 // Returns the resolved path, its Rank (the matching candidate's own
 // pairing.Candidate Rank for a convention hit, pairing.SearchRank for a
 // search hit — see pairing.SearchRank's doc comment for why that value must
 // never compete with a real convention rank), and whether the recursive
 // fallback is what found it. tp == "" means neither stage found anything.
-func findInUniverse(p lang.Plugin, codePath string, present map[string]bool, presentList []string) (tp string, rank int, viaSearch bool) {
-	// Universe cannot fail here: presentList is already in hand, so the error
-	// Resolve returns is always nil and there is nothing to surface.
-	r, _ := pairing.Resolve(p.TestRules(), codePath, pairing.Sources{
-		Exists:   func(cp string) bool { return present[cp] },
-		Universe: func() ([]string, error) { return presentList, nil },
+// The error is modules' (a source that could not be read): Universe cannot
+// fail here, because presentList is already in hand.
+func findInUniverse(p lang.Plugin, root, codePath string, present map[string]bool, presentList []string, modules func(string) ([]pairing.TestModule, error)) (tp string, rank int, viaSearch bool, err error) {
+	r, err := pairing.Resolve(p.TestRules(), codePath, pairing.Sources{
+		Root:        root,
+		Exists:      func(cp string) bool { return present[cp] },
+		Universe:    func() ([]string, error) { return presentList, nil },
+		TestModules: modules,
 	})
-	if !r.Found {
-		return "", 0, false
+	if err != nil {
+		return "", 0, false, err
 	}
-	return r.Path, r.Rank, r.ViaSearch
+	if !r.Found {
+		return "", 0, false, nil
+	}
+	return r.Path, r.Rank, r.ViaSearch, nil
+}
+
+// ResolutionPaths is every path pairing.Resolve checks for codePath, in
+// order: the paths the source's own test-module declarations load (Rust),
+// then the convention candidates. It is Resolve's own Tried with every check
+// answered "absent" and no search — so the list cannot drift from what a
+// resolution actually tries, which a second enumeration over
+// pairing.Candidates already had (it never saw a content-derived path). The
+// orphan check reads it to ask "did the diff delete the test this source
+// would have paired to?".
+func ResolutionPaths(p lang.Plugin, root, codePath string) ([]string, error) {
+	res, err := pairing.Resolve(p.TestRules(), codePath, pairing.Sources{
+		Root:        root,
+		Exists:      func(string) bool { return false },
+		Universe:    func() ([]string, error) { return nil, nil },
+		TestModules: diskTestModules(p, root),
+	})
+	if err != nil {
+		return nil, err
+	}
+	return res.Tried, nil
 }

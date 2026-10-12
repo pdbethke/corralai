@@ -160,6 +160,14 @@ const (
 	// never counted alongside ReasonUncovered/ReasonImportOnly, and never
 	// worded as though the tests failed at anything.
 	ReasonNoExecutableCode = "no executable code"
+	// ReasonTestLandingNotBuilt marks a source file corral cannot audit yet
+	// because a test for it would be written over the file itself: its
+	// language's Primary test path is the source (Rust's inline test module),
+	// and the landing that merges an authored test INTO a source is not
+	// built. See lang.CheckTestLanding. Applied by Enumerate before pairing,
+	// so such a file is never a candidate — whether or not it has a test —
+	// and no ranking, --top slot, selection language or jail is spent on it.
+	ReasonTestLandingNotBuilt = "test-landing-not-built"
 )
 
 // UnauditableChangedSource reports whether an exclusion means a CHANGED
@@ -182,6 +190,17 @@ func UnauditableChangedSource(reason string) bool {
 		// it, its test is claimed by another source, or it is not a file it
 		// can read. Each is "we could not look", not "nothing to look at".
 		return true
+	case ReasonTestLandingNotBuilt:
+		// A language corral cannot audit YET, ruled (Rust part 1) to be
+		// treated exactly as a language it does not audit at all
+		// (ReasonNoLanguage, the default below): the scan discloses the
+		// changed file by name and reason, but it does not by itself fail the
+		// gate. Before Rust was registered a .rs change was invisible, and
+		// failing every mixed-repository pull request that touches one would
+		// punish users for a language corral has not finished. The cost,
+		// accepted: an unaudited Rust change passes the gate with only the
+		// disclosure.
+		return false
 	case ReasonUncovered, ReasonImportOnly:
 		// Also "we could not measure it" — but these are REPORTED as
 		// uncovered by the scan itself, which the report already surfaces
@@ -446,6 +465,21 @@ func EnumerateWithTests(root string, tests *TestMap) ([]Candidate, []Exclusion, 
 			excl = append(excl, Exclusion{Path: rel, Reason: ReasonTestSupport})
 			continue
 		}
+		// A file whose test corral would write over the file itself — its
+		// language's Primary test path is the source, and the landing that
+		// merges an authored test INTO a source is not built — cannot be
+		// audited, paired or not. Classified HERE, before pairing, ranking
+		// and every scan-wide decision that reads the candidate list: left a
+		// candidate, it took --top slots from files corral can grade, made a
+		// mixed repository "span" a language nothing can instrument (which
+		// switched the other language's selection pass off), and sent the
+		// scan's selection and pre-flight passes off to prepare a jail —
+		// a networked `cargo vendor` — for a language with nothing to audit.
+		// See lang.CheckTestLanding, the one place the question is answered.
+		if lang.CheckTestLanding(rel) != nil {
+			excl = append(excl, Exclusion{Path: rel, Reason: ReasonTestLandingNotBuilt})
+			continue
+		}
 		// Walk the plugin's ordered candidates and pair with the first one
 		// that actually exists in this repo. The list is ordered most
 		// specific first (see each plugin's TestRules), so a sibling or
@@ -475,7 +509,11 @@ func EnumerateWithTests(root string, tests *TestMap) ([]Candidate, []Exclusion, 
 			// (see findInUniverse and pairing.Roots): a test that exists but
 			// that no filename convention predicted still beats no pairing
 			// at all.
-			tp, tpRank, viaSearch = findInUniverse(p, rel, present, presentList)
+			var ferr error
+			tp, tpRank, viaSearch, ferr = findInUniverse(p, root, rel, present, presentList, diskTestModules(p, root))
+			if ferr != nil {
+				return nil, nil, fmt.Errorf("pairing %s: %w", rel, ferr)
+			}
 		}
 		if tp == "" {
 			excl = append(excl, Exclusion{Path: rel, Reason: ReasonNoPairedTest})

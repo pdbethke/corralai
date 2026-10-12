@@ -709,6 +709,12 @@ func (rt *AdvPoolRuntime) StartRun(in AdvPoolRunSpec) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
+	// Before preflight and before the tracking mission is written: a file
+	// whose test would be written over the file itself is refused here, not
+	// only at the driver's StartRun after a mission already exists.
+	if err := golang.CheckTestLanding(in.CodePath); err != nil {
+		return 0, fmt.Errorf("advpool: %w", err)
+	}
 	// strings.Fields splits in.TestCmd (an MCP-schema'd single string, e.g.
 	// "go test ./") into argv the SAME way gate.go's scoreWorkspace already
 	// does to build the actual jail command — so Preflight checks the exact

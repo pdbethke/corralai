@@ -47,11 +47,11 @@ func TestToolchainRootNeverReturnsABoundary(t *testing.T) {
 // TestToolchainBindForSystemToolIsANoop: a binary already under /usr needs no
 // extra mount, and adding one would widen the sandbox for nothing.
 func TestToolchainBindForSystemToolIsANoop(t *testing.T) {
-	b, err := toolchainBindFor("sh")
+	b, err := toolchainBindsFor("sh")
 	if err != nil {
 		t.Fatalf("resolving a system tool must not error: %v", err)
 	}
-	if b.Host != "" {
+	if len(b) != 0 {
 		t.Fatalf("a /usr binary needs no bind, got %+v", b)
 	}
 }
@@ -60,8 +60,8 @@ func TestToolchainBindForSystemToolIsANoop(t *testing.T) {
 // misleading failure, not to add one. A command that cannot be resolved must
 // fall through so the jail reports the runner's own message.
 func TestToolchainBindForUnresolvableIsSilent(t *testing.T) {
-	b, err := toolchainBindFor("definitely-not-a-real-binary-xyzzy")
-	if err != nil || b.Host != "" {
+	b, err := toolchainBindsFor("definitely-not-a-real-binary-xyzzy")
+	if err != nil || len(b) != 0 {
 		t.Fatalf("an unresolvable command must be silent, got bind=%+v err=%v", b, err)
 	}
 }

@@ -6,12 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"slices"
-	"strings"
 	"testing"
-
-	"github.com/pdbethke/corralai/internal/creds"
-	"github.com/pdbethke/corralai/internal/sandbox"
 )
 
 // TestEnsureVendoredNoOps pins the three cases that must NOT stage a copy or
@@ -20,13 +15,13 @@ import (
 func TestEnsureVendoredNoOps(t *testing.T) {
 	dir := t.TempDir()
 
-	got, cleanup, err := ensureVendored("corral certify --local", dir, "python", io.Discard)
+	got, cleanup, err := ensureVendored("corral certify --local", dir, "python", nil, io.Discard)
 	if err != nil || got != dir {
 		t.Fatalf("non-Go must be a no-op: got=%s err=%v", got, err)
 	}
 	cleanup()
 
-	got, cleanup, err = ensureVendored("corral certify --local", dir, "go", io.Discard)
+	got, cleanup, err = ensureVendored("corral certify --local", dir, "go", nil, io.Discard)
 	if err != nil || got != dir {
 		t.Fatalf("Go without go.mod must be a no-op: got=%s err=%v", got, err)
 	}
@@ -38,7 +33,7 @@ func TestEnsureVendoredNoOps(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(dir, "vendor"), 0o750); err != nil {
 		t.Fatal(err)
 	}
-	got, cleanup, err = ensureVendored("corral certify --local", dir, "go", io.Discard)
+	got, cleanup, err = ensureVendored("corral certify --local", dir, "go", nil, io.Discard)
 	if err != nil || got != dir {
 		t.Fatalf("already-vendored repo must be a no-op: got=%s err=%v", got, err)
 	}
@@ -76,7 +71,7 @@ func TestBuildRepoSeedLoadsTreeAndAlwaysReturnsCleanup(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	seed, err := buildRepoSeed("corral certify --local", root, "python", "bwrap", nil, false, io.Discard)
+	seed, err := buildRepoSeed("corral certify --local", root, "python", namedIsolator("bwrap"), nil, false, io.Discard)
 	if err != nil {
 		t.Fatalf("buildRepoSeed: %v", err)
 	}
@@ -95,7 +90,7 @@ func TestBuildRepoSeedLoadsTreeAndAlwaysReturnsCleanup(t *testing.T) {
 }
 
 func TestBuildRepoSeedPropagatesLoadError(t *testing.T) {
-	_, err := buildRepoSeed("corral certify --local", filepath.Join(t.TempDir(), "does-not-exist"), "python", "bwrap", nil, false, io.Discard)
+	_, err := buildRepoSeed("corral certify --local", filepath.Join(t.TempDir(), "does-not-exist"), "python", namedIsolator("bwrap"), nil, false, io.Discard)
 	if err == nil {
 		t.Fatal("a missing repo dir must be an error, not an empty seed")
 	}
@@ -136,36 +131,5 @@ func TestVendorAutoBindsExactlyParallelToNodeModulesAndVenv(t *testing.T) {
 				t.Errorf("shouldBind(%q, backend=%q) = %v, want %v — vendor/ must track node_modules/.venv exactly", name, backend, got, want)
 			}
 		}
-	}
-}
-
-// TestVendorCommandEnvDropsCorralSecrets: the vendoring command runs on the
-// HOST, with network, against a copy of an untrusted repository, so none of
-// corral's own secrets may reach it — while the variables a toolchain needs to
-// fetch dependencies must. The secret list is derived from the scrub's own
-// sources, so a secret added there is checked here without editing this test.
-// A nil Env would mean "inherit everything", so it is asserted non-nil.
-func TestVendorCommandEnvDropsCorralSecrets(t *testing.T) {
-	secrets := append(append([]string{}, sandbox.CorralOwnSecrets...), creds.CanonicalNames...)
-	for _, k := range secrets {
-		t.Setenv(k, "leaked-"+k)
-	}
-	t.Setenv("GOPROXY", "https://proxy.example")
-
-	cmd := vendorCommand([]string{"go", "mod", "vendor"}, "/staging")
-	if cmd.Env == nil {
-		t.Fatal("vendorCommand left Env nil, which inherits the whole host environment")
-	}
-	if cmd.Dir != "/staging" {
-		t.Errorf("Dir = %q, want /staging", cmd.Dir)
-	}
-	for _, kv := range cmd.Env {
-		k, _, _ := strings.Cut(kv, "=")
-		if slices.Contains(secrets, k) {
-			t.Errorf("%s reached the vendoring command", k)
-		}
-	}
-	if !slices.Contains(cmd.Env, "GOPROXY=https://proxy.example") {
-		t.Error("GOPROXY must reach the vendoring command: it fetches dependencies")
 	}
 }

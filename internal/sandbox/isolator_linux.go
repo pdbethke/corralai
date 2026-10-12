@@ -151,6 +151,17 @@ func (bwrapIsolator) Wrap(command string, opts Options, env []string) ([]string,
 		}
 		argv = append(argv, "--ro-bind", bnd.Host, bnd.Target)
 	}
+	// Cover what of a toolchain root a whole-tree mount (/usr) would
+	// otherwise expose — a cargo home's credentials, config and checkouts
+	// (see secrets.go). AFTER every bind, so each mask lands on top of the
+	// mount that holds its path.
+	for _, m := range secretMasks(wholeBoundTrees) {
+		if m.Dir {
+			argv = append(argv, "--tmpfs", m.Path)
+		} else {
+			argv = append(argv, "--ro-bind", "/dev/null", m.Path)
+		}
+	}
 	if opts.Network {
 		argv = append(argv, "--ro-bind-try", "/etc/resolv.conf", "/etc/resolv.conf")
 	}

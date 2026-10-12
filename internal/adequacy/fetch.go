@@ -40,10 +40,11 @@ const fetchMaxStdout = 1 << 20
 // the jail such a program sees the jail's tmpfs HOME, not the operator's: of
 // the operator's home directory only the staging path's parents and the
 // toolchain binds exist there, and no toolchain bind ever covers a
-// credentials store (toolchainBindsFor). Its environment is
-// sandbox.FetchEnv, and it writes nowhere but dir and a tmpfs. A rustup
-// proxy cannot download a repository-named toolchain: FetchEnv pins
-// RUSTUP_AUTO_INSTALL=0 (rustup >= 1.28).
+// toolchain root's secrets (toolchainBindsFor; whole-mounted trees are
+// masked by the same rule). Its environment is sandbox.FetchEnv, and it
+// writes nowhere but dir and a tmpfs. A rustup proxy cannot download a
+// repository-named toolchain: FetchEnv pins RUSTUP_AUTO_INSTALL=0 (rustup
+// 1.28 and later; an older rustup ignores it, see below).
 //
 // What the step CAN still reach — the residual risk, stated exactly:
 //
@@ -59,6 +60,9 @@ const fetchMaxStdout = 1 << 20
 //   - macOS (sandbox-exec): Network adds (allow network*) and a blanket
 //     (allow mach-lookup), so the step can talk to any mach service the
 //     user's session exposes.
+//   - rustup older than 1.28 ignores RUSTUP_AUTO_INSTALL, so there a
+//     repository's rust-toolchain.toml can still make the proxy download and
+//     run the toolchain it names, inside this jail, with the network.
 //   - The container backend is never used for this step: cmd/corral's
 //     ensureVendored refuses it (its root cannot read or write the staging
 //     copy).

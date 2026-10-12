@@ -132,3 +132,93 @@ func TestRustupLayoutNeverBindsCargoHome(t *testing.T) {
 		t.Errorf("rustup cargo binds = %v, want %v", got, want)
 	}
 }
+
+// fakeCargoHome builds a rustup CARGO_HOME under a fresh $HOME with NO
+// credentials file: a HARD-linked proxy (older rustup's layout), a separately
+// installed cargo-nextest, a registry token in config.toml (cargo reads
+// registry tokens there too) and a private git checkout.
+func fakeCargoHome(t *testing.T) (home string) {
+	t.Helper()
+	home = t.TempDir()
+	mk := func(rel, body string, mode os.FileMode) string {
+		p := filepath.Join(home, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), mode); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	rustup := mk(".cargo/bin/rustup", "#!/bin/sh\n", 0o755)
+	if err := os.Link(rustup, filepath.Join(home, ".cargo", "bin", "cargo")); err != nil {
+		t.Fatal(err)
+	}
+	mk(".cargo/bin/cargo-nextest", "#!/bin/sh\n", 0o755)
+	mk(".cargo/config.toml", "[registries.priv]\ntoken = \"secret\"\n", 0o600)
+	mk(".cargo/git/checkouts/priv/src/lib.rs", "// private\n", 0o644)
+	mk(".rustup/settings.toml", "", 0o644)
+	t.Setenv("HOME", home)
+	t.Setenv("RUSTUP_HOME", "")
+	t.Setenv("PATH", filepath.Join(home, ".cargo", "bin")+":/usr/bin:/bin")
+	return home
+}
+
+// TestCargoHomeIsAlwaysNarrowedToBin: the narrowing is a property of the
+// ROOT. Any binary in a cargo home — a hard-linked proxy, an installed
+// cargo-nextest — binds <root>/bin plus the rustup home, never the root,
+// whatever its credential files are called.
+func TestCargoHomeIsAlwaysNarrowedToBin(t *testing.T) {
+	home := fakeCargoHome(t)
+	want := []string{filepath.Join(home, ".cargo", "bin"), filepath.Join(home, ".rustup")}
+	for _, cmd := range []string{"cargo", "cargo-nextest"} {
+		binds, err := toolchainBindsFor(cmd)
+		if err != nil {
+			t.Fatalf("%s: %v", cmd, err)
+		}
+		var got []string
+		for _, b := range binds {
+			got = append(got, b.Host)
+		}
+		if !slices.Equal(got, want) {
+			t.Errorf("%s binds = %v, want %v", cmd, got, want)
+		}
+		for _, secret := range []string{".cargo/config.toml", ".cargo/git/checkouts/priv/src/lib.rs"} {
+			if b, ok := coveringBind(binds, filepath.Join(home, secret)); ok {
+				t.Errorf("%s: bind %s exposes %s", cmd, b.Host, secret)
+			}
+		}
+	}
+}
+
+// TestRustupHomeGoesThroughHomeNarrowing: RUSTUP_HOME is a bind root like
+// any other. A bare child of $HOME that is not a toolchain directory
+// (~/.config holds gh, gcloud and composer auth) is refused, not bound; an
+// XDG-style ~/.local/share/rustup is bound as itself.
+func TestRustupHomeGoesThroughHomeNarrowing(t *testing.T) {
+	home := fakeCargoHome(t)
+	if err := os.MkdirAll(filepath.Join(home, ".config", "gh"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("RUSTUP_HOME", filepath.Join(home, ".config"))
+	binds, err := toolchainBindsFor("cargo")
+	if _, ok := coveringBind(binds, filepath.Join(home, ".config", "gh")); ok {
+		t.Errorf("RUSTUP_HOME=~/.config bound ~/.config: %+v", binds)
+	}
+	if err == nil {
+		t.Error("RUSTUP_HOME=~/.config must be refused with a reason, not silently dropped")
+	}
+
+	xdg := filepath.Join(home, ".local", "share", "rustup")
+	if err := os.MkdirAll(xdg, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("RUSTUP_HOME", xdg)
+	binds, err = toolchainBindsFor("cargo")
+	if err != nil || !hasBind(binds, xdg) {
+		t.Errorf("RUSTUP_HOME=~/.local/share/rustup: binds=%+v err=%v, want it bound as itself", binds, err)
+	}
+	if hasBind(binds, filepath.Join(home, ".local")) || hasBind(binds, filepath.Join(home, ".local", "share")) {
+		t.Errorf("a rustup home under ~/.local must not widen to its parents: %+v", binds)
+	}
+}

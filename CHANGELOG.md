@@ -39,21 +39,29 @@ history of any release, `git log v0.3.4..v0.3.5`.
     abstract unix sockets are reachable from it; proxy variables are passed
     as they are, including any credential inside a proxy URL; on macOS the
     step may also look up any mach service. Of your home directory it can
-    read only its own staging copy and the toolchain it runs.
+    read only its own staging copy and the toolchain it runs. With rustup
+    older than 1.28, a repository's `rust-toolchain.toml` can still make
+    rustup download and run the toolchain it names during this step
+    (inside the sandbox); 1.28 and later refuse.
   - The throwaway copy lives under your user cache directory
     (`~/.cache/corral/vendor` on Linux), not the system temporary directory.
     This fixes a bug: a `go.work` file in the temporary directory — which
     any local user can create — made every Go vendoring step fail with
     "cannot be run in workspace mode".
-- **The sandbox no longer mounts a toolchain directory that holds a
-  credentials store.** A toolchain installed under `~/.cargo` (rustup) or
+- **The sandbox no longer exposes a toolchain's secrets.** A toolchain
+  installed under `~/.cargo` (rustup, or anything `cargo install`ed) or
   `~/.gem` was mounted whole, read-only, into every sandboxed run — with
-  `cargo login`'s `credentials.toml` or RubyGems' `credentials` inside it,
-  where the audited code could read it and print it into the record. Now
-  only the directory the runner lives in is mounted (`~/.cargo/bin`, or
-  `~/.gem/ruby`), plus rustup's own toolchain directory for a rustup
-  `cargo`. A layout that cannot be narrowed that way is refused with a
-  message, before the run.
+  `cargo login`'s `credentials.toml`, registry tokens in `config.toml`,
+  private git checkouts and RubyGems' `credentials` inside it, where the
+  audited code could read them and print them into the record. Now:
+  - of a cargo home, only `bin/` is mounted (plus rustup's toolchain
+    directory when `bin/` holds rustup), whichever of its programs runs the
+    suite and whether or not you have run `cargo login`;
+  - of `~/.gem`, only the directory the runner lives in;
+  - a cargo home inside `/usr` (the official Rust container image puts one
+    at `/usr/local/cargo`) is covered in every sandbox except `bin/`;
+  - a `RUSTUP_HOME` that is not a toolchain directory (for example
+    `~/.config`) is refused with a message instead of mounted.
 - **The directory walkers that skip dependency trees now share one
   definition, declared by the language plugins.** `corral review`'s scope
   loading and planning, the repository reader the brain and the gate use,

@@ -64,18 +64,19 @@ func (e ErrSnapToolchain) Error() string {
 // better diagnosis than a guess from here. That is deliberate — this function
 // exists to REMOVE a misleading failure, not to add one.
 //
-// No bind ever covers a credentials store (credentialStores). Two of the
-// toolchain roots below keep one beside the toolchain: rustup's ~/.cargo
-// holds `cargo login`'s token, RubyGems' ~/.gem holds the push key. Every
-// jail reads these binds — the networked vendoring step, which runs
+// No bind ever covers a toolchain root's secrets, as sandbox.SecretEntries
+// defines them (the same rule the isolators mask whole-mounted trees with).
+// Every jail reads these binds — the networked vendoring step, which runs
 // repository-controlled programs, and the graded runs, whose output reaches
-// the ledger, which can be public — so such a root is narrowed to the one
-// child directory the binary lives in (~/.cargo/bin, ~/.gem/ruby), and a
-// root that cannot be narrowed safely is refused. A rustup proxy is ALWAYS
-// narrowed this way, credentials file or not: CARGO_HOME is where `cargo
-// login` will write one, and its git/checkouts already hold private git
-// dependencies' sources; the proxy needs only its bin directory and the
-// rustup home.
+// the ledger, which can be public. So:
+//
+//   - a cargo home (sandbox.IsCargoHome — judged by layout, never by file
+//     name) is ALWAYS bound as its bin/ alone, plus the rustup home when bin/
+//     holds a rustup proxy, whichever of its binaries was named (a symlinked
+//     or hard-linked proxy, cargo-nextest, anything `cargo install`ed);
+//   - any other root holding a credentials store (RubyGems' ~/.gem) is
+//     narrowed to the one child directory the binary lives in;
+//   - a root that cannot be narrowed safely is refused, with the reason.
 func toolchainBindsFor(cmd0 string) ([]sandbox.Bind, error) {
 	cmd0 = strings.TrimSpace(cmd0)
 	if cmd0 == "" {
@@ -112,41 +113,40 @@ func toolchainBindsFor(cmd0 string) ([]sandbox.Bind, error) {
 	} else if narrowed != "" {
 		root = narrowed
 	}
-	rustup := filepath.Base(real) == "rustup"
-	if store := credentialStoreIn(root); store != "" || rustup {
-		child := childOnPath(root, real)
-		if child == "" || credentialStoreIn(child) != "" {
-			why := "it holds a credentials store (" + store + ") and the toolchain cannot be bound without it"
-			if store == "" {
-				why = "a rustup proxy must be bound by its bin directory, never the whole CARGO_HOME, and it is not in one"
+	switch {
+	case sandbox.IsCargoHome(root):
+		// A cargo home is narrowed by its LAYOUT, whatever binary was named
+		// and whether or not a credentials file exists yet: beside bin/ it
+		// keeps registry tokens in config.toml, private checkouts in git/,
+		// binstall.toml — names no list finishes (sandbox.IsCargoHome).
+		bin := filepath.Join(root, "bin")
+		if childOnPath(root, real) != bin {
+			return nil, ErrUnbindableToolchain{Command: cmd0, Path: real, Root: root,
+				Why: "it is a cargo home, and only its bin/ may be bound; the runner is not in bin/"}
+		}
+		binds := []sandbox.Bind{{Host: bin, Target: bin}}
+		if _, err := os.Lstat(filepath.Join(bin, "rustup")); err == nil { // #nosec G703 -- existence check only
+			rh, rerr := rustupHome(cmd0)
+			if rerr != nil {
+				return nil, rerr
 			}
-			return nil, ErrUnbindableToolchain{Command: cmd0, Path: real, Root: root, Why: why}
+			if rh != "" {
+				binds = append(binds, sandbox.Bind{Host: rh, Target: rh})
+			}
+		}
+		return binds, nil
+	case sandbox.CredentialStoreIn(root) != "":
+		store := sandbox.CredentialStoreIn(root)
+		child := childOnPath(root, real)
+		if child == "" || sandbox.CredentialStoreIn(child) != "" {
+			return nil, ErrUnbindableToolchain{Command: cmd0, Path: real, Root: root,
+				Why: "it holds a credentials store (" + store + ") and the toolchain cannot be bound without it"}
 		}
 		root = child
 	}
 	// Bound at the SAME absolute path, so the operator's own PATH keeps
 	// working inside the jail without rewriting the command.
-	binds := []sandbox.Bind{{Host: root, Target: root}}
-	if rh := rustupHomeFor(real); rh != "" && rh != root {
-		binds = append(binds, sandbox.Bind{Host: rh, Target: rh})
-	}
-	return binds, nil
-}
-
-// credentialStores are the file names toolchains keep secrets under inside
-// their own install root: cargo's credentials.toml (and the extensionless
-// legacy credentials it still reads), RubyGems' credentials. Matched by name
-// directly in a candidate bind root.
-var credentialStores = []string{"credentials.toml", "credentials"}
-
-// credentialStoreIn names the credentials store directly inside dir, or "".
-func credentialStoreIn(dir string) string {
-	for _, n := range credentialStores {
-		if _, err := os.Lstat(filepath.Join(dir, n)); err == nil { // #nosec G703 -- existence check only; dir comes from the operator's own PATH resolution, and nothing is opened
-			return filepath.Join(dir, n)
-		}
-	}
-	return ""
+	return []sandbox.Bind{{Host: root, Target: root}}, nil
 }
 
 // childOnPath is the child of root that real lives under (root/bin for
@@ -163,30 +163,43 @@ func childOnPath(root, real string) string {
 	return filepath.Join(root, first)
 }
 
-// rustupHomeFor is the rustup home a rustup proxy needs beside its own bin
-// directory (the proxy is a symlink to the rustup binary; the toolchains it
-// dispatches to live in RUSTUP_HOME, default ~/.rustup), or "" when real is
-// not rustup or that home is not a bindable directory. Inside the jail the
-// proxy finds it only through RUSTUP_HOME, which the jail does not set yet
-// (Task 4's pin); the bind is what that pin will point at.
-func rustupHomeFor(real string) string {
-	if filepath.Base(real) != "rustup" {
-		return ""
-	}
+// rustupHome is the rustup home a rustup proxy needs beside its bin/ (the
+// toolchains it dispatches to live in RUSTUP_HOME, default ~/.rustup), or ""
+// when there is none to bind: no such directory, or one under /usr, which the
+// jail mounts anyway. It is a bind root like any other, so it goes through
+// the same home-directory rule (narrowHomeRoot): RUSTUP_HOME=~/.config is
+// refused, never bound, because ~/.config holds gh, gcloud and composer auth.
+// Inside the jail the proxy finds it only through RUSTUP_HOME, which the
+// jail does not set yet (Task 4's pin); the bind is what that pin will use.
+func rustupHome(cmd0 string) (string, error) {
 	rh := os.Getenv("RUSTUP_HOME")
 	if rh == "" {
 		home, err := os.UserHomeDir()
 		if err != nil || home == "" {
-			return ""
+			return "", nil
 		}
 		rh = filepath.Join(home, ".rustup")
 	}
 	rh = filepath.Clean(rh)
 	fi, err := os.Stat(rh) // #nosec G703 -- stat only; rh is the operator's RUSTUP_HOME or ~/.rustup
-	if err != nil || !fi.IsDir() || toolchainBoundaries()[rh] || credentialStoreIn(rh) != "" {
-		return ""
+	if err != nil || !fi.IsDir() || strings.HasPrefix(rh, "/usr/") {
+		return "", nil
 	}
-	return rh
+	refuse := func(why string) (string, error) {
+		return "", ErrUnbindableToolchain{Command: cmd0, Path: rh, Root: rh, Why: "it is the rustup home, and " + why}
+	}
+	probe := filepath.Join(rh, "toolchains")
+	root := toolchainRoot(probe)
+	if root == "" {
+		return refuse("it is, or sits directly in, a directory the jail must never bind")
+	}
+	if _, refused := narrowHomeRoot(probe, root); refused != "" {
+		return refuse(refused)
+	}
+	if len(sandbox.SecretEntries(rh)) > 0 {
+		return refuse("it holds a credentials store or a cargo home")
+	}
+	return rh, nil
 }
 
 // ErrUnbindableToolchain is returned when the runner resolves to a directory
@@ -244,7 +257,7 @@ func narrowHomeRoot(real, root string) (narrowed, refused string) {
 		if strings.HasPrefix(rel, "bin/") {
 			return filepath.Join(root, "bin"), ""
 		}
-		if strings.HasPrefix(rel, "share/gem/") || strings.HasPrefix(rel, "share/pipx/") {
+		if strings.HasPrefix(rel, "share/gem/") || strings.HasPrefix(rel, "share/pipx/") || strings.HasPrefix(rel, "share/rustup/") {
 			// The one share subtree that is a toolchain: bind it alone.
 			parts := strings.SplitN(rel, "/", 3)
 			return filepath.Join(root, parts[0], parts[1]), ""

@@ -94,6 +94,16 @@ func (sandboxExecIsolator) Wrap(command string, opts Options, env []string) ([]s
 	for _, bnd := range opts.ReadOnlyBinds {
 		sb.WriteString(fmt.Sprintf("(allow file-read* (subpath %q))\n", bnd.Host))
 	}
+	// Deny what of a toolchain root the whole-tree allows above (/usr,
+	// /opt/homebrew) would otherwise expose — the same masks bwrap mounts
+	// over (see secrets.go). Last matching rule wins in SBPL.
+	for _, m := range secretMasks(wholeBoundTrees) {
+		kind := "literal"
+		if m.Dir {
+			kind = "subpath"
+		}
+		sb.WriteString(fmt.Sprintf("(deny file-read* (%s %q))\n", kind, m.Path))
+	}
 
 	// Writable paths. Unlike bwrap (which gives the jail its own private
 	// tmpfs at /tmp via --tmpfs), sandbox-exec has no per-run tmpfs primitive:

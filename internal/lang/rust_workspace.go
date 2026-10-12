@@ -59,8 +59,12 @@ func (rustPlugin) ScopeCmd(repoDir, codePath string, testCmd []string) ([]string
 	if cargoSelectsPackages(testCmd) {
 		return testCmd, nil
 	}
-	if cmdIsShellWrapped(testCmd) {
-		return nil, fmt.Errorf("%s: the test command is shell-wrapped, so corral cannot add the crate to grade; name it yourself with `-p <crate>` inside the command", codePath)
+	// -p is cargo's flag. A wrapper (make, just, a script, `sh -c`) would take
+	// it as its own argument, so only a command whose program IS cargo (or
+	// cargo-nextest, the other binary rustRunner accepts) is rewritten; the
+	// program is found the way rustRunner finds it, past any VAR=value prefix.
+	if bin := filepath.Base(preflightBin(testCmd, "")); bin != "cargo" && bin != "cargo-nextest" {
+		return nil, fmt.Errorf("%s: the test command runs %q, not cargo directly, so corral cannot add the crate to grade; name it yourself with `-p <crate>` inside the command", codePath, bin)
 	}
 	crate, err := owningCrate(repoDir, codePath)
 	if err != nil {
@@ -99,9 +103,9 @@ func owningCrate(repoDir, codePath string) (string, error) {
 		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 			break // above (or outside) the repository: never searched
 		}
-		steps := 1
+		steps := 1 // the repo root itself
 		if rel != "." {
-			steps += strings.Count(rel, string(filepath.Separator)) + 1
+			steps += len(strings.Split(rel, string(filepath.Separator)))
 		}
 		d, ok := nearestAncestorWith(dir, []string{"Cargo.toml"}, min(steps, rustWalkDepth))
 		if !ok {

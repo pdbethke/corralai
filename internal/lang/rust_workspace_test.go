@@ -190,3 +190,43 @@ func TestScopeTestCmdIsIdentityForOtherLanguages(t *testing.T) {
 		}
 	}
 }
+
+// Only cargo takes -p. A wrapper (make, just, a script) would receive it as its
+// own argument, so the crate must be named by the operator instead.
+func TestScopeTestCmdOnlyScopesCargoRunners(t *testing.T) {
+	repo := t.TempDir()
+	writeManifest(t, repo, "Cargo.toml", pkgToml)
+
+	for _, cmd := range [][]string{{"make", "test"}, {"just", "test"}, {"./ci.sh"}, {"make", "nextest"}} {
+		_, err := ScopeTestCmd(rustPlugin{}, repo, "src/lib.rs", cmd)
+		if err == nil || !strings.Contains(err.Error(), "-p <crate>") {
+			t.Errorf("%q: got %v, want the name-the-crate refusal", cmd, err)
+		}
+	}
+	// ...unless the operator's own selection is present.
+	if got, err := ScopeTestCmd(rustPlugin{}, repo, "src/lib.rs", []string{"make", "test", "-p", "x"}); err != nil || len(got) != 4 {
+		t.Errorf("operator selection on a wrapper: got (%q, %v)", got, err)
+	}
+	for _, c := range []struct{ in, want []string }{
+		{[]string{"/home/u/.cargo/bin/cargo", "test"}, []string{"/home/u/.cargo/bin/cargo", "test", "-p", "leaf_crate"}},
+		{[]string{"cargo-nextest", "nextest", "run"}, []string{"cargo-nextest", "nextest", "run", "-p", "leaf_crate"}},
+		{[]string{"RUST_LOG=1", "cargo", "test"}, []string{"RUST_LOG=1", "cargo", "test", "-p", "leaf_crate"}},
+	} {
+		got, err := ScopeTestCmd(rustPlugin{}, repo, "src/lib.rs", c.in)
+		if err != nil || !reflect.DeepEqual(got, c.want) {
+			t.Errorf("%q: got (%q, %v), want %q", c.in, got, err, c.want)
+		}
+	}
+}
+
+// A manifest with no [package] below a package root does not end the walk.
+func TestScopeTestCmdContinuesPastAPackagelessManifest(t *testing.T) {
+	repo := t.TempDir()
+	writeManifest(t, repo, "Cargo.toml", pkgToml)
+	writeManifest(t, repo, "a/b/Cargo.toml", virtualToml)
+	writeManifest(t, repo, "a/Cargo.toml", "[dependencies]\nx = \"1\"\n")
+	got, err := ScopeTestCmd(rustPlugin{}, repo, "a/b/c/src/lib.rs", []string{"cargo", "test"})
+	if err != nil || got[len(got)-1] != "leaf_crate" {
+		t.Errorf("got (%q, %v), want the package at the root", got, err)
+	}
+}

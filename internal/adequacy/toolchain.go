@@ -70,10 +70,9 @@ func (e ErrSnapToolchain) Error() string {
 // repository-controlled programs, and the graded runs, whose output reaches
 // the ledger, which can be public. So:
 //
-//   - a cargo home (sandbox.IsCargoHome: the operator's CARGO_HOME, or a
-//     directory with a bin/ child carrying cargo's own markers — never an
-//     install prefix with lib/) is ALWAYS bound as its bin/ alone, plus
-//     the rustup home when bin/ holds a rustup proxy, whichever of its
+//   - a cargo home (sandbox.IsCargoHome: exactly the operator's CARGO_HOME,
+//     else ~/.cargo, symlinks resolved) is ALWAYS bound as its bin/ alone,
+//     plus the rustup home when bin/ holds a rustup proxy, whichever of its
 //     binaries was named (a symlinked or hard-linked proxy, cargo-nextest,
 //     anything `cargo install`ed);
 //   - any other root holding a credentials store (RubyGems' ~/.gem) is

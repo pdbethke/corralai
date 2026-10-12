@@ -57,19 +57,18 @@ history of any release, `git log v0.3.4..v0.3.5`.
   - a cargo home is mounted as its `bin/` alone (plus rustup's toolchain
     directory when `bin/` holds rustup), whichever of its programs runs the
     suite and whether or not you have run `cargo login`. A cargo home is
-    your `CARGO_HOME` (`~/.cargo` when unset), whatever it holds; or any
-    other directory that has a `bin/` directory, has no `lib/`, and holds
-    one of cargo's own files (`.crates.toml`, `.crates2.json`,
-    `.package-cache`, `registry/`, or `bin/rustup`). A directory with a
-    `lib/` that is not your `CARGO_HOME` is an install prefix, never a cargo
-    home: `/usr/local`, Homebrew's prefix or a standalone Rust install are
-    mounted as before, and `/usr/bin` or `~/.local/bin` are never mistaken
-    for one;
+    exactly what cargo defines: your `CARGO_HOME`, or `~/.cargo` when it is
+    unset (followed through a symlink), whatever it holds. Nothing else is
+    one, so `/usr/bin`, `/usr/local`, `~/.local/bin`, Debian's
+    `/usr/share/cargo`, Homebrew's prefix and its kegs (the `rustup` keg
+    included) and a standalone Rust install are mounted as before. The cost:
+    a second cargo home that `CARGO_HOME` does not name — an image's
+    `/usr/local/cargo` with `CARGO_HOME` unset — is treated as an ordinary
+    toolchain directory, so set `CARGO_HOME` to the one your suite uses;
   - of `~/.gem`, only the directory the runner lives in;
-  - a cargo home inside `/usr` (and, on macOS, `/opt/homebrew`), found
-    through `CARGO_HOME` or the `cargo` on your `PATH` — the official Rust
-    container image puts one at `/usr/local/cargo` — is hidden in every
-    sandbox except its `bin/`;
+  - your `CARGO_HOME` inside `/usr` (and, on macOS, `/opt/homebrew`) — the
+    official Rust container image sets it to `/usr/local/cargo` — is hidden
+    in every sandbox except its `bin/`;
   - a `RUSTUP_HOME` that is not a toolchain directory (for example
     `~/.config`), or that is a cargo home, is refused with a message
     instead of mounted.

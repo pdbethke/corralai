@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -35,34 +36,44 @@ func fakeSystemCargoHome(t *testing.T) (usr, cargoHome string) {
 }
 
 // TestSystemSecretMasksHideACargoHomeButItsBin: a cargo home inside a tree
-// the jail binds whole (/usr) is exposed through that bind, so everything in
-// it but bin/ is masked — found from CARGO_HOME or from the cargo on PATH,
-// and judged by the same predicate that narrows a toolchain bind
-// (SecretEntries).
+// the jail binds whole (/usr) is exposed through that bind, so when it is the
+// operator's CARGO_HOME (the official rust image sets
+// CARGO_HOME=/usr/local/cargo) everything in it but bin/ is masked — judged
+// by the same predicate that narrows a toolchain bind (SecretEntries).
 func TestSystemSecretMasksHideACargoHomeButItsBin(t *testing.T) {
-	for _, via := range []string{"CARGO_HOME", "PATH"} {
-		usr, ch := fakeSystemCargoHome(t)
-		t.Setenv("CARGO_HOME", "")
-		t.Setenv("PATH", "/usr/bin:/bin")
-		if via == "CARGO_HOME" {
-			t.Setenv("CARGO_HOME", ch)
-		} else {
-			t.Setenv("PATH", filepath.Join(ch, "bin")+":/usr/bin:/bin")
-		}
-		var got []string
-		for _, m := range secretMasks([]string{usr}) {
-			got = append(got, m.Path)
-		}
-		slices.Sort(got)
-		want := []string{
-			filepath.Join(ch, "config.toml"),
-			filepath.Join(ch, "credentials.toml"),
-			filepath.Join(ch, "git"),
-			filepath.Join(ch, "registry"),
-		}
-		if !slices.Equal(got, want) {
-			t.Errorf("via %s: masks = %v, want %v", via, got, want)
-		}
+	usr, ch := fakeSystemCargoHome(t)
+	t.Setenv("CARGO_HOME", ch)
+	t.Setenv("PATH", "/usr/bin:/bin")
+	var got []string
+	for _, m := range secretMasks([]string{usr}) {
+		got = append(got, m.Path)
+	}
+	slices.Sort(got)
+	want := []string{
+		filepath.Join(ch, "config.toml"),
+		filepath.Join(ch, "credentials.toml"),
+		filepath.Join(ch, "git"),
+		filepath.Join(ch, "registry"),
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("masks = %v, want %v", got, want)
+	}
+}
+
+// TestACargoHomeNotNamedByCargoHomeIsNotOne: the rule's stated cost. A
+// cargo-home-shaped directory that CARGO_HOME does not name — here the
+// image's /usr/local/cargo with CARGO_HOME unset and its cargo on PATH — is
+// an ordinary toolchain directory: nothing in it is masked.
+func TestACargoHomeNotNamedByCargoHomeIsNotOne(t *testing.T) {
+	usr, ch := fakeSystemCargoHome(t)
+	t.Setenv("CARGO_HOME", "")
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("PATH", filepath.Join(ch, "bin")+":/usr/bin:/bin")
+	if IsCargoHome(ch) {
+		t.Error("only the operator's CARGO_HOME is a cargo home")
+	}
+	if got := secretMasks([]string{usr}); len(got) != 0 {
+		t.Errorf("masks = %+v, want none", got)
 	}
 }
 
@@ -104,42 +115,82 @@ func TestAnInstallPrefixIsNeverACargoHome(t *testing.T) {
 	}
 }
 
-// TestCargoHomeMarkers: outside the operator's own CARGO_HOME, a directory is
-// a cargo home only when it carries one of cargo's (or rustup's) own markers
-// — never by bin/cargo alone.
-func TestCargoHomeMarkers(t *testing.T) {
+// TestOnlyTheOperatorsCargoHomeIsOne: a cargo home is exactly what cargo
+// defines — $CARGO_HOME, else ~/.cargo. No file inside a directory makes one:
+// not cargo's install ledgers (`cargo install --root` writes them into any
+// root, Homebrew's kegs included), not registry/, not bin/rustup, not an
+// `env` script.
+func TestOnlyTheOperatorsCargoHomeIsOne(t *testing.T) {
 	t.Setenv("CARGO_HOME", "")
 	t.Setenv("HOME", t.TempDir())
-	for marker, isDir := range map[string]bool{".crates.toml": false, ".crates2.json": false, ".package-cache": false, "registry": true, "bin/rustup": false} {
+	for _, marker := range []string{".crates.toml", ".crates2.json", ".package-cache", "registry/", "bin/rustup", "env"} {
 		d := t.TempDir()
+		p := filepath.Join(d, marker)
 		if err := os.MkdirAll(filepath.Join(d, "bin"), 0o755); err != nil {
 			t.Fatal(err)
 		}
-		if isDir {
-			if err := os.Mkdir(filepath.Join(d, marker), 0o755); err != nil {
+		if strings.HasSuffix(marker, "/") {
+			if err := os.MkdirAll(p, 0o755); err != nil {
 				t.Fatal(err)
 			}
-		} else if err := os.WriteFile(filepath.Join(d, marker), nil, 0o644); err != nil {
+		} else if err := os.WriteFile(p, nil, 0o755); err != nil {
 			t.Fatal(err)
 		}
-		if !IsCargoHome(d) {
-			t.Errorf("%s marks a cargo home", marker)
+		if IsCargoHome(d) {
+			t.Errorf("%s does not make a cargo home", marker)
 		}
-	}
-	bare := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(bare, "bin"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(bare, "bin", "cargo"), nil, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if IsCargoHome(bare) {
-		t.Error("bin/cargo alone does not make a cargo home")
 	}
 	op := t.TempDir()
 	t.Setenv("CARGO_HOME", op)
 	if !IsCargoHome(op) {
 		t.Error("the operator's CARGO_HOME is a cargo home by definition")
+	}
+}
+
+// TestOperatorCargoHomeIsComparedResolved (M1): a symlinked CARGO_HOME is the
+// same cargo home seen through its target, which is the path a resolved
+// binary walks up through.
+func TestOperatorCargoHomeIsComparedResolved(t *testing.T) {
+	real := filepath.Join(t.TempDir(), "cargo")
+	if err := os.MkdirAll(filepath.Join(real, "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	home := t.TempDir()
+	if err := os.Symlink(real, filepath.Join(home, ".cargo")); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CARGO_HOME", "")
+	t.Setenv("HOME", home)
+	if !IsCargoHome(real) {
+		t.Error("the target of a symlinked ~/.cargo is the operator's cargo home")
+	}
+	if got := CargoHomeOf(filepath.Join(real, "bin", "cargo")); got != real {
+		t.Errorf("CargoHomeOf = %q, want %q", got, real)
+	}
+}
+
+// TestDebianAndInstallRootsAreNotCargoHomes (M2, M3): Debian's
+// /usr/share/cargo (bin/cargo wrapper, registry/ of packaged crates) and a
+// /usr/local that `cargo install --root /usr/local` wrote .crates.toml into,
+// with no lib/, are toolchain directories: nothing in either is masked.
+func TestDebianAndInstallRootsAreNotCargoHomes(t *testing.T) {
+	usr := t.TempDir()
+	for _, f := range []string{"share/cargo/bin/cargo", "share/cargo/registry/serde-1.0/lib.rs", "local/bin/cargo", "local/.crates.toml", "local/share/ca/cert.pem"} {
+		p := filepath.Join(usr, f)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, nil, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("CARGO_HOME", "")
+	t.Setenv("HOME", t.TempDir())
+	for _, bin := range []string{"share/cargo/bin", "local/bin"} {
+		t.Setenv("PATH", filepath.Join(usr, bin)+":/usr/bin:/bin")
+		if got := secretMasks([]string{usr}); len(got) != 0 {
+			t.Errorf("cargo in %s: masks = %+v, want none", bin, got)
+		}
 	}
 }
 
@@ -184,32 +235,6 @@ func TestUsrBinIsNeverACargoHome(t *testing.T) {
 	}
 	if got := secretMasks([]string{usr}); len(got) != 0 {
 		t.Errorf("masks = %+v, want none", got)
-	}
-}
-
-// TestCargoHomeNeedsBinAndACargoMarker (S1, S2): outside the operator's own
-// CARGO_HOME a marker is evidence only in a directory shaped like a cargo
-// home — one with a bin/ child. A generic `env` file (uv's installer writes
-// ~/.local/bin/env) is not cargo's.
-func TestCargoHomeNeedsBinAndACargoMarker(t *testing.T) {
-	t.Setenv("CARGO_HOME", "")
-	t.Setenv("HOME", t.TempDir())
-	noBin := t.TempDir()
-	if err := os.WriteFile(filepath.Join(noBin, ".crates.toml"), nil, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if IsCargoHome(noBin) {
-		t.Error("a marker without a bin/ child does not make a cargo home")
-	}
-	envOnly := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(envOnly, "bin"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(envOnly, "env"), nil, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if IsCargoHome(envOnly) {
-		t.Error("an env file is not a cargo marker")
 	}
 }
 

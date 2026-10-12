@@ -4,7 +4,6 @@ package sandbox
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 )
@@ -42,21 +41,11 @@ func CredentialStoreIn(dir string) string {
 	return ""
 }
 
-// cargoMarkers are files and directories only cargo (or rustup's installer)
-// writes into a CARGO_HOME: `cargo install`'s ledgers, the package-cache
-// lock, the registry cache, and rustup's own proxy. bin/cargo alone is NOT
-// one — every install prefix has a bin/, and a standalone Rust install,
-// /usr/local or Homebrew's prefix can hold bin/cargo. A generic name is never
-// one either: rustup's `env` script shares its name with /usr/bin/env and
-// with the env file uv's installer writes into ~/.local/bin, and a rustup
-// home already carries bin/rustup.
-var cargoMarkers = []string{".crates.toml", ".crates2.json", ".package-cache", "registry", "bin/rustup"}
-
 // OperatorCargoHome is the operator's CARGO_HOME: $CARGO_HOME made absolute,
 // else ~/.cargo. "" when neither can be determined. The ONE reading of the
 // variable; every consumer goes through it. A CARGO_HOME set to a broad
-// directory (/usr/share, ~/sdk) is honored as declared — an operator
-// misconfiguration that fails closed (more is hidden, never less).
+// directory (/usr/share, /usr/local, ~/sdk) is honored as declared — an
+// operator misconfiguration that fails closed (more is hidden, never less).
 func OperatorCargoHome() string {
 	if ch := os.Getenv("CARGO_HOME"); ch != "" {
 		if abs, err := filepath.Abs(ch); err == nil {
@@ -70,42 +59,34 @@ func OperatorCargoHome() string {
 	return filepath.Join(home, ".cargo")
 }
 
+// resolved is p with its symlinks resolved, or p cleaned when it cannot be.
+func resolved(p string) string {
+	if r, err := filepath.EvalSymlinks(p); err == nil {
+		return r
+	}
+	return filepath.Clean(p)
+}
+
 // IsCargoHome reports whether dir is a CARGO_HOME. A cargo home keeps far
 // more than credentials beside its bin/ — registry tokens in config.toml,
 // private git checkouts in git/, binstall.toml — under names a list will
-// never finish, so it is judged by what it IS, not by its file names: of a
-// cargo home, a jail may see bin/ and nothing else.
+// never finish, so of a cargo home a jail may see bin/ and nothing else.
 //
-//   - The operator's own CARGO_HOME (OperatorCargoHome) is one by
-//     definition, whatever else it holds — including the distribution-cargo
-//     layout where ~/.cargo holds only `cargo install`ed tools, and a stray
-//     lib/. This comes first: the operator's declaration can only narrow
-//     what is bound, never widen it.
-//   - Any other directory with lib/ is an install PREFIX (/usr, /usr/local,
-//     Homebrew's prefix and Cellar kegs, a standalone /opt/rust holding
-//     rustc's libraries) and is NEVER a cargo home, whatever its bin/ holds.
-//   - Any other directory is one only when it is shaped like one — it has a
-//     bin/ directory — AND carries a cargo marker (cargoMarkers). A directory
-//     of programs (/usr/bin, ~/.local/bin) has no bin/ child, so nothing in
-//     it can make it a cargo home.
+// A cargo home is exactly what cargo itself defines: the operator's
+// CARGO_HOME, else ~/.cargo (OperatorCargoHome), compared with symlinks
+// resolved on both sides. Nothing else is ever one — whatever it holds,
+// including a stray lib/ in the operator's own. No marker is evidence: cargo
+// writes .crates.toml into any `cargo install --root` (Homebrew sets the root
+// to a keg), registry/ is also Debian's /usr/share/cargo, and rustup's env
+// shares its name with /usr/bin/env.
+//
+// The cost, accepted: a second cargo home that CARGO_HOME does not name (an
+// image's /usr/local/cargo with CARGO_HOME unset, a CARGO_HOME exported only
+// in another shell) is treated as an ordinary toolchain directory and is not
+// narrowed to its bin/.
 func IsCargoHome(dir string) bool {
-	dir = filepath.Clean(dir)
-	if dir == OperatorCargoHome() {
-		return true
-	}
-	isDir := func(rel string) bool {
-		fi, err := os.Stat(filepath.Join(dir, rel)) // #nosec G703 -- existence check only on a toolchain path the operator's own PATH/env resolved
-		return err == nil && fi.IsDir()
-	}
-	if isDir("lib") || !isDir("bin") {
-		return false
-	}
-	for _, m := range cargoMarkers {
-		if _, err := os.Lstat(filepath.Join(dir, m)); err == nil { // #nosec G703 -- existence check only, see above
-			return true
-		}
-	}
-	return false
+	op := OperatorCargoHome()
+	return op != "" && dir != "" && resolved(dir) == resolved(op)
 }
 
 // CargoHomeOf is the nearest ancestor of path that IsCargoHome, or "". The
@@ -153,38 +134,26 @@ type mask struct {
 // so a test can stand a temp dir in for /usr.
 var wholeBoundTrees = []string{"/usr", "/opt/homebrew"}
 
-// secretMasks finds the toolchain roots inside trees that are mounted whole
-// and returns their SecretEntries as masks. The roots are found the way the
-// toolchain is: the operator's CARGO_HOME, and the cargo home the cargo on
-// PATH lives in (the official rust image puts both at /usr/local/cargo).
-// Only a root strictly inside one of trees is reported — a root elsewhere is
-// not reachable through a whole-tree mount, and its toolchain bind narrows
-// it instead.
+// secretMasks finds the operator's cargo home when it lies inside a tree
+// mounted whole (the official rust image sets CARGO_HOME=/usr/local/cargo)
+// and returns its SecretEntries as masks. A cargo home elsewhere is not
+// reachable through a whole-tree mount, and its toolchain bind narrows it
+// instead.
 func secretMasks(trees []string) []mask {
-	var roots []string
-	if os.Getenv("CARGO_HOME") != "" {
-		roots = append(roots, OperatorCargoHome())
+	op := OperatorCargoHome()
+	if op == "" {
+		return nil
 	}
-	if p, err := exec.LookPath("cargo"); err == nil {
-		if real, rerr := filepath.EvalSymlinks(p); rerr == nil {
-			p = real
-		}
-		if ch := CargoHomeOf(p); ch != "" {
-			roots = append(roots, ch)
-		}
+	root := resolved(op)
+	if !insideAny(root, trees) {
+		return nil
 	}
 	seen := map[string]bool{}
 	var out []mask
-	for _, root := range roots {
-		if seen[root] || !insideAny(root, trees) || len(SecretEntries(root)) == 0 {
-			continue
-		}
-		seen[root] = true
-		for _, s := range SecretEntries(root) {
-			if m, ok := maskFor(s, trees); ok && !seen[m.Path] {
-				seen[m.Path] = true
-				out = append(out, m)
-			}
+	for _, s := range SecretEntries(root) {
+		if m, ok := maskFor(s, trees); ok && !seen[m.Path] {
+			seen[m.Path] = true
+			out = append(out, m)
 		}
 	}
 	return out

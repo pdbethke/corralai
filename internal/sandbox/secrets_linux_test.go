@@ -144,3 +144,55 @@ func TestBwrapStartsWithADistroCargoInUsrBin(t *testing.T) {
 		t.Errorf("the jail must start and run /usr/bin programs; exit=%d out=%q", res.ExitCode, res.Output)
 	}
 }
+
+// TestBwrapRunsAHomebrewRustupKeg (I1, real bwrap): Homebrew's rustup formula
+// is keg-only; `cargo install --root=<keg>` leaves .crates.toml and
+// .crates2.json at the keg root, and bin/ holds wrapper scripts that exec the
+// real binaries in libexec/bin. The keg is an install prefix the operator's
+// CARGO_HOME does not name, so nothing in it is masked and cargo runs.
+func TestBwrapRunsAHomebrewRustupKeg(t *testing.T) {
+	iso, err := Resolve(Config{Backend: "bwrap"})
+	if err != nil {
+		t.Skipf("SKIP: bwrap unavailable: %v", err)
+	}
+	brew := t.TempDir()
+	keg := filepath.Join(brew, "Cellar", "rustup", "1.28.2")
+	for rel, body := range map[string]string{
+		".crates.toml":               "[v1]\n",
+		".crates2.json":              "{}\n",
+		"INSTALL_RECEIPT.json":       "{}\n",
+		"bin/cargo":                  "exec sh " + filepath.Join(keg, "libexec", "bin", "cargo") + "\n",
+		"bin/rustup":                 "exec sh " + filepath.Join(keg, "libexec", "bin", "rustup") + "\n",
+		"libexec/bin/cargo":          "echo CARGO-RUNS\n",
+		"libexec/bin/rustup":         "echo RUSTUP-RUNS\n",
+		"etc/rustup/settings.toml":   "",
+		"share/zsh/site-functions/x": "",
+	} {
+		p := filepath.Join(keg, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.MkdirAll(filepath.Join(brew, "opt"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("../Cellar/rustup/1.28.2", filepath.Join(brew, "opt", "rustup")); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CARGO_HOME", "")
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("PATH", filepath.Join(brew, "opt", "rustup", "bin")+":/usr/bin:/bin")
+	old := wholeBoundTrees
+	wholeBoundTrees = []string{brew}
+	t.Cleanup(func() { wholeBoundTrees = old })
+
+	res := Run(context.Background(), "sh "+filepath.Join(brew, "opt", "rustup", "bin", "cargo")+"; echo STARTED", Options{
+		Workspace: t.TempDir(), Backend: iso, ReadOnlyBinds: []Bind{{Host: brew, Target: brew}},
+	})
+	if res.ExitCode != 0 || !strings.Contains(res.Output, "CARGO-RUNS") || !strings.Contains(res.Output, "STARTED") {
+		t.Errorf("a Homebrew rustup keg's cargo must run in the jail; exit=%d out=%q", res.ExitCode, res.Output)
+	}
+}

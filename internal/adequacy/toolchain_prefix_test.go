@@ -165,3 +165,58 @@ func TestRustupHomeRefusesACargoHome(t *testing.T) {
 		t.Errorf("RUSTUP_HOME=~/.cargo -> %q, want refused", rh)
 	}
 }
+
+// TestLinuxbrewRustupKegBindsThePrefix (I1): a linuxbrew rustup keg (wrappers
+// in bin/, real binaries in libexec/bin, .crates.toml at the keg root) is an
+// install prefix, not a cargo home: cargo binds the brew prefix, which covers
+// libexec/, and is not narrowed to the keg's bin/.
+func TestLinuxbrewRustupKegBindsThePrefix(t *testing.T) {
+	home := t.TempDir()
+	brew := filepath.Join(home, ".linuxbrew")
+	keg := filepath.Join(brew, "Cellar", "rustup", "1.28.2")
+	layout(t, home, map[string]string{
+		".linuxbrew/Cellar/rustup/1.28.2/.crates.toml":       "[v1]\n",
+		".linuxbrew/Cellar/rustup/1.28.2/.crates2.json":      "{}\n",
+		".linuxbrew/Cellar/rustup/1.28.2/bin/cargo":          "#!/bin/sh\n",
+		".linuxbrew/Cellar/rustup/1.28.2/bin/rustup":         "#!/bin/sh\n",
+		".linuxbrew/Cellar/rustup/1.28.2/libexec/bin/cargo":  "#!/bin/sh\n",
+		".linuxbrew/Cellar/rustup/1.28.2/libexec/bin/rustup": "#!/bin/sh\n",
+		".linuxbrew/lib/libz.so":                             "",
+		".linuxbrew/opt/rustup":                              "->../Cellar/rustup/1.28.2",
+	})
+	t.Setenv("HOME", home)
+	t.Setenv("CARGO_HOME", "")
+	t.Setenv("RUSTUP_HOME", "")
+	t.Setenv("PATH", filepath.Join(brew, "opt", "rustup", "bin")+":/usr/bin:/bin")
+	binds, err := toolchainBindsFor("cargo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := coveringBind(binds, filepath.Join(keg, "libexec", "bin", "cargo")); !ok {
+		t.Errorf("binds = %+v: the keg's libexec/ is not reachable", binds)
+	}
+}
+
+// TestSymlinkedOperatorCargoHomeNarrowsToBin (M1): ~/.cargo as a symlink to
+// another disk, with a stray lib/ and a registry token in config.toml, is
+// still the operator's cargo home: only its bin/ is bound.
+func TestSymlinkedOperatorCargoHomeNarrowsToBin(t *testing.T) {
+	home := t.TempDir()
+	data := filepath.Join(home, "sdk", "cargo")
+	layout(t, home, map[string]string{
+		"sdk/cargo/bin/cargo-nextest": "#!/bin/sh\n",
+		"sdk/cargo/lib/stray.so":      "",
+		"sdk/cargo/config.toml":       "[registries.priv]\ntoken = \"secret\"\n",
+		".cargo":                      "->" + data,
+	})
+	t.Setenv("HOME", home)
+	t.Setenv("CARGO_HOME", "")
+	t.Setenv("PATH", filepath.Join(home, ".cargo", "bin")+":/usr/bin:/bin")
+	binds, err := toolchainBindsFor("cargo-nextest")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(binds) != 1 || binds[0].Host != filepath.Join(data, "bin") {
+		t.Errorf("binds = %+v, want exactly the cargo home's bin/", binds)
+	}
+}

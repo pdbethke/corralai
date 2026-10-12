@@ -39,11 +39,18 @@ type LanguageStat struct {
 	// review, 2026-09-08 — the third time an enumeration has been the defect
 	// in this repository this week.
 	OtherExcluded int
+	// LandingNotBuilt is source files this language recognises that corral
+	// cannot audit YET: a test for them would be written over the file
+	// itself, because the language's test landing is not built
+	// (ReasonTestLandingNotBuilt, lang.CheckTestLanding). Its own bucket,
+	// never folded into NoPairedTest or Auditable: such a file may well have
+	// a test, and calling it either would be a false statement about it.
+	LandingNotBuilt int
 }
 
 // Total is every file this language accounts for.
 func (s LanguageStat) Total() int {
-	return s.Auditable + s.NoPairedTest + s.Ambiguous + s.TestFiles + s.OtherExcluded
+	return s.Auditable + s.NoPairedTest + s.Ambiguous + s.TestFiles + s.OtherExcluded + s.LandingNotBuilt
 }
 
 // BuildLanguageProfile turns the enumeration's own results into a per-language
@@ -98,6 +105,8 @@ func BuildLanguageProfile(cands []Candidate, excl []Exclusion) []LanguageStat {
 			s.Ambiguous++
 		case ReasonIsTest:
 			s.TestFiles++
+		case ReasonTestLandingNotBuilt:
+			s.LandingNotBuilt++
 		default:
 			// Anything else this language's source can be excluded for —
 			// including a reason WidenCandidacyByEvidence substituted after

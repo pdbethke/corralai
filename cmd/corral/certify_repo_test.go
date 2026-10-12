@@ -4733,6 +4733,11 @@ func TestDocsNeverDescribeCorralAsAnOlderSeries(t *testing.T) {
 // asks what Resolve itself tries, content-derived paths included. The second
 // case is a #[path] target with no test marker at all, which the old
 // MightBeTest pre-filter would also have discarded.
+//
+// The exclusions are supplied by hand: while Rust's test landing is not
+// built, Enumerate excludes every .rs source as test-landing-not-built, never
+// no-paired-test, so a real scan does not reach this check with a Rust source
+// yet. The mechanism is held here so the landing (7a) inherits it working.
 func TestOrphanCheckSeesDeletedRustTests(t *testing.T) {
 	root := t.TempDir()
 	mustWrite(t, filepath.Join(root, "crates", "warp_core", "src", "app_id.rs"),
@@ -4756,34 +4761,250 @@ func TestOrphanCheckSeesDeletedRustTests(t *testing.T) {
 	}
 }
 
-// TestCertifyRepoExcludesAFileWhoseTestWouldOverwriteIt: certify --repo
-// takes a selected Rust source (paired by its inline test module, but with
-// no test landing yet, so a test for it would be written over it) out of the
-// job set right after selection — before goal derivation, evidence or any
-// jail — and accounts it with its reason. It still counts as a candidate,
-// since it IS paired; the Go file beside it is audited as before.
-func TestCertifyRepoExcludesAFileWhoseTestWouldOverwriteIt(t *testing.T) {
+// pyRustRepo is a Python package with one paired test beside a Rust crate
+// whose lib.rs carries an inline test module — the mixed shape (pydantic,
+// aisuite) the landing refusal must not degrade for the Python half.
+func pyRustRepo(t *testing.T, root string) {
+	t.Helper()
+	mustWrite(t, filepath.Join(root, "calc.py"), "def add(a, b):\n    return a + b\n")
+	mustWrite(t, filepath.Join(root, "test_calc.py"), "from calc import add\n\ndef test_add():\n    assert add(1, 2) == 3\n")
+	mustWrite(t, filepath.Join(root, "native", "src", "lib.rs"), "pub fn f() {}\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn t() {}\n}\n")
+}
+
+// TestCertifyRepoTopNeverSpendsASlotOnALandingRefusedFile: a Rust source
+// (its test would be written over it — no test landing yet) is classified
+// by Enumerate, before ranking, so --top 1 audits the Python file it can
+// grade instead of choosing the Rust file and then refusing it (final
+// review I2a: "auditing 1 of 2", 0 jobs). It is accounted with its reason,
+// never as a candidate.
+func TestCertifyRepoTopNeverSpendsASlotOnALandingRefusedFile(t *testing.T) {
 	root := t.TempDir()
-	mustWrite(t, filepath.Join(root, "pkg", "a.go"), "package pkg\n")
-	mustWrite(t, filepath.Join(root, "pkg", "a_test.go"), "package pkg\n")
-	mustWrite(t, filepath.Join(root, "src", "lib.rs"), "pub fn f() {}\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn t() {}\n}\n")
+	pyRustRepo(t, root)
 	goals := filepath.Join(root, "goals.json")
-	mustWrite(t, goals, `{"pkg/a.go": "must not panic", "src/lib.rs": "must not panic"}`)
+	mustWrite(t, goals, `{"calc.py": "adds", "native/src/lib.rs": "must not panic"}`)
 
 	var out, errb bytes.Buffer
 	code := runCertifyRepo([]string{"--repo", root, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant,
-		"--critic-model", "off", "--goals", goals, "--dry-run"}, &out, &errb)
+		"--critic-model", "off", "--goals", goals, "--top", "1", "--dry-run"}, &out, &errb)
 	if code != 0 {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out.String(), errb.String())
 	}
 	s := out.String()
-	if !strings.Contains(s, "2 candidate(s)") {
-		t.Errorf("the inline-paired Rust file should still count as a candidate:\n%s", s)
+	if !strings.Contains(s, "auditing 1 of 1 candidate(s)") {
+		t.Errorf("the refused Rust file must not be counted as a candidate:\n%s", s)
 	}
-	if !strings.Contains(s, reposcan.ReasonTestLandingNotBuilt) || !strings.Contains(s, "src/lib.rs") {
-		t.Errorf("src/lib.rs must be accounted as %s:\n%s", reposcan.ReasonTestLandingNotBuilt, s)
+	if !strings.Contains(s, "1 job(s)") || strings.Contains(s, "calc.py (not-selected)") {
+		t.Errorf("--top 1 must audit calc.py:\n%s", s)
 	}
-	if !strings.Contains(s, "1 job(s)") {
-		t.Errorf("only pkg/a.go should be a job:\n%s", s)
+	if !strings.Contains(s, "native/src/lib.rs ("+reposcan.ReasonTestLandingNotBuilt) {
+		t.Errorf("native/src/lib.rs must be accounted as %s:\n%s", reposcan.ReasonTestLandingNotBuilt, s)
+	}
+}
+
+// TestCertifyRepoLanguageProfileSaysARefusedFileIsNotAuditableYet: the
+// language profile counted a refused Rust file as "1 auditable" (final
+// review I3). It is a source file corral cannot audit yet, and says so.
+func TestCertifyRepoLanguageProfileSaysARefusedFileIsNotAuditableYet(t *testing.T) {
+	root := t.TempDir()
+	pyRustRepo(t, root)
+	var out, errb bytes.Buffer
+	code := runCertifyRepo([]string{"--repo", root, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant,
+		"--critic-model", "off", "--dry-run"}, &out, &errb)
+	if code != 0 {
+		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out.String(), errb.String())
+	}
+	var row string
+	for _, l := range strings.Split(out.String(), "\n") {
+		if strings.Contains(l, "rust ") && strings.Contains(l, "source file(s)") {
+			row = l
+		}
+	}
+	if !strings.Contains(row, "1 source file(s): 0 auditable") || !strings.Contains(row, "1 not auditable yet (test landing not built)") {
+		t.Errorf("rust profile row = %q, want 1 source file, 0 auditable, 1 not auditable yet:\n%s", row, out.String())
+	}
+}
+
+// TestCertifyRepoSelectionSourcesLeaveOutALandingRefusedFile: with no `--`,
+// a Python+Rust repo used to decline Python's selection pass because the scan
+// "spans 2 languages (python, rust)" — a language that can audit nothing
+// switched evidence candidacy off for the one that can (final review I2b).
+// The selection and pre-flight source list is derived from the enumeration,
+// so a refused file never reaches it.
+func TestCertifyRepoSelectionSourcesLeaveOutALandingRefusedFile(t *testing.T) {
+	root := t.TempDir()
+	pyRustRepo(t, root)
+	cands, excl, err := reposcan.Enumerate(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	langs := preflightLanguages(enumeratedSourcePaths(cands, excl))
+	if len(langs) != 1 || !langs["python"] {
+		t.Fatalf("selection languages = %v, want only python", langs)
+	}
+}
+
+// TestScanPassesPrepareNoJailForALanguageThatCannotBeInstrumented: the
+// selection and coverage pre-flight passes built the language's jail seed —
+// for Rust, a networked `cargo vendor` of the whole dependency graph —
+// BEFORE asking whether the plugin can instrument anything at all, so a scan
+// that could audit nothing still paid for it (final review I1). Asserted
+// through the seed seam: no build, not a timing.
+func TestScanPassesPrepareNoJailForALanguageThatCannotBeInstrumented(t *testing.T) {
+	var builds atomic.Int32
+	ex := newLocalExecutor(t.TempDir(), nil, "", 0, io.Discard)
+	ex.jailErr = nil
+	ex.seeds = newSeedCache(func(lang string) (repoSeed, error) {
+		builds.Add(1)
+		return repoSeed{seedDir: "/seed/" + lang, files: map[string]string{}, cleanup: func() {}}, nil
+	})
+	defer ex.Close()
+
+	sources := []string{"src/lib.rs"} // rust: neither a TestSelector nor a CoverageReporter
+	sel := ex.collectSelection(context.Background(), sources)
+	if sel.Ran || sel.Note == "" {
+		t.Errorf("selection = %+v, want a not-run note", sel)
+	}
+	cov := ex.runPreflight(context.Background(), sources)
+	if cov.Ran || cov.Note == "" {
+		t.Errorf("preflight = %+v, want a not-run note", cov)
+	}
+	if got := builds.Load(); got != 0 {
+		t.Fatalf("jail seed built %d time(s) for a language with nothing to instrument, want 0", got)
+	}
+}
+
+// TestCertifyRepoRustOnlyRepoPreparesNoJail: end to end, a repository whose
+// only sources are refused has no selection language at all, so the scan
+// never reaches the seed (which is where `cargo vendor` runs).
+func TestCertifyRepoRustOnlyRepoPreparesNoJail(t *testing.T) {
+	root := t.TempDir()
+	mustWrite(t, filepath.Join(root, "src", "lib.rs"), "pub fn f() {}\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn t() {}\n}\n")
+	cands, excl, err := reposcan.Enumerate(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cands) != 0 {
+		t.Fatalf("candidates = %+v, want none", cands)
+	}
+	if src := enumeratedSourcePaths(cands, excl); len(src) != 0 {
+		t.Fatalf("selection sources = %v, want none — a Rust-only repo must not prepare a jail", src)
+	}
+}
+
+// TestCertifyRepoDiffTouchingOnlyARefusedFileStaysGreenAndSaysSo: the
+// founder's ruling for the diff path — a changed file whose language has no
+// test landing is treated exactly as a changed file in a language corral
+// does not audit (a README, a .c file): it does not by itself turn the gate
+// red. Unlike such a file it is DISCLOSED, by name and reason, because it is
+// code corral recognises and did not audit. Before, the scan said "NOT
+// AUDITED … could not pair with a test" about a file that was paired, told
+// the user to try --tests or certify --local (both refuse it), and exited 1.
+func TestCertifyRepoDiffTouchingOnlyARefusedFileStaysGreenAndSaysSo(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "test-placeholder-not-a-real-key")
+	root := t.TempDir()
+	gitRun := gitCmd(t, root)
+	pyRustRepo(t, root)
+	gitRun("init", "-q")
+	gitRun("add", ".")
+	gitRun("commit", "-q", "-m", "base", "--no-gpg-sign")
+	base := gitRevParseHead(t, root)
+	mustWrite(t, filepath.Join(root, "native", "src", "lib.rs"), "pub fn f() { let _ = 1; }\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn t() {}\n}\n")
+	gitRun("add", ".")
+	gitRun("commit", "-q", "-m", "touch rust", "--no-gpg-sign")
+	goals := filepath.Join(root, "goals.json")
+	mustWrite(t, goals, `{"calc.py": "adds"}`)
+
+	var out, errb bytes.Buffer
+	code := runCertifyRepo([]string{
+		"--repo", root, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant,
+		"--critic-model", "off", "--diff-base", base, "--goals", goals, "--substrate", substrateWorkspace,
+	}, &out, &errb) // not --dry-run: zero jobs means zero model calls, and the real path prints the verdict and exit code
+	s := out.String()
+	if code != 0 {
+		t.Errorf("exit %d on a diff that touched only a file corral cannot audit yet — want the same exit as an unsupported-language change:\n%s\n%s", code, s, errb.String())
+	}
+	if strings.Contains(s, "NOT AUDITED") || strings.Contains(s, "--tests") || strings.Contains(s, "certify --local") {
+		t.Errorf("a refused file must not be reported as unpairable, nor offered --tests/--local:\n%s", s)
+	}
+	if !strings.Contains(s, "auditing 0 of 1 candidate(s)") {
+		t.Errorf("the diff line must not count the refused file as a candidate:\n%s", s)
+	}
+	if !strings.Contains(s, "native/src/lib.rs") || !strings.Contains(s, reposcan.ReasonTestLandingNotBuilt) || !strings.Contains(s, "changed but not audited") {
+		t.Errorf("the changed refused file must be disclosed by name and reason:\n%s", s)
+	}
+}
+
+// TestCertifyRepoDiffMixedRefusedAndAuditableAuditsTheAuditable: a diff that
+// changes a Python file and a Rust file audits the Python one and discloses
+// the Rust one — the filter on the diff path must not take the auditable
+// file with it (final review triage 11: the landing filter had no diff-path
+// test).
+func TestCertifyRepoDiffMixedRefusedAndAuditableAuditsTheAuditable(t *testing.T) {
+	root := t.TempDir()
+	gitRun := gitCmd(t, root)
+	pyRustRepo(t, root)
+	gitRun("init", "-q")
+	gitRun("add", ".")
+	gitRun("commit", "-q", "-m", "base", "--no-gpg-sign")
+	base := gitRevParseHead(t, root)
+	mustWrite(t, filepath.Join(root, "calc.py"), "def add(a, b):\n    return b + a\n")
+	mustWrite(t, filepath.Join(root, "native", "src", "lib.rs"), "pub fn f() { let _ = 1; }\n")
+	gitRun("add", ".")
+	gitRun("commit", "-q", "-m", "touch both", "--no-gpg-sign")
+	goals := filepath.Join(root, "goals.json")
+	mustWrite(t, goals, `{"calc.py": "adds"}`)
+
+	var out, errb bytes.Buffer
+	code := runCertifyRepo([]string{
+		"--repo", root, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant,
+		"--critic-model", "off", "--diff-base", base, "--goals", goals, "--dry-run",
+	}, &out, &errb)
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, errb.String())
+	}
+	s := out.String()
+	if !strings.Contains(s, "auditing 1 of 1 candidate(s)") || !strings.Contains(s, "1 job(s)") {
+		t.Errorf("calc.py must be the one job:\n%s", s)
+	}
+	if !strings.Contains(s, "native/src/lib.rs") || !strings.Contains(s, "changed but not audited") {
+		t.Errorf("the changed Rust file must be disclosed:\n%s", s)
+	}
+}
+
+// TestCertifyRepoDiffTouchingOnlyARefusedTestRunsNoSuite: a diff that changes
+// only a Rust test is, like a change to a file in a language corral does not
+// audit, nothing to run evidence for — no Rust source is a candidate or a
+// selection source, so the instrumented run would be the OTHER language's
+// suite, costing a full run that cannot attribute the change.
+func TestCertifyRepoDiffTouchingOnlyARefusedTestRunsNoSuite(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "test-placeholder-not-a-real-key")
+	root := t.TempDir()
+	gitRun := gitCmd(t, root)
+	pyRustRepo(t, root)
+	mustWrite(t, filepath.Join(root, "native", "tests", "it.rs"), "#[test]\nfn it() {}\n")
+	gitRun("init", "-q")
+	gitRun("add", ".")
+	gitRun("commit", "-q", "-m", "base", "--no-gpg-sign")
+	base := gitRevParseHead(t, root)
+	mustWrite(t, filepath.Join(root, "native", "tests", "it.rs"), "#[test]\nfn it() { assert!(true); }\n")
+	gitRun("add", ".")
+	gitRun("commit", "-q", "-m", "touch a rust test", "--no-gpg-sign")
+	goals := filepath.Join(root, "goals.json")
+	mustWrite(t, goals, `{"calc.py": "adds"}`)
+
+	var out, errb bytes.Buffer
+	code := runCertifyRepo([]string{
+		"--repo", root, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant,
+		"--critic-model", "off", "--diff-base", base, "--goals", goals, "--substrate", substrateWorkspace,
+	}, &out, &errb)
+	s := out.String()
+	if code != 0 {
+		t.Errorf("exit %d:\n%s\n%s", code, s, errb.String())
+	}
+	if strings.Contains(s, "selection:") {
+		t.Errorf("a diff touching only a Rust test ran the selection pass:\n%s", s)
+	}
+	if !strings.Contains(s, "NOTHING IN SCOPE") {
+		t.Errorf("want NOTHING IN SCOPE, as for a change in a language corral does not audit:\n%s", s)
 	}
 }

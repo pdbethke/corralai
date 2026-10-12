@@ -505,6 +505,17 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		sort.Strings(unpairableInDiff)
 		unpairableInDiff = slices.Compact(unpairableInDiff)
 		fmt.Fprintf(stdout, "  diff against %s: auditing %d of %d candidate(s)\n", *diffBase, len(selected), len(cands))
+		// A changed file corral recognises but cannot audit YET (its test
+		// landing is not built) is ruled to be treated as a changed file in a
+		// language corral does not audit: it never fails the gate on its own
+		// (reposcan.UnauditableChangedSource). Unlike a README, it is code
+		// the reader may expect to have been audited, so it is named, with
+		// the reason, rather than left to the exclusion list.
+		for _, e := range excl {
+			if e.Reason == reposcan.ReasonTestLandingNotBuilt && changedSet[e.Path] {
+				fmt.Fprintf(stdout, "    changed but not audited: %s (%s%s)\n", e.Path, e.Reason, reasonGloss(e.Reason))
+			}
+		}
 	} else {
 		// Selection precedes derivation, deliberately: bounding afterwards would
 		// pay for a goal on every candidate in order to audit 25 of them.
@@ -543,31 +554,6 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		if rankInfo.Note != "" {
 			fmt.Fprintf(stdout, "    %s\n", rankInfo.Note)
 		}
-	}
-
-	// A selected file whose test would be written over the file itself (its
-	// language's test landing is not built — lang.CheckTestLanding) is taken
-	// out HERE, after selection and before every jail, store and spend step
-	// below: it would otherwise cost a derived goal and an evidence run and
-	// then be refused per job by resolveAuditPlugin. It stays a candidate in
-	// the count above (it IS paired) and is accounted, never dropped; a
-	// changed one on the diff path is reported NOT AUDITED like any other
-	// changed source corral could not grade.
-	{
-		var kept []reposcan.Candidate
-		for _, c := range selected {
-			if lang.CheckTestLanding(c.Path) != nil {
-				excl = append(excl, reposcan.Exclusion{Path: c.Path, Reason: reposcan.ReasonTestLandingNotBuilt})
-				if diffChanged != nil {
-					unpairableInDiff = append(unpairableInDiff, c.Path)
-					sort.Strings(unpairableInDiff)
-					unpairableInDiff = slices.Compact(unpairableInDiff)
-				}
-				continue
-			}
-			kept = append(kept, c)
-		}
-		selected = kept
 	}
 
 	// --mutants: resolved HERE, after selection and before EVERY model-facing
@@ -823,7 +809,13 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	diffTouchedATest := false
 	mightBeTest := mightBeTestPredicate()
 	for path := range diffChanged {
-		if mightBeTest(path) {
+		// A changed test in a language whose landing is not built is treated
+		// as the scan treats a file in a language it does not audit: no
+		// instrumented run can attribute it (no such language's sources are
+		// candidates or selection sources — see Enumerate), so running the
+		// OTHER language's suite for it would cost a suite run and find
+		// nothing.
+		if mightBeTest(path) && lang.CheckTestLanding(path) == nil {
 			diffTouchedATest = true
 			break
 		}
@@ -2668,6 +2660,12 @@ func (l *localExecutor) runPreflight(ctx context.Context, sources []string) repo
 		testCmd = plug.TestCmd()
 	}
 
+	// Asked BEFORE scanRunner, for the reason collectSelection gives: jail
+	// preparation is the expensive part, and a language with no coverage
+	// instrumentation would get only this note after paying for it.
+	if _, note := reposcan.PreflightCommand(plug, testCmd); note != "" {
+		return reposcan.CoverageMap{Note: note}
+	}
 	runner, files, rerr := l.scanRunner(langName, plug, preflightMaxOutput, preflightTimeout)
 	if rerr != nil {
 		return reposcan.CoverageMap{Note: fmt.Sprintf("preflight: %v", rerr)}
@@ -2865,6 +2863,13 @@ func (l *localExecutor) collectSelection(ctx context.Context, sources []string) 
 		}
 	}
 
+	// Asked BEFORE scanRunner, which prepares the jail seed (a tree copy and,
+	// for a language that vendors, a networked dependency fetch): a plugin
+	// that cannot instrument this command would get only this note after
+	// paying for all of it.
+	if _, note := reposcan.SelectionCommand(plug, testCmd, sources); note != "" {
+		return reposcan.SelectionEvidence{Note: note}
+	}
 	runner, files, err := l.scanRunner(langName, plug, selectionMaxOutput, selectionTimeout)
 	if err != nil {
 		return reposcan.SelectionEvidence{Note: fmt.Sprintf("selection: %v", err)}
@@ -3754,7 +3759,7 @@ func reasonGloss(reason string) string {
 	case reposcan.ReasonMappedTestMissing:
 		return " — the --tests map names a test file that does not exist"
 	case reposcan.ReasonTestLandingNotBuilt:
-		return " — paired, but corral's test landing for this language is not built yet: a test for it would be written over the file itself, so it was not audited"
+		return " — corral cannot audit this language's files yet: its test landing is not built, so a test for this file would be written over the file itself"
 	}
 	return ""
 }
@@ -4884,7 +4889,12 @@ func printLanguageProfile(w io.Writer, profile []reposcan.LanguageStat) {
 	fmt.Fprintln(w, "  languages detected:")
 	for _, s := range profile {
 		fmt.Fprintf(w, "    %-12s %3d source file(s): %d auditable, %d with no paired test",
-			s.Lang, s.Auditable+s.NoPairedTest+s.Ambiguous, s.Auditable, s.NoPairedTest)
+			s.Lang, s.Auditable+s.NoPairedTest+s.Ambiguous+s.LandingNotBuilt, s.Auditable, s.NoPairedTest)
+		if s.LandingNotBuilt > 0 {
+			// Neither "auditable" nor "no paired test" is true of these: the
+			// file may well have a test; corral cannot write one for it yet.
+			fmt.Fprintf(w, ", %d not auditable yet (test landing not built)", s.LandingNotBuilt)
+		}
 		if s.Ambiguous > 0 {
 			// Called out separately because this is where corral KNOWS it is
 			// uncertain — the right place to ask a human rather than guess.

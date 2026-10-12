@@ -26,8 +26,11 @@ import (
 // not by being removed from a list. Every entry that can start an audit asks
 // before any jail, store or spend: advpool.Driver.StartRun, the brain's
 // AdvPoolRuntime.StartRun (certify --adversarial and eval reach the pool
-// there), and certify --local's resolveAuditPlugin (which certify --repo's
-// jobs also route through).
+// there), certify --local's resolveAuditPlugin (which certify --repo's
+// jobs also route through). certify --repo asks earlier still:
+// reposcan.Enumerate excludes such a file before pairing, so it is never a
+// candidate, a --top slot, a selection language or a reason to prepare a
+// jail.
 //
 // The plugin is the one the extension names, as advPoolTestPath resolves it:
 // the check must agree with the path that would actually be written. A file

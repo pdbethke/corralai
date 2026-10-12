@@ -203,11 +203,27 @@ func instrumentCmd(p lang.Plugin, sel lang.TestSelector, testCmd []string, sourc
 // one tree over different source roots shared a key, and the second was
 // served evidence collected over roots it never asked about.
 func InstrumentedCommand(p lang.Plugin, testCmd []string, sourcePaths []string) (cmd []string, ok bool) {
-	sel, selOK := p.(lang.TestSelector)
-	if !selOK {
-		return nil, false
+	cmd, note := SelectionCommand(p, testCmd, sourcePaths)
+	return cmd, note == ""
+}
+
+// SelectionCommand is InstrumentedCommand with the reason it has no command:
+// note is empty exactly when cmd is the command CollectSelectionEvidence
+// would run. Exported so a caller can ask BEFORE preparing the substrate the
+// command would run in — jail preparation is a tree copy and a networked
+// dependency fetch, and paying for it for a plugin that can instrument
+// nothing (no TestSelector, or a test command it cannot instrument) bought
+// only the note below.
+func SelectionCommand(p lang.Plugin, testCmd []string, sourcePaths []string) (cmd []string, note string) {
+	sel, ok := p.(lang.TestSelector)
+	if !ok {
+		return nil, fmt.Sprintf("no selector for %s", p.Name())
 	}
-	return instrumentCmd(p, sel, testCmd, sourceRootsFor(p, sourcePaths))
+	cmd, ok = instrumentCmd(p, sel, testCmd, sourceRootsFor(p, sourcePaths))
+	if !ok {
+		return nil, fmt.Sprintf("%s: cannot instrument test command %v", p.Name(), testCmd)
+	}
+	return cmd, ""
 }
 
 // CollectSelectionEvidence runs the plugin's Instrument command once in the
@@ -232,14 +248,11 @@ func InstrumentedCommand(p lang.Plugin, testCmd []string, sourcePaths []string) 
 // document that measured NOTHING, indistinguishable on its face from a
 // suite that genuinely covers zero files.
 func CollectSelectionEvidence(ctx context.Context, runner commandRunner, files map[string]string, p lang.Plugin, testCmd []string, sourcePaths []string) SelectionEvidence {
-	sel, ok := p.(lang.TestSelector)
-	if !ok {
-		return SelectionEvidence{Note: fmt.Sprintf("no selector for %s", p.Name())}
+	cmd, note := SelectionCommand(p, testCmd, sourcePaths)
+	if note != "" {
+		return SelectionEvidence{Note: note}
 	}
-	cmd, ok := instrumentCmd(p, sel, testCmd, sourceRootsFor(p, sourcePaths))
-	if !ok {
-		return SelectionEvidence{Note: fmt.Sprintf("%s: cannot instrument test command %v", p.Name(), testCmd)}
-	}
+	sel := p.(lang.TestSelector) // SelectionCommand returned a command, so p is one
 	out, exitCode, stderr, err := runSelectionCmd(ctx, runner, files, cmd)
 	if err != nil {
 		note := fmt.Sprintf("%s: selection evidence run failed: %v", p.Name(), err)

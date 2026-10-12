@@ -148,6 +148,18 @@ func TestSearchGolden(t *testing.T) {
 // need to, because findInUniverse kept its signature and became a thin
 // adapter over pairing.Resolve — so this golden ran the same function name
 // before and after the move, which is what made it a gate on the move.
+//
+// The corpus is paths only, so a content rule (Rust's Declared and Inline)
+// is fed "this file declares no test module": a Rust row here pins what
+// pairing does from the path alone, which is to pair nothing by name. What a
+// file's own declarations pair is pinned over real files instead, in
+// internal/pairing's declared_test.go.
 func searchResolve(p lang.Plugin, codePath string, present map[string]bool, presentList []string) (string, int, bool) {
-	return findInUniverse(p, codePath, present, presentList)
+	tp, rank, via, err := findInUniverse(p, codePath, present, presentList, noDeclaredModules)
+	if err != nil {
+		panic(err) // noDeclaredModules cannot fail
+	}
+	return tp, rank, via
 }
+
+func noDeclaredModules(string) ([]pairing.TestModule, error) { return nil, nil }

@@ -132,3 +132,54 @@ func TestCertifyRepoDisclosesSearchPairing(t *testing.T) {
 		t.Errorf("stdout does not disclose the search pairing (%q):\n%s", want, out.String())
 	}
 }
+
+// TestResolveDevTestPrintsHowItPaired: every pairing --local finds is
+// disclosed with the Resolution's Label — the convention's shape, or for
+// Rust what the file itself declared ("inline" means the tests are IN the
+// audited file, which an operator must know before reading a verdict on it).
+// A Rust source that declares no test module is not paired to itself, and
+// the miss says there was nothing to look for rather than listing nothing
+// and claiming a search (Review Focus 1).
+func TestResolveDevTestPrintsHowItPaired(t *testing.T) {
+	root := t.TempDir()
+	for rel, body := range map[string]string{
+		"pkg/mod.py":      "x = 1\n",
+		"pkg/test_mod.py": "def test_x(): pass\n",
+		"src/lib.rs":      "pub fn f() {}\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn t() {}\n}\n",
+		"src/plain.rs":    "pub fn g() {}\n",
+	} {
+		if err := os.MkdirAll(filepath.Join(root, filepath.Dir(rel)), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, rel), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, tc := range []struct{ lang, code, want string }{
+		{"python", "pkg/mod.py", "paired by sibling: pkg/test_mod.py"},
+		{"rust", "src/lib.rs", "paired by inline: src/lib.rs"},
+	} {
+		plug, ok := lang.ByName(tc.lang)
+		if !ok {
+			t.Fatalf("%s plugin not registered", tc.lang)
+		}
+		var stdout bytes.Buffer
+		if _, err := resolveDevTest(plug, root, tc.code, &stdout); err != nil {
+			t.Fatalf("%s: %v", tc.code, err)
+		}
+		if !strings.Contains(stdout.String(), tc.want) {
+			t.Errorf("%s: stdout = %q, want %q", tc.code, stdout.String(), tc.want)
+		}
+	}
+
+	plug, _ := lang.ByName("rust")
+	var stdout bytes.Buffer
+	_, err := resolveDevTest(plug, root, "src/plain.rs", &stdout)
+	if err == nil {
+		t.Fatalf("src/plain.rs declares no test module, yet paired: %q", stdout.String())
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "declares no test of its own") || strings.Contains(msg, "searched") {
+		t.Errorf("miss = %q, want it to say there was nothing to look for, and claim no search", msg)
+	}
+}

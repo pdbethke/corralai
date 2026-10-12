@@ -1,0 +1,13 @@
+Rust pairing fixtures, read by internal/pairing/declared_test.go through the
+real parser (repoindex.TestModules). Nothing here is compiled.
+
+warp/     Paths and #[path] lines from the local Warp fork
+          (~/PycharmProjects/warp, HEAD 325d4d4701b41feb272487e89a6cf02bfba9f194). Each source keeps
+          its module declaration VERBATIM (the #[cfg(test)], #[path] and mod
+          lines); every other line of the real file is elided. The test files
+          are stubs: pairing reads their existence, never their contents.
+layouts/  Constructed trees for the forms Warp does not use at those paths:
+          rustc's default module file (mod.rs and non-mod.rs), a #[path] with
+          ../ into a sibling directory, an inline module, a source with no
+          test module, a #[path] that names a missing file, and one that
+          escapes the repository.

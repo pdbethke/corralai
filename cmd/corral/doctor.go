@@ -349,15 +349,9 @@ func checkPairing(code, test string) checkResult {
 		if res.ViaSearch {
 			return checkResult{name: name, ok: true, detail: "paired by search: " + res.Path}
 		}
-		return checkResult{name: name, ok: true, detail: "found " + res.Path + " by convention"}
+		return checkResult{name: name, ok: true, detail: "found " + res.Path + " by convention (" + res.Label + ")"}
 	}
-	detail := fmt.Sprintf("no test found for %q by convention. Looked for:\n", code)
-	for _, t := range res.Tried {
-		detail += "  " + t + "\n"
-	}
-	if len(res.Roots) > 0 {
-		detail += fmt.Sprintf("and searched %s recursively for a matching basename\n", strings.Join(res.Roots, ", "))
-	}
+	detail := fmt.Sprintf("no test found for %q by convention. ", code) + whereItLooked(res)
 	detail += "Pass --test <path> explicitly. Conventions vary — a JS/TS project using __tests__/ " +
 		"or naming tests after behavior rather than after the source file will never pair automatically."
 	return checkResult{name: name, detail: detail}

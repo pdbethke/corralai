@@ -672,15 +672,29 @@ func auditErr(format string, a ...any) error {
 // before ever learning where corral had actually looked. This message is the
 // third guess made unnecessary.
 func noTestFoundErr(codePath string, res reposcan.SearchResult) string {
+	return strings.TrimRight(fmt.Sprintf("no test found for %s (pass --test to override). ", codePath)+whereItLooked(res), "\n")
+}
+
+// whereItLooked renders a FindTest miss's Tried and Roots — the part of a
+// "no test found" message that saves the operator a guess — for
+// noTestFoundErr and doctor's pairing check alike. A miss with neither is
+// a file that declares no test of its own (a Rust source with no test
+// module) in a language that derives no test file name from a path: there
+// was nothing to look for, and it says so rather than print an empty list
+// or claim a search that never ran.
+func whereItLooked(res reposcan.SearchResult) string {
+	if len(res.Tried) == 0 && len(res.Roots) == 0 {
+		return "Nothing to look for: the file declares no test of its own, and its language derives no test file name from its path.\n"
+	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "no test found for %s (pass --test to override). Looked for:\n", codePath)
+	b.WriteString("Looked for:\n")
 	for _, t := range res.Tried {
 		fmt.Fprintf(&b, "  %s\n", t)
 	}
 	if len(res.Roots) > 0 {
 		fmt.Fprintf(&b, "and searched %s recursively for a matching basename\n", strings.Join(res.Roots, ", "))
 	}
-	return strings.TrimRight(b.String(), "\n")
+	return b.String()
 }
 
 // noTestFound is a FindTest miss as an error: its text is noTestFoundErr's,
@@ -692,8 +706,11 @@ func (e noTestFound) Error() string { return e.msg }
 
 // resolveDevTest is the ONE way a certify command finds the developer's test
 // when the operator named none: reposcan.FindTest (pairing.Resolve over the
-// disk under root), a noTestFound naming everywhere it looked, and the
-// "paired by search" disclosure when no naming convention found it.
+// disk under root), a noTestFound naming everywhere it looked, and a
+// "paired by <how>" line saying how it was found — "search" when no naming
+// convention found it, else the Resolution's Label ("sibling",
+// "parallel-tree", or for Rust "inline", "path-attr", "default-module"; an
+// inline pairing means the tests are IN the audited file).
 // certify --local and certify --adversarial both call it, so the two cannot
 // pair one file two different ways — they did until B1c, when --adversarial
 // took the rank-0 candidate without checking it existed.
@@ -711,6 +728,8 @@ func resolveDevTest(plug lang.Plugin, root, codePath string, stdout io.Writer) (
 		// discloses the pairing came from somewhere else instead of silently
 		// presenting it as though it were the expected sibling.
 		fmt.Fprintf(stdout, "  paired by search: %s\n", res.Path)
+	} else {
+		fmt.Fprintf(stdout, "  paired by %s: %s\n", res.Label, res.Path)
 	}
 	return res.Path, nil
 }

@@ -33,7 +33,6 @@ func langForExt(path string) string {
 var ownExtLang = map[string]string{
 	".tsx":  "typescript",
 	".jsx":  "javascript",
-	".rs":   "rust",
 	".java": "java",
 	".c":    "c",
 	".h":    "c",

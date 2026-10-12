@@ -1496,3 +1496,21 @@ func assertSameNamedFields(t *testing.T, src, dst any) {
 		}
 	}
 }
+
+// TestAdvPoolStartRun_RefusesAFileWhoseTestWouldOverwriteIt: certify
+// --adversarial and eval reach the pool through this StartRun, which writes a
+// tracking mission before the driver's own StartRun runs. A Rust source —
+// whose test landing is not built, so a test for it would be written over
+// it — is refused before that store write.
+func TestAdvPoolStartRun_RefusesAFileWhoseTestWouldOverwriteIt(t *testing.T) {
+	rt, _ := newTestAdvPoolRuntime(t, nil)
+	in := testRunSpecIn()
+	in.CodePath, in.DevTestPath, in.TestCmd = "src/lib.rs", "src/lib.rs", "cargo test"
+	_, err := rt.StartRun(in)
+	if err == nil || !strings.Contains(err.Error(), "not built yet") {
+		t.Fatalf("StartRun(src/lib.rs) err = %v, want the landing refusal", err)
+	}
+	if ms, merr := rt.missions.ListMissions(); merr != nil || len(ms) != 0 {
+		t.Fatalf("a refused run wrote %d mission(s) (err %v)", len(ms), merr)
+	}
+}

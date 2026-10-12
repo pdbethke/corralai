@@ -772,6 +772,12 @@ func resolveAuditPlugin(in localAuditInput) (lang.Plugin, error) {
 		}
 		plug = p
 	}
+	// Before preflight, jail or spend: a file whose test would be written
+	// over the file itself (its language's test landing is not built) cannot
+	// be audited. certify --repo's jobs route through here too.
+	if err := lang.CheckTestLanding(in.codePath); err != nil {
+		return nil, auditUsageErr("%v", err)
+	}
 	// in.checkArgv is the operator's own `-- <cmd>` when one was given (both
 	// certify --local's own flag and certify --repo's per-job testCmd route
 	// through this same field, see localExecutor.Execute) — it names exactly

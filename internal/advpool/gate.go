@@ -43,8 +43,15 @@ func pluginFor(codePath string) (golang.Plugin, error) {
 // TestRules. A file no plugin claims is named by Go's rules instead, matching
 // advPoolBase, which gives such a file the Go scaffold — the test name and the
 // scaffold must agree on one language. A claimed plugin that yields no
-// candidate is unreachable today (every shipped plugin has a Sibling rule) and
-// would also fall back to Go's name.
+// candidate would also fall back to Go's name; no shipped plugin does.
+//
+// For a language with an Inline rule (Rust) Primary IS the source, so this
+// returns codePath itself, and a workspace built from it would overwrite the
+// code under test. Nothing here prevents that; lang.CheckTestLanding does,
+// refusing such a file at every entry that can start a run (Driver.StartRun,
+// the brain's AdvPoolRuntime.StartRun, certify --local's resolveAuditPlugin)
+// before this is ever called — see that function's doc for the list and why
+// the condition is derived from the rules rather than a language name.
 func advPoolTestPath(codePath string) string {
 	if p, err := pluginFor(codePath); err == nil {
 		if c, ok := pairing.Primary(p.TestRules(), codePath); ok {

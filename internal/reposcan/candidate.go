@@ -160,6 +160,13 @@ const (
 	// never counted alongside ReasonUncovered/ReasonImportOnly, and never
 	// worded as though the tests failed at anything.
 	ReasonNoExecutableCode = "no executable code"
+	// ReasonTestLandingNotBuilt marks a paired candidate corral cannot audit
+	// yet because a test for it would be written over the file itself: its
+	// language's Primary test path is the source (Rust's inline test module),
+	// and the landing that merges an authored test INTO a source is not
+	// built. See lang.CheckTestLanding. Applied by certify --repo after
+	// selection, before any spend.
+	ReasonTestLandingNotBuilt = "test-landing-not-built"
 )
 
 // UnauditableChangedSource reports whether an exclusion means a CHANGED
@@ -177,7 +184,7 @@ const (
 // every gate that asks the question.
 func UnauditableChangedSource(reason string) bool {
 	switch reason {
-	case ReasonNoPairedTest, ReasonAmbiguousTest, ReasonNotRegularFile:
+	case ReasonNoPairedTest, ReasonAmbiguousTest, ReasonNotRegularFile, ReasonTestLandingNotBuilt:
 		// The source changed and corral could not grade it: no test names
 		// it, its test is claimed by another source, or it is not a file it
 		// can read. Each is "we could not look", not "nothing to look at".

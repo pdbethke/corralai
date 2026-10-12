@@ -545,6 +545,31 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 
+	// A selected file whose test would be written over the file itself (its
+	// language's test landing is not built — lang.CheckTestLanding) is taken
+	// out HERE, after selection and before every jail, store and spend step
+	// below: it would otherwise cost a derived goal and an evidence run and
+	// then be refused per job by resolveAuditPlugin. It stays a candidate in
+	// the count above (it IS paired) and is accounted, never dropped; a
+	// changed one on the diff path is reported NOT AUDITED like any other
+	// changed source corral could not grade.
+	{
+		var kept []reposcan.Candidate
+		for _, c := range selected {
+			if lang.CheckTestLanding(c.Path) != nil {
+				excl = append(excl, reposcan.Exclusion{Path: c.Path, Reason: reposcan.ReasonTestLandingNotBuilt})
+				if diffChanged != nil {
+					unpairableInDiff = append(unpairableInDiff, c.Path)
+					sort.Strings(unpairableInDiff)
+					unpairableInDiff = slices.Compact(unpairableInDiff)
+				}
+				continue
+			}
+			kept = append(kept, c)
+		}
+		selected = kept
+	}
+
 	// --mutants: resolved HERE, after selection and before EVERY model-facing
 	// step below — the jail preflight, the provider preflight, and goal
 	// derivation, which is where the money starts. The point of a replayed set
@@ -3728,6 +3753,8 @@ func reasonGloss(reason string) string {
 		return " — the workspace could not be prepared for this file"
 	case reposcan.ReasonMappedTestMissing:
 		return " — the --tests map names a test file that does not exist"
+	case reposcan.ReasonTestLandingNotBuilt:
+		return " — paired, but corral's test landing for this language is not built yet: a test for it would be written over the file itself, so it was not audited"
 	}
 	return ""
 }

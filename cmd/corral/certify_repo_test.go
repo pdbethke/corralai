@@ -4755,3 +4755,35 @@ func TestOrphanCheckSeesDeletedRustTests(t *testing.T) {
 		t.Fatalf("orphaned = %v, want %v", got, want)
 	}
 }
+
+// TestCertifyRepoExcludesAFileWhoseTestWouldOverwriteIt: certify --repo
+// takes a selected Rust source (paired by its inline test module, but with
+// no test landing yet, so a test for it would be written over it) out of the
+// job set right after selection — before goal derivation, evidence or any
+// jail — and accounts it with its reason. It still counts as a candidate,
+// since it IS paired; the Go file beside it is audited as before.
+func TestCertifyRepoExcludesAFileWhoseTestWouldOverwriteIt(t *testing.T) {
+	root := t.TempDir()
+	mustWrite(t, filepath.Join(root, "pkg", "a.go"), "package pkg\n")
+	mustWrite(t, filepath.Join(root, "pkg", "a_test.go"), "package pkg\n")
+	mustWrite(t, filepath.Join(root, "src", "lib.rs"), "pub fn f() {}\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn t() {}\n}\n")
+	goals := filepath.Join(root, "goals.json")
+	mustWrite(t, goals, `{"pkg/a.go": "must not panic", "src/lib.rs": "must not panic"}`)
+
+	var out, errb bytes.Buffer
+	code := runCertifyRepo([]string{"--repo", root, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant,
+		"--critic-model", "off", "--goals", goals, "--dry-run"}, &out, &errb)
+	if code != 0 {
+		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out.String(), errb.String())
+	}
+	s := out.String()
+	if !strings.Contains(s, "2 candidate(s)") {
+		t.Errorf("the inline-paired Rust file should still count as a candidate:\n%s", s)
+	}
+	if !strings.Contains(s, reposcan.ReasonTestLandingNotBuilt) || !strings.Contains(s, "src/lib.rs") {
+		t.Errorf("src/lib.rs must be accounted as %s:\n%s", reposcan.ReasonTestLandingNotBuilt, s)
+	}
+	if !strings.Contains(s, "1 job(s)") {
+		t.Errorf("only pkg/a.go should be a job:\n%s", s)
+	}
+}

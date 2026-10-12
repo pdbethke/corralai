@@ -183,3 +183,18 @@ func TestResolveDevTestPrintsHowItPaired(t *testing.T) {
 		t.Errorf("miss = %q, want it to say there was nothing to look for, and claim no search", msg)
 	}
 }
+
+// TestResolveAuditPluginRefusesAFileWhoseTestWouldOverwriteIt: certify
+// --local (and every certify --repo job, which routes through the same
+// function) refuses a Rust source before preflight, jail or spend — its test
+// would be written over the source itself until Rust's landing exists. A
+// Python source is resolved as before.
+func TestResolveAuditPluginRefusesAFileWhoseTestWouldOverwriteIt(t *testing.T) {
+	_, err := resolveAuditPlugin(localAuditInput{codePath: "src/lib.rs", goal: "g"})
+	if err == nil || !strings.Contains(err.Error(), "not built yet") {
+		t.Fatalf("resolveAuditPlugin(src/lib.rs) err = %v, want the landing refusal", err)
+	}
+	if _, err := resolveAuditPlugin(localAuditInput{codePath: "pkg/mod.py", goal: "g", checkArgv: []string{"sh"}}); err != nil && strings.Contains(err.Error(), "not built yet") {
+		t.Fatalf("a Python source was refused by the landing check: %v", err)
+	}
+}

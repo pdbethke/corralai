@@ -4,6 +4,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -389,3 +390,131 @@ func TestDoctorPairingSaysADeclaredTestWasRefusedOutsideTheRoot(t *testing.T) {
 		t.Fatalf("want the refused declaration named, got: %s", got.detail)
 	}
 }
+
+func TestSandboxHintIsPerOS(t *testing.T) {
+	if h := sandboxHint("darwin"); strings.Contains(h, "apt install") || !strings.Contains(h, "--jail container") {
+		t.Errorf("darwin hint = %q", h)
+	}
+	if h := sandboxHint("linux"); !strings.Contains(h, "bubblewrap") {
+		t.Errorf("linux hint = %q", h)
+	}
+}
+
+func TestCheckSandboxNamesTheSelfTestOnBothOutcomes(t *testing.T) {
+	fail := checkSandbox(nil, errors.New("x"))
+	if fail.name != sandboxCheckName || !strings.Contains(fail.name, "self-test") {
+		t.Errorf("failure-path name = %q", fail.name)
+	}
+	if ok := checkSandbox(nil, nil); ok.name != fail.name {
+		t.Errorf("pass name %q != fail name %q", ok.name, fail.name)
+	}
+}
+
+// TestSandboxNotesNameTheMacOSGaps: on the sandbox-exec backend the [ok]
+// line carries every named gap (README Platforms), so an operator reading
+// doctor learns what the jail does NOT do. Informational: it never fails
+// the check, whose "[ok  ] sandbox starts" line the macos CI job greps.
+func TestSandboxNotesNameTheMacOSGaps(t *testing.T) {
+	notes := sandboxNotes("sandbox-exec", []string{"PATH=/usr/bin"})
+	for _, want := range []string{
+		"startup environment and arguments of any non-Apple process", // C1
+		"before auditing, not during",                                // keyring argv
+		"--jail container",
+		"metadata",
+		"process list",
+		"no private /tmp",
+		"deprecated",
+		"strings.ToLower",
+		"execute binaries it cannot read",
+		"passes trivially on an offline host",
+		"php.ini",
+	} {
+		if !strings.Contains(notes, want) {
+			t.Errorf("darwin notes lack %q:\n%s", want, notes)
+		}
+	}
+	if strings.Contains(notes, "WARNING") {
+		t.Errorf("no secret-shaped variable in the environment, yet a WARNING:\n%s", notes)
+	}
+	if n := sandboxNotes("bwrap", []string{"ANTHROPIC_API_KEY=set"}); n != "" {
+		t.Errorf("bwrap has none of these gaps, got notes:\n%s", n)
+	}
+}
+
+// TestSandboxNotesWarnAboutSecretsInTheEnvironment (named gap C1): a
+// secret-shaped variable in corral's own environment is readable by the
+// code an audit runs, so doctor warns, naming each one that is set — and
+// never its value.
+func TestSandboxNotesWarnAboutSecretsInTheEnvironment(t *testing.T) {
+	env := []string{"ANTHROPIC_API_KEY=sk-ant-SECRETVALUE", "GEMINI_API_KEY=AIzaSECRETVALUE", "GOOGLE_API_KEY=  ",
+		"GITHUB_TOKEN=ghp_SECRETVALUE", "DB_PASSWORD=SECRETVALUE", "PATH=/usr/bin"}
+	notes := sandboxNotes("sandbox-exec", env)
+	if !strings.Contains(notes, "WARNING") {
+		t.Fatalf("secrets in the environment, no WARNING:\n%s", notes)
+	}
+	for _, want := range []string{"ANTHROPIC_API_KEY", "GEMINI_API_KEY", "GITHUB_TOKEN", "DB_PASSWORD", "corral secret set", "--jail container"} {
+		if !strings.Contains(notes, want) {
+			t.Errorf("warning lacks %q:\n%s", want, notes)
+		}
+	}
+	for _, never := range []string{"SECRETVALUE", "GOOGLE_API_KEY", "OPENAI_API_KEY", "PATH"} {
+		if strings.Contains(notes, never) {
+			t.Errorf("warning contains %q (a value, or a variable that is not set or not secret-shaped):\n%s", never, notes)
+		}
+	}
+}
+
+// TestCheckSandboxStaysOkWithTheWarning: the warning is a detail on the
+// passing check, never a failure.
+func TestCheckSandboxStaysOkWithTheWarning(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "x")
+	r := checkSandbox(fakeNamedIsolator{"sandbox-exec"}, nil)
+	if !r.ok || r.name != sandboxCheckName {
+		t.Fatalf("the sandbox check must pass with the warning attached: %+v", r)
+	}
+	if !strings.Contains(r.detail, "WARNING") || !strings.Contains(r.detail, "ANTHROPIC_API_KEY") {
+		t.Errorf("detail lacks the warning:\n%s", r.detail)
+	}
+}
+
+// TestJailResolutionWarnsOnceOnMacOS: certify --local and --repo print the
+// macOS jail warning once per process at jail resolution, before any audit
+// work; never for bwrap, never a value; and the advice matches whether the
+// command has a --jail flag.
+func TestJailResolutionWarnsOnceOnMacOS(t *testing.T) {
+	var buf bytes.Buffer
+	oldOut, oldEnv := jailWarnOut, jailWarnEnviron
+	t.Cleanup(func() { jailWarnOut, jailWarnEnviron = oldOut, oldEnv; resetJailWarnOnce() })
+	jailWarnOut = &buf
+	jailWarnEnviron = func() []string { return []string{"OPENAI_API_KEY=sk-SECRETVALUE", "PATH=/usr/bin"} }
+
+	resetJailWarnOnce()
+	noteJailResolved(fakeNamedIsolator{"bwrap"}, true)
+	if buf.Len() != 0 {
+		t.Fatalf("bwrap printed a macOS warning:\n%s", buf.String())
+	}
+	noteJailResolved(fakeNamedIsolator{"sandbox-exec"}, true)
+	noteJailResolved(fakeNamedIsolator{"sandbox-exec"}, true)
+	out := buf.String()
+	if strings.Count(out, "macOS jail:") != 1 {
+		t.Fatalf("want the warning exactly once, got:\n%s", out)
+	}
+	if !strings.Contains(out, "OPENAI_API_KEY") || !strings.Contains(out, "--jail container") || strings.Contains(out, "SECRETVALUE") {
+		t.Errorf("warning must name the variable, never its value, and point at --jail container:\n%s", out)
+	}
+
+	buf.Reset()
+	resetJailWarnOnce()
+	noteJailResolved(fakeNamedIsolator{"sandbox-exec"}, false) // certify --repo: no --jail flag
+	if out := buf.String(); strings.Contains(out, " with --jail container") || !strings.Contains(out, "certify --local --jail container") {
+		t.Errorf("a command without --jail must not offer it as its own flag:\n%s", out)
+	}
+}
+
+type fakeNamedIsolator struct{ name string }
+
+func (f fakeNamedIsolator) Name() string { return f.name }
+func (fakeNamedIsolator) Wrap(string, sandbox.Options, []string) ([]string, error) {
+	return nil, nil
+}
+func (fakeNamedIsolator) Preflight() error { return nil }

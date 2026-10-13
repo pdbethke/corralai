@@ -14,7 +14,13 @@ import (
 // does (CARGO_HOME=/usr/local/cargo), under a stand-in for /usr.
 func fakeSystemCargoHome(t *testing.T) (usr, cargoHome string) {
 	t.Helper()
-	usr = t.TempDir()
+	// Resolved: secretMasks compares the RESOLVED cargo home with the tree,
+	// and on macOS t.TempDir() is /var/folders, a symlink into /private.
+	// The real trees (/usr, /opt/homebrew) are not symlinks.
+	usr, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	cargoHome = filepath.Join(usr, "local", "cargo")
 	for rel, body := range map[string]string{
 		"bin/cargo":                 "#!/bin/sh\n",
@@ -266,5 +272,46 @@ func TestSecretMasksReadCargoHomeThroughOperatorCargoHome(t *testing.T) {
 	t.Setenv("PATH", "/nonexistent")
 	if got := secretMasks([]string{usr}); len(got) == 0 {
 		t.Error("a relative CARGO_HOME inside /usr was not masked")
+	}
+}
+
+// TestPathIdentityFoldsCaseOnDarwin: macOS's default APFS volume and SBPL
+// both match paths case-insensitively, so /USR/local/cargo IS /usr/local/cargo
+// there: a cargo home or a whole-bound tree spelled in another case must be
+// recognized, or its secrets go unmasked under a sandbox that still reads
+// them. Linux is case-sensitive and stays so.
+func TestPathIdentityFoldsCaseOnDarwin(t *testing.T) {
+	if pathKeyOn("darwin", "/USR/Local/Cargo") != pathKeyOn("darwin", "/usr/local/cargo") {
+		t.Error("darwin: differently-cased spellings of one path must share a key")
+	}
+	if pathKeyOn("linux", "/USR/Local/Cargo") == pathKeyOn("linux", "/usr/local/cargo") {
+		t.Error("linux: differently-cased paths are different directories")
+	}
+	if !insideAnyOn("darwin", "/USR/local/cargo/credentials.toml", []string{"/usr"}) {
+		t.Error("darwin: /USR/local/cargo is inside the whole-bound /usr")
+	}
+	if insideAnyOn("linux", "/USR/local/cargo/credentials.toml", []string{"/usr"}) {
+		t.Error("linux: /USR is not /usr")
+	}
+}
+
+// TestMisCasedCargoHomeIsStillOne: end to end on a case-insensitive volume, a
+// CARGO_HOME spelled in another case than the binary path that reaches it is
+// still the cargo home, so only its bin/ is ever exposed.
+func TestMisCasedCargoHomeIsStillOne(t *testing.T) {
+	usr, ch := fakeSystemCargoHome(t)
+	upper := strings.ToUpper(ch)
+	if _, err := os.Stat(filepath.Join(upper, "CONFIG.TOML")); err != nil {
+		t.Skipf("the filesystem under %s is case-sensitive; this test needs a case-insensitive volume (macOS APFS default)", usr)
+	}
+	t.Setenv("CARGO_HOME", upper)
+	if !IsCargoHome(ch) {
+		t.Errorf("CARGO_HOME=%s does not recognize %s as the cargo home", upper, ch)
+	}
+	if got := CargoHomeOf(filepath.Join(ch, "bin", "cargo")); got == "" {
+		t.Error("CargoHomeOf found no cargo home for a binary in the mis-cased CARGO_HOME")
+	}
+	if got := secretMasks([]string{usr}); len(got) == 0 {
+		t.Error("a mis-cased CARGO_HOME inside the whole-bound tree was not masked")
 	}
 }

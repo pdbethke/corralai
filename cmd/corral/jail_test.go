@@ -234,3 +234,36 @@ func sourceOf(t *testing.T, name string) string {
 	}
 	return string(data)
 }
+
+func TestJailUnavailableErrorOnMacOSGivesNoBwrapAdvice(t *testing.T) {
+	cause := errors.New("sandbox-exec jail self-test failed at sh-starts on macOS 27.0.1: boom")
+	err := jailUnavailableError("darwin", "", cause, true)
+	msg := err.Error()
+	if strings.Contains(msg, "apparmor") || strings.Contains(msg, "bwrap") {
+		t.Errorf("macOS failure carries Linux advice:\n%s", msg)
+	}
+	if !strings.Contains(msg, "sh-starts") || !strings.Contains(msg, "--jail container") {
+		t.Errorf("want the failed check and the container fallback:\n%s", msg)
+	}
+}
+
+func TestJailUnavailableErrorOnLinuxKeepsBwrapAdvice(t *testing.T) {
+	err := jailUnavailableError("linux", "", errors.New("userns"), true)
+	if !strings.Contains(err.Error(), "no working bwrap sandbox") {
+		t.Errorf("Linux auto-backend failure lost its bwrap message:\n%s", err)
+	}
+}
+
+func TestJailUnavailableErrorExplicitContainerOnDarwinReturnsCause(t *testing.T) {
+	cause := errors.New("no docker or podman")
+	if err := jailUnavailableError("darwin", "container", cause, true); !errors.Is(err, cause) || err.Error() != cause.Error() {
+		t.Errorf("want the bare cause, got %v", err)
+	}
+}
+
+func TestJailUnavailableErrorDarwinWithoutFallbackOmitsContainerAdvice(t *testing.T) {
+	msg := jailUnavailableError("darwin", "", errors.New("boom"), false).Error()
+	if strings.Contains(msg, "--jail container") || strings.Contains(msg, "bwrap") || strings.Contains(msg, "apparmor") {
+		t.Errorf("unexpected advice:\n%s", msg)
+	}
+}

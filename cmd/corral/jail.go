@@ -5,11 +5,16 @@ package main
 import (
 	"errors"
 	"fmt"
+	"io"
+	"os"
 	"os/exec"
+	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/pdbethke/corralai/internal/adequacy"
+	"github.com/pdbethke/corralai/internal/creds"
 	"github.com/pdbethke/corralai/internal/sandbox"
 )
 
@@ -101,16 +106,30 @@ func resolveJail(jailFlag string, containerFallback bool) (sandbox.Isolator, err
 		if iso.Name() == "none" {
 			return nil, errors.New("corral certify --local: refusing to run unsandboxed (\"none\" backend); this should be unreachable")
 		}
+		noteJailResolved(iso, containerFallback)
 		return iso, nil
 	}
 
-	// Only bwrap gets the apparmor-specific actionable rewrite; an explicit
-	// --jail container failure should surface sandbox.Resolve's own message
-	// (already clear: install docker/podman or set CORRALAI_EXEC_IMAGE).
-	if backend == "" || backend == "bwrap" {
-		return nil, bwrapUnavailableError(err, containerFallback)
+	return nil, jailUnavailableError(runtime.GOOS, backend, err, containerFallback)
+}
+
+// jailUnavailableError gives the failure the advice that fits the PLATFORM:
+// the auto backend is bwrap on Linux and sandbox-exec on macOS, and a macOS
+// self-test failure must never be answered with Ubuntu AppArmor steps. An
+// explicit --jail container failure keeps sandbox.Resolve's own message.
+func jailUnavailableError(goos, backend string, cause error, containerFallback bool) error {
+	switch {
+	case backend == "bwrap" || (backend == "" && goos == "linux"):
+		return bwrapUnavailableError(cause, containerFallback)
+	case backend == "sandbox-exec" || (backend == "" && goos == "darwin"):
+		tail := "This command has no sandbox-backend override; run it on a Mac where sandbox-exec's self-test passes (see `corral doctor`)."
+		if containerFallback {
+			tail = "Or skip sandbox-exec: --jail container (needs docker or podman, plus CORRALAI_EXEC_IMAGE set to an image with your toolchain)."
+		}
+		return fmt.Errorf("no working sandbox-exec jail: %w\n\ncorral never runs untrusted test/mutant code unsandboxed. %s", cause, tail)
+	default:
+		return cause
 	}
-	return nil, err
 }
 
 // bwrapUnavailableError turns a raw bwrap Preflight/Resolve failure into a
@@ -152,3 +171,51 @@ func hasContainerRuntime() bool {
 	}
 	return false
 }
+
+// macJailEnvWarning is the macOS jail's honest label (named gap C1): code
+// under audit can read the startup environment of any non-Apple process the
+// operator owns — corral's included — and no SBPL rule stops it (measured
+// on macOS 27.0.1, even under (deny default) with no sysctl grant). It
+// names every secret-shaped variable set in environ (creds.
+// SecretShapedEnvNames), never a value. hasJailFlag says whether the
+// calling command takes --jail, so the advice is one the operator can
+// follow from there. Shared by doctor and by every jail resolution.
+func macJailEnvWarning(environ []string, hasJailFlag bool) string {
+	advice := "audit third-party or untrusted repos with --jail container"
+	if !hasJailFlag {
+		advice = "audit third-party or untrusted repos with `corral certify --local --jail container` (this command has no --jail flag)"
+	}
+	var b strings.Builder
+	b.WriteString("macOS jail: code under audit can read the startup environment and arguments of any non-Apple process you own " +
+		"(corral, your editor, terminals, agents). It is weaker than the Linux jail: " + advice + "; the native jail is for your own code. " +
+		"Store model keys with `corral secret set` instead of the environment, and run it before auditing, not during.\n")
+	if names := creds.SecretShapedEnvNames(environ); len(names) > 0 {
+		fmt.Fprintf(&b, "WARNING: these variables are set here and are readable from the jail: %s.\n", strings.Join(names, ", "))
+	}
+	return b.String()
+}
+
+// The jail-resolution warning's seams: where it goes, which environment it
+// reads, and the once that keeps a repo scan (which resolves once, but a
+// process may resolve more than once) to a single print. Package vars for
+// tests only.
+var (
+	jailWarnOut     io.Writer = os.Stderr
+	jailWarnEnviron           = os.Environ
+	jailWarnOnce    sync.Once
+)
+
+// noteJailResolved prints macJailEnvWarning to stderr the first time a
+// sandbox-exec jail is resolved in this process, before any audit work.
+// Other backends print nothing.
+func noteJailResolved(iso sandbox.Isolator, containerFallback bool) {
+	if iso == nil || iso.Name() != "sandbox-exec" {
+		return
+	}
+	jailWarnOnce.Do(func() {
+		fmt.Fprint(jailWarnOut, macJailEnvWarning(jailWarnEnviron(), containerFallback))
+	})
+}
+
+// resetJailWarnOnce is for tests.
+func resetJailWarnOnce() { jailWarnOnce = sync.Once{} }

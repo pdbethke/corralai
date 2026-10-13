@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime"
 	"strings"
 	"time"
 
@@ -140,14 +141,61 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
+// sandboxCheckName names the check on BOTH outcomes, so a failure line and a
+// pass line are the same check to anyone grepping doctor output.
+const sandboxCheckName = "sandbox starts (self-test: sh-starts, workspace-write, env-pins, home-denied, net-denied)"
+
 func checkSandbox(iso sandbox.Isolator, err error) checkResult {
 	if err != nil {
-		return checkResult{name: "sandbox starts", fatal: true, detail: fmt.Sprintf(
-			"%v\ncorral refuses to run your tests against live mutations unsandboxed, so this is not optional.\n"+
-				"On Linux install bubblewrap (apt install bubblewrap); or use --jail container with docker/podman.", err)}
+		return checkResult{name: sandboxCheckName, fatal: true, detail: fmt.Sprintf(
+			"%v\ncorral refuses to run your tests against live mutations unsandboxed, so this is not optional.\n%s", err, sandboxHint(runtime.GOOS))}
 	}
-	_ = iso
-	return checkResult{name: "sandbox starts", ok: true}
+	r := checkResult{name: sandboxCheckName, ok: true}
+	if iso != nil {
+		r.detail = sandboxNotes(iso.Name(), os.Environ())
+	}
+	return r
+}
+
+// darwinJailGaps are what the macOS jail cannot match bwrap on, by OS limit
+// — the README's Platforms "named gaps", printed under a passing sandbox
+// check so nobody reads [ok] as "isolated exactly as on Linux".
+var darwinJailGaps = []string{
+	"jailed code can read the startup environment and arguments of any non-Apple process you own, corral's included (sysctl KERN_PROCARGS2; there is no PID namespace)",
+	"file metadata (existence, size, mtime) is visible everywhere; contents are not",
+	"the process list is visible; signals reach only the jail's own processes",
+	"no private /tmp: a per-run TMPDIR replaces it, and tools that hard-code /tmp fail closed",
+	"Apple has deprecated sandbox-exec (it still works on macOS 27.0.1); --jail container is the fallback",
+	"path checks fold case with Go's strings.ToLower, which matches APFS for ASCII paths but not for every Unicode case or normalization form",
+	"jailed code can execute binaries it cannot read (process* exec); the children stay sandboxed",
+	"the self-test's net-denied means an outbound connection was refused (it passes trivially on an offline host)",
+	"Homebrew's etc/ is denied (service config can hold passwords), so a Homebrew PHP loses its php.ini under <prefix>/etc/php and runs on built-in defaults",
+}
+
+// sandboxNotes is the informational detail under a passing sandbox check:
+// on sandbox-exec, its named gaps, then the macOS jail warning
+// (macJailEnvWarning: the C1 consequence, and every secret-shaped variable
+// set in corral's own environment, by name only). It never fails the
+// check: the macos CI job greps "[ok  ] sandbox starts".
+func sandboxNotes(backend string, environ []string) string {
+	if backend != "sandbox-exec" {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("named gaps on macOS (the jail cannot match bwrap here; README, Platforms):\n")
+	for _, g := range darwinJailGaps {
+		b.WriteString("  - " + g + "\n")
+	}
+	b.WriteString(macJailEnvWarning(environ, true))
+	return b.String()
+}
+
+// sandboxHint is the next step for a sandbox that will not start, per OS.
+func sandboxHint(goos string) string {
+	if goos == "darwin" {
+		return "On macOS the jail is sandbox-exec (built in); the self-test above names what failed. Or use --jail container with docker/podman."
+	}
+	return "On Linux install bubblewrap (apt install bubblewrap); or use --jail container with docker/podman."
 }
 
 // checkToolchain runs the test command's own binary INSIDE the SAME jail

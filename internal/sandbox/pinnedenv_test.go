@@ -14,7 +14,7 @@ import (
 // forwarded untouched.
 func hostileHostEnv() []string {
 	env := []string{"PATH=/host/bin", "KEEP=1"}
-	for _, p := range pinnedEnv {
+	for _, p := range pinnedEnv(linuxJailDirs) {
 		env = append(env, p.Key+"="+hostileValue(p.Key))
 	}
 	return env
@@ -51,7 +51,7 @@ func envSettings(argv []string, flag string) map[string][]string {
 // value, and no host value for it survives.
 func assertPinsHold(t *testing.T, got map[string][]string) {
 	t.Helper()
-	for _, p := range pinnedEnv {
+	for _, p := range pinnedEnv(linuxJailDirs) {
 		if vs := got[p.Key]; !slices.Equal(vs, []string{p.Value}) {
 			t.Errorf("%s set to %q, want exactly [%q]", p.Key, vs, p.Value)
 		}
@@ -74,12 +74,41 @@ func TestContainerWrapReadsPinnedEnv(t *testing.T) {
 }
 
 func TestIsPinned(t *testing.T) {
-	for _, p := range pinnedEnv {
+	for _, p := range pinnedEnv(linuxJailDirs) {
 		if !isPinned(p.Key) {
 			t.Errorf("isPinned(%q) = false", p.Key)
 		}
 	}
 	if isPinned("KEEP") || isPinned("PATH") {
 		t.Error("KEEP and PATH are not pins")
+	}
+}
+
+// TestPinsCarryTheBackendsOwnDirs: HOME and TMPDIR are values each backend
+// supplies, so the macOS jail can point them inside its workspace while
+// bwrap and the container keep their tmpfs mounts.
+func TestPinsCarryTheBackendsOwnDirs(t *testing.T) {
+	got := map[string]string{}
+	for _, p := range pinnedEnv(jailDirs{Home: "/ws/.corral-home", Tmp: "/ws/.corral-tmp"}) {
+		got[p.Key] = p.Value
+	}
+	if got["HOME"] != "/ws/.corral-home" || got["TMPDIR"] != "/ws/.corral-tmp" {
+		t.Errorf("HOME=%q TMPDIR=%q, want the dirs passed in", got["HOME"], got["TMPDIR"])
+	}
+	if got["GOTOOLCHAIN"] != "local" {
+		t.Errorf("GOTOOLCHAIN=%q, want local on every backend", got["GOTOOLCHAIN"])
+	}
+	// The host's system gitconfig is operator configuration: no backend
+	// reads it (bwrap never binds /etc/gitconfig; macOS denies <brew>/etc).
+	if got["GIT_CONFIG_NOSYSTEM"] != "1" {
+		t.Errorf("GIT_CONFIG_NOSYSTEM=%q, want 1 on every backend", got["GIT_CONFIG_NOSYSTEM"])
+	}
+}
+
+// TestTMPDIRIsPinned: a host TMPDIR (MinimalEnv forwards one) names a host
+// path that does not exist in the jail; it must be replaced, never forwarded.
+func TestTMPDIRIsPinned(t *testing.T) {
+	if !isPinned("TMPDIR") {
+		t.Fatal("TMPDIR must be a pin")
 	}
 }

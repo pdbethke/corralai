@@ -60,6 +60,7 @@ and are not:
 | workflow | what it does |
 |---|---|
 | `deploy.yml` (`validate`) | the doc gates and the licensing gate ALWAYS; then, only when something other than Markdown changed: vet, provision language toolchains, `go test -v` with a SKIP census, the drift checks, gosec, security gate |
+| `deploy.yml` (`macos`) | on `macos-latest`, only when `validate` reports code changes: the sandbox-exec and fetch jail tests, asserting each named test ran and passed (a skip fails the job), then `corral doctor --jail sandbox-exec` must print the sandbox self-test line |
 | `foreign-sweep.yml` (`sweep`) | `certify --repo --dry-run` over SHA-pinned third-party repos, diffed against `testdata/foreign-sweep-expected.tsv` |
 | `self-audit.yml` | corral auditing corral. Non-blocking, label-gated, all-Gemini, `top: "1"` |
 | `release.yml` | on a `v*` tag: refuses a tag on an unmerged commit, verifies the console signature for the tag's version, publishes the GitHub Release once `validate` is green on the tag's commit or on a `main` that contains it |

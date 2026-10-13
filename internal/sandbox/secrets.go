@@ -5,6 +5,7 @@ package sandbox
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
@@ -74,7 +75,7 @@ func resolved(p string) string {
 //
 // A cargo home is exactly what cargo itself defines: the operator's
 // CARGO_HOME, else ~/.cargo (OperatorCargoHome), compared with symlinks
-// resolved on both sides. Nothing else is ever one — whatever it holds,
+// resolved on both sides (and, on macOS, case-insensitively: pathKey). Nothing else is ever one — whatever it holds,
 // including a stray lib/ in the operator's own. No marker is evidence: cargo
 // writes .crates.toml into any `cargo install --root` (Homebrew sets the root
 // to a keg), registry/ is also Debian's /usr/share/cargo, and rustup's env
@@ -98,7 +99,7 @@ func resolved(p string) string {
 // uses.
 func IsCargoHome(dir string) bool {
 	op := OperatorCargoHome()
-	return op != "" && dir != "" && resolved(dir) == resolved(op)
+	return op != "" && dir != "" && pathKey(resolved(dir)) == pathKey(resolved(op))
 }
 
 // CargoHomeOf is the nearest ancestor of path that IsCargoHome, or "". The
@@ -190,10 +191,33 @@ func maskFor(entry string, trees []string) (mask, bool) {
 	return mask{Path: target, Dir: fi.IsDir()}, true
 }
 
-// insideAny reports whether p lies strictly inside one of trees.
-func insideAny(p string, trees []string) bool {
+// insideAny reports whether p lies strictly inside one of trees, comparing
+// as this host's filesystem does (pathKey).
+func insideAny(p string, trees []string) bool { return insideAnyOn(runtime.GOOS, p, trees) }
+
+// pathKeyOn is the form of p two paths are compared in on goos. macOS's
+// default APFS volume and its sandbox (SBPL) both match paths
+// case-insensitively, so there /USR/local/cargo IS /usr/local/cargo, and a
+// case-sensitive comparison would fail to recognize a cargo home — leaving
+// its secrets unmasked under a sandbox that still reads them. Folding is
+// strings.ToLower, as the sandbox profile's own checks do (sbplCheckReopen).
+// Linux is case-sensitive and compares exactly.
+func pathKeyOn(goos, p string) string {
+	if goos == "darwin" {
+		return strings.ToLower(p)
+	}
+	return p
+}
+
+// pathKey is pathKeyOn for this host.
+func pathKey(p string) string { return pathKeyOn(runtime.GOOS, p) }
+
+// insideAnyOn reports whether p lies strictly inside one of trees, comparing
+// as goos does (pathKeyOn).
+func insideAnyOn(goos, p string, trees []string) bool {
+	k := pathKeyOn(goos, p)
 	for _, t := range trees {
-		if strings.HasPrefix(p, filepath.Clean(t)+string(filepath.Separator)) {
+		if strings.HasPrefix(k, pathKeyOn(goos, filepath.Clean(t))+string(filepath.Separator)) {
 			return true
 		}
 	}

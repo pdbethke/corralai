@@ -199,15 +199,41 @@ func TestPoolEnumerateNeverSharesATreeWithAConcurrentRun(t *testing.T) {
 	}
 }
 
+// treeEnvCheck passes only when CORRAL_TREE is set, non-empty, and names the
+// directory the run is in. Both sides are compared physically (pwd -P), since
+// the tree path may be spelled through a symlink (macOS's /var/folders ->
+// /private/var/folders). The -n guard is load-bearing: under dash, `cd ""`
+// and a bare `cd` with the variable unset stay in place, so without it an
+// absent variable would compare equal.
+const treeEnvCheck = `[ -n "${CORRAL_TREE:-}" ] && [ "$(cd "$CORRAL_TREE" && pwd -P)" = "$(pwd -P)" ]`
+
+// TestPoolTreeEnvIsPerTree: the env names the tree the run is in — and the
+// check itself is proven able to fail: a pool with no tree env must not pass.
 func TestPoolTreeEnvIsPerTree(t *testing.T) {
 	root := newGitRepo(t, map[string]string{"a.py": "x=0\n"}, nil)
 	p, _, _ := NewWorkspacePool(context.Background(), root, 2, time.Minute,
 		WithTreeEnv(func(tree string) []string { return []string{"CORRAL_TREE=" + tree} }))
 	defer p.Close()
-	ok, err := p.RunTest(context.Background(), nil, []string{"sh", "-c", `[ "$CORRAL_TREE" = "$(pwd -P)" ]`})
+	ok, err := p.RunTest(context.Background(), nil, []string{"sh", "-c", treeEnvCheck})
 	if err != nil || !ok {
 		t.Errorf("the run must see ITS tree in the env: ok=%v err=%v", ok, err)
 	}
+
+	t.Run("the check fails without the env", func(t *testing.T) {
+		t.Setenv("CORRAL_TREE", "")
+		for name, opts := range map[string][]WorkspaceOption{
+			"no tree env": nil,
+			"empty value": {WithTreeEnv(func(string) []string { return []string{"CORRAL_TREE="} })},
+			"another dir": {WithTreeEnv(func(string) []string { return []string{"CORRAL_TREE=" + t.TempDir()} })},
+		} {
+			q, _, _ := NewWorkspacePool(context.Background(), root, 2, time.Minute, opts...)
+			ok, err := q.RunTest(context.Background(), nil, []string{"sh", "-c", treeEnvCheck})
+			q.Close()
+			if err != nil || ok {
+				t.Errorf("%s: the check passed (ok=%v err=%v) — it cannot prove the env names the tree", name, ok, err)
+			}
+		}
+	})
 }
 
 // TestProbeDowngradesASuiteThatIsNotConcurrencySafe: a suite that takes an

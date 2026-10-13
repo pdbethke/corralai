@@ -121,6 +121,11 @@ func TestToolchainBindNeverMountsTheOperatorsCredentialDirectories(t *testing.T)
 		{h("src/repo/node_modules/.bin/jest"), "", true},
 		{h(".asdf/installs/golang/1.22/bin/go"), h(".asdf"), false},
 		{h(".nvm/versions/node/v22/bin/node"), h(".nvm"), false},
+		// GitHub Actions' setup-* tool cache on macOS runners ($HOME, not
+		// /opt as on Linux): narrowed to the one tool's directory.
+		{h("hostedtoolcache/go/1.26.9/arm64/bin/go"), h("hostedtoolcache/go"), false},
+		{h("hostedtoolcache/node/22.11.0/arm64/bin/node"), h("hostedtoolcache/node"), false},
+		{h("hostedtoolcache/stray"), "", true},
 	} {
 		root := toolchainRoot(tc.bin)
 		narrowed, refused := narrowHomeRoot(tc.bin, root)

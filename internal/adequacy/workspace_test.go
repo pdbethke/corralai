@@ -247,10 +247,9 @@ func TestWorkspaceRunnerRemovesDirectoriesItCreated(t *testing.T) {
 // checkout: whoever opened the PR could have committed a symlink, and this
 // is the one seam where following it would read or write outside the repo.
 func TestWorkspaceRunnerRefusesASymlinkThatEscapesTheRoot(t *testing.T) {
-	if _, err := os.Readlink("/proc/self"); err != nil {
-		t.Skip("symlinks unavailable on this host")
-	}
-
+	// Symlink support is probed by creating one below (os.Symlink), not by
+	// reading /proc/self: /proc is Linux-only, so that probe skipped this
+	// escape test on macOS with a reason that was not true there.
 	outsideDir := t.TempDir()
 	outsidePath := filepath.Join(outsideDir, "secret.txt")
 	if err := os.WriteFile(outsidePath, []byte("SECRET\n"), 0o644); err != nil {

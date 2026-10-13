@@ -313,6 +313,11 @@ type jailRunner interface {
 	Run(ctx context.Context, command, workdir string, net bool, timeout time.Duration) (exitCode int, combined []byte, dur time.Duration, err error)
 }
 
+// changeResolveFn is realJail's sandbox resolution. A package var solely so
+// a test can stand in a sandbox-exec backend on Linux; never reassigned in
+// production.
+var changeResolveFn = sandbox.Resolve
+
 // realJail resolves a real isolator (bwrap on linux, etc.) and runs the
 // command via sandbox.RunGuarded — the one true "failed run != success"
 // home. A nil/unavailable backend fails closed (never an unsandboxed run).
@@ -326,13 +331,16 @@ func (realJail) Run(ctx context.Context, command, workdir string, net bool, time
 	// confirmation corral-agent uses, and the one sandbox.Resolve's own error
 	// message names). Without that explicit opt-in, an unavailable backend still
 	// fails closed — this never silently runs unsandboxed.
-	iso, err := sandbox.Resolve(sandbox.Config{
+	iso, err := changeResolveFn(sandbox.Config{
 		Backend:    os.Getenv("CORRALAI_EXEC_BACKEND"),
 		UnsafeHost: os.Getenv("AGENT_EXEC_UNSAFE_HOST") == "1",
 	})
 	if err != nil {
 		return -1, nil, 0, fmt.Errorf("no sandbox backend (refusing to run unsandboxed): %w", err)
 	}
+	// The same macOS jail warning every other darwin entry point prints,
+	// once per process (named gap C1). certify change has no --jail flag.
+	noteJailResolved(iso, false)
 	start := time.Now()
 	res, err := sandbox.RunGuarded(ctx, command, sandbox.Options{
 		Workspace: workdir, Timeout: timeout, Network: net, Backend: iso,

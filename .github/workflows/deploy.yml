@@ -102,6 +102,23 @@ jobs:
         run: bash scripts/check-licensing.sh
       - if: steps.filter.outputs.code == 'true'
         run: go vet ./...
+      # THE DARWIN FILES COMPILE ON EVERY PR. Until 2026-10-13 nothing in CI
+      # compiled a //go:build darwin file, so the macOS jail shipped an invalid
+      # profile (`signal*`) that only a real Mac could reveal, and "compile-
+      # checked only" was the best any change could claim. This proves the
+      # sandbox and adequacy packages, tests included, build for darwin/arm64.
+      # Scoped to those two: ./... pulls in the DuckDB cgo bindings, which a
+      # Linux runner cannot cross-compile. The `macos` job builds everything.
+      - name: Darwin cross-compile (sandbox, adequacy)
+        if: steps.filter.outputs.code == 'true'
+        env:
+          GOOS: darwin
+          GOARCH: arm64
+          CGO_ENABLED: "0"
+        run: |
+          go vet ./internal/sandbox/ ./internal/adequacy/
+          go test -c -o /dev/null ./internal/sandbox/
+          go test -c -o /dev/null ./internal/adequacy/
       - name: Provision language test toolchains (audit gate)
         if: steps.filter.outputs.code == 'true'
         # Shared with .github/workflows/self-audit.yml, which runs this same
@@ -246,6 +263,44 @@ jobs:
       - name: Docs-only change — heavy checks skipped
         if: steps.filter.outputs.code != 'true'
         run: echo "Only Markdown changed — go vet/test + security gate skipped; validate passes."
+
+  # THE macOS JAIL RUNS ON A REAL MAC on every code change. Until 2026-10-13
+  # no workflow ran on macOS, and the sandbox-exec backend shipped a profile
+  # that could not start /bin/sh. Hosted macOS minutes are free for a public
+  # repo, and a self-hosted Mac would run fork-PR code on the founder's LAN,
+  # so this is GitHub-hosted. Gated by validate's change detector, not a
+  # workflow path filter, so it can be a REQUIRED check without blocking
+  # docs-only PRs (a skipped job reports success).
+  macos:
+    needs: validate
+    if: needs.validate.outputs.code == 'true'
+    runs-on: macos-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      # A skipped jail test must never read as a green macOS jail, so the
+      # step asserts that each named test actually ran and passed.
+      - name: Jail tests (sandbox-exec, fetch step)
+        run: |
+          set -o pipefail
+          go test ./internal/sandbox/ ./internal/adequacy/ -count=1 -v 2>&1 | tee "$RUNNER_TEMP/jail-tests.log"
+          for t in TestSelfTestRealBackendPassesViaResolve TestSandboxExecRunsGoTest TestSandboxExecDeniesAReadableFileUnderHome TestFetchStepVendorsGoOnMacOS TestJailCanReadAnotherProcessesStartupEnvironment TestSandboxExecHomebrewOpenSSLVerifiesTLS; do
+            if ! grep -q -- "--- PASS: $t" "$RUNNER_TEMP/jail-tests.log"; then
+              echo "::error::jail test $t did not run and pass on macOS (skipped or missing)"
+              exit 1
+            fi
+          done
+      # The real binary's preflight: the shared self-test, through doctor.
+      - name: corral doctor (self-test through the real binary)
+        run: |
+          go build -o "$RUNNER_TEMP/corral" ./cmd/corral
+          "$RUNNER_TEMP/corral" doctor --jail sandbox-exec 2>&1 | tee "$RUNNER_TEMP/doctor.log" || true
+          grep -q '\[ok  \] sandbox starts' "$RUNNER_TEMP/doctor.log"
 
   deploy:
     # Runs ON the deploy host (a self-hosted runner, as the deploy user), so it

@@ -1,0 +1,378 @@
+// SPDX-License-Identifier: Elastic-2.0
+
+package sandbox
+
+import (
+	"strings"
+	"testing"
+)
+
+func sampleSBPL(network bool) sbplInput {
+	return sbplInput{
+		Workspace:    "/private/var/folders/x/T/corral-adequacy-1",
+		OperatorHome: "/Users/op",
+		ReadOnly:     []string{"/Users/op/sdk/go", "/Users/op/.cargo/bin"},
+		Masks:        []mask{{Path: "/opt/homebrew/cargo/credentials.toml"}, {Path: "/opt/homebrew/cargo/registry", Dir: true}},
+		Network:      network,
+	}
+}
+
+// mustProfile builds a profile from an input that must be valid.
+func mustProfile(t *testing.T, in sbplInput) string {
+	t.Helper()
+	p, err := sbplProfile(in)
+	if err != nil {
+		t.Fatalf("sbplProfile: unexpected error: %v", err)
+	}
+	return p
+}
+
+// lineIndex returns the index of the first profile line containing needle, or -1.
+func lineIndex(lines []string, needle string) int {
+	for i, l := range lines {
+		if strings.Contains(l, needle) {
+			return i
+		}
+	}
+	return -1
+}
+
+// TestSBPLLayersAreOrdered: in SBPL the LAST matching rule wins, so order is
+// the security property. The home deny must precede every toolchain allow
+// (or ~/sdk/go is invisible), the workspace allow must follow the home deny
+// (workspaces can live under $HOME), and the credential masks come last of
+// all file rules so nothing re-exposes them.
+func TestSBPLLayersAreOrdered(t *testing.T) {
+	lines := strings.Split(mustProfile(t, sampleSBPL(true)), "\n")
+	homeDeny := lineIndex(lines, `(deny file-read* (subpath "/Users/op"))`)
+	goAllow := lineIndex(lines, `(allow file-read* (subpath "/Users/op/sdk/go"))`)
+	cargoAllow := lineIndex(lines, `(allow file-read* (subpath "/Users/op/.cargo/bin"))`)
+	ws := lineIndex(lines, `(allow file-read* file-write* (subpath "/private/var/folders/x/T/corral-adequacy-1"))`)
+	maskFile := lineIndex(lines, `(deny file-read* (literal "/opt/homebrew/cargo/credentials.toml"))`)
+	maskDir := lineIndex(lines, `(deny file-read* (subpath "/opt/homebrew/cargo/registry"))`)
+	etc := lineIndex(lines, `(allow file-read* (subpath "/private/etc"))`)
+	passwd := lineIndex(lines, `(deny file-read* (literal "/private/etc/master.passwd"))`)
+	for name, i := range map[string]int{"homeDeny": homeDeny, "goAllow": goAllow, "cargoAllow": cargoAllow, "ws": ws, "maskFile": maskFile, "maskDir": maskDir, "etc": etc, "passwd": passwd} {
+		if i < 0 {
+			t.Fatalf("%s rule missing from profile:\n%s", name, strings.Join(lines, "\n"))
+		}
+	}
+	if !(homeDeny < goAllow && homeDeny < cargoAllow) {
+		t.Errorf("home deny (%d) must precede toolchain allows (%d, %d)", homeDeny, goAllow, cargoAllow)
+	}
+	if !(homeDeny < ws) {
+		t.Errorf("home deny (%d) must precede the workspace allow (%d)", homeDeny, ws)
+	}
+	if !(ws < maskFile && ws < maskDir && goAllow < maskFile && cargoAllow < maskDir) {
+		t.Errorf("masks (%d, %d) must follow every file allow", maskFile, maskDir)
+	}
+	if !(etc < passwd) {
+		t.Errorf("master.passwd deny (%d) must follow the /private/etc allow (%d)", passwd, etc)
+	}
+}
+
+// TestSBPLHomebrewDataAndConfigAreDenied: layer 2 reads both Homebrew
+// prefixes whole for their toolchains — Intel's /usr/local through the /usr
+// allow, Apple silicon's /opt/homebrew — but <prefix>/var holds service
+// DATA (Postgres, MySQL, Redis data directories) and <prefix>/etc service
+// CONFIG that can hold passwords. Both denies must FOLLOW the prefix's
+// allow (SBPL applies the last matching rule) and precede every later
+// allow. The public CA bundles under etc/ (openssl@3's OPENSSLDIR) are
+// re-allowed AFTER the etc/ deny, or TLS through Homebrew's OpenSSL fails.
+func TestSBPLHomebrewDataAndConfigAreDenied(t *testing.T) {
+	lines := strings.Split(mustProfile(t, sampleSBPL(true)), "\n")
+	goAllow := lineIndex(lines, `(allow file-read* (subpath "/Users/op/sdk/go"))`)
+	ws := lineIndex(lines, `(allow file-read* file-write* (subpath "/private/var/folders/x/T/corral-adequacy-1"))`)
+	for _, tc := range []struct{ prefix, allow string }{
+		{"/usr/local", `(allow file-read* (subpath "/usr"))`},
+		{"/opt/homebrew", `(allow file-read* (subpath "/opt/homebrew"))`},
+	} {
+		allow := lineIndex(lines, tc.allow)
+		dVar := lineIndex(lines, `(deny file-read* (subpath "`+tc.prefix+`/var"))`)
+		dEtc := lineIndex(lines, `(deny file-read* (subpath "`+tc.prefix+`/etc"))`)
+		cas := map[string]int{
+			"cert.pem":        lineIndex(lines, `(allow file-read* (literal "`+tc.prefix+`/etc/openssl@3/cert.pem"))`),
+			"ca-certificates": lineIndex(lines, `(allow file-read* (subpath "`+tc.prefix+`/etc/ca-certificates"))`),
+			"certs":           lineIndex(lines, `(allow file-read* (subpath "`+tc.prefix+`/etc/openssl@3/certs"))`),
+		}
+		for name, i := range map[string]int{"allow": allow, "var deny": dVar, "etc deny": dEtc, "goAllow": goAllow, "ws": ws} {
+			if i < 0 {
+				t.Fatalf("%s: %s rule missing from profile:\n%s", tc.prefix, name, strings.Join(lines, "\n"))
+			}
+		}
+		if !(allow < dVar && allow < dEtc) {
+			t.Errorf("%s: the var (%d) and etc (%d) denies must follow the prefix allow (%d)", tc.prefix, dVar, dEtc, allow)
+		}
+		if !(dVar < goAllow && dEtc < goAllow && dVar < ws && dEtc < ws) {
+			t.Errorf("%s: the denies (%d, %d) must precede the ReadOnly (%d) and workspace (%d) allows", tc.prefix, dVar, dEtc, goAllow, ws)
+		}
+		for name, i := range cas {
+			if i < 0 {
+				t.Errorf("%s: CA re-allow %s missing:\n%s", tc.prefix, name, strings.Join(lines, "\n"))
+			} else if i < dEtc {
+				t.Errorf("%s: CA re-allow %s (%d) must FOLLOW the etc deny (%d), or the deny wins", tc.prefix, name, i, dEtc)
+			}
+		}
+	}
+	// Nothing else under etc/ is re-allowed: no allow names openssl@3 itself
+	// (it holds private/) or etc/ as a whole.
+	for _, l := range lines {
+		rule, _, _ := strings.Cut(l, " ; ")
+		if strings.HasPrefix(rule, "(allow") && (strings.HasSuffix(rule, `/etc/openssl@3"))`) || strings.HasSuffix(rule, `/etc"))`) && !strings.Contains(rule, "/private/etc")) {
+			t.Errorf("an allow re-opens more of a Homebrew etc/ than the CA bundles: %s", l)
+		}
+	}
+}
+
+// TestSBPLSecretStoresPrecedeAllows: the keychain and directory-service denies
+// must come before every ReadOnly allow and the workspace allow, and the
+// master.passwd deny must come before both as well. A later allow that matched
+// one of these paths would re-expose the secret.
+func TestSBPLSecretStoresPrecedeAllows(t *testing.T) {
+	lines := strings.Split(mustProfile(t, sampleSBPL(false)), "\n")
+	keychain := lineIndex(lines, `(deny file-read* (subpath "/Library/Keychains"))`)
+	dslocal := lineIndex(lines, `(deny file-read* (subpath "/private/var/db/dslocal"))`)
+	passwd := lineIndex(lines, `(deny file-read* (literal "/private/etc/master.passwd"))`)
+	ws := lineIndex(lines, `(allow file-read* file-write* (subpath "/private/var/folders/x/T/corral-adequacy-1"))`)
+	for name, i := range map[string]int{"keychain": keychain, "dslocal": dslocal, "passwd": passwd, "ws": ws} {
+		if i < 0 {
+			t.Fatalf("%s rule missing from profile:\n%s", name, strings.Join(lines, "\n"))
+		}
+	}
+	for _, ro := range []string{`(allow file-read* (subpath "/Users/op/sdk/go"))`, `(allow file-read* (subpath "/Users/op/.cargo/bin"))`} {
+		r := lineIndex(lines, ro)
+		if r < 0 {
+			t.Fatalf("ReadOnly allow %s missing", ro)
+		}
+		if !(keychain < r && dslocal < r && passwd < r) {
+			t.Errorf("secret-store denies (keychain %d, dslocal %d, passwd %d) must precede %s (%d)", keychain, dslocal, passwd, ro, r)
+		}
+	}
+	if !(keychain < ws && dslocal < ws && passwd < ws) {
+		t.Errorf("secret-store denies (keychain %d, dslocal %d, passwd %d) must precede the workspace allow (%d)", keychain, dslocal, passwd, ws)
+	}
+}
+
+// TestSBPLRefusesKnownBadRules: the rules that broke or would widen the jail.
+// Substring checks cover the named rules; the per-line check covers a blanket
+// file-read grant, whose rule text is the part of each line before " ; ".
+func TestSBPLRefusesKnownBadRules(t *testing.T) {
+	p := mustProfile(t, sampleSBPL(true))
+	for _, bad := range []string{"signal*", "(allow mach-lookup)", "(allow default)", "(allow sysctl*)", "xpc-service-name-prefix"} {
+		if strings.Contains(p, bad) {
+			t.Errorf("profile contains %q:\n%s", bad, p)
+		}
+	}
+	for _, l := range strings.Split(p, "\n") {
+		rule, _, _ := strings.Cut(l, " ; ")
+		if rule == "(allow file-read*)" {
+			t.Errorf("profile grants a blanket file read: %q", l)
+		}
+	}
+	if !strings.HasPrefix(p, "(version 1)\n(deny default)") {
+		t.Errorf("profile must open with (version 1) then (deny default):\n%s", p)
+	}
+}
+
+// TestSBPLNetworkOnlyWhenAsked: the graded runs stay offline; only the
+// fetch step (Options.Network) gets the network and the trust service TLS
+// needs (measured 2026-10-13: without com.apple.trustd.agent, x509 fails).
+func TestSBPLNetworkOnlyWhenAsked(t *testing.T) {
+	off := mustProfile(t, sampleSBPL(false))
+	if strings.Contains(off, "network") || strings.Contains(off, "trustd") {
+		t.Errorf("offline profile grants network:\n%s", off)
+	}
+	on := mustProfile(t, sampleSBPL(true))
+	if !strings.Contains(on, "(allow network*)") || !strings.Contains(on, `(global-name "com.apple.trustd.agent")`) {
+		t.Errorf("networked profile lacks network* or trustd.agent:\n%s", on)
+	}
+}
+
+// TestSBPLEveryRuleSaysWhy: the profile is the jail's security policy, and it
+// is printed in debug output; every rule carries its reason, as every bwrap
+// mount carries a comment.
+func TestSBPLEveryRuleSaysWhy(t *testing.T) {
+	for _, l := range strings.Split(strings.TrimSpace(mustProfile(t, sampleSBPL(true))), "\n") {
+		if l == "(version 1)" {
+			continue
+		}
+		if !strings.Contains(l, " ; ") {
+			t.Errorf("rule without a reason: %s", l)
+		}
+	}
+}
+
+// TestSBPLQuotesHostilePaths: a home with a space or a double quote must
+// stay one valid string literal, never break out of it.
+func TestSBPLQuotesHostilePaths(t *testing.T) {
+	in := sampleSBPL(false)
+	in.OperatorHome = `/Users/John "JJ" Smith`
+	p := mustProfile(t, in)
+	if !strings.Contains(p, `(deny file-read* (subpath "/Users/John \"JJ\" Smith"))`) {
+		t.Errorf("hostile home not escaped:\n%s", p)
+	}
+}
+
+// TestSBPLNoHomeNoDeny: with no resolvable operator home there is no empty
+// (subpath "") rule, which would match nothing and read as protection.
+func TestSBPLNoHomeNoDeny(t *testing.T) {
+	in := sampleSBPL(false)
+	in.OperatorHome = ""
+	if strings.Contains(mustProfile(t, in), `(subpath "")`) {
+		t.Error(`profile contains (subpath "")`)
+	}
+}
+
+// TestSBPLRejectsUnmatchablePaths: a path the sandbox cannot match turns a
+// mask into a deny that matches nothing, so the credential stays readable.
+// Every such input must fail with an error naming the field.
+func TestSBPLRejectsUnmatchablePaths(t *testing.T) {
+	cases := []struct {
+		name   string
+		mutate func(*sbplInput)
+		field  string
+	}{
+		{"empty workspace", func(in *sbplInput) { in.Workspace = "" }, "Workspace"},
+		{"relative workspace", func(in *sbplInput) { in.Workspace = "corral-adequacy-1" }, "Workspace"},
+		{"relative ReadOnly", func(in *sbplInput) { in.ReadOnly = []string{"rel/dir"} }, "ReadOnly"},
+		{"empty ReadOnly entry", func(in *sbplInput) { in.ReadOnly = []string{""} }, "ReadOnly"},
+		{"relative mask", func(in *sbplInput) { in.Masks = []mask{{Path: "cargo/credentials.toml"}} }, "Mask"},
+		{"mask with newline", func(in *sbplInput) { in.Masks = []mask{{Path: "/opt/homebrew/cargo/cred\nentials.toml"}} }, "Mask"},
+		{"mask with NUL", func(in *sbplInput) { in.Masks = []mask{{Path: "/opt/x\x00y", Dir: true}} }, "Mask"},
+		{"home with control char", func(in *sbplInput) { in.OperatorHome = "/Users/op\x01" }, "OperatorHome"},
+		{"home with DEL", func(in *sbplInput) { in.OperatorHome = "/Users/op\x7f" }, "OperatorHome"},
+		{"relative home", func(in *sbplInput) { in.OperatorHome = "Users/op" }, "OperatorHome"},
+		{"invalid UTF-8 ReadOnly", func(in *sbplInput) { in.ReadOnly = []string{"/Users/\xffop"} }, "ReadOnly"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			in := sampleSBPL(false)
+			c.mutate(&in)
+			p, err := sbplProfile(in)
+			if err == nil {
+				t.Fatalf("expected an error, got a profile:\n%s", p)
+			}
+			if !strings.Contains(err.Error(), c.field) {
+				t.Errorf("error %q does not name field %q", err, c.field)
+			}
+			if p != "" {
+				t.Errorf("error case returned a non-empty profile")
+			}
+		})
+	}
+}
+
+// TestSBPLQuoteEscapesOnlyBackslashAndQuote: sbplQuote is the whole of SBPL
+// string escaping once control characters are rejected.
+func TestSBPLQuoteEscapesOnlyBackslashAndQuote(t *testing.T) {
+	cases := map[string]string{
+		`/plain/path`: `"/plain/path"`,
+		`/a "b" c`:    `"/a \"b\" c"`,
+		`/back\slash`: `"/back\\slash"`,
+		`/both\"here`: `"/both\\\"here"`,
+	}
+	for in, want := range cases {
+		if got := sbplQuote(in); got != want {
+			t.Errorf("sbplQuote(%q) = %s, want %s", in, got, want)
+		}
+	}
+}
+
+// TestSBPLRefusesAnAllowThatReopensADeny: SBPL applies the LAST matching
+// rule, and the ReadOnly allows (layer 5) and the workspace allow (layer 6)
+// come after the secret-store denies (layers 2 and 4). An allow on a path
+// that EQUALS or CONTAINS a denied one re-allows it: ReadOnly "/private"
+// would hand the jail master.passwd and dslocal's password hashes,
+// "/Library" the system keychains, "/Users" the operator's home. Such an
+// input is refused, naming the path and what it would re-expose. A ReadOnly
+// path INSIDE the operator's home (~/.cargo/bin) is the point of layer 5 and
+// stays allowed; one inside a fixed secret store is refused too.
+func TestSBPLRefusesAnAllowThatReopensADeny(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		mutate   func(*sbplInput)
+		reexpose string // "" = must be accepted
+	}{
+		{"ReadOnly /private", func(in *sbplInput) { in.ReadOnly = []string{"/private"} }, "/private/etc/master.passwd"},
+		{"ReadOnly /private/etc", func(in *sbplInput) { in.ReadOnly = []string{"/private/etc"} }, "/private/etc/master.passwd"},
+		{"ReadOnly /private/var/db", func(in *sbplInput) { in.ReadOnly = []string{"/private/var/db"} }, "/private/var/db/dslocal"},
+		{"ReadOnly /Library", func(in *sbplInput) { in.ReadOnly = []string{"/Library"} }, "/Library/Keychains"},
+		{"ReadOnly /Library/Keychains", func(in *sbplInput) { in.ReadOnly = []string{"/Library/Keychains"} }, "/Library/Keychains"},
+		{"ReadOnly inside the keychains", func(in *sbplInput) { in.ReadOnly = []string{"/Library/Keychains/System.keychain"} }, "/Library/Keychains"},
+		{"ReadOnly master.passwd", func(in *sbplInput) { in.ReadOnly = []string{"/private/etc/master.passwd"} }, "/private/etc/master.passwd"},
+		{"ReadOnly /", func(in *sbplInput) { in.ReadOnly = []string{"/"} }, "/Users/op"},
+		{"ReadOnly /Users", func(in *sbplInput) { in.ReadOnly = []string{"/Users"} }, "/Users/op"},
+		{"ReadOnly the home itself", func(in *sbplInput) { in.ReadOnly = []string{"/Users/op"} }, "/Users/op"},
+		{"ReadOnly with trailing slash", func(in *sbplInput) { in.ReadOnly = []string{"/Users/"} }, "/Users/op"},
+		{"Workspace /", func(in *sbplInput) { in.Workspace = "/" }, "/Users/op"},
+		{"Workspace /Users", func(in *sbplInput) { in.Workspace = "/Users" }, "/Users/op"},
+		{"ReadOnly ~/.cargo/bin", func(in *sbplInput) { in.ReadOnly = []string{"/Users/op/.cargo/bin"} }, ""},
+		{"ReadOnly /Users/op2 (a sibling, not an ancestor)", func(in *sbplInput) { in.ReadOnly = []string{"/Users/op2"} }, ""},
+		{"ReadOnly /Library/Developer", func(in *sbplInput) { in.ReadOnly = []string{"/Library/Developer"} }, ""},
+		{"Workspace in the home", func(in *sbplInput) { in.Workspace = "/Users/op/src/repo" }, ""},
+		{"no home: ReadOnly /Users", func(in *sbplInput) { in.OperatorHome = ""; in.ReadOnly = []string{"/Users"} }, ""},
+		// SBPL matches paths CASE-INSENSITIVELY (measured on macOS 27.0.1:
+		// an allow on "/library/preferences" grants /Library/Preferences),
+		// so a mis-cased allow re-opens a deny just as well.
+		{"ReadOnly /library", func(in *sbplInput) { in.ReadOnly = []string{"/library"} }, "/Library/Keychains"},
+		{"ReadOnly /USERS", func(in *sbplInput) { in.ReadOnly = []string{"/USERS"} }, "/Users/op"},
+		{"ReadOnly /users/OP", func(in *sbplInput) { in.ReadOnly = []string{"/users/OP"} }, "/Users/op"},
+		{"ReadOnly /PRIVATE/etc", func(in *sbplInput) { in.ReadOnly = []string{"/PRIVATE/etc"} }, "/private/etc/master.passwd"},
+		{"ReadOnly inside the keychains, mis-cased", func(in *sbplInput) { in.ReadOnly = []string{"/library/keychains/x"} }, "/Library/Keychains"},
+		{"Workspace /users", func(in *sbplInput) { in.Workspace = "/users" }, "/Users/op"},
+		{"ReadOnly /Users/op/.cargo/bin, mis-cased home", func(in *sbplInput) { in.ReadOnly = []string{"/users/op/.cargo/bin"} }, ""},
+		// Homebrew's service data and config (layer 2 denies them after
+		// reading /opt/homebrew whole): an allow on /opt, /opt/homebrew or
+		// anything inside var/ or etc/ would re-open them.
+		{"ReadOnly /opt", func(in *sbplInput) { in.ReadOnly = []string{"/opt"} }, "/opt/homebrew/var"},
+		{"ReadOnly /opt/homebrew", func(in *sbplInput) { in.ReadOnly = []string{"/opt/homebrew"} }, "/opt/homebrew/etc"},
+		{"ReadOnly /opt/homebrew/var", func(in *sbplInput) { in.ReadOnly = []string{"/opt/homebrew/var"} }, "/opt/homebrew/var"},
+		{"ReadOnly inside /opt/homebrew/var", func(in *sbplInput) { in.ReadOnly = []string{"/opt/homebrew/var/postgresql@17"} }, "/opt/homebrew/var"},
+		{"ReadOnly /opt/homebrew/etc", func(in *sbplInput) { in.ReadOnly = []string{"/opt/homebrew/etc"} }, "/opt/homebrew/etc"},
+		{"ReadOnly /OPT/Homebrew, mis-cased", func(in *sbplInput) { in.ReadOnly = []string{"/OPT/Homebrew"} }, "/opt/homebrew/var"},
+		{"Workspace /opt/homebrew", func(in *sbplInput) { in.Workspace = "/opt/homebrew" }, "/opt/homebrew/var"},
+		{"ReadOnly a Homebrew keg", func(in *sbplInput) { in.ReadOnly = []string{"/opt/homebrew/Cellar/go/1.26.0"} }, ""},
+		// Intel Homebrew (/usr/local) is denied the same way.
+		{"ReadOnly /usr", func(in *sbplInput) { in.ReadOnly = []string{"/usr"} }, "/usr/local/var"},
+		{"ReadOnly /usr/local", func(in *sbplInput) { in.ReadOnly = []string{"/usr/local"} }, "/usr/local/etc"},
+		{"ReadOnly /usr/local/etc", func(in *sbplInput) { in.ReadOnly = []string{"/usr/local/etc"} }, "/usr/local/etc"},
+		{"ReadOnly inside /usr/local/var", func(in *sbplInput) { in.ReadOnly = []string{"/usr/local/var/mysql"} }, "/usr/local/var"},
+		{"ReadOnly /USR/Local/Etc, mis-cased", func(in *sbplInput) { in.ReadOnly = []string{"/USR/Local/Etc"} }, "/usr/local/etc"},
+		{"ReadOnly an Intel keg", func(in *sbplInput) { in.ReadOnly = []string{"/usr/local/Cellar/go/1.26.0"} }, ""},
+		// The CA carve-outs: exactly what layer 2 re-allows is accepted;
+		// their parents and neighbours under etc/ are still refused.
+		{"ReadOnly brew openssl@3/cert.pem", func(in *sbplInput) { in.ReadOnly = []string{"/opt/homebrew/etc/openssl@3/cert.pem"} }, ""},
+		{"ReadOnly brew ca-certificates", func(in *sbplInput) { in.ReadOnly = []string{"/opt/homebrew/etc/ca-certificates"} }, ""},
+		{"ReadOnly inside brew ca-certificates", func(in *sbplInput) { in.ReadOnly = []string{"/opt/homebrew/etc/ca-certificates/cert.pem"} }, ""},
+		{"ReadOnly brew openssl@3/certs", func(in *sbplInput) { in.ReadOnly = []string{"/opt/homebrew/etc/openssl@3/certs"} }, ""},
+		{"ReadOnly Intel openssl@3/cert.pem", func(in *sbplInput) { in.ReadOnly = []string{"/usr/local/etc/openssl@3/cert.pem"} }, ""},
+		{"ReadOnly Intel ca-certificates, mis-cased", func(in *sbplInput) { in.ReadOnly = []string{"/USR/local/etc/CA-certificates"} }, ""},
+		{"ReadOnly brew openssl@3 (holds private/)", func(in *sbplInput) { in.ReadOnly = []string{"/opt/homebrew/etc/openssl@3"} }, "/opt/homebrew/etc"},
+		{"ReadOnly brew openssl@3/private", func(in *sbplInput) { in.ReadOnly = []string{"/opt/homebrew/etc/openssl@3/private"} }, "/opt/homebrew/etc"},
+		{"ReadOnly a cert.pem lookalike", func(in *sbplInput) { in.ReadOnly = []string{"/opt/homebrew/etc/openssl@3/cert.pem.d"} }, "/opt/homebrew/etc"},
+		{"ReadOnly a ca-certificates lookalike", func(in *sbplInput) { in.ReadOnly = []string{"/usr/local/etc/ca-certificatesX"} }, "/usr/local/etc"},
+		{"ReadOnly inside the cert.pem file path", func(in *sbplInput) { in.ReadOnly = []string{"/opt/homebrew/etc/openssl@3/cert.pem/x"} }, "/opt/homebrew/etc"},
+		{"ReadOnly /opt/homebrew/variants (a sibling, not var/)", func(in *sbplInput) { in.ReadOnly = []string{"/opt/homebrew/variants"} }, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			in := sampleSBPL(false)
+			tc.mutate(&in)
+			p, err := sbplProfile(in)
+			if tc.reexpose == "" {
+				if err != nil {
+					t.Fatalf("unexpected refusal: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("accepted an allow that re-exposes %s:\n%s", tc.reexpose, p)
+			}
+			if p != "" {
+				t.Error("a refused input returned a non-empty profile")
+			}
+			if !strings.Contains(err.Error(), tc.reexpose) {
+				t.Errorf("error %q does not name what it would re-expose (%s)", err, tc.reexpose)
+			}
+		})
+	}
+}

@@ -463,7 +463,7 @@ func readModelCallRows(db *sql.DB, where string, args ...any) ([]ModelCallRow, e
 	rows, err := db.Query(`SELECT
 		repo, run_url, scan_id, path, role, model, calls, retries,
 		input_tokens, output_tokens, cached_input_tokens,
-		cache_write_input_tokens, wall_ms,
+		cache_write_input_tokens, unmetered_calls, wall_ms,
 		statement_sha256
 	   FROM corral_model_calls WHERE `+where, args...) // #nosec G202 -- where is a constant clause from readGrains; every value is a bound parameter
 	if err != nil {
@@ -474,15 +474,22 @@ func readModelCallRows(db *sql.DB, where string, args ...any) ([]ModelCallRow, e
 	var out []ModelCallRow
 	for rows.Next() {
 		var c ModelCallRow
-		var cachedInputTokens, cacheWriteInputTokens sql.NullInt64
+		var cachedInputTokens, cacheWriteInputTokens, inputTokens, outputTokens, unmetered sql.NullInt64
 		if err := rows.Scan(
 			&c.Repo, &c.RunURL, &c.ScanID, &c.Path, &c.Role, &c.Model, &c.Calls, &c.Retries,
-			&c.InputTokens, &c.OutputTokens, &cachedInputTokens,
-			&cacheWriteInputTokens, &c.WallMillis,
+			&inputTokens, &outputTokens, &cachedInputTokens,
+			&cacheWriteInputTokens, &unmetered, &c.WallMillis,
 			&c.StatementSHA256,
 		); err != nil {
 			return nil, err
 		}
+		// A NULL token column is an unmetered row (TokensUnmetered); its
+		// count reads back as the 0 the bundle carried, beside the
+		// UnmeteredCalls that says what the 0 means. A NULL unmetered_calls
+		// is a row written before the column existed, when no seat could be
+		// unmetered: 0.
+		c.InputTokens, c.OutputTokens = inputTokens.Int64, outputTokens.Int64
+		c.UnmeteredCalls = int(unmetered.Int64)
 		c.CachedInputTokens = nullInt64(cachedInputTokens)
 		c.CacheWriteInputTokens = nullInt64(cacheWriteInputTokens)
 		out = append(out, c)

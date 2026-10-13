@@ -135,6 +135,7 @@ func modelCallsByPath(calls []scanstore.ModelCall) map[string][]advpool.ModelCal
 			InputTokens: c.InputTokens, OutputTokens: c.OutputTokens,
 			CachedInputTokens:     c.CachedInputTokens,
 			CacheWriteInputTokens: c.CacheWriteInputTokens,
+			UnmeteredCalls:        c.UnmeteredCalls,
 			Wall:                  time.Duration(c.WallMillis) * time.Millisecond,
 		})
 	}

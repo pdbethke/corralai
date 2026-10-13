@@ -149,7 +149,8 @@ func (l *ledgerScans) ModelCallsForScan(_ context.Context, scanID int64) ([]scan
 			Calls: c.Calls, Retries: c.Retries,
 			InputTokens: c.InputTokens, OutputTokens: c.OutputTokens,
 			CachedInputTokens: c.CachedInputTokens, CacheWriteInputTokens: c.CacheWriteInputTokens,
-			WallMillis: c.WallMillis,
+			UnmeteredCalls: c.UnmeteredCalls,
+			WallMillis:     c.WallMillis,
 		})
 	}
 	return out, nil

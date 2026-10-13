@@ -253,7 +253,7 @@ func runReviewRun(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "corral review: the reviewer seat failed: %v\n", err)
 		return 1
 	}
-	r.InputTokens, r.OutputTokens = int64(reply.Usage.InputTokens), int64(reply.Usage.OutputTokens)
+	addReviewUsage(&r, reply.Usage)
 	opinion, findings, sound, perr := review.Parse(reply.Content)
 	if perr != nil {
 		fmt.Fprintf(stderr, "corral review: %v\n--- the reply, verbatim ---\n%s\n", perr, reply.Content)
@@ -289,8 +289,7 @@ func runReviewRun(args []string, stdout, stderr io.Writer) int {
 		} else if vopinion, refs, perr := review.ParseRefutations(vreply.Content, *verifier); perr != nil {
 			fmt.Fprintf(stderr, "corral review: %v — the review is recorded unverified\n--- the reply, verbatim ---\n%s\n", perr, vreply.Content)
 		} else {
-			r.InputTokens += int64(vreply.Usage.InputTokens)
-			r.OutputTokens += int64(vreply.Usage.OutputTokens)
+			addReviewUsage(&r, vreply.Usage)
 			// A verifier that answered with no verdict on any finding has
 			// not verified anything, and the record must not read as if
 			// it had: its reply is kept, marked, and every finding is
@@ -441,6 +440,20 @@ func newWorktreeReproducer(root, commit string, timeout time.Duration) (review.R
 }
 
 // toolNote renders an agentic seat's tool version beside its name.
+// addReviewUsage folds one seat's reply into the review's record: counted
+// always, its tokens summed only when its wire reported them. review has no
+// --max-tokens, so an unmetered seat is not refused here; it is recorded as
+// not metered instead of as a call that cost nothing.
+func addReviewUsage(r *review.Review, u agentbackend.Usage) {
+	r.Calls++
+	if u.Unmetered {
+		r.UnmeteredCalls++
+		return
+	}
+	r.InputTokens += int64(u.InputTokens)
+	r.OutputTokens += int64(u.OutputTokens)
+}
+
 func toolNote(v string) string {
 	if v == "" {
 		return ""

@@ -269,6 +269,7 @@ func buildModelCallRows(calls []scanstore.ModelCall, scanID int64, meta bundleMe
 			InputTokens: c.InputTokens, OutputTokens: c.OutputTokens,
 			CachedInputTokens:     c.CachedInputTokens,
 			CacheWriteInputTokens: c.CacheWriteInputTokens,
+			UnmeteredCalls:        c.UnmeteredCalls,
 			WallMillis:            c.WallMillis,
 		})
 	}

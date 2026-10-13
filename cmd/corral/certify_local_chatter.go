@@ -164,6 +164,9 @@ func localChatterFor(assign advpool.RoleAssignment, meters map[string]*agentback
 			if err != nil {
 				return nil, fmt.Errorf("agent seat %s: %w", role, err)
 			}
+			if err := capCanSee(budget, role, model, ab); err != nil {
+				return nil, err
+			}
 			perRole[role] = agentbackend.AsChatterBudgeted(ab, meters[role], budget)
 			continue
 		}
@@ -210,6 +213,26 @@ func localChatterFor(assign advpool.RoleAssignment, meters map[string]*agentback
 		}
 		return agentbackend.AsChatterBudgeted(base, meters[role], budget)
 	}, nil
+}
+
+// capCanSee refuses a seat a --max-tokens cap cannot bound: one whose
+// backend reports no token usage (agentbackend.Metered — an agent seat on the
+// `text` wire). A cap charged nothing by a seat lets the run spend past the
+// number the operator typed, so it is refused HERE, while the router is being
+// built — before any jail, store or model call — and never discovered from a
+// bill. The rejected alternative was to cap the metered seats and disclose
+// the rest, which is exactly a run exceeding its cap (spec 2026-10-13 agent
+// seats, section 4). nil budget = no cap = nothing to refuse.
+//
+// Only an agent seat can be unmetered today, so only that branch of
+// localChatterFor calls this; Metered answers true for every API backend,
+// and the question is still asked of the backend, never of the seat's name.
+func capCanSee(budget *agentbackend.TokenBudget, role, spec string, b agentbackend.Backend) error {
+	if budget == nil || agentbackend.Metered(b) {
+		return nil
+	}
+	name, _, _ := agentbackend.AgentSeat(spec)
+	return fmt.Errorf("--max-tokens: seat %s (%s) reports no token usage, so the cap cannot see it — drop the cap, or use an agent whose wire reports usage (%s)", role, spec, agentbackend.AgentWireKey(name))
 }
 
 // backendPinned reports whether the operator pinned a base backend at all.

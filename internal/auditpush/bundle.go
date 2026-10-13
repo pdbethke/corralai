@@ -271,9 +271,33 @@ type ModelCallRow struct {
 	// independently of the read count.
 	CacheWriteInputTokens *int64
 	OutputTokens          int64
-	WallMillis            int64
+	// UnmeteredCalls is how many of Calls reported no token usage (an agent
+	// seat on the `text` wire); InputTokens/OutputTokens cover only the rest.
+	// When it equals Calls the warehouse writes the token columns NULL — see
+	// TokensUnmetered.
+	UnmeteredCalls int
+	WallMillis     int64
 
 	StatementSHA256 string
+}
+
+// TokensUnmetered reports whether a row's token counts measure NOTHING:
+// every one of its calls was unmetered. Such a row's 0 tokens is not a
+// measurement, so the warehouse stores those columns NULL and every reader
+// renders "not metered" — the NULL-not-zero rule CachedInputTokens follows,
+// decided here once so the writer and the readers cannot disagree. A row
+// with no calls is not unmetered; it is no row (ZERO-CALLS-MEANS-NO-ROW).
+func TokensUnmetered(calls, unmeteredCalls int) bool {
+	return calls > 0 && unmeteredCalls >= calls
+}
+
+// meteredTokens is a token column's value as written: NULL when the row's
+// calls were all unmetered, the count otherwise.
+func meteredTokens(mc ModelCallRow, n int64) any {
+	if TokensUnmetered(mc.Calls, mc.UnmeteredCalls) {
+		return nil
+	}
+	return n
 }
 
 // EventRow is one entry on the tape. Seq, not TS, is the ordering key: two
@@ -527,6 +551,7 @@ CREATE TABLE IF NOT EXISTS corral_model_calls (
   output_tokens    BIGINT,
   cached_input_tokens BIGINT,
   cache_write_input_tokens BIGINT,
+  unmetered_calls  INTEGER,
   wall_ms          BIGINT,
   statement_sha256 VARCHAR,
   schema_version   INTEGER
@@ -707,6 +732,11 @@ var (
 		{"cached_input_tokens", "cached_input_tokens BIGINT"},
 		{"cache_write_input_tokens", "cache_write_input_tokens BIGINT"},
 		{"scan_uid", "scan_uid VARCHAR"},
+		// unmetered_calls is additive like the cache columns: a warehouse an
+		// earlier corral created gets it on the next push, and its existing
+		// rows keep NULL — "not recorded", which is true of them; every row
+		// written since carries the count, 0 included.
+		{"unmetered_calls", "unmetered_calls INTEGER"},
 	}
 	corralEventsMigrationCols = []struct{ name, ddl string }{
 		{"scan_uid", "scan_uid VARCHAR"},
@@ -1304,13 +1334,13 @@ func insertBundle(db *sql.DB, b Bundle, now time.Time, uid string) (Counts, erro
 		if _, err := tx.Exec(`INSERT INTO corral_model_calls (
 		    scan_uid, ts, repo, run_url, scan_id, path, role, model, calls, retries,
 		    input_tokens, output_tokens, cached_input_tokens,
-		    cache_write_input_tokens, wall_ms,
+		    cache_write_input_tokens, unmetered_calls, wall_ms,
 		    statement_sha256, schema_version
-		  ) VALUES (`+placeholders(17)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
+		  ) VALUES (`+placeholders(18)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
 			uid, now, mc.Repo, mc.RunURL, mc.ScanID, mc.Path, mc.Role, mc.Model,
-			mc.Calls, mc.Retries, mc.InputTokens, mc.OutputTokens,
+			mc.Calls, mc.Retries, meteredTokens(mc, mc.InputTokens), meteredTokens(mc, mc.OutputTokens),
 			nullIfNilInt64(mc.CachedInputTokens), nullIfNilInt64(mc.CacheWriteInputTokens),
-			mc.WallMillis,
+			mc.UnmeteredCalls, mc.WallMillis,
 			mc.StatementSHA256, SchemaVersion,
 		); err != nil {
 			return Counts{}, fmt.Errorf("auditpush: insert model call %s/%s: %w", mc.Path, mc.Role, err)

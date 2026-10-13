@@ -727,6 +727,11 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 			shadowModel:       *shadow.model,
 			shadowWriterModel: *shadow.writerModel,
 			seatProviders:     seatReg.seatProviders(),
+			// The cap is checked here too, so a seat it cannot see (an
+			// unmetered agent) is refused before any goal is derived — the
+			// per-file resolution below would only find it after the scan
+			// had started spending.
+			tokenBudget: agentbackend.NewTokenBudget(*maxTokensFlag),
 		}, stderr); err != nil {
 			fmt.Fprintf(stderr, "corral certify --repo: %v\n", err)
 			if isAuditUsageError(err) {

@@ -708,6 +708,7 @@ func buildScanModelCallRows(results []reposcan.FileResult) []scanstore.ModelCall
 				InputTokens: c.InputTokens, OutputTokens: c.OutputTokens,
 				CachedInputTokens:     c.CachedInputTokens,
 				CacheWriteInputTokens: c.CacheWriteInputTokens,
+				UnmeteredCalls:        c.UnmeteredCalls,
 				WallMillis:            c.Wall.Milliseconds(),
 			})
 		}
@@ -760,6 +761,7 @@ func scanModelCallTotals(results []reposcan.FileResult) []advpool.ModelCall {
 			// nothing about caching rather than claiming a measured miss.
 			t.CachedInputTokens = addCacheCount(t.CachedInputTokens, c.CachedInputTokens)
 			t.CacheWriteInputTokens = addCacheCount(t.CacheWriteInputTokens, c.CacheWriteInputTokens)
+			t.UnmeteredCalls += c.UnmeteredCalls
 			t.Wall += c.Wall
 		}
 	}
@@ -801,6 +803,7 @@ func scanModelCallTotalsWith(results []reposcan.FileResult, d any) []advpool.Mod
 			t.OutputTokens += row.OutputTokens
 			t.CachedInputTokens = addCacheCount(t.CachedInputTokens, row.CachedInputTokens)
 			t.CacheWriteInputTokens = addCacheCount(t.CacheWriteInputTokens, row.CacheWriteInputTokens)
+			t.UnmeteredCalls += row.UnmeteredCalls
 			t.Wall += time.Duration(row.WallMillis) * time.Millisecond
 		}
 		if t != nil {

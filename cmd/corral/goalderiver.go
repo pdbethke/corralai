@@ -96,11 +96,17 @@ func (u *deriveUsage) add(path, model string, got agentbackend.Usage, wall time.
 		u.byPath[path] = row
 	}
 	row.Calls++
+	row.WallMillis += wall.Milliseconds()
+	if got.Unmetered {
+		// The call ran and its wire reported nothing: counted, never summed
+		// (agentbackend.Usage.Unmetered).
+		row.UnmeteredCalls++
+		return
+	}
 	row.InputTokens += int64(got.InputTokens)
 	row.OutputTokens += int64(got.OutputTokens)
 	row.CachedInputTokens = addCacheCount(row.CachedInputTokens, got.CachedInputTokens)
 	row.CacheWriteInputTokens = addCacheCount(row.CacheWriteInputTokens, got.CacheWriteInputTokens)
-	row.WallMillis += wall.Milliseconds()
 }
 
 // deriverSet is every deriver one scan built; its rows are all of theirs.

@@ -129,6 +129,15 @@ type Review struct {
 	Truncated    bool     `json:"truncated,omitempty"`
 	InputTokens  int64    `json:"input_tokens,omitempty"`
 	OutputTokens int64    `json:"output_tokens,omitempty"`
+	// Calls is how many model calls the token counts above were folded from
+	// (the reviewer's, and the verifier's when it answered), and
+	// UnmeteredCalls how many of those reported no usage at all — an agent
+	// seat on the `text` wire. When the two are equal the token counts
+	// measure nothing and must be read as "not metered", never as a free
+	// review (auditpush.TokensUnmetered). Absent on an entry written before
+	// they existed, which reads as 0/0: unknown, and never unmetered.
+	Calls          int `json:"calls,omitempty"`
+	UnmeteredCalls int `json:"unmetered_calls,omitempty"`
 	// Coverage is the run's own note on how much the review can be said to
 	// cover: "" when the sound list and the findings between them say what
 	// was looked at, else why they do not (see CoverageNote). A review with

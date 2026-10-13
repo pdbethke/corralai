@@ -82,6 +82,18 @@ type Usage struct {
 	// Gemini's implicit cache has no write to bill — so it is NULL almost
 	// everywhere, which is exactly what NULL is for.
 	CacheWriteInputTokens *int64
+	// Unmetered says the call RAN and its wire reports no usage at all — an
+	// agent seat on the `text` wire, which hands back a reply and nothing
+	// else. Every token field above is then zero and means nothing: not "this
+	// call was free", but "nobody measured it".
+	//
+	// A flag beside the counters rather than nil counters, because every
+	// API backend and every metered wire fills them, and turning the whole
+	// struct's int fields into pointers to carry the one wire that cannot
+	// would ripple into every provider's response parsing. One bool is the
+	// discriminator, the same shape Verdict.PoolScored is for ProvenMissed:
+	// a reader that sees it set must render "not metered", never 0.
+	Unmetered bool
 }
 
 // UsageMeter accumulates Usage across the calls of one run — or, since this
@@ -124,6 +136,11 @@ type UsageMeter struct {
 	// reason: "reported a write, said nothing about reads" is a real shape.
 	cacheWrite     int64
 	cacheWriteSeen bool
+	// unmetered counts the calls whose wire reported no usage (see
+	// Usage.Unmetered). They are in calls too — they ran — and they add
+	// nothing to the token totals, so a reader can say how much of calls the
+	// totals actually cover.
+	unmetered int64
 
 	// Model is which model this meter is timing. Set once, at construction,
 	// before the meter is handed to any Chatter — one meter per role means
@@ -149,10 +166,16 @@ func (m *UsageMeter) AddTimed(u Usage, wall time.Duration) {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.in += int64(u.InputTokens)
-	m.out += int64(u.OutputTokens)
 	m.calls++
 	m.wall += wall
+	if u.Unmetered {
+		// Counted, timed, and nothing summed: an unmetered call's counters
+		// are not a measurement, whatever they happen to hold.
+		m.unmetered++
+		return
+	}
+	m.in += int64(u.InputTokens)
+	m.out += int64(u.OutputTokens)
 	if u.CachedInputTokens != nil {
 		m.cached += *u.CachedInputTokens
 		m.cachedSeen = true
@@ -193,7 +216,11 @@ type ModelUsage struct {
 	// saving is recorded beside the saving.
 	CacheWriteInputTokens *int64
 	Calls                 int64
-	Wall                  time.Duration
+	// UnmeteredCalls is how many of Calls reported no usage at all (see
+	// Usage.Unmetered); the token totals above cover only the rest. Equal to
+	// Calls means nothing about this seat's tokens was measured.
+	UnmeteredCalls int64
+	Wall           time.Duration
 }
 
 // Snapshot reads every field of the meter at once, under one lock
@@ -218,7 +245,7 @@ func (m *UsageMeter) Snapshot() ModelUsage {
 	}
 	return ModelUsage{Model: m.Model, InputTokens: m.in, OutputTokens: m.out,
 		CachedInputTokens: cached, CacheWriteInputTokens: written,
-		Calls: m.calls, Wall: m.wall}
+		Calls: m.calls, UnmeteredCalls: m.unmetered, Wall: m.wall}
 }
 
 // meteredChatter is AsChatter plus an observer. It changes nothing about the
@@ -324,7 +351,9 @@ func (b *TokenBudget) Charge(u Usage) {
 		return
 	}
 	b.mu.Lock()
-	b.spent += int64(u.InputTokens) + int64(u.OutputTokens)
+	if !u.Unmetered {
+		b.spent += int64(u.InputTokens) + int64(u.OutputTokens)
+	}
 	b.calls++
 	b.mu.Unlock()
 }

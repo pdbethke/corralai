@@ -130,7 +130,16 @@ package reposcan
 // large prompt to hit the same refusal); only 400, 413 and 422 do. A "16"
 // critic count may have been held to a list that was missing real tests.
 // Shape unchanged; behaviour bump.
-const VerdictGeneration = "17"
+// "18" (2026-10-13): a seat can now be a coding-agent CLI, and one on the
+// `text` wire reports no token usage. advpool.ModelCall gained UnmeteredCalls
+// (on the wire as model_calls[].unmetered_calls) so such a seat's calls are
+// counted as not metered rather than as measured zeros. That is a change
+// INSIDE a nested type, which the shallow fingerprint below does not see —
+// VerdictShapeSHA256 is therefore unchanged — and the rule above says to bump
+// for the serialized shape all the same: a cached "17" document unmarshals
+// the field as 0, which would read an unmetered seat's calls as free. (The
+// feat/rust-part2 branch also claims "18"; whichever merges second re-bumps.)
+const VerdictGeneration = "18"
 
 // VerdictShapeSHA256 fingerprints advpool.Verdict's serialized shape: every
 // exported field's name, type and json tag, sorted by name and hashed.

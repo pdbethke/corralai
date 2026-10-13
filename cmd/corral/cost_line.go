@@ -9,6 +9,7 @@ import (
 
 	"github.com/pdbethke/corralai/internal/advpool"
 	"github.com/pdbethke/corralai/internal/agentbackend"
+	"github.com/pdbethke/corralai/internal/auditpush"
 )
 
 // rosterRoleOrder is the order a roster is presented in everywhere this
@@ -73,7 +74,11 @@ func modelCallsFromMeters(meters map[string]*agentbackend.UsageMeter) []advpool.
 			// agentbackend.ModelUsage.CachedInputTokens.
 			CachedInputTokens:     snap.CachedInputTokens,
 			CacheWriteInputTokens: snap.CacheWriteInputTokens,
-			Wall:                  snap.Wall,
+			// How many of Calls the tokens above do NOT cover — an agent
+			// seat on the `text` wire. Dropped here, every surface below
+			// would print this seat's calls as measured zeros.
+			UnmeteredCalls: int(snap.UnmeteredCalls),
+			Wall:           snap.Wall,
 		})
 	}
 	return out
@@ -97,24 +102,58 @@ func modelCallsFromMeters(meters map[string]*agentbackend.UsageMeter) []advpool.
 // before summing. This function is a formatter and enforces nothing about
 // reuse; the exclusion lives at the one place both the line and
 // scan_model_calls are built from (see buildScanModelCallRows).
+//
+// NOT METERED. A call whose wire reports no usage (an agent seat on the
+// `text` wire) is counted and never priced: a role whose every call was
+// unmetered prints `<role> not metered (N calls)`, a mixed role prints its
+// tokens and `, N not metered`, and the total says `+ N calls not metered`
+// rather than folding those calls into a token count they are not in (spec
+// 2026-10-13 agent seats, section 4).
 func costLine(calls []advpool.ModelCall) string {
 	var totalIn, totalOut int64
-	var totalCalls int
+	var meteredCalls, unmeteredCalls int
 	var cached []*int64
 	parts := make([]string, 0, len(calls))
 	for _, c := range calls {
 		if c.Calls == 0 {
 			continue
 		}
+		unmeteredCalls += c.UnmeteredCalls
+		// A role whose every call was unmetered has no token count at all —
+		// its fields hold 0 because nothing filled them, and printing
+		// "0/0" would be a could-not-measure rendered as a measured zero.
+		if auditpush.TokensUnmetered(c.Calls, c.UnmeteredCalls) {
+			parts = append(parts, fmt.Sprintf("%s not metered (%d call%s)", c.Role, c.Calls, pluralS(c.Calls)))
+			continue
+		}
 		totalIn += c.InputTokens
 		totalOut += c.OutputTokens
-		totalCalls += c.Calls
+		meteredCalls += c.Calls - c.UnmeteredCalls
 		cached = append(cached, c.CachedInputTokens)
-		parts = append(parts, fmt.Sprintf("%s %s/%s (%d call%s)",
-			c.Role, abbreviateTokens(c.InputTokens), abbreviateTokens(c.OutputTokens), c.Calls, pluralS(c.Calls)))
+		note := ""
+		if c.UnmeteredCalls > 0 {
+			note = fmt.Sprintf(", %d not metered", c.UnmeteredCalls)
+		}
+		parts = append(parts, fmt.Sprintf("%s %s/%s (%d call%s%s)",
+			c.Role, abbreviateTokens(c.InputTokens), abbreviateTokens(c.OutputTokens), c.Calls, pluralS(c.Calls), note))
 	}
-	if totalCalls == 0 {
+	if meteredCalls+unmeteredCalls == 0 {
 		return ""
+	}
+	// Unmetered calls are ADDED to the total, never folded into it: the
+	// token sums cover the metered calls only, and "across N calls" must
+	// count the calls those tokens were actually measured over. With no
+	// metered call at all there is no token total to print — "0 tokens in"
+	// would be the false zero this line exists to refuse.
+	unmeteredNote := ""
+	if unmeteredCalls > 0 {
+		unmeteredNote = fmt.Sprintf("%d call%s not metered", unmeteredCalls, pluralS(unmeteredCalls))
+	}
+	if meteredCalls == 0 {
+		return fmt.Sprintf("  cost: %s — %s", unmeteredNote, strings.Join(parts, ", "))
+	}
+	if unmeteredNote != "" {
+		unmeteredNote = " + " + unmeteredNote
 	}
 	// The cached share of those input tokens, when any provider reported one.
 	// It is the number the per-survivor writer's whole cost story turns on —
@@ -126,9 +165,9 @@ func costLine(calls []advpool.ModelCall) string {
 	if sum := sumCacheCounts(cached); sum != nil {
 		cachedNote = fmt.Sprintf(" (%s cached)", abbreviateTokens(*sum))
 	}
-	return fmt.Sprintf("  cost: %s tokens in / %s out across %d call%s%s — %s",
-		abbreviateTokens(totalIn), abbreviateTokens(totalOut), totalCalls, pluralS(totalCalls),
-		cachedNote, strings.Join(parts, ", "))
+	return fmt.Sprintf("  cost: %s tokens in / %s out across %d call%s%s%s — %s",
+		abbreviateTokens(totalIn), abbreviateTokens(totalOut), meteredCalls, pluralS(meteredCalls),
+		cachedNote, unmeteredNote, strings.Join(parts, ", "))
 }
 
 // sumCacheCounts totals a nullable per-role counter the NULL-not-zero way: a

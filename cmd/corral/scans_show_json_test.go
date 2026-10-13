@@ -140,6 +140,7 @@ const wantScansShowJSONWithTiming = `{
       "retries": 1,
       "input_tokens": 900000,
       "output_tokens": 31000,
+      "unmetered_calls": 0,
       "cached_input_tokens": null,
       "cache_write_input_tokens": null,
       "wall_ms": 4100
@@ -152,6 +153,7 @@ const wantScansShowJSONWithTiming = `{
       "retries": null,
       "input_tokens": 300000,
       "output_tokens": 17000,
+      "unmetered_calls": 0,
       "cached_input_tokens": 240000,
       "cache_write_input_tokens": 38000,
       "wall_ms": 2200

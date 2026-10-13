@@ -144,7 +144,7 @@ func agentDefinition(name string) (def string, builtin, ok bool) {
 // else text. An operator who redefines a built-in's command line gets text,
 // because their command need not print what the built-in's CLI prints.
 func agentWireFor(name string, builtin bool) (string, agentWire, error) {
-	key := agentEnvKey(name) + agentWireSuffix
+	key := AgentWireKey(name)
 	wireName := "text"
 	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
 		wireName = v
@@ -379,7 +379,11 @@ func (a agentBackend) Chat(messages []Message, tools []any) (Message, error) {
 		return Message{}, fmt.Errorf("%s: %w: %v", a.name, ErrSeatEnvironment, runErr)
 	}
 	out, _ := os.ReadFile(outFile) // #nosec G304 -- our own temp file
-	content, u, _, perr := a.wire.parse(stdout.Bytes(), out)
+	content, u, metered, perr := a.wire.parse(stdout.Bytes(), out)
+	// Carried on the reply, success or failure: a call the wire could not
+	// meter ran all the same, and a meter that saw zeros without this flag
+	// would record a measured free call.
+	u.Unmetered = !metered
 	if runErr != nil {
 		tail := tailOf(strings.TrimSpace(stderr.String()), 800)
 		if errors.Is(perr, ErrSeatEnvironment) {
@@ -435,6 +439,24 @@ func newAgentSeat(spec string, opt SeatOptions) (Backend, bool, error) {
 		timeout = defaultSeatTimeout
 	}
 	return agentBackend{name: name, model: model, dir: dir, argv: argv, wire: wire, tools: opt.Tools, timeout: timeout}, true, nil
+}
+
+// Metered reports whether b reports the token usage of its calls, which is
+// what a --max-tokens cap needs before it can bound a seat. Every API backend
+// does. An agent seat does exactly when its WIRE carries usage: the same
+// agent name is metered on claude-json or codex-jsonl and not on text, so
+// the wire answers, never the agent's name.
+func Metered(b Backend) bool {
+	if a, ok := b.(agentBackend); ok {
+		return a.wire.reportsUsage()
+	}
+	return true
+}
+
+// AgentWireKey is the variable that declares the agent NAME's wire, for an
+// error that tells the operator where to change it.
+func AgentWireKey(name string) string {
+	return agentEnvKey(name) + agentWireSuffix
 }
 
 // defaultSeatTimeout bounds one agent call when the caller names none.

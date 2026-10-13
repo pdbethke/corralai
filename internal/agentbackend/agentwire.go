@@ -43,6 +43,12 @@ type agentWire interface {
 	// file. metered is false when the wire carries no usage at all, which
 	// is not the same as a usage of zero.
 	parse(stdout, outFile []byte) (content string, u Usage, metered bool, err error)
+	// reportsUsage is whether this wire carries token usage AT ALL — the
+	// question Metered asks before a run, when there is no reply to read
+	// yet. A metered wire can still fail to report on one call (a CLI that
+	// died before its usage record); parse's metered answers for that call,
+	// and this answers for the wire.
+	reportsUsage() bool
 }
 
 // agentWires is the one registry: a definition names its wire, and nothing
@@ -64,6 +70,8 @@ func wireNames() []string {
 
 // claudeJSONWire reads `claude -p --output-format json`: one result document.
 type claudeJSONWire struct{}
+
+func (claudeJSONWire) reportsUsage() bool { return true }
 
 func (claudeJSONWire) args(f *agentworker.ResponseFormat, _ string) ([]string, error) {
 	if f == nil {
@@ -123,6 +131,8 @@ func (claudeJSONWire) parse(stdout, _ []byte) (string, Usage, bool, error) {
 // codexJSONLWire reads `codex exec --json -o {out}`: an event stream on
 // stdout, the final message in the {out} file.
 type codexJSONLWire struct{}
+
+func (codexJSONLWire) reportsUsage() bool { return true }
 
 func (codexJSONLWire) args(f *agentworker.ResponseFormat, tmp string) ([]string, error) {
 	if f == nil {
@@ -264,6 +274,8 @@ func addPtr(a, b *int64) *int64 {
 // it is unmetered, and no schema flag — a schema reaches the model only as
 // the prompt describes it.
 type textWire struct{}
+
+func (textWire) reportsUsage() bool { return false }
 
 func (textWire) args(*agentworker.ResponseFormat, string) ([]string, error) { return nil, nil }
 

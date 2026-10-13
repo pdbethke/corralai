@@ -13,6 +13,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/pdbethke/corralai/internal/auditpush"
 	"github.com/pdbethke/corralai/internal/reposcan"
 	"github.com/pdbethke/corralai/internal/scanstore"
 )
@@ -353,13 +354,19 @@ type scansShowJSON struct {
 // scanstore.ModelCall.Retries and the doc below), never a stored 0 that a
 // later query would average as a measured zero.
 type scansShowModelCall struct {
-	Path         string `json:"path"`
-	Role         string `json:"role"`
-	Model        string `json:"model"`
-	Calls        int    `json:"calls"`
-	Retries      *int   `json:"retries"`
-	InputTokens  int64  `json:"input_tokens"`
-	OutputTokens int64  `json:"output_tokens"`
+	Path    string `json:"path"`
+	Role    string `json:"role"`
+	Model   string `json:"model"`
+	Calls   int    `json:"calls"`
+	Retries *int   `json:"retries"`
+	// InputTokens / OutputTokens are null when every one of the row's calls
+	// was unmetered (auditpush.TokensUnmetered) — the same NULL the
+	// warehouse column holds, never a 0 that reads as a free seat.
+	InputTokens  *int64 `json:"input_tokens"`
+	OutputTokens *int64 `json:"output_tokens"`
+	// UnmeteredCalls is how many of Calls reported no token usage; the
+	// token counts cover only the rest.
+	UnmeteredCalls int `json:"unmetered_calls"`
 	// CachedInputTokens is how many of InputTokens the provider served from
 	// its own prompt cache — null when this seat's calls reported nothing,
 	// which is most of them (Ollama and any provider silent about caching).
@@ -397,7 +404,9 @@ func runScansShowJSONWithTiming(st scansReader, id int64, files []scanstore.File
 	for _, c := range calls {
 		out.ModelCalls = append(out.ModelCalls, scansShowModelCall{
 			Path: c.Path, Role: c.Role, Model: c.Model, Calls: c.Calls,
-			Retries: c.Retries, InputTokens: c.InputTokens, OutputTokens: c.OutputTokens,
+			Retries:     c.Retries,
+			InputTokens: meteredCount(c, c.InputTokens), OutputTokens: meteredCount(c, c.OutputTokens),
+			UnmeteredCalls:    c.UnmeteredCalls,
 			CachedInputTokens: c.CachedInputTokens, CacheWriteInputTokens: c.CacheWriteInputTokens,
 			WallMillis: c.WallMillis,
 		})
@@ -643,4 +652,13 @@ func scanFileBudget(f scanstore.File) string {
 		return fmt.Sprint(*f.MutantBudget)
 	}
 	return fmt.Sprintf("%d (%s)", *f.MutantBudget, f.MutantBudgetRule)
+}
+
+// meteredCount is a row's token count for output: nil when nothing about the
+// row's tokens was measured (auditpush.TokensUnmetered), the count otherwise.
+func meteredCount(c scanstore.ModelCall, n int64) *int64 {
+	if auditpush.TokensUnmetered(c.Calls, c.UnmeteredCalls) {
+		return nil
+	}
+	return &n
 }

@@ -4849,7 +4849,7 @@ func (l *localExecutor) Execute(ctx context.Context, j reposcan.Job) (reposcan.F
 	// what builds — and probes — this file's pool), so its answer is available
 	// and is said out loud, per file. The DOWNGRADE is the interesting event:
 	// an operator watching a workspace audit crawl has to be able to see that
-	// their suite failed under N trees, and why, rather than inferring it from
+	// the baseline failed in N trees at once, and why, rather than inferring it from
 	// the wall clock. Silent when nothing was measured (the jail substrate,
 	// which builds no trees).
 	l.noteConcurrency(j.Path, in.concurrency)

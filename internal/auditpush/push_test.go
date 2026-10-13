@@ -480,7 +480,7 @@ func TestConcurrencyColumnsRoundTrip(t *testing.T) {
 	if _, err := Push(target, []Row{
 		{Repo: "o/r", Commit: "c", Path: "src/flask/cli.py", KillRate: rate(0.65), Survivors: 4, Trees: 6, SharedDirs: ".venv"},
 		{Repo: "o/r", Commit: "c", Path: "pkg/a.py", KillRate: rate(0.9), Survivors: 1, Trees: 1,
-			ConcurrencyNote: "suite is not concurrency-safe: baseline failed under 3"},
+			ConcurrencyNote: "baseline failed in 3 private trees at once (the suite may not be concurrency-safe, or the copies lack something it needs — e.g. a Cargo workspace root outside --repo)"},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -508,7 +508,7 @@ func TestConcurrencyColumnsRoundTrip(t *testing.T) {
 	if shared.Valid {
 		t.Errorf("a row that shared nothing must store SQL NULL, got %v", shared)
 	}
-	if trees != 1 || !note.Valid || note.String != "suite is not concurrency-safe: baseline failed under 3" {
+	if trees != 1 || !note.Valid || note.String != "baseline failed in 3 private trees at once (the suite may not be concurrency-safe, or the copies lack something it needs — e.g. a Cargo workspace root outside --repo)" {
 		t.Errorf("got trees=%d note=%v, want the downgrade note preserved", trees, note)
 	}
 }

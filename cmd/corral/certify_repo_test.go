@@ -614,7 +614,7 @@ func TestBuildScanFileRowsCarriesConcurrency(t *testing.T) {
 				Concurrency: advpool.Concurrency{Trees: 6}}},
 		{Job: reposcan.Job{Path: "downgraded.py", Lang: "python"}, Gradable: true,
 			Verdict: advpool.Verdict{DevKillRate: 0.5, Survivors: 4, MutantsTotal: 10, DevScored: true,
-				Concurrency: advpool.Concurrency{Trees: 1, Note: "suite is not concurrency-safe: baseline failed under 3"}}},
+				Concurrency: advpool.Concurrency{Trees: 1, Note: "baseline failed in 3 private trees at once (the suite may not be concurrency-safe, or the copies lack something it needs — e.g. a Cargo workspace root outside --repo)"}}},
 	}
 	rows := buildScanFileRows(results, nil, reposcan.CoverageMap{}, "", "", io.Discard)
 	if len(rows) != 2 {
@@ -627,7 +627,7 @@ func TestBuildScanFileRowsCarriesConcurrency(t *testing.T) {
 	if got := byPath["src/flask/cli.py"]; got.Trees != 6 || got.ConcurrencyNote != "" {
 		t.Errorf("row = %+v, want Trees 6, no note", got)
 	}
-	if got := byPath["downgraded.py"]; got.Trees != 1 || got.ConcurrencyNote != "suite is not concurrency-safe: baseline failed under 3" {
+	if got := byPath["downgraded.py"]; got.Trees != 1 || got.ConcurrencyNote != "baseline failed in 3 private trees at once (the suite may not be concurrency-safe, or the copies lack something it needs — e.g. a Cargo workspace root outside --repo)" {
 		t.Errorf("row = %+v, want the downgrade note preserved", got)
 	}
 	if rows[0].TestWriterFailed {

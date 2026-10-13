@@ -150,7 +150,7 @@ func TestAggregateCarriesConcurrencyOntoTheReport(t *testing.T) {
 			Trees: 6, Shared: []string{".venv"},
 		}}},
 		{Gradable: true, Verdict: advpool.Verdict{Concurrency: advpool.Concurrency{
-			Trees: 1, Note: "suite is not concurrency-safe: baseline failed under 3",
+			Trees: 1, Note: "baseline failed in 3 private trees at once (the suite may not be concurrency-safe, or the copies lack something it needs — e.g. a Cargo workspace root outside --repo)",
 		}}},
 		// A verdict served from the ledger cache, recorded before this
 		// column existed: it carries NO Concurrency at all. That must reach
@@ -172,7 +172,7 @@ func TestAggregateCarriesConcurrencyOntoTheReport(t *testing.T) {
 	if got := byPath["pkg/a.py"]; len(got.SharedDirs) != 1 || got.SharedDirs[0] != ".venv" {
 		t.Errorf("got SharedDirs=%q, want [.venv] on the report", got.SharedDirs)
 	}
-	if got := byPath["pkg/b.py"]; got.Trees != 1 || got.ConcurrencyNote != "suite is not concurrency-safe: baseline failed under 3" {
+	if got := byPath["pkg/b.py"]; got.Trees != 1 || got.ConcurrencyNote != "baseline failed in 3 private trees at once (the suite may not be concurrency-safe, or the copies lack something it needs — e.g. a Cargo workspace root outside --repo)" {
 		t.Errorf("got Trees=%d Note=%q, want the downgrade note preserved", got.Trees, got.ConcurrencyNote)
 	}
 	if got := byPath["pkg/cached.py"]; got.Trees != 0 || got.ConcurrencyNote != "" {

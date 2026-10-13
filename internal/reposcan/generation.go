@@ -144,6 +144,10 @@ package reposcan
 // pass (folded in localExecutor.Execute before the verdict is recorded or
 // cached). That fold landed before "18" left this branch, so no "18"
 // verdict holds the narrower list and it needed no generation of its own.
+// The same holds for the workspace pool's downgrade note
+// (Verdict.Concurrency.Note), reworded under "18" to stop blaming the suite
+// for what may be an incomplete copy: every verdict carrying the old words is
+// a "17" one, which "18" already retires.
 const VerdictGeneration = "18"
 
 // VerdictShapeSHA256 fingerprints advpool.Verdict's serialized shape: every

@@ -211,7 +211,7 @@ func TestWorkspaceWiringDisclosesTheDowngrade(t *testing.T) {
 	if in.concurrency.Trees != 1 {
 		t.Fatalf("trees = %d, want 1: a suite that only passes in the original checkout must NOT be scored in copies", in.concurrency.Trees)
 	}
-	if !strings.Contains(in.concurrency.Note, "baseline failed under 3") {
+	if !strings.Contains(in.concurrency.Note, "baseline failed in 3 private trees at once") {
 		t.Fatalf("downgrade note = %q, want the probe's own reason (the operator has to be able to see WHY the audit is slow)", in.concurrency.Note)
 	}
 }

@@ -643,7 +643,12 @@ func (p *WorkspacePool) Probe(ctx context.Context, base map[string]string, codeP
 	baseOK, baseOut := p.runEverywhere(ctx, base, codePath, compliantCode, testCmd)
 	for i, ok := range baseOK {
 		if !ok {
-			return downgrade(fmt.Sprintf("suite is not concurrency-safe: baseline failed under %d — %s", n, capOutput(baseOut[i])))
+			// Both causes are named, because the probe cannot tell them
+			// apart and the output excerpt is what does: blaming the suite
+			// for an incomplete copy is a false statement about the audited
+			// project (a Rust crate whose Cargo workspace root is outside
+			// --repo fails here with "failed to find a workspace root").
+			return downgrade(fmt.Sprintf("baseline failed in %d private trees at once (the suite may not be concurrency-safe, or the copies lack something it needs — e.g. a Cargo workspace root outside --repo) — %s", n, capOutput(baseOut[i])))
 		}
 	}
 	canaryOK, _ := p.runEverywhere(ctx, base, codePath, CanaryCode, testCmd)

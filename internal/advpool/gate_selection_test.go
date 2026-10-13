@@ -167,8 +167,8 @@ func TestAggregateCarriesConcurrencyOntoTheVerdict(t *testing.T) {
 		t.Errorf("got %+v, want the shared dep dirs preserved", v.Concurrency)
 	}
 
-	rs = RunSpec{Concurrency: Concurrency{Trees: 1, Note: "suite is not concurrency-safe: baseline failed under 3"}}
-	if v := verdictFromSpec(rs); v.Concurrency.Trees != 1 || v.Concurrency.Note != "suite is not concurrency-safe: baseline failed under 3" {
+	rs = RunSpec{Concurrency: Concurrency{Trees: 1, Note: "baseline failed in 3 private trees at once (the suite may not be concurrency-safe, or the copies lack something it needs — e.g. a Cargo workspace root outside --repo)"}}
+	if v := verdictFromSpec(rs); v.Concurrency.Trees != 1 || v.Concurrency.Note != "baseline failed in 3 private trees at once (the suite may not be concurrency-safe, or the copies lack something it needs — e.g. a Cargo workspace root outside --repo)" {
 		t.Errorf("got %+v, want the downgrade note preserved", v.Concurrency)
 	}
 }

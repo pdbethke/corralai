@@ -30,7 +30,11 @@ import (
 
 // ErrSeatEnvironment marks a failure of the seat's ENVIRONMENT — a login, a
 // usage limit, a model the account cannot use, the CLI itself missing or
-// broken — as distinct from anything the model did. A caller that scores
+// broken — as distinct from anything the model did. What is classified is
+// what a wire reads by construction (claude's is_error / terminal_reason,
+// codex's error / turn.failed) plus a missing binary. The captured errors are
+// bad-model errors; a usage limit arriving through those fields has not yet
+// been observed, and a text wire cannot tell a limit notice from a reply. A caller that scores
 // models must never charge one of these to the model (the fifth review found
 // a 429 on the writer path charged to the model).
 //

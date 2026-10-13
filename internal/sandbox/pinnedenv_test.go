@@ -83,3 +83,80 @@ func TestIsPinned(t *testing.T) {
 		t.Error("KEEP and PATH are not pins")
 	}
 }
+
+// offlinePinKeys are the pins that exist to keep a GRADED run off the
+// network. They are looked up by key, not by position, so the test fails by
+// name if a row is removed or renamed.
+var offlinePinKeys = []string{"CARGO_NET_OFFLINE"}
+
+// TestRustPinsAreInTheTable: the three Rust pins the jail sets. RUSTUP_HOME
+// points at the system-wide rustup (the only one inside the /usr the jail
+// mounts), CARGO_HOME at the writable tmpfs HOME, and the offline flag.
+func TestRustPinsAreInTheTable(t *testing.T) {
+	want := map[string]string{
+		"RUSTUP_HOME":       "/usr/local/rustup",
+		"CARGO_HOME":        "/home/agent/.cargo",
+		"CARGO_NET_OFFLINE": "true",
+	}
+	for k, v := range want {
+		found := false
+		for _, p := range pinnedEnv {
+			if p.Key == k {
+				found = true
+				if p.Value != v {
+					t.Errorf("%s pinned to %q, want %q", k, p.Value, v)
+				}
+			}
+		}
+		if !found {
+			t.Errorf("%s is not pinned", k)
+		}
+	}
+}
+
+// TestOfflinePinNeverReachesANetworkedJail is the part-one carry: the
+// networked vendoring step (`cargo vendor`, run with Options.Network) must
+// not be told CARGO_NET_OFFLINE, or it can never download anything. The host's
+// own value must not leak into it either. Graded runs (Network false) get the
+// pin, and the host cannot override it. Both backends read the one table.
+func TestOfflinePinNeverReachesANetworkedJail(t *testing.T) {
+	type backend struct {
+		name string
+		wrap func(Options, []string) ([]string, error)
+		flag string
+	}
+	backends := []backend{
+		{"bwrap", func(o Options, e []string) ([]string, error) { return (bwrapIsolator{}).Wrap("true", o, e) }, "--setenv"},
+		{"container", func(o Options, e []string) ([]string, error) {
+			return containerIsolator{runtime: "docker", image: "img"}.Wrap("true", o, e)
+		}, "-e"},
+	}
+	for _, b := range backends {
+		t.Run(b.name, func(t *testing.T) {
+			net, err := b.wrap(Options{Workspace: "/w", Network: true}, hostileHostEnv())
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := envSettings(net, b.flag)
+			for _, k := range offlinePinKeys {
+				if vs, ok := got[k]; ok {
+					t.Errorf("networked jail sets %s = %q; vendoring would be offline", k, vs)
+				}
+			}
+			// The non-offline pins still hold on the networked jail.
+			for _, p := range pinnedEnv {
+				if slices.Contains(offlinePinKeys, p.Key) {
+					continue
+				}
+				if vs := got[p.Key]; !slices.Equal(vs, []string{p.Value}) {
+					t.Errorf("networked jail: %s = %q, want [%q]", p.Key, vs, p.Value)
+				}
+			}
+			off, err := b.wrap(Options{Workspace: "/w"}, hostileHostEnv())
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertPinsHold(t, envSettings(off, b.flag))
+		})
+	}
+}

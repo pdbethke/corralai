@@ -54,6 +54,40 @@ node --version || echo "node missing — js/ts-in-jail tests will SKIP"
 sudo npm install -g typescript @types/node || npm install -g typescript @types/node || true
 tsc --version || echo "tsc not available — ts-in-jail test will SKIP"
 
+echo "== Rust (internal/lang rust plugin; the jail's pinned RUSTUP_HOME) =="
+# The jail pins RUSTUP_HOME=/usr/local/rustup (internal/sandbox/pinnedenv.go),
+# so the toolchain must live there — CARGO_HOME=/usr/local/cargo holds the
+# proxies and cargo-nextest — and be world-readable. GitHub's ubuntu-latest
+# already has a rustup under the runner's HOME; that one is invisible to the
+# jail (see the rule above), so this installs a second, system-wide one rather
+# than trusting the image's.
+#
+# Both pinned installs are verified: rustup-init against the sha256 rust-lang
+# publishes beside it, cargo-nextest against the digest recorded here. The
+# nextest release tarball is chosen over `cargo install --locked cargo-nextest`
+# on purpose: that compiles ~400 crates on every run, minutes on a CI runner,
+# for the identical binary. Bumping NEXTEST_VERSION means recomputing the sha.
+RUST_VERSION=1.92.0
+NEXTEST_VERSION=0.9.148
+NEXTEST_SHA256=223ba936714cc861a9cdedad5a8eb664dfdd69d6fbdf6cea6aa8184f523290dc
+(
+	set -e
+	tmp=$(mktemp -d)
+	trap 'rm -rf "$tmp"' EXIT
+	url=https://static.rust-lang.org/rustup/dist/x86_64-unknown-linux-gnu
+	curl -fsSL "$url/rustup-init" -o "$tmp/rustup-init"
+	echo "$(curl -fsSL "$url/rustup-init.sha256" | cut -d' ' -f1)  $tmp/rustup-init" | sha256sum -c -
+	chmod +x "$tmp/rustup-init"
+	sudo env RUSTUP_HOME=/usr/local/rustup CARGO_HOME=/usr/local/cargo \
+		"$tmp/rustup-init" -y --no-modify-path --profile minimal --default-toolchain "$RUST_VERSION"
+	curl -fsSL "https://get.nexte.st/$NEXTEST_VERSION/linux" -o "$tmp/nextest.tgz"
+	echo "$NEXTEST_SHA256  $tmp/nextest.tgz" | sha256sum -c -
+	sudo tar -xzf "$tmp/nextest.tgz" -C /usr/local/cargo/bin
+	sudo chmod -R a+rX /usr/local/rustup /usr/local/cargo
+) || echo "rust toolchain install failed — rust-in-jail test will SKIP"
+RUSTUP_HOME=/usr/local/rustup /usr/local/cargo/bin/cargo --version || echo "system-wide cargo not available — rust-in-jail test will SKIP"
+/usr/local/cargo/bin/cargo-nextest nextest --version || echo "cargo-nextest not available — rust-in-jail test will SKIP"
+
 echo "== bubblewrap (jail tests) =="
 sudo apt-get install -y bubblewrap || true
 # Ubuntu 24.04 blocks unprivileged user namespaces, which is what bwrap needs.

@@ -3,11 +3,14 @@
 package lang
 
 import (
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
 	"github.com/pdbethke/corralai/internal/pairing"
+	"github.com/pdbethke/corralai/internal/sandbox"
 )
 
 func init() { Register(rustPlugin{}) }
@@ -139,8 +142,58 @@ func (rustPlugin) TestRules() []pairing.Rule {
 // Preflight requires the runner's binary: cargo for libtest, cargo-nextest for
 // nextest — or the operator's own first token (a rustup proxy at an absolute
 // path) when one is given. The runner row decides; see rustRunner.
+//
+// It also checks the half of the toolchain the jail needs and the host does
+// not: the jail's rustup home is pinned to sandbox.SystemRustupHome, so a
+// `cargo` that is a user-home rustup proxy (~/.cargo/bin/cargo) runs there
+// only when that system-wide toolchain exists. Without it the audit would
+// spend its way to a jail that says "rustup could not choose a version of
+// cargo", which reads as a broken project. A cargo that is NOT a proxy (a
+// distribution package, a tarball) needs nothing and passes.
 func (rustPlugin) Preflight(testCmd []string) error {
-	return toolOnPath(rustRunner(testCmd).preflightBin)
+	bin := rustRunner(testCmd).preflightBin
+	if err := toolOnPath(bin); err != nil {
+		return fmt.Errorf("%w; the audit jail runs the system-wide Rust toolchain (%s)", err, systemRustLayoutHint)
+	}
+	// cargo-nextest is a plain binary, but `cargo nextest` dispatches through
+	// whichever cargo is on PATH, so that one is checked too.
+	for _, name := range []string{bin, preflightBin(testCmd, "cargo")} {
+		if err := userHomeProxyNeedsSystemRustup(name); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// systemRustLayoutHint names the install the jail can see, for every
+// Preflight message that has to tell the operator what to do.
+const systemRustLayoutHint = "install it with `RUSTUP_HOME=" + sandbox.SystemRustupHome +
+	" CARGO_HOME=/usr/local/cargo rustup-init --no-modify-path --default-toolchain <version>`, add /usr/local/cargo/bin to PATH, and `cargo install --locked cargo-nextest` if you use nextest"
+
+// systemRustupHome is sandbox.SystemRustupHome, a variable only so a test can
+// stand a temp dir in for the real /usr/local/rustup.
+var systemRustupHome = sandbox.SystemRustupHome
+
+// userHomeProxyNeedsSystemRustup refuses a tool that resolves to a rustup
+// proxy under $HOME while the system-wide rustup home is missing. nil for any
+// other tool, wherever it lives.
+func userHomeProxyNeedsSystemRustup(name string) error {
+	p, err := exec.LookPath(name)
+	if err != nil {
+		return nil // toolOnPath reports a missing tool; this is not its job
+	}
+	home, herr := os.UserHomeDir()
+	if herr != nil || home == "" || !strings.HasPrefix(p, filepath.Clean(home)+string(filepath.Separator)) {
+		return nil
+	}
+	if _, err := os.Lstat(filepath.Join(filepath.Dir(p), "rustup")); err != nil { // #nosec G703 -- existence check only
+		return nil // not a rustup proxy
+	}
+	if fi, err := os.Stat(filepath.Join(systemRustupHome, "toolchains")); err == nil && fi.IsDir() { // #nosec G703 -- existence check only
+		return nil
+	}
+	return fmt.Errorf("lang: %q resolves to a rustup proxy under your home (%s), and the audit jail cannot see your home: it runs the system-wide toolchain in %s, which is not installed here. %s",
+		name, p, sandbox.SystemRustupHome, systemRustLayoutHint)
 }
 
 func (rustPlugin) PromptLang() string { return "Rust" }

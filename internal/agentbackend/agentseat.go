@@ -311,8 +311,11 @@ func AgentVersion(name string) string {
 	if !isShell(argv[0]) {
 		ctx, cancel := context.WithTimeout(context.Background(), agentVersionTimeout)
 		defer cancel()
-		if out, err := agentCommand(ctx, []string{argv[0], "--version"}).Output(); err == nil {
-			version = strings.TrimSpace(strings.SplitN(string(out), "\n", 2)[0])
+		var out bytes.Buffer
+		cmd := agentCommand(ctx, []string{argv[0], "--version"})
+		cmd.Stdout = &out
+		if err := runAgent(cmd); err == nil {
+			version = strings.TrimSpace(strings.SplitN(out.String(), "\n", 2)[0])
 		}
 	}
 	if builtin && version != "" {
@@ -467,7 +470,10 @@ func (a agentBackend) Chat(messages []Message, tools []any) (Message, error) {
 	cmd.Stdin = strings.NewReader(prompt.String())
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
-	runErr := cmd.Run()
+	runErr := runAgent(cmd)
+	if errors.Is(runErr, ErrInterrupted) {
+		return Message{}, fmt.Errorf("%s: %w", a.name, runErr)
+	}
 	if errors.Is(runErr, exec.ErrNotFound) || errors.Is(runErr, os.ErrNotExist) {
 		return Message{}, fmt.Errorf("%s: %w: %v", a.name, ErrSeatEnvironment, runErr)
 	}

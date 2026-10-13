@@ -123,6 +123,16 @@ key over its subscription login will **bill that key** instead of the
 subscription. Unset the key for an agent-only run if you want the
 subscription to pay.
 
+## Interrupting a run
+
+Each agent runs in its own process group, so a timeout kills everything the
+agent started, a shell wrapper's children included. That takes it out of the
+terminal's foreground group, so corral forwards the interrupt itself: Ctrl-C,
+SIGTERM or SIGHUP kills every live agent seat's process group at once, and no
+further agent call is started in that run. This holds in every verb, including
+`review`, which has no other signal handling. When no agent is running,
+Ctrl-C means what it always did.
+
 ## Concurrency
 
 Up to 10 agent calls ran at once on one subscription with no limit hit. That

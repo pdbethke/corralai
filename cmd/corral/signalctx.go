@@ -33,6 +33,11 @@ import (
 // the end of every clean run, and was caught by the recording tests. A signal
 // gets its own channel so the two causes stay distinguishable.
 //
+// Agent seats are not this handler's job: each runs in its own process group,
+// out of the terminal's reach, and internal/agentbackend kills every live
+// seat's group on the same signal (agentproc.go), in every verb — including
+// the ones that never call auditContext.
+//
 // The SECOND signal is deliberately left to the default behavior — the handler
 // is unregistered as soon as the first arrives — so an operator whose restore
 // is itself wedged can still abandon the process. Trapping every signal would

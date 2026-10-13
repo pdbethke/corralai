@@ -72,6 +72,14 @@ inputs:
     description: "OpenAI (or OpenAI-compatible) API key, supplied to the run as OPENAI_API_KEY. Additive with the other provider keys — see 'anthropic-key'."
     required: false
     default: ""
+  claude-code-oauth-token:
+    description: "Login for a `claude-code` agent seat on a runner, supplied to the run as CLAUDE_CODE_OAUTH_TOKEN (the variable Claude Code reads; create one with `claude setup-token`). Only needed when a seat is `claude-code` and the runner has no login of its own; the `claude` CLI must also be installed on the runner. Exported only when set, so an empty input never blanks a token the runner already carries. Pass as a secret; never inline."
+    required: false
+    default: ""
+  codex-api-key:
+    description: "API key for a `codex` agent seat on a runner, supplied to the run as CODEX_API_KEY (the variable the codex CLI names for API-key auth). Only needed when a seat is `codex` and the runner has no login of its own; the `codex` CLI must also be installed. Exported only when set. Note that an API key bills per token, unlike a subscription login. Pass as a secret; never inline."
+    required: false
+    default: ""
   model-key:
     description: "Generic escape hatch for a credential the named provider inputs above do not cover (e.g. GOOGLE_API_KEY, or a gateway that reads its own variable). Use 'anthropic-key' / 'gemini-key' / 'openai-key' in preference — they are clearer and compose. Pair with 'model-key-env' to say which variable it becomes."
     required: false
@@ -101,7 +109,7 @@ inputs:
     required: false
     default: ""
   reviewer-model:
-    description: "Also run `corral review` on the change, with this model in the REVIEWER seat: a cold model that has never seen the repository is told to assume the code is wrong and prove it; every claim comes with a script corral runs in a detached worktree, a claim that does not reproduce is demoted on the record, and the review is one signed entry in the same `ledger` directory the audit writes to. An API model name (a key must reach it through the *-key inputs) — the agentic seats (`claude-code`, `codex`) need a subscription login a hosted runner does not have and are refused here. Off unless named; corral has no default models."
+    description: "Also run `corral review` on the change, with this model in the REVIEWER seat: a cold model that has never seen the repository is told to assume the code is wrong and prove it; every claim comes with a script corral runs in a detached worktree, a claim that does not reproduce is demoted on the record, and the review is one signed entry in the same `ledger` directory the audit writes to. An API model name (its key through the *-key inputs) or an agent seat (`claude-code`, `codex`, `antigravity`, or one defined as CORRALAI_AGENT_<NAME> in the job's env). An agent seat needs its CLI installed on the runner and a login: `claude-code-oauth-token` and `codex-api-key` pass one through. corral refuses a seat whose CLI is missing before it spends anything. Off unless named; corral has no default models."
     required: false
     default: ""
   verifier-model:
@@ -160,6 +168,8 @@ runs:
         ANTHROPIC_KEY_IN: ${{ inputs.anthropic-key }}
         GEMINI_KEY_IN: ${{ inputs.gemini-key }}
         OPENAI_KEY_IN: ${{ inputs.openai-key }}
+        CLAUDE_CODE_OAUTH_TOKEN_IN: ${{ inputs.claude-code-oauth-token }}
+        CODEX_API_KEY_IN: ${{ inputs.codex-api-key }}
         MODEL_KEY: ${{ inputs.model-key }}
         MODEL_KEY_ENV: ${{ inputs.model-key-env }}
         DERIVE_MODEL: ${{ inputs.derive-model }}
@@ -231,6 +241,10 @@ runs:
         declare_key ANTHROPIC_API_KEY "${ANTHROPIC_KEY_IN:-}"
         declare_key GEMINI_API_KEY "${GEMINI_KEY_IN:-}"
         declare_key OPENAI_API_KEY "${OPENAI_KEY_IN:-}"
+        # Agent-seat logins, under the variables the CLIs themselves read.
+        # Same rules as the API keys: exported only when set, never echoed.
+        declare_key CLAUDE_CODE_OAUTH_TOKEN "${CLAUDE_CODE_OAUTH_TOKEN_IN:-}"
+        declare_key CODEX_API_KEY "${CODEX_API_KEY_IN:-}"
 
         # The generic escape hatch, for a credential the named inputs do not
         # cover. Its name is itself an input, so it is validated before use: an
@@ -465,16 +479,11 @@ runs:
         # same ledger; its own gate is --fail-on, and the step's status is
         # the audit's when that failed, else the review's.
         if [ -n "${REVIEWER_MODEL:-}" ]; then
-          # The agentic seats are a coding CLI with a subscription login;
-          # a hosted runner has neither. Refuse by name rather than fail
-          # deep inside the seat with "claude: not found".
-          for seat in "$REVIEWER_MODEL" "${VERIFIER_MODEL:-}"; do
-            case "${seat%%:*}" in
-              claude-code|codex)
-                echo "::error::'$seat' is an agentic seat (a coding CLI with its own login), which a hosted runner cannot run. CI review uses API seats: name a provider model (gemini-…, claude-…, gpt-…) and supply its key through the *-key inputs." >&2
-                exit 1;;
-            esac
-          done
+          # No list of seat names here. This step used to refuse two agent
+          # seats by name, which missed the third built-in and every agent an
+          # operator defines, and refused a self-hosted runner that has the
+          # CLI and its login. corral's resolver decides for every seat, and
+          # refuses a missing CLI before anything is spent.
           scopes=()
           if [ -n "${REVIEW_SCOPE:-}" ]; then
             scopes+=("$REVIEW_SCOPE")

@@ -40,6 +40,32 @@ history of any release, `git log v0.3.4..v0.3.5`.
   named `codex` rather than `codex:<model>` records a tool, not a model, and
   is no longer counted as evidence about one. Review seats included: they used
   to be counted.
+- **A missing agent CLI is refused up front, by every verb.** `certify`,
+  `review`, goal derivation and `demo` check that a seat's CLI is on `PATH`
+  when they resolve it, before any jail, store or model call. Before, only
+  `doctor` checked, and `certify` ran its jail first and then filed the
+  missing writer as `writer-failed`.
+- **The Action no longer refuses agent seats by name.** Its review step
+  refused `claude-code` and `codex` and missed `antigravity` and every agent
+  you define. It now keeps no list, and two new optional inputs pass a login
+  through: `claude-code-oauth-token` (as `CLAUDE_CODE_OAUTH_TOKEN`) and
+  `codex-api-key` (as `CODEX_API_KEY`). The CLI must be installed on the
+  runner.
+- **An agent seat inherits corral's environment.** An API key you export for
+  corral's API seats also reaches the agent CLI, and a CLI that prefers an API
+  key over its subscription login will bill the key. Unset it for an
+  agent-only run. `codex`'s read-only sandbox still lets it read the host, and
+  a certify prompt carries the audited source; see
+  `docs/corral/agent-seats.md`, "What a seat can reach".
+- **`antigravity` in certify runs without `--dangerously-skip-permissions`.**
+  The flag is now added only when the caller grants tools (review does). Not
+  yet run in certify.
+- **Smaller fixes.** certify and review now compare seats the same way,
+  ignoring case. A pin starting with `-` is refused. A timed-out agent call
+  kills the whole process group. The `--version` probe has a 10s bound.
+  `review` records the verifier's tokens when its reply does not parse.
+  `certify` says when an operator agent's vendor cannot be told. The public
+  warehouse's `bug_catches` extract leaves out unpinned agent seats.
 - **One-time cache miss.** `reposcan.VerdictGeneration` is now 19 (it was 17
   earlier in this release). Every verdict cached before this change is
   re-measured once.

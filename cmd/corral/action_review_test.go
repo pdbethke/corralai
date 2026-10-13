@@ -78,10 +78,15 @@ func TestActionReviewRunsOnTheChange(t *testing.T) {
 		t.Fatalf("a review that exits 3 must fail the step:\n%s", out)
 	}
 
-	// An agentic seat is refused by name, before any review runs.
-	reviews, out, err = reviewInvocations(t, t.TempDir(), "REVIEWER_MODEL=claude-code:claude-sonnet-5", "REVIEW_SCOPE=pkg")
-	if err == nil || len(reviews) != 0 || !strings.Contains(out, "agentic seat") {
-		t.Fatalf("agentic seats cannot run on a hosted runner: reviews=%v err=%v\n%s", reviews, err, out)
+	// An agent seat reaches corral like any other seat: the Action keeps no
+	// list of seat names. Whether the CLI is installed and logged in is
+	// corral's to say (ForSeat refuses a missing binary up front), which also
+	// serves a self-hosted runner and an operator-defined agent.
+	for _, seat := range []string{"claude-code:claude-sonnet-5", "codex", "antigravity", "my-own-agent"} {
+		reviews, out, err = reviewInvocations(t, t.TempDir(), "REVIEWER_MODEL="+seat, "REVIEW_SCOPE=pkg")
+		if err != nil || len(reviews) != 1 || !strings.Contains(strings.Join(reviews[0], " "), "--reviewer-model "+seat) {
+			t.Fatalf("seat %s must be handed to corral review: reviews=%v err=%v\n%s", seat, reviews, err, out)
+		}
 	}
 
 	// Empty scope: the change itself. A workspace with a base commit and a
@@ -132,5 +137,53 @@ func TestActionReviewRunsOnTheChange(t *testing.T) {
 	_, out, err = reviewInvocations(t, tmp, "REVIEWER_MODEL=gemini-3.6-flash", "DIFF_BASE="+first, "REVIEW_MAX_SCOPES=1")
 	if err == nil || !strings.Contains(out, "review-max-scopes") {
 		t.Fatalf("more directories than review-max-scopes must refuse by name: %v\n%s", err, out)
+	}
+}
+
+// The review step names no seat. A hand-kept list of agent names refused two
+// built-ins and missed the third and every operator-defined agent: a rule at
+// one door. corral's own resolver is the one place that decides.
+func TestActionKeepsNoSeatNameList(t *testing.T) {
+	runStep := findStepContaining(t, loadActionYAML(t), "corral \"${args[@]}\"")
+	for _, name := range []string{"claude-code", "codex", "antigravity"} {
+		if strings.Contains(runStep.Run, name) {
+			t.Errorf("the Run step names the seat %q; the Action must not keep a list of seats", name)
+		}
+	}
+}
+
+// An agent seat's login can reach a runner as a secret: each token input is
+// exported under the variable its CLI reads, only when it is set — an empty
+// input must not blank a credential the runner already carries.
+func TestActionPassesAgentTokensThroughOnlyWhenSet(t *testing.T) {
+	a := loadActionYAML(t)
+	runStep := findStepContaining(t, a, "certify --repo")
+	for input, envName := range map[string]string{
+		"claude-code-oauth-token": "CLAUDE_CODE_OAUTH_TOKEN",
+		"codex-api-key":           "CODEX_API_KEY",
+	} {
+		if _, ok := a.Inputs[input]; !ok {
+			t.Errorf("action.yml lacks the %q input", input)
+			continue
+		}
+		in := envName + "_IN"
+		dump := func(tmp string) string { return "env > \"" + filepath.Join(tmp, "env.log") + "\"\n" }
+
+		tmp := t.TempDir()
+		out, err, _ := runRunCorralStepWithStub(t, runStep, tmp, "true", dump(tmp), in+"=tok-"+input)
+		b, _ := os.ReadFile(filepath.Join(tmp, "env.log"))
+		if err != nil || !strings.Contains(string(b), envName+"=tok-"+input+"\n") {
+			t.Errorf("%s set: want %s exported (err %v)\n%s", input, envName, err, out)
+		}
+		if strings.Contains(string(out), "tok-"+input) {
+			t.Errorf("%s: the token value reached the log", input)
+		}
+
+		tmp = t.TempDir()
+		out, err, _ = runRunCorralStepWithStub(t, runStep, tmp, "true", dump(tmp), in+"=", envName+"=runner-own")
+		b, _ = os.ReadFile(filepath.Join(tmp, "env.log"))
+		if err != nil || !strings.Contains(string(b), envName+"=runner-own\n") {
+			t.Errorf("%s empty: the runner's own %s must survive untouched (err %v)\n%s", input, envName, err, out)
+		}
 	}
 }

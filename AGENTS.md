@@ -208,8 +208,13 @@ so an audit never sees the operator's own CLAUDE.md or memory. They are
 report tokens, and a `text` seat (antigravity, or any definition that
 declares no wire) prints `not metered` and is refused under `--max-tokens`,
 because a cap that cannot see a seat is not a cap. And an environment failure
-(a missing binary, a subscription limit hit) is a seat-environment
-failure, never charged to the model. (This paragraph said `review` could run on
+is a seat-environment failure, never charged to the model: a missing binary
+(refused by `ForSeat` before anything runs), claude's `is_error` /
+`terminal_reason`, codex's `error` / `turn.failed`. A subscription limit has
+not yet been observed on either CLI, and a `text` wire cannot tell a limit
+notice from a reply (`docs/corral/agent-seats.md`). The agent CLI inherits
+corral's environment, so an exported vendor API key may bill instead of the
+subscription; and `codex`'s read-only sandbox still lets it read the host. (This paragraph said `review` could run on
 a subscription and `certify` could not, and pointed at
 `cmd/corral/review_agent.go`, which no longer exists. The brain's Pro/Max line in
 `docs/corral/brain.md` is a separate thing: that is the frozen brain's harness.)

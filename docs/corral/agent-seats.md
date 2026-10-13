@@ -16,7 +16,13 @@ A seat is `<agent>` (the CLI picks its own model) or `<agent>:<model>` (you pin
 one). An unpinned seat is recorded as the tool and its version, with the model
 marked unresolved, because corral was not told which model the CLI ran. For
 the decorrelation rule (critic is not the writer) an unpinned agent counts as
-the agent itself.
+the agent itself. Agent names are case-insensitive, and certify and review
+compare seats the same way, ignoring case. A pin that starts with `-` is
+refused, because it would reach the CLI as a flag.
+
+Every verb checks that the seat's CLI is installed when it resolves the seat,
+so a missing binary is refused before any jail, store or model call, naming
+the seat and the binary.
 
 ## What was measured
 
@@ -70,9 +76,52 @@ by the cap is excluded as `derive-budget-exhausted`.
 
 ## Failures are not the model's
 
-A seat that fails because of its environment (the binary is missing, the CLI
-reports an error) is classified as a seat-environment failure and is never
-charged to the model. A subscription limit hit is classified the same way.
+A seat that fails because of its environment is classified as a
+seat-environment failure and is never charged to the model. What is
+classified, by construction:
+
+- **The binary is missing.** Refused when the seat is resolved, before
+  anything runs.
+- **`claude-code` (wire `claude-json`)** reports `is_error`, or a
+  `terminal_reason` other than `completed`.
+- **`codex` (wire `codex-jsonl`)** emits an `error` or `turn.failed` event.
+
+The error records that were captured and tested were bad-model errors (a model
+the account cannot use). A **subscription limit** has **not yet been
+observed** on either CLI. If one arrives through those same fields, it is
+classified the same way, but no captured limit notice shows that it does.
+
+A seat on the **`text` wire** (antigravity, or any definition that declares no
+wire) cannot make this distinction at all. It has no error field, so a limit
+notice printed on stdout is indistinguishable from a reply and is handed on
+as one. A CLI that exits non-zero still fails the call as a seat error.
+
+## What a seat can reach
+
+corral confines a seat only as far as its CLI lets it:
+
+- **`claude-code`** is given no tools in certify, and only `Read`, `Grep` and
+  `Glob` in review.
+- **`codex`** has no tool switch. `--sandbox read-only` is its only
+  confinement, in every verb. That stops writes, not reads, so its shell can
+  still **read the host filesystem** outside its working directory.
+- **`antigravity`** in review runs with `--dangerously-skip-permissions`,
+  because headless `agy` denies every tool it cannot prompt for and a review
+  seat must read the tree. In certify it is granted no tools, so it runs
+  without the flag and relies on that denial. This certify behaviour has not
+  been run.
+
+A certify prompt carries the **audited source**, and source can carry text
+aimed at a model. A seat that can read the host could be steered by it. Audit
+code you are willing to show a coding agent running as you.
+
+**The CLI inherits corral's whole environment.** It needs `PATH`, `HOME` and
+its own token variables, so corral does not strip anything. That means a
+vendor API key you exported for corral's API seats (`ANTHROPIC_API_KEY`,
+`OPENAI_API_KEY`, ...) reaches the agent CLI too. A CLI that prefers an API
+key over its subscription login will **bill that key** instead of the
+subscription. Unset the key for an agent-only run if you want the
+subscription to pay.
 
 ## Concurrency
 
@@ -122,21 +171,32 @@ Redefining a built-in's command line without a wire also gives `text`. A
 
 Your definition wins over a built-in of the same name. corral does not confine
 what the command does: the definition is yours, and the record carries it,
-beside the CLI's `--version` when corral can run it. `corral doctor` checks the
+beside the CLI's `--version` when corral can run it.
+
+**Never put a credential in a `CORRALAI_AGENT_*` definition.** The definition
+is published verbatim, in the verdict's `SeatTools`, in the signed ledger
+entry and in review's `ReviewerTool`. Reference an environment variable the
+CLI reads instead (for example `CLAUDE_CODE_OAUTH_TOKEN`), and set it outside
+the definition. `corral doctor` checks the
 binary is installed without making a call, and reports
 `binary ok (<version>), definition ok, login not verified (no call is spent)`.
 For a shell-wrapped definition (such as `sh -c`) it reports
-`binary not checked (shell-wrapped definition)`.
+`binary not checked (shell-wrapped definition)`. Every other verb runs the same
+check when it resolves the seat: a missing binary is refused, and a
+shell-wrapped definition proceeds unchecked.
 
 An Ollama tag that starts with an agent's name, such as `codex:latest`, reads as
 that agent pinned to the model `latest`; rename the model or undefine the agent.
 
 ## In analysis
 
-`corral models rank` and the bug-catching scorecard leave out an unpinned agent
-seat, review included: a row that names no model is not evidence about a model.
-Before this change they counted such rows.
+`corral models rank`, the bug-catching scorecard and the public warehouse's
+`bug_catches` extract leave out an unpinned agent seat, review included: a row
+that names no model is not evidence about a model. Before this change they
+counted such rows.
 
-On a GitHub-hosted runner, the Action's `review` step refuses `claude-code` and
-`codex` seats by name because a runner has no subscription login; see
-[github-action.md](github-action.md).
+The Action keeps no list of seat names. An agent seat on a runner needs its
+CLI installed and a login, which the `claude-code-oauth-token` and
+`codex-api-key` inputs pass through; see [github-action.md](github-action.md).
+(This section used to say the Action refuses `claude-code` and `codex` by
+name. It no longer does.)

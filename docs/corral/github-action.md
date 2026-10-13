@@ -496,6 +496,8 @@ and the fix belongs in the code, not a caveat in these docs.
 | `anthropic-key` | no | `""` | Anthropic API key, supplied to the run as `ANTHROPIC_API_KEY`. |
 | `gemini-key` | no | `""` | Gemini API key, supplied as `GEMINI_API_KEY`. |
 | `openai-key` | no | `""` | OpenAI (or OpenAI-compatible) key, supplied as `OPENAI_API_KEY`. |
+| `claude-code-oauth-token` | no | `""` | Login for a `claude-code` agent seat, supplied as `CLAUDE_CODE_OAUTH_TOKEN` (create one with `claude setup-token`). The `claude` CLI must be installed on the runner. |
+| `codex-api-key` | no | `""` | API key for a `codex` agent seat, supplied as `CODEX_API_KEY`. The `codex` CLI must be installed on the runner. An API key bills per token, unlike a subscription login. |
 | `model-key` | no | `""` | Generic escape hatch for a credential the three named inputs do not cover (e.g. `GOOGLE_API_KEY`, or a gateway reading its own variable). Prefer the named inputs. |
 | `model-key-env` | no | `""` | Which environment variable `model-key` becomes. Must be a plain environment variable name. **Required when `model-key` is set** — it no longer defaults to `ANTHROPIC_API_KEY`, because corral has no default models and guessing a vendor here puts the key in the wrong variable. Naming a variable a named input already fills, with a *different* value, is refused. |
 
@@ -508,7 +510,7 @@ echoes a key value, and an unset key is never exported as an empty variable
 | `mutant-model` | **yes** | `""` | Model for the mutant-generator role. |
 | `critic-model` | no | `""` | Model for the test-critic role, which must **differ** from the writer's. `off` disables it entirely — it is advisory and never gates the verdict, so a single-vendor run with only one usable model can drop it. No default. |
 | `shadow-model` | no | `""` (OFF) | Challenger model that attacks every region a second time. Recorded for comparison, never gates the verdict. Off unless named. The CLI also takes `--shadow-pool`, a comma-separated pool drawn from per run; the action does not expose it as an input. |
-| `reviewer-model` | no | `""` (off) | Also run `corral review` on the change with this model in the reviewer seat — see "The review, on a pull request" below. An API model name; the agentic seats (`claude-code`, `codex`) are refused on a runner. |
+| `reviewer-model` | no | `""` (off) | Also run `corral review` on the change with this model in the reviewer seat — see "The review, on a pull request" below. An API model name, or an agent seat (see "Seats on a runner" below). |
 | `verifier-model` | no | `""` (off) | With `reviewer-model`, a third model (never the reviewer's) that tries to refute every finding by the same rules. |
 | `review-scope` | no | `""` (the change itself) | What the reviewer is handed. Empty: the top-level directory of every file changed against `diff-base`, one review per directory. |
 | `review-max-scopes` | no | `"5"` | How many changed directories to review before refusing and asking for an explicit `review-scope`. |
@@ -914,11 +916,22 @@ verdict you only keep when it flatters you is not evidence. `never` records
 and reports and lets the step pass. The audit's own status wins when the
 audit failed.
 
-**Seats on a runner.** The agentic seats (`claude-code`, `codex`) are coding
-CLIs with their own subscription login, which a hosted runner does not have;
-the step refuses them by name. CI review uses API seats — a provider model
-reached through the `*-key` inputs — and the decorrelation rule still holds:
-the verifier must be a different model from the reviewer.
+**Seats on a runner.** A seat may be an API model (its key through the
+`*-key` inputs) or an agent seat (`claude-code`, `codex`, `antigravity`, or
+one you define as `CORRALAI_AGENT_<NAME>` in the job's `env`; see
+[agent-seats.md](agent-seats.md)). An agent seat needs its CLI installed on
+the runner and a login. A GitHub-hosted runner has neither by default:
+install the CLI in an earlier step, and pass a login through
+`claude-code-oauth-token` or `codex-api-key`. The step keeps no list of seat
+names. corral refuses a seat whose CLI is not on `PATH` before it spends
+anything. Which later failures corral can tell apart from a model's answer is
+in agent-seats.md, "Failures are not the model's". The decorrelation rule
+still holds: the verifier must be a different model from
+the reviewer.
+
+(This paragraph used to say the step refuses `claude-code` and `codex` by
+name. That list missed `antigravity` and every operator-defined agent, and
+refused self-hosted runners that do have the CLI, so it was removed.)
 
 ## Exit codes
 

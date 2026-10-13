@@ -5,7 +5,7 @@
 // Every database, key and directory corral keeps is a row in the table
 // below. A caller asks Path(row); it never joins a home directory itself.
 // Before this package, 34 call sites each built their own default under
-// another tool's directory (~/.claude) — see
+// another tool's dot-directory under $HOME — see
 // docs/superpowers/specs/2026-10-12-state-dir-design.md for why that was
 // wrong and why the roots are what they are.
 //
@@ -184,6 +184,3 @@ func Path(f File) (string, error) {
 	}
 	return p, nil
 }
-
-// refuseLegacyOnly is a temporary stub until legacy.go lands; Task 2 deletes it.
-func refuseLegacyOnly(File, string) error { return nil }

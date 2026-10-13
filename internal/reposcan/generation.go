@@ -139,7 +139,15 @@ package reposcan
 // for the serialized shape all the same: a cached "17" document unmarshals
 // the field as 0, which would read an unmetered seat's calls as free. (The
 // feat/rust-part2 branch also claims "18"; whichever merges second re-bumps.)
-const VerdictGeneration = "18"
+// "19" (2026-10-13): the Verdict gained SeatTools — each agent seat's CLI and
+// version beside the plain spec in ModelsByRole, mirroring review's
+// ReviewerTool — and the bug-catching rows a converged verdict feeds now mark
+// an unpinned agent seat so per-model analysis leaves it out. A shape change,
+// so shape and generation move together: a cached "18" verdict would
+// unmarshal SeatTools as nil and read an agent seat as an API one. (The cache
+// key ALSO names an agent seat's tool now — seatKeyName — so a CLI upgrade
+// re-measures; that alone invalidates nothing for API-only runs.)
+const VerdictGeneration = "19"
 
 // VerdictShapeSHA256 fingerprints advpool.Verdict's serialized shape: every
 // exported field's name, type and json tag, sorted by name and hashed.
@@ -161,4 +169,4 @@ const VerdictGeneration = "18"
 // Verdict's own FIELDS") and nothing wider. Nor can any fingerprint catch the
 // behaviour half: a scorer that computes a DIFFERENT number into the SAME
 // field is invisible here, and remains a review responsibility.
-const VerdictShapeSHA256 = "4c5dca3b35dff82b06f02ef90f15a8bd382246d9e66bba111f707d03c564bc24"
+const VerdictShapeSHA256 = "06022c5c445ffa4a8fddc34e7d43e9d515e6939b3e0ce53a08d1bad07c752a37"

@@ -168,12 +168,13 @@ func runReviewRun(args []string, stdout, stderr io.Writer) int {
 	defer seatCleanup()
 	agentTimeout := 30 * time.Minute
 	seat := func(spec string) (agentbackend.Backend, string, error) {
-		if name, _, isAgent := agentbackend.AgentSeat(spec); isAgent {
+		if _, _, isAgent := agentbackend.AgentSeat(spec); isAgent {
 			b, err := agentbackend.ForSeat(spec, agentbackend.SeatOptions{Dir: seatTree, Timeout: agentTimeout, Tools: reviewSeatTools})
 			if err != nil {
 				return nil, "", err
 			}
-			return b, agentbackend.AgentVersion(name), nil
+			// The same helper certify's Verdict.SeatTools is built with.
+			return b, agentbackend.SeatTool(spec), nil
 		}
 		b, err := newReviewerBackend(spec, "")
 		return b, "", err

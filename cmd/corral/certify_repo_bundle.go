@@ -49,7 +49,9 @@ type bundleMeta struct {
 	RunURL string
 	// ModelsByRole is the roster as JSON, so a new role does not need a
 	// migration.
-	ModelsByRole    string
+	ModelsByRole string
+	// SeatTools is the roster's agent tools as JSON, beside ModelsByRole.
+	SeatTools       string
 	MinKillRate     *float64
 	MaxProvenMissed *int
 	Passed          *bool // nil when the outcome is not recoverable (scans push)
@@ -164,6 +166,7 @@ func buildAuditRows(files []scanstore.File, scanID int64, meta bundleMeta) []aud
 			// adding a phantom. Revisit when there is a producer.
 			MutantsPlanted: f.MutantsGraded + f.MutantsInvalid,
 			ModelsByRole:   meta.ModelsByRole,
+			SeatTools:      meta.SeatTools,
 			MinKillRate:    meta.MinKillRate, MaxProvenMissed: meta.MaxProvenMissed,
 			Passed:    meta.Passed,
 			StartedAt: meta.StartedAt,

@@ -647,6 +647,10 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// invocation that costs nothing.
 	ledgerDir := ""
 	var ex *localExecutor
+	// ONE token budget for the whole scan — every file's grading seats AND
+	// the goal deriver draw on it, so --max-tokens bounds every seat the way
+	// its help says. Built before anything can spend; nil with no cap.
+	scanBudget := agentbackend.NewTokenBudget(*maxTokensFlag)
 	if !*dryRun {
 		// Each job runs the whole tree in a jail and grades it with the
 		// project's own test command. Given after `--`; absent, the language
@@ -731,13 +735,26 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 			// unmetered agent) is refused before any goal is derived — the
 			// per-file resolution below would only find it after the scan
 			// had started spending.
-			tokenBudget: agentbackend.NewTokenBudget(*maxTokensFlag),
+			tokenBudget: scanBudget,
 		}, stderr); err != nil {
 			fmt.Fprintf(stderr, "corral certify --repo: %v\n", err)
 			if isAuditUsageError(err) {
 				return 2
 			}
 			return 1
+		}
+		// The derive seat is under the same cap, so the same refusal: a
+		// derive seat the cap cannot see is refused before it derives.
+		// Only when it will be asked at all (--goals skips it).
+		if strings.TrimSpace(*goalsPath) == "" && strings.TrimSpace(*deriveModel) != "" && isAgentSeat(*deriveModel) {
+			db, err := agentbackend.ForSeat(*deriveModel, agentbackend.SeatOptions{})
+			if err == nil {
+				err = capCanSee(scanBudget, roleGoalDeriver, *deriveModel, db)
+			}
+			if err != nil {
+				fmt.Fprintf(stderr, "corral certify --repo: %v\n", err)
+				return 2
+			}
 		}
 	}
 
@@ -767,6 +784,8 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	keepDeriver := func(model, endpoint string) (reposcan.Deriver, error) {
 		d, err := certifyRepoDeriver(model, endpoint)
 		if err == nil && d != nil {
+			// The deriver draws on the scan's one budget, like every seat.
+			d = withDeriveBudget(d, scanBudget)
 			scanDerivers = append(scanDerivers, d)
 		}
 		return d, err
@@ -1074,7 +1093,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	localEndpoints = mergeLocalEndpoints(localEndpoints, seatReg.localEndpoints())
 	if ex != nil {
 		ex.localEndpoints = localEndpoints
-		ex.tokenBudget = agentbackend.NewTokenBudget(*maxTokensFlag)
+		ex.tokenBudget = scanBudget
 	}
 
 	cfg := reposcan.EmitConfig{
@@ -1474,10 +1493,18 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// with an empty target).
 	bundleRepo, bundleCommit, subjErr := auditSubject(*repoDir, rep)
 	rosterJSON, _ := json.Marshal(models())
+	// The roster's agent tools beside it, from the helper the verdict's
+	// SeatTools and review's record use; "" when no seat is an agent.
+	seatToolsJSON := ""
+	if tools := seatToolsFor(models()); tools != nil {
+		b, _ := json.Marshal(tools)
+		seatToolsJSON = string(b)
+	}
 	bundle := buildBundle(scan, scanID, files, mutants, modelCallRows, eventRows,
 		auditpush.Link{}, pushSource, bundleRepo, bundleCommit, githubRunURL(),
 		bundleMeta{
 			ModelsByRole: string(rosterJSON),
+			SeatTools:    seatToolsJSON,
 			MinKillRate:  minKillRate, MaxProvenMissed: maxProvenMissed,
 			Passed:   boolPtr(exitCode == 0),
 			PushedBy: auditpush.PushedByCertify,

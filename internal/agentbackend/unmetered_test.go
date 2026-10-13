@@ -5,6 +5,7 @@ package agentbackend
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/pdbethke/corralai/internal/agentworker"
@@ -130,5 +131,40 @@ func TestMeteredIsTheWiresAnswer(t *testing.T) {
 	}
 	if !Metered(&openaiBackend{base: "http://x", model: "m"}) {
 		t.Error("an API backend reported unmetered")
+	}
+}
+
+// SeatTool is the ONE helper both verbs call for the record: the agent's
+// version for an agent seat, "" for an API seat.
+func TestSeatToolNamesTheAgentAndNothingForAnAPISeat(t *testing.T) {
+	script := filepath.Join(t.TempDir(), "fake.sh")
+	writeExec(t, script, "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'fake-cli 1.2.3'; exit 0; fi\ncat\n")
+	t.Setenv("CORRALAI_AGENT_FAKE", script+" {model:--model}")
+	if got := SeatTool("fake:some-model"); got == "" || !strings.Contains(got, "fake-cli 1.2.3") {
+		t.Errorf("SeatTool(agent) = %q, want the agent's version", got)
+	}
+	if got := SeatTool("claude-sonnet-5"); got != "" {
+		t.Errorf("SeatTool(API model) = %q, want empty", got)
+	}
+}
+
+// The recorded rule needs no environment: the record's tool says an agent
+// sat, and only a pin names its model.
+func TestRecordedSeatNamesAModelIsEnvFree(t *testing.T) {
+	for _, c := range []struct {
+		spec, tool string
+		want       bool
+	}{
+		{"codex", "codex-cli 0.160.0", false},
+		{"codex:gpt-6-astra", "codex-cli 0.160.0", true},
+		{"my-agent", "my-agent 0.1 [my-agent run]", false},
+		{"gpt-6", "", true},
+		{"qwen2.5-coder:14b", "", true},
+		{"", "", false},
+		{"claude-code", "", false}, // an older record with no tool: a built-in name is still an agent
+	} {
+		if got := RecordedSeatNamesAModel(c.spec, c.tool); got != c.want {
+			t.Errorf("RecordedSeatNamesAModel(%q, %q) = %v, want %v", c.spec, c.tool, got, c.want)
+		}
 	}
 }

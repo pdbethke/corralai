@@ -109,6 +109,10 @@ type RunSpec struct {
 	// challenger was named by hand. It is disclosure only — the drawn model
 	// is already in ShadowModel / ShadowWriterModel, and nothing here may
 	// influence a verdict seat.
+	// SeatTools is each agent seat's tool and version
+	// (agentbackend.SeatTool), keyed by role; API seats are absent. Carried
+	// to Verdict.SeatTools by signedSeats on BOTH construction paths.
+	SeatTools       map[string]string
 	ShadowSelection []shadowpool.Selection
 
 	// WriterMode is HOW the writer seat attacks the survivors:

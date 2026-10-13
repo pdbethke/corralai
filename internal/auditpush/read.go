@@ -215,10 +215,14 @@ func readScanRow(db *sql.DB, where string, args ...any) (ScanRow, bool, error) {
 	var engineVersion, modelSet, preflightNote, entryHash sql.NullString
 	var author, committer, coAuthors sql.NullString
 	var top, totalFiles sql.NullInt64
+	// NULL header tokens: a scan none of whose calls was metered
+	// (ScanTokensUnmetered). They read back as the 0 the bundle carried; the
+	// per-role rows' unmetered_calls say what that 0 means.
+	var scanIn, scanOut sql.NullInt64
 	if err := row.Scan(
 		&s.Repo, &s.RunURL, &s.ScanID, &s.Commit, &s.CorralVersion, &s.Substrate,
 		&s.Host, &cores, &treesRequested, &s.DiffBase, &s.Candidates, &s.Audited, &scanPassed,
-		&totalMS, &s.InputTokens, &s.OutputTokens, &s.ModelCalls,
+		&totalMS, &scanIn, &scanOut, &s.ModelCalls,
 		&s.SourcePushed, &s.StatementSHA256, &selectionMS, &selectionReused,
 		&rekorLogIndex, &rekorUUID, &scanStarted, &pushedBy, &scanUID,
 		&engineVersion, &modelSet, &top, &allCandidates, &totalFiles,
@@ -230,6 +234,7 @@ func readScanRow(db *sql.DB, where string, args ...any) (ScanRow, bool, error) {
 		}
 		return ScanRow{}, false, err
 	}
+	s.InputTokens, s.OutputTokens = scanIn.Int64, scanOut.Int64
 	if scanPassed.Valid {
 		v := scanPassed.Bool
 		s.Passed = &v
@@ -286,7 +291,7 @@ func readFileRows(db *sql.DB, where string, args ...any) ([]Row, error) {
 		mutant_budget, mutant_budget_rule, complexity,
 		symbols, symbols_probed, decisions, decisions_probed,
 		challenger_mutants, challenger_survived_writer, challenger_survived_shadow, challenger_union, challenger_shared,
-		priors_applied, prior_digest, computed_at, mutants_from
+		priors_applied, prior_digest, computed_at, mutants_from, seat_tools
 	   FROM corral_audits WHERE `+where, args...) // #nosec G202 -- where is a constant clause from readGrains; every value is a bound parameter
 	if err != nil {
 		return nil, err
@@ -319,7 +324,7 @@ func readFileRows(db *sql.DB, where string, args ...any) ([]Row, error) {
 		var priorsApplied sql.NullInt64
 		var priorDigest sql.NullString
 		var coveringTests sql.NullInt64
-		var mutantsFrom sql.NullString
+		var mutantsFrom, seatTools sql.NullString
 		var computedAt sql.NullTime
 		var importOnly sql.NullBool
 		var rowPassed sql.NullBool
@@ -348,7 +353,7 @@ func readFileRows(db *sql.DB, where string, args ...any) ([]Row, error) {
 			&mutantBudget, &mutantBudgetRule, &complexity,
 			&symbols, &symbolsProbed, &decisions, &decisionsProbed,
 			&chMutants, &chSurvW, &chSurvS, &chUnion, &chShared,
-			&priorsApplied, &priorDigest, &computedAt, &mutantsFrom,
+			&priorsApplied, &priorDigest, &computedAt, &mutantsFrom, &seatTools,
 		); err != nil {
 			return nil, err
 		}
@@ -412,6 +417,7 @@ func readFileRows(db *sql.DB, where string, args ...any) ([]Row, error) {
 			r.ComputedAt = &t
 		}
 		r.MutantsFrom = mutantsFrom.String
+		r.SeatTools = seatTools.String
 
 		out = append(out, r)
 	}

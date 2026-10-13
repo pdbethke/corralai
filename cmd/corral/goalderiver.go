@@ -66,6 +66,22 @@ type llmDeriver struct {
 	b     agentbackend.Backend
 	model string
 	usage *deriveUsage
+	// budget is the run's --max-tokens cap, the SAME TokenBudget every
+	// grading seat's meteredChatter consults: consulted before each call,
+	// charged after it. nil = no cap. The deriver is a seat, and the flag
+	// promises "every seat"; it used to be the one seat the cap never saw.
+	budget *agentbackend.TokenBudget
+}
+
+// withDeriveBudget puts a deriver under the run's token cap. A deriver that
+// is not an llmDeriver (a test double, a file source) is returned as is —
+// it makes no model call for a cap to bound.
+func withDeriveBudget(d reposcan.Deriver, budget *agentbackend.TokenBudget) reposcan.Deriver {
+	if ld, ok := d.(llmDeriver); ok {
+		ld.budget = budget
+		return ld
+	}
+	return d
 }
 
 // usageReporter is implemented by a deriver that records its spend; a test
@@ -199,11 +215,18 @@ const goalDeriverUserTemplate = "File: %s\nLanguage: %s\n\n%s"
 
 func (d llmDeriver) Derive(ctx context.Context, c reposcan.Candidate, source string) (string, bool, error) {
 	user := fmt.Sprintf(goalDeriverUserTemplate, c.Path, c.Lang, source)
+	// The cap, exactly as meteredChatter applies it to the grading seats:
+	// checked BEFORE the provider is dialled, so a refused call costs
+	// nothing, and charged after with whatever the reply reported.
+	if !d.budget.Allow() {
+		return "", false, agentbackend.ErrTokenBudgetExhausted
+	}
 	start := time.Now()
 	reply, err := d.b.Chat([]agentbackend.Message{
 		{Role: "system", Content: goalDeriverSystem},
 		{Role: "user", Content: user},
 	}, nil)
+	d.budget.Charge(reply.Usage)
 	if err != nil {
 		// Transport/provider failure — the caller turns this into
 		// derive-failed, never ungoaled.

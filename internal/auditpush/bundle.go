@@ -291,6 +291,30 @@ func TokensUnmetered(calls, unmeteredCalls int) bool {
 	return calls > 0 && unmeteredCalls >= calls
 }
 
+// ScanTokensUnmetered reports whether a scan's header token totals measure
+// NOTHING: the scan made calls and every one of them was unmetered. It is
+// TokensUnmetered over the bundle's own per-role rows — the rows the header's
+// totals were summed from — so the header and the grain cannot disagree, and
+// a mixed scan (some calls metered) keeps its metered sum; its unmetered
+// count is readable on those rows (corral_model_calls.unmetered_calls).
+func ScanTokensUnmetered(b Bundle) bool {
+	calls, unmetered := 0, 0
+	for _, c := range b.Calls {
+		calls += c.Calls
+		unmetered += c.UnmeteredCalls
+	}
+	return TokensUnmetered(calls, unmetered)
+}
+
+// scanTokens is a header token column as written: NULL when nothing in the
+// scan was metered (ScanTokensUnmetered), the sum otherwise.
+func scanTokens(b Bundle, n int64) any {
+	if ScanTokensUnmetered(b) {
+		return nil
+	}
+	return n
+}
+
 // meteredTokens is a token column's value as written: NULL when the row's
 // calls were all unmetered, the count otherwise.
 func meteredTokens(mc ModelCallRow, n int64) any {
@@ -502,7 +526,8 @@ CREATE TABLE IF NOT EXISTS corral_audits (
   priors_applied              INTEGER,
   prior_digest                VARCHAR,
   computed_at                 TIMESTAMPTZ,
-  mutants_from                VARCHAR
+  mutants_from                VARCHAR,
+  seat_tools                  VARCHAR
 );`
 
 // The mutant grain's outcome CHECK is the same discipline scan_files'
@@ -680,6 +705,9 @@ var corralAuditsMigrationCols = []struct{ name, ddl string }{
 	// ledger entry became the only record (the local DuckDB write retired).
 	{"computed_at", "computed_at TIMESTAMPTZ"},
 	{"mutants_from", "mutants_from VARCHAR"},
+	// The roster's agent tools beside models_by_role (Row.SeatTools). NULL
+	// on every row before it: those rosters held API seats only.
+	{"seat_tools", "seat_tools VARCHAR"},
 }
 
 // The other four tables are NEW at schema_version 2, so nothing predates
@@ -1286,7 +1314,7 @@ func insertBundle(db *sql.DB, b Bundle, now time.Time, uid string) (Counts, erro
 			b.Scan.CorralVersion, b.Scan.Substrate, b.Scan.Host, b.Scan.Cores,
 			nullIfZeroInt(b.Scan.TreesRequested), b.Scan.DiffBase,
 			b.Scan.Candidates, b.Scan.Audited, nullBool(b.Scan.Passed),
-			b.Scan.TotalMillis, b.Scan.InputTokens, b.Scan.OutputTokens, b.Scan.ModelCalls,
+			b.Scan.TotalMillis, scanTokens(b, b.Scan.InputTokens), scanTokens(b, b.Scan.OutputTokens), b.Scan.ModelCalls,
 			b.Scan.SourcePushed, b.Scan.StatementSHA256, b.Scan.SelectionMillis, b.Scan.SelectionReused,
 			b.Scan.RekorLogIndex, nullIfEmpty(b.Scan.RekorUUID), SchemaVersion, nullTime(b.Scan.StartedAt),
 			nullIfEmpty(b.Scan.PushedBy),
@@ -1425,8 +1453,8 @@ func insertFileRow(tx *sql.Tx, uid string, now time.Time, r Row) error {
 	    mutant_budget, mutant_budget_rule, complexity,
 	    symbols, symbols_probed, decisions, decisions_probed,
 	    challenger_mutants, challenger_survived_writer, challenger_survived_shadow, challenger_union, challenger_shared,
-	    priors_applied, prior_digest, computed_at, mutants_from
-	  ) VALUES (`+placeholders(94)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
+	    priors_applied, prior_digest, computed_at, mutants_from, seat_tools
+	  ) VALUES (`+placeholders(95)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
 		uid, now, r.Repo, r.Commit, r.Path, r.Lang,
 		killRate, r.Survivors, r.ProvenMissed,
 		r.TimedOut, r.TestWriterFailed, r.PoolTestUnsound,
@@ -1457,6 +1485,7 @@ func insertFileRow(tx *sql.Tx, uid string, now time.Time, r Row) error {
 		r.Symbols, r.SymbolsProbed, r.Decisions, r.DecisionsProbed,
 		r.ChallengerMutants, r.ChallengerSurvivedWriter, r.ChallengerSurvivedShadow, r.ChallengerUnion, r.ChallengerShared,
 		r.PriorsApplied, nullIfEmpty(r.PriorDigest), nullTime(r.ComputedAt), nullIfEmpty(r.MutantsFrom),
+		nullIfEmpty(r.SeatTools),
 	)
 	if err != nil {
 		return fmt.Errorf("auditpush: insert %s: %w", r.Path, err)

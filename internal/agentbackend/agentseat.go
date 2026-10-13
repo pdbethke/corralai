@@ -202,6 +202,45 @@ func SeatNamesAModel(spec string) bool {
 	return strings.TrimSpace(spec) != ""
 }
 
+// SeatTool is what sat in a seat besides its model, for the record: the
+// agent's version (AgentVersion) for an agent seat, "" for an API seat. It
+// is the ONE helper both verbs call — review's ReviewerTool/VerifierTool and
+// certify's Verdict.SeatTools — so the two records cannot describe the same
+// seat two ways.
+func SeatTool(spec string) string {
+	name, _, ok := AgentSeat(spec)
+	if !ok {
+		return ""
+	}
+	return AgentVersion(name)
+}
+
+// RecordedSeatNamesAModel is SeatNamesAModel for a seat that was RECORDED:
+// it reads the record — the spec and the tool beside it — and never the
+// environment, so a historical row means what it meant when it was written
+// (the same reason RecordedVendorOf exists). A recorded tool says an agent
+// sat, and an agent seat names a model only when pinned (`agent:model`). A
+// record with no tool is an API seat, unless its first word is a built-in
+// agent (an entry from before the tool was recorded).
+//
+// This is the one rule every per-model analysis applies — `corral models
+// rank` and the bug-catching scorecard, for certify's seats and review's
+// alike: a row whose seat names no model is not evidence about a model.
+func RecordedSeatNamesAModel(spec, tool string) bool {
+	spec = strings.TrimSpace(spec)
+	if spec == "" {
+		return false
+	}
+	name, model, _ := strings.Cut(spec, ":")
+	if strings.TrimSpace(tool) != "" {
+		return strings.TrimSpace(model) != ""
+	}
+	if _, builtin := builtinAgents[name]; builtin {
+		return strings.TrimSpace(model) != ""
+	}
+	return true
+}
+
 // agentBackend runs the agent's command once per Chat.
 type agentBackend struct {
 	name, model, dir string

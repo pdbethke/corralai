@@ -109,6 +109,7 @@ func (s advpoolBugCatchSink) Record(recordID int64, recordHead string, obs []adv
 			Shard: o.Shard, Region: o.Region, RegionComplexity: o.RegionComplexity, RegionLines: o.RegionLines,
 			TestComplexity: o.TestComplexity, ParseRetries: o.ParseRetries, Dropped: o.Dropped, Shadow: o.Shadow,
 			Lang: o.Lang, ShadowDrawn: o.ShadowDrawn,
+			SeatTool: o.SeatTool, ModelUnresolved: o.ModelUnresolved,
 		})
 	}
 	if err := s.store.Record(context.Background(), rows); err != nil {

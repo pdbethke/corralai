@@ -5,6 +5,8 @@ package advpool
 import (
 	"sort"
 
+	"github.com/pdbethke/corralai/internal/agentbackend"
+
 	"github.com/pdbethke/corralai/internal/shadowpool"
 )
 
@@ -197,6 +199,15 @@ func bugCatchObservations(run *runState, v Verdict) []BugCatchObservation {
 	}
 	for i := range out {
 		out[i].Lang = run.rs.Lang
+		// The one recorded rule, stamped where the row is made: a seat
+		// whose spec names no model (an unpinned agent) is not evidence
+		// about a model, and the scorecard and models rank leave it out.
+		tool := v.SeatTools[out[i].Role]
+		if tool == "" {
+			tool = run.rs.SeatTools[out[i].Role]
+		}
+		out[i].SeatTool = tool
+		out[i].ModelUnresolved = !agentbackend.RecordedSeatNamesAModel(out[i].Model, tool)
 		if out[i].Shadow {
 			_, out[i].ShadowDrawn = shadowpool.Drawn(run.rs.ShadowSelection, out[i].Role)
 		}

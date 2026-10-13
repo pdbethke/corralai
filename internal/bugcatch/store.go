@@ -33,7 +33,18 @@ var bugcatchObservationsMigrationCols = []struct{ name, ddl string }{
 	{"shadow", "shadow BOOLEAN"},
 	{"lang", "lang VARCHAR"},
 	{"shadow_drawn", "shadow_drawn BOOLEAN"},
+	// The seat's agent tool, and whether its spec names no model (an
+	// unpinned agent seat). NULL on every row written before them — API
+	// seats, which name their model — so a legacy row reads as resolved.
+	{"seat_tool", "seat_tool VARCHAR"},
+	{"model_unresolved", "model_unresolved BOOLEAN"},
 }
+
+// resolvedOnly is the one filter every per-model reader of this table
+// applies: a row whose seat named a TOOL rather than a model
+// (advpool.BugCatchObservation.ModelUnresolved) is not evidence about a
+// model. One string, so the scorecard and the shadow draw cannot disagree.
+const resolvedOnly = "NOT COALESCE(model_unresolved, false)"
 
 type Store struct{ db *sql.DB }
 
@@ -76,6 +87,12 @@ type Observation struct {
 	// ShadowDrawn marks a shadow row whose model was DRAWN from a pool
 	// (docs/design/shadow-seat-selection.md) rather than named by hand.
 	ShadowDrawn bool
+	// SeatTool is the seat's agent tool and version, "" for an API seat.
+	SeatTool string
+	// ModelUnresolved: Model names the tool that ran, not a model (an
+	// unpinned agent seat). Per-model readers leave such a row out; see
+	// resolvedOnly.
+	ModelUnresolved bool
 }
 
 type Cell struct {
@@ -178,14 +195,15 @@ func (s *Store) Record(ctx context.Context, obs []Observation) error {
 			critic_flags, mutants_planted, mutants_survived,
 			shard, region, region_complexity, region_lines,
 			test_complexity, parse_retries, dropped, shadow,
-			lang, shadow_drawn
-		) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			lang, shadow_drawn, seat_tool, model_unresolved
+		) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 			o.TS, o.RecordID, o.RecordHead, o.MissionID, o.Repo, o.Commit, model, o.Role, o.Source,
 			o.Catches, o.Opportunities, o.SoundTests, o.AuthoredTests,
 			o.CriticFlags, o.MutantsPlanted, o.MutantsSurvived,
 			o.Shard, o.Region, o.RegionComplexity, o.RegionLines,
 			o.TestComplexity, o.ParseRetries, o.Dropped, o.Shadow,
-			sql.NullString{String: o.Lang, Valid: o.Lang != ""}, o.ShadowDrawn); err != nil {
+			sql.NullString{String: o.Lang, Valid: o.Lang != ""}, o.ShadowDrawn,
+			sql.NullString{String: o.SeatTool, Valid: o.SeatTool != ""}, o.ModelUnresolved); err != nil {
 			return fmt.Errorf("bugcatch: insert: %w", err)
 		}
 	}
@@ -200,7 +218,8 @@ const observationCols = `ts, record_id, record_head, mission_id, repo, commit, m
 		critic_flags, mutants_planted, mutants_survived,
 		COALESCE(shard, 0), COALESCE(region, ''), COALESCE(region_complexity, 0), COALESCE(region_lines, 0),
 		COALESCE(test_complexity, 0), COALESCE(parse_retries, 0), COALESCE(dropped, false), COALESCE(shadow, false),
-		COALESCE(lang, ''), COALESCE(shadow_drawn, false)`
+		COALESCE(lang, ''), COALESCE(shadow_drawn, false),
+		COALESCE(seat_tool, ''), COALESCE(model_unresolved, false)`
 
 func scanObservation(rows *sql.Rows) (Observation, error) {
 	var o Observation
@@ -209,7 +228,7 @@ func scanObservation(rows *sql.Rows) (Observation, error) {
 		&o.CriticFlags, &o.MutantsPlanted, &o.MutantsSurvived,
 		&o.Shard, &o.Region, &o.RegionComplexity, &o.RegionLines,
 		&o.TestComplexity, &o.ParseRetries, &o.Dropped, &o.Shadow,
-		&o.Lang, &o.ShadowDrawn)
+		&o.Lang, &o.ShadowDrawn, &o.SeatTool, &o.ModelUnresolved)
 	return o, err
 }
 
@@ -289,6 +308,7 @@ func (s *Store) Scorecard(ctx context.Context) ([]Cell, error) {
 		CASE WHEN SUM(authored_tests) > 0 THEN SUM(sound_tests)*1.0/SUM(authored_tests) END,
 		SUM(critic_flags), SUM(mutants_planted), SUM(mutants_survived), COUNT(DISTINCT record_id)
 		FROM bugcatch_observations
+		WHERE `+resolvedOnly+`
 		GROUP BY model, role
 		ORDER BY SUM(catches) DESC, model, role`)
 	if err != nil {
@@ -338,7 +358,7 @@ func (s *Store) Evidence(ctx context.Context, roles []string, lang string) (map[
 	q := `SELECT model, COUNT(*), SUM(catches), SUM(opportunities), SUM(mutants_survived), SUM(mutants_planted)
 		FROM bugcatch_observations
 		WHERE role IN (?` + strings.Repeat(",?", len(roles)-1) + `) AND ` + langCond + `
-		AND NOT COALESCE(dropped, false)
+		AND NOT COALESCE(dropped, false) AND ` + resolvedOnly + `
 		GROUP BY model`
 	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {

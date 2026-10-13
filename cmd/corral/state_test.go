@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/pdbethke/corralai/internal/statedir"
 )
 
 func TestStateMigratePrintsTheSamePublicKeyBeforeAndAfter(t *testing.T) {
@@ -133,5 +135,22 @@ func TestStateMigrateConflictExitsOneAndTouchesNothing(t *testing.T) {
 	}
 	if snap() != before {
 		t.Fatal("a conflicted migrate changed the tree")
+	}
+}
+
+func TestCompareKeysRequiresEveryMovedKeyToSurvive(t *testing.T) {
+	moved := []statedir.Move{{File: statedir.CertifyKey, To: "/new/key"}, {File: statedir.CoordDB}}
+	if err := compareKeys(moved, map[string]string{"corralai_certify_key": "aa"}, map[string]string{"corralai_certify_key": "aa"}); err != nil {
+		t.Errorf("identical keys: %v", err)
+	}
+	err := compareKeys(moved, map[string]string{"corralai_certify_key": "aa"}, map[string]string{})
+	if err == nil || !strings.Contains(err.Error(), "corralai_certify_key") {
+		t.Errorf("a moved key unreadable at its destination must fail, got %v", err)
+	}
+	if compareKeys(moved, map[string]string{"corralai_certify_key": "aa"}, map[string]string{"corralai_certify_key": "bb"}) == nil {
+		t.Error("a changed key must fail")
+	}
+	if err := compareKeys(nil, map[string]string{"corralai_certify_key": "aa"}, nil); err != nil {
+		t.Errorf("a key row that never moved is not compared: %v", err)
 	}
 }

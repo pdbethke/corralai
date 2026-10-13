@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/pdbethke/corralai/internal/attest"
 	"github.com/pdbethke/corralai/internal/buildstore"
@@ -123,20 +124,17 @@ func runStateMigrate(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 	after := printKeys(done, false, stdout, stderr)
-	status := 0
-	for k, v := range before {
-		if got, ok := after[k]; ok && got != v {
-			fmt.Fprintf(stderr, "corral state migrate: %s's public key changed in the move (%s → %s)\n", k, v, got)
-			status = 1
-		}
+	cmpErr := compareKeys(done, before, after)
+	if cmpErr != nil {
+		fmt.Fprintln(stderr, "corral state migrate:", cmpErr)
 	}
 	if applyErr != nil {
 		fmt.Fprintln(stderr, "corral state migrate:", applyErr)
 		fmt.Fprintln(stderr, "corral state migrate: stopped partway — fix the cause and run it again; it resumes where it stopped")
 		return 1
 	}
-	if status != 0 {
-		return status
+	if cmpErr != nil {
+		return 1
 	}
 	fmt.Fprintln(stdout, "done. The certify public key above must equal LEDGER_PUBKEY for the ledger you sign.")
 	return 0
@@ -169,4 +167,28 @@ func printKeys(moves []statedir.Move, before bool, stdout, stderr io.Writer) map
 		fmt.Fprintf(stdout, "%s %s public key %s\n", when, m.File.Name, out[m.File.Name])
 	}
 	return out
+}
+
+// compareKeys requires every key row that moved to show the same public key
+// at its destination as it had at its source. A key that was readable before
+// and is missing or unparseable after is a lost key, not a skipped row.
+func compareKeys(done []statedir.Move, before, after map[string]string) error {
+	var bad []string
+	for _, m := range done {
+		want, ok := before[m.File.Name]
+		if !ok {
+			continue
+		}
+		got, ok := after[m.File.Name]
+		switch {
+		case !ok:
+			bad = append(bad, fmt.Sprintf("%s: public key could not be read at %s after the move (was %s)", m.File.Name, m.To, want))
+		case got != want:
+			bad = append(bad, fmt.Sprintf("%s: public key changed in the move (%s → %s)", m.File.Name, want, got))
+		}
+	}
+	if len(bad) == 0 {
+		return nil
+	}
+	return errors.New(strings.Join(bad, "; "))
 }

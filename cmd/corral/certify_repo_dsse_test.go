@@ -106,7 +106,7 @@ func TestLoadLocalCertifyKeyIfConfiguredRefusesWhenUnconfigured(t *testing.T) {
 	if _, err := loadLocalCertifyKeyIfConfigured(); err == nil {
 		t.Fatal("want an error when no signing key is configured, got nil")
 	}
-	if _, statErr := os.Stat(filepath.Join(os.Getenv("HOME"), ".claude", "corralai_certify_key")); statErr == nil {
+	if _, statErr := os.Stat(filepath.Join(os.Getenv("HOME"), ".local", "state", "corral", "corralai_certify_key")); statErr == nil {
 		t.Error("a key was silently created at the default path — this must never happen unconfigured")
 	}
 }

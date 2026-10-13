@@ -12,9 +12,9 @@ import (
 	"flag"
 	"fmt"
 	"github.com/pdbethke/corralai/internal/prior"
+	"github.com/pdbethke/corralai/internal/statedir"
 	"io"
 	"os"
-	"os/user"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -170,9 +170,17 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "corral certify --local: a shadow pool reads history for the audited file's language, and it cannot be detected — pass --lang (or --code)")
 		return 2
 	}
+	// The bug-catching scorecard store: a --local run's per-seat metrics
+	// (including the shadow head-to-head) persist next to the signed build
+	// ledger and feed the same `corral scorecard` surface the daemon's runs feed.
+	bugCatchDBPath, pathErr := statedir.Path(statedir.BugCatchDB)
+	if pathErr != nil {
+		fmt.Fprintln(stderr, "corral certify --local:", pathErr)
+		return 2
+	}
 	shadowSels, drawErr := drawShadowSeats("corral certify --local", *repoDirFlag, drawLang, shadow,
 		map[string]string{advpool.RoleMutantGenerator: *mutantModel, advpool.RoleTestWriter: *writerModel},
-		localBugCatchDBPath(), stderr)
+		bugCatchDBPath, stderr)
 	if drawErr != nil {
 		fmt.Fprintf(stderr, "corral certify --local: %v\n", drawErr)
 		return 2
@@ -265,11 +273,17 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 		}
 	}()
 	openStore := func() (*buildstore.Store, ed25519.PrivateKey, error) {
-		st, err := buildstore.Open(localBuildDBPath())
+		// The SAME signed build-record ledger `corral certify` writes to and
+		// `corral certify verify` reads from.
+		buildPath, err := statedir.Path(statedir.BuildDB)
+		if err != nil {
+			return nil, nil, err
+		}
+		st, err := buildstore.Open(buildPath)
 		if err != nil {
 			return nil, nil, fmt.Errorf("opening build ledger: %w", err)
 		}
-		k, err := buildstore.LoadOrCreateSigningKey(localCertifyKeyPath())
+		k, err := loadLocalCertifyKey()
 		if err != nil {
 			st.Close()
 			return nil, nil, fmt.Errorf("loading signing key: %w", err)
@@ -341,6 +355,20 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 		}()
 	}
 
+	// The critic-accuracy and writer-seat correlation stores sit beside the
+	// signed build ledger and feed `corral criticscore` / `corral scorecard`,
+	// the surfaces the daemon's runs feed.
+	criticScoreDBPath, pathErr := statedir.Path(statedir.CriticScoreDB)
+	if pathErr != nil {
+		fmt.Fprintln(stderr, "corral certify --local:", pathErr)
+		return 2
+	}
+	mutantAttemptsDBPath, pathErr := statedir.Path(statedir.MutantAttemptsDB)
+	if pathErr != nil {
+		fmt.Fprintln(stderr, "corral certify --local:", pathErr)
+		return 2
+	}
+
 	auditCtx, stopSignals := auditContext(stderr)
 	defer stopSignals()
 
@@ -370,8 +398,8 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 		presetMutants: presetMutants, mutantSink: mutantSink,
 		prior: loadedPrior,
 
-		matrix: *matrixFlag, record: rec, bugCatchDB: localBugCatchDBPath(), criticScoreDB: localCriticScoreDBPath(),
-		mutantAttemptsDB: localMutantAttemptsDBPath(),
+		matrix: *matrixFlag, record: rec, bugCatchDB: bugCatchDBPath, criticScoreDB: criticScoreDBPath,
+		mutantAttemptsDB: mutantAttemptsDBPath,
 		openStore:        openStore,
 		stdout:           stdout, stderr: stderr,
 	})
@@ -2456,22 +2484,6 @@ func orDefault(v, def string) string {
 // provider that has no such model.
 func resolveShadowModel(flag string) string {
 	return advpool.ResolveShadowModel(flag)
-}
-
-// localBuildDBPath mirrors cmd/corral/main.go's CORRALAI_BUILD_DB resolution so
-// a --local verdict lands in the SAME signed build-record ledger `corral
-// certify` writes to and `corral certify verify` reads from.
-func localBuildDBPath() string {
-	if p := strings.TrimSpace(os.Getenv("CORRALAI_BUILD_DB")); p != "" {
-		return p
-	}
-	home := ""
-	if u, err := os.UserHomeDir(); err == nil {
-		home = u
-	} else if usr, err := user.Current(); err == nil {
-		home = usr.HomeDir
-	}
-	return filepath.Join(home, ".claude", "corralai_build.duckdb")
 }
 
 // renderModelSpend reports what the run actually consumed from the

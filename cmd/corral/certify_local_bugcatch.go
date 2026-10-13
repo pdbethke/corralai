@@ -6,33 +6,12 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"os"
-	"os/user"
-	"path/filepath"
-	"strings"
 	"sync/atomic"
 	"time"
 
 	"github.com/pdbethke/corralai/internal/advpool"
 	"github.com/pdbethke/corralai/internal/bugcatch"
 )
-
-// localBugCatchDBPath mirrors localBuildDBPath for the bug-catching scorecard
-// store, so a --local run's per-seat metrics (including the shadow
-// head-to-head) persist next to the signed build ledger and feed the same
-// `corral scorecard` surface the daemon's runs feed.
-func localBugCatchDBPath() string {
-	if p := strings.TrimSpace(os.Getenv("CORRALAI_BUGCATCH_DB")); p != "" {
-		return p
-	}
-	home := ""
-	if u, err := os.UserHomeDir(); err == nil {
-		home = u
-	} else if usr, err := user.Current(); err == nil {
-		home = usr.HomeDir
-	}
-	return filepath.Join(home, ".claude", "corralai_bugcatch.duckdb")
-}
 
 // localBugCatchSink persists a converged --local run's per-seat observations
 // into the DuckDB scorecard store, stamping the run context (ts, repo, commit,

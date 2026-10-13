@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/pdbethke/corralai/internal/coord"
+	"github.com/pdbethke/corralai/internal/statedir"
 )
 
 // The broker verbs: the claim broker WITHOUT the daemon. A coding-agent
@@ -33,19 +34,6 @@ import (
 // which is right for one interactive session per machine and wrong for
 // two, so the sessions that matter pass their own.
 
-// brokerDBPath is the ONE coordination store, the same file the daemon
-// serves: $CORRALAI_DB, default ~/.claude/corralai_coord.sqlite3. A claim
-// made from the shell is the claim the MCP claim_task sees, and vice versa
-// — two doors, one record. A second file would have meant a running daemon
-// and a CLI session on the same box disagreeing about who holds what.
-func brokerDBPath() string {
-	if p := strings.TrimSpace(os.Getenv("CORRALAI_DB")); p != "" {
-		return p
-	}
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".claude", "corralai_coord.sqlite3")
-}
-
 func principal() string {
 	if u, err := user.Current(); err == nil && u.Username != "" {
 		return u.Username
@@ -59,7 +47,15 @@ func defaultSession() string {
 }
 
 func openBroker() (*coord.Store, error) {
-	p := brokerDBPath()
+	// The ONE coordination store, the same file the daemon serves
+	// (statedir.CoordDB, $CORRALAI_DB). A claim made from the shell is the
+	// claim the MCP claim_task sees, and vice versa — two doors, one record. A
+	// second file would have meant a running daemon and a CLI session on the
+	// same box disagreeing about who holds what.
+	p, err := statedir.Path(statedir.CoordDB)
+	if err != nil {
+		return nil, err
+	}
 	if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
 		return nil, err
 	}
@@ -86,7 +82,7 @@ func runBroker(verb string, args []string, stdout, stderr io.Writer) int {
 	}
 	st, err := openBroker()
 	if err != nil {
-		fmt.Fprintf(stderr, "corral-wrangler %s: opening the broker store at %s: %v\n", verb, brokerDBPath(), err)
+		fmt.Fprintf(stderr, "corral-wrangler %s: opening the broker store: %v\n", verb, err)
 		return 1
 	}
 	defer st.Close()

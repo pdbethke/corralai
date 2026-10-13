@@ -13,7 +13,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"os/user"
 	"path/filepath"
 	"strings"
 	"time"
@@ -21,6 +20,7 @@ import (
 	"github.com/pdbethke/corralai/internal/buildstore"
 	"github.com/pdbethke/corralai/internal/certify"
 	"github.com/pdbethke/corralai/internal/sandbox"
+	"github.com/pdbethke/corralai/internal/statedir"
 )
 
 // extractCommit resolves ref to a commit sha and materializes that exact
@@ -81,23 +81,17 @@ func extractCommit(ref string) (workdir, sha string, cleanup func(), err error) 
 	return dir, sha, cleanup, nil
 }
 
-// localCertifyKeyPath mirrors cmd/corral/main.go's resolution so the CLI and
-// the daemon sign with the same key file by default.
-func localCertifyKeyPath() string {
-	if p := strings.TrimSpace(os.Getenv("CORRALAI_CERTIFY_KEY_FILE")); p != "" {
-		return p
-	}
-	home := ""
-	if u, err := os.UserHomeDir(); err == nil {
-		home = u
-	} else if usr, err := user.Current(); err == nil {
-		home = usr.HomeDir
-	}
-	return filepath.Join(home, ".claude", "corralai_certify_key")
-}
-
+// loadLocalCertifyKey resolves the signing key through statedir, the one
+// resolution the daemon shares, so the CLI and the daemon sign with the same
+// file by default. A key that exists only at the legacy location is REFUSED
+// (*statedir.LegacyError) rather than replaced: minting a fresh key beside an
+// old one would silently fork the ledger's signer.
 func loadLocalCertifyKey() (ed25519.PrivateKey, error) {
-	return buildstore.LoadOrCreateSigningKey(localCertifyKeyPath())
+	p, err := statedir.Path(statedir.CertifyKey)
+	if err != nil {
+		return nil, err
+	}
+	return buildstore.LoadOrCreateSigningKey(p)
 }
 
 // signBuildLocally turns a raw build record into a signed, self-verifying

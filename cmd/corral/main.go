@@ -96,7 +96,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -104,6 +103,7 @@ import (
 	"github.com/pdbethke/corralai/internal/buildinfo"
 	"github.com/pdbethke/corralai/internal/criticscore"
 	"github.com/pdbethke/corralai/internal/eval"
+	"github.com/pdbethke/corralai/internal/statedir"
 )
 
 func env(k, def string) string {
@@ -459,8 +459,11 @@ func main() {
 			}
 			os.Exit(runScorecard(os.Args[2:], newHTTPScorecardReader(brainURL, token), os.Stdout))
 		}
-		home, _ := os.UserHomeDir()
-		bugCatchDB := env("CORRALAI_BUGCATCH_DB", filepath.Join(home, ".claude", "corralai_bugcatch.duckdb"))
+		bugCatchDB, err := statedir.Path(statedir.BugCatchDB)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "corral scorecard:", err)
+			os.Exit(1)
+		}
 		bugCatchStore, err := bugcatch.Open(bugCatchDB)
 		if err != nil {
 			if strings.Contains(err.Error(), "Conflicting lock is held") {
@@ -476,9 +479,11 @@ func main() {
 		// the critic file is held elsewhere would trade the whole table for
 		// one column.
 		var localCritic *criticscore.Store
-		if cs, cerr := criticscore.Open(localCriticScoreDBPath()); cerr == nil {
-			localCritic = cs
-			defer func() { _ = cs.Close() }()
+		if criticPath, perr := statedir.Path(statedir.CriticScoreDB); perr == nil {
+			if cs, cerr := criticscore.Open(criticPath); cerr == nil {
+				localCritic = cs
+				defer func() { _ = cs.Close() }()
+			}
 		}
 		os.Exit(runScorecard(os.Args[2:], localScorecardReader{store: bugCatchStore, critic: localCritic}, os.Stdout))
 	case "models":
@@ -509,7 +514,12 @@ func main() {
 		// Serve the findings to a coding agent over stdio, read-only, from the
 		// same local store `certify --local` writes. See mcp_findings.go for
 		// why adjudication is deliberately absent from that surface.
-		cs, err := criticscore.Open(localCriticScoreDBPath())
+		criticPath, err := statedir.Path(statedir.CriticScoreDB)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "corral mcp:", err)
+			os.Exit(1)
+		}
+		cs, err := criticscore.Open(criticPath)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "corral mcp: opening the local findings store: %v\n", err)
 			os.Exit(1)
@@ -535,7 +545,12 @@ func main() {
 			// quickstart talks to — and scorecard's C-PREC column could never
 			// be filled by them. See localCriticScore's doc comment for why
 			// this does not weaken the brain's admin gate.
-			cs, err := criticscore.Open(localCriticScoreDBPath())
+			criticPath, err := statedir.Path(statedir.CriticScoreDB)
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "corral criticscore:", err)
+				os.Exit(1)
+			}
+			cs, err := criticscore.Open(criticPath)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "corral criticscore: opening the local critic store: %v\n", err)
 				fmt.Fprintln(os.Stderr, "corral criticscore: (or set CORRAL_BRAIN to adjudicate against a running brain instead)")

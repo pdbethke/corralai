@@ -49,7 +49,7 @@ type importOpts struct {
 
 func importFlags(o *importOpts) *flag.FlagSet {
 	fs := flag.NewFlagSet("corral-recordings-import", flag.ExitOnError)
-	fs.StringVar(&o.db, "db", "", "DuckDB path (default: CORRALAI_RECORDINGS_DB or ~/.claude/corralai_recordings.duckdb)")
+	fs.StringVar(&o.db, "db", "", "DuckDB path (default: CORRALAI_RECORDINGS_DB, else $STATE/corralai_recordings.duckdb — see `corral state paths`)")
 	fs.StringVar(&o.slug, "slug", "", "recording slug")
 	fs.Int64Var(&o.missionID, "mission-id", 0, "mission id")
 	fs.StringVar(&o.replay, "replay", "", "path to scrubbed replay json (with events[])")
@@ -93,9 +93,14 @@ func main() {
 		path = strings.TrimSpace(os.Getenv("CORRALAI_RECORDINGS_DB"))
 	}
 	if path == "" {
-		path = recordings.DefaultDB
+		var derr error
+		path, derr = recordings.DefaultDB()
+		if derr != nil {
+			fmt.Fprintln(os.Stderr, "corral-recordings-import:", derr)
+			os.Exit(1)
+		}
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil { // #nosec G703 -- db path is operator-chosen via --db, CORRALAI_RECORDINGS_DB, or fixed DefaultDB; not remote attacker input
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil { // #nosec G703 -- db path is operator-chosen via --db, CORRALAI_RECORDINGS_DB, or the fixed statedir default; not remote attacker input
 		fmt.Fprintf(os.Stderr, "mkdir db dir: %v\n", err)
 		os.Exit(1)
 	}

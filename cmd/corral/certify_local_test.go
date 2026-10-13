@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"github.com/pdbethke/corralai/internal/statedir"
 	"io"
 	"os"
 	"path/filepath"
@@ -1024,17 +1025,18 @@ func TestResolveRunDeadlineShadowAllowance(t *testing.T) {
 	}
 }
 
-// TestLocalBugCatchDBPathHonoursEnv mirrors the build-ledger path resolution:
-// an operator who redirects the ledger must be able to redirect the metrics
-// store the same way (and tests must never write to the real one).
-func TestLocalBugCatchDBPathHonoursEnv(t *testing.T) {
+// TestBugCatchDBPathHonoursEnv: an operator who redirects the ledger must be
+// able to redirect the metrics store the same way (and tests must never write
+// to the real one).
+func TestBugCatchDBPathHonoursEnv(t *testing.T) {
+	isolateStateHome(t)
 	t.Setenv("CORRALAI_BUGCATCH_DB", "/tmp/some-bugcatch.duckdb")
-	if got := localBugCatchDBPath(); got != "/tmp/some-bugcatch.duckdb" {
-		t.Errorf("localBugCatchDBPath() = %q, want the env override", got)
+	if got, err := statedir.Path(statedir.BugCatchDB); err != nil || got != "/tmp/some-bugcatch.duckdb" {
+		t.Errorf("Path(BugCatchDB) = %q, %v; want the env override", got, err)
 	}
 	t.Setenv("CORRALAI_BUGCATCH_DB", "")
-	if got := localBugCatchDBPath(); !strings.HasSuffix(got, filepath.Join(".claude", "corralai_bugcatch.duckdb")) {
-		t.Errorf("localBugCatchDBPath() default = %q, want it beside the build ledger", got)
+	if got, err := statedir.Path(statedir.BugCatchDB); err != nil || !strings.HasSuffix(got, filepath.Join("corral", "corralai_bugcatch.duckdb")) {
+		t.Errorf("Path(BugCatchDB) default = %q, %v; want it under the state root", got, err)
 	}
 }
 

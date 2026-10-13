@@ -20,6 +20,7 @@ import (
 	"github.com/pdbethke/corralai/internal/modelrank"
 	"github.com/pdbethke/corralai/internal/models"
 	"github.com/pdbethke/corralai/internal/review"
+	"github.com/pdbethke/corralai/internal/statedir"
 )
 
 // rankEvidence is one store's worth of already-attributed outcomes, plus a
@@ -434,7 +435,11 @@ func defaultRankLoader(dsn string) (rankEvidence, error) {
 		}
 		return ev, nil
 	}
-	store, err := bugcatch.Open(localBugCatchDBPath())
+	bugCatchPath, err := statedir.Path(statedir.BugCatchDB)
+	if err != nil {
+		return rankEvidence{}, err
+	}
+	store, err := bugcatch.Open(bugCatchPath)
 	if err != nil {
 		if strings.Contains(err.Error(), "Conflicting lock is held") {
 			return rankEvidence{}, fmt.Errorf("the bug-catching ledger is held by the running brain — stop it, or point --db at a pushed warehouse")
@@ -447,9 +452,11 @@ func defaultRankLoader(dsn string) (rankEvidence, error) {
 	// rows, which is honest, while refusing the whole ranking over one seat
 	// would not be.
 	var critic *criticscore.Store
-	if cs, cerr := criticscore.Open(localCriticScoreDBPath()); cerr == nil {
-		critic = cs
-		defer func() { _ = cs.Close() }()
+	if criticPath, perr := statedir.Path(statedir.CriticScoreDB); perr == nil {
+		if cs, cerr := criticscore.Open(criticPath); cerr == nil {
+			critic = cs
+			defer func() { _ = cs.Close() }()
+		}
 	}
 	return bugcatchRankEvidence(ctx, store, critic)
 }

@@ -17,6 +17,7 @@ import (
 	"strings"
 
 	"github.com/pdbethke/corralai/internal/certify"
+	"github.com/pdbethke/corralai/internal/statedir"
 	"github.com/pdbethke/corralai/internal/transparency"
 )
 
@@ -82,7 +83,11 @@ func loadLocalCertifyKeyIfConfigured() (ed25519.PrivateKey, error) {
 	if strings.TrimSpace(os.Getenv("CORRALAI_CERTIFY_KEY_FILE")) != "" {
 		return loadLocalCertifyKey()
 	}
-	if _, err := os.Stat(localCertifyKeyPath()); err != nil {
+	keyPath, err := statedir.Path(statedir.CertifyKey)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := os.Stat(keyPath); err != nil {
 		return nil, fmt.Errorf("no local signing key is configured — set CORRALAI_CERTIFY_KEY_FILE (or CORRALAI_CERTIFY_KEY) to sign the statement before it can be logged")
 	}
 	return loadLocalCertifyKey()

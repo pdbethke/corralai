@@ -8,21 +8,19 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/pdbethke/corralai/internal/sqlguard"
+	"github.com/pdbethke/corralai/internal/statedir"
 
 	_ "github.com/marcboeker/go-duckdb/v2"
 )
 
-var (
-	home      = mustHome()
-	DefaultDB = filepath.Join(home, ".claude", "corralai_recordings.duckdb")
-)
-
-func mustHome() string { h, _ := os.UserHomeDir(); return h }
+// DefaultDB is the recordings store's default path (statedir.RecordingsDB):
+// $CORRALAI_RECORDINGS_DB, else under the state root. It errors rather than
+// guessing when the file exists only at the legacy location.
+func DefaultDB() (string, error) { return statedir.Path(statedir.RecordingsDB) }
 
 // MissionMeta is one exported recording's mission-level metadata.
 type MissionMeta struct {

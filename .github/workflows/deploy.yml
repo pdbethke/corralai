@@ -289,7 +289,7 @@ jobs:
         run: |
           set -o pipefail
           go test ./internal/sandbox/ ./internal/adequacy/ -count=1 -v 2>&1 | tee "$RUNNER_TEMP/jail-tests.log"
-          for t in TestSelfTestRealBackendPassesViaResolve TestSandboxExecRunsGoTest TestSandboxExecDeniesAReadableFileUnderHome TestFetchStepVendorsGoOnMacOS TestJailCanReadAnotherProcessesStartupEnvironment; do
+          for t in TestSelfTestRealBackendPassesViaResolve TestSandboxExecRunsGoTest TestSandboxExecDeniesAReadableFileUnderHome TestFetchStepVendorsGoOnMacOS TestJailCanReadAnotherProcessesStartupEnvironment TestSandboxExecHomebrewOpenSSLVerifiesTLS; do
             if ! grep -q -- "--- PASS: $t" "$RUNNER_TEMP/jail-tests.log"; then
               echo "::error::jail test $t did not run and pass on macOS (skipped or missing)"
               exit 1

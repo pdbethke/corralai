@@ -207,10 +207,10 @@ func TestEveryBuiltinNamesARegisteredWire(t *testing.T) {
 	}
 }
 
-// The built-in certify seats start cold: none of the operator's settings,
+// The built-in certify seats are DEFINED cold: none of the operator's settings,
 // MCP servers, slash commands or tools. The flag spelling is pinned against
 // the measured CLI (testdata/agentwire/README.md).
-func TestBuiltinSeatsStartCold(t *testing.T) {
+func TestBuiltinSeatDefinitionsCarryTheColdFlags(t *testing.T) {
 	for name, want := range map[string][]string{
 		"claude-code": {"--output-format json", `--setting-sources ""`, "--strict-mcp-config", "--disable-slash-commands", "--no-session-persistence", "--system-prompt", "{tools:--tools}"},
 		"codex":       {"--json", "--ignore-user-config", "--ignore-rules", "--sandbox read-only", "--ephemeral"},

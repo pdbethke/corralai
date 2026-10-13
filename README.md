@@ -1201,7 +1201,7 @@ enforced in CI by [`scripts/check-security.sh`](scripts/check-security.sh).
 
 | | Linux | macOS | Windows |
 |---|---|---|---|
-| **`corral certify --local`** — real exec (bwrap jail) | ✅ | `--jail container` (Docker) — **not exercised in CI** | `--jail container` (Docker) or WSL2 — **not exercised in CI** |
+| **`corral certify --local`** — real exec (jailed) | ✅ bwrap | ✅ sandbox-exec (built in), exercised on `macos-latest` in CI | `--jail container` (Docker) or WSL2 — **not exercised in CI** |
 | **`corral certify --repo --substrate workspace`** (no jail) | ✅ | should work — **not exercised in CI** | should work — **not exercised in CI** |
 | **The GitHub Action** | ✅ `ubuntu-latest` | — | — |
 
@@ -1216,10 +1216,17 @@ backend's integration tests twice, once pinned to each, on every code change.
 Hosted macOS and Windows runners are free for public repositories, so this is a
 task rather than a limitation.
 
-**The jail is a Linux capability — and that's the point.** `bwrap` (bubblewrap) is
-Linux namespaces; on a bare-metal Linux host it runs **unprivileged** (one package,
-no root, no daemon). macOS and Windows have no equivalent, so exec runs inside a Linux
-environment — Docker Desktop or WSL2, or the `--jail container` fallback. `corral`
+**Each platform jails with what it has.** On Linux, `bwrap` (bubblewrap) uses
+namespaces and runs **unprivileged** (one package, no root, no daemon). On macOS,
+`sandbox-exec` is built in: deny-by-default reads, no network, no access to your
+home directory, writes only to the run's workspace. Where macOS cannot match
+bwrap, the gap is named rather than hidden: file **metadata** (existence, size,
+mtime) is visible everywhere, the **process list** is visible (no PID
+namespace), there is **no private `/tmp`** (a per-run `TMPDIR` replaces it), and
+Apple has **deprecated `sandbox-exec`** (it works on macOS 27; `--jail container`
+is the fallback). `corral doctor` runs the jail's self-test and prints what it
+proved. Windows runs inside a Linux environment: Docker Desktop or WSL2, or the
+`--jail container` fallback. `corral`
 itself carries two CGO deps (DuckDB for the ledgers, tree-sitter for the symbol
 index), which is why `go install` builds for ~25s; the optional daemon's client
 binaries are pure Go (see [the brain](#the-brain-optional-and-not-read-by-any-audit)).

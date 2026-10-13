@@ -264,6 +264,35 @@ jobs:
         if: steps.filter.outputs.code != 'true'
         run: echo "Only Markdown changed — go vet/test + security gate skipped; validate passes."
 
+  # THE macOS JAIL RUNS ON A REAL MAC on every code change. Until 2026-10-13
+  # no workflow ran on macOS, and the sandbox-exec backend shipped a profile
+  # that could not start /bin/sh. Hosted macOS minutes are free for a public
+  # repo, and a self-hosted Mac would run fork-PR code on the founder's LAN,
+  # so this is GitHub-hosted. Gated by validate's change detector, not a
+  # workflow path filter, so it can be a REQUIRED check without blocking
+  # docs-only PRs (a skipped job reports success).
+  macos:
+    needs: validate
+    if: needs.validate.outputs.code == 'true'
+    runs-on: macos-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      # -v doubles as the skip census: a jail test that skipped says why.
+      - name: Jail tests (sandbox-exec, fetch step)
+        run: go test ./internal/sandbox/ ./internal/adequacy/ -count=1 -v
+      # The real binary's preflight: the shared self-test, through doctor.
+      - name: corral doctor (self-test through the real binary)
+        run: |
+          go build -o "$RUNNER_TEMP/corral" ./cmd/corral
+          "$RUNNER_TEMP/corral" doctor --jail sandbox-exec 2>&1 | tee "$RUNNER_TEMP/doctor.log" || true
+          grep -q '\[ok  \] sandbox starts' "$RUNNER_TEMP/doctor.log"
+
   deploy:
     # Runs ON the deploy host (a self-hosted runner, as the deploy user), so it
     # updates the canonical clone + rebuilds + restarts in place — no SSH key

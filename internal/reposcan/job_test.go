@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/pdbethke/corralai/internal/agentbackend"
 )
 
 var errFail = errors.New("intentional error")
@@ -267,5 +269,22 @@ func TestEmitJobsAccountsSourceTooLargeUnderItsOwnReason(t *testing.T) {
 	}
 	if len(excl) != 1 || excl[0].Reason != ReasonSourceTooLarge {
 		t.Errorf("excl = %+v, want one %s (never %s)", excl, ReasonSourceTooLarge, ReasonDeriveFailed)
+	}
+}
+
+type interruptedGoals struct{}
+
+func (interruptedGoals) GoalFor(Candidate) (Goal, bool, error) {
+	return Goal{}, false, fmt.Errorf("deriving: %w", agentbackend.ErrInterrupted)
+}
+
+// An interrupt during derivation aborts the scan. Filing it as derive-failed
+// would publish a record of a run the operator stopped.
+func TestEmitJobsAbortsOnAnInterrupt(t *testing.T) {
+	root := writeTree(t, map[string]string{"a.go": "package p\n", "a_test.go": "package p\n"})
+	cands := []Candidate{{Path: "a.go", TestPath: "a_test.go", Lang: "go"}}
+	_, excl, err := EmitJobs(EmitConfig{Owner: "o", Root: root}, cands, interruptedGoals{})
+	if !errors.Is(err, agentbackend.ErrInterrupted) || len(excl) != 0 {
+		t.Fatalf("want the scan aborted with the interrupt, got err=%v excl=%+v", err, excl)
 	}
 }

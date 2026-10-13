@@ -5,6 +5,7 @@ package reposcan
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -241,5 +242,22 @@ func TestDeriverStopsAtTheCapWithoutRetrying(t *testing.T) {
 	}
 	if f.calls != 1 || slept != 0 {
 		t.Fatalf("deriver called %d times and slept %d times, want 1 and 0 — a refused call is not retried", f.calls, slept)
+	}
+}
+
+// An interrupted derivation is neither an outage to retry nor a file to
+// exclude: the operator stopped the run. It stops at once and says so.
+func TestDeriverStopsAtAnInterruptWithoutRetrying(t *testing.T) {
+	root := derivRoot(t)
+	f := &fakeDeriver{err: fmt.Errorf("seat: %w", agentbackend.ErrInterrupted)}
+	slept := 0
+	gs := derivingGoalSource{root: root, d: f, model: "m", engineVersion: "v", retries: 3,
+		maxBytes: maxSourceBytes, sleep: func(time.Duration) { slept++ }}
+	_, ok, err := gs.GoalFor(Candidate{Path: "pkg/a.go", TestPath: "pkg/a_test.go"})
+	if ok || !errors.Is(err, agentbackend.ErrInterrupted) {
+		t.Fatalf("ok=%v err=%v, want the interrupt", ok, err)
+	}
+	if f.calls != 1 || slept != 0 {
+		t.Fatalf("deriver called %d times and slept %d times, want 1 and 0", f.calls, slept)
 	}
 }

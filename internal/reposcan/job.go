@@ -163,6 +163,11 @@ func EmitJobs(cfg EmitConfig, cands []Candidate, gs GoalSource) ([]Job, []Exclus
 
 	for _, c := range cands {
 		goal, ok, err := gs.GoalFor(c)
+		if agentbackend.Interrupted(err) {
+			// The operator stopped the run: no exclusion is recorded for a
+			// file nobody failed on, and the scan aborts.
+			return nil, nil, err
+		}
 		if err != nil {
 			// A per-candidate goal failure is NOT fatal to the scan and is NOT
 			// ungoaled: the source of the goal failed, which says nothing about

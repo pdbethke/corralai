@@ -8,6 +8,8 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -51,8 +53,10 @@ func TestAnInterruptKillsEveryLiveAgentProcessGroup(t *testing.T) {
 		t.Fatal(err)
 	}
 	done := make(chan error, 1)
+	var reply Message
 	go func() {
-		_, err := b.Chat([]Message{{Role: "user", Content: "x"}}, nil)
+		m, err := b.Chat([]Message{{Role: "user", Content: "x"}}, nil)
+		reply = m
 		done <- err
 	}()
 	var got []int
@@ -76,6 +80,11 @@ func TestAnInterruptKillsEveryLiveAgentProcessGroup(t *testing.T) {
 	case err := <-done:
 		if !errors.Is(err, ErrInterrupted) {
 			t.Errorf("the call ended with %v, want ErrInterrupted", err)
+		}
+		// The CLI was killed before it could report usage: a call that ran
+		// and is not metered, never a measured zero.
+		if !reply.Usage.Unmetered {
+			t.Errorf("an interrupted call reported usage %+v as measured", reply.Usage)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("the call did not end within a second of the interrupt")
@@ -114,5 +123,93 @@ func TestKillingAnExitedGroupIsNotAnError(t *testing.T) {
 	}
 	if err := cmd.Cancel(); err != nil {
 		t.Fatalf("Cancel on an exited group = %v, want nil (ESRCH ignored)", err)
+	}
+}
+
+// A process started with SIGINT ignored (nohup, a CI wrapper, `trap "" INT`)
+// must stay that way: signal.Notify on an ignored signal un-ignores it, so
+// corral would start killing agent seats on a signal the operator told it to
+// ignore. Run in a child whose shell ignores SIGINT before exec'ing it.
+func TestAnIgnoredSignalIsNeverCaught(t *testing.T) {
+	if os.Getenv("CORRAL_TEST_IGNORED_CHILD") == "1" {
+		if !signal.Ignored(os.Interrupt) {
+			t.Fatal("precondition: SIGINT should be ignored in the child")
+		}
+		for _, sig := range notifiableSignals() {
+			if sig == os.Interrupt {
+				t.Fatal("an ignored SIGINT is in the set the handler registers")
+			}
+		}
+		t.Setenv("CORRALAI_AGENT_QUICK", "/bin/echo hi")
+		b, err := ForSeat("quick", SeatOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := b.Chat([]Message{{Role: "user", Content: "x"}}, nil); err != nil {
+			t.Fatal(err)
+		}
+		if !signal.Ignored(os.Interrupt) {
+			t.Fatal("running an agent seat un-ignored SIGINT")
+		}
+		return
+	}
+	cmd := exec.Command("sh", "-c", `trap "" INT; exec "$0" -test.run='^TestAnIgnoredSignalIsNeverCaught$' -test.v`, os.Args[0])
+	cmd.Env = append(os.Environ(), "CORRAL_TEST_IGNORED_CHILD=1")
+	out, err := cmd.CombinedOutput()
+	if err != nil || !strings.Contains(string(out), "--- PASS") {
+		t.Fatalf("child: %v\n%s", err, out)
+	}
+}
+
+// SIGHUP is not caught: corral's own interrupt handling does not treat it as
+// an abort, so catching it here would leave certify running with every agent
+// seat killed.
+func TestSIGHUPIsNotForwarded(t *testing.T) {
+	for _, sig := range notifiableSignals() {
+		if sig == syscall.SIGHUP {
+			t.Fatal("SIGHUP is in the forwarded set")
+		}
+	}
+}
+
+// A signal that lands as the last agent finishes must not be lost between
+// the handler's two cases: when both are ready, select picks either.
+func TestASignalRacingTheLastSeatIsNotSwallowed(t *testing.T) {
+	t.Cleanup(resetInterruptForTest)
+	for i := 0; i < 64; i++ {
+		resetInterruptForTest()
+		sigc := make(chan os.Signal, 1)
+		stop := make(chan struct{})
+		sigc <- os.Interrupt
+		close(stop)
+		watchInterrupt(sigc, stop)
+		live.Lock()
+		got := live.interrupted
+		live.Unlock()
+		if !got {
+			t.Fatalf("iteration %d: a pending signal was swallowed when the last seat finished", i)
+		}
+	}
+}
+
+// On darwin, kill(-pgid) can answer EPERM for a group whose only member is
+// an exited, unreaped leader. That is the group being gone, not a failure to
+// kill it; the leader is signalled directly as well.
+func TestAGroupKillAnsweringEPERMIsNotAnError(t *testing.T) {
+	old := sysKill
+	t.Cleanup(func() { sysKill = old })
+	var direct []int
+	sysKill = func(pid int, sig syscall.Signal) error {
+		if pid < 0 {
+			return syscall.EPERM
+		}
+		direct = append(direct, pid)
+		return syscall.ESRCH
+	}
+	if err := killGroup(4242); err != nil {
+		t.Fatalf("killGroup on EPERM = %v, want nil", err)
+	}
+	if len(direct) != 1 || direct[0] != 4242 {
+		t.Fatalf("the leader must be signalled directly after EPERM, got %v", direct)
 	}
 }

@@ -139,7 +139,8 @@ func (s derivingGoalSource) GoalFor(c Candidate) (Goal, bool, error) {
 		if derr != nil {
 			// The cap refuses before any provider is dialled and will refuse
 			// every retry the same way: stop now, and say why.
-			if errors.Is(derr, agentbackend.ErrTokenBudgetExhausted) {
+			// An interrupt likewise: the operator stopped the run.
+			if errors.Is(derr, agentbackend.ErrTokenBudgetExhausted) || agentbackend.Interrupted(derr) {
 				return Goal{}, false, fmt.Errorf("reposcan: deriving a goal for %s: %w", c.Path, derr)
 			}
 			lastErr = derr

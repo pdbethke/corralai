@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/pdbethke/corralai/internal/advpool"
+	"github.com/pdbethke/corralai/internal/agentbackend"
 	"github.com/pdbethke/corralai/internal/agentworker"
 	"github.com/pdbethke/corralai/internal/queue"
 )
@@ -251,6 +252,12 @@ func runOneTask(ctx context.Context, q *queue.Store, missionID int64, workerID s
 	rec.add("task_created", "", task.Key, map[string]any{"role": task.Role, "title": task.Title})
 	rec.add("task_claimed", actor, task.Key, map[string]any{"role": task.Role, "title": task.Title})
 	result, findings, rerr := agentworker.RunRoleWithSystem(ctx, ch, task.Role, task.System, task.Instruction)
+	if agentbackend.Interrupted(rerr) {
+		// Not a provider failure of any seat: the operator stopped the run.
+		// Filing it under a sentinel below would let the run converge and
+		// record a verdict for an audit nobody finished.
+		return fmt.Errorf("running role %q: %w", task.Role, rerr)
+	}
 	if rerr != nil {
 		if task.Role == advpool.RoleMutantGeneratorShadow || task.Role == advpool.RoleTestWriterShadow {
 			// A challenger seat is MEASUREMENT, never the gate — so its LLM

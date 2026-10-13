@@ -251,6 +251,10 @@ func runReviewRun(args []string, stdout, stderr io.Writer) int {
 		{Role: "system", Content: review.BriefSystem},
 		{Role: "user", Content: userTurn},
 	}, nil)
+	if agentbackend.Interrupted(err) {
+		fmt.Fprintln(stderr, "corral review: interrupted — no entry is written")
+		return 1
+	}
 	if err != nil {
 		fmt.Fprintf(stderr, "corral review: the reviewer seat failed: %v\n", err)
 		return 1
@@ -286,6 +290,13 @@ func runReviewRun(args []string, stdout, stderr io.Writer) int {
 			{Role: "system", Content: review.VerifierBriefSystem},
 			{Role: "user", Content: vturn},
 		}, nil)
+		if agentbackend.Interrupted(verr) {
+			// Not "recorded unverified": the operator stopped the run, and
+			// a signed entry (and a push) for it would record a review
+			// nobody finished.
+			fmt.Fprintln(stderr, "corral review: interrupted — no entry is written")
+			return 1
+		}
 		if verr == nil {
 			// The call answered, so it was made and spent, whether or not
 			// its reply parses below: an unverified review must not read

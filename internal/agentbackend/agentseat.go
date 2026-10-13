@@ -472,7 +472,9 @@ func (a agentBackend) Chat(messages []Message, tools []any) (Message, error) {
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	runErr := runAgent(cmd)
 	if errors.Is(runErr, ErrInterrupted) {
-		return Message{}, fmt.Errorf("%s: %w", a.name, runErr)
+		// Killed before it could report usage: it ran, and is not metered —
+		// never a measured zero.
+		return Message{Usage: Usage{Unmetered: true}}, fmt.Errorf("%s: %w", a.name, runErr)
 	}
 	if errors.Is(runErr, exec.ErrNotFound) || errors.Is(runErr, os.ErrNotExist) {
 		return Message{}, fmt.Errorf("%s: %w: %v", a.name, ErrSeatEnvironment, runErr)

@@ -11,6 +11,37 @@ history of any release, `git log v0.3.4..v0.3.5`.
 
 ## [Unreleased]
 
+- **Agent seats in every seat, not only `review`.** A coding-agent CLI
+  (`claude-code`, `codex`, `antigravity`, or one you define as
+  `CORRALAI_AGENT_<NAME>`) can now fill any CLI seat: `certify --local` and
+  `--repo` (`--writer-model`, `--mutant-model`, `--critic-model`,
+  `--derive-model`), `demo`, `doctor`, goal derivation and the shadow seats,
+  through one resolver, `agentbackend.ForSeat`. A seat runs on the agent's own
+  login, so on a subscription it needs no API key. Run on 2026-10-13 with no
+  API keys in the environment: a `demo` on `codex` and `claude-code` (5 of 11
+  mutants killed by the dev suite, 6 of 6 survivors proved) and a real
+  `review` round. `antigravity` was not measured. How to define your own agent,
+  and what was measured, is in `docs/corral/agent-seats.md`.
+- **Changed behaviour: review's built-in agent seats now start cold.** A
+  `claude-code` or `codex` review seat no longer sees your own `CLAUDE.md`,
+  memory, skills or MCP servers. If a review relied on the seat knowing your
+  conventions, put them in the brief or the repository; they are no longer
+  inherited.
+- **A seat that reports no tokens is `not metered`, not free.** An agent seat
+  on the `text` wire shows `not metered` on the cost line, and `--max-tokens`
+  refuses it, because a cap cannot bound what it cannot see. The warehouse and
+  ledger scan token totals are NULL (omitted from the ledger) when nothing in
+  the scan was metered.
+- **`--max-tokens` now also counts goal derivation.** A file whose derivation
+  was stopped by the cap is excluded as `derive-budget-exhausted`.
+- **`models rank` and the scorecard exclude unpinned agent seats.** A seat
+  named `codex` rather than `codex:<model>` records a tool, not a model, and
+  is no longer counted as evidence about one. Review seats included: they used
+  to be counted.
+- **One-time cache miss.** `reposcan.VerdictGeneration` is now 19 (it was 17
+  earlier in this release). Every verdict cached before this change is
+  re-measured once.
+
 - **Breaking: corral's files move out of `~/.claude`.** corral no longer
   creates or reads that directory. Databases and signing keys live in the
   state directory (`$XDG_STATE_HOME/corral`, else `~/.local/state/corral`,

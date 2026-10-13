@@ -16,7 +16,9 @@ package seatrecord
 
 // UnresolvedColumn is the column the rule's answer is stored in, and its DDL
 // for an additive migration. NULL on every row written before it existed —
-// API seats, which name their model — so a legacy row reads as resolved.
+// API seats, which name their model — so a legacy row reads as resolved. That is safe because certify could not
+// seat an agent before this column existed: a NULL row cannot be an unpinned
+// agent seat that went unmarked.
 const (
 	UnresolvedColumn = "model_unresolved"
 	UnresolvedDDL    = UnresolvedColumn + " BOOLEAN"

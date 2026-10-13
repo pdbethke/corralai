@@ -266,7 +266,7 @@ Usage of certify --local:
   -commit string
     	commit sha (default: git rev-parse HEAD, else "local")
   -critic-model string
-    	model for the test-critic role, which must differ from the writer's; "off" disables the critic entirely (it is advisory and never gates the verdict, so a single-vendor run with only one usable model can drop it). No default
+    	model (or agent seat) for the test-critic role, which must differ from the writer's; "off" disables the critic entirely (it is advisory and never gates the verdict, so a single-vendor run with only one usable model can drop it). No default
   -goal string
     	the correctness/security goal the code must satisfy (required)
   -jail string
@@ -282,9 +282,9 @@ Usage of certify --local:
   -max-shards int
     	max mutant-generator seats fanned out across the file's functions (0 = 8). Bounds PARALLELISM only — every function is probed regardless; --n-mutants is the PER-SHARD budget
   -max-tokens int
-    	cap on model TOKENS for the whole run, input + output, every seat (0 = no cap). Checked before each call and charged after it, so one in-flight call can overshoot by its own size. Once reached: a generator seat that has not run makes its file ungradable (executor-error naming the cap), a writer or critic seat is skipped and the file flagged as it is for a provider failure — the dev kill rate already measured stands. The cost line says the cap was reached and after how many calls. Corral has bounded mutants, shards and wall clock and never money; this is the money bound
-  -mutant-model string
-    	model for the mutant-generator role — REQUIRED, corral has no default models. Takes a registry alias (.corral/models.json) or a concrete model name
+    	cap on model TOKENS for the whole run, input + output, every seat (0 = no cap; an agent seat that reports no token usage is refused, since the cap could not see it). Checked before each call and charged after it, so one in-flight call can overshoot by its own size. Once reached: a generator seat that has not run makes its file ungradable (executor-error naming the cap), a writer or critic seat is skipped and the file flagged as it is for a provider failure — the dev kill rate already measured stands. The cost line says the cap was reached and after how many calls. Corral has bounded mutants, shards and wall clock and never money; this is the money bound
+  -mutant-model codex
+    	model for the mutant-generator role — REQUIRED, corral has no default models. Takes a registry alias (.corral/models.json) a concrete model name, or an agent seat (codex, `claude-code`, `antigravity`, or your own CORRALAI_AGENT_<NAME>)
   -mutants string
     	REPLAY a recorded mutant set (see --record-mutants) instead of generating one: --code is graded against exactly the mutants recorded for it, and no mutant-generator model call is made. Refused (exit 2) if the file is absent from the set or its bytes have changed since it was recorded — a mutant is a single-point edit of specific bytes, and re-applying it to different ones grades an exam nobody wrote. Reads a corral-mutants-2 document, or an older corral-mutants-1 one, whose whole-file mutants still replay byte-for-byte.
   -n-mutants --n-mutants 5
@@ -331,8 +331,8 @@ Usage of certify --local:
     	WALL-CLOCK budget for the whole run, measured from its start — not a no-progress timer. A run still making steady progress is stopped when it exceeds this, and banks a needs-review TIMEOUT verdict: the dev kill rate and survivors survive (they were measured), the PROVING half does not. A file with many survivors needs room — 13 survivors measured at ~21-24 minutes — so raise it rather than lose the proofs. One in-flight LLM call can overshoot slightly, since the deadline is checked between ticks (default 30m0s)
   -writer-mode per-survivor
     	how the test-writer attacks this file's survivors: per-survivor (the default) makes ONE call per survivor — each carrying the file once as a cacheable shared prefix plus that survivor's diff, each repaired on its own budget and each PROVEN ALONE against its own mutant — or `batched`, the original shape: one call carrying every survivor, one repair budget, one proof pass over all of them. Nothing measured changes between them (a survivor is proven iff an authored test kills it alone and passes on the original, either way); what changes is that one unbuildable test no longer spends the whole file's retries and takes every other survivor down with it. Each survivor's proof in per-survivor mode runs its OWN compliant baseline (a compliant pass plus a canary, per seat), so a file with N survivors pays N baselines where batched paid one: on a repo whose suite takes a minute, prefer --writer-mode batched or expect N baselines' worth of wall clock.
-  -writer-model string
-    	model for the test-writer role — REQUIRED, corral has no default models. Takes a registry alias (.corral/models.json) or a concrete model name
+  -writer-model codex
+    	model for the test-writer role — REQUIRED, corral has no default models. Takes a registry alias (.corral/models.json) a concrete model name, or an agent seat (codex, `claude-code`, `antigravity`, or your own CORRALAI_AGENT_<NAME>)
 ```
 
 ## `corral control` flags
@@ -381,13 +381,13 @@ usage: corral criticscore list|show <id>|confirm <id> [--why ...]|refute <id> [-
 ```
 Usage of demo:
   -critic-model string
-    	model for the test-critic role, which must differ from the writer's ("off" disables it)
+    	model (or agent seat) for the test-critic role, which must differ from the writer's ("off" disables it)
   -dir string
     	where to write the demo project (default: a new temp dir, printed and kept)
-  -mutant-model string
-    	model for the mutant-generator role — REQUIRED, corral has no default models. Takes a registry alias (.corral/models.json) or a concrete model name
-  -writer-model string
-    	model for the test-writer role — REQUIRED, corral has no default models. Takes a registry alias (.corral/models.json) or a concrete model name
+  -mutant-model codex
+    	model for the mutant-generator role — REQUIRED, corral has no default models. Takes a registry alias (.corral/models.json) a concrete model name, or an agent seat (codex, `claude-code`, `antigravity`, or your own CORRALAI_AGENT_<NAME>)
+  -writer-model codex
+    	model for the test-writer role — REQUIRED, corral has no default models. Takes a registry alias (.corral/models.json) a concrete model name, or an agent seat (codex, `claude-code`, `antigravity`, or your own CORRALAI_AGENT_<NAME>)
 ```
 
 ## `corral doctor` flags
@@ -758,7 +758,7 @@ flags of `corral review`:
   -repo string
     	the checkout to review (a git repository at a commit) (default ".")
   -reviewer-model <name>:<model>
-    	the reviewer seat — an alias from the registry, a provider model name, or an AGENTIC seat: an agent NAME, pinned to a model as <name>:<model>. `claude-code` and `codex` are defined; ANY agent is defined the same way as CORRALAI_AGENT_<NAME>="<command line>" ({dir} the worktree, {out} a reply file, {model} / {model:FLAG} the pin; the brief on stdin, the reply on stdout). An agentic seat is a coding agent started in a disposable copy of the repository: it reads the whole scope itself (no --max-bytes cap) and hands back scripts, which corral runs — nothing it did itself is on the record. Required; corral has no default models
+    	the reviewer seat — an alias from the registry, a provider model name, or an AGENTIC seat: an agent NAME, pinned to a model as <name>:<model>. `claude-code`, `codex` and `antigravity` are defined; ANY agent is defined the same way as CORRALAI_AGENT_<NAME>="<command line>" ({dir} the worktree, {out} a reply file, {model} / {model:FLAG} the pin; the brief on stdin, the reply on stdout). An agentic seat is a coding agent started in a disposable copy of the repository: it reads the whole scope itself (no --max-bytes cap) and hands back scripts, which corral runs — nothing it did itself is on the record. Required; corral has no default models
   -scope string
     	the directory or file under --repo to review (required)
   -timeout duration
@@ -953,9 +953,9 @@ Usage of certify --repo:
   -commit string
     	commit SHA the report is bound to
   -critic-model string
-    	model for the test-critic role, which must differ from the writer's; "off" disables the critic entirely (it is advisory and never gates the verdict, so a single-vendor run with only one usable model can drop it). No default
+    	model (or agent seat) for the test-critic role, which must differ from the writer's; "off" disables the critic entirely (it is advisory and never gates the verdict, so a single-vendor run with only one usable model can drop it). No default
   -derive-model string
-    	model that derives a goal per file when --goals is not given — REQUIRED unless --goals is supplied; corral has no default models
+    	model (or agent seat) that derives a goal per file when --goals is not given — REQUIRED unless --goals is supplied; corral has no default models
   -diff-base string
     	bound the scan to files changed since this git ref, instead of ranking + --top. In a PR the diff IS the bound: ranking and --top do not apply on this path
   -dry-run
@@ -971,11 +971,11 @@ Usage of certify --repo:
   -max-proven-missed string
     	fail the scan (exit 1) if ANY audited file has MORE than this many proven-missed gaps — survivors the pool then killed with a test it WROTE and RAN. Opt-in and unset by default. Prefer this to --min-kill-rate as a merge gate: a kill rate is a proportion of freshly generated mutants and moves between runs on unchanged code, so a threshold set near a healthy value flaps red and gets switched off. A proven-missed gap is a specific demonstrated bug the suite does not catch, established by execution, and 0 means the pool proved nothing — not that it sampled well
   -max-tokens int
-    	cap on model TOKENS for the whole SCAN, every file, input + output, every seat (0 = no cap). Checked before each call and charged after it, so one in-flight call can overshoot by its own size. Once reached: a generator seat that has not run makes its file ungradable (executor-error naming the cap), a writer or critic seat is skipped and the file flagged as it is for a provider failure — the dev kill rate already measured stands. The cost line says the cap was reached and after how many calls. Corral has bounded mutants, shards and wall clock and never money; this is the money bound
+    	cap on model TOKENS for the whole SCAN, every file, input + output, every seat (0 = no cap; an agent seat that reports no token usage is refused, since the cap could not see it). Checked before each call and charged after it, so one in-flight call can overshoot by its own size. Once reached: a generator seat that has not run makes its file ungradable (executor-error naming the cap), a writer or critic seat is skipped and the file flagged as it is for a provider failure — the dev kill rate already measured stands. The cost line says the cap was reached and after how many calls. Corral has bounded mutants, shards and wall clock and never money; this is the money bound
   -min-kill-rate string
     	fail the scan (exit 1) if ANY audited file's kill rate is below this value (0.0-1.0 inclusive; a minimum, so a file exactly at the threshold passes). Opt-in: unset by default, so exit codes are unchanged unless this is given. Applies PER FILE, not to the aggregate — a well-tested file must not mask a weak one
-  -mutant-model string
-    	model for the mutant-generator role — REQUIRED, corral has no default models. Takes a registry alias (.corral/models.json) or a concrete model name
+  -mutant-model codex
+    	model for the mutant-generator role — REQUIRED, corral has no default models. Takes a registry alias (.corral/models.json) a concrete model name, or an agent seat (codex, `claude-code`, `antigravity`, or your own CORRALAI_AGENT_<NAME>)
   -mutants string
     	REPLAY a recorded mutant set (see --record-mutants) instead of generating one: every audited file is graded against exactly the mutants in this file, and not one generator model call is made. Mutants are authored by a model, so an ordinary run re-draws the exam every time and two runs of the same audit are not two samples of one measurement — pin the set and a change to anything ELSE becomes measurable. Every selected file must appear in the set with the SAME bytes it was recorded from; a missing file or a changed one is refused (exit 2) up front, never half-replayed. Reads a corral-mutants-2 document, or an older corral-mutants-1 one, whose whole-file mutants still replay byte-for-byte.
   -no-fail-fast
@@ -1030,8 +1030,8 @@ Usage of certify --repo:
     	grade every mutant against the project's WHOLE suite instead of the tests that demonstrably execute each file (the default, from one instrumented run per scan). Costs O(mutants x whole-suite runtime) per file and answers a different question — 'did ANY test catch it' rather than 'do this file's tests test it'. The verdict records which was used
   -writer-mode per-survivor
     	how the test-writer attacks a file's survivors: per-survivor (the default) makes ONE call per survivor — each carrying the file once as a cacheable shared prefix plus that survivor's diff, each repaired on its own budget and each PROVEN ALONE against its own mutant — or `batched`, the original shape: one call carrying every survivor, one repair budget for the file, one proof pass over all of them. Nothing measured changes between them (a survivor is proven iff an authored test kills it alone and passes on the original, either way); what changes is that one unbuildable test no longer spends the whole file's retries and takes every other survivor down with it. The verdict, the report line, the ledger and the attestation all record which mode earned the numbers. Each survivor's proof in per-survivor mode runs its OWN compliant baseline (a compliant pass plus a canary, per seat), so a file with N survivors pays N baselines where batched paid one: on a repo whose suite takes a minute, prefer --writer-mode batched or expect N baselines' worth of wall clock.
-  -writer-model string
-    	model for the test-writer role — REQUIRED, corral has no default models. Takes a registry alias (.corral/models.json) or a concrete model name
+  -writer-model codex
+    	model for the test-writer role — REQUIRED, corral has no default models. Takes a registry alias (.corral/models.json) a concrete model name, or an agent seat (codex, `claude-code`, `antigravity`, or your own CORRALAI_AGENT_<NAME>)
 ```
 
 ## `corral certify verify` flags

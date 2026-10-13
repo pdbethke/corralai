@@ -112,19 +112,43 @@ def totals(d, files):
     planted = sum(f.get("MutantsGraded") or 0 for f in files)
     wall = sum(f.get("TotalMillis") or 0 for f in files) + (d.get("selection_ms") or 0)
     calls = sum(c["calls"] for c in d["model_calls"])
-    tin = sum(c["input_tokens"] for c in d["model_calls"])
-    tout = sum(c["output_tokens"] for c in d["model_calls"])
-    return audited, converged, proven, planted, wall, calls, tin, tout
+    # A null/absent token total, or a row whose every call was unmetered, is
+    # "not metered", never 0: tin/tout sum the metered rows only and are None
+    # when none was. The third value is how many calls those sums leave out.
+    metered = [c for c in d["model_calls"] if not unmetered_row(c)]
+    um = sum(c["calls"] if unmetered_row(c) else c.get("unmetered_calls", 0) for c in d["model_calls"])
+    tin = sum(c["input_tokens"] for c in metered) if metered else None
+    tout = sum(c["output_tokens"] for c in metered) if metered else None
+    return audited, converged, proven, planted, wall, calls, tin, tout, um
+
+
+def unmetered_row(c):
+    return (
+        c.get("input_tokens") is None
+        or c.get("output_tokens") is None
+        or c.get("unmetered_calls", 0) >= c["calls"]
+    )
+
+
+def tokens_text(tin, tout, um):
+    if tin is None:
+        return "not metered"
+    s = f"{abbreviate(tin)} / {abbreviate(tout)}"
+    return s + (f" (+ {um} calls not metered)" if um else "")
 
 
 def by_model(d):
     agg = {}
     for c in d["model_calls"]:
         k = (c["role"], c["model"])
-        a = agg.setdefault(k, {"calls": 0, "in": 0, "out": 0, "wall": 0})
+        a = agg.setdefault(k, {"calls": 0, "in": None, "out": None, "um": 0, "wall": 0})
         a["calls"] += c["calls"]
-        a["in"] += c["input_tokens"]
-        a["out"] += c["output_tokens"]
+        if unmetered_row(c):
+            a["um"] += c["calls"]
+        else:
+            a["um"] += c.get("unmetered_calls", 0)
+            a["in"] = (a["in"] or 0) + c["input_tokens"]
+            a["out"] = (a["out"] or 0) + c["output_tokens"]
         a["wall"] += c["wall_ms"] or 0
     return agg
 
@@ -150,8 +174,8 @@ def render():
     for run in RUNS:
         d, files = load(run)
         loaded[run["key"]] = (d, files)
-        a, c, p, pl, w, calls, tin, tout = totals(d, files)
-        out.append(f"| {run['label']} | {a} | {c} of {a} | **{p}** | {pl} | {duration_text(w)} | {calls} | {abbreviate(tin)} / {abbreviate(tout)} |")
+        a, c, p, pl, w, calls, tin, tout, um = totals(d, files)
+        out.append(f"| {run['label']} | {a} | {c} of {a} | **{p}** | {pl} | {duration_text(w)} | {calls} | {tokens_text(tin, tout, um)} |")
     out.append("")
     out.append("*Time in audited files* sums each audited file's own phases plus the one selection pass; the runs' clock times — "
                "**4h15m** before, **1h20m** after, **1h22m** primed, from the launcher logs — are longer by the files the scan probed and then could not grade "
@@ -220,7 +244,7 @@ def render():
     for run in RUNS:
         d, _ = loaded[run["key"]]
         for (role, model), a in sorted(by_model(d).items()):
-            out.append(f"| {run['key']} | {role} | `{model}` | {a['calls']} | {abbreviate(a['in'])} / {abbreviate(a['out'])} | {duration_text(a['wall'])} |")
+            out.append(f"| {run['key']} | {role} | `{model}` | {a['calls']} | {tokens_text(a['in'], a['out'], a['um'])} | {duration_text(a['wall'])} |")
     out.append("")
     out.append(MD_END)
     return "\n".join(out) + "\n"

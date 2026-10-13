@@ -928,7 +928,7 @@ withheld unless `--push-source` — to a warehouse or MotherDuck, where the
 seats rank across every repository that pushes. A seat can be a coding
 agent — any agent you assign: `--reviewer-model <name>`, pinned to a model
 as `<name>:<model>`, where a name is a command line you define as
-`CORRALAI_AGENT_<NAME>="…"` (`claude-code`, `codex` and `antigravity` come defined) —
+`CORRALAI_AGENT_<NAME>="…"` (`claude-code`, `codex` and `antigravity` come defined; see [docs/corral/agent-seats.md](docs/corral/agent-seats.md)) —
 started in a throwaway worktree with the brief on stdin; it reads the
 tree itself and hands back scripts, and only corral's run of them is the
 record. `corral review plan` is

@@ -17,7 +17,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"slices"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -1096,11 +1095,7 @@ func (b jailBaselineRunner) RunBaseline() (bool, error) {
 		*b.lastOutput = rep.BaselineOutput
 	}
 	if rep.CompliantPass && b.flaky != nil {
-		for _, name := range rep.BaselineFlaky {
-			if !slices.Contains(*b.flaky, name) {
-				*b.flaky = append(*b.flaky, name)
-			}
-		}
+		*b.flaky = unionTestNames(*b.flaky, rep.BaselineFlaky)
 	}
 	return rep.CompliantPass, nil
 }

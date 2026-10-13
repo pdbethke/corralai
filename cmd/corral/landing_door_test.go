@@ -7,10 +7,12 @@ package main
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -400,5 +402,86 @@ func TestBriefSaysWhereALandedTestGoes(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), `"authored_landing": "src/foo_tests.rs"`) && !strings.Contains(out.String(), `"authored_landing":"src/foo_tests.rs"`) {
 		t.Errorf("brief --json lacks the landing:\n%s", out.String())
+	}
+}
+
+// TestBaselineFlakyIsOneValueFromTheRunnerToTheWarehouse: the tests a
+// passing baseline passed only on a retry are measured twice — by the
+// stability runs before the audit and by the audit's own dev pass — and are
+// ONE value from there on: Execute folds the runner's union into the
+// verdict, de-duplicated, the scan line is rendered from that verdict, and
+// the same list survives the scan's file row, the ledger entry (marshalled
+// and read back as the entry's own JSON) and the warehouse row, all WITHOUT
+// --push-source, which withholds the verdict document that used to be the
+// only place the dev pass's half was kept.
+func TestBaselineFlakyIsOneValueFromTheRunnerToTheWarehouse(t *testing.T) {
+	var progress bytes.Buffer
+	ex := localExecutor{
+		baselineRuns: 2,
+		progress:     &progress,
+		newBaseline: func(context.Context, localAuditInput) (reposcan.BaselineRunner, func(), error) {
+			return flakyBaseline{flaky: []string{"c tests::stability_only", "c tests::both"}}, func() {}, nil
+		},
+		audit: func(context.Context, localAuditInput) (advpool.Verdict, error) {
+			return advpool.Verdict{Lang: "rust", DevScored: true, DevKillRate: 0.5, BaselineFlaky: []string{"c tests::both", "c tests::dev_pass_only"}}, nil
+		},
+	}
+	job := reposcan.Job{Path: "src/foo.rs", Lang: "rust", Goal: reposcan.Goal{Text: "g"}}
+	res, err := ex.Execute(context.Background(), job)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"c tests::stability_only", "c tests::both", "c tests::dev_pass_only"}
+	if !slices.Equal(res.Verdict.BaselineFlaky, want) {
+		t.Fatalf("Verdict.BaselineFlaky = %q, want the runner's union folded in, de-duplicated: %q", res.Verdict.BaselineFlaky, want)
+	}
+	if got := progress.String(); strings.Count(got, "only on a retry") != 1 || !strings.Contains(got, flakyBaselineNote(want)) {
+		t.Errorf("the scan line must say the one folded value, once:\n%s", got)
+	}
+
+	res.Job = job
+	files := buildScanFileRows([]reposcan.FileResult{res}, nil, reposcan.CoverageMap{}, "", t.TempDir(), io.Discard)
+	b := buildBundle(scanstore.Scan{Repo: "o/r", Commit: "c"}, 1, files, nil, nil, nil, auditpush.Link{}, false, "o/r", "c", "", bundleMeta{})
+	raw, err := json.Marshal(auditpush.LedgerEntry{Format: "test", Bundle: b})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var back auditpush.LedgerEntry
+	if err := json.Unmarshal(raw, &back); err != nil {
+		t.Fatal(err)
+	}
+	wantCol := strings.Join(want, "\n")
+	if len(back.Bundle.Files) != 1 || back.Bundle.Files[0].BaselineFlaky != wantCol {
+		t.Fatalf("ledger entry file rows = %+v, want baseline_flaky %q", back.Bundle.Files, wantCol)
+	}
+	if f := fileFromRow(back.Bundle.Files[0]); f.BaselineFlaky != wantCol {
+		t.Errorf("reading the entry back dropped the flaky tests: %+v", f)
+	}
+
+	target := filepath.Join(t.TempDir(), "w.duckdb")
+	if _, err := pushBundle(target, b); err != nil {
+		t.Fatalf("pushBundle: %v", err)
+	}
+	db, err := sql.Open("duckdb", target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var col, verdictJSON sql.NullString
+	if err := db.QueryRow(`SELECT baseline_flaky, verdict_json FROM corral_audits WHERE path = 'src/foo.rs'`).Scan(&col, &verdictJSON); err != nil {
+		t.Fatal(err)
+	}
+	if verdictJSON.Valid {
+		t.Fatal("precondition: without --push-source the verdict document is withheld")
+	}
+	if col.String != wantCol {
+		t.Errorf("warehouse baseline_flaky = %+v, want %q", col, wantCol)
+	}
+	readBack, err := auditpush.ReadBundle(db, "o/r", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(readBack.Files) != 1 || readBack.Files[0].BaselineFlaky != wantCol {
+		t.Errorf("the warehouse reader dropped the flaky tests: %+v", readBack.Files)
 	}
 }

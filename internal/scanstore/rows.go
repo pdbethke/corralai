@@ -232,6 +232,15 @@ type File struct {
 	// then omitted, so `scans show --json` keeps its shape for every row
 	// that has none.
 	AuthoredLanding string `json:",omitempty"`
+	// BaselineFlaky is advpool.Verdict.BaselineFlaky — every test a passing
+	// baseline passed only on a retry (nextest's FLAKY), across the
+	// stability runs and the audit's dev pass — ONE PER LINE: a test name
+	// can hold a comma (a parametrized id) but never a newline, so the
+	// separator ProvenMutantIDs uses would be ambiguous here. Graded as
+	// passed, as the project's retry policy decides, and recorded so the
+	// row says its baseline leaned on retries. "" when none did, and then
+	// omitted.
+	BaselineFlaky string `json:",omitempty"`
 	// TestSelection, SelectedTests and SuiteTests say WHICH MEASUREMENT this
 	// row's kill rate is: the tests coverage evidence showed execute this
 	// file ("coverage-context", SelectedTests of SuiteTests), rather than the

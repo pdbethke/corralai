@@ -479,7 +479,8 @@ CREATE TABLE IF NOT EXISTS corral_audits (
   prior_digest                VARCHAR,
   computed_at                 TIMESTAMPTZ,
   mutants_from                VARCHAR,
-  authored_landing            VARCHAR
+  authored_landing            VARCHAR,
+  baseline_flaky              VARCHAR
 );`
 
 // The mutant grain's outcome CHECK is the same discipline scan_files'
@@ -658,6 +659,8 @@ var corralAuditsMigrationCols = []struct{ name, ddl string }{
 	{"mutants_from", "mutants_from VARCHAR"},
 	// The file a landed authored test must be appended to (Row.AuthoredLanding).
 	{"authored_landing", "authored_landing VARCHAR"},
+	// The tests a passing baseline passed only on a retry (Row.BaselineFlaky).
+	{"baseline_flaky", "baseline_flaky VARCHAR"},
 }
 
 // The other four tables are NEW at schema_version 2, so nothing predates
@@ -1398,8 +1401,8 @@ func insertFileRow(tx *sql.Tx, uid string, now time.Time, r Row) error {
 	    mutant_budget, mutant_budget_rule, complexity,
 	    symbols, symbols_probed, decisions, decisions_probed,
 	    challenger_mutants, challenger_survived_writer, challenger_survived_shadow, challenger_union, challenger_shared,
-	    priors_applied, prior_digest, computed_at, mutants_from, authored_landing
-	  ) VALUES (`+placeholders(95)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
+	    priors_applied, prior_digest, computed_at, mutants_from, authored_landing, baseline_flaky
+	  ) VALUES (`+placeholders(96)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
 		uid, now, r.Repo, r.Commit, r.Path, r.Lang,
 		killRate, r.Survivors, r.ProvenMissed,
 		r.TimedOut, r.TestWriterFailed, r.PoolTestUnsound,
@@ -1430,7 +1433,7 @@ func insertFileRow(tx *sql.Tx, uid string, now time.Time, r Row) error {
 		r.Symbols, r.SymbolsProbed, r.Decisions, r.DecisionsProbed,
 		r.ChallengerMutants, r.ChallengerSurvivedWriter, r.ChallengerSurvivedShadow, r.ChallengerUnion, r.ChallengerShared,
 		r.PriorsApplied, nullIfEmpty(r.PriorDigest), nullTime(r.ComputedAt), nullIfEmpty(r.MutantsFrom),
-		nullIfEmpty(r.AuthoredLanding),
+		nullIfEmpty(r.AuthoredLanding), nullIfEmpty(r.BaselineFlaky),
 	)
 	if err != nil {
 		return fmt.Errorf("auditpush: insert %s: %w", r.Path, err)

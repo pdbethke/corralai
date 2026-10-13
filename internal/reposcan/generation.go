@@ -139,7 +139,11 @@ package reposcan
 // for such a file could exist: every .rs file was refused). The same bump
 // covers BaselineFlaky (the tests a passing baseline passed only on a nextest
 // retry), added in the same change: a "17" document unmarshals it as nil,
-// which would read as "no test leaned on a retry".
+// which would read as "no test leaned on a retry". On certify --repo it is
+// the union of the stability runs before the audit and the audit's own dev
+// pass (folded in localExecutor.Execute before the verdict is recorded or
+// cached). That fold landed before "18" left this branch, so no "18"
+// verdict holds the narrower list and it needed no generation of its own.
 const VerdictGeneration = "18"
 
 // VerdictShapeSHA256 fingerprints advpool.Verdict's serialized shape: every

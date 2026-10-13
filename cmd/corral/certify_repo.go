@@ -3807,6 +3807,20 @@ func printWeakFile(w io.Writer, f reposcan.WeakFile) {
 	}
 }
 
+// unionTestNames is a followed by every name in b it does not already hold,
+// in first-seen order; nil when both are empty. The one way two measurements
+// of the same test list (two baseline runs; the stability runs and the
+// audit's dev pass) become one value.
+func unionTestNames(a, b []string) []string {
+	var out []string
+	for _, name := range slices.Concat(a, b) {
+		if !slices.Contains(out, name) {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
 // flakyBaselineNote is the ONE rendering of a baseline that passed only
 // because the runner retried some tests (nextest's FLAKY), shared by
 // certify --repo's scan line and certify --local's readout. "" when none did.
@@ -4891,17 +4905,28 @@ func (l *localExecutor) Execute(ctx context.Context, j reposcan.Job) (reposcan.F
 	}
 	// A pass that leaned on the runner's retries is still a pass — the
 	// project's own retry policy decides, and corral runs the command as
-	// given — but it is never a silent one: the tests are named.
+	// given — but it is never a silent one: the tests are named. The
+	// stability runs' list is kept until the audit's own dev pass has
+	// measured the same thing, and the two become ONE value on the verdict
+	// (below), which is what the scan line, the ledger and the warehouse all
+	// read.
+	var stabilityFlaky []string
 	if fr, ok := runner.(interface{ BaselineFlaky() []string }); ok {
-		if flaky := fr.BaselineFlaky(); len(flaky) > 0 {
-			l.note("%s: %s\n", j.Path, flakyBaselineNote(flaky))
-		}
+		stabilityFlaky = fr.BaselineFlaky()
 	}
 	release()
 
 	v, err := l.audit(ctx, in)
 	if err != nil {
+		// No verdict to carry it, but the measurement was taken: say it.
+		if note := flakyBaselineNote(stabilityFlaky); note != "" {
+			l.note("%s: %s\n", j.Path, note)
+		}
 		return reposcan.FileResult{}, l.fail(j, err)
+	}
+	v.BaselineFlaky = unionTestNames(stabilityFlaky, v.BaselineFlaky)
+	if note := flakyBaselineNote(v.BaselineFlaky); note != "" {
+		l.note("%s: %s\n", j.Path, note)
 	}
 	// Never fabricate a score: a verdict whose baseline could not pass is
 	// ungradable WITH ITS REASON, never a 0.0 kill rate that would read as

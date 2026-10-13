@@ -57,9 +57,12 @@ const fetchMaxStdout = 1 << 20
 //     an open question for the founder, not solved here.
 //   - Everywhere: the proxy variables in FetchEnv are forwarded verbatim, so
 //     a credential embedded in a proxy URL reaches the step.
-//   - macOS (sandbox-exec): Network adds (allow network*) and a blanket
-//     (allow mach-lookup), so the step can talk to any mach service the
-//     user's session exposes.
+//   - macOS (sandbox-exec): Network adds (allow network*), so every host
+//     loopback service is reachable as on Linux, plus the one mach service
+//     TLS needs (com.apple.trustd.agent; sandbox/sbpl.go layer 8). And, as
+//     in every macOS jail (named gap C1), the step can read the startup
+//     environment of any non-Apple process the operator owns, corral's
+//     included.
 //   - rustup older than 1.28 ignores RUSTUP_AUTO_INSTALL, so there a
 //     repository's rust-toolchain.toml can still make the proxy download and
 //     run the toolchain it names, inside this jail, with the network.

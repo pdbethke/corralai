@@ -99,6 +99,62 @@ def export(con, sql: str, out_path: str) -> int:
     return con.execute(f"SELECT count(*) FROM '{out_path}'").fetchone()[0]
 
 
+#: The SQL half of the rule that keeps a seat which named a TOOL, not a model
+#: (an unpinned agent seat), out of per-model analysis. The SAME text as
+#: internal/seatrecord.ResolvedOnly, which every Go store applies; a Go test
+#: there pins this line to it, so the public page and `corral models rank`
+#: cannot disagree about which rows count.
+RESOLVED_ONLY = "NOT COALESCE(model_unresolved, false)"
+
+
+def catches_sql(con, allow: str):
+    """The bug_catches extract's query, and how many allowlisted rows it
+    leaves out because their seat named no model.
+
+    The scorecard is a per-model analysis on a public page, so an unpinned
+    agent seat is left out exactly as `corral models rank` leaves it out. A
+    store written before the model_unresolved column existed has no such rows
+    (certify could not seat an agent then), so the filter is applied only when
+    the column exists — the query must not fail on an older store.
+    """
+    has_column = con.execute(
+        "SELECT count(*) FROM duckdb_columns() WHERE database_name = 'bugcatch' "
+        "AND table_name = 'bugcatch_observations' AND column_name = 'model_unresolved'"
+    ).fetchone()[0] > 0
+    where = f"short_repo(repo) IN {allow}"
+    unresolved = 0
+    if has_column:
+        unresolved = con.execute(
+            f"SELECT count(*) FROM bugcatch.bugcatch_observations WHERE {where} AND NOT ({RESOLVED_ONLY})"
+        ).fetchone()[0]
+        where += f" AND {RESOLVED_ONLY}"
+    sql = f"""
+        SELECT record_id,
+               short_repo(repo)                          AS repo,
+               model,
+               role,
+               source,
+               mutants_planted,
+               mutants_survived,
+               mutants_planted - mutants_survived        AS mutants_killed,
+               catches,
+               opportunities,
+               sound_tests,
+               authored_tests,
+               critic_flags,
+               shard,
+               region,
+               region_complexity,
+               region_lines,
+               shadow,
+               ts
+        FROM bugcatch.bugcatch_observations
+        WHERE {where}
+        ORDER BY record_id, shard
+    """
+    return sql, unresolved
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default="site/public/data")
@@ -142,38 +198,20 @@ def main() -> int:
     print(f"audit_ledger:  {kept} rows exported, {withheld['audit_ledger']} withheld (repo not on the public allowlist)")
 
     # --- the per-seat scorecard: which model caught what, in which role -----
-    catches_sql = f"""
-        SELECT record_id,
-               short_repo(repo)                          AS repo,
-               model,
-               role,
-               source,
-               mutants_planted,
-               mutants_survived,
-               mutants_planted - mutants_survived        AS mutants_killed,
-               catches,
-               opportunities,
-               sound_tests,
-               authored_tests,
-               critic_flags,
-               shard,
-               region,
-               region_complexity,
-               region_lines,
-               shadow,
-               ts
-        FROM bugcatch.bugcatch_observations
-        WHERE short_repo(repo) IN {allow}
-        ORDER BY record_id, shard
-    """
-    kept = export(con, catches_sql, f"{args.out}/bug_catches.parquet")
+    catches, unresolved = catches_sql(con, allow)
+    kept = export(con, catches, f"{args.out}/bug_catches.parquet")
     total = con.execute("SELECT count(*) FROM bugcatch.bugcatch_observations").fetchone()[0]
     # kept is -1 when export() REFUSED (an empty query against a populated
         # extract). Feeding the sentinel into `total - kept` printed
         # total+1 withheld — a number describing nothing that happened.
         # Found by a cold review, 2026-09-08 (R2).
-    withheld["bug_catches"] = (total - kept) if kept >= 0 else 0
-    print(f"bug_catches:   {kept} rows exported, {withheld['bug_catches']} withheld (repo not on the public allowlist)")
+    # Two different reasons, counted apart: a row left out because its seat
+    # named no model is not a private repo, and printing it as one would
+    # describe something that did not happen.
+    withheld["bug_catches"] = (total - kept - unresolved) if kept >= 0 else 0
+    withheld["bug_catches_model_unresolved"] = unresolved if kept >= 0 else 0
+    print(f"bug_catches:   {kept} rows exported, {withheld['bug_catches']} withheld (repo not on the public allowlist), "
+          f"{withheld['bug_catches_model_unresolved']} left out (unpinned agent seat: names a tool, not a model)")
 
     # --- the repo-scan series, already published; regenerated for parity ----
     #

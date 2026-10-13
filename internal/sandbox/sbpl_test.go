@@ -258,6 +258,16 @@ func TestSBPLRefusesAnAllowThatReopensADeny(t *testing.T) {
 		{"ReadOnly /Library/Developer", func(in *sbplInput) { in.ReadOnly = []string{"/Library/Developer"} }, ""},
 		{"Workspace in the home", func(in *sbplInput) { in.Workspace = "/Users/op/src/repo" }, ""},
 		{"no home: ReadOnly /Users", func(in *sbplInput) { in.OperatorHome = ""; in.ReadOnly = []string{"/Users"} }, ""},
+		// SBPL matches paths CASE-INSENSITIVELY (measured on macOS 27.0.1:
+		// an allow on "/library/preferences" grants /Library/Preferences),
+		// so a mis-cased allow re-opens a deny just as well.
+		{"ReadOnly /library", func(in *sbplInput) { in.ReadOnly = []string{"/library"} }, "/Library/Keychains"},
+		{"ReadOnly /USERS", func(in *sbplInput) { in.ReadOnly = []string{"/USERS"} }, "/Users/op"},
+		{"ReadOnly /users/OP", func(in *sbplInput) { in.ReadOnly = []string{"/users/OP"} }, "/Users/op"},
+		{"ReadOnly /PRIVATE/etc", func(in *sbplInput) { in.ReadOnly = []string{"/PRIVATE/etc"} }, "/private/etc/master.passwd"},
+		{"ReadOnly inside the keychains, mis-cased", func(in *sbplInput) { in.ReadOnly = []string{"/library/keychains/x"} }, "/Library/Keychains"},
+		{"Workspace /users", func(in *sbplInput) { in.Workspace = "/users" }, "/Users/op"},
+		{"ReadOnly /Users/op/.cargo/bin, mis-cased home", func(in *sbplInput) { in.ReadOnly = []string{"/users/op/.cargo/bin"} }, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			in := sampleSBPL(false)

@@ -174,10 +174,16 @@ func sbplCheckReopen(field, p, operatorHome string) error {
 	if operatorHome != "" {
 		ds = append(ds, denied{filepath.Clean(operatorHome), "the operator's home", false})
 	}
-	c := filepath.Clean(p)
+	// SBPL matches paths CASE-INSENSITIVELY (measured on macOS 27.0.1: an
+	// allow on "/library/preferences" grants /Library/Preferences), so the
+	// comparison folds case: "/library" re-opens /Library/Keychains exactly
+	// as "/Library" does. The profile only ever runs on macOS, so folding
+	// here is always right, whatever host builds it.
+	c := strings.ToLower(filepath.Clean(p))
 	var reopened []string
 	for _, d := range ds {
-		if c == "/" || c == d.path || strings.HasPrefix(d.path, c+"/") || (d.inside && strings.HasPrefix(c, d.path+"/")) {
+		dp := strings.ToLower(d.path)
+		if c == "/" || c == dp || strings.HasPrefix(dp, c+"/") || (d.inside && strings.HasPrefix(c, dp+"/")) {
 			reopened = append(reopened, d.path+" ("+d.what+")")
 		}
 	}

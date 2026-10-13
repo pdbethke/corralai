@@ -48,7 +48,7 @@ func TestSandboxExecPinsTheEnvironment(t *testing.T) {
 		t.Fatalf("exit=%d err=%q output=%q", res.ExitCode, res.Err, res.Output)
 	}
 	d := sandboxExecIsolator{}.jailDirs(resolved(ws))
-	for _, want := range []string{"HOME=" + d.Home, "TMPDIR=" + d.Tmp, "GOTOOLCHAIN=local", "CORRAL_HOST_ONLY_MARKER=leak"} {
+	for _, want := range []string{"HOME=" + d.Home, "TMPDIR=" + d.Tmp, "GOTOOLCHAIN=local", "GIT_CONFIG_NOSYSTEM=1", "CORRAL_HOST_ONLY_MARKER=leak"} {
 		if !strings.Contains(res.Output, want+"\n") {
 			t.Errorf("env lacks %q:\n%s", want, res.Output)
 		}

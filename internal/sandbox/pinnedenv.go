@@ -41,6 +41,12 @@ func pinnedEnv(d jailDirs) []envPin {
 		// then fails with a clear "go.mod requires go >= X" error instead — an
 		// honest, actionable signal.
 		{"GOTOOLCHAIN", "local"},
+		// The system gitconfig is operator configuration the jail must not
+		// depend on or read. On macOS it lives under the denied <brew>/etc,
+		// where git dies on the unreadable file (EPERM, not ENOENT); bwrap
+		// never binds /etc/gitconfig either. So this is parity, and changes
+		// nothing on Linux.
+		{"GIT_CONFIG_NOSYSTEM", "1"},
 	}
 }
 

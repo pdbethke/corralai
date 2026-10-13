@@ -25,6 +25,9 @@ type selfTester interface {
 // selfTestChecks are the guarantees the self-test proves, in the order the
 // probe reports them. Each is an executable line of the macOS jail spec
 // (D3): the first one missing from the output is the one that broke.
+// net-denied claims only that an outbound connection was refused, which
+// passes trivially on an offline host; the tag names are grepped by CI and
+// stay as they are.
 var selfTestChecks = []string{"sh-starts", "workspace-write", "env-pins", "home-denied", "net-denied"}
 
 // SelfTestError names the guarantee that failed, so a broken jail stops the

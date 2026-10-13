@@ -64,8 +64,9 @@ history of any release, `git log v0.3.4..v0.3.5`.
   yet run in certify.
 - **Smaller fixes.** certify and review now compare seats the same way,
   ignoring case. A pin starting with `-` is refused. A timed-out agent call
-  kills the whole process group, and Ctrl-C (or SIGTERM / SIGHUP) kills every
-  live agent seat's group and starts no new agent call, in every verb. The `--version` probe has a 10s bound.
+  kills the whole process group, and Ctrl-C (or SIGTERM) kills every live
+  agent seat's group and starts no new agent call, in every verb; an
+  interrupted run records nothing and exits non-zero. The `--version` probe has a 10s bound.
   `review` records the verifier's tokens when its reply does not parse.
   `certify` says when an operator agent's vendor cannot be told. The public
   warehouse's `bug_catches` extract leaves out unpinned agent seats.

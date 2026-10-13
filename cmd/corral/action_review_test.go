@@ -187,3 +187,14 @@ func TestActionPassesAgentTokensThroughOnlyWhenSet(t *testing.T) {
 		}
 	}
 }
+
+// The Marketplace and the Action UI show an input's description, not the
+// docs: an untested input must say so there too.
+func TestActionTokenInputsSayTheyHaveNotRunOnARunner(t *testing.T) {
+	a := loadActionYAML(t)
+	for _, in := range []string{"claude-code-oauth-token", "codex-api-key"} {
+		if !strings.Contains(a.Inputs[in].Description, "Not yet run on a runner") {
+			t.Errorf("%s's description lacks the not-yet-run label: %q", in, a.Inputs[in].Description)
+		}
+	}
+}

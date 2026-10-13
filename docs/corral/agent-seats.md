@@ -127,11 +127,14 @@ subscription to pay.
 
 Each agent runs in its own process group, so a timeout kills everything the
 agent started, a shell wrapper's children included. That takes it out of the
-terminal's foreground group, so corral forwards the interrupt itself: Ctrl-C,
-SIGTERM or SIGHUP kills every live agent seat's process group at once, and no
-further agent call is started in that run. This holds in every verb, including
-`review`, which has no other signal handling. When no agent is running,
-Ctrl-C means what it always did.
+terminal's foreground group, so corral forwards the interrupt itself: Ctrl-C
+or SIGTERM kills every live agent seat's process group at once, and no further
+agent call is started in that run. This holds in every verb, including
+`review`, which has no other signal handling. An interrupted run records
+nothing: no review entry, no verdict, no exclusion, no push, and it exits
+non-zero saying it was interrupted. When no agent is running, Ctrl-C means
+what it always did. A signal the process was started ignoring (`nohup`, for
+SIGINT under some shells) stays ignored. SIGHUP is not forwarded.
 
 ## Concurrency
 

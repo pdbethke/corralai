@@ -73,11 +73,11 @@ inputs:
     required: false
     default: ""
   claude-code-oauth-token:
-    description: "Login for a `claude-code` agent seat on a runner, supplied to the run as CLAUDE_CODE_OAUTH_TOKEN (the variable Claude Code reads; create one with `claude setup-token`). Only needed when a seat is `claude-code` and the runner has no login of its own; the `claude` CLI must also be installed on the runner. Exported only when set, so an empty input never blanks a token the runner already carries. Pass as a secret; never inline."
+    description: "Login for a `claude-code` agent seat on a runner, supplied to the run as CLAUDE_CODE_OAUTH_TOKEN (the variable Claude Code reads; create one with `claude setup-token`). Only needed when a seat is `claude-code` and the runner has no login of its own; the `claude` CLI must also be installed on the runner. Exported only when set, so an empty input never blanks a token the runner already carries. Not yet run on a runner. Pass as a secret; never inline."
     required: false
     default: ""
   codex-api-key:
-    description: "API key for a `codex` agent seat on a runner, supplied to the run as CODEX_API_KEY (the variable the codex CLI names for API-key auth). Only needed when a seat is `codex` and the runner has no login of its own; the `codex` CLI must also be installed. Exported only when set. Note that an API key bills per token, unlike a subscription login. Pass as a secret; never inline."
+    description: "API key for a `codex` agent seat on a runner, supplied to the run as CODEX_API_KEY (the variable the codex CLI names for API-key auth). Only needed when a seat is `codex` and the runner has no login of its own; the `codex` CLI must also be installed. Exported only when set. Note that an API key bills per token, unlike a subscription login. Not yet run on a runner: the variable name comes from the codex binary's own error text, not its --help. Pass as a secret; never inline."
     required: false
     default: ""
   model-key:

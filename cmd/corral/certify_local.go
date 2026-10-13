@@ -1299,11 +1299,11 @@ func resolveAuditRoles(in localAuditInput, stderr io.Writer) (auditRoles, error)
 	// every seat at one endpoint on purpose and is never overruled.
 	if backendSel == "" {
 		if vendor, model := soleAssignedCloudModel(assign); vendor != "" {
-			// ForModel is the single source of truth for which credential a
+			// ForSeat (which defers to ForModel for a cloud name) is the single source of truth for which credential a
 			// model needs, and its error already names the right variable —
 			// so this both validates the key and refuses with an actionable
 			// message, before any jail or store is opened.
-			if _, err := agentbackend.ForModel(model); err != nil {
+			if _, err := agentbackend.ForSeat(model, agentbackend.SeatOptions{}); err != nil {
 				return r, auditUsageErr("%v", err)
 			}
 			backendSel = backendForVendor(vendor)
@@ -1318,7 +1318,7 @@ func resolveAuditRoles(in localAuditInput, stderr io.Writer) (auditRoles, error)
 			// key" about a run with no Claude in it anywhere the operator
 			// could see, which describes a configuration they never chose.
 			if sm := strings.TrimSpace(assign[advpool.RoleMutantGeneratorShadow]); sm != "" && agentbackend.VendorOf(sm) != vendor {
-				if _, err := agentbackend.ForModel(sm); err != nil {
+				if _, err := agentbackend.ForSeat(sm, agentbackend.SeatOptions{}); err != nil {
 					return r, auditUsageErr("the challenger seat (--shadow-model) is %q, a different vendor from this run's graded %s seats, and %v. It only records a comparison and never gates the verdict — pass --shadow-model off to drop it, or give it a %s model", sm, vendor, err, vendor)
 				}
 			}

@@ -57,6 +57,14 @@ func soleAssignedCloudModel(assign advpool.RoleAssignment) (vendor, model string
 		if m == "" || m == "off" {
 			continue
 		}
+		// An AGENT seat (codex, claude-code:<model>) is a CLI that brings its
+		// own login: it needs no backend and no key, so it says nothing about
+		// which API the run must be pointed at. Counting it would make an
+		// all-agent run demand an API key it never uses, and set
+		// MODEL_BACKEND for a vendor nothing will dial.
+		if isAgentSeat(m) {
+			continue
+		}
 		v := agentbackend.VendorOf(m)
 		if v == "" {
 			// A local/ollama model name. Inferring a cloud backend from a set
@@ -74,6 +82,14 @@ func soleAssignedCloudModel(assign advpool.RoleAssignment) (vendor, model string
 	return vendor, model
 }
 
+// isAgentSeat reports whether spec names a coding-agent seat (`codex`,
+// `claude-code:<model>`, any CORRALAI_AGENT_<NAME>) rather than a model name.
+// Every site that treats a seat's name as an API model asks this first.
+func isAgentSeat(spec string) bool {
+	_, _, ok := agentbackend.AgentSeat(spec)
+	return ok
+}
+
 // localChatterFor builds the role→backend router for a real run: the base
 // backend from FromEnv() (MODEL_BACKEND-selected), switched to each role's
 // assigned model via WithModel when the backend supports it. A single ANTHROPIC
@@ -84,7 +100,7 @@ func soleAssignedCloudModel(assign advpool.RoleAssignment) (vendor, model string
 // just a different model on the same vendor. When the operator hasn't pinned
 // an explicit MODEL_BACKEND (the default direct-Claude path) AND the critic's
 // model resolves to a cloud vendor other than the base backend's, this builds
-// a dedicated critic backend via agentbackend.ForModel ONCE up front and
+// a dedicated critic backend via agentbackend.ForSeat ONCE up front and
 // routes RoleTestCritic to it; every other role keeps the base+WithModel path
 // unchanged. An explicit MODEL_BACKEND (openai/openrouter/ollama — an
 // operator pointing every role at one endpoint on purpose) is never
@@ -134,6 +150,23 @@ func localChatterFor(assign advpool.RoleAssignment, meters map[string]*agentback
 		if model == "" {
 			continue
 		}
+		// An AGENT seat is driven as a CLI through the one resolver, which
+		// needs no key and no backend. It is never routed through the base
+		// backend (it is not a model it could serve), and a daemon placement
+		// cannot apply to it: refuse that rather than ignore it.
+		if isAgentSeat(model) {
+			if url := endpoints[role]; url != "" {
+				return nil, fmt.Errorf("--local-endpoint %s=%s: seat %s is the agent seat %q, which runs as a CLI and is not served by a local daemon — remove the endpoint, or give this seat a local model", role, url, role, model)
+			}
+			// No per-call timeout exists for certify's API seats either, so
+			// the seat's own 15m default applies.
+			ab, err := agentbackend.ForSeat(model, agentbackend.SeatOptions{})
+			if err != nil {
+				return nil, fmt.Errorf("agent seat %s: %w", role, err)
+			}
+			perRole[role] = agentbackend.AsChatterBudgeted(ab, meters[role], budget)
+			continue
+		}
 		v := agentbackend.VendorOf(model)
 		if v == "" {
 			// A local/ollama name: the base backend serves it — UNLESS the
@@ -161,7 +194,7 @@ func localChatterFor(assign advpool.RoleAssignment, meters map[string]*agentback
 			// must never be re-routed to Anthropic behind their back.
 			continue
 		}
-		cb, err := agentbackend.ForModel(model)
+		cb, err := agentbackend.ForSeat(model, agentbackend.SeatOptions{})
 		if err != nil {
 			return nil, fmt.Errorf("cross-vendor %s: %w", role, err)
 		}

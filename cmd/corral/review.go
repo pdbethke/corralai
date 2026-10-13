@@ -389,7 +389,7 @@ func seatBackend(model, endpoint string) (agentbackend.Backend, error) {
 	if endpoint != "" {
 		return agentbackend.NewOllamaBackend(endpoint, model), nil
 	}
-	if v := agentbackend.VendorOf(model); v != "" && backendPinned() && (baseVendor() == "" || baseVendor() == v) {
+	if v := agentbackend.VendorOf(model); v != "" && !isAgentSeat(model) && backendPinned() && (baseVendor() == "" || baseVendor() == v) {
 		base := agentbackend.FromEnv()
 		if sw, ok := base.(agentbackend.ModelSwitcher); ok {
 			return sw.WithModel(model), nil

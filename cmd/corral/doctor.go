@@ -14,6 +14,7 @@ import (
 
 	"github.com/pdbethke/corralai/internal/adequacy"
 	"github.com/pdbethke/corralai/internal/advpool"
+	"github.com/pdbethke/corralai/internal/agentbackend"
 	"github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/reposcan"
 	"github.com/pdbethke/corralai/internal/sandbox"
@@ -307,7 +308,39 @@ func checkHerd(mutant, writer, critic, shadow, shadowWriter string, reg *seatRes
 		out = append(out, checkResult{name: name, detail: err.Error()})
 		return out
 	}
-	return append(out, checkResult{name: name, ok: true})
+	out = append(out, checkResult{name: name, ok: true})
+	return append(out, agentSeatChecks(mutant, writer, critic, shadow, shadowWriter)...)
+}
+
+// agentSeatChecks is one line per distinct AGENT seat the herd names. What
+// doctor can say for free is exactly three things: the resolver built the seat
+// (the definition expanded, which the preflight above already required), that
+// the binary is on PATH, the version the binary prints, and — said out loud — that
+// the login is NOT verified. An agent's subscription login can only be proved
+// by spending a call, and doctor spends none; printing "ok" for it would be a
+// claim nothing executed, the one thing this project refuses to make.
+func agentSeatChecks(specs ...string) []checkResult {
+	var out []checkResult
+	seen := map[string]bool{}
+	for _, spec := range specs {
+		spec = strings.TrimSpace(spec)
+		name, _, ok := agentbackend.AgentSeat(spec)
+		if !ok || seen[spec] {
+			continue
+		}
+		seen[spec] = true
+		if err := agentbackend.AgentBinary(name); err != nil {
+			out = append(out, checkResult{name: "agent seat " + spec, detail: err.Error()})
+			continue
+		}
+		out = append(out, checkResult{
+			name: "agent seat " + spec,
+			ok:   true,
+			detail: fmt.Sprintf("binary ok (%s), definition ok, login not verified (no call is spent)",
+				orDefault(agentbackend.AgentVersion(name), "version not reported")),
+		})
+	}
+	return out
 }
 
 // checkDeriveSeat rehearses the derive seat the same way certify --repo
@@ -323,7 +356,7 @@ func checkDeriveSeat(model, endpoint string) []checkResult {
 	if _, err := newLLMDeriver(model, endpoint); err != nil {
 		return []checkResult{{name: name, detail: err.Error()}}
 	}
-	return []checkResult{{name: name, ok: true}}
+	return append([]checkResult{{name: name, ok: true}}, agentSeatChecks(model)...)
 }
 
 // checkPairing answers the question that silently produces a useless run: does

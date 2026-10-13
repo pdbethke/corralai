@@ -405,9 +405,11 @@ func seatTool(seat string) string {
 
 // toolVendor maps the agentic CLIs review_agent.go can drive to the vendor
 // whose model they run BY DEFAULT, for seats recorded with no explicit model
-// ("codex", "claude-code"). agentbackend.VendorOf deliberately answers only
-// about MODEL names, so this is an extension for tools rather than a second
-// copy of that rule — and it is consulted only after VendorOf declines.
+// ("codex", "claude-code"). agentbackend.VendorOf now answers for the built-in
+// agents itself (from the maker declared on their definition), so this table
+// is a fallback for the process where an operator has redefined one — it is
+// consulted only after VendorOf declines. It restates that data and is a
+// candidate for deletion.
 var toolVendor = map[string]string{
 	"claude-code": "anthropic",
 	"codex":       "openai",

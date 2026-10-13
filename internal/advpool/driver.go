@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/pdbethke/corralai/internal/adequacy"
+	"github.com/pdbethke/corralai/internal/agentbackend"
 	golang "github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/matrix"
 	"github.com/pdbethke/corralai/internal/modelcorr"
@@ -859,10 +860,17 @@ type RunState struct {
 // share a model. A test-critic judging tests written by its own model (or a
 // copy of it) is not an independent check — it is the same failure mode
 // grading its own homework. Enforced at driver construction (soundness #4).
+//
+// The comparison is over agentbackend.SeatModelOf, not the raw spec: an agent
+// seat is the model it is pinned to (`codex:gpt-6-astra` is gpt-6-astra) or,
+// unpinned, the agent itself. So `codex` + `codex` is refused (one tool, one
+// model chosen by that tool), while `codex` + `codex:gpt-6-astra` is two
+// different seats. An API name is its own SeatModelOf, so every existing
+// caller — the brain included — compares exactly what it did before.
 func CheckDecorrelation(assign RoleAssignment) error {
 	critic, writer := assign[RoleTestCritic], assign[RoleTestWriter]
-	if critic != "" && critic == writer {
-		return fmt.Errorf("advpool: decorrelation guard: test-critic and test-writer must not share model %q", critic)
+	if critic != "" && agentbackend.SeatModelOf(critic) == agentbackend.SeatModelOf(writer) {
+		return fmt.Errorf("advpool: decorrelation guard: test-critic and test-writer must not share model %q", agentbackend.SeatModelOf(critic))
 	}
 	return nil
 }

@@ -231,7 +231,7 @@ func FromEnv() Backend {
 // caller that wants "whatever backend serves this model" wants this function;
 // a caller that specifically requires a cloud vendor still wants ForModel.
 func ForModelOrLocal(model string) (Backend, error) {
-	if VendorOf(model) == "" {
+	if apiVendorOf(model) == "" {
 		return NewOllamaBackend(env("OLLAMA_URL", "http://127.0.0.1:11434"), model), nil
 	}
 	return ForModel(model)
@@ -339,13 +339,40 @@ func ForModel(model string) (Backend, error) {
 	}
 }
 
-// VendorOf reports which cloud vendor ForModel would route model to
-// ("anthropic"/"google"/"openai"), or "" if none matches (e.g. a local/ollama
-// model name) — used by callers (certify --local's localChatterFor) that need
-// to know a critic model's vendor differs from the base backend's BEFORE
-// calling ForModel (e.g. to decide whether cross-vendor routing even
-// applies), without duplicating the prefix table.
-func VendorOf(model string) string {
+// VendorOf reports which cloud vendor a seat spec is served by
+// ("anthropic"/"google"/"openai"), or "" when none is known (a local/ollama
+// model name, or an operator-defined agent that is not pinned to a model).
+//
+// A model name is answered by its prefix (apiVendorOf, the table ForModel
+// routes by). An AGENT seat is answered by what it runs: pinned
+// (`codex:gpt-6-astra`) the model's own vendor, falling back to the agent's
+// maker when the model name matches no prefix; unpinned the maker of the
+// built-in definition (`codex` -> openai). The maker is DATA on builtinAgent,
+// never a switch on the agent's name. An operator's own agent, or a built-in
+// the operator has REDEFINED, has no declared maker — corral cannot know what
+// their command runs — so unpinned it answers "": silence over a guess.
+//
+// Callers that compare vendors (the same-vendor warning, the verdict's "every
+// graded seat is X" line, cross-vendor routing) ask this, so an agent seat
+// takes part in those rules instead of being invisible to them.
+func VendorOf(spec string) string {
+	if name, model, ok := AgentSeat(spec); ok {
+		if v := apiVendorOf(model); v != "" {
+			return v
+		}
+		if _, builtin, _ := agentDefinition(name); builtin {
+			return builtinAgents[name].maker
+		}
+		return ""
+	}
+	return apiVendorOf(spec)
+}
+
+// apiVendorOf is the model-name prefix table: the vendor ForModel routes a
+// MODEL name to. It is deliberately agent-blind — ForModel and
+// ForModelOrLocal build API backends, and must never mistake a CLI seat for
+// one.
+func apiVendorOf(model string) string {
 	switch {
 	case hasAnyPrefix(model, "claude-", "opus-", "sonnet-", "haiku-", "fable-"):
 		return "anthropic"

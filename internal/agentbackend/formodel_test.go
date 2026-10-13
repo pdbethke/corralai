@@ -195,3 +195,47 @@ func TestOpenRouterReadsItsOwnKey(t *testing.T) {
 		t.Errorf("fallback = %q @ %q, want the OPENAI_* configuration honoured", ob.key, ob.base)
 	}
 }
+
+// VendorOf answers for agent seats from the maker declared on the built-in
+// definition; every API-name answer is what it always was.
+func TestVendorOfAgentSeats(t *testing.T) {
+	t.Setenv("CORRALAI_AGENT_MYTOOL", "/bin/cat")
+	t.Setenv("CORRALAI_AGENT_CODEX", "") // not set: the built-in applies
+	for spec, want := range map[string]string{
+		"codex":                  "openai",
+		"claude-code":            "anthropic",
+		"antigravity":            "google",
+		"codex:gpt-6-astra":      "openai",
+		"claude-code:gemini-9":   "google", // the pinned model decides, not the maker
+		"codex:astra-unprefixed": "openai", // no prefix: fall back to the maker
+		"mytool":                 "",       // operator agent, unpinned: unknown
+		"mytool:claude-sonnet-5": "anthropic",
+		"mytool:local-model":     "",
+		// API names are unchanged.
+		"claude-sonnet-5": "anthropic",
+		"gemini-3.6-pro":  "google",
+		"gpt-6":           "openai",
+		"llama3:8b":       "",
+		"":                "",
+	} {
+		if got := VendorOf(spec); got != want {
+			t.Errorf("VendorOf(%q) = %q, want %q", spec, got, want)
+		}
+	}
+	// A redefined built-in has no declared maker: corral cannot know what it runs.
+	t.Setenv("CORRALAI_AGENT_CODEX", "/bin/cat")
+	if got := VendorOf("codex"); got != "" {
+		t.Errorf("VendorOf(redefined codex) = %q, want empty", got)
+	}
+}
+
+// ForModelOrLocal must stay agent-blind: it builds API backends.
+func TestForModelOrLocalIgnoresAgentNames(t *testing.T) {
+	b, err := ForModelOrLocal("codex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := b.(*ollamaBackend); !ok {
+		t.Fatalf("ForModelOrLocal(codex) = %T, want the local backend", b)
+	}
+}

@@ -134,7 +134,7 @@ func (d llmDeriver) modelCallRows() []scanstore.ModelCall {
 // when a cloud vendor's credential is absent.
 //
 // THE SAME RULES AS EVERY GRADING SEAT (localChatterFor). This seat used to
-// call ForModelOrLocal directly, which ignores MODEL_BACKEND — so with the
+// call ForModelOrLocal directly (now ForSeat), which ignores MODEL_BACKEND — so with the
 // operator's gateway pinned (MODEL_BACKEND=openrouter, OPENAI_BASE_URL=…),
 // the three grading seats went through the gateway and the derive seat
 // dialled the vendor directly, demanding the vendor's own key and sending
@@ -149,6 +149,18 @@ func (d llmDeriver) modelCallRows() []scanstore.ModelCall {
 // the only seat that demanded a cloud vendor, against corral's own
 // local-first claim, and a summarizing task is one a local model handles.
 func newLLMDeriver(model, endpoint string) (reposcan.Deriver, error) {
+	if isAgentSeat(model) {
+		// A coding agent as the derive seat: a CLI with its own login, so
+		// neither a registry daemon nor the pinned gateway applies to it.
+		if endpoint != "" {
+			return nil, fmt.Errorf("goal deriver: the registry places the derive seat on a local daemon (%s), but %q is an agent seat that runs as a CLI — remove the endpoint, or give this seat a local model", endpoint, model)
+		}
+		b, err := agentbackend.ForSeat(model, agentbackend.SeatOptions{})
+		if err != nil {
+			return nil, fmt.Errorf("goal deriver: %w", err)
+		}
+		return newMeteredDeriver(b, model), nil
+	}
 	if endpoint != "" {
 		return newMeteredDeriver(agentbackend.NewOllamaBackend(endpoint, model), model), nil
 	}
@@ -159,7 +171,7 @@ func newLLMDeriver(model, endpoint string) (reposcan.Deriver, error) {
 		}
 		return newMeteredDeriver(base, model), nil
 	}
-	b, err := agentbackend.ForModelOrLocal(model)
+	b, err := agentbackend.ForSeat(model, agentbackend.SeatOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("goal deriver: %w", err)
 	}

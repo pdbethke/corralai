@@ -230,6 +230,27 @@ func AgentVersion(name string) string {
 	return strings.TrimSpace(version + " [" + def + "]")
 }
 
+// AgentBinary checks, without running anything, that the agent's binary can be
+// found: `doctor` needs a free answer to "is the CLI even installed" that does
+// not spend a call. A definition that wraps the agent in a shell (antigravity)
+// has the shell as its first word, and the shell is always there, so for
+// those the check proves only that the shell exists — it cannot see the CLI
+// inside the wrapper, and says nothing it did not look at.
+func AgentBinary(name string) error {
+	def, _, ok := agentDefinition(name)
+	if !ok {
+		return fmt.Errorf("agent %q is not defined (define it as %s=\"<command line>\")", name, agentEnvKey(name))
+	}
+	argv, err := splitWords(def)
+	if err != nil || len(argv) == 0 {
+		return fmt.Errorf("agent %s: its definition %q does not parse", name, def)
+	}
+	if _, err := exec.LookPath(argv[0]); err != nil {
+		return fmt.Errorf("agent %s: binary %q not found: %v", name, argv[0], err)
+	}
+	return nil
+}
+
 // isShell reports whether a definition's first word is a shell rather than
 // the agent itself, so its --version is not mistaken for the seat's.
 func isShell(prog string) bool {

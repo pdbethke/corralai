@@ -8,6 +8,7 @@ import (
 	"crypto/ed25519"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,6 +17,7 @@ import (
 	"time"
 
 	"github.com/pdbethke/corralai/internal/certverify"
+	"github.com/pdbethke/corralai/internal/sandbox"
 )
 
 // gitInitRepo makes a throwaway git repo with one committed file and one
@@ -298,3 +300,47 @@ func TestRunCertifyStandalonePropagatesFailingExit(t *testing.T) {
 		t.Errorf("expected a record even for a failing check: %v", err)
 	}
 }
+
+// TestCertifyChangeJailWarnsOnceOnMacOS: certify change resolves its jail
+// on its own path (realJail.Run, per check), and must print the same macOS
+// jail warning as certify --local/--repo, once per process, never for
+// bwrap, never a value. It has no --jail flag of its own.
+func TestCertifyChangeJailWarnsOnceOnMacOS(t *testing.T) {
+	var buf bytes.Buffer
+	oldOut, oldEnv, oldResolve := jailWarnOut, jailWarnEnviron, changeResolveFn
+	t.Cleanup(func() {
+		jailWarnOut, jailWarnEnviron, changeResolveFn = oldOut, oldEnv, oldResolve
+		resetJailWarnOnce()
+	})
+	jailWarnOut = &buf
+	jailWarnEnviron = func() []string { return []string{"OPENAI_API_KEY=sk-SECRETVALUE"} }
+	backend := "bwrap"
+	changeResolveFn = func(sandbox.Config) (sandbox.Isolator, error) { return refusingIsolator{backend}, nil }
+	resetJailWarnOnce()
+
+	dir := t.TempDir()
+	_, _, _, _ = realJail{}.Run(context.Background(), "true", dir, false, time.Second)
+	if buf.Len() != 0 {
+		t.Fatalf("bwrap printed the macOS warning:\n%s", buf.String())
+	}
+	backend = "sandbox-exec"
+	_, _, _, _ = realJail{}.Run(context.Background(), "true", dir, false, time.Second)
+	_, _, _, _ = realJail{}.Run(context.Background(), "true", dir, false, time.Second)
+	out := buf.String()
+	if strings.Count(out, "macOS jail:") != 1 {
+		t.Fatalf("want the warning exactly once, got:\n%s", out)
+	}
+	if !strings.Contains(out, "OPENAI_API_KEY") || strings.Contains(out, "SECRETVALUE") || !strings.Contains(out, "certify --local --jail container") {
+		t.Errorf("warning must name the variable, never its value, and point at certify --local --jail container:\n%s", out)
+	}
+}
+
+// refusingIsolator is a named backend whose Wrap refuses, so the test
+// exercises resolution and never executes anything.
+type refusingIsolator struct{ name string }
+
+func (r refusingIsolator) Name() string { return r.name }
+func (refusingIsolator) Wrap(string, sandbox.Options, []string) ([]string, error) {
+	return nil, errors.New("test backend: wrap refused")
+}
+func (refusingIsolator) Preflight() error { return nil }

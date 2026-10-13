@@ -52,6 +52,8 @@ var sbplSystemReads = []sbplRule{
 	{`(allow file-read* (subpath "/dev"))`, "device nodes: /dev/null, /dev/urandom, /dev/tty"},
 	{`(allow file-read* (subpath "/Library/Developer"))`, "the Xcode command line tools: clang, git, the SDK headers cgo needs"},
 	{`(allow file-read* (subpath "/opt/homebrew"))`, "Apple-silicon Homebrew toolchains, masked below like /usr"},
+	{`(deny file-read* (subpath "` + sbplBrewVar + `"))`, "Homebrew service data: Postgres, MySQL and Redis data directories, never a toolchain"},
+	{`(deny file-read* (subpath "` + sbplBrewEtc + `"))`, "Homebrew service config, which can hold passwords; never a toolchain"},
 	{`(allow file-write* (literal "/dev/null") (literal "/dev/tty"))`, "discarding output and writing to the terminal"},
 	{`(allow file-ioctl (literal "/dev/null") (literal "/dev/tty"))`, "isatty checks the shell and test runners make"},
 }
@@ -64,11 +66,13 @@ var sbplServices = []sbplRule{
 	{`(allow ipc-posix-shm-read* (ipc-posix-name "apple.shm.notification_center"))`, "notifyd's shared page, read only"},
 }
 
-// The fixed secret stores the profile denies: master.passwd in layer 2, the
-// other two in layer 4. Named once, because sbplCheckReopen must refuse any
-// later allow that would re-expose them.
+// The fixed secret stores the profile denies: master.passwd and Homebrew's
+// var/ and etc/ in layer 2, the other two in layer 4. Named once, because
+// sbplCheckReopen must refuse any later allow that would re-expose them.
 const (
 	sbplMasterPasswd = "/private/etc/master.passwd"
+	sbplBrewVar      = "/opt/homebrew/var"
+	sbplBrewEtc      = "/opt/homebrew/etc"
 	sbplKeychains    = "/Library/Keychains"
 	sbplDSLocal      = "/private/var/db/dslocal"
 )
@@ -153,7 +157,10 @@ func sbplValidate(in sbplInput) error {
 // workspace, layer 6) that would undo a deny above it. SBPL applies the LAST
 // matching rule, so an allow on a path that EQUALS or CONTAINS a denied one
 // re-allows it: ReadOnly "/private" would hand the jail master.passwd,
-// "/Library" the system keychains, "/Users" the operator's home. A toolchain
+// "/Library" the system keychains, "/Users" the operator's home,
+// "/opt/homebrew" Homebrew's service databases. (A Homebrew binary needs no
+// bind: the toolchain resolver treats /opt/homebrew as a tree the jail already
+// reads, adequacy.jailReadsSystemPath.) A toolchain
 // resolver can produce such a path (it once bound "/private" for any
 // toolchain under a macOS temp dir); this makes that a refusal, never a
 // silently open jail.
@@ -170,6 +177,8 @@ func sbplCheckReopen(field, p, operatorHome string) error {
 		{sbplMasterPasswd, "the password hashes", true},
 		{sbplKeychains, "the system keychains", true},
 		{sbplDSLocal, "the directory-service password database", true},
+		{sbplBrewVar, "Homebrew's service data", true},
+		{sbplBrewEtc, "Homebrew's service config", true},
 	}
 	if operatorHome != "" {
 		ds = append(ds, denied{filepath.Clean(operatorHome), "the operator's home", false})

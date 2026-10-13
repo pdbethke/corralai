@@ -162,6 +162,13 @@ func TestMisCasedPathOnTheRealFilesystem(t *testing.T) {
 // to /bin/sh must add no bind — binding /bin widened the jail for nothing.
 // On Linux /bin is usrmerge's symlink into /usr, which already resolves to
 // /usr, so the rule there is unchanged.
+//
+// /opt/homebrew is read whole by the same layer, which then DENIES its var/
+// (service databases) and etc/ (service config). A Homebrew binary must
+// therefore add no bind either: the bind would be /opt/homebrew itself, an
+// allow after those denies that re-opens them, which the profile builder
+// refuses (sbplCheckReopen) — so binding it would make every Homebrew
+// toolchain unrunnable, not merely widen the jail.
 func TestSystemBinariesNeedNoBindOnDarwin(t *testing.T) {
 	for _, tc := range []struct {
 		goos, real string
@@ -171,7 +178,12 @@ func TestSystemBinariesNeedNoBindOnDarwin(t *testing.T) {
 		{"darwin", "/sbin/ping", true},
 		{"darwin", "/usr/bin/git", true},
 		{"darwin", "/binx/tool", false},
-		{"darwin", "/opt/homebrew/bin/node", false},
+		{"darwin", "/opt/homebrew/bin/node", true},
+		{"darwin", "/opt/homebrew/Cellar/node/22.1.0/bin/node", true},
+		{"darwin", "/OPT/Homebrew/bin/node", true},
+		{"darwin", "/opt/homebrewx/bin/node", false},
+		{"darwin", "/opt/local/bin/port", false},
+		{"linux", "/opt/homebrew/bin/node", false},
 		{"linux", "/usr/bin/go", true},
 		{"linux", "/bin/sh", false},
 		{"linux", "/sbin/x", false},

@@ -71,6 +71,31 @@ func TestSBPLLayersAreOrdered(t *testing.T) {
 	}
 }
 
+// TestSBPLHomebrewDataAndConfigAreDenied: layer 2 reads /opt/homebrew whole
+// for its toolchains, but /opt/homebrew/var holds service DATA (Postgres,
+// MySQL, Redis data directories) and /opt/homebrew/etc service CONFIG that
+// can hold passwords. Both denies must FOLLOW the /opt/homebrew allow (SBPL
+// applies the last matching rule) and precede every later allow.
+func TestSBPLHomebrewDataAndConfigAreDenied(t *testing.T) {
+	lines := strings.Split(mustProfile(t, sampleSBPL(true)), "\n")
+	brew := lineIndex(lines, `(allow file-read* (subpath "/opt/homebrew"))`)
+	brewVar := lineIndex(lines, `(deny file-read* (subpath "/opt/homebrew/var"))`)
+	brewEtc := lineIndex(lines, `(deny file-read* (subpath "/opt/homebrew/etc"))`)
+	goAllow := lineIndex(lines, `(allow file-read* (subpath "/Users/op/sdk/go"))`)
+	ws := lineIndex(lines, `(allow file-read* file-write* (subpath "/private/var/folders/x/T/corral-adequacy-1"))`)
+	for name, i := range map[string]int{"brew": brew, "brewVar": brewVar, "brewEtc": brewEtc, "goAllow": goAllow, "ws": ws} {
+		if i < 0 {
+			t.Fatalf("%s rule missing from profile:\n%s", name, strings.Join(lines, "\n"))
+		}
+	}
+	if !(brew < brewVar && brew < brewEtc) {
+		t.Errorf("the /opt/homebrew/var (%d) and /opt/homebrew/etc (%d) denies must follow the /opt/homebrew allow (%d)", brewVar, brewEtc, brew)
+	}
+	if !(brewVar < goAllow && brewEtc < goAllow && brewVar < ws && brewEtc < ws) {
+		t.Errorf("the Homebrew denies (%d, %d) must precede the ReadOnly (%d) and workspace (%d) allows", brewVar, brewEtc, goAllow, ws)
+	}
+}
+
 // TestSBPLSecretStoresPrecedeAllows: the keychain and directory-service denies
 // must come before every ReadOnly allow and the workspace allow, and the
 // master.passwd deny must come before both as well. A later allow that matched
@@ -268,6 +293,18 @@ func TestSBPLRefusesAnAllowThatReopensADeny(t *testing.T) {
 		{"ReadOnly inside the keychains, mis-cased", func(in *sbplInput) { in.ReadOnly = []string{"/library/keychains/x"} }, "/Library/Keychains"},
 		{"Workspace /users", func(in *sbplInput) { in.Workspace = "/users" }, "/Users/op"},
 		{"ReadOnly /Users/op/.cargo/bin, mis-cased home", func(in *sbplInput) { in.ReadOnly = []string{"/users/op/.cargo/bin"} }, ""},
+		// Homebrew's service data and config (layer 2 denies them after
+		// reading /opt/homebrew whole): an allow on /opt, /opt/homebrew or
+		// anything inside var/ or etc/ would re-open them.
+		{"ReadOnly /opt", func(in *sbplInput) { in.ReadOnly = []string{"/opt"} }, "/opt/homebrew/var"},
+		{"ReadOnly /opt/homebrew", func(in *sbplInput) { in.ReadOnly = []string{"/opt/homebrew"} }, "/opt/homebrew/etc"},
+		{"ReadOnly /opt/homebrew/var", func(in *sbplInput) { in.ReadOnly = []string{"/opt/homebrew/var"} }, "/opt/homebrew/var"},
+		{"ReadOnly inside /opt/homebrew/var", func(in *sbplInput) { in.ReadOnly = []string{"/opt/homebrew/var/postgresql@17"} }, "/opt/homebrew/var"},
+		{"ReadOnly /opt/homebrew/etc", func(in *sbplInput) { in.ReadOnly = []string{"/opt/homebrew/etc"} }, "/opt/homebrew/etc"},
+		{"ReadOnly /OPT/Homebrew, mis-cased", func(in *sbplInput) { in.ReadOnly = []string{"/OPT/Homebrew"} }, "/opt/homebrew/var"},
+		{"Workspace /opt/homebrew", func(in *sbplInput) { in.Workspace = "/opt/homebrew" }, "/opt/homebrew/var"},
+		{"ReadOnly a Homebrew keg", func(in *sbplInput) { in.ReadOnly = []string{"/opt/homebrew/Cellar/go/1.26.0"} }, ""},
+		{"ReadOnly /opt/homebrew/variants (a sibling, not var/)", func(in *sbplInput) { in.ReadOnly = []string{"/opt/homebrew/variants"} }, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			in := sampleSBPL(false)

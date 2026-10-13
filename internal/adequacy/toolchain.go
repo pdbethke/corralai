@@ -264,11 +264,22 @@ func toolchainBindsFor(cmd0 string) ([]sandbox.Bind, error) {
 // reads it), and on macOS also /bin and /sbin, which are real directories
 // there (on Linux they are usrmerge symlinks that already resolved to /usr)
 // and which the macOS profile reads in its system layer (sandbox/sbpl.go).
+//
+// On macOS that layer also reads /opt/homebrew whole and then denies its
+// var/ and etc/ (service data and config). A Homebrew binary's toolchain
+// root is /opt/homebrew itself, and binding it would be an allow AFTER those
+// denies, re-opening them — the profile builder refuses exactly that
+// (sbplCheckReopen). So it is read in place, never bound. Folded as the
+// volume folds: /OPT/homebrew is the same tree there.
 func jailReadsSystemPath(goos, real string) bool {
 	if strings.HasPrefix(real, "/usr/") {
 		return true
 	}
-	return goos == "darwin" && (strings.HasPrefix(real, "/bin/") || strings.HasPrefix(real, "/sbin/"))
+	if goos != "darwin" {
+		return false
+	}
+	k := strings.ToLower(real)
+	return strings.HasPrefix(k, "/bin/") || strings.HasPrefix(k, "/sbin/") || strings.HasPrefix(k, "/opt/homebrew/")
 }
 
 // childOnPath is the child of root that real lives under (root/bin for

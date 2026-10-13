@@ -7,6 +7,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
+	"slices"
 	"strings"
 
 	"github.com/pdbethke/corralai/internal/sandbox"
@@ -31,16 +33,75 @@ import (
 // roots, and which must never themselves be bound. Binding $HOME to run a test
 // would hand the sandboxed command every credential the operator owns, which is
 // the opposite of this package's purpose.
-func toolchainBoundaries() map[string]bool {
+func toolchainBoundaries() map[string]bool { return toolchainBoundariesFor(runtime.GOOS) }
+
+// darwinToolchainBoundaries are macOS's counterparts of the Linux set. A
+// binary path is compared with its symlinks resolved, and on macOS /tmp, /var
+// and /etc are symlinks into /private, so without these the walk from any
+// toolchain under /private/tmp or a temp dir reached the first child of / and
+// bound /private whole (master.passwd, every user's temp dir); one under
+// /Library bound /Library (the system keychains); one under /Users/Shared
+// bound every user's home.
+var darwinToolchainBoundaries = []string{
+	"/private", "/private/var", "/private/var/folders", "/private/tmp", "/private/etc",
+	"/Users", "/Library", "/System", "/Applications", "/Volumes",
+}
+
+// toolchainBoundariesFor is toolchainBoundaries for the named GOOS, so the
+// darwin set is testable on Linux. $HOME is a boundary in BOTH spellings —
+// as given and with its symlinks resolved — because the binary path it is
+// compared with is resolved: a symlinked home (/home/op -> /data/op, or any
+// macOS temp home under /var) otherwise never matches, and the walk binds
+// the directory ABOVE the operator's home.
+func toolchainBoundariesFor(goos string) map[string]bool {
 	b := map[string]bool{
 		"/": true, "/home": true, "/usr": true, "/opt": true, "/snap": true,
 		"/var": true, "/etc": true, "/srv": true, "/mnt": true, "/media": true,
 		"/root": true, "/tmp": true, "/local": true,
 	}
-	if home, err := os.UserHomeDir(); err == nil && home != "" {
-		b[filepath.Clean(home)] = true
+	if goos == "darwin" {
+		for _, d := range darwinToolchainBoundaries {
+			b[d] = true
+		}
+		// The per-user temp dir, /private/var/folders/<xx>/<hash>/T: a
+		// toolchain in it binds its own directory, never the hash bucket or
+		// the operator's whole per-user tree (T, C and 0: every temp file and
+		// cache the operator has). Its parent is a boundary only there, so
+		// an odd TMPDIR never makes, say, /Users/op/tmp's parent one.
+		tmp := resolvedPath(os.TempDir())
+		b[tmp] = true
+		if parent := filepath.Dir(tmp); strings.HasPrefix(parent, "/private/var/folders/") {
+			b[parent] = true
+			b[filepath.Dir(parent)] = true
+		}
+	}
+	for _, h := range operatorHomes() {
+		b[h] = true
 	}
 	return b
+}
+
+// operatorHomes is $HOME as given and with its symlinks resolved (one entry
+// when they agree), or none when there is no home.
+func operatorHomes() []string {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return nil
+	}
+	h := filepath.Clean(home)
+	if r := resolvedPath(h); r != h {
+		return []string{h, r}
+	}
+	return []string{h}
+}
+
+// resolvedPath is p with its symlinks resolved, or p cleaned when it cannot
+// be (sandbox.resolved, which this package cannot import).
+func resolvedPath(p string) string {
+	if r, err := filepath.EvalSymlinks(p); err == nil {
+		return r
+	}
+	return filepath.Clean(p)
 }
 
 // ErrSnapToolchain is returned when the command resolves to a snap. It is a
@@ -101,7 +162,7 @@ func toolchainBindsFor(cmd0 string) ([]sandbox.Bind, error) {
 	}
 
 	// Already inside what the jail mounts.
-	if strings.HasPrefix(real, "/usr/") {
+	if jailReadsSystemPath(runtime.GOOS, real) {
 		return nil, nil
 	}
 
@@ -153,6 +214,19 @@ func toolchainBindsFor(cmd0 string) ([]sandbox.Bind, error) {
 	// Bound at the SAME absolute path, so the operator's own PATH keeps
 	// working inside the jail without rewriting the command.
 	return []sandbox.Bind{{Host: root, Target: root}}, nil
+}
+
+// jailReadsSystemPath reports whether the resolved binary real lies under a
+// system tree every jail on goos already reads, so binding it would widen the
+// sandbox for nothing: /usr everywhere (bwrap binds it; the macOS profile
+// reads it), and on macOS also /bin and /sbin, which are real directories
+// there (on Linux they are usrmerge symlinks that already resolved to /usr)
+// and which the macOS profile reads in its system layer (sandbox/sbpl.go).
+func jailReadsSystemPath(goos, real string) bool {
+	if strings.HasPrefix(real, "/usr/") {
+		return true
+	}
+	return goos == "darwin" && (strings.HasPrefix(real, "/bin/") || strings.HasPrefix(real, "/sbin/"))
 }
 
 // childOnPath is the child of root that real lives under (root/bin for
@@ -253,8 +327,7 @@ var homeToolchainDirs = map[string]bool{
 // unchanged; any other child of $HOME is refused, because the jail cannot
 // know what else is in it.
 func narrowHomeRoot(real, root string) (narrowed, refused string) {
-	home, err := os.UserHomeDir()
-	if err != nil || home == "" || filepath.Dir(root) != filepath.Clean(home) {
+	if !slices.Contains(operatorHomes(), filepath.Dir(root)) {
 		return "", ""
 	}
 	base := filepath.Base(root)
@@ -289,8 +362,9 @@ func narrowHomeRoot(real, root string) (narrowed, refused string) {
 // Returns "" when the walk reaches a boundary immediately (a binary sitting
 // directly in a boundary directory has no root to bind that would not be the
 // boundary itself).
-func toolchainRoot(real string) string {
-	bounds := toolchainBoundaries()
+func toolchainRoot(real string) string { return toolchainRootIn(toolchainBoundaries(), real) }
+
+func toolchainRootIn(bounds map[string]bool, real string) string {
 	dir := filepath.Dir(filepath.Clean(real))
 	for dir != "" && dir != "/" {
 		parent := filepath.Dir(dir)

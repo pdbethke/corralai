@@ -49,7 +49,7 @@ type importOpts struct {
 
 func importFlags(o *importOpts) *flag.FlagSet {
 	fs := flag.NewFlagSet("corral-recordings-import", flag.ExitOnError)
-	fs.StringVar(&o.db, "db", "", "DuckDB path (default: CORRALAI_RECORDINGS_DB, else $STATE/corralai_recordings.duckdb — see `corral state paths`)")
+	fs.StringVar(&o.db, "db", "", "DuckDB path (default: CORRALAI_RECORDINGS_DB, else $STATE/corralai_recordings.duckdb — see corral state paths)")
 	fs.StringVar(&o.slug, "slug", "", "recording slug")
 	fs.Int64Var(&o.missionID, "mission-id", 0, "mission id")
 	fs.StringVar(&o.replay, "replay", "", "path to scrubbed replay json (with events[])")

@@ -27,6 +27,12 @@ Usage:
                                   $CORRALAI_ADDR. No audit needs it.
   corral secret set|get|list|rm   manage provider keys + tokens in the secure keystore
                                   (env → OS keyring → age-encrypted file; set reads stdin, never argv)
+  corral state paths              print where each corral file lives and which variable moves it
+  corral state migrate [--from DIR] [--dry-run]
+                                  move corral's files out of the pre-1.0 location into the
+                                  state and cache directories; prints each key's public key
+                                  before and after, refuses on a conflict or while the daemon
+                                  is running
   corral control seed [flags]     seed one vetted control test into the control-gate store
                                   (--spec-db --owner --goal --target --code-path --test-path --test-file)
   corral certify [<ref>] [--out <file>] [--net=false] [--produced-by a,b] -- <check-cmd>...
@@ -876,6 +882,28 @@ usage: corral secret set|get|list|rm <NAME>  (set reads the value from stdin —
 usage: corral secret set <NAME>  (value read from stdin — never a CLI arg)
 ```
 
+## `corral state` flags
+
+```
+usage: corral state migrate [--from DIR] [--dry-run] | corral state paths
+```
+
+## `corral state migrate` flags
+
+```
+Usage of state migrate:
+  -dry-run
+    	print what would move and change nothing
+  -from string
+    	the directory corral's state is in now (default: the pre-statedir location)
+```
+
+## `corral state paths` flags
+
+```
+usage: corral state paths  (takes no arguments; prints each file's root, name, override variable and resolved path)
+```
+
 ## `corral ui` flags
 
 ```
@@ -919,7 +947,7 @@ Usage of certify --repo:
   -attest string
     	write the scan's verdict as an in-toto Statement to this file — the receipt a reviewer can verify without trusting the run that produced it. Consumed by GitHub's attestation API (actions/attest), which signs it keylessly through the workflow's own OIDC identity, so the signature chains to the repository and workflow rather than to a key that lived on an ephemeral runner. Carries every file's kill rate, survivors and proven gaps WITH the honesty flags that say what a zero means, the thresholds it was judged against, and the models in each role. When a local signing key is configured (CORRALAI_CERTIFY_KEY_FILE), the same statement is ALSO signed into a DSSE envelope written beside this file as <path>.dsse.json — this plain file is unchanged either way, so actions/attest keeps working exactly as it does today; --transparency uploads the envelope, never this file
   -cache-db string
-    	path to corral's local CACHE — derived goals and instrumented test selections a later scan reuses on identical bytes (default: $CORRALAI_CACHE_DB, else ~/.claude/corralai_cache.duckdb). A cache, not a record: nothing a verdict rests on lives only here; deleting it costs a re-derivation and one coverage run, never a fact
+    	path to corral's local CACHE — derived goals and instrumented test selections a later scan reuses on identical bytes (default: $CORRALAI_CACHE_DB, else $CACHE/corralai_cache.duckdb, see corral state paths). A cache, not a record: nothing a verdict rests on lives only here; deleting it costs a re-derivation and one coverage run, never a fact
   -commit string
     	commit SHA the report is bound to
   -critic-model string

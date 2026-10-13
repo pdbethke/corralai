@@ -197,6 +197,12 @@ Usage:
                                   $CORRALAI_ADDR. No audit needs it.
   corral secret set|get|list|rm   manage provider keys + tokens in the secure keystore
                                   (env → OS keyring → age-encrypted file; set reads stdin, never argv)
+  corral state paths              print where each corral file lives and which variable moves it
+  corral state migrate [--from DIR] [--dry-run]
+                                  move corral's files out of the pre-1.0 location into the
+                                  state and cache directories; prints each key's public key
+                                  before and after, refuses on a conflict or while the daemon
+                                  is running
   corral control seed [flags]     seed one vetted control test into the control-gate store
                                   (--spec-db --owner --goal --target --code-path --test-path --test-file)
   corral certify [<ref>] [--out <file>] [--net=false] [--produced-by a,b] -- <check-cmd>...
@@ -566,6 +572,8 @@ func main() {
 			os.Exit(1)
 		}
 		os.Exit(runCriticScore(os.Args[2:], newHTTPCriticScoreLister(brainURL, token), mcpCriticScoreAdmin{brainURL: brainURL}, os.Stdout, os.Stderr))
+	case "state":
+		os.Exit(runState(os.Args[2:], os.Stdout, os.Stderr))
 	case "matrix":
 		os.Exit(runMatrixCommand(os.Args[2:], os.Getenv, os.Stdout, os.Stderr))
 	case "scans":

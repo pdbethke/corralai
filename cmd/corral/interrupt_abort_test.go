@@ -82,7 +82,7 @@ func TestAnInterruptedReviewWritesNoEntry(t *testing.T) {
 		ledger := filepath.Join(t.TempDir(), "ledger")
 		var out, errb bytes.Buffer
 		code := runReview([]string{"--repo", root, "--scope", "pkg", "--reviewer-model", "rev", "--verifier-model", "ver", "--ledger", ledger}, &out, &errb)
-		if code == 0 || !strings.Contains(errb.String(), "interrupted") {
+		if code != exitInterrupted || !strings.Contains(errb.String(), "interrupted") {
 			t.Errorf("%s interrupted: want a non-zero exit saying interrupted, got %d\n%s", stopped, code, errb.String())
 		}
 		if entries, _ := os.ReadDir(filepath.Join(ledger, "scans")); len(entries) != 0 {
@@ -124,9 +124,13 @@ func TestAReviewInterruptedAfterItsLastCallWritesNoEntry(t *testing.T) {
 	}
 	ledger := filepath.Join(t.TempDir(), "ledger")
 	push := filepath.Join(t.TempDir(), "wh.duckdb")
+	stmt := filepath.Join(t.TempDir(), "review.statement.json")
 	var out, errb bytes.Buffer
-	code := runReview([]string{"--repo", root, "--scope", "pkg", "--reviewer-model", "rev", "--verifier-model", "ver", "--ledger", ledger, "--push", push}, &out, &errb)
-	if code == 0 || !strings.Contains(errb.String(), "interrupted — nothing recorded") {
+	code := runReview([]string{"--repo", root, "--scope", "pkg", "--reviewer-model", "rev", "--verifier-model", "ver", "--ledger", ledger, "--push", push, "--attest", stmt}, &out, &errb)
+	if matches, _ := filepath.Glob(stmt + "*"); len(matches) != 0 {
+		t.Fatalf("an interrupted review left its statement on disk: %v", matches)
+	}
+	if code != exitInterrupted || !strings.Contains(errb.String(), "interrupted — nothing recorded") {
 		t.Fatalf("want a non-zero exit saying nothing was recorded, got %d\n%s", code, errb.String())
 	}
 	if entries, _ := os.ReadDir(filepath.Join(ledger, "scans")); len(entries) != 0 {
@@ -134,5 +138,26 @@ func TestAReviewInterruptedAfterItsLastCallWritesNoEntry(t *testing.T) {
 	}
 	if _, err := os.Stat(push); !os.IsNotExist(err) {
 		t.Fatalf("pushed after the interrupt")
+	}
+}
+
+// certify --local signs inside the run. A signal that lands after the verdict
+// was signed found a complete, recorded run: it is reported as recorded, never
+// as "nothing recorded".
+func TestALateSignalAfterSigningIsReportedAsRecorded(t *testing.T) {
+	t.Cleanup(agentbackend.ResetInterrupted)
+	agentbackend.Interrupt()
+	if !localInterruptRefuses(nil, &advpool.Verdict{}) {
+		t.Error("an interrupted run with no signed verdict must be refused")
+	}
+	if localInterruptRefuses(nil, &advpool.Verdict{RecordID: 7}) {
+		t.Error("a verdict already signed is a recorded run; the late signal must not disown it")
+	}
+	if !localInterruptRefuses(errSeatInterrupted, nil) {
+		t.Error("an interrupt error must be refused")
+	}
+	agentbackend.ResetInterrupted()
+	if localInterruptRefuses(nil, &advpool.Verdict{}) {
+		t.Error("no interrupt, nothing to refuse")
 	}
 }

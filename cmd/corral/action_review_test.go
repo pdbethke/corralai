@@ -3,7 +3,9 @@
 package main
 
 import (
+	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -196,5 +198,20 @@ func TestActionTokenInputsSayTheyHaveNotRunOnARunner(t *testing.T) {
 		if !strings.Contains(a.Inputs[in].Description, "Not yet run on a runner") {
 			t.Errorf("%s's description lacks the not-yet-run label: %q", in, a.Inputs[in].Description)
 		}
+	}
+}
+
+// 130 is an operator's interrupt. The step must fail on it exactly as on 1,
+// for the audit and for the review.
+func TestActionFailsTheStepOnAnInterruptedRun(t *testing.T) {
+	runStep := findStepContaining(t, loadActionYAML(t), "certify --repo")
+	out, err, _ := runRunCorralStepWithStub(t, runStep, t.TempDir(), "true", stubPrintingReport("interrupted\n", 130))
+	var ee *exec.ExitError
+	if !errors.As(err, &ee) || ee.ExitCode() != 130 {
+		t.Fatalf("an interrupted audit must fail the step with 130, got %v\n%s", err, out)
+	}
+	_, out2, err := reviewInvocations(t, t.TempDir(), "REVIEWER_MODEL=gemini-3.6-flash", "REVIEW_SCOPE=pkg", "STUB_REVIEW_EXIT=130")
+	if !errors.As(err, &ee) || ee.ExitCode() != 130 {
+		t.Fatalf("an interrupted review must fail the step with 130, got %v\n%s", err, out2)
 	}
 }

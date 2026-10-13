@@ -339,10 +339,17 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 	// needs-review verdict included. A red run's exam is the one most worth
 	// being able to reproduce.
 	var mutantSink func(string, []adequacy.Mutant)
+	// interruptRefused: the run was stopped and refused its record, so the
+	// mutant set — partial, or empty — is not written either.
+	interruptRefused := false
 	if p := strings.TrimSpace(*recordMutantsFlag); p != "" {
 		rc := newMutantSetRecorder()
 		mutantSink = rc.sink
 		defer func() {
+			if interruptRefused {
+				fmt.Fprintln(stderr, "corral certify --local: --record-mutants not written — the run was interrupted")
+				return
+			}
 			n, werr := rc.write(p)
 			if werr != nil {
 				fmt.Fprintf(stderr, "corral certify --local: --record-mutants NOT written: %v\n", werr)
@@ -403,8 +410,14 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 		openStore:        openStore,
 		stdout:           stdout, stderr: stderr,
 	})
-	if operatorInterrupted(err) {
+	if localInterruptRefuses(err, &verdict) {
+		interruptRefused = true
 		return refuseInterrupted(stderr, "corral certify --local")
+	}
+	if operatorInterrupted(err) {
+		// Signed before the signal landed: the run is complete and recorded,
+		// and is reported as such.
+		fmt.Fprintf(stderr, "corral certify --local: interrupted after the verdict was signed (record %d) — the run is complete and recorded\n", verdict.RecordID)
 	}
 	if err != nil {
 		fmt.Fprintf(stderr, "corral certify --local: %v\n", err)

@@ -329,11 +329,18 @@ func runReviewRun(args []string, stdout, stderr io.Writer) int {
 
 	// The statement first: it signs the reproductions; the entry, written
 	// after, names it. Fail-open like every write after a measurement.
+	// statementFiles are what it wrote, removed if an interrupt lands before
+	// the entry, so "nothing recorded" stays true.
+	var statementFiles []string
 	if p := strings.TrimSpace(*attest); p != "" {
 		sha, envPath, signErr, aerr := writeReviewStatement(p, r)
 		if aerr != nil {
 			fmt.Fprintf(stderr, "corral review: writing the statement to %s: %v\n", p, aerr)
 		} else {
+			statementFiles = append(statementFiles, p)
+			if signErr == nil {
+				statementFiles = append(statementFiles, envPath)
+			}
 			r.StatementSHA256 = sha
 			// "signed" is said only for an envelope THIS run wrote. It used
 			// to be decided by stat-ing the envelope path, so a leftover
@@ -376,7 +383,7 @@ func runReviewRun(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	if operatorInterrupted(nil) {
-		return refuseInterrupted(stderr, "corral review")
+		return refuseInterruptedAfter(stderr, "corral review", statementFiles)
 	}
 	name, werr := auditpush.WriteReview(ledgerDir, r, signer)
 	if werr != nil {
@@ -393,9 +400,10 @@ func runReviewRun(args []string, stdout, stderr io.Writer) int {
 	// into a warehouse, keyed by the entry's hash.
 	if p := strings.TrimSpace(*push); p != "" && last.Kind == auditpush.KindReview {
 		if operatorInterrupted(nil) {
-			// The entry above is written; the push is not, and the run says so.
-			fmt.Fprintf(stderr, "corral review: interrupted — the entry %s is in %s, and it was NOT pushed\n", name, ledgerDir)
-			return 1
+			// The entry above is written; the push is not, and the run says
+			// exactly that — never "nothing recorded".
+			fmt.Fprintf(stderr, "corral review: interrupted — the entry %s was written to %s, and it was NOT pushed to %s\n", name, ledgerDir, p)
+			return exitInterrupted
 		}
 		if c, perr := auditpush.PushReviewEntry(p, last, f.pushSource); perr != nil {
 			fmt.Fprintf(stderr, "corral review: pushing to %s: %v\n", p, perr)

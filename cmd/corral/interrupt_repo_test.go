@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 
@@ -40,18 +41,24 @@ func interruptedRepoRun(t *testing.T, mutant, writer string) {
 
 	ledgerDir := filepath.Join(t.TempDir(), "ledger")
 	push := filepath.Join(t.TempDir(), "wh.duckdb")
+	mutants := filepath.Join(t.TempDir(), "mutants.json")
 	var out, errb bytes.Buffer
 	code := runCertifyRepo([]string{
 		"--repo", root, "--derive-model", "local-deriver", "--no-goal-cache",
-		"--ledger", ledgerDir, "--push", push,
+		"--ledger", ledgerDir, "--push", push, "--record-mutants", mutants,
 		"--writer-model", writer, "--mutant-model", mutant, "--critic-model", "off",
 		"--substrate", substrateWorkspace,
 		"--", "go", "test", "./...",
 	}, &out, &errb)
 	all := out.String() + errb.String()
 	t.Logf("exit %d\n%s", code, all)
-	if code == 0 || !strings.Contains(errb.String(), "interrupted — nothing recorded") {
-		t.Errorf("want a non-zero exit saying nothing was recorded, got %d", code)
+	if code != exitInterrupted || !strings.Contains(errb.String(), "interrupted — nothing recorded") {
+		t.Errorf("want exit %d saying nothing was recorded, got %d", exitInterrupted, code)
+	}
+	// The Action commits this file back as the next run's prior: an empty
+	// or partial set from a stopped run would be read as an exam.
+	if _, err := os.Stat(mutants); !os.IsNotExist(err) {
+		t.Errorf("an interrupted scan wrote --record-mutants %s", mutants)
 	}
 	if entries, _ := filepath.Glob(filepath.Join(ledgerDir, "scans", "*")); len(entries) != 0 {
 		t.Errorf("an interrupted scan wrote %d ledger entr(ies)", len(entries))
@@ -81,8 +88,11 @@ func TestAnInterruptedRepoScanRecordsNothing_AgentSeat(t *testing.T) {
 // sees the signal. The rule is the same for every seat type.
 func TestAnInterruptedRepoScanRecordsNothing_APISeat(t *testing.T) {
 	noKeys(t)
+	// Once: a second SIGINT would arrive after auditContext restored the
+	// default action and kill the test binary.
+	var once sync.Once
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = syscall.Kill(os.Getpid(), syscall.SIGINT)
+		once.Do(func() { _ = syscall.Kill(os.Getpid(), syscall.SIGINT) })
 		http.Error(w, "stopped", http.StatusServiceUnavailable)
 	}))
 	defer srv.Close()

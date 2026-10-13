@@ -363,8 +363,20 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// can tell two runs' edits at one place apart. --record-mutants only
 	// decides whether the set is ALSO written as a document.
 	mutantRecorder := newMutantSetRecorder()
+	// interruptRefused is set by every refusal of an interrupted run: the
+	// mutant set is then empty or partial, and the Action commits this file
+	// back as the next run's prior, so it is not written.
+	interruptRefused := false
+	refuse := func() int {
+		interruptRefused = true
+		return refuseInterrupted(stderr, "corral certify --repo")
+	}
 	if p := strings.TrimSpace(*recordMutantsFlag); p != "" {
 		defer func() {
+			if interruptRefused {
+				fmt.Fprintln(stderr, "corral certify --repo: --record-mutants not written — the run was interrupted")
+				return
+			}
 			if *dryRun {
 				// Inert, and said so rather than left silent (the same rule
 				// --record follows just below): a dry run audits nothing, so
@@ -1132,7 +1144,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	}
 	jobs, goalExcl, err := reposcan.EmitJobs(cfg, selected, gs)
 	if operatorInterrupted(err) {
-		return refuseInterrupted(stderr, "corral certify --repo")
+		return refuse()
 	}
 	if err != nil {
 		fmt.Fprintf(stderr, "corral certify --repo: emitting jobs: %v\n", err)
@@ -1323,7 +1335,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// no push. Checked again right before those writes, for a signal that
 	// lands while the report prints.
 	if operatorInterrupted(nil) {
-		return refuseInterrupted(stderr, "corral certify --repo")
+		return refuse()
 	}
 	rep := reposcan.Aggregate(*owner, cfg.Repo, *commit, totalFiles, len(cands), results, excl)
 
@@ -1414,7 +1426,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// rows come from (modelCallRows, below) — never a second measurement, so
 	// the scan header's totals and the per-role grain can never disagree.
 	if operatorInterrupted(nil) {
-		return refuseInterrupted(stderr, "corral certify --repo")
+		return refuse()
 	}
 	modelCallRows := scanModelCallRowsWith(results, scanDerivers)
 	var inTokens, outTokens, modelCallCount int64

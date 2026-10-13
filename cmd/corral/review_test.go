@@ -415,21 +415,30 @@ func TestAgenticSeatsRunInAWorktreeWithTheBriefOnStdin(t *testing.T) {
 	gitRun("add", ".")
 	gitRun("commit", "-q", "-m", "base", "--no-gpg-sign")
 
-	// Fake CLIs: record cwd, argv and stdin; reply with canned JSON.
+	// Fake CLIs: record cwd, argv and stdin; reply with canned JSON on each
+	// CLI's own wire — claude's result document, codex's event stream with
+	// the reply in its -o file (internal/agentbackend/testdata/agentwire
+	// holds the real captures these imitate).
 	bin := t.TempDir()
 	log := filepath.Join(t.TempDir(), "calls.log")
-	fake := func(name, reply string) {
+	fake := func(name, reply, stdout string) {
 		script := "#!/bin/sh\n" +
 			"if [ \"$1\" = \"--version\" ]; then echo \"9.9.9 (" + name + " fake)\"; exit 0; fi\n" +
 			"{ echo \"== " + name + " cwd=$PWD argv=$*\"; cat; echo; } >> " + log + "\n" +
 			"for a in \"$@\"; do case \"$prev\" in -o) printf '%s' '" + reply + "' > \"$a\";; esac; prev=\"$a\"; done\n" +
-			"printf '%s' '" + reply + "'\n"
+			"printf '%s' '" + stdout + "'\n"
 		if err := os.WriteFile(filepath.Join(bin, name), []byte(script), 0o755); err != nil { // #nosec G306 -- a test fixture executable
 			t.Fatal(err)
 		}
 	}
-	fake("claude", `{"opinion":"agent says Add subtracts","findings":[{"claim":"Add subtracts","tier":"REPRODUCED","file":"pkg/a.go","line":3,"severity":"high","script":"grep -q \"a - b\" pkg/a.go"}],"sound":["go.mod"]}`)
-	fake("codex", `{"opinion":"cannot refute","refutations":[{"id":"R1","verdict":"STANDS","argument":"it does subtract"}]}`)
+	claudeReply := `{"opinion":"agent says Add subtracts","findings":[{"claim":"Add subtracts","tier":"REPRODUCED","file":"pkg/a.go","line":3,"severity":"high","script":"grep -q \"a - b\" pkg/a.go"}],"sound":["go.mod"]}`
+	claudeDoc, _ := json.Marshal(map[string]any{
+		"type": "result", "is_error": false, "terminal_reason": "completed", "result": claudeReply,
+		"usage": map[string]any{"input_tokens": 2, "cache_creation_input_tokens": 600, "cache_read_input_tokens": 0, "output_tokens": 40},
+	})
+	fake("claude", claudeReply, string(claudeDoc))
+	fake("codex", `{"opinion":"cannot refute","refutations":[{"id":"R1","verdict":"STANDS","argument":"it does subtract"}]}`,
+		`{"type":"turn.completed","usage":{"input_tokens":14000,"cached_input_tokens":12000,"output_tokens":30}}`)
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	var out, errb bytes.Buffer
@@ -460,9 +469,9 @@ func TestAgenticSeatsRunInAWorktreeWithTheBriefOnStdin(t *testing.T) {
 		t.Errorf("the seats must run in a worktree, never the checkout:\n%s", c)
 	}
 	for _, want := range []string{
-		"== claude cwd=", "argv=-p --output-format text --tools Read,Grep,Glob --model claude-sonnet-5",
+		"== claude cwd=", "argv=-p --output-format json --setting-sources  --strict-mcp-config", "--tools Read,Grep,Glob --model claude-sonnet-5",
 		"DISPOSABLE COPY", "  pkg/a.go", "Assume the code is WRONG",
-		"== codex cwd=", "--sandbox read-only", "-m gpt-5-codex", "The findings, as recorded",
+		"== codex cwd=", "--json --ignore-user-config --ignore-rules --sandbox read-only --ephemeral", "-m gpt-5-codex", "The findings, as recorded",
 	} {
 		if !strings.Contains(c, want) {
 			t.Errorf("the CLIs' calls lack %q:\n%s", want, c)

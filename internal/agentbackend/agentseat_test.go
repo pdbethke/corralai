@@ -120,18 +120,18 @@ func TestAGivenDirIsUsedAndKept(t *testing.T) {
 }
 
 func TestExpandAgentArgv(t *testing.T) {
-	got, err := expandAgentArgv("a", []string{"x", "{model:--m}", "{dir}", "o={out}"}, "mod", "/d", "/o")
+	got, err := expandAgentArgv("a", []string{"x", "{model:--m}", "{dir}", "o={out}"}, "mod", "/d", "/o", nil)
 	if err != nil || strings.Join(got, "|") != "x|--m|mod|/d|o=/o" {
 		t.Fatalf("got %q, %v", got, err)
 	}
-	got, err = expandAgentArgv("a", []string{"x", "{model:--m}"}, "", "/d", "/o")
+	got, err = expandAgentArgv("a", []string{"x", "{model:--m}"}, "", "/d", "/o", nil)
 	if err != nil || strings.Join(got, "|") != "x" {
 		t.Fatalf("unpinned flag form must vanish: %q, %v", got, err)
 	}
-	if _, err := expandAgentArgv("a", []string{"x", "{model}"}, "", "/d", "/o"); err == nil || !strings.Contains(err.Error(), "takes a model") {
+	if _, err := expandAgentArgv("a", []string{"x", "{model}"}, "", "/d", "/o", nil); err == nil || !strings.Contains(err.Error(), "takes a model") {
 		t.Fatalf("a bare {model} with no pin must be refused: %v", err)
 	}
-	if _, err := expandAgentArgv("a", []string{"x"}, "m", "/d", "/o"); err == nil || !strings.Contains(err.Error(), "takes no model") {
+	if _, err := expandAgentArgv("a", []string{"x"}, "m", "/d", "/o", nil); err == nil || !strings.Contains(err.Error(), "takes no model") {
 		t.Fatalf("a pin with no carrier must be refused: %v", err)
 	}
 }

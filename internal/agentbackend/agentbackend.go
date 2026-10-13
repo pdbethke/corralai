@@ -799,34 +799,8 @@ func (b *anthropicBackend) Chat(messages []Message, tools []any) (Message, error
 	if err := postJSON(b.base+"/v1/messages", hdr, body, &out); err != nil {
 		return Message{}, err
 	}
-	// NORMALISED, not copied. Anthropic's three input counters are DISJOINT:
-	// `input_tokens` is the UNCACHED remainder of the prompt, and the two
-	// cache counters are the rest of that same prompt. Every other wire
-	// corral speaks reports a prompt total that already contains its cached
-	// half (OpenAI's prompt_tokens, which is also what Gemini's
-	// OpenAI-compatible endpoint sends), so copying the remainder into
-	// Usage.InputTokens would give one column two different meanings
-	// depending on which vendor sat the seat — a per-survivor Anthropic
-	// writer would look CHEAPER in tokens than a batched one purely because
-	// its prompt cached well, which is the opposite of the truth.
-	//
-	// So InputTokens is the whole prompt, every provider, and the two cache
-	// counters remain the breakdown OF it — which is what
-	// Usage.CachedInputTokens' doc says and what cost_line.go's `(N cached)`
-	// renders against.
-	in := out.Usage.InputTokens
-	if out.Usage.CacheReadInputTokens != nil {
-		in += int(*out.Usage.CacheReadInputTokens)
-	}
-	if out.Usage.CacheCreationInputTokens != nil {
-		in += int(*out.Usage.CacheCreationInputTokens)
-	}
-	res := Message{Role: "assistant", Usage: Usage{
-		InputTokens:           in,
-		OutputTokens:          out.Usage.OutputTokens,
-		CachedInputTokens:     out.Usage.CacheReadInputTokens,
-		CacheWriteInputTokens: out.Usage.CacheCreationInputTokens,
-	}}
+	res := Message{Role: "assistant", Usage: anthropicUsage(out.Usage.InputTokens, out.Usage.OutputTokens,
+		out.Usage.CacheReadInputTokens, out.Usage.CacheCreationInputTokens)}
 	for _, c := range out.Content {
 		switch c.Type {
 		case "text":
@@ -848,3 +822,39 @@ func (b *anthropicBackend) Chat(messages []Message, tools []any) (Message, error
 // bounds thinking as well as text on Claude 5 models, so it is sized for a
 // seat that reasons at length before it writes; see the note at the call.
 const anthropicMaxTokens = 32000
+
+// anthropicUsage normalises Anthropic's usage counters into a Usage. Shared
+// by every reader of an Anthropic-shaped usage block — the API backend and
+// the claude-json agent wire (Claude Code reports the same disjoint
+// counters) — so the two cannot disagree about what InputTokens means.
+//
+// NORMALISED, not copied. Anthropic's three input counters are DISJOINT:
+// `input_tokens` is the UNCACHED remainder of the prompt, and the two
+// cache counters are the rest of that same prompt. Every other wire
+// corral speaks reports a prompt total that already contains its cached
+// half (OpenAI's prompt_tokens, which is also what Gemini's
+// OpenAI-compatible endpoint sends), so copying the remainder into
+// Usage.InputTokens would give one column two different meanings
+// depending on which vendor sat the seat — a per-survivor Anthropic
+// writer would look CHEAPER in tokens than a batched one purely because
+// its prompt cached well, which is the opposite of the truth.
+//
+// So InputTokens is the whole prompt, every provider, and the two cache
+// counters remain the breakdown OF it — which is what
+// Usage.CachedInputTokens' doc says and what cost_line.go's `(N cached)`
+// renders against.
+func anthropicUsage(input, output int, cacheRead, cacheCreation *int64) Usage {
+	in := input
+	if cacheRead != nil {
+		in += int(*cacheRead)
+	}
+	if cacheCreation != nil {
+		in += int(*cacheCreation)
+	}
+	return Usage{
+		InputTokens:           in,
+		OutputTokens:          output,
+		CachedInputTokens:     cacheRead,
+		CacheWriteInputTokens: cacheCreation,
+	}
+}

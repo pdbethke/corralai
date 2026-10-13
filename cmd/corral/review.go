@@ -169,7 +169,7 @@ func runReviewRun(args []string, stdout, stderr io.Writer) int {
 	agentTimeout := 30 * time.Minute
 	seat := func(spec string) (agentbackend.Backend, string, error) {
 		if name, _, isAgent := agentbackend.AgentSeat(spec); isAgent {
-			b, err := agentbackend.ForSeat(spec, agentbackend.SeatOptions{Dir: seatTree, Timeout: agentTimeout})
+			b, err := agentbackend.ForSeat(spec, agentbackend.SeatOptions{Dir: seatTree, Timeout: agentTimeout, Tools: reviewSeatTools})
 			if err != nil {
 				return nil, "", err
 			}
@@ -400,6 +400,11 @@ func seatBackend(model, endpoint string) (agentbackend.Backend, error) {
 	// fallback is kept; an agent spec never reaches here (seat() takes it).
 	return agentbackend.ForSeat(model, agentbackend.SeatOptions{})
 }
+
+// reviewSeatTools are the tools an agent seat in review is granted: it reads
+// the tree, so it may read, search and list it — and nothing else. A
+// certify seat is granted none; its prompt carries the code.
+var reviewSeatTools = []string{"Read", "Grep", "Glob"}
 
 // worktreeReproducer runs a script in a detached git worktree at the
 // commit. The operator's checkout is never the subject: a model-written

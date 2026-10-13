@@ -5,6 +5,7 @@ package agentbackend
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -21,21 +22,51 @@ import (
 // scripts; corral runs them. This is what the five cold reviews of corral
 // were, by hand: a coding agent handed a checkout and told to break it.
 //
-// Two agents are defined here because we have run them; ANY agent is
+// Three agents are defined here because we have run them; ANY agent is
 // defined the same way by the operator, in the environment:
 //
 //	CORRALAI_AGENT_<NAME>="<command line>"
+//	CORRALAI_AGENT_<NAME>_WIRE=claude-json | codex-jsonl | text   (optional; default text)
 //
 // with NAME the seat name upper-cased (`-` → `_`), and these words
 // substituted: `{dir}` the worktree, `{out}` a file the agent may write its
 // reply to, `{model}` the pinned model (`<name>:<model>` — required when
 // the word is present, refused when it is absent), and `{model:FLAG}`
-// which becomes `FLAG <model>` when pinned and nothing otherwise. Corral
-// does not confine what the command does; the definition is the operator's,
-// and the record carries it.
-var builtinAgents = map[string]string{
-	"claude-code": "claude -p --output-format text --tools Read,Grep,Glob {model:--model}",
-	"codex":       "codex exec --sandbox read-only --skip-git-repo-check -C {dir} -o {out} {model:-m} -",
+// which becomes `FLAG <model>` when pinned and nothing otherwise, and
+// `{tools:FLAG}`, which becomes `FLAG <a,b,c>` for the tools the caller
+// grants (SeatOptions.Tools) and `FLAG ""` — no tools — when it grants none.
+// The wire (agentwire.go) is how corral reads the reply, the token usage and
+// a response schema; a definition the operator writes is read as plain text
+// unless it declares a wire, because corral cannot know what it prints.
+// Corral does not confine what the command does; the definition is the
+// operator's, and the record carries it.
+var builtinAgents = map[string]builtinAgent{
+	// The certify form is COLD: no settings sources (the operator's
+	// CLAUDE.md, memory, hooks), no MCP servers, no slash commands or skills,
+	// no session file, and no tools unless the caller names them. Unflagged,
+	// a one-word call carried 108,740 input tokens of the operator's own
+	// configuration; this form measured 620 (testdata/agentwire/README.md).
+	// `--bare` would be leaner still but refuses subscription (OAuth) auth,
+	// which is the point of an agent seat. --system-prompt REPLACES Claude
+	// Code's default system prompt (2,972 tokens without it): corral's role
+	// prompt arrives as the message, and the seat needs nothing else.
+	"claude-code": {
+		def:         `claude -p --output-format json --setting-sources "" --strict-mcp-config --disable-slash-commands --no-session-persistence --system-prompt "Follow the instructions in the user's message exactly." {tools:--tools} {model:--model}`,
+		wire:        "claude-json",
+		maker:       "anthropic",
+		coldCeiling: 5000,
+	},
+	// codex loaded no operator instructions even unflagged (its own agent
+	// prompt is ~14.7k tokens, mostly cached); --ignore-user-config and
+	// --ignore-rules make that explicit rather than incidental, and
+	// --ephemeral keeps no session. It has no tool switch: --sandbox
+	// read-only is its confinement in every verb.
+	"codex": {
+		def:         "codex exec --json --ignore-user-config --ignore-rules --sandbox read-only --ephemeral --skip-git-repo-check -C {dir} -o {out} {model:-m} -",
+		wire:        "codex-jsonl",
+		maker:       "openai",
+		coldCeiling: 20000,
+	},
 	// antigravity (`agy`) takes its prompt as a FLAG VALUE, not on stdin, so
 	// the brief is read in by a shell wrapper; the model pin rides through
 	// "$@" because {model:FLAG} is only substituted as a whole word.
@@ -47,25 +78,76 @@ var builtinAgents = map[string]string{
 	// nothing at all. It runs in a disposable worktree and nothing it does
 	// itself reaches the record — only the scripts it hands back, which
 	// corral runs. Stated here rather than left to be discovered.
-	"antigravity": `sh -c 'agy --output-format text --sandbox --dangerously-skip-permissions --print-timeout 15m "$@" -p="$(cat)"' sh {model:--model}`,
+	//
+	// Its JSON mode has not been measured, so it is a text wire (unmetered)
+	// and has no cold ceiling yet (spec open question 2).
+	"antigravity": {
+		def:   `sh -c 'agy --output-format text --sandbox --dangerously-skip-permissions --print-timeout 15m "$@" -p="$(cat)"' sh {model:--model}`,
+		wire:  "text",
+		maker: "google",
+	},
+}
+
+// builtinAgent is one agent corral has run and therefore defines itself.
+type builtinAgent struct {
+	def string // the command line, placeholders intact
+	// wire names how the reply, usage and a schema travel (agentWires).
+	wire string
+	// maker is the vendor of the models the CLI runs when it is not pinned.
+	maker string
+	// coldCeiling is the input-token ceiling a one-line prompt must stay
+	// under for the seat to count as cold; 0 = not yet measured.
+	coldCeiling int
 }
 
 // agentEnvPrefix is where the operator's own agent definitions live.
 const agentEnvPrefix = "CORRALAI_AGENT_"
 
+// agentWireSuffix marks the variable that declares an operator agent's
+// wire. A key ending in it is never itself an agent definition, so an agent
+// cannot be named `<anything>-wire`.
+const agentWireSuffix = "_WIRE"
+
+// agentEnvKey is the variable that defines the seat called name.
+func agentEnvKey(name string) string {
+	return agentEnvPrefix + strings.ToUpper(strings.ReplaceAll(name, "-", "_"))
+}
+
 // agentDefinition is the command line for a seat name: a built-in, or the
 // operator's, which wins over a built-in of the same name.
 func agentDefinition(name string) (def string, builtin, ok bool) {
-	key := agentEnvPrefix + strings.ToUpper(strings.ReplaceAll(name, "-", "_"))
+	key := agentEnvKey(name)
+	if strings.HasSuffix(key, agentWireSuffix) {
+		return "", false, false
+	}
 	if name != "" && !strings.ContainsAny(name, " \t/") {
 		if v, set := os.LookupEnv(key); set && strings.TrimSpace(v) != "" {
 			return strings.TrimSpace(v), false, true
 		}
 	}
-	if d, isBuiltin := builtinAgents[name]; isBuiltin {
-		return d, true, true
+	if b, isBuiltin := builtinAgents[name]; isBuiltin {
+		return b.def, true, true
 	}
 	return "", false, false
+}
+
+// agentWireFor is the wire a defined seat speaks: what its _WIRE variable
+// declares, else the built-in's own when the definition IS the built-in's,
+// else text. An operator who redefines a built-in's command line gets text,
+// because their command need not print what the built-in's CLI prints.
+func agentWireFor(name string, builtin bool) (string, agentWire, error) {
+	key := agentEnvKey(name) + agentWireSuffix
+	wireName := "text"
+	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
+		wireName = v
+	} else if builtin {
+		wireName = builtinAgents[name].wire
+	}
+	w, ok := agentWires[wireName]
+	if !ok {
+		return "", nil, fmt.Errorf("agent %s: %s=%q names no wire (want one of %s)", name, key, wireName, strings.Join(wireNames(), ", "))
+	}
+	return wireName, w, nil
 }
 
 // AgentSeat splits "claude-code:claude-sonnet-5" into agent name and
@@ -112,6 +194,8 @@ func SeatNamesAModel(spec string) bool {
 type agentBackend struct {
 	name, model, dir string
 	argv             []string // the definition, split; placeholders intact
+	wire             agentWire
+	tools            []string // what {tools:FLAG} grants; nil = none
 	timeout          time.Duration
 }
 
@@ -159,7 +243,7 @@ func isShell(prog string) bool {
 // expandAgentArgv substitutes the placeholders. A bare {model} with no
 // pinned model, or a pinned model with no {model} word to carry it, is a
 // refusal by name — corral never guesses what an agent runs.
-func expandAgentArgv(name string, argv []string, model, dir, out string) ([]string, error) {
+func expandAgentArgv(name string, argv []string, model, dir, out string, tools []string) ([]string, error) {
 	carries := false
 	var expanded []string
 	for _, w := range argv {
@@ -175,6 +259,10 @@ func expandAgentArgv(name string, argv []string, model, dir, out string) ([]stri
 			if model != "" {
 				expanded = append(expanded, w[len("{model:"):len(w)-1], model)
 			}
+		case strings.HasPrefix(w, "{tools:") && strings.HasSuffix(w, "}"):
+			// Always the flag, so "no tools" is SAID: a CLI left to its own
+			// default would hand the seat every tool it has.
+			expanded = append(expanded, w[len("{tools:"):len(w)-1], strings.Join(tools, ","))
 		default:
 			expanded = append(expanded, strings.NewReplacer("{dir}", dir, "{out}", out).Replace(w))
 		}
@@ -188,7 +276,12 @@ func expandAgentArgv(name string, argv []string, model, dir, out string) ([]stri
 	return expanded, nil
 }
 
-func (a agentBackend) Chat(messages []Message, _ []any) (Message, error) {
+// Chat runs the agent once. The wire supplies the schema flag (when the
+// caller asked for constrained output — found by splitFormat, exactly as the
+// API backends find it) and reads the reply and usage back. A failure the
+// CLI REPORTS (an error record, a missing binary) is ErrSeatEnvironment; any
+// other failure is a plain error naming the seat. Neither is ever content.
+func (a agentBackend) Chat(messages []Message, tools []any) (Message, error) {
 	var prompt strings.Builder
 	for _, m := range messages {
 		if prompt.Len() > 0 {
@@ -196,18 +289,17 @@ func (a agentBackend) Chat(messages []Message, _ []any) (Message, error) {
 		}
 		prompt.WriteString(m.Content)
 	}
-	outFile := ""
-	for _, w := range a.argv {
-		if strings.Contains(w, "{out}") {
-			f, err := os.CreateTemp("", "corral-agent-*.txt")
-			if err != nil {
-				return Message{}, err
-			}
-			outFile = f.Name()
-			f.Close()
-			defer os.Remove(outFile)
-			break
-		}
+	_, format := splitFormat(tools)
+	// The call's own scratch — {out} and any schema file — kept apart from
+	// the seat's directory, which a certify seat sees empty.
+	scratch, err := os.MkdirTemp("", "corral-agent-*")
+	if err != nil {
+		return Message{}, err
+	}
+	defer os.RemoveAll(scratch)
+	outFile := filepath.Join(scratch, "out.txt")
+	if err := os.WriteFile(outFile, nil, 0o600); err != nil {
+		return Message{}, err
 	}
 	dir := a.dir
 	if dir == "" {
@@ -218,10 +310,15 @@ func (a agentBackend) Chat(messages []Message, _ []any) (Message, error) {
 		defer os.RemoveAll(d)
 		dir = d
 	}
-	argv, err := expandAgentArgv(a.name, a.argv, a.model, dir, outFile)
+	argv, err := expandAgentArgv(a.name, a.argv, a.model, dir, outFile, a.tools)
 	if err != nil {
 		return Message{}, err
 	}
+	extra, err := a.wire.args(format, scratch)
+	if err != nil {
+		return Message{}, fmt.Errorf("%s: %w", a.name, err)
+	}
+	argv = withWireArgs(argv, extra)
 	ctx, cancel := context.WithTimeout(context.Background(), a.timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...) // #nosec G204 -- the operator's own agent definition, run in a disposable worktree
@@ -229,32 +326,58 @@ func (a agentBackend) Chat(messages []Message, _ []any) (Message, error) {
 	cmd.Stdin = strings.NewReader(prompt.String())
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
-	if err := cmd.Run(); err != nil {
-		return Message{}, fmt.Errorf("%s: %v: %s", a.name, err, tailOf(strings.TrimSpace(stderr.String()), 800))
+	runErr := cmd.Run()
+	if errors.Is(runErr, exec.ErrNotFound) || errors.Is(runErr, os.ErrNotExist) {
+		return Message{}, fmt.Errorf("%s: %w: %v", a.name, ErrSeatEnvironment, runErr)
 	}
-	content := stdout.String()
-	if outFile != "" {
-		if b, err := os.ReadFile(outFile); err == nil && len(bytes.TrimSpace(b)) > 0 { // #nosec G304 -- our own temp file
-			content = string(b)
+	out, _ := os.ReadFile(outFile) // #nosec G304 -- our own temp file
+	content, u, _, perr := a.wire.parse(stdout.Bytes(), out)
+	if runErr != nil {
+		tail := tailOf(strings.TrimSpace(stderr.String()), 800)
+		if errors.Is(perr, ErrSeatEnvironment) {
+			return Message{Usage: u}, fmt.Errorf("%s: %w (%v): %s", a.name, perr, runErr, tail)
 		}
+		return Message{Usage: u}, fmt.Errorf("%s: %v: %s", a.name, runErr, tail)
 	}
-	return Message{Role: "assistant", Content: content}, nil
+	if perr != nil {
+		return Message{Usage: u}, fmt.Errorf("%s: %w", a.name, perr)
+	}
+	return Message{Role: "assistant", Content: content, Usage: u}, nil
+}
+
+// withWireArgs places a wire's extra flags: before a trailing `-` (the
+// stdin marker, which must stay last), else at the end.
+func withWireArgs(argv, extra []string) []string {
+	if len(extra) == 0 {
+		return argv
+	}
+	out := make([]string, 0, len(argv)+len(extra))
+	if n := len(argv); n > 1 && argv[n-1] == "-" {
+		out = append(append(append(out, argv[:n-1]...), extra...), "-")
+		return out
+	}
+	return append(append(out, argv...), extra...)
 }
 
 // newAgentSeat is the backend for an agentic seat in dir ("" = a fresh empty
 // directory per call), or nil, false for an API seat. A definition that does
 // not split, or that cannot carry the pin, is an error by name.
-func newAgentSeat(spec, dir string, timeout time.Duration) (Backend, bool, error) {
+func newAgentSeat(spec string, opt SeatOptions) (Backend, bool, error) {
+	dir, timeout := opt.Dir, opt.Timeout
 	name, model, ok := AgentSeat(spec)
 	if !ok {
 		return nil, false, nil
 	}
-	def, _, _ := agentDefinition(name)
+	def, builtin, _ := agentDefinition(name)
 	argv, err := splitWords(def)
 	if err != nil {
 		return nil, true, fmt.Errorf("agent %s: %v in its definition %q", name, err, def)
 	}
-	if _, err := expandAgentArgv(name, argv, model, dir, "out"); err != nil {
+	if _, err := expandAgentArgv(name, argv, model, dir, "out", opt.Tools); err != nil {
+		return nil, true, err
+	}
+	_, wire, err := agentWireFor(name, builtin)
+	if err != nil {
 		return nil, true, err
 	}
 	if dir != "" {
@@ -263,7 +386,7 @@ func newAgentSeat(spec, dir string, timeout time.Duration) (Backend, bool, error
 	if timeout <= 0 {
 		timeout = defaultSeatTimeout
 	}
-	return agentBackend{name: name, model: model, dir: dir, argv: argv, timeout: timeout}, true, nil
+	return agentBackend{name: name, model: model, dir: dir, argv: argv, wire: wire, tools: opt.Tools, timeout: timeout}, true, nil
 }
 
 // defaultSeatTimeout bounds one agent call when the caller names none.
@@ -274,6 +397,10 @@ const defaultSeatTimeout = 15 * time.Minute
 type SeatOptions struct {
 	Dir     string        // the agent's working tree; "" = a fresh empty temp dir per call, removed after
 	Timeout time.Duration // per call; 0 = 15m
+	// Tools are what a definition's {tools:FLAG} grants the agent; nil =
+	// none. A certify seat's prompt carries the code and needs none;
+	// review grants read-only tools because its seat reads the tree.
+	Tools []string
 }
 
 // ForSeat is the single resolver for a seat: spec is either an agent seat
@@ -292,7 +419,7 @@ type SeatOptions struct {
 // An agent seat does not implement ModelSwitcher: it is one tool and one
 // model, and WithModel would silently change what sat in the seat.
 func ForSeat(spec string, opt SeatOptions) (Backend, error) {
-	if b, isAgent, err := newAgentSeat(spec, opt.Dir, opt.Timeout); isAgent {
+	if b, isAgent, err := newAgentSeat(spec, opt); isAgent {
 		if err != nil {
 			return nil, err
 		}
@@ -313,7 +440,7 @@ func DefinedAgents() []string {
 	}
 	for _, kv := range os.Environ() {
 		k, v, _ := strings.Cut(kv, "=")
-		if strings.HasPrefix(k, agentEnvPrefix) && strings.TrimSpace(v) != "" {
+		if strings.HasPrefix(k, agentEnvPrefix) && !strings.HasSuffix(k, agentWireSuffix) && strings.TrimSpace(v) != "" {
 			seen[strings.ToLower(strings.ReplaceAll(strings.TrimPrefix(k, agentEnvPrefix), "_", "-"))] = true
 		}
 	}

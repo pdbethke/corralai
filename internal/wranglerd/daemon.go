@@ -75,7 +75,7 @@ func env(k, def string) string {
 // with an empty store, or a fresh signing key, is the failure the refusal
 // exists to prevent.
 func statePath(f statedir.File) string {
-	p, err := statedir.Path(f)
+	p, err := statedir.PathForWrite(f)
 	if err != nil {
 		log.Fatalf("state: %v", err)
 	}
@@ -103,9 +103,6 @@ func Run(version string) {
 	issuer := os.Getenv("CORRALAI_OIDC_ISSUER")
 	audience := os.Getenv("CORRALAI_OIDC_AUDIENCE")
 
-	if err := os.MkdirAll(filepath.Dir(dbPath), 0o700); err != nil {
-		log.Fatalf("mkdir db dir: %v", err)
-	}
 	store, err := coord.Open(dbPath)
 	if err != nil {
 		log.Fatalf("open coordination store: %v", err)

@@ -9,6 +9,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
 	"sort"
 	"strings"
 	"text/tabwriter"
@@ -435,7 +436,7 @@ func defaultRankLoader(dsn string) (rankEvidence, error) {
 		}
 		return ev, nil
 	}
-	bugCatchPath, err := statedir.Path(statedir.BugCatchDB)
+	bugCatchPath, err := statedir.PathForWrite(statedir.BugCatchDB)
 	if err != nil {
 		return rankEvidence{}, err
 	}
@@ -451,13 +452,8 @@ func defaultRankLoader(dsn string) (rankEvidence, error) {
 	// scorecard's C-PREC column: without it the critic seat has no scored
 	// rows, which is honest, while refusing the whole ranking over one seat
 	// would not be.
-	var critic *criticscore.Store
-	if criticPath, perr := statedir.Path(statedir.CriticScoreDB); perr == nil {
-		if cs, cerr := criticscore.Open(criticPath); cerr == nil {
-			critic = cs
-			defer func() { _ = cs.Close() }()
-		}
-	}
+	critic, closeCritic := openCriticStoreBestEffort("corral models rank", os.Stderr)
+	defer closeCritic()
 	return bugcatchRankEvidence(ctx, store, critic)
 }
 

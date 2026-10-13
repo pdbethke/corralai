@@ -184,3 +184,34 @@ func Path(f File) (string, error) {
 	}
 	return p, nil
 }
+
+// PathForWrite is Path for a caller about to open or create the file: it
+// resolves (and refuses) exactly as Path does, then makes the parent
+// directory 0700. DuckDB and SQLite create a missing FILE but not a missing
+// directory, and on a fresh machine the state root does not exist yet — so
+// without this every store opener failed, or dropped its rows silently.
+//
+// The parent is created only after the refusal has passed: a legacy-only
+// file must leave nothing new behind. A per-file override's parent is made
+// too; the operator named the file, and its directory is part of that. Path
+// stays free of side effects (`corral state paths` and the tests read it).
+func PathForWrite(f File) (string, error) {
+	p, err := Path(f)
+	if err != nil {
+		return "", err
+	}
+	if err := EnsureParent(p); err != nil {
+		return "", err
+	}
+	return p, nil
+}
+
+// EnsureParent makes p's directory 0700 if it is missing. It is the one
+// spelling of that step, for an opener whose path came from a flag rather
+// than the table.
+func EnsureParent(p string) error {
+	if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+		return fmt.Errorf("creating the directory for %s: %w", p, err)
+	}
+	return nil
+}

@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/pdbethke/corralai/internal/auditpush"
+	"github.com/pdbethke/corralai/internal/scanstore"
 	"github.com/pdbethke/corralai/internal/statedir"
 )
 
@@ -176,5 +177,55 @@ func TestCertifyRepoRefusesALegacyOnlyKeyBeforeAnySpend(t *testing.T) {
 	code := runCertifyRepo([]string{"--repo", t.TempDir()}, &out, &errb)
 	if code != 2 || !strings.Contains(errb.String(), "state migrate") || !strings.Contains(errb.String(), "nothing was spent") {
 		t.Fatalf("exit %d, want 2 naming the refusal before spend\nstderr: %.600s", code, errb.String())
+	}
+}
+
+// A fresh machine has no state root. `corral models rank` (and every other
+// CLI store opener) must create it rather than fail "No such file or
+// directory" opening its DuckDB file.
+func TestStoreOpenersWorkOnAFreshMachine(t *testing.T) {
+	home := isolateStateHome(t)
+	if _, err := defaultRankLoader(""); err != nil {
+		t.Fatalf("models rank on a fresh machine: %v", err)
+	}
+	root := filepath.Join(home, ".local", "state", "corral")
+	fi, err := os.Stat(root)
+	if err != nil {
+		t.Fatalf("state root not created: %v", err)
+	}
+	if fi.Mode().Perm() != 0o700 {
+		t.Fatalf("state root mode %v, want 0700", fi.Mode().Perm())
+	}
+	p, err := cacheDSNOr("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, err := scanstore.Open(p)
+	if err != nil {
+		t.Fatalf("the cache store does not open on a fresh machine: %v", err)
+	}
+	_ = st.Close()
+}
+
+// The critic join is best-effort, but a REFUSED path is not "no critic
+// store": with the critic DB only at the legacy location the C-PREC column
+// silently vanished. The refusal must be said, once, on stderr.
+func TestBestEffortCriticStoreSaysWhyItIsMissing(t *testing.T) {
+	home := isolateStateHome(t)
+	legacy := filepath.Join(home, ".claude", "corralai_criticscore.duckdb")
+	if err := os.MkdirAll(filepath.Dir(legacy), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(legacy, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var errb bytes.Buffer
+	cs, closeFn := openCriticStoreBestEffort("corral scorecard", &errb)
+	defer closeFn()
+	if cs != nil {
+		t.Fatal("a refused path opened a store")
+	}
+	if got := errb.String(); strings.Count(got, "\n") != 1 || !strings.Contains(got, "state migrate") || !strings.Contains(got, "corral scorecard") {
+		t.Fatalf("want one stderr line naming the refusal, got %q", got)
 	}
 }

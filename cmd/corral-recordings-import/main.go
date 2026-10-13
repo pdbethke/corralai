@@ -7,10 +7,10 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/pdbethke/corralai/internal/recordings"
+	"github.com/pdbethke/corralai/internal/statedir"
 )
 
 type replayFile struct {
@@ -88,10 +88,8 @@ func main() {
 		fmt.Fprintf(os.Stderr, "corral-recordings-import: missing required flag(s): %s\n", strings.Join(missing, " "))
 		os.Exit(2)
 	}
+	// --db, else the table row (which honours CORRALAI_RECORDINGS_DB).
 	path := strings.TrimSpace(*dbPath)
-	if path == "" {
-		path = strings.TrimSpace(os.Getenv("CORRALAI_RECORDINGS_DB"))
-	}
 	if path == "" {
 		var derr error
 		path, derr = recordings.DefaultDB()
@@ -100,8 +98,8 @@ func main() {
 			os.Exit(1)
 		}
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil { // #nosec G703 -- db path is operator-chosen via --db, CORRALAI_RECORDINGS_DB, or the fixed statedir default; not remote attacker input
-		fmt.Fprintf(os.Stderr, "mkdir db dir: %v\n", err)
+	if err := statedir.EnsureParent(path); err != nil { // #nosec G703 -- db path is operator-chosen via --db, CORRALAI_RECORDINGS_DB, or the fixed statedir default; not remote attacker input
+		fmt.Fprintln(os.Stderr, "corral-recordings-import:", err)
 		os.Exit(1)
 	}
 	store, err := recordings.Open(path)

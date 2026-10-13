@@ -125,7 +125,7 @@ func PlanMigration(dir string) ([]Move, []Conflict, error) {
 func ApplyMigration(moves []Move) ([]Move, error) {
 	var done []Move
 	for _, m := range moves {
-		if err := os.MkdirAll(filepath.Dir(m.To), 0o700); err != nil {
+		if err := EnsureParent(m.To); err != nil {
 			return done, err
 		}
 		var pairs [][2]string

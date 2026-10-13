@@ -173,7 +173,7 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 	// The bug-catching scorecard store: a --local run's per-seat metrics
 	// (including the shadow head-to-head) persist next to the signed build
 	// ledger and feed the same `corral scorecard` surface the daemon's runs feed.
-	bugCatchDBPath, pathErr := statedir.Path(statedir.BugCatchDB)
+	bugCatchDBPath, pathErr := statedir.PathForWrite(statedir.BugCatchDB)
 	if pathErr != nil {
 		fmt.Fprintln(stderr, "corral certify --local:", pathErr)
 		return 2
@@ -275,7 +275,7 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 	openStore := func() (*buildstore.Store, ed25519.PrivateKey, error) {
 		// The SAME signed build-record ledger `corral certify` writes to and
 		// `corral certify verify` reads from.
-		buildPath, err := statedir.Path(statedir.BuildDB)
+		buildPath, err := statedir.PathForWrite(statedir.BuildDB)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -358,12 +358,12 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 	// The critic-accuracy and writer-seat correlation stores sit beside the
 	// signed build ledger and feed `corral criticscore` / `corral scorecard`,
 	// the surfaces the daemon's runs feed.
-	criticScoreDBPath, pathErr := statedir.Path(statedir.CriticScoreDB)
+	criticScoreDBPath, pathErr := statedir.PathForWrite(statedir.CriticScoreDB)
 	if pathErr != nil {
 		fmt.Fprintln(stderr, "corral certify --local:", pathErr)
 		return 2
 	}
-	mutantAttemptsDBPath, pathErr := statedir.Path(statedir.MutantAttemptsDB)
+	mutantAttemptsDBPath, pathErr := statedir.PathForWrite(statedir.MutantAttemptsDB)
 	if pathErr != nil {
 		fmt.Fprintln(stderr, "corral certify --local:", pathErr)
 		return 2

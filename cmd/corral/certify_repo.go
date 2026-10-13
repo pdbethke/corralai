@@ -158,7 +158,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	if *dryRun {
 		drawErr = validateShadowPools("corral certify --repo", *repoDir, shadow, shadowPrimary, false, stderr)
 	} else {
-		bugCatchDBPath, pathErr := statedir.Path(statedir.BugCatchDB)
+		bugCatchDBPath, pathErr := statedir.PathForWrite(statedir.BugCatchDB)
 		if pathErr != nil {
 			fmt.Fprintln(stderr, "corral certify --repo:", pathErr)
 			return 2

@@ -467,7 +467,7 @@ func main() {
 			}
 			os.Exit(runScorecard(os.Args[2:], newHTTPScorecardReader(brainURL, token), os.Stdout))
 		}
-		bugCatchDB, err := statedir.Path(statedir.BugCatchDB)
+		bugCatchDB, err := statedir.PathForWrite(statedir.BugCatchDB)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "corral scorecard:", err)
 			os.Exit(1)
@@ -486,13 +486,8 @@ func main() {
 		// is the pre-existing behavior. Refusing to print a scorecard because
 		// the critic file is held elsewhere would trade the whole table for
 		// one column.
-		var localCritic *criticscore.Store
-		if criticPath, perr := statedir.Path(statedir.CriticScoreDB); perr == nil {
-			if cs, cerr := criticscore.Open(criticPath); cerr == nil {
-				localCritic = cs
-				defer func() { _ = cs.Close() }()
-			}
-		}
+		localCritic, closeCritic := openCriticStoreBestEffort("corral scorecard", os.Stderr)
+		defer closeCritic()
 		os.Exit(runScorecard(os.Args[2:], localScorecardReader{store: bugCatchStore, critic: localCritic}, os.Stdout))
 	case "models":
 		// Read-only disclosure over the stores certify already writes. It
@@ -522,7 +517,7 @@ func main() {
 		// Serve the findings to a coding agent over stdio, read-only, from the
 		// same local store `certify --local` writes. See mcp_findings.go for
 		// why adjudication is deliberately absent from that surface.
-		criticPath, err := statedir.Path(statedir.CriticScoreDB)
+		criticPath, err := statedir.PathForWrite(statedir.CriticScoreDB)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "corral mcp:", err)
 			os.Exit(1)
@@ -553,7 +548,7 @@ func main() {
 			// quickstart talks to — and scorecard's C-PREC column could never
 			// be filled by them. See localCriticScore's doc comment for why
 			// this does not weaken the brain's admin gate.
-			criticPath, err := statedir.Path(statedir.CriticScoreDB)
+			criticPath, err := statedir.PathForWrite(statedir.CriticScoreDB)
 			if err != nil {
 				fmt.Fprintln(os.Stderr, "corral criticscore:", err)
 				os.Exit(1)

@@ -28,7 +28,7 @@ func cacheDSNOr(flagVal string) (string, error) {
 	if v := strings.TrimSpace(flagVal); v != "" {
 		return v, nil
 	}
-	return statedir.Path(statedir.CacheDB)
+	return statedir.PathForWrite(statedir.CacheDB)
 }
 
 // killRatePtr converts a possibly-NaN kill rate into the *float64 form

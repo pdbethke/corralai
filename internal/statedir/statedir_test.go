@@ -4,6 +4,7 @@ package statedir
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -113,5 +114,52 @@ func TestTableIsWellFormed(t *testing.T) {
 			t.Errorf("%s and %s share override %s", prev.Name, f.Name, f.Override)
 		}
 		seenPath[p], seenVar[f.Override] = f, f
+	}
+}
+
+// On a fresh machine the state root does not exist, and DuckDB will not
+// create a file in a missing directory: every CLI store failed to open (or
+// silently dropped its rows). PathForWrite is the one door that makes the
+// parent, 0700, after — and only after — the refusal has passed.
+func TestPathForWriteCreatesTheParentPrivately(t *testing.T) {
+	home := t.TempDir()
+	fakeHost(t, "linux", nil, home)
+	p, err := PathForWrite(BugCatchDB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fi, err := os.Stat(filepath.Dir(p))
+	if err != nil {
+		t.Fatalf("parent not created: %v", err)
+	}
+	if fi.Mode().Perm() != 0o700 {
+		t.Fatalf("parent mode %v, want 0700", fi.Mode().Perm())
+	}
+	if _, err := os.Stat(p); !os.IsNotExist(err) {
+		t.Fatal("PathForWrite must create the directory, never the file")
+	}
+}
+
+func TestPathForWriteCreatesNothingWhenRefused(t *testing.T) {
+	home := t.TempDir()
+	fakeHost(t, "linux", nil, home)
+	writeFile(t, filepath.Join(home, ".claude", "corralai_bugcatch.duckdb"))
+	if _, err := PathForWrite(BugCatchDB); err == nil {
+		t.Fatal("want the legacy refusal")
+	}
+	if _, err := os.Stat(filepath.Join(home, ".local", "state", "corral")); !os.IsNotExist(err) {
+		t.Fatal("a refused PathForWrite created the state root")
+	}
+}
+
+// Path is the read side and stays free of side effects.
+func TestPathCreatesNothing(t *testing.T) {
+	home := t.TempDir()
+	fakeHost(t, "linux", nil, home)
+	if _, err := Path(BugCatchDB); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".local")); !os.IsNotExist(err) {
+		t.Fatal("Path created a directory")
 	}
 }

@@ -9,7 +9,6 @@ import (
 	"io"
 	"os"
 	"os/user"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -52,11 +51,8 @@ func openBroker() (*coord.Store, error) {
 	// claim the MCP claim_task sees, and vice versa — two doors, one record. A
 	// second file would have meant a running daemon and a CLI session on the
 	// same box disagreeing about who holds what.
-	p, err := statedir.Path(statedir.CoordDB)
+	p, err := statedir.PathForWrite(statedir.CoordDB)
 	if err != nil {
-		return nil, err
-	}
-	if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
 		return nil, err
 	}
 	return coord.Open(p)

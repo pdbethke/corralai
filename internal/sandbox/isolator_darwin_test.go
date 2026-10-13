@@ -244,3 +244,41 @@ func TestSandboxExecDeniesSharedTmpWrite(t *testing.T) {
 		t.Fatal("the shared host /tmp was writable inside the jail")
 	}
 }
+
+// TestSandboxExecMasksACargoHomeInAWholeBoundTree (layer 7, for real): a
+// cargo home inside a tree the jail reads whole (/usr, /opt/homebrew) is
+// exposed through that read, so its secrets are denied last. A resolved
+// temp tree stands in for the whole-bound tree, bound read-only exactly as
+// a toolchain is: bin/ stays readable, credentials.toml (and the rest of
+// the cargo home) is "Operation not permitted" — refused by the profile,
+// although the files are readable outside the jail.
+func TestSandboxExecMasksACargoHomeInAWholeBoundTree(t *testing.T) {
+	// Resolved: SBPL matches canonical paths.
+	tree, ch := fakeSystemCargoHome(t)
+	if err := os.WriteFile(filepath.Join(ch, "bin", "tool"), []byte("tool-ok\n"), 0o755); err != nil { //nolint:gosec // a readable toolchain binary is the point
+		t.Fatal(err)
+	}
+	t.Setenv("CARGO_HOME", ch)
+	old := wholeBoundTrees
+	wholeBoundTrees = []string{tree}
+	t.Cleanup(func() { wholeBoundTrees = old })
+
+	cred := filepath.Join(ch, "credentials.toml")
+	if b, err := os.ReadFile(cred); err != nil || !strings.Contains(string(b), "secret") {
+		t.Fatalf("control failed: credentials.toml is not readable outside the jail: %v", err)
+	}
+	script := "cat " + shQuote(filepath.Join(ch, "bin", "tool")) +
+		"; cat " + shQuote(cred) +
+		"; cat " + shQuote(filepath.Join(ch, "config.toml")) +
+		"; ls -A " + shQuote(filepath.Join(ch, "git"))
+	res := runJailed(t, script, Options{ReadOnlyBinds: []Bind{{Host: tree, Target: tree}}})
+	if !strings.Contains(res.Output, "tool-ok\n") {
+		t.Errorf("the cargo home's bin/tool must stay readable:\n%s", res.Output)
+	}
+	if strings.Contains(res.Output, "secret") || strings.Contains(res.Output, "checkouts") {
+		t.Errorf("a masked secret was readable in the jail:\n%s", res.Output)
+	}
+	if !strings.Contains(res.Output, cred+": Operation not permitted") {
+		t.Errorf("credentials.toml must be refused by the profile (Operation not permitted):\n%s", res.Output)
+	}
+}

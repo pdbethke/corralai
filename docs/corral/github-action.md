@@ -496,8 +496,8 @@ and the fix belongs in the code, not a caveat in these docs.
 | `anthropic-key` | no | `""` | Anthropic API key, supplied to the run as `ANTHROPIC_API_KEY`. |
 | `gemini-key` | no | `""` | Gemini API key, supplied as `GEMINI_API_KEY`. |
 | `openai-key` | no | `""` | OpenAI (or OpenAI-compatible) key, supplied as `OPENAI_API_KEY`. |
-| `claude-code-oauth-token` | no | `""` | Login for a `claude-code` agent seat, supplied as `CLAUDE_CODE_OAUTH_TOKEN` (create one with `claude setup-token`). The `claude` CLI must be installed on the runner. |
-| `codex-api-key` | no | `""` | API key for a `codex` agent seat, supplied as `CODEX_API_KEY`. The `codex` CLI must be installed on the runner. An API key bills per token, unlike a subscription login. |
+| `claude-code-oauth-token` | no | `""` | Login for a `claude-code` agent seat, supplied as `CLAUDE_CODE_OAUTH_TOKEN` (create one with `claude setup-token`). The `claude` CLI must be installed on the runner. Not yet run on a runner. |
+| `codex-api-key` | no | `""` | API key for a `codex` agent seat, supplied as `CODEX_API_KEY`. The `codex` CLI must be installed on the runner. An API key bills per token, unlike a subscription login. Not yet run on a runner: the variable name comes from the codex binary's own error text, not its `--help`. |
 | `model-key` | no | `""` | Generic escape hatch for a credential the three named inputs do not cover (e.g. `GOOGLE_API_KEY`, or a gateway reading its own variable). Prefer the named inputs. |
 | `model-key-env` | no | `""` | Which environment variable `model-key` becomes. Must be a plain environment variable name. **Required when `model-key` is set** — it no longer defaults to `ANTHROPIC_API_KEY`, because corral has no default models and guessing a vendor here puts the key in the wrong variable. Naming a variable a named input already fills, with a *different* value, is refused. |
 

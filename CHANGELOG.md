@@ -50,7 +50,9 @@ history of any release, `git log v0.3.4..v0.3.5`.
   you define. It now keeps no list, and two new optional inputs pass a login
   through: `claude-code-oauth-token` (as `CLAUDE_CODE_OAUTH_TOKEN`) and
   `codex-api-key` (as `CODEX_API_KEY`). The CLI must be installed on the
-  runner.
+  runner. Neither input has been run on a runner yet, and `codex-api-key` in
+  particular is not yet run: the variable name comes from the codex binary's
+  own error text, not from its `--help`.
 - **An agent seat inherits corral's environment.** An API key you export for
   corral's API seats also reaches the agent CLI, and a CLI that prefers an API
   key over its subscription login will bill the key. Unset it for an
@@ -62,7 +64,8 @@ history of any release, `git log v0.3.4..v0.3.5`.
   yet run in certify.
 - **Smaller fixes.** certify and review now compare seats the same way,
   ignoring case. A pin starting with `-` is refused. A timed-out agent call
-  kills the whole process group. The `--version` probe has a 10s bound.
+  kills the whole process group, and Ctrl-C (or SIGTERM / SIGHUP) kills every
+  live agent seat's group and starts no new agent call, in every verb. The `--version` probe has a 10s bound.
   `review` records the verifier's tokens when its reply does not parse.
   `certify` says when an operator agent's vendor cannot be told. The public
   warehouse's `bug_catches` extract leaves out unpinned agent seats.

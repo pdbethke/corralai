@@ -410,6 +410,15 @@ func narrowHomeRootOn(goos, real, root string) (narrowed, refused string) {
 		return "", "~/.local/share holds keyrings and application data"
 	case ".config":
 		return "", "~/.config holds credentials (gh, gcloud, composer's auth.json)"
+	case "hostedtoolcache":
+		// GitHub Actions' setup-* tool cache, which macOS runners keep in
+		// $HOME (Linux runners: /opt): toolchain versions only. Bound as the
+		// one tool's directory (~/hostedtoolcache/go), never the whole cache.
+		rel, _ := filepath.Rel(root, real)
+		if tool, rest, ok := strings.Cut(rel, "/"); ok && rest != "" && tool != ".." {
+			return filepath.Join(root, tool), ""
+		}
+		return "", "only a tool's own directory under ~/hostedtoolcache is a toolchain"
 	}
 	return "", "it is not a toolchain directory, and the jail cannot know what else is in it"
 }

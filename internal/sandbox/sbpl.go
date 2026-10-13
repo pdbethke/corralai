@@ -4,7 +4,9 @@ package sandbox
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
+	"unicode/utf8"
 )
 
 // sbplInput is everything the macOS jail's profile depends on. Every path is
@@ -74,6 +76,62 @@ var sbplNetwork = []sbplRule{
 	{`(allow mach-lookup (global-name "com.apple.trustd.agent"))`, "TLS certificate verification; without it x509 fails with OSStatus -26276 (measured 2026-10-13)"},
 }
 
+// sbplQuoter escapes the only two characters that are special inside an SBPL
+// string literal. Control characters never reach it: sbplCheckPath rejects
+// them first, so this is the whole of SBPL string escaping, not a subset.
+var sbplQuoter = strings.NewReplacer(`\`, `\\`, `"`, `\"`)
+
+// sbplQuote renders s as one SBPL string literal.
+func sbplQuote(s string) string {
+	return `"` + sbplQuoter.Replace(s) + `"`
+}
+
+// sbplCheckPath refuses a path the sandbox could not match. A deny on a path
+// that matches nothing reads as protection and protects nothing, so every
+// path is validated before any rule is emitted: absolute, valid UTF-8, and
+// free of control characters.
+func sbplCheckPath(field, p string) error {
+	if p == "" {
+		return fmt.Errorf("sbpl: %s is empty", field)
+	}
+	if !filepath.IsAbs(p) {
+		return fmt.Errorf("sbpl: %s path %q is not absolute", field, p)
+	}
+	if !utf8.ValidString(p) {
+		return fmt.Errorf("sbpl: %s path %q is not valid UTF-8", field, p)
+	}
+	for _, r := range p {
+		if r < 0x20 || r == 0x7f {
+			return fmt.Errorf("sbpl: %s path %q contains control character U+%04X", field, p, r)
+		}
+	}
+	return nil
+}
+
+// sbplValidate checks every path in in. OperatorHome may be empty (unknown);
+// every other path is required.
+func sbplValidate(in sbplInput) error {
+	if err := sbplCheckPath("Workspace", in.Workspace); err != nil {
+		return err
+	}
+	if in.OperatorHome != "" {
+		if err := sbplCheckPath("OperatorHome", in.OperatorHome); err != nil {
+			return err
+		}
+	}
+	for _, p := range in.ReadOnly {
+		if err := sbplCheckPath("ReadOnly", p); err != nil {
+			return err
+		}
+	}
+	for _, m := range in.Masks {
+		if err := sbplCheckPath("Mask", m.Path); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // sbplProfile assembles the profile in its eight layers. ORDER IS THE
 // SECURITY PROPERTY: SBPL applies the LAST matching rule, so
 //   - the home deny (4) precedes the toolchain allows (5), or every toolchain
@@ -82,7 +140,13 @@ var sbplNetwork = []sbplRule{
 //     live under $HOME;
 //   - the credential masks (7) follow every file allow, so nothing above can
 //     re-expose them.
-func sbplProfile(in sbplInput) string {
+//
+// It refuses (returns an error and no profile) any input with a path SBPL
+// could not match, so a mask can never silently fail to apply.
+func sbplProfile(in sbplInput) (string, error) {
+	if err := sbplValidate(in); err != nil {
+		return "", err
+	}
 	var b strings.Builder
 	b.WriteString("(version 1)\n")
 	put := func(rules ...sbplRule) {
@@ -94,22 +158,22 @@ func sbplProfile(in sbplInput) string {
 	put(sbplSystemReads...)    // 2
 	put(sbplServices...)       // 3
 	if in.OperatorHome != "" { // 4
-		put(sbplRule{fmt.Sprintf("(deny file-read* (subpath %q))", in.OperatorHome), "the operator's home: credentials, keys, other projects"})
+		put(sbplRule{fmt.Sprintf("(deny file-read* (subpath %s))", sbplQuote(in.OperatorHome)), "the operator's home: credentials, keys, other projects"})
 	}
 	put(sbplOperatorSecrets...)
 	for _, p := range in.ReadOnly { // 5
-		put(sbplRule{fmt.Sprintf("(allow file-read* (subpath %q))", p), "a toolchain or dependency dir (Options.ReadOnlyBinds), after the home deny so one under $HOME stays visible"})
+		put(sbplRule{fmt.Sprintf("(allow file-read* (subpath %s))", sbplQuote(p)), "a toolchain or dependency dir (Options.ReadOnlyBinds), after the home deny so one under $HOME stays visible"})
 	}
-	put(sbplRule{fmt.Sprintf("(allow file-read* file-write* (subpath %q))", in.Workspace), "the workspace: the only writable tree, holding the per-run HOME and TMPDIR"}) // 6
-	for _, m := range in.Masks {                                                                                                                                          // 7
+	put(sbplRule{fmt.Sprintf("(allow file-read* file-write* (subpath %s))", sbplQuote(in.Workspace)), "the workspace: the only writable tree, holding the per-run HOME and TMPDIR"}) // 6
+	for _, m := range in.Masks {                                                                                                                                                     // 7
 		kind := "literal"
 		if m.Dir {
 			kind = "subpath"
 		}
-		put(sbplRule{fmt.Sprintf("(deny file-read* (%s %q))", kind, m.Path), "a credential mask from secrets.go, last so no allow above re-exposes it"})
+		put(sbplRule{fmt.Sprintf("(deny file-read* (%s %s))", kind, sbplQuote(m.Path)), "a credential mask from secrets.go, last so no allow above re-exposes it"})
 	}
 	if in.Network { // 8
 		put(sbplNetwork...)
 	}
-	return b.String()
+	return b.String(), nil
 }

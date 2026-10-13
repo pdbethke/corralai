@@ -4,6 +4,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -396,5 +397,15 @@ func TestSandboxHintIsPerOS(t *testing.T) {
 	}
 	if h := sandboxHint("linux"); !strings.Contains(h, "bubblewrap") {
 		t.Errorf("linux hint = %q", h)
+	}
+}
+
+func TestCheckSandboxNamesTheSelfTestOnBothOutcomes(t *testing.T) {
+	fail := checkSandbox(nil, errors.New("x"))
+	if fail.name != sandboxCheckName || !strings.Contains(fail.name, "self-test") {
+		t.Errorf("failure-path name = %q", fail.name)
+	}
+	if ok := checkSandbox(nil, nil); ok.name != fail.name {
+		t.Errorf("pass name %q != fail name %q", ok.name, fail.name)
 	}
 }

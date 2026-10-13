@@ -418,7 +418,7 @@ corral doctor --code path/to/your/file.py \
 ```
 
 ```
-  [ok  ] sandbox starts
+  [ok  ] sandbox starts (self-test: sh-starts, workspace-write, env-pins, home-denied, net-denied)
   [ok  ] toolchain reachable inside the sandbox
   [FAIL] credential for mutant-generator (claude-sonnet-5)
          agentbackend: ForModel: model "claude-sonnet-5" needs an Anthropic key — set ANTHROPIC_API_KEY

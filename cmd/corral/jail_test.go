@@ -253,3 +253,17 @@ func TestJailUnavailableErrorOnLinuxKeepsBwrapAdvice(t *testing.T) {
 		t.Errorf("Linux auto-backend failure lost its bwrap message:\n%s", err)
 	}
 }
+
+func TestJailUnavailableErrorExplicitContainerOnDarwinReturnsCause(t *testing.T) {
+	cause := errors.New("no docker or podman")
+	if err := jailUnavailableError("darwin", "container", cause, true); !errors.Is(err, cause) || err.Error() != cause.Error() {
+		t.Errorf("want the bare cause, got %v", err)
+	}
+}
+
+func TestJailUnavailableErrorDarwinWithoutFallbackOmitsContainerAdvice(t *testing.T) {
+	msg := jailUnavailableError("darwin", "", errors.New("boom"), false).Error()
+	if strings.Contains(msg, "--jail container") || strings.Contains(msg, "bwrap") || strings.Contains(msg, "apparmor") {
+		t.Errorf("unexpected advice:\n%s", msg)
+	}
+}

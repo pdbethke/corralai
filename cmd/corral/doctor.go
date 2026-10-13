@@ -141,13 +141,17 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
+// sandboxCheckName names the check on BOTH outcomes, so a failure line and a
+// pass line are the same check to anyone grepping doctor output.
+const sandboxCheckName = "sandbox starts (self-test: sh-starts, workspace-write, env-pins, home-denied, net-denied)"
+
 func checkSandbox(iso sandbox.Isolator, err error) checkResult {
 	if err != nil {
-		return checkResult{name: "sandbox starts", fatal: true, detail: fmt.Sprintf(
+		return checkResult{name: sandboxCheckName, fatal: true, detail: fmt.Sprintf(
 			"%v\ncorral refuses to run your tests against live mutations unsandboxed, so this is not optional.\n%s", err, sandboxHint(runtime.GOOS))}
 	}
 	_ = iso
-	return checkResult{name: "sandbox starts (self-test: sh-starts, workspace-write, env-pins, home-denied, net-denied)", ok: true}
+	return checkResult{name: sandboxCheckName, ok: true}
 }
 
 // sandboxHint is the next step for a sandbox that will not start, per OS.

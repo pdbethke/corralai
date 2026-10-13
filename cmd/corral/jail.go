@@ -117,7 +117,7 @@ func jailUnavailableError(goos, backend string, cause error, containerFallback b
 	case backend == "bwrap" || (backend == "" && goos == "linux"):
 		return bwrapUnavailableError(cause, containerFallback)
 	case backend == "sandbox-exec" || (backend == "" && goos == "darwin"):
-		tail := "Run on a host where sandbox-exec can isolate: this command has no sandbox-backend override."
+		tail := "This command has no sandbox-backend override; run it on a Mac where sandbox-exec's self-test passes (see `corral doctor`)."
 		if containerFallback {
 			tail = "Or skip sandbox-exec: --jail container (needs docker or podman, plus CORRALAI_EXEC_IMAGE set to an image with your toolchain)."
 		}

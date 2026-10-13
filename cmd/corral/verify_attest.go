@@ -10,6 +10,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -263,8 +264,11 @@ func verifySignature(envelope []byte, keyID, pubFlag string) verifyCheckResult {
 		pub, pubSource = ed25519.PublicKey(decoded), "--pub"
 	default:
 		priv, err := loadLocalCertifyKeyIfConfigured()
-		if err != nil {
+		if errors.Is(err, errNoLocalKey) {
 			return verifyCheckResult{checked: false, detail: fmt.Sprintf("signed by %s — no --pub given and no local signing key configured to verify against", who)}
+		}
+		if err != nil {
+			return verifyCheckResult{checked: false, detail: fmt.Sprintf("signed by %s — no --pub given and the local certify key cannot be used: %v", who, err)}
 		}
 		pub, pubSource = priv.Public().(ed25519.PublicKey), "the local certify key"
 	}

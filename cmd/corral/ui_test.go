@@ -172,7 +172,7 @@ func TestUILedgerAPIShowsTheChainTheReviewsAndTheVerdicts(t *testing.T) {
 	t.Setenv("CORRALAI_CERTIFY_KEY_FILE", filepath.Join(t.TempDir(), "certify_key"))
 	dir := filepath.Join(t.TempDir(), "ledger")
 	writeCacheTestEntry(t, dir, []scanstore.File{{Path: "a.go", Disposition: "audited", Gradable: true, KillRate: ptrF(0.5)}})
-	signer, _ := ledgerSignerFromLocalKey()
+	signer, _, _ := ledgerSignerFromLocalKey()
 	// The UI verifies against an EXPLICIT key only; hand it the one that signed.
 	lk, kerr := loadLocalCertifyKeyIfConfigured()
 	if kerr != nil {

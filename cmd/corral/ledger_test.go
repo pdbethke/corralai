@@ -273,7 +273,7 @@ func TestLedgerPushMovesTheRecordAndSkipsWhatTheWarehouseHolds(t *testing.T) {
 	writeCacheTestEntry(t, dir, []scanstore.File{{Path: "a.go", Disposition: "audited", Gradable: true, KillRate: ptrF(0.5), AuthoredTest: "func TestA(t *testing.T) {}", VerdictJSON: "{}"}})
 	writeCacheTestEntry(t, dir, []scanstore.File{{Path: "b.go", Disposition: "audited", Gradable: true, KillRate: ptrF(0.1)}})
 	entries, _ := auditpush.ReadLedgerDir(dir)
-	signer, _ := ledgerSignerFromLocalKey()
+	signer, _, _ := ledgerSignerFromLocalKey()
 	if _, err := auditpush.WriteRetraction(dir, entries[1].Hash, "wrong commit", signer); err != nil {
 		t.Fatal(err)
 	}

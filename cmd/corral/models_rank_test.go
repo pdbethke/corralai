@@ -506,7 +506,7 @@ func TestRankGradesTheReviewerAndTheVerifierFromTheLedger(t *testing.T) {
 	t.Setenv("CORRALAI_CERTIFY_KEY_FILE", filepath.Join(t.TempDir(), "certify_key"))
 	dir := filepath.Join(t.TempDir(), "ledger")
 	writeCacheTestEntry(t, dir, nil) // a scan, so the directory is a ledger the warehouse reader accepts
-	signer, _ := ledgerSignerFromLocalKey()
+	signer, _, _ := ledgerSignerFromLocalKey()
 	code := 0
 	r := review.Review{Repo: "acme/r", Commit: "abc", Scope: "pkg", ReviewerModel: "rev-m", VerifierModel: "ver-m", Lang: "go", FilesShown: []string{"pkg/a.go", "pkg/b.go"},
 		Findings: []review.Finding{
@@ -564,7 +564,7 @@ func TestRankGradesTheReviewerAndTheVerifierFromTheLedger(t *testing.T) {
 func TestRankReadsTheReviewSeatsFromAPushedWarehouse(t *testing.T) {
 	t.Setenv("CORRALAI_CERTIFY_KEY_FILE", filepath.Join(t.TempDir(), "certify_key"))
 	dir := filepath.Join(t.TempDir(), "ledger")
-	signer, _ := ledgerSignerFromLocalKey()
+	signer, _, _ := ledgerSignerFromLocalKey()
 	code := 0
 	r := review.Review{Repo: "acme/r", Commit: "abc", Scope: "pkg", ReviewerModel: "rev-m", VerifierModel: "ver-m", Lang: "go",
 		Findings: []review.Finding{
@@ -621,7 +621,7 @@ func TestRankReadsTheReviewSeatsFromAPushedWarehouse(t *testing.T) {
 func TestRankGradesTheAuditedPartyFromTheLedger(t *testing.T) {
 	t.Setenv("CORRALAI_CERTIFY_KEY_FILE", filepath.Join(t.TempDir(), "certify_key"))
 	dir := filepath.Join(t.TempDir(), "ledger")
-	signer, _ := ledgerSignerFromLocalKey()
+	signer, _, _ := ledgerSignerFromLocalKey()
 	passed, failed := true, false
 	party := auditpush.Identity{Author: "Ada Writer", Committer: "Forge Bot", CoAuthors: "Claude Code"}
 	// Two scans with a gate (one passed, one failed), one with no gate.

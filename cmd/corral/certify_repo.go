@@ -129,6 +129,20 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 
+	// The record is signed at the END of a paid run. A local certify key that
+	// exists but cannot be used — above all one still at the pre-statedir
+	// location, which the loader refuses rather than mint a second identity —
+	// would surface only then, with the spend gone and the entry unwritable.
+	// Asked here, before anything is spent. Only when neither key variable is
+	// set: an explicit CORRALAI_CERTIFY_KEY_FILE naming a missing file is a
+	// deliberate first-run bootstrap, and asking now would mint it early.
+	if strings.TrimSpace(os.Getenv("CORRALAI_CERTIFY_KEY")) == "" && strings.TrimSpace(os.Getenv("CORRALAI_CERTIFY_KEY_FILE")) == "" {
+		if _, kerr := loadLocalCertifyKeyIfConfigured(); kerr != nil && !errors.Is(kerr, errNoLocalKey) {
+			fmt.Fprintf(stderr, "corral certify --repo: the local certify key cannot be used: %v — nothing was spent\n", kerr)
+			return 2
+		}
+	}
+
 	// The shadow draw happens HERE, before the registry resolves any seat, so
 	// the drawn member — as typed — is resolved exactly like a named one. A
 	// scan spans languages and draws ONCE for all of them, so it reads the
@@ -1490,6 +1504,13 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		} else {
 			statementSHA256 = sha
 			bundle.Scan.StatementSHA256 = sha
+			// Silent only when no key is configured — an ordinary keyless
+			// --attest run. A key the operator holds that could not sign is
+			// said, never swallowed.
+			if signErr != nil && !errors.Is(signErr, errNoLocalKey) {
+				fmt.Fprintf(stderr, "corral certify --repo: the statement was written but NOT signed: %v\n", signErr)
+				runnerWarning(stderr, "corral signing failed", "the statement at %s was written but not signed: %v", *attestFlag, signErr)
+			}
 			fmt.Fprintf(stdout, "  wrote the audit statement to %s — attest it with actions/attest, verify with `gh attestation verify`\n", *attestFlag)
 
 			// --transparency: upload the SIGNED envelope (not the plain
@@ -1554,6 +1575,12 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		entryBundle.Scan.SourcePushed = true
 		if c, lerr := pushBundle(ledgerDir+"/", entryBundle); lerr != nil {
 			fmt.Fprintf(stderr, "corral certify --repo: writing the ledger entry to %s: %v\n", ledgerDir, lerr)
+			// A full disk stays fail-open; a signing key that could not be
+			// used does not. The run that keeps no record because its key was
+			// refused must not end green as if it had kept one.
+			if errors.Is(lerr, errKeyUnusable) && exitCode == 0 {
+				exitCode = 1
+			}
 		} else if c.Total() > 0 {
 			fmt.Fprintf(stdout, "  ledger: entry written to %s (%d file(s), %d mutant(s)) — `corral verify --ledger %s` walks the chain\n", ledgerDir, c.Files, c.Mutants, ledgerDir)
 		}
@@ -5406,8 +5433,12 @@ func pushBundle(target string, b auditpush.Bundle) (auditpush.Counts, error) {
 		// and written unsigned — and said to be — when none is. On a
 		// runner with no key, the recipe attests the entry file itself
 		// (actions/attest), which is the keyless equivalent.
-		if priv, err := loadLocalCertifyKeyIfConfigured(); err == nil {
-			auditpush.SetLedgerSigner(auditpush.Ed25519LedgerSigner{KeyID: "corral-certify", Key: priv})
+		signer, _, err := ledgerSignerFromLocalKey()
+		if err != nil {
+			return auditpush.Counts{}, err
+		}
+		if signer != nil {
+			auditpush.SetLedgerSigner(signer)
 		}
 	}
 	return auditpush.PushBundle(target, b)

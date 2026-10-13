@@ -175,5 +175,17 @@ func newBwrapIsolator() (Isolator, error) {
 	if err := b.Preflight(); err != nil {
 		return nil, err
 	}
+	if err := cachedSelfTest(b); err != nil {
+		return nil, err
+	}
 	return b, nil
+}
+
+func (bwrapIsolator) jailDirs(string) jailDirs { return linuxJailDirs }
+
+// netDenialProbe succeeds only if the jail's network namespace has an
+// interface besides loopback. /proc is mounted; /dev/tcp is a bash-ism the
+// jail's sh (dash on Debian/Ubuntu) does not have.
+func (bwrapIsolator) netDenialProbe() string {
+	return `grep -qvE '^ *(lo:|Inter-|face)' /proc/net/dev`
 }

@@ -29,8 +29,14 @@ func newSandboxExecIsolator() (Isolator, error) {
 	if err := s.Preflight(); err != nil {
 		return nil, err
 	}
+	if err := cachedSelfTest(s); err != nil {
+		return nil, err
+	}
 	return s, nil
 }
+
+// netDenialProbe succeeds only if a TCP connection off the machine opens.
+func (sandboxExecIsolator) netDenialProbe() string { return "/usr/bin/nc -z -G 3 1.1.1.1 443" }
 
 func (sandboxExecIsolator) Name() string { return "sandbox-exec" }
 

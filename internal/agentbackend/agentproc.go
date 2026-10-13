@@ -75,8 +75,7 @@ func Interrupted(err error) bool { return errors.Is(err, ErrInterrupted) }
 // THE INTERRUPTED STATE IS PERMANENT for the life of the process: every
 // agent call after it is refused. That is right for a CLI run, which is
 // unwinding. A long-lived process that runs agent seats (an MCP server, the
-// ui) must reset it per run — today none does, and resetInterruptForTest is
-// the only reset.
+// ui) must call ResetInterrupted per run — today none does.
 var live = struct {
 	sync.Mutex
 	pids        map[*exec.Cmd]int // 0 until Start returns; read only under the lock
@@ -85,8 +84,14 @@ var live = struct {
 	interrupted bool
 }{pids: map[*exec.Cmd]int{}}
 
-// notifiableSignals is interruptSignals less any the process is ignoring.
-func notifiableSignals() []os.Signal {
+// NotifiableSignals are the signals that mean "the operator interrupted
+// this run" (Ctrl-C, SIGTERM), less any the process was started IGNORING:
+// signal.Notify un-ignores a signal, so registering an ignored one would
+// override the operator's own choice. Every handler for an operator
+// interrupt — this package's and cmd/corral's auditContext — registers
+// exactly these. It may be empty; a caller must not pass an empty list to
+// signal.Notify, which would register EVERY signal.
+func NotifiableSignals() []os.Signal {
 	var out []os.Signal
 	for _, sig := range interruptSignals {
 		if !signal.Ignored(sig) {
@@ -107,7 +112,7 @@ func runAgent(cmd *exec.Cmd) error {
 	}
 	live.pids[cmd] = 0
 	if live.sigc == nil {
-		if sigs := notifiableSignals(); len(sigs) > 0 {
+		if sigs := NotifiableSignals(); len(sigs) > 0 {
 			live.sigc, live.stop = make(chan os.Signal, 1), make(chan struct{})
 			signal.Notify(live.sigc, sigs...)
 			go watchInterrupt(live.sigc, live.stop)
@@ -130,7 +135,10 @@ func runAgent(cmd *exec.Cmd) error {
 	}
 	live.Unlock()
 	err := cmd.Wait()
+	// Reaped: its pid may be reused from here, so the interrupt path must
+	// not see it.
 	live.Lock()
+	live.pids[cmd] = 0
 	stopped := live.interrupted
 	live.Unlock()
 	if stopped {
@@ -192,6 +200,25 @@ func interruptLiveSeats() {
 	releaseHandler()
 }
 
+// Interrupt records that the operator interrupted this run and stops every
+// live agent seat. cmd/corral's auditContext calls it when IT receives the
+// signal, so the record of an interrupt does not depend on an agent having
+// been live at the moment the signal landed: an API-seat run is interrupted
+// in exactly the same sense.
+func Interrupt() { interruptLiveSeats() }
+
+// WasInterrupted reports whether the operator interrupted this run — by a
+// signal this package caught while a seat was live, or one auditContext
+// caught and passed on through Interrupt. It is the half of "the operator
+// interrupted this run" that does not depend on an error reaching the
+// caller: a signal can land after the last agent call returned, and a write
+// about to record the run must still see it.
+func WasInterrupted() bool {
+	live.Lock()
+	defer live.Unlock()
+	return live.interrupted
+}
+
 // signalHandlerActive reports whether the interrupt handler is registered.
 func signalHandlerActive() bool {
 	live.Lock()
@@ -199,9 +226,11 @@ func signalHandlerActive() bool {
 	return live.sigc != nil
 }
 
-// resetInterruptForTest clears the interrupted state, which is otherwise
-// permanent for the life of the process (see live).
-func resetInterruptForTest() {
+// ResetInterrupted clears the interrupted state, which is otherwise permanent
+// for the life of the process (see live). A process that runs more than one
+// run — tests, and any future long-lived server that seats agents — resets it
+// between runs.
+func ResetInterrupted() {
 	live.Lock()
 	defer live.Unlock()
 	live.interrupted = false

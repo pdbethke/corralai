@@ -9,7 +9,8 @@ import (
 	"os"
 	"os/signal"
 	"sync"
-	"syscall"
+
+	"github.com/pdbethke/corralai/internal/agentbackend"
 )
 
 // auditContext returns a context canceled on SIGINT/SIGTERM, so an interrupted
@@ -46,7 +47,13 @@ func auditContext(stderr io.Writer) (context.Context, context.CancelFunc) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	sigc := make(chan os.Signal, 1)
-	signal.Notify(sigc, os.Interrupt, syscall.SIGTERM)
+	// The operator-interrupt signals, less any the process was started
+	// ignoring (Notify would un-ignore them) — the same list the agent seats'
+	// forwarding registers. An empty list must not reach Notify, which would
+	// then register every signal.
+	if sigs := agentbackend.NotifiableSignals(); len(sigs) > 0 {
+		signal.Notify(sigc, sigs...)
+	}
 
 	done := make(chan struct{})
 	go func() {
@@ -56,6 +63,11 @@ func auditContext(stderr io.Writer) (context.Context, context.CancelFunc) {
 			// terminates the process outright.
 			signal.Stop(sigc)
 			fmt.Fprintln(stderr, "\ncorral: interrupted — finishing the current step so the tree is restored; press Ctrl-C again to abandon it")
+			// Recorded where every verb's "was this run interrupted" check
+			// reads it (operatorInterrupted), and every live agent seat is
+			// stopped: a run interrupted while only API seats were in
+			// flight is interrupted in exactly the same sense.
+			agentbackend.Interrupt()
 			cancel()
 		case <-done:
 		}

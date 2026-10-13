@@ -251,9 +251,8 @@ func runReviewRun(args []string, stdout, stderr io.Writer) int {
 		{Role: "system", Content: review.BriefSystem},
 		{Role: "user", Content: userTurn},
 	}, nil)
-	if agentbackend.Interrupted(err) {
-		fmt.Fprintln(stderr, "corral review: interrupted — no entry is written")
-		return 1
+	if operatorInterrupted(err) {
+		return refuseInterrupted(stderr, "corral review")
 	}
 	if err != nil {
 		fmt.Fprintf(stderr, "corral review: the reviewer seat failed: %v\n", err)
@@ -290,12 +289,11 @@ func runReviewRun(args []string, stdout, stderr io.Writer) int {
 			{Role: "system", Content: review.VerifierBriefSystem},
 			{Role: "user", Content: vturn},
 		}, nil)
-		if agentbackend.Interrupted(verr) {
+		if operatorInterrupted(verr) {
 			// Not "recorded unverified": the operator stopped the run, and
 			// a signed entry (and a push) for it would record a review
 			// nobody finished.
-			fmt.Fprintln(stderr, "corral review: interrupted — no entry is written")
-			return 1
+			return refuseInterrupted(stderr, "corral review")
 		}
 		if verr == nil {
 			// The call answered, so it was made and spent, whether or not
@@ -322,6 +320,11 @@ func runReviewRun(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 
+	// A signal can land after the last seat answered; the writes below would
+	// then record a review the operator stopped.
+	if operatorInterrupted(nil) {
+		return refuseInterrupted(stderr, "corral review")
+	}
 	printReview(stdout, r, nil)
 
 	// The statement first: it signs the reproductions; the entry, written
@@ -372,6 +375,9 @@ func runReviewRun(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "corral review: no entry written to %s: %v\n", ledgerDir, kerr)
 		return 1
 	}
+	if operatorInterrupted(nil) {
+		return refuseInterrupted(stderr, "corral review")
+	}
 	name, werr := auditpush.WriteReview(ledgerDir, r, signer)
 	if werr != nil {
 		fmt.Fprintf(stderr, "corral review: writing the entry to %s: %v\n", ledgerDir, werr)
@@ -386,6 +392,11 @@ func runReviewRun(args []string, stdout, stderr io.Writer) int {
 	// The push, last and fail-open, like certify's: the same entry's rows
 	// into a warehouse, keyed by the entry's hash.
 	if p := strings.TrimSpace(*push); p != "" && last.Kind == auditpush.KindReview {
+		if operatorInterrupted(nil) {
+			// The entry above is written; the push is not, and the run says so.
+			fmt.Fprintf(stderr, "corral review: interrupted — the entry %s is in %s, and it was NOT pushed\n", name, ledgerDir)
+			return 1
+		}
 		if c, perr := auditpush.PushReviewEntry(p, last, f.pushSource); perr != nil {
 			fmt.Fprintf(stderr, "corral review: pushing to %s: %v\n", p, perr)
 		} else {

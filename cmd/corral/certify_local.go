@@ -403,6 +403,9 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 		openStore:        openStore,
 		stdout:           stdout, stderr: stderr,
 	})
+	if operatorInterrupted(err) {
+		return refuseInterrupted(stderr, "corral certify --local")
+	}
 	if err != nil {
 		fmt.Fprintf(stderr, "corral certify --local: %v\n", err)
 		if isAuditUsageError(err) {
@@ -668,6 +671,10 @@ type localAuditInput struct {
 type localAuditError struct {
 	usage bool
 	msg   string
+	// causes are the error arguments the message was formatted from, kept so
+	// errors.Is / errors.As see through the message: an interrupt, a
+	// cancelled context or a typed refusal must survive being reported.
+	causes []error
 	// scanReason, when set, is the reposcan disposition this error deserves in
 	// a whole-repo report — see ScanReason.
 	scanReason string
@@ -675,24 +682,38 @@ type localAuditError struct {
 
 func (e localAuditError) Error() string { return e.msg }
 
+// Unwrap exposes every error the message was built from.
+func (e localAuditError) Unwrap() []error { return e.causes }
+
+// errorArgs are the arguments that are errors, in order.
+func errorArgs(a []any) []error {
+	var out []error
+	for _, v := range a {
+		if err, ok := v.(error); ok {
+			out = append(out, err)
+		}
+	}
+	return out
+}
+
 // ScanReason implements reposcan.ReasonCarrier: a repo scan asks an executor
 // error which disposition it deserves, so a precise refusal is not flattened
 // into the catch-all executor-error. Empty means "no opinion".
 func (e localAuditError) ScanReason() string { return e.scanReason }
 
 func auditUsageErr(format string, a ...any) error {
-	return localAuditError{usage: true, msg: fmt.Sprintf(format, a...)}
+	return localAuditError{usage: true, msg: fmt.Sprintf(format, a...), causes: errorArgs(a)}
 }
 
 // auditNotCollectedErr is auditUsageErr for the ONE refusal a repo scan must
 // report distinctly: the caller's test command would not run the test this
 // audit writes. It is a fact about the invocation, not a corral failure.
 func auditNotCollectedErr(format string, a ...any) error {
-	return localAuditError{usage: true, scanReason: reposcan.ReasonTestCmdCannotCollect, msg: fmt.Sprintf(format, a...)}
+	return localAuditError{usage: true, scanReason: reposcan.ReasonTestCmdCannotCollect, msg: fmt.Sprintf(format, a...), causes: errorArgs(a)}
 }
 
 func auditErr(format string, a ...any) error {
-	return localAuditError{msg: fmt.Sprintf(format, a...)}
+	return localAuditError{msg: fmt.Sprintf(format, a...), causes: errorArgs(a)}
 }
 
 // noTestFoundErr renders a reposcan.FindTest miss as the message an operator
@@ -1633,7 +1654,7 @@ func auditOneFile(ctx context.Context, in localAuditInput) (advpool.Verdict, err
 		if serr != nil {
 			return zero, auditErr("%v", serr)
 		}
-		d.Signer = advpool.CertSigner{Key: k, Store: st, Witness: nil}
+		d.Signer = interruptGuardSigner{advpool.CertSigner{Key: k, Store: st, Witness: nil}}
 	}
 	d.Enumerator = jailEnum
 	// --record-mutants: nil leaves the driver recording nothing, which is

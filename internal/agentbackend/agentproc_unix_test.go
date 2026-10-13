@@ -45,7 +45,7 @@ func goneWithin(d time.Duration, pids ...int) bool {
 // interrupted run leaves a CLI spending until its timeout, and a second
 // Ctrl-C orphans it outright.
 func TestAnInterruptKillsEveryLiveAgentProcessGroup(t *testing.T) {
-	t.Cleanup(resetInterruptForTest)
+	t.Cleanup(ResetInterrupted)
 	pids := filepath.Join(t.TempDir(), "pids")
 	t.Setenv("CORRALAI_AGENT_SLEEPER", `sh -c 'echo $$ > `+pids+`; sleep 60 & echo $! >> `+pids+`; wait'`)
 	b, err := ForSeat("sleeper", SeatOptions{Timeout: time.Minute})
@@ -135,7 +135,7 @@ func TestAnIgnoredSignalIsNeverCaught(t *testing.T) {
 		if !signal.Ignored(os.Interrupt) {
 			t.Fatal("precondition: SIGINT should be ignored in the child")
 		}
-		for _, sig := range notifiableSignals() {
+		for _, sig := range NotifiableSignals() {
 			if sig == os.Interrupt {
 				t.Fatal("an ignored SIGINT is in the set the handler registers")
 			}
@@ -165,7 +165,7 @@ func TestAnIgnoredSignalIsNeverCaught(t *testing.T) {
 // an abort, so catching it here would leave certify running with every agent
 // seat killed.
 func TestSIGHUPIsNotForwarded(t *testing.T) {
-	for _, sig := range notifiableSignals() {
+	for _, sig := range NotifiableSignals() {
 		if sig == syscall.SIGHUP {
 			t.Fatal("SIGHUP is in the forwarded set")
 		}
@@ -175,9 +175,9 @@ func TestSIGHUPIsNotForwarded(t *testing.T) {
 // A signal that lands as the last agent finishes must not be lost between
 // the handler's two cases: when both are ready, select picks either.
 func TestASignalRacingTheLastSeatIsNotSwallowed(t *testing.T) {
-	t.Cleanup(resetInterruptForTest)
+	t.Cleanup(ResetInterrupted)
 	for i := 0; i < 64; i++ {
-		resetInterruptForTest()
+		ResetInterrupted()
 		sigc := make(chan os.Signal, 1)
 		stop := make(chan struct{})
 		sigc <- os.Interrupt

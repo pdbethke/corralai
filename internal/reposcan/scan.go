@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/pdbethke/corralai/internal/advpool"
+	"github.com/pdbethke/corralai/internal/agentbackend"
 )
 
 // Ungradable reasons.
@@ -130,6 +131,13 @@ func Scan(ctx context.Context, jobs []Job, ex Executor, c Cache, workers int) []
 			}
 
 			res, err := ex.Execute(ctx, j)
+			if err != nil && (ctx.Err() != nil || agentbackend.Interrupted(err)) {
+				// Stopped, not failed: the run was cancelled or the operator
+				// interrupted it. Never executor-error, which would blame
+				// the audit for a run nobody let finish.
+				out[i] = FileResult{Job: j, Gradable: false, Reason: ReasonCancelled, ComputedAt: time.Now()}
+				return
+			}
 			if err != nil {
 				// err is the executor's own diagnosis (e.g. "python toolchain
 				// unavailable — refusing to grade: ..."), not a generic

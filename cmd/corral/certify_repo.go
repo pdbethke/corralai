@@ -1131,6 +1131,9 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		},
 	}
 	jobs, goalExcl, err := reposcan.EmitJobs(cfg, selected, gs)
+	if operatorInterrupted(err) {
+		return refuseInterrupted(stderr, "corral certify --repo")
+	}
 	if err != nil {
 		fmt.Fprintf(stderr, "corral certify --repo: emitting jobs: %v\n", err)
 		return 1
@@ -1315,6 +1318,13 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		verdictCacheDir = ""
 	}
 	results = reposcan.Scan(auditCtx, jobs, ex, newLedgerCache(verdictCacheDir, stderr), workers)
+	// An operator's interrupt records nothing, for every seat type: no
+	// report of files that were stopped, no attestation, no ledger entry,
+	// no push. Checked again right before those writes, for a signal that
+	// lands while the report prints.
+	if operatorInterrupted(nil) {
+		return refuseInterrupted(stderr, "corral certify --repo")
+	}
 	rep := reposcan.Aggregate(*owner, cfg.Repo, *commit, totalFiles, len(cands), results, excl)
 
 	// The diff selected zero candidates: a docs-only (or no-paired-test-only)
@@ -1403,6 +1413,9 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// Built from the same per-file ModelCalls the ledger's scan_model_calls
 	// rows come from (modelCallRows, below) — never a second measurement, so
 	// the scan header's totals and the per-role grain can never disagree.
+	if operatorInterrupted(nil) {
+		return refuseInterrupted(stderr, "corral certify --repo")
+	}
 	modelCallRows := scanModelCallRowsWith(results, scanDerivers)
 	var inTokens, outTokens, modelCallCount int64
 	for _, c := range modelCallRows {

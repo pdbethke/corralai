@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/pdbethke/corralai/internal/advpool"
-	"github.com/pdbethke/corralai/internal/agentbackend"
 	"github.com/pdbethke/corralai/internal/agentworker"
 	"github.com/pdbethke/corralai/internal/queue"
 )
@@ -52,6 +51,11 @@ const localTickMaxErrors = 20
 func driveLocalRun(ctx context.Context, d *advpool.Driver, q *queue.Store, missionID int64, chatterFor func(role string) agentworker.Chatter, poll time.Duration, sleep func(time.Duration), progress io.Writer, rec *recordSink, actorFor func(role string) string, swarm int) (*advpool.Verdict, error) {
 	consecutiveTickErrors := 0
 	for {
+		// An operator's interrupt is not a timeout: nothing it stopped is
+		// banked as a verdict, and nothing is retried.
+		if operatorInterrupted(nil) {
+			return nil, errOperatorInterrupt
+		}
 		if err := ctx.Err(); err != nil {
 			if v := bankableTimeoutVerdict(d, missionID); v != nil {
 				fmt.Fprintf(progress, "certify --local: %s\n", timedOutBankedMsg)
@@ -60,6 +64,9 @@ func driveLocalRun(ctx context.Context, d *advpool.Driver, q *queue.Store, missi
 			return nil, fmt.Errorf("timed out before the pool converged: %w", err)
 		}
 		verdict, err := d.Tick(ctx, missionID)
+		if err != nil && operatorInterrupted(err) {
+			return nil, errOperatorInterrupt
+		}
 		if err != nil {
 			// Some failures are TERMINAL, and retrying them is not resilience
 			// — it is spending the operator's money twenty times to print the
@@ -81,6 +88,9 @@ func driveLocalRun(ctx context.Context, d *advpool.Driver, q *queue.Store, missi
 			return verdict, nil
 		}
 		ran, err := runReadyTasks(ctx, q, missionID, chatterFor, rec, actorFor, swarm, progress)
+		if err != nil && operatorInterrupted(err) {
+			return nil, errOperatorInterrupt
+		}
 		if err != nil {
 			// A task-level error CAN be the same ctx expiry surfacing from
 			// inside the jail/LLM call the task was blocked on (see
@@ -252,7 +262,7 @@ func runOneTask(ctx context.Context, q *queue.Store, missionID int64, workerID s
 	rec.add("task_created", "", task.Key, map[string]any{"role": task.Role, "title": task.Title})
 	rec.add("task_claimed", actor, task.Key, map[string]any{"role": task.Role, "title": task.Title})
 	result, findings, rerr := agentworker.RunRoleWithSystem(ctx, ch, task.Role, task.System, task.Instruction)
-	if agentbackend.Interrupted(rerr) {
+	if rerr != nil && operatorInterrupted(rerr) {
 		// Not a provider failure of any seat: the operator stopped the run.
 		// Filing it under a sentinel below would let the run converge and
 		// record a verdict for an audit nobody finished.

@@ -93,3 +93,46 @@ func TestAnInterruptedReviewWritesNoEntry(t *testing.T) {
 		}
 	}
 }
+
+// lateSignalVerifier answers in full, but the operator's interrupt lands just
+// as it returns: after the last seat call, before anything is written.
+type lateSignalVerifier struct{ reply string }
+
+func (v lateSignalVerifier) Chat([]agentbackend.Message, []any) (agentbackend.Message, error) {
+	agentbackend.Interrupt()
+	return agentbackend.Message{Role: "assistant", Content: v.reply}, nil
+}
+
+// A signal after the last agent call still stops the record: review checks
+// the one predicate right before its statement, ledger entry and push.
+func TestAReviewInterruptedAfterItsLastCallWritesNoEntry(t *testing.T) {
+	t.Cleanup(agentbackend.ResetInterrupted)
+	t.Setenv("ANTHROPIC_API_KEY", "test-placeholder-not-a-real-key")
+	root := t.TempDir()
+	gitRun := gitCmd(t, root)
+	mustWrite(t, filepath.Join(root, "pkg", "a.go"), "package pkg\n")
+	gitRun("init", "-q")
+	gitRun("add", ".")
+	gitRun("commit", "-q", "-m", "base", "--no-gpg-sign")
+	orig := newReviewerBackend
+	t.Cleanup(func() { newReviewerBackend = orig })
+	newReviewerBackend = func(model, _ string) (agentbackend.Backend, error) {
+		if model == "rev" {
+			return cannedReviewer{reply: `{"opinion":"o","findings":[{"claim":"c","tier":"CODE-READ","file":"pkg/a.go","line":1}],"sound":[]}`}, nil
+		}
+		return lateSignalVerifier{reply: `{"opinion":"fine","refutations":[{"id":"R1","verdict":"STANDS","argument":"yes"}]}`}, nil
+	}
+	ledger := filepath.Join(t.TempDir(), "ledger")
+	push := filepath.Join(t.TempDir(), "wh.duckdb")
+	var out, errb bytes.Buffer
+	code := runReview([]string{"--repo", root, "--scope", "pkg", "--reviewer-model", "rev", "--verifier-model", "ver", "--ledger", ledger, "--push", push}, &out, &errb)
+	if code == 0 || !strings.Contains(errb.String(), "interrupted — nothing recorded") {
+		t.Fatalf("want a non-zero exit saying nothing was recorded, got %d\n%s", code, errb.String())
+	}
+	if entries, _ := os.ReadDir(filepath.Join(ledger, "scans")); len(entries) != 0 {
+		t.Fatalf("%d ledger entries written after the interrupt", len(entries))
+	}
+	if _, err := os.Stat(push); !os.IsNotExist(err) {
+		t.Fatalf("pushed after the interrupt")
+	}
+}

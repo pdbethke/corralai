@@ -5,85 +5,165 @@
 package sandbox
 
 import (
-	"fmt"
+	"context"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
-func TestSandboxExecDeniesReadsByDefault(t *testing.T) {
-	iso, err := newSandboxExecIsolator()
-	if err != nil {
-		t.Fatal(err)
+// runJailed runs command in a real sandbox-exec jail over a fresh t.TempDir()
+// workspace. On macOS t.TempDir() lives under /var/folders, a symlink into
+// /private/var, so every test here also proves the workspace path is
+// resolved before it reaches the profile (spec finding 7).
+func runJailed(t *testing.T, command string, opts Options) Result {
+	t.Helper()
+	iso := sandboxExecIsolator{}
+	if opts.Workspace == "" {
+		opts.Workspace = t.TempDir()
 	}
-	argv, err := iso.Wrap("echo hi", Options{Workspace: "/tmp/ws"}, nil)
-	if err != nil {
-		t.Fatal(err)
+	opts.Backend = iso
+	if opts.Timeout == 0 {
+		opts.Timeout = 2 * time.Minute
 	}
-	profile := argv[2]
-	if strings.Contains(profile, "(allow file-read*)\n") || strings.Contains(profile, "(allow file-read* )") {
-		t.Fatalf("profile still grants blanket file-read*:\n%s", profile)
-	}
-	if !strings.Contains(profile, "(deny default)") {
-		t.Fatalf("profile must default-deny:\n%s", profile)
-	}
-	if !strings.Contains(profile, `(allow file-read* (subpath "/tmp/ws"))`) {
-		t.Fatalf("workspace must be readable:\n%s", profile)
-	}
-	if !strings.Contains(profile, `(allow file-read* (subpath "/usr"))`) {
-		t.Fatalf("toolchain /usr must be readable:\n%s", profile)
+	return Run(context.Background(), command, opts)
+}
+
+func TestSandboxExecRunsAShellInASymlinkedWorkspace(t *testing.T) {
+	res := runJailed(t, "echo hi > f && cat f", Options{})
+	if res.ExitCode != 0 || strings.TrimSpace(res.Output) != "hi" {
+		t.Fatalf("exit=%d err=%q output=%q", res.ExitCode, res.Err, res.Output)
 	}
 }
 
-func TestSandboxExecAllowsUsrLocal(t *testing.T) {
-	iso, err := newSandboxExecIsolator()
+func TestSandboxExecPinsTheEnvironment(t *testing.T) {
+	t.Setenv("CORRAL_HOST_ONLY_MARKER", "leak")
+	ws := t.TempDir()
+	env := append(MinimalEnv(), "CORRAL_HOST_ONLY_MARKER=leak")
+	res := runJailed(t, "env", Options{Workspace: ws, Env: env})
+	if res.ExitCode != 0 {
+		t.Fatalf("exit=%d err=%q output=%q", res.ExitCode, res.Err, res.Output)
+	}
+	d := sandboxExecIsolator{}.jailDirs(resolved(ws))
+	for _, want := range []string{"HOME=" + d.Home, "TMPDIR=" + d.Tmp, "GOTOOLCHAIN=local", "CORRAL_HOST_ONLY_MARKER=leak"} {
+		if !strings.Contains(res.Output, want+"\n") {
+			t.Errorf("env lacks %q:\n%s", want, res.Output)
+		}
+	}
+	host, _ := os.UserHomeDir()
+	if strings.Contains(res.Output, "HOME="+host+"\n") {
+		t.Errorf("the operator's HOME reached the jail:\n%s", res.Output)
+	}
+}
+
+func TestSandboxExecHomeAndTmpAreWritable(t *testing.T) {
+	res := runJailed(t, `touch "$HOME/p" "$TMPDIR/p" && echo ok`, Options{})
+	if strings.TrimSpace(res.Output) != "ok" {
+		t.Fatalf("exit=%d err=%q output=%q", res.ExitCode, res.Err, res.Output)
+	}
+}
+
+func TestSandboxExecDeniesTheOperatorsHome(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip("no home directory: nothing to deny")
+	}
+	res := runJailed(t, "ls "+shQuote(home), Options{})
+	if res.ExitCode == 0 {
+		t.Fatalf("listing %s succeeded inside the jail:\n%s", home, res.Output)
+	}
+}
+
+func TestSandboxExecDeniesMasterPasswd(t *testing.T) {
+	res := runJailed(t, "head -c1 /etc/master.passwd", Options{})
+	if res.ExitCode == 0 {
+		t.Fatal("/etc/master.passwd was readable inside the jail")
+	}
+}
+
+// A toolchain under $HOME, passed in ReadOnlyBinds, is readable even though
+// the rest of $HOME is denied (layers 4 then 5).
+func TestSandboxExecReadsAToolchainUnderHome(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip("no home directory")
+	}
+	tc, err := os.MkdirTemp(home, ".corral-test-toolchain-*")
 	if err != nil {
 		t.Fatal(err)
 	}
-	argv, err := iso.Wrap("echo hi", Options{Workspace: "/tmp/ws"}, nil)
-	if err != nil {
+	t.Cleanup(func() { os.RemoveAll(tc) })
+	if err := os.WriteFile(filepath.Join(tc, "tool"), []byte("toolchain-ok"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	profile := argv[2]
-	if !strings.Contains(profile, `(allow file-read* (subpath "/usr/local"))`) {
-		t.Fatalf("Intel Homebrew / manual toolchains under /usr/local must be readable:\n%s", profile)
+	res := runJailed(t, "cat "+shQuote(filepath.Join(tc, "tool")), Options{ReadOnlyBinds: []Bind{{Host: tc, Target: tc}}})
+	if strings.TrimSpace(res.Output) != "toolchain-ok" {
+		t.Fatalf("toolchain under $HOME unreadable: exit=%d output=%q", res.ExitCode, res.Output)
+	}
+}
+
+func TestSandboxExecIsOfflineByDefault(t *testing.T) {
+	res := runJailed(t, "/usr/bin/nc -z -G 3 1.1.1.1 443", Options{})
+	if res.ExitCode == 0 {
+		t.Fatal("an outbound connection succeeded without Options.Network")
+	}
+}
+
+func TestSandboxExecNetworkWhenAsked(t *testing.T) {
+	res := runJailed(t, "/usr/bin/curl -sS -o /dev/null -w '%{http_code}' https://proxy.golang.org/", Options{Network: true})
+	if strings.TrimSpace(res.Output) != "200" {
+		t.Fatalf("networked fetch failed: exit=%d output=%q", res.ExitCode, res.Output)
+	}
+}
+
+// A real `go test` of a tiny module, with a cold cache in the per-run HOME.
+func TestSandboxExecRunsGoTest(t *testing.T) {
+	goBin, err := exec.LookPath("go")
+	if err != nil {
+		t.Skip("go not on PATH")
+	}
+	goRoot := resolved(filepath.Dir(filepath.Dir(goBin)))
+	ws := t.TempDir()
+	os.WriteFile(filepath.Join(ws, "go.mod"), []byte("module p\ngo 1.21\n"), 0o600)
+	os.WriteFile(filepath.Join(ws, "p_test.go"), []byte("package p\nimport \"testing\"\nfunc TestX(t *testing.T) {}\n"), 0o600)
+	res := runJailed(t, "go test ./...", Options{Workspace: ws, ReadOnlyBinds: []Bind{{Host: goRoot, Target: goRoot}}})
+	if res.ExitCode != 0 || !strings.Contains(res.Output, "ok") {
+		t.Fatalf("go test in the jail: exit=%d output=%s", res.ExitCode, res.Output)
 	}
 }
 
 func TestSandboxExecPrependsUlimitPrelude(t *testing.T) {
-	iso, err := newSandboxExecIsolator()
+	argv, err := sandboxExecIsolator{}.Wrap("echo hi", Options{Workspace: t.TempDir()}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	argv, err := iso.Wrap("echo hi", Options{Workspace: "/tmp/ws"}, nil)
+	sh := argv[len(argv)-1]
+	if !strings.Contains(sh, "ulimit -u") || !strings.Contains(sh, "ulimit -f") || !strings.HasSuffix(sh, "echo hi") {
+		t.Fatalf("sh -c command must carry the ulimit prelude and end with the command:\n%s", sh)
+	}
+}
+
+// Review focus 3: the deny names the RESOLVED os.UserHomeDir(), not $HOME.
+func TestSandboxExecDeniesTheRealHomeNotEnvHome(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip("no home directory")
+	}
+	argv, err := sandboxExecIsolator{}.Wrap("true", Options{Workspace: t.TempDir()}, []string{"HOME=/elsewhere"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	shCommand := argv[len(argv)-1]
-	if !strings.Contains(shCommand, "ulimit -u") || !strings.Contains(shCommand, "ulimit -f") {
-		t.Fatalf("sh -c command must be prefixed with a ulimit ceiling (fork-bomb + disk-write guard):\n%s", shCommand)
-	}
-	if !strings.HasSuffix(shCommand, "echo hi") {
-		t.Fatalf("original command must still run after the prelude:\n%s", shCommand)
+	if want := `(deny file-read* (subpath "` + resolved(home) + `"))`; !strings.Contains(argv[2], want) {
+		t.Fatalf("profile lacks %s", want)
 	}
 }
 
 func TestSandboxExecDeniesSharedTmpWrite(t *testing.T) {
-	iso, err := newSandboxExecIsolator()
-	if err != nil {
-		t.Fatal(err)
-	}
-	argv, err := iso.Wrap("echo hi", Options{Workspace: "/tmp/ws"}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	profile := argv[2]
-	for _, p := range []string{"/tmp", "/var/tmp", "/private/tmp"} {
-		if strings.Contains(profile, fmt.Sprintf(`(allow file-write* (subpath %q))`, p)) {
-			t.Fatalf("shared host %s must not be writable inside the jail:\n%s", p, profile)
-		}
-	}
-	shCommand := argv[len(argv)-1]
-	if !strings.Contains(shCommand, "TMPDIR=") || !strings.Contains(shCommand, ".corral-tmp") {
-		t.Fatalf("command must redirect TMPDIR to a per-run dir under the workspace:\n%s", shCommand)
+	res := runJailed(t, "touch /private/tmp/corral-should-not-exist", Options{})
+	if res.ExitCode == 0 {
+		os.Remove("/private/tmp/corral-should-not-exist")
+		t.Fatal("the shared host /tmp was writable inside the jail")
 	}
 }

@@ -102,6 +102,23 @@ jobs:
         run: bash scripts/check-licensing.sh
       - if: steps.filter.outputs.code == 'true'
         run: go vet ./...
+      # THE DARWIN FILES COMPILE ON EVERY PR. Until 2026-10-13 nothing in CI
+      # compiled a //go:build darwin file, so the macOS jail shipped an invalid
+      # profile (`signal*`) that only a real Mac could reveal, and "compile-
+      # checked only" was the best any change could claim. This proves the
+      # sandbox and adequacy packages, tests included, build for darwin/arm64.
+      # Scoped to those two: ./... pulls in the DuckDB cgo bindings, which a
+      # Linux runner cannot cross-compile. The `macos` job builds everything.
+      - name: Darwin cross-compile (sandbox, adequacy)
+        if: steps.filter.outputs.code == 'true'
+        env:
+          GOOS: darwin
+          GOARCH: arm64
+          CGO_ENABLED: "0"
+        run: |
+          go vet ./internal/sandbox/ ./internal/adequacy/
+          go test -c -o /dev/null ./internal/sandbox/
+          go test -c -o /dev/null ./internal/adequacy/
       - name: Provision language test toolchains (audit gate)
         if: steps.filter.outputs.code == 'true'
         # Shared with .github/workflows/self-audit.yml, which runs this same

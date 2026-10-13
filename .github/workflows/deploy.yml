@@ -283,9 +283,18 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      # -v doubles as the skip census: a jail test that skipped says why.
+      # A skipped jail test must never read as a green macOS jail, so the
+      # step asserts that each named test actually ran and passed.
       - name: Jail tests (sandbox-exec, fetch step)
-        run: go test ./internal/sandbox/ ./internal/adequacy/ -count=1 -v
+        run: |
+          set -o pipefail
+          go test ./internal/sandbox/ ./internal/adequacy/ -count=1 -v 2>&1 | tee "$RUNNER_TEMP/jail-tests.log"
+          for t in TestSelfTestRealBackendPassesViaResolve TestSandboxExecRunsGoTest TestSandboxExecDeniesAReadableFileUnderHome TestFetchStepVendorsGoOnMacOS; do
+            if ! grep -q -- "--- PASS: $t" "$RUNNER_TEMP/jail-tests.log"; then
+              echo "::error::jail test $t did not run and pass on macOS (skipped or missing)"
+              exit 1
+            fi
+          done
       # The real binary's preflight: the shared self-test, through doctor.
       - name: corral doctor (self-test through the real binary)
         run: |

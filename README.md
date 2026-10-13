@@ -1223,11 +1223,12 @@ home directory, writes only to the run's workspace. Where macOS cannot match
 bwrap, the gap is named rather than hidden: file **metadata** (existence, size,
 mtime) is visible everywhere, the **process list** is visible (no PID
 namespace), there is **no private `/tmp`** (a per-run `TMPDIR` replaces it), and
-Apple has **deprecated `sandbox-exec`** (it works on macOS 27; `--jail container`
+Apple has **deprecated `sandbox-exec`** (verified on macOS 27.0.1; `--jail container`
 is the fallback). `corral doctor` runs the jail's self-test and prints what it
 proved. Windows runs inside a Linux environment: Docker Desktop or WSL2, or the
-`--jail container` fallback. `corral`
-itself carries two CGO deps (DuckDB for the ledgers, tree-sitter for the symbol
+`--jail container` fallback.
+
+`corral` itself carries two CGO deps (DuckDB for the ledgers, tree-sitter for the symbol
 index), which is why `go install` builds for ~25s; the optional daemon's client
 binaries are pure Go (see [the brain](#the-brain-optional-and-not-read-by-any-audit)).
 

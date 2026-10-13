@@ -91,13 +91,21 @@ func (s sandboxExecIsolator) Wrap(command string, opts Options, env []string) ([
 
 	argv := []string{"sandbox-exec", "-p", profile, "/usr/bin/env", "-i"}
 	for _, kv := range env {
-		if i := strings.IndexByte(kv, '='); i > 0 && !isPinned(kv[:i]) {
+		if i := strings.IndexByte(kv, '='); i > 0 && kv[0] != '-' && !isPinned(kv[:i]) {
 			argv = append(argv, kv)
 		}
 	}
 	for _, p := range pinnedEnv(dirs) {
 		argv = append(argv, p.Key+"="+p.Value)
 	}
-	mkdirs := "mkdir -p " + shQuote(dirs.Home) + " " + shQuote(dirs.Tmp) + " 2>/dev/null; "
+	// HOME and TMPDIR are per-command, as bwrap's tmpfs is: cleared before the
+	// command and removed after it (the EXIT trap keeps the command's exit
+	// status). The fetch step runs several commands in one staging dir that
+	// later seeds the audit, so nothing may carry between them. Go's module
+	// cache is read-only, so make it writable before rm. A SIGKILL on timeout
+	// skips the trap; the next command's pre-clear covers that.
+	hq, tq := shQuote(dirs.Home), shQuote(dirs.Tmp)
+	clean := "chmod -R u+w " + hq + " " + tq + " 2>/dev/null; rm -rf " + hq + " " + tq
+	mkdirs := clean + "; mkdir -p " + hq + " " + tq + "; trap '" + strings.ReplaceAll(clean, "'", `'\''`) + "' EXIT; "
 	return append(argv, "/bin/sh", "-c", rlimitPreludeDarwin+mkdirs+command), nil
 }

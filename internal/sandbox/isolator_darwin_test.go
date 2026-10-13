@@ -40,6 +40,7 @@ func TestSandboxExecRunsAShellInASymlinkedWorkspace(t *testing.T) {
 
 func TestSandboxExecPinsTheEnvironment(t *testing.T) {
 	t.Setenv("CORRAL_HOST_ONLY_MARKER", "leak")
+	t.Setenv("CORRAL_HOST_ONLY_UNFORWARDED", "leak") // in the host env, NOT in Options.Env
 	ws := t.TempDir()
 	env := append(MinimalEnv(), "CORRAL_HOST_ONLY_MARKER=leak")
 	res := runJailed(t, "env", Options{Workspace: ws, Env: env})
@@ -51,6 +52,9 @@ func TestSandboxExecPinsTheEnvironment(t *testing.T) {
 		if !strings.Contains(res.Output, want+"\n") {
 			t.Errorf("env lacks %q:\n%s", want, res.Output)
 		}
+	}
+	if strings.Contains(res.Output, "CORRAL_HOST_ONLY_UNFORWARDED") {
+		t.Errorf("env -i let an unforwarded host variable through:\n%s", res.Output)
 	}
 	host, _ := os.UserHomeDir()
 	if strings.Contains(res.Output, "HOME="+host+"\n") {
@@ -76,10 +80,80 @@ func TestSandboxExecDeniesTheOperatorsHome(t *testing.T) {
 	}
 }
 
-func TestSandboxExecDeniesMasterPasswd(t *testing.T) {
-	res := runJailed(t, "head -c1 /etc/master.passwd", Options{})
-	if res.ExitCode == 0 {
-		t.Fatal("/etc/master.passwd was readable inside the jail")
+// Positive control: a world-readable file under the denied home. It is
+// readable outside the jail, so a failure inside is the profile's doing, not
+// file permissions (/etc/master.passwd is 0600 root and proves nothing).
+func TestSandboxExecDeniesAReadableFileUnderHome(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip("no home directory")
+	}
+	dir, err := os.MkdirTemp(home, ".corral-test-readable-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	f := filepath.Join(dir, "secret")
+	if err := os.WriteFile(f, []byte("readable"), 0o644); err != nil { //nolint:gosec // the point: readable outside the jail
+		t.Fatal(err)
+	}
+	if b, err := os.ReadFile(f); err != nil || string(b) != "readable" {
+		t.Fatalf("control failed: the file is not readable outside the jail: %v", err)
+	}
+	res := runJailed(t, "cat "+shQuote(f), Options{})
+	if res.ExitCode == 0 || strings.Contains(res.Output, "readable\n") || !strings.Contains(res.Output, "Operation not permitted") {
+		t.Fatalf("a world-readable file under the operator's home was readable in the jail: exit=%d output=%q", res.ExitCode, res.Output)
+	}
+}
+
+func TestSandboxExecHomeDoesNotSurviveACommand(t *testing.T) {
+	ws := t.TempDir()
+	if res := runJailed(t, `echo x > "$HOME/marker" && echo x > "$TMPDIR/marker"`, Options{Workspace: ws}); res.ExitCode != 0 {
+		t.Fatalf("first run: %+v", res)
+	}
+	for _, n := range []string{".corral-home", ".corral-tmp"} {
+		if _, err := os.Stat(filepath.Join(ws, n)); err == nil {
+			t.Errorf("%s left behind after the run", n)
+		}
+	}
+	res := runJailed(t, `test ! -e "$HOME/marker" && test ! -e "$TMPDIR/marker" && echo clean`, Options{Workspace: ws})
+	if strings.TrimSpace(res.Output) != "clean" {
+		t.Fatalf("HOME/TMPDIR carried into a second command: exit=%d output=%q", res.ExitCode, res.Output)
+	}
+}
+
+// Go's module cache is read-only; the cleanup must still remove it.
+func TestSandboxExecCleanupRemovesReadOnlyTrees(t *testing.T) {
+	ws := t.TempDir()
+	res := runJailed(t, `mkdir -p "$HOME/ro/d" && echo x > "$HOME/ro/d/f" && chmod -R a-w "$HOME/ro"`, Options{Workspace: ws})
+	if res.ExitCode != 0 {
+		t.Fatalf("%+v", res)
+	}
+	if _, err := os.Stat(filepath.Join(ws, ".corral-home")); err == nil {
+		t.Error(".corral-home with a read-only tree survived")
+	}
+}
+
+func TestSandboxExecKeepsTheExitStatusThroughTheTrap(t *testing.T) {
+	res := runJailed(t, "exit 7", Options{})
+	if res.ExitCode != 7 {
+		t.Fatalf("exit=%d err=%q, want 7", res.ExitCode, res.Err)
+	}
+}
+
+// BSD env would parse a key starting with "-" as an option.
+func TestSandboxExecDropsDashKeyedEnv(t *testing.T) {
+	argv, err := sandboxExecIsolator{}.Wrap("true", Options{Workspace: t.TempDir()}, []string{"-S=x", "--foo=bar", "OK=1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range argv[3:] {
+		if strings.HasPrefix(a, "-S=") || strings.HasPrefix(a, "--foo=") {
+			t.Fatalf("dash-keyed env entry reached env's argv: %q", a)
+		}
+	}
+	if !strings.Contains(strings.Join(argv, "\x00"), "OK=1") {
+		t.Fatal("a normal entry was dropped")
 	}
 }
 
@@ -131,6 +205,9 @@ func TestSandboxExecRunsGoTest(t *testing.T) {
 	res := runJailed(t, "go test ./...", Options{Workspace: ws, ReadOnlyBinds: []Bind{{Host: goRoot, Target: goRoot}}})
 	if res.ExitCode != 0 || !strings.Contains(res.Output, "ok") {
 		t.Fatalf("go test in the jail: exit=%d output=%s", res.ExitCode, res.Output)
+	}
+	if _, err := os.Stat(filepath.Join(ws, ".corral-home")); err == nil {
+		t.Error("go test left .corral-home (module/build cache) behind")
 	}
 }
 

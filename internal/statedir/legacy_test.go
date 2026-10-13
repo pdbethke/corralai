@@ -93,3 +93,49 @@ func TestEveryStateRowIsGuarded(t *testing.T) {
 		}
 	}
 }
+
+// A legacy directory corral cannot look into (root-owned after `sudo claude`,
+// say) is not evidence the old key is absent. The refusal must fail CLOSED:
+// treating "cannot tell" as "not there" lets the loader mint a second key.
+func TestUnreadableLegacyDirIsRefusedNotTreatedAsAbsent(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads through mode 000")
+	}
+	home := t.TempDir()
+	fakeHost(t, "linux", nil, home)
+	legacy := filepath.Join(home, ".claude")
+	writeFile(t, filepath.Join(legacy, "corralai_certify_key"))
+	if err := os.Chmod(legacy, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(legacy, 0o700) })
+
+	_, err := Path(CertifyKey)
+	if err == nil || !strings.Contains(err.Error(), "cannot tell whether") || !strings.Contains(err.Error(), legacy) {
+		t.Fatalf("want a refusal naming %s, got %v", legacy, err)
+	}
+	if _, statErr := os.Stat(filepath.Join(home, ".local", "state", "corral")); !os.IsNotExist(statErr) {
+		t.Fatal("Path created something")
+	}
+}
+
+// The same holds for the NEW location: an unreadable state root cannot say
+// the file is absent there either.
+func TestUnreadableStateRootIsRefusedNotTreatedAsAbsent(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads through mode 000")
+	}
+	home := t.TempDir()
+	fakeHost(t, "linux", nil, home)
+	root := filepath.Join(home, ".local", "state", "corral")
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(root, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(root, 0o700) })
+	if _, err := Path(CertifyKey); err == nil || !strings.Contains(err.Error(), "cannot tell whether") {
+		t.Fatalf("want a refusal, got %v", err)
+	}
+}

@@ -54,8 +54,14 @@ func refuseLegacyOnly(f File, p string) error {
 	if f.Root != State {
 		return nil // rebuildable; a fresh cache costs a re-measure, never history
 	}
-	if _, err := os.Lstat(p); err == nil || !os.IsNotExist(err) {
+	// Fail CLOSED on both looks: "could not tell" (EACCES on a root-owned
+	// directory, ENOTDIR, an I/O error) is not "absent", and treating it as
+	// absent is exactly how a loader would mint a second key beside the one
+	// it could not see.
+	if _, err := os.Lstat(p); err == nil {
 		return nil
+	} else if !os.IsNotExist(err) {
+		return cannotTell(p, err)
 	}
 	old, err := LegacyPath(f)
 	if err != nil || old == p {
@@ -63,6 +69,12 @@ func refuseLegacyOnly(f File, p string) error {
 	}
 	if _, err := os.Lstat(old); err == nil {
 		return &LegacyError{File: f, Legacy: old, Want: p}
+	} else if !os.IsNotExist(err) {
+		return cannotTell(old, err)
 	}
 	return nil
+}
+
+func cannotTell(p string, err error) error {
+	return fmt.Errorf("cannot tell whether %s exists (%w) — refusing rather than create a fresh copy that may sit beside it; fix the permissions, or run `corral state migrate` as the user who owns it", p, err)
 }

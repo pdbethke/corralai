@@ -31,7 +31,8 @@ history of any release, `git log v0.3.4..v0.3.5`.
   touching anything, refuses a symlinked source and a running daemon (and a
   file whose lock it cannot probe), and prints each key's public key before
   and after the move, exiting 1 if a moved key does not match. The refusal
-  and the migrate command are removed in the first release after 1.0.
+  and the migrate command are planned for removal in a later release (the
+  first release after 1.0 is proposed, not decided).
 
   `certify --local` now resolves the bug-catch store even when no shadow
   pool is configured, so it can hit the same refusal. The TLS autocert cache

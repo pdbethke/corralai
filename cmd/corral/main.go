@@ -6,7 +6,9 @@
 //
 //	corral   # serves /mcp/ + /healthz on $CORRALAI_ADDR
 //
-// Env ($STATE and $CACHE are corral's state and cache directories; `corral state paths` prints them):
+// Env:
+//
+//	$STATE and $CACHE are corral's state and cache directories; `corral state paths` prints them.
 //
 //	CORRALAI_ADDR              listen address (default 127.0.0.1:9019)
 //	CORRALAI_DB                coordination SQLite path (default $STATE/corralai_coord.sqlite3)

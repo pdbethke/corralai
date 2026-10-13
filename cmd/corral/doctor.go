@@ -15,6 +15,7 @@ import (
 
 	"github.com/pdbethke/corralai/internal/adequacy"
 	"github.com/pdbethke/corralai/internal/advpool"
+	"github.com/pdbethke/corralai/internal/creds"
 	"github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/reposcan"
 	"github.com/pdbethke/corralai/internal/sandbox"
@@ -150,8 +151,62 @@ func checkSandbox(iso sandbox.Isolator, err error) checkResult {
 		return checkResult{name: sandboxCheckName, fatal: true, detail: fmt.Sprintf(
 			"%v\ncorral refuses to run your tests against live mutations unsandboxed, so this is not optional.\n%s", err, sandboxHint(runtime.GOOS))}
 	}
-	_ = iso
-	return checkResult{name: sandboxCheckName, ok: true}
+	r := checkResult{name: sandboxCheckName, ok: true}
+	if iso != nil {
+		r.detail = sandboxNotes(iso.Name(), os.Getenv)
+	}
+	return r
+}
+
+// darwinJailGaps are what the macOS jail cannot match bwrap on, by OS limit
+// — the README's Platforms "named gaps", printed under a passing sandbox
+// check so nobody reads [ok] as "isolated exactly as on Linux".
+var darwinJailGaps = []string{
+	"jailed code can read the startup environment and arguments of any non-Apple process you own, corral's included (sysctl KERN_PROCARGS2; there is no PID namespace)",
+	"file metadata (existence, size, mtime) is visible everywhere; contents are not",
+	"the process list is visible; signals reach only the jail's own processes",
+	"no private /tmp: a per-run TMPDIR replaces it, and tools that hard-code /tmp fail closed",
+	"Apple has deprecated sandbox-exec (it still works on macOS 27.0.1); --jail container is the fallback",
+	"path checks fold case with Go's strings.ToLower, which matches APFS for ASCII paths but not for every Unicode case or normalization form",
+	"jailed code can execute binaries it cannot read (process* exec); the children stay sandboxed",
+	"the self-test's net-denied means an outbound connection was refused (it passes trivially on an offline host)",
+}
+
+// sandboxNotes is the informational detail under a passing sandbox check:
+// on sandbox-exec, its named gaps, then a WARNING naming every provider
+// credential (creds.CanonicalNames — the one list of them) set in corral's
+// own environment, because gap one makes those readable by the code an
+// audit runs. Names only, never values. It never fails the check: the
+// macos CI job greps "[ok  ] sandbox starts".
+func sandboxNotes(backend string, getenv func(string) string) string {
+	if backend != "sandbox-exec" {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("named gaps on macOS (the jail cannot match bwrap here; README, Platforms):\n")
+	for _, g := range darwinJailGaps {
+		b.WriteString("  - " + g + "\n")
+	}
+	var set []string
+	for _, n := range creds.CanonicalNames {
+		if strings.TrimSpace(getenv(n)) != "" {
+			set = append(set, n)
+		}
+	}
+	if len(set) > 0 {
+		fmt.Fprintf(&b, "WARNING: %s set in this environment: code an audit runs can read %s from corral's own process (the first gap above).\n"+
+			"  Before auditing untrusted code, store %s with `corral secret set <NAME>` (the macOS Keychain, else the encrypted file in corral's config directory) and unset %s.\n",
+			strings.Join(set, ", "), pick(len(set), "it", "them"), pick(len(set), "it", "them"), pick(len(set), "it", "them"))
+	}
+	return b.String()
+}
+
+// pick is one when n == 1, else many.
+func pick(n int, one, many string) string {
+	if n == 1 {
+		return one
+	}
+	return many
 }
 
 // sandboxHint is the next step for a sandbox that will not start, per OS.

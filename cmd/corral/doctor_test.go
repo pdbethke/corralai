@@ -409,3 +409,73 @@ func TestCheckSandboxNamesTheSelfTestOnBothOutcomes(t *testing.T) {
 		t.Errorf("pass name %q != fail name %q", ok.name, fail.name)
 	}
 }
+
+// TestSandboxNotesNameTheMacOSGaps: on the sandbox-exec backend the [ok]
+// line carries every named gap (README Platforms), so an operator reading
+// doctor learns what the jail does NOT do. Informational: it never fails
+// the check, whose "[ok  ] sandbox starts" line the macos CI job greps.
+func TestSandboxNotesNameTheMacOSGaps(t *testing.T) {
+	notes := sandboxNotes("sandbox-exec", func(string) string { return "" })
+	for _, want := range []string{
+		"startup environment and arguments of any non-Apple process", // C1
+		"metadata",
+		"process list",
+		"no private /tmp",
+		"deprecated",
+		"strings.ToLower",
+		"execute binaries it cannot read",
+		"passes trivially on an offline host",
+	} {
+		if !strings.Contains(notes, want) {
+			t.Errorf("darwin notes lack %q:\n%s", want, notes)
+		}
+	}
+	if strings.Contains(notes, "WARNING") {
+		t.Errorf("no key in the environment, yet a WARNING:\n%s", notes)
+	}
+	if n := sandboxNotes("bwrap", func(string) string { return "set" }); n != "" {
+		t.Errorf("bwrap has none of these gaps, got notes:\n%s", n)
+	}
+}
+
+// TestSandboxNotesWarnAboutKeysInTheEnvironment (named gap C1): a provider
+// key in corral's own environment is readable by the code an audit runs,
+// so doctor warns, naming each variable that is set — and never its value.
+func TestSandboxNotesWarnAboutKeysInTheEnvironment(t *testing.T) {
+	env := map[string]string{"ANTHROPIC_API_KEY": "sk-ant-SECRETVALUE", "GEMINI_API_KEY": "AIzaSECRETVALUE", "GOOGLE_API_KEY": "  "}
+	notes := sandboxNotes("sandbox-exec", func(k string) string { return env[k] })
+	if !strings.Contains(notes, "WARNING") {
+		t.Fatalf("keys in the environment, no WARNING:\n%s", notes)
+	}
+	for _, want := range []string{"ANTHROPIC_API_KEY", "GEMINI_API_KEY", "corral secret set"} {
+		if !strings.Contains(notes, want) {
+			t.Errorf("warning lacks %q:\n%s", want, notes)
+		}
+	}
+	for _, never := range []string{"SECRETVALUE", "GOOGLE_API_KEY", "OPENAI_API_KEY"} {
+		if strings.Contains(notes, never) {
+			t.Errorf("warning contains %q (a value, or a variable that is not set):\n%s", never, notes)
+		}
+	}
+}
+
+// TestCheckSandboxStaysOkWithTheWarning: the warning is a detail on the
+// passing check, never a failure.
+func TestCheckSandboxStaysOkWithTheWarning(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "x")
+	r := checkSandbox(fakeNamedIsolator{"sandbox-exec"}, nil)
+	if !r.ok || r.name != sandboxCheckName {
+		t.Fatalf("the sandbox check must pass with the warning attached: %+v", r)
+	}
+	if !strings.Contains(r.detail, "WARNING") || !strings.Contains(r.detail, "ANTHROPIC_API_KEY") {
+		t.Errorf("detail lacks the warning:\n%s", r.detail)
+	}
+}
+
+type fakeNamedIsolator struct{ name string }
+
+func (f fakeNamedIsolator) Name() string { return f.name }
+func (fakeNamedIsolator) Wrap(string, sandbox.Options, []string) ([]string, error) {
+	return nil, nil
+}
+func (fakeNamedIsolator) Preflight() error { return nil }

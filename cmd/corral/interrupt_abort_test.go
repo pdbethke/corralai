@@ -161,3 +161,31 @@ func TestALateSignalAfterSigningIsReportedAsRecorded(t *testing.T) {
 		t.Error("no interrupt, nothing to refuse")
 	}
 }
+
+// A review interrupted after its statement was written removes it, so
+// "nothing recorded" is still true; a file it cannot remove is named instead
+// of being covered by that claim.
+func TestRefuseInterruptedAfterRemovesWhatWasWrittenOrNamesIt(t *testing.T) {
+	dir := t.TempDir()
+	stmt, env := filepath.Join(dir, "s.json"), filepath.Join(dir, "s.json.dsse.json")
+	mustWrite(t, stmt, "{}")
+	mustWrite(t, env, "{}")
+	var errb bytes.Buffer
+	if code := refuseInterruptedAfter(&errb, "corral review", []string{stmt, env}); code != exitInterrupted || !strings.Contains(errb.String(), "interrupted — nothing recorded") {
+		t.Fatalf("exit %d, %q", code, errb.String())
+	}
+	for _, f := range []string{stmt, env} {
+		if _, err := os.Stat(f); !os.IsNotExist(err) {
+			t.Errorf("%s was left behind", f)
+		}
+	}
+	// A path that cannot be removed (a non-empty directory) is named, and
+	// "nothing recorded" is not claimed.
+	stuck := filepath.Join(dir, "stuck")
+	mustWrite(t, filepath.Join(stuck, "x"), "x")
+	errb.Reset()
+	refuseInterruptedAfter(&errb, "corral review", []string{stuck})
+	if strings.Contains(errb.String(), "nothing recorded") || !strings.Contains(errb.String(), stuck) {
+		t.Fatalf("an unremovable file must be named, never covered by \"nothing recorded\": %q", errb.String())
+	}
+}

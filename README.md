@@ -1205,28 +1205,52 @@ enforced in CI by [`scripts/check-security.sh`](scripts/check-security.sh).
 | **`corral certify --repo --substrate workspace`** (no jail) | ✅ | should work — **not exercised in CI** | should work — **not exercised in CI** |
 | **The GitHub Action** | ✅ `ubuntu-latest` | — | — |
 
-**"Not exercised in CI" is meant literally.** Every workflow runs on
-`ubuntu-latest`, so the macOS and Windows rows describe a path that should work
+**"Not exercised in CI" is meant literally.** The Linux rows and the macOS
+`--local` row run in CI — the macOS jail on `macos-latest`, where a skipped jail
+test fails the job rather than reading as green. Everything marked "not exercised"
+— the macOS workspace row and all of Windows — describes a path that should work
 and that no run has proven. The container backend itself IS exercised — and was
 found completely broken the first time anyone executed it, because Docker mounts
 `--tmpfs` `noexec` and Go compiles its test binary into `/tmp` — but its
 integration tests used to skip without `CORRALAI_EXEC_IMAGE`, which nothing set — that
 is fixed: CI now builds the jail image with **both** docker and podman and runs the
 backend's integration tests twice, once pinned to each, on every code change.
-Hosted macOS and Windows runners are free for public repositories, so this is a
+Hosted Windows runners are free for public repositories, so the Windows row is a
 task rather than a limitation.
 
 **Each platform jails with what it has.** On Linux, `bwrap` (bubblewrap) uses
 namespaces and runs **unprivileged** (one package, no root, no daemon). On macOS,
-`sandbox-exec` is built in: deny-by-default reads, no network, no access to your
-home directory, writes only to the run's workspace. Where macOS cannot match
-bwrap, the gap is named rather than hidden: file **metadata** (existence, size,
-mtime) is visible everywhere, the **process list** is visible (no PID
-namespace), there is **no private `/tmp`** (a per-run `TMPDIR` replaces it), and
-Apple has **deprecated `sandbox-exec`** (verified on macOS 27.0.1; `--jail container`
-is the fallback). `corral doctor` runs the jail's self-test and prints what it
-proved. Windows runs inside a Linux environment: Docker Desktop or WSL2, or the
-`--jail container` fallback.
+`sandbox-exec` is built in: deny-by-default reads, no network, writes only to the
+run's workspace, and your home directory denied except the toolchain directories
+corral binds read-only and the per-run workspace (which may itself live under
+`~/Library/Caches/corral`). The jail's per-run `HOME` and `TMPDIR` are
+`.corral-home` and `.corral-tmp` inside that workspace; a test runner that
+collects from dot-directories may need to ignore them.
+
+Where macOS cannot match bwrap, the gap is named rather than hidden:
+
+- **Jailed code can read the startup environment and arguments of any non-Apple
+  process you own — including corral's.** If your model API keys are in corral's
+  environment, audited code can read them. Keep keys in corral's credentials store
+  instead of environment variables when auditing untrusted code on macOS:
+  `corral secret set <NAME>` keeps them in the macOS Keychain (else an
+  age-encrypted file in `~/Library/Application Support/corral`), and corral reads
+  them from there at run time. (bwrap's PID namespace prevents this on Linux;
+  `corral doctor` warns when a key is set in its environment.)
+- File **metadata** (existence, size, mtime) is visible everywhere; contents are not.
+- The **process list** is visible (no PID namespace); signals reach only the
+  jail's own processes.
+- There is **no private `/tmp`**: a per-run `TMPDIR` replaces it.
+- Jailed code can **execute binaries it cannot read**; the children stay sandboxed.
+- corral's own path checks fold case with Go's `strings.ToLower`, which matches
+  APFS for ASCII paths but not for every Unicode case or normalization form.
+- Apple has **deprecated `sandbox-exec`** (verified working on macOS 27.0.1;
+  `--jail container` is the fallback).
+
+`corral doctor` runs the jail's self-test and prints what it proved, and these
+gaps. (Its network check is an outbound connection refused, which passes
+trivially on an offline host.) Windows runs inside a Linux environment: Docker
+Desktop or WSL2, or the `--jail container` fallback.
 
 `corral` itself carries two CGO deps (DuckDB for the ledgers, tree-sitter for the symbol
 index), which is why `go install` builds for ~25s; the optional daemon's client

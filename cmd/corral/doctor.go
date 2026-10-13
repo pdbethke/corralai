@@ -304,12 +304,16 @@ func checkHerd(mutant, writer, critic, shadow, shadowWriter string, reg *seatRes
 	}
 	name := fmt.Sprintf("herd accepted by certify's own preflight (mutant-generator=%s, test-writer=%s, test-critic=%s)",
 		strings.TrimSpace(mutant), strings.TrimSpace(writer), advpool.ResolveOptionalModel(critic, "(off)"))
+	// The per-seat lines print whatever the preflight says: a missing binary
+	// fails the preflight too, and its one line names only the first seat it
+	// met, while these name every seat and its binary.
+	seats := agentSeatChecks(mutant, writer, critic, shadow, shadowWriter)
 	if _, err := resolveAuditRoles(in, io.Discard); err != nil {
 		out = append(out, checkResult{name: name, detail: err.Error()})
-		return out
+		return append(out, seats...)
 	}
 	out = append(out, checkResult{name: name, ok: true})
-	return append(out, agentSeatChecks(mutant, writer, critic, shadow, shadowWriter)...)
+	return append(out, seats...)
 }
 
 // agentSeatChecks is one line per distinct AGENT seat the herd names. What
@@ -359,11 +363,28 @@ func checkDeriveSeat(model, endpoint string) []checkResult {
 	if model == "" {
 		return nil
 	}
+	if isAgentSeat(model) {
+		// An agent seat has no credential to check: it has a binary, and gets
+		// the same line every other agent seat gets. Only when that line is
+		// not a failure is the seat itself built (an endpoint placement can
+		// still refuse it), so one missing CLI reads as one problem.
+		lines := agentSeatChecks(model)
+		for i := range lines {
+			lines[i].name += " (derive seat)"
+		}
+		if len(lines) == 1 && !lines[0].ok {
+			return lines
+		}
+		if _, err := newLLMDeriver(model, endpoint); err != nil {
+			lines = append(lines, checkResult{name: "derive seat (" + model + ")", detail: err.Error()})
+		}
+		return lines
+	}
 	name := "credential for the derive seat (" + model + ")"
 	if _, err := newLLMDeriver(model, endpoint); err != nil {
 		return []checkResult{{name: name, detail: err.Error()}}
 	}
-	return append([]checkResult{{name: name, ok: true}}, agentSeatChecks(model)...)
+	return []checkResult{{name: name, ok: true}}
 }
 
 // checkPairing answers the question that silently produces a useless run: does

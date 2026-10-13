@@ -278,3 +278,44 @@ func TestSameVendorCheckSaysWhenAnOperatorAgentsVendorCannotBeTold(t *testing.T)
 		t.Fatalf("a pinned seat's vendor is known:\n%s", warn.String())
 	}
 }
+
+// A missing binary fails certify's own preflight, but must not hide the
+// per-seat lines: those are what say WHICH seat and WHICH binary.
+func TestDoctorHerdPrintsEverySeatLineWhenThePreflightFails(t *testing.T) {
+	noKeys(t)
+	fakeAgent(t, "fakea", "x")
+	t.Setenv("CORRALAI_AGENT_GHOST", "/nonexistent/corral-ghost-agent {model:--model}")
+	res := checkHerd("fakea", "ghost", "off", "", "", nil)
+	byName := map[string]checkResult{}
+	for _, r := range res {
+		byName[r.name] = r
+	}
+	if g, ok := byName["agent seat ghost"]; !ok || g.ok || !strings.Contains(g.detail, `"/nonexistent/corral-ghost-agent" not found`) {
+		t.Fatalf("want a FAIL line for the ghost seat naming its binary, got %+v", res)
+	}
+	if a, ok := byName["agent seat fakea"]; !ok || !a.ok {
+		t.Fatalf("the healthy seat's line must still print, got %+v", res)
+	}
+}
+
+// A derive seat that is an agent gets the same binary line as every other
+// seat. A missing CLI is not a missing credential, and must not be reported
+// as one.
+func TestDoctorDeriveAgentSeatGetsABinaryLineNotACredentialLine(t *testing.T) {
+	noKeys(t)
+	t.Setenv("CORRALAI_AGENT_GHOST", "/nonexistent/corral-ghost-agent {model:--model}")
+	res := checkDeriveSeat("ghost", "")
+	if len(res) != 1 || res[0].ok || !strings.HasPrefix(res[0].name, "agent seat ghost") || !strings.Contains(res[0].detail, "not found") {
+		t.Fatalf("want one FAIL binary line for the derive agent seat, got %+v", res)
+	}
+	for _, r := range res {
+		if strings.Contains(r.name, "credential") {
+			t.Fatalf("a missing CLI reported as a credential problem: %+v", r)
+		}
+	}
+	fakeAgent(t, "fakea", "x")
+	res = checkDeriveSeat("fakea", "")
+	if len(res) == 0 || !res[0].ok || !strings.HasPrefix(res[0].name, "agent seat fakea") || !strings.Contains(res[0].detail, "login not verified") {
+		t.Fatalf("a present derive agent: want the ok binary line, got %+v", res)
+	}
+}

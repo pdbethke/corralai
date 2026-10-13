@@ -59,6 +59,9 @@ codex printed nothing.
 
 ## Lean-seat measurements (input tokens for a one-word reply)
 
+These are the figures measured at fixture capture. The current ones are held by
+`TestBuiltinSeatsStartCold` (`agentseat_real_test.go`).
+
 | seat form | input tokens (input + cache write + cache read) |
 |---|---|
 | claude, lean flags, `--tools ""`, NO `--system-prompt` | 2,972 (2 + 2,435 + 535) |

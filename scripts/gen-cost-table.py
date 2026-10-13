@@ -163,7 +163,7 @@ def cost_line(calls, path=None):
         return (
             c.get("input_tokens") is None
             or c.get("output_tokens") is None
-            or c.get("unmetered_calls", 0) >= c["calls"]
+            or (c["calls"] > 0 and c.get("unmetered_calls", 0) >= c["calls"])
         )
 
     metered = [c for c in ordered if not unmetered_row(c)]

@@ -45,7 +45,7 @@ var builtinAgents = map[string]builtinAgent{
 	// CLAUDE.md, memory, hooks), no MCP servers, no slash commands or skills,
 	// no session file, and no tools unless the caller names them. Unflagged,
 	// a one-word call carried 108,740 input tokens of the operator's own
-	// configuration; this form measured 620 (testdata/agentwire/README.md).
+	// configuration; this form measured 620 at fixture capture (testdata/agentwire/README.md; TestBuiltinSeatsStartCold holds the current figure).
 	// `--bare` would be leaner still but refuses subscription (OAuth) auth,
 	// which is the point of an agent seat. --system-prompt REPLACES Claude
 	// Code's default system prompt (2,972 tokens without it): corral's role
@@ -58,7 +58,7 @@ var builtinAgents = map[string]builtinAgent{
 		coldCeiling: 5000,
 	},
 	// codex loaded no operator instructions even unflagged (its own agent
-	// prompt is ~14.7k tokens, mostly cached); --ignore-user-config and
+	// prompt is ~14.7k tokens at fixture capture, mostly cached; TestBuiltinSeatsStartCold holds the current figure); --ignore-user-config and
 	// --ignore-rules make that explicit rather than incidental, and
 	// --ephemeral keeps no session. It has no tool switch: --sandbox
 	// read-only is its confinement in every verb.

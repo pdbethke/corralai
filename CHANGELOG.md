@@ -22,11 +22,13 @@ history of any release, `git log v0.3.4..v0.3.5`.
   mutants killed by the dev suite, 6 of 6 survivors proved) and a real
   `review` round. `antigravity` was not measured. How to define your own agent,
   and what was measured, is in `docs/corral/agent-seats.md`.
-- **Changed behaviour: review's built-in agent seats now start cold.** A
-  `claude-code` or `codex` review seat no longer sees your own `CLAUDE.md`,
-  memory, skills or MCP servers. If a review relied on the seat knowing your
-  conventions, put them in the brief or the repository; they are no longer
-  inherited.
+- **Changed behaviour: review's built-in `claude-code` seat now starts cold.**
+  It no longer sees your own `CLAUDE.md`, memory, skills or MCP servers; a
+  one-line prompt measured about 94-108k input tokens without the cold flags
+  and 561 with them. If a review relied on the seat knowing your conventions,
+  put them in the brief or the repository. The `codex` seat now passes
+  `--ignore-user-config --ignore-rules` explicitly; nothing measured shows it
+  loaded your setup before.
 - **A seat that reports no tokens is `not metered`, not free.** An agent seat
   on the `text` wire shows `not metered` on the cost line, and `--max-tokens`
   refuses it, because a cap cannot bound what it cannot see. The warehouse and

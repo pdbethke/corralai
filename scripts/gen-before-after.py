@@ -126,7 +126,7 @@ def unmetered_row(c):
     return (
         c.get("input_tokens") is None
         or c.get("output_tokens") is None
-        or c.get("unmetered_calls", 0) >= c["calls"]
+        or (c["calls"] > 0 and c.get("unmetered_calls", 0) >= c["calls"])
     )
 
 

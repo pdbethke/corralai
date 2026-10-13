@@ -1081,7 +1081,7 @@ runner does not have. The design, and the week that produced it:
   (`corral criticscore list|show <id>|confirm <id>|refute <id>`), turn out to be real
   vs. wrong — the same "who watches the watchmen" question the gate asks of generators,
   now asked of the critic. It's human-gated: `certify --local` records each
-  critic finding to a local store (`~/.claude/corralai_criticscore.duckdb`), and
+  critic finding to a local store (`corralai_criticscore.duckdb` in corral's state directory, `CORRALAI_STATE_DIR`), and
   `corral criticscore` reads it there — no brain required — so the C-PREC column
   reflects only findings a person has confirmed or refuted. `certify --repo`
   records nothing to it.

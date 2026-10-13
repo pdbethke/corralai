@@ -212,6 +212,11 @@ func underRoot(root, rel string) string {
 // would report a real source as unpaired for a reason that is not true.
 func diskTestModules(p lang.Plugin, root string) func(rel string) ([]pairing.TestModule, error) {
 	return func(rel string) ([]pairing.TestModule, error) {
+		if !repoindex.ReadsTestModules(p.Name()) {
+			// A no-cgo build answers nil for every file; that is not
+			// "declares no test", and must not be reported as one.
+			return nil, pairing.ErrDeclarationsUnreadable
+		}
 		src, err := os.ReadFile(underRoot(root, rel)) // #nosec G304 -- a source file the scan itself enumerated (or the operator's own --code), under the operator's root
 		if err != nil {
 			return nil, err

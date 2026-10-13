@@ -336,17 +336,21 @@ func checkPairing(code, test string) checkResult {
 			"no language plugin claims %q — corral infers the language from the extension", code)}
 	}
 	// The same refusal every audit door makes before any jail, store or
-	// spend. A file that pairs but cannot be audited is not "[ok]": doctor
-	// used to pass one every certify command then refused. The landing is
-	// read from the repository at the working directory — the root the
-	// pairing below uses — which is what certify --local --repo-dir and
-	// certify --repo read; a run without --repo-dir is single-file and says
-	// so itself (see the hint this command prints about --repo-dir).
-	l, lerr := lang.TestLanding(code, reposcan.DiskSources(p, "."))
-	if lerr != nil {
-		return checkResult{name: name, detail: fmt.Sprintf("reading where a test for %q would land: %v", code, lerr)}
+	// spend, asked through the SAME function certify --local's door asks
+	// (auditLanding), so doctor cannot pass a file certify then refuses. A
+	// file that pairs but cannot be audited is not "[ok]". Asked twice,
+	// because the answer depends on the invocation: with the repository
+	// (--repo-dir, rooted at the working directory as the pairing below is)
+	// and without it (single-file). A file only the first admits — a Rust
+	// file whose test lands in the test file it declares — is [ok], and the
+	// detail says the bare form refuses it and why.
+	_, landing := auditLanding(localAuditInput{codePath: code, repoDir: "."})
+	needsRepoDir := ""
+	if landing == nil {
+		if _, bare := auditLanding(localAuditInput{codePath: code}); bare != nil {
+			needsRepoDir = fmt.Sprintf(" — audit it with --repo-dir: without it, certify --local refuses it (%v)", bare)
+		}
 	}
-	landing := lang.CheckTestLanding(code, l)
 	// Called only when landing != nil.
 	paired := func(how string) checkResult {
 		return checkResult{name: name, detail: fmt.Sprintf("pairs to %s, but cannot be audited yet: %v", how, landing)}
@@ -358,7 +362,7 @@ func checkPairing(code, test string) checkResult {
 		if landing != nil {
 			return paired(t + " (--test)")
 		}
-		return checkResult{name: name, ok: true}
+		return checkResult{name: name, ok: true, detail: strings.TrimPrefix(needsRepoDir, " — ")}
 	}
 	// Rooted at the working directory, as certify --local and
 	// --adversarial resolve an operator's --code: that is also the root a
@@ -372,12 +376,12 @@ func checkPairing(code, test string) checkResult {
 			if landing != nil {
 				return paired(res.Path + " (search)")
 			}
-			return checkResult{name: name, ok: true, detail: "paired by search: " + res.Path}
+			return checkResult{name: name, ok: true, detail: "paired by search: " + res.Path + needsRepoDir}
 		}
 		if landing != nil {
 			return paired(res.Path + " (" + res.Label + ")")
 		}
-		return checkResult{name: name, ok: true, detail: "found " + res.Path + " by convention (" + res.Label + ")"}
+		return checkResult{name: name, ok: true, detail: "found " + res.Path + " by convention (" + res.Label + ")" + needsRepoDir}
 	}
 	detail := fmt.Sprintf("no test found for %q by convention. ", code) + whereItLooked(res)
 	if landing != nil {

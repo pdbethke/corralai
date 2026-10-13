@@ -17,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -1061,10 +1062,13 @@ type jailBaselineRunner struct {
 	// copy of this struct still reports it — reposcan.CheckBaselineStable
 	// takes the runner as an interface and calls it repeatedly.
 	lastOutput *string
-	// lastFlaky is the most recent PASSING baseline's tests the runner passed
-	// only on a retry (adequacy.Report.BaselineFlaky), pointer-shared for the
-	// same reason lastOutput is.
-	lastFlaky *[]string
+	// flaky is every test any PASSING baseline run passed only on a retry
+	// (adequacy.Report.BaselineFlaky) — the UNION over the runs
+	// CheckBaselineStable makes, not the last run's list: a test that needed
+	// a retry in run 1 and not in run 2 still leaned on the retry policy, and
+	// keeping only run 2 would erase that. Pointer-shared for the same reason
+	// lastOutput is.
+	flaky *[]string
 }
 
 func (b jailBaselineRunner) RunBaseline() (bool, error) {
@@ -1078,8 +1082,12 @@ func (b jailBaselineRunner) RunBaseline() (bool, error) {
 	if !rep.CompliantPass && b.lastOutput != nil {
 		*b.lastOutput = rep.BaselineOutput
 	}
-	if rep.CompliantPass && b.lastFlaky != nil {
-		*b.lastFlaky = rep.BaselineFlaky
+	if rep.CompliantPass && b.flaky != nil {
+		for _, name := range rep.BaselineFlaky {
+			if !slices.Contains(*b.flaky, name) {
+				*b.flaky = append(*b.flaky, name)
+			}
+		}
 	}
 	return rep.CompliantPass, nil
 }
@@ -1093,13 +1101,14 @@ func (b jailBaselineRunner) BaselineOutput() string {
 	return *b.lastOutput
 }
 
-// BaselineFlaky is the tests the most recent passing baseline passed only on
-// a retry (see adequacy.Report.BaselineFlaky); nil when there were none.
+// BaselineFlaky is every test a passing baseline run passed only on a retry,
+// across all the runs this runner made, in first-seen order (see
+// adequacy.Report.BaselineFlaky); nil when there were none.
 func (b jailBaselineRunner) BaselineFlaky() []string {
-	if b.lastFlaky == nil {
+	if b.flaky == nil {
 		return nil
 	}
-	return *b.lastFlaky
+	return *b.flaky
 }
 
 // baselineRunnerFor builds the baseline-only runner for one job — honesty
@@ -1147,7 +1156,7 @@ func baselineRunnerFor(ctx context.Context, in localAuditInput) (reposcan.Baseli
 		// Fresh per runner: two files' baseline failures must never be
 		// attributed to each other.
 		lastOutput: new(string),
-		lastFlaky:  new([]string),
+		flaky:      new([]string),
 	}, prep.cleanup, nil
 }
 
@@ -1954,35 +1963,44 @@ func auditOneFile(ctx context.Context, in localAuditInput) (advpool.Verdict, err
 		}
 	}
 
-	// Hand the pool's authored test back: when it killed a survivor the dev suite
-	// missed, print it so the dev can adopt it.
+	// The readout after the verdict: the baseline's flaky tests and the
+	// pool's authored test(s), with where they go.
 	if st, ok := d.RunStatus(localMissionID); ok {
-		if strings.TrimSpace(st.AuthoredTest) != "" {
-			// A landing INTO the project's test file names that file — it is
-			// where the block below was compiled and proven, whatever --test
-			// named — and says to append, since the block is a module.
-			if rs.Landing.Into {
-				fmt.Fprintf(stdout, "\nthe herd authored a test that catches a gap your suite missed — append it to %s:\n\n", rs.Landing.Path)
-			} else {
-				fmt.Fprintf(stdout, "\nthe herd authored a test that catches a gap your suite missed — add it to %s:\n\n", tp)
-			}
-			fmt.Fprintln(stdout, strings.TrimRight(st.AuthoredTest, "\n"))
-		}
-		// And every proven part the language's concatenator would not fold
-		// into that file. Each is a test that was written, compiled and RUN
-		// to kill the survivor it names, so it must reach the operator whole
-		// — see reposcan.WeakFile.AuthoredExtra.
-		for _, p := range st.AuthoredExtra {
-			fmt.Fprintf(stdout, "\nproven test for survivor %s — a SEPARATE file, it cannot be merged with the one above:\n", p.MutantID)
-			if r := strings.TrimSpace(p.Reason); r != "" {
-				fmt.Fprintf(stdout, "  why: %s\n", r)
-			}
-			fmt.Fprintln(stdout, "")
-			fmt.Fprintln(stdout, strings.TrimRight(p.Source, "\n"))
-		}
+		printLocalReadout(stdout, *verdict, st, tp)
 	}
 
 	return *verdict, nil
+}
+
+// printLocalReadout is certify --local's readout after the verdict, every
+// line of it through a rendering certify --repo shares: the tests the dev
+// pass's baseline passed only on a retry (flakyBaselineNote, as --repo's
+// scan line), then the pool's authored test and every proven part that
+// would not merge, each with where it goes (authoredTestDestination — read
+// off the verdict's AuthoredLanding, the field --repo prints and the ledger
+// keeps). tp is the dev test, the target for a test that is a file of its
+// own.
+func printLocalReadout(w io.Writer, v advpool.Verdict, st advpool.RunState, tp string) {
+	if note := flakyBaselineNote(v.BaselineFlaky); note != "" {
+		fmt.Fprintf(w, "%s\n", note)
+	}
+	appendTo := v.AuthoredLanding
+	if strings.TrimSpace(st.AuthoredTest) != "" {
+		fmt.Fprintf(w, "\nthe herd authored a test that catches a gap your suite missed — %s:\n\n", authoredTestDestination(appendTo, tp))
+		fmt.Fprintln(w, strings.TrimRight(st.AuthoredTest, "\n"))
+	}
+	// And every proven part the language's concatenator would not fold into
+	// that file. Each is a test that was written, compiled and RUN to kill
+	// the survivor it names, so it must reach the operator whole — see
+	// reposcan.WeakFile.AuthoredExtra.
+	for _, p := range st.AuthoredExtra {
+		fmt.Fprintf(w, "\nproven test for survivor %s — %s:\n", p.MutantID, authoredExtraDestination(appendTo, "a SEPARATE file, it cannot be merged with the one above"))
+		if r := strings.TrimSpace(p.Reason); r != "" {
+			fmt.Fprintf(w, "  why: %s\n", r)
+		}
+		fmt.Fprintln(w, "")
+		fmt.Fprintln(w, strings.TrimRight(p.Source, "\n"))
+	}
 }
 
 // jailWiringInput bundles the inputs buildJailWiring needs. It is a params

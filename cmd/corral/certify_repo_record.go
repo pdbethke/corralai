@@ -217,6 +217,9 @@ func buildScanFileRows(results []reposcan.FileResult, excluded []reposcan.Exclus
 				// is a record rather than a runnable file — dropping the
 				// extras would retain fewer proofs than proven_missed counts.
 				AuthoredTest: r.Verdict.AuthoredRecord(),
+				// Where that record must be appended, when it is a block
+				// that compiles only inside one file (Verdict.AuthoredLanding).
+				AuthoredLanding: r.Verdict.AuthoredLanding,
 				// ModelsByRole is canonicalized the same way the scan-wide
 				// model_set is (reposcan.CanonicalKV), so a per-file role
 				// assignment is byte-comparable with it rather than a second,

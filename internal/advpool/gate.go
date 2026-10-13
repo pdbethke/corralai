@@ -103,6 +103,17 @@ type AuthoredLanding struct {
 	Existing string
 }
 
+// AppendTo is the file an authored test must be appended to — the landing's
+// Path when it is a landing INTO an existing file, "" when the test is a file
+// of its own. The one reading of the landing every reporter uses
+// (Verdict.AuthoredLanding).
+func (l AuthoredLanding) AppendTo() string {
+	if !l.Into {
+		return ""
+	}
+	return l.Path
+}
+
 // overlay writes an authored test (content, as ParseTest landed it) at its
 // path in ws: ComposeLanding — the landing file's existing bytes with the
 // block appended, for an Into landing; the test alone, as a file of its own,

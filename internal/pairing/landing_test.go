@@ -135,3 +135,19 @@ func landingEqual(a, b Landing) bool {
 	return a.Path == b.Path && a.Shape == b.Shape && a.Label == b.Label && a.Into == b.Into &&
 		a.Depth == b.Depth && a.DeclarationsRead == b.DeclarationsRead && slices.Equal(a.RefusedOutsideRoot, b.RefusedOutsideRoot)
 }
+
+// TestLandSaysWhenTheBuildCannotReadDeclarations: a reader that cannot read
+// declarations at all (a no-cgo build) is not "declares none": the landing
+// falls closed to Primary and says which refusal it is.
+func TestLandSaysWhenTheBuildCannotReadDeclarations(t *testing.T) {
+	got, err := Land(rustLikeRules, "src/foo.rs", Sources{
+		Exists:      func(string) bool { return true },
+		TestModules: func(string) ([]TestModule, error) { return nil, ErrDeclarationsUnreadable },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Path != "src/foo.rs" || !got.DeclarationsUnreadable || got.DeclarationsRead {
+		t.Errorf("Land = %+v, want the source, unreadable, not read", got)
+	}
+}

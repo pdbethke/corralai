@@ -3785,7 +3785,7 @@ func printWeakFile(w io.Writer, f reposcan.WeakFile) {
 	// TestWriterFailed / PoolTestUnsound, ProvenMissed is not meaningful and
 	// the markers above already say why.
 	if f.ProvenMissed > 0 && strings.TrimSpace(f.AuthoredTest) != "" {
-		fmt.Fprintf(w, "      the pool wrote this test and RAN it to prove the gap — add it to your suite:\n")
+		fmt.Fprintf(w, "      the pool wrote this test and RAN it to prove the gap — %s:\n", authoredTestDestination(f.AuthoredLanding, "your suite"))
 		printAuthoredSource(w, f.AuthoredTest)
 	}
 	// The parts that would not merge into the file above. Printed in FULL,
@@ -3799,12 +3799,44 @@ func printWeakFile(w io.Writer, f reposcan.WeakFile) {
 	// ever exists BECAUSE it proved its survivor, so an extra with a zero
 	// count would be a bug worth seeing rather than noise worth hiding.
 	for _, p := range f.AuthoredExtra {
-		fmt.Fprintf(w, "      proven test for %s (separate file — it cannot be merged with the others):\n", p.MutantID)
+		fmt.Fprintf(w, "      proven test for %s (%s):\n", p.MutantID, authoredExtraDestination(f.AuthoredLanding, "separate file — it cannot be merged with the others"))
 		if r := strings.TrimSpace(p.Reason); r != "" {
 			fmt.Fprintf(w, "        why: %s\n", r)
 		}
 		printAuthoredSource(w, p.Source)
 	}
+}
+
+// flakyBaselineNote is the ONE rendering of a baseline that passed only
+// because the runner retried some tests (nextest's FLAKY), shared by
+// certify --repo's scan line and certify --local's readout. "" when none did.
+func flakyBaselineNote(flaky []string) string {
+	if len(flaky) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("the baseline passed %d test(s) only on a retry (flaky), graded as passed: %s", len(flaky), strings.Join(flaky, ", "))
+}
+
+// authoredTestDestination is the ONE rendering of where a printed authored
+// test goes, shared by certify --local and certify --repo: "append it to
+// <file>" when the test is a block that compiles only inside that file
+// (advpool.Verdict.AuthoredLanding — a Rust corral_tests module), else "add it
+// to <otherwise>" (the dev test for --local, "your suite" for --repo).
+func authoredTestDestination(appendTo, otherwise string) string {
+	if appendTo != "" {
+		return "append it to " + appendTo
+	}
+	return "add it to " + otherwise
+}
+
+// authoredExtraDestination is authoredTestDestination for a part the
+// concatenator would not merge: with a landing it is a SEPARATE block for
+// the same file, else the caller's "separate file" wording.
+func authoredExtraDestination(appendTo, otherwise string) string {
+	if appendTo != "" {
+		return "a separate block that cannot be merged with the one above — append it to " + appendTo + " too"
+	}
+	return otherwise
 }
 
 // printAuthoredSource writes one authored test's source, indented, so several
@@ -4849,7 +4881,7 @@ func (l *localExecutor) Execute(ctx context.Context, j reposcan.Job) (reposcan.F
 	// given — but it is never a silent one: the tests are named.
 	if fr, ok := runner.(interface{ BaselineFlaky() []string }); ok {
 		if flaky := fr.BaselineFlaky(); len(flaky) > 0 {
-			l.note("%s: the baseline passed %d test(s) only on a retry (flaky), graded as passed: %s\n", j.Path, len(flaky), strings.Join(flaky, ", "))
+			l.note("%s: %s\n", j.Path, flakyBaselineNote(flaky))
 		}
 	}
 	release()

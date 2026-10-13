@@ -2,6 +2,15 @@
 
 package pairing
 
+import "errors"
+
+// ErrDeclarationsUnreadable is what a Sources.TestModules returns when the
+// caller's BUILD cannot read the language's declarations at all (a no-cgo
+// build has no grammar). It is not "declares none": Land reports it as
+// DeclarationsUnreadable and lands on Primary — fail closed — and Resolve
+// returns it, like any read error.
+var ErrDeclarationsUnreadable = errors.New("this build cannot read the file's test-module declarations (the grammar needs cgo)")
+
 // Landing is where an authored test for a source is WRITTEN — the fourth
 // question pairing answers, beside Primary (what a new test file is called),
 // Resolve (which test already exists) and BestClaim (who keeps a contested
@@ -35,6 +44,11 @@ type Landing struct {
 	// from fails closed instead of guessing, and a refusal can say which of
 	// the two reasons it is.
 	DeclarationsRead bool
+	// DeclarationsUnreadable is true when the reader said this build cannot
+	// read declarations at all (ErrDeclarationsUnreadable) — a different
+	// refusal from "no repository to read them from", and from "declares
+	// none", and said as such.
+	DeclarationsUnreadable bool
 	// RefusedOutsideRoot is every path a declaration named outside
 	// Sources.Root, never read and never landed in (see Resolution's).
 	RefusedOutsideRoot []string
@@ -67,7 +81,11 @@ func Land(rules []Rule, codePath string, src Sources) (Landing, error) {
 	content := contentRules(rules)
 	if len(content) > 0 && src.TestModules != nil {
 		res, err := resolveDeclared(content, codePath, src)
-		if err != nil {
+		switch {
+		case errors.Is(err, ErrDeclarationsUnreadable):
+			l.DeclarationsUnreadable = true
+			return landPrimary(l, rules, codePath), nil
+		case err != nil:
 			return Landing{}, err
 		}
 		l.DeclarationsRead = true
@@ -78,12 +96,17 @@ func Land(rules []Rule, codePath string, src Sources) (Landing, error) {
 			return l, nil
 		}
 	}
+	return landPrimary(l, rules, codePath), nil
+}
+
+// landPrimary fills l with the naming answer, Primary.
+func landPrimary(l Landing, rules []Rule, codePath string) Landing {
 	c, ok := Primary(rules, codePath)
 	if !ok {
-		return l, nil
+		return l
 	}
 	t := traitsOf(c.Shape)
 	l.Path, l.Shape, l.Label = c.Path, c.Shape, string(c.Shape)
 	l.Into, l.Depth = t.content, t.moduleDepth
-	return l, nil
+	return l
 }

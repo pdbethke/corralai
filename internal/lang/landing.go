@@ -112,6 +112,8 @@ func CheckTestLanding(codePath string, l pairing.Landing) error {
 	switch {
 	case len(l.RefusedOutsideRoot) > 0:
 		return fmt.Errorf("%s: %s test landing is not built for this file: the test module it declares (%s) is outside the audited repository, which corral never reads%s", codePath, langName, strings.Join(l.RefusedOutsideRoot, ", "), tail)
+	case l.DeclarationsUnreadable:
+		return fmt.Errorf("%s: %s test landing cannot be found by this corral build: it cannot read the file's test-module declarations (built without cgo, which the grammar needs)%s", codePath, langName, tail)
 	case !l.DeclarationsRead:
 		return fmt.Errorf("%s: %s test landing is not built for a file whose test-module declaration this entry cannot read — it needs the repository (certify --local and --repo with --repo-dir; certify --adversarial and the brain run single-file)%s", codePath, langName, tail)
 	default:

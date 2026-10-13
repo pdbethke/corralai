@@ -7,14 +7,20 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"io"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/pdbethke/corralai/internal/advpool"
+	"github.com/pdbethke/corralai/internal/auditpush"
 	"github.com/pdbethke/corralai/internal/lang"
+	"github.com/pdbethke/corralai/internal/pairing"
 	"github.com/pdbethke/corralai/internal/reposcan"
+	"github.com/pdbethke/corralai/internal/scanstore"
 )
 
 // Every door that asks lang.CheckTestLanding, asked about the same three Rust
@@ -110,8 +116,17 @@ func TestTheWiringCarriesTheAdmittedLandingToEveryWriter(t *testing.T) {
 // (rooted at the working directory, as its pairing is).
 func TestDoctorAdmitsADeclaredRustSource(t *testing.T) {
 	t.Chdir(landingRepo(t))
-	if got := checkPairing("src/foo.rs", ""); !got.ok {
+	got := checkPairing("src/foo.rs", "")
+	if !got.ok {
 		t.Fatalf("doctor refused a declared Rust source: %+v", got)
+	}
+	// certify --local without --repo-dir refuses it, and doctor says so
+	// rather than passing it unqualified.
+	if _, bare := auditLanding(localAuditInput{codePath: "src/foo.rs"}); bare == nil {
+		t.Fatal("precondition: single-file mode refuses a declared Rust source")
+	}
+	if !strings.Contains(got.detail, "--repo-dir") || !strings.Contains(got.detail, "path-attr") {
+		t.Fatalf("doctor's [ok] does not say the file needs --repo-dir: %s", got.detail)
 	}
 	if got := checkPairing("src/bar.rs", ""); got.ok || !strings.Contains(got.detail, "not built yet") {
 		t.Fatalf("doctor passed an inline Rust source: %+v", got)
@@ -171,5 +186,128 @@ func TestCertifyRepoSaysTheRunnerDisclosureOncePerLanguage(t *testing.T) {
 	printRunDisclosures(&buf, ex, []reposcan.Job{{Path: "src/foo.rs", Lang: "rust"}, {Path: "src/baz.rs", Lang: "rust"}})
 	if got := buf.String(); strings.Count(got, ".config/nextest.toml") != 1 || !strings.Contains(got, "do not apply") {
 		t.Errorf("want one runner disclosure line, got:\n%s", got)
+	}
+}
+
+// TestTheLandingReachesTheLedgerAndTheRepoOutput: the file a landed block
+// must be appended to, as the verdict carries it (advpool's
+// TestBothVerdictPathsCarryTheLanding pins RunSpec.Landing -> Verdict through
+// both construction sites), survives every hop after it — the scan's file
+// row, the bundle a ledger entry holds (marshalled and read back as the
+// entry's own JSON), and the --repo report — for a converged and a
+// timed-out verdict alike, and --repo says "append it to <file>" in the same
+// words --local does.
+func TestTheLandingReachesTheLedgerAndTheRepoOutput(t *testing.T) {
+	landing := advpool.AuthoredLanding{Landing: pairing.Landing{Path: "src/foo_tests.rs", Into: true, Depth: 1}}
+	for name, v := range map[string]advpool.Verdict{
+		"converged": {Lang: "rust", ProvenMissed: 1, PoolScored: true, DevScored: true, AuthoredTest: "#[cfg(test)]\nmod corral_tests {\nuse super::super::*;\n}\n"},
+		"timed out": {Lang: "rust", ProvenMissed: 1, PoolScored: true, DevScored: true, TimedOut: true, AuthoredTest: "#[cfg(test)]\nmod corral_tests {\nuse super::super::*;\n}\n"},
+	} {
+		t.Run(strings.ReplaceAll(name, " ", "_"), func(t *testing.T) {
+			v.AuthoredLanding = landing.AppendTo()
+			results := []reposcan.FileResult{{Job: reposcan.Job{Path: "src/foo.rs", Lang: "rust"}, Gradable: true, Verdict: v}}
+
+			files := buildScanFileRows(results, nil, reposcan.CoverageMap{}, "", t.TempDir(), io.Discard)
+			b := buildBundle(scanstore.Scan{Repo: "o/r", Commit: "c"}, 1, files, nil, nil, nil, auditpush.Link{}, false, "o/r", "c", "", bundleMeta{})
+			raw, err := json.Marshal(auditpush.LedgerEntry{Format: "test", Bundle: b})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var back auditpush.LedgerEntry
+			if err := json.Unmarshal(raw, &back); err != nil {
+				t.Fatal(err)
+			}
+			if len(back.Bundle.Files) != 1 || back.Bundle.Files[0].AuthoredLanding != "src/foo_tests.rs" {
+				t.Fatalf("ledger entry file rows = %+v, want authored landing src/foo_tests.rs", back.Bundle.Files)
+			}
+			if f := fileFromRow(back.Bundle.Files[0]); f.AuthoredLanding != "src/foo_tests.rs" {
+				t.Errorf("reading the entry back dropped the landing: %+v", f)
+			}
+
+			rep := reposcan.Aggregate("o", "r", "c", 1, 1, results, nil)
+			if len(rep.Weakest) != 1 || rep.Weakest[0].AuthoredLanding != "src/foo_tests.rs" {
+				t.Fatalf("report = %+v", rep.Weakest)
+			}
+			var out bytes.Buffer
+			printWeakFile(&out, rep.Weakest[0])
+			if !strings.Contains(out.String(), "— "+authoredTestDestination("src/foo_tests.rs", "your suite")+":") ||
+				!strings.Contains(out.String(), "append it to src/foo_tests.rs") {
+				t.Errorf("--repo output does not say where the block goes:\n%s", out.String())
+			}
+		})
+	}
+}
+
+// seqVerboseJail answers each verbose run with the next scripted output,
+// the last repeating, always passing — a baseline that is green every time but leaned on a
+// retry only sometimes.
+type seqVerboseJail struct {
+	outs []string
+	n    int
+}
+
+func (j *seqVerboseJail) RunTest(context.Context, map[string]string, []string) (bool, error) {
+	return true, nil
+}
+
+func (j *seqVerboseJail) RunTestVerbose(context.Context, map[string]string, []string) (bool, string, error) {
+	// The scripted outputs in order, the last one repeating: a run is
+	// whatever number of verbose calls one baseline makes.
+	out := j.outs[min(j.n, len(j.outs)-1)]
+	j.n++
+	return true, out, nil
+}
+
+// TestBaselineFlakyIsTheUnionOfTheRuns: CheckBaselineStable runs the baseline
+// repeatedly; a test that needed a retry in run 1 and not in run 2 still
+// leaned on the retry policy, so it is still named after run 2.
+func TestBaselineFlakyIsTheUnionOfTheRuns(t *testing.T) {
+	flakyOut, err := os.ReadFile("../../internal/lang/testdata/rust/nextest/flaky.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cleanOut, err := os.ReadFile("../../internal/lang/testdata/rust/nextest/pass.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, _ := lang.ByName("rust")
+	fp, _ := p.(lang.FailureParser)
+	b := jailBaselineRunner{
+		ctx:     context.Background(),
+		scorer:  advpool.JailScorer{Jail: &seqVerboseJail{outs: []string{string(flakyOut), string(cleanOut)}}, BaseFiles: map[string]string{}, FailureParser: fp},
+		codeKey: "src/a.rs", code: "fn a() {}", testCmd: "cargo nextest run",
+		lastOutput: new(string), flaky: new([]string),
+	}
+	stable, err := reposcan.CheckBaselineStable(b, 2)
+	if err != nil || !stable {
+		t.Fatalf("stable=%v err=%v", stable, err)
+	}
+	if got := b.BaselineFlaky(); len(got) != 1 || got[0] != "fuzzy_match tests::planted_flaky" {
+		t.Fatalf("BaselineFlaky after a flaky run then a clean one = %q, want the flaky test kept", got)
+	}
+}
+
+// TestLocalReadoutNamesFlakyTestsAndTheLandingAsRepoDoes: certify --local's
+// readout names the baseline's flaky tests and where the authored block
+// goes, in the same rendering certify --repo uses.
+func TestLocalReadoutNamesFlakyTestsAndTheLandingAsRepoDoes(t *testing.T) {
+	var out bytes.Buffer
+	v := advpool.Verdict{BaselineFlaky: []string{"crate tests::f"}, AuthoredLanding: "src/foo_tests.rs"}
+	st := advpool.RunState{AuthoredTest: "#[cfg(test)]\nmod corral_tests {\n}\n", AuthoredExtra: []lang.AuthoredPart{{MutantID: "m2", Source: "x"}}}
+	printLocalReadout(&out, v, st, "src/foo_tests.rs")
+	got := out.String()
+	for _, want := range []string{
+		flakyBaselineNote([]string{"crate tests::f"}),
+		"— " + authoredTestDestination("src/foo_tests.rs", "src/foo_tests.rs") + ":",
+		"append it to src/foo_tests.rs too",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("readout lacks %q:\n%s", want, got)
+		}
+	}
+	out.Reset()
+	printLocalReadout(&out, advpool.Verdict{}, advpool.RunState{AuthoredTest: "def test_x(): pass\n"}, "tests/test_a.py")
+	if !strings.Contains(out.String(), "add it to tests/test_a.py") || strings.Contains(out.String(), "flaky") {
+		t.Errorf("a path landing's readout changed:\n%s", out.String())
 	}
 }

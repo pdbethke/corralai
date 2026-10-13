@@ -140,7 +140,10 @@ func rustMatchingBrace(s string, open int) int {
 	return -1
 }
 
-// dedent removes the indentation every non-blank line shares.
+// dedent removes the indentation every non-blank line shares — and nothing
+// else: when they share none (a string literal continuing at column 0, say)
+// every line is left exactly as written, so nesting and literal text are
+// never flattened. A blank line keeps nothing but its newline.
 func dedent(lines []string) string {
 	common := -1
 	for _, l := range lines {
@@ -152,13 +155,16 @@ func dedent(lines []string) string {
 			common = n
 		}
 	}
+	if common <= 0 {
+		return strings.Join(lines, "\n")
+	}
 	out := make([]string, len(lines))
 	for i, l := range lines {
-		if len(l) >= common && common > 0 {
-			out[i] = l[common:]
-		} else {
-			out[i] = strings.TrimLeft(l, " \t")
+		if strings.TrimSpace(l) == "" {
+			out[i] = ""
+			continue
 		}
+		out[i] = l[common:]
 	}
 	return strings.Join(out, "\n")
 }

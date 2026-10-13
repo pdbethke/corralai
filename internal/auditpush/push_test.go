@@ -692,3 +692,35 @@ func TestPushCarriesCachedInputTokens(t *testing.T) {
 		t.Errorf("mutant-generator cached_input_tokens = %d, want NULL — nothing reported one", *got["mutant-generator"])
 	}
 }
+
+// TestPushCarriesTheAuthoredLandingWithoutSource: the file a landed authored
+// block must be appended to is a PATH, not source, so it reaches the
+// warehouse whether or not --push-source withheld the block itself; empty is
+// NULL.
+func TestPushCarriesTheAuthoredLandingWithoutSource(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "w.duckdb")
+	if _, err := PushBundle(target, Bundle{Files: []Row{
+		{Repo: "o/r", Commit: "c", Path: "src/foo.rs", AuthoredTest: "mod corral_tests {}", AuthoredLanding: "src/foo_tests.rs"},
+		{Repo: "o/r", Commit: "c", Path: "a.py"},
+	}}); err != nil {
+		t.Fatalf("PushBundle: %v", err)
+	}
+	db := openTarget(t, target)
+	got := map[string]sql.NullString{}
+	rows, err := db.Query(`SELECT path, authored_landing FROM corral_audits`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var p string
+		var l sql.NullString
+		if err := rows.Scan(&p, &l); err != nil {
+			t.Fatal(err)
+		}
+		got[p] = l
+	}
+	if got["src/foo.rs"].String != "src/foo_tests.rs" || got["a.py"].Valid {
+		t.Errorf("authored_landing = %+v, want src/foo_tests.rs and NULL", got)
+	}
+}

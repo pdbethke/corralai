@@ -79,17 +79,28 @@ history of any release, `git log v0.3.4..v0.3.5`.
   and restored like every other. `certify --adversarial`, the brain and
   `certify --local` without `--repo-dir` still refuse every `.rs` file:
   they grade single-file and have no repository to read the declaration
-  from, and the refusal now says so. This is a narrowed refusal, not Rust
+  from, and the refusal now says so; `corral doctor` passes such a file
+  only with a note that it needs `--repo-dir`. This is a narrowed refusal, not Rust
   support: no Rust audit has yet produced a verdict on a third-party
   repository.
 - **Rust runs say how they differ from the project's own runner.** With a
   `.config/nextest.toml` in the repository and a `cargo test` command,
   `certify --local` and `certify --repo` say the project's nextest profiles
   (retries, timeouts, test groups) do not apply. Under `cargo nextest run`
-  they say a test passed only on a retry (FLAKY) is graded as passed, and
-  `certify --repo` names any such test from each file's baseline.
-  `nextest.toml` is a harness file, so changing it changes the verdict
+  they say a test passed only on a retry (FLAKY) is graded as passed. Both
+  name such tests from a file's unmutated baseline (`certify --repo` from
+  every baseline run, not only the last); a mutant whose run passed only on
+  a retry is counted as survived and is NOT named, and the disclosure says
+  so. `nextest.toml` is a harness file, so changing it changes the verdict
   cache key.
+- **Where a landed authored test goes is part of the record.** The verdict
+  gains `authored_landing` — the file a Rust `corral_tests` block must be
+  appended to, the only file it compiles in — and `baseline_flaky`. The
+  landing path is a column in the warehouse and a field in the ledger entry
+  (pushed with or without `--push-source`: it is a path, not source), and
+  `certify --repo` now prints "append it to <file>" exactly as `certify
+  --local` does. Cached verdicts move to generation 18, so a verdict cached
+  before this change is recomputed once rather than served without them.
 - **A diff that deletes a Rust source's declared test file reports the
   source as not audited.** That source now lands on itself and is excluded
   as `test-landing-not-built`; the deleted-test check asks those sources

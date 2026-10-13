@@ -133,3 +133,39 @@ func assertComposed(t *testing.T, who string, files map[string]string, code, exi
 }
 
 var _ adequacy.Jail = (*recordingJail)(nil)
+
+// TestBothVerdictPathsCarryTheLanding: the file an authored block must be
+// appended to rides from RunSpec.Landing onto the signed Verdict through BOTH
+// construction sites — a converged run (tickAggregate) and a timed-out one
+// (timeoutVerdict) — and a path landing carries nothing.
+func TestBothVerdictPathsCarryTheLanding(t *testing.T) {
+	rs := newTestRunSpec(t)
+	rs.Landing = declaredLanding("use super::*;\n")
+	if v := runToVerdict(t, rs); v.AuthoredLanding != "src/foo_tests.rs" {
+		t.Errorf("converged verdict AuthoredLanding = %q, want src/foo_tests.rs", v.AuthoredLanding)
+	}
+	d := &Driver{}
+	if v := d.timeoutVerdict(&runState{rs: rs}); v.AuthoredLanding != "src/foo_tests.rs" {
+		t.Errorf("timed-out verdict AuthoredLanding = %q, want src/foo_tests.rs", v.AuthoredLanding)
+	}
+	if v := d.timeoutVerdict(&runState{rs: newTestRunSpec(t)}); v.AuthoredLanding != "" {
+		t.Errorf("a path landing's verdict claims an append target: %q", v.AuthoredLanding)
+	}
+}
+
+// TestBothVerdictPathsCarryTheBaselineFlakyTests: the tests the dev pass's
+// baseline passed only on a retry ride the converged verdict and the
+// timed-out one, so --local can name them as --repo does.
+func TestBothVerdictPathsCarryTheBaselineFlakyTests(t *testing.T) {
+	rs := newTestRunSpec(t)
+	scorer := &writerShadowScorer{devFlaky: []string{"crate tests::flaky_one"}}
+	missionID := writerShadowNextMissionID
+	writerShadowNextMissionID++
+	d := newWriterShadowRun(t, missionID, rs, scorer, &fakeValidator{mutants: writerShadowMutants()})
+	if v := driveWriterShadow(t, d, missionID); len(v.BaselineFlaky) != 1 || v.BaselineFlaky[0] != "crate tests::flaky_one" {
+		t.Errorf("converged verdict BaselineFlaky = %q", v.BaselineFlaky)
+	}
+	if v := (&Driver{}).timeoutVerdict(&runState{rs: rs, baselineFlaky: []string{"crate tests::flaky_one"}}); len(v.BaselineFlaky) != 1 {
+		t.Errorf("timed-out verdict BaselineFlaky = %q", v.BaselineFlaky)
+	}
+}

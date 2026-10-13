@@ -224,6 +224,11 @@ type Row struct {
 	// not by the caller remembering to blank them — see PushBundle.
 	AuthoredTest string
 	VerdictJSON  string
+	// AuthoredLanding is scanstore.File's: the file AuthoredTest must be
+	// appended to (a Rust corral_tests block compiles only there). A path,
+	// not source, so it is written whether or not source is pushed. Omitted
+	// when empty, so every row written before it hashes as it did.
+	AuthoredLanding string `json:",omitempty"`
 	// PromptShape mirrors scanstore.File.PromptShape / advpool.Verdict.PromptShape:
 	// "chunk" when every mutant-generator shard on this file's run saw only
 	// its own symbols' bodies plus the file's preamble, "file" when even one

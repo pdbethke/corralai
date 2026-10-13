@@ -46,7 +46,7 @@ func rustRunner(testCmd []string) runnerRow {
 			bin = testCmd[0]
 		}
 		return runnerRow{preflightBin: bin, disclose: func(string) []string {
-			return []string{"runner: cargo-nextest — a test it passes only on a retry (FLAKY) is graded as passed, as the project's own retry policy decides; any such test is named per file"}
+			return []string{"runner: cargo-nextest — a test it passes only on a retry (FLAKY) is graded as passed, as the project's own retry policy decides; such tests in a file's unmutated baseline are named, but a MUTANT whose run passed only on a retry is counted as survived and is not named"}
 		}}
 	}
 	return runnerRow{preflightBin: preflightBin(testCmd, "cargo"), disclose: func(repoDir string) []string {

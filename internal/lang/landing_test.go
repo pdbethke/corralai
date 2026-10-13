@@ -217,3 +217,32 @@ func TestComposeLandingAppendsAndNeverReplaces(t *testing.T) {
 		t.Errorf("a path landing must be the test alone, got %q", got)
 	}
 }
+
+// TestRustUnwrapLeavesLinesAloneWithNoCommonIndent: a writer's wrapper whose
+// inside shares no indentation (a raw string continuing at column 0) is
+// unwrapped with every line exactly as written — the string's text and the
+// nesting of the rest are not flattened.
+func TestRustUnwrapLeavesLinesAloneWithNoCommonIndent(t *testing.T) {
+	wrapped := "mod corral_tests {\n    #[test]\n    fn t() {\n        let s = \"a\nb\";\n        assert_eq!(s.len(), 3);\n    }\n}\n"
+	got := rustPlugin{}.LandTest(wrapped, 1, "")
+	for _, want := range []string{"\n    #[test]\n", "\n        let s = \"a\nb\";\n", "\n        assert_eq!(s.len(), 3);\n"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("line changed: want %q in\n%s", want, got)
+		}
+	}
+	// With shared indentation the common part, and only it, goes.
+	got = rustPlugin{}.LandTest("mod x {\n    #[test]\n    fn t() {\n        f();\n    }\n}", 1, "")
+	if !strings.Contains(got, "\n#[test]\nfn t() {\n    f();\n}\n") {
+		t.Errorf("common indentation not removed:\n%s", got)
+	}
+}
+
+// TestARefusalSaysWhenTheBuildCannotReadDeclarations: a no-cgo build's
+// refusal of a Rust file says the build cannot read the declaration — never
+// the false "its tests live in the file itself".
+func TestARefusalSaysWhenTheBuildCannotReadDeclarations(t *testing.T) {
+	err := CheckTestLanding("src/foo.rs", pairing.Landing{Path: "src/foo.rs", Into: true, DeclarationsUnreadable: true})
+	if err == nil || !strings.Contains(err.Error(), "cannot read") || strings.Contains(err.Error(), "live in the file itself") {
+		t.Errorf("err = %v", err)
+	}
+}

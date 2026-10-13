@@ -130,7 +130,17 @@ package reposcan
 // large prompt to hit the same refusal); only 400, 413 and 422 do. A "16"
 // critic count may have been held to a list that was missing real tests.
 // Shape unchanged; behaviour bump.
-const VerdictGeneration = "17"
+// "18" (2026-10-13): the Verdict gained AuthoredLanding — the file a Rust
+// authored test (a `mod corral_tests` block) must be appended to, the one file
+// it compiles in. A cached "17" document unmarshals it as "", which would hand
+// the block over with nowhere to put it; shape and generation change
+// together. The same change admitted Rust files whose tests live in a file
+// the source declares, so the exam also changed for them (no "17" verdict
+// for such a file could exist: every .rs file was refused). The same bump
+// covers BaselineFlaky (the tests a passing baseline passed only on a nextest
+// retry), added in the same change: a "17" document unmarshals it as nil,
+// which would read as "no test leaned on a retry".
+const VerdictGeneration = "18"
 
 // VerdictShapeSHA256 fingerprints advpool.Verdict's serialized shape: every
 // exported field's name, type and json tag, sorted by name and hashed.
@@ -152,4 +162,4 @@ const VerdictGeneration = "17"
 // Verdict's own FIELDS") and nothing wider. Nor can any fingerprint catch the
 // behaviour half: a scorer that computes a DIFFERENT number into the SAME
 // field is invisible here, and remains a review responsibility.
-const VerdictShapeSHA256 = "4c5dca3b35dff82b06f02ef90f15a8bd382246d9e66bba111f707d03c564bc24"
+const VerdictShapeSHA256 = "39703f935609f7b0c2e562c2a7d41352aebe526c22f9b84ccfaee34bfcaf3fba"

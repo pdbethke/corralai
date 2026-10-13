@@ -43,7 +43,11 @@ var crate = map[string]string{
 	"src/foo.rs": "fn private_double(x: i32) -> i32 {\n    x * 2\n}\n\npub fn quadruple(x: i32) -> i32 {\n    private_double(private_double(x))\n}\n\n#[cfg(test)]\n#[path = \"foo_tests.rs\"]\nmod tests;\n",
 	// The project's own test: it never reaches private_double's value on its
 	// own, so the mutant below survives it and only the authored test kills.
-	"src/foo_tests.rs": "use super::*;\n\n#[test]\nfn quadruple_of_zero() {\n    assert_eq!(quadruple(0), 0);\n}\n",
+	// It names its parent by path and imports NOTHING, so the tests module
+	// has no glob an authored `use super::*` could ride on: only the
+	// landing's `use super::super::*` reaches private_double (the depth-0
+	// control below proves that it is needed).
+	"src/foo_tests.rs": "#[test]\nfn quadruple_of_zero() {\n    assert_eq!(super::quadruple(0), 0);\n}\n",
 }
 
 // writerBody is what a test-writer returns: test items only, no wrapper.
@@ -121,6 +125,32 @@ func gradeTheLanding(t *testing.T, jail adequacy.Jail, base map[string]string, l
 	// fn; m1 is an equivalent mutant (x + 0 + x == 2x) that nothing can kill.
 	if !killed["m2"] || killed["m1"] {
 		t.Fatalf("under %q killed = %v, want exactly m2 — the landed test reached private_double", testCmd, rep.Killed)
+	}
+}
+
+// TestTheDeclaredLandingNeedsSuperSuper: the same body landed one level too
+// shallow (`use super::*`, the inline landing's line) does not compile in the
+// declared file — so the depth the landing carries is load-bearing, not a
+// style choice the fixture happens to tolerate.
+func TestTheDeclaredLandingNeedsSuperSuper(t *testing.T) {
+	rustToolchainOrSkip(t)
+	dir := writeCrate(t)
+	landing := landingFor(t, dir)
+	runner := adequacy.NewWorkspaceRunner(dir, 180*time.Second)
+	shallow := landing
+	shallow.Depth = 0
+	v := advpool.JailValidator{Jail: runner, BaseFiles: map[string]string{}, DevTestPath: "src/foo_tests.rs", Landing: shallow}
+	test := v.ParseTest(writerBody)
+	if !strings.Contains(test, "\nuse super::*;\n") {
+		t.Fatalf("control did not land at depth 0:\n%s", test)
+	}
+	err := v.CompileTest(context.Background(), "src/foo.rs", crate["src/foo.rs"], test)
+	if err == nil || !strings.Contains(err.Error(), "private_double") {
+		t.Fatalf("a depth-0 landing in the declared file compiled (err %v) — super::super is not proven necessary", err)
+	}
+	ok := advpool.JailValidator{Jail: runner, BaseFiles: map[string]string{}, DevTestPath: "src/foo_tests.rs", Landing: landing}
+	if err := ok.CompileTest(context.Background(), "src/foo.rs", crate["src/foo.rs"], ok.ParseTest(writerBody)); err != nil {
+		t.Fatalf("the depth-1 landing does not compile: %v", err)
 	}
 }
 

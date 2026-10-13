@@ -211,6 +211,7 @@ func buildAuditRows(files []scanstore.File, scanID int64, meta bundleMeta) []aud
 			// unless --push-source was given (auditpush.PushBundle), so a
 			// forgotten blanking here cannot leak code.
 			AuthoredTest:             f.AuthoredTest,
+			AuthoredLanding:          f.AuthoredLanding,
 			VerdictJSON:              f.VerdictJSON,
 			PromptShape:              f.PromptShape,
 			CoveringTests:            f.CoveringTests,

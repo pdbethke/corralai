@@ -389,3 +389,12 @@ func TestDoctorPairingSaysADeclaredTestWasRefusedOutsideTheRoot(t *testing.T) {
 		t.Fatalf("want the refused declaration named, got: %s", got.detail)
 	}
 }
+
+func TestSandboxHintIsPerOS(t *testing.T) {
+	if h := sandboxHint("darwin"); strings.Contains(h, "apt install") || !strings.Contains(h, "--jail container") {
+		t.Errorf("darwin hint = %q", h)
+	}
+	if h := sandboxHint("linux"); !strings.Contains(h, "bubblewrap") {
+		t.Errorf("linux hint = %q", h)
+	}
+}

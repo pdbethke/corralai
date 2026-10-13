@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime"
 	"strings"
 	"time"
 
@@ -143,11 +144,18 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 func checkSandbox(iso sandbox.Isolator, err error) checkResult {
 	if err != nil {
 		return checkResult{name: "sandbox starts", fatal: true, detail: fmt.Sprintf(
-			"%v\ncorral refuses to run your tests against live mutations unsandboxed, so this is not optional.\n"+
-				"On Linux install bubblewrap (apt install bubblewrap); or use --jail container with docker/podman.", err)}
+			"%v\ncorral refuses to run your tests against live mutations unsandboxed, so this is not optional.\n%s", err, sandboxHint(runtime.GOOS))}
 	}
 	_ = iso
-	return checkResult{name: "sandbox starts", ok: true}
+	return checkResult{name: "sandbox starts (self-test: sh-starts, workspace-write, env-pins, home-denied, net-denied)", ok: true}
+}
+
+// sandboxHint is the next step for a sandbox that will not start, per OS.
+func sandboxHint(goos string) string {
+	if goos == "darwin" {
+		return "On macOS the jail is sandbox-exec (built in); the self-test above names what failed. Or use --jail container with docker/podman."
+	}
+	return "On Linux install bubblewrap (apt install bubblewrap); or use --jail container with docker/podman."
 }
 
 // checkToolchain runs the test command's own binary INSIDE the SAME jail

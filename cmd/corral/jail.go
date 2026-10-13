@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"runtime"
 	"strings"
 	"time"
 
@@ -104,13 +105,26 @@ func resolveJail(jailFlag string, containerFallback bool) (sandbox.Isolator, err
 		return iso, nil
 	}
 
-	// Only bwrap gets the apparmor-specific actionable rewrite; an explicit
-	// --jail container failure should surface sandbox.Resolve's own message
-	// (already clear: install docker/podman or set CORRALAI_EXEC_IMAGE).
-	if backend == "" || backend == "bwrap" {
-		return nil, bwrapUnavailableError(err, containerFallback)
+	return nil, jailUnavailableError(runtime.GOOS, backend, err, containerFallback)
+}
+
+// jailUnavailableError gives the failure the advice that fits the PLATFORM:
+// the auto backend is bwrap on Linux and sandbox-exec on macOS, and a macOS
+// self-test failure must never be answered with Ubuntu AppArmor steps. An
+// explicit --jail container failure keeps sandbox.Resolve's own message.
+func jailUnavailableError(goos, backend string, cause error, containerFallback bool) error {
+	switch {
+	case backend == "bwrap" || (backend == "" && goos == "linux"):
+		return bwrapUnavailableError(cause, containerFallback)
+	case backend == "sandbox-exec" || (backend == "" && goos == "darwin"):
+		tail := "Run on a host where sandbox-exec can isolate: this command has no sandbox-backend override."
+		if containerFallback {
+			tail = "Or skip sandbox-exec: --jail container (needs docker or podman, plus CORRALAI_EXEC_IMAGE set to an image with your toolchain)."
+		}
+		return fmt.Errorf("no working sandbox-exec jail: %w\n\ncorral never runs untrusted test/mutant code unsandboxed. %s", cause, tail)
+	default:
+		return cause
 	}
-	return nil, err
 }
 
 // bwrapUnavailableError turns a raw bwrap Preflight/Resolve failure into a

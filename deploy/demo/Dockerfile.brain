@@ -20,15 +20,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
 COPY --from=build /out/corral /usr/local/bin/corral
 COPY --from=build /out/corral-wrangler /usr/local/bin/corral-wrangler
 COPY --from=build /out/corral-admin /usr/local/bin/corral-admin
+# corral's state root, pinned rather than left to HOME/XDG resolution: the
+# compose file mounts the brain-state volume exactly here, and a default that
+# moved with the environment would write outside the volume. Cache is pinned
+# beside it for the same reason (it is rebuildable and not on the volume).
+ENV CORRALAI_STATE_DIR=/var/lib/corral
+ENV CORRALAI_CACHE_DIR=/var/cache/corral
 # Seed the swarm's shared memory with the self-describing meta-entry, so a fresh
 # corpus starts non-empty and agents learn the hive-mind from the hive-mind. The
-# brain re-indexes ~/.claude/projects/*/memory on startup (memStore.Build).
-RUN mkdir -p /root/.claude/projects/default/memory
-COPY deploy/demo/seed-memory/ /root/.claude/projects/default/memory/
+# brain indexes $CORRALAI_STATE_DIR/memory on startup (memStore.Build).
+RUN mkdir -p -m 0700 /var/lib/corral/memory /var/cache/corral
+COPY deploy/demo/seed-memory/ /var/lib/corral/memory/
 # The CORRAL.md convention: seed the demo's own developer-doc corpus (CORRAL.md
 # + docs/corral/*.md) into the same memory dir, flattened alongside seed-memory,
 # so the demo boots with corralai's own pre-seeded docs already searchable.
-COPY CORRAL.md docs/corral/ /root/.claude/projects/default/memory/
+COPY CORRAL.md docs/corral/ /var/lib/corral/memory/
 ENV CORRALAI_ADDR=0.0.0.0:9019
 EXPOSE 9019
 ENTRYPOINT ["corral-wrangler"]

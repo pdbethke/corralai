@@ -11,6 +11,45 @@ history of any release, `git log v0.3.4..v0.3.5`.
 
 ## [Unreleased]
 
+- **Breaking: corral's files move out of `~/.claude`.** corral no longer
+  creates or reads that directory. Databases and signing keys live in the
+  state directory (`$XDG_STATE_HOME/corral`, else `~/.local/state/corral`,
+  or `~/Library/Application Support/corral` on macOS; `CORRALAI_STATE_DIR`
+  moves it), and the verdict cache in the cache directory
+  (`CORRALAI_CACHE_DIR`). Every per-file `CORRALAI_*_DB` / `_FILE` variable
+  keeps its name and still wins. `corral state paths` prints every file, its
+  override variable and where it resolves.
+
+  **Run `corral state migrate` once**, with the daemon stopped, and
+  `--dry-run` first (`--from DIR` names a different source). A store whose
+  only copy is still in `~/.claude` is refused, not recreated: otherwise the
+  first run would mint a new certify key, and every entry signed after it
+  would fail against your `LEDGER_PUBKEY`. Setting `CORRALAI_STATE_DIR` to
+  the old directory uses the files in place instead. Migrate moves each
+  file with its `-wal`, `-shm` and `.wal` side files (side files first, the
+  database last), refuses on any conflict without touching anything, refuses
+  a symlinked source, a running daemon (and a file whose lock it cannot
+  probe), and a source owned by another user, and prints each key's public
+  key before and after the move, exiting 1 if a moved key does not match. A
+  side file already at the destination while its database is still at the
+  source is a conflict, because it may be stale; after a migrate that stopped
+  partway, re-run it with `--resume` to adopt such files (each is listed), and
+  do not start the daemon until a migrate completes. A `.migrate-*` temporary
+  file left in the destination by a crash is reported as a conflict for you
+  to remove. The refusal
+  and the migrate command are planned for removal in a later release (the
+  first release after 1.0 is proposed, not decided).
+
+  `certify --local` now resolves the bug-catch store even when no shadow
+  pool is configured, so it can hit the same refusal. The TLS autocert cache
+  and the repo workspace directory were left where they were.
+
+  Memory: with no `CORRALAI_MEMORY_DIR`, entries are written to and indexed
+  from `$STATE/memory`. Before, they were written to
+  `~/.claude/projects/default/memory` and never indexed; those entries are
+  not migrated, so copy that directory by hand if it holds anything you
+  want.
+
 - **`certify --repo` now recognises `.rs` files and reports them as not
   audited yet.** corral cannot audit Rust today: a test for a Rust file
   would be written over the file itself, because its tests live inside it.

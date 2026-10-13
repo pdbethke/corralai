@@ -11,8 +11,7 @@ description: The environment variables that configure a corralai brain — stora
 A corralai brain is configured **entirely through environment variables** —
 there is no config file to hand-edit, so dev mode and a production deployment
 run the exact same code paths. Everything below is optional; a brain with no
-environment set at all boots in dev mode against sensible `~/.claude/*`
-defaults.
+environment set at all boots in dev mode against sensible defaults under corral's state directory.
 
 :::note
 The **complete, always-current list** is generated straight from the binary's
@@ -22,23 +21,41 @@ page is the guided tour of the knobs you reach for most.
 
 ## Where state lives
 
-Every store defaults under `~/.claude/`; point them elsewhere to relocate a
-brain's data or to isolate a test/demo brain.
+Every store defaults under corral's **state directory** (`~/.local/state/corral` on Linux, `~/Library/Application Support/corral` on macOS; set `CORRALAI_STATE_DIR` to move all of them, or a per-store variable to move one). `corral state paths` prints the resolved list.
 
 | Variable | What it is | Default |
 | --- | --- | --- |
 | `CORRALAI_ADDR` | Listen address (loopback by default; front it with a tunnel/proxy) | `127.0.0.1:9019` |
-| `CORRALAI_DB` | Coordination SQLite (missions, tasks, claims) | `~/.claude/corralai_coord.sqlite3` |
-| `CORRALAI_MEMORY_DB` | Memory DuckDB (the searchable knowledge store) | `~/.claude/corralai_memory.duckdb` |
-| `CORRALAI_MEMORY_DIR` | Where **new** memory entries are written (markdown files) | `~/.claude/projects/default/memory` |
-| `CORRALAI_RECORDINGS_DB` | Recordings DuckDB for scrubbed replay exports | `~/.claude/corralai_recordings.duckdb` |
+| `CORRALAI_STATE_DIR` | Moves every store below at once (per-store variables still win) | `~/.local/state/corral` |
+| `CORRALAI_CACHE_DIR` | Moves rebuildable files, such as the verdict cache | `~/.cache/corral` |
+| `CORRALAI_DB` | Coordination SQLite (missions, tasks, claims) | `$STATE/corralai_coord.sqlite3` |
+| `CORRALAI_MEMORY_DB` | Memory DuckDB (the searchable knowledge store) | `$STATE/corralai_memory.duckdb` |
+| `CORRALAI_MEMORY_DIR` | Where memory entries are written and indexed (markdown files) | `$STATE/memory` |
+| `CORRALAI_RECORDINGS_DB` | Recordings DuckDB for scrubbed replay exports | `$STATE/corralai_recordings.duckdb` |
 
 :::caution
-`CORRALAI_MEMORY_DIR` controls where new memory is **written**. It does not, by
-itself, scope what an existing brain **indexes** on startup — keep a demo or
-test brain pointed at a scratch directory (and a scratch `HOME`) so it never
-picks up a personal memory corpus.
+`CORRALAI_MEMORY_DIR` is the one directory memory is both **written** to and
+**indexed** from; adding an entry and building the index share it. Keep a demo
+or test brain pointed at a scratch directory (or a scratch `CORRALAI_STATE_DIR`)
+so it never picks up a personal memory corpus.
 :::
+
+## Moving from an older install
+
+Before 1.0, corral kept these files in `~/.claude`. It no longer reads
+that directory, and it refuses to start a store whose only copy is still
+there rather than silently create an empty one (or a new signing key).
+Run `corral state migrate --dry-run`, then `corral state migrate`, with
+the daemon stopped. It prints the certify key's public key before and
+after; it must match the `LEDGER_PUBKEY` of any ledger you sign.
+
+Migrate refuses, touching nothing, on any conflict, on a symlinked source, on
+a source owned by another user and on a running daemon. If a migrate stops
+partway, fix the cause and run `corral state migrate --resume`: database side
+files move first, and a side file already at the destination is a conflict
+unless `--resume` says it came from that interrupted run (each one adopted is
+listed). Do not start the daemon until a migrate completes. To keep using the
+old directory in place instead, set `CORRALAI_STATE_DIR` to it.
 
 ## Reliability & stall detection
 

@@ -3,6 +3,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -95,9 +96,10 @@ func runLedgerAppend(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "corral ledger append: %v\n", err)
 		return 1
 	}
-	var signer auditpush.LedgerSigner
-	if priv, kerr := loadLocalCertifyKeyIfConfigured(); kerr == nil {
-		signer = auditpush.Ed25519LedgerSigner{KeyID: "corral-certify", Key: priv}
+	signer, signed, kerr := ledgerSignerFromLocalKey()
+	if kerr != nil {
+		fmt.Fprintf(stderr, "corral ledger append: %v\n", kerr)
+		return 1
 	}
 	// Same directory: the entry is already placed; re-linking it in place
 	// would be an edit of a placed entry, which is the one thing a ledger
@@ -118,10 +120,6 @@ func runLedgerAppend(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "corral ledger append: %v\n", err)
 		return 1
 	}
-	signed := "unsigned"
-	if signer != nil {
-		signed = "signed by corral-certify"
-	}
 	fmt.Fprintf(stdout, "appended %s to %s (%s, linked to the current head)\n", name, dir, signed)
 	return 0
 }
@@ -139,13 +137,27 @@ func defaultLedgerDir(repoDir string) string {
 
 // ledgerSignerFromLocalKey is the signer every ledger verb writes with:
 // the local certify key when one is configured, else nil (unsigned, and
-// said to be by every reader).
-func ledgerSignerFromLocalKey() (auditpush.LedgerSigner, string) {
-	if priv, kerr := loadLocalCertifyKeyIfConfigured(); kerr == nil {
-		return auditpush.Ed25519LedgerSigner{KeyID: "corral-certify", Key: priv}, "signed by corral-certify"
+// said to be by every reader). "Not configured" (errNoLocalKey) is the only
+// case that may write unsigned. Any other key error — the legacy-location
+// refusal above all — is returned, and the caller writes nothing: an
+// unsigned entry is permanent in a hash-linked chain, and one written because
+// the key was merely in the old place would sit forever in a ledger whose
+// every other entry verifies against LEDGER_PUBKEY.
+func ledgerSignerFromLocalKey() (auditpush.LedgerSigner, string, error) {
+	priv, kerr := loadLocalCertifyKeyIfConfigured()
+	switch {
+	case kerr == nil:
+		return auditpush.Ed25519LedgerSigner{KeyID: "corral-certify", Key: priv}, "signed by corral-certify", nil
+	case errors.Is(kerr, errNoLocalKey):
+		return nil, "unsigned", nil
 	}
-	return nil, "unsigned"
+	return nil, "", fmt.Errorf("%w, so nothing was written (an unsigned entry would be permanent): %w", errKeyUnusable, kerr)
 }
+
+// errKeyUnusable marks ledgerSignerFromLocalKey's refusal, so a caller whose
+// other write errors are fail-open (a full disk never changes a verdict) can
+// tell this one apart.
+var errKeyUnusable = errors.New("the local certify key cannot be used")
 
 func runLedgerRetract(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("corral ledger retract", flag.ContinueOnError)
@@ -162,7 +174,11 @@ func runLedgerRetract(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	dir, target := strings.TrimRight(fs.Arg(0), "/"), fs.Arg(1)
-	signer, signed := ledgerSignerFromLocalKey()
+	signer, signed, kerr := ledgerSignerFromLocalKey()
+	if kerr != nil {
+		fmt.Fprintf(stderr, "corral ledger retract: %v\n", kerr)
+		return 1
+	}
 	name, err := auditpush.WriteRetraction(dir, target, *reason, signer)
 	if err != nil {
 		fmt.Fprintf(stderr, "corral ledger retract: %v\n", err)
@@ -178,7 +194,11 @@ func runLedgerCheckpoint(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	dir := strings.TrimRight(args[0], "/")
-	signer, signed := ledgerSignerFromLocalKey()
+	signer, signed, kerr := ledgerSignerFromLocalKey()
+	if kerr != nil {
+		fmt.Fprintf(stderr, "corral ledger checkpoint: %v\n", kerr)
+		return 1
+	}
 	name, pruned, err := auditpush.WriteCheckpoint(dir, signer)
 	if err != nil {
 		fmt.Fprintf(stderr, "corral ledger checkpoint: %v\n", err)

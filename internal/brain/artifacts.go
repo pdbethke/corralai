@@ -80,7 +80,7 @@ func registerArtifacts(s *mcp.Server, store *artifacts.Store, opts Options) {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "sync_pull",
-		Description: "Pull every shared skill/hook changed after since_rev (tombstones included), with content. The client writes skills to ~/.claude/skills and stages hooks for review."},
+		Description: "Pull every shared skill/hook changed after since_rev (tombstones included), with content. The client writes skills to the agent's skills directory and stages hooks for review."},
 		func(_ context.Context, _ *mcp.CallToolRequest, in syncPullIn) (*mcp.CallToolResult, syncPullOut, error) {
 			ch, err := store.ChangesPrefix(in.SinceRev, in.Prefix)
 			if err != nil {

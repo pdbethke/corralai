@@ -1,0 +1,207 @@
+// SPDX-License-Identifier: Elastic-2.0
+
+package main
+
+import (
+	"crypto/ed25519"
+	"encoding/hex"
+	"errors"
+	"flag"
+	"fmt"
+	"io"
+	"os"
+	"strings"
+
+	"github.com/pdbethke/corralai/internal/attest"
+	"github.com/pdbethke/corralai/internal/buildstore"
+	"github.com/pdbethke/corralai/internal/statedir"
+)
+
+// keyPub derives the public key a key row's file holds, without any path
+// that could create one — the check a person compares with LEDGER_PUBKEY.
+var keyPub = map[statedir.File]func([]byte) (ed25519.PublicKey, error){
+	statedir.CertifyKey: func(b []byte) (ed25519.PublicKey, error) {
+		k, err := buildstore.ParseSigningKeySeed(b)
+		if err != nil {
+			return nil, err
+		}
+		return k.Public().(ed25519.PublicKey), nil
+	},
+	statedir.BrainKey: func(b []byte) (ed25519.PublicKey, error) {
+		k, err := attest.ParseKeySeed(b)
+		return k.Pub, err
+	},
+}
+
+func runState(args []string, stdout, stderr io.Writer) int {
+	const usage = "usage: corral state migrate [--from DIR] [--dry-run] [--resume] | corral state paths"
+	if len(args) == 0 {
+		fmt.Fprintln(stderr, usage)
+		return 2
+	}
+	switch args[0] {
+	case "-h", "-help", "--help", "help":
+		fmt.Fprintln(stdout, usage)
+		return 0
+	case "paths":
+		if len(args) > 1 {
+			if args[1] == "-h" || args[1] == "-help" || args[1] == "--help" {
+				fmt.Fprintln(stdout, "usage: corral state paths  (takes no arguments; prints each file's root, name, override variable and resolved path)")
+				return 0
+			}
+			fmt.Fprintln(stderr, "usage: corral state paths  (takes no arguments)")
+			return 2
+		}
+		for _, f := range statedir.Files() {
+			p, err := statedir.Path(f)
+			if err != nil {
+				p = "REFUSED: " + err.Error()
+			}
+			fmt.Fprintf(stdout, "%-6s %-32s %-30s %s\n", f.Root, f.Name, f.Override, p)
+		}
+		return 0
+	case "migrate":
+		return runStateMigrate(args[1:], stdout, stderr)
+	}
+	fmt.Fprintf(stderr, "corral state: unknown subcommand %q\n", args[0])
+	return 2
+}
+
+func runStateMigrate(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("state migrate", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	from := fs.String("from", "", "the directory corral's state is in now (default: the pre-statedir location)")
+	dry := fs.Bool("dry-run", false, "print what would move and change nothing")
+	resume := fs.Bool("resume", false, "adopt database side files already at the destination whose database is still at the source — only after a migration stopped partway; without it they are conflicts")
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return 0
+		}
+		return 2
+	}
+	if *from == "" {
+		d, err := statedir.LegacyDir()
+		if err != nil {
+			fmt.Fprintln(stderr, "corral state migrate:", err)
+			return 1
+		}
+		*from = d
+	}
+	moves, conflicts, err := statedir.PlanMigration(*from, statedir.PlanOptions{Resume: *resume})
+	if err != nil {
+		fmt.Fprintln(stderr, "corral state migrate:", err)
+		return 1
+	}
+	if len(conflicts) > 0 {
+		for _, c := range conflicts {
+			if c.Reason != "" {
+				fmt.Fprintf(stderr, "conflict: %s\n", c.Reason)
+				continue
+			}
+			fmt.Fprintf(stderr, "conflict: %s (%d bytes, %s) and %s (%d bytes, %s) both exist\n",
+				c.From, c.FromInfo.Size(), c.FromInfo.ModTime().Format("2006-01-02 15:04"),
+				c.To, c.ToInfo.Size(), c.ToInfo.ModTime().Format("2006-01-02 15:04"))
+		}
+		fmt.Fprintln(stderr, "corral state migrate: nothing moved — resolve each conflict (keep one copy) and run again")
+		return 1
+	}
+	if len(moves) == 0 {
+		fmt.Fprintln(stdout, "nothing to move")
+		return 0
+	}
+	before := printKeys(moves, true, stdout, stderr)
+	for _, m := range moves {
+		fmt.Fprintf(stdout, "%s → %s\n", m.From, m.To)
+		for _, s := range m.Sidecars {
+			fmt.Fprintf(stdout, "  + %s\n", s)
+		}
+		for _, a := range m.Adopted {
+			fmt.Fprintf(stdout, "  adopting existing %s\n", a)
+		}
+	}
+	if *dry {
+		fmt.Fprintln(stdout, "dry run: nothing moved")
+		return 0
+	}
+	done, applyErr := statedir.ApplyMigration(moves)
+	if applyErr != nil {
+		// Say exactly what did land: the operator has to know which rows are
+		// already at the new path before deciding what to do.
+		for _, m := range done {
+			fmt.Fprintf(stdout, "moved: %s → %s\n", m.From, m.To)
+		}
+	}
+	after := printKeys(done, false, stdout, stderr)
+	cmpErr := compareKeys(done, before, after)
+	if cmpErr != nil {
+		fmt.Fprintln(stderr, "corral state migrate:", cmpErr)
+	}
+	if applyErr != nil {
+		fmt.Fprintln(stderr, "corral state migrate:", applyErr)
+		fmt.Fprintln(stderr, "corral state migrate: stopped partway — fix the cause, then run `corral state migrate --resume`; do not start the daemon until a migrate completes")
+		return 1
+	}
+	if cmpErr != nil {
+		return 1
+	}
+	fmt.Fprintln(stdout, "done.")
+	for _, m := range done {
+		if m.File == statedir.CertifyKey {
+			fmt.Fprintln(stdout, "The certify public key above must equal LEDGER_PUBKEY for the ledger you sign.")
+		}
+	}
+	return 0
+}
+
+// printKeys prints each key row's public key, read from the source before
+// the move and the destination after it.
+func printKeys(moves []statedir.Move, before bool, stdout, stderr io.Writer) map[string]string {
+	out := map[string]string{}
+	for _, m := range moves {
+		pubOf, ok := keyPub[m.File]
+		if !ok {
+			continue
+		}
+		p, when := m.To, "after "
+		if before {
+			p, when = m.From, "before"
+		}
+		raw, err := os.ReadFile(p) // #nosec G304 -- a statedir table row
+		if err != nil {
+			fmt.Fprintf(stderr, "%s: %v\n", p, err)
+			continue
+		}
+		pub, err := pubOf(raw)
+		if err != nil {
+			fmt.Fprintf(stderr, "%s: %v\n", p, err)
+			continue
+		}
+		out[m.File.Name] = hex.EncodeToString(pub)
+		fmt.Fprintf(stdout, "%s %s public key %s\n", when, m.File.Name, out[m.File.Name])
+	}
+	return out
+}
+
+// compareKeys requires every key row that moved to show the same public key
+// at its destination as it had at its source. A key that was readable before
+// and is missing or unparseable after is a lost key, not a skipped row.
+func compareKeys(done []statedir.Move, before, after map[string]string) error {
+	var bad []string
+	for _, m := range done {
+		want, ok := before[m.File.Name]
+		if !ok {
+			continue
+		}
+		got, ok := after[m.File.Name]
+		switch {
+		case !ok:
+			bad = append(bad, fmt.Sprintf("%s: public key could not be read at %s after the move (was %s)", m.File.Name, m.To, want))
+		case got != want:
+			bad = append(bad, fmt.Sprintf("%s: public key changed in the move (%s → %s)", m.File.Name, want, got))
+		}
+	}
+	if len(bad) == 0 {
+		return nil
+	}
+	return errors.New(strings.Join(bad, "; "))
+}

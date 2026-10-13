@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/pdbethke/corralai/internal/consolebundle"
+	"github.com/pdbethke/corralai/internal/statedir"
 )
 
 // maxBundleBytes caps the total bytes fetchBundle will download for one
@@ -379,13 +380,13 @@ func segmentNumber(s string) (int, bool) {
 	return n, true
 }
 
-// defaultCacheRoot is cacheRoot's default: os.UserCacheDir()/corral,
-// falling back to os.TempDir()/corral if the user cache dir can't be
-// determined (e.g. minimal container environments).
+// defaultCacheRoot is cacheRoot's default: statedir's Cache root, falling
+// back to os.TempDir()/corral when there is none (minimal containers). The
+// fallback is safe here and nowhere else: the bundle is disposable and its
+// signature is checked on every load.
 func defaultCacheRoot() string {
-	dir, err := os.UserCacheDir()
-	if err != nil || dir == "" {
-		dir = os.TempDir()
+	if dir, err := statedir.Dir(statedir.Cache); err == nil {
+		return dir
 	}
-	return filepath.Join(dir, "corral")
+	return filepath.Join(os.TempDir(), "corral")
 }

@@ -36,6 +36,7 @@ import (
 	"github.com/pdbethke/corralai/internal/sandbox"
 	"github.com/pdbethke/corralai/internal/scanstore"
 	"github.com/pdbethke/corralai/internal/shadowpool"
+	"github.com/pdbethke/corralai/internal/statedir"
 )
 
 // defaultScanTop bounds a scan by default. Provisional: large enough to be
@@ -103,7 +104,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	var localEndpointFlag stringSlice
 	fs.Var(&localEndpointFlag, "local-endpoint", "place a LOCAL seat on a specific ollama daemon, as <role>=<url> (repeatable; e.g. mutant-generator=http://localhost:11436). A daemon is pinned to a GPU by its own environment, so this is how two models occupy two cards at once — corral selects the DAEMON, never the device. Without it every local seat shares OLLAMA_URL, one card and one VRAM budget")
 
-	cacheDSNFlag := fs.String("cache-db", "", "path to corral's local CACHE — derived goals and instrumented test selections a later scan reuses on identical bytes (default: $CORRALAI_CACHE_DB, else ~/.claude/corralai_cache.duckdb). A cache, not a record: nothing a verdict rests on lives only here; deleting it costs a re-derivation and one coverage run, never a fact")
+	cacheDSNFlag := fs.String("cache-db", "", "path to corral's local CACHE — derived goals and instrumented test selections a later scan reuses on identical bytes (default: $CORRALAI_CACHE_DB, else $CACHE/corralai_cache.duckdb, see corral state paths). A cache, not a record: nothing a verdict rests on lives only here; deleting it costs a re-derivation and one coverage run, never a fact")
 	noGoalCacheFlag := fs.Bool("no-goal-cache", false, "skip the goal cache — every candidate is re-derived even when a PRIOR scan already derived a goal for the exact same bytes, model and prompt revision. Re-buys a model call per file that a content-addressed cache would otherwise have served for free; use this to isolate goal-derivation variance from a comparison, or on a scan whose operator does not want a goal receipt kept in the ledger at all. The cache lives in the file --cache-db names")
 	noVerdictCacheFlag := fs.Bool("no-verdict-cache", false, "skip the verdict cache — every candidate is re-audited even when a PRIOR scan already earned a verdict for the exact same bytes, tests, models, engine and substrate. Re-buys the whole audit (generation, grading, the writer) per file; use this to isolate model variance from a comparison, or to redo a measurement the cache would otherwise keep serving. The cache is the ledger directory itself (--ledger): a verdict an earlier entry recorded under the same key is served, so --no-ledger also disables it")
 	noSelectionCacheFlag := fs.Bool("no-selection-cache", false, "skip the selection cache — the ONE instrumented coverage run always executes, even when a PRIOR scan already ran the identical instrumented command over a byte-identical tree. Re-buys a full suite run (the single most expensive measurement a scan makes outside model calls) that a content-addressed cache would otherwise have served for free; use this to isolate selection variance from a comparison, or when the operator does not trust the tree to be unchanged. The cache lives in the file --cache-db names")
@@ -128,6 +129,20 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 
+	// The record is signed at the END of a paid run. A local certify key that
+	// exists but cannot be used — above all one still at the pre-statedir
+	// location, which the loader refuses rather than mint a second identity —
+	// would surface only then, with the spend gone and the entry unwritable.
+	// Asked here, before anything is spent. Only when neither key variable is
+	// set: an explicit CORRALAI_CERTIFY_KEY_FILE naming a missing file is a
+	// deliberate first-run bootstrap, and asking now would mint it early.
+	if strings.TrimSpace(os.Getenv("CORRALAI_CERTIFY_KEY")) == "" && strings.TrimSpace(os.Getenv("CORRALAI_CERTIFY_KEY_FILE")) == "" {
+		if _, kerr := loadLocalCertifyKeyIfConfigured(); kerr != nil && !errors.Is(kerr, errNoLocalKey) {
+			fmt.Fprintf(stderr, "corral certify --repo: the local certify key cannot be used: %v — nothing was spent\n", kerr)
+			return 2
+		}
+	}
+
 	// The shadow draw happens HERE, before the registry resolves any seat, so
 	// the drawn member — as typed — is resolved exactly like a named one. A
 	// scan spans languages and draws ONCE for all of them, so it reads the
@@ -143,8 +158,13 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	if *dryRun {
 		drawErr = validateShadowPools("corral certify --repo", *repoDir, shadow, shadowPrimary, false, stderr)
 	} else {
+		bugCatchDBPath, pathErr := statedir.PathForWrite(statedir.BugCatchDB)
+		if pathErr != nil {
+			fmt.Fprintln(stderr, "corral certify --repo:", pathErr)
+			return 2
+		}
 		shadowSels, drawErr = drawShadowSeats("corral certify --repo", *repoDir, shadowpool.LangAny, shadow,
-			shadowPrimary, localBugCatchDBPath(), stderr)
+			shadowPrimary, bugCatchDBPath, stderr)
 	}
 	if drawErr != nil {
 		fmt.Fprintf(stderr, "corral certify --repo: %v\n", drawErr)
@@ -643,7 +663,12 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		// (see pendingSelectionPut), once the run it came from is known to
 		// have completed.
 		if !*noSelectionCacheFlag {
-			ex.selectionCache = newSelectionLedgerCache(cacheDSNOr(*cacheDSNFlag))
+			cacheDSN, cerr := cacheDSNOr(*cacheDSNFlag)
+			if cerr != nil {
+				fmt.Fprintln(stderr, "corral certify --repo:", cerr)
+				return 2
+			}
+			ex.selectionCache = newSelectionLedgerCache(cacheDSN)
 		}
 		ex.presetMutants = presetMutants
 		ex.mutantSink = mutantRecorder.sink
@@ -721,7 +746,12 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	var goalCacheDSN string
 	var goalStore reposcan.GoalCacheStore
 	if !*noGoalCacheFlag {
-		goalCacheDSN = cacheDSNOr(*cacheDSNFlag)
+		var cerr error
+		goalCacheDSN, cerr = cacheDSNOr(*cacheDSNFlag)
+		if cerr != nil {
+			fmt.Fprintln(stderr, "corral certify --repo:", cerr)
+			return 2
+		}
 		goalStore = newGoalLedgerCache(goalCacheDSN)
 	}
 
@@ -1474,6 +1504,13 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		} else {
 			statementSHA256 = sha
 			bundle.Scan.StatementSHA256 = sha
+			// Silent only when no key is configured — an ordinary keyless
+			// --attest run. A key the operator holds that could not sign is
+			// said, never swallowed.
+			if signErr != nil && !errors.Is(signErr, errNoLocalKey) {
+				fmt.Fprintf(stderr, "corral certify --repo: the statement was written but NOT signed: %v\n", signErr)
+				runnerWarning(stderr, "corral signing failed", "the statement at %s was written but not signed: %v", *attestFlag, signErr)
+			}
 			fmt.Fprintf(stdout, "  wrote the audit statement to %s — attest it with actions/attest, verify with `gh attestation verify`\n", *attestFlag)
 
 			// --transparency: upload the SIGNED envelope (not the plain
@@ -1538,6 +1575,12 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		entryBundle.Scan.SourcePushed = true
 		if c, lerr := pushBundle(ledgerDir+"/", entryBundle); lerr != nil {
 			fmt.Fprintf(stderr, "corral certify --repo: writing the ledger entry to %s: %v\n", ledgerDir, lerr)
+			// A full disk stays fail-open; a signing key that could not be
+			// used does not. The run that keeps no record because its key was
+			// refused must not end green as if it had kept one.
+			if errors.Is(lerr, errKeyUnusable) && exitCode == 0 {
+				exitCode = 1
+			}
 		} else if c.Total() > 0 {
 			fmt.Fprintf(stdout, "  ledger: entry written to %s (%d file(s), %d mutant(s)) — `corral verify --ledger %s` walks the chain\n", ledgerDir, c.Files, c.Mutants, ledgerDir)
 		}
@@ -5390,8 +5433,12 @@ func pushBundle(target string, b auditpush.Bundle) (auditpush.Counts, error) {
 		// and written unsigned — and said to be — when none is. On a
 		// runner with no key, the recipe attests the entry file itself
 		// (actions/attest), which is the keyless equivalent.
-		if priv, err := loadLocalCertifyKeyIfConfigured(); err == nil {
-			auditpush.SetLedgerSigner(auditpush.Ed25519LedgerSigner{KeyID: "corral-certify", Key: priv})
+		signer, _, err := ledgerSignerFromLocalKey()
+		if err != nil {
+			return auditpush.Counts{}, err
+		}
+		if signer != nil {
+			auditpush.SetLedgerSigner(signer)
 		}
 	}
 	return auditpush.PushBundle(target, b)

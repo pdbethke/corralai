@@ -19,6 +19,7 @@ import (
 	"github.com/pdbethke/corralai/internal/adequacy"
 	"github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/sandbox"
+	"github.com/pdbethke/corralai/internal/statedir"
 	"github.com/pdbethke/corralai/internal/tomllite"
 	"github.com/pdbethke/corralai/internal/treedirs"
 )
@@ -153,7 +154,7 @@ func ensureVendored(cmdName, repoDir, langName string, iso sandbox.Isolator, out
 }
 
 // vendorStagingDir creates a fresh staging directory under corral's own
-// cache directory (os.UserCacheDir()/corral/vendor), never os.TempDir.
+// cache directory (statedir's Cache root + /vendor), never os.TempDir.
 //
 // Why: go and cargo both look for configuration in every PARENT of their
 // working directory — go.work, .cargo/config.toml. Under a shared /tmp,
@@ -165,11 +166,11 @@ func ensureVendored(cmdName, repoDir, langName string, iso sandbox.Isolator, out
 // cannot be determined — a refusal is better than the walk-up it exists to
 // avoid.
 func vendorStagingDir() (string, error) {
-	cache, err := os.UserCacheDir()
+	cache, err := statedir.Dir(statedir.Cache)
 	if err != nil {
-		return "", fmt.Errorf("no user cache directory to stage in (set XDG_CACHE_HOME or HOME): %w", err)
+		return "", fmt.Errorf("no cache directory to stage in (set CORRALAI_CACHE_DIR, XDG_CACHE_HOME or HOME): %w", err)
 	}
-	base := filepath.Join(cache, "corral", "vendor")
+	base := filepath.Join(cache, "vendor")
 	if err := os.MkdirAll(base, 0o700); err != nil {
 		return "", err
 	}

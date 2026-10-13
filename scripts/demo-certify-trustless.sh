@@ -18,8 +18,9 @@
 # narrated" — read the printed output):
 #   - A running corral brain reachable at $CORRAL_BRAIN, built with the
 #     trustless tier. report_build is ON BY DEFAULT — the build-record DB and
-#     certify signing key auto-create under ~/.claude on first run (override
-#     via CORRALAI_BUILD_DB / CORRALAI_CERTIFY_KEY_FILE; see main.go's env docs).
+#     certify signing key auto-create in corral's state directory on first
+#     run (`corral state paths` shows where; override via CORRALAI_BUILD_DB /
+#     CORRALAI_CERTIFY_KEY_FILE; see main.go's env docs).
 #     Verified live against brain.corralai.dev 2026-07-10 (Rekor #2138328104).
 #   - That brain able to reach the public internet (rekor.sigstore.dev by
 #     default, or CORRALAI_REKOR_URL if you've pointed it at a different

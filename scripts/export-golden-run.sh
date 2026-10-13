@@ -23,7 +23,19 @@ YES=0
 BEARER=""
 PLATFORM_INFERENCE="local ollama"
 DUCKDB_ONLY=0
-RECORDINGS_DB="${CORRALAI_RECORDINGS_DB:-$HOME/.claude/corralai_recordings.duckdb}"
+# corral's state root, resolved as internal/statedir resolves it (that
+# package is the source of truth; `corral state paths` prints the result):
+# CORRALAI_STATE_DIR, else an absolute $XDG_STATE_HOME/corral, else the
+# platform default. The per-file CORRALAI_RECORDINGS_DB still wins.
+corral_state_dir() {
+  if [ -n "${CORRALAI_STATE_DIR:-}" ]; then printf '%s\n' "$CORRALAI_STATE_DIR"; return; fi
+  if [ "$(uname -s)" = "Darwin" ]; then printf '%s\n' "$HOME/Library/Application Support/corral"; return; fi
+  case "${XDG_STATE_HOME:-}" in
+    /*) printf '%s\n' "$XDG_STATE_HOME/corral" ;;
+    *)  printf '%s\n' "$HOME/.local/state/corral" ;;
+  esac
+}
+RECORDINGS_DB="${CORRALAI_RECORDINGS_DB:-$(corral_state_dir)/corralai_recordings.duckdb}"
 
 usage(){ cat <<'EOF'
 Usage: scripts/export-golden-run.sh [--mission N] [--brain-url URL] [--bearer TOKEN]
@@ -61,7 +73,8 @@ Usage: scripts/export-golden-run.sh [--mission N] [--brain-url URL] [--bearer TO
                    scrubbed replay into recordings DuckDB.
   --recordings-db PATH
                    Recordings DuckDB path (default
-                   $CORRALAI_RECORDINGS_DB or ~/.claude/corralai_recordings.duckdb).
+                   $CORRALAI_RECORDINGS_DB, else corralai_recordings.duckdb in
+                   corral's state directory — see `corral state paths`).
   --rederive-meta PATH.json
                    Offline mode: no brain contact, no export. Recomputes the
                    models field of PATH's existing .meta.json sidecar from

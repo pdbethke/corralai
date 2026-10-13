@@ -452,6 +452,20 @@ func jsonColumnToAny(v any) (any, error) {
 	}
 }
 
+// ParseSigningKeySeed decodes a certify key file's contents (a hex Ed25519
+// seed). Shared by LoadOrCreateSigningKey and `corral state migrate`, which
+// must read a key without any chance of creating one.
+func ParseSigningKeySeed(raw []byte) (ed25519.PrivateKey, error) {
+	seed, err := hex.DecodeString(strings.TrimSpace(string(raw)))
+	if err != nil {
+		return nil, fmt.Errorf("buildstore: signing key is corrupt")
+	}
+	if len(seed) != ed25519.SeedSize {
+		return nil, fmt.Errorf("buildstore: signing key has an unexpected seed length")
+	}
+	return ed25519.NewKeyFromSeed(seed), nil
+}
+
 // LoadOrCreateSigningKey resolves the Ed25519 key `corral certify` signs
 // build attestations with: env CORRALAI_CERTIFY_KEY (hex-encoded 32-byte
 // seed) overrides everything; else a 0600 seed file at path is read if
@@ -473,14 +487,11 @@ func LoadOrCreateSigningKey(path string) (ed25519.PrivateKey, error) {
 	}
 
 	if raw, err := os.ReadFile(path); err == nil { // #nosec G304 -- path is the operator-configured certify key path, not attacker input
-		seed, err := hex.DecodeString(strings.TrimSpace(string(raw)))
-		if err != nil {
-			return nil, fmt.Errorf("buildstore: signing key file %s is corrupt", path)
+		priv, perr := ParseSigningKeySeed(raw)
+		if perr != nil {
+			return nil, fmt.Errorf("%w (file %s)", perr, path)
 		}
-		if len(seed) != ed25519.SeedSize {
-			return nil, fmt.Errorf("buildstore: signing key file %s has an unexpected seed length", path)
-		}
-		return ed25519.NewKeyFromSeed(seed), nil
+		return priv, nil
 	} else if !os.IsNotExist(err) {
 		return nil, fmt.Errorf("buildstore: reading signing key file %s: %w", path, err)
 	}

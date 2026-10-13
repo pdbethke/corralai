@@ -55,6 +55,7 @@ import (
 	"github.com/pdbethke/corralai/internal/repoindex"
 	"github.com/pdbethke/corralai/internal/rolemodel"
 	"github.com/pdbethke/corralai/internal/sandbox"
+	"github.com/pdbethke/corralai/internal/statedir"
 	"github.com/pdbethke/corralai/internal/taskartifacts"
 	"github.com/pdbethke/corralai/internal/telemetry"
 	"github.com/pdbethke/corralai/internal/testgen"
@@ -67,6 +68,18 @@ func env(k, def string) string {
 		return v
 	}
 	return def
+}
+
+// statePath resolves one of the daemon's stores through statedir. A refusal
+// (the file exists only at the legacy location) stops the daemon: starting
+// with an empty store, or a fresh signing key, is the failure the refusal
+// exists to prevent.
+func statePath(f statedir.File) string {
+	p, err := statedir.PathForWrite(f)
+	if err != nil {
+		log.Fatalf("state: %v", err)
+	}
+	return p
 }
 
 // Run boots the daemon and blocks until it exits. version is what the
@@ -85,15 +98,11 @@ func Run(version string) {
 	fmt.Fprintf(os.Stderr, "corral %s — starting the coordination server on %s. Ctrl-C to stop.\n", version, env("CORRALAI_ADDR", "127.0.0.1:9019"))
 	fmt.Fprintln(os.Stderr, "  Looking for the audit CLI? `corral certify --local --help`, or `corral --help` for everything else.")
 
-	home, _ := os.UserHomeDir()
 	addr := env("CORRALAI_ADDR", "127.0.0.1:9019")
-	dbPath := env("CORRALAI_DB", filepath.Join(home, ".claude", "corralai_coord.sqlite3"))
+	dbPath := statePath(statedir.CoordDB)
 	issuer := os.Getenv("CORRALAI_OIDC_ISSUER")
 	audience := os.Getenv("CORRALAI_OIDC_AUDIENCE")
 
-	if err := os.MkdirAll(filepath.Dir(dbPath), 0o700); err != nil {
-		log.Fatalf("mkdir db dir: %v", err)
-	}
 	store, err := coord.Open(dbPath)
 	if err != nil {
 		log.Fatalf("open coordination store: %v", err)
@@ -102,7 +111,7 @@ func Run(version string) {
 	bus := coord.NewBus() // signal bus: coordination actions -> instant SSE push
 	store.SetBus(bus)
 
-	memDB := env("CORRALAI_MEMORY_DB", filepath.Join(home, ".claude", "corralai_memory.duckdb"))
+	memDB := statePath(statedir.MemoryDB)
 	memStore, err := memory.Open(memDB)
 	if err != nil {
 		log.Fatalf("open memory store: %v", err)
@@ -120,7 +129,7 @@ func Run(version string) {
 	// The DB is canonical at runtime; CORRALAI_ADMIN_PRINCIPALS (superusers) and
 	// CORRALAI_ALLOWED_PRINCIPALS (members) are a day-0 SEED only. `corral
 	// createsuperuser` writes here. Empty table => dev-open.
-	princDB := env("CORRALAI_PRINCIPALS_DB", filepath.Join(home, ".claude", "corralai_principals.sqlite3"))
+	princDB := statePath(statedir.PrincipalsDB)
 	princStore, err := principals.Open(princDB)
 	if err != nil {
 		log.Fatalf("open principals store: %v", err)
@@ -134,7 +143,7 @@ func Run(version string) {
 	log.Printf("principals: %d total, %d superuser(s)", princStore.Count(), princStore.SuperuserCount())
 
 	// MCP gateway registry (admin-curated upstreams + audited proxy).
-	gwDB := env("CORRALAI_GATEWAY_DB", filepath.Join(home, ".claude", "corralai_gateway.sqlite3"))
+	gwDB := statePath(statedir.GatewayDB)
 	gwStore, err := gateway.Open(gwDB)
 	if err != nil {
 		log.Fatalf("open gateway store: %v", err)
@@ -147,7 +156,7 @@ func Run(version string) {
 
 	// Fleet artifact store: shared skills + hooks, bidirectionally synced by
 	// `corral sync` (superuser push). The brain is the canonical set.
-	artDB := env("CORRALAI_ARTIFACTS_DB", filepath.Join(home, ".claude", "corralai_artifacts.sqlite3"))
+	artDB := statePath(statedir.ArtifactsDB)
 	artStore, err := artifacts.Open(artDB)
 	if err != nil {
 		log.Fatalf("open artifacts store: %v", err)
@@ -157,14 +166,14 @@ func Run(version string) {
 
 	// Orchestration: a directive becomes a mission the engine drives over the
 	// subagent + instruction primitives (build -> test ∥ secops -> retro).
-	missionDB := env("CORRALAI_MISSION_DB", filepath.Join(home, ".claude", "corralai_missions.sqlite3"))
+	missionDB := statePath(statedir.MissionDB)
 	missionStore, err := mission.Open(missionDB)
 	if err != nil {
 		log.Fatalf("open mission store: %v", err)
 	}
 	defer missionStore.Close()
 	// Task queue: the pull-model substrate the swarm executes missions through.
-	queueDB := env("CORRALAI_QUEUE_DB", filepath.Join(home, ".claude", "corralai_queue.sqlite3"))
+	queueDB := statePath(statedir.QueueDB)
 	queueStore, err := queue.Open(queueDB)
 	if err != nil {
 		log.Fatalf("open task queue: %v", err)
@@ -174,7 +183,7 @@ func Run(version string) {
 	// Reference corpus (RAG): embedded DuckDB store + a remote embeddings endpoint.
 	// A nil embedder (no CORRALAI_EMBED_URL) keeps the reference tools off — the
 	// engine is portable: embeddings come from wherever you point it, not this host.
-	refDB := env("CORRALAI_REFERENCE_DB", filepath.Join(home, ".claude", "corralai_reference.duckdb"))
+	refDB := statePath(statedir.ReferenceDB)
 	refStore, err := reference.Open(refDB)
 	if err != nil {
 		log.Fatalf("open reference store: %v", err)
@@ -194,13 +203,13 @@ func Run(version string) {
 	}
 
 	// Mission telemetry: the DuckDB event log for analytics.
-	telDB := env("CORRALAI_TELEMETRY_DB", filepath.Join(home, ".claude", "corralai_telemetry.duckdb"))
+	telDB := statePath(statedir.TelemetryDB)
 	telStore, err := telemetry.Open(telDB)
 	if err != nil {
 		log.Fatalf("open telemetry store: %v", err)
 	}
 	defer telStore.Close()
-	recDB := env("CORRALAI_RECORDINGS_DB", filepath.Join(home, ".claude", "corralai_recordings.duckdb"))
+	recDB := statePath(statedir.RecordingsDB)
 	recStore, err := recordings.Open(recDB)
 	if err != nil {
 		log.Fatalf("open recordings store: %v", err)
@@ -209,14 +218,14 @@ func Run(version string) {
 
 	// Learning loop: findings + lessons cluster into human-gated proposals
 	// (approve into standing guidance, optionally a skill).
-	learnDB := env("CORRALAI_LEARN_DB", filepath.Join(home, ".claude", "corralai_learn.sqlite3"))
+	learnDB := statePath(statedir.LearnDB)
 	learnStore, err := learn.Open(learnDB)
 	if err != nil {
 		log.Fatalf("open learn store: %v", err)
 	}
 	defer learnStore.Close()
 
-	taskArtDB := env("CORRALAI_TASK_ARTIFACTS_DB", filepath.Join(home, ".claude", "corralai_task_artifacts.sqlite3"))
+	taskArtDB := statePath(statedir.TaskArtifactsDB)
 	taskArtStore, err := taskartifacts.Open(taskArtDB)
 	if err != nil {
 		log.Fatalf("open task artifacts store: %v", err)
@@ -226,7 +235,7 @@ func Run(version string) {
 	// corral certify's signed build-record ledger + its Ed25519 signing key.
 	// Both must be valid together (server.go's registerBuildCert guard) or
 	// report_build stays disabled rather than sign with a garbage key.
-	buildDB := env("CORRALAI_BUILD_DB", filepath.Join(home, ".claude", "corralai_build.duckdb"))
+	buildDB := statePath(statedir.BuildDB)
 	buildStore, err := buildstore.Open(buildDB)
 	if err != nil {
 		log.Fatalf("open build-record store: %v", err)
@@ -236,7 +245,7 @@ func Run(version string) {
 	// The adversarial pool's bug-catching scorecard store — per-seat,
 	// execution-proven catch/opportunity/mutant observations feeding the
 	// leaderboard's decorrelated staffing.
-	bugCatchDB := env("CORRALAI_BUGCATCH_DB", filepath.Join(home, ".claude", "corralai_bugcatch.duckdb"))
+	bugCatchDB := statePath(statedir.BugCatchDB)
 	bugCatchStore, err := bugcatch.Open(bugCatchDB)
 	if err != nil {
 		log.Fatalf("open bugcatch store: %v", err)
@@ -247,7 +256,7 @@ func Run(version string) {
 	// checked test-critic auto-refute observations, mutable (a human
 	// adjudication permanently outranks a later auto Record) unlike the
 	// append-only bugcatch ledger above. See internal/criticscore.
-	criticScoreDB := env("CORRALAI_CRITICSCORE_DB", filepath.Join(home, ".claude", "corralai_criticscore.duckdb"))
+	criticScoreDB := statePath(statedir.CriticScoreDB)
 	criticScoreStore, err := criticscore.Open(criticScoreDB)
 	if err != nil {
 		log.Fatalf("open criticscore store: %v", err)
@@ -257,14 +266,14 @@ func Run(version string) {
 	// The adversarial pool's tests×mutants matrix store — per-test,
 	// execution-proven kill-count observations (swarm slice 5), append-only
 	// like bugcatch above. See internal/matrixstore.
-	matrixDB := env("CORRALAI_MATRIX_DB", filepath.Join(home, ".claude", "corralai_matrix.duckdb"))
+	matrixDB := statePath(statedir.MatrixDB)
 	matrixStore, err := matrixstore.Open(matrixDB)
 	if err != nil {
 		log.Fatalf("open matrixstore: %v", err)
 	}
 	defer matrixStore.Close()
 
-	certifyKeyFile := env("CORRALAI_CERTIFY_KEY_FILE", filepath.Join(home, ".claude", "corralai_certify_key"))
+	certifyKeyFile := statePath(statedir.CertifyKey)
 	certifyKey, err := buildstore.LoadOrCreateSigningKey(certifyKeyFile)
 	if err != nil {
 		log.Fatalf("load certify signing key: %v", err)
@@ -319,7 +328,7 @@ func Run(version string) {
 	fleetBrainHost, _ := os.Hostname()
 	fleetBrainID := env("CORRALAI_BRAIN_ID", fleetBrainHost)
 	if fleetTarget != "" {
-		keyFile := env("CORRALAI_BRAIN_KEY_FILE", filepath.Join(home, ".claude", "corralai_brain_key"))
+		keyFile := statePath(statedir.BrainKey)
 		brainKey := os.Getenv("CORRALAI_BRAIN_KEY")
 		kp, keyErr := attest.LoadOrCreateKey(brainKey, keyFile)
 		// Always scrub CORRALAI_BRAIN_KEY from env — private key must not linger.
@@ -486,7 +495,7 @@ func Run(version string) {
 	// to index). Shares the same embedder as memory/reference (one vector space).
 	var repoIdx *repoindex.Store
 	if repoEng != nil {
-		idxDB := env("CORRALAI_REPOCODE_DB", filepath.Join(home, ".claude", "corralai_repocode.duckdb"))
+		idxDB := statePath(statedir.RepoCodeDB)
 		if ri, err := repoindex.Open(idxDB); err != nil {
 			log.Printf("repo code index disabled: %v", err)
 		} else {
@@ -673,7 +682,7 @@ func Run(version string) {
 	for _, bad := range badGatePolicies {
 		log.Printf("gate: policy skipped: %s", bad)
 	}
-	gateDB := env("CORRALAI_GATE_DB", filepath.Join(home, ".claude", "corralai_gate.duckdb"))
+	gateDB := statePath(statedir.GateDB)
 
 	// Control gate (v1): CORRALAI_CONTROL_GATE declares repo→owner control
 	// gates; empty => feature off. Runs each owner's VETTED tests against PR
@@ -682,8 +691,8 @@ func Run(version string) {
 	for _, bad := range badControl {
 		log.Printf("control-gate: malformed CORRALAI_CONTROL_GATE entry (skipped): %q", bad)
 	}
-	controlSpecDB := env("CORRALAI_CONTROL_GATE_SPEC_DB", filepath.Join(home, ".claude", "corralai_control_spec.duckdb"))
-	controlGateDB := env("CORRALAI_CONTROL_GATE_DB", filepath.Join(home, ".claude", "corralai_control_gate.duckdb"))
+	controlSpecDB := statePath(statedir.ControlSpecDB)
+	controlGateDB := statePath(statedir.ControlGateDB)
 	controlSpecStore, err := controlspec.OpenStore(controlSpecDB)
 	if err != nil {
 		log.Fatalf("control spec store: %v", err)

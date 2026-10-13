@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -17,6 +18,7 @@ import (
 	"strings"
 
 	"github.com/pdbethke/corralai/internal/certify"
+	"github.com/pdbethke/corralai/internal/statedir"
 	"github.com/pdbethke/corralai/internal/transparency"
 )
 
@@ -57,6 +59,15 @@ func dsseEnvelopePathFor(attestPath string) string { return attestPath + dsseEnv
 // underlying key: both are the one local corral signing identity.
 const transparencyKeyID = "corral-certify"
 
+// errNoLocalKey is the ONE error a caller may treat as "write unsigned": no
+// key is configured and none exists at the default path. Every other error
+// from loadLocalCertifyKeyIfConfigured — the legacy-location refusal
+// (*statedir.LegacyError), a key that cannot be read or parsed, a state root
+// that cannot be resolved — means a key the operator holds could not be used,
+// and an entry written unsigned then is a permanent, wrong record in a
+// public hash-linked ledger. Callers test it with errors.Is and nothing else.
+var errNoLocalKey = errors.New("no local signing key is configured")
+
 // loadLocalCertifyKeyIfConfigured loads the local certify key WITHOUT ever
 // silently provisioning one. loadLocalCertifyKey (buildstore.LoadOrCreateSigningKey
 // underneath) auto-creates a key at whatever path it is given — the
@@ -82,8 +93,16 @@ func loadLocalCertifyKeyIfConfigured() (ed25519.PrivateKey, error) {
 	if strings.TrimSpace(os.Getenv("CORRALAI_CERTIFY_KEY_FILE")) != "" {
 		return loadLocalCertifyKey()
 	}
-	if _, err := os.Stat(localCertifyKeyPath()); err != nil {
-		return nil, fmt.Errorf("no local signing key is configured — set CORRALAI_CERTIFY_KEY_FILE (or CORRALAI_CERTIFY_KEY) to sign the statement before it can be logged")
+	keyPath, err := statedir.Path(statedir.CertifyKey)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := os.Stat(keyPath); err != nil {
+		if os.IsNotExist(err) {
+			return nil, fmt.Errorf("%w — set CORRALAI_CERTIFY_KEY_FILE (or CORRALAI_CERTIFY_KEY) to sign the statement before it can be logged", errNoLocalKey)
+		}
+		// Present but unreadable is not "absent": the operator HAS a key.
+		return nil, fmt.Errorf("cannot tell whether a certify key exists at %s: %w", keyPath, err)
 	}
 	return loadLocalCertifyKey()
 }
@@ -135,7 +154,7 @@ func transparencyPublicKeyPEM() ([]byte, error) {
 // (loadLocalCertifyKeyIfConfigured), when signing fails, or when the write
 // fails. writeStatement treats all of these as non-fatal to the PLAIN
 // file it already wrote and hands the error back: each caller decides (an
-// audit stays silent, a review reports it). --transparency's own early guard is
+// audit stays silent on errNoLocalKey ONLY, a review reports it). --transparency's own early guard is
 // what actually gates a run on key availability, before any of this work runs.
 func writeSignedStatementEnvelope(stmtPath string, stmt map[string]any) (string, error) {
 	priv, err := loadLocalCertifyKeyIfConfigured()
@@ -165,7 +184,9 @@ func writeSignedStatementEnvelope(stmtPath string, stmt map[string]any) (string,
 // form whose sha256 the signed ledger already carries. Do not change it.
 //
 // signErr is returned, not acted on: a review reports it; an audit stays
-// silent, because an ordinary --attest run has no local key by design.
+// silent on errNoLocalKey, because an ordinary --attest run has no local key
+// by design — and only on that: any other sign error is a key the operator
+// holds that could not be used, and the audit says so.
 //
 // A stale envelope that cannot be removed fails the write with NOTHING left
 // at path: not the new statement, and not an old one. The Action attests

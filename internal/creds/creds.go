@@ -17,6 +17,8 @@ import (
 
 	"filippo.io/age"
 	"github.com/zalando/go-keyring"
+
+	"github.com/pdbethke/corralai/internal/statedir"
 )
 
 var errReadOnly = errors.New("creds: backend is read-only")
@@ -179,18 +181,9 @@ func Redact(secret string) string {
 	return fmt.Sprintf("%s…(%d chars)", secret[:4], len(secret))
 }
 
-// credsDir is where the age store + fallback identity live: CORRAL_CREDS_DIR, else
-// the OS user config dir + "corral".
-func credsDir() (string, error) {
-	if d := os.Getenv("CORRAL_CREDS_DIR"); d != "" {
-		return d, nil
-	}
-	base, err := os.UserConfigDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(base, "corral"), nil
-}
+// credsDir is where the age store + fallback identity live: statedir's
+// Config root (CORRAL_CREDS_DIR, else the OS user config dir + "corral").
+func credsDir() (string, error) { return statedir.Dir(statedir.Config) }
 
 // keyringUsable probes the OS keyring with a harmless lookup of a key that is
 // never expected to exist. On a headless Linux host with no Secret Service

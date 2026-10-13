@@ -2,7 +2,7 @@
 
 // Package memory is CorralAI's memory half: a multi-tier, searchable knowledge
 // corpus backed by DuckDB FTS (BM25). Source of truth stays the per-project
-// markdown files under ~/.claude/projects/*/memory/; this is a derived,
+// markdown files in the memory directory (see Dir); this is a derived,
 // rebuildable index. DuckDB (not SQLite) so the semantic upgrade — vectors via
 // the VSS extension — and MotherDuck sync are a natural next step.
 package memory
@@ -20,35 +20,19 @@ import (
 	"github.com/pdbethke/corralai/internal/annindex"
 	"github.com/pdbethke/corralai/internal/embed"
 	"github.com/pdbethke/corralai/internal/searchmerge"
+	"github.com/pdbethke/corralai/internal/statedir"
 )
 
 var (
-	home      = mustHome()
-	DefaultDB = filepath.Join(home, ".claude", "corralai_memory.duckdb")
-	// dirGlob is NOT live configuration and nothing in this package reads it.
-	// It exists solely as the fixture TestBuildNilSkipsPersonalGlobByDefault
-	// swaps out to prove the operator's PERSONAL memory corpus is NOT indexed:
-	// Build(nil) resolves to CORRALAI_MEMORY_DIR or an EMPTY list, and
-	// iterEntries walks only the dirs it is handed, with no fallback.
-	//
-	// Auto-indexing this glob was a real privacy bug (it bit the project four
-	// times, once putting 413 personal entries into a demo) and was fixed in
-	// cc170ce. The var is kept — deliberately named after the thing that must
-	// never happen — so the regression test can point at a realistic shape.
-	//
-	// It nearly caused its own incident: on 2026-08-04 a pre-launch scan read
-	// this line as live config and concluded the leak was still open. If you
-	// are here for the same reason, run the two tests named above; the answer
-	// is that grep for production callers returns nothing.
-	dirGlob   = filepath.Join(home, ".claude", "projects", "*", "memory")
 	skipNames = map[string]bool{"MEMORY.md": true, "ARCHIVE.md": true}
 	fmRe      = regexp.MustCompile(`(?s)^---\n(.*?)\n---\n?(.*)$`)
 )
 
-func mustHome() string { h, _ := os.UserHomeDir(); return h }
-
-// memoryDir is where new entries are written when no target dir is given.
-// Override with CORRALAI_MEMORY_DIR; otherwise a neutral per-tool location.
+// Dir is where memory entries are written AND what Build(nil) indexes —
+// one rule for both, so an added entry is always findable.
+// CORRALAI_MEMORY_DIR if set; otherwise a directory corral owns under its
+// state root. Another agent's memory (e.g. Claude Code's) is read only if
+// the operator points CORRALAI_MEMORY_DIR at it.
 // Resolution is lazy — read on every call rather than cached at package init
 // — so tests can set CORRALAI_MEMORY_DIR (via t.Setenv, per-test) before
 // their first Add and have it take effect. A package-level var resolved at
@@ -56,13 +40,20 @@ func mustHome() string { h, _ := os.UserHomeDir(); return h }
 // test runs; a cached-after-first-call resolution (e.g. sync.Once) would
 // still pin every later test in the same process to whichever value the
 // first caller saw, defeating per-test isolation. The lookup is a single
-// cheap os.Getenv, so re-reading it on each Add is not a meaningful cost.
-func memoryDir() string {
+// cheap os.Getenv, so re-reading it on each call is not a meaningful cost.
+func Dir() (string, error) {
 	if d := strings.TrimSpace(os.Getenv("CORRALAI_MEMORY_DIR")); d != "" {
-		return d
+		return d, nil
 	}
-	return filepath.Join(home, ".claude", "projects", "default", "memory")
+	root, err := statedir.Dir(statedir.State)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(root, "memory"), nil
 }
+
+// DefaultDB is the memory index's default path (statedir.MemoryDB).
+func DefaultDB() (string, error) { return statedir.Path(statedir.MemoryDB) }
 
 // lit renders a Go string as a DuckDB string literal (quotes doubled, invalid UTF-8 stripped).
 func lit(s string) string {
@@ -377,7 +368,9 @@ func (s *Store) Add(name, body, description, typ, project, targetDir string, sha
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if targetDir == "" {
-		targetDir = memoryDir()
+		if targetDir, err = Dir(); err != nil {
+			return "", "", "", err
+		}
 	}
 	if typ == "" {
 		typ = "reference"
@@ -446,7 +439,7 @@ func (s *Store) SetShared(nameOrSlug string, shared bool) (bool, error) {
 	}
 	fmBytes, _ := yaml.Marshal(fm)
 	content := "---\n" + strings.TrimSpace(string(fmBytes)) + "\n---\n\n" + body + "\n"
-	if err := os.WriteFile(e.Path, []byte(content), 0o600); err != nil { // #nosec G703 -- targetDir is server-set (add_memory passes ""→memoryDir()) and the filename is a sanitized slug ([^a-z0-9_-]); not agent-controllable
+	if err := os.WriteFile(e.Path, []byte(content), 0o600); err != nil { // #nosec G703 -- targetDir is server-set (add_memory passes ""→Dir()) and the filename is a sanitized slug ([^a-z0-9_-]); not agent-controllable
 		return false, err
 	}
 	_, err = s.buildLocked(s.lastDirs)

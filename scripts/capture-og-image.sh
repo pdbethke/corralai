@@ -6,14 +6,16 @@
 #
 # SAFETY: this script constructs the safe world itself, rather than trusting
 # whatever brain happens to be listening. The brain is launched under `env -i`
-# with a throwaway $HOME and every CORRALAI_* store path pointed into one
-# mktemp -d scratch dir. That is not paranoia — internal/memory/store.go
-# derives its corpus glob (~/.claude/projects/*/memory) from the process HOME
-# and memStore.Build(nil) walks it UNCONDITIONALLY at brain startup, so a
-# brain started with the operator's real HOME indexes their PERSONAL memory
-# corpus even when every *_DB var points at scratch. Scratch HOME defuses the
-# glob; CORRALAI_MEMORY_DIR redirects new writes; the *_DB vars cover every
-# store cmd/corral would otherwise default into ~/.claude/.
+# with a throwaway $HOME, corral's state and cache roots (CORRALAI_STATE_DIR,
+# CORRALAI_CACHE_DIR) and every CORRALAI_* store path pointed into one
+# mktemp -d scratch dir. That is not paranoia — with no CORRALAI_MEMORY_DIR,
+# internal/memory indexes the memory directory under the STATE root at brain
+# startup, so a brain started against the operator's real state root indexes
+# their PERSONAL memory corpus even when every *_DB var points at scratch.
+# The scratch state root keeps every default inside $SCRATCH — including a
+# store added later that nobody remembered to list below — and
+# CORRALAI_MEMORY_DIR redirects memory itself. XDG_STATE_HOME and
+# XDG_CACHE_HOME are unset as well, so nothing can resolve a real root.
 #
 # Default mode (no args): build cmd/corral, launch it against the scratch
 # world, optionally seed a scene, capture, tear everything down.
@@ -80,12 +82,15 @@ cleanup() {
 trap cleanup EXIT
 
 # One flat list so the seed hook and the brain see the IDENTICAL scratch
-# world. Every store cmd/corral opens is here — if a new store is added with
-# a ~/.claude default, add its var here too (the scratch HOME is the backstop
-# either way).
+# world. CORRALAI_STATE_DIR / CORRALAI_CACHE_DIR are the backstop: any store
+# without its own variable here still resolves into $SCRATCH (`corral state
+# paths` lists every one). The per-store vars are kept so each file's name in
+# the scratch dir is obvious.
 SAFE_ENV=(
   HOME="$FAKEHOME"
   PATH="$PATH"
+  CORRALAI_STATE_DIR="$SCRATCH/state"
+  CORRALAI_CACHE_DIR="$SCRATCH/cache"
   CORRALAI_ADDR="$ADDR"
   CORRALAI_MEMORY_DIR="$SCRATCH/memory"
   CORRALAI_DB="$SCRATCH/coord.sqlite3"
@@ -110,13 +115,14 @@ if [ -n "${OG_SEED_CMD:-}" ]; then
   # operator's toolchain env (go caches etc.) and just gain the scratch vars.
   #
   # !! SAFETY: restoring the real HOME below is safe ONLY for seeders that
-  # never derive paths from $HOME. Any seeder that computes ~/.claude/* paths
-  # — memory seeding especially — MUST keep the scratch HOME (HOME="$FAKEHOME")
-  # instead, because memStore.Build(nil) walks the fixed
-  # ~/.claude/projects/*/memory glob at startup regardless of
-  # CORRALAI_MEMORY_DIR. This exact mistake leaked demo memory files into the
-  # operator's real HOME during the Task 7 UI-tour capture (see ticket #26).
-  env "${SAFE_ENV[@]}" HOME="$HOME" bash -c "$OG_SEED_CMD"
+  # never derive paths from $HOME themselves. A seeder that computes a path
+  # under HOME — memory seeding especially — MUST keep the scratch HOME
+  # (HOME="$FAKEHOME") instead. Exactly this mistake leaked demo memory files
+  # into the operator's real HOME during the Task 7 UI-tour capture (see
+  # ticket #26). corral's own defaults are safe either way: the state and
+  # cache roots are pinned into $SCRATCH, and the XDG roots are unset so a
+  # seeder that resolves them itself cannot reach the operator's either.
+  env -u XDG_STATE_HOME -u XDG_CACHE_HOME "${SAFE_ENV[@]}" HOME="$HOME" bash -c "$OG_SEED_CMD"
 fi
 
 # If something is ALREADY answering on $ADDR (e.g. the operator's real brain),

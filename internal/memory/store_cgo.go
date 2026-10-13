@@ -7,7 +7,6 @@ package memory
 import (
 	"database/sql"
 	"log"
-	"os"
 	"strconv"
 	"strings"
 
@@ -79,11 +78,11 @@ func (s *Store) Build(dirs []string) (int, error) {
 // already hold s.mu (EnsureBuilt/Add/SetShared use this to avoid re-lock deadlock).
 func (s *Store) buildLocked(dirs []string) (int, error) {
 	if dirs == nil {
-		if d := strings.TrimSpace(os.Getenv("CORRALAI_MEMORY_DIR")); d != "" {
-			dirs = []string{d}
-		} else {
-			dirs = []string{}
+		d, err := Dir()
+		if err != nil {
+			return 0, err
 		}
+		dirs = []string{d}
 	}
 	s.lastDirs = dirs
 	rows := iterEntries(dirs, s.tiers)

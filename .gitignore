@@ -11,7 +11,7 @@ dist/
 /corral-observe
 /corral-admin
 
-# Local data / state (coordination + memory live under ~/.claude, never in-repo)
+# Local data / state (corral's databases and keys live in its state directory — see `corral state paths` — never in-repo)
 *.sqlite3
 *.sqlite3-*
 *.duckdb

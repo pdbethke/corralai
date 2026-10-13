@@ -579,20 +579,20 @@ func TestMemoryDisableSwitch(t *testing.T) {
 // TestMemoryDirEnvOverrideAfterProcessStart proves the default-target-dir
 // resolution used by Add(targetDir="") is lazy: CORRALAI_MEMORY_DIR set via
 // t.Setenv (i.e. AFTER process/package init has already run) still redirects
-// writes. This is the seam that broke real ~/.claude/projects/default/memory
+// writes. This is the seam that broke a real default memory
 // isolation: a package-level var resolved at init time captures the env var
 // before any test's t.Setenv takes effect, so tests calling Add with
 // targetDir="" silently wrote into the developer's real memory dir. Must be
-// the first caller of memoryDir() in this test binary — every other test in
+// the first caller of Dir() in this test binary — every other test in
 // this package passes an explicit targetDir to Add.
 func TestMemoryDirEnvOverrideAfterProcessStart(t *testing.T) {
 	root := t.TempDir()
 	want := filepath.Join(root, "redirected-mem")
 	t.Setenv("CORRALAI_MEMORY_DIR", want)
 
-	got := memoryDir()
-	if got != want {
-		t.Fatalf("memoryDir() = %q, want %q (CORRALAI_MEMORY_DIR set after process start must still be honored)", got, want)
+	got, err := Dir()
+	if err != nil || got != want {
+		t.Fatalf("Dir() = %q, %v, want %q (CORRALAI_MEMORY_DIR set after process start must still be honored)", got, err, want)
 	}
 
 	dbPath := filepath.Join(root, "m.duckdb")
@@ -617,9 +617,20 @@ func TestBuildNilSkipsPersonalGlobByDefault(t *testing.T) {
 	root := t.TempDir()
 	mem := filepath.Join(root, "project-a", "memory")
 	writeEntry(t, mem, "personal-note", "private", "", "do not auto-index")
-	oldGlob := dirGlob
-	dirGlob = filepath.Join(root, "*", "memory")
-	t.Cleanup(func() { dirGlob = oldGlob })
+	// dirGlob is a FIXTURE, not configuration: the shape of the operator's
+	// personal memory corpus (a glob of per-project memory dirs). Nothing in
+	// the package reads it. It is named after the thing that must never
+	// happen — Build(nil) auto-indexing a glob like this was a real privacy
+	// bug (once putting 413 personal entries into a demo, fixed in cc170ce) —
+	// so this test can point at a realistic shape and prove it stays unindexed.
+	// Build(nil) now indexes Dir() only: CORRALAI_MEMORY_DIR or corral's own
+	// directory under the state root, both isolated to temp here.
+	dirGlob := filepath.Join(root, "*", "memory")
+	t.Setenv("CORRALAI_MEMORY_DIR", "")
+	t.Setenv("CORRALAI_STATE_DIR", filepath.Join(root, "state"))
+	if m, _ := filepath.Glob(dirGlob); len(m) != 1 {
+		t.Fatalf("fixture glob %q should match the personal tree, got %v", dirGlob, m)
+	}
 
 	s, err := Open(filepath.Join(root, "m.duckdb"))
 	if err != nil {

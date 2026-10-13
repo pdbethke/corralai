@@ -6,32 +6,12 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"os"
-	"os/user"
-	"path/filepath"
-	"strings"
 	"sync/atomic"
 	"time"
 
 	"github.com/pdbethke/corralai/internal/advpool"
 	"github.com/pdbethke/corralai/internal/mutantattempts"
 )
-
-// localMutantAttemptsDBPath mirrors localBugCatchDBPath for the writer-seat
-// correlation store, so a --local run's per-seat, per-mutant outcomes persist
-// next to the signed build ledger and the scorecard.
-func localMutantAttemptsDBPath() string {
-	if p := strings.TrimSpace(os.Getenv("CORRALAI_MUTANT_ATTEMPTS_DB")); p != "" {
-		return p
-	}
-	home := ""
-	if u, err := os.UserHomeDir(); err == nil {
-		home = u
-	} else if usr, err := user.Current(); err == nil {
-		home = usr.HomeDir
-	}
-	return filepath.Join(home, ".claude", "corralai_mutant_attempts.duckdb")
-}
 
 // localMutantAttemptSink persists a converged --local run's per-seat mutant
 // outcomes, stamping the run context (ts, repo, commit) the pure driver does

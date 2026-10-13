@@ -6,33 +6,12 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"os"
-	"os/user"
-	"path/filepath"
-	"strings"
 	"sync/atomic"
 	"time"
 
 	"github.com/pdbethke/corralai/internal/advpool"
 	"github.com/pdbethke/corralai/internal/criticscore"
 )
-
-// localCriticScoreDBPath mirrors localBugCatchDBPath for the critic-accuracy
-// store, so a --local run's critic findings persist next to the signed build
-// ledger and feed the same `corral criticscore` / `corral scorecard` surfaces
-// the daemon's runs feed.
-func localCriticScoreDBPath() string {
-	if p := strings.TrimSpace(os.Getenv("CORRALAI_CRITICSCORE_DB")); p != "" {
-		return p
-	}
-	home := ""
-	if u, err := os.UserHomeDir(); err == nil {
-		home = u
-	} else if usr, err := user.Current(); err == nil {
-		home = usr.HomeDir
-	}
-	return filepath.Join(home, ".claude", "corralai_criticscore.duckdb")
-}
 
 // localCriticSink persists a converged --local run's execution-checked critic
 // findings into the criticscore store, stamping the run context (ts, repo,

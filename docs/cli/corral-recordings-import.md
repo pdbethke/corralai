@@ -10,7 +10,7 @@ description: Generated CLI reference for corral-recordings-import — never hand
 ```
 Usage of corral-recordings-import:
   -db string
-    	DuckDB path (default: CORRALAI_RECORDINGS_DB or ~/.claude/corralai_recordings.duckdb)
+    	DuckDB path (default: CORRALAI_RECORDINGS_DB, else $STATE/corralai_recordings.duckdb — see corral state paths)
   -meta string
     	path to metadata json
   -mission-id int

@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"io"
 	"math"
-	"os"
-	"os/user"
 	"path/filepath"
 	"strings"
 	"time"
@@ -17,36 +15,20 @@ import (
 	"github.com/pdbethke/corralai/internal/modelcorr"
 	"github.com/pdbethke/corralai/internal/reposcan"
 	"github.com/pdbethke/corralai/internal/scanstore"
+	"github.com/pdbethke/corralai/internal/statedir"
 )
 
-// defaultCacheDSN resolves corral's local cache file — derived goals and
-// instrumented test selections — the way localBugCatchDBPath
-// (cmd/corral/certify_local_bugcatch.go) resolves its own store: the
-// CORRALAI_CACHE_DB env var, else os.UserHomeDir() falling back to
-// os/user.Current(), else ~/.claude/corralai_cache.duckdb. A cache, not a
-// record: the record is the ledger directory (see defaultLedgerDir), and
-// this file held the record too until the ledger entry became the only
-// one, which is why its old name (corralai_scans.duckdb, --record-db,
-// $CORRALAI_SCANS_DB) said "scans".
-func defaultCacheDSN() string {
-	if p := strings.TrimSpace(os.Getenv("CORRALAI_CACHE_DB")); p != "" {
-		return p
-	}
-	home := ""
-	if u, err := os.UserHomeDir(); err == nil {
-		home = u
-	} else if usr, err := user.Current(); err == nil {
-		home = usr.HomeDir
-	}
-	return filepath.Join(home, ".claude", "corralai_cache.duckdb")
-}
-
-// cacheDSNOr is the flag's value, or the default when it is blank.
-func cacheDSNOr(flagVal string) string {
+// cacheDSNOr is the flag's value, or the default when it is blank. The default
+// is statedir.CacheDB ($CORRALAI_CACHE_DB, else under the cache root): a cache,
+// not a record. The record is the ledger directory (see defaultLedgerDir); this
+// file held the record too until the ledger entry became the only one, which is
+// why its old name (corralai_scans.duckdb, --record-db, $CORRALAI_SCANS_DB)
+// said "scans". Deleting it costs a re-derivation, never a fact.
+func cacheDSNOr(flagVal string) (string, error) {
 	if v := strings.TrimSpace(flagVal); v != "" {
-		return v
+		return v, nil
 	}
-	return defaultCacheDSN()
+	return statedir.PathForWrite(statedir.CacheDB)
 }
 
 // killRatePtr converts a possibly-NaN kill rate into the *float64 form

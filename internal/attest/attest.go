@@ -25,6 +25,18 @@ type KeyPair struct {
 	Pub  ed25519.PublicKey
 }
 
+// ParseKeySeed decodes a brain key file's contents (a base64 Ed25519 seed).
+// Shared by LoadOrCreateKey and `corral state migrate`, which must read a key
+// without any chance of creating one.
+func ParseKeySeed(raw []byte) (KeyPair, error) {
+	seed, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(raw)))
+	if err != nil || len(seed) != ed25519.SeedSize {
+		return KeyPair{}, fmt.Errorf("attest: bad brain key seed")
+	}
+	priv := ed25519.NewKeyFromSeed(seed)
+	return KeyPair{Priv: priv, Pub: priv.Public().(ed25519.PublicKey)}, nil
+}
+
 // LoadOrCreateKey loads or generates a brain Ed25519 keypair. Priority:
 //  1. seedB64 (base64-encoded 32-byte seed, e.g. from env)
 //  2. keyFile on disk (same base64 format, may have trailing newline)
@@ -36,12 +48,7 @@ func LoadOrCreateKey(seedB64, keyFile string) (KeyPair, error) {
 		}
 	}
 	if seedB64 != "" {
-		seed, err := base64.StdEncoding.DecodeString(strings.TrimSpace(seedB64))
-		if err != nil || len(seed) != ed25519.SeedSize {
-			return KeyPair{}, fmt.Errorf("attest: bad brain key seed")
-		}
-		priv := ed25519.NewKeyFromSeed(seed)
-		return KeyPair{Priv: priv, Pub: priv.Public().(ed25519.PublicKey)}, nil
+		return ParseKeySeed([]byte(seedB64))
 	}
 	// generate + persist
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)

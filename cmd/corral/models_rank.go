@@ -9,6 +9,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
 	"sort"
 	"strings"
 	"text/tabwriter"
@@ -20,6 +21,7 @@ import (
 	"github.com/pdbethke/corralai/internal/modelrank"
 	"github.com/pdbethke/corralai/internal/models"
 	"github.com/pdbethke/corralai/internal/review"
+	"github.com/pdbethke/corralai/internal/statedir"
 )
 
 // rankEvidence is one store's worth of already-attributed outcomes, plus a
@@ -434,7 +436,11 @@ func defaultRankLoader(dsn string) (rankEvidence, error) {
 		}
 		return ev, nil
 	}
-	store, err := bugcatch.Open(localBugCatchDBPath())
+	bugCatchPath, err := statedir.PathForWrite(statedir.BugCatchDB)
+	if err != nil {
+		return rankEvidence{}, err
+	}
+	store, err := bugcatch.Open(bugCatchPath)
 	if err != nil {
 		if strings.Contains(err.Error(), "Conflicting lock is held") {
 			return rankEvidence{}, fmt.Errorf("the bug-catching ledger is held by the running brain — stop it, or point --db at a pushed warehouse")
@@ -446,11 +452,8 @@ func defaultRankLoader(dsn string) (rankEvidence, error) {
 	// scorecard's C-PREC column: without it the critic seat has no scored
 	// rows, which is honest, while refusing the whole ranking over one seat
 	// would not be.
-	var critic *criticscore.Store
-	if cs, cerr := criticscore.Open(localCriticScoreDBPath()); cerr == nil {
-		critic = cs
-		defer func() { _ = cs.Close() }()
-	}
+	critic, closeCritic := openCriticStoreBestEffort("corral models rank", os.Stderr)
+	defer closeCritic()
 	return bugcatchRankEvidence(ctx, store, critic)
 }
 

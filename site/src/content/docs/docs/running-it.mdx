@@ -63,7 +63,7 @@ local OS user.
 
 `corral certify --local` feeds all of this itself: each run appends to the
 local bug-catching store, the critic-accuracy store and the writer-seat
-attempts store under `$HOME/.claude` (`CORRALAI_BUGCATCH_DB`,
+attempts store under corral's state directory (`CORRALAI_STATE_DIR` moves it; `CORRALAI_BUGCATCH_DB`,
 `CORRALAI_CRITICSCORE_DB`, `CORRALAI_MUTANT_ATTEMPTS_DB` override the paths),
 with no brain involved. `certify --repo` writes none of them — N
 concurrent audits must not contend on one single-process file — so the

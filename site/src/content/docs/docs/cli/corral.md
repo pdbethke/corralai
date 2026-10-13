@@ -27,6 +27,12 @@ Usage:
                                   $CORRALAI_ADDR. No audit needs it.
   corral secret set|get|list|rm   manage provider keys + tokens in the secure keystore
                                   (env → OS keyring → age-encrypted file; set reads stdin, never argv)
+  corral state paths              print where each corral file lives and which variable moves it
+  corral state migrate [--from DIR] [--dry-run] [--resume]
+                                  move corral's files out of the pre-1.0 location into the
+                                  state and cache directories; prints each key's public key
+                                  before and after, refuses on a conflict or while the daemon
+                                  is running
   corral control seed [flags]     seed one vetted control test into the control-gate store
                                   (--spec-db --owner --goal --target --code-path --test-path --test-file)
   corral certify [<ref>] [--out <file>] [--net=false] [--produced-by a,b] -- <check-cmd>...
@@ -876,6 +882,30 @@ usage: corral secret set|get|list|rm <NAME>  (set reads the value from stdin —
 usage: corral secret set <NAME>  (value read from stdin — never a CLI arg)
 ```
 
+## `corral state` flags
+
+```
+usage: corral state migrate [--from DIR] [--dry-run] [--resume] | corral state paths
+```
+
+## `corral state migrate` flags
+
+```
+Usage of state migrate:
+  -dry-run
+    	print what would move and change nothing
+  -from string
+    	the directory corral's state is in now (default: the pre-statedir location)
+  -resume
+    	adopt database side files already at the destination whose database is still at the source — only after a migration stopped partway; without it they are conflicts
+```
+
+## `corral state paths` flags
+
+```
+usage: corral state paths  (takes no arguments; prints each file's root, name, override variable and resolved path)
+```
+
 ## `corral ui` flags
 
 ```
@@ -919,7 +949,7 @@ Usage of certify --repo:
   -attest string
     	write the scan's verdict as an in-toto Statement to this file — the receipt a reviewer can verify without trusting the run that produced it. Consumed by GitHub's attestation API (actions/attest), which signs it keylessly through the workflow's own OIDC identity, so the signature chains to the repository and workflow rather than to a key that lived on an ephemeral runner. Carries every file's kill rate, survivors and proven gaps WITH the honesty flags that say what a zero means, the thresholds it was judged against, and the models in each role. When a local signing key is configured (CORRALAI_CERTIFY_KEY_FILE), the same statement is ALSO signed into a DSSE envelope written beside this file as <path>.dsse.json — this plain file is unchanged either way, so actions/attest keeps working exactly as it does today; --transparency uploads the envelope, never this file
   -cache-db string
-    	path to corral's local CACHE — derived goals and instrumented test selections a later scan reuses on identical bytes (default: $CORRALAI_CACHE_DB, else ~/.claude/corralai_cache.duckdb). A cache, not a record: nothing a verdict rests on lives only here; deleting it costs a re-derivation and one coverage run, never a fact
+    	path to corral's local CACHE — derived goals and instrumented test selections a later scan reuses on identical bytes (default: $CORRALAI_CACHE_DB, else $CACHE/corralai_cache.duckdb, see corral state paths). A cache, not a record: nothing a verdict rests on lives only here; deleting it costs a re-derivation and one coverage run, never a fact
   -commit string
     	commit SHA the report is bound to
   -critic-model string
@@ -1022,18 +1052,20 @@ Usage of certify verify:
 
 ```
 
+$STATE and $CACHE are corral's state and cache directories; `corral state paths` prints them.
+
 CORRALAI_ADDR              listen address (default 127.0.0.1:9019)
-CORRALAI_DB                coordination SQLite path (default ~/.claude/corralai_coord.sqlite3)
-CORRALAI_MEMORY_DB         memory DuckDB path (default ~/.claude/corralai_memory.duckdb)
-CORRALAI_RECORDINGS_DB     recordings DuckDB path for scrubbed replay exports (default ~/.claude/corralai_recordings.duckdb)
-CORRALAI_MEMORY_DIR        where new memory entries are written (default ~/.claude/projects/default/memory)
+CORRALAI_DB                coordination SQLite path (default $STATE/corralai_coord.sqlite3)
+CORRALAI_MEMORY_DB         memory DuckDB path (default $STATE/corralai_memory.duckdb)
+CORRALAI_RECORDINGS_DB     recordings DuckDB path for scrubbed replay exports (default $STATE/corralai_recordings.duckdb)
+CORRALAI_MEMORY_DIR        where memory entries are written and indexed (default $STATE/memory)
 CORRALAI_PROJECT_TIERS     optional path->tier rules "substr=tier,substr=tier"; front-matter project: wins, else "default"
 CORRALAI_OIDC_ISSUER       OIDC issuer URL (any OIDC provider: Keycloak, Auth0, Okta, Dex, Authentik, …); empty => AUTH DISABLED (dev)
 CORRALAI_ALLOW_INSECURE    set "1" to allow auth-disabled startup on a non-loopback CORRALAI_ADDR (refused otherwise, H-3)
 CORRALAI_OIDC_AUDIENCE     expected token aud (the client_id)
 CORRALAI_OIDC_CLIENTS      extra trusted clients "issuer|aud,issuer|aud"
 CORRALAI_ALLOWED_PRINCIPALS day-0 SEED of member emails (DB is canonical after; empty => any authenticated)
-CORRALAI_PRINCIPALS_DB     role/allowlist SQLite path (default ~/.claude/corralai_principals.sqlite3)
+CORRALAI_PRINCIPALS_DB     role/allowlist SQLite path (default $STATE/corralai_principals.sqlite3)
 CORRALAI_MEMORY_OWNERS     comma list of emails allowed to read/write memory (empty => any authorized)
 CORRALAI_ALLOWED_HOSTS     comma list of accepted Host headers (default: the brain's domains + localhost)
 CORRALAI_CLIENT_IP_HEADER  trusted real-client-IP header for rate limiting (e.g. CF-Connecting-IP); empty => RemoteAddr
@@ -1044,8 +1076,8 @@ CORRALAI_TLS_CERT / _KEY   serve HTTPS with these PEM files (built-in TLS, no pr
 CORRALAI_TLS_AUTOCERT_DOMAINS  comma list => auto Let's Encrypt certs (needs public reachability)
 CORRALAI_TLS_AUTOCERT_CACHE    cert cache dir (default ~/.cache/corralai-autocert)
 CORRALAI_ADMIN_PRINCIPALS  day-0 SEED of superuser emails (DB is canonical after; `corral createsuperuser` adds more)
-CORRALAI_GATEWAY_DB        MCP-gateway registry SQLite path (default ~/.claude/corralai_gateway.sqlite3)
-CORRALAI_ARTIFACTS_DB      fleet skill/hook sync SQLite path (default ~/.claude/corralai_artifacts.sqlite3)
+CORRALAI_GATEWAY_DB        MCP-gateway registry SQLite path (default $STATE/corralai_gateway.sqlite3)
+CORRALAI_ARTIFACTS_DB      fleet skill/hook sync SQLite path (default $STATE/corralai_artifacts.sqlite3)
 CORRALAI_GATEWAY_ALLOWED_HOSTS  hosts the gateway may dial despite the SSRF block (private/internal targets); empty => block all private/loopback
 CORRALAI_MOTHERDUCK                  fleet-sync target: "md:<db>" or a .duckdb path; empty => sync off
 CORRALAI_MOTHERDUCK_TOKEN            MotherDuck token (exported as motherduck_token for md: attach)
@@ -1060,13 +1092,13 @@ CORRALAI_REPO_WORKSPACE    root dir for per-mission working copies (default $TMP
 CORRALAI_REPO_ENABLE       set "1" to enable the repo engine even without a token (anonymous / GitHub Apps token flow)
 CORRALAI_REVIEW_POLL_SEC   how often (seconds) the brain polls open PRs for CHANGES_REQUESTED reviews (default 60)
 CORRALAI_BRAIN_KEY         base64-encoded Ed25519 seed (32 bytes) for cross-swarm brain identity; takes priority over key file
-CORRALAI_BRAIN_KEY_FILE    path to persist the brain key seed (default ~/.claude/corralai_brain_key); created 0600 on first run
+CORRALAI_BRAIN_KEY_FILE    path to persist the brain key seed (default $STATE/corralai_brain_key); created 0600 on first run
 CORRALAI_BRAIN_PEERS       optional allowlist "brain_id:pubB64" entries (comma or newline separated); empty => TOFU mode
-CORRALAI_LEARN_DB          learning-loop proposals SQLite path (default ~/.claude/corralai_learn.sqlite3)
+CORRALAI_LEARN_DB          learning-loop proposals SQLite path (default $STATE/corralai_learn.sqlite3)
 CORRALAI_LEARN_SWEEP_SECONDS  how often (seconds) the learn sweep clusters findings/lessons into proposals (default 60)
-CORRALAI_BUILD_DB          `corral certify` signed build-record ledger DuckDB path (default ~/.claude/corralai_build.duckdb)
+CORRALAI_BUILD_DB          `corral certify` signed build-record ledger DuckDB path (default $STATE/corralai_build.duckdb)
 CORRALAI_CERTIFY_KEY       hex-encoded Ed25519 seed (32 bytes) `corral certify` build attestations are signed with; takes priority over key file
-CORRALAI_CERTIFY_KEY_FILE  path to persist the certify signing key seed (default ~/.claude/corralai_certify_key); created 0600 on first run
+CORRALAI_CERTIFY_KEY_FILE  path to persist the certify signing key seed (default $STATE/corralai_certify_key); created 0600 on first run
 CORRALAI_BRAIN_TOKEN       `corral certify`'s bearer token to authenticate to a brain (via `corral secret set`); distinct
                            from CORRALAI_BRAIN_KEY above (that's an Ed25519 IDENTITY SEED, not a bearer token — do not reuse it)
 CORRALAI_REKOR_URL         Sigstore Rekor instance report_build anchors signed build attestations to (default https://rekor.sigstore.dev);
@@ -1085,7 +1117,7 @@ CORRALAI_GATE_POLICY_<NAME> repo merge gate: ONE policy per variable, "repo=owne
                            no such variable => the repo gate is OFF (no poller starts); GitHub-only for v1.
                            Replaces CORRALAI_GATE_POLICIES, which is REFUSED: its ";" separator collided with
                            commands containing ";"
-CORRALAI_GATE_DB           repo gate dedupe/index store DuckDB path (default ~/.claude/corralai_gate.duckdb)
+CORRALAI_GATE_DB           repo gate dedupe/index store DuckDB path (default $STATE/corralai_gate.duckdb)
 CORRALAI_GATE_POLL_SECONDS how often (seconds) the repo gate polls covered repos for new PR heads (default 120)
 CORRALAI_GATE_EXEC_BACKEND / _EXEC_UNSAFE_HOST  same jail backend used by the independent verify-gate (see below);
                            the repo gate reuses it — a missing backend disables the repo gate too, loudly, never unsandboxed
@@ -1093,12 +1125,12 @@ CORRALAI_CONTROL_GATE     control gate: ";"-separated "repo=owner/name,owner=<pr
                           — owner= MUST equal the control owner's authenticated principal (the identity they
                           author controls under), else the gate finds no vetted controls
                            — runs the owner's VETTED tests against PR heads, posts corral/control-gate
-CORRALAI_CONTROL_GATE_SPEC_DB  control-gate vetted-tests store (default ~/.claude/corralai_control_spec.duckdb)
-CORRALAI_CONTROL_GATE_DB       control-gate dedupe/index store (default ~/.claude/corralai_control_gate.duckdb)
+CORRALAI_CONTROL_GATE_SPEC_DB  control-gate vetted-tests store (default $STATE/corralai_control_spec.duckdb)
+CORRALAI_CONTROL_GATE_DB       control-gate dedupe/index store (default $STATE/corralai_control_gate.duckdb)
 CORRALAI_CONTROL_GATE_POLL_SECONDS  how often the control gate polls for new PR heads (default 120)
 CORRALAI_BUGCATCH_DB       adversarial pool's bug-catching scorecard store DuckDB path
-                           (default ~/.claude/corralai_bugcatch.duckdb); also read by `corral scorecard`
+                           (default $STATE/corralai_bugcatch.duckdb); also read by `corral scorecard`
 CORRALAI_CRITICSCORE_DB    adversarial pool's critic-accuracy store DuckDB path (default
-                           ~/.claude/corralai_criticscore.duckdb); the scorecard's C-PREC column and
+                           $STATE/corralai_criticscore.duckdb); the scorecard's C-PREC column and
                            `corral criticscore` read it over the API — see CORRAL_BRAIN below
 ```

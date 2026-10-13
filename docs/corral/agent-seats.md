@@ -130,11 +130,25 @@ agent started, a shell wrapper's children included. That takes it out of the
 terminal's foreground group, so corral forwards the interrupt itself: Ctrl-C
 or SIGTERM kills every live agent seat's process group at once, and no further
 agent call is started in that run. This holds in every verb, including
-`review`, which has no other signal handling. An interrupted run records
-nothing: no review entry, no verdict, no exclusion, no push, and it exits
-non-zero saying it was interrupted. When no agent is running, Ctrl-C means
-what it always did. A signal the process was started ignoring (`nohup`, for
-SIGINT under some shells) stays ignored. SIGHUP is not forwarded.
+`review`, which has no other signal handling.
+
+**An interrupted run records nothing**, whatever its seats are (API models
+included): `certify --repo`, `certify --local` and `review` write no ledger
+entry, signed verdict, attestation or push, label no file as failed, and exit
+1 with `interrupted — nothing recorded`. That includes a signal that lands
+after the last model call, right before the writes. When no agent is running,
+Ctrl-C otherwise means what it always did.
+
+A signal the process was started ignoring stays ignored: neither corral's own
+handler nor the agent forwarding registers it. (A shell running a background
+job without job control starts it with SIGINT ignored, for example; `nohup`
+ignores SIGHUP.)
+
+SIGHUP is not forwarded, and corral does not catch it. A terminal or SSH
+hangup therefore kills corral by default, as it always has. An agent CLI in
+its own process group does not receive that hangup; it dies on its next
+write to the pipe corral held, or at its own timeout. Run long audits under
+`tmux`, `screen` or `nohup` if a dropped session must not end them.
 
 ## Concurrency
 

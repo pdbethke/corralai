@@ -65,11 +65,18 @@ history of any release, `git log v0.3.4..v0.3.5`.
 - **Smaller fixes.** certify and review now compare seats the same way,
   ignoring case. A pin starting with `-` is refused. A timed-out agent call
   kills the whole process group, and Ctrl-C (or SIGTERM) kills every live
-  agent seat's group and starts no new agent call, in every verb; an
-  interrupted run records nothing and exits non-zero. The `--version` probe has a 10s bound.
-  `review` records the verifier's tokens when its reply does not parse.
-  `certify` says when an operator agent's vendor cannot be told. The public
-  warehouse's `bug_catches` extract leaves out unpinned agent seats.
+  agent seat's group and starts no new agent call, in every verb. The
+  `--version` probe has a 10s bound. `review` records the verifier's tokens
+  when its reply does not parse. `certify` says when an operator agent's
+  vendor cannot be told. The public warehouse's `bug_catches` extract leaves
+  out unpinned agent seats.
+- **An interrupted run records nothing**, for every seat type. Before,
+  `certify --repo` stamped the stopped file `executor-error` and still wrote
+  its ledger entry, attestation and push, and an interrupted `certify` could
+  bank what it had measured as a timed-out verdict. Now `certify --repo`,
+  `certify --local` and `review` write nothing, label nothing, and exit 1 with
+  `interrupted — nothing recorded`. A process started with SIGINT ignored
+  keeps ignoring it.
 - **One-time cache miss.** `reposcan.VerdictGeneration` is now 19 (it was 17
   earlier in this release). Every verdict cached before this change is
   re-measured once.

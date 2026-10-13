@@ -5,6 +5,7 @@ package adequacy
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -31,19 +32,19 @@ func TestDarwinBoundariesNeverBindAMacOSSystemTree(t *testing.T) {
 		if tc.want != "" && got != tc.want {
 			t.Errorf("darwin toolchainRoot(%q) = %q, want %q", tc.bin, got, tc.want)
 		}
-		if bounds[got] && got != "" {
+		if bounds.has(got) && got != "" {
 			t.Errorf("darwin toolchainRoot(%q) = %q, a boundary the jail must never bind", tc.bin, got)
 		}
 	}
 	for _, b := range []string{"/private", "/private/var", "/private/var/folders", "/private/tmp", "/private/etc",
 		"/Users", "/Library", "/System", "/Applications", "/Volumes"} {
-		if !bounds[b] {
+		if !bounds.has(b) {
 			t.Errorf("%s is not a darwin boundary: a toolchain under it would bind all of it", b)
 		}
 	}
 	// Linux is unchanged: none of the macOS trees is a Linux boundary.
 	for _, b := range []string{"/private", "/Users", "/Library"} {
-		if toolchainBoundariesFor("linux")[b] {
+		if toolchainBoundariesFor("linux").has(b) {
 			t.Errorf("%s leaked into the linux boundaries", b)
 		}
 	}
@@ -60,8 +61,99 @@ func TestDarwinPerUserTempIsABoundary(t *testing.T) {
 	if got := toolchainRootIn(bounds, tmp+"/rust/bin/cargo"); got != tmp+"/rust" {
 		t.Errorf("toolchainRoot under the per-user temp = %q, want %q", got, tmp+"/rust")
 	}
-	if got := toolchainRootIn(bounds, "/private/var/folders/ab/cdef/C/x/bin/y"); got == "/private/var/folders/ab" || got == "/private/var/folders/ab/cdef" {
-		t.Errorf("bound %q: the hash bucket or the operator's whole per-user tree", got)
+	// The per-user tree's other children (C: caches, 0: per-user system
+	// data, X: code-signing clones) are boundaries too: a toolchain in
+	// one binds its own directory, never the whole cache.
+	for _, sib := range []string{"C", "0", "X"} {
+		d := "/private/var/folders/ab/cdef/" + sib
+		if got := toolchainRootIn(bounds, d+"/x/bin/y"); got != d+"/x" {
+			t.Errorf("toolchainRoot under %s = %q, want %q", d, got, d+"/x")
+		}
+	}
+}
+
+// TestDarwinBoundariesFoldCase: APFS is case-insensitive by default, so a
+// PATH entry spelled /library/x/bin resolves to a real binary whose path is
+// spelled that way — and SBPL matches it case-insensitively too. The darwin
+// boundaries must catch a mis-cased spelling exactly as the real one: the
+// root is /library/x, never /library (which the sandbox would read as
+// /Library, keychains included). Linux stays case-sensitive.
+func TestDarwinBoundariesFoldCase(t *testing.T) {
+	t.Setenv("HOME", "/Users/op")
+	t.Setenv("TMPDIR", "/private/var/folders/ab/cdef/T")
+	darwin := toolchainBoundariesFor("darwin")
+	for _, tc := range []struct{ bin, want string }{
+		{"/library/x/bin/tool", "/library/x"},
+		{"/LIBRARY/Frameworks/P/bin/python3", "/LIBRARY/Frameworks"},
+		{"/users/shared/t/bin/x", "/users/shared"},
+		{"/PRIVATE/tmp/rust/bin/cargo", "/PRIVATE/tmp/rust"},
+		{"/users/OP/.asdf/installs/go/bin/go", "/users/OP/.asdf"},
+		{"/Private/Var/Folders/ab/CDEF/c/x/bin/y", "/Private/Var/Folders/ab/CDEF/c/x"},
+	} {
+		if got := toolchainRootIn(darwin, tc.bin); got != tc.want {
+			t.Errorf("darwin toolchainRoot(%q) = %q, want %q", tc.bin, got, tc.want)
+		}
+	}
+	for _, b := range []string{"/library", "/USERS", "/users/op", "/Private/Var"} {
+		if !darwin.has(b) {
+			t.Errorf("darwin: %q is not recognized as a boundary", b)
+		}
+	}
+	linux := toolchainBoundariesFor("linux")
+	if linux.has("/HOME") || linux.has("/Usr") {
+		t.Error("linux boundaries must stay case-sensitive")
+	}
+	if got := toolchainRootIn(linux, "/Home/op/x/bin/y"); got != "/Home" {
+		t.Errorf("linux toolchainRoot(/Home/op/x/bin/y) = %q, want /Home (case-sensitive, unchanged)", got)
+	}
+}
+
+// TestDarwinHomeNarrowingFoldsCase: on darwin a mis-cased spelling of $HOME
+// (/users/op for /Users/op) is still the home, so ~/.config is refused and
+// ~/.local narrows to bin/ whatever case the home was spelled in.
+func TestDarwinHomeNarrowingFoldsCase(t *testing.T) {
+	t.Setenv("HOME", "/Users/op")
+	if _, refused := narrowHomeRootOn("darwin", "/users/op/.config/gh/bin/x", "/users/op/.config"); refused == "" {
+		t.Error("darwin: /users/op/.config was not refused — a mis-cased home escaped narrowing")
+	}
+	if narrowed, _ := narrowHomeRootOn("darwin", "/users/op/.local/bin/pytest", "/users/op/.local"); narrowed != "/users/op/.local/bin" {
+		t.Errorf("darwin: /users/op/.local narrowed to %q, want /users/op/.local/bin", narrowed)
+	}
+	if _, refused := narrowHomeRootOn("linux", "/users/op/.config/gh/bin/x", "/users/op/.config"); refused != "" {
+		t.Error("linux: a differently-cased path is a different directory and is not the home")
+	}
+}
+
+// TestMisCasedPathOnTheRealFilesystem: end to end on a case-insensitive
+// volume (macOS's default APFS): a PATH entry that spells the cargo home's
+// bin/ in another case must still bind bin/ alone, never the cargo home with
+// its registry token, and never the home.
+func TestMisCasedPathOnTheRealFilesystem(t *testing.T) {
+	home := resolvedTempDir(t)
+	layout(t, home, map[string]string{
+		".cargo/bin/cargo-nextest": "#!/bin/sh\n",
+		".cargo/config.toml":       "[registries.priv]\ntoken = \"secret\"\n",
+		".config/gh/hosts.yml":     "token\n",
+	})
+	upper := strings.ToUpper(home)
+	if _, err := os.Stat(filepath.Join(upper, ".CARGO", "BIN", "CARGO-NEXTEST")); err != nil {
+		t.Skipf("the filesystem under %s is case-sensitive; this test needs a case-insensitive volume (macOS APFS default)", home)
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("CARGO_HOME", "")
+	t.Setenv("PATH", filepath.Join(upper, ".CARGO", "BIN")+":/usr/bin:/bin")
+	binds, err := toolchainBindsFor("cargo-nextest")
+	if err != nil {
+		t.Fatalf("cargo-nextest: %v", err)
+	}
+	for _, b := range binds {
+		lb := strings.ToLower(b.Host)
+		if lb != strings.ToLower(filepath.Join(home, ".cargo", "bin")) {
+			t.Errorf("bind %s: a mis-cased PATH widened the bind beyond the cargo home's bin/ (binds %+v)", b.Host, binds)
+		}
+	}
+	if len(binds) != 1 {
+		t.Errorf("binds = %+v, want exactly the cargo home's bin/", binds)
 	}
 }
 

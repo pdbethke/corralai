@@ -69,7 +69,7 @@ func killRatePtr(v float64) *float64 {
 //     enumerate-level reasons (no-language, is-test, no-paired-test,
 //     ambiguous-test, not-regular-file) and the candidate-level ones added
 //     before job emission (ungoaled, source-too-large, derive-failed,
-//     not-selected). These are decided by filename pairing or bookkeeping,
+//     derive-budget-exhausted, not-selected). These are decided by filename pairing or bookkeeping,
 //     never by running anything, so evidence is "paired" for the ones a
 //     pairing was actually ATTEMPTED for and "" for the ones rejected before
 //     its pairing candidates were derived (see exclusionEvidence, which used to stamp

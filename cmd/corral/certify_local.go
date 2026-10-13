@@ -1295,6 +1295,13 @@ func resolveAuditRoles(in localAuditInput, stderr io.Writer) (auditRoles, error)
 		fmt.Fprintf(stderr, "%s: decorrelation: test-writer (%s) and test-critic (%s) are different models from the SAME provider (%s) — the critic is an independent MODEL but not an independent VENDOR. Point one seat at another provider for a cross-vendor read.\n",
 			orDefault(in.cmdName, "corral certify --local"), writer, critic, v)
 	}
+	// The spec's other half of that disclosure: a seat whose vendor corral
+	// cannot tell makes the check above silent, and silence reads as "two
+	// vendors". Said once, naming the seat(s).
+	if seats := untellableAgentSeats(in.seatProviders, writer, critic); len(seats) > 0 {
+		fmt.Fprintf(stderr, "%s: decorrelation: the vendor of %s cannot be told — an operator-defined agent declares no maker and corral will not guess — so the same-vendor check could not compare it.\n",
+			orDefault(in.cmdName, "corral certify --local"), strings.Join(seats, " and "))
+	}
 
 	// Require a provider key for whatever the operator actually named. There
 	// are no default models, so nothing here assumes a vendor: the backend a

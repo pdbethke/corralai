@@ -250,3 +250,31 @@ func TestReviewRefusesAMissingAgentBinaryUpFront(t *testing.T) {
 		t.Fatalf("want exit 2 naming the missing binary, got exit %d\nstdout=%s\nstderr=%s", code, out.String(), errb.String())
 	}
 }
+
+// An unpinned operator agent has no declared maker, so the same-vendor check
+// cannot compare it. That is said, once, rather than left as a silence that
+// reads like "different vendors".
+func TestSameVendorCheckSaysWhenAnOperatorAgentsVendorCannotBeTold(t *testing.T) {
+	noKeys(t)
+	fakeBuiltinBinaries(t)
+	fakeAgent(t, "mine", "{}")
+	var warn bytes.Buffer
+	if _, err := resolveAuditRoles(localAuditInput{
+		mutantModel: "codex", writerModel: "mine", criticModel: "codex", shadowModel: "off",
+	}, &warn); err != nil {
+		t.Fatal(err)
+	}
+	if n := strings.Count(warn.String(), "cannot be told"); n != 1 || !strings.Contains(warn.String(), `"mine"`) {
+		t.Fatalf("want one line naming the agent whose vendor cannot be told, got:\n%s", warn.String())
+	}
+	// A pinned operator agent on a known model has a vendor: no such line.
+	warn.Reset()
+	if _, err := resolveAuditRoles(localAuditInput{
+		mutantModel: "codex", writerModel: "mine:claude-sonnet-5", criticModel: "codex", shadowModel: "off",
+	}, &warn); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(warn.String(), "cannot be told") {
+		t.Fatalf("a pinned seat's vendor is known:\n%s", warn.String())
+	}
+}

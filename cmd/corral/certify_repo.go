@@ -1153,7 +1153,8 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// double-counts files:
 	//   - Enumerate's exclusions are files that are NOT candidates at all
 	//     (no-language / is-test / no-paired-test).
-	//   - not-selected / ungoaled / derive-failed / source-too-large name
+	//   - not-selected / ungoaled / derive-failed / derive-budget-exhausted /
+	//     source-too-large name
 	//     CANDIDATES — they are already inside len(cands).
 	// So the file total is candidates + ENUMERATE-only exclusions. Counting
 	// len(excl) after the appends added every such path a second time and
@@ -3064,7 +3065,8 @@ func goModulePath(repoDir string) (string, error) {
 // excluded for a truthful reason instead). enumOnlyExcl MUST be Enumerate's
 // own exclusions, widened by evidence, only
 // (excl[:enumExcl] in runCertifyRepo) — later-appended reasons
-// (not-selected/ungoaled/derive-failed/source-too-large) describe candidates
+// (not-selected/ungoaled/derive-failed/derive-budget-exhausted/
+// source-too-large) describe candidates
 // already counted via cands, and re-detecting their language here would be
 // redundant, not wrong, but the caller passes the narrower slice anyway to
 // keep the two exclusion universes (Enumerate-level vs candidate-level) from

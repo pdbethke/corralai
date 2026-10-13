@@ -246,6 +246,27 @@ func sharedSeatProvider(providers map[string]string, writer, critic string) stri
 	return pw
 }
 
+// untellableAgentSeats are the graded seats sharedSeatProvider cannot judge:
+// agent seats with no declared provider and no vendor corral can infer — an
+// operator's own agent, unpinned (or pinned to a model no prefix names). Its
+// command is theirs, so corral does not know what it runs and will not guess.
+// Returned so the caller can SAY so: sharedSeatProvider answering "" for
+// these reads exactly like "two different vendors", which is not known.
+func untellableAgentSeats(providers map[string]string, writer, critic string) []string {
+	writer, critic = strings.TrimSpace(writer), strings.TrimSpace(critic)
+	if writer == "" || critic == "" || strings.EqualFold(critic, "off") {
+		return nil
+	}
+	var out []string
+	for _, s := range []struct{ role, spec string }{{advpool.RoleTestWriter, writer}, {advpool.RoleTestCritic, critic}} {
+		if !isAgentSeat(s.spec) || seatProvider(providers, s.role, s.spec) != "" {
+			continue
+		}
+		out = append(out, fmt.Sprintf("%s (%q)", s.role, s.spec))
+	}
+	return out
+}
+
 // seatProvider prefers the DECLARED provider (registry data) over the vendor
 // inferred from a model name. The declaration is the operator's own statement;
 // the inference is a substring guess that cannot see a gateway or a local

@@ -19,6 +19,7 @@ import (
 	"github.com/pdbethke/corralai/internal/agentbackend"
 	"github.com/pdbethke/corralai/internal/auditpush"
 	"github.com/pdbethke/corralai/internal/certify"
+	"github.com/pdbethke/corralai/internal/clip"
 	"github.com/pdbethke/corralai/internal/review"
 )
 
@@ -285,18 +286,23 @@ func runReviewRun(args []string, stdout, stderr io.Writer) int {
 			{Role: "system", Content: review.VerifierBriefSystem},
 			{Role: "user", Content: vturn},
 		}, nil)
+		if verr == nil {
+			// The call answered, so it was made and spent, whether or not
+			// its reply parses below: an unverified review must not read
+			// cheaper than it was.
+			addReviewUsage(&r, vreply.Usage)
+		}
 		if verr != nil {
 			fmt.Fprintf(stderr, "corral review: the verifier seat failed: %v — the review is recorded unverified\n", verr)
 		} else if vopinion, refs, perr := review.ParseRefutations(vreply.Content, *verifier); perr != nil {
 			fmt.Fprintf(stderr, "corral review: %v — the review is recorded unverified\n--- the reply, verbatim ---\n%s\n", perr, vreply.Content)
 		} else {
-			addReviewUsage(&r, vreply.Usage)
 			// A verifier that answered with no verdict on any finding has
 			// not verified anything, and the record must not read as if
 			// it had: its reply is kept, marked, and every finding is
 			// graded as unverified.
 			if len(refs) == 0 && len(r.Findings) > 0 {
-				vopinion = "(the verifier returned no verdicts on any finding; its reply, verbatim: " + tail(vreply.Content, 2000) + ")"
+				vopinion = "(the verifier returned no verdicts on any finding; its reply, verbatim: " + clip.Tail(vreply.Content, 2000) + ")"
 				fmt.Fprintf(stderr, "corral review: the verifier %s returned no verdict on any of %d finding(s) — the review is recorded with its reply, unverified\n", *verifier, len(r.Findings))
 			}
 			r.VerifierTool = verifierTool
@@ -455,7 +461,8 @@ func addReviewUsage(r *review.Review, u agentbackend.Usage) {
 }
 
 // toolNote renders an agentic seat's tool version beside its name. certify's
-// models line and its verdict cache key (seatKeyName) spell a seat the same
+// models line and its verdict cache key (seatToolProbe.keyName, via
+// modelSetKeyWith) spell a seat the same
 // way.
 func toolNote(v string) string {
 	if v == "" {
@@ -596,13 +603,6 @@ func printReview(w io.Writer, r review.Review, adj map[string]auditpush.Adjudica
 // an envelope that does not belong to this statement must not survive it.
 func writeReviewStatement(path string, r review.Review) (sha, envPath string, signErr, err error) {
 	return writeStatement(path, certify.BuildReviewAttestation(r))
-}
-
-func tail(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return "…" + s[len(s)-n:]
 }
 
 func indent(s string) string {

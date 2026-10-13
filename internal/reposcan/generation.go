@@ -145,7 +145,8 @@ package reposcan
 // an unpinned agent seat so per-model analysis leaves it out. A shape change,
 // so shape and generation move together: a cached "18" verdict would
 // unmarshal SeatTools as nil and read an agent seat as an API one. (The cache
-// key ALSO names an agent seat's tool now — seatKeyName — so a CLI upgrade
+// key ALSO names an agent seat's tool now — seatToolProbe.keyName, via
+// modelSetKeyWith in cmd/corral — so a CLI upgrade
 // re-measures; that alone invalidates nothing for API-only runs.)
 const VerdictGeneration = "19"
 

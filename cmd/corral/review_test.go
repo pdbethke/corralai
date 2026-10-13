@@ -355,6 +355,55 @@ func TestReviewSaysWhenTheVerifierReturnedNoVerdicts(t *testing.T) {
 	}
 }
 
+// meteredReviewer answers with a fixed reply and reports token usage, as a
+// real seat does whether or not its reply is usable.
+type meteredReviewer struct {
+	reply string
+	usage agentbackend.Usage
+}
+
+func (m meteredReviewer) Chat([]agentbackend.Message, []any) (agentbackend.Message, error) {
+	return agentbackend.Message{Role: "assistant", Content: m.reply, Usage: m.usage}, nil
+}
+
+// A verifier whose reply does not parse still made a call and still spent its
+// tokens. The record counts them: dropping them would make an unverified
+// review read cheaper than it was.
+func TestReviewRecordsTheVerifiersTokensWhenItsReplyDoesNotParse(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "test-placeholder-not-a-real-key")
+	root := t.TempDir()
+	gitRun := gitCmd(t, root)
+	mustWrite(t, filepath.Join(root, "pkg", "a.go"), "package pkg\n")
+	gitRun("init", "-q")
+	gitRun("add", ".")
+	gitRun("commit", "-q", "-m", "base", "--no-gpg-sign")
+	orig := newReviewerBackend
+	t.Cleanup(func() { newReviewerBackend = orig })
+	newReviewerBackend = func(model, _ string) (agentbackend.Backend, error) {
+		if model == "rev" {
+			return meteredReviewer{reply: `{"opinion":"o","findings":[{"claim":"c","tier":"CODE-READ","file":"pkg/a.go","line":1}],"sound":[]}`,
+				usage: agentbackend.Usage{InputTokens: 100, OutputTokens: 10}}, nil
+		}
+		return meteredReviewer{reply: "not json at all", usage: agentbackend.Usage{InputTokens: 70, OutputTokens: 7}}, nil
+	}
+	ledger := filepath.Join(t.TempDir(), "ledger")
+	var out, errb bytes.Buffer
+	if code := runReview([]string{"--repo", root, "--scope", "pkg", "--reviewer-model", "rev", "--verifier-model", "ver", "--ledger", ledger}, &out, &errb); code != 0 {
+		t.Fatalf("exit %d: %s", code, errb.String())
+	}
+	if !strings.Contains(errb.String(), "recorded unverified") {
+		t.Fatalf("the verifier's reply must fail to parse in this test: %s", errb.String())
+	}
+	entries, err := auditpush.ReadLedgerDir(ledger)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("ledger: %d entries, %v", len(entries), err)
+	}
+	r := entries[0].Review
+	if r.Calls != 2 || r.InputTokens != 170 || r.OutputTokens != 17 {
+		t.Fatalf("record: calls %d, in %d, out %d; want 2 calls, 170 in, 17 out (the verifier's spend included)", r.Calls, r.InputTokens, r.OutputTokens)
+	}
+}
+
 // TestReviewPlanProposesAndCountsFixBatches: over a git fixture with two
 // scopes, one reviewed (a finding that held) and then changed, the plan
 // ranks the never-reviewed scope first, counts the changed files since

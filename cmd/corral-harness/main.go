@@ -49,6 +49,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/pdbethke/corralai/internal/agentrole"
+	"github.com/pdbethke/corralai/internal/clip"
 )
 
 // announceHost registers this bee's model with the brain DETERMINISTICALLY, on a
@@ -287,7 +288,7 @@ func main() {
 		out, err := cmd.Output()
 		cancel()
 		text := strings.TrimSpace(string(out))
-		fmt.Printf("[%s/%s] r%d (%s): %s\n", name, role, round, time.Since(start).Round(time.Second), tail(text, 400))
+		fmt.Printf("[%s/%s] r%d (%s): %s\n", name, role, round, time.Since(start).Round(time.Second), clip.Tail(text, 400))
 		if err != nil {
 			fmt.Printf("[%s/%s] harness exit: %v — backing off %s\n", name, role, err, idle)
 			time.Sleep(idle)
@@ -298,11 +299,4 @@ func main() {
 		}
 	}
 	fmt.Printf("[%s/%s] done.\n", name, role)
-}
-
-func tail(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return "…" + s[len(s)-n:]
 }

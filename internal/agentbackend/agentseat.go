@@ -13,6 +13,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/pdbethke/corralai/internal/clip"
 )
 
 // Agentic seats: a coding agent as the reviewer or the verifier. The seat
@@ -476,7 +478,7 @@ func (a agentBackend) Chat(messages []Message, tools []any) (Message, error) {
 	// would record a measured free call.
 	u.Unmetered = !metered
 	if runErr != nil {
-		tail := tailOf(strings.TrimSpace(stderr.String()), 800)
+		tail := clip.Tail(strings.TrimSpace(stderr.String()), 800)
 		if errors.Is(perr, ErrSeatEnvironment) {
 			return Message{Usage: u}, fmt.Errorf("%s: %w (%v): %s", a.name, perr, runErr, tail)
 		}
@@ -672,13 +674,4 @@ func splitWords(s string) ([]string, error) {
 		words = append(words, cur.String())
 	}
 	return words, nil
-}
-
-// tailOf keeps the last n bytes of s, for error text. oneline's head-truncating
-// shape does not fit: the end of an agent's stderr is where it says why it died.
-func tailOf(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return "…" + s[len(s)-n:]
 }

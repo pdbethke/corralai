@@ -23,6 +23,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pdbethke/corralai/internal/clip"
 	"github.com/pdbethke/corralai/internal/treedirs"
 )
 
@@ -298,7 +299,7 @@ func Reproduce(ctx context.Context, rep Reproducer, r *Review) {
 			continue
 		}
 		out, code, err := rep.Run(ctx, f.Script)
-		f.Stdout = tail(out, 4000)
+		f.Stdout = clip.Tail(out, 4000)
 		if err != nil {
 			// Not demonstrated — but not disproved either: nothing ran.
 			f.Tier, f.Unrun = TierCodeRead, err.Error()
@@ -310,13 +311,6 @@ func Reproduce(ctx context.Context, rep Reproducer, r *Review) {
 			f.Tier, f.Demoted = TierCodeRead, fmt.Sprintf("the script exited %d — it did not demonstrate the claim", code)
 		}
 	}
-}
-
-func tail(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return "…" + s[len(s)-n:]
 }
 
 // reply is the JSON shape the brief asks the reviewer for.

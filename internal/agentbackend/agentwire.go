@@ -33,6 +33,12 @@ import (
 // broken — as distinct from anything the model did. A caller that scores
 // models must never charge one of these to the model (the fifth review found
 // a 429 on the writer path charged to the model).
+//
+// Today the sentinel is ADVISORY: no consumer reads it. A seat failure is kept
+// off the model's record because runOneTask (cmd/corral/certify_local_drive.go)
+// treats EVERY writer or shadow error as a provider failure — sentinel or not —
+// and records the seat as failed rather than measured. If that blanket rule is
+// ever narrowed, this sentinel is what must be read in its place.
 var ErrSeatEnvironment = errors.New("the agent seat's environment failed (login, usage limit, or the CLI itself) — not a model outcome")
 
 type agentWire interface {

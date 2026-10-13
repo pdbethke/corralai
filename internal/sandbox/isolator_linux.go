@@ -59,7 +59,7 @@ func (bwrapIsolator) Wrap(command string, opts Options, env []string) ([]string,
 		}
 	}
 	// The jail's own env pins (HOME, GOTOOLCHAIN, ...): see pinnedEnv.
-	for _, p := range pinnedEnv {
+	for _, p := range pinnedEnv(linuxJailDirs) {
 		argv = append(argv, "--setenv", p.Key, p.Value)
 	}
 	// Minimal read-only root (usrmerged Linux): the command can't read /home or

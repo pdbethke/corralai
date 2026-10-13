@@ -162,7 +162,7 @@ func (c containerIsolator) Wrap(command string, opts Options, env []string) ([]s
 		"--tmpfs", "/home/agent:rw,exec,nosuid,nodev",
 	}
 	// The jail's own env pins (HOME, GOTOOLCHAIN, ...): see pinnedEnv.
-	for _, p := range pinnedEnv {
+	for _, p := range pinnedEnv(linuxJailDirs) {
 		argv = append(argv, "-e", p.Key+"="+p.Value)
 	}
 	for _, kv := range env {

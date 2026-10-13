@@ -97,7 +97,8 @@ func TestPinsCarryTheBackendsOwnDirs(t *testing.T) {
 	}
 	if got["GOTOOLCHAIN"] != "local" {
 		t.Errorf("GOTOOLCHAIN=%q, want local on every backend", got["GOTOOLCHAIN"])
-	}	// The host's system gitconfig is operator configuration: no backend
+	}
+	// The host's system gitconfig is operator configuration: no backend
 	// reads it (bwrap never binds /etc/gitconfig; macOS denies <brew>/etc).
 	if got["GIT_CONFIG_NOSYSTEM"] != "1" {
 		t.Errorf("GIT_CONFIG_NOSYSTEM=%q, want 1 on every backend", got["GIT_CONFIG_NOSYSTEM"])

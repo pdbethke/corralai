@@ -39,7 +39,14 @@ import (
 // a response schema; a definition the operator writes is read as plain text
 // unless it declares a wire, because corral cannot know what it prints.
 // Corral does not confine what the command does; the definition is the
-// operator's, and the record carries it.
+// operator's, and the record carries it — verbatim, in SeatTools, the signed
+// verdict and review's ReviewerTool. So a definition must never carry a
+// credential: reference an environment variable the CLI reads instead.
+//
+// The command inherits corral's whole environment (cmd.Env is never set):
+// the CLI needs PATH, HOME and its own token variables. The cost is that a
+// vendor API key exported for corral's API seats reaches the CLI too, and a
+// CLI that prefers an API key over its subscription login will bill it.
 var builtinAgents = map[string]builtinAgent{
 	// The certify form is COLD: no settings sources (the operator's
 	// CLAUDE.md, memory, hooks), no MCP servers, no slash commands or skills,
@@ -57,11 +64,17 @@ var builtinAgents = map[string]builtinAgent{
 		binary:      "claude",
 		coldCeiling: 5000,
 	},
-	// codex loaded no operator instructions even unflagged (its own agent
-	// prompt is ~14.7k tokens at fixture capture, mostly cached; TestBuiltinSeatsStartCold holds the current figure); --ignore-user-config and
-	// --ignore-rules make that explicit rather than incidental, and
-	// --ephemeral keeps no session. It has no tool switch: --sandbox
-	// read-only is its confinement in every verb.
+	// codex's input for a one-line prompt is its own agent prompt (~14.7k
+	// tokens at fixture capture, mostly cached; TestBuiltinSeatsStartCold
+	// holds the current figure). The measured machine had no codex AGENTS.md,
+	// so that run could not show whether codex would have loaded one;
+	// --ignore-user-config and --ignore-rules make sure it does not, and
+	// --ephemeral keeps no session.
+	//
+	// It has no tool switch: --sandbox read-only is its only confinement, in
+	// every verb. That stops writes, not reads — its shell can still READ the
+	// host filesystem outside {dir}. A certify prompt carries the audited
+	// source, which could carry instructions aimed at the seat.
 	"codex": {
 		def:         "codex exec --json --ignore-user-config --ignore-rules --sandbox read-only --ephemeral --skip-git-repo-check -C {dir} -o {out} {model:-m} -",
 		wire:        "codex-jsonl",
@@ -73,18 +86,24 @@ var builtinAgents = map[string]builtinAgent{
 	// the brief is read in by a shell wrapper; the model pin rides through
 	// "$@" because {model:FLAG} is only substituted as a whole word.
 	//
-	// --dangerously-skip-permissions is load-bearing and weaker than the two
-	// seats above, which are read-only (--tools Read,Grep,Glob; --sandbox
-	// read-only). Headless agy auto-DENIES every tool permission it cannot
-	// prompt for, so without it the seat returns an empty reply and reviews
-	// nothing at all. It runs in a disposable worktree and nothing it does
-	// itself reaches the record — only the scripts it hands back, which
+	// --dangerously-skip-permissions is load-bearing for review and weaker
+	// than the two seats above, which are read-only (--tools Read,Grep,Glob;
+	// --sandbox read-only). Headless agy auto-DENIES every tool permission it
+	// cannot prompt for, so without it a review seat cannot read the tree and
+	// returns an empty reply. It runs in a disposable worktree and nothing it
+	// does itself reaches the record — only the scripts it hands back, which
 	// corral runs. Stated here rather than left to be discovered.
+	//
+	// agy has no tool switch, so {tools:tools} is not passed to it: the
+	// wrapper reads only whether the caller granted ANY tool ($2 non-empty)
+	// and adds the flag then. A certify seat is granted none — its prompt
+	// carries the code — so it runs without the flag, and the auto-deny is
+	// its confinement (unmeasured: antigravity has not been run in certify).
 	//
 	// Its JSON mode has not been measured, so it is a text wire (unmetered)
 	// and has no cold ceiling yet (spec open question 2).
 	"antigravity": {
-		def:    `sh -c 'agy --output-format text --sandbox --dangerously-skip-permissions --print-timeout 15m "$@" -p="$(cat)"' sh {model:--model}`,
+		def:    `sh -c 'skip=; [ -n "$2" ] && skip=--dangerously-skip-permissions; shift 2; exec agy --output-format text --sandbox $skip --print-timeout 15m "$@" -p="$(cat)"' sh {tools:tools} {model:--model}`,
 		wire:   "text",
 		maker:  "google",
 		binary: "agy",
@@ -165,8 +184,13 @@ func agentWireFor(name string, builtin bool) (string, agentWire, error) {
 // AgentSeat splits "claude-code:claude-sonnet-5" into agent name and
 // model; ok is false for an API model name (a spec whose first word names
 // no agent).
+//
+// The agent name is case-insensitive and returned lower-cased: its variable
+// is upper-cased anyway (agentEnvKey), so `MINE` and `mine` are one seat and
+// must compare as one (SameSeat).
 func AgentSeat(spec string) (name, model string, ok bool) {
 	name, model, _ = strings.Cut(strings.TrimSpace(spec), ":")
+	name = strings.ToLower(strings.TrimSpace(name))
 	if _, _, defined := agentDefinition(name); !defined {
 		return "", "", false
 	}
@@ -184,6 +208,18 @@ func SeatModelOf(spec string) string {
 		return model
 	}
 	return strings.TrimSpace(spec)
+}
+
+// SameSeat is the decorrelation comparison, the ONE both doors use: certify's
+// CheckDecorrelation (critic vs writer) and review's verifier vs reviewer.
+// It compares SeatModelOf without regard to case. Agent names are
+// case-insensitive by construction; for a model name, folding case can only
+// refuse a pair a case-sensitive endpoint would have told apart, which is the
+// safe direction for a rule whose failure is a model grading its own work.
+// The two doors used to differ (== against EqualFold), so `MINE` against
+// `mine` was refused by review and let through by certify.
+func SameSeat(a, b string) bool {
+	return strings.EqualFold(SeatModelOf(a), SeatModelOf(b))
 }
 
 // SeatNamesAModel reports whether spec identifies an actual MODEL, or only
@@ -271,7 +307,9 @@ func AgentVersion(name string) string {
 	// version rather than a wrong one, and let the definition speak.
 	version := ""
 	if !isShell(argv[0]) {
-		if out, err := exec.Command(argv[0], "--version").Output(); err == nil { // #nosec G204 -- the operator's own agent binary, as they defined it
+		ctx, cancel := context.WithTimeout(context.Background(), agentVersionTimeout)
+		defer cancel()
+		if out, err := agentCommand(ctx, []string{argv[0], "--version"}).Output(); err == nil {
 			version = strings.TrimSpace(strings.SplitN(string(out), "\n", 2)[0])
 		}
 	}
@@ -281,6 +319,11 @@ func AgentVersion(name string) string {
 	return strings.TrimSpace(version + " [" + def + "]")
 }
 
+// agentVersionTimeout bounds the --version probe: it is provenance for the
+// record, and an agent that hangs on it must not hang the run. A var so a
+// test can shorten it.
+var agentVersionTimeout = 10 * time.Second
+
 // ErrBinaryNotChecked is AgentBinary's answer for an operator definition that
 // wraps its CLI in a shell: the CLI is inside a script corral does not parse,
 // so it cannot say whether it is installed, and says so rather than looking
@@ -288,10 +331,13 @@ func AgentVersion(name string) string {
 var ErrBinaryNotChecked = errors.New("binary not checked (shell-wrapped definition)")
 
 // AgentBinary checks, without running anything, that the agent's CLI can be
-// found: `doctor` needs a free answer to "is it installed" that spends no
-// call. A built-in definition names its real binary (builtinAgent.binary); an
+// found. ForSeat runs it on every agent seat it resolves — so every verb
+// refuses a missing CLI before any jail, store or spend — and `doctor` reports
+// it. A built-in definition names its real binary (builtinAgent.binary); an
 // operator's own definition is checked by its first word, unless that word is
-// a shell, in which case ErrBinaryNotChecked.
+// a shell, in which case ErrBinaryNotChecked, which is NOT a refusal. A
+// binary that is not found is ErrSeatEnvironment: the seat's setup failed,
+// not a model.
 func AgentBinary(name string) error {
 	def, builtin, ok := agentDefinition(name)
 	if !ok {
@@ -312,7 +358,7 @@ func AgentBinary(name string) error {
 		prog = argv[0]
 	}
 	if _, err := exec.LookPath(prog); err != nil {
-		return fmt.Errorf("agent %s: binary %q not found: %v", name, prog, err)
+		return fmt.Errorf("agent seat %s: binary %q not found (%w): %v", name, prog, ErrSeatEnvironment, err)
 	}
 	return nil
 }
@@ -330,7 +376,13 @@ func isShell(prog string) bool {
 // expandAgentArgv substitutes the placeholders. A bare {model} with no
 // pinned model, or a pinned model with no {model} word to carry it, is a
 // refusal by name — corral never guesses what an agent runs.
+//
+// A pin that starts with `-` is refused too: {model:--model} would hand it to
+// the CLI as a flag of its own (`claude-code:--dangerously-skip-permissions`).
 func expandAgentArgv(name string, argv []string, model, dir, out string, tools []string) ([]string, error) {
+	if strings.HasPrefix(model, "-") {
+		return nil, fmt.Errorf("agent %s: the pin %q starts with '-', so it would reach the CLI as a flag, not a model — pin a model name", name, model)
+	}
 	carries := false
 	var expanded []string
 	for _, w := range argv {
@@ -408,7 +460,7 @@ func (a agentBackend) Chat(messages []Message, tools []any) (Message, error) {
 	argv = withWireArgs(argv, extra)
 	ctx, cancel := context.WithTimeout(context.Background(), a.timeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...) // #nosec G204 -- the operator's own agent definition, run in a disposable worktree
+	cmd := agentCommand(ctx, argv)
 	cmd.Dir = dir
 	cmd.Stdin = strings.NewReader(prompt.String())
 	var stdout, stderr bytes.Buffer
@@ -463,6 +515,13 @@ func newAgentSeat(spec string, opt SeatOptions) (Backend, bool, error) {
 	argv, err := splitWords(def)
 	if err != nil {
 		return nil, true, fmt.Errorf("agent %s: %v in its definition %q", name, err, def)
+	}
+	// The CLI must be installed. Checked HERE, where every verb resolves a
+	// seat, so a missing binary refuses the run before any jail, store or
+	// spend instead of surfacing mid-run as a failed writer. A definition
+	// corral cannot check (shell-wrapped) proceeds; doctor says "not checked".
+	if err := AgentBinary(name); err != nil && !errors.Is(err, ErrBinaryNotChecked) {
+		return nil, true, err
 	}
 	if _, err := expandAgentArgv(name, argv, model, dir, "out", opt.Tools); err != nil {
 		return nil, true, err

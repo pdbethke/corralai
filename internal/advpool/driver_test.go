@@ -1796,6 +1796,19 @@ func TestCheckDecorrelation_AgentSeats(t *testing.T) {
 	}
 }
 
+// The same seat spelled in another case is the same seat, at this door as at
+// review's: both go through agentbackend.SameSeat.
+func TestCheckDecorrelation_IgnoresCase(t *testing.T) {
+	t.Setenv("CORRALAI_AGENT_MINE", "/bin/cat {model:--model}")
+	if err := CheckDecorrelation(RoleAssignment{RoleTestWriter: "MINE", RoleTestCritic: "mine"}); err == nil {
+		t.Fatal("MINE + mine are one agent and must be refused")
+	}
+	// review always folded case here; certify compared with ==.
+	if err := CheckDecorrelation(RoleAssignment{RoleTestWriter: "mine:Model-X", RoleTestCritic: "mine:model-x"}); err == nil {
+		t.Fatal("one model spelled in two cases must be refused, as review refuses it")
+	}
+}
+
 // TestCheckDecorrelation_ShadowModelNeverParticipates proves the shadow
 // (challenger) seat cannot trip the decorrelation guard, in either direction:
 // CheckDecorrelation only ever reads assign[RoleTestCritic] and

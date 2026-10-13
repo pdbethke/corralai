@@ -221,6 +221,22 @@ func TestReviewVerifierSeatRefutesByReproductionAndIsDecorrelated(t *testing.T) 
 	}
 }
 
+// The verifier rule is the same comparison certify's critic rule uses
+// (agentbackend.SameSeat): an agent named in another case is the same agent.
+func TestReviewRefusesAVerifierThatIsTheReviewerInAnotherCase(t *testing.T) {
+	root := t.TempDir()
+	gitRun := gitCmd(t, root)
+	mustWrite(t, filepath.Join(root, "pkg", "a.go"), "package pkg\n")
+	gitRun("init", "-q")
+	gitRun("add", ".")
+	gitRun("commit", "-q", "-m", "base", "--no-gpg-sign")
+	t.Setenv("CORRALAI_AGENT_MINE", "/bin/cat {model:--model}")
+	var out, errb bytes.Buffer
+	if code := runReview([]string{"--repo", root, "--scope", "pkg", "--reviewer-model", "MINE", "--verifier-model", "mine", "--no-ledger"}, &out, &errb); code != 2 || !strings.Contains(errb.String(), "reviewer's own model") {
+		t.Fatalf("MINE + mine must be refused as one seat: exit %d %s", code, errb.String())
+	}
+}
+
 // TestReviewAttestSignsTheReproductionsAndTheEntryNamesTheStatement:
 // --attest writes the in-toto statement and its DSSE envelope, the entry
 // written after it carries the statement's hash, `corral verify --attest

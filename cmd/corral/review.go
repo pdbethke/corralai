@@ -152,7 +152,7 @@ func runReviewRun(args []string, stdout, stderr io.Writer) int {
 	// The decorrelation rule, the same one the writer and the critic live
 	// under: a verifier that is the reviewer's own model would grade its
 	// own work. Checked before anything is spent.
-	if strings.TrimSpace(*verifier) != "" && strings.EqualFold(agentbackend.SeatModelOf(*verifier), agentbackend.SeatModelOf(*model)) {
+	if strings.TrimSpace(*verifier) != "" && agentbackend.SameSeat(*verifier, *model) {
 		fmt.Fprintf(stderr, "corral review: --verifier-model %s resolves to the reviewer's own model %s — the verifier must be a different one (nemo iudex in causa sua)\n", *verifier, agentbackend.SeatModelOf(*model))
 		return 2
 	}

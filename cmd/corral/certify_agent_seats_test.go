@@ -36,10 +36,25 @@ func fakeAgent(t *testing.T, name, reply string) string {
 	return def
 }
 
+// fakeBuiltinBinaries puts stand-in executables for the built-in agents' CLIs
+// on PATH: ForSeat refuses a seat whose binary is missing, and a CI runner has
+// none of them. Nothing here runs them.
+func fakeBuiltinBinaries(t *testing.T) {
+	t.Helper()
+	bin := t.TempDir()
+	for _, name := range []string{"claude", "codex", "agy"} {
+		if err := os.WriteFile(filepath.Join(bin, name), []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil { // #nosec G306 -- test fixture must be executable
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
 // An all-agent run holds no API key and must not be asked for one, must not
 // set MODEL_BACKEND for a vendor nothing will dial, and must build every seat.
 func TestAllAgentHerdNeedsNoKeyAndSetsNoBackend(t *testing.T) {
 	noKeys(t)
+	fakeBuiltinBinaries(t)
 	r, err := resolveAuditRoles(localAuditInput{
 		mutantModel: "codex", writerModel: "codex", criticModel: "claude-code", shadowModel: "off",
 	}, &bytes.Buffer{})
@@ -102,6 +117,7 @@ func TestSoleAssignedCloudModelSkipsAgentSeats(t *testing.T) {
 // passes) but one VENDOR: the same-vendor warning must say so.
 func TestSameVendorWarningNamesAgentSeats(t *testing.T) {
 	noKeys(t)
+	fakeBuiltinBinaries(t)
 	var warn bytes.Buffer
 	if _, err := resolveAuditRoles(localAuditInput{
 		mutantModel: "codex", writerModel: "codex:gpt-6-astra", criticModel: "codex", shadowModel: "off",
@@ -192,5 +208,45 @@ func TestDoctorShellWrappedOperatorAgentIsNotChecked(t *testing.T) {
 	d := res[0].detail
 	if !strings.Contains(d, "binary not checked (shell-wrapped definition)") || strings.Contains(d, "binary ok") {
 		t.Fatalf("detail %q must say the binary was not checked", d)
+	}
+}
+
+// A seat whose CLI is not installed refuses certify --local UP FRONT, naming
+// the binary — never after the jail ran, and never as a "writer-failed".
+func TestCertifyLocalRefusesAMissingAgentBinaryUpFront(t *testing.T) {
+	noKeys(t)
+	dir := t.TempDir()
+	mustWrite(t, filepath.Join(dir, "add.go"), "package add\n\nfunc Add(a, b int) int { return a + b }\n")
+	mustWrite(t, filepath.Join(dir, "add_test.go"), "package add\n\nimport \"testing\"\n\nfunc TestAdd(t *testing.T) { _ = Add(1, 2) }\n")
+	fakeAgent(t, "present", "{}")
+	t.Setenv("CORRALAI_AGENT_GHOST", "/nonexistent/corral-ghost-agent {model:--model}")
+	var out, errb bytes.Buffer
+	code := runCertifyLocal([]string{
+		"--code", filepath.Join(dir, "add.go"), "--goal", "adds",
+		"--writer-model", "ghost", "--mutant-model", "present", "--critic-model", "off",
+		"--", "go", "test", "./...",
+	}, &out, &errb)
+	if code == 0 || !strings.Contains(errb.String(), "corral-ghost-agent") || !strings.Contains(errb.String(), "not found") {
+		t.Fatalf("want a refusal naming the missing binary, got exit %d\nstdout=%s\nstderr=%s", code, out.String(), errb.String())
+	}
+	if strings.Contains(out.String()+errb.String(), "writer-failed") || strings.Contains(out.String(), "baseline") {
+		t.Fatalf("the run must stop before the jail:\nstdout=%s\nstderr=%s", out.String(), errb.String())
+	}
+}
+
+// review resolves its seats through the same resolver, so it refuses a
+// missing CLI the same way, before any seat is asked anything.
+func TestReviewRefusesAMissingAgentBinaryUpFront(t *testing.T) {
+	root := t.TempDir()
+	gitRun := gitCmd(t, root)
+	mustWrite(t, filepath.Join(root, "pkg", "a.go"), "package pkg\n")
+	gitRun("init", "-q")
+	gitRun("add", ".")
+	gitRun("commit", "-q", "-m", "base", "--no-gpg-sign")
+	t.Setenv("CORRALAI_AGENT_GHOST", "/nonexistent/corral-ghost-agent {dir} {out}")
+	var out, errb bytes.Buffer
+	code := runReview([]string{"--repo", root, "--scope", "pkg", "--reviewer-model", "ghost", "--no-ledger"}, &out, &errb)
+	if code != 2 || !strings.Contains(errb.String(), "corral-ghost-agent") || !strings.Contains(errb.String(), "not found") {
+		t.Fatalf("want exit 2 naming the missing binary, got exit %d\nstdout=%s\nstderr=%s", code, out.String(), errb.String())
 	}
 }

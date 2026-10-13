@@ -336,10 +336,18 @@ func TestChatPlacesTheSchemaFlagBeforeTheTrailingDash(t *testing.T) {
 	wantUsage(t, m.Usage, 14728, 5, "12288", "0")
 }
 
+// A binary missing at RESOLUTION is refused by ForSeat
+// (TestForSeatRefusesAnAgentWhoseBinaryIsMissing). One that disappears after
+// it — an uninstall mid-run — is still the seat's environment at call time.
 func TestChatMissingBinaryIsSeatEnvironment(t *testing.T) {
-	t.Setenv("CORRALAI_AGENT_FAKE", "/nonexistent/corral-no-such-agent {out}")
+	path := filepath.Join(t.TempDir(), "corral-vanishing-agent")
+	writeExec(t, path, "#!/bin/sh\ncat\n")
+	t.Setenv("CORRALAI_AGENT_FAKE", path+" {out}")
 	b, err := ForSeat("fake", SeatOptions{})
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(path); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := b.Chat([]Message{{Role: "user", Content: "hi"}}, nil); !errors.Is(err, ErrSeatEnvironment) {

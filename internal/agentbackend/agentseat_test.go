@@ -3,10 +3,12 @@
 package agentbackend
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func writeExec(t *testing.T, path, body string) {
@@ -220,5 +222,133 @@ func TestSeatNamesAModelDisagreesWithSeatModelOf(t *testing.T) {
 	if SeatNamesAModel(spec) {
 		t.Errorf("SeatNamesAModel(%q) = true, but %q is a CLI, not a model: "+
 			"recording it as resolved is how a tool name becomes a measurement", spec, spec)
+	}
+}
+
+// A seat whose CLI is not installed is refused when it is RESOLVED — the one
+// place every verb goes through — naming the seat and the binary, and marked
+// as the seat's environment rather than anything a model did. It used to be
+// checked only by doctor, so certify ran its jail first and then filed the
+// missing writer as "writer-failed".
+func TestForSeatRefusesAnAgentWhoseBinaryIsMissing(t *testing.T) {
+	t.Setenv("CORRALAI_AGENT_GHOST", "/nonexistent/corral-ghost-agent {model:--model}")
+	_, err := ForSeat("ghost", SeatOptions{})
+	if err == nil || !errors.Is(err, ErrSeatEnvironment) || !strings.Contains(err.Error(), "ghost") || !strings.Contains(err.Error(), "corral-ghost-agent") {
+		t.Fatalf("want an ErrSeatEnvironment naming seat and binary, got %v", err)
+	}
+	// A built-in is checked by its real binary, a shell-wrapped one included.
+	t.Setenv("PATH", t.TempDir())
+	for name, bin := range map[string]string{"codex": "codex", "claude-code": "claude", "antigravity": "agy"} {
+		_, err := ForSeat(name, SeatOptions{})
+		if err == nil || !errors.Is(err, ErrSeatEnvironment) || !strings.Contains(err.Error(), `"`+bin+`"`) {
+			t.Errorf("%s: want a refusal naming binary %q, got %v", name, bin, err)
+		}
+	}
+}
+
+// An operator definition that wraps its CLI in a shell cannot be checked, and
+// that is not a refusal: the seat proceeds, as doctor says "not checked".
+func TestForSeatProceedsWhenTheBinaryCannotBeChecked(t *testing.T) {
+	t.Setenv("CORRALAI_AGENT_WRAPPED", `sh -c 'corral-no-such-inner-cli "$@"' sh`)
+	if _, err := ForSeat("wrapped", SeatOptions{}); err != nil {
+		t.Fatalf("a shell-wrapped definition must resolve: %v", err)
+	}
+}
+
+// One comparison for "is this the same seat", used by certify and review
+// alike. They used to differ on case (== against EqualFold), so the same pair
+// was refused at one door and let through at the other.
+func TestSameSeatIgnoresCaseAndAgentNamesAreNormalised(t *testing.T) {
+	t.Setenv("CORRALAI_AGENT_MINE", "/bin/cat {model:--model}")
+	if name, _, ok := AgentSeat("MINE"); !ok || name != "mine" {
+		t.Fatalf("AgentSeat(MINE) = %q, %v; want the normalised name mine", name, ok)
+	}
+	for _, c := range []struct {
+		a, b string
+		want bool
+	}{
+		{"MINE", "mine", true},
+		{"mine:Model-X", "mine:model-x", true},
+		{"Gemini-3.6-flash", "gemini-3.6-flash", true},
+		{"codex", "codex:gpt-6-astra", false},
+		{"codex:gpt-6-astra", "gpt-6-astra", true},
+		{"claude-code", "codex", false},
+	} {
+		if got := SameSeat(c.a, c.b); got != c.want {
+			t.Errorf("SameSeat(%q, %q) = %v, want %v", c.a, c.b, got, c.want)
+		}
+	}
+}
+
+// A pin is a model name. One that starts with `-` would reach the CLI as a
+// flag of its own through {model:--model}, so it is refused by name.
+func TestAPinThatLooksLikeAFlagIsRefused(t *testing.T) {
+	t.Setenv("CORRALAI_AGENT_FAKE", "/bin/cat {model:--model}")
+	_, err := ForSeat("fake:--dangerously-skip-permissions", SeatOptions{})
+	if err == nil || !strings.Contains(err.Error(), "--dangerously-skip-permissions") || !strings.Contains(err.Error(), "flag") {
+		t.Fatalf("want a refusal naming the flag-like pin, got %v", err)
+	}
+}
+
+// The per-call timeout must end the whole agent, not only the process corral
+// started: a shell-wrapped agent's grandchild holds stdout open, and Wait
+// would otherwise block until it exits on its own.
+func TestTheTimeoutEndsAShellWrappedAgentsGrandchild(t *testing.T) {
+	t.Setenv("CORRALAI_AGENT_SLOW", `sh -c 'sleep 30 & wait'`)
+	b, err := ForSeat("slow", SeatOptions{Timeout: 300 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	_, err = b.Chat([]Message{{Role: "user", Content: "x"}}, nil)
+	if err == nil {
+		t.Fatal("a call past its timeout must fail")
+	}
+	if d := time.Since(start); d > 10*time.Second {
+		t.Fatalf("the call took %s: the timeout did not end the agent's grandchild", d)
+	}
+}
+
+// --version is probed for the record; an agent that hangs on it must not hang
+// the run.
+func TestAgentVersionIsBounded(t *testing.T) {
+	old := agentVersionTimeout
+	agentVersionTimeout = 300 * time.Millisecond
+	t.Cleanup(func() { agentVersionTimeout = old })
+	path := filepath.Join(t.TempDir(), "hangs")
+	writeExec(t, path, "#!/bin/sh\nsleep 30\n")
+	t.Setenv("CORRALAI_AGENT_HANGS", path)
+	start := time.Now()
+	_ = AgentVersion("hangs")
+	if d := time.Since(start); d > 10*time.Second {
+		t.Fatalf("AgentVersion took %s on a hanging --version", d)
+	}
+}
+
+// antigravity needs --dangerously-skip-permissions only to use tools: headless
+// agy denies every tool it cannot prompt for. A certify seat is granted none,
+// so it runs without the flag; review grants read-only tools and keeps it.
+func TestAntigravitySkipsPermissionsOnlyWhenToolsAreGranted(t *testing.T) {
+	bin := t.TempDir()
+	writeExec(t, filepath.Join(bin, "agy"), "#!/bin/sh\necho \"ARGV $*\"\n")
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	for _, c := range []struct {
+		tools []string
+		want  bool
+	}{{nil, false}, {[]string{"Read", "Grep", "Glob"}, true}} {
+		b, err := ForSeat("antigravity", SeatOptions{Tools: c.tools})
+		if err != nil {
+			t.Fatal(err)
+		}
+		m, err := b.Chat([]Message{{Role: "user", Content: "brief"}}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := strings.Contains(m.Content, "--dangerously-skip-permissions"); got != c.want {
+			t.Errorf("tools %v: skip flag present = %v, want %v (argv %q)", c.tools, got, c.want, m.Content)
+		}
+		if !strings.Contains(m.Content, "-p=brief") {
+			t.Errorf("the brief must still reach agy as -p: %q", m.Content)
+		}
 	}
 }

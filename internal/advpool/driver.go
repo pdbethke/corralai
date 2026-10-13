@@ -887,11 +887,12 @@ type RunState struct {
 // seat is the model it is pinned to (`codex:gpt-6-astra` is gpt-6-astra) or,
 // unpinned, the agent itself. So `codex` + `codex` is refused (one tool, one
 // model chosen by that tool), while `codex` + `codex:gpt-6-astra` is two
-// different seats. An API name is its own SeatModelOf, so every existing
-// caller — the brain included — compares exactly what it did before.
+// different seats. An API name is its own SeatModelOf. The comparison is
+// agentbackend.SameSeat — case-insensitive, and the same one review's
+// verifier rule uses, so the two doors cannot disagree on a pair.
 func CheckDecorrelation(assign RoleAssignment) error {
 	critic, writer := assign[RoleTestCritic], assign[RoleTestWriter]
-	if critic != "" && agentbackend.SeatModelOf(critic) == agentbackend.SeatModelOf(writer) {
+	if critic != "" && agentbackend.SameSeat(critic, writer) {
 		return fmt.Errorf("advpool: decorrelation guard: test-critic and test-writer must not share model %q", agentbackend.SeatModelOf(critic))
 	}
 	return nil

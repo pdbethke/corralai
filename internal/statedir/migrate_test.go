@@ -4,6 +4,8 @@ package statedir
 
 import (
 	"crypto/sha256"
+	"errors"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -48,7 +50,7 @@ func TestMigrateMovesRowsAndSidecarsOnly(t *testing.T) {
 	if err != nil || len(conflicts) != 0 || len(moves) != 2 {
 		t.Fatalf("plan: %d moves, %d conflicts, %v", len(moves), len(conflicts), err)
 	}
-	if err := ApplyMigration(moves); err != nil {
+	if _, err := ApplyMigration(moves); err != nil {
 		t.Fatal(err)
 	}
 	for _, n := range []string{"corralai_certify_key", "corralai_coord.sqlite3", "corralai_coord.sqlite3-wal"} {
@@ -82,7 +84,7 @@ func TestMigrateCrossFilesystemCopiesVerifiesAndRemoves(t *testing.T) {
 	rename = func(a, b string) error { return &os.LinkError{Op: "rename", Old: a, New: b, Err: syscall.EXDEV} }
 	t.Cleanup(func() { rename = old })
 	moves, _, _ := PlanMigration(legacy)
-	if err := ApplyMigration(moves); err != nil {
+	if _, err := ApplyMigration(moves); err != nil {
 		t.Fatal(err)
 	}
 	if b, _ := os.ReadFile(filepath.Join(state, "corralai_certify_key")); string(b) != "x" {
@@ -145,5 +147,131 @@ func TestMigrateStaleDestinationSidecarIsAConflict(t *testing.T) {
 		if m.File.Name == "corralai_coord.sqlite3" {
 			t.Fatal("the database row must not move while its destination WAL is stale")
 		}
+	}
+}
+
+func TestMigrateCopyFailureLeavesNothingAtDestination(t *testing.T) {
+	_, legacy, state := setupMigration(t)
+	oldR, oldC := rename, copyData
+	rename = func(a, b string) error { return &os.LinkError{Op: "rename", Old: a, New: b, Err: syscall.EXDEV} }
+	copyData = func(dst io.Writer, src io.Reader) (int64, error) {
+		_, _ = dst.Write([]byte("par")) // a partial write, then the failure
+		return 3, errors.New("disk full")
+	}
+	t.Cleanup(func() { rename, copyData = oldR, oldC })
+	moves, _, _ := PlanMigration(legacy)
+	if _, err := ApplyMigration(moves); err == nil {
+		t.Fatal("want the copy failure reported")
+	}
+	ents, _ := os.ReadDir(state)
+	if len(ents) != 0 {
+		t.Fatalf("destination must hold nothing (not even a temp), has %v", ents)
+	}
+	for _, n := range []string{"corralai_certify_key", "corralai_coord.sqlite3", "corralai_coord.sqlite3-wal"} {
+		if b, err := os.ReadFile(filepath.Join(legacy, n)); err != nil || string(b) != "x" {
+			t.Fatalf("source %s not intact: %q %v", n, b, err)
+		}
+	}
+}
+
+func TestMigrateCrossFilesystemKeepsMode(t *testing.T) {
+	_, legacy, state := setupMigration(t)
+	old := rename
+	rename = func(a, b string) error { return &os.LinkError{Op: "rename", Old: a, New: b, Err: syscall.EXDEV} }
+	t.Cleanup(func() { rename = old })
+	moves, _, _ := PlanMigration(legacy)
+	if _, err := ApplyMigration(moves); err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range []string{"corralai_certify_key", "corralai_coord.sqlite3", "corralai_coord.sqlite3-wal"} {
+		info, err := os.Stat(filepath.Join(state, n))
+		if err != nil || info.Mode().Perm() != 0o600 {
+			t.Errorf("%s: mode %v err %v, want 0600", n, info.Mode().Perm(), err)
+		}
+	}
+	if ents, _ := os.ReadDir(state); len(ents) != 3 {
+		t.Errorf("stray files in the state dir: %v", ents)
+	}
+}
+
+func TestMigrateMainFileMovesLastAndInterruptedRunResumes(t *testing.T) {
+	_, legacy, state := setupMigration(t)
+	moves, _, _ := PlanMigration(legacy)
+	old := rename
+	rename = func(a, b string) error {
+		if strings.HasSuffix(b, "corralai_coord.sqlite3") { // the main file of the DB row
+			return errors.New("injected")
+		}
+		return os.Rename(a, b)
+	}
+	done, err := ApplyMigration(moves)
+	rename = old
+	if err == nil {
+		t.Fatal("want the injected failure")
+	}
+	if _, serr := os.Stat(filepath.Join(state, "corralai_coord.sqlite3")); !os.IsNotExist(serr) {
+		t.Fatal("main file must not be at the destination before its side files")
+	}
+	if _, serr := os.Stat(filepath.Join(state, "corralai_coord.sqlite3-wal")); serr != nil {
+		t.Fatal("side file should have moved first")
+	}
+	// The legacy-only refusal must still fire for the half-moved database.
+	if _, rerr := Path(CoordDB); rerr == nil {
+		t.Error("a half-moved database must still be refused")
+	}
+	_ = done
+	moves, conflicts, err := PlanMigration(legacy)
+	if err != nil || len(conflicts) != 0 {
+		t.Fatalf("resume plan: %+v %v", conflicts, err)
+	}
+	if _, err := ApplyMigration(moves); err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range []string{"corralai_coord.sqlite3", "corralai_coord.sqlite3-wal", "corralai_certify_key"} {
+		if _, err := os.Stat(filepath.Join(state, n)); err != nil {
+			t.Errorf("%s did not land: %v", n, err)
+		}
+		if _, err := os.Stat(filepath.Join(legacy, n)); !os.IsNotExist(err) {
+			t.Errorf("%s still at the legacy path", n)
+		}
+	}
+}
+
+func TestMigrateReportsCompletedMovesOnLaterFailure(t *testing.T) {
+	_, legacy, _ := setupMigration(t)
+	moves, _, _ := PlanMigration(legacy)
+	if len(moves) != 2 {
+		t.Fatal("setup")
+	}
+	fail := moves[1].To
+	old := rename
+	rename = func(a, b string) error {
+		if b == fail {
+			return errors.New("injected")
+		}
+		return os.Rename(a, b)
+	}
+	done, err := ApplyMigration(moves)
+	rename = old
+	if err == nil || len(done) != 1 || done[0].To != moves[0].To {
+		t.Fatalf("want exactly the first move completed, got %+v, %v", done, err)
+	}
+	again, _, _ := PlanMigration(legacy)
+	if _, err := ApplyMigration(again); err != nil {
+		t.Fatal(err)
+	}
+	if left, _, _ := PlanMigration(legacy); len(left) != 0 {
+		t.Fatalf("re-run left %d moves", len(left))
+	}
+}
+
+func TestMigrateProbeErrorFailsClosed(t *testing.T) {
+	_, legacy, _ := setupMigration(t)
+	old := probe
+	probe = func(string) (bool, error) { return false, errors.New("EIO") }
+	t.Cleanup(func() { probe = old })
+	_, _, err := PlanMigration(legacy)
+	if err == nil || !strings.Contains(err.Error(), "EIO") || !strings.Contains(err.Error(), "corralai_") {
+		t.Fatalf("want a refusal naming the path and the error, got %v", err)
 	}
 }

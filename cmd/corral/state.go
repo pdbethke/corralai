@@ -114,16 +114,29 @@ func runStateMigrate(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stdout, "dry run: nothing moved")
 		return 0
 	}
-	if err := statedir.ApplyMigration(moves); err != nil {
-		fmt.Fprintln(stderr, "corral state migrate:", err)
+	done, applyErr := statedir.ApplyMigration(moves)
+	if applyErr != nil {
+		// Say exactly what did land: the operator has to know which rows are
+		// already at the new path before deciding what to do.
+		for _, m := range done {
+			fmt.Fprintf(stdout, "moved: %s → %s\n", m.From, m.To)
+		}
+	}
+	after := printKeys(done, false, stdout, stderr)
+	status := 0
+	for k, v := range before {
+		if got, ok := after[k]; ok && got != v {
+			fmt.Fprintf(stderr, "corral state migrate: %s's public key changed in the move (%s → %s)\n", k, v, got)
+			status = 1
+		}
+	}
+	if applyErr != nil {
+		fmt.Fprintln(stderr, "corral state migrate:", applyErr)
+		fmt.Fprintln(stderr, "corral state migrate: stopped partway — fix the cause and run it again; it resumes where it stopped")
 		return 1
 	}
-	after := printKeys(moves, false, stdout, stderr)
-	for k, v := range before {
-		if after[k] != v {
-			fmt.Fprintf(stderr, "corral state migrate: %s's public key changed in the move (%s → %s)\n", k, v, after[k])
-			return 1
-		}
+	if status != 0 {
+		return status
 	}
 	fmt.Fprintln(stdout, "done. The certify public key above must equal LEDGER_PUBKEY for the ledger you sign.")
 	return 0

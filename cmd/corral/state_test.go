@@ -93,3 +93,45 @@ func TestStateMigrateFromMovesAnExplicitDirectory(t *testing.T) {
 		t.Fatalf("--from directory's row was not moved: %v", err)
 	}
 }
+
+func TestStateMigrateConflictExitsOneAndTouchesNothing(t *testing.T) {
+	home := t.TempDir()
+	state := filepath.Join(home, "st")
+	t.Setenv("HOME", home)
+	t.Setenv("CORRALAI_STATE_DIR", state)
+	for _, p := range []string{
+		filepath.Join(home, ".claude", "corralai_certify_key"),
+		filepath.Join(home, ".claude", "corralai_coord.sqlite3"),
+		filepath.Join(state, "corralai_certify_key"),
+	} {
+		if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(p), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	snap := func() string {
+		var b strings.Builder
+		_ = filepath.WalkDir(home, func(p string, d os.DirEntry, err error) error {
+			if err == nil && !d.IsDir() {
+				c, _ := os.ReadFile(p)
+				fi, _ := d.Info()
+				b.WriteString(p + " " + fi.Mode().String() + " " + string(c) + "\n")
+			}
+			return nil
+		})
+		return b.String()
+	}
+	before := snap()
+	var out, errb bytes.Buffer
+	if code := runState([]string{"migrate"}, &out, &errb); code != 1 {
+		t.Fatalf("exit %d, want 1: %s", code, errb.String())
+	}
+	if !strings.Contains(errb.String(), "conflict") {
+		t.Errorf("want a conflict line:\n%s", errb.String())
+	}
+	if snap() != before {
+		t.Fatal("a conflicted migrate changed the tree")
+	}
+}

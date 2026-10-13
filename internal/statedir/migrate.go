@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"syscall"
 )
 
@@ -29,6 +30,14 @@ type Conflict struct {
 }
 
 var rename = os.Rename
+
+// copyData is the byte-copy step of a cross-filesystem move, a seam so a test
+// can fail it midway.
+var copyData = io.Copy
+
+// probe reports whether another process holds path open. A seam so a test can
+// make the probe itself fail.
+var probe = lockedByAnother
 
 var sidecarSuffixes = []string{"-wal", "-shm", ".wal"}
 
@@ -62,7 +71,14 @@ func PlanMigration(dir string) ([]Move, []Conflict, error) {
 		if from == to {
 			continue
 		}
-		if locked, err := lockedByAnother(from); err == nil && locked {
+		// Fail closed: a probe that could not answer is not "unlocked". Moving a
+		// store a running daemon holds open is the one mistake this verb must
+		// never make.
+		locked, err := probe(from)
+		if err != nil {
+			return nil, nil, fmt.Errorf("cannot tell whether %s is open in another process (%w) — refusing to move it", from, err)
+		}
+		if locked {
 			return nil, nil, fmt.Errorf("%s is open in another process — stop the daemon (systemctl stop corral) before migrating", from)
 		}
 		if ti, err := os.Lstat(to); err == nil {
@@ -74,6 +90,8 @@ func PlanMigration(dir string) ([]Move, []Conflict, error) {
 		for _, s := range sidecarSuffixes {
 			si, err := os.Lstat(from + s)
 			if err != nil {
+				// Gone from the source and present at the destination is an
+				// interrupted earlier run (side files move first): resume it.
 				continue
 			}
 			if si.Mode()&os.ModeSymlink != 0 {
@@ -98,33 +116,49 @@ func PlanMigration(dir string) ([]Move, []Conflict, error) {
 // ApplyMigration performs the moves: rename on one filesystem, otherwise
 // copy, fsync, verify sha256, remove the source. Modes are preserved;
 // destination directories are created 0700.
-func ApplyMigration(moves []Move) error {
+//
+// Side files move FIRST and the main file LAST. The main file's arrival at the
+// new path is the commit point: until it lands, the legacy-only refusal keeps
+// firing, so a half-moved database is never opened, and a re-run's plan sees the
+// main file still at the source and resumes. It returns the rows that moved
+// completely, even when it also returns an error.
+func ApplyMigration(moves []Move) ([]Move, error) {
+	var done []Move
 	for _, m := range moves {
 		if err := os.MkdirAll(filepath.Dir(m.To), 0o700); err != nil {
-			return err
+			return done, err
 		}
-		pairs := [][2]string{{m.From, m.To}}
+		var pairs [][2]string
 		for _, s := range m.Sidecars {
 			pairs = append(pairs, [2]string{filepath.Join(filepath.Dir(m.From), s), filepath.Join(filepath.Dir(m.To), s)})
 		}
+		pairs = append(pairs, [2]string{m.From, m.To})
 		for _, p := range pairs {
 			if err := moveFile(p[0], p[1]); err != nil {
-				return fmt.Errorf("moving %s → %s: %w", p[0], p[1], err)
+				return done, fmt.Errorf("moving %s → %s: %w", p[0], p[1], err)
 			}
 		}
+		done = append(done, m)
 	}
-	return nil
+	return done, nil
 }
 
 func moveFile(from, to string) error {
 	err := rename(from, to)
-	if err == nil || !errors.Is(err, syscall.EXDEV) {
+	if err == nil {
+		return syncDir(filepath.Dir(to))
+	}
+	if !errors.Is(err, syscall.EXDEV) {
 		return err
 	}
 	return copyVerifyRemove(from, to)
 }
 
-func copyVerifyRemove(from, to string) error {
+// copyVerifyRemove never creates anything at its final name until the bytes
+// are verified: a partial file at `to` would satisfy the legacy-only check and
+// be used (a 0-byte brain key mints a new identity). The temp file is removed
+// on every error path; os.Link fails if `to` appeared meanwhile.
+func copyVerifyRemove(from, to string) (err error) {
 	fi, err := os.Stat(from)
 	if err != nil {
 		return err
@@ -134,31 +168,60 @@ func copyVerifyRemove(from, to string) error {
 		return err
 	}
 	defer src.Close()
-	dst, err := os.OpenFile(to, os.O_WRONLY|os.O_CREATE|os.O_EXCL, fi.Mode().Perm()) // #nosec G304 -- a statedir table row
+	dst, err := os.CreateTemp(filepath.Dir(to), ".migrate-*") // O_EXCL, 0600
 	if err != nil {
 		return err
 	}
+	tmp := dst.Name()
+	defer func() {
+		if err != nil {
+			_ = dst.Close()
+			_ = os.Remove(tmp)
+		}
+	}()
+	if err = dst.Chmod(fi.Mode().Perm()); err != nil {
+		return err
+	}
 	h1 := sha256.New()
-	if _, err := io.Copy(io.MultiWriter(dst, h1), src); err != nil {
-		dst.Close()
+	if _, err = copyData(io.MultiWriter(dst, h1), src); err != nil {
 		return err
 	}
-	if err := dst.Sync(); err != nil {
-		dst.Close()
+	if err = dst.Sync(); err != nil {
 		return err
 	}
-	if err := dst.Close(); err != nil {
+	if err = dst.Close(); err != nil {
 		return err
 	}
-	h2, err := fileSHA256(to)
+	h2, err := fileSHA256(tmp)
 	if err != nil {
 		return err
 	}
 	if string(h2) != string(h1.Sum(nil)) {
-		_ = os.Remove(to)
-		return fmt.Errorf("copy of %s does not match the original; the original is untouched", from)
+		err = fmt.Errorf("copy of %s does not match the original; the original is untouched", from)
+		return err
+	}
+	if err = os.Link(tmp, to); err != nil {
+		return err
+	}
+	_ = os.Remove(tmp)
+	if err = syncDir(filepath.Dir(to)); err != nil {
+		return err
 	}
 	return os.Remove(from)
+}
+
+// syncDir makes a rename or link durable before the source is given up.
+// Windows cannot fsync a directory handle; its rename path fails safely instead.
+func syncDir(dir string) error {
+	if runtime.GOOS == "windows" {
+		return nil
+	}
+	d, err := os.Open(dir) // #nosec G304 -- a statedir directory
+	if err != nil {
+		return err
+	}
+	defer d.Close()
+	return d.Sync()
 }
 
 func fileSHA256(p string) ([]byte, error) {

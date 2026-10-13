@@ -77,6 +77,9 @@ type BriefScan struct {
 	Uncovered   bool     `json:"uncovered"`
 	Passed      *bool    `json:"passed,omitempty"`
 	AuthoredTst string   `json:"authored_test,omitempty"`
+	// AuthoredLanding is the file AuthoredTst must be appended to when it is
+	// a block that compiles only there (the ledger row's AuthoredLanding).
+	AuthoredLanding string `json:"authored_landing,omitempty"`
 }
 
 // BriefMutant is one planted fault the suite missed.
@@ -211,7 +214,7 @@ func buildBrief(dir string, all []auditpush.LedgerEntry, paths []string, maxItem
 			commits[e.Bundle.Scan.Commit] = true
 			bp.Scan = &BriefScan{Commit: e.Bundle.Scan.Commit, Entry: e.Hash, Pushed: e.Pushed.UTC().Format("2006-01-02 15:04"),
 				Disposition: r.Disposition, Reason: r.Reason, KillRate: r.KillRate, Survivors: r.Survivors, ProvenGaps: r.ProvenMissed,
-				Uncovered: r.Uncovered, Passed: r.Passed, AuthoredTst: r.AuthoredTest}
+				Uncovered: r.Uncovered, Passed: r.Passed, AuthoredTst: r.AuthoredTest, AuthoredLanding: r.AuthoredLanding}
 			bp.Disposition = r.Disposition
 			for _, m := range e.Bundle.Mutants {
 				if m.Path != r.Path || m.Outcome != "survived" {
@@ -362,7 +365,7 @@ func renderBrief(b Brief) string {
 			writeHunk(&w, m)
 		}
 		if len(p.ProvenGaps) > 0 && p.Scan != nil && p.Scan.AuthoredTst != "" {
-			w.WriteString("    the test that closes it:\n")
+			fmt.Fprintf(&w, "    the test that closes it%s:\n", authoredTestWhere(p.Scan.AuthoredLanding))
 			w.WriteString(indentLines(strings.TrimRight(p.Scan.AuthoredTst, "\n"), "      "))
 			w.WriteString("\n")
 		}

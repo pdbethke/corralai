@@ -106,7 +106,7 @@ func BuildLanguageProfile(cands []Candidate, excl []Exclusion) []LanguageStat {
 			s.Ambiguous++
 		case ReasonIsTest:
 			s.TestFiles++
-		case ReasonTestLandingNotBuilt:
+		case ReasonTestLandingNotBuilt, ReasonDeclarationsUnreadable:
 			s.LandingNotBuilt++
 		default:
 			// Anything else this language's source can be excluded for —

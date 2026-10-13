@@ -532,7 +532,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		// the reader may expect to have been audited, so it is named, with
 		// the reason, rather than left to the exclusion list.
 		for _, e := range excl {
-			if e.Reason == reposcan.ReasonTestLandingNotBuilt && changedSet[e.Path] {
+			if reposcan.IsLandingRefusal(e.Reason) && changedSet[e.Path] {
 				fmt.Fprintf(stdout, "    changed but not audited: %s (%s%s)\n", e.Path, e.Reason, reasonGloss(e.Reason))
 			}
 		}
@@ -3167,7 +3167,7 @@ func sourcesOrphanedByDeletedTests(repoDir string, changed []string, excl []repo
 	}
 	var out []string
 	for _, e := range excl {
-		if e.Reason != reposcan.ReasonNoPairedTest && e.Reason != reposcan.ReasonMappedTestMissing && e.Reason != reposcan.ReasonTestLandingNotBuilt {
+		if e.Reason != reposcan.ReasonNoPairedTest && e.Reason != reposcan.ReasonMappedTestMissing && !reposcan.IsLandingRefusal(e.Reason) {
 			continue
 		}
 		p, ok := lang.Detect(e.Path)
@@ -3829,6 +3829,17 @@ func authoredTestDestination(appendTo, otherwise string) string {
 	return "add it to " + otherwise
 }
 
+// authoredTestWhere is authoredTestDestination for a reader that names no
+// target of its own (`scans show`, `brief`): " — append it to <file>" when
+// the test is a block that compiles only inside that file, and nothing
+// otherwise, so a path landing's line reads as it always has.
+func authoredTestWhere(appendTo string) string {
+	if appendTo == "" {
+		return ""
+	}
+	return " — " + authoredTestDestination(appendTo, "")
+}
+
 // authoredExtraDestination is authoredTestDestination for a part the
 // concatenator would not merge: with a landing it is a SEPARATE block for
 // the same file, else the caller's "separate file" wording.
@@ -3883,6 +3894,8 @@ func reasonGloss(reason string) string {
 		return " — the workspace could not be prepared for this file"
 	case reposcan.ReasonMappedTestMissing:
 		return " — the --tests map names a test file that does not exist"
+	case reposcan.ReasonDeclarationsUnreadable:
+		return " — corral cannot audit this file in this build: it cannot read the file's test-module declarations (built without cgo, which the grammar needs), so where a test for it would go is unknown"
 	case reposcan.ReasonTestLandingNotBuilt:
 		return " — corral cannot audit this file yet: its tests live in the file itself (or it declares no separate test module), and the landing that composes a test into its own source is not built, so a test for it would be written over the file itself"
 	}

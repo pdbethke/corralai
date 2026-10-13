@@ -170,7 +170,23 @@ const (
 	// so such a file is never a candidate — whether or not it has a test —
 	// and no ranking, --top slot, selection language or jail is spent on it.
 	ReasonTestLandingNotBuilt = "test-landing-not-built"
+	// ReasonDeclarationsUnreadable marks a source whose landing could not
+	// be found because THIS BUILD cannot read the test-module declarations
+	// it would be found from (pairing.ErrDeclarationsUnreadable — a no-cgo
+	// build has no grammar). It is the same refusal as
+	// ReasonTestLandingNotBuilt (the landing falls closed to the source) for
+	// a different, stated reason, and every reader treats the two alike
+	// through IsLandingRefusal.
+	ReasonDeclarationsUnreadable = "test-declarations-unreadable"
 )
+
+// IsLandingRefusal reports whether reason is one of Enumerate's refusals of
+// a file whose authored test would land on the file itself
+// (lang.CheckTestLanding): the one question every gate, bucket and
+// disclosure asks, so a new refusal reason is classified here once.
+func IsLandingRefusal(reason string) bool {
+	return reason == ReasonTestLandingNotBuilt || reason == ReasonDeclarationsUnreadable
+}
 
 // UnauditableChangedSource reports whether an exclusion means a CHANGED
 // source file could not be audited — as opposed to one that is simply not a
@@ -192,7 +208,7 @@ func UnauditableChangedSource(reason string) bool {
 		// it, its test is claimed by another source, or it is not a file it
 		// can read. Each is "we could not look", not "nothing to look at".
 		return true
-	case ReasonTestLandingNotBuilt:
+	case ReasonTestLandingNotBuilt, ReasonDeclarationsUnreadable:
 		// A language corral cannot audit YET, ruled (Rust part 1) to be
 		// treated exactly as a language it does not audit at all
 		// (ReasonNoLanguage, the default below): the scan discloses the
@@ -486,7 +502,11 @@ func EnumerateWithTests(root string, tests *TestMap) ([]Candidate, []Exclusion, 
 			return nil, nil, fmt.Errorf("landing %s: %w", rel, lerr)
 		}
 		if lang.CheckTestLanding(rel, landing) != nil {
-			excl = append(excl, Exclusion{Path: rel, Reason: ReasonTestLandingNotBuilt})
+			reason := ReasonTestLandingNotBuilt
+			if landing.DeclarationsUnreadable {
+				reason = ReasonDeclarationsUnreadable
+			}
+			excl = append(excl, Exclusion{Path: rel, Reason: reason})
 			continue
 		}
 		// Walk the plugin's ordered candidates and pair with the first one

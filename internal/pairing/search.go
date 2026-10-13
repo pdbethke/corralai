@@ -3,6 +3,7 @@
 package pairing
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -124,6 +125,13 @@ type Resolution struct {
 	// absent AND there was a basename to search for) — so a caller can say
 	// everywhere it looked, and never claims a search that did not happen.
 	Roots []string
+	// DeclarationsUnreadable is true when the caller's build could not read
+	// the source's test-module declarations at all
+	// (ErrDeclarationsUnreadable — a no-cgo build). The content rules then
+	// offer NOTHING, exactly as a content Shape with nothing declared:
+	// no Declared file and no Inline self-pairing, never a guess. It is the
+	// reason a miss says, not an error that would abort a scan.
+	DeclarationsUnreadable bool
 	// Found reports whether Path is usable. Path == "" and Found == false
 	// coincide today, but Found makes the zero value unambiguous rather than
 	// relying on a caller to remember that Path == "" means "not found".
@@ -231,6 +239,12 @@ func resolveDeclared(content []Rule, codePath string, src Sources) (Resolution, 
 		return res, nil
 	}
 	mods, err := src.TestModules(codePath)
+	if errors.Is(err, ErrDeclarationsUnreadable) {
+		// The build cannot read declarations at all: the content rules
+		// offer nothing (fail closed), and the Resolution says why.
+		res.DeclarationsUnreadable = true
+		return res, nil
+	}
 	if err != nil {
 		return res, fmt.Errorf("reading the test modules %s declares: %w", codePath, err)
 	}

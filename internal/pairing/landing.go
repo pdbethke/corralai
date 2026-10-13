@@ -8,7 +8,9 @@ import "errors"
 // caller's BUILD cannot read the language's declarations at all (a no-cgo
 // build has no grammar). It is not "declares none": Land reports it as
 // DeclarationsUnreadable and lands on Primary — fail closed — and Resolve
-// returns it, like any read error.
+// lets the content rules offer nothing and sets
+// Resolution.DeclarationsUnreadable: the one seam both read
+// (resolveDeclared), so no caller has to handle it, and no scan aborts on it.
 var ErrDeclarationsUnreadable = errors.New("this build cannot read the file's test-module declarations (the grammar needs cgo)")
 
 // Landing is where an authored test for a source is WRITTEN — the fourth
@@ -81,12 +83,12 @@ func Land(rules []Rule, codePath string, src Sources) (Landing, error) {
 	content := contentRules(rules)
 	if len(content) > 0 && src.TestModules != nil {
 		res, err := resolveDeclared(content, codePath, src)
-		switch {
-		case errors.Is(err, ErrDeclarationsUnreadable):
+		if err != nil {
+			return Landing{}, err
+		}
+		if res.DeclarationsUnreadable {
 			l.DeclarationsUnreadable = true
 			return landPrimary(l, rules, codePath), nil
-		case err != nil:
-			return Landing{}, err
 		}
 		l.DeclarationsRead = true
 		l.RefusedOutsideRoot = res.RefusedOutsideRoot

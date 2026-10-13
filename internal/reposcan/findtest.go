@@ -201,6 +201,11 @@ func underRoot(root, rel string) string {
 	return filepath.Join(root, filepath.FromSlash(rel))
 }
 
+// readsTestModules is repoindex.ReadsTestModules, a variable only so a test
+// in a cgo build (this package cannot build without cgo) can stand in for a
+// no-cgo build's answer and drive Enumerate and FindTest through it.
+var readsTestModules = repoindex.ReadsTestModules
+
 // diskTestModules is the Sources.TestModules both adapters (FindTest and
 // findInUniverse) hand pairing.Resolve: the source file's bytes under root,
 // parsed by repoindex for the test modules p's language declares in itself.
@@ -212,7 +217,7 @@ func underRoot(root, rel string) string {
 // would report a real source as unpaired for a reason that is not true.
 func diskTestModules(p lang.Plugin, root string) func(rel string) ([]pairing.TestModule, error) {
 	return func(rel string) ([]pairing.TestModule, error) {
-		if !repoindex.ReadsTestModules(p.Name()) {
+		if !readsTestModules(p.Name()) {
 			// A no-cgo build answers nil for every file; that is not
 			// "declares no test", and must not be reported as one.
 			return nil, pairing.ErrDeclarationsUnreadable

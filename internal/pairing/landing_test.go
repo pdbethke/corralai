@@ -151,3 +151,22 @@ func TestLandSaysWhenTheBuildCannotReadDeclarations(t *testing.T) {
 		t.Errorf("Land = %+v, want the source, unreadable, not read", got)
 	}
 }
+
+// TestResolveTreatsUnreadableDeclarationsAsNothingDeclared: a build that
+// cannot read declarations is the shared seam's to absorb, not every
+// caller's: Resolve returns no error, offers no Declared file and no Inline
+// self-pairing (fail closed), and says why. Runs without cgo — this package
+// builds there, where reposcan (duckdb) does not.
+func TestResolveTreatsUnreadableDeclarationsAsNothingDeclared(t *testing.T) {
+	res, err := Resolve(rustLikeRules, "src/foo.rs", Sources{
+		Exists:      func(string) bool { return true },
+		Universe:    func() ([]string, error) { return []string{"src/foo.rs", "src/foo_tests.rs"}, nil },
+		TestModules: func(string) ([]TestModule, error) { return nil, ErrDeclarationsUnreadable },
+	})
+	if err != nil {
+		t.Fatalf("Resolve errored on unreadable declarations: %v", err)
+	}
+	if res.Found || !res.DeclarationsUnreadable || len(res.Tried) != 0 {
+		t.Errorf("Resolve = %+v, want a miss that says the declarations were unreadable", res)
+	}
+}

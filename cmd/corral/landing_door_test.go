@@ -311,3 +311,56 @@ func TestLocalReadoutNamesFlakyTestsAndTheLandingAsRepoDoes(t *testing.T) {
 		t.Errorf("a path landing's readout changed:\n%s", out.String())
 	}
 }
+
+// TestScansShowSaysWhereALandedTestGoes: `corral scans show --evidence`
+// prints a landed block with the file it must be appended to, through the
+// shared rendering; a path landing's header is unchanged.
+func TestScansShowSaysWhereALandedTestGoes(t *testing.T) {
+	r := &fakeScansReader{files: []scanstore.File{
+		{Path: "src/foo.rs", Disposition: "audited", Survivors: 1, ProvenMissed: 1, AuthoredTest: "#[cfg(test)]\nmod corral_tests {\n}\n", AuthoredLanding: "src/foo_tests.rs"},
+		{Path: "a.py", Disposition: "audited", Survivors: 1, ProvenMissed: 1, AuthoredTest: "def test_x(): pass\n"},
+	}}
+	var out, errOut bytes.Buffer
+	if code := runScans([]string{"show", "7", "--evidence"}, openFake(r), &out, &errOut); code != 0 {
+		t.Fatalf("exit = %d, stderr=%s", code, errOut.String())
+	}
+	got := out.String()
+	if !strings.Contains(got, "--- src/foo.rs: the pool's authored test"+authoredTestWhere("src/foo_tests.rs")+" ---") ||
+		!strings.Contains(got, "append it to src/foo_tests.rs") {
+		t.Errorf("scans show does not say where the block goes:\n%s", got)
+	}
+	if !strings.Contains(got, "--- a.py: the pool's authored test ---") {
+		t.Errorf("a path landing's header changed:\n%s", got)
+	}
+}
+
+// TestBriefSaysWhereALandedTestGoes: `corral brief` carries the landing from
+// the ledger row and prints it with the test that closes a proven gap, in
+// the text and in the JSON.
+func TestBriefSaysWhereALandedTestGoes(t *testing.T) {
+	dir := t.TempDir()
+	kr := 0.5
+	if _, err := auditpush.PushBundle(dir+"/", auditpush.Bundle{
+		SourcePushed: true,
+		Scan:         auditpush.ScanRow{Repo: "o/r", ScanID: 1, Commit: "c1c1c1c1c1c1c1c1", Host: "h", CorralVersion: "v", Substrate: "workspace", SourcePushed: true},
+		Files: []auditpush.Row{{Repo: "o/r", Commit: "c1c1c1c1c1c1c1c1", ScanID: 1, Path: "src/foo.rs", Disposition: "audited", KillRate: &kr, Survivors: 1, ProvenMissed: 1,
+			AuthoredTest: "#[cfg(test)]\nmod corral_tests {\nuse super::super::*;\n}\n", AuthoredLanding: "src/foo_tests.rs"}},
+		Mutants: []auditpush.MutantRow{{Repo: "o/r", ScanID: 1, Path: "src/foo.rs", MutantID: "s0/m1", Outcome: "survived", Proven: true, SpanStart: 1, SpanEnd: 1}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	if code := runBrief([]string{"--ledger", dir, "--scope", "src"}, &out, &errb); code != 0 {
+		t.Fatalf("exit %d: %s", code, errb.String())
+	}
+	if !strings.Contains(out.String(), "the test that closes it"+authoredTestWhere("src/foo_tests.rs")+":") {
+		t.Errorf("brief does not say where the block goes:\n%s", out.String())
+	}
+	out.Reset()
+	if code := runBrief([]string{"--ledger", dir, "--scope", "src", "--json"}, &out, &errb); code != 0 {
+		t.Fatalf("exit %d: %s", code, errb.String())
+	}
+	if !strings.Contains(out.String(), `"authored_landing": "src/foo_tests.rs"`) && !strings.Contains(out.String(), `"authored_landing":"src/foo_tests.rs"`) {
+		t.Errorf("brief --json lacks the landing:\n%s", out.String())
+	}
+}

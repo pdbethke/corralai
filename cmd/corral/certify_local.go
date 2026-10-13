@@ -715,6 +715,9 @@ func noTestFoundErr(codePath string, res reposcan.SearchResult) string {
 // path was refused for leaving the repository DID declare one, so that is
 // said instead.
 func whereItLooked(res reposcan.SearchResult) string {
+	if res.DeclarationsUnreadable {
+		return "This build cannot read the file's test-module declarations (built without cgo, which the grammar needs), so the test it declares cannot be found.\n"
+	}
 	if len(res.Tried) == 0 && len(res.Roots) == 0 && len(res.RefusedOutsideRoot) == 0 {
 		return "Nothing to look for: the file declares no test of its own, and its language derives no test file name from its path.\n"
 	}

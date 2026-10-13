@@ -45,3 +45,46 @@ func TestEnumerateAdmitsADeclaredRustSource(t *testing.T) {
 		}
 	}
 }
+
+// TestAnUnreadableDeclarationIsAnExclusionNeverAnError stands in for a no-cgo
+// build (this package cannot build without cgo — its advpool import pulls in
+// duckdb — so readsTestModules is swapped instead): Enumerate over a tree
+// with a declared Rust file completes and excludes it with the unreadable
+// reason, while the Python file beside it is still a candidate; FindTest and
+// ResolutionPaths answer a miss that says why, never an error.
+func TestAnUnreadableDeclarationIsAnExclusionNeverAnError(t *testing.T) {
+	orig := readsTestModules
+	readsTestModules = func(string) bool { return false }
+	t.Cleanup(func() { readsTestModules = orig })
+
+	root := writeTree(t, map[string]string{
+		"calc.py":          "def add(a, b):\n    return a + b\n",
+		"test_calc.py":     "from calc import add\n\ndef test_add():\n    assert add(1, 2) == 3\n",
+		"src/foo.rs":       "fn f() {}\n\n#[cfg(test)]\n#[path = \"foo_tests.rs\"]\nmod tests;\n",
+		"src/foo_tests.rs": "#[test]\nfn t() {}\n",
+	})
+	cands, excl, err := Enumerate(root)
+	if err != nil {
+		t.Fatalf("Enumerate aborted: %v", err)
+	}
+	if len(cands) != 1 || cands[0].Path != "calc.py" {
+		t.Errorf("candidates = %+v, want only calc.py", cands)
+	}
+	got := ""
+	for _, e := range excl {
+		if e.Path == "src/foo.rs" {
+			got = e.Reason
+		}
+	}
+	if got != ReasonDeclarationsUnreadable || !IsLandingRefusal(got) || UnauditableChangedSource(got) {
+		t.Errorf("src/foo.rs excluded as %q, want %q (a landing refusal that does not fail the gate)", got, ReasonDeclarationsUnreadable)
+	}
+	p, _ := lang.ByName("rust")
+	res, err := FindTest(p, root, "src/foo.rs")
+	if err != nil || res.Found || !res.DeclarationsUnreadable {
+		t.Errorf("FindTest = %+v, err %v; want a miss saying the declarations were unreadable", res, err)
+	}
+	if _, err := ResolutionPaths(p, root, "src/foo.rs"); err != nil {
+		t.Errorf("ResolutionPaths errored: %v", err)
+	}
+}

@@ -23,7 +23,19 @@ const GENERATED_RECORDINGS_DIR = path.join(GENERATED_ROOT, 'recordings');
 const GENERATED_ANALYTICS_OUT = path.join(GENERATED_ROOT, 'analytics.json');
 const LEGACY_ANALYTICS_OUT = path.join(DATA_ROOT, 'analytics.json');
 
-const DEFAULT_DB_PATH = path.join(os.homedir(), '.claude', 'corralai_recordings.duckdb');
+// corral's state root, resolved as internal/statedir resolves it (that
+// package is the source of truth; `corral state paths` prints the result):
+// CORRALAI_STATE_DIR, else an absolute $XDG_STATE_HOME/corral, else the
+// platform default. The per-file CORRALAI_RECORDINGS_DB below still wins.
+function corralStateDir() {
+  const explicit = (process.env.CORRALAI_STATE_DIR || '').trim();
+  if (explicit) return explicit;
+  if (process.platform === 'darwin') return path.join(os.homedir(), 'Library', 'Application Support', 'corral');
+  const xdg = (process.env.XDG_STATE_HOME || '').trim();
+  if (xdg && path.isAbsolute(xdg)) return path.join(xdg, 'corral');
+  return path.join(os.homedir(), '.local', 'state', 'corral');
+}
+const DEFAULT_DB_PATH = path.join(corralStateDir(), 'corralai_recordings.duckdb');
 const RECORDINGS_DB = process.env.CORRALAI_RECORDINGS_DB || DEFAULT_DB_PATH;
 
 function toPlainRow(row) {

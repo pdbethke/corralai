@@ -31,7 +31,27 @@ try:
 except ImportError:  # pragma: no cover - operator tooling
     sys.exit("duckdb python package required: pip install duckdb")
 
-HOME_DB = os.path.expanduser("~/.claude")
+
+def corral_state_dir() -> str:
+    """corral's state root, resolved as internal/statedir resolves it (that
+    package is the source of truth; `corral state paths` prints the result):
+    CORRALAI_STATE_DIR, else an absolute $XDG_STATE_HOME/corral, else the
+    platform default."""
+    explicit = os.environ.get("CORRALAI_STATE_DIR", "").strip()
+    if explicit:
+        return explicit
+    if sys.platform == "darwin":
+        return os.path.expanduser("~/Library/Application Support/corral")
+    xdg = os.environ.get("XDG_STATE_HOME", "").strip()
+    if xdg and os.path.isabs(xdg):
+        return os.path.join(xdg, "corral")
+    return os.path.expanduser("~/.local/state/corral")
+
+
+def state_db(name: str, override: str) -> str:
+    """One store's path: its per-file override variable wins, as in corral."""
+    return os.environ.get(override, "").strip() or os.path.join(corral_state_dir(), name)
+
 
 #: Repositories whose names may appear on the public site. 'local' is the
 #: repo-less --repo-dir form and names nothing.
@@ -87,9 +107,13 @@ def main() -> int:
 
     withheld = {}
     con = duckdb.connect()
-    con.execute(f"ATTACH '{HOME_DB}/corralai_build.duckdb' AS build (READ_ONLY)")
-    con.execute(f"ATTACH '{HOME_DB}/corralai_bugcatch.duckdb' AS bugcatch (READ_ONLY)")
-    con.execute(f"ATTACH '{HOME_DB}/corralai_scans.duckdb' AS scanstore (READ_ONLY)")
+    con.execute(f"ATTACH '{state_db('corralai_build.duckdb', 'CORRALAI_BUILD_DB')}' AS build (READ_ONLY)")
+    con.execute(f"ATTACH '{state_db('corralai_bugcatch.duckdb', 'CORRALAI_BUGCATCH_DB')}' AS bugcatch (READ_ONLY)")
+    # corralai_scans.duckdb is the retired name of the scan record (now the
+    # ledger directory; the file that kept the name became the cache). It is
+    # not a statedir row and `corral state migrate` does not move it, so it is
+    # looked for in the state directory only where an operator put it.
+    con.execute(f"ATTACH '{os.path.join(corral_state_dir(), 'corralai_scans.duckdb')}' AS scanstore (READ_ONLY)")
 
     con.create_function("short_repo", short_repo, ["VARCHAR"], "VARCHAR")
     allow = "(" + ",".join(f"'{r}'" for r in sorted(PUBLIC_REPOS)) + ")"

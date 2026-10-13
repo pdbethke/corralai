@@ -157,12 +157,19 @@ services:
       # full minute between sweeps to see a proposal open — tighten it here only.
       CORRALAI_LEARN_SWEEP_SECONDS: ${CORRALAI_LEARN_SWEEP_SECONDS:-10}
       CORRALAI_GATEWAY_ALLOWED_HOSTS: ${CORRALAI_GATEWAY_ALLOWED_HOSTS:-172.19.0.1}
-    # brain-state persists the coordination/queue/memory DBs (~/.claude) across
-    # container recreation — without it a brain restart mid-mission silently
-    # wipes the mission while the bees keep polling an empty queue. The image's
-    # seeded memory survives: a named volume copies image content on first use.
-    # `make down` (-v) still resets everything.
-    volumes: ["workspace:/workspace", "brain-state:/root/.claude"]
+      # The volume below is mounted at the state root, and the root is named
+      # here as well as in Dockerfile.brain: the two must agree, and a reader
+      # of this file should not have to open the image to see where state goes.
+      CORRALAI_STATE_DIR: /var/lib/corral
+    # brain-state persists corral's state root (coordination, queue and memory
+    # DBs, the signing keys) across container recreation — without it a brain
+    # restart mid-mission silently wipes the mission while the bees keep
+    # polling an empty queue. The image's seeded memory survives: a named
+    # volume copies image content on first use. A volume created by an older
+    # image keeps its databases (they sat at the volume's root then too) but
+    # not its memory seeds, which lived in a different subdirectory: `make
+    # down` (-v) resets it and re-seeds.
+    volumes: ["workspace:/workspace", "brain-state:/var/lib/corral"]
     ports: ["9019:9019"]
     # Same policy as the bees: without this, a docker daemon restart brings every
     # agent back but leaves the brain down, and the hive crash-loops against it.

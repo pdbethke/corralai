@@ -152,8 +152,8 @@ func runReviewRun(args []string, stdout, stderr io.Writer) int {
 	// The decorrelation rule, the same one the writer and the critic live
 	// under: a verifier that is the reviewer's own model would grade its
 	// own work. Checked before anything is spent.
-	if strings.TrimSpace(*verifier) != "" && strings.EqualFold(seatModelOf(*verifier), seatModelOf(*model)) {
-		fmt.Fprintf(stderr, "corral review: --verifier-model %s resolves to the reviewer's own model %s — the verifier must be a different one (nemo iudex in causa sua)\n", *verifier, seatModelOf(*model))
+	if strings.TrimSpace(*verifier) != "" && strings.EqualFold(agentbackend.SeatModelOf(*verifier), agentbackend.SeatModelOf(*model)) {
+		fmt.Fprintf(stderr, "corral review: --verifier-model %s resolves to the reviewer's own model %s — the verifier must be a different one (nemo iudex in causa sua)\n", *verifier, agentbackend.SeatModelOf(*model))
 		return 2
 	}
 	// The worktrees first: one for an agentic seat to read (it is never
@@ -168,12 +168,12 @@ func runReviewRun(args []string, stdout, stderr io.Writer) int {
 	defer seatCleanup()
 	agentTimeout := 30 * time.Minute
 	seat := func(spec string) (agentbackend.Backend, string, error) {
-		if b, isAgent, err := newAgentSeat(spec, seatTree, agentTimeout); isAgent {
+		if name, _, isAgent := agentbackend.AgentSeat(spec); isAgent {
+			b, err := agentbackend.ForSeat(spec, agentbackend.SeatOptions{Dir: seatTree, Timeout: agentTimeout})
 			if err != nil {
 				return nil, "", err
 			}
-			name, _, _ := agentSeat(spec)
-			return b, agentVersion(name), nil
+			return b, agentbackend.AgentVersion(name), nil
 		}
 		b, err := newReviewerBackend(spec, "")
 		return b, "", err
@@ -191,8 +191,8 @@ func runReviewRun(args []string, stdout, stderr io.Writer) int {
 			return 2
 		}
 	}
-	_, _, reviewerIsAgent := agentSeat(*model)
-	_, _, verifierIsAgent := agentSeat(*verifier)
+	_, _, reviewerIsAgent := agentbackend.AgentSeat(*model)
+	_, _, verifierIsAgent := agentbackend.AgentSeat(*verifier)
 
 	sc, err := review.LoadScope(root, *scope, *maxBytes)
 	if err != nil {
@@ -222,10 +222,10 @@ func runReviewRun(args []string, stdout, stderr io.Writer) int {
 	// CLI pick its own model and never tells us which, so the row cannot
 	// carry a per-model comparison — and that is unrecoverable afterwards.
 	var unpinned []string
-	if !seatNamesAModel(*model) {
+	if !agentbackend.SeatNamesAModel(*model) {
 		unpinned = append(unpinned, "--reviewer-model "+*model)
 	}
-	if verifierBackend != nil && !seatNamesAModel(*verifier) {
+	if verifierBackend != nil && !agentbackend.SeatNamesAModel(*verifier) {
 		unpinned = append(unpinned, "--verifier-model "+*verifier)
 	}
 	if len(unpinned) > 0 {
@@ -237,7 +237,7 @@ func runReviewRun(args []string, stdout, stderr io.Writer) int {
 
 	r := review.Review{Repo: repoName, Commit: commit, Author: party.Author, Committer: party.Committer, CoAuthors: party.CoAuthors,
 		Scope: *scope, ReviewerModel: *model, ReviewerTool: reviewerTool, Lang: langOfScope(allFiles),
-		ReviewerModelResolved: seatNamesAModel(*model),
+		ReviewerModelResolved: agentbackend.SeatNamesAModel(*model),
 		Substrate:             "workspace (a detached worktree at the commit; not a jail)", StartedAt: time.Now().UTC(),
 		FilesShown: sc.Files, BytesShown: sc.Bytes, Truncated: sc.Truncated}
 	userTurn := review.Brief(repoName, commit, *scope, sc)
@@ -300,7 +300,7 @@ func runReviewRun(args []string, stdout, stderr io.Writer) int {
 				fmt.Fprintf(stderr, "corral review: the verifier %s returned no verdict on any of %d finding(s) — the review is recorded with its reply, unverified\n", *verifier, len(r.Findings))
 			}
 			r.VerifierTool = verifierTool
-			r.VerifierModelResolved = seatNamesAModel(*verifier)
+			r.VerifierModelResolved = agentbackend.SeatNamesAModel(*verifier)
 			review.Verify(context.Background(), rep, &r, *verifier, vopinion, refs)
 		}
 	}
@@ -396,7 +396,9 @@ func seatBackend(model, endpoint string) (agentbackend.Backend, error) {
 		}
 		return base, nil
 	}
-	return agentbackend.ForModelOrLocal(model)
+	// ForSeat defers to ForModelOrLocal for a non-agent name, so the local
+	// fallback is kept; an agent spec never reaches here (seat() takes it).
+	return agentbackend.ForSeat(model, agentbackend.SeatOptions{})
 }
 
 // worktreeReproducer runs a script in a detached git worktree at the

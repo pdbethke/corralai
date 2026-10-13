@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Elastic-2.0
 
-package main
+package agentbackend
 
 import (
 	"bytes"
@@ -12,8 +12,6 @@ import (
 	"sort"
 	"strings"
 	"time"
-
-	"github.com/pdbethke/corralai/internal/agentbackend"
 )
 
 // Agentic seats: a coding agent as the reviewer or the verifier. The seat
@@ -70,10 +68,10 @@ func agentDefinition(name string) (def string, builtin, ok bool) {
 	return "", false, false
 }
 
-// agentSeat splits "claude-code:claude-sonnet-5" into agent name and
+// AgentSeat splits "claude-code:claude-sonnet-5" into agent name and
 // model; ok is false for an API model name (a spec whose first word names
 // no agent).
-func agentSeat(spec string) (name, model string, ok bool) {
+func AgentSeat(spec string) (name, model string, ok bool) {
 	name, model, _ = strings.Cut(strings.TrimSpace(spec), ":")
 	if _, _, defined := agentDefinition(name); !defined {
 		return "", "", false
@@ -81,11 +79,11 @@ func agentSeat(spec string) (name, model string, ok bool) {
 	return name, strings.TrimSpace(model), true
 }
 
-// seatModelOf is the model a seat spec resolves to for the decorrelation
+// SeatModelOf is the model a seat spec resolves to for the decorrelation
 // rule: an API seat is its own name; an agentic seat pinned to a model is
 // that model; an unpinned agentic seat is the agent.
-func seatModelOf(spec string) string {
-	if name, model, ok := agentSeat(spec); ok {
+func SeatModelOf(spec string) string {
+	if name, model, ok := AgentSeat(spec); ok {
 		if model == "" {
 			return name
 		}
@@ -94,17 +92,17 @@ func seatModelOf(spec string) string {
 	return strings.TrimSpace(spec)
 }
 
-// seatNamesAModel reports whether spec identifies an actual MODEL, or only
+// SeatNamesAModel reports whether spec identifies an actual MODEL, or only
 // the tool that ran one. An API seat is its own model name. An agentic seat
 // is one only when pinned (`agent:model`); unpinned, the CLI chooses its own
 // model and corral is not told which, so the record must not claim to know.
 //
-// This is deliberately NOT seatModelOf's question. That one asks "what does
+// This is deliberately NOT SeatModelOf's question. That one asks "what does
 // the decorrelation rule compare", and answering "the agent" is right there —
 // two unpinned claude-code seats ARE correlated. This one asks "may a
 // per-model analysis use this row", where the same answer is a no.
-func seatNamesAModel(spec string) bool {
-	if _, model, ok := agentSeat(spec); ok {
+func SeatNamesAModel(spec string) bool {
+	if _, model, ok := AgentSeat(spec); ok {
 		return model != ""
 	}
 	return strings.TrimSpace(spec) != ""
@@ -117,11 +115,11 @@ type agentBackend struct {
 	timeout          time.Duration
 }
 
-// agentVersion is what the agent's binary prints for --version, for the
+// AgentVersion is what the agent's binary prints for --version, for the
 // record: an agent's row in models rank is a tool AND a version AND a
 // model. An operator-defined agent's record also carries its definition,
 // since that is what sat in the seat.
-func agentVersion(name string) string {
+func AgentVersion(name string) string {
 	def, builtin, ok := agentDefinition(name)
 	if !ok {
 		return ""
@@ -190,7 +188,7 @@ func expandAgentArgv(name string, argv []string, model, dir, out string) ([]stri
 	return expanded, nil
 }
 
-func (a agentBackend) Chat(messages []agentbackend.Message, _ []any) (agentbackend.Message, error) {
+func (a agentBackend) Chat(messages []Message, _ []any) (Message, error) {
 	var prompt strings.Builder
 	for _, m := range messages {
 		if prompt.Len() > 0 {
@@ -203,7 +201,7 @@ func (a agentBackend) Chat(messages []agentbackend.Message, _ []any) (agentbacke
 		if strings.Contains(w, "{out}") {
 			f, err := os.CreateTemp("", "corral-agent-*.txt")
 			if err != nil {
-				return agentbackend.Message{}, err
+				return Message{}, err
 			}
 			outFile = f.Name()
 			f.Close()
@@ -211,19 +209,28 @@ func (a agentBackend) Chat(messages []agentbackend.Message, _ []any) (agentbacke
 			break
 		}
 	}
-	argv, err := expandAgentArgv(a.name, a.argv, a.model, a.dir, outFile)
+	dir := a.dir
+	if dir == "" {
+		d, err := os.MkdirTemp("", "corral-seat-*")
+		if err != nil {
+			return Message{}, err
+		}
+		defer os.RemoveAll(d)
+		dir = d
+	}
+	argv, err := expandAgentArgv(a.name, a.argv, a.model, dir, outFile)
 	if err != nil {
-		return agentbackend.Message{}, err
+		return Message{}, err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), a.timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...) // #nosec G204 -- the operator's own agent definition, run in a disposable worktree
-	cmd.Dir = a.dir
+	cmd.Dir = dir
 	cmd.Stdin = strings.NewReader(prompt.String())
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	if err := cmd.Run(); err != nil {
-		return agentbackend.Message{}, fmt.Errorf("%s: %v: %s", a.name, err, tail(strings.TrimSpace(stderr.String()), 800))
+		return Message{}, fmt.Errorf("%s: %v: %s", a.name, err, tailOf(strings.TrimSpace(stderr.String()), 800))
 	}
 	content := stdout.String()
 	if outFile != "" {
@@ -231,14 +238,14 @@ func (a agentBackend) Chat(messages []agentbackend.Message, _ []any) (agentbacke
 			content = string(b)
 		}
 	}
-	return agentbackend.Message{Role: "assistant", Content: content}, nil
+	return Message{Role: "assistant", Content: content}, nil
 }
 
-// newAgentSeat is the backend for an agentic seat in dir (a disposable
-// worktree), or nil, false for an API seat. A definition that does not
-// split, or that cannot carry the pin, is an error by name.
-func newAgentSeat(spec, dir string, timeout time.Duration) (agentbackend.Backend, bool, error) {
-	name, model, ok := agentSeat(spec)
+// newAgentSeat is the backend for an agentic seat in dir ("" = a fresh empty
+// directory per call), or nil, false for an API seat. A definition that does
+// not split, or that cannot carry the pin, is an error by name.
+func newAgentSeat(spec, dir string, timeout time.Duration) (Backend, bool, error) {
+	name, model, ok := AgentSeat(spec)
 	if !ok {
 		return nil, false, nil
 	}
@@ -250,12 +257,56 @@ func newAgentSeat(spec, dir string, timeout time.Duration) (agentbackend.Backend
 	if _, err := expandAgentArgv(name, argv, model, dir, "out"); err != nil {
 		return nil, true, err
 	}
-	return agentBackend{name: name, model: model, dir: filepath.Clean(dir), argv: argv, timeout: timeout}, true, nil
+	if dir != "" {
+		dir = filepath.Clean(dir)
+	}
+	if timeout <= 0 {
+		timeout = defaultSeatTimeout
+	}
+	return agentBackend{name: name, model: model, dir: dir, argv: argv, timeout: timeout}, true, nil
 }
 
-// definedAgents lists the seat names an operator can use right now — the
+// defaultSeatTimeout bounds one agent call when the caller names none.
+const defaultSeatTimeout = 15 * time.Minute
+
+// SeatOptions are how a caller places an agent seat. They mean nothing to an
+// API seat.
+type SeatOptions struct {
+	Dir     string        // the agent's working tree; "" = a fresh empty temp dir per call, removed after
+	Timeout time.Duration // per call; 0 = 15m
+}
+
+// ForSeat is the single resolver for a seat: spec is either an agent seat
+// (`codex`, `claude-code:claude-sonnet-5`, any CORRALAI_AGENT_<NAME>) or a
+// model name. An agent seat is driven as a CLI; anything else defers to
+// ForModelOrLocal, so a name with no cloud-vendor prefix is still served by
+// the local daemon, as review's seats always were.
+//
+// The deferral keeps ForModel's fail-closed guarantee for every CLOUD name: a
+// claude-/gemini-/gpt- model whose key is missing returns the actionable
+// credential error and is NEVER quietly re-served by a local model (the
+// local fallback applies only to names VendorOf does not recognise). certify's
+// up-front credential check relies on that. An empty spec returns the same
+// error ForModel("") does.
+//
+// An agent seat does not implement ModelSwitcher: it is one tool and one
+// model, and WithModel would silently change what sat in the seat.
+func ForSeat(spec string, opt SeatOptions) (Backend, error) {
+	if b, isAgent, err := newAgentSeat(spec, opt.Dir, opt.Timeout); isAgent {
+		if err != nil {
+			return nil, err
+		}
+		return b, nil
+	}
+	if strings.TrimSpace(spec) == "" {
+		return ForModel(spec)
+	}
+	return ForModelOrLocal(spec)
+}
+
+// DefinedAgents lists the seat names an operator can use right now — the
 // built-ins and everything CORRALAI_AGENT_* defines — for help and errors.
-func definedAgents() []string {
+func DefinedAgents() []string {
 	seen := map[string]bool{}
 	for n := range builtinAgents {
 		seen[n] = true
@@ -326,4 +377,13 @@ func splitWords(s string) ([]string, error) {
 		words = append(words, cur.String())
 	}
 	return words, nil
+}
+
+// tailOf keeps the last n bytes of s, for error text. oneline's head-truncating
+// shape does not fit: the end of an agent's stderr is where it says why it died.
+func tailOf(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return "…" + s[len(s)-n:]
 }

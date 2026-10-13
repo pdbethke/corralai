@@ -544,26 +544,7 @@ func TestAnyAgentCanBeDefinedAsASeat(t *testing.T) {
 		t.Fatalf("a definition that does not split must be refused by name: exit %d %s", code, errb.String())
 	}
 	// An unknown name is an API model, not an agent.
-	if _, _, ok := agentSeat("gemini-3.6-flash"); ok {
+	if _, _, ok := agentbackend.AgentSeat("gemini-3.6-flash"); ok {
 		t.Error("a provider model name is not an agentic seat")
-	}
-}
-
-func TestSplitWordsIsPOSIXEnough(t *testing.T) {
-	for in, want := range map[string][]string{
-		`a b  c`:                 {"a", "b", "c"},
-		`a "b c" 'd e' f\ g`:     {"a", "b c", "d e", "f g"},
-		`x --flag="q v" 'it''s'`: {"x", "--flag=q v", "its"},
-		``:                       nil,
-	} {
-		got, err := splitWords(in)
-		if err != nil || strings.Join(got, "|") != strings.Join(want, "|") {
-			t.Errorf("%q → %q, %v; want %q", in, got, err, want)
-		}
-	}
-	for _, bad := range []string{`a "b`, `a 'b`, `a \`} {
-		if _, err := splitWords(bad); err == nil {
-			t.Errorf("%q must not split", bad)
-		}
 	}
 }

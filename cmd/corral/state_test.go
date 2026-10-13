@@ -154,3 +154,67 @@ func TestCompareKeysRequiresEveryMovedKeyToSurvive(t *testing.T) {
 		t.Errorf("a key row that never moved is not compared: %v", err)
 	}
 }
+
+// "must equal LEDGER_PUBKEY" is an instruction about the certify key; said
+// after a migration that moved no certify key it points at a key line that
+// is not there.
+func TestStateMigrateMentionsLedgerPubkeyOnlyWhenTheCertifyKeyMoved(t *testing.T) {
+	home := isolateStateHome(t)
+	legacy := filepath.Join(home, ".claude")
+	if err := os.MkdirAll(legacy, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(legacy, "corralai_coord.sqlite3"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	if code := runState([]string{"migrate"}, &out, &errb); code != 0 {
+		t.Fatalf("exit %d: %s", code, errb.String())
+	}
+	if strings.Contains(out.String(), "LEDGER_PUBKEY") {
+		t.Fatalf("no certify key moved, yet:\n%s", out.String())
+	}
+
+	seed := bytes.Repeat([]byte{7}, ed25519.SeedSize)
+	if err := os.WriteFile(filepath.Join(legacy, "corralai_certify_key"), []byte(hex.EncodeToString(seed)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if code := runState([]string{"migrate"}, &out, &errb); code != 0 {
+		t.Fatalf("exit %d: %s", code, errb.String())
+	}
+	if !strings.Contains(out.String(), "LEDGER_PUBKEY") {
+		t.Fatalf("the certify key moved and the LEDGER_PUBKEY check was not said:\n%s", out.String())
+	}
+}
+
+// A destination side file with its database still at the source is refused
+// without --resume, and adopted — and said to be — with it.
+func TestStateMigrateResumeAdoptsAndSaysSo(t *testing.T) {
+	home := isolateStateHome(t)
+	legacy := filepath.Join(home, ".claude")
+	state := filepath.Join(home, ".local", "state", "corral")
+	for _, p := range []string{filepath.Join(legacy, "corralai_coord.sqlite3"), filepath.Join(state, "corralai_coord.sqlite3-wal")} {
+		if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var out, errb bytes.Buffer
+	if code := runState([]string{"migrate"}, &out, &errb); code != 1 || !strings.Contains(errb.String(), "--resume") {
+		t.Fatalf("without --resume: exit %d, want 1 naming --resume\n%s", code, errb.String())
+	}
+	if _, err := os.Stat(filepath.Join(legacy, "corralai_coord.sqlite3")); err != nil {
+		t.Fatal("a refused plan moved the database")
+	}
+	out.Reset()
+	errb.Reset()
+	if code := runState([]string{"migrate", "--resume"}, &out, &errb); code != 0 {
+		t.Fatalf("--resume: exit %d\n%s", code, errb.String())
+	}
+	if !strings.Contains(out.String(), "adopting existing "+filepath.Join(state, "corralai_coord.sqlite3-wal")) {
+		t.Fatalf("the adopted side file was not listed:\n%s", out.String())
+	}
+}

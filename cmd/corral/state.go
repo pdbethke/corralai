@@ -34,7 +34,7 @@ var keyPub = map[statedir.File]func([]byte) (ed25519.PublicKey, error){
 }
 
 func runState(args []string, stdout, stderr io.Writer) int {
-	const usage = "usage: corral state migrate [--from DIR] [--dry-run] | corral state paths"
+	const usage = "usage: corral state migrate [--from DIR] [--dry-run] [--resume] | corral state paths"
 	if len(args) == 0 {
 		fmt.Fprintln(stderr, usage)
 		return 2
@@ -72,6 +72,7 @@ func runStateMigrate(args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	from := fs.String("from", "", "the directory corral's state is in now (default: the pre-statedir location)")
 	dry := fs.Bool("dry-run", false, "print what would move and change nothing")
+	resume := fs.Bool("resume", false, "adopt database side files already at the destination whose database is still at the source — only after a migration stopped partway; without it they are conflicts")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return 0
@@ -86,13 +87,17 @@ func runStateMigrate(args []string, stdout, stderr io.Writer) int {
 		}
 		*from = d
 	}
-	moves, conflicts, err := statedir.PlanMigration(*from)
+	moves, conflicts, err := statedir.PlanMigration(*from, statedir.PlanOptions{Resume: *resume})
 	if err != nil {
 		fmt.Fprintln(stderr, "corral state migrate:", err)
 		return 1
 	}
 	if len(conflicts) > 0 {
 		for _, c := range conflicts {
+			if c.Reason != "" {
+				fmt.Fprintf(stderr, "conflict: %s\n", c.Reason)
+				continue
+			}
 			fmt.Fprintf(stderr, "conflict: %s (%d bytes, %s) and %s (%d bytes, %s) both exist\n",
 				c.From, c.FromInfo.Size(), c.FromInfo.ModTime().Format("2006-01-02 15:04"),
 				c.To, c.ToInfo.Size(), c.ToInfo.ModTime().Format("2006-01-02 15:04"))
@@ -109,6 +114,9 @@ func runStateMigrate(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, "%s → %s\n", m.From, m.To)
 		for _, s := range m.Sidecars {
 			fmt.Fprintf(stdout, "  + %s\n", s)
+		}
+		for _, a := range m.Adopted {
+			fmt.Fprintf(stdout, "  adopting existing %s\n", a)
 		}
 	}
 	if *dry {
@@ -130,13 +138,18 @@ func runStateMigrate(args []string, stdout, stderr io.Writer) int {
 	}
 	if applyErr != nil {
 		fmt.Fprintln(stderr, "corral state migrate:", applyErr)
-		fmt.Fprintln(stderr, "corral state migrate: stopped partway — fix the cause and run it again; it resumes where it stopped")
+		fmt.Fprintln(stderr, "corral state migrate: stopped partway — fix the cause, then run `corral state migrate --resume`; do not start the daemon until a migrate completes")
 		return 1
 	}
 	if cmpErr != nil {
 		return 1
 	}
-	fmt.Fprintln(stdout, "done. The certify public key above must equal LEDGER_PUBKEY for the ledger you sign.")
+	fmt.Fprintln(stdout, "done.")
+	for _, m := range done {
+		if m.File == statedir.CertifyKey {
+			fmt.Fprintln(stdout, "The certify public key above must equal LEDGER_PUBKEY for the ledger you sign.")
+		}
+	}
 	return 0
 }
 

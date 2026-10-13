@@ -49,9 +49,13 @@ Run `corral state migrate --dry-run`, then `corral state migrate`, with
 the daemon stopped. It prints the certify key's public key before and
 after; it must match the `LEDGER_PUBKEY` of any ledger you sign.
 
-Migrate refuses, touching nothing, on any conflict, on a symlinked source and
-on a running daemon. An interrupted migrate resumes when re-run. To keep using
-the old directory in place instead, set `CORRALAI_STATE_DIR` to it.
+Migrate refuses, touching nothing, on any conflict, on a symlinked source, on
+a source owned by another user and on a running daemon. If a migrate stops
+partway, fix the cause and run `corral state migrate --resume`: database side
+files move first, and a side file already at the destination is a conflict
+unless `--resume` says it came from that interrupted run (each one adopted is
+listed). Do not start the daemon until a migrate completes. To keep using the
+old directory in place instead, set `CORRALAI_STATE_DIR` to it.
 
 ## Reliability & stall detection
 

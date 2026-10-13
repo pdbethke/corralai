@@ -237,3 +237,4 @@ corral review recheck --timeout	executed	test:cmd/corral/review_recheck_test.go
 corral review recheck --json	executed	test:cmd/corral/review_recheck_test.go
 corral state migrate --dry-run	executed	test:cmd/corral/state_test.go (TestStateMigrateDryRunMovesNothing)
 corral state migrate --from	executed	test:cmd/corral/state_test.go (TestStateMigrateFromMovesAnExplicitDirectory)
+corral state migrate --resume	executed	test:cmd/corral/state_test.go (TestStateMigrateResumeAdoptsAndSaysSo)

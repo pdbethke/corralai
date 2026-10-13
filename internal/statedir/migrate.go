@@ -19,14 +19,30 @@ type Move struct {
 	File     File
 	From, To string
 	Sidecars []string // names, e.g. "corralai_coord.sqlite3-wal"
+	// Adopted are side files already at the destination with none at the
+	// source — an interrupted earlier run's, kept only under PlanOptions.Resume
+	// and always listed so the operator sees what was taken as theirs.
+	Adopted []string
 }
 
-// Conflict is a row present at both ends. Migrate never merges and never
-// overwrites; the operator decides.
+// Conflict is something migrate will not decide for the operator: a row
+// present at both ends, a destination side file nothing explains, or a
+// crashed copy's temp file. Migrate never merges and never overwrites.
+// FromInfo is nil when nothing is at From; Reason, when set, says why it is
+// a conflict in words the CLI prints as they are.
 type Conflict struct {
 	File             File
 	From, To         string
 	FromInfo, ToInfo os.FileInfo
+	Reason           string
+}
+
+// PlanOptions are the operator's decisions a plan cannot make itself.
+type PlanOptions struct {
+	// Resume adopts destination side files whose main file is still at the
+	// source: the operator says the earlier run that moved them was THIS
+	// migration, interrupted. Without it they are conflicts.
+	Resume bool
 }
 
 var rename = os.Rename
@@ -44,9 +60,13 @@ var sidecarSuffixes = []string{"-wal", "-shm", ".wal"}
 // PlanMigration decides what would move from dir and changes nothing.
 // Rows with a per-file override are skipped: the operator already chose
 // where that file lives.
-func PlanMigration(dir string) ([]Move, []Conflict, error) {
+func PlanMigration(dir string, opts PlanOptions) ([]Move, []Conflict, error) {
 	var moves []Move
 	var conflicts []Conflict
+	if err := requireOwnedByMe(dir); err != nil {
+		return nil, nil, err
+	}
+	swept := map[string]bool{}
 	for _, f := range Files() {
 		if host.env(f.Override) != "" {
 			continue
@@ -57,6 +77,9 @@ func PlanMigration(dir string) ([]Move, []Conflict, error) {
 			continue
 		}
 		if err != nil {
+			return nil, nil, err
+		}
+		if err := ownedByMe(from, fi); err != nil {
 			return nil, nil, err
 		}
 		if fi.Mode()&os.ModeSymlink != 0 {
@@ -70,6 +93,14 @@ func PlanMigration(dir string) ([]Move, []Conflict, error) {
 		to := filepath.Join(rootDir, f.Name)
 		if from == to {
 			continue
+		}
+		if !swept[rootDir] {
+			swept[rootDir] = true
+			strays, err := strayTemps(f, rootDir)
+			if err != nil {
+				return nil, nil, err
+			}
+			conflicts = append(conflicts, strays...)
 		}
 		// Fail closed: a probe that could not answer is not "unlocked". Moving a
 		// store a running daemon holds open is the one mistake this verb must
@@ -90,8 +121,20 @@ func PlanMigration(dir string) ([]Move, []Conflict, error) {
 		for _, s := range sidecarSuffixes {
 			si, err := os.Lstat(from + s)
 			if err != nil {
-				// Gone from the source and present at the destination is an
-				// interrupted earlier run (side files move first): resume it.
+				// Absent at the source and present at the destination: an
+				// interrupted earlier run (side files move first) — or a stale
+				// file from something else, which rename would then replay
+				// into the wrong database. Only the operator knows which.
+				ti, terr := os.Lstat(to + s)
+				switch {
+				case terr != nil:
+				case opts.Resume:
+					m.Adopted = append(m.Adopted, to+s)
+				default:
+					conflicts = append(conflicts, Conflict{File: f, From: from + s, To: to + s, ToInfo: ti,
+						Reason: fmt.Sprintf("%s exists but %s does not and %s has not moved — if a migration stopped partway, re-run with --resume to adopt it; otherwise remove it", to+s, from+s, from)})
+					clash = true
+				}
 				continue
 			}
 			if si.Mode()&os.ModeSymlink != 0 {
@@ -111,6 +154,55 @@ func PlanMigration(dir string) ([]Move, []Conflict, error) {
 		}
 	}
 	return moves, conflicts, nil
+}
+
+// strayTemps reports any .migrate-* file in a destination directory: a copy
+// copyVerifyRemove made and a crash kept it from removing. It may be a copy of
+// a private key, so it is named for the operator to remove, never swept here.
+func strayTemps(f File, dir string) ([]Conflict, error) {
+	matches, err := filepath.Glob(filepath.Join(dir, ".migrate-*"))
+	if err != nil {
+		return nil, err
+	}
+	var out []Conflict
+	for _, p := range matches {
+		ti, err := os.Lstat(p)
+		if err != nil {
+			continue
+		}
+		out = append(out, Conflict{File: f, To: p, ToInfo: ti,
+			Reason: fmt.Sprintf("%s is a temporary copy left by a migration that crashed (it may hold a private key) — check it and remove it, then run again", p)})
+	}
+	return out, nil
+}
+
+// euid is the effective uid ownership is compared with; a seam so a test can
+// play another user without root.
+var euid = os.Geteuid
+
+// requireOwnedByMe refuses a --from directory another user owns. Run as the
+// wrong user (sudo, a service account), migrate moves files the owner's next
+// run then cannot find — and the owner's key loader mints a fresh key.
+func requireOwnedByMe(dir string) error {
+	fi, err := os.Lstat(dir)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return ownedByMe(dir, fi)
+}
+
+func ownedByMe(p string, fi os.FileInfo) error {
+	uid, ok := ownerUID(fi)
+	if !ok {
+		return nil
+	}
+	if me := euid(); uid != me {
+		return fmt.Errorf("%s is owned by uid %d but this process runs as uid %d — run `corral state migrate` as the user who owns it, so the files land in that user's state directory", p, uid, me)
+	}
+	return nil
 }
 
 // ApplyMigration performs the moves: rename on one filesystem, otherwise

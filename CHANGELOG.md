@@ -26,11 +26,17 @@ history of any release, `git log v0.3.4..v0.3.5`.
   first run would mint a new certify key, and every entry signed after it
   would fail against your `LEDGER_PUBKEY`. Setting `CORRALAI_STATE_DIR` to
   the old directory uses the files in place instead. Migrate moves each
-  file with its `-wal`, `-shm` and `.wal` side files (side files first, so an
-  interrupted run resumes when re-run), refuses on any conflict without
-  touching anything, refuses a symlinked source and a running daemon (and a
-  file whose lock it cannot probe), and prints each key's public key before
-  and after the move, exiting 1 if a moved key does not match. The refusal
+  file with its `-wal`, `-shm` and `.wal` side files (side files first, the
+  database last), refuses on any conflict without touching anything, refuses
+  a symlinked source, a running daemon (and a file whose lock it cannot
+  probe), and a source owned by another user, and prints each key's public
+  key before and after the move, exiting 1 if a moved key does not match. A
+  side file already at the destination while its database is still at the
+  source is a conflict, because it may be stale; after a migrate that stopped
+  partway, re-run it with `--resume` to adopt such files (each is listed), and
+  do not start the daemon until a migrate completes. A `.migrate-*` temporary
+  file left in the destination by a crash is reported as a conflict for you
+  to remove. The refusal
   and the migrate command are planned for removal in a later release (the
   first release after 1.0 is proposed, not decided).
 

@@ -28,7 +28,7 @@ Usage:
   corral secret set|get|list|rm   manage provider keys + tokens in the secure keystore
                                   (env → OS keyring → age-encrypted file; set reads stdin, never argv)
   corral state paths              print where each corral file lives and which variable moves it
-  corral state migrate [--from DIR] [--dry-run]
+  corral state migrate [--from DIR] [--dry-run] [--resume]
                                   move corral's files out of the pre-1.0 location into the
                                   state and cache directories; prints each key's public key
                                   before and after, refuses on a conflict or while the daemon
@@ -885,7 +885,7 @@ usage: corral secret set <NAME>  (value read from stdin — never a CLI arg)
 ## `corral state` flags
 
 ```
-usage: corral state migrate [--from DIR] [--dry-run] | corral state paths
+usage: corral state migrate [--from DIR] [--dry-run] [--resume] | corral state paths
 ```
 
 ## `corral state migrate` flags
@@ -896,6 +896,8 @@ Usage of state migrate:
     	print what would move and change nothing
   -from string
     	the directory corral's state is in now (default: the pre-statedir location)
+  -resume
+    	adopt database side files already at the destination whose database is still at the source — only after a migration stopped partway; without it they are conflicts
 ```
 
 ## `corral state paths` flags

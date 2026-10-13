@@ -58,12 +58,12 @@ func TestMigrateRefusesWhileAnotherProcessHoldsAStore(t *testing.T) {
 	for sc.Scan() && sc.Text() != "ready" {
 	}
 
-	if _, _, err := PlanMigration(legacy); err == nil || !strings.Contains(err.Error(), "stop the daemon") {
+	if _, _, err := PlanMigration(legacy, PlanOptions{}); err == nil || !strings.Contains(err.Error(), "stop the daemon") {
 		t.Fatalf("want a refusal while another process holds the store, got %v", err)
 	}
 	_ = stdin.Close()
 	_ = cmd.Wait()
-	if _, _, err := PlanMigration(legacy); err != nil {
+	if _, _, err := PlanMigration(legacy, PlanOptions{}); err != nil {
 		t.Fatalf("after the holder exits, planning must succeed: %v", err)
 	}
 }

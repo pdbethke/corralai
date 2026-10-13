@@ -131,6 +131,7 @@ func TestScoreRefusesToGradeWithACommandThatFailsOnCompliantCode(t *testing.T) {
 	if _, err := exec.LookPath("python3"); err != nil {
 		t.Skip("python3 not installed — this proof needs the real interpreter")
 	}
+	skipWithoutPytest(t)
 	root := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(root, "tests"), 0o755); err != nil {
 		t.Fatal(err)
@@ -254,6 +255,7 @@ func TestCompileGateThatRejectsCompliantCodeIsDisabled(t *testing.T) {
 	if _, err := exec.LookPath("python3"); err != nil {
 		t.Skip("python3 not installed")
 	}
+	skipWithoutPytest(t)
 	j := NewWorkspaceRunner(root, 60*time.Second)
 	// A "gate" that fails on everything, compliant code included.
 	gate := [][]string{{"false"}}
@@ -277,5 +279,16 @@ func TestCompileGateThatRejectsCompliantCodeIsDisabled(t *testing.T) {
 	}
 	if len(rep.Killed) != 1 {
 		t.Errorf("the suite catches x=2; want killed=[m], got killed=%v survived=%v", rep.Killed, rep.Survived)
+	}
+}
+
+// skipWithoutPytest skips a test whose suite is `python3 -m pytest` when the
+// host's python3 cannot import pytest (macOS's Command Line Tools python3
+// ships without it). Without pytest the compliant baseline itself fails, so
+// such a test would measure the missing tool, not the scorer.
+func skipWithoutPytest(t *testing.T) {
+	t.Helper()
+	if out, err := exec.Command("python3", "-c", "import pytest").CombinedOutput(); err != nil {
+		t.Skipf("python/pytest not available: python3 cannot import pytest (%v): %s", err, strings.TrimSpace(string(out)))
 	}
 }

@@ -559,10 +559,11 @@ runs:
         if [ ! -s "$stmt" ]; then
           # A NOTHING IN SCOPE run still writes a statement (audited: 0,
           # files: []), so a missing file is never "nothing was audited" —
-          # it is a write that failed, and corral has already raised a
-          # ::warning naming the error. Say what this step knows: no
+          # it is a write that failed (corral has already raised a
+          # ::warning naming the error), or an interrupted run (exit 130),
+          # which records nothing by design. Say what this step knows: no
           # statement, so no attestation.
-          echo "::warning title=corral attest::no audit statement was written at $stmt, so nothing is attested — see the run step's own warning for why."
+          echo "::warning title=corral attest::no audit statement was written at $stmt, so nothing is attested — either the write failed (see the run step's own warning) or the run was interrupted (exit 130), which records nothing."
           echo "present=false" >> "$GITHUB_OUTPUT"
           exit 0
         fi

@@ -133,11 +133,23 @@ agent call is started in that run. This holds in every verb, including
 `review`, which has no other signal handling.
 
 **An interrupted run records nothing**, whatever its seats are (API models
-included): `certify --repo`, `certify --local` and `review` write no ledger
-entry, signed verdict, attestation or push, label no file as failed, and exit
-1 with `interrupted — nothing recorded`. That includes a signal that lands
-after the last model call, right before the writes. When no agent is running,
-Ctrl-C otherwise means what it always did.
+included). `certify --repo`, `certify --local` and `review` write no ledger
+entry, signed verdict, attestation, `--record-mutants` set or push, label no
+file as failed, and exit **130** with `interrupted — nothing recorded`. That
+includes a signal that lands after the last model call, right before the
+writes. The one exception is `certify --local`'s live event stream, which
+writes each event as it happens by design, so it holds the events up to the
+interrupt.
+
+Two cases are reported as what they are rather than as "nothing recorded":
+- **certify --local, signal after signing.** certify --local signs its verdict
+  inside the run, so a signal that lands after the verdict was signed found a
+  complete, recorded run. It is reported as recorded.
+- **review, signal between entry and push.** A review interrupted after its
+  ledger entry was written, but before the push, says the entry was written
+  and not pushed.
+
+When no agent is running, Ctrl-C otherwise means what it always did.
 
 A signal the process was started ignoring stays ignored: neither corral's own
 handler nor the agent forwarding registers it. (A shell running a background

@@ -74,9 +74,14 @@ history of any release, `git log v0.3.4..v0.3.5`.
   `certify --repo` stamped the stopped file `executor-error` and still wrote
   its ledger entry, attestation and push, and an interrupted `certify` could
   bank what it had measured as a timed-out verdict. Now `certify --repo`,
-  `certify --local` and `review` write nothing, label nothing, and exit 1 with
-  `interrupted — nothing recorded`. A process started with SIGINT ignored
-  keeps ignoring it.
+  `certify --local` and `review` write no ledger entry, verdict, attestation,
+  `--record-mutants` set or push. They label nothing, and exit **130** (new,
+  the shell's Ctrl-C status) with `interrupted — nothing recorded`.
+  `--record-stream` is the exception: it streams events as they happen, by
+  design. A `certify --local` verdict already signed when the signal lands is
+  reported as recorded. A review interrupted between its ledger entry and its
+  push says the entry was written and not pushed. A process started with
+  SIGINT ignored keeps ignoring it.
 - **One-time cache miss.** `reposcan.VerdictGeneration` is now 19 (it was 17
   earlier in this release). Every verdict cached before this change is
   re-measured once.

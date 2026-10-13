@@ -952,6 +952,12 @@ refused self-hosted runners that do have the CLI, so it was removed.)
   (`KILL-RATE BREACH:`). Per-file goal derivation that runs and comes back
   empty for every file lands here too — the scan happened, it just graded
   nothing.
+- **130** — the run was interrupted (Ctrl-C or SIGTERM): nothing was
+  recorded. No ledger entry, attestation,
+  `--record-mutants` set or push; the step fails as it does on 1. A review
+  interrupted after its ledger entry was written, but before its push, also
+  exits 130 and says so.
+
 - **2** — the run never started: a usage error (bad flags, including a
   `min-kill-rate` that doesn't parse or falls outside 0.0-1.0), or the goal
   deriver could not be CONSTRUCTED at all — the usual cause being no

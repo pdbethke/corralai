@@ -80,3 +80,24 @@ func TestBwrapHomeIsWritable(t *testing.T) {
 		t.Fatalf("HOME should be /home/agent and writable, got %q", r.Output)
 	}
 }
+
+// TestBwrapPinsTheEnvironment mirrors the macOS TestSandboxExecPinsTheEnvironment:
+// a host variable reaches the jail only when the caller forwards it in
+// Options.Env. One set in corral's environment and NOT forwarded is
+// absent (--clearenv); one forwarded is present.
+func TestBwrapPinsTheEnvironment(t *testing.T) {
+	iso := bwrapOrSkip(t)
+	t.Setenv("CORRAL_HOST_ONLY_MARKER", "leak")
+	t.Setenv("CORRAL_HOST_ONLY_UNFORWARDED", "leak") // in the host env, NOT in Options.Env
+	env := append(MinimalEnv(), "CORRAL_HOST_ONLY_MARKER=leak")
+	r := Run(context.Background(), "env", Options{Workspace: t.TempDir(), Backend: iso, Env: env})
+	if r.ExitCode != 0 {
+		t.Fatalf("exit=%d err=%q output=%q", r.ExitCode, r.Err, r.Output)
+	}
+	if !strings.Contains(r.Output, "CORRAL_HOST_ONLY_MARKER=leak\n") {
+		t.Errorf("a forwarded variable is missing from the jail:\n%s", r.Output)
+	}
+	if strings.Contains(r.Output, "CORRAL_HOST_ONLY_UNFORWARDED") {
+		t.Errorf("an unforwarded host variable reached the jail:\n%s", r.Output)
+	}
+}

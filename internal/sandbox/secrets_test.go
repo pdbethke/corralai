@@ -14,7 +14,13 @@ import (
 // does (CARGO_HOME=/usr/local/cargo), under a stand-in for /usr.
 func fakeSystemCargoHome(t *testing.T) (usr, cargoHome string) {
 	t.Helper()
-	usr = t.TempDir()
+	// Resolved: secretMasks compares the RESOLVED cargo home with the tree,
+	// and on macOS t.TempDir() is /var/folders, a symlink into /private.
+	// The real trees (/usr, /opt/homebrew) are not symlinks.
+	usr, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	cargoHome = filepath.Join(usr, "local", "cargo")
 	for rel, body := range map[string]string{
 		"bin/cargo":                 "#!/bin/sh\n",

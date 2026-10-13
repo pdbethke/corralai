@@ -8,6 +8,19 @@ import (
 	"testing"
 )
 
+// resolvedTempDir is t.TempDir() with its symlinks resolved. The code under
+// test resolves every binary it finds on PATH, and on macOS t.TempDir() is
+// /var/folders/..., a symlink to /private/var/folders/...: a test that
+// expects an unresolved path compares two spellings of one directory.
+func resolvedTempDir(t *testing.T) string {
+	t.Helper()
+	d, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return d
+}
+
 // layout writes files (and, for a value starting with "->", symlinks) under
 // root.
 func layout(t *testing.T, root string, files map[string]string) {
@@ -35,7 +48,7 @@ func layout(t *testing.T, root string, files map[string]string) {
 // so it is still bound as bin/ alone: its config.toml registry token and its
 // git checkouts stay out.
 func TestDistroCargoInstalledToolsNarrowToBin(t *testing.T) {
-	home := t.TempDir()
+	home := resolvedTempDir(t)
 	layout(t, home, map[string]string{
 		".cargo/bin/cargo-nextest":         "#!/bin/sh\n",
 		".cargo/.crates.toml":              "[v1]\n",
@@ -60,7 +73,7 @@ func TestDistroCargoInstalledToolsNarrowToBin(t *testing.T) {
 // CARGO_HOME or ~/.cargo, so it is never a cargo home. Its other runners
 // (node, resolving into Cellar/) and its cargo still bind the prefix.
 func TestBrewPrefixWithRustStillBindsItsRunners(t *testing.T) {
-	home := t.TempDir()
+	home := resolvedTempDir(t)
 	brew := filepath.Join(home, ".linuxbrew")
 	layout(t, home, map[string]string{
 		".linuxbrew/Cellar/rust/1.90.0/bin/cargo":              "#!/bin/sh\n",
@@ -87,7 +100,7 @@ func TestBrewPrefixWithRustStillBindsItsRunners(t *testing.T) {
 func TestStandaloneRustPrefixKeepsItsLib(t *testing.T) {
 	// ~/sdk is a toolchain directory directly under $HOME, so the prefix IS
 	// the toolchain root (as /opt/rust is) rather than a child of it.
-	home := t.TempDir()
+	home := resolvedTempDir(t)
 	t.Setenv("HOME", home)
 	prefix := filepath.Join(home, "sdk")
 	layout(t, prefix, map[string]string{
@@ -111,7 +124,7 @@ func TestStandaloneRustPrefixKeepsItsLib(t *testing.T) {
 // ~/.local/bin/env beside uv. ~/.local/bin is a directory of programs, not a
 // cargo home, so uv and a pip --user pytest bind it as before.
 func TestUvLocalBinIsNotACargoHome(t *testing.T) {
-	home := t.TempDir()
+	home := resolvedTempDir(t)
 	layout(t, home, map[string]string{
 		".local/bin/uv":     "#!/bin/sh\n",
 		".local/bin/pytest": "#!/bin/sh\n",
@@ -132,7 +145,7 @@ func TestUvLocalBinIsNotACargoHome(t *testing.T) {
 // operator's cargo home by definition, whatever it holds: a stray lib/ does
 // not make it something bound whole with its registry token and checkouts.
 func TestOperatorCargoHomeWithStrayLibNarrowsToBin(t *testing.T) {
-	home := t.TempDir()
+	home := resolvedTempDir(t)
 	layout(t, home, map[string]string{
 		".cargo/bin/cargo-nextest":         "#!/bin/sh\n",
 		".cargo/lib/stray.so":              "",
@@ -155,7 +168,7 @@ func TestOperatorCargoHomeWithStrayLibNarrowsToBin(t *testing.T) {
 // would bind it whole, exposing everything the cargo-home rule hides. It is
 // refused, even when that cargo home holds nothing but bin/ today.
 func TestRustupHomeRefusesACargoHome(t *testing.T) {
-	home := t.TempDir()
+	home := resolvedTempDir(t)
 	layout(t, home, map[string]string{".cargo/bin/rustup": "#!/bin/sh\n"})
 	t.Setenv("HOME", home)
 	t.Setenv("CARGO_HOME", "")
@@ -170,7 +183,7 @@ func TestRustupHomeRefusesACargoHome(t *testing.T) {
 // install prefix, not a cargo home: cargo binds the brew prefix, which covers
 // libexec/, and is not narrowed to the keg's bin/.
 func TestLinuxbrewRustupKegBindsThePrefix(t *testing.T) {
-	home := t.TempDir()
+	home := resolvedTempDir(t)
 	brew := filepath.Join(home, ".linuxbrew")
 	keg := filepath.Join(brew, "Cellar", "rustup", "1.28.2")
 	layout(t, home, map[string]string{
@@ -200,7 +213,7 @@ func TestLinuxbrewRustupKegBindsThePrefix(t *testing.T) {
 // another disk, with a stray lib/ and a registry token in config.toml, is
 // still the operator's cargo home: only its bin/ is bound.
 func TestSymlinkedOperatorCargoHomeNarrowsToBin(t *testing.T) {
-	home := t.TempDir()
+	home := resolvedTempDir(t)
 	data := filepath.Join(home, "sdk", "cargo")
 	layout(t, home, map[string]string{
 		"sdk/cargo/bin/cargo-nextest": "#!/bin/sh\n",

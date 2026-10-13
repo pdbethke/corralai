@@ -199,12 +199,15 @@ func TestPoolEnumerateNeverSharesATreeWithAConcurrentRun(t *testing.T) {
 	}
 }
 
+// TestPoolTreeEnvIsPerTree: the env names the tree the run is in. Both sides
+// are compared physically (pwd -P), since the tree path may be spelled through
+// a symlink (macOS's /var/folders -> /private/var/folders).
 func TestPoolTreeEnvIsPerTree(t *testing.T) {
 	root := newGitRepo(t, map[string]string{"a.py": "x=0\n"}, nil)
 	p, _, _ := NewWorkspacePool(context.Background(), root, 2, time.Minute,
 		WithTreeEnv(func(tree string) []string { return []string{"CORRAL_TREE=" + tree} }))
 	defer p.Close()
-	ok, err := p.RunTest(context.Background(), nil, []string{"sh", "-c", `[ "$CORRAL_TREE" = "$(pwd -P)" ]`})
+	ok, err := p.RunTest(context.Background(), nil, []string{"sh", "-c", `[ "$(cd "$CORRAL_TREE" && pwd -P)" = "$(pwd -P)" ]`})
 	if err != nil || !ok {
 		t.Errorf("the run must see ITS tree in the env: ok=%v err=%v", ok, err)
 	}

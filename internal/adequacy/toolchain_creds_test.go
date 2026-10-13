@@ -21,7 +21,7 @@ import (
 // points HOME and PATH at it and returns the credential files.
 func fakeHomeWithCredentials(t *testing.T) (home string, creds []string) {
 	t.Helper()
-	home = t.TempDir()
+	home = resolvedTempDir(t)
 	write := func(rel, body string, mode os.FileMode) string {
 		p := filepath.Join(home, rel)
 		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
@@ -139,7 +139,7 @@ func TestRustupLayoutNeverBindsCargoHome(t *testing.T) {
 // registry tokens there too) and a private git checkout.
 func fakeCargoHome(t *testing.T) (home string) {
 	t.Helper()
-	home = t.TempDir()
+	home = resolvedTempDir(t)
 	mk := func(rel, body string, mode os.FileMode) string {
 		p := filepath.Join(home, rel)
 		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {

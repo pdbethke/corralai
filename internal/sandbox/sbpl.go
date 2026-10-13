@@ -46,7 +46,7 @@ var sbplSystemReads = []sbplRule{
 	{`(allow file-read* (subpath "/sbin"))`, "base system utilities some build scripts call"},
 	{`(allow file-read* (subpath "/System"))`, "frameworks and the dyld shared cache every binary maps at exec"},
 	{`(allow file-read* (subpath "/private/etc"))`, "hosts, passwd, group, ssl: the system databases bwrap binds from /etc"},
-	{`(deny file-read* (literal "/private/etc/master.passwd"))`, "the password hashes: bwrap never binds /etc/shadow either"},
+	{`(deny file-read* (literal "` + sbplMasterPasswd + `"))`, "the password hashes: bwrap never binds /etc/shadow either"},
 	{`(allow file-read* (subpath "/private/var/select"))`, "/bin/sh resolves which shell to run through /private/var/select/sh"},
 	{`(allow file-read* (subpath "/private/var/db/timezone"))`, "the timezone database libc reads at startup"},
 	{`(allow file-read* (subpath "/dev"))`, "device nodes: /dev/null, /dev/urandom, /dev/tty"},
@@ -64,10 +64,19 @@ var sbplServices = []sbplRule{
 	{`(allow ipc-posix-shm-read* (ipc-posix-name "apple.shm.notification_center"))`, "notifyd's shared page, read only"},
 }
 
+// The fixed secret stores the profile denies: master.passwd in layer 2, the
+// other two in layer 4. Named once, because sbplCheckReopen must refuse any
+// later allow that would re-expose them.
+const (
+	sbplMasterPasswd = "/private/etc/master.passwd"
+	sbplKeychains    = "/Library/Keychains"
+	sbplDSLocal      = "/private/var/db/dslocal"
+)
+
 // Layer 4 (fixed part): operator secret stores outside $HOME.
 var sbplOperatorSecrets = []sbplRule{
-	{`(deny file-read* (subpath "/Library/Keychains"))`, "system keychains"},
-	{`(deny file-read* (subpath "/private/var/db/dslocal"))`, "the local directory-service database, which holds password hashes"},
+	{`(deny file-read* (subpath "` + sbplKeychains + `"))`, "system keychains"},
+	{`(deny file-read* (subpath "` + sbplDSLocal + `"))`, "the local directory-service database, which holds password hashes"},
 }
 
 // Layer 8: granted only with Options.Network (the fetch step).
@@ -129,6 +138,53 @@ func sbplValidate(in sbplInput) error {
 			return err
 		}
 	}
+	if err := sbplCheckReopen("Workspace", in.Workspace, in.OperatorHome); err != nil {
+		return err
+	}
+	for _, p := range in.ReadOnly {
+		if err := sbplCheckReopen("ReadOnly", p, in.OperatorHome); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// sbplCheckReopen refuses an allow (a ReadOnly path, layer 5, or the
+// workspace, layer 6) that would undo a deny above it. SBPL applies the LAST
+// matching rule, so an allow on a path that EQUALS or CONTAINS a denied one
+// re-allows it: ReadOnly "/private" would hand the jail master.passwd,
+// "/Library" the system keychains, "/Users" the operator's home. A toolchain
+// resolver can produce such a path (it once bound "/private" for any
+// toolchain under a macOS temp dir); this makes that a refusal, never a
+// silently open jail.
+//
+// An allow INSIDE the operator's home is the reason layer 5 follows layer 4
+// (~/.cargo/bin, ~/sdk/go) and is accepted. One inside a fixed secret store
+// (a single keychain file) is refused: nothing a jail runs lives there.
+func sbplCheckReopen(field, p, operatorHome string) error {
+	type denied struct {
+		path, what string
+		inside     bool // refuse descendants too
+	}
+	ds := []denied{
+		{sbplMasterPasswd, "the password hashes", true},
+		{sbplKeychains, "the system keychains", true},
+		{sbplDSLocal, "the directory-service password database", true},
+	}
+	if operatorHome != "" {
+		ds = append(ds, denied{filepath.Clean(operatorHome), "the operator's home", false})
+	}
+	c := filepath.Clean(p)
+	var reopened []string
+	for _, d := range ds {
+		if c == "/" || c == d.path || strings.HasPrefix(d.path, c+"/") || (d.inside && strings.HasPrefix(c, d.path+"/")) {
+			reopened = append(reopened, d.path+" ("+d.what+")")
+		}
+	}
+	if len(reopened) > 0 {
+		return fmt.Errorf("sbpl: %s path %q would re-allow %s: its allow comes after those denies, and SBPL applies the last matching rule",
+			field, p, strings.Join(reopened, ", "))
+	}
 	return nil
 }
 
@@ -142,7 +198,8 @@ func sbplValidate(in sbplInput) error {
 //     re-expose them.
 //
 // It refuses (returns an error and no profile) any input with a path SBPL
-// could not match, so a mask can never silently fail to apply.
+// could not match, so a mask can never silently fail to apply, and any allow
+// that would re-open a deny above it (sbplCheckReopen).
 func sbplProfile(in sbplInput) (string, error) {
 	if err := sbplValidate(in); err != nil {
 		return "", err

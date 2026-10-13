@@ -224,3 +224,60 @@ func TestSBPLQuoteEscapesOnlyBackslashAndQuote(t *testing.T) {
 		}
 	}
 }
+
+// TestSBPLRefusesAnAllowThatReopensADeny: SBPL applies the LAST matching
+// rule, and the ReadOnly allows (layer 5) and the workspace allow (layer 6)
+// come after the secret-store denies (layers 2 and 4). An allow on a path
+// that EQUALS or CONTAINS a denied one re-allows it: ReadOnly "/private"
+// would hand the jail master.passwd and dslocal's password hashes,
+// "/Library" the system keychains, "/Users" the operator's home. Such an
+// input is refused, naming the path and what it would re-expose. A ReadOnly
+// path INSIDE the operator's home (~/.cargo/bin) is the point of layer 5 and
+// stays allowed; one inside a fixed secret store is refused too.
+func TestSBPLRefusesAnAllowThatReopensADeny(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		mutate   func(*sbplInput)
+		reexpose string // "" = must be accepted
+	}{
+		{"ReadOnly /private", func(in *sbplInput) { in.ReadOnly = []string{"/private"} }, "/private/etc/master.passwd"},
+		{"ReadOnly /private/etc", func(in *sbplInput) { in.ReadOnly = []string{"/private/etc"} }, "/private/etc/master.passwd"},
+		{"ReadOnly /private/var/db", func(in *sbplInput) { in.ReadOnly = []string{"/private/var/db"} }, "/private/var/db/dslocal"},
+		{"ReadOnly /Library", func(in *sbplInput) { in.ReadOnly = []string{"/Library"} }, "/Library/Keychains"},
+		{"ReadOnly /Library/Keychains", func(in *sbplInput) { in.ReadOnly = []string{"/Library/Keychains"} }, "/Library/Keychains"},
+		{"ReadOnly inside the keychains", func(in *sbplInput) { in.ReadOnly = []string{"/Library/Keychains/System.keychain"} }, "/Library/Keychains"},
+		{"ReadOnly master.passwd", func(in *sbplInput) { in.ReadOnly = []string{"/private/etc/master.passwd"} }, "/private/etc/master.passwd"},
+		{"ReadOnly /", func(in *sbplInput) { in.ReadOnly = []string{"/"} }, "/Users/op"},
+		{"ReadOnly /Users", func(in *sbplInput) { in.ReadOnly = []string{"/Users"} }, "/Users/op"},
+		{"ReadOnly the home itself", func(in *sbplInput) { in.ReadOnly = []string{"/Users/op"} }, "/Users/op"},
+		{"ReadOnly with trailing slash", func(in *sbplInput) { in.ReadOnly = []string{"/Users/"} }, "/Users/op"},
+		{"Workspace /", func(in *sbplInput) { in.Workspace = "/" }, "/Users/op"},
+		{"Workspace /Users", func(in *sbplInput) { in.Workspace = "/Users" }, "/Users/op"},
+		{"ReadOnly ~/.cargo/bin", func(in *sbplInput) { in.ReadOnly = []string{"/Users/op/.cargo/bin"} }, ""},
+		{"ReadOnly /Users/op2 (a sibling, not an ancestor)", func(in *sbplInput) { in.ReadOnly = []string{"/Users/op2"} }, ""},
+		{"ReadOnly /Library/Developer", func(in *sbplInput) { in.ReadOnly = []string{"/Library/Developer"} }, ""},
+		{"Workspace in the home", func(in *sbplInput) { in.Workspace = "/Users/op/src/repo" }, ""},
+		{"no home: ReadOnly /Users", func(in *sbplInput) { in.OperatorHome = ""; in.ReadOnly = []string{"/Users"} }, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			in := sampleSBPL(false)
+			tc.mutate(&in)
+			p, err := sbplProfile(in)
+			if tc.reexpose == "" {
+				if err != nil {
+					t.Fatalf("unexpected refusal: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("accepted an allow that re-exposes %s:\n%s", tc.reexpose, p)
+			}
+			if p != "" {
+				t.Error("a refused input returned a non-empty profile")
+			}
+			if !strings.Contains(err.Error(), tc.reexpose) {
+				t.Errorf("error %q does not name what it would re-expose (%s)", err, tc.reexpose)
+			}
+		})
+	}
+}

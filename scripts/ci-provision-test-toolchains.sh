@@ -57,16 +57,25 @@ tsc --version || echo "tsc not available — ts-in-jail test will SKIP"
 echo "== Rust (internal/lang rust plugin; the jail's pinned RUSTUP_HOME) =="
 # The jail pins RUSTUP_HOME=/usr/local/rustup (internal/sandbox/pinnedenv.go),
 # so the toolchain must live there — CARGO_HOME=/usr/local/cargo holds the
-# proxies and cargo-nextest — and be world-readable. GitHub's ubuntu-latest
+# proxies and cargo-nextest — and be world-readable. Both paths are literals
+# here because this is shell; the Go source of truth is
+# sandbox.SystemRustupHome and sandbox.SystemCargoHome, and the two must move
+# together. GitHub's ubuntu-latest
 # already has a rustup under the runner's HOME; that one is invisible to the
 # jail (see the rule above), so this installs a second, system-wide one rather
 # than trusting the image's.
 #
-# Both pinned installs are verified: rustup-init against the sha256 rust-lang
-# publishes beside it, cargo-nextest against the digest recorded here. The
+# Both pinned installs are checked, but not equally. rustup-init is verified
+# against the sha256 rust-lang publishes beside it. cargo-nextest is checked
+# against NEXTEST_SHA256 below, which was COMPUTED from the tarball when it
+# was first downloaded (trust on first use) — it was NOT compared with any
+# checksum the nextest project publishes. It proves every later run gets the
+# same bytes as that first download, not that the first download was genuine.
+# The
 # nextest release tarball is chosen over `cargo install --locked cargo-nextest`
 # on purpose: that compiles ~400 crates on every run, minutes on a CI runner,
-# for the identical binary. Bumping NEXTEST_VERSION means recomputing the sha.
+# for the identical binary. Bumping NEXTEST_VERSION means recomputing the sha
+# (again on first use, unless upstream sums are checked at that point).
 RUST_VERSION=1.92.0
 NEXTEST_VERSION=0.9.148
 NEXTEST_SHA256=223ba936714cc861a9cdedad5a8eb664dfdd69d6fbdf6cea6aa8184f523290dc

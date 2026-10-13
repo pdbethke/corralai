@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"fmt"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -25,6 +26,7 @@ import (
 	"github.com/pdbethke/corralai/internal/mission"
 	"github.com/pdbethke/corralai/internal/principals"
 	"github.com/pdbethke/corralai/internal/queue"
+	"github.com/pdbethke/corralai/internal/sandbox"
 	"github.com/pdbethke/corralai/internal/telemetry"
 )
 
@@ -1514,5 +1516,30 @@ func TestAdvPoolStartRun_RefusesAFileWhoseTestWouldOverwriteIt(t *testing.T) {
 	}
 	if ms, merr := rt.missions.ListMissions(); merr != nil || len(ms) != 0 {
 		t.Fatalf("a refused run wrote %d mission(s) (err %v)", len(ms), merr)
+	}
+}
+
+// TestAdvPoolStartRunAsksTheJailsPreflight: the brain always grades in the
+// jail, so a toolchain the HOST runs but the sandbox cannot reach is refused
+// before a mission exists — through lang.JailPreflight, the half certify's
+// door skips only on the workspace substrate. The fixture is an explicit PHP
+// interpreter in a directory the sandbox does not mount.
+func TestAdvPoolStartRunAsksTheJailsPreflight(t *testing.T) {
+	if _, err := sandbox.Resolve(sandbox.Config{}); err != nil {
+		t.Skipf("no working sandbox backend on this host: %v", err)
+	}
+	bin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bin, "php9.9"), []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil { // #nosec G306 -- test stand-in must be executable
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	rt, _ := newTestAdvPoolRuntime(t, nil)
+	in := testRunSpecIn()
+	in.CodePath, in.Code = "src/Target.php", "<?php\nfunction validate($pw) { return true; }\n"
+	in.DevTestPath, in.DevTestCode = "src/TargetTest.php", "<?php\n"
+	in.TestCmd = "php9.9 vendor/bin/phpunit"
+	_, err := rt.StartRun(in)
+	if err == nil || !strings.Contains(err.Error(), "unavailable inside the jail") {
+		t.Fatalf("StartRun = %v, want the jail's preflight refusal", err)
 	}
 }

@@ -3,10 +3,23 @@
 package sandbox
 
 // SystemRustupHome is where the jail looks for Rust toolchains: the
-// system-wide rustup layout (RUSTUP_HOME=/usr/local/rustup, CARGO_HOME=
-// /usr/local/cargo at install time) that scripts/ci-provision-test-toolchains.sh
+// system-wide rustup layout (RUSTUP_HOME=SystemRustupHome, CARGO_HOME=
+// SystemCargoHome at install time) that scripts/ci-provision-test-toolchains.sh
 // installs and the Rust preflight tells the operator to install.
 const SystemRustupHome = "/usr/local/rustup"
+
+// SystemCargoHome is the CARGO_HOME of that same system-wide install: where
+// its cargo, rustc proxies and cargo-nextest live (SystemCargoHome/bin). It
+// is an INSTALL-time location only — the jail pins its own writable
+// CARGO_HOME (below), because this one is read-only inside /usr.
+const SystemCargoHome = "/usr/local/cargo"
+
+// pin is one row of pinnedEnv: the key the jail sets, the value it sets it
+// to, and whether the row applies only to a jail with no network.
+type pin struct {
+	Key, Value  string
+	OfflineOnly bool
+}
 
 // pinnedEnv is every environment variable the jail SETS rather than inherits:
 // the bwrap and container backends strip these keys from the host env they
@@ -27,10 +40,7 @@ const SystemRustupHome = "/usr/local/rustup"
 // has to reach the network, so it is not told the flag that forbids it; the
 // host's own value of the key is still stripped from it, so neither the host
 // nor the table can make a fetch offline. Read the table through pinsFor.
-var pinnedEnv = []struct {
-	Key, Value  string
-	OfflineOnly bool
-}{
+var pinnedEnv = []pin{
 	// A writable HOME on tmpfs so toolchains that cache under $HOME (go
 	// build's GOCACHE, npm, pip) work. Ephemeral per command; the workspace is
 	// for artifacts.
@@ -71,14 +81,8 @@ var pinnedEnv = []struct {
 // pinsFor is the pins a jail with (network) or without network is given:
 // every row, except the offline-only rows on a networked jail. Both backends
 // read the table through here so the two cannot disagree.
-func pinsFor(network bool) []struct {
-	Key, Value  string
-	OfflineOnly bool
-} {
-	var out []struct {
-		Key, Value  string
-		OfflineOnly bool
-	}
+func pinsFor(network bool) []pin {
+	var out []pin
 	for _, p := range pinnedEnv {
 		if p.OfflineOnly && network {
 			continue

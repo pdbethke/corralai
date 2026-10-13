@@ -149,22 +149,33 @@ func (rustPlugin) TestRules() []pairing.Rule {
 // nextest — or the operator's own first token (a rustup proxy at an absolute
 // path) when one is given. The runner row decides; see rustRunner.
 //
-// It also checks the half of the toolchain the jail needs and the host does
-// not: the jail's rustup home is pinned to sandbox.SystemRustupHome, so a
-// `cargo` that is a user-home rustup proxy (~/.cargo/bin/cargo) runs there
-// only when that system-wide toolchain exists. Without it the audit would
-// spend its way to a jail that says "rustup could not choose a version of
-// cargo", which reads as a broken project. A cargo that is NOT a proxy (a
-// distribution package, a tarball) needs nothing and passes.
+// That is ALL it checks, because Preflight runs on every substrate: a stock
+// rustup install (~/.cargo, no sudo) is exactly what --substrate workspace
+// runs, on the host. What only the jail needs is JailPreflight's.
 func (rustPlugin) Preflight(testCmd []string) error {
+	return toolOnPath(rustRunner(testCmd).preflightBin)
+}
+
+// JailPreflight checks the half of the toolchain the jail needs and the host
+// does not: the jail's rustup home is pinned to sandbox.SystemRustupHome
+// (sandbox's pinned env), so a tool that resolves under the operator's home
+// beside rustup (~/.cargo/bin/cargo, a rustup proxy; or a cargo-nextest
+// there, which dispatches through that cargo) runs there only when the
+// system-wide toolchain exists. Without it the audit would spend its way to
+// a jail that says "rustup could not choose a version of cargo", which reads
+// as a broken project. A tool that is NOT beside rustup (a distribution
+// package, a tarball) needs nothing and passes.
+//
+// The system toolchain's presence is judged by its toolchains/ directory
+// existing. That is not proof the toolchain in it is the one the project
+// pins (rust-toolchain.toml) or that it is complete: a mismatch surfaces
+// inside the jail, in rustup's own words, as a baseline that cannot pass.
+func (rustPlugin) JailPreflight(testCmd []string) error {
 	bin := rustRunner(testCmd).preflightBin
-	if err := toolOnPath(bin); err != nil {
-		return fmt.Errorf("%w; the audit jail runs the system-wide Rust toolchain (%s)", err, systemRustLayoutHint)
-	}
 	// cargo-nextest is a plain binary, but `cargo nextest` dispatches through
 	// whichever cargo is on PATH, so that one is checked too.
 	for _, name := range []string{bin, preflightBin(testCmd, "cargo")} {
-		if err := userHomeProxyNeedsSystemRustup(name); err != nil {
+		if err := userHomeRustupNeedsSystemToolchain(name); err != nil {
 			return err
 		}
 	}
@@ -172,33 +183,46 @@ func (rustPlugin) Preflight(testCmd []string) error {
 }
 
 // systemRustLayoutHint names the install the jail can see, for every
-// Preflight message that has to tell the operator what to do.
+// JailPreflight message that has to tell the operator what to do.
 const systemRustLayoutHint = "install it with `RUSTUP_HOME=" + sandbox.SystemRustupHome +
-	" CARGO_HOME=/usr/local/cargo rustup-init --no-modify-path --default-toolchain <version>`, add /usr/local/cargo/bin to PATH, and `cargo install --locked cargo-nextest` if you use nextest"
+	" CARGO_HOME=" + sandbox.SystemCargoHome + " rustup-init --no-modify-path --default-toolchain <version>`, add " +
+	sandbox.SystemCargoHome + "/bin to PATH, and `cargo install --locked cargo-nextest` if you use nextest — or run `certify --repo --substrate workspace`, which runs your own toolchain and builds no jail"
 
 // systemRustupHome is sandbox.SystemRustupHome, a variable only so a test can
 // stand a temp dir in for the real /usr/local/rustup.
 var systemRustupHome = sandbox.SystemRustupHome
 
-// userHomeProxyNeedsSystemRustup refuses a tool that resolves to a rustup
-// proxy under $HOME while the system-wide rustup home is missing. nil for any
-// other tool, wherever it lives.
-func userHomeProxyNeedsSystemRustup(name string) error {
+// SwapSystemRustupHomeForTest stands dir in for sandbox.SystemRustupHome in
+// JailPreflight's existence check and returns the restore. TESTS ONLY: it
+// exists because the doors that decide whether to call JailPreflight live
+// in other packages (cmd/corral), and the real /usr/local/rustup is present
+// on every host that runs the jail tests, so without it no test could watch
+// a door refuse. Not safe for concurrent use.
+func SwapSystemRustupHomeForTest(dir string) (restore func()) {
+	old := systemRustupHome
+	systemRustupHome = dir
+	return func() { systemRustupHome = old }
+}
+
+// userHomeRustupNeedsSystemToolchain refuses a tool that resolves under
+// $HOME beside a rustup binary while the system-wide rustup home is missing.
+// nil for any other tool, wherever it lives.
+func userHomeRustupNeedsSystemToolchain(name string) error {
 	p, err := exec.LookPath(name)
 	if err != nil {
-		return nil // toolOnPath reports a missing tool; this is not its job
+		return nil // Preflight reports a missing tool; this is not its job
 	}
 	home, herr := os.UserHomeDir()
 	if herr != nil || home == "" || !strings.HasPrefix(p, filepath.Clean(home)+string(filepath.Separator)) {
 		return nil
 	}
 	if _, err := os.Lstat(filepath.Join(filepath.Dir(p), "rustup")); err != nil { // #nosec G703 -- existence check only
-		return nil // not a rustup proxy
+		return nil // nothing here runs rustup's toolchain
 	}
 	if fi, err := os.Stat(filepath.Join(systemRustupHome, "toolchains")); err == nil && fi.IsDir() { // #nosec G703 -- existence check only
 		return nil
 	}
-	return fmt.Errorf("lang: %q resolves to a rustup proxy under your home (%s), and the audit jail cannot see your home: it runs the system-wide toolchain in %s, which is not installed here. %s",
+	return fmt.Errorf("lang: %q resolves to %s, beside rustup under your home, so it runs rustup's toolchain — and the audit jail cannot see your home: it runs the system-wide toolchain in %s, which is not installed here. %s",
 		name, p, sandbox.SystemRustupHome, systemRustLayoutHint)
 }
 

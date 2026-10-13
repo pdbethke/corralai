@@ -726,8 +726,15 @@ func (rt *AdvPoolRuntime) StartRun(in AdvPoolRunSpec) (int64, error) {
 	// does to build the actual jail command — so Preflight checks the exact
 	// toolchain the run is about to use, not a stock guess (see
 	// lang.Plugin.Preflight's doc comment).
-	if err := langPlugin.Preflight(adequacy.ShellSplit(in.TestCmd)); err != nil {
+	// The brain always grades in the jail, so it asks the jail's own half
+	// too (golang.JailPreflight) — the same two calls certify's door makes for
+	// a jailed run.
+	argv := adequacy.ShellSplit(in.TestCmd)
+	if err := langPlugin.Preflight(argv); err != nil {
 		return 0, fmt.Errorf("advpool: language toolchain unavailable — refusing to run: %w", err)
+	}
+	if err := golang.JailPreflight(langPlugin, argv); err != nil {
+		return 0, fmt.Errorf("advpool: language toolchain unavailable inside the jail — refusing to run: %w", err)
 	}
 
 	// ShadowModel: the challenger seat's model for THIS run. A per-call

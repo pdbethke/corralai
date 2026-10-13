@@ -8,6 +8,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/pdbethke/corralai/internal/sandbox"
 )
 
 func rustCapture(t *testing.T, runner, name string) []byte {
@@ -130,20 +132,32 @@ func fakeHomeCargo(t *testing.T, withRustup bool) {
 	t.Setenv("PATH", bin)
 }
 
-// A cargo that is a rustup proxy under $HOME runs in the jail only through the
-// system-wide rustup home; without it Preflight says so and names the layout,
-// before any spend.
-func TestRustPreflightUserHomeProxyNeedsTheSystemToolchain(t *testing.T) {
-	fakeHomeCargo(t, true)
-	old := systemRustupHome
-	t.Cleanup(func() { systemRustupHome = old })
+// withSystemRustupHome stands dir in for sandbox.SystemRustupHome for one
+// test.
+func withSystemRustupHome(t *testing.T, dir string) {
+	t.Helper()
+	t.Cleanup(SwapSystemRustupHomeForTest(dir))
+}
 
-	systemRustupHome = filepath.Join(t.TempDir(), "absent")
-	err := rustPlugin{}.Preflight([]string{"cargo", "test"})
-	if err == nil {
-		t.Fatal("a user-home rustup proxy with no system-wide toolchain must be refused")
+// The jail runs the system-wide toolchain, so a cargo that is a rustup proxy
+// under $HOME runs there only when that toolchain exists: JailPreflight says
+// so and names the layout, before any spend. Preflight — the half every
+// substrate needs — admits the same host, because a run that is not jailed
+// (--substrate workspace) runs the operator's own toolchain and has no use
+// for a system-wide one.
+func TestRustJailPreflightUserHomeProxyNeedsTheSystemToolchain(t *testing.T) {
+	fakeHomeCargo(t, true)
+	withSystemRustupHome(t, t.TempDir()) // exists, but holds no toolchains
+
+	if err := (rustPlugin{}).Preflight([]string{"cargo", "test"}); err != nil {
+		t.Fatalf("Preflight must admit a stock ~/.cargo rustup install — nothing it checks needs a jail: %v", err)
 	}
-	for _, want := range []string{"rustup proxy under your home", "/usr/local/cargo", "rustup-init"} {
+	p, _ := ByName("rust")
+	err := JailPreflight(p, []string{"cargo", "test"})
+	if err == nil {
+		t.Fatal("a user-home rustup proxy with no system-wide toolchain must be refused for a jailed run")
+	}
+	for _, want := range []string{"beside rustup under your home", sandbox.SystemRustupHome, sandbox.SystemCargoHome, "rustup-init"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("the refusal must name %q, got: %v", want, err)
 		}
@@ -153,29 +167,66 @@ func TestRustPreflightUserHomeProxyNeedsTheSystemToolchain(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(present, "toolchains"), 0o750); err != nil {
 		t.Fatal(err)
 	}
-	systemRustupHome = present
-	if err := (rustPlugin{}).Preflight([]string{"cargo", "test"}); err != nil {
+	withSystemRustupHome(t, present)
+	if err := JailPreflight(p, []string{"cargo", "test"}); err != nil {
 		t.Errorf("with the system-wide toolchain present the proxy is fine: %v", err)
+	}
+}
+
+// cargo-nextest under ~/.cargo/bin is not itself a rustup proxy — cargo
+// install puts a plain binary there — so the refusal must not call it one;
+// it runs the toolchain through the cargo beside it, which is.
+func TestRustJailPreflightNamesNextestWithoutCallingItAProxy(t *testing.T) {
+	fakeHomeCargo(t, true)
+	home, _ := os.UserHomeDir()
+	if err := os.WriteFile(filepath.Join(home, ".cargo", "bin", "cargo-nextest"), []byte("#!/bin/sh\n"), 0o700); err != nil { // #nosec G306 -- test stand-in must be executable
+		t.Fatal(err)
+	}
+	withSystemRustupHome(t, t.TempDir())
+	p, _ := ByName("rust")
+	err := JailPreflight(p, []string{"cargo-nextest", "nextest", "run"})
+	if err == nil {
+		t.Fatal("a user-home cargo-nextest with no system-wide toolchain must be refused for a jailed run")
+	}
+	if strings.Contains(err.Error(), `"cargo-nextest" resolves to a rustup proxy`) {
+		t.Errorf("cargo-nextest is not a rustup proxy: %v", err)
 	}
 }
 
 // A cargo under $HOME that is not a proxy (no rustup beside it) needs no
 // system rustup, so it is never refused for lacking one.
-func TestRustPreflightNonProxyUserHomeCargoPasses(t *testing.T) {
+func TestRustJailPreflightNonProxyUserHomeCargoPasses(t *testing.T) {
 	fakeHomeCargo(t, false)
-	old := systemRustupHome
-	t.Cleanup(func() { systemRustupHome = old })
-	systemRustupHome = filepath.Join(t.TempDir(), "absent")
-	if err := (rustPlugin{}).Preflight([]string{"cargo", "test"}); err != nil {
+	withSystemRustupHome(t, filepath.Join(t.TempDir(), "absent"))
+	p, _ := ByName("rust")
+	if err := JailPreflight(p, []string{"cargo", "test"}); err != nil {
 		t.Errorf("a non-proxy cargo must pass: %v", err)
 	}
 }
 
-// A missing cargo names the layout the jail can see, not just "not found".
-func TestRustPreflightMissingCargoNamesTheLayout(t *testing.T) {
+// A missing cargo is refused by Preflight, on every substrate, saying only
+// what is true on every substrate: the tool is not on PATH. The system-wide
+// layout is the jail's requirement, and a workspace run has no jail.
+func TestRustPreflightMissingCargoSaysOnlyThatItIsMissing(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
 	err := rustPlugin{}.Preflight([]string{"cargo", "test"})
-	if err == nil || !strings.Contains(err.Error(), "/usr/local/cargo") {
-		t.Errorf("a missing cargo must name the system-wide layout, got: %v", err)
+	if err == nil || !strings.Contains(err.Error(), `"cargo" not found on PATH`) {
+		t.Fatalf("a missing cargo must be refused as missing, got: %v", err)
+	}
+	for _, never := range []string{sandbox.SystemRustupHome, sandbox.SystemCargoHome, "system-wide"} {
+		if strings.Contains(err.Error(), never) {
+			t.Errorf("Preflight runs on every substrate and must not demand the jail's install (%q): %v", never, err)
+		}
+	}
+}
+
+// A plugin with no jail-only requirement answers nil through the seam.
+func TestJailPreflightIsNilForAPluginWithoutOne(t *testing.T) {
+	py, _ := ByName("python")
+	if _, ok := py.(JailPreflighter); ok {
+		t.Fatal("precondition: python declares no jail-only preflight")
+	}
+	if err := JailPreflight(py, []string{"definitely-not-on-path-xyz"}); err != nil {
+		t.Errorf("JailPreflight(python) = %v, want nil", err)
 	}
 }

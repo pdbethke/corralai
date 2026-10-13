@@ -204,7 +204,7 @@ func TestCheckToolchainFailsWhenBinaryInvisibleInJail(t *testing.T) {
 	}
 	defer os.Chdir(wd)
 
-	got := checkToolchain(iso, []string{".venv/bin/python"}, nil)
+	got := checkToolchain(iso, []string{".venv/bin/python"}, nil, nil)
 	if got.ok {
 		t.Fatalf("checkToolchain must FAIL when the run's own jail cannot see the toolchain: %+v", got)
 	}
@@ -253,7 +253,7 @@ func TestCheckToolchainPassesWhenReallyReachable(t *testing.T) {
 	if err != nil {
 		t.Skipf("no working sandbox backend on this host: %v", err)
 	}
-	got := checkToolchain(iso, []string{"sh"}, nil)
+	got := checkToolchain(iso, []string{"sh"}, nil, nil)
 	if !got.ok {
 		t.Fatalf("checkToolchain must pass for a genuinely reachable tool: %+v", got)
 	}

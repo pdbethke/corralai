@@ -87,6 +87,10 @@ type Plugin interface {
 	// explicit command (e.g. certify --local with no --code test command
 	// override); Preflight then falls back to its prior stock-toolchain
 	// check, UNCHANGED from before this parameter existed.
+	//
+	// Preflight runs on EVERY substrate, so it checks only what every
+	// substrate needs. A requirement of the jail alone belongs to the
+	// optional JailPreflighter, which only jailed doors ask.
 	Preflight(testCmd []string) error
 	PromptLang() string       // human label, for verdict metadata + logs
 	TestWriterSystem() string // language-specific test-writer system prompt
@@ -715,6 +719,34 @@ type RunDiscloser interface {
 func RunDisclosures(p Plugin, repoDir string, testCmd []string) []string {
 	if d, ok := p.(RunDiscloser); ok {
 		return d.RunDisclosures(repoDir, testCmd)
+	}
+	return nil
+}
+
+// JailPreflighter is the OPTIONAL plugin extension for the half of a
+// toolchain check that only a JAILED run needs. Plugin.Preflight answers
+// "can this host run the suite at all", which every substrate needs; this
+// answers "can the jail run it", which only the substrates that build one
+// do (certify --local, certify --repo on the jail substrate, the brain,
+// doctor's jail rehearsal). certify --repo --substrate workspace runs the
+// operator's own toolchain on the host and never asks it: a requirement of
+// the jail enforced where no jail runs refuses a run that would have
+// worked, which is a false statement about the operator's machine.
+//
+// Rust implements it (the jail runs the system-wide rustup toolchain, not a
+// ~/.cargo install); PHP implements it (its interpreter must resolve inside
+// the sandbox's mount table, not only on the host).
+type JailPreflighter interface {
+	JailPreflight(testCmd []string) error
+}
+
+// JailPreflight is p's JailPreflighter answer, or nil for a plugin whose
+// jail needs nothing its Preflight did not already check. The one way a
+// caller asks — the same shape as RunDisclosures — so no door switches on a
+// language to decide whether the jail has requirements of its own.
+func JailPreflight(p Plugin, testCmd []string) error {
+	if j, ok := p.(JailPreflighter); ok {
+		return j.JailPreflight(testCmd)
 	}
 	return nil
 }

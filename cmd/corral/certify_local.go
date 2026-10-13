@@ -830,6 +830,16 @@ func resolveAuditPlugin(in localAuditInput) (lang.Plugin, error) {
 	if err := plug.Preflight(in.checkArgv); err != nil {
 		return nil, auditErr("%s toolchain unavailable — refusing to grade: %v", plug.Name(), err)
 	}
+	// The jail's own requirements, asked only where a jail runs: every
+	// substrate but the workspace one, which runs the operator's toolchain on
+	// the host (certify --local is always jailed; certify --repo jobs carry
+	// their substrate here). Enforcing them on the workspace substrate
+	// refused a stock rustup install that substrate runs perfectly well.
+	if in.substrate != substrateWorkspace {
+		if err := lang.JailPreflight(plug, in.checkArgv); err != nil {
+			return nil, auditErr("%s toolchain unavailable inside the audit jail — refusing to grade: %v", plug.Name(), err)
+		}
+	}
 	return plug, nil
 }
 

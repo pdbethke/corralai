@@ -6,6 +6,7 @@ import (
 	"context"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -13,7 +14,7 @@ import (
 	"github.com/pdbethke/corralai/internal/sandbox"
 )
 
-const systemCargoBin = "/usr/local/cargo/bin"
+const systemCargoBin = sandbox.SystemCargoHome + "/bin"
 
 // rustJailOrSkip returns the real bwrap jail, or skips naming the reason. The
 // message starts with SKIP: because CI greps the -v output for it: a jail test
@@ -24,8 +25,8 @@ func rustJailOrSkip(t *testing.T) VerboseJail {
 	if err != nil {
 		t.Skipf("SKIP: no bwrap here: %v", err)
 	}
-	if _, err := os.Stat("/usr/local/rustup/toolchains"); err != nil {
-		t.Skipf("SKIP: no system-wide rustup at /usr/local/rustup (scripts/ci-provision-test-toolchains.sh installs it): %v", err)
+	if _, err := os.Stat(filepath.Join(sandbox.SystemRustupHome, "toolchains")); err != nil {
+		t.Skipf("SKIP: no system-wide rustup at %s (scripts/ci-provision-test-toolchains.sh installs it): %v", sandbox.SystemRustupHome, err)
 	}
 	if _, err := os.Stat(systemCargoBin + "/cargo-nextest"); err != nil {
 		t.Skipf("SKIP: no cargo-nextest in %s: %v", systemCargoBin, err)
@@ -77,7 +78,7 @@ func TestJailRustupProxyDispatchesToTheSystemToolchain(t *testing.T) {
 		t.Skipf("SKIP: cargo resolves to %s, not the proxy", p)
 	}
 	sys := exec.Command(systemCargoBin+"/cargo", "--version")
-	sys.Env = append(os.Environ(), "RUSTUP_HOME=/usr/local/rustup")
+	sys.Env = append(os.Environ(), "RUSTUP_HOME="+sandbox.SystemRustupHome)
 	want, err := sys.Output()
 	if err != nil {
 		t.Skipf("SKIP: system cargo does not run on the host: %v", err)

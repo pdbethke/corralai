@@ -102,7 +102,13 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 	results = append(results, checkSandbox(iso, isoErr))
 
 	if isoErr == nil {
-		results = append(results, checkToolchain(iso, cmd, nil))
+		// The language, when --code names one, so the rehearsal asks that
+		// language's jail-only requirements too; nil asks none.
+		var plug lang.Plugin
+		if c := strings.TrimSpace(*code); c != "" {
+			plug, _ = lang.Detect(c)
+		}
+		results = append(results, checkToolchain(iso, cmd, nil, plug))
 	}
 	results = append(results, checkHerd(*mutantModel, *writerModel, *criticModel, *shadow.model, *shadow.writerModel, seatReg)...)
 	results = append(results, checkDeriveSeat(*deriveModel, seatReg.deriveEndpoint())...)
@@ -167,10 +173,21 @@ func checkSandbox(iso sandbox.Isolator, err error) checkResult {
 // set under `--repo-dir` — see certify --local's own newRunJail call), so a
 // probe run under `--repo-dir` sees exactly the dependency dirs the audit
 // itself will see.
-func checkToolchain(iso sandbox.Isolator, cmd []string, depBinds []adequacy.DepBind) checkResult {
+//
+// plug, when the language is known (doctor's --code), is asked its
+// jail-only requirements first (lang.JailPreflight) — the same call certify's
+// door makes for every jailed run, so the rehearsal refuses what the run
+// would. nil (no --code) asks none: a `--version` probe is all doctor can do
+// without knowing the language.
+func checkToolchain(iso sandbox.Isolator, cmd []string, depBinds []adequacy.DepBind, plug lang.Plugin) checkResult {
 	if len(cmd) == 0 {
 		return checkResult{name: "toolchain reachable inside the sandbox", ok: true,
 			detail: "skipped — no test command given (pass it after `--`)"}
+	}
+	if plug != nil {
+		if err := lang.JailPreflight(plug, cmd); err != nil {
+			return checkResult{name: "toolchain reachable inside the sandbox", detail: err.Error()}
+		}
 	}
 	tool := cmd[0]
 	jail := newRunJail(iso, 60*time.Second, depBinds)

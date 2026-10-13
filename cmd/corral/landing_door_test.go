@@ -20,6 +20,7 @@ import (
 	"github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/pairing"
 	"github.com/pdbethke/corralai/internal/reposcan"
+	"github.com/pdbethke/corralai/internal/sandbox"
 	"github.com/pdbethke/corralai/internal/scanstore"
 )
 
@@ -52,11 +53,16 @@ func landingRepo(t *testing.T) string {
 // which every certify --repo job also goes through.
 func TestResolveAuditPluginAdmitsOnlyADeclaredLanding(t *testing.T) {
 	root := landingRepo(t)
+	// Every toolchain check satisfied — a stock ~/.cargo rustup install, and
+	// a system-wide toolchain for the jail — so the admit below is the
+	// landing's answer and nothing else's.
+	stockRustup(t)
+	withSystemToolchain(t, true)
 	in := func(code string) localAuditInput {
 		return localAuditInput{repoDir: root, codePath: code, goal: "g", checkArgv: []string{"cargo", "test"}}
 	}
-	if _, err := resolveAuditPlugin(in("src/foo.rs")); err != nil && strings.Contains(err.Error(), "test landing") {
-		t.Fatalf("a declared Rust source was refused for its landing: %v", err)
+	if _, err := resolveAuditPlugin(in("src/foo.rs")); err != nil {
+		t.Fatalf("a declared Rust source with its toolchain in place must be admitted: %v", err)
 	}
 	for _, code := range []string{"src/bar.rs", "src/plain.rs"} {
 		if _, err := resolveAuditPlugin(in(code)); err == nil || !strings.Contains(err.Error(), "not built yet") {
@@ -70,6 +76,38 @@ func TestResolveAuditPluginAdmitsOnlyADeclaredLanding(t *testing.T) {
 	// A Python source is untouched by any of it.
 	if _, err := resolveAuditPlugin(localAuditInput{codePath: "pkg/mod.py", goal: "g", checkArgv: []string{"sh"}}); err != nil && strings.Contains(err.Error(), "test landing") {
 		t.Fatalf("a Python source was refused by the landing check: %v", err)
+	}
+}
+
+// TestAStockRustupUserIsRefusedOnlyWhereAJailRuns: a stranger's first run.
+// A stock rustup install (~/.cargo, no sudo, no system-wide toolchain) is
+// exactly what --substrate workspace runs on the host, so that substrate
+// admits it; the jail substrate (and --local, which is always jailed) runs
+// the system-wide toolchain, so it refuses — naming the layout to install,
+// and the substrate that would not need it.
+func TestAStockRustupUserIsRefusedOnlyWhereAJailRuns(t *testing.T) {
+	root := landingRepo(t)
+	stockRustup(t)
+	withSystemToolchain(t, false)
+	in := localAuditInput{repoDir: root, codePath: "src/foo.rs", goal: "g", checkArgv: []string{"cargo", "test"}}
+
+	ws := in
+	ws.substrate = substrateWorkspace
+	if _, err := resolveAuditPlugin(ws); err != nil {
+		t.Fatalf("--substrate workspace runs the operator's own toolchain and must admit a stock rustup install: %v", err)
+	}
+	for _, substrate := range []string{"", substrateJail} {
+		jailed := in
+		jailed.substrate = substrate
+		_, err := resolveAuditPlugin(jailed)
+		if err == nil {
+			t.Fatalf("substrate %q builds a jail, which cannot run a ~/.cargo toolchain, and must refuse", substrate)
+		}
+		for _, want := range []string{sandbox.SystemRustupHome, sandbox.SystemCargoHome, "--substrate workspace"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("substrate %q: the refusal must name %q, got: %v", substrate, want, err)
+			}
+		}
 	}
 }
 

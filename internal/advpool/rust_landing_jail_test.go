@@ -32,7 +32,7 @@ import (
 // Every skip message starts with SKIP: because CI greps the -v output for
 // it: a jail test that skips silently proves nothing about the landing.
 
-const systemCargoBin = "/usr/local/cargo/bin"
+const systemCargoBin = sandbox.SystemCargoHome + "/bin"
 
 // crate is a Warp-shaped crate: src/foo.rs declares its tests in a separate
 // file with #[path], and the private fn is what the mutant breaks.
@@ -55,14 +55,14 @@ const writerBody = "#[test]\nfn test_private_double_doubles() {\n    assert_eq!(
 
 func rustToolchainOrSkip(t *testing.T) {
 	t.Helper()
-	if _, err := os.Stat("/usr/local/rustup/toolchains"); err != nil {
-		t.Skipf("SKIP: no system-wide rustup at /usr/local/rustup (scripts/ci-provision-test-toolchains.sh installs it): %v", err)
+	if _, err := os.Stat(filepath.Join(sandbox.SystemRustupHome, "toolchains")); err != nil {
+		t.Skipf("SKIP: no system-wide rustup at %s (scripts/ci-provision-test-toolchains.sh installs it): %v", sandbox.SystemRustupHome, err)
 	}
 	if _, err := os.Stat(systemCargoBin + "/cargo-nextest"); err != nil {
 		t.Skipf("SKIP: no cargo-nextest in %s: %v", systemCargoBin, err)
 	}
 	t.Setenv("PATH", systemCargoBin+":"+os.Getenv("PATH"))
-	t.Setenv("RUSTUP_HOME", "/usr/local/rustup")
+	t.Setenv("RUSTUP_HOME", sandbox.SystemRustupHome)
 }
 
 func writeCrate(t *testing.T) string {

@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/pdbethke/corralai/internal/agentbackend"
 )
 
 // ReasonDeriveFailed marks a candidate whose goal could not be derived because
@@ -26,6 +28,21 @@ const ReasonDeriveFailed = "derive-failed"
 // Without it an oversized file also burns every retry to reach a 400 that was
 // never going to change.
 const ReasonSourceTooLarge = "source-too-large"
+
+// ReasonDeriveBudgetExhausted marks a candidate whose goal was never derived
+// because the run's --max-tokens cap was reached first
+// (agentbackend.ErrTokenBudgetExhausted). It is neither infrastructure
+// (derive-failed would tell an operator to check their API key) nor a
+// property of the file: it is the operator's own bound, and the deriver
+// stops at it on the FIRST refusal — a retry against an exhausted cap is
+// refused again, every time, for free.
+//
+// It counts as NOT audited: the file is a candidate, so it stays in
+// AuditedFraction's denominator and lowers the coverage floor's number, and
+// it is folded into Ungradable under its own name. A cap that silently
+// shrank the denominator would let a capped scan report full coverage of a
+// repo it mostly never looked at.
+const ReasonDeriveBudgetExhausted = "derive-budget-exhausted"
 
 // ErrSourceTooLarge is returned (wrapped) by the deriving GoalSource when a
 // candidate exceeds maxSourceBytes. EmitJobs matches it with errors.Is to
@@ -120,6 +137,11 @@ func (s derivingGoalSource) GoalFor(c Candidate) (Goal, bool, error) {
 	for attempt := 0; attempt < s.retries; attempt++ {
 		text, ok, derr := s.d.Derive(context.Background(), c, string(src))
 		if derr != nil {
+			// The cap refuses before any provider is dialled and will refuse
+			// every retry the same way: stop now, and say why.
+			if errors.Is(derr, agentbackend.ErrTokenBudgetExhausted) {
+				return Goal{}, false, fmt.Errorf("reposcan: deriving a goal for %s: %w", c.Path, derr)
+			}
 			lastErr = derr
 			// Backoff between attempts, never after the last one: sleeping on
 			// the way out would delay an answer already known to be final.

@@ -453,6 +453,10 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 // Zero values are the documented defaults throughout (see auditOneFile), so a
 // caller only sets what it actually knows.
 type localAuditInput struct {
+	// toolProbe answers each agent seat's tool and version ONCE per scan
+	// (seatToolProbe); nil probes each time it is asked, which is right for
+	// a single-file run.
+	toolProbe *seatToolProbe
 	// The subject. repoDir empty = single-file mode (codePath/testPath are
 	// filesystem paths); non-empty = repo-aware mode (they are repo-relative,
 	// the whole tree is seeded into the jail). testPath empty = the language
@@ -1091,7 +1095,7 @@ type auditRoles struct {
 	// turns this map into the []advpool.ModelCall a Verdict carries).
 	meters map[string]*agentbackend.UsageMeter
 	// tools is each agent seat's tool and version (agentbackend.SeatTool),
-	// by role — see seatToolsFor. Carried to the RunSpec so the verdict's
+	// by role — see seatToolProbe.toolsFor. Carried to the RunSpec so the verdict's
 	// SeatTools records what sat in each seat besides its model.
 	tools map[string]string
 }
@@ -1206,11 +1210,17 @@ func resolveRoleModels(in localAuditInput) (writer, mutant, critic, shadow, shad
 // rather than being dropped: "the critic was deliberately disabled" and "the
 // critic ran" are different audits and must key differently.
 func modelSetKey(writer, mutant, critic, shadow, shadowWriter string) string {
+	return modelSetKeyWith(nil, writer, mutant, critic, shadow, shadowWriter)
+}
+
+// modelSetKeyWith is modelSetKey with the scan's tool probe, so the version
+// in the key is the version every verdict of the scan records.
+func modelSetKeyWith(probe *seatToolProbe, writer, mutant, critic, shadow, shadowWriter string) string {
 	kv := map[string]string{
-		"test-writer":      seatKeyName(writer),
-		"mutant-generator": seatKeyName(mutant),
-		"critic":           seatKeyName(critic),
-		"shadow":           seatKeyName(shadow),
+		"test-writer":      probe.keyName(writer),
+		"mutant-generator": probe.keyName(mutant),
+		"critic":           probe.keyName(critic),
+		"shadow":           probe.keyName(shadow),
 	}
 	// Omitted when off, DELIBERATELY breaking the keep-disabled-seats-in-the-key
 	// convention the other optional seats follow. The critic's on/off changes
@@ -1223,22 +1233,9 @@ func modelSetKey(writer, mutant, critic, shadow, shadowWriter string) string {
 	// enabling the challenger would hit a cached verdict, skip the run, and
 	// silently collect no measurement at all.
 	if shadowWriter != "" {
-		kv["test-writer-shadow"] = seatKeyName(shadowWriter)
+		kv["test-writer-shadow"] = probe.keyName(shadowWriter)
 	}
 	return reposcan.CanonicalKV(kv)
-}
-
-// seatKeyName is a seat as the verdict cache keys it: the spec, plus the
-// agent's tool and version for an agent seat (agentbackend.SeatTool, the
-// record's helper), so a CLI upgrade re-measures instead of reusing a
-// verdict a different CLI earned. An API seat is its spec exactly, so every
-// existing key is byte-identical and no cached verdict is invalidated by
-// this change.
-func seatKeyName(spec string) string {
-	if tool := agentbackend.SeatTool(spec); tool != "" {
-		return spec + " [" + tool + "]"
-	}
-	return spec
 }
 
 // resolveAuditRoles resolves the role models, enforces decorrelation, requires
@@ -1365,27 +1362,7 @@ func resolveAuditRoles(in localAuditInput, stderr io.Writer) (auditRoles, error)
 		return r, auditUsageErr("%v", err)
 	}
 
-	return auditRoles{assign: assign, shadow: shadow, shadowWriter: shadowWriter, writer: writer, mutant: mutant, critic: critic, chatterFor: chatterFor, meters: meters, tools: seatToolsFor(assign)}, nil
-}
-
-// seatToolsFor is the record's tool for every agent seat in assign, through
-// agentbackend.SeatTool — the helper review's record uses too. API seats
-// and disabled ones have no entry; nil when no seat is an agent.
-func seatToolsFor(assign map[string]string) map[string]string {
-	var tools map[string]string
-	for role, spec := range assign {
-		spec = strings.TrimSpace(spec)
-		if spec == "" || spec == "off" {
-			continue
-		}
-		if tool := agentbackend.SeatTool(spec); tool != "" {
-			if tools == nil {
-				tools = map[string]string{}
-			}
-			tools[role] = tool
-		}
-	}
-	return tools
+	return auditRoles{assign: assign, shadow: shadow, shadowWriter: shadowWriter, writer: writer, mutant: mutant, critic: critic, chatterFor: chatterFor, meters: meters, tools: in.toolProbe.toolsFor(assign)}, nil
 }
 
 // runSubject is the FILE-and-repo half of a RunSpec: everything
@@ -1863,7 +1840,7 @@ func auditOneFile(ctx context.Context, in localAuditInput) (advpool.Verdict, err
 
 	renderAdvVerdict(stdout, in.codePath, advVerdictFromPool(*verdict))
 	renderModelSpend(stdout, verdict.ModelCalls)
-	if line := budgetLine(in.tokenBudget); line != "" {
+	if line := budgetLine(in.tokenBudget, 0); line != "" {
 		fmt.Fprintln(stdout, line)
 	}
 

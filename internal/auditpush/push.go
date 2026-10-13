@@ -68,7 +68,7 @@ type Row struct {
 	// by role like ModelsByRole (agentbackend.SeatTool); "" when no seat was
 	// an agent. A per-model reader needs it beside the roster: an unpinned
 	// agent seat names a tool, not a model (agentbackend.RecordedSeatNamesAModel).
-	SeatTools       string
+	SeatTools       string `json:",omitempty"`
 	MinKillRate     *float64
 	MaxProvenMissed *int
 	Passed          *bool      // nil = not recorded; see ScanRow.Passed

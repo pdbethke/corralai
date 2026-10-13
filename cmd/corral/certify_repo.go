@@ -651,6 +651,9 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// the goal deriver draw on it, so --max-tokens bounds every seat the way
 	// its help says. Built before anything can spend; nil with no cap.
 	scanBudget := agentbackend.NewTokenBudget(*maxTokensFlag)
+	// ONE tool probe for the whole scan: every agent seat's version is read
+	// once, and the cache key, each verdict and the bundle all record it.
+	scanTools := newSeatToolProbe()
 	if !*dryRun {
 		// Each job runs the whole tree in a jail and grades it with the
 		// project's own test command. Given after `--`; absent, the language
@@ -736,6 +739,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 			// per-file resolution below would only find it after the scan
 			// had started spending.
 			tokenBudget: scanBudget,
+			toolProbe:   scanTools,
 		}, stderr); err != nil {
 			fmt.Fprintf(stderr, "corral certify --repo: %v\n", err)
 			if isAuditUsageError(err) {
@@ -831,7 +835,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		shadowModel:       *shadow.model,
 		shadowWriterModel: *shadow.writerModel,
 	})
-	modelSet := modelSetKey(rmWriter, rmMutant, rmCritic, rmShadow, rmShadowWriter)
+	modelSet := modelSetKeyWith(scanTools, rmWriter, rmMutant, rmCritic, rmShadow, rmShadowWriter)
 
 	// Evidence-first candidacy (the evidence-as-candidacy design), and the
 	// scan's one instrumented selection run underneath it (#163): collected
@@ -1094,6 +1098,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	if ex != nil {
 		ex.localEndpoints = localEndpoints
 		ex.tokenBudget = scanBudget
+		ex.toolProbe = scanTools
 	}
 
 	cfg := reposcan.EmitConfig{
@@ -1337,7 +1342,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stdout, line)
 	}
 	if ex != nil {
-		if line := budgetLine(ex.tokenBudget); line != "" {
+		if line := budgetLine(ex.tokenBudget, countReason(excl, reposcan.ReasonDeriveBudgetExhausted)); line != "" {
 			fmt.Fprintln(stdout, line)
 		}
 	}
@@ -1496,7 +1501,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// The roster's agent tools beside it, from the helper the verdict's
 	// SeatTools and review's record use; "" when no seat is an agent.
 	seatToolsJSON := ""
-	if tools := seatToolsFor(models()); tools != nil {
+	if tools := scanTools.toolsFor(models()); tools != nil {
 		b, _ := json.Marshal(tools)
 		seatToolsJSON = string(b)
 	}
@@ -3506,6 +3511,8 @@ var candidateLevelReasons = map[string]bool{
 	reposcan.ReasonUngoaled:       true,
 	reposcan.ReasonDeriveFailed:   true,
 	reposcan.ReasonSourceTooLarge: true,
+	// A candidate whose goal the cap stopped: judged auditable, not audited.
+	reposcan.ReasonDeriveBudgetExhausted: true,
 }
 
 // orderExclusionsForListing puts candidate-level exclusions ahead of
@@ -3833,6 +3840,8 @@ func reasonGloss(reason string) string {
 		return " — the workspace could not be prepared for this file"
 	case reposcan.ReasonMappedTestMissing:
 		return " — the --tests map names a test file that does not exist"
+	case reposcan.ReasonDeriveBudgetExhausted:
+		return " — the --max-tokens cap was reached before goals were derived for this file; it was not audited"
 	case reposcan.ReasonTestLandingNotBuilt:
 		return " — corral cannot audit this language's files yet: its test landing is not built, so a test for this file would be written over the file itself"
 	}
@@ -4292,6 +4301,8 @@ type localExecutor struct {
 	localEndpoints map[string]string
 	// tokenBudget is the scan-wide --max-tokens cap, one for every file.
 	tokenBudget *agentbackend.TokenBudget
+	// toolProbe is the scan's one seatToolProbe, handed to every job.
+	toolProbe *seatToolProbe
 
 	// perFileSwarm is how many workers ONE file's own audit may use. It is >1
 	// only on the workspace substrate, where resolveScanWorkers has already
@@ -4554,6 +4565,7 @@ func (l *localExecutor) auditInputFor(j reposcan.Job) localAuditInput {
 	return localAuditInput{
 		localEndpoints: l.localEndpoints,
 		tokenBudget:    l.tokenBudget,
+		toolProbe:      l.toolProbe,
 		repoDir:        l.repoDir,
 		codePath:       j.Path,
 		// j.TestPath is empty for an evidence-only candidate BY

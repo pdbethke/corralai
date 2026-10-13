@@ -10,6 +10,8 @@ import (
 	"os"
 	"path"
 	"strings"
+
+	"github.com/pdbethke/corralai/internal/agentbackend"
 )
 
 // ReasonUngoaled marks a candidate the GoalSource declined to supply a goal
@@ -172,6 +174,11 @@ func EmitJobs(cfg EmitConfig, cands []Candidate, gs GoalSource) ([]Job, []Exclus
 			// would tell an operator to go check their API key.
 			if errors.Is(err, ErrSourceTooLarge) {
 				reason = ReasonSourceTooLarge
+			}
+			// ...or of the operator's own --max-tokens bound, which is
+			// neither an outage nor the file.
+			if errors.Is(err, agentbackend.ErrTokenBudgetExhausted) {
+				reason = ReasonDeriveBudgetExhausted
 			}
 			excl = append(excl, Exclusion{Path: c.Path, Reason: reason})
 			continue

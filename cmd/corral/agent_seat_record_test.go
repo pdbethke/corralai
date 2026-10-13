@@ -5,6 +5,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -16,6 +17,7 @@ import (
 	"github.com/pdbethke/corralai/internal/agentbackend"
 	"github.com/pdbethke/corralai/internal/auditpush"
 	"github.com/pdbethke/corralai/internal/bugcatch"
+	"github.com/pdbethke/corralai/internal/criticscore"
 	"github.com/pdbethke/corralai/internal/modelrank"
 	"github.com/pdbethke/corralai/internal/reposcan"
 	"github.com/pdbethke/corralai/internal/review"
@@ -322,5 +324,167 @@ func TestTheModelsLinePrintsTheAgentTool(t *testing.T) {
 	got := formatModels(map[string]string{"test-writer": "codex", "mutant-generator": "gpt-6"}, map[string]string{"test-writer": "codex-cli 1"})
 	if want := "mutant-generator=gpt-6  test-writer=codex [codex-cli 1]"; got != want {
 		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+// --- fix round 1 ---------------------------------------------------------
+
+// An unpinned agent critic is not a model: models rank's critic-precision
+// rows (criticscore.Precision) leave it out by the same predicate the
+// scorecard uses.
+func TestModelsRankLeavesAnUnpinnedAgentCriticOutOfPrecision(t *testing.T) {
+	critic, err := criticscore.Open(filepath.Join(t.TempDir(), "cs.duckdb"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer critic.Close()
+	ctx := context.Background()
+	if err := critic.Record(ctx, []criticscore.Finding{
+		{ID: "1:1", Model: "codex", SeatTool: "codex-cli 1", ModelUnresolved: true, Adjudication: "confirmed"},
+		{ID: "1:2", Model: "claude-sonnet-5", Adjudication: "confirmed"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ev, err := bugcatchRankEvidence(ctx, nil, critic)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, o := range ev.Obs {
+		if o.Model == "codex" {
+			t.Fatal("models rank ranked an unpinned agent critic as a model")
+		}
+	}
+	if len(ev.Obs) != 1 {
+		t.Fatalf("want the API critic's precision row only, got %+v", ev.Obs)
+	}
+}
+
+// The critic's findings are stamped where they are made by the same helper
+// the bug-catching rows use.
+func TestTheCriticSinkCarriesTheSeatStamp(t *testing.T) {
+	critic, err := criticscore.Open(filepath.Join(t.TempDir(), "cs.duckdb"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer critic.Close()
+	sink := localCriticSink{store: critic}
+	sink.Record(7, "head", []advpool.CriticFindingObservation{{QueueFindingID: 1, Model: "codex", SeatTool: "codex-cli 1", ModelUnresolved: true, Adjudication: "unadjudicated", Source: "auto"}})
+	all, err := critic.All(context.Background())
+	if err != nil || len(all) != 1 || !all[0].ModelUnresolved || all[0].SeatTool != "codex-cli 1" {
+		t.Fatalf("stored finding: %+v %v", all, err)
+	}
+}
+
+// A scan stopped by the cap names the files whose goals were never derived —
+// under their own reason on the scan line and in the budget line — and makes
+// exactly one deriver call per refused file, never three.
+func TestACappedScanNamesTheFilesItNeverDerived(t *testing.T) {
+	noKeys(t)
+	wiredAgent(t, "fakew", "claude-json", claudeJSONReply)
+	wiredAgent(t, "fakem", "claude-json", claudeJSONReply)
+	root := t.TempDir()
+	gitRun := gitCmd(t, root)
+	for _, f := range []string{"a", "b", "c"} {
+		mustWrite(t, filepath.Join(root, "pkg", f+".go"), "package pkg\n\nfunc "+strings.ToUpper(f)+"() int { return 1 }\n")
+		mustWrite(t, filepath.Join(root, "pkg", f+"_test.go"), "package pkg\n")
+	}
+	gitRun("init", "-q")
+	gitRun("add", ".")
+	gitRun("commit", "-q", "-m", "base", "--no-gpg-sign")
+	fb := &countingBackend{reply: "NONE", usage: agentbackend.Usage{InputTokens: 600, OutputTokens: 600}}
+	prev := certifyRepoDeriver
+	t.Cleanup(func() { certifyRepoDeriver = prev })
+	certifyRepoDeriver = func(model, _ string) (reposcan.Deriver, error) {
+		return newMeteredDeriver(fb, model), nil
+	}
+	var out, errb bytes.Buffer
+	runCertifyRepo([]string{
+		"--repo", root, "--derive-model", "fakem", "--no-goal-cache", "--ledger", filepath.Join(t.TempDir(), "ledger"),
+		"--writer-model", "fakew", "--mutant-model", "fakem", "--critic-model", "off",
+		"--substrate", substrateWorkspace, "--max-tokens", "1000", "--", "true",
+	}, &out, &errb)
+	s := out.String()
+	if fb.calls != 1 {
+		t.Errorf("the deriver was dialled %d times, want 1 — a refused derive is not retried\n%s", fb.calls, s)
+	}
+	if !strings.Contains(s, "ungradable: 2 ("+reposcan.ReasonDeriveBudgetExhausted+") — the --max-tokens cap was reached before goals were derived for this file") {
+		t.Errorf("the scan line does not name the capped files:\n%s", s)
+	}
+	if !strings.Contains(s, "2 file(s) never had a goal derived and were not audited") {
+		t.Errorf("the budget line does not count the capped files:\n%s", s)
+	}
+}
+
+// countingBackend is fakeBackend that counts its calls.
+type countingBackend struct {
+	reply string
+	usage agentbackend.Usage
+	calls int
+}
+
+func (c *countingBackend) Chat([]agentbackend.Message, []any) (agentbackend.Message, error) {
+	c.calls++
+	return agentbackend.Message{Role: "assistant", Content: c.reply, Usage: c.usage}, nil
+}
+
+// One --version probe per agent seat per scan: the cache key, every job's
+// verdict and the bundle all read the scan's one probe.
+func TestTheSeatToolIsProbedOncePerSeatPerScan(t *testing.T) {
+	noKeys(t)
+	versionedAgent(t, "fakew", "fake-cli 1.0")
+	probes := map[string]int{}
+	p := newSeatToolProbe()
+	inner := p.probe
+	p.probe = func(spec string) string { probes[spec]++; return inner(spec) }
+	_ = modelSetKeyWith(p, "fakew:m1", "qwen3.5:9b", "off", "off", "")
+	for job := 0; job < 3; job++ {
+		r, err := resolveAuditRoles(localAuditInput{toolProbe: p, mutantModel: "qwen3.5:9b", writerModel: "fakew:m1", criticModel: "off", shadowModel: "off"}, &bytes.Buffer{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(r.tools[advpool.RoleTestWriter], "fake-cli 1.0") {
+			t.Fatalf("job %d: tools %v", job, r.tools)
+		}
+	}
+	_ = p.toolsFor(map[string]string{"test-writer": "fakew:m1"})
+	if probes["fakew:m1"] != 1 {
+		t.Fatalf("the agent seat was probed %d times in one scan, want 1", probes["fakew:m1"])
+	}
+	// And the executor hands every job the scan's probe.
+	ex := &localExecutor{toolProbe: p}
+	if ex.auditInputFor(reposcan.Job{Path: "a.go"}).toolProbe != p {
+		t.Fatal("a job's input does not carry the scan's tool probe")
+	}
+}
+
+// An API-only entry keeps its old shape, and an all-unmetered scan's header
+// states no token total.
+func TestTheLedgerEntryShapeForAPIOnlyAndUnmeteredScans(t *testing.T) {
+	api := buildBundle(scanstore.Scan{Owner: "o", Repo: "r", Commit: "c", ModelCalls: 1, InputTokens: 9, OutputTokens: 3}, 0,
+		[]scanstore.File{{Path: "a.go", Lang: "go", Disposition: "audited"}}, nil,
+		[]scanstore.ModelCall{{Path: "a.go", Role: "test-writer", Calls: 1, InputTokens: 9, OutputTokens: 3}}, nil,
+		auditpush.Link{}, false, "o/r", "c", "", bundleMeta{})
+	js, err := json.Marshal(api)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range []string{`"SeatTools"`, `"UnmeteredCalls"`} {
+		if strings.Contains(string(js), k) {
+			t.Errorf("an API-only entry carries %s:\n%s", k, js)
+		}
+	}
+	if !strings.Contains(string(js), `"InputTokens":9`) {
+		t.Errorf("a metered header lost its tokens:\n%s", js)
+	}
+	un := buildBundle(scanstore.Scan{Owner: "o", Repo: "r", Commit: "c", ModelCalls: 2}, 0,
+		[]scanstore.File{{Path: "a.go", Lang: "go", Disposition: "audited"}}, nil,
+		[]scanstore.ModelCall{{Path: "a.go", Role: "test-writer", Calls: 2, UnmeteredCalls: 2}}, nil,
+		auditpush.Link{}, false, "o/r", "c", "", bundleMeta{})
+	js, err = json.Marshal(un.Scan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(js), `"InputTokens"`) || strings.Contains(string(js), `"OutputTokens"`) {
+		t.Errorf("an all-unmetered header states a token total:\n%s", js)
 	}
 }

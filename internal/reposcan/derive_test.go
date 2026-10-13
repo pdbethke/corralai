@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/pdbethke/corralai/internal/agentbackend"
 )
 
 type fakeDeriver struct {
@@ -220,5 +222,24 @@ func TestDeriverDoesNotSleepWhenTheFirstAttemptSucceeds(t *testing.T) {
 	}
 	if slept != 0 {
 		t.Errorf("slept %d times on a first-attempt success, want 0", slept)
+	}
+}
+
+// The run's --max-tokens cap refuses before any provider is dialled and will
+// refuse every retry the same way: the deriver stops at the FIRST refusal,
+// and the error says it was the cap (EmitJobs files it under
+// ReasonDeriveBudgetExhausted, never derive-failed).
+func TestDeriverStopsAtTheCapWithoutRetrying(t *testing.T) {
+	root := derivRoot(t)
+	f := &fakeDeriver{err: agentbackend.ErrTokenBudgetExhausted}
+	slept := 0
+	gs := derivingGoalSource{root: root, d: f, model: "m", engineVersion: "v", retries: 3,
+		maxBytes: maxSourceBytes, sleep: func(time.Duration) { slept++ }}
+	_, ok, err := gs.GoalFor(Candidate{Path: "pkg/a.go", TestPath: "pkg/a_test.go"})
+	if ok || !errors.Is(err, agentbackend.ErrTokenBudgetExhausted) {
+		t.Fatalf("ok=%v err=%v, want the cap's error", ok, err)
+	}
+	if f.calls != 1 || slept != 0 {
+		t.Fatalf("deriver called %d times and slept %d times, want 1 and 0 — a refused call is not retried", f.calls, slept)
 	}
 }

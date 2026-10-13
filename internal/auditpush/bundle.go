@@ -144,9 +144,15 @@ type ScanRow struct {
 	// the only column that tells a reused pass from one that never ran,
 	// since both leave SelectionMillis NULL.
 	SelectionReused bool
-	InputTokens     int64
-	OutputTokens    int64
-	ModelCalls      int64
+	// InputTokens / OutputTokens are omitted, never written 0, when none
+	// of the scan's calls was metered (ScanTokensUnmetered — the rule the
+	// warehouse's NULL follows): buildBundle leaves them zero there and
+	// omitempty keeps the ledger entry from stating a measured-looking 0.
+	// A scan that made no calls at all omits them too, which reads the same
+	// as before: there were no tokens to measure.
+	InputTokens  int64 `json:",omitempty"`
+	OutputTokens int64 `json:",omitempty"`
+	ModelCalls   int64
 	// SourcePushed records whether THIS run carried source bytes to the
 	// warehouse. A custody fact belongs in the record: "did our code leave
 	// the box on that run" must be answerable from the table, not from
@@ -275,7 +281,7 @@ type ModelCallRow struct {
 	// seat on the `text` wire); InputTokens/OutputTokens cover only the rest.
 	// When it equals Calls the warehouse writes the token columns NULL — see
 	// TokensUnmetered.
-	UnmeteredCalls int
+	UnmeteredCalls int `json:",omitempty"`
 	WallMillis     int64
 
 	StatementSHA256 string

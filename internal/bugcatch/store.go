@@ -12,6 +12,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"github.com/pdbethke/corralai/internal/seatrecord"
 	"strings"
 	"time"
 
@@ -37,14 +38,13 @@ var bugcatchObservationsMigrationCols = []struct{ name, ddl string }{
 	// unpinned agent seat). NULL on every row written before them — API
 	// seats, which name their model — so a legacy row reads as resolved.
 	{"seat_tool", "seat_tool VARCHAR"},
-	{"model_unresolved", "model_unresolved BOOLEAN"},
+	{seatrecord.UnresolvedColumn, seatrecord.UnresolvedDDL},
 }
 
 // resolvedOnly is the one filter every per-model reader of this table
-// applies: a row whose seat named a TOOL rather than a model
-// (advpool.BugCatchObservation.ModelUnresolved) is not evidence about a
-// model. One string, so the scorecard and the shadow draw cannot disagree.
-const resolvedOnly = "NOT COALESCE(model_unresolved, false)"
+// applies — seatrecord.ResolvedOnly, shared with criticscore's precision so
+// the stores cannot disagree about which rows are evidence about a model.
+const resolvedOnly = seatrecord.ResolvedOnly
 
 type Store struct{ db *sql.DB }
 

@@ -440,7 +440,6 @@ func newWorktreeReproducer(root, commit string, timeout time.Duration) (review.R
 	return worktreeReproducer{runner: adequacy.NewWorkspaceRunner(tree, timeout, adequacy.WithWorkspaceMaxOutput(64<<10))}, cleanup, nil
 }
 
-// toolNote renders an agentic seat's tool version beside its name.
 // addReviewUsage folds one seat's reply into the review's record: counted
 // always, its tokens summed only when its wire reported them. review has no
 // --max-tokens, so an unmetered seat is not refused here; it is recorded as
@@ -455,6 +454,9 @@ func addReviewUsage(r *review.Review, u agentbackend.Usage) {
 	r.OutputTokens += int64(u.OutputTokens)
 }
 
+// toolNote renders an agentic seat's tool version beside its name. certify's
+// models line and its verdict cache key (seatKeyName) spell a seat the same
+// way.
 func toolNote(v string) string {
 	if v == "" {
 		return ""

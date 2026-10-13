@@ -134,6 +134,13 @@ func buildBundle(
 		Link:         link,
 		SourcePushed: sourcePushed,
 	}
+	// A scan none of whose calls was metered has no token total: the header
+	// says nothing (omitted from the entry, NULL in the warehouse) rather
+	// than a sum of unmeasured zeros — the one rule, decided from the same
+	// rows the header was summed from.
+	if auditpush.ScanTokensUnmetered(b) {
+		b.Scan.InputTokens, b.Scan.OutputTokens = 0, 0
+	}
 	return b
 }
 

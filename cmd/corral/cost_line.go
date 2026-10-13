@@ -10,6 +10,7 @@ import (
 	"github.com/pdbethke/corralai/internal/advpool"
 	"github.com/pdbethke/corralai/internal/agentbackend"
 	"github.com/pdbethke/corralai/internal/auditpush"
+	"github.com/pdbethke/corralai/internal/reposcan"
 )
 
 // rosterRoleOrder is the order a roster is presented in everywhere this
@@ -240,13 +241,33 @@ func addCacheCount(total, add *int64) *int64 {
 // tokens; seats past that point were refused" when it bit, or the cap and
 // the spend beside it when it did not. "" with no cap, so a run that named
 // none says nothing about money it never bounded.
-func budgetLine(b *agentbackend.TokenBudget) string {
+//
+// underived is how many candidates the cap stopped before their goal was
+// derived (reposcan.ReasonDeriveBudgetExhausted) — named here, because a file
+// the cap kept from ever becoming a job has no ungradable verdict of its own
+// to say so; 0 for certify --local, which derives nothing.
+func budgetLine(b *agentbackend.TokenBudget, underived int) string {
 	if b == nil {
 		return ""
 	}
 	hit, cap, spent, at := b.Exhausted()
 	if hit {
-		return fmt.Sprintf("  cap: --max-tokens %s REACHED after %d call(s) at %s tokens — every later model call was refused; a file whose generator never ran is ungradable for that reason, a writer or critic seat past it was skipped", abbreviateTokens(cap), at, abbreviateTokens(spent))
+		line := fmt.Sprintf("  cap: --max-tokens %s REACHED after %d call(s) at %s tokens — every later model call was refused; a file whose generator never ran is ungradable for that reason, a writer or critic seat past it was skipped", abbreviateTokens(cap), at, abbreviateTokens(spent))
+		if underived > 0 {
+			line += fmt.Sprintf("; %d file(s) never had a goal derived and were not audited (%s)", underived, reposcan.ReasonDeriveBudgetExhausted)
+		}
+		return line
 	}
 	return fmt.Sprintf("  cap: --max-tokens %s, %s spent", abbreviateTokens(cap), abbreviateTokens(b.Spent()))
+}
+
+// countReason is how many exclusions carry reason.
+func countReason(excl []reposcan.Exclusion, reason string) int {
+	n := 0
+	for _, e := range excl {
+		if e.Reason == reason {
+			n++
+		}
+	}
+	return n
 }

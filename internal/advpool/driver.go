@@ -238,6 +238,12 @@ type CriticFindingObservation struct {
 	Evidence, Severity                 string
 	Adjudication                       string // auto verdict: refuted|unadjudicated
 	Source                             string // "auto"
+	// SeatTool / ModelUnresolved: the critic seat's agent tool, and whether
+	// its spec names no model — stamped by seatRecord, the same rule the
+	// bug-catching rows use, so critic precision leaves an unpinned agent
+	// critic out exactly as the scorecard does.
+	SeatTool        string
+	ModelUnresolved bool
 }
 
 // CriticFindingSink is the optional per-run critic-finding feed (nil ⇒
@@ -3191,9 +3197,12 @@ func (d *Driver) adjudicateCriticFindings(ctx context.Context, missionID int64, 
 			}
 			adjudication = AutoAdjudication(scope, ran, kills)
 		}
+		criticModel := v.ModelsByRole[RoleTestCritic]
+		tool, unresolved := seatRecord(run.rs, v, RoleTestCritic, criticModel)
 		obs = append(obs, CriticFindingObservation{
+			SeatTool: tool, ModelUnresolved: unresolved,
 			QueueFindingID: f.ID,
-			Model:          v.ModelsByRole[RoleTestCritic],
+			Model:          criticModel,
 			TargetTest:     f.Target,
 			TestFile:       f.TestFile,
 			TestSelector:   f.TestSelector,

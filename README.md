@@ -1230,18 +1230,28 @@ collects from dot-directories may need to ignore them.
 Where macOS cannot match bwrap, the gap is named rather than hidden:
 
 - **Jailed code can read the startup environment and arguments of any non-Apple
-  process you own — including corral's.** If your model API keys are in corral's
-  environment, audited code can read them. Keep keys in corral's credentials store
-  instead of environment variables when auditing untrusted code on macOS:
+  process you own — including corral's.** No sandbox rule stops it. If your model
+  API keys are in corral's environment, audited code can read them, and the same
+  goes for any process you started: a key exported in your shell profile reaches
+  every process started from that shell — your IDE, terminals, coding agents.
+  Keep keys in corral's credentials store instead of environment variables:
   `corral secret set <NAME>` keeps them in the macOS Keychain (else an
   age-encrypted file in `~/Library/Application Support/corral`), and corral reads
-  them from there at run time. (bwrap's PID namespace prevents this on Linux;
-  `corral doctor` warns when a key is set in its environment.)
+  them from there at run time; run `corral secret set` before auditing, not
+  during. **Use `--jail container` for third-party or untrusted repositories on
+  macOS; the native `sandbox-exec` jail is for your own code.** (bwrap's PID
+  namespace prevents this on Linux. `corral doctor` and every macOS audit name
+  the secret-looking variables set in corral's environment — names only.) A jail
+  that runs audited code as a separate user is planned.
 - File **metadata** (existence, size, mtime) is visible everywhere; contents are not.
 - The **process list** is visible (no PID namespace); signals reach only the
   jail's own processes.
 - There is **no private `/tmp`**: a per-run `TMPDIR` replaces it.
 - Jailed code can **execute binaries it cannot read**; the children stay sandboxed.
+- Homebrew's `var/` (service databases) and `etc/` (service config) are denied
+  under both `/opt/homebrew` and `/usr/local`, except the public CA bundle
+  OpenSSL reads; so a Homebrew **PHP loses its `php.ini`** (under `etc/php`) and
+  runs on built-in defaults.
 - corral's own path checks fold case with Go's `strings.ToLower`, which matches
   APFS for ASCII paths but not for every Unicode case or normalization form.
 - Apple has **deprecated `sandbox-exec`** (verified working on macOS 27.0.1;

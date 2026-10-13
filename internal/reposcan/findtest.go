@@ -168,7 +168,17 @@ func pathUnderSkippedDir(rel string) bool {
 // typed pass ".", the directory that --code is relative to — and the one an
 // absolute --code is held to. RefusedOutsideRoot names what that refused.
 func FindTest(p lang.Plugin, root, codePath string) (SearchResult, error) {
-	return pairing.Resolve(p.TestRules(), codePath, pairing.Sources{
+	return pairing.Resolve(p.TestRules(), codePath, DiskSources(p, root))
+}
+
+// DiskSources is the pairing.Sources over the repository on disk at root:
+// os.Stat for existence, gitVisibleFiles for the search universe, and the
+// source's own declared test modules read by diskTestModules. It is FindTest's
+// adapter, exported so a door asking where an authored test LANDS
+// (lang.TestLanding) reads the repository exactly as the door that paired the
+// file did — one adapter, not a second resolver.
+func DiskSources(p lang.Plugin, root string) pairing.Sources {
+	return pairing.Sources{
 		Root: root,
 		Exists: func(cp string) bool {
 			fi, err := os.Stat(underRoot(root, cp))
@@ -176,7 +186,7 @@ func FindTest(p lang.Plugin, root, codePath string) (SearchResult, error) {
 		},
 		Universe:    func() ([]string, error) { return gitVisibleFiles(root) },
 		TestModules: diskTestModules(p, root),
-	})
+	}
 }
 
 // underRoot is the on-disk path of a root-relative slash path. Live guard:
@@ -234,12 +244,7 @@ func diskTestModules(p lang.Plugin, root string) func(rel string) ([]pairing.Tes
 // The error is modules' (a source that could not be read): Universe cannot
 // fail here, because presentList is already in hand.
 func findInUniverse(p lang.Plugin, root, codePath string, present map[string]bool, presentList []string, modules func(string) ([]pairing.TestModule, error)) (tp string, rank int, viaSearch bool, err error) {
-	r, err := pairing.Resolve(p.TestRules(), codePath, pairing.Sources{
-		Root:        root,
-		Exists:      func(cp string) bool { return present[cp] },
-		Universe:    func() ([]string, error) { return presentList, nil },
-		TestModules: modules,
-	})
+	r, err := pairing.Resolve(p.TestRules(), codePath, universeSources(root, present, presentList, modules))
 	if err != nil {
 		return "", 0, false, err
 	}
@@ -247,6 +252,19 @@ func findInUniverse(p lang.Plugin, root, codePath string, present map[string]boo
 		return "", 0, false, nil
 	}
 	return r.Path, r.Rank, r.ViaSearch, nil
+}
+
+// universeSources is findInUniverse's pairing.Sources: the scan's own walk
+// (present, presentList) as the disk and the listing. Enumerate asks where a
+// file's authored test lands over the same one, so the landing and the
+// pairing read the same tree.
+func universeSources(root string, present map[string]bool, presentList []string, modules func(string) ([]pairing.TestModule, error)) pairing.Sources {
+	return pairing.Sources{
+		Root:        root,
+		Exists:      func(cp string) bool { return present[cp] },
+		Universe:    func() ([]string, error) { return presentList, nil },
+		TestModules: modules,
+	}
 }
 
 // ResolutionPaths is every path pairing.Resolve checks for codePath, in

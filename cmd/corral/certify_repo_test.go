@@ -4734,10 +4734,10 @@ func TestDocsNeverDescribeCorralAsAnOlderSeries(t *testing.T) {
 // case is a #[path] target with no test marker at all, which the old
 // MightBeTest pre-filter would also have discarded.
 //
-// The exclusions are supplied by hand: while Rust's test landing is not
-// built, Enumerate excludes every .rs source as test-landing-not-built, never
-// no-paired-test, so a real scan does not reach this check with a Rust source
-// yet. The mechanism is held here so the Rust landing inherits it working.
+// The exclusions are the scan's own (Enumerate). With the Rust landing, a
+// source whose declared test file is gone lands on itself and is excluded as
+// test-landing-not-built — the deletion is why — so the check must ask those
+// sources too, or the PR above would again drop app_id.rs silently.
 func TestOrphanCheckSeesDeletedRustTests(t *testing.T) {
 	root := t.TempDir()
 	mustWrite(t, filepath.Join(root, "crates", "warp_core", "src", "app_id.rs"),
@@ -4745,10 +4745,9 @@ func TestOrphanCheckSeesDeletedRustTests(t *testing.T) {
 	mustWrite(t, filepath.Join(root, "src", "a", "b.rs"),
 		"pub fn b() {}\n\n#[cfg(test)]\n#[path = \"../elsewhere/x.rs\"]\nmod tests;\n")
 	mustWrite(t, filepath.Join(root, "src", "plain.rs"), "pub fn p() {}\n")
-	excl := []reposcan.Exclusion{
-		{Path: "crates/warp_core/src/app_id.rs", Reason: reposcan.ReasonNoPairedTest},
-		{Path: "src/a/b.rs", Reason: reposcan.ReasonNoPairedTest},
-		{Path: "src/plain.rs", Reason: reposcan.ReasonNoPairedTest},
+	_, excl, err := reposcan.Enumerate(root)
+	if err != nil {
+		t.Fatal(err)
 	}
 	changed := []string{"crates/warp_core/src/app_id_tests.rs", "src/elsewhere/x.rs"}
 	got, err := sourcesOrphanedByDeletedTests(root, changed, excl)

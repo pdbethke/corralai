@@ -50,11 +50,11 @@ history of any release, `git log v0.3.4..v0.3.5`.
   not migrated, so copy that directory by hand if it holds anything you
   want.
 
-- **`certify --repo` now recognises `.rs` files and reports them as not
-  audited yet.** corral cannot audit Rust today: a test for a Rust file
-  would be written over the file itself, because its tests live inside it.
-  Each `.rs` source is listed as `test-landing-not-built`, never as a
-  candidate, and the language profile shows it as
+- **`certify --repo` now recognises `.rs` files and reports the ones it
+  cannot audit yet.** A Rust file whose tests live inside it (an inline
+  `mod tests { … }`), or that declares no test module, cannot be audited: a
+  test for it would be written over the file itself. Each such `.rs` source
+  is listed as `test-landing-not-built`, never as a candidate, and the language profile shows it as
   `N not auditable yet (test landing not built)`. It never takes a `--top`
   slot, never counts as a second language for the selection and coverage
   pre-flight passes (a Python repository with a Rust extension keeps its
@@ -64,9 +64,36 @@ history of any release, `git log v0.3.4..v0.3.5`.
   treated as a changed file in a language corral does not audit, and is
   named in the scan output:
   `changed but not audited: <path> (test-landing-not-built — …)`. A pull
-  request that changes only Rust code, or only a Rust test, reports
-  NOTHING IN SCOPE and exits 0 — that change was not audited, and the line
-  above says so.
+  request that changes only such Rust code reports NOTHING IN SCOPE and
+  exits 0 — that change was not audited, and the line above says so.
+- **The `.rs` refusal is narrowed to files whose test would land on
+  themselves.** A Rust source whose own declaration loads a separate test
+  file — `#[cfg(test)] #[path = "foo_tests.rs"] mod tests;`, or a bare
+  `mod tests;` and rustc's default module file — is no longer refused by
+  `certify --local --repo-dir`, `certify --repo` or `corral doctor`.
+  corral's authored test is appended to that test file as a
+  `#[cfg(test)] mod corral_tests { use super::super::*; … }` block (named
+  `corral_tests_2`, … if the file already has one); the audited source and
+  the project's own tests are left as they are, and on
+  `--substrate workspace` the write into the real test file is journaled
+  and restored like every other. `certify --adversarial`, the brain and
+  `certify --local` without `--repo-dir` still refuse every `.rs` file:
+  they grade single-file and have no repository to read the declaration
+  from, and the refusal now says so. This is a narrowed refusal, not Rust
+  support: no Rust audit has yet produced a verdict on a third-party
+  repository.
+- **Rust runs say how they differ from the project's own runner.** With a
+  `.config/nextest.toml` in the repository and a `cargo test` command,
+  `certify --local` and `certify --repo` say the project's nextest profiles
+  (retries, timeouts, test groups) do not apply. Under `cargo nextest run`
+  they say a test passed only on a retry (FLAKY) is graded as passed, and
+  `certify --repo` names any such test from each file's baseline.
+  `nextest.toml` is a harness file, so changing it changes the verdict
+  cache key.
+- **A diff that deletes a Rust source's declared test file reports the
+  source as not audited.** That source now lands on itself and is excluded
+  as `test-landing-not-built`; the deleted-test check asks those sources
+  too, so the deletion is named rather than silent.
 - **`certify --local` and `certify --adversarial` print how they paired the
   test, for every language:** a new `  paired by <label>: <path>` line
   (`sibling`, `parallel-tree`, `flat-root`, … or `search`), where only a

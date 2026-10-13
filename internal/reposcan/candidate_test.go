@@ -842,8 +842,9 @@ func TestWidenNeverPromotesTestSupport(t *testing.T) {
 }
 
 // TestEnumerateClassifiesALandingRefusedFileBeforePairing: a file whose
-// language has no test landing yet (lang.CheckTestLanding — today every .rs
-// source, whose test would be written over the file itself) is excluded by
+// landing is the source itself (lang.CheckTestLanding — a .rs source whose
+// tests are inline, or that declares no separate test module, so its test
+// would be written over the file itself) is excluded by
 // Enumerate as test-landing-not-built, paired or not, and is never a
 // candidate. Classified here, once, because every scan-wide decision
 // downstream reads cands: --top ranking, the selection and pre-flight source

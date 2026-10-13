@@ -337,8 +337,16 @@ func checkPairing(code, test string) checkResult {
 	}
 	// The same refusal every audit door makes before any jail, store or
 	// spend. A file that pairs but cannot be audited is not "[ok]": doctor
-	// used to pass one every certify command then refused.
-	landing := lang.CheckTestLanding(code)
+	// used to pass one every certify command then refused. The landing is
+	// read from the repository at the working directory — the root the
+	// pairing below uses — which is what certify --local --repo-dir and
+	// certify --repo read; a run without --repo-dir is single-file and says
+	// so itself (see the hint this command prints about --repo-dir).
+	l, lerr := lang.TestLanding(code, reposcan.DiskSources(p, "."))
+	if lerr != nil {
+		return checkResult{name: name, detail: fmt.Sprintf("reading where a test for %q would land: %v", code, lerr)}
+	}
+	landing := lang.CheckTestLanding(code, l)
 	// Called only when landing != nil.
 	paired := func(how string) checkResult {
 		return checkResult{name: name, detail: fmt.Sprintf("pairs to %s, but cannot be audited yet: %v", how, landing)}

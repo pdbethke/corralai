@@ -1499,16 +1499,18 @@ func assertSameNamedFields(t *testing.T, src, dst any) {
 
 // TestAdvPoolStartRun_RefusesAFileWhoseTestWouldOverwriteIt: certify
 // --adversarial and eval reach the pool through this StartRun, which writes a
-// tracking mission before the driver's own StartRun runs. A Rust source —
-// whose test landing is not built, so a test for it would be written over
-// it — is refused before that store write.
+// tracking mission before the driver's own StartRun runs. The brain grades
+// single-file, with no repository to read a Rust source's test-module
+// declaration from, so every Rust source lands on itself here — even one
+// whose declaration names a separate test file (src/foo.rs below) — and is
+// refused before that store write, saying it needs the repository.
 func TestAdvPoolStartRun_RefusesAFileWhoseTestWouldOverwriteIt(t *testing.T) {
 	rt, _ := newTestAdvPoolRuntime(t, nil)
 	in := testRunSpecIn()
-	in.CodePath, in.DevTestPath, in.TestCmd = "src/lib.rs", "src/lib.rs", "cargo test"
+	in.CodePath, in.DevTestPath, in.TestCmd = "src/foo.rs", "src/foo_tests.rs", "cargo test"
 	_, err := rt.StartRun(in)
-	if err == nil || !strings.Contains(err.Error(), "not built yet") {
-		t.Fatalf("StartRun(src/lib.rs) err = %v, want the landing refusal", err)
+	if err == nil || !strings.Contains(err.Error(), "test landing is not built") || !strings.Contains(err.Error(), "--repo-dir") {
+		t.Fatalf("StartRun(src/foo.rs) err = %v, want the landing refusal", err)
 	}
 	if ms, merr := rt.missions.ListMissions(); merr != nil || len(ms) != 0 {
 		t.Fatalf("a refused run wrote %d mission(s) (err %v)", len(ms), merr)

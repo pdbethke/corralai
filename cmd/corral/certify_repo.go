@@ -525,8 +525,8 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		sort.Strings(unpairableInDiff)
 		unpairableInDiff = slices.Compact(unpairableInDiff)
 		fmt.Fprintf(stdout, "  diff against %s: auditing %d of %d candidate(s)\n", *diffBase, len(selected), len(cands))
-		// A changed file corral recognises but cannot audit YET (its test
-		// landing is not built) is ruled to be treated as a changed file in a
+		// A changed file corral recognises but cannot audit YET (its landing
+		// is the source itself) is ruled to be treated as a changed file in a
 		// language corral does not audit: it never fails the gate on its own
 		// (reposcan.UnauditableChangedSource). Unlike a README, it is code
 		// the reader may expect to have been audited, so it is named, with
@@ -839,13 +839,18 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	diffTouchedATest := false
 	mightBeTest := mightBeTestPredicate()
 	for path := range diffChanged {
-		// A changed test in a language whose landing is not built is treated
-		// as the scan treats a file in a language it does not audit: no
-		// instrumented run can attribute it (no such language's sources are
-		// candidates or selection sources — see Enumerate), so running the
-		// OTHER language's suite for it would cost a suite run and find
-		// nothing.
-		if mightBeTest(path) && lang.CheckTestLanding(path) == nil {
+		// A changed test in a language the instrumented run cannot attribute
+		// — one with no lang.CoverageReporter (Rust) — is treated as the scan
+		// treats a file in a language it does not audit: running the
+		// evidence pass for it would cost a suite run and find nothing. Its
+		// sources are still reached the other way, by pairing: a source whose
+		// own declaration loads the changed test pairs to it.
+		//
+		// This asked lang.CheckTestLanding of the TEST path until the Rust
+		// landing arrived. That was the same answer only while every Rust
+		// file was refused; a landing is a question about a SOURCE, and the
+		// one asked here is about evidence.
+		if mightBeTest(path) && evidenceCanAttribute(path) {
 			diffTouchedATest = true
 			break
 		}
@@ -1267,6 +1272,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	}
 	ex.mutantConcurrency = mutantConc
 	ex.noFailFast = *noFailFastFlag
+	printRunDisclosures(stdout, ex, jobs)
 
 	// ex is non-nil here: it is constructed on every non-dry-run path above,
 	// and the dry run returned before this point.
@@ -3142,6 +3148,13 @@ func mightBeTestPredicate() func(path string) bool {
 // and for every other language a path some resolution checks is a candidate,
 // which the registry round trip already holds to be a possible test. The
 // error is a source that could not be read for its declarations.
+//
+// A test-landing-not-built source is asked too. Since the Rust landing, a
+// source whose declared test file the diff deleted no longer has that file
+// to land in, so it lands on itself and is excluded for its LANDING — not as
+// no-paired-test — while the deletion is what made it so. Asking only
+// no-paired-test sources would let that PR drop app_id.rs out of the audit
+// silently again.
 func sourcesOrphanedByDeletedTests(repoDir string, changed []string, excl []reposcan.Exclusion) ([]string, error) {
 	deleted := map[string]bool{}
 	for _, path := range changed {
@@ -3154,7 +3167,7 @@ func sourcesOrphanedByDeletedTests(repoDir string, changed []string, excl []repo
 	}
 	var out []string
 	for _, e := range excl {
-		if e.Reason != reposcan.ReasonNoPairedTest && e.Reason != reposcan.ReasonMappedTestMissing {
+		if e.Reason != reposcan.ReasonNoPairedTest && e.Reason != reposcan.ReasonMappedTestMissing && e.Reason != reposcan.ReasonTestLandingNotBuilt {
 			continue
 		}
 		p, ok := lang.Detect(e.Path)
@@ -3337,6 +3350,43 @@ const maxListedExclusions = 20
 // pairing candidate predicted. Silent otherwise: the vast majority of a
 // scan's candidates pair by convention, and printing a line per file there
 // would just repeat what the "%d candidate(s)" count already says.
+// printRunDisclosures says, once per language in the job set, how running
+// that language's command differs from the project's own runner setup
+// (lang.RunDisclosures — the plugin decides; nothing here knows a runner).
+// The language's base command is the same for every job of it, which is why
+// once per language is enough.
+func printRunDisclosures(w io.Writer, ex *localExecutor, jobs []reposcan.Job) {
+	seen := map[string]bool{}
+	for _, j := range jobs {
+		if seen[j.Lang] {
+			continue
+		}
+		seen[j.Lang] = true
+		p, ok := lang.ByName(j.Lang)
+		if !ok {
+			continue
+		}
+		for _, line := range lang.RunDisclosures(p, ex.repoDir, ex.baseCmd(j)) {
+			fmt.Fprintf(w, "  %s\n", line)
+		}
+	}
+}
+
+// evidenceCanAttribute reports whether the scan's instrumented run can say
+// which sources a changed test at path defends: true for a file no plugin
+// claims (a fixture, a data file — the run is how anything about it is
+// learned) and for a language whose plugin reports coverage; false for a
+// language with no lang.CoverageReporter, whose tests no instrumented run can
+// attribute.
+func evidenceCanAttribute(path string) bool {
+	p, ok := lang.Detect(path)
+	if !ok {
+		return true
+	}
+	_, ok = p.(lang.CoverageReporter)
+	return ok
+}
+
 // candidacySummaryLine is the design's own required line: how many
 // candidates came from the measurement (evidence-paired: no filename
 // pairing, only coverage), how many from the filename walk (name-paired,
@@ -3802,7 +3852,7 @@ func reasonGloss(reason string) string {
 	case reposcan.ReasonMappedTestMissing:
 		return " — the --tests map names a test file that does not exist"
 	case reposcan.ReasonTestLandingNotBuilt:
-		return " — corral cannot audit this language's files yet: its test landing is not built, so a test for this file would be written over the file itself"
+		return " — corral cannot audit this file yet: its tests live in the file itself (or it declares no separate test module), and the landing that composes a test into its own source is not built, so a test for it would be written over the file itself"
 	}
 	return ""
 }
@@ -4793,6 +4843,14 @@ func (l *localExecutor) Execute(ctx context.Context, j reposcan.Job) (reposcan.F
 		}
 		l.note("%s: baseline does not pass unmutated — not graded\n", j.Path)
 		return reposcan.FileResult{Gradable: false, Reason: reposcan.ReasonBaselineFailed}, nil
+	}
+	// A pass that leaned on the runner's retries is still a pass — the
+	// project's own retry policy decides, and corral runs the command as
+	// given — but it is never a silent one: the tests are named.
+	if fr, ok := runner.(interface{ BaselineFlaky() []string }); ok {
+		if flaky := fr.BaselineFlaky(); len(flaky) > 0 {
+			l.note("%s: the baseline passed %d test(s) only on a retry (flaky), graded as passed: %s\n", j.Path, len(flaky), strings.Join(flaky, ", "))
+		}
 	}
 	release()
 

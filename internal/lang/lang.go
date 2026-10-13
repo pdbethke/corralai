@@ -689,6 +689,36 @@ type FailureParser interface {
 	FirstFailure(output []byte) string
 }
 
+// FlakyReporter is an OPTIONAL FailureParser extension for a runner that can
+// pass a run whose tests failed first and passed on a retry (cargo-nextest's
+// FLAKY). Such a run exits 0, so it is graded as PASSED — the operator's own
+// retry policy decides, not corral — and the tests it passed only by retrying
+// are named so that grading is disclosed, never silent. nil or empty means
+// the output names none.
+type FlakyReporter interface {
+	FlakyTests(output []byte) []string
+}
+
+// RunDiscloser is the OPTIONAL plugin extension that says how running
+// testCmd in repoDir differs from how the project's own setup runs its suite
+// — said on the scan line, never acted on: corral runs the operator's
+// command as given and never substitutes one of its own. Rust reports a
+// project nextest.toml that `cargo test` bypasses, and nextest's
+// passed-on-retry grading.
+type RunDiscloser interface {
+	RunDisclosures(repoDir string, testCmd []string) []string
+}
+
+// RunDisclosures is p's RunDiscloser answer, or nil for a plugin that has
+// nothing to say. The one way a caller asks, so no caller switches on a
+// language to decide whether there is anything to disclose.
+func RunDisclosures(p Plugin, repoDir string, testCmd []string) []string {
+	if d, ok := p.(RunDiscloser); ok {
+		return d.RunDisclosures(repoDir, testCmd)
+	}
+	return nil
+}
+
 // SelectionDiagnoser is an OPTIONAL TestSelector extension: a plugin that
 // can recognize its own instrumented selection run's failure text —
 // whatever a runner could capture, possibly just an exit code's worth of

@@ -157,36 +157,14 @@ type Resolution struct {
 // The errors: a content rule with nil src.TestModules (fail closed, before
 // any I/O), src.TestModules' own, and src.Universe's after a stage-1 miss.
 func Resolve(rules []Rule, codePath string, src Sources) (Resolution, error) {
-	var content []Rule
-	for _, r := range rules {
-		if traitsOf(r.Shape).content {
-			content = append(content, r)
-		}
-	}
+	content := contentRules(rules)
 	if len(content) > 0 && src.TestModules == nil {
 		return Resolution{}, fmt.Errorf("pairing: %s is resolved by what it declares (a %s rule), but this caller supplied no Sources.TestModules to read it — refusing rather than skipping the rule", codePath, content[0].Shape)
 	}
 
-	var res Resolution
-	if len(content) > 0 {
-		mods, err := src.TestModules(codePath)
-		if err != nil {
-			return res, fmt.Errorf("reading the test modules %s declares: %w", codePath, err)
-		}
-		for _, r := range content {
-			tr := traitsOf(r.Shape)
-			for _, l := range tr.fromModules(codePath, mods) {
-				if tr.confined && !insideRoot(src.Root, l.path) {
-					res.RefusedOutsideRoot = append(res.RefusedOutsideRoot, l.path)
-					continue
-				}
-				res.Tried = append(res.Tried, l.path)
-				if src.Exists(l.path) {
-					res.Path, res.Rank, res.Shape, res.Label, res.Found = l.path, r.Rank, r.Shape, l.label, true
-					return res, nil
-				}
-			}
-		}
+	res, err := resolveDeclared(content, codePath, src)
+	if err != nil || res.Found {
+		return res, err
 	}
 
 	var cands []Candidate
@@ -225,6 +203,50 @@ func Resolve(rules []Rule, codePath string, src Sources) (Resolution, error) {
 		res.Rank = SearchRank
 		res.ViaSearch = true
 		res.Found = true
+	}
+	return res, nil
+}
+
+// contentRules is rules' content-Shape rules, in rule order.
+func contentRules(rules []Rule) []Rule {
+	var out []Rule
+	for _, r := range rules {
+		if traitsOf(r.Shape).content {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// resolveDeclared is stage 1a of Resolve — what the source DECLARES — and
+// the whole of what Land reads: every content rule, in rule order, the paths
+// its Shape derives from src.TestModules(codePath), confined to src.Root,
+// the first src.Exists accepts winning. It is one function so the file a run
+// pairs a source to and the file it lands an authored test in are the same
+// derivation, never two that could drift. No content rules: a zero
+// Resolution and no read. The caller has checked src.TestModules is set.
+func resolveDeclared(content []Rule, codePath string, src Sources) (Resolution, error) {
+	var res Resolution
+	if len(content) == 0 {
+		return res, nil
+	}
+	mods, err := src.TestModules(codePath)
+	if err != nil {
+		return res, fmt.Errorf("reading the test modules %s declares: %w", codePath, err)
+	}
+	for _, r := range content {
+		tr := traitsOf(r.Shape)
+		for _, l := range tr.fromModules(codePath, mods) {
+			if tr.confined && !insideRoot(src.Root, l.path) {
+				res.RefusedOutsideRoot = append(res.RefusedOutsideRoot, l.path)
+				continue
+			}
+			res.Tried = append(res.Tried, l.path)
+			if src.Exists(l.path) {
+				res.Path, res.Rank, res.Shape, res.Label, res.Found = l.path, r.Rank, r.Shape, l.label, true
+				return res, nil
+			}
+		}
 	}
 	return res, nil
 }

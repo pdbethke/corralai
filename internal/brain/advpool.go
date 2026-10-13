@@ -23,6 +23,7 @@ import (
 	golang "github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/matrixstore"
 	"github.com/pdbethke/corralai/internal/mission"
+	"github.com/pdbethke/corralai/internal/pairing"
 	"github.com/pdbethke/corralai/internal/repoindex"
 	"github.com/pdbethke/corralai/internal/telemetry"
 )
@@ -711,8 +712,13 @@ func (rt *AdvPoolRuntime) StartRun(in AdvPoolRunSpec) (int64, error) {
 	}
 	// Before preflight and before the tracking mission is written: a file
 	// whose test would be written over the file itself is refused here, not
-	// only at the driver's StartRun after a mission already exists.
-	if err := golang.CheckTestLanding(in.CodePath); err != nil {
+	// only at the driver's StartRun after a mission already exists. The
+	// brain runs SINGLE-FILE (a scaffold plus the code and its test, no
+	// repository), so it has nothing to read a file's test-module
+	// declarations from: the zero Landing, which lands a content language
+	// on the source and refuses it — fail closed, and the RunSpec below
+	// carries no Landing, so StartRun refuses it the same way.
+	if err := golang.CheckTestLanding(in.CodePath, pairing.Landing{}); err != nil {
 		return 0, fmt.Errorf("advpool: %w", err)
 	}
 	// strings.Fields splits in.TestCmd (an MCP-schema'd single string, e.g.

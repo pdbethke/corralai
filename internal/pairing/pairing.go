@@ -42,8 +42,11 @@
 // resolution tries, not over the search: a test that was paired by search
 // rather than by convention or declaration and is then deleted is therefore
 // not reported as orphaning its source.
-// The three questions have one function each: Primary names a test corral is
-// about to write (advpool's synthetic and authored tests), Resolve finds the
+// The four questions have one function each: Primary names a test corral is
+// about to write as a file of its own (advpool's synthetic test), Land says
+// where an AUTHORED test goes — Primary's file for a path language, and for a
+// content language the file the source's own declaration loads, appended to
+// (landing.go) — Resolve finds the
 // test that already exists (reposcan.FindTest and findInUniverse, and through
 // FindTest both certify --local and certify --adversarial), and BestClaim
 // settles which of several sources resolving to one test keeps it
@@ -125,6 +128,13 @@ type shapeTraits struct {
 	// controlled declaration), not derived by corral, so each must stay
 	// inside Sources.Root or it is refused (insideRoot). Read by Resolve.
 	confined bool
+	// moduleDepth: for a content Shape, how many module levels the file it
+	// resolves sits BELOW the source's own module — 0 when that file is the
+	// source itself (Inline), 1 when it is a module the source declares
+	// (Declared: rustc loads it as the source's child). A landing in that
+	// file reaches back to the code under test across exactly this many
+	// levels (Rust's `use super::super::*`). Read by Land.
+	moduleDepth int
 }
 
 // labelled is one path a content Shape derived, and the Label a resolution
@@ -186,6 +196,7 @@ var shapeTable = map[Shape]shapeTraits{
 		candidate:   func(_ Rule, src, _, _ string) (string, bool) { return src, true },
 		content:     true,
 		fromModules: inlineModule,
+		moduleDepth: 0,
 	},
 	// Declared has no pure candidate: without the source's own `mod`
 	// declaration there is no test to name. It resolves the file that
@@ -194,6 +205,7 @@ var shapeTable = map[Shape]shapeTraits{
 		content:     true,
 		fromModules: declaredModule,
 		confined:    true,
+		moduleDepth: 1,
 	},
 	TestDir: {
 		searchRoot:   true,

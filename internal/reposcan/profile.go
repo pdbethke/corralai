@@ -41,8 +41,9 @@ type LanguageStat struct {
 	OtherExcluded int
 	// LandingNotBuilt is source files this language recognises that corral
 	// cannot audit YET: a test for them would be written over the file
-	// itself, because the language's test landing is not built
-	// (ReasonTestLandingNotBuilt, lang.CheckTestLanding). Its own bucket,
+	// itself, because their landing is the source (a Rust file whose tests
+	// are inline, or that declares no separate test module) and that landing
+	// is not built (ReasonTestLandingNotBuilt, lang.CheckTestLanding). Its own bucket,
 	// never folded into NoPairedTest or Auditable: such a file may well have
 	// a test, and calling it either would be a false statement about it.
 	LandingNotBuilt int

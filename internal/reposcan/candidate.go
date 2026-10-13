@@ -162,9 +162,11 @@ const (
 	ReasonNoExecutableCode = "no executable code"
 	// ReasonTestLandingNotBuilt marks a source file corral cannot audit yet
 	// because a test for it would be written over the file itself: its
-	// language's Primary test path is the source (Rust's inline test module),
-	// and the landing that merges an authored test INTO a source is not
-	// built. See lang.CheckTestLanding. Applied by Enumerate before pairing,
+	// landing is the source (a Rust file whose tests are inline, or that
+	// declares no separate test module), and the landing that composes an
+	// authored test INTO a source is not built. A Rust file whose own
+	// declaration loads a separate test file lands there and is NOT this.
+	// See lang.CheckTestLanding. Applied by Enumerate before pairing,
 	// so such a file is never a candidate — whether or not it has a test —
 	// and no ranking, --top slot, selection language or jail is spent on it.
 	ReasonTestLandingNotBuilt = "test-landing-not-built"
@@ -465,18 +467,25 @@ func EnumerateWithTests(root string, tests *TestMap) ([]Candidate, []Exclusion, 
 			excl = append(excl, Exclusion{Path: rel, Reason: ReasonTestSupport})
 			continue
 		}
-		// A file whose test corral would write over the file itself — its
-		// language's Primary test path is the source, and the landing that
-		// merges an authored test INTO a source is not built — cannot be
-		// audited, paired or not. Classified HERE, before pairing, ranking
+		// A file whose authored test corral would write over the file itself
+		// — its landing (lang.TestLanding) is the source: a Rust file whose
+		// tests are inline or that declares no separate test module — cannot
+		// be audited, paired or not. Classified HERE, before pairing, ranking
 		// and every scan-wide decision that reads the candidate list: left a
 		// candidate, it took --top slots from files corral can grade, made a
 		// mixed repository "span" a language nothing can instrument (which
 		// switched the other language's selection pass off), and sent the
 		// scan's selection and pre-flight passes off to prepare a jail —
 		// a networked `cargo vendor` — for a language with nothing to audit.
-		// See lang.CheckTestLanding, the one place the question is answered.
-		if lang.CheckTestLanding(rel) != nil {
+		// The landing reads the same walk and the same declarations the
+		// pairing below does (universeSources), so a file the scan admits is
+		// one whose landing every later door derives the same way. See
+		// lang.CheckTestLanding, the one place the question is answered.
+		landing, lerr := lang.TestLanding(rel, universeSources(root, present, presentList, diskTestModules(p, root)))
+		if lerr != nil {
+			return nil, nil, fmt.Errorf("landing %s: %w", rel, lerr)
+		}
+		if lang.CheckTestLanding(rel, landing) != nil {
 			excl = append(excl, Exclusion{Path: rel, Reason: ReasonTestLandingNotBuilt})
 			continue
 		}

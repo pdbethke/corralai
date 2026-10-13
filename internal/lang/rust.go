@@ -32,6 +32,12 @@ func (rustPlugin) Scaffold() map[string]string { return map[string]string{} }
 
 func (rustPlugin) TestCmd() []string { return []string{"cargo", "test"} }
 
+// HarnessFiles names what cargo-nextest reads before any test: its profiles
+// (retries, timeouts, test groups) change what the whole suite measures, so
+// a change to the file moves the verdict cache key. Matched by basename (see
+// HarnessConfigurer); nextest reads it from .config/ at the workspace root.
+func (rustPlugin) HarnessFiles() []string { return []string{"nextest.toml"} }
+
 // LineComment is the rust line-comment marker.
 func (rustPlugin) LineComment() string { return "//" }
 
@@ -199,25 +205,27 @@ func userHomeProxyNeedsSystemRustup(name string) error {
 func (rustPlugin) PromptLang() string { return "Rust" }
 
 func (rustPlugin) TestWriterSystem() string {
-	return `You are a TEST-WRITER. Given a security control GOAL, a target source file, and its signature surface, write ONE executable Rust test module that verifies the code SATISFIES the goal.
-- MATCH THE PROJECT'S CONVENTIONS, which the developer's own tests (shown to you) use, ahead of everything below: their module layout, their assertion helpers, and any test crates they already depend on.
-- Absent a project convention: write ` + "`#[cfg(test)] mod corral_tests { use super::*; ... }`" + ` with plain ` + "`#[test]`" + ` functions — it is compiled into the target's own module, so private items are in scope.
+	return `You are a TEST-WRITER. Given a security control GOAL, a target source file, and its signature surface, write executable Rust tests that verify the code SATISFIES the goal.
+- MATCH THE PROJECT'S CONVENTIONS, which the developer's own tests (shown to you) use, ahead of everything below: their naming, their assertion helpers, and any test crates they already depend on.
+- corral places what you return inside a test module it appends where the project keeps this file's tests; the task names that file and the ` + "`use`" + ` line that brings the code under test (private items included) into scope. Return ONLY that module's items — plain ` + "`#[test]`" + ` functions and any helpers or ` + "`use`" + ` lines they need — never the ` + "`mod`" + ` wrapper itself.
 - It MUST compile against the target and MUST FAIL if the goal is violated — test the goal's boundary (what a weakened implementation would pass that a compliant one must not).
 - Standard library only unless the project's own tests already use more. Deterministic, no network.
-Return ONLY the raw Rust module content — no prose, no markdown fences.`
+Return ONLY the raw Rust items — no prose, no markdown fences.`
 }
 
 func (rustPlugin) MutantSystem() string {
 	return mutantSystem("signatures, types, and module paths (a drop-in replacement that compiles)", "compile errors")
 }
 
-// ImportPath is always ok=false: the authored test is a module inside the
-// target file (`use super::*;`), so there is no import path to derive. See
-// lang.Plugin.ImportPath's doc comment for the general rule this follows.
+// ImportPath is always ok=false: the authored test is a module appended to
+// the landing file (LandTest), which reaches the code under test with an
+// ancestor glob (`use super::super::*;`), so there is no import path to
+// derive. See lang.Plugin.ImportPath's doc comment for the general rule this
+// follows.
 func (rustPlugin) ImportPath(string, func(string) bool) (string, bool) { return "", false }
 
-// ImportNote is always "": see ImportPath — a child test module reaches its
-// parent with `use super::*;`, which needs no per-task correction.
+// ImportNote is always "": see ImportPath — the landed module's own use line,
+// which LandTest writes from the landing's depth, needs no per-task correction.
 func (rustPlugin) ImportNote(string, bool) string { return "" }
 
 // SingleTestCmd, ListTestsCmd and ParseTestList stay ok=false/nil: the Plugin

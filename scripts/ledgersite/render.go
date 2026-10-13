@@ -385,43 +385,12 @@ func isHex(s string) bool {
 	return true
 }
 
-// seatModel splits a review seat ("codex:gpt-6-astra") into the model half.
-// A bare seat ("claude-code", "gemini-3.6-flash") is returned whole. This
-// mirrors agentSeat in cmd/corral/review_agent.go, which is in package main
-// and so cannot be imported; the split is one line and the two must agree.
-func seatModel(seat string) string {
-	if i := strings.Index(seat, ":"); i >= 0 {
-		return seat[i+1:]
-	}
-	return seat
-}
-
-func seatTool(seat string) string {
-	if i := strings.Index(seat, ":"); i >= 0 {
-		return seat[:i]
-	}
-	return seat
-}
-
-// toolVendor maps the agentic CLIs review_agent.go can drive to the vendor
-// whose model they run BY DEFAULT, for seats recorded with no explicit model
-// ("codex", "claude-code"). agentbackend.VendorOf now answers for the built-in
-// agents itself (from the maker declared on their definition), so this table
-// is a fallback for the process where an operator has redefined one — it is
-// consulted only after VendorOf declines. It restates that data and is a
-// candidate for deletion.
-var toolVendor = map[string]string{
-	"claude-code": "anthropic",
-	"codex":       "openai",
-	"antigravity": "google",
-}
-
 // vendorOfSeat resolves a seat to a vendor, or "" when it cannot. Returning
 // "" matters: an undetermined vendor is excluded from the cross-vendor count
 // rather than guessed into it, so the headline can only understate.
 func vendorOfSeat(seat string) string {
-	if v := agentbackend.VendorOf(seatModel(seat)); v != "" {
-		return v
-	}
-	return toolVendor[seatTool(seat)]
+	// RecordedVendorOf, not VendorOf: a signed historical entry was run by
+	// the built-in agent it names, whatever CORRALAI_AGENT_* this renderer's
+	// own environment defines.
+	return agentbackend.RecordedVendorOf(seat)
 }

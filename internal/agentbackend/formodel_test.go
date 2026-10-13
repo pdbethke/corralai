@@ -239,3 +239,19 @@ func TestForModelOrLocalIgnoresAgentNames(t *testing.T) {
 		t.Fatalf("ForModelOrLocal(codex) = %T, want the local backend", b)
 	}
 }
+
+// RecordedVendorOf answers from the tables alone: the environment cannot
+// change what a recorded seat was.
+func TestRecordedVendorOfIsEnvFree(t *testing.T) {
+	t.Setenv("CORRALAI_AGENT_CODEX", "/bin/cat")
+	t.Setenv("CORRALAI_AGENT_MYTOOL", "/bin/cat")
+	for spec, want := range map[string]string{
+		"codex": "openai", "codex:gpt-6": "openai", "claude-code": "anthropic",
+		"antigravity": "google", "mytool": "", "mytool:claude-sonnet-5": "anthropic",
+		"gpt-6": "openai", "llama3:8b": "",
+	} {
+		if got := RecordedVendorOf(spec); got != want {
+			t.Errorf("RecordedVendorOf(%q) = %q, want %q", spec, got, want)
+		}
+	}
+}

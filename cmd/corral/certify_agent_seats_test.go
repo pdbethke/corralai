@@ -24,14 +24,16 @@ func noKeys(t *testing.T) {
 
 // fakeAgent writes an executable that answers --version and otherwise prints a
 // fixed reply, and defines it as the operator agent NAME. No real CLI runs.
-func fakeAgent(t *testing.T, name, reply string) {
+func fakeAgent(t *testing.T, name, reply string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "agent-"+name)
 	script := "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'fakeagent 9.9'; exit 0; fi\ncat >/dev/null\necho '" + reply + "'\n"
 	if err := os.WriteFile(path, []byte(script), 0o700); err != nil { // #nosec G306 -- test fixture must be executable
 		t.Fatal(err)
 	}
-	t.Setenv("CORRALAI_AGENT_"+strings.ToUpper(name), path+" {model:--model}")
+	def := path + " {model:--model}"
+	t.Setenv("CORRALAI_AGENT_"+strings.ToUpper(name), def)
+	return def
 }
 
 // An all-agent run holds no API key and must not be asked for one, must not
@@ -137,7 +139,7 @@ func TestSoleGradedVendorSeesAgentSeats(t *testing.T) {
 // doctor never prints ok for a login it did not try, and spends no call.
 func TestDoctorAgentSeatLineDoesNotClaimALogin(t *testing.T) {
 	noKeys(t)
-	fakeAgent(t, "fakea", "x")
+	def := fakeAgent(t, "fakea", "x")
 	fakeAgent(t, "fakeb", "y")
 	res := checkHerd("fakea", "fakeb", "off", "", "", nil)
 	var line *checkResult
@@ -152,12 +154,10 @@ func TestDoctorAgentSeatLineDoesNotClaimALogin(t *testing.T) {
 	if line == nil {
 		t.Fatalf("no line for the agent seat: %+v", res)
 	}
-	want := "binary ok (fakeagent 9.9 ["
-	if !strings.Contains(line.detail, want) && !strings.Contains(line.detail, "binary ok (fakeagent 9.9)") {
-		t.Fatalf("detail %q lacks the binary version", line.detail)
-	}
-	if !strings.Contains(line.detail, "definition ok, login not verified (no call is spent)") {
-		t.Fatalf("detail %q must say the login is not verified", line.detail)
+	// An operator agent's version is "<--version first line> [<definition>]".
+	want := "binary ok (fakeagent 9.9 [" + def + "]), definition ok, login not verified (no call is spent)"
+	if line.detail != want {
+		t.Fatalf("detail %q, want %q", line.detail, want)
 	}
 }
 
@@ -168,5 +168,29 @@ func TestDoctorAgentSeatMissingBinaryFails(t *testing.T) {
 	res := agentSeatChecks("ghost")
 	if len(res) != 1 || res[0].ok || !strings.Contains(res[0].detail, "not found") {
 		t.Fatalf("want one FAIL naming the missing binary, got %+v", res)
+	}
+}
+
+// antigravity's command line starts with `sh`, so looking up the first word
+// would find a shell on every machine. The check looks for the CLI itself.
+func TestDoctorAntigravityChecksTheRealBinary(t *testing.T) {
+	t.Setenv("PATH", t.TempDir()) // no agy anywhere
+	res := agentSeatChecks("antigravity")
+	if len(res) != 1 || res[0].ok || !strings.Contains(res[0].detail, `"agy" not found`) {
+		t.Fatalf("want a FAIL naming agy, got %+v", res)
+	}
+}
+
+// An operator definition wrapped in a shell hides its CLI from corral: doctor
+// must say it did not check, never "ok".
+func TestDoctorShellWrappedOperatorAgentIsNotChecked(t *testing.T) {
+	t.Setenv("CORRALAI_AGENT_WRAPPED", "sh -c 'corral-no-such-inner-cli \"$@\"' sh")
+	res := agentSeatChecks("wrapped")
+	if len(res) != 1 || !res[0].ok {
+		t.Fatalf("got %+v", res)
+	}
+	d := res[0].detail
+	if !strings.Contains(d, "binary not checked (shell-wrapped definition)") || strings.Contains(d, "binary ok") {
+		t.Fatalf("detail %q must say the binary was not checked", d)
 	}
 }

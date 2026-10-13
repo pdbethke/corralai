@@ -329,7 +329,14 @@ func agentSeatChecks(specs ...string) []checkResult {
 			continue
 		}
 		seen[spec] = true
-		if err := agentbackend.AgentBinary(name); err != nil {
+		if err := agentbackend.AgentBinary(name); errors.Is(err, agentbackend.ErrBinaryNotChecked) {
+			out = append(out, checkResult{
+				name:   "agent seat " + spec,
+				ok:     true,
+				detail: err.Error() + ", definition ok, login not verified (no call is spent)",
+			})
+			continue
+		} else if err != nil {
 			out = append(out, checkResult{name: "agent seat " + spec, detail: err.Error()})
 			continue
 		}

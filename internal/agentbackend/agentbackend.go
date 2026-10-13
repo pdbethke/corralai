@@ -357,15 +357,42 @@ func ForModel(model string) (Backend, error) {
 // takes part in those rules instead of being invisible to them.
 func VendorOf(spec string) string {
 	if name, model, ok := AgentSeat(spec); ok {
-		if v := apiVendorOf(model); v != "" {
-			return v
-		}
-		if _, builtin, _ := agentDefinition(name); builtin {
-			return builtinAgents[name].maker
-		}
-		return ""
+		_, builtin, _ := agentDefinition(name)
+		return agentVendor(name, model, builtin)
 	}
 	return apiVendorOf(spec)
+}
+
+// RecordedVendorOf is VendorOf for a seat that was RECORDED, not one about to
+// run: it answers from the prefix table and the built-in makers alone and
+// never reads the environment. A historical signed entry naming `codex` was
+// run by the codex built-in whatever CORRALAI_AGENT_CODEX says in the
+// process now rendering it, so the renderer must not depend on it. A name
+// that is not a built-in agent is read as a model (its pinned half, if any).
+func RecordedVendorOf(spec string) string {
+	name, model, hasPin := strings.Cut(strings.TrimSpace(spec), ":")
+	if _, ok := builtinAgents[name]; ok {
+		return agentVendor(name, strings.TrimSpace(model), true)
+	}
+	if hasPin {
+		if v := apiVendorOf(strings.TrimSpace(model)); v != "" {
+			return v
+		}
+	}
+	return apiVendorOf(spec)
+}
+
+// agentVendor is the one rule for an agent seat's vendor, shared by VendorOf
+// and RecordedVendorOf: the pinned model's vendor, else — when the definition
+// is the built-in's own — the maker declared on it.
+func agentVendor(name, model string, makerKnown bool) string {
+	if v := apiVendorOf(model); v != "" {
+		return v
+	}
+	if makerKnown {
+		return builtinAgents[name].maker
+	}
+	return ""
 }
 
 // apiVendorOf is the model-name prefix table: the vendor ForModel routes a

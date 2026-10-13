@@ -54,6 +54,7 @@ var builtinAgents = map[string]builtinAgent{
 		def:         `claude -p --output-format json --setting-sources "" --strict-mcp-config --disable-slash-commands --no-session-persistence --system-prompt "Follow the instructions in the user's message exactly." {tools:--tools} {model:--model}`,
 		wire:        "claude-json",
 		maker:       "anthropic",
+		binary:      "claude",
 		coldCeiling: 5000,
 	},
 	// codex loaded no operator instructions even unflagged (its own agent
@@ -65,6 +66,7 @@ var builtinAgents = map[string]builtinAgent{
 		def:         "codex exec --json --ignore-user-config --ignore-rules --sandbox read-only --ephemeral --skip-git-repo-check -C {dir} -o {out} {model:-m} -",
 		wire:        "codex-jsonl",
 		maker:       "openai",
+		binary:      "codex",
 		coldCeiling: 20000,
 	},
 	// antigravity (`agy`) takes its prompt as a FLAG VALUE, not on stdin, so
@@ -82,9 +84,10 @@ var builtinAgents = map[string]builtinAgent{
 	// Its JSON mode has not been measured, so it is a text wire (unmetered)
 	// and has no cold ceiling yet (spec open question 2).
 	"antigravity": {
-		def:   `sh -c 'agy --output-format text --sandbox --dangerously-skip-permissions --print-timeout 15m "$@" -p="$(cat)"' sh {model:--model}`,
-		wire:  "text",
-		maker: "google",
+		def:    `sh -c 'agy --output-format text --sandbox --dangerously-skip-permissions --print-timeout 15m "$@" -p="$(cat)"' sh {model:--model}`,
+		wire:   "text",
+		maker:  "google",
+		binary: "agy",
 	},
 }
 
@@ -95,6 +98,11 @@ type builtinAgent struct {
 	wire string
 	// maker is the vendor of the models the CLI runs when it is not pinned.
 	maker string
+	// binary is the CLI the definition actually runs. It is data because a
+	// definition may wrap the CLI in a shell (antigravity), where the first
+	// word of the command line is the shell and says nothing about whether
+	// the CLI is installed.
+	binary string
 	// coldCeiling is the input-token ceiling a one-line prompt must stay
 	// under for the seat to count as cold; 0 = not yet measured.
 	coldCeiling int
@@ -150,6 +158,10 @@ func agentWireFor(name string, builtin bool) (string, agentWire, error) {
 	return wireName, w, nil
 }
 
+// Note: an Ollama tag such as `codex:latest` reads as the codex agent seat
+// pinned to the model "latest" — the first word wins, so a local model whose
+// name collides with a defined agent must be renamed or the agent undefined.
+//
 // AgentSeat splits "claude-code:claude-sonnet-5" into agent name and
 // model; ok is false for an API model name (a spec whose first word names
 // no agent).
@@ -230,23 +242,38 @@ func AgentVersion(name string) string {
 	return strings.TrimSpace(version + " [" + def + "]")
 }
 
-// AgentBinary checks, without running anything, that the agent's binary can be
-// found: `doctor` needs a free answer to "is the CLI even installed" that does
-// not spend a call. A definition that wraps the agent in a shell (antigravity)
-// has the shell as its first word, and the shell is always there, so for
-// those the check proves only that the shell exists — it cannot see the CLI
-// inside the wrapper, and says nothing it did not look at.
+// ErrBinaryNotChecked is AgentBinary's answer for an operator definition that
+// wraps its CLI in a shell: the CLI is inside a script corral does not parse,
+// so it cannot say whether it is installed, and says so rather than looking
+// at the shell and reporting that.
+var ErrBinaryNotChecked = errors.New("binary not checked (shell-wrapped definition)")
+
+// AgentBinary checks, without running anything, that the agent's CLI can be
+// found: `doctor` needs a free answer to "is it installed" that spends no
+// call. A built-in definition names its real binary (builtinAgent.binary); an
+// operator's own definition is checked by its first word, unless that word is
+// a shell, in which case ErrBinaryNotChecked.
 func AgentBinary(name string) error {
-	def, _, ok := agentDefinition(name)
+	def, builtin, ok := agentDefinition(name)
 	if !ok {
 		return fmt.Errorf("agent %q is not defined (define it as %s=\"<command line>\")", name, agentEnvKey(name))
 	}
-	argv, err := splitWords(def)
-	if err != nil || len(argv) == 0 {
-		return fmt.Errorf("agent %s: its definition %q does not parse", name, def)
+	prog := ""
+	if builtin {
+		prog = builtinAgents[name].binary
 	}
-	if _, err := exec.LookPath(argv[0]); err != nil {
-		return fmt.Errorf("agent %s: binary %q not found: %v", name, argv[0], err)
+	if prog == "" {
+		argv, err := splitWords(def)
+		if err != nil || len(argv) == 0 {
+			return fmt.Errorf("agent %s: its definition %q does not parse", name, def)
+		}
+		if isShell(argv[0]) {
+			return ErrBinaryNotChecked
+		}
+		prog = argv[0]
+	}
+	if _, err := exec.LookPath(prog); err != nil {
+		return fmt.Errorf("agent %s: binary %q not found: %v", name, prog, err)
 	}
 	return nil
 }

@@ -108,7 +108,7 @@ func isAgentSeat(spec string) bool {
 // WithModel behavior.
 //
 // Fails closed: if a cross-vendor critic is requested but its vendor's key is
-// missing, this returns the actionable error from ForModel instead of
+// missing, this returns the actionable error from ForSeat (ForModel for a cloud name) instead of
 // silently falling back to the base backend — the caller must refuse to
 // start the run, not fail mid-run.
 // meters, when non-nil, is ONE UsageMeter PER ROLE — built by

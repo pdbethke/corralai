@@ -282,3 +282,27 @@ func TestSandboxExecMasksACargoHomeInAWholeBoundTree(t *testing.T) {
 		t.Errorf("credentials.toml must be refused by the profile (Operation not permitted):\n%s", res.Output)
 	}
 }
+
+// TestSandboxExecHomebrewOpenSSLVerifiesTLS: layer 2 denies Homebrew's
+// etc/ (service config) but re-allows the public CA bundle openssl@3 reads
+// from its OPENSSLDIR (<prefix>/etc/openssl@3/cert.pem ->
+// <prefix>/etc/ca-certificates). Without the re-allow every tool linked
+// against Homebrew's OpenSSL — Ruby, Python, curl, git — fails certificate
+// verification in the networked fetch step. Runs Homebrew's own openssl in
+// the jail (Apple silicon, else Intel); skips on a Mac without it.
+func TestSandboxExecHomebrewOpenSSLVerifiesTLS(t *testing.T) {
+	var bin string
+	for _, p := range []string{"/opt/homebrew/opt/openssl@3/bin/openssl", "/usr/local/opt/openssl@3/bin/openssl"} {
+		if _, err := os.Stat(p); err == nil {
+			bin = p
+			break
+		}
+	}
+	if bin == "" {
+		t.Skip("no Homebrew openssl@3 on this Mac (looked in /opt/homebrew/opt and /usr/local/opt): nothing reads the re-allowed CA bundle")
+	}
+	res := runJailed(t, shQuote(bin)+" s_client -connect proxy.golang.org:443 -servername proxy.golang.org -verify_return_error </dev/null", Options{Network: true})
+	if !strings.Contains(res.Output, "Verify return code: 0") {
+		t.Fatalf("Homebrew openssl could not verify TLS in the jail (CA bundle unreadable?): exit=%d output=%s", res.ExitCode, res.Output)
+	}
+}

@@ -71,28 +71,56 @@ func TestSBPLLayersAreOrdered(t *testing.T) {
 	}
 }
 
-// TestSBPLHomebrewDataAndConfigAreDenied: layer 2 reads /opt/homebrew whole
-// for its toolchains, but /opt/homebrew/var holds service DATA (Postgres,
-// MySQL, Redis data directories) and /opt/homebrew/etc service CONFIG that
-// can hold passwords. Both denies must FOLLOW the /opt/homebrew allow (SBPL
-// applies the last matching rule) and precede every later allow.
+// TestSBPLHomebrewDataAndConfigAreDenied: layer 2 reads both Homebrew
+// prefixes whole for their toolchains — Intel's /usr/local through the /usr
+// allow, Apple silicon's /opt/homebrew — but <prefix>/var holds service
+// DATA (Postgres, MySQL, Redis data directories) and <prefix>/etc service
+// CONFIG that can hold passwords. Both denies must FOLLOW the prefix's
+// allow (SBPL applies the last matching rule) and precede every later
+// allow. The public CA bundles under etc/ (openssl@3's OPENSSLDIR) are
+// re-allowed AFTER the etc/ deny, or TLS through Homebrew's OpenSSL fails.
 func TestSBPLHomebrewDataAndConfigAreDenied(t *testing.T) {
 	lines := strings.Split(mustProfile(t, sampleSBPL(true)), "\n")
-	brew := lineIndex(lines, `(allow file-read* (subpath "/opt/homebrew"))`)
-	brewVar := lineIndex(lines, `(deny file-read* (subpath "/opt/homebrew/var"))`)
-	brewEtc := lineIndex(lines, `(deny file-read* (subpath "/opt/homebrew/etc"))`)
 	goAllow := lineIndex(lines, `(allow file-read* (subpath "/Users/op/sdk/go"))`)
 	ws := lineIndex(lines, `(allow file-read* file-write* (subpath "/private/var/folders/x/T/corral-adequacy-1"))`)
-	for name, i := range map[string]int{"brew": brew, "brewVar": brewVar, "brewEtc": brewEtc, "goAllow": goAllow, "ws": ws} {
-		if i < 0 {
-			t.Fatalf("%s rule missing from profile:\n%s", name, strings.Join(lines, "\n"))
+	for _, tc := range []struct{ prefix, allow string }{
+		{"/usr/local", `(allow file-read* (subpath "/usr"))`},
+		{"/opt/homebrew", `(allow file-read* (subpath "/opt/homebrew"))`},
+	} {
+		allow := lineIndex(lines, tc.allow)
+		dVar := lineIndex(lines, `(deny file-read* (subpath "`+tc.prefix+`/var"))`)
+		dEtc := lineIndex(lines, `(deny file-read* (subpath "`+tc.prefix+`/etc"))`)
+		cas := map[string]int{
+			"cert.pem":        lineIndex(lines, `(allow file-read* (literal "`+tc.prefix+`/etc/openssl@3/cert.pem"))`),
+			"ca-certificates": lineIndex(lines, `(allow file-read* (subpath "`+tc.prefix+`/etc/ca-certificates"))`),
+			"certs":           lineIndex(lines, `(allow file-read* (subpath "`+tc.prefix+`/etc/openssl@3/certs"))`),
+		}
+		for name, i := range map[string]int{"allow": allow, "var deny": dVar, "etc deny": dEtc, "goAllow": goAllow, "ws": ws} {
+			if i < 0 {
+				t.Fatalf("%s: %s rule missing from profile:\n%s", tc.prefix, name, strings.Join(lines, "\n"))
+			}
+		}
+		if !(allow < dVar && allow < dEtc) {
+			t.Errorf("%s: the var (%d) and etc (%d) denies must follow the prefix allow (%d)", tc.prefix, dVar, dEtc, allow)
+		}
+		if !(dVar < goAllow && dEtc < goAllow && dVar < ws && dEtc < ws) {
+			t.Errorf("%s: the denies (%d, %d) must precede the ReadOnly (%d) and workspace (%d) allows", tc.prefix, dVar, dEtc, goAllow, ws)
+		}
+		for name, i := range cas {
+			if i < 0 {
+				t.Errorf("%s: CA re-allow %s missing:\n%s", tc.prefix, name, strings.Join(lines, "\n"))
+			} else if i < dEtc {
+				t.Errorf("%s: CA re-allow %s (%d) must FOLLOW the etc deny (%d), or the deny wins", tc.prefix, name, i, dEtc)
+			}
 		}
 	}
-	if !(brew < brewVar && brew < brewEtc) {
-		t.Errorf("the /opt/homebrew/var (%d) and /opt/homebrew/etc (%d) denies must follow the /opt/homebrew allow (%d)", brewVar, brewEtc, brew)
-	}
-	if !(brewVar < goAllow && brewEtc < goAllow && brewVar < ws && brewEtc < ws) {
-		t.Errorf("the Homebrew denies (%d, %d) must precede the ReadOnly (%d) and workspace (%d) allows", brewVar, brewEtc, goAllow, ws)
+	// Nothing else under etc/ is re-allowed: no allow names openssl@3 itself
+	// (it holds private/) or etc/ as a whole.
+	for _, l := range lines {
+		rule, _, _ := strings.Cut(l, " ; ")
+		if strings.HasPrefix(rule, "(allow") && (strings.HasSuffix(rule, `/etc/openssl@3"))`) || strings.HasSuffix(rule, `/etc"))`) && !strings.Contains(rule, "/private/etc")) {
+			t.Errorf("an allow re-opens more of a Homebrew etc/ than the CA bundles: %s", l)
+		}
 	}
 }
 
@@ -304,6 +332,26 @@ func TestSBPLRefusesAnAllowThatReopensADeny(t *testing.T) {
 		{"ReadOnly /OPT/Homebrew, mis-cased", func(in *sbplInput) { in.ReadOnly = []string{"/OPT/Homebrew"} }, "/opt/homebrew/var"},
 		{"Workspace /opt/homebrew", func(in *sbplInput) { in.Workspace = "/opt/homebrew" }, "/opt/homebrew/var"},
 		{"ReadOnly a Homebrew keg", func(in *sbplInput) { in.ReadOnly = []string{"/opt/homebrew/Cellar/go/1.26.0"} }, ""},
+		// Intel Homebrew (/usr/local) is denied the same way.
+		{"ReadOnly /usr", func(in *sbplInput) { in.ReadOnly = []string{"/usr"} }, "/usr/local/var"},
+		{"ReadOnly /usr/local", func(in *sbplInput) { in.ReadOnly = []string{"/usr/local"} }, "/usr/local/etc"},
+		{"ReadOnly /usr/local/etc", func(in *sbplInput) { in.ReadOnly = []string{"/usr/local/etc"} }, "/usr/local/etc"},
+		{"ReadOnly inside /usr/local/var", func(in *sbplInput) { in.ReadOnly = []string{"/usr/local/var/mysql"} }, "/usr/local/var"},
+		{"ReadOnly /USR/Local/Etc, mis-cased", func(in *sbplInput) { in.ReadOnly = []string{"/USR/Local/Etc"} }, "/usr/local/etc"},
+		{"ReadOnly an Intel keg", func(in *sbplInput) { in.ReadOnly = []string{"/usr/local/Cellar/go/1.26.0"} }, ""},
+		// The CA carve-outs: exactly what layer 2 re-allows is accepted;
+		// their parents and neighbours under etc/ are still refused.
+		{"ReadOnly brew openssl@3/cert.pem", func(in *sbplInput) { in.ReadOnly = []string{"/opt/homebrew/etc/openssl@3/cert.pem"} }, ""},
+		{"ReadOnly brew ca-certificates", func(in *sbplInput) { in.ReadOnly = []string{"/opt/homebrew/etc/ca-certificates"} }, ""},
+		{"ReadOnly inside brew ca-certificates", func(in *sbplInput) { in.ReadOnly = []string{"/opt/homebrew/etc/ca-certificates/cert.pem"} }, ""},
+		{"ReadOnly brew openssl@3/certs", func(in *sbplInput) { in.ReadOnly = []string{"/opt/homebrew/etc/openssl@3/certs"} }, ""},
+		{"ReadOnly Intel openssl@3/cert.pem", func(in *sbplInput) { in.ReadOnly = []string{"/usr/local/etc/openssl@3/cert.pem"} }, ""},
+		{"ReadOnly Intel ca-certificates, mis-cased", func(in *sbplInput) { in.ReadOnly = []string{"/USR/local/etc/CA-certificates"} }, ""},
+		{"ReadOnly brew openssl@3 (holds private/)", func(in *sbplInput) { in.ReadOnly = []string{"/opt/homebrew/etc/openssl@3"} }, "/opt/homebrew/etc"},
+		{"ReadOnly brew openssl@3/private", func(in *sbplInput) { in.ReadOnly = []string{"/opt/homebrew/etc/openssl@3/private"} }, "/opt/homebrew/etc"},
+		{"ReadOnly a cert.pem lookalike", func(in *sbplInput) { in.ReadOnly = []string{"/opt/homebrew/etc/openssl@3/cert.pem.d"} }, "/opt/homebrew/etc"},
+		{"ReadOnly a ca-certificates lookalike", func(in *sbplInput) { in.ReadOnly = []string{"/usr/local/etc/ca-certificatesX"} }, "/usr/local/etc"},
+		{"ReadOnly inside the cert.pem file path", func(in *sbplInput) { in.ReadOnly = []string{"/opt/homebrew/etc/openssl@3/cert.pem/x"} }, "/opt/homebrew/etc"},
 		{"ReadOnly /opt/homebrew/variants (a sibling, not var/)", func(in *sbplInput) { in.ReadOnly = []string{"/opt/homebrew/variants"} }, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

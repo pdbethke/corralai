@@ -38,24 +38,83 @@ var sbplBase = []sbplRule{
 }
 
 // Layer 2: the system paths a toolchain reads. Each is the macOS counterpart
-// of something bwrap binds read-only.
-var sbplSystemReads = []sbplRule{
-	{`(allow file-read* (literal "/"))`, "the root itself: getcwd and path resolution open it"},
-	{`(allow file-read* (subpath "/usr"))`, "the OS toolchain and libraries, as bwrap binds /usr"},
-	{`(allow file-read* (subpath "/bin"))`, "sh, and the base utilities"},
-	{`(allow file-read* (subpath "/sbin"))`, "base system utilities some build scripts call"},
-	{`(allow file-read* (subpath "/System"))`, "frameworks and the dyld shared cache every binary maps at exec"},
-	{`(allow file-read* (subpath "/private/etc"))`, "hosts, passwd, group, ssl: the system databases bwrap binds from /etc"},
-	{`(deny file-read* (literal "` + sbplMasterPasswd + `"))`, "the password hashes: bwrap never binds /etc/shadow either"},
-	{`(allow file-read* (subpath "/private/var/select"))`, "/bin/sh resolves which shell to run through /private/var/select/sh"},
-	{`(allow file-read* (subpath "/private/var/db/timezone"))`, "the timezone database libc reads at startup"},
-	{`(allow file-read* (subpath "/dev"))`, "device nodes: /dev/null, /dev/urandom, /dev/tty"},
-	{`(allow file-read* (subpath "/Library/Developer"))`, "the Xcode command line tools: clang, git, the SDK headers cgo needs"},
-	{`(allow file-read* (subpath "/opt/homebrew"))`, "Apple-silicon Homebrew toolchains, masked below like /usr"},
-	{`(deny file-read* (subpath "` + sbplBrewVar + `"))`, "Homebrew service data: Postgres, MySQL and Redis data directories, never a toolchain"},
-	{`(deny file-read* (subpath "` + sbplBrewEtc + `"))`, "Homebrew service config, which can hold passwords; never a toolchain"},
-	{`(allow file-write* (literal "/dev/null") (literal "/dev/tty"))`, "discarding output and writing to the terminal"},
-	{`(allow file-ioctl (literal "/dev/null") (literal "/dev/tty"))`, "isatty checks the shell and test runners make"},
+// of something bwrap binds read-only. Both Homebrew prefixes (Intel's
+// /usr/local, read through /usr; Apple silicon's /opt/homebrew) are followed
+// by sbplHomebrewPrefix's denies and CA re-allows.
+var sbplSystemReads = concatRules(
+	[]sbplRule{
+		{`(allow file-read* (literal "/"))`, "the root itself: getcwd and path resolution open it"},
+		{`(allow file-read* (subpath "/usr"))`, "the OS toolchain and libraries, as bwrap binds /usr"},
+	},
+	sbplHomebrewPrefix(sbplBrewPrefixes[0]),
+	[]sbplRule{
+		{`(allow file-read* (subpath "/bin"))`, "sh, and the base utilities"},
+		{`(allow file-read* (subpath "/sbin"))`, "base system utilities some build scripts call"},
+		{`(allow file-read* (subpath "/System"))`, "frameworks and the dyld shared cache every binary maps at exec"},
+		{`(allow file-read* (subpath "/private/etc"))`, "hosts, passwd, group, ssl: the system databases bwrap binds from /etc"},
+		{`(deny file-read* (literal "` + sbplMasterPasswd + `"))`, "the password hashes: bwrap never binds /etc/shadow either"},
+		{`(allow file-read* (subpath "/private/var/select"))`, "/bin/sh resolves which shell to run through /private/var/select/sh"},
+		{`(allow file-read* (subpath "/private/var/db/timezone"))`, "the timezone database libc reads at startup"},
+		{`(allow file-read* (subpath "/dev"))`, "device nodes: /dev/null, /dev/urandom, /dev/tty"},
+		{`(allow file-read* (subpath "/Library/Developer"))`, "the Xcode command line tools: clang, git, the SDK headers cgo needs"},
+		{`(allow file-read* (subpath "/opt/homebrew"))`, "Apple-silicon Homebrew toolchains, masked below like /usr"},
+	},
+	sbplHomebrewPrefix(sbplBrewPrefixes[1]),
+	[]sbplRule{
+		{`(allow file-write* (literal "/dev/null") (literal "/dev/tty"))`, "discarding output and writing to the terminal"},
+		{`(allow file-ioctl (literal "/dev/null") (literal "/dev/tty"))`, "isatty checks the shell and test runners make"},
+	},
+)
+
+// sbplBrewPrefixes are the Homebrew prefixes the profile reads whole: Intel
+// (/usr/local, inside the /usr allow) and Apple silicon. Each one's var/
+// (service data: Postgres, MySQL, Redis data directories) and etc/ (service
+// config, which can hold passwords) are denied.
+var sbplBrewPrefixes = []string{"/usr/local", "/opt/homebrew"}
+
+// sbplCAPath is one public CA-bundle path under a Homebrew etc/ that the
+// profile re-allows after denying etc/: openssl@3's OPENSSLDIR is
+// <prefix>/etc/openssl@3, and its cert.pem links into
+// <prefix>/etc/ca-certificates, so without these every tool linked against
+// Homebrew's OpenSSL (Ruby, Python, curl, git) fails TLS verification in the
+// fetch step. CA bundles are public data.
+type sbplCAPath struct {
+	rel     string // relative to the prefix
+	subpath bool   // a tree, else one file
+	why     string
+}
+
+var sbplCAPaths = []sbplCAPath{
+	{"etc/openssl@3/cert.pem", false, "openssl@3's CA bundle (public data), re-allowed after the etc/ deny so TLS verifies"},
+	{"etc/ca-certificates", true, "Homebrew's CA certificates, which openssl@3/cert.pem links to (public data)"},
+	{"etc/openssl@3/certs", true, "openssl@3's hashed CA directory (public data)"},
+}
+
+// sbplHomebrewPrefix is the deny-then-re-allow block that follows the read
+// of a Homebrew prefix. Order matters: SBPL applies the last matching rule,
+// so the CA re-allows come after the etc/ deny.
+func sbplHomebrewPrefix(prefix string) []sbplRule {
+	rules := []sbplRule{
+		{`(deny file-read* (subpath "` + prefix + `/var"))`, "Homebrew service data under " + prefix + ": Postgres, MySQL and Redis data directories, never a toolchain"},
+		{`(deny file-read* (subpath "` + prefix + `/etc"))`, "Homebrew service config under " + prefix + ", which can hold passwords; never a toolchain"},
+	}
+	for _, ca := range sbplCAPaths {
+		kind := "literal"
+		if ca.subpath {
+			kind = "subpath"
+		}
+		rules = append(rules, sbplRule{`(allow file-read* (` + kind + ` "` + prefix + "/" + ca.rel + `"))`, ca.why})
+	}
+	return rules
+}
+
+// concatRules joins rule tables in order.
+func concatRules(parts ...[]sbplRule) []sbplRule {
+	var out []sbplRule
+	for _, p := range parts {
+		out = append(out, p...)
+	}
+	return out
 }
 
 // Layer 3: the only system services libSystem needs at startup.
@@ -66,13 +125,12 @@ var sbplServices = []sbplRule{
 	{`(allow ipc-posix-shm-read* (ipc-posix-name "apple.shm.notification_center"))`, "notifyd's shared page, read only"},
 }
 
-// The fixed secret stores the profile denies: master.passwd and Homebrew's
-// var/ and etc/ in layer 2, the other two in layer 4. Named once, because
-// sbplCheckReopen must refuse any later allow that would re-expose them.
+// The fixed secret stores the profile denies: master.passwd (and each
+// Homebrew prefix's var/ and etc/, sbplBrewPrefixes) in layer 2, the other
+// two in layer 4. Named once, because sbplCheckReopen must refuse any later
+// allow that would re-expose them.
 const (
 	sbplMasterPasswd = "/private/etc/master.passwd"
-	sbplBrewVar      = "/opt/homebrew/var"
-	sbplBrewEtc      = "/opt/homebrew/etc"
 	sbplKeychains    = "/Library/Keychains"
 	sbplDSLocal      = "/private/var/db/dslocal"
 )
@@ -167,7 +225,10 @@ func sbplValidate(in sbplInput) error {
 //
 // An allow INSIDE the operator's home is the reason layer 5 follows layer 4
 // (~/.cargo/bin, ~/sdk/go) and is accepted. One inside a fixed secret store
-// (a single keychain file) is refused: nothing a jail runs lives there.
+// (a single keychain file) is refused: nothing a jail runs lives there —
+// except exactly the public CA paths the profile re-allows itself
+// (sbplCAPaths), which re-expose nothing. Their PARENTS (etc/openssl@3,
+// which also holds private/) stay refused.
 func sbplCheckReopen(field, p, operatorHome string) error {
 	type denied struct {
 		path, what string
@@ -177,8 +238,11 @@ func sbplCheckReopen(field, p, operatorHome string) error {
 		{sbplMasterPasswd, "the password hashes", true},
 		{sbplKeychains, "the system keychains", true},
 		{sbplDSLocal, "the directory-service password database", true},
-		{sbplBrewVar, "Homebrew's service data", true},
-		{sbplBrewEtc, "Homebrew's service config", true},
+	}
+	for _, pfx := range sbplBrewPrefixes {
+		ds = append(ds,
+			denied{pfx + "/var", "Homebrew's service data", true},
+			denied{pfx + "/etc", "Homebrew's service config", true})
 	}
 	if operatorHome != "" {
 		ds = append(ds, denied{filepath.Clean(operatorHome), "the operator's home", false})
@@ -192,7 +256,11 @@ func sbplCheckReopen(field, p, operatorHome string) error {
 	var reopened []string
 	for _, d := range ds {
 		dp := strings.ToLower(d.path)
-		if c == "/" || c == dp || strings.HasPrefix(dp, c+"/") || (d.inside && strings.HasPrefix(c, dp+"/")) {
+		inside := d.inside && strings.HasPrefix(c, dp+"/")
+		if inside && sbplCACarveOut(c) {
+			continue // a public CA bundle the profile itself re-allows
+		}
+		if c == "/" || c == dp || strings.HasPrefix(dp, c+"/") || inside {
 			reopened = append(reopened, d.path+" ("+d.what+")")
 		}
 	}
@@ -201,6 +269,21 @@ func sbplCheckReopen(field, p, operatorHome string) error {
 			field, p, strings.Join(reopened, ", "))
 	}
 	return nil
+}
+
+// sbplCACarveOut reports whether the case-folded, cleaned path c is one of
+// the CA paths layer 2 re-allows under a Homebrew etc/: the cert.pem file
+// itself, or inside one of the two CA directories.
+func sbplCACarveOut(c string) bool {
+	for _, pfx := range sbplBrewPrefixes {
+		for _, ca := range sbplCAPaths {
+			k := strings.ToLower(pfx + "/" + ca.rel)
+			if c == k || (ca.subpath && strings.HasPrefix(c, k+"/")) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // sbplProfile assembles the profile in its eight layers. ORDER IS THE

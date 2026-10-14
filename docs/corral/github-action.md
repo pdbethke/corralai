@@ -553,12 +553,16 @@ SELECT e.scan_uid[1:8] AS entry, m.Shape, count(*) AS planted,
        sum(m.Outcome = 'survived') AS survived, sum(m.Proven) AS proven
 FROM read_json_auto('scans/*.json.gz') AS e, unnest(e.bundle.Mutants) AS t(m)
 GROUP BY ALL ORDER BY entry, planted DESC;
-``` The same entries a laptop run writes into its own
+```
+
+The same entries a laptop run writes into its own
 ledger directory; a local run and an Action run are one writer with two
 places to put the file, and DuckDB (or MotherDuck) is the query surface
 over both, not the store.
 
 ```yaml
+      # The job needs: permissions: { contents: write, id-token: write, attestations: write }
+      # — write to push the ledger branch, the other two for the attestation.
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }
       - name: Check out the ledger branch (create it on first use)
@@ -582,9 +586,12 @@ over both, not the store.
           anthropic-key: ${{ secrets.ANTHROPIC_API_KEY }}
       - name: Attest this run's ledger entry (keyless, via the workflow's identity)
         if: always() && github.event_name != 'pull_request'
-        uses: actions/attest@v2
+        # attest-build-provenance, not actions/attest: an entry has no
+        # predicate of its own, and actions/attest refuses a subject without
+        # one ("predicate-type must be provided"). Entries are gzipped.
+        uses: actions/attest-build-provenance@v2
         with:
-          subject-path: .corral-ledger/scans/*.json
+          subject-path: .corral-ledger/scans/*.json.gz
       - name: Commit the ledger back
         if: always() && github.event_name != 'pull_request'
         run: |

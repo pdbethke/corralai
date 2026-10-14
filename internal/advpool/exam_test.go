@@ -4,7 +4,6 @@ package advpool
 
 import (
 	"context"
-	"math"
 	"strings"
 	"testing"
 
@@ -57,26 +56,6 @@ func TestExamCoveragePlacesMutantsOnSymbolsAndDecisions(t *testing.T) {
 	}
 	if c := s.coverage(); c.Measured {
 		t.Errorf("no mutants must not measure: %+v", c)
-	}
-}
-
-// The two api.py runs, as intervals: 3/39 and 5/8 do not overlap, and the
-// small exam's band is wide — which is what a reader needs to see.
-func TestWilsonIntervalOnTheTwoRequestsRuns(t *testing.T) {
-	lo, hi, ok := WilsonInterval(3, 39)
-	if !ok || math.Abs(lo-0.026) > 0.01 || math.Abs(hi-0.205) > 0.01 {
-		t.Errorf("3/39: [%.3f, %.3f] ok=%v, want ≈[0.026, 0.205]", lo, hi, ok)
-	}
-	lo, hi, ok = WilsonInterval(5, 8)
-	if !ok || math.Abs(lo-0.305) > 0.01 || math.Abs(hi-0.863) > 0.01 {
-		t.Errorf("5/8: [%.3f, %.3f] ok=%v, want ≈[0.305, 0.863]", lo, hi, ok)
-	}
-	// Edges stay inside [0, 1] and an empty exam has no interval.
-	if lo, hi, ok := WilsonInterval(8, 8); !ok || lo < 0.6 || hi != 1 {
-		t.Errorf("8/8: [%.3f, %.3f]", lo, hi)
-	}
-	if _, _, ok := WilsonInterval(0, 0); ok {
-		t.Error("an interval over nothing is not [0, 1]")
 	}
 }
 

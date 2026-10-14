@@ -3,8 +3,6 @@
 package advpool
 
 import (
-	"math"
-
 	golang "github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/repoindex"
 )
@@ -108,29 +106,3 @@ func (s examSurface) coverage(refs ...[]MutantRef) ExamCoverage {
 // 0.70–0.97, width 0.27), and refuses 9 of 10 (0.60–0.98, width 0.38) and
 // every floor-of-five exam. See aggregate's "exam too small to certify".
 const MaxCertifiableIntervalWidth = 0.35
-
-// WilsonInterval is the 95% Wilson score interval for a kill rate of
-// killed out of graded mutants — the sampling term of a verdict's
-// confidence, the one a bare rate hides. Wilson rather than the normal
-// approximation because the exams here are small (a floor of 5) and the
-// rates sit near 0 and 1, exactly where the approximation fails. Returns
-// (0, 0, false) for graded == 0: an interval over nothing is not [0, 1].
-func WilsonInterval(killed, graded int) (low, high float64, ok bool) {
-	if graded <= 0 || killed < 0 || killed > graded {
-		return 0, 0, false
-	}
-	const z = 1.959964 // 95%
-	n := float64(graded)
-	p := float64(killed) / n
-	denom := 1 + z*z/n
-	centre := (p + z*z/(2*n)) / denom
-	half := z * math.Sqrt(p*(1-p)/n+z*z/(4*n*n)) / denom
-	low, high = centre-half, centre+half
-	if low < 0 {
-		low = 0
-	}
-	if high > 1 {
-		high = 1
-	}
-	return low, high, true
-}

@@ -7,6 +7,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/pdbethke/corralai/internal/killrate"
 	"github.com/pdbethke/corralai/internal/queue"
 )
 
@@ -237,11 +238,7 @@ func aggregate(
 	// budget's floor of five can never certify, which is the honest answer
 	// for a file with five decision points.
 	if v.Status == StatusCertified && mutantsTotal > 0 && certifyIntervalWidth > 0 {
-		killed := mutantsTotal - survivors
-		if killed < 0 {
-			killed = 0
-		}
-		if lo, hi, ok := WilsonInterval(killed, mutantsTotal); ok && hi-lo > certifyIntervalWidth {
+		if lo, hi, ok := killrate.Interval(mutantsTotal, survivors); ok && hi-lo > certifyIntervalWidth {
 			v.Status = StatusNeedsReview
 			v.ExamIndicative = true
 			v.IndicativeReason = fmt.Sprintf("exam too small to certify: %d mutants, 95%% interval %.2f–%.2f (width %.2f, the most a certified verdict may carry is %.2f)",

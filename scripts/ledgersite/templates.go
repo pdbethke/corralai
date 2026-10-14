@@ -75,16 +75,18 @@ const indexTmpl = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>corral/ledger — the record</title>
-<meta name="description" content="Every audit corral ran on its own code: signed, hash-linked, and reproducible.">
+<meta name="description" content="Every audit and review corral has recorded: signed, hash-linked, and reproducible.">
 <style>` + baseCSS + `</style></head><body><div class="wrap">
 
 <h1>corral/ledger — the record</h1>
-<p class="lede">Every review corral has run on <em>its own source</em>, as a signed, hash-linked
-chain. Each finding carries the script that was executed to test it, and the exit code that came
-back. Nothing here asks to be believed: re-run any of it.</p>
+<p class="lede">Every audit and review corral has recorded, as a signed, hash-linked chain.
+An audit plants faults in a file and runs the project's own tests against each one; a review's
+findings each carry the script that was executed to test them, and the exit code that came back.
+Nothing here asks to be believed: re-run any of it.</p>
 
 <div class="stats">
   <div class="stat"><b>{{.LedgerEntries}}</b><span>ledger entries</span></div>
+  <div class="stat"><b>{{.Scans | len}}</b><span>audits</span></div>
   <div class="stat"><b>{{.Reviews | len}}</b><span>reviews</span></div>
   <div class="stat"><b>{{.Findings}}</b><span>findings</span></div>
   <div class="stat"><b>{{.Reproduced}}</b><span>reproduced by execution</span></div>
@@ -94,6 +96,28 @@ back. Nothing here asks to be believed: re-run any of it.</p>
 </div>
 
 {{template "verify" .}}
+
+{{if .Scans}}
+<h2>Audits</h2>
+<p>Each audit planted faults in a file and ran the project's <em>own</em> test command against every
+one. The kill rate is what execution measured, with its 95% interval. A <strong>proven</strong> gap is a
+fault the suite missed and a test corral wrote did catch: that test passed on the real code and failed
+on the fault.</p>
+<table><thead><tr>
+<th>pushed</th><th>repository</th><th>audited</th><th class="nowrap">kill rate</th>
+<th class="nowrap">got through</th><th class="nowrap">proven</th><th>commit</th>
+</tr></thead><tbody>
+{{range .Scans}}<tr>
+<td class="nowrap"><a href="{{entryURL .Short}}">{{date .Pushed}}</a>{{if .Retracted}} <span class="chip bad">retracted</span>{{end}}</td>
+<td class="mono small">{{.RepoName}}</td>
+<td class="mono small">{{range $i, $f := .Audited}}{{if $i}}, {{end}}{{$f.Path}}{{else}}<span class="chip mute">none</span>{{end}}</td>
+<td class="nowrap">{{if .Graded}}{{.Rate}} <span class="small">({{.Killed}} of {{.Graded}})</span>{{else}}<span class="chip mute">not graded</span>{{end}}</td>
+<td>{{.Survived}}</td>
+<td>{{if .Proven}}<span class="chip ok">{{.Proven}}</span>{{else}}0{{end}}</td>
+<td class="mono small">{{if .CommitURL}}<a href="{{.CommitURL}}">{{.ShortSHA}}</a>{{else}}{{.ShortSHA}}{{end}}</td>
+</tr>{{end}}
+</tbody></table>
+{{end}}
 
 <h2>What "reproduced" means here</h2>
 <p>A finding is <span class="chip ok">reproduced</span> only when a script the reviewer wrote was
@@ -138,7 +162,7 @@ the verifier is never the reviewer's model. What actually ran:</p>
 <th class="nowrap">findings</th><th class="nowrap">repro</th><th class="nowrap">verdicts</th><th>commit</th>
 </tr></thead><tbody>
 {{range .Reviews}}<tr>
-<td class="nowrap"><a href="{{entryURL .}}">{{date .Pushed}}</a></td>
+<td class="nowrap"><a href="{{entryURL .Short}}">{{date .Pushed}}</a></td>
 <td class="mono">{{with .Review}}{{.Scope}}{{end}}</td>
 <td class="mono small">{{with .Review}}{{.ReviewerModel}}{{end}}</td>
 <td class="mono small">{{if .HasVerifier}}{{with .Review}}{{.VerifierModel}}{{end}}
@@ -176,7 +200,21 @@ This page renders the record and adds no opinion about it: the chain, the signat
 and the verdicts are all read through <code>internal/auditpush</code>, the same code the CLI uses.</p>
 </footer>
 </div></body></html>
-` + verifyBanner
+` + verifyBanner + entryBanner
+
+// entryBanner is one entry's chain line, shared by review and scan pages.
+const entryBanner = `
+{{define "entrybanner"}}
+<div class="banner{{if not .ChainHashOK}} bad{{else if not .Signed}} warn{{end}}">
+  <p><strong>This entry:</strong>
+  <span class="chip{{if .ChainHashOK}} ok{{else}} bad{{end}}">hash {{if .ChainHashOK}}matches its bytes{{else}}MISMATCH{{end}}</span>
+  <span class="chip{{if .ChainLinkOK}} ok{{else}} bad{{end}}">link {{if .ChainLinkOK}}{{if .Genesis}}genesis{{else}}names its predecessor{{end}}{{else}}BROKEN{{end}}</span>
+  {{if .Signed}}<span class="chip{{if .SigOK}} ok{{else}} warn{{end}}">signature {{if .SigOK}}verified{{else}}not checked (no key){{end}}</span>
+  {{else}}<span class="chip warn">unsigned</span>{{end}}
+  {{if .ChainProblem}}<br><span class="chip bad">{{.ChainProblem}}</span>{{end}}</p>
+</div>
+{{end}}
+`
 
 const entryTmpl = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
@@ -191,14 +229,7 @@ const entryTmpl = `<!doctype html>
 <span class="mono">{{.ReviewerModel}}</span>{{if $.HasVerifier}}, verified by
 <span class="mono">{{.VerifierModel}}</span>{{end}}.</p>
 
-<div class="banner{{if not $.ChainHashOK}} bad{{else if not $.Signed}} warn{{end}}">
-  <p><strong>This entry:</strong>
-  <span class="chip{{if $.ChainHashOK}} ok{{else}} bad{{end}}">hash {{if $.ChainHashOK}}matches its bytes{{else}}MISMATCH{{end}}</span>
-  <span class="chip{{if $.ChainLinkOK}} ok{{else}} bad{{end}}">link {{if $.ChainLinkOK}}{{if $.Genesis}}genesis{{else}}names its predecessor{{end}}{{else}}BROKEN{{end}}</span>
-  {{if $.Signed}}<span class="chip{{if $.SigOK}} ok{{else}} warn{{end}}">signature {{if $.SigOK}}verified{{else}}not checked (no key){{end}}</span>
-  {{else}}<span class="chip warn">unsigned</span>{{end}}
-  {{if $.ChainProblem}}<br><span class="chip bad">{{$.ChainProblem}}</span>{{end}}</p>
-</div>
+{{template "entrybanner" $.ChainView}}
 
 <dl class="meta">
   <dt>repo</dt><dd class="mono">{{.Repo}}</dd>
@@ -275,4 +306,65 @@ It does not make the opinion below true.</p></div>
 <footer><p>Entry <span class="mono">{{.Hash}}</span> · file <span class="mono">{{.File}}</span> ·
 pushed {{stamp .Pushed}} · <a href="../index.html">the whole record</a></p></footer>
 </div></body></html>
-`
+` + entryBanner
+
+const scanTmpl = `<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>audit {{.Short}} — corral/ledger</title>
+<style>` + baseCSS + `</style></head><body><div class="wrap">
+
+<p class="small"><a href="../index.html">← the record</a></p>
+<h1>Audit <span class="mono">{{.Short}}</span></h1>
+<p class="lede"><span class="mono">{{.RepoName}}</span> at <span class="mono">{{.ShortSHA}}</span>:
+{{if .Graded}}the project's own tests caught {{.Killed}} of {{.Graded}} planted faults, {{.Survived}} got through,
+and corral proved {{.Proven}} of those missing tests by writing a test and running it.{{else}}nothing was graded.{{end}}</p>
+
+{{if .Retracted}}<div class="banner bad"><p><strong>This audit was retracted.</strong> The entry stays in the chain and no
+longer stands as the record{{if .RetractedReason}}: {{.RetractedReason}}{{end}}.</p></div>{{end}}
+
+{{template "entrybanner" .ChainView}}
+
+<dl class="meta">
+  <dt>repo</dt><dd class="mono">{{.Scan.Repo}}</dd>
+  <dt>commit</dt><dd class="mono">{{if .CommitURL}}<a href="{{.CommitURL}}">{{.Scan.Commit}}</a>{{else}}{{.Scan.Commit}}{{end}}</dd>
+  <dt>corral</dt><dd class="mono">{{.Scan.CorralVersion}}</dd>
+  <dt>substrate</dt><dd>{{.Scan.Substrate}}</dd>
+  {{if .Seats}}<dt>seats</dt><dd class="mono small">{{range .Seats}}{{.}}<br>{{end}}</dd>{{end}}
+  {{if .Scan.ModelCalls}}<dt>tokens</dt><dd>{{thousands .Scan.InputTokens}} in, {{thousands .Scan.OutputTokens}} out, {{.Scan.ModelCalls}} calls</dd>{{end}}
+  {{with .Scan.StartedAt}}<dt>started</dt><dd>{{stamp .}}</dd>{{end}}
+  {{if .NotAudited}}<dt>not audited</dt><dd class="small">{{range $i, $r := .NotAudited}}{{if $i}} · {{end}}{{$r.Count}} {{$r.Reason}}{{end}}</dd>{{end}}
+</dl>
+
+{{range .Audited}}
+<h2 class="mono">{{.Path}}</h2>
+<div class="stats">
+  <div class="stat"><b>{{if .Rate}}{{.Rate}}{{else}}—{{end}}</b><span>kill rate{{if .Interval}}, 95% interval {{.Interval}}{{else if not .Rate}} (not graded){{end}}</span></div>
+  <div class="stat"><b>{{if .Rate}}{{.Killed}} of {{.MutantsGraded}}{{else}}—{{end}}</b><span>caught by the project's tests</span></div>
+  <div class="stat"><b>{{.Survivors | len}}</b><span>got through</span></div>
+  <div class="stat"><b>{{.ProvenMissed}}</b><span>proven missing tests</span></div>
+</div>
+<dl class="meta">
+  {{if .Lang}}<dt>language</dt><dd>{{.Lang}}</dd>{{end}}
+  {{if .Status}}<dt>status</dt><dd>{{.Status}}</dd>{{end}}
+  {{if .AuthoredLanding}}<dt>tests land in</dt><dd class="mono">{{.AuthoredLanding}}</dd>{{end}}
+</dl>
+{{if .HasAuthored}}<details><summary class="small">the tests corral wrote{{if .AuthoredLanding}} — append to {{.AuthoredLanding}}{{end}}</summary><pre>{{.AuthoredTest}}</pre></details>
+{{else if not $.SourcePushed}}<p class="small">The tests corral wrote, and the faults as code, were withheld:
+this run was pushed without its source (<code>--push-source</code>). The counts above are the run's own.</p>{{end}}
+{{if .Survivors}}
+<h3>The faults that got through</h3>
+<p class="small">A <span class="chip ok">proven</span> fault was caught by a test corral wrote and ran; an
+<span class="chip mute">unproven</span> one was not, so it may be a missing test or a fault no test can see.</p>
+{{range .Survivors}}
+<div class="finding"><p class="small mono"><strong>{{.ID}}</strong>{{if .Line}} · line {{.Line}}{{end}}
+{{if .Proven}}<span class="chip ok">proven</span>{{else}}<span class="chip mute">unproven</span>{{end}}</p>
+{{if .Diff}}<pre>{{.Diff}}</pre>{{end}}</div>
+{{end}}
+{{end}}
+{{end}}
+
+<footer><p>Entry <span class="mono">{{.Hash}}</span> · file <span class="mono">{{.File}}</span> ·
+pushed {{stamp .Pushed}} · <a href="../index.html">the whole record</a></p></footer>
+</div></body></html>
+` + entryBanner

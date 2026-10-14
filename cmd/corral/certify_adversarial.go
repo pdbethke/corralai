@@ -16,6 +16,7 @@ import (
 	"github.com/pdbethke/corralai/internal/advpool"
 	"github.com/pdbethke/corralai/internal/agentbackend"
 	"github.com/pdbethke/corralai/internal/brainclient"
+	"github.com/pdbethke/corralai/internal/killrate"
 	"github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/pairing"
 )
@@ -481,7 +482,7 @@ func renderAdvVerdict(w io.Writer, codePath string, v advVerdict) {
 	}
 	fmt.Fprintf(w, "  status:        %-12s (dev suite killed %d/%d mutants)\n", status, killed, v.MutantsTotal)
 	fmt.Fprintf(w, "  dev_kill_rate: %.2f\n", v.DevKillRate)
-	if lo, hi, ok := advpool.WilsonInterval(killed, v.MutantsTotal); ok {
+	if lo, hi, ok := killrate.WilsonInterval(killed, v.MutantsTotal); ok {
 		// The sampling term a bare rate hides, beside it: 5 of 8 is 0.62
 		// with a band of 0.31–0.86, and the band is what a reader needs.
 		fmt.Fprintf(w, "  95%% interval:  %.2f–%.2f (n=%d)\n", lo, hi, v.MutantsTotal)

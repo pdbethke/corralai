@@ -59,12 +59,25 @@ type FindingView struct {
 	Ref         string // "<entry hash>#<finding id>"
 }
 
+// ChainView is what the chain check said about one entry, and where the
+// entry sits. Review and scan pages share it, so both say the same thing
+// about a hash, a link and a signature.
+type ChainView struct {
+	Hash         string
+	Short        string
+	File         string
+	Pushed       time.Time
+	ChainHashOK  bool
+	ChainLinkOK  bool
+	Signed       bool
+	SigOK        bool
+	ChainProblem string
+	Genesis      bool
+}
+
 // EntryView is one review entry as a page.
 type EntryView struct {
-	Hash       string
-	Short      string
-	File       string
-	Pushed     time.Time
+	ChainView
 	Review     *review.Review
 	Findings   []FindingView
 	Reproduced int
@@ -81,12 +94,6 @@ type EntryView struct {
 	ReviewerVendor string
 	VerifierVendor string
 	CrossVendor    bool
-	ChainHashOK    bool
-	ChainLinkOK    bool
-	Signed         bool
-	SigOK          bool
-	ChainProblem   string
-	Genesis        bool
 }
 
 // SiteView is the whole record.
@@ -96,11 +103,14 @@ type SiteView struct {
 	// PubKeyHex is the key the signatures were checked against, printed in
 	// the "verify it yourself" command so a reader can run the same check.
 	// Empty when the page was rendered without one.
-	PubKeyHex     string
-	Reviews       []EntryView
+	PubKeyHex string
+	Reviews   []EntryView
+	// Scans is every certify scan entry, newest first, retracted ones
+	// included and marked: a retracted scan stays in the chain, so its page
+	// stays too and says why it no longer stands.
+	Scans         []ScanView
 	Adjudications int
 	Retracted     int
-	LegacyScans   int
 	Findings      int
 	Reproduced    int
 	Confirmed     int
@@ -189,12 +199,23 @@ func buildView(entries []auditpush.LedgerEntry, checks []auditpush.ChainCheck, s
 				v.SigsOK++
 			}
 		}
+		cv := ChainView{
+			Hash: e.Hash, Short: shortHash(e.Hash), File: filepath.Base(e.File),
+			Pushed:      e.Pushed,
+			ChainHashOK: c.HashOK, ChainLinkOK: c.LinkOK, Signed: c.Signed,
+			SigOK: c.SigOK, ChainProblem: c.Problem, Genesis: c.Genesis,
+		}
+		if e.IsScan() {
+			var by *auditpush.LedgerEntry
+			if rt, ok := retracted[e.Hash]; ok {
+				by = &rt
+			}
+			v.Scans = append(v.Scans, buildScanView(e, cv, by))
+			continue
+		}
 		switch e.Kind {
 		case auditpush.KindAdjudication:
 			v.Adjudications++
-			continue
-		case auditpush.KindScan:
-			v.LegacyScans++
 			continue
 		case auditpush.KindReview:
 		default:
@@ -204,23 +225,14 @@ func buildView(entries []auditpush.LedgerEntry, checks []auditpush.ChainCheck, s
 			continue
 		}
 		r := e.Review
-		ev := EntryView{
-			Hash: e.Hash, Short: shortHash(e.Hash), File: filepath.Base(e.File),
-			Pushed: e.Pushed, Review: r,
-			ChainHashOK: c.HashOK, ChainLinkOK: c.LinkOK, Signed: c.Signed,
-			SigOK: c.SigOK, ChainProblem: c.Problem, Genesis: c.Genesis,
-		}
+		ev := EntryView{ChainView: cv, Review: r}
 		if base := repoWebURL(r.Repo); base != "" && r.Commit != "" {
 			ev.CommitURL = base + "/commit/" + r.Commit
 			if v.RepoURL == "" {
 				v.RepoURL, v.Repo = base, r.Repo
 			}
 		}
-		if len(r.Commit) > 10 {
-			ev.ShortSHA = r.Commit[:10]
-		} else {
-			ev.ShortSHA = r.Commit
-		}
+		ev.ShortSHA = shortSHA(r.Commit)
 		ev.HasVerifier = strings.TrimSpace(r.VerifierModel) != ""
 		ev.Decorrelated = ev.HasVerifier && r.VerifierModel != r.ReviewerModel
 		if ev.Decorrelated {
@@ -286,6 +298,7 @@ func buildView(entries []auditpush.LedgerEntry, checks []auditpush.ChainCheck, s
 	}
 
 	sort.Slice(v.Reviews, func(i, j int) bool { return v.Reviews[i].Pushed.After(v.Reviews[j].Pushed) })
+	sort.Slice(v.Scans, func(i, j int) bool { return v.Scans[i].Pushed.After(v.Scans[j].Pushed) })
 	v.Models = keys(models)
 	v.VerifierOnly = keys(verifiers)
 	v.Tools = keys(tools)
@@ -328,7 +341,16 @@ func writeSite(out string, v SiteView) error {
 		"stamp":    func(t time.Time) string { return t.UTC().Format("2006-01-02 15:04 UTC") },
 		"join":     func(s []string) string { return strings.Join(s, ", ") },
 		"lower":    strings.ToLower,
-		"entryURL": func(e EntryView) string { return "entry/" + e.Short + ".html" },
+		"entryURL": func(short string) string { return "entry/" + short + ".html" },
+		"thousands": func(n int64) string {
+			if n >= 1_000_000 {
+				return fmt.Sprintf("%.1fM", float64(n)/1e6)
+			}
+			if n >= 1_000 {
+				return fmt.Sprintf("%.1fk", float64(n)/1e3)
+			}
+			return fmt.Sprint(n)
+		},
 	}
 
 	idx, err := template.New("index").Funcs(funcs).Parse(indexTmpl)
@@ -344,20 +366,35 @@ func writeSite(out string, v SiteView) error {
 		return err
 	}
 	for _, e := range v.Reviews {
-		// The name is a hash prefix, so anything outside hex is a record this
-		// program does not understand — refuse rather than write it.
-		if !isHex(e.Short) {
-			return fmt.Errorf("entry %q: name is not a hex hash prefix", e.Short)
-		}
 		data := struct {
 			EntryView
 			Site SiteView
 		}{e, v}
-		if err := writeThrough(root, "entry/"+e.Short+".html", ent, data); err != nil {
+		if err := writeEntryPage(root, e.Short, ent, data); err != nil {
+			return err
+		}
+	}
+	scan, err := template.New("scan").Funcs(funcs).Parse(scanTmpl)
+	if err != nil {
+		return err
+	}
+	for _, s := range v.Scans {
+		if err := writeEntryPage(root, s.Short, scan, s); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// writeEntryPage writes entry/<short>.html. Review and scan pages share the
+// one namespace, which is safe because the name is the entry's own hash
+// prefix — and a name outside hex is a record this program does not
+// understand, so it refuses rather than write it.
+func writeEntryPage(root *os.Root, short string, tmpl *template.Template, data any) error {
+	if !isHex(short) {
+		return fmt.Errorf("entry %q: name is not a hex hash prefix", short)
+	}
+	return writeThrough(root, "entry/"+short+".html", tmpl, data)
 }
 
 // writeThrough renders tmpl into name, resolved inside root.

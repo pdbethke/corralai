@@ -93,7 +93,7 @@ func TestRenderTestWriter_PathFactMatchesTheRealOverlay(t *testing.T) {
 		{"python", "src/flask/cli.py", "tests/test_cli.py"},
 	} {
 		rs := RunSpec{Lang: c.lang, Goal: "g", CodePath: c.code, Code: "CODE", DevTestPath: c.devTest}
-		real := authoredTestPath(c.code, c.devTest, nil)
+		real := authoredTestPath(AuthoredLanding{}, c.code, c.devTest, nil)
 		if got := renderTestWriter(rs, nil, nil); !strings.Contains(got, real) {
 			t.Errorf("%s: prompt does not name the real overlay path %q — the writer is being told about a file that will not exist", c.lang, real)
 		}

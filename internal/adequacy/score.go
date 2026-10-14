@@ -434,6 +434,14 @@ type Report struct {
 	// Empty on success (there is nothing to explain) and empty for a Jail that
 	// only implements RunTest.
 	BaselineOutput string
+	// BaselineFlaky names the tests the compliant run PASSED ONLY ON A RETRY
+	// (cargo-nextest's FLAKY), read from the same output by the run's
+	// FailureParser when it is also a lang.FlakyReporter. The run exited 0,
+	// so it is graded as passed — the project's own retry policy decides —
+	// and this is what lets the scan line say so by name instead of
+	// silently. nil when the parser reports none, cannot, or the Jail could
+	// not hand over the output.
+	BaselineFlaky []string
 	// BaselineDuration is how long the compliant (unmutated) suite took.
 	//
 	// It was computed on every run since this package existed — to derive the
@@ -737,6 +745,9 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 	}
 	rep := Report{CompliantPass: pass}
 	rep.BaselineDuration = baseDur
+	if fr, ok := cfg.failureParser.(lang.FlakyReporter); ok && pass {
+		rep.BaselineFlaky = fr.FlakyTests([]byte(baseOut))
+	}
 	if !pass {
 		// broken/overreaching test — do not score mutants (fail-safe: no kill
 		// rate for an invalid test). Carry the runner's own words: without them

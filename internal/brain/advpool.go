@@ -23,6 +23,7 @@ import (
 	golang "github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/matrixstore"
 	"github.com/pdbethke/corralai/internal/mission"
+	"github.com/pdbethke/corralai/internal/pairing"
 	"github.com/pdbethke/corralai/internal/repoindex"
 	"github.com/pdbethke/corralai/internal/telemetry"
 )
@@ -711,8 +712,13 @@ func (rt *AdvPoolRuntime) StartRun(in AdvPoolRunSpec) (int64, error) {
 	}
 	// Before preflight and before the tracking mission is written: a file
 	// whose test would be written over the file itself is refused here, not
-	// only at the driver's StartRun after a mission already exists.
-	if err := golang.CheckTestLanding(in.CodePath); err != nil {
+	// only at the driver's StartRun after a mission already exists. The
+	// brain runs SINGLE-FILE (a scaffold plus the code and its test, no
+	// repository), so it has nothing to read a file's test-module
+	// declarations from: the zero Landing, which lands a content language
+	// on the source and refuses it — fail closed, and the RunSpec below
+	// carries no Landing, so StartRun refuses it the same way.
+	if err := golang.CheckTestLanding(in.CodePath, pairing.Landing{}); err != nil {
 		return 0, fmt.Errorf("advpool: %w", err)
 	}
 	// strings.Fields splits in.TestCmd (an MCP-schema'd single string, e.g.
@@ -720,8 +726,15 @@ func (rt *AdvPoolRuntime) StartRun(in AdvPoolRunSpec) (int64, error) {
 	// does to build the actual jail command — so Preflight checks the exact
 	// toolchain the run is about to use, not a stock guess (see
 	// lang.Plugin.Preflight's doc comment).
-	if err := langPlugin.Preflight(adequacy.ShellSplit(in.TestCmd)); err != nil {
+	// The brain always grades in the jail, so it asks the jail's own half
+	// too (golang.JailPreflight) — the same two calls certify's door makes for
+	// a jailed run.
+	argv := adequacy.ShellSplit(in.TestCmd)
+	if err := langPlugin.Preflight(argv); err != nil {
 		return 0, fmt.Errorf("advpool: language toolchain unavailable — refusing to run: %w", err)
+	}
+	if err := golang.JailPreflight(langPlugin, argv); err != nil {
+		return 0, fmt.Errorf("advpool: language toolchain unavailable inside the jail — refusing to run: %w", err)
 	}
 
 	// ShadowModel: the challenger seat's model for THIS run. A per-call

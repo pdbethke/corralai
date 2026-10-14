@@ -189,24 +189,35 @@ func (phpPlugin) HarnessFiles() []string {
 // phpunit binary present but no working php interpreter would otherwise
 // pass preflight and fail at run time instead of refusing up front.
 //
-// It THEN probes that SAME interpreter through an actual sandbox, before
-// any model spend — a host-only LookPath check cannot see the gap this
-// closes: /usr/bin/php resolving fine via the OS's /etc/alternatives
-// indirection on the HOST tells you nothing about whether the SANDBOX's own
+// The probe of that SAME interpreter through an actual sandbox is the
+// JAIL's half and lives in JailPreflight, so a --substrate workspace run —
+// which executes php on the host — is not refused for a mount table it never
+// uses. JailPreflight's probe runs before any model spend — a host-only
+// LookPath check cannot see the gap it closes: /usr/bin/php resolving fine
+// via the OS's /etc/alternatives indirection on the HOST tells you nothing about whether the SANDBOX's own
 // mount table (which does not carry /etc/alternatives) can still follow it.
 // This is the exact bug an acceptance run on webmozart/assert hit: baseline
 // passed (an explicit php8.5 in testCmd), but CompileCheck's then-hardcoded
 // "php -l" invalidated all 40 mutants with "sh: 1: php: not found" — a cost
 // a free, pre-spend probe would have caught. See phpJailPreflight.
 func (phpPlugin) Preflight(testCmd []string) error {
-	interp, probe, err := phpInterpreterAndProbe(testCmd)
+	interp, _, err := phpInterpreterAndProbe(testCmd)
 	if err != nil {
 		return err
 	}
 	if err := toolOnPath(interp); err != nil {
 		return err
 	}
-	if err := toolOnPath(preflightBin(testCmd, "vendor/bin/phpunit")); err != nil {
+	return toolOnPath(preflightBin(testCmd, "vendor/bin/phpunit"))
+}
+
+// JailPreflight runs Preflight's interpreter through a real sandbox (see
+// phpJailPreflight): the requirement only a jailed run has. A probe that
+// cannot be derived is refused here too — Preflight says the same, but a
+// door may ask this half alone (doctor), and it must not pass by default.
+func (phpPlugin) JailPreflight(testCmd []string) error {
+	_, probe, err := phpInterpreterAndProbe(testCmd)
+	if err != nil {
 		return err
 	}
 	iso, isoErr := sandbox.Resolve(sandbox.Config{})

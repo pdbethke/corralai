@@ -177,9 +177,11 @@ func childOnPath(root, real string) string {
 // refused, never bound, because ~/.config holds gh, gcloud and composer auth.
 // A RUSTUP_HOME that is a cargo home (sandbox.IsCargoHome) is refused too:
 // binding it whole would expose everything the cargo-home rule hides.
-// Inside the jail the proxy finds it only through RUSTUP_HOME, which the
-// jail does not set yet; the bind is what setting RUSTUP_HOME in the jail
-// will point at.
+// The jail pins RUSTUP_HOME to sandbox.SystemRustupHome (pinnedenv.go), so
+// a proxy bound from bin/ dispatches to the system-wide toolchain and does
+// NOT read this directory; binding it is a leftover from before that pin,
+// kept because it exposes only toolchains and removing it is a behavior
+// change of its own.
 func rustupHome(cmd0 string) (string, error) {
 	rh := os.Getenv("RUSTUP_HOME")
 	if rh == "" {

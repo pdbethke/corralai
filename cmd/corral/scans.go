@@ -314,7 +314,7 @@ func runScansShow(args []string, open func(string) (scansReader, error), stdout,
 			if strings.TrimSpace(f.AuthoredTest) == "" {
 				continue
 			}
-			fmt.Fprintf(stdout, "\n--- %s: the pool's authored test ---\n", f.Path)
+			fmt.Fprintf(stdout, "\n--- %s: the pool's authored test%s ---\n", f.Path, authoredTestWhere(f.AuthoredLanding))
 			fmt.Fprintln(stdout, authoredTestOutcome(f))
 			fmt.Fprintln(stdout, f.AuthoredTest)
 		}

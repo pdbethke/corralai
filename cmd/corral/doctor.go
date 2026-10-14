@@ -102,7 +102,13 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 	results = append(results, checkSandbox(iso, isoErr))
 
 	if isoErr == nil {
-		results = append(results, checkToolchain(iso, cmd, nil))
+		// The language, when --code names one, so the rehearsal asks that
+		// language's jail-only requirements too; nil asks none.
+		var plug lang.Plugin
+		if c := strings.TrimSpace(*code); c != "" {
+			plug, _ = lang.Detect(c)
+		}
+		results = append(results, checkToolchain(iso, cmd, nil, plug))
 	}
 	results = append(results, checkHerd(*mutantModel, *writerModel, *criticModel, *shadow.model, *shadow.writerModel, seatReg)...)
 	results = append(results, checkDeriveSeat(*deriveModel, seatReg.deriveEndpoint())...)
@@ -167,10 +173,21 @@ func checkSandbox(iso sandbox.Isolator, err error) checkResult {
 // set under `--repo-dir` — see certify --local's own newRunJail call), so a
 // probe run under `--repo-dir` sees exactly the dependency dirs the audit
 // itself will see.
-func checkToolchain(iso sandbox.Isolator, cmd []string, depBinds []adequacy.DepBind) checkResult {
+//
+// plug, when the language is known (doctor's --code), is asked its
+// jail-only requirements first (lang.JailPreflight) — the same call certify's
+// door makes for every jailed run, so the rehearsal refuses what the run
+// would. nil (no --code) asks none: a `--version` probe is all doctor can do
+// without knowing the language.
+func checkToolchain(iso sandbox.Isolator, cmd []string, depBinds []adequacy.DepBind, plug lang.Plugin) checkResult {
 	if len(cmd) == 0 {
 		return checkResult{name: "toolchain reachable inside the sandbox", ok: true,
 			detail: "skipped — no test command given (pass it after `--`)"}
+	}
+	if plug != nil {
+		if err := lang.JailPreflight(plug, cmd); err != nil {
+			return checkResult{name: "toolchain reachable inside the sandbox", detail: err.Error()}
+		}
 	}
 	tool := cmd[0]
 	jail := newRunJail(iso, 60*time.Second, depBinds)
@@ -336,9 +353,21 @@ func checkPairing(code, test string) checkResult {
 			"no language plugin claims %q — corral infers the language from the extension", code)}
 	}
 	// The same refusal every audit door makes before any jail, store or
-	// spend. A file that pairs but cannot be audited is not "[ok]": doctor
-	// used to pass one every certify command then refused.
-	landing := lang.CheckTestLanding(code)
+	// spend, asked through the SAME function certify --local's door asks
+	// (auditLanding), so doctor cannot pass a file certify then refuses. A
+	// file that pairs but cannot be audited is not "[ok]". Asked twice,
+	// because the answer depends on the invocation: with the repository
+	// (--repo-dir, rooted at the working directory as the pairing below is)
+	// and without it (single-file). A file only the first admits — a Rust
+	// file whose test lands in the test file it declares — is [ok], and the
+	// detail says the bare form refuses it and why.
+	_, landing := auditLanding(localAuditInput{codePath: code, repoDir: "."})
+	needsRepoDir := ""
+	if landing == nil {
+		if _, bare := auditLanding(localAuditInput{codePath: code}); bare != nil {
+			needsRepoDir = fmt.Sprintf(" — audit it with --repo-dir: without it, certify --local refuses it (%v)", bare)
+		}
+	}
 	// Called only when landing != nil.
 	paired := func(how string) checkResult {
 		return checkResult{name: name, detail: fmt.Sprintf("pairs to %s, but cannot be audited yet: %v", how, landing)}
@@ -350,7 +379,7 @@ func checkPairing(code, test string) checkResult {
 		if landing != nil {
 			return paired(t + " (--test)")
 		}
-		return checkResult{name: name, ok: true}
+		return checkResult{name: name, ok: true, detail: strings.TrimPrefix(needsRepoDir, " — ")}
 	}
 	// Rooted at the working directory, as certify --local and
 	// --adversarial resolve an operator's --code: that is also the root a
@@ -364,12 +393,12 @@ func checkPairing(code, test string) checkResult {
 			if landing != nil {
 				return paired(res.Path + " (search)")
 			}
-			return checkResult{name: name, ok: true, detail: "paired by search: " + res.Path}
+			return checkResult{name: name, ok: true, detail: "paired by search: " + res.Path + needsRepoDir}
 		}
 		if landing != nil {
 			return paired(res.Path + " (" + res.Label + ")")
 		}
-		return checkResult{name: name, ok: true, detail: "found " + res.Path + " by convention (" + res.Label + ")"}
+		return checkResult{name: name, ok: true, detail: "found " + res.Path + " by convention (" + res.Label + ")" + needsRepoDir}
 	}
 	detail := fmt.Sprintf("no test found for %q by convention. ", code) + whereItLooked(res)
 	if landing != nil {

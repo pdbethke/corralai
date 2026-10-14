@@ -17,6 +17,7 @@ import (
 	"github.com/pdbethke/corralai/internal/agentbackend"
 	"github.com/pdbethke/corralai/internal/brainclient"
 	"github.com/pdbethke/corralai/internal/lang"
+	"github.com/pdbethke/corralai/internal/pairing"
 )
 
 // advFinding is the subset of a queue.Finding the verdict render shows. The
@@ -291,11 +292,14 @@ func runCertifyAdversarial(args []string, client advPoolClient, run cmdRunner, s
 		plug = p
 	}
 	// Before ANY read: a file whose test would be written over the file
-	// itself (its language's test landing is not built) is refused here, on
+	// itself (its landing is the source) is refused here, on
 	// the client, not only at the brain. Held at the brain alone, the client
 	// first resolved the dev test, read both files and uploaded them — and a
 	// repository's #[path] could make that upload a host file. The same predicate every other audit door asks.
-	if err := lang.CheckTestLanding(*codePath); err != nil {
+	// The zero Landing: the brain grades SINGLE-FILE (code and test uploaded,
+	// no repository), so a test can only land in a file of its own there —
+	// a content language is refused here exactly as the brain refuses it.
+	if err := lang.CheckTestLanding(*codePath, pairing.Landing{}); err != nil {
 		fmt.Fprintf(stderr, "corral certify --adversarial: %v\n", err)
 		return 2
 	}

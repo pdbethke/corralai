@@ -320,7 +320,7 @@ func TestScansShow_DisclosesConcurrency(t *testing.T) {
 		files: []scanstore.File{
 			{Path: "src/flask/cli.py", Disposition: "audited", Trees: 6, SharedDirs: ".venv"},
 			{Path: "downgraded.py", Disposition: "audited", Trees: 1,
-				ConcurrencyNote: "suite is not concurrency-safe: baseline failed under 3"},
+				ConcurrencyNote: "baseline failed in 3 private trees at once (the suite may not be concurrency-safe, or the copies lack something it needs — e.g. a Cargo workspace root outside --repo)"},
 			// Trees 0 is the ledger's "not recorded": a row written before
 			// the column existed, a rejected file that was never scored, or
 			// a jail-substrate run that builds no trees at all. Printing a
@@ -335,7 +335,7 @@ func TestScansShow_DisclosesConcurrency(t *testing.T) {
 	if !strings.Contains(out.String(), "6 trees (baseline passed under 6; shared: .venv)") {
 		t.Errorf("scans show did not disclose the tree count and the shared dep dirs:\n%s", out.String())
 	}
-	if !strings.Contains(out.String(), "1 (suite is not concurrency-safe: baseline failed under 3)") {
+	if !strings.Contains(out.String(), "1 (baseline failed in 3 private trees at once (the suite may not be concurrency-safe, or the copies lack something it needs — e.g. a Cargo workspace root outside --repo))") {
 		t.Errorf("scans show did not disclose the downgrade note:\n%s", out.String())
 	}
 	if !strings.Contains(out.String(), "not recorded") {

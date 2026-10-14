@@ -51,7 +51,9 @@ func pluginFor(codePath string) (golang.Plugin, error) {
 // refusing such a file at every entry that can start a run (Driver.StartRun,
 // the brain's AdvPoolRuntime.StartRun, certify --local's resolveAuditPlugin)
 // before this is ever called — see that function's doc for the list and why
-// the condition is derived from the rules rather than a language name.
+// the condition is derived from the landing rather than a language name. A
+// Rust file those doors admit has a Declared landing, and its authored test
+// never comes here: authoredTestPath answers it from the AuthoredLanding.
 func advPoolTestPath(codePath string) string {
 	if p, err := pluginFor(codePath); err == nil {
 		if c, ok := pairing.Primary(p.TestRules(), codePath); ok {
@@ -78,6 +80,49 @@ const authoredTestMarker = "_corral"
 // which is not a shape any real project has — falling back is honest
 // degradation, and the positive control still grades the result.
 const authoredTestCollisionLimit = 10
+
+// AuthoredLanding is where this run's authored test lands — the
+// pairing.Landing the door computed with lang.TestLanding, its Path rewritten
+// to the workspace key — and Existing, that file's content when the door read
+// it. It is computed ONCE, by the door that admitted the file
+// (lang.CheckTestLanding read the same value), and carried: on RunSpec (the
+// driver's own refusal and the writer's prompt) and on JailValidator and
+// JailScorer (every workspace that holds an authored test), all three set
+// from one variable by the caller. Nothing in this package re-derives it.
+//
+// Existing is carried rather than read from BaseFiles because on the
+// workspace substrate BaseFiles is deliberately EMPTY (the checkout is
+// already on disk), and an Into landing composed onto "" would replace the
+// project's test file with corral's module alone.
+//
+// The zero value is "no landing computed": authoredTestPath keeps its
+// path-language rule, and lang.CheckTestLanding refuses a content language —
+// fail closed.
+type AuthoredLanding struct {
+	pairing.Landing
+	Existing string
+}
+
+// AppendTo is the file an authored test must be appended to — the landing's
+// Path when it is a landing INTO an existing file, "" when the test is a file
+// of its own. The one reading of the landing every reporter uses
+// (Verdict.AuthoredLanding).
+func (l AuthoredLanding) AppendTo() string {
+	if !l.Into {
+		return ""
+	}
+	return l.Path
+}
+
+// overlay writes an authored test (content, as ParseTest landed it) at its
+// path in ws: ComposeLanding — the landing file's existing bytes with the
+// block appended, for an Into landing; the test alone, as a file of its own,
+// otherwise. The one overlay rule for an authored test, shared by
+// CompileTest and authoredWorkspace so the file compiled and the file graded
+// are composed the same way.
+func (l AuthoredLanding) overlay(ws map[string]string, path, content string) {
+	ws[path] = golang.ComposeLanding(l.Landing, l.Existing, content)
+}
 
 // authoredTestPath derives the path the POOL-AUTHORED test is written to in
 // repo-aware mode. It differs from advPoolTestPath (which names the synthetic
@@ -109,7 +154,18 @@ const authoredTestCollisionLimit = 10
 // measurement taken in a workspace that is not the one it claims to be. Any
 // clash is disambiguated away; an empty devTestPath (single-file mode, or any
 // caller with no dev test to offer) falls back to advPoolTestPath unchanged.
-func authoredTestPath(codePath, devTestPath string, base map[string]string) string {
+//
+// l is the run's AuthoredLanding, and it is asked FIRST: a landing INTO an
+// existing file (a Rust source whose own `mod` declaration loads a separate
+// test file) is that file, whatever the dev test is — the relocation below
+// would invent foo_corral_tests.rs, which no module declaration compiles, so
+// the authored test would grade nothing. The zero AuthoredLanding (every
+// path language, and every caller with no landing) leaves the rule below
+// exactly as it was.
+func authoredTestPath(l AuthoredLanding, codePath, devTestPath string, base map[string]string) string {
+	if l.Into {
+		return l.Path
+	}
 	fallback := advPoolTestPath(codePath)
 	if strings.TrimSpace(devTestPath) == "" {
 		return fallback
@@ -261,6 +317,10 @@ type JailScorer struct {
 	// placement, which single-file mode wants and which silently graded
 	// nothing on any project that confines discovery to a test root.
 	DevTestPath string
+	// Landing is the run's AuthoredLanding (see its doc): where the authored
+	// test is written and what is already there. MUST equal the
+	// JailValidator's and the RunSpec's — one value, set by the caller.
+	Landing AuthoredLanding
 	// Lang and Selection shape the AUTHORED pass's command (authoredCmd);
 	// the DEV pass's is built by its callers, from the same fields on the
 	// RunSpec, via DevCommand. Lang names the plugin whose WithAuthoredTest appends a
@@ -347,7 +407,7 @@ func (s JailScorer) gatedScoreOpts(codePath string, base map[string]string) []ad
 		// into "every mutant invalid", which is a worse diagnosis.
 		return opts
 	}
-	testPath := authoredTestPath(codePath, s.DevTestPath, s.BaseFiles)
+	testPath := authoredTestPath(s.Landing, codePath, s.DevTestPath, s.BaseFiles)
 	if _, ok := base[testPath]; !ok {
 		// A per-file checker (python, ruby, node) is handed BOTH paths and
 		// fails on one that is not in the workspace — which would mark EVERY
@@ -483,7 +543,7 @@ func (s JailScorer) ScoreAuthoredReport(ctx context.Context, codePath, code, tes
 	// during this pass used to count as the authored test proving a gap.
 	opts := s.baseScoreOpts()
 	if ts := s.selector(); ts != nil {
-		alone := ts.WithAuthoredTest(golang.Selection{Base: s.Selection.Base}, base, authoredTestPath(codePath, s.DevTestPath, s.BaseFiles))
+		alone := ts.WithAuthoredTest(golang.Selection{Base: s.Selection.Base}, base, authoredTestPath(s.Landing, codePath, s.DevTestPath, s.BaseFiles))
 		cmd = alone
 		opts = append(opts, adequacy.WithCommandFor(func(adequacy.Mutant) adequacy.MutantCommand {
 			return adequacy.MutantCommand{Cmd: alone, Tests: 1, Rule: RuleAuthoredAlone}
@@ -584,7 +644,7 @@ func (s JailScorer) authoredWorkspace(codePath, content string) map[string]strin
 	for k, v := range s.BaseFiles {
 		ws[k] = v
 	}
-	ws[authoredTestPath(codePath, s.DevTestPath, s.BaseFiles)] = content
+	s.Landing.overlay(ws, authoredTestPath(s.Landing, codePath, s.DevTestPath, s.BaseFiles), content)
 	return ws
 }
 
@@ -632,8 +692,8 @@ func (s JailScorer) verifyAuthoredTestReaches(ctx context.Context, codePath stri
 
 // AuthoredTestPathFor is the path the pool-authored test is written to, for
 // an error message that can name the file rather than describe it.
-func AuthoredTestPathFor(codePath, devTestPath string) string {
-	return authoredTestPath(codePath, devTestPath, nil)
+func AuthoredTestPathFor(l AuthoredLanding, codePath, devTestPath string) string {
+	return authoredTestPath(l, codePath, devTestPath, nil)
 }
 
 // AuthoredTestWouldBeCollected reports whether the project's own test command
@@ -810,7 +870,7 @@ func (s JailScorer) authoredCmd(codePath string, cmd []string) []string {
 	if ts == nil {
 		return cmd
 	}
-	return ts.WithAuthoredTest(s.Selection, cmd, authoredTestPath(codePath, s.DevTestPath, s.BaseFiles))
+	return ts.WithAuthoredTest(s.Selection, cmd, authoredTestPath(s.Landing, codePath, s.DevTestPath, s.BaseFiles))
 }
 
 // scoreWorkspace builds the jail base file-map and the test command for a
@@ -898,6 +958,10 @@ type JailValidator struct {
 	// if the validator and the scorer disagreed about that path the pool would
 	// compile-check a file at one location and grade a file at another.
 	DevTestPath string
+	// Landing mirrors JailScorer.Landing and MUST be the same value, for the
+	// same reason: ParseTest lands the writer's body for it, and CompileTest
+	// composes it there.
+	Landing AuthoredLanding
 }
 
 // CompileError is returned by CompileTest when the authored test builds a
@@ -950,8 +1014,8 @@ func (v JailValidator) CompileTest(ctx context.Context, codePath, code, test str
 		ws[k] = val
 	}
 	ws[codePath] = code
-	testPath := authoredTestPath(codePath, v.DevTestPath, v.BaseFiles)
-	ws[testPath] = test
+	testPath := authoredTestPath(v.Landing, codePath, v.DevTestPath, v.BaseFiles)
+	v.Landing.overlay(ws, testPath, test)
 
 	// CompileCheck returns a SEQUENCE of commands (see lang.Plugin.CompileCheck's
 	// doc comment): most plugins yield exactly one, but a plugin whose checker
@@ -1014,8 +1078,15 @@ func (v JailValidator) ParseMutants(raw, original string) ([]adequacy.Mutant, er
 	return testgen.ParseMutantsOutput(raw, original)
 }
 
+// ParseTest is the writer's test as the run compiles, grades and delivers it:
+// testgen's parse, then — for a landing INTO an existing file — the landing
+// file's TestLander wraps it as the block appended there (Rust: a
+// corral_tests module with the use line the landing's depth calls for). It
+// happens HERE, once, before any compile or proof, so every attempt, the
+// shadow writer's included, is the landed block: what was proven is exactly
+// what the operator is handed and what the concatenator merges.
 func (v JailValidator) ParseTest(raw string) string {
-	return testgen.ParseTestOutput(raw)
+	return golang.LandBody(v.Landing.Landing, v.Landing.Existing, testgen.ParseTestOutput(raw))
 }
 
 // CertSigner signs a terminal Verdict via the SAME certify chain

@@ -447,7 +447,7 @@ func TestScoreAuthoredReportRunsTheWholePassWithTheAuthoredTestAlone(t *testing.
 	s := repoScorer(lineSelection())
 	s.Jail = jail
 	s.BaseFiles = map[string]string{codePath: code, "tests/test_a.py": "def test_x(): pass\n"}
-	authored := authoredTestPath(codePath, s.DevTestPath, s.BaseFiles)
+	authored := authoredTestPath(AuthoredLanding{}, codePath, s.DevTestPath, s.BaseFiles)
 
 	mutants := []adequacy.Mutant{
 		{ID: "m1", Replace: "x = 2\n", Span: lang.LineRange{Start: 41, End: 41}},

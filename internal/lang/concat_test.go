@@ -283,29 +283,12 @@ func TestRubyConcatRefusesMixedFrameworks(t *testing.T) {
 // separately-proven files, so a language with no concatenator hands its
 // operators nothing merged at all. Derived from the registry, so a new
 // language fails here until it implements one — the hand list this replaced
-// skipped php, which implements it.
-//
-// concatenatorPending names a registered language whose concatenator is not
-// written yet: Rust registered for pairing first, and its TestConcatenator
-// (one #[cfg(test)] module, written into the source file) arrives with the
-// task that proves it on a real crate. Staleness-checked like
-// sharedCoverage: an entry for a language that now HAS one hides nothing and
-// must be deleted.
-var concatenatorPending = map[string]bool{"rust": true}
-
+// skipped php, which implements it. (Rust was exempt until its landing
+// arrived; its concatenator merges landed corral_tests modules.)
 func TestEveryLanguageHasAConcatenator(t *testing.T) {
 	for _, name := range Names() {
-		_, ok := registry[name].(TestConcatenator)
-		switch {
-		case ok && concatenatorPending[name]:
-			t.Errorf("concatenatorPending exempts %s, which now implements TestConcatenator — the exemption is stale and must be deleted", name)
-		case !ok && !concatenatorPending[name]:
+		if _, ok := registry[name].(TestConcatenator); !ok {
 			t.Errorf("%s has no TestConcatenator — the default writer mode cannot hand its operators one file", name)
-		}
-	}
-	for name := range concatenatorPending {
-		if _, ok := registry[name]; !ok {
-			t.Errorf("concatenatorPending exempts %s, which is not a registered language — the exemption is stale and must be deleted", name)
 		}
 	}
 }

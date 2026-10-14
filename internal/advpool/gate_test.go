@@ -661,7 +661,7 @@ func TestAuthoredTestCollectionIsNotQuestionedInSingleFileMode(t *testing.T) {
 // The error message names the file, so the operator does not have to grep
 // corral's source for its naming convention — which is what this session did.
 func TestAuthoredTestPathForNamesTheFile(t *testing.T) {
-	got := AuthoredTestPathFor("scripts/ci/check-unicode-safety.js", "tests/scripts/check-unicode-safety.test.js")
+	got := AuthoredTestPathFor(AuthoredLanding{}, "scripts/ci/check-unicode-safety.js", "tests/scripts/check-unicode-safety.test.js")
 	if !strings.Contains(got, "_corral") || !strings.Contains(got, "tests/scripts/") {
 		t.Errorf("AuthoredTestPathFor = %q, want a _corral-marked file in the dev test's directory", got)
 	}
@@ -682,7 +682,7 @@ func TestAuthoredTestPathMirrorsTheDevTestsShape(t *testing.T) {
 		{"pkg/calc.go", "pkg/calc_test.go", "pkg/calc_corral_test.go"},
 		{"pkg/calc.py", "tests/test_calc.py", "tests/test_calc_corral.py"},
 	} {
-		if got := AuthoredTestPathFor(tc.code, tc.dev); got != tc.want {
+		if got := AuthoredTestPathFor(AuthoredLanding{}, tc.code, tc.dev); got != tc.want {
 			t.Errorf("AuthoredTestPathFor(%q, %q) = %q, want %q", tc.code, tc.dev, got, tc.want)
 		}
 	}

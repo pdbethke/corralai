@@ -46,7 +46,7 @@ func TestAuthoredPassAppendsTheAuthoredTestsRealPath(t *testing.T) {
 	}
 	s := repoScorer(sel)
 	got := s.authoredCmd("pkg/a.py", []string{"python3", "-m", "pytest", "-q"})
-	authored := authoredTestPath("pkg/a.py", s.DevTestPath, s.BaseFiles)
+	authored := authoredTestPath(AuthoredLanding{}, "pkg/a.py", s.DevTestPath, s.BaseFiles)
 	want := []string{"python3", "-m", "pytest", "-q", "tests/test_a.py::test_x", authored}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("authored cmd = %v, want selection + %q", got, authored)
@@ -74,7 +74,7 @@ func TestBothPassesBuildOnTheSelectionsStrippedBase(t *testing.T) {
 	if got, want := DevCommandArgv(s.Selection, s.Lang, raw, s.DevTestPath), []string{"pytest", "tests/test_a.py::test_x"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("dev cmd = %v, want %v — tests/ must not survive", got, want)
 	}
-	authored := authoredTestPath("pkg/a.py", s.DevTestPath, s.BaseFiles)
+	authored := authoredTestPath(AuthoredLanding{}, "pkg/a.py", s.DevTestPath, s.BaseFiles)
 	if got, want := s.authoredCmd("pkg/a.py", raw), []string{"pytest", "tests/test_a.py::test_x", authored}; !reflect.DeepEqual(got, want) {
 		t.Errorf("authored cmd = %v, want %v", got, want)
 	}
@@ -167,8 +167,8 @@ func TestAggregateCarriesConcurrencyOntoTheVerdict(t *testing.T) {
 		t.Errorf("got %+v, want the shared dep dirs preserved", v.Concurrency)
 	}
 
-	rs = RunSpec{Concurrency: Concurrency{Trees: 1, Note: "suite is not concurrency-safe: baseline failed under 3"}}
-	if v := verdictFromSpec(rs); v.Concurrency.Trees != 1 || v.Concurrency.Note != "suite is not concurrency-safe: baseline failed under 3" {
+	rs = RunSpec{Concurrency: Concurrency{Trees: 1, Note: "baseline failed in 3 private trees at once (the suite may not be concurrency-safe, or the copies lack something it needs — e.g. a Cargo workspace root outside --repo)"}}
+	if v := verdictFromSpec(rs); v.Concurrency.Trees != 1 || v.Concurrency.Note != "baseline failed in 3 private trees at once (the suite may not be concurrency-safe, or the copies lack something it needs — e.g. a Cargo workspace root outside --repo)" {
 		t.Errorf("got %+v, want the downgrade note preserved", v.Concurrency)
 	}
 }
@@ -266,7 +266,7 @@ func TestAuthoredCollectionPreflightChecksTheAuthoredPassesCommand(t *testing.T)
 		Cmd:   []string{"pytest", "tests/test_a.py::test_x"},
 		Tests: []string{"tests/test_a.py::test_x"}, Method: "coverage-context",
 	})
-	authored := authoredTestPath("pkg/a.py", s.DevTestPath, s.BaseFiles)
+	authored := authoredTestPath(AuthoredLanding{}, "pkg/a.py", s.DevTestPath, s.BaseFiles)
 	s.Jail = discoveryJail{authored: authored}
 	base := []string{"pytest", "tests/"}
 

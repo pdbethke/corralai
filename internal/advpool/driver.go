@@ -475,6 +475,18 @@ type Verdict struct {
 	// --repo` has no tape flag, so diagnosing it meant paying to re-run. "" when
 	// the writer never produced a compiling test.
 	AuthoredTest string
+	// AuthoredLanding is the repository file the authored test must be
+	// APPENDED to, when the run landed it INTO an existing file (Rust: the
+	// test file the source's own `mod` declaration loads). "" for a test
+	// that is a file of its own (every path language) and on every verdict
+	// earned before landings existed.
+	//
+	// It travels with AuthoredTest because, for such a landing, the test is
+	// a module (`mod corral_tests { use super::super::*; … }`) that compiles
+	// ONLY inside that one file — handed over without it, the proof cannot
+	// be used. Set from RunSpec.Landing in verdictFromSpec, the shared
+	// literal, so the converged and the timed-out verdict both carry it.
+	AuthoredLanding string `json:"authored_landing,omitempty"`
 	// WriterMode is HOW the writer seat attacked this file's survivors —
 	// "per-survivor" (one call, one repair budget and one proof PER survivor)
 	// or "batched" (one call carrying every survivor as a diff). Empty on a
@@ -602,6 +614,12 @@ type Verdict struct {
 	// actually fix. Empty when the baseline passed, or when the runner produced
 	// no output at all.
 	BaselineOutput string
+	// BaselineFlaky names the tests the dev suite's compliant run PASSED ONLY
+	// ON A RETRY (adequacy.Report.BaselineFlaky — nextest's FLAKY). The run
+	// exited 0 and is graded as passed, as the project's own retry policy
+	// decides; this is what lets the readout name them instead of passing in
+	// silence. nil when there were none, or the runner cannot say.
+	BaselineFlaky []string `json:"baseline_flaky,omitempty"`
 	// SuiteIgnoresFile is true when the dev suite passed on deliberately
 	// invalid source — it provably never compiles or imports the file under
 	// audit, so DevKillRate is meaningless. DISTINCT from BaselineFailed:
@@ -1005,6 +1023,9 @@ type runState struct {
 	// including a failed baseline, since a suite that took 90s to fail is the
 	// case an operator most needs the number for. See Verdict.BaselineDuration.
 	baselineDuration time.Duration
+	// baselineFlaky is adequacy.Report.BaselineFlaky from the dev pass — see
+	// Verdict.BaselineFlaky.
+	baselineFlaky []string
 	// suiteIgnoresFile is true when the dev suite PASSED its baseline but also
 	// passed on deliberately invalid source (adequacy.Report.CanaryKilled=false):
 	// the check command provably never compiles or imports the file under audit,
@@ -1544,8 +1565,10 @@ func (d *Driver) attributeOpenPhases(run *runState) {
 
 func (d *Driver) StartRun(missionID int64, rs RunSpec, sigs []repoindex.Signature) error {
 	// Before anything is enqueued: a file whose test would be written over
-	// the file itself (no test landing for its language yet) is never run.
-	if err := golang.CheckTestLanding(rs.CodePath); err != nil {
+	// the file itself (its landing is the source) is never run. rs.Landing
+	// is the value the scorer and validator write with, so the check and the
+	// write cannot disagree; a zero one (no door computed it) fails closed.
+	if err := golang.CheckTestLanding(rs.CodePath, rs.Landing.Landing); err != nil {
 		return fmt.Errorf("advpool: %w", err)
 	}
 	d.mu.Lock()
@@ -1869,6 +1892,7 @@ func applyDevScore(ctx context.Context, run *runState, scorer Scorer, mutants []
 	run.perMutantGraded = perMutant
 	run.baselineFailed = !rep.CompliantPass
 	run.baselineDuration = rep.BaselineDuration
+	run.baselineFlaky = rep.BaselineFlaky
 	// Keep the runner's own words on a FAILING baseline. certify --repo has
 	// printed these since the day two paid audits dead-ended here with nothing
 	// to go on; certify --local computed the same string and discarded it, so
@@ -2811,6 +2835,7 @@ func (d *Driver) tickAggregate(ctx context.Context, missionID int64, run *runSta
 	// instead of reporting the 0 as if the suite were graded and scored zero.
 	v.BaselineFailed = run.baselineFailed
 	v.BaselineOutput = run.baselineOutput
+	v.BaselineFlaky = run.baselineFlaky
 	// The other could-not-grade case, carried separately so the readout can
 	// name the right one: the suite passed but never reads the audited file.
 	v.SuiteIgnoresFile = run.suiteIgnoresFile
@@ -3229,6 +3254,9 @@ func (d *Driver) timeoutVerdict(run *runState) Verdict {
 	// which is a fabricated measurement. Never fabricate a score.
 	v.BaselineFailed = run.baselineFailed
 	v.BaselineOutput = run.baselineOutput
+	// The dev pass ran its baseline before the deadline, so its flaky tests
+	// are as true of a stalled run as of a converged one.
+	v.BaselineFlaky = run.baselineFlaky
 	v.SuiteIgnoresFile = run.suiteIgnoresFile
 	// TestWriterFailed/PoolTestUnsound must ride the TIMEOUT verdict too:
 	// a run that reached tickPoolAdequacy, converged its pool score (or

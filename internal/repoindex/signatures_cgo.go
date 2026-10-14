@@ -24,6 +24,12 @@ func extractSignatures(text, lang string) ([]Signature, error) {
 	return nil, ErrUnsupportedLang
 }
 
+// readsTestModules: lang's row has a modules reader.
+func readsTestModules(lang string) bool {
+	spec, ok := langSpecs[lang]
+	return ok && spec.modules != nil
+}
+
 // testModules dispatches to the modules reader in lang's langSpecs row; a
 // language without one answers nil (it pairs by filename alone).
 func testModules(lang string, src []byte) []pairing.TestModule {

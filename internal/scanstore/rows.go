@@ -225,6 +225,22 @@ type File struct {
 	// question "what did it actually try?" had no answer at any price short of
 	// another run. "" when no compiling test was ever produced.
 	AuthoredTest string
+	// AuthoredLanding mirrors advpool.Verdict.AuthoredLanding: the repository
+	// file AuthoredTest must be appended to, when it is a block that compiles
+	// only there. A PATH, not source — so unlike AuthoredTest it is pushed
+	// without --push-source. "" for a test that is a file of its own, and
+	// then omitted, so `scans show --json` keeps its shape for every row
+	// that has none.
+	AuthoredLanding string `json:",omitempty"`
+	// BaselineFlaky is advpool.Verdict.BaselineFlaky — every test a passing
+	// baseline passed only on a retry (nextest's FLAKY), across the
+	// stability runs and the audit's dev pass — ONE PER LINE: a test name
+	// can hold a comma (a parametrized id) but never a newline, so the
+	// separator ProvenMutantIDs uses would be ambiguous here. Graded as
+	// passed, as the project's retry policy decides, and recorded so the
+	// row says its baseline leaned on retries. "" when none did, and then
+	// omitted.
+	BaselineFlaky string `json:",omitempty"`
 	// TestSelection, SelectedTests and SuiteTests say WHICH MEASUREMENT this
 	// row's kill rate is: the tests coverage evidence showed execute this
 	// file ("coverage-context", SelectedTests of SuiteTests), rather than the

@@ -286,7 +286,7 @@ func readFileRows(db *sql.DB, where string, args ...any) ([]Row, error) {
 		mutant_budget, mutant_budget_rule, complexity,
 		symbols, symbols_probed, decisions, decisions_probed,
 		challenger_mutants, challenger_survived_writer, challenger_survived_shadow, challenger_union, challenger_shared,
-		priors_applied, prior_digest, computed_at, mutants_from
+		priors_applied, prior_digest, computed_at, mutants_from, authored_landing, baseline_flaky
 	   FROM corral_audits WHERE `+where, args...) // #nosec G202 -- where is a constant clause from readGrains; every value is a bound parameter
 	if err != nil {
 		return nil, err
@@ -319,7 +319,7 @@ func readFileRows(db *sql.DB, where string, args ...any) ([]Row, error) {
 		var priorsApplied sql.NullInt64
 		var priorDigest sql.NullString
 		var coveringTests sql.NullInt64
-		var mutantsFrom sql.NullString
+		var mutantsFrom, authoredLanding, baselineFlaky sql.NullString
 		var computedAt sql.NullTime
 		var importOnly sql.NullBool
 		var rowPassed sql.NullBool
@@ -348,7 +348,7 @@ func readFileRows(db *sql.DB, where string, args ...any) ([]Row, error) {
 			&mutantBudget, &mutantBudgetRule, &complexity,
 			&symbols, &symbolsProbed, &decisions, &decisionsProbed,
 			&chMutants, &chSurvW, &chSurvS, &chUnion, &chShared,
-			&priorsApplied, &priorDigest, &computedAt, &mutantsFrom,
+			&priorsApplied, &priorDigest, &computedAt, &mutantsFrom, &authoredLanding, &baselineFlaky,
 		); err != nil {
 			return nil, err
 		}
@@ -412,6 +412,8 @@ func readFileRows(db *sql.DB, where string, args ...any) ([]Row, error) {
 			r.ComputedAt = &t
 		}
 		r.MutantsFrom = mutantsFrom.String
+		r.AuthoredLanding = authoredLanding.String
+		r.BaselineFlaky = baselineFlaky.String
 
 		out = append(out, r)
 	}

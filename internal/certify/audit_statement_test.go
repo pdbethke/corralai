@@ -210,7 +210,7 @@ func TestConcurrencyIsSigned(t *testing.T) {
 		Files: []AuditedFile{
 			{Path: "pkg/a.py", KillRate: killRate(0.55), Survivors: 4, Trees: 6, SharedDirs: []string{".venv"}},
 			{Path: "pkg/b.py", KillRate: killRate(0.9), Survivors: 1, Trees: 1,
-				ConcurrencyNote: "suite is not concurrency-safe: baseline failed under 3"},
+				ConcurrencyNote: "baseline failed in 3 private trees at once (the suite may not be concurrency-safe, or the copies lack something it needs — e.g. a Cargo workspace root outside --repo)"},
 			// Trees 0 is "not recorded" — the jail substrate builds no trees,
 			// and a verdict served from a pre-concurrency cache row carries
 			// none. Signing "trees": 0 would be a number no measurement
@@ -228,7 +228,7 @@ func TestConcurrencyIsSigned(t *testing.T) {
 	if v, ok := files[1]["trees"]; !ok || v != 1 {
 		t.Errorf("trees must always be signed: %v", files[1])
 	}
-	if v, ok := files[1]["concurrencyNote"]; !ok || v != "suite is not concurrency-safe: baseline failed under 3" {
+	if v, ok := files[1]["concurrencyNote"]; !ok || v != "baseline failed in 3 private trees at once (the suite may not be concurrency-safe, or the copies lack something it needs — e.g. a Cargo workspace root outside --repo)" {
 		t.Errorf("a downgraded file must sign its note: %v", files[1])
 	}
 	if _, ok := files[2]["trees"]; ok {

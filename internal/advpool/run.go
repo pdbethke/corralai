@@ -29,6 +29,15 @@ type RunSpec struct {
 	TestCmd     string
 	NMutants    int
 
+	// Landing is where the authored test lands (AuthoredLanding), as the
+	// door that admitted CodePath computed it: StartRun refuses on it
+	// (lang.CheckTestLanding) and the writer is told where its test goes
+	// from it. The zero value — a caller with no repository to read a
+	// landing from (the brain) — refuses a content language and changes
+	// nothing for a path one. It MUST equal the JailScorer's and the
+	// JailValidator's Landing.
+	Landing AuthoredLanding
+
 	// Selection narrows TestCmd to the tests that EXECUTED CodePath, from
 	// evidence recorded once per scan (lang.TestSelector). The zero value
 	// is the whole suite. When Method is set and Tests is empty the file is

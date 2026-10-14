@@ -73,6 +73,11 @@ func verdictFromSpec(rs RunSpec) Verdict {
 		// a timeout that reported them as unmeasured would understate the
 		// cost of exactly the runs that cost the most.
 		Timing: Timing{Selection: rs.SelectionDuration, Pool: rs.PoolDuration},
+		// Where the authored test goes, when it goes INTO a file — set here,
+		// the literal both Verdict construction sites share, so neither the
+		// converged nor the timed-out verdict can drop it. See
+		// Verdict.AuthoredLanding.
+		AuthoredLanding: rs.Landing.AppendTo(),
 	}
 }
 

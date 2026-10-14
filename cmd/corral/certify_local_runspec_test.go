@@ -161,7 +161,7 @@ func TestConcurrencyReachesTheRunSpec(t *testing.T) {
 		t.Errorf("shared dep dirs = %+v, want [.venv] carried onto the RunSpec", rs.Concurrency)
 	}
 
-	downgraded := &adequacy.Disclosure{Trees: 1, Note: "suite is not concurrency-safe: baseline failed under 3"}
+	downgraded := &adequacy.Disclosure{Trees: 1, Note: "baseline failed in 3 private trees at once (the suite may not be concurrency-safe, or the copies lack something it needs — e.g. a Cargo workspace root outside --repo)"}
 	rs = newAuditRunSpec(localAuditInput{checkArgv: []string{"go", "test", "./..."}, concurrency: downgraded}, roles, subj)
 	if rs.Concurrency.Trees != 1 || rs.Concurrency.Note != downgraded.Note {
 		t.Errorf("downgraded disclosure = %+v, want the note preserved", rs.Concurrency)

@@ -80,3 +80,24 @@ func TestBwrapHomeIsWritable(t *testing.T) {
 		t.Fatalf("HOME should be /home/agent and writable, got %q", r.Output)
 	}
 }
+
+// TestBwrapRustPinsGradedVersusNetworked runs the real jail: a graded run
+// (no network) is told CARGO_NET_OFFLINE and has a writable CARGO_HOME; the
+// networked dependency fetch is not told CARGO_NET_OFFLINE even when the host
+// is, and still has the same writable CARGO_HOME for its download cache.
+func TestBwrapRustPinsGradedVersusNetworked(t *testing.T) {
+	iso := bwrapOrSkip(t)
+	t.Setenv("CARGO_NET_OFFLINE", "false")
+	ws := t.TempDir()
+	probe := `echo "offline=${CARGO_NET_OFFLINE-unset} rustup=$RUSTUP_HOME"; mkdir -p "$CARGO_HOME/registry" && echo cargohome-writable`
+	env := append(MinimalEnv(), "CARGO_NET_OFFLINE=false")
+
+	graded := Run(context.Background(), probe, Options{Workspace: ws, Backend: iso, Env: env})
+	if graded.ExitCode != 0 || !strings.Contains(graded.Output, "offline=true rustup=/usr/local/rustup") || !strings.Contains(graded.Output, "cargohome-writable") {
+		t.Errorf("graded run: want offline=true and a writable CARGO_HOME, got %+v", graded)
+	}
+	fetch := Run(context.Background(), probe, Options{Workspace: ws, Backend: iso, Network: true, Env: env})
+	if fetch.ExitCode != 0 || !strings.Contains(fetch.Output, "offline=unset") || !strings.Contains(fetch.Output, "cargohome-writable") {
+		t.Errorf("networked fetch: want CARGO_NET_OFFLINE unset and a writable CARGO_HOME, got %+v", fetch)
+	}
+}

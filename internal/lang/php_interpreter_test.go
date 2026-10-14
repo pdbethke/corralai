@@ -333,3 +333,33 @@ func TestPHPSuggestedInterpreterPrefersAHostInstalledVersion(t *testing.T) {
 		t.Errorf("phpSuggestedInterpreter() = %q, want the host's own installed \"php9.9\"", got)
 	}
 }
+
+// TestPHPSandboxProbeIsTheJailsHalf: the probe that runs the interpreter
+// INSIDE a sandbox is a requirement of the jail, so it lives behind
+// JailPreflight and Preflight never runs it — a --substrate workspace run
+// executes php on the host, where an interpreter the sandbox's mount table
+// cannot follow works fine. An interpreter that exists only in a directory
+// the sandbox does not mount is the fixture: on PATH for the host, absent in
+// the jail.
+func TestPHPSandboxProbeIsTheJailsHalf(t *testing.T) {
+	if _, err := sandbox.Resolve(sandbox.Config{}); err != nil {
+		t.Skipf("no working sandbox backend on this host: %v", err)
+	}
+	home := t.TempDir()
+	bin := filepath.Join(home, "bin")
+	mustFakePHPBin(t, bin, "php9.9")
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	cmd := []string{"php9.9", "vendor/bin/phpunit"}
+
+	p, _ := ByName("php")
+	if err := p.Preflight(cmd); err != nil {
+		t.Fatalf("Preflight must admit an interpreter the HOST can run — it runs on every substrate: %v", err)
+	}
+	err := JailPreflight(p, cmd)
+	if err == nil {
+		t.Fatal("JailPreflight must refuse an interpreter the sandbox cannot reach")
+	}
+	if !strings.Contains(err.Error(), "not reachable INSIDE the sandbox") {
+		t.Errorf("the refusal must be the sandbox probe's, got: %v", err)
+	}
+}

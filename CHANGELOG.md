@@ -50,11 +50,11 @@ history of any release, `git log v0.3.4..v0.3.5`.
   not migrated, so copy that directory by hand if it holds anything you
   want.
 
-- **`certify --repo` now recognises `.rs` files and reports them as not
-  audited yet.** corral cannot audit Rust today: a test for a Rust file
-  would be written over the file itself, because its tests live inside it.
-  Each `.rs` source is listed as `test-landing-not-built`, never as a
-  candidate, and the language profile shows it as
+- **`certify --repo` now recognises `.rs` files and reports the ones it
+  cannot audit yet.** A Rust file whose tests live inside it (an inline
+  `mod tests { … }`), or that declares no test module, cannot be audited: a
+  test for it would be written over the file itself. Each such `.rs` source
+  is listed as `test-landing-not-built`, never as a candidate, and the language profile shows it as
   `N not auditable yet (test landing not built)`. It never takes a `--top`
   slot, never counts as a second language for the selection and coverage
   pre-flight passes (a Python repository with a Rust extension keeps its
@@ -64,9 +64,88 @@ history of any release, `git log v0.3.4..v0.3.5`.
   treated as a changed file in a language corral does not audit, and is
   named in the scan output:
   `changed but not audited: <path> (test-landing-not-built — …)`. A pull
-  request that changes only Rust code, or only a Rust test, reports
-  NOTHING IN SCOPE and exits 0 — that change was not audited, and the line
-  above says so.
+  request that changes only such Rust code reports NOTHING IN SCOPE and
+  exits 0 — that change was not audited, and the line above says so.
+- **The `.rs` refusal is narrowed to files whose test would land on
+  themselves.** A Rust source whose own declaration loads a separate test
+  file — `#[cfg(test)] #[path = "foo_tests.rs"] mod tests;`, or a bare
+  `mod tests;` and rustc's default module file — is no longer refused by
+  `certify --local --repo-dir`, `certify --repo` or `corral doctor`.
+  corral's authored test is appended to that test file as a
+  `#[cfg(test)] mod corral_tests { use super::super::*; … }` block (named
+  `corral_tests_2`, … if the file already has one); the audited source and
+  the project's own tests are left as they are, and on
+  `--substrate workspace` the write into the real test file is journaled
+  and restored like every other. `certify --adversarial`, the brain and
+  `certify --local` without `--repo-dir` still refuse every `.rs` file:
+  they grade single-file and have no repository to read the declaration
+  from, and the refusal now says so; `corral doctor` passes such a file
+  only with a note that it needs `--repo-dir`. This is a narrowed refusal,
+  not Rust support.
+- **In a jail, a Rust audit runs the system-wide Rust toolchain, not
+  yours.** Under the bwrap jail and `--jail container`, `RUSTUP_HOME` is
+  pinned to `/usr/local/rustup` and `CARGO_HOME` to a writable directory
+  inside the jail, and graded runs set `CARGO_NET_OFFLINE=true` (the
+  `cargo vendor` step, which needs the network, does not). So a jailed Rust
+  audit needs a system-wide install —
+  `RUSTUP_HOME=/usr/local/rustup CARGO_HOME=/usr/local/cargo rustup-init
+  --no-modify-path --default-toolchain <version>`, with `/usr/local/cargo/bin`
+  on `PATH` (plus `cargo install --locked cargo-nextest` for nextest) — and
+  a `cargo` that is a rustup proxy under your home is refused before any
+  spend when that install is missing. `certify --repo --substrate workspace`
+  builds no jail and runs your own toolchain (`~/.cargo` is fine; see the
+  next entry). The macOS sandbox does not apply these pins.
+- **A requirement of the jail is checked only where a jail runs.** A
+  language's toolchain check is now two halves: what every run needs (the
+  test command's binary on `PATH`) and what only the jail needs. `certify
+  --local`, `certify --repo` on the jail substrate, the brain and `corral
+  doctor`'s sandbox check (when `--code` names the language) ask both;
+  `certify --repo --substrate workspace` asks only the first. So:
+  - a stock rustup install (`~/.cargo`, no sudo) is no longer refused on
+    `--substrate workspace`; a jailed run's refusal now also names that
+    substrate as the alternative;
+  - a PHP run on `--substrate workspace` no longer probes the interpreter
+    inside a sandbox, so it is no longer refused because the sandbox cannot
+    follow `/etc/alternatives` (a run on the host never needs to), and no
+    longer starts a sandbox at all just to check;
+  - `corral doctor --code <file>` reports the jail-only refusal a jailed
+    run would hit, instead of an inconclusive `--version` probe.
+- **The tests a baseline passed only on a retry are recorded, not only
+  printed.** `certify --repo` measured them twice — in the baseline
+  stability runs and in the audit's own dev pass — and printed one list
+  while the verdict kept the other. They are now one list on the verdict
+  (de-duplicated), which the scan line prints and which reaches the ledger
+  entry and a new warehouse column, `baseline_flaky` (one test per line),
+  with or without `--push-source`.
+- **The workspace pool's downgrade note no longer blames the suite.** When
+  the baseline fails in several private trees at once, the note used to say
+  "suite is not concurrency-safe". It may instead be that the copies lack
+  something the suite needs — on a Rust crate, a Cargo workspace root
+  outside `--repo` — so the note now says `baseline failed in N private
+  trees at once (the suite may not be concurrency-safe, or the copies lack
+  something it needs — …)`, followed by the run's own output as before.
+- **Rust runs say how they differ from the project's own runner.** With a
+  `.config/nextest.toml` in the repository and a `cargo test` command,
+  `certify --local` and `certify --repo` say the project's nextest profiles
+  (retries, timeouts, test groups) do not apply. Under `cargo nextest run`
+  they say a test passed only on a retry (FLAKY) is graded as passed. Both
+  name such tests from a file's unmutated baseline (`certify --repo` from
+  its baseline stability runs and the audit's dev pass together, once); a mutant whose run passed only on
+  a retry is counted as survived and is NOT named, and the disclosure says
+  so. `nextest.toml` is a harness file, so changing it changes the verdict
+  cache key.
+- **Where a landed authored test goes is part of the record.** The verdict
+  gains `authored_landing` — the file a Rust `corral_tests` block must be
+  appended to, the only file it compiles in — and `baseline_flaky`. Both
+  are columns in the warehouse and fields in the ledger entry (pushed with
+  or without `--push-source`: neither is source), and
+  `certify --repo` now prints "append it to <file>" exactly as `certify
+  --local` does. Cached verdicts move to generation 18, so a verdict cached
+  before this change is recomputed once rather than served without them.
+- **A diff that deletes a Rust source's declared test file reports the
+  source as not audited.** That source now lands on itself and is excluded
+  as `test-landing-not-built`; the deleted-test check asks those sources
+  too, so the deletion is named rather than silent.
 - **`certify --local` and `certify --adversarial` print how they paired the
   test, for every language:** a new `  paired by <label>: <path>` line
   (`sibling`, `parallel-tree`, `flat-root`, … or `search`), where only a
@@ -127,9 +206,14 @@ history of any release, `git log v0.3.4..v0.3.5`.
   `cargo login`'s `credentials.toml`, registry tokens in `config.toml`,
   private git checkouts and RubyGems' `credentials` inside it, where the
   audited code could read them and print them into the record. Now:
-  - a cargo home is mounted as its `bin/` alone (plus rustup's toolchain
-    directory when `bin/` holds rustup), whichever of its programs runs the
-    suite and whether or not you have run `cargo login`. A cargo home is
+  - a cargo home is mounted as its `bin/` alone, whichever of its programs
+    runs the suite. When `bin/` holds rustup, rustup's own home
+    (`~/.rustup`, or your `RUSTUP_HOME`) is mounted too, read-only — but the
+    jail does not run the toolchains in it: `RUSTUP_HOME` is pinned to the
+    system-wide `/usr/local/rustup`, so the proxy in `bin/` dispatches to
+    that install (see "In a jail, a Rust audit runs the system-wide Rust
+    toolchain" above). This holds whether or not you have run
+    `cargo login`. A cargo home is
     exactly what cargo defines: your `CARGO_HOME`, or `~/.cargo` when it is
     unset (followed through a symlink), whatever it holds. Nothing else is
     one, so `/usr/bin`, `/usr/local`, `~/.local/bin`, Debian's

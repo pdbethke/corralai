@@ -11,6 +11,8 @@ history of any release, `git log v0.3.4..v0.3.5`.
 
 ## [Unreleased]
 
+## [v1.0.0-rc.21] — 2026-10-14
+
 - **A compile check never costs a file its grade.** The check that a mutant
   still builds is first run on the unmutated file. That run used to be held
   to the per-mutant test timeout, and any failure made the whole file
@@ -25,6 +27,13 @@ history of any release, `git log v0.3.4..v0.3.5`.
   skipped some mutants, the run's progress output now says so; before, that
   note was computed and never printed. It is not yet part of the signed
   verdict.
+- **The ledger-branch recipe's attestation step works.** The workflow in
+  `docs/corral/github-action.md` used `actions/attest` with no predicate,
+  which it refuses, over `scans/*.json`, which matches no entry (entries are
+  `.json.gz`). It is now `actions/attest-build-provenance` over
+  `scans/*.json.gz`, and the example names the permissions the job needs
+  (`contents: write`, `id-token: write`, `attestations: write`). Found by
+  running the recipe in a fork of Warp.
 
 ## [v1.0.0-rc.20] — 2026-10-14
 

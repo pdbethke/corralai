@@ -4387,6 +4387,15 @@ func TestDocsPinTheNewestCutTag(t *testing.T) {
 	docs := docsAdvertisingAnActionRef(t, repoRoot)
 	ref := regexp.MustCompile(`pdbethke/corralai@(v[0-9][A-Za-z0-9._-]*)`)
 	for doc, body := range docs {
+		// A field note is a dated record of a run, and quotes the version
+		// that ran: "One workflow file" shows the workflow that audited Warp
+		// on v1.0.0-rc.20, and moving that line to a later tag would make the
+		// note describe a run that never happened. Nobody follows a field
+		// note to install corral. Field notes still answer to
+		// TestDocsNeverAdvertiseAnUncutActionTag: what they quote must exist.
+		if strings.HasPrefix(filepath.ToSlash(doc), "site/src/content/field-notes/") {
+			continue
+		}
 		for _, m := range ref.FindAllStringSubmatch(body, -1) {
 			if m[1] != newest {
 				t.Errorf("%s pins %s but %s is cut — a reader following the docs installs something older than the Releases page calls current", doc, m[1], newest)

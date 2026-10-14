@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -2250,4 +2251,55 @@ func TestActionTestCommandSurvivesUutilsPrintf(t *testing.T) {
 			t.Errorf("test-command %q: got argv=%q, want=%q", tc.cmd, argv, tc.want)
 		}
 	}
+}
+
+// TestActionPassesPathOnlyWhenSet: --path bounds a scan to one part of a
+// monorepo while the checkout stays whole (a Cargo workspace member keeps the
+// root manifest it inherits from). The Action runs from the repository root,
+// so without this input it could only ever rank the whole repository. The
+// env name is SCAN_PATH because PATH is the shell's.
+func TestActionPassesPathOnlyWhenSet(t *testing.T) {
+	a := loadActionYAML(t)
+	runStep := findStepContaining(t, a, "certify --repo")
+	if _, ok := a.Inputs["path"]; !ok {
+		t.Fatal(`action.yml should declare a "path" input so a workflow can audit one part of a monorepo`)
+	}
+
+	// The flag must exist and parse on the real command.
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "crates", "one"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	if code := runCertifyRepo([]string{"--repo", root, "--dry-run", "--path", "crates/one"}, &out, &errb); code != 0 {
+		t.Fatalf("certify --repo rejected --path, the flag the action now passes: exit %d, stderr=%s", code, errb.String())
+	}
+
+	argv := func(tmp string) []string {
+		t.Helper()
+		b, err := os.ReadFile(filepath.Join(tmp, "argv.log"))
+		if err != nil {
+			t.Fatalf("corral stub was never invoked: %v", err)
+		}
+		return strings.Split(strings.TrimSuffix(string(b), "\x00"), "\x00")
+	}
+	t.Run("set", func(t *testing.T) {
+		tmp := t.TempDir()
+		if out, err, _ := runRunCorralStep(t, runStep, tmp, "true", "SCAN_PATH=crates/fuzzy_match"); err != nil {
+			t.Fatalf("run-corral step failed: %v\n%s", err, out)
+		}
+		full := argv(tmp)
+		if i := slices.Index(full, "--path"); i < 0 || i+1 >= len(full) || full[i+1] != "crates/fuzzy_match" {
+			t.Errorf("want --path crates/fuzzy_match in corral's argv, got: %v", full)
+		}
+	})
+	t.Run("unset", func(t *testing.T) {
+		tmp := t.TempDir()
+		if out, err, _ := runRunCorralStep(t, runStep, tmp, "true", "SCAN_PATH="); err != nil {
+			t.Fatalf("run-corral step failed: %v\n%s", err, out)
+		}
+		if slices.Contains(argv(tmp), "--path") {
+			t.Errorf("path input was empty; --path must not be passed, got: %v", argv(tmp))
+		}
+	})
 }

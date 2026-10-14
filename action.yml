@@ -48,6 +48,10 @@ inputs:
     description: "Audit at most this many of the highest-ranked candidate files, as a ceiling on what one run can cost. An audit costs roughly (mutants × your suite's whole runtime) PER FILE, and the file count comes from the PR's diff — a number the author picks, not you. On a repo whose suite takes a minute, a ten-file PR is a job measured in tens of hours, discovered only once it is running. Leave empty to keep corral's own default bound."
     required: false
     default: ""
+  path:
+    description: "Audit only the files under this directory of the repository (relative to its root), keeping the checkout whole — for one package of a monorepo, e.g. 'crates/fuzzy_match'. Tests are still found anywhere in the repository and the build still sees the root's files (a Cargo workspace manifest, a monorepo's package.json). The scope is recorded in the ledger entry. Empty = the whole repository."
+    required: false
+    default: ""
   max-tokens:
     description: "Cap on model tokens for the whole run, input + output, every seat, every file (empty = no cap). Checked before each call and charged after it; once reached, no further model call is made — a file whose generator never ran is ungradable for that reason, a writer or critic seat past it is skipped and the file flagged, and the cost line says the cap was reached. corral bounds mutants, files and wall clock; this is the money bound."
     required: false
@@ -187,6 +191,7 @@ runs:
         PUSH_SOURCE: ${{ inputs.push-source }}
         motherduck_token: ${{ inputs.motherduck-token }}
         TOP: ${{ inputs.top }}
+        SCAN_PATH: ${{ inputs.path }}
         TIMEOUT: ${{ inputs.timeout }}
         MAX_TOKENS: ${{ inputs.max-tokens }}
         LEDGER_DIR: ${{ inputs.ledger }}
@@ -304,6 +309,7 @@ runs:
           echo "CORRAL_ATTEST_PATH=${RUNNER_TEMP:-/tmp}/corral-audit-statement.json" >> "$GITHUB_ENV"
         fi
         [ -n "${TOP:-}" ] && args+=(--top "$TOP")
+        [ -n "${SCAN_PATH:-}" ] && args+=(--path "$SCAN_PATH")
         [ -n "${TIMEOUT:-}" ] && args+=(--timeout "$TIMEOUT")
         [ -n "${MAX_TOKENS:-}" ] && args+=(--max-tokens "$MAX_TOKENS")
         # The ledger directory: read as the prior, written as the record.

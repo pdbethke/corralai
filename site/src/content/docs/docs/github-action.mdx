@@ -75,10 +75,13 @@ talked you out of trying it. We are leaving the correction visible because it
 is the same failure mode this tool exists to catch: a plausible number nobody
 executed.
 
-Three levers keep a run bounded:
+Four levers keep a run bounded:
 
 - **`top`** — audit at most this many of the highest-ranked candidate files
   (default 25). The diff narrows the candidates; `top` bounds what is left.
+- **`path`** — audit only one directory of the repository, such as one crate
+  of a Cargo workspace or one package of a monorepo. The checkout stays whole,
+  so tests elsewhere still pair and the build still sees the root's files.
 - **`paths:`** on the workflow — so a docs-only PR doesn't spend time printing
   `NOTHING IN SCOPE`.
 - **`diff-base`** declares an empty default, and the action synthesizes a base

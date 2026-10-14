@@ -28,6 +28,7 @@ import (
 	"github.com/pdbethke/corralai/internal/agentbackend"
 	"github.com/pdbethke/corralai/internal/auditpush"
 	"github.com/pdbethke/corralai/internal/certify"
+	"github.com/pdbethke/corralai/internal/killrate"
 	"github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/modelcorr"
 	"github.com/pdbethke/corralai/internal/pairing"
@@ -5305,11 +5306,7 @@ func writeAuditStatement(path, repoDir string, r reposcan.RepoReport, models map
 		// file's rate is withheld (signableKillRate), and so is its band.
 		var lo, hi float64
 		if !f.Uncovered && f.MutantsGraded > 0 {
-			killed := f.MutantsGraded - f.Survivors
-			if killed < 0 {
-				killed = 0
-			}
-			lo, hi, _ = advpool.WilsonInterval(killed, f.MutantsGraded)
+			lo, hi, _ = killrate.Interval(f.MutantsGraded, f.Survivors)
 		}
 		files = append(files, certify.AuditedFile{
 			Path:             f.Path,
@@ -5751,11 +5748,7 @@ func examConfidenceLine(f reposcan.WeakFile) string {
 	var parts []string
 	n := f.MutantsGraded
 	if n > 0 && !f.Uncovered {
-		killed := n - f.Survivors
-		if killed < 0 {
-			killed = 0
-		}
-		if lo, hi, ok := advpool.WilsonInterval(killed, n); ok {
+		if lo, hi, ok := killrate.Interval(n, f.Survivors); ok {
 			parts = append(parts, fmt.Sprintf("kill rate %.2f, 95%% interval %.2f–%.2f (n=%d)", f.KillRate, lo, hi, n))
 		}
 	}

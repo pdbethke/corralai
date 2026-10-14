@@ -3,6 +3,9 @@
 package advpool
 
 import (
+	"os"
+	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -62,5 +65,45 @@ func TestMutantGateSkippedForUnsupportedLanguage(t *testing.T) {
 	opts := s.gatedScoreOpts("weird/thing.cobol", map[string]string{})
 	if len(opts) != len(s.baseScoreOpts()) {
 		t.Errorf("scoreOpts returned %d options for an unsupported language, want the %d base options and no compile gate", len(opts), len(s.baseScoreOpts()))
+	}
+}
+
+// The compile gate grades the same unit the test command does. Rust's check
+// is `cargo test --no-run`; run from a workspace root it builds EVERY
+// member's tests, and on Warp (80 crates) that ran past the per-mutant
+// timeout before one mutant was scored, while the test command — scoped by
+// lang.ScopeTestCmd — graded one crate. Both commands now go through that
+// one door.
+func TestTheCompileGateIsScopedLikeTheTestCommand(t *testing.T) {
+	repo := t.TempDir()
+	for rel, text := range map[string]string{
+		"Cargo.toml":             "[workspace]\nmembers = [\"crates/*\"]\n",
+		"crates/leaf/Cargo.toml": "[package]\nname = \"leaf_crate\"\nversion = \"0.1.0\"\n",
+		"crates/leaf/src/lib.rs": "",
+	} {
+		p := filepath.Join(repo, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(p), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(text), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	p, err := pluginFor("crates/leaf/src/lib.rs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	seq := compileCheckFor(p, repo, "crates/leaf/src/lib.rs", "crates/leaf/src/lib.rs")
+	if len(seq) == 0 {
+		t.Fatal("no compile check")
+	}
+	for _, cmd := range seq {
+		if !strings.Contains(strings.Join(cmd, " "), "-p leaf_crate") {
+			t.Errorf("compile check %q is not scoped to the owning crate", cmd)
+		}
+	}
+	// No checkout (single-file mode): the plugin's own check, unchanged.
+	if got, want := compileCheckFor(p, "", "lib.rs", "lib.rs"), p.CompileCheck("lib.rs", "lib.rs"); !reflect.DeepEqual(got, want) {
+		t.Errorf("with no checkout the check changed: %q, want %q", got, want)
 	}
 }

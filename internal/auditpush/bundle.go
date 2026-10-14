@@ -116,8 +116,13 @@ type ScanRow struct {
 	// jail, which builds no trees, and written SQL NULL there.
 	TreesRequested int
 	DiffBase       string
-	Candidates     int
-	Audited        int
+	// Scope is the --path subtree a scan was bounded to, "" for the whole
+	// repository. Without it an entry for one crate of an 80-crate
+	// workspace reads its file counts and "100% of candidates" as if they
+	// described the repository named in Repo.
+	Scope      string
+	Candidates int
+	Audited    int
 	// Passed is NULLABLE: nil is "no threshold was set, so nothing was
 	// passed or failed" — never a fabricated true.
 	Passed *bool
@@ -409,6 +414,7 @@ CREATE TABLE IF NOT EXISTS corral_scans (
   cores            INTEGER,
   trees_requested  INTEGER,
   diff_base        VARCHAR,
+  scope            VARCHAR,
   candidates       INTEGER,
   audited          INTEGER,
   passed           BOOLEAN,
@@ -758,6 +764,9 @@ var (
 		{"author", "author VARCHAR"},
 		{"committer", "committer VARCHAR"},
 		{"co_authors", "co_authors VARCHAR"},
+		// The --path subtree (ScanRow.Scope). NULL before it: every earlier
+		// scan was over its whole repository.
+		{"scope", "scope VARCHAR"},
 	}
 	corralMutantsMigrationCols = []struct{ name, ddl string }{
 		{"scan_uid", "scan_uid VARCHAR"},
@@ -1320,8 +1329,8 @@ func insertBundle(db *sql.DB, b Bundle, now time.Time, uid string) (Counts, erro
 		    rekor_log_index, rekor_uuid, schema_version, started_at, pushed_by,
 		    engine_version, model_set, top, all_candidates, total_files,
 		    preflight_ran, preflight_note, finished_at, entry_hash,
-		    author, committer, co_authors
-		  ) VALUES (`+placeholders(40)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
+		    author, committer, co_authors, scope
+		  ) VALUES (`+placeholders(41)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
 			uid, now, b.Scan.Repo, b.Scan.RunURL, b.Scan.ScanID, b.Scan.Commit,
 			b.Scan.CorralVersion, b.Scan.Substrate, b.Scan.Host, b.Scan.Cores,
 			nullIfZeroInt(b.Scan.TreesRequested), b.Scan.DiffBase,
@@ -1334,6 +1343,7 @@ func insertBundle(db *sql.DB, b Bundle, now time.Time, uid string) (Counts, erro
 			b.Scan.AllCandidates, nullIfZeroInt(b.Scan.TotalFiles),
 			b.Scan.PreflightRan, nullIfEmpty(b.Scan.PreflightNote), nullTime(b.Scan.FinishedAt), nullIfEmpty(b.Scan.EntryHash),
 			nullIfEmpty(b.Scan.Identity.Author), nullIfEmpty(b.Scan.Identity.Committer), nullIfEmpty(b.Scan.Identity.CoAuthors),
+			nullIfEmpty(b.Scan.Scope),
 		); err != nil {
 			return Counts{}, fmt.Errorf("auditpush: insert scan row: %w", err)
 		}

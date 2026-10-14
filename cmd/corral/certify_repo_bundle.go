@@ -102,7 +102,7 @@ func buildBundle(
 			Repo: repo, RunURL: runURL, ScanID: scanID, Commit: commit,
 			CorralVersion: scan.CorralVersion, Substrate: scan.Substrate,
 			Host: scan.Host, Cores: scan.Cores, TreesRequested: scan.TreesRequested,
-			DiffBase: scan.DiffBase, Candidates: scan.Candidates, Audited: scan.Audited,
+			DiffBase: scan.DiffBase, Scope: scan.Scope, Candidates: scan.Candidates, Audited: scan.Audited,
 			Passed:      meta.Passed,
 			StartedAt:   meta.StartedAt,
 			TotalMillis: nilIfZeroMillis(scan.TotalMillis),

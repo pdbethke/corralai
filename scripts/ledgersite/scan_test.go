@@ -171,3 +171,17 @@ func ptr[T any](v T) *T { return &v }
 func htmlEscape(s string) string {
 	return strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;", `"`, "&#34;", "'", "&#39;", "+", "&#43;").Replace(s)
 }
+
+// An audit scoped with --path names its scope wherever it names its
+// repository: otherwise a page for one crate reads as an audit of Warp.
+func TestAScopedScanNamesItsScope(t *testing.T) {
+	e := warpLikeScan("eeeeeeeeeeee0000", true)
+	e.Bundle.Scan.Scope = "crates/fuzzy_match"
+	index, page := renderOne(t, []auditpush.LedgerEntry{e})
+	if !strings.Contains(page("eeeeeeeeeeee"), "scoped to <span class=\"mono\">crates/fuzzy_match</span>") {
+		t.Errorf("the audit page does not name the scope")
+	}
+	if !strings.Contains(index, "crates/fuzzy_match") {
+		t.Errorf("the index does not name the scope")
+	}
+}

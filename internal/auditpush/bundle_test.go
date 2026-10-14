@@ -48,7 +48,7 @@ func sampleBundle() Bundle {
 		Scan: ScanRow{
 			Repo: "o/r", RunURL: "https://ci/1", ScanID: 7, Commit: "abc",
 			CorralVersion: "v9.9.9", Substrate: "workspace", Host: "box-1",
-			Cores: 24, TreesRequested: 6, DiffBase: "main",
+			Cores: 24, TreesRequested: 6, DiffBase: "main", Scope: "pkg",
 			Candidates: 2, Audited: 1, Passed: boolPtrT(true),
 			TotalMillis: ms(61000), InputTokens: 1200, OutputTokens: 340, ModelCalls: 7,
 			EngineVersion: "reposcan-1", ModelSet: "w=m1;g=m2", Top: 3, AllCandidates: false,

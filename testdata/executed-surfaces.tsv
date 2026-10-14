@@ -90,6 +90,7 @@ corral certify --repo --commit	executed	test:cmd/corral/certify_repo_test.go
 corral certify --repo --critic-model	executed	test:cmd/corral/certify_repo_writer_mode_test.go
 corral certify --repo --derive-model	executed	run:2026-09-02 md:corral_public scans 22-26
 corral certify --repo --diff-base	executed	test:cmd/corral/certify_repo_selcache_test.go
+corral certify --repo --path	executed	test:cmd/corral/certify_repo_test.go
 corral certify --repo --dry-run	executed	test:cmd/corral/certify_repo_writer_mode_test.go
 corral certify --repo --goals	executed	test:cmd/corral/certify_repo_selcache_test.go
 corral certify --repo --json	executed	test:cmd/corral/models_rank_test.go

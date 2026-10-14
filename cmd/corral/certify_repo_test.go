@@ -5038,3 +5038,61 @@ func TestCertifyRepoDryRunNamesTheFilesItWouldAudit(t *testing.T) {
 		t.Errorf("a file beyond --top was listed as one the run would audit:\n%s", s)
 	}
 }
+
+// A contributor to a monorepo works in one package of it, and the package
+// often cannot be audited as a repository of its own: Warp's crates inherit
+// from a workspace manifest at the root, so a copy of one crate does not
+// build. --path keeps the repository whole and bounds the scan to a subtree.
+// Pairing still sees the whole tree; only files under the path become
+// candidates, exclusions, or counts.
+func TestCertifyRepoPathBoundsTheScanToASubtree(t *testing.T) {
+	root := t.TempDir()
+	mustWrite(t, filepath.Join(root, "crates", "one", "a.go"), "package one\n")
+	mustWrite(t, filepath.Join(root, "crates", "one", "a_test.go"), "package one\n")
+	mustWrite(t, filepath.Join(root, "crates", "two", "b.go"), "package two\n\n"+strings.Repeat("// larger, so it would rank first unscoped\n", 40))
+	mustWrite(t, filepath.Join(root, "crates", "two", "b_test.go"), "package two\n")
+	mustWrite(t, filepath.Join(root, "README.md"), "# x\n")
+	goals := filepath.Join(root, "goals.json")
+	mustWrite(t, goals, `{"crates/one/a.go": "must not panic", "crates/two/b.go": "must not panic"}`)
+
+	for _, scope := range []string{"crates/one", "crates/one/", "./crates/one"} {
+		var out, errb bytes.Buffer
+		code := runCertifyRepo([]string{"--repo", root, "--path", scope, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant, "--critic-model", "off", "--goals", goals, "--dry-run"}, &out, &errb)
+		if code != 0 {
+			t.Fatalf("--path %s exited %d: %s", scope, code, errb.String())
+		}
+		s := out.String()
+		if !strings.Contains(s, "  scope: crates/one (--path)\n") {
+			t.Errorf("--path %s: the report does not say the scan was scoped:\n%s", scope, s)
+		}
+		if !strings.Contains(s, "    crates/one/a.go (go) — graded against crates/one/a_test.go\n") {
+			t.Errorf("--path %s: the file inside the scope is not a job:\n%s", scope, s)
+		}
+		if strings.Contains(s, "crates/two/") || strings.Contains(s, "README.md") {
+			t.Errorf("--path %s: a file outside the scope reached the report:\n%s", scope, s)
+		}
+		if !strings.Contains(s, "  2 file(s) walked; 1 candidate(s); 1 job(s);") {
+			t.Errorf("--path %s: the counts are not the scope's own:\n%s", scope, s)
+		}
+	}
+}
+
+// A scope that is not a directory inside the repository is refused before
+// anything runs: one outside it would audit files the operator did not name
+// as the repository, and one that does not exist would report a scan of
+// nothing as a clean scan.
+func TestCertifyRepoPathRefusesAScopeOutsideTheRepository(t *testing.T) {
+	root := t.TempDir()
+	mustWrite(t, filepath.Join(root, "pkg", "a.go"), "package pkg\n")
+	mustWrite(t, filepath.Join(root, "pkg", "a_test.go"), "package pkg\n")
+	for _, scope := range []string{"../elsewhere", "/etc", "pkg/missing", "pkg/a.go"} {
+		var out, errb bytes.Buffer
+		code := runCertifyRepo([]string{"--repo", root, "--path", scope, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant, "--critic-model", "off", "--dry-run"}, &out, &errb)
+		if code != 2 {
+			t.Errorf("--path %s: exit %d, want 2 (refused)\nstdout:%s\nstderr:%s", scope, code, out.String(), errb.String())
+		}
+		if !strings.Contains(errb.String(), "--path") {
+			t.Errorf("--path %s: the refusal does not name the flag: %s", scope, errb.String())
+		}
+	}
+}

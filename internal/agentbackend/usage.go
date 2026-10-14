@@ -295,10 +295,21 @@ func (c meteredChatter) Chat(messages []agentworker.Message, tools []any) (agent
 // model) that a meteredChatter consults before each call. Corral bounded
 // mutants, shards, wall clock and concurrency and nothing in tokens: a
 // per-survivor writer on a survivor-heavy file paid N calls and nothing
-// clamped it. The cap is checked BEFORE a call and charged after it, so one
-// in-flight call can overshoot by its own size — said in the error rather
-// than pretended away; estimating a call's cost from its prompt would be a
-// guess presented as a bound.
+// clamped it. The cap is checked BEFORE a call and charged after it, so a
+// call can overshoot by its own size — said in the error rather than
+// pretended away; estimating a call's cost from its prompt would be a guess
+// presented as a bound.
+//
+// ADMISSION, NOT JUST A CHECK. Seats call in parallel — the writer sends one
+// call per survivor at once — and a check-then-charge cap admitted every call
+// that started before the first one finished: `--max-tokens 1` spent 97.8k
+// tokens over 8 calls on a Warp replay. So a call is admitted only while the
+// spend plus every call in flight, each reserved at the LARGEST call this run
+// has measured, leaves room for one more of that size; otherwise it waits for
+// an in-flight call to finish and asks again. With nothing measured yet, one
+// call at a time. With nothing in flight and spend under the cap, a call is
+// always admitted, which is the one-call overshoot above and no more. Every
+// Allow that returns true must be followed by exactly one Charge.
 //
 // Shared by every seat of a run (a scan's files included), so it is
 // mutex-guarded; a nil *TokenBudget is "no cap", so every existing caller
@@ -309,9 +320,13 @@ type TokenBudget struct {
 	spent int64
 	// hit is set the first time a call was refused, so the disclosure can
 	// say WHEN the cap bit rather than only that it did.
-	hit      bool
-	hitCalls int64
-	calls    int64
+	hit   bool
+	calls int64
+	// inflight counts admitted calls not yet charged; largest is the
+	// biggest single call charged so far, the reservation for each of them.
+	inflight int64
+	largest  int64
+	room     *sync.Cond // signalled on every Charge
 }
 
 // NewTokenBudget returns a budget of cap tokens; cap <= 0 returns nil (no
@@ -320,7 +335,9 @@ func NewTokenBudget(cap int64) *TokenBudget {
 	if cap <= 0 {
 		return nil
 	}
-	return &TokenBudget{cap: cap}
+	b := &TokenBudget{cap: cap}
+	b.room = sync.NewCond(&b.mu)
+	return b
 }
 
 // ErrTokenBudgetExhausted is returned by a metered chatter INSTEAD of
@@ -328,45 +345,61 @@ func NewTokenBudget(cap int64) *TokenBudget {
 // nothing: no provider was contacted, no money was spent on the refused call.
 var ErrTokenBudgetExhausted = errors.New("the run's --max-tokens cap is reached; no further model call is made")
 
-// Allow reports whether one more call may be made, refusing once spent >=
-// cap. Recorded so Exhausted can say after how many calls.
+// Allow admits one more call, waiting while calls in flight hold the room it
+// would need, and refuses once spent >= cap (see the type's doc for the
+// rule). A true return reserves a slot that Charge releases.
 func (b *TokenBudget) Allow() bool {
 	if b == nil {
 		return true
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if b.spent >= b.cap {
-		if !b.hit {
-			b.hit, b.hitCalls = true, b.calls
+	for {
+		if b.spent >= b.cap {
+			b.hit = true
+			return false
 		}
-		return false
+		if b.inflight == 0 || (b.largest > 0 && b.spent+(b.inflight+1)*b.largest <= b.cap) {
+			b.inflight++
+			return true
+		}
+		b.room.Wait()
 	}
-	return true
 }
 
-// Charge records a completed call's usage.
+// Charge records a completed call's usage and releases its slot.
 func (b *TokenBudget) Charge(u Usage) {
 	if b == nil {
 		return
 	}
 	b.mu.Lock()
 	if !u.Unmetered {
-		b.spent += int64(u.InputTokens) + int64(u.OutputTokens)
+		n := int64(u.InputTokens) + int64(u.OutputTokens)
+		b.spent += n
+		if n > b.largest {
+			b.largest = n
+		}
 	}
 	b.calls++
+	if b.inflight > 0 {
+		b.inflight--
+	}
 	b.mu.Unlock()
+	b.room.Broadcast()
 }
 
 // Exhausted reports whether the cap ever refused a call, with the spend and
-// the call count at that moment — the disclosure a verdict carries.
+// the number of calls made — the disclosure a verdict carries. Both are the
+// run's totals when it is read at the end: a count taken at the first
+// refusal missed the calls still in flight then, and printed "after 1
+// call(s)" beside the tokens of eight.
 func (b *TokenBudget) Exhausted() (hit bool, cap, spent, calls int64) {
 	if b == nil {
 		return false, 0, 0, 0
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return b.hit, b.cap, b.spent, b.hitCalls
+	return b.hit, b.cap, b.spent, b.calls
 }
 
 // Spent is the running total: what the cost line prints beside the cap.

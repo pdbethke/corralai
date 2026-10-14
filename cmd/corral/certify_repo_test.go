@@ -5007,3 +5007,34 @@ func TestCertifyRepoDiffTouchingOnlyARefusedTestRunsNoSuite(t *testing.T) {
 		t.Errorf("want NOTHING IN SCOPE, as for a change in a language corral does not audit:\n%s", s)
 	}
 }
+
+// A dry run said "jobs below are what the scan would emit" and then listed
+// only the files it would NOT audit: on Warp, 25 jobs and twenty lines of
+// exclusions, none of them a job. The jobs only reached --json. A stranger's
+// first command has to name the files a paid run would audit, in the order
+// it would audit them, beside the test each is graded against.
+func TestCertifyRepoDryRunNamesTheFilesItWouldAudit(t *testing.T) {
+	root := t.TempDir()
+	mustWrite(t, filepath.Join(root, "pkg", "big.go"), "package pkg\n\n"+strings.Repeat("// padding so this ranks first by size\n", 40))
+	mustWrite(t, filepath.Join(root, "pkg", "big_test.go"), "package pkg\n")
+	mustWrite(t, filepath.Join(root, "pkg", "small.go"), "package pkg\n")
+	mustWrite(t, filepath.Join(root, "pkg", "small_test.go"), "package pkg\n")
+	goals := filepath.Join(root, "goals.json")
+	mustWrite(t, goals, `{"pkg/big.go": "must not panic", "pkg/small.go": "must not panic"}`)
+
+	var out, errb bytes.Buffer
+	code := runCertifyRepo([]string{"--repo", root, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant, "--critic-model", "off", "--goals", goals, "--top", "1", "--dry-run"}, &out, &errb)
+	if code != 0 {
+		t.Fatalf("dry run exited %d: %s", code, errb.String())
+	}
+	s := out.String()
+	if !strings.Contains(s, "would audit 1 file(s), in rank order:") {
+		t.Fatalf("the dry run does not introduce the files it would audit:\n%s", s)
+	}
+	if !strings.Contains(s, "    pkg/big.go (go) — graded against pkg/big_test.go\n") {
+		t.Errorf("the dry run does not name its job with the test it is graded against:\n%s", s)
+	}
+	if strings.Contains(s, "pkg/small.go (go) — graded against") {
+		t.Errorf("a file beyond --top was listed as one the run would audit:\n%s", s)
+	}
+}

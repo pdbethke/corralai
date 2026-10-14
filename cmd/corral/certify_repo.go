@@ -1207,6 +1207,9 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	printLanguageProfile(stdout, reposcan.BuildLanguageProfile(cands, excl))
 	printSearchPairings(stdout, cands)
 	printEvidencePairings(stdout, cands)
+	if *dryRun {
+		printWouldAudit(stdout, jobs)
+	}
 	printExclusions(stdout, excl)
 
 	// An explicit `-- <cmd>` is applied to EVERY job, so it is only meaningful
@@ -3552,6 +3555,30 @@ func printSearchPairings(w io.Writer, cands []reposcan.Candidate) {
 			break
 		}
 		fmt.Fprintf(w, "    %s paired by search: %s\n", c.Path, c.TestPath)
+	}
+}
+
+// printWouldAudit names a dry run's jobs, in the order the scan would audit
+// them, each beside the test it would be graded against. It is the answer
+// the dry run exists to give — which files a paid run would spend on — and
+// it used to reach only --json, while the text output promised the jobs
+// "below" and listed the exclusions instead. Uncapped, unlike the exclusion
+// listing: the jobs are bounded by --top already, and a reader who asked
+// for --all asked to see every one.
+func printWouldAudit(w io.Writer, jobs []reposcan.Job) {
+	if len(jobs) == 0 {
+		return
+	}
+	fmt.Fprintf(w, "  would audit %d file(s), in rank order:\n", len(jobs))
+	for _, j := range jobs {
+		switch {
+		case j.TestPath != "":
+			fmt.Fprintf(w, "    %s (%s) — graded against %s\n", j.Path, j.Lang, j.TestPath)
+		case j.CoveringTestPath != "":
+			fmt.Fprintf(w, "    %s (%s) — graded by the tests that cover it; a written test lands beside %s\n", j.Path, j.Lang, j.CoveringTestPath)
+		default:
+			fmt.Fprintf(w, "    %s (%s)\n", j.Path, j.Lang)
+		}
 	}
 }
 

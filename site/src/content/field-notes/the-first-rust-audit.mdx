@@ -1,0 +1,159 @@
+---
+title: "The first Rust audit"
+description: "corral can now audit Rust. Its first run on someone else's code was one file of Warp's fuzzy matcher: the crate's own 33 tests caught 11 of 34 planted faults, and for 22 of the 23 that got through, corral wrote a test that catches it and ran it to prove so. Here is how a test lands in a Rust project, what the run measured, how we checked it, and what it does not show."
+pubDate: 2026-10-14
+draft: false
+---
+
+{/* SPDX-License-Identifier: Elastic-2.0 */}
+
+*Field note. Every number below is from one signed ledger entry,
+[`94d9296c5801`](https://github.com/pdbethke/corralai/blob/corral/ledger/scans/20261014T133712Z-714c51f1e29f-8f1bc4949be5.json.gz)
+on the `corral/ledger` branch, and the audit log of the run that wrote it.*
+
+## What we ran
+
+[Warp](https://github.com/warpdotdev/warp) is a terminal written in Rust, a
+Cargo workspace of 80 crates. We picked one small crate,
+`crates/fuzzy_match`: 672 lines of matching logic in `src/lib.rs`, tested by 33
+tests in `src/fuzzy_tests.rs`. It builds and tests in about a second, so every
+planted fault costs almost nothing to run, and its tests live where most of
+Warp's do, in a separate file the source points at:
+
+```rust
+#[cfg(test)]
+#[path = "fuzzy_tests.rs"]
+mod tests;
+```
+
+The command, with corral built from `main` at `59facd91`, on a clone of
+Warp's upstream `main` at `714c51f1e`:
+
+```
+corral certify --repo crates/fuzzy_match --substrate workspace --top 1 \
+  --derive-model gemini-3.8-flash --mutant-model gemini-3.8-flash \
+  --writer-model gemini-3.8-flash --critic-model codex \
+  --max-tokens 3000000 -- cargo nextest run -p fuzzy_match
+```
+
+One model plants faults that break the goal it derived for the file. Warp's own
+`cargo nextest` runs against each one. For every fault the suite does not
+catch, a model writes a test, and corral runs that test against both the fault
+and the unchanged code. A fault counts as a proven gap only if the new test
+passes on the real code and fails on the fault. The critic seat was the Codex
+CLI on a subscription, not an API key; corral can seat a coding agent in any
+role now.
+
+## What it measured
+
+| | |
+|---|---|
+| faults planted and graded | 34 (40 budgeted from 71 decision points) |
+| caught by the crate's own 33 tests | 11: a kill rate of 0.32, 95% interval 0.19–0.49 |
+| got through | 23 |
+| caught by a test corral wrote and ran | 22 |
+| tried and missed | 1 |
+| tokens | 0.3M in, 13.2k out, 35 calls, against a cap of 3M |
+| wall clock | 10m08s |
+
+Two of the faults that got through, each one line:
+
+```diff
+- if text.ends_with(suffix) {
++ if text.starts_with(suffix) {
+```
+
+```diff
+- for start_idx in 0..text_chars.len() {
++ for start_idx in 1..text_chars.len() {
+```
+
+The first is in the fast path for patterns like `*.rs`: it checks the wrong end
+of the text. The second stops a glob from ever matching at the first character.
+The existing suite passes with either one in place. corral wrote a test for
+each that passes on Warp's code and fails on the fault.
+
+## Where the tests went
+
+A test corral writes has to compile where the project keeps its tests, and in
+Rust that is a module, not a file name. Here the source declares its test module
+in `fuzzy_tests.rs`, so corral appends one block to that file and leaves the
+source byte-identical:
+
+```rust
+#[cfg(test)]
+mod corral_tests {
+    use super::super::*;
+    // 35 tests
+}
+```
+
+`super::super` because the block sits inside the declared `tests` module, one
+level below the code it tests. The run printed `append it to
+src/fuzzy_tests.rs`, and the same path is in the ledger entry, so whoever reads
+the record knows where the block compiles.
+
+## How we checked it
+
+The run's own grading is execution: each new test ran against the unchanged code
+and against its fault. We also checked it outside corral. On a separate clone of the
+same commit we appended the 35-test block and ran Warp's command:
+
+```
+cargo nextest run -p fuzzy_match
+Summary [0.031s] 68 tests run: 68 passed, 0 skipped
+```
+
+33 of Warp's, 35 of corral's, all green on the real code. After the run, `git status`
+in the checkout corral had worked in showed no change.
+
+## What this does not show
+
+- **It is one file.** A kill rate of 0.32 on 34 faults has a 95% interval of
+  0.19 to 0.49. It says something about this file's tests and nothing about
+  Warp's.
+- **A second run plants different faults.** The day before, the same command
+  on an unreleased build graded 37 faults, caught 9 (0.24) and proved 27. Both
+  results fall inside each other's interval. The faults are generated, so the
+  counts move between runs; the finding, that this file's suite misses most of
+  what was planted, did not.
+- **A fault that gets through is a missing test, not a bug.** The code is
+  correct as far as we know. What the run shows is that 22 ways of breaking it
+  would pass the current suite.
+- **"Proven" means caught by execution, not reviewed.** Each of the 22 proving
+  tests fails on its fault and passes on the real code. Whether each is a test Warp's
+  maintainers would want is their call, and nobody on their side has seen them
+  yet.
+- **The tests were written by a model.** They compile and run; they are not
+  hand-written, and some overlap.
+- **Rust has no per-test selection in corral yet**, so every fault ran the
+  crate's whole suite. At about a second a run that cost nothing here; on a
+  slow crate it would.
+
+## What broke
+
+Two things, both ours.
+
+corral runs several faults at once, each in a private copy of the directory it
+was pointed at. Here that directory was the crate, and the crate inherits
+settings from Warp's top-level `Cargo.toml`, which the copy did not include. So
+cargo refused to build the copies. corral noticed, said why on the scan line,
+and fell back to one fault at a time in the real checkout. The result is the
+same; it took longer. For a crate inside a Cargo workspace the copy needs the
+workspace root, and that is the next fix.
+
+The other we found while writing this up: corral's Rust preflight asked for a
+system-wide Rust install even when no sandbox runs, so a developer with rustup
+in their home directory, which is nearly everyone, was refused before
+anything ran. That is fixed on `main`
+([#404](https://github.com/pdbethke/corralai/pull/404)): the system-wide
+toolchain is required only when the jail runs, and a `--substrate workspace` run
+uses whatever `cargo` is on the PATH. It ships in the next release.
+
+## Next
+
+Rust files whose tests sit inline in the same file are still refused; that
+needs the test block and the planted fault to coexist in one file, which is the
+next piece of work after the two above. And before any of it, we are going to
+run corral on a Rust crate the way someone who has never seen it would: a clean
+account, the public docs, nothing else.

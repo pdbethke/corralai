@@ -64,12 +64,12 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	testsPath := fs.String("tests", "", "JSON file mapping repo-relative SOURCE paths to their test files, consulted before filename convention. Convention cannot pair a project that names tests after behaviour rather than after source files (expressjs/express: lib/response.js is tested by test/res.send.js, res.json.js …), and it can pair the WRONG file (psf/requests pairs adapters.py to an 8-line test_adapters.py while its real coverage is in a 108KB test_requests.py). A mapping to a file that does not exist is refused, never silently fallen back to convention")
 	topFlag := fs.Int("top", defaultScanTop, "audit only the N highest-ranked candidates (0 or --all = every candidate). Bounded by default: a whole-repo audit runs a full herd per file, so an unbounded first scan on a large repo costs hours and real money. The DEFAULT bound does not apply with --goals — a hand-written goals map has already chosen the surface — but an explicit --top does")
 	allFlag := fs.Bool("all", false, "audit every candidate, ignoring --top")
-	deriveModel := fs.String("derive-model", "", "model that derives a goal per file when --goals is not given — REQUIRED unless --goals is supplied; corral has no default models")
+	deriveModel := fs.String("derive-model", "", "model (or agent seat) that derives a goal per file when --goals is not given — REQUIRED unless --goals is supplied; corral has no default models")
 	// Per-role models. `certify --local` has had these all along; without them
 	// here a repo scan was locked to the Claude defaults with no override.
-	writerModelFlag := fs.String("writer-model", "", "model for the test-writer role — REQUIRED, corral has no default models. Takes a registry alias (.corral/models.json) or a concrete model name")
-	mutantModelFlag := fs.String("mutant-model", "", "model for the mutant-generator role — REQUIRED, corral has no default models. Takes a registry alias (.corral/models.json) or a concrete model name")
-	criticModelFlag := fs.String("critic-model", "", "model for the test-critic role, which must differ from the writer's; \"off\" disables the critic entirely (it is advisory and never gates the verdict, so a single-vendor run with only one usable model can drop it). No default")
+	writerModelFlag := fs.String("writer-model", "", "model for the test-writer role — REQUIRED, corral has no default models. Takes a registry alias (.corral/models.json), a concrete model name, or an agent seat (`codex`, `claude-code`, `antigravity`, or your own CORRALAI_AGENT_<NAME>)")
+	mutantModelFlag := fs.String("mutant-model", "", "model for the mutant-generator role — REQUIRED, corral has no default models. Takes a registry alias (.corral/models.json), a concrete model name, or an agent seat (`codex`, `claude-code`, `antigravity`, or your own CORRALAI_AGENT_<NAME>)")
+	criticModelFlag := fs.String("critic-model", "", "model (or agent seat) for the test-critic role, which must differ from the writer's; \"off\" disables the critic entirely (it is advisory and never gates the verdict, so a single-vendor run with only one usable model can drop it). No default")
 	scopeTestsFlag := fs.Bool("scope-tests", false, "REMOVED — see --whole-suite. Selection by coverage evidence is now the default")
 	wholeSuiteFlag := fs.Bool("whole-suite", false, "grade every mutant against the project's WHOLE suite instead of the tests that demonstrably execute each file (the default, from one instrumented run per scan). Costs O(mutants x whole-suite runtime) per file and answers a different question — 'did ANY test catch it' rather than 'do this file's tests test it'. The verdict records which was used")
 	shadow := registerShadowSeatFlags(fs, shadowSeatHelp{
@@ -108,7 +108,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	noGoalCacheFlag := fs.Bool("no-goal-cache", false, "skip the goal cache — every candidate is re-derived even when a PRIOR scan already derived a goal for the exact same bytes, model and prompt revision. Re-buys a model call per file that a content-addressed cache would otherwise have served for free; use this to isolate goal-derivation variance from a comparison, or on a scan whose operator does not want a goal receipt kept in the ledger at all. The cache lives in the file --cache-db names")
 	noVerdictCacheFlag := fs.Bool("no-verdict-cache", false, "skip the verdict cache — every candidate is re-audited even when a PRIOR scan already earned a verdict for the exact same bytes, tests, models, engine and substrate. Re-buys the whole audit (generation, grading, the writer) per file; use this to isolate model variance from a comparison, or to redo a measurement the cache would otherwise keep serving. The cache is the ledger directory itself (--ledger): a verdict an earlier entry recorded under the same key is served, so --no-ledger also disables it")
 	noSelectionCacheFlag := fs.Bool("no-selection-cache", false, "skip the selection cache — the ONE instrumented coverage run always executes, even when a PRIOR scan already ran the identical instrumented command over a byte-identical tree. Re-buys a full suite run (the single most expensive measurement a scan makes outside model calls) that a content-addressed cache would otherwise have served for free; use this to isolate selection variance from a comparison, or when the operator does not trust the tree to be unchanged. The cache lives in the file --cache-db names")
-	maxTokensFlag := fs.Int64("max-tokens", 0, "cap on model TOKENS for the whole SCAN, every file, input + output, every seat (0 = no cap). Checked before each call and charged after it, so one in-flight call can overshoot by its own size. Once reached: a generator seat that has not run makes its file ungradable (executor-error naming the cap), a writer or critic seat is skipped and the file flagged as it is for a provider failure — the dev kill rate already measured stands. The cost line says the cap was reached and after how many calls. Corral has bounded mutants, shards and wall clock and never money; this is the money bound")
+	maxTokensFlag := fs.Int64("max-tokens", 0, "cap on model TOKENS for the whole SCAN, every file, input + output, every seat (0 = no cap; an agent seat that reports no token usage is refused, since the cap could not see it). Checked before each call and charged after it, so one in-flight call can overshoot by its own size. Once reached: a generator seat that has not run makes its file ungradable (executor-error naming the cap), a writer or critic seat is skipped and the file flagged as it is for a provider failure — the dev kill rate already measured stands. The cost line says the cap was reached and after how many calls. Corral has bounded mutants, shards and wall clock and never money; this is the money bound")
 	timeoutFlag := fs.Duration("timeout", defaultRunTimeout, "per-file WALL-CLOCK budget, measured from that file's run start — not a no-progress timer. A file still making steady progress is stopped when it exceeds this and banks a needs-review TIMEOUT verdict, keeping its dev kill rate and survivors but losing the PROVING half. Same default and semantics as `certify --local`'s --timeout; raise it for a file with many survivors, which needs the most room and has the most to prove. PER FILE, so it multiplies: a scan of N files with W workers can spend up to (N/W) x this in the worst case, which is what --top and --swarm are for")
 	if err := fs.Parse(flagArgs); err != nil {
 		return flagParseExit(err)
@@ -363,8 +363,20 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// can tell two runs' edits at one place apart. --record-mutants only
 	// decides whether the set is ALSO written as a document.
 	mutantRecorder := newMutantSetRecorder()
+	// interruptRefused is set by every refusal of an interrupted run: the
+	// mutant set is then empty or partial, and the Action commits this file
+	// back as the next run's prior, so it is not written.
+	interruptRefused := false
+	refuse := func() int {
+		interruptRefused = true
+		return refuseInterrupted(stderr, "corral certify --repo")
+	}
 	if p := strings.TrimSpace(*recordMutantsFlag); p != "" {
 		defer func() {
+			if interruptRefused {
+				fmt.Fprintln(stderr, "corral certify --repo: --record-mutants not written — the run was interrupted")
+				return
+			}
 			if *dryRun {
 				// Inert, and said so rather than left silent (the same rule
 				// --record follows just below): a dry run audits nothing, so
@@ -647,6 +659,13 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// invocation that costs nothing.
 	ledgerDir := ""
 	var ex *localExecutor
+	// ONE token budget for the whole scan — every file's grading seats AND
+	// the goal deriver draw on it, so --max-tokens bounds every seat the way
+	// its help says. Built before anything can spend; nil with no cap.
+	scanBudget := agentbackend.NewTokenBudget(*maxTokensFlag)
+	// ONE tool probe for the whole scan: every agent seat's version is read
+	// once, and the cache key, each verdict and the bundle all record it.
+	scanTools := newSeatToolProbe()
 	if !*dryRun {
 		// Each job runs the whole tree in a jail and grades it with the
 		// project's own test command. Given after `--`; absent, the language
@@ -727,12 +746,31 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 			shadowModel:       *shadow.model,
 			shadowWriterModel: *shadow.writerModel,
 			seatProviders:     seatReg.seatProviders(),
+			// The cap is checked here too, so a seat it cannot see (an
+			// unmetered agent) is refused before any goal is derived — the
+			// per-file resolution below would only find it after the scan
+			// had started spending.
+			tokenBudget: scanBudget,
+			toolProbe:   scanTools,
 		}, stderr); err != nil {
 			fmt.Fprintf(stderr, "corral certify --repo: %v\n", err)
 			if isAuditUsageError(err) {
 				return 2
 			}
 			return 1
+		}
+		// The derive seat is under the same cap, so the same refusal: a
+		// derive seat the cap cannot see is refused before it derives.
+		// Only when it will be asked at all (--goals skips it).
+		if strings.TrimSpace(*goalsPath) == "" && strings.TrimSpace(*deriveModel) != "" && isAgentSeat(*deriveModel) {
+			db, err := agentbackend.ForSeat(*deriveModel, agentbackend.SeatOptions{})
+			if err == nil {
+				err = capCanSee(scanBudget, roleGoalDeriver, *deriveModel, db)
+			}
+			if err != nil {
+				fmt.Fprintf(stderr, "corral certify --repo: %v\n", err)
+				return 2
+			}
 		}
 	}
 
@@ -762,6 +800,8 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	keepDeriver := func(model, endpoint string) (reposcan.Deriver, error) {
 		d, err := certifyRepoDeriver(model, endpoint)
 		if err == nil && d != nil {
+			// The deriver draws on the scan's one budget, like every seat.
+			d = withDeriveBudget(d, scanBudget)
 			scanDerivers = append(scanDerivers, d)
 		}
 		return d, err
@@ -807,7 +847,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		shadowModel:       *shadow.model,
 		shadowWriterModel: *shadow.writerModel,
 	})
-	modelSet := modelSetKey(rmWriter, rmMutant, rmCritic, rmShadow, rmShadowWriter)
+	modelSet := modelSetKeyWith(scanTools, rmWriter, rmMutant, rmCritic, rmShadow, rmShadowWriter)
 
 	// Evidence-first candidacy (the evidence-as-candidacy design), and the
 	// scan's one instrumented selection run underneath it (#163): collected
@@ -1074,7 +1114,8 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	localEndpoints = mergeLocalEndpoints(localEndpoints, seatReg.localEndpoints())
 	if ex != nil {
 		ex.localEndpoints = localEndpoints
-		ex.tokenBudget = agentbackend.NewTokenBudget(*maxTokensFlag)
+		ex.tokenBudget = scanBudget
+		ex.toolProbe = scanTools
 	}
 
 	cfg := reposcan.EmitConfig{
@@ -1107,6 +1148,9 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		},
 	}
 	jobs, goalExcl, err := reposcan.EmitJobs(cfg, selected, gs)
+	if operatorInterrupted(err) {
+		return refuse()
+	}
 	if err != nil {
 		fmt.Fprintf(stderr, "corral certify --repo: emitting jobs: %v\n", err)
 		return 1
@@ -1129,7 +1173,8 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// double-counts files:
 	//   - Enumerate's exclusions are files that are NOT candidates at all
 	//     (no-language / is-test / no-paired-test).
-	//   - not-selected / ungoaled / derive-failed / source-too-large name
+	//   - not-selected / ungoaled / derive-failed / derive-budget-exhausted /
+	//     source-too-large name
 	//     CANDIDATES — they are already inside len(cands).
 	// So the file total is candidates + ENUMERATE-only exclusions. Counting
 	// len(excl) after the appends added every such path a second time and
@@ -1291,6 +1336,13 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		verdictCacheDir = ""
 	}
 	results = reposcan.Scan(auditCtx, jobs, ex, newLedgerCache(verdictCacheDir, stderr), workers)
+	// An operator's interrupt records nothing, for every seat type: no
+	// report of files that were stopped, no attestation, no ledger entry,
+	// no push. Checked again right before those writes, for a signal that
+	// lands while the report prints.
+	if operatorInterrupted(nil) {
+		return refuse()
+	}
 	rep := reposcan.Aggregate(*owner, cfg.Repo, *commit, totalFiles, len(cands), results, excl)
 
 	// The diff selected zero candidates: a docs-only (or no-paired-test-only)
@@ -1319,7 +1371,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stdout, line)
 	}
 	if ex != nil {
-		if line := budgetLine(ex.tokenBudget); line != "" {
+		if line := budgetLine(ex.tokenBudget, countReason(excl, reposcan.ReasonDeriveBudgetExhausted)); line != "" {
 			fmt.Fprintln(stdout, line)
 		}
 	}
@@ -1379,6 +1431,9 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// Built from the same per-file ModelCalls the ledger's scan_model_calls
 	// rows come from (modelCallRows, below) — never a second measurement, so
 	// the scan header's totals and the per-role grain can never disagree.
+	if operatorInterrupted(nil) {
+		return refuse()
+	}
 	modelCallRows := scanModelCallRowsWith(results, scanDerivers)
 	var inTokens, outTokens, modelCallCount int64
 	for _, c := range modelCallRows {
@@ -1475,10 +1530,18 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// with an empty target).
 	bundleRepo, bundleCommit, subjErr := auditSubject(*repoDir, rep)
 	rosterJSON, _ := json.Marshal(models())
+	// The roster's agent tools beside it, from the helper the verdict's
+	// SeatTools and review's record use; "" when no seat is an agent.
+	seatToolsJSON := ""
+	if tools := scanTools.toolsFor(models()); tools != nil {
+		b, _ := json.Marshal(tools)
+		seatToolsJSON = string(b)
+	}
 	bundle := buildBundle(scan, scanID, files, mutants, modelCallRows, eventRows,
 		auditpush.Link{}, pushSource, bundleRepo, bundleCommit, githubRunURL(),
 		bundleMeta{
 			ModelsByRole: string(rosterJSON),
+			SeatTools:    seatToolsJSON,
 			MinKillRate:  minKillRate, MaxProvenMissed: maxProvenMissed,
 			Passed:   boolPtr(exitCode == 0),
 			PushedBy: auditpush.PushedByCertify,
@@ -3033,7 +3096,8 @@ func goModulePath(repoDir string) (string, error) {
 // excluded for a truthful reason instead). enumOnlyExcl MUST be Enumerate's
 // own exclusions, widened by evidence, only
 // (excl[:enumExcl] in runCertifyRepo) — later-appended reasons
-// (not-selected/ungoaled/derive-failed/source-too-large) describe candidates
+// (not-selected/ungoaled/derive-failed/derive-budget-exhausted/
+// source-too-large) describe candidates
 // already counted via cands, and re-detecting their language here would be
 // redundant, not wrong, but the caller passes the narrower slice anyway to
 // keep the two exclusion universes (Enumerate-level vs candidate-level) from
@@ -3524,6 +3588,8 @@ var candidateLevelReasons = map[string]bool{
 	reposcan.ReasonUngoaled:       true,
 	reposcan.ReasonDeriveFailed:   true,
 	reposcan.ReasonSourceTooLarge: true,
+	// A candidate whose goal the cap stopped: judged auditable, not audited.
+	reposcan.ReasonDeriveBudgetExhausted: true,
 }
 
 // orderExclusionsForListing puts candidate-level exclusions ahead of
@@ -3908,6 +3974,8 @@ func reasonGloss(reason string) string {
 		return " — the workspace could not be prepared for this file"
 	case reposcan.ReasonMappedTestMissing:
 		return " — the --tests map names a test file that does not exist"
+	case reposcan.ReasonDeriveBudgetExhausted:
+		return " — the --max-tokens cap was reached before goals were derived for this file; it was not audited"
 	case reposcan.ReasonDeclarationsUnreadable:
 		return " — corral cannot audit this file in this build: it cannot read the file's test-module declarations (built without cgo, which the grammar needs), so where a test for it would go is unknown"
 	case reposcan.ReasonTestLandingNotBuilt:
@@ -4369,6 +4437,8 @@ type localExecutor struct {
 	localEndpoints map[string]string
 	// tokenBudget is the scan-wide --max-tokens cap, one for every file.
 	tokenBudget *agentbackend.TokenBudget
+	// toolProbe is the scan's one seatToolProbe, handed to every job.
+	toolProbe *seatToolProbe
 
 	// perFileSwarm is how many workers ONE file's own audit may use. It is >1
 	// only on the workspace substrate, where resolveScanWorkers has already
@@ -4631,6 +4701,7 @@ func (l *localExecutor) auditInputFor(j reposcan.Job) localAuditInput {
 	return localAuditInput{
 		localEndpoints: l.localEndpoints,
 		tokenBudget:    l.tokenBudget,
+		toolProbe:      l.toolProbe,
 		repoDir:        l.repoDir,
 		codePath:       j.Path,
 		// j.TestPath is empty for an evidence-only candidate BY

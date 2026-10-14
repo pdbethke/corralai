@@ -150,3 +150,24 @@ func mustGunzip(t *testing.T, path string) []byte {
 	}
 	return b
 }
+
+// A historical signed entry's vendor must not depend on the environment of
+// the process that renders it: codex was OpenAI's CLI when it ran.
+func TestVendorOfSeatIgnoresTheRenderersAgentEnvironment(t *testing.T) {
+	t.Setenv("CORRALAI_AGENT_CODEX", "/bin/cat")
+	t.Setenv("CORRALAI_AGENT_CLAUDE_CODE", "/bin/cat")
+	for seat, want := range map[string]string{
+		"codex":                  "openai",
+		"claude-code":            "anthropic",
+		"antigravity":            "google",
+		"codex:gpt-6-astra":      "openai",
+		"claude-code:gemini-9":   "google",
+		"gemini-3.6-flash":       "google",
+		"some-operator-agent":    "",
+		"mytool:claude-sonnet-5": "anthropic",
+	} {
+		if got := vendorOfSeat(seat); got != want {
+			t.Errorf("vendorOfSeat(%q) = %q, want %q", seat, got, want)
+		}
+	}
+}

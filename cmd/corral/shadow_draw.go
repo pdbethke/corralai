@@ -22,7 +22,7 @@ import (
 // once per process, so no environment variable set inside a test can
 // reliably make a key absent.
 var shadowMemberRunnable = func(model string) error {
-	_, err := agentbackend.ForModelOrLocal(model)
+	_, err := agentbackend.ForSeat(model, agentbackend.SeatOptions{})
 	return err
 }
 

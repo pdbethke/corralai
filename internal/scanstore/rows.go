@@ -636,7 +636,11 @@ type ModelCall struct {
 	// of the read count.
 	CacheWriteInputTokens *int64
 	OutputTokens          int64
-	WallMillis            int64
+	// UnmeteredCalls is how many of Calls reported no token usage (an agent
+	// seat on the `text` wire); the token columns cover only the rest. See
+	// advpool.ModelCall.UnmeteredCalls.
+	UnmeteredCalls int
+	WallMillis     int64
 }
 
 // Event is one entry on the tape: an ordered log of what the pool did, at

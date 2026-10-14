@@ -14,6 +14,7 @@ import (
 	"strings"
 	"text/tabwriter"
 
+	"github.com/pdbethke/corralai/internal/agentbackend"
 	"github.com/pdbethke/corralai/internal/auditpush"
 	"github.com/pdbethke/corralai/internal/bugcatch"
 	"github.com/pdbethke/corralai/internal/criticscore"
@@ -275,6 +276,11 @@ func bugcatchRankEvidence(ctx context.Context, store *bugcatch.Store, critic *cr
 			if o.Shadow {
 				return nil
 			}
+			// A seat that named a tool, not a model, is not evidence about
+			// a model (the one rule; see bugcatch's resolvedOnly).
+			if o.ModelUnresolved {
+				return nil
+			}
 			ev.Obs = append(ev.Obs, modelrank.Observation{
 				Model:           o.Model,
 				Role:            o.Role,
@@ -340,7 +346,7 @@ func bugcatchRankEvidence(ctx context.Context, store *bugcatch.Store, critic *cr
 // generator's "per run" count is a different number under the two.
 func warehouseRankEvidence(db *sql.DB, dsn string) (rankEvidence, error) {
 	ev := rankEvidence{Source: "the pushed warehouse " + dsn + " (corral_audits; a run is one SCAN, not one audited file as in the local ledger)"}
-	rows, err := db.Query(`SELECT COALESCE(lang, ''), COALESCE(models_by_role, ''), COALESCE(scan_id, 0),
+	rows, err := db.Query(`SELECT COALESCE(lang, ''), COALESCE(models_by_role, ''), COALESCE(seat_tools, ''), COALESCE(scan_id, 0),
 		COALESCE(path, ''), COALESCE(survivors, 0), COALESCE(proven_missed, 0),
 		COALESCE(mutants_planted, 0), COALESCE(mutants_graded, 0), COALESCE(mutants_invalid, 0),
 		COALESCE(cache_hit, false), reused_from_scan_id IS NOT NULL,
@@ -352,11 +358,11 @@ func warehouseRankEvidence(db *sql.DB, dsn string) (rankEvidence, error) {
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var lang, byRole, path string
+		var lang, byRole, toolsJSON, path string
 		var scanID int64
 		var survivors, proven, planted, graded, invalid int
 		var cacheHit, reused, baselineFailed, timedOut, writerFailed, unsound bool
-		if err := rows.Scan(&lang, &byRole, &scanID, &path, &survivors, &proven, &planted, &graded, &invalid,
+		if err := rows.Scan(&lang, &byRole, &toolsJSON, &scanID, &path, &survivors, &proven, &planted, &graded, &invalid,
 			&cacheHit, &reused, &baselineFailed, &timedOut, &writerFailed, &unsound); err != nil {
 			return rankEvidence{}, fmt.Errorf("scanning corral_audits from %s: %w", dsn, err)
 		}
@@ -377,9 +383,20 @@ func warehouseRankEvidence(db *sql.DB, dsn string) (rankEvidence, error) {
 		// with one writer is one run's worth of evidence about that writer,
 		// and counting it as 30 would clear any evidence floor on the first
 		// scan.
+		// The roster's agent tools: an unreadable or absent value is no
+		// tools, which reads every seat as the API seat it then was.
+		tools := map[string]string{}
+		if strings.TrimSpace(toolsJSON) != "" {
+			_ = json.Unmarshal([]byte(toolsJSON), &tools)
+		}
 		run := fmt.Sprintf("%d", scanID)
 		for role, model := range seats {
 			if strings.TrimSpace(model) == "" || strings.EqualFold(model, "off") {
+				continue
+			}
+			// The one rule: a seat that named a tool, not a model, is not
+			// evidence about a model.
+			if !agentbackend.RecordedSeatNamesAModel(model, tools[role]) {
 				continue
 			}
 			o := modelrank.Observation{Model: model, Role: role, Lang: lang, Run: run}
@@ -464,7 +481,7 @@ func defaultRankLoader(dsn string) (rankEvidence, error) {
 // execution otherwise, and a claim with no outcome grades nobody. The
 // review entry is the run.
 func reviewRankEvidence(db *sql.DB) ([]modelrank.Observation, error) {
-	rows, err := db.Query(`SELECT f.review_uid, COALESCE(r.reviewer_model, ''), COALESCE(r.lang, ''),
+	rows, err := db.Query(`SELECT f.review_uid, COALESCE(r.reviewer_model, ''), COALESCE(r.reviewer_tool, ''), COALESCE(r.verifier_tool, ''), COALESCE(r.lang, ''),
 	    f.declared_tier, f.tier, f.exit_code, COALESCE(f.unrun, ''),
 	    COALESCE(f.refutation_model, ''), COALESCE(f.refutation_verdict, ''), COALESCE(f.refutation_tier, ''), f.refutation_exit_code, COALESCE(f.refutation_unrun, ''),
 	    COALESCE(a.verdict, ''), COALESCE(a.decided_by, '')
@@ -481,9 +498,9 @@ func reviewRankEvidence(db *sql.DB) ([]modelrank.Observation, error) {
 	defer rows.Close()
 	var obs []modelrank.Observation
 	for rows.Next() {
-		var uid, reviewer, lang, declared, tier, unrun, vModel, vVerdict, vTier, vUnrun, aVerdict, aBy string
+		var uid, reviewer, reviewerTool, verifierTool, lang, declared, tier, unrun, vModel, vVerdict, vTier, vUnrun, aVerdict, aBy string
 		var exit, vExit sql.NullInt64
-		if err := rows.Scan(&uid, &reviewer, &lang, &declared, &tier, &exit, &unrun, &vModel, &vVerdict, &vTier, &vExit, &vUnrun, &aVerdict, &aBy); err != nil {
+		if err := rows.Scan(&uid, &reviewer, &reviewerTool, &verifierTool, &lang, &declared, &tier, &exit, &unrun, &vModel, &vVerdict, &vTier, &vExit, &vUnrun, &aVerdict, &aBy); err != nil {
 			return nil, err
 		}
 		f := findingFromRow(declared, tier, exit, unrun, vModel, vVerdict, vTier, vExit, vUnrun)
@@ -492,11 +509,13 @@ func reviewRankEvidence(db *sql.DB) ([]modelrank.Observation, error) {
 			adj = &review.Adjudicated{Verdict: aVerdict, By: aBy}
 		}
 		g := review.Grade(f, adj)
-		if g.ReviewerChecked {
+		// The one rule, for review's seats as for certify's: a seat that
+		// named a tool, not a model, is not evidence about a model.
+		if g.ReviewerChecked && agentbackend.RecordedSeatNamesAModel(reviewer, reviewerTool) {
 			obs = append(obs, modelrank.Observation{Model: reviewer, Role: modelrank.SeatReviewer, Lang: lang, Run: uid,
 				ReviewClaimsChecked: 1, ReviewClaimsHeld: boolToInt(g.ReviewerHeld)})
 		}
-		if g.VerifierCalled {
+		if g.VerifierCalled && agentbackend.RecordedSeatNamesAModel(vModel, verifierTool) {
 			obs = append(obs, modelrank.Observation{Model: vModel, Role: modelrank.SeatVerifier, Lang: lang, Run: uid,
 				VerifierCalls: 1, VerifierCorrect: boolToInt(g.VerifierCorrect)})
 		}

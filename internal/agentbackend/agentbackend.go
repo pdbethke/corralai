@@ -231,7 +231,7 @@ func FromEnv() Backend {
 // caller that wants "whatever backend serves this model" wants this function;
 // a caller that specifically requires a cloud vendor still wants ForModel.
 func ForModelOrLocal(model string) (Backend, error) {
-	if VendorOf(model) == "" {
+	if apiVendorOf(model) == "" {
 		return NewOllamaBackend(env("OLLAMA_URL", "http://127.0.0.1:11434"), model), nil
 	}
 	return ForModel(model)
@@ -339,13 +339,67 @@ func ForModel(model string) (Backend, error) {
 	}
 }
 
-// VendorOf reports which cloud vendor ForModel would route model to
-// ("anthropic"/"google"/"openai"), or "" if none matches (e.g. a local/ollama
-// model name) — used by callers (certify --local's localChatterFor) that need
-// to know a critic model's vendor differs from the base backend's BEFORE
-// calling ForModel (e.g. to decide whether cross-vendor routing even
-// applies), without duplicating the prefix table.
-func VendorOf(model string) string {
+// VendorOf reports which cloud vendor a seat spec is served by
+// ("anthropic"/"google"/"openai"), or "" when none is known (a local/ollama
+// model name, or an operator-defined agent that is not pinned to a model).
+//
+// A model name is answered by its prefix (apiVendorOf, the table ForModel
+// routes by). An AGENT seat is answered by what it runs: pinned
+// (`codex:gpt-6-astra`) the model's own vendor, falling back to the agent's
+// maker when the model name matches no prefix; unpinned the maker of the
+// built-in definition (`codex` -> openai). The maker is DATA on builtinAgent,
+// never a switch on the agent's name. An operator's own agent, or a built-in
+// the operator has REDEFINED, has no declared maker — corral cannot know what
+// their command runs — so unpinned it answers "": silence over a guess.
+//
+// Callers that compare vendors (the same-vendor warning, the verdict's "every
+// graded seat is X" line, cross-vendor routing) ask this, so an agent seat
+// takes part in those rules instead of being invisible to them.
+func VendorOf(spec string) string {
+	if name, model, ok := AgentSeat(spec); ok {
+		_, builtin, _ := agentDefinition(name)
+		return agentVendor(name, model, builtin)
+	}
+	return apiVendorOf(spec)
+}
+
+// RecordedVendorOf is VendorOf for a seat that was RECORDED, not one about to
+// run: it answers from the prefix table and the built-in makers alone and
+// never reads the environment. A historical signed entry naming `codex` was
+// run by the codex built-in whatever CORRALAI_AGENT_CODEX says in the
+// process now rendering it, so the renderer must not depend on it. A name
+// that is not a built-in agent is read as a model (its pinned half, if any).
+func RecordedVendorOf(spec string) string {
+	name, model, hasPin := strings.Cut(strings.TrimSpace(spec), ":")
+	if _, ok := builtinAgents[name]; ok {
+		return agentVendor(name, strings.TrimSpace(model), true)
+	}
+	if hasPin {
+		if v := apiVendorOf(strings.TrimSpace(model)); v != "" {
+			return v
+		}
+	}
+	return apiVendorOf(spec)
+}
+
+// agentVendor is the one rule for an agent seat's vendor, shared by VendorOf
+// and RecordedVendorOf: the pinned model's vendor, else — when the definition
+// is the built-in's own — the maker declared on it.
+func agentVendor(name, model string, makerKnown bool) string {
+	if v := apiVendorOf(model); v != "" {
+		return v
+	}
+	if makerKnown {
+		return builtinAgents[name].maker
+	}
+	return ""
+}
+
+// apiVendorOf is the model-name prefix table: the vendor ForModel routes a
+// MODEL name to. It is deliberately agent-blind — ForModel and
+// ForModelOrLocal build API backends, and must never mistake a CLI seat for
+// one.
+func apiVendorOf(model string) string {
 	switch {
 	case hasAnyPrefix(model, "claude-", "opus-", "sonnet-", "haiku-", "fable-"):
 		return "anthropic"
@@ -799,34 +853,8 @@ func (b *anthropicBackend) Chat(messages []Message, tools []any) (Message, error
 	if err := postJSON(b.base+"/v1/messages", hdr, body, &out); err != nil {
 		return Message{}, err
 	}
-	// NORMALISED, not copied. Anthropic's three input counters are DISJOINT:
-	// `input_tokens` is the UNCACHED remainder of the prompt, and the two
-	// cache counters are the rest of that same prompt. Every other wire
-	// corral speaks reports a prompt total that already contains its cached
-	// half (OpenAI's prompt_tokens, which is also what Gemini's
-	// OpenAI-compatible endpoint sends), so copying the remainder into
-	// Usage.InputTokens would give one column two different meanings
-	// depending on which vendor sat the seat — a per-survivor Anthropic
-	// writer would look CHEAPER in tokens than a batched one purely because
-	// its prompt cached well, which is the opposite of the truth.
-	//
-	// So InputTokens is the whole prompt, every provider, and the two cache
-	// counters remain the breakdown OF it — which is what
-	// Usage.CachedInputTokens' doc says and what cost_line.go's `(N cached)`
-	// renders against.
-	in := out.Usage.InputTokens
-	if out.Usage.CacheReadInputTokens != nil {
-		in += int(*out.Usage.CacheReadInputTokens)
-	}
-	if out.Usage.CacheCreationInputTokens != nil {
-		in += int(*out.Usage.CacheCreationInputTokens)
-	}
-	res := Message{Role: "assistant", Usage: Usage{
-		InputTokens:           in,
-		OutputTokens:          out.Usage.OutputTokens,
-		CachedInputTokens:     out.Usage.CacheReadInputTokens,
-		CacheWriteInputTokens: out.Usage.CacheCreationInputTokens,
-	}}
+	res := Message{Role: "assistant", Usage: anthropicUsage(out.Usage.InputTokens, out.Usage.OutputTokens,
+		out.Usage.CacheReadInputTokens, out.Usage.CacheCreationInputTokens)}
 	for _, c := range out.Content {
 		switch c.Type {
 		case "text":
@@ -848,3 +876,39 @@ func (b *anthropicBackend) Chat(messages []Message, tools []any) (Message, error
 // bounds thinking as well as text on Claude 5 models, so it is sized for a
 // seat that reasons at length before it writes; see the note at the call.
 const anthropicMaxTokens = 32000
+
+// anthropicUsage normalises Anthropic's usage counters into a Usage. Shared
+// by every reader of an Anthropic-shaped usage block — the API backend and
+// the claude-json agent wire (Claude Code reports the same disjoint
+// counters) — so the two cannot disagree about what InputTokens means.
+//
+// NORMALISED, not copied. Anthropic's three input counters are DISJOINT:
+// `input_tokens` is the UNCACHED remainder of the prompt, and the two
+// cache counters are the rest of that same prompt. Every other wire
+// corral speaks reports a prompt total that already contains its cached
+// half (OpenAI's prompt_tokens, which is also what Gemini's
+// OpenAI-compatible endpoint sends), so copying the remainder into
+// Usage.InputTokens would give one column two different meanings
+// depending on which vendor sat the seat — a per-survivor Anthropic
+// writer would look CHEAPER in tokens than a batched one purely because
+// its prompt cached well, which is the opposite of the truth.
+//
+// So InputTokens is the whole prompt, every provider, and the two cache
+// counters remain the breakdown OF it — which is what
+// Usage.CachedInputTokens' doc says and what cost_line.go's `(N cached)`
+// renders against.
+func anthropicUsage(input, output int, cacheRead, cacheCreation *int64) Usage {
+	in := input
+	if cacheRead != nil {
+		in += int(*cacheRead)
+	}
+	if cacheCreation != nil {
+		in += int(*cacheCreation)
+	}
+	return Usage{
+		InputTokens:           in,
+		OutputTokens:          output,
+		CachedInputTokens:     cacheRead,
+		CacheWriteInputTokens: cacheCreation,
+	}
+}

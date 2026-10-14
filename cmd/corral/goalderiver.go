@@ -66,6 +66,22 @@ type llmDeriver struct {
 	b     agentbackend.Backend
 	model string
 	usage *deriveUsage
+	// budget is the run's --max-tokens cap, the SAME TokenBudget every
+	// grading seat's meteredChatter consults: consulted before each call,
+	// charged after it. nil = no cap. The deriver is a seat, and the flag
+	// promises "every seat"; it used to be the one seat the cap never saw.
+	budget *agentbackend.TokenBudget
+}
+
+// withDeriveBudget puts a deriver under the run's token cap. A deriver that
+// is not an llmDeriver (a test double, a file source) is returned as is —
+// it makes no model call for a cap to bound.
+func withDeriveBudget(d reposcan.Deriver, budget *agentbackend.TokenBudget) reposcan.Deriver {
+	if ld, ok := d.(llmDeriver); ok {
+		ld.budget = budget
+		return ld
+	}
+	return d
 }
 
 // usageReporter is implemented by a deriver that records its spend; a test
@@ -96,11 +112,17 @@ func (u *deriveUsage) add(path, model string, got agentbackend.Usage, wall time.
 		u.byPath[path] = row
 	}
 	row.Calls++
+	row.WallMillis += wall.Milliseconds()
+	if got.Unmetered {
+		// The call ran and its wire reported nothing: counted, never summed
+		// (agentbackend.Usage.Unmetered).
+		row.UnmeteredCalls++
+		return
+	}
 	row.InputTokens += int64(got.InputTokens)
 	row.OutputTokens += int64(got.OutputTokens)
 	row.CachedInputTokens = addCacheCount(row.CachedInputTokens, got.CachedInputTokens)
 	row.CacheWriteInputTokens = addCacheCount(row.CacheWriteInputTokens, got.CacheWriteInputTokens)
-	row.WallMillis += wall.Milliseconds()
 }
 
 // deriverSet is every deriver one scan built; its rows are all of theirs.
@@ -134,7 +156,7 @@ func (d llmDeriver) modelCallRows() []scanstore.ModelCall {
 // when a cloud vendor's credential is absent.
 //
 // THE SAME RULES AS EVERY GRADING SEAT (localChatterFor). This seat used to
-// call ForModelOrLocal directly, which ignores MODEL_BACKEND — so with the
+// call ForModelOrLocal directly (now ForSeat), which ignores MODEL_BACKEND — so with the
 // operator's gateway pinned (MODEL_BACKEND=openrouter, OPENAI_BASE_URL=…),
 // the three grading seats went through the gateway and the derive seat
 // dialled the vendor directly, demanding the vendor's own key and sending
@@ -149,6 +171,18 @@ func (d llmDeriver) modelCallRows() []scanstore.ModelCall {
 // the only seat that demanded a cloud vendor, against corral's own
 // local-first claim, and a summarizing task is one a local model handles.
 func newLLMDeriver(model, endpoint string) (reposcan.Deriver, error) {
+	if isAgentSeat(model) {
+		// A coding agent as the derive seat: a CLI with its own login, so
+		// neither a registry daemon nor the pinned gateway applies to it.
+		if endpoint != "" {
+			return nil, fmt.Errorf("goal deriver: the registry places the derive seat on a local daemon (%s), but %q is an agent seat that runs as a CLI — remove the endpoint, or give this seat a local model", endpoint, model)
+		}
+		b, err := agentbackend.ForSeat(model, agentbackend.SeatOptions{})
+		if err != nil {
+			return nil, fmt.Errorf("goal deriver: %w", err)
+		}
+		return newMeteredDeriver(b, model), nil
+	}
 	if endpoint != "" {
 		return newMeteredDeriver(agentbackend.NewOllamaBackend(endpoint, model), model), nil
 	}
@@ -159,7 +193,7 @@ func newLLMDeriver(model, endpoint string) (reposcan.Deriver, error) {
 		}
 		return newMeteredDeriver(base, model), nil
 	}
-	b, err := agentbackend.ForModelOrLocal(model)
+	b, err := agentbackend.ForSeat(model, agentbackend.SeatOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("goal deriver: %w", err)
 	}
@@ -181,11 +215,18 @@ const goalDeriverUserTemplate = "File: %s\nLanguage: %s\n\n%s"
 
 func (d llmDeriver) Derive(ctx context.Context, c reposcan.Candidate, source string) (string, bool, error) {
 	user := fmt.Sprintf(goalDeriverUserTemplate, c.Path, c.Lang, source)
+	// The cap, exactly as meteredChatter applies it to the grading seats:
+	// checked BEFORE the provider is dialled, so a refused call costs
+	// nothing, and charged after with whatever the reply reported.
+	if !d.budget.Allow() {
+		return "", false, agentbackend.ErrTokenBudgetExhausted
+	}
 	start := time.Now()
 	reply, err := d.b.Chat([]agentbackend.Message{
 		{Role: "system", Content: goalDeriverSystem},
 		{Role: "user", Content: user},
 	}, nil)
+	d.budget.Charge(reply.Usage)
 	if err != nil {
 		// Transport/provider failure — the caller turns this into
 		// derive-failed, never ungoaled.

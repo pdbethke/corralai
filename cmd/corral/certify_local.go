@@ -97,9 +97,9 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 	langFlag := fs.String("lang", "", "source language (default: inferred from --code extension)")
 	goal := fs.String("goal", "", "the correctness/security goal the code must satisfy (required)")
 	nMutants := fs.Int("n-mutants", 0, "PER-SEAT seeded-violation mutant budget, when you want to set the exam by hand. Unset (0), the budget is DERIVED from the file's complexity — about one fault per decision point, floor "+fmt.Sprint(advpool.BudgetFloor)+", ceiling "+fmt.Sprint(advpool.BudgetCeiling)+" — and the verdict says which rule it used. Set, it is NOT the run's total: total mutants scale with --max-shards (default "+fmt.Sprint(advpool.DefaultMaxShards)+") seats, and DOUBLE again if you name a --shadow-model. E.g. `--n-mutants 5` with 8 seats means up to ~40 full dev-suite executions; `--n-mutants 20` roughly ~320")
-	writerModel := fs.String("writer-model", "", "model for the test-writer role — REQUIRED, corral has no default models. Takes a registry alias (.corral/models.json) or a concrete model name")
-	criticModel := fs.String("critic-model", "", "model for the test-critic role, which must differ from the writer's; \"off\" disables the critic entirely (it is advisory and never gates the verdict, so a single-vendor run with only one usable model can drop it). No default")
-	mutantModel := fs.String("mutant-model", "", "model for the mutant-generator role — REQUIRED, corral has no default models. Takes a registry alias (.corral/models.json) or a concrete model name")
+	writerModel := fs.String("writer-model", "", "model for the test-writer role — REQUIRED, corral has no default models. Takes a registry alias (.corral/models.json), a concrete model name, or an agent seat (`codex`, `claude-code`, `antigravity`, or your own CORRALAI_AGENT_<NAME>)")
+	criticModel := fs.String("critic-model", "", "model (or agent seat) for the test-critic role, which must differ from the writer's; \"off\" disables the critic entirely (it is advisory and never gates the verdict, so a single-vendor run with only one usable model can drop it). No default")
+	mutantModel := fs.String("mutant-model", "", "model for the mutant-generator role — REQUIRED, corral has no default models. Takes a registry alias (.corral/models.json), a concrete model name, or an agent seat (`codex`, `claude-code`, `antigravity`, or your own CORRALAI_AGENT_<NAME>)")
 	jailFlag := fs.String("jail", "", "sandbox backend: bwrap|container (Linux), sandbox-exec (macOS) (default: auto-detect for this OS; \"none\" is not supported — --local always sandboxes). \"container\" needs CORRALAI_EXEC_IMAGE set to a toolchain image, e.g. CORRALAI_EXEC_IMAGE=python:3.12-bookworm")
 	timeout := fs.Duration("timeout", defaultRunTimeout, "WALL-CLOCK budget for the whole run, measured from its start — not a no-progress timer. A run still making steady progress is stopped when it exceeds this, and banks a needs-review TIMEOUT verdict: the dev kill rate and survivors survive (they were measured), the PROVING half does not. A file with many survivors needs room — 13 survivors measured at ~21-24 minutes — so raise it rather than lose the proofs. One in-flight LLM call can overshoot slightly, since the deadline is checked between ticks")
 	testTimeout := fs.Duration("test-timeout", 0, "hard cap on a SINGLE test-suite run in the jail (0 = auto: derived from the healthy suite's own runtime, so a mutant that makes the suite hang is killed fast instead of eating the whole --timeout). Raise it only if your suite legitimately runs long")
@@ -114,7 +114,7 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 
 	recordFlag := fs.String("record", "", "write a replayable tape of the run (the pool's reasoning beats, task lifecycle, and findings) to this JSON file — the same {events:[…]} shape the corralai.dev cockpit replays")
 	swarmFlag := fs.Int("swarm", 0, "max concurrent audit workers (0 = auto-size to this host's cores). The BUDGET clamp: independent role tasks run in parallel up to this bound, so a big audit swarms without melting the box")
-	maxTokensFlag := fs.Int64("max-tokens", 0, "cap on model TOKENS for the whole run, input + output, every seat (0 = no cap). Checked before each call and charged after it, so one in-flight call can overshoot by its own size. Once reached: a generator seat that has not run makes its file ungradable (executor-error naming the cap), a writer or critic seat is skipped and the file flagged as it is for a provider failure — the dev kill rate already measured stands. The cost line says the cap was reached and after how many calls. Corral has bounded mutants, shards and wall clock and never money; this is the money bound")
+	maxTokensFlag := fs.Int64("max-tokens", 0, "cap on model TOKENS for the whole run, input + output, every seat (0 = no cap; an agent seat that reports no token usage is refused, since the cap could not see it). Checked before each call and charged after it, so one in-flight call can overshoot by its own size. Once reached: a generator seat that has not run makes its file ungradable (executor-error naming the cap), a writer or critic seat is skipped and the file flagged as it is for a provider failure — the dev kill rate already measured stands. The cost line says the cap was reached and after how many calls. Corral has bounded mutants, shards and wall clock and never money; this is the money bound")
 	maxShardsFlag := fs.Int("max-shards", 0, "max mutant-generator seats fanned out across the file's functions (0 = "+fmt.Sprint(advpool.DefaultMaxShards)+"). Bounds PARALLELISM only — every function is probed regardless; --n-mutants is the PER-SHARD budget")
 	shadow := registerShadowSeatFlags(fs, shadowSeatHelp{
 		model:       "challenger model that attacks every region a SECOND time for a region-controlled head-to-head. OFF unless named. Recorded for comparison — NEVER gates the verdict",
@@ -340,10 +340,17 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 	// needs-review verdict included. A red run's exam is the one most worth
 	// being able to reproduce.
 	var mutantSink func(string, []adequacy.Mutant)
+	// interruptRefused: the run was stopped and refused its record, so the
+	// mutant set — partial, or empty — is not written either.
+	interruptRefused := false
 	if p := strings.TrimSpace(*recordMutantsFlag); p != "" {
 		rc := newMutantSetRecorder()
 		mutantSink = rc.sink
 		defer func() {
+			if interruptRefused {
+				fmt.Fprintln(stderr, "corral certify --local: --record-mutants not written — the run was interrupted")
+				return
+			}
 			n, werr := rc.write(p)
 			if werr != nil {
 				fmt.Fprintf(stderr, "corral certify --local: --record-mutants NOT written: %v\n", werr)
@@ -404,6 +411,15 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 		openStore:        openStore,
 		stdout:           stdout, stderr: stderr,
 	})
+	if localInterruptRefuses(err, &verdict) {
+		interruptRefused = true
+		return refuseInterrupted(stderr, "corral certify --local")
+	}
+	if operatorInterrupted(err) {
+		// Signed before the signal landed: the run is complete and recorded,
+		// and is reported as such.
+		fmt.Fprintf(stderr, "corral certify --local: interrupted after the verdict was signed (record %d) — the run is complete and recorded\n", verdict.RecordID)
+	}
 	if err != nil {
 		fmt.Fprintf(stderr, "corral certify --local: %v\n", err)
 		if isAuditUsageError(err) {
@@ -454,6 +470,10 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 // Zero values are the documented defaults throughout (see auditOneFile), so a
 // caller only sets what it actually knows.
 type localAuditInput struct {
+	// toolProbe answers each agent seat's tool and version ONCE per scan
+	// (seatToolProbe); nil probes each time it is asked, which is right for
+	// a single-file run.
+	toolProbe *seatToolProbe
 	// The subject. repoDir empty = single-file mode (codePath/testPath are
 	// filesystem paths); non-empty = repo-aware mode (they are repo-relative,
 	// the whole tree is seeded into the jail). testPath empty = the language
@@ -665,6 +685,10 @@ type localAuditInput struct {
 type localAuditError struct {
 	usage bool
 	msg   string
+	// causes are the error arguments the message was formatted from, kept so
+	// errors.Is / errors.As see through the message: an interrupt, a
+	// cancelled context or a typed refusal must survive being reported.
+	causes []error
 	// scanReason, when set, is the reposcan disposition this error deserves in
 	// a whole-repo report — see ScanReason.
 	scanReason string
@@ -672,24 +696,38 @@ type localAuditError struct {
 
 func (e localAuditError) Error() string { return e.msg }
 
+// Unwrap exposes every error the message was built from.
+func (e localAuditError) Unwrap() []error { return e.causes }
+
+// errorArgs are the arguments that are errors, in order.
+func errorArgs(a []any) []error {
+	var out []error
+	for _, v := range a {
+		if err, ok := v.(error); ok {
+			out = append(out, err)
+		}
+	}
+	return out
+}
+
 // ScanReason implements reposcan.ReasonCarrier: a repo scan asks an executor
 // error which disposition it deserves, so a precise refusal is not flattened
 // into the catch-all executor-error. Empty means "no opinion".
 func (e localAuditError) ScanReason() string { return e.scanReason }
 
 func auditUsageErr(format string, a ...any) error {
-	return localAuditError{usage: true, msg: fmt.Sprintf(format, a...)}
+	return localAuditError{usage: true, msg: fmt.Sprintf(format, a...), causes: errorArgs(a)}
 }
 
 // auditNotCollectedErr is auditUsageErr for the ONE refusal a repo scan must
 // report distinctly: the caller's test command would not run the test this
 // audit writes. It is a fact about the invocation, not a corral failure.
 func auditNotCollectedErr(format string, a ...any) error {
-	return localAuditError{usage: true, scanReason: reposcan.ReasonTestCmdCannotCollect, msg: fmt.Sprintf(format, a...)}
+	return localAuditError{usage: true, scanReason: reposcan.ReasonTestCmdCannotCollect, msg: fmt.Sprintf(format, a...), causes: errorArgs(a)}
 }
 
 func auditErr(format string, a ...any) error {
-	return localAuditError{msg: fmt.Sprintf(format, a...)}
+	return localAuditError{msg: fmt.Sprintf(format, a...), causes: errorArgs(a)}
 }
 
 // noTestFoundErr renders a reposcan.FindTest miss as the message an operator
@@ -1191,6 +1229,10 @@ type auditRoles struct {
 	// is the second (per file, per ROLE — see modelCallsFromMeters, which
 	// turns this map into the []advpool.ModelCall a Verdict carries).
 	meters map[string]*agentbackend.UsageMeter
+	// tools is each agent seat's tool and version (agentbackend.SeatTool),
+	// by role — see seatToolProbe.toolsFor. Carried to the RunSpec so the verdict's
+	// SeatTools records what sat in each seat besides its model.
+	tools map[string]string
 }
 
 // herdNotConfiguredErr refuses a run whose grading seats have no model, and
@@ -1303,11 +1345,17 @@ func resolveRoleModels(in localAuditInput) (writer, mutant, critic, shadow, shad
 // rather than being dropped: "the critic was deliberately disabled" and "the
 // critic ran" are different audits and must key differently.
 func modelSetKey(writer, mutant, critic, shadow, shadowWriter string) string {
+	return modelSetKeyWith(nil, writer, mutant, critic, shadow, shadowWriter)
+}
+
+// modelSetKeyWith is modelSetKey with the scan's tool probe, so the version
+// in the key is the version every verdict of the scan records.
+func modelSetKeyWith(probe *seatToolProbe, writer, mutant, critic, shadow, shadowWriter string) string {
 	kv := map[string]string{
-		"test-writer":      writer,
-		"mutant-generator": mutant,
-		"critic":           critic,
-		"shadow":           shadow,
+		"test-writer":      probe.keyName(writer),
+		"mutant-generator": probe.keyName(mutant),
+		"critic":           probe.keyName(critic),
+		"shadow":           probe.keyName(shadow),
 	}
 	// Omitted when off, DELIBERATELY breaking the keep-disabled-seats-in-the-key
 	// convention the other optional seats follow. The critic's on/off changes
@@ -1320,7 +1368,7 @@ func modelSetKey(writer, mutant, critic, shadow, shadowWriter string) string {
 	// enabling the challenger would hit a cached verdict, skip the run, and
 	// silently collect no measurement at all.
 	if shadowWriter != "" {
-		kv["test-writer-shadow"] = shadowWriter
+		kv["test-writer-shadow"] = probe.keyName(shadowWriter)
 	}
 	return reposcan.CanonicalKV(kv)
 }
@@ -1382,6 +1430,13 @@ func resolveAuditRoles(in localAuditInput, stderr io.Writer) (auditRoles, error)
 		fmt.Fprintf(stderr, "%s: decorrelation: test-writer (%s) and test-critic (%s) are different models from the SAME provider (%s) — the critic is an independent MODEL but not an independent VENDOR. Point one seat at another provider for a cross-vendor read.\n",
 			orDefault(in.cmdName, "corral certify --local"), writer, critic, v)
 	}
+	// The spec's other half of that disclosure: a seat whose vendor corral
+	// cannot tell makes the check above silent, and silence reads as "two
+	// vendors". Said once, naming the seat(s).
+	if seats := untellableAgentSeats(in.seatProviders, writer, critic); len(seats) > 0 {
+		fmt.Fprintf(stderr, "%s: decorrelation: the vendor of %s cannot be told — an operator-defined agent declares no maker and corral will not guess — so the same-vendor check could not compare it.\n",
+			orDefault(in.cmdName, "corral certify --local"), strings.Join(seats, " and "))
+	}
 
 	// Require a provider key for whatever the operator actually named. There
 	// are no default models, so nothing here assumes a vendor: the backend a
@@ -1400,11 +1455,11 @@ func resolveAuditRoles(in localAuditInput, stderr io.Writer) (auditRoles, error)
 	// every seat at one endpoint on purpose and is never overruled.
 	if backendSel == "" {
 		if vendor, model := soleAssignedCloudModel(assign); vendor != "" {
-			// ForModel is the single source of truth for which credential a
+			// ForSeat (which defers to ForModel for a cloud name) is the single source of truth for which credential a
 			// model needs, and its error already names the right variable —
 			// so this both validates the key and refuses with an actionable
 			// message, before any jail or store is opened.
-			if _, err := agentbackend.ForModel(model); err != nil {
+			if _, err := agentbackend.ForSeat(model, agentbackend.SeatOptions{}); err != nil {
 				return r, auditUsageErr("%v", err)
 			}
 			backendSel = backendForVendor(vendor)
@@ -1419,7 +1474,7 @@ func resolveAuditRoles(in localAuditInput, stderr io.Writer) (auditRoles, error)
 			// key" about a run with no Claude in it anywhere the operator
 			// could see, which describes a configuration they never chose.
 			if sm := strings.TrimSpace(assign[advpool.RoleMutantGeneratorShadow]); sm != "" && agentbackend.VendorOf(sm) != vendor {
-				if _, err := agentbackend.ForModel(sm); err != nil {
+				if _, err := agentbackend.ForSeat(sm, agentbackend.SeatOptions{}); err != nil {
 					return r, auditUsageErr("the challenger seat (--shadow-model) is %q, a different vendor from this run's graded %s seats, and %v. It only records a comparison and never gates the verdict — pass --shadow-model off to drop it, or give it a %s model", sm, vendor, err, vendor)
 				}
 			}
@@ -1449,7 +1504,7 @@ func resolveAuditRoles(in localAuditInput, stderr io.Writer) (auditRoles, error)
 		return r, auditUsageErr("%v", err)
 	}
 
-	return auditRoles{assign: assign, shadow: shadow, shadowWriter: shadowWriter, writer: writer, mutant: mutant, critic: critic, chatterFor: chatterFor, meters: meters}, nil
+	return auditRoles{assign: assign, shadow: shadow, shadowWriter: shadowWriter, writer: writer, mutant: mutant, critic: critic, chatterFor: chatterFor, meters: meters, tools: in.toolProbe.toolsFor(assign)}, nil
 }
 
 // runSubject is the FILE-and-repo half of a RunSpec: everything
@@ -1591,6 +1646,7 @@ func newAuditRunSpec(in localAuditInput, roles auditRoles, subj runSubject) advp
 		ShadowModel:       roles.shadow,
 		ShadowWriterModel: roles.shadowWriter,
 		ShadowSelection:   in.shadowSelection,
+		SeatTools:         roles.tools,
 		// HOW the writer attacks. The CLI's default is per-survivor; an
 		// EMPTY value here means batched, which is what a caller outside the
 		// CLI (the brain, a test) gets — see RunSpec.WriterMode.
@@ -1716,7 +1772,7 @@ func auditOneFile(ctx context.Context, in localAuditInput) (advpool.Verdict, err
 		if serr != nil {
 			return zero, auditErr("%v", serr)
 		}
-		d.Signer = advpool.CertSigner{Key: k, Store: st, Witness: nil}
+		d.Signer = interruptGuardSigner{advpool.CertSigner{Key: k, Store: st, Witness: nil}}
 	}
 	d.Enumerator = jailEnum
 	// --record-mutants: nil leaves the driver recording nothing, which is
@@ -1931,7 +1987,7 @@ func auditOneFile(ctx context.Context, in localAuditInput) (advpool.Verdict, err
 
 	renderAdvVerdict(stdout, in.codePath, advVerdictFromPool(*verdict))
 	renderModelSpend(stdout, verdict.ModelCalls)
-	if line := budgetLine(in.tokenBudget); line != "" {
+	if line := budgetLine(in.tokenBudget, 0); line != "" {
 		fmt.Fprintln(stdout, line)
 	}
 
@@ -2572,7 +2628,7 @@ func advVerdictFromPool(v advpool.Verdict) advVerdict {
 		DevKillRate: v.DevKillRate, MutantsTotal: v.MutantsTotal,
 		MutantsInvalid: v.MutantsInvalid,
 		Survivors:      v.Survivors, ProvenMissed: v.ProvenMissed,
-		ModelsByRole: v.ModelsByRole, Status: v.Status,
+		ModelsByRole: v.ModelsByRole, SeatTools: v.SeatTools, Status: v.Status,
 		RecordID: v.RecordID, RecordHead: v.RecordHead,
 		RegionsTotal: v.RegionsTotal, RegionsProbed: v.RegionsProbed,
 		DroppedRegions:   v.DroppedRegions,

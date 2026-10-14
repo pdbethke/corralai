@@ -183,10 +183,10 @@ func TestMaxTokensIsOneCapAcrossSeats(t *testing.T) {
 	if got := atomic.LoadInt32(&hits); got != 2 {
 		t.Fatalf("daemon hit %d times, want 2 — the refused call must not be dialled", got)
 	}
-	if line := budgetLine(budget); !strings.Contains(line, "REACHED after 2 call(s) at 1.4k tokens") {
+	if line := budgetLine(budget, 0); !strings.Contains(line, "REACHED after 2 call(s) at 1.4k tokens") {
 		t.Errorf("budget line = %q", line)
 	}
-	if budgetLine(nil) != "" {
+	if budgetLine(nil, 0) != "" {
 		t.Error("no cap must print nothing")
 	}
 }

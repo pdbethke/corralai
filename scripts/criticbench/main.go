@@ -14,7 +14,9 @@
 //
 // A model name agentbackend.VendorOf recognises goes to that cloud vendor
 // (and spends money, against that vendor's key); anything else is served by
-// the local ollama daemon.
+// the local ollama daemon. An AGENT seat (-model codex, -model
+// claude-code:claude-sonnet-5) is resolved through agentbackend.ForSeat and
+// runs that CLI, on the operator's own login.
 package main
 
 import (
@@ -196,7 +198,7 @@ func main() {
 	}
 	backend := agentbackend.NewOllamaBackend(*url, *model)
 	if agentbackend.VendorOf(*model) != "" {
-		b, err := agentbackend.ForModel(*model)
+		b, err := agentbackend.ForSeat(*model, agentbackend.SeatOptions{})
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "criticbench:", err)
 			os.Exit(2)

@@ -55,9 +55,12 @@ type advVerdict struct {
 	// short, so VacuousFindings is a lower bound, not the whole list.
 	CriticIncomplete bool              `json:"critic_incomplete,omitempty"`
 	ModelsByRole     map[string]string `json:"ModelsByRole"`
-	Status           string            `json:"Status"`
-	RecordID         int64             `json:"RecordID"`
-	RecordHead       string            `json:"RecordHead"`
+	// SeatTools mirrors advpool.Verdict.SeatTools: each agent seat's tool
+	// and version, printed beside its spec on the models line.
+	SeatTools  map[string]string `json:"seat_tools,omitempty"`
+	Status     string            `json:"Status"`
+	RecordID   int64             `json:"RecordID"`
+	RecordHead string            `json:"RecordHead"`
 	// TestWriterFailed mirrors advpool.Verdict.TestWriterFailed: true when the
 	// pool exhausted its compile-retry budget without authoring a compiling
 	// killing test. See renderAdvVerdict for the honest readout this drives.
@@ -589,7 +592,7 @@ func renderAdvVerdict(w io.Writer, codePath string, v advVerdict) {
 		// record. Label them so no one mistakes an LLM's say-so for proof.
 		fmt.Fprintf(w, "  critic review: %d test(s) flagged — UNVERIFIED (a second model's opinion, not execution-proven; check before acting)\n", len(v.VacuousFindings))
 	}
-	fmt.Fprintf(w, "  models:        %s\n", formatModels(v.ModelsByRole))
+	fmt.Fprintf(w, "  models:        %s\n", formatModels(v.ModelsByRole, v.SeatTools))
 	if vendor := soleGradedVendor(v.ModelsByRole); vendor != "" {
 		// The fourth participant (#104). CheckDecorrelation keeps corral's own
 		// three seats apart and knows nothing about whatever WROTE the code
@@ -629,7 +632,7 @@ func renderAdvVerdict(w io.Writer, codePath string, v advVerdict) {
 }
 
 // formatModels renders ModelsByRole deterministically (sorted by role).
-func formatModels(m map[string]string) string {
+func formatModels(m, tools map[string]string) string {
 	if len(m) == 0 {
 		return "(none recorded)"
 	}
@@ -640,7 +643,9 @@ func formatModels(m map[string]string) string {
 	sort.Strings(roles)
 	parts := make([]string, 0, len(roles))
 	for _, r := range roles {
-		parts = append(parts, r+"="+m[r])
+		// An agent seat reads `spec [tool]`, exactly as review prints its
+		// seats (toolNote).
+		parts = append(parts, r+"="+m[r]+toolNote(tools[r]))
 	}
 	return strings.Join(parts, "  ")
 }

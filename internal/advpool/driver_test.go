@@ -1782,6 +1782,33 @@ func TestCheckDecorrelation(t *testing.T) {
 	}
 }
 
+// An agent seat is compared as the model it runs: a pinned codex seat is a
+// different seat from an unpinned one, two unpinned ones are the same tool.
+func TestCheckDecorrelation_AgentSeats(t *testing.T) {
+	if err := CheckDecorrelation(RoleAssignment{RoleTestWriter: "codex:gpt-6-astra", RoleTestCritic: "codex"}); err != nil {
+		t.Fatalf("codex + codex:gpt-6-astra are different seats, got %v", err)
+	}
+	if err := CheckDecorrelation(RoleAssignment{RoleTestWriter: "codex", RoleTestCritic: "codex"}); err == nil {
+		t.Fatal("codex + codex must be refused")
+	}
+	if err := CheckDecorrelation(RoleAssignment{RoleTestWriter: "codex:gpt-6-astra", RoleTestCritic: "claude-code:gpt-6-astra"}); err == nil {
+		t.Fatal("two agents pinned to the same model must be refused")
+	}
+}
+
+// The same seat spelled in another case is the same seat, at this door as at
+// review's: both go through agentbackend.SameSeat.
+func TestCheckDecorrelation_IgnoresCase(t *testing.T) {
+	t.Setenv("CORRALAI_AGENT_MINE", "/bin/cat {model:--model}")
+	if err := CheckDecorrelation(RoleAssignment{RoleTestWriter: "MINE", RoleTestCritic: "mine"}); err == nil {
+		t.Fatal("MINE + mine are one agent and must be refused")
+	}
+	// review always folded case here; certify compared with ==.
+	if err := CheckDecorrelation(RoleAssignment{RoleTestWriter: "mine:Model-X", RoleTestCritic: "mine:model-x"}); err == nil {
+		t.Fatal("one model spelled in two cases must be refused, as review refuses it")
+	}
+}
+
 // TestCheckDecorrelation_ShadowModelNeverParticipates proves the shadow
 // (challenger) seat cannot trip the decorrelation guard, in either direction:
 // CheckDecorrelation only ever reads assign[RoleTestCritic] and

@@ -155,18 +155,44 @@ def cost_line(calls, path=None):
         (c for c in scoped if c.get("calls", 0) > 0),
         key=lambda c: ROSTER_ROLE_ORDER.index(c["role"]) if c["role"] in ROSTER_ROLE_ORDER else len(ROSTER_ROLE_ORDER),
     )
-    total_in = sum(c["input_tokens"] for c in ordered)
-    total_out = sum(c["output_tokens"] for c in ordered)
+    # Mirrors costLine's NOT METERED rule: a row with no token count (null or
+    # absent total) or whose every call was unmetered prints "not metered",
+    # never "0/0"; the totals sum the metered rows only and say how many calls
+    # they leave out.
+    def unmetered_row(c):
+        return (
+            c.get("input_tokens") is None
+            or c.get("output_tokens") is None
+            or (c["calls"] > 0 and c.get("unmetered_calls", 0) >= c["calls"])
+        )
+
+    metered = [c for c in ordered if not unmetered_row(c)]
+    total_in = sum(c["input_tokens"] for c in metered)
+    total_out = sum(c["output_tokens"] for c in metered)
     total_calls = sum(c["calls"] for c in ordered)
     if total_calls == 0:
         return ""
-    parts = [
-        f"{c['role']} {abbreviate_tokens(c['input_tokens'])}/{abbreviate_tokens(c['output_tokens'])} ({c['calls']} call{plural_s(c['calls'])})"
-        for c in ordered
-    ]
+    unmetered_calls = sum(
+        c["calls"] if unmetered_row(c) else c.get("unmetered_calls", 0) for c in ordered
+    )
+    parts = []
+    for c in ordered:
+        n = c["calls"]
+        if unmetered_row(c):
+            parts.append(f"{c['role']} not metered ({n} call{plural_s(n)})")
+            continue
+        note = f", {c['unmetered_calls']} not metered" if c.get("unmetered_calls", 0) > 0 else ""
+        parts.append(
+            f"{c['role']} {abbreviate_tokens(c['input_tokens'])}/{abbreviate_tokens(c['output_tokens'])} ({n} call{plural_s(n)}{note})"
+        )
+    um = f"{unmetered_calls} call{plural_s(unmetered_calls)} not metered" if unmetered_calls else ""
+    if not metered:
+        return f"cost: {um} — " + ", ".join(parts)
     return (
         f"cost: {abbreviate_tokens(total_in)} tokens in / {abbreviate_tokens(total_out)} out "
-        f"across {total_calls} call{plural_s(total_calls)} — " + ", ".join(parts)
+        f"across {total_calls - unmetered_calls} call{plural_s(total_calls - unmetered_calls)}"
+        + (f" + {um}" if um else "")
+        + " — " + ", ".join(parts)
     )
 
 

@@ -346,6 +346,10 @@ var reports = map[string]string{
 	"findings": `SELECT kind, count(*) AS n FROM events WHERE kind LIKE 'finding%' GROUP BY kind ORDER BY n DESC`,
 	"replans":  `SELECT kind, count(*) AS n FROM events WHERE kind IN ('task_superseded','task_cancelled','task_reopened') GROUP BY kind ORDER BY n DESC`,
 	"sprints":  `SELECT kind, count(*) AS n FROM events WHERE kind IN ('review_accepted','review_changes') GROUP BY kind ORDER BY n DESC`,
+	// model_comparison reads the frozen brain's own events (finding_reported /
+	// finding_resolved). certify and review never write to this table, so an
+	// agent seat — pinned or not — cannot appear here, and it deliberately
+	// does not apply seatrecord.ResolvedOnly.
 	"model_comparison": `WITH rep AS (
   SELECT COALESCE(NULLIF(model,''),'(no model)') AS model,
     count(*) AS findings,

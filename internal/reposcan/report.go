@@ -476,7 +476,7 @@ func Aggregate(owner, repo, commit string, totalFiles, candidates int, results [
 	// Excluded, and AuditedFraction already carries it in the denominator.
 	for _, e := range excl {
 		switch e.Reason {
-		case ReasonUngoaled, ReasonDeriveFailed, ReasonSourceTooLarge:
+		case ReasonUngoaled, ReasonDeriveFailed, ReasonSourceTooLarge, ReasonDeriveBudgetExhausted:
 			rep.Ungradable[e.Reason]++
 		}
 	}

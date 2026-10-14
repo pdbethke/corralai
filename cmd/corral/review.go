@@ -19,6 +19,7 @@ import (
 	"github.com/pdbethke/corralai/internal/agentbackend"
 	"github.com/pdbethke/corralai/internal/auditpush"
 	"github.com/pdbethke/corralai/internal/certify"
+	"github.com/pdbethke/corralai/internal/clip"
 	"github.com/pdbethke/corralai/internal/review"
 )
 
@@ -102,7 +103,7 @@ func reviewFlagSet(out io.Writer) (*flag.FlagSet, *reviewFlags) {
 	f := &reviewFlags{}
 	fs.StringVar(&f.repoDir, "repo", ".", "the checkout to review (a git repository at a commit)")
 	fs.StringVar(&f.scope, "scope", "", "the directory or file under --repo to review (required)")
-	fs.StringVar(&f.model, "reviewer-model", "", "the reviewer seat — an alias from the registry, a provider model name, or an AGENTIC seat: an agent NAME, pinned to a model as `<name>:<model>`. `claude-code` and `codex` are defined; ANY agent is defined the same way as CORRALAI_AGENT_<NAME>=\"<command line>\" ({dir} the worktree, {out} a reply file, {model} / {model:FLAG} the pin; the brief on stdin, the reply on stdout). An agentic seat is a coding agent started in a disposable copy of the repository: it reads the whole scope itself (no --max-bytes cap) and hands back scripts, which corral runs — nothing it did itself is on the record. Required; corral has no default models")
+	fs.StringVar(&f.model, "reviewer-model", "", "the reviewer seat — an alias from the registry, a provider model name, or an AGENTIC seat: an agent NAME, pinned to a model as `<name>:<model>`. `claude-code`, `codex` and `antigravity` are defined; ANY agent is defined the same way as CORRALAI_AGENT_<NAME>=\"<command line>\" ({dir} the worktree, {out} a reply file, {model} / {model:FLAG} the pin; the brief on stdin, the reply on stdout). An agentic seat is a coding agent started in a disposable copy of the repository: it reads the whole scope itself (no --max-bytes cap) and hands back scripts, which corral runs — nothing it did itself is on the record. Required; corral has no default models")
 	fs.StringVar(&f.verifier, "verifier-model", "", "a VERIFIER seat, adversarial to the reviewer: a different model that tries to refute every finding, by the same rules — a REPRODUCED refutation (a sh script that exits 0 iff the refutation is demonstrated) that holds demotes the finding on the record; a CODE-READ refutation is carried as opinion; a search that finds nothing is never a refutation. Must not be the reviewer's model. Off unless named")
 	fs.StringVar(&f.ledger, "ledger", "", "the ledger directory the review entry is written to (default: <repo>/.corral/ledger, or $CORRAL_LEDGER)")
 	fs.StringVar(&f.attest, "attest", "", "write an in-toto statement (predicate https://corralai.dev/review/v1) to this path, and its DSSE envelope beside it when a certify key is configured: the REPRODUCTIONS — every finding's declared and recorded tier, the hash of its script and output, its exit, the verifier's refutation on the same terms — signed; the opinion bound by its hash and not carried. The ledger entry then names the statement. `corral verify --attest <path> --db <ledger dir>` recomputes the reproductions' hash from the entry")
@@ -152,8 +153,8 @@ func runReviewRun(args []string, stdout, stderr io.Writer) int {
 	// The decorrelation rule, the same one the writer and the critic live
 	// under: a verifier that is the reviewer's own model would grade its
 	// own work. Checked before anything is spent.
-	if strings.TrimSpace(*verifier) != "" && strings.EqualFold(seatModelOf(*verifier), seatModelOf(*model)) {
-		fmt.Fprintf(stderr, "corral review: --verifier-model %s resolves to the reviewer's own model %s — the verifier must be a different one (nemo iudex in causa sua)\n", *verifier, seatModelOf(*model))
+	if strings.TrimSpace(*verifier) != "" && agentbackend.SameSeat(*verifier, *model) {
+		fmt.Fprintf(stderr, "corral review: --verifier-model %s resolves to the reviewer's own model %s — the verifier must be a different one (nemo iudex in causa sua)\n", *verifier, agentbackend.SeatModelOf(*model))
 		return 2
 	}
 	// The worktrees first: one for an agentic seat to read (it is never
@@ -168,12 +169,13 @@ func runReviewRun(args []string, stdout, stderr io.Writer) int {
 	defer seatCleanup()
 	agentTimeout := 30 * time.Minute
 	seat := func(spec string) (agentbackend.Backend, string, error) {
-		if b, isAgent, err := newAgentSeat(spec, seatTree, agentTimeout); isAgent {
+		if _, _, isAgent := agentbackend.AgentSeat(spec); isAgent {
+			b, err := agentbackend.ForSeat(spec, agentbackend.SeatOptions{Dir: seatTree, Timeout: agentTimeout, Tools: reviewSeatTools})
 			if err != nil {
 				return nil, "", err
 			}
-			name, _, _ := agentSeat(spec)
-			return b, agentVersion(name), nil
+			// The same helper certify's Verdict.SeatTools is built with.
+			return b, agentbackend.SeatTool(spec), nil
 		}
 		b, err := newReviewerBackend(spec, "")
 		return b, "", err
@@ -191,8 +193,8 @@ func runReviewRun(args []string, stdout, stderr io.Writer) int {
 			return 2
 		}
 	}
-	_, _, reviewerIsAgent := agentSeat(*model)
-	_, _, verifierIsAgent := agentSeat(*verifier)
+	_, _, reviewerIsAgent := agentbackend.AgentSeat(*model)
+	_, _, verifierIsAgent := agentbackend.AgentSeat(*verifier)
 
 	sc, err := review.LoadScope(root, *scope, *maxBytes)
 	if err != nil {
@@ -222,10 +224,10 @@ func runReviewRun(args []string, stdout, stderr io.Writer) int {
 	// CLI pick its own model and never tells us which, so the row cannot
 	// carry a per-model comparison — and that is unrecoverable afterwards.
 	var unpinned []string
-	if !seatNamesAModel(*model) {
+	if !agentbackend.SeatNamesAModel(*model) {
 		unpinned = append(unpinned, "--reviewer-model "+*model)
 	}
-	if verifierBackend != nil && !seatNamesAModel(*verifier) {
+	if verifierBackend != nil && !agentbackend.SeatNamesAModel(*verifier) {
 		unpinned = append(unpinned, "--verifier-model "+*verifier)
 	}
 	if len(unpinned) > 0 {
@@ -237,7 +239,7 @@ func runReviewRun(args []string, stdout, stderr io.Writer) int {
 
 	r := review.Review{Repo: repoName, Commit: commit, Author: party.Author, Committer: party.Committer, CoAuthors: party.CoAuthors,
 		Scope: *scope, ReviewerModel: *model, ReviewerTool: reviewerTool, Lang: langOfScope(allFiles),
-		ReviewerModelResolved: seatNamesAModel(*model),
+		ReviewerModelResolved: agentbackend.SeatNamesAModel(*model),
 		Substrate:             "workspace (a detached worktree at the commit; not a jail)", StartedAt: time.Now().UTC(),
 		FilesShown: sc.Files, BytesShown: sc.Bytes, Truncated: sc.Truncated}
 	userTurn := review.Brief(repoName, commit, *scope, sc)
@@ -249,11 +251,14 @@ func runReviewRun(args []string, stdout, stderr io.Writer) int {
 		{Role: "system", Content: review.BriefSystem},
 		{Role: "user", Content: userTurn},
 	}, nil)
+	if operatorInterrupted(err) {
+		return refuseInterrupted(stderr, "corral review")
+	}
 	if err != nil {
 		fmt.Fprintf(stderr, "corral review: the reviewer seat failed: %v\n", err)
 		return 1
 	}
-	r.InputTokens, r.OutputTokens = int64(reply.Usage.InputTokens), int64(reply.Usage.OutputTokens)
+	addReviewUsage(&r, reply.Usage)
 	opinion, findings, sound, perr := review.Parse(reply.Content)
 	if perr != nil {
 		fmt.Fprintf(stderr, "corral review: %v\n--- the reply, verbatim ---\n%s\n", perr, reply.Content)
@@ -284,36 +289,58 @@ func runReviewRun(args []string, stdout, stderr io.Writer) int {
 			{Role: "system", Content: review.VerifierBriefSystem},
 			{Role: "user", Content: vturn},
 		}, nil)
+		if operatorInterrupted(verr) {
+			// Not "recorded unverified": the operator stopped the run, and
+			// a signed entry (and a push) for it would record a review
+			// nobody finished.
+			return refuseInterrupted(stderr, "corral review")
+		}
+		if verr == nil {
+			// The call answered, so it was made and spent, whether or not
+			// its reply parses below: an unverified review must not read
+			// cheaper than it was.
+			addReviewUsage(&r, vreply.Usage)
+		}
 		if verr != nil {
 			fmt.Fprintf(stderr, "corral review: the verifier seat failed: %v — the review is recorded unverified\n", verr)
 		} else if vopinion, refs, perr := review.ParseRefutations(vreply.Content, *verifier); perr != nil {
 			fmt.Fprintf(stderr, "corral review: %v — the review is recorded unverified\n--- the reply, verbatim ---\n%s\n", perr, vreply.Content)
 		} else {
-			r.InputTokens += int64(vreply.Usage.InputTokens)
-			r.OutputTokens += int64(vreply.Usage.OutputTokens)
 			// A verifier that answered with no verdict on any finding has
 			// not verified anything, and the record must not read as if
 			// it had: its reply is kept, marked, and every finding is
 			// graded as unverified.
 			if len(refs) == 0 && len(r.Findings) > 0 {
-				vopinion = "(the verifier returned no verdicts on any finding; its reply, verbatim: " + tail(vreply.Content, 2000) + ")"
+				vopinion = "(the verifier returned no verdicts on any finding; its reply, verbatim: " + clip.Tail(vreply.Content, 2000) + ")"
 				fmt.Fprintf(stderr, "corral review: the verifier %s returned no verdict on any of %d finding(s) — the review is recorded with its reply, unverified\n", *verifier, len(r.Findings))
 			}
 			r.VerifierTool = verifierTool
-			r.VerifierModelResolved = seatNamesAModel(*verifier)
+			r.VerifierModelResolved = agentbackend.SeatNamesAModel(*verifier)
 			review.Verify(context.Background(), rep, &r, *verifier, vopinion, refs)
 		}
 	}
 
+	// A signal can land after the last seat answered; the writes below would
+	// then record a review the operator stopped.
+	if operatorInterrupted(nil) {
+		return refuseInterrupted(stderr, "corral review")
+	}
 	printReview(stdout, r, nil)
 
 	// The statement first: it signs the reproductions; the entry, written
 	// after, names it. Fail-open like every write after a measurement.
+	// statementFiles are what it wrote, removed if an interrupt lands before
+	// the entry, so "nothing recorded" stays true.
+	var statementFiles []string
 	if p := strings.TrimSpace(*attest); p != "" {
 		sha, envPath, signErr, aerr := writeReviewStatement(p, r)
 		if aerr != nil {
 			fmt.Fprintf(stderr, "corral review: writing the statement to %s: %v\n", p, aerr)
 		} else {
+			statementFiles = append(statementFiles, p)
+			if signErr == nil {
+				statementFiles = append(statementFiles, envPath)
+			}
 			r.StatementSHA256 = sha
 			// "signed" is said only for an envelope THIS run wrote. It used
 			// to be decided by stat-ing the envelope path, so a leftover
@@ -355,6 +382,9 @@ func runReviewRun(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "corral review: no entry written to %s: %v\n", ledgerDir, kerr)
 		return 1
 	}
+	if operatorInterrupted(nil) {
+		return refuseInterruptedAfter(stderr, "corral review", statementFiles)
+	}
 	name, werr := auditpush.WriteReview(ledgerDir, r, signer)
 	if werr != nil {
 		fmt.Fprintf(stderr, "corral review: writing the entry to %s: %v\n", ledgerDir, werr)
@@ -369,6 +399,12 @@ func runReviewRun(args []string, stdout, stderr io.Writer) int {
 	// The push, last and fail-open, like certify's: the same entry's rows
 	// into a warehouse, keyed by the entry's hash.
 	if p := strings.TrimSpace(*push); p != "" && last.Kind == auditpush.KindReview {
+		if operatorInterrupted(nil) {
+			// The entry above is written; the push is not, and the run says
+			// exactly that — never "nothing recorded".
+			fmt.Fprintf(stderr, "corral review: interrupted — the entry %s was written to %s, and it was NOT pushed to %s\n", name, ledgerDir, p)
+			return exitInterrupted
+		}
 		if c, perr := auditpush.PushReviewEntry(p, last, f.pushSource); perr != nil {
 			fmt.Fprintf(stderr, "corral review: pushing to %s: %v\n", p, perr)
 		} else {
@@ -389,15 +425,22 @@ func seatBackend(model, endpoint string) (agentbackend.Backend, error) {
 	if endpoint != "" {
 		return agentbackend.NewOllamaBackend(endpoint, model), nil
 	}
-	if v := agentbackend.VendorOf(model); v != "" && backendPinned() && (baseVendor() == "" || baseVendor() == v) {
+	if v := agentbackend.VendorOf(model); v != "" && !isAgentSeat(model) && backendPinned() && (baseVendor() == "" || baseVendor() == v) {
 		base := agentbackend.FromEnv()
 		if sw, ok := base.(agentbackend.ModelSwitcher); ok {
 			return sw.WithModel(model), nil
 		}
 		return base, nil
 	}
-	return agentbackend.ForModelOrLocal(model)
+	// ForSeat defers to ForModelOrLocal for a non-agent name, so the local
+	// fallback is kept; an agent spec never reaches here (seat() takes it).
+	return agentbackend.ForSeat(model, agentbackend.SeatOptions{})
 }
+
+// reviewSeatTools are the tools an agent seat in review is granted: it reads
+// the tree, so it may read, search and list it — and nothing else. A
+// certify seat is granted none; its prompt carries the code.
+var reviewSeatTools = []string{"Read", "Grep", "Glob"}
 
 // worktreeReproducer runs a script in a detached git worktree at the
 // commit. The operator's checkout is never the subject: a model-written
@@ -433,7 +476,24 @@ func newWorktreeReproducer(root, commit string, timeout time.Duration) (review.R
 	return worktreeReproducer{runner: adequacy.NewWorkspaceRunner(tree, timeout, adequacy.WithWorkspaceMaxOutput(64<<10))}, cleanup, nil
 }
 
-// toolNote renders an agentic seat's tool version beside its name.
+// addReviewUsage folds one seat's reply into the review's record: counted
+// always, its tokens summed only when its wire reported them. review has no
+// --max-tokens, so an unmetered seat is not refused here; it is recorded as
+// not metered instead of as a call that cost nothing.
+func addReviewUsage(r *review.Review, u agentbackend.Usage) {
+	r.Calls++
+	if u.Unmetered {
+		r.UnmeteredCalls++
+		return
+	}
+	r.InputTokens += int64(u.InputTokens)
+	r.OutputTokens += int64(u.OutputTokens)
+}
+
+// toolNote renders an agentic seat's tool version beside its name. certify's
+// models line and its verdict cache key (seatToolProbe.keyName, via
+// modelSetKeyWith) spell a seat the same
+// way.
 func toolNote(v string) string {
 	if v == "" {
 		return ""
@@ -573,13 +633,6 @@ func printReview(w io.Writer, r review.Review, adj map[string]auditpush.Adjudica
 // an envelope that does not belong to this statement must not survive it.
 func writeReviewStatement(path string, r review.Review) (sha, envPath string, signErr, err error) {
 	return writeStatement(path, certify.BuildReviewAttestation(r))
-}
-
-func tail(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return "…" + s[len(s)-n:]
 }
 
 func indent(s string) string {

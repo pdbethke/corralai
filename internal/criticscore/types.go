@@ -34,6 +34,12 @@ type Finding struct {
 	// (see Store.Adjudicate); when present it is what lets a reader tell a
 	// considered judgment from a careless one.
 	Rationale string
+	// SeatTool is the critic seat's agent tool and version, "" for an API
+	// seat. ModelUnresolved says Model names that tool, not a model (an
+	// unpinned agent seat); Precision leaves such a finding out
+	// (seatrecord.ResolvedOnly).
+	SeatTool        string
+	ModelUnresolved bool
 }
 
 // CriticCell is one row of the per-model precision rollup: how often a

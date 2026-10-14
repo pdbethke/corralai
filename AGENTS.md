@@ -188,17 +188,38 @@ claim. We run Claude; we do not make anyone else.
 when on. It used to default to a Claude model and be on, which quietly kept an
 Anthropic seat alive through an otherwise all-Gemini run.
 
-**`review` can run on a SUBSCRIPTION; `certify` cannot.** `cmd/corral/review_agent.go`
-drives agentic CLIs as seats — `claude-code`, `codex`, `antigravity` — in
-`agent:model` form (`--reviewer-model codex:gpt-6-astra`, or a bare `codex` for
-the tool's default model). Those bring their own auth, so a review round costs
-nothing per token on a Pro/Max/Plus plan. `certify --local` / `--repo` resolve
-seats through `internal/agentbackend` instead, which knows only **anthropic,
-openai, gemini, ollama, openrouter** — all key-based. So "run it on the
-subscription we already pay for" is true of `review` and NOT of `certify`, and
-the Pro/Max line in `docs/corral/brain.md` is about the (frozen) brain's harness. `ollama` is
-`MODEL_BACKEND`'s default and is local and free, which is the zero-cost way to
-run `certify` seats.
+**Any seat can run on a SUBSCRIPTION, through one resolver.** `agentbackend.ForSeat`
+(`internal/agentbackend/agentseat.go`) resolves every CLI seat — `certify`,
+`demo`, `doctor`, goal derivation, shadow seats and `review` — either to a
+coding-agent CLI in `agent:model` form (`--writer-model codex`,
+`--reviewer-model claude-code:claude-sonnet-5`, a bare name for the tool's
+default model) or to an API model. `claude-code`, `codex` and `antigravity`
+come defined; any other agent is the operator's own, defined as
+`CORRALAI_AGENT_<NAME>="<command line>"` with an optional
+`CORRALAI_AGENT_<NAME>_WIRE` (`claude-json`, `codex-jsonl`, `text`). The agent
+brings its own auth, so a seat costs nothing per token on a Pro/Max/Plus plan
+— a run with no API key in the environment was executed for `claude-code` and
+`codex` only (2026-10-13); `antigravity` was not measured.
+Three properties are deliberate. Seats **start cold**: the built-in `claude-code`
+definition loads no settings sources, MCP servers, skills or session file (a
+one-line prompt measured 561 input tokens, against about 108,740 with no flags),
+so an audit never sees the operator's own CLAUDE.md or memory. They are
+**metered by their wire**, not by their name: `claude-json` and `codex-jsonl`
+report tokens, and a `text` seat (antigravity, or any definition that
+declares no wire) prints `not metered` and is refused under `--max-tokens`,
+because a cap that cannot see a seat is not a cap. And an environment failure
+is a seat-environment failure, never charged to the model: a missing binary
+(refused by `ForSeat` before anything runs), claude's `is_error` /
+`terminal_reason`, codex's `error` / `turn.failed`. A subscription limit has
+not yet been observed on either CLI, and a `text` wire cannot tell a limit
+notice from a reply (`docs/corral/agent-seats.md`). The agent CLI inherits
+corral's environment, so an exported vendor API key may bill instead of the
+subscription; and `codex`'s read-only sandbox still lets it read the host. (This paragraph said `review` could run on
+a subscription and `certify` could not, and pointed at
+`cmd/corral/review_agent.go`, which no longer exists. The brain's Pro/Max line in
+`docs/corral/brain.md` is a separate thing: that is the frozen brain's harness.)
+`ollama` is `MODEL_BACKEND`'s default and is local and free, the other
+zero-cost way to run seats.
 
 **A key alone does not move providers.** Each role resolves its own backend from
 its own model name; a Gemini model name with only an Anthropic key configured is

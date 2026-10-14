@@ -221,6 +221,22 @@ func TestReviewVerifierSeatRefutesByReproductionAndIsDecorrelated(t *testing.T) 
 	}
 }
 
+// The verifier rule is the same comparison certify's critic rule uses
+// (agentbackend.SameSeat): an agent named in another case is the same agent.
+func TestReviewRefusesAVerifierThatIsTheReviewerInAnotherCase(t *testing.T) {
+	root := t.TempDir()
+	gitRun := gitCmd(t, root)
+	mustWrite(t, filepath.Join(root, "pkg", "a.go"), "package pkg\n")
+	gitRun("init", "-q")
+	gitRun("add", ".")
+	gitRun("commit", "-q", "-m", "base", "--no-gpg-sign")
+	t.Setenv("CORRALAI_AGENT_MINE", "/bin/cat {model:--model}")
+	var out, errb bytes.Buffer
+	if code := runReview([]string{"--repo", root, "--scope", "pkg", "--reviewer-model", "MINE", "--verifier-model", "mine", "--no-ledger"}, &out, &errb); code != 2 || !strings.Contains(errb.String(), "reviewer's own model") {
+		t.Fatalf("MINE + mine must be refused as one seat: exit %d %s", code, errb.String())
+	}
+}
+
 // TestReviewAttestSignsTheReproductionsAndTheEntryNamesTheStatement:
 // --attest writes the in-toto statement and its DSSE envelope, the entry
 // written after it carries the statement's hash, `corral verify --attest
@@ -339,6 +355,55 @@ func TestReviewSaysWhenTheVerifierReturnedNoVerdicts(t *testing.T) {
 	}
 }
 
+// meteredReviewer answers with a fixed reply and reports token usage, as a
+// real seat does whether or not its reply is usable.
+type meteredReviewer struct {
+	reply string
+	usage agentbackend.Usage
+}
+
+func (m meteredReviewer) Chat([]agentbackend.Message, []any) (agentbackend.Message, error) {
+	return agentbackend.Message{Role: "assistant", Content: m.reply, Usage: m.usage}, nil
+}
+
+// A verifier whose reply does not parse still made a call and still spent its
+// tokens. The record counts them: dropping them would make an unverified
+// review read cheaper than it was.
+func TestReviewRecordsTheVerifiersTokensWhenItsReplyDoesNotParse(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "test-placeholder-not-a-real-key")
+	root := t.TempDir()
+	gitRun := gitCmd(t, root)
+	mustWrite(t, filepath.Join(root, "pkg", "a.go"), "package pkg\n")
+	gitRun("init", "-q")
+	gitRun("add", ".")
+	gitRun("commit", "-q", "-m", "base", "--no-gpg-sign")
+	orig := newReviewerBackend
+	t.Cleanup(func() { newReviewerBackend = orig })
+	newReviewerBackend = func(model, _ string) (agentbackend.Backend, error) {
+		if model == "rev" {
+			return meteredReviewer{reply: `{"opinion":"o","findings":[{"claim":"c","tier":"CODE-READ","file":"pkg/a.go","line":1}],"sound":[]}`,
+				usage: agentbackend.Usage{InputTokens: 100, OutputTokens: 10}}, nil
+		}
+		return meteredReviewer{reply: "not json at all", usage: agentbackend.Usage{InputTokens: 70, OutputTokens: 7}}, nil
+	}
+	ledger := filepath.Join(t.TempDir(), "ledger")
+	var out, errb bytes.Buffer
+	if code := runReview([]string{"--repo", root, "--scope", "pkg", "--reviewer-model", "rev", "--verifier-model", "ver", "--ledger", ledger}, &out, &errb); code != 0 {
+		t.Fatalf("exit %d: %s", code, errb.String())
+	}
+	if !strings.Contains(errb.String(), "recorded unverified") {
+		t.Fatalf("the verifier's reply must fail to parse in this test: %s", errb.String())
+	}
+	entries, err := auditpush.ReadLedgerDir(ledger)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("ledger: %d entries, %v", len(entries), err)
+	}
+	r := entries[0].Review
+	if r.Calls != 2 || r.InputTokens != 170 || r.OutputTokens != 17 {
+		t.Fatalf("record: calls %d, in %d, out %d; want 2 calls, 170 in, 17 out (the verifier's spend included)", r.Calls, r.InputTokens, r.OutputTokens)
+	}
+}
+
 // TestReviewPlanProposesAndCountsFixBatches: over a git fixture with two
 // scopes, one reviewed (a finding that held) and then changed, the plan
 // ranks the never-reviewed scope first, counts the changed files since
@@ -415,21 +480,30 @@ func TestAgenticSeatsRunInAWorktreeWithTheBriefOnStdin(t *testing.T) {
 	gitRun("add", ".")
 	gitRun("commit", "-q", "-m", "base", "--no-gpg-sign")
 
-	// Fake CLIs: record cwd, argv and stdin; reply with canned JSON.
+	// Fake CLIs: record cwd, argv and stdin; reply with canned JSON on each
+	// CLI's own wire — claude's result document, codex's event stream with
+	// the reply in its -o file (internal/agentbackend/testdata/agentwire
+	// holds the real captures these imitate).
 	bin := t.TempDir()
 	log := filepath.Join(t.TempDir(), "calls.log")
-	fake := func(name, reply string) {
+	fake := func(name, reply, stdout string) {
 		script := "#!/bin/sh\n" +
 			"if [ \"$1\" = \"--version\" ]; then echo \"9.9.9 (" + name + " fake)\"; exit 0; fi\n" +
 			"{ echo \"== " + name + " cwd=$PWD argv=$*\"; cat; echo; } >> " + log + "\n" +
 			"for a in \"$@\"; do case \"$prev\" in -o) printf '%s' '" + reply + "' > \"$a\";; esac; prev=\"$a\"; done\n" +
-			"printf '%s' '" + reply + "'\n"
+			"printf '%s' '" + stdout + "'\n"
 		if err := os.WriteFile(filepath.Join(bin, name), []byte(script), 0o755); err != nil { // #nosec G306 -- a test fixture executable
 			t.Fatal(err)
 		}
 	}
-	fake("claude", `{"opinion":"agent says Add subtracts","findings":[{"claim":"Add subtracts","tier":"REPRODUCED","file":"pkg/a.go","line":3,"severity":"high","script":"grep -q \"a - b\" pkg/a.go"}],"sound":["go.mod"]}`)
-	fake("codex", `{"opinion":"cannot refute","refutations":[{"id":"R1","verdict":"STANDS","argument":"it does subtract"}]}`)
+	claudeReply := `{"opinion":"agent says Add subtracts","findings":[{"claim":"Add subtracts","tier":"REPRODUCED","file":"pkg/a.go","line":3,"severity":"high","script":"grep -q \"a - b\" pkg/a.go"}],"sound":["go.mod"]}`
+	claudeDoc, _ := json.Marshal(map[string]any{
+		"type": "result", "is_error": false, "terminal_reason": "completed", "result": claudeReply,
+		"usage": map[string]any{"input_tokens": 2, "cache_creation_input_tokens": 600, "cache_read_input_tokens": 0, "output_tokens": 40},
+	})
+	fake("claude", claudeReply, string(claudeDoc))
+	fake("codex", `{"opinion":"cannot refute","refutations":[{"id":"R1","verdict":"STANDS","argument":"it does subtract"}]}`,
+		`{"type":"turn.completed","usage":{"input_tokens":14000,"cached_input_tokens":12000,"output_tokens":30}}`)
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	var out, errb bytes.Buffer
@@ -460,9 +534,9 @@ func TestAgenticSeatsRunInAWorktreeWithTheBriefOnStdin(t *testing.T) {
 		t.Errorf("the seats must run in a worktree, never the checkout:\n%s", c)
 	}
 	for _, want := range []string{
-		"== claude cwd=", "argv=-p --output-format text --tools Read,Grep,Glob --model claude-sonnet-5",
+		"== claude cwd=", "argv=-p --output-format json --setting-sources  --strict-mcp-config", "--tools Read,Grep,Glob --model claude-sonnet-5",
 		"DISPOSABLE COPY", "  pkg/a.go", "Assume the code is WRONG",
-		"== codex cwd=", "--sandbox read-only", "-m gpt-5-codex", "The findings, as recorded",
+		"== codex cwd=", "--json --ignore-user-config --ignore-rules --sandbox read-only --ephemeral", "-m gpt-5-codex", "The findings, as recorded",
 	} {
 		if !strings.Contains(c, want) {
 			t.Errorf("the CLIs' calls lack %q:\n%s", want, c)
@@ -544,26 +618,7 @@ func TestAnyAgentCanBeDefinedAsASeat(t *testing.T) {
 		t.Fatalf("a definition that does not split must be refused by name: exit %d %s", code, errb.String())
 	}
 	// An unknown name is an API model, not an agent.
-	if _, _, ok := agentSeat("gemini-3.6-flash"); ok {
+	if _, _, ok := agentbackend.AgentSeat("gemini-3.6-flash"); ok {
 		t.Error("a provider model name is not an agentic seat")
-	}
-}
-
-func TestSplitWordsIsPOSIXEnough(t *testing.T) {
-	for in, want := range map[string][]string{
-		`a b  c`:                 {"a", "b", "c"},
-		`a "b c" 'd e' f\ g`:     {"a", "b c", "d e", "f g"},
-		`x --flag="q v" 'it''s'`: {"x", "--flag=q v", "its"},
-		``:                       nil,
-	} {
-		got, err := splitWords(in)
-		if err != nil || strings.Join(got, "|") != strings.Join(want, "|") {
-			t.Errorf("%q → %q, %v; want %q", in, got, err, want)
-		}
-	}
-	for _, bad := range []string{`a "b`, `a 'b`, `a \`} {
-		if _, err := splitWords(bad); err == nil {
-			t.Errorf("%q must not split", bad)
-		}
 	}
 }

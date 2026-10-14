@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/pdbethke/corralai/internal/adequacy"
+	"github.com/pdbethke/corralai/internal/agentbackend"
 	golang "github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/matrix"
 	"github.com/pdbethke/corralai/internal/modelcorr"
@@ -184,6 +185,12 @@ type BugCatchObservation struct {
 	// ShadowDrawn: this shadow row's model was drawn from a pool
 	// (RunSpec.ShadowSelection), not named by hand. False on non-shadow rows.
 	ShadowDrawn bool
+	// SeatTool is the seat's agent tool and version (Verdict.SeatTools), ""
+	// for an API seat. ModelUnresolved says Model names a TOOL rather than
+	// a model (agentbackend.RecordedSeatNamesAModel false — an unpinned
+	// agent seat), so every per-model reader leaves the row out.
+	SeatTool        string
+	ModelUnresolved bool
 }
 
 // BugCatchSink is the optional per-run bug-catching feed (nil ⇒ no-op),
@@ -231,6 +238,12 @@ type CriticFindingObservation struct {
 	Evidence, Severity                 string
 	Adjudication                       string // auto verdict: refuted|unadjudicated
 	Source                             string // "auto"
+	// SeatTool / ModelUnresolved: the critic seat's agent tool, and whether
+	// its spec names no model — stamped by seatRecord, the same rule the
+	// bug-catching rows use, so critic precision leaves an unpinned agent
+	// critic out exactly as the scorecard does.
+	SeatTool        string
+	ModelUnresolved bool
 }
 
 // CriticFindingSink is the optional per-run critic-finding feed (nil ⇒
@@ -806,6 +819,16 @@ type Verdict struct {
 	// and never dispatched is in neither. JSON-tagged, so CertSigner's digest
 	// of the verdict covers it on the --local path with no further copying.
 	ShadowSelection []shadowpool.Selection `json:"shadow_selection,omitempty"`
+	// SeatTools is what sat in each AGENT seat besides its model: the coding
+	// CLI and its version (agentbackend.SeatTool), keyed by role, for the
+	// seats the signed roster names; an API seat has no entry. ModelsByRole
+	// stays the plain spec — decorrelation, the vendor rule and every reader
+	// of the roster read it as one — and this rides beside it, the way
+	// review's ReviewerTool rides beside ReviewerModel: a row in a per-model
+	// analysis is a tool AND a version AND a model. Set by signedSeats, so
+	// both construction paths carry it, and JSON-tagged, so the --local
+	// signed digest covers it.
+	SeatTools map[string]string `json:"seat_tools,omitempty"`
 	// PromptShape discloses what a mutant-generator shard actually SAW:
 	// "chunk" when every shard of this run showed only its own symbols'
 	// bodies (see advpool's shardCode), "file" when even one shard fell back
@@ -877,10 +900,18 @@ type RunState struct {
 // share a model. A test-critic judging tests written by its own model (or a
 // copy of it) is not an independent check — it is the same failure mode
 // grading its own homework. Enforced at driver construction (soundness #4).
+//
+// The comparison is over agentbackend.SeatModelOf, not the raw spec: an agent
+// seat is the model it is pinned to (`codex:gpt-6-astra` is gpt-6-astra) or,
+// unpinned, the agent itself. So `codex` + `codex` is refused (one tool, one
+// model chosen by that tool), while `codex` + `codex:gpt-6-astra` is two
+// different seats. An API name is its own SeatModelOf. The comparison is
+// agentbackend.SameSeat — case-insensitive, and the same one review's
+// verifier rule uses, so the two doors cannot disagree on a pair.
 func CheckDecorrelation(assign RoleAssignment) error {
 	critic, writer := assign[RoleTestCritic], assign[RoleTestWriter]
-	if critic != "" && critic == writer {
-		return fmt.Errorf("advpool: decorrelation guard: test-critic and test-writer must not share model %q", critic)
+	if critic != "" && agentbackend.SameSeat(critic, writer) {
+		return fmt.Errorf("advpool: decorrelation guard: test-critic and test-writer must not share model %q", agentbackend.SeatModelOf(critic))
 	}
 	return nil
 }
@@ -2795,10 +2826,11 @@ func (d *Driver) tickAggregate(ctx context.Context, missionID int64, run *runSta
 	// execution-proven judgment (kill-rate + proven_missed), never an LLM's
 	// opinion, which can hallucinate. blockingFindingOpen remains for a future
 	// execution-verified finding path.
-	roster, seatedSelection := run.signedSeats(d.Assign)
+	roster, seatedSelection, seatTools := run.signedSeats(d.Assign)
 	v := aggregate(run.rs, roster, run.devKillRate, run.mutantsTotal, len(run.devSurvivors), run.provenMissed,
 		criticFindings, d.Threshold, d.CertifyIntervalWidth, false, run.testWriterFailed, run.poolTestUnsound)
 	v.ShadowSelection = seatedSelection
+	v.SeatTools = seatTools
 	v.CriticIncomplete = criticIncomplete
 	v.RegionsTotal = run.regionsTotal
 	v.PromptShape = run.promptShape
@@ -3191,9 +3223,12 @@ func (d *Driver) adjudicateCriticFindings(ctx context.Context, missionID int64, 
 			}
 			adjudication = AutoAdjudication(scope, ran, kills)
 		}
+		criticModel := v.ModelsByRole[RoleTestCritic]
+		tool, unresolved := seatRecord(run.rs, v, RoleTestCritic, criticModel)
 		obs = append(obs, CriticFindingObservation{
+			SeatTool: tool, ModelUnresolved: unresolved,
 			QueueFindingID: f.ID,
-			Model:          v.ModelsByRole[RoleTestCritic],
+			Model:          criticModel,
 			TargetTest:     f.Target,
 			TestFile:       f.TestFile,
 			TestSelector:   f.TestSelector,
@@ -3289,7 +3324,7 @@ func (d *Driver) timeoutVerdict(run *runState) Verdict {
 	v.DuplicateMutants = run.dupMutants
 	v.PromptShape = run.promptShape
 	v.MutantBudget = run.mutantBudget
-	v.ModelsByRole, v.ShadowSelection = run.signedSeats(d.Assign)
+	v.ModelsByRole, v.ShadowSelection, v.SeatTools = run.signedSeats(d.Assign)
 	// A stalled run still spent everything it spent, and it is the run an
 	// operator most needs the clock for: "which phase was it sitting in when
 	// the deadline hit" is answerable only from the phases that DID close,
@@ -3395,7 +3430,7 @@ func (d *Driver) feedLeaderboard(v Verdict, testWriterMoot bool, criticObs []Cri
 // the roster by modelsByRole; its selection must go with it, or the record
 // would say a seat was drawn for a run the roster says it never sat in.
 // Both verdict construction sites call this, never modelsByRole alone.
-func (r *runState) signedSeats(assign RoleAssignment) (map[string]string, []shadowpool.Selection) {
+func (r *runState) signedSeats(assign RoleAssignment) (map[string]string, []shadowpool.Selection, map[string]string) {
 	roster := r.modelsByRole(assign)
 	var sels []shadowpool.Selection
 	for _, sel := range r.rs.ShadowSelection {
@@ -3403,7 +3438,21 @@ func (r *runState) signedSeats(assign RoleAssignment) (map[string]string, []shad
 			sels = append(sels, sel)
 		}
 	}
-	return roster, sels
+	// The tools of the seats the roster names, and only those: a challenger
+	// never dispatched is not in the roster, so its tool is not either. Nil
+	// when no named seat is an agent, so an all-API verdict serializes
+	// exactly as it did before the field existed.
+	var tools map[string]string
+	for role, tool := range r.rs.SeatTools {
+		if strings.TrimSpace(tool) == "" || strings.TrimSpace(roster[role]) == "" {
+			continue
+		}
+		if tools == nil {
+			tools = map[string]string{}
+		}
+		tools[role] = tool
+	}
+	return roster, sels, tools
 }
 
 // modelsByRole is the roster a verdict SIGNS: the assignment, minus any

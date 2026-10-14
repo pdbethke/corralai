@@ -5,6 +5,8 @@ package advpool
 import (
 	"sort"
 
+	"github.com/pdbethke/corralai/internal/agentbackend"
+
 	"github.com/pdbethke/corralai/internal/shadowpool"
 )
 
@@ -197,11 +199,26 @@ func bugCatchObservations(run *runState, v Verdict) []BugCatchObservation {
 	}
 	for i := range out {
 		out[i].Lang = run.rs.Lang
+		out[i].SeatTool, out[i].ModelUnresolved = seatRecord(run.rs, v, out[i].Role, out[i].Model)
 		if out[i].Shadow {
 			_, out[i].ShadowDrawn = shadowpool.Drawn(run.rs.ShadowSelection, out[i].Role)
 		}
 	}
 	return out
+}
+
+// seatRecord is the one place a row's seat is stamped for per-model
+// analysis: the seat's agent tool (the verdict's, else the RunSpec's — a
+// challenger row's role may be absent from a roster that dropped it), and
+// whether its spec names no model (agentbackend.RecordedSeatNamesAModel).
+// The bug-catching rows and the critic's findings both call it, so the
+// scorecard and critic precision apply one rule.
+func seatRecord(rs RunSpec, v Verdict, role, model string) (tool string, unresolved bool) {
+	tool = v.SeatTools[role]
+	if tool == "" {
+		tool = rs.SeatTools[role]
+	}
+	return tool, !agentbackend.RecordedSeatNamesAModel(model, tool)
 }
 
 // sortedShardIndexes returns the shard indexes in ascending order, so emitted

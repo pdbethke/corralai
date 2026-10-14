@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/pdbethke/corralai/internal/clip"
 )
 
 // Refutation is the verifier's answer to one finding. Declared is the tier
@@ -201,7 +203,7 @@ func Verify(ctx context.Context, rep Reproducer, r *Review, model, opinion strin
 				x.Tier, x.Demoted = TierCodeRead, "declared REPRODUCED with no script"
 			} else {
 				out, code, err := rep.Run(ctx, x.Script)
-				x.Stdout = tail(out, 4000)
+				x.Stdout = clip.Tail(out, 4000)
 				switch {
 				case err != nil:
 					x.Tier, x.Unrun = TierCodeRead, err.Error()

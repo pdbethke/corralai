@@ -11,6 +11,81 @@ history of any release, `git log v0.3.4..v0.3.5`.
 
 ## [Unreleased]
 
+- **Agent seats in every seat, not only `review`.** A coding-agent CLI
+  (`claude-code`, `codex`, `antigravity`, or one you define as
+  `CORRALAI_AGENT_<NAME>`) can now fill any CLI seat: `certify --local` and
+  `--repo` (`--writer-model`, `--mutant-model`, `--critic-model`,
+  `--derive-model`), `demo`, `doctor`, goal derivation and the shadow seats,
+  through one resolver, `agentbackend.ForSeat`. A seat runs on the agent's own
+  login, so on a subscription it needs no API key. Run on 2026-10-13 with no
+  API keys in the environment: a `demo` on `codex` and `claude-code` (5 of 11
+  mutants killed by the dev suite, 6 of 6 survivors proved) and a real
+  `review` round. `antigravity` was not measured. How to define your own agent,
+  and what was measured, is in `docs/corral/agent-seats.md`.
+- **Changed behaviour: review's built-in `claude-code` seat now starts cold.**
+  It no longer sees your own `CLAUDE.md`, memory, skills or MCP servers; a
+  one-line prompt measured about 94-108k input tokens without the cold flags
+  and 561 with them. If a review relied on the seat knowing your conventions,
+  put them in the brief or the repository. The `codex` seat now passes
+  `--ignore-user-config --ignore-rules` explicitly; nothing measured shows it
+  loaded your setup before.
+- **A seat that reports no tokens is `not metered`, not free.** An agent seat
+  on the `text` wire shows `not metered` on the cost line, and `--max-tokens`
+  refuses it, because a cap cannot bound what it cannot see. The warehouse and
+  ledger scan token totals are NULL (omitted from the ledger) when nothing in
+  the scan was metered.
+- **`--max-tokens` now also counts goal derivation.** A file whose derivation
+  was stopped by the cap is excluded as `derive-budget-exhausted`.
+- **`models rank` and the scorecard exclude unpinned agent seats.** A seat
+  named `codex` rather than `codex:<model>` records a tool, not a model, and
+  is no longer counted as evidence about one. Review seats included: they used
+  to be counted.
+- **A missing agent CLI is refused up front, by every verb.** `certify`,
+  `review`, goal derivation and `demo` check that a seat's CLI is on `PATH`
+  when they resolve it, before any jail, store or model call. Before, only
+  `doctor` checked, and `certify` ran its jail first and then filed the
+  missing writer as `writer-failed`.
+- **The Action no longer refuses agent seats by name.** Its review step
+  refused `claude-code` and `codex` and missed `antigravity` and every agent
+  you define. It now keeps no list, and two new optional inputs pass a login
+  through: `claude-code-oauth-token` (as `CLAUDE_CODE_OAUTH_TOKEN`) and
+  `codex-api-key` (as `CODEX_API_KEY`). The CLI must be installed on the
+  runner. Neither input has been run on a runner yet, and `codex-api-key` in
+  particular is not yet run: the variable name comes from the codex binary's
+  own error text, not from its `--help`.
+- **An agent seat inherits corral's environment.** An API key you export for
+  corral's API seats also reaches the agent CLI, and a CLI that prefers an API
+  key over its subscription login will bill the key. Unset it for an
+  agent-only run. `codex`'s read-only sandbox still lets it read the host, and
+  a certify prompt carries the audited source; see
+  `docs/corral/agent-seats.md`, "What a seat can reach".
+- **`antigravity` in certify runs without `--dangerously-skip-permissions`.**
+  The flag is now added only when the caller grants tools (review does). Not
+  yet run in certify.
+- **Smaller fixes.** certify and review now compare seats the same way,
+  ignoring case. A pin starting with `-` is refused. A timed-out agent call
+  kills the whole process group, and Ctrl-C (or SIGTERM) kills every live
+  agent seat's group and starts no new agent call, in every verb. The
+  `--version` probe has a 10s bound. `review` records the verifier's tokens
+  when its reply does not parse. `certify` says when an operator agent's
+  vendor cannot be told. The public warehouse's `bug_catches` extract leaves
+  out unpinned agent seats.
+- **An interrupted run records nothing**, for every seat type. Before,
+  `certify --repo` stamped the stopped file `executor-error` and still wrote
+  its ledger entry, attestation and push, and an interrupted `certify` could
+  bank what it had measured as a timed-out verdict. Now `certify --repo`,
+  `certify --local` and `review` write no ledger entry, verdict, attestation,
+  `--record-mutants` set or push. They label nothing, and exit **130** (new,
+  the shell's Ctrl-C status) with `interrupted — nothing recorded`.
+  `--record-stream` is the exception: it streams events as they happen, by
+  design. A `certify --local` verdict already signed when the signal lands is
+  reported as recorded. A review interrupted between its ledger entry and its
+  push says the entry was written and not pushed. A process started with
+  SIGINT ignored keeps ignoring it.
+- **One-time cache miss.** `reposcan.VerdictGeneration` is now 21 (it was 17
+  earlier in this release; 19 and 20 were skipped). Every verdict cached before this change is
+  re-measured once.
+
 - **Breaking: corral's files move out of `~/.claude`.** corral no longer
   creates or reads that directory. Databases and signing keys live in the
   state directory (`$XDG_STATE_HOME/corral`, else `~/.local/state/corral`,
@@ -140,8 +215,9 @@ history of any release, `git log v0.3.4..v0.3.5`.
   are columns in the warehouse and fields in the ledger entry (pushed with
   or without `--push-source`: neither is source), and
   `certify --repo` now prints "append it to <file>" exactly as `certify
-  --local` does. Cached verdicts move to generation 18, so a verdict cached
-  before this change is recomputed once rather than served without them.
+  --local` does. Cached verdicts move to a new generation (now 21, after the agent-seat
+  change below), so a verdict cached before this change is recomputed once
+  rather than served without them.
 - **A diff that deletes a Rust source's declared test file reports the
   source as not audited.** That source now lands on itself and is excluded
   as `test-landing-not-built`; the deleted-test check asks those sources

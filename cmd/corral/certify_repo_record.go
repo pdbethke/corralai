@@ -69,7 +69,7 @@ func killRatePtr(v float64) *float64 {
 //     enumerate-level reasons (no-language, is-test, no-paired-test,
 //     ambiguous-test, not-regular-file) and the candidate-level ones added
 //     before job emission (ungoaled, source-too-large, derive-failed,
-//     not-selected). These are decided by filename pairing or bookkeeping,
+//     derive-budget-exhausted, not-selected). These are decided by filename pairing or bookkeeping,
 //     never by running anything, so evidence is "paired" for the ones a
 //     pairing was actually ATTEMPTED for and "" for the ones rejected before
 //     its pairing candidates were derived (see exclusionEvidence, which used to stamp
@@ -714,6 +714,7 @@ func buildScanModelCallRows(results []reposcan.FileResult) []scanstore.ModelCall
 				InputTokens: c.InputTokens, OutputTokens: c.OutputTokens,
 				CachedInputTokens:     c.CachedInputTokens,
 				CacheWriteInputTokens: c.CacheWriteInputTokens,
+				UnmeteredCalls:        c.UnmeteredCalls,
 				WallMillis:            c.Wall.Milliseconds(),
 			})
 		}
@@ -766,6 +767,7 @@ func scanModelCallTotals(results []reposcan.FileResult) []advpool.ModelCall {
 			// nothing about caching rather than claiming a measured miss.
 			t.CachedInputTokens = addCacheCount(t.CachedInputTokens, c.CachedInputTokens)
 			t.CacheWriteInputTokens = addCacheCount(t.CacheWriteInputTokens, c.CacheWriteInputTokens)
+			t.UnmeteredCalls += c.UnmeteredCalls
 			t.Wall += c.Wall
 		}
 	}
@@ -807,6 +809,7 @@ func scanModelCallTotalsWith(results []reposcan.FileResult, d any) []advpool.Mod
 			t.OutputTokens += row.OutputTokens
 			t.CachedInputTokens = addCacheCount(t.CachedInputTokens, row.CachedInputTokens)
 			t.CacheWriteInputTokens = addCacheCount(t.CacheWriteInputTokens, row.CacheWriteInputTokens)
+			t.UnmeteredCalls += row.UnmeteredCalls
 			t.Wall += time.Duration(row.WallMillis) * time.Millisecond
 		}
 		if t != nil {

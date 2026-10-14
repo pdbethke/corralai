@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/pdbethke/corralai/internal/auditpush"
+	"github.com/pdbethke/corralai/internal/clip"
 	"github.com/pdbethke/corralai/internal/review"
 )
 
@@ -119,7 +120,7 @@ func runReviewRecheck(args []string, stdout, stderr io.Writer) int {
 	}
 	defer cleanup()
 	out, code, rerr := rep.Run(ctx, f.Script)
-	res.Output = tail(out, 4000)
+	res.Output = clip.Tail(out, 4000)
 	switch {
 	case rerr != nil:
 		res.Outcome, res.Reason = recheckUnrun, rerr.Error()

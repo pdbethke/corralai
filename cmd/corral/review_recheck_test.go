@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pdbethke/corralai/internal/agentbackend"
 	"github.com/pdbethke/corralai/internal/auditpush"
 	"github.com/pdbethke/corralai/internal/review"
 )
@@ -205,6 +206,7 @@ func TestRecheckAncestryRefusesAnEmptyReviewedCommit(t *testing.T) {
 // operator's repo. Before the recheck took a signal-aware context, the first
 // SIGTERM killed the process outright — here, the test binary itself.
 func TestReviewRecheckUnwindsOnInterrupt(t *testing.T) {
+	t.Cleanup(agentbackend.ResetInterrupted) // the signal records an interrupt for the whole process
 	started := filepath.Join(t.TempDir(), "started")
 	repo, ledger, hash := recheckFixture(t, map[string]string{"R1": "touch " + started + " && exec sleep 30"})
 	type result struct {

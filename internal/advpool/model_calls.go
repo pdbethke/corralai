@@ -55,6 +55,14 @@ type ModelCall struct {
 	// saving and hide its price. Nullable, and nil separately from
 	// CachedInputTokens: only Anthropic reports it.
 	CacheWriteInputTokens *int64
+	// UnmeteredCalls is how many of Calls reported no token usage at all —
+	// an agent seat on the `text` wire (agentbackend.Usage.Unmetered). The
+	// token fields above cover only the other calls, so when this equals
+	// Calls nothing about the seat's tokens was measured and a reader must
+	// render "not metered", never the 0 the fields hold. An int beside the
+	// counters, not pointer counters, because it is a COUNT a mixed seat
+	// needs ("4 calls, 1 not metered") that a nil could not carry.
+	UnmeteredCalls int
 	// Wall is this role's accumulated wall-clock time across every call this
 	// file's audit made it — a MEASUREMENT (agentbackend.UsageMeter times
 	// every call), never a budget. It rides on the Verdict the same way
@@ -83,6 +91,7 @@ type modelCallWire struct {
 	OutputTokens          int64  `json:"output_tokens,omitempty"`
 	CachedInputTokens     *int64 `json:"cached_input_tokens,omitempty"`
 	CacheWriteInputTokens *int64 `json:"cache_write_input_tokens,omitempty"`
+	UnmeteredCalls        int    `json:"unmetered_calls,omitempty"`
 	WallMillis            int64  `json:"wall_ms,omitempty"`
 }
 
@@ -95,6 +104,7 @@ func (c ModelCall) MarshalJSON() ([]byte, error) {
 		InputTokens: c.InputTokens, OutputTokens: c.OutputTokens,
 		CachedInputTokens:     c.CachedInputTokens,
 		CacheWriteInputTokens: c.CacheWriteInputTokens,
+		UnmeteredCalls:        c.UnmeteredCalls,
 		WallMillis:            c.Wall.Milliseconds(),
 	})
 }
@@ -110,6 +120,7 @@ func (c *ModelCall) UnmarshalJSON(b []byte) error {
 		InputTokens: w.InputTokens, OutputTokens: w.OutputTokens,
 		CachedInputTokens:     w.CachedInputTokens,
 		CacheWriteInputTokens: w.CacheWriteInputTokens,
+		UnmeteredCalls:        w.UnmeteredCalls,
 		Wall:                  time.Duration(w.WallMillis) * time.Millisecond,
 	}
 	return nil

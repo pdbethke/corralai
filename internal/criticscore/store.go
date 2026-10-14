@@ -14,6 +14,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"github.com/pdbethke/corralai/internal/seatrecord"
 	"time"
 
 	_ "github.com/marcboeker/go-duckdb/v2"
@@ -40,6 +41,12 @@ var criticFindingsMigrationCols = []struct{ name, ddl string }{
 	// exists only in whoever's memory. The metric is auditable; the judgments
 	// behind it were not.
 	{name: "adjudication_rationale", ddl: "adjudication_rationale VARCHAR"},
+	// The critic seat's agent tool, and whether its spec named a tool rather
+	// than a model (an unpinned agent seat) — stamped where the finding is
+	// made, by the rule bugcatch's rows use. Precision filters on it with the
+	// same predicate the scorecard does (seatrecord.ResolvedOnly).
+	{name: "seat_tool", ddl: "seat_tool VARCHAR"},
+	{name: seatrecord.UnresolvedColumn, ddl: seatrecord.UnresolvedDDL},
 }
 
 // Open opens (creating if absent) the critic_findings store at dsn. dsn is
@@ -118,7 +125,8 @@ func (s *Store) Close() error { return s.db.Close() }
 // input.
 const findingCols = `id, ts, record_id, record_head, repo, commit, mission_id, model, ` +
 	`target_test, test_file, test_selector, scope, evidence, severity, ` +
-	`adjudication, source, adjudicated_by, adjudicated_ts, adjudication_rationale`
+	`adjudication, source, adjudicated_by, adjudicated_ts, adjudication_rationale, ` +
+	`COALESCE(seat_tool, ''), COALESCE(` + seatrecord.UnresolvedColumn + `, false)`
 
 // insertFindingCols is findingCols WITHOUT adjudication_rationale: a rationale
 // is written by Adjudicate (a human explaining a verdict), never by Record (the
@@ -127,7 +135,7 @@ const findingCols = `id, ts, record_id, record_head, repo, commit, mission_id, m
 // break the positional INSERT the way this one did.
 const insertFindingCols = `id, ts, record_id, record_head, repo, commit, mission_id, model, ` +
 	`target_test, test_file, test_selector, scope, evidence, severity, ` +
-	`adjudication, source, adjudicated_by, adjudicated_ts`
+	`adjudication, source, adjudicated_by, adjudicated_ts, seat_tool, ` + seatrecord.UnresolvedColumn
 
 // rowScanner is satisfied by both *sql.Row (QueryRow) and *sql.Rows.
 type rowScanner interface{ Scan(dest ...any) error }
@@ -142,7 +150,8 @@ func scanFinding(sc rowScanner) (Finding, error) {
 	var adjudicatedTS sql.NullFloat64
 	if err := sc.Scan(&f.ID, &f.TS, &f.RecordID, &f.RecordHead, &f.Repo, &f.Commit, &f.MissionID, &f.Model,
 		&f.TargetTest, &f.TestFile, &f.TestSelector, &f.Scope, &f.Evidence, &f.Severity,
-		&f.Adjudication, &f.Source, &adjudicatedBy, &adjudicatedTS, &rationale); err != nil {
+		&f.Adjudication, &f.Source, &adjudicatedBy, &adjudicatedTS, &rationale,
+		&f.SeatTool, &f.ModelUnresolved); err != nil {
 		return Finding{}, err
 	}
 	f.AdjudicatedBy = adjudicatedBy.String
@@ -184,10 +193,11 @@ func (s *Store) Record(ctx context.Context, fs []Finding) error {
 		err := tx.QueryRowContext(ctx, `SELECT source FROM critic_findings WHERE id = ?`, f.ID).Scan(&existingSource)
 		switch {
 		case err == sql.ErrNoRows:
-			if _, err := tx.ExecContext(ctx, `INSERT INTO critic_findings (`+insertFindingCols+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			if _, err := tx.ExecContext(ctx, `INSERT INTO critic_findings (`+insertFindingCols+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 				f.ID, f.TS, f.RecordID, f.RecordHead, f.Repo, f.Commit, f.MissionID, f.Model,
 				f.TargetTest, f.TestFile, f.TestSelector, f.Scope, f.Evidence, f.Severity,
-				f.Adjudication, f.Source, nullIfEmpty(f.AdjudicatedBy), nullIfZero(f.AdjudicatedTS)); err != nil {
+				f.Adjudication, f.Source, nullIfEmpty(f.AdjudicatedBy), nullIfZero(f.AdjudicatedTS),
+				nullIfEmpty(f.SeatTool), f.ModelUnresolved); err != nil {
 				return fmt.Errorf("criticscore: insert %s: %w", f.ID, err)
 			}
 		case err != nil:
@@ -198,21 +208,23 @@ func (s *Store) Record(ctx context.Context, fs []Finding) error {
 			// touch adjudication/source/adjudicated_by/adjudicated_ts.
 			if _, err := tx.ExecContext(ctx, `UPDATE critic_findings SET
 				record_id = ?, record_head = ?, repo = ?, commit = ?, mission_id = ?, model = ?,
-				target_test = ?, test_file = ?, test_selector = ?, scope = ?, evidence = ?, severity = ?
-				WHERE id = ?`,
+				target_test = ?, test_file = ?, test_selector = ?, scope = ?, evidence = ?, severity = ?,
+				seat_tool = ?, `+seatrecord.UnresolvedColumn+` = ?
+				WHERE id = ?`, // #nosec G202 -- only seatrecord's constant column name is concatenated; every value is a bound parameter
 				f.RecordID, f.RecordHead, f.Repo, f.Commit, f.MissionID, f.Model,
-				f.TargetTest, f.TestFile, f.TestSelector, f.Scope, f.Evidence, f.Severity, f.ID); err != nil {
+				f.TargetTest, f.TestFile, f.TestSelector, f.Scope, f.Evidence, f.Severity,
+				nullIfEmpty(f.SeatTool), f.ModelUnresolved, f.ID); err != nil {
 				return fmt.Errorf("criticscore: update (human-preserved) %s: %w", f.ID, err)
 			}
 		default:
 			if _, err := tx.ExecContext(ctx, `UPDATE critic_findings SET
 				record_id = ?, record_head = ?, repo = ?, commit = ?, mission_id = ?, model = ?,
 				target_test = ?, test_file = ?, test_selector = ?, scope = ?, evidence = ?, severity = ?,
-				adjudication = ?, source = ?
-				WHERE id = ?`,
+				adjudication = ?, source = ?, seat_tool = ?, `+seatrecord.UnresolvedColumn+` = ?
+				WHERE id = ?`, // #nosec G202 -- only seatrecord's constant column name is concatenated; every value is a bound parameter
 				f.RecordID, f.RecordHead, f.Repo, f.Commit, f.MissionID, f.Model,
 				f.TargetTest, f.TestFile, f.TestSelector, f.Scope, f.Evidence, f.Severity,
-				f.Adjudication, f.Source, f.ID); err != nil {
+				f.Adjudication, f.Source, nullIfEmpty(f.SeatTool), f.ModelUnresolved, f.ID); err != nil {
 				return fmt.Errorf("criticscore: update %s: %w", f.ID, err)
 			}
 		}
@@ -329,7 +341,7 @@ func (s *Store) Precision(ctx context.Context) ([]CriticCell, error) {
 		SUM(CASE WHEN adjudication = 'confirmed' THEN 1 ELSE 0 END),
 		SUM(CASE WHEN adjudication = 'refuted' THEN 1 ELSE 0 END),
 		SUM(CASE WHEN adjudication = 'unadjudicated' THEN 1 ELSE 0 END)
-		FROM critic_findings GROUP BY model ORDER BY model`)
+		FROM critic_findings WHERE `+seatrecord.ResolvedOnly+` GROUP BY model ORDER BY model`) // #nosec G202 -- only seatrecord's constant predicate is concatenated
 	if err != nil {
 		return nil, fmt.Errorf("criticscore: precision: %w", err)
 	}

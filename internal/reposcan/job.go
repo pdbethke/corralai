@@ -10,6 +10,8 @@ import (
 	"os"
 	"path"
 	"strings"
+
+	"github.com/pdbethke/corralai/internal/agentbackend"
 )
 
 // ReasonUngoaled marks a candidate the GoalSource declined to supply a goal
@@ -161,6 +163,11 @@ func EmitJobs(cfg EmitConfig, cands []Candidate, gs GoalSource) ([]Job, []Exclus
 
 	for _, c := range cands {
 		goal, ok, err := gs.GoalFor(c)
+		if agentbackend.Interrupted(err) {
+			// The operator stopped the run: no exclusion is recorded for a
+			// file nobody failed on, and the scan aborts.
+			return nil, nil, err
+		}
 		if err != nil {
 			// A per-candidate goal failure is NOT fatal to the scan and is NOT
 			// ungoaled: the source of the goal failed, which says nothing about
@@ -172,6 +179,11 @@ func EmitJobs(cfg EmitConfig, cands []Candidate, gs GoalSource) ([]Job, []Exclus
 			// would tell an operator to go check their API key.
 			if errors.Is(err, ErrSourceTooLarge) {
 				reason = ReasonSourceTooLarge
+			}
+			// ...or of the operator's own --max-tokens bound, which is
+			// neither an outage nor the file.
+			if errors.Is(err, agentbackend.ErrTokenBudgetExhausted) {
+				reason = ReasonDeriveBudgetExhausted
 			}
 			excl = append(excl, Exclusion{Path: c.Path, Reason: reason})
 			continue

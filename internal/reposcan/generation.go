@@ -148,7 +148,23 @@ package reposcan
 // (Verdict.Concurrency.Note), reworded under "18" to stop blaming the suite
 // for what may be an incomplete copy: every verdict carrying the old words is
 // a "17" one, which "18" already retires.
-const VerdictGeneration = "18"
+// "21" (2026-10-14): a seat can now be a coding-agent CLI. Two changes ride
+// it. advpool.ModelCall gained UnmeteredCalls (model_calls[].unmetered_calls),
+// so a `text`-wire seat's calls count as not metered rather than as measured
+// zeros; that is inside a nested type the shallow fingerprint below does not
+// see, and a cached document without it would read an unmetered seat's calls
+// as free. And the Verdict gained SeatTools, each agent seat's CLI and version
+// beside the plain spec in ModelsByRole (mirroring review's ReviewerTool), so
+// a cached verdict without it would read an agent seat as an API one. The
+// bug-catching rows a converged verdict feeds now mark an unpinned agent seat
+// so per-model analysis leaves it out, and the cache key names an agent
+// seat's tool (seatToolProbe.keyName, via modelSetKeyWith in cmd/corral), so
+// a CLI upgrade re-measures. "19" and "20" are burned, never assigned: the
+// agent-seats branch stamped "18" and "19" on its own acceptance runs before
+// "18" landed on main for Rust, and an unreleased build combining both
+// branches stamped "20" into a local ledger. Skipping both keeps any of those
+// entries from being read as a verdict of this shape.
+const VerdictGeneration = "21"
 
 // VerdictShapeSHA256 fingerprints advpool.Verdict's serialized shape: every
 // exported field's name, type and json tag, sorted by name and hashed.
@@ -170,4 +186,4 @@ const VerdictGeneration = "18"
 // Verdict's own FIELDS") and nothing wider. Nor can any fingerprint catch the
 // behaviour half: a scorer that computes a DIFFERENT number into the SAME
 // field is invisible here, and remains a review responsibility.
-const VerdictShapeSHA256 = "39703f935609f7b0c2e562c2a7d41352aebe526c22f9b84ccfaee34bfcaf3fba"
+const VerdictShapeSHA256 = "59dc4560fefa5082629ef52986351db848046ff085341bbb7ca9cd3141859c28"

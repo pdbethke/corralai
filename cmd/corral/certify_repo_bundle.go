@@ -49,7 +49,9 @@ type bundleMeta struct {
 	RunURL string
 	// ModelsByRole is the roster as JSON, so a new role does not need a
 	// migration.
-	ModelsByRole    string
+	ModelsByRole string
+	// SeatTools is the roster's agent tools as JSON, beside ModelsByRole.
+	SeatTools       string
 	MinKillRate     *float64
 	MaxProvenMissed *int
 	Passed          *bool // nil when the outcome is not recoverable (scans push)
@@ -132,6 +134,13 @@ func buildBundle(
 		Link:         link,
 		SourcePushed: sourcePushed,
 	}
+	// A scan none of whose calls was metered has no token total: the header
+	// says nothing (omitted from the entry, NULL in the warehouse) rather
+	// than a sum of unmeasured zeros — the one rule, decided from the same
+	// rows the header was summed from.
+	if auditpush.ScanTokensUnmetered(b) {
+		b.Scan.InputTokens, b.Scan.OutputTokens = 0, 0
+	}
 	return b
 }
 
@@ -164,6 +173,7 @@ func buildAuditRows(files []scanstore.File, scanID int64, meta bundleMeta) []aud
 			// adding a phantom. Revisit when there is a producer.
 			MutantsPlanted: f.MutantsGraded + f.MutantsInvalid,
 			ModelsByRole:   meta.ModelsByRole,
+			SeatTools:      meta.SeatTools,
 			MinKillRate:    meta.MinKillRate, MaxProvenMissed: meta.MaxProvenMissed,
 			Passed:    meta.Passed,
 			StartedAt: meta.StartedAt,
@@ -271,6 +281,7 @@ func buildModelCallRows(calls []scanstore.ModelCall, scanID int64, meta bundleMe
 			InputTokens: c.InputTokens, OutputTokens: c.OutputTokens,
 			CachedInputTokens:     c.CachedInputTokens,
 			CacheWriteInputTokens: c.CacheWriteInputTokens,
+			UnmeteredCalls:        c.UnmeteredCalls,
 			WallMillis:            c.WallMillis,
 		})
 	}

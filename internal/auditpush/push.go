@@ -61,9 +61,14 @@ type Row struct {
 	// rate on a dense 200-line function and one on a 12-line accessor are not
 	// the same measurement, and a reader cannot tell a hard file from a weak
 	// suite.
-	Lang            string
-	MutantsPlanted  int
-	ModelsByRole    string // JSON, so a new role does not need a migration
+	Lang           string
+	MutantsPlanted int
+	ModelsByRole   string // JSON, so a new role does not need a migration
+	// SeatTools is the roster's agent seats' tool and version, as JSON keyed
+	// by role like ModelsByRole (agentbackend.SeatTool); "" when no seat was
+	// an agent. A per-model reader needs it beside the roster: an unpinned
+	// agent seat names a tool, not a model (agentbackend.RecordedSeatNamesAModel).
+	SeatTools       string `json:",omitempty"`
 	MinKillRate     *float64
 	MaxProvenMissed *int
 	Passed          *bool      // nil = not recorded; see ScanRow.Passed

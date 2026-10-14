@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Elastic-2.0
 
 // Command ledgersite renders a corral ledger directory as a static, public,
-// read-only site: an index of every entry and a page per review.
+// read-only site: an index of every entry and a page per review and per audit.
 //
 // It lives in scripts/ and not cmd/ ON PURPOSE. scripts/gen-cli-docs.sh derives
 // its binary list from `cmd/*/` and publishes a CLI reference page for each, so
@@ -76,8 +76,8 @@ func main() {
 	reviews, findings, reproduced := 0, 0, 0
 	for _, e := range entries {
 		k := e.Kind
-		if k == auditpush.KindScan {
-			k = "scan(legacy)"
+		if e.IsScan() {
+			k = "scan"
 		}
 		kinds[k]++
 		if e.Review != nil {
@@ -123,7 +123,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "ledgersite: writing site: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Printf("wrote:             %s (index.html + %d entry pages)\n", *out, len(v.Reviews))
+	fmt.Printf("wrote:             %s (index.html + %d review and %d audit pages)\n", *out, len(v.Reviews), len(v.Scans))
 }
 
 // loadEntries is the ledger's own reader: same accepted names (.json and

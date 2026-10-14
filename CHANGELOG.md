@@ -11,6 +11,21 @@ history of any release, `git log v0.3.4..v0.3.5`.
 
 ## [Unreleased]
 
+- **A compile check never costs a file its grade.** The check that a mutant
+  still builds is first run on the unmutated file. That run used to be held
+  to the per-mutant test timeout, and any failure made the whole file
+  COULD-NOT-GRADE: on Warp, before rc.20 scoped Rust's check to one crate, it
+  died 54 seconds in. The first run now gets the file's whole budget and is
+  timed. If it cannot run, the gate is switched off for that file and every
+  mutant is graded by execution. Each mutant's check is capped at three times
+  the measured time, never below the test cap; a mutant whose build runs
+  past that is invalid, with the reason. A check that fails to run on one
+  mutant grades that mutant by execution and is counted. Only the run's own
+  `--timeout` or an interrupt still stops it here. When the gate is off, or
+  skipped some mutants, the run's progress output now says so; before, that
+  note was computed and never printed. It is not yet part of the signed
+  verdict.
+
 ## [v1.0.0-rc.20] — 2026-10-14
 
 - **Rust.** A Rust source whose test module is declared in a separate file

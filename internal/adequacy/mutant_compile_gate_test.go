@@ -5,17 +5,23 @@ package adequacy
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
+	"time"
 )
 
 // gateJail distinguishes a COMPILE-CHECK command from the TEST command, so a
 // test can make a mutant fail to compile while its suite would have passed.
 type gateJail struct {
-	compileCmd    string          // argv[0] that means "this is the compile check"
-	uncompilable  map[string]bool // mutant code -> fails the compile check
-	testPasses    bool            // what the suite reports for a mutant that DOES compile
-	compileErr    error           // infra failure from the gate itself
-	testRuns      int             // how many full suite runs happened
+	compileCmd   string          // argv[0] that means "this is the compile check"
+	uncompilable map[string]bool // mutant code -> fails the compile check
+	testPasses   bool            // what the suite reports for a mutant that DOES compile
+	compileErr   error           // infra failure from the gate itself
+	// compileErrFor fails the gate for one code body only (nil: none), so a
+	// test can break the gate on a mutant while the probe of the compliant
+	// file succeeds.
+	compileErrFor map[string]error
+	testRuns      int // how many full suite runs happened
 	compileRuns   int
 	baselineFiles string
 }
@@ -26,6 +32,9 @@ func (g *gateJail) RunTest(ctx context.Context, files map[string]string, cmd []s
 		g.compileRuns++
 		if g.compileErr != nil {
 			return false, g.compileErr
+		}
+		if err := g.compileErrFor[code]; err != nil {
+			return false, err
 		}
 		return !g.uncompilable[code], nil
 	}
@@ -122,17 +131,114 @@ func TestScore_InvalidMutantSkipsTheSuiteRun(t *testing.T) {
 	}
 }
 
-// FAIL CLOSED: if the gate itself cannot run, that is infrastructure failure.
-// Silently calling every mutant "invalid" would erase the exam.
-func TestScore_CompileGateInfraFailureIsAnError(t *testing.T) {
+// A gate that cannot run on the COMPLIANT file never costs the file its
+// grade. It used to: on Warp, an unscoped `cargo test --no-run` ran past the
+// per-mutant timeout on the unmutated code and the whole file was
+// COULD-NOT-GRADE before one mutant was scored. The gate is an optimisation
+// and a classifier; the measurement is the suite. So the gate is switched off
+// for the file, the report says why, and every mutant is graded by execution.
+// What the old rule protected still holds: a broken gate never reads as "all
+// mutants invalid".
+func TestScore_AGateThatCannotRunIsDisabledNotFatal(t *testing.T) {
 	boom := errors.New("jail exploded")
-	j := &gateJail{compileCmd: "COMPILE", compileErr: boom, baselineFiles: gateBase}
-	_, err := Score(context.Background(), j, map[string]string{}, "x.go", gateBase,
+	j := &gateJail{compileCmd: "COMPILE", compileErr: boom, testPasses: true, baselineFiles: gateBase}
+	rep, err := Score(context.Background(), j, map[string]string{}, "x.go", gateBase,
 		gateMutants(), []string{"TEST"},
 		WithMutantCompileCheck([][]string{{"COMPILE", "x.go"}}))
-	if !errors.Is(err, boom) {
-		t.Fatalf("err = %v, want the gate's infra error — a broken gate must never read as 'all mutants invalid'", err)
+	if err != nil {
+		t.Fatalf("Score: %v — a compile gate that cannot run must not fail the file", err)
 	}
+	if len(rep.Invalid) != 0 {
+		t.Errorf("Invalid = %v — a broken gate must never read as invalid mutants", rep.Invalid)
+	}
+	if rep.Total != 2 {
+		t.Errorf("Total = %d, want 2 — both mutants graded by execution", rep.Total)
+	}
+	if !strings.Contains(rep.CompileGateNote, "DISABLED") || !strings.Contains(rep.CompileGateNote, "jail exploded") {
+		t.Errorf("CompileGateNote = %q, want it to say the gate was disabled and why", rep.CompileGateNote)
+	}
+}
+
+// The probe of the compliant file is not held to the per-mutant TEST timeout:
+// a build can take longer than the suite it builds (Rust's first compile), and
+// the probe is one run. It runs within the file's own budget and is timed.
+func TestScore_TheGateProbeIsNotCappedByTheTestTimeout(t *testing.T) {
+	j := &slowGateJail{gateJail: gateJail{compileCmd: "COMPILE", testPasses: true, baselineFiles: gateBase},
+		compileTakes: 60 * time.Millisecond}
+	rep, err := Score(context.Background(), j, map[string]string{}, "x.go", gateBase,
+		gateMutants(), []string{"TEST"},
+		WithMutantTimeout(20*time.Millisecond),
+		WithMutantCompileCheck([][]string{{"COMPILE", "x.go"}}))
+	if err != nil {
+		t.Fatalf("Score: %v", err)
+	}
+	if rep.CompileGateNote != "" {
+		t.Errorf("CompileGateNote = %q — a gate slower than one test run is still a working gate", rep.CompileGateNote)
+	}
+	if len(rep.Invalid) != 0 {
+		t.Errorf("Invalid = %v — every mutant compiles within the probe's own measured time", rep.Invalid)
+	}
+}
+
+// A mutant whose compile check fails to RUN (not a rejection, not a
+// timeout) is graded by execution like any mutant with no gate, and the
+// report counts it. One mutant's broken gate run is not the file's.
+func TestScore_AGateErrorOnOneMutantGradesItByExecution(t *testing.T) {
+	m := gateMutants()
+	j := &gateJail{compileCmd: "COMPILE", testPasses: true, baselineFiles: gateBase,
+		compileErrFor: map[string]error{m[0].Replace: errors.New("flaky gate")}}
+	rep, err := Score(context.Background(), j, map[string]string{}, "x.go", gateBase,
+		m[:1], []string{"TEST"},
+		WithMutantCompileCheck([][]string{{"COMPILE", "x.go"}}))
+	if err != nil {
+		t.Fatalf("Score: %v — one mutant's gate error must not fail the file", err)
+	}
+	if len(rep.Survived) != 1 {
+		t.Errorf("Survived = %v, want [m1] — graded by execution", rep.Survived)
+	}
+	if !strings.Contains(rep.CompileGateNote, "1 mutant") {
+		t.Errorf("CompileGateNote = %q, want it to count the mutant the gate could not judge", rep.CompileGateNote)
+	}
+}
+
+// A mutant whose compile check runs past the cap the compliant file's own
+// compile set is invalid, with the reason: the unmutated code provably
+// compiles in time, so a build that does not finish is a fact about the
+// mutant, like a build that fails.
+func TestScore_AMutantWhoseBuildRunsPastTheCapIsInvalid(t *testing.T) {
+	m := gateMutants()
+	j := &gateJail{compileCmd: "COMPILE", testPasses: true, baselineFiles: gateBase,
+		compileErrFor: map[string]error{m[0].Replace: ErrTestTimeout}}
+	rep, err := Score(context.Background(), j, map[string]string{}, "x.go", gateBase,
+		m[:1], []string{"TEST"},
+		WithMutantCompileCheck([][]string{{"COMPILE", "x.go"}}))
+	if err != nil {
+		t.Fatalf("Score: %v", err)
+	}
+	if len(rep.Invalid) != 1 {
+		t.Fatalf("Invalid = %v, want [m1]", rep.Invalid)
+	}
+	if r := rep.InvalidReasons["m1"]; !strings.Contains(r, "did not finish") {
+		t.Errorf("invalid reason = %q, want it to say the build did not finish in time", r)
+	}
+}
+
+// slowGateJail makes the compile check take a fixed time and honour its
+// context, so a test can tell which deadline the gate ran under.
+type slowGateJail struct {
+	gateJail
+	compileTakes time.Duration
+}
+
+func (s *slowGateJail) RunTest(ctx context.Context, files map[string]string, cmd []string) (bool, error) {
+	if len(cmd) > 0 && cmd[0] == s.compileCmd {
+		select {
+		case <-time.After(s.compileTakes):
+		case <-ctx.Done():
+			return false, ErrTestTimeout
+		}
+	}
+	return s.gateJail.RunTest(ctx, files, cmd)
 }
 
 // BACK-COMPAT: without the option, behavior is exactly as before.

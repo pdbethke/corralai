@@ -1,0 +1,178 @@
+---
+title: "One workflow file"
+description: "The same Warp crate, audited again, this time by corral's GitHub Action on GitHub's own runners from a fork: a released version, one workflow file, and a key in a repository secret. The crate's tests caught 7 of 37 planted faults; for 27 of the 30 that got through, corral wrote a test that catches it and ran it. Getting there took a release and four fixes, every one found by running corral the way a stranger would."
+pubDate: 2026-10-14
+draft: false
+---
+
+{/* SPDX-License-Identifier: Elastic-2.0 */}
+
+*Field note. The numbers below are from
+[the Action run](https://github.com/pdbethke/warp/actions/runs/38626412419)
+and the ledger entry it committed,
+[`scans/20261014T195956Z-322ab3325dce-f92502643dc4.json.gz`](https://github.com/pdbethke/warp/blob/corral/ledger/scans/20261014T195956Z-322ab3325dce-f92502643dc4.json.gz)
+on the fork's `corral/ledger` branch.*
+
+## Where the last note stopped
+
+[The first Rust audit](/field-notes/the-first-rust-audit/) ran on one of our
+machines, with a build of corral from `main`, and ended on a promise: run it
+the way someone who has never seen corral would. A clean machine, the public
+docs, nothing else. This is that run, and then the same audit with no machine of
+ours involved at all.
+
+## The stranger
+
+A fresh Ubuntu 24.04 container, a user account, Go installed the way go.dev
+says, Rust installed with rustup into the home directory, and a clone of Warp
+at the same commit as before. Only the getting-started page.
+
+The first thing it hit was the install line. The docs pinned
+`v1.0.0-rc.19`, and every piece of Rust support had merged after that tag. A
+stranger following the page exactly could not audit Rust at all. That needed a
+release, and it is the first reason `v1.0.0-rc.20` exists.
+
+Then the free dry run, which the page promises "tells you which files corral can
+audit". It printed "25 job(s)" and "jobs below are what the scan would emit",
+and then listed only the files it would *not* audit. The jobs had only ever
+gone to `--json`. It now lists them, each beside the test it is graded against.
+
+Then the real problem. Warp is a Cargo workspace of 80 crates, and a
+contributor works in one of them. Pointed at Warp's root, corral ranked the
+whole repository and could not be told which crate. Pointed at the crate's own
+directory, it audited fine, but each private copy it scores faults in was a copy
+of the crate alone, missing the workspace manifest the crate inherits from, so
+every copy failed to build and the run fell back to one fault at a time.
+
+## `--path`
+
+So corral now takes `--path`: the repository stays whole, and the scan is cut
+to one directory of it.
+
+```
+corral certify --repo . --path crates/fuzzy_match --substrate workspace ...
+  -- cargo test -p fuzzy_match
+```
+
+Tests are still found anywhere in the repository, the copies carry the root's
+files, and the ledger entry records the scope, so an entry for one crate does
+not read as a claim about all of Warp.
+
+The first run with it died 54 seconds in, before a single fault was scored.
+corral checks that each fault still compiles, and for Rust that check was
+`cargo test --no-run` with no crate named. From inside a crate, cargo builds
+only that crate. From the workspace root, it builds every crate's tests, and
+that ran past the time allowed per fault. The test command had always been
+narrowed to the crate; the compile check went through a different door. It goes
+through the same one now.
+
+With both fixed, the copies built: six at once instead of one. And the run was
+not faster.
+
+| on `crates/fuzzy_match` | from the crate | `--path` from the root |
+|---|---|---|
+| faults scored at once | 1 | 6 |
+| scoring 37 faults | 1m35s | 1m29s |
+| whole run | 9m14s | 10m42s |
+
+This crate's 33 tests finish in milliseconds. What each fault costs is cargo
+rebuilding the crate, and six fresh copies compiling side by side do not beat
+one warm one. Most of the run is the other half: writing a test for each fault
+that got through and running it. A crate with a slow suite should come out
+ahead; we have not measured one. What `--path` does do is let a contributor
+audit the crate they work on, from the root, the way they would run its tests.
+
+## One workflow file
+
+Then the part with no machine of ours in it, on our fork of Warp,
+`pdbethke/warp`. On a branch of it, Warp's own workflows are removed so a push
+runs nothing else, and one file is added:
+
+```yaml
+- uses: pdbethke/corralai@v1.0.0-rc.20
+  with:
+    test-command: cargo test -p fuzzy_match
+    path: crates/fuzzy_match
+    top: "1"
+    ledger: .corral-ledger
+    derive-model: gemini-3.8-flash
+    mutant-model: gemini-3.8-flash
+    writer-model: gemini-3.8-flash
+    critic-model: "off"
+    max-tokens: "1000000"
+    gemini-key: ${{ secrets.GEMINI_API_KEY }}
+```
+
+Around it: `actions/checkout`, `actions/setup-go`, a step that prints the Rust
+toolchain (GitHub's runner has rustup, and Warp's `rust-toolchain.toml` picks
+the version), a step that checks out the ledger branch, and a step that commits
+the entry back. The Gemini key is a repository secret.
+
+| | |
+|---|---|
+| faults planted and graded | 37 (40 budgeted) |
+| caught by the crate's own tests | 7: a kill rate of 0.19, 95% interval 0.09–0.34 |
+| got through | 30 |
+| caught by a test corral wrote and ran | 27 |
+| tokens | 0.42M in, 17.0k out, 42 calls, against a cap of 1M |
+| the audit | 11m58s; 13m12s with installing corral |
+
+Two of the 27, each one line:
+
+```diff
+- if is_glob_match_recursive(text, pattern, text_idx, pattern_idx + 1) {
++ if false {
+```
+
+```diff
+- let remaining_start_char = text[..prefix_end].chars().count();
++ let remaining_start_char = text.chars().count();
+```
+
+The first removes the branch of the glob matcher that lets `*` match an empty
+run of characters. The second changes the offset added to a suffix match's
+positions, so the function reports the wrong characters as matched.
+The crate's suite passes with either in place. For each, corral wrote a test
+that passes on Warp's code and fails on the fault, and ran both.
+
+The runner has four cores, and corral sizes its copies at a quarter of the
+machine, so on GitHub's standard runner the faults were scored one at a time.
+On this crate, by the table above, that cost nothing.
+
+## The record
+
+The Action committed one entry to the fork's `corral/ledger` branch, a
+gzipped JSON file with the scope, every fault, its outcome, the models, the
+tokens and the run's URL. A runner has no signing key of ours, so the entry is
+not signed. The workflow's last step was meant to attest it instead, with
+GitHub's keyless attestation: a statement, signed with the workflow's own
+identity, that this repository's workflow produced exactly these bytes.
+
+That step failed, and the fault was in our docs. The recipe we publish for the
+ledger branch used `actions/attest` with no predicate, which it refuses, over
+`scans/*.json`, which matches nothing because entries are gzipped. We had never
+run our own recipe end to end on a real repository. We fixed it
+([#414](https://github.com/pdbethke/corralai/pull/414)) and ran the fixed step
+in the fork as a second, separate workflow over the entry the audit had
+committed; GitHub's attestation API now holds one attestation for that file's
+SHA-256. So this entry's attestation came from that second run, not from the
+audit's own. The fork's workflow carries the fixed step for the next one.
+
+## What this does not show
+
+- **It is one file, again.** The same file as the last note, so the two runs
+  can be compared, and a kill rate on 37 faults has a wide interval.
+- **The counts move between runs.** Four runs of this file today graded 34 to
+  37 faults, caught between 5 and 11, and proved between 22 and 29. The faults
+  are generated each time. Every run says the same thing: the suite misses most
+  of what was planted.
+- **A fault that gets through is a missing test, not a bug.** As far as we
+  know Warp's code is correct.
+- **Nobody at Warp has seen these tests.** "Proven" means each one passes on the
+  real code and fails on its fault. Whether Warp wants them is their call.
+- **This ran on a fork, by us.** It is what anyone could do with their own fork
+  and their own key; it is not Warp running corral.
+
+## Next
+
+The tests themselves, offered to Warp the way any contributor would offer them.

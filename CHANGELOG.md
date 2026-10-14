@@ -11,6 +11,37 @@ history of any release, `git log v0.3.4..v0.3.5`.
 
 ## [Unreleased]
 
+## [v1.0.0-rc.20] — 2026-10-14
+
+- **Rust.** A Rust source whose test module is declared in a separate file
+  (`#[path = "foo_tests.rs"] mod tests;`, or `mod tests;` and rustc's default
+  file) can be audited by `certify --local --repo-dir` and `certify --repo`,
+  with `cargo test` or `cargo nextest run`, on a stock rustup install under
+  `--substrate workspace`. Measured on Warp's `crates/fuzzy_match` at
+  714c51f1, from a clean Ubuntu container with rustup in `$HOME` and
+  Gemini 3.8 Flash seats: 37 mutants graded, kill rate 0.14 (95% interval
+  0.06–0.28), 29 survivors proven missing tests, 0.4M input tokens, 10m42s.
+  The entries below say what is and is not covered.
+- **`certify --repo --path <dir>` audits one part of a repository.** The
+  checkout stays whole, so tests elsewhere still pair and the build still
+  sees the root's files (a Cargo workspace manifest, a monorepo's
+  `package.json`); candidates, exclusions, counts and the `--diff-base`
+  change list are cut to the directory. A path that is absolute, outside the
+  repository or not a directory is refused. The scope is recorded in the
+  ledger entry, in a new `corral_scans.scope` warehouse column, and on the
+  record page.
+- **The Action takes a `path` input**, passed as `--path`.
+- **A dry run names the files it would audit**, in rank order, each beside
+  the test it is graded against. It said "jobs below" and listed only the
+  exclusions; the jobs reached `--json` alone.
+- **Rust's compile gate builds the crate the suite grades.** It was
+  `cargo test --no-run` with no package, which from a workspace root built
+  every member and could run past the per-mutant timeout before one mutant
+  was scored. It now goes through the same crate scoping as the test command.
+- **The record page shows audits, not just reviews.** Each scan entry on
+  corralai.dev/ledger has its own page: the kill rate with its interval, the
+  survivors as diffs, the proven gaps and where corral's test lands.
+
 - **Agent seats in every seat, not only `review`.** A coding-agent CLI
   (`claude-code`, `codex`, `antigravity`, or one you define as
   `CORRALAI_AGENT_<NAME>`) can now fill any CLI seat: `certify --local` and

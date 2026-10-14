@@ -25,6 +25,7 @@ type Scan struct {
 	Top                 int
 	AllCandidates       bool
 	DiffBase            string
+	Scope               string // the --path subtree; see auditpush.ScanRow.Scope
 	TotalFiles          int
 	Candidates          int
 	Audited             int

@@ -86,6 +86,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	dryRun := fs.Bool("dry-run", false, "enumerate and emit jobs, then stop — no audits run")
 	jsonOut := fs.Bool("json", false, "with --dry-run, emit the repository's audit surface as JSON instead of the human report: per-language counts, every auditable file with its inferred test pairing, and the machine-stable exclusion tally. Needs no key, no jail and no money — it is the free inventory a UI or a tenant's own tooling can consume instead of scraping stdout")
 	substrateFlag := fs.String("substrate", substrateJail, "where the audit runs: "+substrateJail+" (bwrap) or "+substrateWorkspace+" (mutate --repo in place; the caller IS the isolation boundary, e.g. an ephemeral CI runner)")
+	pathFlag := fs.String("path", "", "bound the scan to this subtree of --repo (a directory, relative to it), keeping the repository whole: tests are still found anywhere in it, and the audit's copies still carry the root's build files (a Cargo workspace manifest, a monorepo's package.json). Pair it with a test command scoped the same way, e.g. `cargo test -p <crate>`")
 	diffBase := fs.String("diff-base", "", "bound the scan to files changed since this git ref, instead of ranking + --top. In a PR the diff IS the bound: ranking and --top do not apply on this path")
 	pushFlag := fs.String("push", "", "append this scan's per-file verdicts to a DuckDB you own — a path, or `md:<db>` for MotherDuck (which reads motherduck_token from the environment; the database is created on first push if it does not already exist — a MotherDuck SHARE is a read target and cannot be pushed to). corral has no hosted tier and keeps nothing: the warehouse is yours, and any DuckDB works, so this is a destination rather than a lock-in. Append-only. Every row carries the ledger's scan id (0 when --record was not given), and — traceable only with --attest — the sha256 of the signed statement it came from, so a row can be checked against something a third party can verify; without --attest, statement_sha256 is honestly empty rather than fabricated; and with --attest, a statement that FAILS to write withholds the push too, since a row that cannot name the statement it came from is not written. It answers what one pull request cannot — a single kill rate is a sample, and the same unchanged diff has scored 0.85 and 0.90; forty of them are a distribution")
 	pushSourceFlag := fs.Bool("push-source", false, "with --push, also send the SOURCE BYTES corral holds to your warehouse: the pool's authored test, and the full verdict JSON. Off by default because those bytes are derived from — and quote — your audited code; without this the pushed rows carry numbers, hashes, reasons and model names, and no source leaves the box. Mutant code is NOT carried, by either setting: corral does not keep mutant source at rest, so the corral_mutants.code column exists and is always NULL until something records it. The scan row records which setting was used, so the custody question is answerable from the table rather than from whoever remembers the argv")
@@ -268,6 +269,11 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "corral certify --repo: --repo is required")
 		return 2
 	}
+	scope, scopeErr := resolveScanScope(*repoDir, *pathFlag)
+	if scopeErr != nil {
+		fmt.Fprintf(stderr, "corral certify --repo: %v\n", scopeErr)
+		return 2
+	}
 
 	// An unrecognized substrate must be a usage error, not a silent
 	// fall-through to the jail default: a run that quietly used the wrong
@@ -327,6 +333,12 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "corral certify --repo: enumerating %s: %v\n", *repoDir, err)
 		return 1
 	}
+	// Bounded AFTER the walk, never by walking less: pairing has already
+	// searched the whole repository, so a source under the scope keeps a
+	// test that lives outside it. Everything downstream — ranking, counts,
+	// the exclusion tally, the ledger's file rows — then describes the
+	// scope alone.
+	cands, excl = scopeEnumeration(scope, cands, excl)
 
 	// --json emits the inventory INSTEAD of the human report, matching the
 	// convention `corral scorecard`/`matrix` already set: a consumer must not
@@ -348,6 +360,9 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	}
 
 	fmt.Fprintf(stdout, "corral certify --repo %s\n", *repoDir)
+	if scope != "" {
+		fmt.Fprintf(stdout, "  scope: %s (--path)\n", scope)
+	}
 
 	// --record-mutants: the accumulator every audited file's driver feeds. It
 	// is flushed once at the very end of this function, on EVERY exit path
@@ -458,6 +473,9 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stderr, "corral certify --repo: %v\n", cerr)
 			return 1
 		}
+		// The diff, within the scope: a change outside --path is outside
+		// this scan the way a change outside --repo would be.
+		changed = slices.DeleteFunc(changed, func(p string) bool { return !inScanScope(scope, p) })
 		diffChanged = make(map[string]bool, len(changed))
 		for _, p := range changed {
 			diffChanged[p] = true
@@ -1453,7 +1471,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	scan := scanstore.Scan{
 		Owner: *owner, Repo: cfg.Repo, Commit: *commit,
 		Substrate: *substrateFlag, EngineVersion: version, ModelSet: cfg.ModelSet,
-		Top: effectiveTop, AllCandidates: *allFlag, DiffBase: *diffBase,
+		Top: effectiveTop, AllCandidates: *allFlag, DiffBase: *diffBase, Scope: scope,
 		TotalFiles: totalFiles, Candidates: rep.Candidates, Audited: rep.Audited,
 		KillRate: killRatePtr(rep.KillRate), CacheHits: rep.CacheHits,
 		PreflightRan: preflightResult.Ran, PreflightNote: preflightResult.Note,
@@ -3556,6 +3574,65 @@ func printSearchPairings(w io.Writer, cands []reposcan.Candidate) {
 		}
 		fmt.Fprintf(w, "    %s paired by search: %s\n", c.Path, c.TestPath)
 	}
+}
+
+// resolveScanScope turns --path into the repo-relative, slash-separated
+// prefix the scan is bounded to, "" for none. It refuses a path that is
+// absolute, climbs out of the repository, or is not an existing directory
+// in it: a scope outside --repo would audit files the operator did not
+// name as the repository, and a missing one would report a scan of nothing
+// as a clean scan.
+func resolveScanScope(repoDir, raw string) (string, error) {
+	if strings.TrimSpace(raw) == "" {
+		return "", nil
+	}
+	if filepath.IsAbs(raw) {
+		return "", fmt.Errorf("--path %q must be relative to --repo, not absolute", raw)
+	}
+	rel := filepath.Clean(raw)
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("--path %q leaves the repository", raw)
+	}
+	fi, err := os.Stat(filepath.Join(repoDir, rel))
+	if err != nil {
+		return "", fmt.Errorf("--path %q: %w", raw, err)
+	}
+	if !fi.IsDir() {
+		return "", fmt.Errorf("--path %q is not a directory", raw)
+	}
+	if rel == "." {
+		return "", nil
+	}
+	return filepath.ToSlash(rel), nil
+}
+
+// scopeEnumeration keeps the candidates and exclusions under scope. Files
+// outside it are dropped rather than excluded: they are outside the scan the
+// way files outside --repo are, and tallying them as exclusions would bury
+// the scope's own reasons under the rest of the repository's.
+func scopeEnumeration(scope string, cands []reposcan.Candidate, excl []reposcan.Exclusion) ([]reposcan.Candidate, []reposcan.Exclusion) {
+	if scope == "" {
+		return cands, excl
+	}
+	var c []reposcan.Candidate
+	for _, x := range cands {
+		if inScanScope(scope, x.Path) {
+			c = append(c, x)
+		}
+	}
+	var e []reposcan.Exclusion
+	for _, x := range excl {
+		if inScanScope(scope, x.Path) {
+			e = append(e, x)
+		}
+	}
+	return c, e
+}
+
+// inScanScope reports whether a repo-relative path lies under scope ("" is
+// the whole repository).
+func inScanScope(scope, path string) bool {
+	return scope == "" || strings.HasPrefix(path, scope+"/")
 }
 
 // printWouldAudit names a dry run's jobs, in the order the scan would audit

@@ -109,7 +109,7 @@ on the fault.</p>
 </tr></thead><tbody>
 {{range .Scans}}<tr>
 <td class="nowrap"><a href="{{entryURL .Short}}">{{date .Pushed}}</a>{{if .Retracted}} <span class="chip bad">retracted</span>{{end}}</td>
-<td class="mono small">{{.RepoName}}</td>
+<td class="mono small">{{.RepoName}}{{with .Scan.Scope}}<br><span class="small">{{.}}</span>{{end}}</td>
 <td class="mono small">{{range $i, $f := .Audited}}{{if $i}}, {{end}}{{$f.Path}}{{else}}<span class="chip mute">none</span>{{end}}</td>
 <td class="nowrap">{{if .Graded}}{{.Rate}} <span class="small">({{.Killed}} of {{.Graded}})</span>{{else}}<span class="chip mute">not graded</span>{{end}}</td>
 <td>{{.Survived}}</td>
@@ -316,7 +316,7 @@ const scanTmpl = `<!doctype html>
 
 <p class="small"><a href="../index.html">← the record</a></p>
 <h1>Audit <span class="mono">{{.Short}}</span></h1>
-<p class="lede"><span class="mono">{{.RepoName}}</span> at <span class="mono">{{.ShortSHA}}</span>:
+<p class="lede"><span class="mono">{{.RepoName}}</span>{{with .Scan.Scope}}, scoped to <span class="mono">{{.}}</span>,{{end}} at <span class="mono">{{.ShortSHA}}</span>:
 {{if .Graded}}the project's own tests caught {{.Killed}} of {{.Graded}} planted faults, {{.Survived}} got through,
 and corral proved {{.Proven}} of those missing tests by writing a test and running it.{{else}}nothing was graded.{{end}}</p>
 
@@ -327,6 +327,7 @@ longer stands as the record{{if .RetractedReason}}: {{.RetractedReason}}{{end}}.
 
 <dl class="meta">
   <dt>repo</dt><dd class="mono">{{.Scan.Repo}}</dd>
+  {{with .Scan.Scope}}<dt>scope</dt><dd class="mono">{{.}} <span class="small">(--path: only files under it were considered)</span></dd>{{end}}
   <dt>commit</dt><dd class="mono">{{if .CommitURL}}<a href="{{.CommitURL}}">{{.Scan.Commit}}</a>{{else}}{{.Scan.Commit}}{{end}}</dd>
   <dt>corral</dt><dd class="mono">{{.Scan.CorralVersion}}</dd>
   <dt>substrate</dt><dd>{{.Scan.Substrate}}</dd>

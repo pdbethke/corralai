@@ -1013,7 +1013,12 @@ type runState struct {
 	// cannot distinguish a generator dropping a used import from one changing a
 	// signature, and cannot be fed back to the model that made the mistake.
 	invalidReasons map[string]string
-	devSurvivors   []adequacy.Mutant
+	// compileGateNote is adequacy.Report.CompileGateNote: the compile gate
+	// was switched off for this file, or could not judge some of its
+	// mutants, and why. "" when the gate ran on every mutant (or there was
+	// none). Printed with the dev-adequacy line; not yet part of the verdict.
+	compileGateNote string
+	devSurvivors    []adequacy.Mutant
 	// devKilled is the mutant-level counterpart to devSurvivors: the mutants
 	// the dev suite's OWN tests killed (rep.Killed), reduced to MutantRef (id
 	// + ParentSHA256, no source) at the point it's built, since nothing else
@@ -1949,6 +1954,7 @@ func applyDevScore(ctx context.Context, run *runState, scorer Scorer, mutants []
 	// soundness-#1 reflex that keeps DevKillRate off a worker's word.
 	run.mutantsInvalid = len(rep.Invalid)
 	run.invalidReasons = rep.InvalidReasons
+	run.compileGateNote = rep.CompileGateNote
 	run.mutantsTotal = len(mutants) - run.mutantsInvalid
 	// What each mutant was actually graded with, kept so the verdict's mutant
 	// refs can carry it. Empty both on a run that graded every mutant with
@@ -2376,6 +2382,9 @@ func (d *Driver) tickDevAdequacy(ctx context.Context, missionID int64, run *runS
 		// wrong, rather than only that it got something wrong.
 		for _, id := range sampleInvalidReasons(run, 3) {
 			log.Printf("advpool: run %d invalid mutant %s: %s", missionID, id, firstLine(run.invalidReasons[id]))
+		}
+		if run.compileGateNote != "" {
+			log.Printf("advpool: run %d %s: %s", missionID, run.rs.CodePath, run.compileGateNote)
 		}
 		log.Printf("advpool: run %d dev-adequacy: the dev's OWN tests scored %.0f%% (killed %d of %d graded mutants, %d survived — bugs the dev's tests miss)%s",
 			missionID, killRate*100, run.mutantsTotal-len(survivors), run.mutantsTotal, len(survivors), invalidNote)

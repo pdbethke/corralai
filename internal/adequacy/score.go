@@ -879,6 +879,9 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 		unmeasured       bool
 		unmeasuredReason string
 		grading          *MutantGrading
+		// gateSkipped: the compile gate could not RUN on this mutant (not
+		// a rejection, not a timeout), so it was graded by execution alone.
+		gateSkipped bool
 	}
 	outcomes := make([]outcome, len(mutants))
 
@@ -911,13 +914,34 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 	// file cannot pass is switched off for the run and the report says so;
 	// every mutant is then graded by execution, which is the measurement
 	// that matters anyway.
+	//
+	// A COMPILE GATE NEVER COSTS THE FILE ITS GRADE. The gate is an
+	// optimisation and a classifier; the measurement is the suite. So the
+	// probe runs within the FILE's budget (ctx), not the per-mutant test
+	// timeout — a build can take longer than the suite it builds, and on Warp
+	// an unscoped `cargo test --no-run` ran past that timeout and made the
+	// whole file COULD-NOT-GRADE before one mutant was scored. A probe that
+	// cannot run switches the gate off for the file, said so, exactly as a
+	// probe the compliant file fails does. Only the file's own cancellation
+	// (its --timeout, an interrupt) stops the run here.
+	//
+	// The probe is TIMED, and each mutant's check is capped at a multiple of
+	// that measurement (never below the test cap), so the gate is held to what
+	// this file's build actually takes rather than to what its tests take.
+	gateCap := perMutant
+	var gateProbe time.Duration
 	if len(cfg.mutantCompileCheck) > 0 {
-		gctx, gcancel := context.WithTimeout(ctx, perMutant)
+		probeStart := time.Now()
 		for _, cmd := range cfg.mutantCompileCheck {
-			ok, out, gerr := runCmdVerbose(gctx, compliantCode, cmd)
+			ok, out, gerr := runCmdVerbose(ctx, compliantCode, cmd)
 			if gerr != nil {
-				gcancel()
-				return Report{}, fmt.Errorf("adequacy: probing the compile gate on compliant code: %w", gerr)
+				if cerr := ctx.Err(); cerr != nil {
+					return Report{}, fmt.Errorf("adequacy: probing the compile gate on compliant code: %w", cerr)
+				}
+				rep.CompileGateNote = fmt.Sprintf("compile gate DISABLED for this file: %s could not run on the UNMUTATED source (%v), so it cannot judge a mutant — every mutant graded by execution instead",
+					strings.Join(cmd, " "), gerr)
+				cfg.mutantCompileCheck = nil
+				break
 			}
 			if !ok {
 				rep.CompileGateNote = fmt.Sprintf("compile gate DISABLED for this file: %s rejects the UNMUTATED source, so it cannot judge a mutant — every mutant graded by execution instead. Gate output: %s",
@@ -926,7 +950,10 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 				break
 			}
 		}
-		gcancel()
+		gateProbe = time.Since(probeStart)
+		if c := gateProbe * mutantTimeoutMultiple; c > gateCap {
+			gateCap = c
+		}
 	}
 
 	commandFailsOnCompliant := map[string]string{}
@@ -1054,25 +1081,44 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 		}
 		// The compile gate runs FIRST and is cheap relative to a suite run, so
 		// an invalid mutant costs one type-check instead of a full execution.
+		gateSkipped := false
 		if len(cfg.mutantCompileCheck) > 0 {
-			gctx, gcancel := context.WithTimeout(ctx, perMutant)
+			gctx, gcancel := context.WithTimeout(ctx, gateCap)
+		gate:
 			for _, cmd := range cfg.mutantCompileCheck {
 				ok, out, err := runCmdVerbose(gctx, mutantCode, cmd)
-				if err != nil {
-					// FAIL CLOSED. A gate that could not RUN says nothing about
-					// the mutant; treating that as "invalid" would quietly erase
-					// the exam whenever the jail misbehaved.
+				switch {
+				case err != nil && ctx.Err() != nil:
+					// The file's own cancellation, not the gate's.
 					gcancel()
-					outcomes[i] = outcome{err: err}
+					outcomes[i] = outcome{err: ctx.Err()}
 					return
-				}
-				if !ok {
+				case err != nil && (errors.Is(err, ErrTestTimeout) || errors.Is(err, context.DeadlineExceeded)):
+					// The compliant file built within gateProbe; this mutant
+					// did not build within a multiple of it. That is a fact
+					// about the mutant, like a build that fails.
+					gcancel()
+					outcomes[i] = outcome{invalid: true, invalidReason: fmt.Sprintf("the compile check did not finish within %s (the unmutated file's took %s): %s",
+						gateCap.Round(time.Millisecond), gateProbe.Round(time.Millisecond), strings.Join(cmd, " "))}
+					return
+				case err != nil:
+					// The gate could not RUN on this mutant. That says nothing
+					// about the mutant, so it is neither invalid nor fatal: it
+					// is graded by execution, as with no gate, and counted.
+					gateSkipped = true
+					break gate
+				case !ok:
 					gcancel()
 					outcomes[i] = outcome{invalid: true, invalidReason: strings.TrimSpace(out)}
 					return
 				}
 			}
 			gcancel()
+		}
+		if gateSkipped {
+			// Every path below assigns outcomes[i] whole; this marks
+			// whichever one it was.
+			defer func() { outcomes[i].gateSkipped = true }()
 		}
 		cmd := testCmd
 		var grading *MutantGrading
@@ -1251,6 +1297,20 @@ func Score(ctx context.Context, j Jail, base map[string]string, codePath, compli
 			o.grading = &g
 		}
 		outcomes[i] = o
+	}
+
+	gateSkippedN := 0
+	for _, o := range outcomes {
+		if o.gateSkipped {
+			gateSkippedN++
+		}
+	}
+	if gateSkippedN > 0 {
+		note := fmt.Sprintf("the compile gate could not run on %d mutant(s); they were graded by execution alone", gateSkippedN)
+		if rep.CompileGateNote != "" {
+			note = rep.CompileGateNote + "; " + note
+		}
+		rep.CompileGateNote = note
 	}
 
 	for i, m := range mutants {

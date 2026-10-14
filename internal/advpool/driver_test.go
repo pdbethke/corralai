@@ -45,9 +45,10 @@ type scoreCall struct {
 // the second the pool score (survivors against the pool's authored test) —
 // matching the order Tick's state machine actually calls Score in.
 type fakeScorer struct {
-	devInvalid []string // mutant IDs the compile gate rejected (scripted)
-	calls      []scoreCall
-	err        error
+	devInvalid  []string // mutant IDs the compile gate rejected (scripted)
+	devGateNote string   // the dev report's CompileGateNote (scripted)
+	calls       []scoreCall
+	err         error
 	// failFirstN, when > 0 (together with err), makes Score fail with err on
 	// exactly the first failFirstN call ATTEMPTS (successful or not — this
 	// counts total attempts), then succeed on every attempt after —
@@ -225,6 +226,7 @@ func (f *fakeScorer) ScoreReport(ctx context.Context, codePath, code, test strin
 		}
 		rep := devReportFrom(kr, survivors, mutants)
 		rep.Invalid = f.devInvalid
+		rep.CompileGateNote = f.devGateNote
 		return rep, nil
 	}
 	if f.reportFn != nil {

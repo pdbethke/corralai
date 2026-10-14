@@ -2,7 +2,12 @@
 
 package advpool
 
-import "testing"
+import (
+	"bytes"
+	"log"
+	"strings"
+	"testing"
+)
 
 // THE FOURTH RECURRENCE of one failure shape: a value added in one place, a
 // second construction or conversion site missed, every unit test green.
@@ -29,5 +34,29 @@ func TestMutantsInvalidReachesTheSignedVerdict(t *testing.T) {
 	// The graded total must exclude them, or the summary contradicts the rate.
 	if v.MutantsTotal != 2 {
 		t.Errorf("Verdict.MutantsTotal = %d, want 2 (5 emitted - 3 invalid)", v.MutantsTotal)
+	}
+}
+
+// adequacy.Report.CompileGateNote said when the compile gate was switched off
+// for a file, and nothing outside adequacy ever read it: a run graded with no
+// gate looked exactly like one graded with it. It is printed on the run's
+// progress output beside the invalid-mutant count.
+func TestTheCompileGateNoteReachesTheRunOutput(t *testing.T) {
+	var buf bytes.Buffer
+	prevOut, prevFlags := log.Writer(), log.Flags()
+	log.SetOutput(&buf)
+	log.SetFlags(0)
+	t.Cleanup(func() { log.SetOutput(prevOut); log.SetFlags(prevFlags) })
+
+	d, missionID := newScoredRun(t, scoredRun{
+		survivors: 1, mutantsTotal: 3,
+		writerModel: "claude-sonnet-5", criticModel: "gemini-3.5-flash",
+	})
+	d.Scorer.(*fakeScorer).devGateNote = "compile gate DISABLED for this file: COMPILE could not run"
+	if v := drivePoolToConvergence(t, d, missionID); v == nil {
+		t.Fatal("run did not converge")
+	}
+	if !strings.Contains(buf.String(), "compile gate DISABLED for this file: COMPILE could not run") {
+		t.Errorf("the gate note never reached the run output:\n%s", buf.String())
 	}
 }

@@ -2386,8 +2386,8 @@ func buildJailWiring(ctx context.Context, in jailWiringInput) (w jailWiring, err
 		// has ONE tree, and a scorer told to run six mutants at once against
 		// it would queue five of them behind the borrow channel for the whole
 		// audit. The number that scores must be the number that exists.
-		w.scorer = advpool.JailScorer{Jail: pool, BaseFiles: base, MutantTimeout: in.testTimeout, DevTestPath: w.devTestKey, Landing: w.landing, Concurrency: pool.Trees(), Lang: in.langName, Selection: in.selection, FailureParser: failureParser, FailFast: failFast}
-		w.validator = advpool.JailValidator{Jail: pool, BaseFiles: base, DevTestPath: w.devTestKey, Landing: w.landing}
+		w.scorer = advpool.JailScorer{Jail: pool, RepoDir: in.repoDir, BaseFiles: base, MutantTimeout: in.testTimeout, DevTestPath: w.devTestKey, Landing: w.landing, Concurrency: pool.Trees(), Lang: in.langName, Selection: in.selection, FailureParser: failureParser, FailFast: failFast}
+		w.validator = advpool.JailValidator{Jail: pool, RepoDir: in.repoDir, BaseFiles: base, DevTestPath: w.devTestKey, Landing: w.landing}
 		w.jailEnum = advpool.JailEnumerator{Jail: pool, BaseFiles: base}
 		// w.depBinds stays nil: there is nothing to bind read-only when the
 		// real tree is already present.
@@ -2443,8 +2443,8 @@ func buildJailWiring(ctx context.Context, in jailWiringInput) (w jailWiring, err
 		// RunSpec.Matrix, so wiring it here costs nothing when --matrix is off
 		// (the flag is the real gate).
 		enumerator := newRunEnumerator(in.iso, in.timeout, depBinds)
-		w.scorer = advpool.JailScorer{Jail: jail, BaseFiles: repoFiles, MutantTimeout: in.testTimeout, DevTestPath: w.devTestKey, Landing: w.landing, Concurrency: in.mutantConcurrency, Lang: in.langName, Selection: in.selection, FailureParser: failureParser, FailFast: failFast}
-		w.validator = advpool.JailValidator{Jail: jail, BaseFiles: repoFiles, DevTestPath: w.devTestKey, Landing: w.landing}
+		w.scorer = advpool.JailScorer{Jail: jail, RepoDir: in.repoDir, BaseFiles: repoFiles, MutantTimeout: in.testTimeout, DevTestPath: w.devTestKey, Landing: w.landing, Concurrency: in.mutantConcurrency, Lang: in.langName, Selection: in.selection, FailureParser: failureParser, FailFast: failFast}
+		w.validator = advpool.JailValidator{Jail: jail, RepoDir: in.repoDir, BaseFiles: repoFiles, DevTestPath: w.devTestKey, Landing: w.landing}
 		w.jailEnum = advpool.JailEnumerator{Jail: enumerator, BaseFiles: repoFiles}
 		if len(depBinds) > 0 {
 			names := make([]string, 0, len(depBinds))

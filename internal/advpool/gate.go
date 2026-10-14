@@ -295,6 +295,10 @@ func advPoolBase(codePath string) (base map[string]string, testCmd []string) {
 // kill rate, only what this Scorer actually observes running in the jail.
 type JailScorer struct {
 	Jail adequacy.Jail
+	// RepoDir is the operator's checkout, "" in single-file mode. It is read
+	// only to scope the mutant compile gate the way the test command was
+	// scoped (see compileCheckFor); nothing is written to it.
+	RepoDir string
 	// BaseFiles, when non-nil, switches the scorer into REPO-AWARE mode: the
 	// jail workspace is seeded with these files (a whole cloned repo/package,
 	// keyed by repo-relative path) instead of the synthetic single-file
@@ -415,7 +419,7 @@ func (s JailScorer) gatedScoreOpts(codePath string, base map[string]string) []ad
 		// present, and gating the mutant is what this is for.
 		testPath = codePath
 	}
-	if cc := p.CompileCheck(codePath, testPath); len(cc) > 0 {
+	if cc := compileCheckFor(p, s.RepoDir, codePath, testPath); len(cc) > 0 {
 		opts = append(opts, adequacy.WithMutantCompileCheck(cc))
 	}
 	return opts
@@ -948,6 +952,9 @@ func (e JailEnumerator) Enumerate(ctx context.Context, codePath, code, test stri
 // covers whatever directory the files actually landed in.
 type JailValidator struct {
 	Jail adequacy.Jail
+	// RepoDir mirrors JailScorer.RepoDir, so the authored test is
+	// compile-checked over the same unit the mutants are.
+	RepoDir string
 	// BaseFiles mirrors JailScorer.BaseFiles: in repo-aware mode the authored
 	// test is compile-checked against the WHOLE repo (so a test that imports
 	// the package resolves), not the bare single-file scaffold. nil preserves
@@ -1029,7 +1036,7 @@ func (v JailValidator) CompileTest(ctx context.Context, codePath, code, test str
 	// history (the pallets/flask PYTHONPYCACHEPREFIX regression, and its
 	// ruby/js && sibling) for exactly what silently breaks when a plugin's
 	// CompileCheck output assumes one.
-	seq := p.CompileCheck(codePath, testPath)
+	seq := compileCheckFor(p, v.RepoDir, codePath, testPath)
 	if len(seq) == 0 {
 		// An empty sequence must NOT read as "nothing to check, therefore
 		// compiles": that is exactly the failure mode this method's own
@@ -1307,4 +1314,32 @@ func signedDurationS(t Timing) any {
 		return nil
 	}
 	return t.Total.Seconds()
+}
+
+// compileCheckFor is the plugin's compile check, scoped the way the test
+// command is: through lang.ScopeTestCmd, the one door every per-file command
+// goes through. A check that builds more than the test command grades is not
+// just slower — on a workspace it can exceed the per-mutant timeout and fail
+// the whole file before one mutant is scored (Warp: `cargo test --no-run`
+// from the root built all 80 crates while the suite graded one).
+//
+// With no checkout (single-file mode) the plugin's check is used as is: the
+// scaffold is the whole unit. If scoping fails, which cannot happen once the
+// test command itself was scoped against the same checkout and file, the
+// unscoped check is kept — slower, but it still decides "does it build",
+// whereas dropping the gate would count every unbuildable mutant as a kill.
+func compileCheckFor(p golang.Plugin, repoDir, codePath, testPath string) [][]string {
+	seq := p.CompileCheck(codePath, testPath)
+	if repoDir == "" {
+		return seq
+	}
+	out := make([][]string, 0, len(seq))
+	for _, cmd := range seq {
+		scoped, err := golang.ScopeTestCmd(p, repoDir, codePath, cmd)
+		if err != nil {
+			return seq
+		}
+		out = append(out, scoped)
+	}
+	return out
 }

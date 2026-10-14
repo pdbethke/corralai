@@ -81,6 +81,11 @@ type WeakFile struct {
 	//
 	// Only meaningful alongside ProvenMissed > 0.
 	AuthoredTest string
+	// AuthoredLanding mirrors advpool.Verdict.AuthoredLanding: the file
+	// AuthoredTest must be appended to when it is a block that compiles only
+	// inside that file (a Rust corral_tests module); "" when it is a file of
+	// its own. A printer that shows AuthoredTest shows this with it.
+	AuthoredLanding string
 	// AuthoredExtra mirrors advpool.Verdict.AuthoredExtra: proven authored
 	// tests the language's concatenator would not fold into AuthoredTest.
 	//
@@ -559,6 +564,7 @@ func Aggregate(owner, repo, commit string, totalFiles, candidates int, results [
 			PriorSource:      r.Verdict.PriorSource,
 			ShadowSelection:  r.Verdict.ShadowSelection,
 			AuthoredTest:     r.Verdict.AuthoredTest,
+			AuthoredLanding:  r.Verdict.AuthoredLanding,
 			// Which measurement this file's rate IS, carried onto the report
 			// so the printer never has to reach back into the verdict — and
 			// so it cannot print a rate without the question it answers.

@@ -215,7 +215,7 @@ func renderTestWriterRepairing(rs RunSpec, sigs []repoindex.Signature, survivors
 	// `base` is nil here: a collision-disambiguated name would differ in the
 	// FILENAME only, never the directory, so the relative hop below stays
 	// correct either way.
-	authored := authoredTestPath(rs.CodePath, rs.DevTestPath, nil)
+	authored := authoredTestPath(rs.Landing, rs.CodePath, rs.DevTestPath, nil)
 	authoredDir, codeDir := filepath.Dir(authored), filepath.Dir(rs.CodePath)
 	rel, rerr := filepath.Rel(authoredDir, rs.CodePath)
 	if rerr != nil {
@@ -224,14 +224,24 @@ func renderTestWriterRepairing(rs RunSpec, sigs []repoindex.Signature, survivors
 	rel = filepath.ToSlash(rel)
 
 	var fileFact string
-	if authoredDir == codeDir {
+	switch {
+	case rs.Landing.Into:
+		// A landing INTO the project's own test file: the writer must know
+		// the file, that what it returns is wrapped (and how — the use line
+		// is the landing's, rendered by the same LandBody ParseTest will
+		// apply), and that it must not write the wrapper itself. The
+		// "reference the code by path" sentence below would be false here:
+		// the wrapper's use line is what brings the code into scope.
+		fileFact = fmt.Sprintf("Your test is APPENDED to %q — the file where the project keeps the tests for %q, which declares it as its own test module; the tests already in it stay exactly as they are. corral wraps what you return like this:\n\n%s\nso return ONLY what goes inside it, and do not write that wrapper yourself.",
+			filepath.ToSlash(authored), filepath.ToSlash(rs.CodePath), golang.LandBody(rs.Landing.Landing, rs.Landing.Existing, "<your tests>"))
+	case authoredDir == codeDir:
 		fileFact = fmt.Sprintf("Your test file will be created at %q — the same directory as the source file under review, %q.",
 			filepath.ToSlash(authored), filepath.Base(rs.CodePath))
-	} else {
+	default:
 		fileFact = fmt.Sprintf("Your test file will be created at %q. The source file under review is %q, which from your test file's own location is %q — it is NOT in the same directory as your test.",
 			filepath.ToSlash(authored), filepath.ToSlash(rs.CodePath), rel)
 	}
-	if importNote == "" {
+	if importNote == "" && !rs.Landing.Into {
 		// Only when the language has no absolute-import fact to give (every
 		// plugin but python). Stated as superseding, because a plugin's own
 		// TestWriterSystem may carry a same-directory EXAMPLE — ruby's says

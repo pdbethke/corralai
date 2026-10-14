@@ -224,7 +224,12 @@ func TestProbeDowngradesASuiteThatIsNotConcurrencySafe(t *testing.T) {
 	defer p.Close()
 	q, d := p.Probe(context.Background(), nil, "a.py", "x=0\n", cmd)
 	defer q.Close()
-	if d.Trees != 1 || !strings.HasPrefix(d.Note, "suite is not concurrency-safe: baseline failed under 3") {
+	// The note names both causes a failing baseline under N trees can have:
+	// the probe cannot tell a suite that is not concurrency-safe from a copy
+	// that lacks something the suite needs (Warp: a crate whose Cargo
+	// workspace root sat outside --repo), and blaming the suite for the
+	// second is a false statement about the audited project.
+	if d.Trees != 1 || !strings.HasPrefix(d.Note, "baseline failed in 3 private trees at once (the suite may not be concurrency-safe, or the copies lack something it needs — e.g. a Cargo workspace root outside --repo) — ") || strings.HasPrefix(d.Note, "suite is not concurrency-safe") {
 		t.Errorf("got %+v", d)
 	}
 	if q.Trees() != 1 || q.treeRoots()[0] != root {

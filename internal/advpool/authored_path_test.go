@@ -57,7 +57,7 @@ func TestAuthoredTestPath_RelocatesIntoDevTestDir(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := authoredTestPath(c.codePath, c.devTest, nil)
+			got := authoredTestPath(AuthoredLanding{}, c.codePath, c.devTest, nil)
 			if got != c.want {
 				t.Fatalf("authoredTestPath(%q, %q) = %q, want %q", c.codePath, c.devTest, got, c.want)
 			}
@@ -75,7 +75,7 @@ func TestAuthoredTestPath_RelocatesIntoDevTestDir(t *testing.T) {
 // being the same string there is the existing contract, not a collision.
 func TestAuthoredTestPath_NoDevTestFallsBackUnchanged(t *testing.T) {
 	for _, codePath := range []string{"passwd.py", "src/flask/cli.py", "internal/auth/login.go", "weird.unknownext"} {
-		if got, want := authoredTestPath(codePath, "", nil), advPoolTestPath(codePath); got != want {
+		if got, want := authoredTestPath(AuthoredLanding{}, codePath, "", nil), advPoolTestPath(codePath); got != want {
 			t.Fatalf("authoredTestPath(%q, \"\") = %q, want the unchanged advPoolTestPath %q", codePath, got, want)
 		}
 	}
@@ -92,7 +92,7 @@ func TestAuthoredTestPath_NeverShadowsAnExistingRepoFile(t *testing.T) {
 		"tests/test_cli.py":        "REAL DEV TEST",
 		"tests/test_cli_corral.py": "SOME REAL FILE THAT ALREADY EXISTS",
 	}
-	got := authoredTestPath("src/flask/cli.py", "tests/test_cli.py", base)
+	got := authoredTestPath(AuthoredLanding{}, "src/flask/cli.py", "tests/test_cli.py", base)
 	if _, clash := base[got]; clash {
 		t.Fatalf("authoredTestPath returned %q, which already exists in the repo — overlaying it would destroy real source", got)
 	}
@@ -110,7 +110,7 @@ func TestAuthoredTestPath_NeverShadowsAnExistingRepoFile(t *testing.T) {
 func TestScoreAuthoredReport_OverlaysAtTheRelocatedPath(t *testing.T) {
 	const codePath = "src/flask/cli.py"
 	const devTest = "tests/test_cli.py"
-	want := authoredTestPath(codePath, devTest, nil)
+	want := authoredTestPath(AuthoredLanding{}, codePath, devTest, nil)
 
 	jail := &wellBehavedJail{
 		codePath: codePath,
@@ -161,7 +161,7 @@ func TestScoreAuthoredReport_LandsBesideAnEvidenceOnlyCoveringTest(t *testing.T)
 	// uses for an evidence-only candidacy fixture.
 	const codePath = "mypkg/core.py"
 	const coveringTest = "tests/test_smoke.py"
-	want := authoredTestPath(codePath, coveringTest, nil)
+	want := authoredTestPath(AuthoredLanding{}, codePath, coveringTest, nil)
 	if filepath.Dir(want) != "tests" {
 		t.Fatalf("authoredTestPath(%q, %q) = %q, want it sited beside the covering test in tests/", codePath, coveringTest, want)
 	}

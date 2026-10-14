@@ -130,25 +130,41 @@ package reposcan
 // large prompt to hit the same refusal); only 400, 413 and 422 do. A "16"
 // critic count may have been held to a list that was missing real tests.
 // Shape unchanged; behaviour bump.
-// "18" (2026-10-13): a seat can now be a coding-agent CLI, and one on the
-// `text` wire reports no token usage. advpool.ModelCall gained UnmeteredCalls
-// (on the wire as model_calls[].unmetered_calls) so such a seat's calls are
-// counted as not metered rather than as measured zeros. That is a change
-// INSIDE a nested type, which the shallow fingerprint below does not see —
-// VerdictShapeSHA256 is therefore unchanged — and the rule above says to bump
-// for the serialized shape all the same: a cached "17" document unmarshals
-// the field as 0, which would read an unmetered seat's calls as free. (The
-// feat/rust-part2 branch also claims "18"; whichever merges second re-bumps.)
-// "19" (2026-10-13): the Verdict gained SeatTools — each agent seat's CLI and
-// version beside the plain spec in ModelsByRole, mirroring review's
-// ReviewerTool — and the bug-catching rows a converged verdict feeds now mark
-// an unpinned agent seat so per-model analysis leaves it out. A shape change,
-// so shape and generation move together: a cached "18" verdict would
-// unmarshal SeatTools as nil and read an agent seat as an API one. (The cache
-// key ALSO names an agent seat's tool now — seatToolProbe.keyName, via
-// modelSetKeyWith in cmd/corral — so a CLI upgrade
-// re-measures; that alone invalidates nothing for API-only runs.)
-const VerdictGeneration = "19"
+// "18" (2026-10-13): the Verdict gained AuthoredLanding — the file a Rust
+// authored test (a `mod corral_tests` block) must be appended to, the one file
+// it compiles in. A cached "17" document unmarshals it as "", which would hand
+// the block over with nowhere to put it; shape and generation change
+// together. The same change admitted Rust files whose tests live in a file
+// the source declares, so the exam also changed for them (no "17" verdict
+// for such a file could exist: every .rs file was refused). The same bump
+// covers BaselineFlaky (the tests a passing baseline passed only on a nextest
+// retry), added in the same change: a "17" document unmarshals it as nil,
+// which would read as "no test leaned on a retry". On certify --repo it is
+// the union of the stability runs before the audit and the audit's own dev
+// pass (folded in localExecutor.Execute before the verdict is recorded or
+// cached). That fold landed before "18" left this branch, so no "18"
+// verdict holds the narrower list and it needed no generation of its own.
+// The same holds for the workspace pool's downgrade note
+// (Verdict.Concurrency.Note), reworded under "18" to stop blaming the suite
+// for what may be an incomplete copy: every verdict carrying the old words is
+// a "17" one, which "18" already retires.
+// "21" (2026-10-14): a seat can now be a coding-agent CLI. Two changes ride
+// it. advpool.ModelCall gained UnmeteredCalls (model_calls[].unmetered_calls),
+// so a `text`-wire seat's calls count as not metered rather than as measured
+// zeros; that is inside a nested type the shallow fingerprint below does not
+// see, and a cached document without it would read an unmetered seat's calls
+// as free. And the Verdict gained SeatTools, each agent seat's CLI and version
+// beside the plain spec in ModelsByRole (mirroring review's ReviewerTool), so
+// a cached verdict without it would read an agent seat as an API one. The
+// bug-catching rows a converged verdict feeds now mark an unpinned agent seat
+// so per-model analysis leaves it out, and the cache key names an agent
+// seat's tool (seatToolProbe.keyName, via modelSetKeyWith in cmd/corral), so
+// a CLI upgrade re-measures. "19" and "20" are burned, never assigned: the
+// agent-seats branch stamped "18" and "19" on its own acceptance runs before
+// "18" landed on main for Rust, and an unreleased build combining both
+// branches stamped "20" into a local ledger. Skipping both keeps any of those
+// entries from being read as a verdict of this shape.
+const VerdictGeneration = "21"
 
 // VerdictShapeSHA256 fingerprints advpool.Verdict's serialized shape: every
 // exported field's name, type and json tag, sorted by name and hashed.
@@ -170,4 +186,4 @@ const VerdictGeneration = "19"
 // Verdict's own FIELDS") and nothing wider. Nor can any fingerprint catch the
 // behaviour half: a scorer that computes a DIFFERENT number into the SAME
 // field is invisible here, and remains a review responsibility.
-const VerdictShapeSHA256 = "06022c5c445ffa4a8fddc34e7d43e9d515e6939b3e0ce53a08d1bad07c752a37"
+const VerdictShapeSHA256 = "59dc4560fefa5082629ef52986351db848046ff085341bbb7ca9cd3141859c28"

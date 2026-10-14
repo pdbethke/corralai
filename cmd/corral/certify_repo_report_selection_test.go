@@ -240,8 +240,8 @@ func TestPrintWeakFileNamesTheConcurrency(t *testing.T) {
 
 	b.Reset()
 	printWeakFile(&b, reposcan.WeakFile{Path: "pkg/b.py", KillRate: 0.65, Trees: 1,
-		ConcurrencyNote: "suite is not concurrency-safe: baseline failed under 3"})
-	if !strings.Contains(b.String(), "   concurrency: 1 (suite is not concurrency-safe: baseline failed under 3)") {
+		ConcurrencyNote: "baseline failed in 3 private trees at once (the suite may not be concurrency-safe, or the copies lack something it needs — e.g. a Cargo workspace root outside --repo)"})
+	if !strings.Contains(b.String(), "   concurrency: 1 (baseline failed in 3 private trees at once (the suite may not be concurrency-safe, or the copies lack something it needs — e.g. a Cargo workspace root outside --repo))") {
 		t.Errorf("got %q", b.String())
 	}
 

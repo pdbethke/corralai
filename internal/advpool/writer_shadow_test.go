@@ -79,6 +79,9 @@ type writerShadowScorer struct {
 	// challenger is measured cleanly — the shape that proves the
 	// unmeasured-is-not-zero guard is enforced on BOTH seats.
 	primaryRep *adequacy.Report
+	// devFlaky, when set, is the dev pass's BaselineFlaky — the tests its
+	// baseline passed only on a retry.
+	devFlaky []string
 }
 
 // gradedReport is the report a suite that genuinely ran produces: everything it
@@ -102,7 +105,9 @@ func gradedReport(mutants []adequacy.Mutant, survives []string) adequacy.Report 
 // ScoreReport is the DEV suite's score: it misses m1 and m2.
 func (s *writerShadowScorer) ScoreReport(_ context.Context, _, code, test string, mutants []adequacy.Mutant, _ string) (adequacy.Report, error) {
 	s.calls = append(s.calls, scoreCall{code, test, mutants})
-	return gradedReport(mutants, writerShadowDevSurvives), nil
+	rep := gradedReport(mutants, writerShadowDevSurvives)
+	rep.BaselineFlaky = s.devFlaky
+	return rep, nil
 }
 
 // ScoreAuthoredReport is an AUTHORED suite's score — the primary writer's, and

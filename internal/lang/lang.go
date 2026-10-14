@@ -87,6 +87,10 @@ type Plugin interface {
 	// explicit command (e.g. certify --local with no --code test command
 	// override); Preflight then falls back to its prior stock-toolchain
 	// check, UNCHANGED from before this parameter existed.
+	//
+	// Preflight runs on EVERY substrate, so it checks only what every
+	// substrate needs. A requirement of the jail alone belongs to the
+	// optional JailPreflighter, which only jailed doors ask.
 	Preflight(testCmd []string) error
 	PromptLang() string       // human label, for verdict metadata + logs
 	TestWriterSystem() string // language-specific test-writer system prompt
@@ -687,6 +691,64 @@ type FailureParser interface {
 	// FirstFailure returns the first failing test's id, or "" when the output
 	// names none.
 	FirstFailure(output []byte) string
+}
+
+// FlakyReporter is an OPTIONAL FailureParser extension for a runner that can
+// pass a run whose tests failed first and passed on a retry (cargo-nextest's
+// FLAKY). Such a run exits 0, so it is graded as PASSED — the operator's own
+// retry policy decides, not corral — and the tests it passed only by retrying
+// are named so that grading is disclosed, never silent. nil or empty means
+// the output names none.
+type FlakyReporter interface {
+	FlakyTests(output []byte) []string
+}
+
+// RunDiscloser is the OPTIONAL plugin extension that says how running
+// testCmd in repoDir differs from how the project's own setup runs its suite
+// — said on the scan line, never acted on: corral runs the operator's
+// command as given and never substitutes one of its own. Rust reports a
+// project nextest.toml that `cargo test` bypasses, and nextest's
+// passed-on-retry grading.
+type RunDiscloser interface {
+	RunDisclosures(repoDir string, testCmd []string) []string
+}
+
+// RunDisclosures is p's RunDiscloser answer, or nil for a plugin that has
+// nothing to say. The one way a caller asks, so no caller switches on a
+// language to decide whether there is anything to disclose.
+func RunDisclosures(p Plugin, repoDir string, testCmd []string) []string {
+	if d, ok := p.(RunDiscloser); ok {
+		return d.RunDisclosures(repoDir, testCmd)
+	}
+	return nil
+}
+
+// JailPreflighter is the OPTIONAL plugin extension for the half of a
+// toolchain check that only a JAILED run needs. Plugin.Preflight answers
+// "can this host run the suite at all", which every substrate needs; this
+// answers "can the jail run it", which only the substrates that build one
+// do (certify --local, certify --repo on the jail substrate, the brain,
+// doctor's jail rehearsal). certify --repo --substrate workspace runs the
+// operator's own toolchain on the host and never asks it: a requirement of
+// the jail enforced where no jail runs refuses a run that would have
+// worked, which is a false statement about the operator's machine.
+//
+// Rust implements it (the jail runs the system-wide rustup toolchain, not a
+// ~/.cargo install); PHP implements it (its interpreter must resolve inside
+// the sandbox's mount table, not only on the host).
+type JailPreflighter interface {
+	JailPreflight(testCmd []string) error
+}
+
+// JailPreflight is p's JailPreflighter answer, or nil for a plugin whose
+// jail needs nothing its Preflight did not already check. The one way a
+// caller asks — the same shape as RunDisclosures — so no door switches on a
+// language to decide whether the jail has requirements of its own.
+func JailPreflight(p Plugin, testCmd []string) error {
+	if j, ok := p.(JailPreflighter); ok {
+		return j.JailPreflight(testCmd)
+	}
+	return nil
 }
 
 // SelectionDiagnoser is an OPTIONAL TestSelector extension: a plugin that

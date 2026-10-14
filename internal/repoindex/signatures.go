@@ -59,6 +59,13 @@ func ExtractSignatures(text, lang string) ([]Signature, error) {
 	return extractSignatures(text, lang)
 }
 
+// ReadsTestModules reports whether this build can read lang's test-module
+// declarations at all: false for a language with no modules reader, and for
+// EVERY language in a no-cgo build (the parse needs the grammar). A caller
+// whose language declares its tests (a content rule) must not take
+// TestModules' nil from a build that cannot read as "declares none".
+func ReadsTestModules(lang string) bool { return readsTestModules(lang) }
+
 // TestModules returns the test modules src declares in itself, for a language
 // whose row has a modules reader (Rust); every other language answers nil.
 // Build-tagged like ExtractSignatures: the parse needs the grammar, so a

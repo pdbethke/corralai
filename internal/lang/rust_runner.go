@@ -4,6 +4,7 @@ package lang
 
 import (
 	"bytes"
+	"os"
 	"path/filepath"
 	"strings"
 )
@@ -29,19 +30,43 @@ const (
 type runnerRow struct {
 	// preflightBin is the binary that must be on PATH.
 	preflightBin string
+	// disclose is what the scan line says about running this runner in
+	// repoDir (read by RunDisclosures).
+	disclose func(repoDir string) []string
 }
 
-// The nextest.toml disclosure (cargo test ignores the project's nextest
-// profiles) lands with the landing task, where a scan line exists to carry it.
+// nextestConfig is where cargo-nextest reads a project's profiles, relative
+// to the workspace root.
+const nextestConfig = ".config/nextest.toml"
+
 func rustRunner(testCmd []string) runnerRow {
 	if cmdHasWord(testCmd, "nextest") || cmdHasWord(testCmd, "cargo-nextest") {
 		bin := "cargo-nextest"
 		if len(testCmd) > 0 && filepath.Base(testCmd[0]) == "cargo-nextest" {
 			bin = testCmd[0]
 		}
-		return runnerRow{preflightBin: bin}
+		return runnerRow{preflightBin: bin, disclose: func(string) []string {
+			return []string{"runner: cargo-nextest — a test it passes only on a retry (FLAKY) is graded as passed, as the project's own retry policy decides; such tests in a file's unmutated baseline are named, but a MUTANT whose run passed only on a retry is counted as survived and is not named"}
+		}}
 	}
-	return runnerRow{preflightBin: preflightBin(testCmd, "cargo")}
+	return runnerRow{preflightBin: preflightBin(testCmd, "cargo"), disclose: func(repoDir string) []string {
+		if fi, err := os.Stat(filepath.Join(repoDir, filepath.FromSlash(nextestConfig))); err != nil || !fi.Mode().IsRegular() { // #nosec G703 -- existence check under the operator's repository
+			return nil
+		}
+		return []string{"runner: cargo test, but this repository keeps " + nextestConfig + " — its nextest profiles (retries, timeouts, test groups) do not apply to this run, and libtest runs every test of a binary in one process where nextest runs each in its own; pass `-- cargo nextest run` to grade under the project's own runner"}
+	}}
+}
+
+// RunDisclosures is the runner row's disclosure (see RunDiscloser).
+func (rustPlugin) RunDisclosures(repoDir string, testCmd []string) []string {
+	return rustRunner(testCmd).disclose(repoDir)
+}
+
+// FlakyTests names the tests nextest passed only on a retry — the Flaky list
+// of the same parse FirstFailure reads (see FlakyReporter). libtest has no
+// retries, so its output names none.
+func (rustPlugin) FlakyTests(output []byte) []string {
+	return parseRustRun(rustGrammarOf(output), output).Flaky
 }
 
 // rustRun is what one parse of a runner's output established.

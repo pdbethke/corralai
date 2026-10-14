@@ -186,3 +186,12 @@ func TestRustBoolOpsAndLoopsCount(t *testing.T) {
 		t.Errorf("complexity = %d, want 6", sigs[0].Complexity)
 	}
 }
+
+// TestReadsTestModulesNamesTheLanguagesWithAReader: with the grammar, Rust's
+// declarations are readable and a language with no modules reader's are not
+// (it pairs by filename alone).
+func TestReadsTestModulesNamesTheLanguagesWithAReader(t *testing.T) {
+	if !ReadsTestModules("rust") || ReadsTestModules("python") {
+		t.Errorf("ReadsTestModules rust=%v python=%v", ReadsTestModules("rust"), ReadsTestModules("python"))
+	}
+}

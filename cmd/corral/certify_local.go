@@ -28,6 +28,7 @@ import (
 	"github.com/pdbethke/corralai/internal/buildstore"
 	"github.com/pdbethke/corralai/internal/creds"
 	"github.com/pdbethke/corralai/internal/lang"
+	"github.com/pdbethke/corralai/internal/pairing"
 	"github.com/pdbethke/corralai/internal/queue"
 	"github.com/pdbethke/corralai/internal/repoindex"
 	"github.com/pdbethke/corralai/internal/reposcan"
@@ -751,6 +752,9 @@ func noTestFoundErr(codePath string, res reposcan.SearchResult) string {
 // path was refused for leaving the repository DID declare one, so that is
 // said instead.
 func whereItLooked(res reposcan.SearchResult) string {
+	if res.DeclarationsUnreadable {
+		return "This build cannot read the file's test-module declarations (built without cgo, which the grammar needs), so the test it declares cannot be found.\n"
+	}
 	if len(res.Tried) == 0 && len(res.Roots) == 0 && len(res.RefusedOutsideRoot) == 0 {
 		return "Nothing to look for: the file declares no test of its own, and its language derives no test file name from its path.\n"
 	}
@@ -848,11 +852,11 @@ func resolveAuditPlugin(in localAuditInput) (lang.Plugin, error) {
 		}
 		plug = p
 	}
-	// Before preflight, jail or spend: a file whose test would be written
-	// over the file itself (its language's test landing is not built) cannot
-	// be audited. certify --repo's jobs route through here too.
-	if err := lang.CheckTestLanding(in.codePath); err != nil {
-		return nil, auditUsageErr("%v", err)
+	// Before preflight, jail or spend: a file whose authored test would be
+	// written over the file itself (its landing is the source) cannot be
+	// audited. certify --repo's jobs route through here too.
+	if _, err := auditLanding(in); err != nil {
+		return nil, err
 	}
 	// in.checkArgv is the operator's own `-- <cmd>` when one was given (both
 	// certify --local's own flag and certify --repo's per-job testCmd route
@@ -863,7 +867,72 @@ func resolveAuditPlugin(in localAuditInput) (lang.Plugin, error) {
 	if err := plug.Preflight(in.checkArgv); err != nil {
 		return nil, auditErr("%s toolchain unavailable — refusing to grade: %v", plug.Name(), err)
 	}
+	// The jail's own requirements, asked only where a jail runs: every
+	// substrate but the workspace one, which runs the operator's toolchain on
+	// the host (certify --local is always jailed; certify --repo jobs carry
+	// their substrate here). Enforcing them on the workspace substrate
+	// refused a stock rustup install that substrate runs perfectly well.
+	if in.substrate != substrateWorkspace {
+		if err := lang.JailPreflight(plug, in.checkArgv); err != nil {
+			return nil, auditErr("%s toolchain unavailable inside the audit jail — refusing to grade: %v", plug.Name(), err)
+		}
+	}
 	return plug, nil
+}
+
+// auditLanding is where this audit's authored test lands
+// (lang.TestLanding), CHECKED (lang.CheckTestLanding) — the one call both the
+// door (resolveAuditPlugin) and the wiring (prepareAuditJail) make, so the
+// jail is never built around a landing that was not the one admitted.
+//
+// It reads the repository at --repo-dir with the same adapter that pairs
+// the file (reposcan.DiskSources, the confinement root being the repository).
+// With no --repo-dir there is no repository: single-file mode seeds only the
+// code and its test, by base name, so a test cannot be composed into a
+// project file — pairing.Sources{}, and a content language (Rust) is refused
+// saying it needs --repo-dir. A path language never reads anything here.
+func auditLanding(in localAuditInput) (pairing.Landing, error) {
+	src := pairing.Sources{}
+	if repoDir := strings.TrimSpace(in.repoDir); repoDir != "" {
+		if p, ok := lang.Detect(in.codePath); ok {
+			src = reposcan.DiskSources(p, repoDir)
+		}
+	}
+	l, err := lang.TestLanding(in.codePath, src)
+	if err != nil {
+		return l, auditErr("where the authored test for %s lands: %v", in.codePath, err)
+	}
+	if err := lang.CheckTestLanding(in.codePath, l); err != nil {
+		return l, auditUsageErr("%v", err)
+	}
+	return l, nil
+}
+
+// authoredLandingFor is the run's advpool.AuthoredLanding: the checked landing
+// with its Path rewritten as the workspace key (repo-relative, slash — the
+// same rewrite codeKey and devTestKey get), and, for a landing INTO an
+// existing file, that file's bytes as they are now, which every workspace
+// composes the authored block onto. Single-file mode (no repoDir) carries
+// none: auditLanding has already refused a content language there, and a
+// path language's authored test keeps authoredTestPath's own rule.
+func authoredLandingFor(l pairing.Landing, repoDir string, fsPath func(string) string) (advpool.AuthoredLanding, error) {
+	if strings.TrimSpace(repoDir) == "" || l.Path == "" {
+		return advpool.AuthoredLanding{}, nil
+	}
+	k, err := filepath.Rel(repoDir, fsPath(l.Path))
+	if err != nil || k == ".." || strings.HasPrefix(k, ".."+string(filepath.Separator)) {
+		return advpool.AuthoredLanding{}, fmt.Errorf("the authored test's landing %s is not inside --repo-dir %s", l.Path, repoDir)
+	}
+	out := advpool.AuthoredLanding{Landing: l}
+	out.Path = filepath.ToSlash(k)
+	if l.Into {
+		b, rerr := os.ReadFile(fsPath(l.Path)) // #nosec G304 -- the test file the source's own declaration loads, confined to the repository by pairing (insideRoot)
+		if rerr != nil {
+			return advpool.AuthoredLanding{}, fmt.Errorf("reading %s, where the authored test lands: %v", l.Path, rerr)
+		}
+		out.Existing = string(b)
+	}
+	return out, nil
 }
 
 // scopeAuditInput is the ONE place a file's audit commands are scoped to the
@@ -983,8 +1052,19 @@ func prepareAuditJail(ctx context.Context, in localAuditInput, plug lang.Plugin,
 		}
 	}
 
+	// The landing the door admitted, re-derived by the same call and
+	// re-checked, so the wiring below writes exactly where the check looked.
+	landing, err := auditLanding(in)
+	if err != nil {
+		return p, err
+	}
+	for _, line := range lang.RunDisclosures(plug, repoDir, in.checkArgv) {
+		fmt.Fprintf(stdout, "  %s\n", line)
+	}
+
 	wiring, err := buildJailWiring(ctx, jailWiringInput{
-		iso: iso, timeout: timeout, testTimeout: in.mutantTimeout,
+		landing: landing,
+		iso:     iso, timeout: timeout, testTimeout: in.mutantTimeout,
 		codePath: in.codePath, testPath: tp, repoDir: repoDir, langName: plug.Name(), fsPath: fsPath,
 		code: code, devTest: devTest, checkArgv: in.checkArgv,
 		baseArgv: in.baseArgv, selection: in.selection,
@@ -1032,6 +1112,13 @@ type jailBaselineRunner struct {
 	// copy of this struct still reports it — reposcan.CheckBaselineStable
 	// takes the runner as an interface and calls it repeatedly.
 	lastOutput *string
+	// flaky is every test any PASSING baseline run passed only on a retry
+	// (adequacy.Report.BaselineFlaky) — the UNION over the runs
+	// CheckBaselineStable makes, not the last run's list: a test that needed
+	// a retry in run 1 and not in run 2 still leaned on the retry policy, and
+	// keeping only run 2 would erase that. Pointer-shared for the same reason
+	// lastOutput is.
+	flaky *[]string
 }
 
 func (b jailBaselineRunner) RunBaseline() (bool, error) {
@@ -1045,6 +1132,9 @@ func (b jailBaselineRunner) RunBaseline() (bool, error) {
 	if !rep.CompliantPass && b.lastOutput != nil {
 		*b.lastOutput = rep.BaselineOutput
 	}
+	if rep.CompliantPass && b.flaky != nil {
+		*b.flaky = unionTestNames(*b.flaky, rep.BaselineFlaky)
+	}
 	return rep.CompliantPass, nil
 }
 
@@ -1055,6 +1145,16 @@ func (b jailBaselineRunner) BaselineOutput() string {
 		return ""
 	}
 	return *b.lastOutput
+}
+
+// BaselineFlaky is every test a passing baseline run passed only on a retry,
+// across all the runs this runner made, in first-seen order (see
+// adequacy.Report.BaselineFlaky); nil when there were none.
+func (b jailBaselineRunner) BaselineFlaky() []string {
+	if b.flaky == nil {
+		return nil
+	}
+	return *b.flaky
 }
 
 // baselineRunnerFor builds the baseline-only runner for one job — honesty
@@ -1102,6 +1202,7 @@ func baselineRunnerFor(ctx context.Context, in localAuditInput) (reposcan.Baseli
 		// Fresh per runner: two files' baseline failures must never be
 		// attributed to each other.
 		lastOutput: new(string),
+		flaky:      new([]string),
 	}, prep.cleanup, nil
 }
 
@@ -1415,6 +1516,9 @@ type runSubject struct {
 	codePath, code       string
 	devTestPath, devTest string
 	lang, importPath     string
+	// landing is the wiring's AuthoredLanding — the same value the scorer
+	// and validator write with (jailWiring.landing).
+	landing advpool.AuthoredLanding
 }
 
 // orArgv returns a when it has words, else b. The narrowed and the base
@@ -1495,6 +1599,7 @@ func newAuditRunSpec(in localAuditInput, roles auditRoles, subj runSubject) advp
 		Repo: subj.repo, Commit: subj.commit, Goal: strings.TrimSpace(in.goal),
 		CodePath: subj.codePath, Code: subj.code,
 		DevTestPath: subj.devTestPath, DevTestCode: subj.devTest,
+		Landing: subj.landing,
 		// Quoted, not space-joined: TestCmd is a STRING that gets re-split
 		// downstream, and a plain Join is not reversible — an argument
 		// containing a space (an inline -e script, --filter="a b") comes back
@@ -1770,6 +1875,7 @@ func auditOneFile(ctx context.Context, in localAuditInput) (advpool.Verdict, err
 		codePath: codeKey, code: string(code),
 		devTestPath: devTestKey, devTest: string(devTest),
 		lang: plug.Name(), importPath: prep.importPath,
+		landing: prep.wiring.landing,
 	})
 
 	// Signatures are best-effort (mirrors the brain's StartRun): a failure just
@@ -1856,7 +1962,7 @@ func auditOneFile(ctx context.Context, in localAuditInput) (advpool.Verdict, err
 				"  Widen it to the directory or the runner's own discovery: `-- pytest tests/` rather than `-- pytest tests/test_one.py`;\n"+
 				"  `-- npx jest tests/` rather than a single spec path.\n"+
 				"  Nothing was spent — this is checked before any model runs.",
-			advpool.AuthoredTestPathFor(rs.CodePath, rs.DevTestPath))
+			advpool.AuthoredTestPathFor(rs.Landing, rs.CodePath, rs.DevTestPath))
 	}
 
 	verdict, err := driveLocalRun(ctx, d, q, localMissionID, chatterFor, poll, time.Sleep, stdout, rec, actorFor, swarm)
@@ -1921,34 +2027,53 @@ func auditOneFile(ctx context.Context, in localAuditInput) (advpool.Verdict, err
 		}
 	}
 
-	// Hand the pool's authored test back: when it killed a survivor the dev suite
-	// missed, print it so the dev can adopt it.
+	// The readout after the verdict: the baseline's flaky tests and the
+	// pool's authored test(s), with where they go.
 	if st, ok := d.RunStatus(localMissionID); ok {
-		if strings.TrimSpace(st.AuthoredTest) != "" {
-			fmt.Fprintf(stdout, "\nthe herd authored a test that catches a gap your suite missed — add it to %s:\n\n", tp)
-			fmt.Fprintln(stdout, strings.TrimRight(st.AuthoredTest, "\n"))
-		}
-		// And every proven part the language's concatenator would not fold
-		// into that file. Each is a test that was written, compiled and RUN
-		// to kill the survivor it names, so it must reach the operator whole
-		// — see reposcan.WeakFile.AuthoredExtra.
-		for _, p := range st.AuthoredExtra {
-			fmt.Fprintf(stdout, "\nproven test for survivor %s — a SEPARATE file, it cannot be merged with the one above:\n", p.MutantID)
-			if r := strings.TrimSpace(p.Reason); r != "" {
-				fmt.Fprintf(stdout, "  why: %s\n", r)
-			}
-			fmt.Fprintln(stdout, "")
-			fmt.Fprintln(stdout, strings.TrimRight(p.Source, "\n"))
-		}
+		printLocalReadout(stdout, *verdict, st, tp)
 	}
 
 	return *verdict, nil
+}
+
+// printLocalReadout is certify --local's readout after the verdict, every
+// line of it through a rendering certify --repo shares: the tests the dev
+// pass's baseline passed only on a retry (flakyBaselineNote, as --repo's
+// scan line), then the pool's authored test and every proven part that
+// would not merge, each with where it goes (authoredTestDestination — read
+// off the verdict's AuthoredLanding, the field --repo prints and the ledger
+// keeps). tp is the dev test, the target for a test that is a file of its
+// own.
+func printLocalReadout(w io.Writer, v advpool.Verdict, st advpool.RunState, tp string) {
+	if note := flakyBaselineNote(v.BaselineFlaky); note != "" {
+		fmt.Fprintf(w, "%s\n", note)
+	}
+	appendTo := v.AuthoredLanding
+	if strings.TrimSpace(st.AuthoredTest) != "" {
+		fmt.Fprintf(w, "\nthe herd authored a test that catches a gap your suite missed — %s:\n\n", authoredTestDestination(appendTo, tp))
+		fmt.Fprintln(w, strings.TrimRight(st.AuthoredTest, "\n"))
+	}
+	// And every proven part the language's concatenator would not fold into
+	// that file. Each is a test that was written, compiled and RUN to kill
+	// the survivor it names, so it must reach the operator whole — see
+	// reposcan.WeakFile.AuthoredExtra.
+	for _, p := range st.AuthoredExtra {
+		fmt.Fprintf(w, "\nproven test for survivor %s — %s:\n", p.MutantID, authoredExtraDestination(appendTo, "a SEPARATE file, it cannot be merged with the one above"))
+		if r := strings.TrimSpace(p.Reason); r != "" {
+			fmt.Fprintf(w, "  why: %s\n", r)
+		}
+		fmt.Fprintln(w, "")
+		fmt.Fprintln(w, strings.TrimRight(p.Source, "\n"))
+	}
 }
 
 // jailWiringInput bundles the inputs buildJailWiring needs. It is a params
 // struct only to keep the signature readable — every field is a plain input,
 // none optional.
 type jailWiringInput struct {
+	// landing is the checked landing (auditLanding); the repo branches turn
+	// it into the wiring's AuthoredLanding.
+	landing        pairing.Landing
 	iso            sandbox.Isolator
 	timeout        time.Duration
 	testTimeout    time.Duration
@@ -2056,8 +2181,12 @@ var (
 // scorer/validator/enumerator, the workspace keys for the code + dev-test files,
 // and the read-only dependency binds (empty in single-file mode).
 type jailWiring struct {
-	scorer     advpool.JailScorer
-	validator  advpool.JailValidator
+	scorer    advpool.JailScorer
+	validator advpool.JailValidator
+	// landing is the ONE AuthoredLanding the scorer, the validator and the
+	// RunSpec all carry (see advpool.AuthoredLanding): set once here, read
+	// into all three, so they cannot disagree about where the test goes.
+	landing    advpool.AuthoredLanding
 	jailEnum   advpool.JailEnumerator
 	codeKey    string
 	devTestKey string
@@ -2142,6 +2271,9 @@ func buildJailWiring(ctx context.Context, in jailWiringInput) (w jailWiring, err
 			return w, fmt.Errorf("--test %s is not inside --repo-dir %s", in.testPath, in.repoDir)
 		}
 		w.codeKey, w.devTestKey = filepath.ToSlash(ck), filepath.ToSlash(dk)
+		if w.landing, err = authoredLandingFor(in.landing, in.repoDir, in.fsPath); err != nil {
+			return w, err
+		}
 
 		// EMPTY but NON-NIL. scoreWorkspace (internal/advpool/gate.go:143)
 		// branches on BaseFiles != nil: non-nil takes the repo-aware path and
@@ -2254,8 +2386,8 @@ func buildJailWiring(ctx context.Context, in jailWiringInput) (w jailWiring, err
 		// has ONE tree, and a scorer told to run six mutants at once against
 		// it would queue five of them behind the borrow channel for the whole
 		// audit. The number that scores must be the number that exists.
-		w.scorer = advpool.JailScorer{Jail: pool, BaseFiles: base, MutantTimeout: in.testTimeout, DevTestPath: w.devTestKey, Concurrency: pool.Trees(), Lang: in.langName, Selection: in.selection, FailureParser: failureParser, FailFast: failFast}
-		w.validator = advpool.JailValidator{Jail: pool, BaseFiles: base, DevTestPath: w.devTestKey}
+		w.scorer = advpool.JailScorer{Jail: pool, BaseFiles: base, MutantTimeout: in.testTimeout, DevTestPath: w.devTestKey, Landing: w.landing, Concurrency: pool.Trees(), Lang: in.langName, Selection: in.selection, FailureParser: failureParser, FailFast: failFast}
+		w.validator = advpool.JailValidator{Jail: pool, BaseFiles: base, DevTestPath: w.devTestKey, Landing: w.landing}
 		w.jailEnum = advpool.JailEnumerator{Jail: pool, BaseFiles: base}
 		// w.depBinds stays nil: there is nothing to bind read-only when the
 		// real tree is already present.
@@ -2292,6 +2424,9 @@ func buildJailWiring(ctx context.Context, in jailWiringInput) (w jailWiring, err
 			return w, fmt.Errorf("--test %s is not inside --repo-dir %s", in.testPath, in.repoDir)
 		}
 		w.codeKey, w.devTestKey = filepath.ToSlash(ck), filepath.ToSlash(dk)
+		if w.landing, err = authoredLandingFor(in.landing, in.repoDir, in.fsPath); err != nil {
+			return w, err
+		}
 		// The just-read code/test are authoritative in the map (identical to the
 		// on-disk copy, but explicit so a mutant overlay targets the right key).
 		// A private copy: the seed may be SHARED across concurrent jobs and must
@@ -2308,8 +2443,8 @@ func buildJailWiring(ctx context.Context, in jailWiringInput) (w jailWiring, err
 		// RunSpec.Matrix, so wiring it here costs nothing when --matrix is off
 		// (the flag is the real gate).
 		enumerator := newRunEnumerator(in.iso, in.timeout, depBinds)
-		w.scorer = advpool.JailScorer{Jail: jail, BaseFiles: repoFiles, MutantTimeout: in.testTimeout, DevTestPath: w.devTestKey, Concurrency: in.mutantConcurrency, Lang: in.langName, Selection: in.selection, FailureParser: failureParser, FailFast: failFast}
-		w.validator = advpool.JailValidator{Jail: jail, BaseFiles: repoFiles, DevTestPath: w.devTestKey}
+		w.scorer = advpool.JailScorer{Jail: jail, BaseFiles: repoFiles, MutantTimeout: in.testTimeout, DevTestPath: w.devTestKey, Landing: w.landing, Concurrency: in.mutantConcurrency, Lang: in.langName, Selection: in.selection, FailureParser: failureParser, FailFast: failFast}
+		w.validator = advpool.JailValidator{Jail: jail, BaseFiles: repoFiles, DevTestPath: w.devTestKey, Landing: w.landing}
 		w.jailEnum = advpool.JailEnumerator{Jail: enumerator, BaseFiles: repoFiles}
 		if len(depBinds) > 0 {
 			names := make([]string, 0, len(depBinds))

@@ -533,6 +533,8 @@ CREATE TABLE IF NOT EXISTS corral_audits (
   prior_digest                VARCHAR,
   computed_at                 TIMESTAMPTZ,
   mutants_from                VARCHAR,
+  authored_landing            VARCHAR,
+  baseline_flaky              VARCHAR,
   seat_tools                  VARCHAR
 );`
 
@@ -711,6 +713,10 @@ var corralAuditsMigrationCols = []struct{ name, ddl string }{
 	// ledger entry became the only record (the local DuckDB write retired).
 	{"computed_at", "computed_at TIMESTAMPTZ"},
 	{"mutants_from", "mutants_from VARCHAR"},
+	// The file a landed authored test must be appended to (Row.AuthoredLanding).
+	{"authored_landing", "authored_landing VARCHAR"},
+	// The tests a passing baseline passed only on a retry (Row.BaselineFlaky).
+	{"baseline_flaky", "baseline_flaky VARCHAR"},
 	// The roster's agent tools beside models_by_role (Row.SeatTools). NULL
 	// on every row before it: those rosters held API seats only.
 	{"seat_tools", "seat_tools VARCHAR"},
@@ -1459,8 +1465,8 @@ func insertFileRow(tx *sql.Tx, uid string, now time.Time, r Row) error {
 	    mutant_budget, mutant_budget_rule, complexity,
 	    symbols, symbols_probed, decisions, decisions_probed,
 	    challenger_mutants, challenger_survived_writer, challenger_survived_shadow, challenger_union, challenger_shared,
-	    priors_applied, prior_digest, computed_at, mutants_from, seat_tools
-	  ) VALUES (`+placeholders(95)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
+	    priors_applied, prior_digest, computed_at, mutants_from, authored_landing, baseline_flaky, seat_tools
+	  ) VALUES (`+placeholders(97)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
 		uid, now, r.Repo, r.Commit, r.Path, r.Lang,
 		killRate, r.Survivors, r.ProvenMissed,
 		r.TimedOut, r.TestWriterFailed, r.PoolTestUnsound,
@@ -1491,7 +1497,7 @@ func insertFileRow(tx *sql.Tx, uid string, now time.Time, r Row) error {
 		r.Symbols, r.SymbolsProbed, r.Decisions, r.DecisionsProbed,
 		r.ChallengerMutants, r.ChallengerSurvivedWriter, r.ChallengerSurvivedShadow, r.ChallengerUnion, r.ChallengerShared,
 		r.PriorsApplied, nullIfEmpty(r.PriorDigest), nullTime(r.ComputedAt), nullIfEmpty(r.MutantsFrom),
-		nullIfEmpty(r.SeatTools),
+		nullIfEmpty(r.AuthoredLanding), nullIfEmpty(r.BaselineFlaky), nullIfEmpty(r.SeatTools),
 	)
 	if err != nil {
 		return fmt.Errorf("auditpush: insert %s: %w", r.Path, err)

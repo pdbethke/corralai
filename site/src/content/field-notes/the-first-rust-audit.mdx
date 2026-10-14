@@ -1,19 +1,15 @@
 ---
 title: "The first Rust audit"
-description: "corral can now audit Rust. Its first run on someone else's code was one file of Warp's fuzzy matcher: the crate's own 33 tests caught 9 of 37 planted faults, and for 27 of the 28 that got through, corral wrote a test that catches it and ran it to prove so. Here is how a test lands in a Rust project, what the run measured, how we checked it, and what it does not show."
-pubDate: 2026-10-13
+description: "corral can now audit Rust. Its first run on someone else's code was one file of Warp's fuzzy matcher: the crate's own 33 tests caught 11 of 34 planted faults, and for 22 of the 23 that got through, corral wrote a test that catches it and ran it to prove so. Here is how a test lands in a Rust project, what the run measured, how we checked it, and what it does not show."
+pubDate: 2026-10-14
 draft: true
 ---
 
 {/* SPDX-License-Identifier: Elastic-2.0 */}
 
-{/* DRAFT. The figures below are from the run of 2026-10-13 on an unreleased build
-(a local merge of the two branches that add Rust and agent seats). Before this
-is published they are replaced by the figures of the re-run on main, and the
-ledger link below points at that entry. Every number must trace to it. */}
-
 *Field note. Every number below is from one signed ledger entry,
-[`<entry name after the re-run>`](/ledger/), and the audit log beside it.*
+[`94d9296c5801`](/ledger/entry/94d9296c5801.html), and the audit log of the
+run that wrote it.*
 
 ## What we ran
 
@@ -30,7 +26,8 @@ Warp's do, in a separate file the source points at:
 mod tests;
 ```
 
-The command, on a clone of upstream `main` at `714c51f1e`:
+The command, with corral built from `main` at `59facd91`, on a clone of
+Warp's upstream `main` at `714c51f1e`:
 
 ```
 corral certify --repo crates/fuzzy_match --substrate workspace --top 1 \
@@ -51,30 +48,30 @@ role now.
 
 | | |
 |---|---|
-| faults planted and graded | 37 (40 budgeted from 71 decision points) |
-| caught by the crate's own 33 tests | 9: a kill rate of 0.24, 95% interval 0.13–0.40 |
-| got through | 28 |
-| caught by a test corral wrote and ran | 27 |
+| faults planted and graded | 34 (40 budgeted from 71 decision points) |
+| caught by the crate's own 33 tests | 11: a kill rate of 0.32, 95% interval 0.19–0.49 |
+| got through | 23 |
+| caught by a test corral wrote and ran | 22 |
 | tried and missed | 1 |
-| tokens | 0.4M in, 12.8k out, 39 calls, against a cap of 3M |
-| wall clock | 10m32s |
+| tokens | 0.3M in, 13.2k out, 35 calls, against a cap of 3M |
+| wall clock | 10m08s |
 
 Two of the faults that got through, each one line:
 
 ```diff
-- if remaining_text.ends_with(suffix_part) {
-+ if remaining_text.starts_with(suffix_part) {
+- if text.ends_with(suffix) {
++ if text.starts_with(suffix) {
 ```
 
 ```diff
-- let matched_indices: Vec<usize> = (start_idx..end_idx.min(text_chars.len())).collect();
-+ let matched_indices: Vec<usize> = (start_idx..text_chars.len() + 1).collect();
+- for start_idx in 0..text_chars.len() {
++ for start_idx in 1..text_chars.len() {
 ```
 
-The first changes how a pattern's suffix is matched. The second lets highlight
-indices run past the end of the text. Nothing in the existing suite looks at
-either. Several of the tests corral wrote check exactly that every matched index
-is inside the text.
+The first is in the fast path for patterns like `*.rs`: it checks the wrong end
+of the text. The second stops a glob from ever matching at the first character.
+The existing suite passes with either one in place. corral wrote a test for
+each that passes on Warp's code and fails on the fault.
 
 ## Where the tests went
 
@@ -87,7 +84,7 @@ source byte-identical:
 #[cfg(test)]
 mod corral_tests {
     use super::super::*;
-    // 44 tests
+    // 35 tests
 }
 ```
 
@@ -99,27 +96,32 @@ the record knows where the block compiles.
 ## How we checked it
 
 The run's own grading is execution: each new test ran against the unchanged code
-and against its fault. We also checked it outside corral. On a fresh copy of the
-same commit we appended the 44-test block and ran Warp's command:
+and against its fault. We also checked it outside corral. On a separate clone of the
+same commit we appended the 35-test block and ran Warp's command:
 
 ```
 cargo nextest run -p fuzzy_match
-Summary [0.040s] 77 tests run: 77 passed, 0 skipped
+Summary [0.031s] 68 tests run: 68 passed, 0 skipped
 ```
 
-33 of Warp's, 44 of corral's, all green on the real code. After the run, `git status`
+33 of Warp's, 35 of corral's, all green on the real code. After the run, `git status`
 in the checkout corral had worked in showed no change.
 
 ## What this does not show
 
-- **It is one file.** A kill rate of 0.24 on 37 faults has a 95% interval of
-  0.13 to 0.40. It says something about this file's tests and nothing about
+- **It is one file.** A kill rate of 0.32 on 34 faults has a 95% interval of
+  0.19 to 0.49. It says something about this file's tests and nothing about
   Warp's.
+- **A second run plants different faults.** The day before, the same command
+  on an unreleased build graded 37 faults, caught 9 (0.24) and proved 27. Both
+  results fall inside each other's interval. The faults are generated, so the
+  counts move between runs; the finding, that this file's suite misses most of
+  what was planted, did not.
 - **A fault that gets through is a missing test, not a bug.** The code is
-  correct as far as we know. What the run shows is that 27 ways of breaking it
+  correct as far as we know. What the run shows is that 22 ways of breaking it
   would pass the current suite.
-- **"Proven" means caught by execution, not reviewed.** Each of the 27 tests
-  fails on its fault and passes on the real code. Whether each is a test Warp's
+- **"Proven" means caught by execution, not reviewed.** Each of the 22 proving
+  tests fails on its fault and passes on the real code. Whether each is a test Warp's
   maintainers would want is their call, and nobody on their side has seen them
   yet.
 - **The tests were written by a model.** They compile and run; they are not
@@ -143,8 +145,10 @@ workspace root, and that is the next fix.
 The other we found while writing this up: corral's Rust preflight asked for a
 system-wide Rust install even when no sandbox runs, so a developer with rustup
 in their home directory, which is nearly everyone, was refused before
-anything ran. {/* Before publishing: say whether this is fixed in the release
-the note points at, and how. */}
+anything ran. That is fixed on `main`
+([#404](https://github.com/pdbethke/corralai/pull/404)): the system-wide
+toolchain is required only when the jail runs, and a `--substrate workspace` run
+uses whatever `cargo` is on the PATH. It ships in the next release.
 
 ## Next
 

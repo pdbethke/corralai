@@ -68,16 +68,31 @@ func (phpPlugin) CompileCheck(codePath, testPath string) [][]string {
 		interp = "php"
 	}
 	// `php -l` is SYNTAX only; the third command loads the file the way a
-	// test's autoloader would, so `class Calc extends \App\DoesNotExist`
-	// or a top-level call to an undefined function is INVALID (as it is
-	// under Go's and Python's gates), not a kill any suite would score.
-	// Probed on compliant code first, like every gate command.
+	// test would, so `class Calc extends \App\DoesNotExist` or a top-level
+	// call to an undefined function is INVALID (as it is under Go's and
+	// Python's gates), not a kill any suite would score. Probed on
+	// compliant code first, like every gate command.
+	//
+	// "The way a test would" means through the project's autoloader: a
+	// class using a trait or extending a class from another file only loads
+	// once Composer can find it. Required bare, webmozart/assert's
+	// src/Assert.php died on `Trait "Webmozart\Assert\Mixin" not found`,
+	// so the unmodified file failed the check and every test the writer
+	// authored for it was refused. The check runs from the tree root, where
+	// Composer's default vendor/ lives; with no autoloader there (single-file
+	// mode, a custom vendor-dir) the file is required alone, as before.
+	// require_once, because the autoloader may already have loaded the file
+	// while resolving one of its own dependencies.
 	return [][]string{
 		{interp, "-l", codePath},
 		{interp, "-l", testPath},
-		{interp, "-r", "require $argv[1];", "--", codePath},
+		{interp, "-r", phpLoadCheck, "--", codePath},
 	}
 }
+
+// phpLoadCheck is CompileCheck's load command: the project's autoloader when
+// there is one, then the file under check.
+const phpLoadCheck = `if (is_file('vendor/autoload.php')) { require 'vendor/autoload.php'; } require_once $argv[1];`
 
 // phpVersionedInterpreterRe matches a php interpreter's basename, with or
 // without a version suffix (php, php8, php8.3, ...) — deliberately narrow

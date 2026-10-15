@@ -11,6 +11,19 @@ history of any release, `git log v0.3.4..v0.3.5`.
 
 ## [Unreleased]
 
+- **PHP: the writer can prove a survivor in a class that depends on
+  another file.** The PHP compile check loaded the file without Composer's
+  autoloader, so any class using a trait, parent or interface from another
+  file failed it unmodified. The mutant side already switched such a check
+  off; the writer's side did not, and refused every test it wrote as "does
+  not compile". On webmozart/assert's `src/Assert.php` that made the one
+  survivor unprovable. The check now loads `vendor/autoload.php` when the
+  project has one, and a compile check the unmodified source fails no longer
+  rejects an authored test (the test's own checks still do). Re-run on the
+  same file: the survivor was proven on the writer's first attempt, by a
+  test calling `Assert::notNegativeInteger(-1)` — the suite tests `-123`,
+  never `-1`.
+
 - **`--max-tokens` holds under parallel calls.** The cap was checked before
   each call and charged after it, so every call that started before the
   first one finished was admitted at a spend of zero. The test-writer sends

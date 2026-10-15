@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"github.com/pdbethke/corralai/internal/shadowpool"
 	"log"
+	"maps"
 	"path/filepath"
 	"slices"
 	"sort"
@@ -1021,6 +1022,9 @@ func (v JailValidator) CompileTest(ctx context.Context, codePath, code, test str
 		ws[k] = val
 	}
 	ws[codePath] = code
+	// The workspace as it stands WITHOUT the authored test, kept to ask one
+	// question of a failing check: does it fail here too? See below.
+	unmodified := maps.Clone(ws)
 	testPath := authoredTestPath(v.Landing, codePath, v.DevTestPath, v.BaseFiles)
 	v.Landing.overlay(ws, testPath, test)
 
@@ -1049,36 +1053,56 @@ func (v JailValidator) CompileTest(ctx context.Context, codePath, code, test str
 		// contract this enforces.
 		return fmt.Errorf("advpool: compile-verify test: %s plugin's CompileCheck(%q, %q) returned an empty command sequence — refusing to report a compile pass without running anything", p.Name(), codePath, testPath)
 	}
-	vj, verbose := v.Jail.(verboseJail)
 	for _, cmd := range seq {
-		if verbose {
-			compiles, output, err := vj.RunTestVerbose(ctx, ws, cmd)
-			if err != nil {
-				return fmt.Errorf("advpool: compile-verify test: %w", err)
-			}
-			if !compiles {
-				// Output/Cmd carry ONLY this failing command's own output —
-				// never a preceding, PASSING command's output. A multi-command
-				// sequence (ruby -c code, ruby -c test) means a passing first
-				// command would otherwise prefix the real diagnostic with a
-				// success message ("Syntax OK\n<real error>"), which is noise
-				// the test-writer has to see past on retry, not a fact worth
-				// feeding it. Cmd names which command in the sequence failed,
-				// since "test does not compile" alone no longer says whether
-				// it was the code file or the test file's own check.
-				return &CompileError{Output: output, Cmd: cmd}
-			}
-			continue
-		}
-		compiles, err := v.Jail.RunTest(ctx, ws, cmd)
+		compiles, output, err := v.runCompileCmd(ctx, ws, cmd)
 		if err != nil {
 			return fmt.Errorf("advpool: compile-verify test: %w", err)
 		}
-		if !compiles {
-			return &CompileError{Cmd: cmd}
+		if compiles {
+			continue
 		}
+		// A CHECK THE UNMODIFIED SOURCE FAILS JUDGES NOTHING ABOUT THE TEST.
+		// adequacy.Score switches such a check off for mutants (#416); this
+		// is the same rule at the writer's door. webmozart/assert,
+		// 2026-10-15: PHP's load check could not find a trait, the mutant
+		// gate disabled itself for that reason, and this gate, running the
+		// same command, refused all three of the writer's tests — so no PHP
+		// survivor on that file could be proven. So a failing command is run
+		// once more without the authored test, and skipped if it fails there
+		// too. A command naming the test file is the test's own check and is
+		// never excused. Skipping cannot fabricate a proof: the test is still
+		// run against the compliant code before it can kill anything, and a
+		// test that does not build fails there.
+		if !slices.Contains(cmd, testPath) {
+			if ok, _, berr := v.runCompileCmd(ctx, unmodified, cmd); berr == nil && !ok {
+				log.Printf("advpool: %s: compile check %s rejects the UNMODIFIED source too, so it cannot judge the authored test — skipped; the test is graded by execution instead. Gate output: %s",
+					codePath, strings.Join(cmd, " "), strings.TrimSpace(output))
+				continue
+			}
+		}
+		// Output/Cmd carry ONLY this failing command's own output — never a
+		// preceding, PASSING command's output. A multi-command sequence (ruby
+		// -c code, ruby -c test) means a passing first command would
+		// otherwise prefix the real diagnostic with a success message
+		// ("Syntax OK\n<real error>"), which is noise the test-writer has to
+		// see past on retry, not a fact worth feeding it. Cmd names which
+		// command in the sequence failed, since "test does not compile" alone
+		// no longer says whether it was the code file or the test file's own
+		// check.
+		return &CompileError{Output: output, Cmd: cmd}
 	}
 	return nil
+}
+
+// runCompileCmd runs one command of the compile sequence, with its output
+// when the jail can surface it (verboseJail) and without otherwise — still a
+// correct pass/fail, just nothing to feed back to the writer.
+func (v JailValidator) runCompileCmd(ctx context.Context, ws map[string]string, cmd []string) (bool, string, error) {
+	if vj, ok := v.Jail.(verboseJail); ok {
+		return vj.RunTestVerbose(ctx, ws, cmd)
+	}
+	compiles, err := v.Jail.RunTest(ctx, ws, cmd)
+	return compiles, "", err
 }
 
 func (v JailValidator) ParseMutants(raw, original string) ([]adequacy.Mutant, error) {

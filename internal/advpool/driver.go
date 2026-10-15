@@ -565,7 +565,15 @@ type Verdict struct {
 	// shrank silently is one nobody can reconcile against the generator's
 	// own output. Omitted from JSON when zero, which is the common case.
 	DuplicateMutants int             `json:"duplicate_mutants,omitempty"`
-	VacuousFindings  []queue.Finding // test-critic's designed-to-pass/vacuous flags
+	VacuousFindings  []queue.Finding // test-critic's designed-to-pass/vacuous flags that execution did not refute
+	// RefutedFindings are the critic's "this test can never fail" claims that
+	// execution disproved: the named test, run alone against this run's
+	// mutants, killed at least one (adjudicateCriticFindings). They are kept,
+	// so the record shows what the critic said and what running it showed,
+	// and left out of VacuousFindings, whose count is what a record publishes.
+	// Only the converged path adjudicates; a timed-out verdict read no
+	// findings and has none.
+	RefutedFindings []queue.Finding `json:"refuted_findings,omitempty"`
 	// CriticIncomplete says the critic was seated and its review did NOT fully
 	// reach this verdict: it used every step without concluding, so findings it
 	// had not filed are missing (the loop's criticIncompletePrefix), or the run
@@ -1110,6 +1118,14 @@ type runState struct {
 	// pipeline, and Tick may be called many times before convergence.
 	matrix     *matrix.Result
 	matrixDone bool
+
+	// criticListed is the runner's own list of test ids, read once per run
+	// for a CommandTestTargeter language (Rust) when a critic finding needs
+	// its one test run alone; criticListTried keeps a failed listing from
+	// being retried per finding, and criticListWhy says why it failed.
+	criticListed    []string
+	criticListTried bool
+	criticListWhy   string
 
 	// shadowWriter* hold the CHALLENGER writer seat's outcome. They are
 	// deliberately separate from devKilled/devSurvivors: nothing here may
@@ -2914,9 +2930,18 @@ func (d *Driver) tickAggregate(ctx context.Context, missionID int64, run *runSta
 	// fed, because the leaderboard used to reward the critic for FLAGGING
 	// (any finding = pass) and now rewards it for being RIGHT. Only when a
 	// sink that consumes it is wired and there is something to adjudicate.
+	//
+	// It runs on every run with findings, not only when a sink wants the
+	// observations: the verdict itself carries the outcome. A finding that
+	// execution refuted moves from VacuousFindings to RefutedFindings, so the
+	// count a record publishes is the critic's claims that still stand, not
+	// claims a run of the test has already shown false. Before 2026-10-15 it
+	// ran only for a wired sink, which `certify --repo` never wires, so the
+	// Action's records counted every claim, refuted or not.
 	var criticObs []CriticFindingObservation
-	if (d.CriticFindings != nil || d.Leaderboard != nil) && len(criticFindings) > 0 {
+	if len(criticFindings) > 0 {
 		criticObs = d.adjudicateCriticFindings(ctx, missionID, run, criticFindings, v)
+		v.VacuousFindings, v.RefutedFindings = splitRefuted(v.VacuousFindings, criticObs)
 	}
 
 	// The in-memory agreement measurement, carried onto the verdict itself —
@@ -3201,7 +3226,6 @@ func challengerPair(d *Driver, run *runState) *modelcorr.Pair {
 // unadjudicated; neither path ever auto-fails the audit — a scoring/jail
 // error is logged and simply leaves that one finding unadjudicated.
 func (d *Driver) adjudicateCriticFindings(ctx context.Context, missionID int64, run *runState, criticFindings []queue.Finding, v Verdict) []CriticFindingObservation {
-	p := langFor(run.rs)
 	var obs []CriticFindingObservation
 	for _, f := range criticFindings {
 		scope := NormalizeScope(f.Scope)
@@ -3216,13 +3240,15 @@ func (d *Driver) adjudicateCriticFindings(ctx context.Context, missionID int64, 
 		} else {
 			ran, kills := false, 0
 			if scope == ScopeWholeTest && f.TestSelector != "" {
-				if cmd, ok := p.SingleTestCmd(f.TestFile, f.TestSelector); ok {
+				if cmd, why := d.criticTestCommand(ctx, run, f); cmd == "" {
+					log.Printf("advpool: %s: test-critic: the claim that %s can never fail was not checked: %s", run.rs.CodePath, f.TestSelector, why)
+				} else {
 					// Deliberately NOT narrowed to the run's Selection: this
 					// call already names ONE test, which is the whole
 					// question ("does this single test kill anything?").
 					// Unioning it with the selection would answer a
 					// different one.
-					if kr, survivors, serr := d.Scorer.Score(ctx, run.rs.CodePath, run.rs.Code, run.rs.DevTestCode, run.mutants, strings.Join(cmd, " ")); serr != nil {
+					if kr, survivors, serr := d.Scorer.Score(ctx, run.rs.CodePath, run.rs.Code, run.rs.DevTestCode, run.mutants, cmd); serr != nil {
 						log.Printf("advpool: run %d: critic auto-refute score failed for %q: %v", missionID, f.TestSelector, serr)
 					} else if kr > 0 {
 						// kr == 0 covers BOTH the baseline-couldn't-pass case
@@ -3233,6 +3259,9 @@ func (d *Driver) adjudicateCriticFindings(ctx context.Context, missionID int64, 
 						// AutoAdjudication yields unadjudicated (inconclusive),
 						// never a false "refuted".
 						ran, kills = true, len(run.mutants)-len(survivors)
+						log.Printf("advpool: %s: test-critic: the claim that %s can never fail is REFUTED by execution — run alone, it killed %d of %d mutants", run.rs.CodePath, f.TestSelector, kills, len(run.mutants))
+					} else {
+						log.Printf("advpool: %s: test-critic: %s, run alone, killed none of %d mutants — the claim that it can never fail stands, unproven", run.rs.CodePath, f.TestSelector, len(run.mutants))
 					}
 				}
 			}
@@ -3255,6 +3284,74 @@ func (d *Driver) adjudicateCriticFindings(ctx context.Context, missionID int64, 
 		})
 	}
 	return obs
+}
+
+// criticTestCommand returns the command that runs, alone, the one test a
+// critic finding names, or "" and why there is none. A plugin with
+// Plugin.SingleTestCmd builds it from the finding's selector. A
+// CommandTestTargeter (Rust) builds it from the operator's own command, after
+// mapping the finding's file-relative name onto the runner's own id with one
+// listing per run; a name that maps to no listed test or to several is left
+// unchecked rather than run beside a test it does not name.
+func (d *Driver) criticTestCommand(ctx context.Context, run *runState, f queue.Finding) (string, string) {
+	p := langFor(run.rs)
+	t, ok := p.(golang.CommandTestTargeter)
+	if !ok {
+		if cmd, ok := p.SingleTestCmd(f.TestFile, f.TestSelector); ok {
+			return strings.Join(cmd, " "), ""
+		}
+		return "", "this language has no command that runs one test"
+	}
+	argv := adequacy.ShellSplit(run.rs.TestCmd)
+	if !run.criticListTried {
+		run.criticListTried = true
+		listCmd, ok := t.ListTestsCmdFor(argv)
+		switch {
+		case !ok:
+			run.criticListWhy = "the test command cannot be turned into one that lists its tests"
+		case d.Enumerator == nil:
+			run.criticListWhy = "no enumerator is wired to list the tests"
+		default:
+			out, err := d.Enumerator.Enumerate(ctx, run.rs.CodePath, run.rs.Code, run.rs.DevTestCode, listCmd)
+			if err != nil {
+				run.criticListWhy = fmt.Sprintf("listing the tests failed: %v", err)
+			} else if run.criticListed = t.ParseTestListFor(argv, out); len(run.criticListed) == 0 {
+				run.criticListWhy = "listing the tests found none"
+			}
+		}
+	}
+	if run.criticListWhy != "" {
+		return "", run.criticListWhy
+	}
+	id, ok := golang.ResolveListedTest(run.criticListed, f.TestSelector)
+	if !ok {
+		return "", "the name matches no listed test, or more than one"
+	}
+	cmd, ok := t.SingleTestCmdFor(argv, id)
+	if !ok {
+		return "", "the test command cannot be narrowed to the one test (it carries a filter of its own)"
+	}
+	return adequacy.ShellJoin(cmd), ""
+}
+
+// splitRefuted moves every finding execution refuted out of flagged, by the
+// queue finding id its observation carries. A finding with no observation,
+// or one that was not refuted, stays where it was.
+func splitRefuted(flagged []queue.Finding, obs []CriticFindingObservation) (standing, refuted []queue.Finding) {
+	gone := map[int64]bool{}
+	for _, o := range obs {
+		if o.Adjudication == AdjRefuted {
+			gone[o.QueueFindingID] = true
+		}
+	}
+	for _, f := range flagged {
+		if gone[f.ID] {
+			refuted = append(refuted, f)
+		} else {
+			standing = append(standing, f)
+		}
+	}
+	return standing, refuted
 }
 
 // timeoutVerdict builds the signed needs-review verdict for a run that did

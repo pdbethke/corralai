@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/pdbethke/corralai/internal/advpool"
+	"github.com/pdbethke/corralai/internal/queue"
 )
 
 func TestAdvVerdictDecodesToolPayload(t *testing.T) {
@@ -943,6 +944,41 @@ func TestVerdictSaysTheCriticReviewWasIncomplete(t *testing.T) {
 func TestCriticIncompleteSurvivesTheConversion(t *testing.T) {
 	if !advVerdictFromPool(advpool.Verdict{CriticIncomplete: true}).CriticIncomplete {
 		t.Fatal("advVerdictFromPool dropped CriticIncomplete")
+	}
+}
+
+// A claim execution refuted is shown as refuted, never counted as a flag
+// still standing, and survives the conversion from the pool's verdict.
+func TestVerdictShowsRefutedCriticClaims(t *testing.T) {
+	base := advVerdict{
+		Status: "certified", DevScored: true, MutantsTotal: 5, Survivors: 1, DevKillRate: 0.8,
+		ModelsByRole:    map[string]string{advpool.RoleTestCritic: "claude-haiku-4-5"},
+		RefutedFindings: []advFinding{{Target: "test_ignore_spaces_empty_query", Evidence: "can never fail"}},
+	}
+	var buf bytes.Buffer
+	renderAdvVerdict(&buf, "src/lib.rs", base)
+	got := buf.String()
+	for _, want := range []string{"1 test(s) flagged, every claim REFUTED by execution", "[refuted] test_ignore_spaces_empty_query"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("all-refuted: missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "no vacuous tests flagged") || strings.Contains(got, "UNVERIFIED") {
+		t.Errorf("all-refuted: printed as clean or as standing flags:\n%s", got)
+	}
+
+	base.VacuousFindings = []advFinding{{Target: "test_other"}}
+	buf.Reset()
+	renderAdvVerdict(&buf, "src/lib.rs", base)
+	got = buf.String()
+	for _, want := range []string{"1 test(s) flagged — UNVERIFIED", "1 more flag(s) REFUTED by execution"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("mixed: missing %q:\n%s", want, got)
+		}
+	}
+
+	if conv := advVerdictFromPool(advpool.Verdict{RefutedFindings: []queue.Finding{{Target: "t"}}}); len(conv.RefutedFindings) != 1 {
+		t.Fatal("advVerdictFromPool dropped RefutedFindings")
 	}
 }
 

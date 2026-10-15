@@ -2657,6 +2657,12 @@ func advVerdictFromPool(v advpool.Verdict) advVerdict {
 			Evidence: f.Evidence, ReporterModel: f.ReporterModel,
 		})
 	}
+	for _, f := range v.RefutedFindings {
+		out.RefutedFindings = append(out.RefutedFindings, advFinding{
+			Type: f.Type, Severity: f.Severity, Target: f.Target,
+			Evidence: f.Evidence, ReporterModel: f.ReporterModel,
+		})
+	}
 	return out
 }
 

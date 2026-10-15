@@ -11,6 +11,26 @@ history of any release, `git log v0.3.4..v0.3.5`.
 
 ## [Unreleased]
 
+- **A critic's "this test can never fail" claim is checked by execution on
+  every run, and a refuted one leaves the count.** The named test runs alone
+  against the run's mutants; if it kills one, the claim is false, and the
+  verdict now records it under `refuted_findings` instead of counting it with
+  the claims that stand. This check used to run only when a critic-score
+  store was attached, which `certify --repo` (and so the GitHub Action) never
+  does, so every claim reached the record unchecked. On Warp's
+  `crates/fuzzy_match` a claude-haiku-4-5 critic called two tests vacuous
+  that fail the moment the guard clause they cover is deleted.
+- **Rust can run one test alone.** libtest gets `-- --exact <path>` and
+  nextest `-E 'test(=<path>)'`, built from the operator's own command, so a
+  package filter and the runner survive. The test's full path comes from the
+  runner's own list (`-- --list`, or `cargo nextest list`), and a critic's
+  name is mapped to the one listed test it names; a name that matches more
+  than one (the same test name in two modules) is left unchecked, since
+  running it would run the other test too. A nextest command carrying its own
+  filterset is not narrowed, for the same reason.
+- **One-time cache miss.** `reposcan.VerdictGeneration` is now 24 (rc.23
+  shipped 23). Every verdict cached before this change is re-measured once.
+
 ## [v1.0.0-rc.23] — 2026-10-15
 
 - **PHP's test critic must judge every test in the file.** It used to get no

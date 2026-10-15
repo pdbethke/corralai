@@ -3,6 +3,9 @@
 package lang
 
 import (
+	"os"
+	"os/exec"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -155,5 +158,53 @@ func TestPHPCoverageCmdDisablesTheProjectsOwnCoverage(t *testing.T) {
 	}
 	if strings.Contains(cmd[2], "--no-coverage") {
 		t.Errorf("a composer script must not have phpunit flags appended: %s", cmd[2])
+	}
+}
+
+// TestPHPLoadCheckUsesTheProjectsAutoloader is the webmozart/assert case
+// (2026-10-15): src/Assert.php uses a trait declared in src/Mixin.php, which
+// only Composer's autoloader can find. A load check that required the file
+// bare rejected the UNMODIFIED source with `Trait ... not found`, so every
+// test the writer authored for a PHP class with a dependency was refused as
+// "does not compile". The check runs from the tree root, where
+// vendor/autoload.php is; with it, the file loads, and a genuinely missing
+// parent is still refused.
+func TestPHPLoadCheckUsesTheProjectsAutoloader(t *testing.T) {
+	p, _ := ByName("php")
+	if _, err := phpInterpreter(nil); err != nil {
+		t.Skipf("no php on PATH: %v", err)
+	}
+	dir := t.TempDir()
+	write := func(rel, body string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(dir, rel)), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, rel), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("vendor/autoload.php", `<?php
+spl_autoload_register(function ($c) {
+    $f = __DIR__ . '/../src/' . substr($c, strlen('App\\')) . '.php';
+    if (is_file($f)) { require $f; }
+});
+`)
+	write("src/Mixin.php", "<?php\nnamespace App;\ntrait Mixin { public static function hi() { return 1; } }\n")
+	write("src/Assert.php", "<?php\nnamespace App;\nclass Assert { use Mixin; }\n")
+	write("src/Broken.php", "<?php\nnamespace App;\nclass Broken extends DoesNotExist {}\n")
+
+	load := func(code string) (string, error) {
+		cc := p.CompileCheck(code, "tests/AssertTest.php")
+		cmd := exec.Command(cc[len(cc)-1][0], cc[len(cc)-1][1:]...) // #nosec G204 -- the plugin's own check, in a temp dir
+		cmd.Dir = dir
+		out, err := cmd.CombinedOutput()
+		return string(out), err
+	}
+	if out, err := load("src/Assert.php"); err != nil {
+		t.Fatalf("the load check rejected a class whose trait the project's autoloader provides: %v\n%s", err, out)
+	}
+	if out, err := load("src/Broken.php"); err == nil {
+		t.Fatalf("the load check accepted a class extending a class that exists nowhere:\n%s", out)
 	}
 }

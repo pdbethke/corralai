@@ -252,7 +252,7 @@ func budgetLine(b *agentbackend.TokenBudget, underived int) string {
 	}
 	hit, cap, spent, at := b.Exhausted()
 	if hit {
-		line := fmt.Sprintf("  cap: --max-tokens %s REACHED after %d call(s) at %s tokens — every later model call was refused; a file whose generator never ran is ungradable for that reason, a writer or critic seat past it was skipped", abbreviateTokens(cap), at, abbreviateTokens(spent))
+		line := fmt.Sprintf("  cap: --max-tokens %s REACHED — %d call(s) made, %s tokens spent; every call after that was refused; a file whose generator never ran is ungradable for that reason, a writer or critic seat past it was skipped", abbreviateTokens(cap), at, abbreviateTokens(spent))
 		if underived > 0 {
 			line += fmt.Sprintf("; %d file(s) never had a goal derived and were not audited (%s)", underived, reposcan.ReasonDeriveBudgetExhausted)
 		}

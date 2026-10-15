@@ -218,3 +218,76 @@ func TestTokenBudgetRefusesBeforeTheProviderIsDialled(t *testing.T) {
 		t.Error("a cap of 0 is 'no cap', which is nil")
 	}
 }
+
+// THE CAP UNDER A PARALLEL FAN-OUT. The writer seat sends one call per
+// survivor at once. The cap was checked before each call and charged after,
+// so every call that started before the first one finished was admitted at a
+// spend of 0: `--max-tokens 1` on a Warp replay spent 97.8k tokens over 8
+// calls and reported "REACHED after 1 call(s)". With nothing yet measured,
+// only one call may be in flight; past the cap, the waiting calls are
+// refused without dialling.
+func TestTokenBudgetHoldsUnderAParallelFanOut(t *testing.T) {
+	var mu sync.Mutex
+	dialled := 0
+	inner := &fakeUsageBackend{reply: "ok", usage: Usage{InputTokens: 12000, OutputTokens: 300}, onChat: func() {
+		mu.Lock()
+		dialled++
+		mu.Unlock()
+		time.Sleep(20 * time.Millisecond) // long enough for the others to arrive while it is in flight
+	}}
+	budget := NewTokenBudget(1)
+	c := AsChatterBudgeted(inner, &UsageMeter{}, budget)
+	var wg sync.WaitGroup
+	refused := 0
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := c.Chat(nil, nil); errors.Is(err, ErrTokenBudgetExhausted) {
+				mu.Lock()
+				refused++
+				mu.Unlock()
+			}
+		}()
+	}
+	wg.Wait()
+	if dialled != 1 || refused != 7 {
+		t.Fatalf("dialled %d, refused %d — want 1 and 7: a cap of 1 admits one call, not a batch", dialled, refused)
+	}
+	hit, _, spent, calls := budget.Exhausted()
+	if !hit || spent != 12300 || calls != 1 {
+		t.Errorf("Exhausted = hit %v, spent %d, calls %d — want true, 12300, 1", hit, spent, calls)
+	}
+}
+
+// Once a call's size has been MEASURED, parallel calls are admitted while the
+// spend plus every in-flight call at the largest size seen fits the cap, and
+// the rest wait for room rather than all starting at once. Nothing is
+// estimated from a prompt; the reservation is a size this run already paid.
+func TestTokenBudgetAdmitsWhatTheMeasuredSizeLeavesRoomFor(t *testing.T) {
+	var mu sync.Mutex
+	dialled := 0
+	inner := &fakeUsageBackend{reply: "ok", usage: Usage{InputTokens: 10000}, onChat: func() {
+		mu.Lock()
+		dialled++
+		mu.Unlock()
+		time.Sleep(10 * time.Millisecond)
+	}}
+	budget := NewTokenBudget(50000)
+	c := AsChatterBudgeted(inner, &UsageMeter{}, budget)
+	if _, err := c.Chat(nil, nil); err != nil { // measured: 10k a call
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Add(1)
+		go func() { defer wg.Done(); _, _ = c.Chat(nil, nil) }()
+	}
+	wg.Wait()
+	if dialled != 5 {
+		t.Errorf("dialled %d calls, want 5 — 1 measured + 4 that fit 50k at 10k each", dialled)
+	}
+	if spent := budget.Spent(); spent != 50000 {
+		t.Errorf("spent %d, want 50000 — exactly the cap, no batch overshoot", spent)
+	}
+}

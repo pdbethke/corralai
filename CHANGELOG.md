@@ -11,6 +11,19 @@ history of any release, `git log v0.3.4..v0.3.5`.
 
 ## [Unreleased]
 
+- **`--max-tokens` holds under parallel calls.** The cap was checked before
+  each call and charged after it, so every call that started before the
+  first one finished was admitted at a spend of zero. The test-writer sends
+  one call per survivor at once, and `--max-tokens 1` on a Warp replay spent
+  97.8k tokens over 8 calls. A call is now admitted only while the spend,
+  plus every call in flight sized at the largest call the run has measured,
+  leaves room for one more; otherwise it waits for room or, past the cap, is
+  refused without dialling. Until one call has been measured, one call runs
+  at a time, so a capped run's first parallel batch waits for its first
+  call. The overshoot is now at most about one call, as documented. The cap
+  line reports the run's real totals (`REACHED — N call(s) made, M tokens
+  spent`); it said "after 1 call(s)" beside the tokens of eight.
+
 ## [v1.0.0-rc.21] — 2026-10-14
 
 - **A compile check never costs a file its grade.** The check that a mutant

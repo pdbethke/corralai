@@ -279,9 +279,6 @@ func (rustPlugin) FirstFailure(output []byte) string {
 	return run.Failures[0]
 }
 
-// TestNamesInSource: no static lister for this language yet; nil is "unknown".
-func (rustPlugin) TestNamesInSource(string, string) []string { return nil }
-
 // WorkspaceRunEnv is a no-op FOR NOW, and that is not a claim of safety:
 // cargo decides whether to rebuild a local crate by comparing source mtimes
 // against target/'s dep-info, which may share the same-second staleness hole

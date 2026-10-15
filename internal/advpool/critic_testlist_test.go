@@ -28,6 +28,12 @@ func TestCriticInstructionCarriesTheTestList(t *testing.T) {
 	if want := agentworker.CriticTestListBlock("tests/ATest.php", []string{"ATest::testA", "ATest::b"}); !strings.Contains(CriticInstruction(php), want) {
 		t.Fatalf("PHP instruction lacks the list block %q:\n%s", want, CriticInstruction(php))
 	}
+	// Rust lists libtest's tests by their module path in the file.
+	rust := RunSpec{Goal: "matches", Lang: "rust", CodePath: "src/fuzzy.rs", Code: "pub fn m() {}", DevTestPath: "src/fuzzy_tests.rs",
+		DevTestCode: "use super::*;\n\n#[test]\nfn a() {}\n\nmod more {\n    #[tokio::test]\n    async fn b() {}\n}\n"}
+	if want := agentworker.CriticTestListBlock("src/fuzzy_tests.rs", []string{"a", "more::b"}); !strings.Contains(CriticInstruction(rust), want) {
+		t.Fatalf("Rust instruction lacks the list block %q:\n%s", want, CriticInstruction(rust))
+	}
 	rs.Lang, rs.CodePath, rs.DevTestPath, rs.DevTestCode = "ruby", "lib/p.rb", "spec/p_spec.rb", "describe 'p' do\nend\n"
 	if got := CriticInstruction(rs); strings.Contains(got, "TESTS TO JUDGE") {
 		t.Fatalf("a language that cannot list must get no block:\n%s", got)

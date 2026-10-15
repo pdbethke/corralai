@@ -237,8 +237,8 @@ of "decorrelated" and not its point. Prefer genuinely different vendors.
 Plugins live in `internal/lang/` (`go.go`, `python.go`, `ruby.go`,
 `javascript.go`, `typescript.go`, `php.go`). A plugin declares detection, test-path
 convention, test command, compile check, the role system prompts, and
-`TestNamesInSource` (the static test list the critic must judge; Go, Python and PHP
-only, nil elsewhere).
+`TestNamesInSource` (the static test list the critic must judge; Go, Python, PHP and
+Rust only, nil elsewhere).
 
 Two rules, both learned expensively:
 

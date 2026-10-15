@@ -172,7 +172,12 @@ package reposcan
 // tests, and twice answered with no tests at all, which sent it to the tool
 // loop. A "21" PHP critic count may be a partial review read as complete.
 // Shape unchanged; behaviour bump.
-const VerdictGeneration = "22"
+// "23" (2026-10-15): Rust gets the same list (lang.Plugin.TestNamesInSource:
+// libtest's test functions by their module path within the file), so a
+// Rust critic must judge every test as Go, Python and PHP critics do. A
+// "22" Rust critic count came from an answer nothing held to the file's
+// tests. Shape unchanged; behaviour bump.
+const VerdictGeneration = "23"
 
 // VerdictShapeSHA256 fingerprints advpool.Verdict's serialized shape: every
 // exported field's name, type and json tag, sorted by name and hashed.

@@ -28,7 +28,18 @@ history of any release, `git log v0.3.4..v0.3.5`.
   the fallback to the tool loop and the parse errors that caused it. That
   text was computed and read only for its "incomplete" marker, so a critic
   that made seven calls instead of one could not say why.
-- **One-time cache miss.** `reposcan.VerdictGeneration` is now 22 (rc.22
+- **Rust's test critic must judge every test in the file, too.** The critic
+  is now handed libtest's tests by their module path within the file
+  (`tests::name`, or `name` at the top of a `#[path]` test file): functions
+  at module level marked `#[test]`, `#[tokio::test]` or any attribute whose
+  path ends in `test`, `#[rstest]`, `#[test_case]` or
+  `#[wasm_bindgen_test]`, including those inside a `proptest!` block. That is
+  a suffix of libtest's own path, which `cargo test` matches by substring.
+  Checked against a lister built on tree-sitter's Rust grammar over Warp,
+  django-bolt and two small crates: 4,175 files, 16,162 tests, the same
+  list everywhere except 25 `proptest!` tests that tree-sitter cannot see
+  inside a macro and this lister does.
+- **One-time cache miss.** `reposcan.VerdictGeneration` is now 23 (rc.22
   shipped 21). Every verdict cached before this change is re-measured once.
 
 ## [v1.0.0-rc.22] — 2026-10-15

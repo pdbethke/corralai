@@ -690,5 +690,9 @@ func (phpPlugin) ParseCoverage(stdout, modulePath string) (executed map[string]b
 func (phpPlugin) LineComment() string { return "//" }
 
 // DependencyDirs is Composer's install target (holding vendor/bin/phpunit) —
-// the same repo-relative basename as Go's vendor directory.
-func (phpPlugin) DependencyDirs() []DepDir { return []DepDir{{Name: "vendor"}} }
+// the same repo-relative basename as Go's vendor directory. autoload.php and
+// composer/ are Composer's locator: they find the project from their own
+// directory, so each private tree needs its own (see DepDir.CopyPerTree).
+func (phpPlugin) DependencyDirs() []DepDir {
+	return []DepDir{{Name: "vendor", CopyPerTree: []string{"autoload.php", "composer"}}}
+}

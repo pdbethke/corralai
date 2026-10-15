@@ -87,6 +87,19 @@ func SharedDependencies() map[string]bool {
 	return compose(depNames(func(d lang.DepDir) bool { return !d.RunWrites }))
 }
 
+// CopyPerTree maps each SharedDependencies name to the entries inside it a
+// private tree copies rather than links (lang.DepDir.CopyPerTree). A name
+// with none is absent.
+func CopyPerTree() map[string][]string {
+	m := map[string][]string{}
+	for _, d := range lang.AllDependencyDirs() {
+		if !d.RunWrites && len(d.CopyPerTree) > 0 {
+			m[d.Name] = d.CopyPerTree
+		}
+	}
+	return m
+}
+
 // NeverWalked is what the repo scan does not descend into: dependency,
 // build-output and VCS trees are not the subject of an audit of THIS repo's
 // tests, and letting them into the walk puts vendored third-party code into

@@ -6,9 +6,12 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -68,6 +71,10 @@ const maxUniverseBytes = 2 << 30 // 2 GiB
 // no order and Disclosure.Shared reports them in this one. Why those and not
 // .tox (a run writes into it) is on that function.
 var symlinkedDepDirs = sortedKeys(treedirs.SharedDependencies())
+
+// copiedDepEntries is, per shared dep dir name, the entries a tree copies
+// instead of linking: treedirs' CopyPerTree, read once like the names above.
+var copiedDepEntries = treedirs.CopyPerTree()
 
 func sortedKeys(m map[string]bool) []string {
 	out := make([]string, 0, len(m))
@@ -209,6 +216,7 @@ func NewWorkspacePool(ctx context.Context, root string, n int, timeout time.Dura
 	if err != nil {
 		return single("git could not list the checkout: " + err.Error())
 	}
+	links := depDirLinks(root)
 	if size > maxUniverseBytes {
 		return single("checkout over 2 GiB")
 	}
@@ -235,7 +243,7 @@ func NewWorkspacePool(ctx context.Context, root string, n int, timeout time.Dura
 			return single("could not create a tree: " + terr.Error())
 		}
 		temps = append(temps, tree)
-		shared, cerr := copyTree(root, tree, universe)
+		shared, cerr := copyTree(root, tree, universe, links)
 		if cerr != nil {
 			cleanup()
 			return single("could not copy the checkout: " + cerr.Error())
@@ -364,25 +372,72 @@ func gitUniverse(root string) (paths []string, size int64, err error) {
 	return paths, size, nil
 }
 
-// copyTree materialises one private tree: the dep-dir symlinks first, then
-// every universe file copied in with its mode preserved. It returns the
-// dep dirs it actually linked, which is what Disclosure.Shared reports.
+// depDirLinks is every dependency directory a tree links to rather than
+// copies, as repo-relative slash paths, sorted: each SharedDependencies name
+// present at the top of the checkout, plus each one git ignores at any depth.
+//
+// Nested ones are webmozart/assert (2026-10-15): PHPUnit lives in
+// tools/phpunit/vendor, the test command is ./tools/phpunit/vendor/bin/phpunit,
+// and only the root vendor/ was linked, so the command did not exist in any
+// copy, the baseline failed in all six trees, and the file was graded one
+// mutant at a time. A monorepo's packages/*/node_modules is the same shape.
+// Git names them (`--ignored --directory` lists an ignored directory once,
+// without descending), so nothing here walks the checkout; only IGNORED ones
+// need linking, since an unignored one is in the universe and copied. If git
+// cannot answer, the top-level links alone are what every tree had before.
+func depDirLinks(root string) []string {
+	shared := treedirs.SharedDependencies()
+	seen := map[string]bool{}
+	var out []string
+	add := func(rel string) {
+		if !seen[rel] {
+			seen[rel] = true
+			out = append(out, rel)
+		}
+	}
+	for _, d := range symlinkedDepDirs {
+		if _, err := os.Lstat(filepath.Join(root, d)); err == nil {
+			add(d)
+		}
+	}
+	if git, err := exec.LookPath("git"); err == nil {
+		ls := exec.Command(git, "-C", root, "ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--directory") // #nosec G204 -- git via LookPath; root is the operator's own checkout; literal args
+		if b, lerr := ls.Output(); lerr == nil {
+			for _, rel := range strings.Split(string(b), "\x00") {
+				rel = strings.TrimSuffix(rel, "/")
+				if rel != "" && shared[path.Base(rel)] {
+					add(rel)
+				}
+			}
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// copyTree materialises one private tree: the dep-dir symlinks (links, from
+// depDirLinks) first, then every universe file copied in with its mode
+// preserved. It returns the dep dirs it actually linked, which is what
+// Disclosure.Shared reports.
 //
 // Symlinks go first on purpose. A path under a symlinked dep dir must never
 // be written through it — that would write into the ORIGINAL checkout, which
 // is the one thing a private tree exists to prevent — so anything in the
 // universe that lands under one of them is skipped, and skipping requires
 // knowing which links exist.
-func copyTree(root, tree string, universe []string) (shared []string, err error) {
-	linked := make(map[string]bool)
-	for _, d := range symlinkedDepDirs {
-		if _, lerr := os.Lstat(filepath.Join(root, d)); lerr != nil {
+func copyTree(root, tree string, universe, links []string) (shared []string, err error) {
+	for _, d := range links {
+		src := filepath.Join(root, filepath.FromSlash(d))
+		if _, lerr := os.Lstat(src); lerr != nil {
 			continue
 		}
-		if serr := os.Symlink(filepath.Join(root, d), filepath.Join(tree, d)); serr != nil {
-			return nil, fmt.Errorf("adequacy: linking %s into %s: %w", d, tree, serr)
+		dst := filepath.Join(tree, filepath.FromSlash(d))
+		if merr := os.MkdirAll(filepath.Dir(dst), 0o750); merr != nil {
+			return nil, fmt.Errorf("adequacy: creating %s: %w", filepath.Dir(dst), merr)
 		}
-		linked[d] = true
+		if lerr := linkDepDir(src, dst, copiedDepEntries[path.Base(d)]); lerr != nil {
+			return nil, fmt.Errorf("adequacy: linking %s into %s: %w", d, tree, lerr)
+		}
 		shared = append(shared, d)
 	}
 	for _, rel := range universe {
@@ -391,8 +446,7 @@ func copyTree(root, tree string, universe []string) (shared []string, err error)
 		// it onto the link copyTree just made is EEXIST — the whole pool
 		// then fell to one tree (review 4d83ed44bab5#R1, Gemini reviewing,
 		// Claude Code verifying).
-		top, _, _ := strings.Cut(filepath.ToSlash(rel), "/")
-		if linked[top] {
+		if underLink(filepath.ToSlash(rel), shared) {
 			continue
 		}
 		if cerr := copyFile(filepath.Join(root, filepath.FromSlash(rel)), filepath.Join(tree, filepath.FromSlash(rel))); cerr != nil {
@@ -400,6 +454,72 @@ func copyTree(root, tree string, universe []string) (shared []string, err error)
 		}
 	}
 	return shared, nil
+}
+
+// linkDepDir puts the dependency directory src at dst: one symlink to it
+// when none of copied exists in it, otherwise a real directory holding a
+// copy of each copied entry and a symlink to every other entry. The copied
+// entries are the ones that locate the project from their own path
+// (lang.DepDir.CopyPerTree); everything else is third-party code, linked
+// for the same reasons the whole directory otherwise is.
+func linkDepDir(src, dst string, copied []string) error {
+	split := false
+	for _, e := range copied {
+		if _, err := os.Lstat(filepath.Join(src, e)); err == nil {
+			split = true
+		}
+	}
+	if !split {
+		return os.Symlink(src, dst)
+	}
+	entries, err := os.ReadDir(src)
+	if err != nil {
+		return err
+	}
+	if err := os.Mkdir(dst, 0o750); err != nil {
+		return err
+	}
+	for _, e := range entries {
+		from, to := filepath.Join(src, e.Name()), filepath.Join(dst, e.Name())
+		if !slices.Contains(copied, e.Name()) {
+			if err := os.Symlink(from, to); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := copyAll(from, to); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// copyAll copies the file or directory tree at src to dst with copyFile's
+// rules for each file and symlink.
+func copyAll(src, dst string) error {
+	return filepath.WalkDir(src, func(p string, de fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, rerr := filepath.Rel(src, p)
+		if rerr != nil {
+			return rerr
+		}
+		if de.IsDir() {
+			return os.MkdirAll(filepath.Join(dst, rel), 0o750)
+		}
+		return copyFile(p, filepath.Join(dst, rel))
+	})
+}
+
+// underLink reports whether rel is one of links or lies beneath one.
+func underLink(rel string, links []string) bool {
+	for _, l := range links {
+		if rel == l || strings.HasPrefix(rel, l+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 // copyFile copies src to dst, creating dst's parents and giving dst src's

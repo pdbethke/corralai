@@ -3,7 +3,7 @@
 package lang
 
 import (
-	"slices"
+	"reflect"
 	"testing"
 )
 
@@ -17,7 +17,7 @@ func TestMergeDependencyDirsRunWritesIsSticky(t *testing.T) {
 	reads := []DepDir{{Name: "shared"}, {Name: "only-reads"}}
 	want := []DepDir{{Name: "only-reads"}, {Name: "shared", RunWrites: true}}
 	for _, decls := range [][][]DepDir{{writes, reads}, {reads, writes}} {
-		if got := mergeDependencyDirs(decls); !slices.Equal(got, want) {
+		if got := mergeDependencyDirs(decls); !reflect.DeepEqual(got, want) {
 			t.Errorf("mergeDependencyDirs(%v) = %v, want %v", decls, got, want)
 		}
 	}
@@ -31,7 +31,35 @@ func TestAllDependencyDirsIsTheMergeOfEveryPlugin(t *testing.T) {
 		p, _ := ByName(name)
 		decls = append(decls, p.DependencyDirs())
 	}
-	if got, want := AllDependencyDirs(), mergeDependencyDirs(decls); !slices.Equal(got, want) {
+	if got, want := AllDependencyDirs(), mergeDependencyDirs(decls); !reflect.DeepEqual(got, want) {
 		t.Errorf("AllDependencyDirs() = %v, want %v", got, want)
+	}
+}
+
+// TestMergeDependencyDirsUnionsCopyPerTree: vendor is Go's and PHP's, and
+// only PHP's needs autoload.php and composer/ copied into each tree. The
+// merged declaration carries every language's entries, sorted and once, in
+// either order — copying an entry Go's vendor does not have is a no-op, and
+// linking one Composer locates the project from would make every tree load
+// the original checkout.
+func TestMergeDependencyDirsUnionsCopyPerTree(t *testing.T) {
+	php := []DepDir{{Name: "vendor", CopyPerTree: []string{"composer", "autoload.php"}}}
+	gov := []DepDir{{Name: "vendor"}}
+	other := []DepDir{{Name: "vendor", CopyPerTree: []string{"autoload.php", "x"}}}
+	want := []DepDir{{Name: "vendor", CopyPerTree: []string{"autoload.php", "composer", "x"}}}
+	for _, decls := range [][][]DepDir{{php, gov, other}, {other, gov, php}} {
+		if got := mergeDependencyDirs(decls); !reflect.DeepEqual(got, want) {
+			t.Errorf("mergeDependencyDirs(%v) = %v, want %v", decls, got, want)
+		}
+	}
+}
+
+// PHP declares the two Composer entries that locate the project by their own
+// path; the rest of vendor/ is third-party code and stays linked.
+func TestPHPVendorCopiesComposersLocatorPerTree(t *testing.T) {
+	p, _ := ByName("php")
+	want := []DepDir{{Name: "vendor", CopyPerTree: []string{"autoload.php", "composer"}}}
+	if got := p.DependencyDirs(); !reflect.DeepEqual(got, want) {
+		t.Errorf("php DependencyDirs() = %v, want %v", got, want)
 	}
 }

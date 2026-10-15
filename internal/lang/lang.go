@@ -11,6 +11,7 @@ package lang
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -24,6 +25,14 @@ type DepDir struct {
 	// directory (tox creates and reuses its environments in .tox), so it
 	// can never be shared read-only or symlinked across trees.
 	RunWrites bool
+	// CopyPerTree names entries INSIDE the directory that a private tree
+	// gets its own copy of while the rest is linked, because they locate
+	// the project from their own path. Composer's vendor/autoload.php and
+	// vendor/composer/ find the project as two levels above themselves, and
+	// PHP resolves __DIR__ through a symlink, so a tree whose vendor/ was a
+	// link loaded the ORIGINAL checkout's classes and never saw a mutant
+	// (webmozart/assert, 2026-10-15). Empty: the directory is linked whole.
+	CopyPerTree []string
 }
 
 // Plugin is everything the audit gate needs to grade one self-contained
@@ -304,12 +313,19 @@ func mergeDependencyDirs(decls [][]DepDir) []DepDir {
 		for _, d := range ds {
 			if prev, ok := byName[d.Name]; ok {
 				d.RunWrites = d.RunWrites || prev.RunWrites
+				// CopyPerTree is the union: an entry one language needs
+				// copied is a no-op for a language whose directory lacks
+				// it, and linking it would break the language that has it.
+				d.CopyPerTree = append(slices.Clone(prev.CopyPerTree), d.CopyPerTree...)
 			}
 			byName[d.Name] = d
 		}
 	}
 	out := make([]DepDir, 0, len(byName))
 	for _, d := range byName {
+		if len(d.CopyPerTree) > 0 {
+			d.CopyPerTree = slices.Compact(slices.Sorted(slices.Values(d.CopyPerTree)))
+		}
 		out = append(out, d)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })

@@ -11,6 +11,8 @@ history of any release, `git log v0.3.4..v0.3.5`.
 
 ## [Unreleased]
 
+## [v1.0.0-rc.22] — 2026-10-15
+
 - **PHP grades mutants in parallel on `--substrate workspace`.** Two things
   kept a Composer project at one mutant at a time. A private tree linked
   only top-level dependency directories, so a PHPUnit installed under

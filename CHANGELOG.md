@@ -11,6 +11,8 @@ history of any release, `git log v0.3.4..v0.3.5`.
 
 ## [Unreleased]
 
+## [v1.0.0-rc.23] — 2026-10-15
+
 - **PHP's test critic must judge every test in the file.** It used to get no
   list of the file's tests, so nothing checked that its answer covered them
   all. Replayed four times on webmozart/assert's `tests/AssertTest.php` (14

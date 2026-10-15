@@ -437,7 +437,7 @@ func TestCopyTreeSkipsATrackedTopLevelDepDirLink(t *testing.T) {
 		t.Fatal(err)
 	}
 	tree := t.TempDir()
-	shared, err := copyTree(root, tree, []string{".venv", "a.py"})
+	shared, err := copyTree(root, tree, []string{".venv", "a.py"}, depDirLinks(root))
 	if err != nil {
 		t.Fatalf("copyTree failed on a tracked top-level dep link: %v", err)
 	}

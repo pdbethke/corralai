@@ -11,6 +11,20 @@ history of any release, `git log v0.3.4..v0.3.5`.
 
 ## [Unreleased]
 
+- **PHP grades mutants in parallel on `--substrate workspace`.** Two things
+  kept a Composer project at one mutant at a time. A private tree linked
+  only top-level dependency directories, so a PHPUnit installed under
+  `tools/phpunit/vendor` was missing from every tree and the baseline failed
+  in all of them; every git-ignored dependency directory is now linked at
+  any depth (a monorepo's `packages/*/node_modules` has the same shape).
+  Then, because PHP resolves `__DIR__` through a symlink, Composer's
+  autoloader in a linked `vendor/` located the project in the ORIGINAL
+  checkout, so a tree never ran its own mutant — the pool's canary caught it
+  and refused to parallelise. `vendor/autoload.php` and `vendor/composer/`
+  are now copied into each tree, and the rest of `vendor/` stays linked. On
+  webmozart/assert's `src/Assert.php`: 6 trees instead of 1, and the dev pass
+  over 40 mutants took 8s instead of 37s.
+
 - **PHP: the writer can prove a survivor in a class that depends on
   another file.** The PHP compile check loaded the file without Composer's
   autoloader, so any class using a trait, parent or interface from another

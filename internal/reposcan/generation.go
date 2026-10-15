@@ -164,7 +164,15 @@ package reposcan
 // "18" landed on main for Rust, and an unreleased build combining both
 // branches stamped "20" into a local ledger. Skipping both keeps any of those
 // entries from being read as a verdict of this shape.
-const VerdictGeneration = "21"
+// "22" (2026-10-15): for PHP the critic is now handed the test file's tests
+// by name (lang.Plugin.TestNamesInSource, PHPUnit's Class::method) and must
+// judge every one, as Go and Python have since "14". Without the list a
+// claude-haiku-4-5 critic on webmozart/assert's AssertTest.php judged 1, 5,
+// 6 or 0 of its 14 tests across four replays, named data-provider cases as
+// tests, and twice answered with no tests at all, which sent it to the tool
+// loop. A "21" PHP critic count may be a partial review read as complete.
+// Shape unchanged; behaviour bump.
+const VerdictGeneration = "22"
 
 // VerdictShapeSHA256 fingerprints advpool.Verdict's serialized shape: every
 // exported field's name, type and json tag, sorted by name and hashed.

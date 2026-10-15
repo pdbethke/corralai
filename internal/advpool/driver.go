@@ -2817,6 +2817,12 @@ func (d *Driver) tickAggregate(ctx context.Context, missionID int64, run *runSta
 		}
 		criticFindings = filterCriticFindings(findings, tc.ID)
 		criticIncomplete = strings.HasPrefix(tc.Result, criticIncompletePrefix)
+		// The result names the path that produced the review (one typed
+		// call, or the tool loop and why the typed answers were refused).
+		// Read only for its marker, it once hid why a critic made seven
+		// calls instead of one; it goes on the run's output, not the
+		// verdict, because it explains a cost and changes no measurement.
+		log.Printf("advpool: %s: test-critic: %s", run.rs.CodePath, criticSummary(tc.Result))
 		// The wait is over: everything from the pool score to this moment is
 		// what having a critic cost the run. Closed only on the path that
 		// actually READ the critic's findings — the early return above
@@ -3657,6 +3663,27 @@ func sampleInvalidReasons(run *runState, n int) []string {
 		}
 	}
 	return out
+}
+
+// criticSummary is the critic's result as one line of run output: the
+// incomplete marker spelled out, and the loop's free-text answer, which a
+// fallback appends after its note, cut to the first line and a bounded
+// length so a chatty model cannot flood the progress output.
+func criticSummary(result string) string {
+	const max = 400
+	s := result
+	cut := false
+	if rest, ok := strings.CutPrefix(s, criticIncompletePrefix); ok {
+		s, cut = rest, true
+	}
+	s = firstLine(s)
+	if r := []rune(s); len(r) > max {
+		s = string(r[:max]) + "…"
+	}
+	if cut {
+		return "INCOMPLETE — " + s
+	}
+	return s
 }
 
 // firstLine trims a compiler's multi-line output to its first meaningful line,

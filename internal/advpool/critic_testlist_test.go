@@ -20,6 +20,14 @@ func TestCriticInstructionCarriesTheTestList(t *testing.T) {
 	if want := agentworker.CriticTestListBlock("p/p_test.go", []string{"TestA", "TestB"}); !strings.Contains(got, want) {
 		t.Fatalf("instruction lacks the list block %q:\n%s", want, got)
 	}
+	// PHP lists PHPUnit's tests (2026-10-15): without the list a critic
+	// judged an arbitrary subset of a file's tests and the review read as
+	// complete.
+	php := RunSpec{Goal: "asserts", Lang: "php", CodePath: "src/A.php", Code: "<?php class A {}", DevTestPath: "tests/ATest.php",
+		DevTestCode: "<?php\nclass ATest extends TestCase {\n    public function testA(): void {}\n    #[Test]\n    public function b(): void {}\n}\n"}
+	if want := agentworker.CriticTestListBlock("tests/ATest.php", []string{"ATest::testA", "ATest::b"}); !strings.Contains(CriticInstruction(php), want) {
+		t.Fatalf("PHP instruction lacks the list block %q:\n%s", want, CriticInstruction(php))
+	}
 	rs.Lang, rs.CodePath, rs.DevTestPath, rs.DevTestCode = "ruby", "lib/p.rb", "spec/p_spec.rb", "describe 'p' do\nend\n"
 	if got := CriticInstruction(rs); strings.Contains(got, "TESTS TO JUDGE") {
 		t.Fatalf("a language that cannot list must get no block:\n%s", got)

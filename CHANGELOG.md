@@ -11,6 +11,26 @@ history of any release, `git log v0.3.4..v0.3.5`.
 
 ## [Unreleased]
 
+- **PHP's test critic must judge every test in the file.** It used to get no
+  list of the file's tests, so nothing checked that its answer covered them
+  all. Replayed four times on webmozart/assert's `tests/AssertTest.php` (14
+  tests), a claude-haiku-4-5 critic judged 5, 1, 6 and 0 of them, filed
+  findings against data-provider cases it named as tests, and on the empty
+  answer fell back to the tool loop (8 calls instead of 1). The critic is
+  now handed PHPUnit's tests by name (`Class::method`: public `test*`
+  methods and those marked `#[Test]` or `@test`), as Go and Python have
+  been, and an answer that skips or invents one is refused. Checked against
+  a lister built on PHP's own tokenizer over the test files of PHPUnit,
+  symfony/console and laravel/framework: 2,512 files, 18,459 tests, no
+  difference.
+- **The run output says which path the critic took.** A line per file now
+  reads `test-critic: typed critic judged N test(s), M flagged`, or names
+  the fallback to the tool loop and the parse errors that caused it. That
+  text was computed and read only for its "incomplete" marker, so a critic
+  that made seven calls instead of one could not say why.
+- **One-time cache miss.** `reposcan.VerdictGeneration` is now 22 (rc.22
+  shipped 21). Every verdict cached before this change is re-measured once.
+
 ## [v1.0.0-rc.22] — 2026-10-15
 
 - **PHP grades mutants in parallel on `--substrate workspace`.** Two things

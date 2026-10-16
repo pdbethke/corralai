@@ -36,7 +36,7 @@ What corral does with each language's tests. This page is rendered from the same
 
 ## By runner
 
-A language has a runner capability when any of its runners does; this is which. corral recognises the runner from the test command you pass; a command it does not recognise (a `make` target, `npm test`) is graded exactly the same, by exit code, and is treated as its language's default runner, except that it never gets a fail-fast flag.
+A language has a runner capability when any of its runners does; this is which. corral recognises the runner from the test command you pass, or from the package script it runs: `composer` reads `composer.json` and hands the runner its arguments after `--`; `npm` reads `package.json` and hands the runner its arguments after `--`; `pnpm` reads `package.json` and hands the runner its arguments after `--`; `yarn` reads `package.json` and hands the runner its arguments directly. A script gets the runner's arguments only when it is one command, since a launcher appends them to the end of the script. `--runner <id>` names the runner when corral cannot read it. A command whose runner corral does not know (a `make` target) is graded exactly the same, by exit code, as its language's default runner, except that it never gets a fail-fast flag.
 
 | runner | `--runner` | languages | stop at first failure | list tests | run one test | names the killing test | salvage | names flaky tests | note |
 |---|---|---|---|---|---|---|---|---|---|

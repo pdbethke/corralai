@@ -66,7 +66,25 @@ history of any release, `git log v0.3.4..v0.3.5`.
   Rust: their list is what the command runs, which a directory argument or a
   `.mocharc` widens beyond the test file, so a matrix would offer other
   files' tests for deletion.
-- **One-time cache miss.** `reposcan.VerdictGeneration` is now 25 (rc.23
+- **`npm test` is read through its script, and `--runner` names a runner
+  corral cannot read.** A test command that runs a package script (`npm
+  test`, `yarn test`, `pnpm test`, `composer test`, `npm run <name>`) is
+  read statically from `package.json` or `composer.json`, once at run start,
+  and the run says what it found (`npm test → jest (package.json
+  scripts.test)`). When the script is one command, the runner gets its own
+  arguments through the launcher: fail-fast, the test list and one-test
+  runs, so the critic's claims are checked. A compound script (`jest &&
+  eslint .`) is detected but gets no arguments, because npm and Composer
+  append them to the end of the script, where `--bail` would reach eslint.
+  Each launcher's separator was run: npm 10.9 and pnpm 9.15 after `--`,
+  yarn 1.22 directly, Composer 2.9 after `--`. `certify --runner <id>`
+  overrides detection (ids are on the language-support page); a typo, or a
+  runner of another language, is refused before anything is spent, and
+  corral still runs the command as given. The coverage wrappers now take
+  their runner words from the runner table. Not covered: yarn 2 and later,
+  a script that calls another script, Composer scripts starting with `@`,
+  Makefiles, and a `runner` input on the GitHub Action.
+- **One-time cache miss.** `reposcan.VerdictGeneration` is now 26 (rc.23
   shipped 23). Every verdict cached before this change is re-measured once.
 
 ## [v1.0.0-rc.23] — 2026-10-15

@@ -3,10 +3,10 @@
 package lang
 
 import (
-	"slices"
 	"bytes"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )

@@ -4,6 +4,7 @@ package lang
 
 import (
 	"encoding/json"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -72,6 +73,20 @@ var launchers = map[string]launcher{
 	"pnpm":     {"package.json", "scripts", "--", []string{"test", "t"}, []string{"run", "run-script"}, true},
 	"yarn":     {"package.json", "scripts", "", []string{"test"}, []string{"run"}, true},
 	"composer": {"composer.json", "scripts", "--", []string{"test"}, []string{"run-script", "run"}, true},
+}
+
+// ScriptLauncher is one package manager whose scripts the runner table reads,
+// for the support page: the manifest it reads and the separator before extra
+// arguments ("" = none).
+type ScriptLauncher struct{ Name, Manifest, Pass string }
+
+// ScriptLaunchers is every launcher Resolve reads, by name.
+func ScriptLaunchers() []ScriptLauncher {
+	var out []ScriptLauncher
+	for _, name := range slices.Sorted(maps.Keys(launchers)) {
+		out = append(out, ScriptLauncher{name, launchers[name].manifest, launchers[name].pass})
+	}
+	return out
 }
 
 // Resolve reads the package script argv runs, if it runs one, and applies an

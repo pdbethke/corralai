@@ -187,7 +187,13 @@ package reposcan
 // PHPUnit list a file's tests and run one alone). A "24" verdict for those languages carries every whole-test claim
 // unchecked, so a refuted one would be served as standing. Shape unchanged;
 // behaviour bump.
-const VerdictGeneration = "25"
+// "26" (2026-10-16): a test command that runs a package script (npm test,
+// yarn test, pnpm test, composer test) is now read through the script
+// (lang.Resolve), so a one-command script's runner gets its fail-fast flag
+// and its critic claims are checked by execution. A "25" verdict for such a
+// command graded every mutant with the whole suite and left every critic
+// claim unchecked. Shape unchanged; behaviour bump.
+const VerdictGeneration = "26"
 
 // VerdictShapeSHA256 fingerprints advpool.Verdict's serialized shape: every
 // exported field's name, type and json tag, sorted by name and hashed.

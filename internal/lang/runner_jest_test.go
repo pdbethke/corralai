@@ -72,3 +72,18 @@ func TestJestRowDispatch(t *testing.T) {
 		}
 	}
 }
+
+// jest builds its name filter case-insensitively (jest-circus: new
+// RegExp(pattern, 'i')); measured on jest 30.5, ^Calc adds$ ran both
+// "Calc adds" and "calc adds". So two names differing only in case corun.
+func TestJestCorunsIgnoresCase(t *testing.T) {
+	js, _ := ByName("javascript")
+	argv := []string{"npx", "jest"}
+	if _, ok := ResolveForRun(js, argv, []string{"Calc adds", "calc adds"}, "Calc adds"); ok {
+		t.Error("Calc adds resolved; jest's -t would also run calc adds")
+	}
+	vt, _ := ByName("typescript")
+	if _, ok := ResolveForRun(vt, []string{"npx", "vitest", "run"}, []string{"Calc adds", "calc adds"}, "Calc adds"); !ok {
+		t.Error("vitest matches case-sensitively; Calc adds should resolve")
+	}
+}

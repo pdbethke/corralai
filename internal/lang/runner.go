@@ -124,7 +124,7 @@ var runners = []Runner{
 	// kill. node --test has no such flag.
 	{
 		Name: "jest", Languages: []string{"javascript", "typescript"}, Words: []string{"jest"}, FailFast: []string{"--bail"},
-		ListCmd: jestListCmd, ParseList: jestParseList, SingleCmd: jestSingleCmd, ResolveByList: true, Coruns: fullNameColl,
+		ListCmd: jestListCmd, ParseList: jestParseList, SingleCmd: jestSingleCmd, ResolveByList: true, Coruns: jestCoruns,
 		Note: "listing and one-test runs verified on jest 30.5",
 	},
 	{

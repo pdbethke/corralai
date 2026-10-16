@@ -57,3 +57,10 @@ func jestSingleCmd(argv []string, testPath, id string) ([]string, bool) {
 	}
 	return append(slices.Clone(argv), "--testNamePattern", "^"+jsRegexQuote(fullName(id))+"$", testPath), true
 }
+
+// jestCoruns is fullNameColl without case: jest compiles its name filter
+// with the 'i' flag (jest-circus), so `^Calc adds$` also runs "calc adds"
+// (measured on jest 30.5). vitest, mocha, node and rspec match case-sensitively.
+func jestCoruns(id, other string) bool {
+	return id != other && strings.EqualFold(fullName(id), fullName(other))
+}

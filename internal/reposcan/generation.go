@@ -184,8 +184,7 @@ package reposcan
 // its critic count would be served as one that excludes them.
 // "25" (2026-10-16): JavaScript, TypeScript, Ruby and PHP critic claims are
 // now checked by execution (jest, vitest, mocha, node --test, rspec and
-// PHPUnit list a file's tests and run one alone), and --matrix runs for
-// them. A "24" verdict for those languages carries every whole-test claim
+// PHPUnit list a file's tests and run one alone). A "24" verdict for those languages carries every whole-test claim
 // unchecked, so a refuted one would be served as standing. Shape unchanged;
 // behaviour bump.
 const VerdictGeneration = "25"

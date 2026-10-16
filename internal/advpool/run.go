@@ -29,6 +29,14 @@ type RunSpec struct {
 	TestCmd     string
 	NMutants    int
 
+	// Invocation is what the runner table resolved about TestCmd at run
+	// start, where the repository was on disk: the package script it runs
+	// (npm test) and an operator's --runner. The driver has no repository
+	// directory and must not re-read files, so it carries the answer; its
+	// Argv is always TestCmd's (inv). Zero means nothing was resolved, and
+	// the command answers as a bare argv.
+	Invocation lang.Invocation
+
 	// Landing is where the authored test lands (AuthoredLanding), as the
 	// door that admitted CodePath computed it: StartRun refuses on it
 	// (lang.CheckTestLanding) and the writer is told where its test goes
@@ -200,3 +208,9 @@ type RunSpec struct {
 // RoleAssignment maps a role name (Role.Name) to the gate-earned model that
 // should run it, e.g. from StaffingManager off the leaderboard.
 type RoleAssignment map[string]string
+
+// inv is the run's test command as the runner table reads it: TestCmd's
+// words, with whatever was resolved about them at run start.
+func (rs RunSpec) inv() lang.Invocation {
+	return rs.Invocation.WithArgv(adequacy.ShellSplit(rs.TestCmd))
+}

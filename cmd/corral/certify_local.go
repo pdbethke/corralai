@@ -545,6 +545,9 @@ type localAuditInput struct {
 	jail       string
 	bindDirs   []string
 	noBindDeps bool
+	// runner is the operator's --runner: the runner-table row behind
+	// checkArgv when corral cannot read it (lang.Resolve). "" = detect.
+	runner string
 
 	// baseArgv is checkArgv BEFORE coverage-guided narrowing: the operator's
 	// own `-- <cmd>` or the plugin's stock recursive command. It is what
@@ -962,6 +965,9 @@ func scopeAuditInput(in localAuditInput, plug lang.Plugin) (localAuditInput, err
 // the code + dev-test bytes, and the jail-backed scorer/validator/enumerator
 // wiring. cleanup releases any Go-vendor staging dir and is always non-nil.
 type auditJailPrep struct {
+	// inv is what lang.Resolve found about the test command: the package
+	// script it runs, and the operator's --runner.
+	inv        lang.Invocation
 	testPath   string
 	code       []byte
 	devTest    []byte
@@ -1058,7 +1064,14 @@ func prepareAuditJail(ctx context.Context, in localAuditInput, plug lang.Plugin,
 	if err != nil {
 		return p, err
 	}
-	for _, line := range lang.RunDisclosures(plug, repoDir, lang.Cmd(in.checkArgv)) {
+	// The runner behind the command, resolved ONCE, here, where the
+	// repository is on disk: the package script `npm test` runs, and the
+	// operator's --runner. Everything downstream carries this answer.
+	inv, err := lang.Resolve(plug, repoDir, orArgv(in.baseArgv, in.checkArgv), in.runner)
+	if err != nil {
+		return p, auditErr("%v", err)
+	}
+	for _, line := range lang.RunDisclosures(plug, repoDir, inv.WithArgv(in.checkArgv)) {
 		fmt.Fprintf(stdout, "  %s\n", line)
 	}
 
@@ -1066,7 +1079,7 @@ func prepareAuditJail(ctx context.Context, in localAuditInput, plug lang.Plugin,
 		landing: landing,
 		iso:     iso, timeout: timeout, testTimeout: in.mutantTimeout,
 		codePath: in.codePath, testPath: tp, repoDir: repoDir, langName: plug.Name(), fsPath: fsPath,
-		code: code, devTest: devTest, checkArgv: in.checkArgv,
+		code: code, devTest: devTest, checkArgv: in.checkArgv, inv: inv,
 		baseArgv: in.baseArgv, selection: in.selection,
 		bindDirFlag: in.bindDirs, noBindDepsFlag: in.noBindDeps, stdout: stdout,
 		seed: in.seed, substrate: in.substrate, mutantConcurrency: in.mutantConcurrency,
@@ -1091,7 +1104,7 @@ func prepareAuditJail(ctx context.Context, in localAuditInput, plug lang.Plugin,
 		return statErr == nil
 	})
 
-	return auditJailPrep{testPath: tp, code: code, devTest: devTest, wiring: wiring, importPath: importPath, cleanup: wiring.cleanup}, nil
+	return auditJailPrep{inv: inv, testPath: tp, code: code, devTest: devTest, wiring: wiring, importPath: importPath, cleanup: wiring.cleanup}, nil
 }
 
 // jailBaselineRunner runs a candidate's UNMUTATED suite in the jail, once per
@@ -1519,6 +1532,8 @@ type runSubject struct {
 	// landing is the wiring's AuthoredLanding — the same value the scorer
 	// and validator write with (jailWiring.landing).
 	landing advpool.AuthoredLanding
+	// inv is the resolved test command (auditJailPrep.inv).
+	inv lang.Invocation
 }
 
 // orArgv returns a when it has words, else b. The narrowed and the base
@@ -1611,8 +1626,11 @@ func newAuditRunSpec(in localAuditInput, roles auditRoles, subj runSubject) advp
 		// pass), so narrowing here would narrow twice and would drop the
 		// authored test from the pool's own pass. Empty baseArgv is the
 		// `--local` path, where checkArgv IS the base.
-		TestCmd:   adequacy.ShellJoin(orArgv(in.baseArgv, in.checkArgv)),
-		Selection: in.selection,
+		TestCmd: adequacy.ShellJoin(orArgv(in.baseArgv, in.checkArgv)),
+		// What lang.Resolve found about that command, so the driver's
+		// one-test and list commands go through the same package script.
+		Invocation: subj.inv,
+		Selection:  in.selection,
 		// Concurrency carries the workspace substrate's probe answer onto
 		// the RunSpec the driver actually reads — the ONLY hop that does,
 		// so every verdict, report line and ledger row can disclose how
@@ -1876,6 +1894,7 @@ func auditOneFile(ctx context.Context, in localAuditInput) (advpool.Verdict, err
 		devTestPath: devTestKey, devTest: string(devTest),
 		lang: plug.Name(), importPath: prep.importPath,
 		landing: prep.wiring.landing,
+		inv:     prep.inv,
 	})
 
 	// Signatures are best-effort (mirrors the brain's StartRun): a failure just
@@ -2073,19 +2092,22 @@ func printLocalReadout(w io.Writer, v advpool.Verdict, st advpool.RunState, tp s
 type jailWiringInput struct {
 	// landing is the checked landing (auditLanding); the repo branches turn
 	// it into the wiring's AuthoredLanding.
-	landing        pairing.Landing
-	iso            sandbox.Isolator
-	timeout        time.Duration
-	testTimeout    time.Duration
-	codePath       string
-	testPath       string
-	repoDir        string
-	langName       string // resolved language plugin name — drives dependency vendoring
-	fsPath         func(string) string
-	code           []byte
-	devTest        []byte
-	checkArgv      []string
-	baseArgv       []string
+	landing     pairing.Landing
+	iso         sandbox.Isolator
+	timeout     time.Duration
+	testTimeout time.Duration
+	codePath    string
+	testPath    string
+	repoDir     string
+	langName    string // resolved language plugin name — drives dependency vendoring
+	fsPath      func(string) string
+	code        []byte
+	devTest     []byte
+	checkArgv   []string
+	baseArgv    []string
+	// inv is the resolved test command (auditJailPrep.inv); zero answers
+	// as a bare checkArgv.
+	inv            lang.Invocation
 	selection      lang.Selection
 	bindDirFlag    []string
 	noBindDepsFlag bool
@@ -2229,7 +2251,7 @@ func buildJailWiring(ctx context.Context, in jailWiringInput) (w jailWiring, err
 	// column.
 	var failureParser lang.FailureParser
 	if plug, ok := lang.ByName(in.langName); ok {
-		failureParser = lang.FailureParserFor(plug, lang.Cmd(in.checkArgv))
+		failureParser = lang.FailureParserFor(plug, in.inv.WithArgv(in.checkArgv))
 	}
 
 	// A KILLED MUTANT NEEDS ONE FAILING TEST. Resolved off the same plugin,
@@ -2240,7 +2262,7 @@ func buildJailWiring(ctx context.Context, in jailWiringInput) (w jailWiring, err
 	var failFast adequacy.FailFastFor
 	if !in.noFailFast {
 		if plug, ok := lang.ByName(in.langName); ok {
-			failFast = func(cmd []string) ([]string, bool) { return lang.FailFastArgsFor(plug, lang.Cmd(cmd)) }
+			failFast = func(cmd []string) ([]string, bool) { return lang.FailFastArgsFor(plug, in.inv.WithArgv(cmd)) }
 		}
 	}
 

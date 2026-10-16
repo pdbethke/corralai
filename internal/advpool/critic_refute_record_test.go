@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/pdbethke/corralai/internal/adequacy"
+	golang "github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/queue"
 )
 
@@ -170,5 +171,29 @@ func TestMatrixLeavesJestToTheCriticPath(t *testing.T) {
 	d.tickMatrix(context.Background(), run)
 	if enumerator.calls != 0 || run.matrix != nil {
 		t.Fatalf("jest --matrix enumerated %d time(s), matrix=%v; want the matrix skipped", enumerator.calls, run.matrix)
+	}
+}
+
+// A run whose test command is `npm test` carries what was resolved about it
+// at run start (the jest script behind it), so the critic's one-test command
+// goes through npm to jest — and the driver never reads package.json.
+func TestCriticTestCommandThroughNpmTest(t *testing.T) {
+	b, err := os.ReadFile("../lang/testdata/runners/jest-list.json") // #nosec G304 -- test fixture
+	if err != nil {
+		t.Fatal(err)
+	}
+	enum := &fakeEnumerator{out: string(b)}
+	d := &Driver{Enumerator: enum}
+	inv := golang.Invocation{Script: []string{"jest"}, Pass: "--", Narrow: true, From: "package.json scripts.test"}
+	run := &runState{rs: RunSpec{Lang: "javascript", DevTestPath: "calc.jest.test.js", TestCmd: "npm test", Invocation: inv}}
+	cmd, why := d.criticTestCommand(context.Background(), run, queue.Finding{TestSelector: "top level", TestFile: "calc.jest.test.js"})
+	if want := []string{"npm", "test", "--", "--testNamePattern", "^top level$", "calc.jest.test.js"}; !reflect.DeepEqual(adequacy.ShellSplit(cmd), want) {
+		t.Errorf("command = %q (%s), want %q", cmd, why, want)
+	}
+
+	// Without the resolution, npm test is no runner corral can narrow.
+	bare := &runState{rs: RunSpec{Lang: "javascript", DevTestPath: "calc.jest.test.js", TestCmd: "npm test"}}
+	if cmd, _ := d.criticTestCommand(context.Background(), bare, queue.Finding{TestSelector: "top level"}); cmd != "" {
+		t.Errorf("an unresolved npm test was narrowed to %q", cmd)
 	}
 }

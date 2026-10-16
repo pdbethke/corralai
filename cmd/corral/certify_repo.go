@@ -3452,7 +3452,11 @@ func printRunDisclosures(w io.Writer, ex *localExecutor, jobs []reposcan.Job) {
 		if !ok {
 			continue
 		}
-		for _, line := range lang.RunDisclosures(p, ex.repoDir, lang.Cmd(ex.baseCmd(j))) {
+		inv, err := lang.Resolve(p, ex.repoDir, ex.baseCmd(j), ex.runnerFor(j.Lang))
+		if err != nil {
+			continue // runnerFor only names a runner of j.Lang; unreachable
+		}
+		for _, line := range lang.RunDisclosures(p, ex.repoDir, inv) {
 			fmt.Fprintf(w, "  %s\n", line)
 		}
 	}
@@ -4537,6 +4541,11 @@ type localExecutor struct {
 	// localAuditInput (see auditInputFor).
 	models auditModels
 
+	// runner is the operator's --runner. It applies to the jobs whose
+	// language that runner runs (runnerFor); the scan's other languages
+	// detect their runner as before.
+	runner string
+
 	// localEndpoints places local seats on specific ollama daemons for every
 	// file this scan audits — one daemon per GPU. See parseLocalEndpoints.
 	localEndpoints map[string]string
@@ -4826,6 +4835,7 @@ func (l *localExecutor) auditInputFor(j reposcan.Job) localAuditInput {
 		testPath: orDefault(j.TestPath, j.CoveringTestPath),
 		goal:     j.Goal.Text,
 		lang:     j.Lang,
+		runner:   l.runnerFor(j.Lang),
 		repo:     j.Repo,
 		iso:      l.iso,
 		// "local" rather than "" when the operator gave no --commit: an empty
@@ -5937,4 +5947,19 @@ func (l *localExecutor) priorDigestFor(path string) string {
 		return ""
 	}
 	return prior.Digest(tried)
+}
+
+// runnerFor is the --runner that applies to a job in language langName: the
+// operator's, when that row runs the language, else "" (detect). A scan can
+// span languages under one test command's language family; a runner named
+// for one of them says nothing about the others.
+func (l *localExecutor) runnerFor(langName string) string {
+	p, ok := lang.ByName(langName)
+	if !ok || l.runner == "" {
+		return ""
+	}
+	if _, err := lang.RunnerByID(p, l.runner); err != nil {
+		return ""
+	}
+	return l.runner
 }

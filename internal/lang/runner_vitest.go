@@ -60,9 +60,7 @@ func vitestParseList(stdout string) []string {
 		if len(parts) < 2 {
 			continue
 		}
-		if id := joinTitles(parts[1:]); id != "" {
-			ids = append(ids, id)
-		}
+		ids = append(ids, joinTitles(parts[1:]))
 	}
 	return ids
 }

@@ -41,9 +41,7 @@ func jestParseList(stdout string) []string {
 	var ids []string
 	for _, f := range rep.TestResults {
 		for _, a := range f.AssertionResults {
-			if id := joinTitles(append(slices.Clone(a.AncestorTitles), a.Title)); id != "" {
-				ids = append(ids, id)
-			}
+			ids = append(ids, joinTitles(append(slices.Clone(a.AncestorTitles), a.Title)))
 		}
 	}
 	return ids

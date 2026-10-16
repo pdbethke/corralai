@@ -11,8 +11,8 @@ func TestVitestParsesItsRealList(t *testing.T) {
 	if got := vitestParseList(readFixture(t, "vitest-list.txt")); !slices.Equal(got, fixtureJSIDs) {
 		t.Errorf("vitestParseList = %q, want %q", got, fixtureJSIDs)
 	}
-	if got := vitestParseList("a.test.ts > has::colons\nno separator here\n"); got != nil {
-		t.Errorf("parsed %q; a title with the id separator, and a line without vitest's, list nothing", got)
+	if got, want := vitestParseList("a.test.ts > has::colons\nno separator here\n"), []string{markNotAlone("has::colons")}; !slices.Equal(got, want) {
+		t.Errorf("parsed %q, want %q: a title with the id separator is listed but not runnable alone, and a line without vitest's lists nothing", got, want)
 	}
 }
 

@@ -23,16 +23,30 @@ func fullNameColl(id, other string) bool {
 	return id != other && fullName(id) == fullName(other)
 }
 
-// joinTitles is an id from a test's titles, outermost first, or "" when a
-// title holds the separator itself: such an id would split into the wrong
-// titles, and its pattern would select a test that does not exist.
+// notAlone marks a listed id corral cannot run by itself: a title holding
+// the id separator (its pattern would name titles that do not exist), or a
+// node test with subtests (running either runs the parent's body). Such an id
+// stays IN the list, because a list without it would let a critic's name
+// resolve to the one remaining test that shares it, and that test's kills
+// would refute a claim about the other. ResolveListedTest matches it by its
+// name; RunsAlone refuses it.
+const notAlone = "\x00"
+
+func markNotAlone(id string) string { return notAlone + id }
+
+// listedName is a listed id without its notAlone mark.
+func listedName(id string) string { return strings.TrimPrefix(id, notAlone) }
+
+// joinTitles is an id from a test's titles, outermost first; marked notAlone
+// when a title is empty or holds the separator itself.
 func joinTitles(titles []string) string {
+	id := strings.Join(titles, "::")
 	for _, t := range titles {
 		if t == "" || strings.Contains(t, "::") {
-			return ""
+			return markNotAlone(id)
 		}
 	}
-	return strings.Join(titles, "::")
+	return id
 }
 
 // hasFlag reports whether argv carries any of flags, bare or as flag=value.
@@ -68,16 +82,34 @@ func jsRegexQuote(s string) string { return regexQuoter.Replace(s) }
 
 // idFromFull is the id of a test a runner reports as a full name and a leaf
 // title (mocha's fullTitle/title, rspec's full_description/description):
-// everything before the leaf is one segment, so a critic's bare test name
-// still matches as the "::"-suffix and the full name is unchanged. "" when
-// the full name does not end in the leaf.
+// everything before the leaf is one segment, which may itself hold "::"
+// (`RSpec.describe MyApp::Calc`, the usual Rails idiom). The LAST "::" is the
+// boundary, so a critic's bare test name still matches as the suffix and
+// lastFull restores the full name. Marked notAlone when the leaf holds "::"
+// or the full name does not end in it.
 func idFromFull(full, leaf string) string {
+	if leaf == "" || strings.Contains(leaf, "::") {
+		return markNotAlone(full)
+	}
 	if full == leaf {
-		return joinTitles([]string{leaf})
+		return leaf
 	}
 	prefix, ok := strings.CutSuffix(full, " "+leaf)
 	if !ok {
-		return ""
+		return markNotAlone(full)
 	}
-	return joinTitles([]string{prefix, leaf})
+	return prefix + "::" + leaf
+}
+
+// lastFull is the full name of an idFromFull id: its last "::" back to a space.
+func lastFull(id string) string {
+	if i := strings.LastIndex(id, "::"); i >= 0 {
+		return id[:i] + " " + id[i+2:]
+	}
+	return id
+}
+
+// lastFullColl is Coruns for the idFromFull rows (mocha, rspec).
+func lastFullColl(id, other string) bool {
+	return id != other && lastFull(id) == lastFull(other)
 }

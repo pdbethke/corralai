@@ -37,9 +37,7 @@ func rspecParseList(stdout string) []string {
 	}
 	var ids []string
 	for _, e := range rep.Examples {
-		if id := idFromFull(e.FullDescription, e.Description); id != "" {
-			ids = append(ids, id)
-		}
+		ids = append(ids, idFromFull(e.FullDescription, e.Description))
 	}
 	return ids
 }
@@ -51,5 +49,5 @@ func rspecSingleCmd(argv []string, testPath, id string) ([]string, bool) {
 	if id == "" || !narrowable(argv, rspecFilters...) {
 		return nil, false
 	}
-	return append(slices.Clone(argv), "-E", `\A`+regexQuoter.Replace(fullName(id))+`\z`, testPath), true
+	return append(slices.Clone(argv), "-E", `\A`+regexQuoter.Replace(lastFull(id))+`\z`, testPath), true
 }

@@ -24,13 +24,14 @@ func nodeListCmd(argv []string, testPath string) ([]string, bool) {
 	return append(slices.Clone(argv), "--test-reporter=tap", testPath), true
 }
 
-// nodeParseList reads the TAP report into the ids of tests that are leaves
-// under suites only. node nests a subtest four spaces deeper per level, and
-// each result's YAML says `type: 'test'` or `type: 'suite'`. Left out:
-//   - a test with subtests, and every subtest of a test: running either runs
-//     the parent's body too, so what it killed cannot be credited to one;
-//   - a result whose YAML carries exitCode, which is the FILE failing to load
-//     (node reports it as a test named after the file), not a test.
+// nodeParseList reads the TAP report into the ids of its tests. node nests a
+// subtest four spaces deeper per level, and each result's YAML says
+// `type: 'test'` or `type: 'suite'`. A test with subtests, and every subtest
+// of a test, is listed but marked notAlone: running either runs the parent's
+// body too, so what it killed cannot be credited to one, yet its name must
+// still make a critic's name ambiguous. Left out entirely: a result whose
+// YAML carries exitCode, which is the FILE failing to load (node reports it
+// as a test named after the file), not a test.
 func nodeParseList(stdout string) []string {
 	var entries []*nodeEntry
 	var stack []string
@@ -73,16 +74,18 @@ func nodeParseList(stdout string) []string {
 	}
 	var ids []string
 	for _, e := range entries {
-		if e.typ != "test" || e.exit || hasChild[nodeKey(e.path)] {
+		if e.typ != "test" || e.exit {
 			continue
 		}
-		suitesOnly := true
+		alone := !hasChild[nodeKey(e.path)]
 		for k := 1; k < len(e.path); k++ {
-			suitesOnly = suitesOnly && typeOf[nodeKey(e.path[:k])] == "suite"
+			alone = alone && typeOf[nodeKey(e.path[:k])] == "suite"
 		}
-		if id := joinTitles(e.path); suitesOnly && id != "" {
-			ids = append(ids, id)
+		id := joinTitles(e.path)
+		if !alone && id == listedName(id) {
+			id = markNotAlone(id)
 		}
+		ids = append(ids, id)
 	}
 	return ids
 }

@@ -34,9 +34,7 @@ func mochaParseList(stdout string) []string {
 	}
 	var ids []string
 	for _, t := range rep.Tests {
-		if id := idFromFull(t.FullTitle, t.Title); id != "" {
-			ids = append(ids, id)
-		}
+		ids = append(ids, idFromFull(t.FullTitle, t.Title))
 	}
 	return ids
 }
@@ -46,5 +44,5 @@ func mochaSingleCmd(argv []string, testPath, id string) ([]string, bool) {
 	if id == "" || !narrowable(argv, mochaFilters...) {
 		return nil, false
 	}
-	return append(slices.Clone(argv), "--grep", "^"+jsRegexQuote(fullName(id))+"$", testPath), true
+	return append(slices.Clone(argv), "--grep", "^"+jsRegexQuote(lastFull(id))+"$", testPath), true
 }

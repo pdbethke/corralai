@@ -129,7 +129,7 @@ var runners = []Runner{
 	},
 	{
 		Name: "mocha", Languages: []string{"javascript", "typescript"}, Words: []string{"mocha"}, FailFast: []string{"--bail"},
-		ListCmd: mochaListCmd, ParseList: mochaParseList, SingleCmd: mochaSingleCmd, ResolveByList: true, Coruns: fullNameColl,
+		ListCmd: mochaListCmd, ParseList: mochaParseList, SingleCmd: mochaSingleCmd, ResolveByList: true, Coruns: lastFullColl,
 		Note: "listing and one-test runs verified on mocha 11.8 (listing needs mocha 9 or later)",
 	},
 	{
@@ -153,7 +153,7 @@ var runners = []Runner{
 	// unknown option as an error, which the scorer would read as a kill.
 	{
 		Name: "rspec", Languages: []string{"ruby"}, Default: true, Words: []string{"rspec"}, FailFast: []string{"--fail-fast"},
-		ListCmd: rspecListCmd, ParseList: rspecParseList, SingleCmd: rspecSingleCmd, ResolveByList: true, Coruns: fullNameColl,
+		ListCmd: rspecListCmd, ParseList: rspecParseList, SingleCmd: rspecSingleCmd, ResolveByList: true, Coruns: lastFullColl,
 		Note: "listing and one-test runs verified on rspec-core 3.13 (one-test runs need 3.12 or later)",
 	},
 	{
@@ -289,12 +289,15 @@ func ResolveForRun(p Plugin, argv []string, listed []string, name string) (strin
 // and no other listed one: the id is listed once, and no other listed test
 // is one the runner's selection would also run (Coruns).
 func RunsAlone(p Plugin, argv []string, listed []string, id string) bool {
+	if id != listedName(id) {
+		return false
+	}
 	r, found := RunnerFor(p, argv)
 	n := 0
 	for _, other := range listed {
 		if other == id {
 			n++
-		} else if found && r.Coruns != nil && r.Coruns(id, other) {
+		} else if found && r.Coruns != nil && r.Coruns(id, listedName(other)) {
 			return false
 		}
 	}

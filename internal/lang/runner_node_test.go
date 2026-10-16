@@ -19,8 +19,9 @@ func TestNodeParsesItsRealList(t *testing.T) {
 }
 
 // A test with subtests (t.test) runs its own body to reach them, so neither
-// the parent nor its subtests can be run alone and credited alone.
-func TestNodeLeavesSubtestsOfATestUnlisted(t *testing.T) {
+// the parent nor its subtests can be run alone and credited alone: both are
+// listed, marked, and never resolved.
+func TestNodeMarksSubtestsOfATestNotAlone(t *testing.T) {
 	tap := `TAP version 13
 # Subtest: parent
     # Subtest: child
@@ -46,8 +47,19 @@ ok 2 - S
   ...
 1..2
 `
-	if got, want := nodeParseList(tap), []string{"S::has # hash"}; !slices.Equal(got, want) {
-		t.Errorf("nodeParseList = %q, want %q", got, want)
+	ids := nodeParseList(tap)
+	if want := []string{markNotAlone("parent::child"), markNotAlone("parent"), "S::has # hash"}; !slices.Equal(ids, want) {
+		t.Errorf("nodeParseList = %q, want %q", ids, want)
+	}
+	js, _ := ByName("javascript")
+	argv := []string{"node", "--test"}
+	for _, name := range []string{"child", "parent"} {
+		if id, ok := ResolveForRun(js, argv, ids, name); ok {
+			t.Errorf("%s resolved to %q; it cannot run alone", name, id)
+		}
+	}
+	if id, ok := ResolveForRun(js, argv, ids, "has # hash"); !ok || id != "S::has # hash" {
+		t.Errorf("has # hash = %q, %v", id, ok)
 	}
 }
 

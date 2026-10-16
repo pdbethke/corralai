@@ -308,6 +308,13 @@ sha>` — resolved by blaming its site against the prior fix commits. Then the
 churn ratio is a `GROUP BY` on the branch like everything else, and the
 stopping rule below is enforceable instead of a promise.
 
+*Built (2026-10-16):* `corral review churn` computes it from the ledger and
+git blame, per round, without storing an origin on the finding: a finding is
+churn when its line was written after the previous review of its file. That
+counts every change in between rather than only the fix commits, which the
+record does not identify; on the rounds above it gives churn 5 and 5, and drain
+one lower in each (one finding fell; one entry of round four was lost).
+
 The question this raises — whether a given model is any good at *fixing*, as
 opposed to writing — has no execution-proven answer today, and corral turns out
 to already own the answer key: every held REPRODUCED finding carries a script

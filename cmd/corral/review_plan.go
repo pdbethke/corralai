@@ -51,22 +51,7 @@ func runReviewPlan(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "corral review plan: reading %s: %v\n", ledgerDir, err)
 		return 1
 	}
-	// A withdrawn review is not coverage: the planner sees what stands.
-	entries := rec.Live
-	adj := rec.liveAdjudications()
-	var reviews []review.Reviewed
-	for _, e := range entries {
-		if e.Kind != auditpush.KindReview || e.Review == nil {
-			continue
-		}
-		rv := review.Reviewed{Scope: e.Review.Scope, Commit: e.Review.Commit, When: e.Pushed, Findings: e.Review.Findings, Adjudications: map[string]*review.Adjudicated{}}
-		for _, f := range e.Review.Findings {
-			if a, ok := adj[e.Hash+"#"+f.ID]; ok {
-				rv.Adjudications[f.ID] = &review.Adjudicated{Verdict: a.Verdict, By: a.By}
-			}
-		}
-		reviews = append(reviews, rv)
-	}
+	reviews := reviewsOf(rec)
 	head := gitHeadCommit(root)
 	changed := func(scope, since string) int {
 		if head == "" {
@@ -104,6 +89,27 @@ func runReviewPlan(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stdout, "  a proposal, not a choice: a person names the scope — a model choosing its own exam would be grading its own work")
 	}
 	return 0
+}
+
+// reviewsOf is every live review entry on the record, with the adjudications
+// that stand on its findings: what review plan and review churn both read. A
+// withdrawn review is not coverage, and not a round.
+func reviewsOf(rec ledgerRecord) []review.Reviewed {
+	adj := rec.liveAdjudications()
+	var reviews []review.Reviewed
+	for _, e := range rec.Live {
+		if e.Kind != auditpush.KindReview || e.Review == nil {
+			continue
+		}
+		rv := review.Reviewed{Scope: e.Review.Scope, Commit: e.Review.Commit, When: e.Pushed, Findings: e.Review.Findings, Adjudications: map[string]*review.Adjudicated{}}
+		for _, f := range e.Review.Findings {
+			if a, ok := adj[e.Hash+"#"+f.ID]; ok {
+				rv.Adjudications[f.ID] = &review.Adjudicated{Verdict: a.Verdict, By: a.By}
+			}
+		}
+		reviews = append(reviews, rv)
+	}
+	return reviews
 }
 
 // repoScopes is the directories at most depth segments deep that hold at

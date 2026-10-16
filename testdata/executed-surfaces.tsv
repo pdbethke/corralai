@@ -239,6 +239,10 @@ corral scans show --timing	executed	test:cmd/corral/scans_timing_test.go
 corral review recheck --repo	executed	test:cmd/corral/review_recheck_test.go
 corral review recheck --timeout	executed	test:cmd/corral/review_recheck_test.go
 corral review recheck --json	executed	test:cmd/corral/review_recheck_test.go
+corral review churn --findings	executed	test:cmd/corral/review_churn_test.go
+corral review churn --json	executed	test:cmd/corral/review_churn_test.go
+corral review churn --ledger	executed	test:cmd/corral/review_churn_test.go
+corral review churn --repo	executed	test:cmd/corral/review_churn_test.go
 corral review recheck --substrate	executed	test:cmd/corral/review_jail_test.go (jail and workspace, with and without a sandbox on the host)
 corral state migrate --dry-run	executed	test:cmd/corral/state_test.go (TestStateMigrateDryRunMovesNothing)
 corral state migrate --from	executed	test:cmd/corral/state_test.go (TestStateMigrateFromMovesAnExplicitDirectory)

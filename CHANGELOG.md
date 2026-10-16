@@ -11,6 +11,18 @@ history of any release, `git log v0.3.4..v0.3.5`.
 
 ## [Unreleased]
 
+- **`corral review churn`: is the review loop draining the code or churning
+  it?** For every review on the ledger, each finding's line is blamed at the
+  reviewed commit. It is **drain** if the line was there when the previous
+  review of its file looked, **churn** if it was written since, and a **first
+  look** if no earlier review covered the file. Findings that fell (refuted by
+  a person, or by execution) are not counted. This is the hand count from the
+  "For every season, churn" field note, now a command: no model runs, nothing
+  is written. One approximation, stated in its output: churn counts every
+  line written since the previous review, not only the commits that fixed its
+  findings, because the record does not say which those were. On corral's own
+  ledger it reproduces the field note's churn column for the September gate
+  and transparency rounds (5 and 5) and its drain within one finding each.
 - **`corral review` runs its reproductions in the sandbox.** A reproduction
   is a model's shell script, and it ran in a plain git worktree on your
   machine, with the network on and only model keys removed from its

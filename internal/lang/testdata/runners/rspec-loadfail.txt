@@ -1,0 +1,32 @@
+
+While loading ./fail/spec/broken_spec.rb a `raise SyntaxError` occurred, RSpec will now quit.
+Failure/Error: __send__(method, file)
+
+SyntaxError:
+  --> $DIR/fail/spec/broken_spec.rb
+  Unmatched keyword, missing `end' ?
+  > 2  RSpec.describe 'Broken' do
+  
+  $DIR/fail/spec/broken_spec.rb:3: syntax error, unexpected end-of-input, expecting `end' or dummy end (SyntaxError)
+    it('x') { }
+               ^
+# ~/.local/share/gem/ruby/3.3.0/gems/rspec-core-3.13.6/lib/rspec/core/configuration.rb:2144:in `load'
+# ~/.local/share/gem/ruby/3.3.0/gems/rspec-core-3.13.6/lib/rspec/core/configuration.rb:2144:in `load_file_handling_errors'
+# ~/.local/share/gem/ruby/3.3.0/gems/rspec-core-3.13.6/lib/rspec/core/configuration.rb:1643:in `block in load_spec_files'
+# ~/.local/share/gem/ruby/3.3.0/gems/rspec-core-3.13.6/lib/rspec/core/configuration.rb:1641:in `each'
+# ~/.local/share/gem/ruby/3.3.0/gems/rspec-core-3.13.6/lib/rspec/core/configuration.rb:1641:in `load_spec_files'
+# ~/.local/share/gem/ruby/3.3.0/gems/rspec-core-3.13.6/lib/rspec/core/runner.rb:102:in `setup'
+# ~/.local/share/gem/ruby/3.3.0/gems/rspec-core-3.13.6/lib/rspec/core/runner.rb:86:in `run'
+# ~/.local/share/gem/ruby/3.3.0/gems/rspec-core-3.13.6/lib/rspec/core/runner.rb:71:in `run'
+# ~/.local/share/gem/ruby/3.3.0/gems/rspec-core-3.13.6/lib/rspec/core/runner.rb:45:in `invoke'
+# ~/.local/share/gem/ruby/3.3.0/gems/rspec-core-3.13.6/exe/rspec:4:in `<top (required)>'
+# /usr/local/bin/rspec:25:in `load'
+# /usr/local/bin/rspec:25:in `<main>'
+# 
+#   Showing full backtrace because every line was filtered out.
+#   See docs for RSpec::Configuration#backtrace_exclusion_patterns and
+#   RSpec::Configuration#backtrace_inclusion_patterns for more information.
+
+
+0 examples, 0 failures, 1 error occurred outside of examples
+

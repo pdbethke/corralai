@@ -1,0 +1,45 @@
+
+
+  1) top level
+  Calc
+    2) adds (a+b)
+    ✔ ok
+    neg
+      3) adds
+
+
+  1 passing (4ms)
+  3 failing
+
+  1) top level:
+
+      AssertionError [ERR_ASSERTION]: 1 == 2
+      + expected - actual
+
+      -1
+      +2
+      
+      at Context.<anonymous> (fail/f.mocha.js:8:32)
+      at process.processImmediate (node:internal/timers:484:21)
+
+  2) Calc
+       adds (a+b):
+
+      AssertionError [ERR_ASSERTION]: 2 == 3
+      + expected - actual
+
+      -2
+      +3
+      
+      at Context.<anonymous> (fail/f.mocha.js:4:35)
+      at process.processImmediate (node:internal/timers:484:21)
+
+  3) Calc
+       neg
+         adds:
+     Error: boom
+      at Context.<anonymous> (fail/f.mocha.js:6:52)
+      at process.processImmediate (node:internal/timers:484:21)
+
+
+

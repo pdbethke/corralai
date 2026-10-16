@@ -16,21 +16,17 @@ What corral does with each language's tests. This page is rendered from the same
 | Run one test alone (critic claims checked) | ✓ | ✓ | ✓ | ✓ | ✓ (rspec) | ✓ | ✓ |
 | Name the killing test | ✓ | ✓ | ✓ | ✓ | ✓ (rspec, minitest) | ✓ | ✓ |
 | Stop at the first failure | ✓ | ✓ (jest, mocha) | ✓ | ✓ | ✓ (rspec) | — (3) | ✓ (jest, mocha) |
-| Keep the passing part of an authored test | — (4) | — (5) | — (6) | ✓ | — (7) | — (8) | — (5) |
-| Coverage pre-flight | ✓ | ✓ | ✓ | ✓ | ✓ | — (9) | ✓ |
-| Grade only the tests that run the file | — (10) | — (11) | — (11) | ✓ | — (11) | — (11) | — (11) |
+| Keep the passing part of an authored test | ✓ | ✓ | ✓ | ✓ | ✓ (rspec, minitest) | — (4) | ✓ |
+| Coverage pre-flight | ✓ | ✓ | ✓ | ✓ | ✓ | — (5) | ✓ |
+| Grade only the tests that run the file | — (6) | — (7) | — (7) | ✓ | — (7) | — (7) | — (7) |
 
 1. describe/it names are strings in calls, not declarations; no static lister yet (runner table Phase 4)
 2. rspec and minitest names are strings or methods by runner; no static lister yet (runner table Phase 4)
 3. nextest's --fail-fast and libtest's lack of one are not yet verified against a real run (runner table Phase 5)
-4. go test names failing tests but -skip needs a regexp per test, unverified (runner table Phase 3)
-5. no JS runner's failures are parsed yet (runner table Phase 3)
-6. phpunit has no deselect flag; a --filter exclusion is unverified (runner table Phase 3)
-7. rspec and minitest failures are not parsed yet (runner table Phase 3)
-8. libtest --skip and nextest filtersets are not yet verified for salvage (runner table Phase 3)
-9. cargo llvm-cov is not wired yet (runner table Phase 5)
-10. per-test coverage needs a run per test; its own spec (runner table Phase 6)
-11. per-test coverage contexts per runner; its own spec (runner table Phase 6)
+4. libtest --skip and nextest filtersets are not yet verified for salvage (runner table Phase 5)
+5. cargo llvm-cov is not wired yet (runner table Phase 5)
+6. per-test coverage needs a run per test; its own spec (runner table Phase 6)
+7. per-test coverage contexts per runner; its own spec (runner table Phase 6)
 
 ## By runner
 
@@ -38,16 +34,16 @@ A language has a runner capability when any of its runners does; this is which. 
 
 | runner | `--runner` | languages | stop at first failure | list tests | run one test | names the killing test | salvage | names flaky tests | note |
 |---|---|---|---|---|---|---|---|---|---|
-| `go test` (default) | `go-test` | go | `-failfast` | ✓ | ✓ | ✓ |  |  |  |
+| `go test` (default) | `go-test` | go | `-failfast` | ✓ | ✓ | ✓ | ✓ |  |  |
 | `gotestsum` | `gotestsum` | go |  | ✓ | ✓ | ✓ |  |  | listing and one-test runs use `go test` itself; the killing test is read from `--- FAIL:` lines, which gotestsum passes through for a failed test but was not run here |
 | `pytest` (default) | `pytest` | python | `-x` | ✓ | ✓ | ✓ | ✓ |  |  |
 | `unittest` | `unittest` | python | `--failfast` | ✓ | ✓ |  |  |  | listing and one-test runs use pytest, which collects unittest suites; they need pytest installed |
-| `jest` | `jest` | javascript, typescript | `--bail` | ✓ | ✓ | ✓ |  |  | listing and one-test runs verified on jest 30.5 |
-| `mocha` | `mocha` | javascript, typescript | `--bail` | ✓ | ✓ | ✓ |  |  | listing and one-test runs verified on mocha 11.8 (listing needs mocha 9 or later) |
-| `vitest` | `vitest` | javascript, typescript |  | ✓ | ✓ | ✓ |  |  | listing and one-test runs verified on vitest 3.2; vitest 1, 2 and 4 were not run |
-| `node --test` (default) | `node-test` | javascript, typescript |  | ✓ | ✓ | ✓ |  |  | node has no collect-only mode, so listing RUNS the test file once on the unmutated code; verified on node 22.23 |
-| `rspec` (default) | `rspec` | ruby | `--fail-fast` | ✓ | ✓ | ✓ |  |  | listing and one-test runs verified on rspec-core 3.13 (one-test runs need 3.12 or later) |
-| `minitest` | `minitest` | ruby |  |  |  | ✓ |  |  | minitest has no list mode and no full-name selector; rspec is the Ruby runner that lists and runs one test |
-| `phpunit` (default) | `phpunit` | php | `--stop-on-failure` | ✓ | ✓ | ✓ |  |  | listing and one-test runs verified on PHPUnit 11.5 |
+| `jest` | `jest` | javascript, typescript | `--bail` | ✓ | ✓ | ✓ | ✓ |  | listing and one-test runs verified on jest 30.5 |
+| `mocha` | `mocha` | javascript, typescript | `--bail` | ✓ | ✓ | ✓ | ✓ |  | listing and one-test runs verified on mocha 11.8 (listing needs mocha 9 or later) |
+| `vitest` | `vitest` | javascript, typescript |  | ✓ | ✓ | ✓ | ✓ |  | listing and one-test runs verified on vitest 3.2; vitest 1, 2 and 4 were not run |
+| `node --test` (default) | `node-test` | javascript, typescript |  | ✓ | ✓ | ✓ | ✓ |  | node has no collect-only mode, so listing RUNS the test file once on the unmutated code; verified on node 22.23 |
+| `rspec` (default) | `rspec` | ruby | `--fail-fast` | ✓ | ✓ | ✓ | ✓ |  | listing and one-test runs verified on rspec-core 3.13 (one-test runs need 3.12 or later) |
+| `minitest` | `minitest` | ruby |  |  |  | ✓ | ✓ |  | minitest has no list mode and no full-name selector; rspec is the Ruby runner that lists and runs one test |
+| `phpunit` (default) | `phpunit` | php | `--stop-on-failure` | ✓ | ✓ | ✓ | ✓ |  | listing and one-test runs verified on PHPUnit 11.5 |
 | `cargo nextest` | `cargo-nextest` | rust |  | ✓ | ✓ | ✓ |  | ✓ |  |
 | `cargo test` (default) | `cargo-test` | rust |  | ✓ | ✓ | ✓ |  | ✓ | libtest has no retries; flaky tests are named when the output is nextest's (a wrapper that runs nextest under another command) |

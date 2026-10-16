@@ -8,14 +8,16 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
+	"strings"
 	"testing"
 )
 
 // ranCount reads how many tests a runner says it ran and passed, from its
 // own summary line (jest, vitest, mocha, node's TAP or spec reporter, rspec,
-// PHPUnit), or -1.
-var ranCount = regexp.MustCompile(`(?m)(\d+) passed|(\d+) passing|^[#ℹ] pass (\d+)|(\d+) examples?, 0 failures|OK \((\d+) tests?`)
+// PHPUnit, minitest), or -1.
+var ranCount = regexp.MustCompile(`(?m)(\d+) passed|(\d+) passing|^[#ℹ] pass (\d+)|(\d+) examples?, 0 failures|OK \((\d+) tests?|(\d+) runs, \d+ assertions, 0 failures, 0 errors`)
 
 func ran(out string) int {
 	m := ranCount.FindStringSubmatch(out)
@@ -123,17 +125,146 @@ func TestRealRunnersListAndRunOne(t *testing.T) {
 // test run from two.
 func TestRanReadsEachRunnersSummary(t *testing.T) {
 	for out, want := range map[string]int{
-		"Tests:       4 skipped, 1 passed, 5 total": 1,
-		"      Tests  2 passed | 3 skipped (5)":     2,
-		"  2 passing (3ms)":                         2,
-		"# pass 1\n# fail 0":                        1,
-		"ℹ pass 2":                                  2,
-		"1 example, 0 failures":                     1,
-		"OK (2 tests, 2 assertions)":                2,
-		"no summary at all":                         -1,
+		"Tests:       4 skipped, 1 passed, 5 total":           1,
+		"      Tests  2 passed | 3 skipped (5)":               2,
+		"  2 passing (3ms)":                                   2,
+		"# pass 1\n# fail 0":                                  1,
+		"ℹ pass 2":                                            2,
+		"1 example, 0 failures":                               1,
+		"OK (2 tests, 2 assertions)":                          2,
+		"1 runs, 0 assertions, 0 failures, 0 errors, 0 skips": 1,
+		"no summary at all":                                   -1,
 	} {
 		if got := ran(out); got != want {
 			t.Errorf("ran(%q) = %d, want %d", out, got, want)
+		}
+	}
+}
+
+// TestRealRunnersSalvage drives salvage end to end against the real runner:
+// run the operator's command over the failing fixture (testdata/runners/
+// src/fail: three failing tests, one passing), read its failures through the
+// row, rerun with the row's skip command, and require exactly the passing
+// test to run, and pass. Skipped by name where the runner is absent, as
+// TestRealRunnersListAndRunOne is.
+func TestRealRunnersSalvage(t *testing.T) {
+	root := os.Getenv("CORRALAI_RUNNER_ROOT")
+	rspec := []string{"rspec"}
+	if exec.Command("rspec", "--version").Run() != nil {
+		rspec = []string{"ruby", "-S", "rspec"}
+	}
+	for _, c := range []struct {
+		runner, lang  string
+		argv          []string
+		needsRoot     bool
+		throughScript bool
+	}{
+		{"node --test", "javascript", []string{"node", "--test", "fail/f.node.test.js"}, false, false},
+		{"rspec", "ruby", append(slices.Clone(rspec), "fail/spec/f_spec.rb"), false, false},
+		{"minitest", "ruby", []string{"ruby", "fail/f_test.rb"}, false, false},
+		{"go test", "go", []string{"go", "test", "-v", "./..."}, false, false},
+		{"jest", "javascript", []string{"npx", "--no-install", "jest", "fail/f.jest.test.js"}, true, false},
+		{"vitest", "typescript", []string{"npx", "--no-install", "vitest", "run", "fail/f.vitest.test.mjs"}, true, false},
+		{"mocha", "javascript", []string{"npx", "--no-install", "mocha", "fail/f.mocha.js"}, true, false},
+		{"phpunit", "php", []string{"vendor/bin/phpunit", "fail/tests/FTest.php"}, true, false},
+		{"jest", "javascript", []string{"npm", "test", "--", "fail/f.jest.test.js"}, true, true},
+		{"phpunit", "php", []string{"composer", "test", "--", "fail/tests/FTest.php"}, true, true},
+	} {
+		t.Run(c.runner+"/"+c.argv[0], func(t *testing.T) {
+			dir := root
+			switch {
+			case c.runner == "go test":
+				dir = t.TempDir()
+				writeGoFailFixture(t, dir)
+			case !c.needsRoot:
+				dir = t.TempDir()
+				if err := os.CopyFS(dir, os.DirFS("testdata/runners/src")); err != nil {
+					t.Fatal(err)
+				}
+			case dir == "":
+				t.Skipf("SKIP %s: CORRALAI_RUNNER_ROOT is not set (scripts/capture-runner-fixtures.sh --keep DIR)", c.runner)
+			}
+			if _, err := exec.LookPath(c.argv[0]); err != nil && filepath.Base(c.argv[0]) == c.argv[0] {
+				t.Skipf("SKIP %s: %s is not installed", c.runner, c.argv[0])
+			}
+			if c.runner == "rspec" && exec.Command(rspec[0], append(rspec[1:], "--version")...).Run() != nil {
+				t.Skip("SKIP rspec: rspec does not run here")
+			}
+			if c.runner == "minitest" && exec.Command("ruby", "-e", `require "minitest"`).Run() != nil {
+				t.Skip("SKIP minitest: minitest is not installed")
+			}
+			p, _ := ByName(c.lang)
+			inv := Cmd(c.argv)
+			if c.throughScript {
+				var err error
+				if inv, err = Resolve(p, dir, c.argv, ""); err != nil || inv.Script == nil {
+					t.Fatalf("Resolve(%q) = %+v, %v", c.argv, inv, err)
+				}
+			}
+			if r, _ := RunnerFor(p, inv); r.Name != c.runner {
+				t.Fatalf("%q dispatched to row %q", c.argv, r.Name)
+			}
+			run := func(cmd []string) (string, error) {
+				var out bytes.Buffer
+				x := exec.Command(cmd[0], cmd[1:]...) // #nosec G204 -- the row's own command over a test fixture
+				x.Dir = dir
+				x.Stdout = &out
+				x.Stderr = &out
+				err := x.Run()
+				return out.String(), err
+			}
+			out, err := run(c.argv)
+			if err == nil {
+				t.Fatalf("the failing fixture passed:\n%s", out)
+			}
+			failed, ok := DeselectorFor(p, inv)
+			if !ok {
+				t.Fatal("no salvage for this command")
+			}
+			ids := failed(out)
+			if len(ids) != 3 {
+				t.Fatalf("read %d failures %q, want 3, from:\n%s", len(ids), ids, out)
+			}
+			skip, ok := DeselectCmd(p, inv, ids)
+			if !ok {
+				t.Fatal("no skip command")
+			}
+			out, err = run(skip)
+			if err != nil {
+				t.Fatalf("%q failed: %v\n%s", skip, err, out)
+			}
+			if c.runner == "go test" {
+				if !strings.Contains(out, "--- PASS: TestOK") || strings.Contains(out, "--- FAIL") {
+					t.Errorf("%q:\n%s", skip, out)
+				}
+				return
+			}
+			if ran(out) != 1 {
+				t.Errorf("%q ran %d tests, want 1:\n%s", skip, ran(out), out)
+			}
+		})
+	}
+}
+
+// writeGoFailFixture is the go-test counterpart of src/fail: TestA fails in
+// a subtest, TestB and TestC fail, TestOK passes.
+func writeGoFailFixture(t *testing.T, dir string) {
+	t.Helper()
+	files := map[string]string{
+		"go.mod": "module failfix\n\ngo 1.20\n",
+		"f_test.go": `package failfix
+
+import "testing"
+
+func TestA(t *testing.T)  { t.Run("sub", func(t *testing.T) { t.Fatal("a") }) }
+func TestB(t *testing.T)  { t.Fatal("b") }
+func TestC(t *testing.T)  { t.Fatal("c") }
+func TestOK(t *testing.T) {}
+`,
+	}
+	for name, src := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(src), 0o600); err != nil {
+			t.Fatal(err)
 		}
 	}
 }

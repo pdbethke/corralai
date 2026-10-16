@@ -87,12 +87,7 @@ var ParityExemptions = []Exemption{
 
 	{"rust", "fail-fast", "nextest's --fail-fast and libtest's lack of one are not yet verified against a real run (runner table Phase 5)"},
 
-	{"go", "salvage", "go test names failing tests but -skip needs a regexp per test, unverified (runner table Phase 3)"},
-	{"javascript", "salvage", "no JS runner's failures are parsed yet (runner table Phase 3)"},
-	{"typescript", "salvage", "no JS runner's failures are parsed yet (runner table Phase 3)"},
-	{"ruby", "salvage", "rspec and minitest failures are not parsed yet (runner table Phase 3)"},
-	{"php", "salvage", "phpunit has no deselect flag; a --filter exclusion is unverified (runner table Phase 3)"},
-	{"rust", "salvage", "libtest --skip and nextest filtersets are not yet verified for salvage (runner table Phase 3)"},
+	{"rust", "salvage", "libtest --skip and nextest filtersets are not yet verified for salvage (runner table Phase 5)"},
 
 	{"rust", "coverage", "cargo llvm-cov is not wired yet (runner table Phase 5)"},
 

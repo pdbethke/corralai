@@ -99,7 +99,7 @@ var runners = []Runner{
 		Name: "go test", ID: "go-test", Languages: []string{"go"}, Default: true, Detect: goTestCmd,
 		FailFast: []string{"-failfast"},
 		ListCmd:  goListCmd, ParseList: goParseTestList, SingleCmd: goSingleCmd,
-		FirstFailure: goFirstFailure, FailedTests: goFailedTests,
+		FirstFailure: goFirstFailure, FailedTests: goFailedTests, DeselectCmd: goDeselectCmd,
 	},
 	{
 		Name: "gotestsum", ID: "gotestsum", Languages: []string{"go"}, Words: []string{"gotestsum"},
@@ -131,13 +131,13 @@ var runners = []Runner{
 	{
 		Name: "jest", ID: "jest", Languages: []string{"javascript", "typescript"}, Words: []string{"jest"}, FailFast: []string{"--bail"},
 		ListCmd: jestListCmd, ParseList: jestParseList, SingleCmd: jestSingleCmd, ResolveByList: true, Coruns: jestCoruns,
-		FirstFailure: firstOf(jestFailures), FailedTests: jestFailures,
+		FirstFailure: firstOf(jestFailures), FailedTests: jestFailures, DeselectCmd: jestDeselectCmd,
 		Note: "listing and one-test runs verified on jest 30.5",
 	},
 	{
 		Name: "mocha", ID: "mocha", Languages: []string{"javascript", "typescript"}, Words: []string{"mocha"}, FailFast: []string{"--bail"},
 		ListCmd: mochaListCmd, ParseList: mochaParseList, SingleCmd: mochaSingleCmd, ResolveByList: true, Coruns: lastFullColl,
-		FirstFailure: firstOf(mochaFailures), FailedTests: mochaFailures,
+		FirstFailure: firstOf(mochaFailures), FailedTests: mochaFailures, DeselectCmd: mochaDeselectCmd,
 		Note: "listing and one-test runs verified on mocha 11.8 (listing needs mocha 9 or later)",
 	},
 	{
@@ -146,7 +146,7 @@ var runners = []Runner{
 		Name: "vitest", ID: "vitest", Languages: []string{"javascript", "typescript"}, Words: []string{"vitest"},
 		Detect:  func(argv []string) bool { return vitestIndex(argv) >= 0 },
 		ListCmd: vitestListCmd, ParseList: vitestParseList, SingleCmd: vitestSingleCmd, ResolveByList: true, Coruns: fullNameColl,
-		FirstFailure: firstOf(vitestFailures), FailedTests: vitestFailures,
+		FirstFailure: firstOf(vitestFailures), FailedTests: vitestFailures, DeselectCmd: vitestDeselectCmd,
 		Note: "listing and one-test runs verified on vitest 3.2; vitest 1, 2 and 4 were not run",
 	},
 	{
@@ -155,7 +155,7 @@ var runners = []Runner{
 			return len(argv) > 0 && filepath.Base(argv[0]) == "node" && slices.Contains(argv, "--test")
 		},
 		ListCmd: nodeListCmd, ParseList: nodeParseList, SingleCmd: nodeSingleCmd, ResolveByList: true, Coruns: nodeCoruns,
-		FirstFailure: firstOf(nodeFailures), FailedTests: nodeFailures,
+		FirstFailure: firstOf(nodeFailures), FailedTests: nodeFailures, DeselectCmd: nodeDeselectCmd,
 		Note: "node has no collect-only mode, so listing RUNS the test file once on the unmutated code; verified on node 22.23",
 	},
 	// rspec takes --fail-fast. Minitest is deliberately without one: its own
@@ -164,17 +164,17 @@ var runners = []Runner{
 	{
 		Name: "rspec", ID: "rspec", Languages: []string{"ruby"}, Default: true, Words: []string{"rspec"}, FailFast: []string{"--fail-fast"},
 		ListCmd: rspecListCmd, ParseList: rspecParseList, SingleCmd: rspecSingleCmd, ResolveByList: true, Coruns: lastFullColl,
-		FirstFailure: firstOf(rspecFailures), FailedTests: rspecFailures,
+		FirstFailure: firstOf(rspecFailures), FailedTests: rspecFailures, DeselectCmd: rspecDeselectCmd,
 		Note: "listing and one-test runs verified on rspec-core 3.13 (one-test runs need 3.12 or later)",
 	},
 	{
 		Name: "minitest", ID: "minitest", Languages: []string{"ruby"}, Words: []string{"ruby", "rake", "testrb"},
-		FirstFailure: firstOf(minitestFailures), FailedTests: minitestFailures,
+		FirstFailure: firstOf(minitestFailures), FailedTests: minitestFailures, DeselectCmd: minitestDeselectCmd,
 		Note: "minitest has no list mode and no full-name selector; rspec is the Ruby runner that lists and runs one test",
 	},
 	{
 		Name: "phpunit", ID: "phpunit", Languages: []string{"php"}, Default: true, Words: []string{"phpunit"},
-		FailFast: []string{"--stop-on-failure"}, FirstFailure: phpFirstFailure, FailedTests: phpFailures,
+		FailFast: []string{"--stop-on-failure"}, FirstFailure: phpFirstFailure, FailedTests: phpFailures, DeselectCmd: phpunitDeselectCmd,
 		ListCmd: phpunitListCmd, ParseList: phpunitParseList, SingleCmd: phpunitSingleCmd, ResolveByList: true,
 		Note: "listing and one-test runs verified on PHPUnit 11.5",
 	},

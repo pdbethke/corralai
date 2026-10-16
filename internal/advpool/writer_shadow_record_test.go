@@ -218,9 +218,8 @@ func (s *salvageableWriterShadowScorer) CompliantFailure(context.Context, string
 // be recorded even though the challenger was cleanly measured.
 func TestSalvagedPrimaryWritesNoAttemptRows(t *testing.T) {
 	rs := newTestRunSpec(t)
-	// PYTHON specifically: salvageByDeselect is gated on the test command's runner
-	// having salvage, and only pytest has it (see
-	// driver_salvage_test.go's pythonSalvageSpec).
+	// PYTHON: the clean-code failure output this scorer reports is pytest's
+	// (see driver_salvage_test.go's pythonSalvageSpec).
 	rs.Lang = "python"
 	rs.TestCmd = "python3 -m pytest -q"
 	rs.ShadowWriterModel = "challenger-model"

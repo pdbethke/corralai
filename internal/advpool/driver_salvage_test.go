@@ -10,8 +10,9 @@ import (
 	"github.com/pdbethke/corralai/internal/adequacy"
 )
 
-// pythonSalvageSpec is the go-flavoured testRunSpec retargeted at python, the
-// one runner whose row offers salvage (lang.DeselectorFor).
+// pythonSalvageSpec is the go-flavoured testRunSpec retargeted at pytest,
+// whose failure lines (FAILED <id>) these tests feed as the clean-code
+// failure output; any row with salvage would do (lang.DeselectorFor).
 func pythonSalvageSpec() RunSpec {
 	rs := testRunSpec()
 	rs.Lang = "python"
@@ -54,10 +55,7 @@ func TestTick_PoolAdequacy_SalvagesPassingTestsFromABrokenFile(t *testing.T) {
 		},
 	}
 	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Replace: "c0"}, survivors[0], survivors[1]}}
-	// PYTHON specifically: the salvage is gated on the test command's runner
-	// having salvage, and only pytest has it — go (the
-	// default test spec) deliberately does not, because corral cannot parse
-	// its failures into deselectable selectors.
+	// PYTHON: the fake's clean-code failure output is pytest's.
 	d := newTestDriverWithSpec(t, 2, scorer, validator, 0.1, pythonSalvageSpec())
 
 	v := completeRunTolerantOfWriterRetries(t, d, 2, "no findings")
@@ -99,10 +97,7 @@ func TestTick_PoolAdequacy_SalvageRejectedWhenItProvesNothing(t *testing.T) {
 		},
 	}
 	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Replace: "c0"}, survivors[0], survivors[1]}}
-	// PYTHON specifically: the salvage is gated on the test command's runner
-	// having salvage, and only pytest has it — go (the
-	// default test spec) deliberately does not, because corral cannot parse
-	// its failures into deselectable selectors.
+	// PYTHON: the fake's clean-code failure output is pytest's.
 	d := newTestDriverWithSpec(t, 2, scorer, validator, 0.1, pythonSalvageSpec())
 
 	v := completeRunTolerantOfWriterRetries(t, d, 2, "no findings")

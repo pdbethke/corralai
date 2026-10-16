@@ -3,6 +3,7 @@
 package lang
 
 import (
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
@@ -199,4 +200,112 @@ func goFailedTests(out string) []string {
 		}
 	}
 	return ids
+}
+
+// The skip commands: argv rerun without the failing ids, each in its
+// runner's own exclusion, verified against the real runner by
+// scripts/capture-runner-fixtures.sh (its *-skip checks). Each refuses where
+// the row's one-test command refuses — the operator's own name filter would
+// be ORed with the skip (rspec's -E) or replaced by it (jest's -t) — and
+// when there is nothing to skip.
+
+// alternation is ids, each made literal by quote, joined by "|".
+func alternation(ids []string, quote func(string) string) string {
+	q := make([]string, len(ids))
+	for i, id := range ids {
+		q[i] = quote(id)
+	}
+	return strings.Join(q, "|")
+}
+
+// jsNames quotes an id's full name for a JavaScript regex.
+func jsNames(id string) string { return jsRegexQuote(fullName(id)) }
+
+// jestDeselectCmd skips by a negative lookahead over full names: jest has no
+// skip flag, and -t matches the full name. jest matches -t case-insensitively,
+// so a passing test whose name differs only in case is skipped too — a
+// narrower exam, never a wrong one.
+func jestDeselectCmd(argv, ids []string) ([]string, bool) {
+	if len(ids) == 0 || !narrowable(argv, jestFilters...) {
+		return nil, false
+	}
+	return append(slices.Clone(argv), "--testNamePattern", "^(?!(?:"+alternation(ids, jsNames)+")$)"), true
+}
+
+// vitestDeselectCmd is jest's lookahead on vitest's -t. The command is the
+// operator's as it stands: it already ran once to fail, so no mode is added.
+func vitestDeselectCmd(argv, ids []string) ([]string, bool) {
+	if len(ids) == 0 || vitestIndex(argv) < 0 || !narrowable(argv, vitestFilters...) {
+		return nil, false
+	}
+	return append(slices.Clone(argv), "-t", "^(?!(?:"+alternation(ids, jsNames)+")$)"), true
+}
+
+// mochaDeselectCmd inverts a grep over full titles.
+func mochaDeselectCmd(argv, ids []string) ([]string, bool) {
+	if len(ids) == 0 || !narrowable(argv, mochaFilters...) {
+		return nil, false
+	}
+	full := func(id string) string { return jsRegexQuote(lastFull(id)) }
+	return append(slices.Clone(argv), "--grep", "^(?:"+alternation(ids, full)+")$", "--invert"), true
+}
+
+// nodeDeselectCmd uses --test-skip-pattern (node 22.1 or later; an older node
+// rejects it and the salvage fails closed). A lookahead in
+// --test-name-pattern does not skip: node also runs a test whose suite's own
+// name matches (measured on node 22.23).
+func nodeDeselectCmd(argv, ids []string) ([]string, bool) {
+	if len(ids) == 0 || !narrowable(argv, nodeFilters...) {
+		return nil, false
+	}
+	return nodeWith(argv, "", "--test-skip-pattern", "^(?:"+alternation(ids, jsNames)+")$")
+}
+
+// rspecDeselectCmd excludes by a negative lookahead in -E (rspec-core 3.12 or
+// later). Its ids are full descriptions (rspecFailures), quoted verbatim.
+func rspecDeselectCmd(argv, ids []string) ([]string, bool) {
+	if len(ids) == 0 || !narrowable(argv, rspecFilters...) {
+		return nil, false
+	}
+	return append(slices.Clone(argv), "-E", `\A(?!(?:`+alternation(ids, regexQuoter.Replace)+`)\z)`), true
+}
+
+var minitestFilters = []string{"-n", "--name", "-e", "--exclude"}
+
+// minitestDeselectCmd passes --exclude to the test file, which only `ruby
+// <file.rb>` hands it: rake and testrb take no arguments for the tests.
+func minitestDeselectCmd(argv, ids []string) ([]string, bool) {
+	if len(ids) == 0 || len(argv) < 2 || filepath.Base(argv[0]) != "ruby" || !narrowable(argv, minitestFilters...) ||
+		!slices.ContainsFunc(argv[1:], func(a string) bool { return strings.HasSuffix(a, ".rb") }) {
+		return nil, false
+	}
+	return append(slices.Clone(argv), "--exclude", `/\A(?:`+alternation(ids, regexQuoter.Replace)+`)\z/`), true
+}
+
+// phpunitDeselectCmd uses --exclude-filter (PHPUnit 10 or later) over
+// Class::method, without namespace or data set: a failing data set skips the
+// method's other sets too — narrower, never wrong.
+func phpunitDeselectCmd(argv, ids []string) ([]string, bool) {
+	if len(ids) == 0 || !narrowable(argv, "--filter", "--exclude-filter") {
+		return nil, false
+	}
+	var methods []string
+	for _, id := range ids {
+		m, _, _ := strings.Cut(id, " with data set ")
+		m = m[strings.LastIndex(m, `\`)+1:]
+		if !slices.Contains(methods, m) {
+			methods = append(methods, m)
+		}
+	}
+	filter := `/(?:^|\\)(?:` + alternation(methods, regexQuoter.Replace) + `)(?: with data set .*)?$/`
+	return append(slices.Clone(argv), "--exclude-filter", filter), true
+}
+
+// goDeselectCmd uses -skip (Go 1.20 or later) over top-level test names
+// (goFailedTests).
+func goDeselectCmd(argv, ids []string) ([]string, bool) {
+	if len(ids) == 0 || !goTestCmd(argv) || hasFlag(argv, "-run", "-skip", "--run", "--skip") {
+		return nil, false
+	}
+	return append(slices.Clone(argv), "-skip", "^(?:"+alternation(ids, regexp.QuoteMeta)+")$"), true
 }

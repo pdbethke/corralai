@@ -97,3 +97,70 @@ func TestGoFailedTestsAreTopLevel(t *testing.T) {
 		t.Errorf("goFailedTests = %q", got)
 	}
 }
+
+// Each row's skip command for three failing ids holding regex syntax: the
+// shape scripts/capture-runner-fixtures.sh ran against the real runner (its
+// *-skip checks), appended to the operator's command.
+func TestDeselectCmds(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		cmd  func(argv, ids []string) ([]string, bool)
+		argv []string
+		ids  []string
+		want []string
+	}{
+		{"jest", jestDeselectCmd, []string{"npx", "jest"}, []string{"Calc::adds (a+b)", "Calc::neg::adds", "top level"},
+			[]string{"npx", "jest", "--testNamePattern", `^(?!(?:Calc adds \(a\+b\)|Calc neg adds|top level)$)`}},
+		{"vitest", vitestDeselectCmd, []string{"npx", "vitest", "run"}, []string{"Calc::adds (a+b)", "top level"},
+			[]string{"npx", "vitest", "run", "-t", `^(?!(?:Calc adds \(a\+b\)|top level)$)`}},
+		{"mocha", mochaDeselectCmd, []string{"npx", "mocha"}, []string{"top level", "Calc::adds (a+b)", "Calc neg::adds"},
+			[]string{"npx", "mocha", "--grep", `^(?:top level|Calc adds \(a\+b\)|Calc neg adds)$`, "--invert"}},
+		{"node", nodeDeselectCmd, []string{"node", "--test", "tests/"}, []string{"Calc::adds (a+b)", "top level"},
+			[]string{"node", "--test", "--test-skip-pattern", `^(?:Calc adds \(a\+b\)|top level)$`, "tests/"}},
+		{"rspec", rspecDeselectCmd, []string{"bundle", "exec", "rspec"}, []string{"Calc adds (a+b)", "MyApp::Calc top level"},
+			[]string{"bundle", "exec", "rspec", "-E", `\A(?!(?:Calc adds \(a\+b\)|MyApp::Calc top level)\z)`}},
+		{"minitest", minitestDeselectCmd, []string{"ruby", "-Itest", "test/f_test.rb"}, []string{"CalcTest#test_adds", "MyApp::NegTest#test_x"},
+			[]string{"ruby", "-Itest", "test/f_test.rb", "--exclude", `/\A(?:CalcTest#test_adds|MyApp::NegTest#test_x)\z/`}},
+		{"phpunit", phpunitDeselectCmd, []string{"vendor/bin/phpunit"}, []string{"FTest::testBoom", `App\Tests\FTest::testAdds`, `FTest::testData with data set "two" (2)`},
+			[]string{"vendor/bin/phpunit", "--exclude-filter", `/(?:^|\\)(?:FTest::testBoom|FTest::testAdds|FTest::testData)(?: with data set .*)?$/`}},
+		{"go", goDeselectCmd, []string{"go", "test", "./..."}, []string{"TestA", "TestB"},
+			[]string{"go", "test", "./...", "-skip", `^(?:TestA|TestB)$`}},
+	} {
+		if got, ok := c.cmd(c.argv, c.ids); !ok || !slices.Equal(got, c.want) {
+			t.Errorf("%s = %q, %v\n want %q", c.name, got, ok, c.want)
+		}
+		if got, ok := c.cmd(c.argv, nil); ok {
+			t.Errorf("%s skipped nothing: %q", c.name, got)
+		}
+	}
+}
+
+// A skip refuses where a one-test run refuses: the operator's own name
+// filter (ORed or overridden), a shell-wrapped command, and for minitest a
+// launcher that hands no arguments to the test file (rake, testrb).
+func TestDeselectCmdsRefuse(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		cmd  func(argv, ids []string) ([]string, bool)
+		argv []string
+	}{
+		{"jest own -t", jestDeselectCmd, []string{"jest", "-t", "x"}},
+		{"vitest own -t", vitestDeselectCmd, []string{"vitest", "run", "-t", "x"}},
+		{"vitest not vitest", vitestDeselectCmd, []string{"node", "x.js"}},
+		{"mocha own --grep", mochaDeselectCmd, []string{"mocha", "--grep", "x"}},
+		{"node own pattern", nodeDeselectCmd, []string{"node", "--test", "--test-name-pattern=x"}},
+		{"node not --test", nodeDeselectCmd, []string{"node", "a.js"}},
+		{"rspec own -e", rspecDeselectCmd, []string{"rspec", "-e", "x"}},
+		{"rspec shell", rspecDeselectCmd, []string{"sh", "-c", "rspec"}},
+		{"minitest rake", minitestDeselectCmd, []string{"rake", "test"}},
+		{"minitest no file", minitestDeselectCmd, []string{"ruby", "-e", "1"}},
+		{"minitest own -n", minitestDeselectCmd, []string{"ruby", "t.rb", "-n", "x"}},
+		{"phpunit own filter", phpunitDeselectCmd, []string{"phpunit", "--filter", "x"}},
+		{"go own -skip", goDeselectCmd, []string{"go", "test", "-skip", "X", "./..."}},
+		{"go not go test", goDeselectCmd, []string{"make", "test"}},
+	} {
+		if got, ok := c.cmd(c.argv, []string{"T::x"}); ok {
+			t.Errorf("%s: %q", c.name, got)
+		}
+	}
+}

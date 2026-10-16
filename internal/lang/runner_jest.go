@@ -7,8 +7,9 @@ import (
 	"strings"
 )
 
-// jest's own name filters; a command carrying one is not narrowed further.
-var jestFilters = []string{"-t", "--testNamePattern"}
+// jest's own name filters, in both spellings its option parser (yargs)
+// accepts; a command carrying one is not narrowed further.
+var jestFilters = []string{"-t", "--testNamePattern", "--test-name-pattern"}
 
 // jestListCmd asks jest for its JSON report under a name pattern no test
 // matches (`^\b$` cannot match a non-empty name): every test is collected and

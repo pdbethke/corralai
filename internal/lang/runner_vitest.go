@@ -8,7 +8,8 @@ import (
 	"strings"
 )
 
-var vitestFilters = []string{"-t", "--testNamePattern"}
+// vitestFilters are vitest's name filters, in both spellings it accepts.
+var vitestFilters = []string{"-t", "--testNamePattern", "--test-name-pattern"}
 
 // vitestIndex is the position of the word that is vitest in argv: the vitest
 // binary, or its entry script run by a host interpreter

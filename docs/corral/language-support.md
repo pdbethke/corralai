@@ -38,7 +38,7 @@ A language has a runner capability when any of its runners does; this is which. 
 | `jest` | `jest` | javascript, typescript | `--bail` | ✓ | ✓ | ✓ | ✓ |  | listing and one-test runs verified on jest 30.5 |
 | `mocha` | `mocha` | javascript, typescript | `--bail` | ✓ | ✓ | ✓ | ✓ |  | listing and one-test runs verified on mocha 11.8 (listing needs mocha 9 or later) |
 | `vitest` | `vitest` | javascript, typescript |  | ✓ | ✓ | ✓ | ✓ |  | listing and one-test runs verified on vitest 3.2; vitest 1, 2 and 4 were not run |
-| `node --test` (default) | `node-test` | javascript, typescript |  | ✓ | ✓ | ✓ | ✓ |  | node has no collect-only mode, so listing RUNS the test file once on the unmutated code; verified on node 22.23 |
+| `node --test` (default) | `node-test` | javascript, typescript |  | ✓ | ✓ | ✓ | ✓ |  | node has no collect-only mode, so listing RUNS the test file once on the unmutated code; verified on node 22.23 and 24.22. Through a package script, listing, one-test runs and salvage need `--test` to be the script's last word, since node reads options only before the first file |
 | `rspec` (default) | `rspec` | ruby | `--fail-fast` | ✓ | ✓ | ✓ | ✓ |  | listing and one-test runs verified on rspec-core 3.13 (one-test runs need 3.12 or later) |
 | `minitest` | `minitest` | ruby |  |  |  | ✓ | ✓ |  | minitest has no list mode and no full-name selector; rspec is the Ruby runner that lists and runs one test |
 | `phpunit` (default) | `phpunit` | php | `--stop-on-failure` | ✓ | ✓ | ✓ | ✓ |  | listing and one-test runs verified on PHPUnit 11.5 |

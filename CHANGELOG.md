@@ -26,14 +26,23 @@ history of any release, `git log v0.3.4..v0.3.5`.
   the flag, so nothing is salvaged; a skip can drop more than the failing
   cases (jest's `-t` ignores case; a failing Go subtest skips its parent;
   a failing PHPUnit data set skips its method) but can never keep a failing
-  one in a passing rerun. Each was run against the real runner
-  (`scripts/capture-runner-fixtures.sh`). The salvage rerun is also built the
+  one in a passing rerun. A skip can also run MORE than the original
+  command did: rspec's `-E` replaces the project's tag exclusions
+  (`filter_run_excluding :slow` specs run again), and a command-line
+  `--grep` or `-t` replaces one set in a config file. So every mutant a
+  salvage kills is graded once more under the same command with the
+  project's own tests alone, and a kill they make there is not credited to
+  the authored test. Each was run against the real runner
+  (`scripts/capture-runner-fixtures.sh`); `node --test` was also run on
+  node 24, which prints its spec reporter where node 22 prints TAP, and
+  both are read. The salvage rerun is also built the
   way a one-test run is, so it goes through `npm test`'s `--` and is refused
   where the operator's command already filters by name; a pytest id
   holding shell syntax is now quoted rather than handed to the shell. Not
   covered: Rust (Phase 5), a test title holding the runner's own separator
   (` › ` in jest, ` > ` in vitest), whose failure is then mislabelled and
-  not skipped, and a reporter other than the runner's default.
+  not skipped, and a reporter other than the runner's default (for node,
+  other than TAP or spec).
 - **Fixed: a one-test `node --test` run could run every test.** node reads
   its options only before the first file, and the flag that picks one test
   was placed after the operator's paths, so with `node --test tests/` it was

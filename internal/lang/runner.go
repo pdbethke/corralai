@@ -156,7 +156,7 @@ var runners = []Runner{
 		},
 		ListCmd: nodeListCmd, ParseList: nodeParseList, SingleCmd: nodeSingleCmd, ResolveByList: true, Coruns: nodeCoruns,
 		FirstFailure: firstOf(nodeFailures), FailedTests: nodeFailures, DeselectCmd: nodeDeselectCmd,
-		Note: "node has no collect-only mode, so listing RUNS the test file once on the unmutated code; verified on node 22.23",
+		Note: "node has no collect-only mode, so listing RUNS the test file once on the unmutated code; verified on node 22.23 and 24.22. Through a package script, listing, one-test runs and salvage need `--test` to be the script's last word, since node reads options only before the first file",
 	},
 	// rspec takes --fail-fast. Minitest is deliberately without one: its own
 	// --fail-fast arrived in minitest 5.22, and an older minitest treats an

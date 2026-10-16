@@ -42,18 +42,20 @@ findings, and **govulncheck** (non-fatal if not installed locally).
 `gofmt` has failed a PR here for a one-line import ordering slip. Run it before
 you push; it costs nothing and the CI round trip costs minutes.
 
-Two drift gates bite agents specifically, because both files look hand-written
-and are not:
+Three drift gates bite agents specifically, because their files look
+hand-written and are not, plus the licensing gate:
 
 - `bash scripts/gen-cli-docs.sh --check` — the CLI reference is **generated
   from the binaries' own `-h` output**. Never hand-edit it; regenerate.
 - `bash scripts/sync-site-assets.sh --check` — the site's vendored replay
   player must not drift from source.
+- `bash scripts/gen-language-support.sh --check` — the language-support page
+  is rendered from the runner table; regenerate, never hand-edit.
 - `bash scripts/check-licensing.sh` — every tracked `.go` file carries the
   Elastic-2.0 SPDX header, and LICENSE/NOTICE/README still say what they must.
-  `scripts/add-spdx.sh` fixes the header half. **Two of the three gates in this
-  list run on EVERY change, docs-only included** — this one and the `^TestDocs`
-  tests — because all three of them grade Markdown as well as Go.
+  `scripts/add-spdx.sh` fixes the header half. **This one and the
+  language-support check run on EVERY change, docs-only included**, as do the
+  `^TestDocs` tests, because all of them grade Markdown as well as Go.
 
 ### CI workflows
 
@@ -239,6 +241,20 @@ Plugins live in `internal/lang/` (`go.go`, `python.go`, `ruby.go`,
 convention, test command, compile check, the role system prompts, and
 `TestNamesInSource` (the static test list the critic must judge; Go, Python, PHP and
 Rust only, nil elsewhere).
+
+**A fact about a test RUNNER goes in its row, not in a plugin.** Fail-fast
+flags, listing tests, running one test, naming the failing test, salvage,
+flaky reporting and run disclosures are one row per runner in
+`internal/lang/runner.go`; callers ask through `lang.RunnerFor` and the thin
+functions beside it, never the plugin. A new runner is a new row, ordered
+before any more general row whose word its command also contains. Two gates
+follow every change there: `TestEveryLanguageHasEveryCapabilityOrSaysWhy`
+(`internal/lang/parity.go`: a language lacking a capability needs a written
+exemption, and an exemption for a capability it now has fails), and
+`bash scripts/gen-language-support.sh --check`, which renders the public
+support page from the same table. `testdata/runner-golden.json` is what the
+per-plugin methods answered before the table replaced them; it is never
+regenerated.
 
 Two rules, both learned expensively:
 

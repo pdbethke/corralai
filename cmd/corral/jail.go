@@ -37,8 +37,8 @@ func newRunJail(iso sandbox.Isolator, timeout time.Duration, depBinds []adequacy
 // newRunEnumerator is newRunJail's Enumerator-returning sibling — same
 // backend/timeout/binds contract, same single-definition requirement. Wired
 // wherever an Enumerator is built alongside a Jail off the same inputs.
-func newRunEnumerator(iso sandbox.Isolator, timeout time.Duration, depBinds []adequacy.DepBind) adequacy.Enumerator {
-	return adequacy.NewEnumerator(iso, timeout, adequacy.WithReadOnlyBinds(depBinds))
+func newRunEnumerator(iso sandbox.Isolator, timeout time.Duration, depBinds []adequacy.DepBind, opts ...adequacy.JailOption) adequacy.Enumerator {
+	return adequacy.NewEnumerator(iso, timeout, append([]adequacy.JailOption{adequacy.WithReadOnlyBinds(depBinds)}, opts...)...)
 }
 
 // resolveLocalJail resolves the sandbox for a --local run from the --jail flag

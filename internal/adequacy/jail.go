@@ -40,6 +40,10 @@ type bwrapJail struct {
 	timeout   time.Duration
 	binds     []DepBind
 	maxOutput int // 0 => sandbox.Run's own default (16 KiB); see WithMaxOutput
+	// toolchainFrom, when set (toolchainSet), is the command whose toolchain
+	// is bound instead of the run command's; see WithToolchainFrom.
+	toolchainFrom []string
+	toolchainSet  bool
 }
 
 // DepBind is a read-only dependency dir to mount into the jail: Host is the
@@ -78,6 +82,26 @@ func WithReadOnlyBinds(binds []DepBind) JailOption {
 // test process buffer arbitrarily more into memory for no benefit.
 func WithMaxOutput(n int) JailOption {
 	return func(j *bwrapJail) { j.maxOutput = n }
+}
+
+// WithToolchainFrom names the command whose interpreters' toolchains are
+// bound into the jail, in place of the command each run executes. The default
+// — the run command — is right when the operator wrote it (certify's test
+// command). It is wrong for a command a MODEL wrote: every executable word of
+// a review reproduction would be looked up on the host and its toolchain root
+// mounted, so a script naming /opt/x/bin/y chose to mount /opt/x. Review
+// passes its scope language's own test command; nil binds no toolchain beyond
+// what every run mounts.
+func WithToolchainFrom(cmd []string) JailOption {
+	return func(j *bwrapJail) { j.toolchainFrom, j.toolchainSet = cmd, true }
+}
+
+// toolchainCmd is the command whose toolchain a run of cmd binds.
+func (j bwrapJail) toolchainCmd(cmd []string) []string {
+	if j.toolchainSet {
+		return j.toolchainFrom
+	}
+	return cmd
 }
 
 // NewJail builds the real bwrap-sandboxed Jail for the adequacy scorer.
@@ -266,7 +290,7 @@ func (j bwrapJail) runInJailCapturing(ctx context.Context, files map[string]stri
 	if berr != nil {
 		return sandbox.Result{}, berr
 	}
-	tbs, terr := toolchainBinds(cmd)
+	tbs, terr := toolchainBinds(j.toolchainCmd(cmd))
 	if terr != nil {
 		return sandbox.Result{}, terr
 	}

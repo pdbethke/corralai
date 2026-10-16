@@ -113,7 +113,7 @@ inputs:
     required: false
     default: ""
   reviewer-model:
-    description: "Also run `corral review` on the change, with this model in the REVIEWER seat: a cold model that has never seen the repository is told to assume the code is wrong and prove it; every claim comes with a script corral runs in a detached worktree, a claim that does not reproduce is demoted on the record, and the review is one signed entry in the same `ledger` directory the audit writes to. An API model name (its key through the *-key inputs) or an agent seat (`claude-code`, `codex`, `antigravity`, or one defined as CORRALAI_AGENT_<NAME> in the job's env). An agent seat needs its CLI installed on the runner and a login: `claude-code-oauth-token` and `codex-api-key` pass one through. corral refuses a seat whose CLI is missing before it spends anything. Off unless named; corral has no default models."
+    description: "Also run `corral review` on the change, with this model in the REVIEWER seat: a cold model that has never seen the repository is told to assume the code is wrong and prove it; every claim comes with a script corral runs in a detached worktree on the runner (`--substrate workspace`: the runner is the isolation boundary, as for the audit; run locally, `corral review` runs them in its offline sandbox), a claim that does not reproduce is demoted on the record, and the review is one signed entry in the same `ledger` directory the audit writes to. An API model name (its key through the *-key inputs) or an agent seat (`claude-code`, `codex`, `antigravity`, or one defined as CORRALAI_AGENT_<NAME> in the job's env). An agent seat needs its CLI installed on the runner and a login: `claude-code-oauth-token` and `codex-api-key` pass one through. corral refuses a seat whose CLI is missing before it spends anything. Off unless named; corral has no default models."
     required: false
     default: ""
   verifier-model:
@@ -522,7 +522,10 @@ runs:
           fi
           review_status=0
           for scope in "${scopes[@]}"; do
-            rargs=(review --repo "${GITHUB_WORKSPACE:-.}" --scope "$scope" --reviewer-model "$REVIEWER_MODEL")
+            # The runner is the isolation boundary, as for the audit's
+            # --substrate workspace: a hosted runner cannot start bwrap
+            # without changing the host, and is thrown away after the job.
+            rargs=(review --repo "${GITHUB_WORKSPACE:-.}" --scope "$scope" --reviewer-model "$REVIEWER_MODEL" --substrate workspace)
             [ -n "${VERIFIER_MODEL:-}" ] && rargs+=(--verifier-model "$VERIFIER_MODEL")
             if [ -n "${LEDGER_DIR:-}" ]; then rargs+=(--ledger "$LEDGER_DIR"); else rargs+=(--no-ledger); fi
             case "${REVIEW_FAIL_ON:-reproduced}" in

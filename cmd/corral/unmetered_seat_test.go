@@ -311,6 +311,7 @@ func int64Ptr(v int64) *int64 { return &v }
 // it runs, and its record says what it could not measure: the call is
 // counted as unmetered, and the warehouse's token columns are NULL, never 0.
 func TestReviewRunsAnUnmeteredSeatAndRecordsItNotMetered(t *testing.T) {
+	requireReviewSandbox(t)
 	noKeys(t)
 	root := t.TempDir()
 	gitRun := gitCmd(t, root)

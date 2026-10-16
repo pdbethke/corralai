@@ -931,7 +931,8 @@ and the same step runs it when `reviewer-model` is named:
 
 A model that has never seen the repository is handed the change and told to
 assume it is wrong: every claim comes with a script, corral runs the scripts
-in a detached worktree, a claim that does not reproduce is demoted on the
+in a detached worktree on the runner (`--substrate workspace`, as for the
+audit: the runner is the isolation boundary), a claim that does not reproduce is demoted on the
 record, the verifier tries to refute what stands, and the review is one
 signed entry in the same `ledger` directory the audit writes to — so the
 pull request's record holds both verdicts, in one chain. Each review is

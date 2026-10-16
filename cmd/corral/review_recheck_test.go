@@ -21,7 +21,8 @@ import (
 )
 
 // recheckFixture is a git checkout with one committed file and a ledger
-// holding one review whose findings carry the given scripts.
+// holding one review whose findings carry the given scripts, reproduced (as
+// the entry records) in the jail.
 func recheckFixture(t *testing.T, scripts map[string]string) (repo, ledger, hash string) {
 	t.Helper()
 	return recheckFixtureCommit(t, scripts, nil)
@@ -30,6 +31,13 @@ func recheckFixture(t *testing.T, scripts map[string]string) (repo, ledger, hash
 // recheckFixtureCommit is recheckFixture with the review's recorded Commit
 // chosen by commitOf (nil: the fixture repo's HEAD).
 func recheckFixtureCommit(t *testing.T, scripts map[string]string, commitOf func(repo string) string) (repo, ledger, hash string) {
+	t.Helper()
+	return recheckFixtureIn(t, scripts, commitOf, "jail (test fixture)")
+}
+
+// recheckFixtureIn is recheckFixtureCommit with the substrate the entry
+// records ("" for an entry from before the jail).
+func recheckFixtureIn(t *testing.T, scripts map[string]string, commitOf func(repo string) string, substrate string) (repo, ledger, hash string) {
 	t.Helper()
 	t.Setenv("CORRALAI_CERTIFY_KEY_FILE", filepath.Join(t.TempDir(), "certify_key"))
 	repo = t.TempDir()
@@ -55,7 +63,7 @@ func recheckFixtureCommit(t *testing.T, scripts map[string]string, commitOf func
 	if commitOf != nil {
 		commit = commitOf(repo)
 	}
-	r := review.Review{Repo: "acme/r", Commit: commit, Scope: "pkg", ReviewerModel: "rev", Opinion: "o"}
+	r := review.Review{Repo: "acme/r", Commit: commit, Scope: "pkg", ReviewerModel: "rev", Opinion: "o", Substrate: substrate}
 	zero := 0
 	for _, id := range ids {
 		r.Findings = append(r.Findings, review.Finding{ID: id, Claim: "c " + id, Declared: review.TierReproduced, Tier: review.TierReproduced, Script: scripts[id], ExitCode: &zero})
@@ -90,6 +98,7 @@ func dirDigest(t *testing.T, dir string) string {
 }
 
 func TestReviewRecheckReportsTheThreeOutcomesAndWritesNothing(t *testing.T) {
+	requireReviewSandbox(t)
 	repo, ledger, hash := recheckFixture(t, map[string]string{
 		"R1": "test -f marker.txt",         // still true on HEAD
 		"R2": "test -f gone.txt",           // no longer true
@@ -134,6 +143,7 @@ func TestReviewRecheckReportsTheThreeOutcomesAndWritesNothing(t *testing.T) {
 }
 
 func TestReviewRecheckRefusesAFindingWithNoScript(t *testing.T) {
+	requireReviewSandbox(t)
 	repo, ledger, hash := recheckFixture(t, map[string]string{"R1": ""})
 	var out, errb bytes.Buffer
 	if code := runReview([]string{"recheck", ledger, hash + "#R1", "--repo", repo}, &out, &errb); code != 1 {
@@ -168,6 +178,7 @@ func gitRepoWithMarker(t *testing.T) string {
 // script ran against unrelated code, so its exit says nothing about the
 // finding. Before this check, an unrelated repo reported no-longer-reproduces.
 func TestReviewRecheckRefusesACheckoutThatDoesNotDescendFromTheReviewedCommit(t *testing.T) {
+	requireReviewSandbox(t)
 	_, ledger, hash := recheckFixture(t, map[string]string{"R1": "test -f marker.txt"})
 	other := gitRepoWithMarker(t)
 	var out, errb bytes.Buffer
@@ -191,6 +202,7 @@ func TestReviewRecheckRefusesACheckoutThatDoesNotDescendFromTheReviewedCommit(t 
 // cannot reach recheck through a well-formed ledger; the guard is defensive,
 // and is tested at the helper.
 func TestRecheckAncestryRefusesAnEmptyReviewedCommit(t *testing.T) {
+	requireReviewSandbox(t)
 	repo, _, _ := recheckFixture(t, map[string]string{"R1": "true"})
 	if reason := recheckAncestry(repo, ""); !strings.Contains(reason, "no reviewed commit") {
 		t.Fatalf("want a reason naming the missing commit, got %q", reason)
@@ -206,9 +218,12 @@ func TestRecheckAncestryRefusesAnEmptyReviewedCommit(t *testing.T) {
 // operator's repo. Before the recheck took a signal-aware context, the first
 // SIGTERM killed the process outright — here, the test binary itself.
 func TestReviewRecheckUnwindsOnInterrupt(t *testing.T) {
+	requireReviewSandbox(t)
 	t.Cleanup(agentbackend.ResetInterrupted) // the signal records an interrupt for the whole process
-	started := filepath.Join(t.TempDir(), "started")
-	repo, ledger, hash := recheckFixture(t, map[string]string{"R1": "touch " + started + " && exec sleep 30"})
+	// The script runs in the jail, so it cannot mark the host when it starts;
+	// the interrupt is sent once it has had time to, and a cancellation that
+	// lands while the jail is still being seeded unwinds the same way.
+	repo, ledger, hash := recheckFixture(t, map[string]string{"R1": "exec sleep 30"})
 	type result struct {
 		code int
 		out  string
@@ -219,16 +234,7 @@ func TestReviewRecheckUnwindsOnInterrupt(t *testing.T) {
 		code := runReview([]string{"recheck", ledger, hash + "#R1", "--repo", repo, "--json", "--timeout", "40s"}, &out, &errb)
 		done <- result{code, out.String()}
 	}()
-	deadline := time.Now().Add(10 * time.Second)
-	for {
-		if _, err := os.Stat(started); err == nil {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("the script never started")
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
+	time.Sleep(2 * time.Second)
 	if err := syscall.Kill(syscall.Getpid(), syscall.SIGTERM); err != nil {
 		t.Fatal(err)
 	}

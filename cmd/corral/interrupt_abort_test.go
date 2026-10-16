@@ -63,6 +63,7 @@ func (interruptedSeat) Chat([]agentbackend.Message, []any) (agentbackend.Message
 // push — and exits non-zero saying it was interrupted, whichever seat the
 // interrupt stopped.
 func TestAnInterruptedReviewWritesNoEntry(t *testing.T) {
+	requireReviewSandbox(t)
 	t.Setenv("ANTHROPIC_API_KEY", "test-placeholder-not-a-real-key")
 	root := t.TempDir()
 	gitRun := gitCmd(t, root)
@@ -106,6 +107,7 @@ func (v lateSignalVerifier) Chat([]agentbackend.Message, []any) (agentbackend.Me
 // A signal after the last agent call still stops the record: review checks
 // the one predicate right before its statement, ledger entry and push.
 func TestAReviewInterruptedAfterItsLastCallWritesNoEntry(t *testing.T) {
+	requireReviewSandbox(t)
 	t.Cleanup(agentbackend.ResetInterrupted)
 	t.Setenv("ANTHROPIC_API_KEY", "test-placeholder-not-a-real-key")
 	root := t.TempDir()

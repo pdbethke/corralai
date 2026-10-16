@@ -288,3 +288,16 @@ func TestPlanRanksNeverReviewedThenChangedThenStalest(t *testing.T) {
 		t.Errorf("never2: %+v", n)
 	}
 }
+
+// In the jail a script killed by a signal comes back as an exit status,
+// 128+N. That is not the script failing to demonstrate the claim — nothing was
+// measured — so the finding records Unrun, and grades nobody, as a harness
+// failure does.
+func TestReproduceReadsASignalAsUnrun(t *testing.T) {
+	r := &Review{Findings: []Finding{{ID: "R1", Declared: TierReproduced, Script: "killed"}}}
+	Reproduce(context.Background(), scripted{"killed": {out: "Killed", code: 137}}, r)
+	f := r.Findings[0]
+	if f.Unrun == "" || f.Tier != TierCodeRead || OutcomeOf(f, nil).Known {
+		t.Errorf("a signal-killed script was graded: %+v", f)
+	}
+}

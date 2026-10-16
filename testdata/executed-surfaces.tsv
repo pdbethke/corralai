@@ -231,6 +231,7 @@ corral review plan --ledger	executed	test:cmd/corral/review_test.go
 corral review plan --limit	executed	test:cmd/corral/review_test.go
 corral review plan --repo	executed	test:cmd/corral/review_test.go
 corral review --fail-on	executed	test:cmd/corral/reviewed_doors_test.go
+corral review --substrate	executed	test:cmd/corral/review_jail_test.go (jail against real bwrap: the tree and bound deps visible, a host write refused; workspace recorded on the entry)
 corral scans show --evidence	executed	test:cmd/corral/scans_evidence_test.go
 corral scans show --json	executed	test:cmd/corral/scans_show_json_test.go
 corral scans show --ledger	executed	test:cmd/corral/scans_test.go
@@ -238,6 +239,11 @@ corral scans show --timing	executed	test:cmd/corral/scans_timing_test.go
 corral review recheck --repo	executed	test:cmd/corral/review_recheck_test.go
 corral review recheck --timeout	executed	test:cmd/corral/review_recheck_test.go
 corral review recheck --json	executed	test:cmd/corral/review_recheck_test.go
+corral review churn --findings	executed	test:cmd/corral/review_churn_test.go
+corral review churn --json	executed	test:cmd/corral/review_churn_test.go
+corral review churn --ledger	executed	test:cmd/corral/review_churn_test.go
+corral review churn --repo	executed	test:cmd/corral/review_churn_test.go
+corral review recheck --substrate	executed	test:cmd/corral/review_jail_test.go (jail and workspace, with and without a sandbox on the host)
 corral state migrate --dry-run	executed	test:cmd/corral/state_test.go (TestStateMigrateDryRunMovesNothing)
 corral state migrate --from	executed	test:cmd/corral/state_test.go (TestStateMigrateFromMovesAnExplicitDirectory)
 corral state migrate --resume	executed	test:cmd/corral/state_test.go (TestStateMigrateResumeAdoptsAndSaysSo)

@@ -3,9 +3,7 @@
 package lang
 
 import (
-	"encoding/json"
 	"slices"
-	"strings"
 )
 
 var rspecFilters = []string{"-e", "--example", "-E", "--example-matches"}
@@ -22,17 +20,13 @@ func rspecListCmd(argv []string, testPath string) ([]string, bool) {
 // rspecParseList reads the JSON formatter's examples. The report is read from
 // its first "{", since bundler and spec helpers can print before it.
 func rspecParseList(stdout string) []string {
-	i := strings.Index(stdout, "{")
-	if i < 0 {
-		return nil
-	}
 	var rep struct {
 		Examples []struct {
 			Description     string `json:"description"`
 			FullDescription string `json:"full_description"`
 		} `json:"examples"`
 	}
-	if json.NewDecoder(strings.NewReader(stdout[i:])).Decode(&rep) != nil {
+	if !decodeReport(stdout, &rep) {
 		return nil
 	}
 	var ids []string

@@ -158,11 +158,15 @@ func readScript(path, key, name string) (string, bool) {
 	if err != nil {
 		return "", false
 	}
-	var m map[string]map[string]json.RawMessage
-	if json.Unmarshal(b, &m) != nil {
+	// Only the scripts object is decoded: a manifest's other top-level
+	// values are strings, booleans and arrays ("name", "private"), which a
+	// decode of the whole file into objects refuses.
+	var top map[string]json.RawMessage
+	var scripts map[string]json.RawMessage
+	if json.Unmarshal(b, &top) != nil || json.Unmarshal(top[key], &scripts) != nil {
 		return "", false
 	}
-	raw, ok := m[key][name]
+	raw, ok := scripts[name]
 	if !ok {
 		return "", false
 	}

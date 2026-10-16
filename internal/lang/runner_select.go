@@ -3,6 +3,7 @@
 package lang
 
 import (
+	"encoding/json"
 	"strings"
 )
 
@@ -112,4 +113,25 @@ func lastFull(id string) string {
 // lastFullColl is Coruns for the idFromFull rows (mocha, rspec).
 func lastFullColl(id, other string) bool {
 	return id != other && lastFull(id) == lastFull(other)
+}
+
+// decodeReport decodes the JSON report a runner prints on stdout into v,
+// starting at the first line that begins with "{" and stopping after the one
+// value. A package launcher prints its own lines around the report — npm and
+// pnpm a "> script" banner before it, yarn one before and "Done in" after
+// (measured on npm 10.9, pnpm 9.15, yarn 1.22) — and bundler or a spec
+// helper can print before rspec's.
+func decodeReport(stdout string, v any) bool {
+	i := 0
+	for i < len(stdout) && stdout[i] != '{' {
+		nl := strings.IndexByte(stdout[i:], '\n')
+		if nl < 0 {
+			return false
+		}
+		i += nl + 1
+	}
+	if i >= len(stdout) {
+		return false
+	}
+	return json.NewDecoder(strings.NewReader(stdout[i:])).Decode(v) == nil
 }

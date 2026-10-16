@@ -47,15 +47,22 @@ func TestRealRunnersListAndRunOne(t *testing.T) {
 		testPath     string
 		name, want   string
 		needsRoot    bool
+		// throughScript: argv runs a package script, read from the
+		// fixture's package.json / composer.json (lang.Resolve).
+		throughScript bool
 	}{
-		{"node --test", "javascript", []string{"node", "--test"}, "calc.node.test.js", "top level", "top level", false},
-		{"rspec", "ruby", rspec, "spec/calc_spec.rb", "level", "top::level", false},
-		{"jest", "javascript", []string{"npx", "--no-install", "jest"}, "calc.jest.test.js", "top level", "top level", true},
-		{"vitest", "typescript", []string{"npx", "--no-install", "vitest", "run"}, "calc.vitest.test.mjs", "top level", "top level", true},
-		{"mocha", "javascript", []string{"npx", "--no-install", "mocha"}, "calc.mocha.js", "top level", "top level", true},
-		{"phpunit", "php", []string{"vendor/bin/phpunit"}, "tests/CalcTest.php", "testAdds", "CalcTest::testAdds", true},
+		{"node --test", "javascript", []string{"node", "--test"}, "calc.node.test.js", "top level", "top level", false, false},
+		{"rspec", "ruby", rspec, "spec/calc_spec.rb", "level", "top::level", false, false},
+		{"jest", "javascript", []string{"npx", "--no-install", "jest"}, "calc.jest.test.js", "top level", "top level", true, false},
+		{"vitest", "typescript", []string{"npx", "--no-install", "vitest", "run"}, "calc.vitest.test.mjs", "top level", "top level", true, false},
+		{"mocha", "javascript", []string{"npx", "--no-install", "mocha"}, "calc.mocha.js", "top level", "top level", true, false},
+		{"phpunit", "php", []string{"vendor/bin/phpunit"}, "tests/CalcTest.php", "testAdds", "CalcTest::testAdds", true, false},
+		{"jest", "javascript", []string{"npm", "test"}, "calc.jest.test.js", "top level", "top level", true, true},
+		{"jest", "javascript", []string{"yarn", "test"}, "calc.jest.test.js", "top level", "top level", true, true},
+		{"jest", "javascript", []string{"pnpm", "test"}, "calc.jest.test.js", "top level", "top level", true, true},
+		{"phpunit", "php", []string{"composer", "test"}, "tests/CalcTest.php", "testAdds", "CalcTest::testAdds", true, true},
 	} {
-		t.Run(c.runner, func(t *testing.T) {
+		t.Run(c.runner+"/"+c.argv[0], func(t *testing.T) {
 			dir := root
 			if !c.needsRoot {
 				dir = t.TempDir()
@@ -72,7 +79,14 @@ func TestRealRunnersListAndRunOne(t *testing.T) {
 				t.Skip("SKIP rspec: rspec does not run here")
 			}
 			p, _ := ByName(c.lang)
-			if r, _ := RunnerFor(p, Cmd(c.argv)); r.Name != c.runner {
+			inv := Cmd(c.argv)
+			if c.throughScript {
+				var err error
+				if inv, err = Resolve(p, dir, c.argv, ""); err != nil || inv.Script == nil {
+					t.Fatalf("Resolve(%q) = %+v, %v", c.argv, inv, err)
+				}
+			}
+			if r, _ := RunnerFor(p, inv); r.Name != c.runner {
 				t.Fatalf("%q dispatched to row %q", c.argv, r.Name)
 			}
 			run := func(cmd []string) (string, string) {
@@ -84,17 +98,17 @@ func TestRealRunnersListAndRunOne(t *testing.T) {
 				_ = x.Run()
 				return stdout.String(), stdout.String() + all.String()
 			}
-			list, ok := ListTestsCmd(p, Cmd(c.argv), c.testPath)
+			list, ok := ListTestsCmd(p, inv, c.testPath)
 			if !ok {
 				t.Fatal("no list command")
 			}
 			out, _ := run(list)
-			ids := ParseTestList(p, Cmd(c.argv), out)
-			id, ok := ResolveForRun(p, Cmd(c.argv), ids, c.name)
+			ids := ParseTestList(p, inv, out)
+			id, ok := ResolveForRun(p, inv, ids, c.name)
 			if !ok || id != c.want {
 				t.Fatalf("%q resolved to %q, %v over the listed %q", c.name, id, ok, ids)
 			}
-			one, ok := SingleTestCmd(p, Cmd(c.argv), c.testPath, id)
+			one, ok := SingleTestCmd(p, inv, c.testPath, id)
 			if !ok {
 				t.Fatal("no single-test command")
 			}

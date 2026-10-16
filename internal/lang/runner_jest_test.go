@@ -87,3 +87,18 @@ func TestJestCorunsIgnoresCase(t *testing.T) {
 		t.Error("vitest matches case-sensitively; Calc adds should resolve")
 	}
 }
+
+// Through a package launcher the report has the launcher's own lines around
+// it (captured from npm 10.9 and yarn 1.22); they list nothing and stop
+// nothing.
+func TestJestReportThroughALauncher(t *testing.T) {
+	report := readFixture(t, "jest-list.json")
+	for name, out := range map[string]string{
+		"npm":  "\n> corral-runner-fixtures@ test\n> jest --json --testNamePattern ^\\b$ calc.jest.test.js\n\n" + report,
+		"yarn": "yarn run v1.22.22\n$ jest --json --testNamePattern '^\\b$' calc.jest.test.js\n" + report + "\nDone in 0.61s.\n",
+	} {
+		if got := jestParseList(out); !slices.Equal(got, fixtureJSIDs) {
+			t.Errorf("%s: jestParseList = %q", name, got)
+		}
+	}
+}

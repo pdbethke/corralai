@@ -3,7 +3,6 @@
 package lang
 
 import (
-	"encoding/json"
 	"slices"
 	"strings"
 )
@@ -35,7 +34,7 @@ func jestParseList(stdout string) []string {
 			} `json:"assertionResults"`
 		} `json:"testResults"`
 	}
-	if json.Unmarshal([]byte(strings.TrimSpace(stdout)), &rep) != nil {
+	if !decodeReport(stdout, &rep) {
 		return nil
 	}
 	var ids []string

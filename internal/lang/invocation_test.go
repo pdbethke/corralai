@@ -239,3 +239,32 @@ func TestSplitScript(t *testing.T) {
 		t.Error("unbalanced quotes split")
 	}
 }
+
+// The fixture manifests are real ones — a name, private, a require block —
+// not a bare {"scripts": ...}: a reader that only handled the bare shape
+// passed every other test here and read no real repository at all.
+func TestResolveReadsRealManifests(t *testing.T) {
+	src := "testdata/runners/src"
+	for _, c := range []struct {
+		lang string
+		argv []string
+		row  string
+	}{
+		{"javascript", []string{"npm", "test"}, "jest"},
+		{"javascript", []string{"npm", "run", "test:env"}, "jest"},
+		{"php", []string{"composer", "test"}, "phpunit"},
+	} {
+		p, inv := resolve(t, c.lang, src, c.argv, "")
+		if inv.Script == nil || inv.From == "" {
+			t.Errorf("%q: nothing resolved from %s: %+v", c.argv, src, inv)
+			continue
+		}
+		if r, _ := RunnerFor(p, inv); r.ID != c.row {
+			t.Errorf("%q ran as %q", c.argv, r.ID)
+		}
+	}
+	dir := repoWith(t, map[string]string{"composer.json": `{"name": "a/b", "minimum-stability": "dev", "require": {"php": ">=8.1"}, "scripts": {"test": "phpunit"}}`})
+	if _, inv := resolve(t, "php", dir, []string{"composer", "test"}, ""); inv.Script == nil {
+		t.Error("a composer.json with string and object siblings of scripts was not read")
+	}
+}

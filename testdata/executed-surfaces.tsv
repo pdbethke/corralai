@@ -65,6 +65,7 @@ corral certify --local --mutants	executed	test:cmd/corral/certify_repo_evidence_
 corral certify --local --n-mutants	executed	run:2026-09-02 record 89
 corral certify --local --no-bind-deps	executed	test:cmd/corral/certify_local_test.go
 corral certify --local --no-fail-fast	unexecuted	
+corral certify --local --runner	executed	test:cmd/corral/certify_runner_test.go (resolved through package.json in prepareAuditJail, carried on the RunSpec; another language refused before any jail)
 corral certify --local --out	executed	run:2026-09-02 record 89
 corral certify --local --poll	executed	test:cmd/corral/certify_adversarial_test.go
 corral certify --local --quiet	executed	test:cmd/corral/certify_local_tape_stream_test.go (TestQuietSelectsWhetherBeatsEchoLive: live echo on/off, and the tape unaffected either way)
@@ -100,6 +101,7 @@ corral certify --repo --min-kill-rate	executed	test:cmd/corral/certify_repo_test
 corral certify --repo --mutant-model	executed	test:cmd/corral/certify_repo_writer_mode_test.go
 corral certify --repo --mutants	executed	test:cmd/corral/certify_repo_evidence_candidacy_test.go
 corral certify --repo --no-fail-fast	executed	test:cmd/corral/certify_failfast_flag_test.go (reaches every job's audit input); semantics in internal/adequacy/verdict_identity_test.go
+corral certify --repo --runner	unexecuted	
 corral certify --repo --no-goal-cache	executed	test:cmd/corral/certify_repo_goalcache_test.go (TestNoGoalCacheFlagDerivesEveryTime)
 corral certify --repo --no-selection-cache	executed	test:cmd/corral/certify_repo_selcache_test.go
 corral certify --repo --no-verdict-cache	executed	test:cmd/corral/certify_repo_reuse_test.go

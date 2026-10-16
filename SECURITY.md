@@ -16,7 +16,7 @@ from that:
 | `certify` (default): your suite against each mutant, and the written tests | a disposable copy of your tree in a `bwrap` sandbox (container or `sandbox-exec` elsewhere); project dependency dirs bound read-only | none | no |
 | `certify --repo --substrate workspace` | your checkout, in place (you, or the CI runner, are the isolation boundary) | yes | no (scrubbed) |
 | `corral review`: the reviewer's and verifier's reproduction scripts | a detached git worktree at the reviewed commit, **not a sandbox** | yes | no (scrubbed) |
-| an agentic review seat (Claude Code, Codex, …) | that agent, started in a disposable copy of the repository | the agent's own | the agent's own |
+| an agent seat (Claude Code, Codex, …), in any verb | that agent's own process: for `review`, started in a disposable copy of the repository; for `certify`, in an empty temporary directory | the agent's own | corral's environment, so an exported provider key reaches it (and may bill instead of the subscription) |
 
 Two of those rows are not sandboxed, and that is stated here because it is easy to miss:
 
@@ -29,6 +29,12 @@ Two of those rows are not sandboxed, and that is stated here because it is easy 
   environment). Run it where that is acceptable: a CI runner, a container, a machine you do
   not mind a script touching. The scripts are recorded in the ledger, so what ran is never
   hidden.
+
+On macOS the `sandbox-exec` backend is a weaker boundary than Linux's `bwrap`: it runs as
+your user, and a jailed command can read the start-up environment of your other processes
+through the kernel (KERN_PROCARGS2, measured on macOS 27, 2026-10-13; no Seatbelt rule tried
+blocked it). Do not run an audit there with API keys exported in other shells, or use
+`--jail container`.
 
 ## Why a hijacked model cannot change a verdict
 
@@ -197,8 +203,8 @@ Honesty is part of the model.
 - **It does not defend against a malicious insider holding a valid key.** Attestation between daemons
   stops identity *forgery*, not an authorized brain publishing *false* claims; that is mitigated
   by advisory-only semantics, TTLs, and revocation, not prevented.
-- **It assumes a single trust domain.** Cross-swarm coordination assumes all participating swarms
-  belong to one owner; it is not multi-tenant isolation.
+- **It assumes a single trust domain.** Coordination between daemons assumes every participating
+  daemon belongs to one owner; it is not multi-tenant isolation.
 - **`corral review` and `--substrate workspace` are not sandboxed** (see "What runs where");
   `certify`'s default substrate is.
 - **It has not been battle-tested at scale.** The properties are proven by design review and the

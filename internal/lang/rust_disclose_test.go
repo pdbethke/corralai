@@ -31,22 +31,22 @@ func TestRustRunnerDisclosures(t *testing.T) {
 	}
 	p, _ := ByName("rust")
 
-	got := RunDisclosures(p, withCfg, []string{"cargo", "test", "-p", "warp_core"})
+	got := RunDisclosures(p, withCfg, Cmd([]string{"cargo", "test", "-p", "warp_core"}))
 	if len(got) != 1 || !strings.Contains(got[0], ".config/nextest.toml") || !strings.Contains(got[0], "cargo test") || !strings.Contains(got[0], "do not apply") {
 		t.Errorf("cargo test beside a nextest.toml: %q", got)
 	}
-	if got := RunDisclosures(p, bare, []string{"cargo", "test"}); len(got) != 0 {
+	if got := RunDisclosures(p, bare, Cmd([]string{"cargo", "test"})); len(got) != 0 {
 		t.Errorf("cargo test, no nextest.toml: want nothing, got %q", got)
 	}
 	for _, dir := range []string{bare, withCfg} {
-		got := RunDisclosures(p, dir, []string{"cargo", "nextest", "run", "-p", "warp_core"})
+		got := RunDisclosures(p, dir, Cmd([]string{"cargo", "nextest", "run", "-p", "warp_core"}))
 		if len(got) != 1 || !strings.Contains(got[0], "FLAKY") || !strings.Contains(got[0], "graded as passed") {
 			t.Errorf("nextest: %q", got)
 		}
 	}
 	// A runner with nothing to disclose says nothing.
 	py, _ := ByName("python")
-	if got := RunDisclosures(py, withCfg, []string{"pytest"}); got != nil {
+	if got := RunDisclosures(py, withCfg, Cmd([]string{"pytest"})); got != nil {
 		t.Errorf("python: %q", got)
 	}
 }
@@ -54,7 +54,7 @@ func TestRustRunnerDisclosures(t *testing.T) {
 // TestRustFlakyTestsAreReadFromTheRun: the Flaky list part 1 parsed and left
 // unread is what FlakyTests hands the scan line, off the same parse.
 func TestRustFlakyTestsAreReadFromTheRun(t *testing.T) {
-	fr := FailureParserFor(rustPlugin{}, nil).(FlakyReporter)
+	fr := FailureParserFor(rustPlugin{}, Cmd(nil)).(FlakyReporter)
 	if got := fr.FlakyTests(rustCapture(t, "nextest", "flaky")); !reflect.DeepEqual(got, []string{"fuzzy_match tests::planted_flaky"}) {
 		t.Errorf("FlakyTests(nextest flaky) = %q", got)
 	}

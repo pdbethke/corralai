@@ -311,6 +311,8 @@ Usage of certify --local:
     	repository (default: git remote.origin.url, else "local")
   -repo-dir --
     	audit --code IN THE CONTEXT of this cloned repo/package: the whole tree is seeded into the jail, the file is mutated in place, and the project's OWN test command (given after --) grades it — so real multi-file projects with package imports work (--code/--test are repo-relative)
+  -runner string
+    	the test runner behind the test command, when corral cannot read it from the command or its package script (a runner id: go-test, pytest, jest, vitest, mocha, node-test, rspec, phpunit, cargo-nextest, ...; docs/corral/language-support.md lists them). Overrides detection; corral still runs your command as given, and adds a runner's own arguments (fail-fast, one-test runs) only where the command or its script names that runner
   -shadow-model string
     	challenger model that attacks every region a SECOND time for a region-controlled head-to-head. OFF unless named. Recorded for comparison — NEVER gates the verdict
   -shadow-pool string
@@ -1004,6 +1006,8 @@ Usage of certify --repo:
     	write the mutants this scan actually GRADED to this file, as a replayable corral-mutants-2 document — one entry per audited file, each mutant its SEARCH/REPLACE hunk, tied to the sha256 of the source it was derived from. Written even when the scan's gates fail: a red verdict is still a recorded exam. A v2 document re-recorded from a --mutants replay of an older corral-mutants-1 set contains that set's WHOLE-FILE entries, not hunks — the run graded what was recorded, and re-recording it does not manufacture anchors it never had
   -repo string
     	path of the repository to audit (required)
+  -runner string
+    	the test runner behind the test command, when corral cannot read it from the command or its package script (a runner id: go-test, pytest, jest, vitest, mocha, node-test, rspec, phpunit, cargo-nextest, ...; docs/corral/language-support.md lists them). Overrides detection; corral still runs your command as given, and adds a runner's own arguments (fail-fast, one-test runs) only where the command or its script names that runner
   -scope-tests
     	REMOVED — see --whole-suite. Selection by coverage evidence is now the default
   -shadow-model string

@@ -5,6 +5,7 @@ package lang
 import (
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -187,6 +188,35 @@ func coverageRunAndReduce(setup, env string, testCmd []string, reduce string) []
 		env + " " + strings.Join(quoted, " ") + " >&2" +
 		"; " + reduce
 	return []string{"sh", "-c", script}
+}
+
+// coverageLaunchers are the launchers and interpreters a language's suites
+// are started through — a fact about the language's runtime, kept here —
+// plus the runners that have no row yet (tap, ava, jasmine; pest, paratest,
+// codecept), which leave this list when they get one.
+var coverageLaunchers = map[string][]string{
+	"javascript": {"node", "npm", "npx", "yarn", "pnpm", "tap", "ava", "jasmine"},
+	"php":        {"php", "phpdbg", "composer", "pest", "paratest", "codecept"},
+	"ruby":       nil, // ruby, rake and testrb are minitest's row words, rspec is rspec's
+}
+
+// coverageClaims is every command word a language's coverage wrapper
+// claims: its launchers, and every Word of a runner row for that language —
+// a runner fact, kept on the row, so a new row's runner is instrumented
+// without a second list to remember.
+func coverageClaims(langName string) []string {
+	out := slices.Clone(coverageLaunchers[langName])
+	for _, r := range runners {
+		if !slices.Contains(r.Languages, langName) {
+			continue
+		}
+		for _, w := range r.Words {
+			if !slices.Contains(out, w) {
+				out = append(out, w)
+			}
+		}
+	}
+	return out
 }
 
 // coverageRunnerNamed reports whether testCmd launches one of this language's

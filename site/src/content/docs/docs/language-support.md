@@ -36,20 +36,20 @@ What corral does with each language's tests. This page is rendered from the same
 
 ## By runner
 
-A language has a runner capability when any of its runners does; this is which. corral recognises the runner from the test command you pass; a command it does not recognise (a `make` target, `npm test`) is graded exactly the same, by exit code, and is treated as its language's default runner, except that it never gets a fail-fast flag.
+A language has a runner capability when any of its runners does; this is which. corral recognises the runner from the test command you pass, or from the package script it runs: `composer` reads `composer.json` and hands the runner its arguments after `--`; `npm` reads `package.json` and hands the runner its arguments after `--`; `pnpm` reads `package.json` and hands the runner its arguments after `--`; `yarn` reads `package.json` and hands the runner its arguments directly. A script gets the runner's arguments only when it is one command, since a launcher appends them to the end of the script. `--runner <id>` names the runner when corral cannot read it. A command whose runner corral does not know (a `make` target) is graded exactly the same, by exit code, as its language's default runner, except that it never gets a fail-fast flag.
 
-| runner | languages | stop at first failure | list tests | run one test | names the killing test | salvage | names flaky tests | note |
-|---|---|---|---|---|---|---|---|---|
-| `go test` (default) | go | `-failfast` | ✓ | ✓ | ✓ |  |  |  |
-| `gotestsum` | go |  | ✓ | ✓ | ✓ |  |  | listing and one-test runs use `go test` itself; the killing test is read from `--- FAIL:` lines, which gotestsum passes through for a failed test but was not run here |
-| `pytest` (default) | python | `-x` | ✓ | ✓ | ✓ | ✓ |  |  |
-| `unittest` | python | `--failfast` | ✓ | ✓ |  |  |  | listing and one-test runs use pytest, which collects unittest suites; they need pytest installed |
-| `jest` | javascript, typescript | `--bail` | ✓ | ✓ |  |  |  | listing and one-test runs verified on jest 30.5 |
-| `mocha` | javascript, typescript | `--bail` | ✓ | ✓ |  |  |  | listing and one-test runs verified on mocha 11.8 (listing needs mocha 9 or later) |
-| `vitest` | javascript, typescript |  | ✓ | ✓ |  |  |  | listing and one-test runs verified on vitest 3.2; vitest 1, 2 and 4 were not run |
-| `node --test` (default) | javascript, typescript |  | ✓ | ✓ |  |  |  | node has no collect-only mode, so listing RUNS the test file once on the unmutated code; verified on node 22.23 |
-| `rspec` (default) | ruby | `--fail-fast` | ✓ | ✓ |  |  |  | listing and one-test runs verified on rspec-core 3.13 (one-test runs need 3.12 or later) |
-| `minitest` | ruby |  |  |  |  |  |  | minitest has no list mode and no full-name selector; rspec is the Ruby runner that lists and runs one test |
-| `phpunit` (default) | php | `--stop-on-failure` | ✓ | ✓ | ✓ |  |  | listing and one-test runs verified on PHPUnit 11.5 |
-| `cargo nextest` | rust |  | ✓ | ✓ | ✓ |  | ✓ |  |
-| `cargo test` (default) | rust |  | ✓ | ✓ | ✓ |  | ✓ | libtest has no retries; flaky tests are named when the output is nextest's (a wrapper that runs nextest under another command) |
+| runner | `--runner` | languages | stop at first failure | list tests | run one test | names the killing test | salvage | names flaky tests | note |
+|---|---|---|---|---|---|---|---|---|---|
+| `go test` (default) | `go-test` | go | `-failfast` | ✓ | ✓ | ✓ |  |  |  |
+| `gotestsum` | `gotestsum` | go |  | ✓ | ✓ | ✓ |  |  | listing and one-test runs use `go test` itself; the killing test is read from `--- FAIL:` lines, which gotestsum passes through for a failed test but was not run here |
+| `pytest` (default) | `pytest` | python | `-x` | ✓ | ✓ | ✓ | ✓ |  |  |
+| `unittest` | `unittest` | python | `--failfast` | ✓ | ✓ |  |  |  | listing and one-test runs use pytest, which collects unittest suites; they need pytest installed |
+| `jest` | `jest` | javascript, typescript | `--bail` | ✓ | ✓ |  |  |  | listing and one-test runs verified on jest 30.5 |
+| `mocha` | `mocha` | javascript, typescript | `--bail` | ✓ | ✓ |  |  |  | listing and one-test runs verified on mocha 11.8 (listing needs mocha 9 or later) |
+| `vitest` | `vitest` | javascript, typescript |  | ✓ | ✓ |  |  |  | listing and one-test runs verified on vitest 3.2; vitest 1, 2 and 4 were not run |
+| `node --test` (default) | `node-test` | javascript, typescript |  | ✓ | ✓ |  |  |  | node has no collect-only mode, so listing RUNS the test file once on the unmutated code; verified on node 22.23 |
+| `rspec` (default) | `rspec` | ruby | `--fail-fast` | ✓ | ✓ |  |  |  | listing and one-test runs verified on rspec-core 3.13 (one-test runs need 3.12 or later) |
+| `minitest` | `minitest` | ruby |  |  |  |  |  |  | minitest has no list mode and no full-name selector; rspec is the Ruby runner that lists and runs one test |
+| `phpunit` (default) | `phpunit` | php | `--stop-on-failure` | ✓ | ✓ | ✓ |  |  | listing and one-test runs verified on PHPUnit 11.5 |
+| `cargo nextest` | `cargo-nextest` | rust |  | ✓ | ✓ | ✓ |  | ✓ |  |
+| `cargo test` (default) | `cargo-test` | rust |  | ✓ | ✓ | ✓ |  | ✓ | libtest has no retries; flaky tests are named when the output is nextest's (a wrapper that runs nextest under another command) |

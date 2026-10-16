@@ -2059,7 +2059,7 @@ func killedFrom(rep adequacy.Report, mutants []adequacy.Mutant) []adequacy.Mutan
 // deselect is arithmetic over the runner's output either way, and the scope
 // is the caller's to state rather than this function's to assume.
 func (d *Driver) salvageByDeselect(ctx context.Context, run *runState, writerTest string, rep adequacy.Report, survivors []adequacy.Mutant) (proven int, ids []string, deselected int, ok bool) {
-	failedTests, deselectArgs, canDeselect := golang.DeselectorFor(langFor(run.rs), adequacy.ShellSplit(run.rs.TestCmd))
+	failedTests, deselectArgs, canDeselect := golang.DeselectorFor(langFor(run.rs), run.rs.inv())
 	if !canDeselect {
 		return 0, nil, 0, false
 	}
@@ -3296,16 +3296,16 @@ func (d *Driver) adjudicateCriticFindings(ctx context.Context, missionID int64, 
 // test it does not name.
 func (d *Driver) criticTestCommand(ctx context.Context, run *runState, f queue.Finding) (string, string) {
 	p := langFor(run.rs)
-	argv := adequacy.ShellSplit(run.rs.TestCmd)
-	if !golang.ResolvesByList(p, argv) {
-		if cmd, ok := golang.SingleTestCmd(p, argv, f.TestFile, f.TestSelector); ok {
+	inv := run.rs.inv()
+	if !golang.ResolvesByList(p, inv) {
+		if cmd, ok := golang.SingleTestCmd(p, inv, f.TestFile, f.TestSelector); ok {
 			return strings.Join(cmd, " "), ""
 		}
 		return "", "this language has no command that runs one test"
 	}
 	if !run.criticListTried {
 		run.criticListTried = true
-		listCmd, ok := golang.ListTestsCmd(p, argv, f.TestFile)
+		listCmd, ok := golang.ListTestsCmd(p, inv, f.TestFile)
 		switch {
 		case !ok:
 			run.criticListWhy = "the test command cannot be turned into one that lists its tests"
@@ -3315,7 +3315,7 @@ func (d *Driver) criticTestCommand(ctx context.Context, run *runState, f queue.F
 			out, err := d.Enumerator.Enumerate(ctx, run.rs.CodePath, run.rs.Code, run.rs.DevTestCode, listCmd)
 			if err != nil {
 				run.criticListWhy = fmt.Sprintf("listing the tests failed: %v", err)
-			} else if run.criticListed = golang.ParseTestList(p, argv, out); len(run.criticListed) == 0 {
+			} else if run.criticListed = golang.ParseTestList(p, inv, out); len(run.criticListed) == 0 {
 				run.criticListWhy = "listing the tests found none"
 			}
 		}
@@ -3323,11 +3323,11 @@ func (d *Driver) criticTestCommand(ctx context.Context, run *runState, f queue.F
 	if run.criticListWhy != "" {
 		return "", run.criticListWhy
 	}
-	id, ok := golang.ResolveForRun(p, argv, run.criticListed, f.TestSelector)
+	id, ok := golang.ResolveForRun(p, inv, run.criticListed, f.TestSelector)
 	if !ok {
 		return "", "the name matches no listed test, or more than one, or its run would also run another"
 	}
-	cmd, ok := golang.SingleTestCmd(p, argv, f.TestFile, id)
+	cmd, ok := golang.SingleTestCmd(p, inv, f.TestFile, id)
 	if !ok {
 		return "", "the test command cannot be narrowed to the one test (it carries a filter of its own)"
 	}

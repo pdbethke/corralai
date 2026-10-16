@@ -2,7 +2,11 @@
 
 package lang
 
-import "testing"
+import (
+	"regexp"
+	"strings"
+	"testing"
+)
 
 // Every language has exactly one Default row, and every row names only
 // registered languages: a row for a language nobody registered, or a
@@ -52,12 +56,12 @@ func TestRunnerForPicksTheMostSpecificRow(t *testing.T) {
 		{js, []string{"npx", "vitest", "run"}, "vitest"},
 		{js, []string{"npm", "test"}, "node --test"},
 	} {
-		if r, ok := RunnerFor(c.p, c.argv); !ok || r.Name != c.want {
+		if r, ok := RunnerFor(c.p, Cmd(c.argv)); !ok || r.Name != c.want {
 			t.Errorf("RunnerFor(%s, %q) = %q, want %q", c.p.Name(), c.argv, r.Name, c.want)
 		}
 	}
 	// The Default answered for an unnamed command must never add a flag.
-	if a, ok := FailFastArgsFor(py, []string{"sh", "-c", "echo pytest"}); ok {
+	if a, ok := FailFastArgsFor(py, Cmd([]string{"sh", "-c", "echo pytest"})); ok {
 		t.Errorf("a shell script that only mentions pytest got fail-fast %q", a)
 	}
 }
@@ -68,10 +72,10 @@ func TestRunnerForPicksTheMostSpecificRow(t *testing.T) {
 // table gives deselection to the pytest row only.
 func TestUnittestGetsNoPytestDeselect(t *testing.T) {
 	py, _ := ByName("python")
-	if _, _, ok := DeselectorFor(py, []string{"python3", "-m", "unittest", "discover"}); ok {
+	if _, _, ok := DeselectorFor(py, Cmd([]string{"python3", "-m", "unittest", "discover"})); ok {
 		t.Error("a unittest command was offered pytest's --deselect")
 	}
-	if _, _, ok := DeselectorFor(py, []string{"python3", "-m", "pytest", "-q"}); !ok {
+	if _, _, ok := DeselectorFor(py, Cmd([]string{"python3", "-m", "pytest", "-q"})); !ok {
 		t.Error("a pytest command lost --deselect")
 	}
 }
@@ -95,18 +99,18 @@ func TestResolveForRunRefusesACollidingId(t *testing.T) {
 	listed := []string{"Calc::adds", "Calc adds", "top level", "Calc::neg::adds"}
 
 	withRunners(t, []Runner{{Name: "fake", Languages: []string{"javascript"}, Default: true, Words: []string{"fakerunner"}, Coruns: fullNameColl}})
-	if id, ok := ResolveForRun(js, argv, listed, "Calc::adds"); ok {
+	if id, ok := ResolveForRun(js, Cmd(argv), listed, "Calc::adds"); ok {
 		t.Errorf("Calc::adds resolved to %q; its run would also run the top-level test named \"Calc adds\"", id)
 	}
-	if id, ok := ResolveForRun(js, argv, listed, "top level"); !ok || id != "top level" {
+	if id, ok := ResolveForRun(js, Cmd(argv), listed, "top level"); !ok || id != "top level" {
 		t.Errorf("top level = %q, %v; want it resolved", id, ok)
 	}
-	if _, ok := ResolveForRun(js, argv, listed, "adds"); ok {
+	if _, ok := ResolveForRun(js, Cmd(argv), listed, "adds"); ok {
 		t.Error("adds resolved; it names two listed tests")
 	}
 
 	withRunners(t, []Runner{{Name: "exact", Languages: []string{"javascript"}, Default: true, Words: []string{"fakerunner"}}})
-	if id, ok := ResolveForRun(js, argv, listed, "Calc::adds"); !ok || id != "Calc::adds" {
+	if id, ok := ResolveForRun(js, Cmd(argv), listed, "Calc::adds"); !ok || id != "Calc::adds" {
 		t.Errorf("without Coruns, Calc::adds = %q, %v; want ResolveListedTest's answer", id, ok)
 	}
 }
@@ -129,5 +133,34 @@ func TestRunnerSelectHelpers(t *testing.T) {
 	}
 	if wordIndex([]string{"npx", "./node_modules/.bin/vitest", "run"}, "vitest") != 1 || wordIndex([]string{"go", "test"}, "vitest") != -1 {
 		t.Error("wordIndex wrong")
+	}
+}
+
+// Every row has an ID an operator can type after --runner, and no two share one.
+func TestRunnerIDsAreUniqueFlagValues(t *testing.T) {
+	flag := regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
+	seen := map[string]string{}
+	for _, r := range runners {
+		if !flag.MatchString(r.ID) {
+			t.Errorf("row %s has ID %q, not a flag value", r.Name, r.ID)
+		}
+		if prev, dup := seen[r.ID]; dup {
+			t.Errorf("rows %s and %s share ID %q", prev, r.Name, r.ID)
+		}
+		seen[r.ID] = r.Name
+	}
+}
+
+func TestRunnerByIDRefusesOtherLanguages(t *testing.T) {
+	py, _ := ByName("python")
+	if r, err := RunnerByID(py, "unittest"); err != nil || r.Name != "unittest" {
+		t.Errorf("unittest = %q, %v", r.Name, err)
+	}
+	_, err := RunnerByID(py, "jest")
+	if err == nil || !strings.Contains(err.Error(), "pytest, unittest") {
+		t.Errorf("jest for python: err = %v, want one naming pytest, unittest", err)
+	}
+	if _, err := RunnerByID(py, "nope"); err == nil {
+		t.Error("an unknown id was accepted")
 	}
 }

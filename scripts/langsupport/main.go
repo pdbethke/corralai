@@ -67,8 +67,17 @@ func render(site bool) string {
 		fmt.Fprintf(&b, "%d. %s\n", i+1, r)
 	}
 
-	b.WriteString("\n## By runner\n\nA language has a runner capability when any of its runners does; this is which. corral recognises the runner from the test command you pass; a command it does not recognise (a `make` target, `npm test`) is graded exactly the same, by exit code, and is treated as its language's default runner, except that it never gets a fail-fast flag.\n\n")
-	b.WriteString("| runner | languages | stop at first failure | list tests | run one test | names the killing test | salvage | names flaky tests | note |\n|---|---|---|---|---|---|---|---|---|\n")
+	b.WriteString("\n## By runner\n\nA language has a runner capability when any of its runners does; this is which. corral recognises the runner from the test command you pass, or from the package script it runs: ")
+	var via []string
+	for _, l := range lang.ScriptLaunchers() {
+		pass := "directly"
+		if l.Pass != "" {
+			pass = "after `" + l.Pass + "`"
+		}
+		via = append(via, fmt.Sprintf("`%s` reads `%s` and hands the runner its arguments %s", l.Name, l.Manifest, pass))
+	}
+	b.WriteString(strings.Join(via, "; ") + ". A script gets the runner's arguments only when it is one command, since a launcher appends them to the end of the script. `--runner <id>` names the runner when corral cannot read it. A command whose runner corral does not know (a `make` target) is graded exactly the same, by exit code, as its language's default runner, except that it never gets a fail-fast flag.\n\n")
+	b.WriteString("| runner | `--runner` | languages | stop at first failure | list tests | run one test | names the killing test | salvage | names flaky tests | note |\n|---|---|---|---|---|---|---|---|---|---|\n")
 	mark := func(ok bool) string {
 		if ok {
 			return "✓"
@@ -84,7 +93,7 @@ func render(site bool) string {
 		if len(r.FailFast) > 0 {
 			ff = "`" + strings.Join(r.FailFast, " ") + "`"
 		}
-		fmt.Fprintf(&b, "| %s | %s | %s | %s | %s | %s | %s | %s | %s |\n", name, strings.Join(r.Languages, ", "), ff,
+		fmt.Fprintf(&b, "| %s | `%s` | %s | %s | %s | %s | %s | %s | %s | %s |\n", name, r.ID, strings.Join(r.Languages, ", "), ff,
 			mark(r.ListCmd != nil && r.ParseList != nil), mark(r.SingleCmd != nil), mark(r.FirstFailure != nil),
 			mark(r.FailedTests != nil && r.DeselectArgs != nil), mark(r.Flaky != nil), r.Note)
 	}

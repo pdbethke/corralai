@@ -3,6 +3,7 @@
 package lang
 
 import (
+	"fmt"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -19,7 +20,9 @@ import (
 // A nil or empty field means "this runner has none", never a guess, exactly
 // as langSpec's zero fields do. Detection happens in one place, RunnerFor.
 type Runner struct {
-	Name      string
+	Name string
+	// ID is the row's --runner value: lowercase words joined by hyphens.
+	ID        string
 	Languages []string // plugin names whose commands this runner runs
 	// Default marks the row RunnerFor answers for its languages when no row
 	// is detected in the command. Each language has exactly one.
@@ -90,19 +93,19 @@ func pySingleCmd(_ []string, testPath, id string) ([]string, bool) {
 var runners = []Runner{
 	{
 		// -failfast stops after the first test binary failure.
-		Name: "go test", Languages: []string{"go"}, Default: true, Detect: goTestCmd,
+		Name: "go test", ID: "go-test", Languages: []string{"go"}, Default: true, Detect: goTestCmd,
 		FailFast: []string{"-failfast"},
 		ListCmd:  goListCmd, ParseList: goParseTestList, SingleCmd: goSingleCmd,
 		FirstFailure: goFirstFailure,
 	},
 	{
-		Name: "gotestsum", Languages: []string{"go"}, Words: []string{"gotestsum"},
+		Name: "gotestsum", ID: "gotestsum", Languages: []string{"go"}, Words: []string{"gotestsum"},
 		ListCmd: goListCmd, ParseList: goParseTestList, SingleCmd: goSingleCmd,
 		FirstFailure: goFirstFailure,
 		Note:         "listing and one-test runs use `go test` itself; the killing test is read from `--- FAIL:` lines, which gotestsum passes through for a failed test but was not run here",
 	},
 	{
-		Name: "pytest", Languages: []string{"python"}, Default: true, Words: []string{"pytest"},
+		Name: "pytest", ID: "pytest", Languages: []string{"python"}, Default: true, Words: []string{"pytest"},
 		FailFast: []string{"-x"},
 		ListCmd:  pyListCmd, ParseList: pyParseTestList, SingleCmd: pySingleCmd,
 		FirstFailure: pyFirstFailure, FailedTests: pyFailedTests, DeselectArgs: pyDeselectArgs,
@@ -113,7 +116,7 @@ var runners = []Runner{
 		// `FAILED <node id>` line unittest never prints. List and single-test
 		// commands are pytest's, as they always were for every Python
 		// command; pytest collects unittest suites.
-		Name: "unittest", Languages: []string{"python"}, Words: []string{"unittest"},
+		Name: "unittest", ID: "unittest", Languages: []string{"python"}, Words: []string{"unittest"},
 		FailFast: []string{"--failfast"},
 		ListCmd:  pyListCmd, ParseList: pyParseTestList, SingleCmd: pySingleCmd,
 		Note: "listing and one-test runs use pytest, which collects unittest suites; they need pytest installed",
@@ -123,25 +126,25 @@ var runners = []Runner{
 	// unrecognised flag would make every mutant exit non-zero and read as a
 	// kill. node --test has no such flag.
 	{
-		Name: "jest", Languages: []string{"javascript", "typescript"}, Words: []string{"jest"}, FailFast: []string{"--bail"},
+		Name: "jest", ID: "jest", Languages: []string{"javascript", "typescript"}, Words: []string{"jest"}, FailFast: []string{"--bail"},
 		ListCmd: jestListCmd, ParseList: jestParseList, SingleCmd: jestSingleCmd, ResolveByList: true, Coruns: jestCoruns,
 		Note: "listing and one-test runs verified on jest 30.5",
 	},
 	{
-		Name: "mocha", Languages: []string{"javascript", "typescript"}, Words: []string{"mocha"}, FailFast: []string{"--bail"},
+		Name: "mocha", ID: "mocha", Languages: []string{"javascript", "typescript"}, Words: []string{"mocha"}, FailFast: []string{"--bail"},
 		ListCmd: mochaListCmd, ParseList: mochaParseList, SingleCmd: mochaSingleCmd, ResolveByList: true, Coruns: lastFullColl,
 		Note: "listing and one-test runs verified on mocha 11.8 (listing needs mocha 9 or later)",
 	},
 	{
 		// Detect adds vitest's entry script to the word; a shell-wrapped
 		// script is still read through Words.
-		Name: "vitest", Languages: []string{"javascript", "typescript"}, Words: []string{"vitest"},
+		Name: "vitest", ID: "vitest", Languages: []string{"javascript", "typescript"}, Words: []string{"vitest"},
 		Detect:  func(argv []string) bool { return vitestIndex(argv) >= 0 },
 		ListCmd: vitestListCmd, ParseList: vitestParseList, SingleCmd: vitestSingleCmd, ResolveByList: true, Coruns: fullNameColl,
 		Note: "listing and one-test runs verified on vitest 3.2; vitest 1, 2 and 4 were not run",
 	},
 	{
-		Name: "node --test", Languages: []string{"javascript", "typescript"}, Default: true,
+		Name: "node --test", ID: "node-test", Languages: []string{"javascript", "typescript"}, Default: true,
 		Detect: func(argv []string) bool {
 			return len(argv) > 0 && filepath.Base(argv[0]) == "node" && slices.Contains(argv, "--test")
 		},
@@ -152,16 +155,16 @@ var runners = []Runner{
 	// --fail-fast arrived in minitest 5.22, and an older minitest treats an
 	// unknown option as an error, which the scorer would read as a kill.
 	{
-		Name: "rspec", Languages: []string{"ruby"}, Default: true, Words: []string{"rspec"}, FailFast: []string{"--fail-fast"},
+		Name: "rspec", ID: "rspec", Languages: []string{"ruby"}, Default: true, Words: []string{"rspec"}, FailFast: []string{"--fail-fast"},
 		ListCmd: rspecListCmd, ParseList: rspecParseList, SingleCmd: rspecSingleCmd, ResolveByList: true, Coruns: lastFullColl,
 		Note: "listing and one-test runs verified on rspec-core 3.13 (one-test runs need 3.12 or later)",
 	},
 	{
-		Name: "minitest", Languages: []string{"ruby"}, Words: []string{"ruby", "rake", "testrb"},
+		Name: "minitest", ID: "minitest", Languages: []string{"ruby"}, Words: []string{"ruby", "rake", "testrb"},
 		Note: "minitest has no list mode and no full-name selector; rspec is the Ruby runner that lists and runs one test",
 	},
 	{
-		Name: "phpunit", Languages: []string{"php"}, Default: true, Words: []string{"phpunit"},
+		Name: "phpunit", ID: "phpunit", Languages: []string{"php"}, Default: true, Words: []string{"phpunit"},
 		FailFast: []string{"--stop-on-failure"}, FirstFailure: phpFirstFailure,
 		ListCmd: phpunitListCmd, ParseList: phpunitParseList, SingleCmd: phpunitSingleCmd, ResolveByList: true,
 		Note: "listing and one-test runs verified on PHPUnit 11.5",
@@ -169,13 +172,13 @@ var runners = []Runner{
 	{
 		// FirstFailure and Flaky read the grammar off the output, not the
 		// command (rustGrammarOf), so both cargo rows share them.
-		Name: "cargo nextest", Languages: []string{"rust"}, Detect: isNextest,
+		Name: "cargo nextest", ID: "cargo-nextest", Languages: []string{"rust"}, Detect: isNextest,
 		ListCmd: nextestListCmd, ParseList: nextestParseList, SingleCmd: nextestSingleCmd, ResolveByList: true,
 		FirstFailure: rustFirstFailure, Flaky: rustFlakyTests,
 		Disclose: nextestDisclose, PreflightBin: nextestPreflightBin,
 	},
 	{
-		Name: "cargo test", Languages: []string{"rust"}, Default: true, Words: []string{"cargo"},
+		Name: "cargo test", ID: "cargo-test", Languages: []string{"rust"}, Default: true, Words: []string{"cargo"},
 		ListCmd: libtestListCmd, ParseList: libtestParseList, SingleCmd: libtestSingleCmd, ResolveByList: true,
 		FirstFailure: rustFirstFailure, Flaky: rustFlakyTests,
 		Disclose: libtestDisclose, PreflightBin: libtestPreflightBin,
@@ -183,11 +186,18 @@ var runners = []Runner{
 	},
 }
 
-// RunnerFor is the ONE place a command is mapped to a runner: the first row
-// for p's language that the command names, else that language's Default row.
+// RunnerFor is the ONE place a command is mapped to a runner: the row an
+// operator named with --runner, else the first row for p's language that the
+// command (or the package script it runs) names, else that language's
+// Default row.
 // ok is false only for a language with no row at all.
-func RunnerFor(p Plugin, argv []string) (Runner, bool) {
-	if r, ok := namedRunner(p, argv); ok {
+func RunnerFor(p Plugin, inv Invocation) (Runner, bool) {
+	if inv.Runner != "" {
+		if r, err := RunnerByID(p, inv.Runner); err == nil {
+			return r, true
+		}
+	}
+	if r, ok := namedRunner(p, inv.detectWords()); ok {
 		return r, true
 	}
 	for _, r := range runners {
@@ -238,18 +248,47 @@ func namedRunner(p Plugin, argv []string) (Runner, bool) {
 	return Runner{}, false
 }
 
+// RunnerByID is the row an operator named with --runner, refused when it
+// does not run p's language; the error lists the ids that do.
+func RunnerByID(p Plugin, id string) (Runner, error) {
+	var ids []string
+	for _, r := range runners {
+		if !slices.Contains(r.Languages, p.Name()) {
+			continue
+		}
+		if r.ID == id {
+			return r, nil
+		}
+		ids = append(ids, r.ID)
+	}
+	return Runner{}, fmt.Errorf("--runner %q is not a %s runner; one of: %s", id, p.Name(), strings.Join(ids, ", "))
+}
+
+// CheckRunnerID refuses an id no row has, listing every id: a --runner typo
+// is caught when the flag is read, before any language is known.
+func CheckRunnerID(id string) error {
+	ids := make([]string, len(runners))
+	for i, r := range runners {
+		if r.ID == id {
+			return nil
+		}
+		ids[i] = r.ID
+	}
+	return fmt.Errorf("--runner %q is not a runner corral knows; one of: %s", id, strings.Join(ids, ", "))
+}
+
 // ListTestsCmd is the command that lists the tests argv runs, from its runner.
-func ListTestsCmd(p Plugin, argv []string, testPath string) ([]string, bool) {
-	r, ok := RunnerFor(p, argv)
+func ListTestsCmd(p Plugin, inv Invocation, testPath string) ([]string, bool) {
+	r, ok := RunnerFor(p, inv)
 	if !ok || r.ListCmd == nil {
 		return nil, false
 	}
-	return r.ListCmd(argv, testPath)
+	return inv.shape(p, func(w []string) ([]string, bool) { return r.ListCmd(w, testPath) })
 }
 
 // ParseTestList reads ListTestsCmd's stdout into test ids.
-func ParseTestList(p Plugin, argv []string, stdout string) []string {
-	r, ok := RunnerFor(p, argv)
+func ParseTestList(p Plugin, inv Invocation, stdout string) []string {
+	r, ok := RunnerFor(p, inv)
 	if !ok || r.ParseList == nil {
 		return nil
 	}
@@ -257,18 +296,18 @@ func ParseTestList(p Plugin, argv []string, stdout string) []string {
 }
 
 // SingleTestCmd is argv's runner narrowed to the one test id.
-func SingleTestCmd(p Plugin, argv []string, testPath, id string) ([]string, bool) {
-	r, ok := RunnerFor(p, argv)
+func SingleTestCmd(p Plugin, inv Invocation, testPath, id string) ([]string, bool) {
+	r, ok := RunnerFor(p, inv)
 	if !ok || r.SingleCmd == nil {
 		return nil, false
 	}
-	return r.SingleCmd(argv, testPath, id)
+	return inv.shape(p, func(w []string) ([]string, bool) { return r.SingleCmd(w, testPath, id) })
 }
 
 // ResolvesByList reports whether a critic's test name must be resolved
 // against the runner's own list before SingleTestCmd.
-func ResolvesByList(p Plugin, argv []string) bool {
-	r, ok := RunnerFor(p, argv)
+func ResolvesByList(p Plugin, inv Invocation) bool {
+	r, ok := RunnerFor(p, inv)
 	return ok && r.ResolveByList
 }
 
@@ -277,9 +316,9 @@ func ResolvesByList(p Plugin, argv []string) bool {
 // runner's selection for that id would also run another listed test. What a
 // run killed is credited to the test it names, so a run that also ran a
 // second test cannot be credited at all.
-func ResolveForRun(p Plugin, argv []string, listed []string, name string) (string, bool) {
+func ResolveForRun(p Plugin, inv Invocation, listed []string, name string) (string, bool) {
 	id, ok := ResolveListedTest(listed, name)
-	if !ok || !RunsAlone(p, argv, listed, id) {
+	if !ok || !RunsAlone(p, inv, listed, id) {
 		return "", false
 	}
 	return id, true
@@ -288,11 +327,11 @@ func ResolveForRun(p Plugin, argv []string, listed []string, name string) (strin
 // RunsAlone reports whether SingleTestCmd for the listed id runs that test
 // and no other listed one: the id is listed once, and no other listed test
 // is one the runner's selection would also run (Coruns).
-func RunsAlone(p Plugin, argv []string, listed []string, id string) bool {
+func RunsAlone(p Plugin, inv Invocation, listed []string, id string) bool {
 	if id != listedName(id) {
 		return false
 	}
-	r, found := RunnerFor(p, argv)
+	r, found := RunnerFor(p, inv)
 	n := 0
 	for _, other := range listed {
 		if other == id {
@@ -311,19 +350,24 @@ func RunsAlone(p Plugin, argv []string, listed []string, id string) bool {
 // `cargo test` bypasses, and nextest's passed-on-retry grading. nil when the
 // runner has nothing to say; the one way a caller asks, so no caller
 // switches on a language to decide whether there is anything to disclose.
-func RunDisclosures(p Plugin, repoDir string, testCmd []string) []string {
-	r, ok := RunnerFor(p, testCmd)
-	if !ok || r.Disclose == nil {
-		return nil
+// It leads with how the runner was found when that was not the command
+// itself (a package script, --runner): Invocation.Describe.
+func RunDisclosures(p Plugin, repoDir string, inv Invocation) []string {
+	var out []string
+	if d := inv.Describe(p); d != "" {
+		out = append(out, d)
 	}
-	return r.Disclose(repoDir, testCmd)
+	if r, ok := RunnerFor(p, inv); ok && r.Disclose != nil {
+		out = append(out, r.Disclose(repoDir, inv.Argv)...)
+	}
+	return out
 }
 
 // FailureParserFor is argv's runner as the FailureParser adequacy holds, or
 // nil when the runner names no failures. It also implements FlakyReporter
 // when the runner reports retries.
-func FailureParserFor(p Plugin, argv []string) FailureParser {
-	r, ok := RunnerFor(p, argv)
+func FailureParserFor(p Plugin, inv Invocation) FailureParser {
+	r, ok := RunnerFor(p, inv)
 	if !ok || r.FirstFailure == nil {
 		return nil
 	}
@@ -360,8 +404,8 @@ func (p flakyRowParser) FlakyTests(output []byte) []string { return p.r.Flaky(ou
 // from precisely, and from unittest, which exits 2 on pytest's --deselect. A wrong selector would
 // deselect the wrong test and silently narrow the exam, which is worse than
 // not salvaging: the run would look healthier while proving less.
-func DeselectorFor(p Plugin, argv []string) (failed func(string) []string, deselect func([]string) []string, ok bool) {
-	r, found := RunnerFor(p, argv)
+func DeselectorFor(p Plugin, inv Invocation) (failed func(string) []string, deselect func([]string) []string, ok bool) {
+	r, found := RunnerFor(p, inv)
 	if !found || r.FailedTests == nil || r.DeselectArgs == nil {
 		return nil, nil, false
 	}

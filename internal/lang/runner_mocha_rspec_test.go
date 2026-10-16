@@ -57,13 +57,13 @@ func TestRspecCommands(t *testing.T) {
 func TestRspecRowRefusesTheCollision(t *testing.T) {
 	rb, _ := ByName("ruby")
 	argv := []string{"rspec"}
-	ids := ParseTestList(rb, argv, readFixture(t, "rspec-list.json"))
+	ids := ParseTestList(rb, Cmd(argv), readFixture(t, "rspec-list.json"))
 	for _, name := range []string{"Calc::adds x", "Calc adds::x"} {
-		if _, ok := ResolveForRun(rb, argv, ids, name); ok {
+		if _, ok := ResolveForRun(rb, Cmd(argv), ids, name); ok {
 			t.Errorf("%s resolved; another example has its full name", name)
 		}
 	}
-	if id, ok := ResolveForRun(rb, argv, ids, "level"); !ok || id != "top::level" {
+	if id, ok := ResolveForRun(rb, Cmd(argv), ids, "level"); !ok || id != "top::level" {
 		t.Errorf("level = %q, %v", id, ok)
 	}
 }

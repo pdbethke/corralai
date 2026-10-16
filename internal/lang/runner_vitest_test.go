@@ -54,7 +54,7 @@ func TestVitestCommands(t *testing.T) {
 
 func TestVitestEntryScriptIsTheVitestRow(t *testing.T) {
 	ts, _ := ByName("typescript")
-	if r, _ := RunnerFor(ts, []string{"node", "./node_modules/vitest/vitest.mjs", "run"}); r.Name != "vitest" {
+	if r, _ := RunnerFor(ts, Cmd([]string{"node", "./node_modules/vitest/vitest.mjs", "run"})); r.Name != "vitest" {
 		t.Errorf("vitest's entry script ran as %q", r.Name)
 	}
 }

@@ -258,7 +258,7 @@ func (jsPlugin) CoverageCmd(testCmd []string) (cmd []string, ok bool) {
 	if len(testCmd) == 0 {
 		return nil, false
 	}
-	if !coverageRunnerNamed(testCmd, []string{"node", "npm", "npx", "yarn", "pnpm", "jest", "vitest", "mocha", "tap", "ava", "jasmine"}) {
+	if !coverageRunnerNamed(testCmd, coverageClaims("javascript")) {
 		return nil, false
 	}
 	setup := `cat > "$d/corral_reduce.js" <<'CORRAL_JS_EOF'` + "\n" + jsCoverageReduce + "CORRAL_JS_EOF\n"

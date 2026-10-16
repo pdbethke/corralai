@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -496,6 +497,24 @@ func TestShellWrapperSpellingsSeenThroughByCorralcov(t *testing.T) {
 		}
 		if got := InterpretersIn(argv); strings.Join(got, ",") != "pytest" {
 			t.Errorf("InterpretersIn(%q) = %v, want [pytest]", argv, got)
+		}
+	}
+}
+
+// The words each language's coverage wrapper claims, before they were
+// derived from the runner rows. Deriving them must not change one: a word
+// lost stops instrumenting that runner's suites, and a word gained claims a
+// command for a language it is not.
+func TestCoverageClaimsMatchTheListsTheyReplaced(t *testing.T) {
+	for lang, old := range map[string][]string{
+		"javascript": {"node", "npm", "npx", "yarn", "pnpm", "jest", "vitest", "mocha", "tap", "ava", "jasmine"},
+		"php":        {"php", "phpunit", "phpdbg", "composer", "pest", "paratest", "codecept"},
+		"ruby":       {"ruby", "rspec", "rake", "testrb"},
+	} {
+		got := slices.Sorted(slices.Values(coverageClaims(lang)))
+		want := slices.Sorted(slices.Values(old))
+		if !slices.Equal(got, want) {
+			t.Errorf("%s claims %q, want %q", lang, got, want)
 		}
 	}
 }

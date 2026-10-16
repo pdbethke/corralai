@@ -20,14 +20,14 @@ func TestPhpunitNamespacesAndDataSets(t *testing.T) {
 	php, _ := ByName("php")
 	argv := []string{"vendor/bin/phpunit"}
 	out := "Available tests:\n - App\\Unit\\CalcTest::testAdds\n - App\\Feature\\CalcTest::testAdds\n - App\\Unit\\CalcTest::testWith#0\n - App\\Unit\\CalcTest::testWith#1\n"
-	ids := ParseTestList(php, argv, out)
+	ids := ParseTestList(php, Cmd(argv), out)
 	if want := []string{"CalcTest::testAdds", "CalcTest::testAdds", "CalcTest::testWith"}; !slices.Equal(ids, want) {
 		t.Fatalf("ids = %q, want %q", ids, want)
 	}
-	if _, ok := ResolveForRun(php, argv, ids, "CalcTest::testAdds"); ok {
+	if _, ok := ResolveForRun(php, Cmd(argv), ids, "CalcTest::testAdds"); ok {
 		t.Error("CalcTest::testAdds resolved; two namespaces declare it")
 	}
-	if id, ok := ResolveForRun(php, argv, ids, "testWith"); !ok || id != "CalcTest::testWith" {
+	if id, ok := ResolveForRun(php, Cmd(argv), ids, "testWith"); !ok || id != "CalcTest::testWith" {
 		t.Errorf("testWith = %q, %v", id, ok)
 	}
 }

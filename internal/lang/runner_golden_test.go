@@ -111,21 +111,21 @@ func captureNew(t *testing.T) map[string]string {
 		p, _ := ByName(n)
 		for _, cmd := range goldenCommands() {
 			key := strings.Join(cmd, " ")
-			a, ok := FailFastArgsFor(p, cmd)
+			a, ok := FailFastArgsFor(p, Cmd(cmd))
 			got[n+"|failfast|"+key] = show(a, ok)
-			l, ok := ListTestsCmd(p, cmd, "tests/test_x.py")
+			l, ok := ListTestsCmd(p, Cmd(cmd), "tests/test_x.py")
 			got[n+"|list|"+key] = show(l, ok)
-			s, ok := SingleTestCmd(p, cmd, "tests/test_x.py", "tests::a")
+			s, ok := SingleTestCmd(p, Cmd(cmd), "tests/test_x.py", "tests::a")
 			got[n+"|single|"+key] = show(s, ok)
 			for _, dir := range []string{"testdata/rust/libtest", t.TempDir()} {
 				base := filepath.Base(dir)
 				if base != "libtest" {
 					base = "empty-dir"
 				}
-				got[n+"|disclose|"+key+"|"+base] = show(RunDisclosures(p, dir, cmd))
+				got[n+"|disclose|"+key+"|"+base] = show(RunDisclosures(p, dir, Cmd(cmd)))
 			}
 			for name, o := range outs {
-				got[n+"|parselist|"+key+"|"+name] = show(ParseTestList(p, cmd, o))
+				got[n+"|parselist|"+key+"|"+name] = show(ParseTestList(p, Cmd(cmd), o))
 			}
 		}
 		for name, o := range outs {
@@ -137,14 +137,14 @@ func captureNew(t *testing.T) map[string]string {
 				answers[c][v] = true
 			}
 			for _, cmd := range goldenCommands() {
-				if fp := FailureParserFor(p, cmd); fp != nil {
+				if fp := FailureParserFor(p, Cmd(cmd)); fp != nil {
 					note("firstfailure", show(fp.FirstFailure([]byte(o))))
 					if fr, ok := fp.(FlakyReporter); ok {
 						note("flaky", show(fr.FlakyTests([]byte(o))))
 					}
 				}
 			}
-			if failed, deselect, ok := DeselectorFor(p, p.TestCmd()); ok {
+			if failed, deselect, ok := DeselectorFor(p, Cmd(p.TestCmd())); ok {
 				f := failed(o)
 				got[n+"|failedtests|"+name] = show(f)
 				got[n+"|deselect|"+name] = show(deselect(f))

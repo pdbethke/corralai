@@ -1,0 +1,9 @@
+{
+ "name": "corral-runner-fixtures",
+ "private": true,
+ "scripts": {
+  "test": "jest",
+  "test:env": "NODE_ENV=test jest",
+  "test:compound": "jest && node -e \"process.exit(0)\""
+ }
+}

@@ -95,7 +95,7 @@ func TestRustRunner_ChosenOnceFromTheCommand(t *testing.T) {
 }
 
 func TestFirstFailure_RustBothRunners(t *testing.T) {
-	p := FailureParserFor(rustPlugin{}, nil)
+	p := FailureParserFor(rustPlugin{}, Cmd(nil))
 	for _, c := range []struct{ runner, name, want string }{
 		{"libtest", "panic", "test::planted_panic"},
 		{"libtest", "pass", ""},

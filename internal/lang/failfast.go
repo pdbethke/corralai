@@ -75,16 +75,23 @@ func AppendFailFast(cmd, args []string) []string {
 // 1.00. adequacy re-runs the compliant baseline once WITH these args before
 // trusting them for exactly that reason; this list stays conservative anyway.
 //
-// So the flag lives on the runner's row, and is offered only when testCmd
-// itself NAMES that row: a language's Default row, answered for a command no
-// row recognises, never adds one.
-func FailFastArgsFor(p Plugin, testCmd []string) ([]string, bool) {
-	if cmdIsShellWrapped(testCmd) {
+// So the flag lives on the runner's row, and is offered only when the
+// command, or the one-command package script it runs, NAMES that row: a
+// language's Default row, answered for a command no row recognises, never
+// adds one, and neither does a --runner the command words do not name.
+func FailFastArgsFor(p Plugin, inv Invocation) ([]string, bool) {
+	words := inv.detectWords()
+	if cmdIsShellWrapped(inv.Argv) || cmdIsShellWrapped(words) || (inv.Script != nil && !inv.Narrow) {
 		return nil, false
 	}
-	r, ok := namedRunner(p, testCmd)
-	if !ok || len(r.FailFast) == 0 {
+	r, ok := namedRunner(p, words)
+	if !ok || len(r.FailFast) == 0 || (inv.Runner != "" && r.ID != inv.Runner) {
 		return nil, false
+	}
+	if inv.Script != nil && inv.Pass != "" && !slices.Contains(inv.Argv, inv.Pass) {
+		// Through a launcher the flag reaches the script only after its
+		// separator: `npm test -- --bail`.
+		return append([]string{inv.Pass}, r.FailFast...), true
 	}
 	return slices.Clone(r.FailFast), true
 }

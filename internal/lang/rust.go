@@ -184,7 +184,7 @@ func (rustPlugin) JailPreflight(testCmd []string) error {
 
 // rustPreflightBin is the binary testCmd's cargo row needs on PATH.
 func rustPreflightBin(testCmd []string) string {
-	r, _ := RunnerFor(rustPlugin{}, testCmd)
+	r, _ := RunnerFor(rustPlugin{}, Cmd(testCmd))
 	return r.PreflightBin(testCmd)
 }
 

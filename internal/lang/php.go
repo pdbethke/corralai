@@ -606,7 +606,7 @@ register_shutdown_function(function () {
 // knew the bare token "php" would decline to instrument exactly that suite. No
 // other language's runner begins with "php", so the prefix is unambiguous.
 func phpIsRunner(testCmd []string) bool {
-	if coverageRunnerNamed(testCmd, []string{"php", "phpunit", "phpdbg", "composer", "pest", "paratest", "codecept"}) {
+	if coverageRunnerNamed(testCmd, coverageClaims("php")) {
 		return true
 	}
 	if len(testCmd) == 0 {

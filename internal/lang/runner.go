@@ -128,7 +128,14 @@ var runners = []Runner{
 		Note: "listing and one-test runs verified on jest 30.5",
 	},
 	{Name: "mocha", Languages: []string{"javascript", "typescript"}, Words: []string{"mocha"}, FailFast: []string{"--bail"}},
-	{Name: "vitest", Languages: []string{"javascript", "typescript"}, Words: []string{"vitest"}},
+	{
+		// Detect adds vitest's entry script to the word; a shell-wrapped
+		// script is still read through Words.
+		Name: "vitest", Languages: []string{"javascript", "typescript"}, Words: []string{"vitest"},
+		Detect:  func(argv []string) bool { return vitestIndex(argv) >= 0 },
+		ListCmd: vitestListCmd, ParseList: vitestParseList, SingleCmd: vitestSingleCmd, ResolveByList: true, Coruns: fullNameColl,
+		Note: "listing and one-test runs verified on vitest 3.2; vitest 1, 2 and 4 were not run",
+	},
 	{
 		Name: "node --test", Languages: []string{"javascript", "typescript"}, Default: true,
 		Detect: func(argv []string) bool {

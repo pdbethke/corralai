@@ -27,7 +27,8 @@ import verdictImg from '../assets/ui-cockpit/signed-verdict.png';
         loading="lazy"
       />
       <figcaption>
-        The cockpit replaying the <code>passwd-gappy</code> audit. On the canvas,
+        The cockpit replaying a password-validator audit (a maintainer run whose
+        tape is not in the gallery). On the canvas,
         the decorrelated herd&nbsp;— a <strong>mutant-generator</strong>, a <strong>test-writer</strong>, and a separate <strong>test-critic</strong>&nbsp;— not a builder in sight. One scrub bar drives the whole thing.
       </figcaption>
     </figure>
@@ -64,16 +65,14 @@ import verdictImg from '../assets/ui-cockpit/signed-verdict.png';
   </div>
 
   <p>
-    Nothing about a finished audit is thrown away: every fault the herd
-    planted, every test run against it, every kill and every survivor, each
-    command an agent actually ran, and the event log itself survive
-    indefinitely. A signed verdict — certified or needs-review — sits at the
-    end of a record you can list, open, and re-run. Replay is read-only: it
-    reconstructs the whole audit from durable rows and plays it back on the
-    same corral canvas, at up to 16×. And <strong>one scrub bar moves the
-    whole cockpit</strong> — canvas, plan, files, and console all snap to the
-    same instant in the run, so pausing live traffic and stepping through
-    history is a single control, not four.
+    Pass <code>--record run.json</code> to <code>certify --local</code> and
+    the audit is kept as a tape: the pool's reasoning beats, the task
+    lifecycle, the findings, and the verdict at the end. Without <code>--record</code> there is no
+    tape; the verdict and the ledger entry are kept either way. Replay is
+    read-only: it plays the tape back on the same corral canvas, at up to
+    16×. And <strong>one scrub bar moves the whole cockpit</strong> —
+    canvas, plan, files, and console all snap to the same instant in the
+    run, so stepping through it is a single control, not four.
   </p>
   <p>
     Then go deeper than the timeline: <strong>click any task</strong> — a row
@@ -96,7 +95,7 @@ import verdictImg from '../assets/ui-cockpit/signed-verdict.png';
     debugger for your tests, not a demo reel.
   </p>
   <p class="callout">This hero IS that player — the exact same code, replaying a real audit.</p>
-  <p><a href="/recordings/">More recordings → the same pick’em file audited twice (green branch vs main), the cross-vendor pool-fence tape, a Go stdlib audit, a Ruby and a TypeScript library — every one a real audit, all replayable.</a></p>
+  <p><a href="/recordings/">More recordings → the same pick’em file audited twice (green branch vs main), the cross-vendor pool-fence tape, google/uuid in Go, a Ruby and a TypeScript library — every one a real audit, all replayable.</a></p>
 </section>
 
 <style>

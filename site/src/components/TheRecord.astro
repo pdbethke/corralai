@@ -12,16 +12,18 @@
     A CI runner is a throwaway machine: it boots, it measures your code, it is
     destroyed. The usual way to keep what it learned is to stand up a database —
     a server, a schema, credentials in CI, a bill — to hold what is really just
-    an append-only list of small facts. Corral doesn't stand anything up. <strong>Every verdict is committed to an orphan git branch in your own
-    repository</strong>, <code>corral/ledger</code>. It shares no history with <code>main</code>, never appears in your diffs, and lives somewhere every
-    runner already has credentials for. GitHub stops being just CI and becomes
+    an append-only list of small facts. Corral doesn't stand anything up. <strong>Every verdict is an entry in a
+    ledger directory in your own repository</strong> (<code>.corral/ledger</code> by default). Make that directory a worktree of an orphan branch, <code>corral/ledger</code>, and
+    the record shares no history with <code>main</code>, never appears in your diffs, and lives somewhere every
+    runner already has credentials for. In CI, the Action's <code>ledger</code> input names the directory, and your workflow checks the branch out before
+    the audit step and commits it back after (<a href="/docs/github-action/">the recipe</a>). GitHub stops being just CI and becomes
     the record.
   </p>
 
   <div class="chain">
     <span class="link"><strong>GitHub Action</strong><em>writes the entry</em></span>
     <span class="arrow" aria-hidden="true">→</span>
-    <span class="link"><strong>corral/ledger</strong><em>signed, hash-linked</em></span>
+    <span class="link"><strong>corral/ledger</strong><em>hash-linked, signed when keyed</em></span>
     <span class="arrow" aria-hidden="true">→</span>
     <span class="link"><strong>DuckDB</strong><em>reads it as tables</em></span>
     <span class="arrow" aria-hidden="true">→</span>
@@ -32,20 +34,22 @@
 
   <div class="tech-grid">
     <div class="tech">
-      <h3>DuckDB reads the branch in place</h3>
+      <h3>DuckDB reads the entries as they are</h3>
       <p>
-        Entries are gzipped JSON, and DuckDB reads JSON over HTTPS — so the
-        record is in an analytical engine from the first entry, with nothing
-        installed and nothing running. No clone, no server, no schema to adopt.
-        Point any DuckDB at the raw files:
+        Entries are gzipped JSON, so the record is in an analytical engine from
+        the first entry: no server, no schema to adopt. Copy the branch's files
+        out without touching your checkout, and point any DuckDB at them:
       </p>
-      <pre class="cmd"><code>SELECT kind, count(*) AS entries
-FROM read_json_auto('scans/*.json.gz')
+      <pre class="cmd"><code>git fetch origin corral/ledger
+mkdir -p /tmp/ledger && git archive origin/corral/ledger | tar -x -C /tmp/ledger
+
+-- then, in duckdb:
+SELECT coalesce(kind, 'scan') AS kind, count(*) AS entries
+FROM read_json_auto('/tmp/ledger/scans/*.json.gz')
 GROUP BY 1 ORDER BY 2 DESC;</code></pre>
       <p>
-        The same query runs against the URLs straight off the branch, from any
-        DuckDB client — the CLI, Python, R, or the WebAssembly build in a
-        browser tab. Then the questions a single run can never answer are one <code>GROUP BY</code> each: which files have been weak across every
+        An audit's entry has no <code>kind</code> field, hence the <code>coalesce</code>. Any DuckDB client runs it: the CLI, Python, R.
+        Then the questions a single run can never answer are one <code>GROUP BY</code> each: which files have been weak across every
         scan, which model catches bugs in which language, what an audit costs
         per file, whose review claims held once execution checked them.
       </p>
@@ -61,8 +65,7 @@ GROUP BY 1 ORDER BY 2 DESC;</code></pre>
         uploads the signed statement to <strong>Sigstore's Rekor</strong>, a
         public append-only log run by people with no stake in the audit, and
         prints the receipt, and records it on the ledger entry. The flask audit on
-        corral's own branch carries <a href="https://rekor.sigstore.dev/api/v1/log/entries?logIndex=2759598612" rel="noopener noreferrer">index 2759598612</a>
-        — read it off the entry, fetch it from Sigstore, and check it matches,
+        corral's own branch carries <a href="https://rekor.sigstore.dev/api/v1/log/entries?logIndex=2759598612" rel="noopener noreferrer">index 2759598612</a> — read it off the entry, fetch it from Sigstore, and check it matches,
         without asking us for anything.
       </p>
       <p class="warn">
@@ -92,9 +95,12 @@ GROUP BY 1 ORDER BY 2 DESC;</code></pre>
     <div class="tech">
       <h3>Nobody can quietly edit it</h3>
       <p>
-        Each entry carries the hash of the one before it and is signed with your
-        certify key. Edit an entry and its signature breaks; remove one and the
-        next entry's link breaks. <code>corral ledger verify</code> walks the
+        Each entry carries the hash of the one before it, and is signed with your
+        certify key when one is configured. Edit a signed entry and its
+        signature breaks; edit any entry and its hash no longer matches; remove
+        one and the next entry's link breaks. On a runner with no key, the
+        recipe attests the entry file itself with GitHub's keyless attestation
+        instead. <code>corral ledger verify</code> walks the
         chain from a clean checkout and names which entry is wrong — a stranger
         checks the record against its own signatures, not against you. Nothing
         is edited in place: a wrong entry is retracted by a later entry that
@@ -132,7 +138,7 @@ GROUP BY 1 ORDER BY 2 DESC;</code></pre>
   <p class="foot">
     Corral's own record is public at <a href="https://github.com/pdbethke/corralai/tree/corral/ledger" rel="noopener noreferrer"><code>corral/ledger</code></a>
     — audits, cold reviews, and the human rulings on them, in a branch you can
-    query without cloning.
+    read without disturbing your own checkout.
   </p>
 </section>
 

@@ -45,6 +45,10 @@ type Runner struct {
 	// (ResolveListedTest) before SingleCmd, because the runner's ids carry a
 	// prefix the source does not (Rust's module path).
 	ResolveByList bool
+	// Coruns reports whether running id alone would also run other: the
+	// runner selects by a pattern a second listed test can match too. nil
+	// means its ids are exact. ResolveForRun refuses an id that coruns.
+	Coruns func(id, other string) bool
 	// FirstFailure names the first failing test in the runner's output (a
 	// label, never a grade); Flaky names tests that passed only on a retry.
 	FirstFailure func(output []byte) string
@@ -240,6 +244,26 @@ func SingleTestCmd(p Plugin, argv []string, testPath, id string) ([]string, bool
 func ResolvesByList(p Plugin, argv []string) bool {
 	r, ok := RunnerFor(p, argv)
 	return ok && r.ResolveByList
+}
+
+// ResolveForRun maps a critic's test name onto the one listed id
+// SingleTestCmd may run: ResolveListedTest's answer, refused when the
+// runner's selection for that id would also run another listed test. What a
+// run killed is credited to the test it names, so a run that also ran a
+// second test cannot be credited at all.
+func ResolveForRun(p Plugin, argv []string, listed []string, name string) (string, bool) {
+	id, ok := ResolveListedTest(listed, name)
+	if !ok {
+		return "", false
+	}
+	if r, found := RunnerFor(p, argv); found && r.Coruns != nil {
+		for _, other := range listed {
+			if r.Coruns(id, other) {
+				return "", false
+			}
+		}
+	}
+	return id, true
 }
 
 // RunDisclosures is what the scan line says about running testCmd in

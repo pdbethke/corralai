@@ -75,3 +75,59 @@ func TestUnittestGetsNoPytestDeselect(t *testing.T) {
 		t.Error("a pytest command lost --deselect")
 	}
 }
+
+// withRunners swaps the runner table for one test, so a dispatcher rule can
+// be pinned on a row the real table does not have yet.
+func withRunners(t *testing.T, rows []Runner) {
+	t.Helper()
+	saved := runners
+	runners = rows
+	t.Cleanup(func() { runners = saved })
+}
+
+// A runner that selects one test by a pattern over its full name also runs
+// every other listed test with that full name, so ResolveForRun leaves such
+// an id unchecked — the same rule ResolveListedTest applies to a name listed
+// twice. A row without Coruns resolves exactly as ResolveListedTest does.
+func TestResolveForRunRefusesACollidingId(t *testing.T) {
+	js, _ := ByName("javascript")
+	argv := []string{"npx", "fakerunner"}
+	listed := []string{"Calc::adds", "Calc adds", "top level", "Calc::neg::adds"}
+
+	withRunners(t, []Runner{{Name: "fake", Languages: []string{"javascript"}, Default: true, Words: []string{"fakerunner"}, Coruns: fullNameColl}})
+	if id, ok := ResolveForRun(js, argv, listed, "Calc::adds"); ok {
+		t.Errorf("Calc::adds resolved to %q; its run would also run the top-level test named \"Calc adds\"", id)
+	}
+	if id, ok := ResolveForRun(js, argv, listed, "top level"); !ok || id != "top level" {
+		t.Errorf("top level = %q, %v; want it resolved", id, ok)
+	}
+	if _, ok := ResolveForRun(js, argv, listed, "adds"); ok {
+		t.Error("adds resolved; it names two listed tests")
+	}
+
+	withRunners(t, []Runner{{Name: "exact", Languages: []string{"javascript"}, Default: true, Words: []string{"fakerunner"}}})
+	if id, ok := ResolveForRun(js, argv, listed, "Calc::adds"); !ok || id != "Calc::adds" {
+		t.Errorf("without Coruns, Calc::adds = %q, %v; want ResolveListedTest's answer", id, ok)
+	}
+}
+
+func TestRunnerSelectHelpers(t *testing.T) {
+	if got := fullName("Calc::neg::adds"); got != "Calc neg adds" {
+		t.Errorf("fullName = %q", got)
+	}
+	if got := jsRegexQuote(`adds (a+b) $1.5 [x]|{y}/\z^`); got != `adds \(a\+b\) \$1\.5 \[x\]\|\{y\}\/\\z\^` {
+		t.Errorf("jsRegexQuote = %q", got)
+	}
+	if !hasFlag([]string{"npx", "jest", "--testNamePattern=x"}, "-t", "--testNamePattern") || !hasFlag([]string{"jest", "-t", "x"}, "-t") {
+		t.Error("hasFlag missed a filter")
+	}
+	if hasFlag([]string{"jest", "--testNamePatternX"}, "--testNamePattern") {
+		t.Error("hasFlag matched a longer flag")
+	}
+	if narrowable([]string{"sh", "-c", "npx jest"}) || narrowable(nil) || narrowable([]string{"jest", "-t", "x"}, "-t") || !narrowable([]string{"npx", "jest"}, "-t") {
+		t.Error("narrowable wrong")
+	}
+	if wordIndex([]string{"npx", "./node_modules/.bin/vitest", "run"}, "vitest") != 1 || wordIndex([]string{"go", "test"}, "vitest") != -1 {
+		t.Error("wordIndex wrong")
+	}
+}

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -15,7 +16,7 @@ import (
 // testdata/runner-golden.json was captured from the per-plugin methods the
 // runner table replaced (commit 0eaba5b9, before any of them moved) and is
 // never regenerated: it is the record of what corral did, and the table is
-// held to it.
+// held to it — every answer the plugins gave, exactly (goldenDiffs).
 
 // goldenCommands is every command shape the runner table must answer for
 // exactly as the per-plugin methods did: each plugin's stock command, the
@@ -170,15 +171,47 @@ func TestRunnerTableAnswersAsThePluginsDid(t *testing.T) {
 	if err := json.Unmarshal(b, &want); err != nil {
 		t.Fatal(err)
 	}
-	got := captureNew(t)
+	for _, d := range goldenDiffs(want, captureNew(t)) {
+		t.Error(d)
+	}
+}
+
+// noAnswer is how the golden renders "the plugins had no answer here": a
+// refused command, an empty list, an empty failure name.
+var noAnswer = map[string]bool{"not-ok": true, "[]": true, `""`: true}
+
+// goldenDiffs is every way got departs from the plugins' answers. The table
+// may ADD an answer where the plugins had none — that is each later phase
+// filling a capability, and it cannot change what any run did before — but
+// never change an answer, and never answer a question the golden never asked.
+func goldenDiffs(want, got map[string]string) []string {
+	var diffs []string
 	for k, w := range want {
-		if got[k] != w {
-			t.Errorf("%s: table %s, golden %s", k, got[k], w)
+		if g := got[k]; g != w && !noAnswer[w] {
+			diffs = append(diffs, fmt.Sprintf("%s: table %s, golden %s", k, g, w))
 		}
 	}
-	for k := range got {
+	for k, g := range got {
 		if _, ok := want[k]; !ok {
-			t.Errorf("%s: answered by the table (%s) but not by the plugins", k, got[k])
+			diffs = append(diffs, fmt.Sprintf("%s: answered by the table (%s) but not by the plugins", k, g))
 		}
+	}
+	slices.Sort(diffs)
+	return diffs
+}
+
+// The add-only rule must still catch a changed answer: the negative control
+// for goldenDiffs, so relaxing it for new capabilities cannot silently relax
+// it for old ones.
+func TestGoldenAddOnlyRuleStillCatchesAChange(t *testing.T) {
+	want := map[string]string{"a": `"x"`, "b": "not-ok", "c": "[]"}
+	if d := goldenDiffs(want, map[string]string{"a": `"x"`, "b": `["new"]`, "c": `["new"]`}); len(d) != 0 {
+		t.Errorf("an answer added where the plugins had none was refused: %v", d)
+	}
+	if d := goldenDiffs(want, map[string]string{"a": `"y"`, "b": "not-ok", "c": "[]"}); len(d) != 1 {
+		t.Errorf("a changed answer was not caught: %v", d)
+	}
+	if d := goldenDiffs(want, map[string]string{"a": `"x"`, "b": "not-ok", "c": "[]", "d": `"z"`}); len(d) != 1 {
+		t.Errorf("a key the plugins never answered was not caught: %v", d)
 	}
 }

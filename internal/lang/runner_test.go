@@ -72,10 +72,10 @@ func TestRunnerForPicksTheMostSpecificRow(t *testing.T) {
 // table gives deselection to the pytest row only.
 func TestUnittestGetsNoPytestDeselect(t *testing.T) {
 	py, _ := ByName("python")
-	if _, _, ok := DeselectorFor(py, Cmd([]string{"python3", "-m", "unittest", "discover"})); ok {
+	if _, ok := DeselectorFor(py, Cmd([]string{"python3", "-m", "unittest", "discover"})); ok {
 		t.Error("a unittest command was offered pytest's --deselect")
 	}
-	if _, _, ok := DeselectorFor(py, Cmd([]string{"python3", "-m", "pytest", "-q"})); !ok {
+	if _, ok := DeselectorFor(py, Cmd([]string{"python3", "-m", "pytest", "-q"})); !ok {
 		t.Error("a pytest command lost --deselect")
 	}
 }

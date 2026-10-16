@@ -95,7 +95,7 @@ func render(site bool) string {
 		}
 		fmt.Fprintf(&b, "| %s | `%s` | %s | %s | %s | %s | %s | %s | %s | %s |\n", name, r.ID, strings.Join(r.Languages, ", "), ff,
 			mark(r.ListCmd != nil && r.ParseList != nil), mark(r.SingleCmd != nil), mark(r.FirstFailure != nil),
-			mark(r.FailedTests != nil && r.DeselectArgs != nil), mark(r.Flaky != nil), r.Note)
+			mark(r.FailedTests != nil && r.DeselectCmd != nil), mark(r.Flaky != nil), r.Note)
 	}
 	return b.String()
 }

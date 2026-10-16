@@ -144,10 +144,16 @@ func captureNew(t *testing.T) map[string]string {
 					}
 				}
 			}
-			if failed, deselect, ok := DeselectorFor(p, Cmd(p.TestCmd())); ok {
+			if failed, ok := DeselectorFor(p, Cmd(p.TestCmd())); ok {
 				f := failed(o)
 				got[n+"|failedtests|"+name] = show(f)
-				got[n+"|deselect|"+name] = show(deselect(f))
+				// The plugins answered the arguments appended to the stock
+				// command; DeselectCmd answers the whole command.
+				var args []string
+				if cmd, ok := DeselectCmd(p, Cmd(p.TestCmd()), f); ok {
+					args = cmd[len(p.TestCmd()):]
+				}
+				got[n+"|deselect|"+name] = show(args)
 			}
 			for c, vs := range answers {
 				if len(vs) != 1 {

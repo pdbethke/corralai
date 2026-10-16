@@ -56,10 +56,13 @@ type Runner struct {
 	// label, never a grade); Flaky names tests that passed only on a retry.
 	FirstFailure func(output []byte) string
 	Flaky        func(output []byte) []string
-	// FailedTests and DeselectArgs let a partly failing authored test be
-	// salvaged: the failing ids, rendered as arguments that skip them.
-	FailedTests  func(output string) []string
-	DeselectArgs func(ids []string) []string
+	// FailedTests and DeselectCmd let a partly failing authored test be
+	// salvaged: the failing ids, and argv rerun without them. DeselectCmd is
+	// shaped like SingleCmd, and refuses as it does (a name filter already in
+	// argv, a launcher that takes no arguments): a skip handed to the wrong
+	// program, or ORed with the operator's own filter, runs a set nobody chose.
+	FailedTests func(output string) []string
+	DeselectCmd func(argv, ids []string) ([]string, bool)
 	// Disclose is what the scan line says about running this runner in
 	// repoDir; PreflightBin is the binary that must be on PATH.
 	Disclose     func(repoDir string, argv []string) []string
@@ -108,7 +111,7 @@ var runners = []Runner{
 		Name: "pytest", ID: "pytest", Languages: []string{"python"}, Default: true, Words: []string{"pytest"},
 		FailFast: []string{"-x"},
 		ListCmd:  pyListCmd, ParseList: pyParseTestList, SingleCmd: pySingleCmd,
-		FirstFailure: pyFirstFailure, FailedTests: pyFailedTests, DeselectArgs: pyDeselectArgs,
+		FirstFailure: pyFirstFailure, FailedTests: pyFailedTests, DeselectCmd: pyDeselectCmd,
 	},
 	{
 		// No salvage: unittest exits 2 on pytest's --deselect, so a rerun
@@ -391,9 +394,9 @@ type flakyRowParser struct{ rowParser }
 
 func (p flakyRowParser) FlakyTests(output []byte) []string { return p.r.Flaky(output) }
 
-// DeselectorFor is argv's runner's salvage pair, ok=false when it has none:
-// the runner's failing ids, and the arguments that deselect them, for
-// salvaging a partially broken authored test. The compliant check is
+// DeselectorFor is argv's runner's failure list for salvage, ok=false when
+// the runner cannot salvage (DeselectCmd builds the rerun without them),
+// for salvaging a partially broken authored test. The compliant check is
 // all-or-nothing per FILE: if any test in the authored file fails against the
 // unmutated code, the whole file is discarded and nothing is scored.
 //
@@ -410,12 +413,23 @@ func (p flakyRowParser) FlakyTests(output []byte) []string { return p.r.Flaky(ou
 // from precisely, and from unittest, which exits 2 on pytest's --deselect. A wrong selector would
 // deselect the wrong test and silently narrow the exam, which is worse than
 // not salvaging: the run would look healthier while proving less.
-func DeselectorFor(p Plugin, inv Invocation) (failed func(string) []string, deselect func([]string) []string, ok bool) {
+func DeselectorFor(p Plugin, inv Invocation) (failed func(string) []string, ok bool) {
 	r, found := RunnerFor(p, inv)
-	if !found || r.FailedTests == nil || r.DeselectArgs == nil {
-		return nil, nil, false
+	if !found || r.FailedTests == nil || r.DeselectCmd == nil {
+		return nil, false
 	}
-	return r.FailedTests, r.DeselectArgs, true
+	return r.FailedTests, true
+}
+
+// DeselectCmd is argv rerun without the tests ids, from its runner, shaped
+// as SingleTestCmd is; ok=false when there is nothing to skip or the runner
+// cannot skip them through this command.
+func DeselectCmd(p Plugin, inv Invocation, ids []string) ([]string, bool) {
+	r, ok := RunnerFor(p, inv)
+	if !ok || r.DeselectCmd == nil || len(ids) == 0 {
+		return nil, false
+	}
+	return inv.shape(p, func(w []string) ([]string, bool) { return r.DeselectCmd(w, ids) })
 }
 
 // Runners returns the runner table in its order, for readers outside the

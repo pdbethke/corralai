@@ -114,3 +114,57 @@ func TestTick_PoolAdequacy_SalvageRejectedWhenItProvesNothing(t *testing.T) {
 		t.Error("PoolTestUnsound = false, want true — with no salvage and no successful repair, the honest diagnosis still stands")
 	}
 }
+
+// The salvage rerun is lang.DeselectCmd's argv, quoted for the jail's shell:
+// a pytest id holding shell syntax (a parametrized case, `[x;y]`) stays one argument, where
+// a space-joined string handed the `;` to the shell as a command separator.
+func TestSalvageCommandIsQuotedArgv(t *testing.T) {
+	survivors := []adequacy.Mutant{{ID: "m1", Replace: "c1"}, {ID: "m2", Replace: "c2"}}
+	var salvageCmd string
+	scorer := &fakeScorer{
+		devKillRate:      0.9,
+		devSurvivors:     survivors,
+		compliantFailure: "FAILED tests/test_x_corral.py::test_p[x;y] - boom\n1 failed, 3 passed",
+		poolReportFn: func(ctx context.Context, codePath, code, test string, mutants []adequacy.Mutant, testCmd string) (adequacy.Report, error) {
+			if strings.Contains(testCmd, "--deselect") {
+				salvageCmd = testCmd
+				return adequacy.Report{CompliantPass: true, CanaryKilled: true, Total: 2, Killed: []string{"m1"}, Survived: []string{"m2"}}, nil
+			}
+			return adequacy.Report{CompliantPass: false, Total: 0}, nil
+		},
+	}
+	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Replace: "c0"}, survivors[0], survivors[1]}}
+	d := newTestDriverWithSpec(t, 2, scorer, validator, 0.1, pythonSalvageSpec())
+	completeRunTolerantOfWriterRetries(t, d, 2, "no findings")
+
+	want := adequacy.ShellJoin([]string{"python3", "-m", "pytest", "-q", "--deselect", "tests/test_x_corral.py::test_p[x;y]"})
+	if salvageCmd != want {
+		t.Errorf("salvage ran %q, want %q", salvageCmd, want)
+	}
+}
+
+// A command the runner cannot append a skip to — here shell-wrapped, where
+// an appended argument goes to sh, not pytest — gets no salvage attempt.
+func TestNoSalvageWhenTheCommandTakesNoSkip(t *testing.T) {
+	survivors := []adequacy.Mutant{{ID: "m1", Replace: "c1"}, {ID: "m2", Replace: "c2"}}
+	sawDeselect := false
+	scorer := &fakeScorer{
+		devKillRate:      0.9,
+		devSurvivors:     survivors,
+		compliantFailure: "FAILED tests/test_x_corral.py::test_bad - boom",
+		poolReportFn: func(ctx context.Context, codePath, code, test string, mutants []adequacy.Mutant, testCmd string) (adequacy.Report, error) {
+			if strings.Contains(testCmd, "--deselect") {
+				sawDeselect = true
+			}
+			return adequacy.Report{CompliantPass: false, Total: 0}, nil
+		},
+	}
+	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Replace: "c0"}, survivors[0], survivors[1]}}
+	rs := pythonSalvageSpec()
+	rs.TestCmd = "sh -c 'python3 -m pytest -q'"
+	d := newTestDriverWithSpec(t, 2, scorer, validator, 0.1, rs)
+	completeRunTolerantOfWriterRetries(t, d, 2, "no findings")
+	if sawDeselect {
+		t.Error("a shell-wrapped command was given a --deselect")
+	}
+}

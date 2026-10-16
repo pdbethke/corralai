@@ -3,6 +3,7 @@
 package lang
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
@@ -23,7 +24,7 @@ import (
 // model at all — it is arithmetic on the runner's own output.
 func TestPythonFailedTests(t *testing.T) {
 	p, _ := ByName("python")
-	failedTests, _, ok := DeselectorFor(p, Cmd(p.TestCmd()))
+	failedTests, ok := DeselectorFor(p, Cmd(p.TestCmd()))
 	if !ok {
 		t.Fatal("pytest must offer salvage — pytest names its failures precisely and supports --deselect")
 	}
@@ -62,7 +63,7 @@ FAILED tests/test_cli_corral.py::test_set_app_option - assert 2 == 0
 // passing suite and quietly skip real tests.
 func TestPythonFailedTests_NoFailuresNoSelectors(t *testing.T) {
 	p, _ := ByName("python")
-	failedTests, _, _ := DeselectorFor(p, Cmd(p.TestCmd()))
+	failedTests, _ := DeselectorFor(p, Cmd(p.TestCmd()))
 	for _, out := range []string{"", "13 passed in 0.06s", "collected 0 items"} {
 		if got := failedTests(out); len(got) != 0 {
 			t.Errorf("FailedTests(%q) = %v, want none", out, got)
@@ -70,40 +71,46 @@ func TestPythonFailedTests_NoFailuresNoSelectors(t *testing.T) {
 	}
 }
 
-// TestPythonDeselectArgs pins the exact argv pytest needs, one flag per
-// selector — pytest does not accept a comma-joined list.
-func TestPythonDeselectArgs(t *testing.T) {
+// TestPythonDeselectCmd pins the exact argv pytest needs, one flag per
+// selector — pytest does not accept a comma-joined list — appended to the
+// operator's command.
+func TestPythonDeselectCmd(t *testing.T) {
 	p, _ := ByName("python")
-	_, deselectArgs, _ := DeselectorFor(p, Cmd(p.TestCmd()))
-
-	got := deselectArgs([]string{"a.py::t1", "a.py::t2"})
-	want := []string{"--deselect", "a.py::t1", "--deselect", "a.py::t2"}
-	if len(got) != len(want) {
-		t.Fatalf("DeselectArgs = %v, want %v", got, want)
+	inv := Cmd([]string{"python3", "-m", "pytest", "-q"})
+	got, ok := DeselectCmd(p, inv, []string{"a.py::t1", "a.py::t2"})
+	want := []string{"python3", "-m", "pytest", "-q", "--deselect", "a.py::t1", "--deselect", "a.py::t2"}
+	if !ok || !slices.Equal(got, want) {
+		t.Fatalf("DeselectCmd = %q, %v, want %q", got, ok, want)
 	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("DeselectArgs = %v, want %v", got, want)
-		}
-	}
-	if len(deselectArgs(nil)) != 0 {
-		t.Error("DeselectArgs(nil) must be empty — never emit a bare --deselect with no argument")
+	if got, ok := DeselectCmd(p, inv, nil); ok {
+		t.Errorf("DeselectCmd(nil) = %q — nothing to skip is no salvage, never a bare --deselect", got)
 	}
 }
 
-// TestNonPythonPluginsDoNotClaimDeselection pins the fail-closed default: a
-// language whose runner corral cannot parse failures from must NOT implement
-// the interface, so the salvage path is skipped rather than guessed at. A
-// wrong selector would deselect the wrong test and silently narrow the exam.
-func TestNonPythonPluginsDoNotClaimDeselection(t *testing.T) {
-	for _, name := range []string{"go", "ruby", "javascript", "typescript"} {
-		p, ok := ByName(name)
-		if !ok {
-			t.Fatalf("plugin %q not registered", name)
-		}
-		if _, _, claims := DeselectorFor(p, Cmd(p.TestCmd())); claims {
-			t.Errorf("%s offers salvage — only give a runner row FailedTests and DeselectArgs with a verified failure-line parser and a real deselect flag for that runner", name)
-		}
+// Salvage is shaped like a one-test run (inv.shape): through a package
+// script the skip arguments go after the launcher's separator, a script
+// that is not one command gets none, and neither does a shell-wrapped one.
+func TestSalvageGoesThroughTheLauncher(t *testing.T) {
+	withRunners(t, []Runner{{
+		Name: "fake", ID: "fake", Languages: []string{"javascript"}, Default: true, Words: []string{"jest"},
+		FailedTests: func(string) []string { return nil },
+		DeselectCmd: func(argv, ids []string) ([]string, bool) {
+			return append(slices.Clone(argv), append([]string{"--skip"}, ids...)...), true
+		},
+	}})
+	js, _ := ByName("javascript")
+	npm := Invocation{Argv: []string{"npm", "test"}, Script: []string{"jest"}, Pass: "--", Narrow: true}
+	if got, ok := DeselectCmd(js, npm, []string{"a"}); !ok || !slices.Equal(got, []string{"npm", "test", "--", "--skip", "a"}) {
+		t.Errorf("through npm test = %q, %v", got, ok)
+	}
+	compound := npm
+	compound.Narrow = false
+	if got, ok := DeselectCmd(js, compound, []string{"a"}); ok {
+		t.Errorf("a compound script got %q", got)
+	}
+	unread := Invocation{Argv: []string{"npm", "test"}, Script: []string{}}
+	if got, ok := DeselectCmd(js, unread, []string{"a"}); ok {
+		t.Errorf("an unread script got %q", got)
 	}
 }
 

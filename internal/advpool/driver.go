@@ -2049,8 +2049,8 @@ func killedFrom(rep adequacy.Report, mutants []adequacy.Mutant) []adequacy.Mutan
 // a run's one chance at salvage to record a zero, displacing a retry that
 // might have done better.
 //
-// Requires the test command's runner to name its failures and take a
-// deselect argument (lang.DeselectorFor), and the
+// Requires the test command's runner to name its failures (lang.DeselectorFor)
+// and to rerun without them through this command (lang.DeselectCmd), and the
 // Scorer to be able to report the failure output. Anything missing means no
 // salvage, never a guess: a wrong selector would deselect the wrong test and
 // silently narrow the exam, making the run look healthier while proving less.
@@ -2059,7 +2059,7 @@ func killedFrom(rep adequacy.Report, mutants []adequacy.Mutant) []adequacy.Mutan
 // deselect is arithmetic over the runner's output either way, and the scope
 // is the caller's to state rather than this function's to assume.
 func (d *Driver) salvageByDeselect(ctx context.Context, run *runState, writerTest string, rep adequacy.Report, survivors []adequacy.Mutant) (proven int, ids []string, deselected int, ok bool) {
-	failedTests, deselectArgs, canDeselect := golang.DeselectorFor(langFor(run.rs), run.rs.inv())
+	failedTests, canDeselect := golang.DeselectorFor(langFor(run.rs), run.rs.inv())
 	if !canDeselect {
 		return 0, nil, 0, false
 	}
@@ -2068,12 +2068,12 @@ func (d *Driver) salvageByDeselect(ctx context.Context, run *runState, writerTes
 	if len(failing) == 0 {
 		return 0, nil, 0, false
 	}
-	args := deselectArgs(failing)
-	if len(args) == 0 {
+	argv, ok := golang.DeselectCmd(langFor(run.rs), run.rs.inv(), failing)
+	if !ok {
 		return 0, nil, 0, false
 	}
 
-	cmd := strings.TrimSpace(run.rs.TestCmd + " " + strings.Join(args, " "))
+	cmd := adequacy.ShellJoin(argv)
 	salvaged, serr := scoreAuthored(ctx, d.Scorer, run.rs.CodePath, run.rs.Code, writerTest, survivors, cmd)
 	if serr != nil {
 		// A failed salvage attempt is not a failed run: fall back to the

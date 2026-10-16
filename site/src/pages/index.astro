@@ -7,17 +7,14 @@ import HowItWorks from '../components/HowItWorks.astro';
 import TheRecord from '../components/TheRecord.astro';
 import TheVideos from '../components/TheVideos.astro';
 import ProofBand from '../components/ProofBand.astro';
-import LearningLoop from '../components/LearningLoop.astro';
-import KnowledgeCorpus from '../components/KnowledgeCorpus.astro';
 import WatchItBack from '../components/WatchItBack.astro';
-import TeamsInfra from '../components/TeamsInfra.astro';
 import Quickstart from '../components/Quickstart.astro';
 import SiteFooter from '../components/SiteFooter.astro';
 import Header from '../components/Header.astro';
 import FieldNotesRail from '../components/FieldNotesRail.astro';
 
 const title = 'Corral — the bugs your tests miss, and the tests that catch them';
-const description = 'Corral plants bugs in your code and runs your own test suite against each one. For every bug that slips through, it writes a test and runs it, keeping only tests that fail on the bug and pass on your real code: the tests your suite is missing, proven by execution. Every verdict is a signed entry in your repository; run it as a GitHub Action.';
+const description = 'Corral plants bugs in your code and runs your own test suite against each one. For every bug that slips through, it writes a test and runs it, keeping only tests that fail on the bug and pass on your real code: the tests your suite is missing, proven by execution. Every verdict is an entry in a hash-linked ledger kept in your repository, signed when a certify key is configured; run it as a GitHub Action.';
 const ogTitle = 'Your tests pass. Corral finds the bugs they miss.';
 const url = 'https://corralai.dev/';
 ---
@@ -59,9 +56,6 @@ const url = 'https://corralai.dev/';
   <HowItWorks />
   <ProofBand />
   <Quickstart />
-  <LearningLoop />
-  <KnowledgeCorpus />
-  <TeamsInfra />
   <WatchItBack />
   </div>
   </div>

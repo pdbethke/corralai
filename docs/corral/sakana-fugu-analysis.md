@@ -1,5 +1,16 @@
 # Sakana Fugu & Corralai Architectural Analysis
 
+> **Historical, builder-era analysis (June 2026). It does not describe corral as it ships.**
+> It was written when corral was a coordination daemon with builder roles. Today corral is an
+> auditing engine that never builds, and the brain daemon is optional and frozen
+> ([brain.md](brain.md)). Where this page describes corral, read it with these corrections:
+> the audit's roles are mutant-generator, test-writer and test-critic (there is no
+> mutant-scorer; scoring is deterministic, by execution); survivors are scored by running the
+> tests, never by the critic, which only advises; the one enforced decorrelation rule is
+> critic ≠ writer (`CheckDecorrelation`); an audit's prompts are built from the goal, the code
+> and its symbols, never from shared memory; there is no "LLM Lead" and no builder; and seats
+> are named by the operator, so no audit re-staffs its own seats.
+
 This document records the architectural comparison and analysis of the **Sakana Fugu Technical Report** (Sakana AI, June 2026) and its implications/opportunities for **Corralai** — an audit-by-execution gate for software change, coordinated by a role-differentiated pool of adversarial agents (generator, critic, decorrelated verifier roles).
 
 ---

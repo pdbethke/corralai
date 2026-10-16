@@ -97,6 +97,20 @@ const pool = poolVerdict
 // in the suite); everything shown is read from the tape here, never typed in.
 // The pair was also proven by hand on 2026-10-07: the test passes on the real
 // certify.go and fails with the mutant applied.
+// "cross-vendor" is said only when the tape's own seats span vendors: a
+// one-vendor herd satisfies decorrelation (critic != writer) and is a
+// different, weaker claim, so the caption must not borrow the stronger one.
+function vendorOf(model: string | undefined): string {
+  const m = (model || '').toLowerCase();
+  if (m.startsWith('gemini')) return 'google';
+  if (m.startsWith('claude')) return 'anthropic';
+  if (m.startsWith('gpt') || m.startsWith('codex') || /^o\d/.test(m)) return 'openai';
+  return m.split(/[-:/]/)[0];
+}
+const heroVendors = pool
+  ? new Set([pool.planter, pool.writer, pool.critic].filter(Boolean).map(vendorOf))
+  : new Set();
+const crossVendor = heroVendors.size > 1;
 const exhibitMeta = meta.hero_exhibit;
 function exhibitFor(id: string) {
   const [shard, mut] = id.split('/');
@@ -164,13 +178,13 @@ const exhibit = exhibitMeta && pool ? exhibitFor(exhibitMeta.survivor) : null;
     <h2>Why: everyone is building build harnesses. Corral is the one that refuses to build.</h2>
     <p class="latin"><em>Nemo iudex in causa sua</em> — no one may be judge in their own cause.</p>
     <p class="lead">Would you trust your house if the same person architected it, built it, inspected it, and certified it? Corral is an auditing engine. It judges code it did not write — by execution and by adversary — onto a record nobody can edit. Accountability, paper trail, analysis, certification: everything but building.</p>
-    <p class="pitch">Two extensions carry the rule: <strong>certify</strong> breaks your code on purpose and runs your own tests against every fault; <strong>review</strong> hands your code to a model that has never seen it and makes every claim prove itself by script, with a second model arguing the other side. Both write signed, hash-linked entries to a branch in your repository — run as a GitHub Action, GitHub becomes the record, and any DuckDB reads it straight from the branch.</p>
+    <p class="pitch">Two extensions carry the rule: <strong>certify</strong> breaks your code on purpose and runs your own tests against every fault; <strong>review</strong> hands your code to a model that has never seen it and makes every claim prove itself by script, with a second model arguing the other side. Both write hash-linked entries to a ledger directory in your repository, signed when a certify key is configured. Keep that directory on its own <code>corral/ledger</code> branch and, run as a GitHub Action, GitHub becomes the record that any DuckDB can read.</p>
     <p class="why-more"><a href="/docs/how-it-works/">How it works →</a></p>
     </div>
     {pool ? (
       <p class="caption">
         {/* single line: Astro collapses a text→newline→expression boundary to ZERO chars, so keep interpolations inline */}
-        Below is a real run, replaying now: a <em>decorrelated</em> cross-vendor herd put <code>{pool.codePath}</code> to its own tests — {pool.planter} planted {pool.mutants} faults, and the project's <em>own</em> test suite was run against every one of them in a sandbox. No model graded anything: the suite's exit code decided, and it caught {pool.caught}, missed {pool.survivors}.{pool.critic ? ` A different model, ${pool.critic}, reviewed the run alongside it — the critic advises and is never allowed to decide.` : ''} Signed <strong>{pool.statusLabel}</strong>{pool.provenMissed > 0 ? ', and the herd handed back a test that catches the gap' : ''}.
+        Below is a real run, replaying now: a <em>decorrelated</em>{crossVendor ? ' cross-vendor' : ''} herd put <code>{pool.codePath}</code> to its own tests — {pool.planter} planted {pool.mutants} faults, and the project's <em>own</em> test suite was run against every one of them in a sandbox. No model graded anything: the suite's exit code decided, and it caught {pool.caught}, missed {pool.survivors}.{pool.critic ? ` A different model, ${pool.critic}, reviewed the run alongside it — the critic advises and is never allowed to decide.` : ''} Signed <strong>{pool.statusLabel}</strong>{pool.provenMissed > 0 ? ', and the herd handed back a test that catches the gap' : ''}.
       </p>
     ) : (
       <p class="caption">
@@ -224,7 +238,7 @@ const exhibit = exhibitMeta && pool ? exhibitFor(exhibitMeta.survivor) : null;
             <dl>
               <div><dt>Code under audit</dt><dd><code>{pool.codePath}</code></dd></div>
               {pool.goal && <div><dt>The goal it must satisfy</dt><dd>“{pool.goal}”</dd></div>}
-              {pool.devTestPath && <div><dt>Graded by</dt><dd><code>{pool.devTestPath}</code> — the library’s own tests</dd></div>}
+              {pool.devTestPath && <div><dt>Graded by</dt><dd><code>{pool.devTestPath}</code> — the project’s own tests</dd></div>}
             </dl>
           </section>
           <section class="bd-block">
@@ -240,7 +254,7 @@ const exhibit = exhibitMeta && pool ? exhibitFor(exhibitMeta.survivor) : null;
             <ul>
               <li>Planted <strong>{pool.mutants}</strong> goal-violating mutants across the file.</li>
               <li>Ran the developer’s own suite against every one — it killed <strong>{pool.caught} of {pool.mutants}</strong>{pool.killPct != null ? ` (a ${pool.killPct}% kill-rate)` : ''}, measured by execution, not asserted.</li>
-              <li>Verdict: <strong class={pool.certified ? 'ok' : 'review'}>{pool.statusLabel}</strong> — signed and offline-verifiable{pool.provenMissed > 0 ? ', and the herd handed back a compiling test that kills the gap' : ''}.</li>
+              <li>Verdict: <strong class={pool.certified ? 'ok' : 'review'}>{pool.statusLabel}</strong> — signed with the local certify key of the machine that ran it{pool.provenMissed > 0 ? ', and the herd handed back a compiling test that kills the gap' : ''}.</li>
             </ul>
           </section>
           <section class="bd-block bd-wide">
@@ -274,10 +288,10 @@ const exhibit = exhibitMeta && pool ? exhibitFor(exhibitMeta.survivor) : null;
       exposing test, reads the suite for theater. The verdict is <em>measured by
       execution in a jail, never taken on a model's word</em>. Any model, local
       7B to frontier, mixed in one run. Human-gated and fail-closed; every run
-      recorded, replayable, and signed into a record you verify offline. (Honest
-      floor: <code>corral certify</code> is the shipped atom; the adversarial
-      pool is experimental and off by default; the broader engine is ahead —
-      we'll always tell you which.)
+      recorded into a hash-linked record, signed when a certify key is
+      configured. The adversarial pool <em>is</em> the product: <code>certify --local</code>, <code>certify
+      --repo</code> and the GitHub Action all run it. What is optional is the
+      brain daemon, which no audit needs.
     </p>
     <p class="star-invite">
       Free, source-available, and getting better with every run — <a href="https://github.com/pdbethke/corralai">a star helps other people find it</a>.

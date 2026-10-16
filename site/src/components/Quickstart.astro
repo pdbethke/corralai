@@ -3,43 +3,76 @@
 ---
 <section class="section" id="quickstart">
   <h2>Quickstart</h2>
-  <p>Install the CLI, hand it your key, and point it at a change plus the test that's supposed to guard it:</p>
-  <pre class="code">go install github.com/pdbethke/corralai/cmd/corral@v1.0.0-rc.23
-export ANTHROPIC_API_KEY=sk-ant-...
-corral certify --local --code path/to/file.go \
+  <p>Install the CLI. It needs a Go toolchain and a C compiler, because the binary links DuckDB and tree-sitter (CGO):</p>
+  <pre class="code">go install github.com/pdbethke/corralai/cmd/corral@v1.0.0-rc.23</pre>
+  <p>See what corral can audit in your repository. This step is free: no key, no sandbox, no model call:</p>
+  <pre class="code">cd your-repo
+corral certify --repo . --dry-run</pre>
+  <p>
+    Then audit one file in the context of the whole repository, and write the
+    signed verdict to a file. <code>--repo-dir .</code> matters: without it
+    corral copies only the file and its test into the sandbox, which suits a
+    single self-contained file and fails on anything that imports the rest
+    of your project.
+  </p>
+  <pre class="code">export ANTHROPIC_API_KEY=sk-ant-...
+corral certify --local --repo-dir . --code path/to/file.go \
   --goal "what it must guarantee" \
   --writer-model claude-sonnet-5 --mutant-model claude-sonnet-5 --critic-model claude-haiku-4-5 \
+  --out record.json \
   -- go test ./...</pre>
   <p>
-    Out comes a signed verdict — <strong>certified</strong> or <strong>needs-review</strong> — with the kill-rate, the survivors, and any
-    written-and-proven killing test. Re-check the record offline, anytime:
+    The model names are an example; corral has no defaults, and you name every
+    seat. Out comes a verdict, <strong>certified</strong> or <strong>needs-review</strong>, with the kill rate, the survivors, and any
+    written-and-proven killing test, signed with a certify key corral keeps
+    on your machine. Check the record against that key, offline:
   </p>
-  <pre class="code">corral certify verify record.json    # re-runs the proof — no key, no network</pre>
+  <pre class="code">corral certify verify record.json --pubkey "$(corral certify pubkey)" --allow-unanchored</pre>
   <p>
-    The herd runs in a bwrap jail on Linux (<code>--jail container</code> for
-    docker/podman elsewhere) and grades tests in six languages — Go, Python,
-    Ruby, JavaScript, TypeScript, PHP — writing its killing test in <em>your</em> project's harness, so vitest, jest, pytest, minitest and
-    PHPUnit work without configuration. Roles are decorrelation-<strong>enforced</strong> across
-    models — the critic must differ from the writer or the run refuses — and
-    each role can be pointed at a different <em>vendor</em>: a Gemini
-    fault-planter with a Claude critic is a supported run, off your own keys.
+    <code>verify</code> checks the record's Ed25519 signature, its hash chain,
+    and that the statement is bound to that ledger head. It re-runs nothing.
+    It never trusts the key embedded in the record, so it refuses to run
+    without <code>--pubkey</code>; <code>--allow-unanchored</code> accepts a
+    record that was not logged to a public transparency log, which a local
+    run's never is.
+  </p>
+  <p>
+    The herd runs in a sandbox: bwrap (or <code>--jail container</code> with
+    docker or podman) on Linux, <code>sandbox-exec</code> on macOS. It grades
+    tests in seven languages (Go, Python, Ruby, JavaScript, TypeScript, PHP
+    and Rust) and writes its killing test in <em>your</em> project's harness,
+    so go test, pytest, vitest, jest, minitest, RSpec, PHPUnit and cargo
+    test work without configuration. The critic must be a different model
+    from the writer, or the run refuses. Each seat can be a different <em>vendor</em> (a Gemini fault-planter with a Claude critic is a supported
+    run), or a coding-agent CLI you already pay for (<code>claude-code</code>, <code>codex</code>) with no API key at all. <a href="/docs/language-support/">What each language supports →</a>
   </p>
   <p class="caveat">
-    Honest about the coverage behind that: <strong>Go and Python are exercised
-    hardest</strong> — Go continuously in this repo's own CI, Python across
+    What the evidence behind that is: <strong>Go and Python are exercised
+    hardest</strong>. Go audits run in this repository's own CI on demand
+    (on pull requests labelled <code>audit</code>), and Python has had
     repeated whole-repo scans of Flask. TypeScript, JavaScript, Ruby and PHP
-    each rest on a <strong>single third-party repository</strong> so far,
-    which shows the plugin works and is not evidence about the ecosystem. <a href="https://github.com/pdbethke/corralai#readme">The evidence table is in the README →</a>
+    each rest on a <strong>single third-party repository</strong> so far, and
+    Rust on Warp's <code>fuzzy_match</code> crate; that shows the plugin works
+    and is not evidence about the ecosystem. Rust has known limits: no
+    coverage pre-flight, no salvage of a partly passing test, fail-fast not
+    yet verified, and a source whose tests live inside it (an inline <code>mod tests &#123; … &#125;</code>) cannot be audited yet; one whose test
+    module is a separate file can. <a href="https://github.com/pdbethke/corralai#readme">The evidence table is in the README →</a>
   </p>
   <p>
-    Ready for more than one file? Install your project's dev dependencies first —
-    the suite has to pass before corral can plant bugs against it — then point
-    corral at the whole repo:
+    Ready for more than one file? Install your project's dev dependencies first
+    (the suite has to pass before corral can plant bugs against it), then audit
+    the highest-ranked files with a bound on files and on money:
   </p>
-  <pre class="code">corral certify --repo . --substrate workspace \
+  <pre class="code">corral certify --repo . --top 3 --max-tokens 3000000 \
   --writer-model claude-sonnet-5 --mutant-model claude-sonnet-5 --critic-model claude-haiku-4-5 \
   --derive-model claude-sonnet-5 \
   -- python -m pytest   # or your own test command</pre>
+  <p>
+    Without <code>--top</code>, a repo scan audits up to 25 files. It runs in
+    the same sandbox by default; <code>--substrate workspace</code> instead
+    mutates your checkout in place, and is meant for a disposable CI runner,
+    never a tree with uncommitted work.
+  </p>
 </section>
 
 <style>

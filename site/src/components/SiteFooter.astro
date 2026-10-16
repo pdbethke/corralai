@@ -1,9 +1,6 @@
 ---
 // SPDX-License-Identifier: Elastic-2.0
 const REPO = 'https://github.com/pdbethke/corralai';
-// The brain reports itself as this MCP server version (internal/brain/server.go);
-// surfaced here as the honest v0.x framing the roadmap + README carry.
-const VERSION = 'v0.1';
 ---
 <footer class="section" id="site-footer">
   <nav class="foot-links" aria-label="Footer">
@@ -18,12 +15,11 @@ const VERSION = 'v0.1';
   <p class="foot-meta">
     <a href={REPO} target="_blank" rel="noopener noreferrer">github.com/pdbethke/corralai</a>
     · Source-available under the <a href={`${REPO}/blob/main/LICENSE`} target="_blank" rel="noopener noreferrer">Elastic License 2.0</a>
-    · <span class="foot-version">MCP protocol {VERSION}</span>
     · built by a herd, wrangled by a human.
   </p>
   <p class="built-on">
-    Built on DuckDB (mission telemetry, and the analytics on the <a href="/recordings/">recordings page</a>) and MotherDuck (fleet sync +
-    the cross-brain oracle, product-side).
+    Built on DuckDB (the view over the ledger, and the analytics on the <a href="/recordings/">recordings page</a>) and MotherDuck (an optional
+    destination for <code>ledger push</code> and <code>--push</code>).
   </p>
 </footer>
 
@@ -40,10 +36,5 @@ const VERSION = 'v0.1';
   .foot-links a { text-decoration: none; }
   .foot-links a:hover { text-decoration: underline; }
   .foot-meta { color: var(--muted); font-size: 0.9rem; margin: 0 0 8px; }
-  .foot-version {
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    color: var(--amber);
-    font-size: 0.82rem;
-  }
   .built-on { color: var(--muted); font-size: 0.85rem; }
 </style>

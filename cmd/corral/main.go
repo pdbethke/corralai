@@ -235,8 +235,8 @@ Usage:
                                   an explicit -- <test cmd> grades EVERY file, so it is refused
                                   when the scan spans more than one language (omit it and each
                                   file is graded with its own language's stock command)
-                                  the report is NOT signed yet — that lands with the sealed
-                                  repo statement
+                                  the run's record is a ledger entry, signed when a certify key
+                                  is configured; --attest also writes a signed in-toto statement
   corral certify verify <record-file> [--pubkey <hex>|--brain <url>] [--allow-unanchored]
                                   independently verify a --out (or report_build) record: the
                                   Ed25519 signature, the ledger's hash chain, and that the

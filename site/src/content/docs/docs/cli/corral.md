@@ -63,8 +63,8 @@ Usage:
                                   an explicit -- <test cmd> grades EVERY file, so it is refused
                                   when the scan spans more than one language (omit it and each
                                   file is graded with its own language's stock command)
-                                  the report is NOT signed yet — that lands with the sealed
-                                  repo statement
+                                  the run's record is a ledger entry, signed when a certify key
+                                  is configured; --attest also writes a signed in-toto statement
   corral certify verify <record-file> [--pubkey <hex>|--brain <url>] [--allow-unanchored]
                                   independently verify a --out (or report_build) record: the
                                   Ed25519 signature, the ledger's hash chain, and that the
@@ -397,7 +397,7 @@ Usage of demo:
 ```
 Usage of doctor:
   -code string
-    	the source file you intend to audit (optional, enables the pairing and baseline checks)
+    	the source file you intend to audit (optional, enables the test-pairing check; doctor does not run your suite on unmutated code — run it by hand first)
   -critic-model string
     	the test-critic model whose credential to check
   -derive-model certify --repo

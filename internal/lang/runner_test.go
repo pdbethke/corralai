@@ -2,7 +2,11 @@
 
 package lang
 
-import "testing"
+import (
+	"regexp"
+	"strings"
+	"testing"
+)
 
 // Every language has exactly one Default row, and every row names only
 // registered languages: a row for a language nobody registered, or a
@@ -129,5 +133,34 @@ func TestRunnerSelectHelpers(t *testing.T) {
 	}
 	if wordIndex([]string{"npx", "./node_modules/.bin/vitest", "run"}, "vitest") != 1 || wordIndex([]string{"go", "test"}, "vitest") != -1 {
 		t.Error("wordIndex wrong")
+	}
+}
+
+// Every row has an ID an operator can type after --runner, and no two share one.
+func TestRunnerIDsAreUniqueFlagValues(t *testing.T) {
+	flag := regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
+	seen := map[string]string{}
+	for _, r := range runners {
+		if !flag.MatchString(r.ID) {
+			t.Errorf("row %s has ID %q, not a flag value", r.Name, r.ID)
+		}
+		if prev, dup := seen[r.ID]; dup {
+			t.Errorf("rows %s and %s share ID %q", prev, r.Name, r.ID)
+		}
+		seen[r.ID] = r.Name
+	}
+}
+
+func TestRunnerByIDRefusesOtherLanguages(t *testing.T) {
+	py, _ := ByName("python")
+	if r, err := RunnerByID(py, "unittest"); err != nil || r.Name != "unittest" {
+		t.Errorf("unittest = %q, %v", r.Name, err)
+	}
+	_, err := RunnerByID(py, "jest")
+	if err == nil || !strings.Contains(err.Error(), "pytest, unittest") {
+		t.Errorf("jest for python: err = %v, want one naming pytest, unittest", err)
+	}
+	if _, err := RunnerByID(py, "nope"); err == nil {
+		t.Error("an unknown id was accepted")
 	}
 }

@@ -5,7 +5,6 @@ package advpool
 import (
 	"context"
 	"log"
-	"strings"
 
 	"github.com/pdbethke/corralai/internal/adequacy"
 	golang "github.com/pdbethke/corralai/internal/lang"
@@ -55,13 +54,11 @@ func (d *Driver) tickMatrix(ctx context.Context, run *runState) {
 
 	p := langFor(run.rs)
 	argv := adequacy.ShellSplit(run.rs.TestCmd)
-	// A runner whose ids are resolved through its own list (the cargo rows)
-	// is left to the critic's list-and-resolve path: this matrix matches
-	// critic findings by exact selector, which a file-relative name never
-	// equals, and such a runner lists its whole crate rather than the file's
-	// tests, which would offer unrelated tests for deletion.
-	if golang.ResolvesByList(p, argv) {
-		log.Printf("advpool: matrix: unavailable for %q (its test ids are resolved through the runner's list; the critic path checks claims instead)", run.rs.Lang)
+	// A runner that lists the whole suite rather than the test file (the
+	// cargo rows list the crate) is left to the critic's list-and-resolve
+	// path: its matrix would offer tests unrelated to the file for deletion.
+	if golang.ListsWholeSuite(p, argv) {
+		log.Printf("advpool: matrix: unavailable for %q (its runner lists the whole suite, not the test file; the critic path checks claims instead)", run.rs.Lang)
 		return
 	}
 	listCmd, ok := golang.ListTestsCmd(p, argv, run.rs.DevTestPath)
@@ -76,7 +73,17 @@ func (d *Driver) tickMatrix(ctx context.Context, run *runState) {
 		return
 	}
 
-	sels := golang.ParseTestList(p, argv, out)
+	// Only a test that runs alone gets a row: a selection that also runs
+	// another listed test (two tests sharing a full name) would credit that
+	// test's kills to this one, and a zero for the pair could mark a test
+	// for deletion that never ran by itself.
+	listed := golang.ParseTestList(p, argv, out)
+	var sels []string
+	for _, id := range listed {
+		if golang.RunsAlone(p, argv, listed, id) {
+			sels = append(sels, id)
+		}
+	}
 	if len(sels) == 0 {
 		return
 	}
@@ -102,7 +109,7 @@ func (d *Driver) tickMatrix(ctx context.Context, run *runState) {
 		if !ok {
 			return 0, nil, false
 		}
-		rep, serr := d.Scorer.ScoreReport(sctx, run.rs.CodePath, run.rs.Code, run.rs.DevTestCode, run.mutants, strings.Join(cmd, " "))
+		rep, serr := d.Scorer.ScoreReport(sctx, run.rs.CodePath, run.rs.Code, run.rs.DevTestCode, run.mutants, adequacy.ShellJoin(cmd))
 		if serr != nil {
 			log.Printf("advpool: matrix: score failed for %q: %v", tr.Selector, serr)
 			return 0, nil, false

@@ -49,6 +49,10 @@ type Runner struct {
 	// runner selects by a pattern a second listed test can match too. nil
 	// means its ids are exact. ResolveForRun refuses an id that coruns.
 	Coruns func(id, other string) bool
+	// ListsWholeSuite: ListCmd lists every test the command runs, not the
+	// test file's (the cargo rows list the crate), so a per-test matrix over
+	// it would offer unrelated tests for deletion.
+	ListsWholeSuite bool
 	// FirstFailure names the first failing test in the runner's output (a
 	// label, never a grade); Flaky names tests that passed only on a retry.
 	FirstFailure func(output []byte) string
@@ -170,13 +174,13 @@ var runners = []Runner{
 		// FirstFailure and Flaky read the grammar off the output, not the
 		// command (rustGrammarOf), so both cargo rows share them.
 		Name: "cargo nextest", Languages: []string{"rust"}, Detect: isNextest,
-		ListCmd: nextestListCmd, ParseList: nextestParseList, SingleCmd: nextestSingleCmd, ResolveByList: true,
+		ListCmd: nextestListCmd, ParseList: nextestParseList, SingleCmd: nextestSingleCmd, ResolveByList: true, ListsWholeSuite: true,
 		FirstFailure: rustFirstFailure, Flaky: rustFlakyTests,
 		Disclose: nextestDisclose, PreflightBin: nextestPreflightBin,
 	},
 	{
 		Name: "cargo test", Languages: []string{"rust"}, Default: true, Words: []string{"cargo"},
-		ListCmd: libtestListCmd, ParseList: libtestParseList, SingleCmd: libtestSingleCmd, ResolveByList: true,
+		ListCmd: libtestListCmd, ParseList: libtestParseList, SingleCmd: libtestSingleCmd, ResolveByList: true, ListsWholeSuite: true,
 		FirstFailure: rustFirstFailure, Flaky: rustFlakyTests,
 		Disclose: libtestDisclose, PreflightBin: libtestPreflightBin,
 		Note: "libtest has no retries; flaky tests are named when the output is nextest's (a wrapper that runs nextest under another command)",
@@ -279,17 +283,33 @@ func ResolvesByList(p Plugin, argv []string) bool {
 // second test cannot be credited at all.
 func ResolveForRun(p Plugin, argv []string, listed []string, name string) (string, bool) {
 	id, ok := ResolveListedTest(listed, name)
-	if !ok {
+	if !ok || !RunsAlone(p, argv, listed, id) {
 		return "", false
 	}
-	if r, found := RunnerFor(p, argv); found && r.Coruns != nil {
-		for _, other := range listed {
-			if r.Coruns(id, other) {
-				return "", false
-			}
+	return id, true
+}
+
+// RunsAlone reports whether SingleTestCmd for the listed id runs that test
+// and no other listed one: the id is listed once, and no other listed test
+// is one the runner's selection would also run (Coruns).
+func RunsAlone(p Plugin, argv []string, listed []string, id string) bool {
+	r, found := RunnerFor(p, argv)
+	n := 0
+	for _, other := range listed {
+		if other == id {
+			n++
+		} else if found && r.Coruns != nil && r.Coruns(id, other) {
+			return false
 		}
 	}
-	return id, true
+	return n == 1
+}
+
+// ListsWholeSuite reports whether argv's runner lists every test the command
+// runs rather than the test file's.
+func ListsWholeSuite(p Plugin, argv []string) bool {
+	r, ok := RunnerFor(p, argv)
+	return ok && r.ListsWholeSuite
 }
 
 // RunDisclosures is what the scan line says about running testCmd in

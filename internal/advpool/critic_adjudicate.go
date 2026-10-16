@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: Elastic-2.0
 package advpool
 
-import "github.com/pdbethke/corralai/internal/matrix"
+import (
+	golang "github.com/pdbethke/corralai/internal/lang"
+	"github.com/pdbethke/corralai/internal/matrix"
+)
 
 const (
 	AdjUnadjudicated = "unadjudicated"
@@ -34,9 +37,21 @@ func AutoAdjudication(scope string, ran bool, kills int) string {
 // TestSelector, nil if the matrix never scored that selector (e.g. it was
 // not among the enumerated tests).
 func matrixRowFor(rows []matrix.TestAdequacy, selector string) *matrix.TestAdequacy {
+	ids := make([]string, len(rows))
 	for i := range rows {
 		if rows[i].Selector == selector {
 			return &rows[i]
+		}
+		ids[i] = rows[i].Selector
+	}
+	// A critic names a test by its own title; a listed runner's row is its
+	// id (`Calc::adds`). Resolved the way the critic path resolves it, so a
+	// title two rows share finds neither.
+	if id, ok := golang.ResolveListedTest(ids, selector); ok {
+		for i := range rows {
+			if rows[i].Selector == id {
+				return &rows[i]
+			}
 		}
 	}
 	return nil

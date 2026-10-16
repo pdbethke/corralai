@@ -619,14 +619,14 @@ func (pyPlugin) MutantSystem() string {
 	return mutantSystem("public signatures (drop-in importable Python)", "syntax errors")
 }
 
-func (pyPlugin) SingleTestCmd(testPath, selector string) ([]string, bool) {
+func pySingleTestCmd(testPath, selector string) ([]string, bool) {
 	if selector == "" {
 		return nil, false
 	}
 	return []string{"python3", "-m", "pytest", "-q", selector}, true
 }
 
-func (pyPlugin) ListTestsCmd(testPath string) ([]string, bool) {
+func pyListTestsCmd(testPath string) ([]string, bool) {
 	if testPath == "" {
 		return nil, false
 	}
@@ -1126,7 +1126,7 @@ func (l *pyLexer) scan(line string) {
 	}
 }
 
-func (pyPlugin) ParseTestList(output string) []string {
+func pyParseTestList(output string) []string {
 	var out []string
 	for _, line := range strings.Split(output, "\n") {
 		line = strings.TrimSpace(line)
@@ -1139,12 +1139,12 @@ func (pyPlugin) ParseTestList(output string) []string {
 	return out
 }
 
-// FailedTests parses pytest's "short test summary info" lines. pytest prints
+// pyFailedTests parses pytest's "short test summary info" lines. pytest prints
 // one `FAILED <selector> - <error>` line per failure, and the selector is the
 // exact `path::test` form `--deselect` accepts. The trailing " - <error>"
 // summary must be stripped: passing it through would make the selector match
 // nothing and the deselect silently no-op.
-func (pyPlugin) FailedTests(output string) []string {
+func pyFailedTests(output string) []string {
 	var out []string
 	for _, line := range strings.Split(output, "\n") {
 		line = strings.TrimSpace(line)
@@ -1164,9 +1164,9 @@ func (pyPlugin) FailedTests(output string) []string {
 	return out
 }
 
-// DeselectArgs renders one --deselect per selector: pytest takes the flag
+// pyDeselectArgs renders one --deselect per selector: pytest takes the flag
 // repeatedly and does NOT accept a comma-joined list.
-func (pyPlugin) DeselectArgs(selectors []string) []string {
+func pyDeselectArgs(selectors []string) []string {
 	args := make([]string, 0, len(selectors)*2)
 	for _, s := range selectors {
 		if s = strings.TrimSpace(s); s != "" {
@@ -1893,7 +1893,7 @@ func alignPyPath(path, root string) (string, bool) {
 	return rel, true
 }
 
-// FirstFailure names the first test pytest's "short test summary info" block
+// pyFirstFailure names the first test pytest's "short test summary info" block
 // reports as failing. pytest prints one `FAILED <id> - <error>` line per
 // failure and one `ERROR <id>` line per test it could not even collect, in
 // the order they happened; the FIRST of either is the answer, with an ERROR
@@ -1908,7 +1908,7 @@ func alignPyPath(path, root string) (string, bool) {
 // test, and returning its first word would put a fabricated id in the
 // ledger. Collection errors that name only a FILE are likewise declined:
 // nothing there identifies a test.
-func (pyPlugin) FirstFailure(output []byte) string {
+func pyFirstFailure(output []byte) string {
 	for _, line := range strings.Split(string(output), "\n") {
 		line = strings.TrimSpace(line)
 		var prefix string

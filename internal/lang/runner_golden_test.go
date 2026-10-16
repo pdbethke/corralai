@@ -187,3 +187,88 @@ func TestRunnerGoldenIsCurrent(t *testing.T) {
 		t.Errorf("key count: got %d, golden %d", len(got), len(want))
 	}
 }
+
+// captureNew asks the runner table the same questions captureOld asked the
+// plugins. Output parsers are asked under EVERY corpus command and must give
+// the golden's single answer under each: the old parsers never looked at the
+// command, and the fallback to a language's Default row must keep it so.
+func captureNew(t *testing.T) map[string]string {
+	t.Helper()
+	got := map[string]string{}
+	outs := goldenOutputs(t)
+	for _, n := range Names() {
+		p, _ := ByName(n)
+		for _, cmd := range goldenCommands() {
+			key := strings.Join(cmd, " ")
+			a, ok := failFastViaRows(p, cmd)
+			got[n+"|failfast|"+key] = show(a, ok)
+			l, ok := ListTestsCmd(p, cmd, "tests/test_x.py")
+			got[n+"|list|"+key] = show(l, ok)
+			s, ok := SingleTestCmd(p, cmd, "tests/test_x.py", "tests::a")
+			got[n+"|single|"+key] = show(s, ok)
+			for _, dir := range []string{"testdata/rust/libtest", t.TempDir()} {
+				base := filepath.Base(dir)
+				if base != "libtest" {
+					base = "empty-dir"
+				}
+				got[n+"|disclose|"+key+"|"+base] = show(disclosuresViaRows(p, dir, cmd))
+			}
+			for name, o := range outs {
+				got[n+"|parselist|"+key+"|"+name] = show(ParseTestList(p, cmd, o))
+			}
+		}
+		for name, o := range outs {
+			answers := map[string]map[string]bool{}
+			note := func(c, v string) {
+				if answers[c] == nil {
+					answers[c] = map[string]bool{}
+				}
+				answers[c][v] = true
+			}
+			for _, cmd := range goldenCommands() {
+				if fp := FailureParserFor(p, cmd); fp != nil {
+					note("firstfailure", show(fp.FirstFailure([]byte(o))))
+					if fr, ok := fp.(FlakyReporter); ok {
+						note("flaky", show(fr.FlakyTests([]byte(o))))
+					}
+				}
+			}
+			if failed, deselect, ok := DeselectorFor(p, p.TestCmd()); ok {
+				f := failed(o)
+				got[n+"|failedtests|"+name] = show(f)
+				got[n+"|deselect|"+name] = show(deselect(f))
+			}
+			for c, vs := range answers {
+				if len(vs) != 1 {
+					t.Errorf("%s|%s|%s depends on the command: %v", n, c, name, vs)
+				}
+				for v := range vs {
+					got[n+"|"+c+"|"+name] = v
+				}
+			}
+		}
+	}
+	return got
+}
+
+func TestRunnerTableAnswersAsThePluginsDid(t *testing.T) {
+	b, err := os.ReadFile("testdata/runner-golden.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var want map[string]string
+	if err := json.Unmarshal(b, &want); err != nil {
+		t.Fatal(err)
+	}
+	got := captureNew(t)
+	for k, w := range want {
+		if got[k] != w {
+			t.Errorf("%s: table %s, golden %s", k, got[k], w)
+		}
+	}
+	for k := range got {
+		if _, ok := want[k]; !ok {
+			t.Errorf("%s: answered by the table (%s) but not by the plugins", k, got[k])
+		}
+	}
+}

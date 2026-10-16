@@ -263,7 +263,7 @@ func (rustPlugin) ListTestsCmd(string) ([]string, bool) { return nil, false }
 
 func (rustPlugin) ParseTestList(string) []string { return nil }
 
-// FirstFailure names the first test the runner's own summary reported as
+// rustFirstFailure names the first test the runner's own summary reported as
 // failing, for the killed_by label (internal/adequacy/score.go). GRADING IS BY
 // EXIT CODE; this only labels, so "" means "no label", never a grade: it is
 // returned for a passing run and equally for output the grammar does not
@@ -272,7 +272,7 @@ func (rustPlugin) ParseTestList(string) []string { return nil }
 // The id differs by runner: libtest gives the test path (`tests::name`),
 // nextest gives `<binary-id> <name>`. FailureParser is handed output alone, so
 // the grammar is read off the output (rustGrammarOf), not off a command.
-func (rustPlugin) FirstFailure(output []byte) string {
+func rustFirstFailure(output []byte) string {
 	run := parseRustRun(rustGrammarOf(output), output)
 	if len(run.Failures) == 0 {
 		return ""

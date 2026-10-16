@@ -387,7 +387,7 @@ func phpFailureID(line string) (string, bool) {
 	return id, true
 }
 
-// FirstFailure names the first test PHPUnit's numbered failure/error section
+// phpFirstFailure names the first test PHPUnit's numbered failure/error section
 // reports, read verbatim from a "N) Class::method" line. PHPUnit prints one
 // such line per failing OR erroring test — both sections share the shape, so
 // no prefix distinguishes them the way pytest's FAILED/ERROR split does:
@@ -402,7 +402,7 @@ func phpFailureID(line string) (string, bool) {
 // A clean "OK (...)" run, or output PHPUnit produced no numbered section
 // for at all (e.g. a fatal error that crashed before any test summary),
 // names nothing: no test can be blamed for a summary that never named one.
-func (phpPlugin) FirstFailure(output []byte) string {
+func phpFirstFailure(output []byte) string {
 	for _, line := range strings.Split(string(output), "\n") {
 		if id, ok := phpFailureID(line); ok {
 			return id

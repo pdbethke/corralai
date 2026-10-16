@@ -127,7 +127,11 @@ var runners = []Runner{
 		ListCmd: jestListCmd, ParseList: jestParseList, SingleCmd: jestSingleCmd, ResolveByList: true, Coruns: fullNameColl,
 		Note: "listing and one-test runs verified on jest 30.5",
 	},
-	{Name: "mocha", Languages: []string{"javascript", "typescript"}, Words: []string{"mocha"}, FailFast: []string{"--bail"}},
+	{
+		Name: "mocha", Languages: []string{"javascript", "typescript"}, Words: []string{"mocha"}, FailFast: []string{"--bail"},
+		ListCmd: mochaListCmd, ParseList: mochaParseList, SingleCmd: mochaSingleCmd, ResolveByList: true, Coruns: fullNameColl,
+		Note: "listing and one-test runs verified on mocha 11.8 (listing needs mocha 9 or later)",
+	},
 	{
 		// Detect adds vitest's entry script to the word; a shell-wrapped
 		// script is still read through Words.
@@ -145,8 +149,15 @@ var runners = []Runner{
 	// rspec takes --fail-fast. Minitest is deliberately without one: its own
 	// --fail-fast arrived in minitest 5.22, and an older minitest treats an
 	// unknown option as an error, which the scorer would read as a kill.
-	{Name: "rspec", Languages: []string{"ruby"}, Default: true, Words: []string{"rspec"}, FailFast: []string{"--fail-fast"}},
-	{Name: "minitest", Languages: []string{"ruby"}, Words: []string{"ruby", "rake", "testrb"}},
+	{
+		Name: "rspec", Languages: []string{"ruby"}, Default: true, Words: []string{"rspec"}, FailFast: []string{"--fail-fast"},
+		ListCmd: rspecListCmd, ParseList: rspecParseList, SingleCmd: rspecSingleCmd, ResolveByList: true, Coruns: fullNameColl,
+		Note: "listing and one-test runs verified on rspec-core 3.13 (one-test runs need 3.12 or later)",
+	},
+	{
+		Name: "minitest", Languages: []string{"ruby"}, Words: []string{"ruby", "rake", "testrb"},
+		Note: "minitest has no list mode and no full-name selector; rspec is the Ruby runner that lists and runs one test",
+	},
 	{
 		Name: "phpunit", Languages: []string{"php"}, Default: true, Words: []string{"phpunit"},
 		FailFast: []string{"--stop-on-failure"}, FirstFailure: phpFirstFailure,

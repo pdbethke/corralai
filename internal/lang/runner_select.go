@@ -65,3 +65,19 @@ var regexQuoter = strings.NewReplacer(
 
 // jsRegexQuote makes s match itself literally inside a JavaScript regex.
 func jsRegexQuote(s string) string { return regexQuoter.Replace(s) }
+
+// idFromFull is the id of a test a runner reports as a full name and a leaf
+// title (mocha's fullTitle/title, rspec's full_description/description):
+// everything before the leaf is one segment, so a critic's bare test name
+// still matches as the "::"-suffix and the full name is unchanged. "" when
+// the full name does not end in the leaf.
+func idFromFull(full, leaf string) string {
+	if full == leaf {
+		return joinTitles([]string{leaf})
+	}
+	prefix, ok := strings.CutSuffix(full, " "+leaf)
+	if !ok {
+		return ""
+	}
+	return joinTitles([]string{prefix, leaf})
+}

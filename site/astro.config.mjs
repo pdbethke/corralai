@@ -65,6 +65,8 @@ export default defineConfig({
         },
         { label: 'The record — DuckDB, Rekor, MotherDuck', slug: 'docs/warehouse' },
         { label: 'Configuration', slug: 'docs/configuration' },
+        // Generated from internal/lang's runner table (scripts/gen-language-support.sh).
+        { label: 'Language support', slug: 'docs/language-support' },
         {
           // The daemon is optional infrastructure: nothing in it is required
           // for a verdict, and nothing in it is read by one. Grouped so a

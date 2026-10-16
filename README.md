@@ -182,11 +182,14 @@ project that names tests after *behavior* rather than after the source file
 relying on pairing to find it. Before spending a real run, `corral doctor`
 checks the environment for free — see below.
 
-Go, Python, Ruby, JavaScript, TypeScript and PHP — the language is inferred
-from `--code`'s extension, each a plugin in `internal/lang`. The authored test
-is written in **your project's own harness** (it is shown your existing test
-file and told to match it), so vitest, jest, pytest, minitest, RSpec and
-PHPUnit all work without configuration.
+Go, Python, Ruby, JavaScript, TypeScript, PHP and Rust — the language is
+inferred from `--code`'s extension, each a plugin in `internal/lang`. The
+authored test is written in **your project's own harness** (it is shown your
+existing test file and told to match it), so vitest, jest, pytest, minitest,
+RSpec and PHPUnit all work without configuration. What corral does with each
+language's tests, runner by runner, and why each gap exists, is on
+[docs/corral/language-support.md](docs/corral/language-support.md) —
+generated from the table the code dispatches on, not written by hand.
 
 **Where each language's support actually stands.** A tool that argues for
 execution over self-report should not claim a language on the strength of a

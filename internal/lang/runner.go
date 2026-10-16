@@ -57,6 +57,9 @@ type Runner struct {
 	// repoDir; PreflightBin is the binary that must be on PATH.
 	Disclose     func(repoDir string, argv []string) []string
 	PreflightBin func(argv []string) string
+	// Note qualifies a capability the row borrows from another runner, for
+	// the support page: what it really runs, or what was not run against it.
+	Note string
 }
 
 // goTestCmd matches an actual `go test` invocation and nothing else: a
@@ -83,6 +86,7 @@ var runners = []Runner{
 		Name: "gotestsum", Languages: []string{"go"}, Words: []string{"gotestsum"},
 		ListCmd: goListCmd, ParseList: goParseTestList, SingleCmd: goSingleCmd,
 		FirstFailure: goFirstFailure,
+		Note:         "listing and one-test runs use `go test` itself; the killing test is read from `--- FAIL:` lines, which gotestsum passes through for a failed test but was not run here",
 	},
 	{
 		// -failfast stops after the first test binary failure.
@@ -99,13 +103,14 @@ var runners = []Runner{
 	},
 	{
 		// No salvage: unittest exits 2 on pytest's --deselect, so a rerun
-		// with it could never pass. List and single-test commands are
-		// pytest's, as they always were for every Python command; pytest
-		// collects unittest suites.
+		// with it could never pass. No FirstFailure: pytest's parser needs a
+		// `FAILED <node id>` line unittest never prints. List and single-test
+		// commands are pytest's, as they always were for every Python
+		// command; pytest collects unittest suites.
 		Name: "unittest", Languages: []string{"python"}, Words: []string{"unittest"},
 		FailFast: []string{"--failfast"},
 		ListCmd:  pyListCmd, ParseList: pyParseTestList, SingleCmd: pySingleCmd,
-		FirstFailure: pyFirstFailure,
+		Note: "listing and one-test runs use pytest, which collects unittest suites; they need pytest installed",
 	},
 	// jest and mocha take --bail. vitest is left without one deliberately:
 	// its bail spelling has changed across major versions, and an
@@ -142,6 +147,7 @@ var runners = []Runner{
 		ListCmd: libtestListCmd, ParseList: libtestParseList, SingleCmd: libtestSingleCmd, ResolveByList: true,
 		FirstFailure: rustFirstFailure, Flaky: rustFlakyTests,
 		Disclose: libtestDisclose, PreflightBin: libtestPreflightBin,
+		Note: "libtest has no retries; flaky tests are named when the output is nextest's (a wrapper that runs nextest under another command)",
 	},
 }
 
@@ -297,3 +303,7 @@ func DeselectorFor(p Plugin, argv []string) (failed func(string) []string, desel
 	}
 	return r.FailedTests, r.DeselectArgs, true
 }
+
+// Runners returns the runner table in its order, for readers outside the
+// package (scripts/langsupport renders it). The rows are copies.
+func Runners() []Runner { return slices.Clone(runners) }

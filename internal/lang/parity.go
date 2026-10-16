@@ -85,10 +85,6 @@ var ParityExemptions = []Exemption{
 	{"typescript", "critic-list", "describe/it names are strings in calls, not declarations; no static lister yet (runner table Phase 4)"},
 	{"ruby", "critic-list", "rspec and minitest names are strings or methods by runner; no static lister yet (runner table Phase 4)"},
 
-	{"php", "list", "the phpunit row has no --list-tests command yet (runner table Phase 2)"},
-
-	{"php", "single", "the phpunit row has no --filter command yet (runner table Phase 2)"},
-
 	{"javascript", "first-failure", "no JS runner's failure summary is parsed yet; a wrong id is worse than none (runner table Phase 3)"},
 	{"typescript", "first-failure", "no JS runner's failure summary is parsed yet; a wrong id is worse than none (runner table Phase 3)"},
 	{"ruby", "first-failure", "rspec and minitest failure summaries are not parsed yet; a wrong id is worse than none (runner table Phase 3)"},

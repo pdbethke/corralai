@@ -163,6 +163,8 @@ var runners = []Runner{
 	{
 		Name: "phpunit", Languages: []string{"php"}, Default: true, Words: []string{"phpunit"},
 		FailFast: []string{"--stop-on-failure"}, FirstFailure: phpFirstFailure,
+		ListCmd: phpunitListCmd, ParseList: phpunitParseList, SingleCmd: phpunitSingleCmd, ResolveByList: true,
+		Note: "listing and one-test runs verified on PHPUnit 11.5",
 	},
 	{
 		// FirstFailure and Flaky read the grammar off the output, not the

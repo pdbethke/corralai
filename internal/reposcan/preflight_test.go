@@ -45,9 +45,6 @@ func (stubPlugin) TestWriterSystem() string                            { return 
 func (stubPlugin) MutantSystem() string                                { return "" }
 func (stubPlugin) ImportPath(string, func(string) bool) (string, bool) { return "", false }
 func (stubPlugin) ImportNote(string, bool) string                      { return "" }
-func (stubPlugin) SingleTestCmd(string, string) ([]string, bool)       { return nil, false }
-func (stubPlugin) ListTestsCmd(string) ([]string, bool)                { return nil, false }
-func (stubPlugin) ParseTestList(string) []string                       { return nil }
 func (stubPlugin) TestNamesInSource(string, string) []string           { return nil }
 func (stubPlugin) WorkspaceRunEnv() (env []string, cleanup func())     { return nil, func() {} }
 

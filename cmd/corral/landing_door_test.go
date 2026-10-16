@@ -311,7 +311,7 @@ func TestBaselineFlakyIsTheUnionOfTheRuns(t *testing.T) {
 		t.Fatal(err)
 	}
 	p, _ := lang.ByName("rust")
-	fp, _ := p.(lang.FailureParser)
+	fp := lang.FailureParserFor(p, p.TestCmd())
 	b := jailBaselineRunner{
 		ctx:     context.Background(),
 		scorer:  advpool.JailScorer{Jail: &seqVerboseJail{outs: []string{string(flakyOut), string(cleanOut)}}, BaseFiles: map[string]string{}, FailureParser: fp},

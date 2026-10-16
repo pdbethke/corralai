@@ -105,7 +105,7 @@ type scoreConfig struct {
 
 // FailFastFor returns the stop-at-first-failure arguments to append to one
 // MUTANT run's command, or ok=false for a runner that has none. It is the
-// language plugin's lang.FailFaster, passed in rather than looked up here so
+// runner's row (lang.FailFastArgsFor), passed in rather than looked up here so
 // adequacy stays language-agnostic.
 type FailFastFor func(cmd []string) (args []string, ok bool)
 

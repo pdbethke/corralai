@@ -17,55 +17,43 @@ const (
 	rustGrammarNextest                    // `cargo nextest run`
 )
 
-// runnerRow is the ONE runner decision made from the operator's test command
-// with cmdHasWord: which binary must be on PATH (read by Preflight). Nothing
-// else re-tests argv for "nextest": two places answering the same question is
-// how a preflight and a test selector come to disagree about which runner the
-// suite uses.
-//
-// The output grammar is deliberately NOT on the row. Its one production
-// reader, FirstFailure, is handed the output and never the command, so it
-// reads the grammar off the output (rustGrammarOf); a grammar field here was
-// read only by tests, which is a value production never consults.
-type runnerRow struct {
-	// preflightBin is the binary that must be on PATH.
-	preflightBin string
-	// disclose is what the scan line says about running this runner in
-	// repoDir (read by RunDisclosures).
-	disclose func(repoDir string) []string
-}
+// The runner decision (libtest or nextest) is made once, by RunnerFor over
+// the two cargo rows in runner.go. The output grammar is deliberately NOT
+// taken from the row: FirstFailure is handed the output and never the
+// command, so it reads the grammar off the output (rustGrammarOf).
 
 // nextestConfig is where cargo-nextest reads a project's profiles, relative
 // to the workspace root.
 const nextestConfig = ".config/nextest.toml"
 
-func rustRunner(testCmd []string) runnerRow {
-	if cmdHasWord(testCmd, "nextest") || cmdHasWord(testCmd, "cargo-nextest") {
-		bin := "cargo-nextest"
-		if len(testCmd) > 0 && filepath.Base(testCmd[0]) == "cargo-nextest" {
-			bin = testCmd[0]
-		}
-		return runnerRow{preflightBin: bin, disclose: func(string) []string {
-			return []string{"runner: cargo-nextest — a test it passes only on a retry (FLAKY) is graded as passed, as the project's own retry policy decides; such tests in a file's unmutated baseline are named, but a MUTANT whose run passed only on a retry is counted as survived and is not named"}
-		}}
+// nextestPreflightBin is cargo-nextest, or the operator's own path to it.
+func nextestPreflightBin(testCmd []string) string {
+	if len(testCmd) > 0 && filepath.Base(testCmd[0]) == "cargo-nextest" {
+		return testCmd[0]
 	}
-	return runnerRow{preflightBin: preflightBin(testCmd, "cargo"), disclose: func(repoDir string) []string {
-		if fi, err := os.Stat(filepath.Join(repoDir, filepath.FromSlash(nextestConfig))); err != nil || !fi.Mode().IsRegular() { // #nosec G703 -- existence check under the operator's repository
-			return nil
-		}
-		return []string{"runner: cargo test, but this repository keeps " + nextestConfig + " — its nextest profiles (retries, timeouts, test groups) do not apply to this run, and libtest runs every test of a binary in one process where nextest runs each in its own; pass `-- cargo nextest run` to grade under the project's own runner"}
-	}}
+	return "cargo-nextest"
 }
 
-// RunDisclosures is the runner row's disclosure (see RunDiscloser).
-func (rustPlugin) RunDisclosures(repoDir string, testCmd []string) []string {
-	return rustRunner(testCmd).disclose(repoDir)
+func libtestPreflightBin(testCmd []string) string { return preflightBin(testCmd, "cargo") }
+
+// nextestDisclose says how nextest's retries are graded.
+func nextestDisclose(string, []string) []string {
+	return []string{"runner: cargo-nextest — a test it passes only on a retry (FLAKY) is graded as passed, as the project's own retry policy decides; such tests in a file's unmutated baseline are named, but a MUTANT whose run passed only on a retry is counted as survived and is not named"}
 }
 
-// FlakyTests names the tests nextest passed only on a retry — the Flaky list
+// libtestDisclose says when a repository keeps nextest profiles that a
+// `cargo test` run does not apply.
+func libtestDisclose(repoDir string, _ []string) []string {
+	if fi, err := os.Stat(filepath.Join(repoDir, filepath.FromSlash(nextestConfig))); err != nil || !fi.Mode().IsRegular() { // #nosec G703 -- existence check under the operator's repository
+		return nil
+	}
+	return []string{"runner: cargo test, but this repository keeps " + nextestConfig + " — its nextest profiles (retries, timeouts, test groups) do not apply to this run, and libtest runs every test of a binary in one process where nextest runs each in its own; pass `-- cargo nextest run` to grade under the project's own runner"}
+}
+
+// rustFlakyTests names the tests nextest passed only on a retry — the Flaky list
 // of the same parse FirstFailure reads (see FlakyReporter). libtest has no
 // retries, so its output names none.
-func (rustPlugin) FlakyTests(output []byte) []string {
+func rustFlakyTests(output []byte) []string {
 	return parseRustRun(rustGrammarOf(output), output).Flaky
 }
 

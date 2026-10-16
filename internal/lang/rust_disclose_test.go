@@ -44,7 +44,7 @@ func TestRustRunnerDisclosures(t *testing.T) {
 			t.Errorf("nextest: %q", got)
 		}
 	}
-	// A plugin that implements no RunDiscloser says nothing.
+	// A runner with nothing to disclose says nothing.
 	py, _ := ByName("python")
 	if got := RunDisclosures(py, withCfg, []string{"pytest"}); got != nil {
 		t.Errorf("python: %q", got)
@@ -54,7 +54,7 @@ func TestRustRunnerDisclosures(t *testing.T) {
 // TestRustFlakyTestsAreReadFromTheRun: the Flaky list part 1 parsed and left
 // unread is what FlakyTests hands the scan line, off the same parse.
 func TestRustFlakyTestsAreReadFromTheRun(t *testing.T) {
-	var fr FlakyReporter = rustPlugin{}
+	fr := FailureParserFor(rustPlugin{}, nil).(FlakyReporter)
 	if got := fr.FlakyTests(rustCapture(t, "nextest", "flaky")); !reflect.DeepEqual(got, []string{"fuzzy_match tests::planted_flaky"}) {
 		t.Errorf("FlakyTests(nextest flaky) = %q", got)
 	}

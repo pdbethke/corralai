@@ -88,14 +88,14 @@ func TestRustRunner_ChosenOnceFromTheCommand(t *testing.T) {
 		{[]string{"/home/u/.cargo/bin/cargo-nextest", "nextest", "run"}, "/home/u/.cargo/bin/cargo-nextest"},
 		{[]string{"/home/u/.cargo/bin/cargo", "test"}, "/home/u/.cargo/bin/cargo"},
 	} {
-		if row := rustRunner(c.cmd); row.preflightBin != c.pre {
-			t.Errorf("%v: bin %q, want %q", c.cmd, row.preflightBin, c.pre)
+		if bin := rustPreflightBin(c.cmd); bin != c.pre {
+			t.Errorf("%v: bin %q, want %q", c.cmd, bin, c.pre)
 		}
 	}
 }
 
 func TestFirstFailure_RustBothRunners(t *testing.T) {
-	var p FailureParser = rustPlugin{}
+	p := FailureParserFor(rustPlugin{}, nil)
 	for _, c := range []struct{ runner, name, want string }{
 		{"libtest", "panic", "test::planted_panic"},
 		{"libtest", "pass", ""},

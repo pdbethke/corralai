@@ -4,39 +4,9 @@ package lang
 
 import (
 	"path/filepath"
+	"slices"
 	"strings"
 )
-
-// FailFaster is an OPTIONAL plugin extension: the runner's own
-// stop-at-first-failure flag, for MUTANT runs only.
-//
-// WHY IT EXISTS. Scoring costs O(mutants × the target's suite runtime), and a
-// KILLED mutant needs exactly ONE failing test to be killed — the rest of the
-// selected set is paid for and then discarded. pytest -x, go test -failfast,
-// jest --bail and phpunit --stop-on-failure all stop at the first failure, so
-// the average killed mutant costs the tests up to its killer instead of the
-// whole set. `killed_by` already records the FIRST failure the runner named,
-// so nothing recorded changes either.
-//
-// IT MUST NEVER BE USED ON THE BASELINE. A green baseline is the claim that
-// the suite passes; a baseline that stopped early would certify a suite corral
-// never fully ran.
-//
-// THE FLAG IS THE RUNNER'S, NOT THE LANGUAGE'S. A Python repo may be graded by
-// pytest or by unittest; a JS repo by node --test, jest, mocha or vitest, and
-// only some of those have such a flag. So the decision is made from the
-// COMMAND, and a command whose runner corral does not recognise gets ok=false
-// — no flag, unchanged behaviour. This matters more than it looks: an
-// unrecognised flag makes the runner exit NON-ZERO, which the scorer reads as
-// a KILL, so a wrong guess here would silently inflate every kill rate to
-// 1.00. adequacy re-runs the compliant baseline once WITH these args before
-// trusting them for exactly that reason; this list stays conservative anyway.
-type FailFaster interface {
-	// FailFastArgs returns the arguments to APPEND to testCmd so its runner
-	// stops at the first failing test. ok=false when this command's runner
-	// has no such flag corral is sure of.
-	FailFastArgs(testCmd []string) (args []string, ok bool)
-}
 
 // cmdHasWord reports whether any argv word IS name (or a path ending in it,
 // e.g. .venv/bin/pytest). Whole-word only, deliberately: a substring match
@@ -76,13 +46,41 @@ func AppendFailFast(cmd, args []string) []string {
 	return append(out, args...)
 }
 
-// FailFastArgsFor is the one lookup a caller needs: the plugin's own
-// stop-at-first-failure args for testCmd, or ok=false for a plugin that does
-// not implement FailFaster at all (which is simply unchanged behaviour).
+// FailFastArgsFor is the stop-at-first-failure flag of the runner testCmd
+// names, for MUTANT runs only, or ok=false.
+//
+// WHY IT EXISTS. Scoring costs O(mutants × the target's suite runtime), and a
+// KILLED mutant needs exactly ONE failing test to be killed — the rest of the
+// selected set is paid for and then discarded. pytest -x, go test -failfast,
+// jest --bail and phpunit --stop-on-failure all stop at the first failure, so
+// the average killed mutant costs the tests up to its killer instead of the
+// whole set. `killed_by` already records the FIRST failure the runner named,
+// so nothing recorded changes either.
+//
+// IT MUST NEVER BE USED ON THE BASELINE. A green baseline is the claim that
+// the suite passes; a baseline that stopped early would certify a suite corral
+// never fully ran.
+//
+// THE FLAG IS THE RUNNER'S, NOT THE LANGUAGE'S. A Python repo may be graded by
+// pytest or by unittest; a JS repo by node --test, jest, mocha or vitest, and
+// only some of those have such a flag. So the decision is made from the
+// COMMAND, and a command whose runner corral does not recognise gets ok=false
+// — no flag, unchanged behaviour. This matters more than it looks: an
+// unrecognised flag makes the runner exit NON-ZERO, which the scorer reads as
+// a KILL, so a wrong guess here would silently inflate every kill rate to
+// 1.00. adequacy re-runs the compliant baseline once WITH these args before
+// trusting them for exactly that reason; this list stays conservative anyway.
+//
+// So the flag lives on the runner's row, and is offered only when testCmd
+// itself NAMES that row: a language's Default row, answered for a command no
+// row recognises, never adds one.
 func FailFastArgsFor(p Plugin, testCmd []string) ([]string, bool) {
-	ff, ok := p.(FailFaster)
-	if !ok {
+	if cmdIsShellWrapped(testCmd) {
 		return nil, false
 	}
-	return ff.FailFastArgs(testCmd)
+	r, ok := namedRunner(p, testCmd)
+	if !ok || len(r.FailFast) == 0 {
+		return nil, false
+	}
+	return slices.Clone(r.FailFast), true
 }

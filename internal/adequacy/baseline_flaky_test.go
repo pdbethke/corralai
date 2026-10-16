@@ -23,9 +23,9 @@ func TestScore_PassingBaselineNamesItsFlakyTests(t *testing.T) {
 		t.Fatal(err)
 	}
 	p, _ := lang.ByName("rust")
-	fp, ok := p.(lang.FailureParser)
-	if !ok {
-		t.Fatal("the rust plugin is not a FailureParser")
+	fp := lang.FailureParserFor(p, p.TestCmd())
+	if fp == nil {
+		t.Fatal("rust's runner has no failure parser")
 	}
 	jail := &verboseFakeJail{pass: true, output: string(out)}
 	rep, err := adequacy.Score(context.Background(), jail, nil, "src/a.rs", "code", nil,
@@ -38,7 +38,7 @@ func TestScore_PassingBaselineNamesItsFlakyTests(t *testing.T) {
 	}
 	// A parser that cannot report flakiness reports none.
 	py, _ := lang.ByName("python")
-	pfp, _ := py.(lang.FailureParser)
+	pfp := lang.FailureParserFor(py, py.TestCmd())
 	rep, err = adequacy.Score(context.Background(), jail, nil, "a.py", "code", nil, []string{"pytest"}, adequacy.WithFailureParser(pfp))
 	if err != nil || rep.BaselineFlaky != nil {
 		t.Fatalf("python: BaselineFlaky=%q err=%v", rep.BaselineFlaky, err)

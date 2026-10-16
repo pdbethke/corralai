@@ -143,14 +143,14 @@ func (goPlugin) ImportPath(string, func(string) bool) (string, bool) { return ""
 // no per-task import correction.
 func (goPlugin) ImportNote(string, bool) string { return "" }
 
-func (goPlugin) SingleTestCmd(testPath, selector string) ([]string, bool) {
+func goSingleTestCmd(testPath, selector string) ([]string, bool) {
 	if selector == "" {
 		return nil, false
 	}
 	return []string{"go", "test", "-run", "^" + selector + "$", "./..."}, true
 }
 
-func (goPlugin) ListTestsCmd(testPath string) ([]string, bool) {
+func goListTestsCmd(testPath string) ([]string, bool) {
 	return []string{"go", "test", "-list", ".*", "./..."}, true
 }
 
@@ -466,7 +466,7 @@ func isGoTestName(name string) bool {
 	return !unicode.IsLower(r)
 }
 
-func (goPlugin) ParseTestList(output string) []string {
+func goParseTestList(output string) []string {
 	var out []string
 	for _, line := range strings.Split(output, "\n") {
 		line = strings.TrimSpace(line)
@@ -480,7 +480,7 @@ func (goPlugin) ParseTestList(output string) []string {
 	return out
 }
 
-// FirstFailure names the first test `go test` reported as failing. The
+// goFirstFailure names the first test `go test` reported as failing. The
 // runner prints one `--- FAIL: <name> (<elapsed>)` line per failing test,
 // indented one level per subtest depth; the name is taken VERBATIM, so a
 // subtest comes back as `TestA/sub` — the form `go test -run` accepts.
@@ -492,7 +492,7 @@ func (goPlugin) ParseTestList(output string) []string {
 //
 // Output with no `--- FAIL:` line at all — a passing package, or one that
 // failed to BUILD — names nothing. No test ran, so no test can be blamed.
-func (goPlugin) FirstFailure(output []byte) string {
+func goFirstFailure(output []byte) string {
 	for _, line := range strings.Split(string(output), "\n") {
 		line = strings.TrimSpace(line)
 		rest, ok := strings.CutPrefix(line, "--- FAIL: ")
@@ -507,23 +507,6 @@ func (goPlugin) FirstFailure(output []byte) string {
 		}
 	}
 	return ""
-}
-
-// FailFastArgs is `go test -failfast` — stop after the first test binary
-// failure. Recognised only for an actual `go test` invocation: a Makefile
-// wrapper or a gotestsum shape is not one, and guessing a flag onto it would
-// make every mutant exit non-zero and read as a kill. See lang.FailFaster.
-func (goPlugin) FailFastArgs(testCmd []string) ([]string, bool) {
-	if len(testCmd) < 2 || cmdIsShellWrapped(testCmd) {
-		return nil, false
-	}
-	if !isGoBinary(testCmd[0]) {
-		return nil, false
-	}
-	if testCmd[1] != "test" {
-		return nil, false
-	}
-	return []string{"-failfast"}, true
 }
 
 // isGoBinary reports whether argv0 names the go command: base name go or

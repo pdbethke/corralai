@@ -55,7 +55,7 @@ type AuthoredPart struct {
 // proof is still delivered — just not in the same file.
 //
 // A language whose file structure corral cannot rewrite precisely simply does
-// not implement this, exactly as FailureDeselector is left unimplemented where
+// not implement this, exactly as a runner row is left without salvage where
 // a runner's output cannot be parsed precisely. Guessing is the failure mode
 // this interface is shaped to avoid.
 type TestConcatenator interface {

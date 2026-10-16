@@ -93,3 +93,21 @@ func TestCriticTestCommandForRust(t *testing.T) {
 		t.Errorf("with no enumerator: cmd=%q why=%q", cmd, why)
 	}
 }
+
+// A runner whose ids need resolving by its own list (the cargo rows) gets no
+// matrix: the matrix looks critic findings up by exact selector, and a
+// critic's file-relative name (`adds`) never equals a listed id
+// (`tests::adds`), so every whole-test claim would go unchecked. libtest
+// also lists the whole crate, so tests of unrelated modules would be scored
+// against one file's mutants and offered for deletion. Until the matrix
+// scopes and resolves, such a run keeps the list-and-resolve critic path.
+func TestMatrixLeavesResolveByListRunnersToTheCriticPath(t *testing.T) {
+	enumerator := &fakeEnumerator{out: "tests::adds: test\n"}
+	d := &Driver{Enumerator: enumerator}
+	rs := RunSpec{Lang: "rust", TestCmd: "cargo test", Matrix: true, CodePath: "src/a.rs", DevTestPath: "src/a.rs"}
+	run := &runState{rs: rs, mutants: []adequacy.Mutant{{ID: "m1"}}}
+	d.tickMatrix(context.Background(), run)
+	if enumerator.calls != 0 || run.matrix != nil {
+		t.Fatalf("Rust --matrix enumerated %d time(s), matrix=%v; want the matrix skipped", enumerator.calls, run.matrix)
+	}
+}

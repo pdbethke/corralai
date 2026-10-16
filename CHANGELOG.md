@@ -28,6 +28,21 @@ history of any release, `git log v0.3.4..v0.3.5`.
   than one (the same test name in two modules) is left unchecked, since
   running it would run the other test too. A nextest command carrying its own
   filterset is not narrowed, for the same reason.
+- **Test runners are one table, and what each language supports is a
+  generated page.** Everything corral knows about a runner — its fail-fast
+  flag, how it lists tests, how it runs one, how it names a failure — is now
+  one row per runner in `internal/lang/runner.go`, instead of a method per
+  language that re-detected the runner each time (and, for jest, mocha and
+  vitest, was written once for JavaScript and again for TypeScript). Nothing
+  a run does changes, with two exceptions: a `python -m unittest` command no
+  longer gets pytest's `--deselect` when an authored test is salvaged
+  (unittest exits 2 on an option it does not know, so that rerun could never
+  pass), and Rust says why `--matrix` is unavailable (its test ids are
+  resolved through the runner's list, which the matrix does not do; the
+  critic still checks claims through that list). The new
+  [language-support page](docs/corral/language-support.md) is rendered from
+  the same table, so it cannot claim what the code does not do, and every gap
+  it shows carries its reason.
 - **One-time cache miss.** `reposcan.VerdictGeneration` is now 24 (rc.23
   shipped 23). Every verdict cached before this change is re-measured once.
 

@@ -375,9 +375,6 @@ func (emptySeqPlugin) TestWriterSystem() string                            { ret
 func (emptySeqPlugin) MutantSystem() string                                { return "" }
 func (emptySeqPlugin) ImportPath(string, func(string) bool) (string, bool) { return "", false }
 func (emptySeqPlugin) ImportNote(string, bool) string                      { return "" }
-func (emptySeqPlugin) SingleTestCmd(string, string) ([]string, bool)       { return nil, false }
-func (emptySeqPlugin) ListTestsCmd(string) ([]string, bool)                { return nil, false }
-func (emptySeqPlugin) ParseTestList(string) []string                       { return nil }
 func (emptySeqPlugin) TestNamesInSource(string, string) []string           { return nil }
 func (emptySeqPlugin) WorkspaceRunEnv() (env []string, cleanup func())     { return nil, func() {} }
 

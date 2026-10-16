@@ -189,7 +189,7 @@ path.
 
 **Each job costs what one audit of each touched file costs.** The one
 hosted-runner figure on record is 11m12s for one file (`cmd/corral/main.go`,
-40 mutants) on a 2-core `ubuntu-latest` runner (`github-action.md`); the
+40 mutants) on an `ubuntu-latest` runner (`github-action.md`); the
 4-vCPU cell in `docs/design/cost-model.md` is still empty, because nobody has
 recorded that run. Nothing about running this per PR makes any single audit faster — it is still
 *mutants × that file's suite runtime*, per file, exactly as

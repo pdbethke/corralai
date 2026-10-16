@@ -66,7 +66,7 @@ corral certify --local --repo-dir . --code path/to/file.go \
   <pre class="code">corral certify --repo . --top 3 --max-tokens 3000000 \
   --writer-model claude-sonnet-5 --mutant-model claude-sonnet-5 --critic-model claude-haiku-4-5 \
   --derive-model claude-sonnet-5 \
-  -- python -m pytest   # or your own test command</pre>
+  -- .venv/bin/python -m pytest   # the project's venv; or your own test command</pre>
   <p>
     Without <code>--top</code>, a repo scan audits up to 25 files. It runs in
     the same sandbox by default; <code>--substrate workspace</code> instead

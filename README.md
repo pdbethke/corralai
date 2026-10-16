@@ -1302,7 +1302,7 @@ bwrap shares the host kernel — it stops casual damage, egress, and filesystem 
 
 The headline feature, not a footnote. (The OpenSSF Scorecard badge above read
 5.7 on 2026-10-16. It scores project practice, not code quality: its low
-checks are code review, which a solo maintainer cannot score on, dependency
+checks include code review, which a solo maintainer cannot score on, dependency
 pinning, fuzzing and static-analysis tooling; see SECURITY.md.) Full write-up in **[SECURITY.md](SECURITY.md)**;
 the short version for the audit:
 

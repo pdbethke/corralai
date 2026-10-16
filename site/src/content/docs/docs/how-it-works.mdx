@@ -141,7 +141,7 @@ second stranger checking the first.
    *hypothesis*, and stays labelled that way.
 3. **Corral runs the scripts, not the reviewer.** Each script runs on a fresh
    copy of the tree at the commit, in the same offline sandbox an audit uses
-   (`--substrate workspace` runs it on the checkout instead, for a CI runner). A script that exits 0 keeps its claim at
+   (`--substrate workspace` runs it in a plain git worktree at the commit on the host instead, for a CI runner). A script that exits 0 keeps its claim at
    *reproduced*. A script that does not is **demoted** to code-read, on the
    record, with its output. A script the harness could not run at all is
    marked *not run* and counts for nothing — it is not charged to the

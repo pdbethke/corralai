@@ -22,7 +22,7 @@ honest version: what it does today, what it can't do yet, and what's next.
 - **Seven languages** — Go, Python, Ruby, JavaScript, TypeScript, PHP and Rust —
   with the runner read from your test command or its package script. Evidence is
   uneven and stated plainly: Go and Python are exercised hardest; the others
-  rest on one or two third-party repositories each so far (Rust on Warp's
+  rest on a single third-party repository each so far (Rust on Warp's
   `crates/fuzzy_match`, PHP on webmozart/assert). The evidence table is in the
   [README](https://github.com/pdbethke/corralai#readme), and what each runner
   supports is on [language support](/docs/language-support/).
@@ -33,8 +33,8 @@ honest version: what it does today, what it can't do yet, and what's next.
 - **A merge gate.** `certify --repo --min-kill-rate` / `--max-proven-missed`
   turn a scan into an exit code any CI can gate on; the
   [GitHub Action](/docs/github-action/) wraps it.
-- **The record.** Every `certify --repo` and `corral review` run writes a signed,
-  hash-linked entry to a ledger directory (in CI, the `corral/ledger` branch);
+- **The record.** Every `certify --repo` and `corral review` run writes a
+  hash-linked entry, signed when a certify key is configured, to a ledger directory (in CI, the `corral/ledger` branch);
   `--attest --transparency` logs the signed statement to Sigstore Rekor.
   `corral verify` checks three legs — DSSE signature, warehouse rows-hash against
   the statement, Rekor inclusion — and has run against live infrastructure:
@@ -57,7 +57,7 @@ honest version: what it does today, what it can't do yet, and what's next.
   against nothing; `--preflight` reports which source files the suite never
   executes.
 - **`time:`/`cost:`** lines on every run, and `--max-tokens` as a hard token cap
-  across every seat.
+  across every audit seat (`corral review` has none).
 
 ## What it does *not* claim
 

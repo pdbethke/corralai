@@ -1023,8 +1023,9 @@ refused self-hosted runners that do have the CLI, so it was removed.)
   The cost of that trade is real: test runners have flags spelled the same as
   corral's, with one dash or two. Five names that everyday runners use are let
   through — `all`, `tests`, `timeout`, `json` and `path` — because misplacing
-  one of them cannot switch a gate off or lift a spending cap: corral uses its
-  own default for that flag and the runner gets an argument it understands. So
+  one of them cannot switch a gate off or lift a spending cap (it can widen the
+  scan or the clock, never the money): corral uses its own default for that
+  flag and the runner gets an argument it understands. So
   `cargo test --all`, `cargo test --tests`, `go test -timeout 5m ./...`,
   `go test -json ./...` and `pytest --timeout=30` all work. Every other name is
   refused, including any flag added to corral later, until someone decides it

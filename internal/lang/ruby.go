@@ -318,7 +318,7 @@ func (rubyPlugin) CoverageCmd(testCmd []string) (cmd []string, ok bool) {
 	}
 	// `bundle exec <runner>` is a ruby process; `bundle install` is not, so
 	// bundle alone is not a runner token.
-	if !coverageRunnerNamed(testCmd, []string{"ruby", "rspec", "rake", "testrb"}) {
+	if !coverageRunnerNamed(testCmd, coverageClaims("ruby")) {
 		if !(len(testCmd) >= 2 && filepath.Base(testCmd[0]) == "bundle" && testCmd[1] == "exec") {
 			return nil, false
 		}

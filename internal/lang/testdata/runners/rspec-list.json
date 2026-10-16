@@ -1,0 +1,34 @@
+{
+  "examples": [
+    {
+      "id": "./spec/calc_spec.rb[1:1]",
+      "description": "adds (a+b)",
+      "full_description": "Calc adds (a+b)"
+    },
+    {
+      "id": "./spec/calc_spec.rb[1:2]",
+      "description": "adds",
+      "full_description": "Calc adds"
+    },
+    {
+      "id": "./spec/calc_spec.rb[1:3]",
+      "description": "adds x",
+      "full_description": "Calc adds x"
+    },
+    {
+      "id": "./spec/calc_spec.rb[1:4:1]",
+      "description": "adds",
+      "full_description": "Calc neg adds"
+    },
+    {
+      "id": "./spec/calc_spec.rb[2:1]",
+      "description": "x",
+      "full_description": "Calc adds x"
+    },
+    {
+      "id": "./spec/calc_spec.rb[3:1]",
+      "description": "level",
+      "full_description": "top level"
+    }
+  ]
+}

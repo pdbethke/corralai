@@ -254,7 +254,9 @@ exemption, and an exemption for a capability it now has fails), and
 `bash scripts/gen-language-support.sh --check`, which renders the public
 support page from the same table. `testdata/runner-golden.json` is what the
 per-plugin methods answered before the table replaced them; it is never
-regenerated.
+regenerated, and the table may only ADD an answer where it records none
+(`goldenDiffs`). A runner capability ships with its runner's real output
+under `internal/lang/testdata/runners/` (`scripts/capture-runner-fixtures.sh`).
 
 Two rules, both learned expensively:
 

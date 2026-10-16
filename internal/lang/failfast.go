@@ -12,13 +12,17 @@ import (
 // e.g. .venv/bin/pytest). Whole-word only, deliberately: a substring match
 // would fire on `sh -c "pytest ..."`, where appending a flag adds a positional
 // argument to sh — which becomes $0 — instead of an option to the runner.
-func cmdHasWord(cmd []string, name string) bool {
-	for _, a := range cmd {
+func cmdHasWord(cmd []string, name string) bool { return wordIndex(cmd, name) >= 0 }
+
+// wordIndex is the index of the first word in cmd that names name by
+// cmdHasWord's rule, or -1.
+func wordIndex(cmd []string, name string) int {
+	for i, a := range cmd {
 		if a == name || filepath.Base(a) == name || filepath.Base(a) == name+".exe" {
-			return true
+			return i
 		}
 	}
-	return false
+	return -1
 }
 
 // AppendFailFast appends args to cmd, unless there is nothing to append, the

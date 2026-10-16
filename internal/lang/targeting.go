@@ -9,14 +9,16 @@ import "strings"
 // to it, or ending in "::"+name. It resolves nothing when no id matches or
 // when several do — the same name in two modules or two test binaries —
 // because running that id would run the other test too, and what it killed
-// could not be credited to the one named.
+// could not be credited to the one named. An id the runner cannot run alone
+// (notAlone) is matched by its name like any other, so it still makes a name
+// ambiguous; RunsAlone then refuses it if it is the one found.
 func ResolveListedTest(listed []string, name string) (string, bool) {
 	if name == "" {
 		return "", false
 	}
 	found, n := "", 0
 	for _, id := range listed {
-		if id == name || strings.HasSuffix(id, "::"+name) {
+		if ln := listedName(id); ln == name || strings.HasSuffix(ln, "::"+name) {
 			found = id
 			n++
 		}

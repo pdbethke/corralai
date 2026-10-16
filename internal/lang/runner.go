@@ -45,6 +45,10 @@ type Runner struct {
 	// (ResolveListedTest) before SingleCmd, because the runner's ids carry a
 	// prefix the source does not (Rust's module path).
 	ResolveByList bool
+	// Coruns reports whether running id alone would also run other: the
+	// runner selects by a pattern a second listed test can match too. nil
+	// means its ids are exact. ResolveForRun refuses an id that coruns.
+	Coruns func(id, other string) bool
 	// FirstFailure names the first failing test in the runner's output (a
 	// label, never a grade); Flaky names tests that passed only on a retry.
 	FirstFailure func(output []byte) string
@@ -118,23 +122,49 @@ var runners = []Runner{
 	// its bail spelling has changed across major versions, and an
 	// unrecognised flag would make every mutant exit non-zero and read as a
 	// kill. node --test has no such flag.
-	{Name: "jest", Languages: []string{"javascript", "typescript"}, Words: []string{"jest"}, FailFast: []string{"--bail"}},
-	{Name: "mocha", Languages: []string{"javascript", "typescript"}, Words: []string{"mocha"}, FailFast: []string{"--bail"}},
-	{Name: "vitest", Languages: []string{"javascript", "typescript"}, Words: []string{"vitest"}},
+	{
+		Name: "jest", Languages: []string{"javascript", "typescript"}, Words: []string{"jest"}, FailFast: []string{"--bail"},
+		ListCmd: jestListCmd, ParseList: jestParseList, SingleCmd: jestSingleCmd, ResolveByList: true, Coruns: jestCoruns,
+		Note: "listing and one-test runs verified on jest 30.5",
+	},
+	{
+		Name: "mocha", Languages: []string{"javascript", "typescript"}, Words: []string{"mocha"}, FailFast: []string{"--bail"},
+		ListCmd: mochaListCmd, ParseList: mochaParseList, SingleCmd: mochaSingleCmd, ResolveByList: true, Coruns: lastFullColl,
+		Note: "listing and one-test runs verified on mocha 11.8 (listing needs mocha 9 or later)",
+	},
+	{
+		// Detect adds vitest's entry script to the word; a shell-wrapped
+		// script is still read through Words.
+		Name: "vitest", Languages: []string{"javascript", "typescript"}, Words: []string{"vitest"},
+		Detect:  func(argv []string) bool { return vitestIndex(argv) >= 0 },
+		ListCmd: vitestListCmd, ParseList: vitestParseList, SingleCmd: vitestSingleCmd, ResolveByList: true, Coruns: fullNameColl,
+		Note: "listing and one-test runs verified on vitest 3.2; vitest 1, 2 and 4 were not run",
+	},
 	{
 		Name: "node --test", Languages: []string{"javascript", "typescript"}, Default: true,
 		Detect: func(argv []string) bool {
 			return len(argv) > 0 && filepath.Base(argv[0]) == "node" && slices.Contains(argv, "--test")
 		},
+		ListCmd: nodeListCmd, ParseList: nodeParseList, SingleCmd: nodeSingleCmd, ResolveByList: true, Coruns: nodeCoruns,
+		Note: "node has no collect-only mode, so listing RUNS the test file once on the unmutated code; verified on node 22.23",
 	},
 	// rspec takes --fail-fast. Minitest is deliberately without one: its own
 	// --fail-fast arrived in minitest 5.22, and an older minitest treats an
 	// unknown option as an error, which the scorer would read as a kill.
-	{Name: "rspec", Languages: []string{"ruby"}, Default: true, Words: []string{"rspec"}, FailFast: []string{"--fail-fast"}},
-	{Name: "minitest", Languages: []string{"ruby"}, Words: []string{"ruby", "rake", "testrb"}},
+	{
+		Name: "rspec", Languages: []string{"ruby"}, Default: true, Words: []string{"rspec"}, FailFast: []string{"--fail-fast"},
+		ListCmd: rspecListCmd, ParseList: rspecParseList, SingleCmd: rspecSingleCmd, ResolveByList: true, Coruns: lastFullColl,
+		Note: "listing and one-test runs verified on rspec-core 3.13 (one-test runs need 3.12 or later)",
+	},
+	{
+		Name: "minitest", Languages: []string{"ruby"}, Words: []string{"ruby", "rake", "testrb"},
+		Note: "minitest has no list mode and no full-name selector; rspec is the Ruby runner that lists and runs one test",
+	},
 	{
 		Name: "phpunit", Languages: []string{"php"}, Default: true, Words: []string{"phpunit"},
 		FailFast: []string{"--stop-on-failure"}, FirstFailure: phpFirstFailure,
+		ListCmd: phpunitListCmd, ParseList: phpunitParseList, SingleCmd: phpunitSingleCmd, ResolveByList: true,
+		Note: "listing and one-test runs verified on PHPUnit 11.5",
 	},
 	{
 		// FirstFailure and Flaky read the grammar off the output, not the
@@ -240,6 +270,38 @@ func SingleTestCmd(p Plugin, argv []string, testPath, id string) ([]string, bool
 func ResolvesByList(p Plugin, argv []string) bool {
 	r, ok := RunnerFor(p, argv)
 	return ok && r.ResolveByList
+}
+
+// ResolveForRun maps a critic's test name onto the one listed id
+// SingleTestCmd may run: ResolveListedTest's answer, refused when the
+// runner's selection for that id would also run another listed test. What a
+// run killed is credited to the test it names, so a run that also ran a
+// second test cannot be credited at all.
+func ResolveForRun(p Plugin, argv []string, listed []string, name string) (string, bool) {
+	id, ok := ResolveListedTest(listed, name)
+	if !ok || !RunsAlone(p, argv, listed, id) {
+		return "", false
+	}
+	return id, true
+}
+
+// RunsAlone reports whether SingleTestCmd for the listed id runs that test
+// and no other listed one: the id is listed once, and no other listed test
+// is one the runner's selection would also run (Coruns).
+func RunsAlone(p Plugin, argv []string, listed []string, id string) bool {
+	if id != listedName(id) {
+		return false
+	}
+	r, found := RunnerFor(p, argv)
+	n := 0
+	for _, other := range listed {
+		if other == id {
+			n++
+		} else if found && r.Coruns != nil && r.Coruns(id, listedName(other)) {
+			return false
+		}
+	}
+	return n == 1
 }
 
 // RunDisclosures is what the scan line says about running testCmd in

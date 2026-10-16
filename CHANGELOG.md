@@ -38,12 +38,35 @@ history of any release, `git log v0.3.4..v0.3.5`.
   longer gets pytest's `--deselect` when an authored test is salvaged
   (unittest exits 2 on an option it does not know, so that rerun could never
   pass), and Rust says why `--matrix` is unavailable (its test ids are
-  resolved through the runner's list, which the matrix does not do; the
-  critic still checks claims through that list). The new
+  resolved through the runner's list, which is the whole crate rather than
+  the test file; the critic still checks claims through that list). The new
   [language-support page](docs/corral/language-support.md) is rendered from
   the same table, so it cannot claim what the code does not do, and every gap
   it shows carries its reason.
-- **One-time cache miss.** `reposcan.VerdictGeneration` is now 24 (rc.23
+- **A critic's claim is checked by execution in JavaScript, TypeScript, Ruby
+  and PHP too.** jest, vitest, mocha, `node --test`, rspec and PHPUnit can
+  each list a test file's tests and run one alone, built from the operator's
+  own command. Until now a "this test can
+  never fail" claim in those languages reached the record unchecked. A test
+  is run alone only when nothing else would run with it: these runners pick
+  a test by its describe/it titles joined by spaces, so `Calc > adds` and a
+  top-level test named `Calc adds` are both left unchecked, and so is any
+  test whose name node also matches as a leaf or suite name (jest also
+  matches without regard to case). A test the runner reports but corral
+  cannot run alone, such as a node test with subtests, still makes a name
+  ambiguous. Each runner was
+  run against a fixture suite (jest 30.5, vitest 3.2, mocha 11.8, node 22,
+  rspec-core 3.13, PHPUnit 11.5;
+  `scripts/capture-runner-fixtures.sh`). node has no collect-only mode, so
+  listing for `node --test` runs the test file once, on unmutated code.
+  Not covered: minitest (no list mode), commands that hide the runner behind
+  a script such as `npm test` or `composer test`, a shell-wrapped command
+  (so Ruby's stock command, which is one, still does not get this), and
+  vitest majors other than 3. `--matrix` stays off for these runners, as for
+  Rust: their list is what the command runs, which a directory argument or a
+  `.mocharc` widens beyond the test file, so a matrix would offer other
+  files' tests for deletion.
+- **One-time cache miss.** `reposcan.VerdictGeneration` is now 25 (rc.23
   shipped 23). Every verdict cached before this change is re-measured once.
 
 ## [v1.0.0-rc.23] — 2026-10-15

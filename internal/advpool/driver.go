@@ -3323,9 +3323,9 @@ func (d *Driver) criticTestCommand(ctx context.Context, run *runState, f queue.F
 	if run.criticListWhy != "" {
 		return "", run.criticListWhy
 	}
-	id, ok := golang.ResolveListedTest(run.criticListed, f.TestSelector)
+	id, ok := golang.ResolveForRun(p, argv, run.criticListed, f.TestSelector)
 	if !ok {
-		return "", "the name matches no listed test, or more than one"
+		return "", "the name matches no listed test, or more than one, or its run would also run another"
 	}
 	cmd, ok := golang.SingleTestCmd(p, argv, f.TestFile, id)
 	if !ok {

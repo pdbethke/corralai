@@ -1,0 +1,5 @@
+Captured by scripts/capture-runner-fixtures.sh on 2026-10-16.
+jest 30.5.2, vitest 3.2.7, mocha 11.8.0 (npm); PHPUnit 11.5.57 (composer)
+node v22.23.3; rspec-core 3.13.6
+Suites: src/. Each *-list file is the stdout of that runner's list command
+(jest and mocha JSON reduced to the fields the parsers read).

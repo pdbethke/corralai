@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"log"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -109,5 +110,65 @@ func TestMatrixLeavesResolveByListRunnersToTheCriticPath(t *testing.T) {
 	d.tickMatrix(context.Background(), run)
 	if enumerator.calls != 0 || run.matrix != nil {
 		t.Fatalf("Rust --matrix enumerated %d time(s), matrix=%v; want the matrix skipped", enumerator.calls, run.matrix)
+	}
+}
+
+// The runners Phase 2 added reach the critic the way Rust does: one listing
+// per run, the critic's name resolved onto a listed id, the operator's
+// command narrowed to that one test. The command survives the string the
+// scorer is handed (regex metacharacters and spaces included), and a name
+// whose run would also run a second listed test is left unchecked.
+func TestCriticTestCommandForTheListedRunners(t *testing.T) {
+	read := func(name string) string {
+		b, err := os.ReadFile("../lang/testdata/runners/" + name) // #nosec G304 -- test fixture
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	for _, c := range []struct {
+		lang, testCmd, testPath, list, name string
+		want                                []string
+		collides                            string
+	}{
+		{"javascript", "npx jest", "calc.jest.test.js", read("jest-list.json"), "adds (a+b)",
+			[]string{"npx", "jest", "--testNamePattern", `^Calc adds \(a\+b\)$`, "calc.jest.test.js"}, "Calc::adds"},
+		{"typescript", "node --experimental-strip-types --test", "calc.node.test.ts", read("node-tap.txt"), "top level",
+			[]string{"node", "--experimental-strip-types", "--test", "--test-name-pattern", `^top level$`, "calc.node.test.ts"}, "adds"},
+		{"ruby", "bundle exec rspec", "spec/calc_spec.rb", read("rspec-list.json"), "level",
+			[]string{"bundle", "exec", "rspec", "-E", `\Atop level\z`, "spec/calc_spec.rb"}, "Calc::adds x"},
+		{"php", "vendor/bin/phpunit", "tests/CalcTest.php", read("phpunit-list.txt"), "CalcTest::testWith",
+			[]string{"vendor/bin/phpunit", "--filter", `/(?:^|\\)CalcTest::testWith(?: with data set .*)?$/`, "tests/CalcTest.php"}, ""},
+	} {
+		d := &Driver{Enumerator: &fakeEnumerator{out: c.list}}
+		run := &runState{rs: RunSpec{Lang: c.lang, DevTestPath: c.testPath, TestCmd: c.testCmd}}
+		ctx := context.Background()
+		cmd, why := d.criticTestCommand(ctx, run, queue.Finding{TestSelector: c.name, TestFile: c.testPath})
+		if got := adequacy.ShellSplit(cmd); !reflect.DeepEqual(got, c.want) {
+			t.Errorf("%s: command = %q (%s), want %q", c.lang, got, why, c.want)
+		}
+		if c.collides != "" {
+			if cmd, why := d.criticTestCommand(ctx, run, queue.Finding{TestSelector: c.collides, TestFile: c.testPath}); cmd != "" || !strings.Contains(why, "also run another") && !strings.Contains(why, "more than one") {
+				t.Errorf("%s: %q was not left unchecked: cmd=%q why=%q", c.lang, c.collides, cmd, why)
+			}
+		}
+	}
+}
+
+// A jest command's list is what the command runs, not the test file's tests
+// (a directory argument or a config widens it), so --matrix stays off for
+// jest as for Rust: it would offer other files' tests for deletion.
+func TestMatrixLeavesJestToTheCriticPath(t *testing.T) {
+	b, err := os.ReadFile("../lang/testdata/runners/jest-list.json") // #nosec G304 -- test fixture
+	if err != nil {
+		t.Fatal(err)
+	}
+	enumerator := &fakeEnumerator{out: string(b)}
+	d := &Driver{Enumerator: enumerator}
+	rs := RunSpec{Lang: "javascript", TestCmd: "npx jest src", Matrix: true, CodePath: "src/calc.js", DevTestPath: "src/calc.jest.test.js"}
+	run := &runState{rs: rs, mutants: []adequacy.Mutant{{ID: "m1"}}}
+	d.tickMatrix(context.Background(), run)
+	if enumerator.calls != 0 || run.matrix != nil {
+		t.Fatalf("jest --matrix enumerated %d time(s), matrix=%v; want the matrix skipped", enumerator.calls, run.matrix)
 	}
 }

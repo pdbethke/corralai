@@ -147,13 +147,13 @@ func (rustPlugin) TestRules() []pairing.Rule {
 
 // Preflight requires the runner's binary: cargo for libtest, cargo-nextest for
 // nextest — or the operator's own first token (a rustup proxy at an absolute
-// path) when one is given. The runner row decides; see rustRunner.
+// path) when one is given. The runner row decides; see RunnerFor.
 //
 // That is ALL it checks, because Preflight runs on every substrate: a stock
 // rustup install (~/.cargo, no sudo) is exactly what --substrate workspace
 // runs, on the host. What only the jail needs is JailPreflight's.
 func (rustPlugin) Preflight(testCmd []string) error {
-	return toolOnPath(rustRunner(testCmd).preflightBin)
+	return toolOnPath(rustPreflightBin(testCmd))
 }
 
 // JailPreflight checks the half of the toolchain the jail needs and the host
@@ -171,7 +171,7 @@ func (rustPlugin) Preflight(testCmd []string) error {
 // pins (rust-toolchain.toml) or that it is complete: a mismatch surfaces
 // inside the jail, in rustup's own words, as a baseline that cannot pass.
 func (rustPlugin) JailPreflight(testCmd []string) error {
-	bin := rustRunner(testCmd).preflightBin
+	bin := rustPreflightBin(testCmd)
 	// cargo-nextest is a plain binary, but `cargo nextest` dispatches through
 	// whichever cargo is on PATH, so that one is checked too.
 	for _, name := range []string{bin, preflightBin(testCmd, "cargo")} {
@@ -180,6 +180,12 @@ func (rustPlugin) JailPreflight(testCmd []string) error {
 		}
 	}
 	return nil
+}
+
+// rustPreflightBin is the binary testCmd's cargo row needs on PATH.
+func rustPreflightBin(testCmd []string) string {
+	r, _ := RunnerFor(rustPlugin{}, testCmd)
+	return r.PreflightBin(testCmd)
 }
 
 // systemRustLayoutHint names the install the jail can see, for every
@@ -251,17 +257,6 @@ func (rustPlugin) ImportPath(string, func(string) bool) (string, bool) { return 
 // ImportNote is always "": see ImportPath — the landed module's own use line,
 // which LandTest writes from the landing's depth, needs no per-task correction.
 func (rustPlugin) ImportNote(string, bool) string { return "" }
-
-// SingleTestCmd, ListTestsCmd and ParseTestList stay ok=false/nil: the Plugin
-// interface never hands these methods the operator's test command, so a
-// stateless plugin cannot tell libtest from nextest, and answering for one
-// runner would be wrong for the other. Rust answers through
-// CommandTestTargeter instead (rust_single.go), which is handed the command.
-func (rustPlugin) SingleTestCmd(string, string) ([]string, bool) { return nil, false }
-
-func (rustPlugin) ListTestsCmd(string) ([]string, bool) { return nil, false }
-
-func (rustPlugin) ParseTestList(string) []string { return nil }
 
 // rustFirstFailure names the first test the runner's own summary reported as
 // failing, for the killed_by label (internal/adequacy/score.go). GRADING IS BY

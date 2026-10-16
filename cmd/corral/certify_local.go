@@ -2220,29 +2220,27 @@ func buildJailWiring(ctx context.Context, in jailWiringInput) (w jailWiring, err
 			w.cleanup = func() {}
 		}
 	}()
-	// WHICH TEST WAS AWAKE. The language plugin either can read its runner's
-	// failure summary or it cannot; there is no middle answer, and a plugin
-	// that does not implement lang.FailureParser leaves every killed_by NULL
+	// WHICH TEST WAS AWAKE. The test command's runner either can read its
+	// failure summary or it cannot; there is no middle answer, and a runner
+	// with no FirstFailure (lang.FailureParserFor is nil) leaves every killed_by NULL
 	// rather than having an id guessed for it. Resolved ONCE here, off the
 	// same in.langName every other plugin lookup in this function uses, and
 	// handed to all three scorer wirings so no substrate silently drops the
 	// column.
 	var failureParser lang.FailureParser
 	if plug, ok := lang.ByName(in.langName); ok {
-		failureParser, _ = plug.(lang.FailureParser)
+		failureParser = lang.FailureParserFor(plug, in.checkArgv)
 	}
 
 	// A KILLED MUTANT NEEDS ONE FAILING TEST. Resolved off the same plugin,
 	// in the same place, for the same reason: the flag belongs to the RUNNER
-	// (see lang.FailFaster), and adequacy re-proves the healthy suite still
+	// (see lang.FailFastArgsFor), and adequacy re-proves the healthy suite still
 	// passes with it before a single mutant is graded with it. nil under
 	// --no-fail-fast, which is byte-for-byte what corral always did.
 	var failFast adequacy.FailFastFor
 	if !in.noFailFast {
 		if plug, ok := lang.ByName(in.langName); ok {
-			if _, isFF := plug.(lang.FailFaster); isFF {
-				failFast = func(cmd []string) ([]string, bool) { return lang.FailFastArgsFor(plug, cmd) }
-			}
+			failFast = func(cmd []string) ([]string, bool) { return lang.FailFastArgsFor(plug, cmd) }
 		}
 	}
 

@@ -5,16 +5,17 @@ package lang
 import (
 	"crypto/sha256"
 	"encoding/json"
-	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"testing"
 )
 
-var updateRunnerGolden = flag.Bool("update-runner-golden", false, "rewrite testdata/runner-golden.json from the current code")
+// testdata/runner-golden.json was captured from the per-plugin methods the
+// runner table replaced (commit 0eaba5b9, before any of them moved) and is
+// never regenerated: it is the record of what corral did, and the table is
+// held to it.
 
 // goldenCommands is every command shape the runner table must answer for
 // exactly as the per-plugin methods did: each plugin's stock command, the
@@ -97,97 +98,6 @@ func show(v any, ok ...bool) string {
 	return s
 }
 
-// captureOld runs TODAY's per-plugin methods over the corpus. After the
-// plugin methods are deleted this function goes with them; the JSON it
-// wrote stays as the reference the runner table is held to.
-func captureOld(t *testing.T) map[string]string {
-	t.Helper()
-	got := map[string]string{}
-	outs := goldenOutputs(t)
-	for _, n := range Names() {
-		p, _ := ByName(n)
-		tt, targeter := p.(CommandTestTargeter)
-		for _, cmd := range goldenCommands() {
-			key := strings.Join(cmd, " ")
-			a, ok := FailFastArgsFor(p, cmd)
-			got[n+"|failfast|"+key] = show(a, ok)
-			if targeter {
-				l, ok := tt.ListTestsCmdFor(cmd)
-				got[n+"|list|"+key] = show(l, ok)
-				s, ok := tt.SingleTestCmdFor(cmd, "tests::a")
-				got[n+"|single|"+key] = show(s, ok)
-			} else {
-				l, ok := p.ListTestsCmd("tests/test_x.py")
-				got[n+"|list|"+key] = show(l, ok)
-				s, ok := p.SingleTestCmd("tests/test_x.py", "tests::a")
-				got[n+"|single|"+key] = show(s, ok)
-			}
-			for _, dir := range []string{"testdata/rust/libtest", t.TempDir()} {
-				base := filepath.Base(dir)
-				if base != "libtest" {
-					base = "empty-dir"
-				}
-				got[n+"|disclose|"+key+"|"+base] = show(RunDisclosures(p, dir, cmd))
-			}
-			for name, o := range outs {
-				if targeter {
-					got[n+"|parselist|"+key+"|"+name] = show(tt.ParseTestListFor(cmd, o))
-				} else {
-					got[n+"|parselist|"+key+"|"+name] = show(p.ParseTestList(o))
-				}
-			}
-		}
-		for name, o := range outs {
-			if fp, ok := p.(FailureParser); ok {
-				got[n+"|firstfailure|"+name] = show(fp.FirstFailure([]byte(o)))
-			}
-			if fr, ok := p.(FlakyReporter); ok {
-				got[n+"|flaky|"+name] = show(fr.FlakyTests([]byte(o)))
-			}
-			if fd, ok := p.(FailureDeselector); ok {
-				f := fd.FailedTests(o)
-				got[n+"|failedtests|"+name] = show(f)
-				got[n+"|deselect|"+name] = show(fd.DeselectArgs(f))
-			}
-		}
-	}
-	return got
-}
-
-func TestRunnerGoldenIsCurrent(t *testing.T) {
-	got := captureOld(t)
-	path := "testdata/runner-golden.json"
-	if *updateRunnerGolden {
-		keys := make([]string, 0, len(got))
-		for k := range got {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-		b, _ := json.MarshalIndent(got, "", " ")
-		if err := os.WriteFile(path, append(b, '\n'), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		t.Logf("wrote %d keys", len(keys))
-		return
-	}
-	b, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("no golden: run go test ./internal/lang -run TestRunnerGoldenIsCurrent -update-runner-golden (%v)", err)
-	}
-	var want map[string]string
-	if err := json.Unmarshal(b, &want); err != nil {
-		t.Fatal(err)
-	}
-	for k, w := range want {
-		if got[k] != w {
-			t.Errorf("%s: got %s, golden %s", k, got[k], w)
-		}
-	}
-	if len(got) != len(want) {
-		t.Errorf("key count: got %d, golden %d", len(got), len(want))
-	}
-}
-
 // captureNew asks the runner table the same questions captureOld asked the
 // plugins. Output parsers are asked under EVERY corpus command and must give
 // the golden's single answer under each: the old parsers never looked at the
@@ -200,7 +110,7 @@ func captureNew(t *testing.T) map[string]string {
 		p, _ := ByName(n)
 		for _, cmd := range goldenCommands() {
 			key := strings.Join(cmd, " ")
-			a, ok := failFastViaRows(p, cmd)
+			a, ok := FailFastArgsFor(p, cmd)
 			got[n+"|failfast|"+key] = show(a, ok)
 			l, ok := ListTestsCmd(p, cmd, "tests/test_x.py")
 			got[n+"|list|"+key] = show(l, ok)
@@ -211,7 +121,7 @@ func captureNew(t *testing.T) map[string]string {
 				if base != "libtest" {
 					base = "empty-dir"
 				}
-				got[n+"|disclose|"+key+"|"+base] = show(disclosuresViaRows(p, dir, cmd))
+				got[n+"|disclose|"+key+"|"+base] = show(RunDisclosures(p, dir, cmd))
 			}
 			for name, o := range outs {
 				got[n+"|parselist|"+key+"|"+name] = show(ParseTestList(p, cmd, o))

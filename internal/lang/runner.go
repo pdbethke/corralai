@@ -234,26 +234,19 @@ func ResolvesByList(p Plugin, argv []string) bool {
 	return ok && r.ResolveByList
 }
 
-// failFastViaRows is the row's fail-fast flag for argv, offered only when
-// argv itself names the row (a fallback Default row never adds a flag) and
-// is not shell-wrapped (appending to `sh -c` would set $0, not an option).
-func failFastViaRows(p Plugin, argv []string) ([]string, bool) {
-	if cmdIsShellWrapped(argv) {
-		return nil, false
-	}
-	r, ok := namedRunner(p, argv)
-	if !ok || len(r.FailFast) == 0 {
-		return nil, false
-	}
-	return slices.Clone(r.FailFast), true
-}
-
-func disclosuresViaRows(p Plugin, repoDir string, argv []string) []string {
-	r, ok := RunnerFor(p, argv)
+// RunDisclosures is what the scan line says about running testCmd in
+// repoDir that differs from how the project's own setup runs its suite —
+// said, never acted on: corral runs the operator's command as given and never
+// substitutes one of its own. Rust reports a project nextest.toml that
+// `cargo test` bypasses, and nextest's passed-on-retry grading. nil when the
+// runner has nothing to say; the one way a caller asks, so no caller
+// switches on a language to decide whether there is anything to disclose.
+func RunDisclosures(p Plugin, repoDir string, testCmd []string) []string {
+	r, ok := RunnerFor(p, testCmd)
 	if !ok || r.Disclose == nil {
 		return nil
 	}
-	return r.Disclose(repoDir, argv)
+	return r.Disclose(repoDir, testCmd)
 }
 
 // FailureParserFor is argv's runner as the FailureParser adequacy holds, or
@@ -278,7 +271,25 @@ type flakyRowParser struct{ rowParser }
 
 func (p flakyRowParser) FlakyTests(output []byte) []string { return p.r.Flaky(output) }
 
-// DeselectorFor is argv's runner's salvage pair, ok=false when it has none.
+// DeselectorFor is argv's runner's salvage pair, ok=false when it has none:
+// the runner's failing ids, and the arguments that deselect them, for
+// salvaging a partially broken authored test. The compliant check is
+// all-or-nothing per FILE: if any test in the authored file fails against the
+// unmutated code, the whole file is discarded and nothing is scored.
+//
+// Measured cost of that, on the first authored test corral ever retained
+// (gemini-3.6-flash on pallets/flask, 2026-07-31): 13 tests, TEN PASSED, and
+// all 13 were thrown away because 3 carried wrong API assumptions.
+//
+// Asking the model to repair itself is one answer and depends on the model
+// being able to. Deselecting the failures and scoring with the remainder does
+// not depend on the model at all — it is arithmetic over the runner's own
+// output.
+//
+// Deliberately absent from rows for runners corral cannot parse failures
+// from precisely, and from unittest, which exits 2 on pytest's --deselect. A wrong selector would
+// deselect the wrong test and silently narrow the exam, which is worse than
+// not salvaging: the run would look healthier while proving less.
 func DeselectorFor(p Plugin, argv []string) (failed func(string) []string, deselect func([]string) []string, ok bool) {
 	r, found := RunnerFor(p, argv)
 	if !found || r.FailedTests == nil || r.DeselectArgs == nil {

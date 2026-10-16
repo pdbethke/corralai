@@ -137,20 +137,9 @@ type Plugin interface {
 	// wrong) base-name convention — the whole point of this seam existing
 	// (see internal/advpool/roles.go's renderTestWriterWithRepair).
 	ImportNote(importPath string, ok bool) string
-	// SingleTestCmd yields a command that runs exactly the one test named by
-	// selector in testPath. ok=false when the language can't yet target a
-	// single test — callers must treat that as "no auto-signal", never a pass.
-	SingleTestCmd(testPath, selector string) (cmd []string, ok bool)
-	// ListTestsCmd yields a command that ENUMERATES the individual tests in
-	// testPath. ok=false when the language can't list tests yet — callers must
-	// then skip the matrix, never assume an empty suite.
-	ListTestsCmd(testPath string) (cmd []string, ok bool)
-	// ParseTestList extracts SingleTestCmd-compatible selectors from the output
-	// of ListTestsCmd, in emission order. Pure.
-	ParseTestList(output string) []string
 	// TestNamesInSource lists the tests a test file declares, read from its
-	// source without running anything, as SingleTestCmd-compatible selectors
-	// in file order (the same form ParseTestList yields). It exists for the
+	// source without running anything, in file order, as selectors a
+	// critic finding names and the runner table resolves (lang.SingleTestCmd). It exists for the
 	// test-critic, whose task is written before any command runs: handed the
 	// list, the critic must judge every named test. nil means this language
 	// cannot list statically, never that the file has no tests. Pure.
@@ -487,34 +476,6 @@ func PreambleFor(p Plugin, code string) string {
 	return strings.Join(lines[:defaultPreambleLines], "\n")
 }
 
-// FailureDeselector is an OPTIONAL plugin extension for salvaging a partially
-// broken authored test. The compliant check is all-or-nothing per FILE: if any
-// test in the authored file fails against the unmutated code, the whole file
-// is discarded and nothing is scored.
-//
-// Measured cost of that, on the first authored test corral ever retained
-// (gemini-3.6-flash on pallets/flask, 2026-07-31): 13 tests, TEN PASSED, and
-// all 13 were thrown away because 3 carried wrong API assumptions.
-//
-// Asking the model to repair itself is one answer and depends on the model
-// being able to. Deselecting the failures and scoring with the remainder does
-// not depend on the model at all — it is arithmetic over the runner's own
-// output.
-//
-// Deliberately OPTIONAL, and deliberately unimplemented for languages whose
-// runners corral cannot parse failures from precisely. A wrong selector would
-// deselect the wrong test and silently narrow the exam, which is worse than
-// not salvaging: the run would look healthier while proving less.
-type FailureDeselector interface {
-	// FailedTests extracts the runner's own failing-test selectors from its
-	// output. Empty when nothing failed or nothing could be parsed.
-	FailedTests(output string) []string
-	// DeselectArgs renders those selectors as arguments appended to the
-	// project's own test command. Empty for an empty selector list — never a
-	// bare flag with no argument.
-	DeselectArgs(selectors []string) []string
-}
-
 // Selection is what one TestSelector.Select call decided for one source
 // file: the tests that EXECUTED it, as evidence from a run, and the narrowed
 // command that runs just those.
@@ -700,9 +661,10 @@ const (
 // is stored as NULL. A fabricated or inferred id would name a test that never
 // ran, in a record whose whole product is that its claims are checkable.
 //
-// Deliberately unimplemented for the languages whose runners corral cannot
-// parse precisely (ruby, javascript, typescript), for the same reason
-// FailureDeselector is: a wrong id is worse than no id.
+// No plugin implements it: a runner row's FirstFailure does, through the
+// adapter FailureParserFor returns. Rows for runners corral cannot parse
+// precisely have none, for the same reason a row without salvage has none:
+// a wrong id is worse than no id.
 type FailureParser interface {
 	// FirstFailure returns the first failing test's id, or "" when the output
 	// names none.
@@ -717,26 +679,6 @@ type FailureParser interface {
 // the output names none.
 type FlakyReporter interface {
 	FlakyTests(output []byte) []string
-}
-
-// RunDiscloser is the OPTIONAL plugin extension that says how running
-// testCmd in repoDir differs from how the project's own setup runs its suite
-// — said on the scan line, never acted on: corral runs the operator's
-// command as given and never substitutes one of its own. Rust reports a
-// project nextest.toml that `cargo test` bypasses, and nextest's
-// passed-on-retry grading.
-type RunDiscloser interface {
-	RunDisclosures(repoDir string, testCmd []string) []string
-}
-
-// RunDisclosures is p's RunDiscloser answer, or nil for a plugin that has
-// nothing to say. The one way a caller asks, so no caller switches on a
-// language to decide whether there is anything to disclose.
-func RunDisclosures(p Plugin, repoDir string, testCmd []string) []string {
-	if d, ok := p.(RunDiscloser); ok {
-		return d.RunDisclosures(repoDir, testCmd)
-	}
-	return nil
 }
 
 // JailPreflighter is the OPTIONAL plugin extension for the half of a

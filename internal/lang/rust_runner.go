@@ -17,34 +17,14 @@ const (
 	rustGrammarNextest                    // `cargo nextest run`
 )
 
-// runnerRow is the ONE runner decision made from the operator's test command
-// with cmdHasWord: which binary must be on PATH (read by Preflight). Nothing
-// else re-tests argv for "nextest": two places answering the same question is
-// how a preflight and a test selector come to disagree about which runner the
-// suite uses.
-//
-// The output grammar is deliberately NOT on the row. Its one production
-// reader, FirstFailure, is handed the output and never the command, so it
-// reads the grammar off the output (rustGrammarOf); a grammar field here was
-// read only by tests, which is a value production never consults.
-type runnerRow struct {
-	// preflightBin is the binary that must be on PATH.
-	preflightBin string
-	// disclose is what the scan line says about running this runner in
-	// repoDir (read by RunDisclosures).
-	disclose func(repoDir string) []string
-}
+// The runner decision (libtest or nextest) is made once, by RunnerFor over
+// the two cargo rows in runner.go. The output grammar is deliberately NOT
+// taken from the row: FirstFailure is handed the output and never the
+// command, so it reads the grammar off the output (rustGrammarOf).
 
 // nextestConfig is where cargo-nextest reads a project's profiles, relative
 // to the workspace root.
 const nextestConfig = ".config/nextest.toml"
-
-func rustRunner(testCmd []string) runnerRow {
-	if isNextest(testCmd) {
-		return runnerRow{preflightBin: nextestPreflightBin(testCmd), disclose: func(d string) []string { return nextestDisclose(d, testCmd) }}
-	}
-	return runnerRow{preflightBin: libtestPreflightBin(testCmd), disclose: func(d string) []string { return libtestDisclose(d, testCmd) }}
-}
 
 // nextestPreflightBin is cargo-nextest, or the operator's own path to it.
 func nextestPreflightBin(testCmd []string) string {
@@ -68,11 +48,6 @@ func libtestDisclose(repoDir string, _ []string) []string {
 		return nil
 	}
 	return []string{"runner: cargo test, but this repository keeps " + nextestConfig + " — its nextest profiles (retries, timeouts, test groups) do not apply to this run, and libtest runs every test of a binary in one process where nextest runs each in its own; pass `-- cargo nextest run` to grade under the project's own runner"}
-}
-
-// RunDisclosures is the runner row's disclosure (see RunDiscloser).
-func (rustPlugin) RunDisclosures(repoDir string, testCmd []string) []string {
-	return rustRunner(testCmd).disclose(repoDir)
 }
 
 // rustFlakyTests names the tests nextest passed only on a retry — the Flaky list

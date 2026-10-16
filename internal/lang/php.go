@@ -351,12 +351,6 @@ func (phpPlugin) ImportPath(string, func(string) bool) (string, bool) { return "
 // autoloading needs no per-task correction.
 func (phpPlugin) ImportNote(string, bool) string { return "" }
 
-func (phpPlugin) SingleTestCmd(testPath, selector string) ([]string, bool) { return nil, false }
-
-func (phpPlugin) ListTestsCmd(string) ([]string, bool) { return nil, false }
-
-func (phpPlugin) ParseTestList(string) []string { return nil }
-
 // WorkspaceRunEnv is a no-op: PHP's opcache is not, by default, a
 // persistent bytecode cache keyed off a source file's (mtime, size) sitting
 // next to that source the way CPython's __pycache__ is — the class of hole
@@ -477,17 +471,6 @@ func (phpPlugin) ConcatTests(parts []AuthoredPart) (string, error) {
 		return parts[0].Source, nil
 	}
 	return "", fmt.Errorf("php: PHPUnit 10+ loads one class per file, the class named after the file, so proven PHPUnit tests are not merged — save each under its own class name (%s)", parts[len(parts)-1].MutantID)
-}
-
-// FailFastArgs is phpunit's `--stop-on-failure`. See lang.FailFaster.
-func (phpPlugin) FailFastArgs(testCmd []string) ([]string, bool) {
-	if len(testCmd) == 0 || cmdIsShellWrapped(testCmd) {
-		return nil, false
-	}
-	if cmdHasWord(testCmd, "phpunit") {
-		return []string{"--stop-on-failure"}, true
-	}
-	return nil, false
 }
 
 // COVERAGE FOR PHP — pcov or Xdebug, and the extension is the honest catch.

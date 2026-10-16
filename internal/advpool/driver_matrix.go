@@ -7,6 +7,8 @@ import (
 	"log"
 	"strings"
 
+	"github.com/pdbethke/corralai/internal/adequacy"
+	golang "github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/matrix"
 )
 
@@ -52,7 +54,8 @@ func (d *Driver) tickMatrix(ctx context.Context, run *runState) {
 	}
 
 	p := langFor(run.rs)
-	listCmd, ok := p.ListTestsCmd(run.rs.DevTestPath)
+	argv := adequacy.ShellSplit(run.rs.TestCmd)
+	listCmd, ok := golang.ListTestsCmd(p, argv, run.rs.DevTestPath)
 	if !ok {
 		log.Printf("advpool: matrix: unavailable for %q", run.rs.Lang)
 		return
@@ -64,7 +67,7 @@ func (d *Driver) tickMatrix(ctx context.Context, run *runState) {
 		return
 	}
 
-	sels := p.ParseTestList(out)
+	sels := golang.ParseTestList(p, argv, out)
 	if len(sels) == 0 {
 		return
 	}
@@ -86,7 +89,7 @@ func (d *Driver) tickMatrix(ctx context.Context, run *runState) {
 		len(sels), len(run.mutants), len(sels)*len(run.mutants), workers)
 
 	scoreFn := func(sctx context.Context, tr matrix.TestRef) (int, []string, bool) {
-		cmd, ok := p.SingleTestCmd(tr.TestFile, tr.Selector)
+		cmd, ok := golang.SingleTestCmd(p, argv, tr.TestFile, tr.Selector)
 		if !ok {
 			return 0, nil, false
 		}

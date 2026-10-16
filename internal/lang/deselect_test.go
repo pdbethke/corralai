@@ -23,9 +23,9 @@ import (
 // model at all — it is arithmetic on the runner's own output.
 func TestPythonFailedTests(t *testing.T) {
 	p, _ := ByName("python")
-	fd, ok := p.(FailureDeselector)
+	failedTests, _, ok := DeselectorFor(p, p.TestCmd())
 	if !ok {
-		t.Fatal("the python plugin must implement FailureDeselector — pytest names its failures precisely and supports --deselect")
+		t.Fatal("pytest must offer salvage — pytest names its failures precisely and supports --deselect")
 	}
 
 	// Real pytest output shape, including the trailing " - <error>" summary
@@ -42,7 +42,7 @@ FAILED tests/test_cli_corral.py::test_with_appcontext_ctx_invoke - AttributeErro
 FAILED tests/test_cli_corral.py::test_set_app_option - assert 2 == 0
 3 failed, 10 passed in 0.06s`
 
-	got := fd.FailedTests(out)
+	got := failedTests(out)
 	want := []string{
 		"tests/test_cli_corral.py::test_with_appcontext_ctx_invoke",
 		"tests/test_cli_corral.py::test_set_app_option",
@@ -62,9 +62,9 @@ FAILED tests/test_cli_corral.py::test_set_app_option - assert 2 == 0
 // passing suite and quietly skip real tests.
 func TestPythonFailedTests_NoFailuresNoSelectors(t *testing.T) {
 	p, _ := ByName("python")
-	fd := p.(FailureDeselector)
+	failedTests, _, _ := DeselectorFor(p, p.TestCmd())
 	for _, out := range []string{"", "13 passed in 0.06s", "collected 0 items"} {
-		if got := fd.FailedTests(out); len(got) != 0 {
+		if got := failedTests(out); len(got) != 0 {
 			t.Errorf("FailedTests(%q) = %v, want none", out, got)
 		}
 	}
@@ -74,9 +74,9 @@ func TestPythonFailedTests_NoFailuresNoSelectors(t *testing.T) {
 // selector — pytest does not accept a comma-joined list.
 func TestPythonDeselectArgs(t *testing.T) {
 	p, _ := ByName("python")
-	fd := p.(FailureDeselector)
+	_, deselectArgs, _ := DeselectorFor(p, p.TestCmd())
 
-	got := fd.DeselectArgs([]string{"a.py::t1", "a.py::t2"})
+	got := deselectArgs([]string{"a.py::t1", "a.py::t2"})
 	want := []string{"--deselect", "a.py::t1", "--deselect", "a.py::t2"}
 	if len(got) != len(want) {
 		t.Fatalf("DeselectArgs = %v, want %v", got, want)
@@ -86,7 +86,7 @@ func TestPythonDeselectArgs(t *testing.T) {
 			t.Fatalf("DeselectArgs = %v, want %v", got, want)
 		}
 	}
-	if len(fd.DeselectArgs(nil)) != 0 {
+	if len(deselectArgs(nil)) != 0 {
 		t.Error("DeselectArgs(nil) must be empty — never emit a bare --deselect with no argument")
 	}
 }
@@ -101,8 +101,8 @@ func TestNonPythonPluginsDoNotClaimDeselection(t *testing.T) {
 		if !ok {
 			t.Fatalf("plugin %q not registered", name)
 		}
-		if _, claims := p.(FailureDeselector); claims {
-			t.Errorf("%s claims FailureDeselector — only implement it with a verified failure-line parser and a real deselect flag for that runner", name)
+		if _, _, claims := DeselectorFor(p, p.TestCmd()); claims {
+			t.Errorf("%s offers salvage — only give a runner row FailedTests and DeselectArgs with a verified failure-line parser and a real deselect flag for that runner", name)
 		}
 	}
 }

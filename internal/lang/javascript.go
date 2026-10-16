@@ -176,12 +176,6 @@ func (jsPlugin) ImportPath(string, func(string) bool) (string, bool) { return ""
 // per-task correction.
 func (jsPlugin) ImportNote(string, bool) string { return "" }
 
-func (jsPlugin) SingleTestCmd(testPath, selector string) ([]string, bool) { return nil, false }
-
-func (jsPlugin) ListTestsCmd(string) ([]string, bool) { return nil, false }
-
-func (jsPlugin) ParseTestList(string) []string { return nil }
-
 // TestNamesInSource: no static lister for this language yet; nil is "unknown".
 func (jsPlugin) TestNamesInSource(string, string) []string { return nil }
 
@@ -194,28 +188,6 @@ func (jsPlugin) TestNamesInSource(string, string) []string { return nil }
 // stock TestCmd doesn't route through one; see lang.Plugin.WorkspaceRunEnv's
 // doc comment and typescript.go's own note for the closer case.
 func (jsPlugin) WorkspaceRunEnv() (env []string, cleanup func()) { return nil, func() {} }
-
-// FailFastArgs is `--bail` for the two JS runners that take it and corral is
-// sure of (jest, mocha). `node --test` — this plugin's own stock command — has
-// no such flag, so it returns ok=false and is simply unchanged; vitest is left
-// out deliberately (its bail spelling has changed across major versions, and
-// an unrecognised flag would make every mutant exit non-zero and read as a
-// kill). See lang.FailFaster.
-func (jsPlugin) FailFastArgs(testCmd []string) ([]string, bool) {
-	return jsFailFastArgs(testCmd)
-}
-
-// jsFailFastArgs is shared by the javascript and typescript plugins: the
-// runners are the same, and a second copy would be free to drift.
-func jsFailFastArgs(testCmd []string) ([]string, bool) {
-	if len(testCmd) == 0 || cmdIsShellWrapped(testCmd) {
-		return nil, false
-	}
-	if cmdHasWord(testCmd, "jest") || cmdHasWord(testCmd, "mocha") {
-		return []string{"--bail"}, true
-	}
-	return nil, false
-}
 
 // COVERAGE FOR JAVASCRIPT, WITH NOTHING TO INSTALL.
 //

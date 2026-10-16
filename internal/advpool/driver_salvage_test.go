@@ -11,7 +11,7 @@ import (
 )
 
 // pythonSalvageSpec is the go-flavoured testRunSpec retargeted at python, the
-// one language whose plugin implements lang.FailureDeselector.
+// one runner whose row offers salvage (lang.DeselectorFor).
 func pythonSalvageSpec() RunSpec {
 	rs := testRunSpec()
 	rs.Lang = "python"
@@ -54,8 +54,8 @@ func TestTick_PoolAdequacy_SalvagesPassingTestsFromABrokenFile(t *testing.T) {
 		},
 	}
 	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Replace: "c0"}, survivors[0], survivors[1]}}
-	// PYTHON specifically: the salvage is gated on the language plugin
-	// implementing lang.FailureDeselector, and only python does — go (the
+	// PYTHON specifically: the salvage is gated on the test command's runner
+	// having salvage, and only pytest has it — go (the
 	// default test spec) deliberately does not, because corral cannot parse
 	// its failures into deselectable selectors.
 	d := newTestDriverWithSpec(t, 2, scorer, validator, 0.1, pythonSalvageSpec())
@@ -99,8 +99,8 @@ func TestTick_PoolAdequacy_SalvageRejectedWhenItProvesNothing(t *testing.T) {
 		},
 	}
 	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Replace: "c0"}, survivors[0], survivors[1]}}
-	// PYTHON specifically: the salvage is gated on the language plugin
-	// implementing lang.FailureDeselector, and only python does — go (the
+	// PYTHON specifically: the salvage is gated on the test command's runner
+	// having salvage, and only pytest has it — go (the
 	// default test spec) deliberately does not, because corral cannot parse
 	// its failures into deselectable selectors.
 	d := newTestDriverWithSpec(t, 2, scorer, validator, 0.1, pythonSalvageSpec())

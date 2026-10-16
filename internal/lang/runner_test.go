@@ -55,7 +55,21 @@ func TestRunnerForPicksTheMostSpecificRow(t *testing.T) {
 		}
 	}
 	// The Default answered for an unnamed command must never add a flag.
-	if a, ok := failFastViaRows(py, []string{"sh", "-c", "echo pytest"}); ok {
+	if a, ok := FailFastArgsFor(py, []string{"sh", "-c", "echo pytest"}); ok {
 		t.Errorf("a shell script that only mentions pytest got fail-fast %q", a)
+	}
+}
+
+// The one deliberate change the runner table made: pytest's --deselect
+// belonged to every Python command, and unittest exits 2 on an option it does
+// not know, so a salvage rerun of a unittest suite could never pass. The
+// table gives deselection to the pytest row only.
+func TestUnittestGetsNoPytestDeselect(t *testing.T) {
+	py, _ := ByName("python")
+	if _, _, ok := DeselectorFor(py, []string{"python3", "-m", "unittest", "discover"}); ok {
+		t.Error("a unittest command was offered pytest's --deselect")
+	}
+	if _, _, ok := DeselectorFor(py, []string{"python3", "-m", "pytest", "-q"}); !ok {
+		t.Error("a pytest command lost --deselect")
 	}
 }

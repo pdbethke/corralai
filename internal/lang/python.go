@@ -1686,7 +1686,7 @@ func (pyPlugin) ForSpan(sel Selection, span LineRange) ([]string, []string, stri
 	// KILL-LIKELIEST FIRST. The evidence already knows how many of the
 	// mutated span's own lines each covering test executes; a test that runs
 	// more of the changed code is likelier to observe the change. With
-	// per-mutant fail-fast (lang.FailFaster) the average killed mutant then
+	// per-mutant fail-fast (lang.FailFastArgsFor) the average killed mutant then
 	// costs the tests up to its killer rather than the whole set.
 	//
 	// THIS CHANGES ORDER ONLY. Exactly the ids selected above are returned,
@@ -1929,23 +1929,6 @@ func pyFirstFailure(output []byte) string {
 		return prefix + rest
 	}
 	return ""
-}
-
-// FailFastArgs is pytest's `-x` (or unittest's `--failfast`) — stop at the
-// first failing test. Recognised from the COMMAND, because a Python repo may
-// be graded by either runner and only the runner's own flag is safe to append.
-// See lang.FailFaster for why a wrong guess would inflate the kill rate.
-func (pyPlugin) FailFastArgs(testCmd []string) ([]string, bool) {
-	if len(testCmd) == 0 || cmdIsShellWrapped(testCmd) {
-		return nil, false
-	}
-	if cmdHasWord(testCmd, "pytest") {
-		return []string{"-x"}, true
-	}
-	if cmdHasWord(testCmd, "unittest") {
-		return []string{"--failfast"}, true
-	}
-	return nil, false
 }
 
 // sortBySpanCoverage orders ids by how many of span's own lines each test

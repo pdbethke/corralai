@@ -509,23 +509,6 @@ func goFirstFailure(output []byte) string {
 	return ""
 }
 
-// FailFastArgs is `go test -failfast` — stop after the first test binary
-// failure. Recognised only for an actual `go test` invocation: a Makefile
-// wrapper or a gotestsum shape is not one, and guessing a flag onto it would
-// make every mutant exit non-zero and read as a kill. See lang.FailFaster.
-func (goPlugin) FailFastArgs(testCmd []string) ([]string, bool) {
-	if len(testCmd) < 2 || cmdIsShellWrapped(testCmd) {
-		return nil, false
-	}
-	if !isGoBinary(testCmd[0]) {
-		return nil, false
-	}
-	if testCmd[1] != "test" {
-		return nil, false
-	}
-	return []string{"-failfast"}, true
-}
-
 // isGoBinary reports whether argv0 names the go command: base name go or
 // go.exe. A versioned toolchain wrapper from golang.org/dl (`go1.26.9`) is
 // NOT recognised, so a command run through one gets no -failfast and no

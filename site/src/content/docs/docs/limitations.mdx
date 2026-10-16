@@ -90,6 +90,11 @@ Named, so they are not discovered one paid run at a time:
   --user`, pyenv, nvm, a stock rustup) is invisible; install it under `/usr`, put
   a Python virtualenv inside the project, or use `--substrate workspace` (below).
   See [Getting started](/docs/getting-started/).
+- **On macOS the sandbox is weaker.** `sandbox-exec` runs as your user, and a
+  jailed command can read the start-up environment of your other processes
+  through the kernel (measured on macOS 27, 2026-10-13; no Seatbelt rule tried
+  blocked it). Do not audit there with API keys exported in other shells, or use
+  `--jail container`. See [SECURITY.md](https://github.com/pdbethke/corralai/blob/main/SECURITY.md).
 - **`--substrate workspace` mutates your real checkout.** It is opt-in, for a
   place that is already the isolation boundary (a CI runner, a scratch clone).
   Restores run on a failing command, a timeout, a panic and an interrupt; a

@@ -147,9 +147,10 @@ warehouse design doc and this page disagreeing about them:
   a row "aging" when it holds a checkout to compare the file's *own* last
   change against.
 - **`killed_by` is per-language and best-effort.** It requires BOTH a
-  `lang.FailureParser` for the language (`internal/lang/lang.go`) — shipped
-  for Go and Python, deliberately unimplemented for Ruby/JS/TS, where a
-  wrong guess is worse than none — AND a jail that can hand its run output
+  failure parser for the test runner (a runner row's `FirstFailure`,
+  `internal/lang/runner.go`) — every runner but unittest has one since the
+  runner table's Phase 3, each read from the runner's real default output —
+  AND a jail that can hand its run output
   back (`adequacy.DetailedJail`). Both substrates satisfy the second half
   today: the bwrap jail and the workspace substrate both implement
   `DetailedJail` (`internal/adequacy/jail_detailed_test.go`'s

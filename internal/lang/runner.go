@@ -122,7 +122,11 @@ var runners = []Runner{
 	// its bail spelling has changed across major versions, and an
 	// unrecognised flag would make every mutant exit non-zero and read as a
 	// kill. node --test has no such flag.
-	{Name: "jest", Languages: []string{"javascript", "typescript"}, Words: []string{"jest"}, FailFast: []string{"--bail"}},
+	{
+		Name: "jest", Languages: []string{"javascript", "typescript"}, Words: []string{"jest"}, FailFast: []string{"--bail"},
+		ListCmd: jestListCmd, ParseList: jestParseList, SingleCmd: jestSingleCmd, ResolveByList: true, Coruns: fullNameColl,
+		Note: "listing and one-test runs verified on jest 30.5",
+	},
 	{Name: "mocha", Languages: []string{"javascript", "typescript"}, Words: []string{"mocha"}, FailFast: []string{"--bail"}},
 	{Name: "vitest", Languages: []string{"javascript", "typescript"}, Words: []string{"vitest"}},
 	{

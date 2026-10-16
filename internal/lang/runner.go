@@ -49,10 +49,6 @@ type Runner struct {
 	// runner selects by a pattern a second listed test can match too. nil
 	// means its ids are exact. ResolveForRun refuses an id that coruns.
 	Coruns func(id, other string) bool
-	// ListsWholeSuite: ListCmd lists every test the command runs, not the
-	// test file's (the cargo rows list the crate), so a per-test matrix over
-	// it would offer unrelated tests for deletion.
-	ListsWholeSuite bool
 	// FirstFailure names the first failing test in the runner's output (a
 	// label, never a grade); Flaky names tests that passed only on a retry.
 	FirstFailure func(output []byte) string
@@ -174,13 +170,13 @@ var runners = []Runner{
 		// FirstFailure and Flaky read the grammar off the output, not the
 		// command (rustGrammarOf), so both cargo rows share them.
 		Name: "cargo nextest", Languages: []string{"rust"}, Detect: isNextest,
-		ListCmd: nextestListCmd, ParseList: nextestParseList, SingleCmd: nextestSingleCmd, ResolveByList: true, ListsWholeSuite: true,
+		ListCmd: nextestListCmd, ParseList: nextestParseList, SingleCmd: nextestSingleCmd, ResolveByList: true,
 		FirstFailure: rustFirstFailure, Flaky: rustFlakyTests,
 		Disclose: nextestDisclose, PreflightBin: nextestPreflightBin,
 	},
 	{
 		Name: "cargo test", Languages: []string{"rust"}, Default: true, Words: []string{"cargo"},
-		ListCmd: libtestListCmd, ParseList: libtestParseList, SingleCmd: libtestSingleCmd, ResolveByList: true, ListsWholeSuite: true,
+		ListCmd: libtestListCmd, ParseList: libtestParseList, SingleCmd: libtestSingleCmd, ResolveByList: true,
 		FirstFailure: rustFirstFailure, Flaky: rustFlakyTests,
 		Disclose: libtestDisclose, PreflightBin: libtestPreflightBin,
 		Note: "libtest has no retries; flaky tests are named when the output is nextest's (a wrapper that runs nextest under another command)",
@@ -303,13 +299,6 @@ func RunsAlone(p Plugin, argv []string, listed []string, id string) bool {
 		}
 	}
 	return n == 1
-}
-
-// ListsWholeSuite reports whether argv's runner lists every test the command
-// runs rather than the test file's.
-func ListsWholeSuite(p Plugin, argv []string) bool {
-	r, ok := RunnerFor(p, argv)
-	return ok && r.ListsWholeSuite
 }
 
 // RunDisclosures is what the scan line says about running testCmd in

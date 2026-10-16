@@ -94,19 +94,3 @@ func TestMatrixRowFor(t *testing.T) {
 		t.Fatalf("no-match must return nil, got %+v", r)
 	}
 }
-
-// A critic names a test by its own title, the matrix by the runner's id
-// (`Calc::adds`): the finding finds its row the way the critic path finds its
-// test, through ResolveListedTest, and a title two rows share finds none.
-func TestMatrixRowForResolvesACriticsTitle(t *testing.T) {
-	rows := []matrix.TestAdequacy{{Selector: "Calc::adds (a+b)"}, {Selector: "Calc::adds"}, {Selector: "Calc::neg::adds"}}
-	if r := matrixRowFor(rows, "adds (a+b)"); r == nil || r.Selector != "Calc::adds (a+b)" {
-		t.Errorf("adds (a+b) found %+v", r)
-	}
-	if r := matrixRowFor(rows, "adds"); r != nil {
-		t.Errorf("adds is two rows' title, found %+v", r)
-	}
-	if r := matrixRowFor(rows, "Calc::adds"); r == nil || r.Selector != "Calc::adds" {
-		t.Errorf("an exact id found %+v", r)
-	}
-}

@@ -8,7 +8,6 @@ import (
 	"log"
 	"os"
 	"reflect"
-	"slices"
 	"strings"
 	"testing"
 
@@ -103,7 +102,7 @@ func TestCriticTestCommandForRust(t *testing.T) {
 // also lists the whole crate, so tests of unrelated modules would be scored
 // against one file's mutants and offered for deletion. Until the matrix
 // scopes and resolves, such a run keeps the list-and-resolve critic path.
-func TestMatrixLeavesWholeSuiteListersToTheCriticPath(t *testing.T) {
+func TestMatrixLeavesResolveByListRunnersToTheCriticPath(t *testing.T) {
 	enumerator := &fakeEnumerator{out: "tests::adds: test\n"}
 	d := &Driver{Enumerator: enumerator}
 	rs := RunSpec{Lang: "rust", TestCmd: "cargo test", Matrix: true, CodePath: "src/a.rs", DevTestPath: "src/a.rs"}
@@ -156,53 +155,20 @@ func TestCriticTestCommandForTheListedRunners(t *testing.T) {
 	}
 }
 
-// cmdRecordingScorer passes every score and records the commands it was
-// handed, split back into argv as the jail splits them.
-type cmdRecordingScorer struct{ cmds [][]string }
-
-func (s *cmdRecordingScorer) Score(_ context.Context, _, _, _ string, _ []adequacy.Mutant, cmd string) (float64, []adequacy.Mutant, error) {
-	s.cmds = append(s.cmds, adequacy.ShellSplit(cmd))
-	return 1, nil, nil
-}
-
-func (s *cmdRecordingScorer) ScoreReport(_ context.Context, _, _, _ string, m []adequacy.Mutant, cmd string) (adequacy.Report, error) {
-	s.cmds = append(s.cmds, adequacy.ShellSplit(cmd))
-	return adequacy.Report{CompliantPass: true, CanaryKilled: true, Killed: []string{m[0].ID}}, nil
-}
-
-// A runner whose list is the test file (jest) gets a matrix: one row per
-// listed test that runs alone, each scored with that test's own command
-// intact through the string the scorer is handed. The fixture's colliding
-// pair (`Calc::adds`, top-level `Calc adds`) gets no row: a run of either
-// runs both, so neither's kills could be credited to it.
-func TestMatrixRunsForJest(t *testing.T) {
+// A jest command's list is what the command runs, not the test file's tests
+// (a directory argument or a config widens it), so --matrix stays off for
+// jest as for Rust: it would offer other files' tests for deletion.
+func TestMatrixLeavesJestToTheCriticPath(t *testing.T) {
 	b, err := os.ReadFile("../lang/testdata/runners/jest-list.json") // #nosec G304 -- test fixture
 	if err != nil {
 		t.Fatal(err)
 	}
-	scorer := &cmdRecordingScorer{}
-	d := &Driver{Enumerator: &fakeEnumerator{out: string(b)}, Scorer: scorer, MatrixWorkers: 1}
-	rs := RunSpec{Lang: "javascript", TestCmd: "npx jest", Matrix: true, CodePath: "calc.js", DevTestPath: "calc.jest.test.js"}
+	enumerator := &fakeEnumerator{out: string(b)}
+	d := &Driver{Enumerator: enumerator}
+	rs := RunSpec{Lang: "javascript", TestCmd: "npx jest src", Matrix: true, CodePath: "src/calc.js", DevTestPath: "src/calc.jest.test.js"}
 	run := &runState{rs: rs, mutants: []adequacy.Mutant{{ID: "m1"}}}
 	d.tickMatrix(context.Background(), run)
-	if run.matrix == nil {
-		t.Fatal("no matrix for jest")
-	}
-	var got []string
-	for _, r := range run.matrix.Rows {
-		got = append(got, r.Selector)
-	}
-	slices.Sort(got)
-	if want := []string{"Calc::adds (a+b)", "Calc::neg::adds", "top level"}; !slices.Equal(got, want) {
-		t.Errorf("matrix rows = %q, want %q", got, want)
-	}
-	found := false
-	for _, c := range scorer.cmds {
-		if slices.Equal(c, []string{"npx", "jest", "--testNamePattern", `^Calc adds \(a\+b\)$`, "calc.jest.test.js"}) {
-			found = true
-		}
-	}
-	if !found {
-		t.Errorf("no score ran the one test intact; commands = %q", scorer.cmds)
+	if enumerator.calls != 0 || run.matrix != nil {
+		t.Fatalf("jest --matrix enumerated %d time(s), matrix=%v; want the matrix skipped", enumerator.calls, run.matrix)
 	}
 }

@@ -54,11 +54,15 @@ func (d *Driver) tickMatrix(ctx context.Context, run *runState) {
 
 	p := langFor(run.rs)
 	argv := adequacy.ShellSplit(run.rs.TestCmd)
-	// A runner that lists the whole suite rather than the test file (the
-	// cargo rows list the crate) is left to the critic's list-and-resolve
-	// path: its matrix would offer tests unrelated to the file for deletion.
-	if golang.ListsWholeSuite(p, argv) {
-		log.Printf("advpool: matrix: unavailable for %q (its runner lists the whole suite, not the test file; the critic path checks claims instead)", run.rs.Lang)
+	// A runner whose ids are resolved through its own list is left to the
+	// critic's list-and-resolve path. Its list is what the command runs, not
+	// the test file's tests: the cargo rows list the crate, and a jest, mocha
+	// or rspec command that already names a directory (or a .mocharc spec)
+	// lists every file under it. A matrix over that would offer other files'
+	// tests for deletion, and a critic's title resolved against the matrix's
+	// rows would not see the tests the matrix left out.
+	if golang.ResolvesByList(p, argv) {
+		log.Printf("advpool: matrix: unavailable for %q (its runner lists what the command runs, not the test file; the critic path checks claims instead)", run.rs.Lang)
 		return
 	}
 	listCmd, ok := golang.ListTestsCmd(p, argv, run.rs.DevTestPath)

@@ -67,12 +67,32 @@ func perEntryBinds(b Bind) []Bind {
 		if strings.HasPrefix(name, ".") && name != ".bin" {
 			continue
 		}
+		if e.Type()&os.ModeSymlink != 0 && !linksWithin(filepath.Join(b.Host, name), b.Host) {
+			// bwrap and docker follow a bind's source: a checked-in
+			// node_modules/x -> ~/.ssh would mount the target. A link
+			// that stays inside (pnpm's farm into .pnpm) is mounted.
+			continue
+		}
 		out = append(out, Bind{
 			Host:   filepath.Join(b.Host, name),
 			Target: path.Join(b.Target, name),
 		})
 	}
 	return out
+}
+
+// linksWithin reports whether the symlink at p resolves to a path inside dir.
+func linksWithin(p, dir string) bool {
+	target, err := filepath.EvalSymlinks(p)
+	if err != nil {
+		return false
+	}
+	root, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return false
+	}
+	rel, err := filepath.Rel(root, target)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 // Options configure a single Run.

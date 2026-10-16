@@ -217,6 +217,7 @@ func writerOver(t *testing.T, repo, ledger string) (*uiWriter, http.Handler) {
 }
 
 func TestUIAdjudicateWritesTheSameEntryTheCLIWould(t *testing.T) {
+	requireReviewSandbox(t)
 	repo, ledger, hash := recheckFixture(t, map[string]string{"R1": "test -f marker.txt"})
 	_, h := writerOver(t, repo, ledger)
 	reason := "real: $(rm -rf ~) stays text\nsecond line"
@@ -243,6 +244,7 @@ func TestUIAdjudicateWritesTheSameEntryTheCLIWould(t *testing.T) {
 }
 
 func TestUIRejectsARefThatCouldBeParsedAsAFlag(t *testing.T) {
+	requireReviewSandbox(t)
 	repo, ledger, _ := recheckFixture(t, map[string]string{"R1": "true"})
 	_, h := writerOver(t, repo, ledger)
 	for _, ref := range []string{"--push=md:x#R1", "abc#R1 --by x", "zz12zz12zz12#R1", "", "0123456789ab#1"} {
@@ -258,6 +260,7 @@ func TestUIRejectsARefThatCouldBeParsedAsAFlag(t *testing.T) {
 }
 
 func TestUIAdjudicateRequiresAVerdictAndAReason(t *testing.T) {
+	requireReviewSandbox(t)
 	repo, ledger, hash := recheckFixture(t, map[string]string{"R1": "true"})
 	_, h := writerOver(t, repo, ledger)
 	for _, b := range []map[string]string{
@@ -274,6 +277,7 @@ func TestUIAdjudicateRequiresAVerdictAndAReason(t *testing.T) {
 }
 
 func TestUIShowsACLIRefusalVerbatimAndChangesNothing(t *testing.T) {
+	requireReviewSandbox(t)
 	repo, ledger, _ := recheckFixture(t, map[string]string{"R1": "true"})
 	_, h := writerOver(t, repo, ledger)
 	before := dirDigest(t, ledger)
@@ -289,6 +293,7 @@ func TestUIShowsACLIRefusalVerbatimAndChangesNothing(t *testing.T) {
 }
 
 func TestUISerializesConcurrentVerdicts(t *testing.T) {
+	requireReviewSandbox(t)
 	repo, ledger, hash := recheckFixture(t, map[string]string{"R1": "true", "R2": "true"})
 	_, h := writerOver(t, repo, ledger)
 	var wg sync.WaitGroup
@@ -320,6 +325,7 @@ func TestUISerializesConcurrentVerdicts(t *testing.T) {
 }
 
 func TestUIRecheckReturnsTheCLIsMeasurement(t *testing.T) {
+	requireReviewSandbox(t)
 	repo, ledger, hash := recheckFixture(t, map[string]string{"R1": "test -f marker.txt", "R2": "test -f gone.txt"})
 	_, h := writerOver(t, repo, ledger)
 	for id, want := range map[string]string{"R1": recheckStill, "R2": recheckGone} {
@@ -334,6 +340,7 @@ func TestUIRecheckReturnsTheCLIsMeasurement(t *testing.T) {
 }
 
 func TestUICitedListsCommitsNamingTheReviewAndLabelsNothingFixed(t *testing.T) {
+	requireReviewSandbox(t)
 	repo, ledger, hash := recheckFixture(t, map[string]string{"R1": "true"})
 	if out, err := exec.Command("git", "-C", repo, "-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "fix: the thing from review "+hash).CombinedOutput(); err != nil {
 		t.Fatalf("%v: %s", err, out)
@@ -361,6 +368,7 @@ func TestUICitedListsCommitsNamingTheReviewAndLabelsNothingFixed(t *testing.T) {
 // leaving the UI reporting failure for a change that landed). The child
 // must run on a context detached from the request, with its own bound.
 func TestUICancelledRequestDoesNotCancelTheRecheckChild(t *testing.T) {
+	requireReviewSandbox(t)
 	repo, ledger, hash := recheckFixture(t, map[string]string{"R1": "true"})
 	w := testWriter(t, "127.0.0.1:8787")
 	w.repo, w.ledgerDir = repo, ledger
@@ -390,6 +398,7 @@ func TestUICancelledRequestDoesNotCancelTheRecheckChild(t *testing.T) {
 }
 
 func TestUICancelledRequestDoesNotCancelTheAdjudicateChild(t *testing.T) {
+	requireReviewSandbox(t)
 	repo, ledger, hash := recheckFixture(t, map[string]string{"R1": "true"})
 	w := testWriter(t, "127.0.0.1:8787")
 	w.repo, w.ledgerDir = repo, ledger
@@ -422,6 +431,7 @@ func TestUICancelledRequestDoesNotCancelTheAdjudicateChild(t *testing.T) {
 // empty [] would silently pass a repo that is not even a checkout as
 // "nothing cites this review".
 func TestUICitedReturnsAnErrorWhenGitFails(t *testing.T) {
+	requireReviewSandbox(t)
 	_, ledger, hash := recheckFixture(t, map[string]string{"R1": "true"})
 	notARepo := t.TempDir()
 	_, h := writerOver(t, notARepo, ledger)

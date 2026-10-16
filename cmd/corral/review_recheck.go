@@ -35,7 +35,7 @@ type recheckResult struct {
 }
 
 // runReviewRecheck re-runs one finding's recorded reproduction script
-// against the CURRENT HEAD of --repo, in a disposable worktree, the way
+// against the CURRENT HEAD of --repo, in the sandbox (--substrate), the way
 // `corral review` ran it at review time.
 //
 // "Is it fixed?" is answered by execution, never by a commit message that
@@ -47,8 +47,9 @@ type recheckResult struct {
 func runReviewRecheck(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("corral review recheck", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	repo := fs.String("repo", ".", "the checkout whose HEAD the script runs against, in a disposable worktree")
+	repo := fs.String("repo", ".", "the checkout whose HEAD the script runs against, in the sandbox (or a disposable worktree with --substrate workspace)")
 	timeout := fs.Duration("timeout", time.Minute, "wall-clock bound on the script")
+	substrate := fs.String("substrate", substrateJail, "where the script runs: `jail` (default, the offline sandbox) or `workspace` (a detached worktree on the host), as for `corral review`")
 	asJSON := fs.Bool("json", false, "print the result as one JSON object")
 	if err := fs.Parse(flagsFirst(fs, args)); err != nil {
 		return flagParseExit(err)
@@ -113,7 +114,12 @@ func runReviewRecheck(args []string, stdout, stderr io.Writer) int {
 	// (defers run in reverse), so cleanup itself runs under the handler.
 	ctx, stop := auditContext(stderr)
 	defer stop()
-	rep, cleanup, werr := newWorktreeReproducer(root, res.Commit, *timeout)
+	iso, jerr := resolveReviewSubstrate(*substrate)
+	if jerr != nil {
+		res.Outcome, res.Reason = recheckUnrun, jerr.Error()
+		return printRecheck(stdout, res, *asJSON)
+	}
+	rep, cleanup, werr := newReproducer(*substrate, iso, root, res.Commit, e.Review.Scope, *timeout, stderr)
 	if werr != nil {
 		res.Outcome, res.Reason = recheckUnrun, werr.Error()
 		return printRecheck(stdout, res, *asJSON)
@@ -121,9 +127,17 @@ func runReviewRecheck(args []string, stdout, stderr io.Writer) int {
 	defer cleanup()
 	out, code, rerr := rep.Run(ctx, f.Script)
 	res.Output = clip.Tail(out, 4000)
+	// A finding reproduced in a worktree — every entry before the jail, and
+	// every one the Action writes — had .git, the network and every binary.
+	// In the jail a script can fail for lack of them alone (git exits 128
+	// with no repository), so a failure there is not evidence of a fix.
+	inWorkspace := !strings.HasPrefix(e.Review.Substrate, "jail")
 	switch {
 	case rerr != nil:
 		res.Outcome, res.Reason = recheckUnrun, rerr.Error()
+	case code != 0 && *substrate == substrateJail && inWorkspace:
+		res.ExitCode = &code
+		res.Outcome, res.Reason = recheckUnrun, fmt.Sprintf("the script exited %d in the jail, but the finding was reproduced in a worktree (%s), which has .git, the network and binaries the jail does not — not evidence of a fix; recheck it with --substrate workspace where that is safe", code, orDefault(e.Review.Substrate, "an entry from before the jail"))
 	case code < 0:
 		// A negative code (WorkspaceRunner's convention, see
 		// internal/adequacy/workspace.go around st.Exited()) means the
@@ -131,6 +145,13 @@ func runReviewRecheck(args []string, stdout, stderr io.Writer) int {
 		// finished — not that the defect is gone. Reporting it as
 		// no-longer-reproduces would let a crash pass as a fix.
 		res.Outcome, res.Reason = recheckUnrun, "the script did not exit normally: killed by a signal, or never finished — not a result"
+	case code > 128 && code <= 128+64:
+		// In the jail a signal arrives as an exit status: bwrap's init
+		// reports a child killed by signal N as 128+N (measured: `kill -9
+		// $$` exits 137), so it cannot be told from a script that chose that
+		// status. Read as the signal, the safe way: a crash is never a fix.
+		res.ExitCode = &code
+		res.Outcome, res.Reason = recheckUnrun, fmt.Sprintf("the script exited %d: killed by signal %d (in the jail a signal arrives as 128+N), not a result", code, code-128)
 	case code == 126 || code == 127:
 		res.ExitCode = &code
 		res.Outcome, res.Reason = recheckUnrun, fmt.Sprintf("the script exited %d: a command was not found or not executable — a missing toolchain, not a result", code)

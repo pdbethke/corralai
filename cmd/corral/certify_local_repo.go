@@ -332,7 +332,11 @@ type loadOpts struct {
 	BackendName  string   // sandbox backend Name(): "bwrap" | "container" | "sandbox-exec" | ...
 	ExtraBindDir []string // repo-relative dirs from --bind-dir
 	NoBindDeps   bool     // --no-bind-deps: copy dep dirs instead of binding
-	rootAbs      string   // absolute root, set internally before the walk
+	// NoFiles collects the dependency binds only, reading no file: review
+	// seeds its jail from a worktree at the commit, where untracked
+	// dependency dirs are absent, and binds them from the operator's checkout.
+	NoFiles bool
+	rootAbs string // absolute root, set internally before the walk
 }
 
 // depDirNames are directory basenames auto-detected as dependency trees:
@@ -478,8 +482,13 @@ func loadRepoFiles(root string, opts loadOpts) (map[string]string, []adequacy.De
 			}
 			return nil
 		}
-		if d.Type()&fs.ModeSymlink != 0 {
+		if d.Type()&fs.ModeSymlink != 0 || opts.NoFiles {
 			return nil // never follow a symlink out of the repo
+		}
+		if d.Name() == ".git" {
+			// A worktree's .git is a FILE naming the main repository's path
+			// on the host: not source, and a pointer out of the seed.
+			return nil
 		}
 		info, ierr := d.Info()
 		if ierr != nil {

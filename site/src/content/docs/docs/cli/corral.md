@@ -718,7 +718,9 @@ corral review — a cold model reviews a scope of the repository; corral runs it
       The reviewer is told to assume the code is wrong. Every finding carries a tier it
       declared — REPRODUCED (with a sh script that exits 0 iff the defect is demonstrated),
       CODE-READ (file:line, argued), HYPOTHESIS — and the run executes every REPRODUCED
-      script against a detached worktree at HEAD. A script that does not hold demotes its
+      script in the offline sandbox certify grades in, over the tree at HEAD (refused when
+      there is none; --substrate workspace runs them in a detached worktree on the host, for
+      a CI runner). A script that does not hold demotes its
       finding to CODE-READ on the record, out loud. The reviewer must also list what it
       checked and found sound. The opinion is printed and carried; only the reproductions
       are what the entry's signature vouches for. Exit 0 either way unless --fail-on reproduced,
@@ -770,6 +772,8 @@ flags of `corral review`:
     	the reviewer seat — an alias from the registry, a provider model name, or an AGENTIC seat: an agent NAME, pinned to a model as <name>:<model>. `claude-code`, `codex` and `antigravity` are defined; ANY agent is defined the same way as CORRALAI_AGENT_<NAME>="<command line>" ({dir} the worktree, {out} a reply file, {model} / {model:FLAG} the pin; the brief on stdin, the reply on stdout). An agentic seat is a coding agent started in a disposable copy of the repository: it reads the whole scope itself (no --max-bytes cap) and hands back scripts, which corral runs — nothing it did itself is on the record. Required; corral has no default models
   -scope string
     	the directory or file under --repo to review (required)
+  -substrate jail
+    	where the reproduction scripts run: jail (default) — the offline sandbox certify grades in, over the tree at the commit with your dependency directories read-only; or `workspace` — a detached git worktree on the host, network on, model keys removed from the environment, for where the caller is the isolation boundary (a CI runner, as with certify --repo --substrate workspace) (default "jail")
   -timeout duration
     	wall-clock bound on each reproduction script (default 1m0s)
   -verifier-model string
@@ -827,7 +831,9 @@ Usage of corral review recheck:
   -json
     	print the result as one JSON object
   -repo string
-    	the checkout whose HEAD the script runs against, in a disposable worktree (default ".")
+    	the checkout whose HEAD the script runs against, in the sandbox (or a disposable worktree with --substrate workspace) (default ".")
+  -substrate jail
+    	where the script runs: jail (default, the offline sandbox) or `workspace` (a detached worktree on the host), as for `corral review` (default "jail")
   -timeout duration
     	wall-clock bound on the script (default 1m0s)
 ```
@@ -941,8 +947,8 @@ Usage of ui:
     	with --write, also open the URL in a browser. A convenience for a desktop: it hands the URL, token included, to the opener as a command-line argument, which other local processes can read while it runs
   -print-url
     	print the URL and exit without serving (for scripts and smoke tests)
-  -repo string
-    	with --write, the checkout a finding's reproduction is rechecked against (its HEAD, in a disposable worktree) (default ".")
+  -repo corral review recheck
+    	with --write, the checkout a finding's reproduction is rechecked against (its HEAD, in the sandbox — see corral review recheck) (default ".")
   -write
     	let this page WRITE: adjudicate findings and recheck them, by running corral's own subcommands. Loopback only; prints a URL carrying a launch token valid until the server exits — anyone with that URL can write verdicts in your name. The URL is printed, never opened, so the token stays off every process's command line; over SSH, tunnel the same port on both ends (ssh -L 8787:127.0.0.1:8787). Agents must never start this
 ```

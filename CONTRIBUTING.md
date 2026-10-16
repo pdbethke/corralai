@@ -27,7 +27,13 @@ future contributions.
 4. `bash scripts/check-licensing.sh` must exit 0.
 5. `gofmt -l ./cmd ./internal` must print nothing, and
    `bash scripts/check-security.sh` must exit 0 — both are CI gates.
-6. Merge through a pull request. Branch protection sets `enforce_admins: false`,
+6. The drift gates must pass, docs-only changes included:
+   `bash scripts/gen-cli-docs.sh --check` (the CLI reference is generated
+   from the binaries' `-h`; regenerate it, never hand-edit),
+   `bash scripts/gen-language-support.sh --check`,
+   `bash scripts/sync-site-assets.sh --check`, and the `TestDocs` tests
+   (`go test ./... -run TestDocs`), which grade Markdown as well as Go.
+7. Merge through a pull request. Branch protection sets `enforce_admins: false`,
    so a direct push to `main` bypasses every check above.
 
 **Working with an AI coding agent?** [AGENTS.md](AGENTS.md) is the operating
@@ -39,12 +45,14 @@ human too.
 ## Contributing knowledge, not just code
 
 `docs/corral/` is corralai's own developer-doc corpus — see [CORRAL.md](CORRAL.md)
-for the convention. Every mission cloning this repo ingests it as advisory
-memory the herd's agents can search. If you know something about this codebase
-that would help an agent (or a human) working in it, open a PR against
-`docs/corral/` exactly as you would for code — code review is the trust gate
-for knowledge here just as it is for code; nothing you add is auto-vetted, it's
-read via search until reviewed and merged.
+for the convention — and the reference corral ships to the people who run it.
+No audit reads it: `certify` and `review` read only the repository under audit
+and its ledger. (The optional daemon, `corral-wrangler`, which is frozen, does
+ingest it as advisory, never auto-vetted, memory.) If you know something about
+this codebase that would help an agent or a human working in it, open a PR
+against `docs/corral/` exactly as you would for code; review is the trust gate
+for it, and the documentation rules in [AGENTS.md](AGENTS.md) apply: no number
+nobody ran, no claim of support that was not executed.
 
 ## Cutting a release: sign the console bundle first
 

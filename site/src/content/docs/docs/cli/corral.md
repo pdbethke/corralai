@@ -732,6 +732,13 @@ corral review — a cold model reviews a scope of the repository; corral runs it
       findings by outcome, how many of its files changed since — and a proposal for the next round:
       never reviewed first, then changed since review (a fix batch nobody re-attacked), then the
       stalest. No model runs; a person names the scope.
+  corral review churn [--repo <dir>] [--ledger <dir>] [--findings] [--json]
+      Is the review loop draining the code or churning it? For every review on the record,
+      each finding's line is blamed at the reviewed commit: DRAIN if the line was there when
+      the previous review of its file looked, CHURN if it was written since — counting every
+      change in between, since the record does not say which commits were the fixes —
+      FIRST LOOK if no earlier review covered the file. Findings that fell are not counted.
+      No model runs; nothing is written.
   corral review show <ledger dir> <review hash>       print a review with its adjudications applied
   corral review adjudicate <ledger dir> <hash>#<Rn> --confirm|--refute --reason "…" [--by <who>]
       A person's verdict on one finding, as its own entry: the newest verdict per finding
@@ -783,6 +790,20 @@ Usage of corral review adjudicate:
     	why, in your words (required)
   -refute
     	the finding is not real, or not as stated
+```
+
+## `corral review churn` flags
+
+```
+Usage of corral review churn:
+  -findings
+    	list every finding under its round, with the commit that wrote its line
+  -json
+    	print every round and every finding's origin as JSON
+  -ledger string
+    	the ledger directory whose review entries are the rounds (default: <repo>/.corral/ledger, or $CORRAL_LEDGER)
+  -repo string
+    	the checkout whose history the findings' lines are blamed in (default ".")
 ```
 
 ## `corral review plan` flags

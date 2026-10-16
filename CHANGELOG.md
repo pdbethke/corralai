@@ -11,6 +11,19 @@ history of any release, `git log v0.3.4..v0.3.5`.
 
 ## [Unreleased]
 
+- **`corral review churn`: is the review loop draining the code or churning
+  it?** For every review on the ledger, each finding's line is blamed at the
+  reviewed commit. It is **drain** if the line was there when the previous
+  review of its file looked, **churn** if it was written since, and a **first
+  look** if no earlier review covered the file. Findings that fell (refuted by
+  a person, or by execution) are not counted. This is the hand count from the
+  "For every season, churn" field note, now a command: no model runs, nothing
+  is written. One approximation, stated in its output: churn counts every
+  line written since the previous review, not only the commits that fixed its
+  findings, because the record does not say which those were. On corral's own
+  ledger it reproduces the field note's churn column for the September gate
+  and transparency rounds (5 and 5) and its drain within one finding each.
+
 - **The killing test is named, and a partly failing authored test is
   salvaged, in every language but Rust.** jest, vitest, mocha, `node --test`,
   rspec and minitest now record which test killed each mutant

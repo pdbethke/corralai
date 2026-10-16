@@ -182,7 +182,13 @@ package reposcan
 // "23" document unmarshals RefutedFindings as nil and still counts its
 // refuted claims (and, from certify --repo, never ran the check at all), so
 // its critic count would be served as one that excludes them.
-const VerdictGeneration = "24"
+// "25" (2026-10-16): JavaScript, TypeScript, Ruby and PHP critic claims are
+// now checked by execution (jest, vitest, mocha, node --test, rspec and
+// PHPUnit list a file's tests and run one alone), and --matrix runs for
+// them. A "24" verdict for those languages carries every whole-test claim
+// unchecked, so a refuted one would be served as standing. Shape unchanged;
+// behaviour bump.
+const VerdictGeneration = "25"
 
 // VerdictShapeSHA256 fingerprints advpool.Verdict's serialized shape: every
 // exported field's name, type and json tag, sorted by name and hashed.

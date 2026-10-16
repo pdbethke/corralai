@@ -79,6 +79,10 @@ fails vitest-suitefail.txt npx vitest run fail/broken.vitest.test.mjs
 fails mocha-fail.txt npx mocha fail/f.mocha.js
 fails mocha-hookfail.txt npx mocha fail/hook.mocha.js
 fails node-fail.txt node --test fail/f.node.test.js
+# node 23+ prints the spec reporter off a TTY too (measured on node 24.22); node
+# 22's --test-reporter=spec prints the same tree.
+fails node-spec-fail.txt node --test --test-reporter=spec fail/f.node.test.js
+fails node-spec-loadfail.txt node --test --test-reporter=spec broken.node.test.js
 fails rspec-fail.txt $RSPEC fail/spec/f_spec.rb
 fails rspec-loadfail.txt $RSPEC fail/spec/broken_spec.rb
 fails minitest-fail.txt ruby fail/f_test.rb

@@ -1,0 +1,70 @@
+▶ Calc
+  ✖ adds (a+b) (0.94315ms)
+  ✔ ok (0.104747ms)
+  ▶ neg
+    ✖ adds (0.149753ms)
+  ✖ neg (0.251805ms)
+✖ Calc (2.084253ms)
+✖ top level (0.250583ms)
+ℹ tests 4
+ℹ suites 2
+ℹ pass 1
+ℹ fail 3
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+
+✖ failing tests:
+
+test at fail/f.node.test.js:4:3
+✖ adds (a+b) (0.94315ms)
+  AssertionError [ERR_ASSERTION]: 2 == 3
+      at TestContext.<anonymous> ($DIR/fail/f.node.test.js:4:35)
+      at Test.runInAsyncScope (node:async_hooks:214:14)
+      at Test.run (node:internal/test_runner/test:1047:25)
+      at Test.start (node:internal/test_runner/test:944:17)
+      at node:internal/test_runner/test:1440:71
+      at node:internal/per_context/primordials:466:82
+      at new Promise (<anonymous>)
+      at new SafePromise (node:internal/per_context/primordials:435:3)
+      at node:internal/per_context/primordials:466:9
+      at Array.map (<anonymous>) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 2,
+    expected: 3,
+    operator: '==',
+    diff: 'simple'
+  }
+
+test at fail/f.node.test.js:6:27
+✖ adds (0.149753ms)
+  Error: boom
+      at TestContext.<anonymous> ($DIR/fail/f.node.test.js:6:52)
+      at Test.runInAsyncScope (node:async_hooks:214:14)
+      at Test.run (node:internal/test_runner/test:1047:25)
+      at Test.start (node:internal/test_runner/test:944:17)
+      at node:internal/test_runner/test:1440:71
+      at node:internal/per_context/primordials:466:82
+      at new Promise (<anonymous>)
+      at new SafePromise (node:internal/per_context/primordials:435:3)
+      at node:internal/per_context/primordials:466:9
+      at Array.map (<anonymous>)
+
+test at fail/f.node.test.js:8:1
+✖ top level (0.250583ms)
+  AssertionError [ERR_ASSERTION]: 1 == 2
+      at TestContext.<anonymous> ($DIR/fail/f.node.test.js:8:34)
+      at Test.runInAsyncScope (node:async_hooks:214:14)
+      at Test.run (node:internal/test_runner/test:1047:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+      at Suite.postRun (node:internal/test_runner/test:1173:19)
+      at Suite.run (node:internal/test_runner/test:1457:10)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:296:3) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 2,
+    operator: '==',
+    diff: 'simple'
+  }

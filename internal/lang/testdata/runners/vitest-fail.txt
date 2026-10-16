@@ -1,13 +1,13 @@
 
  RUN  v3.2.7 $DIR
 
- ❯ fail/f.vitest.test.mjs (4 tests | 3 failed) 7ms
-   × Calc > adds (a+b) 5ms
+ ❯ fail/f.vitest.test.mjs (4 tests | 3 failed) 9ms
+   × Calc > adds (a+b) 7ms
      → expected 2 to be 3 // Object.is equality
    ✓ Calc > ok 0ms
    × Calc > neg > adds 0ms
      → boom
-   × top level 0ms
+   × top level 1ms
      → expected 1 to be 2 // Object.is equality
 
 ⎯⎯⎯⎯⎯⎯⎯ Failed Tests 3 ⎯⎯⎯⎯⎯⎯⎯

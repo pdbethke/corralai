@@ -160,6 +160,7 @@ func TestRealRunnersSalvage(t *testing.T) {
 		throughScript bool
 	}{
 		{"node --test", "javascript", []string{"node", "--test", "fail/f.node.test.js"}, false, false},
+		{"node --test", "javascript", []string{"node", "--test", "--test-reporter=spec", "fail/f.node.test.js"}, false, false},
 		{"rspec", "ruby", append(slices.Clone(rspec), "fail/spec/f_spec.rb"), false, false},
 		{"minitest", "ruby", []string{"ruby", "fail/f_test.rb"}, false, false},
 		{"go test", "go", []string{"go", "test", "-v", "./..."}, false, false},

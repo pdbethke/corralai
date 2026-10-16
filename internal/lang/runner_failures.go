@@ -12,7 +12,9 @@ import (
 // The failure parsers. Each reads its runner's DEFAULT reporter as the jail
 // runs it (not a TTY) and returns every failing test, in report order, in the
 // form the runner's list gives it, so a killed_by label is the same string
-// the critic list and --matrix use. A row's FirstFailure is firstOf its
+// the critic list and --matrix use — except rspec's, which are full
+// descriptions: its "Failed examples:" list does not say where the leaf
+// title starts. A row's FirstFailure is firstOf its
 // parser and its FailedTests is the parser itself: the label and the salvage
 // list can never disagree. Output a parser cannot read — another reporter, a
 // file that failed to load, a failing hook — names nothing, never a guess.
@@ -33,12 +35,14 @@ func firstOf(failures func(string) []string) func([]byte) string {
 // with " › ", so a title holding that separator is split wrongly: its label
 // is wrong and its skip pattern misses it, which leaves the failing test in
 // and fails the salvage closed. "Test suite failed to run" (a file that did
-// not load) and "Console" (captured console output) are not tests.
+// not load), "Console" (captured console output) and a heading indented
+// further ("●  TCPSERVERWRAP", an open handle --detectOpenHandles reports)
+// are not tests.
 func jestFailures(out string) []string {
 	var ids []string
 	for _, line := range strings.Split(out, "\n") {
 		name, ok := strings.CutPrefix(line, "  ● ")
-		if !ok || name == "Test suite failed to run" || strings.HasPrefix(name, "Console") {
+		if !ok || name == "Test suite failed to run" || name == "Console" || strings.HasPrefix(name, " ") {
 			continue
 		}
 		ids = append(ids, strings.Join(strings.Split(name, " › "), "::"))
@@ -109,16 +113,61 @@ func mochaFailures(out string) []string {
 	return ids
 }
 
-// nodeFailures reads the TAP report node prints off a TTY: every failing
-// result of type test with no subtests. A suite, or a test whose subtests
-// failed, is rolled up as failed and is not itself the failure; a result
-// carrying exitCode is the file failing to load.
+// nodeFailures reads node's report off a TTY: TAP on node 22, the spec
+// reporter on node 23 and later (measured on 22.23 and 24.22). Either way it
+// names every failing test with no subtests: a suite, or a test whose
+// subtests failed, is rolled up as failed and is not itself the failure, and
+// a file that failed to load is not a test.
 func nodeFailures(out string) []string {
+	if !strings.Contains(out, "TAP version") {
+		return nodeSpecFailures(out)
+	}
 	entries, hasChild := nodeEntries(out)
 	var ids []string
 	for _, e := range entries {
 		if !e.ok && e.typ == "test" && !e.exit && !hasChild[nodeKey(e.path)] {
 			ids = append(ids, strings.Join(e.path, "::"))
+		}
+	}
+	return ids
+}
+
+var nodeSpecDuration = regexp.MustCompile(` \([0-9.]+m?s\)$`)
+
+// nodeSpecFailures reads the spec reporter's tree, two spaces a level: "▶ name"
+// opens a suite (or a test with subtests) and a result line of the same name
+// at the same depth closes it, so only a "✖" that closes nothing is a failing
+// test. The "✖ failing tests:" section that follows repeats leaf titles
+// without their path and is not read, except for what marks a file that
+// failed to load: its entry's error is node's own 'test failed'.
+func nodeSpecFailures(out string) []string {
+	lines := strings.Split(out, "\n")
+	tail := slices.Index(lines, "✖ failing tests:")
+	if tail < 0 {
+		tail = len(lines)
+	}
+	notLoaded := map[string]bool{}
+	for i := tail; i+1 < len(lines); i++ {
+		if name, ok := strings.CutPrefix(lines[i], "✖ "); ok && strings.TrimSpace(lines[i+1]) == "'test failed'" {
+			notLoaded[nodeSpecDuration.ReplaceAllString(name, "")] = true
+		}
+	}
+	var stack, ids []string
+	for _, line := range lines[:tail] {
+		trimmed := strings.TrimLeft(line, " ")
+		depth := (len(line) - len(trimmed)) / 2
+		mark, name, ok := strings.Cut(trimmed, " ")
+		if !ok || depth > len(stack) {
+			continue
+		}
+		name = nodeSpecDuration.ReplaceAllString(name, "")
+		switch {
+		case mark == "▶":
+			stack = append(stack[:depth], name)
+		case len(stack) == depth+1 && stack[depth] == name:
+			stack = stack[:depth] // the line closing a suite
+		case mark == "✖" && !(depth == 0 && notLoaded[name]):
+			ids = append(ids, strings.Join(append(slices.Clone(stack[:depth]), name), "::"))
 		}
 	}
 	return ids

@@ -20,6 +20,7 @@ func TestFailureParsersReadTheRealOutput(t *testing.T) {
 		{"vitest-fail.txt", vitestFailures, []string{"Calc::adds (a+b)", "Calc::neg::adds", "top level"}},
 		{"mocha-fail.txt", mochaFailures, []string{"top level", "Calc::adds (a+b)", "Calc neg::adds"}},
 		{"node-fail.txt", nodeFailures, []string{"Calc::adds (a+b)", "Calc::neg::adds", "top level"}},
+		{"node-spec-fail.txt", nodeFailures, []string{"Calc::adds (a+b)", "Calc::neg::adds", "top level"}},
 		{"rspec-fail.txt", rspecFailures, []string{"Calc adds (a+b)", "Calc neg adds", "MyApp::Calc top level"}},
 		{"minitest-fail.txt", minitestFailures, []string{"MyApp::NegTest#test_x", "CalcTest#test_adds", "CalcTest#test_boom"}},
 		{"phpunit-fail.txt", phpFailures, []string{"FTest::testBoom", "FTest::testAdds", `FTest::testData with data set "two" (2)`}},
@@ -48,6 +49,7 @@ func TestFailureParsersNameNoTestForALoadFailure(t *testing.T) {
 		{"mocha-hookfail.txt", mochaFailures},
 		{"rspec-loadfail.txt", rspecFailures},
 		{"node-tap-loadfail.txt", nodeFailures},
+		{"node-spec-loadfail.txt", nodeFailures},
 	} {
 		if got := c.parse(readFixture(t, c.fixture)); got != nil {
 			t.Errorf("%s named %q", c.fixture, got)
@@ -63,6 +65,11 @@ func TestFailureParsersSkipWhatIsNotAFailure(t *testing.T) {
 	if got := jestFailures(jest); !slices.Equal(got, []string{"Calc::adds"}) {
 		t.Errorf("jest = %q", got)
 	}
+	// A suite that merely starts with "Console" is a test; --detectOpenHandles
+	// prints its handles as "●  TCPSERVERWRAP", two spaces in.
+	if got := jestFailures("  ● Console logger › prints\n  ●  TCPSERVERWRAP\n"); !slices.Equal(got, []string{"Console logger::prints"}) {
+		t.Errorf("jest headings = %q", got)
+	}
 	mocha := "  Calc\n    1) adds\n\n  0 passing\n"
 	if got := mochaFailures(mocha); got != nil {
 		t.Errorf("mocha read the progress list: %q", got)
@@ -70,6 +77,16 @@ func TestFailureParsersSkipWhatIsNotAFailure(t *testing.T) {
 	// A blank line before any title ending ":" is not an entry.
 	if got := mochaFailures("  1 failing\n\n  1) Calc\n\n     Error: x\n"); got != nil {
 		t.Errorf("mocha read an unterminated entry: %q", got)
+	}
+}
+
+// node's spec tree closes each suite with a line of its own name at the
+// suite's depth; a test with the same name one level down is a test, and a
+// test with subtests is rolled up like a suite.
+func TestNodeSpecTreeClosesSuitesByDepth(t *testing.T) {
+	out := "▶ X\n  ✖ X (1ms)\n  ▶ p\n    ✖ c (1ms)\n  ✖ p (1ms)\n✖ X (2ms)\n"
+	if got := nodeFailures(out); !slices.Equal(got, []string{"X::X", "X::p::c"}) {
+		t.Errorf("nodeFailures = %q", got)
 	}
 }
 
@@ -146,6 +163,8 @@ func TestDeselectCmdsRefuse(t *testing.T) {
 	}{
 		{"jest own -t", jestDeselectCmd, []string{"jest", "-t", "x"}},
 		{"vitest own -t", vitestDeselectCmd, []string{"vitest", "run", "-t", "x"}},
+		{"jest own kebab", jestDeselectCmd, []string{"jest", "--test-name-pattern=x"}},
+		{"vitest own kebab", vitestDeselectCmd, []string{"vitest", "run", "--test-name-pattern", "x"}},
 		{"vitest not vitest", vitestDeselectCmd, []string{"node", "x.js"}},
 		{"mocha own --grep", mochaDeselectCmd, []string{"mocha", "--grep", "x"}},
 		{"node own pattern", nodeDeselectCmd, []string{"node", "--test", "--test-name-pattern=x"}},

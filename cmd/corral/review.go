@@ -174,6 +174,19 @@ func runReviewRun(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "corral review: %v\n", jerr)
 		return 2
 	}
+	// The substrate's seed — a worktree, the tree copy, vendoring, the text
+	// cap — is built now, before any seat is paid: one that fails costs
+	// nothing. The seats read their own, separate worktree, so building it
+	// first does not let a seat arrange the tree its scripts are judged in.
+	// The signal-aware context unwinds a Ctrl-C through every cleanup.
+	ctx, stop := auditContext(stderr)
+	defer stop()
+	rep, cleanup, rerr := newReproducerFn(f.substrate, iso, root, commit, *scope, *timeout, stderr)
+	if rerr != nil {
+		fmt.Fprintf(stderr, "corral review: preparing where the reproductions run: %v\n", rerr)
+		return 1
+	}
+	defer cleanup()
 	// The worktrees first: one for an agentic seat to read (it is never
 	// handed the checkout), and — after the seats have spoken — the one
 	// the reproductions run in. Two, so a seat that could write could not
@@ -257,7 +270,7 @@ func runReviewRun(args []string, stdout, stderr io.Writer) int {
 	r := review.Review{Repo: repoName, Commit: commit, Author: party.Author, Committer: party.Committer, CoAuthors: party.CoAuthors,
 		Scope: *scope, ReviewerModel: *model, ReviewerTool: reviewerTool, Lang: langOfScope(allFiles),
 		ReviewerModelResolved: agentbackend.SeatNamesAModel(*model),
-		Substrate:             substrateNote(f.substrate, iso), StartedAt: time.Now().UTC(),
+		Substrate:             substrateOf(rep), StartedAt: time.Now().UTC(),
 		FilesShown: sc.Files, BytesShown: sc.Bytes, Truncated: sc.Truncated}
 	userTurn := review.Brief(repoName, commit, *scope, sc)
 	if reviewerIsAgent {
@@ -283,16 +296,9 @@ func runReviewRun(args []string, stdout, stderr io.Writer) int {
 	}
 	r.Opinion, r.Findings, r.Sound = opinion, findings, sound
 
-	// The reproductions: every REPRODUCED script, run in the jail over the
-	// tree at the commit, so neither the operator's checkout nor the host is
-	// ever the subject.
-	rep, cleanup, rerr := newReproducer(f.substrate, iso, root, commit, *scope, *timeout, stderr)
-	if rerr != nil {
-		fmt.Fprintf(stderr, "corral review: %v\n", rerr)
-		return 1
-	}
-	defer cleanup()
-	review.Reproduce(context.Background(), rep, &r)
+	// The reproductions: every REPRODUCED script, in the substrate built
+	// above, so neither the operator's checkout nor the host is the subject.
+	review.Reproduce(ctx, rep, &r)
 	r.Coverage = review.CoverageNote(r)
 
 	// The verifier sees the review AS RECORDED — reproductions run, tiers
@@ -334,7 +340,7 @@ func runReviewRun(args []string, stdout, stderr io.Writer) int {
 			}
 			r.VerifierTool = verifierTool
 			r.VerifierModelResolved = agentbackend.SeatNamesAModel(*verifier)
-			review.Verify(context.Background(), rep, &r, *verifier, vopinion, refs)
+			review.Verify(ctx, rep, &r, *verifier, vopinion, refs)
 		}
 	}
 
@@ -473,7 +479,12 @@ var reviewSeatTools = []string{"Read", "Grep", "Glob"}
 type jailReproducer struct {
 	enum  detailedEnumerator
 	files map[string]string
+	note  string
 }
+
+// Substrate is what the review entry records about where its reproductions
+// ran, including which dependency directories were actually there.
+func (j jailReproducer) Substrate() string { return j.note }
 
 // detailedEnumerator is the jail's run that keeps the exit code and stderr,
 // which a reproduction's outcome is read from.
@@ -509,7 +520,8 @@ func newJailReproducer(iso sandbox.Isolator, root, commit, scope string, timeout
 	if err != nil {
 		return nil, nil, err
 	}
-	seed, err := buildRepoSeed("corral review", tree, reviewLang(tree, scope), iso, nil, false, progress)
+	langName := reviewLang(tree, scope)
+	seed, err := buildRepoSeed("corral review", tree, langName, iso, nil, false, progress)
 	if err != nil {
 		removeTree()
 		return nil, nil, err
@@ -520,18 +532,50 @@ func newJailReproducer(iso sandbox.Isolator, root, commit, scope string, timeout
 		cleanup()
 		return nil, nil, fmt.Errorf("finding the dependency directories in %s: %w", root, err)
 	}
-	binds := seed.binds
-	for _, d := range deps {
-		if !slices.ContainsFunc(binds, func(b adequacy.DepBind) bool { return b.Rel == d.Rel }) {
-			binds = append(binds, d)
+	// The operator's installed dependency dirs first: where a repository
+	// commits part of one (vendor/, a slice of node_modules), the installed
+	// tree is the complete one.
+	binds := deps
+	for _, b := range seed.binds {
+		if !slices.ContainsFunc(binds, func(d adequacy.DepBind) bool { return d.Rel == b.Rel }) {
+			binds = append(binds, b)
 		}
 	}
-	enum, ok := newRunEnumerator(iso, timeout, binds).(detailedEnumerator)
+	// A dependency directory this backend cannot relocate into the jail
+	// (sandbox-exec; a dir the container's user cannot read) is neither
+	// bound nor copied: said on stderr and on the record, never implied.
+	var bound, unbound []string
+	_, every, _ := loadRepoFiles(root, loadOpts{BackendName: "bwrap", NoFiles: true}) // every dependency dir, bindable or not
+	for _, d := range every {
+		if slices.ContainsFunc(binds, func(b adequacy.DepBind) bool { return b.Rel == d.Rel }) {
+			bound = append(bound, d.Rel)
+		} else {
+			unbound = append(unbound, d.Rel)
+		}
+	}
+	if len(unbound) > 0 {
+		fmt.Fprintf(progress, "corral review: the %s sandbox cannot mount %s; a reproduction that needs it will fail and be demoted\n", iso.Name(), strings.Join(unbound, ", "))
+	}
+	// The toolchain bound is the scope language's own test command's, never
+	// one read from a script: a model's words must not choose host
+	// directories to mount (adequacy.WithToolchainFrom).
+	var toolchain []string
+	if p, ok := lang.ByName(langName); ok {
+		toolchain = p.TestCmd()
+	}
+	enum, ok := newRunEnumerator(iso, timeout, binds, adequacy.WithToolchainFrom(toolchain), adequacy.WithMaxOutput(64<<10)).(detailedEnumerator)
 	if !ok {
 		cleanup()
 		return nil, nil, errors.New("the jail cannot report a script's exit code")
 	}
-	return jailReproducer{enum: enum, files: seed.files}, cleanup, nil
+	note := "jail (" + iso.Name() + ", offline: the tree at the commit"
+	if len(bound) > 0 {
+		note += "; " + strings.Join(bound, ", ") + " bound read-only"
+	}
+	if len(unbound) > 0 {
+		note += "; not mounted: " + strings.Join(unbound, ", ")
+	}
+	return jailReproducer{enum: enum, files: seed.files, note: note + ")"}, cleanup, nil
 }
 
 // resolveReviewSubstrate checks --substrate and, for the jail, resolves the
@@ -564,14 +608,18 @@ func newReproducer(name string, iso sandbox.Isolator, root, commit, scope string
 	return newJailReproducer(iso, root, commit, scope, timeout, progress)
 }
 
-// substrateNote is what the review entry records about where its
+// substrateOf is what the review entry records about where its
 // reproductions ran.
-func substrateNote(name string, iso sandbox.Isolator) string {
-	if name == substrateWorkspace {
-		return "workspace (a detached worktree at the commit; not a jail)"
+func substrateOf(rep review.Reproducer) string {
+	if s, ok := rep.(interface{ Substrate() string }); ok {
+		return s.Substrate()
 	}
-	return "jail (" + iso.Name() + ", offline: the tree at the commit, dependency directories read-only)"
+	return "workspace (a detached worktree at the commit; not a jail)"
 }
+
+// newReproducerFn is newReproducer, a seam so a test can fail the seed and
+// show that no seat was paid first.
+var newReproducerFn = newReproducer
 
 // worktreeReproducer runs a script in a detached git worktree on the host:
 // --substrate workspace, where the caller is the isolation boundary.

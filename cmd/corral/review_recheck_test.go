@@ -21,7 +21,8 @@ import (
 )
 
 // recheckFixture is a git checkout with one committed file and a ledger
-// holding one review whose findings carry the given scripts.
+// holding one review whose findings carry the given scripts, reproduced (as
+// the entry records) in the jail.
 func recheckFixture(t *testing.T, scripts map[string]string) (repo, ledger, hash string) {
 	t.Helper()
 	return recheckFixtureCommit(t, scripts, nil)
@@ -30,6 +31,13 @@ func recheckFixture(t *testing.T, scripts map[string]string) (repo, ledger, hash
 // recheckFixtureCommit is recheckFixture with the review's recorded Commit
 // chosen by commitOf (nil: the fixture repo's HEAD).
 func recheckFixtureCommit(t *testing.T, scripts map[string]string, commitOf func(repo string) string) (repo, ledger, hash string) {
+	t.Helper()
+	return recheckFixtureIn(t, scripts, commitOf, "jail (test fixture)")
+}
+
+// recheckFixtureIn is recheckFixtureCommit with the substrate the entry
+// records ("" for an entry from before the jail).
+func recheckFixtureIn(t *testing.T, scripts map[string]string, commitOf func(repo string) string, substrate string) (repo, ledger, hash string) {
 	t.Helper()
 	t.Setenv("CORRALAI_CERTIFY_KEY_FILE", filepath.Join(t.TempDir(), "certify_key"))
 	repo = t.TempDir()
@@ -55,7 +63,7 @@ func recheckFixtureCommit(t *testing.T, scripts map[string]string, commitOf func
 	if commitOf != nil {
 		commit = commitOf(repo)
 	}
-	r := review.Review{Repo: "acme/r", Commit: commit, Scope: "pkg", ReviewerModel: "rev", Opinion: "o"}
+	r := review.Review{Repo: "acme/r", Commit: commit, Scope: "pkg", ReviewerModel: "rev", Opinion: "o", Substrate: substrate}
 	zero := 0
 	for _, id := range ids {
 		r.Findings = append(r.Findings, review.Finding{ID: id, Claim: "c " + id, Declared: review.TierReproduced, Tier: review.TierReproduced, Script: scripts[id], ExitCode: &zero})

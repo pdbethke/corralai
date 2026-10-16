@@ -35,7 +35,7 @@ type recheckResult struct {
 }
 
 // runReviewRecheck re-runs one finding's recorded reproduction script
-// against the CURRENT HEAD of --repo, in a disposable worktree, the way
+// against the CURRENT HEAD of --repo, in the sandbox (--substrate), the way
 // `corral review` ran it at review time.
 //
 // "Is it fixed?" is answered by execution, never by a commit message that
@@ -47,7 +47,7 @@ type recheckResult struct {
 func runReviewRecheck(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("corral review recheck", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	repo := fs.String("repo", ".", "the checkout whose HEAD the script runs against, in a disposable worktree")
+	repo := fs.String("repo", ".", "the checkout whose HEAD the script runs against, in the sandbox (or a disposable worktree with --substrate workspace)")
 	timeout := fs.Duration("timeout", time.Minute, "wall-clock bound on the script")
 	substrate := fs.String("substrate", substrateJail, "where the script runs: `jail` (default, the offline sandbox) or `workspace` (a detached worktree on the host), as for `corral review`")
 	asJSON := fs.Bool("json", false, "print the result as one JSON object")
@@ -127,9 +127,17 @@ func runReviewRecheck(args []string, stdout, stderr io.Writer) int {
 	defer cleanup()
 	out, code, rerr := rep.Run(ctx, f.Script)
 	res.Output = clip.Tail(out, 4000)
+	// A finding reproduced in a worktree — every entry before the jail, and
+	// every one the Action writes — had .git, the network and every binary.
+	// In the jail a script can fail for lack of them alone (git exits 128
+	// with no repository), so a failure there is not evidence of a fix.
+	inWorkspace := !strings.HasPrefix(e.Review.Substrate, "jail")
 	switch {
 	case rerr != nil:
 		res.Outcome, res.Reason = recheckUnrun, rerr.Error()
+	case code != 0 && *substrate == substrateJail && inWorkspace:
+		res.ExitCode = &code
+		res.Outcome, res.Reason = recheckUnrun, fmt.Sprintf("the script exited %d in the jail, but the finding was reproduced in a worktree (%s), which has .git, the network and binaries the jail does not — not evidence of a fix; recheck it with --substrate workspace where that is safe", code, orDefault(e.Review.Substrate, "an entry from before the jail"))
 	case code < 0:
 		// A negative code (WorkspaceRunner's convention, see
 		// internal/adequacy/workspace.go around st.Exited()) means the

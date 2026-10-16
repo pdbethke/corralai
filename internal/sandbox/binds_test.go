@@ -101,3 +101,34 @@ func TestPerEntryBindsUnreadableHostExpandsToNothing(t *testing.T) {
 		t.Fatalf("expected no binds for an unreadable host, got %v", got)
 	}
 }
+
+// An entry that is a symlink leading OUT of the dependency directory is not
+// mounted: bwrap and docker follow a bind's source, so a checked-in
+// node_modules/x -> ~/.ssh would mount the target into the jail (measured with
+// bwrap: a script read the linked directory's file). A link that stays inside
+// — pnpm's node_modules/pkg -> .pnpm/... — is still mounted.
+func TestPerEntryBindsRefusesSymlinksLeavingTheDir(t *testing.T) {
+	host := t.TempDir()
+	outside := t.TempDir()
+	for _, d := range []string{"real", ".pnpm/pkg@1/node_modules/pkg"} {
+		if err := os.MkdirAll(filepath.Join(host, d), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink(outside, filepath.Join(host, "evil")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(host, ".pnpm/pkg@1/node_modules/pkg"), filepath.Join(host, "pkg")); err != nil {
+		t.Fatal(err)
+	}
+	targets := map[string]bool{}
+	for _, b := range perEntryBinds(Bind{Host: host, Target: "/w/node_modules", PerEntry: true}) {
+		targets[b.Target] = true
+	}
+	if targets["/w/node_modules/evil"] {
+		t.Error("a symlink out of the dependency directory was mounted")
+	}
+	if !targets["/w/node_modules/real"] || !targets["/w/node_modules/pkg"] {
+		t.Errorf("real entries and in-tree links must still mount: %v", targets)
+	}
+}

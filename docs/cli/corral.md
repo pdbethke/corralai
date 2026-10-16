@@ -810,7 +810,7 @@ Usage of corral review recheck:
   -json
     	print the result as one JSON object
   -repo string
-    	the checkout whose HEAD the script runs against, in a disposable worktree (default ".")
+    	the checkout whose HEAD the script runs against, in the sandbox (or a disposable worktree with --substrate workspace) (default ".")
   -substrate jail
     	where the script runs: jail (default, the offline sandbox) or `workspace` (a detached worktree on the host), as for `corral review` (default "jail")
   -timeout duration
@@ -926,8 +926,8 @@ Usage of ui:
     	with --write, also open the URL in a browser. A convenience for a desktop: it hands the URL, token included, to the opener as a command-line argument, which other local processes can read while it runs
   -print-url
     	print the URL and exit without serving (for scripts and smoke tests)
-  -repo string
-    	with --write, the checkout a finding's reproduction is rechecked against (its HEAD, in a disposable worktree) (default ".")
+  -repo corral review recheck
+    	with --write, the checkout a finding's reproduction is rechecked against (its HEAD, in the sandbox — see corral review recheck) (default ".")
   -write
     	let this page WRITE: adjudicate findings and recheck them, by running corral's own subcommands. Loopback only; prints a URL carrying a launch token valid until the server exits — anyone with that URL can write verdicts in your name. The URL is printed, never opened, so the token stays off every process's command line; over SSH, tunnel the same port on both ends (ssh -L 8787:127.0.0.1:8787). Agents must never start this
 ```

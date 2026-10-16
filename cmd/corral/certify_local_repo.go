@@ -485,6 +485,11 @@ func loadRepoFiles(root string, opts loadOpts) (map[string]string, []adequacy.De
 		if d.Type()&fs.ModeSymlink != 0 || opts.NoFiles {
 			return nil // never follow a symlink out of the repo
 		}
+		if d.Name() == ".git" {
+			// A worktree's .git is a FILE naming the main repository's path
+			// on the host: not source, and a pointer out of the seed.
+			return nil
+		}
 		info, ierr := d.Info()
 		if ierr != nil {
 			return ierr

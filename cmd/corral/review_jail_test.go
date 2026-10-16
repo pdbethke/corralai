@@ -5,13 +5,16 @@ package main
 import (
 	"bytes"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/pdbethke/corralai/internal/agentbackend"
 	"github.com/pdbethke/corralai/internal/auditpush"
+	"github.com/pdbethke/corralai/internal/review"
 	"github.com/pdbethke/corralai/internal/sandbox"
 )
 
@@ -49,7 +52,7 @@ func TestReviewReproductionsRunInTheJail(t *testing.T) {
 	newReviewerBackend = func(string, string) (agentbackend.Backend, error) {
 		return cannedReviewer{reply: `{"opinion":"R1 sees the tree; R2 writes to the host.",
 "findings":[
- {"claim":"the tree and its dependencies are there","tier":"REPRODUCED","file":"pkg/a.go","line":3,"severity":"high","script":"grep -q 'return a - b' pkg/a.go && test -f node_modules/dep/index.js"},
+ {"claim":"the tree and its dependencies are there","tier":"REPRODUCED","file":"pkg/a.go","line":3,"severity":"high","script":"grep -q 'return a - b' pkg/a.go && test -f node_modules/dep/index.js && test ! -e .git"},
  {"claim":"a script can write to the host","tier":"REPRODUCED","file":"pkg/a.go","line":1,"severity":"low","script":"echo leaked > ` + escaped + `"}
 ],"sound":[]}`}, nil
 	}
@@ -73,8 +76,8 @@ func TestReviewReproductionsRunInTheJail(t *testing.T) {
 	if err != nil || len(entries) != 1 {
 		t.Fatalf("ledger: %v", err)
 	}
-	if got := entries[0].Review.Substrate; !strings.HasPrefix(got, "jail") {
-		t.Errorf("the entry records substrate %q, want the jail", got)
+	if got := entries[0].Review.Substrate; !strings.HasPrefix(got, "jail") || !strings.Contains(got, "node_modules") {
+		t.Errorf("the entry records substrate %q, want the jail and the dependency directories it bound", got)
 	}
 }
 
@@ -165,5 +168,59 @@ func TestReviewRecheckTakesTheSameSubstrate(t *testing.T) {
 		if code := runReview(args, &out, &errb); code != c.code || !strings.Contains(out.String(), `"outcome":"`+c.want+`"`) {
 			t.Errorf("%q: exit %d, %s %s", c.args, code, out.String(), errb.String())
 		}
+	}
+}
+
+// Every entry before the jail, and every entry the Action writes, was
+// reproduced in a worktree, with .git, the network and every binary. A
+// default (jail) recheck of one cannot read a jail-only failure as a fix:
+// `git rev-parse HEAD` exits 128 in the jail, which recheck used to report as
+// no-longer-reproduces.
+func TestRecheckOfAWorkspaceEntryDoesNotReadAJailFailureAsAFix(t *testing.T) {
+	requireReviewSandbox(t)
+	repo, ledger, hash := recheckFixtureIn(t, map[string]string{"R1": "git rev-parse HEAD"}, nil, "")
+	for _, c := range []struct {
+		args []string
+		want string
+	}{
+		{nil, recheckUnrun},
+		{[]string{"--substrate", "workspace"}, recheckStill},
+	} {
+		var out, errb bytes.Buffer
+		runReview(append([]string{"recheck", ledger, hash + "#R1", "--repo", repo, "--json"}, c.args...), &out, &errb)
+		if !strings.Contains(out.String(), `"outcome":"`+c.want+`"`) {
+			t.Errorf("%q: %s %s", c.args, out.String(), errb.String())
+		}
+		if c.args == nil && !strings.Contains(out.String(), "--substrate workspace") {
+			t.Errorf("the could-not-run must say how to recheck it where it ran: %s", out.String())
+		}
+	}
+}
+
+// The sandbox's seed — the tree copy, vendoring, the 64 MiB text cap — can
+// fail, and it is built before any seat is paid, so a failure costs nothing.
+func TestReviewBuildsItsSandboxBeforeAnySeatIsPaid(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "test-placeholder-not-a-real-key")
+	root := t.TempDir()
+	gitRun := gitCmd(t, root)
+	mustWrite(t, filepath.Join(root, "a.go"), "package a\n")
+	gitRun("init", "-q")
+	gitRun("add", ".")
+	gitRun("commit", "-q", "-m", "base", "--no-gpg-sign")
+	origRep := newReproducerFn
+	t.Cleanup(func() { newReproducerFn = origRep })
+	newReproducerFn = func(string, sandbox.Isolator, string, string, string, time.Duration, io.Writer) (review.Reproducer, func(), error) {
+		return nil, nil, errors.New("the seed is too large")
+	}
+	orig := newReviewerBackend
+	t.Cleanup(func() { newReviewerBackend = orig })
+	newReviewerBackend = func(string, string) (agentbackend.Backend, error) {
+		t.Fatal("a seat was paid before the sandbox it must be checked in existed")
+		return nil, nil
+	}
+	var out, errb bytes.Buffer
+	code := runReview([]string{"--repo", root, "--scope", "a.go", "--reviewer-model", "reviewer-x", "--no-ledger", "--substrate", "workspace"}, &out, &errb)
+	if code == 0 || !strings.Contains(errb.String(), "the seed is too large") {
+		t.Errorf("exit %d, %q", code, errb.String())
 	}
 }

@@ -274,8 +274,8 @@ func isText(b []byte) bool {
 }
 
 // Reproducer runs one script against the tree and reports what happened.
-// It is the seam the substrate hides behind: a detached worktree on the
-// workspace substrate today, the jail when it accepts a script.
+// It is the seam the substrate hides behind: the jail by default, a detached
+// worktree on the host under --substrate workspace (cmd/corral/review.go).
 type Reproducer interface {
 	Run(ctx context.Context, script string) (stdout string, exitCode int, err error)
 }
@@ -304,6 +304,14 @@ func Reproduce(ctx context.Context, rep Reproducer, r *Review) {
 			// Not demonstrated — but not disproved either: nothing ran.
 			f.Tier, f.Unrun = TierCodeRead, err.Error()
 			f.Demoted = "not run (harness): " + err.Error()
+			continue
+		}
+		if code > 128 && code <= 128+64 {
+			// The jail reports a script killed by signal N as exit 128+N:
+			// nothing was measured, so it grades nobody, as a harness
+			// failure does (review recheck reads the same rule).
+			f.Tier, f.Unrun = TierCodeRead, fmt.Sprintf("killed by signal %d (exit %d)", code-128, code)
+			f.Demoted = "not run: " + f.Unrun
 			continue
 		}
 		f.ExitCode = &code

@@ -24,8 +24,21 @@ history of any release, `git log v0.3.4..v0.3.5`.
   GitHub Action passes it, as it already does for the audit, and the review
   entry records which one ran. A script that needs the network, git history
   or a binary file outside `testdata` now fails, and its finding is demoted.
-  `review recheck` reads an exit status of 129–192 as a signal (the sandbox
-  reports a killed script as 128+N), so a crash is never read as a fix.
+  The sandbox is prepared before any model is paid, so a repository it
+  cannot seed costs nothing. The review entry records which dependency
+  directories were mounted, and says which ones this machine's sandbox could
+  not mount. The toolchain mounted is the scope language's own, never one a
+  script names. A script killed by a signal (the sandbox reports it as exit
+  128+N) is recorded as not run, in a review and in `review recheck` alike, so
+  a crash is never read as a result. `review recheck` of a finding reproduced
+  in a worktree (every entry before this, and every one the Action writes)
+  does not read a failure in the sandbox as a fix, since the sandbox has no
+  `.git`, network or binaries; it says to recheck with `--substrate workspace`.
+- **Fixed: a dependency directory could mount a path outside itself.** An
+  entry of `node_modules` (or any bound dependency directory) that is a
+  symlink leading out of it was mounted into the sandbox at its target, for
+  `certify` as well as `review`. Such an entry is now skipped; a link that
+  stays inside, as pnpm's do, still mounts.
 
 - **The killing test is named, and a partly failing authored test is
   salvaged, in every language but Rust.** jest, vitest, mocha, `node --test`,

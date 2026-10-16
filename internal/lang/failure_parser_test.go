@@ -228,17 +228,13 @@ func TestPHPFirstFailure(t *testing.T) {
 	}
 }
 
-// The languages corral can audit but whose runners it cannot parse precisely
-// must offer NO parser at all. A wrong id is worse than none: the ledger
-// would name a test that never ran.
-func TestLanguagesWithoutAFailureParserOfferNone(t *testing.T) {
-	for _, name := range []string{"ruby", "javascript", "typescript"} {
-		p, ok := ByName(name)
-		if !ok {
-			continue
-		}
-		if FailureParserFor(p, Cmd(p.TestCmd())) != nil {
-			t.Errorf("%s implements FailureParser — see FailureParser's doc: an unproven parser must not exist", name)
-		}
+// A runner corral cannot parse precisely must offer NO parser at all. A
+// wrong id is worse than none: the ledger would name a test that never ran.
+// unittest is the one row left without one (see its row); every row that has
+// one is read against its runner's real output in runner_failures_test.go.
+func TestRunnersWithoutAFailureParserOfferNone(t *testing.T) {
+	p, _ := ByName("python")
+	if FailureParserFor(p, Cmd([]string{"python3", "-m", "unittest"})) != nil {
+		t.Error("unittest implements FailureParser — see FailureParser's doc: an unproven parser must not exist")
 	}
 }

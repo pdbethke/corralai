@@ -51,44 +51,10 @@ func nodeListCmd(argv []string, testPath string) ([]string, bool) {
 // YAML carries exitCode, which is the FILE failing to load (node reports it
 // as a test named after the file), not a test.
 func nodeParseList(stdout string) []string {
-	var entries []*nodeEntry
-	var stack []string
-	var cur *nodeEntry // the result whose YAML block is being read
-	for _, line := range strings.Split(stdout, "\n") {
-		trimmed := strings.TrimLeft(line, " ")
-		level := (len(line) - len(trimmed)) / 4
-		if name, ok := strings.CutPrefix(trimmed, "# Subtest: "); ok {
-			stack = append(stack[:min(level, len(stack))], tapUnescape(name))
-			cur = nil
-			continue
-		}
-		if strings.HasPrefix(trimmed, "ok ") || strings.HasPrefix(trimmed, "not ok ") {
-			if level >= len(stack) {
-				cur = nil
-				continue
-			}
-			cur = &nodeEntry{path: slices.Clone(stack[:level+1])}
-			entries = append(entries, cur)
-			continue
-		}
-		if cur == nil {
-			continue
-		}
-		switch {
-		case strings.HasPrefix(trimmed, "type: "):
-			cur.typ = strings.Trim(strings.TrimPrefix(trimmed, "type: "), "'")
-		case strings.HasPrefix(trimmed, "exitCode:"):
-			cur.exit = true
-		case trimmed == "...":
-			cur = nil
-		}
-	}
-	typeOf, hasChild := map[string]string{}, map[string]bool{}
+	entries, hasChild := nodeEntries(stdout)
+	typeOf := map[string]string{}
 	for _, e := range entries {
 		typeOf[nodeKey(e.path)] = e.typ
-		if len(e.path) > 1 {
-			hasChild[nodeKey(e.path[:len(e.path)-1])] = true
-		}
 	}
 	var ids []string
 	for _, e := range entries {
@@ -108,12 +74,56 @@ func nodeParseList(stdout string) []string {
 	return ids
 }
 
-// nodeEntry is one result in a TAP report: its describe path, its YAML type,
-// and whether it reports a process exit code.
+// nodeEntry is one result in a TAP report: its describe path, whether it
+// passed, its YAML type, and whether it reports a process exit code.
 type nodeEntry struct {
 	path []string
+	ok   bool
 	typ  string
 	exit bool
+}
+
+// nodeEntries walks a TAP report into its results, and which of them have
+// subtests. nodeParseList and nodeFailures read the same walk.
+func nodeEntries(stdout string) (entries []*nodeEntry, hasChild map[string]bool) {
+	var stack []string
+	var cur *nodeEntry // the result whose YAML block is being read
+	for _, line := range strings.Split(stdout, "\n") {
+		trimmed := strings.TrimLeft(line, " ")
+		level := (len(line) - len(trimmed)) / 4
+		if name, ok := strings.CutPrefix(trimmed, "# Subtest: "); ok {
+			stack = append(stack[:min(level, len(stack))], tapUnescape(name))
+			cur = nil
+			continue
+		}
+		if strings.HasPrefix(trimmed, "ok ") || strings.HasPrefix(trimmed, "not ok ") {
+			if level >= len(stack) {
+				cur = nil
+				continue
+			}
+			cur = &nodeEntry{path: slices.Clone(stack[:level+1]), ok: strings.HasPrefix(trimmed, "ok ")}
+			entries = append(entries, cur)
+			continue
+		}
+		if cur == nil {
+			continue
+		}
+		switch {
+		case strings.HasPrefix(trimmed, "type: "):
+			cur.typ = strings.Trim(strings.TrimPrefix(trimmed, "type: "), "'")
+		case strings.HasPrefix(trimmed, "exitCode:"):
+			cur.exit = true
+		case trimmed == "...":
+			cur = nil
+		}
+	}
+	hasChild = map[string]bool{}
+	for _, e := range entries {
+		if len(e.path) > 1 {
+			hasChild[nodeKey(e.path[:len(e.path)-1])] = true
+		}
+	}
+	return entries, hasChild
 }
 
 func nodeKey(path []string) string { return strings.Join(path, "\x00") }

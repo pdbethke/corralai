@@ -1,16 +1,16 @@
 ---
 title: Running it
-description: Dev mode vs auth-on, the demo compose profiles, and deploying a brain behind a tunnel.
+description: What an audit run prints, keeps and reuses, how dependencies reach the jail, and — for the optional, frozen daemon — dev mode, the demo stack, the verify gate and deploying it.
 ---
 
 {/* SPDX-License-Identifier: Elastic-2.0 */}
 {/* Source: cmd/corral/main.go env doc block (via cross-link); deploy/demo/README.md, deploy/demo/Makefile */}
 
-:::note[The brain — optional, and not read by any audit]
-This page describes the **brain**, corral's optional coordination daemon. Nothing on it is required for a verdict: `corral certify`, the GitHub Action, `verify`, `ui`, `seal` and `scans` never contact a brain. And nothing on it is read by an audit — an audit's prompts are built from the goal, the code and its symbols, never from shared memory, skills or a prior run. See [the brain, and what it is not](https://github.com/pdbethke/corralai/blob/main/docs/corral/brain.md).
+:::note[Two kinds of section on this page]
+The scorecard, the matrix, verdict reuse, the progress echo and dependency binding are about an ordinary audit. Everything else here — dev mode, the demo compose stack, the verify gate and deploying behind a tunnel — describes the **brain**, corral's optional coordination daemon, which is frozen. Nothing in those sections is required for a verdict: `corral certify --local` and `--repo`, `corral review`, the GitHub Action, `verify`, `ui`, `seal` and `scans` never contact a brain. And nothing in the daemon is read by an audit — an audit's prompts are built from the goal, the code and its symbols, never from the daemon's shared memory or skills. See [the brain, and what it is not](https://github.com/pdbethke/corralai/blob/main/docs/corral/brain.md).
 :::
 
-## Dev mode vs auth-on
+## Dev mode vs auth-on (the brain)
 
 With `CORRALAI_OIDC_ISSUER` unset, the brain runs with auth disabled — any
 caller is trusted. This is for local development only. Setting
@@ -22,14 +22,17 @@ with auth" don't drift apart. See the full env reference on [corral's CLI
 page](/docs/cli/corral/) — every variable there is generated straight from
 the binary's own source comment, not hand-copied.
 
-## The demo compose profiles
+## The demo compose profiles (the brain)
 
 `corral certify --local` (see [Getting started](/docs/getting-started/) and
-[Your first audit, in detail](/docs/first-audit/)) is the fastest way to see
-the audit itself — no daemon required. `deploy/demo/` is the separate,
-optional compose stack for the coordination substrate underneath a running
-brain: it brings up the brain plus a small herd of agents against a bundled
-local model, no API keys required. `make demo` is the base coordinated herd,
+[Your first audit, in detail](/docs/first-audit/)), or `corral demo`, is how to
+see the audit itself — no daemon required. `deploy/demo/` is something else: a
+compose stack from the period when the brain coordinated a herd that **built**
+software. It brings up the brain plus builder, tester, pentester and reviewer
+agents against a bundled local model, no API keys required. corral no longer
+builds anything — it audits — and this stack is kept only as a demonstration of
+the frozen daemon's coordination (claims, leases, the verify gate); nothing in
+it is part of an audit. `make demo` is the base coordinated herd,
 `make demo-clobber` runs the same herd with claims turned off (a demo of what
 NOT coordinating looks like), `make demo-observe` adds a read-only observer
 console, and `make demo-models` runs a two-model comparison so
@@ -69,7 +72,7 @@ with no brain involved. `certify --repo` writes none of them — N
 concurrent audits must not contend on one single-process file — so the
 scorecard grows from `--local` runs or from a brain, not from repo scans.
 
-## The tests×mutants matrix (`--matrix`, opt-in, brain-path only)
+## The tests×mutants matrix (`--matrix`, opt-in)
 
 `corral certify --local --matrix` opts a run into a second, more expensive pass:
 after the primary mutant pass converges, it re-scores **every one of the dev
@@ -105,10 +108,13 @@ secret`). A `--local --matrix` run with no `CORRAL_BRAIN` configured prints
 its own tape/verdict summary same as always, but that run's rows are never
 persisted anywhere `corral matrix list` can see them.
 
-**Language support:** go and python only today, the same two languages the
-underlying test-enumeration/single-test-selector plumbing (`ListTestsCmd`/
-`SingleTestCmd`) currently implements — an unsupported language silently
-skips the matrix phase (the primary audit still runs and gates normally).
+**Language support:** Go and Python only today. The other runners (jest,
+mocha, vitest, node:test, RSpec, PHPUnit, cargo) can list tests and run one,
+but what they list is everything the command runs, not the tests in the one
+test file, so a matrix over that list would offer other files' tests for
+deletion; they are left out on purpose. On any other language the run logs
+`advpool: matrix: unavailable for …` and skips the matrix phase; the primary
+audit still runs and gates normally.
 
 **Python single-file caveat:** in single-file `--test` mode (no repo dir),
 enumeration runs `pytest --collect-only` against the operator-supplied
@@ -120,11 +126,19 @@ no crash). Repo-dir mode and go are unaffected.
 
 ## Verdict reuse — the cache, and what it will and will not do
 
-`certify --repo --record` consults a content-addressed cache before auditing a
+`certify --repo` consults a content-addressed cache before auditing a
 file, and reuses a verdict when **every input that could change it** is unchanged:
 the file's contents, its package, its goal, the test surface, the substrate, the
 resolved model set, the verdict-affecting flags, and a hand-bumped engine
 generation. Change any one and the file is re-audited.
+
+The verdict cache **is the ledger directory** (`--ledger`, default
+`<repo>/.corral/ledger`): a verdict an earlier entry recorded under the same key
+is served. `--no-verdict-cache` skips it, and `--no-ledger` disables it too.
+Derived goals and coverage-guided test selections are cached separately, in the
+local DuckDB file `--cache-db` names (`corral state paths` prints where); that
+file is a cache, not a record — deleting it costs a re-derivation and one
+coverage run, never a fact.
 
 **Reuse is always disclosed.** The report names how many verdicts were reused and
 the age of the **oldest** one, because a scan that reports reused work without
@@ -143,20 +157,20 @@ surprised by:
 - **Any change to any test file invalidates every file's verdict** on the
   whole-suite path. That is correct — the grading surface really did change for
   every file — but it means the hit rate is lower than the word "cache" suggests.
-- **Derived goals are cached too, but only a recorded scan writes them.** The
-  goal is part of the key. A goal derived from unchanged bytes by the same
-  `--derive-model` at the same prompt revision is served **byte-identical** from
-  the goal cache, so the key holds across runs — but that cache is only
-  written by a `--record` scan; an unrecorded scan may read what a recorded one
-  left and adds nothing. If you want reuse without `--record`, check your goals
-  into a file and pass `--goals`.
+- **The goal is part of the key, so goal reuse matters.** A goal derived from
+  unchanged bytes by the same `--derive-model` at the same prompt revision is
+  served **byte-identical** from the goal cache, so the key holds across runs on
+  the same machine. A fresh CI runner starts with an empty cache, so its goals
+  are re-derived; if you want the key to hold there, check your goals into a
+  file and pass `--goals`.
 
 Known gaps, documented here because they are wrong-hit paths rather than design:
-the file-scoped path (coverage-guided selection, or a test command naming
-specific files) does not key on the wider test surface, so weakening a shared
-`tests/conftest.py` leaves the key unmoved; a repo-root `conftest.py` with tests
-under `tests/` is not covered; and argv tokens given as absolute paths or
-symlinked directories do not disqualify a file-scoped scan.
+the file-scoped path (a test command after `--` that names specific test files)
+keys only on the one paired test file, not the wider test surface, so weakening a
+shared `tests/conftest.py` leaves the key unmoved; and argv tokens given as
+absolute paths or through symlinked directories are not recognized as test
+files, so they leave a scan file-scoped while those tests grade it. Coverage-
+guided selection with no explicit test files is keyed on the whole suite.
 
 ## What a run prints while it works
 
@@ -227,11 +241,14 @@ relocate a dir into the jail workspace, which is where the test toolchain
 backend), every dep dir is **copied** into the workspace seed, the same as
 `--no-bind-deps`, and is subject to the 64 MiB workspace size cap.
 
-## The verify gate needs a sandbox (Ubuntu 24.04+)
+## The brain's verify gate needs a sandbox (Ubuntu 24.04+)
 
 The brain certifies a gated task by **running its verify command itself** — in a
 jail, against its own working copy, reading the real exit code — rather than
-trusting what a worker reports (see [Trust & security](/docs/concepts/trust-and-security/)).
+trusting what a worker reports. That is the normal path. Looking up a
+worker-reported `report_execution` (described in
+[Queue & the verify gate](/docs/concepts/queue-and-verify/)) is the fallback,
+used only when the brain cannot get a sandbox, and it says so in its log.
 That jail is [bubblewrap](https://github.com/containers/bubblewrap) by default,
 and bubblewrap needs unprivileged user namespaces.
 
@@ -245,33 +262,35 @@ verify-gate: NO isolation backend (bwrap ... Permission denied);
 gated completion falls back to worker-reported executions — set CORRALAI_GATE_EXEC_BACKEND
 ```
 
-To get the independent gate, install bubblewrap and grant it (and it alone) the
-`userns` permission with a small AppArmor profile — this keeps the rest of the
-host hardened:
+To get the independent gate, install bubblewrap and load the AppArmor profile
+Ubuntu ships for it, `bwrap-userns-restrict` (on 24.04 it may still be under
+`/usr/share/apparmor/extra-profiles`). This is the same advice `corral certify`
+prints when it finds no working bwrap:
 
 ```sh
 sudo apt install -y bubblewrap
-sudo tee /etc/apparmor.d/bwrap >/dev/null <<'PROF'
-abi <abi/4.0>,
-include <tunables/global>
-profile bwrap /usr/bin/bwrap flags=(unconfined) {
-  userns,
-  include if exists <local/bwrap>
-}
-PROF
-sudo apparmor_parser -r /etc/apparmor.d/bwrap
+[ -f /etc/apparmor.d/bwrap-userns-restrict ] || sudo cp /usr/share/apparmor/extra-profiles/bwrap-userns-restrict /etc/apparmor.d/
+sudo apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict
+```
+
+**Do not write your own `/etc/apparmor.d/bwrap` marked `unconfined`.** It takes
+bwrap away from the shipped profile and leaves it without the capabilities it
+needs. corral printed such a profile before 1.0, and this page recommended it; if
+one is on your host from that advice, remove it:
+
+```sh
+sudo apparmor_parser -R /etc/apparmor.d/bwrap && sudo rm /etc/apparmor.d/bwrap
 ```
 
 Restart the brain and confirm the log now reads
-`verify-gate: independent verification enabled (backend bwrap)`. The profile in
-`/etc/apparmor.d/` reloads automatically on boot.
+`verify-gate: independent verification enabled (backend bwrap)`.
 
 Alternatives to bubblewrap: set `CORRALAI_GATE_EXEC_BACKEND=container` to run the
 verify command in a container instead (needs a runtime and an image carrying the
 project's toolchain), or — only on a host that is already a disposable sandbox —
 `CORRALAI_GATE_EXEC_BACKEND=none` with `CORRALAI_GATE_EXEC_UNSAFE_HOST=1`. Lifting
 the restriction globally (`kernel.apparmor_restrict_unprivileged_userns=0`) also
-works but weakens every process on the host, so prefer the per-binary profile.
+works but weakens every process on the host, so prefer the shipped profile.
 
 ## Deploying a brain behind a tunnel
 

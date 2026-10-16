@@ -37,17 +37,32 @@ export GEMINI_API_KEY=...        # and ANTHROPIC_API_KEY for the critic below
 corral certify --repo . --top 3 --max-tokens 3000000 \
   --writer-model gemini-3.8-flash --mutant-model gemini-3.8-flash \
   --derive-model gemini-3.8-flash --critic-model claude-haiku-4-5 \
-  -- python -m pytest -q         # your own test command: npm test, go test ./..., …
+  -- .venv/bin/python -m pytest -q   # your own test command: npm test, go test ./..., cargo test, …
 ```
 
 - **Those model names are an example, not a default — corral has none.** Name any
   models you hold keys for. The one rule: the critic must be a different model
   from the writer. One provider is enough (for example two different Anthropic
   models), and `--critic-model off` drops the critic, which is advisory anyway.
-- **Your suite has to pass first.** Install the project's dev dependencies. A
-  virtualenv inside the project (`./.venv`) is bound into the sandbox read-only;
-  one under your home directory is not. For Python, add `pytest-cov` so corral
-  can pick the tests that cover each file.
+- **No API key? Use a subscription.** Any seat can be a coding-agent CLI instead
+  of an API model: `--writer-model codex`, `--critic-model claude-code`, or
+  `claude-code:<model>` to pin one. The agent uses its own login, so on a
+  Pro/Max/Plus plan a seat has no per-token bill. Two cautions: the CLI inherits
+  corral's environment, so an exported vendor API key may be billed instead of the
+  subscription; and a seat that reports no token usage is refused under
+  `--max-tokens` (`claude-code` and `codex` do report it). See
+  [agent seats](https://github.com/pdbethke/corralai/blob/main/docs/corral/agent-seats.md).
+- **Your suite has to pass first, inside the sandbox.** The sandbox is offline
+  and sees `/usr` plus your checkout, not your home directory. Install the
+  project's dev dependencies into a virtualenv **inside the project**
+  (`./.venv`), which is bound in read-only, and run the suite through it, as
+  above: a bare `python` inside the sandbox is the system interpreter, which does
+  not have your dependencies. For Python, add `pytest-cov` so corral can pick the
+  tests that cover each file.
+- **One language per explicit test command.** A test command after `--` grades
+  every file, so it is refused when the scan spans more than one language. On a
+  mixed repository, omit it (corral then runs each language's default runner), or
+  narrow the scan with `--path <dir>`.
 - **What it costs, measured once:** flask's `src/flask/app.py` with these seats
   took about six minutes and 0.5M input tokens, and proved 9 of 9 surviving bugs
   catchable. Your files and suite will differ; `--max-tokens` is the hard cap.
@@ -59,6 +74,38 @@ corral certify --repo . --top 3 --max-tokens 3000000 \
 the first paid run. To run it on every pull request instead, see
 [the GitHub Action](/docs/github-action/).
 
+### A Rust project
+
+Rust is audited with `cargo test` or `cargo nextest run`. Two things differ from
+the other languages:
+
+- **The source's tests must live in a separate file it declares** —
+  `#[path = "foo_tests.rs"] mod tests;`, or `mod tests;` with rustc's default
+  module file. A file whose tests are an inline `#[cfg(test)] mod tests { … }`
+  block cannot be audited yet: corral would have to compose its test into the
+  source file itself, and that is not built. `--dry-run` lists those files as
+  excluded, with the reason `test-landing-not-built`.
+- **The toolchain.** A stock rustup install lives under `$HOME`, which the jail
+  cannot see. Either install a system-wide toolchain the jail can use
+  (`RUSTUP_HOME=/usr/local/rustup CARGO_HOME=/usr/local/cargo rustup-init
+  --no-modify-path`, with `/usr/local/cargo/bin` on `PATH`), or, on a disposable
+  checkout such as a CI runner or a scratch clone, pass `--substrate workspace`,
+  which runs your own toolchain on the checkout itself (and mutates it — see
+  [Limitations](/docs/limitations/)).
+
+In a Cargo workspace, scope the scan and the command to one crate:
+
+```bash
+corral certify --repo . --path crates/<crate> --top 3 --max-tokens 3000000 \
+  --writer-model gemini-3.8-flash --mutant-model gemini-3.8-flash \
+  --derive-model gemini-3.8-flash --critic-model claude-haiku-4-5 \
+  -- cargo test -p <crate>
+```
+
+Rust has no fail-fast flag verified yet, no salvage of a partly failing authored
+test and no coverage pre-flight; [language support](/docs/language-support/) has
+the full table.
+
 ## See it work first: `corral demo`
 
 One command, no setup beyond a provider key:
@@ -69,8 +116,11 @@ corral demo --writer-model claude-sonnet-5 --mutant-model claude-sonnet-5 --crit
 
 It writes a small Go package with a five-clause password rule and a test that checks
 only two of them, then audits it with the real `certify --local`. You need a Go
-toolchain — you installed corral with one — and one provider key. No venv, no
-database, no fixtures. The project is left on disk so you can read the test and see
+toolchain the sandbox can see — a system-wide install under `/usr`, not one under
+your home directory or from snap (see "It always runs sandboxed" below) — and one
+provider key, or agent seats (`--writer-model codex --mutant-model codex
+--critic-model claude-code`) and no key at all. No venv, no database, no
+fixtures. The project is left on disk so you can read the test and see
 what it never asserts.
 
 Then point it at your own code, with `corral doctor` first.
@@ -89,6 +139,7 @@ corral certify --local --repo-dir . \
   --writer-model claude-sonnet-5 \
   --mutant-model claude-sonnet-5 \
   --critic-model claude-haiku-4-5 \
+  --out verdict.json \
   -- go test ./...
 ```
 
@@ -105,10 +156,11 @@ seed goal-violating bugs into your code, your own test is scored against them
 by executing it in a jail (never a self-report), a test-writer proves any gap
 is real by writing and killing the test you were missing, and a decorrelated
 test-critic reads your suite cold. You get a signed verdict — `certified` or
-`needs-review` — and can re-check it offline any time:
+`needs-review` — and, because of `--out`, a record file you can re-check offline
+any time:
 
 ```bash
-corral certify verify <record> --pubkey "$(corral certify pubkey)" --allow-unanchored
+corral certify verify verdict.json --pubkey "$(corral certify pubkey)" --allow-unanchored
 ```
 
 A record's own embedded key is never a trust anchor, so `verify` refuses to run
@@ -135,22 +187,28 @@ corral doctor --code path/to/your/file.go \
 ```
   [ok  ] sandbox starts
   [ok  ] toolchain reachable inside the sandbox
-  [FAIL] credential for mutant-generator (claude-sonnet-5)
+  [FAIL] herd accepted by certify's own preflight (mutant-generator=claude-sonnet-5, test-writer=claude-sonnet-5, test-critic=claude-haiku-4-5)
          agentbackend: ForModel: model "claude-sonnet-5" needs an Anthropic key — set ANTHROPIC_API_KEY
+  [ok  ] code file pairs to a test
+         found path/to/your/file_test.go by convention (sibling)
 
 1 check(s) failed — fix these before spending a run.
 ```
 
 Every argument is optional and each unlocks more checks: `--code`/`--test` add the
 test-pairing check, a test command after `--` adds the in-sandbox toolchain check,
-and `--mutant-model`/`--writer-model`/`--critic-model` check the credential for
-exactly the models you plan to route to. It exits non-zero if anything failed.
+and `--mutant-model`/`--writer-model`/`--critic-model` run the same seat preflight
+certify runs, for exactly the models you plan to route to. An agent seat gets its
+own line: the binary is found and its version printed, but its login is **not**
+verified, because that would cost a call. It exits non-zero if anything failed.
 
-Two things it deliberately does **not** check, because both need a real seeded
+One thing it deliberately does **not** check, because it needs a real seeded
 workspace: whether your suite passes on *unmutated* code inside the sandbox — the
-most common way an audit dies — and whether a multi-file project needs `--repo-dir`.
-`certify --local` reports the first as `COULD-NOT-GRADE`, with the runner's own
-output.
+most common way an audit dies. Run your own test command by hand first;
+`certify --local` reports a failing baseline as `COULD-NOT-GRADE`, with the
+runner's own output. Whether a multi-file project needs `--repo-dir` is checked
+only where the single-file form is refused outright (a Rust file is one); for
+anything with imports, use `--repo-dir`.
 
 On a file with several functions the generation **fans out** — one seat per
 group of functions, so every function gets probed, not just whichever one a
@@ -170,15 +228,33 @@ Haiku critiquing, say) off that single `ANTHROPIC_API_KEY`. Naming
 `GOOGLE_API_KEY`) routes the critic to Gemini via the OpenAI-compatible Google
 endpoint — a real cross-vendor critic, writer and mutant-generator unchanged. A
 missing key fails the run closed instead of silently falling back. It supports
-Go, Python (pytest), Ruby (minitest/RSpec), JavaScript (node:test),
-TypeScript (tsc + node:test), and PHP (PHPUnit) — the language is inferred
-from `--code`'s extension.
+seven languages — Go (`go test`, gotestsum), Python (pytest, unittest), Ruby
+(RSpec, minitest), JavaScript and TypeScript (`node --test`, jest, mocha,
+vitest), PHP (PHPUnit) and Rust (`cargo test`, `cargo nextest`) — with the
+language inferred from `--code`'s extension and the runner from your test
+command. What each runner can and cannot do is on
+[language support](/docs/language-support/).
 
 **It always runs sandboxed.** `bwrap` is the Linux default; `--jail container`
 falls back to docker/podman; macOS uses `sandbox-exec`. There's no unsandboxed
-option. On Ubuntu 24.04+, apparmor disables unprivileged user namespaces by
-default and bwrap won't start — the error message spells out the exact
-one-line fix (or pass `--jail container`). And the language toolchain has to be
+option. On Ubuntu 24.04+, AppArmor restricts unprivileged user namespaces by
+default and bwrap won't start. The error message tells you to load the profile
+Ubuntu ships for bwrap, `bwrap-userns-restrict` (on 24.04 it may still be under
+`/usr/share/apparmor/extra-profiles`):
+
+```bash
+[ -f /etc/apparmor.d/bwrap-userns-restrict ] || sudo cp /usr/share/apparmor/extra-profiles/bwrap-userns-restrict /etc/apparmor.d/
+sudo apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict
+```
+
+Do not write your own `/etc/apparmor.d/bwrap` marked unconfined: it takes bwrap
+away from the shipped profile and leaves it without the capabilities it needs.
+corral printed such a profile before 1.0; if one is on your host, remove it with
+`sudo apparmor_parser -R /etc/apparmor.d/bwrap && sudo rm /etc/apparmor.d/bwrap`.
+Or pass `--jail container`, which needs docker or
+podman and `CORRALAI_EXEC_IMAGE` set to an image carrying your toolchain (for
+example `python:3.12-bookworm`). The sandbox is **offline**: anything your tests
+fetch from the network fails inside it. And the language toolchain has to be
 **jail-visible**: installed system-wide under `/usr` (your distro's
 `golang`/`python3` package), not a `--user`/snap/pyenv install — a snap `go` or
 a `pip install --user pytest` is invisible inside the sandboxed mount
@@ -199,7 +275,8 @@ python3 -m venv .venv && .venv/bin/pip install pytest   # or:
 PIPENV_VENV_IN_PROJECT=1 pipenv install --dev pytest
 
 corral certify --local --repo-dir . --code pkg/thing.py --test tests/test_thing.py \
-  --goal "…" -- .venv/bin/python -m pytest -q
+  --goal "…" --writer-model … --mutant-model … --critic-model … \
+  -- .venv/bin/python -m pytest -q
 ```
 
 pipenv's default venv location is outside the project, which is exactly the

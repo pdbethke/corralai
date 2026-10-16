@@ -3,13 +3,18 @@
 # Changelog
 
 Notable changes to corral. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
-versions are [semantic](https://semver.org/), and pre-1.0 means the CLI surface can
-still move between minor versions.
+versions are [semantic](https://semver.org/). A change that breaks how you run
+corral or read its record is listed under **Breaking** in its version's section.
 
 Entries describe what changed for someone *using* the tool. For the full commit
 history of any release, `git log v0.3.4..v0.3.5`.
 
-## [Unreleased]
+## [v1.0.0] — 2026-10-16
+
+The first stable release since v0.8.3, so `go install
+github.com/pdbethke/corralai/cmd/corral@latest` installs it. What changed since
+v0.8.3 is in the v1.0.0-rc.1 through rc.23 sections below; this section lists
+what changed since rc.23.
 
 - **`corral review churn`: is the review loop draining the code or churning
   it?** For every review on the ledger, each finding's line is blamed at the

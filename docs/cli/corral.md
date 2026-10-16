@@ -23,8 +23,8 @@ Start here:
   for --repo, --derive-model. https://corralai.dev/docs/getting-started/
 
 Usage:
-  corral                          serve the optional daemon (the brain): /mcp/ + /healthz on
-                                  $CORRALAI_ADDR. No audit needs it.
+  corral                          with no verb, exits 2: the optional daemon is
+                                  `corral-wrangler serve`. No audit needs it.
   corral secret set|get|list|rm   manage provider keys + tokens in the secure keystore
                                   (env → OS keyring → age-encrypted file; set reads stdin, never argv)
   corral state paths              print where each corral file lives and which variable moves it
@@ -297,8 +297,8 @@ Usage of certify --local:
     	also write the signed verdict as a self-contained record file, re-verifiable offline with corral certify verify <file> --pubkey <hex> --allow-unanchored
   -poll duration
     	how long to wait between drive iterations when nothing is claimable (default 2s)
-  -prior string
-    	what earlier runs already tried, so this run plants DIFFERENT faults: a corral-mutants document (see --record-mutants), a scan ledger (.duckdb, see --record-db), or a directory holding any number of either — a document brings the hunks, a ledger the outcomes, merged per edit. Applied only to a file whose bytes are EXACTLY what the prior was recorded against; a file the prior knows under other bytes gets none, and the report says so. A run handed a prior sits a different exam from one without — the verdict, the ledger and the signed statement carry priorsApplied and the prior's digest, and the digest is in the cache key, so a repeat audit never reads as the tests changing when only the exam did
+  -prior .corral/ledger
+    	what earlier runs already tried, so this run plants DIFFERENT faults: a corral-mutants document (see --record-mutants), a ledger directory (.corral/ledger, the record every --repo run and review writes), or a directory holding any number of corral-mutants documents — a document brings the hunks, a ledger the outcomes, merged per edit. Applied only to a file whose bytes are EXACTLY what the prior was recorded against; a file the prior knows under other bytes gets none, and the report says so. A run handed a prior sits a different exam from one without — the verdict, the ledger and the signed statement carry priorsApplied and the prior's digest, and the digest is in the cache key, so a repeat audit never reads as the tests changing when only the exam did
   -quiet
     	suppress the live progress echo on stderr (the verdict, --out and --record are unaffected)
   -record string

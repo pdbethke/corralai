@@ -195,8 +195,8 @@ Start here:
   for --repo, --derive-model. https://corralai.dev/docs/getting-started/
 
 Usage:
-  corral                          serve the optional daemon (the brain): /mcp/ + /healthz on
-                                  $CORRALAI_ADDR. No audit needs it.
+  corral                          with no verb, exits 2: the optional daemon is
+                                  ` + "`corral-wrangler serve`" + `. No audit needs it.
   corral secret set|get|list|rm   manage provider keys + tokens in the secure keystore
                                   (env → OS keyring → age-encrypted file; set reads stdin, never argv)
   corral state paths              print where each corral file lives and which variable moves it

@@ -114,10 +114,13 @@ func resolveJail(jailFlag string, containerFallback bool) (sandbox.Isolator, err
 }
 
 // bwrapUnavailableError turns a raw bwrap Preflight/Resolve failure into a
-// concise, copy-pasteable actionable error: it names the Ubuntu 24.04 apparmor
-// cause (unprivileged userns disabled by the distro default), the surgical
-// fix, and — only for commands that actually expose --jail — the container
-// fallback. It is a pure formatter — no bwrap invocation — so it is
+// concise, copy-pasteable actionable error: it names the Ubuntu 24.04+ apparmor
+// cause (unprivileged userns restricted by the distro default), the fix — load
+// Ubuntu's own bwrap-userns-restrict profile — and, only for commands that
+// actually expose --jail, the container fallback. It used to print a
+// hand-written /etc/apparmor.d/bwrap marked unconfined; that profile shadows
+// the shipped one and leaves bwrap without CAP_NET_ADMIN (measured on Ubuntu
+// 26.04, where it broke bwrap and GNOME's glycin), so it now says to remove it. It is a pure formatter — no bwrap invocation — so it is
 // unit-testable without a working (or degraded) bwrap on the host.
 func bwrapUnavailableError(cause error, containerFallback bool) error {
 	tail := `Otherwise run on a host where bwrap can isolate: this command has no
@@ -130,12 +133,19 @@ CORRALAI_EXEC_IMAGE=python:3.12-bookworm).`
 	return fmt.Errorf(
 		`no working bwrap sandbox: %w
 
-corral never runs untrusted test/mutant code unsandboxed. On Ubuntu 24.04+
-apparmor disables unprivileged user namespaces by default, which is the usual
-cause. Fix it with a surgical profile that allows only bwrap's own binary:
+corral never runs untrusted test/mutant code unsandboxed. On Ubuntu 24.04 and
+later, AppArmor restricts the unprivileged user namespaces bwrap needs. Ubuntu
+ships a profile for bwrap, bwrap-userns-restrict; load it (on 24.04 it may
+still be under /usr/share/apparmor/extra-profiles):
 
-  printf 'abi <abi/4.0>,\ninclude <tunables/global>\n\n/usr/bin/bwrap flags=(unconfined) {\n  userns,\n  include if exists <local/bwrap>\n}\n' | sudo tee /etc/apparmor.d/bwrap
-  sudo systemctl reload apparmor
+  [ -f /etc/apparmor.d/bwrap-userns-restrict ] || sudo cp /usr/share/apparmor/extra-profiles/bwrap-userns-restrict /etc/apparmor.d/
+  sudo apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict
+
+Do not write your own /etc/apparmor.d/bwrap marked unconfined: it takes bwrap
+away from the shipped profile and leaves it without the capabilities it needs.
+If one is there from earlier advice (corral printed it before 1.0), remove it:
+
+  sudo apparmor_parser -R /etc/apparmor.d/bwrap && sudo rm /etc/apparmor.d/bwrap
 
 %s`, cause, tail)
 }

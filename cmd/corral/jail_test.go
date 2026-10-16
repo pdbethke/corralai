@@ -53,6 +53,16 @@ func TestBwrapUnavailableError_NamesTheFixAndTheAlternative(t *testing.T) {
 	if !strings.Contains(msg, cause.Error()) {
 		t.Errorf("error message %q should preserve the underlying cause for debugging", msg)
 	}
+	// The fix is Ubuntu's own bwrap-userns-restrict profile. A hand-written
+	// /etc/apparmor.d/bwrap with flags=(unconfined) — what this message used
+	// to print — shadows that profile and leaves bwrap without the
+	// capabilities it needs (measured on Ubuntu 26.04: bwrap failed outright).
+	if !strings.Contains(msg, "bwrap-userns-restrict") {
+		t.Errorf("message %q must point at the shipped bwrap-userns-restrict profile", msg)
+	}
+	if strings.Contains(msg, "flags=(unconfined) {") || strings.Contains(msg, "sudo tee /etc/apparmor.d/bwrap") {
+		t.Errorf("message %q still tells the operator to write the profile that breaks bwrap", msg)
+	}
 }
 
 // resolveLocalJail("container") must never silently succeed to an unsandboxed

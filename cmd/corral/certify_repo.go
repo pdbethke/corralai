@@ -2421,11 +2421,20 @@ func resolveGoalSource(stderr io.Writer, repoDir, goalsPath, deriveModel, derive
 // check-command arguments — "false", "-q"'s VALUE, a test path, "0.5")
 // never matches: TrimLeft strips leading dashes, and a token that had
 // none to begin with is left unchanged by it, which the equality check
-// below catches and skips. A single-dash short flag some OTHER tool
-// happens to define (pytest's "-q", "-x") only collides if its single
-// letter happens to equal one of THIS command's flag names outright,
-// which none of them do today (all are multi-letter) — so a real,
-// unrelated check command is never falsely rejected.
+// below catches and skips. Any number of leading dashes is stripped, so
+// `go test -timeout` matches corral's --timeout as written.
+//
+// runnerSpellings are the exceptions: names of corral's own flags that
+// everyday test runners use too (`cargo test --all`, `cargo test --tests`,
+// `go test -timeout 5m`, `go test -json`, a `--path` filter). Refusing them
+// turned away the commands a first visitor types. Each is safe to let
+// through because misplacing it after -- cannot switch a gate off or lift a
+// spending cap: corral then runs with its default for that flag, and the
+// runner gets an argument it understands. It is an allowlist on purpose: a
+// flag added to this command later is refused until someone decides it is
+// safe, so the list can only fail closed.
+var runnerSpellings = map[string]bool{"all": true, "tests": true, "timeout": true, "json": true, "path": true}
+
 func checkArgvNoFlagCollision(fs *flag.FlagSet, checkArgv []string) error {
 	names := map[string]bool{}
 	fs.VisitAll(func(f *flag.Flag) { names[f.Name] = true })
@@ -2442,7 +2451,7 @@ func checkArgvNoFlagCollision(fs *flag.FlagSet, checkArgv []string) error {
 		if i := strings.IndexByte(name, '='); i >= 0 {
 			name = name[:i]
 		}
-		if names[name] {
+		if names[name] && !runnerSpellings[name] {
 			return fmt.Errorf(
 				"the check command (after --) contains %q, which is one of this command's OWN flags — flags must be given BEFORE --, never after (splitCertifyArgs has no way to tell a real command-line argument from a misplaced flag). Move %q before -- ; if the check command genuinely needs a colliding token, wrap it in a script and pass the script as the check command instead",
 				tok, tok)

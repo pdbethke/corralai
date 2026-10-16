@@ -195,8 +195,8 @@ Start here:
   for --repo, --derive-model. https://corralai.dev/docs/getting-started/
 
 Usage:
-  corral                          serve the optional daemon (the brain): /mcp/ + /healthz on
-                                  $CORRALAI_ADDR. No audit needs it.
+  corral                          with no verb, exits 2: the optional daemon is
+                                  ` + "`corral-wrangler serve`" + `. No audit needs it.
   corral secret set|get|list|rm   manage provider keys + tokens in the secure keystore
                                   (env → OS keyring → age-encrypted file; set reads stdin, never argv)
   corral state paths              print where each corral file lives and which variable moves it
@@ -235,8 +235,8 @@ Usage:
                                   an explicit -- <test cmd> grades EVERY file, so it is refused
                                   when the scan spans more than one language (omit it and each
                                   file is graded with its own language's stock command)
-                                  the report is NOT signed yet — that lands with the sealed
-                                  repo statement
+                                  the run's record is a ledger entry, signed when a certify key
+                                  is configured; --attest also writes a signed in-toto statement
   corral certify verify <record-file> [--pubkey <hex>|--brain <url>] [--allow-unanchored]
                                   independently verify a --out (or report_build) record: the
                                   Ed25519 signature, the ledger's hash chain, and that the

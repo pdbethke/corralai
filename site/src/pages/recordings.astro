@@ -108,7 +108,8 @@ const replayCorpus = buildReplayCorpus(streams, cards[0]?.slug ?? '');
     <h1>Recordings</h1>
     <p>
       Real audits, recorded. Each is corral <em>certifying a change by
-      execution</em>: a <strong>decorrelated</strong> cross-vendor herd plants
+      execution</em>: a <strong>decorrelated</strong> herd (the critic always a
+      different model from the writer; a few of these tapes also mix vendors) plants
       faults in the code, checks whether the developer's own tests catch them,
       and signs a tamper-evident verdict — <em>no one judging their own cause</em>.
       Some clear the bar and certify; some leave too many survivors the suite
@@ -118,8 +119,9 @@ const replayCorpus = buildReplayCorpus(streams, cards[0]?.slug ?? '');
     </p>
     <p>
       Every one was exported through the same deny-list + human-manifest privacy
-      gate as the landing hero, and is offline-verifiable from its signed record.
-      Open the <strong>tests</strong> tab in any replay to see the verdict, the
+      gate as the landing hero. The tapes replay; the signed records behind
+      them stayed in the stores of the machines that ran them and are not
+      published here. Open the <strong>tests</strong> tab in any replay to see the verdict, the
       code under review with the surviving fault highlighted, and the suite it
       graded. Pick a card to replay it on the corral canvas.
     </p>
@@ -187,9 +189,9 @@ const replayCorpus = buildReplayCorpus(streams, cards[0]?.slug ?? '');
     <p class="how">
       The cross-recording metric for audits isn't a findings table — it's the <strong>bug-catching scorecard</strong>: which model actually catches bugs, <em>proven by execution</em>, per (model, role). It accrues as audits run —
       a cell stays <em>provisional</em> until it has enough of them, so we don't
-      publish a confident number off a handful — and lives at <code>corral scorecard</code> / <code>/api/bugcatch</code>, offline-verifiable
-      from each signed record. Fugu's routing scores come out of a trained black
-      box; this comes out of a test that really ran and really killed a fault.
+      publish a confident number off a handful — and <code>corral scorecard</code> prints it from your own runs. It comes
+      out of a test that really ran and really killed a fault, not out of a
+      model's opinion of itself.
     </p>
   </div>
 </body>

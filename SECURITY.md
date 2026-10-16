@@ -17,7 +17,7 @@ from that:
 | `certify --repo --substrate workspace` | your checkout, in place (you, or the CI runner, are the isolation boundary) | yes | no (scrubbed) |
 | `corral review` (default): the reviewer's and verifier's reproduction scripts | the same sandbox as `certify`, seeded with the tree at the reviewed commit; dependency dirs bound read-only; a fresh workspace per script | none | no |
 | `corral review --substrate workspace` (what the GitHub Action runs) | a detached git worktree at the reviewed commit on the host, **not a sandbox** (the runner is the isolation boundary) | yes | no (scrubbed) |
-| an agentic review seat (Claude Code, Codex, …) | that agent, started in a disposable copy of the repository | the agent's own | the agent's own |
+| an agent seat (Claude Code, Codex, …), in any verb | that agent's own process: for `review`, started in a disposable copy of the repository; for `certify`, in an empty temporary directory | the agent's own | corral's environment, so an exported provider key reaches it (and may bill instead of the subscription) |
 
 Two of those rows are not sandboxed, and that is stated here because it is easy to miss:
 
@@ -31,6 +31,12 @@ Two of those rows are not sandboxed, and that is stated here because it is easy 
   container. Without it, review runs the scripts in the same offline sandbox as `certify`, and
   refuses when there is none. The scripts are recorded in the ledger either way, so what ran
   is never hidden.
+
+On macOS the `sandbox-exec` backend is a weaker boundary than Linux's `bwrap`: it runs as
+your user, and a jailed command can read the start-up environment of your other processes
+through the kernel (KERN_PROCARGS2, measured on macOS 27, 2026-10-13; no Seatbelt rule tried
+blocked it). Do not run an audit there with API keys exported in other shells, or use
+`--jail container`.
 
 ## Why a hijacked model cannot change a verdict
 
@@ -60,10 +66,22 @@ Two of those rows are not sandboxed, and that is stated here because it is easy 
 
 - Model keys come from the environment or corral's keystore (`corral secret`: OS keyring, then
   an age-encrypted file; `set` reads stdin, never argv). They are removed from the
-  environment of anything corral runs.
-- **A run spends money.** `--max-tokens` caps a run's tokens across every seat. In the GitHub
-  Action, a pull request from a fork runs with your key unless you require approval for fork
-  workflows; the Action docs say how.
+  environment of the code corral runs: your suite in the jail or on the workspace substrate,
+  and review's reproduction scripts.
+- **An agent seat is the exception.** Any seat can be a coding-agent CLI (`claude-code`,
+  `codex`, or one you define as `CORRALAI_AGENT_<NAME>`), and that CLI inherits corral's whole
+  environment, because it needs `PATH`, `HOME` and its own login variables. So a vendor API key
+  you exported for corral's API seats reaches it too, and a CLI that prefers an API key over
+  its subscription login will bill it. A `certify` agent seat starts in a fresh empty directory
+  and the built-in definitions grant it no tools; a `review` agent seat reads a worktree of the
+  repository with read-only tools (`Read`, `Grep`, `Glob`; `codex` runs `--sandbox read-only`,
+  which still lets it read the host). corral does not confine what the CLI itself does; see
+  `docs/corral/agent-seats.md`.
+- **A run spends money.** `--max-tokens` caps an audit's tokens across every audit seat;
+  `corral review` has no token cap. In the GitHub Action, a pull request from a fork gets none
+  of your secrets, so it cannot spend your key — it fails for want of one unless the job is
+  guarded. Never switch to `pull_request_target` to make fork PRs run: it hands your secrets
+  to a workflow that checks out the contributor's code. The Action docs say how to guard it.
 
 ## The optional daemon (`corral-wrangler`, frozen)
 
@@ -75,13 +93,13 @@ containment and on every action being attributable.
 
 The blast radius of a compromised agent is bounded by construction, not by trust.
 
-- **Agents are jailed.** A bee's shell commands run in a `bwrap` sandbox: no network by
+- **Agents are jailed.** An agent's shell commands run in a `bwrap` sandbox: no network by
   default, filesystem confined to its workspace, host `$HOME` and secrets stripped from the
-  environment. The bee process is confined at the point it executes anything.
+  environment. The agent process is confined at the point it executes anything.
 - **The credential boundary.** The git/forge token lives **only** in the brain. It is scrubbed
   from the process environment right after load, injected into a clone/push URL for exactly one
-  network call, and **never** written to `.git/config` (which a bee could read) or any log. Bees
-  hold no credentials — they ask the brain to perform git operations.
+  network call, and **never** written to `.git/config` (which an agent could read) or any log.
+  Agents hold no credentials — they ask the brain to perform git operations.
 - **Per-forge credential isolation.** With multiple forges configured (GitHub / GitLab / Gitea),
   a token is only ever used against **its own** host — one forge's token is never injected into
   another forge's URL.
@@ -102,8 +120,8 @@ The blast radius of a compromised agent is bounded by construction, not by trust
 - **Knowledge is trust-tiered.** Agent-written "lessons" and ingested reference material are
   **unvetted** — searchable as clearly-fenced data, but **never** auto-injected as an
   authoritative instruction into a future mission. Only human-vetted knowledge is authoritative.
-  This kills the "poisoned document propagates through the swarm" worm.
-- **Cross-swarm coordination is signed and fail-closed.** Brains have Ed25519 identities;
+  This kills the "poisoned document propagates through the herd" worm.
+- **Coordination between daemons is signed and fail-closed.** Brains have Ed25519 identities;
   coordination intents are signed and verified against a trust registry, replay-protected, and
   advisory-only — a brain publishes its own signed intents and reads verified peers'; it can
   never call, command, or coerce another brain.
@@ -153,10 +171,8 @@ The load-bearing suites, by claim:
 - `TestRecallLessonsSharedOnly` — agent-written (private) lessons are never auto-recalled into
   instructions; only vetted (shared) lessons are.
 - `TestUntrustedNeutralizesEmbeddedSentinel` — untrusted content can't forge or escape the data fence.
-- `TestReplanFencesEvidence` / `TestReplanVerifyFencesEvidence` — reported evidence is fenced, not
-  executed.
 
-**Cross-swarm identity is unforgeable** (`internal/attest`, `internal/fleet`)
+**A daemon's identity is unforgeable** (`internal/attest`, `internal/fleet`)
 - `TestVerifyRejectsTamper` / `TestVerifyWrongKeyFails` — tampered or impersonated intents fail
   verification.
 - `TestRegisterTOFUPinAndConflict` — a brain cannot overwrite another brain's pinned identity.
@@ -186,11 +202,11 @@ Honesty is part of the model.
   authoritative position and that a fooled agent is contained. If an agent chooses to follow
   injected text in fenced reference data, containment (jail, no credentials, human PR review) is
   what limits the damage.
-- **It does not defend against a malicious insider holding a valid key.** Cross-swarm attestation
+- **It does not defend against a malicious insider holding a valid key.** Attestation between daemons
   stops identity *forgery*, not an authorized brain publishing *false* claims; that is mitigated
   by advisory-only semantics, TTLs, and revocation, not prevented.
-- **It assumes a single trust domain.** Cross-swarm coordination assumes all participating swarms
-  belong to one owner; it is not multi-tenant isolation.
+- **It assumes a single trust domain.** Coordination between daemons assumes every participating
+  daemon belongs to one owner; it is not multi-tenant isolation.
 - **`--substrate workspace` is not sandboxed**, for `certify --repo` and `corral review` alike
   (see "What runs where"); both verbs' default substrate is.
 - **It has not been battle-tested at scale.** The properties are proven by design review and the
@@ -221,9 +237,10 @@ Corralai is source-available under the **Elastic License 2.0**; see `LICENSE`.
 We hold corralai's *own* build and distribution to the standards it helps others meet, and publish
 the evidence:
 
-- **Provenance:** releases target SLSA build provenance; the console UI bundle and release artifacts
-  are signed and (as the transparency work lands) anchored to a public log — the same in-toto/SLSA +
-  Sigstore/Rekor machinery `corral certify` provides.
+- **Provenance:** a release is a source tag, installed with `go install` and checked against the
+  Go checksum database; no SLSA build provenance is produced yet. The console UI bundle's
+  manifest is signed with an Ed25519 release key, and the release workflow refuses to publish
+  a version whose committed signature does not cover it.
 - **Scoring:** an **OpenSSF Scorecard** runs on every push to `main` (see the badge in the README).
 - **SBOM:** an SPDX Software Bill of Materials is generated in CI.
 - **Vulnerabilities:** `govulncheck` gates every merge (`scripts/check-security.sh`); `gosec`

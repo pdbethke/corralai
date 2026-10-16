@@ -1,5 +1,12 @@
 # demo-map
 
+> **Historical: the frozen daemon's builder-era demo.** This page maps a Compose demo of the
+> optional brain daemon coordinating builder/tester/pentester/reviewer agents. corral no
+> longer builds anything, the daemon is optional and frozen ([brain.md](brain.md)), and no
+> audit uses any of this. For the product, start with `corral demo` and the README
+> quickstart. The make targets below still match `deploy/demo/Makefile`; the tab names and
+> the UI notes are from that era and the UI has changed since.
+
 `deploy/demo/Makefile` wraps `docker compose -f docker-compose.yml` with
 per-scenario profiles that stand up a local brain + herd against Ollama —
 no API key required. The UI is always at `http://localhost:9019`, with tabs
@@ -34,4 +41,4 @@ demo and its make targets.
 The UI is served by `internal/ui` (`Server`, built from `internal/ui/web/index.html`).
 Its state view (`stateView` in `internal/ui/ui.go`) assembles tasks, findings,
 executions, activity, topology, and proposals from the brain's stores each
-poll — that one struct backs all four tabs.
+poll — that one struct backs every tab.

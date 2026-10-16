@@ -117,8 +117,9 @@ the kind of mistake a tired human would plausibly make. Fewer mutants, aimed at
 behaviour that matters.
 
 **The loop closes.** Classical tools stop at the number: *here is your mutation
-score, good luck.* corral takes the survivors and has a **different** model write a
-test targeting them, then executes it. It must compile, pass on your correct code,
+score, good luck.* corral takes the survivors and has a test-writer model write a
+test targeting them, then executes it. (The writer may be the same model that
+planted the mutants; what decides the outcome is the run, not either model.) It must compile, pass on your correct code,
 and fail on the mutant. Only then does the gap count as proven — and you get the
 test, not just the diagnosis.
 

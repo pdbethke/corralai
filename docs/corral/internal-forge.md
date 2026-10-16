@@ -20,17 +20,26 @@ them and yours should too:
   Ollama daemon inside the network (`--local-endpoint`), a gateway you
   run, or a vendor. What goes out to a vendor is the file under audit and
   the tests around it, the same bytes a developer pastes into a chat.
-- **There is no keyless attestation.** On GitHub, `actions/attest` signs
-  each entry with the workflow's OIDC identity and no key. Off GitHub the
+- **There is no keyless attestation.** On GitHub, the Action's `attest`
+  input signs the audit statement, and the ledger recipe attests each entry
+  with `actions/attest-build-provenance`, both through the workflow's OIDC
+  identity and no key. Off GitHub the
   chain's trust rests on the **certify key** you configure
   (`CORRALAI_CERTIFY_KEY`, a 32-byte Ed25519 seed as hex — or
   `CORRALAI_CERTIFY_KEY_FILE` naming a file holding the same): every entry
   is signed with it, `corral verify --ledger <dir> --pub <hex>` checks every
   signature against its public half, and custody of that seed is the
   thing your process has to get right. Keep it in the CI secret store,
-  never in the repository; rotate it by adding the new public key to the
-  verifier's list, not by rewriting entries. GitLab's own OIDC ID tokens
-  work with `cosign sign-blob` if you want a keyless witness as well.
+  never in the repository. There is no list of trusted keys: `--pub` takes
+  one, and every signed entry is checked against it, so after a rotation the
+  old entries fail under the new key. Rotate at a checkpoint: verify the
+  chain under the old key one last time and keep that output, configure the
+  new seed, and run `corral ledger checkpoint <dir>`. The checkpoint is
+  signed with the new key and names the head it replaced; from there the
+  chain verifies under the new public key, and the pruned entries stay in
+  the branch's git history, verifiable under the old key at that commit.
+  Never rewrite an entry to re-sign it. GitLab's own OIDC ID tokens work
+  with `cosign sign-blob` if you want a keyless witness as well.
 
 ## The recipe, forge-neutral
 
@@ -64,13 +73,19 @@ code=$?
 #    than rebasing — a rebase moves the commit, not the link.
 cd .corral-ledger
 git add -A && git -c user.name=corral -c user.email=corral@noreply commit -qm "corral: $COMMIT_SHA" || exit "$code"
+keep=$(mktemp -d)
 for i in 1 2 3; do
   git push origin HEAD:corral/ledger && exit "$code"
-  ours=$(git diff --name-only HEAD~1 HEAD -- scans/ | head -1)
-  cp "$ours" /tmp/entry.json.gz
-  git fetch origin corral/ledger && git reset -q --hard origin/corral/ledger
-  corral ledger append /tmp/entry.json.gz . && git add -A \
-    && git -c user.name=corral -c user.email=corral@noreply commit -qm "corral: $COMMIT_SHA (re-linked)"
+  # Keep our entry and our mutants file; `git show HEAD` lists them even
+  # when our commit is the branch's first, where HEAD~1 does not exist.
+  rm -rf "$keep" && mkdir -p "$keep/mutants"
+  cp "$(git show --name-only --format= HEAD -- scans/ | head -1)" "$keep/entry.json.gz"
+  git show --name-only --format= HEAD -- mutants/ | while read -r f; do cp "$f" "$keep/mutants/"; done
+  git fetch --no-tags origin "+refs/heads/corral/ledger:refs/remotes/origin/corral/ledger" \
+    && git reset -q --hard origin/corral/ledger
+  corral ledger append "$keep/entry.json.gz" . || exit 1
+  mkdir -p mutants && { cp -n "$keep"/mutants/* mutants/ 2>/dev/null || true; }
+  git add -A && git -c user.name=corral -c user.email=corral@noreply commit -qm "corral: $COMMIT_SHA (re-linked)"
 done
 exit 1
 ```
@@ -88,6 +103,9 @@ merge-request target is `CI_MERGE_REQUEST_TARGET_BRANCH_NAME`.
 
 ```yaml
 corral:
+  # golang:1.26 carries Go only. The recipe runs `pytest -q`, so use an image
+  # that has your project's own toolchain and dependencies (and Go, to install
+  # corral), or install them in before_script.
   image: golang:1.26
   variables:
     GIT_DEPTH: 0
@@ -119,8 +137,9 @@ The recipe is the same shell; only the push credential and the
 target-branch variable change. Gitea Actions runs GitHub-style workflows,
 so the Action's own YAML works there with `uses: pdbethke/corralai@v1.0.0-rc.23`
 pointed at a mirror (Gitea resolves `uses:` against `github.com` by
-default) and `actions/attest` removed — there is no attestation API to
-call. Bitbucket Pipelines: `BITBUCKET_PR_DESTINATION_BRANCH` is the target,
+default), with `attest` left unset and the ledger recipe's
+`actions/attest-build-provenance` step dropped — there is no attestation
+API to call. Bitbucket Pipelines: `BITBUCKET_PR_DESTINATION_BRANCH` is the target,
 and an app password or access token with repository write is the push
 credential. Gerrit: the ledger branch is an ordinary ref; push it with the
 job's own credential, and the `corral/ledger` ref needs no review — it is

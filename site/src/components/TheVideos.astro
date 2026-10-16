@@ -75,11 +75,13 @@
 
   <p class="note">
     <strong>One run each, not a grade.</strong> Faults are generated fresh
-    every time, so the same file scores differently on different days — this <code>app.py</code> has come back at 0.62, 0.72 and 0.75 across runs. That
+    every time, so the same file scores differently on different runs — six
+    scans of flask's <code>cli.py</code> on one day ranged from 0.375 to 0.525
+    (the data behind <a href="/warehouse/">the warehouse page</a>). That
     spread is the reason corral reports a <em>proven gap</em>, which does not
     drift, rather than asking you to gate on a kill rate, which does. Both
     runs above are entries on the public branch; query them and you will get
-    these numbers and other runs' too.
+    these numbers.
   </p>
 
   <p class="foot">

@@ -18,7 +18,7 @@ const audits = [
 ];
 ---
 <section class="section wide" id="proof-band">
-  <h2>Eight real audits, eight signed verdicts</h2>
+  <h2>Eight real audits, on tape</h2>
   <p class="lede">
     We pointed corral at real code across four languages — libraries we didn't
     write, plus our own — and graded each suite <em>by execution</em>: plant
@@ -26,8 +26,8 @@ const audits = [
     them in a jail, sign the kill-rate. The first two rows are the same file
     twice: on a branch whose suite is green but thin it scored 75% and came back <strong>NEEDS-REVIEW</strong>; on main, one test richer, 90% and <strong>CERTIFIED</strong>. more-itertools certified at 90% too. The rest
     fell short of the bar and were sent back with their survivors <em>disclosed</em> — corral hands those to a human to judge, it doesn't rule
-    them defects. Every verdict is a signed record you can replay and verify
-    offline — pick any row.
+    them defects. Each row replays the run's own tape, every beat of it —
+    pick any row.
   </p>
 
   <ul class="verdicts" role="list">
@@ -43,6 +43,20 @@ const audits = [
     ))}
   </ul>
 
+  <div class="rust">
+    <h3>And Rust, on the public record</h3>
+    <p>
+      The newest language has no tape here yet; its evidence is a signed entry
+      on corral's own ledger branch. On 2026-10-14 corral audited <code>src/lib.rs</code> of Warp's <code>fuzzy_match</code> crate
+      (<a href="https://github.com/warpdotdev/warp" rel="noopener noreferrer">warpdotdev/warp</a> at <code>714c51f1</code>). It planted <strong>34</strong> faults; the crate's own tests killed <strong>11</strong> and missed <strong>23</strong>, a kill rate of <strong>0.32</strong>. The
+      test-writer then wrote a test for each survivor and ran it alone against
+      its fault: <strong>22 of the 23</strong> are proven gaps. Verdict <strong>needs-review</strong>, in about ten minutes. The seats were
+      gemini-3.8-flash for the faults and the tests, and codex as the critic.
+    </p>
+    <p class="rust-cite">
+      <a href="https://github.com/pdbethke/corralai/blob/corral/ledger/scans/20261014T133712Z-714c51f1e29f-8f1bc4949be5.json.gz" rel="noopener noreferrer">The ledger entry →</a> (<code>scans/20261014T133712Z-714c51f1e29f-8f1bc4949be5.json.gz</code>, signed <code>corral-certify</code>)
+    </p>
+  </div>
   <div class="cta">
     <p class="cta-label">Run it yourself — one command, off a single <code>ANTHROPIC_API_KEY</code>:</p>
     <pre class="cmd">corral certify --local --code validator.py \
@@ -50,7 +64,7 @@ const audits = [
   --writer-model claude-sonnet-5 --mutant-model claude-sonnet-5 --critic-model claude-haiku-4-5 \
   -- pytest</pre>
     <p class="cta-foot">
-      Every number above is a real signed record you can verify offline — <a href="/field-notes/your-tests-suck/">read the write-up →</a>
+      Every row's numbers are read off its run's tape, and Rust's off its ledger entry — <a href="/field-notes/your-tests-suck/">read the write-up →</a>
     </p>
   </div>
 </section>
@@ -106,6 +120,12 @@ const audits = [
   }
   .verdict:hover .replay { color: var(--fg); }
 
+  .rust { margin-top: 28px; background: var(--panel); border: 1px solid var(--line); border-left: 3px solid var(--amber); border-radius: 10px; padding: 18px 20px; }
+  .rust h3 { margin: 0 0 8px; font-size: 1.05rem; color: var(--amber); }
+  .rust p { margin: 0 0 10px; font-size: 0.94rem; color: var(--fg); }
+  .rust p:last-child { margin-bottom: 0; }
+  .rust code { background: var(--sel); border-radius: 4px; padding: 1px 5px; font-size: 0.85em; overflow-wrap: anywhere; }
+  .rust-cite { font-size: 0.88rem; color: var(--muted); }
   .cta { margin-top: 28px; }
   .cta-label { margin: 0 0 8px; color: var(--fg); }
   .cta-label code { background: var(--sel); border-radius: 4px; padding: 1px 5px; font-size: 0.85em; }

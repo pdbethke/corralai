@@ -1,44 +1,133 @@
 ---
 title: Configuration
-description: The environment variables that configure a corralai brain — storage paths, auth, repo work, the fleet, and the knobs the demo and recordings pipeline read.
+description: What configures an audit — seats and keys, agent seats, the model registry, the sandbox, the signing key, the ledger and the cache — and, separately, the optional daemon's variables.
 ---
 
 {/* SPDX-License-Identifier: Elastic-2.0 */}
 {/* Source: cmd/corral/main.go // Env: doc block (the authoritative list is the
-    generated CLI reference at /docs/cli/corral/); this page is the
+    generated CLI reference at /docs/cli/corral/), internal/agentbackend,
+    internal/models, docs/corral/agent-seats.md; this page is the
     task-oriented tour of the load-bearing ones. */}
 
-A corralai brain is configured **entirely through environment variables** —
-there is no config file to hand-edit, so dev mode and a production deployment
-run the exact same code paths. Everything below is optional; a brain with no
-environment set at all boots in dev mode against sensible defaults under corral's state directory.
+An audit is configured by its **flags** — every seat is named on the command
+line, because corral has no default models — and by a handful of environment
+variables for keys, the sandbox, signing and where files live. There is no
+config file to hand-edit. Everything below is optional except the seats.
 
 :::note
-The **complete, always-current list** is generated straight from the binary's
-own source comment — see [the `corral` CLI reference](/docs/cli/corral/). This
-page is the guided tour of the knobs you reach for most.
+The **complete, always-current list** of variables is generated straight from
+the binary's own source comment — see [the `corral` CLI reference](/docs/cli/corral/).
+This page is the guided tour of the ones you reach for.
 :::
 
-## Where state lives
+## Seats and provider keys
 
-Every store defaults under corral's **state directory** (`~/.local/state/corral` on Linux, `~/Library/Application Support/corral` on macOS; set `CORRALAI_STATE_DIR` to move all of them, or a per-store variable to move one). `corral state paths` prints the resolved list.
+Each seat — `--mutant-model`, `--writer-model`, `--critic-model`, and on
+`certify --repo` `--derive-model` — resolves its own backend from the name you
+give it. A run with an unnamed seat is refused before any sandbox, store or
+spend, and the refusal says which provider credentials it can see. The one rule:
+the critic must differ from the writer (`--critic-model off` drops the critic,
+which is advisory and never gates).
+
+| Variable | What it is |
+| --- | --- |
+| `ANTHROPIC_API_KEY` | Claude models |
+| `GEMINI_API_KEY` (or `GOOGLE_API_KEY`) | Gemini models |
+| `OPENAI_API_KEY` | OpenAI models |
+| `OPENROUTER_API_KEY` | OpenRouter, one key for several vendors |
+| `MODEL_BACKEND` / `OPENAI_BASE_URL` | Pin every seat to one endpoint (OpenRouter, a local daemon) instead of routing by model name. An explicit gateway is never re-routed |
+| `OLLAMA_URL` | The local Ollama daemon (default `http://127.0.0.1:11434`); `--local-endpoint <role>=<url>` places one seat on another daemon |
+
+**A key alone does not move a seat to a provider.** A Gemini model name with
+only an Anthropic key configured is an error from Anthropic, not a Gemini call:
+set the model names *and* the matching keys.
+
+Keys can live in corral's **keystore** instead of a plaintext environment:
+
+```sh
+corral secret set ANTHROPIC_API_KEY    # value read from stdin — never a CLI arg
+corral secret list                     # names only, never values
+corral secret rm  GEMINI_API_KEY
+```
+
+Each secret resolves through **env var → OS keyring → an age-encrypted file**
+(first hit wins, so an env var always overrides a stored value). On a headless
+server the store is age-encrypted under your config dir (`CORRAL_CREDS_DIR` to
+override), with its identity from `CORRAL_AGE_IDENTITY`, a systemd credential
+(`age-identity`) or a `0600` key file, and it **fails closed** if that source is
+present but malformed. Model keys are removed from the environment of your tests
+and of everything else corral runs to grade them; an agent seat's CLI is the
+exception (below).
+
+## Agent seats (subscriptions)
+
+Any seat can be a coding-agent CLI instead of an API model: `claude-code` and
+`codex` (and `antigravity`) come defined, as `<agent>` or `<agent>:<model>`.
+The agent uses its own login, so on a subscription plan the seat has no
+per-token API bill. Define your own:
+
+| Variable | What it is |
+| --- | --- |
+| `CORRALAI_AGENT_<NAME>` | The command line for a seat called `<name>`, with `{dir}`, `{out}`, `{model}`, `{model:FLAG}` and `{tools:FLAG}` substituted |
+| `CORRALAI_AGENT_<NAME>_WIRE` | How to read its reply: `claude-json`, `codex-jsonl` or `text` (the default for your own definitions). A `text` seat is not metered, and is refused under `--max-tokens` |
+
+**Never put a credential in a `CORRALAI_AGENT_*` definition** — it is published
+verbatim in the signed record. The agent CLI inherits corral's environment, so an
+exported vendor API key may bill instead of the subscription. Details, and what
+was measured: [agent seats](https://github.com/pdbethke/corralai/blob/main/docs/corral/agent-seats.md).
+
+## The model registry
+
+Seats can be named by alias from a registry, read from exactly one of these
+(most explicit first; they do not merge):
+
+| Source | What it is |
+| --- | --- |
+| `CORRALAI_MODELS` | The whole registry as inline JSON — how a CI job declares a herd without committing a file |
+| `CORRALAI_MODELS_FILE` | A registry file elsewhere on disk (a named file that does not exist is an error) |
+| `.corral/models.json` | The repository's own registry |
+
+A registry marked `"strict": true` requires every seat to name a declared alias.
+
+## The sandbox
+
+| Variable | What it is |
+| --- | --- |
+| `CORRALAI_EXEC_IMAGE` | The image `--jail container` runs in; it must carry your toolchain (e.g. `python:3.12-bookworm`). Required for that backend |
+| `CORRALAI_EXEC_RUNTIME` | Which container runtime to use (default: podman, then docker, whichever is on `PATH`) |
+
+`bwrap` is the Linux default and needs nothing configured, except on Ubuntu
+24.04 and later, where AppArmor must allow it — see
+[Getting started](/docs/getting-started/). `certify --repo --substrate
+workspace` runs on your checkout instead of in a sandbox; see
+[Trust & security](/docs/concepts/trust-and-security/).
+
+## Signing, the ledger and the cache
 
 | Variable | What it is | Default |
 | --- | --- | --- |
-| `CORRALAI_ADDR` | Listen address (loopback by default; front it with a tunnel/proxy) | `127.0.0.1:9019` |
-| `CORRALAI_STATE_DIR` | Moves every store below at once (per-store variables still win) | `~/.local/state/corral` |
-| `CORRALAI_CACHE_DIR` | Moves rebuildable files, such as the verdict cache | `~/.cache/corral` |
-| `CORRALAI_DB` | Coordination SQLite (missions, tasks, claims) | `$STATE/corralai_coord.sqlite3` |
-| `CORRALAI_MEMORY_DB` | Memory DuckDB (the searchable knowledge store) | `$STATE/corralai_memory.duckdb` |
-| `CORRALAI_MEMORY_DIR` | Where memory entries are written and indexed (markdown files) | `$STATE/memory` |
-| `CORRALAI_RECORDINGS_DB` | Recordings DuckDB for scrubbed replay exports | `$STATE/corralai_recordings.duckdb` |
+| `CORRALAI_CERTIFY_KEY` | Hex-encoded Ed25519 seed that signs verdicts and ledger entries; takes priority over the file | — |
+| `CORRALAI_CERTIFY_KEY_FILE` | Where the signing key seed lives; created `0600` on first use by `certify --local` | `$STATE/corralai_certify_key` |
+| `CORRAL_LEDGER` | The ledger directory `certify --repo` writes its entry to and reads its prior from (`--ledger` overrides) | `<repo>/.corral/ledger` |
+| `CORRALAI_LEDGER_PUBKEY` | The public key `corral ledger verify` checks signatures against when `--pub` is not given | — (signatures not checked) |
+| `CORRALAI_CACHE_DB` | The local cache of derived goals and coverage selections (a cache, not a record) | `$CACHE/corralai_cache.duckdb` |
+| `motherduck_token` | Read by `--push md:<db>` to reach MotherDuck | — |
 
-:::caution
-`CORRALAI_MEMORY_DIR` is the one directory memory is both **written** to and
-**indexed** from; adding an entry and building the index share it. Keep a demo
-or test brain pointed at a scratch directory (or a scratch `CORRALAI_STATE_DIR`)
-so it never picks up a personal memory corpus.
-:::
+`corral certify pubkey` prints the public half of your signing key. A
+`certify --repo` ledger entry is signed when a key is configured or already
+exists at the default path, and written unsigned — and said to be — when none
+is. The verdict cache is the ledger directory itself, not a file of its own.
+
+## Where state lives
+
+Every local store defaults under corral's **state directory**
+(`~/.local/state/corral` on Linux, `~/Library/Application Support/corral` on
+macOS) and the cache under `~/.cache/corral`. `CORRALAI_STATE_DIR` and
+`CORRALAI_CACHE_DIR` move them; a per-store variable moves one.
+`corral state paths` prints every file, which variable moves it, and where it
+resolves. The ones an audit writes are the signing key, and on `certify --local`
+the scorecard stores (`CORRALAI_BUGCATCH_DB`, `CORRALAI_CRITICSCORE_DB`,
+`CORRALAI_MUTANT_ATTEMPTS_DB`); the rest belong to the daemon.
 
 ## Moving from an older install
 
@@ -57,7 +146,32 @@ unless `--resume` says it came from that interrupted run (each one adopted is
 listed). Do not start the daemon until a migrate completes. To keep using the
 old directory in place instead, set `CORRALAI_STATE_DIR` to it.
 
-## Reliability & stall detection
+## The optional daemon
+
+:::note[Frozen, and not read by any audit]
+Everything from here down configures the **brain** (`corral-wrangler serve`; `corral` with no verb
+only points there), corral's optional coordination daemon. It is frozen, and no
+audit needs or reads it. See [Running it](/docs/running-it/).
+:::
+
+The daemon is configured entirely through environment variables; with none set,
+it boots in dev mode (auth off) against defaults under the state directory.
+
+| Variable | What it is | Default |
+| --- | --- | --- |
+| `CORRALAI_ADDR` | Listen address (loopback by default; front it with a tunnel/proxy) | `127.0.0.1:9019` |
+| `CORRALAI_DB` | Coordination SQLite (missions, tasks, claims) | `$STATE/corralai_coord.sqlite3` |
+| `CORRALAI_MEMORY_DB` | Memory DuckDB (the searchable knowledge store) | `$STATE/corralai_memory.duckdb` |
+| `CORRALAI_MEMORY_DIR` | Where memory entries are written and indexed (markdown files) | `$STATE/memory` |
+| `CORRALAI_RECORDINGS_DB` | Recordings DuckDB for scrubbed replay exports | `$STATE/corralai_recordings.duckdb` |
+
+:::caution
+`CORRALAI_MEMORY_DIR` is the one directory memory is both **written** to and
+**indexed** from. Keep a demo or test brain pointed at a scratch directory (or a
+scratch `CORRALAI_STATE_DIR`) so it never picks up a personal memory corpus.
+:::
+
+### Reliability & stall detection
 
 | Variable | What it is | Default |
 | --- | --- | --- |
@@ -67,7 +181,7 @@ This is the knob behind *graceful degradation over deadlock*: a worker that
 claims a task and then dies (crash, quota blip) must never strand the mission —
 after the stall window its lease is reclaimable by the rest of the herd.
 
-## Auth & access
+### Auth & access
 
 With `CORRALAI_OIDC_ISSUER` **unset**, auth is disabled (dev mode — any caller
 is trusted). Set it to any OIDC provider to turn auth on.
@@ -81,7 +195,7 @@ is trusted). Set it to any OIDC provider to turn auth on.
 | `CORRALAI_ALLOWED_HOSTS` | Accepted `Host` headers (add the public hostname a tunnel exposes) |
 | `CORRALAI_MEMORY_OWNERS` | Emails allowed to read/write memory |
 
-## Repo work (jail → PR)
+### Repo work (jail → PR)
 
 | Variable | What it is |
 | --- | --- |
@@ -91,9 +205,9 @@ is trusted). Set it to any OIDC provider to turn auth on.
 
 The token lives **only** in the brain — it is scrubbed from the environment,
 injected into a push URL for one call, and never written to `.git/config`. See
-[Trust & security](/docs/concepts/trust-and-security/).
+`SECURITY.md`'s section on the optional daemon.
 
-## Models & the fleet
+### Models & the fleet
 
 | Variable | What it is |
 | --- | --- |
@@ -103,7 +217,7 @@ injected into a push URL for one call, and never written to `.git/config`. See
 | `CORRALAI_MOTHERDUCK` | Fleet-sync target (`md:<db>` or a `.duckdb` path); empty ⇒ sync off |
 | `CORRALAI_BRAIN_ID` | Tag for this brain's rows in the fleet (default: hostname) |
 
-**corral has no default models — anywhere.** The hosted adversarial pool used to
+**The daemon has no default models either.** Its hosted adversarial pool used to
 cold-start on a hardcoded pair of small local models, which meant a brain nobody
 had configured still ran *something*. It no longer does: with no
 `CORRALAI_ADVPOOL_MODELS` the pool logs `DISABLED — no models assigned` and is
@@ -124,30 +238,9 @@ the same evidence. A model you never named cannot be routed to, whatever a
 worker reported about it, and the roster each run actually used is logged at
 run start.
 
-### Secrets & keys
+The keystore above serves the daemon too: `corral-agent` reads
+`OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `CORRALAI_BRAIN_KEY` through it, so they
+need never sit in the process environment.
 
-Provider API keys and the worker token are configured with the embedded
-**keystore** rather than left in a plaintext env file:
-
-```sh
-corral secret set OPENAI_API_KEY       # value read from stdin — never a CLI arg
-corral secret set OPENROUTER_API_KEY   # one OpenRouter key covers gemini + gpt + claude
-corral secret list                     # names only, never values
-corral secret rm  GEMINI_API_KEY
-```
-
-Each secret resolves through **env var → OS keyring → an age-encrypted file**
-(first hit wins, so an env var always overrides a stored value). On a desktop the
-OS keychain (macOS Keychain, Windows Credential Manager, Linux Secret Service)
-holds it directly. On a headless server it's an age-encrypted store under your
-config dir (`CORRAL_CREDS_DIR` to override), whose encryption identity comes from
-`CORRAL_AGE_IDENTITY`, a systemd credential (`age-identity`), or a `0600` key file
-— and **fails closed** if that source is present but malformed, so it never
-silently orphans your store. Secret values are redacted to a fingerprint in every
-log and error, and `corral-agent` reads `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` /
-`CORRALAI_BRAIN_KEY` through the keystore — so they need never sit in the process
-environment at all.
-
-See [Running it](/docs/running-it/) for how these come together in dev vs.
-auth-on, and [Multi-model herds](/docs/concepts/multi-model-herds/) for the
-model story.
+See [Running it](/docs/running-it/) for dev mode vs. auth-on, and
+[Multi-model herds](/docs/concepts/multi-model-herds/) for the daemon's herd.

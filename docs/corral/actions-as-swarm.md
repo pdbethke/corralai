@@ -1,11 +1,11 @@
-# Actions as the swarm, MotherDuck (or any DuckDB) as the seal
+# Actions as the herd, MotherDuck (or any DuckDB) as the seal
 
 The GitHub Action (`docs/corral/github-action.md`) already runs one audit per
 pull request, scoped to the files that PR touched. GitHub already runs
 twenty such jobs at once, one per open PR. `certify --repo`'s `--push`
 already appends every audited (and rejected) file's verdict, as a row, to a
 DuckDB the operator owns. Put those three existing facts together and the
-swarm already exists: **many narrow jobs, each a few files, all pushed to
+herd already exists: **many narrow jobs, each a few files, all pushed to
 one growing warehouse.** This page is that workflow, written down, plus what
 reads it back.
 
@@ -33,6 +33,9 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0      # required — see github-action.md's "fetch-depth: 0 is required"
+      # Your suite must already pass on the runner before corral can plant
+      # faults against it: install the toolchain and test dependencies here
+      # (e.g. actions/setup-python, then `pip install -e . pytest`).
       - uses: pdbethke/corralai@v1.0.0-rc.23
         with:
           test-command: "python -m pytest -q"
@@ -143,7 +146,7 @@ producing its own scan. Nothing coordinates them, and nothing needs to:
   runs the key degenerates to `(repo, scan_id)`, and two different local
   ledgers that both audited the same repository can collide for real. In CI —
   the case this page is about — `run_url` is always present and always
-  distinct, so the swarm was never affected. `scan_uid` closes it for
+  distinct, so the per-PR jobs were never affected. `scan_uid` closes it for
   everyone else, on every row.
 
   `corral_seal` is immune either way: it partitions on `(repo, path)` ordered
@@ -157,7 +160,7 @@ producing its own scan. Nothing coordinates them, and nothing needs to:
   the lock; twenty jobs pushing to `md:<db>` do not have this problem.
 
 So: many writers, one grain each, no shared mutable state between them. The
-swarm is exactly as wide as GitHub's own concurrent-job limit lets it be.
+herd is exactly as wide as GitHub's own concurrent-job limit lets it be.
 
 ## `corral seal` — the reader
 
@@ -184,12 +187,15 @@ path.
 
 ## Said plainly: wide, not fast
 
-**Each job is 15–35 minutes per touched file on a 4-vCPU runner.** Nothing
-about running this per PR makes any single audit faster — it is still
+**Each job costs what one audit of each touched file costs.** The one
+hosted-runner figure on record is 11m12s for one file (`cmd/corral/main.go`,
+40 mutants) on an `ubuntu-latest` runner (`github-action.md`); the
+4-vCPU cell in `docs/design/cost-model.md` is still empty, because nobody has
+recorded that run. Nothing about running this per PR makes any single audit faster — it is still
 *mutants × that file's suite runtime*, per file, exactly as
 `docs/design/cost-model.md` describes. What changes is that twenty PRs
 running twenty jobs in parallel is twenty files audited in the time one
-would have taken serially. The swarm is horizontal: more runners covering
+would have taken serially. The herd grows sideways: more runners covering
 more files at once, not any one file's audit getting quicker. A larger
 GitHub-hosted runner (an organization-plan feature, not available to a
 personal account) buys a faster *single* file by widening its tree count

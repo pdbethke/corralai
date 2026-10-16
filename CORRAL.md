@@ -2,59 +2,83 @@
 
 > **Visibility and accountability enhance, rather than restrict, performance.**
 
-Entry point to corralai's own developer-doc corpus — the convention any repo
-audited with corralai can adopt.
+Entry point to corral's own knowledge corpus: the Markdown that ships in this
+repository for the people and agents who use corral, as opposed to
+[AGENTS.md](AGENTS.md), which is for an agent working *on* corral.
 
-Corralai is a multi-model **audit engine**: the `corral` CLI (`cmd/corral`)
-certifies a change **by execution** — it runs the check in a jail, measures the
-result itself (never a self-report), and signs a tamper-evident record — and
-`corral review` makes every claim prove itself by script. `certify` and `review`
-read only the repository and its ledger. The optional daemon (`corral-wrangler`,
-frozen) keeps a persistent, searchable memory (`internal/memory`) for its herd.
-See [README.md](README.md).
-
-## Where the herd's knowledge lives
-
-Two kinds of knowledge feed a daemon run (an audit with `corral certify` reads
-neither):
-
-- **Vetted memory** — lessons and guidance the herd itself discovered and a
-  human promoted (`internal/learn`, `internal/brain/learn.go`). This is
-  `shared=true`: trusted enough to auto-inject into new instructions.
-- **This repo's developer docs** — `CORRAL.md` (this file), `AGENTS.md`, plus
-  `docs/corral/*.md`. On a clone, the brain ingests these files as **advisory**
-  memory entries (`shared=false`, tagged to this repo) — see
-  `internal/brain/seeddocs.go`. Agents can find them via search but they never
-  auto-inject; a repo you don't control can't smuggle "vetted" guidance in just
-  by shipping a file.
-
-  `AGENTS.md` is the one that carries furthest. `CORRAL.md` is our own
-  convention, so a repository we did not write essentially never has one —
-  while `AGENTS.md` is an emerging cross-vendor standard for how an agent
-  should operate inside a specific codebase: its build commands, how to invoke
-  its tests, its project-specific traps. That is exactly what the herd is
-  missing when `certify --repo` drops it into a stranger's tree, and a project
-  that wrote one is telling us how to run its suite correctly. It is ingested
-  on the same terms as everything else here — advisory, never auto-vetted.
-  Being a recognized standard earns it no trust it has not otherwise been given.
+corral is an auditing engine. The `corral` CLI (`cmd/corral`) plants faults in
+your code, runs your own test suite against each one in a sandbox, and for every
+fault that survives writes a test and runs it, keeping only tests that fail on
+the fault and pass on your real code: proven missing tests. `corral review`
+hands a scope to a cold model and makes every claim prove itself by a script
+corral runs. Both write signed, hash-linked entries to a ledger in your own
+repository. Neither reads this corpus, or any memory, when it judges code: an
+audit's prompts are built from the goal, the code and its symbols. See
+[README.md](README.md).
 
 ## The docs/corral/ corpus
 
-- [docs/corral/verify-gate.md](docs/corral/verify-gate.md) — the verification gate: how a check is certified by execution, not a self-report.
-- [docs/corral/memory-etiquette.md](docs/corral/memory-etiquette.md) — how to write and search memory.
-- [docs/corral/claims-and-leases.md](docs/corral/claims-and-leases.md) — the path/branch claim broker.
-- [docs/corral/demo-map.md](docs/corral/demo-map.md) — the demo's make targets and UI tabs.
-- [docs/corral/sakana-fugu-analysis.md](docs/corral/sakana-fugu-analysis.md) — dynamic orchestrator models vs. Corralai.
+The audit:
 
-Anyone can add to this corpus via a normal pull request — see
-[CONTRIBUTING.md](CONTRIBUTING.md). Knowledge grows the way code does: through
-review, where **code review is the trust gate for knowledge exactly as it is
-for code**.
+- [docs/corral/language-support.md](docs/corral/language-support.md) — what corral does with each language's tests, runner by runner, and why each gap exists. Generated from the runner table the code dispatches on; never hand-edited.
+- [docs/corral/agent-seats.md](docs/corral/agent-seats.md) — running any seat on a coding-agent CLI (`claude-code`, `codex`, or one you define) instead of an API model, with no API key, and what was measured that way.
+- [docs/corral/github-action.md](docs/corral/github-action.md) — the GitHub Action: inputs, the `corral/ledger` branch recipe, and the runs behind it.
+- [docs/corral/internal-forge.md](docs/corral/internal-forge.md) — the same audit on GitLab, Gitea, Bitbucket or Gerrit: one `certify --repo` invocation plus a git branch.
+- [docs/corral/actions-as-swarm.md](docs/corral/actions-as-swarm.md) — running the Action on every pull request and reading the results together from DuckDB or MotherDuck.
+- [docs/corral/foreign-sweep.md](docs/corral/foreign-sweep.md) — the CI gate that runs `certify --repo --dry-run` over SHA-pinned third-party repositories, and how to move its golden numbers.
 
-## How a developer's agent queries it
+The optional daemon (`corral-wrangler`, frozen; no audit needs it or reads it):
 
-A thin client (Claude Code, Cursor, Gemini CLI, ...) joins the brain by
-pointing its `.mcp.json` at the brain's MCP endpoint (README.md's "Thin
-client" platform row), then calls `search_memory` — full-text search over
-everything you can see, including this repo's advisory `docs/corral/*.md`
-entries alongside vetted lessons and guidance.
+- [docs/corral/brain.md](docs/corral/brain.md) — what the daemon is, what it is not, and its own security surfaces. Read this first.
+- [docs/corral/verify-gate.md](docs/corral/verify-gate.md) — the daemon's task gate, which certifies a task by running its check rather than taking a worker's word.
+- [docs/corral/claims-and-leases.md](docs/corral/claims-and-leases.md) — the daemon's path and branch claim broker.
+- [docs/corral/memory-etiquette.md](docs/corral/memory-etiquette.md) — how to write and search the daemon's memory.
+- [docs/corral/demo-map.md](docs/corral/demo-map.md) — the daemon demo's `make` targets and UI tabs. It describes a builder/tester herd from before corral became an auditor that never builds; it is kept as a record of that design.
+
+Background:
+
+- [docs/corral/sakana-fugu-analysis.md](docs/corral/sakana-fugu-analysis.md) — a comparison of Sakana AI's Fugu orchestrator with corral's design.
+
+Anyone can add to this corpus with a pull request; see
+[CONTRIBUTING.md](CONTRIBUTING.md). Knowledge is reviewed the way code is:
+**code review is the trust gate for knowledge exactly as it is for code.**
+
+## How a developer's agent reads corral's findings
+
+`corral mcp` serves an audit's findings to a coding agent over MCP on stdio:
+local, read-only, with no daemon and no network listener. It reads the store
+`certify --local` writes, and offers two tools:
+
+- `list_audit_findings` — the test-critic's findings, grouped by test file, each
+  with its evidence and the signed record it came from.
+- `get_audit_finding` — one finding in full, with any verdict a person gave it.
+
+The findings are unverified model opinions until a person adjudicates them, and
+the tools are read-only on purpose: confirming or refuting a finding
+(`corral criticscore confirm|refute`) stays a person's action, so the critic's
+precision is never graded by an agent.
+
+The Claude Code plugin wires this up along with the `corral` skill
+([skills/corral/](skills/corral/SKILL.md)):
+
+```bash
+claude plugin marketplace add pdbethke/corralai
+claude plugin install corral@corralai
+```
+
+Any other MCP client takes one entry in `.mcp.json`:
+
+```json
+{ "mcpServers": { "corral": { "command": "corral", "args": ["mcp"] } } }
+```
+
+## If you run the optional daemon
+
+The daemon ingests `CORRAL.md`, `AGENTS.md` and `docs/corral/*.md` from a
+cloned repository as **advisory** memory entries (`shared=false`, tagged to
+that repository; `internal/brain/seeddocs.go`). Its agents can find them by
+search, but they are never injected into instructions automatically, so a
+repository you do not control cannot pass off its own files as vetted
+guidance. Only lessons a person promoted are `shared=true`. An agent connected
+to the daemon's MCP endpoint searches all of this with `search_memory`; how to
+connect is in [docs/corral/brain.md](docs/corral/brain.md).

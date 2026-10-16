@@ -951,11 +951,13 @@ func TestCertifyRepoRejectsFlagsAfterDashDash(t *testing.T) {
 	}{
 		{"min-kill-rate", []string{"--repo", root, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant, "--critic-model", "off", "--dry-run", "--", "pytest", "-q", "--min-kill-rate", "0.5"}},
 		{"ledger", []string{"--repo", root, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant, "--critic-model", "off", "--dry-run", "--", "pytest", "-q", "--ledger", "/tmp/x"}},
-		// --timeout is new: it joins the same guard automatically (names
-		// come from fs.VisitAll, not a hardcoded list — see
-		// TestCheckArgvNoFlagCollisionDerivesNamesFromTheFlagSet) and this
-		// pins that it actually does.
-		{"timeout", []string{"--repo", root, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant, "--critic-model", "off", "--dry-run", "--", "pytest", "-q", "--timeout", "5m"}},
+		// A flag joins the guard automatically (names come from
+		// fs.VisitAll — see TestCheckArgvNoFlagCollisionDerivesNamesFromTheFlagSet).
+		// --timeout used to be pinned here; it is now one of the runner
+		// spellings let through (runnerSpellings: `go test -timeout`), since
+		// misplacing it costs corral's default timeout and nothing else.
+		// --max-tokens is the cap a misplacement would silently lift.
+		{"max-tokens", []string{"--repo", root, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant, "--critic-model", "off", "--dry-run", "--", "pytest", "-q", "--max-tokens", "100"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var out, errb bytes.Buffer
@@ -1019,6 +1021,12 @@ func TestCertifyRepoAcceptsLegitimateCheckArgvWithUnrelatedFlags(t *testing.T) {
 	for _, tc := range [][]string{
 		{"--repo", root, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant, "--critic-model", "off", "--dry-run", "--", "pytest", "-q", "-x", "--tb=short"},
 		{"--repo", root, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant, "--critic-model", "off", "--dry-run", "--", "go", "test", "./...", "-count=1"},
+		// Everyday runner flags spelled like one of corral's: refused until
+		// 2026-10-16, which turned away `cargo test --all` and `go test
+		// -timeout 5m` (runnerSpellings).
+		{"--repo", root, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant, "--critic-model", "off", "--dry-run", "--", "cargo", "test", "--all"},
+		{"--repo", root, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant, "--critic-model", "off", "--dry-run", "--", "cargo", "test", "--tests"},
+		{"--repo", root, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant, "--critic-model", "off", "--dry-run", "--", "go", "test", "-timeout", "5m", "-json", "./..."},
 	} {
 		var out, errb bytes.Buffer
 		code := runCertifyRepo(tc, &out, &errb)
@@ -1045,6 +1053,19 @@ func TestCheckArgvNoFlagCollisionDerivesNamesFromTheFlagSet(t *testing.T) {
 	}
 	if err := checkArgvNoFlagCollision(fs, []string{"--unrelated", "-q", "plain-arg"}); err != nil {
 		t.Fatalf("want no error for tokens that are not fs's own flags: %v", err)
+	}
+	// A runner's own everyday spelling passes; a gate or a spending cap
+	// misplaced after -- is still refused.
+	fs.Bool("all", false, "")
+	fs.Float64("min-kill-rate", 0, "")
+	fs.Int64("max-tokens", 0, "")
+	if err := checkArgvNoFlagCollision(fs, []string{"--all", "-timeout", "5m"}); err != nil {
+		t.Fatalf("a runner's own --all was refused: %v", err)
+	}
+	for _, tok := range []string{"--min-kill-rate=0.8", "--max-tokens"} {
+		if err := checkArgvNoFlagCollision(fs, []string{tok}); err == nil {
+			t.Errorf("%s after -- was accepted: a gate or a cap would silently not apply", tok)
+		}
 	}
 }
 

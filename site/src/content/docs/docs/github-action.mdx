@@ -56,8 +56,8 @@ the pool's authored test PROVED 1 of 30 survivor(s) catchable by execution
 ```
 
 Forty faults planted, ten caught, thirty missed, and one of those thirty proven
-catchable by a test the pool wrote itself. The run took **11m12s** on a 2-core
-hosted runner.
+catchable by a test the pool wrote itself. The run took **11m12s** on a
+GitHub-hosted `ubuntu-latest` runner.
 
 That number is bad and it is ours. A gate whose author can quietly not-publish
 the result is furniture.
@@ -77,8 +77,11 @@ executed.
 
 Four levers keep a run bounded:
 
-- **`top`** — audit at most this many of the highest-ranked candidate files
-  (default 25). The diff narrows the candidates; `top` bounds what is left.
+- **`top`** — audit at most this many of the highest-ranked candidate files.
+  On a pull request the diff narrows the candidates and nothing else bounds
+  them: corral's default of 25 applies only to a whole-repository run, so with
+  `top` empty every changed file that pairs with a test is audited. Set it,
+  and the changed files it cuts are listed as not audited.
 - **`path`** — audit only one directory of the repository, such as one crate
   of a Cargo workspace or one package of a monorepo. The checkout stays whole,
   so tests elsewhere still pair and the build still sees the root's files.
@@ -93,7 +96,7 @@ Four levers keep a run bounded:
 A diff that touches no auditable candidate at all is a legitimate pass: the
 action prints `NOTHING IN SCOPE:` and exits 0. One exception, and it is
 deliberate: if the diff changed source files that corral could not pair with
-any test, the run exits **1** rather than 0 — "nothing could be audited"
+any test, or deleted the test that paired one, the run exits **1** rather than 0 — "nothing could be audited"
 because nothing was reachable is a result, not a pass.
 
 ## Giving it teeth
@@ -106,8 +109,12 @@ existing caller.
 ```yaml
 - uses: pdbethke/corralai@v1.0.0-rc.23
   with:
-    test-command: "go test ./..."
-    anthropic-key: ${{ secrets.ANTHROPIC_API_KEY }}
+    test-command:  "go test ./..."
+    gemini-key:    ${{ secrets.GEMINI_API_KEY }}
+    mutant-model:  gemini-3.6-flash
+    writer-model:  gemini-3.6-flash
+    derive-model:  gemini-3.6-flash
+    critic-model:  "off"
     min-kill-rate: "0.7"
 ```
 
@@ -133,9 +140,12 @@ script the step runs, a claim that does not reproduce is demoted on the
 record, a `verifier-model` tries to refute what stands, and the review is
 one signed entry in the same ledger branch as the audit. `review-fail-on:
 reproduced` (the default) fails the check with exit 3 when a reproduced
-finding stands — after the entry is written. API seats only on a runner;
-the [full reference](https://github.com/pdbethke/corralai/blob/main/docs/corral/github-action.md) has the inputs and what "the
-change" means.
+finding stands — after the entry is written. A seat can be an API model or
+a coding-agent CLI (`claude-code`, `codex`) if you install the CLI on the
+runner and pass its login through `claude-code-oauth-token` or
+`codex-api-key`; neither has been run on a runner yet. The
+[full reference](https://github.com/pdbethke/corralai/blob/main/docs/corral/github-action.md)
+has the inputs and what "the change" means.
 
 ## Where the verdict shows up
 
@@ -187,9 +197,10 @@ jobs:
        contains(github.event.pull_request.labels.*.name, 'audit'))
 ```
 
-`.github/workflows/self-audit.yml` in this repository is exactly that shape —
-non-blocking, `top: "1"`, Go-only paths, fork-guarded and label-gated — and is
-the honest starting point to copy.
+`.github/workflows/self-audit.yml` in this repository is that shape —
+non-blocking, `top: "1"`, Go-only paths, fork-guarded and label-gated — plus a
+step that checks the key secret is present and skips the audit with a notice
+when it is not.
 
 ## Keys are additive
 
@@ -280,8 +291,8 @@ so a row traces back to something a third party can verify. Without `attest:`,
 `statement_sha256` is left empty rather than fabricated.
 
 What it is for is the question a single run cannot answer. A kill rate is a
-**sample**: mutants are generated fresh each time, and the same unchanged file
-has scored 0.375 and then 0.525 here. Forty rows are a distribution — *"this
+**sample**: mutants are generated fresh each time, and the same unchanged diff
+has scored 0.85 and then 0.90 here. Forty rows are a distribution — *"this
 file drifted from 0.9 to 0.6 over two months"* is a claim no individual run
 supports. See [the warehouse](/docs/warehouse/) for the queries worth running.
 
@@ -289,8 +300,9 @@ supports. See [the warehouse](/docs/warehouse/) for the queries worth running.
 
 `min-kill-rate` is the obvious merge gate and the wrong default. A kill rate is
 a proportion of **freshly generated** mutants, so it moves between runs on code
-nobody touched — this project's own warehouse records a file whose rate swung
-0.375 to 0.525 across a replicate series with nothing changed but the seed. Set
+nobody touched — the identical diff of one of this project's demonstration
+pull requests scored 0.85 and then 0.90, the higher number on the more
+weakened suite (CHANGELOG, `--max-proven-missed`). Set
 the threshold near a healthy value and it goes red on good work; the team turns
 it off, and you have no gate at all.
 
@@ -317,8 +329,8 @@ thing that actually blocks a merge.
 
 Three provider inputs and a decorrelation rule read like corral needs an
 account with every vendor. It does not. The gate's verdict is measured by
-execution in a jail — the critic is advisory and never gates it — so a single
-key runs the whole thing:
+execution — the critic is advisory and never gates it — so a single key runs
+the whole thing:
 
 ```yaml
 - uses: pdbethke/corralai@v1.0.0-rc.23
@@ -361,13 +373,20 @@ reviewer does not get to hand out a clean bill of health.
 ## Exit codes
 
 - **0** — the scan graded at least one file and every audited file met
-  `min-kill-rate` (if given); or nothing was in scope. With `min-kill-rate`
-  unset, a weak-but-gradable suite still exits 0 — read the report for the
-  number.
-- **1** — a real failure: files were in scope and *none* could be graded
+  `min-kill-rate` and `max-proven-missed` (when given); or nothing in scope.
+  With both gates unset, a weak-but-gradable suite still exits 0 — read the
+  report for the number.
+- **1** — a real failure: the diff changed source files corral could not pair
+  with a test (`NOT AUDITED:`); files were in scope and *none* could be graded
   (`COULD-NOT-GRADE:`, e.g. every candidate's baseline suite was already broken
-  or flaky), enumeration failed, or at least one file scored below
-  `min-kill-rate` (`KILL-RATE BREACH:`).
+  or flaky); every audited file timed out; enumeration failed; a file scored
+  below `min-kill-rate` (`KILL-RATE BREACH:`); or a file broke
+  `max-proven-missed`, including `PROVEN-GAP UNMEASURED`.
+- **2** — the run never started: a usage error, an unnamed seat, a seat with
+  no key for its provider (what a fork's pull request gets), or a
+  `test-command` containing one of corral's own flags.
+- **3** — `review-fail-on: reproduced` and a reproduced review finding stands.
+- **130** — the run was interrupted; the audit records nothing.
 
 ## The full reference
 

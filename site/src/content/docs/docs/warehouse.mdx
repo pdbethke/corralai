@@ -248,9 +248,19 @@ The branch is one repository's record. When you want the view across many,
 plain DuckDB file, or MotherDuck:
 
 ```bash
-corral certify --repo . --push md:my_database -- pytest -q
+corral ledger push .corral/ledger md:my_database
 # or a plain file, if you would rather not involve anyone
-corral certify --repo . --push ./audits.duckdb -- pytest -q
+corral ledger push .corral/ledger ./audits.duckdb
+```
+
+A scan can also push as it goes, with `--push` on the run itself (the seats are
+required as on any run; the model names are an example):
+
+```bash
+corral certify --repo . --push md:my_database \
+  --writer-model gemini-3.8-flash --mutant-model gemini-3.8-flash \
+  --derive-model gemini-3.8-flash --critic-model claude-haiku-4-5 \
+  -- .venv/bin/python -m pytest -q
 ```
 
 From the [Action](/docs/github-action/) that is `push:` plus a

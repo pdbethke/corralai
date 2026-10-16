@@ -29,8 +29,10 @@ run YOUR tests against each fault, in a bwrap jail ──► kill-rate (never a 
 [test-critic — a DIFFERENT model reads the suite cold]
   │
   ▼
-SIGNED VERDICT ── certified   (kill-rate clears the bar, no blocking gap)
-               └─ needs-review (a survivor still stands, or a human must adjudicate)</pre>
+SIGNED VERDICT ── certified   (kill-rate clears the bar, the writer neither
+               │                failed nor wrote an unsound test)
+               └─ needs-review (below the bar, a writer failure, or an exam too
+                                small to judge — a human adjudicates)</pre>
 
   <div class="tech-grid">
     <div class="tech">
@@ -38,11 +40,10 @@ SIGNED VERDICT ── certified   (kill-rate clears the bar, no blocking gap)
       <p>
         Run one LLM in every role and the "critic" shares the fault-planter's
         blind spots — the same model can't be surprised by its own bugs.
-        Corral forces the three roles apart: the model that plants the faults,
-        the model that writes the exposing test, and the model that critiques
-        the suite are <em>genuinely different models</em>, enforced at
-        assignment — <code>CheckDecorrelation</code> refuses a run where the
-        critic and the test-writer are the same model. Each role can be pointed
+        Corral holds one pair apart by rule: <code>CheckDecorrelation</code> refuses a run where the critic and the test-writer are the same model.
+        The fault-planter and the writer may share a model, and a run whose
+        seats all come from one vendor is allowed — the verdict says so ("every
+        graded seat is …") rather than refusing it. Each role can be pointed
         at a different <em>vendor</em>, so a Gemini fault-planter with a Claude
         critic is one run. Mix cheap local models with frontier ones: bring
         anything OpenAI-compatible, or a local model, on your own key — no
@@ -62,21 +63,21 @@ SIGNED VERDICT ── certified   (kill-rate clears the bar, no blocking gap)
       <h3>Certified by execution, not by a vibe</h3>
       <p>
         A suite's grade isn't an opinion. The kill rate is <strong>mutation
-        testing measured by the brain</strong>: your real command — <code>go test</code>, <code>pytest</code>, <code>npm test</code>, <code>cargo test</code>, anything — is run against each planted fault
+        testing, measured by execution on your machine or runner</strong>: your real command — <code>go test</code>, <code>pytest</code>, <code>npm test</code>, <code>cargo test</code>, anything — is run against each planted fault
         inside a <code>bwrap</code> jail, and the exit codes decide what died.
         A model never tells us it did well; a test that claims to catch a bug
         has to actually catch it, on a real run, on the record. Clear the bar
         with no blocking gap and the change is certified; fall short and it
         routes to a human as needs-review.
       </p>
-      <a href="/docs/concepts/queue-and-verify/">Certify by execution →</a>
+      <a href="/docs/concepts/mutation-testing/">Certify by execution →</a>
     </div>
     <div class="tech">
       <h3>Survivors don't just get flagged — they get a test</h3>
       <p>
         A critic who only complains is furniture. When a planted fault slips
         past your suite, the <strong>test-writer</strong> writes the test you
-        were missing and the brain <em>proves</em> it: runs the new test
+        were missing and corral <em>proves</em> it: runs the new test
         against the surviving fault and watches it fail, then against clean
         code and watches it pass. The gap comes back to you as <code>proven_missed</code> — a real, catchable bug and the exact test
         that would have caught it — not a lecture.
@@ -86,7 +87,11 @@ SIGNED VERDICT ── certified   (kill-rate clears the bar, no blocking gap)
     <div class="tech">
       <h3>A signed, tamper-evident verdict</h3>
       <p>
-        Every run ends in a signed record you can verify offline: the kill
+        A <code>certify --local</code> run ends in a record signed with your
+        local certify key (<code>--out</code> writes it as a file anyone holding
+        your public key can verify offline); a <code>--repo</code> run's ledger
+        entry is signed when a certify key is configured and written unsigned
+        when one is not (still hash-linked). Either way it carries the kill
         rate, the survivors, the written tests, and which model played which
         role — <code>ProducedBy: [mutant-generator, test-critic, test-writer]</code>,
         each named. Because the verdict is attributed to a verified principal
@@ -106,7 +111,7 @@ SIGNED VERDICT ── certified   (kill-rate clears the bar, no blocking gap)
         model asserted. Nothing about the grade rests on trusting the thing
         being graded.
       </p>
-      <a href="/docs/concepts/queue-and-verify/">The verify gate →</a>
+      <a href="/docs/concepts/trust-and-security/">The jail →</a>
     </div>
     <div class="tech">
       <h3>And it measures which model to trust</h3>
@@ -115,9 +120,9 @@ SIGNED VERDICT ── certified   (kill-rate clears the bar, no blocking gap)
         seat, proven by execution, not self-reported. <code>corral models
         rank</code> reads that back and ranks the seats — a number you can't
         flatter your way up. It never staffs one: you name every seat, so no
-        audit picks its own auditors. See below.
+        audit picks its own auditors.
       </p>
-      <a href="#learning-loop">Measuring the models ↓</a>
+      <a href="/docs/cli/corral/">The CLI reference →</a>
     </div>
   </div>
 </section>

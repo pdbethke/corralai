@@ -87,7 +87,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	jsonOut := fs.Bool("json", false, "with --dry-run, emit the repository's audit surface as JSON instead of the human report: per-language counts, every auditable file with its inferred test pairing, and the machine-stable exclusion tally. Needs no key, no jail and no money — it is the free inventory a UI or a tenant's own tooling can consume instead of scraping stdout")
 	substrateFlag := fs.String("substrate", substrateJail, "where the audit runs: "+substrateJail+" (bwrap) or "+substrateWorkspace+" (mutate --repo in place; the caller IS the isolation boundary, e.g. an ephemeral CI runner)")
 	pathFlag := fs.String("path", "", "bound the scan to this subtree of --repo (a directory, relative to it), keeping the repository whole: tests are still found anywhere in it, and the audit's copies still carry the root's build files (a Cargo workspace manifest, a monorepo's package.json). Pair it with a test command scoped the same way, e.g. `cargo test -p <crate>`")
-	diffBase := fs.String("diff-base", "", "bound the scan to files changed since this git ref, instead of ranking + --top. In a PR the diff IS the bound: ranking and --top do not apply on this path")
+	diffBase := fs.String("diff-base", "", "bound the scan to files changed since this git ref: every candidate that changed, or whose paired test changed, is audited. In a PR the diff IS the bound, so the default --top does not apply on this path; an EXPLICIT --top still does, auditing that many of the changed files by rank and reporting the rest as not audited")
 	pushFlag := fs.String("push", "", "append this scan's per-file verdicts to a DuckDB you own — a path, or `md:<db>` for MotherDuck (which reads motherduck_token from the environment; the database is created on first push if it does not already exist — a MotherDuck SHARE is a read target and cannot be pushed to). corral has no hosted tier and keeps nothing: the warehouse is yours, and any DuckDB works, so this is a destination rather than a lock-in. Append-only. Every row carries the ledger's scan id (0 when --record was not given), and — traceable only with --attest — the sha256 of the signed statement it came from, so a row can be checked against something a third party can verify; without --attest, statement_sha256 is honestly empty rather than fabricated; and with --attest, a statement that FAILS to write withholds the push too, since a row that cannot name the statement it came from is not written. It answers what one pull request cannot — a single kill rate is a sample, and the same unchanged diff has scored 0.85 and 0.90; forty of them are a distribution")
 	pushSourceFlag := fs.Bool("push-source", false, "with --push, also send the SOURCE BYTES corral holds to your warehouse: the pool's authored test, and the full verdict JSON. Off by default because those bytes are derived from — and quote — your audited code; without this the pushed rows carry numbers, hashes, reasons and model names, and no source leaves the box. Mutant code is NOT carried, by either setting: corral does not keep mutant source at rest, so the corral_mutants.code column exists and is always NULL until something records it. The scan row records which setting was used, so the custody question is answerable from the table rather than from whoever remembers the argv")
 	attestFlag := fs.String("attest", "", "write the scan's verdict as an in-toto Statement to this file — the receipt a reviewer can verify without trusting the run that produced it. Consumed by GitHub's attestation API (actions/attest), which signs it keylessly through the workflow's own OIDC identity, so the signature chains to the repository and workflow rather than to a key that lived on an ephemeral runner. Carries every file's kill rate, survivors and proven gaps WITH the honesty flags that say what a zero means, the thresholds it was judged against, and the models in each role. When a local signing key is configured (CORRALAI_CERTIFY_KEY_FILE), the same statement is ALSO signed into a DSSE envelope written beside this file as <path>.dsse.json — this plain file is unchanged either way, so actions/attest keeps working exactly as it does today; --transparency uploads the envelope, never this file")
@@ -2421,11 +2421,20 @@ func resolveGoalSource(stderr io.Writer, repoDir, goalsPath, deriveModel, derive
 // check-command arguments — "false", "-q"'s VALUE, a test path, "0.5")
 // never matches: TrimLeft strips leading dashes, and a token that had
 // none to begin with is left unchanged by it, which the equality check
-// below catches and skips. A single-dash short flag some OTHER tool
-// happens to define (pytest's "-q", "-x") only collides if its single
-// letter happens to equal one of THIS command's flag names outright,
-// which none of them do today (all are multi-letter) — so a real,
-// unrelated check command is never falsely rejected.
+// below catches and skips. Any number of leading dashes is stripped, so
+// `go test -timeout` matches corral's --timeout as written.
+//
+// runnerSpellings are the exceptions: names of corral's own flags that
+// everyday test runners use too (`cargo test --all`, `cargo test --tests`,
+// `go test -timeout 5m`, `go test -json`, a `--path` filter). Refusing them
+// turned away the commands a first visitor types. Each is safe to let
+// through because misplacing it after -- cannot switch a gate off or lift a
+// spending cap: corral then runs with its default for that flag, and the
+// runner gets an argument it understands. It is an allowlist on purpose: a
+// flag added to this command later is refused until someone decides it is
+// safe, so the list can only fail closed.
+var runnerSpellings = map[string]bool{"all": true, "tests": true, "timeout": true, "json": true, "path": true}
+
 func checkArgvNoFlagCollision(fs *flag.FlagSet, checkArgv []string) error {
 	names := map[string]bool{}
 	fs.VisitAll(func(f *flag.Flag) { names[f.Name] = true })
@@ -2442,7 +2451,7 @@ func checkArgvNoFlagCollision(fs *flag.FlagSet, checkArgv []string) error {
 		if i := strings.IndexByte(name, '='); i >= 0 {
 			name = name[:i]
 		}
-		if names[name] {
+		if names[name] && !runnerSpellings[name] {
 			return fmt.Errorf(
 				"the check command (after --) contains %q, which is one of this command's OWN flags — flags must be given BEFORE --, never after (splitCertifyArgs has no way to tell a real command-line argument from a misplaced flag). Move %q before -- ; if the check command genuinely needs a colliding token, wrap it in a script and pass the script as the check command instead",
 				tok, tok)

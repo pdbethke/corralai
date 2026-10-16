@@ -108,8 +108,9 @@ file, and compare. It will not match exactly, and that is expected — see below
 ## Expect the numbers to move
 
 Faults are generated fresh on every run, so two audits of the same file with the
-same suite return different kill rates. Measured swing on one file: **0.55 to
-0.80**.
+same suite return different kill rates. Measured swings: **0.55 to 0.80** on
+one file here, and **0.85 to 0.90** on an unchanged diff in CI (the figure the
+`--push` help quotes). How far a number moves depends on the file and the suite.
 
 That is why there are three records for most repositories here rather than one.
 A single run is evidence of *specific gaps*, never a grade — and anyone quoting

@@ -1,12 +1,11 @@
 ---
 // SPDX-License-Identifier: Elastic-2.0
 // The accountability warehouse: DuckDB (WebAssembly) running IN THE BROWSER
-// against corral's REAL audit dataset. corral stores every audit as a signed,
-// hash-linked record + per-model execution telemetry in DuckDB; this page ships
-// two tiny parquet extracts (self-hosted) and runs live SQL client-side. The
+// against corral's REAL audit dataset: historical extracts of the stores that
+// predate the ledger directory (now the record; DuckDB is its view). It ships
+// tiny parquet extracts (self-hosted) and runs live SQL client-side. The
 // DuckDB runtime is loaded from jsDelivr on first query (the wasm is >25MiB, over
 // Cloudflare Pages' file cap — and loading the runtime from a CDN is the norm).
-// The same schema federates to MotherDuck (corral/internal/fleet) for streaming-live.
 import '../styles/global.css';
 import Header from '../components/Header.astro';
 import SiteFooter from '../components/SiteFooter.astro';
@@ -63,7 +62,7 @@ const initialSql = PRESETS[0].sql;
   </script>
   <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
   <title>Corralai — the accountability warehouse (DuckDB in your browser)</title>
-  <meta name="description" content="Query corral's real audit ledger with DuckDB running in WebAssembly, client-side. Signed records + execution-proven telemetry, live SQL, no backend — the same schema that federates to MotherDuck." />
+  <meta name="description" content="Query corral's real audit ledger with DuckDB running in WebAssembly, client-side. Execution-proven audit telemetry, live SQL, no backend." />
 </head>
 <body>
   <Header active="warehouse" />
@@ -71,7 +70,8 @@ const initialSql = PRESETS[0].sql;
     <h1>The accountability warehouse</h1>
     <p class="lede">
       corral records every scan — <strong>what it audited, what it rejected, and
-      why</strong> — natively in <strong>DuckDB</strong>. This page runs DuckDB
+      why</strong> — as an entry in its ledger, a directory of hash-linked,
+      gzipped JSON (signed when a certify key is configured), and <strong>DuckDB</strong> is the view over it. This page runs DuckDB
       itself, compiled to <strong>WebAssembly</strong>, <em>in your browser</em>,
       against a real dataset: six scans of <strong>Flask</strong>, a library we
       didn't write. Real SQL, no backend. Query the rejections as readily as the
@@ -80,7 +80,7 @@ const initialSql = PRESETS[0].sql;
       point is that you can have the same table of your own: `corral certify`
       takes <code>--push &lt;target&gt;</code> and appends every run's per-file
       verdict to a DuckDB <em>you</em> own — a path, or <code>md:&lt;db&gt;</code> for MotherDuck. There is no hosted tier and nothing is collected; your key,
-      your runner, your warehouse. The same schema federates to <strong>MotherDuck</strong> (a DSN flip) as a shared warehouse across a distributed dev shop.
+      your runner, your warehouse. Point <code>--push</code> (or <code>corral ledger push</code>) at <strong>MotherDuck</strong> instead of a local file and the same tables become a warehouse shared across repositories. corral's own live record is the public <a href="https://github.com/pdbethke/corralai/tree/corral/ledger"><code>corral/ledger</code></a> branch.
     </p>
 
     <div class="presets">
@@ -111,8 +111,8 @@ const initialSql = PRESETS[0].sql;
       are corral's own historical stores, hand-exported from the machine that
       produced them: a signed verdict per audit, a row per model seat, and a
       whole-repo scan series. A run with <code>--push</code> writes something
-      newer and simpler — one <code>corral_audits</code> row per audited file,
-      carrying the kill rate, the survivors, the proven gaps, the qualifier
+      newer — <code>corral_scans</code>, <code>corral_audits</code>, <code>corral_mutants</code>, <code>corral_model_calls</code> and <code>corral_events</code>, with one <code>corral_audits</code> row per
+      audited file carrying the kill rate, the survivors, the proven gaps, the qualifier
       flags that say what a zero means, the thresholds, the roster, and the
       sha256 of the signed statement it came from. Same subject, different
       shape, and the <a href="/docs/warehouse/">documentation</a> describes that
@@ -125,10 +125,7 @@ const initialSql = PRESETS[0].sql;
       and {withheldSeats} seat rows</strong>, counted here rather than quietly dropped, because a
       truncated table that does not say so looks more complete than it is. The
       scan series was <strong>recorded 2026-08-02</strong> against <a href="https://github.com/pallets/flask">Flask</a> — a library we did not
-      write — on the <code>workspace</code> substrate.
-      The brain's fleet sync (<code>CORRALAI_MOTHERDUCK</code>) federates the
-      same schema to MotherDuck for
-      streaming-live. <a href="/recordings/">See the audits these rows came from →</a>
+      write — on the <code>workspace</code> substrate. <a href="/recordings/">See the audits these rows came from →</a>
     </p>
   </div>
   <SiteFooter />

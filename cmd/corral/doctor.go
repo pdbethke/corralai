@@ -51,7 +51,7 @@ type checkResult struct {
 func runDoctor(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("doctor", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	code := fs.String("code", "", "the source file you intend to audit (optional, enables the pairing and baseline checks)")
+	code := fs.String("code", "", "the source file you intend to audit (optional, enables the test-pairing check; doctor does not run your suite on unmutated code — run it by hand first)")
 	test := fs.String("test", "", "its test file (optional; otherwise inferred from the language's convention)")
 	backend := fs.String("jail", "", "sandbox backend (default: auto-detect). \"container\" needs CORRALAI_EXEC_IMAGE set to a toolchain image, e.g. CORRALAI_EXEC_IMAGE=python:3.12-bookworm")
 	mutantModel := fs.String("mutant-model", "", "the mutant-generator model whose credential to check")

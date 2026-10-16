@@ -23,8 +23,8 @@ Start here:
   for --repo, --derive-model. https://corralai.dev/docs/getting-started/
 
 Usage:
-  corral                          serve the optional daemon (the brain): /mcp/ + /healthz on
-                                  $CORRALAI_ADDR. No audit needs it.
+  corral                          with no verb, exits 2: the optional daemon is
+                                  `corral-wrangler serve`. No audit needs it.
   corral secret set|get|list|rm   manage provider keys + tokens in the secure keystore
                                   (env → OS keyring → age-encrypted file; set reads stdin, never argv)
   corral state paths              print where each corral file lives and which variable moves it
@@ -63,8 +63,8 @@ Usage:
                                   an explicit -- <test cmd> grades EVERY file, so it is refused
                                   when the scan spans more than one language (omit it and each
                                   file is graded with its own language's stock command)
-                                  the report is NOT signed yet — that lands with the sealed
-                                  repo statement
+                                  the run's record is a ledger entry, signed when a certify key
+                                  is configured; --attest also writes a signed in-toto statement
   corral certify verify <record-file> [--pubkey <hex>|--brain <url>] [--allow-unanchored]
                                   independently verify a --out (or report_build) record: the
                                   Ed25519 signature, the ledger's hash chain, and that the
@@ -297,8 +297,8 @@ Usage of certify --local:
     	also write the signed verdict as a self-contained record file, re-verifiable offline with corral certify verify <file> --pubkey <hex> --allow-unanchored
   -poll duration
     	how long to wait between drive iterations when nothing is claimable (default 2s)
-  -prior string
-    	what earlier runs already tried, so this run plants DIFFERENT faults: a corral-mutants document (see --record-mutants), a scan ledger (.duckdb, see --record-db), or a directory holding any number of either — a document brings the hunks, a ledger the outcomes, merged per edit. Applied only to a file whose bytes are EXACTLY what the prior was recorded against; a file the prior knows under other bytes gets none, and the report says so. A run handed a prior sits a different exam from one without — the verdict, the ledger and the signed statement carry priorsApplied and the prior's digest, and the digest is in the cache key, so a repeat audit never reads as the tests changing when only the exam did
+  -prior .corral/ledger
+    	what earlier runs already tried, so this run plants DIFFERENT faults: a corral-mutants document (see --record-mutants), a ledger directory (.corral/ledger, the record every --repo run and review writes), or a directory holding any number of corral-mutants documents — a document brings the hunks, a ledger the outcomes, merged per edit. Applied only to a file whose bytes are EXACTLY what the prior was recorded against; a file the prior knows under other bytes gets none, and the report says so. A run handed a prior sits a different exam from one without — the verdict, the ledger and the signed statement carry priorsApplied and the prior's digest, and the digest is in the cache key, so a repeat audit never reads as the tests changing when only the exam did
   -quiet
     	suppress the live progress echo on stderr (the verdict, --out and --record are unaffected)
   -record string
@@ -397,7 +397,7 @@ Usage of demo:
 ```
 Usage of doctor:
   -code string
-    	the source file you intend to audit (optional, enables the pairing and baseline checks)
+    	the source file you intend to audit (optional, enables the test-pairing check; doctor does not run your suite on unmutated code — run it by hand first)
   -critic-model string
     	the test-critic model whose credential to check
   -derive-model certify --repo
@@ -986,7 +986,7 @@ Usage of certify --repo:
   -derive-model string
     	model (or agent seat) that derives a goal per file when --goals is not given — REQUIRED unless --goals is supplied; corral has no default models
   -diff-base string
-    	bound the scan to files changed since this git ref, instead of ranking + --top. In a PR the diff IS the bound: ranking and --top do not apply on this path
+    	bound the scan to files changed since this git ref: every candidate that changed, or whose paired test changed, is audited. In a PR the diff IS the bound, so the default --top does not apply on this path; an EXPLICIT --top still does, auditing that many of the changed files by rank and reporting the rest as not audited
   -dry-run
     	enumerate and emit jobs, then stop — no audits run
   -goals string

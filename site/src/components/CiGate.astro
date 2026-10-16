@@ -6,19 +6,29 @@
   <p>
     A principle nobody enforces is a slogan. The way corral enforces this one is
     a <strong>GitHub Action</strong>: it installs itself, audits only the files
-    a pull request actually touched, and writes the verdict to the run page <em>verbatim</em> — including the lines that say what a number does <em>not</em> mean. Two steps, and there is no <code>corral</code> for you to
-    install:
+    a pull request actually touched, and writes the verdict to the run page <em>verbatim</em> — including the lines that say what a number does <em>not</em> mean. One job, and there is no <code>corral</code> for you to
+    install (the Action builds it with the runner's Go toolchain, which <code>ubuntu-latest</code> already has; a self-hosted runner needs <code>actions/setup-go</code> first). corral has no default models, so the job names every seat:
   </p>
 
-  <pre class="yml"><code>- uses: actions/checkout@v4
-  with:
-    fetch-depth: 0            # required — the diff needs a merge base
-- uses: pdbethke/corralai@v1.0.0-rc.23
-  with:
-    test-command: "go test ./..."
-    anthropic-key: $&#123;&#123; secrets.ANTHROPIC_API_KEY &#125;&#125;
-    max-proven-missed: "0"    # fail on a DEMONSTRATED gap
-    attest: "true"            # publish a receipt anyone can verify</code></pre>
+  <pre class="yml"><code># one job of a workflow on: pull_request, runs-on: ubuntu-latest
+permissions:
+  id-token: write             # these three are required by attest
+  attestations: write
+  contents: read
+steps:
+  - uses: actions/checkout@v4
+    with:
+      fetch-depth: 0          # required — the diff needs a merge base
+  - uses: pdbethke/corralai@v1.0.0-rc.23
+    with:
+      test-command: "go test ./..."
+      derive-model: claude-sonnet-5
+      writer-model: claude-sonnet-5
+      mutant-model: claude-sonnet-5
+      critic-model: claude-haiku-4-5    # must differ from the writer; "off" drops it
+      anthropic-key: $&#123;&#123; secrets.ANTHROPIC_API_KEY &#125;&#125;
+      max-proven-missed: "0"  # fail on a DEMONSTRATED gap
+      attest: "true"          # publish a receipt anyone can verify</code></pre>
 
   <p>
     <code>max-proven-missed</code> rather than a kill-rate threshold, and the

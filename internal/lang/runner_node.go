@@ -9,6 +9,24 @@ import (
 
 var nodeFilters = []string{"--test-name-pattern", "--test-skip-pattern"}
 
+// nodeWith is argv with a row's flags right after --test and testPath (when
+// given) at the end. node reads its options only BEFORE the first file: one
+// after it is handed to the test files as an argument, so `node --test
+// tests/ --test-name-pattern x` runs every test in tests/ (measured on node
+// 22.23). Through a package script the flags then land mid-script, which
+// shape refuses unless --test is the script's last word.
+func nodeWith(argv []string, testPath string, flags ...string) ([]string, bool) {
+	i := slices.Index(argv, "--test")
+	if i < 0 {
+		return nil, false
+	}
+	cmd := slices.Insert(slices.Clone(argv), i+1, flags...)
+	if testPath != "" {
+		cmd = append(cmd, testPath)
+	}
+	return cmd, true
+}
+
 // nodeListCmd lists node:test's tests by RUNNING the test file once with the
 // TAP reporter, against the unmutated code, in the same jail as the baseline.
 // node 22 has no collect-only mode: a pattern that matches nothing, or a skip
@@ -18,10 +36,10 @@ var nodeFilters = []string{"--test-name-pattern", "--test-skip-pattern"}
 // for the JavaScript and TypeScript default runner. A command that already
 // names a reporter is not listed: two reporters on stdout interleave.
 func nodeListCmd(argv []string, testPath string) ([]string, bool) {
-	if !slices.Contains(argv, "--test") || !narrowable(argv, append(nodeFilters, "--test-reporter", "--test-reporter-destination")...) {
+	if !narrowable(argv, append(nodeFilters, "--test-reporter", "--test-reporter-destination")...) {
 		return nil, false
 	}
-	return append(slices.Clone(argv), "--test-reporter=tap", testPath), true
+	return nodeWith(argv, testPath, "--test-reporter=tap")
 }
 
 // nodeParseList reads the TAP report into the ids of its tests. node nests a
@@ -107,10 +125,10 @@ func tapUnescape(s string) string {
 
 // nodeSingleCmd runs the one test whose full name is id's.
 func nodeSingleCmd(argv []string, testPath, id string) ([]string, bool) {
-	if id == "" || !slices.Contains(argv, "--test") || !narrowable(argv, nodeFilters...) {
+	if id == "" || !narrowable(argv, nodeFilters...) {
 		return nil, false
 	}
-	return append(slices.Clone(argv), "--test-name-pattern", "^"+jsRegexQuote(fullName(id))+"$", testPath), true
+	return nodeWith(argv, testPath, "--test-name-pattern", "^"+jsRegexQuote(fullName(id))+"$")
 }
 
 // nodeCoruns is wider than full-name equality: node runs every test or suite

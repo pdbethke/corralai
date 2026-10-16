@@ -3452,7 +3452,7 @@ func printRunDisclosures(w io.Writer, ex *localExecutor, jobs []reposcan.Job) {
 		if !ok {
 			continue
 		}
-		for _, line := range lang.RunDisclosures(p, ex.repoDir, ex.baseCmd(j)) {
+		for _, line := range lang.RunDisclosures(p, ex.repoDir, lang.Cmd(ex.baseCmd(j))) {
 			fmt.Fprintf(w, "  %s\n", line)
 		}
 	}

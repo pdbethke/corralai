@@ -21,7 +21,7 @@ func pythonFailureParser(t *testing.T) lang.FailureParser {
 	if !ok {
 		t.Fatal("python plugin not registered")
 	}
-	fp := lang.FailureParserFor(p, p.TestCmd())
+	fp := lang.FailureParserFor(p, lang.Cmd(p.TestCmd()))
 	if fp == nil {
 		t.Fatal("python's runner has no failure parser")
 	}

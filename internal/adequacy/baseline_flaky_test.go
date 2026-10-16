@@ -23,7 +23,7 @@ func TestScore_PassingBaselineNamesItsFlakyTests(t *testing.T) {
 		t.Fatal(err)
 	}
 	p, _ := lang.ByName("rust")
-	fp := lang.FailureParserFor(p, p.TestCmd())
+	fp := lang.FailureParserFor(p, lang.Cmd(p.TestCmd()))
 	if fp == nil {
 		t.Fatal("rust's runner has no failure parser")
 	}
@@ -38,7 +38,7 @@ func TestScore_PassingBaselineNamesItsFlakyTests(t *testing.T) {
 	}
 	// A parser that cannot report flakiness reports none.
 	py, _ := lang.ByName("python")
-	pfp := lang.FailureParserFor(py, py.TestCmd())
+	pfp := lang.FailureParserFor(py, lang.Cmd(py.TestCmd()))
 	rep, err = adequacy.Score(context.Background(), jail, nil, "a.py", "code", nil, []string{"pytest"}, adequacy.WithFailureParser(pfp))
 	if err != nil || rep.BaselineFlaky != nil {
 		t.Fatalf("python: BaselineFlaky=%q err=%v", rep.BaselineFlaky, err)

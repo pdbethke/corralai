@@ -16,13 +16,13 @@ func TestATestThatCannotRunAloneStillMakesANameAmbiguous(t *testing.T) {
 	rspecOut := `{"examples":[
 	 {"description":"adds","full_description":"MyApp::Calc adds"},
 	 {"description":"adds","full_description":"helpers adds"}]}`
-	if id, ok := ResolveForRun(rb, []string{"rspec"}, ParseTestList(rb, []string{"rspec"}, rspecOut), "adds"); ok {
+	if id, ok := ResolveForRun(rb, Cmd([]string{"rspec"}), ParseTestList(rb, Cmd([]string{"rspec"}), rspecOut), "adds"); ok {
 		t.Errorf("rspec: adds resolved to %q; MyApp::Calc also has one", id)
 	}
 	// node: a subtest of a test (unrunnable alone) beside a suite's test.
 	nodeTap := "TAP version 13\n# Subtest: parent\n    # Subtest: adds\n    ok 1 - adds\n      ---\n      type: 'test'\n      ...\n    1..1\nok 1 - parent\n  ---\n  type: 'test'\n  ...\n# Subtest: Calc\n    # Subtest: adds\n    ok 1 - adds\n      ---\n      type: 'test'\n      ...\n    1..1\nok 2 - Calc\n  ---\n  type: 'suite'\n  ...\n"
 	argv := []string{"node", "--test"}
-	if id, ok := ResolveForRun(js, argv, ParseTestList(js, argv, nodeTap), "adds"); ok {
+	if id, ok := ResolveForRun(js, Cmd(argv), ParseTestList(js, Cmd(argv), nodeTap), "adds"); ok {
 		t.Errorf("node: adds resolved to %q; parent's subtest is also adds", id)
 	}
 	// jest: a title holding the id separator beside a plain one.
@@ -30,7 +30,7 @@ func TestATestThatCannotRunAloneStillMakesANameAmbiguous(t *testing.T) {
 	 {"ancestorTitles":["A::B"],"title":"adds"},
 	 {"ancestorTitles":["C"],"title":"adds"}]}]}`
 	jargv := []string{"npx", "jest"}
-	if id, ok := ResolveForRun(js, jargv, ParseTestList(js, jargv, jestOut), "adds"); ok {
+	if id, ok := ResolveForRun(js, Cmd(jargv), ParseTestList(js, Cmd(jargv), jestOut), "adds"); ok {
 		t.Errorf("jest: adds resolved to %q; A::B also has one", id)
 	}
 }
@@ -40,12 +40,12 @@ func TestATestThatCannotRunAloneStillMakesANameAmbiguous(t *testing.T) {
 func TestRspecNamespacedGroupRunsAlone(t *testing.T) {
 	rb, _ := ByName("ruby")
 	argv := []string{"rspec"}
-	ids := ParseTestList(rb, argv, `{"examples":[{"description":"adds","full_description":"MyApp::Calc adds"}]}`)
-	id, ok := ResolveForRun(rb, argv, ids, "adds")
+	ids := ParseTestList(rb, Cmd(argv), `{"examples":[{"description":"adds","full_description":"MyApp::Calc adds"}]}`)
+	id, ok := ResolveForRun(rb, Cmd(argv), ids, "adds")
 	if !ok {
 		t.Fatalf("adds did not resolve over %q", ids)
 	}
-	cmd, _ := SingleTestCmd(rb, argv, "spec/calc_spec.rb", id)
+	cmd, _ := SingleTestCmd(rb, Cmd(argv), "spec/calc_spec.rb", id)
 	if want := `\AMyApp::Calc adds\z`; len(cmd) < 3 || cmd[2] != want {
 		t.Errorf("single = %q, want -E %s", cmd, want)
 	}

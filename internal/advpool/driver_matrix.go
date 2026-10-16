@@ -61,11 +61,11 @@ func (d *Driver) tickMatrix(ctx context.Context, run *runState) {
 	// lists every file under it. A matrix over that would offer other files'
 	// tests for deletion, and a critic's title resolved against the matrix's
 	// rows would not see the tests the matrix left out.
-	if golang.ResolvesByList(p, argv) {
+	if golang.ResolvesByList(p, golang.Cmd(argv)) {
 		log.Printf("advpool: matrix: unavailable for %q (its runner lists what the command runs, not the test file; the critic path checks claims instead)", run.rs.Lang)
 		return
 	}
-	listCmd, ok := golang.ListTestsCmd(p, argv, run.rs.DevTestPath)
+	listCmd, ok := golang.ListTestsCmd(p, golang.Cmd(argv), run.rs.DevTestPath)
 	if !ok {
 		log.Printf("advpool: matrix: unavailable for %q", run.rs.Lang)
 		return
@@ -81,10 +81,10 @@ func (d *Driver) tickMatrix(ctx context.Context, run *runState) {
 	// another listed test (two tests sharing a full name) would credit that
 	// test's kills to this one, and a zero for the pair could mark a test
 	// for deletion that never ran by itself.
-	listed := golang.ParseTestList(p, argv, out)
+	listed := golang.ParseTestList(p, golang.Cmd(argv), out)
 	var sels []string
 	for _, id := range listed {
-		if golang.RunsAlone(p, argv, listed, id) {
+		if golang.RunsAlone(p, golang.Cmd(argv), listed, id) {
 			sels = append(sels, id)
 		}
 	}
@@ -109,7 +109,7 @@ func (d *Driver) tickMatrix(ctx context.Context, run *runState) {
 		len(sels), len(run.mutants), len(sels)*len(run.mutants), workers)
 
 	scoreFn := func(sctx context.Context, tr matrix.TestRef) (int, []string, bool) {
-		cmd, ok := golang.SingleTestCmd(p, argv, tr.TestFile, tr.Selector)
+		cmd, ok := golang.SingleTestCmd(p, golang.Cmd(argv), tr.TestFile, tr.Selector)
 		if !ok {
 			return 0, nil, false
 		}

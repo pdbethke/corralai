@@ -30,7 +30,7 @@ func TestDefaultFailFastResolvesForASupportedRunner(t *testing.T) {
 	if !ok {
 		t.Fatal("python plugin not registered")
 	}
-	var f adequacy.FailFastFor = func(cmd []string) ([]string, bool) { return lang.FailFastArgsFor(p, cmd) }
+	var f adequacy.FailFastFor = func(cmd []string) ([]string, bool) { return lang.FailFastArgsFor(p, lang.Cmd(cmd)) }
 	args, ok := f([]string{"python3", "-m", "pytest", "tests/"})
 	if !ok || len(args) != 1 || args[0] != "-x" {
 		t.Fatalf("resolved fail-fast = %v ok=%v, want [-x]", args, ok)

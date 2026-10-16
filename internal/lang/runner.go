@@ -186,11 +186,18 @@ var runners = []Runner{
 	},
 }
 
-// RunnerFor is the ONE place a command is mapped to a runner: the first row
-// for p's language that the command names, else that language's Default row.
+// RunnerFor is the ONE place a command is mapped to a runner: the row an
+// operator named with --runner, else the first row for p's language that the
+// command (or the package script it runs) names, else that language's
+// Default row.
 // ok is false only for a language with no row at all.
-func RunnerFor(p Plugin, argv []string) (Runner, bool) {
-	if r, ok := namedRunner(p, argv); ok {
+func RunnerFor(p Plugin, inv Invocation) (Runner, bool) {
+	if inv.Runner != "" {
+		if r, err := RunnerByID(p, inv.Runner); err == nil {
+			return r, true
+		}
+	}
+	if r, ok := namedRunner(p, inv.detectWords()); ok {
 		return r, true
 	}
 	for _, r := range runners {
@@ -258,17 +265,17 @@ func RunnerByID(p Plugin, id string) (Runner, error) {
 }
 
 // ListTestsCmd is the command that lists the tests argv runs, from its runner.
-func ListTestsCmd(p Plugin, argv []string, testPath string) ([]string, bool) {
-	r, ok := RunnerFor(p, argv)
+func ListTestsCmd(p Plugin, inv Invocation, testPath string) ([]string, bool) {
+	r, ok := RunnerFor(p, inv)
 	if !ok || r.ListCmd == nil {
 		return nil, false
 	}
-	return r.ListCmd(argv, testPath)
+	return inv.shape(p, func(w []string) ([]string, bool) { return r.ListCmd(w, testPath) })
 }
 
 // ParseTestList reads ListTestsCmd's stdout into test ids.
-func ParseTestList(p Plugin, argv []string, stdout string) []string {
-	r, ok := RunnerFor(p, argv)
+func ParseTestList(p Plugin, inv Invocation, stdout string) []string {
+	r, ok := RunnerFor(p, inv)
 	if !ok || r.ParseList == nil {
 		return nil
 	}
@@ -276,18 +283,18 @@ func ParseTestList(p Plugin, argv []string, stdout string) []string {
 }
 
 // SingleTestCmd is argv's runner narrowed to the one test id.
-func SingleTestCmd(p Plugin, argv []string, testPath, id string) ([]string, bool) {
-	r, ok := RunnerFor(p, argv)
+func SingleTestCmd(p Plugin, inv Invocation, testPath, id string) ([]string, bool) {
+	r, ok := RunnerFor(p, inv)
 	if !ok || r.SingleCmd == nil {
 		return nil, false
 	}
-	return r.SingleCmd(argv, testPath, id)
+	return inv.shape(p, func(w []string) ([]string, bool) { return r.SingleCmd(w, testPath, id) })
 }
 
 // ResolvesByList reports whether a critic's test name must be resolved
 // against the runner's own list before SingleTestCmd.
-func ResolvesByList(p Plugin, argv []string) bool {
-	r, ok := RunnerFor(p, argv)
+func ResolvesByList(p Plugin, inv Invocation) bool {
+	r, ok := RunnerFor(p, inv)
 	return ok && r.ResolveByList
 }
 
@@ -296,9 +303,9 @@ func ResolvesByList(p Plugin, argv []string) bool {
 // runner's selection for that id would also run another listed test. What a
 // run killed is credited to the test it names, so a run that also ran a
 // second test cannot be credited at all.
-func ResolveForRun(p Plugin, argv []string, listed []string, name string) (string, bool) {
+func ResolveForRun(p Plugin, inv Invocation, listed []string, name string) (string, bool) {
 	id, ok := ResolveListedTest(listed, name)
-	if !ok || !RunsAlone(p, argv, listed, id) {
+	if !ok || !RunsAlone(p, inv, listed, id) {
 		return "", false
 	}
 	return id, true
@@ -307,11 +314,11 @@ func ResolveForRun(p Plugin, argv []string, listed []string, name string) (strin
 // RunsAlone reports whether SingleTestCmd for the listed id runs that test
 // and no other listed one: the id is listed once, and no other listed test
 // is one the runner's selection would also run (Coruns).
-func RunsAlone(p Plugin, argv []string, listed []string, id string) bool {
+func RunsAlone(p Plugin, inv Invocation, listed []string, id string) bool {
 	if id != listedName(id) {
 		return false
 	}
-	r, found := RunnerFor(p, argv)
+	r, found := RunnerFor(p, inv)
 	n := 0
 	for _, other := range listed {
 		if other == id {
@@ -330,19 +337,24 @@ func RunsAlone(p Plugin, argv []string, listed []string, id string) bool {
 // `cargo test` bypasses, and nextest's passed-on-retry grading. nil when the
 // runner has nothing to say; the one way a caller asks, so no caller
 // switches on a language to decide whether there is anything to disclose.
-func RunDisclosures(p Plugin, repoDir string, testCmd []string) []string {
-	r, ok := RunnerFor(p, testCmd)
-	if !ok || r.Disclose == nil {
-		return nil
+// It leads with how the runner was found when that was not the command
+// itself (a package script, --runner): Invocation.Describe.
+func RunDisclosures(p Plugin, repoDir string, inv Invocation) []string {
+	var out []string
+	if d := inv.Describe(p); d != "" {
+		out = append(out, d)
 	}
-	return r.Disclose(repoDir, testCmd)
+	if r, ok := RunnerFor(p, inv); ok && r.Disclose != nil {
+		out = append(out, r.Disclose(repoDir, inv.Argv)...)
+	}
+	return out
 }
 
 // FailureParserFor is argv's runner as the FailureParser adequacy holds, or
 // nil when the runner names no failures. It also implements FlakyReporter
 // when the runner reports retries.
-func FailureParserFor(p Plugin, argv []string) FailureParser {
-	r, ok := RunnerFor(p, argv)
+func FailureParserFor(p Plugin, inv Invocation) FailureParser {
+	r, ok := RunnerFor(p, inv)
 	if !ok || r.FirstFailure == nil {
 		return nil
 	}
@@ -379,8 +391,8 @@ func (p flakyRowParser) FlakyTests(output []byte) []string { return p.r.Flaky(ou
 // from precisely, and from unittest, which exits 2 on pytest's --deselect. A wrong selector would
 // deselect the wrong test and silently narrow the exam, which is worse than
 // not salvaging: the run would look healthier while proving less.
-func DeselectorFor(p Plugin, argv []string) (failed func(string) []string, deselect func([]string) []string, ok bool) {
-	r, found := RunnerFor(p, argv)
+func DeselectorFor(p Plugin, inv Invocation) (failed func(string) []string, deselect func([]string) []string, ok bool) {
+	r, found := RunnerFor(p, inv)
 	if !found || r.FailedTests == nil || r.DeselectArgs == nil {
 		return nil, nil, false
 	}

@@ -60,14 +60,14 @@ func TestJestRowDispatch(t *testing.T) {
 	for _, l := range []string{"javascript", "typescript"} {
 		p, _ := ByName(l)
 		argv := []string{"npx", "jest"}
-		if !ResolvesByList(p, argv) {
+		if !ResolvesByList(p, Cmd(argv)) {
 			t.Errorf("%s: jest does not resolve by list", l)
 		}
-		ids := ParseTestList(p, argv, readFixture(t, "jest-list.json"))
-		if _, ok := ResolveForRun(p, argv, ids, "Calc::adds"); ok {
+		ids := ParseTestList(p, Cmd(argv), readFixture(t, "jest-list.json"))
+		if _, ok := ResolveForRun(p, Cmd(argv), ids, "Calc::adds"); ok {
 			t.Errorf("%s: Calc::adds resolved; its pattern also runs the top-level \"Calc adds\"", l)
 		}
-		if id, ok := ResolveForRun(p, argv, ids, "top level"); !ok || id != "top level" {
+		if id, ok := ResolveForRun(p, Cmd(argv), ids, "top level"); !ok || id != "top level" {
 			t.Errorf("%s: top level = %q, %v", l, id, ok)
 		}
 	}
@@ -79,11 +79,11 @@ func TestJestRowDispatch(t *testing.T) {
 func TestJestCorunsIgnoresCase(t *testing.T) {
 	js, _ := ByName("javascript")
 	argv := []string{"npx", "jest"}
-	if _, ok := ResolveForRun(js, argv, []string{"Calc adds", "calc adds"}, "Calc adds"); ok {
+	if _, ok := ResolveForRun(js, Cmd(argv), []string{"Calc adds", "calc adds"}, "Calc adds"); ok {
 		t.Error("Calc adds resolved; jest's -t would also run calc adds")
 	}
 	vt, _ := ByName("typescript")
-	if _, ok := ResolveForRun(vt, []string{"npx", "vitest", "run"}, []string{"Calc adds", "calc adds"}, "Calc adds"); !ok {
+	if _, ok := ResolveForRun(vt, Cmd([]string{"npx", "vitest", "run"}), []string{"Calc adds", "calc adds"}, "Calc adds"); !ok {
 		t.Error("vitest matches case-sensitively; Calc adds should resolve")
 	}
 }

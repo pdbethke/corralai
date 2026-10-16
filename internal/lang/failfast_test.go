@@ -39,7 +39,7 @@ func TestFailFastArgsAreTheRunnersOwn(t *testing.T) {
 		if !ok {
 			t.Fatalf("%s plugin not registered", c.lang)
 		}
-		args, got := FailFastArgsFor(p, c.cmd)
+		args, got := FailFastArgsFor(p, Cmd(c.cmd))
 		if c.want == "" {
 			if got {
 				t.Errorf("%s %v: got %v, want no flag — an unrecognised runner must be left alone", c.lang, c.cmd, args)
@@ -56,7 +56,7 @@ func TestFailFastArgsAreTheRunnersOwn(t *testing.T) {
 // word there makes it sh's $0, not an option to the suite.
 func TestShellWrappedCommandsAreNeverTouched(t *testing.T) {
 	p, _ := ByName("python")
-	if args, ok := FailFastArgsFor(p, []string{"sh", "-c", "pytest tests/"}); ok {
+	if args, ok := FailFastArgsFor(p, Cmd([]string{"sh", "-c", "pytest tests/"})); ok {
 		t.Errorf("shell-wrapped command got %v — appending there changes sh's $0, not the runner's options", args)
 	}
 	if got := AppendFailFast([]string{"bash", "-c", "pytest"}, []string{"-x"}); len(got) != 3 {

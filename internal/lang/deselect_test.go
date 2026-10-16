@@ -23,7 +23,7 @@ import (
 // model at all — it is arithmetic on the runner's own output.
 func TestPythonFailedTests(t *testing.T) {
 	p, _ := ByName("python")
-	failedTests, _, ok := DeselectorFor(p, p.TestCmd())
+	failedTests, _, ok := DeselectorFor(p, Cmd(p.TestCmd()))
 	if !ok {
 		t.Fatal("pytest must offer salvage — pytest names its failures precisely and supports --deselect")
 	}
@@ -62,7 +62,7 @@ FAILED tests/test_cli_corral.py::test_set_app_option - assert 2 == 0
 // passing suite and quietly skip real tests.
 func TestPythonFailedTests_NoFailuresNoSelectors(t *testing.T) {
 	p, _ := ByName("python")
-	failedTests, _, _ := DeselectorFor(p, p.TestCmd())
+	failedTests, _, _ := DeselectorFor(p, Cmd(p.TestCmd()))
 	for _, out := range []string{"", "13 passed in 0.06s", "collected 0 items"} {
 		if got := failedTests(out); len(got) != 0 {
 			t.Errorf("FailedTests(%q) = %v, want none", out, got)
@@ -74,7 +74,7 @@ func TestPythonFailedTests_NoFailuresNoSelectors(t *testing.T) {
 // selector — pytest does not accept a comma-joined list.
 func TestPythonDeselectArgs(t *testing.T) {
 	p, _ := ByName("python")
-	_, deselectArgs, _ := DeselectorFor(p, p.TestCmd())
+	_, deselectArgs, _ := DeselectorFor(p, Cmd(p.TestCmd()))
 
 	got := deselectArgs([]string{"a.py::t1", "a.py::t2"})
 	want := []string{"--deselect", "a.py::t1", "--deselect", "a.py::t2"}
@@ -101,7 +101,7 @@ func TestNonPythonPluginsDoNotClaimDeselection(t *testing.T) {
 		if !ok {
 			t.Fatalf("plugin %q not registered", name)
 		}
-		if _, _, claims := DeselectorFor(p, p.TestCmd()); claims {
+		if _, _, claims := DeselectorFor(p, Cmd(p.TestCmd())); claims {
 			t.Errorf("%s offers salvage — only give a runner row FailedTests and DeselectArgs with a verified failure-line parser and a real deselect flag for that runner", name)
 		}
 	}

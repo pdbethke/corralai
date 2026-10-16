@@ -54,11 +54,11 @@ ok 2 - S
 	js, _ := ByName("javascript")
 	argv := []string{"node", "--test"}
 	for _, name := range []string{"child", "parent"} {
-		if id, ok := ResolveForRun(js, argv, ids, name); ok {
+		if id, ok := ResolveForRun(js, Cmd(argv), ids, name); ok {
 			t.Errorf("%s resolved to %q; it cannot run alone", name, id)
 		}
 	}
-	if id, ok := ResolveForRun(js, argv, ids, "has # hash"); !ok || id != "S::has # hash" {
+	if id, ok := ResolveForRun(js, Cmd(argv), ids, "has # hash"); !ok || id != "S::has # hash" {
 		t.Errorf("has # hash = %q, %v", id, ok)
 	}
 }

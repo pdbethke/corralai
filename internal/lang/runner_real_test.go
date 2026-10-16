@@ -72,7 +72,7 @@ func TestRealRunnersListAndRunOne(t *testing.T) {
 				t.Skip("SKIP rspec: rspec does not run here")
 			}
 			p, _ := ByName(c.lang)
-			if r, _ := RunnerFor(p, c.argv); r.Name != c.runner {
+			if r, _ := RunnerFor(p, Cmd(c.argv)); r.Name != c.runner {
 				t.Fatalf("%q dispatched to row %q", c.argv, r.Name)
 			}
 			run := func(cmd []string) (string, string) {
@@ -84,17 +84,17 @@ func TestRealRunnersListAndRunOne(t *testing.T) {
 				_ = x.Run()
 				return stdout.String(), stdout.String() + all.String()
 			}
-			list, ok := ListTestsCmd(p, c.argv, c.testPath)
+			list, ok := ListTestsCmd(p, Cmd(c.argv), c.testPath)
 			if !ok {
 				t.Fatal("no list command")
 			}
 			out, _ := run(list)
-			ids := ParseTestList(p, c.argv, out)
-			id, ok := ResolveForRun(p, c.argv, ids, c.name)
+			ids := ParseTestList(p, Cmd(c.argv), out)
+			id, ok := ResolveForRun(p, Cmd(c.argv), ids, c.name)
 			if !ok || id != c.want {
 				t.Fatalf("%q resolved to %q, %v over the listed %q", c.name, id, ok, ids)
 			}
-			one, ok := SingleTestCmd(p, c.argv, c.testPath, id)
+			one, ok := SingleTestCmd(p, Cmd(c.argv), c.testPath, id)
 			if !ok {
 				t.Fatal("no single-test command")
 			}

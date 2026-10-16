@@ -73,11 +73,11 @@ func TestRustCommandTestTargeting(t *testing.T) {
 		},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			list, ok := ListTestsCmd(p, c.testCmd, "")
+			list, ok := ListTestsCmd(p, Cmd(c.testCmd), "")
 			if ok != c.listOK || (ok && !reflect.DeepEqual(list, c.list)) {
 				t.Errorf("ListTestsCmdFor = %q, %v; want %q, %v", list, ok, c.list, c.listOK)
 			}
-			single, ok := SingleTestCmd(p, c.testCmd, "", "tests::a")
+			single, ok := SingleTestCmd(p, Cmd(c.testCmd), "", "tests::a")
 			if ok != c.singleOK || (ok && !reflect.DeepEqual(single, c.single)) {
 				t.Errorf("SingleTestCmdFor = %q, %v; want %q, %v", single, ok, c.single, c.singleOK)
 			}
@@ -85,7 +85,7 @@ func TestRustCommandTestTargeting(t *testing.T) {
 				// Cargo's own progress lines are on stderr, but a merged
 				// stream must not add tests either.
 				out := "   Compiling demo v0.1.0 (/tmp/demo)\n    Finished `test` profile\n     Running unittests src/lib.rs (target/debug/deps/demo-1)\n" + c.listOut
-				if got := ParseTestList(p, c.testCmd, out); !reflect.DeepEqual(got, c.wantIDs) {
+				if got := ParseTestList(p, Cmd(c.testCmd), out); !reflect.DeepEqual(got, c.wantIDs) {
 					t.Errorf("ParseTestListFor =\n  %q\nwant\n  %q", got, c.wantIDs)
 				}
 			}

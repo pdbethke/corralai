@@ -1058,7 +1058,7 @@ func prepareAuditJail(ctx context.Context, in localAuditInput, plug lang.Plugin,
 	if err != nil {
 		return p, err
 	}
-	for _, line := range lang.RunDisclosures(plug, repoDir, in.checkArgv) {
+	for _, line := range lang.RunDisclosures(plug, repoDir, lang.Cmd(in.checkArgv)) {
 		fmt.Fprintf(stdout, "  %s\n", line)
 	}
 
@@ -2229,7 +2229,7 @@ func buildJailWiring(ctx context.Context, in jailWiringInput) (w jailWiring, err
 	// column.
 	var failureParser lang.FailureParser
 	if plug, ok := lang.ByName(in.langName); ok {
-		failureParser = lang.FailureParserFor(plug, in.checkArgv)
+		failureParser = lang.FailureParserFor(plug, lang.Cmd(in.checkArgv))
 	}
 
 	// A KILLED MUTANT NEEDS ONE FAILING TEST. Resolved off the same plugin,
@@ -2240,7 +2240,7 @@ func buildJailWiring(ctx context.Context, in jailWiringInput) (w jailWiring, err
 	var failFast adequacy.FailFastFor
 	if !in.noFailFast {
 		if plug, ok := lang.ByName(in.langName); ok {
-			failFast = func(cmd []string) ([]string, bool) { return lang.FailFastArgsFor(plug, cmd) }
+			failFast = func(cmd []string) ([]string, bool) { return lang.FailFastArgsFor(plug, lang.Cmd(cmd)) }
 		}
 	}
 

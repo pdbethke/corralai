@@ -55,7 +55,7 @@ func TestPythonFirstFailure(t *testing.T) {
 	if !ok {
 		t.Fatal("python plugin not registered")
 	}
-	fp := FailureParserFor(p, p.TestCmd())
+	fp := FailureParserFor(p, Cmd(p.TestCmd()))
 	if fp == nil {
 		t.Fatal("python plugin does not implement FailureParser")
 	}
@@ -120,7 +120,7 @@ func TestGoFirstFailure(t *testing.T) {
 	if !ok {
 		t.Fatal("go plugin not registered")
 	}
-	fp := FailureParserFor(p, p.TestCmd())
+	fp := FailureParserFor(p, Cmd(p.TestCmd()))
 	if fp == nil {
 		t.Fatal("go plugin does not implement FailureParser")
 	}
@@ -206,7 +206,7 @@ func TestPHPFirstFailure(t *testing.T) {
 	if !ok {
 		t.Fatal("php plugin not registered")
 	}
-	fp := FailureParserFor(p, p.TestCmd())
+	fp := FailureParserFor(p, Cmd(p.TestCmd()))
 	if fp == nil {
 		t.Fatal("php plugin does not implement FailureParser")
 	}
@@ -237,7 +237,7 @@ func TestLanguagesWithoutAFailureParserOfferNone(t *testing.T) {
 		if !ok {
 			continue
 		}
-		if FailureParserFor(p, p.TestCmd()) != nil {
+		if FailureParserFor(p, Cmd(p.TestCmd())) != nil {
 			t.Errorf("%s implements FailureParser — see FailureParser's doc: an unproven parser must not exist", name)
 		}
 	}

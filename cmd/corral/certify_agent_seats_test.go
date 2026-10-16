@@ -237,6 +237,7 @@ func TestCertifyLocalRefusesAMissingAgentBinaryUpFront(t *testing.T) {
 // review resolves its seats through the same resolver, so it refuses a
 // missing CLI the same way, before any seat is asked anything.
 func TestReviewRefusesAMissingAgentBinaryUpFront(t *testing.T) {
+	requireReviewSandbox(t)
 	root := t.TempDir()
 	gitRun := gitCmd(t, root)
 	mustWrite(t, filepath.Join(root, "pkg", "a.go"), "package pkg\n")

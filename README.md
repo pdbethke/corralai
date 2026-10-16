@@ -897,8 +897,9 @@ the code is wrong. What comes back is an opinion carrying findings, each
 with a tier the reviewer declared: **REPRODUCED**, with a `sh` script that
 exits 0 iff the defect is demonstrated; **CODE-READ**, a `file:line`
 argument with no execution; **HYPOTHESIS**. corral runs every REPRODUCED
-script against a detached worktree at the commit — your checkout is never
-the subject — and a script that does not hold demotes its finding to
+script in the same offline sandbox `certify` uses, over the tree at the
+commit (your checkout is never the subject; `--substrate workspace` runs them
+in a worktree on the host, for a CI runner) — and a script that does not hold demotes its finding to
 CODE-READ on the record, saying why. The reviewer must also list what it
 checked and found sound, so the review's coverage is legible. corral does
 not sign the opinion; it signs the entry that carries the reproductions

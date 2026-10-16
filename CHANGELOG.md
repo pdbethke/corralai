@@ -11,6 +11,22 @@ history of any release, `git log v0.3.4..v0.3.5`.
 
 ## [Unreleased]
 
+- **`corral review` runs its reproductions in the sandbox.** A reproduction
+  is a model's shell script, and it ran in a plain git worktree on your
+  machine, with the network on and only model keys removed from its
+  environment — the one place corral ran model-written code outside the
+  sandbox `certify` grades in. It now runs there by default: offline, a fresh
+  copy of the tree at the reviewed commit per script, your installed
+  dependency directories bound read-only, Go and Rust dependencies vendored
+  as `certify` vendors them. With no sandbox on the machine, review (and
+  `review recheck`) refuses before calling a model. `--substrate workspace`
+  keeps the old worktree, for where the caller is the isolation boundary; the
+  GitHub Action passes it, as it already does for the audit, and the review
+  entry records which one ran. A script that needs the network, git history
+  or a binary file outside `testdata` now fails, and its finding is demoted.
+  `review recheck` reads an exit status of 129–192 as a signal (the sandbox
+  reports a killed script as 128+N), so a crash is never read as a fix.
+
 - **The killing test is named, and a partly failing authored test is
   salvaged, in every language but Rust.** jest, vitest, mocha, `node --test`,
   rspec and minitest now record which test killed each mutant

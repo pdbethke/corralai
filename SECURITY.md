@@ -15,7 +15,8 @@ from that:
 |---|---|---|---|
 | `certify` (default): your suite against each mutant, and the written tests | a disposable copy of your tree in a `bwrap` sandbox (container or `sandbox-exec` elsewhere); project dependency dirs bound read-only | none | no |
 | `certify --repo --substrate workspace` | your checkout, in place (you, or the CI runner, are the isolation boundary) | yes | no (scrubbed) |
-| `corral review`: the reviewer's and verifier's reproduction scripts | a detached git worktree at the reviewed commit, **not a sandbox** | yes | no (scrubbed) |
+| `corral review` (default): the reviewer's and verifier's reproduction scripts | the same sandbox as `certify`, seeded with the tree at the reviewed commit; dependency dirs bound read-only; a fresh workspace per script | none | no |
+| `corral review --substrate workspace` (what the GitHub Action runs) | a detached git worktree at the reviewed commit on the host, **not a sandbox** (the runner is the isolation boundary) | yes | no (scrubbed) |
 | an agentic review seat (Claude Code, Codex, …) | that agent, started in a disposable copy of the repository | the agent's own | the agent's own |
 
 Two of those rows are not sandboxed, and that is stated here because it is easy to miss:
@@ -24,11 +25,12 @@ Two of those rows are not sandboxed, and that is stated here because it is easy 
   clone, or a tree with no uncommitted work. Restores run on a failing command, a timeout, a
   panic and an interrupt (SIGINT/SIGTERM); a process killed outright (kill -9, out of
   memory) can leave a mutant behind, and nothing detects it.
-- **`corral review` runs model-written scripts with your user's permissions**, on your
-  filesystem and network (in a throwaway worktree, with model keys removed from their
-  environment). Run it where that is acceptable: a CI runner, a container, a machine you do
-  not mind a script touching. The scripts are recorded in the ledger, so what ran is never
-  hidden.
+- **`corral review --substrate workspace` runs model-written scripts with your user's
+  permissions**, on your filesystem and network (in a throwaway worktree, with model keys
+  removed from their environment). It is opt-in, for where that is acceptable: a CI runner, a
+  container. Without it, review runs the scripts in the same offline sandbox as `certify`, and
+  refuses when there is none. The scripts are recorded in the ledger either way, so what ran
+  is never hidden.
 
 ## Why a hijacked model cannot change a verdict
 
@@ -189,8 +191,8 @@ Honesty is part of the model.
   by advisory-only semantics, TTLs, and revocation, not prevented.
 - **It assumes a single trust domain.** Cross-swarm coordination assumes all participating swarms
   belong to one owner; it is not multi-tenant isolation.
-- **`corral review` and `--substrate workspace` are not sandboxed** (see "What runs where");
-  `certify`'s default substrate is.
+- **`--substrate workspace` is not sandboxed**, for `certify --repo` and `corral review` alike
+  (see "What runs where"); both verbs' default substrate is.
 - **It has not been battle-tested at scale.** The properties are proven by design review and the
   adversarial tests above; they have not (yet) survived a hostile production adversary.
 

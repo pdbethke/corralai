@@ -37,6 +37,7 @@ func (c cannedReviewer) Chat(msgs []agentbackend.Message, _ []any) (agentbackend
 // CODE-READ, one HYPOTHESIS; the entry written; `review show` reading it;
 // an adjudication taken and shown; `verify --ledger` naming both.
 func TestReviewRunsReproductionsRecordsTheEntryAndTakesAdjudications(t *testing.T) {
+	requireReviewSandbox(t)
 	t.Setenv("ANTHROPIC_API_KEY", "test-placeholder-not-a-real-key")
 	root := t.TempDir()
 	gitRun := gitCmd(t, root)
@@ -143,6 +144,7 @@ func TestReviewRunsReproductionsRecordsTheEntryAndTakesAdjudications(t *testing.
 }
 
 func TestReviewRefusesWithoutASeatOrAScopeOrACommit(t *testing.T) {
+	requireReviewSandbox(t)
 	var out, errb bytes.Buffer
 	if code := runReview([]string{"--scope", "x"}, &out, &errb); code != 2 || !strings.Contains(errb.String(), "--reviewer-model") {
 		t.Errorf("no seat: %d %s", code, errb.String())
@@ -160,6 +162,7 @@ func TestReviewRefusesWithoutASeatOrAScopeOrACommit(t *testing.T) {
 // the finding; a refutation whose script fails is itself demoted and moves
 // nothing; the verifier's model may never be the reviewer's.
 func TestReviewVerifierSeatRefutesByReproductionAndIsDecorrelated(t *testing.T) {
+	requireReviewSandbox(t)
 	t.Setenv("ANTHROPIC_API_KEY", "test-placeholder-not-a-real-key")
 	root := t.TempDir()
 	gitRun := gitCmd(t, root)
@@ -224,6 +227,7 @@ func TestReviewVerifierSeatRefutesByReproductionAndIsDecorrelated(t *testing.T) 
 // The verifier rule is the same comparison certify's critic rule uses
 // (agentbackend.SameSeat): an agent named in another case is the same agent.
 func TestReviewRefusesAVerifierThatIsTheReviewerInAnotherCase(t *testing.T) {
+	requireReviewSandbox(t)
 	root := t.TempDir()
 	gitRun := gitCmd(t, root)
 	mustWrite(t, filepath.Join(root, "pkg", "a.go"), "package pkg\n")
@@ -244,6 +248,7 @@ func TestReviewRefusesAVerifierThatIsTheReviewerInAnotherCase(t *testing.T) {
 // reproductions' hash — and an entry whose findings were edited after the
 // statement was signed is named as such.
 func TestReviewAttestSignsTheReproductionsAndTheEntryNamesTheStatement(t *testing.T) {
+	requireReviewSandbox(t)
 	t.Setenv("ANTHROPIC_API_KEY", "test-placeholder-not-a-real-key")
 	t.Setenv("CORRALAI_CERTIFY_KEY_FILE", filepath.Join(t.TempDir(), "certify_key"))
 	root := t.TempDir()
@@ -328,6 +333,7 @@ func gzipBytesFor(t *testing.T, b []byte) []byte {
 // 450 KB brain scope) is recorded as unverified with its reply kept, and
 // said on stderr — never as a silent, verified-looking review.
 func TestReviewSaysWhenTheVerifierReturnedNoVerdicts(t *testing.T) {
+	requireReviewSandbox(t)
 	t.Setenv("ANTHROPIC_API_KEY", "test-placeholder-not-a-real-key")
 	root := t.TempDir()
 	gitRun := gitCmd(t, root)
@@ -370,6 +376,7 @@ func (m meteredReviewer) Chat([]agentbackend.Message, []any) (agentbackend.Messa
 // tokens. The record counts them: dropping them would make an unverified
 // review read cheaper than it was.
 func TestReviewRecordsTheVerifiersTokensWhenItsReplyDoesNotParse(t *testing.T) {
+	requireReviewSandbox(t)
 	t.Setenv("ANTHROPIC_API_KEY", "test-placeholder-not-a-real-key")
 	root := t.TempDir()
 	gitRun := gitCmd(t, root)
@@ -471,6 +478,7 @@ func TestReviewPlanProposesAndCountsFixBatches(t *testing.T) {
 // the tool's version is on the record; the decorrelation rule sees
 // through the tool to the model.
 func TestAgenticSeatsRunInAWorktreeWithTheBriefOnStdin(t *testing.T) {
+	requireReviewSandbox(t)
 	t.Setenv("ANTHROPIC_API_KEY", "test-placeholder-not-a-real-key")
 	root := t.TempDir()
 	gitRun := gitCmd(t, root)
@@ -551,6 +559,7 @@ func TestAgenticSeatsRunInAWorktreeWithTheBriefOnStdin(t *testing.T) {
 // list. An operator defines one in the environment, names it like a
 // built-in, and the record carries the definition beside the version.
 func TestAnyAgentCanBeDefinedAsASeat(t *testing.T) {
+	requireReviewSandbox(t)
 	t.Setenv("ANTHROPIC_API_KEY", "test-placeholder-not-a-real-key")
 	root := t.TempDir()
 	gitRun := gitCmd(t, root)

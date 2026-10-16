@@ -244,6 +244,7 @@ func TestDocsCLIReferenceDocumentsNoVerbThatDoesNotExist(t *testing.T) {
 // that reproduced stands after the run, the entry written first either
 // way; a review whose reproductions all fell exits 0.
 func TestReviewFailOnReproducedIsAGateAfterTheRecord(t *testing.T) {
+	requireReviewSandbox(t)
 	t.Setenv("ANTHROPIC_API_KEY", "test-placeholder-not-a-real-key")
 	t.Setenv("CORRALAI_CERTIFY_KEY_FILE", filepath.Join(t.TempDir(), "certify_key"))
 	root := t.TempDir()

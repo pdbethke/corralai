@@ -11,6 +11,35 @@ history of any release, `git log v0.3.4..v0.3.5`.
 
 ## [Unreleased]
 
+- **`corral review` runs its reproductions in the sandbox.** A reproduction
+  is a model's shell script, and it ran in a plain git worktree on your
+  machine, with the network on and only model keys removed from its
+  environment — the one place corral ran model-written code outside the
+  sandbox `certify` grades in. It now runs there by default: offline, a fresh
+  copy of the tree at the reviewed commit per script, your installed
+  dependency directories bound read-only, Go and Rust dependencies vendored
+  as `certify` vendors them. With no sandbox on the machine, review (and
+  `review recheck`) refuses before calling a model. `--substrate workspace`
+  keeps the old worktree, for where the caller is the isolation boundary; the
+  GitHub Action passes it, as it already does for the audit, and the review
+  entry records which one ran. A script that needs the network, git history
+  or a binary file outside `testdata` now fails, and its finding is demoted.
+  The sandbox is prepared before any model is paid, so a repository it
+  cannot seed costs nothing. The review entry records which dependency
+  directories were mounted, and says which ones this machine's sandbox could
+  not mount. The toolchain mounted is the scope language's own, never one a
+  script names. A script killed by a signal (the sandbox reports it as exit
+  128+N) is recorded as not run, in a review and in `review recheck` alike, so
+  a crash is never read as a result. `review recheck` of a finding reproduced
+  in a worktree (every entry before this, and every one the Action writes)
+  does not read a failure in the sandbox as a fix, since the sandbox has no
+  `.git`, network or binaries; it says to recheck with `--substrate workspace`.
+- **Fixed: a dependency directory could mount a path outside itself.** An
+  entry of `node_modules` (or any bound dependency directory) that is a
+  symlink leading out of it was mounted into the sandbox at its target, for
+  `certify` as well as `review`. Such an entry is now skipped; a link that
+  stays inside, as pnpm's do, still mounts.
+
 - **The killing test is named, and a partly failing authored test is
   salvaged, in every language but Rust.** jest, vitest, mocha, `node --test`,
   rspec and minitest now record which test killed each mutant

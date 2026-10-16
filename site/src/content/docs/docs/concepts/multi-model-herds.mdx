@@ -1,50 +1,85 @@
 ---
 title: Multi-model herds
-description: Decorrelation by construction, role-based model policy, harness workers bringing their own auth, and model comparison.
+description: Decorrelation in the audit — what is enforced and what is only warned about — seats on any provider or on a subscription, comparing models, and the optional daemon's role policy.
 ---
 
 {/* SPDX-License-Identifier: Elastic-2.0 */}
-{/* Source: README.md multi-model + decorrelation + harness sections; internal/rolemodel/rolemodel.go, internal/brain/subagents.go, internal/brain/host.go, internal/advpool/driver.go */}
+{/* Source: README.md multi-model + decorrelation sections; docs/corral/agent-seats.md; internal/advpool/driver.go (CheckDecorrelation); cmd/corral/certify_local.go, certify_adversarial.go (vendor warnings); internal/rolemodel/rolemodel.go, internal/brain/subagents.go, internal/brain/host.go */}
 
-Multi-model isn't a comparison feature bolted onto certify — it's the mechanism
-that makes the verdict trustworthy. *Nemo iudex in causa sua*: the model that
-critiques a test suite is **forced** to differ from the model that wrote the
-exposing test — the run refuses to start where the roles collapse onto one
-model. A swarm that runs one LLM in every role gets parallelism with
-*correlated* blind spots, because the "reviewer" shares the "author's" failure
-modes when it's the same model underneath.
+Multi-model isn't a comparison feature bolted onto certify — it's part of what
+makes the verdict worth reading. *Nemo iudex in causa sua*: the model that
+critiques a test suite must differ from the model that wrote the exposing test,
+and the run refuses to start when those two seats name the same model. A herd
+that runs one LLM in every role gets parallelism with *correlated* blind spots,
+because the "reviewer" shares the "author's" failure modes when it's the same
+model underneath.
 
 ## Decorrelation across the audit roles
 
-`corral certify --local` runs distinct roles — mutant-generator, test-writer,
-test-critic — each with its own model assignment, and the critic role is
-**decorrelation-enforced**: it must differ from the model that authored the
-exposing test, checked at run start, not advised after the fact. There are no
-default models — you name every seat — but a single `ANTHROPIC_API_KEY` can
-satisfy the rule on its own (Sonnet writing and mutating, Haiku critiquing) —
-the weakest form of it, since two models from one lab share the most lineage;
-`--critic-model` plus a second vendor's key crosses a vendor boundary entirely. Bring Claude, Gemini, GPT, anything OpenAI-compatible, or a
-local model — no lock-in.
+`corral certify --local` and `--repo` run distinct roles — mutant-generator,
+test-writer, test-critic, and on `--repo` a goal-deriver — each with its own
+model. There are no default models: you name every seat. A single
+`ANTHROPIC_API_KEY` can satisfy the rule on its own (Sonnet writing and
+mutating, Haiku critiquing) — the weakest form of it, since two models from one
+lab share the most lineage; `--critic-model` plus a second vendor's key crosses
+a vendor boundary entirely. Bring Claude, Gemini, GPT, anything
+OpenAI-compatible, or a local model through Ollama.
 
-**What is enforced, what is advised, and what isn't checked.** Read the
-sentence above precisely: `CheckDecorrelation` (`internal/advpool/driver.go`)
-compares exactly one pair — `test-critic` against `test-writer` — by model
-name, and refuses the run if they match. That is the *entire* rule.
-Cross-vendor separation (Sonnet writing, Gemini critiquing) is **advised**,
-not enforced: two models from the same lab satisfy the check just as well,
-which is why it's called the weakest form above rather than a loophole. And
-the **mutant-generator is not part of the check at all** — it may share a
-model with the test-writer, and often does (naming one model for both
+**What is enforced, what is warned about, and what isn't checked.**
+`CheckDecorrelation` (`internal/advpool/driver.go`) compares exactly one pair —
+`test-critic` against `test-writer` — by name, and refuses the run if they
+match. That is the *entire* rule. Cross-vendor separation is **warned about,
+not enforced**: when the writer and critic are different models from one
+provider, the run says the critic is "an independent MODEL but not an
+independent VENDOR", and when every graded seat is one vendor the verdict says
+so. It warns rather than refuses so that an operator with one provider is not
+stranded. The **mutant-generator is not part of the check at all** — it may
+share a model with the test-writer, and often does (naming one model for both
 `--writer-model` and `--mutant-model` is a common, supported configuration).
-None of that is a defect in the verdict: the kill-rate that gates
-certification is decided by running your real suite against each mutant in a
-sandbox and reading the exit code, not by any model's opinion, so a
-correlated generator/writer pair cannot move the number it certifies on. It
-is a real gap between "decorrelated by construction" and what the code
-checks, and it's disclosed here rather than left for a reader to find in
-`driver.go`.
+None of that moves the verdict: the kill rate is decided by running your real
+suite against each mutant in a sandbox and reading the exit code, not by any
+model's opinion, so a correlated generator/writer pair cannot move the number
+it certifies on.
 
-## A role-model policy for the hosted brain
+## Seats on a subscription
+
+Any seat can be a coding-agent CLI instead of an API model — `claude-code`,
+`codex`, `antigravity`, or one you define as `CORRALAI_AGENT_<NAME>` — written
+as `<agent>` or `<agent>:<model>`. The agent brings its own login, so on a
+Pro/Max/Plus plan the seat has no per-token API bill:
+
+```bash
+corral demo --writer-model codex --mutant-model codex --critic-model claude-code
+```
+
+For the decorrelation rule, an unpinned agent counts as the agent itself, so
+`codex` writing and `claude-code` critiquing satisfy it. Built-in seats start
+cold — no settings, MCP servers, skills or session file — so a seat is graded on
+the audit's prompt alone. Metering, failure classification, what a seat can
+reach and how to define your own are in
+[agent seats](https://github.com/pdbethke/corralai/blob/main/docs/corral/agent-seats.md).
+
+## Comparing models on the same work
+
+- **Shadow seats.** `--shadow-model` names a challenger generator that attacks
+  every region a second time, and `--shadow-writer-model` a challenger writer
+  that attacks the same survivors (`--shadow-pool` / `--shadow-writer-pool` draw
+  one from a list). They are off unless named, recorded for comparison, and never
+  gate the verdict.
+- **`corral models rank`** ranks the models that have sat in each seat by
+  corral's own recorded evidence — a different metric per seat (the writer by
+  proven gaps per survivor attempted, the generator by valid mutants the dev
+  suite missed, the critic by precision against human adjudication). It is
+  disclosure, not selection: it writes no config and staffs no seat.
+
+## The optional daemon
+
+:::note[Frozen, and not read by any audit]
+The sections below describe the **brain**, corral's optional coordination
+daemon, which is frozen. No audit needs or reads it.
+:::
+
+### A role-model policy for the hosted brain
 
 The same idea, generalized: `CORRALAI_ROLE_MODELS` maps `role=backend:model`
 pairs so different roles in a running brain carry different models — e.g. a
@@ -56,7 +91,7 @@ default instead and the gap shows up as **drift** on `swarm_topology` rather
 than a blocked spawn. See [corral's env reference](/docs/cli/corral/) for the
 rest of the brain's environment variables.
 
-## Bring your own model, bring your own auth
+### Harness workers bring their own auth
 
 `corral-harness` workers bring their own model *and* their own auth — e.g. a
 Claude Code agent running on a Claude Pro/Max subscription instead of
@@ -68,7 +103,7 @@ wired to a local Ollama model by default (`MODEL_BACKEND=ollama`,
 (`MODEL_BACKEND=openai`, e.g. Gemini or OpenRouter). Neither binary is
 special-cased brain-side — both are ordinary MCP clients.
 
-## Comparing models on the same work
+### `model_comparison` across a mission
 
 `corral-admin analyze` can report on `model_comparison` across a mission's
 agents once more than one model has done work in it — findings raised (by
@@ -76,7 +111,7 @@ severity) and how they were resolved (addressed vs. dismissed vs. still
 open — the open count is derived as raised minus resolved, floored at zero),
 broken out per model, so an A-vs-B run isn't just a vibe.
 
-## The fleet view
+### The fleet view
 
 Beyond a single mission, `CORRALAI_MOTHERDUCK` turns on a DuckDB bridge that
 incrementally rolls the coordination audit/action stream from many brains

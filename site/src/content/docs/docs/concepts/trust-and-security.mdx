@@ -1,12 +1,123 @@
 ---
 title: Trust & security
-description: The trust model, the human gate, observer tokens, delegation, and sandbox jails — with honest scope framing.
+description: What an audit trusts and what it does not — the offline jail, the one mode that touches your checkout, keys and seats, the critic that never gates, and the signed ledger — plus the optional daemon's human gate.
 ---
 
 {/* SPDX-License-Identifier: Elastic-2.0 */}
-{/* Source: docs/DESIGN.md P9 + security model; docs/superpowers/specs/2026-07-03-human-gate-design.md; README.md security model section; internal/brain/identity.go, internal/sandbox */}
+{/* Source: SECURITY.md; AGENTS.md ("Where corral writes"); docs/corral/agent-seats.md; internal/sandbox, internal/adequacy, internal/auditpush; for the daemon: internal/brain/identity.go, internal/egress */}
 
-## The human gate
+corral audits code it did not write, so it **runs untrusted code by design**:
+your test suite against deliberately broken copies of your code, tests a model
+wrote, and, in `corral review`, reproduction scripts a model wrote. A model can
+also be steered by text inside the code it reads. The posture starts from that:
+**nothing a model says is trusted, and nothing a model wrote runs unconfined
+unless you choose that.** A verdict is decided by execution, and every result is
+signed. [`SECURITY.md`](https://github.com/pdbethke/corralai/blob/main/SECURITY.md)
+is the full statement; this page is the tour.
+
+## The jail
+
+By default corral never writes to your repository. `certify --local` and
+`certify --repo` copy the tree into a disposable sandbox — `bwrap` on Linux,
+`--jail container` (docker or podman) where bwrap cannot run, `sandbox-exec` on
+macOS — and every mutant is applied to that copy. There is no unsandboxed option
+on this path: if no sandbox can start, the run refuses.
+
+- **Offline.** The sandbox has no network. The one exception is vendoring a
+  project whose dependencies live outside the tree (`go mod vendor`,
+  `cargo vendor`): that step runs in a throwaway copy, inside the sandbox, with
+  network for that step only — never on the host, because the package manager
+  reads configuration the repository controls.
+- **Read-only dependencies.** `node_modules`, `vendor`, `.venv`, `venv` and
+  `.bundle` are bound in read-only rather than copied (macOS `sandbox-exec` cannot
+  relocate a directory, so there they are copied).
+- **No keys.** Model keys are removed from the environment of everything corral
+  runs to grade your code.
+- **Only `/usr` and the checkout.** Your home directory is not visible, which is
+  why a toolchain installed there is not either.
+
+## The one mode that touches your checkout
+
+`certify --repo --substrate workspace` runs on your real checkout instead of a
+copy. It is opt-in, and correct where the caller already is the isolation
+boundary — an ephemeral CI runner, which is why the GitHub Action passes it.
+Writes go through a rooted handle so a symlink cannot escape the repository,
+originals are journaled, files that did not exist are removed rather than left
+behind, and restores run on a failing command, a timeout, a panic and an
+interrupt (SIGINT/SIGTERM). **The residual risk, stated exactly:** a process
+killed outright — kill -9, out of memory, a runner reclaimed mid-step — can
+leave a mutant behind, and nothing detects it. Use it on a runner, a scratch
+clone, or a tree with no uncommitted work.
+
+`corral review` runs a reviewer's reproduction scripts in the same offline
+sandbox by default, with `--substrate workspace` as the same opt-in for a CI
+runner.
+
+## Why a hijacked model cannot change a verdict
+
+- **The kill rate is your suite's exit code**, run against each planted fault.
+  No model reports it, so no injected instruction can raise it.
+- **A proven gap is execution too:** a written test counts only if it fails with
+  the fault in and passes on your real code, both run.
+- **The critic is advisory.** Its opinion is recorded as unverified and never
+  moves a status. Its answer is parsed strictly, so it can say only *sound*,
+  *vacuous* or *dead check*, and where corral can run one test alone, the claim
+  is checked by execution.
+- **Review claims are demoted unless their script reproduces**, and a second
+  seat tries to refute what stands.
+- **The critic must be a different model from the writer.** That is the one
+  decorrelation rule enforced; corral warns when every graded seat is one
+  vendor, and does not refuse.
+
+## Keys and seats
+
+- **There are no default models.** Every seat is one you named; a run with an
+  unnamed seat is refused before any sandbox, store or spend.
+- **Keys** come from the environment or the keystore (`corral secret`: OS
+  keyring, then an age-encrypted file; `set` reads stdin, never argv).
+- **Seats start cold.** The built-in `claude-code` seat loads no settings, MCP
+  servers, skills or session file, so an audit never sees your own `CLAUDE.md` or
+  memory, and no audit reads shared memory or skills.
+- **An agent seat is confined only as far as its CLI allows.** `claude-code`
+  gets no tools in certify; `codex`'s `--sandbox read-only` stops writes, not
+  reads, so it can still read the host. The CLI inherits corral's environment,
+  so an exported vendor API key reaches it and may be billed. A certify prompt
+  carries the audited source, which can carry text aimed at a model: audit code
+  you are willing to show a coding agent running as you. See
+  [agent seats](https://github.com/pdbethke/corralai/blob/main/docs/corral/agent-seats.md).
+- **A run spends money.** `--max-tokens` caps a run's tokens across every seat.
+  In the GitHub Action, a pull request from a fork runs with your key unless you
+  require approval for fork workflows.
+
+## The record
+
+- Every `certify --repo` and `corral review` run writes a **signed (Ed25519),
+  hash-linked** entry to a ledger directory — by default `.corral/ledger`, and in
+  CI the orphan branch `corral/ledger`. An edited, removed or re-ordered entry
+  breaks the chain, and `corral ledger verify --pub <key>` names it.
+- `certify --repo --attest --transparency` logs the signed statement to Sigstore
+  **Rekor**, a public, append-only log, so a record can be checked by someone who
+  trusts neither you nor us.
+- **A record's own embedded key is never a trust anchor.** `corral certify verify`
+  takes the key from you (`--pubkey`), and refuses an unanchored record unless you
+  pass `--allow-unanchored`. See [Verify a record](/docs/verify-a-record/).
+
+## Honest scope
+
+corral measures whether a suite catches planted faults and proves the gaps it
+can; it does not guarantee the correctness of your code, and it does not call an
+unproven survivor a bug. It does not make a model immune to instructions in the
+code it reads — the control is that no model's word decides a verdict.
+
+## The optional daemon
+
+:::note[Frozen, and not read by any audit]
+The rest of this page describes the **brain**, corral's optional coordination
+daemon. No audit needs or reads it. Its full model — containment of a herd that
+can be hijacked, and forensics — is in `SECURITY.md`.
+:::
+
+### The human gate
 
 Nothing that changes what a future audit run does — a memory promotion, a
 skill proposal, a fleet-published skill, a promoted control, a superuser
@@ -29,7 +140,7 @@ names itself `corral-agent` at the MCP handshake, or that calls
 does), is marked a worker for that session's life and refused at the same
 gates — workers propose, the operator disposes.
 
-## Delegation, and its documented limit
+### Delegation, and its documented limit
 
 An agent can spawn an out-of-process subagent with a scoped, TTL-bound
 delegation token: the subagent acts under its own identity, accountability
@@ -41,7 +152,7 @@ spawn mode that actually matters for autonomous workers. This is a disclosed
 limitation, not a hidden gap: it's why the human gate is described as
 per-session enforcement, not per-agent.
 
-## Observer tokens
+### Observer tokens
 
 A **read-only observer token**, minted via `mint_observer` (or
 `corral-admin mint-observer`), grants view-only access to a brain's live
@@ -52,16 +163,16 @@ via the brain's own principal store, seeded day-0 from
 `CORRALAI_ALLOWED_PRINCIPALS`/`CORRALAI_ADMIN_PRINCIPALS` and canonical in the
 database after.
 
-## Sandbox jails
+### Sandbox jails
 
-Agent-executed commands run inside a sandbox boundary (`internal/sandbox`) —
+The daemon's agent-executed commands run inside the same sandbox boundary (`internal/sandbox`) —
 a `bwrap` namespace jail on Linux, workspace-confined with secret-free env —
 rather than directly against the operator's own filesystem. The demo's
 `CLOBBER=1` mode (see [claims & leases](/docs/concepts/claims-and-leases/))
 still runs inside this same sandbox; it only disables coordination claims,
 not the sandbox itself.
 
-## Egress scan
+### Egress scan
 
 Before the brain pushes a mission's branch and opens a pull request, it scans the
 cumulative changed files for problems the herd must not ship (`internal/egress`).
@@ -71,12 +182,6 @@ an operator intervenes. New or vulnerable dependencies and license conflicts are
 flagged as advisory findings. This is the last brain-side checkpoint before code
 leaves for *any* forge — the forge-agnostic floor beneath GitHub's own secret
 scanning, which self-hosted Gitea and GitLab don't get. Containment runs both
-ways: the [jail](#sandbox-jails) bounds what an agent can *do*; the egress scan
+ways: the jail bounds what an agent can *do*; the egress scan
 vets what it can *ship*.
 
-## Honest scope
-
-Corralai coordinates agents and enforces process gates — it does not itself
-guarantee the correctness of any given agent's code, model output, or
-judgment. The verify gate, findings, and human review exist because of that
-limit, not instead of it.

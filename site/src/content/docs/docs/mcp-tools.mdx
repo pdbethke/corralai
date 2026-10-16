@@ -1,6 +1,6 @@
 ---
 title: MCP tools reference
-description: The brain is an MCP server — certify, the gates, and the herd doing audit work all reach it through these tools. Grouped by what they do.
+description: The optional daemon's MCP server — the tools its herd, gates and operators call, grouped by what they do. Not used by certify --local, --repo or the Action; for audit findings over MCP, see corral mcp.
 ---
 
 {/* SPDX-License-Identifier: Elastic-2.0 */}
@@ -12,8 +12,14 @@ description: The brain is an MCP server — certify, the gates, and the herd doi
     artifacts.go, browser.go, thought.go, activity.go, tasks.go, missions.go).
     Descriptions paraphrase each tool's own registered Description. */}
 
-:::note[The brain — optional, and not read by any audit]
-This page describes the **brain**, corral's optional coordination daemon. Nothing on it is required for a verdict: `corral certify`, the GitHub Action, `verify`, `ui`, `seal` and `scans` never contact a brain. And nothing on it is read by an audit — an audit's prompts are built from the goal, the code and its symbols, never from shared memory, skills or a prior run. See [the brain, and what it is not](https://github.com/pdbethke/corralai/blob/main/docs/corral/brain.md).
+:::note[The optional daemon — frozen, and not read by any audit]
+This page describes the **brain**, corral's optional coordination daemon. It is frozen: shipped and supported, but no longer developed and not on the path an audit takes. Nothing on it is required for a verdict: `corral certify --local` and `--repo`, `corral review`, the GitHub Action, `verify`, `ui`, `seal` and `scans` never contact a brain. And nothing on it is read by an audit — an audit's prompts are built from the goal, the code and its symbols, never from the daemon's shared memory or skills. See [the brain, and what it is not](https://github.com/pdbethke/corralai/blob/main/docs/corral/brain.md).
+:::
+
+:::tip[Looking for audit findings over MCP?]
+That is `corral mcp`, not this page: a read-only MCP server on stdin/stdout over
+the local findings store `corral certify --local` writes, so an editor or agent
+can read what past audits found. No brain, no writes, no network listener.
 :::
 
 The corral brain is **MCP-native**: `corral` serves `/mcp/` (and `/healthz`) on

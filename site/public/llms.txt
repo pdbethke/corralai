@@ -1,32 +1,33 @@
-# Corralai
+# corral
 
-> A headless "brain" orchestrates a herd of AI agents across any model — mix local and frontier in one mission — to plan, build, verify, and re-plan real software missions behind real fences, human-gated. Every run is recorded and replayable.
+> corral audits whether a test suite actually tests anything. A model plants deliberate, goal-violating faults in your code, your project's own test command runs against each one in an offline sandbox, and the kill rate is what execution measured, never what a model reported. For each fault your tests miss, a test-writer model writes a test that catches it and corral runs it to prove so: the proven missing tests are handed back to you, and every verdict is recorded in a signed, hash-linked ledger.
 
-Corralai is a Go multi-agent orchestrator (source-available, Elastic License 2.0). The load-bearing idea: correctness is certified by **execution, not judgment** — the brain runs the verify command itself in a jail and reads the real exit code; anything ambiguous goes to a **human gate**. Agents run credential-less in bubblewrap jails, and the only way work leaves the jail is a reviewed pull request. It is v0.1, solo-maintained, and moving fast.
+corral is a Go CLI (source-available, Elastic License 2.0), solo-maintained. It audits; it never builds or edits your code. It has no default models: you name every seat (any API provider, a local model through Ollama, or a coding-agent CLI such as `claude-code` or `codex` running on its own subscription login). A second, different model critiques the suite, and its opinion is advisory: it never gates a verdict. Languages: Go, Python, Ruby, JavaScript, TypeScript, PHP and Rust; what each runner supports is on the language-support page. An optional daemon (the "brain") exists, is frozen, and is not used or read by any audit.
+
+First run: `corral certify --repo . --dry-run` lists what corral can audit (no key, no sandbox, no cost); `corral doctor` checks sandbox, toolchain and keys for free; then `corral certify --repo . --top 3 --max-tokens 3000000 --writer-model <m> --mutant-model <m> --derive-model <m> --critic-model <m> -- <your test command>`.
 
 ## Docs
-- [Getting started](https://corralai.dev/docs/getting-started/): install, your first mission, the key-free local demo
-- [Running it](https://corralai.dev/docs/running-it/): dev vs auth-on, the demo profiles, the verify-gate sandbox setup, deploying behind a tunnel
-- [Configuration](https://corralai.dev/docs/configuration/): environment variables and knobs
-- [MCP tools reference](https://corralai.dev/docs/mcp-tools/): the brain's Model Context Protocol tool surface
+- [How it works](https://corralai.dev/docs/how-it-works/): the audit, the review and the ledger, step by step
+- [Getting started](https://corralai.dev/docs/getting-started/): install, a first audit, subscription agent seats, Python virtualenvs, Rust, the sandbox traps
+- [Your first audit, in detail](https://corralai.dev/docs/first-audit/): one certify --local run end to end
+- [The GitHub Action](https://corralai.dev/docs/github-action/): an audit on every pull request, with a merge gate
+- [On an internal forge](https://corralai.dev/docs/internal-forge/): the same recipe on GitLab, Gitea and others
+- [Verify a record yourself](https://corralai.dev/docs/verify-a-record/): check a published verdict offline
+- [Mutants, survivors, kill rates](https://corralai.dev/docs/concepts/mutation-testing/): the vocabulary, and how this differs from classical mutation testing
+- [Multi-model herds](https://corralai.dev/docs/concepts/multi-model-herds/): what decorrelation is enforced, seats on a subscription, comparing models
+- [Trust & security](https://corralai.dev/docs/concepts/trust-and-security/): the offline jail, the one mode that touches your checkout, keys and seats, the signed ledger
+- [The record](https://corralai.dev/docs/warehouse/): the ledger branch, DuckDB, Rekor and MotherDuck
+- [Configuration](https://corralai.dev/docs/configuration/): seats, keys, agent seats, the sandbox, signing and the cache
+- [Language support](https://corralai.dev/docs/language-support/): every language and runner, generated from the code's own table
 - [CLI reference](https://corralai.dev/docs/cli/corral/): every binary's flags, generated from its own -h output
-- [Limitations & roadmap](https://corralai.dev/docs/limitations/): what v0.1 does, and what it deliberately does not claim
-
-## Concepts
-- [Mission lifecycle](https://corralai.dev/docs/concepts/mission-lifecycle/): directive → plan → build → verify → re-plan → converge
-- [The task queue + verify gate](https://corralai.dev/docs/concepts/queue-and-verify/): the deterministic, execution-based gate
-- [Claims & leases](https://corralai.dev/docs/concepts/claims-and-leases/): how the herd coordinates work without collisions
-- [Memory tiers + the learning loop](https://corralai.dev/docs/concepts/memory-and-learning-loop/): findings become human-approved skills
-- [Mission history + replay](https://corralai.dev/docs/concepts/history-and-replay/): every run recorded and scrubbable
-- [Multi-model herds](https://corralai.dev/docs/concepts/multi-model-herds/): mix local and frontier models in one mission
-- [The knowledge corpus](https://corralai.dev/docs/concepts/knowledge-corpus/): bring-your-own reference RAG
-- [Trust & security](https://corralai.dev/docs/concepts/trust-and-security/): jails, the deterministic gate, the human gate, and content fencing
+- [Limitations & roadmap](https://corralai.dev/docs/limitations/): what it does today, its current limits, and what it does not claim
 
 ## Field notes
-- [Why we built a brain, not a bot](https://corralai.dev/field-notes/why-we-built-it/): the contain / certify / query thesis, and why it sits on one queryable ledger
-- [Fugu, and the knife it leaves unwashed](https://corralai.dev/field-notes/fugu/): on Sakana's Fugu orchestrator and the containment seam it leaves open
-- [We caught our own gate cheating](https://corralai.dev/field-notes/we-caught-our-own-gate-cheating/): finding and fixing a self-certification bug in the open
+- [The first Rust audit](https://corralai.dev/field-notes/the-first-rust-audit/): one file of Warp's fuzzy matcher, the faults its tests missed, and the tests corral proved
+- [The auditor never builds](https://corralai.dev/field-notes/the-auditor-never-builds/): why corral audits and does not write the code it judges
+- [A ledger, not a log](https://corralai.dev/field-notes/a-ledger-not-a-log/): verdicts as signed, hash-linked files on a git branch
 
 ## More
 - [Source on GitHub](https://github.com/pdbethke/corralai): the code, Elastic License 2.0
-- [Recordings](https://corralai.dev/recordings/): replayable golden runs of real missions
+- [Recordings](https://corralai.dev/recordings/): replayable tapes of real audits
+- [The public record](https://corralai.dev/ledger/): corral's own ledger, entry by entry

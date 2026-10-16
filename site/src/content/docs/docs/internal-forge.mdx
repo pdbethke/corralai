@@ -70,7 +70,7 @@ cd .corral-ledger
 git add -A && git -c user.name=corral -c user.email=corral@noreply commit -qm "corral: $COMMIT_SHA" || exit "$code"
 for i in 1 2 3; do
   git push origin HEAD:corral/ledger && exit "$code"
-  ours=$(git diff --name-only HEAD~1 HEAD -- scans/ | head -1)
+  ours=$(git diff-tree --no-commit-id --name-only -r --root HEAD -- scans/ | head -1)
   cp "$ours" /tmp/entry.json.gz
   git fetch origin corral/ledger && git reset -q --hard origin/corral/ledger
   corral ledger append /tmp/entry.json.gz . && git add -A \
@@ -90,9 +90,14 @@ repository's record.
 `write_repository` (masked variable `CORRAL_LEDGER_TOKEN`); and the
 merge-request target is `CI_MERGE_REQUEST_TARGET_BRANCH_NAME`.
 
+The job's image needs Go (to install corral) **and** the project's own test
+toolchain, because `--substrate workspace` runs your suite on the runner itself.
+`golang:1.26` fits a Go project; for the recipe's `pytest -q`, use an image that
+carries Python and pytest and install Go into it, or the other way round.
+
 ```yaml
 corral:
-  image: golang:1.26
+  image: golang:1.26   # plus your project's toolchain — see above
   variables:
     GIT_DEPTH: 0
     # CORRALAI_CERTIFY_KEY (hex seed), CORRAL_LEDGER_TOKEN, GEMINI_API_KEY and

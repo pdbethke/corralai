@@ -3,8 +3,8 @@ title: Skills
 description: The tab that shows the fleet's shared skills — the versioned artifacts corral sync pulls to every member.
 ---
 
-:::note[The brain — optional, and not read by any audit]
-This page describes the **brain**, corral's optional coordination daemon. Nothing on it is required for a verdict: `corral certify`, the GitHub Action, `verify`, `ui`, `seal` and `scans` never contact a brain. And nothing on it is read by an audit — an audit's prompts are built from the goal, the code and its symbols, never from shared memory, skills or a prior run. See [the brain, and what it is not](https://github.com/pdbethke/corralai/blob/main/docs/corral/brain.md).
+:::note[The optional daemon — frozen, and not read by any audit]
+This page describes the **brain**, corral's optional coordination daemon. It is frozen: shipped and supported, but no longer developed and not on the path an audit takes. Nothing on it is required for a verdict: `corral certify --local` and `--repo`, `corral review`, the GitHub Action, `verify`, `ui`, `seal` and `scans` never contact a brain. And nothing on it is read by an audit — an audit's prompts are built from the goal, the code and its symbols, never from the daemon's shared memory or skills. See [the brain, and what it is not](https://github.com/pdbethke/corralai/blob/main/docs/corral/brain.md).
 :::
 
 The Skills tab lists the fleet's shared skills — "we share skills, not just
@@ -15,7 +15,8 @@ synced member *can* use), not any one agent's private equip list — the same
 honest scope as the fleet-skills section of the agent inspector.
 
 A skill lands here the same way a memory entry does: an approved learning-loop
-proposal writes it to the artifact store, and `corral sync` carries it to
-every member of the fleet. See [memory tiers and the learning
+proposal writes it to the artifact store, and each member of the fleet pulls
+it from there through the brain's `sync_pull` MCP tool (there is no
+`corral sync` command). See [memory tiers and the learning
 loop](/docs/concepts/memory-and-learning-loop/) for how a finding becomes a
 skill in the first place.

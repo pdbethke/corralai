@@ -69,10 +69,12 @@ This is corral breaking your code on purpose and checking whether your tests
 notice.
 
 1. **It reads the repository, not a model's summary of it.** It lists the
-   files, pairs each with the tests that reach it, and — if you ask — runs
-   your suite once with coverage on, so it knows which tests actually
-   execute which file. A file no test reaches is reported as uncovered, never
-   scored.
+   files and pairs each with its tests. On Python it also runs your suite
+   once with coverage on, by default, so it knows which tests actually execute
+   which file and grades each file against those; `--preflight` runs the same
+   coverage pass in the other languages (except Rust) to report the files no
+   test executes. A file coverage shows no test reaches is reported as
+   uncovered, never scored.
 2. **A model derives the goals.** For each file under audit, one model
    writes down what the file promises — the guarantees a change must not
    break. You can hand it the goals instead. Either way they are written into
@@ -103,14 +105,17 @@ notice.
 7. **A third model critiques, and never gates.** A critic — required by rule
    to be a different model from the writer — reads your own test file next to
    the code and returns a verdict per test: sound, vacuous (it could never
-   fail), or a dead check. For Go and Python it is handed every test name and
-   must judge each one. When execution shows a flagged test did
+   fail), or a dead check. For Go, Python, PHP and Rust it is handed every test
+   name and must judge each one. When execution shows a flagged test did
    kill a fault, the critic's finding is refuted on the record. The critic's
    opinion is advisory; it changes no number.
-8. **The verdict is signed.** Kill rate, survivors, proven gaps, which seat
-   did what, the models by name, the wall clock — per file, at a commit —
-   as an in-toto statement. With `--transparency` the signed statement is
-   also entered into Sigstore's public log, and the receipt number is on the
+8. **The verdict is recorded, and signed when you have a key.** Kill rate,
+   survivors, proven gaps, which seat did what, the models by name, the wall
+   clock — per file, at a commit — go into the ledger entry, signed with your
+   certify key when one is configured (`certify --local` creates one on first
+   use). `--attest` also writes the scan as an in-toto statement, signed into a
+   DSSE envelope when a key is configured. With `--transparency` that signed
+   statement is also entered into Sigstore's public log, and the receipt number is on the
    record: a stranger can verify it against the log, not against you.
 9. **One entry goes to the ledger** (below). If you set a threshold — a
    minimum kill rate, a maximum number of proven gaps — the run exits
@@ -134,8 +139,9 @@ second stranger checking the first.
    *reproduced* must include a shell script that exits 0 only if the defect
    is demonstrated. A finding it cannot script is declared *code-read* or a
    *hypothesis*, and stays labelled that way.
-3. **Corral runs the scripts, not the reviewer.** Each script runs in a
-   fresh worktree at the commit. A script that exits 0 keeps its claim at
+3. **Corral runs the scripts, not the reviewer.** Each script runs on a fresh
+   copy of the tree at the commit, in the same offline sandbox an audit uses
+   (`--substrate workspace` runs it on the checkout instead, for a CI runner). A script that exits 0 keeps its claim at
    *reproduced*. A script that does not is **demoted** to code-read, on the
    record, with its output. A script the harness could not run at all is
    marked *not run* and counts for nothing — it is not charged to the

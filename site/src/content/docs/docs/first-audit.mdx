@@ -8,8 +8,9 @@ description: A real corral certify --local verdict, end to end — the code, the
 This walks one real `corral certify --local` run start to finish, using the
 same password-validator example published in the field note
 ["Terribly sorry to trouble you… but your tests, um, well. They suck, really"](/field-notes/your-tests-suck/).
-Nothing here is staged for the docs — it's the actual shape of a verdict this
-gate produced.
+The code, the test and the command are the real ones; the verdict lines further
+down are in the format the run prints, with illustrative numbers — your run draws
+its own mutants and will score differently.
 
 ## The code under review
 
@@ -82,10 +83,16 @@ corral certify --local \
 is yours to name, from whichever provider you hold a key for; the only rule is that
 the test-critic must differ from the test-writer.
 
-`--code`/`--test` may be absolute or relative paths. On Ubuntu 24.04, if `bwrap`
-won't start (apparmor disables unprivileged user namespaces by default), add
-`--jail container` and `export CORRALAI_EXEC_IMAGE=golang:1.26` to run the
-jailed check in Docker instead — no sudo required.
+No API key? Any seat can be a coding-agent CLI on its own subscription login
+instead: `--writer-model codex --mutant-model codex --critic-model claude-code`
+(see [Getting started](/docs/getting-started/)).
+
+`--code`/`--test` may be absolute or relative paths. On Ubuntu 24.04 and later, if
+`bwrap` won't start (AppArmor restricts unprivileged user namespaces by default),
+load the profile Ubuntu ships for it, as the error message and
+[Getting started](/docs/getting-started/) describe — or add `--jail container` and
+`export CORRALAI_EXEC_IMAGE=golang:1.26` to run the jailed check in Docker
+instead, with no sudo required.
 
 ## What happens inside the jail
 
@@ -120,7 +127,8 @@ jailed check in Docker instead — no sudo required.
    handed back for you to add.
 5. **Test-critic.** A decorrelated critic model reads the dev's test file next
    to the code and returns a verdict per test (sound, vacuous, or a dead check);
-   for Go and Python it is handed every test name and must judge each one. It
+   for Go, Python, PHP and Rust it is handed every test name and must judge each
+   one. It
    flags what it would have said in review: the suite never tries an
    *invalid* password that's the right length. Its findings are carried as an
    **unverified** second opinion — advisory, never gating the signed verdict,
@@ -141,11 +149,13 @@ exits 1 with the provider's error and no verdict.
 ## The verdict
 
 ```
-dev_kill_rate = 0.75   (killed 6 of 8 mutants, 2 survived)
-status: needs-review   (below the 0.8 certify bar)
+  status:        NEEDS-REVIEW (dev suite killed 6/8 mutants)
+  dev_kill_rate: 0.75
+  95% interval:  0.41–0.93 (n=8)
+  survivors:     2
 ```
 
-Below the bar, so the run routes to a human instead of auto-certifying — the
+The certify bar is a kill rate of 0.8. This one is below it, so the run routes to a human instead of auto-certifying — the
 honest failure mode. The kill-rate is measured, not asserted: it's mutation
 testing executed in the sandbox, never the model's self-report of how good the
 test is.
@@ -171,14 +181,16 @@ that weaker "signed-by-you, not third-party-witnessed" trust explicitly.
 
 Point `--code` and `--test` at a real file and its test, describe the
 guarantee in `--goal`, and pass whatever check command actually exercises it
-(`go test ./...`, `pytest`, `npm test`, …). See
+(`go test ./...`, `.venv/bin/python -m pytest`, `npm test`, `cargo test`, …).
+For anything with imports, add `--repo-dir .`. See
 [Getting started](/docs/getting-started/) for the jail-visibility gotcha
-(system-installed toolchain, not a `--user`/snap install) and the
-Ubuntu-apparmor fix if `bwrap` won't start.
+(system-installed toolchain, not a `--user`/snap install), the in-project
+virtualenv for Python, the Rust rules and the Ubuntu AppArmor fix if `bwrap`
+won't start.
 
 ## Reproduce a published audit yourself
 
-The two `sportspicker-core` tapes on the [recordings
+The `sportspicker-core` tapes on the [recordings
 page](/recordings/) are the easiest published runs to reproduce, because the
 subject is a public, zero-dependency library and the audit needs nothing but
 `pytest`. It scores sports pick'em contests, and the guarantee it has to defend

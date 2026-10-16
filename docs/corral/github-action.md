@@ -190,8 +190,8 @@ need before the corral step:
 
 For JavaScript, use `actions/setup-node`, run `npm ci`, and set
 `test-command: "npm test"`. corral reads which runner that runs from
-`package.json`'s `scripts.test`, and when the script is one command (`jest`,
-`vitest run`) it gets that runner's fail-fast flag and one-test runs; a
+`package.json`'s `scripts.test`, and when the script is one jest or mocha
+command it gets that runner's fail-fast flag, test list and one-test runs; a
 compound script (`jest && eslint .`) is graded by exit code alone. **On a public repository, a pull request from a
 fork spends your model key** unless you require approval for fork workflows;
 see [who pays](#who-pays-and-how-not-to-pay-for-a-strangers-pull-request)

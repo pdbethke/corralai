@@ -24,7 +24,10 @@ type Invocation struct {
 	// Runner is the row ID an operator named with --runner; "" = detect.
 	Runner string
 	// Script is the package script's words when Argv runs one (`npm test`
-	// reads package.json scripts.test), nil otherwise.
+	// reads package.json scripts.test), nil otherwise. Non-nil and EMPTY
+	// means Argv runs a package script corral did not read — no manifest, a
+	// script of several commands, a launcher flag pointing at another
+	// package — so nothing may be appended to it.
 	Script []string
 	// Pass is what the launcher needs before extra arguments to reach the
 	// script ("--" for npm, pnpm and composer; "" for yarn), and Narrow
@@ -102,8 +105,25 @@ func Resolve(p Plugin, repoDir string, argv []string, override string) (Invocati
 		}
 		inv.Runner, inv.From = override, "--runner"
 	}
+	if len(argv) == 0 {
+		return inv, nil
+	}
+	if _, isLauncher := launchers[filepath.Base(argv[0])]; !isLauncher {
+		return inv, nil
+	}
 	l, name, ok := launchedScript(repoDir, argv)
 	if !ok {
+		// A launcher running something corral cannot name as a script.
+		// `yarn jest` names its runner itself and is read as before;
+		// anything else (`composer --working-dir=pkg test`, `pnpm --filter
+		// web test`) runs a script corral has not read.
+		if _, named := namedRunner(p, argv); !named {
+			inv.Script = []string{}
+		}
+		return inv, nil
+	}
+	inv.Script = []string{} // until it is read
+	if launcherRedirected(argv) {
 		return inv, nil
 	}
 	src, ok := readScript(filepath.Join(repoDir, l.manifest), l.key, name)
@@ -120,6 +140,26 @@ func Resolve(p Plugin, repoDir string, argv []string, override string) (Invocati
 		inv.From = l.manifest + " scripts." + name
 	}
 	return inv, nil
+}
+
+// launcherRedirects are launcher options that run a script from ANOTHER
+// package's manifest than the one at the repository root (npm and pnpm
+// workspaces, yarn's --cwd, composer's --working-dir): the root's script is
+// not the one that runs.
+var launcherRedirects = []string{
+	"--workspace", "-w", "--workspaces", "-ws", "--prefix", "--include-workspace-root",
+	"--cwd", "--filter", "-F", "--recursive", "-r", "--dir", "-C", "--workspace-root",
+	"--working-dir", "-d",
+}
+
+// launcherRedirected reports whether argv carries a launcher redirect before
+// its "--" (after it, the words are the script's).
+func launcherRedirected(argv []string) bool {
+	head := argv[1:]
+	if i := slices.Index(head, "--"); i >= 0 {
+		head = head[:i]
+	}
+	return hasFlag(head, launcherRedirects...)
 }
 
 // launchedScript is the launcher argv runs and the script name it runs.
@@ -239,8 +279,12 @@ func (inv Invocation) shape(p Plugin, row func([]string) ([]string, bool)) ([]st
 	if inv.Script != nil && !inv.Narrow {
 		return nil, false
 	}
-	if inv.Runner != "" {
-		if r, named := namedRunner(p, words); !named || r.ID != inv.Runner {
+	// Through a script, or under --runner, the row must be one the words
+	// name: a script running pest or `php artisan test` is no phpunit, and
+	// phpunit's --list-tests must not reach it just because phpunit is
+	// PHP's Default row.
+	if inv.Script != nil || inv.Runner != "" {
+		if r, named := namedRunner(p, words); !named || (inv.Runner != "" && r.ID != inv.Runner) {
 			return nil, false
 		}
 	}
@@ -268,11 +312,14 @@ func (inv Invocation) passThrough(extra []string) []string {
 // Describe is what the scan line says about how the runner was found: ""
 // when nothing was resolved (the command named its runner, or no row did).
 func (inv Invocation) Describe(p Plugin) string {
-	if inv.From == "" {
+	if inv.From == "" && (inv.Script == nil || len(inv.Script) > 0) {
 		return ""
 	}
 	r, _ := RunnerFor(p, inv)
 	cmd := strings.Join(inv.Argv, " ")
+	if inv.Script != nil && len(inv.Script) == 0 {
+		return cmd + " runs a package script corral did not read, so it adds no arguments to it (no fail-fast, no test list, no one-test runs)"
+	}
 	if inv.Runner == "" {
 		if _, named := namedRunner(p, inv.Script); !named {
 			return cmd + " runs `" + strings.Join(inv.Script, " ") + "` (" + inv.From + "): no runner corral recognises in it, so it is graded by exit code with no runner-specific steps; --runner names one"

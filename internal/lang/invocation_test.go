@@ -152,9 +152,10 @@ func TestLaunchersAndTheirSeparators(t *testing.T) {
 	}
 }
 
-// Nothing to read is not an error: the row is detected from argv alone, and
-// the command answers exactly as it did before.
-func TestAnUnreadableScriptFallsBackToArgv(t *testing.T) {
+// Nothing to read is not an error, but it is not argv alone either: `npm
+// test` still runs a package script, one corral did not read, so nothing is
+// appended to it and the scan line says so.
+func TestAnUnreadableScriptGetsNoArguments(t *testing.T) {
 	for name, files := range map[string]map[string]string{
 		"no manifest":  {},
 		"no script":    {"package.json": `{"scripts": {"build": "tsc"}}`},
@@ -163,8 +164,11 @@ func TestAnUnreadableScriptFallsBackToArgv(t *testing.T) {
 		"empty script": {"package.json": `{"scripts": {"test": ""}}`},
 	} {
 		p, inv := resolve(t, "javascript", repoWith(t, files), []string{"npm", "test"}, "")
-		if inv.Script != nil || inv.From != "" {
-			t.Errorf("%s: resolved %+v", name, inv)
+		if inv.Script == nil || len(inv.Script) != 0 || inv.From != "" {
+			t.Errorf("%s: resolved %+v, want an unread script", name, inv)
+		}
+		if d := inv.Describe(p); !strings.Contains(d, "did not read") {
+			t.Errorf("%s: Describe = %q", name, d)
 		}
 		if _, ok := FailFastArgsFor(p, inv); ok {
 			t.Errorf("%s: npm test got fail-fast", name)
@@ -266,5 +270,36 @@ func TestResolveReadsRealManifests(t *testing.T) {
 	dir := repoWith(t, map[string]string{"composer.json": `{"name": "a/b", "minimum-stability": "dev", "require": {"php": ">=8.1"}, "scripts": {"test": "phpunit"}}`})
 	if _, inv := resolve(t, "php", dir, []string{"composer", "test"}, ""); inv.Script == nil {
 		t.Error("a composer.json with string and object siblings of scripts was not read")
+	}
+}
+
+// Once argv runs a package script, nothing is appended to it unless the
+// script was read and names a runner corral knows: not for a script naming
+// some other tool (pest, artisan), not for one corral could not read, and not
+// when a launcher flag points it at another package's manifest.
+func TestNothingIsAppendedToAScriptCorralDidNotRead(t *testing.T) {
+	for name, c := range map[string]struct {
+		lang  string
+		files map[string]string
+		argv  []string
+	}{
+		"unrecognised tool":    {"php", map[string]string{"composer.json": `{"scripts": {"test": "pest"}}`}, []string{"composer", "test"}},
+		"artisan":              {"php", map[string]string{"composer.json": `{"scripts": {"test": "php artisan test"}}`}, []string{"composer", "test"}},
+		"two-command array":    {"php", map[string]string{"composer.json": `{"scripts": {"test": ["phpunit", "phpstan"]}}`}, []string{"composer", "test"}},
+		"no manifest":          {"php", map[string]string{}, []string{"composer", "test"}},
+		"composer working-dir": {"php", map[string]string{"composer.json": `{"scripts": {"test": "phpunit"}}`}, []string{"composer", "--working-dir=pkg", "test"}},
+		"npm workspace":        {"javascript", map[string]string{"package.json": pkgJSON}, []string{"npm", "test", "--workspace=web"}},
+		"pnpm filter":          {"javascript", map[string]string{"package.json": pkgJSON}, []string{"pnpm", "--filter", "web", "test"}},
+	} {
+		p, inv := resolve(t, c.lang, repoWith(t, c.files), c.argv, "")
+		if cmd, ok := ListTestsCmd(p, inv, "tests/ATest.php"); ok {
+			t.Errorf("%s: list = %q", name, cmd)
+		}
+		if cmd, ok := SingleTestCmd(p, inv, "tests/ATest.php", "ATest::testA"); ok {
+			t.Errorf("%s: single = %q", name, cmd)
+		}
+		if args, ok := FailFastArgsFor(p, inv); ok {
+			t.Errorf("%s: fail-fast = %q", name, args)
+		}
 	}
 }

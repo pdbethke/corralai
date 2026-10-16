@@ -81,7 +81,13 @@ history of any release, `git log v0.3.4..v0.3.5`.
   overrides detection (ids are on the language-support page); a typo, or a
   runner of another language, is refused before anything is spent, and
   corral still runs the command as given. The coverage wrappers now take
-  their runner words from the runner table. Not covered: yarn 2 and later,
+  their runner words from the runner table. A script corral did not read (no
+  manifest, a Composer array of several commands, a workspace or
+  `--working-dir` flag pointing at another package) or one naming a tool it
+  does not know (`pest`, `php artisan test`) gets no arguments, and the run
+  says so. jest through npm, yarn and pnpm and PHPUnit through Composer were
+  each driven end to end (list, resolve, one test run). Not covered: yarn 2
+  and later, vitest through a script (its list rewrites the subcommand),
   a script that calls another script, Composer scripts starting with `@`,
   Makefiles, and a `runner` input on the GitHub Action.
 - **One-time cache miss.** `reposcan.VerdictGeneration` is now 26 (rc.23

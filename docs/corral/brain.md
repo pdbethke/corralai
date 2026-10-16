@@ -14,14 +14,18 @@ for all of it:
    skills and the learning loop's lessons are the brain's own state. An audit's
    prompts are built from the goal, the code and its symbols
    (`internal/testgen.GenerateMutantsPrompt`), and no `certify` path queries
-   memory, skills or a prior run's mutants. A lesson the brain has learned does
-   not change what corral plants or grades. Feeding the ledger back into an
-   audit — as a *disclosed* input on the verdict — is designed and not built
-   (see [`docs/design/adversarial-review.md`](../design/adversarial-review.md)).
+   memory or skills. A lesson the brain has learned does not change what corral
+   plants or grades. What an audit *can* read is its own ledger: `--prior`
+   on `certify --local` and `--repo` hands the generator what earlier runs
+   already planted, so it plants different faults, and `certify --repo` reads
+   its ledger directory as the prior by default. That is applied only to a
+   file whose bytes match exactly, and it is a *disclosed* input: the verdict,
+   the ledger entry and the signed statement carry `priorsApplied` and the
+   prior's digest. It comes from the ledger, never from the brain.
 
 The daemon is its own binary, **`corral-wrangler`** (`corral` with no
-subcommand still starts the same server for one release, then becomes a
-pointer), and still runs corralai's own instance; it is kept as the substrate for
+subcommand no longer starts it; it prints a pointer to `corral-wrangler serve`
+and exits 2), and still runs corralai's own instance; it is kept as the substrate for
 remote workers, a live console over a running herd, and the human-gated
 proposal loop. It is not the first thing to run, and it is not a moving part of
 the audit.
@@ -49,8 +53,9 @@ via the admin-only `start_adversarial_run` MCP tool (the flags are the ones in
 [the README](../../README.md#the-audit-flags)).
 
 The hosted brain runs the same sharded + shadow machinery via `start_adversarial_run`
-(`max_shards` default 8, ceilinged at 20 for a hosted run; `shadow_model` defaults on
-daemon-wide via `CORRALAI_ADVPOOL_SHADOW_MODEL`, `off` to disable; the run deadline is
+(`max_shards` default 8, ceilinged at 20 for a hosted run; `shadow_model` is off
+unless `CORRALAI_ADVPOOL_SHADOW_MODEL` names one daemon-wide, and `off` disables it
+per run; the run deadline is
 widened automatically when a shadow model is set, so shadow work can never force a
 timeout `needs-review`).
 
@@ -89,7 +94,7 @@ anything, and until it does, treat this as plumbing rather than a result.
   through the brain, so what one machine's herd learns, every machine's herd can
   *do* — but publishing to the fleet is superuser-only (a worker proposes, it
   can't publish).
-  Corralai ships a [`using-corralai`](skills/using-corralai/SKILL.md) skill that
+  Corralai ships a [`using-corralai`](../../skills/using-corralai/SKILL.md) skill that
   teaches any coding agent to drive the gate.
 - **Reference RAG** — upload your own grounding material (text · URLs · **PDFs**);
   chunked and vector-embedded (any OpenAI-compatible embedding endpoint) for agents to
@@ -216,7 +221,7 @@ CGO column honest.)
 | Binary | Role | CGO | Ships as |
 |--------|------|-----|----------|
 | **`corral-wrangler`** | the **brain** as its own binary — MCP coordination, the gates, task queue, memory, reference RAG, repo-work + multi-forge, the fleet oracle, embedded UI; owns the databases. `corral` with no subcommand exits with a pointer to it | yes | `deploy/demo/Dockerfile.brain` |
-| **`corral`** | the **audit CLI** — `certify`, `verify`, `scans`, `ui`, `seal`, `models rank`, `doctor`, `secret`. Carries the ledgers' DuckDB and the symbol index's tree-sitter, hence CGO | yes | `go install` |
+| **`corral`** | the **audit CLI** — `certify`, `review`, `verify`, `ledger`, `scans`, `ui`, `seal`, `models rank`, `brief`, `demo`, `doctor`, `mcp`, `state`, `secret` and more (`corral -h` lists them). Carries the ledgers' DuckDB and the symbol index's tree-sitter, hence CGO | yes | `go install` |
 | **`corral-agent`** | the reference **audit-role worker** — model-agnostic, claims an adversarial-audit role (mutant-generator / test-writer / test-critic) off the queue | no | `deploy/demo/Dockerfile.agent` (distroless) |
 | **`corral-observe`** | the **observer** — read-only credentialed window onto a brain's live UI | no | `deploy/observe/Dockerfile` (distroless) |
 | **`corral-admin`** | the **operator** — privileged live console plus command verbs over MCP | no | binary / `go install` |
@@ -261,10 +266,11 @@ corral-wrangler list                                                            
 
 A claim from the shell and a claim over the daemon's MCP `claim_task` are the
 same claim, because both open the same file (`$CORRALAI_DB`). The wrangler
-owns this SQLite — leases and presence, transient by nature; corral owns the
-DuckDB warehouse — the record. The review loop's seats will claim their work
-through these same verbs: a review claim is a file claim with a different
-reason.
+owns this SQLite — leases and presence, transient by nature. The record is
+not here: it is the ledger directory `corral certify` and `corral review`
+write (hash-linked JSON, signed when a certify key is configured), and DuckDB is the view over it. `corral
+review` shipped without the broker; its seats do not claim work through
+these verbs.
 
 ## Running the brain
 
@@ -277,5 +283,5 @@ Common knobs: `CORRALAI_OIDC_ISSUER`/`_AUDIENCE` (cross-machine auth) ·
 `CORRALAI_GIT_TOKEN` + `CORRALAI_FORGES` (repo-work / multi-forge) ·
 `CORRALAI_EMBED_URL` (reference RAG + vector search) · `CORRALAI_MOTHERDUCK` (fleet
 analytics + oracle) · `MODEL_BACKEND`/`OPENAI_BASE_URL` (bring your own model). See
-**[docs/DESIGN.md](docs/DESIGN.md)**.
+**[docs/DESIGN.md](../DESIGN.md)**.
 

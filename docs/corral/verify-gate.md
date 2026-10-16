@@ -57,7 +57,7 @@ not this page's mechanism. `Task.Verify` is set only on brain mission tasks;
 the adversarial pool's tasks (mutant-generator, test-writer, test-critic)
 never carry one (`internal/advpool/roles.go`'s `BuildDAG`), and
 `corral certify --local` / `--repo` never contact a brain at all. Their
-scoring is `adequacy.Score` (`internal/advpool/gate.go`): each mutant is
+scoring is `adequacy.Score` (`internal/adequacy/score.go`; the pool reaches it through `JailScorer` in `internal/advpool/gate.go`): each mutant is
 applied, the suite is executed in the jail (or the workspace substrate), and
 the exit code decides `killed`/`survived` in-process. The repo gate and the
 control gate run their check the same way, on the brain. Nothing in corral

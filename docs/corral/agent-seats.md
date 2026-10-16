@@ -22,7 +22,9 @@ refused, because it would reach the CLI as a flag.
 
 Every verb checks that the seat's CLI is installed when it resolves the seat,
 so a missing binary is refused before any jail, store or model call, naming
-the seat and the binary.
+the seat and the binary. A built-in definition is checked by the binary it
+runs (`claude`, `codex`, `agy`), even though `antigravity`'s is shell-wrapped;
+only an operator's own shell-wrapped definition proceeds unchecked.
 
 ## What was measured
 

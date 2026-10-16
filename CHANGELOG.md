@@ -11,6 +11,44 @@ history of any release, `git log v0.3.4..v0.3.5`.
 
 ## [Unreleased]
 
+- **The killing test is named, and a partly failing authored test is
+  salvaged, in every language but Rust.** jest, vitest, mocha, `node --test`,
+  rspec and minitest now record which test killed each mutant
+  (`killed_by`), read from the runner's own default output. And when a
+  test corral writes fails some of its cases on the unmutated code, those
+  eight runners (the six plus PHPUnit and `go test`) rerun it without the
+  failing cases and keep what the rest prove, as pytest already did, instead
+  of discarding the whole file. Each skips in its own way: `-t` with a
+  negative lookahead (jest, vitest), `--grep --invert` (mocha),
+  `--test-skip-pattern` (node 22.1 or later), `-E` (rspec-core 3.12 or
+  later), `--exclude` (minitest, only for `ruby <file>`), `--exclude-filter`
+  (PHPUnit 10 or later), `-skip` (Go 1.20 or later). An older runner rejects
+  the flag, so nothing is salvaged; a skip can drop more than the failing
+  cases (jest's `-t` ignores case; a failing Go subtest skips its parent;
+  a failing PHPUnit data set skips its method) but can never keep a failing
+  one in a passing rerun. A skip can also run MORE than the original
+  command did: rspec's `-E` replaces the project's tag exclusions
+  (`filter_run_excluding :slow` specs run again), and a command-line
+  `--grep` or `-t` replaces one set in a config file. So every mutant a
+  salvage kills is graded once more under the same command with the
+  project's own tests alone, and a kill they make there is not credited to
+  the authored test. Each was run against the real runner
+  (`scripts/capture-runner-fixtures.sh`); `node --test` was also run on
+  node 24, which prints its spec reporter where node 22 prints TAP, and
+  both are read. The salvage rerun is also built the
+  way a one-test run is, so it goes through `npm test`'s `--` and is refused
+  where the operator's command already filters by name; a pytest id
+  holding shell syntax is now quoted rather than handed to the shell. Not
+  covered: Rust (Phase 5), a test title holding the runner's own separator
+  (` › ` in jest, ` > ` in vitest), whose failure is then mislabelled and
+  not skipped, and a reporter other than the runner's default (for node,
+  other than TAP or spec).
+- **Fixed: a one-test `node --test` run could run every test.** node reads
+  its options only before the first file, and the flag that picks one test
+  was placed after the operator's paths, so with `node --test tests/` it was
+  ignored and every test ran; a kill was then credited to the one test a
+  critic named. The flags now go right after `--test`.
+
 - **A critic's "this test can never fail" claim is checked by execution on
   every run, and a refuted one leaves the count.** The named test runs alone
   against the run's mutants; if it kills one, the claim is false, and the

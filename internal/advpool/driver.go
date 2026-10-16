@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"github.com/pdbethke/corralai/internal/shadowpool"
 	"log"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -2049,8 +2050,8 @@ func killedFrom(rep adequacy.Report, mutants []adequacy.Mutant) []adequacy.Mutan
 // a run's one chance at salvage to record a zero, displacing a retry that
 // might have done better.
 //
-// Requires the test command's runner to name its failures and take a
-// deselect argument (lang.DeselectorFor), and the
+// Requires the test command's runner to name its failures (lang.DeselectorFor)
+// and to rerun without them through this command (lang.DeselectCmd), and the
 // Scorer to be able to report the failure output. Anything missing means no
 // salvage, never a guess: a wrong selector would deselect the wrong test and
 // silently narrow the exam, making the run look healthier while proving less.
@@ -2059,7 +2060,7 @@ func killedFrom(rep adequacy.Report, mutants []adequacy.Mutant) []adequacy.Mutan
 // deselect is arithmetic over the runner's output either way, and the scope
 // is the caller's to state rather than this function's to assume.
 func (d *Driver) salvageByDeselect(ctx context.Context, run *runState, writerTest string, rep adequacy.Report, survivors []adequacy.Mutant) (proven int, ids []string, deselected int, ok bool) {
-	failedTests, deselectArgs, canDeselect := golang.DeselectorFor(langFor(run.rs), run.rs.inv())
+	failedTests, canDeselect := golang.DeselectorFor(langFor(run.rs), run.rs.inv())
 	if !canDeselect {
 		return 0, nil, 0, false
 	}
@@ -2068,12 +2069,12 @@ func (d *Driver) salvageByDeselect(ctx context.Context, run *runState, writerTes
 	if len(failing) == 0 {
 		return 0, nil, 0, false
 	}
-	args := deselectArgs(failing)
-	if len(args) == 0 {
+	argv, ok := golang.DeselectCmd(langFor(run.rs), run.rs.inv(), failing)
+	if !ok {
 		return 0, nil, 0, false
 	}
 
-	cmd := strings.TrimSpace(run.rs.TestCmd + " " + strings.Join(args, " "))
+	cmd := adequacy.ShellJoin(argv)
 	salvaged, serr := scoreAuthored(ctx, d.Scorer, run.rs.CodePath, run.rs.Code, writerTest, survivors, cmd)
 	if serr != nil {
 		// A failed salvage attempt is not a failed run: fall back to the
@@ -2088,7 +2089,42 @@ func (d *Driver) salvageByDeselect(ctx context.Context, run *runState, writerTes
 	if len(killed) == 0 {
 		return 0, nil, 0, false
 	}
+	killed, ok = notKilledByTheDevSuite(ctx, d.Scorer, run.rs, survivors, killed, cmd)
+	if !ok || len(killed) == 0 {
+		return 0, nil, 0, false
+	}
 	return len(killed), killed, len(failing), true
+}
+
+// notKilledByTheDevSuite is killed less every mutant the dev suite ALONE kills
+// under the salvage command. The salvage rerun is not the command the dev
+// pass ran, and it can run more than it did: rspec's -E replaces the
+// operator's tag exclusions (measured on rspec-core 3.13: a spec under
+// filter_run_excluding :slow ran), a CLI --grep replaces one set in .mocharc,
+// -t replaces vitest's configured testNamePattern. A spec the dev pass never
+// ran would then kill a survivor and the kill would be credited to the
+// authored test — a proof nobody made. Grading the kills again without the
+// authored test catches that for every runner at once, at one extra run per
+// salvage, rather than one runner's widening at a time. A control that cannot
+// grade (an error, a baseline that fails) credits nothing.
+func notKilledByTheDevSuite(ctx context.Context, s Scorer, rs RunSpec, survivors []adequacy.Mutant, killed []string, cmd string) ([]string, bool) {
+	var mutants []adequacy.Mutant
+	for _, m := range survivors {
+		if slices.Contains(killed, m.ID) {
+			mutants = append(mutants, m)
+		}
+	}
+	control, err := s.ScoreReport(ctx, rs.CodePath, rs.Code, rs.DevTestCode, mutants, cmd)
+	if err != nil || !control.CompliantPass {
+		return nil, false
+	}
+	var own []string
+	for _, id := range killed {
+		if !slices.Contains(control.Killed, id) {
+			own = append(own, id)
+		}
+	}
+	return own, true
 }
 
 // CompliantFailureExplainer is the optional Scorer extension that reports WHY

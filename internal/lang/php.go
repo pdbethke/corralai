@@ -396,14 +396,7 @@ func phpFailureID(line string) (string, bool) {
 // A clean "OK (...)" run, or output PHPUnit produced no numbered section
 // for at all (e.g. a fatal error that crashed before any test summary),
 // names nothing: no test can be blamed for a summary that never named one.
-func phpFirstFailure(output []byte) string {
-	for _, line := range strings.Split(string(output), "\n") {
-		if id, ok := phpFailureID(line); ok {
-			return id
-		}
-	}
-	return ""
-}
+func phpFirstFailure(output []byte) string { return firstOf(phpFailures)(output) }
 
 // phpNamespaceRe matches a top-level `namespace X\Y;` declaration — PHP's
 // SINGLETON header: exactly one may govern a file, unlike an `import`/`use`

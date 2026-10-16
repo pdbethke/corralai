@@ -144,10 +144,16 @@ func captureNew(t *testing.T) map[string]string {
 					}
 				}
 			}
-			if failed, deselect, ok := DeselectorFor(p, Cmd(p.TestCmd())); ok {
+			if failed, ok := DeselectorFor(p, Cmd(p.TestCmd())); ok {
 				f := failed(o)
 				got[n+"|failedtests|"+name] = show(f)
-				got[n+"|deselect|"+name] = show(deselect(f))
+				// The plugins answered the arguments appended to the stock
+				// command; DeselectCmd answers the whole command.
+				var args []string
+				if cmd, ok := DeselectCmd(p, Cmd(p.TestCmd()), f); ok {
+					args = cmd[len(p.TestCmd()):]
+				}
+				got[n+"|deselect|"+name] = show(args)
 			}
 			for c, vs := range answers {
 				if len(vs) != 1 {
@@ -180,6 +186,12 @@ func TestRunnerTableAnswersAsThePluginsDid(t *testing.T) {
 // refused command, an empty list, an empty failure name.
 var noAnswer = map[string]bool{"not-ok": true, "[]": true, `""`: true}
 
+// writtenWhenHad are the questions captureNew asks only of a language whose
+// runner HAS the capability (a FailureParser, a salvage pair): the plugins
+// wrote no key at all where they had none, so a key missing from the golden
+// is a no-answer, not a question the golden never asked.
+var writtenWhenHad = map[string]bool{"firstfailure": true, "flaky": true, "failedtests": true, "deselect": true}
+
 // goldenDiffs is every way got departs from the plugins' answers. The table
 // may ADD an answer where the plugins had none — that is each later phase
 // filling a capability, and it cannot change what any run did before — but
@@ -192,12 +204,21 @@ func goldenDiffs(want, got map[string]string) []string {
 		}
 	}
 	for k, g := range got {
-		if _, ok := want[k]; !ok {
+		if _, ok := want[k]; !ok && !writtenWhenHad[goldenQuestion(k)] {
 			diffs = append(diffs, fmt.Sprintf("%s: answered by the table (%s) but not by the plugins", k, g))
 		}
 	}
 	slices.Sort(diffs)
 	return diffs
+}
+
+// goldenQuestion is the question a golden key asks: its second field
+// (language|question|...).
+func goldenQuestion(k string) string {
+	if f := strings.Split(k, "|"); len(f) > 1 {
+		return f[1]
+	}
+	return ""
 }
 
 // The add-only rule must still catch a changed answer: the negative control
@@ -213,5 +234,8 @@ func TestGoldenAddOnlyRuleStillCatchesAChange(t *testing.T) {
 	}
 	if d := goldenDiffs(want, map[string]string{"a": `"x"`, "b": "not-ok", "c": "[]", "d": `"z"`}); len(d) != 1 {
 		t.Errorf("a key the plugins never answered was not caught: %v", d)
+	}
+	if d := goldenDiffs(want, map[string]string{"a": `"x"`, "b": "not-ok", "c": "[]", "ruby|firstfailure|out": `"t"`}); len(d) != 0 {
+		t.Errorf("a failure parser the plugins lacked was refused: %v", d)
 	}
 }

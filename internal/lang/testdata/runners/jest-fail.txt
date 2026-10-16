@@ -1,0 +1,51 @@
+FAIL fail/f.jest.test.js
+  ● Calc › adds (a+b)
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: 3
+    Received: 2
+
+      1 | // Failing fixture for the runner table (scripts/capture-runner-fixtures.sh): what each runner prints when tests fail, and which tests its skip command leaves.
+      2 | describe('Calc', () => {
+    > 3 |   it('adds (a+b)', () => { expect(1 + 1).toBe(3); });
+        |                                          ^
+      4 |   it('ok', () => {});
+      5 |   describe('neg', () => { it('adds', () => { throw new Error('boom'); }); });
+      6 | });
+
+      at Object.toBe (fail/f.jest.test.js:3:42)
+
+  ● Calc › neg › adds
+
+    boom
+
+      3 |   it('adds (a+b)', () => { expect(1 + 1).toBe(3); });
+      4 |   it('ok', () => {});
+    > 5 |   describe('neg', () => { it('adds', () => { throw new Error('boom'); }); });
+        |                                                    ^
+      6 | });
+      7 | test('top level', () => { expect(1).toBe(2); });
+      8 |
+
+      at Object.<anonymous> (fail/f.jest.test.js:5:52)
+
+  ● top level
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: 2
+    Received: 1
+
+      5 |   describe('neg', () => { it('adds', () => { throw new Error('boom'); }); });
+      6 | });
+    > 7 | test('top level', () => { expect(1).toBe(2); });
+        |                                     ^
+      8 |
+
+      at Object.toBe (fail/f.jest.test.js:7:37)
+
+Test Suites: 1 failed, 1 total
+Tests:       3 failed, 1 passed, 4 total
+Snapshots:   0 total
+Ran all test suites matching fail/f.jest.test.js.

@@ -9,6 +9,24 @@ import (
 
 var nodeFilters = []string{"--test-name-pattern", "--test-skip-pattern"}
 
+// nodeWith is argv with a row's flags right after --test and testPath (when
+// given) at the end. node reads its options only BEFORE the first file: one
+// after it is handed to the test files as an argument, so `node --test
+// tests/ --test-name-pattern x` runs every test in tests/ (measured on node
+// 22.23). Through a package script the flags then land mid-script, which
+// shape refuses unless --test is the script's last word.
+func nodeWith(argv []string, testPath string, flags ...string) ([]string, bool) {
+	i := slices.Index(argv, "--test")
+	if i < 0 {
+		return nil, false
+	}
+	cmd := slices.Insert(slices.Clone(argv), i+1, flags...)
+	if testPath != "" {
+		cmd = append(cmd, testPath)
+	}
+	return cmd, true
+}
+
 // nodeListCmd lists node:test's tests by RUNNING the test file once with the
 // TAP reporter, against the unmutated code, in the same jail as the baseline.
 // node 22 has no collect-only mode: a pattern that matches nothing, or a skip
@@ -18,10 +36,10 @@ var nodeFilters = []string{"--test-name-pattern", "--test-skip-pattern"}
 // for the JavaScript and TypeScript default runner. A command that already
 // names a reporter is not listed: two reporters on stdout interleave.
 func nodeListCmd(argv []string, testPath string) ([]string, bool) {
-	if !slices.Contains(argv, "--test") || !narrowable(argv, append(nodeFilters, "--test-reporter", "--test-reporter-destination")...) {
+	if !narrowable(argv, append(nodeFilters, "--test-reporter", "--test-reporter-destination")...) {
 		return nil, false
 	}
-	return append(slices.Clone(argv), "--test-reporter=tap", testPath), true
+	return nodeWith(argv, testPath, "--test-reporter=tap")
 }
 
 // nodeParseList reads the TAP report into the ids of its tests. node nests a
@@ -33,44 +51,10 @@ func nodeListCmd(argv []string, testPath string) ([]string, bool) {
 // YAML carries exitCode, which is the FILE failing to load (node reports it
 // as a test named after the file), not a test.
 func nodeParseList(stdout string) []string {
-	var entries []*nodeEntry
-	var stack []string
-	var cur *nodeEntry // the result whose YAML block is being read
-	for _, line := range strings.Split(stdout, "\n") {
-		trimmed := strings.TrimLeft(line, " ")
-		level := (len(line) - len(trimmed)) / 4
-		if name, ok := strings.CutPrefix(trimmed, "# Subtest: "); ok {
-			stack = append(stack[:min(level, len(stack))], tapUnescape(name))
-			cur = nil
-			continue
-		}
-		if strings.HasPrefix(trimmed, "ok ") || strings.HasPrefix(trimmed, "not ok ") {
-			if level >= len(stack) {
-				cur = nil
-				continue
-			}
-			cur = &nodeEntry{path: slices.Clone(stack[:level+1])}
-			entries = append(entries, cur)
-			continue
-		}
-		if cur == nil {
-			continue
-		}
-		switch {
-		case strings.HasPrefix(trimmed, "type: "):
-			cur.typ = strings.Trim(strings.TrimPrefix(trimmed, "type: "), "'")
-		case strings.HasPrefix(trimmed, "exitCode:"):
-			cur.exit = true
-		case trimmed == "...":
-			cur = nil
-		}
-	}
-	typeOf, hasChild := map[string]string{}, map[string]bool{}
+	entries, hasChild := nodeEntries(stdout)
+	typeOf := map[string]string{}
 	for _, e := range entries {
 		typeOf[nodeKey(e.path)] = e.typ
-		if len(e.path) > 1 {
-			hasChild[nodeKey(e.path[:len(e.path)-1])] = true
-		}
 	}
 	var ids []string
 	for _, e := range entries {
@@ -90,12 +74,56 @@ func nodeParseList(stdout string) []string {
 	return ids
 }
 
-// nodeEntry is one result in a TAP report: its describe path, its YAML type,
-// and whether it reports a process exit code.
+// nodeEntry is one result in a TAP report: its describe path, whether it
+// passed, its YAML type, and whether it reports a process exit code.
 type nodeEntry struct {
 	path []string
+	ok   bool
 	typ  string
 	exit bool
+}
+
+// nodeEntries walks a TAP report into its results, and which of them have
+// subtests. nodeParseList and nodeFailures read the same walk.
+func nodeEntries(stdout string) (entries []*nodeEntry, hasChild map[string]bool) {
+	var stack []string
+	var cur *nodeEntry // the result whose YAML block is being read
+	for _, line := range strings.Split(stdout, "\n") {
+		trimmed := strings.TrimLeft(line, " ")
+		level := (len(line) - len(trimmed)) / 4
+		if name, ok := strings.CutPrefix(trimmed, "# Subtest: "); ok {
+			stack = append(stack[:min(level, len(stack))], tapUnescape(name))
+			cur = nil
+			continue
+		}
+		if strings.HasPrefix(trimmed, "ok ") || strings.HasPrefix(trimmed, "not ok ") {
+			if level >= len(stack) {
+				cur = nil
+				continue
+			}
+			cur = &nodeEntry{path: slices.Clone(stack[:level+1]), ok: strings.HasPrefix(trimmed, "ok ")}
+			entries = append(entries, cur)
+			continue
+		}
+		if cur == nil {
+			continue
+		}
+		switch {
+		case strings.HasPrefix(trimmed, "type: "):
+			cur.typ = strings.Trim(strings.TrimPrefix(trimmed, "type: "), "'")
+		case strings.HasPrefix(trimmed, "exitCode:"):
+			cur.exit = true
+		case trimmed == "...":
+			cur = nil
+		}
+	}
+	hasChild = map[string]bool{}
+	for _, e := range entries {
+		if len(e.path) > 1 {
+			hasChild[nodeKey(e.path[:len(e.path)-1])] = true
+		}
+	}
+	return entries, hasChild
 }
 
 func nodeKey(path []string) string { return strings.Join(path, "\x00") }
@@ -107,10 +135,10 @@ func tapUnescape(s string) string {
 
 // nodeSingleCmd runs the one test whose full name is id's.
 func nodeSingleCmd(argv []string, testPath, id string) ([]string, bool) {
-	if id == "" || !slices.Contains(argv, "--test") || !narrowable(argv, nodeFilters...) {
+	if id == "" || !narrowable(argv, nodeFilters...) {
 		return nil, false
 	}
-	return append(slices.Clone(argv), "--test-name-pattern", "^"+jsRegexQuote(fullName(id))+"$", testPath), true
+	return nodeWith(argv, testPath, "--test-name-pattern", "^"+jsRegexQuote(fullName(id))+"$")
 }
 
 // nodeCoruns is wider than full-name equality: node runs every test or suite

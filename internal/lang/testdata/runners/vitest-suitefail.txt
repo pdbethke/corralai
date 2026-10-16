@@ -1,0 +1,26 @@
+
+ RUN  v3.2.7 $DIR
+
+
+⎯⎯⎯⎯⎯⎯ Failed Suites 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  fail/broken.vitest.test.mjs [ fail/broken.vitest.test.mjs ]
+Error: Failed to parse source for import analysis because the content contains invalid JS syntax. If you are using JSX, make sure to name the file with the .jsx or .tsx extension.
+  Plugin: vite:import-analysis
+  File: $DIR/fail/broken.vitest.test.mjs:1:0
+  1  |  // A file that fails to load: no test in it can be named.
+     |  ^
+  2  |  import {describe,it} from 'vitest';
+  3  |  describe('Broken', () => {
+ ❯ TransformPluginContext._formatLog node_modules/vite/dist/node/chunks/config.js:29250:43
+ ❯ TransformPluginContext.error node_modules/vite/dist/node/chunks/config.js:29247:14
+ ❯ TransformPluginContext.transform node_modules/vite/dist/node/chunks/config.js:27333:10
+ ❯ EnvironmentPluginContainer.transform node_modules/vite/dist/node/chunks/config.js:29048:14
+ ❯ loadAndTransform node_modules/vite/dist/node/chunks/config.js:22914:26
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  no tests
+

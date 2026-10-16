@@ -70,7 +70,7 @@ var Capabilities = []Capability{
 	rowCapability("single", "Run one test alone (critic claims checked)", func(r Runner) bool { return r.SingleCmd != nil }),
 	rowCapability("first-failure", "Name the killing test", func(r Runner) bool { return r.FirstFailure != nil }),
 	rowCapability("fail-fast", "Stop at the first failure", func(r Runner) bool { return len(r.FailFast) > 0 }),
-	rowCapability("salvage", "Keep the passing part of an authored test", func(r Runner) bool { return r.FailedTests != nil && r.DeselectArgs != nil }),
+	rowCapability("salvage", "Keep the passing part of an authored test", func(r Runner) bool { return r.FailedTests != nil && r.DeselectCmd != nil }),
 	{Key: "coverage", Title: "Coverage pre-flight", Has: func(p Plugin) bool { _, ok := p.(CoverageReporter); return ok }},
 	{Key: "selection", Title: "Grade only the tests that run the file", Has: func(p Plugin) bool { _, ok := p.(TestSelector); return ok }},
 }
@@ -85,18 +85,9 @@ var ParityExemptions = []Exemption{
 	{"typescript", "critic-list", "describe/it names are strings in calls, not declarations; no static lister yet (runner table Phase 4)"},
 	{"ruby", "critic-list", "rspec and minitest names are strings or methods by runner; no static lister yet (runner table Phase 4)"},
 
-	{"javascript", "first-failure", "no JS runner's failure summary is parsed yet; a wrong id is worse than none (runner table Phase 3)"},
-	{"typescript", "first-failure", "no JS runner's failure summary is parsed yet; a wrong id is worse than none (runner table Phase 3)"},
-	{"ruby", "first-failure", "rspec and minitest failure summaries are not parsed yet; a wrong id is worse than none (runner table Phase 3)"},
-
 	{"rust", "fail-fast", "nextest's --fail-fast and libtest's lack of one are not yet verified against a real run (runner table Phase 5)"},
 
-	{"go", "salvage", "go test names failing tests but -skip needs a regexp per test, unverified (runner table Phase 3)"},
-	{"javascript", "salvage", "no JS runner's failures are parsed yet (runner table Phase 3)"},
-	{"typescript", "salvage", "no JS runner's failures are parsed yet (runner table Phase 3)"},
-	{"ruby", "salvage", "rspec and minitest failures are not parsed yet (runner table Phase 3)"},
-	{"php", "salvage", "phpunit has no deselect flag; a --filter exclusion is unverified (runner table Phase 3)"},
-	{"rust", "salvage", "libtest --skip and nextest filtersets are not yet verified for salvage (runner table Phase 3)"},
+	{"rust", "salvage", "libtest --skip and nextest filtersets are not yet verified for salvage (runner table Phase 5)"},
 
 	{"rust", "coverage", "cargo llvm-cov is not wired yet (runner table Phase 5)"},
 

@@ -193,7 +193,14 @@ package reposcan
 // and its critic claims are checked by execution. A "25" verdict for such a
 // command graded every mutant with the whole suite and left every critic
 // claim unchecked. Shape unchanged; behaviour bump.
-const VerdictGeneration = "26"
+// "27" (2026-10-16): jest, vitest, mocha, node --test, rspec and minitest now
+// name the killing test, and those six plus phpunit and go test salvage a
+// partly failing authored test by skipping its failing tests. A "26" verdict
+// for those languages has no killed_by labels and a ProvenMissed of 0 where
+// salvage now proves gaps; node --test's one-test command also ran every test
+// under an operator path (its flag landed after the path), so its refuted
+// claims could be wrong. Shape unchanged; behaviour bump.
+const VerdictGeneration = "27"
 
 // VerdictShapeSHA256 fingerprints advpool.Verdict's serialized shape: every
 // exported field's name, type and json tag, sorted by name and hashed.

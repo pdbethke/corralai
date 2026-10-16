@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -1164,16 +1165,19 @@ func pyFailedTests(output string) []string {
 	return out
 }
 
-// pyDeselectArgs renders one --deselect per selector: pytest takes the flag
-// repeatedly and does NOT accept a comma-joined list.
-func pyDeselectArgs(selectors []string) []string {
-	args := make([]string, 0, len(selectors)*2)
+// pyDeselectCmd is argv with one --deselect per selector: pytest takes the
+// flag repeatedly and does NOT accept a comma-joined list.
+func pyDeselectCmd(argv, selectors []string) ([]string, bool) {
+	if !narrowable(argv) {
+		return nil, false
+	}
+	cmd := slices.Clone(argv)
 	for _, s := range selectors {
 		if s = strings.TrimSpace(s); s != "" {
-			args = append(args, "--deselect", s)
+			cmd = append(cmd, "--deselect", s)
 		}
 	}
-	return args
+	return cmd, len(cmd) > len(argv)
 }
 
 // selectionMaxArgv bounds the node-id list Select puts on one command line.

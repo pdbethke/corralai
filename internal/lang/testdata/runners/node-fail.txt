@@ -1,0 +1,99 @@
+TAP version 13
+# Subtest: Calc
+    # Subtest: adds (a+b)
+    not ok 1 - adds (a+b)
+      ---
+      type: 'test'
+      location: '$DIR/fail/f.node.test.js:4:3'
+      failureType: 'testCodeFailure'
+      error: '2 == 3'
+      code: 'ERR_ASSERTION'
+      name: 'AssertionError'
+      expected: 3
+      actual: 2
+      operator: '=='
+      stack: |-
+        TestContext.<anonymous> ($DIR/fail/f.node.test.js:4:35)
+        Test.runInAsyncScope (node:async_hooks:214:14)
+        Test.run (node:internal/test_runner/test:1047:25)
+        Test.start (node:internal/test_runner/test:944:17)
+        node:internal/test_runner/test:1440:71
+        node:internal/per_context/primordials:466:82
+        new Promise (<anonymous>)
+        new SafePromise (node:internal/per_context/primordials:435:3)
+        node:internal/per_context/primordials:466:9
+        Array.map (<anonymous>)
+      ...
+    # Subtest: ok
+    ok 2 - ok
+      ---
+      type: 'test'
+      ...
+    # Subtest: neg
+        # Subtest: adds
+        not ok 1 - adds
+          ---
+          type: 'test'
+          location: '$DIR/fail/f.node.test.js:6:27'
+          failureType: 'testCodeFailure'
+          error: 'boom'
+          code: 'ERR_TEST_FAILURE'
+          stack: |-
+            TestContext.<anonymous> ($DIR/fail/f.node.test.js:6:52)
+            Test.runInAsyncScope (node:async_hooks:214:14)
+            Test.run (node:internal/test_runner/test:1047:25)
+            Test.start (node:internal/test_runner/test:944:17)
+            node:internal/test_runner/test:1440:71
+            node:internal/per_context/primordials:466:82
+            new Promise (<anonymous>)
+            new SafePromise (node:internal/per_context/primordials:435:3)
+            node:internal/per_context/primordials:466:9
+            Array.map (<anonymous>)
+          ...
+        1..1
+    not ok 3 - neg
+      ---
+      type: 'suite'
+      location: '$DIR/fail/f.node.test.js:6:3'
+      failureType: 'subtestsFailed'
+      error: '1 subtest failed'
+      code: 'ERR_TEST_FAILURE'
+      ...
+    1..3
+not ok 1 - Calc
+  ---
+  type: 'suite'
+  location: '$DIR/fail/f.node.test.js:3:1'
+  failureType: 'subtestsFailed'
+  error: '2 subtests failed'
+  code: 'ERR_TEST_FAILURE'
+  ...
+# Subtest: top level
+not ok 2 - top level
+  ---
+  type: 'test'
+  location: '$DIR/fail/f.node.test.js:8:1'
+  failureType: 'testCodeFailure'
+  error: '1 == 2'
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 2
+  actual: 1
+  operator: '=='
+  stack: |-
+    TestContext.<anonymous> ($DIR/fail/f.node.test.js:8:34)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Suite.postRun (node:internal/test_runner/test:1173:19)
+    Suite.run (node:internal/test_runner/test:1457:10)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:296:3)
+  ...
+1..2
+# tests 4
+# suites 2
+# pass 1
+# fail 3
+# cancelled 0
+# skipped 0
+# todo 0

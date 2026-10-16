@@ -106,3 +106,17 @@ func TestNodeCommands(t *testing.T) {
 		t.Error("list accepted a command with its own reporter")
 	}
 }
+
+// node reads its options only BEFORE the first file: one after it is handed
+// to the test files as an argument (measured on node 22.23: `node --test
+// f.test.js --test-name-pattern x` ran every test). So a row's flags go right
+// after --test, ahead of the operator's own paths.
+func TestNodeFlagsPrecedeTheOperatorsPaths(t *testing.T) {
+	argv := []string{"node", "--test", "tests/"}
+	if got, ok := nodeListCmd(argv, "a.js"); !ok || !slices.Equal(got, []string{"node", "--test", "--test-reporter=tap", "tests/", "a.js"}) {
+		t.Errorf("list = %q, %v", got, ok)
+	}
+	if got, ok := nodeSingleCmd(argv, "a.js", "Calc::ok"); !ok || !slices.Equal(got, []string{"node", "--test", "--test-name-pattern", "^Calc ok$", "tests/", "a.js"}) {
+		t.Errorf("single = %q, %v", got, ok)
+	}
+}

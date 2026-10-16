@@ -56,10 +56,13 @@ type Runner struct {
 	// label, never a grade); Flaky names tests that passed only on a retry.
 	FirstFailure func(output []byte) string
 	Flaky        func(output []byte) []string
-	// FailedTests and DeselectArgs let a partly failing authored test be
-	// salvaged: the failing ids, rendered as arguments that skip them.
-	FailedTests  func(output string) []string
-	DeselectArgs func(ids []string) []string
+	// FailedTests and DeselectCmd let a partly failing authored test be
+	// salvaged: the failing ids, and argv rerun without them. DeselectCmd is
+	// shaped like SingleCmd, and refuses as it does (a name filter already in
+	// argv, a launcher that takes no arguments): a skip handed to the wrong
+	// program, or ORed with the operator's own filter, runs a set nobody chose.
+	FailedTests func(output string) []string
+	DeselectCmd func(argv, ids []string) ([]string, bool)
 	// Disclose is what the scan line says about running this runner in
 	// repoDir; PreflightBin is the binary that must be on PATH.
 	Disclose     func(repoDir string, argv []string) []string
@@ -96,7 +99,7 @@ var runners = []Runner{
 		Name: "go test", ID: "go-test", Languages: []string{"go"}, Default: true, Detect: goTestCmd,
 		FailFast: []string{"-failfast"},
 		ListCmd:  goListCmd, ParseList: goParseTestList, SingleCmd: goSingleCmd,
-		FirstFailure: goFirstFailure,
+		FirstFailure: goFirstFailure, FailedTests: goFailedTests, DeselectCmd: goDeselectCmd,
 	},
 	{
 		Name: "gotestsum", ID: "gotestsum", Languages: []string{"go"}, Words: []string{"gotestsum"},
@@ -108,7 +111,7 @@ var runners = []Runner{
 		Name: "pytest", ID: "pytest", Languages: []string{"python"}, Default: true, Words: []string{"pytest"},
 		FailFast: []string{"-x"},
 		ListCmd:  pyListCmd, ParseList: pyParseTestList, SingleCmd: pySingleCmd,
-		FirstFailure: pyFirstFailure, FailedTests: pyFailedTests, DeselectArgs: pyDeselectArgs,
+		FirstFailure: pyFirstFailure, FailedTests: pyFailedTests, DeselectCmd: pyDeselectCmd,
 	},
 	{
 		// No salvage: unittest exits 2 on pytest's --deselect, so a rerun
@@ -128,11 +131,13 @@ var runners = []Runner{
 	{
 		Name: "jest", ID: "jest", Languages: []string{"javascript", "typescript"}, Words: []string{"jest"}, FailFast: []string{"--bail"},
 		ListCmd: jestListCmd, ParseList: jestParseList, SingleCmd: jestSingleCmd, ResolveByList: true, Coruns: jestCoruns,
+		FirstFailure: firstOf(jestFailures), FailedTests: jestFailures, DeselectCmd: jestDeselectCmd,
 		Note: "listing and one-test runs verified on jest 30.5",
 	},
 	{
 		Name: "mocha", ID: "mocha", Languages: []string{"javascript", "typescript"}, Words: []string{"mocha"}, FailFast: []string{"--bail"},
 		ListCmd: mochaListCmd, ParseList: mochaParseList, SingleCmd: mochaSingleCmd, ResolveByList: true, Coruns: lastFullColl,
+		FirstFailure: firstOf(mochaFailures), FailedTests: mochaFailures, DeselectCmd: mochaDeselectCmd,
 		Note: "listing and one-test runs verified on mocha 11.8 (listing needs mocha 9 or later)",
 	},
 	{
@@ -141,6 +146,7 @@ var runners = []Runner{
 		Name: "vitest", ID: "vitest", Languages: []string{"javascript", "typescript"}, Words: []string{"vitest"},
 		Detect:  func(argv []string) bool { return vitestIndex(argv) >= 0 },
 		ListCmd: vitestListCmd, ParseList: vitestParseList, SingleCmd: vitestSingleCmd, ResolveByList: true, Coruns: fullNameColl,
+		FirstFailure: firstOf(vitestFailures), FailedTests: vitestFailures, DeselectCmd: vitestDeselectCmd,
 		Note: "listing and one-test runs verified on vitest 3.2; vitest 1, 2 and 4 were not run",
 	},
 	{
@@ -149,7 +155,8 @@ var runners = []Runner{
 			return len(argv) > 0 && filepath.Base(argv[0]) == "node" && slices.Contains(argv, "--test")
 		},
 		ListCmd: nodeListCmd, ParseList: nodeParseList, SingleCmd: nodeSingleCmd, ResolveByList: true, Coruns: nodeCoruns,
-		Note: "node has no collect-only mode, so listing RUNS the test file once on the unmutated code; verified on node 22.23",
+		FirstFailure: firstOf(nodeFailures), FailedTests: nodeFailures, DeselectCmd: nodeDeselectCmd,
+		Note: "node has no collect-only mode, so listing RUNS the test file once on the unmutated code; verified on node 22.23 and 24.22. Through a package script, listing, one-test runs and salvage need `--test` to be the script's last word, since node reads options only before the first file",
 	},
 	// rspec takes --fail-fast. Minitest is deliberately without one: its own
 	// --fail-fast arrived in minitest 5.22, and an older minitest treats an
@@ -157,15 +164,17 @@ var runners = []Runner{
 	{
 		Name: "rspec", ID: "rspec", Languages: []string{"ruby"}, Default: true, Words: []string{"rspec"}, FailFast: []string{"--fail-fast"},
 		ListCmd: rspecListCmd, ParseList: rspecParseList, SingleCmd: rspecSingleCmd, ResolveByList: true, Coruns: lastFullColl,
+		FirstFailure: firstOf(rspecFailures), FailedTests: rspecFailures, DeselectCmd: rspecDeselectCmd,
 		Note: "listing and one-test runs verified on rspec-core 3.13 (one-test runs need 3.12 or later)",
 	},
 	{
 		Name: "minitest", ID: "minitest", Languages: []string{"ruby"}, Words: []string{"ruby", "rake", "testrb"},
+		FirstFailure: firstOf(minitestFailures), FailedTests: minitestFailures, DeselectCmd: minitestDeselectCmd,
 		Note: "minitest has no list mode and no full-name selector; rspec is the Ruby runner that lists and runs one test",
 	},
 	{
 		Name: "phpunit", ID: "phpunit", Languages: []string{"php"}, Default: true, Words: []string{"phpunit"},
-		FailFast: []string{"--stop-on-failure"}, FirstFailure: phpFirstFailure,
+		FailFast: []string{"--stop-on-failure"}, FirstFailure: phpFirstFailure, FailedTests: phpFailures, DeselectCmd: phpunitDeselectCmd,
 		ListCmd: phpunitListCmd, ParseList: phpunitParseList, SingleCmd: phpunitSingleCmd, ResolveByList: true,
 		Note: "listing and one-test runs verified on PHPUnit 11.5",
 	},
@@ -385,9 +394,9 @@ type flakyRowParser struct{ rowParser }
 
 func (p flakyRowParser) FlakyTests(output []byte) []string { return p.r.Flaky(output) }
 
-// DeselectorFor is argv's runner's salvage pair, ok=false when it has none:
-// the runner's failing ids, and the arguments that deselect them, for
-// salvaging a partially broken authored test. The compliant check is
+// DeselectorFor is argv's runner's failure list for salvage, ok=false when
+// the runner cannot salvage (DeselectCmd builds the rerun without them),
+// for salvaging a partially broken authored test. The compliant check is
 // all-or-nothing per FILE: if any test in the authored file fails against the
 // unmutated code, the whole file is discarded and nothing is scored.
 //
@@ -404,12 +413,23 @@ func (p flakyRowParser) FlakyTests(output []byte) []string { return p.r.Flaky(ou
 // from precisely, and from unittest, which exits 2 on pytest's --deselect. A wrong selector would
 // deselect the wrong test and silently narrow the exam, which is worse than
 // not salvaging: the run would look healthier while proving less.
-func DeselectorFor(p Plugin, inv Invocation) (failed func(string) []string, deselect func([]string) []string, ok bool) {
+func DeselectorFor(p Plugin, inv Invocation) (failed func(string) []string, ok bool) {
 	r, found := RunnerFor(p, inv)
-	if !found || r.FailedTests == nil || r.DeselectArgs == nil {
-		return nil, nil, false
+	if !found || r.FailedTests == nil || r.DeselectCmd == nil {
+		return nil, false
 	}
-	return r.FailedTests, r.DeselectArgs, true
+	return r.FailedTests, true
+}
+
+// DeselectCmd is argv rerun without the tests ids, from its runner, shaped
+// as SingleTestCmd is; ok=false when there is nothing to skip or the runner
+// cannot skip them through this command.
+func DeselectCmd(p Plugin, inv Invocation, ids []string) ([]string, bool) {
+	r, ok := RunnerFor(p, inv)
+	if !ok || r.DeselectCmd == nil || len(ids) == 0 {
+		return nil, false
+	}
+	return inv.shape(p, func(w []string) ([]string, bool) { return r.DeselectCmd(w, ids) })
 }
 
 // Runners returns the runner table in its order, for readers outside the

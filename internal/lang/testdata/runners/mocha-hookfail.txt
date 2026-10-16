@@ -1,0 +1,17 @@
+
+
+  Hooked
+    1) "before all" hook for "never runs"
+
+
+  0 passing (1ms)
+  1 failing
+
+  1) Hooked
+       "before all" hook for "never runs":
+     Error: hook boom
+      at Context.<anonymous> (fail/hook.mocha.js:3:24)
+      at process.processImmediate (node:internal/timers:484:21)
+
+
+

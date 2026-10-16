@@ -66,6 +66,48 @@ want rspec 1 "$($RSPEC --format json -E '\ACalc adds \(a\+b\)\z' spec/calc_spec.
 want phpunit 1 "$(vendor/bin/phpunit --filter '/(?:^|\\)CalcTest::testAdds(?: with data set .*)?$/' tests/CalcTest.php | sed -n 's/^OK (\([0-9]*\) test.*/\1/p')"
 want phpunit-dataset 2 "$(vendor/bin/phpunit --filter '/(?:^|\\)CalcTest::testWith(?: with data set .*)?$/' tests/CalcTest.php | sed -n 's/^OK (\([0-9]*\) test.*/\1/p')"
 
+# --- failing suites: what each DEFAULT reporter prints, and the skip commands --
+# (internal/lang/runner_failures.go). $DIR and $HOME are replaced: these files are public.
+fails() { # fails <fixture> <cmd...>: stdout+stderr, ANSI stripped
+  local f="$1"; shift
+  "$@" 2>&1 | sed -e 's/\x1b\[[0-9;]*m//g' -e "s#$DIR#\$DIR#g" -e "s#$HOME#~#g" -e '/duration_ms\|^Finished in\|^Time: \|Duration \|Start at \|^Run options: --seed\|runs\/s/d' > "$OUT/$f" || true
+}
+fails jest-fail.txt npx jest fail/f.jest.test.js
+fails jest-suitefail.txt npx jest fail/broken.jest.test.js
+fails vitest-fail.txt npx vitest run fail/f.vitest.test.mjs
+fails vitest-suitefail.txt npx vitest run fail/broken.vitest.test.mjs
+fails mocha-fail.txt npx mocha fail/f.mocha.js
+fails mocha-hookfail.txt npx mocha fail/hook.mocha.js
+fails node-fail.txt node --test fail/f.node.test.js
+# node 23+ prints the spec reporter off a TTY too (measured on node 24.22); node
+# 22's --test-reporter=spec prints the same tree.
+fails node-spec-fail.txt node --test --test-reporter=spec fail/f.node.test.js
+fails node-spec-loadfail.txt node --test --test-reporter=spec broken.node.test.js
+fails rspec-fail.txt $RSPEC fail/spec/f_spec.rb
+fails rspec-loadfail.txt $RSPEC fail/spec/broken_spec.rb
+fails minitest-fail.txt ruby fail/f_test.rb
+fails phpunit-fail.txt vendor/bin/phpunit fail/tests/FTest.php
+
+# Each skip command names the three failing tests; exactly the one passing test
+# must run, and pass.
+passed() { grep -oE '([0-9]+ (passed|passing|examples?|runs,))|# pass [0-9]+|OK \([0-9]+ test' | grep -oE '[0-9]+' | head -1; }
+skipok() { # skipok <name> <cmd...>
+  local name="$1" out rc; shift
+  out="$("$@" 2>&1)" && rc=0 || rc=$?
+  want "$name-skip" "1 exit 0" "$(printf '%s' "$out" | sed 's/\x1b\[[0-9;]*m//g' | passed) exit $rc"
+}
+skipok jest npx jest fail/f.jest.test.js --testNamePattern '^(?!(?:Calc adds \(a\+b\)|Calc neg adds|top level)$)'
+skipok vitest npx vitest run fail/f.vitest.test.mjs -t '^(?!(?:Calc adds \(a\+b\)|Calc neg adds|top level)$)'
+skipok mocha npx mocha fail/f.mocha.js --grep '^(?:Calc adds \(a\+b\)|Calc neg adds|top level)$' --invert
+skipok node node --test --test-skip-pattern '^(?:Calc adds \(a\+b\)|Calc neg adds|top level)$' fail/f.node.test.js
+# node reads options only before the first file (runner_node.go nodeWith): after it, ignored.
+want node-option-after-file-ignored 4 "$(node --test fail/f.node.test.js --test-skip-pattern '^(?:Calc adds \(a\+b\)|Calc neg adds|top level)$' 2>/dev/null | sed -n 's/^# tests //p')"
+skipok rspec $RSPEC fail/spec/f_spec.rb -E '\A(?!(?:Calc adds \(a\+b\)|Calc neg adds|MyApp::Calc top level)\z)'
+skipok minitest ruby fail/f_test.rb --exclude '/\A(?:CalcTest#test_adds|CalcTest#test_boom|MyApp::NegTest#test_x)\z/'
+skipok phpunit vendor/bin/phpunit fail/tests/FTest.php --exclude-filter '/(?:^|\\)(?:FTest::testBoom|FTest::testAdds|FTest::testData)(?: with data set .*)?$/'
+skipok npm-test npm test -- fail/f.jest.test.js --testNamePattern '^(?!(?:Calc adds \(a\+b\)|Calc neg adds|top level)$)'
+skipok composer-test composer test -- fail/tests/FTest.php --exclude-filter '/(?:^|\\)(?:FTest::testBoom|FTest::testAdds|FTest::testData)(?: with data set .*)?$/'
+
 # --- package scripts: how each launcher hands extra arguments to the script --
 # (internal/lang/invocation.go's launcher table; keep the separators equal)
 export COREPACK_ENABLE_DOWNLOAD_PROMPT=0
@@ -87,6 +129,9 @@ want composer-test-single 1 "$(composer test -- --filter '/(?:^|\\)CalcTest::tes
   echo "yarn $YARN takes them directly, composer $(composer --version 2>/dev/null | awk '{print $3}') after --."
   echo "Suites: src/. Each *-list file is the stdout of that runner's list command"
   echo "(jest and mocha JSON reduced to the fields the parsers read)."
+  echo "Each *-fail, *-suitefail, *-loadfail and *-hookfail file is stdout+stderr of"
+  echo "the runner's DEFAULT command on src/fail, not a TTY, as the jail runs it;"
+  echo "$(ruby -e 'require "minitest"; print "minitest ", Minitest::VERSION')."
 } > "$OUT/PROVENANCE.txt"
 
 exit "$fail"

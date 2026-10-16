@@ -255,7 +255,8 @@ func (rustPlugin) ImportNote(string, bool) string { return "" }
 // SingleTestCmd, ListTestsCmd and ParseTestList stay ok=false/nil: the Plugin
 // interface never hands these methods the operator's test command, so a
 // stateless plugin cannot tell libtest from nextest, and answering for one
-// runner would be wrong for the other.
+// runner would be wrong for the other. Rust answers through
+// CommandTestTargeter instead (rust_single.go), which is handed the command.
 func (rustPlugin) SingleTestCmd(string, string) ([]string, bool) { return nil, false }
 
 func (rustPlugin) ListTestsCmd(string) ([]string, bool) { return nil, false }

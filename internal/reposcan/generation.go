@@ -177,7 +177,12 @@ package reposcan
 // Rust critic must judge every test as Go, Python and PHP critics do. A
 // "22" Rust critic count came from an answer nothing held to the file's
 // tests. Shape unchanged; behaviour bump.
-const VerdictGeneration = "23"
+// "24" (2026-10-15): the Verdict gained RefutedFindings, the critic claims
+// execution disproved, and VacuousFindings no longer holds them. A cached
+// "23" document unmarshals RefutedFindings as nil and still counts its
+// refuted claims (and, from certify --repo, never ran the check at all), so
+// its critic count would be served as one that excludes them.
+const VerdictGeneration = "24"
 
 // VerdictShapeSHA256 fingerprints advpool.Verdict's serialized shape: every
 // exported field's name, type and json tag, sorted by name and hashed.
@@ -199,4 +204,4 @@ const VerdictGeneration = "23"
 // Verdict's own FIELDS") and nothing wider. Nor can any fingerprint catch the
 // behaviour half: a scorer that computes a DIFFERENT number into the SAME
 // field is invisible here, and remains a review responsibility.
-const VerdictShapeSHA256 = "59dc4560fefa5082629ef52986351db848046ff085341bbb7ca9cd3141859c28"
+const VerdictShapeSHA256 = "896d49ca72d396cf32101ea0f91527b315f761e7a47f9069a91605843a0fc1cc"

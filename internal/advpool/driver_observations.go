@@ -90,7 +90,7 @@ func bugCatchObservations(run *runState, v Verdict) []BugCatchObservation {
 	if v.ModelsByRole[RoleTestCritic] != "" {
 		out = append(out, BugCatchObservation{
 			Model: v.ModelsByRole[RoleTestCritic], Role: RoleTestCritic,
-			CriticFlags: len(v.VacuousFindings),
+			CriticFlags: len(v.VacuousFindings) + len(v.RefutedFindings), // every flag the critic raised, refuted or not
 		})
 	}
 	// mutant-generator: one row PER SHARD. Never summed — see shardStat.

@@ -1084,7 +1084,13 @@ runner does not have. The design, and the week that produced it:
   critic finding to a local store (`corralai_criticscore.duckdb` in corral's state directory, `CORRALAI_STATE_DIR`), and
   `corral criticscore` reads it there — no brain required — so the C-PREC column
   reflects only findings a person has confirmed or refuted. `certify --repo`
-  records nothing to it.
+  records nothing to it. Independently of that store, every run checks the
+  critic's "this test can never fail" claims by execution: the named test runs
+  alone against the run's mutants, and a claim it disproves (the test killed
+  one) is recorded on the verdict as refuted and left out of the critic's count.
+  Go, Python and Rust have the single-test command this needs; elsewhere, and
+  for a Rust name that matches more than one listed test, the claim is left
+  unchecked and the run output says why.
 - **The tests×mutants matrix (`--matrix`, opt-in).** After the primary pass, re-score
   EVERY dev test alone against the run's mutants — a per-test adequacy readout instead
   of one suite-wide kill-rate, plus a safe-to-delete candidate list (a test that caught

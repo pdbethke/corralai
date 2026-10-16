@@ -79,21 +79,23 @@ func pySingleCmd(_ []string, testPath, id string) ([]string, bool) {
 
 // runners is the table. ORDER IS LOAD-BEARING: RunnerFor takes the first row
 // that matches, so a row whose command also contains a more general row's
-// word comes first (cargo nextest before cargo test, gotestsum before go
-// test, jest and mocha before vitest).
+// word comes first (cargo nextest before cargo test, jest and mocha before
+// vitest). go test comes before gotestsum for the opposite reason: its Detect
+// is exact (argv[0] go, argv[1] test), and gotestsum's word would otherwise
+// claim `go test ./cmd/gotestsum`.
 var runners = []Runner{
-	{
-		Name: "gotestsum", Languages: []string{"go"}, Words: []string{"gotestsum"},
-		ListCmd: goListCmd, ParseList: goParseTestList, SingleCmd: goSingleCmd,
-		FirstFailure: goFirstFailure,
-		Note:         "listing and one-test runs use `go test` itself; the killing test is read from `--- FAIL:` lines, which gotestsum passes through for a failed test but was not run here",
-	},
 	{
 		// -failfast stops after the first test binary failure.
 		Name: "go test", Languages: []string{"go"}, Default: true, Detect: goTestCmd,
 		FailFast: []string{"-failfast"},
 		ListCmd:  goListCmd, ParseList: goParseTestList, SingleCmd: goSingleCmd,
 		FirstFailure: goFirstFailure,
+	},
+	{
+		Name: "gotestsum", Languages: []string{"go"}, Words: []string{"gotestsum"},
+		ListCmd: goListCmd, ParseList: goParseTestList, SingleCmd: goSingleCmd,
+		FirstFailure: goFirstFailure,
+		Note:         "listing and one-test runs use `go test` itself; the killing test is read from `--- FAIL:` lines, which gotestsum passes through for a failed test but was not run here",
 	},
 	{
 		Name: "pytest", Languages: []string{"python"}, Default: true, Words: []string{"pytest"},

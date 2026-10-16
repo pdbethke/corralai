@@ -12,7 +12,7 @@ What corral does with each language's tests. This page is rendered from the same
 | List the tests | ✓ | — (3) | — (4) | ✓ | — (5) | ✓ | — (3) |
 | Run one test alone (critic claims checked) | ✓ | — (6) | — (7) | ✓ | — (8) | ✓ | — (6) |
 | Name the killing test | ✓ | — (9) | ✓ | ✓ | — (10) | ✓ | — (9) |
-| Stop at the first failure | ✓ | ✓ | ✓ | ✓ | ✓ | — (11) | ✓ |
+| Stop at the first failure | ✓ | ✓ (jest, mocha) | ✓ | ✓ | ✓ (rspec) | — (11) | ✓ (jest, mocha) |
 | Keep the passing part of an authored test | — (12) | — (13) | — (14) | ✓ | — (15) | — (16) | — (13) |
 | Coverage pre-flight | ✓ | ✓ | ✓ | ✓ | ✓ | — (17) | ✓ |
 | Grade only the tests that run the file | — (18) | — (19) | — (19) | ✓ | — (19) | — (19) | — (19) |
@@ -39,12 +39,12 @@ What corral does with each language's tests. This page is rendered from the same
 
 ## By runner
 
-A language has a runner capability when any of its runners does; this is which. corral recognises the runner from the test command you pass; a command it does not recognise (a `make` target, `npm test`) is graded exactly the same, by exit code, and gets only its language's default runner's output parsing, never an added flag.
+A language has a runner capability when any of its runners does; this is which. corral recognises the runner from the test command you pass; a command it does not recognise (a `make` target, `npm test`) is graded exactly the same, by exit code, and is treated as its language's default runner, except that it never gets a fail-fast flag.
 
 | runner | languages | stop at first failure | list tests | run one test | names the killing test | salvage | names flaky tests | note |
 |---|---|---|---|---|---|---|---|---|
-| `gotestsum` | go |  | ✓ | ✓ | ✓ |  |  | listing and one-test runs use `go test` itself; the killing test is read from `--- FAIL:` lines, which gotestsum passes through for a failed test but was not run here |
 | `go test` (default) | go | `-failfast` | ✓ | ✓ | ✓ |  |  |  |
+| `gotestsum` | go |  | ✓ | ✓ | ✓ |  |  | listing and one-test runs use `go test` itself; the killing test is read from `--- FAIL:` lines, which gotestsum passes through for a failed test but was not run here |
 | `pytest` (default) | python | `-x` | ✓ | ✓ | ✓ | ✓ |  |  |
 | `unittest` | python | `--failfast` | ✓ | ✓ |  |  |  | listing and one-test runs use pytest, which collects unittest suites; they need pytest installed |
 | `jest` | javascript, typescript | `--bail` |  |  |  |  |  |  |

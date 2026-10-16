@@ -10,6 +10,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 
 	"github.com/pdbethke/corralai/internal/lang"
@@ -18,8 +19,17 @@ import (
 func main() {
 	site := flag.Bool("site", false, "prefix Starlight frontmatter for the site's copy")
 	flag.Parse()
+	if _, err := os.Stdout.WriteString(render(*site)); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+}
+
+// render is the page: the site's copy carries Starlight frontmatter in place
+// of the repo copy's heading.
+func render(site bool) string {
 	var b strings.Builder
-	if *site {
+	if site {
 		b.WriteString("---\ntitle: Language support\ndescription: Generated from the runner table corral dispatches on — never hand-written; see scripts/gen-language-support.sh.\n---\n\n")
 	} else {
 		b.WriteString("# Language support\n\n")
@@ -40,7 +50,7 @@ func main() {
 		for _, n := range names {
 			p, _ := lang.ByName(n)
 			if c.Has(p) {
-				row = append(row, "✓")
+				row = append(row, "✓"+viaRunners(c, p))
 				continue
 			}
 			r := reason[[2]string{n, c.Key}]
@@ -57,7 +67,7 @@ func main() {
 		fmt.Fprintf(&b, "%d. %s\n", i+1, r)
 	}
 
-	b.WriteString("\n## By runner\n\nA language has a runner capability when any of its runners does; this is which. corral recognises the runner from the test command you pass; a command it does not recognise (a `make` target, `npm test`) is graded exactly the same, by exit code, and gets only its language's default runner's output parsing, never an added flag.\n\n")
+	b.WriteString("\n## By runner\n\nA language has a runner capability when any of its runners does; this is which. corral recognises the runner from the test command you pass; a command it does not recognise (a `make` target, `npm test`) is graded exactly the same, by exit code, and is treated as its language's default runner, except that it never gets a fail-fast flag.\n\n")
 	b.WriteString("| runner | languages | stop at first failure | list tests | run one test | names the killing test | salvage | names flaky tests | note |\n|---|---|---|---|---|---|---|---|---|\n")
 	mark := func(ok bool) string {
 		if ok {
@@ -78,8 +88,20 @@ func main() {
 			mark(r.ListCmd != nil && r.ParseList != nil), mark(r.SingleCmd != nil), mark(r.FirstFailure != nil),
 			mark(r.FailedTests != nil && r.DeselectArgs != nil), mark(r.Flaky != nil), r.Note)
 	}
-	if _, err := os.Stdout.WriteString(b.String()); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+	return b.String()
+}
+
+// viaRunners names the rows that give p capability c when p's stock command
+// does not get it as is, as " (jest, mocha)"; "" otherwise.
+func viaRunners(c lang.Capability, p lang.Plugin) string {
+	if c.Row == nil || c.Stock(p) {
+		return ""
 	}
+	var names []string
+	for _, r := range lang.Runners() {
+		if slices.Contains(r.Languages, p.Name()) && c.Row(r) {
+			names = append(names, r.Name)
+		}
+	}
+	return " (" + strings.Join(names, ", ") + ")"
 }

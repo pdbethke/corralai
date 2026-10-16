@@ -24,6 +24,25 @@ var paritySamples = map[string]paritySample{
 type Capability struct {
 	Key, Title string
 	Has        func(p Plugin) bool
+	// Row is set for a capability a runner row provides: the language has it
+	// when any of its rows does (Has). Stock says whether the language's own
+	// stock command gets it as is; when it does not, the support page names
+	// the rows that do, so a Ruby user is not told their shell-wrapped stock
+	// command stops at the first failure.
+	Row   func(Runner) bool
+	Stock func(p Plugin) bool
+}
+
+// rowCapability is a Capability judged on the language's runner rows.
+func rowCapability(key, title string, row func(Runner) bool) Capability {
+	return Capability{Key: key, Title: title, Row: row,
+		Has: func(p Plugin) bool { return anyRow(p, row) },
+		Stock: func(p Plugin) bool {
+			stock := p.TestCmd()
+			r, named := namedRunner(p, stock)
+			return named && !cmdIsShellWrapped(stock) && row(r)
+		},
+	}
 }
 
 // anyRow reports whether some runner row for p's language has the capability.
@@ -43,27 +62,17 @@ func anyRow(p Plugin, has func(Runner) bool) bool {
 // Capabilities is every capability in the parity contract, in the order the
 // support table prints them.
 var Capabilities = []Capability{
-	{"critic-list", "Critic must judge every test", func(p Plugin) bool {
+	{Key: "critic-list", Title: "Critic must judge every test", Has: func(p Plugin) bool {
 		s := paritySamples[p.Name()]
 		return len(p.TestNamesInSource(s.path, s.src)) > 0
 	}},
-	{"list", "List the tests", func(p Plugin) bool {
-		return anyRow(p, func(r Runner) bool { return r.ListCmd != nil && r.ParseList != nil })
-	}},
-	{"single", "Run one test alone (critic claims checked)", func(p Plugin) bool {
-		return anyRow(p, func(r Runner) bool { return r.SingleCmd != nil })
-	}},
-	{"first-failure", "Name the killing test", func(p Plugin) bool {
-		return anyRow(p, func(r Runner) bool { return r.FirstFailure != nil })
-	}},
-	{"fail-fast", "Stop at the first failure", func(p Plugin) bool {
-		return anyRow(p, func(r Runner) bool { return len(r.FailFast) > 0 })
-	}},
-	{"salvage", "Keep the passing part of an authored test", func(p Plugin) bool {
-		return anyRow(p, func(r Runner) bool { return r.FailedTests != nil && r.DeselectArgs != nil })
-	}},
-	{"coverage", "Coverage pre-flight", func(p Plugin) bool { _, ok := p.(CoverageReporter); return ok }},
-	{"selection", "Grade only the tests that run the file", func(p Plugin) bool { _, ok := p.(TestSelector); return ok }},
+	rowCapability("list", "List the tests", func(r Runner) bool { return r.ListCmd != nil && r.ParseList != nil }),
+	rowCapability("single", "Run one test alone (critic claims checked)", func(r Runner) bool { return r.SingleCmd != nil }),
+	rowCapability("first-failure", "Name the killing test", func(r Runner) bool { return r.FirstFailure != nil }),
+	rowCapability("fail-fast", "Stop at the first failure", func(r Runner) bool { return len(r.FailFast) > 0 }),
+	rowCapability("salvage", "Keep the passing part of an authored test", func(r Runner) bool { return r.FailedTests != nil && r.DeselectArgs != nil }),
+	{Key: "coverage", Title: "Coverage pre-flight", Has: func(p Plugin) bool { _, ok := p.(CoverageReporter); return ok }},
+	{Key: "selection", Title: "Grade only the tests that run the file", Has: func(p Plugin) bool { _, ok := p.(TestSelector); return ok }},
 }
 
 // Exemption is a capability a language lacks, with the reason. The parity

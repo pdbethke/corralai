@@ -37,7 +37,9 @@ history of any release, `git log v0.3.4..v0.3.5`.
   a run does changes, with two exceptions: a `python -m unittest` command no
   longer gets pytest's `--deselect` when an authored test is salvaged
   (unittest exits 2 on an option it does not know, so that rerun could never
-  pass), and `--matrix` now works for Rust. The new
+  pass), and Rust says why `--matrix` is unavailable (its test ids are
+  resolved through the runner's list, which the matrix does not do; the
+  critic still checks claims through that list). The new
   [language-support page](docs/corral/language-support.md) is rendered from
   the same table, so it cannot claim what the code does not do, and every gap
   it shows carries its reason.

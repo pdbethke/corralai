@@ -44,6 +44,8 @@ func TestRunnerForPicksTheMostSpecificRow(t *testing.T) {
 		{rust, []string{"make", "test"}, "cargo test"},
 		{goP, []string{"gotestsum", "--", "./..."}, "gotestsum"},
 		{goP, []string{"go", "test", "./..."}, "go test"},
+		// A package path ending in a runner's word is not that runner.
+		{goP, []string{"go", "test", "./cmd/gotestsum"}, "go test"},
 		{py, []string{"python3", "-m", "unittest", "discover"}, "unittest"},
 		{py, []string{"sh", "-c", "cd src && pytest -q"}, "pytest"},
 		{py, []string{"sh", "-c", "echo pytest"}, "pytest"}, // not in command position: the Default, not a match

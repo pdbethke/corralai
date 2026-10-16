@@ -55,6 +55,15 @@ func (d *Driver) tickMatrix(ctx context.Context, run *runState) {
 
 	p := langFor(run.rs)
 	argv := adequacy.ShellSplit(run.rs.TestCmd)
+	// A runner whose ids are resolved through its own list (the cargo rows)
+	// is left to the critic's list-and-resolve path: this matrix matches
+	// critic findings by exact selector, which a file-relative name never
+	// equals, and such a runner lists its whole crate rather than the file's
+	// tests, which would offer unrelated tests for deletion.
+	if golang.ResolvesByList(p, argv) {
+		log.Printf("advpool: matrix: unavailable for %q (its test ids are resolved through the runner's list; the critic path checks claims instead)", run.rs.Lang)
+		return
+	}
 	listCmd, ok := golang.ListTestsCmd(p, argv, run.rs.DevTestPath)
 	if !ok {
 		log.Printf("advpool: matrix: unavailable for %q", run.rs.Lang)

@@ -145,6 +145,8 @@ var runners = []Runner{
 		Detect: func(argv []string) bool {
 			return len(argv) > 0 && filepath.Base(argv[0]) == "node" && slices.Contains(argv, "--test")
 		},
+		ListCmd: nodeListCmd, ParseList: nodeParseList, SingleCmd: nodeSingleCmd, ResolveByList: true, Coruns: nodeCoruns,
+		Note: "node has no collect-only mode, so listing RUNS the test file once on the unmutated code; verified on node 22.23",
 	},
 	// rspec takes --fail-fast. Minitest is deliberately without one: its own
 	// --fail-fast arrived in minitest 5.22, and an older minitest treats an

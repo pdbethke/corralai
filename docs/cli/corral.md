@@ -959,7 +959,7 @@ Usage of certify --repo:
   -derive-model string
     	model (or agent seat) that derives a goal per file when --goals is not given — REQUIRED unless --goals is supplied; corral has no default models
   -diff-base string
-    	bound the scan to files changed since this git ref, instead of ranking + --top. In a PR the diff IS the bound: ranking and --top do not apply on this path
+    	bound the scan to files changed since this git ref: every candidate that changed, or whose paired test changed, is audited. In a PR the diff IS the bound, so the default --top does not apply on this path; an EXPLICIT --top still does, auditing that many of the changed files by rank and reporting the rest as not audited
   -dry-run
     	enumerate and emit jobs, then stop — no audits run
   -goals string

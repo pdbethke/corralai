@@ -1,0 +1,6 @@
+{
+    "name": "corral/runner-fixtures",
+    "scripts": {
+        "test": "phpunit"
+    }
+}

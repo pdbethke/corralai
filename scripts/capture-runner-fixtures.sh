@@ -33,7 +33,6 @@ JEST=30.5.2 VITEST=3.2.7 MOCHA=11.8.0 PHPUNIT=11.5.57
 mkdir -p "$DIR"
 cp -r "$OUT/src/." "$DIR/"
 cd "$DIR"
-[ -f package.json ] || npm init -y >/dev/null
 npm install --silent --no-audit --no-fund "jest@$JEST" "vitest@$VITEST" "mocha@$MOCHA" >/dev/null
 [ -f vendor/bin/phpunit ] || composer require -q --dev "phpunit/phpunit:$PHPUNIT"
 
@@ -67,10 +66,25 @@ want rspec 1 "$($RSPEC --format json -E '\ACalc adds \(a\+b\)\z' spec/calc_spec.
 want phpunit 1 "$(vendor/bin/phpunit --filter '/(?:^|\\)CalcTest::testAdds(?: with data set .*)?$/' tests/CalcTest.php | sed -n 's/^OK (\([0-9]*\) test.*/\1/p')"
 want phpunit-dataset 2 "$(vendor/bin/phpunit --filter '/(?:^|\\)CalcTest::testWith(?: with data set .*)?$/' tests/CalcTest.php | sed -n 's/^OK (\([0-9]*\) test.*/\1/p')"
 
+# --- package scripts: how each launcher hands extra arguments to the script --
+# (internal/lang/invocation.go's launcher table; keep the separators equal)
+export COREPACK_ENABLE_DOWNLOAD_PROMPT=0
+YARN=1.22.22 PNPM=9.15.9
+jestran() { grep -oE '[0-9]+ passed' | head -1 | cut -d' ' -f1; }
+want npm-test-list 5 "$(npm test --silent -- --json --testNamePattern '^\b$' calc.jest.test.js 2>/dev/null | node -e 'const j=JSON.parse(require("fs").readFileSync(0));console.log(j.numTotalTests)')"
+want npm-test-single 1 "$(npm test -- --testNamePattern '^top level$' calc.jest.test.js 2>&1 | jestran)"
+want npm-run-env-single 1 "$(npm run test:env -- --testNamePattern '^top level$' calc.jest.test.js 2>&1 | jestran)"
+want npm-test-bail 0 "$(npm test -- --bail calc.jest.test.js >/dev/null 2>&1; echo $?)"
+want yarn-test-single 1 "$(corepack "yarn@$YARN" test --testNamePattern '^top level$' calc.jest.test.js 2>&1 | jestran)"
+want pnpm-test-single 1 "$(corepack "pnpm@$PNPM" test -- --testNamePattern '^top level$' calc.jest.test.js 2>&1 | jestran)"
+want composer-test-single 1 "$(composer test -- --filter '/(?:^|\\)CalcTest::testAdds(?: with data set .*)?$/' tests/CalcTest.php 2>&1 | sed -n 's/^OK (\([0-9]*\) test.*/\1/p')"
+
 {
   echo "Captured by scripts/capture-runner-fixtures.sh on $(date -u +%Y-%m-%d)."
   echo "jest $JEST, vitest $VITEST, mocha $MOCHA (npm); PHPUnit $PHPUNIT (composer)"
   echo "$(node --version | sed 's/^/node /'); $(ruby -e 'require "rspec/core"; print "rspec-core ", RSpec::Core::Version::STRING')"
+  echo "Launchers: npm $(npm --version) and pnpm $PNPM take extra script arguments after --,"
+  echo "yarn $YARN takes them directly, composer $(composer --version 2>/dev/null | awk '{print $3}') after --."
   echo "Suites: src/. Each *-list file is the stdout of that runner's list command"
   echo "(jest and mocha JSON reduced to the fields the parsers read)."
 } > "$OUT/PROVENANCE.txt"

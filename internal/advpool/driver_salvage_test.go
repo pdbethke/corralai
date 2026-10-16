@@ -4,6 +4,7 @@ package advpool
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 
@@ -161,5 +162,50 @@ func TestNoSalvageWhenTheCommandTakesNoSkip(t *testing.T) {
 	completeRunTolerantOfWriterRetries(t, d, 2, "no findings")
 	if sawDeselect {
 		t.Error("a shell-wrapped command was given a --deselect")
+	}
+}
+
+// A salvage rerun can run MORE than the dev pass did: rspec's -E replaces the
+// operator's tag exclusions (filter_run_excluding :slow), and a CLI --grep
+// replaces one set in .mocharc. A spec the dev pass never ran can then kill a
+// survivor, and the kill would be credited to the authored test. So every
+// mutant the salvage killed is graded again under the same command with the
+// dev suite alone; one the dev suite kills there is not the authored test's.
+func TestSalvageCreditsNoKillTheDevSuiteMakesUnderTheSalvageCommand(t *testing.T) {
+	survivors := []adequacy.Mutant{{ID: "m1", Replace: "c1"}, {ID: "m2", Replace: "c2"}}
+	rs := pythonSalvageSpec()
+	sawControl := false
+	scorer := &fakeScorer{
+		devKillRate:      0.9,
+		devSurvivors:     survivors,
+		compliantFailure: "FAILED tests/test_x_corral.py::test_bad - boom\n1 failed, 3 passed",
+		poolReportFn: func(ctx context.Context, codePath, code, test string, mutants []adequacy.Mutant, testCmd string) (adequacy.Report, error) {
+			if strings.Contains(testCmd, "--deselect") {
+				return adequacy.Report{CompliantPass: true, CanaryKilled: true, Total: 2, Killed: []string{"m1", "m2"}}, nil
+			}
+			return adequacy.Report{CompliantPass: false, Total: 0}, nil
+		},
+		reportFn: func(ctx context.Context, codePath, code, test string, mutants []adequacy.Mutant, testCmd string) (adequacy.Report, error) {
+			if strings.Contains(testCmd, "--deselect") && test == rs.DevTestCode {
+				// The dev suite alone, under the salvage command, kills m1:
+				// something the dev pass never ran is running now.
+				sawControl = true
+				return adequacy.Report{CompliantPass: true, CanaryKilled: true, Total: len(mutants), Killed: []string{"m1"}}, nil
+			}
+			return adequacy.Report{CompliantPass: true, CanaryKilled: true}, nil
+		},
+	}
+	validator := &fakeValidator{mutants: []adequacy.Mutant{{ID: "m0", Replace: "c0"}, survivors[0], survivors[1]}}
+	d := newTestDriverWithSpec(t, 2, scorer, validator, 0.1, rs)
+	v := completeRunTolerantOfWriterRetries(t, d, 2, "no findings")
+
+	if !sawControl {
+		t.Fatal("the salvage's kills were never graded with the dev suite alone")
+	}
+	if slices.Contains(v.ProvenMutantIDs, "m1") {
+		t.Errorf("ProvenMutantIDs = %v: m1 was killed by the dev suite under the salvage command, not by the authored test", v.ProvenMutantIDs)
+	}
+	if !slices.Contains(v.ProvenMutantIDs, "m2") {
+		t.Errorf("ProvenMutantIDs = %v: m2 is the authored test's and must stay proven", v.ProvenMutantIDs)
 	}
 }

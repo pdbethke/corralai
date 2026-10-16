@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"github.com/pdbethke/corralai/internal/shadowpool"
 	"log"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -2088,7 +2089,42 @@ func (d *Driver) salvageByDeselect(ctx context.Context, run *runState, writerTes
 	if len(killed) == 0 {
 		return 0, nil, 0, false
 	}
+	killed, ok = notKilledByTheDevSuite(ctx, d.Scorer, run.rs, survivors, killed, cmd)
+	if !ok || len(killed) == 0 {
+		return 0, nil, 0, false
+	}
 	return len(killed), killed, len(failing), true
+}
+
+// notKilledByTheDevSuite is killed less every mutant the dev suite ALONE kills
+// under the salvage command. The salvage rerun is not the command the dev
+// pass ran, and it can run more than it did: rspec's -E replaces the
+// operator's tag exclusions (measured on rspec-core 3.13: a spec under
+// filter_run_excluding :slow ran), a CLI --grep replaces one set in .mocharc,
+// -t replaces vitest's configured testNamePattern. A spec the dev pass never
+// ran would then kill a survivor and the kill would be credited to the
+// authored test — a proof nobody made. Grading the kills again without the
+// authored test catches that for every runner at once, at one extra run per
+// salvage, rather than one runner's widening at a time. A control that cannot
+// grade (an error, a baseline that fails) credits nothing.
+func notKilledByTheDevSuite(ctx context.Context, s Scorer, rs RunSpec, survivors []adequacy.Mutant, killed []string, cmd string) ([]string, bool) {
+	var mutants []adequacy.Mutant
+	for _, m := range survivors {
+		if slices.Contains(killed, m.ID) {
+			mutants = append(mutants, m)
+		}
+	}
+	control, err := s.ScoreReport(ctx, rs.CodePath, rs.Code, rs.DevTestCode, mutants, cmd)
+	if err != nil || !control.CompliantPass {
+		return nil, false
+	}
+	var own []string
+	for _, id := range killed {
+		if !slices.Contains(control.Killed, id) {
+			own = append(own, id)
+		}
+	}
+	return own, true
 }
 
 // CompliantFailureExplainer is the optional Scorer extension that reports WHY

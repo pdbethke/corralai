@@ -65,6 +65,9 @@ export default defineConfig({
         },
         { label: 'The record — DuckDB, Rekor, MotherDuck', slug: 'docs/warehouse' },
         { label: 'Configuration', slug: 'docs/configuration' },
+        // Half audit (what a run prints, keeps and reuses; dependency binds),
+        // half daemon; the page's own note says which section is which.
+        { label: 'Running it', slug: 'docs/running-it' },
         // Generated from internal/lang's runner table (scripts/gen-language-support.sh).
         { label: 'Language support', slug: 'docs/language-support' },
         {
@@ -73,10 +76,11 @@ export default defineConfig({
           // reader adopting the audit never has to walk through it — the
           // "too many moving parts" a first read used to meet was mostly
           // this group, unlabelled, interleaved with the audit's pages.
-          label: 'The brain (optional — not read by any audit)',
+          // Frozen (2026-10-16): shipped and supported, no longer developed.
+          // Every page in it opens with a note saying so.
+          label: 'The optional daemon (frozen — not read by any audit)',
           collapsed: true,
           items: [
-            { label: 'Running it', slug: 'docs/running-it' },
             { label: 'The task queue + verify gate', slug: 'docs/concepts/queue-and-verify' },
             { label: 'Claims & leases', slug: 'docs/concepts/claims-and-leases' },
             { label: 'Memory tiers + the learning loop', slug: 'docs/concepts/memory-and-learning-loop' },

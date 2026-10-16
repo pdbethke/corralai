@@ -6,8 +6,8 @@ description: A repo's own working knowledge, read by developers, coding agents, 
 {/* SPDX-License-Identifier: Elastic-2.0 */}
 {/* Source: docs/corral/memory-etiquette.md; site/src/components/KnowledgeCorpus.astro */}
 
-:::note[The brain — optional, and not read by any audit]
-This page describes the **brain**, corral's optional coordination daemon. Nothing on it is required for a verdict: `corral certify`, the GitHub Action, `verify`, `ui`, `seal` and `scans` never contact a brain. And nothing on it is read by an audit — an audit's prompts are built from the goal, the code and its symbols, never from shared memory, skills or a prior run. See [the brain, and what it is not](https://github.com/pdbethke/corralai/blob/main/docs/corral/brain.md).
+:::note[The optional daemon — frozen, and not read by any audit]
+This page describes the **brain**, corral's optional coordination daemon. It is frozen: shipped and supported, but no longer developed and not on the path an audit takes. Nothing on it is required for a verdict: `corral certify --local` and `--repo`, `corral review`, the GitHub Action, `verify`, `ui`, `seal` and `scans` never contact a brain. And nothing on it is read by an audit — an audit's prompts are built from the goal, the code and its symbols, never from the daemon's shared memory or skills. See [the brain, and what it is not](https://github.com/pdbethke/corralai/blob/main/docs/corral/brain.md).
 :::
 
 A repo that runs with corralai can carry its working knowledge as a markdown

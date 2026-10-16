@@ -160,8 +160,8 @@ slow"`), not a shell one-liner that chains multiple commands.
     writer-model: claude-sonnet-5
     mutant-model: claude-sonnet-5
     critic-model: claude-haiku-4-5
-    top: "3"                 # audit the three highest-ranked files
-    max-tokens: "3000000"    # a hard cap on the run's spend, every seat
+    top: "3"                 # audit at most three changed files, highest-ranked first
+    max-tokens: "3000000"    # a hard cap on the audit's spend, every audit seat
 ```
 
 **A Python or JavaScript project needs its dependencies on the runner first.**
@@ -190,12 +190,14 @@ need before the corral step:
 
 For JavaScript, use `actions/setup-node`, run `npm ci`, and set
 `test-command: "npm test"`. corral reads which runner that runs from
-`package.json`'s `scripts.test`, and when the script is one jest or mocha
-command it gets that runner's fail-fast flag, test list and one-test runs; a
-compound script (`jest && eslint .`) is graded by exit code alone. **On a public repository, a pull request from a
-fork spends your model key** unless you require approval for fork workflows;
-see [who pays](#who-pays-and-how-not-to-pay-for-a-strangers-pull-request)
-below.
+`package.json`'s `scripts.test`, and when the script is one jest, mocha,
+vitest or `node --test` command it gets that runner's test list, one-test runs
+and salvage (jest and mocha also get a fail-fast flag; see
+[language support](language-support.md)); a compound script
+(`jest && eslint .`) is graded by exit code alone. **On a public repository,
+a pull request from a fork gets no secrets**, so the audit fails for lack of a
+key (exit 2) unless the job is guarded; see
+[who pays](#who-pays-and-how-not-to-pay-for-a-strangers-pull-request) below.
 
 **There is no `v1` tag, but there are pinnable release tags.** `v0.1.0` and
 `v0.2.0` predate the action and carry no `action.yml`; **`v0.3.0` and later do**
@@ -280,9 +282,10 @@ private copies of the checkout — one "tree" per mutant in flight, sized at a
 quarter of the run's budget (`--swarm`, or the host's cores when it is unset).
 Each file's pool is probed first by running that file's own baseline command in
 the copies at once; a suite that fails under concurrency is downgraded to a
-single tree and the `concurrency:` line on that file's report says why. On the
-Action's 4-vCPU runner that budget works out to one tree, so **nothing about a
-CI run changes** — expect the same wall clock. Combined with `--diff-base`
+single tree and the `concurrency:` line on that file's report says why. On a
+GitHub-hosted runner (GitHub lists 4 vCPUs for `ubuntu-latest` on a public
+repository and 2 on a private one) that budget works out to one tree, so
+**nothing about a CI run changes** — expect the same wall clock. Combined with `--diff-base`
 scoping (the default), it is a cost measured against the handful of files a PR
 touched.
 
@@ -303,9 +306,13 @@ A file the diff didn't touch is still counted in the report's denominator, as
 repo, on purpose. It's telling you what it covered, not claiming the whole
 repo passed.
 
-A diff that touches no auditable candidate (a docs-only PR, or one that only
-touches files with no paired test) is a legitimate pass: the action prints
-`NOTHING IN SCOPE:` and exits 0.
+A diff that changes nothing corral audits (a docs-only PR) is a legitimate
+pass: the action prints `NOTHING IN SCOPE:` and exits 0. A diff that changed
+source files corral could not pair with a test, or deleted the test that paired
+one, is **not** a pass: the
+report prints `NOT AUDITED: … NOT a clean bill of health` and the run exits 1,
+because a gate that goes green on exactly the change it could not inspect has
+failed open. Pair them with the `tests` input.
 
 ## Coverage pre-flight (`--preflight`) — CLI only, not yet an Action input
 
@@ -342,7 +349,7 @@ spots for both `coverage.py` and Go's own instrumentation. Treat a finding
 here as "worth a look", not as a certified defect the way a killed mutant is.
 
 **A known limitation on Go: "executed" can mean "imported", not "tested".**
-`-coverpkg=./...` (required — see the false-accusation section above) makes
+`-coverpkg=./...` (required — see the false-accusation section below) makes
 every test binary that *imports* a package instrument it, and Go runs a
 package's `init()` functions and package-level variable initializers at
 **import time**, before any test executes. A file whose only reachable
@@ -390,7 +397,9 @@ limitation it exists to route around. Verified on
 `python-jsonschema/jsonschema`, which yields **0** audit candidates and 31
 Python files excluded as `no-paired-test`: the pre-flight runs.
 
-**All six languages.** The pre-flight is implemented for Go
+**Six of the seven languages.** Rust has no coverage pre-flight yet
+(`cargo llvm-cov` is not wired; see [language support](language-support.md)).
+The pre-flight is implemented for Go
 (`go test -coverpkg=./... -coverprofile=…`), Python (`pytest`/`coverage run` +
 `coverage json`), Ruby (the stdlib `Coverage` module via `RUBYOPT`),
 JavaScript/TypeScript (`NODE_V8_COVERAGE`, built into Node) and PHP (pcov or
@@ -430,7 +439,7 @@ TypeScript's reporter DECLINES a pytest command — each language's CoverageCmd
 accepts only its own runners, in command position — so Python is the *only*
 candidate that claims this command, not merely the likeliest one. (TypeScript
 did once have no reporter at all; that was the original reason, and it stopped
-being true when all six languages got one.)
+being true when every language then supported got one.)
 Given that command, this repo now runs the pre-flight; its TypeScript files
 simply never enter `CoverageMap.Executed` and land in "never measured" —
 the same tri-state contract every other out-of-language file already gets,
@@ -446,8 +455,8 @@ removal.
 
 **Cost: one suite run, but "one run" is not "instant".** The design's claim
 is O(1) in the number of source *files* — one instrumented invocation
-classifies every file in the repo, instead of the ~84-suite-runs-per-file
-the adversarial audit costs. That held on every repo in the foreign-repo
+classifies every file in the repo, instead of the 5 to 40 suite runs per
+file the adversarial audit costs (one per mutant). That held on every repo in the foreign-repo
 sweep this flag was proven against: exactly one suite invocation regardless
 of file count. But the flag's wall clock is still bounded below by however
 long the project's *own* test suite takes to run once — a repo with a large,
@@ -487,13 +496,13 @@ and the fix belongs in the code, not a caveat in these docs.
 | `goals` | no | `""` | Optional JSON file of per-file goals. Omitted means goals are derived per file by a model. |
 | `tests` | no | `""` | Optional JSON file mapping repo-relative **source** paths to their test files, consulted before filename convention. Needed whenever your project names tests after behaviour rather than after source files — common in JS/TS, where convention can pair *nothing* and the gate would then have no file to audit. A mapping to a file that does not exist is refused, not silently ignored. |
 | `timeout` | no | `""` (corral's own default, 30m) | Per-file budget, a Go duration. The default is sized for a PR author who did not choose to start an hours-long job, not for a whole audit: every mutant re-runs your suite, so one large file on a hosted runner is hours. Raise it (and the job's `timeout-minutes`) when you want the complete audit rather than a bounded sample. |
-| `max-tokens` | no | `""` (no cap) | Cap on model tokens for the whole run — input + output, every seat, every file. Checked before each call and charged after it; past the cap no further model call is made, and the cost line says so. The money bound, beside `top` (files) and `timeout` (clock). |
-| `ledger` | no | `""` | A directory inside the checkout that is the repository's **signed ledger** — see "The ledger branch" below. This run's record is written as one JSON entry in `<ledger>/scans/` (naming the previous entry's hash, signed when a certify key is configured) and its graded mutants to `<ledger>/mutants/<commit>.json`; earlier entries are handed to the generator as a **prior** (same-bytes files only; the report says which). Commit the directory back to the `corral/ledger` branch after the step. |
-| `top` | no | `""` (corral's own default bound, 25) | Audit at most this many of the highest-ranked candidate files. An audit costs roughly (mutants × your suite's **whole** runtime) **per file**, and the file count comes from the PR's diff — a number the author picks, not you. See "What one run costs" below before raising it. |
+| `max-tokens` | no | `""` (no cap) | Cap on model tokens for the audit — input + output, every audit seat, every file. The review step is not capped: `corral review` has no token cap. Checked before each call and charged after it; past the cap no further model call is made, and the cost line says so. The money bound, beside `top` (files) and `timeout` (clock). |
+| `ledger` | no | `""` | A directory inside the checkout that is the repository's **signed ledger** — see "The ledger branch" below. This run's record is written as one JSON entry in `<ledger>/scans/` (naming the previous entry's hash, signed when a certify key is configured — see the honesty notes under "The ledger branch") and its graded mutants to `<ledger>/mutants/<commit>.json`; earlier entries are handed to the generator as a **prior** (same-bytes files only; the report says which). Commit the directory back to the `corral/ledger` branch after the step. |
+| `top` | no | `""` (no bound on a pull request; 25 on a whole-repository run) | Audit at most this many of the highest-ranked candidate files. On a pull request the diff is the bound, and corral's default of 25 does not apply to it: left empty, every changed file that pairs with a test is audited. Set it to cap a PR; the changed files it cuts are listed as not audited. An audit costs roughly (mutants × your suite's **whole** runtime) **per file**, and the file count comes from the PR's diff — a number the author picks, not you. See "What one run costs" below before raising it. |
 | `path` | no | `""` (the whole repository) | Audit only the files under this directory, keeping the checkout whole: one package of a monorepo, such as a crate of a Cargo workspace. Tests are still found anywhere in the repository, the build still sees the root's files, and the ledger entry records the scope. |
 | `min-kill-rate` | no | `""` (unset) | Fail the run (exit 1) if **any individual audited file's** kill rate is below this value. Range 0.0-1.0 inclusive; a *minimum*, so a file exactly at the value passes. Opt-in — leave empty to keep the pre-`min-kill-rate` behaviour, where a weak-but-gradable suite still exits 0. See "Failing on a weak kill rate" below. |
 | `max-proven-missed` | no | `""` (unset) | Fail the run if any audited file has *more* than this many PROVEN-MISSED gaps — survivors the herd itself then killed with a test it wrote and ran. Prefer this to `min-kill-rate` as the merge gate: a kill rate is a proportion of freshly generated mutants and moves between runs on unchanged code, while a proven gap is a specific, execution-demonstrated bug. `0` means any demonstrated gap fails the build. Fails **closed** when the herd had survivors but authored no test that graded — a `0` there means nothing was proven, not that the suite is clean. |
-| `push` | no | `""` | Append this run's per-file verdicts to a DuckDB *you* own — a path, or `md:<db>` for MotherDuck. Append-only; every row carries the run URL, and — only when `attest` is also set — the sha256 of the signed statement it came from. See `docs/corral/actions-as-swarm.md` for a full per-PR workflow and `docs/design/cost-model.md` for what a pushed row's timing and cost columns mean. |
+| `push` | no | `""` | Append this run's per-file audit verdicts (the review step does not push) to a DuckDB *you* own — a path, or `md:<db>` for MotherDuck. Append-only; every row carries the run URL, and — only when `attest` is also set — the sha256 of the signed statement it came from. See `docs/corral/actions-as-swarm.md` for a full per-PR workflow and `docs/design/cost-model.md` for what a pushed row's timing and cost columns mean. |
 | `push-source` | no | `"false"` | With `push`, also send the SOURCE BYTES corral holds — the pool's authored test and the full verdict JSON — to the warehouse. Default `false`: those bytes quote your audited code, so with it off the pushed rows carry only numbers, hashes, reasons, and model names, and no source leaves the runner. Mutant code is **never** carried by either setting — corral keeps no mutant source at rest. The scan row records which setting was used. |
 | `motherduck-token` | no | `""` | MotherDuck token, exported as `motherduck_token`, for a `md:<db>` `push` target. Pass as a secret, never inline. Not needed for a local DuckDB path. |
 | `attest` | no | `""` (off) | Write the scan's verdict as an in-toto Statement and publish it as a GitHub artifact attestation (`gh attestation verify`) — a receipt a reviewer can check without trusting the run that produced it. Set to `"true"` to enable. Requires `permissions: { id-token: write, attestations: write, contents: read }` on the calling job; works on public repositories at no cost; signing is keyless through the workflow's own OIDC identity. `action.yml`'s remaining steps (gated on `attest`) upload the statement as a `corral-audit-statement` artifact and print how to `gh attestation verify` it. |
@@ -504,11 +513,6 @@ and the fix belongs in the code, not a caveat in these docs.
 | `codex-api-key` | no | `""` | API key for a `codex` agent seat, supplied as `CODEX_API_KEY`. The `codex` CLI must be installed on the runner. An API key bills per token, unlike a subscription login. Not yet run on a runner: the variable name comes from the codex binary's own error text, not its `--help`. |
 | `model-key` | no | `""` | Generic escape hatch for a credential the three named inputs do not cover (e.g. `GOOGLE_API_KEY`, or a gateway reading its own variable). Prefer the named inputs. |
 | `model-key-env` | no | `""` | Which environment variable `model-key` becomes. Must be a plain environment variable name. **Required when `model-key` is set** — it no longer defaults to `ANTHROPIC_API_KEY`, because corral has no default models and guessing a vendor here puts the key in the wrong variable. Naming a variable a named input already fills, with a *different* value, is refused. |
-
-**The provider keys are additive, not alternatives.** Set as many as your role
-routing needs; pass every one as a secret and never inline. The step never
-echoes a key value, and an unset key is never exported as an empty variable
-(which would blank a credential the runner already had).
 | `derive-model` | **yes**, unless `goals` is set | `""` | Model that derives a goal per file. `goals` skips derivation entirely and needs no model or key. **corral has no default models** — see "Naming the herd" below. |
 | `writer-model` | **yes** | `""` | Model for the test-writer role — the half that authors a test to prove a survivor is a real gap. |
 | `mutant-model` | **yes** | `""` | Model for the mutant-generator role. |
@@ -520,6 +524,11 @@ echoes a key value, and an unset key is never exported as an empty variable
 | `review-max-scopes` | no | `"5"` | How many changed directories to review before refusing and asking for an explicit `review-scope`. |
 | `review-fail-on` | no | `"reproduced"` | `reproduced`: the step fails (exit 3, after the entry is written) when a REPRODUCED finding stands. `never`: recorded and reported, never fails the step. |
 | `corral-version` | no | `""` (falls back to the action's own ref, `github.action_ref`) | Which `corral` to `go install`, as a version suffix (a tag, branch, or commit). Leave it empty unless you deliberately want a different `corral` release than the action you pinned in `uses:`. |
+
+**The provider keys are additive, not alternatives.** Set as many as your role
+routing needs; pass every one as a secret and never inline. The step never
+echoes a key value, and an unset key is never exported as an empty variable
+(which would blank a credential the runner already had).
 
 ## The ledger branch — what a runner remembers
 
@@ -604,20 +613,29 @@ over both, not the store.
           # A chain is one writer at a time. If another run pushed first,
           # our entry names a head that is no longer the head — and a git
           # rebase moves the commit, not the link. So the retry re-LINKS:
-          # take our entry out, fetch the branch, `corral ledger append` it
-          # (re-hash, re-sign, place at the new head), commit, push again.
+          # keep our entry and our mutants file, fetch the branch,
+          # `corral ledger append` the entry (re-hash, re-sign, place at the
+          # new head), put the mutants file back, commit, push again.
+          # `git show HEAD` lists our files even when our commit is the
+          # branch's first, where HEAD~1 does not exist.
+          keep="$RUNNER_TEMP/corral-keep"
           for i in 1 2 3; do
             git push origin HEAD:corral/ledger && exit 0
-            ours=$(git diff --name-only HEAD~1 HEAD -- scans/ | head -1)
-            cp "$ours" "$RUNNER_TEMP/entry.json.gz"
-            git reset -q --hard origin/corral/ledger 2>/dev/null; git fetch origin corral/ledger && git reset -q --hard origin/corral/ledger
-            corral ledger append "$RUNNER_TEMP/entry.json.gz" . && git add -A && git -c user.name=corral -c user.email=corral@users.noreply.github.com commit -qm "corral: ${{ github.sha }} (re-linked)"
+            rm -rf "$keep" && mkdir -p "$keep/mutants"
+            cp "$(git show --name-only --format= HEAD -- scans/ | head -1)" "$keep/entry.json.gz"
+            git show --name-only --format= HEAD -- mutants/ | while read -r f; do cp "$f" "$keep/mutants/"; done
+            git fetch --no-tags origin "+refs/heads/corral/ledger:refs/remotes/origin/corral/ledger" && git reset -q --hard origin/corral/ledger
+            corral ledger append "$keep/entry.json.gz" . || exit 1
+            mkdir -p mutants && { cp -n "$keep"/mutants/* mutants/ 2>/dev/null || true; }
+            git add -A && git -c user.name=corral -c user.email=corral@users.noreply.github.com commit -qm "corral: ${{ github.sha }} (re-linked)"
           done
           exit 1
 ```
 
 Three honesty notes. **A runner has no certify key**, so its entries are
-signed only if you give it one (`CORRALAI_CERTIFY_KEY` as a secret) — the
+signed only if you give it one: the hex-encoded 32-byte Ed25519 seed, stored
+as a secret and set as `CORRALAI_CERTIFY_KEY` in the corral step's `env:` (a
+composite action reads the step's environment) — the
 step above attests the entry file keylessly through the workflow's own
 identity instead, which is what `gh attestation verify` checks; the chain's
 hashes and links hold either way, and `verify --ledger` says which entries
@@ -781,7 +799,7 @@ the graded tests take, multiplied by how many files the PR touched. The step
 summary's per-file line says which measurement produced its number.
 
 Corral's own repo is a worked example, and it is a **measured** one rather than
-an estimate: auditing `cmd/corral/main.go` on a GitHub-hosted 2-core runner took
+an estimate: auditing `cmd/corral/main.go` on a GitHub-hosted `ubuntu-latest` runner took
 **11m12s** end to end (run `30846983897`, 40 mutants planted, kill rate 0.25).
 
 An earlier version of this document predicted "in the region of two hours" for
@@ -794,7 +812,9 @@ only timing that really applies to your repo.
 So:
 
 - Set `top` to bound what one PR can cost. The diff already narrows the
-  candidate set; `top` bounds what is left.
+  candidate set, but nothing else bounds it: on a pull request corral's
+  default of 25 does not apply, so with `top` empty every changed file that
+  pairs with a test is audited.
 - Scope the workflow with `paths:` so a docs-only PR does not spend an hour
   printing `NOTHING IN SCOPE`.
 - Reach for `min-kill-rate` only once you have real timings from your own repo.
@@ -807,13 +827,17 @@ your API key. On a public repo that means **an outside contributor's pull
 request would spend your money**, once per push, for as long as they keep
 pushing.
 
-GitHub withholds secrets from fork pull requests, so an audit on a fork skips
-on its own. Do not rely on that alone — it is a platform default doing the work
-silently, and the specific way it gets undone is someone reaching for
-`pull_request_target` because "fork PRs skip". **That trigger runs with your
-secrets while checking out the contributor's code, so it does not just spend
-your key, it exposes it.** If fork PRs skipping looks like a bug, it is the
-feature.
+GitHub withholds secrets from fork pull requests, so a fork's pull request
+cannot spend your key — but the action does not skip on its own: with the
+models named and no key, corral refuses (`needs a Google key`, exit 2), and
+the contributor sees a red check that is your configuration, not their code.
+It still costs runner minutes up to that point. Guard the job, as below, so a
+fork PR is skipped on purpose. And do not rely on the missing secret alone —
+it is a platform default doing the work silently, and the specific way it gets
+undone is someone reaching for `pull_request_target` to make fork PRs run.
+**That trigger runs with your secrets while checking out the contributor's
+code, so it does not just spend your key, it exposes it.** If fork PRs
+skipping looks like a bug, it is the feature.
 
 Say it in the workflow instead, and add an opt-in so no pull request — yours
 included — starts an hours-long paid job merely by existing:
@@ -833,9 +857,11 @@ jobs:
        contains(github.event.pull_request.labels.*.name, 'audit'))
 ```
 
-`.github/workflows/self-audit.yml` in this repository is exactly this shape —
-non-blocking, `top: "1"`, Go-only paths, fork-guarded and label-gated — and is
-the honest starting point to copy.
+`.github/workflows/self-audit.yml` in this repository is this shape —
+non-blocking, `top: "1"`, Go-only paths, fork-guarded and label-gated — plus a
+step that checks the key secret is present and skips the audit with a notice
+when it is not. Copy that step too if the workflow can run anywhere the secret
+is absent.
 
 ## Failing on a weak kill rate
 
@@ -922,8 +948,9 @@ review there needs `review-scope`.
 **The gate.** `review-fail-on: reproduced` (the default) fails the step with
 exit 3 when a REPRODUCED finding stands at the end — its script ran and
 exited 0, and neither a reproduced refutation nor a person's adjudication
-overturned it. The entry is written and pushed before the gate fires: a
-verdict you only keep when it flatters you is not evidence. `never` records
+overturned it. The entry is written before the gate fires: a verdict you
+only keep when it flatters you is not evidence. (The step does not push a
+review to a warehouse; the ledger directory carries it.) `never` records
 and reports and lets the step pass. The audit's own status wins when the
 audit failed.
 
@@ -951,18 +978,27 @@ refused self-hosted runners that do have the CLI, so it was removed.)
   gate can tell "the review found something that reproduced" from "the review
   did not happen".
 
-- **0** — the scan ran and graded at least one file, and (if `min-kill-rate`
-  was given) every audited file met it; or nothing was in scope at all (a
-  docs-only PR is a legitimate green). **With `min-kill-rate` left unset**, a
-  weak-but-gradable suite still exits 0 regardless of its score — read the
-  report for the number, or set `min-kill-rate` if you want CI to block on it.
-- **1** — a real failure: either files were in scope and *none* of them could
-  be graded at all (`COULD-NOT-GRADE:`, e.g. every candidate's baseline suite
-  was already broken or flaky), enumeration failed, or (only when
-  `min-kill-rate` was given) at least one audited file scored below it
-  (`KILL-RATE BREACH:`). Per-file goal derivation that runs and comes back
-  empty for every file lands here too — the scan happened, it just graded
-  nothing.
+- **0** — the scan ran and graded at least one file, and every audited file
+  met `min-kill-rate` and `max-proven-missed` (when given); or nothing corral
+  audits changed (a docs-only PR is a legitimate green). **With both gates left
+  unset**, a weak-but-gradable suite still exits 0 regardless of its score —
+  read the report for the number, or set a gate if you want CI to block on it.
+- **1** — a real failure. Any of:
+  - the diff changed source files corral could not pair with a test, or
+    deleted the test that paired one (`NOT AUDITED:`);
+  - files were in scope and *none* of them could be graded
+    (`COULD-NOT-GRADE:`, e.g. every candidate's baseline suite was already
+    broken or flaky), including every audited file UNCOVERED by the suite
+    (`NO GRADED FILE`) and per-file goal derivation that came back empty for
+    every file;
+  - every audited file hit its `timeout` before the pool finished;
+  - enumeration failed (a shallow checkout with no merge base, for one);
+  - `min-kill-rate` was given and a file scored below it (`KILL-RATE BREACH:`);
+  - `max-proven-missed` was given and a file has more proven gaps than it
+    allows, or the question could not be answered for a file that had
+    survivors (`PROVEN-GAP UNMEASURED`: the writer failed, its test was
+    unsound, or the file timed out before the pool scored), or no mutant of a
+    file could be graded at all.
 - **130** — the run was interrupted (Ctrl-C or SIGTERM): nothing was
   recorded. No ledger entry, attestation,
   `--record-mutants` set or push; the step fails as it does on 1. A review
@@ -970,10 +1006,12 @@ refused self-hosted runners that do have the CLI, so it was removed.)
   exits 130 and says so.
 
 - **2** — the run never started: a usage error (bad flags, including a
-  `min-kill-rate` that doesn't parse or falls outside 0.0-1.0), or the goal
-  deriver could not be CONSTRUCTED at all — the usual cause being no
-  `model-key` (and no `goals` file) to derive goals with. Distinct from exit
-  1: nothing was attempted, so nothing is being reported about your code.
+  `min-kill-rate` that doesn't parse or falls outside 0.0-1.0), a seat left
+  unnamed (`writer-model`, `mutant-model`, and `derive-model` unless `goals`
+  is set — corral has no default models), or a named seat with no key for its
+  provider (`needs a Google key`, which is what a fork's pull request sees,
+  since it gets no secrets). Distinct from exit 1: nothing was attempted, so
+  nothing is being reported about your code.
 
   **Also exit 2: a `test-command` containing one of corral's own flag names.**
   Everything after `--` is your test command, and corral used to hand it
@@ -982,10 +1020,15 @@ refused self-hosted runners that do have the CLI, so it was removed.)
   would have failed. A silent-no-gate is the worst outcome available to a merge
   gate, so corral now refuses instead, naming the offending token.
 
-  The cost of that trade is real: a few test runners have flags spelled the
-  same as corral's. Cypress's `--record` is the live example — `cypress run
-  --record` was accepted before and is refused now. Whole flag names only, so
-  `--recorder`, `--top-level` and `--substrate-foo` are untouched, and both
-  `--flag value` and `--flag=value` are caught. If your test command genuinely
-  needs a colliding flag, wrap it in a script and pass the script as
-  `test-command`.
+  The cost of that trade is real: test runners have flags spelled the same as
+  corral's, with one dash or two. Five names that everyday runners use are let
+  through — `all`, `tests`, `timeout`, `json` and `path` — because misplacing
+  one of them cannot switch a gate off or lift a spending cap: corral uses its
+  own default for that flag and the runner gets an argument it understands. So
+  `cargo test --all`, `cargo test --tests`, `go test -timeout 5m ./...`,
+  `go test -json ./...` and `pytest --timeout=30` all work. Every other name is
+  refused, including any flag added to corral later, until someone decides it
+  is safe. Whole flag names only, so `--recorder`, `--top-level` and
+  `--substrate-foo` are untouched, and both `--flag value` and `--flag=value`
+  are caught. If your test command genuinely needs a colliding flag, wrap it in
+  a script and pass the script as `test-command`.

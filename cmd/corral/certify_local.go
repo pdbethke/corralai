@@ -104,6 +104,7 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 	timeout := fs.Duration("timeout", defaultRunTimeout, "WALL-CLOCK budget for the whole run, measured from its start — not a no-progress timer. A run still making steady progress is stopped when it exceeds this, and banks a needs-review TIMEOUT verdict: the dev kill rate and survivors survive (they were measured), the PROVING half does not. A file with many survivors needs room — 13 survivors measured at ~21-24 minutes — so raise it rather than lose the proofs. One in-flight LLM call can overshoot slightly, since the deadline is checked between ticks")
 	testTimeout := fs.Duration("test-timeout", 0, "hard cap on a SINGLE test-suite run in the jail (0 = auto: derived from the healthy suite's own runtime, so a mutant that makes the suite hang is killed fast instead of eating the whole --timeout). Raise it only if your suite legitimately runs long")
 	noFailFast := fs.Bool("no-fail-fast", false, noFailFastHelp)
+	runnerFlag := fs.String("runner", "", runnerHelp)
 	poll := fs.Duration("poll", 2*time.Second, "how long to wait between drive iterations when nothing is claimable")
 	repoFlag := fs.String("repo", "", "repository (default: git remote.origin.url, else \"local\")")
 	commitFlag := fs.String("commit", "", "commit sha (default: git rev-parse HEAD, else \"local\")")
@@ -146,6 +147,12 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 	if wmErr != nil {
 		fmt.Fprintf(stderr, "%s: %v\n", "corral certify --local", wmErr)
 		return 2
+	}
+	if *runnerFlag != "" {
+		if err := lang.CheckRunnerID(*runnerFlag); err != nil {
+			fmt.Fprintf(stderr, "corral certify --local: %v\n", err)
+			return 2
+		}
 	}
 
 	// The shadow draw happens HERE, before the registry resolves any seat, so
@@ -387,6 +394,7 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 
 		swarm: *swarmFlag, mutantTimeout: *testTimeout, timeout: *timeout,
 		noFailFast: *noFailFast,
+		runner:     *runnerFlag,
 		poll:       *poll, nMutants: *nMutants, maxShards: *maxShardsFlag,
 
 		writerModel: *writerModel, criticModel: *criticModel,
@@ -2724,6 +2732,10 @@ const noFailFastHelp = "grade every mutant with the WHOLE selected test set inst
 	"which is most of the per-mutant cost on a repo with a real suite; the verdict is identical either way, and the baseline always runs everything. " +
 	"COSTS: turning this off makes each killed mutant pay for its whole selected set again — on a 77s suite that is the dominant term in the audit. " +
 	"Use it only if your suite is order-dependent or flaky in a way that makes an early stop misleading."
+
+const runnerHelp = "the test runner behind the test command, when corral cannot read it from the command or its package script " +
+	"(a runner id: go-test, pytest, jest, vitest, mocha, node-test, rspec, phpunit, cargo-nextest, ...; docs/corral/language-support.md lists them). " +
+	"Overrides detection; corral still runs your command as given, and adds a runner's own arguments (fail-fast, one-test runs) only where the command or its script names that runner"
 
 // defaultRunTimeout is the wall-clock budget one file's run gets before it is
 // stopped and banked as a TIMEOUT verdict.

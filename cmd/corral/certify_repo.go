@@ -95,6 +95,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	maxProvenMissedFlag := fs.String("max-proven-missed", "", "fail the scan (exit 1) if ANY audited file has MORE than this many proven-missed gaps — survivors the pool then killed with a test it WROTE and RAN. Opt-in and unset by default. Prefer this to --min-kill-rate as a merge gate: a kill rate is a proportion of freshly generated mutants and moves between runs on unchanged code, so a threshold set near a healthy value flaps red and gets switched off. A proven-missed gap is a specific demonstrated bug the suite does not catch, established by execution, and 0 means the pool proved nothing — not that it sampled well")
 	minKillRateFlag := fs.String("min-kill-rate", "", "fail the scan (exit 1) if ANY audited file's kill rate is below this value (0.0-1.0 inclusive; a minimum, so a file exactly at the threshold passes). Opt-in: unset by default, so exit codes are unchanged unless this is given. Applies PER FILE, not to the aggregate — a well-tested file must not mask a weak one")
 	noFailFastFlag := fs.Bool("no-fail-fast", false, noFailFastHelp)
+	runnerFlag := fs.String("runner", "", runnerHelp)
 	preflightFlag := fs.Bool("preflight", false, "run the project's test suite once with coverage instrumentation and report which source files it never executes. One extra suite run; reports coverage-grade evidence, not proof")
 	ledgerFlag := fs.String("ledger", "", "the ledger DIRECTORY this scan's entry is written to and earlier entries are read from as the prior (default: <repo>/.corral/ledger, or $CORRAL_LEDGER). One gzipped JSON entry per scan, naming the previous entry's hash, signed when a certify key is configured — the record, in plain text; DuckDB is its view (`corral verify --ledger`, `seal --db <dir>`, `models rank --db <dir>`). Make the directory a worktree of the corral/ledger branch and a laptop run and an Action run are one writer")
 	noLedgerFlag := fs.Bool("no-ledger", false, "write no ledger entry and read no prior from the default ledger directory (an explicit --prior still applies)")
@@ -129,6 +130,12 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	if wmErr != nil {
 		fmt.Fprintf(stderr, "%s: %v\n", "corral certify --repo", wmErr)
 		return 2
+	}
+	if *runnerFlag != "" {
+		if err := lang.CheckRunnerID(*runnerFlag); err != nil {
+			fmt.Fprintf(stderr, "corral certify --repo: %v\n", err)
+			return 2
+		}
 	}
 
 	// The record is signed at the END of a paid run. A local certify key that
@@ -825,6 +832,12 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		}
 		return d, err
 	}
+	// A --runner that runs none of the selected files' languages would be
+	// inert for every job; refused here, before goal derivation spends.
+	if err := runnerServesSome(*runnerFlag, selected); err != nil {
+		fmt.Fprintf(stderr, "corral certify --repo: %v\n", err)
+		return 2
+	}
 	gs, disclosure, code := resolveGoalSource(stderr, *repoDir, *goalsPath, *deriveModel, seatReg.deriveEndpoint(), *dryRun, len(selected), keepDeriver, goalStore, *noGoalCacheFlag, !*noGoalCacheFlag)
 	if code != 0 {
 		return code
@@ -1339,6 +1352,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	}
 	ex.mutantConcurrency = mutantConc
 	ex.noFailFast = *noFailFastFlag
+	ex.runner = *runnerFlag
 	printRunDisclosures(stdout, ex, jobs)
 
 	// ex is non-nil here: it is constructed on every non-dry-run path above,
@@ -5962,4 +5976,27 @@ func (l *localExecutor) runnerFor(langName string) string {
 		return ""
 	}
 	return l.runner
+}
+
+// runnerServesSome refuses a --runner that runs none of the candidates'
+// languages; "" (no --runner) and a runner some candidate's language uses
+// pass.
+func runnerServesSome(id string, cands []reposcan.Candidate) error {
+	if id == "" {
+		return nil
+	}
+	seen := map[string]bool{}
+	var langs []string
+	for _, c := range cands {
+		p, ok := lang.ByName(c.Lang)
+		if !ok || seen[c.Lang] {
+			continue
+		}
+		seen[c.Lang] = true
+		langs = append(langs, c.Lang)
+		if _, err := lang.RunnerByID(p, id); err == nil {
+			return nil
+		}
+	}
+	return fmt.Errorf("--runner %q runs none of the selected files' languages (%s)", id, strings.Join(langs, ", "))
 }

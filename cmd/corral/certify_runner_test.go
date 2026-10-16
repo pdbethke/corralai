@@ -5,6 +5,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/pdbethke/corralai/internal/lang"
+	"github.com/pdbethke/corralai/internal/reposcan"
 )
 
 func writeRepo(t *testing.T, files map[string]string) string {
@@ -86,5 +88,31 @@ func TestCertifyRepoRunnerAppliesToItsLanguageOnly(t *testing.T) {
 	}
 	if got := ex.runnerFor("go"); got != "" {
 		t.Errorf("go job: runner %q, want detection", got)
+	}
+}
+
+// A --runner typo is refused when the flag is read, in both modes, before
+// anything is built or spent, and the refusal lists the ids.
+func TestRunnerFlagTypoIsRefusedInBothModes(t *testing.T) {
+	for name, run := range map[string]func([]string, io.Writer, io.Writer) int{
+		"--local": runCertifyLocal, "--repo": runCertifyRepo,
+	} {
+		var stderr bytes.Buffer
+		if code := run([]string{"--runner", "jets"}, io.Discard, &stderr); code != 2 || !strings.Contains(stderr.String(), "node-test") {
+			t.Errorf("%s --runner jets: exit %d, stderr %q", name, code, stderr.String())
+		}
+	}
+}
+
+func TestRunnerServesSome(t *testing.T) {
+	cands := []reposcan.Candidate{{Lang: "go"}, {Lang: "typescript"}}
+	if err := runnerServesSome("vitest", cands); err != nil {
+		t.Errorf("vitest over go+typescript: %v", err)
+	}
+	if err := runnerServesSome("rspec", cands); err == nil || !strings.Contains(err.Error(), "go, typescript") {
+		t.Errorf("rspec over go+typescript: %v", err)
+	}
+	if err := runnerServesSome("", cands); err != nil {
+		t.Errorf("no --runner: %v", err)
 	}
 }

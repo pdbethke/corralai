@@ -264,6 +264,19 @@ func RunnerByID(p Plugin, id string) (Runner, error) {
 	return Runner{}, fmt.Errorf("--runner %q is not a %s runner; one of: %s", id, p.Name(), strings.Join(ids, ", "))
 }
 
+// CheckRunnerID refuses an id no row has, listing every id: a --runner typo
+// is caught when the flag is read, before any language is known.
+func CheckRunnerID(id string) error {
+	ids := make([]string, len(runners))
+	for i, r := range runners {
+		if r.ID == id {
+			return nil
+		}
+		ids[i] = r.ID
+	}
+	return fmt.Errorf("--runner %q is not a runner corral knows; one of: %s", id, strings.Join(ids, ", "))
+}
+
 // ListTestsCmd is the command that lists the tests argv runs, from its runner.
 func ListTestsCmd(p Plugin, inv Invocation, testPath string) ([]string, bool) {
 	r, ok := RunnerFor(p, inv)

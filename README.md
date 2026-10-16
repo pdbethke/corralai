@@ -27,23 +27,100 @@ the constraint everything below is built on. ([why it's the whole design](https:
 
 ### See it work (2 minutes)
 
-One command, no setup beyond a provider key. `corral demo` writes a small Go
-package with a five-clause password rule and a test that checks only two of
-them, then audits it with the real `certify --local`:
+One command. `corral demo` writes a small Go package with a five-clause
+password rule and a test that checks only two of them, then audits it with the
+real `certify --local`:
 
 ```bash
 go install github.com/pdbethke/corralai/cmd/corral@v1.0.0-rc.23   # @latest still resolves to 0.8.x: a release candidate is a pre-release to Go
-export ANTHROPIC_API_KEY=sk-ant-...     # or OPENAI_/GEMINI_/OPENROUTER_API_KEY
 
-corral demo --writer-model <model> --mutant-model <model> --critic-model <model>
+# with API keys (the model names are an example, not a default; corral has none):
+export GEMINI_API_KEY=...  ANTHROPIC_API_KEY=sk-ant-...
+corral demo --writer-model gemini-3.8-flash --mutant-model gemini-3.8-flash --critic-model claude-haiku-4-5
+
+# or with no API key at all, on the coding-agent CLIs you are already logged in to:
+corral demo --writer-model codex --mutant-model codex --critic-model claude-code
 ```
 
-Measured on a warm Go module cache: **~25s to compile and install** (it builds
-two CGO deps) **and ~75s for the demo itself** to converge to a verdict — call
-it two minutes end to end, longer on a first-ever `go install`. You need a Go
-toolchain — you installed corral with one — and one key. No venv, no
-database, no fixtures, nothing of yours to configure. It leaves the project on
-disk so you can read the test and see what it never asserts.
+**Any seat can be a coding-agent CLI instead of an API model.** `claude-code`
+and `codex` come defined (`antigravity` too, unmeasured), and you can define
+your own as `CORRALAI_AGENT_<NAME>`. The agent brings its own login, so on a
+Claude or ChatGPT subscription a seat has no per-token API bill. The second
+command above was run with no API key in the environment: 6 of 6 survivors
+were proven by an authored test. This works on every verb that takes a seat
+(`demo`, `certify --local`, `certify --repo`, `doctor`, `review`), not only on
+`review`. Seats start cold, so the agent never sees your own `CLAUDE.md`, memory or
+skills. An exported vendor API key may bill instead of the subscription. See
+[docs/corral/agent-seats.md](docs/corral/agent-seats.md).
+
+On a warm Go module cache, the install took **~25s** and the demo **~75s** to
+reach a verdict, so about two minutes end to end, longer on a first-ever
+`go install`. What you need:
+
+- **Go**, and a **C compiler** (gcc or clang; Xcode Command Line Tools on
+  macOS). corral links two cgo dependencies, DuckDB and tree-sitter.
+- **A sandbox.** On Linux that means `bubblewrap` (`apt install bubblewrap`). On Ubuntu 24.04
+  and later, AppArmor stops bwrap from starting until you load Ubuntu's
+  `bwrap-userns-restrict` profile. corral's error prints the two commands,
+  and they are also [below](#the-jail-in-detail). On macOS the default is
+  `sandbox-exec`, which is built in.
+- **Seats**: one API key, or a logged-in `codex` / `claude` CLI.
+
+You need no virtualenv, no database and no fixtures. The demo leaves the
+project on disk so you can read the test and see what it never asserts.
+
+### Audit a Rust crate (a Cargo workspace such as Warp)
+
+Rust is audited a crate at a time. Run this from a **scratch clone**, because
+`--substrate workspace` plants each fault in the checkout itself:
+
+```bash
+corral certify --repo . --path crates/<crate> --dry-run      # free: no key, no sandbox, no model call
+
+corral certify --repo . --path crates/<crate> --substrate workspace --top 1 \
+  --derive-model gemini-3.8-flash --mutant-model gemini-3.8-flash \
+  --writer-model gemini-3.8-flash --critic-model codex \
+  --max-tokens 3000000 \
+  -- cargo test -p <crate>          # or: cargo nextest run -p <crate>
+```
+
+What each part is for, and the limits that apply:
+
+- **`--path crates/<crate>`** limits the scan to one directory but keeps the
+  whole repository. The build still sees the workspace's root `Cargo.toml`, and
+  tests are still found anywhere in the repository. Scope the test command the
+  same way, with `-p <crate>`. `cargo test --all` and `--tests` are also
+  accepted after `--`.
+- **`--substrate workspace`** runs your own toolchain, so a stock rustup under
+  `~/.cargo` works. The default sandboxed run uses a system-wide toolchain only
+  (`RUSTUP_HOME=/usr/local/rustup`), and when that install is missing it is
+  refused before anything is spent. To use the sandbox, install Rust like this:
+  `RUSTUP_HOME=/usr/local/rustup CARGO_HOME=/usr/local/cargo rustup-init
+  --no-modify-path --default-toolchain <version>`, with `/usr/local/cargo/bin`
+  on `PATH`.
+- **Only sources whose tests live in a separate file can be audited.** That
+  means a file declaring `#[cfg(test)] #[path = "foo_tests.rs"] mod tests;` or
+  a bare `mod tests;`. corral appends its test to that file as a
+  `mod corral_tests { use super::super::*; … }` block. A file whose tests are
+  inline (`mod tests { … }`) is listed as `test-landing-not-built`. It is never
+  audited, because the test would have to be written into the source under
+  audit. `certify --local` refuses a `.rs` file unless you pass `--repo-dir`.
+- **What Rust does not have yet:** a coverage pre-flight, a verified fail-fast
+  flag, salvage of a partly failing authored test, and `--matrix`. The critic
+  is still given every test name, and each of its "this test can never fail"
+  claims is checked by running that test alone (`-- --exact`). See
+  [docs/corral/language-support.md](docs/corral/language-support.md).
+- **What it found on Warp.** The first run was on `crates/fuzzy_match` at
+  `714c51f1`, with the critic on the Codex CLI on a subscription. Of 34 planted
+  faults, the crate's 33 tests caught 11 (0.32). corral wrote and ran tests
+  proving 22 of the 23 survivors were real gaps. The record is signed ledger
+  entry [`94d9296c5801`](https://github.com/pdbethke/corralai/blob/corral/ledger/scans/20261014T133712Z-714c51f1e29f-8f1bc4949be5.json.gz),
+  and [the field note](https://corralai.dev/field-notes/the-first-rust-audit/)
+  walks through it. A second run on the same commit, from a clean Ubuntu
+  container, graded 37 and proved 29 (CHANGELOG, rc.20). Each run plants a
+  fresh set of faults.
+
+### What a run does
 
 In the age of AI, the thing that wrote the code tends to be the thing that grades
 it — the model writes the code and says it's good, or writes the tests for its own
@@ -53,9 +130,9 @@ that did the work never certifies the work, nothing is taken on a model's say-so
 the one number that means anything is the one no model was allowed to author — it's
 what happened when the check actually ran, in a sandbox.
 
-**Those model names are an example, not a default — corral has none.** Every seat
-is yours to name, from whichever provider you have a key for; the models above are
-simply what *we* run. The one rule is that the **critic must differ from the
+**The model names in these commands are examples, not defaults — corral has none.** Every seat
+is yours to name, from whichever provider you have a key for or whichever agent CLI
+you are logged in to; the models above are simply what *we* run. The one rule is that the **critic must differ from the
 writer** — the run refuses to start where they collapse onto one model. That rule
 enforces *distinctness*, which is necessary and, on our own evidence, not
 sufficient: two frontier models from different labs still shared three quarters
@@ -85,8 +162,8 @@ actually test anything, or do they just pass?* — and answers it by execution:
 - A **test-critic** — always a *different* model, enforced — reads your test
   file next to the code and returns one verdict per test: sound, vacuous (it can
   never fail), or a dead check inside an otherwise real test. The answer is held
-  to a schema by the provider; for Go and Python the critic is handed every test
-  name and must judge each one, in batches of 20. A review cut short is reported
+  to a schema by the provider; for Go, Python, PHP and Rust the critic is handed
+  every test name and must judge each one, in batches of 20. A review cut short is reported
   as INCOMPLETE, never as clean. Its opinion is carried as **unverified advice;
   it never gates the verdict.**
 
@@ -103,14 +180,14 @@ server, was never submitted to a public witness, so it's "signed by you, not
 third-party attested" — a weaker claim, and verify makes you say so out loud.
 A stronger record is one a third party witnessed: `certify --repo --attest
 --transparency` logs the signed statement to **Sigstore Rekor**, a public,
-append-only log (see [the warehouse and public transparency](#in-ci--the-github-action)
-below), and the optional brain daemon anchors every record it signs the same
-way, carrying the inclusion proof *inside* the record. `corral certify verify`
-checks an anchored record against the Rekor key from Sigstore's TUF root — one
-fetch of that root, then no round trip to the log or to any server — so
-tampering is detectable by someone who trusts neither. A witness outage
-degrades honestly (`anchored=false`, never a fabricated proof); verify then
-refuses unless you pass `--allow-unanchored`.
+append-only log, and `corral verify --attest` checks it (see [the warehouse
+and public transparency](#in-ci--the-github-action) below). A record file like
+the one above is anchored only when the optional, frozen brain daemon signed
+it, in which case the inclusion proof is carried inside the record and
+`corral certify verify` checks it against the Rekor key from Sigstore's TUF
+root, with no round trip to the log. A record that was never anchored says
+`anchored=false`, never a fabricated proof, and verify refuses it unless you
+pass `--allow-unanchored`.
 
 ### Audit a real repo
 
@@ -136,8 +213,9 @@ corral certify --repo . --top 3 --max-tokens 3000000 \
 
 The model names are an example — what we run, not a default. `--top 3` audits the
 three highest-ranked files and `--max-tokens` caps the whole run's spend. For
-scale, one measured run on flask's `src/flask/app.py` with those seats took about
-six minutes and 0.5M input tokens, and proved 9 of 9 surviving bugs catchable. Each
+scale, one maintainer-run audit of flask's `src/flask/app.py` with those seats
+took about six minutes and 0.5M input tokens, and proved 9 of 9 surviving bugs
+catchable (a self-report: no artefact of that run is in this repository). Each
 proven test is printed at the end of the report with "add it to your suite", and
 `corral scans show <id> --evidence` prints it again later; corral does not write
 it into your repository or open a pull request.
@@ -185,8 +263,11 @@ checks the environment for free — see below.
 Go, Python, Ruby, JavaScript, TypeScript, PHP and Rust — the language is
 inferred from `--code`'s extension, each a plugin in `internal/lang`. The
 authored test is written in **your project's own harness** (it is shown your
-existing test file and told to match it), so vitest, jest, pytest, minitest,
-RSpec and PHPUnit all work without configuration. What corral does with each
+existing test file and told to match it). corral recognises the runner from
+your test command — `go test`, gotestsum, pytest, unittest, jest, vitest,
+mocha, `node --test`, RSpec, minitest, PHPUnit, `cargo test`, `cargo nextest`
+— or from the package script behind `npm test`, `yarn test`, `pnpm test` or
+`composer test`; `--runner <id>` names it when corral cannot. What corral does with each
 language's tests, runner by runner, and why each gap exists, is on
 [docs/corral/language-support.md](docs/corral/language-support.md) —
 generated from the table the code dispatches on, not written by hand.
@@ -202,12 +283,15 @@ passing unit test, so here is what has actually been run, against what:
 | **TypeScript** | a private SDK, and [vercel/ms](https://github.com/vercel/ms) | 0.79 / **0.94**, 3 and 2 gaps proven |
 | **JavaScript** | [vercel/ms](https://github.com/vercel/ms) under jest | **CERTIFIED**, 33 of 35 killed, 2 gaps proven |
 | **Ruby** | [minitest](https://github.com/minitest/minitest) itself | 36 of 40 killed, **0.90** |
-| **PHP** | [webmozart/assert](https://github.com/webmozart/assert) under PHPUnit | **CERTIFIED**, 40 of 40 planted faults killed, 0 survivors |
+| **PHP** | [webmozart/assert](https://github.com/webmozart/assert) under PHPUnit | **CERTIFIED**, 40 of 40 planted faults killed; a later run on `src/Assert.php` left 1 survivor, and the writer proved it |
+| **Rust** | [Warp](https://github.com/warpdotdev/warp)'s `crates/fuzzy_match` under `cargo nextest` | 11 of 34 killed, **0.32**, 22 gaps proven |
 
-**Which of these can you open for yourself?** Two. The Go row is a GitHub
-Actions run, linked from
+**Which of these can you open for yourself?** Three. The Go row is GitHub
+Actions run `30846983897`, named in
 [docs/corral/github-action.md](docs/corral/github-action.md); the vercel/ms
-result is a published recording under `site/src/data/recordings/`. The Python,
+result is a published recording under `site/src/data/recordings/`; the Rust
+row is a signed entry on the [`corral/ledger`](https://github.com/pdbethke/corralai/tree/corral/ledger)
+branch, `94d9296c5801`. The Python,
 Ruby, PHP and private-SDK figures are maintainer-run and have no artefact in
 this repository — they are self-reports, and a project whose whole argument is
 execution over self-report should say which of its own numbers are which.
@@ -216,15 +300,14 @@ Reproducing them is the point: every one names the repo and the runner.
 Go and Python are exercised hardest — Go on demand in CI, Python across
 repeated whole-repo scans. The self-audit workflow is opt-in per pull request
 (it needs the `audit` label) and is `continue-on-error`, so it is a tool the
-maintainer reaches for, not a gate that runs on every commit: of its last 100
-runs, 6 executed and 94 skipped. **TypeScript, JavaScript, Ruby and PHP each rest on
-a single third-party repository**, which is enough to show the plugin works
-and is not evidence about the ecosystem. Treat them accordingly. PHP's own
-40/40 deserves the same honesty every other row gets: a suite that killed
-everything an adversary planted is a genuinely adequate suite on THAT run —
-but it also means the pool's proving seat, which exists to author a killing
-test against whatever survives, had nothing left to prove. Zero survivors is
-the good outcome, not a gap in what was measured.
+maintainer reaches for, not a gate that runs on every commit: as of
+2026-10-16, its last 100 runs were all skipped. **TypeScript, JavaScript, Ruby,
+PHP and Rust each rest on a single third-party repository**, which is enough
+to show the plugin works and is not evidence about the ecosystem. Treat them
+accordingly. PHP's 40/40 run gave the proving seat nothing to prove; the
+later run that left one survivor is where the PHP writer proved a gap (the
+suite tests `-123`, never `-1`, and the authored test calls
+`Assert::notNegativeInteger(-1)`; CHANGELOG, rc.22).
 
 One number in that table deserves its own warning: kill rate moves **run to
 run on the same file with the same suite**, because the faults are generated
@@ -240,8 +323,6 @@ preflight now resolves the real interpreter and probes it *through* the
 sandbox before spending a single model call, and refuses with the fix named
 if it can't follow the chain: pass an explicit interpreter in your test
 command, e.g. `-- php8.5 vendor/bin/phpunit tests/`.
-
-C is next.
 
 ### Single files, and what the demo runs: `corral certify --local`
 
@@ -266,8 +347,9 @@ is bound into it read-only when you pass `--repo-dir`; one under your home
 directory, or a `pip install --user`, is invisible there.
 
 > **Whole-repo scanning is not equally strong across those languages.** `certify
-> --local` audits any single file you name, in any of them — you give it the path,
-> so nothing has to be discovered. `certify --repo` must first *find* the files, by
+> --local` audits any single file you name — you give it the path, so nothing
+> has to be discovered (a Rust file also needs `--repo-dir` and a separate test
+> file; see [the Rust section](#audit-a-rust-crate-a-cargo-workspace-such-as-warp)). `certify --repo` must first *find* the files, by
 > pairing each source file with its test using naming conventions, and that pairing
 > is much better at some ecosystems than others. On a real Python run that also
 > changes: the one instrumented coverage pass promotes any file the tests
@@ -399,7 +481,8 @@ The levers that bound it: `corral doctor` (below) catches environment failures f
 free before a run spends anything; `--top` bounds a whole-repo scan to the
 highest-ranked N candidates instead of auditing every file; the mutant budget is
 sized to each file's complexity and fitted to your `--timeout` from a measured
-suite cost (below), and `--n-mutants` sets it by hand; and `--mutants`/`--record-mutants` let you pin a recorded
+suite cost (below), and on `certify --local` `--n-mutants` sets it by hand
+(`certify --repo` has no such flag); and `--mutants`/`--record-mutants` let you pin a recorded
 mutant set and replay it — comparing runs, or re-grading after a fix, without paying
 for a fresh generator call. There is no cache that makes a slow suite fast; these
 bound *how many times* the suite runs, not how long each run takes.
@@ -456,8 +539,8 @@ reported `[TEST UNSOUND]` and its proven count is **withheld** rather than repor
 as a clean zero.
 
 **What varies is whether the authored test comes back sound — not whether corral can
-prove gaps once it does.** Measured on `src/flask/cli.py` in pallets/flask across
-four runs: one authored test passed on the unmodified source and then killed **14 of
+prove gaps once it does.** Measured by the maintainer on `src/flask/cli.py` in
+pallets/flask across four runs (no artefact in this repository): one authored test passed on the unmodified source and then killed **14 of
 14** survivors, proving every one by execution; another failed on the unmodified
 source and proved nothing. The determining factor was the test's own soundness, and a
 test that fails on correct code is now reissued to the writer with the failure fed
@@ -477,7 +560,8 @@ corral certify <ref> -- <cmd>      # e.g. corral certify HEAD -- go test ./...
 
 It checks `<ref>` out into a jail, runs `<cmd>`, reads the exit code, and writes a
 signed record you verify offline with `corral certify verify` — no server required.
-`--brain <url>` optionally posts it to a running brain.
+`--brain <url>` posts it to the optional, frozen brain daemon instead, if you
+run one.
 
 ## Three constraints the machine enforces
 
@@ -500,7 +584,7 @@ Not a slogan — the code refuses to do otherwise.
    is a deterministic bit, not a judgment.
 3. **The boundary is named, and so is the record.** A model that writes and runs
    code is a security problem, so corral says where the fence is instead of
-   implying one: `certify --local` runs every mutant in a `bwrap` jail (no network,
+   implying one: `certify --local` runs every mutant in a jail (`bwrap` on Linux; no network,
    secret-free env, workspace-confined — the only mode, `--jail none` is refused);
    `certify --repo --substrate workspace` runs your suite **unjailed, in your own
    checkout**, and the caller — a CI runner, a throwaway tree — *is* the boundary,
@@ -517,8 +601,9 @@ suite are separate *duties*, and the machine refuses to let one model hold two o
 them where that would let an author grade himself. The **corral** is the enclosure
 those seats work in and the **fences** are the security boundaries.
 
-> **Where it's at:** pre-1.0, solo-maintained, tested honestly — every claim in this
-> README was run before it was written. Issues and verified-harness PRs welcome.
+> **Where it's at:** solo-maintained. The rule for this README is that every
+> claim was run before it was written; a claim found to break that rule is
+> corrected in the open. Issues and verified-harness PRs welcome.
 
 ## In CI — the GitHub Action
 
@@ -531,12 +616,19 @@ itself is the isolation boundary, so this is for CI, not a working tree you
 care about. Scoped to the PR's changed files by default (auditing every file
 on every PR is expensive — between 5 and 40 suite runs per file, one per
 mutant, the count set by the file's complexity; it doubles only if you name a
---shadow-model); a whole-repo run is opt-in. By default a weak-but-gradable kill rate still exits 0 — the
-opt-in `min-kill-rate` input (`--min-kill-rate` on the CLI) fails the run
-when any *individual* audited file scores below the threshold you set. See
+--shadow-model); a whole-repo run is opt-in. `path` scopes it to one directory
+(one crate of a Cargo workspace, one package of a monorepo), `top` caps how
+many files one run audits, and `max-tokens` caps its spend. By default a weak
+but gradable result still exits 0. The merge gate to use is
+`max-proven-missed` (`--max-proven-missed` on the CLI): it fails the run when
+any audited file has more proven missing tests than you allow, and each of
+those is a specific bug your suite was shown not to catch. `min-kill-rate`
+also exists, but a kill rate is a proportion of freshly generated faults and
+moves between runs on unchanged code, so a threshold near a healthy value
+fails good work at random. See
 **[docs/corral/github-action.md](docs/corral/github-action.md)**.
 
-**Coverage pre-flight (`--preflight`, CLI only — all six languages).** `certify
+**Coverage pre-flight (`--preflight`, CLI only — every language but Rust).** `certify
 --repo --preflight` runs the project's test suite **one extra time**, with
 coverage instrumentation, and reports which source files it never touches at
 all — a whole-repo inventory for the cost of one suite run, instead of the
@@ -573,7 +665,7 @@ actually launched: `rspec`, `rake`, a bare `ruby`, `node --test`, jest's
 workers, vitest, mocha, `npm test`.
 
 **PHP works too, with one disclosed condition.** It is the only one of the six
-that cannot be instrumented with what a machine already has: PHP reports no
+pre-flight languages that cannot be instrumented with what a machine already has: PHP reports no
 coverage without a runtime extension (pcov or Xdebug). It still asks nothing of
 the audited *project* — the extension is injected through `PHP_INI_SCAN_DIR`,
 which is why `vendor/bin/phpunit` and `composer test` are instrumented as
@@ -891,14 +983,17 @@ support for any of those is claimed.
 
 ## Review — a cold model's opinion, linked to reproductions it ran
 
-`corral review --scope internal/router --reviewer-model <m>` hands a scope
+`corral review --scope internal/advpool --reviewer-model <m>` hands a scope
 of the repository at HEAD to a model that has never seen it, told to assume
 the code is wrong. What comes back is an opinion carrying findings, each
 with a tier the reviewer declared: **REPRODUCED**, with a `sh` script that
 exits 0 iff the defect is demonstrated; **CODE-READ**, a `file:line`
 argument with no execution; **HYPOTHESIS**. corral runs every REPRODUCED
-script against a detached worktree at the commit — your checkout is never
-the subject — and a script that does not hold demotes its finding to
+script in the same offline sandbox `certify` uses, seeded from the reviewed
+commit — your checkout is never the subject — and with no sandbox on the
+machine, review refuses before any seat is called. `--substrate workspace`
+runs the scripts in a plain worktree instead; it is opt-in, and the record
+says which ran. A script that does not hold demotes its finding to
 CODE-READ on the record, saying why. The reviewer must also list what it
 checked and found sound, so the review's coverage is legible. corral does
 not sign the opinion; it signs the entry that carries the reproductions
@@ -937,17 +1032,22 @@ tree itself and hands back scripts, and only corral's run of them is the
 record. `corral review plan` is
 the round planner: which scopes were reviewed and when, which changed
 since (a fix batch nobody re-attacked), which never were — and a proposal
-a person confirms. `corral brief --scope <path>` (or `--changed <base>`)
+a person confirms. `corral review churn` reads the same record and says, per
+round, whether findings were in code an earlier review had already looked at
+(drain) or in lines written since (churn). `corral brief --scope <path>` (or `--changed <base>`)
 is the record handed back to whoever writes next: for each file, the
 newest scan's verdict, each fault your tests missed with the test that
 closes a proven gap, each review claim that stands and what a person
 ruled — claims that did not hold are counted, not listed. It reads the
 ledger and writes nothing; `--json` is the same report for an agent to
 read. In CI, the Action runs the review on the pull request's changed
-directories when `reviewer-model` is named (`review-fail-on: reproduced`
-fails the check, exit 3, after the entry is written), into the same ledger
-branch as the audit; API seats only — the agentic seats need a login a
-runner does not have. The design, and the week that produced it:
+directories when `reviewer-model` is named, into the same ledger branch as
+the audit, with `--substrate workspace` because a hosted runner cannot start
+bwrap. By default a REPRODUCED finding that stands fails the check (exit 3,
+after the entry is written); `review-fail-on: never` records without failing.
+Agent seats are wired for the Action (`claude-code-oauth-token` and
+`codex-api-key` pass a login through) but have not yet been run on a
+runner. The design, and the week that produced it:
 **[docs/design/adversarial-review.md](docs/design/adversarial-review.md)**.
 
 ## The audit flags
@@ -969,9 +1069,9 @@ runner does not have. The design, and the week that produced it:
   `--timeout`** from a *measured* cost: the concurrency probe already ran this
   file's own selected tests in every tree, twice, so half of it is what one round
   of mutants costs, and a budget that would not grade inside half the deadline is
-  lowered — never below the floor — under its own rule name. `--n-mutants N` sets
-  a per-seat budget by hand instead; it is never fitted, but the header warns when
-  it cannot fit. **Every verdict, ledger row and signed statement carries the
+  lowered — never below the floor — under its own rule name. On `certify
+  --local`, `--n-mutants N` sets a per-seat budget by hand instead (`certify
+  --repo` has no `--n-mutants`); it is never fitted. **Every verdict, ledger row and signed statement carries the
   budget and its rule** (`complexity`, `complexity-fitted`, `explicit`, `default`),
   because a kill rate over 8 mutants and one over 40 are different measurements.
 - **The ledger — the record, as text, written by default.** A `--repo` scan
@@ -1010,13 +1110,17 @@ runner does not have. The design, and the week that produced it:
 - **A cap on money (`--max-tokens`).** Corral bounded mutants, shards, wall clock
   and concurrency and never tokens; a per-survivor writer on a survivor-heavy
   file paid a call per survivor and nothing clamped it. `--max-tokens N` is one
-  cap across every seat of a run (every file of a scan), checked before each
-  call and charged after it, so one in-flight call can overshoot by its own
-  size. Once reached, no further model call is made: a file whose generator
+  cap across every seat of a run (every file of a scan). A call is admitted only
+  while the spend so far, plus every call in flight sized at the largest call
+  the run has measured, leaves room for one more, so parallel calls cannot
+  slip past it; the overshoot is at most about one call. Once reached, no
+  further model call is made: a file whose generator
   never ran is ungradable *for that reason*, a writer or critic seat past the
   cap is skipped and the file flagged as it is for a provider failure — the
-  dev kill rate already measured stands — and the cost line says the cap was
-  reached and after how many calls. Local (Ollama) seats now meter their tokens
+  dev kill rate already measured stands — and the cost line reports the run's
+  real totals (`REACHED — N call(s) made, M tokens spent`). A seat that
+  reports no tokens (a `text`-wire agent) cannot be capped, so a capped run
+  naming one is refused before it starts. Local (Ollama) seats now meter their tokens
   too; they used to read as zero.
 - **Confidence — two terms, never one number.** Beside every kill rate the report
   prints what the bare rate hides: its **95% interval** over the mutants graded
@@ -1091,13 +1195,16 @@ runner does not have. The design, and the week that produced it:
   critic's "this test can never fail" claims by execution: the named test runs
   alone against the run's mutants, and a claim it disproves (the test killed
   one) is recorded on the verdict as refuted and left out of the critic's count.
-  Go, Python and Rust have the single-test command this needs; elsewhere, and
-  for a Rust name that matches more than one listed test, the claim is left
-  unchecked and the run output says why.
+  Every language has a runner that can do this (go test, pytest, jest,
+  vitest, mocha, `node --test`, RSpec, PHPUnit, `cargo test`, `cargo
+  nextest`). The claim is left unchecked, and the run output says why, under
+  minitest, under a shell-wrapped command, and for a name that would run
+  more than one listed test.
 - **The tests×mutants matrix (`--matrix`, opt-in).** After the primary pass, re-score
   EVERY dev test alone against the run's mutants — a per-test adequacy readout instead
   of one suite-wide kill-rate, plus a safe-to-delete candidate list (a test that caught
-  none of the planted mutants). Read it with `corral matrix list [--json]`. Costly (T
+  none of the planted mutants). The summary is printed with the run's verdict
+  (`matrix: N test(s) scored, M delete-candidate(s)`). Costly (T
   tests × M mutants extra jail runs) and opt-in for that reason; go + python only
   today; a delete-candidate is relative to the mutants THIS run happened to plant, not
   proof a test is dead weight — review before deleting, don't auto-delete on it.
@@ -1131,12 +1238,34 @@ runner does not have. The design, and the week that produced it:
   (copy every dep dir into the seed, subject to the size cap). A run prints `deps:
   bound N dir(s) read-only (...)` whenever anything was bound.
 
-**`certify --local` always runs sandboxed** (`bwrap` on Linux by default; `--jail
-container` for a docker/podman fallback) — it has no unsandboxed option. **`certify
---repo --substrate workspace` is the unsandboxed option**, by design: it runs your
-suite in your checkout and the caller is the boundary. On Ubuntu 24.04+, apparmor disables unprivileged user namespaces and bwrap
-won't start; the CLI's error message spells out the one-line fix, or use `--jail
-container` with a toolchain image (`export CORRALAI_EXEC_IMAGE=python:3.12-bookworm`). One gotcha:
+**`certify --local` always runs sandboxed** (`bwrap` on Linux and `sandbox-exec`
+on macOS by default; `--jail container` for a docker/podman fallback) — it has
+no unsandboxed option. **`certify --repo --substrate workspace` is the
+unsandboxed option**, by design: it runs your suite in your checkout and the
+caller is the boundary.
+
+**On Ubuntu 24.04 and later, bwrap will not start until AppArmor allows it.**
+AppArmor restricts the unprivileged user namespaces bwrap needs. Ubuntu ships
+a profile for bwrap, `bwrap-userns-restrict`; load it (on 24.04 it may still be
+under `/usr/share/apparmor/extra-profiles`). These are the commands corral's
+own error prints:
+
+```bash
+[ -f /etc/apparmor.d/bwrap-userns-restrict ] || sudo cp /usr/share/apparmor/extra-profiles/bwrap-userns-restrict /etc/apparmor.d/
+sudo apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict
+```
+
+Do not write your own `/etc/apparmor.d/bwrap` marked `unconfined`. It takes
+bwrap away from the shipped profile and leaves it without the capabilities it
+needs. corral printed that advice before 1.0, so if you followed it, remove the
+file:
+
+```bash
+sudo apparmor_parser -R /etc/apparmor.d/bwrap && sudo rm /etc/apparmor.d/bwrap
+```
+
+Or skip bwrap with `--jail container` and a toolchain image
+(`export CORRALAI_EXEC_IMAGE=python:3.12-bookworm`). One gotcha:
 the language toolchain has to be **jail-visible** — installed system-wide under `/usr`,
 not a `--user`/snap/pyenv install invisible to the sandboxed mount namespace.
 
@@ -1151,6 +1280,12 @@ isolated (under `--substrate workspace`, nothing is: see above):
 - **`bwrap` backend (default, Linux).** Each command runs in an unprivileged namespace
   jail: network off, read-only root except the workspace, no privileged caps, a
   secret-free env (the token never reaches it). Needs `bubblewrap` present.
+- **`sandbox-exec` backend (default, macOS).** A Seatbelt profile confines the
+  command to its workspace and denies reads of your home directory. It is a
+  weaker boundary than the Linux jail: it is the same user, so a jailed command
+  can read the start-up environment of your other processes through the
+  kernel (measured on macOS 27, 2026-10-13). Do not run it with API keys
+  exported in other shells you have open, or use `--jail container`.
 - **`container` backend.** `--jail container` (or `AGENT_EXEC_BACKEND=container`) runs
   the jailed command inside a docker/podman container with `--cap-drop=ALL`,
   `--read-only`, `--network=none`, and pid/memory limits — for hosts without bwrap.
@@ -1165,12 +1300,13 @@ bwrap shares the host kernel — it stops casual damage, egress, and filesystem 
 
 ## Security model
 
-The headline feature, not a footnote. (The OpenSSF Scorecard badge above reads
-3.5 — it scores release signing and dependency pinning, both open items, not
-code quality; see SECURITY.md.) Full write-up in **[SECURITY.md](SECURITY.md)**;
+The headline feature, not a footnote. (The OpenSSF Scorecard badge above read
+5.7 on 2026-10-16. It scores project practice, not code quality: its low
+checks are code review, which a solo maintainer cannot score on, dependency
+pinning, fuzzing and static-analysis tooling; see SECURITY.md.) Full write-up in **[SECURITY.md](SECURITY.md)**;
 the short version for the audit:
 
-- **The jail (`certify --local`).** Every mutant is graded in a `bwrap` jail: no
+- **The jail (`certify --local`).** Every mutant is graded in a `bwrap` jail (`sandbox-exec` on macOS, weaker; see above): no
   network, workspace-confined, a secret-free environment (the jail is built from
   a scrubbed environ — your provider key never reaches the suite). This is what
   makes running a model's test unattended safe: corral bounds *what a command
@@ -1210,12 +1346,12 @@ enforced in CI by [`scripts/check-security.sh`](scripts/check-security.sh).
 
 | | Linux | macOS | Windows |
 |---|---|---|---|
-| **`corral certify --local`** — real exec (bwrap jail) | ✅ | `--jail container` (Docker) — **not exercised in CI** | `--jail container` (Docker) or WSL2 — **not exercised in CI** |
+| **`corral certify --local`** — real exec (sandboxed) | ✅ bwrap | `sandbox-exec` (default) or `--jail container` (Docker) — **not exercised in CI** | `--jail container` (Docker) or WSL2 — **not exercised in CI** |
 | **`corral certify --repo --substrate workspace`** (no jail) | ✅ | should work — **not exercised in CI** | should work — **not exercised in CI** |
 | **The GitHub Action** | ✅ `ubuntu-latest` | — | — |
 
-**"Not exercised in CI" is meant literally.** Every workflow runs on
-`ubuntu-latest`, so the macOS and Windows rows describe a path that should work
+**"Not exercised in CI" is meant literally.** Every test job runs on
+`ubuntu-latest` (only the job that redeploys the optional daemon runs on a self-hosted runner), so the macOS and Windows rows describe a path that should work
 and that no run has proven. The container backend itself IS exercised — and was
 found completely broken the first time anyone executed it, because Docker mounts
 `--tmpfs` `noexec` and Go compiles its test binary into `/tmp` — but its
@@ -1227,8 +1363,9 @@ task rather than a limitation.
 
 **The jail is a Linux capability — and that's the point.** `bwrap` (bubblewrap) is
 Linux namespaces; on a bare-metal Linux host it runs **unprivileged** (one package,
-no root, no daemon). macOS and Windows have no equivalent, so exec runs inside a Linux
-environment — Docker Desktop or WSL2, or the `--jail container` fallback. `corral`
+no root, no daemon). macOS has `sandbox-exec`, a weaker boundary (see [the
+jail](#the-jail-in-detail)); Windows has no equivalent, so exec runs inside a
+Linux environment — WSL2, or the `--jail container` fallback. `corral`
 itself carries two CGO deps (DuckDB for the ledgers, tree-sitter for the symbol
 index), which is why `go install` builds for ~25s; the optional daemon's client
 binaries are pure Go (see [the brain](#the-brain-optional-and-not-read-by-any-audit)).

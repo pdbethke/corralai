@@ -16,7 +16,7 @@ from that:
 | `certify` (default): your suite against each mutant, and the written tests | a disposable copy of your tree in a `bwrap` sandbox (container or `sandbox-exec` elsewhere); project dependency dirs bound read-only | none | no |
 | `certify --repo --substrate workspace` | your checkout, in place (you, or the CI runner, are the isolation boundary) | yes | no (scrubbed) |
 | `corral review` (default): the reviewer's and verifier's reproduction scripts | the same sandbox as `certify`, seeded with the tree at the reviewed commit; dependency dirs bound read-only; a fresh workspace per script | none | no |
-| `corral review --substrate workspace` (what the GitHub Action runs) | a detached git worktree at the reviewed commit on the host, **not a sandbox** (the runner is the isolation boundary) | yes | no (scrubbed) |
+| `corral review --substrate workspace` (what the GitHub Action runs) | a fresh detached git worktree at the reviewed commit for each script, on the host, **not a sandbox** (the runner is the isolation boundary) | yes | no (scrubbed) |
 | an agent seat (Claude Code, Codex, …), in any verb | that agent's own process: for `review`, started in a disposable copy of the repository; for `certify`, in an empty temporary directory | the agent's own | corral's environment, so an exported provider key reaches it (and may bill instead of the subscription) |
 
 Two of those rows are not sandboxed, and that is stated here because it is easy to miss:

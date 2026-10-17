@@ -317,8 +317,8 @@ func runReviewRun(args []string, stdout, stderr io.Writer) int {
 	r.Coverage = review.CoverageNote(r)
 
 	// The verifier sees the review AS RECORDED — reproductions run, tiers
-	// demoted — and the same scope, and its own reproductions run in the
-	// same worktree.
+	// demoted — and the same scope, and its own reproductions run on the
+	// same substrate, each from a fresh copy of the commit.
 	if verifierBackend != nil {
 		vturn := review.VerifierBrief(r, sc)
 		if verifierIsAgent {
@@ -614,11 +614,14 @@ func resolveReviewSubstrate(name string) (sandbox.Isolator, error) {
 // and review recheck alike.
 func newReproducer(name string, iso sandbox.Isolator, root, commit, scope string, timeout time.Duration, progress io.Writer) (review.Reproducer, func(), error) {
 	if name == substrateWorkspace {
-		tree, cleanup, err := newWorktree(root, commit)
+		// Proven once here, before any seat is paid, that a worktree at
+		// the commit can be made at all; each Run then makes its own.
+		_, probeCleanup, err := newWorktree(root, commit)
 		if err != nil {
 			return nil, nil, err
 		}
-		return worktreeReproducer{runner: adequacy.NewWorkspaceRunner(tree, timeout, adequacy.WithWorkspaceMaxOutput(64<<10))}, cleanup, nil
+		probeCleanup()
+		return worktreeReproducer{root: root, commit: commit, timeout: timeout}, func() {}, nil
 	}
 	return newJailReproducer(iso, root, commit, scope, timeout, progress)
 }
@@ -629,21 +632,34 @@ func substrateOf(rep review.Reproducer) string {
 	if s, ok := rep.(interface{ Substrate() string }); ok {
 		return s.Substrate()
 	}
-	return "workspace (a detached worktree at the commit; not a jail)"
+	return "workspace (a fresh detached worktree at the commit for each script; not a jail)"
 }
 
 // newReproducerFn is newReproducer, a seam so a test can fail the seed and
 // show that no seat was paid first.
 var newReproducerFn = newReproducer
 
-// worktreeReproducer runs a script in a detached git worktree on the host:
-// --substrate workspace, where the caller is the isolation boundary.
+// worktreeReproducer runs each script in its OWN detached git worktree at
+// the commit, on the host: --substrate workspace, where the caller is the
+// isolation boundary. One worktree per script, not per review: a script may
+// write (a reproduction is allowed to create a test file), and the runner
+// restores nothing it did not apply itself, so a shared tree let a later
+// finding or the verifier's refutation be graded on what an earlier script
+// left behind instead of on the commit (Codex review, 2026-10-17). The jail
+// substrate already seeds every run fresh; this makes the two agree.
 type worktreeReproducer struct {
-	runner *adequacy.WorkspaceRunner
+	root, commit string
+	timeout      time.Duration
 }
 
 func (w worktreeReproducer) Run(ctx context.Context, script string) (string, int, error) {
-	res, err := w.runner.EnumerateDetailed(ctx, nil, []string{"sh", "-c", script})
+	tree, cleanup, err := newWorktree(w.root, w.commit)
+	if err != nil {
+		return "", 0, err
+	}
+	defer cleanup()
+	runner := adequacy.NewWorkspaceRunner(tree, w.timeout, adequacy.WithWorkspaceMaxOutput(64<<10))
+	res, err := runner.EnumerateDetailed(ctx, nil, []string{"sh", "-c", script})
 	out := res.Output
 	if res.Stderr != "" {
 		out += "\n[stderr]\n" + res.Stderr

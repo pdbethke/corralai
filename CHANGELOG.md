@@ -9,6 +9,16 @@ still move between minor versions.
 Entries describe what changed for someone *using* the tool. For the full commit
 history of any release, `git log v0.3.4..v0.3.5`.
 
+## [Unreleased]
+
+- **`corral review --substrate workspace` runs each reproduction from a
+  fresh copy of the commit.** One worktree served the whole review, and a
+  script's own edits were never undone, so a later finding, or the
+  verifier's refutation, could pass or fail on what an earlier script left
+  behind instead of on the reviewed commit. Each script now gets its own
+  worktree, which is removed afterward. The default sandbox already worked
+  this way. Found by an outside review.
+
 ## [v1.0.0-rc.24] — 2026-10-17
 
 - **A verdict could certify on less evidence than its exam-size rule

@@ -34,6 +34,29 @@ history is worth keeping; read "the brain" there as "the optional daemon", and
 see **The record** and **The review** immediately below for what actually
 carries the product now.
 
+## What 1.0 waits for
+
+corral's rule is that no one judges their own cause, so we do not get to
+declare 1.0 because it feels ready. On 2026-10-17 a v1.0.0 release was
+prepared and held. That morning an outside review (Codex) had found two ways a
+verdict could certify on less evidence than its own rule allows. Both were
+fixed (#437), and the release went out as an rc instead. 1.0 is cut when each
+of these has happened, with the evidence linked here:
+
+1. **A stranger's run.** Someone outside the project audits their own
+   repository from the public docs alone, with no help from us, and gets a
+   verdict. Failed attempts are recorded too.
+2. **The Action, cold.** The README's GitHub Action example, copied as
+   published onto a fresh hosted runner, produces a verdict and an
+   attestation that `gh attestation verify` accepts.
+3. **A review round with no P1.** An outside review of the release
+   candidate finds nothing that makes corral say something false about a
+   suite. This is the same stopping rule the review loop already uses.
+4. **No known defect in what a verdict or a review records.** The one open
+   now: under `--substrate workspace`, `corral review` runs every
+   reproduction script in one shared tree, so one script's edits can change
+   the next one's result.
+
 ## Shipped
 
 **The record — GitHub becomes the store.**

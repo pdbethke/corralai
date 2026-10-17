@@ -23,6 +23,13 @@ history of any release, `git log v0.3.4..v0.3.5`.
   findings, because the record does not say which those were. On corral's own
   ledger it reproduces the field note's churn column for the September gate
   and transparency rounds (5 and 5) and its drain within one finding each.
+- **`corral review` shows an API seat the commit it reviews, not your
+  working copy.** The entry is recorded against HEAD and its reproductions
+  run on HEAD, but an API reviewer and verifier were shown the files as
+  they stood in your checkout, uncommitted edits and untracked files
+  included. A finding about uncommitted code was then graded against
+  different bytes and demoted. Both seats now read the same detached
+  worktree an agentic seat already did. Found by an outside review.
 - **`corral review` runs its reproductions in the sandbox.** A reproduction
   is a model's shell script, and it ran in a plain git worktree on your
   machine, with the network on and only model keys removed from its

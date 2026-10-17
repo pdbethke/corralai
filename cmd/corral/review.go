@@ -235,7 +235,13 @@ func runReviewRun(args []string, stdout, stderr io.Writer) int {
 	_, _, reviewerIsAgent := agentbackend.AgentSeat(*model)
 	_, _, verifierIsAgent := agentbackend.AgentSeat(*verifier)
 
-	sc, err := review.LoadScope(root, *scope, *maxBytes)
+	// Read from seatTree, the detached worktree AT commit, never from root:
+	// the entry is recorded against commit and the reproductions run on it,
+	// so an API seat shown the working copy would review uncommitted code
+	// (modified or untracked) under HEAD's name, and its findings would then
+	// be graded against different bytes. An agentic seat already reads
+	// seatTree; this makes the API seat and the verifier's brief agree.
+	sc, err := review.LoadScope(seatTree, *scope, *maxBytes)
 	if err != nil {
 		fmt.Fprintf(stderr, "corral review: %v\n", err)
 		return 2

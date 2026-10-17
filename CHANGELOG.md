@@ -16,6 +16,19 @@ github.com/pdbethke/corralai/cmd/corral@latest` installs it. What changed since
 v0.8.3 is in the v1.0.0-rc.1 through rc.23 sections below; this section lists
 what changed since rc.23.
 
+- **A verdict could certify on less evidence than its exam-size rule
+  allows. Fixed.** Two ways, both found by an outside review and reproduced
+  with real shell runs. First, a mutant whose grading command fails on the
+  unmutated code is *unmeasured*, neither killed nor survived, but the
+  verdict still counted it as graded: one measured kill beside seven
+  unmeasured mutants printed "killed 8 of 8" and certified. Unmeasured
+  mutants are now left out of `MutantsTotal`, counted in a new
+  `mutants_unmeasured` field, and printed on the verdict. Second, duplicate
+  mutants (byte-identical edits, graded once) still count toward the kill
+  rate as before, but the interval that decides whether an exam is big
+  enough to certify is now taken over *distinct* edits: eight copies of one
+  fault are one observation and can no longer certify. `VerdictGeneration`
+  is 28, so cached verdicts are re-measured once.
 - **`corral review churn`: is the review loop draining the code or churning
   it?** For every review on the ledger, each finding's line is blamed at the
   reviewed commit. It is **drain** if the line was there when the previous
@@ -28,6 +41,13 @@ what changed since rc.23.
   findings, because the record does not say which those were. On corral's own
   ledger it reproduces the field note's churn column for the September gate
   and transparency rounds (5 and 5) and its drain within one finding each.
+- **`corral review` shows an API seat the commit it reviews, not your
+  working copy.** The entry is recorded against HEAD and its reproductions
+  run on HEAD, but an API reviewer and verifier were shown the files as
+  they stood in your checkout, uncommitted edits and untracked files
+  included. A finding about uncommitted code was then graded against
+  different bytes and demoted. Both seats now read the same detached
+  worktree an agentic seat already did. Found by an outside review.
 - **`corral review` runs its reproductions in the sandbox.** A reproduction
   is a model's shell script, and it ran in a plain git worktree on your
   machine, with the network on and only model keys removed from its

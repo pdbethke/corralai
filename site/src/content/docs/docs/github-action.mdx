@@ -313,8 +313,10 @@ it off, and you have no gate at all.
 ```
 
 A **proven-missed gap** is a survivor the herd then killed with a test it wrote
-and ran. Not a proportion, not an opinion — a specific demonstrated bug your
-suite does not catch, established by execution. `0` means any demonstrated gap
+and ran. Not a proportion, not an opinion — a specific planted fault your
+suite does not catch, with a test shown by execution to catch it. It is a gap
+in the tests, not a bug found in your code, and a person still decides whether
+the test belongs. `0` means any demonstrated gap
 fails the build.
 
 It **fails closed**. If the herd had survivors but could author no test that

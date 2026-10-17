@@ -50,8 +50,8 @@ SIGNED VERDICT ── certified   (kill-rate clears the bar, the writer neither
         vendor lock-in.
       </p>
       <p>
-        And decorrelate from whoever wrote the code. corral separates its own
-        three roles; it cannot see the <em>fourth</em> participant — the model
+        And decorrelate from whoever wrote the code. corral keeps the critic apart
+        from the writer; it cannot see the <em>fourth</em> participant — the model
         that authored the file under audit. If that was Claude and you audit
         with Claude, the lineage that wrote the code is planting the faults and
         grading the tests for it. Point the roles at a different vendor than
@@ -79,8 +79,9 @@ SIGNED VERDICT ── certified   (kill-rate clears the bar, the writer neither
         past your suite, the <strong>test-writer</strong> writes the test you
         were missing and corral <em>proves</em> it: runs the new test
         against the surviving fault and watches it fail, then against clean
-        code and watches it pass. The gap comes back to you as <code>proven_missed</code> — a real, catchable bug and the exact test
-        that would have caught it — not a lecture.
+        code and watches it pass. The gap comes back to you as <code>proven_missed</code> — a fault your suite missed and the exact test
+        that catches it — not a lecture. It is a gap in your tests, not a bug
+        found in your code; whether the test belongs is still your call.
       </p>
       <a href="/field-notes/your-tests-suck/">Three real verdicts →</a>
     </div>
@@ -102,14 +103,18 @@ SIGNED VERDICT ── certified   (kill-rate clears the bar, the writer neither
       <a href="/docs/concepts/trust-and-security/">Trust &amp; security →</a>
     </div>
     <div class="tech">
-      <h3>The jail is the only place a claim gets proven</h3>
+      <h3>Where the code runs</h3>
       <p>
-        Every command corral runs — your tests against each mutant, the new
-        test against the survivor — runs inside a <code>bwrap</code> jail: no
-        network by default, workspace-confined, a secret-free environment. The
-        kill rate is a fact about what happened in that jail, not a number a
-        model asserted. Nothing about the grade rests on trusting the thing
-        being graded.
+        By default, the commands an audit runs — your tests against each
+        mutant, the new test against the survivor, a review's reproduction
+        scripts — run on a copy of your tree inside a sandbox (<code>bwrap</code> or a
+        container on Linux, <code>sandbox-exec</code> on macOS): no network,
+        your checkout untouched, a secret-free environment. One mode opts
+        out: <code>--substrate workspace</code>, which the GitHub Action uses, runs
+        them on the runner itself and mutates its checkout, because a
+        disposable CI runner is the isolation boundary there. A coding-agent
+        seat runs under that agent's own permissions. Either way the kill rate
+        is a fact about what ran, not a number a model asserted.
       </p>
       <a href="/docs/concepts/trust-and-security/">The jail →</a>
     </div>

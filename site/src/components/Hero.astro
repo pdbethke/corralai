@@ -177,7 +177,7 @@ const exhibit = exhibitMeta && pool ? exhibitFor(exhibitMeta.survivor) : null;
     />
     <h2>Why: everyone is building build harnesses. Corral is the one that refuses to build.</h2>
     <p class="latin"><em>Nemo iudex in causa sua</em> — no one may be judge in their own cause.</p>
-    <p class="lead">Would you trust your house if the same person architected it, built it, inspected it, and certified it? Corral is an auditing engine. It judges code it did not write — by execution and by adversary — onto a record nobody can edit. Accountability, paper trail, analysis, certification: everything but building.</p>
+    <p class="lead">Would you trust your house if the same person architected it, built it, inspected it, and certified it? Corral is an auditing engine. It judges code it did not write — by execution and by adversary — onto a signed, tamper-evident record. Accountability, paper trail, analysis, certification: everything but building.</p>
     <p class="pitch">Two extensions carry the rule: <strong>certify</strong> breaks your code on purpose and runs your own tests against every fault; <strong>review</strong> hands your code to a model that has never seen it and makes every claim prove itself by script, with a second model arguing the other side. Both write hash-linked entries to a ledger directory in your repository, signed when a certify key is configured. Keep that directory on its own <code>corral/ledger</code> branch and, run as a GitHub Action, GitHub becomes the record that any DuckDB can read.</p>
     <p class="why-more"><a href="/docs/how-it-works/">How it works →</a></p>
     </div>

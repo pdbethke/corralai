@@ -20,7 +20,7 @@ const withheldSeats = warehouse.withheld.bug_catches;
 const PRESETS = [
   {
     label: 'Which files keep shipping demonstrated gaps',
-    sql: `-- The cross-project question a single pull request cannot answer.\n-- A proven gap is a survivor the herd then KILLED with a test it wrote and\n-- ran: a demonstrated bug, not a proportion. Counting those across repos is\n-- legitimate arithmetic — averaging kill rates across them is not, because a\n-- dense function and a small accessor are not the same measurement.\nSELECT l.repo,\n       COUNT(DISTINCT l.id)      AS audits,\n       SUM(b.mutants_planted)    AS planted,\n       SUM(b.mutants_killed)     AS killed\nFROM audit_ledger l JOIN bug_catches b ON b.record_id = l.id\nGROUP BY 1\nORDER BY planted DESC;`,
+    sql: `-- The cross-project question a single pull request cannot answer.\n-- A proven gap is a survivor the herd then KILLED with a test it wrote and\n-- ran: a demonstrated test gap, not a proportion. Counting those across repos is\n-- legitimate arithmetic — averaging kill rates across them is not, because a\n-- dense function and a small accessor are not the same measurement.\nSELECT l.repo,\n       COUNT(DISTINCT l.id)      AS audits,\n       SUM(b.mutants_planted)    AS planted,\n       SUM(b.mutants_killed)     AS killed\nFROM audit_ledger l JOIN bug_catches b ON b.record_id = l.id\nGROUP BY 1\nORDER BY planted DESC;`,
   },
   {
     label: 'Is one file drifting, or is that just the sampling?',

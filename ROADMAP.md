@@ -6,7 +6,7 @@
 > priorities shift with what real use surfaces.
 
 **Corral is an auditing engine.** It judges code it did not write — by execution
-and by adversary — onto a record nobody can edit. Accountability, paper trail,
+and by adversary — onto a signed, tamper-evident record. Accountability, paper trail,
 analysis, certification: everything but building. Two extensions carry that rule
 into practice, and both write to the same record:
 

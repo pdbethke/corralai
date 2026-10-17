@@ -9,7 +9,7 @@ still move between minor versions.
 Entries describe what changed for someone *using* the tool. For the full commit
 history of any release, `git log v0.3.4..v0.3.5`.
 
-## [Unreleased]
+## [v1.0.0-rc.24] — 2026-10-17
 
 - **A verdict could certify on less evidence than its exam-size rule
   allows. Fixed.** Two ways, both found by an outside review and reproduced
@@ -189,7 +189,7 @@ history of any release, `git log v0.3.4..v0.3.5`.
   and later, vitest through a script (its list rewrites the subcommand),
   a script that calls another script, Composer scripts starting with `@`,
   Makefiles, and a `runner` input on the GitHub Action.
-- **One-time cache miss.** `reposcan.VerdictGeneration` is now 26 (rc.23
+- **One-time cache miss.** `reposcan.VerdictGeneration` is now 28 (rc.23
   shipped 23). Every verdict cached before this change is re-measured once.
 
 ## [v1.0.0-rc.23] — 2026-10-15

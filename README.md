@@ -9,7 +9,7 @@
 
 **Everyone is building build harnesses. Corral is the one that refuses to build.** It never authors the code it judges: the faults it plants are probes, discarded once scored, and the tests it writes are evidence — each proven against its own fault and handed back to you.
 
-**Corral is an auditing engine.** It judges code it did not write — by execution and by adversary — onto a record nobody can edit. Accountability, paper trail, analysis, certification: everything but building. Two extensions carry the engine's rule into practice:
+**Corral is an auditing engine.** It judges code it did not write — by execution and by adversary — onto a signed, tamper-evident record. Accountability, paper trail, analysis, certification: everything but building. Two extensions carry the engine's rule into practice:
 
 - **`certify`** — by execution. Corral breaks your code on purpose and checks whether your tests notice: it plants faults that violate a stated guarantee, runs **your own suite** against each one in a sandbox, and reports how many it killed — measured, never taken on a model's word.
 - **`review`** — by adversary. A model that has never seen your repository is told to assume the code is wrong and prove it; every claim comes with a script corral runs, a claim that does not reproduce is demoted on the record, a second seat tries to refute what stands, and both seats are graded by what held.

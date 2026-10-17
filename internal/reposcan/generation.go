@@ -200,7 +200,13 @@ package reposcan
 // salvage now proves gaps; node --test's one-test command also ran every test
 // under an operator path (its flag landed after the path), so its refuted
 // claims could be wrong. Shape unchanged; behaviour bump.
-const VerdictGeneration = "27"
+// "28" (2026-10-17): MutantsTotal no longer counts UNMEASURED mutants (their
+// grading command failed on the compliant code), and the certification
+// interval is taken over distinct measured edits, not over every duplicate.
+// A "27" verdict could certify on one measured mutant beside seven
+// unmeasured ones, or on eight copies of one edit (found by an outside
+// review, 2026-10-17). Adds Verdict.MutantsUnmeasured; behaviour bump.
+const VerdictGeneration = "28"
 
 // VerdictShapeSHA256 fingerprints advpool.Verdict's serialized shape: every
 // exported field's name, type and json tag, sorted by name and hashed.
@@ -222,4 +228,4 @@ const VerdictGeneration = "27"
 // Verdict's own FIELDS") and nothing wider. Nor can any fingerprint catch the
 // behaviour half: a scorer that computes a DIFFERENT number into the SAME
 // field is invisible here, and remains a review responsibility.
-const VerdictShapeSHA256 = "896d49ca72d396cf32101ea0f91527b315f761e7a47f9069a91605843a0fc1cc"
+const VerdictShapeSHA256 = "df59345cf6269cd6527ccb9a2c448b5e5e0504dd24d673ecb44f8a43f772b30f"

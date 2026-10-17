@@ -107,28 +107,28 @@ func TestVerdictCarriesExamCoverageFromItsOwnRefs(t *testing.T) {
 // exam that can; 7 of 8 (0.53–0.98) cannot.
 func TestAnExamTooSmallToCertifyIsIndicativeNotCertified(t *testing.T) {
 	rs := testRunSpec()
-	v := aggregate(rs, decorrelatedAssign(), 1.0, 5, 0, 0, nil, 0.8, MaxCertifiableIntervalWidth, false, false, false)
+	v := aggregate(rs, decorrelatedAssign(), 1.0, 5, 0, 0, nil, 0.8, MaxCertifiableIntervalWidth, examSample{distinct: 5, survived: 0}, false, false, false)
 	if v.Status != StatusNeedsReview || !v.ExamIndicative {
 		t.Fatalf("5 of 5: status=%q indicative=%v, want needs-review + indicative", v.Status, v.ExamIndicative)
 	}
-	if !strings.Contains(v.IndicativeReason, "5 mutants") || !strings.Contains(v.IndicativeReason, "0.57–1.00") {
+	if !strings.Contains(v.IndicativeReason, "5 distinct mutants") || !strings.Contains(v.IndicativeReason, "0.57–1.00") {
 		t.Errorf("reason = %q, want the counts and the band", v.IndicativeReason)
 	}
-	v = aggregate(rs, decorrelatedAssign(), 0.875, 8, 1, 1, nil, 0.8, MaxCertifiableIntervalWidth, false, false, false)
+	v = aggregate(rs, decorrelatedAssign(), 0.875, 8, 1, 1, nil, 0.8, MaxCertifiableIntervalWidth, examSample{distinct: 8, survived: 1}, false, false, false)
 	if v.Status != StatusNeedsReview || !v.ExamIndicative {
 		t.Errorf("7 of 8: status=%q indicative=%v, want indicative (0.53–0.98)", v.Status, v.ExamIndicative)
 	}
-	v = aggregate(rs, decorrelatedAssign(), 1.0, 8, 0, 0, nil, 0.8, MaxCertifiableIntervalWidth, false, false, false)
+	v = aggregate(rs, decorrelatedAssign(), 1.0, 8, 0, 0, nil, 0.8, MaxCertifiableIntervalWidth, examSample{distinct: 8, survived: 0}, false, false, false)
 	if v.Status != StatusCertified || v.ExamIndicative {
 		t.Errorf("8 of 8: status=%q indicative=%v, want certified (0.68–1.00, width 0.32)", v.Status, v.ExamIndicative)
 	}
 	// 36 of 40 (0.90): 0.77–0.96, width 0.19 — certifies.
-	v = aggregate(rs, decorrelatedAssign(), 0.9, 40, 4, 4, nil, 0.8, MaxCertifiableIntervalWidth, false, false, false)
+	v = aggregate(rs, decorrelatedAssign(), 0.9, 40, 4, 4, nil, 0.8, MaxCertifiableIntervalWidth, examSample{distinct: 40, survived: 4}, false, false, false)
 	if v.Status != StatusCertified || v.ExamIndicative {
 		t.Errorf("36 of 40: status=%q indicative=%v, want certified", v.Status, v.ExamIndicative)
 	}
 	// Below threshold stays needs-review for the threshold's reason, not this one.
-	v = aggregate(rs, decorrelatedAssign(), 0.5, 8, 4, 4, nil, 0.8, MaxCertifiableIntervalWidth, false, false, false)
+	v = aggregate(rs, decorrelatedAssign(), 0.5, 8, 4, 4, nil, 0.8, MaxCertifiableIntervalWidth, examSample{distinct: 8, survived: 4}, false, false, false)
 	if v.Status != StatusNeedsReview || v.ExamIndicative {
 		t.Errorf("4 of 8: status=%q indicative=%v, want needs-review by threshold, not marked indicative", v.Status, v.ExamIndicative)
 	}

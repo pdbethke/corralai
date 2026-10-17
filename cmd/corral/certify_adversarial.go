@@ -35,17 +35,20 @@ type advFinding struct {
 // tags, so its keys are the Go-default CAPITALIZED field names — matched here
 // verbatim. Changing these breaks decoding.
 type advVerdict struct {
-	Repo           string   `json:"Repo"`
-	Commit         string   `json:"Commit"`
-	Lang           string   `json:"Lang"`
-	DevKillRate    float64  `json:"DevKillRate"`
-	MutantsTotal   int      `json:"MutantsTotal"`
-	MutantsInvalid int      `json:"MutantsInvalid"`
-	Survivors      int      `json:"Survivors"`
-	ProvenMissed   int      `json:"ProvenMissed"`
-	RegionsTotal   int      `json:"RegionsTotal"`
-	RegionsProbed  int      `json:"RegionsProbed"`
-	DroppedRegions []string `json:"DroppedRegions"`
+	Repo           string  `json:"Repo"`
+	Commit         string  `json:"Commit"`
+	Lang           string  `json:"Lang"`
+	DevKillRate    float64 `json:"DevKillRate"`
+	MutantsTotal   int     `json:"MutantsTotal"`
+	MutantsInvalid int     `json:"MutantsInvalid"`
+	// MutantsUnmeasured mirrors advpool.Verdict's: mutants whose grading
+	// command failed on the compliant code, excluded from MutantsTotal.
+	MutantsUnmeasured int      `json:"mutants_unmeasured,omitempty"`
+	Survivors         int      `json:"Survivors"`
+	ProvenMissed      int      `json:"ProvenMissed"`
+	RegionsTotal      int      `json:"RegionsTotal"`
+	RegionsProbed     int      `json:"RegionsProbed"`
+	DroppedRegions    []string `json:"DroppedRegions"`
 	// DuplicateMutants: generated mutants that were byte-identical edits of
 	// another and were collapsed before scoring — see
 	// adequacy.DedupeMutants. Disclosed so the graded denominator is
@@ -511,6 +514,9 @@ func renderAdvVerdict(w io.Writer, codePath string, v advVerdict) {
 		// mutants graded a far smaller exam than the budget implies, and the
 		// kill rate above is over the GRADED ones only.
 		fmt.Fprintf(w, "  invalid:       %d mutant(s) failed the compile check and were not graded (evidence about the generator, not your tests)\n", v.MutantsInvalid)
+	}
+	if v.MutantsUnmeasured > 0 {
+		fmt.Fprintf(w, "  unmeasured:    %d mutant(s) were not graded: the command chosen to grade them fails on the unmutated code, so its answer is not evidence\n", v.MutantsUnmeasured)
 	}
 	if v.TimedOut {
 		// A claim carries how it was earned: dev_kill_rate/survivors above

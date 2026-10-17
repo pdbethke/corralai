@@ -23,6 +23,15 @@ history of any release, `git log v0.3.4..v0.3.5`.
   the run as COULD-NOT-GRADE, discarding mutants already scored. The audit
   now continues, and the verdict marks the critic review INCOMPLETE rather
   than clean. Found auditing Warp with an `antigravity` critic.
+- **Proven tests are now also run together.** Each authored test is proven
+  alone, so tests that each pass alone could still break each other in one
+  suite. On Warp's `secret_redaction`, ten proven tests swapped one global
+  regex and one failed when the file ran in parallel. A per-survivor run with
+  two or more proven tests now runs the merged file once on the unmutated
+  code. The verdict records `authored_together` (`pass`, `fail`, or absent
+  when not checked), and both `certify --local` and `--repo` print a warning
+  with the runner's output when it fails. Counts and status are unchanged.
+- **One-time cache miss.** `reposcan.VerdictGeneration` is now 29.
 
 ## [v1.0.0-rc.24] — 2026-10-17
 

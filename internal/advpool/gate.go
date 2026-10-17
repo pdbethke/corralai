@@ -606,9 +606,23 @@ func (s JailScorer) ScoreAuthoredReport(ctx context.Context, codePath, code, tes
 // path — the scoring run that produced CompliantPass=false has already
 // returned by the time this is called, and Report carries no output to reuse.
 func (s JailScorer) CompliantFailure(ctx context.Context, codePath, code, test, testCmd string) string {
+	_, out, err := s.CompliantRun(ctx, codePath, code, test, testCmd)
+	if err != nil {
+		return ""
+	}
+	return out
+}
+
+// CompliantRun runs test against the UNMUTATED code with the authored command
+// and reports whether it passed, with the runner's output. It is
+// CompliantFailure's run, answering the yes/no too: the together check
+// (checkAuthoredTogether) needs the verdict, the retry needs only the output.
+// A jail that cannot surface output is an error here, so a caller records
+// "not checked" rather than a pass.
+func (s JailScorer) CompliantRun(ctx context.Context, codePath, code, test, testCmd string) (bool, string, error) {
 	vj, ok := s.Jail.(verboseJail)
 	if !ok {
-		return ""
+		return false, "", errors.New("this jail cannot report a run's output")
 	}
 	ws, base := s.scoreWorkspace(codePath, test, testCmd)
 	// The AUTHORED command, as ScoreAuthoredReport builds it three hundred
@@ -630,11 +644,7 @@ func (s JailScorer) CompliantFailure(ctx context.Context, codePath, code, test, 
 	// The UNMUTATED code: this asks "why does your test fail on software that
 	// is correct", which is the only question worth feeding back.
 	ws[codePath] = code
-	_, out, err := vj.RunTestVerbose(ctx, ws, cmd)
-	if err != nil {
-		return ""
-	}
-	return out
+	return vj.RunTestVerbose(ctx, ws, cmd)
 }
 
 // authoredWorkspace builds the repo-aware scoring workspace with `content`

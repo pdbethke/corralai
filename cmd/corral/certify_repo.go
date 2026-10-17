@@ -3985,6 +3985,7 @@ func printWeakFile(w io.Writer, f reposcan.WeakFile) {
 	if f.ProvenMissed > 0 && strings.TrimSpace(f.AuthoredTest) != "" {
 		fmt.Fprintf(w, "      the pool wrote this test and RAN it to prove the gap — %s:\n", authoredTestDestination(f.AuthoredLanding, "your suite"))
 		printAuthoredSource(w, f.AuthoredTest)
+		printAuthoredTogether(w, "      ", f.AuthoredTogether, f.AuthoredTogetherOutput)
 	}
 	// The parts that would not merge into the file above. Printed in FULL,
 	// each under its own header: every one is a test corral wrote, compiled

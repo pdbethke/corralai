@@ -593,6 +593,39 @@ in August 2026 reversed an assumption this roadmap previously carried.
   corral is would have missed the two things it now leads with. Same defect,
   larger blast radius: a rule stated in one place and enforced at no door.
 
+## Open question — is a proven gap the gap the goal named?
+
+A proven gap is three facts, each checked by execution: the mutant survives
+the suite, the authored test passes on the unmutated code, and the authored
+test fails on the mutant. What is **not** checked is the fourth claim the
+report implies — that the mutant breaks the clause of the goal it was planted
+against. The generator is asked to violate the goal, and nothing verifies that
+it did. A mutant that breaks the code some other way still yields a "proven"
+gap, just not the one the goal named. Run with concern-style goals (Warp's
+`secret_redaction`, 2026-10-17: "Enterprise outranks User"), that difference
+is the whole claim: "these tests cover the stated concerns" currently rests on
+the generator's word.
+
+- **What we have not seen.** No run has yet shown an off-goal mutant. This is a
+  gap reasoned to, not one observed, which is why it is written down rather
+  than built.
+- **The shape, if built.** Not a new opinion seat: a model saying "this mutant
+  fits the goal" would be advisory, like the critic, and could never back the
+  claim. Instead, point `corral review` at the audit's own output. For each
+  proven pair, the reviewer must attach a reproduction that demonstrates which
+  goal clause the mutant violates (a script corral runs), and the verifier tries
+  to refute it. What reproduces is evidence; what does not is recorded as an
+  unverified, off-goal-suspect pair. It never changes a count or a status.
+- **Rejected.** A deterministic check that a mutant violates a goal written
+  in prose does not exist in general. Restricting goals to executable
+  properties would make the check possible and the goals useless to most
+  operators.
+- **Until then.** Read the proven tests against the goal by hand before they
+  leave the building, which is what a reviewer receiving them does anyway.
+- **What would move it up.** One observed off-goal proven pair, or a consumer
+  (a paper, a contribution) that needs "covers the stated concern" as a
+  checked claim rather than a read one.
+
 ## Ahead — operate the gate at scale
 
 The reviewer's seat moves from *author* to *assessor*: set the model mix, watch the

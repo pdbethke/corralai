@@ -2678,6 +2678,8 @@ func advVerdictFromPool(v advpool.Verdict) advVerdict {
 		ExamIndicative:           v.ExamIndicative,
 		IndicativeReason:         v.IndicativeReason,
 		CriticIncomplete:         v.CriticIncomplete,
+		AuthoredTogether:         v.AuthoredTogether,
+		AuthoredTogetherOutput:   v.AuthoredTogetherOutput,
 	}
 	for _, f := range v.VacuousFindings {
 		out.VacuousFindings = append(out.VacuousFindings, advFinding{

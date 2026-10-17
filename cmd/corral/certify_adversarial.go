@@ -60,8 +60,12 @@ type advVerdict struct {
 	RefutedFindings []advFinding `json:"refuted_findings,omitempty"`
 	// CriticIncomplete mirrors advpool.Verdict's: the critic's review was cut
 	// short, so VacuousFindings is a lower bound, not the whole list.
-	CriticIncomplete bool              `json:"critic_incomplete,omitempty"`
-	ModelsByRole     map[string]string `json:"ModelsByRole"`
+	CriticIncomplete bool `json:"critic_incomplete,omitempty"`
+	// AuthoredTogether / AuthoredTogetherOutput mirror advpool.Verdict's: what
+	// running the proven tests whole, once, on the unmutated code showed.
+	AuthoredTogether       string            `json:"authored_together,omitempty"`
+	AuthoredTogetherOutput string            `json:"authored_together_output,omitempty"`
+	ModelsByRole           map[string]string `json:"ModelsByRole"`
 	// SeatTools mirrors advpool.Verdict.SeatTools: each agent seat's tool
 	// and version, printed beside its spec on the models line.
 	SeatTools  map[string]string `json:"seat_tools,omitempty"`
@@ -539,6 +543,7 @@ func renderAdvVerdict(w io.Writer, codePath string, v advVerdict) {
 	} else {
 		fmt.Fprintf(w, "  proven_missed: %d\n", v.ProvenMissed)
 	}
+	printAuthoredTogether(w, "  ", v.AuthoredTogether, v.AuthoredTogetherOutput)
 	if v.WriterSeatsUngraded > 0 {
 		// Printed BESIDE the count it qualifies, never instead of it: the
 		// number is real, and this says what it is a count OVER. A file where
@@ -697,4 +702,21 @@ func soleGradedVendor(models map[string]string) string {
 		}
 	}
 	return vendor
+}
+
+// printAuthoredTogether says what running the proven tests whole, once, on the
+// unmutated code showed. Each was proven ALONE, so a pass alone is no promise
+// they pass in one suite; a failure here means they interfere and need work
+// (a lock around shared state, say) before they are added. Nothing is printed
+// when it was not checked: an absent check must not read as a clean one.
+func printAuthoredTogether(w io.Writer, indent, together, out string) {
+	switch together {
+	case advpool.AuthoredTogetherPass:
+		fmt.Fprintf(w, "%sthe proven tests also pass when run together on the unmutated code\n", indent)
+	case advpool.AuthoredTogetherFail:
+		fmt.Fprintf(w, "%sWARNING: the proven tests each pass alone but FAIL when run together on the unmutated code — they interfere (shared state?) and need fixing before you add them:\n", indent)
+		for _, l := range strings.Split(strings.TrimSpace(out), "\n") {
+			fmt.Fprintf(w, "%s  | %s\n", indent, l)
+		}
+	}
 }

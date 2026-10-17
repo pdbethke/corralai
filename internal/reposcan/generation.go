@@ -206,7 +206,14 @@ package reposcan
 // A "27" verdict could certify on one measured mutant beside seven
 // unmeasured ones, or on eight copies of one edit (found by an outside
 // review, 2026-10-17). Adds Verdict.MutantsUnmeasured; behaviour bump.
-const VerdictGeneration = "28"
+//
+// "29" (2026-10-17): a per-survivor run with two or more proven tests now runs
+// the merged file once, whole, on the unmutated code and records what that
+// showed (Verdict.AuthoredTogether, AuthoredTogetherOutput). Each proof runs
+// its test alone, so on Warp's secret_redaction ten proven tests that swapped
+// one global regex passed alone and one failed in the combined suite. A "28"
+// verdict never ran that check; a disclosure, no count or status changes.
+const VerdictGeneration = "29"
 
 // VerdictShapeSHA256 fingerprints advpool.Verdict's serialized shape: every
 // exported field's name, type and json tag, sorted by name and hashed.
@@ -228,4 +235,4 @@ const VerdictGeneration = "28"
 // Verdict's own FIELDS") and nothing wider. Nor can any fingerprint catch the
 // behaviour half: a scorer that computes a DIFFERENT number into the SAME
 // field is invisible here, and remains a review responsibility.
-const VerdictShapeSHA256 = "df59345cf6269cd6527ccb9a2c448b5e5e0504dd24d673ecb44f8a43f772b30f"
+const VerdictShapeSHA256 = "bae7accb093484f1340814bff421b09b46cc9dea9e031163bc1a466ca6582992"

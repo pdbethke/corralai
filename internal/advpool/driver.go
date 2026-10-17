@@ -508,6 +508,18 @@ type Verdict struct {
 	// be used. Set from RunSpec.Landing in verdictFromSpec, the shared
 	// literal, so the converged and the timed-out verdict both carry it.
 	AuthoredLanding string `json:"authored_landing,omitempty"`
+	// AuthoredTogether is what running AuthoredTest WHOLE, once, on the
+	// unmutated code showed: AuthoredTogetherPass, AuthoredTogetherFail, or ""
+	// when it was not checked (one proven test, a batched run, or a scorer
+	// that cannot run a file). Every proof runs its test ALONE, so tests that
+	// each pass alone can still break each other in one suite — on Warp's
+	// secret_redaction (2026-10-17) ten swapped one process-wide regex and one
+	// failed when the file ran in parallel. A disclosure: it changes no count
+	// and no status, and "" must never be read as a pass.
+	AuthoredTogether string `json:"authored_together,omitempty"`
+	// AuthoredTogetherOutput is the runner's output from a failing together
+	// run, clipped. Empty unless AuthoredTogether is AuthoredTogetherFail.
+	AuthoredTogetherOutput string `json:"authored_together_output,omitempty"`
 	// WriterMode is HOW the writer seat attacked this file's survivors —
 	// "per-survivor" (one call, one repair budget and one proof PER survivor)
 	// or "batched" (one call carrying every survivor as a diff). Empty on a
@@ -1121,6 +1133,9 @@ type runState struct {
 	// merge — carried onto the verdict rather than dropped. See
 	// Verdict.AuthoredExtra.
 	authoredExtra []golang.AuthoredPart
+	// authoredTogether / authoredTogetherOutput: see Verdict.AuthoredTogether.
+	authoredTogether       string
+	authoredTogetherOutput string
 
 	poolScored   bool
 	provenMissed int
@@ -2611,6 +2626,7 @@ func (d *Driver) tickPoolAdequacy(ctx context.Context, missionID int64, run *run
 			return nil
 		}
 		d.finishWriterFanout(run)
+		d.checkAuthoredTogether(ctx, run)
 		return nil
 	}
 
@@ -2941,6 +2957,7 @@ func (d *Driver) tickAggregate(ctx context.Context, missionID int64, run *runSta
 	v.MutantsInvalid = run.mutantsInvalid
 	v.MutantsUnmeasured = run.mutantsUnmeasured
 	v.AuthoredTest = run.authoredTest
+	v.AuthoredTogether, v.AuthoredTogetherOutput = run.authoredTogether, run.authoredTogetherOutput
 	// The mode is stamped from the RUN's resolved value, never from the
 	// RunSpec's raw field: an unset spec means batched, and the verdict must
 	// say which measurement this is in the same words a reader can look up.
@@ -3529,6 +3546,7 @@ func (d *Driver) timeoutVerdict(run *runState) Verdict {
 	v.PoolScored = run.poolScored
 	v.ProvenMutantIDs = run.provenIDs
 	v.AuthoredTest = run.authoredTest
+	v.AuthoredTogether, v.AuthoredTogetherOutput = run.authoredTogether, run.authoredTogetherOutput
 	// The challenger comparison, for the same reason as everything above it:
 	// challengerPair is a pure function of run state that already returns nil
 	// when the two seats' measured sets do not overlap, so a run that graded

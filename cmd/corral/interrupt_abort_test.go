@@ -24,7 +24,7 @@ var errSeatInterrupted = fmt.Errorf("seat: %w", agentbackend.ErrInterrupted)
 // WriterProviderFailed sentinel would let the run converge and record a
 // verdict for an audit the operator stopped. The interrupt aborts.
 func TestAnInterruptedWriterAbortsRatherThanFilingWriterFailed(t *testing.T) {
-	for _, role := range []string{advpool.RoleTestWriter, advpool.RoleMutantGeneratorShadow} {
+	for _, role := range []string{advpool.RoleTestWriter, advpool.RoleMutantGeneratorShadow, advpool.RoleTestCritic} {
 		q, err := queue.Open(filepath.Join(t.TempDir(), "q.sqlite3"))
 		if err != nil {
 			t.Fatal(err)

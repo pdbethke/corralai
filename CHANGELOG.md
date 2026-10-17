@@ -18,6 +18,11 @@ history of any release, `git log v0.3.4..v0.3.5`.
   behind instead of on the reviewed commit. Each script now gets its own
   worktree, which is removed afterward. The default sandbox already worked
   this way. Found by an outside review.
+- **A critic whose model call fails no longer ends the audit.** The critic
+  is advisory and never decides a verdict, yet a failed critic call stopped
+  the run as COULD-NOT-GRADE, discarding mutants already scored. The audit
+  now continues, and the verdict marks the critic review INCOMPLETE rather
+  than clean. Found auditing Warp with an `antigravity` critic.
 
 ## [v1.0.0-rc.24] — 2026-10-17
 

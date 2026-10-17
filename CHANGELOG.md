@@ -9,7 +9,7 @@ corral or read its record is listed under **Breaking** in its version's section.
 Entries describe what changed for someone *using* the tool. For the full commit
 history of any release, `git log v0.3.4..v0.3.5`.
 
-## [v1.0.0] — 2026-10-16
+## [v1.0.0] — 2026-10-17
 
 The first stable release since v0.8.3, so `go install
 github.com/pdbethke/corralai/cmd/corral@latest` installs it. What changed since
@@ -194,7 +194,7 @@ what changed since rc.23.
   and later, vitest through a script (its list rewrites the subcommand),
   a script that calls another script, Composer scripts starting with `@`,
   Makefiles, and a `runner` input on the GitHub Action.
-- **One-time cache miss.** `reposcan.VerdictGeneration` is now 26 (rc.23
+- **One-time cache miss.** `reposcan.VerdictGeneration` is now 28 (rc.23
   shipped 23). Every verdict cached before this change is re-measured once.
 
 ## [v1.0.0-rc.23] — 2026-10-15

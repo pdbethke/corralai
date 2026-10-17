@@ -308,6 +308,14 @@ func runOneTask(ctx context.Context, q *queue.Store, missionID int64, workerID s
 			// that never produced a compiling test.
 			fmt.Fprintf(progress, "certify: the test-writer's model call failed (%v) — the dev-adequacy result stands, no authored test; the file is flagged writer-failed\n", rerr)
 			result, findings = advpool.WriterProviderFailedResult, nil
+		} else if task.Role == advpool.RoleTestCritic {
+			// The critic is advisory and never gates a verdict, so its call
+			// failing must not cost the audit either: it once turned a Warp run
+			// with every mutant scored into COULD-NOT-GRADE. Completing under
+			// the incomplete-critic marker lets the run converge with the
+			// verdict saying the review did not reach it — never a clean one.
+			fmt.Fprintf(progress, "certify: the test-critic's model call failed (%v) — the audit continues; the critic review is INCOMPLETE\n", rerr)
+			result, findings = agentworker.CriticIncompletePrefix+"the critic's model call failed: "+rerr.Error(), nil
 		} else {
 			return fmt.Errorf("running role %q: %w", task.Role, rerr)
 		}

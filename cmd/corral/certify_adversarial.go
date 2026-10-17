@@ -591,7 +591,7 @@ func renderAdvVerdict(w io.Writer, codePath string, v advVerdict) {
 	} else if v.CriticIncomplete && len(v.VacuousFindings) == 0 && len(v.RefutedFindings) == 0 {
 		// Cut short before it concluded: an empty list here is NOT a clean
 		// review, and printing "no vacuous tests flagged" would say one was.
-		fmt.Fprintln(w, "  critic review: INCOMPLETE — the critic was cut short before concluding and filed nothing; this is not a clean review")
+		fmt.Fprintln(w, "  critic review: INCOMPLETE — the critic did not conclude (cut short, or its model call failed) and filed nothing; this is not a clean review")
 	} else if v.CriticIncomplete {
 		fmt.Fprintf(w, "  critic review: %d test(s) flagged before the critic was cut short — INCOMPLETE, there may be more; UNVERIFIED (a second model's opinion, not execution-proven; check before acting)\n", len(v.VacuousFindings))
 	} else if len(v.VacuousFindings) == 0 && len(v.RefutedFindings) == 0 {

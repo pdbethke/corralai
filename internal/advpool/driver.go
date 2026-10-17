@@ -584,8 +584,9 @@ type Verdict struct {
 	RefutedFindings []queue.Finding `json:"refuted_findings,omitempty"`
 	// CriticIncomplete says the critic was seated and its review did NOT fully
 	// reach this verdict: it used every step without concluding, so findings it
-	// had not filed are missing (the loop's criticIncompletePrefix), or the run
-	// timed out before its findings were read. VacuousFindings is then a lower
+	// had not filed are missing (the loop's criticIncompletePrefix), its model
+	// call failed (certify files that under the same prefix rather than abort
+	// the audit), or the run timed out before its findings were read. VacuousFindings is then a lower
 	// bound, never a complete count. False when no critic was seated. The
 	// critic stays advisory: this changes no status.
 	CriticIncomplete bool `json:"critic_incomplete,omitempty"`

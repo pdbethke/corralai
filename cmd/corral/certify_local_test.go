@@ -1773,3 +1773,47 @@ func TestMissingModelMessageSeesKeysSavedWithCorralSecret(t *testing.T) {
 		t.Errorf("message leaks the secret value:\n%s", msg)
 	}
 }
+
+// The critic is advisory: nothing it says can change a verdict, so its model
+// call failing must not take the audit down. Before this, runOneTask returned
+// the critic's error like a primary seat's, and a Warp audit whose critic
+// (antigravity) returned an empty reply ended COULD-NOT-GRADE with every
+// mutant already scored. The task completes under the incomplete-critic
+// marker instead, so the verdict says the review did not reach it rather
+// than that it found nothing.
+func TestCriticSeatFailureDoesNotFailTheRun(t *testing.T) {
+	q, err := queue.Open(filepath.Join(t.TempDir(), "q.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer q.Close()
+
+	const mission int64 = 1
+	if err := q.Enqueue(mission, []queue.TaskSpec{{Key: "critic", Role: advpool.RoleTestCritic, Title: "critic", Instruction: "do"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := q.PromoteReady(mission); err != nil {
+		t.Fatal(err)
+	}
+	chatterFor := func(string) agentworker.Chatter {
+		return failingChatter{err: fmt.Errorf("antigravity: returned an empty reply")}
+	}
+	var progress bytes.Buffer
+	if _, err := runReadyTasks(context.Background(), q, mission, chatterFor, nil, nil, 1, &progress); err != nil {
+		t.Fatalf("a CRITIC seat's failure must not fail the run, got: %v", err)
+	}
+	if !strings.Contains(progress.String(), "critic") {
+		t.Errorf("the missing review must be reported, got progress:\n%s", progress.String())
+	}
+	tasks, err := q.List(mission)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks) != 1 || tasks[0].Status != queue.StatusDone {
+		t.Fatalf("the critic task must be completed so the run can converge, got %+v", tasks)
+	}
+	res := tasks[0].Result
+	if !strings.HasPrefix(res, agentworker.CriticIncompletePrefix) || !strings.Contains(res, "empty reply") {
+		t.Errorf("the critic task must complete as INCOMPLETE and carry the failure, got %q", res)
+	}
+}

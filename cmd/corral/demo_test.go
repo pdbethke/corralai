@@ -77,6 +77,24 @@ func TestDemoRefusesWithoutModels(t *testing.T) {
 	}
 }
 
+// --dir is resolved against the caller's directory, not the project's: the
+// certify call takes both --code and --repo-dir from it, and a relative root
+// handed to both was joined twice (agy-demo/agy-demo/passwd.go), so a
+// relative --dir failed before any seat ran.
+func TestDemoProjectRootIsAbsolute(t *testing.T) {
+	t.Chdir(t.TempDir())
+	root, err := demoRoot("rel-demo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !filepath.IsAbs(root) {
+		t.Fatalf("demoRoot(%q) = %q, want an absolute path", "rel-demo", root)
+	}
+	if filepath.Base(root) != "rel-demo" {
+		t.Fatalf("demoRoot must keep the directory the caller named, got %q", root)
+	}
+}
+
 // The demo writes into a directory the caller can inspect afterwards, because
 // reading the thin test is half of understanding the verdict.
 func TestDemoProjectWritesTheThreeFiles(t *testing.T) {

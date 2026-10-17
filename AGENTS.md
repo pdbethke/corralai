@@ -201,7 +201,9 @@ come defined; any other agent is the operator's own, defined as
 `CORRALAI_AGENT_<NAME>_WIRE` (`claude-json`, `codex-jsonl`, `text`). The agent
 brings its own auth, so a seat costs nothing per token on a Pro/Max/Plus plan
 — a run with no API key in the environment was executed for `claude-code` and
-`codex` only (2026-10-13); `antigravity` was not measured.
+`codex` (2026-10-13) and for `antigravity` (2026-10-17, mutant and critic
+seats; its headless tool denial sometimes leaves an empty reply, see
+`docs/corral/agent-seats.md`).
 Three properties are deliberate. Seats **start cold**: the built-in `claude-code`
 definition loads no settings sources, MCP servers, skills or session file (a
 one-line prompt measured 561 input tokens, against about 108,740 with no flags),

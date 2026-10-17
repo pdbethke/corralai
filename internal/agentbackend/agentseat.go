@@ -100,7 +100,9 @@ var builtinAgents = map[string]builtinAgent{
 	// wrapper reads only whether the caller granted ANY tool ($2 non-empty)
 	// and adds the flag then. A certify seat is granted none — its prompt
 	// carries the code — so it runs without the flag, and the auto-deny is
-	// its confinement (unmeasured: antigravity has not been run in certify).
+	// its confinement. Run in certify 2026-10-17: the denial holds, and a call
+	// whose model reached for a tool exits 0 with an empty reply and a stderr
+	// line naming the denied permission, which Chat carries on its error.
 	//
 	// Its JSON mode has not been measured, so it is a text wire (unmetered)
 	// and has no cold ceiling yet (spec open question 2).
@@ -493,6 +495,11 @@ func (a agentBackend) Chat(messages []Message, tools []any) (Message, error) {
 		return Message{Usage: u}, fmt.Errorf("%s: %v: %s", a.name, runErr, tail)
 	}
 	if perr != nil {
+		// A CLI that exited 0 with no usable reply usually said why on
+		// stderr (antigravity names the tool it auto-denied); carry it.
+		if tail := clip.Tail(strings.TrimSpace(stderr.String()), 800); tail != "" {
+			return Message{Usage: u}, fmt.Errorf("%s: %w: %s", a.name, perr, tail)
+		}
 		return Message{Usage: u}, fmt.Errorf("%s: %w", a.name, perr)
 	}
 	return Message{Role: "assistant", Content: content, Usage: u}, nil

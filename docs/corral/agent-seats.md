@@ -37,9 +37,14 @@ benchmarks.
 | `corral demo --mutant-model codex --writer-model codex --critic-model claude-code` | the dev suite killed 5 of 11 mutants; 6 of 6 survivors were PROVED by an authored test. Cost line: 0.1M tokens in / 1.9k out across 8 calls (86.0k cached). The verdict's models line read `codex [codex-cli 0.160.0]` / `claude-code [2.1.296 (Claude Code)]`. |
 | the same demo swapped (`claude-code` mutant and writer, `codex` critic) | the dev suite killed 2 of 11; 9 of 9 PROVED; 39.3k in / 6.1k out across 11 calls. |
 | one `corral review` round (`claude-code` reviewer, `codex` verifier, scope `internal/seatrecord`) | completed. The record marks both unpinned seats model-unresolved. |
+| `corral demo --mutant-model antigravity --writer-model codex --critic-model off` (2026-10-17, no API key) | the dev suite killed 2 of 11; 9 of 9 PROVED. The mutant seat's one call shows as `not metered`. |
+| the same with `--critic-model antigravity` | the critic answered in the keyed JSON shape and judged both demo tests sound. The mutant seat returned an empty reply (below). |
 
-`antigravity` was not measured. Its built-in definition speaks the `text`
-wire, so it is not metered (below).
+`antigravity` speaks the `text` wire, so it is not metered (below). In 2 of
+the 3 certify runs above its mutant seat answered; in the third, headless
+`agy` exited 0 with nothing on stdout and said on stderr that the model had
+reached for a tool needing the `command` permission, which it auto-denied. The
+run stops on that reply rather than grading nothing; rerunning is the remedy.
 
 ## Seats start cold
 
@@ -110,8 +115,9 @@ corral confines a seat only as far as its CLI lets it:
 - **`antigravity`** in review runs with `--dangerously-skip-permissions`,
   because headless `agy` denies every tool it cannot prompt for and a review
   seat must read the tree. In certify it is granted no tools, so it runs
-  without the flag and relies on that denial. This certify behaviour has not
-  been run.
+  without the flag and relies on that denial. That denial was observed in
+  certify (2026-10-17): it holds, and the call it denies returns an empty
+  reply, which corral reports with `agy`'s own stderr line.
 
 A certify prompt carries the **audited source**, and source can carry text
 aimed at a model. A seat that can read the host could be steered by it. Audit

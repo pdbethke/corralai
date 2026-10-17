@@ -49,14 +49,10 @@ func runDemo(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 
-	root := strings.TrimSpace(*dir)
-	if root == "" {
-		d, err := os.MkdirTemp("", "corral-demo-")
-		if err != nil {
-			fmt.Fprintf(stderr, "corral demo: creating a temp project: %v\n", err)
-			return 1
-		}
-		root = d
+	root, err := demoRoot(*dir)
+	if err != nil {
+		fmt.Fprintf(stderr, "corral demo: %v\n", err)
+		return 1
 	}
 	if err := writeDemoProject(root); err != nil {
 		fmt.Fprintf(stderr, "corral demo: writing the demo project: %v\n", err)
@@ -91,6 +87,25 @@ func runDemo(args []string, stdout, stderr io.Writer) int {
 	fmt.Fprintf(stdout, "to try this on your own code, run `corral doctor` first: it checks the environment for free,\n")
 	fmt.Fprintf(stdout, "and the environment is what stops an audit far more often than the tests are.\n")
 	return code
+}
+
+// demoRoot is the project directory: the one named, made absolute, or a new
+// temp dir. Absolute because certify resolves --code against --repo-dir, and
+// the demo hands it the same root for both — a relative root was joined twice.
+func demoRoot(dir string) (string, error) {
+	dir = strings.TrimSpace(dir)
+	if dir == "" {
+		d, err := os.MkdirTemp("", "corral-demo-")
+		if err != nil {
+			return "", fmt.Errorf("creating a temp project: %w", err)
+		}
+		return d, nil
+	}
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return "", fmt.Errorf("resolving --dir %q: %w", dir, err)
+	}
+	return abs, nil
 }
 
 // demoGoal is the contract the demo's test is deliberately thin against. It is

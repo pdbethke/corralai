@@ -303,6 +303,18 @@ func TestChatTextWireEmptyReplyIsAnErrorNamingTheSeat(t *testing.T) {
 	}
 }
 
+// A CLI that exits 0 with nothing on stdout usually said why on stderr:
+// antigravity, headless, prints that it auto-denied a tool the model reached
+// for. Dropping that line left the operator with "returned an empty reply" and
+// nothing to act on — a diagnostic computed and thrown away.
+func TestChatTextWireEmptyReplyCarriesStderr(t *testing.T) {
+	b := fakeSeat(t, "cat >/dev/null\necho 'no output produced: a tool was auto-denied' >&2\n", "")
+	_, err := b.Chat([]Message{{Role: "user", Content: "hi"}}, nil)
+	if err == nil || !strings.Contains(err.Error(), "auto-denied") {
+		t.Fatalf("an empty reply must carry the CLI's stderr, got %v", err)
+	}
+}
+
 func TestChatClaudeJSONFillsUsage(t *testing.T) {
 	b := fakeSeat(t, "cat >/dev/null; cat '"+fixturePath(t, "claude-json-ok.json")+"'\n", "claude-json")
 	m, err := b.Chat([]Message{{Role: "user", Content: "hi"}}, nil)

@@ -52,10 +52,10 @@ of these has happened, with the evidence linked here:
 3. **A review round with no P1.** An outside review of the release
    candidate finds nothing that makes corral say something false about a
    suite. This is the same stopping rule the review loop already uses.
-4. **No known defect in what a verdict or a review records.** The one open
-   now: under `--substrate workspace`, `corral review` runs every
-   reproduction script in one shared tree, so one script's edits can change
-   the next one's result.
+4. **No known defect in what a verdict or a review records.** None is open
+   as of 2026-10-17: the last one found (workspace reproductions sharing a
+   tree, so one script's edits could change the next one's result) was fixed
+   in #440. A new finding of this kind reopens this item.
 
 ## Shipped
 

@@ -992,7 +992,7 @@ argument with no execution; **HYPOTHESIS**. corral runs every REPRODUCED
 script in the same offline sandbox `certify` uses, seeded from the reviewed
 commit — your checkout is never the subject — and with no sandbox on the
 machine, review refuses before any seat is called. `--substrate workspace`
-runs the scripts in a plain worktree instead; it is opt-in, and the record
+runs each script in its own plain worktree at the commit instead; it is opt-in, and the record
 says which ran. A script that does not hold demotes its finding to
 CODE-READ on the record, saying why. The reviewer must also list what it
 checked and found sound, so the review's coverage is legible. corral does

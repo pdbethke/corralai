@@ -158,7 +158,7 @@ func TestReviewRefusesWithoutASeatOrAScopeOrACommit(t *testing.T) {
 
 // TestReviewVerifierSeatRefutesByReproductionAndIsDecorrelated: the
 // verifier is handed the review AS RECORDED (the demoted finding says so),
-// its REPRODUCED refutation runs in the same worktree and, holding, demotes
+// its REPRODUCED refutation runs on the same substrate and, holding, demotes
 // the finding; a refutation whose script fails is itself demoted and moves
 // nothing; the verifier's model may never be the reviewer's.
 func TestReviewVerifierSeatRefutesByReproductionAndIsDecorrelated(t *testing.T) {

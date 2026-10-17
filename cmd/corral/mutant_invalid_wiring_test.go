@@ -53,3 +53,23 @@ func TestRenderedVerdictOmitsInvalidWhenZero(t *testing.T) {
 		t.Errorf("invalid line printed on a clean run:\n%s", b.String())
 	}
 }
+
+// The same wire for MutantsUnmeasured: mutants whose grading command failed on
+// the compliant code. Excluded from MutantsTotal, so the operator must see
+// the count or the exam silently looks smaller than its budget for no reason.
+func TestAdvVerdictCarriesAndShowsMutantsUnmeasured(t *testing.T) {
+	got := advVerdictFromPool(advpool.Verdict{MutantsTotal: 1, MutantsUnmeasured: 7, Status: advpool.StatusNeedsReview})
+	if got.MutantsUnmeasured != 7 {
+		t.Fatalf("MutantsUnmeasured = %d, want 7 — the CLI mapping dropped it", got.MutantsUnmeasured)
+	}
+	var b strings.Builder
+	renderAdvVerdict(&b, "x.go", got)
+	if !strings.Contains(b.String(), "unmeasured:    7 mutant(s)") {
+		t.Errorf("rendered verdict hides the unmeasured count:\n%s", b.String())
+	}
+	b.Reset()
+	renderAdvVerdict(&b, "x.go", advVerdict{MutantsTotal: 4})
+	if strings.Contains(b.String(), "unmeasured") {
+		t.Errorf("unmeasured line printed on a clean run:\n%s", b.String())
+	}
+}

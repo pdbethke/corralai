@@ -474,8 +474,15 @@ type Verdict struct {
 	// generator produced mostly unbuildable mutants graded a much smaller exam
 	// than its mutant budget suggests, and the operator must be able to see it.
 	MutantsInvalid int
-	Survivors      int // mutants the dev's own tests did NOT kill
-	ProvenMissed   int // survivors the pool's authored test then killed — real, catchable gaps
+	// MutantsUnmeasured counts mutants whose grading command failed on the
+	// COMPLIANT code, so nothing it said about the mutant was evidence
+	// (adequacy.Report.Unmeasured). Like MutantsInvalid they are excluded
+	// from MutantsTotal: they were in the exam and never sat it. Counting
+	// them as graded once let seven unmeasured mutants and one measured kill
+	// sign as "killed 8 of 8" and certify.
+	MutantsUnmeasured int `json:"mutants_unmeasured,omitempty"`
+	Survivors         int // mutants the dev's own tests did NOT kill
+	ProvenMissed      int // survivors the pool's authored test then killed — real, catchable gaps
 	// ProvenMutantIDs is the EVIDENCE behind ProvenMissed: which survivors the
 	// authored test actually killed, derived from the same scoring report so
 	// the two can never disagree. Empty on every path that did not grade
@@ -1017,6 +1024,12 @@ type runState struct {
 	// are evidence about the GENERATOR, not the suite, so they are excluded
 	// from mutantsTotal and reported separately rather than hidden.
 	mutantsInvalid int
+	// mutantsUnmeasured counts mutants the scorer could not measure (their
+	// command fails on compliant code); excluded from mutantsTotal.
+	mutantsUnmeasured int
+	// examSample is the certification interval's sample: DISTINCT measured
+	// edits, and how many of those survived. See examSampleOf.
+	examSample examSample
 	// invalidReasons maps a rejected mutant's ID to what the compile checker
 	// printed. Kept so the run can SAY why the exam shrank — a bare count
 	// cannot distinguish a generator dropping a used import from one changing a
@@ -1972,7 +1985,16 @@ func applyDevScore(ctx context.Context, run *runState, scorer Scorer, mutants []
 	run.mutantsInvalid = len(rep.Invalid)
 	run.invalidReasons = rep.InvalidReasons
 	run.compileGateNote = rep.CompileGateNote
-	run.mutantsTotal = len(mutants) - run.mutantsInvalid
+	run.mutantsUnmeasured = len(rep.Unmeasured)
+	if run.mutantsUnmeasured > 0 {
+		log.Printf("advpool: %s: %d mutant(s) UNMEASURED — the grading command fails on the compliant code, so they are not counted as graded: %s",
+			run.rs.CodePath, run.mutantsUnmeasured, rep.UnmeasuredReasons[rep.Unmeasured[0]])
+	}
+	// Minus the unmeasured too: a mutant the scorer could not measure is
+	// neither killed nor survived, and counting it here made the interval
+	// below and the ledger's MutantsTotal describe an exam that never ran.
+	run.mutantsTotal = len(mutants) - run.mutantsInvalid - run.mutantsUnmeasured
+	run.examSample = examSampleOf(rep, mutants)
 	// What each mutant was actually graded with, kept so the verdict's mutant
 	// refs can carry it. Empty both on a run that graded every mutant with
 	// the same command AND on a per-mutant run with nothing left to grade —
@@ -2896,7 +2918,7 @@ func (d *Driver) tickAggregate(ctx context.Context, missionID int64, run *runSta
 	// execution-verified finding path.
 	roster, seatedSelection, seatTools := run.signedSeats(d.Assign)
 	v := aggregate(run.rs, roster, run.devKillRate, run.mutantsTotal, len(run.devSurvivors), run.provenMissed,
-		criticFindings, d.Threshold, d.CertifyIntervalWidth, false, run.testWriterFailed, run.poolTestUnsound)
+		criticFindings, d.Threshold, d.CertifyIntervalWidth, run.examSample, false, run.testWriterFailed, run.poolTestUnsound)
 	v.ShadowSelection = seatedSelection
 	v.SeatTools = seatTools
 	v.CriticIncomplete = criticIncomplete
@@ -2917,6 +2939,7 @@ func (d *Driver) tickAggregate(ctx context.Context, missionID int64, run *runSta
 	// verdict — the fourth time on this branch that a value was added in one
 	// place and a second construction/conversion site was missed.
 	v.MutantsInvalid = run.mutantsInvalid
+	v.MutantsUnmeasured = run.mutantsUnmeasured
 	v.AuthoredTest = run.authoredTest
 	// The mode is stamped from the RUN's resolved value, never from the
 	// RunSpec's raw field: an unset spec means batched, and the verdict must
@@ -3413,6 +3436,7 @@ func (d *Driver) timeoutVerdict(run *runState) Verdict {
 	v.BaselineDuration = run.baselineDuration
 	v.MutantsTotal = run.mutantsTotal
 	v.MutantsInvalid = run.mutantsInvalid
+	v.MutantsUnmeasured = run.mutantsUnmeasured
 	v.Survivors = len(run.devSurvivors)
 	v.ProvenMissed = run.provenMissed
 	// The mutant-level evidence must ride the TIMEOUT verdict too, for the

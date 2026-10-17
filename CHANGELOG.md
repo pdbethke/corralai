@@ -11,6 +11,19 @@ history of any release, `git log v0.3.4..v0.3.5`.
 
 ## [Unreleased]
 
+- **A verdict could certify on less evidence than its exam-size rule
+  allows. Fixed.** Two ways, both found by an outside review and reproduced
+  with real shell runs. First, a mutant whose grading command fails on the
+  unmutated code is *unmeasured*, neither killed nor survived, but the
+  verdict still counted it as graded: one measured kill beside seven
+  unmeasured mutants printed "killed 8 of 8" and certified. Unmeasured
+  mutants are now left out of `MutantsTotal`, counted in a new
+  `mutants_unmeasured` field, and printed on the verdict. Second, duplicate
+  mutants (byte-identical edits, graded once) still count toward the kill
+  rate as before, but the interval that decides whether an exam is big
+  enough to certify is now taken over *distinct* edits: eight copies of one
+  fault are one observation and can no longer certify. `VerdictGeneration`
+  is 28, so cached verdicts are re-measured once.
 - **`corral review churn`: is the review loop draining the code or churning
   it?** For every review on the ledger, each finding's line is blamed at the
   reviewed commit. It is **drain** if the line was there when the previous

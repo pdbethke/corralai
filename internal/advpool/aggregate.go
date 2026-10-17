@@ -7,6 +7,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/pdbethke/corralai/internal/adequacy"
 	"github.com/pdbethke/corralai/internal/killrate"
 	"github.com/pdbethke/corralai/internal/queue"
 )
@@ -179,6 +180,7 @@ func aggregate(
 	vacuousFindings []queue.Finding,
 	threshold float64,
 	certifyIntervalWidth float64,
+	exam examSample,
 	blockingFindingOpen bool,
 	testWriterFailed bool,
 	poolTestUnsound bool,
@@ -237,13 +239,60 @@ func aggregate(
 	// decides whether the rate is a grade or an indication. The complexity
 	// budget's floor of five can never certify, which is the honest answer
 	// for a file with five decision points.
+	//
+	// The interval's sample is the DISTINCT measured edits (exam), not
+	// mutantsTotal. mutantsTotal keeps every duplicate so the kill rate keeps
+	// its output weighting, but eight copies of one edit are one observation:
+	// taken over the copies, one fault run once certified as if eight had.
 	if v.Status == StatusCertified && mutantsTotal > 0 && certifyIntervalWidth > 0 {
-		if lo, hi, ok := killrate.Interval(mutantsTotal, survivors); ok && hi-lo > certifyIntervalWidth {
+		if exam.distinct == 0 {
 			v.Status = StatusNeedsReview
 			v.ExamIndicative = true
-			v.IndicativeReason = fmt.Sprintf("exam too small to certify: %d mutants, 95%% interval %.2f–%.2f (width %.2f, the most a certified verdict may carry is %.2f)",
-				mutantsTotal, lo, hi, hi-lo, certifyIntervalWidth)
+			v.IndicativeReason = "exam too small to certify: no distinct mutant was measured"
+		} else if lo, hi, ok := killrate.Interval(exam.distinct, exam.survived); ok && hi-lo > certifyIntervalWidth {
+			v.Status = StatusNeedsReview
+			v.ExamIndicative = true
+			v.IndicativeReason = fmt.Sprintf("exam too small to certify: %d distinct mutants, 95%% interval %.2f–%.2f (width %.2f, the most a certified verdict may carry is %.2f)",
+				exam.distinct, lo, hi, hi-lo, certifyIntervalWidth)
 		}
 	}
 	return v
+}
+
+// examSample is what the certification interval is taken over.
+type examSample struct {
+	distinct int // distinct edits that were measured (killed or survived)
+	survived int // of those, how many survived
+}
+
+// examSampleOf counts the DISTINCT edits the report measured. Duplicates are
+// keyed by adequacy.IdentityOf, the same identity the scorer collapses on,
+// so two copies of one edit are one observation however many commands graded
+// them. An edit with any surviving copy counts as survived: the interval may
+// only be made wider by that choice, never narrower.
+func examSampleOf(rep adequacy.Report, mutants []adequacy.Mutant) examSample {
+	killed := make(map[string]bool, len(rep.Killed))
+	for _, id := range rep.Killed {
+		killed[id] = true
+	}
+	survived := make(map[string]bool, len(rep.Survived))
+	for _, id := range rep.Survived {
+		survived[id] = true
+	}
+	seen := map[adequacy.MutantIdentity]bool{}
+	for _, m := range mutants {
+		if !killed[m.ID] && !survived[m.ID] {
+			continue
+		}
+		id := adequacy.IdentityOf(m)
+		seen[id] = seen[id] || survived[m.ID]
+	}
+	var s examSample
+	for _, sv := range seen {
+		s.distinct++
+		if sv {
+			s.survived++
+		}
+	}
+	return s
 }

@@ -226,7 +226,13 @@ package reposcan
 // new name declare tests node runs and the list left out, so a "30" critic
 // could be held to a short list and pass as complete (found by an outside
 // review, Codex). Shape unchanged; behaviour bump.
-const VerdictGeneration = "31"
+//
+// "32" (2026-10-18): `node ./node_modules/jest/bin/jest.js` and mocha's
+// bin/mocha.js or bin/_mocha (the jail form AGENTS.md gives) are now the jest
+// and mocha rows, not node --test's Default. A "31" verdict for that command
+// never listed tests, named a killing test or checked a critic claim by
+// execution. Shape unchanged; behaviour bump.
+const VerdictGeneration = "32"
 
 // VerdictShapeSHA256 fingerprints advpool.Verdict's serialized shape: every
 // exported field's name, type and json tag, sorted by name and hashed.

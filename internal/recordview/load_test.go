@@ -3,6 +3,8 @@
 package recordview
 
 import (
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/pdbethke/corralai/internal/auditpush"
@@ -35,10 +37,21 @@ func TestLoadReadsVerifiesAndPairs(t *testing.T) {
 func TestLiveModeReadsTheLedgerFreshOnEveryRequest(t *testing.T) {
 	dir := t.TempDir()
 	appendOne(t, dir)
-	first, _ := Load(dir, nil)
+	h := Handler(func() (Site, error) { return Load(dir, nil) })
+	get := func() string {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest("GET", "/", nil))
+		if rec.Code != 200 {
+			t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+		}
+		return rec.Body.String()
+	}
+	first := get()
 	appendOne(t, dir)
-	second, _ := Load(dir, nil)
-	if first.LedgerEntries != 1 || second.LedgerEntries != 2 {
-		t.Fatalf("Load is not reading afresh: %d then %d", first.LedgerEntries, second.LedgerEntries)
+	second := get()
+	want1 := `<div class="stat"><b>1</b><span>ledger entries</span>`
+	want2 := `<div class="stat"><b>2</b><span>ledger entries</span>`
+	if !strings.Contains(first, want1) || !strings.Contains(second, want2) {
+		t.Fatal("the second request did not reflect the entry appended between requests")
 	}
 }

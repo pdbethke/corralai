@@ -468,8 +468,8 @@ const verdictsTmpl = `<!doctype html>
 <title>awaiting a verdict - corral/ledger</title>
 <style>` + baseCSS + `</style></head><body><div class="wrap">
 <p class="small"><a href="index.html">&larr; the record</a></p>
-<h1>Awaiting a person's verdict <span class="small">{{len .Awaiting}}</span></h1>
-<p class="lede">Findings from reviews that stand, with no verdict that stands. Reproduced ones first: execution backed them.</p>
+<h1>Awaiting a person's verdict{{if .HasLedger}} <span class="small">{{len .Awaiting}}</span>{{end}}</h1>
+{{if .HasLedger}}<p class="lede">Findings from reviews that stand, with no verdict that stands. Reproduced ones first: execution backed them.</p>{{end}}
 {{if not .HasLedger}}{{template "noledger"}}{{else if not .Awaiting}}<p>Nothing is waiting for a verdict.</p>{{end}}
 {{range .Awaiting}}
 <div class="finding"><p class="small mono"><a href="{{entryURL .Review.Short}}#{{.Finding.ID}}">{{.Finding.Ref}}</a>

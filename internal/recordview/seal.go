@@ -33,6 +33,12 @@ func (s Site) WithSeal(rows []SealRow, readErr error) Site {
 	}
 	rs := append([]SealRow(nil), rows...)
 	sort.SliceStable(rs, func(i, j int) bool {
+		// A caveated row's kill rate is not a measurement of the suite
+		// (baseline failed, writer failed...), so it must not rank by it:
+		// a BASELINE-FAILED 0.00 would otherwise lead as the worst-tested file.
+		if ci, cj := rs[i].Caveat != "", rs[j].Caveat != ""; ci != cj {
+			return !ci
+		}
 		if rs[i].ProvenMissed != rs[j].ProvenMissed {
 			return rs[i].ProvenMissed > rs[j].ProvenMissed // proven gaps first: the earned findings
 		}

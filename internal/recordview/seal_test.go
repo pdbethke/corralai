@@ -49,7 +49,7 @@ func TestASealOnlyTargetMakesNoChainClaim(t *testing.T) {
 			t.Fatalf("%s: %v", path, err)
 		}
 		page := b.String()
-		if strings.Contains(page, "intact") || strings.Contains(page, "The record is empty") || strings.Contains(page, "Nothing is waiting") {
+		if strings.Contains(page, "intact") || strings.Contains(page, "The record is empty") || strings.Contains(page, "Nothing is waiting") || strings.Contains(page, `<span class="small">0</span>`) {
 			t.Fatalf("%s: a warehouse-only target must make no claim about a chain it never read", path)
 		}
 		if path != "index.html" && !strings.Contains(page, "Not a ledger directory") {
@@ -69,5 +69,17 @@ func TestAStaticSiteHasNoSealSection(t *testing.T) {
 	_ = p.Render(&b, Site{HasLedger: true}, "index.html")
 	if strings.Contains(b.String(), "The seal") {
 		t.Fatal("absent is not empty: a site never given a seal shows no section")
+	}
+}
+
+func TestACaveatedRowIsNotRankedByItsFaceValueKillRate(t *testing.T) {
+	s := Site{HasLedger: true}.WithSeal([]SealRow{
+		{Path: "failed.go", KillRate: 0, Caveat: "BASELINE-FAILED"},
+		{Path: "ok.go", KillRate: 0.8},
+		{Path: "gap.go", KillRate: 0.9, ProvenMissed: 1},
+	}, nil)
+	got := []string{s.Seal[0].Path, s.Seal[1].Path, s.Seal[2].Path}
+	if got[0] != "gap.go" || got[1] != "ok.go" || got[2] != "failed.go" {
+		t.Fatalf("caveated rows must follow every graded row, got %v", got)
 	}
 }

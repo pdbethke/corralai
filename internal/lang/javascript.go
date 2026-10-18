@@ -176,8 +176,9 @@ func (jsPlugin) ImportPath(string, func(string) bool) (string, bool) { return ""
 // per-task correction.
 func (jsPlugin) ImportNote(string, bool) string { return "" }
 
-// TestNamesInSource: no static lister for this language yet; nil is "unknown".
-func (jsPlugin) TestNamesInSource(string, string) []string { return nil }
+// TestNamesInSource lists the file's tests by their describe/it titles
+// (jsTestNames, shared by JavaScript and TypeScript).
+func (jsPlugin) TestNamesInSource(_, src string) []string { return jsTestNames(src) }
 
 // WorkspaceRunEnv is a no-op. TestCmd runs Node's builtin test runner
 // directly against source (no separate persistent compile-cache step), so

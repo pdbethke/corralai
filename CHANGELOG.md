@@ -11,6 +11,19 @@ history of any release, `git log v0.3.4..v0.3.5`.
 
 ## [Unreleased]
 
+- **JavaScript, TypeScript and Ruby critics must now judge every test.**
+  The critic is handed the test file's tests by name, read from the source:
+  describe/it titles for jest, vitest, mocha and node --test, rspec's full
+  descriptions, and minitest's `Class#test_name`. Until now only Go, Python,
+  PHP and Rust critics got the list; in these three languages a critic could
+  skip tests or name ones that do not exist. A file whose tests cannot all be
+  named exactly gets no list, as before: tests generated with `.each`, a loop
+  or `define_method`, shared examples, a title built at run time, a test
+  under a braceless `if`, and JSX text with an apostrophe in a React test
+  file. The names were checked against what real jest, vitest, mocha, node,
+  rspec and minitest list for captured fixtures, and three real audits
+  (jest, mocha, rspec) handed their critics the list and got all four tests
+  judged. Cached verdicts are re-measured once (VerdictGeneration 30).
 - **`corral review --substrate workspace` runs each reproduction from a
   fresh copy of the commit.** One worktree served the whole review, and a
   script's own edits were never undone, so a later finding, or the

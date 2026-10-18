@@ -14,7 +14,7 @@ var paritySamples = map[string]paritySample{
 	"rust":       {"src/a.rs", "#[test]\nfn a() {}\n"},
 	"javascript": {"a.test.js", "test('a', () => {});\n"},
 	"typescript": {"a.test.ts", "test('a', () => {});\n"},
-	"ruby":       {"a_spec.rb", "it 'a' do\nend\n"},
+	"ruby":       {"a_spec.rb", "describe 'A' do\n  it 'a' do\n  end\nend\n"},
 }
 
 // Capability is one user-facing thing corral does with a language's tests.
@@ -81,10 +81,6 @@ var Capabilities = []Capability{
 type Exemption struct{ Lang, Capability, Reason string }
 
 var ParityExemptions = []Exemption{
-	{"javascript", "critic-list", "describe/it names are strings in calls, not declarations; no static lister yet (runner table Phase 4)"},
-	{"typescript", "critic-list", "describe/it names are strings in calls, not declarations; no static lister yet (runner table Phase 4)"},
-	{"ruby", "critic-list", "rspec and minitest names are strings or methods by runner; no static lister yet (runner table Phase 4)"},
-
 	{"rust", "fail-fast", "nextest's --fail-fast and libtest's lack of one are not yet verified against a real run (runner table Phase 5)"},
 
 	{"rust", "salvage", "libtest --skip and nextest filtersets are not yet verified for salvage (runner table Phase 5)"},

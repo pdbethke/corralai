@@ -156,8 +156,11 @@ func (rubyPlugin) ImportPath(string, func(string) bool) (string, bool) { return 
 // no per-task correction.
 func (rubyPlugin) ImportNote(string, bool) string { return "" }
 
-// TestNamesInSource: no static lister for this language yet; nil is "unknown".
-func (rubyPlugin) TestNamesInSource(string, string) []string { return nil }
+// TestNamesInSource lists the file's tests as its runner names them
+// (rubyTestNames: rspec by path convention, minitest otherwise).
+func (rubyPlugin) TestNamesInSource(testPath, src string) []string {
+	return rubyTestNames(testPath, src)
+}
 
 // WorkspaceRunEnv is a no-op: MRI has no persistent, mtime/size-keyed
 // bytecode cache next to a .rb source file by default (unlike CPython's

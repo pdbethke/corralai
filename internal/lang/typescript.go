@@ -175,8 +175,9 @@ func (tsPlugin) ImportPath(string, func(string) bool) (string, bool) { return ""
 // per-task correction.
 func (tsPlugin) ImportNote(string, bool) string { return "" }
 
-// TestNamesInSource: no static lister for this language yet; nil is "unknown".
-func (tsPlugin) TestNamesInSource(string, string) []string { return nil }
+// TestNamesInSource lists the file's tests by their describe/it titles
+// (jsTestNames, shared by JavaScript and TypeScript).
+func (tsPlugin) TestNamesInSource(_, src string) []string { return jsTestNames(src) }
 
 // WorkspaceRunEnv is a no-op. TestCmd uses Node's native `--experimental-
 // strip-types`, an in-memory transform with no persistent on-disk cache

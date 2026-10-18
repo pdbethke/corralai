@@ -201,3 +201,41 @@ func TestBriefIsBoundedAndNamesTheCut(t *testing.T) {
 		t.Fatalf("the cut must be named and honoured:\n%s", s)
 	}
 }
+
+// The brief hands back the authored test as "the test that closes it", so it
+// must also carry what running those tests TOGETHER showed. An outside review
+// (Codex, 2026-10-18) found `scans show --evidence` dropping a recorded
+// together failure; the brief reads the same ledger row and dropped it too.
+func TestBriefCarriesTheTogetherFailure(t *testing.T) {
+	const failure = "FAILED test_two: shared state"
+	dir := t.TempDir()
+	kr := 0.5
+	vj := `{"authored_together":"fail","authored_together_output":"` + failure + `"}`
+	if _, err := auditpush.PushBundle(dir+"/", auditpush.Bundle{
+		SourcePushed: true,
+		Scan:         auditpush.ScanRow{Repo: "o/r", ScanID: 1, Commit: "c1c1c1c1c1c1c1c1", Host: "h", CorralVersion: "v", Substrate: "workspace", SourcePushed: true},
+		Files: []auditpush.Row{{Repo: "o/r", Commit: "c1c1c1c1c1c1c1c1", ScanID: 1, Path: "pkg/a.go", Disposition: "audited", KillRate: &kr, Survivors: 1, ProvenMissed: 1,
+			AuthoredTest: "func TestAddSubtracts(t *testing.T) {}\n", VerdictJSON: vj}},
+		Mutants: []auditpush.MutantRow{{Repo: "o/r", ScanID: 1, Path: "pkg/a.go", MutantID: "s0/m1", Outcome: "survived", Proven: true, SpanStart: 3, SpanEnd: 3}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	if code := runBrief([]string{"--ledger", dir, "--scope", "pkg"}, &out, &errb); code != 0 {
+		t.Fatalf("exit %d: %s", code, errb.String())
+	}
+	for _, want := range []string{"func TestAddSubtracts", "FAIL when run together", failure} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("brief lacks %q:\n%s", want, out.String())
+		}
+	}
+	out.Reset()
+	if code := runBrief([]string{"--ledger", dir, "--scope", "pkg", "--json"}, &out, &errb); code != 0 {
+		t.Fatalf("--json exit %d: %s", code, errb.String())
+	}
+	for _, want := range []string{`"authored_together": "fail"`, failure} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("brief --json lacks %q:\n%s", want, out.String())
+		}
+	}
+}

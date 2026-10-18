@@ -704,6 +704,23 @@ func soleGradedVendor(models map[string]string) string {
 	return vendor
 }
 
+// storedAuthoredTogether reads the together outcome back out of a stored
+// verdict (scanstore.File.VerdictJSON, a ledger row's VerdictJSON), so a
+// reader handing back the authored test later says what the live report
+// said beside it. The verdict is stored whole for exactly this; there is no
+// column. An empty or unreadable document yields "", which renders as not
+// checked — never as passed.
+func storedAuthoredTogether(verdictJSON string) (together, out string) {
+	var v struct {
+		Together string `json:"authored_together"`
+		Output   string `json:"authored_together_output"`
+	}
+	if verdictJSON == "" || json.Unmarshal([]byte(verdictJSON), &v) != nil {
+		return "", ""
+	}
+	return v.Together, v.Output
+}
+
 // printAuthoredTogether says what running the proven tests whole, once, on the
 // unmutated code showed. Each was proven ALONE, so a pass alone is no promise
 // they pass in one suite; a failure here means they interfere and need work

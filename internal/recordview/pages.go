@@ -213,7 +213,7 @@ func listPath(path string) (string, int, bool) {
 		return "", 0, false
 	}
 	n, err := strconv.Atoi(num)
-	if err != nil || n < 1 {
+	if err != nil || n < 1 || strconv.Itoa(n) != num {
 		return "", 0, false
 	}
 	return prefix, n, true

@@ -109,6 +109,17 @@ func TestAnEmptyLedgerRendersAndSaysItIsEmpty(t *testing.T) {
 	if strings.Contains(b.String(), "every entry's hash matches its bytes") {
 		t.Fatal("zero entries must not be presented as an intact chain")
 	}
+	for _, path := range s.Paths() {
+		var pb bytes.Buffer
+		if err := p.Render(&pb, s, path); err != nil {
+			t.Fatalf("%s: %v", path, err)
+		}
+		for _, bad := range []string{"every entry's hash matches its bytes", "intact"} {
+			if strings.Contains(pb.String(), bad) {
+				t.Fatalf("%s: an empty ledger page says %q", path, bad)
+			}
+		}
+	}
 }
 
 func contains(xs []string, x string) bool {

@@ -44,7 +44,7 @@ func TestLiveAndStaticServeTheSameBytes(t *testing.T) {
 func TestLiveModeRefusesPathsItDidNotRender(t *testing.T) {
 	s := buildOK(manyScans(1))
 	h := Handler(func() (Site, error) { return s, nil })
-	for _, p := range []string{"/entry/../../etc/passwd", "/entry/zzzz.html", "/entry/ffffffffffff.html", "/secret.txt", "/audits-0.html", "/audits-x.html"} {
+	for _, p := range []string{"/entry/../../etc/passwd", "/entry/zzzz.html", "/entry/ffffffffffff.html", "/secret.txt", "/audits-0.html", "/audits-x.html", "/audits-01.html", "/chain-+1.html"} {
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, p, nil))
 		if rec.Code != http.StatusNotFound {

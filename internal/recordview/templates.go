@@ -60,6 +60,8 @@ table{font-size:.8rem}th,td{padding:6px}}
 // verifyBanner is shared: it must say NOT CHECKED when no key was supplied,
 // which is neither a pass nor a failure. `corral verify` sets that standard.
 const verifyBanner = `
+{{define "emptyrecord"}}<div class="banner warn"><p><strong>The record is empty.</strong> This ledger has no entries yet:
+<code>corral certify</code> and <code>corral review</code> write them.</p></div>{{end}}
 {{define "verify"}}
 <div class="banner{{if .ChainProblems}} bad{{else if not .SigsChecked}} warn{{end}}">
   <p><strong>Chain:</strong>
@@ -98,8 +100,7 @@ Nothing here asks to be believed: re-run any of it.</p>
 
 {{if .LedgerEntries}}{{template "verify" .}}
 <p class="small"><a href="chain-1.html">The whole chain, entry by entry →</a></p>
-{{else}}<div class="banner warn"><p><strong>The record is empty.</strong> This ledger has no entries yet:
-<code>corral certify</code> and <code>corral review</code> write them.</p></div>{{end}}
+{{else}}{{template "emptyrecord"}}{{end}}
 
 {{if .Scans}}
 <h2>Audits</h2>
@@ -412,7 +413,7 @@ const chainTmpl = `<!doctype html>
 <style>` + baseCSS + `</style></head><body><div class="wrap">
 <p class="small"><a href="index.html">← the record</a></p>
 <h1>The chain <span class="small">page {{.N}} of {{.Of}}, newest first</span></h1>
-{{template "verify" .Site}}
+{{if .LedgerEntries}}{{template "verify" .Site}}{{else}}{{template "emptyrecord"}}{{end}}
 <div class="scroll"><table><thead><tr><th>#</th><th>when</th><th>kind</th><th>what</th><th>signature</th></tr></thead><tbody>
 {{range .Rows}}<tr>
 <td>{{.Pos}}</td><td class="nowrap">{{stamp .Pushed}}</td>

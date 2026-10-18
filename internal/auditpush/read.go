@@ -278,7 +278,7 @@ func readFileRows(db *sql.DB, where string, args ...any) ([]Row, error) {
 		trees, concurrency_note, shared_dirs, scan_id,
 		disposition, reason, preflight_state, evidence, detail, status,
 		cache_hit, reused_from_scan_id, cache_key, parent_sha256,
-		mutants_graded, mutants_invalid, mutants_timed_out,
+		mutants_graded, mutants_invalid, mutants_timed_out, mutants_distinct, mutants_distinct_survived,
 		regions_total, regions_probed, dropped_regions, vacuous_findings,
 		-- a row written before the column existed holds NULL: it cannot say
 		-- whether its critic was cut short, and reads as not marked
@@ -310,7 +310,7 @@ func readFileRows(db *sql.DB, where string, args ...any) ([]Row, error) {
 		var detail, status sql.NullString
 		var maxProvenMissed sql.NullInt64
 		var reusedFromScanID sql.NullInt64
-		var mutantsTimedOut sql.NullInt64
+		var mutantsTimedOut, mutantsDistinct, mutantsDistinctSurvived sql.NullInt64
 		var suiteBaselineMillis sql.NullInt64
 		var challengerJaccard, challengerKappa sql.NullFloat64
 		var challengerSufficient sql.NullBool
@@ -343,7 +343,7 @@ func readFileRows(db *sql.DB, where string, args ...any) ([]Row, error) {
 			&trees, &concurrencyNote, &sharedDirs, &r.ScanID,
 			&r.Disposition, &reason, &r.PreflightState, &r.Evidence, &detail, &status,
 			&r.CacheHit, &reusedFromScanID, &cacheKey, &parentSHA256,
-			&r.MutantsGraded, &r.MutantsInvalid, &mutantsTimedOut,
+			&r.MutantsGraded, &r.MutantsInvalid, &mutantsTimedOut, &mutantsDistinct, &mutantsDistinctSurvived,
 			&r.RegionsTotal, &r.RegionsProbed, &droppedRegions, &r.VacuousFindings, &r.CriticIncomplete,
 			&r.AuthoredTestNotCollected, &r.BaselineFailed, &suiteBaselineMillis,
 			&provenMutantIDs, &challengerJaccard, &challengerKappa,
@@ -384,6 +384,7 @@ func readFileRows(db *sql.DB, where string, args ...any) ([]Row, error) {
 		r.CacheKey = cacheKey.String
 		r.ParentSHA256 = parentSHA256.String
 		r.MutantsTimedOut = nullInt(mutantsTimedOut)
+		r.MutantsDistinct, r.MutantsDistinctSurvived = nullInt(mutantsDistinct), nullInt(mutantsDistinctSurvived)
 		r.DroppedRegions = droppedRegions.String
 		r.SuiteBaselineMillis = nullInt64(suiteBaselineMillis)
 		r.ProvenMutantIDs = provenMutantIDs.String

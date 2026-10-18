@@ -2661,6 +2661,7 @@ func advVerdictFromPool(v advpool.Verdict) advVerdict {
 		RegionsTotal: v.RegionsTotal, RegionsProbed: v.RegionsProbed,
 		DroppedRegions:   v.DroppedRegions,
 		DuplicateMutants: v.DuplicateMutants,
+		MutantsDistinct:  v.MutantsDistinct, MutantsDistinctSurvived: v.MutantsDistinctSurvived,
 		TestWriterFailed: v.TestWriterFailed,
 		PoolTestUnsound:  v.PoolTestUnsound,
 		BaselineFailed:   v.BaselineFailed,

@@ -185,3 +185,21 @@ func TestAScopedScanNamesItsScope(t *testing.T) {
 		t.Errorf("the index does not name the scope")
 	}
 }
+
+// The page's interval is over the row's DISTINCT measured edits when the row
+// recorded them: 8 graded copies of 3 distinct edits, 1 surviving, is a band
+// over n=3. A row from before that was recorded keeps its band over every
+// graded mutant, labelled as such rather than passed off as the other.
+func TestTheIntervalIsOverDistinctEdits(t *testing.T) {
+	e := warpLikeScan("aaaabbbbccccdddd", true)
+	three, one := 3, 1
+	e.Bundle.Files[2].MutantsDistinct, e.Bundle.Files[2].MutantsDistinctSurvived = &three, &one
+	_, page := renderOne(t, []auditpush.LedgerEntry{e})
+	if p := page("aaaabbbbcccc"); !strings.Contains(p, "0.21–0.94") || strings.Contains(p, "0.19–0.49") {
+		t.Errorf("the interval is not over the 3 distinct edits:\n%s", p)
+	}
+	_, page = renderOne(t, []auditpush.LedgerEntry{warpLikeScan("eeeeffff00001111", true)})
+	if p := page("eeeeffff0000"); !strings.Contains(p, "0.19–0.49") || !strings.Contains(p, "duplicates counted") {
+		t.Errorf("an older row's interval is not labelled as over every graded mutant:\n%s", p)
+	}
+}

@@ -481,8 +481,17 @@ type Verdict struct {
 	// them as graded once let seven unmeasured mutants and one measured kill
 	// sign as "killed 8 of 8" and certify.
 	MutantsUnmeasured int `json:"mutants_unmeasured,omitempty"`
-	Survivors         int // mutants the dev's own tests did NOT kill
-	ProvenMissed      int // survivors the pool's authored test then killed — real, catchable gaps
+	// MutantsDistinct / MutantsDistinctSurvived are the sample the 95%
+	// interval is taken over: DISTINCT measured edits, and how many of them
+	// survived (examSampleOf). MutantsTotal keeps every duplicate so the kill
+	// rate keeps its weighting, but eight copies of one edit are one
+	// observation, and a band printed over the copies is narrower than the
+	// evidence. The certification gate always used this sample; carrying it
+	// out lets every printed interval use it too. 0 when nothing was measured.
+	MutantsDistinct         int `json:"mutants_distinct,omitempty"`
+	MutantsDistinctSurvived int `json:"mutants_distinct_survived,omitempty"`
+	Survivors               int // mutants the dev's own tests did NOT kill
+	ProvenMissed            int // survivors the pool's authored test then killed — real, catchable gaps
 	// ProvenMutantIDs is the EVIDENCE behind ProvenMissed: which survivors the
 	// authored test actually killed, derived from the same scoring report so
 	// the two can never disagree. Empty on every path that did not grade
@@ -2957,6 +2966,7 @@ func (d *Driver) tickAggregate(ctx context.Context, missionID int64, run *runSta
 	// place and a second construction/conversion site was missed.
 	v.MutantsInvalid = run.mutantsInvalid
 	v.MutantsUnmeasured = run.mutantsUnmeasured
+	v.MutantsDistinct, v.MutantsDistinctSurvived = run.examSample.distinct, run.examSample.survived
 	v.AuthoredTest = run.authoredTest
 	v.AuthoredTogether, v.AuthoredTogetherOutput = run.authoredTogether, run.authoredTogetherOutput
 	// The mode is stamped from the RUN's resolved value, never from the
@@ -3455,6 +3465,7 @@ func (d *Driver) timeoutVerdict(run *runState) Verdict {
 	v.MutantsTotal = run.mutantsTotal
 	v.MutantsInvalid = run.mutantsInvalid
 	v.MutantsUnmeasured = run.mutantsUnmeasured
+	v.MutantsDistinct, v.MutantsDistinctSurvived = run.examSample.distinct, run.examSample.survived
 	v.Survivors = len(run.devSurvivors)
 	v.ProvenMissed = run.provenMissed
 	// The mutant-level evidence must ride the TIMEOUT verdict too, for the

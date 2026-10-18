@@ -232,7 +232,13 @@ package reposcan
 // and mocha rows, not node --test's Default. A "31" verdict for that command
 // never listed tests, named a killing test or checked a critic claim by
 // execution. Shape unchanged; behaviour bump.
-const VerdictGeneration = "32"
+//
+// "33" (2026-10-18): the verdict carries the certification interval's sample,
+// MutantsDistinct and MutantsDistinctSurvived (distinct measured edits), and
+// every printed and signed 95% interval is taken over it. A "32" verdict has
+// no such sample, and its printed band counted duplicates (eight copies of
+// one edit as n=8). Shape change: two fields added.
+const VerdictGeneration = "33"
 
 // VerdictShapeSHA256 fingerprints advpool.Verdict's serialized shape: every
 // exported field's name, type and json tag, sorted by name and hashed.
@@ -254,4 +260,4 @@ const VerdictGeneration = "32"
 // Verdict's own FIELDS") and nothing wider. Nor can any fingerprint catch the
 // behaviour half: a scorer that computes a DIFFERENT number into the SAME
 // field is invisible here, and remains a review responsibility.
-const VerdictShapeSHA256 = "bae7accb093484f1340814bff421b09b46cc9dea9e031163bc1a466ca6582992"
+const VerdictShapeSHA256 = "80232f62d5589bea6840b561376493c777618e732d66f6e8f928fab92c0996df"

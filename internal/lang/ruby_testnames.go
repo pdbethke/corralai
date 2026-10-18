@@ -29,8 +29,12 @@ import (
 // NOTHING: a description that is not a plain literal, an example with no
 // description (its name comes from the matcher), shared examples, a test
 // declared inside a loop, hook, helper or any block that is not a group, a
-// minitest spec, a test class inheriting another from this file, or a scan
-// that loses its place.
+// minitest spec, a test class whose base is not a framework test class
+// (its tests would run under this class's name), a test method made or
+// renamed at run time (define_method, alias, alias_method) or hidden by
+// name (private :test_x), or a scan that loses its place. An include is
+// allowed: refusing it would refuse most Rails tests, and a mixin that
+// defines test_ methods is the residual this list can miss.
 func rubyTestNames(testPath, src string) []string {
 	base := filepath.Base(testPath)
 	spec := strings.HasSuffix(base, "_spec.rb") || strings.HasPrefix(base, "spec_") && strings.HasSuffix(base, ".rb")
@@ -85,6 +89,15 @@ type rbWalk struct {
 }
 
 var (
+	// rbMinitestBases are the framework test classes, which declare no tests
+	// of their own. ApplicationSystemTestCase is the app's own (Rails
+	// generates it) and is taken on trust: it is a base for system tests and
+	// does not hold them.
+	rbMinitestBases = map[string]bool{"Minitest::Test": true, "MiniTest::Test": true, "Minitest::Unit::TestCase": true,
+		"ActiveSupport::TestCase": true, "ActionDispatch::IntegrationTest": true, "ActionDispatch::SystemTestCase": true,
+		"ActionController::TestCase": true, "ActionMailer::TestCase": true, "ActionView::TestCase": true, "ActiveJob::TestCase": true,
+		"ActionCable::TestCase": true, "ActionCable::Channel::TestCase": true, "ActionCable::Connection::TestCase": true,
+		"ActionMailbox::TestCase": true, "Rails::Generators::TestCase": true, "ApplicationSystemTestCase": true}
 	rbGroupCallees = map[string]bool{"describe": true, "context": true, "feature": true, "example_group": true,
 		"xdescribe": true, "xcontext": true, "xfeature": true, "fdescribe": true, "fcontext": true, "ffeature": true}
 	rbExampleCallees = map[string]bool{"it": true, "specify": true, "example": true, "scenario": true,
@@ -361,12 +374,16 @@ func (w *rbWalk) class(i int) bool {
 	if k < len(toks) && toks[k].kind == rbPunct && toks[k].text == "<" {
 		super, _ := rbConstPath(toks, k+1)
 		if !w.spec && (strings.HasSuffix(super, "Test") || strings.HasSuffix(super, "TestCase")) {
-			if w.classes[super] || w.classes[rbJoinScope(w.scopeName(), super)] {
-				return false // inherits tests this lister does not carry over
+			if !rbMinitestBases[strings.TrimPrefix(super, "::")] {
+				// A base from this file or another may define tests of its
+				// own, which minitest runs under this class's name.
+				return false
 			}
 			f.role = rbTestClass
 			w.classes[full] = true
 		}
+	} else if w.classes[full] {
+		f.role = rbTestClass // a test class reopened
 	}
 	w.stack = append(w.stack, f)
 	return true
@@ -447,6 +464,14 @@ func (w *rbWalk) declaration(i int) bool {
 				return false // a minitest spec: test names are generated
 			}
 			return true
+		}
+		if w.inTestClass() {
+			switch {
+			case name == "define_method" || name == "alias" || name == "alias_method":
+				return false // a test method made at run time, or under a second name
+			case (name == "private" || name == "protected") && next.kind == rbSym && strings.HasPrefix(next.text, "test_"):
+				return false // hides a test by name, after the fact
+			}
 		}
 		if t := w.top(); t != nil && t.role == rbTestClass {
 			switch {

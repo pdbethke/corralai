@@ -56,6 +56,9 @@ func TestRubyTestNamesInSourceMinitest(t *testing.T) {
 		{"private def", "class CalcTest < Minitest::Test\n  private def test_hidden; end\n  def test_a; end\nend\n", []string{"CalcTest#test_a"}},
 		{"module nesting", "module MyApp\n  class NegTest < Minitest::Test\n    def test_x; end\n  end\nend\n", []string{"MyApp::NegTest#test_x"}},
 		{"activesupport test blocks", "class CalcTest < ActiveSupport::TestCase\n  test \"adds two\" do\n    assert true\n  end\n  test 'subs' do\n  end\nend\n", []string{"CalcTest#test_adds_two", "CalcTest#test_subs"}},
+		{"rails bases", "class ATest < ActionDispatch::IntegrationTest\n  def test_a; end\nend\nclass BTest < ApplicationSystemTestCase\n  test 'b' do\n  end\nend\n", []string{"ATest#test_a", "BTest#test_b"}},
+		{"reopened test class", "class CalcTest < Minitest::Test\n  def test_a; end\nend\nclass CalcTest\n  def test_b; end\nend\n", []string{"CalcTest#test_a", "CalcTest#test_b"}},
+		{"include is allowed", "class CalcTest < Minitest::Test\n  include Helpers\n  def test_a; end\nend\n", []string{"CalcTest#test_a"}},
 		{"not a test class", "class Helper\n  def test_x; end\nend\nclass CalcTest < Minitest::Test\n  def test_a; end\nend\n", []string{"CalcTest#test_a"}},
 	} {
 		if got := rubyTestNames("test/calc_test.rb", c.src); !reflect.DeepEqual(got, c.want) {
@@ -87,6 +90,11 @@ func TestRubyTestNamesInSourceFailsClosed(t *testing.T) {
 		{"example outside any group", "a_spec.rb", "it 'loose' do\nend\n"},
 		{"constant described inside a module", "a_spec.rb", "module MyApp\n  RSpec.describe Calc do\n    it 'b' do\n    end\n  end\nend\n"},
 		{"constant aliased in this file", "a_spec.rb", "Alias = MyApp::Calc\nRSpec.describe Alias do\n  it 'c' do\n  end\nend\n"},
+		{"define_method", "a_test.rb", "class CalcTest < Minitest::Test\n  def test_a; end\n  %w[a b].each { |n| define_method(\"test_gen_#{n}\") {} }\nend\n"},
+		{"alias", "a_test.rb", "class CalcTest < Minitest::Test\n  def test_a; end\n  alias test_c test_a\nend\n"},
+		{"alias_method", "a_test.rb", "class CalcTest < Minitest::Test\n  def test_a; end\n  alias_method :test_c, :test_a\nend\n"},
+		{"private by symbol", "a_test.rb", "class CalcTest < Minitest::Test\n  def test_a; end\n  def test_b; end\n  private :test_b\nend\n"},
+		{"superclass from another file", "a_test.rb", "class CalcTest < BaseTest\n  def test_a; end\nend\n"},
 		{"neither convention", "calc.rb", "describe 'G' do\n  it 'a' do\n  end\nend\n"},
 	} {
 		if got := rubyTestNames(c.path, c.src); got != nil {

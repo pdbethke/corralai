@@ -23,6 +23,15 @@ func ResolveListedTest(listed []string, name string) (string, bool) {
 			n++
 		}
 	}
+	if n == 0 {
+		full := strings.ReplaceAll(name, "::", " ")
+		for _, id := range listed {
+			if lastFull(listedName(id)) == full {
+				found = id
+				n++
+			}
+		}
+	}
 	if n != 1 {
 		return "", false
 	}

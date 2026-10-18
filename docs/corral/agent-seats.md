@@ -221,7 +221,7 @@ what the command does: the definition is yours, and the record carries it,
 beside the CLI's `--version` when corral can run it.
 
 **Never put a credential in a `CORRALAI_AGENT_*` definition.** The definition
-is published verbatim, in the verdict's `SeatTools`, in the signed ledger
+is published verbatim, in the verdict's `SeatTools`, in the ledger
 entry and in review's `ReviewerTool`. Reference an environment variable the
 CLI reads instead (for example `CLAUDE_CODE_OAUTH_TOKEN`), and set it outside
 the definition. `corral doctor` checks the

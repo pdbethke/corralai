@@ -35,13 +35,16 @@ steps:
     difference matters. A kill rate is a proportion of <em>freshly generated</em> faults, so it moves between runs on code nobody touched — we have watched an
     unchanged file score 0.375 and then 0.525, and a deliberately weakened suite
     score <em>higher</em> than it had a moment earlier. Set a bar near a healthy
-    value and it reddens good work until someone switches it off. A <strong>proven gap</strong> is a survivor the herd then
+    value and it reddens good work with nothing to act on. A <strong>proven gap</strong> is a survivor the herd then
     killed with a test it wrote and ran — a specific planted fault your suite misses,
     with a test shown to catch it. It is a gap in the tests, not a bug found in
     your code, and a person still decides whether the test belongs.
-    The recorded fault/test pair remains inspectable, but discovery in a fresh run
-    can vary even on unchanged code. A proven-gap gate can therefore change
-    between runs too; replay recorded mutants when comparing test changes.
+    So a <code>max-proven-missed</code> gate fails only with a concrete fault and
+    test in hand. It does not catch everything: a fresh run regenerates its faults,
+    so discovery can vary even on unchanged code, and a fresh run can miss a gap an
+    earlier run found. The recorded fault and test stay inspectable; to compare test
+    changes against the same faults, replay them locally with
+    <code>corral certify --mutants</code> (the Action has no input for that).
   </p>
 
   <p>

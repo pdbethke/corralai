@@ -151,7 +151,7 @@ exits 1 with the provider's error and no verdict.
 ```
   status:        NEEDS-REVIEW (dev suite killed 6/8 mutants)
   dev_kill_rate: 0.75
-  95% interval:  0.41–0.93 (n=8)
+  95% interval:  0.41–0.93 (n=8 distinct)
   survivors:     2
 ```
 
@@ -160,8 +160,9 @@ honest failure mode. The kill-rate is measured, not asserted: it's mutation
 testing executed in the sandbox, never the model's self-report of how good the
 test is.
 
-The Wilson interval uses a binomial sampling model, not a calibrated probability
-that the software is correct. Generated edits can share blind spots and are not
+The interval is computed over the distinct edits that were graded (`n=8 distinct`),
+and it describes this sample of generated faults, assuming independent draws; it is
+not a calibrated probability that the software is correct. Generated edits can share blind spots and are not
 necessarily independent or representative. See [the measurement limits](/docs/concepts/mutation-testing/#what-the-confidence-interval-does-and-does-not-mean).
 Review any generated tests and run them in your full suite before merging;
 passing individually does not guarantee that they work together.

@@ -140,16 +140,19 @@ equivalent mutant simply never gets proven, and never gets claimed.
 ## Related work and Corral's integration
 
 Mutation-guided test generation has substantial prior work.
-[Meta's ACH paper](https://arxiv.org/abs/2501.12862), published at FSE 2025,
-describes concern-directed mutant generation followed by tests that kill
-survivors. [LLMutantKiller](https://doi.org/10.1145/3832098), published in
-October 2026, describes feedback-directed LLM test generation against surviving
-mutants. Corral does not claim to have invented either loop, and these citations
-are not a head-to-head performance comparison.
+ACH, described in [*Mutation-Guided LLM-based Test Generation at Meta*](https://arxiv.org/abs/2501.12862)
+(Foster et al., arXiv, January 2025; FSE 2025 Companion, Industry track), plants
+concern-directed faults and generates tests that kill them.
+[LLMutantKiller](https://doi.org/10.1145/3832098) (Khalili, Domondon, Garg and
+Tip; ISSTA 2026) generates tests for surviving mutants produced by Stryker rather
+than by an LLM. Corral did not invent the plant-then-kill idea, and these
+citations are not a head-to-head performance comparison. Corral's distinction is
+the integrated workflow and how it handles evidence: grading only by execution in
+a sandbox, a hash-linked ledger, and a decorrelated critic that is advisory only.
 
 Corral's offering is the integration of the following capabilities:
 
-**The faults are proposed against a stated goal, not by mechanical operator.**
+**The faults are proposed against a stated goal, not by mechanical operator,** as ACH also does.
 Classical mutation testing flips syntax: every `+` becomes `-`, every `<` becomes
 `<=`. That's cheap and thorough and produces a lot of uninteresting damage. corral
 asks a model to introduce violations of a specific correctness or security goal —

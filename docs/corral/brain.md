@@ -189,8 +189,8 @@ The audit's security model is in [the README](../../README.md#security-model) an
 
 - **The single trusted egress.** A worker acts *through* the brain, so the brain
   records every consequential action, attributed to a verified principal.
-  Workers can't forge or erase their own trail; the subject of the record doesn't
-  control the ledger. The git/forge token lives only in the brain — scrubbed from
+  Workers can't forge or erase their own trail; the subject of the record does not
+  control the ledger, though the brain's operator does. The git/forge token lives only in the brain — scrubbed from
   the environment, never written to `.git/config`, never given to a worker, never
   used against a forge other than its own. The "ask the fleet" query runs in a
   locked-down DuckDB connection that can't read files or reach secrets.

@@ -79,6 +79,14 @@ use. The question a reader has was never "did a thousand strangers agree";
 it is "did this run produce these rows, and has anyone touched them since".
 A chain of signatures answers that.
 
+> **Correction (2026-10-18):** not every entry is signed. An entry is signed
+> only when a certify key is present, and a CI runner has none by default, so
+> Action entries are unsigned unless one is configured; `ledger verify` reports an
+> unsigned entry among signed ones as a note, not a failure. Whoever holds the
+> key can rewrite and re-sign the whole chain, and dropping the newest entries
+> leaves a valid chain; only an external anchor, such as a Rekor receipt or a
+> published chain head, detects either.
+
 ## The engine that doesn't own the data
 
 Here is the part we think is genuinely a good use of DuckDB. The directory

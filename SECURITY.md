@@ -66,7 +66,10 @@ blocked it). Do not run an audit there with API keys exported in other shells, o
   its successor's link, but **tail truncation** leaves the remaining chain valid.
   Detecting a missing tail requires an **external** record of the expected head.
   The owner can delete or rewrite local files; the ledger is tamper-evident under
-  these trust assumptions, not immutable or automatically complete.
+  these trust assumptions, not immutable or automatically complete. Whoever holds
+  the signing key can rewrite and re-sign the whole chain, and `ledger verify`
+  reports an unsigned entry among signed ones as a note, not a failure; only an
+  external anchor (a Rekor receipt or a published chain head) detects either.
   Corral's own signing key is published as `LEDGER_PUBKEY` and anchored in Rekor.
 - `certify --repo --attest --transparency` logs the signed statement to **Rekor**, a public,
   append-only log, so a record can be checked by someone who trusts neither you nor us.

@@ -33,6 +33,11 @@ So I built the critic. Point it at a change and its own tests, and it does what 
 
 Then, because a critic who only complains is useless, it writes the test you should have had (and proves it catches the bug), and a **second, deliberately different model** reads your tests cold and files the pan.
 
+> **Correction (2026-10-18):** corral attempts a test for each survivor and
+> keeps only the ones that pass on the unmutated code and fail on the fault; when
+> the writer cannot produce one, the survivor stays unproven. It does not always
+> hand back a test.
+
 And it files it *politely*. If Ebert supplies the standard, John Cleese supplies the bedside manner — the verdict lands the way the nicest man in the sketch delivers the worst possible news: *terribly sorry to trouble you; lovely validator, really, top marks on the length check; it's only that a password with no digit strolls straight through, and I did feel you'd want to know. I've taken the liberty of writing the test you were missing. No rush.* You are allowed to tell a suite it's broken to its face, provided you are gracious about it and hand over the fix on the way out. That politeness isn't a bit — it's the humility the whole design is built on. A gate whose first principle is *no one may judge their own cause* has no business being smug.
 
 But Cleese was working a vein far deeper than manners, and it happens to be the exact reason this tool needs to exist. His whole career was built on one exquisite agony: a person who plainly *perceives* the obvious thing and cannot force it past their own lips. In the very first episode of *Flying Circus*, an interviewer has landed the scoop of the century — Arthur Frampton, the man with three buttocks — and, live on air, cannot bring himself to ask the one question the entire nation tuned in for. He circles it in strangled euphemism ("you have a certain, shall we say, *something*…"), physically unable to name what everyone can plainly see.

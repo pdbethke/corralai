@@ -6,7 +6,7 @@ real run; the pipeline applies pacing and captions and nothing else.
 
 | video | what it is | length |
 |---|---|---|
-| `corral-certify.mp4` | `certify --repo . --top 1` on flask: goals derived, forty faults planted in `app.py`, flask's own suite run against each in a jail, 29 killed / 11 survived, a test written for every survivor and proven alone against its fault, 10 of 11 proven, the signed verdict, its entry in Sigstore's public log (Rekor index 2759598612), the ledger entry, the chain verified | 56 s |
+| `corral-certify.mp4` | `certify --repo . --top 1` on flask: goals derived, forty faults planted in `app.py`, flask's own suite run against each in a jail, 29 killed / 11 survived, a second model attempts a test for each survivor and keeps the ones that prove, each run alone against its fault, 10 of 11 proven, the signed verdict, its entry in Sigstore's public log (Rekor index 2759598612), the ledger entry, the chain verified | 56 s |
 | `corral-review.mp4` | `review --scope src/flask/sessions.py` with Claude Code reviewing and Codex verifying: five claims, two declared reproduced whose scripts did not demonstrate them (demoted on the record), five standing as read; a person checks the top claim by hand (`session \|= {"a": 1}` on an app with no secret key mutates the null session silently) and rules; `ledger verify`, `brief`, a DuckDB query over the branch | 84 s |
 
 Both end on the same frame: a fresh clone of `corral/ledger`, `corral ledger

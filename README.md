@@ -152,8 +152,8 @@ actually test anything, or do they just pass?* — and answers it by execution:
 - Your **own test suite** is run against every one of them, **in a jail** — the
   fraction it catches (the *kill-rate*) is the adequacy score, measured, never a
   self-report.
-- A **test-writer** authors a compiling test that kills whatever your suite missed,
-  correcting itself when its test doesn't compile rather than blindly repeating. A
+- A **test-writer** attempts a compiling test for each survivor and keeps the ones
+  that prove, correcting itself when its test doesn't compile rather than blindly repeating. A
   surviving mutant is *disclosed, unadjudicated* — a real gap, or an equivalent
   mutant no test can catch, your call. Only a survivor a compiling test actually
   kills is a **proven** gap. Zero proven gaps means *nothing was proven this run* —
@@ -566,8 +566,8 @@ individual proven count or certification status. A pass is not a flakiness
 guarantee. Run the tests in your full suite before adding them.
 
 Mutation-guided test generation has prior art, including
-[Meta's ACH (FSE 2025)](https://arxiv.org/abs/2501.12862) and
-[LLMutantKiller (October 2026)](https://doi.org/10.1145/3832098).
+[Meta's ACH (arXiv January 2025; FSE 2025 Companion, Industry track)](https://arxiv.org/abs/2501.12862) and
+[LLMutantKiller (ISSTA 2026)](https://doi.org/10.1145/3832098).
 Corral's offering is the integration of execution checks, model seats, CI and a
 portable record, not invention of the survivor-to-test loop. These citations are
 not evidence that Corral outperforms those systems.
@@ -742,7 +742,8 @@ real (marked) verdict instead of a bare internal-failure error.
 --repo` run keeps what it computes — a row per file the scan audited (with
 its kill rate) or rejected (with a machine-stable reason), every mutant's
 fate, every model call, the run's events, the verdict JSON and the authored
-test — as **one signed, hash-linked, gzipped JSON entry** under the audited
+test — as **one hash-linked, gzipped JSON entry** (signed when a certify key is
+configured) under the audited
 repo's `.corral/ledger/` (`--ledger <dir>` moves it, `--no-ledger` skips
 it, `$CORRAL_LEDGER` overrides the default). Plain text, ~21 KB a run; a
 git branch on a runner, a folder on a laptop; DuckDB reads it in place.
@@ -1148,9 +1149,10 @@ runner. The design, and the week that produced it:
   naming one is refused before it starts. Local (Ollama) seats now meter their tokens
   too; they used to read as zero.
 - **Confidence — two terms, never one number.** Beside every kill rate the report
-  prints what the bare rate hides: its **95% interval** over distinct graded edits
-  (Wilson, because the exams are small and the rates sit near 0 and 1 — `0.62,
-  95% interval 0.30–0.86 (n=8)`), and the exam's **reach** — how many of the
+  prints what the bare rate hides: its **95% interval**, computed over the
+  distinct graded edits only, so a repeated edit is counted once (Wilson, because
+  the exams are small and the rates sit near 0 and 1 — `0.62,
+  95% interval 0.30–0.86 (n=8 distinct)`), and the exam's **reach** — how many of the
   file's symbols and decision points a fault actually landed on (`reached 8 of 8
   symbols, 8 of 8 decision points`). Both are computed from what the ledger
   records per mutant (its line span) and per file (its decision points), so a

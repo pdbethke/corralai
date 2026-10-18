@@ -80,6 +80,15 @@ last sentence is one no existing tool can write, and it is the sentence the
 whole product turns on. Nobody could write it before a model could write the
 test.
 
+> **Correction (2026-10-18):** this overstates it. Meta's ACH, described in
+> *Mutation-Guided LLM-based Test Generation at Meta* (Foster et al., arXiv,
+> January 2025), predates this note and already planted concern-directed faults
+> and generated tests that kill them, so "could not have been produced by …
+> anything else", "every mutation tool produces survivors and stops" and "no
+> existing tool can write" are wrong as stated. What differs in corral is the
+> evidence handling around that loop: grading only by execution in a sandbox,
+> the hash-linked ledger, and an advisory critic from a different model.
+
 **A measurement of how alike two models are, instead of an assumption.** The
 second-model-as-reviewer pattern is now everywhere; every serious agent
 pipeline runs one model as a check on another. We have not found anyone who

@@ -7,12 +7,13 @@ repository for the people and agents who use corral, as opposed to
 [AGENTS.md](AGENTS.md), which is for an agent working *on* corral.
 
 corral is an auditing engine. The `corral` CLI (`cmd/corral`) plants faults in
-your code, runs your own test suite against each one in a sandbox, and for every
-fault that survives writes a test and runs it, keeping only tests that fail on
-the fault and pass on your real code: proven missing tests. `corral review`
+your code, runs your own test suite against each one in a sandbox, and for each
+fault that survives attempts a test and keeps the ones that prove: tests that
+fail on the fault and pass on your real code, proven missing tests. A survivor
+the writer cannot prove stays unproven. `corral review`
 hands a scope to a cold model and makes every claim prove itself by a script
-corral runs. Both write signed, hash-linked entries to a ledger in your own
-repository. Neither reads this corpus, or any memory, when it judges code: an
+corral runs. Both write hash-linked entries to a ledger in your own
+repository, signed when a certify key is configured and unsigned otherwise. Neither reads this corpus, or any memory, when it judges code: an
 audit's prompts are built from the goal, the code and its symbols. See
 [README.md](README.md).
 

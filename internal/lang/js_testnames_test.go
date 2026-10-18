@@ -32,7 +32,9 @@ func TestJSTestNamesInSource(t *testing.T) {
 		{"typescript generics and types", "describe('G', () => {\n  const id = <T,>(x: T): T => x;\n  it('a', (): void => { expect(id<number>(1)).toBe(1); });\n});\n", []string{"G::a"}},
 		{"jsx attribute holding a brace", "describe('G', () => {\n  it('renders', () => { render(<A b=\"}\" />); });\n});\n", []string{"G::renders"}},
 		{"destructured imports are not calls", "const { describe, it, test } = require('node:test');\ntest('a', f);\n", []string{"a"}},
-		{"member it is not a test", "test('a', () => { foo.it('x'); });\n", []string{"a"}},
+		{"member it is not a test", "test('a', () => { const n = foo.it; });\n", []string{"a"}},
+		{"no semicolons", "const calc = require('./calc')\ntest('a', f)\ntest('b', f)\n", []string{"a", "b"}},
+		{"default and namespace imports", "import test from 'node:test'\nconst it = require('node:test').it\nimport { describe as d, it as i } from 'vitest'\ntest('a', f)\n", []string{"a"}},
 	} {
 		if got := jsTestNames(c.src); !reflect.DeepEqual(got, c.want) {
 			t.Errorf("%s: got %q, want %q", c.name, got, c.want)
@@ -44,21 +46,27 @@ func TestJSTestNamesInSource(t *testing.T) {
 // to the list, so a short list would be read as complete.
 func TestJSTestNamesInSourceFailsClosed(t *testing.T) {
 	for name, src := range map[string]string{
-		"substitution in a title": "test(`a ${x}`, f);\n",
-		"each":                    "test.each([1, 2])('n %i', f);\n",
-		"describe each":           "describe.each([1])('g', () => { it('a', f); });\n",
-		"variable title":          "it(name, f);\n",
-		"concatenated title":      "it('a' + x, f);\n",
-		"test in a loop":          "for (const n of [1, 2]) {\n  it('x', f);\n}\n",
-		"test in a hook":          "beforeEach(() => { it('x', f); });\n",
-		"test in a function":      "function make() { test('x', f); }\n",
-		"unterminated string":     "test('a, f);\n",
-		"unterminated comment":    "test('a', f); /* never closed\n",
-		"unterminated template":   "test(`a, f);\n",
-		"unbalanced braces":       "describe('G', () => {\n  it('a', f);\n",
-		"mismatched brackets":     "describe('G', () => { it('a', f); ));\n",
-		"non-literal describe":    "describe(Calc, () => { it('a', f); });\n",
-		"unknown modifier":        "test.concurrent.each`x`('a', f);\n",
+		"substitution in a title":    "test(`a ${x}`, f);\n",
+		"each":                       "test.each([1, 2])('n %i', f);\n",
+		"describe each":              "describe.each([1])('g', () => { it('a', f); });\n",
+		"variable title":             "it(name, f);\n",
+		"concatenated title":         "it('a' + x, f);\n",
+		"test in a loop":             "for (const n of [1, 2]) {\n  it('x', f);\n}\n",
+		"test in a hook":             "beforeEach(() => { it('x', f); });\n",
+		"test in a function":         "function make() { test('x', f); }\n",
+		"unterminated string":        "test('a, f);\n",
+		"unterminated comment":       "test('a', f); /* never closed\n",
+		"unterminated template":      "test(`a, f);\n",
+		"unbalanced braces":          "describe('G', () => {\n  it('a', f);\n",
+		"mismatched brackets":        "describe('G', () => { it('a', f); ));\n",
+		"non-literal describe":       "describe(Calc, () => { it('a', f); });\n",
+		"unknown modifier":           "test.concurrent.each`x`('a', f);\n",
+		"test under a braceless if":  "describe('g', () => { if (env) it('a', f); });\n",
+		"test under a braceless for": "describe('g', () => { for (const n of []) it('a', f) });\n",
+		"test under an else":         "describe('g', () => { if (x) {} else it('a', f); });\n",
+		"test in a top-level arrow":  "const make = () => it('a', f);\ndescribe('g', () => { make(); });\n",
+		"aliased test function":      "const itIf = ok ? it : xit;\nitIf('b', f);\nit('a', f);\n",
+		"node subtest":               "test('top', async (t) => { await t.test('sub', f); });\n",
 	} {
 		if got := jsTestNames(src); got != nil {
 			t.Errorf("%s: want nil, got %q", name, got)

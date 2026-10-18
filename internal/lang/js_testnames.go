@@ -23,10 +23,14 @@ import (
 // The list is a promise the critic is held to (see the Python lister), so
 // any test it cannot name exactly lists NOTHING rather than a short list:
 // a title that is not a plain string literal (a variable, a concatenation, a
-// template with a substitution), a generated test (.each, or a call inside a
-// loop, a hook, a function or any block that is not a describe callback), an
+// template with a substitution), a generated or conditional test (.each, or
+// a call inside a loop, a hook, a function, an arrow that is not a
+// describe's callback, any block that is not one, or a braceless if/else or
+// loop body), a test function passed around by value (ok ? it : xit), a node
+// subtest (t.test('name', fn), which the runner lists under its parent), an
 // unknown modifier, or a scan that ends inside a literal or with unbalanced
-// brackets. Calls preceded by "." (foo.it) are some other object's methods.
+// brackets. Other calls preceded by "." are other objects' methods
+// (re.test(s)).
 func jsTestNames(src string) []string {
 	toks, ok := jsTokens(src)
 	if !ok {
@@ -36,6 +40,7 @@ func jsTestNames(src string) []string {
 		open     string
 		group    bool   // a '{' opened directly inside a describe call: its callback body
 		describe bool   // a '(' of a describe call
+		cond     bool   // a '(' after if/for/while/with: a control-flow head
 		title    string // the describe's title
 	}
 	var stack []frame
@@ -57,11 +62,19 @@ func jsTestNames(src string) []string {
 	}
 	var out []string
 	seen := map[string]bool{}
+	// afterHead: the token before this one closed a control-flow head, so a
+	// statement here is that if's or loop's body, braces or not.
+	afterHead := false
 	for i := 0; i < len(toks); i++ {
 		t := toks[i]
+		wasAfterHead := afterHead
+		afterHead = false
 		if t.kind == jsPunct {
 			switch t.text {
-			case "(", "[":
+			case "(":
+				head := i > 0 && toks[i-1].kind == jsIdent && jsControlHeads[toks[i-1].text]
+				stack = append(stack, frame{open: "(", cond: head})
+			case "[":
 				stack = append(stack, frame{open: t.text})
 			case "{":
 				top := len(stack) > 0 && stack[len(stack)-1].describe
@@ -71,16 +84,30 @@ func jsTestNames(src string) []string {
 				if len(stack) == 0 || stack[len(stack)-1].open != want {
 					return nil
 				}
+				afterHead = stack[len(stack)-1].cond
 				stack = stack[:len(stack)-1]
 			}
 			continue
 		}
-		if t.kind != jsIdent || (i > 0 && toks[i-1].kind == jsPunct && toks[i-1].text == ".") {
+		if t.kind != jsIdent {
 			continue
 		}
 		isTest, isDescribe := jsTestCallees[t.text], jsDescribeCallees[t.text]
 		if !isTest && !isDescribe {
 			continue
+		}
+		next := jsTok{}
+		if i+1 < len(toks) {
+			next = toks[i+1]
+		}
+		if i > 0 && toks[i-1].kind == jsPunct && toks[i-1].text == "." {
+			// t.test('sub', fn) is a node subtest, listed by the runner under
+			// its parent. re.test('abc') is RegExp's, and takes one argument.
+			if next.kind == jsPunct && next.text == "(" && i+3 < len(toks) && toks[i+2].kind == jsString &&
+				toks[i+3].kind == jsPunct && toks[i+3].text == "," {
+				return nil
+			}
+			continue // a property or another method: require('node:test').it, re.test(s)
 		}
 		j, todo, modified := i+1, false, false
 		for j+1 < len(toks) && toks[j].kind == jsPunct && toks[j].text == "." {
@@ -95,13 +122,25 @@ func jsTestNames(src string) []string {
 			j += 2
 		}
 		if j >= len(toks) || toks[j].kind != jsPunct || toks[j].text != "(" {
-			if modified {
+			if modified || !jsNamesOnly(toks, i) {
+				return nil // passed around (ok ? it : xit): calls of it cannot be seen
+			}
+			continue // an import or declaration of the name
+		}
+		if !allowed() || wasAfterHead {
+			return nil
+		}
+		if i > 0 {
+			prev := toks[i-1]
+			if prev.kind == jsIdent && (prev.text == "else" || prev.text == "do") {
 				return nil
 			}
-			continue // a name, not a call: an import, a destructuring
-		}
-		if !allowed() {
-			return nil
+			// An arrow's body is a describe's callback only directly inside
+			// the describe call; anywhere else it runs when called, if ever.
+			arrow := i > 1 && prev.kind == jsPunct && prev.text == ">" && toks[i-2].kind == jsPunct && toks[i-2].text == "="
+			if arrow && (len(stack) == 0 || !stack[len(stack)-1].describe) {
+				return nil
+			}
 		}
 		if j+2 >= len(toks) || toks[j+1].kind != jsString || toks[j+2].kind != jsPunct || (toks[j+2].text != "," && toks[j+2].text != ")") {
 			return nil
@@ -122,7 +161,27 @@ func jsTestNames(src string) []string {
 	return out
 }
 
+// jsNamesOnly reports whether the bare test function name at i is only
+// being named: in an import or destructuring list ({ describe, it }), renamed
+// (it as i), or declared (const test = require('node:test')).
+func jsNamesOnly(toks []jsTok, i int) bool {
+	if i > 0 && toks[i-1].kind == jsIdent {
+		switch toks[i-1].text {
+		case "import", "const", "let", "var", "as":
+			return true
+		}
+	}
+	if i+1 >= len(toks) {
+		return false
+	}
+	n := toks[i+1]
+	return n.kind == jsPunct && (n.text == "," || n.text == "}") || n.kind == jsIdent && n.text == "as"
+}
+
 var (
+	// jsControlHeads take a parenthesized head whose statement may be a
+	// braceless body.
+	jsControlHeads    = map[string]bool{"if": true, "for": true, "while": true, "with": true}
 	jsTestCallees     = map[string]bool{"it": true, "test": true, "specify": true, "xit": true, "fit": true, "xtest": true}
 	jsDescribeCallees = map[string]bool{"describe": true, "context": true, "suite": true, "xdescribe": true, "fdescribe": true, "xcontext": true}
 	// jsTestModifiers are the chained forms that still declare one test or

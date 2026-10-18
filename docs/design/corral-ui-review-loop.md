@@ -247,3 +247,5 @@ Each piece ships on its own and depends on the one before:
 2. `corral review recheck`, then the verdict queue and form
 3. Publish
 4. Run a round
+
+> **2026-10-18:** the single-page `uiweb/index.html` and the `/api/ledger` and `/api/seal` read routes are retired. `corral ui` serves the record pages from `internal/recordview`, the same pages as the public record. The write routes and every token rule above are unchanged. See `docs/superpowers/specs/2026-10-18-corral-app-design.md` §5.

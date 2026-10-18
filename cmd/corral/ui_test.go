@@ -6,11 +6,9 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/hex"
-	"encoding/json"
 	"github.com/pdbethke/corralai/internal/auditpush"
 	"github.com/pdbethke/corralai/internal/review"
 	"github.com/pdbethke/corralai/internal/scanstore"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -34,6 +32,14 @@ func (f fakeSeal) ImportOnlyPaths(context.Context, string) (map[string]bool, err
 }
 func (f fakeSeal) Close() error { return nil }
 
+// uiGet serves one GET through h and returns the response.
+func uiGet(t *testing.T, h http.Handler, path string) *httptest.ResponseRecorder {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+	return rec
+}
+
 // TestUIServesTheSealAndRanksProvenGapsFirst: the page's whole job is to put
 // the earned findings at the top. A proven gap is a survivor the pool wrote a
 // test for and killed by execution; a bare survivor is a question. Sorting by
@@ -44,55 +50,31 @@ func TestUIServesTheSealAndRanksProvenGapsFirst(t *testing.T) {
 		{Repo: "r", Path: "low-rate-nothing-proven.go", KillRate: 0.20, Survivors: 9, ProvenMissed: 0, TS: time.Now()},
 		{Repo: "r", Path: "proven.go", KillRate: 0.75, Survivors: 12, ProvenMissed: 12, TS: time.Now()},
 	}}
-	rec := httptest.NewRecorder()
-	uiHandler(st, "").ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/seal", nil))
-
+	rec := uiGet(t, uiHandler(st, ""), "/")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
-	var got []sealRow
-	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
-		t.Fatalf("decoding: %v (body %q)", err, rec.Body.String())
+	body := rec.Body.String()
+	proven, low := strings.Index(body, "proven.go"), strings.Index(body, "low-rate-nothing-proven.go")
+	if proven < 0 || low < 0 {
+		t.Fatalf("the seal is missing a row (proven at %d, low-rate at %d)", proven, low)
 	}
-	if len(got) != 2 {
-		t.Fatalf("got %d rows, want 2", len(got))
-	}
-	if got[0].Path != "proven.go" {
-		t.Errorf("first row = %q, want proven.go — proven gaps are the earned findings and must rank above a worse kill rate that proved nothing", got[0].Path)
+	if proven > low {
+		t.Errorf("proven.go renders after low-rate-nothing-proven.go — proven gaps are the earned findings and must rank above a worse kill rate that proved nothing")
 	}
 }
 
-// TestUIReportsAReadFailureRatherThanAnEmptyLedger is the honesty rule this
-// project applies everywhere else, applied to a web page: an empty table reads
-// as "this codebase has no audited files", which is a far more comforting
-// claim than "the ledger could not be read". They must not look alike.
-func TestUIReportsAReadFailureRatherThanAnEmptyLedger(t *testing.T) {
-	rec := httptest.NewRecorder()
-	uiHandler(fakeSeal{err: io.ErrUnexpectedEOF}, "").ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/seal", nil))
-
-	if rec.Code == http.StatusOK {
-		t.Fatalf("status = 200 on a failed read — the page would render an empty table and an operator would read it as a clean codebase")
-	}
-	if !strings.Contains(rec.Body.String(), "error") {
-		t.Errorf("body = %q, want the failure named", rec.Body.String())
-	}
-}
-
-// TestUIServesTheEmbeddedPage: the page ships IN the binary. No CDN, no
-// network — the same posture as the jail. If this regresses, `corral ui` serves
-// an API and a 404.
+// TestUIServesTheEmbeddedPage: the pages ship IN the binary. No CDN, no
+// network — the same posture as the jail.
 func TestUIServesTheEmbeddedPage(t *testing.T) {
-	rec := httptest.NewRecorder()
-	uiHandler(fakeSeal{}, "").ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	rec := uiGet(t, uiHandler(fakeSeal{}, ""), "/")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d serving the page, want 200", rec.Code)
 	}
-	body := rec.Body.String()
-	for _, want := range []string{"The seal", "api/seal", "The chain", "api/ledger"} {
-		if !strings.Contains(body, want) {
-			t.Errorf("the embedded page does not mention %q", want)
-		}
+	if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/html") {
+		t.Fatalf("Content-Type = %q, want text/html", ct)
 	}
+	body := rec.Body.String()
 	if strings.Contains(body, "https://cdn") || strings.Contains(body, "unpkg") {
 		t.Error("the page loads something from a CDN — it must be self-contained, like everything else corral ships")
 	}
@@ -163,12 +145,12 @@ func TestDocsEveryDocumentedVerbIsDispatched(t *testing.T) {
 	}
 }
 
-// TestUILedgerAPIShowsTheChainTheReviewsAndTheVerdicts: the page's second
-// half. Over a ledger directory, /api/ledger carries every entry with its
-// chain check, each review with its findings, the verifier's refutation
-// and the newest adjudication attached, and retractions; over anything
-// that is not a directory it says so instead of pretending.
-func TestUILedgerAPIShowsTheChainTheReviewsAndTheVerdicts(t *testing.T) {
+// TestUIShowsTheChainTheReviewsAndTheVerdicts: the record's second half.
+// Over a ledger directory, the chain page carries every entry with its
+// chain check and marks the retracted one, and the review's page carries
+// its findings with the verifier's refutation and the person's verdict;
+// over anything that is not a directory it says so instead of pretending.
+func TestUIShowsTheChainTheReviewsAndTheVerdicts(t *testing.T) {
 	t.Setenv("CORRALAI_CERTIFY_KEY_FILE", filepath.Join(t.TempDir(), "certify_key"))
 	dir := filepath.Join(t.TempDir(), "ledger")
 	writeCacheTestEntry(t, dir, []scanstore.File{{Path: "a.go", Disposition: "audited", Gradable: true, KillRate: ptrF(0.5)}})
@@ -196,47 +178,45 @@ func TestUILedgerAPIShowsTheChainTheReviewsAndTheVerdicts(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	rec := httptest.NewRecorder()
-	uiHandler(fakeSeal{}, dir).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/ledger", nil))
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+	h := uiHandler(fakeSeal{}, dir)
+	chain := uiGet(t, h, "/chain-1.html")
+	if chain.Code != http.StatusOK {
+		t.Fatalf("chain status %d: %s", chain.Code, chain.Body.String())
 	}
-	var l uiLedger
-	if err := json.Unmarshal(rec.Body.Bytes(), &l); err != nil {
-		t.Fatal(err)
+	cb := chain.Body.String()
+	// Four entries, every signature checked against the explicit key, no
+	// chain problem, the retracted scan marked.
+	if n := strings.Count(cb, `<span class="chip ok">verified</span>`); n != 4 {
+		t.Errorf("chain shows %d verified signatures, want 4", n)
 	}
-	if l.Dir != dir || len(l.Entries) != 4 || l.Problems != 0 || l.Verified == "" {
-		t.Fatalf("ledger = dir %q, %d entries, %d problems, verified %q", l.Dir, len(l.Entries), l.Problems, l.Verified)
+	for _, want := range []string{"retract", "scan", "review", "adjudication", "RETRACTED: wrong commit", "4/4 verified"} {
+		if !strings.Contains(cb, want) {
+			t.Errorf("the chain page is missing %q", want)
+		}
 	}
-	// Newest first: the retraction, the adjudication, the review, the scan.
-	if l.Entries[0].Kind != "retract" || l.Entries[3].Kind != "scan" || !l.Entries[3].Signed || !l.Entries[3].Verified {
-		t.Errorf("entries: %+v", l.Entries)
+	for _, bad := range []string{"does NOT verify", `chip bad">problem`, "not checked"} {
+		if strings.Contains(cb, bad) {
+			t.Errorf("the chain page says %q over an intact, verified chain", bad)
+		}
 	}
-	if !strings.HasPrefix(l.Entries[3].Note, "RETRACTED: wrong commit") {
-		t.Errorf("the retracted scan must say so in the chain: %+v", l.Entries[3])
+	rev := uiGet(t, h, "/entry/"+revHash[:12]+".html")
+	if rev.Code != http.StatusOK {
+		t.Fatalf("review page status %d", rev.Code)
 	}
-	if len(l.Reviews) != 1 || l.Reviews[0].Reviewer != "rev" || l.Reviews[0].Verifier != "ver" || l.Reviews[0].Reproduced != 1 {
-		t.Fatalf("reviews: %+v", l.Reviews)
-	}
-	f := l.Reviews[0].Findings[0]
-	if f.Refutation == nil || f.Refutation.Verdict != review.VerdictStands || f.Adjudication == nil || f.Adjudication.Verdict != auditpush.VerdictConfirmed || f.Adjudication.By != "pdb" {
-		t.Errorf("the finding must carry the verifier's answer and the person's verdict: %+v", f)
-	}
-	if len(l.Retracts) != 1 || l.Retracts[0].Reason != "wrong commit" {
-		t.Errorf("retractions: %+v", l.Retracts)
+	rb := rev.Body.String()
+	for _, want := range []string{"rev", "ver", "leaks the key", "it leaks", "the parser",
+		`<span class="chip ok">reproduced</span>`,
+		"refutation — ver", review.VerdictStands, "could not refute",
+		`<span class="chip ok">confirmed by a person</span>`, "<strong>confirmed</strong> by pdb — it does"} {
+		if !strings.Contains(rb, want) {
+			t.Errorf("the review page is missing %q", want)
+		}
 	}
 
-	// Not a directory: the API says so rather than inventing a chain.
-	rec = httptest.NewRecorder()
-	uiHandler(fakeSeal{}, "").ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/ledger", nil))
-	if rec.Code != http.StatusOK || strings.TrimSpace(rec.Body.String()) != `{"dir":"","write":false}` {
-		t.Errorf("no directory: %d %s", rec.Code, rec.Body.String())
-	}
-	// And the page itself carries the ledger sections.
-	rec = httptest.NewRecorder()
-	uiHandler(fakeSeal{}, dir).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
-	if !strings.Contains(rec.Body.String(), "api/ledger") || !strings.Contains(rec.Body.String(), "The chain") {
-		t.Error("the page does not render the ledger half")
+	// Not a directory: the chain page says so rather than inventing a chain.
+	none := uiGet(t, uiHandler(fakeSeal{}, ""), "/chain-1.html")
+	if none.Code != http.StatusOK || !strings.Contains(none.Body.String(), "Not a ledger directory") {
+		t.Errorf("no directory: %d %s", none.Code, none.Body.String())
 	}
 }
 
@@ -248,20 +228,16 @@ func TestUILedgerNeverVerifiesAgainstTheLocalKeyImplicitly(t *testing.T) {
 	t.Setenv(auditpush.LedgerPubKeyEnv, "")
 	dir := filepath.Join(t.TempDir(), "ledger")
 	writeCacheTestEntry(t, dir, []scanstore.File{{Path: "a.go", Disposition: "audited", Gradable: true, KillRate: ptrF(0.5)}})
-	u, err := readUILedger(dir)
-	if err != nil {
-		t.Fatal(err)
+	h := uiHandler(fakeSeal{}, dir)
+	rec := uiGet(t, h, "/chain-1.html")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d", rec.Code)
 	}
-	if u.Verified != "" || strings.Contains(u.Verified, "local") {
-		t.Fatalf("verified against %q with no explicit key", u.Verified)
-	}
-	for _, e := range u.Entries {
-		if e.Verified {
-			t.Fatalf("entry reported verified with no key: %+v", e)
-		}
+	if body := rec.Body.String(); !strings.Contains(body, "signed, not checked") || strings.Contains(body, `chip ok">verified`) {
+		t.Fatalf("with no explicit key the chain must read \"signed, not checked\" and never verified:\n%s", body)
 	}
 	t.Setenv(auditpush.LedgerPubKeyEnv, "garbage")
-	if _, err := readUILedger(dir); err == nil || !strings.Contains(err.Error(), auditpush.LedgerPubKeyEnv) {
-		t.Fatalf("garbage key must be an error naming the variable, got %v", err)
+	if rec := uiGet(t, h, "/chain-1.html"); rec.Code != http.StatusInternalServerError || !strings.Contains(rec.Body.String(), auditpush.LedgerPubKeyEnv) {
+		t.Fatalf("garbage key must be a read failure naming the variable, got %d %s", rec.Code, rec.Body.String())
 	}
 }

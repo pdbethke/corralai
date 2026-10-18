@@ -16,6 +16,7 @@ import (
 	"testing"
 
 	"github.com/pdbethke/corralai/internal/auditpush"
+	"github.com/pdbethke/corralai/internal/review"
 )
 
 // --write on a non-loopback address is refused outright: the token gate
@@ -158,14 +159,14 @@ func TestUIWriteAllowsIPv6Loopback(t *testing.T) {
 // allowed hosts; read-only mode is unchanged and has no Host check at all.
 func TestUIWriteModeReadsNeedNoTokenButDoNeedTheHost(t *testing.T) {
 	h := uiHandlerWith(fakeSeal{}, "", testWriter(t, "127.0.0.1:8787"))
-	ok := httptest.NewRequest(http.MethodGet, "/api/seal", nil)
+	ok := httptest.NewRequest(http.MethodGet, "/", nil)
 	ok.Host = "127.0.0.1:8787"
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, ok)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("read in write mode: %d", rec.Code)
 	}
-	bad := httptest.NewRequest(http.MethodGet, "/api/seal", nil)
+	bad := httptest.NewRequest(http.MethodGet, "/", nil)
 	bad.Host = "rebound.example:8787"
 	rec = httptest.NewRecorder()
 	h.ServeHTTP(rec, bad)
@@ -448,40 +449,38 @@ func TestUICitedReturnsAnErrorWhenGitFails(t *testing.T) {
 	}
 }
 
-// The page must take the token from the fragment, keep it per tab, strip it
-// from the address bar, and send it only as a Bearer header.
+// Write mode serves the adjudication controls and the script that sends
+// the token; read-only mode serves neither. The token-handling strings
+// themselves (fragment, sessionStorage, Bearer, never localStorage or ?t=)
+// are held by recordview's TestWriteControlsHandleTheTokenOnlyTheWaySpecified,
+// where the page now lives.
 func TestUIPageHandlesTheTokenOnlyTheWaySpecified(t *testing.T) {
+	ledger := t.TempDir()
+	exit0 := 0
+	r := review.Review{Repo: "r", Commit: "0123456789abcdef0123456789abcdef01234567", Scope: "pkg", ReviewerModel: "m",
+		Findings: []review.Finding{{ID: "R1", Claim: "awaiting a verdict", Script: "exit 0", ExitCode: &exit0}}}
+	if _, err := auditpush.WriteReview(ledger, r, nil); err != nil {
+		t.Fatal(err)
+	}
+	_, h := writerOver(t, t.TempDir(), ledger)
+	req := httptest.NewRequest(http.MethodGet, "/verdicts.html", nil)
+	req.Host = "127.0.0.1:8787"
 	rec := httptest.NewRecorder()
-	uiHandler(fakeSeal{}, "").ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	h.ServeHTTP(rec, req)
 	page := rec.Body.String()
-	for _, must := range []string{
-		`location.hash`, `sessionStorage`, `history.replaceState`, `'Authorization': 'Bearer '`,
-		`id="verdicts"`, `api/recheck`, `api/adjudicate`, `api/cited`, `cited by a commit message, not verified`,
-		`could not check citations`,
-		// A double-click, or Confirm then Refute before the re-render, must
-		// not send two adjudications: both verdict buttons on the card are
-		// disabled the moment a click is accepted. This is a string-presence
-		// check, not a DOM simulation — it does not prove the disable fires
-		// only on the right element or only once.
-		`id="lastwrite"`, `.disabled = true`,
-		// A failed reload AFTER a recorded verdict says so and leaves the
-		// buttons disabled; a ledger read failure after whoami is not called
-		// "Write mode unavailable"; and with no ledger directory the queue is
-		// hidden rather than reading "Nothing is waiting". Also string
-		// presence only: these prove the text and the guard exist in the
-		// page, not which promise branch reaches them.
-		`verdict recorded; reload the page to refresh`,
-		`Could not read the ledger: ' + esc(e.message) + '. Reload the page`,
-		`!l.write || !TOKEN || !l.dir`,
-	} {
+	for _, must := range []string{`api/adjudicate`, `data-verdict="confirm"`, `sessionStorage`, `'Authorization': 'Bearer '`} {
 		if !strings.Contains(page, must) {
-			t.Errorf("page is missing %q", must)
+			t.Errorf("write mode's verdict page is missing %q", must)
 		}
 	}
 	for _, mustNot := range []string{`localStorage`, `?t=`} {
 		if strings.Contains(page, mustNot) {
 			t.Errorf("page must not use %q (the token outlives the tab / reaches the server)", mustNot)
 		}
+	}
+	rec = uiGet(t, uiHandler(fakeSeal{}, ledger), "/verdicts.html")
+	if strings.Contains(rec.Body.String(), "api/adjudicate") || strings.Contains(rec.Body.String(), `data-verdict=`) {
+		t.Error("read-only mode serves the write controls")
 	}
 }
 

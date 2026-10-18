@@ -3,26 +3,23 @@
 package main
 
 import (
-	"embed"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
-	"io/fs"
 	"net"
 	"net/http"
 	"os/user"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
+
+	"github.com/pdbethke/corralai/internal/recordview"
 )
 
-//go:embed uiweb/*
-var uiWeb embed.FS
-
-// runUI serves a local, read-only view of the scan ledger.
+// runUI serves a local view of the record: the record pages, rendered by
+// internal/recordview (the same pages as the public record), plus the seal.
+// Read-only unless --write, which adds the guarded write routes.
 //
 // WHAT IT IS NOT. internal/ui is the BRAIN's cockpit — a headless daemon
 // serving a signed /console bundle to thin clients, with ~30 collaborators
@@ -131,54 +128,6 @@ func uiHandler(st sealReader, ledgerDir string) http.Handler {
 // answer to (DNS rebinding).
 func uiHandlerWith(st sealReader, ledgerDir string, wr *uiWriter) http.Handler {
 	mux := http.NewServeMux()
-	// The ledger half: the chain, the reviews, the adjudications — read
-	// fresh on every request, so a verdict written from another terminal
-	// shows on reload.
-	mux.HandleFunc("/api/ledger", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		if ledgerDir == "" {
-			_ = json.NewEncoder(w).Encode(map[string]any{"dir": "", "write": wr != nil})
-			return
-		}
-		l, err := readUILedger(ledgerDir)
-		if err != nil {
-			w.WriteHeader(http.StatusInternalServerError)
-			_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
-			return
-		}
-		l.Write = wr != nil
-		_ = json.NewEncoder(w).Encode(l)
-	})
-	mux.HandleFunc("/api/seal", func(w http.ResponseWriter, r *http.Request) {
-		rows, err := st.SealRows(r.Context(), strings.TrimSpace(r.URL.Query().Get("repo")))
-		if err != nil {
-			// A read failure is reported as one. An empty list would render as
-			// "this codebase has no audited files", which is a different and
-			// much more comforting claim than "the ledger could not be read".
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusInternalServerError)
-			_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
-			return
-		}
-		sort.Slice(rows, func(i, j int) bool {
-			if rows[i].ProvenMissed != rows[j].ProvenMissed {
-				return rows[i].ProvenMissed > rows[j].ProvenMissed // proven gaps first: the earned findings
-			}
-			return rows[i].KillRate < rows[j].KillRate
-		})
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(rows)
-	})
-	sub, err := fs.Sub(uiWeb, "uiweb")
-	if err != nil {
-		// The page is embedded at build time, so this cannot fail in a shipped
-		// binary — but serving the API with no page at all is a worse answer
-		// than saying so.
-		mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
-			http.Error(w, "corral ui: embedded page unavailable: "+err.Error(), http.StatusInternalServerError)
-		})
-		return hostGate(wr, mux)
-	}
 	if wr != nil {
 		mux.HandleFunc("/api/whoami", wr.guard(func(w http.ResponseWriter, r *http.Request) {
 			by := ""
@@ -191,7 +140,11 @@ func uiHandlerWith(st sealReader, ledgerDir string, wr *uiWriter) http.Handler {
 		mux.HandleFunc("/api/adjudicate", wr.guard(wr.adjudicate))
 		mux.HandleFunc("/api/cited", wr.cited) // a read: Host-gated by hostGate, no token
 	}
-	mux.Handle("/", http.FileServer(http.FS(sub)))
+	// Everything else is the record: recordview's pages, the same ones the
+	// public record is built from, read fresh on every request so a
+	// verdict written from another terminal shows on reload. GET and HEAD
+	// only, and only the paths recordview rendered; anything else is 404.
+	mux.Handle("/", recordview.Handler(uiSite(st, ledgerDir, wr != nil)))
 	return hostGate(wr, mux)
 }
 

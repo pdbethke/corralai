@@ -219,7 +219,20 @@ package reposcan
 // Class#test_name) and must judge every one, as Go, Python, PHP and Rust
 // critics already must. A "29" critic count for those languages came from an
 // answer nothing held to the file's tests. Shape unchanged; behaviour bump.
-const VerdictGeneration = "30"
+//
+// "31" (2026-10-18): the JavaScript/TypeScript list is now withheld when a
+// test function is bound under another name (import { test as check }, or
+// node:test's default export imported or required as nt). Calls through the
+// new name declare tests node runs and the list left out, so a "30" critic
+// could be held to a short list and pass as complete (found by an outside
+// review, Codex). Shape unchanged; behaviour bump.
+//
+// "32" (2026-10-18): `node ./node_modules/jest/bin/jest.js` and mocha's
+// bin/mocha.js or bin/_mocha (the jail form AGENTS.md gives) are now the jest
+// and mocha rows, not node --test's Default. A "31" verdict for that command
+// never listed tests, named a killing test or checked a critic claim by
+// execution. Shape unchanged; behaviour bump.
+const VerdictGeneration = "32"
 
 // VerdictShapeSHA256 fingerprints advpool.Verdict's serialized shape: every
 // exported field's name, type and json tag, sorted by name and hashed.

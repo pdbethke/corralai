@@ -317,6 +317,8 @@ func runScansShow(args []string, open func(string) (scansReader, error), stdout,
 			}
 			fmt.Fprintf(stdout, "\n--- %s: the pool's authored test%s ---\n", f.Path, authoredTestWhere(f.AuthoredLanding))
 			fmt.Fprintln(stdout, authoredTestOutcome(f))
+			together, togetherOut := storedAuthoredTogether(f.VerdictJSON)
+			printAuthoredTogether(stdout, "", together, togetherOut)
 			fmt.Fprintln(stdout, f.AuthoredTest)
 		}
 	}

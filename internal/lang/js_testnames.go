@@ -26,14 +26,16 @@ import (
 // template with a substitution), a generated or conditional test (.each, or
 // a call inside a loop, a hook, a function, an arrow that is not a
 // describe's callback, any block that is not one, or a braceless if/else or
-// loop body), a test function passed around by value (ok ? it : xit), a node
-// subtest (t.test('name', fn), which the runner lists under its parent), an
+// loop body), a test function passed around by value (ok ? it : xit) or
+// bound under another name (import { test as check }, or node:test's default
+// export imported or required as anything but a test function's own name),
+// a node subtest (t.test('name', fn), which the runner lists under its parent), an
 // unknown modifier, or a scan that ends inside a literal or with unbalanced
 // brackets. Other calls preceded by "." are other objects' methods
 // (re.test(s)).
 func jsTestNames(src string) []string {
 	toks, ok := jsTokens(src)
-	if !ok {
+	if !ok || jsBindsNodeTestElsewhere(toks) {
 		return nil
 	}
 	type frame struct {
@@ -125,6 +127,9 @@ func jsTestNames(src string) []string {
 			if modified || !jsNamesOnly(toks, i) {
 				return nil // passed around (ok ? it : xit): calls of it cannot be seen
 			}
+			if next.kind == jsIdent && next.text == "as" && (i+2 >= len(toks) || toks[i+2].text != t.text) {
+				return nil // renamed (test as check): calls through the new name cannot be seen
+			}
 			continue // an import or declaration of the name
 		}
 		if !allowed() || wasAfterHead {
@@ -176,6 +181,41 @@ func jsNamesOnly(toks []jsTok, i int) bool {
 	}
 	n := toks[i+1]
 	return n.kind == jsPunct && (n.text == "," || n.text == "}") || n.kind == jsIdent && n.text == "as"
+}
+
+// jsBindsNodeTestElsewhere reports whether node's test module is bound, whole,
+// to a name that is not a test function's own: import nt from 'node:test',
+// import nt, { it } from 'node:test', const nt = require('node:test'). Its
+// default export IS test, so nt('x', fn) declares a test the walk, which
+// knows test functions by name, would not see. A named or destructured
+// import binds names the walk checks itself.
+func jsBindsNodeTestElsewhere(toks []jsTok) bool {
+	nodeTest := func(t jsTok) bool { return t.kind == jsString && (t.text == "node:test" || t.text == "test") }
+	unknown := func(t jsTok) bool {
+		return t.kind == jsIdent && !jsTestCallees[t.text] && !jsDescribeCallees[t.text]
+	}
+	for i, t := range toks {
+		if t.kind != jsIdent {
+			continue
+		}
+		switch {
+		case t.text == "import" && i+1 < len(toks) && unknown(toks[i+1]) && toks[i+1].text != "type":
+			// The default binding; find the module it comes from.
+			for j := i + 2; j+1 < len(toks); j++ {
+				if toks[j].kind == jsIdent && toks[j].text == "from" {
+					if nodeTest(toks[j+1]) {
+						return true
+					}
+					break
+				}
+			}
+		case t.text == "require" && i >= 2 && i+3 < len(toks) &&
+			toks[i+1].text == "(" && nodeTest(toks[i+2]) && toks[i+3].text == ")" &&
+			toks[i-1].kind == jsPunct && toks[i-1].text == "=" && unknown(toks[i-2]):
+			return true
+		}
+	}
+	return false
 }
 
 var (

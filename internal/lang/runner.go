@@ -133,7 +133,12 @@ var runners = []Runner{
 	// unrecognised flag would make every mutant exit non-zero and read as a
 	// kill. node --test has no such flag.
 	{
+		// Detect adds jest's entry script (node ./node_modules/jest/bin/jest.js,
+		// the form AGENTS.md gives for the jail) to the word.
 		Name: "jest", ID: "jest", Languages: []string{"javascript", "typescript"}, Words: []string{"jest"}, FailFast: []string{"--bail"},
+		Detect: func(argv []string) bool {
+			return wordIndex(argv, "jest") >= 0 || entryScriptIndex(argv, "jest", "bin/jest.js") >= 0
+		},
 		ListCmd: jestListCmd, ParseList: jestParseList, SingleCmd: jestSingleCmd, ResolveByList: true, Coruns: jestCoruns,
 		FirstFailure: firstOf(jestFailures), FailedTests: jestFailures, DeselectCmd: jestDeselectCmd,
 		Note: "listing and one-test runs verified on jest 30.5",
@@ -141,6 +146,9 @@ var runners = []Runner{
 	{
 		ListsFullNames: true,
 		Name:           "mocha", ID: "mocha", Languages: []string{"javascript", "typescript"}, Words: []string{"mocha"}, FailFast: []string{"--bail"},
+		Detect: func(argv []string) bool {
+			return wordIndex(argv, "mocha") >= 0 || entryScriptIndex(argv, "mocha", "bin/mocha.js", "bin/_mocha") >= 0
+		},
 		ListCmd: mochaListCmd, ParseList: mochaParseList, SingleCmd: mochaSingleCmd, ResolveByList: true, Coruns: lastFullColl,
 		FirstFailure: firstOf(mochaFailures), FailedTests: mochaFailures, DeselectCmd: mochaDeselectCmd,
 		Note: "listing and one-test runs verified on mocha 11.8 (listing needs mocha 9 or later)",
@@ -261,6 +269,22 @@ func namedRunner(p Plugin, argv []string) (Runner, bool) {
 		}
 	}
 	return Runner{}, false
+}
+
+// entryScriptIndex is the index of the word in argv that is pkg's own entry
+// script, node_modules/<pkg>/<one of bins>, or -1. It matches the package
+// path, not a base name, so a test file that happens to be called jest.js
+// names no runner.
+func entryScriptIndex(argv []string, pkg string, bins ...string) int {
+	return slices.IndexFunc(argv, func(a string) bool {
+		a = filepath.ToSlash(a)
+		for _, b := range bins {
+			if suffix := "node_modules/" + pkg + "/" + b; a == suffix || strings.HasSuffix(a, "/"+suffix) {
+				return true
+			}
+		}
+		return false
+	})
 }
 
 // RunnerByID is the row an operator named with --runner, refused when it

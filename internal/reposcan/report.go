@@ -252,6 +252,11 @@ type WeakFile struct {
 	// per-mutant spread below is over. The dev-pass duration alone cannot say
 	// whether a slow file had four mutants or four hundred.
 	MutantsGraded int
+	// MutantsDistinct / MutantsDistinctSurvived mirror advpool.Verdict's:
+	// the distinct measured edits a 95% interval is taken over. See
+	// Verdict.MutantsDistinct for why MutantsGraded is not that sample.
+	MutantsDistinct         int
+	MutantsDistinctSurvived int
 	// MutantsInvalid mirrors advpool.Verdict.MutantsInvalid: mutants the
 	// compile gate rejected before anything graded them. Carried per file so a
 	// printer can tell "the suite caught nothing" from "there was nothing to
@@ -602,14 +607,16 @@ func Aggregate(owner, repo, commit string, totalFiles, candidates int, results [
 			// And where the minutes went — see WeakFile.Timing. CacheHit
 			// rides beside them because on a reused verdict they are not
 			// this run's minutes; see WeakFile.CacheHit.
-			CacheHit:           r.CacheHit,
-			VerdictComputedAt:  r.ComputedAt,
-			Timing:             r.Verdict.Timing,
-			ModelCalls:         r.Verdict.ModelCalls,
-			MutantsGraded:      r.Verdict.MutantsTotal,
-			MutantsInvalid:     r.Verdict.MutantsInvalid,
-			MutantMillisMedian: r.Verdict.MutantDurationMedian.Milliseconds(),
-			MutantMillisMax:    r.Verdict.MutantDurationMax.Milliseconds(),
+			CacheHit:                r.CacheHit,
+			VerdictComputedAt:       r.ComputedAt,
+			Timing:                  r.Verdict.Timing,
+			ModelCalls:              r.Verdict.ModelCalls,
+			MutantsGraded:           r.Verdict.MutantsTotal,
+			MutantsDistinct:         r.Verdict.MutantsDistinct,
+			MutantsDistinctSurvived: r.Verdict.MutantsDistinctSurvived,
+			MutantsInvalid:          r.Verdict.MutantsInvalid,
+			MutantMillisMedian:      r.Verdict.MutantDurationMedian.Milliseconds(),
+			MutantMillisMax:         r.Verdict.MutantDurationMax.Milliseconds(),
 			// The primary/challenger agreement, carried straight through —
 			// nil whenever no comparable pair exists (see
 			// advpool.Verdict.ChallengerAgreement's doc).

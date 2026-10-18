@@ -43,12 +43,16 @@ type advVerdict struct {
 	MutantsInvalid int     `json:"MutantsInvalid"`
 	// MutantsUnmeasured mirrors advpool.Verdict's: mutants whose grading
 	// command failed on the compliant code, excluded from MutantsTotal.
-	MutantsUnmeasured int      `json:"mutants_unmeasured,omitempty"`
-	Survivors         int      `json:"Survivors"`
-	ProvenMissed      int      `json:"ProvenMissed"`
-	RegionsTotal      int      `json:"RegionsTotal"`
-	RegionsProbed     int      `json:"RegionsProbed"`
-	DroppedRegions    []string `json:"DroppedRegions"`
+	MutantsUnmeasured int `json:"mutants_unmeasured,omitempty"`
+	// MutantsDistinct / MutantsDistinctSurvived mirror advpool.Verdict's:
+	// the distinct measured edits the 95% interval is taken over.
+	MutantsDistinct         int      `json:"mutants_distinct,omitempty"`
+	MutantsDistinctSurvived int      `json:"mutants_distinct_survived,omitempty"`
+	Survivors               int      `json:"Survivors"`
+	ProvenMissed            int      `json:"ProvenMissed"`
+	RegionsTotal            int      `json:"RegionsTotal"`
+	RegionsProbed           int      `json:"RegionsProbed"`
+	DroppedRegions          []string `json:"DroppedRegions"`
 	// DuplicateMutants: generated mutants that were byte-identical edits of
 	// another and were collapsed before scoring — see
 	// adequacy.DedupeMutants. Disclosed so the graded denominator is
@@ -492,10 +496,12 @@ func renderAdvVerdict(w io.Writer, codePath string, v advVerdict) {
 	}
 	fmt.Fprintf(w, "  status:        %-12s (dev suite killed %d/%d mutants)\n", status, killed, v.MutantsTotal)
 	fmt.Fprintf(w, "  dev_kill_rate: %.2f\n", v.DevKillRate)
-	if lo, hi, ok := killrate.WilsonInterval(killed, v.MutantsTotal); ok {
+	if lo, hi, ok := killrate.Interval(v.MutantsDistinct, v.MutantsDistinctSurvived); ok {
 		// The sampling term a bare rate hides, beside it: 5 of 8 is 0.62
-		// with a band of 0.31–0.86, and the band is what a reader needs.
-		fmt.Fprintf(w, "  95%% interval:  %.2f–%.2f (n=%d)\n", lo, hi, v.MutantsTotal)
+		// with a band of 0.31–0.86, and the band is what a reader needs. It
+		// is over DISTINCT edits, the sample the certification gate used:
+		// over MutantsTotal, eight copies of one edit read as n=8.
+		fmt.Fprintf(w, "  95%% interval:  %.2f–%.2f (n=%d distinct)\n", lo, hi, v.MutantsDistinct)
 	}
 	if v.ExamIndicative {
 		fmt.Fprintf(w, "  INDICATIVE:    %s — needs-review for that reason, not a weak suite\n", v.IndicativeReason)

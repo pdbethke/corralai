@@ -724,3 +724,30 @@ func TestPushCarriesTheAuthoredLandingWithoutSource(t *testing.T) {
 		t.Errorf("authored_landing = %+v, want src/foo_tests.rs and NULL", got)
 	}
 }
+
+// The distinct sample a row's 95% interval is taken over round-trips through
+// the warehouse, and a row that never recorded it reads back NULL, never a
+// measured 0.
+func TestDistinctSampleRoundTripsThroughPushAndRead(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "w.duckdb")
+	one, three := 1, 3
+	if _, err := Push(target, []Row{
+		{Repo: "o/r", Commit: "c", Path: "a.go", KillRate: rate(1), MutantsGraded: 8, MutantsDistinct: &three, MutantsDistinctSurvived: &one},
+		{Repo: "o/r", Commit: "c", Path: "old.go", KillRate: rate(1), MutantsGraded: 8},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	db := openTarget(t, target)
+	for path, want := range map[string][2]sql.NullInt64{
+		"a.go":   {{Int64: 3, Valid: true}, {Int64: 1, Valid: true}},
+		"old.go": {},
+	} {
+		var d, s sql.NullInt64
+		if err := db.QueryRow(`SELECT mutants_distinct, mutants_distinct_survived FROM corral_audits WHERE path = ?`, path).Scan(&d, &s); err != nil {
+			t.Fatalf("%s: %v", path, err)
+		}
+		if d != want[0] || s != want[1] {
+			t.Errorf("%s: distinct=%v survived=%v, want %v", path, d, s, want)
+		}
+	}
+}

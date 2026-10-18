@@ -26,7 +26,17 @@ history of any release, `git log v0.3.4..v0.3.5`.
   test the list left out. The names were checked against what real jest, vitest, mocha, node,
   rspec and minitest list for captured fixtures, and three real audits
   (jest, mocha, rspec) handed their critics the list and got all four tests
-  judged. Cached verdicts are re-measured once (VerdictGeneration 32).
+  judged. Cached verdicts are re-measured once (VerdictGeneration 33).
+- **Every 95% interval is now over distinct edits.** The certification gate
+  already took its interval over distinct measured edits, but the interval
+  printed by `certify --local` and `--repo`, signed into the audit statement
+  and shown on the public record page was taken over every graded mutant,
+  duplicates included, so eight copies of one edit printed as n=8 with a
+  band far narrower than one observation supports. The verdict now carries
+  the distinct sample (`mutants_distinct`, `mutants_distinct_survived`, also
+  new nullable ledger and warehouse columns), and every interval uses it,
+  printed as `(n=3 distinct)`. Ledger entries written before this keep their
+  band, labelled "duplicates counted". Found by a claims review of the docs.
 - **jest and mocha are recognized when run by their entry script.** The
   jail form the docs give, `node ./node_modules/jest/bin/jest.js` (or
   mocha's `bin/mocha.js` / `bin/_mocha`), was read as node's own test

@@ -164,10 +164,17 @@ type Row struct {
 	// measurement nobody made — so it is written SQL NULL until there is
 	// something to write.
 	MutantsTimedOut *int
-	RegionsTotal    int
-	RegionsProbed   int
-	DroppedRegions  string
-	VacuousFindings int
+	// MutantsDistinct / MutantsDistinctSurvived are the sample a 95% interval
+	// is taken over: distinct measured edits, and how many survived
+	// (advpool.Verdict.MutantsDistinct). MutantsGraded counts duplicates, so
+	// a band over it is narrower than the evidence. *int because rows pushed
+	// before this was recorded have none, and a stored 0 would claim one.
+	MutantsDistinct         *int `json:",omitempty"`
+	MutantsDistinctSurvived *int `json:",omitempty"`
+	RegionsTotal            int
+	RegionsProbed           int
+	DroppedRegions          string
+	VacuousFindings         int
 	// CriticIncomplete qualifies VacuousFindings: the critic's review was cut
 	// short, so the count is a lower bound (scanstore.File's field).
 	CriticIncomplete bool `json:",omitempty"`

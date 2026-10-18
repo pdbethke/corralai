@@ -3,7 +3,7 @@ jest 30.5.2, vitest 3.2.7, mocha 11.8.0 (npm); PHPUnit 11.5.57 (composer)
 node v22.23.3; rspec-core 3.13.6
 Launchers: npm 10.9.9 and pnpm 9.15.9 take extra script arguments after --,
 yarn 1.22.22 takes them directly, composer 2.9.5 after --.
-Suites: src/. Each *-list file is the stdout of that runner's list command
+Suites: src/ (rspec-join-list.json: spec/join_spec.rb, added 2026-10-18 with rspec-core 3.13.6). Each *-list file is the stdout of that runner's list command
 (jest and mocha JSON reduced to the fields the parsers read).
 Each *-fail, *-suitefail, *-loadfail and *-hookfail file is stdout+stderr of
 the runner's DEFAULT command on src/fail, not a TTY, as the jail runs it;

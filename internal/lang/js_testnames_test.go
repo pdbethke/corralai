@@ -73,14 +73,18 @@ func TestJSTestNamesInSourceFailsClosed(t *testing.T) {
 func TestJSNamesResolveOntoRealRunnerLists(t *testing.T) {
 	dir := filepath.Join("testdata", "runners")
 	for _, c := range []struct {
-		src, list string
-		parse     func(string) []string
+		src, list, runner string
 	}{
-		{"src/calc.jest.test.js", "jest-list.json", jestParseList},
-		{"src/calc.vitest.test.mjs", "vitest-list.txt", vitestParseList},
-		{"src/calc.mocha.js", "mocha-list.json", mochaParseList},
-		{"src/calc.node.test.js", "node-tap.txt", nodeParseList},
+		{"src/calc.jest.test.js", "jest-list.json", "jest"},
+		{"src/calc.vitest.test.mjs", "vitest-list.txt", "vitest"},
+		{"src/calc.mocha.js", "mocha-list.json", "mocha"},
+		{"src/calc.node.test.js", "node-tap.txt", "node-test"},
 	} {
+		js, _ := ByName("javascript")
+		r, err := RunnerByID(js, c.runner)
+		if err != nil {
+			t.Fatal(err)
+		}
 		src, err := os.ReadFile(filepath.Join(dir, c.src))
 		if err != nil {
 			t.Fatal(err)
@@ -89,20 +93,20 @@ func TestJSNamesResolveOntoRealRunnerLists(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		assertNamesResolveOneToOne(t, c.src, jsTestNames(string(src)), c.parse(string(out)))
+		assertNamesResolveOneToOne(t, c.src, r, jsTestNames(string(src)), r.ParseList(string(out)))
 	}
 }
 
 // assertNamesResolveOneToOne requires every name to resolve onto a distinct
 // listed id and every listed id the runner can run alone to be named.
-func assertNamesResolveOneToOne(t *testing.T, label string, names, listed []string) {
+func assertNamesResolveOneToOne(t *testing.T, label string, r Runner, names, listed []string) {
 	t.Helper()
 	if len(names) == 0 || len(listed) == 0 {
 		t.Fatalf("%s: names %q, listed %q: both must be non-empty", label, names, listed)
 	}
 	hit := map[string]string{}
 	for _, n := range names {
-		id, ok := ResolveListedTest(listed, n)
+		id, ok := resolveForRow(r, listed, n)
 		if !ok {
 			t.Errorf("%s: name %q resolves onto no single listed test in %q", label, n, listed)
 			continue

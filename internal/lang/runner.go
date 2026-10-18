@@ -48,6 +48,10 @@ type Runner struct {
 	// (ResolveListedTest) before SingleCmd, because the runner's ids carry a
 	// prefix the source does not (Rust's module path).
 	ResolveByList bool
+	// ListsFullNames: ParseList builds ids with idFromFull, so a nested
+	// test's groups are one space-joined segment ("Outer Inner::leaf") and
+	// resolveForRow also takes the "Outer::Inner::leaf" spelling of it.
+	ListsFullNames bool
 	// Coruns reports whether running id alone would also run other: the
 	// runner selects by a pattern a second listed test can match too. nil
 	// means its ids are exact. ResolveForRun refuses an id that coruns.
@@ -135,7 +139,8 @@ var runners = []Runner{
 		Note: "listing and one-test runs verified on jest 30.5",
 	},
 	{
-		Name: "mocha", ID: "mocha", Languages: []string{"javascript", "typescript"}, Words: []string{"mocha"}, FailFast: []string{"--bail"},
+		ListsFullNames: true,
+		Name:           "mocha", ID: "mocha", Languages: []string{"javascript", "typescript"}, Words: []string{"mocha"}, FailFast: []string{"--bail"},
 		ListCmd: mochaListCmd, ParseList: mochaParseList, SingleCmd: mochaSingleCmd, ResolveByList: true, Coruns: lastFullColl,
 		FirstFailure: firstOf(mochaFailures), FailedTests: mochaFailures, DeselectCmd: mochaDeselectCmd,
 		Note: "listing and one-test runs verified on mocha 11.8 (listing needs mocha 9 or later)",
@@ -162,7 +167,8 @@ var runners = []Runner{
 	// --fail-fast arrived in minitest 5.22, and an older minitest treats an
 	// unknown option as an error, which the scorer would read as a kill.
 	{
-		Name: "rspec", ID: "rspec", Languages: []string{"ruby"}, Default: true, Words: []string{"rspec"}, FailFast: []string{"--fail-fast"},
+		ListsFullNames: true,
+		Name:           "rspec", ID: "rspec", Languages: []string{"ruby"}, Default: true, Words: []string{"rspec"}, FailFast: []string{"--fail-fast"},
 		ListCmd: rspecListCmd, ParseList: rspecParseList, SingleCmd: rspecSingleCmd, ResolveByList: true, Coruns: lastFullColl,
 		FirstFailure: firstOf(rspecFailures), FailedTests: rspecFailures, DeselectCmd: rspecDeselectCmd,
 		Note: "listing and one-test runs verified on rspec-core 3.13 (one-test runs need 3.12 or later)",
@@ -326,7 +332,8 @@ func ResolvesByList(p Plugin, inv Invocation) bool {
 // run killed is credited to the test it names, so a run that also ran a
 // second test cannot be credited at all.
 func ResolveForRun(p Plugin, inv Invocation, listed []string, name string) (string, bool) {
-	id, ok := ResolveListedTest(listed, name)
+	r, _ := RunnerFor(p, inv)
+	id, ok := resolveForRow(r, listed, name)
 	if !ok || !RunsAlone(p, inv, listed, id) {
 		return "", false
 	}

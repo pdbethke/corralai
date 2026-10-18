@@ -14,7 +14,7 @@ var paritySamples = map[string]paritySample{
 	"rust":       {"src/a.rs", "#[test]\nfn a() {}\n"},
 	"javascript": {"a.test.js", "test('a', () => {});\n"},
 	"typescript": {"a.test.ts", "test('a', () => {});\n"},
-	"ruby":       {"a_spec.rb", "it 'a' do\nend\n"},
+	"ruby":       {"a_spec.rb", "describe 'A' do\n  it 'a' do\n  end\nend\n"},
 }
 
 // Capability is one user-facing thing corral does with a language's tests.

@@ -15,8 +15,8 @@ import (
 //   - *_spec.rb or spec_*.rb is RSpec: every example (it, specify, example,
 //     scenario, their x/f forms, and pending or skip with a description) by
 //     its full description in idFromFull's form — the groups' descriptions
-//     joined as RSpec joins them (no space before one starting "#", "." or
-//     "::"), then "::" and the example's own — the id rspec lists it under.
+//     joined as rspec-core joins them (rspecGroupJoin), then "::" and the
+//     example's own — the id rspec lists it under.
 //   - *_test.rb or test_*.rb is minitest: in each class whose superclass
 //     ends in Test or TestCase, the public test_* methods and ActiveSupport
 //     `test "name"` blocks, as Class#test_name (modules and outer classes
@@ -42,7 +42,7 @@ func rubyTestNames(testPath, src string) []string {
 	if !ok {
 		return nil
 	}
-	w := rbWalk{toks: toks, spec: spec, seen: map[string]bool{}, classes: map[string]bool{}}
+	w := rbWalk{toks: toks, spec: spec, seen: map[string]bool{}, classes: map[string]bool{}, assigned: rbAssignedConstants(toks)}
 	if !w.run() || len(w.out) == 0 {
 		return nil
 	}
@@ -55,6 +55,9 @@ type rbFrame struct {
 	role    byte   // rbGroup, rbExample, rbTestClass, rbModule, or 0
 	full    string // a group's full description; a class or module's full name
 	private bool   // a test class's default visibility after a bare private
+	// constLast: a group whose last description argument is a constant
+	// (a Module, at run time), which decides how a child group joins it.
+	constLast bool
 }
 
 const (
@@ -65,12 +68,15 @@ const (
 )
 
 type rbWalk struct {
-	toks    []rbTok
-	spec    bool
-	stack   []rbFrame
-	out     []string
-	seen    map[string]bool
-	classes map[string]bool // test classes defined in this file
+	toks []rbTok
+	spec bool
+	// assigned holds the constants this file assigns (Alias = MyApp::Calc):
+	// described, they print the name of what they hold, not their own.
+	assigned map[string]bool
+	stack    []rbFrame
+	out      []string
+	seen     map[string]bool
+	classes  map[string]bool // test classes defined in this file
 	// pending is the role the next do/{ opened at depth pendDepth takes: the
 	// block of the call just read. A statement end at that depth drops it.
 	pending      *rbFrame
@@ -120,14 +126,25 @@ func (w *rbWalk) inExample() bool {
 	return false
 }
 
-// groupFull is the full description of the innermost enclosing group.
-func (w *rbWalk) groupFull() string {
+// group is the innermost enclosing group, or nil.
+func (w *rbWalk) group() *rbFrame {
 	for i := len(w.stack) - 1; i >= 0; i-- {
 		if w.stack[i].role == rbGroup {
-			return w.stack[i].full
+			return &w.stack[i]
 		}
 	}
-	return ""
+	return nil
+}
+
+// inModule reports whether the walk is inside a module or class body, where
+// a constant resolves through the nesting and describes as its full name.
+func (w *rbWalk) inModule() bool {
+	for _, f := range w.stack {
+		if f.role == rbModule || f.role == rbTestClass {
+			return true
+		}
+	}
+	return false
 }
 
 // scopeName is the full name of the innermost enclosing class or module.
@@ -140,21 +157,41 @@ func (w *rbWalk) scopeName() string {
 	return ""
 }
 
-// rspecJoin joins a description onto its parent's as RSpec builds a full
-// description: no space before one starting "#", "." or "::".
-func rspecJoin(parent, child string) string {
-	if parent == "" {
-		return child
+// rspecGroupJoin joins a description onto what precedes it as rspec-core
+// 3.13 does (Metadata#description_separator): with no space when the part
+// before is a Module (a constant here) and the description starts "#", "."
+// or "::" (`describe Calc do describe '#add'` is "Calc#add"), and with a
+// space otherwise (`describe 'Str' do describe '#add'` is "Str #add"). It
+// joins a group's two arguments and a group onto its parent group. An
+// example always joins its group with a space (build_description_from is
+// handed the parent's full description, a String): `it '#mul'` under Calc is
+// "Calc #mul".
+func rspecGroupJoin(before string, beforeIsConst bool, desc string) string {
+	if before == "" {
+		return desc
 	}
-	if strings.HasPrefix(child, "#") || strings.HasPrefix(child, ".") || strings.HasPrefix(child, "::") {
-		return parent + child
+	if beforeIsConst && (strings.HasPrefix(desc, "#") || strings.HasPrefix(desc, ".") || strings.HasPrefix(desc, "::")) {
+		return before + desc
 	}
-	return parent + " " + child
+	return before + " " + desc
+}
+
+// rbAssignedConstants is every constant a statement in toks assigns.
+func rbAssignedConstants(toks []rbTok) map[string]bool {
+	out := map[string]bool{}
+	for i := 0; i+2 < len(toks); i++ {
+		t := toks[i]
+		if t.kind == rbIdent && t.text[0] >= 'A' && t.text[0] <= 'Z' && (i == 0 || toks[i-1].kind == rbNL || toks[i-1].kind == rbPunct && toks[i-1].text == ";") &&
+			toks[i+1].kind == rbPunct && toks[i+1].text == "=" && !(toks[i+2].kind == rbPunct && (toks[i+2].text == "=" || toks[i+2].text == "~")) {
+			out[t.text] = true
+		}
+	}
+	return out
 }
 
 func (w *rbWalk) push(f rbFrame) {
 	if (f.open == "do" || f.open == "{") && w.pending != nil && len(w.stack) == w.pendDepth {
-		f.role, f.full = w.pending.role, w.pending.full
+		f.role, f.full, f.constLast = w.pending.role, w.pending.full, w.pending.constLast
 		w.pending = nil
 	}
 	w.stack = append(w.stack, f)
@@ -452,30 +489,42 @@ func (w *rbWalk) declaration(i int) bool {
 			return false
 		}
 		leaf := args[0][0].text
-		full := rspecJoin(w.groupFull(), leaf)
-		w.add(listedName(idFromFull(full, leaf)))
+		g := w.group()
+		if g == nil {
+			return false // rspec has no it outside a group: the file fails to load
+		}
+		w.add(listedName(idFromFull(g.full+" "+leaf, leaf)))
 		w.pending, w.pendDepth = &rbFrame{role: rbExample}, len(w.stack)
 		return true
 	}
 	if len(args) == 0 {
 		return false
 	}
-	desc, ok := rbDescription(args[0])
+	desc, isConst, ok := rbDescription(args[0])
 	if !ok {
 		return false
 	}
-	if len(args) > 1 && len(args[1]) == 1 && args[1][0].kind == rbStr {
-		desc += " " + args[1][0].text
+	if isConst && (w.inModule() || w.assigned[strings.SplitN(desc, "::", 2)[0]]) {
+		return false // the constant describes as a name this file does not spell
 	}
-	w.pending, w.pendDepth = &rbFrame{role: rbGroup, full: rspecJoin(w.groupFull(), desc)}, len(w.stack)
+	constLast := isConst
+	if len(args) > 1 && len(args[1]) == 1 && args[1][0].kind == rbStr {
+		desc, constLast = rspecGroupJoin(desc, isConst, args[1][0].text), false
+	}
+	full := desc
+	if g := w.group(); g != nil {
+		full = rspecGroupJoin(g.full, g.constLast, desc)
+	}
+	w.pending, w.pendDepth = &rbFrame{role: rbGroup, full: full, constLast: constLast}, len(w.stack)
 	return true
 }
 
 // rbDescription is a group's description from its first argument: a plain
-// string, a constant path, or a symbol.
-func rbDescription(arg []rbTok) (string, bool) {
+// string, a symbol, or a constant path (isConst), which rspec describes by
+// the Module's name.
+func rbDescription(arg []rbTok) (desc string, isConst, ok bool) {
 	if len(arg) == 1 && (arg[0].kind == rbStr || arg[0].kind == rbSym) {
-		return arg[0].text, true
+		return arg[0].text, false, true
 	}
 	var b strings.Builder
 	for k, t := range arg {
@@ -484,13 +533,13 @@ func rbDescription(arg []rbTok) (string, bool) {
 		} else if k%2 == 1 && t.kind == rbPunct && t.text == "::" {
 			b.WriteString("::")
 		} else {
-			return "", false
+			return "", false, false
 		}
 	}
 	if len(arg)%2 == 0 {
-		return "", false
+		return "", false, false
 	}
-	return b.String(), true
+	return b.String(), true, true
 }
 
 // rbArgs splits a call's arguments, starting at k, at its top-level commas:

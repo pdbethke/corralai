@@ -49,6 +49,9 @@ node --test --test-reporter=tap broken.node.test.js 2>/dev/null | grep -vE "dura
 $RSPEC --dry-run --format json spec/calc_spec.rb 2>/dev/null | ruby -rjson -e \
   'j=JSON.parse(STDIN.read); puts JSON.pretty_generate({"examples"=>j["examples"].map{|e| e.slice("id","description","full_description")}})' \
   > "$OUT/rspec-list.json"
+$RSPEC --dry-run --format json spec/join_spec.rb 2>/dev/null | ruby -rjson -e \
+  'j=JSON.parse(STDIN.read); puts JSON.pretty_generate({"examples"=>j["examples"].map{|e| e.slice("id","description","full_description")}})' \
+  > "$OUT/rspec-join-list.json"
 vendor/bin/phpunit --list-tests tests/CalcTest.php > "$OUT/phpunit-list.txt"
 
 # --- one-test commands: each must run exactly the tests named --------------

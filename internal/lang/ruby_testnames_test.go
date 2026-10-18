@@ -84,6 +84,9 @@ func TestRubyTestNamesInSourceFailsClosed(t *testing.T) {
 		{"interpolated test block", "a_test.rb", "class CalcTest < ActiveSupport::TestCase\n  test \"adds #{n}\" do\n  end\nend\n"},
 		{"test block with punctuation", "a_test.rb", "class CalcTest < ActiveSupport::TestCase\n  test 'adds, then subs' do\n  end\nend\n"},
 		{"inherits a test class from this file", "a_test.rb", "class BaseTest < Minitest::Test\n  def test_a; end\nend\nclass MoreTest < BaseTest\n  def test_b; end\nend\n"},
+		{"example outside any group", "a_spec.rb", "it 'loose' do\nend\n"},
+		{"constant described inside a module", "a_spec.rb", "module MyApp\n  RSpec.describe Calc do\n    it 'b' do\n    end\n  end\nend\n"},
+		{"constant aliased in this file", "a_spec.rb", "Alias = MyApp::Calc\nRSpec.describe Alias do\n  it 'c' do\n  end\nend\n"},
 		{"neither convention", "calc.rb", "describe 'G' do\n  it 'a' do\n  end\nend\n"},
 	} {
 		if got := rubyTestNames(c.path, c.src); got != nil {
@@ -105,8 +108,19 @@ func TestRubyNamesResolveOntoRealRunnerLists(t *testing.T) {
 		}
 		return string(b)
 	}
-	assertNamesResolveOneToOne(t, "spec/calc_spec.rb",
-		rubyTestNames("spec/calc_spec.rb", read("src/spec/calc_spec.rb")), rspecParseList(read("rspec-list.json")))
+	rb, _ := ByName("ruby")
+	rspec, err := RunnerByID(rb, "rspec")
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertNamesResolveOneToOne(t, "spec/calc_spec.rb", rspec,
+		rubyTestNames("spec/calc_spec.rb", read("src/spec/calc_spec.rb")), rspec.ParseList(read("rspec-list.json")))
+
+	// How rspec joins descriptions, captured from a real --dry-run: no space
+	// before a "#", "." or "::" child only when the parent's last argument is
+	// a Module, and always a space before an example's description.
+	assertNamesResolveOneToOne(t, "spec/join_spec.rb", rspec,
+		rubyTestNames("spec/join_spec.rb", read("src/spec/join_spec.rb")), rspec.ParseList(read("rspec-join-list.json")))
 
 	names := rubyTestNames("fail/f_test.rb", read("src/fail/f_test.rb"))
 	failed := minitestFailures(read("minitest-fail.txt"))

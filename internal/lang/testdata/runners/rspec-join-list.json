@@ -1,0 +1,49 @@
+{
+  "examples": [
+    {
+      "id": "./spec/join_spec.rb[1:1:1]",
+      "description": "sums",
+      "full_description": "Str #add sums"
+    },
+    {
+      "id": "./spec/join_spec.rb[2:1]",
+      "description": "#mul works",
+      "full_description": "Calc #mul works"
+    },
+    {
+      "id": "./spec/join_spec.rb[2:2]",
+      "description": ".build",
+      "full_description": "Calc .build"
+    },
+    {
+      "id": "./spec/join_spec.rb[2:3:1]",
+      "description": "x",
+      "full_description": "Calc#add x"
+    },
+    {
+      "id": "./spec/join_spec.rb[3:1]",
+      "description": "subs",
+      "full_description": "Calc#sub subs"
+    },
+    {
+      "id": "./spec/join_spec.rb[4:1:1]",
+      "description": "z",
+      "full_description": "Calc x #y z"
+    },
+    {
+      "id": "./spec/join_spec.rb[5:1:1]",
+      "description": "r",
+      "full_description": "sym #q r"
+    },
+    {
+      "id": "./spec/join_spec.rb[6:1:1]",
+      "description": "b",
+      "full_description": "MyApp::Calc.make b"
+    },
+    {
+      "id": "./spec/join_spec.rb[7:1]",
+      "description": "c",
+      "full_description": "A B c"
+    }
+  ]
+}

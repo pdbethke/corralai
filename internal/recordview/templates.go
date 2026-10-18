@@ -48,6 +48,7 @@ padding:1px 9px;font-size:.74rem;white-space:nowrap}
 .small{font-size:.82rem;color:var(--muted)}
 .nowrap{white-space:nowrap}
 footer{margin-top:60px;padding-top:20px;border-top:1px solid var(--line);color:var(--muted);font-size:.85rem}
+.scroll{overflow-x:auto;max-width:100%}
 details{margin:.5em 0}
 summary{cursor:pointer;color:var(--accent);padding:3px 0}
 summary:hover{text-decoration:underline}
@@ -95,7 +96,10 @@ Nothing here asks to be believed: re-run any of it.</p>
   <div class="stat"><b>{{.CrossVendor}}</b><span>verified by another vendor</span></div>
 </div>
 
-{{template "verify" .}}
+{{if .LedgerEntries}}{{template "verify" .}}
+<p class="small"><a href="chain-1.html">The whole chain, entry by entry →</a></p>
+{{else}}<div class="banner warn"><p><strong>The record is empty.</strong> This ledger has no entries yet:
+<code>corral certify</code> and <code>corral review</code> write them.</p></div>{{end}}
 
 {{if .Scans}}
 <h2>Audits</h2>
@@ -103,20 +107,13 @@ Nothing here asks to be believed: re-run any of it.</p>
 one. The kill rate is what execution measured, with its 95% interval. A <strong>proven</strong> gap is a
 fault the suite missed and a test corral wrote did catch: that test passed on the real code and failed
 on the fault.</p>
-<table><thead><tr>
+<div class="scroll"><table><thead><tr>
 <th>pushed</th><th>repository</th><th>audited</th><th class="nowrap">kill rate</th>
 <th class="nowrap">got through</th><th class="nowrap">proven</th><th>commit</th>
 </tr></thead><tbody>
-{{range .Scans}}<tr>
-<td class="nowrap"><a href="{{entryURL .Short}}">{{date .Pushed}}</a>{{if .Retracted}} <span class="chip bad">retracted</span>{{end}}</td>
-<td class="mono small">{{.RepoName}}{{with .Scan.Scope}}<br><span class="small">{{.}}</span>{{end}}</td>
-<td class="mono small">{{range $i, $f := .Audited}}{{if $i}}, {{end}}{{$f.Path}}{{else}}<span class="chip mute">none</span>{{end}}</td>
-<td class="nowrap">{{if .Graded}}{{.Rate}} <span class="small">({{.Killed}} of {{.Graded}})</span>{{else}}<span class="chip mute">not graded</span>{{end}}</td>
-<td>{{.Survived}}</td>
-<td>{{if .Proven}}<span class="chip ok">{{.Proven}}</span>{{else}}0{{end}}</td>
-<td class="mono small">{{if .CommitURL}}<a href="{{.CommitURL}}">{{.ShortSHA}}</a>{{else}}{{.ShortSHA}}{{end}}</td>
-</tr>{{end}}
-</tbody></table>
+{{range .NewestScans}}{{template "scanrow" .}}{{end}}
+</tbody></table></div>
+{{if gt (len .Scans) (len .NewestScans)}}<p><a href="audits-1.html">All {{len .Scans}} audits →</a></p>{{end}}
 {{end}}
 
 <h2>What "reproduced" means here</h2>
@@ -157,23 +154,13 @@ the verifier is never the reviewer's model. What actually ran:</p>
 
 <h2>Reviews</h2>
 <p class="small">Newest first. {{if .First.IsZero}}{{else}}Record spans {{date .First}} to {{date .Last}}.{{end}}</p>
-<table><thead><tr>
+<div class="scroll"><table><thead><tr>
 <th>pushed</th><th>scope</th><th>reviewer</th><th>verifier</th>
 <th class="nowrap">findings</th><th class="nowrap">repro</th><th class="nowrap">verdicts</th><th>commit</th>
 </tr></thead><tbody>
-{{range .Reviews}}<tr>
-<td class="nowrap"><a href="{{entryURL .Short}}">{{date .Pushed}}</a>{{if .Retracted}} <span class="chip bad">retracted</span>{{end}}</td>
-<td class="mono">{{with .Review}}{{.Scope}}{{end}}</td>
-<td class="mono small">{{with .Review}}{{.ReviewerModel}}{{end}}</td>
-<td class="mono small">{{if .HasVerifier}}{{with .Review}}{{.VerifierModel}}{{end}}
-  {{if .Decorrelated}}<span class="chip ok">≠</span>{{end}}
-  {{else}}<span class="chip mute">none</span>{{end}}</td>
-<td>{{.Findings | len}}</td>
-<td>{{if .Reproduced}}<span class="chip ok">{{.Reproduced}}</span>{{else}}0{{end}}</td>
-<td class="small">{{if .Confirmed}}<span class="chip ok">{{.Confirmed}}✓</span> {{end}}{{if .Refuted}}<span class="chip bad">{{.Refuted}}✗</span>{{end}}</td>
-<td class="mono small">{{if .CommitURL}}<a href="{{.CommitURL}}">{{.ShortSHA}}</a>{{else}}{{.ShortSHA}}{{end}}</td>
-</tr>{{end}}
-</tbody></table>
+{{range .NewestReviews}}{{template "reviewrow" .}}{{end}}
+</tbody></table></div>
+{{if gt (len .Reviews) (len .NewestReviews)}}<p><a href="reviews-1.html">All {{len .Reviews}} reviews →</a></p>{{end}}
 
 <h2>Verify it yourself</h2>
 <p>The record is a git branch, so there is nothing to trust and nothing to install to read it:</p>
@@ -200,7 +187,7 @@ This page renders the record and adds no opinion about it: the chain, the signat
 and the verdicts are all read through <code>internal/auditpush</code>, the same code the CLI uses.</p>
 </footer>
 </div></body></html>
-` + verifyBanner + entryBanner
+` + verifyBanner + entryBanner + rowTmpls
 
 // entryBanner is one entry's chain line, shared by review and scan pages.
 const entryBanner = `
@@ -374,3 +361,70 @@ this run was pushed without its source (<code>--push-source</code>). The counts 
 pushed {{stamp .Pushed}} · <a href="../index.html">the whole record</a></p></footer>
 </div></body></html>
 ` + entryBanner
+
+const rowTmpls = `
+{{define "scanrow"}}<tr>
+<td class="nowrap"><a href="{{entryURL .Short}}">{{date .Pushed}}</a>{{if .Retracted}} <span class="chip bad">retracted</span>{{end}}</td>
+<td class="mono small">{{.RepoName}}{{with .Scan.Scope}}<br><span class="small">{{.}}</span>{{end}}</td>
+<td class="mono small">{{range $i, $f := .Audited}}{{if $i}}, {{end}}{{$f.Path}}{{else}}<span class="chip mute">none</span>{{end}}</td>
+<td class="nowrap">{{if .Graded}}{{.Rate}} <span class="small">({{.Killed}} of {{.Graded}})</span>{{else}}<span class="chip mute">not graded</span>{{end}}</td>
+<td>{{.Survived}}</td>
+<td>{{if .Proven}}<span class="chip ok">{{.Proven}}</span>{{else}}0{{end}}</td>
+<td class="mono small">{{if .CommitURL}}<a href="{{.CommitURL}}">{{.ShortSHA}}</a>{{else}}{{.ShortSHA}}{{end}}</td>
+</tr>{{end}}
+{{define "reviewrow"}}<tr>
+<td class="nowrap"><a href="{{entryURL .Short}}">{{date .Pushed}}</a>{{if .Retracted}} <span class="chip bad">retracted</span>{{end}}</td>
+<td class="mono">{{with .Review}}{{.Scope}}{{end}}</td>
+<td class="mono small">{{with .Review}}{{.ReviewerModel}}{{end}}</td>
+<td class="mono small">{{if .HasVerifier}}{{with .Review}}{{.VerifierModel}}{{end}}
+  {{if .Decorrelated}}<span class="chip ok">≠</span>{{end}}
+  {{else}}<span class="chip mute">none</span>{{end}}</td>
+<td>{{.Findings | len}}</td>
+<td>{{if .Reproduced}}<span class="chip ok">{{.Reproduced}}</span>{{else}}0{{end}}</td>
+<td class="small">{{if .Confirmed}}<span class="chip ok">{{.Confirmed}}✓</span> {{end}}{{if .Refuted}}<span class="chip bad">{{.Refuted}}✗</span>{{end}}</td>
+<td class="mono small">{{if .CommitURL}}<a href="{{.CommitURL}}">{{.ShortSHA}}</a>{{else}}{{.ShortSHA}}{{end}}</td>
+</tr>{{end}}
+`
+
+const listTmpl = `<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{{.What}}, page {{.N}} — corral/ledger</title>
+<style>` + baseCSS + `</style></head><body><div class="wrap">
+<p class="small"><a href="index.html">← the record</a></p>
+<h1>All {{.What}} <span class="small">page {{.N}} of {{.Of}}</span></h1>
+{{if eq .What "audits"}}<div class="scroll"><table><thead><tr>
+<th>pushed</th><th>repository</th><th>audited</th><th class="nowrap">kill rate</th>
+<th class="nowrap">got through</th><th class="nowrap">proven</th><th>commit</th>
+</tr></thead><tbody>{{range .Scans}}{{template "scanrow" .}}{{end}}</tbody></table></div>
+{{else}}<div class="scroll"><table><thead><tr>
+<th>pushed</th><th>scope</th><th>reviewer</th><th>verifier</th>
+<th class="nowrap">findings</th><th class="nowrap">repro</th><th class="nowrap">verdicts</th><th>commit</th>
+</tr></thead><tbody>{{range .Reviews}}{{template "reviewrow" .}}{{end}}</tbody></table></div>{{end}}
+<p>{{if .Prev}}<a href="{{.Prev}}">← newer</a>{{end}} {{if .Next}}<a href="{{.Next}}">older →</a>{{end}}</p>
+</div></body></html>
+` + rowTmpls
+
+const chainTmpl = `<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>the chain, page {{.N}} — corral/ledger</title>
+<style>` + baseCSS + `</style></head><body><div class="wrap">
+<p class="small"><a href="index.html">← the record</a></p>
+<h1>The chain <span class="small">page {{.N}} of {{.Of}}, newest first</span></h1>
+{{template "verify" .Site}}
+<div class="scroll"><table><thead><tr><th>#</th><th>when</th><th>kind</th><th>what</th><th>signature</th></tr></thead><tbody>
+{{range .Rows}}<tr>
+<td>{{.Pos}}</td><td class="nowrap">{{stamp .Pushed}}</td>
+<td>{{if or (eq .Kind "scan") (eq .Kind "review")}}<a href="{{entryURL .Short}}">{{.Kind}}</a>{{else}}{{.Kind}}{{end}}</td>
+<td class="small">{{.Note}}{{if .ChainProblem}} <span class="chip bad">{{.ChainProblem}}</span>{{end}}</td>
+<td>{{if .ChainProblem}}<span class="chip bad">problem</span>
+{{else if not .Signed}}<span class="chip warn">unsigned</span>
+{{else if not .KeyGiven}}<span class="chip warn">signed, not checked</span>
+{{else if .SigOK}}<span class="chip ok">verified</span>
+{{else}}<span class="chip bad">does NOT verify</span>{{end}}</td>
+</tr>{{end}}
+</tbody></table></div>
+<p>{{if .Prev}}<a href="{{.Prev}}">← newer</a>{{end}} {{if .Next}}<a href="{{.Next}}">older →</a>{{end}}</p>
+</div></body></html>
+` + verifyBanner

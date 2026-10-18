@@ -12,11 +12,7 @@
 package recordview
 
 import (
-	"errors"
 	"fmt"
-	"html/template"
-	"io/fs"
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -131,6 +127,9 @@ type Site struct {
 	// Empty when the page was rendered without one.
 	PubKeyHex string
 	Reviews   []EntryView
+	// Chain is every entry of every kind, newest first: the chain itself,
+	// with each entry's check. Scan and review pages hold the detail.
+	Chain []ChainView
 	// Scans is every certify scan entry, newest first, retracted ones
 	// included and marked: a retracted scan stays in the chain, so its page
 	// stays too and says why it no longer stands.
@@ -237,6 +236,7 @@ func Build(entries []auditpush.LedgerEntry, checks []auditpush.ChainCheck, sigsC
 			SigOK: c.SigOK, ChainProblem: c.Problem, Genesis: c.Genesis,
 			Pos: i + 1, Kind: kind, KeyID: c.KeyID, Note: c.Note, KeyGiven: sigsChecked,
 		}
+		v.Chain = append(v.Chain, cv)
 		if e.IsScan() {
 			var by *auditpush.LedgerEntry
 			if rt, ok := retracted[e.Hash]; ok {
@@ -339,6 +339,7 @@ func Build(entries []auditpush.LedgerEntry, checks []auditpush.ChainCheck, sigsC
 		v.Reviews = append(v.Reviews, ev)
 	}
 
+	sort.Slice(v.Chain, func(i, j int) bool { return v.Chain[i].Pos > v.Chain[j].Pos })
 	sort.Slice(v.Reviews, func(i, j int) bool { return v.Reviews[i].Pushed.After(v.Reviews[j].Pushed) })
 	sort.Slice(v.Scans, func(i, j int) bool { return v.Scans[i].Pushed.After(v.Scans[j].Pushed) })
 	v.Models = keys(models)
@@ -356,100 +357,6 @@ func keys(m map[string]bool) []string {
 	}
 	sort.Strings(out)
 	return out
-}
-
-func WriteStatic(out string, v Site) error {
-	// Writes go through os.Root, the same defence the workspace substrate
-	// uses: every path is resolved INSIDE out, so a symlink planted in the
-	// output directory cannot redirect a write anywhere else. 0o750 rather
-	// than 0o755 — nothing here needs to be world-readable on the machine
-	// that builds it; the deploy copies the files out.
-	if err := os.MkdirAll(out, 0o750); err != nil {
-		return err
-	}
-	root, err := os.OpenRoot(out)
-	if err != nil {
-		return err
-	}
-	defer root.Close()
-	if err := root.Mkdir("entry", 0o750); err != nil && !errors.Is(err, fs.ErrExist) {
-		return err
-	}
-
-	funcs := template.FuncMap{
-		"short":    shortHash,
-		"hasPre":   func(s string) bool { return strings.TrimSpace(s) != "" },
-		"date":     func(t time.Time) string { return t.UTC().Format("2006-01-02") },
-		"stamp":    func(t time.Time) string { return t.UTC().Format("2006-01-02 15:04 UTC") },
-		"join":     func(s []string) string { return strings.Join(s, ", ") },
-		"lower":    strings.ToLower,
-		"entryURL": func(short string) string { return "entry/" + short + ".html" },
-		"thousands": func(n int64) string {
-			if n >= 1_000_000 {
-				return fmt.Sprintf("%.1fM", float64(n)/1e6)
-			}
-			if n >= 1_000 {
-				return fmt.Sprintf("%.1fk", float64(n)/1e3)
-			}
-			return fmt.Sprint(n)
-		},
-	}
-
-	idx, err := template.New("index").Funcs(funcs).Parse(indexTmpl)
-	if err != nil {
-		return err
-	}
-	if err := writeThrough(root, "index.html", idx, v); err != nil {
-		return err
-	}
-
-	ent, err := template.New("entry").Funcs(funcs).Parse(entryTmpl)
-	if err != nil {
-		return err
-	}
-	for _, e := range v.Reviews {
-		data := struct {
-			EntryView
-			Site Site
-		}{e, v}
-		if err := writeEntryPage(root, e.Short, ent, data); err != nil {
-			return err
-		}
-	}
-	scan, err := template.New("scan").Funcs(funcs).Parse(scanTmpl)
-	if err != nil {
-		return err
-	}
-	for _, s := range v.Scans {
-		if err := writeEntryPage(root, s.Short, scan, s); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// writeEntryPage writes entry/<short>.html. Review and scan pages share the
-// one namespace, which is safe because the name is the entry's own hash
-// prefix — and a name outside hex is a record this program does not
-// understand, so it refuses rather than write it.
-func writeEntryPage(root *os.Root, short string, tmpl *template.Template, data any) error {
-	if !isHex(short) {
-		return fmt.Errorf("entry %q: name is not a hex hash prefix", short)
-	}
-	return writeThrough(root, "entry/"+short+".html", tmpl, data)
-}
-
-// writeThrough renders tmpl into name, resolved inside root.
-func writeThrough(root *os.Root, name string, tmpl *template.Template, data any) error {
-	f, err := root.Create(name)
-	if err != nil {
-		return err
-	}
-	if err := tmpl.Execute(f, data); err != nil {
-		f.Close()
-		return fmt.Errorf("%s: %w", name, err)
-	}
-	return f.Close()
 }
 
 func isHex(s string) bool {

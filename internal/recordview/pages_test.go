@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -119,6 +120,59 @@ func TestAnEmptyLedgerRendersAndSaysItIsEmpty(t *testing.T) {
 				t.Fatalf("%s: an empty ledger page says %q", path, bad)
 			}
 		}
+	}
+}
+
+// A full list with nothing in it says so, rather than drawing a bare table
+// that reads like a rendering fault.
+func TestAnEmptyListSaysNoneRecordedYet(t *testing.T) {
+	p, _ := NewPages()
+	for _, c := range []struct {
+		s    Site
+		path string
+	}{
+		{buildOK([]auditpush.LedgerEntry{reviewEntry("aaaaaaaaaaaa", 0)}), "audits-1.html"},
+		{buildOK(manyScans(1)), "reviews-1.html"},
+		{buildOK(manyScans(1)), "index.html"},
+	} {
+		var b bytes.Buffer
+		if err := p.Render(&b, c.s, c.path); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(b.String(), "None recorded yet.") {
+			t.Errorf("%s with nothing to list does not say so", c.path)
+		}
+	}
+}
+
+// A chain row with a problem names it once, in the row's note; the
+// signature column says what the verifier said about the signature.
+func TestAChainRowNamesItsProblemOnce(t *testing.T) {
+	e := reviewEntry("aaaaaaaaaaaa", 0)
+	e.File = e.Hash + ".json.gz"
+	c := okCheck(e)
+	c.HashOK, c.Problem = false, "hash does not match the entry's bytes"
+	s := Build([]auditpush.LedgerEntry{e}, []auditpush.ChainCheck{c}, true)
+	p, _ := NewPages()
+	var b bytes.Buffer
+	if err := p.Render(&b, s, "chain-1.html"); err != nil {
+		t.Fatal(err)
+	}
+	page := b.String()
+	if n := strings.Count(page, "hash does not match the entry&#39;s bytes"); n != 1 {
+		t.Errorf("the problem appears %d times, want once", n)
+	}
+	if strings.Contains(page, `chip bad">problem<`) {
+		t.Error("the row repeats its problem as a bare chip in the signature column")
+	}
+}
+
+// Site carries no count that nothing renders: an unrendered number is the
+// one most likely to be wrong unnoticed (Adjudications counted retracted
+// verdicts for as long as it existed).
+func TestSiteCarriesNoUnrenderedAdjudicationCount(t *testing.T) {
+	if _, ok := reflect.TypeOf(Site{}).FieldByName("Adjudications"); ok {
+		t.Fatal("Site.Adjudications is computed and never rendered")
 	}
 }
 

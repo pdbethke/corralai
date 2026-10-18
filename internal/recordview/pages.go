@@ -118,6 +118,9 @@ func neighbours(prefix string, n, of int) (prev, next string) {
 	return prev, next
 }
 
+// VerifiedEntries is how many entries the chain check actually saw.
+func (s Site) VerifiedEntries() int { return s.LedgerEntries - s.Unverified }
+
 // NewestScans and NewestReviews are what the index shows.
 func (s Site) NewestScans() []ScanView    { return window(s.Scans, 1, IndexRows) }
 func (s Site) NewestReviews() []EntryView { return window(s.Reviews, 1, IndexRows) }
@@ -167,7 +170,10 @@ func (p *Pages) Render(w io.Writer, s Site, path string) error {
 		}
 		for _, sc := range s.Scans {
 			if sc.Short == short {
-				return p.scan.Execute(w, sc)
+				return p.scan.Execute(w, struct {
+					ScanView
+					Site Site
+				}{sc, s})
 			}
 		}
 		return ErrNotFound

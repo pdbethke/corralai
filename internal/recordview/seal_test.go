@@ -49,8 +49,10 @@ func TestASealOnlyTargetMakesNoChainClaim(t *testing.T) {
 			t.Fatalf("%s: %v", path, err)
 		}
 		page := b.String()
-		if strings.Contains(page, "intact") || strings.Contains(page, "The record is empty") || strings.Contains(page, "Nothing is waiting") || strings.Contains(page, `<span class="small">0</span>`) {
-			t.Fatalf("%s: a warehouse-only target must make no claim about a chain it never read", path)
+		for _, claim := range []string{"intact", "hash-linked", "The record is empty", "Nothing is waiting", `<span class="small">0</span>`} {
+			if strings.Contains(page, claim) {
+				t.Fatalf("%s: a warehouse-only target must make no claim about a chain it never read: %q", path, claim)
+			}
 		}
 		if path != "index.html" && !strings.Contains(page, "Not a ledger directory") {
 			t.Fatalf("%s: must say why there is no chain here", path)

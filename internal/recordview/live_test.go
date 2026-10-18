@@ -4,6 +4,7 @@ package recordview
 
 import (
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -55,6 +56,23 @@ func TestLiveModeRefusesPathsItDidNotRender(t *testing.T) {
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/index.html", nil))
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("POST to a page: got %d, want 405", rec.Code)
+	}
+}
+
+// A render failure is not a read failure: the ledger was read, and the
+// page says what actually went wrong.
+func TestLiveModeLabelsARenderFailureAsOne(t *testing.T) {
+	h := serve(func() (Site, error) { return Site{}, nil }, func(io.Writer, Site, string) error {
+		return errors.New("template exploded")
+	})
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	body := rec.Body.String()
+	if rec.Code != http.StatusInternalServerError || !strings.Contains(body, "Could not render this page: template exploded") {
+		t.Fatalf("got %d %q", rec.Code, body)
+	}
+	if strings.Contains(body, "Could not read the ledger") || strings.Contains(body, "failure to read") {
+		t.Fatal("a render failure is labelled a failure to read the ledger")
 	}
 }
 

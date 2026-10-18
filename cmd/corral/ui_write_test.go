@@ -449,8 +449,9 @@ func TestUICitedReturnsAnErrorWhenGitFails(t *testing.T) {
 	}
 }
 
-// Write mode serves the adjudication controls and the script that sends
-// the token; read-only mode serves neither. The token-handling strings
+// Write mode captures the token on the page its printed URL opens ("/")
+// and serves the adjudication controls and the script that sends the
+// token; read-only mode serves neither. The token-handling strings
 // themselves (fragment, sessionStorage, Bearer, never localStorage or ?t=)
 // are held by recordview's TestWriteControlsHandleTheTokenOnlyTheWaySpecified,
 // where the page now lives.
@@ -463,22 +464,36 @@ func TestUIPageHandlesTheTokenOnlyTheWaySpecified(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, h := writerOver(t, t.TempDir(), ledger)
-	req := httptest.NewRequest(http.MethodGet, "/verdicts.html", nil)
-	req.Host = "127.0.0.1:8787"
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-	page := rec.Body.String()
+	get := func(path string) string {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		req.Host = "127.0.0.1:8787"
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec.Body.String()
+	}
+	// "/" is where the URL corral ui --write prints lands, so it is the page
+	// that must capture the token: fragment to sessionStorage, stripped from
+	// the address bar, whoami asked up front.
+	root := get("/")
+	for _, must := range []string{`sessionStorage.setItem`, `history.replaceState`, `api/whoami`} {
+		if !strings.Contains(root, must) {
+			t.Errorf("write mode's landing page / is missing %q", must)
+		}
+	}
+	page := get("/verdicts.html")
 	for _, must := range []string{`api/adjudicate`, `data-verdict="confirm"`, `sessionStorage`, `'Authorization': 'Bearer '`} {
 		if !strings.Contains(page, must) {
 			t.Errorf("write mode's verdict page is missing %q", must)
 		}
 	}
-	for _, mustNot := range []string{`localStorage`, `?t=`} {
-		if strings.Contains(page, mustNot) {
-			t.Errorf("page must not use %q (the token outlives the tab / reaches the server)", mustNot)
+	for path, p := range map[string]string{"/": root, "/verdicts.html": page} {
+		for _, mustNot := range []string{`localStorage`, `?t=`} {
+			if strings.Contains(p, mustNot) {
+				t.Errorf("%s must not use %q (the token outlives the tab / reaches the server)", path, mustNot)
+			}
 		}
 	}
-	rec = uiGet(t, uiHandler(fakeSeal{}, ledger), "/verdicts.html")
+	rec := uiGet(t, uiHandler(fakeSeal{}, ledger), "/verdicts.html")
 	if strings.Contains(rec.Body.String(), "api/adjudicate") || strings.Contains(rec.Body.String(), `data-verdict=`) {
 		t.Error("read-only mode serves the write controls")
 	}

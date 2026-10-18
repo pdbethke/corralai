@@ -68,13 +68,15 @@ const verifyBanner = `
 {{define "noledger"}}<div class="banner warn"><p><strong>Not a ledger directory.</strong> This target is a warehouse, so there is no chain, no reviews and no verdicts to show here. Point <code>corral ui --db</code> at a ledger directory (<code>.corral/ledger</code>) to see them.</p></div>{{end}}
 {{define "chainclaim"}}{{if not .HasLedger}}{{template "noledger"}}{{else if .LedgerEntries}}{{template "verify" .}}{{else}}{{template "emptyrecord"}}{{end}}{{end}}
 {{define "verify"}}
-<div class="banner{{if .ChainProblems}} bad{{else if not .SigsChecked}} warn{{end}}">
+<div class="banner{{if .ChainProblems}} bad{{else if or .Unverified (not .SigsChecked)}} warn{{end}}">
   <p><strong>Chain:</strong>
   {{if .ChainProblems}}<span class="chip bad">{{.ChainProblems}} problem(s)</span>
+  {{else if .Unverified}}<span class="chip ok">intact</span> across the {{.VerifiedEntries}} entries that were checked — every one's hash matches its bytes and every link names its predecessor.
   {{else}}<span class="chip ok">intact</span> — every entry's hash matches its bytes and every link names its predecessor, across all {{.LedgerEntries}} entries.{{end}}</p>
+  {{if .Unverified}}<p><span class="chip warn">not verified</span> {{.Unverified}} {{if eq .Unverified 1}}entry{{else}}entries{{end}} changed while being read — not verified; reload.</p>{{end}}
   <p><strong>Signatures:</strong>
   {{if .SigsChecked}}<span class="chip ok">{{.SigsOK}}/{{.SigsTotal}} verified</span>
-  {{else}}<span class="chip warn">not checked</span> — this page was generated without a public key, so signature validity is <em>unknown</em>. That is not a pass and not a failure. {{.SigsTotal}} of {{.LedgerEntries}} entries carry a signature; verify them yourself with the command below.{{end}}</p>
+  {{else}}<span class="chip warn">not checked</span> — this page was generated without a public key, so signature validity is <em>unknown</em>. That is not a pass and not a failure. {{.SigsTotal}} of {{.VerifiedEntries}} checked entries carry a signature; verify them yourself with the command below.{{end}}</p>
 </div>
 {{end}}
 `
@@ -83,11 +85,11 @@ const indexTmpl = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>corral/ledger — the record</title>
-<meta name="description" content="Every audit and review corral has recorded: hash-linked, signed where a key was present, and reproducible.">
+<meta name="description" content="Every audit and review corral has recorded{{if .HasLedger}}: hash-linked, signed where a key was present, and reproducible{{end}}.">
 <style>` + baseCSS + `</style></head><body><div class="wrap">
 
 <h1>corral/ledger — the record</h1>
-<p class="lede">Every audit and review corral has recorded, as a hash-linked chain, signed where a key was present.
+<p class="lede">Every audit and review corral has recorded{{if .HasLedger}}, as a hash-linked chain, signed where a key was present{{end}}.
 An audit plants faults in a file and runs the project's own tests against each one; a review's
 findings each carry the script that was executed to test them, and the exit code that came back.
 Nothing here asks to be believed: re-run any of it.</p>
@@ -175,7 +177,7 @@ the verifier is never the reviewer's model. What actually ran:</p>
 <th>pushed</th><th>scope</th><th>reviewer</th><th>verifier</th>
 <th class="nowrap">findings</th><th class="nowrap">repro</th><th class="nowrap">verdicts</th><th>commit</th>
 </tr></thead><tbody>
-{{range .NewestReviews}}{{template "reviewrow" .}}{{end}}
+{{range .NewestReviews}}{{template "reviewrow" .}}{{else}}<tr><td colspan="8">None recorded yet.</td></tr>{{end}}
 </tbody></table></div>
 {{if gt (len .Reviews) (len .NewestReviews)}}<p><a href="reviews-1.html">All {{len .Reviews}} reviews →</a></p>{{end}}
 
@@ -204,20 +206,22 @@ This page renders the record and adds no opinion about it: the chain, the signat
 and the verdicts are all read through <code>internal/auditpush</code>, the same code the CLI uses.</p>
 </footer>
 {{end}}
+{{if .Write}}` + writeJS + `{{end}}
 </div></body></html>
 ` + verifyBanner + entryBanner + rowTmpls
 
 // entryBanner is one entry's chain line, shared by review and scan pages.
 const entryBanner = `
 {{define "entrybanner"}}
-<div class="banner{{if or (not .ChainHashOK) .ChainProblem}} bad{{else if not .Signed}} warn{{end}}">
+<div class="banner{{if not .Verified}} warn{{else if or (not .ChainHashOK) .ChainProblem}} bad{{else if not .Signed}} warn{{end}}">
   <p><strong>This entry:</strong>
-  <span class="chip{{if .ChainHashOK}} ok{{else}} bad{{end}}">hash {{if .ChainHashOK}}matches its bytes{{else}}MISMATCH{{end}}</span>
+  {{if not .Verified}}<span class="chip warn">not verified</span> — it was appended while the ledger was being read, so the chain check never saw it. Its hash, link and signature are unknown, not failed: reload to check them.
+  {{else}}<span class="chip{{if .ChainHashOK}} ok{{else}} bad{{end}}">hash {{if .ChainHashOK}}matches its bytes{{else}}MISMATCH{{end}}</span>
   <span class="chip{{if .ChainLinkOK}} ok{{else}} bad{{end}}">link {{if .ChainLinkOK}}{{if .Genesis}}genesis{{else}}names its predecessor{{end}}{{else}}BROKEN{{end}}</span>
   {{if .Signed}}{{if not .KeyGiven}}<span class="chip warn">signed, not checked (no key given)</span>
   {{else if .SigOK}}<span class="chip ok">signature verified</span>
   {{else}}<span class="chip bad">signature does NOT verify</span>{{end}}
-  {{else}}<span class="chip warn">unsigned</span>{{end}}
+  {{else}}<span class="chip warn">unsigned</span>{{end}}{{end}}
   {{if .ChainProblem}}<br><span class="chip bad">{{.ChainProblem}}</span>{{end}}
   {{if .Note}}<br><span class="small">{{.Note}}</span>{{end}}</p>
 </div>
@@ -379,6 +383,7 @@ this run was pushed without its source (<code>--push-source</code>). The counts 
 
 <footer><p>Entry <span class="mono">{{.Hash}}</span> · file <span class="mono">{{.File}}</span> ·
 pushed {{stamp .Pushed}} · <a href="../index.html">the whole record</a></p></footer>
+{{if .Site.Write}}` + writeJS + `{{end}}
 </div></body></html>
 ` + entryBanner
 
@@ -417,12 +422,13 @@ const listTmpl = `<!doctype html>
 {{if eq .What "audits"}}<div class="scroll"><table><thead><tr>
 <th>pushed</th><th>repository</th><th>audited</th><th class="nowrap">kill rate</th>
 <th class="nowrap">got through</th><th class="nowrap">proven</th><th>commit</th>
-</tr></thead><tbody>{{range .Scans}}{{template "scanrow" .}}{{end}}</tbody></table></div>
+</tr></thead><tbody>{{range .Scans}}{{template "scanrow" .}}{{else}}<tr><td colspan="7">None recorded yet.</td></tr>{{end}}</tbody></table></div>
 {{else}}<div class="scroll"><table><thead><tr>
 <th>pushed</th><th>scope</th><th>reviewer</th><th>verifier</th>
 <th class="nowrap">findings</th><th class="nowrap">repro</th><th class="nowrap">verdicts</th><th>commit</th>
-</tr></thead><tbody>{{range .Reviews}}{{template "reviewrow" .}}{{end}}</tbody></table></div>{{end}}
+</tr></thead><tbody>{{range .Reviews}}{{template "reviewrow" .}}{{else}}<tr><td colspan="8">None recorded yet.</td></tr>{{end}}</tbody></table></div>{{end}}
 <p>{{if .Prev}}<a href="{{.Prev}}">← newer</a>{{end}} {{if .Next}}<a href="{{.Next}}">older →</a>{{end}}</p>
+{{if .Write}}` + writeJS + `{{end}}
 </div></body></html>
 ` + rowTmpls + verifyBanner
 
@@ -439,7 +445,7 @@ const chainTmpl = `<!doctype html>
 <td>{{.Pos}}</td><td class="nowrap">{{stamp .Pushed}}</td>
 <td>{{if or (eq .Kind "scan") (eq .Kind "review")}}<a href="{{entryURL .Short}}">{{.Kind}}</a>{{else}}{{.Kind}}{{end}}</td>
 <td class="small">{{.Note}}{{if .ChainProblem}} <span class="chip bad">{{.ChainProblem}}</span>{{end}}</td>
-<td>{{if .ChainProblem}}<span class="chip bad">problem</span>
+<td>{{if not .Verified}}<span class="chip warn">not verified</span>
 {{else if not .Signed}}<span class="chip warn">unsigned</span>
 {{else if not .KeyGiven}}<span class="chip warn">signed, not checked</span>
 {{else if .SigOK}}<span class="chip ok">verified</span>
@@ -447,6 +453,7 @@ const chainTmpl = `<!doctype html>
 </tr>{{end}}
 </tbody></table></div>
 <p>{{if .Prev}}<a href="{{.Prev}}">← newer</a>{{end}} {{if .Next}}<a href="{{.Next}}">older →</a>{{end}}</p>
+{{if .Write}}` + writeJS + `{{end}}
 </div></body></html>
 ` + verifyBanner
 

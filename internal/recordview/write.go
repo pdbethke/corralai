@@ -10,6 +10,12 @@ package recordview
 // header to this origin's own api/ routes, which run corral's own
 // subcommands.
 //
+// Every page carries it in write mode, controls or not: corral ui --write
+// prints a URL to "/", so the page the operator lands on must be the one
+// that captures the token and strips it from the address bar, and every
+// page after it must show who the verdicts are recorded as. On a page with
+// no controls the control loop below simply finds nothing.
+//
 // Differences from the uiweb page, deliberately: there is no in-page queue
 // re-render (a recorded verdict says "reload the page to refresh", because
 // pages are rendered from the ledger on each request); so there is also no

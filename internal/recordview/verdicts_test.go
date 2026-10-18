@@ -22,10 +22,22 @@ func TestTheQueueListsOnlyFindingsWithNoStandingVerdict(t *testing.T) {
 	}
 }
 
+// everyKind is a site with a page of every kind: a review, an audit, an
+// adjudication on the chain, and so every list and chain page.
+func everyKind() Site {
+	return buildOK([]auditpush.LedgerEntry{
+		reviewEntry("aaaaaaaaaaaa", 0),
+		warpLikeScan("ab12cd34ef56", true),
+		adjudicationEntry("cccccccccccc", "aaaaaaaaaaaa#R1", auditpush.VerdictConfirmed),
+	})
+}
+
+// A static page carries no script at all: on EVERY page the site lists,
+// not only the two that hold controls.
 func TestStaticPagesCarryNoWriteControls(t *testing.T) {
-	s := buildOK([]auditpush.LedgerEntry{reviewEntry("aaaaaaaaaaaa", 0)})
+	s := everyKind()
 	p, _ := NewPages()
-	for _, path := range []string{"verdicts.html", "entry/aaaaaaaaaaaa.html"} {
+	for _, path := range s.Paths() {
 		var b bytes.Buffer
 		if err := p.Render(&b, s, path); err != nil {
 			t.Fatal(err)
@@ -33,6 +45,35 @@ func TestStaticPagesCarryNoWriteControls(t *testing.T) {
 		for _, mustNot := range []string{"api/adjudicate", "Authorization", "data-verdict", "<script"} {
 			if strings.Contains(b.String(), mustNot) {
 				t.Fatalf("%s: a read-only page carries %q", path, mustNot)
+			}
+		}
+	}
+}
+
+// corral ui --write prints a URL to "/", so the token is captured on
+// whichever page the operator lands on: every page in write mode moves the
+// fragment to sessionStorage, strips it from the address bar and asks
+// api/whoami who it writes as, whether or not the page holds controls.
+// Without it the printed URL left the token in the address bar and lost it
+// one click later (final review of feat/recordview, 2026-10-18).
+func TestEveryPageCapturesTheTokenInWriteMode(t *testing.T) {
+	s := everyKind()
+	s.Write = true
+	p, _ := NewPages()
+	for _, path := range s.Paths() {
+		var b bytes.Buffer
+		if err := p.Render(&b, s, path); err != nil {
+			t.Fatal(err)
+		}
+		page := b.String()
+		for _, must := range []string{`sessionStorage.setItem('corral-ui-token'`, `history.replaceState`, `api/whoami`} {
+			if !strings.Contains(page, must) {
+				t.Errorf("%s in write mode is missing %q", path, must)
+			}
+		}
+		for _, mustNot := range []string{`localStorage`, `?t=`} {
+			if strings.Contains(page, mustNot) {
+				t.Errorf("%s must not use %q", path, mustNot)
 			}
 		}
 	}

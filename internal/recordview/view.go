@@ -68,10 +68,14 @@ type FindingView struct {
 // entry sits. Review and scan pages share it, so both say the same thing
 // about a hash, a link and a signature.
 type ChainView struct {
-	Hash         string
-	Short        string
-	File         string
-	Pushed       time.Time
+	Hash   string
+	Short  string
+	File   string
+	Pushed time.Time
+	// Verified is false when the verifying pass never saw this entry (it
+	// was appended while the ledger was read). The chain fields below are
+	// then unmeasured, and every page says "not verified" instead of them.
+	Verified     bool
 	ChainHashOK  bool
 	ChainLinkOK  bool
 	Signed       bool
@@ -118,7 +122,7 @@ type EntryView struct {
 	CrossVendor    bool
 }
 
-// SiteView is the whole record.
+// Site is the whole record.
 type Site struct {
 	// Write renders the adjudication controls. Only corral ui --write sets
 	// it, per request; a static build never does.
@@ -148,13 +152,16 @@ type Site struct {
 	// included and marked: a retracted scan stays in the chain, so its page
 	// stays too and says why it no longer stands.
 	Scans         []ScanView
-	Adjudications int
 	Retracted     int
 	Findings      int
 	Reproduced    int
 	Confirmed     int
 	Refuted       int
 	ChainProblems int
+	// Unverified counts entries the verifying pass never saw (the ledger
+	// changed between the read and the check). They are not chain problems:
+	// nothing measured them, so the page says "not verified", not failed.
+	Unverified int
 	// SigsChecked is false when no public key was supplied. The page must
 	// then say signatures were NOT CHECKED — never imply they passed, and
 	// never imply they failed. (`corral verify` sets this standard: "NOTHING
@@ -201,6 +208,8 @@ func repoWebURL(remote string) string {
 	return ""
 }
 
+// Build turns the ledger's entries and VerifyLedgerDir's checks of them
+// into a Site. sigsChecked says whether a public key was given to the checks.
 func Build(entries []auditpush.LedgerEntry, checks []auditpush.ChainCheck, sigsChecked bool) Site {
 	paired := PairChecks(entries, checks)
 	// Only verdicts that STAND: LiveEntries drops a retracted adjudication
@@ -235,7 +244,10 @@ func Build(entries []auditpush.LedgerEntry, checks []auditpush.ChainCheck, sigsC
 			v.Last = e.Pushed
 		}
 		c := paired[i]
-		if c.Problem != "" || !c.HashOK || !c.LinkOK {
+		switch {
+		case !c.Verified:
+			v.Unverified++
+		case c.Problem != "" || !c.HashOK || !c.LinkOK:
 			v.ChainProblems++
 		}
 		if c.Signed {
@@ -250,7 +262,7 @@ func Build(entries []auditpush.LedgerEntry, checks []auditpush.ChainCheck, sigsC
 		}
 		cv := ChainView{
 			Hash: e.Hash, Short: shortHash(e.Hash), File: filepath.Base(e.File),
-			Pushed:      e.Pushed,
+			Pushed: e.Pushed, Verified: c.Verified,
 			ChainHashOK: c.HashOK, ChainLinkOK: c.LinkOK, Signed: c.Signed,
 			SigOK: c.SigOK, ChainProblem: c.Problem, Genesis: c.Genesis,
 			Pos: i + 1, Kind: kind, KeyID: c.KeyID, Note: c.Note, KeyGiven: sigsChecked,
@@ -274,9 +286,6 @@ func Build(entries []auditpush.LedgerEntry, checks []auditpush.ChainCheck, sigsC
 			continue
 		}
 		switch e.Kind {
-		case auditpush.KindAdjudication:
-			v.Adjudications++
-			continue
 		case auditpush.KindReview:
 		default:
 			continue

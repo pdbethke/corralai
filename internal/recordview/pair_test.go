@@ -3,6 +3,7 @@
 package recordview
 
 import (
+	"bytes"
 	"strings"
 	"testing"
 
@@ -22,8 +23,52 @@ func TestChecksPairByHash(t *testing.T) {
 	if !got[0].SigOK || got[1].SigOK || got[1].Problem != "bad signature" {
 		t.Fatalf("checks paired by position or file, not hash: %+v", got)
 	}
-	if !strings.Contains(got[2].Problem, "not verified") {
-		t.Fatalf("an entry the verifying pass never saw must be a problem, got %+v", got[2])
+	if !got[0].Verified || !got[1].Verified || got[2].Verified {
+		t.Fatalf("only an entry no check names is unverified, got %+v", got)
+	}
+	if got[2].Problem != "" || got[2].HashOK || got[2].LinkOK {
+		t.Fatalf("an unverified entry carries no measured outcome, got %+v", got[2])
+	}
+}
+
+// An entry appended between the read and the verifying pass was never
+// checked. That is a could-not-measure, not a measured failure: no page may
+// call its hash a MISMATCH, its link BROKEN, it unsigned, or count it as a
+// chain problem. Each page says "not verified" and asks for a reload.
+func TestAnEntryTheVerifierNeverSawIsNotVerifiedRatherThanFailed(t *testing.T) {
+	seen := reviewEntry("aaaaaaaaaaaa", 0)
+	late := warpLikeScan("ab12cd34ef56", true)
+	entries := []auditpush.LedgerEntry{seen, late}
+	for i := range entries {
+		entries[i].File = entries[i].Hash + ".json.gz"
+	}
+	s := Build(entries, []auditpush.ChainCheck{okCheck(entries[0])}, true)
+	if s.ChainProblems != 0 || s.Unverified != 1 {
+		t.Errorf("ChainProblems=%d Unverified=%d, want 0 and 1", s.ChainProblems, s.Unverified)
+	}
+	p, _ := NewPages()
+	for _, path := range s.Paths() {
+		var b bytes.Buffer
+		if err := p.Render(&b, s, path); err != nil {
+			t.Fatalf("%s: %v", path, err)
+		}
+		page := b.String()
+		for _, bad := range []string{"MISMATCH", "BROKEN", "problem(s)", ">unsigned<"} {
+			if strings.Contains(page, bad) {
+				t.Errorf("%s: an unverified entry renders as measured: %q", path, bad)
+			}
+		}
+		switch path {
+		case "index.html", "chain-1.html", "entry/ab12cd34ef56.html":
+			if !strings.Contains(page, "not verified") {
+				t.Errorf("%s does not say the entry was not verified", path)
+			}
+		}
+	}
+	var b bytes.Buffer
+	_ = p.Render(&b, s, "index.html")
+	if !strings.Contains(b.String(), "1 entry changed while being read") {
+		t.Error("the index does not count what was not verified")
 	}
 }
 

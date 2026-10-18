@@ -9,7 +9,8 @@ import (
 	"os"
 )
 
-// WriteStatic writes every page of s under out. Writes go through os.Root,
+// WriteStatic writes every page of s under out, rendering each through the
+// same Render the live Handler uses. Writes go through os.Root,
 // the same defence the workspace substrate uses: every path is resolved
 // INSIDE out, so a symlink planted in the output directory cannot redirect
 // a write anywhere else. 0o750, not 0o755: nothing here needs to be

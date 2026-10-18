@@ -70,7 +70,7 @@ func main() {
 
 	live := auditpush.LiveEntries(entries)
 	retracted := auditpush.Retracted(entries)
-	verdicts := auditpush.Adjudications(entries)
+	verdicts := auditpush.Adjudications(live) // only verdicts that stand, as the page counts them
 	fmt.Printf("live entries:      %d\n", len(live))
 	fmt.Printf("retracted:         %d\n", len(retracted))
 	fmt.Printf("adjudications:     %d\n", len(verdicts))

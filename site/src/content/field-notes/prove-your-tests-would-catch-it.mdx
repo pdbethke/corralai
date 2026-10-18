@@ -41,6 +41,11 @@ Those are mature and free. Three things here are not the same.
 
 **It hands you the test, not a line number.** Traditional mutation testing tells you "mutant survived at line 47." Corral writes the test that kills it and proves the kill by running it. A report becomes a patch.
 
+> **Correction (2026-10-18):** corral attempts a test for each survivor and
+> keeps only the ones that pass on the unmutated code and fail on the fault; when
+> the writer cannot produce one, the survivor stays unproven. It does not always
+> hand back a test.
+
 **The faults are semantic, not syntactic.** Instead of flipping `>` to `>=`, it plants violations of a stated goal — so it measures whether your suite defends the contract, rather than whether it notices a character change.
 
 **The grader is never the author.** The model that writes the killing test cannot be the model that critiques the suite; the run is refused otherwise. That is the whole point of the project, and it is why this exists now. A large and growing share of code is written by an assistant, that assistant writes the tests, and the tests pass. Nothing in that loop is an independent check.

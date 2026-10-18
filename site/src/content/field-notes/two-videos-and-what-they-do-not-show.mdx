@@ -131,6 +131,12 @@ single benchmark. What does not drift is a *proven gap*: a specific
 demonstrated bug with a working test attached, which is why the merge gate
 keys on that and not on a percentage.
 
+> **Correction (2026-10-18):** a proven gap that is already recorded, the fault
+> and its test, stays inspectable and can be re-run against the same fault
+> locally with `corral certify --mutants`. But a fresh run regenerates its faults,
+> so whether a run rediscovers that gap is not guaranteed: discovery drifts too,
+> and a proven-gap gate can change between runs on unchanged code.
+
 **They are one file each.** `--top 1` on a repository with 21 candidates.
 The cost model is `O(mutants × your suite's runtime)`, and that is the honest
 reason: a whole-repo audit is something you opt into deliberately.

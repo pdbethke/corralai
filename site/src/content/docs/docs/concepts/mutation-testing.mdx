@@ -1,6 +1,6 @@
 ---
 title: Mutants, survivors, kill rates
-description: The vocabulary corral uses, what a "mutant" actually is (not the X-Men kind), and an honest account of which parts of this are a fifty-year-old idea and which parts are new.
+description: The vocabulary corral uses, its relationship to mutation-guided test generation, and the limits of an execution-demonstrated test gap.
 ---
 
 {/* SPDX-License-Identifier: Elastic-2.0 */}
@@ -10,8 +10,9 @@ borrowed from an established field, and if you haven't met them before the repor
 read like comic-book solicitations. This page is the vocabulary, plus a straight
 answer to the fair question *"isn't this just mutation testing?"*
 
-Short version: **the mutation part is not new and we don't claim it. What's new is
-what happens after a mutant survives.**
+Short version: **neither mutation testing nor generating tests for survivors is
+new.** Corral packages those techniques with execution checks, selectable model
+seats, CI integration, and a portable audit record.
 
 ## A mutant is a deliberately broken copy of your code
 
@@ -36,12 +37,12 @@ Now run **your existing test suite** against the broken version and watch what
 happens:
 
 - If a test **fails**, your suite noticed. The mutant is **killed**.
-- If every test still **passes**, your suite did not notice a real behaviour change.
+- If every test still **passes**, your suite did not detect the edit.
   The mutant **survived**.
 
-A survivor is the interesting outcome. It means there is a way your code can be
-wrong that your tests would sail straight past. If someone made that exact mistake
-in a PR, CI would go green.
+A survivor is a candidate test gap, not automatically a behavior change or a bug.
+The edit may be equivalent to the original program. For a non-equivalent edit,
+the suite passed despite that difference in this run.
 
 That's the whole trick, and it's why the numbers mean something a coverage
 percentage doesn't. Coverage tells you a line *ran*. A killed mutant tells you a
@@ -50,8 +51,9 @@ coverage and kill nothing.
 
 ## The rest of the vocabulary
 
-**Kill rate** — of the mutants planted, the fraction your suite caught. This is the
-adequacy grade. It is measured by executing your tests, never estimated and never
+**Kill rate** — of the mutants actually graded, the fraction your suite caught.
+Invalid and unmeasured mutants are excluded. This is a measurement of this exam,
+not a general correctness grade. It is measured by executing your tests, never
 self-reported by a model.
 
 **Baseline** — a run of your suite against your *unmodified* code, before any
@@ -70,8 +72,38 @@ A survivor is a *candidate*: a change your tests didn't catch. It stays disclose
 and unproven until a test actually kills it by execution.
 
 **Proven missed** — a survivor that corral then wrote a test for, where that test
-compiled, ran, passed on your correct code, and **failed on the mutant**. That's no
-longer a claim. It's a demonstrated gap plus the test that closes it.
+compiled, ran, passed on your unmodified code, and **failed on the mutant**. It is
+an execution-demonstrated test gap, not a defect found in the original program.
+The test still needs review for intended behavior, relevance and maintainability.
+The writer may fail to produce such a test; an unproven survivor stays unproven.
+
+## What the confidence interval does and does not mean
+
+The reported 95% Wilson interval uses a binomial sampling model. Its usual
+interpretation assumes independent observations from a representative sample of
+a defined fault population. Generated faults can be correlated, goal-directed
+and influenced by earlier runs; distinct edits are not necessarily independent
+samples. Corral's exam-size gate uses distinct graded edits rather than counting
+duplicate edits as extra observations, but that does not establish representativeness.
+
+The interval is **not a probability that your code is correct**, and a narrow
+interval is not proof that the exam covered every important failure mode.
+Certification applies to the recorded exam and execution conditions.
+
+A recorded fault/test pair remains inspectable, but a fresh run can discover
+different gaps, or none, even on unchanged code. Both kill-rate and proven-gap
+gates can vary. Replay a recorded mutant set when comparing test changes; test
+generation and flaky execution can still vary even with that set held fixed.
+
+## Individually proven tests are not automatically a merge-ready bundle
+
+Run generated tests in your full suite and review their assertions before adding
+them. Tests that pass alone can interfere through shared state, fixtures or order.
+On **unreleased main, after rc.24**, a per-survivor run with multiple proven tests
+also runs the merged authored file once on the unmodified code. Its
+`authored_together` result is `pass`, `fail`, or absent when not checked.
+A failure produces a **warning**; it does not change the individual proven count
+or certification status. A pass is one run, not a guarantee against flakiness.
 
 ## This technique is about fifty years old
 
@@ -105,26 +137,38 @@ general. corral's answer is procedural rather than clever: a survivor is never
 reported as a bug, only as a candidate, until a test kills it by execution. An
 equivalent mutant simply never gets proven, and never gets claimed.
 
-## What is actually new here
+## Related work and Corral's integration
 
-Three things, and none of them is the mutation.
+Mutation-guided test generation has substantial prior work.
+ACH, described in [*Mutation-Guided LLM-based Test Generation at Meta*](https://arxiv.org/abs/2501.12862)
+(Foster et al., arXiv, January 2025; FSE 2025 Companion, Industry track), plants
+concern-directed faults and generates tests that kill them.
+[LLMutantKiller](https://doi.org/10.1145/3832098) (Khalili, Domondon, Garg and
+Tip; ISSTA 2026) generates tests for surviving mutants produced by Stryker rather
+than by an LLM. Corral did not invent the plant-then-kill idea, and these
+citations are not a head-to-head performance comparison. Corral's distinction is
+the integrated workflow and how it handles evidence: grading only by execution in
+a sandbox, a hash-linked ledger, and a decorrelated critic that is advisory only.
 
-**The faults are proposed against a stated goal, not by mechanical operator.**
+Corral's offering is the integration of the following capabilities:
+
+**The faults are proposed against a stated goal, not by mechanical operator,** as ACH also does.
 Classical mutation testing flips syntax: every `+` becomes `-`, every `<` becomes
 `<=`. That's cheap and thorough and produces a lot of uninteresting damage. corral
 asks a model to introduce violations of a specific correctness or security goal —
 the kind of mistake a tired human would plausibly make. Fewer mutants, aimed at
 behaviour that matters.
 
-**The loop closes.** Classical tools stop at the number: *here is your mutation
-score, good luck.* corral takes the survivors and has a test-writer model write a
-test targeting them, then executes it. (The writer may be the same model that
-planted the mutants; what decides the outcome is the run, not either model.) It must compile, pass on your correct code,
+**Tests target survivors.** Corral takes the survivors and asks a test-writer model
+for tests targeting them, then executes the results. (The writer may be the same
+model that planted the mutants; what decides the outcome is the run, not either model.) A proven test must compile, pass on your unmodified code,
 and fail on the mutant. Only then does the gap count as proven — and you get the
 test, not just the diagnosis.
 
-**The result is evidence, not a report.** The verdict is signed and recorded so it
-can be queried later; where a witness is configured, it can also be anchored to an
+**The result carries evidence.** Local certification records are signed;
+repository and review ledger entries are signed when a certify key is configured
+and otherwise remain unsigned and hash-linked. The record can be queried later;
+where a witness is configured, a signed statement can also be anchored to an
 external transparency log (Sigstore Rekor) via `--transparency` — shipped, opt-in,
 off by default, and never on the `--local` path most of this site's examples run.
 See [Verify a record yourself](/docs/verify-a-record/) for the difference between a
@@ -132,10 +176,9 @@ signed record and an anchored one. It's built to gate a merge, which means it ha
 to be something a skeptical third party can check rather than something you tell
 them.
 
-That's the honest split. The measurement is a well-understood technique we
-implement conventionally. The adversarial half — plant, survive, **author a killing
-test**, prove by execution, sign the result — is where corral is doing something the
-existing tools don't.
+The value to evaluate is whether this integration returns useful, reviewable tests
+at an acceptable setup and execution cost. Establishing that advantage requires
+comparative runs and independent maintainer acceptance, not a novelty claim.
 
 ## Reading a real verdict
 

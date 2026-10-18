@@ -5,7 +5,7 @@
 [![docs](https://img.shields.io/badge/docs-corralai.dev-2f6f4e)](https://corralai.dev/docs/getting-started/)
 [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/pdbethke/corralai/badge)](https://securityscorecards.dev/viewer/?uri=github.com/pdbethke/corralai)
 
-**Your tests pass. Corral finds the bugs they miss — and hands you the tests that catch them.** It plants bugs in your code and runs your own test suite against each one. For every bug that slips through, it writes a test and runs it, keeping only tests that fail on the bug and pass on your real code. Proven, not suggested. Run on its own signing code, corral planted 78 bugs; 35 slipped past our own tests, and it wrote tests proving 30 of them were real gaps. We merged those tests the next day ([#210](https://github.com/pdbethke/corralai/pull/210)); [corralai.dev](https://corralai.dev/) shows one of them beside the bug it catches.
+**Your tests pass. Corral finds the bugs they miss — and hands you the tests that catch them.** It plants faults in your code and runs your own test suite against each one. For survivors, it attempts new tests and keeps only execution-demonstrated proofs: tests that fail on the fault and pass on your unmodified code. Not every survivor gets proven; the tests still need your review. Run on its own signing code, corral planted 78 faults; 35 slipped past our own tests, and it wrote tests proving 30 of them were catchable gaps. We merged tests from that run the next day ([#210](https://github.com/pdbethke/corralai/pull/210)); [corralai.dev](https://corralai.dev/) shows one beside the fault it catches.
 
 **Everyone is building build harnesses. Corral is the one that refuses to build.** It never authors the code it judges: the faults it plants are probes, discarded once scored, and the tests it writes are evidence — each proven against its own fault and handed back to you.
 
@@ -14,9 +14,9 @@
 - **`certify`** — by execution. Corral breaks your code on purpose and checks whether your tests notice: it plants faults that violate a stated guarantee, runs **your own suite** against each one in a sandbox, and reports how many it killed — measured, never taken on a model's word.
 - **`review`** — by adversary. A model that has never seen your repository is told to assume the code is wrong and prove it; every claim comes with a script corral runs, a claim that does not reproduce is demoted on the record, a second seat tries to refute what stands, and both seats are graded by what held.
 
-Both write signed, hash-linked entries into a ledger in your own repository, and every seat — the one planting faults, the one writing tests, the reviewer, the verifier — is ranked by the record it leaves. Corral never writes the code. That is what it judges.
+Both write hash-linked entries into a ledger in your own repository, signed when a certify key is configured and unsigned otherwise. Every seat — the one planting faults, the one writing tests, the reviewer, the verifier — can be ranked by the record it leaves. Corral never writes the code. That is what it judges.
 
-**GitHub becomes the record.** A CI runner forgets everything when the job ends and GitHub is not a database; corral makes the two into one. Run as a GitHub Action, every verdict is a signed, hash-linked entry committed to an orphan branch, `corral/ledger` — and any DuckDB reads that branch straight from GitHub, over HTTPS, as tables — no clone, no server, nothing to run — so the record sits in an analytical engine from the first entry: the weakest files across every scan, which model catches bugs in which language, the cost per audited file, whose claims hold, one `GROUP BY` each; MotherDuck is the same engine over every repository that pushes. `corral ledger verify` walks the chain from a clean checkout, so a stranger checks the record against its own signatures, not against you — and the next run reads the branch as its memory: faults already planted become the generator's prior, unchanged files keep their verdict, the planner knows what was reviewed. [How it works](https://corralai.dev/docs/how-it-works/) has the query you can paste; corral's own record is at [`corral/ledger`](https://github.com/pdbethke/corralai/tree/corral/ledger).
+**GitHub becomes the record.** A CI runner forgets everything when the job ends. The ledger workflow preserves each recorded verdict as a hash-linked entry on an orphan branch, `corral/ledger`, signed when a certify key is configured. Any DuckDB can read that branch over HTTPS as tables: the weakest files across scans, which model catches faults in which language, cost per audited file, and whose review claims hold. MotherDuck is the same engine over every repository that pushes. `corral ledger verify --pub <trusted-key>` checks retained signatures and links; detecting deletion from the tail requires an external record of the expected head. The repository owner controls the files, so this is tamper evidence, not immutable or guaranteed-complete history. The next run reads earlier faults as the generator's prior, reuses eligible verdicts, and knows which scopes were reviewed. [How it works](https://corralai.dev/docs/how-it-works/) has the query; corral's own record is at [`corral/ledger`](https://github.com/pdbethke/corralai/tree/corral/ledger).
 
 ***Nemo iudex in causa sua*** — no one may be judge in their own cause. The one who
 wrote the code doesn't get to certify it: the verdict is **measured by execution**, by
@@ -152,8 +152,8 @@ actually test anything, or do they just pass?* — and answers it by execution:
 - Your **own test suite** is run against every one of them, **in a jail** — the
   fraction it catches (the *kill-rate*) is the adequacy score, measured, never a
   self-report.
-- A **test-writer** authors a compiling test that kills whatever your suite missed,
-  correcting itself when its test doesn't compile rather than blindly repeating. A
+- A **test-writer** attempts a compiling test for each survivor and keeps the ones
+  that prove, correcting itself when its test doesn't compile rather than blindly repeating. A
   surviving mutant is *disclosed, unadjudicated* — a real gap, or an equivalent
   mutant no test can catch, your call. Only a survivor a compiling test actually
   kills is a **proven** gap. Zero proven gaps means *nothing was proven this run* —
@@ -550,6 +550,28 @@ about your repo.)
 Which is why zero proven gaps means *nothing was proven this run*, and never *your
 tests are fine*.
 
+**A recorded proof is specific; discovery is variable.** A fresh run can plant
+different faults and produce different tests, so both the kill rate and the
+proven-gap count can change on unchanged code. Replay a recorded mutant set when
+comparing suites; writer success and flaky execution can still vary. A proven
+test shows a distinction from one planted fault, not that the original program
+is correct or that the assertion matches its intended specification.
+
+**Review and integrate the tests, do not merge them blindly.** Tests that pass
+alone can interfere through fixtures, global state or execution order. On
+unreleased main after rc.24, per-survivor runs with multiple proven tests also
+run the merged file once against the unmodified code. `authored_together` is
+`pass`, `fail`, or absent when not checked; a failure warns without changing the
+individual proven count or certification status. A pass is not a flakiness
+guarantee. Run the tests in your full suite before adding them.
+
+Mutation-guided test generation has prior art, including
+[Meta's ACH (arXiv January 2025; FSE 2025 Companion, Industry track)](https://arxiv.org/abs/2501.12862) and
+[LLMutantKiller (ISSTA 2026)](https://doi.org/10.1145/3832098).
+Corral's offering is the integration of execution checks, model seats, CI and a
+portable record, not invention of the survivor-to-test loop. These citations are
+not evidence that Corral outperforms those systems.
+
 ### Certify a change by its declared check
 
 The other entry point takes any commit and any command:
@@ -720,7 +742,8 @@ real (marked) verdict instead of a bare internal-failure error.
 --repo` run keeps what it computes — a row per file the scan audited (with
 its kill rate) or rejected (with a machine-stable reason), every mutant's
 fate, every model call, the run's events, the verdict JSON and the authored
-test — as **one signed, hash-linked, gzipped JSON entry** under the audited
+test — as **one hash-linked, gzipped JSON entry** (signed when a certify key is
+configured) under the audited
 repo's `.corral/ledger/` (`--ledger <dir>` moves it, `--no-ledger` skips
 it, `$CORRAL_LEDGER` overrides the default). Plain text, ~21 KB a run; a
 git branch on a runner, a folder on a laptop; DuckDB reads it in place.
@@ -1080,7 +1103,10 @@ runner. The design, and the week that produced it:
   outcome, the model calls, the events — that names the previous entry's
   hash and, when a certify key is configured, carries an Ed25519 signature
   over its own. `corral verify --ledger .corral/ledger` walks the chain and
-  names an entry that was edited, removed or reordered. DuckDB is the view,
+  checks retained hashes, links and signatures under a supplied public key.
+  Interior deletion breaks a link; tail truncation needs an external expected
+  head to detect. An unsigned chain can be rewritten and rehashed by its owner.
+  DuckDB is the view,
   never the store: `seal --db <dir>`, `models rank --db <dir>` and `verify
   --db <dir>` read a directory as they read a warehouse, `--push md:` sends
   the same entries to MotherDuck, and plain DuckDB reads the files with
@@ -1123,9 +1149,10 @@ runner. The design, and the week that produced it:
   naming one is refused before it starts. Local (Ollama) seats now meter their tokens
   too; they used to read as zero.
 - **Confidence — two terms, never one number.** Beside every kill rate the report
-  prints what the bare rate hides: its **95% interval** over the mutants graded
-  (Wilson, because the exams are small and the rates sit near 0 and 1 — `0.62,
-  95% interval 0.30–0.86 (n=8)`), and the exam's **reach** — how many of the
+  prints what the bare rate hides: its **95% interval**, computed over the
+  distinct graded edits only, so a repeated edit is counted once (Wilson, because
+  the exams are small and the rates sit near 0 and 1 — `0.62,
+  95% interval 0.30–0.86 (n=8 distinct)`), and the exam's **reach** — how many of the
   file's symbols and decision points a fault actually landed on (`reached 8 of 8
   symbols, 8 of 8 decision points`). Both are computed from what the ledger
   records per mutant (its line span) and per file (its decision points), so a
@@ -1136,7 +1163,11 @@ runner. The design, and the week that produced it:
   reached all of them. The point estimate still decides the rate, but the
   interval now gates certification: a rate that clears the threshold on an
   interval wider than 0.35 is routed to `needs-review` and marked
-  `[INDICATIVE — …]`. Reach is reported and signed, not gated.
+  `[INDICATIVE — …]`. Reach is reported and signed, not gated. The usual Wilson
+  interpretation assumes independent observations sampled representatively from
+  a defined fault population; generated edits do not establish those assumptions.
+  This interval is not a probability of software correctness, even when narrow.
+  See [the measurement limits](https://corralai.dev/docs/concepts/mutation-testing/#what-the-confidence-interval-does-and-does-not-mean).
 - **The shadow challenger.** `--shadow-model <model>` fans a challenger
   mutant-generator seat across every region for a region-controlled,
   execution-proven head-to-head between generator models — same file, same goal,

@@ -497,7 +497,7 @@ and the fix belongs in the code, not a caveat in these docs.
 | `tests` | no | `""` | Optional JSON file mapping repo-relative **source** paths to their test files, consulted before filename convention. Needed whenever your project names tests after behaviour rather than after source files — common in JS/TS, where convention can pair *nothing* and the gate would then have no file to audit. A mapping to a file that does not exist is refused, not silently ignored. |
 | `timeout` | no | `""` (corral's own default, 30m) | Per-file budget, a Go duration. The default is sized for a PR author who did not choose to start an hours-long job, not for a whole audit: every mutant re-runs your suite, so one large file on a hosted runner is hours. Raise it (and the job's `timeout-minutes`) when you want the complete audit rather than a bounded sample. |
 | `max-tokens` | no | `""` (no cap) | Cap on model tokens for the audit — input + output, every audit seat, every file. The review step is not capped: `corral review` has no token cap. Checked before each call and charged after it; past the cap no further model call is made, and the cost line says so. The money bound, beside `top` (files) and `timeout` (clock). |
-| `ledger` | no | `""` | A directory inside the checkout that is the repository's **signed ledger** — see "The ledger branch" below. This run's record is written as one JSON entry in `<ledger>/scans/` (naming the previous entry's hash, signed when a certify key is configured — see the honesty notes under "The ledger branch") and its graded mutants to `<ledger>/mutants/<commit>.json`; earlier entries are handed to the generator as a **prior** (same-bytes files only; the report says which). Commit the directory back to the `corral/ledger` branch after the step. |
+| `ledger` | no | `""` | A directory inside the checkout that is the repository's **hash-linked ledger** — see "The ledger branch" below. This run's record is written as one JSON entry in `<ledger>/scans/` (naming the previous entry's hash, signed when a certify key is configured — see the honesty notes under "The ledger branch") and its graded mutants to `<ledger>/mutants/<commit>.json`; earlier entries are handed to the generator as a **prior** (same-bytes files only; the report says which). Commit the directory back to the `corral/ledger` branch after the step. |
 | `top` | no | `""` (no bound on a pull request; 25 on a whole-repository run) | Audit at most this many of the highest-ranked candidate files. On a pull request the diff is the bound, and corral's default of 25 does not apply to it: left empty, every changed file that pairs with a test is audited. Set it to cap a PR; the changed files it cuts are listed as not audited. An audit costs roughly (mutants × your suite's **whole** runtime) **per file**, and the file count comes from the PR's diff — a number the author picks, not you. See "What one run costs" below before raising it. |
 | `path` | no | `""` (the whole repository) | Audit only the files under this directory, keeping the checkout whole: one package of a monorepo, such as a crate of a Cargo workspace. Tests are still found anywhere in the repository, the build still sees the root's files, and the ledger entry records the scope. |
 | `min-kill-rate` | no | `""` (unset) | Fail the run (exit 1) if **any individual audited file's** kill rate is below this value. Range 0.0-1.0 inclusive; a *minimum*, so a file exactly at the value passes. Opt-in — leave empty to keep the pre-`min-kill-rate` behaviour, where a weak-but-gradable suite still exits 0. See "Failing on a weak kill rate" below. |
@@ -542,15 +542,21 @@ protection keeps a fork's pull request from writing to it, and the git
 author of each commit is the principal. The files are the repository's own
 code and numbers; nothing leaves that was not already there.
 
-**What the branch holds is a signed, hash-linked ledger, in plain text.**
+**What the branch holds is a hash-linked ledger, signed when keyed, in plain text.**
 Every scan is one JSON file under `scans/` — the same five grains a
 warehouse push writes (scan, files, mutants with span/shape/outcome, model
 calls, events) — that names the previous entry's hash and, when the run has
 a certify key, carries an Ed25519 signature over its own. Editing an entry
-breaks its hash; removing or reordering one breaks the next entry's link;
+breaks its hash until someone re-hashes and re-links the chain, which needs
+no key for unsigned entries and only the signing key for signed ones;
+removing or reordering an interior entry breaks the next entry's link;
 `corral verify --ledger <dir>` walks the whole chain and names the entry
-that fails. It is the part of a blockchain that was always a good idea —
-an append-only log where every entry is signed and names its predecessor —
+that fails. It reports an unsigned entry among signed ones as a note, not
+a failure, and dropping the newest entries (tail truncation) leaves a valid
+chain; only an external anchor, a Rekor receipt or a published chain head,
+detects a re-signed chain or a missing tail. It is the part of a blockchain
+that was always a good idea — an append-only log where each entry names its
+predecessor —
 with one writer per branch and, when a stranger must trust it, Sigstore's
 public log as the witness instead of consensus. And it is just text: `cat`
 it, diff it in a pull request, `jq` it, or read the whole branch with
@@ -671,10 +677,11 @@ fill a MotherDuck database from runs that had no `push` input, or to
 carry a branch pulled later. Source only with `--push-source`; `--dry-run`
 plans and writes nothing.
 
-**Taking something back, without deleting it.** A chain cannot have an
-entry removed quietly — delete one and the next entry's link breaks, and
-`verify --ledger` names it — so the record has two verbs for the two honest
-cases. A run that should not count (a broken environment, a suite that
+**Taking something back, without deleting it.** An interior entry cannot
+be removed without a trace — delete one and the next entry's link breaks, and
+`verify --ledger` names it (dropping the newest entries is not detectable
+from the chain alone; see above) — so the record has two verbs for the two
+honest cases. A run that should not count (a broken environment, a suite that
 did not import, a scan of the wrong commit) is **retracted**: `corral
 ledger retract .corral/ledger <hash> --reason "…"` appends an entry that
 names it and says why. The retracted scan stays in the chain — it

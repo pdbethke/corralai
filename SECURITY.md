@@ -7,7 +7,9 @@ inside the code it reads (a prompt injection in a comment or a test). The postur
 from that:
 
 > **Nothing a model says is trusted, and nothing a model wrote runs unconfined without
-> you choosing that.** A verdict is decided by execution, and every result is signed.
+> you choosing that.** A verdict is decided by execution. `certify --local` signs with
+> its local key; repository and review ledger entries are signed when a certify key
+> is configured and otherwise remain unsigned and hash-linked.
 
 ## What runs where
 
@@ -52,15 +54,41 @@ blocked it). Do not run an audit there with API keys exported in other shells, o
 
 ## The record
 
-- Every `certify --repo` and `review` run writes a **signed (Ed25519), hash-linked** entry to a
-  ledger directory, by default `.corral/ledger`, and in CI to the orphan branch
-  `corral/ledger`. An edited, removed or re-ordered entry breaks the chain;
-  `corral verify --ledger <dir> --pub <key>` names it. The key that signs corral's own ledger
-  is published as `LEDGER_PUBKEY` and anchored in Sigstore Rekor.
+- Unless recording is disabled, `certify --repo` and `review` write **hash-linked**
+  entries to a ledger directory, by default `.corral/ledger`. They carry an Ed25519
+  signature when a certify key is configured and are **unsigned** otherwise. In CI,
+  the workflow must preserve the directory, for example on the orphan branch
+  `corral/ledger`; the Action alone does not persist that branch.
+- `corral verify --ledger <dir> --pub <key>` checks hashes, links and signatures
+  against a public key supplied by the verifier. A signature authenticates retained
+  bytes under that key, not the truth of the audit. An unsigned chain has no signer
+  authenticity: its owner can recompute hashes. Removing an interior entry breaks
+  its successor's link, but **tail truncation** leaves the remaining chain valid.
+  Detecting a missing tail requires an **external** record of the expected head.
+  The owner can delete or rewrite local files; the ledger is tamper-evident under
+  these trust assumptions, not immutable or automatically complete. Whoever holds
+  the signing key can rewrite and re-sign the whole chain, and `ledger verify`
+  reports an unsigned entry among signed ones as a note, not a failure; only an
+  external anchor (a Rekor receipt or a published chain head) detects either.
+  Corral's own signing key is published as `LEDGER_PUBKEY` and anchored in Rekor.
 - `certify --repo --attest --transparency` logs the signed statement to **Rekor**, a public,
   append-only log, so a record can be checked by someone who trusts neither you nor us.
   `corral certify verify` refuses an unanchored record unless you pass `--allow-unanchored`.
 - A record's own embedded key is never a trust anchor: verification takes the key from you.
+
+## Scope of an execution proof
+
+A proven gap demonstrates that a test passes on the unmodified code and fails on
+a particular planted fault. It does not prove that the original code is correct,
+that the mutation is a realistic production defect, or that the test expresses the
+intended specification. Likewise, a reproduction script's exit status is evidence
+to inspect, not independent proof that its interpretation is correct.
+
+Generated tests still need human review and execution in the project's full suite.
+On unreleased main, per-survivor runs with multiple proven tests also check the
+merged file once on the unmodified code (`authored_together`). A failure is a
+warning, not a change to the individual proofs, counts or certification status.
+An absent result means not checked; even a pass is not a flakiness guarantee.
 
 ## Keys and cost
 

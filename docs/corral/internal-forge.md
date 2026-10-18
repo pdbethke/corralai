@@ -6,9 +6,9 @@ The GitHub Action is a convenience, not a dependency. Everything it does is
 one `corral certify --repo` invocation plus a git branch, and both work on
 any forge — including one that nothing outside your network can reach.
 That is the point for an organization with an internal forge: **the record
-never leaves the perimeter.** Every scan's entry is a signed, hash-linked
-file in a branch of the repository it audits; it is verified with a public
-key you hold; DuckDB reads it in place on any machine that can clone the
+never leaves the perimeter.** Every scan's entry is a hash-linked file, signed
+when a certify key is configured, in a branch of the repository it audits; a
+signed entry is verified with a public key you hold; DuckDB reads it in place on any machine that can clone the
 repo. There is no warehouse to stand up and no service to trust.
 
 Two things to state exactly, because the docs on the public forge state
@@ -26,8 +26,8 @@ them and yours should too:
   identity and no key. Off GitHub the
   chain's trust rests on the **certify key** you configure
   (`CORRALAI_CERTIFY_KEY`, a 32-byte Ed25519 seed as hex — or
-  `CORRALAI_CERTIFY_KEY_FILE` naming a file holding the same): every entry
-  is signed with it, `corral verify --ledger <dir> --pub <hex>` checks every
+  `CORRALAI_CERTIFY_KEY_FILE` naming a file holding the same): each entry
+  written while it is configured is signed with it, `corral verify --ledger <dir> --pub <hex>` checks every
   signature against its public half, and custody of that seed is the
   thing your process has to get right. Keep it in the CI secret store,
   never in the repository. There is no list of trusted keys: `--pub` takes

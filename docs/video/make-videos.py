@@ -72,7 +72,7 @@ cards=[(0.0,'one real run on flask, 1× speed — each wait on the jail or a mod
        ('goal','the goals: what this file promises, derived from the code'),
        ('budgeted by complexity','forty faults planted in app.py — each one violates a goal'),
        ('graded mutants', scored() or 'flask\'s own suite runs against every fault, in a jail — measured by execution, never a model\'s word'),
-       ('survivor writer','a second model writes a test for each survivor; each test is proven alone against its fault'),
+       ('survivor writer','a second model attempts a test for each survivor and keeps the ones that prove, each run alone against its fault'),
        ('kill rate 0.','the verdict — kill rate, survivors, the gaps proven — signed'),
        ('rekor index','and entered into Sigstore\'s public transparency log: a receipt anyone can check against the log, not against us'),
        ('ledger: entry written','one entry, on a branch in the repo'),

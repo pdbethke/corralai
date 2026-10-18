@@ -120,7 +120,7 @@ instead, with no sudo required.
    not the tool's — corral won't call an unproven survivor a real bug.
 4. **Test-writer.** For each surviving mutant, a test-writer model (a
    different model than the critic, enforced — decorrelation isn't optional)
-   writes a targeted test; if its first attempt doesn't compile, the compiler's
+   attempts a targeted test; if its first attempt doesn't compile, the compiler's
    own error is **fed back** so it corrects rather than blindly repeating. When
    the jail confirms the test kills the mutant, *that* survivor is now a
    **proven**, catchable gap — not a fluke of the harness — and the test is
@@ -151,7 +151,7 @@ exits 1 with the provider's error and no verdict.
 ```
   status:        NEEDS-REVIEW (dev suite killed 6/8 mutants)
   dev_kill_rate: 0.75
-  95% interval:  0.41–0.93 (n=8)
+  95% interval:  0.41–0.93 (n=8 distinct)
   survivors:     2
 ```
 
@@ -159,6 +159,13 @@ The certify bar is a kill rate of 0.8. This one is below it, so the run routes t
 honest failure mode. The kill-rate is measured, not asserted: it's mutation
 testing executed in the sandbox, never the model's self-report of how good the
 test is.
+
+The interval is computed over the distinct edits that were graded (`n=8 distinct`),
+and it describes this sample of generated faults, assuming independent draws; it is
+not a calibrated probability that the software is correct. Generated edits can share blind spots and are not
+necessarily independent or representative. See [the measurement limits](/docs/concepts/mutation-testing/#what-the-confidence-interval-does-and-does-not-mean).
+Review any generated tests and run them in your full suite before merging;
+passing individually does not guarantee that they work together.
 
 ## The signed record
 
@@ -228,6 +235,7 @@ guarantee the audit is grading, visible in one command.
 **green** 80-test suite: **15/20 — NEEDS-REVIEW**. Same file, same command, and
 CI is happy with both. That gap is the whole product in one command.
 
-Your numbers will not match ours exactly — the mutants are generated fresh each
-run, so the two verdicts are samples, not constants. What reproduces is the
-direction: the thinner suite scores materially worse on the same code.
+Your numbers will not necessarily match ours — the mutants are generated fresh
+each run, so these recorded verdicts are not constants. Even the direction of a
+fresh comparison can change; a thinner suite is not guaranteed to score worse on
+a different generated exam. Replay the same recorded mutants to compare suites.

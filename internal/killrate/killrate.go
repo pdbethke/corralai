@@ -15,6 +15,10 @@ import "math"
 // approximation because the exams here are small (a floor of 5) and the
 // rates sit near 0 and 1, exactly where the approximation fails. Returns
 // (0, 0, false) for graded == 0: an interval over nothing is not [0, 1].
+// Its usual coverage interpretation assumes independent Bernoulli observations
+// sampled representatively from a defined population. Goal-directed generated
+// mutants do not establish those assumptions, even after duplicate edits are
+// collapsed. This is not a probability of software correctness.
 func WilsonInterval(killed, graded int) (low, high float64, ok bool) {
 	if graded <= 0 || killed < 0 || killed > graded {
 		return 0, 0, false

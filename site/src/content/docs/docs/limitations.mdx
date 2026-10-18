@@ -73,7 +73,24 @@ See also [Trust & security](/docs/concepts/trust-and-security/) and `SECURITY.md
   "nothing was proven in this run", never "your tests are fine."**
 - **A kill rate is a sample, not a constant.** Mutants are generated fresh each
   run, so an unchanged file scores differently run to run; `--mutants` pins the
-  set when you need a comparison.
+  set when you need a comparison. Proven-gap discovery can vary too: a recorded
+  pair remains evidence, but a fresh run may not find it. Writer success and flaky
+  execution can vary even when the mutant set is fixed.
+- **A confidence interval is not confidence in software correctness.** The Wilson
+  calculation assumes independent observations from a representative sample.
+  Goal-directed generated edits do not establish those assumptions. Its exam-size
+  gate rejects thin evidence; it does not turn the exam into an exhaustive audit.
+  See [the measurement limits](/docs/concepts/mutation-testing/#what-the-confidence-interval-does-and-does-not-mean).
+- **Individually proven tests are not a merge-ready bundle.** Review their
+  assertions and run them in your full suite. On unreleased main after rc.24,
+  per-survivor runs with multiple proven tests also check the merged file once.
+  `authored_together: fail` warns without changing the individual proven count or
+  certification status; an absent field means not checked. Passing once does not
+  establish freedom from flakiness.
+- **A ledger is not immutable or automatically complete.** Entries can be unsigned
+  when no certify key is configured. The owner can rewrite unsigned hashes or
+  delete files; a missing tail requires an externally held expected head to detect.
+  A trusted signature authenticates bytes, not the truth of an audit's claims.
 - **It does not make a model immune to instructions in the code it reads.** The
   control is that no model's output decides a verdict: the kill rate and a proven
   gap are execution, and the critic is advisory and never gates.
@@ -182,8 +199,24 @@ From the [roadmap](https://github.com/pdbethke/corralai/blob/main/ROADMAP.md)
 - **A review cockpit** docked beside the diff.
 
 The through-line: every capability is judged by a party that did not produce
-the thing, human-gated, attributed, and written to a record the audited party
-does not own.
+the thing, checked by execution where possible, and recorded with its evidence
+and limits. The repository owner controls the ledger; a third party verifies it
+against a trusted key and any external anchors, not against an ownership claim.
+
+## Adoption and comparative evidence still to gather
+
+Maintainer-run audits demonstrate individual executions, not independent adoption
+or product-market fit. This documentation does not establish a repeat-use study
+by outside maintainers or a head-to-head advantage over other test-generation
+tools. [The related-work discussion](/docs/concepts/mutation-testing/#related-work-and-corrals-integration)
+names prior approaches; citations are not benchmarks.
+
+An outside trial should retain unsuccessful attempts as well as useful results:
+setup failures, time to first useful test, API spend and runner time, proposed
+tests reviewed, tests accepted as useful and nonredundant, rejection reasons,
+review effort, and voluntary repeat use. The useful outcome is cost and elapsed
+time per accepted test, not just mutant count. No results for that trial are
+claimed here.
 
 Want to shape it? Issues and verified-harness PRs are welcome on
 [GitHub](https://github.com/pdbethke/corralai).

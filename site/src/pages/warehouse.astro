@@ -31,8 +31,8 @@ const PRESETS = [
     sql: `-- The scorecard the replay's panes link to. Every row is EXECUTION:\n-- mutants a seat planted, and how many the developer's suite killed.\n-- A test-critic plants nothing, so its planted count is 0 by design --\n-- it reads the suite, it never gates the verdict.\nSELECT model, role, COUNT(*) AS seats, SUM(mutants_planted) AS planted,\n       SUM(mutants_killed) AS killed,\n       ROUND(100.0*SUM(mutants_killed)/NULLIF(SUM(mutants_planted),0),1) AS caught_pct\nFROM bug_catches\nGROUP BY 1,2\nORDER BY planted DESC;`,
   },
   {
-    label: 'Every signed verdict, by repo',
-    sql: `-- One row per repo per verdict, joined from the signed ledger to the\n-- per-seat telemetry. Libraries we did not write sit beside our own code,\n-- and corral's own repo is not the best score on the board.\nSELECT l.repo, IF(l.certified,'CERTIFIED','needs-review') AS verdict,\n       COUNT(DISTINCT l.id) AS records,\n       SUM(b.mutants_killed) AS killed, SUM(b.mutants_planted) AS planted,\n       ROUND(100.0*SUM(b.mutants_killed)/SUM(b.mutants_planted),1) AS kill_pct\nFROM audit_ledger l JOIN bug_catches b ON b.record_id = l.id\nGROUP BY 1,2\nORDER BY kill_pct DESC;`,
+    label: 'Every recorded verdict, by repo',
+    sql: `-- One row per repo per verdict, joined from the ledger to the\n-- per-seat telemetry. Libraries we did not write sit beside our own code,\n-- and corral's own repo is not the best score on the board.\nSELECT l.repo, IF(l.certified,'CERTIFIED','needs-review') AS verdict,\n       COUNT(DISTINCT l.id) AS records,\n       SUM(b.mutants_killed) AS killed, SUM(b.mutants_planted) AS planted,\n       ROUND(100.0*SUM(b.mutants_killed)/SUM(b.mutants_planted),1) AS kill_pct\nFROM audit_ledger l JOIN bug_catches b ON b.record_id = l.id\nGROUP BY 1,2\nORDER BY kill_pct DESC;`,
   },
   {
     label: 'Every audited file had a proven gap',

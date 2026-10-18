@@ -6,10 +6,11 @@
   <p>
     Point corral at a code change and the tests that are supposed to cover it.
     A decorrelated herd of models plants goal-violating faults in the code and
-    runs <em>your</em> tests against each one in a jail — measuring the kill
+    runs <em>your</em> tests against each one in the selected execution substrate — measuring the kill
     rate by execution, never by a self-report. A different model reads the
-    suite cold and critiques it; any fault that survives gets a missing test
-    written and <em>proven</em> to catch it. What comes out is a signed
+    suite cold and critiques it; the writer attempts to author a test for
+    each survivor. A proof is not guaranteed: only tests that pass on the
+    unmodified code and fail on a survivor count. What comes out is a recorded
     verdict: <strong>certified</strong>, or <strong>needs-review</strong>. No
     one may be judge in their own cause.
   </p>
@@ -19,17 +20,17 @@
 [mutant-generator] plants goal-violating faults in the code
   │ each fault ↓
   ▼
-run YOUR tests against each fault, in a bwrap jail ──► kill-rate (never a self-report)
+run YOUR tests against each fault ──► kill-rate (never a self-report)
   │
   ├── faults your tests killed        → covered
-  └── survivors (a fault slipped past) → [test-writer] writes the missing
-                                          killing test, proven against the fault
+  └── survivors (a fault slipped past) → [test-writer] attempts a killing test
+                                          keep only execution-demonstrated proofs
   │
   ▼
 [test-critic — a DIFFERENT model reads the suite cold]
   │
   ▼
-SIGNED VERDICT ── certified   (kill-rate clears the bar, the writer neither
+RECORDED VERDICT ─ certified (kill-rate clears the bar, the writer neither
                │                failed nor wrote an unsound test)
                └─ needs-review (below the bar, a writer failure, or an exam too
                                 small to judge — a human adjudicates)</pre>
@@ -38,8 +39,9 @@ SIGNED VERDICT ── certified   (kill-rate clears the bar, the writer neither
     <div class="tech">
       <h3>Decorrelated by construction</h3>
       <p>
-        Run one LLM in every role and the "critic" shares the fault-planter's
-        blind spots — the same model can't be surprised by its own bugs.
+        Reusing one model in every role risks correlated blind spots.
+        A cold run of the same model can still find something an earlier run missed;
+        different model names or vendors do not guarantee independence.
         Corral holds one pair apart by rule: <code>CheckDecorrelation</code> refuses a run where the critic and the test-writer are the same model.
         The fault-planter and the writer may share a model, and a run whose
         seats all come from one vendor is allowed — the verdict says so ("every
@@ -64,7 +66,7 @@ SIGNED VERDICT ── certified   (kill-rate clears the bar, the writer neither
       <p>
         A suite's grade isn't an opinion. The kill rate is <strong>mutation
         testing, measured by execution on your machine or runner</strong>: your real command — <code>go test</code>, <code>pytest</code>, <code>npm test</code>, <code>cargo test</code>, anything — is run against each planted fault
-        inside a <code>bwrap</code> jail, and the exit codes decide what died.
+        inside a sandbox by default (on the host with <code>--substrate workspace</code>), and the exit codes decide what died.
         A model never tells us it did well; a test that claims to catch a bug
         has to actually catch it, on a real run, on the record. Clear the bar
         with no blocking gap and the change is certified; fall short and it
@@ -73,15 +75,18 @@ SIGNED VERDICT ── certified   (kill-rate clears the bar, the writer neither
       <a href="/docs/concepts/mutation-testing/">Certify by execution →</a>
     </div>
     <div class="tech">
-      <h3>Survivors don't just get flagged — they get a test</h3>
+      <h3>Survivors get a test-writing attempt, not a promise</h3>
       <p>
         A critic who only complains is furniture. When a planted fault slips
-        past your suite, the <strong>test-writer</strong> writes the test you
-        were missing and corral <em>proves</em> it: runs the new test
+        past your suite, the <strong>test-writer</strong> attempts a test and
+        corral checks it: runs the new test
         against the surviving fault and watches it fail, then against clean
         code and watches it pass. The gap comes back to you as <code>proven_missed</code> — a fault your suite missed and the exact test
         that catches it — not a lecture. It is a gap in your tests, not a bug
         found in your code; whether the test belongs is still your call.
+        A writer that cannot prove a survivor leaves it unproven, not clean.
+        Review the tests and run them in your full suite before merging:
+        individual proofs do not guarantee that the tests work together.
       </p>
       <a href="/field-notes/your-tests-suck/">Three real verdicts →</a>
     </div>
@@ -95,10 +100,10 @@ SIGNED VERDICT ── certified   (kill-rate clears the bar, the writer neither
         when one is not (still hash-linked). Either way it carries the kill
         rate, the survivors, the written tests, and which model played which
         role — <code>ProducedBy: [mutant-generator, test-critic, test-writer]</code>,
-        each named. Because the verdict is attributed to a verified principal
-        and the subject of the record doesn't control the ledger, it's a
-        forensic artifact, not a screenshot. A judge may not certify her own
-        cause, and she may not quietly edit the transcript either.
+        each named. A signature proves integrity under a public key you trust,
+        not the truth of the claims or the independence of the signer.
+        You control the local ledger: detecting removal from its tail requires
+        an external record of the expected head. It is tamper-evident, not immutable.
       </p>
       <a href="/docs/concepts/trust-and-security/">Trust &amp; security →</a>
     </div>

@@ -443,7 +443,7 @@ Usage of eval:
 ## `corral ledger` flags
 
 ```
-corral ledger — the signed, hash-linked record, as a directory of entries.
+corral ledger — the hash-linked record (signed when a key is present), as a directory of entries.
 
   corral ledger append <entry.json.gz> <dir>   re-link an entry to <dir>'s current head (re-hash, re-sign, place)
   corral ledger retract <dir> <hash> --reason "…"
@@ -474,7 +474,7 @@ runner's entry past a branch that moved: fetch, `corral ledger append`, push.
 ## `corral ledger append` flags
 
 ```
-corral ledger — the signed, hash-linked record, as a directory of entries.
+corral ledger — the hash-linked record (signed when a key is present), as a directory of entries.
 
   corral ledger append <entry.json.gz> <dir>   re-link an entry to <dir>'s current head (re-hash, re-sign, place)
   corral ledger retract <dir> <hash> --reason "…"
@@ -505,7 +505,7 @@ runner's entry past a branch that moved: fetch, `corral ledger append`, push.
 ## `corral ledger checkpoint` flags
 
 ```
-corral ledger — the signed, hash-linked record, as a directory of entries.
+corral ledger — the hash-linked record (signed when a key is present), as a directory of entries.
 
   corral ledger append <entry.json.gz> <dir>   re-link an entry to <dir>'s current head (re-hash, re-sign, place)
   corral ledger retract <dir> <hash> --reason "…"
@@ -536,7 +536,7 @@ runner's entry past a branch that moved: fetch, `corral ledger append`, push.
 ## `corral ledger push` flags
 
 ```
-corral ledger — the signed, hash-linked record, as a directory of entries.
+corral ledger — the hash-linked record (signed when a key is present), as a directory of entries.
 
   corral ledger append <entry.json.gz> <dir>   re-link an entry to <dir>'s current head (re-hash, re-sign, place)
   corral ledger retract <dir> <hash> --reason "…"
@@ -567,7 +567,7 @@ runner's entry past a branch that moved: fetch, `corral ledger append`, push.
 ## `corral ledger retract` flags
 
 ```
-corral ledger — the signed, hash-linked record, as a directory of entries.
+corral ledger — the hash-linked record (signed when a key is present), as a directory of entries.
 
   corral ledger append <entry.json.gz> <dir>   re-link an entry to <dir>'s current head (re-hash, re-sign, place)
   corral ledger retract <dir> <hash> --reason "…"
@@ -598,7 +598,7 @@ runner's entry past a branch that moved: fetch, `corral ledger append`, push.
 ## `corral ledger verify` flags
 
 ```
-corral ledger — the signed, hash-linked record, as a directory of entries.
+corral ledger — the hash-linked record (signed when a key is present), as a directory of entries.
 
   corral ledger append <entry.json.gz> <dir>   re-link an entry to <dir>'s current head (re-hash, re-sign, place)
   corral ledger retract <dir> <hash> --reason "…"

@@ -57,7 +57,7 @@ func runLedger(args []string, stdout, stderr io.Writer) int {
 	return 2
 }
 
-const ledgerUsage = `corral ledger — the signed, hash-linked record, as a directory of entries.
+const ledgerUsage = `corral ledger — the hash-linked record (signed when a key is present), as a directory of entries.
 
   corral ledger append <entry.json.gz> <dir>   re-link an entry to <dir>'s current head (re-hash, re-sign, place)
   corral ledger retract <dir> <hash> --reason "…"

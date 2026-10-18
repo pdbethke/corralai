@@ -59,9 +59,8 @@ GROUP BY 1 ORDER BY 2 DESC;</code></pre>
     <div class="tech">
       <h3>Rekor witnesses it, so it isn't our word</h3>
       <p>
-        Signing proves integrity — the verdict is byte-for-byte the one
-        produced. It does not prove <em>independent</em> authenticity, because
-        the key is still ours. <code>--transparency</code> closes that gap: it
+        Signing proves integrity under a public key you trust. It does not
+        prove that the measurement or the signer's claims are true. <code>--transparency</code> adds an external witness: it
         uploads the signed statement to <strong>Sigstore's Rekor</strong>, a
         public append-only log run by people with no stake in the audit, and
         prints the receipt, and records it on the ledger entry. The flask audit on
@@ -93,17 +92,27 @@ GROUP BY 1 ORDER BY 2 DESC;</code></pre>
     </div>
 
     <div class="tech">
-      <h3>Nobody can quietly edit it</h3>
+      <h3>Tamper-evident, not immutable</h3>
       <p>
         Each entry carries the hash of the one before it, and is signed with your
         certify key when one is configured. Edit a signed entry and its
-        signature breaks; edit any entry and its hash no longer matches; remove
-        one and the next entry's link breaks. On a runner with no key, the
+        signature breaks for anyone without the key, but whoever holds the
+        key can rewrite and re-sign the whole chain, and
+        <code>ledger verify</code> reports an entry whose signature was
+        stripped as unsigned: a note, not a failure. An unsigned entry has no
+        signer authenticity.
+        A hash alone can be recomputed, so trust comes from a signature or an
+        external anchor, not from the hash stored beside the content.
+        Remove an interior entry and the next entry's link breaks. Remove the
+        tail and the remaining chain is still valid: detecting that truncation
+        needs an external record of the expected head. The ledger owner can
+        delete files; verification is not a guarantee of completeness.
+        On a runner with no key, the
         recipe attests the entry file itself with GitHub's keyless attestation
         instead. <code>corral ledger verify</code> walks the
-        chain from a clean checkout and names which entry is wrong — a stranger
-        checks the record against its own signatures, not against you. Nothing
-        is edited in place: a wrong entry is retracted by a later entry that
+        chain from a clean checkout; pass a trusted public key to check its
+        signatures. Corral's supported correction path does not edit an entry
+        in place: a wrong entry is retracted by a later entry that
         says so, and every reader leaves it out.
       </p>
       <a href="/docs/verify-a-record/">Check the chain →</a>

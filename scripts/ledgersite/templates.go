@@ -75,11 +75,11 @@ const indexTmpl = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>corral/ledger — the record</title>
-<meta name="description" content="Every audit and review corral has recorded: signed, hash-linked, and reproducible.">
+<meta name="description" content="Every audit and review corral has recorded: hash-linked, signed where a key was present, and reproducible.">
 <style>` + baseCSS + `</style></head><body><div class="wrap">
 
 <h1>corral/ledger — the record</h1>
-<p class="lede">Every audit and review corral has recorded, as a signed, hash-linked chain.
+<p class="lede">Every audit and review corral has recorded, as a hash-linked chain, signed where a key was present.
 An audit plants faults in a file and runs the project's own tests against each one; a review's
 findings each carry the script that was executed to test them, and the exit code that came back.
 Nothing here asks to be believed: re-run any of it.</p>

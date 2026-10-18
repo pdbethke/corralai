@@ -49,6 +49,9 @@ padding:1px 9px;font-size:.74rem;white-space:nowrap}
 .nowrap{white-space:nowrap}
 footer{margin-top:60px;padding-top:20px;border-top:1px solid var(--line);color:var(--muted);font-size:.85rem}
 .scroll{overflow-x:auto;max-width:100%}
+/* long hashes, model names and paths break instead of widening the page */
+.mono,.meta dd,h1,h2,.claim{overflow-wrap:anywhere}
+.stat{min-width:0}
 details{margin:.5em 0}
 summary{cursor:pointer;color:var(--accent);padding:3px 0}
 summary:hover{text-decoration:underline}

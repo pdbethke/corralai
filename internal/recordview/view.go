@@ -106,6 +106,11 @@ type EntryView struct {
 	Refuted    int
 	CommitURL  string
 	ShortSHA   string
+	// Retracted is true when a retraction in force names this review. The
+	// page stays, so a link to it does not break, and says why it no longer
+	// stands. Its findings are left out of the record's totals.
+	Retracted       bool
+	RetractedReason string
 	// Decorrelated reports whether a verifier seat ran on a DIFFERENT model
 	// than the reviewer. False with no verifier at all — which is not a
 	// failure, only an absence, and the page says which it is.
@@ -185,7 +190,11 @@ func repoWebURL(remote string) string {
 
 func Build(entries []auditpush.LedgerEntry, checks []auditpush.ChainCheck, sigsChecked bool) Site {
 	paired := PairChecks(entries, checks)
-	verdicts := auditpush.Adjudications(entries)
+	// Only verdicts that STAND: LiveEntries drops a retracted adjudication
+	// and an adjudication of a retracted review. Adjudications over every
+	// entry counted both (found 2026-10-18 by comparing this page with
+	// corral ui, which already read the live set).
+	verdicts := auditpush.Adjudications(auditpush.LiveEntries(entries))
 	retracted := auditpush.Retracted(entries)
 
 	v := Site{
@@ -249,6 +258,9 @@ func Build(entries []auditpush.LedgerEntry, checks []auditpush.ChainCheck, sigsC
 		}
 		r := e.Review
 		ev := EntryView{ChainView: cv, Review: r}
+		if rt, ok := retracted[e.Hash]; ok {
+			ev.Retracted, ev.RetractedReason = true, rt.Reason
+		}
 		if base := repoWebURL(r.Repo); base != "" && r.Commit != "" {
 			ev.CommitURL = base + "/commit/" + r.Commit
 			if v.RepoURL == "" {
@@ -301,20 +313,27 @@ func Build(entries []auditpush.LedgerEntry, checks []auditpush.ChainCheck, sigsC
 			if a, ok := verdicts[fv.Ref]; ok {
 				fv.Verdict, fv.VerdictBy, fv.VerdictWhy = a.Verdict, a.By, a.Reason
 			}
-			switch fv.Outcome {
-			case OutcomeReproduced:
+			if fv.Outcome == OutcomeReproduced {
 				ev.Reproduced++
-				v.Reproduced++
+				if !ev.Retracted {
+					v.Reproduced++
+				}
 			}
 			switch fv.Verdict {
 			case auditpush.VerdictConfirmed:
 				ev.Confirmed++
-				v.Confirmed++
+				if !ev.Retracted {
+					v.Confirmed++
+				}
 			case auditpush.VerdictRefuted:
 				ev.Refuted++
-				v.Refuted++
+				if !ev.Retracted {
+					v.Refuted++
+				}
 			}
-			v.Findings++
+			if !ev.Retracted {
+				v.Findings++
+			}
 			ev.Findings = append(ev.Findings, fv)
 		}
 		v.Reviews = append(v.Reviews, ev)

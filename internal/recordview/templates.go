@@ -162,7 +162,7 @@ the verifier is never the reviewer's model. What actually ran:</p>
 <th class="nowrap">findings</th><th class="nowrap">repro</th><th class="nowrap">verdicts</th><th>commit</th>
 </tr></thead><tbody>
 {{range .Reviews}}<tr>
-<td class="nowrap"><a href="{{entryURL .Short}}">{{date .Pushed}}</a></td>
+<td class="nowrap"><a href="{{entryURL .Short}}">{{date .Pushed}}</a>{{if .Retracted}} <span class="chip bad">retracted</span>{{end}}</td>
 <td class="mono">{{with .Review}}{{.Scope}}{{end}}</td>
 <td class="mono small">{{with .Review}}{{.ReviewerModel}}{{end}}</td>
 <td class="mono small">{{if .HasVerifier}}{{with .Review}}{{.VerifierModel}}{{end}}
@@ -233,6 +233,8 @@ const entryTmpl = `<!doctype html>
 <span class="mono">{{.VerifierModel}}</span>{{end}}.</p>
 
 {{template "entrybanner" $.ChainView}}
+{{if $.Retracted}}<div class="banner bad"><p><strong>This review was retracted.</strong> The entry stays in the chain and no
+longer stands as the record{{if $.RetractedReason}}: {{$.RetractedReason}}{{end}}. Its findings are not counted in the record's totals.</p></div>{{end}}
 
 <dl class="meta">
   <dt>repo</dt><dd class="mono">{{.Repo}}</dd>

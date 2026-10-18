@@ -81,8 +81,6 @@ var Capabilities = []Capability{
 type Exemption struct{ Lang, Capability, Reason string }
 
 var ParityExemptions = []Exemption{
-	{"javascript", "critic-list", "describe/it names are strings in calls, not declarations; no static lister yet (runner table Phase 4)"},
-	{"typescript", "critic-list", "describe/it names are strings in calls, not declarations; no static lister yet (runner table Phase 4)"},
 	{"ruby", "critic-list", "rspec and minitest names are strings or methods by runner; no static lister yet (runner table Phase 4)"},
 
 	{"rust", "fail-fast", "nextest's --fail-fast and libtest's lack of one are not yet verified against a real run (runner table Phase 5)"},

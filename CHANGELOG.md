@@ -26,7 +26,13 @@ history of any release, `git log v0.3.4..v0.3.5`.
   test the list left out. The names were checked against what real jest, vitest, mocha, node,
   rspec and minitest list for captured fixtures, and three real audits
   (jest, mocha, rspec) handed their critics the list and got all four tests
-  judged. Cached verdicts are re-measured once (VerdictGeneration 31).
+  judged. Cached verdicts are re-measured once (VerdictGeneration 32).
+- **jest and mocha are recognized when run by their entry script.** The
+  jail form the docs give, `node ./node_modules/jest/bin/jest.js` (or
+  mocha's `bin/mocha.js` / `bin/_mocha`), was read as node's own test
+  runner, so tests were never listed, no killing test was named, and the
+  critic's claims went unchecked. It now gets the jest or mocha row, and its
+  list commands were run against real jest 30.5 and mocha 11.8.
 - **`scans show --evidence` and `corral brief` now say when the proven tests
   fail together.** Both hand back the stored authored test, and neither
   read the recorded result of running the tests together, so a test file

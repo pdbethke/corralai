@@ -4,6 +4,7 @@ package lang
 
 import (
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -162,5 +163,37 @@ func TestRunnerByIDRefusesOtherLanguages(t *testing.T) {
 	}
 	if _, err := RunnerByID(py, "nope"); err == nil {
 		t.Error("an unknown id was accepted")
+	}
+}
+
+// AGENTS.md tells an operator to run jest or mocha in the jail as
+// `node ./node_modules/<runner>/bin/...`, since a bare runner is not on the
+// jail's PATH. Each runner's own entry script names it, as vitest's does;
+// without this, that form fell to node --test's Default row and the critic's
+// claims went unchecked. The paths are the packages' own bin entries (jest
+// 30.5 "./bin/jest.js"; mocha 11.8 "./bin/mocha.js" and "./bin/_mocha").
+func TestJSEntryScriptsNameTheirRunner(t *testing.T) {
+	js, _ := ByName("javascript")
+	for _, c := range []struct {
+		argv []string
+		want string
+	}{
+		{[]string{"node", "./node_modules/jest/bin/jest.js"}, "jest"},
+		{[]string{"node", "node_modules/jest/bin/jest.js", "--ci", "src"}, "jest"},
+		{[]string{"node", "./node_modules/mocha/bin/mocha.js", "test"}, "mocha"},
+		{[]string{"node", "./node_modules/mocha/bin/_mocha"}, "mocha"},
+		{[]string{"/usr/bin/node", "/w/node_modules/mocha/bin/mocha.js"}, "mocha"},
+		// A test FILE named after a runner is not that runner's entry.
+		{[]string{"node", "--test", "test/jest.js"}, "node --test"},
+		{[]string{"npx", "mocha", "test/jest.js"}, "mocha"},
+	} {
+		if r, _ := RunnerFor(js, Cmd(c.argv)); r.Name != c.want {
+			t.Errorf("%q ran as %q, want %q", c.argv, r.Name, c.want)
+		}
+	}
+	// The row's commands work on the entry-script form unchanged.
+	argv := []string{"node", "./node_modules/jest/bin/jest.js"}
+	if got, ok := ListTestsCmd(js, Cmd(argv), "a.test.js"); !ok || !slices.Equal(got[:2], argv) || !slices.Contains(got, "--json") {
+		t.Errorf("jest entry-script list cmd = %q, %v", got, ok)
 	}
 }

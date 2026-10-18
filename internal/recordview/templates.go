@@ -205,13 +205,16 @@ and the verdicts are all read through <code>internal/auditpush</code>, the same 
 // entryBanner is one entry's chain line, shared by review and scan pages.
 const entryBanner = `
 {{define "entrybanner"}}
-<div class="banner{{if not .ChainHashOK}} bad{{else if not .Signed}} warn{{end}}">
+<div class="banner{{if or (not .ChainHashOK) .ChainProblem}} bad{{else if not .Signed}} warn{{end}}">
   <p><strong>This entry:</strong>
   <span class="chip{{if .ChainHashOK}} ok{{else}} bad{{end}}">hash {{if .ChainHashOK}}matches its bytes{{else}}MISMATCH{{end}}</span>
   <span class="chip{{if .ChainLinkOK}} ok{{else}} bad{{end}}">link {{if .ChainLinkOK}}{{if .Genesis}}genesis{{else}}names its predecessor{{end}}{{else}}BROKEN{{end}}</span>
-  {{if .Signed}}<span class="chip{{if .SigOK}} ok{{else}} warn{{end}}">signature {{if .SigOK}}verified{{else}}not checked (no key){{end}}</span>
+  {{if .Signed}}{{if not .KeyGiven}}<span class="chip warn">signed, not checked (no key given)</span>
+  {{else if .SigOK}}<span class="chip ok">signature verified</span>
+  {{else}}<span class="chip bad">signature does NOT verify</span>{{end}}
   {{else}}<span class="chip warn">unsigned</span>{{end}}
-  {{if .ChainProblem}}<br><span class="chip bad">{{.ChainProblem}}</span>{{end}}</p>
+  {{if .ChainProblem}}<br><span class="chip bad">{{.ChainProblem}}</span>{{end}}
+  {{if .Note}}<br><span class="small">{{.Note}}</span>{{end}}</p>
 </div>
 {{end}}
 `

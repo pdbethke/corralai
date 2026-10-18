@@ -82,6 +82,18 @@ type ChainView struct {
 	SigOK        bool
 	ChainProblem string
 	Genesis      bool
+
+	// Pos is the entry's 1-based place in the chain. Kind is "scan" for a
+	// run's own record, else the entry's kind. KeyID is the signer name
+	// the entry carries; it is self-reported unless the Note says the
+	// format covers it. Note is VerifyLedgerDir's caveat, in words.
+	// KeyGiven is false when no public key was supplied, so a signed
+	// entry's signature is unchecked, never "verified" and never "failed".
+	Pos      int
+	Kind     string
+	KeyID    string
+	Note     string
+	KeyGiven bool
 }
 
 // EntryView is one review entry as a page.
@@ -172,10 +184,7 @@ func repoWebURL(remote string) string {
 }
 
 func Build(entries []auditpush.LedgerEntry, checks []auditpush.ChainCheck, sigsChecked bool) Site {
-	byFile := map[string]auditpush.ChainCheck{}
-	for _, c := range checks {
-		byFile[filepath.Base(c.File)] = c
-	}
+	paired := PairChecks(entries, checks)
 	verdicts := auditpush.Adjudications(entries)
 	retracted := auditpush.Retracted(entries)
 
@@ -191,14 +200,14 @@ func Build(entries []auditpush.LedgerEntry, checks []auditpush.ChainCheck, sigsC
 	scopes := map[string]bool{}
 	vendors := map[string]bool{}
 
-	for _, e := range entries {
+	for i, e := range entries {
 		if v.First.IsZero() || e.Pushed.Before(v.First) {
 			v.First = e.Pushed
 		}
 		if e.Pushed.After(v.Last) {
 			v.Last = e.Pushed
 		}
-		c := byFile[filepath.Base(e.File)]
+		c := paired[i]
 		if c.Problem != "" || !c.HashOK || !c.LinkOK {
 			v.ChainProblems++
 		}
@@ -208,11 +217,16 @@ func Build(entries []auditpush.LedgerEntry, checks []auditpush.ChainCheck, sigsC
 				v.SigsOK++
 			}
 		}
+		kind := e.Kind
+		if e.IsScan() {
+			kind = "scan"
+		}
 		cv := ChainView{
 			Hash: e.Hash, Short: shortHash(e.Hash), File: filepath.Base(e.File),
 			Pushed:      e.Pushed,
 			ChainHashOK: c.HashOK, ChainLinkOK: c.LinkOK, Signed: c.Signed,
 			SigOK: c.SigOK, ChainProblem: c.Problem, Genesis: c.Genesis,
+			Pos: i + 1, Kind: kind, KeyID: c.KeyID, Note: c.Note, KeyGiven: sigsChecked,
 		}
 		if e.IsScan() {
 			var by *auditpush.LedgerEntry

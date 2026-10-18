@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/pdbethke/corralai/internal/auditpush"
+	"github.com/pdbethke/corralai/internal/recordview"
 	"github.com/pdbethke/corralai/internal/review"
 )
 
@@ -102,7 +103,7 @@ func readUILedger(dir string) (uiLedger, error) {
 	for _, e := range rec.Live {
 		live[e.Hash] = true
 	}
-	paired := checksByEntry(entries, checks)
+	paired := recordview.PairChecks(entries, checks)
 	for i, e := range entries {
 		c := paired[i]
 		kind := e.Kind
@@ -157,28 +158,6 @@ func readUILedger(dir string) (uiLedger, error) {
 		out.Reviews[i], out.Reviews[j] = out.Reviews[j], out.Reviews[i]
 	}
 	return out, nil
-}
-
-// checksByEntry pairs each entry with the check VerifyLedgerDir made of it,
-// by hash. The two come from two reads of the directory (verification reads
-// it itself), and pairing them by position let a concurrent change attach
-// one entry's signature check to another entry's bytes, or render an entry
-// appended between the reads as "unsigned" with no problem counted (review
-// 786e8a0c675e#R1). An entry no check names was not verified, and says so.
-func checksByEntry(entries []auditpush.LedgerEntry, checks []auditpush.ChainCheck) []auditpush.ChainCheck {
-	byHash := make(map[string]auditpush.ChainCheck, len(checks))
-	for _, c := range checks {
-		byHash[c.Hash] = c
-	}
-	out := make([]auditpush.ChainCheck, len(entries))
-	for i, e := range entries {
-		c, ok := byHash[e.Hash]
-		if !ok {
-			c = auditpush.ChainCheck{Hash: e.Hash, Problem: "not verified: the ledger changed while it was read — reload"}
-		}
-		out[i] = c
-	}
-	return out
 }
 
 // withNote adds a standing note (a retraction) to the verifier's note

@@ -209,6 +209,10 @@ func Build(entries []auditpush.LedgerEntry, checks []auditpush.ChainCheck, sigsC
 	// corral ui, which already read the live set).
 	verdicts := auditpush.Adjudications(auditpush.LiveEntries(entries))
 	retracted := auditpush.Retracted(entries)
+	live := map[string]bool{}
+	for _, e := range auditpush.LiveEntries(entries) {
+		live[e.Hash] = true
+	}
 
 	v := Site{
 		Generated:     time.Now().UTC(),
@@ -251,7 +255,16 @@ func Build(entries []auditpush.LedgerEntry, checks []auditpush.ChainCheck, sigsC
 			SigOK: c.SigOK, ChainProblem: c.Problem, Genesis: c.Genesis,
 			Pos: i + 1, Kind: kind, KeyID: c.KeyID, Note: c.Note, KeyGiven: sigsChecked,
 		}
-		v.Chain = append(v.Chain, cv)
+		// The chain shows every entry (it IS the chain), but one that does
+		// not stand says so there, whatever its kind. Only the chain row
+		// carries it: an entry's own page has its retraction banner.
+		row := cv
+		if rt, gone := retracted[e.Hash]; gone {
+			row.Note = withNote(row.Note, "RETRACTED: "+rt.Reason)
+		} else if !live[e.Hash] && e.Kind == auditpush.KindAdjudication {
+			row.Note = withNote(row.Note, "RETRACTED with the review it adjudicates")
+		}
+		v.Chain = append(v.Chain, row)
 		if e.IsScan() {
 			var by *auditpush.LedgerEntry
 			if rt, ok := retracted[e.Hash]; ok {
@@ -424,4 +437,17 @@ func (s Site) Awaiting() []AwaitingView {
 		}
 	}
 	return append(repro, rest...)
+}
+
+// withNote adds a standing note (a retraction) to the verifier's note
+// rather than replacing it: the verifier's caveat (a legacy entry's
+// self-reported signer name) qualifies the signature chip beside it, and
+// overwriting it left the chip unqualified on exactly the retracted legacy
+// entries (review 786e8a0c675e#R2). Moved here from corral ui's retired
+// ledger view.
+func withNote(verifierNote, note string) string {
+	if verifierNote == "" {
+		return note
+	}
+	return note + " · " + verifierNote
 }

@@ -213,7 +213,13 @@ package reposcan
 // its test alone, so on Warp's secret_redaction ten proven tests that swapped
 // one global regex passed alone and one failed in the combined suite. A "28"
 // verdict never ran that check; a disclosure, no count or status changes.
-const VerdictGeneration = "29"
+// "30" (2026-10-18): JavaScript, TypeScript and Ruby critics are now handed
+// the test file's tests by name (lang.Plugin.TestNamesInSource: describe/it
+// titles joined with "::", rspec's full description, minitest's
+// Class#test_name) and must judge every one, as Go, Python, PHP and Rust
+// critics already must. A "29" critic count for those languages came from an
+// answer nothing held to the file's tests. Shape unchanged; behaviour bump.
+const VerdictGeneration = "30"
 
 // VerdictShapeSHA256 fingerprints advpool.Verdict's serialized shape: every
 // exported field's name, type and json tag, sorted by name and hashed.

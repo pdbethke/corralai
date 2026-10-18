@@ -18,7 +18,7 @@ import (
 func TestTheVerifyCommandCarriesThePublishedKey(t *testing.T) {
 	const key = "909429443700441a9f662c07c5f1b7110333fd7fb94fb21e8991e40f2cb6dc09"
 	out := t.TempDir()
-	if err := WriteStatic(out, Site{Generated: time.Unix(0, 0), LedgerEntries: 7, SigsChecked: true, PubKeyHex: key}); err != nil {
+	if err := WriteStatic(out, Site{HasLedger: true, Generated: time.Unix(0, 0), LedgerEntries: 7, SigsChecked: true, PubKeyHex: key}); err != nil {
 		t.Fatal(err)
 	}
 	page := read(t, filepath.Join(out, "index.html"))
@@ -34,7 +34,7 @@ func TestTheVerifyCommandCarriesThePublishedKey(t *testing.T) {
 // invent one and must keep saying signatures were not checked.
 func TestWithoutAKeyThePageSaysSo(t *testing.T) {
 	out := t.TempDir()
-	if err := WriteStatic(out, Site{Generated: time.Unix(0, 0), LedgerEntries: 7}); err != nil {
+	if err := WriteStatic(out, Site{HasLedger: true, Generated: time.Unix(0, 0), LedgerEntries: 7}); err != nil {
 		t.Fatal(err)
 	}
 	page := read(t, filepath.Join(out, "index.html"))

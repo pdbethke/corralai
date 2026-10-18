@@ -19,7 +19,6 @@
 package main
 
 import (
-	"encoding/hex"
 	"flag"
 	"fmt"
 	"os"
@@ -119,9 +118,10 @@ func main() {
 	if *out == "" {
 		return
 	}
-	v := recordview.Build(entries, checks, pub != nil)
-	if pub != nil {
-		v.PubKeyHex = hex.EncodeToString(pub)
+	v, err := recordview.Load(*ledger, pub)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ledgersite: loading record: %v\n", err)
+		os.Exit(1)
 	}
 	if err := recordview.WriteStatic(*out, v); err != nil {
 		fmt.Fprintf(os.Stderr, "ledgersite: writing site: %v\n", err)

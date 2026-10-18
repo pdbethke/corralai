@@ -62,6 +62,8 @@ table{font-size:.8rem}th,td{padding:6px}}
 const verifyBanner = `
 {{define "emptyrecord"}}<div class="banner warn"><p><strong>The record is empty.</strong> This ledger has no entries yet:
 <code>corral certify</code> and <code>corral review</code> write them.</p></div>{{end}}
+{{define "noledger"}}<div class="banner warn"><p><strong>Not a ledger directory.</strong> This target is a warehouse, so there is no chain, no reviews and no verdicts to show here. Point <code>corral ui --db</code> at a ledger directory (<code>.corral/ledger</code>) to see them.</p></div>{{end}}
+{{define "chainclaim"}}{{if not .HasLedger}}{{template "noledger"}}{{else if .LedgerEntries}}{{template "verify" .}}{{else}}{{template "emptyrecord"}}{{end}}{{end}}
 {{define "verify"}}
 <div class="banner{{if .ChainProblems}} bad{{else if not .SigsChecked}} warn{{end}}">
   <p><strong>Chain:</strong>
@@ -87,6 +89,17 @@ An audit plants faults in a file and runs the project's own tests against each o
 findings each carry the script that was executed to test them, and the exit code that came back.
 Nothing here asks to be believed: re-run any of it.</p>
 
+{{if .SealRead}}<h2>The seal</h2>
+<p class="small">Each file's newest graded verdict. Proven gaps first.</p>
+{{if .SealErr}}<div class="banner bad"><p>Could not read the seal: {{.SealErr}}</p></div>
+{{else if not .Seal}}<p>No file has a graded verdict yet. Run <code>corral certify --repo &lt;dir&gt;</code>.</p>
+{{else}}<div class="scroll"><table><thead><tr><th>repo</th><th>file</th><th>kill rate</th><th>got through</th><th>proven</th><th>audited</th></tr></thead><tbody>
+{{range .Seal}}<tr><td class="mono small">{{.Repo}}</td><td class="mono small">{{.Path}}</td>
+<td>{{printf "%.2f" .KillRate}}{{if .Caveat}} <span class="chip warn">{{.Caveat}}</span>{{end}}</td>
+<td>{{.Survivors}}</td><td>{{if .ProvenMissed}}<span class="chip ok">{{.ProvenMissed}}</span>{{else}}0{{end}}</td>
+<td class="nowrap">{{if .AuditedAt.IsZero}}—{{else}}{{date .AuditedAt}}{{end}}</td></tr>{{end}}
+</tbody></table></div>{{end}}{{end}}
+{{if not .HasLedger}}{{template "noledger"}}{{else}}
 <div class="stats">
   <div class="stat"><b>{{.LedgerEntries}}</b><span>ledger entries</span></div>
   <div class="stat"><b>{{.Scans | len}}</b><span>audits</span></div>
@@ -98,9 +111,8 @@ Nothing here asks to be believed: re-run any of it.</p>
   <div class="stat"><b>{{.CrossVendor}}</b><span>verified by another vendor</span></div>
 </div>
 
-{{if .LedgerEntries}}{{template "verify" .}}
-<p class="small"><a href="chain-1.html">The whole chain, entry by entry →</a></p>
-{{else}}{{template "emptyrecord"}}{{end}}
+{{template "chainclaim" .}}
+{{if and .HasLedger .LedgerEntries}}<p class="small"><a href="chain-1.html">The whole chain, entry by entry →</a></p>{{end}}
 
 {{if .Scans}}
 <h2>Audits</h2>
@@ -188,6 +200,7 @@ the files alone that no entry was edited and none removed from the middle.</p>{{
 This page renders the record and adds no opinion about it: the chain, the signatures, the retractions
 and the verdicts are all read through <code>internal/auditpush</code>, the same code the CLI uses.</p>
 </footer>
+{{end}}
 </div></body></html>
 ` + verifyBanner + entryBanner + rowTmpls
 
@@ -397,6 +410,7 @@ const listTmpl = `<!doctype html>
 <style>` + baseCSS + `</style></head><body><div class="wrap">
 <p class="small"><a href="index.html">← the record</a></p>
 <h1>All {{.What}} <span class="small">page {{.N}} of {{.Of}}</span></h1>
+{{if not .HasLedger}}{{template "noledger"}}{{end}}
 {{if eq .What "audits"}}<div class="scroll"><table><thead><tr>
 <th>pushed</th><th>repository</th><th>audited</th><th class="nowrap">kill rate</th>
 <th class="nowrap">got through</th><th class="nowrap">proven</th><th>commit</th>
@@ -407,7 +421,7 @@ const listTmpl = `<!doctype html>
 </tr></thead><tbody>{{range .Reviews}}{{template "reviewrow" .}}{{end}}</tbody></table></div>{{end}}
 <p>{{if .Prev}}<a href="{{.Prev}}">← newer</a>{{end}} {{if .Next}}<a href="{{.Next}}">older →</a>{{end}}</p>
 </div></body></html>
-` + rowTmpls
+` + rowTmpls + verifyBanner
 
 const chainTmpl = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
@@ -416,7 +430,7 @@ const chainTmpl = `<!doctype html>
 <style>` + baseCSS + `</style></head><body><div class="wrap">
 <p class="small"><a href="index.html">← the record</a></p>
 <h1>The chain <span class="small">page {{.N}} of {{.Of}}, newest first</span></h1>
-{{if .LedgerEntries}}{{template "verify" .Site}}{{else}}{{template "emptyrecord"}}{{end}}
+{{template "chainclaim" .Site}}
 <div class="scroll"><table><thead><tr><th>#</th><th>when</th><th>kind</th><th>what</th><th>signature</th></tr></thead><tbody>
 {{range .Rows}}<tr>
 <td>{{.Pos}}</td><td class="nowrap">{{stamp .Pushed}}</td>
@@ -456,7 +470,7 @@ const verdictsTmpl = `<!doctype html>
 <p class="small"><a href="index.html">&larr; the record</a></p>
 <h1>Awaiting a person's verdict <span class="small">{{len .Awaiting}}</span></h1>
 <p class="lede">Findings from reviews that stand, with no verdict that stands. Reproduced ones first: execution backed them.</p>
-{{if not .Awaiting}}<p>Nothing is waiting for a verdict.</p>{{end}}
+{{if not .HasLedger}}{{template "noledger"}}{{else if not .Awaiting}}<p>Nothing is waiting for a verdict.</p>{{end}}
 {{range .Awaiting}}
 <div class="finding"><p class="small mono"><a href="{{entryURL .Review.Short}}#{{.Finding.ID}}">{{.Finding.Ref}}</a>
 {{if eq .Finding.Outcome "reproduced"}}<span class="chip ok">reproduced</span>{{else}}<span class="chip mute">{{.Finding.Outcome}}</span>{{end}}</p>
@@ -466,4 +480,4 @@ const verdictsTmpl = `<!doctype html>
 {{end}}
 {{if .Write}}` + writeJS + `{{end}}
 </div></body></html>
-` + controlsTmpl
+` + verifyBanner + controlsTmpl

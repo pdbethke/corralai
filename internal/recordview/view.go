@@ -124,8 +124,18 @@ type Site struct {
 	// it, per request; a static build never does.
 	Write bool
 
-	Generated     time.Time
+	Generated time.Time
+	// HasLedger is false when no ledger directory stands behind this site
+	// (corral ui pointed at a warehouse): it then makes no claim about a chain.
+	HasLedger     bool
 	LedgerEntries int
+	// Seal is the warehouse's newest kill-rate-bearing row per file, handed
+	// in by the caller (see WithSeal). SealRead distinguishes "not read
+	// here" (static build: no section) from "read, and no rows"; SealErr is
+	// a failed read, rendered as one.
+	Seal     []SealRow
+	SealRead bool
+	SealErr  string
 	// PubKeyHex is the key the signatures were checked against, printed in
 	// the "verify it yourself" command so a reader can run the same check.
 	// Empty when the page was rendered without one.
@@ -202,6 +212,7 @@ func Build(entries []auditpush.LedgerEntry, checks []auditpush.ChainCheck, sigsC
 
 	v := Site{
 		Generated:     time.Now().UTC(),
+		HasLedger:     true,
 		LedgerEntries: len(entries),
 		Retracted:     len(retracted),
 		SigsChecked:   sigsChecked,

@@ -97,8 +97,8 @@ GROUP BY 1 ORDER BY 2 DESC;</code></pre>
         Each entry carries the hash of the one before it, and is signed with your
         certify key when one is configured. Edit a signed entry and its
         signature breaks for anyone without the key, but whoever holds the
-        key can rewrite and re-sign the whole chain, and
-        <code>ledger verify</code> reports an entry whose signature was
+        key can rewrite and re-sign the whole chain,
+        and <code>ledger verify</code> reports an entry whose signature was
         stripped as unsigned: a note, not a failure. An unsigned entry has no
         signer authenticity.
         A hash alone can be recomputed, so trust comes from a signature or an

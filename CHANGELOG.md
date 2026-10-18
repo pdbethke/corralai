@@ -9,7 +9,7 @@ still move between minor versions.
 Entries describe what changed for someone *using* the tool. For the full commit
 history of any release, `git log v0.3.4..v0.3.5`.
 
-## [Unreleased]
+## [v1.0.0-rc.25] — 2026-10-18
 
 - **JavaScript, TypeScript and Ruby critics must now judge every test.**
   The critic is handed the test file's tests by name, read from the source:
@@ -69,7 +69,18 @@ history of any release, `git log v0.3.4..v0.3.5`.
   code. The verdict records `authored_together` (`pass`, `fail`, or absent
   when not checked), and both `certify --local` and `--repo` print a warning
   with the runner's output when it fails. Counts and status are unchanged.
-- **One-time cache miss.** `reposcan.VerdictGeneration` is now 29.
+- **Public claims now match what the record guarantees.** The docs and
+  site now say that ledger entries are signed only when a key is present,
+  that the key holder can re-sign the whole chain, that dropping the
+  newest entries leaves a valid chain, and that `ledger verify` reports an
+  unsigned entry among signed ones as a note; only an external anchor
+  detects those. Corral attempts a test for each survivor and keeps the ones
+  that prove, rather than writing one for every bug, and a fresh run can
+  miss a gap an earlier run found. Prior work that plants faults and writes
+  tests to kill them (Meta's ACH, LLMutantKiller) is cited, and dated field
+  notes carry visible corrections. `corral ledger`'s help says the same.
+- **One-time cache miss.** `reposcan.VerdictGeneration` is now 33 (rc.24
+  shipped 28). Every verdict cached before this change is re-measured once.
 
 ## [v1.0.0-rc.24] — 2026-10-17
 

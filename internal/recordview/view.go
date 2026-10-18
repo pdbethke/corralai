@@ -120,6 +120,10 @@ type EntryView struct {
 
 // SiteView is the whole record.
 type Site struct {
+	// Write renders the adjudication controls. Only corral ui --write sets
+	// it, per request; a static build never does.
+	Write bool
+
 	Generated     time.Time
 	LedgerEntries int
 	// PubKeyHex is the key the signatures were checked against, printed in
@@ -379,4 +383,34 @@ func vendorOfSeat(seat string) string {
 	// the built-in agent it names, whatever CORRALAI_AGENT_* this renderer's
 	// own environment defines.
 	return agentbackend.RecordedVendorOf(seat)
+}
+
+// AwaitingView is one finding waiting for a person's verdict.
+type AwaitingView struct {
+	Review  EntryView
+	Finding FindingView
+}
+
+// Awaiting is every finding of a review that stands with no verdict that
+// stands: reproduced findings first (they are the ones execution backed),
+// then newest review first, as Reviews is already ordered.
+func (s Site) Awaiting() []AwaitingView {
+	var repro, rest []AwaitingView
+	for _, r := range s.Reviews {
+		if r.Retracted {
+			continue
+		}
+		for _, f := range r.Findings {
+			if f.Verdict != "" {
+				continue
+			}
+			a := AwaitingView{Review: r, Finding: f}
+			if f.Outcome == OutcomeReproduced {
+				repro = append(repro, a)
+			} else {
+				rest = append(rest, a)
+			}
+		}
+	}
+	return append(repro, rest...)
 }

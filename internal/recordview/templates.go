@@ -153,6 +153,7 @@ the verifier is never the reviewer's model. What actually ran:</p>
   {{if .Scopes}}<dt>scopes reviewed</dt><dd class="mono">{{join .Scopes}}</dd>{{end}}
 </div>
 
+{{if .Awaiting}}<p><a href="verdicts.html">{{len .Awaiting}} finding(s) await a person's verdict &rarr;</a></p>{{end}}
 <h2>Reviews</h2>
 <p class="small">Newest first. {{if .First.IsZero}}{{else}}Record spans {{date .First}} to {{date .Last}}.{{end}}</p>
 <div class="scroll"><table><thead><tr>
@@ -272,6 +273,7 @@ longer stands as the record{{if $.RetractedReason}}: {{$.RetractedReason}}{{end}
   <h3 class="small">human verdict</h3>
   <p class="small"><strong>{{.Verdict}}</strong> by {{.VerdictBy}}{{if .VerdictWhy}} — {{.VerdictWhy}}{{end}}</p>
   {{end}}
+  {{if and $.Site.Write (not .Verdict) (not $.Retracted)}}{{template "controls" ctl . $.ShortSHA}}{{end}}
   <p class="small mono">ref {{.Ref}}</p>
 </div>
 {{end}}
@@ -298,8 +300,9 @@ It does not make the opinion below true.</p></div>
 
 <footer><p>Entry <span class="mono">{{.Hash}}</span> · file <span class="mono">{{.File}}</span> ·
 pushed {{stamp .Pushed}} · <a href="../index.html">the whole record</a></p></footer>
+{{if $.Site.Write}}` + writeJS + `{{end}}
 </div></body></html>
-` + entryBanner
+` + entryBanner + controlsTmpl
 
 const scanTmpl = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
@@ -429,3 +432,38 @@ const chainTmpl = `<!doctype html>
 <p>{{if .Prev}}<a href="{{.Prev}}">← newer</a>{{end}} {{if .Next}}<a href="{{.Next}}">older →</a>{{end}}</p>
 </div></body></html>
 ` + verifyBanner
+
+// controlsTmpl is the adjudication block, rendered only when Site.Write is
+// set. The buttons call the existing api/ routes through writeJS.
+const controlsTmpl = `
+{{define "controls"}}
+<div class="controls banner" data-ref="{{.F.Ref}}" data-verifier="{{with .F.Refutation}}{{.Model}} {{.Verdict}}{{end}}">
+  <p class="small"><strong>Your verdict</strong> - each button runs a <code>corral review</code> command on this machine.</p>
+  {{if not (hasPre .F.Script)}}<p class="small">no script: judge from the code at <code>{{if .F.File}}{{.F.File}}{{else}}?{{end}}:{{if .F.Line}}{{.F.Line}}{{else}}?{{end}}</code> (commit <code>{{.SHA}}</code>)</p>{{end}}
+  <textarea rows="2" style="width:100%" placeholder="why (required)"></textarea>
+  <p><button data-verdict="confirm">Confirm</button> <button data-verdict="refute">Refute</button>
+  {{if hasPre .F.Script}}<button data-recheck>Recheck on HEAD</button>{{end}}</p>
+  <p class="small" data-cited></p><div class="out small"></div>
+</div>
+{{end}}
+`
+
+const verdictsTmpl = `<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>awaiting a verdict - corral/ledger</title>
+<style>` + baseCSS + `</style></head><body><div class="wrap">
+<p class="small"><a href="index.html">&larr; the record</a></p>
+<h1>Awaiting a person's verdict <span class="small">{{len .Awaiting}}</span></h1>
+<p class="lede">Findings from reviews that stand, with no verdict that stands. Reproduced ones first: execution backed them.</p>
+{{if not .Awaiting}}<p>Nothing is waiting for a verdict.</p>{{end}}
+{{range .Awaiting}}
+<div class="finding"><p class="small mono"><a href="{{entryURL .Review.Short}}#{{.Finding.ID}}">{{.Finding.Ref}}</a>
+{{if eq .Finding.Outcome "reproduced"}}<span class="chip ok">reproduced</span>{{else}}<span class="chip mute">{{.Finding.Outcome}}</span>{{end}}</p>
+<p class="claim">{{.Finding.Claim}}</p>
+{{if $.Write}}{{template "controls" ctl .Finding .Review.ShortSHA}}{{end}}
+</div>
+{{end}}
+{{if .Write}}` + writeJS + `{{end}}
+</div></body></html>
+` + controlsTmpl

@@ -25,7 +25,7 @@ var ErrNotFound = errors.New("recordview: no such page")
 
 // Pages holds the parsed templates. Parse once, render many times.
 type Pages struct {
-	index, entry, scan, list, chain *template.Template
+	index, entry, scan, list, chain, verdicts *template.Template
 }
 
 func funcs() template.FuncMap {
@@ -36,6 +36,7 @@ func funcs() template.FuncMap {
 		"stamp":    func(t time.Time) string { return t.UTC().Format("2006-01-02 15:04 UTC") },
 		"join":     func(s []string) string { return strings.Join(s, ", ") },
 		"lower":    strings.ToLower,
+		"ctl":      func(f FindingView, sha string) controlsData { return controlsData{f, sha} },
 		"entryURL": func(short string) string { return "entry/" + short + ".html" },
 		"thousands": func(n int64) string {
 			if n >= 1_000_000 {
@@ -62,6 +63,7 @@ func NewPages() (*Pages, error) {
 		{&p.scan, "scan", scanTmpl},
 		{&p.list, "list", listTmpl},
 		{&p.chain, "chain", chainTmpl},
+		{&p.verdicts, "verdicts", verdictsTmpl},
 	} {
 		parsed, err := template.New(t.name).Funcs(funcs()).Parse(t.src)
 		if err != nil {
@@ -123,7 +125,7 @@ func (s Site) NewestReviews() []EntryView { return window(s.Reviews, 1, IndexRow
 // Paths is every page this site has, in a stable order: the index, the
 // list and chain pages, then one page per review and per audit.
 func (s Site) Paths() []string {
-	out := []string{"index.html"}
+	out := []string{"index.html", "verdicts.html"}
 	for _, l := range []struct {
 		prefix string
 		n      int
@@ -148,6 +150,8 @@ func (p *Pages) Render(w io.Writer, s Site, path string) error {
 	switch {
 	case path == "index.html":
 		return p.index.Execute(w, s)
+	case path == "verdicts.html":
+		return p.verdicts.Execute(w, s)
 	case strings.HasPrefix(path, "entry/") && strings.HasSuffix(path, ".html"):
 		short := strings.TrimSuffix(strings.TrimPrefix(path, "entry/"), ".html")
 		if !isHex(short) {
@@ -217,4 +221,11 @@ func listPath(path string) (string, int, bool) {
 		return "", 0, false
 	}
 	return prefix, n, true
+}
+
+// controlsData is what the "controls" template needs: the finding, and the
+// short commit the scriptless note names.
+type controlsData struct {
+	F   FindingView
+	SHA string
 }

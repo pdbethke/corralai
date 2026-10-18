@@ -401,9 +401,9 @@ standard.
   yourself. That was wrong — its element type is an alias of the exported
   `LedgerEntry` — and it told agents to rebuild the reader that
   `scripts/ledgersite` now shares with the CLI.)
-- `scripts/ledgersite/` + `scripts/gen-ledger-site.sh` — renders that branch as
-  the public record page into `site/public/ledger/` (gitignored; generated at
-  site-deploy time). Needs **only Go and git** — no key, no jail, no bwrap — so it
+- `scripts/ledgersite/` + `scripts/gen-ledger-site.sh` — writes the public record
+  page into `site/public/ledger/` (gitignored; generated at site-deploy time)
+  using `internal/recordview`, the one renderer `corral ui` serves too. Needs **only Go and git** — no key, no jail, no bwrap — so it
   runs in the container environments where corral itself cannot start.
 - `private/` — **gitignored, never committed.** Machine-specific operator notes for
   whoever's box you're on (host setup, local GPU/model plans). This repo is public;

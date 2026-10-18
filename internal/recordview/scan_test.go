@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Elastic-2.0
 
-package main
+package recordview
 
 import (
 	"path/filepath"
@@ -60,7 +60,7 @@ func renderOne(t *testing.T, entries []auditpush.LedgerEntry) (index string, pag
 		checks = append(checks, okCheck(entries[i]))
 	}
 	out := t.TempDir()
-	if err := writeSite(out, buildView(entries, checks, true)); err != nil {
+	if err := WriteStatic(out, Build(entries, checks, true)); err != nil {
 		t.Fatal(err)
 	}
 	return read(t, filepath.Join(out, "index.html")), func(short string) string {

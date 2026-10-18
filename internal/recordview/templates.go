@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Elastic-2.0
 
-package main
+package recordview
 
 const baseCSS = `
 :root{--bg:#fbfaf7;--fg:#1a1a18;--muted:#5f5e58;--line:#e2ded4;--card:#fff;

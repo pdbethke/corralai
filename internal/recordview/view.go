@@ -1,6 +1,15 @@
 // SPDX-License-Identifier: Elastic-2.0
 
-package main
+// Package recordview renders a corral ledger as pages: the index, a page
+// per review and per audit, the chain and the verdict queue. It is the ONE
+// renderer for the record. The public site writes its pages to disk
+// (WriteStatic) and `corral ui` serves the same pages on request (Handler),
+// so the two cannot drift the way scripts/ledgersite and uiweb/index.html
+// did (spec 2026-10-18-corral-app-design.md §5).
+//
+// Every rule about what the record MEANS comes from internal/auditpush.
+// This package adds no second opinion about it.
+package recordview
 
 import (
 	"errors"
@@ -97,7 +106,7 @@ type EntryView struct {
 }
 
 // SiteView is the whole record.
-type SiteView struct {
+type Site struct {
 	Generated     time.Time
 	LedgerEntries int
 	// PubKeyHex is the key the signatures were checked against, printed in
@@ -162,7 +171,7 @@ func repoWebURL(remote string) string {
 	return ""
 }
 
-func buildView(entries []auditpush.LedgerEntry, checks []auditpush.ChainCheck, sigsChecked bool) SiteView {
+func Build(entries []auditpush.LedgerEntry, checks []auditpush.ChainCheck, sigsChecked bool) Site {
 	byFile := map[string]auditpush.ChainCheck{}
 	for _, c := range checks {
 		byFile[filepath.Base(c.File)] = c
@@ -170,7 +179,7 @@ func buildView(entries []auditpush.LedgerEntry, checks []auditpush.ChainCheck, s
 	verdicts := auditpush.Adjudications(entries)
 	retracted := auditpush.Retracted(entries)
 
-	v := SiteView{
+	v := Site{
 		Generated:     time.Now().UTC(),
 		LedgerEntries: len(entries),
 		Retracted:     len(retracted),
@@ -316,7 +325,7 @@ func keys(m map[string]bool) []string {
 	return out
 }
 
-func writeSite(out string, v SiteView) error {
+func WriteStatic(out string, v Site) error {
 	// Writes go through os.Root, the same defence the workspace substrate
 	// uses: every path is resolved INSIDE out, so a symlink planted in the
 	// output directory cannot redirect a write anywhere else. 0o750 rather
@@ -368,7 +377,7 @@ func writeSite(out string, v SiteView) error {
 	for _, e := range v.Reviews {
 		data := struct {
 			EntryView
-			Site SiteView
+			Site Site
 		}{e, v}
 		if err := writeEntryPage(root, e.Short, ent, data); err != nil {
 			return err

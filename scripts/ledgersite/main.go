@@ -13,6 +13,9 @@
 // Retracted and Adjudications. This program adds no second opinion about what
 // the record means — it only renders what those say, which is the same reason
 // corral ui drives the CLI instead of reimplementing it.
+//
+// Rendering lives in internal/recordview, shared with `corral ui`. This
+// program reads the ledger, prints what it found, and writes the static pages.
 package main
 
 import (
@@ -23,6 +26,7 @@ import (
 	"sort"
 
 	"github.com/pdbethke/corralai/internal/auditpush"
+	"github.com/pdbethke/corralai/internal/recordview"
 )
 
 func main() {
@@ -115,11 +119,11 @@ func main() {
 	if *out == "" {
 		return
 	}
-	v := buildView(entries, checks, pub != nil)
+	v := recordview.Build(entries, checks, pub != nil)
 	if pub != nil {
 		v.PubKeyHex = hex.EncodeToString(pub)
 	}
-	if err := writeSite(*out, v); err != nil {
+	if err := recordview.WriteStatic(*out, v); err != nil {
 		fmt.Fprintf(os.Stderr, "ledgersite: writing site: %v\n", err)
 		os.Exit(1)
 	}

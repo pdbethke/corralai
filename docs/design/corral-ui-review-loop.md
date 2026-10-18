@@ -248,4 +248,4 @@ Each piece ships on its own and depends on the one before:
 3. Publish
 4. Run a round
 
-> **2026-10-18:** the single-page `uiweb/index.html` and the `/api/ledger` and `/api/seal` read routes are retired. `corral ui` serves the record pages from `internal/recordview`, the same pages as the public record. The write routes and every token rule above are unchanged. See `docs/superpowers/specs/2026-10-18-corral-app-design.md` §5.
+> **2026-10-18:** the single-page `uiweb/index.html` and the `/api/ledger` and `/api/seal` read routes are retired. `corral ui` serves the record pages from `internal/recordview`, the same pages as the public record. The old page rendered the whole chain at once, showed a self-reported signer name as signed when nothing had been checked, and dropped the seal's caveats. Serving the public record's own pages means `corral ui` and the published record cannot disagree. The write routes and every token rule above are unchanged. Only reads moved, and a read in write mode still needs the `Host` gate and no token.

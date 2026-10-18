@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -162,9 +163,9 @@ func TestUIShowsTheChainTheReviewsAndTheVerdicts(t *testing.T) {
 	}
 	t.Setenv(auditpush.LedgerPubKeyEnv, hex.EncodeToString(lk.Public().(ed25519.PublicKey)))
 	code := 0
-	r := review.Review{Repo: "acme/r", Commit: "abc", Scope: "pkg", ReviewerModel: "rev", VerifierModel: "ver", Opinion: "it leaks",
+	r := review.Review{Repo: "acme/r", Commit: "abc", Scope: "pkg", ReviewerModel: "reviewer-model-x", VerifierModel: "verifier-model-y", Opinion: "it leaks",
 		Findings: []review.Finding{{ID: "R1", Claim: "leaks the key", Declared: review.TierReproduced, Tier: review.TierReproduced, Script: "exit 0", ExitCode: &code,
-			Refutation: &review.Refutation{Model: "ver", Verdict: review.VerdictStands, Argument: "could not refute"}}},
+			Refutation: &review.Refutation{Model: "verifier-model-y", Verdict: review.VerdictStands, Argument: "could not refute"}}},
 		Sound: []string{"the parser"}}
 	if _, err := auditpush.WriteReview(dir, r, signer); err != nil {
 		t.Fatal(err)
@@ -184,15 +185,33 @@ func TestUIShowsTheChainTheReviewsAndTheVerdicts(t *testing.T) {
 		t.Fatalf("chain status %d: %s", chain.Code, chain.Body.String())
 	}
 	cb := chain.Body.String()
-	// Four entries, every signature checked against the explicit key, no
-	// chain problem, the retracted scan marked.
-	if n := strings.Count(cb, `<span class="chip ok">verified</span>`); n != 4 {
-		t.Errorf("chain shows %d verified signatures, want 4", n)
+	// Four rows, newest first, each with its kind, every signature checked
+	// against the explicit key, and the retraction marked on the SCAN's row
+	// (the retract row's own note names the reason too, so a page-wide
+	// substring would prove nothing).
+	rows := chainRows(cb)
+	wantKinds := []string{"retract", "adjudication", "review", "scan"}
+	if len(rows) != len(wantKinds) {
+		t.Fatalf("chain page has %d rows, want %d: %+v", len(rows), len(wantKinds), rows)
 	}
-	for _, want := range []string{"retract", "scan", "review", "adjudication", "RETRACTED: wrong commit", "4/4 verified"} {
-		if !strings.Contains(cb, want) {
-			t.Errorf("the chain page is missing %q", want)
+	for i, k := range wantKinds {
+		if rows[i].Kind != k || rows[i].Pos != strconv.Itoa(len(wantKinds)-i) {
+			t.Errorf("row %d = #%s %s, want #%d %s (newest first)", i, rows[i].Pos, rows[i].Kind, len(wantKinds)-i, k)
 		}
+		if !strings.Contains(rows[i].Sig, `<span class="chip ok">verified</span>`) {
+			t.Errorf("row #%s (%s) signature = %q, want verified", rows[i].Pos, rows[i].Kind, rows[i].Sig)
+		}
+	}
+	if !strings.HasPrefix(rows[3].Note, "RETRACTED: wrong commit") {
+		t.Errorf("the retracted scan's chain row must say so: %q", rows[3].Note)
+	}
+	for _, r := range rows[:3] {
+		if strings.Contains(r.Note, "RETRACTED") {
+			t.Errorf("row #%s (%s) is marked retracted but stands: %q", r.Pos, r.Kind, r.Note)
+		}
+	}
+	if !strings.Contains(cb, "4/4 verified") {
+		t.Error("the chain banner does not say 4/4 verified")
 	}
 	for _, bad := range []string{"does NOT verify", `chip bad">problem`, "not checked"} {
 		if strings.Contains(cb, bad) {
@@ -204,9 +223,9 @@ func TestUIShowsTheChainTheReviewsAndTheVerdicts(t *testing.T) {
 		t.Fatalf("review page status %d", rev.Code)
 	}
 	rb := rev.Body.String()
-	for _, want := range []string{"rev", "ver", "leaks the key", "it leaks", "the parser",
+	for _, want := range []string{"reviewer-model-x", "leaks the key", "it leaks", "the parser",
 		`<span class="chip ok">reproduced</span>`,
-		"refutation — ver", review.VerdictStands, "could not refute",
+		`refutation — verifier-model-y <span class="chip mute">` + review.VerdictStands + `</span>`, "could not refute",
 		`<span class="chip ok">confirmed by a person</span>`, "<strong>confirmed</strong> by pdb — it does"} {
 		if !strings.Contains(rb, want) {
 			t.Errorf("the review page is missing %q", want)
@@ -218,6 +237,22 @@ func TestUIShowsTheChainTheReviewsAndTheVerdicts(t *testing.T) {
 	if none.Code != http.StatusOK || !strings.Contains(none.Body.String(), "Not a ledger directory") {
 		t.Errorf("no directory: %d %s", none.Code, none.Body.String())
 	}
+}
+
+// chainRow is one row of the chain page's table, as rendered.
+type chainRow struct{ Pos, Kind, Note, Sig string }
+
+var chainRowRE = regexp.MustCompile(`(?s)<tr>\s*<td>(\d+)</td><td class="nowrap">[^<]*</td>\s*<td>(?:<a [^>]*>)?([a-z]+)(?:</a>)?</td>\s*<td class="small">(.*?)</td>\s*<td>(.*?)</td>\s*</tr>`)
+
+// chainRows reads the chain table's rows in page order, so a test can
+// assert on one row's kind, note and signature rather than on a substring
+// that page chrome or another row could satisfy.
+func chainRows(page string) []chainRow {
+	var out []chainRow
+	for _, m := range chainRowRE.FindAllStringSubmatch(page, -1) {
+		out = append(out, chainRow{Pos: m[1], Kind: m[2], Note: strings.TrimSpace(m[3]), Sig: strings.TrimSpace(m[4])})
+	}
+	return out
 }
 
 // The UI is a third door onto "which key checks the ledger": with a local

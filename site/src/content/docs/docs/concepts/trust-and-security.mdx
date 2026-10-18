@@ -11,8 +11,10 @@ your test suite against deliberately broken copies of your code, tests a model
 wrote, and, in `corral review`, reproduction scripts a model wrote. A model can
 also be steered by text inside the code it reads. The posture starts from that:
 **nothing a model says is trusted, and nothing a model wrote runs unconfined
-unless you choose that.** A verdict is decided by execution, and every result is
-signed. [`SECURITY.md`](https://github.com/pdbethke/corralai/blob/main/SECURITY.md)
+unless you choose that.** A verdict is decided by execution. Local certification
+records are signed; repository and review ledger entries are signed when a
+certify key is configured and otherwise remain unsigned and hash-linked.
+[`SECURITY.md`](https://github.com/pdbethke/corralai/blob/main/SECURITY.md)
 is the full statement; this page is the tour.
 
 ## The jail
@@ -93,11 +95,16 @@ runner.
 
 ## The record
 
-- Every `certify --repo` and `corral review` run writes a **hash-linked** entry,
+- Unless recording is disabled, `certify --repo` and `corral review` write a **hash-linked** entry,
   **signed (Ed25519)** when a certify key is configured (a CI runner has none
   unless you give it one), to a ledger directory — by default `.corral/ledger`, and in
-  CI the orphan branch `corral/ledger`. An edited, removed or re-ordered entry
-  breaks the chain, and `corral ledger verify --pub <key>` names it.
+  CI a workflow can preserve it on the orphan branch `corral/ledger`.
+  Without a key the entry is unsigned. `corral ledger verify --pub <key>`
+  checks retained entries against a trusted public key. Removing an interior
+  entry breaks its successor's link; removing the tail leaves the remaining
+  chain valid. Detecting tail truncation requires an external record of the
+  expected head. The ledger owner can delete files and recompute unsigned hashes:
+  tamper evidence is not immutability or guaranteed completeness.
 - `certify --repo --attest --transparency` logs the signed statement to Sigstore
   **Rekor**, a public, append-only log, so a record can be checked by someone who
   trusts neither you nor us.
@@ -109,7 +116,11 @@ runner.
 
 corral measures whether a suite catches planted faults and proves the gaps it
 can; it does not guarantee the correctness of your code, and it does not call an
-unproven survivor a bug. It does not make a model immune to instructions in the
+unproven survivor a bug. A generated test's pass/fail distinction does not establish
+that its assertion matches the intended specification. Review it and run it in
+your full suite: tests proven individually can still interfere when combined.
+A reproduction script's successful exit likewise does not establish that its
+interpretation of a defect is correct. It does not make a model immune to instructions in the
 code it reads — the control is that no model's word decides a verdict.
 
 ## The optional daemon

@@ -78,8 +78,10 @@
     every time, so the same file scores differently on different runs — six
     scans of flask's <code>cli.py</code> on one day ranged from 0.375 to 0.525
     (the data behind <a href="/warehouse/">the warehouse page</a>). That
-    spread is the reason corral reports a <em>proven gap</em>, which does not
-    drift, rather than asking you to gate on a kill rate, which does. Both
+    spread is the reason to inspect each <em>proven gap</em> as a specific
+    recorded fault/test pair rather than read a kill rate as a stable grade.
+    Discovery in a fresh run can vary too: it may find different gaps or prove
+    none, so a proven-gap gate is not guaranteed to return the same result. Both
     runs above are entries on the public branch; query them and you will get
     these numbers.
   </p>

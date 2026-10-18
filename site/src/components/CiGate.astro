@@ -35,10 +35,13 @@ steps:
     difference matters. A kill rate is a proportion of <em>freshly generated</em> faults, so it moves between runs on code nobody touched — we have watched an
     unchanged file score 0.375 and then 0.525, and a deliberately weakened suite
     score <em>higher</em> than it had a moment earlier. Set a bar near a healthy
-    value and it reddens good work until someone switches it off. A <strong>proven gap</strong> does not drift: it is a survivor the herd then
+    value and it reddens good work until someone switches it off. A <strong>proven gap</strong> is a survivor the herd then
     killed with a test it wrote and ran — a specific planted fault your suite misses,
     with a test shown to catch it. It is a gap in the tests, not a bug found in
     your code, and a person still decides whether the test belongs.
+    The recorded fault/test pair remains inspectable, but discovery in a fresh run
+    can vary even on unchanged code. A proven-gap gate can therefore change
+    between runs too; replay recorded mutants when comparing test changes.
   </p>
 
   <p>
@@ -85,11 +88,11 @@ steps:
     <div class="tech">
       <h3>Teeth are opt-in, and per file</h3>
       <p>
-        Without <code>min-kill-rate</code>, a graded file exits 0 no matter how
-        weak it scored — read the report for the number. Set it and any single
+        A low kill rate alone does not fail a graded scan unless you set <code>min-kill-rate</code>. Set it and any single
         file below the threshold fails the run; a well-tested file elsewhere in
-        the PR cannot average out a weak one. The bar is the operator's, never
-        the tool's.
+        the PR cannot average out a weak one. <code>max-proven-missed</code> is a
+        separate gate on demonstrated test gaps; other execution failures can
+        also fail the run. The thresholds are the operator's.
       </p>
       <a href="/docs/github-action/">Exit codes &amp; thresholds →</a>
     </div>
@@ -97,9 +100,11 @@ steps:
       <h3>It won't spend your money on a stranger</h3>
       <p>
         The bill lands on the repository that runs the workflow — your runner
-        minutes, your API key. Fork pull requests skip on their own because
-        GitHub withholds secrets, and the shipped example is label-gated on top
-        of that, so no pull request starts a paid job merely by existing.
+        minutes, your API key. GitHub withholds secrets from fork pull requests:
+        without a job guard they fail for want of a key, rather than skipping.
+        The full workflow in the docs adds a same-repository and audit-label
+        guard; the job excerpt above does not. Add that guard if you want
+        paid runs to require an explicit label.
         Reaching for <code>pull_request_target</code> to "fix" that would run a
         contributor's code <em>with</em> your secrets.
       </p>

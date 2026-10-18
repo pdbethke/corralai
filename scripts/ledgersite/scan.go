@@ -104,8 +104,16 @@ func buildScanView(e auditpush.LedgerEntry, c ChainView, retraction *auditpush.L
 		if f.KillRate != nil && f.MutantsGraded > 0 {
 			fv.Killed = killrate.Killed(f.MutantsGraded, f.Survivors)
 			fv.Rate = fmt.Sprintf("%.2f", *f.KillRate)
-			if lo, hi, ok := killrate.Interval(f.MutantsGraded, f.Survivors); ok {
-				fv.Interval = fmt.Sprintf("%.2f–%.2f", lo, hi)
+			// The band is over the DISTINCT measured edits when the row
+			// recorded them, the sample the certification gate used. An
+			// older row has only MutantsGraded, which counts duplicates, so
+			// its band says so rather than passing for the other.
+			if f.MutantsDistinct != nil && f.MutantsDistinctSurvived != nil {
+				if lo, hi, ok := killrate.Interval(*f.MutantsDistinct, *f.MutantsDistinctSurvived); ok {
+					fv.Interval = fmt.Sprintf("%.2f–%.2f (n=%d distinct)", lo, hi, *f.MutantsDistinct)
+				}
+			} else if lo, hi, ok := killrate.Interval(f.MutantsGraded, f.Survivors); ok {
+				fv.Interval = fmt.Sprintf("%.2f–%.2f (n=%d, duplicates counted)", lo, hi, f.MutantsGraded)
 			}
 			sv.Graded += f.MutantsGraded
 			sv.Killed += fv.Killed

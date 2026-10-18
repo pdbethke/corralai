@@ -3,6 +3,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"time"
@@ -194,7 +195,10 @@ func buildAuditRows(files []scanstore.File, scanID int64, meta bundleMeta) []aud
 			CacheKey: f.CacheKey, ParentSHA256: f.ParentSHA256,
 			MutantsGraded: f.MutantsGraded, MutantsInvalid: f.MutantsInvalid,
 			MutantsTimedOut: f.MutantsTimedOut,
-			RegionsTotal:    f.RegionsTotal, RegionsProbed: f.RegionsProbed,
+			// The interval's sample is read from the stored verdict, which
+			// holds it whole; scanstore has no column for it.
+			MutantsDistinct: storedDistinct(f.VerdictJSON, "mutants_distinct"), MutantsDistinctSurvived: storedDistinct(f.VerdictJSON, "mutants_distinct_survived"),
+			RegionsTotal: f.RegionsTotal, RegionsProbed: f.RegionsProbed,
 			DroppedRegions: f.DroppedRegions, VacuousFindings: f.VacuousFindings, CriticIncomplete: f.CriticIncomplete,
 			AuthoredTestNotCollected: f.AuthoredTestNotCollected,
 			BaselineFailed:           f.BaselineFailed,
@@ -334,4 +338,31 @@ func nilIfZeroTime(t time.Time) *time.Time {
 		return nil
 	}
 	return &t
+}
+
+// storedDistinct reads one of the distinct-sample counts out of a stored
+// verdict (advpool.Verdict.MutantsDistinct and its survived count). nil when
+// there is no verdict or it never recorded the sample: a file that was not
+// graded, or a verdict from before the sample was carried.
+func storedDistinct(verdictJSON, key string) *int {
+	if verdictJSON == "" {
+		return nil
+	}
+	var v map[string]json.RawMessage
+	if json.Unmarshal([]byte(verdictJSON), &v) != nil {
+		return nil
+	}
+	raw, ok := v[key]
+	if !ok {
+		if _, has := v["mutants_distinct"]; !has {
+			return nil // the sample was never recorded
+		}
+		zero := 0 // recorded, with none surviving (omitempty dropped the 0)
+		return &zero
+	}
+	var n int
+	if json.Unmarshal(raw, &n) != nil {
+		return nil
+	}
+	return &n
 }

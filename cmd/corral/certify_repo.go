@@ -5442,10 +5442,7 @@ func writeAuditStatement(path, repoDir string, r reposcan.RepoReport, models map
 	for _, f := range r.Weakest {
 		// The interval is signed only where the rate is: an uncovered
 		// file's rate is withheld (signableKillRate), and so is its band.
-		var lo, hi float64
-		if !f.Uncovered && f.MutantsGraded > 0 {
-			lo, hi, _ = killrate.Interval(f.MutantsGraded, f.Survivors)
-		}
+		lo, hi, _ := fileInterval(f)
 		files = append(files, certify.AuditedFile{
 			Path:             f.Path,
 			KillRate:         signableKillRate(f),
@@ -5876,6 +5873,20 @@ func writerModeDisclosure(mode string, calls, seatsUngraded int, attempts *advpo
 	return fmt.Sprintf("writer: %s (%d %s)%s", mode, calls, unit, attemptsNote)
 }
 
+// fileInterval is a file's 95% kill-rate interval, the ONE derivation both
+// the printed report and the signed audit statement use. It is taken over
+// the DISTINCT measured edits, the sample the certification gate decided on
+// (advpool.Verdict.MutantsDistinct), never over MutantsGraded, which counts
+// every duplicate and so prints a band narrower than the evidence. ok is
+// false for an uncovered file (its rate is withheld) and when no distinct
+// edit was measured: a band over an unknown n is not a band.
+func fileInterval(f reposcan.WeakFile) (lo, hi float64, ok bool) {
+	if f.Uncovered || f.MutantsDistinct <= 0 {
+		return 0, 0, false
+	}
+	return killrate.Interval(f.MutantsDistinct, f.MutantsDistinctSurvived)
+}
+
 // examConfidenceLine is the two terms a bare kill rate hides, on one line:
 // the sampling term (a 95% Wilson interval over the mutants graded) and the
 // coverage term (how much of the file's surface the mutants reached). Each is
@@ -5884,11 +5895,8 @@ func writerModeDisclosure(mode string, calls, seatsUngraded int, attempts *advpo
 // own when unmeasured rather than printed as a zero.
 func examConfidenceLine(f reposcan.WeakFile) string {
 	var parts []string
-	n := f.MutantsGraded
-	if n > 0 && !f.Uncovered {
-		if lo, hi, ok := killrate.Interval(n, f.Survivors); ok {
-			parts = append(parts, fmt.Sprintf("kill rate %.2f, 95%% interval %.2f–%.2f (n=%d)", f.KillRate, lo, hi, n))
-		}
+	if lo, hi, ok := fileInterval(f); ok {
+		parts = append(parts, fmt.Sprintf("kill rate %.2f, 95%% interval %.2f–%.2f (n=%d distinct)", f.KillRate, lo, hi, f.MutantsDistinct))
 	}
 	if c := f.ExamCoverage; c.Measured {
 		s := fmt.Sprintf("reached %d of %d symbols", c.SymbolsProbed, c.Symbols)

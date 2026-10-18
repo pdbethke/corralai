@@ -34,7 +34,8 @@ func TestJSTestNamesInSource(t *testing.T) {
 		{"destructured imports are not calls", "const { describe, it, test } = require('node:test');\ntest('a', f);\n", []string{"a"}},
 		{"member it is not a test", "test('a', () => { const n = foo.it; });\n", []string{"a"}},
 		{"no semicolons", "const calc = require('./calc')\ntest('a', f)\ntest('b', f)\n", []string{"a", "b"}},
-		{"default and namespace imports", "import test from 'node:test'\nconst it = require('node:test').it\nimport { describe as d, it as i } from 'vitest'\ntest('a', f)\n", []string{"a"}},
+		{"default and namespace imports", "import test from 'node:test'\nconst it = require('node:test').it\nimport { it as it } from 'vitest'\ntest('a', f)\n", []string{"a"}},
+		{"a default import of another module", "import calc from './calc'\nconst x = require('test-utils')\ntest('a', f)\n", []string{"a"}},
 	} {
 		if got := jsTestNames(c.src); !reflect.DeepEqual(got, c.want) {
 			t.Errorf("%s: got %q, want %q", c.name, got, c.want)
@@ -67,6 +68,15 @@ func TestJSTestNamesInSourceFailsClosed(t *testing.T) {
 		"test in a top-level arrow":  "const make = () => it('a', f);\ndescribe('g', () => { make(); });\n",
 		"aliased test function":      "const itIf = ok ? it : xit;\nitIf('b', f);\nit('a', f);\n",
 		"node subtest":               "test('top', async (t) => { await t.test('sub', f); });\n",
+		// Renamed bindings: calls through the new name cannot be seen (an
+		// outside review, Codex 2026-10-18, ran the first under node --test:
+		// two tests, one listed).
+		"import renamed with as":          "import { test, test as check } from 'node:test';\ncheck('hidden', () => {});\ntest('visible', () => {});\n",
+		"describe renamed with as":        "import { describe as d, it } from 'vitest'\nit('a', f)\nd('g', function () {})\n",
+		"destructured rename":             "const { test: check, it } = require('node:test');\ncheck('hidden', f);\nit('a', f);\n",
+		"node:test default under a name":  "import nt from 'node:test';\nimport { it } from 'node:test';\nnt('hidden', f);\nit('a', f);\n",
+		"node:test required under a name": "const nt = require('node:test');\nconst { it } = require('node:test');\nnt('hidden', f);\nit('a', f);\n",
+		"default plus named":              "import nt, { it } from 'node:test';\nnt('hidden', f);\nit('a', f);\n",
 	} {
 		if got := jsTestNames(src); got != nil {
 			t.Errorf("%s: want nil, got %q", name, got)

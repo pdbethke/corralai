@@ -132,7 +132,15 @@ limits are about conduct, not disclosure:
   upstream contributions go through that project's own process, in the
   founder's words;
 - findings are stated plainly as what execution measured, with no commentary
-  on the project.
+  on the project;
+- an exploitable security vulnerability — not a missing test, not an ordinary
+  bug — follows coordinated disclosure on Project Zero's terms: the founder
+  reports it privately (the project's `SECURITY.md` or GitHub private
+  vulnerability reporting), and the full finding is published when a fix
+  ships or at 90 days, whichever comes first (7 days if it is being exploited
+  in the wild). The delay protects the project's users, not the project.
+  The ledger has no commit-now-reveal-later entry yet, so until it does the
+  signed entry is kept locally and pushed at the deadline.
 
 (This said "never audit a repository belonging to someone who has not agreed
 to it" until 2026-10-19. It contradicted the ledger's practice of publishing

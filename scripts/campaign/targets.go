@@ -71,6 +71,11 @@ func (t Target) Validate() error {
 			return fmt.Errorf("target %q: %s is required", t.Name, r.key)
 		}
 	}
+	// A fork that is its own upstream would make `gh repo sync` and the ledger
+	// pushes act on the upstream project itself.
+	if strings.EqualFold(strings.TrimSpace(t.Fork), strings.TrimSpace(t.Upstream)) {
+		return fmt.Errorf("target %q: fork and upstream are both %q; the fork must be the founder's own repository, never the upstream", t.Name, t.Fork)
+	}
 	if t.Substrate != "jail" && t.Substrate != "workspace" {
 		return fmt.Errorf("target %q: substrate %q must be \"jail\" or \"workspace\"", t.Name, t.Substrate)
 	}

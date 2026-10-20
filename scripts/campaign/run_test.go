@@ -14,6 +14,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/pdbethke/corralai/internal/auditpush"
 )
@@ -40,20 +41,24 @@ type fakeRunner struct {
 	branch     map[string]string // worktree -> status header override
 	certifyErr error             // returned by certify AFTER it wrote its entry
 	sha        string
+	version    string
+	registered bool  // a worktree is registered in the clone (add refuses until pruned)
+	removeCtx  error // ctx.Err() seen by the last `git worktree remove`
 }
 
 func newFake(t *testing.T, l layout, tg Target) *fakeRunner {
 	return &fakeRunner{
-		t: t, sha: testSHA,
+		t: t, sha: testSHA, version: "corral v1.0.0-rc.26",
 		origin: map[string]string{
 			l.ledger: "https://github.com/" + tg.Fork + ".git",
 			l.corral: "git@github.com:pdbethke/corralai.git",
+			l.clone:  "https://github.com/" + tg.Upstream + ".git",
 		},
 		untracked: map[string][]string{}, ahead: map[string][]string{}, branch: map[string]string{},
 	}
 }
 
-func (f *fakeRunner) Run(_ context.Context, dir string, argv ...string) (string, error) {
+func (f *fakeRunner) Run(ctx context.Context, dir string, argv ...string) (string, error) {
 	f.calls = append(f.calls, call{dir, argv})
 	if err := checkAllowed(argv); err != nil {
 		return "", err
@@ -64,6 +69,21 @@ func (f *fakeRunner) Run(_ context.Context, dir string, argv ...string) (string,
 		}
 	}
 	switch {
+	case argv[0] == "corral" && argv[1] == "--version":
+		return f.version + "\n", nil
+	case argv[0] == "git" && argv[1] == "worktree":
+		switch argv[2] {
+		case "prune":
+			f.registered = false
+		case "add":
+			if f.registered {
+				return "", errors.New("fatal: '" + argv[4] + "' is a missing but already registered worktree; use 'add -f' to override, or 'prune' or 'remove' to clear")
+			}
+			f.registered = true
+		case "remove":
+			f.removeCtx = ctx.Err()
+			f.registered = false
+		}
 	case argv[0] == "git" && argv[1] == "remote":
 		return f.origin[dir] + "\n", nil
 	case argv[0] == "git" && argv[1] == "-C":
@@ -336,7 +356,8 @@ func TestRunNeverTouchesTheCurationCheckout(t *testing.T) {
 		if c.dir != l.clone {
 			continue
 		}
-		ok := (c.argv[0] == "git" && c.argv[1] == "fetch") || (c.argv[0] == "git" && c.argv[1] == "worktree")
+		ok := (c.argv[0] == "git" && c.argv[1] == "fetch") || (c.argv[0] == "git" && c.argv[1] == "worktree") ||
+			reflect.DeepEqual(c.argv, []string{"git", "remote", "get-url", "upstream"}) // read-only
 		if !ok {
 			t.Fatalf("command in the curation checkout: %q", c.argv)
 		}
@@ -395,6 +416,16 @@ func TestCheckAllowedRefusesWhatTheCampaignMustNeverDo(t *testing.T) {
 		{"git", "remote", "get-url", "origin"},
 		{"git", "diff", "--name-only", "origin/corral/ledger", "HEAD", "--", "scans"},
 		{"corral", "ledger", "prune"},
+		{"corral", "--version", "--help"},
+		{"corral", "--help"},
+		{"git", "remote", "get-url", "upstream", "extra"},
+		{"git", "remote", "get-url", "--push", "upstream"},
+		{"git", "remote", "get-url", "other"},
+		{"git", "worktree", "list"},
+		{"git", "worktree", "add", "x", "y"},
+		{"git", "worktree", "remove", "--force", "x"},
+		{"git", "worktree", "remove"},
+		{"git", "worktree", "prune", "--expire=now"},
 		{"curl", "http://x"},
 	} {
 		if checkAllowed(argv) == nil {
@@ -673,5 +704,256 @@ func TestRunKeepsSavedEntriesWhenARelinkFails(t *testing.T) {
 	saved, _ := filepath.Glob(filepath.Join(unplaced, "relink-*", "*.json"))
 	if len(saved) != 1 {
 		t.Fatalf("kept copies: %v", saved)
+	}
+}
+
+func TestFindingsI1SkipsWhenAnOlderEntryMatchesBehindANewerOne(t *testing.T) {
+	tg := validTarget()
+	l := newLayout(t, tg)
+	writeEntry(t, l.ledger, "20260101T000000-old.json", testSHA, tg.Path)
+	writeEntry(t, l.ledger, "20260102T000000-new.json", "deadbeef", "other")
+	f := newFake(t, l, tg)
+	if _, _, err := runIt(t, f, tg, l); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.with("corral", "certify")) != 0 {
+		t.Fatal("an older matching entry behind a newer non-matching one was not seen")
+	}
+}
+
+func TestSecondRunRecoversFromARegisteredButMissingWorktree(t *testing.T) {
+	tg := validTarget()
+	l := newLayout(t, tg)
+	f := newFake(t, l, tg)
+	f.registered = true // a killed run left git's record of a directory that is gone
+	if _, _, err := runIt(t, f, tg, l); err != nil {
+		t.Fatalf("a stale registration must not fail the run: %v", err)
+	}
+	if len(f.with("corral", "certify")) != 1 {
+		t.Fatal("no audit ran")
+	}
+	if len(f.with("git", "worktree", "prune")) == 0 {
+		t.Fatal("never pruned")
+	}
+}
+
+func TestWorktreeIsRemovedEvenWhenTheRunWasCancelled(t *testing.T) {
+	tg := validTarget()
+	l := newLayout(t, tg)
+	f := newFake(t, l, tg)
+	ctx, cancel := context.WithCancel(context.Background())
+	f.hook = func(f *fakeRunner, dir string, argv []string) (string, error, bool) {
+		if argv[0] == "corral" && argv[1] == "certify" {
+			cancel() // Ctrl-C mid-audit
+			return "", context.Canceled, true
+		}
+		return "", nil, false
+	}
+	var o, e bytes.Buffer
+	if err := RunTarget(ctx, f, tg, l.campaign, &o, &e); err == nil {
+		t.Fatal("want the cancellation reported")
+	}
+	if len(f.with("git", "worktree", "remove")) != 1 || f.removeCtx != nil {
+		t.Fatalf("cleanup must run on an uncancelled context: removed %d, ctx err %v", len(f.with("git", "worktree", "remove")), f.removeCtx)
+	}
+	if f.registered {
+		t.Fatal("worktree left registered")
+	}
+}
+
+func TestLockRefusesASecondRun(t *testing.T) {
+	tg := validTarget()
+	l := newLayout(t, tg)
+	targets := filepath.Join(t.TempDir(), "targets.json")
+	copyTargets(t, targets)
+	env := func(k string) string {
+		if k == "CORRAL_CAMPAIGN_DIR" {
+			return l.campaign
+		}
+		return ""
+	}
+	unlock, err := lockCampaign(l.campaign)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := &recRunner{}
+	var errb bytes.Buffer
+	if code := cli(context.Background(), []string{"-targets", targets, "run", tg.Name}, env, r, &bytes.Buffer{}, &errb); code != 1 ||
+		!strings.Contains(errb.String(), "another campaign run is in progress") {
+		t.Fatalf("exit %d: %s", code, errb.String())
+	}
+	if len(r.argvs) != 0 {
+		t.Fatalf("a locked run ran %v", r.argvs)
+	}
+	unlock()
+	if _, err := lockCampaign(l.campaign); err != nil {
+		t.Fatalf("lock not released: %v", err)
+	}
+}
+
+func TestRunRefusesAnUpstreamRemoteThatIsNotTheTargetsUpstreamBeforeSpend(t *testing.T) {
+	tg := validTarget()
+	l := newLayout(t, tg)
+	f := newFake(t, l, tg)
+	f.origin[l.clone] = "https://github.com/someone/else.git"
+	_, _, err := runIt(t, f, tg, l)
+	if err == nil || !strings.Contains(err.Error(), "someone/else") {
+		t.Fatalf("err %v", err)
+	}
+	if len(f.with("gh")) != 0 || len(f.with("corral")) != 0 || len(f.with("git", "fetch")) != 0 {
+		t.Fatal("spent before refusing")
+	}
+}
+
+func TestRunRefusesAGoneUpstreamBranch(t *testing.T) {
+	tg := validTarget()
+	l := newLayout(t, tg)
+	f := newFake(t, l, tg)
+	f.branch[l.corral] = "## corral/ledger...origin/corral/ledger [gone]"
+	_, _, err := runIt(t, f, tg, l)
+	if err == nil || !strings.Contains(err.Error(), "[gone]") {
+		t.Fatalf("err %v", err)
+	}
+	if len(f.with("corral")) != 0 {
+		t.Fatal("spent before refusing")
+	}
+}
+
+func TestRunRefusesChangesOutsideScansBeforeSpend(t *testing.T) {
+	tg := validTarget()
+	l := newLayout(t, tg)
+	f := newFake(t, l, tg)
+	f.hook = func(f *fakeRunner, dir string, argv []string) (string, error, bool) {
+		if argv[0] == "git" && argv[1] == "status" && dir == l.ledger {
+			return "## corral/ledger...origin/corral/ledger\n M README.md\n", nil, true
+		}
+		return "", nil, false
+	}
+	_, _, err := runIt(t, f, tg, l)
+	if err == nil || !strings.Contains(err.Error(), "README.md") {
+		t.Fatalf("err %v", err)
+	}
+	if len(f.with("corral")) != 0 || len(f.with("gh")) != 0 {
+		t.Fatal("spent before refusing")
+	}
+}
+
+func TestRunRefusesAnOldOrUnstampedCorralBeforeSpend(t *testing.T) {
+	for _, v := range []string{"corral dev", "corral v1.0.0-rc.25", "corral v1.0.0-rc.26-dirty", "corral v0.9.0", "corral v1.0.0-rc.26.0.20261020-abc", "garbage", ""} {
+		tg := validTarget()
+		l := newLayout(t, tg)
+		f := newFake(t, l, tg)
+		f.version = v
+		_, _, err := runIt(t, f, tg, l)
+		if err == nil || !strings.Contains(err.Error(), "go install github.com/pdbethke/corralai/cmd/corral@v1.0.0-rc.26") {
+			t.Fatalf("%q: err %v", v, err)
+		}
+		if len(f.with("gh")) != 0 || len(f.with("corral", "certify")) != 0 {
+			t.Fatalf("%q: spent before refusing", v)
+		}
+	}
+	for _, v := range []string{"v1.0.0-rc.26", "v1.0.0-rc.27", "v1.0.0", "v1.0.1", "v2.0.0-rc.1"} {
+		if !versionAtLeast(v, minCorral) {
+			t.Errorf("%s should pass", v)
+		}
+	}
+}
+
+func TestDirtyOutsideScansDoesNotCountAsUnpublished(t *testing.T) {
+	tg := validTarget()
+	l := newLayout(t, tg)
+	f := newFake(t, l, tg)
+	f.hook = func(f *fakeRunner, dir string, argv []string) (string, error, bool) {
+		if argv[0] == "git" && argv[1] == "status" && dir == l.ledger {
+			return "## corral/ledger...origin/corral/ledger\n?? notes.txt\n", nil, true
+		}
+		return "", nil, false
+	}
+	files, dirty, ahead, err := unpublished(context.Background(), f, l.ledger)
+	if err != nil || dirty || ahead || len(files) != 0 {
+		t.Fatalf("%v %v %v %v", files, dirty, ahead, err)
+	}
+}
+
+func TestRelinkRefusesAnEntryNameThatIsNotAnEntryFile(t *testing.T) {
+	for _, bad := range []string{"scans/sub/x.json", "scans/.hidden.json", "scans/a b.json", "scans/x.txt", "scans/../x.json"} {
+		tg := validTarget()
+		l := newLayout(t, tg)
+		f := newFake(t, l, tg)
+		f.hook = func(f *fakeRunner, dir string, argv []string) (string, error, bool) {
+			if dir != l.ledger {
+				return "", nil, false
+			}
+			switch {
+			case argv[0] == "git" && argv[1] == "push":
+				return "", errors.New("[rejected] (non-fast-forward)"), true
+			case argv[0] == "git" && argv[1] == "status":
+				return "## corral/ledger...origin/corral/ledger\n?? " + bad + "\n", nil, true
+			}
+			return "", nil, false
+		}
+		err := publish(context.Background(), f, l.ledger, filepath.Join(l.root, "unplaced"), "m", &bytes.Buffer{})
+		if err == nil || !strings.Contains(err.Error(), "not a ledger entry file name") {
+			t.Errorf("%q: want a refusal, got %v", bad, err)
+		}
+		if len(f.with("git", "reset")) != 0 {
+			t.Errorf("%q: reset ran after the refusal", bad)
+		}
+	}
+}
+
+func TestRelinkFetchFailureNamesTheSavedCopies(t *testing.T) {
+	tg := validTarget()
+	l := newLayout(t, tg)
+	f := newFake(t, l, tg)
+	f.hook = func(f *fakeRunner, dir string, argv []string) (string, error, bool) {
+		if dir != l.ledger {
+			return "", nil, false
+		}
+		switch {
+		case argv[0] == "git" && argv[1] == "push":
+			return "", errors.New("[rejected] (non-fast-forward)"), true
+		case argv[0] == "git" && argv[1] == "fetch":
+			return "", errors.New("network down"), true
+		}
+		return "", nil, false
+	}
+	_, _, err := runIt(t, f, tg, l)
+	unplaced := filepath.Join(l.root, "unplaced")
+	if err == nil || !strings.Contains(err.Error(), unplaced) {
+		t.Fatalf("err %v", err)
+	}
+}
+
+func TestSettleDoesNotCopyARetractedEntry(t *testing.T) {
+	tg := validTarget()
+	l := newLayout(t, tg)
+	f := newFake(t, l, tg)
+	dir := filepath.Join(l.ledger, auditpush.ScansSubdir)
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	put := func(name string, e auditpush.LedgerEntry) {
+		raw, err := json.Marshal(e)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, name), raw, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	scan := auditpush.LedgerEntry{Format: auditpush.LedgerFileFormat, Hash: "h1", Pushed: time.Unix(1000, 0)}
+	scan.Bundle.Scan.Commit = testSHA
+	put("20260101T000000-a.json", scan)
+	put("20260102T000000-retract.json", auditpush.LedgerEntry{Format: auditpush.LedgerFileFormat, Kind: auditpush.KindRetract,
+		Hash: "h2", Retracts: "h1", Reason: "bad run", Pushed: time.Unix(2000, 0)})
+	if err := recordManifest(manifestFile(l.root), []string{scanKey(scan.Bundle.Scan)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := settle(context.Background(), f, l.ledger, l.corral, manifestFile(l.root), filepath.Join(l.root, "unplaced"), "m", &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.with("corral", "ledger", "append")) != 0 {
+		t.Fatal("a retracted entry was copied")
 	}
 }

@@ -23,19 +23,60 @@ var unitNameRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*$`)
 // unquoted unit value: % is a specifier, $ an expansion, the rest quoting.
 const unitUnsafe = "%\"'\\$"
 
-// fixedPath is appended after the corral binary's directory so git and gh stay
-// findable; a systemd user unit's default PATH is not the operator's shell's.
-const fixedPath = "/usr/local/bin:/usr/bin:/bin"
+// checkUnitValue refuses a value systemd would split or expand in an unquoted
+// Environment=/ExecStart= line.
+func checkUnitValue(label, v string) error {
+	if i := strings.IndexAny(v, unitUnsafe); i >= 0 || strings.IndexFunc(v, unicode.IsSpace) >= 0 {
+		return fmt.Errorf("%s %q contains whitespace or one of %s, which systemd would split or expand in an unquoted Environment=/ExecStart= value; use a path without them", label, v, unitUnsafe)
+	}
+	return nil
+}
 
-// RenderUnits returns the oneshot service and the weekly timer for one target.
+// checkPathEnv validates a PATH value for the unit: every component absolute
+// and free of the characters checkUnitValue refuses. The unit's PATH is exactly
+// this value; nothing is appended, because a baked-in directory list would be
+// one machine's layout imposed on the rest (the subscription seats' claude and
+// codex live wherever the operator installed them, often ~/.local/bin).
+func checkPathEnv(v string) error {
+	if strings.TrimSpace(v) == "" {
+		return errors.New("--path is required: the PATH value for the unit (absolute directories joined by ':'), including where git, gh, claude and codex live")
+	}
+	if err := checkUnitValue("--path", v); err != nil {
+		return err
+	}
+	for _, c := range strings.Split(v, ":") {
+		if !filepath.IsAbs(c) {
+			return fmt.Errorf("--path %q: component %q must be an absolute directory", v, c)
+		}
+	}
+	return nil
+}
+
+// checkOnCalendar validates the timer's schedule. Spaces are legal in a
+// calendar spec ("Mon *-*-* 03:00"); control characters and the characters
+// systemd expands are not.
+func checkOnCalendar(v string) error {
+	if strings.TrimSpace(v) == "" {
+		return errors.New("--on-calendar is required: a systemd calendar spec, different for each target so audits do not overlap")
+	}
+	if strings.ContainsAny(v, unitUnsafe) || strings.IndexFunc(v, unicode.IsControl) >= 0 {
+		return fmt.Errorf("--on-calendar %q contains a control character or one of %s", v, unitUnsafe)
+	}
+	return nil
+}
+
+// RenderUnits returns the oneshot service and the timer for one target.
 // Every path must be absolute: a unit runs with no working directory the
 // operator chose, so a relative path would resolve against nothing meaningful.
 //
 // The service has no Restart=: a failed audit waits for next week rather than
 // retrying and spending again (the run itself never retries either).
-// Persistent=true makes a missed week (machine off) run at the next start or
+// onCalendar is required and not defaulted: one default would fire every
+// target at the same moment, and the audits are long and metered. (`run` also
+// takes a lock, so overlap is refused even if the schedules are not apart.)
+// Persistent=true makes a missed run (machine off) run at the next start or
 // wake; the randomized delay spreads the start time within the hour.
-func RenderUnits(binPath, corralPath, campaignDir, targetsPath, name string) (service, timer string, err error) {
+func RenderUnits(binPath, corralPath, campaignDir, targetsPath, pathEnv, onCalendar, name string) (service, timer string, err error) {
 	for _, p := range [][2]string{
 		{"campaign binary", binPath}, {"corral binary", corralPath},
 		{"campaign dir", campaignDir}, {"targets file", targetsPath},
@@ -48,9 +89,15 @@ func RenderUnits(binPath, corralPath, campaignDir, targetsPath, name string) (se
 		{"campaign binary", binPath}, {"corral binary", corralPath},
 		{"campaign dir", campaignDir}, {"targets file", targetsPath},
 	} {
-		if i := strings.IndexAny(p[1], unitUnsafe); i >= 0 || strings.IndexFunc(p[1], unicode.IsSpace) >= 0 {
-			return "", "", fmt.Errorf("%s %q contains whitespace or one of %s, which systemd would split or expand in an unquoted Environment=/ExecStart= value; use a path without them", p[0], p[1], unitUnsafe)
+		if err := checkUnitValue(p[0], p[1]); err != nil {
+			return "", "", err
 		}
+	}
+	if err := checkPathEnv(pathEnv); err != nil {
+		return "", "", err
+	}
+	if err := checkOnCalendar(onCalendar); err != nil {
+		return "", "", err
 	}
 	if !unitNameRE.MatchString(name) {
 		return "", "", fmt.Errorf("target name %q is not usable in a unit name", name)
@@ -62,21 +109,21 @@ Description=corral proven-contributions campaign: audit %[1]s
 [Service]
 Type=oneshot
 Environment=CORRAL_CAMPAIGN_DIR=%[2]s
-Environment=PATH=%[3]s:%[4]s
-ExecStart=%[5]s -targets %[6]s run %[1]s
-`, name, campaignDir, filepath.Dir(corralPath), fixedPath, binPath, targetsPath)
+Environment=PATH=%[3]s
+ExecStart=%[4]s -targets %[5]s run %[1]s
+`, name, campaignDir, pathEnv, binPath, targetsPath)
 	timer = fmt.Sprintf(`# SPDX-License-Identifier: Elastic-2.0
 [Unit]
-Description=Weekly corral campaign audit: %[1]s
+Description=Scheduled corral campaign audit: %[1]s
 
 [Timer]
-OnCalendar=weekly
+OnCalendar=%[2]s
 Persistent=true
 RandomizedDelaySec=1h
 
 [Install]
 WantedBy=timers.target
-`, name)
+`, name, onCalendar)
 	return service, timer, nil
 }
 
@@ -97,8 +144,8 @@ func unitDir(getenv func(string) string) (string, error) {
 // program's command allowlist has no systemctl in it. An existing unit with
 // different content is refused rather than overwritten, checked for both
 // files before either is written.
-func InstallTimer(dir, binPath, corralPath, campaignDir, targetsPath, name string, stdout io.Writer) error {
-	svc, tim, err := RenderUnits(binPath, corralPath, campaignDir, targetsPath, name)
+func InstallTimer(dir, binPath, corralPath, campaignDir, targetsPath, pathEnv, onCalendar, name string, stdout io.Writer) error {
+	svc, tim, err := RenderUnits(binPath, corralPath, campaignDir, targetsPath, pathEnv, onCalendar, name)
 	if err != nil {
 		return err
 	}
@@ -123,12 +170,12 @@ func InstallTimer(dir, binPath, corralPath, campaignDir, targetsPath, name strin
 		}
 	}
 	if len(toWrite) > 0 {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return err
 		}
 	}
 	for _, i := range toWrite {
-		if err := os.WriteFile(files[i].path, []byte(files[i].body), 0o644); err != nil {
+		if err := os.WriteFile(files[i].path, []byte(files[i].body), 0o600); err != nil {
 			return err
 		}
 		fmt.Fprintf(stdout, "wrote %s\n", files[i].path)

@@ -173,3 +173,14 @@ func TestShippedTargetsFileLoads(t *testing.T) {
 		t.Fatalf("targets.json: %v", err)
 	}
 }
+
+func TestValidateRefusesForkEqualToUpstream(t *testing.T) {
+	for _, fork := range []string{"Kludex/starlette", "kludex/STARLETTE"} {
+		tg := validTarget()
+		tg.Fork = fork
+		err := tg.Validate()
+		if err == nil || !strings.Contains(err.Error(), "fork") {
+			t.Errorf("fork %q: err %v", fork, err)
+		}
+	}
+}

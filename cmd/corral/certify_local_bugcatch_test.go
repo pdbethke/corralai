@@ -32,6 +32,20 @@ func fillNonZero(t *testing.T, p any) {
 	}
 }
 
+// alternateBools sets every bool field of *p by field-index parity (flip
+// inverts it). fillNonZero makes every bool true, so a converter that swaps
+// two bool fields passes; run a parity test with flip false and again true
+// and each bool is true in one run and false in the other, so a swap (or a
+// dropped bool) fails one of them.
+func alternateBools(p any, flip bool) {
+	v := reflect.ValueOf(p).Elem()
+	for i := 0; i < v.NumField(); i++ {
+		if f := v.Field(i); f.Kind() == reflect.Bool {
+			f.SetBool((i%2 == 0) != flip)
+		}
+	}
+}
+
 func assertSameNamedFields(t *testing.T, src, dst any) {
 	t.Helper()
 	sv, dv := reflect.ValueOf(src), reflect.ValueOf(dst)
@@ -39,7 +53,7 @@ func assertSameNamedFields(t *testing.T, src, dst any) {
 		name := sv.Type().Field(i).Name
 		df := dv.FieldByName(name)
 		if !df.IsValid() {
-			t.Errorf("bugcatch.Observation has no field %s — the sink cannot carry it", name)
+			t.Errorf("%s has no field %s — the sink cannot carry it", dv.Type(), name)
 			continue
 		}
 		if !reflect.DeepEqual(sv.Field(i).Interface(), df.Interface()) {

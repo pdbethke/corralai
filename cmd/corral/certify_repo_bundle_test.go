@@ -773,14 +773,14 @@ func TestBundleCarriesTreeDirtyAndRepoIdentity(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if has := strings.Contains(string(raw), `"tree_dirty"`); has != (tc.dirty != nil) {
-				t.Fatalf("tree_dirty present in JSON = %v for %s: %s", has, tc.name, raw)
+			if has := strings.Contains(string(raw), `"TreeDirty"`); has != (tc.dirty != nil) {
+				t.Fatalf("TreeDirty present in JSON = %v for %s: %s", has, tc.name, raw)
 			}
 		})
 	}
 	// Absent facts leave the JSON as it was before they existed.
 	raw, _ := json.Marshal(buildBundle(scan, 1, nil, nil, nil, nil, auditpush.Link{}, false, "o/r", "deadbeef", "", bundleMeta{}).Scan)
-	if strings.Contains(string(raw), "repo_identity") || strings.Contains(string(raw), "tree_dirty") {
+	if strings.Contains(string(raw), "RepoIdentity") || strings.Contains(string(raw), "TreeDirty") {
 		t.Fatalf("a bundle without the new facts must not mention them: %s", raw)
 	}
 }

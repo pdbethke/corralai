@@ -5530,8 +5530,9 @@ func writeAuditStatement(path, repoDir string, r reposcan.RepoReport, models map
 		return "", nil, fmt.Errorf("refusing to write an audit statement: %w", err)
 	}
 
-	// The WHOLE bundle this scan would push (or did, if --push also ran) —
-	// all five grains, not just the file rows. Hashing only the file rows
+	// The five WAREHOUSE grains of the bundle this scan would push (or did,
+	// if --push also ran), not just the file rows; the telemetry rows are
+	// bound separately by telemetrySHA256 below. Hashing only the file rows
 	// would sign a fraction of what the push writes, and the mutant grain is
 	// exactly where the evidence behind proven_missed lives.
 	//
@@ -5545,7 +5546,13 @@ func writeAuditStatement(path, repoDir string, r reposcan.RepoReport, models map
 		return "", nil, err
 	}
 
+	telSHA, err := telemetrySHA256(bundle)
+	if err != nil {
+		return "", nil, err
+	}
+
 	stmt := certify.BuildAuditAttestation(certify.AuditStatement{
+		TelemetrySHA256:     telSHA,
 		Repo:                repo,
 		Commit:              commit,
 		Files:               files,
@@ -5575,7 +5582,8 @@ func writeAuditStatement(path, repoDir string, r reposcan.RepoReport, models map
 	return sha, signErr, err
 }
 
-// warehouseRowsSHA256 is the hex sha256 of the bundle's canonical JSON, with
+// warehouseRowsSHA256 is the hex sha256 of the bundle's canonical JSON, minus
+// the telemetry slices (see prepareRowsForHash), with
 // BlankUnpushedSource applied and every StatementSHA256 blanked — the value
 // the signed statement carries as warehouseRowsSha256.
 //
@@ -5584,7 +5592,10 @@ func writeAuditStatement(path, repoDir string, r reposcan.RepoReport, models map
 // make the statement's hash depend on itself.
 //
 // WHAT THIS HASH IS, EXACTLY: a SELF-CONSISTENCY CHECK over the canonical
-// JSON of the bundle this process built and pushed. It binds the statement to
+// JSON of the five WAREHOUSE grains of the bundle this process built and
+// pushed (scan, files, mutants, calls, events). The seat, attempt and
+// critic-finding rows are not in it: the statement signs those under
+// telemetrySha256 (telemetrySHA256). It binds the statement to
 // the rows the run produced, so the two cannot be swapped or edited
 // independently, and a holder of BOTH artifacts can check them against each
 // other in either order.
@@ -5682,9 +5693,13 @@ func prepareRowsForHash(b auditpush.Bundle, version int) (auditpush.Bundle, erro
 	// signed ledger entry) but the warehouse has no table for them yet, so a
 	// verifier reading the rows back could never reproduce a hash that
 	// covered them: every run that carried them would fail `verify --db`.
-	// The ledger chain's signature binds them; this hash binds what the
-	// warehouse holds. Phase 4 adds the tables and a hash version that
-	// includes them.
+	// The statement signs them separately (telemetrySHA256) and the ledger
+	// entry's hash binds them too; this hash binds what the warehouse holds.
+	//
+	// VERSION-SCOPED: this exclusion is part of rows-hash versions 1-4 and
+	// stays so for every statement already signed. Phase 4 adds the
+	// warehouse tables and a rows-hash version (5) that includes the slices;
+	// until then telemetrySHA256 is what the statement signs for them.
 	b.Seats, b.MutantAttempts, b.CriticFindings = nil, nil, nil
 	// Link is deliberately NOT hashed: it holds the statement hash itself.
 	b.Link = auditpush.Link{}
@@ -5719,6 +5734,30 @@ func warehouseRowsSHA256At(b auditpush.Bundle, version int) (string, error) {
 		canonical = auditpush.CanonicalSparseJSONV2
 	}
 	js, err := canonical(prepared)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(js)
+	return hex.EncodeToString(sum[:]), nil
+}
+
+// telemetrySHA256 is the hex sha256 of the bundle's three telemetry slices
+// (Seats, MutantAttempts, CriticFindings): BlankUnpushedSource applied (so
+// the digest is over what the entry may lawfully carry, and a critic
+// finding's Evidence is in it only when the run pushed source), then the
+// SAME canonical form the rows hash uses at version 4. "" when the bundle
+// carries no telemetry at all, which the statement omits rather than sign a
+// digest of nothing (see certify.AuditStatement.TelemetrySHA256).
+func telemetrySHA256(b auditpush.Bundle) (string, error) {
+	if len(b.Seats) == 0 && len(b.MutantAttempts) == 0 && len(b.CriticFindings) == 0 {
+		return "", nil
+	}
+	auditpush.BlankUnpushedSource(&b)
+	js, err := auditpush.CanonicalSparseJSONV2(struct {
+		Seats          []auditpush.SeatRow
+		MutantAttempts []auditpush.MutantAttemptRow
+		CriticFindings []auditpush.CriticFindingRow
+	}{b.Seats, b.MutantAttempts, b.CriticFindings})
 	if err != nil {
 		return "", err
 	}

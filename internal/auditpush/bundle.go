@@ -204,12 +204,12 @@ type ScanRow struct {
 	// untracked changes when the run began. A pointer on purpose: nil is
 	// "git could not say" (and every row written before this field), which
 	// is not the same claim as false.
-	TreeDirty *bool `json:"tree_dirty,omitempty"`
+	TreeDirty *bool `json:",omitempty"`
 	// RepoIdentity is how Repo was established: "git" (derived from the
 	// checkout's origin) or "none" (it could not be, and Repo is a stand-in
 	// or empty). It is NOT Identity above — that is the audited PARTY, this
 	// is the provenance of the repo NAME. Empty on rows that never recorded it.
-	RepoIdentity string `json:"repo_identity,omitempty"`
+	RepoIdentity string `json:",omitempty"`
 }
 
 // PushedByCertify is the ScanRow.PushedBy of a run's own entry.
@@ -384,31 +384,31 @@ type EventRow struct {
 // not omitempty: a seat that caught nothing measured zero, and the entry
 // says so.
 type SeatRow struct {
-	Repo   string `json:"repo"`
-	Commit string `json:"commit"`
-	Path   string `json:"path"`
+	Repo   string
+	Commit string
+	Path   string
 
-	Model            string `json:"model"`
-	Role             string `json:"role"`
-	Catches          int    `json:"catches"`
-	Opportunities    int    `json:"opportunities"`
-	SoundTests       int    `json:"sound_tests"`
-	AuthoredTests    int    `json:"authored_tests"`
-	CriticFlags      int    `json:"critic_flags"`
-	MutantsPlanted   int    `json:"mutants_planted"`
-	MutantsSurvived  int    `json:"mutants_survived"`
-	Shard            int    `json:"shard"`
-	Region           string `json:"region"`
-	RegionComplexity int    `json:"region_complexity"`
-	RegionLines      int    `json:"region_lines"`
-	TestComplexity   int    `json:"test_complexity"`
-	ParseRetries     int    `json:"parse_retries"`
-	Dropped          bool   `json:"dropped"`
-	Shadow           bool   `json:"shadow"`
-	Lang             string `json:"lang"`
-	ShadowDrawn      bool   `json:"shadow_drawn"`
-	SeatTool         string `json:"seat_tool"`
-	ModelUnresolved  bool   `json:"model_unresolved"`
+	Model            string
+	Role             string
+	Catches          int
+	Opportunities    int
+	SoundTests       int
+	AuthoredTests    int
+	CriticFlags      int
+	MutantsPlanted   int
+	MutantsSurvived  int
+	Shard            int
+	Region           string
+	RegionComplexity int
+	RegionLines      int
+	TestComplexity   int
+	ParseRetries     int
+	Dropped          bool
+	Shadow           bool
+	Lang             string
+	ShadowDrawn      bool
+	SeatTool         string
+	ModelUnresolved  bool
 }
 
 // MutantAttemptRow is one seat's outcome for one mutant: the paired
@@ -416,15 +416,15 @@ type SeatRow struct {
 // advpool.MutantAttempt by the same Go name, plus Repo and Commit. Path is
 // the producer's own (the mutant's file), not a run-level value.
 type MutantAttemptRow struct {
-	Repo   string `json:"repo"`
-	Commit string `json:"commit"`
+	Repo   string
+	Commit string
 
-	Path     string `json:"path"`
-	MutantID string `json:"mutant_id"`
-	Model    string `json:"model"`
-	Role     string `json:"role"`
-	Shadow   bool   `json:"shadow"`
-	Outcome  string `json:"outcome"`
+	Path     string
+	MutantID string
+	Model    string
+	Role     string
+	Shadow   bool
+	Outcome  string
 }
 
 // CriticFindingRow is one test-critic finding and the execution-checked
@@ -432,22 +432,22 @@ type MutantAttemptRow struct {
 // Go name, plus the subject. Evidence quotes code, so it is in the custody
 // set BlankUnpushedSource withholds.
 type CriticFindingRow struct {
-	Repo   string `json:"repo"`
-	Commit string `json:"commit"`
-	Path   string `json:"path"`
+	Repo   string
+	Commit string
+	Path   string
 
-	QueueFindingID  int64  `json:"queue_finding_id"`
-	Model           string `json:"model"`
-	TargetTest      string `json:"target_test"`
-	TestFile        string `json:"test_file"`
-	TestSelector    string `json:"test_selector"`
-	Scope           string `json:"scope"`
-	Evidence        string `json:"evidence"`
-	Severity        string `json:"severity"`
-	Adjudication    string `json:"adjudication"`
-	Source          string `json:"source"`
-	SeatTool        string `json:"seat_tool"`
-	ModelUnresolved bool   `json:"model_unresolved"`
+	QueueFindingID  int64
+	Model           string
+	TargetTest      string
+	TestFile        string
+	TestSelector    string
+	Scope           string
+	Evidence        string
+	Severity        string
+	Adjudication    string
+	Source          string
+	SeatTool        string
+	ModelUnresolved bool
 }
 
 // Bundle is one scan at all five grains: the thing a push actually is. It
@@ -468,9 +468,9 @@ type Bundle struct {
 	// from the warehouse and could never reproduce a hash that covered rows
 	// the warehouse never received. omitempty, so a bundle that carries none
 	// marshals byte-for-byte as it did before they existed.
-	Seats          []SeatRow          `json:"seats,omitempty"`
-	MutantAttempts []MutantAttemptRow `json:"mutant_attempts,omitempty"`
-	CriticFindings []CriticFindingRow `json:"critic_findings,omitempty"`
+	Seats          []SeatRow          `json:",omitempty"`
+	MutantAttempts []MutantAttemptRow `json:",omitempty"`
+	CriticFindings []CriticFindingRow `json:",omitempty"`
 	// Link is stamped onto every row of every table by PushBundle, so a row
 	// and the statement it names can never disagree about which run produced
 	// them.

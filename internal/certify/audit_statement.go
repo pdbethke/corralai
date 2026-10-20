@@ -216,7 +216,9 @@ type AuditStatement struct {
 	// ledger row that does not exist.
 	ScanID int64 `json:"scanId"`
 	// WarehouseRowsSHA256 is the sha256 of the canonical JSON of the
-	// warehouse rows this scan produces — computed BEFORE this statement is
+	// warehouse rows this scan produces (the five grains the warehouse has
+	// tables for: scan, files, mutants, calls, events. The seat, attempt and
+	// critic-finding rows are NOT in it; TelemetrySHA256 covers those) — computed BEFORE this statement is
 	// signed, from the same rows a --push would write (with ScanID set and
 	// StatementSHA256 left empty, since the statement's own hash cannot
 	// depend on itself). It lets a holder of BOTH the statement and the
@@ -240,6 +242,21 @@ type AuditStatement struct {
 	// the pushing binary's structs, reproducible only by a binary with the
 	// same struct shape.
 	WarehouseRowsHashVersion int `json:"warehouseRowsHashVersion,omitempty"`
+	// TelemetrySHA256 is the sha256 of the canonical JSON of the three
+	// telemetry slices of the bundle (Seats, MutantAttempts, CriticFindings),
+	// after BlankUnpushedSource, in the same canonical form as the rows hash.
+	// It exists because WarehouseRowsSHA256 deliberately EXCLUDES those
+	// slices (the warehouse has no table for them yet, so `verify --db`
+	// could never rebuild them): without this field the signed, anchored
+	// statement would cover none of the per-seat measurements.
+	//
+	// ABSENT means the bundle carried no telemetry rows at all, so nothing
+	// was recorded. It is omitted rather than signed as the digest of an
+	// empty set: a constant digest would read as "telemetry was measured and
+	// there was none", which is a different claim from "none was recorded".
+	// A verifier holding a bundle WITH telemetry against a statement without
+	// this field reports a mismatch.
+	TelemetrySHA256 string `json:"telemetrySha256,omitempty"`
 }
 
 // BuildAuditAttestation renders the statement as an in-toto Statement v1.
@@ -424,6 +441,10 @@ func BuildAuditAttestation(s AuditStatement) map[string]any {
 		if s.WarehouseRowsHashVersion > 0 {
 			predicate["warehouseRowsHashVersion"] = s.WarehouseRowsHashVersion
 		}
+	}
+
+	if s.TelemetrySHA256 != "" {
+		predicate["telemetrySha256"] = s.TelemetrySHA256
 	}
 
 	return map[string]any{

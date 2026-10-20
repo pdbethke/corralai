@@ -122,6 +122,16 @@ func runVerifyAttest(args []string, stdout, stderr io.Writer) int {
 		failed = true
 	}
 
+	// --- 2b. Telemetry rows ---
+	// Only for a scan statement: a review statement signs no telemetry.
+	if pt, _ := stmt["predicateType"].(string); !certify.IsReviewPredicate(pt) {
+		telResult := verifyTelemetry(*dbFlag, stmt, plainStatementSHA256(*attestFlag, envPath))
+		printCheckResult(stdout, "telemetry", telResult)
+		if telResult.checked && !telResult.ok {
+			failed = true
+		}
+	}
+
 	// --- 3. Rekor inclusion ---
 	rekorResult := verifyRekorInclusion(context.Background(), envelope, stmt, *dbFlag, *rekorIndexFlag)
 	printCheckResult(stdout, "rekor inclusion", rekorResult)
@@ -291,6 +301,9 @@ type scanIdentity struct {
 	// rowsHashVersion is the form the signer hashed with (0 = v1, before
 	// the field existed).
 	rowsHashVersion int
+	// telemetrySHA256 is "" when the statement signed none (the bundle
+	// carried no telemetry rows, or the statement predates them).
+	telemetrySHA256 string
 }
 
 // statementScanIdentity reads the fields BuildAuditAttestation wrote — see
@@ -316,6 +329,9 @@ func statementScanIdentity(stmt map[string]any) scanIdentity {
 	}
 	if v, ok := pred["warehouseRowsSha256"].(string); ok {
 		id.warehouseRowsSHA256 = v
+	}
+	if v, ok := pred["telemetrySha256"].(string); ok {
+		id.telemetrySHA256 = v
 	}
 	if v, ok := pred["warehouseRowsHashVersion"].(float64); ok {
 		id.rowsHashVersion = int(v)
@@ -426,6 +442,73 @@ func verifyWarehouseRows(dbFlag string, stmt map[string]any, statementSHA string
 		detail += "; and this statement's hash is version 1 (the full JSON of the pushing binary's row structs), which a binary with columns added since cannot reproduce — a pre-1.0 limitation, not evidence of tampering; verify it with the corral version that pushed it"
 	}
 	return verifyCheckResult{checked: true, ok: false, detail: detail}
+}
+
+// verifyTelemetry checks the statement's telemetrySha256 against a bundle
+// the verifier actually HOLDS. The only such source is a ledger directory:
+// its entries carry the whole bundle, telemetry included. A warehouse has no
+// tables for the seat, attempt and critic-finding rows yet (Phase 4), so
+// `verify --db <warehouse>` cannot rebuild them and says so rather than
+// pass or fail on nothing.
+func verifyTelemetry(dbFlag string, stmt map[string]any, statementSHA string) verifyCheckResult {
+	notChecked := func(why string) verifyCheckResult { return verifyCheckResult{checked: false, detail: why} }
+	id := statementScanIdentity(stmt)
+	if strings.TrimSpace(dbFlag) == "" {
+		return notChecked("no --db given")
+	}
+	dir := strings.TrimRight(dbFlag, "/")
+	if !auditpush.IsLedgerDir(dbFlag) {
+		return notChecked("the warehouse holds no telemetry tables yet")
+	}
+	if statementSHA == "" {
+		return notChecked("the plain statement file is not beside its envelope, so the entry that names it cannot be found")
+	}
+	if err := auditpush.RequireIntactChain(dir); err != nil {
+		return notChecked(fmt.Sprintf("reading the ledger: %v", err))
+	}
+	files, err := auditpush.ReadLedgerDir(dir)
+	if err != nil {
+		return notChecked(fmt.Sprintf("reading the ledger: %v", err))
+	}
+	var held []auditpush.Bundle
+	for _, e := range auditpush.ScanEntries(files) {
+		if e.Bundle.Scan.StatementSHA256 == statementSHA {
+			held = append(held, e.Bundle)
+		}
+	}
+	if len(held) == 0 {
+		return notChecked("no ledger entry names this statement")
+	}
+	var last verifyCheckResult
+	for _, b := range held {
+		last = checkTelemetryDigest(id.telemetrySHA256, b)
+		if last.ok {
+			return last
+		}
+	}
+	return last
+}
+
+// checkTelemetryDigest compares the digest a statement signed with the one
+// the bundle's own telemetry rows give. A bundle with rows against a
+// statement that signed none is a mismatch (rows were added after signing);
+// neither side having any is a pass that says so.
+func checkTelemetryDigest(signed string, b auditpush.Bundle) verifyCheckResult {
+	got, err := telemetrySHA256(b)
+	if err != nil {
+		return verifyCheckResult{checked: false, detail: fmt.Sprintf("hashing the telemetry rows: %v", err)}
+	}
+	switch {
+	case signed == "" && got == "":
+		return verifyCheckResult{checked: true, ok: true, detail: "the statement signed no telemetry and the entry carries none"}
+	case got == signed:
+		return verifyCheckResult{checked: true, ok: true, detail: "the entry's seat, attempt and critic-finding rows hash to exactly the value the statement signs"}
+	case signed == "":
+		return verifyCheckResult{checked: true, ok: false, detail: "the entry carries telemetry rows the statement does not sign"}
+	case got == "":
+		return verifyCheckResult{checked: true, ok: false, detail: "the statement signs telemetry the entry does not carry"}
+	}
+	return verifyCheckResult{checked: true, ok: false, detail: "the entry's telemetry rows hash to a different value than the statement signs"}
 }
 
 // openWarehouse opens dbFlag (a plain DuckDB path or md:<db>, the same

@@ -5,8 +5,11 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -49,19 +52,19 @@ func (t Target) Validate() error {
 		key string
 		ok  bool
 	}{
-		{"name", t.Name != ""},
-		{"upstream", t.Upstream != ""},
-		{"fork", t.Fork != ""},
-		{"branch", t.Branch != ""},
-		{"path", t.Path != ""},
+		{"name", strings.TrimSpace(t.Name) != ""},
+		{"upstream", strings.TrimSpace(t.Upstream) != ""},
+		{"fork", strings.TrimSpace(t.Fork) != ""},
+		{"branch", strings.TrimSpace(t.Branch) != ""},
+		{"path", strings.TrimSpace(t.Path) != ""},
 		{"test_command", len(t.TestCommand) > 0},
-		{"substrate", t.Substrate != ""},
-		{"seats.mutant", t.Seats.Mutant != ""},
-		{"seats.writer", t.Seats.Writer != ""},
-		{"seats.shadow_writer", t.Seats.ShadowWriter != ""},
-		{"seats.critic", t.Seats.Critic != ""},
+		{"substrate", strings.TrimSpace(t.Substrate) != ""},
+		{"seats.mutant", strings.TrimSpace(t.Seats.Mutant) != ""},
+		{"seats.writer", strings.TrimSpace(t.Seats.Writer) != ""},
+		{"seats.shadow_writer", strings.TrimSpace(t.Seats.ShadowWriter) != ""},
+		{"seats.critic", strings.TrimSpace(t.Seats.Critic) != ""},
 		{"max_tokens", t.MaxTokens > 0},
-		{"timeout", t.Timeout != ""},
+		{"timeout", strings.TrimSpace(t.Timeout) != ""},
 	}
 	for _, r := range required {
 		if !r.ok {
@@ -74,7 +77,7 @@ func (t Target) Validate() error {
 	if _, err := time.ParseDuration(t.Timeout); err != nil {
 		return fmt.Errorf("target %q: timeout %q is not a Go duration: %w", t.Name, t.Timeout, err)
 	}
-	if t.Goals == "" && t.Seats.Derive == "" {
+	if t.Goals == "" && strings.TrimSpace(t.Seats.Derive) == "" {
 		return fmt.Errorf("target %q: seats.derive is required when goals is empty (goals are derived by that seat)", t.Name)
 	}
 	// The decorrelation rule corral enforces at run time (critic != writer),
@@ -88,6 +91,12 @@ func (t Target) Validate() error {
 	}
 	return nil
 }
+
+// ErrInvalid marks a targets file that was read but is wrong (bad JSON, an
+// unknown key, a missing field, a duplicate name). Callers tell it from an I/O
+// failure with errors.Is, so a bad file exits 2 ("fix what you passed") and an
+// unreadable one exits 1.
+var ErrInvalid = errors.New("invalid targets file")
 
 // LoadTargets reads and validates a targets file. Unknown keys are an error:
 // a misspelled `testcomand` would otherwise decode to an empty command and
@@ -103,15 +112,18 @@ func LoadTargets(path string) ([]Target, error) {
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&file); err != nil {
-		return nil, fmt.Errorf("%s: %w", path, err)
+		return nil, fmt.Errorf("%w: %s: %v", ErrInvalid, path, err)
+	}
+	if _, err := dec.Token(); err != io.EOF {
+		return nil, fmt.Errorf("%w: %s: unexpected data after the JSON object", ErrInvalid, path)
 	}
 	seen := map[string]bool{}
 	for _, t := range file.Targets {
 		if err := t.Validate(); err != nil {
-			return nil, fmt.Errorf("%s: %w", path, err)
+			return nil, fmt.Errorf("%w: %s: %v", ErrInvalid, path, err)
 		}
 		if seen[t.Name] {
-			return nil, fmt.Errorf("%s: duplicate target name %q", path, t.Name)
+			return nil, fmt.Errorf("%w: %s: duplicate target name %q", ErrInvalid, path, t.Name)
 		}
 		seen[t.Name] = true
 	}

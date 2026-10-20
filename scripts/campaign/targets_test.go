@@ -3,6 +3,7 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -142,9 +143,28 @@ func TestLoadTargetsRefusesUnknownFields(t *testing.T) {
 }
 
 func TestLoadTargetsValidatesEveryTarget(t *testing.T) {
-	p := writeTargets(t, `{"targets":[{"name":"a"}]}`)
-	if _, err := LoadTargets(p); err == nil || !strings.Contains(err.Error(), "a") {
-		t.Errorf("an incomplete target must fail the load: got %v", err)
+	p := writeTargets(t, `{"targets":[{"name":"zeta"}]}`)
+	_, err := LoadTargets(p)
+	if !errors.Is(err, ErrInvalid) {
+		t.Fatalf("an incomplete target must fail the load with ErrInvalid: got %v", err)
+	}
+	if !strings.Contains(err.Error(), `target "zeta": upstream is required`) {
+		t.Errorf("error must name the target and the first missing key: %v", err)
+	}
+}
+
+func TestValidateRefusesWhitespaceOnlyStrings(t *testing.T) {
+	tg := validTarget()
+	tg.Seats.Mutant = "  \t"
+	if err := tg.Validate(); err == nil || !strings.Contains(err.Error(), "seats.mutant") {
+		t.Errorf("whitespace-only seat: got %v", err)
+	}
+}
+
+func TestLoadTargetsRefusesTrailingData(t *testing.T) {
+	p := writeTargets(t, `{"targets":[]} {"targets":[]}`)
+	if _, err := LoadTargets(p); !errors.Is(err, ErrInvalid) {
+		t.Errorf("trailing data: got %v", err)
 	}
 }
 

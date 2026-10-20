@@ -12,6 +12,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -27,7 +28,10 @@ func main() {
 	ts, err := LoadTargets(*targets)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "campaign:", err)
-		os.Exit(1)
+		if errors.Is(err, ErrInvalid) {
+			os.Exit(2) // the file is wrong: name what to fix, as for a missing flag
+		}
+		os.Exit(1) // could not read it at all
 	}
 	fmt.Printf("%d targets, all valid\n", len(ts))
 }

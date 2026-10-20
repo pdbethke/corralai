@@ -438,6 +438,9 @@ standard.
 - `internal/lang/` — language plugins
 - `site/` — the Astro/Starlight site (`npm run build` in `site/`)
 - `docs/corral/` — the public knowledge corpus that ships to users
+- `docs/reviews/` — dated project reviews and their finding-status index. For
+  periodic reviews, start with the index, keep finding IDs stable, and append
+  verified resolutions without rewriting the original observations.
 - `scripts/` — the gates; read the header comment before changing one. Internal
   build tooling goes here and **never in `cmd/`**: `scripts/gen-cli-docs.sh`
   derives its binary list from `cmd/*/` and publishes a public CLI reference page

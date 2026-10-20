@@ -16,7 +16,6 @@ import (
 	"github.com/pdbethke/corralai/internal/auditpush"
 	"github.com/pdbethke/corralai/internal/reposcan"
 	"github.com/pdbethke/corralai/internal/scanstore"
-	"github.com/pdbethke/corralai/internal/statedir"
 )
 
 // A `certify --local` run's ledger entry. Until this file, a --local run
@@ -210,14 +209,8 @@ func writeLocalLedgerEntries(b auditpush.Bundle, ledgerFlag string, noLedger boo
 	default:
 		// Resolved and checked BEFORE machineLedgerDir creates it, so a
 		// machine ledger declared inside the checkout leaves no trace there.
-		path, err := statedir.Path(statedir.MachineLedger)
-		if err == nil && ledgerInsideCheckout(path, repoDir) {
-			fmt.Fprintf(stderr, "corral certify --local: machine ledger %s is inside --repo-dir %s — no entry written there, because --local never writes into the checkout; point CORRALAI_MACHINE_LEDGER outside it\n", path, repoDir)
-			break
-		}
-		dir, err := machineLedgerDir()
-		if err != nil {
-			fmt.Fprintf(stderr, "corral certify --local: machine ledger: %v\n", err)
+		dir, ok := machineLedgerOutsideCheckout("corral certify --local", "--repo-dir", repoDir, stderr)
+		if !ok {
 			break
 		}
 		machine = dir

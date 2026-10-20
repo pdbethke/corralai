@@ -88,24 +88,35 @@ codebase whose comments carry most of its institutional memory.
 
 ## Where corral writes, and the one mode that touches your checkout
 
-**By default corral never writes to your repository.** Both `certify --local`
-and `certify --repo` run on the `jail` substrate: the tree is copied into a
-disposable bwrap sandbox, dependency dirs are bound read-only, and every mutant
-is applied to the COPY. `certify --local` has no `--substrate` flag at all, so
-it cannot select anything else.
+**By default corral never runs a mutant against your repository.** Both
+`certify --local` and `certify --repo` run on the `jail` substrate: the tree is
+copied into a disposable bwrap sandbox, dependency dirs are bound read-only, and
+every mutant is applied to the COPY. `certify --local` has no `--substrate` flag
+at all, so it cannot select anything else. What corral does write is its record,
+and exactly where is below.
 
-**Where each verb's record goes.** `certify --repo`, `certify --local` and
-`review` each keep their entry in the **machine ledger** — `statedir.MachineLedger`, under the
-state directory (override `CORRALAI_MACHINE_LEDGER`), never in a checkout.
-`certify --repo` writes its entry to the repo ledger (`<repo>/.corral/ledger`,
-or `--ledger`/`$CORRAL_LEDGER`) plus the machine copy; `corral review` does the
-same; `certify --local` writes its entry to the machine ledger by default (and
-also to `--ledger <dir>`, which it refuses inside `--repo-dir`). `--no-ledger`
-skips the machine copy; on `--local` an explicit `--ledger` is still written.
-A failed machine copy is printed and never changes an exit code (a signing
-key the operator cannot use still refuses, as it does for the repo entry).
-`review adjudicate` and `ledger` verbs write only the directory they are
-given.
+**Where each verb's record goes.**
+- `certify --repo` writes one entry to the repo ledger (`<repo>/.corral/ledger`,
+  or `--ledger` / `$CORRAL_LEDGER`) and a copy to the **machine ledger**
+  (`statedir.MachineLedger`: the state directory's `ledger`, override
+  `CORRALAI_MACHINE_LEDGER`; `corral state paths` prints it). A `--repo` tree
+  with no commit writes neither entry.
+- `corral review` does the same: repo ledger entry plus the machine copy.
+- `certify --local` writes its entry to the machine ledger by default, plus
+  `--ledger <dir>` if given. It writes nothing under the repository.
+- `corral demo` runs `certify --local` and has no opt-out: its entries go to
+  the machine ledger, so its measurements are not left only in DuckDB; they
+  carry identity `none` and can never be published as a project's record.
+- `--no-ledger` skips the machine copy on `--repo`/`review` (and the repo entry);
+  on `--local` it skips the machine ledger and an explicit `--ledger` is still
+  written.
+- No verb puts the machine copy inside the checkout it audits: a machine ledger
+  that resolves inside it is not written (not even created) and the skip is
+  printed (`machineLedgerOutsideCheckout`, one helper for all three verbs).
+- A failed machine copy is printed and never changes an exit code; a signing
+  key the operator cannot use writes nothing (as it does for the repo entry).
+- `review adjudicate` and the `ledger` verbs never write the machine ledger;
+  they write the ledger directory (and any `--push` target) they are given.
 
 **One substrate mutates the real checkout, and it is opt-in:**
 `certify --repo --substrate workspace`. That is what the GitHub Action uses

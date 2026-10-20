@@ -1113,10 +1113,11 @@ runner. The design, and the week that produced it:
   `read_json_auto('scans/*.json.gz')`. On a runner the Action writes the same
   entries into a checkout of the `corral/ledger` branch; make your local
   directory a worktree of that branch and a laptop run and an Action run are
-  one writer. `--ledger <dir>` moves it, `--no-ledger` skips it. Each run also
-  keeps a copy in the machine ledger under the state directory
-  (`CORRALAI_MACHINE_LEDGER`), never in the checkout; `certify --local` writes
-  there by default. Twenty-one
+  one writer. `--ledger <dir>` moves it, `--no-ledger` skips it. `certify --repo`
+  and `review` also keep a copy in the machine ledger under the state directory
+  (`CORRALAI_MACHINE_LEDGER`; skipped by `--no-ledger`, and never written inside
+  the audited checkout); `certify --local` writes there by default. A
+  `--repo` tree with no commit writes no entry. Twenty-one
   kilobytes a run, measured. ([the field note](https://corralai.dev/field-notes/the-ledger-is-just-text/))
 - **The prior (`--prior`) — the next run plants what the last one didn't.**
   Hand a run what earlier runs recorded — a `--record-mutants` document (the

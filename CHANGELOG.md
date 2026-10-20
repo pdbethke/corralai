@@ -43,40 +43,50 @@ history of any release, `git log v0.3.4..v0.3.5`.
   keyless read believes any signer entry that names the root, so only a read
   under the root key authorizes anything.
 
-- **`certify --local` now records a ledger entry, and a run whose repository
-  cannot be derived says so.** What changes for anyone using it:
-  - **`certify --local` writes one hash-linked entry per run (signed when a
-    certify key is configured) to the machine ledger** (`$STATE/ledger`; `CORRALAI_MACHINE_LEDGER` moves it) by
-    default, where before it wrote no ledger entry at all. That is a new
-    write to your state directory on every run. `--no-ledger` opts out;
-    `--ledger <dir>` writes there as well and is refused inside `--repo-dir`,
-    because `--local` never writes into the checkout (a machine ledger that
-    resolves inside `--repo-dir` is skipped, and the skip is printed).
+- **`certify --local` takes its subject from `--repo-dir`, not from where you
+  ran it, and a repository that cannot be derived is recorded as unknown.**
+  - **The recorded repo and commit change for anyone who ran `--local` from a
+    different directory than the one audited.** Before, repo came from the
+    process's working directory (`git config --get remote.origin.url`) and
+    commit from its HEAD, so a run was filed under whatever repository the
+    shell sat in. Now both come from `--repo-dir`'s git, and the repo is
+    `git remote get-url origin`, which applies `url.<base>.insteadOf` rewrites:
+    the name can differ from the raw configured URL.
   - **`--repo` and `--commit` on `certify --local` are now both-or-neither.**
-    Passing exactly one exits 2. With neither, both come from `--repo-dir`'s
-    git.
-  - **Store rows and the ledger entry record `""` (identity `none`) where
-    they used to record the invented name `"local"`**, for a run whose
-    repository or commit git cannot tell, and `certify --repo` no longer hands
-    a tree without a HEAD the commit `"local"`. A reader that matched the
-    string `local` must match the empty value instead. A typed `--repo` and
-    `--commit` are recorded as identity `operator`.
+    Passing exactly one exits 2.
+  - **`""` (identity `none`) replaces the invented `"local"`** as the repo and
+    commit when git cannot tell, in store rows and in ledger entries, and
+    `certify --repo` no longer hands a tree without a HEAD the commit
+    `"local"`. A reader that matched the string `local` must match the empty
+    value. A typed `--repo` and `--commit` are recorded as identity `operator`.
 
 ### Added
 
+- **`certify --local` writes a ledger entry.** One hash-linked entry per run
+  (signed when a certify key is configured) goes to the machine ledger
+  (`$STATE/ledger`; `CORRALAI_MACHINE_LEDGER` moves it), where before a
+  `--local` run left no ledger entry. Not breaking: it is fail-open (a failure
+  is printed and never changes an exit code) and `--no-ledger` opts out. A new
+  `--ledger <dir>` writes it there as well; it is refused inside `--repo-dir`,
+  because `--local` never writes into the checkout, and a machine ledger that
+  resolves inside `--repo-dir` is skipped with the reason printed. `corral
+  demo` runs `--local` and has no opt-out: its entries go to the machine ledger
+  with identity `none`, so its measurements are not kept only in DuckDB.
 - **Ledger entries carry what the run did, and `review` keeps a copy too.**
   A scan entry now records whether the audited tree was dirty (`TreeDirty`,
-  unknown when git could not say, never `false` by default), how the repository
-  was identified (`git`, `operator` or `none`), and, per audited file, the seats
-  that ran, the generation attempts and the critic's findings. A statement
-  signs these rows as `telemetrySha256` (the critic's evidence text is not in
-  that digest); entries stay `corral-ledger-5` and a bundle without the new
-  fields hashes as before. `certify --repo` and `corral review` each write
-  their entry where they did and also append a copy to the machine ledger,
-  fail-open: a failure is printed and never changes an exit code, `--no-ledger`
-  skips it, and a `--ledger` that already is the machine ledger is not written
-  twice. Where each verb writes is now stated in `AGENTS.md` ("Where corral
-  writes") and in the configuration and trust-and-security pages.
+  unknown when git could not say, never `false` by default), how the
+  repository was identified (`git`, `operator` or `none`), and, per audited
+  file, the seats that ran, the generation attempts and the critic's findings.
+  An `--attest` statement signs those three row sets as `telemetrySha256`;
+  the digest covers only them, and the critic's evidence text is not in it.
+  Entries stay `corral-ledger-5` and a bundle without the new fields hashes
+  as before. `certify --repo` and `corral review` write their entry where they
+  did and also append a copy to the machine ledger, fail-open and never inside
+  the audited checkout (skipped with the reason printed if it resolves there);
+  `--no-ledger` skips it, a `--ledger` that already is the machine ledger is
+  not written twice, and a `--repo` tree with no commit writes no entry. Where
+  each verb writes is stated in `AGENTS.md` ("Where corral writes") and the
+  configuration and trust-and-security pages.
 
 ## [v1.0.0-rc.25] — 2026-10-18
 

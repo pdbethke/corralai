@@ -261,6 +261,29 @@ func TestRepoWritesMachineLedger(t *testing.T) {
 	}
 }
 
+// A machine ledger declared inside the audited repo is not written or
+// created: certify --repo, like --local, never puts the machine copy in the
+// tree it audits. Printed with its reason; the repo entry and exit code stand.
+func TestRepoMachineLedgerInsideCheckoutIsSkipped(t *testing.T) {
+	root, setPath, goals := telemetryRepoFixture(t)
+	withMachineLedger(t)
+	inside := filepath.Join(root, "machine-inside")
+	t.Setenv("CORRALAI_MACHINE_LEDGER", inside)
+	code, out, errs := runTelemetryFixture(t, root, setPath, goals)
+	if code != 0 {
+		t.Fatalf("exit=%d\n%s%s", code, out, errs)
+	}
+	if _, err := os.Stat(inside); !os.IsNotExist(err) {
+		t.Errorf("the machine ledger was created inside the checkout (stat err %v)", err)
+	}
+	if !strings.Contains(errs, "is inside --repo") {
+		t.Errorf("the skip was not printed with its reason:\n%s", errs)
+	}
+	if r, _ := auditpush.ReadLedgerDir(filepath.Join(root, ".corral", "ledger")); len(r) != 1 {
+		t.Errorf("the repo entry must stand: %d", len(r))
+	}
+}
+
 // The executor hands the per-file audit the scan's subject exactly: the
 // commit the scan resolved (HEAD, or "" when there is none), never an
 // invented "local", and marked as already resolved so the audit does not

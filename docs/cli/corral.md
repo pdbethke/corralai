@@ -274,7 +274,7 @@ Usage of certify --local:
   -lang string
     	source language (default: inferred from --code extension)
   -ledger string
-    	ALSO write this run's ledger entry to this ledger DIRECTORY, beside the machine ledger (statedir's ledger, override CORRALAI_MACHINE_LEDGER) every --local run writes to. Refused inside --repo-dir: --local never writes into the checkout. One signed, hash-linked entry per run; corral verify --ledger <dir> walks the chain
+    	ALSO write this run's ledger entry to this ledger DIRECTORY, beside the machine ledger (the state directory's ledger, see corral state paths; override CORRALAI_MACHINE_LEDGER) every --local run writes to. Refused inside --repo-dir: --local never writes into the checkout. One signed, hash-linked entry per run; corral verify --ledger <dir> walks the chain
   -local
     	run the adversarial pool in-process (this mode)
   -local-endpoint value
@@ -875,8 +875,8 @@ flags of `corral review`:
     	write an in-toto statement (predicate https://corralai.dev/review/v1) to this path, and its DSSE envelope beside it when a certify key is configured: the REPRODUCTIONS — every finding's declared and recorded tier, the hash of its script and output, its exit, the verifier's refutation on the same terms — signed; the opinion bound by its hash and not carried. The ledger entry then names the statement. corral verify --attest <path> --db <ledger dir> recomputes the reproductions' hash from the entry
   -fail-on reproduced
     	exit 3 when a finding STANDS at this tier after the run: reproduced (its script ran and exited 0, and no reproduced refutation or adjudication overturned it). Off by default — the record is written either way; this is the merge gate's switch, for CI
-  -ledger string
-    	the ledger directory the review entry is written to (default: <repo>/.corral/ledger, or $CORRAL_LEDGER). A copy of the entry also goes to this machine's own ledger (statedir's ledger, override CORRALAI_MACHINE_LEDGER), which is never inside the checkout
+  -ledger corral state paths
+    	the ledger directory the review entry is written to (default: <repo>/.corral/ledger, or $CORRAL_LEDGER). A copy of the entry also goes to this machine's own ledger (the state directory's ledger, see corral state paths; override CORRALAI_MACHINE_LEDGER); a machine ledger that resolves inside the checkout is skipped, with the reason printed
   -max-bytes int
     	how many bytes of the scope the reviewer is shown; files past the cap are listed by name and the review records them as unshown (default 200000)
   -no-ledger

@@ -1697,7 +1697,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		} else if c.Total() > 0 {
 			fmt.Fprintf(stdout, "  ledger: entry written to %s (%d file(s), %d mutant(s)) — `corral verify --ledger %s` walks the chain\n", ledgerDir, c.Files, c.Mutants, ledgerDir)
 		}
-		writeMachineLedgerCopy(entryBundle, ledgerDir, stdout, stderr)
+		writeMachineLedgerCopy(entryBundle, *repoDir, ledgerDir, stdout, stderr)
 	}
 	if strings.TrimSpace(*pushFlag) != "" {
 		bundle.Link = auditpush.Link{ScanID: scanID, StatementSHA256: statementSHA256, Require: strings.TrimSpace(*attestFlag) != ""}
@@ -5869,8 +5869,8 @@ func pushBundle(target string, b auditpush.Bundle) (auditpush.Counts, error) {
 // repoLedger is the directory the entry already went to: when the operator
 // pointed --ledger AT the machine ledger, the one entry is the copy, and a
 // second append would record one run twice in one chain.
-func writeMachineLedgerCopy(b auditpush.Bundle, repoLedger string, stdout, stderr io.Writer) {
-	keepMachineLedgerCopy("corral certify --repo", repoLedger, stdout, stderr, func(dir string) (bool, error) {
+func writeMachineLedgerCopy(b auditpush.Bundle, checkout, repoLedger string, stdout, stderr io.Writer) {
+	keepMachineLedgerCopy("corral certify --repo", "--repo", checkout, repoLedger, stdout, stderr, func(dir string) (bool, error) {
 		c, err := pushBundle(dir+"/", b)
 		// The same guard the repo-ledger line has: an entry that wrote no
 		// rows is not announced as written.
@@ -5886,15 +5886,19 @@ func writeMachineLedgerCopy(b auditpush.Bundle, repoLedger string, stdout, stder
 // two cannot drift on dedup, on printing, or on the rule that a copy never
 // changes an exit code (it returns nothing to change one with). write
 // reports whether it wrote anything worth announcing.
-func keepMachineLedgerCopy(verb, repoLedger string, stdout, stderr io.Writer, write func(dir string) (wrote bool, err error)) {
-	dir, err := machineLedgerDir()
-	if err == nil && samePath(dir, repoLedger) {
+//
+// checkout is the audited tree and checkoutFlag the flag that named it (for
+// the message): the machine ledger is held to the rule --local's --ledger is,
+// by the one helper below, so the rule cannot drift between verbs.
+func keepMachineLedgerCopy(verb, checkoutFlag, checkout, repoLedger string, stdout, stderr io.Writer, write func(dir string) (wrote bool, err error)) {
+	dir, ok := machineLedgerOutsideCheckout(verb, checkoutFlag, checkout, stderr)
+	if !ok {
 		return
 	}
-	wrote := false
-	if err == nil {
-		wrote, err = write(dir)
+	if samePath(dir, repoLedger) {
+		return
 	}
+	wrote, err := write(dir)
 	if err != nil {
 		fmt.Fprintf(stderr, "%s: machine ledger: %v\n", verb, err)
 		return
@@ -5902,6 +5906,28 @@ func keepMachineLedgerCopy(verb, repoLedger string, stdout, stderr io.Writer, wr
 	if wrote {
 		fmt.Fprintf(stdout, "  machine ledger: entry written to %s\n", dir)
 	}
+}
+
+// machineLedgerOutsideCheckout resolves the machine ledger for a verb that
+// audits checkout, and refuses (ok false, reason printed) when the declared
+// path (CORRALAI_MACHINE_LEDGER or CORRALAI_STATE_DIR) lies inside it: no
+// verb writes into the tree it audits, whoever chose the path. The path is
+// checked BEFORE machineLedgerDir creates it, so a refused ledger leaves no
+// trace in the checkout. An unresolvable or uncreatable ledger is printed as
+// a machine-ledger failure and also returns ok false. An empty checkout (a
+// single-file run with no repository) is never "inside".
+func machineLedgerOutsideCheckout(verb, checkoutFlag, checkout string, stderr io.Writer) (string, bool) {
+	path, err := statedir.Path(statedir.MachineLedger)
+	if err == nil && ledgerInsideCheckout(path, checkout) {
+		fmt.Fprintf(stderr, "%s: machine ledger %s is inside %s %s — no entry written there, because %s never writes into the checkout; point CORRALAI_MACHINE_LEDGER outside it\n", verb, path, checkoutFlag, checkout, verb)
+		return "", false
+	}
+	dir, err := machineLedgerDir()
+	if err != nil {
+		fmt.Fprintf(stderr, "%s: machine ledger: %v\n", verb, err)
+		return "", false
+	}
+	return dir, true
 }
 
 // samePath reports whether a and b name one directory: compared absolute and

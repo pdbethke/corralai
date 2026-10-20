@@ -55,6 +55,15 @@ type FileResult struct {
 	Detail     string
 	ComputedAt time.Time
 	CacheHit   bool
+	// Telemetry is what THIS file's run measured about its seats (seat
+	// scorecards, per-mutant writer outcomes, critic findings), carried on the
+	// file's own result so concurrent audits can never mix their rows. Empty
+	// for a file that ran no audit this scan — a cache hit, an ungradable
+	// refusal before the pool started — which is "measured nothing here",
+	// never "measured zero". Not part of the verdict and not cached: a reused
+	// verdict's seats were measured by the run that produced it, and that
+	// run's entry already holds them.
+	Telemetry advpool.RunTelemetry
 }
 
 // Executor runs one job to a verdict. The CLI supplies an adapter over the

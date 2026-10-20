@@ -5,6 +5,7 @@ package main
 import (
 	"github.com/pdbethke/corralai/internal/advpool"
 	"github.com/pdbethke/corralai/internal/auditpush"
+	"github.com/pdbethke/corralai/internal/reposcan"
 )
 
 // telemetryRows turns what a finished run measured about its seats into the
@@ -54,6 +55,24 @@ func telemetryRows(repo, commit, path string, t advpool.RunTelemetry) ([]auditpu
 			Adjudication: f.Adjudication, Source: f.Source,
 			SeatTool: f.SeatTool, ModelUnresolved: f.ModelUnresolved,
 		})
+	}
+	return seats, attempts, findings
+}
+
+// scanTelemetryRows is a repo scan's three telemetry slices: every file's own
+// run's rows (FileResult.Telemetry), concatenated in results order, with each
+// seat and critic-finding row stamped with the file that run audited (the
+// stamping rule is telemetryRows', not a second one). A file that ran
+// no audit this scan (a cache hit, a refusal) contributes nothing, and a scan
+// in which no file measured anything returns nil slices, so the entry carries
+// no telemetry keys rather than a claim of "none".
+func scanTelemetryRows(repo, commit string, results []reposcan.FileResult) ([]auditpush.SeatRow, []auditpush.MutantAttemptRow, []auditpush.CriticFindingRow) {
+	var seats []auditpush.SeatRow
+	var attempts []auditpush.MutantAttemptRow
+	var findings []auditpush.CriticFindingRow
+	for _, r := range results {
+		s, a, f := telemetryRows(repo, commit, r.Job.Path, r.Telemetry)
+		seats, attempts, findings = append(seats, s...), append(attempts, a...), append(findings, f...)
 	}
 	return seats, attempts, findings
 }

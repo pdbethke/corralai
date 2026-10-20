@@ -56,7 +56,7 @@ func TestMain(m *testing.M) {
 	}
 	testHome = home
 	_ = os.Setenv("HOME", home)
-	for _, k := range []string{"XDG_STATE_HOME", "XDG_CACHE_HOME", "XDG_CONFIG_HOME", "CORRALAI_STATE_DIR", "CORRALAI_CACHE_DIR"} {
+	for _, k := range []string{"XDG_STATE_HOME", "XDG_CACHE_HOME", "XDG_CONFIG_HOME", "CORRALAI_STATE_DIR", "CORRALAI_CACHE_DIR", "CORRALAI_MACHINE_LEDGER"} {
 		_ = os.Unsetenv(k)
 	}
 	code := m.Run()

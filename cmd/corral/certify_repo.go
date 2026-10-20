@@ -1595,6 +1595,13 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// ran no dev pass and has no hunk; its rows stay bare, and the prior
 	// merges a bare row into the one edit it can be.
 	mutantRecorder.stampHunks(bundle.Mutants)
+	// What every file's run measured about its seats, each row stamped with
+	// its own file (FileResult.Telemetry, filled per job — see Execute).
+	// HERE, before the statement below and never after it: the statement
+	// signs these rows as telemetrySha256, and a statement written before
+	// they were added would sign none while the entry carried them — a
+	// `corral verify` failure on every run (TestRepoBundleCarriesSeatRows).
+	bundle.Seats, bundle.MutantAttempts, bundle.CriticFindings = scanTelemetryRows(bundleRepo, bundleCommit, results)
 
 	// The audit statement, written after the exit code is known so `passed`
 	// records the verdict this run actually returned rather than a guess
@@ -1695,6 +1702,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		} else if c.Total() > 0 {
 			fmt.Fprintf(stdout, "  ledger: entry written to %s (%d file(s), %d mutant(s)) — `corral verify --ledger %s` walks the chain\n", ledgerDir, c.Files, c.Mutants, ledgerDir)
 		}
+		writeMachineLedgerCopy(entryBundle, ledgerDir, stdout, stderr)
 	}
 	if strings.TrimSpace(*pushFlag) != "" {
 		bundle.Link = auditpush.Link{ScanID: scanID, StatementSHA256: statementSHA256, Require: strings.TrimSpace(*attestFlag) != ""}
@@ -4868,12 +4876,16 @@ func (l *localExecutor) auditInputFor(j reposcan.Job) localAuditInput {
 		runner:   l.runnerFor(j.Lang),
 		repo:     j.Repo,
 		iso:      l.iso,
-		// "local" rather than "" when the operator gave no --commit: an empty
-		// commit makes auditOneFile fall back to `git rev-parse HEAD` — which
-		// reads the CWD's repo, not the SCANNED one, and would stamp every
-		// verdict with an unrelated sha.
-		commit:    orDefault(j.Commit, "local"),
-		checkArgv: l.testCmd(j, sel),
+		// The scan's subject, exactly: j.Commit is --commit, else the HEAD
+		// runCertifyRepo read from --repo before the fan-out, else "" (a
+		// tree with no HEAD). It used to be orDefault(j.Commit, "local"),
+		// guarding a since-removed cwd `git rev-parse HEAD` fallback with an
+		// invented revision every verdict then signed. subjectResolved tells
+		// the audit not to re-derive the pair, and not to refuse a resolved
+		// repo with no commit as if it were a half-typed flag pair.
+		commit:          j.Commit,
+		subjectResolved: true,
+		checkArgv:       l.testCmd(j, sel),
 		// The BASE command, before narrowing: RunSpec.TestCmd must stay the
 		// whole-suite command because the Selection is applied downstream,
 		// per pass (advpool.DevCommand for the dev/shadow passes, the
@@ -5029,6 +5041,12 @@ func (l *localExecutor) workspacePoolBox() *workspacePool {
 
 func (l *localExecutor) Execute(ctx context.Context, j reposcan.Job) (reposcan.FileResult, error) {
 	in := l.auditInputFor(j)
+	// This job's own destination for what its run measures. Written by the
+	// driver once, on the run's terminal Tick, inside l.audit — the same
+	// goroutine that reads it back below — and copied onto this job's result
+	// only, so N concurrent files never append into one shared slice.
+	var measured advpool.RunTelemetry
+	in.telemetry = func(t advpool.RunTelemetry) { measured = t }
 	// The job owns its private trees for as long as the job lasts — through
 	// the baseline-stability check AND the audit, which is the whole point of
 	// hanging them here rather than on the wiring's own cleanup (that one is
@@ -5148,7 +5166,7 @@ func (l *localExecutor) Execute(ctx context.Context, j reposcan.Job) (reposcan.F
 	// ungradable WITH ITS REASON, never a 0.0 kill rate that would read as
 	// "terrible tests". (Scan re-asserts this; setting it here means the
 	// adapter is honest on its own, for any caller.)
-	res := reposcan.FileResult{Verdict: v, Gradable: !v.BaselineFailed && !v.SuiteIgnoresFile}
+	res := reposcan.FileResult{Verdict: v, Gradable: !v.BaselineFailed && !v.SuiteIgnoresFile, Telemetry: measured}
 	// Checked BEFORE BaselineFailed so the more specific diagnosis wins: a
 	// suite that passes on invalid source is not broken, it is pointed at
 	// something other than this file, and an operator told "baseline failed"
@@ -5742,16 +5760,24 @@ func warehouseRowsSHA256At(b auditpush.Bundle, version int) (string, error) {
 }
 
 // telemetrySHA256 is the hex sha256 of the bundle's three telemetry slices
-// (Seats, MutantAttempts, CriticFindings): BlankUnpushedSource applied (so
-// the digest is over what the entry may lawfully carry, and a critic
-// finding's Evidence is in it only when the run pushed source), then the
-// SAME canonical form the rows hash uses at version 4. "" when the bundle
+// (Seats, MutantAttempts, CriticFindings): source withheld whatever the
+// bundle's custody (a critic finding's Evidence is never in it — see the
+// body), then the SAME canonical form the rows hash uses at version 4. "" when the bundle
 // carries no telemetry at all, which the statement omits rather than sign a
 // digest of nothing (see certify.AuditStatement.TelemetrySHA256).
 func telemetrySHA256(b auditpush.Bundle) (string, error) {
 	if len(b.Seats) == 0 && len(b.MutantAttempts) == 0 && len(b.CriticFindings) == 0 {
 		return "", nil
 	}
+	// Source is NEVER in this digest, for the reason prepareRowsForHash gives
+	// at rows-hash v3: one run writes this bundle to several sinks under
+	// different custody — the repo and machine ledger entries carry source
+	// (SourcePushed true), the statement is computed from the --push bundle,
+	// which withholds it unless --push-source. A digest that followed each
+	// bundle's own custody bit signed blanked Evidence while the entry kept
+	// it, and every run with a critic finding failed its own `verify`. The
+	// ledger chain's signature binds the full entry, Evidence included.
+	b.SourcePushed, b.Scan.SourcePushed = false, false
 	auditpush.BlankUnpushedSource(&b)
 	js, err := auditpush.CanonicalSparseJSONV2(struct {
 		Seats          []auditpush.SeatRow
@@ -5826,6 +5852,41 @@ func pushBundle(target string, b auditpush.Bundle) (auditpush.Counts, error) {
 		}
 	}
 	return auditpush.PushBundle(target, b)
+}
+
+// writeMachineLedgerCopy appends b, the entry a run just wrote to the repo's
+// ledger, to this machine's own ledger as well (statedir.MachineLedger): the
+// one place every run on this box is kept whether or not the audited repo
+// keeps its ledger, is pushed anywhere, or is deleted next week. It is the
+// SAME bundle — one record, two directories — so the two copies can never
+// disagree about what the run measured; each chain links it to its own head.
+//
+// Fail-open without exception, and printed, never silent: a full disk or an
+// unwritable state directory costs this copy only. Unlike the repo entry, it
+// never touches the exit code — not even for a key the operator cannot use.
+// That refusal is ledgerSignerFromLocalKey's (nothing is written unsigned,
+// because an unsigned entry is permanent), and it is the same key the repo
+// entry just failed on, which already turned the run red; charging it a
+// second time here would add nothing, and charging it only here would let a
+// copy decide a verdict. --no-ledger skips this too: its help promises no
+// ledger entry, and the machine ledger is one.
+//
+// repoLedger is the directory the entry already went to: when the operator
+// pointed --ledger AT the machine ledger, the one entry is the copy, and a
+// second append would record one run twice in one chain.
+func writeMachineLedgerCopy(b auditpush.Bundle, repoLedger string, stdout, stderr io.Writer) {
+	dir, err := machineLedgerDir()
+	if err == nil && filepath.Clean(dir) == filepath.Clean(repoLedger) {
+		return
+	}
+	if err == nil {
+		_, err = pushBundle(dir+"/", b)
+	}
+	if err != nil {
+		fmt.Fprintf(stderr, "corral certify --repo: machine ledger: %v\n", err)
+		return
+	}
+	fmt.Fprintf(stdout, "  machine ledger: entry written to %s\n", dir)
 }
 
 // gitHeadCommit resolves repoDir's HEAD, or "" when repoDir is not a checkout

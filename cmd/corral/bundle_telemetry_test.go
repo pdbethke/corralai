@@ -151,18 +151,25 @@ func TestTelemetryDigestDetectsTamperingAndCustody(t *testing.T) {
 	if r := checkTelemetryDigest(signed, tampered); !r.checked || r.ok {
 		t.Errorf("tampered seat row must fail: %+v", r)
 	}
-	// Evidence is blanked before hashing unless source was pushed, so the
-	// digest does not depend on a field the entry may not carry.
+	// Evidence is never in the digest, whatever the bundle's custody: the
+	// statement is computed from the --push bundle (source withheld unless
+	// --push-source) while the ledger entry carries source, and one digest
+	// has to verify against both.
 	other := telBundle()
 	other.CriticFindings[0].Evidence = "different"
 	if a, _ := telemetrySHA256(other); a != signed {
 		t.Error("withheld Evidence leaked into the digest")
 	}
-	other.SourcePushed, b.SourcePushed = true, true
-	x, _ := telemetrySHA256(other)
-	y, _ := telemetrySHA256(b)
-	if x == y {
-		t.Error("with --push-source, Evidence must be in the digest")
+	entry := telBundle()
+	entry.SourcePushed, entry.Scan.SourcePushed = true, true
+	if r := checkTelemetryDigest(signed, entry); !r.checked || !r.ok {
+		t.Errorf("a statement signed over the push bundle must verify against the entry, which carries source: %+v", r)
+	}
+	if x, _ := telemetrySHA256(entry); x != signed {
+		t.Error("the entry's custody bit changed the digest")
+	}
+	if entry.CriticFindings[0].Evidence == "" {
+		t.Error("hashing blanked the caller's own Evidence")
 	}
 	// Rows added to a bundle the statement signed none for, and a bundle with none.
 	if r := checkTelemetryDigest("", telBundle()); r.ok {

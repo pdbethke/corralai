@@ -662,6 +662,21 @@ type localAuditInput struct {
 
 	// The signed subject's identity. Empty is derived from git on --repo-dir (localSubject), else left empty.
 	repo, commit string
+	// subjectResolved says repo and commit are ALREADY the subject, decided by
+	// the caller once for every file it audits — the repo scan's position: its
+	// subject is resolveRepoName and the HEAD it read before the fan-out, and
+	// every file's verdict must name that same subject, not one each audit
+	// re-derived. An empty commit is then a recorded fact (the tree has no
+	// HEAD), not a half-typed --repo/--commit pair for resolveSubject to
+	// refuse. False is `certify --local`'s position: the flags as typed.
+	subjectResolved bool
+
+	// telemetry, when non-nil, becomes the driver's Telemetry callback: it
+	// receives everything the finished run measured about its seats, with or
+	// without a signed record. The repo scan sets one per file that writes
+	// into that file's own result (localExecutor.Execute), so concurrent
+	// audits never share a destination. nil delivers nothing.
+	telemetry func(advpool.RunTelemetry)
 
 	// Effects, all optional. A nil openStore means the verdict is NOT signed
 	// (the repo scan's H1a position — signing is H1c); an empty bugCatchDB
@@ -1710,6 +1725,16 @@ func newAuditRunSpec(in localAuditInput, roles auditRoles, subj runSubject) advp
 	return rs
 }
 
+// auditRunSubject is the subject a run's verdict names: the caller's own
+// when it already resolved one (localAuditInput.subjectResolved, the repo
+// scan), else resolveSubject's rule over the flags as typed.
+func auditRunSubject(in localAuditInput) (repo, commit string, err error) {
+	if in.subjectResolved {
+		return strings.TrimSpace(in.repo), strings.TrimSpace(in.commit), nil
+	}
+	return resolveSubject(in.repo, in.commit, in.repoDir)
+}
+
 // auditOneFile runs ONE file's complete adversarial-pool audit in-process and
 // returns the converged verdict. This is the whole of what `corral certify
 // --local` does between parsing its flags and writing its --out/--record
@@ -1853,10 +1878,13 @@ func auditOneFile(ctx context.Context, in localAuditInput) (advpool.Verdict, err
 	// carried as if it were a repository. (localSubject also returns an
 	// identity word, "git" or "none"; the ledger entry that a later step
 	// writes will record it.)
-	repo, commit, serr := resolveSubject(in.repo, in.commit, in.repoDir)
+	repo, commit, serr := auditRunSubject(in)
 	if serr != nil {
 		return advpool.Verdict{}, auditUsageErr("%v", serr)
 	}
+	// What the finished run measured, handed to the caller's own destination
+	// (see localAuditInput.telemetry).
+	d.Telemetry = in.telemetry
 
 	// The bug-catching scorecard feed — the ONLY thing that makes the shadow
 	// head-to-head durable: BugCatch was previously wired solely in the brain,

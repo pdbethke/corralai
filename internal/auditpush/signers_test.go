@@ -486,3 +486,109 @@ func TestVerifyForgedRootKeyID(t *testing.T) {
 		t.Fatalf("ActiveSigners %+v: want the forged key present — a keyless set is a claim, not an authorization", active)
 	}
 }
+
+// chainWithMember builds root registers M; M appends; the shape every
+// checkpoint test starts from.
+func chainWithMember(t *testing.T, rootSeed, mSeed byte) (dir string, root, m ed25519.PrivateKey) {
+	t.Helper()
+	dir = t.TempDir()
+	root, m = seededKey(rootSeed), seededKey(mSeed)
+	mustSignerChange(t, dir, registerOf(m, "laptop"), signerOf(root))
+	appendScan(t, dir, signerOf(m), "aaaa1111")
+	return dir, root, m
+}
+
+func TestCheckpointKeepsSigners(t *testing.T) {
+	dir, root, m := chainWithMember(t, 0x20, 0x21)
+	if _, _, err := WriteCheckpoint(dir, signerOf(root)); err != nil {
+		t.Fatal(err)
+	}
+	appendScan(t, dir, signerOf(m), "bbbb2222")
+	entries := mustRead(t, dir)
+	if len(entries) != 2 || entries[0].Kind != KindCheckpoint {
+		t.Fatalf("%d entries, first %q, want a checkpoint then one scan", len(entries), entries[0].Kind)
+	}
+	if got := entries[0].Checkpoint.Signers; len(got) != 1 || got[0].KeyID != KeyFingerprint(pubOf(m)) || got[0].Name != "laptop" {
+		t.Fatalf("checkpoint signers %+v, want only laptop", got)
+	}
+	checks := verifyChecks(t, dir, pubOf(root))
+	for _, c := range checks {
+		wantClean(t, c)
+	}
+	if checks[1].Signer != "laptop" || !checks[1].SigOK {
+		t.Fatalf("entry after the checkpoint: signer %q sigOK %v, want laptop/true", checks[1].Signer, checks[1].SigOK)
+	}
+	rootID, active := ActiveSigners(entries)
+	if rootID != KeyFingerprint(pubOf(root)) || len(active) != 1 || active[0].Name != "laptop" {
+		t.Fatalf("ActiveSigners across a checkpoint: root %q active %+v", rootID, active)
+	}
+	// The same chain with no key still finds the root: it is the keyid of
+	// the checkpoint that carries the set.
+	if rootID, _ := ActiveSigners(entries[:1]); rootID != KeyFingerprint(pubOf(root)) {
+		t.Fatalf("keyless root of a checkpoint-led chain %q, want the checkpoint's keyid", rootID)
+	}
+}
+
+func TestCheckpointByNonRootWithSignersIsProblem(t *testing.T) {
+	dir, root, m := chainWithMember(t, 0x22, 0x23)
+	if _, _, err := WriteCheckpoint(dir, signerOf(m)); err != nil {
+		t.Fatal(err)
+	}
+	checks := verifyChecks(t, dir, pubOf(root))
+	wantProblem(t, checks[0], "a checkpoint that carries signers must be signed by the root")
+	// Its seed was not applied: a later entry by M is not good either.
+	// (placeForged: a keyless read takes the checkpoint's own keyid for the
+	// root and would refuse the append itself; only --pub sees the forgery.)
+	placeForged(t, dir, LedgerEntry{Bundle: Bundle{Scan: ScanRow{Repo: "r", Commit: "bbbb2222", ScanID: 1}}}, signerOf(m))
+	checks = verifyChecks(t, dir, pubOf(root))
+	wantProblem(t, checks[1], "not a registered signer at this point in the chain")
+}
+
+func TestCheckpointWithoutSignersUnchanged(t *testing.T) {
+	dir := t.TempDir()
+	k := seededKey(0x24)
+	appendScan(t, dir, signerOf(k), "aaaa1111")
+	if _, _, err := WriteCheckpoint(dir, signerOf(k)); err != nil {
+		t.Fatal(err)
+	}
+	entries := mustRead(t, dir)
+	if entries[0].Checkpoint.Signers != nil {
+		t.Fatalf("signers %+v on a chain that never registered any", entries[0].Checkpoint.Signers)
+	}
+	js, err := json.Marshal(entries[0].Checkpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(js), "signers") {
+		t.Fatalf("checkpoint JSON %s has a signers key; a signer-less chain must checkpoint byte-for-byte as before", js)
+	}
+	wantClean(t, verifyChecks(t, dir, pubOf(k))[0])
+}
+
+func TestCheckpointRejectsMalformedSeedKey(t *testing.T) {
+	root, m := seededKey(0x25), seededKey(0x26)
+	good := SignerKey{KeyID: KeyFingerprint(pubOf(m)), PubKey: hex.EncodeToString(pubOf(m)), Name: "laptop"}
+	cases := map[string]SignerKey{
+		"short pubkey":      {KeyID: good.KeyID, PubKey: "abcd", Name: "laptop"},
+		"not hex":           {KeyID: good.KeyID, PubKey: "zz", Name: "laptop"},
+		"keyid not derived": {KeyID: "ed25519:0000000000000000", PubKey: good.PubKey, Name: "laptop"},
+		"unnamed":           {KeyID: good.KeyID, PubKey: good.PubKey, Name: " "},
+		"the root itself":   {KeyID: KeyFingerprint(pubOf(root)), PubKey: hex.EncodeToString(pubOf(root)), Name: "root again"},
+	}
+	for name, bad := range cases {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			cp := LedgerEntry{Format: LedgerFileFormat, KeyID: KeyFingerprint(pubOf(root)),
+				Kind: KindCheckpoint, Checkpoint: &Checkpoint{Head: "abc", Entries: 1, Signers: []SignerKey{bad}}}
+			placeRawEntry(t, dir, cp, root)
+			wantProblem(t, verifyChecks(t, dir, pubOf(root))[0], "checkpoint")
+			// And nothing was seeded, with or without a key (no panic either).
+			for _, pub := range []ed25519.PublicKey{pubOf(root), nil} {
+				_, set := verifyEntries(mustRead(t, dir), pub)
+				if len(set.list()) != 0 {
+					t.Fatalf("pub=%v: seeded %+v from a malformed checkpoint", pub != nil, set.list())
+				}
+			}
+		})
+	}
+}

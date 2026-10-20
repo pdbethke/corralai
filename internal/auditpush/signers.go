@@ -110,8 +110,15 @@ const legacyKeyIDProblem = `a corral-ledger-5 entry names its key by fingerprint
 // CLAIMS, never an authorization; see ActiveSigners.
 //
 // Seeding: active starts empty. A leading checkpoint that carries the set
-// it replaced (Task 3 of the signers plan) seeds it here, in
-// newSignerSet, and nowhere else.
+// it replaced seeds it (seed, called by the walk once the checkpoint checked
+// clean). Under --pub the checkpoint must be signed by the root, or anyone
+// who could write a genesis could hand themselves signing keys; the pruned
+// register entries were the proof of those keys, and the root's signature
+// on the checkpoint is what stands in for them. With no pub the authority
+// check is by NAME, exactly as for a signer entry: a checkpoint whose keyid
+// string equals the root's passes, whatever its signature bytes, so a keyless
+// read of a checkpoint-led chain describes what the chain CLAIMS. For such a
+// chain the root is the checkpoint's own keyid.
 type signerSet struct {
 	rootID  string
 	rootPub ed25519.PublicKey // nil when no key was given: nothing is signature-checked
@@ -123,6 +130,10 @@ func newSignerSet(entries []LedgerEntry, pub ed25519.PublicKey) *signerSet {
 	s := &signerSet{rootPub: pub, active: map[string]SignerKey{}}
 	if pub != nil {
 		s.rootID = KeyFingerprint(pub)
+		return s
+	}
+	if len(entries) > 0 && entries[0].Kind == KindCheckpoint && entries[0].Checkpoint != nil && len(entries[0].Checkpoint.Signers) > 0 {
+		s.rootID = entries[0].KeyID
 		return s
 	}
 	for _, e := range entries {
@@ -258,4 +269,54 @@ func orNoKeyID(id string) string {
 func ActiveSigners(entries []LedgerEntry) (rootKeyID string, active []SignerKey) {
 	_, set := verifyEntries(entries, nil)
 	return set.rootID, set.list()
+}
+
+// checkpointSignersProblem is the shape rule for a checkpoint's carried
+// set. Each key must pass the very rule a registration does
+// (signerShapeProblem) — a wrong-length key seeded here would otherwise
+// reach ed25519.Verify, which panics on one — and a key may appear once.
+func checkpointSignersProblem(keys []SignerKey) string {
+	seen := map[string]bool{}
+	for _, k := range keys {
+		reg := SignerChange{Action: SignerRegister, KeyID: k.KeyID, PubKey: k.PubKey, Name: k.Name}
+		if p := signerShapeProblem(&reg); p != "" {
+			return "a checkpoint's carried signer: " + p
+		}
+		if seen[k.KeyID] {
+			return fmt.Sprintf("a checkpoint carries signer %s twice", k.KeyID)
+		}
+		seen[k.KeyID] = true
+	}
+	return ""
+}
+
+const errCheckpointNotRoot = "a checkpoint that carries signers must be signed by the root"
+
+// seedProblem is the authority half of a leading checkpoint's carried set,
+// checked after its shape: it must be signed by the root, and may not list
+// the root among the registered keys (the root signs registrations, it is
+// not one). "" when there is nothing to object to, including a checkpoint
+// that carries no signers.
+func (s *signerSet) seedProblem(e LedgerEntry) string {
+	keys := e.Checkpoint.Signers
+	if len(keys) == 0 {
+		return ""
+	}
+	if e.Signature == "" || !s.isRoot(e) {
+		return errCheckpointNotRoot
+	}
+	for _, k := range keys {
+		if k.KeyID == s.rootID {
+			return "a checkpoint registers the ledger's own root key — the root is not registered, it signs registrations"
+		}
+	}
+	return ""
+}
+
+// seed installs a clean leading checkpoint's carried set.
+func (s *signerSet) seed(keys []SignerKey) {
+	for _, k := range keys {
+		s.active[k.KeyID] = k
+		s.order = append(s.order, k.KeyID)
+	}
 }

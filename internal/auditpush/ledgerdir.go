@@ -176,6 +176,13 @@ type Checkpoint struct {
 	Head    string    `json:"head"`    // the Hash of the last pruned entry
 	Entries int       `json:"entries"` // how many entries were pruned
 	Through time.Time `json:"through"` // the Pushed time of the last pruned entry
+	// Signers is the active signer set at the pruned head (ActiveSigners).
+	// A checkpoint deletes the register entries that made later entries'
+	// keys good, so without this the first entry a registered key signs
+	// after a prune would verify as "not a registered signer". It is
+	// omitempty on a nil slice so a chain that never registered a signer
+	// checkpoints byte-for-byte as before.
+	Signers []SignerKey `json:"signers,omitempty"`
 }
 
 // IsScan reports whether the entry is a run's own record.
@@ -267,6 +274,9 @@ func EntryShapeProblem(e LedgerEntry) string {
 	case KindCheckpoint:
 		if e.Checkpoint == nil || e.Checkpoint.Head == "" {
 			return "a checkpoint entry that names no replaced head"
+		}
+		if p := checkpointSignersProblem(e.Checkpoint.Signers); p != "" {
+			return p
 		}
 	case KindReview:
 		if e.Review == nil {
@@ -649,6 +659,10 @@ func verifyEntries(entries []LedgerEntry, pub ed25519.PublicKey) ([]ChainCheck, 
 		if e.Kind == KindSigner && shapeProblem == "" {
 			changeProblem = set.changeProblem(e)
 		}
+		seedProblem := ""
+		if e.Kind == KindCheckpoint && i == 0 && shapeProblem == "" {
+			seedProblem = set.seedProblem(e)
+		}
 		uidOK := true
 		if e.Format != ledgerFormat2 && e.IsScan() && e.Bundle.Scan != (ScanRow{}) {
 			uidOK = e.ScanUID == scanUID(e.Bundle.Scan, e.Pushed) && e.Bundle.Scan.ScanUID == e.ScanUID
@@ -660,6 +674,11 @@ func verifyEntries(entries []LedgerEntry, pub ed25519.PublicKey) ([]ChainCheck, 
 			c.Problem = "scan_uid does not derive from the entry's scan row and pushed time — the identity was altered, or minted elsewhere"
 		case !c.LinkOK:
 			c.Problem = fmt.Sprintf("prev %.12s does not name the previous entry (%.12s) — an entry was removed, reordered or inserted", e.Prev, prevHash)
+		case seedProblem != "" && seedProblem == errCheckpointNotRoot:
+			// Before keyProblem: a checkpoint by a non-root key is not "an
+			// unregistered key" — the set is empty at a genesis — it is a
+			// genesis claiming authority to hand out keys.
+			c.Problem = seedProblem
 		case keyProblem != "":
 			c.Problem = keyProblem
 		case c.Signed && key != nil && !c.SigOK && name == "root":
@@ -670,6 +689,8 @@ func verifyEntries(entries []LedgerEntry, pub ed25519.PublicKey) ([]ChainCheck, 
 			c.Problem = fmt.Sprintf("a checkpoint at position %d — a checkpoint is a genesis and stands only at the start of a chain", i+1)
 		case shapeProblem != "":
 			c.Problem = shapeProblem
+		case seedProblem != "":
+			c.Problem = seedProblem
 		case changeProblem != "":
 			c.Problem = changeProblem
 		case e.Kind == KindSigner:
@@ -727,6 +748,9 @@ func verifyEntries(entries []LedgerEntry, pub ed25519.PublicKey) ([]ChainCheck, 
 		// tampered or forged one leaves the set as it was.
 		if e.Kind == KindSigner && c.Problem == "" {
 			set.apply(e.Signer)
+		}
+		if e.Kind == KindCheckpoint && i == 0 && c.Problem == "" {
+			set.seed(e.Checkpoint.Signers)
 		}
 		out = append(out, c)
 		prevHash = e.Hash
@@ -932,7 +956,15 @@ func WriteCheckpoint(dir string, signer LedgerSigner) (string, int, error) {
 	if err != nil {
 		return "", 0, err
 	}
-	cp := LedgerEntry{Kind: KindCheckpoint, Checkpoint: &Checkpoint{Head: head.Hash, Entries: len(entries), Through: head.Pushed}}
+	// The set the pruned register/revoke entries left at the head travels in
+	// the checkpoint (see Checkpoint.Signers). nil, not empty, when there is
+	// none, so the JSON gains no key.
+	_, active := ActiveSigners(entries)
+	var carried []SignerKey
+	if len(active) > 0 {
+		carried = active
+	}
+	cp := LedgerEntry{Kind: KindCheckpoint, Checkpoint: &Checkpoint{Head: head.Hash, Entries: len(entries), Through: head.Pushed, Signers: carried}}
 	name, err := placeEntry(dir, cp, "", signer)
 	if err != nil {
 		return "", 0, err

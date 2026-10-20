@@ -94,6 +94,19 @@ disposable bwrap sandbox, dependency dirs are bound read-only, and every mutant
 is applied to the COPY. `certify --local` has no `--substrate` flag at all, so
 it cannot select anything else.
 
+**Where each verb's record goes.** `certify --repo`, `certify --local` and
+`review` each keep their entry in the **machine ledger** — `statedir.MachineLedger`, under the
+state directory (override `CORRALAI_MACHINE_LEDGER`), never in a checkout.
+`certify --repo` writes its entry to the repo ledger (`<repo>/.corral/ledger`,
+or `--ledger`/`$CORRAL_LEDGER`) plus the machine copy; `corral review` does the
+same; `certify --local` writes its entry to the machine ledger by default (and
+also to `--ledger <dir>`, which it refuses inside `--repo-dir`). `--no-ledger`
+skips the machine copy; on `--local` an explicit `--ledger` is still written.
+A failed machine copy is printed and never changes an exit code (a signing
+key the operator cannot use still refuses, as it does for the repo entry).
+`review adjudicate` and `ledger` verbs write only the directory they are
+given.
+
 **One substrate mutates the real checkout, and it is opt-in:**
 `certify --repo --substrate workspace`. That is what the GitHub Action uses
 (`action.yml`), and it is correct there for the reason the flag's own help

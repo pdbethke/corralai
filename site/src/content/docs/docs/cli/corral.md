@@ -876,11 +876,11 @@ flags of `corral review`:
   -fail-on reproduced
     	exit 3 when a finding STANDS at this tier after the run: reproduced (its script ran and exited 0, and no reproduced refutation or adjudication overturned it). Off by default — the record is written either way; this is the merge gate's switch, for CI
   -ledger string
-    	the ledger directory the review entry is written to (default: <repo>/.corral/ledger, or $CORRAL_LEDGER)
+    	the ledger directory the review entry is written to (default: <repo>/.corral/ledger, or $CORRAL_LEDGER). A copy of the entry also goes to this machine's own ledger (statedir's ledger, override CORRALAI_MACHINE_LEDGER), which is never inside the checkout
   -max-bytes int
     	how many bytes of the scope the reviewer is shown; files past the cap are listed by name and the review records them as unshown (default 200000)
   -no-ledger
-    	print the review and write no entry
+    	print the review and write no entry, in either ledger
   -push review adjudicate --push
     	also append the review's rows to a warehouse you own — a DuckDB path, or md:<db> — as corral_reviews and corral_findings, keyed by the entry's hash so a later review adjudicate --push joins to them. Scripts and outputs travel as hashes unless --push-source
   -push-source

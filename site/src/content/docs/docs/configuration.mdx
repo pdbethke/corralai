@@ -109,6 +109,7 @@ workspace` runs on your checkout instead of in a sandbox; see
 | `CORRALAI_CERTIFY_KEY` | Hex-encoded Ed25519 seed that signs verdicts and ledger entries; takes priority over the file | — |
 | `CORRALAI_CERTIFY_KEY_FILE` | Where the signing key seed lives; created `0600` on first use by `certify --local` | `$STATE/corralai_certify_key` |
 | `CORRAL_LEDGER` | The ledger directory `certify --repo` writes its entry to and reads its prior from (`--ledger` overrides) | `<repo>/.corral/ledger` |
+| `CORRALAI_MACHINE_LEDGER` | This machine's own ledger: `certify --local` writes its entry here, and `certify --repo` and `review` keep a copy of theirs here (`--no-ledger` skips it) | `$STATE/ledger` |
 | `CORRALAI_LEDGER_PUBKEY` | The public key `corral ledger verify` checks signatures against when `--pub` is not given | — (signatures not checked) |
 | `CORRALAI_CACHE_DB` | The local cache of derived goals and coverage selections (a cache, not a record) | `$CACHE/corralai_cache.duckdb` |
 | `motherduck_token` | Read by `--push md:<db>` to reach MotherDuck | — |

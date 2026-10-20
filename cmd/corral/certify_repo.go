@@ -5870,21 +5870,36 @@ func pushBundle(target string, b auditpush.Bundle) (auditpush.Counts, error) {
 // pointed --ledger AT the machine ledger, the one entry is the copy, and a
 // second append would record one run twice in one chain.
 func writeMachineLedgerCopy(b auditpush.Bundle, repoLedger string, stdout, stderr io.Writer) {
+	keepMachineLedgerCopy("corral certify --repo", repoLedger, stdout, stderr, func(dir string) (bool, error) {
+		c, err := pushBundle(dir+"/", b)
+		// The same guard the repo-ledger line has: an entry that wrote no
+		// rows is not announced as written.
+		return c.Total() > 0, err
+	})
+}
+
+// keepMachineLedgerCopy is the part of a machine-ledger copy that is not
+// about what kind of entry it is: find the machine ledger, skip when the
+// entry already went there (repoLedger IS the machine ledger), run write
+// against it, and print — never swallow — a failure, prefixed with the verb
+// that ran. certify --repo and review both keep a copy through it, so the
+// two cannot drift on dedup, on printing, or on the rule that a copy never
+// changes an exit code (it returns nothing to change one with). write
+// reports whether it wrote anything worth announcing.
+func keepMachineLedgerCopy(verb, repoLedger string, stdout, stderr io.Writer, write func(dir string) (wrote bool, err error)) {
 	dir, err := machineLedgerDir()
 	if err == nil && samePath(dir, repoLedger) {
 		return
 	}
-	var c auditpush.Counts
+	wrote := false
 	if err == nil {
-		c, err = pushBundle(dir+"/", b)
+		wrote, err = write(dir)
 	}
 	if err != nil {
-		fmt.Fprintf(stderr, "corral certify --repo: machine ledger: %v\n", err)
+		fmt.Fprintf(stderr, "%s: machine ledger: %v\n", verb, err)
 		return
 	}
-	// The same guard the repo-ledger line has: an entry that wrote no rows
-	// is not announced as written.
-	if c.Total() > 0 {
+	if wrote {
 		fmt.Fprintf(stdout, "  machine ledger: entry written to %s\n", dir)
 	}
 }

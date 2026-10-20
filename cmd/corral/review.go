@@ -123,11 +123,11 @@ func reviewFlagSet(out io.Writer) (*flag.FlagSet, *reviewFlags) {
 	fs.StringVar(&f.scope, "scope", "", "the directory or file under --repo to review (required)")
 	fs.StringVar(&f.model, "reviewer-model", "", "the reviewer seat — an alias from the registry, a provider model name, or an AGENTIC seat: an agent NAME, pinned to a model as `<name>:<model>`. `claude-code`, `codex` and `antigravity` are defined; ANY agent is defined the same way as CORRALAI_AGENT_<NAME>=\"<command line>\" ({dir} the worktree, {out} a reply file, {model} / {model:FLAG} the pin; the brief on stdin, the reply on stdout). An agentic seat is a coding agent started in a disposable copy of the repository: it reads the whole scope itself (no --max-bytes cap) and hands back scripts, which corral runs — nothing it did itself is on the record. Required; corral has no default models")
 	fs.StringVar(&f.verifier, "verifier-model", "", "a VERIFIER seat, adversarial to the reviewer: a different model that tries to refute every finding, by the same rules — a REPRODUCED refutation (a sh script that exits 0 iff the refutation is demonstrated) that holds demotes the finding on the record; a CODE-READ refutation is carried as opinion; a search that finds nothing is never a refutation. Must not be the reviewer's model. Off unless named")
-	fs.StringVar(&f.ledger, "ledger", "", "the ledger directory the review entry is written to (default: <repo>/.corral/ledger, or $CORRAL_LEDGER)")
+	fs.StringVar(&f.ledger, "ledger", "", "the ledger directory the review entry is written to (default: <repo>/.corral/ledger, or $CORRAL_LEDGER). A copy of the entry also goes to this machine's own ledger (statedir's ledger, override CORRALAI_MACHINE_LEDGER), which is never inside the checkout")
 	fs.StringVar(&f.attest, "attest", "", "write an in-toto statement (predicate https://corralai.dev/review/v1) to this path, and its DSSE envelope beside it when a certify key is configured: the REPRODUCTIONS — every finding's declared and recorded tier, the hash of its script and output, its exit, the verifier's refutation on the same terms — signed; the opinion bound by its hash and not carried. The ledger entry then names the statement. `corral verify --attest <path> --db <ledger dir>` recomputes the reproductions' hash from the entry")
 	fs.StringVar(&f.push, "push", "", "also append the review's rows to a warehouse you own — a DuckDB path, or md:<db> — as corral_reviews and corral_findings, keyed by the entry's hash so a later `review adjudicate --push` joins to them. Scripts and outputs travel as hashes unless --push-source")
 	fs.BoolVar(&f.pushSource, "push-source", false, "with --push, also send the scripts and what they printed (they quote the audited code); off by default")
-	fs.BoolVar(&f.noLedger, "no-ledger", false, "print the review and write no entry")
+	fs.BoolVar(&f.noLedger, "no-ledger", false, "print the review and write no entry, in either ledger")
 	fs.StringVar(&f.failOn, "fail-on", "", "exit 3 when a finding STANDS at this tier after the run: `reproduced` (its script ran and exited 0, and no reproduced refutation or adjudication overturned it). Off by default — the record is written either way; this is the merge gate's switch, for CI")
 	fs.DurationVar(&f.timeout, "timeout", time.Minute, "wall-clock bound on each reproduction script")
 	fs.StringVar(&f.substrate, "substrate", substrateJail, "where the reproduction scripts run: `jail` (default) — the offline sandbox certify grades in, over the tree at the commit with your dependency directories read-only; or `workspace` — a detached git worktree on the host, network on, model keys removed from the environment, for where the caller is the isolation boundary (a CI runner, as with certify --repo --substrate workspace)")
@@ -425,8 +425,21 @@ func runReviewRun(args []string, stdout, stderr io.Writer) int {
 		return refuseInterruptedAfter(stderr, "corral review", statementFiles)
 	}
 	name, werr := auditpush.WriteReview(ledgerDir, r, signer)
+	// A copy in this machine's own ledger, whether or not the repo entry
+	// landed: the box keeps every review it ran. Same helper, same rules as
+	// certify --repo's copy (dedup when --ledger IS the machine ledger,
+	// failures printed, exit code untouched). The state directory is never
+	// inside the audited checkout, so this cannot dirty the tree under review.
+	// --no-ledger returned above, so it skips this too.
+	keepCopy := func() {
+		keepMachineLedgerCopy("corral review", ledgerDir, stdout, stderr, func(dir string) (bool, error) {
+			_, err := auditpush.WriteReview(dir, r, signer)
+			return err == nil, err
+		})
+	}
 	if werr != nil {
 		fmt.Fprintf(stderr, "corral review: writing the entry to %s: %v\n", ledgerDir, werr)
+		keepCopy()
 		return exit
 	}
 	entries, _ := auditpush.ReadLedgerDir(ledgerDir)
@@ -435,6 +448,7 @@ func runReviewRun(args []string, stdout, stderr io.Writer) int {
 		last = entries[n-1]
 	}
 	fmt.Fprintf(stdout, "\nledger: review entry %s written to %s (%s)\n  adjudicate a finding: corral review adjudicate %s %.12s#R1 --confirm|--refute --reason \"…\"\n", name, ledgerDir, signed, ledgerDir, last.Hash)
+	keepCopy()
 	// The push, last and fail-open, like certify's: the same entry's rows
 	// into a warehouse, keyed by the entry's hash.
 	if p := strings.TrimSpace(*push); p != "" && last.Kind == auditpush.KindReview {

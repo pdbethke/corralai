@@ -665,6 +665,9 @@ there as its prior. Make that directory a worktree of the `corral/ledger`
 branch — `git worktree add .corral/ledger corral/ledger` — and a local run
 and an Action run are one writer with two places to put the file: `git
 push` carries your entry up, the next run on either side links to it.
+The same run also keeps a copy of its entry in the machine ledger under
+corral's state directory (`CORRALAI_MACHINE_LEDGER` moves it; `--no-ledger`
+skips it too), so the box keeps a record whether or not the repository does.
 If the branch moved under you, `git fetch` and `corral ledger append
 <your entry> .corral/ledger` re-links it to the new head before you push.
 

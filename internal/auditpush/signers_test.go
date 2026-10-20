@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func seededKey(b byte) ed25519.PrivateKey {
@@ -140,5 +141,313 @@ func TestFormat4StillRead(t *testing.T) {
 	}
 	if again, _ := EntryHash(got); again != h {
 		t.Fatalf("re-hash of the format-4 bytes = %s, want %s", again, h)
+	}
+}
+
+// --- The walk: who may sign, entry by entry ---------------------------------
+
+func pubOf(k ed25519.PrivateKey) ed25519.PublicKey { return k.Public().(ed25519.PublicKey) }
+
+func signerOf(k ed25519.PrivateKey) Ed25519LedgerSigner {
+	return Ed25519LedgerSigner{KeyID: KeyFingerprint(pubOf(k)), Key: k}
+}
+
+func registerOf(k ed25519.PrivateKey, name string) SignerChange {
+	p := pubOf(k)
+	return SignerChange{Action: SignerRegister, KeyID: KeyFingerprint(p), PubKey: hex.EncodeToString(p), Name: name}
+}
+
+func revokeOf(k ed25519.PrivateKey, reason string) SignerChange {
+	p := pubOf(k)
+	return SignerChange{Action: SignerRevoke, KeyID: KeyFingerprint(p), PubKey: hex.EncodeToString(p), Name: "-", Reason: reason}
+}
+
+func appendScan(t *testing.T, dir string, s LedgerSigner, commit string) {
+	t.Helper()
+	e := LedgerEntry{Bundle: Bundle{Scan: ScanRow{Repo: "r", Commit: commit, ScanID: 1}}}
+	if _, err := AppendLedgerEntry(dir, e, s); err != nil {
+		t.Fatalf("append %s: %v", commit, err)
+	}
+}
+
+func mustSignerChange(t *testing.T, dir string, c SignerChange, s LedgerSigner) {
+	t.Helper()
+	if _, err := WriteSignerChange(dir, c, s); err != nil {
+		t.Fatalf("signer change %s %s: %v", c.Action, c.KeyID, err)
+	}
+}
+
+// placeForged links e to the head and writes it WITHOUT AppendLedgerEntry's
+// intact-chain guard, so a test can build the chain a forger would: the
+// verifier, not the writer, is what is under test.
+func placeForged(t *testing.T, dir string, e LedgerEntry, s LedgerSigner) {
+	t.Helper()
+	entries, err := ReadLedgerDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prev := ""
+	if n := len(entries); n > 0 {
+		prev = entries[n-1].Hash
+	}
+	if _, err := placeEntry(dir, e, prev, s); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// placeRawEntry writes e exactly as given (format, keyid and all), linked to
+// the head and signed by key — the shape an older binary, or a hand, put on
+// disk. placeEntry would stamp format 5 and refuse a legacy keyid.
+func placeRawEntry(t *testing.T, dir string, e LedgerEntry, key ed25519.PrivateKey) {
+	t.Helper()
+	entries, err := ReadLedgerDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := len(entries); n > 0 {
+		e.Prev = entries[n-1].Hash
+	}
+	e.Pushed = time.Now().UTC().Truncate(time.Microsecond)
+	if e.IsScan() && e.Bundle.Scan != (ScanRow{}) {
+		e.ScanUID = scanUID(e.Bundle.Scan, e.Pushed)
+		e.Bundle.Scan.ScanUID = e.ScanUID
+	}
+	e.Hash, e.Signature, e.Raw = "", "", nil
+	h, err := EntryHash(e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.Hash = h
+	raw, _ := hex.DecodeString(h)
+	e.Signature = hex.EncodeToString(ed25519.Sign(key, raw))
+	js, _ := json.MarshalIndent(e, "", " ")
+	var buf bytes.Buffer
+	zw := gzip.NewWriter(&buf)
+	_, _ = zw.Write(js)
+	_ = zw.Close()
+	if err := os.MkdirAll(filepath.Join(dir, ScansSubdir), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	name := e.Pushed.Format("20060102T150405.000000Z") + "-raw-" + h[:12] + ".json.gz"
+	if err := os.WriteFile(filepath.Join(dir, ScansSubdir, name), buf.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func verifyChecks(t *testing.T, dir string, pub ed25519.PublicKey) []ChainCheck {
+	t.Helper()
+	checks, err := VerifyLedgerDir(dir, pub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return checks
+}
+
+func wantClean(t *testing.T, c ChainCheck) {
+	t.Helper()
+	if c.Problem != "" {
+		t.Fatalf("%s (%s): unexpected problem %q", c.File, c.Kind, c.Problem)
+	}
+}
+
+func wantProblem(t *testing.T, c ChainCheck, substr string) {
+	t.Helper()
+	if !strings.Contains(c.Problem, substr) {
+		t.Fatalf("%s (%s): problem %q, want it to contain %q", c.File, c.Kind, c.Problem, substr)
+	}
+}
+
+func TestVerifyRegisteredKey(t *testing.T) {
+	dir := t.TempDir()
+	root, m := seededKey(0x10), seededKey(0x11)
+	mustSignerChange(t, dir, registerOf(m, "laptop"), signerOf(root))
+	appendScan(t, dir, signerOf(m), "aaaa1111")
+	checks := verifyChecks(t, dir, pubOf(root))
+	if len(checks) != 2 {
+		t.Fatalf("%d checks, want 2", len(checks))
+	}
+	for _, c := range checks {
+		wantClean(t, c)
+	}
+	if checks[0].Signer != "root" || !checks[0].SigOK {
+		t.Fatalf("the registration: signer %q sigOK %v, want root/true", checks[0].Signer, checks[0].SigOK)
+	}
+	if checks[1].Signer != "laptop" || !checks[1].SigOK {
+		t.Fatalf("the registered key's entry: signer %q sigOK %v, want laptop/true", checks[1].Signer, checks[1].SigOK)
+	}
+}
+
+func TestVerifyKeyBeforeRegistration(t *testing.T) {
+	dir := t.TempDir()
+	root, m := seededKey(0x12), seededKey(0x13)
+	appendScan(t, dir, signerOf(m), "aaaa1111")
+	mustSignerChange(t, dir, registerOf(m, "laptop"), signerOf(root))
+	checks := verifyChecks(t, dir, pubOf(root))
+	wantProblem(t, checks[0], "not a registered signer at this point in the chain")
+	if checks[0].SigOK || checks[0].Signer != "" {
+		t.Fatalf("an unregistered key's entry: sigOK %v signer %q, want false/\"\"", checks[0].SigOK, checks[0].Signer)
+	}
+	wantClean(t, checks[1])
+}
+
+func TestVerifyRevokedKey(t *testing.T) {
+	dir := t.TempDir()
+	root, m := seededKey(0x14), seededKey(0x15)
+	mustSignerChange(t, dir, registerOf(m, "laptop"), signerOf(root))
+	appendScan(t, dir, signerOf(m), "aaaa1111")
+	// Register and revoke of one key inside one second must not collide on
+	// the file name (the tail is the entry's own hash).
+	mustSignerChange(t, dir, revokeOf(m, "laptop stolen"), signerOf(root))
+	appendScan(t, dir, signerOf(m), "bbbb2222")
+	checks := verifyChecks(t, dir, pubOf(root))
+	if len(checks) != 4 {
+		t.Fatalf("%d checks, want 4", len(checks))
+	}
+	wantClean(t, checks[0])
+	wantClean(t, checks[1])
+	wantClean(t, checks[2])
+	wantProblem(t, checks[3], "not a registered signer at this point in the chain")
+}
+
+func TestVerifyForgedRegistration(t *testing.T) {
+	dir := t.TempDir()
+	root, m, x := seededKey(0x16), seededKey(0x17), seededKey(0x18)
+	mustSignerChange(t, dir, registerOf(m, "laptop"), signerOf(root))
+	c := registerOf(x, "intruder")
+	placeForged(t, dir, LedgerEntry{Kind: KindSigner, Signer: &c}, signerOf(m))
+	placeForged(t, dir, LedgerEntry{Bundle: Bundle{Scan: ScanRow{Repo: "r", Commit: "cccc3333", ScanID: 1}}}, signerOf(x))
+	checks := verifyChecks(t, dir, pubOf(root))
+	wantClean(t, checks[0])
+	wantProblem(t, checks[1], "a signer entry must be signed by the ledger's root key")
+	wantProblem(t, checks[2], "not a registered signer at this point in the chain")
+	// Without a key the forgery is still visible: the authority rule is
+	// structural (the root is the chain's first signer), not a signature.
+	nopub := verifyChecks(t, dir, nil)
+	wantProblem(t, nopub[1], "a signer entry must be signed by the ledger's root key")
+	if rootID, active := ActiveSigners(mustRead(t, dir)); rootID != KeyFingerprint(pubOf(root)) || len(active) != 1 || active[0].Name != "laptop" {
+		t.Fatalf("ActiveSigners after a forged registration: root %q active %+v, want only laptop", rootID, active)
+	}
+}
+
+func mustRead(t *testing.T, dir string) []LedgerEntry {
+	t.Helper()
+	entries, err := ReadLedgerDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return entries
+}
+
+func TestVerifyLegacyKeyIDIsRoot(t *testing.T) {
+	root := seededKey(0x19)
+	scan := func() LedgerEntry {
+		return LedgerEntry{KeyID: LegacyRootKeyID, Bundle: Bundle{Scan: ScanRow{Repo: "r", Commit: "dddd4444", ScanID: 1}}}
+	}
+	dir := t.TempDir()
+	e := scan()
+	e.Format = ledgerFormat4
+	placeRawEntry(t, dir, e, root)
+	checks := verifyChecks(t, dir, pubOf(root))
+	wantClean(t, checks[0])
+	if checks[0].Signer != "root" || !checks[0].SigOK {
+		t.Fatalf("a format-4 corral-certify entry: signer %q sigOK %v, want root/true", checks[0].Signer, checks[0].SigOK)
+	}
+
+	dir5 := t.TempDir()
+	e = scan()
+	e.Format = LedgerFileFormat
+	placeRawEntry(t, dir5, e, root)
+	for _, pub := range []ed25519.PublicKey{pubOf(root), nil} {
+		wantProblem(t, verifyChecks(t, dir5, pub)[0], `a corral-ledger-5 entry names its key by fingerprint, not "corral-certify"`)
+	}
+	// The writer refuses it too: the rule at both doors.
+	if _, err := AppendLedgerEntry(t.TempDir(), scan(), Ed25519LedgerSigner{KeyID: LegacyRootKeyID, Key: root}); err == nil || !strings.Contains(err.Error(), "by fingerprint") {
+		t.Fatalf("placing a format-5 entry keyed %q: err %v, want a refusal", LegacyRootKeyID, err)
+	}
+}
+
+func TestVerifyRootCannotBeRevoked(t *testing.T) {
+	dir := t.TempDir()
+	root := seededKey(0x1a)
+	mustSignerChange(t, dir, revokeOf(root, "rotating"), signerOf(root))
+	wantProblem(t, verifyChecks(t, dir, pubOf(root))[0], "the root cannot be revoked — a new root is a new ledger")
+}
+
+// The other three change rules: a key registered twice, the root
+// registered as a signer, and a revoke of a key that is not active. Each
+// is a Problem and none changes the set.
+func TestVerifySignerChangeRules(t *testing.T) {
+	root, m, x := seededKey(0x1b), seededKey(0x1c), seededKey(0x1d)
+	cases := map[string]struct {
+		changes []SignerChange
+		want    string
+	}{
+		"register twice":    {[]SignerChange{registerOf(m, "a"), registerOf(m, "b")}, "already a registered signer"},
+		"register the root": {[]SignerChange{registerOf(root, "root again")}, "the root is not registered"},
+		"revoke a stranger": {[]SignerChange{registerOf(m, "a"), revokeOf(x, "gone")}, "not a registered signer at this point in the chain"},
+		"revoke twice":      {[]SignerChange{registerOf(m, "a"), revokeOf(m, "gone"), revokeOf(m, "again")}, "not a registered signer at this point in the chain"},
+		"unsigned register": {nil, "a signer entry must be signed by the ledger's root key"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			if tc.changes == nil {
+				// An unsigned change after a signed one: the root is known.
+				mustSignerChange(t, dir, registerOf(m, "a"), signerOf(root))
+				c := registerOf(x, "x")
+				placeForged(t, dir, LedgerEntry{Kind: KindSigner, Signer: &c}, nil)
+			}
+			for _, c := range tc.changes {
+				placeForged(t, dir, LedgerEntry{Kind: KindSigner, Signer: &c}, signerOf(root))
+			}
+			checks := verifyChecks(t, dir, pubOf(root))
+			for _, c := range checks[:len(checks)-1] {
+				wantClean(t, c)
+			}
+			wantProblem(t, checks[len(checks)-1], tc.want)
+		})
+	}
+}
+
+// With no key, nothing is signature-checked — but signer entries are still
+// shape-checked and applied, and every entry's Signer is named from the set.
+func TestVerifyNoPubStillAppliesShape(t *testing.T) {
+	dir := t.TempDir()
+	root, m := seededKey(0x1e), seededKey(0x1f)
+	mustSignerChange(t, dir, registerOf(m, "laptop"), signerOf(root))
+	appendScan(t, dir, signerOf(m), "eeee5555")
+	appendScan(t, dir, signerOf(root), "ffff6666")
+	checks := verifyChecks(t, dir, nil)
+	for i, want := range []string{"root", "laptop", "root"} {
+		wantClean(t, checks[i])
+		if checks[i].Signer != want || checks[i].SigOK {
+			t.Fatalf("entry %d with no key: signer %q sigOK %v, want %q/false", i, checks[i].Signer, checks[i].SigOK, want)
+		}
+	}
+	// A malformed signer change is still a problem with no key.
+	bad := registerOf(seededKey(0x20), "x")
+	bad.KeyID = "ed25519:0000000000000000"
+	e := LedgerEntry{Format: LedgerFileFormat, Kind: KindSigner, Signer: &bad, KeyID: KeyFingerprint(pubOf(root))}
+	placeRawEntry(t, dir, e, root)
+	checks = verifyChecks(t, dir, nil)
+	wantProblem(t, checks[len(checks)-1], "fingerprint")
+}
+
+func TestActiveSignersAtHead(t *testing.T) {
+	dir := t.TempDir()
+	root, a, b := seededKey(0x21), seededKey(0x22), seededKey(0x23)
+	if rootID, active := ActiveSigners(nil); rootID != "" || len(active) != 0 {
+		t.Fatalf("an empty chain: root %q active %+v, want none", rootID, active)
+	}
+	mustSignerChange(t, dir, registerOf(a, "A"), signerOf(root))
+	mustSignerChange(t, dir, registerOf(b, "B"), signerOf(root))
+	mustSignerChange(t, dir, revokeOf(a, "retired"), signerOf(root))
+	rootID, active := ActiveSigners(mustRead(t, dir))
+	if rootID != KeyFingerprint(pubOf(root)) {
+		t.Fatalf("rootKeyID %q, want %q", rootID, KeyFingerprint(pubOf(root)))
+	}
+	want := SignerKey{KeyID: KeyFingerprint(pubOf(b)), PubKey: hex.EncodeToString(pubOf(b)), Name: "B"}
+	if len(active) != 1 || active[0] != want {
+		t.Fatalf("active %+v, want [%+v]", active, want)
 	}
 }

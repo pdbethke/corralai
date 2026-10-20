@@ -3,6 +3,7 @@
 package main
 
 import (
+	"crypto/ed25519"
 	"errors"
 	"flag"
 	"fmt"
@@ -147,7 +148,11 @@ func ledgerSignerFromLocalKey() (auditpush.LedgerSigner, string, error) {
 	priv, kerr := loadLocalCertifyKeyIfConfigured()
 	switch {
 	case kerr == nil:
-		return auditpush.Ed25519LedgerSigner{KeyID: "corral-certify", Key: priv}, "signed by corral-certify", nil
+		// The key is named by its fingerprint (corral-ledger-5): the
+		// verifier resolves a keyid to the root or a registered signer, and
+		// a format-5 entry keyed "corral-certify" is a Problem there.
+		id := auditpush.KeyFingerprint(priv.Public().(ed25519.PublicKey))
+		return auditpush.Ed25519LedgerSigner{KeyID: id, Key: priv}, "signed by " + id, nil
 	case errors.Is(kerr, errNoLocalKey):
 		return nil, "unsigned", nil
 	}

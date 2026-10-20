@@ -84,7 +84,7 @@ func TestLedgerDirIsOneFilePerPushAndLoadsAsAWarehouseView(t *testing.T) {
 func TestLedgerDirIsASignedHashLinkedChain(t *testing.T) {
 	dir := t.TempDir()
 	pub, priv, _ := ed25519.GenerateKey(nil)
-	SetLedgerSigner(Ed25519LedgerSigner{KeyID: "corral-certify", Key: priv})
+	SetLedgerSigner(Ed25519LedgerSigner{KeyID: KeyFingerprint(priv.Public().(ed25519.PublicKey)), Key: priv})
 	t.Cleanup(func() { SetLedgerSigner(nil) })
 	push := func(commit string) {
 		if _, err := PushBundle(dir, Bundle{Scan: ScanRow{Repo: "r", Commit: commit, ScanID: 1}, Files: []Row{{Repo: "r", ScanID: 1, Path: "a.py"}}}); err != nil {
@@ -102,7 +102,7 @@ func TestLedgerDirIsASignedHashLinkedChain(t *testing.T) {
 		t.Fatalf("want 3 entries, got %d", len(checks))
 	}
 	for i, c := range checks {
-		if !c.HashOK || !c.LinkOK || !c.Signed || !c.SigOK || c.Problem != "" || c.KeyID != "corral-certify" {
+		if !c.HashOK || !c.LinkOK || !c.Signed || !c.SigOK || c.Problem != "" || c.KeyID != KeyFingerprint(pub) {
 			t.Errorf("entry %d: %+v", i, c)
 		}
 	}
@@ -183,7 +183,7 @@ func gzipBytes(b []byte) []byte {
 func TestRetractionIsAnEntryNotADeletion(t *testing.T) {
 	dir := t.TempDir()
 	pub, priv, _ := ed25519.GenerateKey(nil)
-	signer := Ed25519LedgerSigner{KeyID: "corral-certify", Key: priv}
+	signer := Ed25519LedgerSigner{KeyID: KeyFingerprint(priv.Public().(ed25519.PublicKey)), Key: priv}
 	SetLedgerSigner(signer)
 	t.Cleanup(func() { SetLedgerSigner(nil) })
 	push := func(commit string) {
@@ -276,7 +276,7 @@ func TestRetractionIsAnEntryNotADeletion(t *testing.T) {
 func TestCheckpointIsAGenesisThatNamesWhatItReplaced(t *testing.T) {
 	dir := t.TempDir()
 	pub, priv, _ := ed25519.GenerateKey(nil)
-	signer := Ed25519LedgerSigner{KeyID: "corral-certify", Key: priv}
+	signer := Ed25519LedgerSigner{KeyID: KeyFingerprint(priv.Public().(ed25519.PublicKey)), Key: priv}
 	SetLedgerSigner(signer)
 	t.Cleanup(func() { SetLedgerSigner(nil) })
 	push := func(commit string) {
@@ -364,7 +364,7 @@ func TestOldEntriesHashTheSameWithoutAKind(t *testing.T) {
 func TestReviewAndAdjudicationAreEntriesBesideTheScans(t *testing.T) {
 	dir := t.TempDir()
 	pub, priv, _ := ed25519.GenerateKey(nil)
-	signer := Ed25519LedgerSigner{KeyID: "corral-certify", Key: priv}
+	signer := Ed25519LedgerSigner{KeyID: KeyFingerprint(priv.Public().(ed25519.PublicKey)), Key: priv}
 	SetLedgerSigner(signer)
 	t.Cleanup(func() { SetLedgerSigner(nil) })
 	if _, err := PushBundle(dir, Bundle{Scan: ScanRow{Repo: "r", Commit: "aaa1"}}); err != nil {

@@ -60,7 +60,7 @@ func TestEntryHashDistinguishesAMeasuredZeroFromNothingMeasured(t *testing.T) {
 	// verification — the hash is over the bytes in the file.
 	dir := t.TempDir()
 	pub, priv, _ := ed25519.GenerateKey(nil)
-	signer := Ed25519LedgerSigner{KeyID: "k", Key: priv}
+	signer := Ed25519LedgerSigner{KeyID: KeyFingerprint(pub), Key: priv}
 	if _, err := AppendLedgerEntry(dir, a, signer); err != nil {
 		t.Fatal(err)
 	}

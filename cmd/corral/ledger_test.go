@@ -4,7 +4,9 @@ package main
 
 import (
 	"bytes"
+	"crypto/ed25519"
 	"database/sql"
+	"encoding/hex"
 	"io"
 	"os"
 	"os/exec"
@@ -327,5 +329,25 @@ func TestLedgerPushMovesTheRecordAndSkipsWhatTheWarehouseHolds(t *testing.T) {
 	// A directory target is refused.
 	if code := runLedger([]string{"push", dir, filepath.Join(t.TempDir(), "other") + "/"}, &out, &errb); code != 2 {
 		t.Errorf("a directory target must be refused, got %d", code)
+	}
+}
+
+// From corral-ledger-5 a ledger entry names its key by fingerprint, and the
+// verifier calls a format-5 "corral-certify" a Problem — so the signer every
+// ledger verb writes with must already sign by fingerprint, and say so.
+func TestLedgerSignerUsesFingerprint(t *testing.T) {
+	seed := strings.Repeat("5a", ed25519.SeedSize)
+	t.Setenv("CORRALAI_CERTIFY_KEY", seed)
+	raw, _ := hex.DecodeString(seed)
+	want := auditpush.KeyFingerprint(ed25519.NewKeyFromSeed(raw).Public().(ed25519.PublicKey))
+	s, label, err := ledgerSignerFromLocalKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := s.SigningKeyID(); got != want {
+		t.Fatalf("SigningKeyID() = %q, want the key's fingerprint %q", got, want)
+	}
+	if label != "signed by "+want {
+		t.Fatalf("label %q, want %q", label, "signed by "+want)
 	}
 }

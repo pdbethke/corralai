@@ -284,7 +284,7 @@ func TestCheckpointIsAGenesisThatNamesWhatItReplaced(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, _, err := WriteCheckpoint(dir, signer); err == nil {
+	if _, _, err := WriteCheckpoint(dir, signer, nil); err == nil {
 		t.Fatal("a checkpoint of an empty directory was accepted")
 	}
 	push("aaa1")
@@ -293,7 +293,7 @@ func TestCheckpointIsAGenesisThatNamesWhatItReplaced(t *testing.T) {
 	before, _ := ReadLedgerDir(dir)
 	oldHead := before[2]
 
-	name, pruned, err := WriteCheckpoint(dir, signer)
+	name, pruned, err := WriteCheckpoint(dir, signer, nil)
 	if err != nil {
 		t.Fatalf("WriteCheckpoint: %v", err)
 	}

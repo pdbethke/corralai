@@ -204,7 +204,7 @@ func runLedgerCheckpoint(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "corral ledger checkpoint: %v\n", kerr)
 		return 1
 	}
-	name, pruned, err := auditpush.WriteCheckpoint(dir, signer)
+	name, pruned, err := auditpush.WriteCheckpoint(dir, signer, nil) // Task 5 wires the root key here
 	if err != nil {
 		fmt.Fprintf(stderr, "corral ledger checkpoint: %v\n", err)
 		return 1

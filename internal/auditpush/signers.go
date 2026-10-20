@@ -265,7 +265,8 @@ func orNoKeyID(id string) string {
 // authorization: whether a key really was registered is answered only by
 // VerifyLedgerDir under the root key. On a chain that verifies clean under
 // the root key it is exactly the set that verify walked. rootKeyID is the
-// KeyID of the chain's first signer entry, "" when the chain has none.
+// KeyID of the chain's first signer entry — or of a leading checkpoint that
+// carries a set — and "" when the chain has neither.
 func ActiveSigners(entries []LedgerEntry) (rootKeyID string, active []SignerKey) {
 	_, set := verifyEntries(entries, nil)
 	return set.rootID, set.list()

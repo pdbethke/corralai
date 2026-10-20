@@ -927,13 +927,27 @@ func RequireIntactChain(dir string) error {
 	return nil
 }
 
+// chainHasSigners reports whether the chain registers signers at all: a
+// signer entry, or a leading checkpoint that carries a set.
+func chainHasSigners(entries []LedgerEntry) bool {
+	for i, e := range entries {
+		if e.Kind == KindSigner {
+			return true
+		}
+		if i == 0 && e.Kind == KindCheckpoint && e.Checkpoint != nil && len(e.Checkpoint.Signers) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
 // WriteCheckpoint replaces every entry in dir with one KindCheckpoint
 // genesis that names the head it stood in for. The pruned files are
 // DELETED — that is the point of a checkpoint — after the checkpoint is
 // safely placed, so a failure midway leaves a chain the verifier reports
 // (a checkpoint not at position 1), never an empty directory. Returns the
 // checkpoint's file name and how many entries were pruned.
-func WriteCheckpoint(dir string, signer LedgerSigner) (string, int, error) {
+func WriteCheckpoint(dir string, signer LedgerSigner, rootPub ed25519.PublicKey) (string, int, error) {
 	entries, err := ReadLedgerDir(dir)
 	if err != nil {
 		return "", 0, err
@@ -957,12 +971,32 @@ func WriteCheckpoint(dir string, signer LedgerSigner) (string, int, error) {
 		return "", 0, err
 	}
 	// The set the pruned register/revoke entries left at the head travels in
-	// the checkpoint (see Checkpoint.Signers). nil, not empty, when there is
-	// none, so the JSON gains no key.
-	_, active := ActiveSigners(entries)
+	// the checkpoint (see Checkpoint.Signers), and the root's signature on
+	// the checkpoint turns that set into an authorization. So on a chain
+	// that has signers, the set must come from a walk the ROOT KEY vouches
+	// for: the keyless walk accepts a signer entry by name, so carrying its
+	// set would let anyone who can write the directory (no key needed) have
+	// a forged registration signed by the root at the next prune. Every
+	// refusal here precedes the first write or delete. nil, not empty, when
+	// there is no set, so the JSON gains no key.
 	var carried []SignerKey
-	if len(active) > 0 {
-		carried = active
+	if chainHasSigners(entries) {
+		if rootPub == nil {
+			return "", 0, fmt.Errorf("auditpush: %s registers signers, so a checkpoint needs the root public key to vouch for them (none was given) — refusing to prune", dir)
+		}
+		if signer == nil || signer.SigningKeyID() != KeyFingerprint(rootPub) {
+			return "", 0, fmt.Errorf("auditpush: a checkpoint over a chain with signers must be signed by the root (%s) — refusing to prune, because the checkpoint would be a permanent Problem under the root key", KeyFingerprint(rootPub))
+		}
+		checks, set := verifyEntries(entries, rootPub)
+		for _, c := range checks {
+			if c.Problem != "" {
+				return "", 0, fmt.Errorf("auditpush: %s does not verify under the root key (%s: %s) — refusing to prune, because a checkpoint would sign a set the root never authorized", dir, c.File, c.Problem)
+			}
+		}
+		carried = set.list()
+		if len(carried) == 0 {
+			carried = nil
+		}
 	}
 	cp := LedgerEntry{Kind: KindCheckpoint, Checkpoint: &Checkpoint{Head: head.Hash, Entries: len(entries), Through: head.Pushed, Signers: carried}}
 	name, err := placeEntry(dir, cp, "", signer)

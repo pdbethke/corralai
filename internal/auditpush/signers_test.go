@@ -500,7 +500,7 @@ func chainWithMember(t *testing.T, rootSeed, mSeed byte) (dir string, root, m ed
 
 func TestCheckpointKeepsSigners(t *testing.T) {
 	dir, root, m := chainWithMember(t, 0x20, 0x21)
-	if _, _, err := WriteCheckpoint(dir, signerOf(root)); err != nil {
+	if _, _, err := WriteCheckpoint(dir, signerOf(root), pubOf(root)); err != nil {
 		t.Fatal(err)
 	}
 	appendScan(t, dir, signerOf(m), "bbbb2222")
@@ -530,25 +530,77 @@ func TestCheckpointKeepsSigners(t *testing.T) {
 }
 
 func TestCheckpointByNonRootWithSignersIsProblem(t *testing.T) {
-	dir, root, m := chainWithMember(t, 0x22, 0x23)
-	if _, _, err := WriteCheckpoint(dir, signerOf(m)); err != nil {
-		t.Fatal(err)
-	}
+	// A hand-built genesis, since the writer refuses to make one.
+	root, m := seededKey(0x22), seededKey(0x23)
+	dir := t.TempDir()
+	mk := SignerKey{KeyID: KeyFingerprint(pubOf(m)), PubKey: hex.EncodeToString(pubOf(m)), Name: "laptop"}
+	cp := LedgerEntry{Format: LedgerFileFormat, KeyID: mk.KeyID, Kind: KindCheckpoint,
+		Checkpoint: &Checkpoint{Head: "abc", Entries: 2, Signers: []SignerKey{mk}}}
+	placeRawEntry(t, dir, cp, m)
 	checks := verifyChecks(t, dir, pubOf(root))
 	wantProblem(t, checks[0], "a checkpoint that carries signers must be signed by the root")
 	// Its seed was not applied: a later entry by M is not good either.
-	// (placeForged: a keyless read takes the checkpoint's own keyid for the
-	// root and would refuse the append itself; only --pub sees the forgery.)
 	placeForged(t, dir, LedgerEntry{Bundle: Bundle{Scan: ScanRow{Repo: "r", Commit: "bbbb2222", ScanID: 1}}}, signerOf(m))
 	checks = verifyChecks(t, dir, pubOf(root))
 	wantProblem(t, checks[1], "not a registered signer at this point in the chain")
+}
+
+func fileList(t *testing.T, dir string) []string {
+	t.Helper()
+	ents, err := os.ReadDir(filepath.Join(dir, ScansSubdir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []string
+	for _, e := range ents {
+		out = append(out, e.Name())
+	}
+	return out
+}
+
+func TestWriteCheckpointRefusesForgedRegistration(t *testing.T) {
+	dir, root, _ := chainWithMember(t, 0x27, 0x28)
+	x := seededKey(0x29)
+	c := registerOf(x, "intruder")
+	// Keyless, naming the root's fingerprint is enough to be believed.
+	placeForged(t, dir, LedgerEntry{Kind: KindSigner, Signer: &c}, Ed25519LedgerSigner{KeyID: KeyFingerprint(pubOf(root)), Key: x})
+	before := fileList(t, dir)
+	if _, _, err := WriteCheckpoint(dir, signerOf(root), pubOf(root)); err == nil {
+		t.Fatal("a checkpoint over a forged registration was written")
+	}
+	if after := fileList(t, dir); strings.Join(after, ",") != strings.Join(before, ",") {
+		t.Fatalf("a refused checkpoint changed the directory: %v -> %v", before, after)
+	}
+}
+
+func TestWriteCheckpointRefusesNonRootSigner(t *testing.T) {
+	dir, root, m := chainWithMember(t, 0x2a, 0x2b)
+	before := fileList(t, dir)
+	if _, _, err := WriteCheckpoint(dir, signerOf(m), pubOf(root)); err == nil {
+		t.Fatal("a checkpoint by a non-root signer was written")
+	}
+	if after := fileList(t, dir); strings.Join(after, ",") != strings.Join(before, ",") {
+		t.Fatalf("a refused checkpoint changed the directory: %v -> %v", before, after)
+	}
+}
+
+func TestWriteCheckpointOnSignerChainNeedsRootPub(t *testing.T) {
+	dir, root, _ := chainWithMember(t, 0x2c, 0x2d)
+	before := fileList(t, dir)
+	_, _, err := WriteCheckpoint(dir, signerOf(root), nil)
+	if err == nil || !strings.Contains(err.Error(), "root public key") {
+		t.Fatalf("err %v, want a refusal naming the root public key", err)
+	}
+	if after := fileList(t, dir); strings.Join(after, ",") != strings.Join(before, ",") {
+		t.Fatalf("a refused checkpoint changed the directory: %v -> %v", before, after)
+	}
 }
 
 func TestCheckpointWithoutSignersUnchanged(t *testing.T) {
 	dir := t.TempDir()
 	k := seededKey(0x24)
 	appendScan(t, dir, signerOf(k), "aaaa1111")
-	if _, _, err := WriteCheckpoint(dir, signerOf(k)); err != nil {
+	if _, _, err := WriteCheckpoint(dir, signerOf(k), nil); err != nil {
 		t.Fatal(err)
 	}
 	entries := mustRead(t, dir)

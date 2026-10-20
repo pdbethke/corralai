@@ -73,7 +73,7 @@ func tamperedChain(t *testing.T, n int) (dir string, pub ed25519.PublicKey) {
 func TestCheckpointRefusesToPruneAChainThatDoesNotVerify(t *testing.T) {
 	dir, pub := tamperedChain(t, 3)
 
-	_, pruned, err := WriteCheckpoint(dir, ledgerSigner)
+	_, pruned, err := WriteCheckpoint(dir, ledgerSigner, nil)
 	if err == nil {
 		t.Fatalf("checkpoint pruned %d entries of a chain that does not verify — a tampered entry can be deleted and the genesis left verifying clean", pruned)
 	}

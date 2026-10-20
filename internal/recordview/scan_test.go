@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Elastic-2.0
 
-package main
+package recordview
 
 import (
 	"path/filepath"
@@ -60,7 +60,7 @@ func renderOne(t *testing.T, entries []auditpush.LedgerEntry) (index string, pag
 		checks = append(checks, okCheck(entries[i]))
 	}
 	out := t.TempDir()
-	if err := writeSite(out, buildView(entries, checks, true)); err != nil {
+	if err := WriteStatic(out, Build(entries, checks, true)); err != nil {
 		t.Fatal(err)
 	}
 	return read(t, filepath.Join(out, "index.html")), func(short string) string {
@@ -213,7 +213,7 @@ func TestEntryBannerSaysWhoSignedAndDoesNotCallAFailureUnchecked(t *testing.T) {
 		entries[0].File = entries[0].Hash + ".json.gz"
 		c.File, c.Hash, c.HashOK, c.LinkOK = entries[0].File, entries[0].Hash, true, true
 		out := t.TempDir()
-		if err := writeSite(out, buildView(entries, []auditpush.ChainCheck{c}, sigsChecked)); err != nil {
+		if err := WriteStatic(out, Build(entries, []auditpush.ChainCheck{c}, sigsChecked)); err != nil {
 			t.Fatal(err)
 		}
 		return read(t, filepath.Join(out, "entry", shortHash(entries[0].Hash)+".html"))
@@ -223,11 +223,11 @@ func TestEntryBannerSaysWhoSignedAndDoesNotCallAFailureUnchecked(t *testing.T) {
 		t.Error("the page does not say who signed")
 	}
 	bad := render(true, auditpush.ChainCheck{Signed: true, Problem: "key not registered"})
-	if strings.Contains(bad, "not checked (no key)") || !strings.Contains(bad, "NOT VERIFIED") {
+	if strings.Contains(bad, "not checked (no key given)") || !strings.Contains(bad, "signature does NOT verify") {
 		t.Error("a signature that failed under a given key was rendered as unchecked")
 	}
 	nokey := render(false, auditpush.ChainCheck{Signed: true})
-	if !strings.Contains(nokey, "not checked (no key)") {
+	if !strings.Contains(nokey, "not checked (no key given)") {
 		t.Error("with no key the page must say signatures were not checked")
 	}
 }

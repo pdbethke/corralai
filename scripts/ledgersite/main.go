@@ -13,16 +13,19 @@
 // Retracted and Adjudications. This program adds no second opinion about what
 // the record means — it only renders what those say, which is the same reason
 // corral ui drives the CLI instead of reimplementing it.
+//
+// Rendering lives in internal/recordview, shared with `corral ui`. This
+// program reads the ledger, prints what it found, and writes the static pages.
 package main
 
 import (
-	"encoding/hex"
 	"flag"
 	"fmt"
 	"os"
 	"sort"
 
 	"github.com/pdbethke/corralai/internal/auditpush"
+	"github.com/pdbethke/corralai/internal/recordview"
 )
 
 func main() {
@@ -67,7 +70,7 @@ func main() {
 
 	live := auditpush.LiveEntries(entries)
 	retracted := auditpush.Retracted(entries)
-	verdicts := auditpush.Adjudications(entries)
+	verdicts := auditpush.Adjudications(live) // only verdicts that stand, as the page counts them
 	fmt.Printf("live entries:      %d\n", len(live))
 	fmt.Printf("retracted:         %d\n", len(retracted))
 	fmt.Printf("adjudications:     %d\n", len(verdicts))
@@ -115,11 +118,12 @@ func main() {
 	if *out == "" {
 		return
 	}
-	v := buildView(entries, checks, pub != nil)
-	if pub != nil {
-		v.PubKeyHex = hex.EncodeToString(pub)
+	v, err := recordview.Load(*ledger, pub)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ledgersite: loading record: %v\n", err)
+		os.Exit(1)
 	}
-	if err := writeSite(*out, v); err != nil {
+	if err := recordview.WriteStatic(*out, v); err != nil {
 		fmt.Fprintf(os.Stderr, "ledgersite: writing site: %v\n", err)
 		os.Exit(1)
 	}

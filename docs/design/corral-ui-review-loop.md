@@ -64,8 +64,9 @@ to open) and because a printed URL never reaches a process's command line.
 port (`-L 9000:…`) sends `localhost:9000` and every request is refused.
 The token is in the `#fragment` because browsers never send
 the fragment to the server, so it cannot reach an access log or a `Referer`
-header. The page moves it into the tab's `sessionStorage`, strips it from the
-address bar, and sends it as `Authorization: Bearer <token>` on every write.
+header. Whichever page it lands on (the printed URL opens `/`) moves it into
+the tab's `sessionStorage`, strips it from the address bar, and every page
+sends it as `Authorization: Bearer <token>` on every write.
 The server compares it in constant time.
 
 **Guards on every request:**
@@ -94,6 +95,11 @@ and possibly a cold-started browser — as a command-line argument, which any
 other local process can read (`/proc/<pid>/cmdline`, `ps`) while it runs.
 This paragraph goes in the `-h` text and the docs. To close the agent side, `skills/corral/SKILL.md` and
 `AGENTS.md` gain an explicit rule: **agents never start `corral ui --write`.**
+(Corrected 2026-10-20: that rule is lifted. It added no protection, since any
+agent that can run `corral review adjudicate` can already write, and it left
+the page's browser check undone. What stands is the adjudication rule: an
+agent records a verdict, by click or by command, only when the person has
+named it.)
 
 ## 2. Triage and adjudicate
 
@@ -247,3 +253,5 @@ Each piece ships on its own and depends on the one before:
 2. `corral review recheck`, then the verdict queue and form
 3. Publish
 4. Run a round
+
+> **2026-10-18:** the single-page `uiweb/index.html` and the `/api/ledger` and `/api/seal` read routes are retired. `corral ui` serves the record pages from `internal/recordview`, the same pages as the public record. The old page rendered the whole chain at once, showed a self-reported signer name as signed when nothing had been checked, and dropped the seal's caveats. Serving the public record's own pages means `corral ui` and the published record cannot disagree. The write routes and every token rule above are unchanged. Only reads moved, and a read in write mode still needs the `Host` gate and no token. In write mode every record page — the index the printed URL opens, the lists, the chain, each entry and the verdict queue — carries the token capture and the "WRITE mode" bar; only review pages and the queue carry adjudication controls. (The first cut of this change put the capture on the two pages with controls only, so the printed URL to `/` never took the token; the final branch review caught it before merge.)

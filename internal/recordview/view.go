@@ -1,13 +1,18 @@
 // SPDX-License-Identifier: Elastic-2.0
 
-package main
+// Package recordview renders a corral ledger as pages: the index, a page
+// per review and per audit, the chain and the verdict queue. It is the ONE
+// renderer for the record. The public site writes its pages to disk
+// (WriteStatic) and `corral ui` serves the same pages on request (Handler),
+// so the two cannot drift the way scripts/ledgersite and uiweb/index.html
+// did (spec 2026-10-18-corral-app-design.md §5).
+//
+// Every rule about what the record MEANS comes from internal/auditpush.
+// This package adds no second opinion about it.
+package recordview
 
 import (
-	"errors"
 	"fmt"
-	"html/template"
-	"io/fs"
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -63,21 +68,36 @@ type FindingView struct {
 // entry sits. Review and scan pages share it, so both say the same thing
 // about a hash, a link and a signature.
 type ChainView struct {
-	Hash        string
-	Short       string
-	File        string
-	Pushed      time.Time
+	Hash   string
+	Short  string
+	File   string
+	Pushed time.Time
+	// Verified is false when the verifying pass never saw this entry (it
+	// was appended while the ledger was read). The chain fields below are
+	// then unmeasured, and every page says "not verified" instead of them.
+	Verified    bool
 	ChainHashOK bool
 	ChainLinkOK bool
 	Signed      bool
 	SigOK       bool
-	// Signer is who the chain says held the signing key ("root" or a
-	// registered name); SigsChecked is whether a public key was given, which
-	// decides if a signature that did not verify is "unchecked" or a failure.
+	// Signer is who the chain says held the signing key at this entry
+	// ("root" or a registered name), resolved from the chain rather than
+	// taken from the entry's own KeyID. Only SigOK says it was checked.
 	Signer       string
-	SigsChecked  bool
 	ChainProblem string
 	Genesis      bool
+
+	// Pos is the entry's 1-based place in the chain. Kind is "scan" for a
+	// run's own record, else the entry's kind. KeyID is the signer name
+	// the entry carries; it is self-reported unless the Note says the
+	// format covers it. Note is VerifyLedgerDir's caveat, in words.
+	// KeyGiven is false when no public key was supplied, so a signed
+	// entry's signature is unchecked, never "verified" and never "failed".
+	Pos      int
+	Kind     string
+	KeyID    string
+	Note     string
+	KeyGiven bool
 }
 
 // EntryView is one review entry as a page.
@@ -90,6 +110,11 @@ type EntryView struct {
 	Refuted    int
 	CommitURL  string
 	ShortSHA   string
+	// Retracted is true when a retraction in force names this review. The
+	// page stays, so a link to it does not break, and says why it no longer
+	// stands. Its findings are left out of the record's totals.
+	Retracted       bool
+	RetractedReason string
 	// Decorrelated reports whether a verifier seat ran on a DIFFERENT model
 	// than the reviewer. False with no verifier at all — which is not a
 	// failure, only an absence, and the page says which it is.
@@ -101,26 +126,46 @@ type EntryView struct {
 	CrossVendor    bool
 }
 
-// SiteView is the whole record.
-type SiteView struct {
-	Generated     time.Time
+// Site is the whole record.
+type Site struct {
+	// Write renders the adjudication controls. Only corral ui --write sets
+	// it, per request; a static build never does.
+	Write bool
+
+	Generated time.Time
+	// HasLedger is false when no ledger directory stands behind this site
+	// (corral ui pointed at a warehouse): it then makes no claim about a chain.
+	HasLedger     bool
 	LedgerEntries int
+	// Seal is the warehouse's newest kill-rate-bearing row per file, handed
+	// in by the caller (see WithSeal). SealRead distinguishes "not read
+	// here" (static build: no section) from "read, and no rows"; SealErr is
+	// a failed read, rendered as one.
+	Seal     []SealRow
+	SealRead bool
+	SealErr  string
 	// PubKeyHex is the key the signatures were checked against, printed in
 	// the "verify it yourself" command so a reader can run the same check.
 	// Empty when the page was rendered without one.
 	PubKeyHex string
 	Reviews   []EntryView
+	// Chain is every entry of every kind, newest first: the chain itself,
+	// with each entry's check. Scan and review pages hold the detail.
+	Chain []ChainView
 	// Scans is every certify scan entry, newest first, retracted ones
 	// included and marked: a retracted scan stays in the chain, so its page
 	// stays too and says why it no longer stands.
 	Scans         []ScanView
-	Adjudications int
 	Retracted     int
 	Findings      int
 	Reproduced    int
 	Confirmed     int
 	Refuted       int
 	ChainProblems int
+	// Unverified counts entries the verifying pass never saw (the ledger
+	// changed between the read and the check). They are not chain problems:
+	// nothing measured them, so the page says "not verified", not failed.
+	Unverified int
 	// SigsChecked is false when no public key was supplied. The page must
 	// then say signatures were NOT CHECKED — never imply they passed, and
 	// never imply they failed. (`corral verify` sets this standard: "NOTHING
@@ -167,16 +212,24 @@ func repoWebURL(remote string) string {
 	return ""
 }
 
-func buildView(entries []auditpush.LedgerEntry, checks []auditpush.ChainCheck, sigsChecked bool) SiteView {
-	byFile := map[string]auditpush.ChainCheck{}
-	for _, c := range checks {
-		byFile[filepath.Base(c.File)] = c
-	}
-	verdicts := auditpush.Adjudications(entries)
+// Build turns the ledger's entries and VerifyLedgerDir's checks of them
+// into a Site. sigsChecked says whether a public key was given to the checks.
+func Build(entries []auditpush.LedgerEntry, checks []auditpush.ChainCheck, sigsChecked bool) Site {
+	paired := PairChecks(entries, checks)
+	// Only verdicts that STAND: LiveEntries drops a retracted adjudication
+	// and an adjudication of a retracted review. Adjudications over every
+	// entry counted both (found 2026-10-18 by comparing this page with
+	// corral ui, which already read the live set).
+	verdicts := auditpush.Adjudications(auditpush.LiveEntries(entries))
 	retracted := auditpush.Retracted(entries)
+	live := map[string]bool{}
+	for _, e := range auditpush.LiveEntries(entries) {
+		live[e.Hash] = true
+	}
 
-	v := SiteView{
+	v := Site{
 		Generated:     time.Now().UTC(),
+		HasLedger:     true,
 		LedgerEntries: len(entries),
 		Retracted:     len(retracted),
 		SigsChecked:   sigsChecked,
@@ -187,15 +240,18 @@ func buildView(entries []auditpush.LedgerEntry, checks []auditpush.ChainCheck, s
 	scopes := map[string]bool{}
 	vendors := map[string]bool{}
 
-	for _, e := range entries {
+	for i, e := range entries {
 		if v.First.IsZero() || e.Pushed.Before(v.First) {
 			v.First = e.Pushed
 		}
 		if e.Pushed.After(v.Last) {
 			v.Last = e.Pushed
 		}
-		c := byFile[filepath.Base(e.File)]
-		if c.Problem != "" || !c.HashOK || !c.LinkOK {
+		c := paired[i]
+		switch {
+		case !c.Verified:
+			v.Unverified++
+		case c.Problem != "" || !c.HashOK || !c.LinkOK:
 			v.ChainProblems++
 		}
 		if c.Signed {
@@ -204,12 +260,27 @@ func buildView(entries []auditpush.LedgerEntry, checks []auditpush.ChainCheck, s
 				v.SigsOK++
 			}
 		}
+		kind := e.Kind
+		if e.IsScan() {
+			kind = "scan"
+		}
 		cv := ChainView{
 			Hash: e.Hash, Short: shortHash(e.Hash), File: filepath.Base(e.File),
-			Pushed:      e.Pushed,
+			Pushed: e.Pushed, Verified: c.Verified,
 			ChainHashOK: c.HashOK, ChainLinkOK: c.LinkOK, Signed: c.Signed,
-			SigOK: c.SigOK, Signer: c.Signer, SigsChecked: sigsChecked, ChainProblem: c.Problem, Genesis: c.Genesis,
+			SigOK: c.SigOK, Signer: c.Signer, ChainProblem: c.Problem, Genesis: c.Genesis,
+			Pos: i + 1, Kind: kind, KeyID: c.KeyID, Note: c.Note, KeyGiven: sigsChecked,
 		}
+		// The chain shows every entry (it IS the chain), but one that does
+		// not stand says so there, whatever its kind. Only the chain row
+		// carries it: an entry's own page has its retraction banner.
+		row := cv
+		if rt, gone := retracted[e.Hash]; gone {
+			row.Note = withNote(row.Note, "RETRACTED: "+rt.Reason)
+		} else if !live[e.Hash] && e.Kind == auditpush.KindAdjudication {
+			row.Note = withNote(row.Note, "RETRACTED with the review it adjudicates")
+		}
+		v.Chain = append(v.Chain, row)
 		if e.IsScan() {
 			var by *auditpush.LedgerEntry
 			if rt, ok := retracted[e.Hash]; ok {
@@ -219,9 +290,6 @@ func buildView(entries []auditpush.LedgerEntry, checks []auditpush.ChainCheck, s
 			continue
 		}
 		switch e.Kind {
-		case auditpush.KindAdjudication:
-			v.Adjudications++
-			continue
 		case auditpush.KindReview:
 		default:
 			continue
@@ -231,6 +299,9 @@ func buildView(entries []auditpush.LedgerEntry, checks []auditpush.ChainCheck, s
 		}
 		r := e.Review
 		ev := EntryView{ChainView: cv, Review: r}
+		if rt, ok := retracted[e.Hash]; ok {
+			ev.Retracted, ev.RetractedReason = true, rt.Reason
+		}
 		if base := repoWebURL(r.Repo); base != "" && r.Commit != "" {
 			ev.CommitURL = base + "/commit/" + r.Commit
 			if v.RepoURL == "" {
@@ -283,25 +354,33 @@ func buildView(entries []auditpush.LedgerEntry, checks []auditpush.ChainCheck, s
 			if a, ok := verdicts[fv.Ref]; ok {
 				fv.Verdict, fv.VerdictBy, fv.VerdictWhy = a.Verdict, a.By, a.Reason
 			}
-			switch fv.Outcome {
-			case OutcomeReproduced:
+			if fv.Outcome == OutcomeReproduced {
 				ev.Reproduced++
-				v.Reproduced++
+				if !ev.Retracted {
+					v.Reproduced++
+				}
 			}
 			switch fv.Verdict {
 			case auditpush.VerdictConfirmed:
 				ev.Confirmed++
-				v.Confirmed++
+				if !ev.Retracted {
+					v.Confirmed++
+				}
 			case auditpush.VerdictRefuted:
 				ev.Refuted++
-				v.Refuted++
+				if !ev.Retracted {
+					v.Refuted++
+				}
 			}
-			v.Findings++
+			if !ev.Retracted {
+				v.Findings++
+			}
 			ev.Findings = append(ev.Findings, fv)
 		}
 		v.Reviews = append(v.Reviews, ev)
 	}
 
+	sort.Slice(v.Chain, func(i, j int) bool { return v.Chain[i].Pos > v.Chain[j].Pos })
 	sort.Slice(v.Reviews, func(i, j int) bool { return v.Reviews[i].Pushed.After(v.Reviews[j].Pushed) })
 	sort.Slice(v.Scans, func(i, j int) bool { return v.Scans[i].Pushed.After(v.Scans[j].Pushed) })
 	v.Models = keys(models)
@@ -319,100 +398,6 @@ func keys(m map[string]bool) []string {
 	}
 	sort.Strings(out)
 	return out
-}
-
-func writeSite(out string, v SiteView) error {
-	// Writes go through os.Root, the same defence the workspace substrate
-	// uses: every path is resolved INSIDE out, so a symlink planted in the
-	// output directory cannot redirect a write anywhere else. 0o750 rather
-	// than 0o755 — nothing here needs to be world-readable on the machine
-	// that builds it; the deploy copies the files out.
-	if err := os.MkdirAll(out, 0o750); err != nil {
-		return err
-	}
-	root, err := os.OpenRoot(out)
-	if err != nil {
-		return err
-	}
-	defer root.Close()
-	if err := root.Mkdir("entry", 0o750); err != nil && !errors.Is(err, fs.ErrExist) {
-		return err
-	}
-
-	funcs := template.FuncMap{
-		"short":    shortHash,
-		"hasPre":   func(s string) bool { return strings.TrimSpace(s) != "" },
-		"date":     func(t time.Time) string { return t.UTC().Format("2006-01-02") },
-		"stamp":    func(t time.Time) string { return t.UTC().Format("2006-01-02 15:04 UTC") },
-		"join":     func(s []string) string { return strings.Join(s, ", ") },
-		"lower":    strings.ToLower,
-		"entryURL": func(short string) string { return "entry/" + short + ".html" },
-		"thousands": func(n int64) string {
-			if n >= 1_000_000 {
-				return fmt.Sprintf("%.1fM", float64(n)/1e6)
-			}
-			if n >= 1_000 {
-				return fmt.Sprintf("%.1fk", float64(n)/1e3)
-			}
-			return fmt.Sprint(n)
-		},
-	}
-
-	idx, err := template.New("index").Funcs(funcs).Parse(indexTmpl)
-	if err != nil {
-		return err
-	}
-	if err := writeThrough(root, "index.html", idx, v); err != nil {
-		return err
-	}
-
-	ent, err := template.New("entry").Funcs(funcs).Parse(entryTmpl)
-	if err != nil {
-		return err
-	}
-	for _, e := range v.Reviews {
-		data := struct {
-			EntryView
-			Site SiteView
-		}{e, v}
-		if err := writeEntryPage(root, e.Short, ent, data); err != nil {
-			return err
-		}
-	}
-	scan, err := template.New("scan").Funcs(funcs).Parse(scanTmpl)
-	if err != nil {
-		return err
-	}
-	for _, s := range v.Scans {
-		if err := writeEntryPage(root, s.Short, scan, s); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// writeEntryPage writes entry/<short>.html. Review and scan pages share the
-// one namespace, which is safe because the name is the entry's own hash
-// prefix — and a name outside hex is a record this program does not
-// understand, so it refuses rather than write it.
-func writeEntryPage(root *os.Root, short string, tmpl *template.Template, data any) error {
-	if !isHex(short) {
-		return fmt.Errorf("entry %q: name is not a hex hash prefix", short)
-	}
-	return writeThrough(root, "entry/"+short+".html", tmpl, data)
-}
-
-// writeThrough renders tmpl into name, resolved inside root.
-func writeThrough(root *os.Root, name string, tmpl *template.Template, data any) error {
-	f, err := root.Create(name)
-	if err != nil {
-		return err
-	}
-	if err := tmpl.Execute(f, data); err != nil {
-		f.Close()
-		return fmt.Errorf("%s: %w", name, err)
-	}
-	return f.Close()
 }
 
 func isHex(s string) bool {
@@ -435,4 +420,47 @@ func vendorOfSeat(seat string) string {
 	// the built-in agent it names, whatever CORRALAI_AGENT_* this renderer's
 	// own environment defines.
 	return agentbackend.RecordedVendorOf(seat)
+}
+
+// AwaitingView is one finding waiting for a person's verdict.
+type AwaitingView struct {
+	Review  EntryView
+	Finding FindingView
+}
+
+// Awaiting is every finding of a review that stands with no verdict that
+// stands: reproduced findings first (they are the ones execution backed),
+// then newest review first, as Reviews is already ordered.
+func (s Site) Awaiting() []AwaitingView {
+	var repro, rest []AwaitingView
+	for _, r := range s.Reviews {
+		if r.Retracted {
+			continue
+		}
+		for _, f := range r.Findings {
+			if f.Verdict != "" {
+				continue
+			}
+			a := AwaitingView{Review: r, Finding: f}
+			if f.Outcome == OutcomeReproduced {
+				repro = append(repro, a)
+			} else {
+				rest = append(rest, a)
+			}
+		}
+	}
+	return append(repro, rest...)
+}
+
+// withNote adds a standing note (a retraction) to the verifier's note
+// rather than replacing it: the verifier's caveat (a legacy entry's
+// self-reported signer name) qualifies the signature chip beside it, and
+// overwriting it left the chip unqualified on exactly the retracted legacy
+// entries (review 786e8a0c675e#R2). Moved here from corral ui's retired
+// ledger view.
+func withNote(verifierNote, note string) string {
+	if verifierNote == "" {
+		return note
+	}
+	return note + " · " + verifierNote
 }

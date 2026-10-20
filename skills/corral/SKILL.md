@@ -81,9 +81,10 @@ your evidence as the `--why`. Run one yourself only when the user has named the
 verdict for that specific finding. "Deal with them" or "clean up the list" is
 not a verdict.
 
-Never start `corral ui --write`, and never open or use its URL: its launch
-token is how the page knows a person started it, and an agent holding it is
-exactly what the token exists to prevent.
+You may start `corral ui --write` when the user asks, and drive the page. A
+click on Confirm or Refute records a verdict in the user's name, so the rule
+above applies to every click: only for a finding whose verdict the user has
+named. Never send its URL anywhere but the browser on this machine.
 
 ## Step 3: running an audit (spends money — only when asked)
 
@@ -145,4 +146,4 @@ there is deliberately no adjudication tool.
 | "No key in env — let me look around for one" | Stop and ask |
 | "I'll pin the command to the test file to be fast" | The authored test never runs; gaps read 0 |
 | "Can't find the findings — I'll ask where they are" | `corral brief`, `corral criticscore list` |
-| "I'll start `corral ui --write` so they can click through the verdicts" | The token is the person's. Tell them to run it themselves |
+| "I'll start `corral ui --write` and click through the verdicts for them" | Starting it is fine when asked; each click is a verdict, and the user names verdicts |

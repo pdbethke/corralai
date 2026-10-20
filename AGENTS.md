@@ -174,11 +174,19 @@ to it" until 2026-10-19. It contradicted the ledger's practice of publishing
 third-party findings at run time, and it would have ruled out the public
 benchmark of real fix commits.)
 
-**`corral ui --write` is a person's tool, never an agent's.** It prints a
-launch-token URL that lets the page adjudicate findings in the operator's
-name. An agent must never start it, open it or read its URL: the token is the
-only thing distinguishing the person from any other local process, and it is
-no stronger than the terminal it was printed in.
+**`corral ui --write` writes verdicts in the operator's name.** It prints a
+launch-token URL that lets the page adjudicate findings as the OS user who
+started it. An agent may start it, open it and drive it when the person asks
+(to check the page, say). A click on Confirm or Refute is an adjudication, so
+the rule for `corral review adjudicate` applies unchanged: record one only for
+a finding whose verdict the person has named. Never pass the URL anywhere but
+the browser on this machine, and never put a test verdict in a published
+ledger; use a scratch copy. The token narrows who can write from any local
+process to whoever launched the server, and no further: it is no stronger than
+the terminal it was printed in. (Until 2026-10-20 this said an agent must never
+start it. That added no protection, since an agent that can run
+`corral review adjudicate` can already write, and it left the page's browser
+check undone.)
 
 ## Running an audit: the traps, in the order you will hit them
 
@@ -457,9 +465,9 @@ standard.
   yourself. That was wrong — its element type is an alias of the exported
   `LedgerEntry` — and it told agents to rebuild the reader that
   `scripts/ledgersite` now shares with the CLI.)
-- `scripts/ledgersite/` + `scripts/gen-ledger-site.sh` — renders that branch as
-  the public record page into `site/public/ledger/` (gitignored; generated at
-  site-deploy time). Needs **only Go and git** — no key, no jail, no bwrap — so it
+- `scripts/ledgersite/` + `scripts/gen-ledger-site.sh` — writes the public record
+  page into `site/public/ledger/` (gitignored; generated at site-deploy time)
+  using `internal/recordview`, the one renderer `corral ui` serves too. Needs **only Go and git** — no key, no jail, no bwrap — so it
   runs in the container environments where corral itself cannot start.
 - `private/` — **gitignored, never committed.** Machine-specific operator notes for
   whoever's box you're on (host setup, local GPU/model plans). This repo is public;

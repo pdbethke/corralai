@@ -93,31 +93,26 @@ func retractedReviewLedger(t *testing.T) (dir, hash, reason string) {
 }
 
 // R3 — `corral ui` shows the chain, marks what does not stand (of every
-// kind), and lists only standing reviews.
+// kind), and offers only standing reviews for a verdict. Since 2026-10-18
+// the pages are recordview's; the chain-note rule itself is held by
+// recordview's TestTheChainMarksWhatDoesNotStandBesideTheVerifierNote.
 func TestUIHonoursARetractedReview(t *testing.T) {
 	t.Setenv("CORRALAI_CERTIFY_KEY_FILE", filepath.Join(t.TempDir(), "no-key"))
 	dir, hash, reason := retractedReviewLedger(t)
-	u, err := readUILedger(dir)
-	if err != nil {
-		t.Fatal(err)
+	h := uiHandler(fakeSeal{}, dir)
+	chain := uiGet(t, h, "/chain-1.html").Body.String()
+	if !strings.Contains(chain, "RETRACTED: "+reason) || !strings.Contains(chain, "RETRACTED with the review it adjudicates") {
+		t.Fatalf("the chain must mark the retracted review and its adjudication:\n%s", chain)
 	}
-	if len(u.Reviews) != 0 {
-		t.Fatalf("a retracted review rendered as live: %+v", u.Reviews)
+	if n := strings.Count(chain, "<tr>\n<td>"); n != 3 {
+		t.Fatalf("the chain still lists every entry: %d rows", n)
 	}
-	marked, adjMarked := false, false
-	for _, e := range u.Entries {
-		if e.Hash == hash && strings.Contains(e.Note, "RETRACTED: "+reason) {
-			marked = true
-		}
-		if e.Kind == auditpush.KindAdjudication && strings.Contains(e.Note, "RETRACTED") {
-			adjMarked = true
-		}
+	page := uiGet(t, h, "/entry/"+hash[:12]+".html").Body.String()
+	if !strings.Contains(page, "This review was retracted") {
+		t.Fatalf("the retracted review's page must say so")
 	}
-	if !marked || !adjMarked {
-		t.Fatalf("the chain must mark the retracted review and its adjudication: %+v", u.Entries)
-	}
-	if len(u.Entries) != 3 {
-		t.Fatalf("the chain view still lists every entry: %d", len(u.Entries))
+	if v := uiGet(t, h, "/verdicts.html").Body.String(); strings.Contains(v, "a claim that was retracted") {
+		t.Fatalf("a retracted review's finding is offered for a verdict")
 	}
 }
 

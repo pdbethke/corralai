@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Elastic-2.0
 
-package main
+package recordview
 
 const baseCSS = `
 :root{--bg:#fbfaf7;--fg:#1a1a18;--muted:#5f5e58;--line:#e2ded4;--card:#fff;
@@ -48,6 +48,10 @@ padding:1px 9px;font-size:.74rem;white-space:nowrap}
 .small{font-size:.82rem;color:var(--muted)}
 .nowrap{white-space:nowrap}
 footer{margin-top:60px;padding-top:20px;border-top:1px solid var(--line);color:var(--muted);font-size:.85rem}
+.scroll{overflow-x:auto;max-width:100%}
+/* long hashes, model names and paths break instead of widening the page */
+.mono,.meta dd,h1,h2,.claim{overflow-wrap:anywhere}
+.stat{min-width:0}
 details{margin:.5em 0}
 summary{cursor:pointer;color:var(--accent);padding:3px 0}
 summary:hover{text-decoration:underline}
@@ -59,14 +63,20 @@ table{font-size:.8rem}th,td{padding:6px}}
 // verifyBanner is shared: it must say NOT CHECKED when no key was supplied,
 // which is neither a pass nor a failure. `corral verify` sets that standard.
 const verifyBanner = `
+{{define "emptyrecord"}}<div class="banner warn"><p><strong>The record is empty.</strong> This ledger has no entries yet:
+<code>corral certify</code> and <code>corral review</code> write them.</p></div>{{end}}
+{{define "noledger"}}<div class="banner warn"><p><strong>Not a ledger directory.</strong> This target is a warehouse, so there is no chain, no reviews and no verdicts to show here. Point <code>corral ui --db</code> at a ledger directory (<code>.corral/ledger</code>) to see them.</p></div>{{end}}
+{{define "chainclaim"}}{{if not .HasLedger}}{{template "noledger"}}{{else if .LedgerEntries}}{{template "verify" .}}{{else}}{{template "emptyrecord"}}{{end}}{{end}}
 {{define "verify"}}
-<div class="banner{{if .ChainProblems}} bad{{else if not .SigsChecked}} warn{{end}}">
+<div class="banner{{if .ChainProblems}} bad{{else if or .Unverified (not .SigsChecked)}} warn{{end}}">
   <p><strong>Chain:</strong>
   {{if .ChainProblems}}<span class="chip bad">{{.ChainProblems}} problem(s)</span>
+  {{else if .Unverified}}<span class="chip ok">intact</span> across the {{.VerifiedEntries}} entries that were checked — every one's hash matches its bytes and every link names its predecessor.
   {{else}}<span class="chip ok">intact</span> — every entry's hash matches its bytes and every link names its predecessor, across all {{.LedgerEntries}} entries.{{end}}</p>
+  {{if .Unverified}}<p><span class="chip warn">not verified</span> {{.Unverified}} {{if eq .Unverified 1}}entry{{else}}entries{{end}} changed while being read — not verified; reload.</p>{{end}}
   <p><strong>Signatures:</strong>
   {{if .SigsChecked}}<span class="chip ok">{{.SigsOK}}/{{.SigsTotal}} verified</span>
-  {{else}}<span class="chip warn">not checked</span> — this page was generated without a public key, so signature validity is <em>unknown</em>. That is not a pass and not a failure. {{.SigsTotal}} of {{.LedgerEntries}} entries carry a signature; verify them yourself with the command below.{{end}}</p>
+  {{else}}<span class="chip warn">not checked</span> — this page was generated without a public key, so signature validity is <em>unknown</em>. That is not a pass and not a failure. {{.SigsTotal}} of {{.VerifiedEntries}} checked entries carry a signature; verify them yourself with the command below.{{end}}</p>
 </div>
 {{end}}
 `
@@ -75,15 +85,26 @@ const indexTmpl = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>corral/ledger — the record</title>
-<meta name="description" content="Every audit and review corral has recorded: hash-linked, signed where a key was present, and reproducible.">
+<meta name="description" content="Every audit and review corral has recorded{{if .HasLedger}}: hash-linked, signed where a key was present, and reproducible{{end}}.">
 <style>` + baseCSS + `</style></head><body><div class="wrap">
 
 <h1>corral/ledger — the record</h1>
-<p class="lede">Every audit and review corral has recorded, as a hash-linked chain, signed where a key was present.
+<p class="lede">Every audit and review corral has recorded{{if .HasLedger}}, as a hash-linked chain, signed where a key was present{{end}}.
 An audit plants faults in a file and runs the project's own tests against each one; a review's
 findings each carry the script that was executed to test them, and the exit code that came back.
 Nothing here asks to be believed: re-run any of it.</p>
 
+{{if .SealRead}}<h2>The seal</h2>
+<p class="small">Each file's newest graded verdict. Proven gaps first.</p>
+{{if .SealErr}}<div class="banner bad"><p>Could not read the seal: {{.SealErr}}</p></div>
+{{else if not .Seal}}<p>No file has a graded verdict yet. Run <code>corral certify --repo &lt;dir&gt;</code>.</p>
+{{else}}<div class="scroll"><table><thead><tr><th>repo</th><th>file</th><th>kill rate</th><th>got through</th><th>proven</th><th>audited</th></tr></thead><tbody>
+{{range .Seal}}<tr><td class="mono small">{{.Repo}}</td><td class="mono small">{{.Path}}</td>
+<td>{{printf "%.2f" .KillRate}}{{if .Caveat}} <span class="chip warn">{{.Caveat}}</span>{{end}}</td>
+<td>{{.Survivors}}</td><td>{{if .ProvenMissed}}<span class="chip ok">{{.ProvenMissed}}</span>{{else}}0{{end}}</td>
+<td class="nowrap">{{if .AuditedAt.IsZero}}—{{else}}{{date .AuditedAt}}{{end}}</td></tr>{{end}}
+</tbody></table></div>{{end}}{{end}}
+{{if not .HasLedger}}{{template "noledger"}}{{else}}
 <div class="stats">
   <div class="stat"><b>{{.LedgerEntries}}</b><span>ledger entries</span></div>
   <div class="stat"><b>{{.Scans | len}}</b><span>audits</span></div>
@@ -95,7 +116,8 @@ Nothing here asks to be believed: re-run any of it.</p>
   <div class="stat"><b>{{.CrossVendor}}</b><span>verified by another vendor</span></div>
 </div>
 
-{{template "verify" .}}
+{{template "chainclaim" .}}
+{{if and .HasLedger .LedgerEntries}}<p class="small"><a href="chain-1.html">The whole chain, entry by entry →</a></p>{{end}}
 
 {{if .Scans}}
 <h2>Audits</h2>
@@ -103,20 +125,13 @@ Nothing here asks to be believed: re-run any of it.</p>
 one. The kill rate is what execution measured, with its 95% interval. A <strong>proven</strong> gap is a
 fault the suite missed and a test corral wrote did catch: that test passed on the real code and failed
 on the fault.</p>
-<table><thead><tr>
+<div class="scroll"><table><thead><tr>
 <th>pushed</th><th>repository</th><th>audited</th><th class="nowrap">kill rate</th>
 <th class="nowrap">got through</th><th class="nowrap">proven</th><th>commit</th>
 </tr></thead><tbody>
-{{range .Scans}}<tr>
-<td class="nowrap"><a href="{{entryURL .Short}}">{{date .Pushed}}</a>{{if .Retracted}} <span class="chip bad">retracted</span>{{end}}</td>
-<td class="mono small">{{.RepoName}}{{with .Scan.Scope}}<br><span class="small">{{.}}</span>{{end}}</td>
-<td class="mono small">{{range $i, $f := .Audited}}{{if $i}}, {{end}}{{$f.Path}}{{else}}<span class="chip mute">none</span>{{end}}</td>
-<td class="nowrap">{{if .Graded}}{{.Rate}} <span class="small">({{.Killed}} of {{.Graded}})</span>{{else}}<span class="chip mute">not graded</span>{{end}}</td>
-<td>{{.Survived}}</td>
-<td>{{if .Proven}}<span class="chip ok">{{.Proven}}</span>{{else}}0{{end}}</td>
-<td class="mono small">{{if .CommitURL}}<a href="{{.CommitURL}}">{{.ShortSHA}}</a>{{else}}{{.ShortSHA}}{{end}}</td>
-</tr>{{end}}
-</tbody></table>
+{{range .NewestScans}}{{template "scanrow" .}}{{end}}
+</tbody></table></div>
+{{if gt (len .Scans) (len .NewestScans)}}<p><a href="audits-1.html">All {{len .Scans}} audits →</a></p>{{end}}
 {{end}}
 
 <h2>What "reproduced" means here</h2>
@@ -155,25 +170,16 @@ the verifier is never the reviewer's model. What actually ran:</p>
   {{if .Scopes}}<dt>scopes reviewed</dt><dd class="mono">{{join .Scopes}}</dd>{{end}}
 </div>
 
+{{if .Awaiting}}<p><a href="verdicts.html">{{len .Awaiting}} finding(s) await a person's verdict &rarr;</a></p>{{end}}
 <h2>Reviews</h2>
 <p class="small">Newest first. {{if .First.IsZero}}{{else}}Record spans {{date .First}} to {{date .Last}}.{{end}}</p>
-<table><thead><tr>
+<div class="scroll"><table><thead><tr>
 <th>pushed</th><th>scope</th><th>reviewer</th><th>verifier</th>
 <th class="nowrap">findings</th><th class="nowrap">repro</th><th class="nowrap">verdicts</th><th>commit</th>
 </tr></thead><tbody>
-{{range .Reviews}}<tr>
-<td class="nowrap"><a href="{{entryURL .Short}}">{{date .Pushed}}</a></td>
-<td class="mono">{{with .Review}}{{.Scope}}{{end}}</td>
-<td class="mono small">{{with .Review}}{{.ReviewerModel}}{{end}}</td>
-<td class="mono small">{{if .HasVerifier}}{{with .Review}}{{.VerifierModel}}{{end}}
-  {{if .Decorrelated}}<span class="chip ok">≠</span>{{end}}
-  {{else}}<span class="chip mute">none</span>{{end}}</td>
-<td>{{.Findings | len}}</td>
-<td>{{if .Reproduced}}<span class="chip ok">{{.Reproduced}}</span>{{else}}0{{end}}</td>
-<td class="small">{{if .Confirmed}}<span class="chip ok">{{.Confirmed}}✓</span> {{end}}{{if .Refuted}}<span class="chip bad">{{.Refuted}}✗</span>{{end}}</td>
-<td class="mono small">{{if .CommitURL}}<a href="{{.CommitURL}}">{{.ShortSHA}}</a>{{else}}{{.ShortSHA}}{{end}}</td>
-</tr>{{end}}
-</tbody></table>
+{{range .NewestReviews}}{{template "reviewrow" .}}{{else}}<tr><td colspan="8">None recorded yet.</td></tr>{{end}}
+</tbody></table></div>
+{{if gt (len .Reviews) (len .NewestReviews)}}<p><a href="reviews-1.html">All {{len .Reviews}} reviews →</a></p>{{end}}
 
 <h2>Verify it yourself</h2>
 <p>The record is a git branch, so there is nothing to trust and nothing to install to read it:</p>
@@ -199,19 +205,25 @@ the files alone that no entry was edited and none removed from the middle.</p>{{
 This page renders the record and adds no opinion about it: the chain, the signatures, the retractions
 and the verdicts are all read through <code>internal/auditpush</code>, the same code the CLI uses.</p>
 </footer>
+{{end}}
+{{if .Write}}` + writeJS + `{{end}}
 </div></body></html>
-` + verifyBanner + entryBanner
+` + verifyBanner + entryBanner + rowTmpls
 
 // entryBanner is one entry's chain line, shared by review and scan pages.
 const entryBanner = `
 {{define "entrybanner"}}
-<div class="banner{{if not .ChainHashOK}} bad{{else if not .Signed}} warn{{end}}">
+<div class="banner{{if not .Verified}} warn{{else if or (not .ChainHashOK) .ChainProblem}} bad{{else if not .Signed}} warn{{end}}">
   <p><strong>This entry:</strong>
-  <span class="chip{{if .ChainHashOK}} ok{{else}} bad{{end}}">hash {{if .ChainHashOK}}matches its bytes{{else}}MISMATCH{{end}}</span>
+  {{if not .Verified}}<span class="chip warn">not verified</span> — it was appended while the ledger was being read, so the chain check never saw it. Its hash, link and signature are unknown, not failed: reload to check them.
+  {{else}}<span class="chip{{if .ChainHashOK}} ok{{else}} bad{{end}}">hash {{if .ChainHashOK}}matches its bytes{{else}}MISMATCH{{end}}</span>
   <span class="chip{{if .ChainLinkOK}} ok{{else}} bad{{end}}">link {{if .ChainLinkOK}}{{if .Genesis}}genesis{{else}}names its predecessor{{end}}{{else}}BROKEN{{end}}</span>
-  {{if .Signed}}<span class="chip{{if .SigOK}} ok{{else if .SigsChecked}} bad{{else}} warn{{end}}">signature {{if .SigOK}}verified{{else if .SigsChecked}}NOT VERIFIED{{else}}not checked (no key){{end}}</span>{{if .Signer}} <span class="small">signed by {{.Signer}}</span>{{end}}
-  {{else}}<span class="chip warn">unsigned</span>{{end}}
-  {{if .ChainProblem}}<br><span class="chip bad">{{.ChainProblem}}</span>{{end}}</p>
+  {{if .Signed}}{{if not .KeyGiven}}<span class="chip warn">signed, not checked (no key given)</span>
+  {{else if .SigOK}}<span class="chip ok">signature verified</span>
+  {{else}}<span class="chip bad">signature does NOT verify</span>{{end}}{{if .Signer}} <span class="small">signed by {{.Signer}}</span>{{end}}
+  {{else}}<span class="chip warn">unsigned</span>{{end}}{{end}}
+  {{if .ChainProblem}}<br><span class="chip bad">{{.ChainProblem}}</span>{{end}}
+  {{if .Note}}<br><span class="small">{{.Note}}</span>{{end}}</p>
 </div>
 {{end}}
 `
@@ -230,6 +242,8 @@ const entryTmpl = `<!doctype html>
 <span class="mono">{{.VerifierModel}}</span>{{end}}.</p>
 
 {{template "entrybanner" $.ChainView}}
+{{if $.Retracted}}<div class="banner bad"><p><strong>This review was retracted.</strong> The entry stays in the chain and no
+longer stands as the record{{if $.RetractedReason}}: {{$.RetractedReason}}{{end}}. Its findings are not counted in the record's totals.</p></div>{{end}}
 
 <dl class="meta">
   <dt>repo</dt><dd class="mono">{{.Repo}}</dd>
@@ -279,6 +293,7 @@ const entryTmpl = `<!doctype html>
   <h3 class="small">human verdict</h3>
   <p class="small"><strong>{{.Verdict}}</strong> by {{.VerdictBy}}{{if .VerdictWhy}} — {{.VerdictWhy}}{{end}}</p>
   {{end}}
+  {{if and $.Site.Write (not .Verdict) (not $.Retracted)}}{{template "controls" ctl . $.ShortSHA}}{{end}}
   <p class="small mono">ref {{.Ref}}</p>
 </div>
 {{end}}
@@ -305,8 +320,9 @@ It does not make the opinion below true.</p></div>
 
 <footer><p>Entry <span class="mono">{{.Hash}}</span> · file <span class="mono">{{.File}}</span> ·
 pushed {{stamp .Pushed}} · <a href="../index.html">the whole record</a></p></footer>
+{{if $.Site.Write}}` + writeJS + `{{end}}
 </div></body></html>
-` + entryBanner
+` + entryBanner + controlsTmpl
 
 const scanTmpl = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
@@ -367,5 +383,111 @@ this run was pushed without its source (<code>--push-source</code>). The counts 
 
 <footer><p>Entry <span class="mono">{{.Hash}}</span> · file <span class="mono">{{.File}}</span> ·
 pushed {{stamp .Pushed}} · <a href="../index.html">the whole record</a></p></footer>
+{{if .Site.Write}}` + writeJS + `{{end}}
 </div></body></html>
 ` + entryBanner
+
+const rowTmpls = `
+{{define "scanrow"}}<tr>
+<td class="nowrap"><a href="{{entryURL .Short}}">{{date .Pushed}}</a>{{if .Retracted}} <span class="chip bad">retracted</span>{{end}}</td>
+<td class="mono small">{{.RepoName}}{{with .Scan.Scope}}<br><span class="small">{{.}}</span>{{end}}</td>
+<td class="mono small">{{range $i, $f := .Audited}}{{if $i}}, {{end}}{{$f.Path}}{{else}}<span class="chip mute">none</span>{{end}}</td>
+<td class="nowrap">{{if .Graded}}{{.Rate}} <span class="small">({{.Killed}} of {{.Graded}})</span>{{else}}<span class="chip mute">not graded</span>{{end}}</td>
+<td>{{.Survived}}</td>
+<td>{{if .Proven}}<span class="chip ok">{{.Proven}}</span>{{else}}0{{end}}</td>
+<td class="mono small">{{if .CommitURL}}<a href="{{.CommitURL}}">{{.ShortSHA}}</a>{{else}}{{.ShortSHA}}{{end}}</td>
+</tr>{{end}}
+{{define "reviewrow"}}<tr>
+<td class="nowrap"><a href="{{entryURL .Short}}">{{date .Pushed}}</a>{{if .Retracted}} <span class="chip bad">retracted</span>{{end}}</td>
+<td class="mono">{{with .Review}}{{.Scope}}{{end}}</td>
+<td class="mono small">{{with .Review}}{{.ReviewerModel}}{{end}}</td>
+<td class="mono small">{{if .HasVerifier}}{{with .Review}}{{.VerifierModel}}{{end}}
+  {{if .Decorrelated}}<span class="chip ok">≠</span>{{end}}
+  {{else}}<span class="chip mute">none</span>{{end}}</td>
+<td>{{.Findings | len}}</td>
+<td>{{if .Reproduced}}<span class="chip ok">{{.Reproduced}}</span>{{else}}0{{end}}</td>
+<td class="small">{{if .Confirmed}}<span class="chip ok">{{.Confirmed}}✓</span> {{end}}{{if .Refuted}}<span class="chip bad">{{.Refuted}}✗</span>{{end}}</td>
+<td class="mono small">{{if .CommitURL}}<a href="{{.CommitURL}}">{{.ShortSHA}}</a>{{else}}{{.ShortSHA}}{{end}}</td>
+</tr>{{end}}
+`
+
+const listTmpl = `<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{{.What}}, page {{.N}} — corral/ledger</title>
+<style>` + baseCSS + `</style></head><body><div class="wrap">
+<p class="small"><a href="index.html">← the record</a></p>
+<h1>All {{.What}} <span class="small">page {{.N}} of {{.Of}}</span></h1>
+{{if not .HasLedger}}{{template "noledger"}}{{end}}
+{{if eq .What "audits"}}<div class="scroll"><table><thead><tr>
+<th>pushed</th><th>repository</th><th>audited</th><th class="nowrap">kill rate</th>
+<th class="nowrap">got through</th><th class="nowrap">proven</th><th>commit</th>
+</tr></thead><tbody>{{range .Scans}}{{template "scanrow" .}}{{else}}<tr><td colspan="7">None recorded yet.</td></tr>{{end}}</tbody></table></div>
+{{else}}<div class="scroll"><table><thead><tr>
+<th>pushed</th><th>scope</th><th>reviewer</th><th>verifier</th>
+<th class="nowrap">findings</th><th class="nowrap">repro</th><th class="nowrap">verdicts</th><th>commit</th>
+</tr></thead><tbody>{{range .Reviews}}{{template "reviewrow" .}}{{else}}<tr><td colspan="8">None recorded yet.</td></tr>{{end}}</tbody></table></div>{{end}}
+<p>{{if .Prev}}<a href="{{.Prev}}">← newer</a>{{end}} {{if .Next}}<a href="{{.Next}}">older →</a>{{end}}</p>
+{{if .Write}}` + writeJS + `{{end}}
+</div></body></html>
+` + rowTmpls + verifyBanner
+
+const chainTmpl = `<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>the chain, page {{.N}} — corral/ledger</title>
+<style>` + baseCSS + `</style></head><body><div class="wrap">
+<p class="small"><a href="index.html">← the record</a></p>
+<h1>The chain <span class="small">page {{.N}} of {{.Of}}, newest first</span></h1>
+{{template "chainclaim" .Site}}
+<div class="scroll"><table><thead><tr><th>#</th><th>when</th><th>kind</th><th>what</th><th>signature</th></tr></thead><tbody>
+{{range .Rows}}<tr>
+<td>{{.Pos}}</td><td class="nowrap">{{stamp .Pushed}}</td>
+<td>{{if or (eq .Kind "scan") (eq .Kind "review")}}<a href="{{entryURL .Short}}">{{.Kind}}</a>{{else}}{{.Kind}}{{end}}</td>
+<td class="small">{{.Note}}{{if .ChainProblem}} <span class="chip bad">{{.ChainProblem}}</span>{{end}}</td>
+<td>{{if not .Verified}}<span class="chip warn">not verified</span>
+{{else if not .Signed}}<span class="chip warn">unsigned</span>
+{{else if not .KeyGiven}}<span class="chip warn">signed, not checked</span>
+{{else if .SigOK}}<span class="chip ok">verified</span>
+{{else}}<span class="chip bad">does NOT verify</span>{{end}}</td>
+</tr>{{end}}
+</tbody></table></div>
+<p>{{if .Prev}}<a href="{{.Prev}}">← newer</a>{{end}} {{if .Next}}<a href="{{.Next}}">older →</a>{{end}}</p>
+{{if .Write}}` + writeJS + `{{end}}
+</div></body></html>
+` + verifyBanner
+
+// controlsTmpl is the adjudication block, rendered only when Site.Write is
+// set. The buttons call the existing api/ routes through writeJS.
+const controlsTmpl = `
+{{define "controls"}}
+<div class="controls banner" data-ref="{{.F.Ref}}" data-verifier="{{with .F.Refutation}}{{.Model}} {{.Verdict}}{{end}}">
+  <p class="small"><strong>Your verdict</strong> - each button runs a <code>corral review</code> command on this machine.</p>
+  {{if not (hasPre .F.Script)}}<p class="small">no script: judge from the code at <code>{{if .F.File}}{{.F.File}}{{else}}?{{end}}:{{if .F.Line}}{{.F.Line}}{{else}}?{{end}}</code> (commit <code>{{.SHA}}</code>)</p>{{end}}
+  <textarea rows="2" style="width:100%" placeholder="why (required)"></textarea>
+  <p><button data-verdict="confirm">Confirm</button> <button data-verdict="refute">Refute</button>
+  {{if hasPre .F.Script}}<button data-recheck>Recheck on HEAD</button>{{end}}</p>
+  <p class="small" data-cited></p><div class="out small"></div>
+</div>
+{{end}}
+`
+
+const verdictsTmpl = `<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>awaiting a verdict - corral/ledger</title>
+<style>` + baseCSS + `</style></head><body><div class="wrap">
+<p class="small"><a href="index.html">&larr; the record</a></p>
+<h1>Awaiting a person's verdict{{if .HasLedger}} <span class="small">{{len .Awaiting}}</span>{{end}}</h1>
+{{if .HasLedger}}<p class="lede">Findings from reviews that stand, with no verdict that stands. Reproduced ones first: execution backed them.</p>{{end}}
+{{if not .HasLedger}}{{template "noledger"}}{{else if not .Awaiting}}<p>Nothing is waiting for a verdict.</p>{{end}}
+{{range .Awaiting}}
+<div class="finding"><p class="small mono"><a href="{{entryURL .Review.Short}}#{{.Finding.ID}}">{{.Finding.Ref}}</a>
+{{if eq .Finding.Outcome "reproduced"}}<span class="chip ok">reproduced</span>{{else}}<span class="chip mute">{{.Finding.Outcome}}</span>{{end}}</p>
+<p class="claim">{{.Finding.Claim}}</p>
+{{if $.Write}}{{template "controls" ctl .Finding .Review.ShortSHA}}{{end}}
+</div>
+{{end}}
+{{if .Write}}` + writeJS + `{{end}}
+</div></body></html>
+` + verifyBanner + controlsTmpl

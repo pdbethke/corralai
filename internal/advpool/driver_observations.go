@@ -207,6 +207,48 @@ func bugCatchObservations(run *runState, v Verdict) []BugCatchObservation {
 	return out
 }
 
+// timeoutObservations is bugCatchObservations for a run that hit RunDeadline:
+// the same rows, minus every row whose phase did not finish. A converged run
+// has finished every phase, so bugCatchObservations may assume it; a stalled
+// one has not, and the rows it would produce for an unfinished phase are
+// measurements nobody took:
+//
+//   - Before dev adequacy scored, there is nothing at all: the generator's row
+//     would read "planted 0", a potency of zero for mutants never graded.
+//   - Before the pool phase closed, the primary writer has no row: it would
+//     read "authored 1, sound 0" — a charge against a model for a test the
+//     run never let it finish (testWriterMoot and writerProviderFailed, the
+//     two guards bugCatchObservations has, are both false on that path).
+//   - The critic never has a row: this path never reads the critic's findings
+//     (Verdict.CriticIncomplete says so on the verdict), so its "0 flags"
+//     would be a count of findings nobody looked at.
+//
+// The challenger rows need no extra filter: bugCatchObservations already
+// drops an unmeasured challenger generator seat and marks a challenger writer
+// with no measured survivor Dropped, which is exactly true of a stalled one.
+//
+// Built by FILTERING bugCatchObservations rather than as a second
+// construction, so a row a converged run reports and a stalled run keeps is
+// the same row.
+func timeoutObservations(run *runState, v Verdict) []BugCatchObservation {
+	if !run.devScored {
+		return nil
+	}
+	var out []BugCatchObservation
+	for _, o := range bugCatchObservations(run, v) {
+		switch o.Role {
+		case RoleTestCritic:
+			continue
+		case RoleTestWriter:
+			if !run.poolScored {
+				continue
+			}
+		}
+		out = append(out, o)
+	}
+	return out
+}
+
 // seatRecord is the one place a row's seat is stamped for per-model
 // analysis: the seat's agent tool (the verdict's, else the RunSpec's — a
 // challenger row's role may be absent from a roster that dropped it), and

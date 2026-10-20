@@ -741,7 +741,7 @@ func TestAttemptRowsOnlyForSeatsThatMeasured(t *testing.T) {
 			"m3": {mutant: survivors[2], done: true},
 		},
 	}
-	d.recordMutantAttempts(run, Verdict{RecordID: 7})
+	d.recordMutantAttempts(Verdict{RecordID: 7}, mutantAttemptRows(run, Verdict{RecordID: 7}))
 
 	for _, a := range sink.attempts {
 		if a.MutantID != "m1" {
@@ -771,7 +771,7 @@ func TestAttemptRowsForEverySurvivorInBatchedMode(t *testing.T) {
 		shadowWriterMeasured:  true,
 		shadowWriterKilled:    []MutantRef{{ID: "m2"}},
 	}
-	d.recordMutantAttempts(run, Verdict{RecordID: 7})
+	d.recordMutantAttempts(Verdict{RecordID: 7}, mutantAttemptRows(run, Verdict{RecordID: 7}))
 	if len(sink.attempts) != 4 {
 		t.Fatalf("wrote %d rows, want 4 (2 survivors x 2 writers): %+v", len(sink.attempts), sink.attempts)
 	}
@@ -959,7 +959,7 @@ func TestOneSalvagedSeatDoesNotVoidTheWholeFilesComparison(t *testing.T) {
 
 	sink := &fakeMutantAttemptSink{}
 	d.MutantAttempts = sink
-	d.recordMutantAttempts(run, Verdict{RecordID: 7})
+	d.recordMutantAttempts(Verdict{RecordID: 7}, mutantAttemptRows(run, Verdict{RecordID: 7}))
 	for _, a := range sink.attempts {
 		if a.MutantID == "m2" && a.Role == RoleTestWriter {
 			t.Error("recorded a primary row for the SALVAGED seat — its proof came from a deselected remainder the challenger got no equivalent of")
@@ -992,7 +992,7 @@ func TestSalvageStillVoidsTheWholeFileInBatchedMode(t *testing.T) {
 	}
 	sink := &fakeMutantAttemptSink{}
 	d.MutantAttempts = sink
-	d.recordMutantAttempts(run, Verdict{RecordID: 7})
+	d.recordMutantAttempts(Verdict{RecordID: 7}, mutantAttemptRows(run, Verdict{RecordID: 7}))
 	if len(sink.attempts) != 0 {
 		t.Errorf("wrote %d attempt rows for a salvaged batched run, want 0", len(sink.attempts))
 	}

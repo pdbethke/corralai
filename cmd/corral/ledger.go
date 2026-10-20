@@ -287,7 +287,7 @@ func runLedgerPush(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 	if plan.NotPushable > 0 {
-		fmt.Fprintf(stdout, "  %d retraction/checkpoint entr%s are chain facts, not rows\n", plan.NotPushable, map[bool]string{true: "y", false: "ies"}[plan.NotPushable == 1])
+		fmt.Fprintf(stdout, "  %d retraction/checkpoint/signer entr%s are chain facts, not rows\n", plan.NotPushable, map[bool]string{true: "y", false: "ies"}[plan.NotPushable == 1])
 	}
 	source := "source withheld (hashes only)"
 	if *withSource {

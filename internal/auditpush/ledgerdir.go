@@ -421,8 +421,46 @@ func AppendLedgerEntry(dir string, e LedgerEntry, signer LedgerSigner) (string, 
 			return "", fmt.Errorf("%w — refusing to append, which would sign this chain as the new entry's history", err)
 		}
 		prev = existing[n-1].Hash
+		if err := requireRegisteredSigner(existing, signer); err != nil {
+			return "", err
+		}
 	}
 	return placeEntry(dir, e, prev, signer)
+}
+
+// requireRegisteredSigner is the writer-side refusal to append with a key a
+// signer ledger never registered. It exists to keep an HONEST operator from
+// writing an entry the verifier would reject — a laptop key nobody added, or
+// an unsigned entry on a ledger that now requires signatures — and it is not
+// the security boundary. It reads the set through ActiveSigners, which is a
+// keyless, name-based read: a signer entry that merely names the root's keyid
+// is accepted by it, so anyone who can write the directory can get past this
+// guard. Whether a key really was registered is answered only by
+// VerifyLedgerDir under the root key (--pub), and that is where a forged
+// registration is caught.
+//
+// A ledger with no signer entries and no signer-carrying checkpoint skips the
+// guard entirely, so a stranger's keyless chain, and every ledger that has
+// never used signers, append exactly as before. The root is always allowed:
+// it is how a key is registered in the first place.
+func requireRegisteredSigner(existing []LedgerEntry, signer LedgerSigner) error {
+	rootID, active := ActiveSigners(existing)
+	if rootID == "" {
+		return nil
+	}
+	if signer == nil {
+		return fmt.Errorf("auditpush: this ledger registers its signers, so an unsigned entry would be refused by the verifier; sign with the root key or a registered one")
+	}
+	id := signer.SigningKeyID()
+	if id == rootID {
+		return nil
+	}
+	for _, k := range active {
+		if k.KeyID == id {
+			return nil
+		}
+	}
+	return fmt.Errorf("auditpush: key %s is not registered on this ledger, so the verifier would refuse its entries; register it with `corral ledger signer add` (signed by the root key) first", id)
 }
 
 // placeEntry hashes, signs and writes e linked to prev. It is the one

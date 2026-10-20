@@ -298,7 +298,9 @@ func TestVerifyRevokedKey(t *testing.T) {
 	// Register and revoke of one key inside one second must not collide on
 	// the file name (the tail is the entry's own hash).
 	mustSignerChange(t, dir, revokeOf(m, "laptop stolen"), signerOf(root))
-	appendScan(t, dir, signerOf(m), "bbbb2222")
+	// Forged past the writer guard, which now refuses a revoked key: the
+	// verifier, not the writer, is what this test is about.
+	placeForged(t, dir, scanEntry("bbbb2222"), signerOf(m))
 	checks := verifyChecks(t, dir, pubOf(root))
 	if len(checks) != 4 {
 		t.Fatalf("%d checks, want 4", len(checks))
@@ -642,5 +644,87 @@ func TestCheckpointRejectsMalformedSeedKey(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// --- Writers refuse a key the ledger never registered ------------------------
+
+func scanFileCount(t *testing.T, dir string) int {
+	t.Helper()
+	ents, err := os.ReadDir(filepath.Join(dir, ScansSubdir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return len(ents)
+}
+
+func scanEntry(commit string) LedgerEntry {
+	return LedgerEntry{Bundle: Bundle{Scan: ScanRow{Repo: "r", Commit: commit, ScanID: 1}}}
+}
+
+func TestAppendRefusesUnregisteredKey(t *testing.T) {
+	dir := t.TempDir()
+	root, stranger := seededKey(0x30), seededKey(0x31)
+	mustSignerChange(t, dir, registerOf(seededKey(0x32), "laptop"), signerOf(root))
+	before := scanFileCount(t, dir)
+	_, err := AppendLedgerEntry(dir, scanEntry("bbbb2222"), signerOf(stranger))
+	if err == nil {
+		t.Fatal("an unregistered key appended to a signer ledger")
+	}
+	for _, want := range []string{"corral ledger signer add", KeyFingerprint(pubOf(stranger))} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error %q lacks %q", err, want)
+		}
+	}
+	if got := scanFileCount(t, dir); got != before {
+		t.Fatalf("%d files, want %d: the refused entry was written", got, before)
+	}
+}
+
+func TestAppendRefusesUnsignedOnSignerLedger(t *testing.T) {
+	dir := t.TempDir()
+	mustSignerChange(t, dir, registerOf(seededKey(0x33), "laptop"), signerOf(seededKey(0x34)))
+	before := scanFileCount(t, dir)
+	if _, err := AppendLedgerEntry(dir, scanEntry("cccc3333"), nil); err == nil {
+		t.Fatal("an unsigned entry appended to a signer ledger")
+	}
+	if got := scanFileCount(t, dir); got != before {
+		t.Fatalf("%d files, want %d: the refused entry was written", got, before)
+	}
+}
+
+func TestAppendAllowsRootAndRegistered(t *testing.T) {
+	dir := t.TempDir()
+	root, m := seededKey(0x35), seededKey(0x36)
+	mustSignerChange(t, dir, registerOf(m, "laptop"), signerOf(root))
+	appendScan(t, dir, signerOf(root), "dddd4444")
+	appendScan(t, dir, signerOf(m), "eeee5555")
+	// Revoking removes the permission again.
+	mustSignerChange(t, dir, revokeOf(m, "retired"), signerOf(root))
+	if _, err := AppendLedgerEntry(dir, scanEntry("ffff6666"), signerOf(m)); err == nil {
+		t.Fatal("a revoked key appended")
+	}
+}
+
+func TestAppendOnPlainLedgerUnchanged(t *testing.T) {
+	dir := t.TempDir()
+	appendScan(t, dir, signerOf(seededKey(0x37)), "aaaa7777")
+	appendScan(t, dir, signerOf(seededKey(0x38)), "bbbb8888")
+	appendScan(t, dir, nil, "cccc9999")
+}
+
+// A signer entry is not a warehouse row: a push plan reports it as a chain
+// fact instead of letting it fall through unremarked.
+func TestPushPlanCountsSignerEntry(t *testing.T) {
+	dir := t.TempDir()
+	root := seededKey(0x39)
+	mustSignerChange(t, dir, registerOf(seededKey(0x3a), "laptop"), signerOf(root))
+	appendScan(t, dir, signerOf(root), "abab1212")
+	plan, err := PushLedgerDir(dir, filepath.Join(t.TempDir(), "wh.duckdb"), false, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.NotPushable != 1 || plan.Scans != 1 {
+		t.Fatalf("plan %+v, want 1 not-pushable (the signer entry) and 1 scan", plan)
 	}
 }

@@ -14,7 +14,7 @@ type PushPlan struct {
 	Scans, Reviews, Adjudications int // entries to push
 	Skipped                       int // already in the target (by entry hash)
 	Retracted                     int // scan entries a later entry retracted — not the record, not pushed
-	NotPushable                   int // retractions and checkpoints: chain facts, no warehouse row
+	NotPushable                   int // retractions, checkpoints and signer changes: chain facts, no warehouse row
 	Files, Findings               int // rows those entries carry
 	// RetractedButPushed names entries the ledger has since retracted whose
 	// rows the warehouse ALREADY holds. Nothing here removes them — a push
@@ -77,7 +77,11 @@ func PushLedgerDir(dir, target string, withSource, dryRun bool) (PushPlan, error
 	var plan PushPlan
 	for _, e := range entries {
 		switch e.Kind {
-		case KindRetract, KindCheckpoint:
+		case KindRetract, KindCheckpoint, KindSigner:
+			// A signer entry changes who may sign, not what was found: like a
+			// retraction or a checkpoint it is a chain fact with no warehouse
+			// row, and it is COUNTED so a push says it left one out rather
+			// than letting the entry fall through both switches unremarked.
 			plan.NotPushable++
 			continue
 		}

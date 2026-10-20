@@ -53,6 +53,9 @@ func localSubject(repoDir string) (repo, commit, identity string) {
 	if repoDir == "" {
 		return "", "", subjectIdentityNone
 	}
+	// get-url rather than `config --get remote.origin.url`: it applies
+	// url.<base>.insteadOf rewrites, so the name recorded is the URL git
+	// would actually contact, which is what a reader can resolve.
 	repo = gitIn(repoDir, "remote", "get-url", "origin")
 	commit = gitIn(repoDir, "rev-parse", "HEAD")
 	if repo == "" || commit == "" {
@@ -70,4 +73,25 @@ func gitIn(dir string, args ...string) string {
 		return ""
 	}
 	return strings.TrimSpace(string(out))
+}
+
+// resolveSubject is the one rule for naming a local run's subject. --repo and
+// --commit are ONE unit: both given are used as typed, neither given are both
+// derived from repoDir's git (localSubject), and exactly one is an error —
+// pairing a typed repo with another repository's HEAD signs a revision that
+// never existed. The error is a usage error, raised before any spend.
+func resolveSubject(repoFlag, commitFlag, repoDir string) (repo, commit string, err error) {
+	repo, commit = strings.TrimSpace(repoFlag), strings.TrimSpace(commitFlag)
+	switch {
+	case repo != "" && commit != "":
+		return repo, commit, nil
+	case repo == "" && commit == "":
+		repo, commit, _ = localSubject(repoDir)
+		return repo, commit, nil
+	}
+	missing := "--commit"
+	if repo == "" {
+		missing = "--repo"
+	}
+	return "", "", fmt.Errorf("--repo and --commit name one subject together; pass both or neither (with neither, both come from --repo-dir's git); %s is missing", missing)
 }

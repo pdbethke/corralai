@@ -191,7 +191,7 @@ func TestMachineLedgerDeclared(t *testing.T) {
 // move (rename of a directory would skip the lock probe and sidecar logic
 // built for files) nor treated as a legacy-only state file.
 func TestMigrateAndLegacyIgnoreTheMachineLedgerDirectory(t *testing.T) {
-	_, legacy, state := setupMigration(t)
+	_, legacy, _ := setupMigration(t)
 	writeFile(t, filepath.Join(legacy, "ledger", "entry.json"))
 	moves, conflicts, err := PlanMigration(legacy, PlanOptions{})
 	if err != nil || len(conflicts) != 0 || len(moves) != 2 {
@@ -205,5 +205,4 @@ func TestMigrateAndLegacyIgnoreTheMachineLedgerDirectory(t *testing.T) {
 	if _, err := Path(MachineLedger); err != nil {
 		t.Errorf("a legacy dir named ledger must not refuse the machine ledger: %v", err)
 	}
-	_ = state
 }

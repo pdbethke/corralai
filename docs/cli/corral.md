@@ -264,7 +264,7 @@ Usage of certify --local:
   -code string
     	path of the code under review (required)
   -commit string
-    	commit sha (default: git rev-parse HEAD, else "local")
+    	commit sha the signed verdict names; goes with --repo (both or neither, see --repo)
   -critic-model string
     	model (or agent seat) for the test-critic role, which must differ from the writer's; "off" disables the critic entirely (it is advisory and never gates the verdict, so a single-vendor run with only one usable model can drop it). No default
   -goal string
@@ -308,7 +308,7 @@ Usage of certify --local:
   -record-stream tail -f
     	stream each run event as newline-delimited JSON to this file AS IT HAPPENS — the same events --record collects into a tape at the end, so a watcher (tail -f, the cockpit) can follow a run in flight instead of waiting hours for it to finish. Independent of --record: either, both, or neither
   -repo string
-    	repository (default: git remote.origin.url, else "local")
+    	repository the signed verdict names. --repo and --commit name ONE subject and go together: pass both or neither (exactly one is refused, exit 2). With neither, both come from --repo-dir's git (origin URL and HEAD); where git cannot tell, the run is recorded as unidentified, never under an invented name
   -repo-dir --
     	audit --code IN THE CONTEXT of this cloned repo/package: the whole tree is seeded into the jail, the file is mutated in place, and the project's OWN test command (given after --) grades it — so real multi-file projects with package imports work (--code/--test are repo-relative)
   -runner string

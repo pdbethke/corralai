@@ -106,8 +106,8 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 	noFailFast := fs.Bool("no-fail-fast", false, noFailFastHelp)
 	runnerFlag := fs.String("runner", "", runnerHelp)
 	poll := fs.Duration("poll", 2*time.Second, "how long to wait between drive iterations when nothing is claimable")
-	repoFlag := fs.String("repo", "", "repository (default: git remote.origin.url, else \"local\")")
-	commitFlag := fs.String("commit", "", "commit sha (default: git rev-parse HEAD, else \"local\")")
+	repoFlag := fs.String("repo", "", "repository the signed verdict names. --repo and --commit name ONE subject and go together: pass both or neither (exactly one is refused, exit 2). With neither, both come from --repo-dir's git (origin URL and HEAD); where git cannot tell, the run is recorded as unidentified, never under an invented name")
+	commitFlag := fs.String("commit", "", "commit sha the signed verdict names; goes with --repo (both or neither, see --repo)")
 	outFlag := fs.String("out", "", "also write the signed verdict as a self-contained record file, re-verifiable offline with `corral certify verify <file> --pubkey <hex> --allow-unanchored`")
 	quietFlag := fs.Bool("quiet", false, "suppress the live progress echo on stderr (the verdict, --out and --record are unaffected)")
 	repoDirFlag := fs.String("repo-dir", "", "audit --code IN THE CONTEXT of this cloned repo/package: the whole tree is seeded into the jail, the file is mutated in place, and the project's OWN test command (given after `--`) grades it — so real multi-file projects with package imports work (--code/--test are repo-relative)")
@@ -210,6 +210,14 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 	}
 	if strings.TrimSpace(*goal) == "" {
 		fmt.Fprintln(stderr, "corral certify --local: --goal is required")
+		return 2
+	}
+	// The subject is a pair. A --repo with a commit taken from --repo-dir's
+	// HEAD (or the reverse) would sign "X@<a commit of some other repository>",
+	// a statement about a revision that never existed. Refused before any jail,
+	// store or spend, like the other flag refusals above.
+	if _, _, err := resolveSubject(*repoFlag, *commitFlag, *repoDirFlag); err != nil {
+		fmt.Fprintf(stderr, "corral certify --local: %v\n", err)
 		return 2
 	}
 	// --bind-dir/--no-bind-deps only apply to --repo-dir mode: loadRepoFiles
@@ -1845,16 +1853,9 @@ func auditOneFile(ctx context.Context, in localAuditInput) (advpool.Verdict, err
 	// carried as if it were a repository. (localSubject also returns an
 	// identity word, "git" or "none"; the ledger entry that a later step
 	// writes will record it.)
-	repo := strings.TrimSpace(in.repo)
-	commit := strings.TrimSpace(in.commit)
-	if repo == "" || commit == "" {
-		gRepo, gCommit, _ := localSubject(in.repoDir)
-		if repo == "" {
-			repo = gRepo
-		}
-		if commit == "" {
-			commit = gCommit
-		}
+	repo, commit, serr := resolveSubject(in.repo, in.commit, in.repoDir)
+	if serr != nil {
+		return advpool.Verdict{}, auditUsageErr("%v", serr)
 	}
 
 	// The bug-catching scorecard feed — the ONLY thing that makes the shadow

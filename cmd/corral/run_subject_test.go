@@ -3,9 +3,11 @@
 package main
 
 import (
+	"bytes"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -82,5 +84,30 @@ func TestMachineLedgerDirCreatedFromOverride(t *testing.T) {
 	}
 	if m := fi.Mode().Perm(); m != 0o750 {
 		t.Errorf("mode %o, want 750", m)
+	}
+}
+
+func TestResolveSubjectIsAPair(t *testing.T) {
+	dir, head := gitFixture(t, "https://example.test/acme/widget.git")
+	if r, c, err := resolveSubject("X", "abc", dir); err != nil || r != "X" || c != "abc" {
+		t.Errorf("both given must be used as typed: (%q, %q, %v)", r, c, err)
+	}
+	if r, c, err := resolveSubject("", "", dir); err != nil || r != "https://example.test/acme/widget.git" || c != head {
+		t.Errorf("neither given must derive both: (%q, %q, %v)", r, c, err)
+	}
+	for _, tc := range [][2]string{{"X", ""}, {"", "abc"}} {
+		if _, _, err := resolveSubject(tc[0], tc[1], dir); err == nil || !strings.Contains(err.Error(), "both or neither") {
+			t.Errorf("repo=%q commit=%q: want a both-or-neither refusal, got %v", tc[0], tc[1], err)
+		}
+	}
+}
+
+func TestRunCertifyLocal_OneOfRepoCommitIsRefused(t *testing.T) {
+	for _, extra := range [][]string{{"--repo", "X"}, {"--commit", "abc"}} {
+		var stdout, stderr bytes.Buffer
+		code := runCertifyLocal(append([]string{"--code", "foo.go", "--goal", "correctness"}, extra...), &stdout, &stderr)
+		if code != 2 || !strings.Contains(stderr.String(), "both or neither") {
+			t.Errorf("%v: want exit 2 naming both-or-neither, got %d %q", extra, code, stderr.String())
+		}
 	}
 }

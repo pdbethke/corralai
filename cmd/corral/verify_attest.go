@@ -544,9 +544,9 @@ func runVerifyLedger(dir, pubFlag, expectHead string, stdout, stderr io.Writer) 
 			mark, what = "✗", c.Problem
 			bad++
 		case c.Signed && pub != nil:
-			what += fmt.Sprintf(", signed by %s and verified against %s", orUnnamed(c.KeyID), pubSource)
+			what += fmt.Sprintf(", signed by %s and verified against %s", signerLabel(c), pubSource)
 		case c.Signed:
-			what += fmt.Sprintf(", signed by %s — unverified, signature NOT CHECKED (no --pub, no %s)", orUnnamed(c.KeyID), auditpush.LedgerPubKeyEnv)
+			what += fmt.Sprintf(", signed by %s — unverified, signature NOT CHECKED (no --pub, no %s)", signerLabel(c), auditpush.LedgerPubKeyEnv)
 		default:
 			what += ", UNSIGNED"
 		}
@@ -570,12 +570,13 @@ func runVerifyLedger(dir, pubFlag, expectHead string, stdout, stderr io.Writer) 
 		// A PREFIX is accepted — an operator holds a short hash more often
 		// than a full one — but not a short one: `--expect-head a` matches
 		// most chains and is not an anchor. (Round four, R3.)
-		if len(head) < 12 {
+		got := checks[len(checks)-1]
+		short, match := matchExpectHead(head, got.Hash)
+		if short {
 			fmt.Fprintf(stderr, "corral: --expect-head %s is too short to be an anchor — give at least 12 hex characters\n", head)
 			return 2
 		}
-		got := checks[len(checks)-1]
-		if !strings.HasPrefix(got.Hash, head) {
+		if !match {
 			fmt.Fprintf(stdout, "✗ head is %.12s, expected %s — entries were removed from the END of this chain, which the chain itself cannot detect\n", got.Hash, head)
 			return 1
 		}
@@ -584,6 +585,28 @@ func runVerifyLedger(dir, pubFlag, expectHead string, stdout, stderr io.Writer) 
 	}
 	fmt.Fprintln(stdout, "· intact means every entry present hashes, links and verifies. It does NOT mean none were removed from the END: dropping the newest entries leaves the rest valid, and no check inside the directory can see it. Anchor it from outside — the branch's git history, a Rekor receipt on a later entry, or `--expect-head <hash>`.")
 	return 0
+}
+
+// signerLabel is who signed an entry: the name the chain holds for the key
+// ("root", or the name a registration gave it) beside its keyid. Without a
+// name (a key the chain does not hold here) it is the keyid alone, as before.
+func signerLabel(c auditpush.ChainCheck) string {
+	if c.Signer == "" {
+		return orUnnamed(c.KeyID)
+	}
+	return fmt.Sprintf("%s (%s)", c.Signer, orUnnamed(c.KeyID))
+}
+
+// matchExpectHead is the one reading of --expect-head, shared by `verify`
+// and `checkpoint`: a prefix is accepted but not a short one (a 1-character
+// prefix matches most chains and is not an anchor). short means refuse as a
+// usage error; otherwise match says whether the head begins with it.
+func matchExpectHead(expect, headHash string) (short, match bool) {
+	expect = strings.TrimSpace(expect)
+	if len(expect) < 12 {
+		return true, false
+	}
+	return false, strings.HasPrefix(headHash, expect)
 }
 
 func orUnnamed(keyID string) string {

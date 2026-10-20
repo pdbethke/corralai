@@ -38,6 +38,8 @@ func runLedger(args []string, stdout, stderr io.Writer) int {
 		return runLedgerRetract(args[1:], stdout, stderr)
 	case "checkpoint":
 		return runLedgerCheckpoint(args[1:], stdout, stderr)
+	case "signer":
+		return runLedgerSigner(args[1:], stdout, stderr)
 	case "push":
 		return runLedgerPush(args[1:], stdout, stderr)
 	case "verify":
@@ -65,8 +67,20 @@ const ledgerUsage = `corral ledger — the hash-linked record (signed when a key
                                                append an entry retracting an earlier one: the retracted scan STAYS in
                                                the chain (deleting it would break the next link) and stops being the
                                                record — the view, the prior, the verdict cache and scans skip it
-  corral ledger checkpoint <dir>               PRUNE: replace every entry with one genesis naming the head it replaced
-                                               (hash, count, date); the chain restarts there and the verifier says so
+  corral ledger checkpoint [--expect-head <hash>] <dir>
+                                               PRUNE: replace every entry with one genesis naming the head it replaced
+                                               (hash, count, date); the chain restarts there and the verifier says so.
+                                               On a chain that registers signers it is signed by the ROOT
+                                               ($CORRALAI_LEDGER_ROOT_KEY) and --expect-head is REQUIRED: a root
+                                               checkpoint over a chain whose newest entries were removed would make
+                                               a revoked key permanent
+  corral ledger signer add <dir> --name <n> --pub <hex>
+  corral ledger signer revoke <dir> --keyid <id> --reason "…"
+  corral ledger signer list <dir> [--pub <root hex>]
+                                               who may sign this ledger besides the root. add/revoke are signed by the
+                                               ROOT key, read from $CORRALAI_LEDGER_ROOT_KEY and nowhere else (the
+                                               machine key is never a fallback); the entry is part of the chain, so
+                                               verify checks each signature against the key the chain registered
   corral ledger push <dir> <dsn> [--push-source] [--dry-run]
                                                append the directory's record to a warehouse you own (a DuckDB path, or
                                                md:<db>): every scan, review and adjudication entry the target does not
@@ -194,17 +208,64 @@ func runLedgerRetract(args []string, stdout, stderr io.Writer) int {
 }
 
 func runLedgerCheckpoint(args []string, stdout, stderr io.Writer) int {
-	if len(args) != 1 {
-		fmt.Fprintln(stderr, "corral ledger checkpoint: usage: corral ledger checkpoint <dir>")
+	fs := flag.NewFlagSet("corral ledger checkpoint", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	expectHead := fs.String("expect-head", "", "the hash this chain's newest entry must have, held from OUTSIDE the directory. REQUIRED on a chain that registers signers (at least 12 hex characters): the root's signature on a checkpoint makes the chain as it stands permanent, and a chain whose newest entries — a revocation, say — were deleted would be cemented without them")
+	if err := fs.Parse(flagsFirst(fs, args)); err != nil {
+		return flagParseExit(err)
+	}
+	if fs.NArg() != 1 {
+		fmt.Fprintln(stderr, "corral ledger checkpoint: usage: corral ledger checkpoint [--expect-head <hash>] <dir>")
 		return 2
 	}
-	dir := strings.TrimRight(args[0], "/")
-	signer, signed, kerr := ledgerSignerFromLocalKey()
-	if kerr != nil {
-		fmt.Fprintf(stderr, "corral ledger checkpoint: %v\n", kerr)
+	dir := strings.TrimRight(fs.Arg(0), "/")
+	entries, err := auditpush.ReadLedgerDir(dir)
+	if err != nil {
+		fmt.Fprintf(stderr, "corral ledger checkpoint: %v\n", err)
 		return 1
 	}
-	name, pruned, err := auditpush.WriteCheckpoint(dir, signer, nil) // Task 5 wires the root key here
+	var (
+		signer  auditpush.LedgerSigner
+		signed  string
+		rootPub ed25519.PublicKey
+	)
+	if auditpush.ChainHasSigners(entries) {
+		// The root vouches for the carried set (see WriteCheckpoint), so the
+		// root signs, and the chain must be the one the operator expects.
+		// The anchor is checked FIRST and against the head the root key
+		// verifies, so a refusal precedes every write and delete.
+		root, rpub, ok := rootGate("checkpoint", dir, stderr)
+		if !ok {
+			return 2
+		}
+		if strings.TrimSpace(*expectHead) == "" {
+			fmt.Fprintf(stderr, "corral ledger checkpoint: %s registers signers, so a checkpoint needs --expect-head <hash> from OUTSIDE the directory (a git ref, a note) — a root checkpoint over a chain whose newest entries were removed would make a revoked key permanent. Nothing written\n", dir)
+			return 2
+		}
+		checks, err := auditpush.VerifyLedgerDir(dir, rpub)
+		if err != nil || len(checks) == 0 {
+			fmt.Fprintf(stderr, "corral ledger checkpoint: cannot read %s's head: %v\n", dir, err)
+			return 1
+		}
+		short, match := matchExpectHead(*expectHead, checks[len(checks)-1].Hash)
+		if short {
+			fmt.Fprintf(stderr, "corral: --expect-head %s is too short to be an anchor — give at least 12 hex characters\n", strings.TrimSpace(*expectHead))
+			return 2
+		}
+		if !match {
+			fmt.Fprintf(stderr, "corral ledger checkpoint: head is %.12s, expected %s — entries were removed from the END of this chain, which the chain itself cannot detect. Nothing written\n", checks[len(checks)-1].Hash, strings.TrimSpace(*expectHead))
+			return 1
+		}
+		signer, rootPub, signed = root, rpub, "signed by root "+root.KeyID
+	} else {
+		var kerr error
+		signer, signed, kerr = ledgerSignerFromLocalKey()
+		if kerr != nil {
+			fmt.Fprintf(stderr, "corral ledger checkpoint: %v\n", kerr)
+			return 1
+		}
+	}
+	name, pruned, err := auditpush.WriteCheckpoint(dir, signer, rootPub)
 	if err != nil {
 		fmt.Fprintf(stderr, "corral ledger checkpoint: %v\n", err)
 		return 1

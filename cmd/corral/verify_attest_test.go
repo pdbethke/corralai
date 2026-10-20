@@ -685,7 +685,7 @@ func TestVerifyLedgerWalksTheChain(t *testing.T) {
 		t.Fatalf("intact chain: exit %d\n%s%s", code, out.String(), errb.String())
 	}
 	s := out.String()
-	if !strings.Contains(s, "genesis, signed by "+auditpush.KeyFingerprint(priv.Public().(ed25519.PublicKey))+" and verified against the --pub flag") || !strings.Contains(s, "2 entries, chain intact") {
+	if !strings.Contains(s, "genesis, signed by root ("+auditpush.KeyFingerprint(priv.Public().(ed25519.PublicKey))+") and verified against the --pub flag") || !strings.Contains(s, "2 entries, chain intact") {
 		t.Errorf("intact chain output:\n%s", s)
 	}
 	// Remove the first entry: the second's link names a missing predecessor.

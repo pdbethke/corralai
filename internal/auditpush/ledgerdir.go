@@ -965,9 +965,9 @@ func RequireIntactChain(dir string) error {
 	return nil
 }
 
-// chainHasSigners reports whether the chain registers signers at all: a
+// ChainHasSigners reports whether the chain registers signers at all: a
 // signer entry, or a leading checkpoint that carries a set.
-func chainHasSigners(entries []LedgerEntry) bool {
+func ChainHasSigners(entries []LedgerEntry) bool {
 	for i, e := range entries {
 		if e.Kind == KindSigner {
 			return true
@@ -1018,7 +1018,7 @@ func WriteCheckpoint(dir string, signer LedgerSigner, rootPub ed25519.PublicKey)
 	// refusal here precedes the first write or delete. nil, not empty, when
 	// there is no set, so the JSON gains no key.
 	var carried []SignerKey
-	if chainHasSigners(entries) {
+	if ChainHasSigners(entries) {
 		if rootPub == nil {
 			return "", 0, fmt.Errorf("auditpush: %s registers signers, so a checkpoint needs the root public key to vouch for them (none was given) — refusing to prune", dir)
 		}

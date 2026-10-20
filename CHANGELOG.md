@@ -9,6 +9,31 @@ still move between minor versions.
 Entries describe what changed for someone *using* the tool. For the full commit
 history of any release, `git log v0.3.4..v0.3.5`.
 
+## [Unreleased]
+
+### Breaking
+
+- **A ledger can now say who may sign it, and its entries are
+  `corral-ledger-5`.** `corral ledger signer add|revoke|list` registers and
+  retires signing keys inside the chain itself: a registration or revocation
+  is an entry, signed by the root key, and `verify` checks each later entry's
+  signature against the key the chain registered for it rather than one key
+  for the whole ledger. Three things follow, and the first two break old
+  readers. A corral-ledger-5 entry's `keyid` is the key's fingerprint
+  (`ed25519:` and 16 hex characters of its SHA-256), not the name
+  `corral-certify`; older entries verify unchanged, and `corral-certify` on
+  them means the root. **An older corral cannot read a ledger that contains a
+  format-5 entry**, so upgrade before verifying corral's own ledger after the
+  key ceremony. `--pub` and `CORRALAI_LEDGER_PUBKEY` name only the root; with
+  neither, signatures are still not checked, and a keyless read believes any
+  signer entry that names the root, so only a read under the root key
+  authorizes anything. And the root seed is read from
+  `CORRALAI_LEDGER_ROOT_KEY` alone, only by root operations, never from a
+  file corral finds and never in place of the machine key.
+  `corral ledger checkpoint` on a chain that has signers is a root operation
+  too, and requires `--expect-head <hash>` from outside the directory.
+  `verify` now prints `signed by <name> (<keyid>)` on each entry.
+
 ## [v1.0.0-rc.25] — 2026-10-18
 
 - **JavaScript, TypeScript and Ruby critics must now judge every test.**

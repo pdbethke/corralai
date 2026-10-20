@@ -548,7 +548,9 @@ warehouse push writes (scan, files, mutants with span/shape/outcome, model
 calls, events) — that names the previous entry's hash and, when the run has
 a certify key, carries an Ed25519 signature over its own. Editing an entry
 breaks its hash until someone re-hashes and re-links the chain, which needs
-no key for unsigned entries and only the signing key for signed ones;
+no key for unsigned entries and only the signing key for signed ones (the
+ledger's root key, or a signer the root registered in the chain — `corral
+ledger signer list`);
 removing or reordering an interior entry breaks the next entry's link;
 `corral verify --ledger <dir>` walks the whole chain and names the entry
 that fails. It reports an unsigned entry among signed ones as a note, not

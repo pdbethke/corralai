@@ -450,8 +450,20 @@ corral ledger — the hash-linked record (signed when a key is present), as a di
                                                append an entry retracting an earlier one: the retracted scan STAYS in
                                                the chain (deleting it would break the next link) and stops being the
                                                record — the view, the prior, the verdict cache and scans skip it
-  corral ledger checkpoint <dir>               PRUNE: replace every entry with one genesis naming the head it replaced
-                                               (hash, count, date); the chain restarts there and the verifier says so
+  corral ledger checkpoint [--expect-head <hash>] <dir>
+                                               PRUNE: replace every entry with one genesis naming the head it replaced
+                                               (hash, count, date); the chain restarts there and the verifier says so.
+                                               On a chain that registers signers it is signed by the ROOT
+                                               ($CORRALAI_LEDGER_ROOT_KEY) and --expect-head is REQUIRED: a root
+                                               checkpoint over a chain whose newest entries were removed would make
+                                               a revoked key permanent
+  corral ledger signer add <dir> --name <n> --pub <hex>
+  corral ledger signer revoke <dir> --keyid <id> --reason "…"
+  corral ledger signer list <dir> [--pub <root hex>]
+                                               who may sign this ledger besides the root. add/revoke are signed by the
+                                               ROOT key, read from $CORRALAI_LEDGER_ROOT_KEY and nowhere else (the
+                                               machine key is never a fallback); the entry is part of the chain, so
+                                               verify checks each signature against the key the chain registered
   corral ledger push <dir> <dsn> [--push-source] [--dry-run]
                                                append the directory's record to a warehouse you own (a DuckDB path, or
                                                md:<db>): every scan, review and adjudication entry the target does not
@@ -481,8 +493,20 @@ corral ledger — the hash-linked record (signed when a key is present), as a di
                                                append an entry retracting an earlier one: the retracted scan STAYS in
                                                the chain (deleting it would break the next link) and stops being the
                                                record — the view, the prior, the verdict cache and scans skip it
-  corral ledger checkpoint <dir>               PRUNE: replace every entry with one genesis naming the head it replaced
-                                               (hash, count, date); the chain restarts there and the verifier says so
+  corral ledger checkpoint [--expect-head <hash>] <dir>
+                                               PRUNE: replace every entry with one genesis naming the head it replaced
+                                               (hash, count, date); the chain restarts there and the verifier says so.
+                                               On a chain that registers signers it is signed by the ROOT
+                                               ($CORRALAI_LEDGER_ROOT_KEY) and --expect-head is REQUIRED: a root
+                                               checkpoint over a chain whose newest entries were removed would make
+                                               a revoked key permanent
+  corral ledger signer add <dir> --name <n> --pub <hex>
+  corral ledger signer revoke <dir> --keyid <id> --reason "…"
+  corral ledger signer list <dir> [--pub <root hex>]
+                                               who may sign this ledger besides the root. add/revoke are signed by the
+                                               ROOT key, read from $CORRALAI_LEDGER_ROOT_KEY and nowhere else (the
+                                               machine key is never a fallback); the entry is part of the chain, so
+                                               verify checks each signature against the key the chain registered
   corral ledger push <dir> <dsn> [--push-source] [--dry-run]
                                                append the directory's record to a warehouse you own (a DuckDB path, or
                                                md:<db>): every scan, review and adjudication entry the target does not
@@ -512,8 +536,20 @@ corral ledger — the hash-linked record (signed when a key is present), as a di
                                                append an entry retracting an earlier one: the retracted scan STAYS in
                                                the chain (deleting it would break the next link) and stops being the
                                                record — the view, the prior, the verdict cache and scans skip it
-  corral ledger checkpoint <dir>               PRUNE: replace every entry with one genesis naming the head it replaced
-                                               (hash, count, date); the chain restarts there and the verifier says so
+  corral ledger checkpoint [--expect-head <hash>] <dir>
+                                               PRUNE: replace every entry with one genesis naming the head it replaced
+                                               (hash, count, date); the chain restarts there and the verifier says so.
+                                               On a chain that registers signers it is signed by the ROOT
+                                               ($CORRALAI_LEDGER_ROOT_KEY) and --expect-head is REQUIRED: a root
+                                               checkpoint over a chain whose newest entries were removed would make
+                                               a revoked key permanent
+  corral ledger signer add <dir> --name <n> --pub <hex>
+  corral ledger signer revoke <dir> --keyid <id> --reason "…"
+  corral ledger signer list <dir> [--pub <root hex>]
+                                               who may sign this ledger besides the root. add/revoke are signed by the
+                                               ROOT key, read from $CORRALAI_LEDGER_ROOT_KEY and nowhere else (the
+                                               machine key is never a fallback); the entry is part of the chain, so
+                                               verify checks each signature against the key the chain registered
   corral ledger push <dir> <dsn> [--push-source] [--dry-run]
                                                append the directory's record to a warehouse you own (a DuckDB path, or
                                                md:<db>): every scan, review and adjudication entry the target does not
@@ -543,8 +579,20 @@ corral ledger — the hash-linked record (signed when a key is present), as a di
                                                append an entry retracting an earlier one: the retracted scan STAYS in
                                                the chain (deleting it would break the next link) and stops being the
                                                record — the view, the prior, the verdict cache and scans skip it
-  corral ledger checkpoint <dir>               PRUNE: replace every entry with one genesis naming the head it replaced
-                                               (hash, count, date); the chain restarts there and the verifier says so
+  corral ledger checkpoint [--expect-head <hash>] <dir>
+                                               PRUNE: replace every entry with one genesis naming the head it replaced
+                                               (hash, count, date); the chain restarts there and the verifier says so.
+                                               On a chain that registers signers it is signed by the ROOT
+                                               ($CORRALAI_LEDGER_ROOT_KEY) and --expect-head is REQUIRED: a root
+                                               checkpoint over a chain whose newest entries were removed would make
+                                               a revoked key permanent
+  corral ledger signer add <dir> --name <n> --pub <hex>
+  corral ledger signer revoke <dir> --keyid <id> --reason "…"
+  corral ledger signer list <dir> [--pub <root hex>]
+                                               who may sign this ledger besides the root. add/revoke are signed by the
+                                               ROOT key, read from $CORRALAI_LEDGER_ROOT_KEY and nowhere else (the
+                                               machine key is never a fallback); the entry is part of the chain, so
+                                               verify checks each signature against the key the chain registered
   corral ledger push <dir> <dsn> [--push-source] [--dry-run]
                                                append the directory's record to a warehouse you own (a DuckDB path, or
                                                md:<db>): every scan, review and adjudication entry the target does not
@@ -574,8 +622,63 @@ corral ledger — the hash-linked record (signed when a key is present), as a di
                                                append an entry retracting an earlier one: the retracted scan STAYS in
                                                the chain (deleting it would break the next link) and stops being the
                                                record — the view, the prior, the verdict cache and scans skip it
-  corral ledger checkpoint <dir>               PRUNE: replace every entry with one genesis naming the head it replaced
-                                               (hash, count, date); the chain restarts there and the verifier says so
+  corral ledger checkpoint [--expect-head <hash>] <dir>
+                                               PRUNE: replace every entry with one genesis naming the head it replaced
+                                               (hash, count, date); the chain restarts there and the verifier says so.
+                                               On a chain that registers signers it is signed by the ROOT
+                                               ($CORRALAI_LEDGER_ROOT_KEY) and --expect-head is REQUIRED: a root
+                                               checkpoint over a chain whose newest entries were removed would make
+                                               a revoked key permanent
+  corral ledger signer add <dir> --name <n> --pub <hex>
+  corral ledger signer revoke <dir> --keyid <id> --reason "…"
+  corral ledger signer list <dir> [--pub <root hex>]
+                                               who may sign this ledger besides the root. add/revoke are signed by the
+                                               ROOT key, read from $CORRALAI_LEDGER_ROOT_KEY and nowhere else (the
+                                               machine key is never a fallback); the entry is part of the chain, so
+                                               verify checks each signature against the key the chain registered
+  corral ledger push <dir> <dsn> [--push-source] [--dry-run]
+                                               append the directory's record to a warehouse you own (a DuckDB path, or
+                                               md:<db>): every scan, review and adjudication entry the target does not
+                                               already hold (by entry hash), retracted scans left out. Source — the
+                                               authored tests, verdict JSON, scripts and their output — travels only
+                                               with --push-source. A run's own --push already does this as it goes;
+                                               this is for a directory that ran without one, or a branch pulled later
+  corral ledger verify [--pub <hex>] [--expect-head <hash>] <dir>
+                                               walk the chain: every hash, link and signature, one line per entry.
+                                               A chain verifies against ITSELF, so removing the newest entries leaves
+                                               the rest valid — --expect-head is the anchor from outside that catches it
+
+A certify --repo run writes its entry into the repo's .corral/ledger/ by
+default (--ledger <dir> to move it, --no-ledger to skip), and reads earlier
+entries there as its prior. On a runner the Action does the same into a
+checkout of the corral/ledger branch. To carry a local entry up, or a
+runner's entry past a branch that moved: fetch, `corral ledger append`, push.
+```
+
+## `corral ledger signer` flags
+
+```
+corral ledger — the hash-linked record (signed when a key is present), as a directory of entries.
+
+  corral ledger append <entry.json.gz> <dir>   re-link an entry to <dir>'s current head (re-hash, re-sign, place)
+  corral ledger retract <dir> <hash> --reason "…"
+                                               append an entry retracting an earlier one: the retracted scan STAYS in
+                                               the chain (deleting it would break the next link) and stops being the
+                                               record — the view, the prior, the verdict cache and scans skip it
+  corral ledger checkpoint [--expect-head <hash>] <dir>
+                                               PRUNE: replace every entry with one genesis naming the head it replaced
+                                               (hash, count, date); the chain restarts there and the verifier says so.
+                                               On a chain that registers signers it is signed by the ROOT
+                                               ($CORRALAI_LEDGER_ROOT_KEY) and --expect-head is REQUIRED: a root
+                                               checkpoint over a chain whose newest entries were removed would make
+                                               a revoked key permanent
+  corral ledger signer add <dir> --name <n> --pub <hex>
+  corral ledger signer revoke <dir> --keyid <id> --reason "…"
+  corral ledger signer list <dir> [--pub <root hex>]
+                                               who may sign this ledger besides the root. add/revoke are signed by the
+                                               ROOT key, read from $CORRALAI_LEDGER_ROOT_KEY and nowhere else (the
+                                               machine key is never a fallback); the entry is part of the chain, so
+                                               verify checks each signature against the key the chain registered
   corral ledger push <dir> <dsn> [--push-source] [--dry-run]
                                                append the directory's record to a warehouse you own (a DuckDB path, or
                                                md:<db>): every scan, review and adjudication entry the target does not
@@ -605,8 +708,20 @@ corral ledger — the hash-linked record (signed when a key is present), as a di
                                                append an entry retracting an earlier one: the retracted scan STAYS in
                                                the chain (deleting it would break the next link) and stops being the
                                                record — the view, the prior, the verdict cache and scans skip it
-  corral ledger checkpoint <dir>               PRUNE: replace every entry with one genesis naming the head it replaced
-                                               (hash, count, date); the chain restarts there and the verifier says so
+  corral ledger checkpoint [--expect-head <hash>] <dir>
+                                               PRUNE: replace every entry with one genesis naming the head it replaced
+                                               (hash, count, date); the chain restarts there and the verifier says so.
+                                               On a chain that registers signers it is signed by the ROOT
+                                               ($CORRALAI_LEDGER_ROOT_KEY) and --expect-head is REQUIRED: a root
+                                               checkpoint over a chain whose newest entries were removed would make
+                                               a revoked key permanent
+  corral ledger signer add <dir> --name <n> --pub <hex>
+  corral ledger signer revoke <dir> --keyid <id> --reason "…"
+  corral ledger signer list <dir> [--pub <root hex>]
+                                               who may sign this ledger besides the root. add/revoke are signed by the
+                                               ROOT key, read from $CORRALAI_LEDGER_ROOT_KEY and nowhere else (the
+                                               machine key is never a fallback); the entry is part of the chain, so
+                                               verify checks each signature against the key the chain registered
   corral ledger push <dir> <dsn> [--push-source] [--dry-run]
                                                append the directory's record to a warehouse you own (a DuckDB path, or
                                                md:<db>): every scan, review and adjudication entry the target does not

@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -83,6 +84,20 @@ func TestServiceUnitUsesAbsolutePathsOnly(t *testing.T) {
 	}
 }
 
+func TestRenderUnitsRefusesPathsSystemdWouldMisread(t *testing.T) {
+	bin, corral, dir, tg := unitInputs(t)
+	for _, bad := range []string{" ", "\t", "%", "\"", "'", "\\", "$"} {
+		for i, field := range []string{"campaign binary", "corral binary", "campaign dir", "targets file"} {
+			in := [4]string{bin, corral, dir, tg}
+			in[i] += "x" + bad + "y"
+			_, _, err := RenderUnits(in[0], in[1], in[2], in[3], "n")
+			if err == nil || !strings.Contains(err.Error(), field) || !strings.Contains(err.Error(), fmt.Sprintf("%q", in[i])) {
+				t.Errorf("%s with %q: want an error naming the field and path, got %v", field, bad, err)
+			}
+		}
+	}
+}
+
 func installArgs(bin, corral, tg, name string) []string {
 	return []string{"-targets", tg, "install-timer", name, "--bin", bin, "--corral", corral}
 }
@@ -107,7 +122,7 @@ func firstTarget(t *testing.T, path string) string {
 	return ts[0].Name
 }
 
-func TestInstallTimerDoesNotEnable(t *testing.T) {
+func TestInstallTimerWritesUnitsAndPrintsEnableCommand(t *testing.T) {
 	bin, corral, dir, tg := unitInputs(t)
 	copyTargets(t, tg)
 	name := firstTarget(t, tg)
@@ -174,14 +189,34 @@ func TestInstallTimerRefusesBadInvocations(t *testing.T) {
 		}
 		return ""
 	}
+	nonExec := filepath.Join(t.TempDir(), "corral")
+	if err := os.WriteFile(nonExec, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	cases := map[string][]string{
-		"no --bin":          {"-targets", tg, "install-timer", name, "--corral", corral},
-		"no --corral":       {"-targets", tg, "install-timer", name, "--bin", bin},
-		"missing bin":       installArgs(bin+"-nope", corral, tg, name),
-		"unknown name":      installArgs(bin, corral, tg, "nope"),
-		"relative bin":      installArgs("campaign", corral, tg, name),
-		"no name":           {"-targets", tg, "install-timer"},
-		"relative -targets": installArgs(bin, corral, "targets.json", name),
+		"no --bin":              {"-targets", tg, "install-timer", name, "--corral", corral},
+		"no --corral":           {"-targets", tg, "install-timer", name, "--bin", bin},
+		"missing bin":           installArgs(bin+"-nope", corral, tg, name),
+		"unknown name":          installArgs(bin, corral, tg, "nope"),
+		"relative bin":          installArgs("campaign", corral, tg, name),
+		"bin is a directory":    installArgs(filepath.Dir(bin), corral, tg, name),
+		"corral not executable": installArgs(bin, nonExec, tg, name),
+		"no name":               {"-targets", tg, "install-timer"},
+		"relative -targets":     installArgs(bin, corral, "targets.json", name),
+	}
+	for label, e := range map[string][2]string{
+		"relative XDG_CONFIG_HOME":     {"XDG_CONFIG_HOME", "rel/cfg"},
+		"relative CORRAL_CAMPAIGN_DIR": {"CORRAL_CAMPAIGN_DIR", "rel/dir"},
+	} {
+		env := func(k string) string {
+			if k == e[0] {
+				return e[1]
+			}
+			return env(k)
+		}
+		if code := cli(context.Background(), installArgs(bin, corral, tg, name), env, &recRunner{}, &bytes.Buffer{}, &bytes.Buffer{}); code != 2 {
+			t.Errorf("%s: want exit 2, got %d", label, code)
+		}
 	}
 	for label, args := range cases {
 		if code := cli(context.Background(), args, env, &recRunner{}, &bytes.Buffer{}, &bytes.Buffer{}); code != 2 {

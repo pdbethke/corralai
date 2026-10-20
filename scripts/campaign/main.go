@@ -12,7 +12,8 @@
 //
 //	campaign -targets targets.json list
 //	campaign -targets targets.json run <name>
-//	campaign -targets /abs/targets.json install-timer <name> --bin /abs/campaign --corral /abs/corral
+//	campaign -targets /abs/targets.json install-timer <name> \
+//	    --bin /abs/campaign --corral /abs/corral
 //
 // `run` needs CORRAL_CAMPAIGN_DIR, the directory holding one folder per target
 // plus _corral-ledger/. `install-timer` only writes systemd user units and
@@ -96,12 +97,19 @@ func cli(ctx context.Context, args []string, getenv func(string) string, r Runne
 			if !filepath.IsAbs(p[1]) {
 				return usage(p[0] + " is required and must be an absolute path")
 			}
-			if _, err := os.Stat(p[1]); err != nil {
+			fi, err := os.Stat(p[1])
+			if err != nil {
 				return usage(p[0] + ": " + err.Error())
+			}
+			if p[0] != "-targets" && (!fi.Mode().IsRegular() || fi.Mode().Perm()&0o111 == 0) {
+				return usage(p[0] + ": " + p[1] + " is not an executable regular file")
 			}
 		}
 		if !filepath.IsAbs(campaignDir) {
 			return usage("CORRAL_CAMPAIGN_DIR must be an absolute path")
+		}
+		if x := getenv("XDG_CONFIG_HOME"); x != "" && !filepath.IsAbs(x) {
+			return usage("XDG_CONFIG_HOME must be an absolute path when set")
 		}
 		binPath, corralPath = *bin, *corral
 	}

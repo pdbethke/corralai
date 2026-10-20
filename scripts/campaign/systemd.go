@@ -10,12 +10,18 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
+	"unicode"
 )
 
 // unitNameRE is what a target name may be inside a unit file name and an
 // ExecStart line: a plain identifier, so no path separator, space or
 // systemd specifier ("%") can reach either.
 var unitNameRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*$`)
+
+// unitUnsafe are the non-space characters systemd treats specially in an
+// unquoted unit value: % is a specifier, $ an expansion, the rest quoting.
+const unitUnsafe = "%\"'\\$"
 
 // fixedPath is appended after the corral binary's directory so git and gh stay
 // findable; a systemd user unit's default PATH is not the operator's shell's.
@@ -27,8 +33,8 @@ const fixedPath = "/usr/local/bin:/usr/bin:/bin"
 //
 // The service has no Restart=: a failed audit waits for next week rather than
 // retrying and spending again (the run itself never retries either).
-// Persistent=true makes a missed week (machine off) run at next boot, and the
-// randomized delay keeps a fleet of installs from all starting at once.
+// Persistent=true makes a missed week (machine off) run at the next start or
+// wake; the randomized delay spreads the start time within the hour.
 func RenderUnits(binPath, corralPath, campaignDir, targetsPath, name string) (service, timer string, err error) {
 	for _, p := range [][2]string{
 		{"campaign binary", binPath}, {"corral binary", corralPath},
@@ -36,6 +42,14 @@ func RenderUnits(binPath, corralPath, campaignDir, targetsPath, name string) (se
 	} {
 		if !filepath.IsAbs(p[1]) {
 			return "", "", fmt.Errorf("%s %q must be an absolute path", p[0], p[1])
+		}
+	}
+	for _, p := range [][2]string{
+		{"campaign binary", binPath}, {"corral binary", corralPath},
+		{"campaign dir", campaignDir}, {"targets file", targetsPath},
+	} {
+		if i := strings.IndexAny(p[1], unitUnsafe); i >= 0 || strings.IndexFunc(p[1], unicode.IsSpace) >= 0 {
+			return "", "", fmt.Errorf("%s %q contains whitespace or one of %s, which systemd would split or expand in an unquoted Environment=/ExecStart= value; use a path without them", p[0], p[1], unitUnsafe)
 		}
 	}
 	if !unitNameRE.MatchString(name) {

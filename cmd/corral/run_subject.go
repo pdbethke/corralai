@@ -58,10 +58,7 @@ func localSubject(repoDir string) (repo, commit, identity string) {
 	if repoDir == "" {
 		return "", "", subjectIdentityNone
 	}
-	// get-url rather than `config --get remote.origin.url`: it applies
-	// url.<base>.insteadOf rewrites, so the name recorded is the URL git
-	// would actually contact, which is what a reader can resolve.
-	repo = gitIn(repoDir, "remote", "get-url", "origin")
+	repo = originRepoName(repoDir)
 	commit = gitIn(repoDir, "rev-parse", "HEAD")
 	if repo == "" || commit == "" {
 		return repo, commit, subjectIdentityNone
@@ -69,18 +66,71 @@ func localSubject(repoDir string) (repo, commit, identity string) {
 	return repo, commit, subjectIdentityGit
 }
 
+// originRepoName is the name a checkout's origin gives it, and the ONE place
+// that name is derived: localSubject (--local), resolveRepoName (--repo,
+// review) and repoIdentity all read it here, so the name a run is filed
+// under and whether that name counts as a git identity are decided together.
+// Before, --local kept origin's ".git" suffix and --repo stripped it, so one
+// checkout was filed as two repositories depending on the verb (final
+// whole-branch review, 2026-10-20).
+//
+// get-url rather than `config --get remote.origin.url`: it applies
+// url.<base>.insteadOf rewrites, so the name recorded is the URL git would
+// actually contact, which is what a reader can resolve. The ".git" suffix is
+// removed because it is a transport spelling, not part of the project's
+// name (https://github.com/o/r and https://github.com/o/r.git are one
+// repository). An origin of "." is the checkout pointing at itself, which
+// names nothing. "" means no name: no git, not a checkout, or no origin.
+func originRepoName(repoDir string) string {
+	repo := strings.TrimSuffix(gitIn(repoDir, "remote", "get-url", "origin"), ".git")
+	if repo == "." {
+		return ""
+	}
+	return repo
+}
+
 // repoIdentity says whether a --repo run's subject came from git: "git" when
-// origin resolves (the name resolveRepoName files the run under is then the
-// remote's URL), "none" when it does not and resolveRepoName fell back to the
-// checkout directory's BASENAME. That basename still keys the row today —
-// changing the recorded name is a separate decision — but it is not an
-// identity, and the ledger must say so rather than let a reader take a
-// directory name for a project's.
+// origin names the checkout (the name resolveRepoName files the run under is
+// then originRepoName's), "none" when it does not and resolveRepoName fell
+// back to the checkout directory's BASENAME. That basename still keys the
+// row today — changing the recorded name is a separate decision — but it is
+// not an identity, and the ledger must say so rather than let a reader take
+// a directory name for a project's.
 func repoIdentity(repoDir string) string {
-	if gitIn(repoDir, "remote", "get-url", "origin") == "" {
+	if originRepoName(repoDir) == "" {
 		return subjectIdentityNone
 	}
 	return subjectIdentityGit
+}
+
+// treeDirtyAt is the TreeDirty a run whose recorded commit is commit
+// records. TreeDirty is defined against HEAD — whether the audited tree
+// differed from HEAD — so it is only a statement about the RECORDED revision
+// when that revision is HEAD. `--commit <other sha>` on a feature-branch
+// checkout audits HEAD's tree and records another commit; treeDirty would
+// have said false (clean against HEAD), and a reader would have taken that
+// as "this commit's code, unmodified" (final whole-branch review,
+// 2026-10-20). So when the recorded commit is not HEAD — or cannot be
+// resolved to compare — the answer is nil, unknown, never a false.
+//
+// Compared as full SHAs: an abbreviated typed commit counts as HEAD only if
+// git resolves it to HEAD's own SHA. An empty commit (no revision recorded)
+// has no HEAD to be measured against and is nil too.
+func treeDirtyAt(repoDir, commit string) *bool {
+	commit = strings.TrimSpace(commit)
+	repoDir = strings.TrimSpace(repoDir)
+	// A leading "-" would be read by rev-parse as an option, not a revision.
+	if commit == "" || repoDir == "" || strings.HasPrefix(commit, "-") {
+		return nil
+	}
+	head := gitIn(repoDir, "rev-parse", "--verify", "--quiet", "HEAD^{commit}")
+	if head == "" {
+		return nil
+	}
+	if commit != head && gitIn(repoDir, "rev-parse", "--verify", "--quiet", commit+"^{commit}") != head {
+		return nil
+	}
+	return treeDirty(repoDir)
 }
 
 // treeDirty reports whether the working tree at repoDir has changes the
@@ -145,23 +195,27 @@ func gitIn(dir string, args ...string) string {
 	return strings.TrimSpace(string(out))
 }
 
-// resolveSubject is the one rule for naming a local run's subject. --repo and
-// --commit are ONE unit: both given are used as typed, neither given are both
-// derived from repoDir's git (localSubject), and exactly one is an error —
-// pairing a typed repo with another repository's HEAD signs a revision that
-// never existed. The error is a usage error, raised before any spend.
-func resolveSubject(repoFlag, commitFlag, repoDir string) (repo, commit string, err error) {
+// resolveSubject is the one rule for naming a local run's subject, and for
+// how that name was established. --repo and --commit are ONE unit: both
+// given are used as typed (identity "operator": a typed name is the
+// operator's claim, and git was not asked to back it — "git" would vouch for
+// a name nothing checked, "none" would deny a name that was given), neither
+// given are both derived from repoDir's git (localSubject, which says "git"
+// or "none"), and exactly one is an error — pairing a typed repo with another
+// repository's HEAD signs a revision that never existed. The error is a usage
+// error, raised before any spend.
+func resolveSubject(repoFlag, commitFlag, repoDir string) (repo, commit, identity string, err error) {
 	repo, commit = strings.TrimSpace(repoFlag), strings.TrimSpace(commitFlag)
 	switch {
 	case repo != "" && commit != "":
-		return repo, commit, nil
+		return repo, commit, subjectIdentityOperator, nil
 	case repo == "" && commit == "":
-		repo, commit, _ = localSubject(repoDir)
-		return repo, commit, nil
+		repo, commit, identity = localSubject(repoDir)
+		return repo, commit, identity, nil
 	}
 	missing := "--commit"
 	if repo == "" {
 		missing = "--repo"
 	}
-	return "", "", fmt.Errorf("--repo and --commit name one subject together; pass both or neither (with neither, both come from --repo-dir's git); %s is missing", missing)
+	return "", "", "", fmt.Errorf("--repo and --commit name one subject together; pass both or neither (with neither, both come from --repo-dir's git); %s is missing", missing)
 }

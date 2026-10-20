@@ -41,7 +41,7 @@ func gitFixture(t *testing.T, origin string) (dir, head string) {
 func TestLocalSubjectFromRepoDirNotCwd(t *testing.T) {
 	dir, head := gitFixture(t, "https://example.test/acme/widget.git")
 	repo, commit, id := localSubject(dir)
-	if repo != "https://example.test/acme/widget.git" || commit != head || id != "git" {
+	if repo != "https://example.test/acme/widget" || commit != head || id != "git" {
 		t.Fatalf("got (%q, %q, %q), want the fixture's origin, %s, git", repo, commit, id, head)
 	}
 }
@@ -89,14 +89,14 @@ func TestMachineLedgerDirCreatedFromOverride(t *testing.T) {
 
 func TestResolveSubjectIsAPair(t *testing.T) {
 	dir, head := gitFixture(t, "https://example.test/acme/widget.git")
-	if r, c, err := resolveSubject("X", "abc", dir); err != nil || r != "X" || c != "abc" {
-		t.Errorf("both given must be used as typed: (%q, %q, %v)", r, c, err)
+	if r, c, id, err := resolveSubject("X", "abc", dir); err != nil || r != "X" || c != "abc" || id != subjectIdentityOperator {
+		t.Errorf("both given must be used as typed, identity operator: (%q, %q, %q, %v)", r, c, id, err)
 	}
-	if r, c, err := resolveSubject("", "", dir); err != nil || r != "https://example.test/acme/widget.git" || c != head {
-		t.Errorf("neither given must derive both: (%q, %q, %v)", r, c, err)
+	if r, c, id, err := resolveSubject("", "", dir); err != nil || r != "https://example.test/acme/widget" || c != head || id != subjectIdentityGit {
+		t.Errorf("neither given must derive both, identity git: (%q, %q, %q, %v)", r, c, id, err)
 	}
 	for _, tc := range [][2]string{{"X", ""}, {"", "abc"}} {
-		if _, _, err := resolveSubject(tc[0], tc[1], dir); err == nil || !strings.Contains(err.Error(), "both or neither") {
+		if _, _, _, err := resolveSubject(tc[0], tc[1], dir); err == nil || !strings.Contains(err.Error(), "both or neither") {
 			t.Errorf("repo=%q commit=%q: want a both-or-neither refusal, got %v", tc[0], tc[1], err)
 		}
 	}
@@ -219,5 +219,60 @@ func TestRepoIdentityBasenameFallbackIsNone(t *testing.T) {
 	}
 	if got := repoIdentity(dir); got != subjectIdentityGit {
 		t.Fatalf("repoIdentity(origin) = %q, want %q", got, subjectIdentityGit)
+	}
+}
+
+// One checkout is ONE repository name, whichever verb ran: --local
+// (localSubject), --repo and review (resolveRepoName) and the identity word
+// (repoIdentity) all read originRepoName. --local used to keep the ".git"
+// suffix --repo stripped, filing one checkout as two repositories.
+func TestOneCheckoutIsOneRepoNameAcrossVerbs(t *testing.T) {
+	for _, origin := range []string{
+		"https://github.com/o/r.git", "https://github.com/o/r", "git@github.com:o/r.git",
+	} {
+		dir, _ := gitFixture(t, origin)
+		local, _, id := localSubject(dir)
+		repo := resolveRepoName(dir, "")
+		if local != repo || local == "" {
+			t.Errorf("origin %s: --local records %q, --repo records %q; want one name", origin, local, repo)
+		}
+		if strings.HasSuffix(local, ".git") {
+			t.Errorf("origin %s: recorded %q keeps the transport suffix", origin, local)
+		}
+		if id != subjectIdentityGit || repoIdentity(dir) != subjectIdentityGit {
+			t.Errorf("origin %s: identities %q / %q, want git / git", origin, id, repoIdentity(dir))
+		}
+	}
+}
+
+// TreeDirty is "differed from HEAD", so it is measured only when the
+// recorded commit IS HEAD — by full SHA, an abbreviation counting only when
+// git resolves it to HEAD. Any other commit, an unresolvable one, or none is
+// nil: unknown, never a false that reads as "this commit, unmodified".
+func TestTreeDirtyAtOnlyMeasuresHead(t *testing.T) {
+	dir := treeFixture(t)
+	first := strings.TrimSpace(gitOut(t, dir, "rev-parse", "HEAD"))
+	if err := os.WriteFile(filepath.Join(dir, "b.txt"), []byte("two\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	gitRun := gitCmd(t, dir)
+	gitRun("add", "b.txt")
+	gitRun("commit", "-q", "-m", "second", "--no-gpg-sign")
+	head := strings.TrimSpace(gitOut(t, dir, "rev-parse", "HEAD"))
+
+	wantDirty(t, treeDirtyAt(dir, head), false)
+	wantDirty(t, treeDirtyAt(dir, head[:10]), false)
+	for _, c := range []string{first, first[:10], "deadbeefdeadbeef", "", "  ", "--all", "HEAD~1"} {
+		if got := treeDirtyAt(dir, c); got != nil {
+			t.Errorf("treeDirtyAt(%q) = %v, want nil: the recorded commit is not HEAD", c, *got)
+		}
+	}
+	// A dirty tree is still reported dirty against HEAD.
+	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("changed\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	wantDirty(t, treeDirtyAt(dir, head), true)
+	if got := treeDirtyAt(t.TempDir(), head); got != nil {
+		t.Errorf("treeDirtyAt(not a repo) = %v, want nil", *got)
 	}
 }

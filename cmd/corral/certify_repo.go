@@ -1137,7 +1137,9 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// Whether the tree has changes the commit lacks, asked ONCE, before the
 	// audit starts: a run's own writes (and a --substrate workspace run's
 	// mutants, however well restored) must never be able to flip the answer.
-	auditedTreeDirty := treeDirty(*repoDir)
+	// Against the commit the run RECORDS (treeDirtyAt): a --commit that is not
+	// HEAD leaves it unknown, never "clean against some other revision".
+	auditedTreeDirty := treeDirtyAt(*repoDir, *commit)
 
 	localEndpoints, lerr := parseLocalEndpoints(localEndpointFlag)
 	if lerr != nil {
@@ -5990,11 +5992,10 @@ func resolveRepoName(repoDir, given string) string {
 	if repo != "" && repo != "." {
 		return repo
 	}
-	// #nosec G204 -- fixed argv; repoDir is the operator's own --repo path, never remote input
-	if out, gerr := exec.Command("git", "-C", repoDir, "remote", "get-url", "origin").Output(); gerr == nil {
-		repo = strings.TrimSuffix(strings.TrimSpace(string(out)), ".git")
-	}
-	if repo == "" || repo == "." {
+	// originRepoName: the one derivation --local's subject and repoIdentity
+	// share, so a checkout is filed under one name whichever verb ran.
+	repo = originRepoName(repoDir)
+	if repo == "" {
 		if abs, aerr := filepath.Abs(repoDir); aerr == nil {
 			repo = filepath.Base(abs)
 		}

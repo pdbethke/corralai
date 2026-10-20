@@ -364,3 +364,48 @@ func TestRepoMachineLedgerThatIsTheRepoLedgerIsDedupedNotSkipped(t *testing.T) {
 		t.Errorf("repo ledger holds %d entries, want exactly 1", len(r))
 	}
 }
+
+// --repo records TreeDirty only for the revision it measured it against:
+// HEAD. A --commit naming another revision of a clean checkout records nil
+// (unknown) — before, it recorded false, which reads as "that commit's code,
+// unmodified" though the tree audited was HEAD's. An abbreviation of HEAD is
+// HEAD and is measured. The name is origin's without ".git", the same string
+// --local records for this checkout.
+func TestRepoTreeDirtyIsUnknownWhenTheRecordedCommitIsNotHead(t *testing.T) {
+	root, setPath, goals := telemetryRepoFixture(t)
+	machine := withMachineLedger(t)
+	gitRun := gitCmd(t, root)
+	gitRun("remote", "add", "origin", "https://github.com/acme/widget.git")
+	first := strings.TrimSpace(gitOut(t, root, "rev-parse", "HEAD"))
+	mustWrite(t, filepath.Join(root, "notes.txt"), "a second commit\n")
+	gitRun("add", "notes.txt")
+	gitRun("commit", "-q", "-m", "second", "--no-gpg-sign")
+	head := strings.TrimSpace(gitOut(t, root, "rev-parse", "HEAD"))
+
+	for i, tc := range []struct {
+		commit string
+		want   *bool
+	}{
+		{first, nil},
+		{head[:12], boolPtr(false)},
+	} {
+		code, out, errs := runTelemetryFixture(t, root, setPath, goals, "--commit", tc.commit)
+		if code != 0 {
+			t.Fatalf("--commit %s: exit=%d\n%s%s", tc.commit, code, out, errs)
+		}
+		entries, err := auditpush.ReadLedgerDir(machine)
+		if err != nil || len(entries) != i+1 {
+			t.Fatalf("--commit %s: machine ledger holds %d entries (%v), want %d", tc.commit, len(entries), err, i+1)
+		}
+		sc := entries[i].Bundle.Scan
+		if (sc.TreeDirty == nil) != (tc.want == nil) || (tc.want != nil && *sc.TreeDirty != *tc.want) {
+			t.Errorf("--commit %s: tree_dirty = %v, want %v", tc.commit, sc.TreeDirty, tc.want)
+		}
+		if sc.Repo != "https://github.com/acme/widget" || sc.RepoIdentity != subjectIdentityGit {
+			t.Errorf("--commit %s: repo %q (%q), want https://github.com/acme/widget (git)", tc.commit, sc.Repo, sc.RepoIdentity)
+		}
+		if local, _, _ := localSubject(root); local != sc.Repo {
+			t.Errorf("--repo records %q, --local would record %q for the same checkout", sc.Repo, local)
+		}
+	}
+}

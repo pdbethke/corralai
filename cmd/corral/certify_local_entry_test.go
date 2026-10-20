@@ -24,6 +24,10 @@ import (
 
 const localEntryOrigin = "https://example.test/acme/widget.git"
 
+// localEntryRepoName is what that origin files a run under: originRepoName
+// drops the transport suffix, for --local exactly as for --repo.
+const localEntryRepoName = "https://example.test/acme/widget"
+
 // localEntryFixture is a committed one-file Go module with an origin, a
 // recorded mutant set its own test kills, and a metered fake critic seat — so
 // a real `certify --local` over it runs the jail, makes model calls nobody
@@ -116,8 +120,8 @@ func TestLocalRunWritesMachineLedgerEntry(t *testing.T) {
 	e := entries[0]
 	b := e.Bundle
 	head := strings.TrimSpace(gitOut(t, root, "rev-parse", "HEAD"))
-	if b.Scan.Repo != localEntryOrigin || b.Scan.Commit != head || b.Scan.RepoIdentity != subjectIdentityGit {
-		t.Errorf("subject = %q@%q (%q), want %q@%q (git)", b.Scan.Repo, b.Scan.Commit, b.Scan.RepoIdentity, localEntryOrigin, head)
+	if b.Scan.Repo != localEntryRepoName || b.Scan.Commit != head || b.Scan.RepoIdentity != subjectIdentityGit {
+		t.Errorf("subject = %q@%q (%q), want %q@%q (git)", b.Scan.Repo, b.Scan.Commit, b.Scan.RepoIdentity, localEntryRepoName, head)
 	}
 	if b.Scan.PushedBy != auditpush.PushedByCertify || b.Scan.Substrate != substrateJail {
 		t.Errorf("pushed_by %q substrate %q, want %q and %q", b.Scan.PushedBy, b.Scan.Substrate, auditpush.PushedByCertify, substrateJail)
@@ -291,7 +295,14 @@ func TestLocalEntryFieldsSurvive(t *testing.T) {
 	in := localAuditInput{repoDir: dir, codePath: "a.go", writerModel: "w", mutantModel: "m", criticModel: "off"}
 	started := time.Now().Add(-time.Minute)
 
-	b, err := localEntryBundle(in, v, tel, started, localRunFacts{})
+	// The subject as runCertifyLocalAs decides it, once, before the run: for
+	// a directory that is not a repository, nothing, and identity "none".
+	repo, commit, identity, err := resolveSubject("", "", dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v.Repo, v.Commit = repo, commit
+	b, err := localEntryBundle(in, v, tel, started, localRunFacts{repoIdentity: identity})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -354,16 +365,88 @@ func TestLedgerInsideCheckout(t *testing.T) {
 	}
 }
 
-// A subject the operator typed is recorded as the operator's, not git's and
-// not unknown.
-func TestLocalEntryTypedSubjectIsOperator(t *testing.T) {
-	in := localAuditInput{repoDir: t.TempDir(), codePath: "a.go", repo: "acme/widget", commit: "abc123", writerModel: "w", mutantModel: "m", criticModel: "off"}
-	b, err := localEntryBundle(in, richAuditedVerdict(), advpool.RunTelemetry{}, time.Now(), localRunFacts{})
+// The entry names the subject the verdict SIGNED, decided once before the
+// run, never a second look at git afterwards. An operator who commits during
+// a long audit moves HEAD; the entry used to re-ask git and put the new HEAD
+// on its header and telemetry rows around a verdict, build record and
+// scorecard rows signed for the old one (final whole-branch review,
+// 2026-10-20). The seam: HEAD moves between resolution and entry building.
+func TestLocalEntryNamesTheSignedCommitNotALaterHead(t *testing.T) {
+	dir, signed := gitFixture(t, localEntryOrigin)
+	repo, commit, identity, err := resolveSubject("", "", dir)
+	if err != nil || commit != signed {
+		t.Fatalf("resolveSubject = %q@%q (%v), want the fixture's HEAD %s", repo, commit, err, signed)
+	}
+	v := richAuditedVerdict()
+	v.Repo, v.Commit = repo, commit
+
+	// The operator commits while the audit runs.
+	mustWrite(t, filepath.Join(dir, "g"), "later\n")
+	gitRun := gitCmd(t, dir)
+	gitRun("add", "g")
+	gitRun("commit", "-q", "-m", "during the run", "--no-gpg-sign")
+	if moved := strings.TrimSpace(gitOut(t, dir, "rev-parse", "HEAD")); moved == signed {
+		t.Fatal("the fixture's HEAD did not move")
+	}
+
+	in := localAuditInput{repoDir: dir, codePath: "f", writerModel: "w", mutantModel: "m", criticModel: "off"}
+	tel := advpool.RunTelemetry{Seats: []advpool.BugCatchObservation{{Role: advpool.RoleMutantGenerator, Model: "m"}}}
+	b, err := localEntryBundle(in, v, tel, time.Now(), localRunFacts{repoIdentity: identity})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if b.Scan.Repo != "acme/widget" || b.Scan.Commit != "abc123" || b.Scan.RepoIdentity != subjectIdentityOperator {
-		t.Errorf("subject %q@%q identity %q, want acme/widget@abc123 operator", b.Scan.Repo, b.Scan.Commit, b.Scan.RepoIdentity)
+	if b.Scan.Repo != localEntryRepoName || b.Scan.Commit != signed || b.Scan.RepoIdentity != subjectIdentityGit {
+		t.Errorf("entry header = %q@%q (%q), want the signed %q@%q (git)", b.Scan.Repo, b.Scan.Commit, b.Scan.RepoIdentity, localEntryRepoName, signed)
+	}
+	if len(b.Seats) != 1 || b.Seats[0].Commit != signed || b.Seats[0].Repo != localEntryRepoName {
+		t.Errorf("seat rows = %+v, want one naming the signed commit %s", b.Seats, signed)
+	}
+	for _, f := range b.Files {
+		if f.Commit != signed {
+			t.Errorf("file row names %q, want the signed commit %s", f.Commit, signed)
+		}
+	}
+}
+
+// A subject the operator typed is recorded as the operator's (not git's,
+// not unknown), under exactly the typed commit — and because that commit is
+// not the checkout's HEAD, the tree is UNKNOWN: TreeDirty is "differed from
+// HEAD", so it says nothing about another revision, and a clean checkout
+// must not be recorded as this commit's clean tree. A typed abbreviation
+// that resolves to HEAD is HEAD, and is measured.
+func TestLocalTypedSubjectIsOperatorAndTreeDirtyOnlyAgainstHead(t *testing.T) {
+	root, setPath, _ := localEntryFixture(t)
+	ml := withMachineLedger(t)
+	first := strings.TrimSpace(gitOut(t, root, "rev-parse", "HEAD"))
+	mustWrite(t, filepath.Join(root, "notes.txt"), "a second commit\n")
+	gitRun := gitCmd(t, root)
+	gitRun("add", "notes.txt")
+	gitRun("commit", "-q", "-m", "second", "--no-gpg-sign")
+	head := strings.TrimSpace(gitOut(t, root, "rev-parse", "HEAD"))
+
+	code, out, errs := runLocalEntryFixture(t, root, setPath, "--repo", "acme/widget", "--commit", first)
+	localRunFinished(t, code, out, errs)
+	entries := scanEntriesIn(t, ml)
+	if len(entries) != 1 {
+		t.Fatalf("machine ledger holds %d scan entries, want 1", len(entries))
+	}
+	sc := entries[0].Bundle.Scan
+	if sc.Repo != "acme/widget" || sc.Commit != first || sc.RepoIdentity != subjectIdentityOperator {
+		t.Errorf("subject %q@%q identity %q, want acme/widget@%s operator", sc.Repo, sc.Commit, sc.RepoIdentity, first)
+	}
+	if sc.TreeDirty != nil {
+		t.Errorf("tree_dirty = %v for a recorded commit that is not HEAD, want nil (unknown)", *sc.TreeDirty)
+	}
+
+	code, out, errs = runLocalEntryFixture(t, root, setPath, "--repo", "acme/widget", "--commit", head[:12])
+	localRunFinished(t, code, out, errs)
+	entries = scanEntriesIn(t, ml)
+	if len(entries) != 2 {
+		t.Fatalf("machine ledger holds %d scan entries, want 2", len(entries))
+	}
+	sc = entries[1].Bundle.Scan
+	if sc.TreeDirty == nil || *sc.TreeDirty {
+		t.Errorf("tree_dirty = %v for an abbreviation of HEAD on a clean checkout, want a measured false", sc.TreeDirty)
 	}
 }
 

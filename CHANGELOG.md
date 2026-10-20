@@ -51,7 +51,10 @@ history of any release, `git log v0.3.4..v0.3.5`.
     commit from its HEAD, so a run was filed under whatever repository the
     shell sat in. Now both come from `--repo-dir`'s git, and the repo is
     `git remote get-url origin`, which applies `url.<base>.insteadOf` rewrites:
-    the name can differ from the raw configured URL.
+    the name can differ from the raw configured URL. A trailing `.git` is
+    dropped, the rule `certify --repo` already used, so one checkout is filed
+    under one name by both verbs (`https://github.com/o/r`, not
+    `https://github.com/o/r.git`).
   - **A `--local` run with no `--repo-dir` used to record the working
     directory's origin and HEAD and now records `""` (identity `none`)**, since
     there is no repository to ask about.
@@ -78,14 +81,22 @@ history of any release, `git log v0.3.4..v0.3.5`.
   (empty repo and commit, identity `none`), even when the demo directory is inside a git
   checkout.
 - **Ledger entries carry what the run did, and `review` keeps a copy too.**
-  A scan entry now records whether the audited tree was dirty (`TreeDirty`,
-  unknown when git could not say, never `false` by default), how the
-  repository was identified (`git`, `operator` or `none`), and, per audited
-  file, the seats that ran, the generation attempts and the critic's findings.
-  An `--attest` statement signs those three row sets as `telemetrySha256`;
-  the digest covers only them, and the critic's evidence text is not in it.
-  Entries stay `corral-ledger-5` and a bundle without the new fields hashes
-  as before. `certify --repo` and `corral review` write their entry where they
+  A scan entry now records whether the audited tree differed from HEAD
+  (`TreeDirty`: unknown when git could not say or when the recorded commit
+  is not HEAD, never `false` by default), how the repository was identified
+  (`git`, `operator` or `none`), and, per audited file, three row sets: the
+  seats that ran with their scorecard counts, the critic's findings, and,
+  only when a challenger writer ran (`--shadow-writer-model`), each writer
+  seat's killed-or-survived outcome per surviving mutant. An entry is signed
+  as a whole when a certify key is configured, rows included. On
+  `certify --repo` an `--attest` statement also signs the three row sets as
+  `telemetrySha256`; that digest covers only them, and the critic's evidence
+  text is not in it. A `--local` entry has no statement, so its rows are
+  covered by the entry's signature alone. Entries stay `corral-ledger-5` and
+  a bundle without the new fields hashes as before. Two runs appending to one
+  ledger directory at once (two certify runs sharing the machine ledger) now
+  take turns under a lock instead of both linking to the same head, which
+  had broken the chain for good. `certify --repo` and `corral review` write their entry where they
   did and also append a copy to the machine ledger, fail-open and never inside
   the audited checkout (skipped with the reason printed if it resolves there);
   `--no-ledger` skips it, a `--ledger` that already is the machine ledger is

@@ -11,6 +11,12 @@ import (
 	"strings"
 )
 
+// demoRunLocal is how the demo reaches the real certify --local: always
+// unattributed (true). It is a variable so a test can pin that routing; a demo
+// that went back through runCertifyLocal would file its measurements under
+// whatever repository its directory happens to sit in.
+var demoRunLocal = runCertifyLocalAs
+
 // `corral demo` is the two-minute first run.
 //
 // It exists because the honest first-run experience was not two minutes. Every
@@ -33,12 +39,6 @@ import (
 //
 // It still has no default models. The demo is not an exception to the rule that
 // corral never picks a vendor for you; it just makes everything else free.
-// demoRunLocal is how the demo reaches the real certify --local: always
-// unattributed (true). It is a variable so a test can pin that routing; a demo
-// that went back through runCertifyLocal would file its measurements under
-// whatever repository its directory happens to sit in.
-var demoRunLocal = runCertifyLocalAs
-
 func runDemo(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("demo", flag.ContinueOnError)
 	fs.SetOutput(stderr)

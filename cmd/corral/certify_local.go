@@ -230,7 +230,7 @@ func runCertifyLocalAs(args []string, unattributed bool, stdout, stderr io.Write
 	// HEAD (or the reverse) would sign "X@<a commit of some other repository>",
 	// a statement about a revision that never existed. Refused before any jail,
 	// store or spend, like the other flag refusals above.
-	if _, _, err := resolveSubject(*repoFlag, *commitFlag, *repoDirFlag); err != nil {
+	if _, _, _, err := resolveSubject(*repoFlag, *commitFlag, *repoDirFlag); err != nil {
 		fmt.Fprintf(stderr, "corral certify --local: %v\n", err)
 		return 2
 	}
@@ -427,14 +427,26 @@ func runCertifyLocalAs(args []string, unattributed bool, stdout, stderr io.Write
 	auditCtx, stopSignals := auditContext(stderr)
 	defer stopSignals()
 
-	// Whether the checkout has changes its commit lacks, asked ONCE, before
-	// the audit starts (treeDirty's rule).
+	// The run's subject, how it was established, and whether the checkout
+	// has changes its commit lacks — all decided ONCE, here, before the audit
+	// starts, and handed to everything downstream. The signed verdict, the
+	// build record, the scorecard rows and the ledger entry therefore name
+	// one revision: the entry used to re-ask git for HEAD after the run, so
+	// an operator who committed during a long audit got an entry naming the
+	// new HEAD around a verdict signed for the old one (final whole-branch
+	// review, 2026-10-20). resolveSubject already refused a half-typed pair
+	// above, so its error cannot occur here.
+	//
 	// An unattributed run (corral demo) is not a project's record and asks git
-	// nothing, so it records an unknown tree (nil), never a dirty bit about a
-	// repository it did not audit.
+	// nothing: subject "", identity "none", and an unknown tree (nil), never a
+	// dirty bit about a repository it did not audit.
+	subjectRepo, subjectCommit, subjectIdentity := "", "", subjectIdentityNone
 	var auditedTreeDirty *bool
 	if !unattributed {
-		auditedTreeDirty = treeDirty(*repoDirFlag)
+		subjectRepo, subjectCommit, subjectIdentity, _ = resolveSubject(*repoFlag, *commitFlag, *repoDirFlag)
+		// Against the commit the run RECORDS (treeDirtyAt): a typed --commit
+		// that is not HEAD leaves the tree unknown.
+		auditedTreeDirty = treeDirtyAt(*repoDirFlag, subjectCommit)
 	}
 	// What the finished run measured about its seats, for the ledger entry.
 	var measured advpool.RunTelemetry
@@ -462,7 +474,7 @@ func runCertifyLocalAs(args []string, unattributed bool, stdout, stderr io.Write
 		tokenBudget:    agentbackend.NewTokenBudget(*maxTokensFlag),
 		bindDirs:       bindDirFlag, noBindDeps: *noBindDepsFlag,
 
-		repo: strings.TrimSpace(*repoFlag), commit: strings.TrimSpace(*commitFlag),
+		repo: subjectRepo, commit: subjectCommit, subjectResolved: true,
 
 		presetMutants: presetMutants, mutantSink: mutantSink,
 		prior: loadedPrior,
@@ -496,7 +508,8 @@ func runCertifyLocalAs(args []string, unattributed bool, stdout, stderr io.Write
 	// machine ledger by default, never into the checkout; fail-open — see
 	// writeLocalLedgerEntries.
 	if b, berr := localEntryBundle(in, verdict, measured, startedAt, localRunFacts{
-		treeDirty: auditedTreeDirty, mutantsFrom: mutantsFromSHA, recorder: rc,
+		treeDirty: auditedTreeDirty, repoIdentity: subjectIdentity,
+		mutantsFrom: mutantsFromSHA, recorder: rc,
 	}); berr != nil {
 		fmt.Fprintf(stderr, "corral certify --local: no ledger entry written: %v\n", berr)
 	} else {
@@ -727,7 +740,11 @@ type localAuditInput struct {
 	// every file's verdict must name that same subject, not one each audit
 	// re-derived. An empty commit is then a recorded fact (the tree has no
 	// HEAD), not a half-typed --repo/--commit pair for resolveSubject to
-	// refuse. False is `certify --local`'s position: the flags as typed.
+	// refuse. `certify --local` takes the same position for its one file: it
+	// resolves the subject before the audit starts (runCertifyLocalAs) and
+	// hands it down, so the verdict and the ledger entry built after it name
+	// one revision. False — repo and commit are the flags as typed, resolved
+	// here — remains for callers that never write an entry (doctor).
 	subjectResolved bool
 	// unattributed says this run is not a project's record: its subject is
 	// "" and its identity "none", and git is never asked (corral demo). It
@@ -1789,8 +1806,9 @@ func newAuditRunSpec(in localAuditInput, roles auditRoles, subj runSubject) advp
 }
 
 // auditRunSubject is the subject a run's verdict names: the caller's own
-// when it already resolved one (localAuditInput.subjectResolved, the repo
-// scan), else resolveSubject's rule over the flags as typed.
+// when it already resolved one (localAuditInput.subjectResolved: the repo
+// scan, and certify --local), else resolveSubject's rule over the flags as
+// typed.
 func auditRunSubject(in localAuditInput) (repo, commit string, err error) {
 	if in.unattributed {
 		return "", "", nil
@@ -1798,7 +1816,8 @@ func auditRunSubject(in localAuditInput) (repo, commit string, err error) {
 	if in.subjectResolved {
 		return strings.TrimSpace(in.repo), strings.TrimSpace(in.commit), nil
 	}
-	return resolveSubject(in.repo, in.commit, in.repoDir)
+	repo, commit, _, err = resolveSubject(in.repo, in.commit, in.repoDir)
+	return repo, commit, err
 }
 
 // auditOneFile runs ONE file's complete adversarial-pool audit in-process and
@@ -1941,9 +1960,10 @@ func auditOneFile(ctx context.Context, in localAuditInput) (advpool.Verdict, err
 	// wins; otherwise git is asked about --repo-dir (see localSubject), NOT the
 	// process cwd. What git cannot answer stays "" — the old "local" literal
 	// was an invented identity that the store rows and the signed subject then
-	// carried as if it were a repository. (localSubject also returns an
-	// identity word, "git" or "none"; the ledger entry that a later step
-	// writes will record it.)
+	// carried as if it were a repository. Both callers that write a ledger
+	// entry (certify --local and the repo scan) resolve the subject before
+	// calling here (subjectResolved), and the identity word with it, so this
+	// only hands their decision on.
 	repo, commit, serr := auditRunSubject(in)
 	if serr != nil {
 		return advpool.Verdict{}, auditUsageErr("%v", serr)

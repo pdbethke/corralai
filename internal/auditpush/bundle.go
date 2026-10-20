@@ -200,10 +200,15 @@ type ScanRow struct {
 	// Empty on rows written before it was recorded, or when the checkout
 	// could not say.
 	Identity Identity
-	// TreeDirty is whether the audited working tree had uncommitted or
-	// untracked changes when the run began. A pointer on purpose: nil is
-	// "git could not say" (and every row written before this field), which
-	// is not the same claim as false.
+	// TreeDirty is whether the audited tree differed from HEAD — uncommitted
+	// or untracked changes when the run began; nil when unknown or when the
+	// recorded commit is not HEAD. It is defined against HEAD because that is
+	// what git can measure, so it says something about Commit only when
+	// Commit IS HEAD (cmd/corral treeDirtyAt compares full SHAs): a run that
+	// records another revision would otherwise carry a "clean" that described
+	// a different tree. A pointer on purpose: nil — "git could not say", "not
+	// the recorded revision", and every row written before this field — is
+	// not the same claim as false.
 	TreeDirty *bool `json:",omitempty"`
 	// RepoIdentity is how Repo was established: "git" (derived from the
 	// checkout's origin), "operator" (typed by the operator — certify
@@ -931,25 +936,10 @@ func migrateTable(db *sql.DB, table string, cols []struct{ name, ddl string }) e
 	// as 'warehouse', but EnsureSchema's contract is any open handle, and a
 	// plain DuckDB database has its own name — the hardcoded name probed
 	// nothing and every ALTER then failed (review e00b52bab444#R2).
-	rows, err := db.Query(`SELECT column_name FROM duckdb_columns()
-	    WHERE database_name = current_database() AND table_name = ?`, table)
+	existing, err := existingColumns(db, table)
 	if err != nil {
-		return fmt.Errorf("auditpush: probe existing %s columns: %w", table, err)
+		return err
 	}
-	existing := map[string]bool{}
-	for rows.Next() {
-		var name string
-		if err := rows.Scan(&name); err != nil {
-			rows.Close()
-			return fmt.Errorf("auditpush: scan existing %s column: %w", table, err)
-		}
-		existing[name] = true
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return fmt.Errorf("auditpush: probe existing %s columns: %w", table, err)
-	}
-	rows.Close()
 	// No columns at all is no table: nothing to migrate — the schema DDL
 	// creates it whole. (Before the probe named the current catalog, this
 	// was also what a MIS-probed table looked like, and every ALTER then
@@ -967,6 +957,31 @@ func migrateTable(db *sql.DB, table string, cols []struct{ name, ddl string }) e
 		}
 	}
 	return nil
+}
+
+// existingColumns is the column set table has in the CURRENT catalog —
+// the probe migrateTable runs before it ALTERs, and readScanRow before it
+// selects. Empty means no table. See migrateTable for why duckdb_columns()
+// and current_database(), not information_schema.
+func existingColumns(db *sql.DB, table string) (map[string]bool, error) {
+	rows, err := db.Query(`SELECT column_name FROM duckdb_columns()
+	    WHERE database_name = current_database() AND table_name = ?`, table)
+	if err != nil {
+		return nil, fmt.Errorf("auditpush: probe existing %s columns: %w", table, err)
+	}
+	defer rows.Close()
+	existing := map[string]bool{}
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, fmt.Errorf("auditpush: scan existing %s column: %w", table, err)
+		}
+		existing[name] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("auditpush: probe existing %s columns: %w", table, err)
+	}
+	return existing, nil
 }
 
 // lockRetryWindow is how long a push keeps trying when another writer holds

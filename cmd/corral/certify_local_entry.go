@@ -42,9 +42,17 @@ import (
 // localRunFacts are what a --local entry records that the verdict does not
 // carry and that must be measured OUTSIDE auditOneFile.
 type localRunFacts struct {
-	// treeDirty is asked of git ONCE, before the audit starts (treeDirty's
-	// own rule): nil when git could not say, never a guessed false.
+	// treeDirty is asked of git ONCE, before the audit starts (treeDirtyAt's
+	// rule): nil when git could not say, or when the recorded commit is not
+	// HEAD — never a guessed false.
 	treeDirty *bool
+	// repoIdentity is how the subject's repo name was established, decided
+	// with the subject itself (resolveSubject) before the audit starts:
+	// "git" when derived from --repo-dir's git, "operator" when typed as
+	// --repo/--commit, "none" when it could not be derived or the run is
+	// unattributed. Carried here rather than re-derived at the end, so it
+	// describes the subject the verdict signed, not a later look at git.
+	repoIdentity string
 	// mutantsFrom is the sha256 of the --mutants document the run replayed,
 	// "" when it generated its own exam — the same column a repo scan fills.
 	mutantsFrom string
@@ -83,35 +91,20 @@ func localFileResult(in localAuditInput, v advpool.Verdict, t advpool.RunTelemet
 	return res
 }
 
-// localRepoIdentity is how the entry's repo name was established: what
-// localSubject says when the subject was derived from --repo-dir's git, and
-// "operator" when the operator typed --repo/--commit. A typed name is the
-// operator's claim, and git was not asked to back it; recording "git" for it
-// would vouch for a name nothing checked, and "none" would deny a name that
-// was given.
-func localRepoIdentity(in localAuditInput) string {
-	if in.unattributed {
-		return subjectIdentityNone
-	}
-	if strings.TrimSpace(in.repo) != "" || strings.TrimSpace(in.commit) != "" {
-		return subjectIdentityOperator
-	}
-	_, _, identity := localSubject(in.repoDir)
-	return identity
-}
-
 // localEntryBundle is the complete ledger entry for one finished --local run:
 // the scan header, the one file row, its mutant rows (with their hunks when
 // the run recorded them), its model calls and the three telemetry slices.
 // Built AFTER auditOneFile has set v.ModelCalls, so the calls and the
-// header's token totals are present. The subject is auditRunSubject's — the
-// same rule that named the signed verdict — so the entry and the build record
-// can never name two different revisions.
+// header's token totals are present. The subject is the VERDICT's own
+// (v.Repo, v.Commit) — the one the run resolved once before it started and
+// signed — and is never asked of git again here: a second look at HEAD after
+// a long run names whatever the operator committed meanwhile, which put a new
+// revision on the entry's header and telemetry rows around a verdict, build
+// record and scorecard rows signed for the old one (final whole-branch
+// review, 2026-10-20). The audited party (CommitIdentity) is read for that
+// same signed commit.
 func localEntryBundle(in localAuditInput, v advpool.Verdict, t advpool.RunTelemetry, started time.Time, run localRunFacts) (auditpush.Bundle, error) {
-	repo, commit, err := auditRunSubject(in)
-	if err != nil {
-		return auditpush.Bundle{}, err
-	}
+	repo, commit := v.Repo, v.Commit
 	finished := time.Now()
 	results := []reposcan.FileResult{localFileResult(in, v, t, finished)}
 	// The run's own stderr, so a row builder's disclosure (a verdict that
@@ -173,7 +166,7 @@ func localEntryBundle(in localAuditInput, v advpool.Verdict, t advpool.RunTeleme
 			ModelsByRole: string(rosterJSON), SeatTools: seatToolsJSON,
 			Passed:    boolPtr(v.Status == advpool.StatusCertified),
 			PushedBy:  auditpush.PushedByCertify,
-			TreeDirty: run.treeDirty, RepoIdentity: localRepoIdentity(in),
+			TreeDirty: run.treeDirty, RepoIdentity: run.repoIdentity,
 		})
 	if run.recorder != nil {
 		run.recorder.stampHunks(b.Mutants)

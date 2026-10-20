@@ -81,7 +81,7 @@ func runDemo(args []string, stdout, stderr io.Writer) int {
 	}
 	argv = append(argv, "--", "go", "test", "./...")
 
-	code := runCertifyLocal(argv, stdout, stderr)
+	code := runCertifyLocalUnattributed(argv, stdout, stderr)
 
 	fmt.Fprintf(stdout, "\nthe demo project is still at %s — read passwd_test.go and see what it never asserts.\n", root)
 	fmt.Fprintf(stdout, "to try this on your own code, run `corral doctor` first: it checks the environment for free,\n")

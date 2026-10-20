@@ -84,8 +84,8 @@ func TestReviewWritesMachineLedger(t *testing.T) {
 }
 
 // A machine ledger declared INSIDE the reviewed checkout is not written, not
-// even created: no verb writes into the tree it audits, whoever chose the
-// path. The skip is printed with its reason, the repo entry still lands, and
+// even created: the machine COPY is never put in the tree it audits,
+// whoever chose the path (the repo ledger is a separate write). The skip is printed with its reason, the repo entry still lands, and
 // the exit code stands.
 func TestReviewMachineLedgerInsideCheckoutIsSkipped(t *testing.T) {
 	requireReviewSandbox(t)
@@ -102,7 +102,7 @@ func TestReviewMachineLedgerInsideCheckoutIsSkipped(t *testing.T) {
 	if _, err := os.Stat(inside); !os.IsNotExist(err) {
 		t.Errorf("the machine ledger was created inside the checkout (stat err %v)", err)
 	}
-	if !strings.Contains(errs, "is inside --repo") {
+	if !strings.Contains(errs, "is inside the audited checkout (--repo ") {
 		t.Errorf("the skip was not printed with its reason:\n%s", errs)
 	}
 	if r, _ := auditpush.ReadLedgerDir(ledger); len(r) != 1 {

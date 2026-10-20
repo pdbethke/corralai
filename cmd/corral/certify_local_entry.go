@@ -90,6 +90,9 @@ func localFileResult(in localAuditInput, v advpool.Verdict, t advpool.RunTelemet
 // would vouch for a name nothing checked, and "none" would deny a name that
 // was given.
 func localRepoIdentity(in localAuditInput) string {
+	if in.unattributed {
+		return subjectIdentityNone
+	}
 	if strings.TrimSpace(in.repo) != "" || strings.TrimSpace(in.commit) != "" {
 		return subjectIdentityOperator
 	}

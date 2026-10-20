@@ -382,7 +382,7 @@ func TestLocalMachineLedgerInsideCheckoutIsSkipped(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(repo, ".corral")); err == nil {
 		t.Errorf("the machine ledger was created inside the checkout")
 	}
-	if !strings.Contains(errb.String(), "is inside --repo-dir") {
+	if !strings.Contains(errb.String(), "is inside the audited checkout (--repo-dir") {
 		t.Errorf("the skip must be said, with its reason; stderr:\n%s", errb.String())
 	}
 	if n := len(scanEntriesIn(t, other)); n != 1 {
@@ -397,5 +397,29 @@ func TestModelCallRowTotals(t *testing.T) {
 	})
 	if in != 15 || out != 10 || calls != 3 {
 		t.Errorf("totals = %d/%d over %d calls, want 15/10 over 3", in, out, calls)
+	}
+}
+
+// corral demo's run is not a project's record. Even when its --repo-dir sits
+// inside a git checkout that has an origin (so git WOULD name a repository),
+// the entry records an empty subject and identity "none".
+func TestUnattributedLocalRunRecordsNoSubjectEvenInsideAGitCheckout(t *testing.T) {
+	root, setPath, _ := localEntryFixture(t)
+	ml := withMachineLedger(t)
+	args := []string{
+		"--repo-dir", root, "--code", "pkg/a.go", "--goal", "A returns 1",
+		"--writer-model", testHerdWriter, "--mutant-model", testHerdMutant, "--critic-model", "fakec",
+		"--mutants", setPath, "--quiet", "--", "go", "test", "./...",
+	}
+	var out, errb bytes.Buffer
+	code := runCertifyLocalUnattributed(args, &out, &errb)
+	localRunFinished(t, code, out.String(), errb.String())
+	entries := scanEntriesIn(t, ml)
+	if len(entries) != 1 {
+		t.Fatalf("machine ledger holds %d scan entries, want 1", len(entries))
+	}
+	sc := entries[0].Bundle.Scan
+	if sc.Repo != "" || sc.Commit != "" || sc.RepoIdentity != subjectIdentityNone {
+		t.Errorf("subject = %q@%q (%q), want an empty subject with identity none", sc.Repo, sc.Commit, sc.RepoIdentity)
 	}
 }

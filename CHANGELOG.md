@@ -52,6 +52,9 @@ history of any release, `git log v0.3.4..v0.3.5`.
     shell sat in. Now both come from `--repo-dir`'s git, and the repo is
     `git remote get-url origin`, which applies `url.<base>.insteadOf` rewrites:
     the name can differ from the raw configured URL.
+  - **A `--local` run with no `--repo-dir` used to record the working
+    directory's origin and HEAD and now records `""` (identity `none`)**, since
+    there is no repository to ask about.
   - **`--repo` and `--commit` on `certify --local` are now both-or-neither.**
     Passing exactly one exits 2.
   - **`""` (identity `none`) replaces the invented `"local"`** as the repo and
@@ -70,8 +73,10 @@ history of any release, `git log v0.3.4..v0.3.5`.
   `--ledger <dir>` writes it there as well; it is refused inside `--repo-dir`,
   because `--local` never writes into the checkout, and a machine ledger that
   resolves inside `--repo-dir` is skipped with the reason printed. `corral
-  demo` runs `--local` and has no opt-out: its entries go to the machine ledger
-  with identity `none`, so its measurements are not kept only in DuckDB.
+  demo` runs `--local` and has no opt-out: its entries go to the machine ledger,
+  so its measurements are not kept only in DuckDB. They record no repo identity
+  (empty repo and commit, identity `none`), even when the demo directory is inside a git
+  checkout.
 - **Ledger entries carry what the run did, and `review` keeps a copy too.**
   A scan entry now records whether the audited tree was dirty (`TreeDirty`,
   unknown when git could not say, never `false` by default), how the

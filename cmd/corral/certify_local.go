@@ -87,6 +87,20 @@ const localCertifyThreshold = 0.8
 // the kill-rate is still measured by executing tests in a sandbox jail (never a
 // self-report), decorrelation is still enforced, and the verdict is still signed.
 func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
+	return runCertifyLocalAs(args, false, stdout, stderr)
+}
+
+// runCertifyLocalUnattributed is runCertifyLocal for a run that is not a
+// project's record (corral demo): the subject is empty and the identity
+// "none" WHATEVER git says about --repo-dir. A demo may be written under a
+// --dir that sits inside someone's checkout; asking git there would file the
+// demo's measurements under that project's origin and HEAD, which is a claim
+// about a repository the demo never audited.
+func runCertifyLocalUnattributed(args []string, stdout, stderr io.Writer) int {
+	return runCertifyLocalAs(args, true, stdout, stderr)
+}
+
+func runCertifyLocalAs(args []string, unattributed bool, stdout, stderr io.Writer) int {
 	// The run's start, for the ledger entry's started_at and total_millis.
 	startedAt := time.Now()
 	flagArgs, checkArgv := splitCertifyArgs(args)
@@ -424,7 +438,8 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 	var measured advpool.RunTelemetry
 
 	in := localAuditInput{
-		repoDir: strings.TrimSpace(*repoDirFlag), codePath: *codePath,
+		unattributed: unattributed,
+		repoDir:      strings.TrimSpace(*repoDirFlag), codePath: *codePath,
 		testPath: strings.TrimSpace(*testPath), goal: strings.TrimSpace(*goal),
 		lang: strings.TrimSpace(*langFlag),
 
@@ -712,6 +727,10 @@ type localAuditInput struct {
 	// HEAD), not a half-typed --repo/--commit pair for resolveSubject to
 	// refuse. False is `certify --local`'s position: the flags as typed.
 	subjectResolved bool
+	// unattributed says this run is not a project's record: its subject is
+	// "" and its identity "none", and git is never asked (corral demo). It
+	// outranks --repo/--commit only because the demo passes neither.
+	unattributed bool
 
 	// telemetry, when non-nil, becomes the driver's Telemetry callback: it
 	// receives everything the finished run measured about its seats, with or
@@ -1771,6 +1790,9 @@ func newAuditRunSpec(in localAuditInput, roles auditRoles, subj runSubject) advp
 // when it already resolved one (localAuditInput.subjectResolved, the repo
 // scan), else resolveSubject's rule over the flags as typed.
 func auditRunSubject(in localAuditInput) (repo, commit string, err error) {
+	if in.unattributed {
+		return "", "", nil
+	}
 	if in.subjectResolved {
 		return strings.TrimSpace(in.repo), strings.TrimSpace(in.commit), nil
 	}

@@ -19,7 +19,10 @@ is the full statement; this page is the tour.
 
 ## The jail
 
-By default corral never writes to your repository. `certify --local` and
+By default corral never runs a mutant against your repository. What it does
+write is its record: `certify --repo` and `corral review` write an entry to
+`<repo>/.corral/ledger` (see [The record](#the-record)), and `certify --local`
+writes nothing under the repository. `certify --local` and
 `certify --repo` copy the tree into a disposable sandbox — `bwrap` on Linux,
 `--jail container` (docker or podman) where bwrap cannot run, `sandbox-exec` on
 macOS — and every mutant is applied to that copy. There is no unsandboxed option

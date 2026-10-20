@@ -871,17 +871,17 @@ corral review — a cold model reviews a scope of the repository; corral runs it
       --reason to put it on the record. Exit 0 when it ran, 3 when it could not.
 
 flags of `corral review`:
-  -attest corral verify --attest <path> --db <ledger dir>
+  -attest string
     	write an in-toto statement (predicate https://corralai.dev/review/v1) to this path, and its DSSE envelope beside it when a certify key is configured: the REPRODUCTIONS — every finding's declared and recorded tier, the hash of its script and output, its exit, the verifier's refutation on the same terms — signed; the opinion bound by its hash and not carried. The ledger entry then names the statement. corral verify --attest <path> --db <ledger dir> recomputes the reproductions' hash from the entry
   -fail-on reproduced
     	exit 3 when a finding STANDS at this tier after the run: reproduced (its script ran and exited 0, and no reproduced refutation or adjudication overturned it). Off by default — the record is written either way; this is the merge gate's switch, for CI
-  -ledger corral state paths
+  -ledger string
     	the ledger directory the review entry is written to (default: <repo>/.corral/ledger, or $CORRAL_LEDGER). A copy of the entry also goes to this machine's own ledger (the state directory's ledger, see corral state paths; override CORRALAI_MACHINE_LEDGER); a machine ledger that resolves inside the checkout is skipped, with the reason printed
   -max-bytes int
     	how many bytes of the scope the reviewer is shown; files past the cap are listed by name and the review records them as unshown (default 200000)
   -no-ledger
     	print the review and write no entry, in either ledger
-  -push review adjudicate --push
+  -push string
     	also append the review's rows to a warehouse you own — a DuckDB path, or md:<db> — as corral_reviews and corral_findings, keyed by the entry's hash so a later review adjudicate --push joins to them. Scripts and outputs travel as hashes unless --push-source
   -push-source
     	with --push, also send the scripts and what they printed (they quote the audited code); off by default

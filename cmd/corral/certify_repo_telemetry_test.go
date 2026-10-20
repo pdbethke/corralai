@@ -253,11 +253,15 @@ func TestRepoWritesMachineLedger(t *testing.T) {
 
 	// --no-ledger: neither ledger gains an entry.
 	t.Setenv("CORRALAI_MACHINE_LEDGER", machine)
+	repoBefore, _ := auditpush.ReadLedgerDir(filepath.Join(root, ".corral", "ledger"))
 	if code, out, errs = runTelemetryFixture(t, root, setPath, goals, "--no-ledger"); code != 0 {
 		t.Fatalf("exit=%d\n%s%s", code, out, errs)
 	}
 	if m, _ := auditpush.ReadLedgerDir(machine); len(m) != 1 {
 		t.Errorf("--no-ledger wrote to the machine ledger: %d entries", len(m))
+	}
+	if r, _ := auditpush.ReadLedgerDir(filepath.Join(root, ".corral", "ledger")); len(r) != len(repoBefore) {
+		t.Errorf("--no-ledger wrote to the repo ledger: %d entries, was %d", len(r), len(repoBefore))
 	}
 }
 
@@ -276,7 +280,7 @@ func TestRepoMachineLedgerInsideCheckoutIsSkipped(t *testing.T) {
 	if _, err := os.Stat(inside); !os.IsNotExist(err) {
 		t.Errorf("the machine ledger was created inside the checkout (stat err %v)", err)
 	}
-	if !strings.Contains(errs, "is inside --repo") {
+	if !strings.Contains(errs, "is inside the audited checkout (--repo ") {
 		t.Errorf("the skip was not printed with its reason:\n%s", errs)
 	}
 	if r, _ := auditpush.ReadLedgerDir(filepath.Join(root, ".corral", "ledger")); len(r) != 1 {
@@ -338,5 +342,25 @@ func TestSamePathResolvesSymlinksAndMissingPaths(t *testing.T) {
 	missing := filepath.Join(dir, "not-yet")
 	if !samePath(missing, missing+"/./") || samePath(missing, dir) {
 		t.Error("a path that does not exist yet compares by its cleaned absolute spelling")
+	}
+}
+
+// CORRALAI_MACHINE_LEDGER pointed at the repo's own ledger: the one entry IS
+// the machine copy, so nothing is skipped as "inside the checkout" and no
+// misleading "no entry written there" is printed while the entry is there.
+func TestRepoMachineLedgerThatIsTheRepoLedgerIsDedupedNotSkipped(t *testing.T) {
+	root, setPath, goals := telemetryRepoFixture(t)
+	withMachineLedger(t)
+	repoLedger := filepath.Join(root, ".corral", "ledger")
+	t.Setenv("CORRALAI_MACHINE_LEDGER", repoLedger)
+	code, out, errs := runTelemetryFixture(t, root, setPath, goals)
+	if code != 0 {
+		t.Fatalf("exit=%d\n%s%s", code, out, errs)
+	}
+	if strings.Contains(errs, "skipped") || strings.Contains(errs, "machine ledger") {
+		t.Errorf("a machine ledger that is the repo ledger was reported as skipped or failed:\n%s", errs)
+	}
+	if r, _ := auditpush.ReadLedgerDir(repoLedger); len(r) != 1 {
+		t.Errorf("repo ledger holds %d entries, want exactly 1", len(r))
 	}
 }

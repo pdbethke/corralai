@@ -105,12 +105,14 @@ and exactly where is below.
 - `certify --local` writes its entry to the machine ledger by default, plus
   `--ledger <dir>` if given. It writes nothing under the repository.
 - `corral demo` runs `certify --local` and has no opt-out: its entries go to
-  the machine ledger, so its measurements are not left only in DuckDB; they
-  carry identity `none` and can never be published as a project's record.
+  the machine ledger, so its measurements are not left only in DuckDB. They
+  record no repo identity (empty repo and commit, identity `none`) even when
+  the demo directory sits inside a git checkout: a demo is never a project's record.
 - `--no-ledger` skips the machine copy on `--repo`/`review` (and the repo entry);
   on `--local` it skips the machine ledger and an explicit `--ledger` is still
   written.
-- No verb puts the machine copy inside the checkout it audits: a machine ledger
+- No verb puts the MACHINE COPY inside the checkout it audits (the repo ledger
+  is a separate write that does land in the repo by default): a machine ledger
   that resolves inside it is not written (not even created) and the skip is
   printed (`machineLedgerOutsideCheckout`, one helper for all three verbs).
 - A failed machine copy is printed and never changes an exit code; a signing

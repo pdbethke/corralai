@@ -5891,11 +5891,14 @@ func writeMachineLedgerCopy(b auditpush.Bundle, checkout, repoLedger string, std
 // the message): the machine ledger is held to the rule --local's --ledger is,
 // by the one helper below, so the rule cannot drift between verbs.
 func keepMachineLedgerCopy(verb, checkoutFlag, checkout, repoLedger string, stdout, stderr io.Writer, write func(dir string) (wrote bool, err error)) {
-	dir, ok := machineLedgerOutsideCheckout(verb, checkoutFlag, checkout, stderr)
-	if !ok {
+	// Dedup BEFORE the checkout rule: a machine ledger that IS the repo
+	// ledger already holds the entry (the operator chose that path for the
+	// primary write), so "no entry written there" would be false.
+	if path, perr := statedir.Path(statedir.MachineLedger); perr == nil && samePath(path, repoLedger) {
 		return
 	}
-	if samePath(dir, repoLedger) {
+	dir, ok := machineLedgerOutsideCheckout(verb, checkoutFlag, checkout, stderr)
+	if !ok {
 		return
 	}
 	wrote, err := write(dir)
@@ -5909,17 +5912,19 @@ func keepMachineLedgerCopy(verb, checkoutFlag, checkout, repoLedger string, stdo
 }
 
 // machineLedgerOutsideCheckout resolves the machine ledger for a verb that
-// audits checkout, and refuses (ok false, reason printed) when the declared
-// path (CORRALAI_MACHINE_LEDGER or CORRALAI_STATE_DIR) lies inside it: no
-// verb writes into the tree it audits, whoever chose the path. The path is
-// checked BEFORE machineLedgerDir creates it, so a refused ledger leaves no
-// trace in the checkout. An unresolvable or uncreatable ledger is printed as
-// a machine-ledger failure and also returns ok false. An empty checkout (a
-// single-file run with no repository) is never "inside".
+// audits checkout, and skips it (ok false, reason printed) when the declared
+// path (CORRALAI_MACHINE_LEDGER or CORRALAI_STATE_DIR) lies inside it. This is
+// about the machine copy only: certify --repo and review write the repo ledger
+// (<repo>/.corral/ledger) into the checkout by default, as documented, while
+// the machine copy is never put in the tree it audits, whoever chose the
+// path. The path is checked BEFORE machineLedgerDir creates it, so a skipped
+// ledger leaves no trace in the checkout. An unresolvable or uncreatable
+// ledger is printed as a machine-ledger failure and also returns ok false. An
+// empty checkout (a single-file run with no repository) is never "inside".
 func machineLedgerOutsideCheckout(verb, checkoutFlag, checkout string, stderr io.Writer) (string, bool) {
 	path, err := statedir.Path(statedir.MachineLedger)
 	if err == nil && ledgerInsideCheckout(path, checkout) {
-		fmt.Fprintf(stderr, "%s: machine ledger %s is inside %s %s — no entry written there, because %s never writes into the checkout; point CORRALAI_MACHINE_LEDGER outside it\n", verb, path, checkoutFlag, checkout, verb)
+		fmt.Fprintf(stderr, "%s: machine ledger %s is inside the audited checkout (%s %s) — skipped; the machine copy is never written into the tree it audits; point CORRALAI_MACHINE_LEDGER outside it\n", verb, path, checkoutFlag, checkout)
 		return "", false
 	}
 	dir, err := machineLedgerDir()

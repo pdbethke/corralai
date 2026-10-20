@@ -19,7 +19,10 @@ is the full statement; this page is the tour.
 
 ## The jail
 
-By default corral never writes to your repository. `certify --local` and
+By default corral never runs a mutant against your repository. What it does
+write is its record: `certify --repo` and `corral review` write an entry to
+`<repo>/.corral/ledger` (see [The record](#the-record)), and `certify --local`
+writes nothing under the repository. `certify --local` and
 `certify --repo` copy the tree into a disposable sandbox — `bwrap` on Linux,
 `--jail container` (docker or podman) where bwrap cannot run, `sandbox-exec` on
 macOS — and every mutant is applied to that copy. There is no unsandboxed option
@@ -99,8 +102,17 @@ runner.
   **signed (Ed25519)** when a certify key is configured (a CI runner has none
   unless you give it one), to a ledger directory — by default `.corral/ledger`, and in
   CI a workflow can preserve it on the orphan branch `corral/ledger`.
+  `certify --repo` and `corral review` also keep a copy of their entry in the
+  **machine ledger** under corral's state directory (`CORRALAI_MACHINE_LEDGER`
+  moves it); `certify --local` writes there by default and, unless you pass
+  `--ledger`, nowhere else. A machine ledger that resolves inside the audited
+  checkout is not written, unless it is the repo ledger itself (that directory
+  is written, as the primary entry, and no skip is printed). `--no-ledger` skips the machine copy, and a
+  `certify --repo` tree with no commit writes no entry at all.
   Without a key the entry is unsigned. `corral ledger verify --pub <key>`
-  checks retained entries against a trusted public key. Removing an interior
+  checks retained entries against the ledger's root public key (and, for an entry
+  signed by a registered signer, the key the chain registered; see
+  [Signers](#signers)). Removing an interior
   entry breaks its successor's link; removing the tail leaves the remaining
   chain valid. Detecting tail truncation requires an external record of the
   expected head. The ledger owner can delete files and recompute unsigned hashes:
@@ -111,6 +123,50 @@ runner.
 - **A record's own embedded key is never a trust anchor.** `corral certify verify`
   takes the key from you (`--pubkey`), and refuses an unanchored record unless you
   pass `--allow-unanchored`. See [Verify a record](/docs/verify-a-record/).
+
+### Signers
+
+A ledger written by more than one machine would otherwise need every machine to
+hold the one key everyone verifies against. Instead the ledger names a **root**
+key, kept offline, and the root registers the keys that actually write: a
+registration or revocation is an entry in the chain, signed by the root, so the
+set of signers is part of the record and not a file beside it. We did not
+publish a list of keys next to the ledger because a list a writer can edit
+vouches for nothing; the cost of the chain-borne design is that the root must
+sign every change, and that every entry this corral writes is format
+`corral-ledger-5`, so an older corral cannot read any ledger this one has
+appended to, signers or not.
+
+- **Register and revoke.** `corral ledger signer add <dir> --name <name> --pub <hex>`
+  and `corral ledger signer revoke <dir> --keyid <id> --reason "…"`. Both read
+  the root seed from `CORRALAI_LEDGER_ROOT_KEY` and from nowhere else: not a
+  file corral finds, and never the machine's certify key. They refuse, writing
+  nothing, when the seed is missing, when `CORRALAI_LEDGER_PUBKEY` names a
+  different root, when the root has never signed anything in the directory (a
+  mistyped path, an empty directory, an unsigned chain), or when the directory
+  does not verify under the seed's root.
+  `corral ledger signer list <dir> [--pub <hex>]` shows the active signers,
+  the entry that registered each, then the revoked ones.
+- **The verify rule.** With the root key (`--pub`), each entry's signature is
+  checked against the key the chain had registered for its `keyid` at that
+  point; an entry signed by a key not yet registered, or already revoked, is a
+  problem. A revocation holds only as far as the chain's head is anchored from
+  outside (`--expect-head`, the branch's git history): delete the trailing
+  revoke entry and the revoked key's later entries verify clean, which is the
+  tail-truncation limit described above. `corral ledger verify` prints who signed each entry as
+  `signed by <name> (<keyid>)`. A key is named by its fingerprint, `ed25519:`
+  plus 16 hex characters of the SHA-256 of the public key; the full key travels
+  in its registration and is what signatures are checked against.
+- **With no key, nothing is authorized.** A keyless read does not check
+  signatures, and it believes any signer entry that names the root, so anyone
+  who can write the directory could appear to register their own key. Only a
+  read under the root key says a registration was real.
+- **Pruning.** A checkpoint on a chain with signers carries the active set
+  forward and is signed by the root, which is what stands in for the pruned
+  registrations. `corral ledger checkpoint` therefore needs the root seed and
+  `--expect-head <hash>` from outside the directory: a root checkpoint over a
+  chain whose newest entries (a revocation, say) were deleted would make the
+  revoked key permanent.
 
 ## Honest scope
 

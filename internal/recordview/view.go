@@ -75,11 +75,15 @@ type ChainView struct {
 	// Verified is false when the verifying pass never saw this entry (it
 	// was appended while the ledger was read). The chain fields below are
 	// then unmeasured, and every page says "not verified" instead of them.
-	Verified     bool
-	ChainHashOK  bool
-	ChainLinkOK  bool
-	Signed       bool
-	SigOK        bool
+	Verified    bool
+	ChainHashOK bool
+	ChainLinkOK bool
+	Signed      bool
+	SigOK       bool
+	// Signer is who the chain says held the signing key at this entry
+	// ("root" or a registered name), resolved from the chain rather than
+	// taken from the entry's own KeyID. Only SigOK says it was checked.
+	Signer       string
 	ChainProblem string
 	Genesis      bool
 
@@ -264,7 +268,7 @@ func Build(entries []auditpush.LedgerEntry, checks []auditpush.ChainCheck, sigsC
 			Hash: e.Hash, Short: shortHash(e.Hash), File: filepath.Base(e.File),
 			Pushed: e.Pushed, Verified: c.Verified,
 			ChainHashOK: c.HashOK, ChainLinkOK: c.LinkOK, Signed: c.Signed,
-			SigOK: c.SigOK, ChainProblem: c.Problem, Genesis: c.Genesis,
+			SigOK: c.SigOK, Signer: c.Signer, ChainProblem: c.Problem, Genesis: c.Genesis,
 			Pos: i + 1, Kind: kind, KeyID: c.KeyID, Note: c.Note, KeyGiven: sigsChecked,
 		}
 		// The chain shows every entry (it IS the chain), but one that does

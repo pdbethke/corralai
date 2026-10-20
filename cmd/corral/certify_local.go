@@ -87,6 +87,18 @@ const localCertifyThreshold = 0.8
 // the kill-rate is still measured by executing tests in a sandbox jail (never a
 // self-report), decorrelation is still enforced, and the verdict is still signed.
 func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
+	return runCertifyLocalAs(args, false, stdout, stderr)
+}
+
+// runCertifyLocalAs is runCertifyLocal with the choice of subject made
+// explicit. unattributed is for a run that is not a project's record (corral
+// demo): the subject is empty, the identity "none" and the tree state unknown,
+// WHATEVER git says about --repo-dir, because git is never asked. A demo may
+// be written under a directory inside someone's checkout; asking git there
+// would file the demo's measurements under that project's origin and HEAD.
+func runCertifyLocalAs(args []string, unattributed bool, stdout, stderr io.Writer) int {
+	// The run's start, for the ledger entry's started_at and total_millis.
+	startedAt := time.Now()
 	flagArgs, checkArgv := splitCertifyArgs(args)
 
 	fs := flag.NewFlagSet("certify --local", flag.ContinueOnError)
@@ -106,9 +118,9 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 	noFailFast := fs.Bool("no-fail-fast", false, noFailFastHelp)
 	runnerFlag := fs.String("runner", "", runnerHelp)
 	poll := fs.Duration("poll", 2*time.Second, "how long to wait between drive iterations when nothing is claimable")
-	repoFlag := fs.String("repo", "", "repository (default: git remote.origin.url, else \"local\")")
-	commitFlag := fs.String("commit", "", "commit sha (default: git rev-parse HEAD, else \"local\")")
-	outFlag := fs.String("out", "", "also write the signed verdict as a self-contained record file, re-verifiable offline with `corral certify verify <file> --pubkey <hex> --allow-unanchored`")
+	repoFlag := fs.String("repo", "", "repository the signed verdict names. --repo and --commit name ONE subject and go together: pass both or neither (exactly one is refused, exit 2). With neither, both come from --repo-dir's git (origin URL and HEAD); where git cannot tell, the run is recorded as unidentified, never under an invented name")
+	commitFlag := fs.String("commit", "", "commit sha the signed verdict names; goes with --repo (both or neither, see --repo)")
+	outFlag := fs.String("out", "", "also write the signed verdict as a self-contained record file, re-verifiable offline with corral certify verify <file> --pubkey <hex> --allow-unanchored")
 	quietFlag := fs.Bool("quiet", false, "suppress the live progress echo on stderr (the verdict, --out and --record are unaffected)")
 	repoDirFlag := fs.String("repo-dir", "", "audit --code IN THE CONTEXT of this cloned repo/package: the whole tree is seeded into the jail, the file is mutated in place, and the project's OWN test command (given after `--`) grades it — so real multi-file projects with package imports work (--code/--test are repo-relative)")
 	recordStreamFlag := fs.String("record-stream", "", "stream each run event as newline-delimited JSON to this file AS IT HAPPENS — the same events --record collects into a tape at the end, so a watcher (`tail -f`, the cockpit) can follow a run in flight instead of waiting hours for it to finish. Independent of --record: either, both, or neither")
@@ -134,6 +146,8 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 	recordMutantsFlag := fs.String("record-mutants", "", "write the mutants this run actually GRADED to this file, as a replayable corral-mutants-2 document — each mutant its SEARCH/REPLACE hunk, tied to the sha256 of the source it is an edit of. Mutants are authored by a model, so an ordinary run re-draws the exam every time; pin the set and a later comparison measures the thing you changed instead of generator variance. Written even when the verdict is needs-review. A v2 document re-recorded from a --mutants replay of an older corral-mutants-1 set contains that set's WHOLE-FILE entries, not hunks — the run graded what was recorded, and re-recording it does not manufacture anchors it never had")
 	var bindDirFlag stringSlice
 	fs.Var(&bindDirFlag, "bind-dir", "extra repo-relative dependency dir to mount read-only into the jail instead of copying it into the workspace (repeatable; node_modules/vendor/.venv/venv/.bundle are auto-detected) — --repo-dir mode only")
+	ledgerFlag := fs.String("ledger", "", "ALSO write this run's ledger entry to this ledger DIRECTORY, beside the machine ledger (the state directory's ledger, see corral state paths; override CORRALAI_MACHINE_LEDGER) every --local run writes to. Refused inside --repo-dir: --local never writes into the checkout. One signed, hash-linked entry per run; corral verify --ledger <dir> walks the chain")
+	noLedgerFlag := fs.Bool("no-ledger", false, "write no entry to the machine ledger (an explicit --ledger is still written)")
 	noBindDepsFlag := fs.Bool("no-bind-deps", false, "copy dependency dirs into the jail workspace instead of bind-mounting them read-only (the pre-bind behavior; subject to the workspace size cap)")
 	if err := fs.Parse(flagArgs); err != nil {
 		return flagParseExit(err)
@@ -212,6 +226,14 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "corral certify --local: --goal is required")
 		return 2
 	}
+	// The subject is a pair. A --repo with a commit taken from --repo-dir's
+	// HEAD (or the reverse) would sign "X@<a commit of some other repository>",
+	// a statement about a revision that never existed. Refused before any jail,
+	// store or spend, like the other flag refusals above.
+	if _, _, _, err := resolveSubject(*repoFlag, *commitFlag, *repoDirFlag); err != nil {
+		fmt.Fprintf(stderr, "corral certify --local: %v\n", err)
+		return 2
+	}
 	// --bind-dir/--no-bind-deps only apply to --repo-dir mode: loadRepoFiles
 	// (the only thing that reads them) is never called for a single-file
 	// --code path. Without --repo-dir they'd be silently unread — refuse
@@ -236,6 +258,13 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 	// contradiction rather than do the opposite of one flag quietly.
 	if len(bindDirFlag) > 0 && *noBindDepsFlag {
 		fmt.Fprintln(stderr, "corral certify --local: --bind-dir and --no-bind-deps conflict (--bind-dir binds a dir read-only; --no-bind-deps copies all dep dirs — pick one)")
+		return 2
+	}
+	// Refused before any jail, store or spend, like the flag refusals above:
+	// an entry the run could only place inside the checkout is a write into
+	// the checkout, which --local never makes.
+	if l := strings.TrimSpace(*ledgerFlag); l != "" && ledgerInsideCheckout(l, strings.TrimSpace(*repoDirFlag)) {
+		fmt.Fprintf(stderr, "corral certify --local: --ledger %s is inside --repo-dir %s — --local never writes into the checkout; name a directory outside it\n", l, *repoDirFlag)
 		return 2
 	}
 
@@ -318,6 +347,7 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 		loadedPrior = lp
 	}
 	var presetMutants []adequacy.Mutant
+	var mutantsFromSHA string
 	if p := strings.TrimSpace(*mutantsFlag); p != "" {
 		set, serr := adequacy.ReadMutantSet(p)
 		if serr != nil {
@@ -340,19 +370,29 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 			return 2
 		}
 		presetMutants = ms
+		// The exam's identity on the ledger row, hashed the way a repo scan
+		// hashes its --mutants document.
+		sum, herr := fileSHA256(p)
+		if herr != nil {
+			fmt.Fprintf(stderr, "corral certify --local: hashing --mutants %s: %v\n", p, herr)
+			return 2
+		}
+		mutantsFromSHA = sum
 		fmt.Fprintf(stdout, "replaying %d recorded mutant(s) for %s from %s — no mutant-generator model call will be made\n", len(ms), setKey, p)
 	}
 
 	// --record-mutants: flushed after the run on EVERY exit path below, a
 	// needs-review verdict included. A red run's exam is the one most worth
 	// being able to reproduce.
-	var mutantSink func(string, []adequacy.Mutant)
+	// The recorder exists on EVERY run, as it does on a repo scan: its hunks
+	// are the code on the ledger entry's mutant rows (stampHunks), and
+	// --record-mutants decides only whether the set is ALSO written to a file.
+	rc := newMutantSetRecorder()
+	mutantSink := rc.sink
 	// interruptRefused: the run was stopped and refused its record, so the
 	// mutant set — partial, or empty — is not written either.
 	interruptRefused := false
 	if p := strings.TrimSpace(*recordMutantsFlag); p != "" {
-		rc := newMutantSetRecorder()
-		mutantSink = rc.sink
 		defer func() {
 			if interruptRefused {
 				fmt.Fprintln(stderr, "corral certify --local: --record-mutants not written — the run was interrupted")
@@ -387,8 +427,33 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 	auditCtx, stopSignals := auditContext(stderr)
 	defer stopSignals()
 
-	verdict, err := auditOneFile(auditCtx, localAuditInput{
-		repoDir: strings.TrimSpace(*repoDirFlag), codePath: *codePath,
+	// The run's subject, how it was established, and whether the checkout
+	// has changes its commit lacks — all decided ONCE, here, before the audit
+	// starts, and handed to everything downstream. The signed verdict, the
+	// build record, the scorecard rows and the ledger entry therefore name
+	// one revision: the entry used to re-ask git for HEAD after the run, so
+	// an operator who committed during a long audit got an entry naming the
+	// new HEAD around a verdict signed for the old one (final whole-branch
+	// review, 2026-10-20). resolveSubject already refused a half-typed pair
+	// above, so its error cannot occur here.
+	//
+	// An unattributed run (corral demo) is not a project's record and asks git
+	// nothing: subject "", identity "none", and an unknown tree (nil), never a
+	// dirty bit about a repository it did not audit.
+	subjectRepo, subjectCommit, subjectIdentity := "", "", subjectIdentityNone
+	var auditedTreeDirty *bool
+	if !unattributed {
+		subjectRepo, subjectCommit, subjectIdentity, _ = resolveSubject(*repoFlag, *commitFlag, *repoDirFlag)
+		// Against the commit the run RECORDS (treeDirtyAt): a typed --commit
+		// that is not HEAD leaves the tree unknown.
+		auditedTreeDirty = treeDirtyAt(*repoDirFlag, subjectCommit)
+	}
+	// What the finished run measured about its seats, for the ledger entry.
+	var measured advpool.RunTelemetry
+
+	in := localAuditInput{
+		unattributed: unattributed,
+		repoDir:      strings.TrimSpace(*repoDirFlag), codePath: *codePath,
 		testPath: strings.TrimSpace(*testPath), goal: strings.TrimSpace(*goal),
 		lang: strings.TrimSpace(*langFlag),
 
@@ -409,7 +474,7 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 		tokenBudget:    agentbackend.NewTokenBudget(*maxTokensFlag),
 		bindDirs:       bindDirFlag, noBindDeps: *noBindDepsFlag,
 
-		repo: strings.TrimSpace(*repoFlag), commit: strings.TrimSpace(*commitFlag),
+		repo: subjectRepo, commit: subjectCommit, subjectResolved: true,
 
 		presetMutants: presetMutants, mutantSink: mutantSink,
 		prior: loadedPrior,
@@ -417,8 +482,10 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 		matrix: *matrixFlag, record: rec, bugCatchDB: bugCatchDBPath, criticScoreDB: criticScoreDBPath,
 		mutantAttemptsDB: mutantAttemptsDBPath,
 		openStore:        openStore,
+		telemetry:        func(t advpool.RunTelemetry) { measured = t },
 		stdout:           stdout, stderr: stderr,
-	})
+	}
+	verdict, err := auditOneFile(auditCtx, in)
 	if localInterruptRefuses(err, &verdict) {
 		interruptRefused = true
 		return refuseInterrupted(stderr, "corral certify --local")
@@ -434,6 +501,19 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 			return 2
 		}
 		return 1
+	}
+
+	// The ledger entry: built here, after auditOneFile set verdict.ModelCalls,
+	// so the entry carries the calls and the header's token totals. To the
+	// machine ledger by default, never into the checkout; fail-open — see
+	// writeLocalLedgerEntries.
+	if b, berr := localEntryBundle(in, verdict, measured, startedAt, localRunFacts{
+		treeDirty: auditedTreeDirty, repoIdentity: subjectIdentity,
+		mutantsFrom: mutantsFromSHA, recorder: rc,
+	}); berr != nil {
+		fmt.Fprintf(stderr, "corral certify --local: no ledger entry written: %v\n", berr)
+	} else {
+		writeLocalLedgerEntries(b, *ledgerFlag, *noLedgerFlag, in.repoDir, stdout, stderr)
 	}
 
 	// --out writes the signed record as a self-contained file the user can
@@ -652,8 +732,31 @@ type localAuditInput struct {
 	// resolve one here, which is the `certify --local` path.
 	iso sandbox.Isolator
 
-	// The signed subject's identity. Empty falls back to git, else "local".
+	// The signed subject's identity. Empty is derived from git on --repo-dir (localSubject), else left empty.
 	repo, commit string
+	// subjectResolved says repo and commit are ALREADY the subject, decided by
+	// the caller once for every file it audits — the repo scan's position: its
+	// subject is resolveRepoName and the HEAD it read before the fan-out, and
+	// every file's verdict must name that same subject, not one each audit
+	// re-derived. An empty commit is then a recorded fact (the tree has no
+	// HEAD), not a half-typed --repo/--commit pair for resolveSubject to
+	// refuse. `certify --local` takes the same position for its one file: it
+	// resolves the subject before the audit starts (runCertifyLocalAs) and
+	// hands it down, so the verdict and the ledger entry built after it name
+	// one revision. False — repo and commit are the flags as typed, resolved
+	// here — remains for callers that never write an entry (doctor).
+	subjectResolved bool
+	// unattributed says this run is not a project's record: its subject is
+	// "" and its identity "none", and git is never asked (corral demo). It
+	// outranks --repo/--commit only because the demo passes neither.
+	unattributed bool
+
+	// telemetry, when non-nil, becomes the driver's Telemetry callback: it
+	// receives everything the finished run measured about its seats, with or
+	// without a signed record. The repo scan sets one per file that writes
+	// into that file's own result (localExecutor.Execute), so concurrent
+	// audits never share a destination. nil delivers nothing.
+	telemetry func(advpool.RunTelemetry)
 
 	// Effects, all optional. A nil openStore means the verdict is NOT signed
 	// (the repo scan's H1a position — signing is H1c); an empty bugCatchDB
@@ -1702,6 +1805,21 @@ func newAuditRunSpec(in localAuditInput, roles auditRoles, subj runSubject) advp
 	return rs
 }
 
+// auditRunSubject is the subject a run's verdict names: the caller's own
+// when it already resolved one (localAuditInput.subjectResolved: the repo
+// scan, and certify --local), else resolveSubject's rule over the flags as
+// typed.
+func auditRunSubject(in localAuditInput) (repo, commit string, err error) {
+	if in.unattributed {
+		return "", "", nil
+	}
+	if in.subjectResolved {
+		return strings.TrimSpace(in.repo), strings.TrimSpace(in.commit), nil
+	}
+	repo, commit, _, err = resolveSubject(in.repo, in.commit, in.repoDir)
+	return repo, commit, err
+}
+
 // auditOneFile runs ONE file's complete adversarial-pool audit in-process and
 // returns the converged verdict. This is the whole of what `corral certify
 // --local` does between parsing its flags and writing its --out/--record
@@ -1838,23 +1956,21 @@ func auditOneFile(ctx context.Context, in localAuditInput) (advpool.Verdict, err
 	// itself closes it: see resolveRunDeadline.
 	d.RunDeadline = resolveRunDeadline(timeout, shadow)
 
-	// Resolve repo/commit for the signed subject (best-effort git, else "local").
-	repo := strings.TrimSpace(in.repo)
-	if repo == "" {
-		if v, gerr := (realRunner{}).GitOutput("config", "--get", "remote.origin.url"); gerr == nil && v != "" {
-			repo = v
-		} else {
-			repo = "local"
-		}
+	// Resolve repo/commit for the signed subject. An explicit --repo/--commit
+	// wins; otherwise git is asked about --repo-dir (see localSubject), NOT the
+	// process cwd. What git cannot answer stays "" — the old "local" literal
+	// was an invented identity that the store rows and the signed subject then
+	// carried as if it were a repository. Both callers that write a ledger
+	// entry (certify --local and the repo scan) resolve the subject before
+	// calling here (subjectResolved), and the identity word with it, so this
+	// only hands their decision on.
+	repo, commit, serr := auditRunSubject(in)
+	if serr != nil {
+		return advpool.Verdict{}, auditUsageErr("%v", serr)
 	}
-	commit := strings.TrimSpace(in.commit)
-	if commit == "" {
-		if v, gerr := (realRunner{}).GitOutput("rev-parse", "HEAD"); gerr == nil && v != "" {
-			commit = v
-		} else {
-			commit = "local"
-		}
-	}
+	// What the finished run measured, handed to the caller's own destination
+	// (see localAuditInput.telemetry).
+	d.Telemetry = in.telemetry
 
 	// The bug-catching scorecard feed — the ONLY thing that makes the shadow
 	// head-to-head durable: BugCatch was previously wired solely in the brain,

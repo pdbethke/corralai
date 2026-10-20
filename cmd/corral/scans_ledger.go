@@ -75,6 +75,14 @@ func (l *ledgerScans) EntryKind(scanID int64) string {
 			return fmt.Sprintf("a checkpoint: %d earlier entries (through %s, head %.12s) were pruned before it", e.Checkpoint.Entries, e.Checkpoint.Through.UTC().Format("2006-01-02"), e.Checkpoint.Head)
 		}
 		return "a checkpoint"
+	case auditpush.KindSigner:
+		if c := e.Signer; c != nil {
+			if c.Action == auditpush.SignerRevoke {
+				return fmt.Sprintf("signer revoke %s: %s", c.KeyID, c.Reason)
+			}
+			return fmt.Sprintf("signer register %s (%s)", c.Name, c.KeyID)
+		}
+		return "a signer change"
 	}
 	return ""
 }

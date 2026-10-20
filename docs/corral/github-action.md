@@ -548,7 +548,9 @@ warehouse push writes (scan, files, mutants with span/shape/outcome, model
 calls, events) — that names the previous entry's hash and, when the run has
 a certify key, carries an Ed25519 signature over its own. Editing an entry
 breaks its hash until someone re-hashes and re-links the chain, which needs
-no key for unsigned entries and only the signing key for signed ones;
+no key for unsigned entries and only the signing key for signed ones (the
+ledger's root key, or a signer the root registered in the chain — `corral
+ledger signer list`);
 removing or reordering an interior entry breaks the next entry's link;
 `corral verify --ledger <dir>` walks the whole chain and names the entry
 that fails. It reports an unsigned entry among signed ones as a note, not
@@ -663,6 +665,11 @@ there as its prior. Make that directory a worktree of the `corral/ledger`
 branch — `git worktree add .corral/ledger corral/ledger` — and a local run
 and an Action run are one writer with two places to put the file: `git
 push` carries your entry up, the next run on either side links to it.
+The same run also keeps a copy of its entry in the machine ledger under
+corral's state directory (`CORRALAI_MACHINE_LEDGER` moves it; `--no-ledger`
+skips it too; a machine ledger inside the audited repo is not written), so the
+box keeps a record whether or not the repository does. A tree with no commit
+writes neither entry.
 If the branch moved under you, `git fetch` and `corral ledger append
 <your entry> .corral/ledger` re-links it to the new head before you push.
 

@@ -81,7 +81,7 @@ func TestCacheRowIsNeverRefused(t *testing.T) {
 
 func TestEveryStateRowIsGuarded(t *testing.T) {
 	for _, f := range Files() {
-		if f.Root != State {
+		if f.Root != State || f.IsDir() {
 			continue
 		}
 		home := t.TempDir()

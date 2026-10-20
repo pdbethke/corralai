@@ -254,6 +254,24 @@ type CriticFindingSink interface {
 	Record(recordID int64, recordHead string, obs []CriticFindingObservation)
 }
 
+// RunTelemetry is everything one finished run measured about its seats,
+// handed to Driver.Telemetry whether or not a build-store record exists.
+//
+// It is the SAME data the record-keyed sinks (BugCatch, MutantAttempts,
+// CriticFindings) receive — one computation, read twice — and not a parallel
+// derivation. The sinks key their rows by record id, so they stay gated on a
+// real RecordID; this carries no record id at all, which is why it can be
+// delivered on a run that signed nothing (`certify --repo`).
+//
+// An empty slice means the run measured nothing of that kind, never that it
+// measured zero: a timed-out run reports only the phases that finished (see
+// timeoutObservations).
+type RunTelemetry struct {
+	Seats          []BugCatchObservation
+	MutantAttempts []MutantAttempt
+	CriticFindings []CriticFindingObservation
+}
+
 // TestEnumerator runs a language plugin's list command in the run's jail
 // workspace and returns its stdout — the seam tickMatrix needs to turn a
 // suite file into individual selectors before scoring each one. Optional on
@@ -1442,6 +1460,15 @@ type Driver struct {
 	// primary's proof for that survivor not salvaged).
 	MutantAttempts MutantAttemptSink
 
+	// Telemetry, when set, is called once per finished run with everything the
+	// run measured, whether or not a build-store record exists (RecordID may be
+	// 0). The sinks above are gated on RecordID!=0 because their rows are keyed
+	// by it; before this existed, a run with no Signer computed its bug-catch
+	// rows not at all and its critic adjudications only to drop them. Called on
+	// BOTH terminal paths — tickAggregate and the RunDeadline timeout — and
+	// only after a verdict exists, so Tick's idempotence makes it once per run.
+	Telemetry func(RunTelemetry)
+
 	// Enumerator is the optional jail-backed test-list seam (nil = the matrix
 	// phase is always skipped, regardless of any run's RunSpec.Matrix). When
 	// set AND a run opts in, tickMatrix uses it to enumerate the dev suite's
@@ -1888,6 +1915,15 @@ func (d *Driver) Tick(ctx context.Context, missionID int64) (*Verdict, error) {
 			}
 			v.RecordID, v.RecordHead = recordID, head
 		}
+		// The second terminal path hands over what IT measured, which is
+		// less than a converged run did: timeoutObservations keeps only the
+		// seats whose phase finished, and the critic's findings are never
+		// read on this path, so there are none to hand over. No sink is fed
+		// here — none ever was on a timeout, and that is unchanged.
+		d.deliverTelemetry(RunTelemetry{
+			Seats:          timeoutObservations(run, v),
+			MutantAttempts: mutantAttemptRows(run, v),
+		})
 		d.emit(missionID, "pool_verdict", v.Commit, map[string]any{
 			"status": v.Status, "dev_kill_rate": v.DevKillRate, "mutants_total": v.MutantsTotal,
 			"survivors": v.Survivors, "proven_missed": v.ProvenMissed, "models_by_role": v.ModelsByRole,
@@ -3077,8 +3113,16 @@ func (d *Driver) tickAggregate(ctx context.Context, missionID int64, run *runSta
 	// row this sink writes would carry that same unlinkable record_id=0. Since
 	// Cell.Runs is COUNT(DISTINCT record_id), those rows would all collapse
 	// into a single "run", pinning every cell below provisionalBelow forever.
+	//
+	// Computed ONCE, here, and handed to both this sink and the Telemetry
+	// callback below — whichever of the two is wired — so the record-keyed
+	// rows and the record-free ones cannot disagree.
+	var seats []BugCatchObservation
+	if d.BugCatch != nil || d.Telemetry != nil {
+		seats = bugCatchObservations(run, v)
+	}
 	if d.BugCatch != nil && v.RecordID != 0 {
-		d.BugCatch.Record(v.RecordID, v.RecordHead, bugCatchObservations(run, v))
+		d.BugCatch.Record(v.RecordID, v.RecordHead, seats)
 	}
 
 	// Conservative auto-refute/confirm of the test-critic's findings — the full
@@ -3092,7 +3136,10 @@ func (d *Driver) tickAggregate(ctx context.Context, missionID int64, run *runSta
 	// Feed both writer seats' per-mutant outcomes, pair-or-nothing, to the
 	// DURABLE store (a DIFFERENT sink, gated on RecordID!=0 same as
 	// BugCatch/CriticFindings above — see recordMutantAttempts' own doc).
-	d.recordMutantAttempts(run, v)
+	// The rows are built once, by mutantAttemptRows, for the sink and the
+	// Telemetry callback alike.
+	attempts := mutantAttemptRows(run, v)
+	d.recordMutantAttempts(v, attempts)
 
 	// Feed the matrix sink with the SAME matrix result tickMatrix already
 	// computed — only when the matrix actually ran (run.matrix != nil) and a
@@ -3110,6 +3157,12 @@ func (d *Driver) tickAggregate(ctx context.Context, missionID int64, run *runSta
 		}
 		d.Matrix.Record(v.RecordID, v.RecordHead, obs)
 	}
+
+	// Everything above, with or without a record. Placed after every sink and
+	// immediately before the verdict is stored: an error return above (a
+	// failed signature) leaves the run unfinished and Tick will come back
+	// here, so firing any earlier could deliver one run twice.
+	d.deliverTelemetry(RunTelemetry{Seats: seats, MutantAttempts: attempts, CriticFindings: criticObs})
 
 	d.emit(missionID, "pool_verdict", v.Commit, map[string]any{
 		"status": v.Status, "dev_kill_rate": v.DevKillRate, "mutants_total": v.MutantsTotal,
@@ -3195,17 +3248,36 @@ func challengerVectors(run *runState) (killedByPrimary, killedByShadow map[strin
 	return killedByPrimary, killedByShadow, true
 }
 
-func (d *Driver) recordMutantAttempts(run *runState, v Verdict) {
+func (d *Driver) recordMutantAttempts(v Verdict, attempts []MutantAttempt) {
 	// The v.RecordID != 0 guard is the SAME one BugCatch and CriticFindings
 	// use, for the same reason (driver.go:1630): a Driver wired without a
 	// Signer leaves RecordID at zero, and rows carrying record_id=0 are
 	// unlinkable to the audit that produced them.
-	if d.MutantAttempts == nil || v.RecordID == 0 {
+	//
+	// The pair-or-nothing rule is mutantAttemptRows': it returns NIL when no
+	// comparable pair exists, and a non-nil (possibly empty) slice when one
+	// does. The nil check, not a length check, keeps this sink called exactly
+	// as often as it was before the rows were built outside it.
+	if d.MutantAttempts == nil || v.RecordID == 0 || attempts == nil {
 		return
 	}
+	d.MutantAttempts.Record(v.RecordID, v.RecordHead, attempts)
+}
+
+// mutantAttemptRows builds both writer seats' per-mutant outcome rows under
+// the pair rule recordMutantAttempts documents, or nil when no comparable pair
+// exists (a comparable pair over no measured survivor is a non-nil empty
+// slice — the distinction recordMutantAttempts relies on). The ONE construction of these rows: the record-keyed sink and the
+// Telemetry callback both read its result, so the two cannot drift.
+//
+// The primary seat's model is read off the SIGNED roster (v.ModelsByRole),
+// the same source bugCatchObservations stamps its rows from; signedSeats
+// never removes the primary writer from that roster, so this is the value
+// d.Assign carried when this was read from the assignment directly.
+func mutantAttemptRows(run *runState, v Verdict) []MutantAttempt {
 	killedByPrimary, killedByShadow, ok := challengerVectors(run)
 	if !ok {
-		return
+		return nil
 	}
 	outcome := func(killed bool) string {
 		if killed {
@@ -3225,7 +3297,7 @@ func (d *Driver) recordMutantAttempts(run *runState, v Verdict) {
 		if run.primarySeatComparable(m.ID) {
 			attempts = append(attempts, MutantAttempt{
 				Path: run.rs.CodePath, MutantID: m.ID,
-				Model: d.Assign[RoleTestWriter], Role: RoleTestWriter,
+				Model: v.ModelsByRole[RoleTestWriter], Role: RoleTestWriter,
 				Shadow: false, Outcome: outcome(killedByPrimary[m.ID]),
 			})
 		}
@@ -3237,7 +3309,18 @@ func (d *Driver) recordMutantAttempts(run *runState, v Verdict) {
 			})
 		}
 	}
-	d.MutantAttempts.Record(v.RecordID, v.RecordHead, attempts)
+	return attempts
+}
+
+// deliverTelemetry hands one finished run's measurements to Driver.Telemetry,
+// when one is wired. Both terminal paths call it — tickAggregate and the
+// RunDeadline timeout in Tick — each exactly once, right before the verdict
+// is stored; a stored verdict short-circuits every later Tick, which is what
+// makes it once per run.
+func (d *Driver) deliverTelemetry(t RunTelemetry) {
+	if d.Telemetry != nil {
+		d.Telemetry(t)
+	}
 }
 
 // challengerPair computes the primary/challenger agreement DIRECTLY from the

@@ -95,8 +95,8 @@ func TestPathPrecedence(t *testing.T) {
 
 func TestTableIsWellFormed(t *testing.T) {
 	fakeHost(t, "linux", map[string]string{"CORRALAI_STATE_DIR": "/s", "CORRALAI_CACHE_DIR": "/c"}, "/h")
-	if len(Files()) != 24 {
-		t.Fatalf("want 24 rows (spec Appendix A), got %d", len(Files()))
+	if len(Files()) != 25 {
+		t.Fatalf("want 25 rows (spec Appendix A plus the machine ledger), got %d", len(Files()))
 	}
 	seenPath, seenVar := map[string]File{}, map[string]File{}
 	for _, f := range Files() {
@@ -161,5 +161,48 @@ func TestPathCreatesNothing(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(home, ".local")); !os.IsNotExist(err) {
 		t.Fatal("Path created a directory")
+	}
+}
+
+func TestMachineLedgerDeclared(t *testing.T) {
+	found := false
+	for _, f := range Files() {
+		if f == MachineLedger {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("MachineLedger is not in the table, so `corral state paths` would not list it")
+	}
+	if !MachineLedger.IsDir() {
+		t.Error("MachineLedger is a directory and must say so")
+	}
+	fakeHost(t, "linux", map[string]string{"CORRALAI_STATE_DIR": "/s"}, "/h")
+	if got, _ := Path(MachineLedger); got != "/s/ledger" {
+		t.Errorf("default location: got %q, want /s/ledger", got)
+	}
+	fakeHost(t, "linux", map[string]string{"CORRALAI_STATE_DIR": "/s", "CORRALAI_MACHINE_LEDGER": "/elsewhere/l"}, "/h")
+	if got, _ := Path(MachineLedger); got != "/elsewhere/l" {
+		t.Errorf("CORRALAI_MACHINE_LEDGER must override: got %q", got)
+	}
+}
+
+// A directory named "ledger" in the legacy location must not be planned as a
+// move (rename of a directory would skip the lock probe and sidecar logic
+// built for files) nor treated as a legacy-only state file.
+func TestMigrateAndLegacyIgnoreTheMachineLedgerDirectory(t *testing.T) {
+	_, legacy, _ := setupMigration(t)
+	writeFile(t, filepath.Join(legacy, "ledger", "entry.json"))
+	moves, conflicts, err := PlanMigration(legacy, PlanOptions{})
+	if err != nil || len(conflicts) != 0 || len(moves) != 2 {
+		t.Fatalf("moves=%v conflicts=%v err=%v; want the 2 file rows only", moves, conflicts, err)
+	}
+	for _, m := range moves {
+		if m.File.IsDir() {
+			t.Errorf("planned a move of the directory row: %+v", m)
+		}
+	}
+	if _, err := Path(MachineLedger); err != nil {
+		t.Errorf("a legacy dir named ledger must not refuse the machine ledger: %v", err)
 	}
 }

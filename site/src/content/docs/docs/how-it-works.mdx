@@ -191,7 +191,9 @@ in your repository.
    tail truncation requires an external record of the expected head. An unsigned
    chain can be rewritten and rehashed by its owner. Signatures under a trusted
    key and external anchors provide trust beyond internal hash consistency;
-   neither establishes the truth of the audit's claims.
+   neither establishes the truth of the audit's claims. The key is the
+   ledger's root, or a signer the root registered in the chain itself; see
+   [Signers](/docs/concepts/trust-and-security/#signers).
 3. **Corral corrects by appending, not editing.** A wrong entry is retracted by a later entry
    that says so, and every reader — the view, the prior, the planner, the
    UI — then leaves it out. Old history can be cut from the front with a

@@ -24,7 +24,7 @@ func tamperedChain(t *testing.T, n int) (dir string, pub ed25519.PublicKey) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	SetLedgerSigner(Ed25519LedgerSigner{KeyID: "corral-certify", Key: priv})
+	SetLedgerSigner(Ed25519LedgerSigner{KeyID: KeyFingerprint(priv.Public().(ed25519.PublicKey)), Key: priv})
 	t.Cleanup(func() { SetLedgerSigner(nil) })
 
 	for i := 0; i < n; i++ {
@@ -73,7 +73,7 @@ func tamperedChain(t *testing.T, n int) (dir string, pub ed25519.PublicKey) {
 func TestCheckpointRefusesToPruneAChainThatDoesNotVerify(t *testing.T) {
 	dir, pub := tamperedChain(t, 3)
 
-	_, pruned, err := WriteCheckpoint(dir, ledgerSigner)
+	_, pruned, err := WriteCheckpoint(dir, ledgerSigner, nil)
 	if err == nil {
 		t.Fatalf("checkpoint pruned %d entries of a chain that does not verify — a tampered entry can be deleted and the genesis left verifying clean", pruned)
 	}
@@ -117,7 +117,7 @@ func TestKeyIDIsCoveredByTheHash(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	SetLedgerSigner(Ed25519LedgerSigner{KeyID: "corral-certify", Key: priv})
+	SetLedgerSigner(Ed25519LedgerSigner{KeyID: KeyFingerprint(priv.Public().(ed25519.PublicKey)), Key: priv})
 	t.Cleanup(func() { SetLedgerSigner(nil) })
 
 	if _, err := PushBundle(dir, Bundle{Scan: ScanRow{Repo: "r", Commit: "aaa1", Audited: 1}}); err != nil {
@@ -143,7 +143,7 @@ func TestKeyIDIsCoveredByTheHash(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	old := []byte(`"keyid": "corral-certify"`)
+	old := []byte(`"keyid": "` + KeyFingerprint(pub) + `"`)
 	if !bytes.Contains(raw, old) {
 		t.Fatalf("setup: %q not found in the entry as written", old)
 	}
@@ -208,7 +208,7 @@ func TestRetractingARetractionRestoresTheEntry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	signer := Ed25519LedgerSigner{KeyID: "corral-certify", Key: priv}
+	signer := Ed25519LedgerSigner{KeyID: KeyFingerprint(priv.Public().(ed25519.PublicKey)), Key: priv}
 	SetLedgerSigner(signer)
 	t.Cleanup(func() { SetLedgerSigner(nil) })
 
@@ -249,7 +249,7 @@ func TestRetractionDepthAlternates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	signer := Ed25519LedgerSigner{KeyID: "corral-certify", Key: priv}
+	signer := Ed25519LedgerSigner{KeyID: KeyFingerprint(priv.Public().(ed25519.PublicKey)), Key: priv}
 	SetLedgerSigner(signer)
 	t.Cleanup(func() { SetLedgerSigner(nil) })
 
@@ -287,7 +287,7 @@ func TestAdjudicationMustNameAReview(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	signer := Ed25519LedgerSigner{KeyID: "corral-certify", Key: priv}
+	signer := Ed25519LedgerSigner{KeyID: KeyFingerprint(priv.Public().(ed25519.PublicKey)), Key: priv}
 	SetLedgerSigner(signer)
 	t.Cleanup(func() { SetLedgerSigner(nil) })
 
@@ -325,7 +325,7 @@ func TestUnsignedEntryInASignedChainIsAProblem(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	SetLedgerSigner(Ed25519LedgerSigner{KeyID: "corral-certify", Key: priv})
+	SetLedgerSigner(Ed25519LedgerSigner{KeyID: KeyFingerprint(priv.Public().(ed25519.PublicKey)), Key: priv})
 	t.Cleanup(func() { SetLedgerSigner(nil) })
 
 	for _, c := range []string{"aaa1", "bbb2"} {

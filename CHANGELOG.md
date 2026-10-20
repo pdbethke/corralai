@@ -9,6 +9,101 @@ still move between minor versions.
 Entries describe what changed for someone *using* the tool. For the full commit
 history of any release, `git log v0.3.4..v0.3.5`.
 
+## [Unreleased]
+
+### Breaking
+
+- **A ledger can now say who may sign it, and every entry corral writes is
+  now `corral-ledger-5`.** `corral ledger signer add|revoke|list` registers
+  and retires signing keys inside the chain itself: a registration or
+  revocation is an entry, signed by the root key, and `verify` checks each
+  later entry's signature against the key the chain registered for it rather
+  than one key for the whole ledger. What breaks:
+  - **An older corral cannot read a ledger this corral has appended to**,
+    signers or not, because every new entry is format 5. That applies as soon
+    as any entry is appended by this version, by anyone, to any ledger.
+    corral's own `corral/ledger` receives none until a release carrying
+    format 5 is tagged and the docs are pinned to it. Older entries verify
+    unchanged here.
+  - **`keyid` is the key's fingerprint** (`ed25519:` and 16 hex characters of
+    its SHA-256) on new entries, not the name `corral-certify`; on older
+    entries `corral-certify` still means the root.
+  - **`verify` output changed for every signed entry, plain chains
+    included:** it reads `signed by root (<keyid>)` or
+    `signed by <name> (<keyid>)` where it used to print the bare key name.
+    Anything parsing that line must change.
+  - **`corral ledger checkpoint` on a chain that has signers** is a root
+    operation: it needs `CORRALAI_LEDGER_ROOT_KEY` and `--expect-head <hash>`
+    from outside the directory. A chain without signers checkpoints as before.
+
+  Also new, not breaking: root operations read the root seed from
+  `CORRALAI_LEDGER_ROOT_KEY` alone, never from a file corral finds, and never
+  fall back to the machine's certify key. `--pub` and `CORRALAI_LEDGER_PUBKEY`
+  name only the root; with neither, signatures are still not checked, and a
+  keyless read believes any signer entry that names the root, so only a read
+  under the root key authorizes anything.
+
+- **`certify --local` takes its subject from `--repo-dir`, not from where you
+  ran it, and a repository that cannot be derived is recorded as unknown.**
+  - **The recorded repo and commit change for anyone who ran `--local` from a
+    different directory than the one audited.** Before, repo came from the
+    process's working directory (`git config --get remote.origin.url`) and
+    commit from its HEAD, so a run was filed under whatever repository the
+    shell sat in. Now both come from `--repo-dir`'s git, and the repo is
+    `git remote get-url origin`, which applies `url.<base>.insteadOf` rewrites:
+    the name can differ from the raw configured URL. A trailing `.git` is
+    dropped, the rule `certify --repo` already used, so one checkout is filed
+    under one name by both verbs (`https://github.com/o/r`, not
+    `https://github.com/o/r.git`).
+  - **A `--local` run with no `--repo-dir` used to record the working
+    directory's origin and HEAD and now records `""` (identity `none`)**, since
+    there is no repository to ask about.
+  - **`--repo` and `--commit` on `certify --local` are now both-or-neither.**
+    Passing exactly one exits 2.
+  - **`""` (identity `none`) replaces the invented `"local"`** as the repo and
+    commit when git cannot tell, in store rows and in ledger entries, and
+    `certify --repo` no longer hands a tree without a HEAD the commit
+    `"local"`. A reader that matched the string `local` must match the empty
+    value. A typed `--repo` and `--commit` are recorded as identity `operator`.
+
+### Added
+
+- **`certify --local` writes a ledger entry.** One hash-linked entry per run
+  (signed when a certify key is configured) goes to the machine ledger
+  (`$STATE/ledger`; `CORRALAI_MACHINE_LEDGER` moves it), where before a
+  `--local` run left no ledger entry. Not breaking: it is fail-open (a failure
+  is printed and never changes an exit code) and `--no-ledger` opts out. A new
+  `--ledger <dir>` writes it there as well; it is refused inside `--repo-dir`,
+  because `--local` never writes into the checkout, and a machine ledger that
+  resolves inside `--repo-dir` is skipped with the reason printed. `corral
+  demo` runs `--local` and has no opt-out: its entries go to the machine ledger,
+  so its measurements are not kept only in DuckDB. They record no repo identity
+  (empty repo and commit, identity `none`), even when the demo directory is inside a git
+  checkout.
+- **Ledger entries carry what the run did, and `review` keeps a copy too.**
+  A scan entry now records whether the audited tree differed from HEAD
+  (`TreeDirty`: unknown when git could not say or when the recorded commit
+  is not HEAD, never `false` by default), how the repository was identified
+  (`git`, `operator` or `none`), and, per audited file, three row sets: the
+  seats that ran with their scorecard counts, the critic's findings, and,
+  only when a challenger writer ran (`--shadow-writer-model`), each writer
+  seat's killed-or-survived outcome per surviving mutant. An entry is signed
+  as a whole when a certify key is configured, rows included. On
+  `certify --repo` an `--attest` statement also signs the three row sets as
+  `telemetrySha256`; that digest covers only them, and the critic's evidence
+  text is not in it. A `--local` entry has no statement, so its rows are
+  covered by the entry's signature alone. Entries stay `corral-ledger-5` and
+  a bundle without the new fields hashes as before. Two runs appending to one
+  ledger directory at once (two certify runs sharing the machine ledger) now
+  take turns under a lock instead of both linking to the same head, which
+  had broken the chain for good. `certify --repo` and `corral review` write their entry where they
+  did and also append a copy to the machine ledger, fail-open and never inside
+  the audited checkout (skipped with the reason printed if it resolves there);
+  `--no-ledger` skips it, a `--ledger` that already is the machine ledger is
+  not written twice, and a `--repo` tree with no commit writes no entry. Where
+  each verb writes is stated in `AGENTS.md` ("Where corral writes") and the
+  configuration and trust-and-security pages.
+
 ## [v1.0.0-rc.25] — 2026-10-18
 
 - **JavaScript, TypeScript and Ruby critics must now judge every test.**

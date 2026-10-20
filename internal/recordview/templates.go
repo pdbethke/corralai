@@ -220,7 +220,7 @@ const entryBanner = `
   <span class="chip{{if .ChainLinkOK}} ok{{else}} bad{{end}}">link {{if .ChainLinkOK}}{{if .Genesis}}genesis{{else}}names its predecessor{{end}}{{else}}BROKEN{{end}}</span>
   {{if .Signed}}{{if not .KeyGiven}}<span class="chip warn">signed, not checked (no key given)</span>
   {{else if .SigOK}}<span class="chip ok">signature verified</span>
-  {{else}}<span class="chip bad">signature does NOT verify</span>{{end}}
+  {{else}}<span class="chip bad">signature does NOT verify</span>{{end}}{{if .Signer}} <span class="small">signed by {{.Signer}}</span>{{end}}
   {{else}}<span class="chip warn">unsigned</span>{{end}}{{end}}
   {{if .ChainProblem}}<br><span class="chip bad">{{.ChainProblem}}</span>{{end}}
   {{if .Note}}<br><span class="small">{{.Note}}</span>{{end}}</p>

@@ -51,6 +51,9 @@ func (e *LegacyError) Error() string {
 }
 
 func refuseLegacyOnly(f File, p string) error {
+	if f.IsDir() {
+		return nil // never lived in the legacy directory; nothing to be re-minted
+	}
 	if f.Root != State {
 		return nil // rebuildable; a fresh cache costs a re-measure, never history
 	}

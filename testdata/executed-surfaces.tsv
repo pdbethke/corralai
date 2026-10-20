@@ -57,12 +57,14 @@ corral certify --local --lang	executed	test:cmd/corral/models_rank_test.go
 corral certify --local --local	executed	test:cmd/corral/jail_test.go
 corral certify --local --local-endpoint	executed	test:cmd/corral/local_endpoint_test.go (parseLocalEndpoints, shared by both paths)
 corral certify --local --matrix	executed	test:cmd/corral/certify_local_test.go
+corral certify --local --ledger	executed	test:cmd/corral/certify_local_entry_test.go (TestLocalLedgerFlagWritesBoth: written beside the machine ledger, deduplicated against it, refused inside --repo-dir)
 corral certify --local --max-shards	executed	run:2026-09-02 record 89
 corral certify --local --max-tokens	executed	test:cmd/corral/local_endpoint_test.go
 corral certify --local --prior	executed	test:cmd/corral/certify_repo_evidence_candidacy_test.go
 corral certify --local --mutant-model	executed	test:cmd/corral/certify_repo_writer_mode_test.go
 corral certify --local --mutants	executed	test:cmd/corral/certify_repo_evidence_candidacy_test.go
 corral certify --local --n-mutants	executed	run:2026-09-02 record 89
+corral certify --local --no-ledger	executed	test:cmd/corral/certify_local_entry_test.go (TestLocalNoLedgerFlag)
 corral certify --local --no-bind-deps	executed	test:cmd/corral/certify_local_test.go
 corral certify --local --no-fail-fast	unexecuted	
 corral certify --local --runner	executed	test:cmd/corral/certify_runner_test.go (resolved through package.json in prepareAuditJail, carried on the RunSpec; another language refused before any jail)

@@ -19,7 +19,10 @@ is the full statement; this page is the tour.
 
 ## The jail
 
-By default corral never writes to your repository. `certify --local` and
+By default corral never runs a mutant against your repository. What it does
+write is its record: `certify --repo` and `corral review` write an entry to
+`<repo>/.corral/ledger` (see [The record](#the-record)), and `certify --local`
+writes nothing under the repository. `certify --local` and
 `certify --repo` copy the tree into a disposable sandbox — `bwrap` on Linux,
 `--jail container` (docker or podman) where bwrap cannot run, `sandbox-exec` on
 macOS — and every mutant is applied to that copy. There is no unsandboxed option
@@ -99,6 +102,13 @@ runner.
   **signed (Ed25519)** when a certify key is configured (a CI runner has none
   unless you give it one), to a ledger directory — by default `.corral/ledger`, and in
   CI a workflow can preserve it on the orphan branch `corral/ledger`.
+  `certify --repo` and `corral review` also keep a copy of their entry in the
+  **machine ledger** under corral's state directory (`CORRALAI_MACHINE_LEDGER`
+  moves it); `certify --local` writes there by default and, unless you pass
+  `--ledger`, nowhere else. A machine ledger that resolves inside the audited
+  checkout is not written, unless it is the repo ledger itself (that directory
+  is written, as the primary entry, and no skip is printed). `--no-ledger` skips the machine copy, and a
+  `certify --repo` tree with no commit writes no entry at all.
   Without a key the entry is unsigned. `corral ledger verify --pub <key>`
   checks retained entries against the ledger's root public key (and, for an entry
   signed by a registered signer, the key the chain registered; see

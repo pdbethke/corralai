@@ -4,6 +4,7 @@ package main
 
 import (
 	"bytes"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -106,5 +107,26 @@ func TestDemoProjectWritesTheThreeFiles(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(dir, f)); err != nil {
 			t.Errorf("expected %s in the demo project: %v", f, err)
 		}
+	}
+}
+
+// corral demo must reach certify --local UNATTRIBUTED: reverting it to a
+// plain runCertifyLocal would file the demo under whatever repository its
+// directory sits in.
+func TestDemoRunsCertifyLocalUnattributed(t *testing.T) {
+	orig := demoRunLocal
+	t.Cleanup(func() { demoRunLocal = orig })
+	var got []string
+	called, unattributed := false, false
+	demoRunLocal = func(args []string, u bool, _, _ io.Writer) int {
+		called, unattributed, got = true, u, args
+		return 0
+	}
+	var out, errb bytes.Buffer
+	if code := runDemo([]string{"--dir", t.TempDir(), "--writer-model", "w", "--mutant-model", "m"}, &out, &errb); code != 0 {
+		t.Fatalf("exit %d: %s", code, errb.String())
+	}
+	if !called || !unattributed {
+		t.Errorf("demo called certify --local: %v, unattributed: %v (argv %v)", called, unattributed, got)
 	}
 }

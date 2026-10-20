@@ -29,7 +29,10 @@ import sys
 try:
     import duckdb
 except ImportError:  # pragma: no cover - operator tooling
-    sys.exit("duckdb python package required: pip install duckdb")
+    # Refused in main(), not here: the privacy gate below is pure Python, and
+    # its tests (scripts/test-build-warehouse-parquet.py) must run on a
+    # machine without duckdb rather than skip the one check that matters most.
+    duckdb = None
 
 
 def corral_state_dir() -> str:
@@ -53,10 +56,20 @@ def state_db(name: str, override: str) -> str:
     return os.environ.get(override, "").strip() or os.path.join(corral_state_dir(), name)
 
 
-#: Repositories whose names may appear on the public site. 'local' is the
-#: repo-less --repo-dir form and names nothing.
+#: Repositories whose names may appear on the public site.
+#:
+#: 'local' is NOT here, and must never be: it was the placeholder an older
+#: corral recorded for a run with no derivable repository, and corral now
+#: records "" for the same run (identity "none"). Neither names a project —
+#: both are "a checkout we could not identify", which is exactly the
+#: population a private checkout belongs to. Allowing 'local' therefore
+#: published any such run's paths and metrics; when --local stopped asking
+#: git about the process's cwd, every run from inside a private checkout
+#: without --repo-dir became one (final whole-branch review, 2026-10-20).
+#: An unidentified repo fails CLOSED: withheld and counted, like any other
+#: name not on this list. require_closed_gate() refuses to run if either
+#: spelling is ever added back.
 PUBLIC_REPOS = {
-    "local",
     "pdbethke/corralai",
     "pdbethke/sportspicker-core",
     "vercel/ms",
@@ -69,14 +82,38 @@ PUBLIC_REPOS = {
 }
 
 
+#: The repo spellings that name no repository. short_repo maps every one of
+#: them to "", and "" can never be on the allowlist.
+UNIDENTIFIED_REPOS = {"", "local"}
+
+
 def short_repo(raw: str) -> str:
-    """git@github.com:owner/name.git and https://… both render as owner/name."""
-    if not raw or raw == "local":
-        return "local"
-    s = raw.removesuffix(".git")
+    """git@github.com:owner/name.git and https://… both render as owner/name.
+    A repo that names nothing ("" / NULL, or the retired 'local') renders as
+    "", which the allowlist gate never passes."""
+    if not raw or raw.strip() in UNIDENTIFIED_REPOS:
+        return ""
+    s = raw.strip().removesuffix(".git")
     for prefix in ("git@github.com:", "https://github.com/", "http://github.com/"):
         s = s.removeprefix(prefix)
     return s
+
+
+def require_closed_gate(allow: set) -> None:
+    """Refuse an allowlist that would pass an unidentified repo. Checked at
+    run time, before anything is exported, so a well-meant edit that adds
+    'local' back cannot quietly reopen the leak."""
+    leaked = UNIDENTIFIED_REPOS & allow
+    if leaked:
+        sys.exit(f"REFUSED: PUBLIC_REPOS contains {sorted(leaked)!r}, which names no repository "
+                 f"(a private checkout's run records exactly that); remove it")
+
+
+def is_public(raw: str) -> bool:
+    """The gate, as one predicate: the repo's short name is on PUBLIC_REPOS.
+    An unidentified repo is never public."""
+    name = short_repo(raw)
+    return name not in UNIDENTIFIED_REPOS and name in PUBLIC_REPOS
 
 
 def export(con, sql: str, out_path: str) -> int:
@@ -159,6 +196,9 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default="site/public/data")
     args = ap.parse_args()
+    if duckdb is None:
+        sys.exit("duckdb python package required: pip install duckdb")
+    require_closed_gate(PUBLIC_REPOS)
     os.makedirs(args.out, exist_ok=True)
 
     withheld = {}

@@ -5,6 +5,7 @@ package auditpush
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 )
 
 // ReadBundle reconstructs the Bundle PushBundle wrote for one (repo, scanID)
@@ -193,17 +194,55 @@ func nullBoolPtr(v sql.NullBool) *bool {
 	return &b
 }
 
+// scanRowColumns is what readScanRow reads, in its Scan order.
+var scanRowColumns = []string{
+	"repo", "run_url", "scan_id", "commit_sha", "corral_version", "substrate",
+	"host", "cores", "trees_requested", "diff_base", "candidates", "audited", "passed",
+	"total_ms", "input_tokens", "output_tokens", "model_calls",
+	"source_pushed", "statement_sha256", "selection_ms", "selection_reused",
+	"rekor_log_index", "rekor_uuid", "started_at", "pushed_by", "scan_uid",
+	"engine_version", "model_set", "top", "all_candidates", "total_files",
+	"preflight_ran", "preflight_note", "finished_at", "entry_hash",
+	"author", "committer", "co_authors", "scope", "tree_dirty", "repo_identity",
+}
+
+// scanRowSelectList is scanRowColumns as a SELECT list for the corral_scans
+// this database actually has. A column the additive migration adds
+// (corralScansMigrationCols) is absent from a warehouse no push of this
+// version has met yet — and READING never migrates (`verify --db` opens the
+// file as it is) — so naming it unconditionally failed every read of such a
+// warehouse with "Referenced column not found" (final whole-branch review,
+// 2026-10-20, on tree_dirty). An absent migrated column is selected as NULL,
+// which is what the migration would have given those rows: not recorded. A
+// column outside the migration list is base schema and is named as is, so a
+// table that is not corral's still fails loudly.
+func scanRowSelectList(db *sql.DB) (string, error) {
+	existing, err := existingColumns(db, "corral_scans")
+	if err != nil {
+		return "", err
+	}
+	late := map[string]bool{}
+	for _, c := range corralScansMigrationCols {
+		late[c.name] = true
+	}
+	cols := make([]string, len(scanRowColumns))
+	for i, c := range scanRowColumns {
+		if late[c] && len(existing) > 0 && !existing[c] {
+			cols[i] = "NULL AS " + c
+			continue
+		}
+		cols[i] = c
+	}
+	return strings.Join(cols, ", "), nil
+}
+
 func readScanRow(db *sql.DB, where string, args ...any) (ScanRow, bool, error) {
-	row := db.QueryRow(`SELECT
-		repo, run_url, scan_id, commit_sha, corral_version, substrate,
-		host, cores, trees_requested, diff_base, candidates, audited, passed,
-		total_ms, input_tokens, output_tokens, model_calls,
-		source_pushed, statement_sha256, selection_ms, selection_reused,
-		rekor_log_index, rekor_uuid, started_at, pushed_by, scan_uid,
-		engine_version, model_set, top, all_candidates, total_files,
-		preflight_ran, preflight_note, finished_at, entry_hash,
-		author, committer, co_authors, scope
-	   FROM corral_scans WHERE `+where, args...) // #nosec G202 -- where is a constant clause chosen by this package's own callers; every value is a bound parameter
+	selectList, err := scanRowSelectList(db)
+	if err != nil {
+		return ScanRow{}, false, err
+	}
+	row := db.QueryRow(`SELECT `+selectList+`
+	   FROM corral_scans WHERE `+where, args...) // #nosec G202 -- the select list is built from this package's own column names; where is a constant clause chosen by its own callers; every value is a bound parameter
 
 	var s ScanRow
 	var cores, treesRequested sql.NullInt64
@@ -213,7 +252,8 @@ func readScanRow(db *sql.DB, where string, args ...any) (ScanRow, bool, error) {
 	var scanPassed, allCandidates, preflightRan sql.NullBool
 	var scanStarted, scanFinished sql.NullTime
 	var engineVersion, modelSet, preflightNote, entryHash sql.NullString
-	var author, committer, coAuthors, scope sql.NullString
+	var author, committer, coAuthors, scope, repoIdentity sql.NullString
+	var treeDirty sql.NullBool
 	var top, totalFiles sql.NullInt64
 	// NULL header tokens: a scan none of whose calls was metered
 	// (ScanTokensUnmetered). They read back as the 0 the bundle carried; the
@@ -227,7 +267,7 @@ func readScanRow(db *sql.DB, where string, args ...any) (ScanRow, bool, error) {
 		&rekorLogIndex, &rekorUUID, &scanStarted, &pushedBy, &scanUID,
 		&engineVersion, &modelSet, &top, &allCandidates, &totalFiles,
 		&preflightRan, &preflightNote, &scanFinished, &entryHash,
-		&author, &committer, &coAuthors, &scope,
+		&author, &committer, &coAuthors, &scope, &treeDirty, &repoIdentity,
 	); err != nil {
 		if err == sql.ErrNoRows {
 			return ScanRow{}, false, nil
@@ -257,6 +297,11 @@ func readScanRow(db *sql.DB, where string, args ...any) (ScanRow, bool, error) {
 	s.AllCandidates, s.PreflightRan = allCandidates.Bool, preflightRan.Bool
 	s.EntryHash = entryHash.String
 	s.Scope = scope.String
+	s.RepoIdentity = repoIdentity.String
+	if treeDirty.Valid {
+		v := treeDirty.Bool
+		s.TreeDirty = &v
+	}
 	s.Identity = Identity{Author: author.String, Committer: committer.String, CoAuthors: coAuthors.String}
 	if scanFinished.Valid {
 		t := scanFinished.Time

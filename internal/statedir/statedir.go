@@ -96,13 +96,28 @@ var (
 	ControlSpecDB    = File{State, "corralai_control_spec.duckdb", "CORRALAI_CONTROL_GATE_SPEC_DB"}
 	ControlGateDB    = File{State, "corralai_control_gate.duckdb", "CORRALAI_CONTROL_GATE_DB"}
 	CacheDB          = File{Cache, "corralai_cache.duckdb", "CORRALAI_CACHE_DB"}
+
+	// MachineLedger is a DIRECTORY, not a file: this machine's own ledger,
+	// where every run writes a complete entry whether or not the audited repo
+	// keeps one. It lives in State (not the repo, not Cache) because it is
+	// history, and "delete the cache" must never delete it. See IsDir for what
+	// being a directory excludes it from.
+	MachineLedger = File{State, "ledger", "CORRALAI_MACHINE_LEDGER"}
 )
+
+// IsDir reports whether the row names a directory. The table was files only;
+// legacy migration moves files (and their database side files) and the legacy
+// refusal guards a key that would otherwise be re-minted, and neither idea
+// applies to a ledger directory that has no legacy home — so both skip these
+// rows explicitly rather than treat a directory as a very large file.
+func (f File) IsDir() bool { return f == MachineLedger }
 
 var table = []File{
 	CoordDB, CertifyKey, BrainKey, MemoryDB, PrincipalsDB, GatewayDB, ArtifactsDB,
 	MissionDB, QueueDB, ReferenceDB, TelemetryDB, RecordingsDB, LearnDB,
 	TaskArtifactsDB, BuildDB, BugCatchDB, CriticScoreDB, MutantAttemptsDB,
 	MatrixDB, RepoCodeDB, GateDB, ControlSpecDB, ControlGateDB, CacheDB,
+	MachineLedger,
 }
 
 // Files is the whole table, for tests, migrate and `corral state paths`.

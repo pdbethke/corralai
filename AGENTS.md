@@ -88,11 +88,38 @@ codebase whose comments carry most of its institutional memory.
 
 ## Where corral writes, and the one mode that touches your checkout
 
-**By default corral never writes to your repository.** Both `certify --local`
-and `certify --repo` run on the `jail` substrate: the tree is copied into a
-disposable bwrap sandbox, dependency dirs are bound read-only, and every mutant
-is applied to the COPY. `certify --local` has no `--substrate` flag at all, so
-it cannot select anything else.
+**By default corral never runs a mutant against your repository.** Both
+`certify --local` and `certify --repo` run on the `jail` substrate: the tree is
+copied into a disposable bwrap sandbox, dependency dirs are bound read-only, and
+every mutant is applied to the COPY. `certify --local` has no `--substrate` flag
+at all, so it cannot select anything else. What corral does write is its record,
+and exactly where is below.
+
+**Where each verb's record goes.**
+- `certify --repo` writes one entry to the repo ledger (`<repo>/.corral/ledger`,
+  or `--ledger` / `$CORRAL_LEDGER`) and a copy to the **machine ledger**
+  (`statedir.MachineLedger`: the state directory's `ledger`, override
+  `CORRALAI_MACHINE_LEDGER`; `corral state paths` prints it). A `--repo` tree
+  with no commit writes neither entry.
+- `corral review` does the same: repo ledger entry plus the machine copy.
+- `certify --local` writes its entry to the machine ledger by default, plus
+  `--ledger <dir>` if given. It writes nothing under the repository.
+- `corral demo` runs `certify --local` and has no opt-out: its entries go to
+  the machine ledger, so its measurements are not left only in DuckDB. They
+  record no repo identity (empty repo and commit, identity `none`) even when
+  the demo directory sits inside a git checkout: a demo is never a project's record.
+- `--no-ledger` skips the machine copy on `--repo`/`review` (and the repo entry);
+  on `--local` it skips the machine ledger and an explicit `--ledger` is still
+  written.
+- No verb puts the MACHINE COPY inside the checkout it audits (the repo ledger
+  is a separate write that does land in the repo by default): a machine ledger
+  that resolves inside it, unless it is the repo ledger itself (that directory
+  IS written, as the primary entry, and no skip is printed), is not written (not even created) and the skip is
+  printed (`machineLedgerOutsideCheckout`, one helper for all three verbs).
+- A failed machine copy is printed and never changes an exit code; a signing
+  key the operator cannot use writes nothing (as it does for the repo entry).
+- `review adjudicate` and the `ledger` verbs never write the machine ledger;
+  they write the ledger directory (and any `--push` target) they are given.
 
 **One substrate mutates the real checkout, and it is opt-in:**
 `certify --repo --substrate workspace`. That is what the GitHub Action uses

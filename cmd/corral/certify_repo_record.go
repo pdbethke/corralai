@@ -171,7 +171,7 @@ func buildScanFileRows(results []reposcan.FileResult, excluded []reposcan.Exclus
 				// this command threads a stderr writer everywhere else,
 				// and a caller capturing stderr must actually SEE a
 				// fail-open disclosure.
-				fmt.Fprintf(stderr, "corral certify --repo: %s: verdict not cached (marshal failed): %v\n", path, merr)
+				fmt.Fprintf(stderr, "corral certify: %s: verdict not cached (marshal failed): %v\n", path, merr)
 				verdictJSON = ""
 			}
 			rows = append(rows, scanstore.File{
@@ -722,6 +722,19 @@ func buildScanModelCallRows(results []reposcan.FileResult) []scanstore.ModelCall
 	return rows
 }
 
+// modelCallRowTotals is the scan header's token and call totals, summed from
+// the same call rows the entry records — the ONE sum both certify --repo's
+// and certify --local's headers use, so a header can never disagree with
+// the per-(file, role) grain beneath it.
+func modelCallRowTotals(rows []scanstore.ModelCall) (in, out, calls int64) {
+	for _, c := range rows {
+		in += c.InputTokens
+		out += c.OutputTokens
+		calls += int64(c.Calls)
+	}
+	return in, out, calls
+}
+
 // scanModelCallTotals sums buildScanModelCallRows' per-(file, role) grain
 // into ONE []advpool.ModelCall per role for the WHOLE scan, in roster order —
 // the shape costLine takes, for the end-of-scan stdout line. A role's model
@@ -838,7 +851,7 @@ func auditedParentSHA256(path string, v advpool.Verdict, stderr io.Writer) strin
 				continue
 			}
 			if m.ParentSHA256 != sha {
-				fmt.Fprintf(stderr, "corral certify --repo: %s: mutants disagree about the parent they came from (%s vs %s) — recording no parent_sha256 for this file\n",
+				fmt.Fprintf(stderr, "corral certify: %s: mutants disagree about the parent they came from (%s vs %s) — recording no parent_sha256 for this file\n",
 					path, sha, m.ParentSHA256)
 				return ""
 			}

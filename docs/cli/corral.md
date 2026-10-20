@@ -245,7 +245,7 @@ Usage of corral brief:
     	report on the files changed since this git ref (base...HEAD), instead of or as well as --scope
   -json
     	the report as one JSON document, for an agent to read
-  -ledger certify --repo
+  -ledger string
     	the ledger directory to read (default: $CORRAL_LEDGER, else ./.corral/ledger — where certify --repo writes its entry for the repo you are standing in)
   -max-items int
     	at most this many items (survivors, gaps, claims) across the report; the cut is named (default 50)
@@ -264,7 +264,7 @@ Usage of certify --local:
   -code string
     	path of the code under review (required)
   -commit string
-    	commit sha (default: git rev-parse HEAD, else "local")
+    	commit sha the signed verdict names; goes with --repo (both or neither, see --repo)
   -critic-model string
     	model (or agent seat) for the test-critic role, which must differ from the writer's; "off" disables the critic entirely (it is advisory and never gates the verdict, so a single-vendor run with only one usable model can drop it). No default
   -goal string
@@ -273,6 +273,8 @@ Usage of certify --local:
     	sandbox backend: bwrap|container (Linux), sandbox-exec (macOS) (default: auto-detect for this OS; "none" is not supported — --local always sandboxes). "container" needs CORRALAI_EXEC_IMAGE set to a toolchain image, e.g. CORRALAI_EXEC_IMAGE=python:3.12-bookworm
   -lang string
     	source language (default: inferred from --code extension)
+  -ledger string
+    	ALSO write this run's ledger entry to this ledger DIRECTORY, beside the machine ledger (the state directory's ledger, see corral state paths; override CORRALAI_MACHINE_LEDGER) every --local run writes to. Refused inside --repo-dir: --local never writes into the checkout. One signed, hash-linked entry per run; corral verify --ledger <dir> walks the chain
   -local
     	run the adversarial pool in-process (this mode)
   -local-endpoint value
@@ -293,7 +295,9 @@ Usage of certify --local:
     	copy dependency dirs into the jail workspace instead of bind-mounting them read-only (the pre-bind behavior; subject to the workspace size cap)
   -no-fail-fast
     	grade every mutant with the WHOLE selected test set instead of stopping at the first failing test. By default a killed mutant stops at the one test that killed it (pytest -x, go test -failfast, jest --bail, phpunit --stop-on-failure), which is most of the per-mutant cost on a repo with a real suite; the verdict is identical either way, and the baseline always runs everything. COSTS: turning this off makes each killed mutant pay for its whole selected set again — on a 77s suite that is the dominant term in the audit. Use it only if your suite is order-dependent or flaky in a way that makes an early stop misleading.
-  -out corral certify verify <file> --pubkey <hex> --allow-unanchored
+  -no-ledger
+    	write no entry to the machine ledger (an explicit --ledger is still written)
+  -out string
     	also write the signed verdict as a self-contained record file, re-verifiable offline with corral certify verify <file> --pubkey <hex> --allow-unanchored
   -poll duration
     	how long to wait between drive iterations when nothing is claimable (default 2s)
@@ -308,7 +312,7 @@ Usage of certify --local:
   -record-stream tail -f
     	stream each run event as newline-delimited JSON to this file AS IT HAPPENS — the same events --record collects into a tape at the end, so a watcher (tail -f, the cockpit) can follow a run in flight instead of waiting hours for it to finish. Independent of --record: either, both, or neither
   -repo string
-    	repository (default: git remote.origin.url, else "local")
+    	repository the signed verdict names. --repo and --commit name ONE subject and go together: pass both or neither (exactly one is refused, exit 2). With neither, both come from --repo-dir's git (origin URL and HEAD); where git cannot tell, the run is recorded as unidentified, never under an invented name
   -repo-dir --
     	audit --code IN THE CONTEXT of this cloned repo/package: the whole tree is seeded into the jail, the file is mutated in place, and the project's OWN test command (given after --) grades it — so real multi-file projects with package imports work (--code/--test are repo-relative)
   -runner string
@@ -867,17 +871,17 @@ corral review — a cold model reviews a scope of the repository; corral runs it
       --reason to put it on the record. Exit 0 when it ran, 3 when it could not.
 
 flags of `corral review`:
-  -attest corral verify --attest <path> --db <ledger dir>
+  -attest string
     	write an in-toto statement (predicate https://corralai.dev/review/v1) to this path, and its DSSE envelope beside it when a certify key is configured: the REPRODUCTIONS — every finding's declared and recorded tier, the hash of its script and output, its exit, the verifier's refutation on the same terms — signed; the opinion bound by its hash and not carried. The ledger entry then names the statement. corral verify --attest <path> --db <ledger dir> recomputes the reproductions' hash from the entry
   -fail-on reproduced
     	exit 3 when a finding STANDS at this tier after the run: reproduced (its script ran and exited 0, and no reproduced refutation or adjudication overturned it). Off by default — the record is written either way; this is the merge gate's switch, for CI
   -ledger string
-    	the ledger directory the review entry is written to (default: <repo>/.corral/ledger, or $CORRAL_LEDGER)
+    	the ledger directory the review entry is written to (default: <repo>/.corral/ledger, or $CORRAL_LEDGER). A copy of the entry also goes to this machine's own ledger (the state directory's ledger, see corral state paths; override CORRALAI_MACHINE_LEDGER); a machine ledger that resolves inside the checkout is skipped, with the reason printed
   -max-bytes int
     	how many bytes of the scope the reviewer is shown; files past the cap are listed by name and the review records them as unshown (default 200000)
   -no-ledger
-    	print the review and write no entry
-  -push review adjudicate --push
+    	print the review and write no entry, in either ledger
+  -push string
     	also append the review's rows to a warehouse you own — a DuckDB path, or md:<db> — as corral_reviews and corral_findings, keyed by the entry's hash so a later review adjudicate --push joins to them. Scripts and outputs travel as hashes unless --push-source
   -push-source
     	with --push, also send the scripts and what they printed (they quote the audited code); off by default
@@ -972,7 +976,7 @@ usage: corral scans list [--ledger <dir>] [--limit n] [--json]
 Usage of scans list:
   -json
     	emit the raw rows as JSON
-  -ledger certify --repo
+  -ledger string
     	the ledger directory to read (default: $CORRAL_LEDGER, else ./.corral/ledger — where certify --repo writes its entry for the repo you are standing in)
   -limit int
     	how many scans to show, newest first (default 20)
@@ -986,7 +990,7 @@ usage: corral scans show <scan-id> [--ledger <dir>] [--json] [--evidence] [--tim
     	also print the pool's authored test source for each audited file
   -json
     	emit the raw rows as JSON
-  -ledger certify --repo
+  -ledger string
     	the ledger directory to read (default: $CORRAL_LEDGER, else ./.corral/ledger — where certify --repo writes its entry for the repo you are standing in)
   -timing
     	also print where each audited file's wall clock went, phase by phase — with --json, adds top-level selection_ms, selection_reused and model_calls and wraps the file array in an object ({"files": [...], "selection_ms": ..., "selection_reused": ..., "model_calls": [...]}) instead of emitting it bare
@@ -1004,7 +1008,7 @@ Usage of scorecard:
 
 ```
 Usage of seal:
-  -db corral scans
+  -db string
     	what to read: a ledger directory, a warehouse file, or md:<db> (default: $CORRAL_LEDGER, else ./.corral/ledger — the same resolution corral scans uses)
   -json
     	emit the rows as JSON
@@ -1056,13 +1060,13 @@ usage: corral state paths  (takes no arguments; prints each file's root, name, o
 Usage of ui:
   -addr string
     	local listen address. Loopback by default ON PURPOSE: the ledger is a map of where a codebase's tests are thinnest (default "127.0.0.1:8787")
-  -db corral seal
-    	what to read: a ledger directory (the seal, the chain and the reviews) or a warehouse file / md:<db> (the seal only) — default $CORRAL_LEDGER, else ./.corral/ledger, the same resolution corral seal and `corral scans` use
+  -db string
+    	what to read: a ledger directory (the seal, the chain and the reviews) or a warehouse file / md:<db> (the seal only) — default $CORRAL_LEDGER, else ./.corral/ledger, the same resolution corral seal and corral scans use
   -open
     	with --write, also open the URL in a browser. A convenience for a desktop: it hands the URL, token included, to the opener as a command-line argument, which other local processes can read while it runs
   -print-url
     	print the URL and exit without serving (for scripts and smoke tests)
-  -repo corral review recheck
+  -repo string
     	with --write, the checkout a finding's reproduction is rechecked against (its HEAD, in the sandbox — see corral review recheck) (default ".")
   -write
     	let this page WRITE: adjudicate findings and recheck them, by running corral's own subcommands. Loopback only; prints a URL carrying a launch token valid until the server exits — anyone with that URL can write verdicts in your name. The URL is printed, never opened, so the token stays off every process's command line; over SSH, tunnel the same port on both ends (ssh -L 8787:127.0.0.1:8787). Agents must never start this
@@ -1074,7 +1078,7 @@ Usage of ui:
 Usage of verify:
   -attest string
     	the --attest statement to verify (required) — the plain JSON path (its signed envelope is expected at <path>.dsse.json) or the envelope itself
-  -db corral review --attest
+  -db string
     	also recompute the warehouse rows' hash from this pushed DuckDB (a path, or md:<db> for MotherDuck) and compare it to the statement's claim; for a corral review --attest statement, the ledger DIRECTORY whose entry names it, so the reproductions' hash is recomputed from the entry. Every push of the scan the warehouse holds is tried (each has its own scan_uid); a VACUUMed warehouse can change row order and trip a false ✗ here without tampering
   -ledger --push <dir>/
     	walk a LEDGER DIRECTORY (the JSON entries --push <dir>/ writes, one per scan, each naming the previous entry's hash and carrying a signature): every entry's hash against its bytes, every link against its predecessor, every signature against --pub, else $CORRALAI_LEDGER_PUBKEY, else NOT CHECKED (the local certify key is never used to verify a ledger). One line per entry; an edited entry, a removed one, or a foreign signature is named. Instead of --attest, not with it
@@ -1108,8 +1112,8 @@ Usage of certify --repo:
     	JSON file mapping repo-relative paths to goals (default: derive a goal per file)
   -json
     	with --dry-run, emit the repository's audit surface as JSON instead of the human report: per-language counts, every auditable file with its inferred test pairing, and the machine-stable exclusion tally. Needs no key, no jail and no money — it is the free inventory a UI or a tenant's own tooling can consume instead of scraping stdout
-  -ledger corral verify --ledger
-    	the ledger DIRECTORY this scan's entry is written to and earlier entries are read from as the prior (default: <repo>/.corral/ledger, or $CORRAL_LEDGER). One gzipped JSON entry per scan, naming the previous entry's hash, signed when a certify key is configured — the record, in plain text; DuckDB is its view (corral verify --ledger, `seal --db <dir>`, `models rank --db <dir>`). Make the directory a worktree of the corral/ledger branch and a laptop run and an Action run are one writer
+  -ledger string
+    	the ledger DIRECTORY this scan's entry is written to and earlier entries are read from as the prior (default: <repo>/.corral/ledger, or $CORRAL_LEDGER). One gzipped JSON entry per scan, naming the previous entry's hash, signed when a certify key is configured — the record, in plain text; DuckDB is its view (corral verify --ledger, seal --db <dir>, models rank --db <dir>). Make the directory a worktree of the corral/ledger branch and a laptop run and an Action run are one writer
   -local-endpoint value
     	place a LOCAL seat on a specific ollama daemon, as <role>=<url> (repeatable; e.g. mutant-generator=http://localhost:11436). A daemon is pinned to a GPU by its own environment, so this is how two models occupy two cards at once — corral selects the DAEMON, never the device. Without it every local seat shares OLLAMA_URL, one card and one VRAM budget
   -max-proven-missed string
@@ -1134,7 +1138,7 @@ Usage of certify --repo:
     	skip the verdict cache — every candidate is re-audited even when a PRIOR scan already earned a verdict for the exact same bytes, tests, models, engine and substrate. Re-buys the whole audit (generation, grading, the writer) per file; use this to isolate model variance from a comparison, or to redo a measurement the cache would otherwise keep serving. The cache is the ledger directory itself (--ledger): a verdict an earlier entry recorded under the same key is served, so --no-ledger also disables it
   -owner string
     	owning account for the scan (tenant identifier) (default "local")
-  -path cargo test -p <crate>
+  -path string
     	bound the scan to this subtree of --repo (a directory, relative to it), keeping the repository whole: tests are still found anywhere in it, and the audit's copies still carry the root's build files (a Cargo workspace manifest, a monorepo's package.json). Pair it with a test command scoped the same way, e.g. cargo test -p <crate>
   -preflight
     	run the project's test suite once with coverage instrumentation and report which source files it never executes. One extra suite run; reports coverage-grade evidence, not proof

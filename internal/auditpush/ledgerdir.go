@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pdbethke/corralai/internal/dirlock"
 	"github.com/pdbethke/corralai/internal/review"
 )
 
@@ -381,10 +382,16 @@ func writeLedgerFile(dir string, b Bundle, signer LedgerSigner) (Counts, error) 
 	// The uid is minted where Pushed is stamped — placeEntry — so the two
 	// agree by construction and a reader can derive one from the other.
 	e := LedgerEntry{Format: LedgerFileFormat, Bundle: b}
-	if _, err := AppendLedgerEntry(dir, e, signer); err != nil {
+	name, err := AppendLedgerEntry(dir, e, signer)
+	if err != nil {
 		return Counts{}, err
 	}
-	return Counts{Scans: boolToInt(b.Scan != (ScanRow{})), Files: len(b.Files), Mutants: len(b.Mutants), Calls: len(b.Calls), Events: len(b.Events)}, nil
+	keyID := ""
+	if signer != nil {
+		keyID = signer.SigningKeyID()
+	}
+	return Counts{Scans: boolToInt(b.Scan != (ScanRow{})), Files: len(b.Files), Mutants: len(b.Mutants), Calls: len(b.Calls), Events: len(b.Events),
+		Entry: name, KeyID: keyID}, nil
 }
 
 // AppendLedgerEntry LINKS e to the directory's current head, hashes it,
@@ -399,6 +406,16 @@ func AppendLedgerEntry(dir string, e LedgerEntry, signer LedgerSigner) (string, 
 	if e.Kind == KindCheckpoint {
 		return "", fmt.Errorf("auditpush: a checkpoint is a genesis and cannot be appended to a chain — see WriteCheckpoint")
 	}
+	// The directory is created here, before the lock, because the lock is
+	// taken ON it; placeEntry would have created it a moment later anyway.
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		return "", fmt.Errorf("auditpush: ledger dir: %w", err)
+	}
+	unlock, err := lockLedgerDir(dir)
+	if err != nil {
+		return "", err
+	}
+	defer unlock()
 	// The link: the newest entry's hash. Read, not remembered — the
 	// directory is the state, and another writer may have appended.
 	//
@@ -426,6 +443,34 @@ func AppendLedgerEntry(dir string, e LedgerEntry, signer LedgerSigner) (string, 
 		}
 	}
 	return placeEntry(dir, e, prev, signer)
+}
+
+// lockLedgerDir takes dir's exclusive writer lock and returns its release.
+// It is held from reading the head through placing the entry — by
+// AppendLedgerEntry, and by WriteCheckpoint, which rewrites the directory —
+// because "Prev is the head at placement time" is only true if nobody else
+// can place between the read and the write. Without it, two runs appending
+// to one machine ledger both linked to the same head and the chain was
+// broken for good: every later append was refused (final whole-branch
+// review, 2026-10-20; 8 concurrent pushes broke it in 3 of 3 runs).
+//
+// The lock is advisory and kernel-held (internal/dirlock), so a writer that
+// dies mid-append releases it, and on unix it creates no file in the
+// directory — nothing for a reader to skip, nothing for the `git add -A`
+// that publishes a ledger branch to commit. It excludes corral's own
+// writers; a person copying files into scans/ by hand is not excluded, and
+// RequireIntactChain is what catches that.
+//
+// The release's error is dropped on purpose: by then the entry is placed or
+// the append has already failed, and closing the descriptor releases the
+// lock regardless, so reporting it would only misdescribe a write that
+// succeeded.
+func lockLedgerDir(dir string) (func(), error) {
+	unlock, err := dirlock.Lock(dir)
+	if err != nil {
+		return nil, fmt.Errorf("auditpush: lock ledger dir: %w", err)
+	}
+	return func() { _ = unlock() }, nil
 }
 
 // requireRegisteredSigner is the writer-side refusal to append with a key a
@@ -986,6 +1031,17 @@ func ChainHasSigners(entries []LedgerEntry) bool {
 // (a checkpoint not at position 1), never an empty directory. Returns the
 // checkpoint's file name and how many entries were pruned.
 func WriteCheckpoint(dir string, signer LedgerSigner, rootPub ed25519.PublicKey) (string, int, error) {
+	// Locked like an append (lockLedgerDir): a run appending while the prune
+	// deletes would place an entry linked to a head that is about to vanish.
+	// A missing directory is not created to be locked; it has no entries,
+	// which the read below reports.
+	if st, err := os.Stat(dir); err == nil && st.IsDir() {
+		unlock, err := lockLedgerDir(dir)
+		if err != nil {
+			return "", 0, err
+		}
+		defer unlock()
+	}
 	entries, err := ReadLedgerDir(dir)
 	if err != nil {
 		return "", 0, err

@@ -446,3 +446,43 @@ func TestReviewAndAdjudicationAreEntriesBesideTheScans(t *testing.T) {
 		t.Errorf("must be a problem by name: %+v", last)
 	}
 }
+
+// A directory push reports the file it placed and the key that signed it,
+// from the write itself: the name is the entry ReadLedgerDir then finds, and
+// an unsigned push reports no keyid. A warehouse push places no file and
+// reports neither.
+func TestLedgerDirPushNamesTheEntryItWrote(t *testing.T) {
+	dir := t.TempDir()
+	_, priv, _ := ed25519.GenerateKey(nil)
+	id := KeyFingerprint(priv.Public().(ed25519.PublicKey))
+	SetLedgerSigner(Ed25519LedgerSigner{KeyID: id, Key: priv})
+	t.Cleanup(func() { SetLedgerSigner(nil) })
+	c, err := PushBundle(dir+"/", Bundle{Scan: ScanRow{Repo: "r", Commit: "aaa1", ScanID: 1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, err := ReadLedgerDir(dir)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("want one entry, got %d (%v)", len(entries), err)
+	}
+	if c.Entry == "" || c.Entry != entries[0].File || c.KeyID != id || entries[0].KeyID != id {
+		t.Errorf("counts name %q signed %q; the directory holds %q signed %q (want %q)", c.Entry, c.KeyID, entries[0].File, entries[0].KeyID, id)
+	}
+
+	SetLedgerSigner(nil)
+	c, err = PushBundle(dir+"/", Bundle{Scan: ScanRow{Repo: "r", Commit: "bbb2", ScanID: 1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Entry == "" || c.KeyID != "" {
+		t.Errorf("an unsigned push reports entry %q keyid %q, want a name and no keyid", c.Entry, c.KeyID)
+	}
+
+	w, err := PushBundle(filepath.Join(t.TempDir(), "w.duckdb"), Bundle{Scan: ScanRow{Repo: "r", Commit: "ccc3", ScanID: 1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w.Entry != "" || w.KeyID != "" {
+		t.Errorf("a warehouse push names entry %q keyid %q, want neither", w.Entry, w.KeyID)
+	}
+}

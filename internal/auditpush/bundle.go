@@ -200,6 +200,22 @@ type ScanRow struct {
 	// Empty on rows written before it was recorded, or when the checkout
 	// could not say.
 	Identity Identity
+	// TreeDirty is whether the audited tree differed from HEAD — uncommitted
+	// or untracked changes when the run began; nil when unknown or when the
+	// recorded commit is not HEAD. It is defined against HEAD because that is
+	// what git can measure, so it says something about Commit only when
+	// Commit IS HEAD (cmd/corral treeDirtyAt compares full SHAs): a run that
+	// records another revision would otherwise carry a "clean" that described
+	// a different tree. A pointer on purpose: nil — "git could not say", "not
+	// the recorded revision", and every row written before this field — is
+	// not the same claim as false.
+	TreeDirty *bool `json:",omitempty"`
+	// RepoIdentity is how Repo was established: "git" (derived from the
+	// checkout's origin), "operator" (typed by the operator — certify
+	// --local's --repo/--commit — and not checked against git) or "none" (it
+	// could not be, and Repo is a stand-in or empty). It is NOT Identity above — that is the audited PARTY, this
+	// is the provenance of the repo NAME. Empty on rows that never recorded it.
+	RepoIdentity string `json:",omitempty"`
 }
 
 // PushedByCertify is the ScanRow.PushedBy of a run's own entry.
@@ -364,6 +380,85 @@ type EventRow struct {
 	StatementSHA256 string
 }
 
+// SeatRow is one seat's execution-proven contribution to one run: the
+// per-seat scorecard (catches, opportunities, plants, survivors, critic
+// flags). Every field of advpool.BugCatchObservation by the same Go name,
+// plus the subject the run audited (Repo, Commit, Path). auditpush cannot
+// name the producer type in a signature without inverting the layering, so
+// the parity is enforced by TestSeatRowCarriesEveryObservationField in
+// cmd/corral, which fails when a producer field has no home here. Counts are
+// not omitempty: a seat that caught nothing measured zero, and the entry
+// says so.
+type SeatRow struct {
+	Repo   string
+	Commit string
+	Path   string
+
+	Model            string
+	Role             string
+	Catches          int
+	Opportunities    int
+	SoundTests       int
+	AuthoredTests    int
+	CriticFlags      int
+	MutantsPlanted   int
+	MutantsSurvived  int
+	Shard            int
+	Region           string
+	RegionComplexity int
+	RegionLines      int
+	TestComplexity   int
+	ParseRetries     int
+	Dropped          bool
+	Shadow           bool
+	Lang             string
+	ShadowDrawn      bool
+	SeatTool         string
+	ModelUnresolved  bool
+}
+
+// MutantAttemptRow is one seat's outcome for one mutant: the paired
+// observation the correlation statistic needs. Every field of
+// advpool.MutantAttempt by the same Go name, plus Repo and Commit. Path is
+// the producer's own (the mutant's file), not a run-level value.
+type MutantAttemptRow struct {
+	Repo   string
+	Commit string
+
+	Path     string
+	MutantID string
+	Model    string
+	Role     string
+	Shadow   bool
+	Outcome  string
+}
+
+// CriticFindingRow is one test-critic finding and the execution-checked
+// outcome of it. Every field of advpool.CriticFindingObservation by the same
+// Go name, plus the subject. Evidence quotes code, so it is in the custody
+// set BlankUnpushedSource withholds. It is also NEVER in a statement's
+// telemetrySha256, whatever the bundle's custody (see
+// certify.AuditStatement.TelemetrySHA256 and cmd/corral telemetrySHA256):
+// one statement must verify against both the push and the ledger entry.
+type CriticFindingRow struct {
+	Repo   string
+	Commit string
+	Path   string
+
+	QueueFindingID  int64
+	Model           string
+	TargetTest      string
+	TestFile        string
+	TestSelector    string
+	Scope           string
+	Evidence        string
+	Severity        string
+	Adjudication    string
+	Source          string
+	SeatTool        string
+	ModelUnresolved bool
+}
+
 // Bundle is one scan at all five grains: the thing a push actually is. It
 // exists as one value, rather than five calls, because the five tables must
 // land together — a scan row with no mutants reads, to the next query, as a
@@ -374,6 +469,19 @@ type Bundle struct {
 	Mutants []MutantRow
 	Calls   []ModelCallRow
 	Events  []EventRow
+	// Seats, MutantAttempts and CriticFindings are what a run measured about
+	// its seats (see SeatRow). They live in the bundle, and so in the signed
+	// ledger entry, but NO warehouse table holds them yet (Phase 4):
+	// PushBundle ignores them, and the warehouse-rows hash leaves them out
+	// (cmd/corral prepareRowsForHash) because a verifier reads the rows back
+	// from the warehouse and could never reproduce a hash that covered rows
+	// the warehouse never received. omitempty, so a bundle that carries none
+	// marshals byte-for-byte as it did before they existed. When a statement
+	// is written, it additionally binds them through its telemetrySha256
+	// (cmd/corral telemetrySHA256).
+	Seats          []SeatRow          `json:",omitempty"`
+	MutantAttempts []MutantAttemptRow `json:",omitempty"`
+	CriticFindings []CriticFindingRow `json:",omitempty"`
 	// Link is stamped onto every row of every table by PushBundle, so a row
 	// and the statement it names can never disagree about which run produced
 	// them.
@@ -393,6 +501,14 @@ type Counts struct {
 	Mutants int
 	Calls   int
 	Events  int
+	// Entry and KeyID describe a LEDGER-DIRECTORY push only: the file name
+	// the entry was placed under and the keyid that signed it ("" when it
+	// was written unsigned). Both are "" for a warehouse push, which places
+	// no file. Carried here, from the write itself, so a caller that names
+	// the entry it wrote never has to re-read the directory to find it — a
+	// re-read names whichever entry is newest, and another writer's may be.
+	Entry string
+	KeyID string
 }
 
 // Total is every row the push wrote, for a caller that only wants one number.
@@ -440,7 +556,9 @@ CREATE TABLE IF NOT EXISTS corral_scans (
   entry_hash       VARCHAR,
   author           VARCHAR,
   committer        VARCHAR,
-  co_authors       VARCHAR
+  co_authors       VARCHAR,
+  tree_dirty       BOOLEAN,
+  repo_identity    VARCHAR
 );`
 
 const auditsSchema = `
@@ -771,6 +889,11 @@ var (
 		// The --path subtree (ScanRow.Scope). NULL before it: every earlier
 		// scan was over its whole repository.
 		{"scope", "scope VARCHAR"},
+		// Whether the audited tree was clean, and how repo was established
+		// (ScanRow.TreeDirty / RepoIdentity). NULL before them: unknown, which
+		// is exactly what those rows are.
+		{"tree_dirty", "tree_dirty BOOLEAN"},
+		{"repo_identity", "repo_identity VARCHAR"},
 	}
 	corralMutantsMigrationCols = []struct{ name, ddl string }{
 		{"scan_uid", "scan_uid VARCHAR"},
@@ -813,25 +936,10 @@ func migrateTable(db *sql.DB, table string, cols []struct{ name, ddl string }) e
 	// as 'warehouse', but EnsureSchema's contract is any open handle, and a
 	// plain DuckDB database has its own name — the hardcoded name probed
 	// nothing and every ALTER then failed (review e00b52bab444#R2).
-	rows, err := db.Query(`SELECT column_name FROM duckdb_columns()
-	    WHERE database_name = current_database() AND table_name = ?`, table)
+	existing, err := existingColumns(db, table)
 	if err != nil {
-		return fmt.Errorf("auditpush: probe existing %s columns: %w", table, err)
+		return err
 	}
-	existing := map[string]bool{}
-	for rows.Next() {
-		var name string
-		if err := rows.Scan(&name); err != nil {
-			rows.Close()
-			return fmt.Errorf("auditpush: scan existing %s column: %w", table, err)
-		}
-		existing[name] = true
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return fmt.Errorf("auditpush: probe existing %s columns: %w", table, err)
-	}
-	rows.Close()
 	// No columns at all is no table: nothing to migrate — the schema DDL
 	// creates it whole. (Before the probe named the current catalog, this
 	// was also what a MIS-probed table looked like, and every ALTER then
@@ -849,6 +957,31 @@ func migrateTable(db *sql.DB, table string, cols []struct{ name, ddl string }) e
 		}
 	}
 	return nil
+}
+
+// existingColumns is the column set table has in the CURRENT catalog —
+// the probe migrateTable runs before it ALTERs, and readScanRow before it
+// selects. Empty means no table. See migrateTable for why duckdb_columns()
+// and current_database(), not information_schema.
+func existingColumns(db *sql.DB, table string) (map[string]bool, error) {
+	rows, err := db.Query(`SELECT column_name FROM duckdb_columns()
+	    WHERE database_name = current_database() AND table_name = ?`, table)
+	if err != nil {
+		return nil, fmt.Errorf("auditpush: probe existing %s columns: %w", table, err)
+	}
+	defer rows.Close()
+	existing := map[string]bool{}
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, fmt.Errorf("auditpush: scan existing %s column: %w", table, err)
+		}
+		existing[name] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("auditpush: probe existing %s columns: %w", table, err)
+	}
+	return existing, nil
 }
 
 // lockRetryWindow is how long a push keeps trying when another writer holds
@@ -1101,6 +1234,13 @@ func BlankUnpushedSource(b *Bundle) {
 		mutants[i].Code = ""
 	}
 	b.Mutants = mutants
+
+	// A critic finding's Evidence quotes the flagged test's code.
+	findings := append([]CriticFindingRow(nil), b.CriticFindings...)
+	for i := range findings {
+		findings[i].Evidence = ""
+	}
+	b.CriticFindings = findings
 }
 
 // requireStatements enforces Link.Require: refuse the whole push, naming the
@@ -1333,8 +1473,8 @@ func insertBundle(db *sql.DB, b Bundle, now time.Time, uid string) (Counts, erro
 		    rekor_log_index, rekor_uuid, schema_version, started_at, pushed_by,
 		    engine_version, model_set, top, all_candidates, total_files,
 		    preflight_ran, preflight_note, finished_at, entry_hash,
-		    author, committer, co_authors, scope
-		  ) VALUES (`+placeholders(41)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
+		    author, committer, co_authors, scope, tree_dirty, repo_identity
+		  ) VALUES (`+placeholders(43)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
 			uid, now, b.Scan.Repo, b.Scan.RunURL, b.Scan.ScanID, b.Scan.Commit,
 			b.Scan.CorralVersion, b.Scan.Substrate, b.Scan.Host, b.Scan.Cores,
 			nullIfZeroInt(b.Scan.TreesRequested), b.Scan.DiffBase,
@@ -1347,7 +1487,7 @@ func insertBundle(db *sql.DB, b Bundle, now time.Time, uid string) (Counts, erro
 			b.Scan.AllCandidates, nullIfZeroInt(b.Scan.TotalFiles),
 			b.Scan.PreflightRan, nullIfEmpty(b.Scan.PreflightNote), nullTime(b.Scan.FinishedAt), nullIfEmpty(b.Scan.EntryHash),
 			nullIfEmpty(b.Scan.Identity.Author), nullIfEmpty(b.Scan.Identity.Committer), nullIfEmpty(b.Scan.Identity.CoAuthors),
-			nullIfEmpty(b.Scan.Scope),
+			nullIfEmpty(b.Scan.Scope), nullBool(b.Scan.TreeDirty), nullIfEmpty(b.Scan.RepoIdentity),
 		); err != nil {
 			return Counts{}, fmt.Errorf("auditpush: insert scan row: %w", err)
 		}

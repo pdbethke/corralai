@@ -9,7 +9,7 @@ still move between minor versions.
 Entries describe what changed for someone *using* the tool. For the full commit
 history of any release, `git log v0.3.4..v0.3.5`.
 
-## [Unreleased]
+## [v1.0.0-rc.26] — 2026-10-20
 
 ### Breaking
 
@@ -103,6 +103,29 @@ history of any release, `git log v0.3.4..v0.3.5`.
   not written twice, and a `--repo` tree with no commit writes no entry. Where
   each verb writes is stated in `AGENTS.md` ("Where corral writes") and the
   configuration and trust-and-security pages.
+
+### Changed
+
+- **`corral ui` and the public record page now render the ledger with one
+  renderer, `internal/recordview`, and agree on what it says.** They used to
+  disagree on which verdicts count, how chain checks pair with entries, and
+  what an unchecked signature means. Now chain checks pair by hash, a failed
+  signature never shows as "unchecked", only live verdicts count, a retracted
+  review is marked retracted on the chain page (the public record included),
+  and an empty chain no longer calls itself intact. An entry signed by a
+  registered signer names it. A target with no ledger says so instead of
+  showing zero counts, and seal rows whose baseline failed sort after the
+  graded ones instead of ranking by a 0.00 kill rate. The pages fit a 375px
+  screen. What a script or proxy may notice:
+  - `corral ui`'s single-page app is gone, along with `/api/ledger` and
+    `/api/seal`; the record is served as pages.
+  - In read-only mode a POST to a write route returns 405, not 404.
+  - A seal that cannot be read shows an error banner instead of a 500.
+- **`corral ui --write` keeps its launch token out of URLs.** The printed
+  URL's `#t=` fragment moves into the tab's `sessionStorage`, leaves the
+  address bar, and is sent only as a Bearer header; every page picks it up,
+  so the URL the command prints works on any page. A tab that never opened
+  that URL cannot write. This runs in a real headless browser in CI.
 
 ## [v1.0.0-rc.25] — 2026-10-18
 

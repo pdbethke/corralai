@@ -69,11 +69,24 @@ func rootGate(verb, dir string, stderr io.Writer) (auditpush.Ed25519LedgerSigner
 		fmt.Fprintf(stderr, "corral ledger %s: %v\n", verb, err)
 		return signer, nil, false
 	}
+	rootSigned := false
 	for _, c := range checks {
 		if c.Problem != "" {
 			fmt.Fprintf(stderr, "corral ledger %s: %s does not verify under root %s (%s: %s) — either the seed is not this chain's root, or the chain is broken; nothing written\n", verb, dir, signer.KeyID, c.File, c.Problem)
 			return signer, nil, false
 		}
+		if c.Signed && c.SigOK && c.Signer == "root" {
+			rootSigned = true
+		}
+	}
+	// "No Problem" is vacuous on a chain with nothing in it: a mistyped
+	// directory, an empty one, an unsigned chain, or one only another key
+	// signed all pass the loop above under ANY seed, and the write would
+	// start a new ledger rooted at whatever seed is loaded. The seed is this
+	// chain's root only if the root has already signed something in it.
+	if !rootSigned {
+		fmt.Fprintf(stderr, "corral ledger %s: %s has no entry signed by root %s — the root must already have signed this chain (a mistyped directory, an empty or unsigned ledger, or the wrong seed); nothing written\n", verb, dir, signer.KeyID)
+		return signer, nil, false
 	}
 	return signer, rootPub, true
 }

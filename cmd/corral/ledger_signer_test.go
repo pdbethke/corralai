@@ -54,7 +54,10 @@ func newSignerFixture(t *testing.T) signerFixture {
 
 func ledgerFileCount(t *testing.T, dir string) int {
 	t.Helper()
-	n, _ := os.ReadDir(filepath.Join(dir, auditpush.ScansSubdir))
+	n, err := os.ReadDir(filepath.Join(dir, auditpush.ScansSubdir))
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
 	return len(n)
 }
 
@@ -88,7 +91,7 @@ func TestSignerAddRefusesWrongRoot(t *testing.T) {
 	t.Setenv(ledgerRootKeyEnv, seedHex(0x33))
 	before := ledgerFileCount(t, f.dir)
 	code, out := run(t, "signer", "add", f.dir, "--name", "x", "--pub", pubHexOfSeed(t, seedHex(0x22)))
-	if code != 2 || ledgerFileCount(t, f.dir) != before {
+	if code != 2 || !strings.Contains(out, "does not verify under root") || ledgerFileCount(t, f.dir) != before {
 		t.Fatalf("a seed that is not the root: exit %d, files %d→%d\n%s", code, before, ledgerFileCount(t, f.dir), out)
 	}
 }
@@ -113,8 +116,37 @@ func TestSignerAddRefusesPubMismatch(t *testing.T) {
 	t.Setenv("CORRALAI_LEDGER_PUBKEY", pubHexOfSeed(t, seedHex(0x44)))
 	before := ledgerFileCount(t, f.dir)
 	code, out := run(t, "signer", "add", f.dir, "--name", "x", "--pub", pubHexOfSeed(t, seedHex(0x22)))
-	if code != 2 || ledgerFileCount(t, f.dir) != before {
+	if code != 2 || !strings.Contains(out, "CORRALAI_LEDGER_PUBKEY") || ledgerFileCount(t, f.dir) != before {
 		t.Fatalf("exit %d\n%s", code, out)
+	}
+}
+
+// The root check must not be vacuous: a directory with nothing the root
+// signed would pass "no Problem" under any seed and start a new ledger.
+func TestSignerAddRefusesWhereRootHasNotSigned(t *testing.T) {
+	newPub := pubHexOfSeed(t, seedHex(0x22))
+	t.Setenv("CORRALAI_CERTIFY_KEY_FILE", filepath.Join(t.TempDir(), "certify.key"))
+	t.Setenv("CORRALAI_LEDGER_PUBKEY", "")
+	t.Setenv(ledgerRootKeyEnv, seedHex(0x11))
+	missing := filepath.Join(t.TempDir(), "typo-does-not-exist")
+	unsigned := t.TempDir()
+	t.Setenv("CORRALAI_CERTIFY_KEY", "")
+	pushAs(t, unsigned, "", "aaaa1111")
+	other := t.TempDir()
+	pushAs(t, other, seedHex(0x55), "aaaa1111")
+	t.Setenv("CORRALAI_CERTIFY_KEY", "")
+	// missing and empty hit the "root has not signed" refusal; the other two
+	// already show a Problem under the root, which refuses first. Either way
+	// nothing is written.
+	for name, dir := range map[string]string{"missing": missing, "empty": t.TempDir(), "unsigned": unsigned, "other key": other} {
+		before := ledgerFileCount(t, dir)
+		code, out := run(t, "signer", "add", dir, "--name", "x", "--pub", newPub)
+		if code != 2 || !strings.Contains(out, "nothing written") || ledgerFileCount(t, dir) != before {
+			t.Errorf("%s: exit %d, files %d→%d\n%s", name, code, before, ledgerFileCount(t, dir), out)
+		}
+	}
+	if _, err := os.Stat(missing); !os.IsNotExist(err) {
+		t.Errorf("a refused add created the directory (stat err %v)", err)
 	}
 }
 

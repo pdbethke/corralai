@@ -123,7 +123,9 @@ registration or revocation is an entry in the chain, signed by the root, so the
 set of signers is part of the record and not a file beside it. We did not
 publish a list of keys next to the ledger because a list a writer can edit
 vouches for nothing; the cost of the chain-borne design is that the root must
-sign every change, and that an older corral cannot read a ledger containing one.
+sign every change, and that every entry this corral writes is format
+`corral-ledger-5`, so an older corral cannot read any ledger this one has
+appended to, signers or not.
 
 - **Register and revoke.** `corral ledger signer add <dir> --name <name> --pub <hex>`
   and `corral ledger signer revoke <dir> --keyid <id> --reason "…"`. Both read

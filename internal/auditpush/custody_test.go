@@ -4,6 +4,7 @@ package auditpush
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"reflect"
@@ -18,6 +19,8 @@ import (
 var custodySet = map[string][]string{
 	"Files":   {"AuthoredTest", "VerdictJSON"},
 	"Mutants": {"Code"},
+	// Evidence quotes the flagged test.
+	"CriticFindings": {"Evidence"},
 }
 
 // fillStrings sets every string field of the struct v points at to a unique
@@ -42,7 +45,14 @@ func custodyFixture() Bundle {
 	fillStrings(reflect.ValueOf(&ev).Elem(), "event")
 	var scan ScanRow
 	fillStrings(reflect.ValueOf(&scan).Elem(), "scan")
-	return Bundle{Scan: scan, Files: []Row{row}, Mutants: []MutantRow{mut}, Calls: []ModelCallRow{call}, Events: []EventRow{ev}}
+	var seat SeatRow
+	fillStrings(reflect.ValueOf(&seat).Elem(), "seat")
+	var att MutantAttemptRow
+	fillStrings(reflect.ValueOf(&att).Elem(), "attempt")
+	var cf CriticFindingRow
+	fillStrings(reflect.ValueOf(&cf).Elem(), "finding")
+	return Bundle{Scan: scan, Files: []Row{row}, Mutants: []MutantRow{mut}, Calls: []ModelCallRow{call}, Events: []EventRow{ev},
+		Seats: []SeatRow{seat}, MutantAttempts: []MutantAttemptRow{att}, CriticFindings: []CriticFindingRow{cf}}
 }
 
 // TestBlankUnpushedSourceIsTheOneCustodySet pins the rule that used to exist
@@ -97,6 +107,9 @@ func assertCustody(t *testing.T, got, before Bundle, blanked bool) {
 		{"Calls", reflect.ValueOf(got.Calls[0]), reflect.ValueOf(before.Calls[0])},
 		{"Events", reflect.ValueOf(got.Events[0]), reflect.ValueOf(before.Events[0])},
 		{"Scan", reflect.ValueOf(got.Scan), reflect.ValueOf(before.Scan)},
+		{"Seats", reflect.ValueOf(got.Seats[0]), reflect.ValueOf(before.Seats[0])},
+		{"MutantAttempts", reflect.ValueOf(got.MutantAttempts[0]), reflect.ValueOf(before.MutantAttempts[0])},
+		{"CriticFindings", reflect.ValueOf(got.CriticFindings[0]), reflect.ValueOf(before.CriticFindings[0])},
 	}
 	for _, p := range pairs {
 		inSet := map[string]bool{}
@@ -167,5 +180,61 @@ func TestPushBundleWithholdsEveryCustodyField(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestCriticEvidenceIsSource: a critic finding's Evidence quotes code, so it
+// is withheld unless the run pushed source, and nothing else on the row is.
+// (assertCustody above also walks every other string field of the three
+// telemetry rows and fails if one is blanked.)
+func TestCriticEvidenceIsSource(t *testing.T) {
+	for _, pushed := range []bool{false, true} {
+		b := Bundle{CriticFindings: []CriticFindingRow{{Path: "a.go", Evidence: "func TestX() {}"}}, SourcePushed: pushed}
+		BlankUnpushedSource(&b)
+		if got := b.CriticFindings[0].Evidence != ""; got != pushed {
+			t.Errorf("SourcePushed=%v: evidence kept = %v", pushed, got)
+		}
+		if b.CriticFindings[0].Path != "a.go" {
+			t.Error("a non-source field of the finding was blanked")
+		}
+	}
+	orig := []CriticFindingRow{{Evidence: "E"}}
+	b := Bundle{CriticFindings: orig}
+	BlankUnpushedSource(&b)
+	if orig[0].Evidence != "E" {
+		t.Error("BlankUnpushedSource blanked the caller's own slice in place")
+	}
+}
+
+// TestPushBundleIgnoresTelemetryRows: the warehouse has no table for the
+// seat, attempt and finding rows yet (Phase 4); a bundle carrying them must
+// push cleanly and the counts must not claim they were written.
+func TestPushBundleIgnoresTelemetryRows(t *testing.T) {
+	b := Bundle{
+		Files:          []Row{{Repo: "o/r", Path: "a.go"}},
+		Seats:          []SeatRow{{Repo: "o/r", Model: "m"}},
+		MutantAttempts: []MutantAttemptRow{{Repo: "o/r", MutantID: "m1"}},
+		CriticFindings: []CriticFindingRow{{Repo: "o/r", Evidence: "E"}},
+	}
+	n, err := PushBundle(filepath.Join(t.TempDir(), "w.duckdb"), b)
+	if err != nil {
+		t.Fatalf("PushBundle: %v", err)
+	}
+	if n.Files != 1 {
+		t.Errorf("Files = %d, want 1", n.Files)
+	}
+}
+
+// TestBundleWithoutTelemetryHashesAsBefore: the new fields are omitempty, so
+// a bundle that carries none marshals to exactly the bytes it did before
+// they existed. The fixture is a literal, written before the fields were.
+func TestBundleWithoutTelemetryHashesAsBefore(t *testing.T) {
+	const before = `{"Scan":{"ScanUID":"","Repo":"","RunURL":"","ScanID":0,"Commit":"","CorralVersion":"","Substrate":"","Host":"","Cores":0,"TreesRequested":0,"DiffBase":"","Scope":"","Candidates":0,"Audited":0,"Passed":null,"StartedAt":null,"TotalMillis":null,"SelectionMillis":null,"SelectionReused":false,"ModelCalls":0,"SourcePushed":false,"StatementSHA256":"","RekorLogIndex":null,"RekorUUID":"","PushedBy":"","EntryHash":"","EngineVersion":"","ModelSet":"","Top":0,"AllCandidates":false,"TotalFiles":0,"PreflightRan":false,"PreflightNote":"","FinishedAt":null,"Identity":{}},"Files":null,"Mutants":null,"Calls":null,"Events":null,"Link":{"ScanID":0,"StatementSHA256":"","Require":false},"SourcePushed":false}`
+	got, err := json.Marshal(Bundle{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != before {
+		t.Errorf("a bundle with no telemetry no longer marshals as it did:\n got %s\nwant %s", got, before)
 	}
 }

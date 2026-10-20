@@ -374,6 +374,82 @@ type EventRow struct {
 	StatementSHA256 string
 }
 
+// SeatRow is one seat's execution-proven contribution to one run: the
+// per-seat scorecard (catches, opportunities, plants, survivors, critic
+// flags). Every field of advpool.BugCatchObservation by the same Go name,
+// plus the subject the run audited (Repo, Commit, Path). auditpush cannot
+// name the producer type in a signature without inverting the layering, so
+// the parity is enforced by TestSeatRowCarriesEveryObservationField in
+// cmd/corral, which fails when a producer field has no home here. Counts are
+// not omitempty: a seat that caught nothing measured zero, and the entry
+// says so.
+type SeatRow struct {
+	Repo   string `json:"repo"`
+	Commit string `json:"commit"`
+	Path   string `json:"path"`
+
+	Model            string `json:"model"`
+	Role             string `json:"role"`
+	Catches          int    `json:"catches"`
+	Opportunities    int    `json:"opportunities"`
+	SoundTests       int    `json:"sound_tests"`
+	AuthoredTests    int    `json:"authored_tests"`
+	CriticFlags      int    `json:"critic_flags"`
+	MutantsPlanted   int    `json:"mutants_planted"`
+	MutantsSurvived  int    `json:"mutants_survived"`
+	Shard            int    `json:"shard"`
+	Region           string `json:"region"`
+	RegionComplexity int    `json:"region_complexity"`
+	RegionLines      int    `json:"region_lines"`
+	TestComplexity   int    `json:"test_complexity"`
+	ParseRetries     int    `json:"parse_retries"`
+	Dropped          bool   `json:"dropped"`
+	Shadow           bool   `json:"shadow"`
+	Lang             string `json:"lang"`
+	ShadowDrawn      bool   `json:"shadow_drawn"`
+	SeatTool         string `json:"seat_tool"`
+	ModelUnresolved  bool   `json:"model_unresolved"`
+}
+
+// MutantAttemptRow is one seat's outcome for one mutant: the paired
+// observation the correlation statistic needs. Every field of
+// advpool.MutantAttempt by the same Go name, plus Repo and Commit. Path is
+// the producer's own (the mutant's file), not a run-level value.
+type MutantAttemptRow struct {
+	Repo   string `json:"repo"`
+	Commit string `json:"commit"`
+
+	Path     string `json:"path"`
+	MutantID string `json:"mutant_id"`
+	Model    string `json:"model"`
+	Role     string `json:"role"`
+	Shadow   bool   `json:"shadow"`
+	Outcome  string `json:"outcome"`
+}
+
+// CriticFindingRow is one test-critic finding and the execution-checked
+// outcome of it. Every field of advpool.CriticFindingObservation by the same
+// Go name, plus the subject. Evidence quotes code, so it is in the custody
+// set BlankUnpushedSource withholds.
+type CriticFindingRow struct {
+	Repo   string `json:"repo"`
+	Commit string `json:"commit"`
+	Path   string `json:"path"`
+
+	QueueFindingID  int64  `json:"queue_finding_id"`
+	Model           string `json:"model"`
+	TargetTest      string `json:"target_test"`
+	TestFile        string `json:"test_file"`
+	TestSelector    string `json:"test_selector"`
+	Scope           string `json:"scope"`
+	Evidence        string `json:"evidence"`
+	Severity        string `json:"severity"`
+	Adjudication    string `json:"adjudication"`
+	Source          string `json:"source"`
+	SeatTool        string `json:"seat_tool"`
+	ModelUnresolved bool   `json:"model_unresolved"`
+}
+
 // Bundle is one scan at all five grains: the thing a push actually is. It
 // exists as one value, rather than five calls, because the five tables must
 // land together — a scan row with no mutants reads, to the next query, as a
@@ -384,6 +460,17 @@ type Bundle struct {
 	Mutants []MutantRow
 	Calls   []ModelCallRow
 	Events  []EventRow
+	// Seats, MutantAttempts and CriticFindings are what a run measured about
+	// its seats (see SeatRow). They live in the bundle, and so in the signed
+	// ledger entry, but NO warehouse table holds them yet (Phase 4):
+	// PushBundle ignores them, and the warehouse-rows hash leaves them out
+	// (cmd/corral prepareRowsForHash) because a verifier reads the rows back
+	// from the warehouse and could never reproduce a hash that covered rows
+	// the warehouse never received. omitempty, so a bundle that carries none
+	// marshals byte-for-byte as it did before they existed.
+	Seats          []SeatRow          `json:"seats,omitempty"`
+	MutantAttempts []MutantAttemptRow `json:"mutant_attempts,omitempty"`
+	CriticFindings []CriticFindingRow `json:"critic_findings,omitempty"`
 	// Link is stamped onto every row of every table by PushBundle, so a row
 	// and the statement it names can never disagree about which run produced
 	// them.
@@ -1118,6 +1205,13 @@ func BlankUnpushedSource(b *Bundle) {
 		mutants[i].Code = ""
 	}
 	b.Mutants = mutants
+
+	// A critic finding's Evidence quotes the flagged test's code.
+	findings := append([]CriticFindingRow(nil), b.CriticFindings...)
+	for i := range findings {
+		findings[i].Evidence = ""
+	}
+	b.CriticFindings = findings
 }
 
 // requireStatements enforces Link.Require: refuse the whole push, naming the

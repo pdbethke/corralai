@@ -5678,6 +5678,14 @@ func prepareRowsForHash(b auditpush.Bundle, version int) (auditpush.Bundle, erro
 	for i := range b.Events {
 		b.Events[i].StatementSHA256 = ""
 	}
+	// The seat, attempt and critic-finding rows are in the bundle (so in the
+	// signed ledger entry) but the warehouse has no table for them yet, so a
+	// verifier reading the rows back could never reproduce a hash that
+	// covered them: every run that carried them would fail `verify --db`.
+	// The ledger chain's signature binds them; this hash binds what the
+	// warehouse holds. Phase 4 adds the tables and a hash version that
+	// includes them.
+	b.Seats, b.MutantAttempts, b.CriticFindings = nil, nil, nil
 	// Link is deliberately NOT hashed: it holds the statement hash itself.
 	b.Link = auditpush.Link{}
 	return b, nil

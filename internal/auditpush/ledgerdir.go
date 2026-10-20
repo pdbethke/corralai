@@ -78,8 +78,10 @@ func IsLedgerDir(target string) bool {
 // Hash is sha256 over the canonical sparse JSON (CanonicalSparseJSON) of
 // the entry with Hash and Signature cleared; Prev is the previous entry's
 // Hash, "" on the first entry (a stated genesis, never a fabricated link).
-// Signature is Ed25519 over Hash's bytes, KeyID naming the key convention
-// ("corral-certify" — the same key --local verdicts and --attest use).
+// Signature is Ed25519 over Hash's bytes, KeyID naming the key: from
+// corral-ledger-5 its fingerprint (KeyFingerprint), resolved by the
+// verifier to the root or a registered signer; through corral-ledger-4 the
+// convention name "corral-certify", which means the root (LegacyRootKeyID).
 // Unsigned entries are legal (no key configured) and are SAID to be, by
 // every reader: a chain still orders them; only a signature says who.
 type LedgerEntry struct {
@@ -125,6 +127,8 @@ type LedgerEntry struct {
 	// who decided and why. Automatic passes never write these; a later one
 	// by the same or another person is a new entry, and the newest stands.
 	Adjudication *Adjudication `json:"adjudication,omitempty"`
+	// Signer (KindSigner) registers or revokes a signing key. See signers.go.
+	Signer *SignerChange `json:"signer,omitempty"`
 	// Hash and Signature are computed over everything above.
 	Hash      string `json:"hash,omitempty"`
 	KeyID     string `json:"keyid,omitempty"`
@@ -149,6 +153,7 @@ const (
 	KindCheckpoint   = "checkpoint"
 	KindReview       = "review"
 	KindAdjudication = "adjudication"
+	// KindSigner is declared in signers.go beside its payload.
 )
 
 // Adjudication is a person's verdict on one finding of a review entry.
@@ -171,6 +176,13 @@ type Checkpoint struct {
 	Head    string    `json:"head"`    // the Hash of the last pruned entry
 	Entries int       `json:"entries"` // how many entries were pruned
 	Through time.Time `json:"through"` // the Pushed time of the last pruned entry
+	// Signers is the active signer set at the pruned head (ActiveSigners).
+	// A checkpoint deletes the register entries that made later entries'
+	// keys good, so without this the first entry a registered key signs
+	// after a prune would verify as "not a registered signer". It is
+	// omitempty on a nil slice so a chain that never registered a signer
+	// checkpoints byte-for-byte as before.
+	Signers []SignerKey `json:"signers,omitempty"`
 }
 
 // IsScan reports whether the entry is a run's own record.
@@ -180,6 +192,11 @@ func (e LedgerEntry) IsScan() bool { return e.Kind == KindScan }
 type ledgerFile = LedgerEntry
 
 // LedgerFileFormat is the document version a ledger entry declares.
+// corral-ledger-5 (2026-10-19): keyid is a key FINGERPRINT
+// ("ed25519:" + 16 hex of sha256(pubkey)), not a convention name, and a
+// ledger may register signers (KindSigner), so a per-machine key can sign
+// under a root's authority. Format-4 and older entries are read unchanged;
+// their "corral-certify" keyid means "the root key" (LegacyRootKeyID).
 // corral-ledger-4 (2026-09-08): keyid — the name of WHO signed — is inside
 // the hashed bytes, so editing it breaks the hash and the signature that
 // covers it. Through corral-ledger-3 keyid was deleted before hashing and
@@ -198,14 +215,15 @@ type ledgerFile = LedgerEntry
 // whole directory exists to make impossible. VerifyLedgerDir notes on every
 // pre-4 entry that its signer name is self-reported.
 const (
-	LedgerFileFormat = "corral-ledger-4"
+	LedgerFileFormat = "corral-ledger-5"
+	ledgerFormat4    = "corral-ledger-4"
 	ledgerFormat3    = "corral-ledger-3"
 	ledgerFormat2    = "corral-ledger-2"
 )
 
 // knownLedgerFormat is what a reader accepts.
 func knownLedgerFormat(f string) bool {
-	return f == LedgerFileFormat || f == ledgerFormat3 || f == ledgerFormat2
+	return f == LedgerFileFormat || f == ledgerFormat4 || f == ledgerFormat3 || f == ledgerFormat2
 }
 
 // keyIDIsHashed reports whether this format covers keyid in the hashed
@@ -257,6 +275,9 @@ func EntryShapeProblem(e LedgerEntry) string {
 		if e.Checkpoint == nil || e.Checkpoint.Head == "" {
 			return "a checkpoint entry that names no replaced head"
 		}
+		if p := checkpointSignersProblem(e.Checkpoint.Signers); p != "" {
+			return p
+		}
 	case KindReview:
 		if e.Review == nil {
 			return "a review entry that carries no review"
@@ -278,6 +299,8 @@ func EntryShapeProblem(e LedgerEntry) string {
 		if strings.TrimSpace(a.By) == "" || strings.TrimSpace(a.Reason) == "" {
 			return "an adjudication names who decided and why"
 		}
+	case KindSigner:
+		return signerShapeProblem(e.Signer)
 	default:
 		return fmt.Sprintf("an entry of unknown kind %q", e.Kind)
 	}
@@ -398,8 +421,46 @@ func AppendLedgerEntry(dir string, e LedgerEntry, signer LedgerSigner) (string, 
 			return "", fmt.Errorf("%w — refusing to append, which would sign this chain as the new entry's history", err)
 		}
 		prev = existing[n-1].Hash
+		if err := requireRegisteredSigner(existing, signer); err != nil {
+			return "", err
+		}
 	}
 	return placeEntry(dir, e, prev, signer)
+}
+
+// requireRegisteredSigner is the writer-side refusal to append with a key a
+// signer ledger never registered. It exists to keep an HONEST operator from
+// writing an entry the verifier would reject — a laptop key nobody added, or
+// an unsigned entry on a ledger that now requires signatures — and it is not
+// the security boundary. It reads the set through ActiveSigners, which is a
+// keyless, name-based read: a signer entry that merely names the root's keyid
+// is accepted by it, so anyone who can write the directory can get past this
+// guard. Whether a key really was registered is answered only by
+// VerifyLedgerDir under the root key (--pub), and that is where a forged
+// registration is caught.
+//
+// A ledger with no signer entries and no signer-carrying checkpoint skips the
+// guard entirely, so a stranger's keyless chain, and every ledger that has
+// never used signers, append exactly as before. The root is always allowed:
+// it is how a key is registered in the first place.
+func requireRegisteredSigner(existing []LedgerEntry, signer LedgerSigner) error {
+	rootID, active := ActiveSigners(existing)
+	if rootID == "" {
+		return nil
+	}
+	if signer == nil {
+		return fmt.Errorf("auditpush: this ledger registers its signers, so the verifier reports an unsigned entry as UNSIGNED among signed ones; sign with the root key or a registered one (register a machine key with `corral ledger signer add`)")
+	}
+	id := signer.SigningKeyID()
+	if id == rootID {
+		return nil
+	}
+	for _, k := range active {
+		if k.KeyID == id {
+			return nil
+		}
+	}
+	return fmt.Errorf("auditpush: key %s is not registered on this ledger, so the verifier would refuse its entries; register it with `corral ledger signer add` (signed by the root key) first", id)
 }
 
 // placeEntry hashes, signs and writes e linked to prev. It is the one
@@ -438,6 +499,12 @@ func placeEntry(dir string, e LedgerEntry, prev string, signer LedgerSigner) (st
 	// precisely the hole this format closes.
 	if signer != nil {
 		e.KeyID = signer.SigningKeyID()
+		// Format 5 names keys by fingerprint; the verifier calls this
+		// spelling a Problem, so the writer refuses it rather than place an
+		// entry its own reader rejects.
+		if e.KeyID == LegacyRootKeyID {
+			return "", fmt.Errorf("auditpush: refusing to place %s", legacyKeyIDProblem)
+		}
 	}
 	h, err := EntryHash(e)
 	if err != nil {
@@ -464,6 +531,12 @@ func placeEntry(dir string, e LedgerEntry, prev string, signer LedgerSigner) (st
 		middle, tail = "retract", e.Retracts
 	case KindCheckpoint:
 		middle, tail = "checkpoint", e.Checkpoint.Head
+	case KindSigner:
+		// Its own hash, as for reviews below. The tail was the key's
+		// fingerprint, which read nicely and collided: a register and a
+		// revoke of one key inside one second share a name, and the second
+		// was refused ("already exists").
+		middle, tail = "signer", e.Hash
 	case KindReview, KindAdjudication:
 		// Its own hash: two reviews of one commit, or two verdicts on one
 		// review, can land in the same second, and a name that collided
@@ -542,13 +615,18 @@ type ChainCheck struct {
 	// Hash is the entry's own hash, so a caller can compare the chain's HEAD
 	// against an anchor held outside the directory. Truncation from the end
 	// leaves every surviving link valid and is invisible from within.
-	Hash    string
-	Commit  string
-	HashOK  bool // the stored Hash matches the entry's bytes
-	LinkOK  bool // Prev names the previous entry's Hash (true for a genesis entry)
-	Signed  bool // the entry carries a signature
-	SigOK   bool // the signature verifies under pub (false when unsigned or no pub given)
-	KeyID   string
+	Hash   string
+	Commit string
+	HashOK bool // the stored Hash matches the entry's bytes
+	LinkOK bool // Prev names the previous entry's Hash (true for a genesis entry)
+	Signed bool // the entry carries a signature
+	SigOK  bool // the signature verifies under the key resolved for KeyID (false when unsigned, unresolved or no pub given)
+	KeyID  string
+	// Signer is who the chain says holds KeyID at this entry: "root", the
+	// name a register entry gave the key, or "" (unsigned, or a key the
+	// chain does not hold here). Filled with or without a key; only SigOK
+	// says the signature was checked.
+	Signer  string
 	Problem string // "" when nothing is wrong
 	Genesis bool
 	// Kind is the entry's kind; Note says what a retraction or checkpoint
@@ -558,14 +636,33 @@ type ChainCheck struct {
 }
 
 // VerifyLedgerDir walks the chain: every entry's hash against its bytes,
-// every Prev against its predecessor, every signature against pub (when
+// every Prev against its predecessor, every signature against the key the
+// chain held for its keyid at that point (when pub, the ROOT key, is
 // given). It never stops at the first failure — a reader wants the whole
 // picture — and it never calls an unsigned entry verified.
+//
+// Until corral-ledger-5 every signature was checked against pub alone: one
+// key for the whole ledger, and keyid a label. Now pub is the root, and the
+// root's signer entries say which other keys may sign from where on, so a
+// second machine signs under its own key instead of holding a copy of the
+// root's. A key is good only between its registration and its revocation;
+// an entry it signed outside that window is a Problem, whatever its
+// signature says.
 func VerifyLedgerDir(dir string, pub ed25519.PublicKey) ([]ChainCheck, error) {
 	entries, err := ReadLedgerDir(dir)
 	if err != nil {
 		return nil, err
 	}
+	checks, _ := verifyEntries(entries, pub)
+	return checks, nil
+}
+
+// verifyEntries is THE walk: VerifyLedgerDir's checks, and the signer set
+// it leaves at the head, which is what ActiveSigners returns. One loop for
+// both, so a reader and a writer can never disagree about who was
+// registered when.
+func verifyEntries(entries []LedgerEntry, pub ed25519.PublicKey) ([]ChainCheck, *signerSet) {
+	set := newSignerSet(entries, pub)
 	// Whether this chain is a signed one at all: an entirely unsigned ledger
 	// is honest (no key was configured), but a single unsigned entry among
 	// signed ones is a hole, not a style.
@@ -586,10 +683,23 @@ func VerifyLedgerDir(dir string, pub ed25519.PublicKey) ([]ChainCheck, error) {
 		c.HashOK = herr == nil && h == e.Hash
 		c.LinkOK = e.Prev == prevHash
 		c.Signed = e.Signature != ""
-		if c.Signed && pub != nil {
+		// The key is resolved BEFORE the signature is checked, from the set
+		// as it stands at this entry — never from the entry's own claim.
+		name, key, keyProblem := set.resolve(e)
+		c.Signer = name
+		if c.Signed && key != nil {
 			raw, _ := hex.DecodeString(e.Hash)
 			sig, _ := hex.DecodeString(e.Signature)
-			c.SigOK = ed25519.Verify(pub, raw, sig)
+			c.SigOK = ed25519.Verify(key, raw, sig)
+		}
+		shapeProblem := EntryShapeProblem(e)
+		changeProblem := ""
+		if e.Kind == KindSigner && shapeProblem == "" {
+			changeProblem = set.changeProblem(e)
+		}
+		seedProblem := ""
+		if e.Kind == KindCheckpoint && i == 0 && shapeProblem == "" {
+			seedProblem = set.seedProblem(e)
 		}
 		uidOK := true
 		if e.Format != ledgerFormat2 && e.IsScan() && e.Bundle.Scan != (ScanRow{}) {
@@ -602,12 +712,27 @@ func VerifyLedgerDir(dir string, pub ed25519.PublicKey) ([]ChainCheck, error) {
 			c.Problem = "scan_uid does not derive from the entry's scan row and pushed time — the identity was altered, or minted elsewhere"
 		case !c.LinkOK:
 			c.Problem = fmt.Sprintf("prev %.12s does not name the previous entry (%.12s) — an entry was removed, reordered or inserted", e.Prev, prevHash)
-		case c.Signed && pub != nil && !c.SigOK:
+		case seedProblem != "" && seedProblem == errCheckpointNotRoot:
+			// Before keyProblem: a checkpoint by a non-root key is not "an
+			// unregistered key" — the set is empty at a genesis — it is a
+			// genesis claiming authority to hand out keys.
+			c.Problem = seedProblem
+		case keyProblem != "":
+			c.Problem = keyProblem
+		case c.Signed && key != nil && !c.SigOK && name == "root":
 			c.Problem = "signature does not verify under the given key"
+		case c.Signed && key != nil && !c.SigOK:
+			c.Problem = fmt.Sprintf("signature does not verify under the key registered as %s (%s)", name, e.KeyID)
 		case e.Kind == KindCheckpoint && i != 0:
 			c.Problem = fmt.Sprintf("a checkpoint at position %d — a checkpoint is a genesis and stands only at the start of a chain", i+1)
-		case EntryShapeProblem(e) != "":
-			c.Problem = EntryShapeProblem(e)
+		case shapeProblem != "":
+			c.Problem = shapeProblem
+		case seedProblem != "":
+			c.Problem = seedProblem
+		case changeProblem != "":
+			c.Problem = changeProblem
+		case e.Kind == KindSigner:
+			c.Note = changeNote(e.Signer)
 		case e.Kind == KindCheckpoint:
 			c.Note = fmt.Sprintf("chain begins at a checkpoint: %d earlier entries (through %s, head %.12s) are not present", e.Checkpoint.Entries, e.Checkpoint.Through.UTC().Format("2006-01-02"), e.Checkpoint.Head)
 		case e.Kind == KindRetract && !seen[e.Retracts]:
@@ -656,6 +781,15 @@ func VerifyLedgerDir(dir string, pub ed25519.PublicKey) ([]ChainCheck, error) {
 		if !keyIDIsHashed(e.Format) && c.Signed && c.Problem == "" {
 			c.Note = strings.TrimPrefix(strings.TrimSpace(c.Note+" · signer name is self-reported: "+e.Format+" does not cover keyid in the hash, so it is not vouched for by the signature (the signature itself is checked)"), "· ")
 		}
+		// The set moves only on a signer entry that checked CLEAN, and only
+		// after its own check: the change cannot vouch for itself, and a
+		// tampered or forged one leaves the set as it was.
+		if e.Kind == KindSigner && c.Problem == "" {
+			set.apply(e.Signer)
+		}
+		if e.Kind == KindCheckpoint && i == 0 && c.Problem == "" {
+			set.seed(e.Checkpoint.Signers)
+		}
 		out = append(out, c)
 		prevHash = e.Hash
 		seen[e.Hash] = true
@@ -663,7 +797,7 @@ func VerifyLedgerDir(dir string, pub ed25519.PublicKey) ([]ChainCheck, error) {
 			seenReview[e.Hash] = true
 		}
 	}
-	return out, nil
+	return out, set
 }
 
 // shortRef renders "<hash>#Rn" as "<hash12>#Rn".
@@ -831,13 +965,27 @@ func RequireIntactChain(dir string) error {
 	return nil
 }
 
+// ChainHasSigners reports whether the chain registers signers at all: a
+// signer entry, or a leading checkpoint that carries a set.
+func ChainHasSigners(entries []LedgerEntry) bool {
+	for i, e := range entries {
+		if e.Kind == KindSigner {
+			return true
+		}
+		if i == 0 && e.Kind == KindCheckpoint && e.Checkpoint != nil && len(e.Checkpoint.Signers) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
 // WriteCheckpoint replaces every entry in dir with one KindCheckpoint
 // genesis that names the head it stood in for. The pruned files are
 // DELETED — that is the point of a checkpoint — after the checkpoint is
 // safely placed, so a failure midway leaves a chain the verifier reports
 // (a checkpoint not at position 1), never an empty directory. Returns the
 // checkpoint's file name and how many entries were pruned.
-func WriteCheckpoint(dir string, signer LedgerSigner) (string, int, error) {
+func WriteCheckpoint(dir string, signer LedgerSigner, rootPub ed25519.PublicKey) (string, int, error) {
 	entries, err := ReadLedgerDir(dir)
 	if err != nil {
 		return "", 0, err
@@ -860,7 +1008,44 @@ func WriteCheckpoint(dir string, signer LedgerSigner) (string, int, error) {
 	if err != nil {
 		return "", 0, err
 	}
-	cp := LedgerEntry{Kind: KindCheckpoint, Checkpoint: &Checkpoint{Head: head.Hash, Entries: len(entries), Through: head.Pushed}}
+	// The set the pruned register/revoke entries left at the head travels in
+	// the checkpoint (see Checkpoint.Signers), and the root's signature on
+	// the checkpoint turns that set into an authorization. So on a chain
+	// that has signers, the set must come from a walk the ROOT KEY vouches
+	// for: the keyless walk accepts a signer entry by name, so carrying its
+	// set would let anyone who can write the directory (no key needed) have
+	// a forged registration signed by the root at the next prune. Every
+	// refusal here precedes the first write or delete. nil, not empty, when
+	// there is no set, so the JSON gains no key.
+	var carried []SignerKey
+	if ChainHasSigners(entries) {
+		if rootPub == nil {
+			return "", 0, fmt.Errorf("auditpush: %s registers signers, so a checkpoint needs the root public key to vouch for them (none was given) — refusing to prune", dir)
+		}
+		if signer == nil || signer.SigningKeyID() != KeyFingerprint(rootPub) {
+			return "", 0, fmt.Errorf("auditpush: a checkpoint over a chain with signers must be signed by the root (%s) — refusing to prune, because the checkpoint would be a permanent Problem under the root key", KeyFingerprint(rootPub))
+		}
+		// The keyid is only a label the signer reports; an API caller can
+		// attach the root's fingerprint to another key. Prove the key signs
+		// as the root BEFORE anything is placed or deleted, or the prune
+		// would leave a genesis the root key rejects, permanently.
+		probeSum := sha256.Sum256([]byte("corral-ledger-checkpoint-root-probe-v1"))
+		_, probeSig, perr := signer.Sign(probeSum[:])
+		if perr != nil || !ed25519.Verify(rootPub, probeSum[:], probeSig) {
+			return "", 0, fmt.Errorf("auditpush: the signer claims the root keyid (%s) but its key does not sign as the root — refusing to prune, because the checkpoint would be a permanent Problem under the root key", KeyFingerprint(rootPub))
+		}
+		checks, set := verifyEntries(entries, rootPub)
+		for _, c := range checks {
+			if c.Problem != "" {
+				return "", 0, fmt.Errorf("auditpush: %s does not verify under the root key (%s: %s) — refusing to prune, because a checkpoint would sign a set the root never authorized", dir, c.File, c.Problem)
+			}
+		}
+		carried = set.list()
+		if len(carried) == 0 {
+			carried = nil
+		}
+	}
+	cp := LedgerEntry{Kind: KindCheckpoint, Checkpoint: &Checkpoint{Head: head.Hash, Entries: len(entries), Through: head.Pushed, Signers: carried}}
 	name, err := placeEntry(dir, cp, "", signer)
 	if err != nil {
 		return "", 0, err

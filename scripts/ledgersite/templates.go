@@ -209,7 +209,7 @@ const entryBanner = `
   <p><strong>This entry:</strong>
   <span class="chip{{if .ChainHashOK}} ok{{else}} bad{{end}}">hash {{if .ChainHashOK}}matches its bytes{{else}}MISMATCH{{end}}</span>
   <span class="chip{{if .ChainLinkOK}} ok{{else}} bad{{end}}">link {{if .ChainLinkOK}}{{if .Genesis}}genesis{{else}}names its predecessor{{end}}{{else}}BROKEN{{end}}</span>
-  {{if .Signed}}<span class="chip{{if .SigOK}} ok{{else}} warn{{end}}">signature {{if .SigOK}}verified{{else}}not checked (no key){{end}}</span>
+  {{if .Signed}}<span class="chip{{if .SigOK}} ok{{else if .SigsChecked}} bad{{else}} warn{{end}}">signature {{if .SigOK}}verified{{else if .SigsChecked}}NOT VERIFIED{{else}}not checked (no key){{end}}</span>{{if .Signer}} <span class="small">signed by {{.Signer}}</span>{{end}}
   {{else}}<span class="chip warn">unsigned</span>{{end}}
   {{if .ChainProblem}}<br><span class="chip bad">{{.ChainProblem}}</span>{{end}}</p>
 </div>

@@ -27,7 +27,7 @@ func TestMalformedAdjudicationIsRefusedAtBothDoors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	signer := Ed25519LedgerSigner{KeyID: "repro", Key: priv}
+	signer := Ed25519LedgerSigner{KeyID: KeyFingerprint(pub), Key: priv}
 	dir := t.TempDir()
 	if _, err := WriteReview(dir, review.Review{Commit: "abc", Scope: "internal/auditpush"}, signer); err != nil {
 		t.Fatal(err)
@@ -44,7 +44,7 @@ func TestMalformedAdjudicationIsRefusedAtBothDoors(t *testing.T) {
 	// From corral-ledger-4 the signer's name is inside the hashed bytes, so
 	// a hand-written entry must name its key BEFORE hashing — setting it
 	// afterwards is the hole that format closed.
-	malformed.KeyID = "repro"
+	malformed.KeyID = KeyFingerprint(pub)
 	h, err := EntryHash(malformed)
 	if err != nil {
 		t.Fatal(err)

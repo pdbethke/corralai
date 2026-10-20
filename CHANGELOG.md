@@ -9,6 +9,40 @@ still move between minor versions.
 Entries describe what changed for someone *using* the tool. For the full commit
 history of any release, `git log v0.3.4..v0.3.5`.
 
+## [Unreleased]
+
+### Breaking
+
+- **A ledger can now say who may sign it, and every entry corral writes is
+  now `corral-ledger-5`.** `corral ledger signer add|revoke|list` registers
+  and retires signing keys inside the chain itself: a registration or
+  revocation is an entry, signed by the root key, and `verify` checks each
+  later entry's signature against the key the chain registered for it rather
+  than one key for the whole ledger. What breaks:
+  - **An older corral cannot read a ledger this corral has appended to**,
+    signers or not, because every new entry is format 5. That applies as soon
+    as any entry is appended by this version, by anyone, to any ledger.
+    corral's own `corral/ledger` receives none until a release carrying
+    format 5 is tagged and the docs are pinned to it. Older entries verify
+    unchanged here.
+  - **`keyid` is the key's fingerprint** (`ed25519:` and 16 hex characters of
+    its SHA-256) on new entries, not the name `corral-certify`; on older
+    entries `corral-certify` still means the root.
+  - **`verify` output changed for every signed entry, plain chains
+    included:** it reads `signed by root (<keyid>)` or
+    `signed by <name> (<keyid>)` where it used to print the bare key name.
+    Anything parsing that line must change.
+  - **`corral ledger checkpoint` on a chain that has signers** is a root
+    operation: it needs `CORRALAI_LEDGER_ROOT_KEY` and `--expect-head <hash>`
+    from outside the directory. A chain without signers checkpoints as before.
+
+  Also new, not breaking: root operations read the root seed from
+  `CORRALAI_LEDGER_ROOT_KEY` alone, never from a file corral finds, and never
+  fall back to the machine's certify key. `--pub` and `CORRALAI_LEDGER_PUBKEY`
+  name only the root; with neither, signatures are still not checked, and a
+  keyless read believes any signer entry that names the root, so only a read
+  under the root key authorizes anything.
+
 ## [v1.0.0-rc.25] — 2026-10-18
 
 - **JavaScript, TypeScript and Ruby critics must now judge every test.**

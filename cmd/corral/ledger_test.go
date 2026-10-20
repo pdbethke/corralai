@@ -4,7 +4,9 @@ package main
 
 import (
 	"bytes"
+	"crypto/ed25519"
 	"database/sql"
+	"encoding/hex"
 	"io"
 	"os"
 	"os/exec"
@@ -297,7 +299,7 @@ func TestLedgerPushMovesTheRecordAndSkipsWhatTheWarehouseHolds(t *testing.T) {
 	if code := runLedger([]string{"push", dir, wh}, &out, &errb); code != 0 {
 		t.Fatalf("push: exit %d\n%s%s", code, out.String(), errb.String())
 	}
-	for _, want := range []string{"pushed 1 scan(s) (1 file rows), 1 review(s) (1 findings), 1 adjudication(s)", "1 retracted entry left out", "1 retraction/checkpoint entry are chain facts", "source withheld"} {
+	for _, want := range []string{"pushed 1 scan(s) (1 file rows), 1 review(s) (1 findings), 1 adjudication(s)", "1 retracted entry left out", "1 retraction/checkpoint/signer entry are chain facts", "source withheld"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("push output lacks %q:\n%s", want, out.String())
 		}
@@ -327,5 +329,53 @@ func TestLedgerPushMovesTheRecordAndSkipsWhatTheWarehouseHolds(t *testing.T) {
 	// A directory target is refused.
 	if code := runLedger([]string{"push", dir, filepath.Join(t.TempDir(), "other") + "/"}, &out, &errb); code != 2 {
 		t.Errorf("a directory target must be refused, got %d", code)
+	}
+}
+
+// From corral-ledger-5 a ledger entry names its key by fingerprint, and the
+// verifier calls a format-5 "corral-certify" a Problem — so the signer every
+// ledger verb writes with must already sign by fingerprint, and say so.
+func TestLedgerSignerUsesFingerprint(t *testing.T) {
+	seed := strings.Repeat("5a", ed25519.SeedSize)
+	t.Setenv("CORRALAI_CERTIFY_KEY", seed)
+	raw, _ := hex.DecodeString(seed)
+	want := auditpush.KeyFingerprint(ed25519.NewKeyFromSeed(raw).Public().(ed25519.PublicKey))
+	s, label, err := ledgerSignerFromLocalKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := s.SigningKeyID(); got != want {
+		t.Fatalf("SigningKeyID() = %q, want the key's fingerprint %q", got, want)
+	}
+	if label != "signed by "+want {
+		t.Fatalf("label %q, want %q", label, "signed by "+want)
+	}
+}
+
+// TestScansDescribesSignerEntries: `scans show` at a signer entry's position
+// says what the entry did, for a registration and a revocation.
+func TestScansDescribesSignerEntries(t *testing.T) {
+	root, m := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0x41}, ed25519.SeedSize)), ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0x42}, ed25519.SeedSize))
+	pub := m.Public().(ed25519.PublicKey)
+	id := auditpush.KeyFingerprint(pub)
+	s := auditpush.Ed25519LedgerSigner{KeyID: auditpush.KeyFingerprint(root.Public().(ed25519.PublicKey)), Key: root}
+	dir := t.TempDir()
+	reg := auditpush.SignerChange{Action: auditpush.SignerRegister, KeyID: id, PubKey: hex.EncodeToString(pub), Name: "laptop"}
+	rev := auditpush.SignerChange{Action: auditpush.SignerRevoke, KeyID: id, PubKey: hex.EncodeToString(pub), Name: "-", Reason: "retired"}
+	for _, c := range []auditpush.SignerChange{reg, rev} {
+		if _, err := auditpush.WriteSignerChange(dir, c, s); err != nil {
+			t.Fatal(err)
+		}
+	}
+	entries, err := auditpush.ReadLedgerDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l := &ledgerScans{entries: entries}
+	if got, want := l.EntryKind(1), "signer register laptop ("+id+")"; got != want {
+		t.Errorf("register: %q, want %q", got, want)
+	}
+	if got, want := l.EntryKind(2), "signer revoke "+id+": retired"; got != want {
+		t.Errorf("revoke: %q, want %q", got, want)
 	}
 }

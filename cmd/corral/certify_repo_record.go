@@ -171,7 +171,7 @@ func buildScanFileRows(results []reposcan.FileResult, excluded []reposcan.Exclus
 				// this command threads a stderr writer everywhere else,
 				// and a caller capturing stderr must actually SEE a
 				// fail-open disclosure.
-				fmt.Fprintf(stderr, "corral certify --repo: %s: verdict not cached (marshal failed): %v\n", path, merr)
+				fmt.Fprintf(stderr, "corral certify: %s: verdict not cached (marshal failed): %v\n", path, merr)
 				verdictJSON = ""
 			}
 			rows = append(rows, scanstore.File{
@@ -838,7 +838,7 @@ func auditedParentSHA256(path string, v advpool.Verdict, stderr io.Writer) strin
 				continue
 			}
 			if m.ParentSHA256 != sha {
-				fmt.Fprintf(stderr, "corral certify --repo: %s: mutants disagree about the parent they came from (%s vs %s) — recording no parent_sha256 for this file\n",
+				fmt.Fprintf(stderr, "corral certify: %s: mutants disagree about the parent they came from (%s vs %s) — recording no parent_sha256 for this file\n",
 					path, sha, m.ParentSHA256)
 				return ""
 			}

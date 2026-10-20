@@ -87,6 +87,8 @@ const localCertifyThreshold = 0.8
 // the kill-rate is still measured by executing tests in a sandbox jail (never a
 // self-report), decorrelation is still enforced, and the verdict is still signed.
 func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
+	// The run's start, for the ledger entry's started_at and total_millis.
+	startedAt := time.Now()
 	flagArgs, checkArgv := splitCertifyArgs(args)
 
 	fs := flag.NewFlagSet("certify --local", flag.ContinueOnError)
@@ -134,6 +136,8 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 	recordMutantsFlag := fs.String("record-mutants", "", "write the mutants this run actually GRADED to this file, as a replayable corral-mutants-2 document — each mutant its SEARCH/REPLACE hunk, tied to the sha256 of the source it is an edit of. Mutants are authored by a model, so an ordinary run re-draws the exam every time; pin the set and a later comparison measures the thing you changed instead of generator variance. Written even when the verdict is needs-review. A v2 document re-recorded from a --mutants replay of an older corral-mutants-1 set contains that set's WHOLE-FILE entries, not hunks — the run graded what was recorded, and re-recording it does not manufacture anchors it never had")
 	var bindDirFlag stringSlice
 	fs.Var(&bindDirFlag, "bind-dir", "extra repo-relative dependency dir to mount read-only into the jail instead of copying it into the workspace (repeatable; node_modules/vendor/.venv/venv/.bundle are auto-detected) — --repo-dir mode only")
+	ledgerFlag := fs.String("ledger", "", "ALSO write this run's ledger entry to this ledger DIRECTORY, beside the machine ledger (statedir's ledger, override CORRALAI_MACHINE_LEDGER) every --local run writes to. Refused inside --repo-dir: --local never writes into the checkout. One signed, hash-linked entry per run; `corral verify --ledger <dir>` walks the chain")
+	noLedgerFlag := fs.Bool("no-ledger", false, "write no entry to the machine ledger (an explicit --ledger is still written)")
 	noBindDepsFlag := fs.Bool("no-bind-deps", false, "copy dependency dirs into the jail workspace instead of bind-mounting them read-only (the pre-bind behavior; subject to the workspace size cap)")
 	if err := fs.Parse(flagArgs); err != nil {
 		return flagParseExit(err)
@@ -246,6 +250,13 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "corral certify --local: --bind-dir and --no-bind-deps conflict (--bind-dir binds a dir read-only; --no-bind-deps copies all dep dirs — pick one)")
 		return 2
 	}
+	// Refused before any jail, store or spend, like the flag refusals above:
+	// an entry the run could only place inside the checkout is a write into
+	// the checkout, which --local never makes.
+	if l := strings.TrimSpace(*ledgerFlag); l != "" && ledgerInsideCheckout(l, *repoDirFlag) {
+		fmt.Fprintf(stderr, "corral certify --local: --ledger %s is inside --repo-dir %s — --local never writes into the checkout; name a directory outside it\n", l, *repoDirFlag)
+		return 2
+	}
 
 	// --record: collect the run into a replayable tape. The sink is the driver's
 	// EventSink (pool reasoning beats) and is also fed the task lifecycle +
@@ -326,6 +337,7 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 		loadedPrior = lp
 	}
 	var presetMutants []adequacy.Mutant
+	var mutantsFromSHA string
 	if p := strings.TrimSpace(*mutantsFlag); p != "" {
 		set, serr := adequacy.ReadMutantSet(p)
 		if serr != nil {
@@ -348,19 +360,29 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 			return 2
 		}
 		presetMutants = ms
+		// The exam's identity on the ledger row, hashed the way a repo scan
+		// hashes its --mutants document.
+		sum, herr := fileSHA256(p)
+		if herr != nil {
+			fmt.Fprintf(stderr, "corral certify --local: hashing --mutants %s: %v\n", p, herr)
+			return 2
+		}
+		mutantsFromSHA = sum
 		fmt.Fprintf(stdout, "replaying %d recorded mutant(s) for %s from %s — no mutant-generator model call will be made\n", len(ms), setKey, p)
 	}
 
 	// --record-mutants: flushed after the run on EVERY exit path below, a
 	// needs-review verdict included. A red run's exam is the one most worth
 	// being able to reproduce.
-	var mutantSink func(string, []adequacy.Mutant)
+	// The recorder exists on EVERY run, as it does on a repo scan: its hunks
+	// are the code on the ledger entry's mutant rows (stampHunks), and
+	// --record-mutants decides only whether the set is ALSO written to a file.
+	rc := newMutantSetRecorder()
+	mutantSink := rc.sink
 	// interruptRefused: the run was stopped and refused its record, so the
 	// mutant set — partial, or empty — is not written either.
 	interruptRefused := false
 	if p := strings.TrimSpace(*recordMutantsFlag); p != "" {
-		rc := newMutantSetRecorder()
-		mutantSink = rc.sink
 		defer func() {
 			if interruptRefused {
 				fmt.Fprintln(stderr, "corral certify --local: --record-mutants not written — the run was interrupted")
@@ -395,7 +417,13 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 	auditCtx, stopSignals := auditContext(stderr)
 	defer stopSignals()
 
-	verdict, err := auditOneFile(auditCtx, localAuditInput{
+	// Whether the checkout has changes its commit lacks, asked ONCE, before
+	// the audit starts (treeDirty's rule).
+	auditedTreeDirty := treeDirty(*repoDirFlag)
+	// What the finished run measured about its seats, for the ledger entry.
+	var measured advpool.RunTelemetry
+
+	in := localAuditInput{
 		repoDir: strings.TrimSpace(*repoDirFlag), codePath: *codePath,
 		testPath: strings.TrimSpace(*testPath), goal: strings.TrimSpace(*goal),
 		lang: strings.TrimSpace(*langFlag),
@@ -425,8 +453,10 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 		matrix: *matrixFlag, record: rec, bugCatchDB: bugCatchDBPath, criticScoreDB: criticScoreDBPath,
 		mutantAttemptsDB: mutantAttemptsDBPath,
 		openStore:        openStore,
+		telemetry:        func(t advpool.RunTelemetry) { measured = t },
 		stdout:           stdout, stderr: stderr,
-	})
+	}
+	verdict, err := auditOneFile(auditCtx, in)
 	if localInterruptRefuses(err, &verdict) {
 		interruptRefused = true
 		return refuseInterrupted(stderr, "corral certify --local")
@@ -442,6 +472,18 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 			return 2
 		}
 		return 1
+	}
+
+	// The ledger entry: built here, after auditOneFile set verdict.ModelCalls,
+	// so the entry carries the calls and the header's token totals. To the
+	// machine ledger by default, never into the checkout; fail-open — see
+	// writeLocalLedgerEntries.
+	if b, berr := localEntryBundle(in, verdict, measured, startedAt, localRunFacts{
+		treeDirty: auditedTreeDirty, mutantsFrom: mutantsFromSHA, recorder: rc,
+	}); berr != nil {
+		fmt.Fprintf(stderr, "corral certify --local: no ledger entry written: %v\n", berr)
+	} else {
+		writeLocalLedgerEntries(b, *ledgerFlag, *noLedgerFlag, stdout, stderr)
 	}
 
 	// --out writes the signed record as a self-contained file the user can

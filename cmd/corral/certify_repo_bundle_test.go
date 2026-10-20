@@ -53,61 +53,7 @@ func twoFileLedgerRows(t *testing.T) (string, []scanstore.File, []scanstore.Muta
 				Text: "F never returns a negative number", Provenance: "derived:claude-x@v1.2.3 (reused)",
 			}, GoalReused: true},
 			Gradable: true,
-			Verdict: advpool.Verdict{
-				DevKillRate: 0.5, Survivors: 2, ProvenMissed: 1,
-				// A real pair, non-nil and Sufficient, so the field-for-field
-				// walk below actually exercises the Challenger columns
-				// rather than comparing nil to nil.
-				ChallengerAgreement: &modelcorr.Pair{
-					ModelA: "writer-a", ModelB: "writer-b",
-					Mutants: 8, SurvivedA: 4, SurvivedB: 3,
-					SharedSurvivors: 3, UnionSurvivors: 4,
-					Jaccard: 0.75, Sufficient: true,
-					Kappa: 0.4, KappaDefined: true,
-				},
-				MutantsTotal: 8, MutantsInvalid: 1,
-				RegionsTotal: 2, RegionsProbed: 2,
-				// A real value, non-empty, so the field-for-field walk below
-				// actually exercises PromptShape rather than comparing "" to
-				// "" — see PromptShape's own doc for what the value means.
-				PromptShape: "chunk",
-				// DISTINCT from PromptShape above, and non-empty, so the
-				// reflection walk below proves each value reaches its OWN
-				// warehouse column: two adjacent strings that happen to
-				// match would let a transposition pass.
-				WriterMode: advpool.WriterModePerSurvivor,
-				Status:     "needs-review", AuthoredTest: "func TestX(t *testing.T) {}",
-				ProvenMutantIDs: []string{"m2"},
-				TestSelection: advpool.TestSelection{
-					Method: "coverage-lines", Selected: 4, Of: 41, PerMutant: true,
-					TestsPerMutant: &advpool.TestsPerMutantSpread{Min: 3, Median: 4, Max: 9},
-				},
-				Concurrency: advpool.Concurrency{Trees: 6, Note: "probe passed"},
-				// The generator hashed the exact bytes it mutated, and every
-				// mutant of one file agrees. That hash — not a re-read of the
-				// checkout — is the file's parent_sha256.
-				DevKilledMutants: []advpool.MutantRef{
-					{ID: "m1", ParentSHA256: auditedParentSHA, TestsRun: 4, Rule: "lines", Duration: 54 * time.Second,
-						// A REAL id, so the walk below actually walks
-						// killed_by: an empty one compares "" to "" and a
-						// dropped mapping passes.
-						KilledBy: "tests/test_a.py::test_scale"},
-				},
-				DevSurvivedMutants: []advpool.MutantRef{
-					{ID: "m2", ParentSHA256: auditedParentSHA, TestsRun: 3, Rule: "lines", Duration: 3 * time.Minute},
-					{ID: "m3", ParentSHA256: auditedParentSHA, TestsRun: 5, Rule: "lines"},
-				},
-				// The clock. Set on the fixture so the field-for-field walk
-				// below actually WALKS the timing columns: a mapping that
-				// dropped them would otherwise compare nil to nil and pass.
-				Timing: advpool.Timing{
-					Selection: 92 * time.Second, Generation: 4*time.Minute + 10*time.Second,
-					Pool: 12 * time.Second, DevPass: 35*time.Minute + 4*time.Second,
-					AuthoredPass: 109 * time.Second, Total: 43*time.Minute + 13*time.Second,
-				},
-				MutantDurationMedian: 54 * time.Second,
-				MutantDurationMax:    3 * time.Minute,
-			},
+			Verdict:  richAuditedVerdict(),
 		},
 		{
 			Job:      reposcan.Job{Path: "b.go", Lang: "go"},
@@ -118,6 +64,69 @@ func twoFileLedgerRows(t *testing.T) (string, []scanstore.File, []scanstore.Muta
 	}
 	return dir, buildScanFileRows(results, nil, reposcan.CoverageMap{}, "", dir, io.Discard),
 		buildScanMutantRows(0, results)
+}
+
+// richAuditedVerdict is an audited file's verdict with every field the ledger
+// file row reads set to a real, mutually distinct value, so a field-for-field
+// walk over the row built from it compares values and never two zeros. Shared
+// by the --repo bundle walk and the --local entry walk: both wrap a verdict
+// as a reposcan.FileResult, and the fixture is the same verdict.
+func richAuditedVerdict() advpool.Verdict {
+	return advpool.Verdict{
+		DevKillRate: 0.5, Survivors: 2, ProvenMissed: 1,
+		// A real pair, non-nil and Sufficient, so the field-for-field
+		// walk below actually exercises the Challenger columns
+		// rather than comparing nil to nil.
+		ChallengerAgreement: &modelcorr.Pair{
+			ModelA: "writer-a", ModelB: "writer-b",
+			Mutants: 8, SurvivedA: 4, SurvivedB: 3,
+			SharedSurvivors: 3, UnionSurvivors: 4,
+			Jaccard: 0.75, Sufficient: true,
+			Kappa: 0.4, KappaDefined: true,
+		},
+		MutantsTotal: 8, MutantsInvalid: 1,
+		RegionsTotal: 2, RegionsProbed: 2,
+		// A real value, non-empty, so the field-for-field walk below
+		// actually exercises PromptShape rather than comparing "" to
+		// "" — see PromptShape's own doc for what the value means.
+		PromptShape: "chunk",
+		// DISTINCT from PromptShape above, and non-empty, so the
+		// reflection walk below proves each value reaches its OWN
+		// warehouse column: two adjacent strings that happen to
+		// match would let a transposition pass.
+		WriterMode: advpool.WriterModePerSurvivor,
+		Status:     "needs-review", AuthoredTest: "func TestX(t *testing.T) {}",
+		ProvenMutantIDs: []string{"m2"},
+		TestSelection: advpool.TestSelection{
+			Method: "coverage-lines", Selected: 4, Of: 41, PerMutant: true,
+			TestsPerMutant: &advpool.TestsPerMutantSpread{Min: 3, Median: 4, Max: 9},
+		},
+		Concurrency: advpool.Concurrency{Trees: 6, Note: "probe passed"},
+		// The generator hashed the exact bytes it mutated, and every
+		// mutant of one file agrees. That hash — not a re-read of the
+		// checkout — is the file's parent_sha256.
+		DevKilledMutants: []advpool.MutantRef{
+			{ID: "m1", ParentSHA256: auditedParentSHA, TestsRun: 4, Rule: "lines", Duration: 54 * time.Second,
+				// A REAL id, so the walk below actually walks
+				// killed_by: an empty one compares "" to "" and a
+				// dropped mapping passes.
+				KilledBy: "tests/test_a.py::test_scale"},
+		},
+		DevSurvivedMutants: []advpool.MutantRef{
+			{ID: "m2", ParentSHA256: auditedParentSHA, TestsRun: 3, Rule: "lines", Duration: 3 * time.Minute},
+			{ID: "m3", ParentSHA256: auditedParentSHA, TestsRun: 5, Rule: "lines"},
+		},
+		// The clock. Set on the fixture so the field-for-field walk
+		// below actually WALKS the timing columns: a mapping that
+		// dropped them would otherwise compare nil to nil and pass.
+		Timing: advpool.Timing{
+			Selection: 92 * time.Second, Generation: 4*time.Minute + 10*time.Second,
+			Pool: 12 * time.Second, DevPass: 35*time.Minute + 4*time.Second,
+			AuthoredPass: 109 * time.Second, Total: 43*time.Minute + 13*time.Second,
+		},
+		MutantDurationMedian: 54 * time.Second,
+		MutantDurationMax:    3 * time.Minute,
+	}
 }
 
 // auditedParentSHA is the hash the mutant generator recorded for a.go's
@@ -170,30 +179,6 @@ func TestBundleIsTheLedgerRowForRow(t *testing.T) {
 		t.Errorf("a rejected file must carry no kill rate, got %v", *rejected.KillRate)
 	}
 
-	// deliberatelyUnmapped names every scanstore.File field that has an
-	// identically-named auditpush.Row field this test does NOT compare, with
-	// the reason. Anything not listed here must match exactly.
-	deliberatelyUnmapped := map[string]string{
-		// The ledger column predates the NULL-not-zero rule and is a plain
-		// int64; the warehouse column is nullable. Converted on purpose by
-		// nilIfZeroMillis — see buildAuditRows.
-		"SuiteBaselineMillis": "int64 in the ledger, *int64 (NULL when unmeasured) in the warehouse",
-		// The ledger keeps three nullable ints; the warehouse keeps one
-		// pointer-to-struct, so an unmeasured spread is absent rather than
-		// three zeros.
-		"TestsPerMutantMin":    "folded into Row.TestsPerMutant",
-		"TestsPerMutantMedian": "folded into Row.TestsPerMutant",
-		"TestsPerMutantMax":    "folded into Row.TestsPerMutant",
-		// The ledger's canonical per-file roster; the warehouse column holds
-		// the scan-wide roster JSON, which is a different (and older) claim.
-		"ModelsByRole": "Row.ModelsByRole is the scan-wide roster JSON, not the per-file KV",
-		// Renamed at the boundary, and compared explicitly below.
-		"MutantsTotal": "lands in Row.MutantsPlanted",
-		// Local-only bookkeeping with no warehouse column at all.
-		"Gradable":   "implied by Disposition",
-		"ComputedAt": "time.Time in the ledger, *time.Time (NULL when never earned) in the warehouse",
-	}
-
 	for _, f := range files {
 		var row auditpush.Row
 		for _, r := range b.Files {
@@ -201,42 +186,7 @@ func TestBundleIsTheLedgerRowForRow(t *testing.T) {
 				row = r
 			}
 		}
-		lv, rv := reflect.ValueOf(f), reflect.ValueOf(row)
-		lt := lv.Type()
-		for i := 0; i < lt.NumField(); i++ {
-			name := lt.Field(i).Name
-			if _, skip := deliberatelyUnmapped[name]; skip {
-				continue
-			}
-			rf := rv.FieldByName(name)
-			if !rf.IsValid() {
-				// t.Errorf, not a silent continue: this walk exists to catch
-				// a ledger field that never reaches the warehouse, and
-				// skipping every field with no matching name skipped exactly
-				// that case. A field with no column belongs on the
-				// deliberately-unmapped list, WITH the reason.
-				t.Errorf("scanstore.File.%s has no warehouse column of the same name, and is not on the deliberately-unmapped list", name)
-				continue
-			}
-			if rf.Type() != lv.Field(i).Type() {
-				t.Errorf("%s: field %s is %s in the ledger and %s in the warehouse, and is not on the deliberately-unmapped list",
-					f.Path, name, lv.Field(i).Type(), rf.Type())
-				continue
-			}
-			if !reflect.DeepEqual(lv.Field(i).Interface(), rf.Interface()) {
-				t.Errorf("%s: field %s was dropped or changed on the way to the warehouse: ledger %v, row %v",
-					f.Path, name, lv.Field(i).Interface(), rf.Interface())
-			}
-		}
-		// PLANTED, not graded. advpool's MutantsTotal is the count that
-		// reached grading (compile-gate rejects excluded), so filing it under
-		// mutants_planted understated every run that produced an invalid
-		// mutant — and it duplicated mutants_graded exactly, which is how the
-		// column stopped saying anything.
-		wantPlanted := f.MutantsGraded + f.MutantsInvalid
-		if row.MutantsPlanted != wantPlanted {
-			t.Errorf("%s: mutants_planted = %d, want graded+invalid = %d", f.Path, row.MutantsPlanted, wantPlanted)
-		}
+		assertFileRowMapped(t, f, row)
 	}
 
 	// The audited row's validity key is the GENERATOR's hash of the bytes it
@@ -245,6 +195,74 @@ func TestBundleIsTheLedgerRowForRow(t *testing.T) {
 		if r.Path == "a.go" && r.ParentSHA256 != auditedParentSHA {
 			t.Errorf("the audited row's parent_sha256 = %q, want the mutants' own parent hash %q", r.ParentSHA256, auditedParentSHA)
 		}
+	}
+}
+
+// fileRowUnmapped names every scanstore.File field that has an
+// identically-named auditpush.Row field assertFileRowMapped does NOT compare,
+// with the reason. Anything not listed here must match exactly.
+var fileRowUnmapped = map[string]string{
+	// The ledger column predates the NULL-not-zero rule and is a plain
+	// int64; the warehouse column is nullable. Converted on purpose by
+	// nilIfZeroMillis — see buildAuditRows.
+	"SuiteBaselineMillis": "int64 in the ledger, *int64 (NULL when unmeasured) in the warehouse",
+	// The ledger keeps three nullable ints; the warehouse keeps one
+	// pointer-to-struct, so an unmeasured spread is absent rather than
+	// three zeros.
+	"TestsPerMutantMin":    "folded into Row.TestsPerMutant",
+	"TestsPerMutantMedian": "folded into Row.TestsPerMutant",
+	"TestsPerMutantMax":    "folded into Row.TestsPerMutant",
+	// The ledger's canonical per-file roster; the warehouse column holds
+	// the scan-wide roster JSON, which is a different (and older) claim.
+	"ModelsByRole": "Row.ModelsByRole is the scan-wide roster JSON, not the per-file KV",
+	// Renamed at the boundary, and compared explicitly below.
+	"MutantsTotal": "lands in Row.MutantsPlanted",
+	// Local-only bookkeeping with no warehouse column at all.
+	"Gradable":   "implied by Disposition",
+	"ComputedAt": "time.Time in the ledger, *time.Time (NULL when never earned) in the warehouse",
+}
+
+// assertFileRowMapped walks every field of one ledger file row by REFLECTION
+// and fails on any that did not reach the bundle row of the same name
+// unchanged — the walk TestBundleIsTheLedgerRowForRow and the --local entry's
+// TestLocalEntryFieldsSurvive share, so the two paths are held to one list.
+func assertFileRowMapped(t *testing.T, f scanstore.File, row auditpush.Row) {
+	t.Helper()
+	lv, rv := reflect.ValueOf(f), reflect.ValueOf(row)
+	lt := lv.Type()
+	for i := 0; i < lt.NumField(); i++ {
+		name := lt.Field(i).Name
+		if _, skip := fileRowUnmapped[name]; skip {
+			continue
+		}
+		rf := rv.FieldByName(name)
+		if !rf.IsValid() {
+			// t.Errorf, not a silent continue: this walk exists to catch
+			// a ledger field that never reaches the warehouse, and
+			// skipping every field with no matching name skipped exactly
+			// that case. A field with no column belongs on the
+			// deliberately-unmapped list, WITH the reason.
+			t.Errorf("scanstore.File.%s has no warehouse column of the same name, and is not on the deliberately-unmapped list", name)
+			continue
+		}
+		if rf.Type() != lv.Field(i).Type() {
+			t.Errorf("%s: field %s is %s in the ledger and %s in the warehouse, and is not on the deliberately-unmapped list",
+				f.Path, name, lv.Field(i).Type(), rf.Type())
+			continue
+		}
+		if !reflect.DeepEqual(lv.Field(i).Interface(), rf.Interface()) {
+			t.Errorf("%s: field %s was dropped or changed on the way to the warehouse: ledger %v, row %v",
+				f.Path, name, lv.Field(i).Interface(), rf.Interface())
+		}
+	}
+	// PLANTED, not graded. advpool's MutantsTotal is the count that
+	// reached grading (compile-gate rejects excluded), so filing it under
+	// mutants_planted understated every run that produced an invalid
+	// mutant — and it duplicated mutants_graded exactly, which is how the
+	// column stopped saying anything.
+	wantPlanted := f.MutantsGraded + f.MutantsInvalid
+	if row.MutantsPlanted != wantPlanted {
+		t.Errorf("%s: mutants_planted = %d, want graded+invalid = %d", f.Path, row.MutantsPlanted, wantPlanted)
 	}
 }
 

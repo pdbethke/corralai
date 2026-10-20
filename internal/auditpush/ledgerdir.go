@@ -381,10 +381,16 @@ func writeLedgerFile(dir string, b Bundle, signer LedgerSigner) (Counts, error) 
 	// The uid is minted where Pushed is stamped — placeEntry — so the two
 	// agree by construction and a reader can derive one from the other.
 	e := LedgerEntry{Format: LedgerFileFormat, Bundle: b}
-	if _, err := AppendLedgerEntry(dir, e, signer); err != nil {
+	name, err := AppendLedgerEntry(dir, e, signer)
+	if err != nil {
 		return Counts{}, err
 	}
-	return Counts{Scans: boolToInt(b.Scan != (ScanRow{})), Files: len(b.Files), Mutants: len(b.Mutants), Calls: len(b.Calls), Events: len(b.Events)}, nil
+	keyID := ""
+	if signer != nil {
+		keyID = signer.SigningKeyID()
+	}
+	return Counts{Scans: boolToInt(b.Scan != (ScanRow{})), Files: len(b.Files), Mutants: len(b.Mutants), Calls: len(b.Calls), Events: len(b.Events),
+		Entry: name, KeyID: keyID}, nil
 }
 
 // AppendLedgerEntry LINKS e to the directory's current head, hashes it,

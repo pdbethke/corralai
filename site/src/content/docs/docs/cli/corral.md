@@ -273,6 +273,8 @@ Usage of certify --local:
     	sandbox backend: bwrap|container (Linux), sandbox-exec (macOS) (default: auto-detect for this OS; "none" is not supported — --local always sandboxes). "container" needs CORRALAI_EXEC_IMAGE set to a toolchain image, e.g. CORRALAI_EXEC_IMAGE=python:3.12-bookworm
   -lang string
     	source language (default: inferred from --code extension)
+  -ledger corral verify --ledger <dir>
+    	ALSO write this run's ledger entry to this ledger DIRECTORY, beside the machine ledger (statedir's ledger, override CORRALAI_MACHINE_LEDGER) every --local run writes to. Refused inside --repo-dir: --local never writes into the checkout. One signed, hash-linked entry per run; corral verify --ledger <dir> walks the chain
   -local
     	run the adversarial pool in-process (this mode)
   -local-endpoint value
@@ -293,6 +295,8 @@ Usage of certify --local:
     	copy dependency dirs into the jail workspace instead of bind-mounting them read-only (the pre-bind behavior; subject to the workspace size cap)
   -no-fail-fast
     	grade every mutant with the WHOLE selected test set instead of stopping at the first failing test. By default a killed mutant stops at the one test that killed it (pytest -x, go test -failfast, jest --bail, phpunit --stop-on-failure), which is most of the per-mutant cost on a repo with a real suite; the verdict is identical either way, and the baseline always runs everything. COSTS: turning this off makes each killed mutant pay for its whole selected set again — on a 77s suite that is the dominant term in the audit. Use it only if your suite is order-dependent or flaky in a way that makes an early stop misleading.
+  -no-ledger
+    	write no entry to the machine ledger (an explicit --ledger is still written)
   -out corral certify verify <file> --pubkey <hex> --allow-unanchored
     	also write the signed verdict as a self-contained record file, re-verifiable offline with corral certify verify <file> --pubkey <hex> --allow-unanchored
   -poll duration

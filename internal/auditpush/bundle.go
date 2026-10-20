@@ -495,6 +495,14 @@ type Counts struct {
 	Mutants int
 	Calls   int
 	Events  int
+	// Entry and KeyID describe a LEDGER-DIRECTORY push only: the file name
+	// the entry was placed under and the keyid that signed it ("" when it
+	// was written unsigned). Both are "" for a warehouse push, which places
+	// no file. Carried here, from the write itself, so a caller that names
+	// the entry it wrote never has to re-read the directory to find it — a
+	// re-read names whichever entry is newest, and another writer's may be.
+	Entry string
+	KeyID string
 }
 
 // Total is every row the push wrote, for a caller that only wants one number.

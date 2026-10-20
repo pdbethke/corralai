@@ -36,7 +36,7 @@ jobs:
       # Your suite must already pass on the runner before corral can plant
       # faults against it: install the toolchain and test dependencies here
       # (e.g. actions/setup-python, then `pip install -e . pytest`).
-      - uses: pdbethke/corralai@v1.0.0-rc.25
+      - uses: pdbethke/corralai@v1.0.0-rc.26
         with:
           test-command: "python -m pytest -q"
           # diff-base left empty: on a pull_request event the action already
@@ -83,7 +83,7 @@ acceptable on a recurring basis) with an empty `diff-base` and a `top` bound
 covers the rest:
 
 ```yaml
-  - uses: pdbethke/corralai@v1.0.0-rc.25
+  - uses: pdbethke/corralai@v1.0.0-rc.26
     with:
       test-command: "python -m pytest -q"
       diff-base: ""        # whole-repo scope — see "why scoped by default"

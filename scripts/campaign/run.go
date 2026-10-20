@@ -5,6 +5,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -13,6 +14,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -75,6 +77,13 @@ var allowedCommands = map[string]bool{
 	"gh repo": true,
 }
 
+// diffAddedArgv lists the entry files the worktree has that the remote branch
+// lacks. Three dots and --diff-filter=A: only files ADDED on this side since
+// the merge base, so a diverged remote's own files are never mistaken for ours.
+func diffAddedArgv() []string {
+	return []string{"git", "diff", "--name-only", "--diff-filter=A", "origin/" + ledgerBranch + "...HEAD", "--", auditpush.ScansSubdir}
+}
+
 var combinedShort = regexp.MustCompile(`^-[A-Za-z]+$`)
 
 // checkAllowed is the campaign's whole authority, as a list. The campaign
@@ -125,7 +134,13 @@ func checkAllowed(argv []string) error {
 			return bad()
 		}
 	case "git remote":
-		if !reflect.DeepEqual(argv, []string{"git", "remote", "get-url", "origin"}) {
+		if !reflect.DeepEqual(argv, []string{"git", "remote", "get-url", "--push", "origin"}) {
+			return bad()
+		}
+	case "git push":
+		// One refspec, one remote: deletes, mirrors, --all, --prune and any
+		// ":ref" refspec are all unreachable because nothing else is allowed.
+		if !reflect.DeepEqual(argv, []string{"git", "push", "origin", "HEAD:" + ledgerBranch}) {
 			return bad()
 		}
 	case "git status":
@@ -133,7 +148,7 @@ func checkAllowed(argv []string) error {
 			return bad()
 		}
 	case "git diff":
-		if len(argv) != 7 || argv[2] != "--name-only" || argv[5] != "--" {
+		if !reflect.DeepEqual(argv, diffAddedArgv()) {
 			return bad()
 		}
 	}
@@ -185,7 +200,7 @@ func remoteNames(url, repo string) bool {
 // must publish to: the push target is `origin`, and an unchecked origin would
 // let a misconfigured worktree send signed entries somewhere unintended.
 func checkRemote(ctx context.Context, r Runner, dir, repo string) error {
-	out, err := r.Run(ctx, dir, "git", "remote", "get-url", "origin")
+	out, err := r.Run(ctx, dir, "git", "remote", "get-url", "--push", "origin")
 	if err != nil {
 		return fmt.Errorf("campaign: reading origin of %s: %w", dir, err)
 	}
@@ -193,6 +208,72 @@ func checkRemote(ctx context.Context, r Runner, dir, repo string) error {
 		return fmt.Errorf("campaign: origin of %s is %q, want github.com/%s", dir, strings.TrimSpace(out), repo)
 	}
 	return nil
+}
+
+// checkTracking refuses a ledger worktree that is not on corral/ledger
+// tracking origin/corral/ledger: "ahead" and the diff are measured against
+// that upstream, so on any other branch the recovery logic would be blind.
+func checkTracking(ctx context.Context, r Runner, dir string) error {
+	out, err := r.Run(ctx, dir, "git", "status", "--porcelain", "--branch", "--untracked-files=all")
+	if err != nil {
+		return fmt.Errorf("campaign: reading the branch of %s: %w", dir, err)
+	}
+	want := "## " + ledgerBranch + "...origin/" + ledgerBranch
+	header, _, _ := strings.Cut(out, "\n")
+	if header != want && !strings.HasPrefix(header, want+" ") {
+		return fmt.Errorf("campaign: %s is on %q, want %q; fix with: git -C %s checkout %s && git -C %s branch --set-upstream-to=origin/%s",
+			dir, strings.TrimPrefix(header, "## "), strings.TrimPrefix(want, "## "), dir, ledgerBranch, dir, ledgerBranch)
+	}
+	return nil
+}
+
+// manifestFile is the durable list of scans this campaign itself produced.
+// Only those are ever copied to corral's public ledger: a fork may hold older
+// entries (an earlier Action's, say) that nobody chose to re-sign there.
+func manifestFile(root string) string { return filepath.Join(root, "campaign-entries.json") }
+
+func loadManifest(path string) (map[string]bool, error) {
+	raw, err := os.ReadFile(path) // #nosec G304 -- the campaign's own file
+	if os.IsNotExist(err) {
+		return map[string]bool{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var keys []string
+	if err := json.Unmarshal(raw, &keys); err != nil {
+		return nil, fmt.Errorf("campaign: %s: %w", path, err)
+	}
+	m := map[string]bool{}
+	for _, k := range keys {
+		m[k] = true
+	}
+	return m, nil
+}
+
+// recordManifest adds keys and writes the file atomically.
+func recordManifest(path string, add []string) error {
+	m, err := loadManifest(path)
+	if err != nil {
+		return err
+	}
+	for _, k := range add {
+		m[k] = true
+	}
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	raw, err := json.MarshalIndent(keys, "", "  ")
+	if err != nil {
+		return err
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
 }
 
 // normalizeScope is the form corral records a --path scope in
@@ -255,6 +336,12 @@ func RunTarget(ctx context.Context, r Runner, t Target, campaignDir string, stdo
 	if err := checkRemote(ctx, r, corralLedger, corralRepo); err != nil {
 		return err
 	}
+	for _, d := range []string{ledger, corralLedger} {
+		if err := checkTracking(ctx, r, d); err != nil {
+			return err
+		}
+	}
+	manifest, unplaced := manifestFile(root), filepath.Join(root, "unplaced")
 
 	if _, err := r.Run(ctx, root, "gh", "repo", "sync", t.Fork); err != nil {
 		return fmt.Errorf("campaign: syncing fork %s: %w", t.Fork, err)
@@ -272,7 +359,7 @@ func RunTarget(ctx context.Context, r Runner, t Target, campaignDir string, stdo
 	}
 	msg := fmt.Sprintf("Record the corral audit of %s.", t.Upstream)
 
-	if err := settle(ctx, r, ledger, corralLedger, msg, stderr); err != nil {
+	if err := settle(ctx, r, ledger, corralLedger, manifest, unplaced, msg, stderr); err != nil {
 		return err
 	}
 	entries, err := auditpush.ReadLedgerDir(ledger)
@@ -293,20 +380,44 @@ func RunTarget(ctx context.Context, r Runner, t Target, campaignDir string, stdo
 	}
 	defer removeAudit(ctx, r, clone, audit)
 
+	preexisting := map[string]bool{}
+	for _, e := range entries {
+		preexisting[e.File] = true
+	}
 	fmt.Fprintf(stderr, "campaign: auditing %s at %s\n", t.Upstream, sha)
 	_, certErr := r.Run(ctx, root, CertifyArgv(t, audit, ledger, t.Goals)...)
 	if certErr != nil {
 		certErr = fmt.Errorf("campaign: audit of %s failed (not retried): %w", t.Name, certErr)
 	}
-	return errors.Join(certErr, settle(ctx, r, ledger, corralLedger, msg, stderr))
+	// Record what this run produced before anything can fail, success or not:
+	// the manifest is what later runs use to know an entry is the campaign's.
+	var mfErr error
+	if after, err := auditpush.ReadLedgerDir(ledger); err != nil {
+		mfErr = fmt.Errorf("campaign: reading %s after the audit: %w", ledger, err)
+	} else {
+		var fresh []string
+		for _, e := range after {
+			if e.IsScan() && !preexisting[e.File] {
+				fresh = append(fresh, scanKey(e.Bundle.Scan))
+			}
+		}
+		if len(fresh) > 0 {
+			mfErr = recordManifest(manifest, fresh)
+		}
+	}
+	return errors.Join(certErr, mfErr, settle(ctx, r, ledger, corralLedger, manifest, unplaced, msg, stderr))
 }
 
 // settle brings both ledgers level with what has been measured: unpublished
 // fork entries are pushed, fork entries corral's ledger lacks are appended
 // there, and corral's ledger is pushed. Each step is idempotent, so a run
 // that died between any two of them is finished by the next one.
-func settle(ctx context.Context, r Runner, ledger, corralLedger, msg string, stderr io.Writer) error {
-	if err := publish(ctx, r, ledger, msg, stderr); err != nil {
+func settle(ctx context.Context, r Runner, ledger, corralLedger, manifest, unplaced, msg string, stderr io.Writer) error {
+	mine, err := loadManifest(manifest)
+	if err != nil {
+		return err
+	}
+	if err := publish(ctx, r, ledger, unplaced, msg, stderr); err != nil {
 		return err
 	}
 	fork, err := auditpush.ReadLedgerDir(ledger)
@@ -324,7 +435,8 @@ func settle(ctx context.Context, r Runner, ledger, corralLedger, msg string, std
 		}
 	}
 	for _, e := range fork {
-		if !e.IsScan() || known[scanKey(e.Bundle.Scan)] {
+		k := scanKey(e.Bundle.Scan)
+		if !e.IsScan() || known[k] || !mine[k] {
 			continue
 		}
 		src := filepath.Join(ledger, auditpush.ScansSubdir, e.File)
@@ -332,7 +444,7 @@ func settle(ctx context.Context, r Runner, ledger, corralLedger, msg string, std
 			return fmt.Errorf("campaign: appending %s to %s: %w", e.File, corralLedger, err)
 		}
 	}
-	return publish(ctx, r, corralLedger, msg, stderr)
+	return publish(ctx, r, corralLedger, unplaced, msg, stderr)
 }
 
 // audited reports whether the newest scan entry already names this commit and
@@ -383,7 +495,7 @@ func unpublished(ctx context.Context, r Runner, dir string) (files []string, dir
 		}
 	}
 	if ahead {
-		out, err := r.Run(ctx, dir, "git", "diff", "--name-only", "origin/"+ledgerBranch, "HEAD", "--", auditpush.ScansSubdir)
+		out, err := r.Run(ctx, dir, diffAddedArgv()...)
 		if err != nil {
 			return nil, false, false, err
 		}
@@ -400,7 +512,7 @@ func unpublished(ctx context.Context, r Runner, dir string) (files []string, dir
 // remote branch (which would delete them), and each is re-appended with
 // `corral ledger append`, which re-hashes and re-links it onto the new head
 // under a new file name. A second rejection is an error.
-func publish(ctx context.Context, r Runner, dir, msg string, stderr io.Writer) error {
+func publish(ctx context.Context, r Runner, dir, unplaced, msg string, stderr io.Writer) error {
 	files, dirty, ahead, err := unpublished(ctx, r, dir)
 	if err != nil {
 		return err
@@ -434,11 +546,22 @@ func publish(ctx context.Context, r Runner, dir, msg string, stderr io.Writer) e
 		return fmt.Errorf("campaign: %s is ahead of a moved remote and no entry files could be named to re-link: %w", dir, err)
 	}
 	fmt.Fprintf(stderr, "campaign: %s moved on the remote; re-linking %d entries in %s\n", ledgerBranch, len(files), dir)
-	tmp, terr := os.MkdirTemp("", "campaign-entries-")
+	// The saved copies are the only record of these entries once the reset
+	// runs, so they live under the campaign directory and are deleted only
+	// when every one has been re-placed.
+	if terr := os.MkdirAll(unplaced, 0o750); terr != nil {
+		return terr
+	}
+	tmp, terr := os.MkdirTemp(unplaced, "relink-")
 	if terr != nil {
 		return terr
 	}
-	defer func() { _ = os.RemoveAll(tmp) }()
+	keep := true
+	defer func() {
+		if !keep {
+			_ = os.RemoveAll(tmp)
+		}
+	}()
 	var saved []string
 	for _, f := range files {
 		raw, rerr := os.ReadFile(filepath.Join(dir, f)) // #nosec G304 -- listed by git in the ledger worktree
@@ -459,10 +582,14 @@ func publish(ctx context.Context, r Runner, dir, msg string, stderr io.Writer) e
 	}
 	for _, p := range saved {
 		if _, err := r.Run(ctx, dir, "corral", "ledger", "append", p, dir); err != nil {
-			return fmt.Errorf("re-linking %s: %w", filepath.Base(p), err)
+			return fmt.Errorf("re-linking %s: %w (the saved entries are kept in %s)", filepath.Base(p), err, tmp)
 		}
 	}
-	return commitAndPush()
+	if err := commitAndPush(); err != nil {
+		return fmt.Errorf("%w (the saved entries are kept in %s)", err, tmp)
+	}
+	keep = false
+	return nil
 }
 
 // moved reports whether a push failed because the remote branch is ahead.

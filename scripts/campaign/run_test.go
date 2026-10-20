@@ -37,7 +37,8 @@ type fakeRunner struct {
 	untracked  map[string][]string
 	ahead      map[string][]string
 	seq        int
-	certifyErr error // returned by certify AFTER it wrote its entry
+	branch     map[string]string // worktree -> status header override
+	certifyErr error             // returned by certify AFTER it wrote its entry
 	sha        string
 }
 
@@ -48,7 +49,7 @@ func newFake(t *testing.T, l layout, tg Target) *fakeRunner {
 			l.ledger: "https://github.com/" + tg.Fork + ".git",
 			l.corral: "git@github.com:pdbethke/corralai.git",
 		},
-		untracked: map[string][]string{}, ahead: map[string][]string{},
+		untracked: map[string][]string{}, ahead: map[string][]string{}, branch: map[string]string{},
 	}
 }
 
@@ -69,6 +70,9 @@ func (f *fakeRunner) Run(_ context.Context, dir string, argv ...string) (string,
 		return f.sha + "\n", nil
 	case argv[0] == "git" && argv[1] == "status":
 		out := "## corral/ledger...origin/corral/ledger"
+		if h, ok := f.branch[dir]; ok {
+			out = h
+		}
 		if len(f.ahead[dir]) > 0 {
 			out += " [ahead 1]"
 		}
@@ -380,6 +384,16 @@ func TestCheckAllowedRefusesWhatTheCampaignMustNeverDo(t *testing.T) {
 		{"git", "remote", "add", "x", "y"},
 		{"git", "remote", "set-url", "origin", "y"},
 		{"git", "status"},
+		{"git", "push", "origin", ":corral/ledger"},
+		{"git", "push", "--delete", "origin", "corral/ledger"},
+		{"git", "push", "-d", "origin", "corral/ledger"},
+		{"git", "push", "--mirror"},
+		{"git", "push", "--all"},
+		{"git", "push", "--prune", "origin"},
+		{"git", "push", "origin", "HEAD:main"},
+		{"git", "push", "upstream", "HEAD:corral/ledger"},
+		{"git", "remote", "get-url", "origin"},
+		{"git", "diff", "--name-only", "origin/corral/ledger", "HEAD", "--", "scans"},
 		{"corral", "ledger", "prune"},
 		{"curl", "http://x"},
 	} {
@@ -432,6 +446,10 @@ func TestRunFinishesAnEarlierUnpublishedAuditInsteadOfStrandingIt(t *testing.T) 
 	writeEntry(t, l.ledger, "20260101T000000-old.json", testSHA, tg.Path)
 	f := newFake(t, l, tg)
 	f.untracked[l.ledger] = []string{"20260101T000000-old.json"}
+	// it was recorded in the manifest right after certify returned
+	if err := recordManifest(manifestFile(l.root), []string{scanKey(auditpush.ScanRow{Commit: testSHA, Scope: tg.Path})}); err != nil {
+		t.Fatal(err)
+	}
 	out, _, err := runIt(t, f, tg, l)
 	if err != nil {
 		t.Fatal(err)
@@ -555,5 +573,105 @@ func TestExecRunnerErrorLetsMovedRecogniseARealRejection(t *testing.T) {
 	_, err = execRunner{echo: &echo}.Run(context.Background(), b, "git", "fetch", "nonexistent-remote")
 	if err == nil || moved(err) {
 		t.Fatalf("unrelated failure: %v", err)
+	}
+}
+
+func TestRunCopiesOnlyEntriesTheCampaignProduced(t *testing.T) {
+	tg := validTarget()
+	l := newLayout(t, tg)
+	// an older entry (an earlier Action's, say) that no campaign run produced
+	writeEntry(t, l.ledger, "20250101T000000-history.json", "cafe", "elsewhere")
+	f := newFake(t, l, tg)
+	if _, _, err := runIt(t, f, tg, l); err != nil {
+		t.Fatal(err)
+	}
+	var copied []string
+	for _, c := range f.with("corral", "ledger", "append") {
+		if c.dir == l.corral {
+			copied = append(copied, filepath.Base(c.argv[3]))
+		}
+	}
+	if !reflect.DeepEqual(copied, []string{"20261020T000000-new.json"}) {
+		t.Fatalf("copied to corral's ledger: %v", copied)
+	}
+	raw, err := os.ReadFile(manifestFile(l.root))
+	if err != nil || !strings.Contains(string(raw), testSHA) {
+		t.Fatalf("manifest: %v %q", err, raw)
+	}
+}
+
+func TestRunRecordsTheManifestEvenWhenTheAuditFails(t *testing.T) {
+	tg := validTarget()
+	l := newLayout(t, tg)
+	f := newFake(t, l, tg)
+	f.certifyErr = errors.New("exit status 1")
+	if _, _, err := runIt(t, f, tg, l); err == nil {
+		t.Fatal("want the audit's error")
+	}
+	keys, err := loadManifest(manifestFile(l.root))
+	if err != nil || len(keys) != 1 {
+		t.Fatalf("manifest %v %v", keys, err)
+	}
+}
+
+func TestRunPushesACommittedButUnpushedLedgerWithoutRecommitting(t *testing.T) {
+	tg := validTarget()
+	l := newLayout(t, tg)
+	writeEntry(t, l.ledger, "20260101T000000-old.json", testSHA, tg.Path)
+	if err := recordManifest(manifestFile(l.root), []string{scanKey(auditpush.ScanRow{Commit: testSHA, Scope: tg.Path})}); err != nil {
+		t.Fatal(err)
+	}
+	f := newFake(t, l, tg)
+	f.ahead[l.ledger] = []string{"20260101T000000-old.json"} // committed, push failed last time
+	if _, _, err := runIt(t, f, tg, l); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range f.with("git", "commit") {
+		if c.dir == l.ledger {
+			t.Fatal("recommitted an already-committed ledger")
+		}
+	}
+	if len(f.ahead[l.ledger]) != 0 {
+		t.Fatal("the ahead commit was not pushed")
+	}
+}
+
+func TestRunRefusesALedgerNotTrackingTheLedgerBranchBeforeSpend(t *testing.T) {
+	tg := validTarget()
+	l := newLayout(t, tg)
+	f := newFake(t, l, tg)
+	f.branch[l.ledger] = "## main...origin/main"
+	_, _, err := runIt(t, f, tg, l)
+	if err == nil || !strings.Contains(err.Error(), "set-upstream-to=origin/corral/ledger") {
+		t.Fatalf("err %v", err)
+	}
+	if len(f.with("gh")) != 0 || len(f.with("corral")) != 0 {
+		t.Fatal("spent before refusing")
+	}
+}
+
+func TestRunKeepsSavedEntriesWhenARelinkFails(t *testing.T) {
+	tg := validTarget()
+	l := newLayout(t, tg)
+	f := newFake(t, l, tg)
+	pushes := 0
+	f.hook = func(f *fakeRunner, dir string, argv []string) (string, error, bool) {
+		if argv[0] == "git" && argv[1] == "push" && dir == l.ledger {
+			pushes++
+			return "", errors.New("[rejected] (non-fast-forward)"), true
+		}
+		if argv[0] == "corral" && argv[1] == "ledger" && dir == l.ledger {
+			return "", errors.New("signing key unavailable"), true
+		}
+		return "", nil, false
+	}
+	_, _, err := runIt(t, f, tg, l)
+	unplaced := filepath.Join(l.root, "unplaced")
+	if err == nil || !strings.Contains(err.Error(), unplaced) {
+		t.Fatalf("error must name the kept copies: %v", err)
+	}
+	saved, _ := filepath.Glob(filepath.Join(unplaced, "relink-*", "*.json"))
+	if len(saved) != 1 {
+		t.Fatalf("kept copies: %v", saved)
 	}
 }

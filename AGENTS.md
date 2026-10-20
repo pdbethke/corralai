@@ -118,8 +118,34 @@ invocation.
 add one and not come back here. An outside reviewer found it, 2026-09-08.)
 
 So: run `--substrate workspace` only where the caller is the isolation boundary
-(CI, a scratch copy, a tree with no uncommitted work). And never audit a
-repository belonging to someone who has not agreed to it.
+(CI, a scratch copy, a tree with no uncommitted work), and never on someone
+else's machine or checkout.
+
+**Auditing public code is a public service, and its findings are public.** If
+it is in a public repository, it is public: it may be audited, and the results
+go into the ledger at run time — no embargo, no advance notice to the project,
+no courtesy hold. A bug is a bug; corral's own ledger records corral's. The
+limits are about conduct, not disclosure:
+
+- mutate only your own clone (the jail, or `workspace` on a scratch copy);
+- an agent never pushes to, files issues on, or comments in another project —
+  upstream contributions go through that project's own process, in the
+  founder's words;
+- findings are stated plainly as what execution measured, with no commentary
+  on the project;
+- an exploitable security vulnerability — not a missing test, not an ordinary
+  bug — follows coordinated disclosure on Project Zero's terms: the founder
+  reports it privately (the project's `SECURITY.md` or GitHub private
+  vulnerability reporting), and the full finding is published when a fix
+  ships or at 90 days, whichever comes first (7 days if it is being exploited
+  in the wild). The delay protects the project's users, not the project.
+  The ledger has no commit-now-reveal-later entry yet, so until it does the
+  signed entry is kept locally and pushed at the deadline.
+
+(This said "never audit a repository belonging to someone who has not agreed
+to it" until 2026-10-19. It contradicted the ledger's practice of publishing
+third-party findings at run time, and it would have ruled out the public
+benchmark of real fix commits.)
 
 **`corral ui --write` is a person's tool, never an agent's.** It prints a
 launch-token URL that lets the page adjudicate findings in the operator's

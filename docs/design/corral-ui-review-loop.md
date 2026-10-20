@@ -95,6 +95,11 @@ and possibly a cold-started browser — as a command-line argument, which any
 other local process can read (`/proc/<pid>/cmdline`, `ps`) while it runs.
 This paragraph goes in the `-h` text and the docs. To close the agent side, `skills/corral/SKILL.md` and
 `AGENTS.md` gain an explicit rule: **agents never start `corral ui --write`.**
+(Corrected 2026-10-20: that rule is lifted. It added no protection, since any
+agent that can run `corral review adjudicate` can already write, and it left
+the page's browser check undone. What stands is the adjudication rule: an
+agent records a verdict, by click or by command, only when the person has
+named it.)
 
 ## 2. Triage and adjudicate
 

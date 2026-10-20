@@ -27,10 +27,8 @@ import (
 // prints is opened.
 //
 // It is the same handler `corral ui --write` serves (uiHandlerWith), over a
-// throwaway ledger, with a token this test mints. It never starts `corral ui
-// --write` and never sees a token that can write in anyone's name: AGENTS.md
-// keeps the real command a person's tool, and this test exists so that rule
-// does not leave the page unchecked.
+// throwaway ledger, with a token this test mints, so it runs on every CI pass
+// without touching anyone's record.
 //
 // It skips, by name, when the machine has no Chrome or Chromium; it never
 // downloads one. CI's runner image has Chrome, so the census shows it ran.

@@ -1069,7 +1069,7 @@ Usage of ui:
   -repo string
     	with --write, the checkout a finding's reproduction is rechecked against (its HEAD, in the sandbox — see corral review recheck) (default ".")
   -write
-    	let this page WRITE: adjudicate findings and recheck them, by running corral's own subcommands. Loopback only; prints a URL carrying a launch token valid until the server exits — anyone with that URL can write verdicts in your name. The URL is printed, never opened, so the token stays off every process's command line; over SSH, tunnel the same port on both ends (ssh -L 8787:127.0.0.1:8787). Agents must never start this
+    	let this page WRITE: adjudicate findings and recheck them, by running corral's own subcommands. Loopback only; prints a URL carrying a launch token valid until the server exits — anyone with that URL can write verdicts in your name. The URL is printed, never opened, so the token stays off every process's command line; over SSH, tunnel the same port on both ends (ssh -L 8787:127.0.0.1:8787). A click on Confirm or Refute is a verdict recorded as you
 ```
 
 ## `corral verify` flags

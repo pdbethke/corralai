@@ -67,6 +67,11 @@ type bundleMeta struct {
 	// is a join people skip.
 	Audited    int
 	Candidates int
+	// TreeDirty is asked of git once, before the audit starts (nil: git could
+	// not say), and RepoIdentity says how Repo was established. Both are
+	// scan-header facts only; the other grains do not carry them.
+	TreeDirty    *bool
+	RepoIdentity string
 }
 
 // buildBundle maps one recorded scan — its header and all four row grains —
@@ -127,6 +132,7 @@ func buildBundle(
 			PreflightRan: scan.PreflightRan, PreflightNote: scan.PreflightNote,
 			FinishedAt: nilIfZeroTime(scan.FinishedAt),
 			Identity:   auditpush.Identity{Author: scan.Author, Committer: scan.Committer, CoAuthors: scan.CoAuthors},
+			TreeDirty:  meta.TreeDirty, RepoIdentity: meta.RepoIdentity,
 		},
 		Files:        buildAuditRows(files, scanID, meta),
 		Mutants:      buildMutantRows(mutants, scanID, meta),

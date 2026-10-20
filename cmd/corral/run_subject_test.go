@@ -111,3 +111,113 @@ func TestRunCertifyLocal_OneOfRepoCommitIsRefused(t *testing.T) {
 		}
 	}
 }
+
+// treeFixture makes a committed one-file repository.
+func treeFixture(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	for _, argv := range [][]string{
+		{"init"},
+		{"-c", "user.email=t@t", "-c", "user.name=t", "commit", "--allow-empty", "-m", "seed"},
+	} {
+		if out, err := exec.Command("git", append([]string{"-C", dir}, argv...)...).CombinedOutput(); err != nil {
+			t.Skipf("git unavailable: %v: %s", err, out)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("one\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, argv := range [][]string{
+		{"add", "a.txt"},
+		{"-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", "add a"},
+	} {
+		if out, err := exec.Command("git", append([]string{"-C", dir}, argv...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", argv, err, out)
+		}
+	}
+	return dir
+}
+
+func wantDirty(t *testing.T, got *bool, want bool) {
+	t.Helper()
+	if got == nil {
+		t.Fatalf("treeDirty = nil, want %v", want)
+	}
+	if *got != want {
+		t.Fatalf("treeDirty = %v, want %v", *got, want)
+	}
+}
+
+func TestTreeDirtyClean(t *testing.T) {
+	wantDirty(t, treeDirty(treeFixture(t)), false)
+}
+
+func TestTreeDirtyModifiedTracked(t *testing.T) {
+	dir := treeFixture(t)
+	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("two\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	wantDirty(t, treeDirty(dir), true)
+}
+
+func TestTreeDirtyUntrackedFile(t *testing.T) {
+	dir := treeFixture(t)
+	// Inside a new directory: --untracked-files=all is what stops git
+	// reporting only "newdir/" (still dirty, but the property is the file).
+	if err := os.MkdirAll(filepath.Join(dir, "newdir"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "newdir", "b.txt"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	wantDirty(t, treeDirty(dir), true)
+}
+
+func TestTreeDirtyIgnoresCorralDir(t *testing.T) {
+	dir := treeFixture(t)
+	if err := os.MkdirAll(filepath.Join(dir, ".corral", "ledger"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".corral", "ledger", "x"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	wantDirty(t, treeDirty(dir), false)
+}
+
+func TestTreeDirtyNotARepo(t *testing.T) {
+	if got := treeDirty(t.TempDir()); got != nil {
+		t.Fatalf("treeDirty(non-repo) = %v, want nil (unknown, never clean)", *got)
+	}
+	if got := treeDirty(""); got != nil {
+		t.Fatalf("treeDirty(\"\") = %v, want nil", *got)
+	}
+}
+
+// A repoDir that is a subdirectory of the work tree: its own .corral/ is
+// corral's, the sibling file's change is not.
+func TestTreeDirtySubdirCorralDir(t *testing.T) {
+	dir := treeFixture(t)
+	sub := filepath.Join(dir, "sub")
+	if err := os.MkdirAll(filepath.Join(sub, ".corral"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sub, ".corral", "x"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	wantDirty(t, treeDirty(sub), false)
+}
+
+// --repo with no origin falls back to the directory basename for the repo
+// string; that must be labelled "none", while a real origin is "git".
+func TestRepoIdentityBasenameFallbackIsNone(t *testing.T) {
+	dir := treeFixture(t)
+	if got := repoIdentity(dir); got != subjectIdentityNone {
+		t.Fatalf("repoIdentity(no origin) = %q, want %q", got, subjectIdentityNone)
+	}
+	if out, err := exec.Command("git", "-C", dir, "remote", "add", "origin", "https://github.com/acme/widget.git").CombinedOutput(); err != nil {
+		t.Fatalf("git remote add: %v: %s", err, out)
+	}
+	if got := repoIdentity(dir); got != subjectIdentityGit {
+		t.Fatalf("repoIdentity(origin) = %q, want %q", got, subjectIdentityGit)
+	}
+}

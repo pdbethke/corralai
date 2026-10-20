@@ -64,6 +64,71 @@ func localSubject(repoDir string) (repo, commit, identity string) {
 	return repo, commit, subjectIdentityGit
 }
 
+// repoIdentity says whether a --repo run's subject came from git: "git" when
+// origin resolves (the name resolveRepoName files the run under is then the
+// remote's URL), "none" when it does not and resolveRepoName fell back to the
+// checkout directory's BASENAME. That basename still keys the row today —
+// changing the recorded name is a separate decision — but it is not an
+// identity, and the ledger must say so rather than let a reader take a
+// directory name for a project's.
+func repoIdentity(repoDir string) string {
+	if gitIn(repoDir, "remote", "get-url", "origin") == "" {
+		return subjectIdentityNone
+	}
+	return subjectIdentityGit
+}
+
+// treeDirty reports whether the working tree at repoDir has changes the
+// commit does not contain: modified or deleted tracked files, staged changes,
+// or untracked files (--untracked-files=all, so one new file inside a new
+// directory is not hidden behind the directory's name). A verdict signed
+// against a commit describes that commit only when the tree is clean; this is
+// the bit that lets a reader tell.
+//
+// Corral's own state directory (.corral/, relative to repoDir) is ignored: a
+// run writes its ledger there, so counting it would make the answer depend on
+// whether the run had already started. Callers therefore ask ONCE, before the
+// audit begins.
+//
+// nil means git could not say (absent, not a work tree, status failed) — an
+// unknown tree is never rendered as a clean one.
+func treeDirty(repoDir string) *bool {
+	repoDir = strings.TrimSpace(repoDir)
+	if repoDir == "" || gitIn(repoDir, "rev-parse", "--is-inside-work-tree") != "true" {
+		return nil
+	}
+	// Not gitIn: its TrimSpace would eat the leading space of the first
+	// porcelain line (" M file"), and an empty result must be told apart from
+	// a failure.
+	// #nosec G204 -- fixed argv; repoDir is the operator's own --repo-dir, never remote input
+	out, err := exec.Command("git", "-C", repoDir, "status", "--porcelain=v1", "-z", "--untracked-files=all").Output()
+	if err != nil {
+		return nil
+	}
+	// status paths are relative to the repository root, so corral's directory
+	// is the subdirectory repoDir sits in (if any) plus ".corral".
+	corralDir := gitIn(repoDir, "rev-parse", "--show-prefix") + ".corral"
+	dirty := false
+	entries := strings.Split(string(out), "\x00")
+	for i := 0; i < len(entries); i++ {
+		e := entries[i]
+		if len(e) < 4 {
+			continue
+		}
+		// A rename or copy is followed by a second entry naming its source.
+		if e[0] == 'R' || e[0] == 'C' || e[1] == 'R' || e[1] == 'C' {
+			i++
+		}
+		path := e[3:]
+		if path == corralDir || strings.HasPrefix(path, corralDir+"/") {
+			continue
+		}
+		dirty = true
+		break
+	}
+	return &dirty
+}
+
 // gitIn runs git against dir and returns its trimmed stdout, or "" when git
 // is absent or the question has no answer (not a repository, no origin).
 func gitIn(dir string, args ...string) string {

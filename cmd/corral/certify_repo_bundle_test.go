@@ -5,6 +5,7 @@ package main
 import (
 	"bytes"
 	"database/sql"
+	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
@@ -749,3 +750,37 @@ func TestVerifyRowsHashSurvivesTheRealReader(t *testing.T) {
 
 // boolPtrT is the test-side pointer helper for the nullable Passed column.
 func boolPtrT(b bool) *bool { return &b }
+
+// TestBundleCarriesTreeDirtyAndRepoIdentity: both scan-header facts survive
+// buildBundle (meta -> ScanRow), true and false are told apart from unknown,
+// and an unknown tree is absent from the JSON rather than rendered false.
+func TestBundleCarriesTreeDirtyAndRepoIdentity(t *testing.T) {
+	scan := scanstore.Scan{Repo: "o/r", Commit: "deadbeef"}
+	for _, tc := range []struct {
+		name  string
+		dirty *bool
+	}{{"dirty", boolPtrT(true)}, {"clean", boolPtrT(false)}, {"unknown", nil}} {
+		t.Run(tc.name, func(t *testing.T) {
+			b := buildBundle(scan, 1, nil, nil, nil, nil, auditpush.Link{}, false, "o/r", "deadbeef", "",
+				bundleMeta{TreeDirty: tc.dirty, RepoIdentity: "none"})
+			if (b.Scan.TreeDirty == nil) != (tc.dirty == nil) || (tc.dirty != nil && *b.Scan.TreeDirty != *tc.dirty) {
+				t.Fatalf("ScanRow.TreeDirty = %v, want %v", b.Scan.TreeDirty, tc.dirty)
+			}
+			if b.Scan.RepoIdentity != "none" {
+				t.Fatalf("ScanRow.RepoIdentity = %q, want none", b.Scan.RepoIdentity)
+			}
+			raw, err := json.Marshal(b.Scan)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if has := strings.Contains(string(raw), `"tree_dirty"`); has != (tc.dirty != nil) {
+				t.Fatalf("tree_dirty present in JSON = %v for %s: %s", has, tc.name, raw)
+			}
+		})
+	}
+	// Absent facts leave the JSON as it was before they existed.
+	raw, _ := json.Marshal(buildBundle(scan, 1, nil, nil, nil, nil, auditpush.Link{}, false, "o/r", "deadbeef", "", bundleMeta{}).Scan)
+	if strings.Contains(string(raw), "repo_identity") || strings.Contains(string(raw), "tree_dirty") {
+		t.Fatalf("a bundle without the new facts must not mention them: %s", raw)
+	}
+}

@@ -202,7 +202,7 @@ func readScanRow(db *sql.DB, where string, args ...any) (ScanRow, bool, error) {
 		rekor_log_index, rekor_uuid, started_at, pushed_by, scan_uid,
 		engine_version, model_set, top, all_candidates, total_files,
 		preflight_ran, preflight_note, finished_at, entry_hash,
-		author, committer, co_authors, scope
+		author, committer, co_authors, scope, tree_dirty, repo_identity
 	   FROM corral_scans WHERE `+where, args...) // #nosec G202 -- where is a constant clause chosen by this package's own callers; every value is a bound parameter
 
 	var s ScanRow
@@ -213,7 +213,8 @@ func readScanRow(db *sql.DB, where string, args ...any) (ScanRow, bool, error) {
 	var scanPassed, allCandidates, preflightRan sql.NullBool
 	var scanStarted, scanFinished sql.NullTime
 	var engineVersion, modelSet, preflightNote, entryHash sql.NullString
-	var author, committer, coAuthors, scope sql.NullString
+	var author, committer, coAuthors, scope, repoIdentity sql.NullString
+	var treeDirty sql.NullBool
 	var top, totalFiles sql.NullInt64
 	// NULL header tokens: a scan none of whose calls was metered
 	// (ScanTokensUnmetered). They read back as the 0 the bundle carried; the
@@ -227,7 +228,7 @@ func readScanRow(db *sql.DB, where string, args ...any) (ScanRow, bool, error) {
 		&rekorLogIndex, &rekorUUID, &scanStarted, &pushedBy, &scanUID,
 		&engineVersion, &modelSet, &top, &allCandidates, &totalFiles,
 		&preflightRan, &preflightNote, &scanFinished, &entryHash,
-		&author, &committer, &coAuthors, &scope,
+		&author, &committer, &coAuthors, &scope, &treeDirty, &repoIdentity,
 	); err != nil {
 		if err == sql.ErrNoRows {
 			return ScanRow{}, false, nil
@@ -257,6 +258,11 @@ func readScanRow(db *sql.DB, where string, args ...any) (ScanRow, bool, error) {
 	s.AllCandidates, s.PreflightRan = allCandidates.Bool, preflightRan.Bool
 	s.EntryHash = entryHash.String
 	s.Scope = scope.String
+	s.RepoIdentity = repoIdentity.String
+	if treeDirty.Valid {
+		v := treeDirty.Bool
+		s.TreeDirty = &v
+	}
 	s.Identity = Identity{Author: author.String, Committer: committer.String, CoAuthors: coAuthors.String}
 	if scanFinished.Valid {
 		t := scanFinished.Time

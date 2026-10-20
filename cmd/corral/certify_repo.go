@@ -1134,6 +1134,11 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		*commit = gitHeadCommit(*repoDir)
 	}
 
+	// Whether the tree has changes the commit lacks, asked ONCE, before the
+	// audit starts: a run's own writes (and a --substrate workspace run's
+	// mutants, however well restored) must never be able to flip the answer.
+	auditedTreeDirty := treeDirty(*repoDir)
+
 	localEndpoints, lerr := parseLocalEndpoints(localEndpointFlag)
 	if lerr != nil {
 		fmt.Fprintf(stderr, "corral certify --repo: %v\n", lerr)
@@ -1579,8 +1584,9 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 			ModelsByRole: string(rosterJSON),
 			SeatTools:    seatToolsJSON,
 			MinKillRate:  minKillRate, MaxProvenMissed: maxProvenMissed,
-			Passed:   boolPtr(exitCode == 0),
-			PushedBy: auditpush.PushedByCertify,
+			Passed:    boolPtr(exitCode == 0),
+			PushedBy:  auditpush.PushedByCertify,
+			TreeDirty: auditedTreeDirty, RepoIdentity: repoIdentity(*repoDir),
 		})
 	// The hunks onto the mutant rows: `code` is the mutant's source, and
 	// the custody rule already withholds it (BlankUnpushedSource) unless

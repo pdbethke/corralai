@@ -200,6 +200,16 @@ type ScanRow struct {
 	// Empty on rows written before it was recorded, or when the checkout
 	// could not say.
 	Identity Identity
+	// TreeDirty is whether the audited working tree had uncommitted or
+	// untracked changes when the run began. A pointer on purpose: nil is
+	// "git could not say" (and every row written before this field), which
+	// is not the same claim as false.
+	TreeDirty *bool `json:"tree_dirty,omitempty"`
+	// RepoIdentity is how Repo was established: "git" (derived from the
+	// checkout's origin) or "none" (it could not be, and Repo is a stand-in
+	// or empty). It is NOT Identity above — that is the audited PARTY, this
+	// is the provenance of the repo NAME. Empty on rows that never recorded it.
+	RepoIdentity string `json:"repo_identity,omitempty"`
 }
 
 // PushedByCertify is the ScanRow.PushedBy of a run's own entry.
@@ -440,7 +450,9 @@ CREATE TABLE IF NOT EXISTS corral_scans (
   entry_hash       VARCHAR,
   author           VARCHAR,
   committer        VARCHAR,
-  co_authors       VARCHAR
+  co_authors       VARCHAR,
+  tree_dirty       BOOLEAN,
+  repo_identity    VARCHAR
 );`
 
 const auditsSchema = `
@@ -771,6 +783,11 @@ var (
 		// The --path subtree (ScanRow.Scope). NULL before it: every earlier
 		// scan was over its whole repository.
 		{"scope", "scope VARCHAR"},
+		// Whether the audited tree was clean, and how repo was established
+		// (ScanRow.TreeDirty / RepoIdentity). NULL before them: unknown, which
+		// is exactly what those rows are.
+		{"tree_dirty", "tree_dirty BOOLEAN"},
+		{"repo_identity", "repo_identity VARCHAR"},
 	}
 	corralMutantsMigrationCols = []struct{ name, ddl string }{
 		{"scan_uid", "scan_uid VARCHAR"},
@@ -1333,8 +1350,8 @@ func insertBundle(db *sql.DB, b Bundle, now time.Time, uid string) (Counts, erro
 		    rekor_log_index, rekor_uuid, schema_version, started_at, pushed_by,
 		    engine_version, model_set, top, all_candidates, total_files,
 		    preflight_ran, preflight_note, finished_at, entry_hash,
-		    author, committer, co_authors, scope
-		  ) VALUES (`+placeholders(41)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
+		    author, committer, co_authors, scope, tree_dirty, repo_identity
+		  ) VALUES (`+placeholders(43)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
 			uid, now, b.Scan.Repo, b.Scan.RunURL, b.Scan.ScanID, b.Scan.Commit,
 			b.Scan.CorralVersion, b.Scan.Substrate, b.Scan.Host, b.Scan.Cores,
 			nullIfZeroInt(b.Scan.TreesRequested), b.Scan.DiffBase,
@@ -1347,7 +1364,7 @@ func insertBundle(db *sql.DB, b Bundle, now time.Time, uid string) (Counts, erro
 			b.Scan.AllCandidates, nullIfZeroInt(b.Scan.TotalFiles),
 			b.Scan.PreflightRan, nullIfEmpty(b.Scan.PreflightNote), nullTime(b.Scan.FinishedAt), nullIfEmpty(b.Scan.EntryHash),
 			nullIfEmpty(b.Scan.Identity.Author), nullIfEmpty(b.Scan.Identity.Committer), nullIfEmpty(b.Scan.Identity.CoAuthors),
-			nullIfEmpty(b.Scan.Scope),
+			nullIfEmpty(b.Scan.Scope), nullBool(b.Scan.TreeDirty), nullIfEmpty(b.Scan.RepoIdentity),
 		); err != nil {
 			return Counts{}, fmt.Errorf("auditpush: insert scan row: %w", err)
 		}

@@ -758,3 +758,34 @@ func TestRequireStatementsCoversEveryGrain(t *testing.T) {
 }
 
 func timePtr(t time.Time) *time.Time { return &t }
+
+// TestScanTreeStateAndRepoIdentityReachTheWarehouse: ScanRow.TreeDirty and
+// RepoIdentity are enumerated column by column in the INSERT and the read, so
+// a field added to the struct and forgotten there would vanish silently. True,
+// false and unknown are three different stored states.
+func TestScanTreeStateAndRepoIdentityReachTheWarehouse(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		dirty *bool
+	}{{"dirty", boolPtrT(true)}, {"clean", boolPtrT(false)}, {"unknown", nil}} {
+		t.Run(tc.name, func(t *testing.T) {
+			target := filepath.Join(t.TempDir(), "w.duckdb")
+			b := sampleBundle()
+			b.Scan.TreeDirty, b.Scan.RepoIdentity = tc.dirty, "none"
+			if _, err := PushBundle(target, b); err != nil {
+				t.Fatalf("PushBundle: %v", err)
+			}
+			db := openWarehouse(t, target)
+			got, ok, err := readScanRow(db, "repo = ?", "o/r")
+			if err != nil || !ok {
+				t.Fatalf("readScanRow: ok=%v err=%v", ok, err)
+			}
+			if (got.TreeDirty == nil) != (tc.dirty == nil) || (tc.dirty != nil && *got.TreeDirty != *tc.dirty) {
+				t.Errorf("TreeDirty round trip = %v, want %v", got.TreeDirty, tc.dirty)
+			}
+			if got.RepoIdentity != "none" {
+				t.Errorf("RepoIdentity round trip = %q, want none", got.RepoIdentity)
+			}
+		})
+	}
+}

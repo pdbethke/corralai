@@ -125,6 +125,8 @@ type LedgerEntry struct {
 	// who decided and why. Automatic passes never write these; a later one
 	// by the same or another person is a new entry, and the newest stands.
 	Adjudication *Adjudication `json:"adjudication,omitempty"`
+	// Signer (KindSigner) registers or revokes a signing key. See signers.go.
+	Signer *SignerChange `json:"signer,omitempty"`
 	// Hash and Signature are computed over everything above.
 	Hash      string `json:"hash,omitempty"`
 	KeyID     string `json:"keyid,omitempty"`
@@ -149,6 +151,7 @@ const (
 	KindCheckpoint   = "checkpoint"
 	KindReview       = "review"
 	KindAdjudication = "adjudication"
+	// KindSigner is declared in signers.go beside its payload.
 )
 
 // Adjudication is a person's verdict on one finding of a review entry.
@@ -180,6 +183,11 @@ func (e LedgerEntry) IsScan() bool { return e.Kind == KindScan }
 type ledgerFile = LedgerEntry
 
 // LedgerFileFormat is the document version a ledger entry declares.
+// corral-ledger-5 (2026-10-19): keyid is a key FINGERPRINT
+// ("ed25519:" + 16 hex of sha256(pubkey)), not a convention name, and a
+// ledger may register signers (KindSigner), so a per-machine key can sign
+// under a root's authority. Format-4 and older entries are read unchanged;
+// their "corral-certify" keyid means "the root key" (LegacyRootKeyID).
 // corral-ledger-4 (2026-09-08): keyid — the name of WHO signed — is inside
 // the hashed bytes, so editing it breaks the hash and the signature that
 // covers it. Through corral-ledger-3 keyid was deleted before hashing and
@@ -198,14 +206,15 @@ type ledgerFile = LedgerEntry
 // whole directory exists to make impossible. VerifyLedgerDir notes on every
 // pre-4 entry that its signer name is self-reported.
 const (
-	LedgerFileFormat = "corral-ledger-4"
+	LedgerFileFormat = "corral-ledger-5"
+	ledgerFormat4    = "corral-ledger-4"
 	ledgerFormat3    = "corral-ledger-3"
 	ledgerFormat2    = "corral-ledger-2"
 )
 
 // knownLedgerFormat is what a reader accepts.
 func knownLedgerFormat(f string) bool {
-	return f == LedgerFileFormat || f == ledgerFormat3 || f == ledgerFormat2
+	return f == LedgerFileFormat || f == ledgerFormat4 || f == ledgerFormat3 || f == ledgerFormat2
 }
 
 // keyIDIsHashed reports whether this format covers keyid in the hashed
@@ -278,6 +287,8 @@ func EntryShapeProblem(e LedgerEntry) string {
 		if strings.TrimSpace(a.By) == "" || strings.TrimSpace(a.Reason) == "" {
 			return "an adjudication names who decided and why"
 		}
+	case KindSigner:
+		return signerShapeProblem(e.Signer)
 	default:
 		return fmt.Sprintf("an entry of unknown kind %q", e.Kind)
 	}
@@ -464,6 +475,11 @@ func placeEntry(dir string, e LedgerEntry, prev string, signer LedgerSigner) (st
 		middle, tail = "retract", e.Retracts
 	case KindCheckpoint:
 		middle, tail = "checkpoint", e.Checkpoint.Head
+	case KindSigner:
+		// The key's fingerprint without its scheme prefix: the directory
+		// listing reads "who was registered", and two changes to one key
+		// cannot share a second because Pushed differs or the append refuses.
+		middle, tail = "signer", strings.TrimPrefix(e.Signer.KeyID, "ed25519:")
 	case KindReview, KindAdjudication:
 		// Its own hash: two reviews of one commit, or two verdicts on one
 		// review, can land in the same second, and a name that collided

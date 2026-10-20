@@ -467,7 +467,9 @@ type Bundle struct {
 	// (cmd/corral prepareRowsForHash) because a verifier reads the rows back
 	// from the warehouse and could never reproduce a hash that covered rows
 	// the warehouse never received. omitempty, so a bundle that carries none
-	// marshals byte-for-byte as it did before they existed.
+	// marshals byte-for-byte as it did before they existed. When a statement
+	// is written, it additionally binds them through its telemetrySha256
+	// (cmd/corral telemetrySHA256).
 	Seats          []SeatRow          `json:",omitempty"`
 	MutantAttempts []MutantAttemptRow `json:",omitempty"`
 	CriticFindings []CriticFindingRow `json:",omitempty"`

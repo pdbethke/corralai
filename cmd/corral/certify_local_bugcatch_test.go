@@ -32,16 +32,39 @@ func fillNonZero(t *testing.T, p any) {
 	}
 }
 
-// alternateBools sets every bool field of *p by field-index parity (flip
-// inverts it). fillNonZero makes every bool true, so a converter that swaps
-// two bool fields passes; run a parity test with flip false and again true
-// and each bool is true in one run and false in the other, so a swap (or a
-// dropped bool) fails one of them.
-func alternateBools(p any, flip bool) {
+// boolPasses is how many alternateBools passes prove every pair of bool
+// fields of *p distinguishable: two per bit of the largest bool ordinal (the
+// bit and its complement), at least two.
+func boolPasses(p any) int {
 	v := reflect.ValueOf(p).Elem()
+	k := 0
+	for i := 0; i < v.NumField(); i++ {
+		if v.Field(i).Kind() == reflect.Bool {
+			k++
+		}
+	}
+	bits := 1
+	for 1<<bits < k {
+		bits++
+	}
+	return 2 * bits
+}
+
+// alternateBools numbers the bool fields of *p 0..k-1 in declaration order
+// and, for pass n, sets bool b to bit n/2 of b (inverted on odd n).
+// fillNonZero makes every bool true, so a converter that swaps two bool
+// fields passes it. Parity alone is not enough either: it cannot tell apart
+// two bools of the same parity (Shadow and ShadowDrawn). Distinct ordinals
+// differ in at least one bit, so across the boolPasses(p) passes every pair of
+// bools takes different values in some pass, and a swap fails it.
+func alternateBools(p any, pass int) {
+	v := reflect.ValueOf(p).Elem()
+	ord := 0
 	for i := 0; i < v.NumField(); i++ {
 		if f := v.Field(i); f.Kind() == reflect.Bool {
-			f.SetBool((i%2 == 0) != flip)
+			bit := (ord>>(pass/2))&1 == 1
+			f.SetBool(bit != (pass%2 == 1))
+			ord++
 		}
 	}
 }

@@ -21,17 +21,18 @@ import (
 // same-named row field fails with "has no field X".
 
 func TestSeatRowCarriesEveryObservationField(t *testing.T) {
-	for _, flip := range []bool{false, true} {
-		t.Run(fmt.Sprintf("flip=%v", flip), func(t *testing.T) {
-			parityTestSeatRowCarriesEveryObservationField(t, flip)
+	var zero advpool.BugCatchObservation
+	for pass := 0; pass < boolPasses(&zero); pass++ {
+		t.Run(fmt.Sprintf("pass=%d", pass), func(t *testing.T) {
+			parityTestSeatRowCarriesEveryObservationField(t, pass)
 		})
 	}
 }
 
-func parityTestSeatRowCarriesEveryObservationField(t *testing.T, flip bool) {
+func parityTestSeatRowCarriesEveryObservationField(t *testing.T, pass int) {
 	var o advpool.BugCatchObservation
 	fillNonZero(t, &o)
-	alternateBools(&o, flip)
+	alternateBools(&o, pass)
 	seats, _, _ := telemetryRows("r", "c", "p.go", advpool.RunTelemetry{Seats: []advpool.BugCatchObservation{o}})
 	if len(seats) != 1 {
 		t.Fatalf("got %d seat rows, want 1", len(seats))
@@ -43,17 +44,18 @@ func parityTestSeatRowCarriesEveryObservationField(t *testing.T, flip bool) {
 }
 
 func TestMutantAttemptRowCarriesEveryField(t *testing.T) {
-	for _, flip := range []bool{false, true} {
-		t.Run(fmt.Sprintf("flip=%v", flip), func(t *testing.T) {
-			parityTestMutantAttemptRowCarriesEveryField(t, flip)
+	var zero advpool.MutantAttempt
+	for pass := 0; pass < boolPasses(&zero); pass++ {
+		t.Run(fmt.Sprintf("pass=%d", pass), func(t *testing.T) {
+			parityTestMutantAttemptRowCarriesEveryField(t, pass)
 		})
 	}
 }
 
-func parityTestMutantAttemptRowCarriesEveryField(t *testing.T, flip bool) {
+func parityTestMutantAttemptRowCarriesEveryField(t *testing.T, pass int) {
 	var a advpool.MutantAttempt
 	fillNonZero(t, &a)
-	alternateBools(&a, flip)
+	alternateBools(&a, pass)
 	_, rows, _ := telemetryRows("r", "c", "p.go", advpool.RunTelemetry{MutantAttempts: []advpool.MutantAttempt{a}})
 	if len(rows) != 1 {
 		t.Fatalf("got %d rows, want 1", len(rows))
@@ -65,17 +67,18 @@ func parityTestMutantAttemptRowCarriesEveryField(t *testing.T, flip bool) {
 }
 
 func TestCriticFindingRowCarriesEveryField(t *testing.T) {
-	for _, flip := range []bool{false, true} {
-		t.Run(fmt.Sprintf("flip=%v", flip), func(t *testing.T) {
-			parityTestCriticFindingRowCarriesEveryField(t, flip)
+	var zero advpool.CriticFindingObservation
+	for pass := 0; pass < boolPasses(&zero); pass++ {
+		t.Run(fmt.Sprintf("pass=%d", pass), func(t *testing.T) {
+			parityTestCriticFindingRowCarriesEveryField(t, pass)
 		})
 	}
 }
 
-func parityTestCriticFindingRowCarriesEveryField(t *testing.T, flip bool) {
+func parityTestCriticFindingRowCarriesEveryField(t *testing.T, pass int) {
 	var f advpool.CriticFindingObservation
 	fillNonZero(t, &f)
-	alternateBools(&f, flip)
+	alternateBools(&f, pass)
 	_, _, rows := telemetryRows("r", "c", "p.go", advpool.RunTelemetry{CriticFindings: []advpool.CriticFindingObservation{f}})
 	if len(rows) != 1 {
 		t.Fatalf("got %d rows, want 1", len(rows))

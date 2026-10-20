@@ -430,7 +430,10 @@ type MutantAttemptRow struct {
 // CriticFindingRow is one test-critic finding and the execution-checked
 // outcome of it. Every field of advpool.CriticFindingObservation by the same
 // Go name, plus the subject. Evidence quotes code, so it is in the custody
-// set BlankUnpushedSource withholds.
+// set BlankUnpushedSource withholds. It is also NEVER in a statement's
+// telemetrySha256, whatever the bundle's custody (see
+// certify.AuditStatement.TelemetrySHA256 and cmd/corral telemetrySHA256):
+// one statement must verify against both the push and the ledger entry.
 type CriticFindingRow struct {
 	Repo   string
 	Commit string

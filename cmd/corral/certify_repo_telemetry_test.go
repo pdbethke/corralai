@@ -278,3 +278,42 @@ func TestAuditInputCarriesTheScansCommitNotAnInventedOne(t *testing.T) {
 		t.Errorf("a resolved subject with no commit: %q@%q, %v — want acme/r@\"\" and no refusal", repo, commit, err)
 	}
 }
+
+// --ledger naming the machine ledger through a symlink is still the machine
+// ledger: the run's one entry is the copy, never appended twice.
+func TestRepoLedgerSymlinkToMachineLedgerAppendsOnce(t *testing.T) {
+	root, setPath, goals := telemetryRepoFixture(t)
+	machine := withMachineLedger(t)
+	if err := os.MkdirAll(machine, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(t.TempDir(), "ledger-link")
+	if err := os.Symlink(machine, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	code, out, errs := runTelemetryFixture(t, root, setPath, goals, "--ledger", link)
+	if code != 0 {
+		t.Fatalf("exit=%d\n%s%s", code, out, errs)
+	}
+	if m, err := auditpush.ReadLedgerDir(machine); err != nil || len(m) != 1 {
+		t.Fatalf("want exactly one entry in the machine ledger, got %d (%v)\n%s%s", len(m), err, out, errs)
+	}
+	if strings.Contains(out, "machine ledger: entry written") {
+		t.Errorf("the run announced a second, machine-ledger write:\n%s", out)
+	}
+}
+
+func TestSamePathResolvesSymlinksAndMissingPaths(t *testing.T) {
+	dir := t.TempDir()
+	link := filepath.Join(t.TempDir(), "l")
+	if err := os.Symlink(dir, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if !samePath(dir, link) || !samePath(dir, dir+"/") {
+		t.Error("a symlinked or trailing-slash spelling of one directory must compare equal")
+	}
+	missing := filepath.Join(dir, "not-yet")
+	if !samePath(missing, missing+"/./") || samePath(missing, dir) {
+		t.Error("a path that does not exist yet compares by its cleaned absolute spelling")
+	}
+}

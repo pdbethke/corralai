@@ -5876,17 +5876,39 @@ func pushBundle(target string, b auditpush.Bundle) (auditpush.Counts, error) {
 // second append would record one run twice in one chain.
 func writeMachineLedgerCopy(b auditpush.Bundle, repoLedger string, stdout, stderr io.Writer) {
 	dir, err := machineLedgerDir()
-	if err == nil && filepath.Clean(dir) == filepath.Clean(repoLedger) {
+	if err == nil && samePath(dir, repoLedger) {
 		return
 	}
+	var c auditpush.Counts
 	if err == nil {
-		_, err = pushBundle(dir+"/", b)
+		c, err = pushBundle(dir+"/", b)
 	}
 	if err != nil {
 		fmt.Fprintf(stderr, "corral certify --repo: machine ledger: %v\n", err)
 		return
 	}
-	fmt.Fprintf(stdout, "  machine ledger: entry written to %s\n", dir)
+	// The same guard the repo-ledger line has: an entry that wrote no rows
+	// is not announced as written.
+	if c.Total() > 0 {
+		fmt.Fprintf(stdout, "  machine ledger: entry written to %s\n", dir)
+	}
+}
+
+// samePath reports whether a and b name one directory: compared absolute and
+// with symlinks resolved, so a link to the machine ledger passed as --ledger
+// is recognised as the machine ledger. A path that does not resolve (not
+// created yet) is compared in its absolute, cleaned spelling instead.
+func samePath(a, b string) bool {
+	canon := func(p string) string {
+		if abs, err := filepath.Abs(p); err == nil {
+			p = abs
+		}
+		if real, err := filepath.EvalSymlinks(p); err == nil {
+			return real
+		}
+		return filepath.Clean(p)
+	}
+	return canon(a) == canon(b)
 }
 
 // gitHeadCommit resolves repoDir's HEAD, or "" when repoDir is not a checkout

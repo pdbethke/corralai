@@ -244,7 +244,9 @@ type AuditStatement struct {
 	WarehouseRowsHashVersion int `json:"warehouseRowsHashVersion,omitempty"`
 	// TelemetrySHA256 is the sha256 of the canonical JSON of the three
 	// telemetry slices of the bundle (Seats, MutantAttempts, CriticFindings),
-	// after BlankUnpushedSource, in the same canonical form as the rows hash.
+	// with source withheld whatever the bundle's custody (a critic finding's
+	// Evidence is never in the digest; the ledger chain's signature covers
+	// it), in the same canonical form as the rows hash.
 	// It exists because WarehouseRowsSHA256 deliberately EXCLUDES those
 	// slices (the warehouse has no table for them yet, so `verify --db`
 	// could never rebuild them): without this field the signed, anchored

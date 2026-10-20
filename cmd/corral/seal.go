@@ -348,7 +348,7 @@ func attachWarehouse(dsn string, readOnly bool) (*sql.DB, error) {
 func runSeal(args []string, open func(dsn string) (sealReader, error), stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("seal", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	dsn := fs.String("db", "", "what to read: a ledger directory, a warehouse file, or md:<db> (default: $CORRAL_LEDGER, else ./.corral/ledger — the same resolution `corral scans` uses)")
+	dsn := fs.String("db", "", "what to read: a ledger directory, a warehouse file, or md:<db> (default: $CORRAL_LEDGER, else ./.corral/ledger — the same resolution corral scans uses)")
 	repoDir := fs.String("repo", "", "a checkout to judge validity against: each hot file's seal row is marked live (bytes unchanged since the audit), stale (changed since), never audited, unreadable, or unknown when the row recorded no validity key to compare against. Only live counts toward coverage. Without this flag, seal prints the raw ledger with no such judgement")
 	top := fs.Int("top", defaultSealTop, "how many of the repo's highest-ranked (churn x size) files count as \"hot\" for the coverage line — same ranking `certify --repo` uses to bound a scan")
 	asJSON := fs.Bool("json", false, "emit the rows as JSON")

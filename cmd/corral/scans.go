@@ -601,7 +601,7 @@ func formatKillRate(k *float64) string {
 	return fmt.Sprintf("%.2f", *k)
 }
 
-const ledgerReadHelp = "the ledger directory to read (default: $CORRAL_LEDGER, else ./.corral/ledger — where `certify --repo` writes its entry for the repo you are standing in)"
+const ledgerReadHelp = "the ledger directory to read (default: $CORRAL_LEDGER, else ./.corral/ledger — where certify --repo writes its entry for the repo you are standing in)"
 
 // scansTarget is --ledger, or the default directory, always spelled with
 // a trailing separator so a directory that does not exist yet reads as an

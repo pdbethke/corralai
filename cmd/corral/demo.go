@@ -33,6 +33,12 @@ import (
 //
 // It still has no default models. The demo is not an exception to the rule that
 // corral never picks a vendor for you; it just makes everything else free.
+// demoRunLocal is how the demo reaches the real certify --local: always
+// unattributed (true). It is a variable so a test can pin that routing; a demo
+// that went back through runCertifyLocal would file its measurements under
+// whatever repository its directory happens to sit in.
+var demoRunLocal = runCertifyLocalAs
+
 func runDemo(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("demo", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -81,7 +87,7 @@ func runDemo(args []string, stdout, stderr io.Writer) int {
 	}
 	argv = append(argv, "--", "go", "test", "./...")
 
-	code := runCertifyLocalUnattributed(argv, stdout, stderr)
+	code := demoRunLocal(argv, true, stdout, stderr)
 
 	fmt.Fprintf(stdout, "\nthe demo project is still at %s — read passwd_test.go and see what it never asserts.\n", root)
 	fmt.Fprintf(stdout, "to try this on your own code, run `corral doctor` first: it checks the environment for free,\n")

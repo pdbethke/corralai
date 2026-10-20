@@ -404,7 +404,16 @@ func TestModelCallRowTotals(t *testing.T) {
 // inside a git checkout that has an origin (so git WOULD name a repository),
 // the entry records an empty subject and identity "none".
 func TestUnattributedLocalRunRecordsNoSubjectEvenInsideAGitCheckout(t *testing.T) {
-	root, setPath, _ := localEntryFixture(t)
+	checkout, setPath, _ := localEntryFixture(t)
+	// A subdirectory of the checkout, as `corral demo --dir` would be.
+	root := filepath.Join(checkout, "demo")
+	for _, f := range []string{"go.mod", "pkg/a.go", "pkg/a_test.go"} {
+		b, err := os.ReadFile(filepath.Join(checkout, f))
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustWrite(t, filepath.Join(root, f), string(b))
+	}
 	ml := withMachineLedger(t)
 	args := []string{
 		"--repo-dir", root, "--code", "pkg/a.go", "--goal", "A returns 1",
@@ -412,7 +421,7 @@ func TestUnattributedLocalRunRecordsNoSubjectEvenInsideAGitCheckout(t *testing.T
 		"--mutants", setPath, "--quiet", "--", "go", "test", "./...",
 	}
 	var out, errb bytes.Buffer
-	code := runCertifyLocalUnattributed(args, &out, &errb)
+	code := runCertifyLocalAs(args, true, &out, &errb)
 	localRunFinished(t, code, out.String(), errb.String())
 	entries := scanEntriesIn(t, ml)
 	if len(entries) != 1 {
@@ -421,5 +430,8 @@ func TestUnattributedLocalRunRecordsNoSubjectEvenInsideAGitCheckout(t *testing.T
 	sc := entries[0].Bundle.Scan
 	if sc.Repo != "" || sc.Commit != "" || sc.RepoIdentity != subjectIdentityNone {
 		t.Errorf("subject = %q@%q (%q), want an empty subject with identity none", sc.Repo, sc.Commit, sc.RepoIdentity)
+	}
+	if sc.TreeDirty != nil {
+		t.Errorf("tree_dirty = %v, want nil: an unattributed run asks git nothing", *sc.TreeDirty)
 	}
 }

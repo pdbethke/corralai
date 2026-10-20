@@ -90,16 +90,12 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 	return runCertifyLocalAs(args, false, stdout, stderr)
 }
 
-// runCertifyLocalUnattributed is runCertifyLocal for a run that is not a
-// project's record (corral demo): the subject is empty and the identity
-// "none" WHATEVER git says about --repo-dir. A demo may be written under a
-// --dir that sits inside someone's checkout; asking git there would file the
-// demo's measurements under that project's origin and HEAD, which is a claim
-// about a repository the demo never audited.
-func runCertifyLocalUnattributed(args []string, stdout, stderr io.Writer) int {
-	return runCertifyLocalAs(args, true, stdout, stderr)
-}
-
+// runCertifyLocalAs is runCertifyLocal with the choice of subject made
+// explicit. unattributed is for a run that is not a project's record (corral
+// demo): the subject is empty, the identity "none" and the tree state unknown,
+// WHATEVER git says about --repo-dir, because git is never asked. A demo may
+// be written under a directory inside someone's checkout; asking git there
+// would file the demo's measurements under that project's origin and HEAD.
 func runCertifyLocalAs(args []string, unattributed bool, stdout, stderr io.Writer) int {
 	// The run's start, for the ledger entry's started_at and total_millis.
 	startedAt := time.Now()
@@ -124,7 +120,7 @@ func runCertifyLocalAs(args []string, unattributed bool, stdout, stderr io.Write
 	poll := fs.Duration("poll", 2*time.Second, "how long to wait between drive iterations when nothing is claimable")
 	repoFlag := fs.String("repo", "", "repository the signed verdict names. --repo and --commit name ONE subject and go together: pass both or neither (exactly one is refused, exit 2). With neither, both come from --repo-dir's git (origin URL and HEAD); where git cannot tell, the run is recorded as unidentified, never under an invented name")
 	commitFlag := fs.String("commit", "", "commit sha the signed verdict names; goes with --repo (both or neither, see --repo)")
-	outFlag := fs.String("out", "", "also write the signed verdict as a self-contained record file, re-verifiable offline with `corral certify verify <file> --pubkey <hex> --allow-unanchored`")
+	outFlag := fs.String("out", "", "also write the signed verdict as a self-contained record file, re-verifiable offline with corral certify verify <file> --pubkey <hex> --allow-unanchored")
 	quietFlag := fs.Bool("quiet", false, "suppress the live progress echo on stderr (the verdict, --out and --record are unaffected)")
 	repoDirFlag := fs.String("repo-dir", "", "audit --code IN THE CONTEXT of this cloned repo/package: the whole tree is seeded into the jail, the file is mutated in place, and the project's OWN test command (given after `--`) grades it — so real multi-file projects with package imports work (--code/--test are repo-relative)")
 	recordStreamFlag := fs.String("record-stream", "", "stream each run event as newline-delimited JSON to this file AS IT HAPPENS — the same events --record collects into a tape at the end, so a watcher (`tail -f`, the cockpit) can follow a run in flight instead of waiting hours for it to finish. Independent of --record: either, both, or neither")
@@ -433,7 +429,13 @@ func runCertifyLocalAs(args []string, unattributed bool, stdout, stderr io.Write
 
 	// Whether the checkout has changes its commit lacks, asked ONCE, before
 	// the audit starts (treeDirty's rule).
-	auditedTreeDirty := treeDirty(*repoDirFlag)
+	// An unattributed run (corral demo) is not a project's record and asks git
+	// nothing, so it records an unknown tree (nil), never a dirty bit about a
+	// repository it did not audit.
+	var auditedTreeDirty *bool
+	if !unattributed {
+		auditedTreeDirty = treeDirty(*repoDirFlag)
+	}
 	// What the finished run measured about its seats, for the ledger entry.
 	var measured advpool.RunTelemetry
 

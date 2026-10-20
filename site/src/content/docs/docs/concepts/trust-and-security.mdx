@@ -106,7 +106,8 @@ runner.
   **machine ledger** under corral's state directory (`CORRALAI_MACHINE_LEDGER`
   moves it); `certify --local` writes there by default and, unless you pass
   `--ledger`, nowhere else. A machine ledger that resolves inside the audited
-  checkout is not written. `--no-ledger` skips the machine copy, and a
+  checkout is not written, unless it is the repo ledger itself (that directory
+  is written, as the primary entry, and no skip is printed). `--no-ledger` skips the machine copy, and a
   `certify --repo` tree with no commit writes no entry at all.
   Without a key the entry is unsigned. `corral ledger verify --pub <key>`
   checks retained entries against the ledger's root public key (and, for an entry

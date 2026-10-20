@@ -113,7 +113,8 @@ and exactly where is below.
   written.
 - No verb puts the MACHINE COPY inside the checkout it audits (the repo ledger
   is a separate write that does land in the repo by default): a machine ledger
-  that resolves inside it is not written (not even created) and the skip is
+  that resolves inside it, unless it is the repo ledger itself (that directory
+  IS written, as the primary entry, and no skip is printed), is not written (not even created) and the skip is
   printed (`machineLedgerOutsideCheckout`, one helper for all three verbs).
 - A failed machine copy is printed and never changes an exit code; a signing
   key the operator cannot use writes nothing (as it does for the repo entry).

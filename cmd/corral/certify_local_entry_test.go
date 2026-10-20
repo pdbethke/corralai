@@ -19,6 +19,7 @@ import (
 	"github.com/pdbethke/corralai/internal/advpool"
 	"github.com/pdbethke/corralai/internal/auditpush"
 	"github.com/pdbethke/corralai/internal/reposcan"
+	"github.com/pdbethke/corralai/internal/scanstore"
 )
 
 const localEntryOrigin = "https://example.test/acme/widget.git"
@@ -350,5 +351,51 @@ func TestLedgerInsideCheckout(t *testing.T) {
 	}
 	if ledgerInsideCheckout(filepath.Join(repo, "x"), "") {
 		t.Error("with no --repo-dir there is no checkout to be inside")
+	}
+}
+
+// A subject the operator typed is recorded as the operator's, not git's and
+// not unknown.
+func TestLocalEntryTypedSubjectIsOperator(t *testing.T) {
+	in := localAuditInput{repoDir: t.TempDir(), codePath: "a.go", repo: "acme/widget", commit: "abc123", writerModel: "w", mutantModel: "m", criticModel: "off"}
+	b, err := localEntryBundle(in, richAuditedVerdict(), advpool.RunTelemetry{}, time.Now(), localRunFacts{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b.Scan.Repo != "acme/widget" || b.Scan.Commit != "abc123" || b.Scan.RepoIdentity != subjectIdentityOperator {
+		t.Errorf("subject %q@%q identity %q, want acme/widget@abc123 operator", b.Scan.Repo, b.Scan.Commit, b.Scan.RepoIdentity)
+	}
+}
+
+// A machine ledger declared inside the checkout is skipped, said, and never
+// created; an explicit --ledger outside it is still written.
+func TestLocalMachineLedgerInsideCheckoutIsSkipped(t *testing.T) {
+	repo := t.TempDir()
+	inside := filepath.Join(repo, ".corral", "machine-ledger")
+	t.Setenv("CORRALAI_MACHINE_LEDGER", inside)
+	t.Setenv("CORRALAI_CERTIFY_KEY_FILE", filepath.Join(t.TempDir(), "certify.key"))
+	t.Setenv("CORRALAI_CERTIFY_KEY", "")
+	other := filepath.Join(t.TempDir(), "other")
+	b := auditpush.Bundle{Scan: auditpush.ScanRow{Repo: "r", Commit: "c"}}
+	var out, errb bytes.Buffer
+	writeLocalLedgerEntries(b, other, false, repo, &out, &errb)
+	if _, err := os.Stat(filepath.Join(repo, ".corral")); err == nil {
+		t.Errorf("the machine ledger was created inside the checkout")
+	}
+	if !strings.Contains(errb.String(), "is inside --repo-dir") {
+		t.Errorf("the skip must be said, with its reason; stderr:\n%s", errb.String())
+	}
+	if n := len(scanEntriesIn(t, other)); n != 1 {
+		t.Errorf("--ledger outside the checkout holds %d entries, want 1", n)
+	}
+}
+
+func TestModelCallRowTotals(t *testing.T) {
+	in, out, calls := modelCallRowTotals([]scanstore.ModelCall{
+		{InputTokens: 10, OutputTokens: 3, Calls: 2},
+		{InputTokens: 5, OutputTokens: 7, Calls: 1},
+	})
+	if in != 15 || out != 10 || calls != 3 {
+		t.Errorf("totals = %d/%d over %d calls, want 15/10 over 3", in, out, calls)
 	}
 }

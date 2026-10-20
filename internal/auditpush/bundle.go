@@ -206,8 +206,9 @@ type ScanRow struct {
 	// is not the same claim as false.
 	TreeDirty *bool `json:",omitempty"`
 	// RepoIdentity is how Repo was established: "git" (derived from the
-	// checkout's origin) or "none" (it could not be, and Repo is a stand-in
-	// or empty). It is NOT Identity above — that is the audited PARTY, this
+	// checkout's origin), "operator" (typed by the operator — certify
+	// --local's --repo/--commit — and not checked against git) or "none" (it
+	// could not be, and Repo is a stand-in or empty). It is NOT Identity above — that is the audited PARTY, this
 	// is the provenance of the repo NAME. Empty on rows that never recorded it.
 	RepoIdentity string `json:",omitempty"`
 }

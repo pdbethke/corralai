@@ -16,6 +16,7 @@ import (
 	"github.com/pdbethke/corralai/internal/auditpush"
 	"github.com/pdbethke/corralai/internal/reposcan"
 	"github.com/pdbethke/corralai/internal/scanstore"
+	"github.com/pdbethke/corralai/internal/statedir"
 )
 
 // A `certify --local` run's ledger entry. Until this file, a --local run
@@ -63,6 +64,11 @@ type localRunFacts struct {
 // or a suite that never touches the file, is ungradable WITH its reason,
 // never a 0.0 kill rate.
 func localFileResult(in localAuditInput, v advpool.Verdict, t advpool.RunTelemetry, at time.Time) reposcan.FileResult {
+	// The discarded value is the file's filesystem path, not an error:
+	// localMutantSetKey returns none. Its one degraded case (a --code that
+	// filepath.Rel cannot place under --repo-dir) falls back to the
+	// operator's spelling, and buildJailWiring refuses that run before any
+	// verdict exists, so no entry is ever built from it.
 	key, _ := localMutantSetKey(in.repoDir, in.codePath)
 	res := reposcan.FileResult{
 		Job:     reposcan.Job{Path: key, Lang: v.Lang},
@@ -80,12 +86,13 @@ func localFileResult(in localAuditInput, v advpool.Verdict, t advpool.RunTelemet
 
 // localRepoIdentity is how the entry's repo name was established: what
 // localSubject says when the subject was derived from --repo-dir's git, and
-// "none" when the operator typed --repo/--commit. A typed name is the
+// "operator" when the operator typed --repo/--commit. A typed name is the
 // operator's claim, and git was not asked to back it; recording "git" for it
-// would vouch for a name nothing checked.
+// would vouch for a name nothing checked, and "none" would deny a name that
+// was given.
 func localRepoIdentity(in localAuditInput) string {
 	if strings.TrimSpace(in.repo) != "" || strings.TrimSpace(in.commit) != "" {
-		return subjectIdentityNone
+		return subjectIdentityOperator
 	}
 	_, _, identity := localSubject(in.repoDir)
 	return identity
@@ -115,12 +122,7 @@ func localEntryBundle(in localAuditInput, v advpool.Verdict, t advpool.RunTeleme
 	files := buildScanFileRows(results, nil, reposcan.CoverageMap{}, run.mutantsFrom, in.repoDir, stderr)
 	mutants := buildScanMutantRows(0, results)
 	calls := buildScanModelCallRows(results)
-	var inTokens, outTokens, callCount int64
-	for _, c := range calls {
-		inTokens += c.InputTokens
-		outTokens += c.OutputTokens
-		callCount += int64(c.Calls)
-	}
+	inTokens, outTokens, callCount := modelCallRowTotals(calls)
 	audited := 0
 	if results[0].Gradable {
 		audited = 1
@@ -194,18 +196,32 @@ func localEntryBundle(in localAuditInput, v advpool.Verdict, t advpool.RunTeleme
 // writes, the same key has already signed the build record, so an unusable
 // key here cannot be the ordinary case, and a ledger write is not allowed to
 // decide a verdict.)
-func writeLocalLedgerEntries(b auditpush.Bundle, ledgerFlag string, noLedger bool, stdout, stderr io.Writer) {
+//
+// The machine ledger is held to the same rule as --ledger: when
+// CORRALAI_MACHINE_LEDGER (or CORRALAI_STATE_DIR) puts it inside repoDir,
+// the entry is NOT written there — not even the directory is created — and
+// the skip is printed with its reason. --local never writes into the
+// checkout, whoever chose the path.
+func writeLocalLedgerEntries(b auditpush.Bundle, ledgerFlag string, noLedger bool, repoDir string, stdout, stderr io.Writer) {
 	machine := ""
-	if noLedger {
+	switch {
+	case noLedger:
 		fmt.Fprintln(stdout, "  ledger: --no-ledger — no entry written to the machine ledger")
-	} else {
+	default:
+		// Resolved and checked BEFORE machineLedgerDir creates it, so a
+		// machine ledger declared inside the checkout leaves no trace there.
+		path, err := statedir.Path(statedir.MachineLedger)
+		if err == nil && ledgerInsideCheckout(path, repoDir) {
+			fmt.Fprintf(stderr, "corral certify --local: machine ledger %s is inside --repo-dir %s — no entry written there, because --local never writes into the checkout; point CORRALAI_MACHINE_LEDGER outside it\n", path, repoDir)
+			break
+		}
 		dir, err := machineLedgerDir()
 		if err != nil {
 			fmt.Fprintf(stderr, "corral certify --local: machine ledger: %v\n", err)
-		} else {
-			machine = dir
-			writeLocalLedgerEntry(b, dir, stdout, stderr)
+			break
 		}
+		machine = dir
+		writeLocalLedgerEntry(b, dir, stdout, stderr)
 	}
 	if extra := strings.TrimSpace(ledgerFlag); extra != "" {
 		if machine != "" && samePath(machine, extra) {

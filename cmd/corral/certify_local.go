@@ -136,7 +136,7 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 	recordMutantsFlag := fs.String("record-mutants", "", "write the mutants this run actually GRADED to this file, as a replayable corral-mutants-2 document — each mutant its SEARCH/REPLACE hunk, tied to the sha256 of the source it is an edit of. Mutants are authored by a model, so an ordinary run re-draws the exam every time; pin the set and a later comparison measures the thing you changed instead of generator variance. Written even when the verdict is needs-review. A v2 document re-recorded from a --mutants replay of an older corral-mutants-1 set contains that set's WHOLE-FILE entries, not hunks — the run graded what was recorded, and re-recording it does not manufacture anchors it never had")
 	var bindDirFlag stringSlice
 	fs.Var(&bindDirFlag, "bind-dir", "extra repo-relative dependency dir to mount read-only into the jail instead of copying it into the workspace (repeatable; node_modules/vendor/.venv/venv/.bundle are auto-detected) — --repo-dir mode only")
-	ledgerFlag := fs.String("ledger", "", "ALSO write this run's ledger entry to this ledger DIRECTORY, beside the machine ledger (statedir's ledger, override CORRALAI_MACHINE_LEDGER) every --local run writes to. Refused inside --repo-dir: --local never writes into the checkout. One signed, hash-linked entry per run; `corral verify --ledger <dir>` walks the chain")
+	ledgerFlag := fs.String("ledger", "", "ALSO write this run's ledger entry to this ledger DIRECTORY, beside the machine ledger (statedir's ledger, override CORRALAI_MACHINE_LEDGER) every --local run writes to. Refused inside --repo-dir: --local never writes into the checkout. One signed, hash-linked entry per run; corral verify --ledger <dir> walks the chain")
 	noLedgerFlag := fs.Bool("no-ledger", false, "write no entry to the machine ledger (an explicit --ledger is still written)")
 	noBindDepsFlag := fs.Bool("no-bind-deps", false, "copy dependency dirs into the jail workspace instead of bind-mounting them read-only (the pre-bind behavior; subject to the workspace size cap)")
 	if err := fs.Parse(flagArgs); err != nil {
@@ -253,7 +253,7 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 	// Refused before any jail, store or spend, like the flag refusals above:
 	// an entry the run could only place inside the checkout is a write into
 	// the checkout, which --local never makes.
-	if l := strings.TrimSpace(*ledgerFlag); l != "" && ledgerInsideCheckout(l, *repoDirFlag) {
+	if l := strings.TrimSpace(*ledgerFlag); l != "" && ledgerInsideCheckout(l, strings.TrimSpace(*repoDirFlag)) {
 		fmt.Fprintf(stderr, "corral certify --local: --ledger %s is inside --repo-dir %s — --local never writes into the checkout; name a directory outside it\n", l, *repoDirFlag)
 		return 2
 	}
@@ -483,7 +483,7 @@ func runCertifyLocal(args []string, stdout, stderr io.Writer) int {
 	}); berr != nil {
 		fmt.Fprintf(stderr, "corral certify --local: no ledger entry written: %v\n", berr)
 	} else {
-		writeLocalLedgerEntries(b, *ledgerFlag, *noLedgerFlag, stdout, stderr)
+		writeLocalLedgerEntries(b, *ledgerFlag, *noLedgerFlag, in.repoDir, stdout, stderr)
 	}
 
 	// --out writes the signed record as a self-contained file the user can

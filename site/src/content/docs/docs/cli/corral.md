@@ -273,7 +273,7 @@ Usage of certify --local:
     	sandbox backend: bwrap|container (Linux), sandbox-exec (macOS) (default: auto-detect for this OS; "none" is not supported — --local always sandboxes). "container" needs CORRALAI_EXEC_IMAGE set to a toolchain image, e.g. CORRALAI_EXEC_IMAGE=python:3.12-bookworm
   -lang string
     	source language (default: inferred from --code extension)
-  -ledger corral verify --ledger <dir>
+  -ledger string
     	ALSO write this run's ledger entry to this ledger DIRECTORY, beside the machine ledger (statedir's ledger, override CORRALAI_MACHINE_LEDGER) every --local run writes to. Refused inside --repo-dir: --local never writes into the checkout. One signed, hash-linked entry per run; corral verify --ledger <dir> walks the chain
   -local
     	run the adversarial pool in-process (this mode)

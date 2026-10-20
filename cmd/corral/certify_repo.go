@@ -1476,12 +1476,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		return refuse()
 	}
 	modelCallRows := scanModelCallRowsWith(results, scanDerivers)
-	var inTokens, outTokens, modelCallCount int64
-	for _, c := range modelCallRows {
-		inTokens += c.InputTokens
-		outTokens += c.OutputTokens
-		modelCallCount += int64(c.Calls)
-	}
+	inTokens, outTokens, modelCallCount := modelCallRowTotals(modelCallRows)
 	host, _ := os.Hostname()
 	finishedAt := time.Now()
 	// The audited party, from the checkout: nemo iudex names two parties,

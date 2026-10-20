@@ -16,6 +16,11 @@ import (
 const (
 	subjectIdentityGit  = "git"
 	subjectIdentityNone = "none"
+	// subjectIdentityOperator is a subject the operator TYPED (--repo and
+	// --commit on certify --local): neither derived from git nor unknown.
+	// git was not asked to back it, so it is not "git"; it was given, so it
+	// is not "none".
+	subjectIdentityOperator = "operator"
 )
 
 // machineLedgerDir is where this machine keeps its own ledger, created 0o750

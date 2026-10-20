@@ -722,6 +722,19 @@ func buildScanModelCallRows(results []reposcan.FileResult) []scanstore.ModelCall
 	return rows
 }
 
+// modelCallRowTotals is the scan header's token and call totals, summed from
+// the same call rows the entry records — the ONE sum both certify --repo's
+// and certify --local's headers use, so a header can never disagree with
+// the per-(file, role) grain beneath it.
+func modelCallRowTotals(rows []scanstore.ModelCall) (in, out, calls int64) {
+	for _, c := range rows {
+		in += c.InputTokens
+		out += c.OutputTokens
+		calls += int64(c.Calls)
+	}
+	return in, out, calls
+}
+
 // scanModelCallTotals sums buildScanModelCallRows' per-(file, role) grain
 // into ONE []advpool.ModelCall per role for the WHOLE scan, in roster order —
 // the shape costLine takes, for the end-of-scan stdout line. A role's model

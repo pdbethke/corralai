@@ -171,9 +171,16 @@ jobs:
           # rests on. The count is the only way to see whether the bubblewrap
           # provisioning above actually took effect on this runner. -v changes
           # verbosity only, never pass/fail.
+          #
+          # -timeout is explicit because cmd/corral runs real certify --local
+          # audits end to end, and every jail run compiles Go from a cold,
+          # per-command GOCACHE. That package took 346s of go test's default
+          # 600s on this runner (#454), and the ledger tests of #455 added
+          # nine more runs at about 37s each, which crossed it. A timeout
+          # is not a skip: the tests still run in full.
           set +e
           set -o pipefail
-          go test ./... -v 2>&1 | tee /tmp/gotest.log
+          go test ./... -v -timeout 30m 2>&1 | tee /tmp/gotest.log
           rc=$?
           set -e
           count=$(grep -c -- '--- SKIP' /tmp/gotest.log || true)

@@ -68,7 +68,7 @@ func PlanMigration(dir string, opts PlanOptions) ([]Move, []Conflict, error) {
 	}
 	swept := map[string]bool{}
 	for _, f := range Files() {
-		if host.env(f.Override) != "" {
+		if f.IsDir() || host.env(f.Override) != "" {
 			continue
 		}
 		from := filepath.Join(dir, f.Name)

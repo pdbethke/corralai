@@ -652,7 +652,7 @@ type localAuditInput struct {
 	// resolve one here, which is the `certify --local` path.
 	iso sandbox.Isolator
 
-	// The signed subject's identity. Empty falls back to git, else "local".
+	// The signed subject's identity. Empty is derived from git on --repo-dir (localSubject), else left empty.
 	repo, commit string
 
 	// Effects, all optional. A nil openStore means the verdict is NOT signed
@@ -1838,21 +1838,22 @@ func auditOneFile(ctx context.Context, in localAuditInput) (advpool.Verdict, err
 	// itself closes it: see resolveRunDeadline.
 	d.RunDeadline = resolveRunDeadline(timeout, shadow)
 
-	// Resolve repo/commit for the signed subject (best-effort git, else "local").
+	// Resolve repo/commit for the signed subject. An explicit --repo/--commit
+	// wins; otherwise git is asked about --repo-dir (see localSubject), NOT the
+	// process cwd. What git cannot answer stays "" — the old "local" literal
+	// was an invented identity that the store rows and the signed subject then
+	// carried as if it were a repository. (localSubject also returns an
+	// identity word, "git" or "none"; the ledger entry that a later step
+	// writes will record it.)
 	repo := strings.TrimSpace(in.repo)
-	if repo == "" {
-		if v, gerr := (realRunner{}).GitOutput("config", "--get", "remote.origin.url"); gerr == nil && v != "" {
-			repo = v
-		} else {
-			repo = "local"
-		}
-	}
 	commit := strings.TrimSpace(in.commit)
-	if commit == "" {
-		if v, gerr := (realRunner{}).GitOutput("rev-parse", "HEAD"); gerr == nil && v != "" {
-			commit = v
-		} else {
-			commit = "local"
+	if repo == "" || commit == "" {
+		gRepo, gCommit, _ := localSubject(in.repoDir)
+		if repo == "" {
+			repo = gRepo
+		}
+		if commit == "" {
+			commit = gCommit
 		}
 	}
 

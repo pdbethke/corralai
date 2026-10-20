@@ -320,8 +320,9 @@ func TestVerifyForgedRegistration(t *testing.T) {
 	wantClean(t, checks[0])
 	wantProblem(t, checks[1], "a signer entry must be signed by the ledger's root key")
 	wantProblem(t, checks[2], "not a registered signer at this point in the chain")
-	// Without a key the forgery is still visible: the authority rule is
-	// structural (the root is the chain's first signer), not a signature.
+	// Without a key this forgery is still visible, but only because the
+	// forger signed under its OWN keyid: with no key the authority rule is
+	// by name. TestVerifyForgedRootKeyID is the forger who copies the root's.
 	nopub := verifyChecks(t, dir, nil)
 	wantProblem(t, nopub[1], "a signer entry must be signed by the ledger's root key")
 	if rootID, active := ActiveSigners(mustRead(t, dir)); rootID != KeyFingerprint(pubOf(root)) || len(active) != 1 || active[0].Name != "laptop" {
@@ -449,5 +450,39 @@ func TestActiveSignersAtHead(t *testing.T) {
 	want := SignerKey{KeyID: KeyFingerprint(pubOf(b)), PubKey: hex.EncodeToString(pubOf(b)), Name: "B"}
 	if len(active) != 1 || active[0] != want {
 		t.Fatalf("active %+v, want [%+v]", active, want)
+	}
+}
+
+// The forger who copies the root's keyid. M signs a signer entry that NAMES
+// the root's fingerprint (plaintext on every root entry) to register X. Under
+// the root key the signature is checked against the root: a Problem, and the
+// set does not move, so X's entry is unregistered. With no key nothing is
+// signature-checked and the name is all there is: the forgery is accepted.
+// Both halves are pinned — the first is the security property, the second is
+// the documented limit of a keyless read (signerSet, ActiveSigners).
+func TestVerifyForgedRootKeyID(t *testing.T) {
+	dir := t.TempDir()
+	root, m, x := seededKey(0x24), seededKey(0x25), seededKey(0x26)
+	mustSignerChange(t, dir, registerOf(m, "laptop"), signerOf(root))
+	c := registerOf(x, "intruder")
+	posingAsRoot := Ed25519LedgerSigner{KeyID: KeyFingerprint(pubOf(root)), Key: m}
+	placeForged(t, dir, LedgerEntry{Kind: KindSigner, Signer: &c}, posingAsRoot)
+	placeForged(t, dir, LedgerEntry{Bundle: Bundle{Scan: ScanRow{Repo: "r", Commit: "abab1212", ScanID: 1}}}, signerOf(x))
+
+	checks := verifyChecks(t, dir, pubOf(root))
+	wantClean(t, checks[0])
+	wantProblem(t, checks[1], "signature does not verify under the given key")
+	wantProblem(t, checks[2], "not a registered signer at this point in the chain")
+
+	nopub := verifyChecks(t, dir, nil)
+	for _, c := range nopub {
+		wantClean(t, c)
+	}
+	if nopub[1].Signer != "root" || nopub[2].Signer != "intruder" {
+		t.Fatalf("keyless read: signers %q, %q — want the forgery accepted by name (root, intruder)", nopub[1].Signer, nopub[2].Signer)
+	}
+	_, active := ActiveSigners(mustRead(t, dir))
+	if len(active) != 2 || active[1].KeyID != KeyFingerprint(pubOf(x)) {
+		t.Fatalf("ActiveSigners %+v: want the forged key present — a keyless set is a claim, not an authorization", active)
 	}
 }

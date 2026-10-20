@@ -97,11 +97,17 @@ const legacyKeyIDProblem = `a corral-ledger-5 entry names its key by fingerprint
 //
 // The root is either the key the operator gave (--pub names only the root)
 // or, with no key, the keyid of the chain's first signer entry. The second
-// is structural, not proven: without a key nothing is, and a forger who
-// writes the FIRST signer entry of a keyless read makes themselves its
-// root. With a key, a first signer entry the key did not sign is a Problem
-// and changes nothing. The two answers can differ on a forged chain, which
-// is why ActiveSigners documents itself as the keyless reading.
+// is a NAME, not a proof, and with no key every authority check is by name:
+// a signer entry is accepted as the root's when its keyid string equals the
+// root's fingerprint (or is "corral-certify" on a format <= 4 entry),
+// whatever its signature bytes. The root's fingerprint is plaintext on
+// every entry the root signed, so anyone who can write the directory can
+// place a signer entry, at ANY position, that registers their own key on a
+// keyless read — not only one who writes the first signer entry. Only a
+// read under the root key (--pub) refuses it: there the signature is
+// checked against the root, the forged entry is a Problem, and the set does
+// not move. The keyless set is therefore a description of what the chain
+// CLAIMS, never an authorization; see ActiveSigners.
 //
 // Seeding: active starts empty. A leading checkpoint that carries the set
 // it replaced (Task 3 of the signers plan) seeds it here, in
@@ -239,13 +245,16 @@ func orNoKeyID(id string) string {
 }
 
 // ActiveSigners is the signer set at the chain's head, as the verifier's
-// own walk leaves it with no key: hashes, links and shape are checked and a
-// change that fails any of them is not applied, but no signature is. So it
-// is structural — the right input for a WRITER deciding whether its key may
-// append (signatures are the reader's job, under --pub) — and on a chain
-// that verifies clean under the root key it is exactly what that verify
-// walked. rootKeyID is the KeyID of the chain's first signer entry, "" when
-// the chain has none.
+// own walk leaves it with no key: hashes, links, shape and the register /
+// revoke rules are checked and a change that fails any of them is not
+// applied, but NO SIGNATURE IS. A signer entry that merely names the root's
+// keyid is accepted, so anyone who can write the directory can add their
+// own key here (see signerSet). That makes it a CONVENIENCE for a writer —
+// "would this append look right to a reader?" — and never an
+// authorization: whether a key really was registered is answered only by
+// VerifyLedgerDir under the root key. On a chain that verifies clean under
+// the root key it is exactly the set that verify walked. rootKeyID is the
+// KeyID of the chain's first signer entry, "" when the chain has none.
 func ActiveSigners(entries []LedgerEntry) (rootKeyID string, active []SignerKey) {
 	_, set := verifyEntries(entries, nil)
 	return set.rootID, set.list()

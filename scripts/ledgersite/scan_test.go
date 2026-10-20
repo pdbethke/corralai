@@ -203,3 +203,31 @@ func TestTheIntervalIsOverDistinctEdits(t *testing.T) {
 		t.Errorf("an older row's interval is not labelled as over every graded mutant:\n%s", p)
 	}
 }
+
+// A signature that did not verify is only "not checked" when no key was
+// given. With a key, it is a failure, and the entry says who the chain says
+// held the key.
+func TestEntryBannerSaysWhoSignedAndDoesNotCallAFailureUnchecked(t *testing.T) {
+	render := func(sigsChecked bool, c auditpush.ChainCheck) string {
+		entries := []auditpush.LedgerEntry{warpLikeScan("abcdef0123456789abcdef", true)}
+		entries[0].File = entries[0].Hash + ".json.gz"
+		c.File, c.Hash, c.HashOK, c.LinkOK = entries[0].File, entries[0].Hash, true, true
+		out := t.TempDir()
+		if err := writeSite(out, buildView(entries, []auditpush.ChainCheck{c}, sigsChecked)); err != nil {
+			t.Fatal(err)
+		}
+		return read(t, filepath.Join(out, "entry", shortHash(entries[0].Hash)+".html"))
+	}
+	ok := render(true, auditpush.ChainCheck{Signed: true, SigOK: true, Signer: "laptop"})
+	if !strings.Contains(ok, "signed by laptop") {
+		t.Error("the page does not say who signed")
+	}
+	bad := render(true, auditpush.ChainCheck{Signed: true, Problem: "key not registered"})
+	if strings.Contains(bad, "not checked (no key)") || !strings.Contains(bad, "NOT VERIFIED") {
+		t.Error("a signature that failed under a given key was rendered as unchecked")
+	}
+	nokey := render(false, auditpush.ChainCheck{Signed: true})
+	if !strings.Contains(nokey, "not checked (no key)") {
+		t.Error("with no key the page must say signatures were not checked")
+	}
+}

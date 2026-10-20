@@ -449,7 +449,7 @@ func requireRegisteredSigner(existing []LedgerEntry, signer LedgerSigner) error 
 		return nil
 	}
 	if signer == nil {
-		return fmt.Errorf("auditpush: this ledger registers its signers, so an unsigned entry would be refused by the verifier; sign with the root key or a registered one")
+		return fmt.Errorf("auditpush: this ledger registers its signers, so the verifier reports an unsigned entry as UNSIGNED among signed ones; sign with the root key or a registered one (register a machine key with `corral ledger signer add`)")
 	}
 	id := signer.SigningKeyID()
 	if id == rootID {
@@ -1024,6 +1024,15 @@ func WriteCheckpoint(dir string, signer LedgerSigner, rootPub ed25519.PublicKey)
 		}
 		if signer == nil || signer.SigningKeyID() != KeyFingerprint(rootPub) {
 			return "", 0, fmt.Errorf("auditpush: a checkpoint over a chain with signers must be signed by the root (%s) — refusing to prune, because the checkpoint would be a permanent Problem under the root key", KeyFingerprint(rootPub))
+		}
+		// The keyid is only a label the signer reports; an API caller can
+		// attach the root's fingerprint to another key. Prove the key signs
+		// as the root BEFORE anything is placed or deleted, or the prune
+		// would leave a genesis the root key rejects, permanently.
+		probeSum := sha256.Sum256([]byte("corral-ledger-checkpoint-root-probe-v1"))
+		_, probeSig, perr := signer.Sign(probeSum[:])
+		if perr != nil || !ed25519.Verify(rootPub, probeSum[:], probeSig) {
+			return "", 0, fmt.Errorf("auditpush: the signer claims the root keyid (%s) but its key does not sign as the root — refusing to prune, because the checkpoint would be a permanent Problem under the root key", KeyFingerprint(rootPub))
 		}
 		checks, set := verifyEntries(entries, rootPub)
 		for _, c := range checks {

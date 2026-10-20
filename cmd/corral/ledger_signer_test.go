@@ -135,9 +135,10 @@ func TestSignerAddRefusesWhereRootHasNotSigned(t *testing.T) {
 	other := t.TempDir()
 	pushAs(t, other, seedHex(0x55), "aaaa1111")
 	t.Setenv("CORRALAI_CERTIFY_KEY", "")
-	// missing and empty hit the "root has not signed" refusal; the other two
-	// already show a Problem under the root, which refuses first. Either way
-	// nothing is written.
+	// missing, empty and unsigned all hit the "root has never signed this
+	// chain" refusal (the unsigned one has no Problem to trip, so only that
+	// check stops it); "other key" shows a Problem under the root, which
+	// refuses first. Either way nothing is written.
 	for name, dir := range map[string]string{"missing": missing, "empty": t.TempDir(), "unsigned": unsigned, "other key": other} {
 		before := ledgerFileCount(t, dir)
 		code, out := run(t, "signer", "add", dir, "--name", "x", "--pub", newPub)

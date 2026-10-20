@@ -63,14 +63,19 @@ type FindingView struct {
 // entry sits. Review and scan pages share it, so both say the same thing
 // about a hash, a link and a signature.
 type ChainView struct {
-	Hash         string
-	Short        string
-	File         string
-	Pushed       time.Time
-	ChainHashOK  bool
-	ChainLinkOK  bool
-	Signed       bool
-	SigOK        bool
+	Hash        string
+	Short       string
+	File        string
+	Pushed      time.Time
+	ChainHashOK bool
+	ChainLinkOK bool
+	Signed      bool
+	SigOK       bool
+	// Signer is who the chain says held the signing key ("root" or a
+	// registered name); SigsChecked is whether a public key was given, which
+	// decides if a signature that did not verify is "unchecked" or a failure.
+	Signer       string
+	SigsChecked  bool
 	ChainProblem string
 	Genesis      bool
 }
@@ -203,7 +208,7 @@ func buildView(entries []auditpush.LedgerEntry, checks []auditpush.ChainCheck, s
 			Hash: e.Hash, Short: shortHash(e.Hash), File: filepath.Base(e.File),
 			Pushed:      e.Pushed,
 			ChainHashOK: c.HashOK, ChainLinkOK: c.LinkOK, Signed: c.Signed,
-			SigOK: c.SigOK, ChainProblem: c.Problem, Genesis: c.Genesis,
+			SigOK: c.SigOK, Signer: c.Signer, SigsChecked: sigsChecked, ChainProblem: c.Problem, Genesis: c.Genesis,
 		}
 		if e.IsScan() {
 			var by *auditpush.LedgerEntry

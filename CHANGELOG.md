@@ -20,8 +20,10 @@ history of any release, `git log v0.3.4..v0.3.5`.
   later entry's signature against the key the chain registered for it rather
   than one key for the whole ledger. What breaks:
   - **An older corral cannot read a ledger this corral has appended to**,
-    signers or not, because every new entry is format 5. Upgrade before
-    verifying corral's own ledger after the key ceremony. Older entries verify
+    signers or not, because every new entry is format 5. That applies as soon
+    as any entry is appended by this version, by anyone, to any ledger.
+    corral's own `corral/ledger` receives none until a release carrying
+    format 5 is tagged and the docs are pinned to it. Older entries verify
     unchanged here.
   - **`keyid` is the key's fingerprint** (`ed25519:` and 16 hex characters of
     its SHA-256) on new entries, not the name `corral-certify`; on older

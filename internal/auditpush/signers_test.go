@@ -728,3 +728,18 @@ func TestPushPlanCountsSignerEntry(t *testing.T) {
 		t.Fatalf("plan %+v, want 1 not-pushable (the signer entry) and 1 scan", plan)
 	}
 }
+
+// The keyid is a label the signer reports, not proof of the key behind it. A
+// signer that reads the root's fingerprint but holds another key would prune
+// the chain and then leave a genesis the root key rejects for good.
+func TestWriteCheckpointRefusesSignerThatOnlyClaimsTheRootKeyID(t *testing.T) {
+	dir, root, _ := chainWithMember(t, 0x2e, 0x2f)
+	liar := Ed25519LedgerSigner{KeyID: KeyFingerprint(pubOf(root)), Key: seededKey(0x30)}
+	before := fileList(t, dir)
+	if _, _, err := WriteCheckpoint(dir, liar, pubOf(root)); err == nil {
+		t.Fatal("a checkpoint was written by a key that is not the root behind the root's keyid")
+	}
+	if after := fileList(t, dir); strings.Join(after, ",") != strings.Join(before, ",") {
+		t.Fatalf("a refused checkpoint changed the directory: %v -> %v", before, after)
+	}
+}

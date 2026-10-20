@@ -132,13 +132,18 @@ appended to, signers or not.
   the root seed from `CORRALAI_LEDGER_ROOT_KEY` and from nowhere else: not a
   file corral finds, and never the machine's certify key. They refuse, writing
   nothing, when the seed is missing, when `CORRALAI_LEDGER_PUBKEY` names a
-  different root, or when the directory does not verify under the seed's root.
+  different root, when the root has never signed anything in the directory (a
+  mistyped path, an empty directory, an unsigned chain), or when the directory
+  does not verify under the seed's root.
   `corral ledger signer list <dir> [--pub <hex>]` shows the active signers,
   the entry that registered each, then the revoked ones.
 - **The verify rule.** With the root key (`--pub`), each entry's signature is
   checked against the key the chain had registered for its `keyid` at that
   point; an entry signed by a key not yet registered, or already revoked, is a
-  problem. `corral ledger verify` prints who signed each entry as
+  problem. A revocation holds only as far as the chain's head is anchored from
+  outside (`--expect-head`, the branch's git history): delete the trailing
+  revoke entry and the revoked key's later entries verify clean, which is the
+  tail-truncation limit described above. `corral ledger verify` prints who signed each entry as
   `signed by <name> (<keyid>)`. A key is named by its fingerprint, `ed25519:`
   plus 16 hex characters of the SHA-256 of the public key; the full key travels
   in its registration and is what signatures are checked against.

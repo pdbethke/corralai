@@ -1,0 +1,3 @@
+{
+  "flag_mutex.go": "In a MutuallyExclusiveFlags group, at most one option path may be set on the command line: setting flags from two different option paths is an error naming both flags, while setting several flags within the same option path is allowed. A Required group with no flag set is an error; a group that is not required and has no flag set is not an error. The group's Category is applied to every categorizable flag in it. When Stringer is set it is applied to every flag in the group that accepts a stringer and flags that do not are left alone; when Stringer is nil the flags keep their own display."
+}

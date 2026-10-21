@@ -65,6 +65,7 @@
         "python3",
         "-m",
         "pytest",
+        "tests/test_functional.py",
         "tests/checkers",
         "-q",
         "-p",

@@ -22,9 +22,9 @@ test('the landing header carries the logo, primary nav, and a star CTA', async (
   await expect(brand).toHaveAttribute('aria-label', /home/i);
   await expect(brand.locator('.cai-word')).toContainText('CorralAI');
 
-  // Primary nav: Home, Docs, Recordings, GitHub.
+  // Primary nav: Home, Docs, Recordings, Ledger, GitHub.
   const nav = header.locator('nav.sh-nav');
-  for (const label of ['Home', 'Docs', 'Recordings', 'GitHub']) {
+  for (const label of ['Home', 'Docs', 'Recordings', 'Ledger', 'GitHub']) {
     await expect(nav.getByRole('link', { name: label, exact: true })).toBeVisible();
   }
   // Home is marked as the current page on the landing route.
@@ -34,12 +34,15 @@ test('the landing header carries the logo, primary nav, and a star CTA', async (
   await expect(header.locator('a.sh-star')).toHaveAttribute('href', /github\.com\/pdbethke\/corralai/);
 });
 
-test('the header nav links resolve on-domain (docs + recordings)', async ({ page }) => {
+// The ledger is the record every audit, PR and field note points at; for a
+// while it was live at /ledger/ with nothing on the site linking to it.
+test('the header nav links resolve on-domain (docs + recordings + ledger)', async ({ page }) => {
   await page.goto('/');
   const nav = page.locator('header.site-header nav.sh-nav');
   const docsHref = await nav.getByRole('link', { name: 'Docs', exact: true }).getAttribute('href');
   const recHref = await nav.getByRole('link', { name: 'Recordings', exact: true }).getAttribute('href');
-  for (const href of [docsHref, recHref]) {
+  const ledgerHref = await nav.getByRole('link', { name: 'Ledger', exact: true }).getAttribute('href');
+  for (const href of [docsHref, recHref, ledgerHref]) {
     expect(href).toBeTruthy();
     const res = await page.request.get(href!);
     expect(res.status(), `${href} returned ${res.status()}`).toBeLessThan(400);

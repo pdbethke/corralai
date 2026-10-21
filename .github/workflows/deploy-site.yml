@@ -23,11 +23,18 @@ on:
       - "site/**"
       - "internal/ui/web/replay-player.js"
       - ".github/workflows/deploy-site.yml"
+      # The /ledger/ pages are rendered by these at deploy time.
+      - "internal/recordview/**"
+      - "scripts/ledgersite/**"
+      - "scripts/gen-ledger-site.sh"
   pull_request:
     branches: [main]
     paths:
       - "site/**"
       - "internal/ui/web/replay-player.js"
+      - "internal/recordview/**"
+      - "scripts/ledgersite/**"
+      - "scripts/gen-ledger-site.sh"
   # The /ledger/ pages are rendered from the corral/ledger branch at deploy
   # time, and new entries (the Action, the campaign's weekly runs) never touch
   # site/**, so without this the record page lagged until the next site

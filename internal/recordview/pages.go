@@ -3,6 +3,7 @@
 package recordview
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"html/template"
@@ -150,6 +151,16 @@ func (s Site) Paths() []string {
 // Render writes the page at path. It is the only way any page is produced,
 // static or live, which is what keeps the two identical.
 func (p *Pages) Render(w io.Writer, s Site, path string) error {
+	var buf bytes.Buffer
+	if err := p.render(&buf, s, path); err != nil {
+		return err
+	}
+	_, err := w.Write(fillNav(buf.Bytes(), s.Nav))
+	return err
+}
+
+// render executes the template for path; Render puts Site.Nav in its slot.
+func (p *Pages) render(w io.Writer, s Site, path string) error {
 	switch {
 	case path == "index.html":
 		return p.index.Execute(w, s)

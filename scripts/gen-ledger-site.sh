@@ -34,8 +34,17 @@ echo "gen-ledger-site: rendering $REF ($(git rev-parse --short "$REF"))"
 git archive "$REF" | tar -x -C "$TMP"
 
 mkdir -p "$OUT"
+# The site's menu, on every record page: a reader who arrives at an entry
+# from a PR or issue link must be able to find out what corral is.
+NAV=(
+  -nav "What is corral?=/"
+  -nav "How it works=/docs/how-it-works/"
+  -nav "Get started=/docs/getting-started/"
+  -nav "Field notes=/field-notes/"
+  -nav "GitHub=https://github.com/pdbethke/corralai"
+)
 if [ -n "$PUBKEY" ]; then
-  go run ./scripts/ledgersite -ledger "$TMP" -out "$OUT" -pubkey "$PUBKEY"
+  go run ./scripts/ledgersite -ledger "$TMP" -out "$OUT" -pubkey "$PUBKEY" "${NAV[@]}"
 else
-  go run ./scripts/ledgersite -ledger "$TMP" -out "$OUT"
+  go run ./scripts/ledgersite -ledger "$TMP" -out "$OUT" "${NAV[@]}"
 fi

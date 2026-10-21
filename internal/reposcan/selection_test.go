@@ -354,3 +354,29 @@ func TestCollectSelectionEvidenceRefusesUnparseableOutput(t *testing.T) {
 		t.Errorf("the note must say the document was unparseable AND show what came back, got %q", ev.Note)
 	}
 }
+
+// A suite that FAILS under instrumentation prints its own summary last, and
+// that line was handed to the JSON reader: pylint's "2 failed, 440 passed in
+// 9.81s" read as the number 2 followed by an f, and the disclosure said
+// "unparseable selection evidence", hiding the measurement that mattered
+// (pylint-dev/pylint@5e998f68, 2026-10-21). A non-zero exit is reported as
+// what it is, with the suite's own last line.
+func TestSelectionEvidenceFailingSuiteSaysTheSuiteFailed(t *testing.T) {
+	py, _ := lang.ByName("python")
+	r := &fakeDetailedRunner{res: sandbox.EnumerateResult{
+		Output:   "s....... [ 14%]\nFAILED tests/checkers/x.py::t\n2 failed, 440 passed, 43 skipped in 9.81s\n",
+		ExitCode: 1,
+	}}
+	ev := CollectSelectionEvidence(context.Background(), r, nil, py, []string{"pytest"}, nil)
+	if ev.Ran {
+		t.Fatal("a failing instrumented suite is not selection evidence")
+	}
+	for _, want := range []string{"exited 1", "2 failed, 440 passed, 43 skipped in 9.81s"} {
+		if !strings.Contains(ev.Note, want) {
+			t.Errorf("note %q does not contain %q", ev.Note, want)
+		}
+	}
+	if strings.Contains(ev.Note, "invalid character") {
+		t.Errorf("a failing suite was reported as a JSON error: %q", ev.Note)
+	}
+}

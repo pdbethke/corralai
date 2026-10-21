@@ -600,6 +600,28 @@ func DirMarksTest(rules []Rule, rel string) bool {
 // too).
 func MightBeTest(all [][]Rule, rel string) bool {
 	rel = filepath.ToSlash(rel)
+	if InTestTree(all, rel) {
+		return true
+	}
+	sets := append([][]Rule{Generic}, all...)
+	base := strings.ToLower(path.Base(rel))
+	for _, rules := range sets {
+		if nameMatches(rules, base, true) {
+			return true
+		}
+	}
+	return false
+}
+
+// InTestTree reports whether any directory segment of rel is a test
+// directory some rule (or Generic) names — tests/, spec/, __tests__/ and the
+// rest, under any language. It is the directory half of MightBeTest, and the
+// generous question for the same reason: it is asked of files no plugin has
+// claimed (a fixture, a data file), where "lives in the test tree" is the only
+// evidence there is. Segment equality, not a substring: contests/ is not
+// tests/.
+func InTestTree(all [][]Rule, rel string) bool {
+	rel = filepath.ToSlash(rel)
 	sets := append([][]Rule{Generic}, all...)
 	dirs := map[string]bool{}
 	for _, rules := range sets {
@@ -614,12 +636,6 @@ func MightBeTest(all [][]Rule, rel string) bool {
 	}
 	for _, seg := range strings.Split(path.Dir(rel), "/") {
 		if dirs[seg] {
-			return true
-		}
-	}
-	base := strings.ToLower(path.Base(rel))
-	for _, rules := range sets {
-		if nameMatches(rules, base, true) {
 			return true
 		}
 	}

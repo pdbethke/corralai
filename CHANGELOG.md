@@ -9,6 +9,25 @@ still move between minor versions.
 Entries describe what changed for someone *using* the tool. For the full commit
 history of any release, `git log v0.3.4..v0.3.5`.
 
+## [Unreleased]
+
+### Fixed
+
+- **Fixtures in a test tree reach the jail.** The jail's copy of a
+  repository dropped every file that is not valid UTF-8 except under a
+  `testdata` directory, which is Go's convention. Other languages keep their
+  fixtures in their test trees, so pylint's
+  `tests/regrtest_data/unicode/*_utf_32_bom.txt` were dropped and two of its
+  tests failed inside the jail on unmutated code. A non-UTF-8 file in any
+  directory a language names as a test directory (`tests/`, `spec/`,
+  `__tests__/` and the rest) is now copied too; one outside every test tree
+  still is not.
+- **A failing instrumented suite says it failed.** When the per-test
+  selection run exited non-zero, its last line, the test runner's own summary,
+  was handed to the JSON reader: pylint's `2 failed, 440 passed` was reported
+  as `invalid character 'f' after top-level value`. The note now gives the
+  exit code and the line the run ended on.
+
 ## [v1.0.0-rc.27] — 2026-10-21
 
 ### Added

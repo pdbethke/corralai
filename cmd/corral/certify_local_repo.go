@@ -18,6 +18,7 @@ import (
 
 	"github.com/pdbethke/corralai/internal/adequacy"
 	"github.com/pdbethke/corralai/internal/lang"
+	"github.com/pdbethke/corralai/internal/pairing"
 	"github.com/pdbethke/corralai/internal/sandbox"
 	"github.com/pdbethke/corralai/internal/statedir"
 	"github.com/pdbethke/corralai/internal/tomllite"
@@ -405,7 +406,10 @@ func worldReadableDir(dir string) bool {
 // the paths a mutant overlay and the project's own test command reference
 // (e.g. `more_itertools/recipes.py`, `tests/test_recipes.py`).
 func loadRepoFiles(root string, opts loadOpts) (map[string]string, []adequacy.DepBind, error) {
-	const maxFile = 1 << 20   // 1 MiB per file
+	const maxFile = 1 << 20 // 1 MiB per file
+	// Every language's test directories, built once for the walk's
+	// fixture carve-out below.
+	testRules := lang.AllTestRules()
 	const maxTotal = 64 << 20 // 64 MiB of text total
 
 	rootAbs, aerr := filepath.Abs(root)
@@ -506,9 +510,13 @@ func loadRepoFiles(root string, opts loadOpts) (map[string]string, []adequacy.De
 		if rerr != nil {
 			return rerr
 		}
-		if !utf8.Valid(b) && !underTestdata(rel) {
+		if !utf8.Valid(b) && !underTestdata(rel) && !pairing.InTestTree(testRules, rel) {
 			// Binary — the jail workspace is text-only, with ONE carve-out:
-			// a fixture under a `testdata` path segment. A suite that opens
+			// a fixture under a `testdata` path segment, or anywhere in a test
+			// tree (pairing.InTestTree: tests/, spec/, __tests__/, ...), which
+			// is where every language but Go keeps its fixtures. pylint reads
+			// tests/regrtest_data/unicode/*_utf_32_bom.txt; dropped, two of its
+			// tests failed in the jail on unmutated code (2026-10-21). A suite that opens
 			// testdata/small.zip cannot pass its UNMUTATED baseline without
 			// it, so dropping it does not narrow the audit — it makes the
 			// whole file ungradable, and the operator sees a confusing

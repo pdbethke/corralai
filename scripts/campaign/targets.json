@@ -1,1 +1,87 @@
-{"targets": []}
+{
+  "targets": [
+    {
+      "name": "cli",
+      "upstream": "urfave/cli",
+      "fork": "pdbethke/cli",
+      "branch": "main",
+      "path": ".",
+      "goals": "goals/cli.json",
+      "test_command": [
+        "go",
+        "test",
+        "."
+      ],
+      "substrate": "jail",
+      "jail": "bwrap",
+      "image": "",
+      "seats": {
+        "mutant": "claude-code:claude-opus-5-5",
+        "writer": "codex",
+        "shadow_writer": "claude-code:claude-opus-5-5",
+        "critic": "claude-code:claude-sonnet-5-5",
+        "derive": ""
+      },
+      "max_tokens": 3000000,
+      "timeout": "30m"
+    },
+    {
+      "name": "starlette",
+      "upstream": "Kludex/starlette",
+      "fork": "pdbethke/starlette",
+      "branch": "main",
+      "path": "starlette",
+      "goals": "goals/starlette.json",
+      "test_command": [
+        "python3",
+        "-m",
+        "pytest",
+        "tests",
+        "-q",
+        "-p",
+        "no:cacheprovider"
+      ],
+      "substrate": "jail",
+      "jail": "container",
+      "image": "corral-campaign/starlette:1",
+      "seats": {
+        "mutant": "claude-code:claude-opus-5-5",
+        "writer": "codex",
+        "shadow_writer": "claude-code:claude-opus-5-5",
+        "critic": "claude-code:claude-sonnet-5-5",
+        "derive": ""
+      },
+      "max_tokens": 3000000,
+      "timeout": "30m"
+    },
+    {
+      "name": "pylint",
+      "upstream": "pylint-dev/pylint",
+      "fork": "pdbethke/pylint",
+      "branch": "main",
+      "path": "pylint/checkers",
+      "goals": "goals/pylint.json",
+      "test_command": [
+        "python3",
+        "-m",
+        "pytest",
+        "tests/checkers",
+        "-q",
+        "-p",
+        "no:cacheprovider"
+      ],
+      "substrate": "jail",
+      "jail": "container",
+      "image": "corral-campaign/pylint:1",
+      "seats": {
+        "mutant": "claude-code:claude-opus-5-5",
+        "writer": "codex",
+        "shadow_writer": "claude-code:claude-opus-5-5",
+        "critic": "claude-code:claude-sonnet-5-5",
+        "derive": ""
+      },
+      "max_tokens": 3000000,
+      "timeout": "30m"
+    }
+  ]
+}

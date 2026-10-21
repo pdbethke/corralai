@@ -24,6 +24,7 @@ const testSHA = "0123456789abcdef0123456789abcdef01234567"
 type call struct {
 	dir  string
 	argv []string
+	env  []string
 }
 
 // fakeRunner records every command and models just enough git and corral for
@@ -48,7 +49,7 @@ type fakeRunner struct {
 
 func newFake(t *testing.T, l layout, tg Target) *fakeRunner {
 	return &fakeRunner{
-		t: t, sha: testSHA, version: "corral v1.0.0-rc.26",
+		t: t, sha: testSHA, version: "corral v1.0.0-rc.27",
 		origin: map[string]string{
 			l.ledger: "https://github.com/" + tg.Fork + ".git",
 			l.corral: "git@github.com:pdbethke/corralai.git",
@@ -59,7 +60,14 @@ func newFake(t *testing.T, l layout, tg Target) *fakeRunner {
 }
 
 func (f *fakeRunner) Run(ctx context.Context, dir string, argv ...string) (string, error) {
-	f.calls = append(f.calls, call{dir, argv})
+	return f.RunWith(ctx, dir, nil, argv...)
+}
+
+func (f *fakeRunner) RunWith(ctx context.Context, dir string, env []string, argv ...string) (string, error) {
+	f.calls = append(f.calls, call{dir, argv, env})
+	if err := checkAllowedEnv(argv, env); err != nil {
+		return "", err
+	}
 	if err := checkAllowed(argv); err != nil {
 		return "", err
 	}
@@ -205,7 +213,7 @@ func TestCertifyArgvNamesEverySeatAndCap(t *testing.T) {
 	want := []string{"corral", "certify", "--repo", "/a", "--path", "starlette", "--substrate", "jail",
 		"--mutant-model", "gemini-3.6-pro", "--writer-model", "claude-code:claude-sonnet-5",
 		"--shadow-writer-model", "codex", "--critic-model", "gemini-3.6-flash",
-		"--max-tokens", "2000000", "--timeout", "90m", "--ledger", "/l",
+		"--max-tokens", "2000000", "--timeout", "90m", "--ledger", "/l", "--jail", "bwrap",
 		"--derive-model", "gemini-3.6-pro", "--", "python", "-m", "pytest", "tests"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("derive form:\n got %q\nwant %q", got, want)
@@ -214,7 +222,7 @@ func TestCertifyArgvNamesEverySeatAndCap(t *testing.T) {
 	exp := []string{"corral", "certify", "--repo", "/a", "--path", "starlette", "--substrate", "jail",
 		"--mutant-model", "gemini-3.6-pro", "--writer-model", "claude-code:claude-sonnet-5",
 		"--shadow-writer-model", "codex", "--critic-model", "gemini-3.6-flash",
-		"--max-tokens", "2000000", "--timeout", "90m", "--ledger", "/l",
+		"--max-tokens", "2000000", "--timeout", "90m", "--ledger", "/l", "--jail", "bwrap",
 		"--goals", "/g.json", "--", "python", "-m", "pytest", "tests"}
 	if !reflect.DeepEqual(got, exp) {
 		t.Fatalf("goals form:\n got %q\nwant %q", got, exp)
@@ -267,6 +275,62 @@ func TestRunAuditsWhenNewestEntryIsADifferentCommitOrPath(t *testing.T) {
 	}
 	if len(f.with("corral", "certify")) != 1 {
 		t.Fatal("expected one certify")
+	}
+}
+
+// A container target's audit names the jail on the command line and hands
+// corral the image the only way it takes one, CORRALAI_EXEC_IMAGE; a bwrap
+// target passes no environment at all.
+func TestRunPassesTheJailAndImageToCertify(t *testing.T) {
+	for _, tc := range []struct {
+		jail, image string
+		env         []string
+	}{
+		{"bwrap", "", nil},
+		{"container", "corral-campaign/starlette:1", []string{"CORRALAI_EXEC_IMAGE=corral-campaign/starlette:1"}},
+	} {
+		tg := validTarget()
+		tg.Jail, tg.Image = tc.jail, tc.image
+		l := newLayout(t, tg)
+		f := newFake(t, l, tg)
+		if _, _, err := runIt(t, f, tg, l); err != nil {
+			t.Fatalf("%s: %v", tc.jail, err)
+		}
+		certs := f.with("corral", "certify")
+		if len(certs) != 1 {
+			t.Fatalf("%s: %d certify calls", tc.jail, len(certs))
+		}
+		if !strings.Contains(strings.Join(certs[0].argv, " "), "--jail "+tc.jail+" ") {
+			t.Errorf("%s: certify line lacks --jail: %q", tc.jail, certs[0].argv)
+		}
+		if !reflect.DeepEqual(certs[0].env, tc.env) {
+			t.Errorf("%s: certify env = %q, want %q", tc.jail, certs[0].env, tc.env)
+		}
+	}
+}
+
+// The environment is allowlisted as tightly as argv: one variable, on one
+// command, and nothing else can smuggle configuration into a run.
+func TestCheckAllowedEnv(t *testing.T) {
+	certify := []string{"corral", "certify", "--repo", "/a"}
+	if err := checkAllowedEnv(certify, []string{"CORRALAI_EXEC_IMAGE=py:1"}); err != nil {
+		t.Errorf("the image on certify must be allowed: %v", err)
+	}
+	if err := checkAllowedEnv([]string{"git", "push", "origin", "HEAD:corral/ledger"}, nil); err != nil {
+		t.Errorf("no environment is always allowed: %v", err)
+	}
+	for _, bad := range []struct {
+		argv []string
+		env  []string
+	}{
+		{certify, []string{"ANTHROPIC_API_KEY=x"}},
+		{certify, []string{"CORRALAI_EXEC_IMAGE="}},
+		{certify, []string{"CORRALAI_EXEC_IMAGE=a", "CORRALAI_EXEC_IMAGE=b"}},
+		{[]string{"git", "push", "origin", "HEAD:corral/ledger"}, []string{"CORRALAI_EXEC_IMAGE=py:1"}},
+	} {
+		if err := checkAllowedEnv(bad.argv, bad.env); err == nil {
+			t.Errorf("checkAllowedEnv(%q, %q) allowed it", bad.argv, bad.env)
+		}
 	}
 }
 
@@ -839,20 +903,20 @@ func TestRunRefusesChangesOutsideScansBeforeSpend(t *testing.T) {
 }
 
 func TestRunRefusesAnOldOrUnstampedCorralBeforeSpend(t *testing.T) {
-	for _, v := range []string{"corral dev", "corral v1.0.0-rc.25", "corral v1.0.0-rc.26-dirty", "corral v0.9.0", "corral v1.0.0-rc.26.0.20261020-abc", "garbage", ""} {
+	for _, v := range []string{"corral dev", "corral v1.0.0-rc.25", "corral v1.0.0-rc.26", "corral v1.0.0-rc.27-dirty", "corral v0.9.0", "corral v1.0.0-rc.27.0.20261020-abc", "garbage", ""} {
 		tg := validTarget()
 		l := newLayout(t, tg)
 		f := newFake(t, l, tg)
 		f.version = v
 		_, _, err := runIt(t, f, tg, l)
-		if err == nil || !strings.Contains(err.Error(), "go install github.com/pdbethke/corralai/cmd/corral@v1.0.0-rc.26") {
+		if err == nil || !strings.Contains(err.Error(), "go install github.com/pdbethke/corralai/cmd/corral@v1.0.0-rc.27") {
 			t.Fatalf("%q: err %v", v, err)
 		}
 		if len(f.with("gh")) != 0 || len(f.with("corral", "certify")) != 0 {
 			t.Fatalf("%q: spent before refusing", v)
 		}
 	}
-	for _, v := range []string{"v1.0.0-rc.26", "v1.0.0-rc.27", "v1.0.0", "v1.0.1", "v2.0.0-rc.1"} {
+	for _, v := range []string{"v1.0.0-rc.27", "v1.0.0-rc.28", "v1.0.0", "v1.0.1", "v2.0.0-rc.1"} {
 		if !versionAtLeast(v, minCorral) {
 			t.Errorf("%s should pass", v)
 		}

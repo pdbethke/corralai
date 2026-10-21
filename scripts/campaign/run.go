@@ -28,6 +28,34 @@ import (
 // that was actually issued rather than remembered.
 type Runner interface {
 	Run(ctx context.Context, dir string, argv ...string) (stdout string, err error)
+	// RunWith is Run with extra environment, held to checkAllowedEnv. Only
+	// the audit uses it, to hand corral its container image.
+	RunWith(ctx context.Context, dir string, env []string, argv ...string) (stdout string, err error)
+}
+
+// certifyEnv is the environment the audit adds: the container image, which
+// corral takes only as CORRALAI_EXEC_IMAGE. Nothing for any other jail.
+func certifyEnv(t Target) []string {
+	if t.Jail != "container" {
+		return nil
+	}
+	return []string{"CORRALAI_EXEC_IMAGE=" + t.Image}
+}
+
+// checkAllowedEnv holds extra environment to the same standard as argv: one
+// variable, non-empty, once, and only on `corral certify`. Anything wider
+// would let a targets file set configuration no allowlist rule has seen.
+func checkAllowedEnv(argv, env []string) error {
+	if len(env) == 0 {
+		return nil
+	}
+	if len(argv) < 2 || argv[0] != "corral" || argv[1] != "certify" {
+		return fmt.Errorf("campaign: refusing environment %q on %q: only corral certify takes any", env, argv)
+	}
+	if len(env) != 1 || !strings.HasPrefix(env[0], "CORRALAI_EXEC_IMAGE=") || env[0] == "CORRALAI_EXEC_IMAGE=" {
+		return fmt.Errorf("campaign: refusing environment %q: only one non-empty CORRALAI_EXEC_IMAGE is allowed", env)
+	}
+	return nil
 }
 
 // ledgerBranch is the branch both the fork's ledger worktree and corral's own
@@ -51,6 +79,9 @@ func CertifyArgv(t Target, repoDir, ledgerDir, goalsPath string) []string {
 		"--max-tokens", strconv.Itoa(t.MaxTokens),
 		"--timeout", t.Timeout,
 		"--ledger", ledgerDir,
+	}
+	if t.Jail != "" {
+		argv = append(argv, "--jail", t.Jail)
 	}
 	if goalsPath != "" {
 		argv = append(argv, "--goals", goalsPath)
@@ -178,11 +209,21 @@ func checkAllowed(argv []string) error {
 type execRunner struct{ echo io.Writer }
 
 func (e execRunner) Run(ctx context.Context, dir string, argv ...string) (string, error) {
+	return e.RunWith(ctx, dir, nil, argv...)
+}
+
+func (e execRunner) RunWith(ctx context.Context, dir string, env []string, argv ...string) (string, error) {
+	if err := checkAllowedEnv(argv, env); err != nil {
+		return "", err
+	}
 	if err := checkAllowed(argv); err != nil {
 		return "", err
 	}
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...) // #nosec G204 -- argv passed checkAllowed
 	cmd.Dir = dir
+	if env != nil {
+		cmd.Env = append(os.Environ(), env...)
+	}
 	// CommandContext would SIGKILL on cancel, and corral unwinds (restores
 	// trees, writes its record) only if it is interrupted instead. It gets
 	// WaitDelay to do that before being killed.
@@ -442,7 +483,7 @@ func RunTarget(ctx context.Context, r Runner, t Target, campaignDir string, stdo
 		preexisting[e.File] = true
 	}
 	fmt.Fprintf(stderr, "campaign: auditing %s at %s\n", t.Upstream, sha)
-	_, certErr := r.Run(ctx, root, CertifyArgv(t, audit, ledger, t.Goals)...)
+	_, certErr := r.RunWith(ctx, root, certifyEnv(t), CertifyArgv(t, audit, ledger, t.Goals)...)
 	if certErr != nil {
 		// Whether a retry happens depends on whether certify recorded an entry
 		// before it failed; that is decided by the ledger, not by this error.
@@ -704,9 +745,11 @@ func publish(ctx context.Context, r Runner, dir, unplaced, msg string, stderr io
 // underscore, no leading dot, no separator.
 var entryNameRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*\.json(\.gz)?$`)
 
-// minCorral is the first release whose ledger format the campaign writes: an
-// older corral would sign entries a format-5 reader refuses.
-const minCorral = "v1.0.0-rc.26"
+// minCorral is the first release the campaign can drive: rc.26 brought the
+// format-5 ledger the campaign writes (an older corral signs entries a
+// format-5 reader refuses), and rc.27 brought certify --repo --jail and the
+// entries that name their jail, which every target's jail field needs.
+const minCorral = "v1.0.0-rc.27"
 
 var corralVersionRE = regexp.MustCompile(`^v(\d+)\.(\d+)\.(\d+)(?:-rc\.(\d+))?$`)
 

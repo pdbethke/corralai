@@ -9,6 +9,17 @@ still move between minor versions.
 Entries describe what changed for someone *using* the tool. For the full commit
 history of any release, `git log v0.3.4..v0.3.5`.
 
+## [Unreleased]
+
+### Fixed
+
+- **Go 1.26.10, github.com/klauspost/compress 1.18.7.** The standard-library
+  advisory in `crypto/x509` (GO-2026-6809, fixed in go1.26.10) is reachable
+  from corral's own call paths, so the module floor and the Dockerfiles move
+  up. `klauspost/compress` comes in through DuckDB's Arrow dependency; its
+  advisory is in the `s2` package, which corral does not reach (govulncheck
+  does not report it), and it moves to the patched release anyway.
+
 ## [v1.0.0-rc.26] — 2026-10-20
 
 ### Breaking

@@ -9,7 +9,7 @@ still move between minor versions.
 Entries describe what changed for someone *using* the tool. For the full commit
 history of any release, `git log v0.3.4..v0.3.5`.
 
-## [Unreleased]
+## [v1.0.0-rc.28] — 2026-10-21
 
 ### Fixed
 

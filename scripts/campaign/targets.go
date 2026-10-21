@@ -38,6 +38,8 @@ type Target struct {
 	Goals       string   `json:"goals"`        // goals JSON, relative to targets.json; "" means derive
 	TestCommand []string `json:"test_command"` // argv after "--"
 	Substrate   string   `json:"substrate"`    // "jail" or "workspace"
+	Jail        string   `json:"jail"`         // jail substrate only: "bwrap" or "container"
+	Image       string   `json:"image"`        // jail "container" only: the toolchain image, CORRALAI_EXEC_IMAGE
 	Seats       Seats    `json:"seats"`
 	MaxTokens   int      `json:"max_tokens"` // > 0
 	Timeout     string   `json:"timeout"`    // a Go duration, passed to --timeout
@@ -78,6 +80,19 @@ func (t Target) Validate() error {
 	}
 	if t.Substrate != "jail" && t.Substrate != "workspace" {
 		return fmt.Errorf("target %q: substrate %q must be \"jail\" or \"workspace\"", t.Name, t.Substrate)
+	}
+	// Which sandbox the jail substrate runs in is named, never defaulted:
+	// it decides which toolchain the suite runs with, and corral records it
+	// on every entry. A container needs its image and nothing else takes one.
+	switch {
+	case t.Substrate == "workspace" && (t.Jail != "" || t.Image != ""):
+		return fmt.Errorf("target %q: substrate workspace runs no sandbox, so jail and image must be empty", t.Name)
+	case t.Substrate == "jail" && t.Jail != "bwrap" && t.Jail != "container":
+		return fmt.Errorf("target %q: jail %q must be \"bwrap\" or \"container\" on the jail substrate", t.Name, t.Jail)
+	case t.Jail == "container" && strings.TrimSpace(t.Image) == "":
+		return fmt.Errorf("target %q: jail container needs an image carrying the project's toolchain", t.Name)
+	case t.Jail != "container" && t.Image != "":
+		return fmt.Errorf("target %q: image %q is only for jail container", t.Name, t.Image)
 	}
 	if _, err := time.ParseDuration(t.Timeout); err != nil {
 		return fmt.Errorf("target %q: timeout %q is not a Go duration: %w", t.Name, t.Timeout, err)

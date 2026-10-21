@@ -22,6 +22,7 @@ func validTarget() Target {
 		Goals:       "",
 		TestCommand: []string{"python", "-m", "pytest", "tests"},
 		Substrate:   "jail",
+		Jail:        "bwrap",
 		Seats: Seats{
 			Mutant:       "gemini-3.6-pro",
 			Writer:       "claude-code:claude-sonnet-5",
@@ -122,7 +123,7 @@ func TestValidateRefusesWriterEqualShadowWriter(t *testing.T) {
 }
 
 func TestLoadTargetsRefusesDuplicateNames(t *testing.T) {
-	one := `{"name":"a","upstream":"o/a","fork":"f/a","branch":"main","path":"p","test_command":["go","test","./..."],"substrate":"jail",` +
+	one := `{"name":"a","upstream":"o/a","fork":"f/a","branch":"main","path":"p","test_command":["go","test","./..."],"substrate":"jail","jail":"bwrap",` +
 		`"seats":{"mutant":"m","writer":"w","shadow_writer":"s","critic":"c","derive":"d"},"max_tokens":1,"timeout":"1h"}`
 	p := writeTargets(t, `{"targets":[`+one+`,`+one+`]}`)
 	if _, err := LoadTargets(p); err == nil || !strings.Contains(err.Error(), "duplicate") {
@@ -205,5 +206,34 @@ func TestGoalsPathIsAbsoluteForARelativeTargetsFile(t *testing.T) {
 	}
 	if got, _ := goalsPath("", "targets.json"); got != "" {
 		t.Fatalf("no goals must stay no goals (derive), got %q", got)
+	}
+}
+
+// The jail substrate runs in a named sandbox, never a defaulted one: bwrap,
+// or a container whose image carries the project's toolchain. The image is
+// required exactly when the jail is a container, and the workspace
+// substrate, which runs no sandbox, takes neither.
+func TestValidateJailAndImage(t *testing.T) {
+	ok := func(f func(*Target)) Target { x := validTarget(); f(&x); return x }
+	for name, tc := range map[string]struct {
+		t    Target
+		want string // "" = valid
+	}{
+		"bwrap":                   {ok(func(x *Target) {}), ""},
+		"container with image":    {ok(func(x *Target) { x.Jail, x.Image = "container", "corral-campaign/starlette:1" }), ""},
+		"workspace, no jail":      {ok(func(x *Target) { x.Substrate, x.Jail = "workspace", "" }), ""},
+		"jail missing":            {ok(func(x *Target) { x.Jail = "" }), "jail"},
+		"unknown jail":            {ok(func(x *Target) { x.Jail = "chroot" }), "chroot"},
+		"container, no image":     {ok(func(x *Target) { x.Jail = "container" }), "image"},
+		"image without container": {ok(func(x *Target) { x.Image = "py:1" }), "image"},
+		"workspace with jail":     {ok(func(x *Target) { x.Substrate = "workspace" }), "workspace"},
+	} {
+		err := tc.t.Validate()
+		switch {
+		case tc.want == "" && err != nil:
+			t.Errorf("%s: %v", name, err)
+		case tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want)):
+			t.Errorf("%s: Validate = %v, want an error naming %q", name, err, tc.want)
+		}
 	}
 }

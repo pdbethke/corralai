@@ -240,6 +240,10 @@ func (r *recRunner) Run(_ context.Context, _ string, argv ...string) (string, er
 	return "", nil
 }
 
+func (r *recRunner) RunWith(ctx context.Context, dir string, _ []string, argv ...string) (string, error) {
+	return r.Run(ctx, dir, argv...)
+}
+
 func TestInstallTimerRequiresPathAndOnCalendar(t *testing.T) {
 	bin, corral, dir, tg := unitInputs(t)
 	copyTargets(t, tg)

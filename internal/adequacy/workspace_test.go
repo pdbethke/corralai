@@ -562,6 +562,32 @@ func TestWorkspaceRunnerNeverHandsTheSuiteCorralsSecrets(t *testing.T) {
 	}
 }
 
+// TestWorkspaceRunnerNeverHandsTheSuiteTheDesktop: the suite runs on the
+// host once per mutant, and with the operator's display it opened real
+// windows on their screen, again and again (Warp's UI tests, 2026-10-21). The
+// command a real runner starts must not see the session's handles.
+func TestWorkspaceRunnerNeverHandsTheSuiteTheDesktop(t *testing.T) {
+	t.Setenv("DISPLAY", ":0")
+	t.Setenv("WAYLAND_DISPLAY", "wayland-0")
+	t.Setenv("XAUTHORITY", "/home/u/.Xauthority")
+	t.Setenv("DBUS_SESSION_BUS_ADDRESS", "unix:path=/run/user/1000/bus")
+	root := wsTree(t, map[string]string{"a.txt": "x\n"})
+	w := NewWorkspaceRunner(root, 0)
+
+	_, out, err := w.RunTestVerbose(context.Background(), nil, []string{"sh", "-c", "env"})
+	if err != nil {
+		t.Fatalf("RunTestVerbose: %v", err)
+	}
+	for _, v := range []string{"DISPLAY=", "WAYLAND_DISPLAY=", "XAUTHORITY=", "DBUS_SESSION_BUS_ADDRESS="} {
+		if strings.Contains("\n"+out, "\n"+v) {
+			t.Errorf("the test command received the operator's %s", strings.TrimSuffix(v, "="))
+		}
+	}
+	if !strings.Contains(out, "PATH=") {
+		t.Errorf("the suite lost the ordinary environment it needs:\n%s", out)
+	}
+}
+
 // A restore that fails must never be reported as a clean run. The command
 // here replaces the overlaid file with a directory, so writing the original
 // bytes back cannot succeed; before this was fixed RunTest returned

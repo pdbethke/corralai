@@ -892,7 +892,7 @@ flags of `corral review`:
   -scope string
     	the directory or file under --repo to review (required)
   -substrate jail
-    	where the reproduction scripts run: jail (default) — the offline sandbox certify grades in, over the tree at the commit with your dependency directories read-only; or `workspace` — a detached git worktree on the host, network on, model keys removed from the environment, for where the caller is the isolation boundary (a CI runner, as with certify --repo --substrate workspace) (default "jail")
+    	where the reproduction scripts run: jail (default) — the offline sandbox certify grades in, over the tree at the commit with your dependency directories read-only; or `workspace` — a detached git worktree on the host, network on, model keys and your desktop session (DISPLAY, WAYLAND_DISPLAY, ...) removed from the environment, for where the caller is the isolation boundary (a CI runner, as with certify --repo --substrate workspace) (default "jail")
   -timeout duration
     	wall-clock bound on each reproduction script (default 1m0s)
   -verifier-model string

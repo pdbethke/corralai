@@ -104,3 +104,22 @@ func mustGunzip(t *testing.T, path string) []byte {
 	}
 	return b
 }
+
+// -nav keeps order and the whole href (the label may carry spaces and "?"),
+// and refuses an entry with no label or no href rather than drawing a dead link.
+func TestNavFlag(t *testing.T) {
+	var n navFlag
+	for _, v := range []string{"What is corral?=/", "GitHub=https://github.com/pdbethke/corralai?tab=readme"} {
+		if err := n.Set(v); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(n) != 2 || n[0].Label != "What is corral?" || n[0].Href != "/" || n[1].Href != "https://github.com/pdbethke/corralai?tab=readme" {
+		t.Fatalf("got %+v", n)
+	}
+	for _, bad := range []string{"no-equals", "=/", "Label="} {
+		if err := n.Set(bad); err == nil {
+			t.Errorf("Set(%q) accepted", bad)
+		}
+	}
+}

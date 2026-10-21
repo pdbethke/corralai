@@ -27,3 +27,18 @@ test('an entry page does not scroll sideways at 375px', async ({ page }) => {
   await page.goto(`/ledger/entry/${f}`);
   expect(await page.evaluate(overflow), `entry ${f} overflow in px`).toBeLessThanOrEqual(0);
 });
+
+// The pages a PR or issue link lands on must lead back to the site: a reader
+// there could not find out what corral is.
+test('an entry page carries the site menu back to the rest of the site', async ({ page }) => {
+  const f = firstOf(/\.html$/);
+  expect(f, 'no entry pages: run scripts/gen-ledger-site.sh first').toBeTruthy();
+  await page.goto(`/ledger/entry/${f}`);
+  const nav = page.getByRole('navigation', { name: 'Site' });
+  for (const [label, href] of [['What is corral?', '/'], ['How it works', '/docs/how-it-works/'], ['Get started', '/docs/getting-started/']]) {
+    const link = nav.getByRole('link', { name: label, exact: true });
+    await expect(link).toHaveAttribute('href', href);
+    const res = await page.request.get(href);
+    expect(res.status(), `${href} returned ${res.status()}`).toBeLessThan(400);
+  }
+});

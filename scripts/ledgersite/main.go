@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strings"
 
 	"github.com/pdbethke/corralai/internal/auditpush"
 	"github.com/pdbethke/corralai/internal/recordview"
@@ -32,6 +33,8 @@ func main() {
 	ledger := flag.String("ledger", "", "the ledger directory (a checkout of the ledger branch)")
 	out := flag.String("out", "", "directory to write the static site into (index.html + entry/<hash>.html)")
 	pubHex := flag.String("pubkey", "", "hex Ed25519 public key to verify signatures against; else $CORRALAI_LEDGER_PUBKEY; with neither, signatures are NOT checked and the page says so")
+	var nav navFlag
+	flag.Var(&nav, "nav", "a site menu entry, Label=href, on every page (repeatable, in order); none means no menu")
 	flag.Parse()
 
 	if *ledger == "" {
@@ -123,6 +126,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "ledgersite: loading record: %v\n", err)
 		os.Exit(1)
 	}
+	v.Nav = nav
 	if err := recordview.WriteStatic(*out, v); err != nil {
 		fmt.Fprintf(os.Stderr, "ledgersite: writing site: %v\n", err)
 		os.Exit(1)
@@ -135,4 +139,19 @@ func main() {
 // walker here once disagreed with it on both.
 func loadEntries(dir string) ([]auditpush.LedgerEntry, error) {
 	return auditpush.ReadLedgerDir(dir)
+}
+
+// navFlag collects -nav Label=href entries, in the order given. The label may
+// contain spaces and "?"; the href is everything after the first "=".
+type navFlag []recordview.NavLink
+
+func (n *navFlag) String() string { return fmt.Sprint(*n) }
+
+func (n *navFlag) Set(v string) error {
+	label, href, ok := strings.Cut(v, "=")
+	if !ok || strings.TrimSpace(label) == "" || strings.TrimSpace(href) == "" {
+		return fmt.Errorf("want Label=href, got %q", v)
+	}
+	*n = append(*n, recordview.NavLink{Label: label, Href: href})
+	return nil
 }

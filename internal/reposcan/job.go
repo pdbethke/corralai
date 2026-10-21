@@ -56,6 +56,9 @@ type EmitConfig struct {
 	// key identically: without it, a cached jail verdict would satisfy a
 	// seal claiming runner provenance.
 	Substrate string
+	// SandboxImage is the jail's container image, carried into every job's
+	// KeyInputs (see KeyInputs.SandboxImage). "" when there is none.
+	SandboxImage string
 	// FileAuditConfig, when set, contributes a per-candidate component to
 	// that job's cache key, appended to AuditConfig. It exists because the
 	// grading MODE can differ per file inside one scan (selection for most
@@ -247,6 +250,7 @@ func EmitJobs(cfg EmitConfig, cands []Candidate, gs GoalSource) ([]Job, []Exclus
 			ModelSet:          cfg.ModelSet,
 			AuditConfig:       auditConfig,
 			Substrate:         cfg.Substrate,
+			SandboxImage:      cfg.SandboxImage,
 		}.CacheKey()
 
 		jobs = append(jobs, Job{

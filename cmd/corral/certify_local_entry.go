@@ -15,6 +15,7 @@ import (
 	"github.com/pdbethke/corralai/internal/advpool"
 	"github.com/pdbethke/corralai/internal/auditpush"
 	"github.com/pdbethke/corralai/internal/reposcan"
+	"github.com/pdbethke/corralai/internal/sandbox"
 	"github.com/pdbethke/corralai/internal/scanstore"
 )
 
@@ -53,6 +54,8 @@ type localRunFacts struct {
 	// unattributed. Carried here rather than re-derived at the end, so it
 	// describes the subject the verdict signed, not a later look at git.
 	repoIdentity string
+	// sandbox is the jail the audit ran in (localSandboxIdentity).
+	sandbox sandbox.Identity
 	// mutantsFrom is the sha256 of the --mutants document the run replayed,
 	// "" when it generated its own exam — the same column a repo scan fills.
 	mutantsFrom string
@@ -167,6 +170,7 @@ func localEntryBundle(in localAuditInput, v advpool.Verdict, t advpool.RunTeleme
 			Passed:    boolPtr(v.Status == advpool.StatusCertified),
 			PushedBy:  auditpush.PushedByCertify,
 			TreeDirty: run.treeDirty, RepoIdentity: run.repoIdentity,
+			Sandbox: run.sandbox,
 		})
 	if run.recorder != nil {
 		run.recorder.stampHunks(b.Mutants)
@@ -264,4 +268,24 @@ func ledgerInsideCheckout(dir, repoDir string) bool {
 	}
 	rel, err := filepath.Rel(canon(repoDir), canon(dir))
 	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+// localSandboxIdentity names the jail a finished --local audit ran in, for its
+// entry. It resolves --jail again rather than threading the isolator out of
+// the audit: the resolution already succeeded there (the audit ran), and doing
+// it up front instead would change which error a host without a sandbox
+// reports first. For a container the image is in the runtime's store by now,
+// so its ID is the one that ran. If it still cannot be identified the entry
+// records no sandbox, which reads as not recorded, and says so.
+func localSandboxIdentity(jailFlag string, stderr io.Writer) sandbox.Identity {
+	iso, err := resolveLocalJail(jailFlag)
+	var id sandbox.Identity
+	if err == nil {
+		id, err = sandbox.Identify(iso)
+	}
+	if err != nil {
+		fmt.Fprintf(stderr, "corral certify --local: the entry will not name its jail: %v\n", err)
+		return sandbox.Identity{}
+	}
+	return id
 }

@@ -11,6 +11,32 @@ history of any release, `git log v0.3.4..v0.3.5`.
 
 ## [Unreleased]
 
+### Added
+
+- **`certify --repo --jail bwrap|container|sandbox-exec`.** The scan always
+  ran in the platform's default sandbox (bwrap on Linux), while
+  `certify --local` and `doctor` could already run theirs in a container.
+  `--jail container` runs every test command in `CORRALAI_EXEC_IMAGE`, so a
+  project's test dependencies can live in an image instead of being installed
+  under `/usr` on the host. Same container flags as `--local`: offline,
+  read-only root, every capability dropped. `--jail` beside
+  `--substrate workspace`, which runs no sandbox, is a usage error. Go
+  repositories that need `go mod vendor` are still refused under the
+  container backend, as they are on `--local`. `review` still takes the
+  default sandbox.
+- **Every scan entry names the jail it ran in.** `certify --repo` and
+  `certify --local` entries record `SandboxBackend` (`bwrap`, `container`,
+  `sandbox-exec`) and, for a container, `SandboxImage` as
+  `<ref>@<image id>`: the toolchain the tests ran with, pinned to the ID the
+  runtime resolved, since a tag can be rebuilt. `Substrate` said only
+  `jail`, which could not answer which one. `certify --repo` refuses a
+  container image the runtime cannot identify before any spend. Both fields
+  reach the warehouse (`sandbox_backend`, `sandbox_image`, added to an
+  existing `corral_scans` on the next push) and the record page. Entries
+  written before this name no jail. The verdict cache keys on the image too,
+  so a verdict graded in one image never answers for another; a jail with no
+  image keeps the key it had, so cached bwrap verdicts stay valid.
+
 ### Fixed
 
 - **Go 1.26.10, github.com/klauspost/compress 1.18.7.** The standard-library

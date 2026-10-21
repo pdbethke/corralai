@@ -67,11 +67,17 @@ func resolveLocalJail(jailFlag string) (sandbox.Isolator, error) {
 // identity assertion can never fail. Never reassigned in production.
 var resolveJailFn = resolveJail
 
-// resolveScanJail resolves the sandbox for `corral certify --repo`. Same
-// fail-closed rules as resolveLocalJail, but the scan exposes no --jail flag,
-// so a bwrap failure must not advise `--jail container`: an operator who never
-// ran --local cannot reach that escape hatch from the command that printed the
-// message.
+// resolveRepoJail resolves the sandbox for `corral certify --repo` from its
+// --jail flag (or auto). Same fail-closed rules as resolveLocalJail, and the
+// same `--jail container` advice on a bwrap failure, since --repo offers it.
+func resolveRepoJail(jailFlag string) (sandbox.Isolator, error) {
+	return resolveJailFn(jailFlag, true)
+}
+
+// resolveScanJail resolves the sandbox for `corral review`. Same fail-closed
+// rules as resolveLocalJail, but review exposes no --jail flag, so a bwrap
+// failure must not advise `--jail container`: an operator cannot reach that
+// escape hatch from the command that printed the message.
 func resolveScanJail() (sandbox.Isolator, error) {
 	return resolveJailFn("", false)
 }

@@ -1110,6 +1110,8 @@ Usage of certify --repo:
     	enumerate and emit jobs, then stop — no audits run
   -goals string
     	JSON file mapping repo-relative paths to goals (default: derive a goal per file)
+  -jail string
+    	sandbox backend for --substrate jail: bwrap (Linux) or container, or sandbox-exec (macOS) (default: auto-detect for this OS). "container" runs every test command in CORRALAI_EXEC_IMAGE, an image carrying the project's toolchain, so nothing has to be installed on the host
   -json
     	with --dry-run, emit the repository's audit surface as JSON instead of the human report: per-language counts, every auditable file with its inferred test pairing, and the machine-stable exclusion tally. Needs no key, no jail and no money — it is the free inventory a UI or a tenant's own tooling can consume instead of scraping stdout
   -ledger string

@@ -216,6 +216,14 @@ type ScanRow struct {
 	// could not be, and Repo is a stand-in or empty). It is NOT Identity above — that is the audited PARTY, this
 	// is the provenance of the repo NAME. Empty on rows that never recorded it.
 	RepoIdentity string `json:",omitempty"`
+	// SandboxBackend and SandboxImage say which jail ran the scan's commands
+	// (sandbox.Identity): the backend ("bwrap", "container", "sandbox-exec")
+	// and, for a container, "<ref>@<image id>", the toolchain the tests ran
+	// with. Substrate says only "jail", which cannot answer "which one?".
+	// Empty under --substrate workspace, which runs no sandbox, and on every
+	// row written before them.
+	SandboxBackend string `json:",omitempty"`
+	SandboxImage   string `json:",omitempty"`
 }
 
 // PushedByCertify is the ScanRow.PushedBy of a run's own entry.
@@ -558,7 +566,9 @@ CREATE TABLE IF NOT EXISTS corral_scans (
   committer        VARCHAR,
   co_authors       VARCHAR,
   tree_dirty       BOOLEAN,
-  repo_identity    VARCHAR
+  repo_identity    VARCHAR,
+  sandbox_backend  VARCHAR,
+  sandbox_image    VARCHAR
 );`
 
 const auditsSchema = `
@@ -894,6 +904,10 @@ var (
 		// is exactly what those rows are.
 		{"tree_dirty", "tree_dirty BOOLEAN"},
 		{"repo_identity", "repo_identity VARCHAR"},
+		// Which jail ran the scan, and its image (ScanRow.SandboxBackend /
+		// SandboxImage). NULL before them: not recorded.
+		{"sandbox_backend", "sandbox_backend VARCHAR"},
+		{"sandbox_image", "sandbox_image VARCHAR"},
 	}
 	corralMutantsMigrationCols = []struct{ name, ddl string }{
 		{"scan_uid", "scan_uid VARCHAR"},
@@ -1473,8 +1487,9 @@ func insertBundle(db *sql.DB, b Bundle, now time.Time, uid string) (Counts, erro
 		    rekor_log_index, rekor_uuid, schema_version, started_at, pushed_by,
 		    engine_version, model_set, top, all_candidates, total_files,
 		    preflight_ran, preflight_note, finished_at, entry_hash,
-		    author, committer, co_authors, scope, tree_dirty, repo_identity
-		  ) VALUES (`+placeholders(43)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
+		    author, committer, co_authors, scope, tree_dirty, repo_identity,
+		    sandbox_backend, sandbox_image
+		  ) VALUES (`+placeholders(45)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
 			uid, now, b.Scan.Repo, b.Scan.RunURL, b.Scan.ScanID, b.Scan.Commit,
 			b.Scan.CorralVersion, b.Scan.Substrate, b.Scan.Host, b.Scan.Cores,
 			nullIfZeroInt(b.Scan.TreesRequested), b.Scan.DiffBase,
@@ -1488,6 +1503,7 @@ func insertBundle(db *sql.DB, b Bundle, now time.Time, uid string) (Counts, erro
 			b.Scan.PreflightRan, nullIfEmpty(b.Scan.PreflightNote), nullTime(b.Scan.FinishedAt), nullIfEmpty(b.Scan.EntryHash),
 			nullIfEmpty(b.Scan.Identity.Author), nullIfEmpty(b.Scan.Identity.Committer), nullIfEmpty(b.Scan.Identity.CoAuthors),
 			nullIfEmpty(b.Scan.Scope), nullBool(b.Scan.TreeDirty), nullIfEmpty(b.Scan.RepoIdentity),
+			nullIfEmpty(b.Scan.SandboxBackend), nullIfEmpty(b.Scan.SandboxImage),
 		); err != nil {
 			return Counts{}, fmt.Errorf("auditpush: insert scan row: %w", err)
 		}

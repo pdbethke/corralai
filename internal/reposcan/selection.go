@@ -282,6 +282,21 @@ func CollectSelectionEvidence(ctx context.Context, runner commandRunner, files m
 		// because Ran was true. A document the plugin cannot read says
 		// nothing about any test; it is a failure to measure, with the
 		// reason and the first line of what came back.
+		//
+		// A run that EXITED NON-ZERO never reached the reducer (python's
+		// script exits with the suite's code), so its last line is whatever
+		// stopped it: the runner's own summary when the suite failed, a shell
+		// error when the interpreter is missing. Handing that line to the JSON
+		// reader read pylint's "2 failed, 440 passed" as the number 2
+		// followed by an f, and the note named a JSON error instead of the
+		// failure (2026-10-21). Say how it exited and how it ended.
+		if exitCode > 0 {
+			note := fmt.Sprintf("%s: selection evidence run exited %d, so its output is unparseable as evidence and no test can be selected (it ended: %q)", p.Name(), exitCode, lastLine(out))
+			if hint := selectionFailureHint(p, stderr+" "+out); hint != "" {
+				note += " — " + hint
+			}
+			return SelectionEvidence{Note: note}
+		}
 		return SelectionEvidence{Note: fmt.Sprintf("%s: selection evidence unparseable: %v (output began: %q)", p.Name(), mErr, firstLine(out))}
 	}
 	if !hasMeasuredSourceFile(p, measured) {
@@ -292,6 +307,19 @@ func CollectSelectionEvidence(ctx context.Context, runner commandRunner, files m
 
 // firstLine is a short excerpt of a document that failed to parse — enough to
 // recognise a `command not found` where a JSON report was expected.
+// lastLine is firstLine's counterpart for the END of an output, where a test
+// runner prints its summary; bounded the same way.
+func lastLine(s string) string {
+	s = strings.TrimSpace(s)
+	if i := strings.LastIndexByte(s, '\n'); i >= 0 {
+		s = s[i+1:]
+	}
+	if len(s) > 120 {
+		s = s[:120] + "…"
+	}
+	return s
+}
+
 func firstLine(s string) string {
 	s = strings.TrimSpace(s)
 	if i := strings.IndexByte(s, '\n'); i >= 0 {

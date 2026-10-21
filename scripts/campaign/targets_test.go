@@ -184,3 +184,26 @@ func TestValidateRefusesForkEqualToUpstream(t *testing.T) {
 		}
 	}
 }
+
+// A targets file named relatively (`-targets targets.json`) has "." as its
+// directory, so joining onto it left the goals path relative, and certify,
+// which runs from the campaign directory, could not open it. The first real
+// run (urfave/cli, 2026-10-21) died on exactly that.
+func TestGoalsPathIsAbsoluteForARelativeTargetsFile(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	got, err := goalsPath("goals/cli.json", "targets.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(dir, "goals", "cli.json")
+	if got != want {
+		t.Fatalf("goalsPath = %q, want %q", got, want)
+	}
+	if got, _ := goalsPath("/abs/goals.json", "targets.json"); got != "/abs/goals.json" {
+		t.Fatalf("an absolute goals path must pass through unchanged, got %q", got)
+	}
+	if got, _ := goalsPath("", "targets.json"); got != "" {
+		t.Fatalf("no goals must stay no goals (derive), got %q", got)
+	}
+}

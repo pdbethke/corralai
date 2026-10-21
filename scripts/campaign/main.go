@@ -183,11 +183,12 @@ func cli(ctx context.Context, args []string, getenv func(string) string, r Runne
 		if t.Name != rest[1] {
 			continue
 		}
-		// goals are named relative to the targets file; the audit runs
-		// elsewhere, so hand it an absolute path.
-		if t.Goals != "" && !filepath.IsAbs(t.Goals) {
-			t.Goals = filepath.Join(filepath.Dir(*targetsPath), t.Goals)
+		goals, err := goalsPath(t.Goals, *targetsPath)
+		if err != nil {
+			fmt.Fprintln(stderr, "campaign:", err)
+			return 1
 		}
+		t.Goals = goals
 		unlock, err := lockCampaign(campaignDir)
 		if err != nil {
 			fmt.Fprintln(stderr, "campaign:", err)
@@ -201,4 +202,20 @@ func cli(ctx context.Context, args []string, getenv func(string) string, r Runne
 		return 0
 	}
 	return usage(fmt.Sprintf("no target named %q (see: list)", rest[1]))
+}
+
+// goalsPath resolves a target's goals file, named relative to the targets
+// file, to an absolute path: the audit runs from the campaign directory, so a
+// relative one would be opened from the wrong place. A targets file named
+// relatively has "." as its directory, which is why joining alone is not
+// enough. "" (derive the goals) stays "".
+func goalsPath(goals, targetsPath string) (string, error) {
+	if goals == "" || filepath.IsAbs(goals) {
+		return goals, nil
+	}
+	p, err := filepath.Abs(filepath.Join(filepath.Dir(targetsPath), goals))
+	if err != nil {
+		return "", fmt.Errorf("resolving goals %s: %w", goals, err)
+	}
+	return p, nil
 }

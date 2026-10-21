@@ -42,6 +42,7 @@ func TestCacheKeyChangesWhenAnyFieldChanges(t *testing.T) {
 		"ModelSet":          func(k *KeyInputs) { k.ModelSet = "x" },
 		"AuditConfig":       func(k *KeyInputs) { k.AuditConfig = "x" },
 		"Substrate":         func(k *KeyInputs) { k.Substrate = "x" },
+		"SandboxImage":      func(k *KeyInputs) { k.SandboxImage = "img@sha256:x" },
 	}
 	want := baseInputs().CacheKey()
 	for field, mutate := range mutators {
@@ -75,6 +76,23 @@ func TestCacheKeySeparatesSubstrates(t *testing.T) {
 	runner.Substrate = "workspace"
 	if jail.CacheKey() == runner.CacheKey() {
 		t.Fatal("jail and workspace verdicts share a cache key")
+	}
+}
+
+// The container's image IS the toolchain the tests ran with, so two images
+// must never share a verdict. A jail with no image (bwrap, which runs the
+// host's toolchain) must keep the key it had before SandboxImage existed:
+// the golden value is baseInputs' key from before the field, so every cached
+// bwrap verdict stays valid rather than forcing a paid re-measure.
+func TestCacheKeySeparatesContainerImagesAndKeepsTheBwrapKey(t *testing.T) {
+	const beforeSandboxImage = "8622add30e9bfdafe14f425c66eab0861194ddac0f0f84e8b14642ce36751c49"
+	if got := baseInputs().CacheKey(); got != beforeSandboxImage {
+		t.Fatalf("a jail with no image changed key: %s, want %s", got, beforeSandboxImage)
+	}
+	a, b := baseInputs(), baseInputs()
+	a.SandboxImage, b.SandboxImage = "py:1@sha256:aa", "py:1@sha256:bb"
+	if a.CacheKey() == b.CacheKey() || a.CacheKey() == beforeSandboxImage {
+		t.Fatal("two images, or an image and none, share a cache key")
 	}
 }
 

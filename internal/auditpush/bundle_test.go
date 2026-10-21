@@ -789,3 +789,24 @@ func TestScanTreeStateAndRepoIdentityReachTheWarehouse(t *testing.T) {
 		})
 	}
 }
+
+// TestScanSandboxReachesTheWarehouse: the jail a scan ran in is enumerated
+// column by column in the INSERT and the read like every scan field, so one
+// forgotten there would vanish from the warehouse while the signed entry
+// still carried it.
+func TestScanSandboxReachesTheWarehouse(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "w.duckdb")
+	b := sampleBundle()
+	b.Scan.Substrate = "jail"
+	b.Scan.SandboxBackend, b.Scan.SandboxImage = "container", "py:1@sha256:11855f76"
+	if _, err := PushBundle(target, b); err != nil {
+		t.Fatalf("PushBundle: %v", err)
+	}
+	got, ok, err := readScanRow(openWarehouse(t, target), "repo = ?", "o/r")
+	if err != nil || !ok {
+		t.Fatalf("readScanRow: ok=%v err=%v", ok, err)
+	}
+	if got.SandboxBackend != "container" || got.SandboxImage != "py:1@sha256:11855f76" {
+		t.Errorf("sandbox round trip = %q %q", got.SandboxBackend, got.SandboxImage)
+	}
+}

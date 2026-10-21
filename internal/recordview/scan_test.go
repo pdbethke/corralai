@@ -231,3 +231,26 @@ func TestEntryBannerSaysWhoSignedAndDoesNotCallAFailureUnchecked(t *testing.T) {
 		t.Error("with no key the page must say signatures were not checked")
 	}
 }
+
+// "jail" alone cannot answer which jail graded a verdict, or with which
+// toolchain. The page names the backend and, for a container, the image
+// pinned to its ID; a scan that recorded neither shows only the substrate.
+func TestAScanPageNamesItsJailAndImage(t *testing.T) {
+	e := warpLikeScan("cccccccccccc0000", true)
+	e.Bundle.Scan.Substrate = "jail"
+	e.Bundle.Scan.SandboxBackend = "container"
+	e.Bundle.Scan.SandboxImage = "corral-campaign/starlette:1@sha256:11855f76"
+	_, page := renderOne(t, []auditpush.LedgerEntry{e})
+	p := page("cccccccccccc")
+	for _, want := range []string{"container", "corral-campaign/starlette:1@sha256:11855f76"} {
+		if !strings.Contains(p, want) {
+			t.Errorf("scan page does not show %q", want)
+		}
+	}
+
+	old := warpLikeScan("dddddddddddd0000", true)
+	_, page = renderOne(t, []auditpush.LedgerEntry{old})
+	if strings.Contains(page("dddddddddddd"), "<dt>image</dt>") {
+		t.Error("a scan that recorded no image must not show an image row")
+	}
+}

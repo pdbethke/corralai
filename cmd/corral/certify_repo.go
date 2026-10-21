@@ -86,6 +86,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	dryRun := fs.Bool("dry-run", false, "enumerate and emit jobs, then stop — no audits run")
 	jsonOut := fs.Bool("json", false, "with --dry-run, emit the repository's audit surface as JSON instead of the human report: per-language counts, every auditable file with its inferred test pairing, and the machine-stable exclusion tally. Needs no key, no jail and no money — it is the free inventory a UI or a tenant's own tooling can consume instead of scraping stdout")
 	substrateFlag := fs.String("substrate", substrateJail, "where the audit runs: "+substrateJail+" (bwrap) or "+substrateWorkspace+" (mutate --repo in place; the caller IS the isolation boundary, e.g. an ephemeral CI runner)")
+	jailFlag := fs.String("jail", "", "sandbox backend for --substrate jail: bwrap (Linux) or container, or sandbox-exec (macOS) (default: auto-detect for this OS). \"container\" runs every test command in CORRALAI_EXEC_IMAGE, an image carrying the project's toolchain, so nothing has to be installed on the host")
 	pathFlag := fs.String("path", "", "bound the scan to this subtree of --repo (a directory, relative to it), keeping the repository whole: tests are still found anywhere in it, and the audit's copies still carry the root's build files (a Cargo workspace manifest, a monorepo's package.json). Pair it with a test command scoped the same way, e.g. cargo test -p <crate>")
 	diffBase := fs.String("diff-base", "", "bound the scan to files changed since this git ref: every candidate that changed, or whose paired test changed, is audited. In a PR the diff IS the bound, so the default --top does not apply on this path; an EXPLICIT --top still does, auditing that many of the changed files by rank and reporting the rest as not audited")
 	pushFlag := fs.String("push", "", "append this scan's per-file verdicts to a DuckDB you own — a path, or `md:<db>` for MotherDuck (which reads motherduck_token from the environment; the database is created on first push if it does not already exist — a MotherDuck SHARE is a read target and cannot be pushed to). corral has no hosted tier and keeps nothing: the warehouse is yours, and any DuckDB works, so this is a destination rather than a lock-in. Append-only. Every row carries the ledger's scan id (0 when --record was not given), and — traceable only with --attest — the sha256 of the signed statement it came from, so a row can be checked against something a third party can verify; without --attest, statement_sha256 is honestly empty rather than fabricated; and with --attest, a statement that FAILS to write withholds the push too, since a row that cannot name the statement it came from is not written. It answers what one pull request cannot — a single kill rate is a sample, and the same unchanged diff has scored 0.85 and 0.90; forty of them are a distribution")
@@ -288,6 +289,19 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// failure diff scoping and the cache key exist to close.
 	if *substrateFlag != substrateJail && *substrateFlag != substrateWorkspace {
 		fmt.Fprintf(stderr, "corral certify --repo: --substrate %q is not %s or %s\n", *substrateFlag, substrateJail, substrateWorkspace)
+		return 2
+	}
+	// --jail picks the sandbox the jail substrate runs in. Beside the
+	// workspace substrate, which runs none, it would be a choice recorded and
+	// never used; and an unknown name must not fall through to the default.
+	switch *jailFlag {
+	case "", "auto", "bwrap", "container", "sandbox-exec":
+	default:
+		fmt.Fprintf(stderr, "corral certify --repo: --jail %q is not bwrap, container or sandbox-exec\n", *jailFlag)
+		return 2
+	}
+	if *jailFlag != "" && *substrateFlag == substrateWorkspace {
+		fmt.Fprintf(stderr, "corral certify --repo: --jail %s has no effect with --substrate %s, which runs no sandbox; drop one of them\n", *jailFlag, substrateWorkspace)
 		return 2
 	}
 
@@ -697,7 +711,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		// project's own test command. Given after `--`; absent, the language
 		// plugin's stock recursive command is used — resolved per job, since a
 		// repo can mix languages.
-		ex = newLocalExecutor(*repoDir, checkArgv, *substrateFlag, *timeoutFlag, stdout)
+		ex = newLocalExecutorWithJail(*repoDir, checkArgv, *substrateFlag, *jailFlag, *timeoutFlag, stdout)
 		ledgerDir = strings.TrimRight(*ledgerFlag, "/")
 		if ledgerDir == "" {
 			ledgerDir = defaultLedgerDir(*repoDir)
@@ -1160,7 +1174,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	cfg := reposcan.EmitConfig{
 		Owner: *owner, Repo: resolveRepoName(*repoDir, ""), Commit: *commit, Root: *repoDir,
 		EngineVersion: reposcan.VerdictGeneration, ModelSet: modelSet, AuditConfig: auditConfig,
-		Substrate: *substrateFlag,
+		Substrate: *substrateFlag, SandboxImage: ex.sandboxIdentity().Image,
 		// What the verdicts are GRADED BY decides what TestSurfaceDigest has
 		// to cover — one paired test file, or the whole suite. Both are
 		// computed from the same facts testCmd itself resolves the command
@@ -1584,6 +1598,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 			Passed:    boolPtr(exitCode == 0),
 			PushedBy:  auditpush.PushedByCertify,
 			TreeDirty: auditedTreeDirty, RepoIdentity: repoIdentity(*repoDir),
+			Sandbox: ex.sandboxIdentity(),
 		})
 	// The hunks onto the mutant rows: `code` is the mutant's source, and
 	// the custody rule already withholds it (BlankUnpushedSource) unless
@@ -4731,6 +4746,9 @@ type localExecutor struct {
 	// construction. It is scan-fatal (no jail = nothing can be graded on this
 	// host), surfaced by preflight before the fan-out — never swallowed.
 	jailErr error
+	// sandbox names the resolved jail for the record (sandbox.Identify);
+	// zero on the workspace substrate, which resolves none.
+	sandbox sandbox.Identity
 
 	// substrate selects where every job in this scan runs — "" or
 	// substrateJail (the bwrap jail, today's behavior) or substrateWorkspace
@@ -4758,6 +4776,12 @@ func (l *localExecutor) effectivePerFileSwarm() int {
 }
 
 func newLocalExecutor(repoDir string, checkArgv []string, substrate string, timeout time.Duration, progress io.Writer) *localExecutor {
+	return newLocalExecutorWithJail(repoDir, checkArgv, substrate, "", timeout, progress)
+}
+
+// newLocalExecutorWithJail is newLocalExecutor with certify --repo's --jail:
+// the sandbox backend the jail substrate resolves ("" = the platform default).
+func newLocalExecutorWithJail(repoDir string, checkArgv []string, substrate, jail string, timeout time.Duration, progress io.Writer) *localExecutor {
 	if progress == nil {
 		progress = io.Discard
 	}
@@ -4786,15 +4810,20 @@ func newLocalExecutor(repoDir string, checkArgv []string, substrate string, time
 		// input to the seed (it decides which dep dirs can be bind-mounted
 		// rather than copied), and it is a scan-wide constant — resolving it
 		// per file would re-run the backend probe for every job to reach the
-		// same answer. The scan exposes no --jail flag, so the auto backend is
-		// resolved (same rules as prepareAuditJail's empty in.jail), minus the
-		// `--jail container` advice on failure — a flag this command does not
-		// offer.
-		iso, err := resolveScanJail()
+		// same answer. --jail names the backend ("" = auto, the same rules
+		// as prepareAuditJail's empty in.jail).
+		// The jail is identified here too, once: a container image the
+		// runtime cannot pin to an ID fails the preflight rather than reach
+		// the record as a bare tag.
+		iso, err := resolveRepoJail(jail)
+		var id sandbox.Identity
+		if err == nil {
+			id, err = sandbox.Identify(iso)
+		}
 		if err != nil {
 			l.jailErr = err
 		} else {
-			l.iso = iso
+			l.iso, l.sandbox = iso, id
 		}
 	}
 	// The seed is jail preparation — a tree copy, `go mod vendor`, a full
@@ -4827,6 +4856,15 @@ func newLocalExecutor(repoDir string, checkArgv []string, substrate string, time
 // like the provider-key preflight: discovering it per file would report every
 // file as ungradable for a reason the first job could have stated instantly.
 func (l *localExecutor) preflight() error { return l.jailErr }
+
+// sandboxIdentity is the jail the scan ran in; zero for a dry run (no
+// executor) and for the workspace substrate.
+func (l *localExecutor) sandboxIdentity() sandbox.Identity {
+	if l == nil {
+		return sandbox.Identity{}
+	}
+	return l.sandbox
+}
 
 // Close releases every staging dir this scan's seeds created. Idempotent.
 

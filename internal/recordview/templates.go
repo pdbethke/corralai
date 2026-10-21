@@ -346,7 +346,8 @@ longer stands as the record{{if .RetractedReason}}: {{.RetractedReason}}{{end}}.
   {{with .Scan.Scope}}<dt>scope</dt><dd class="mono">{{.}} <span class="small">(--path: only files under it were considered)</span></dd>{{end}}
   <dt>commit</dt><dd class="mono">{{if .CommitURL}}<a href="{{.CommitURL}}">{{.Scan.Commit}}</a>{{else}}{{.Scan.Commit}}{{end}}</dd>
   <dt>corral</dt><dd class="mono">{{.Scan.CorralVersion}}</dd>
-  <dt>substrate</dt><dd>{{.Scan.Substrate}}</dd>
+  <dt>substrate</dt><dd>{{.Scan.Substrate}}{{with .Scan.SandboxBackend}} <span class="small">· {{.}}</span>{{end}}</dd>
+  {{with .Scan.SandboxImage}}<dt>image</dt><dd class="mono small">{{.}}</dd>{{end}}
   {{if .Seats}}<dt>seats</dt><dd class="mono small">{{range .Seats}}{{.}}<br>{{end}}</dd>{{end}}
   {{if .Scan.ModelCalls}}<dt>tokens</dt><dd>{{thousands .Scan.InputTokens}} in, {{thousands .Scan.OutputTokens}} out, {{.Scan.ModelCalls}} calls</dd>{{end}}
   {{with .Scan.StartedAt}}<dt>started</dt><dd>{{stamp .}}</dd>{{end}}

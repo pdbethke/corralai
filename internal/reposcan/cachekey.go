@@ -45,6 +45,12 @@ type KeyInputs struct {
 	// provenance. Keying on it stops a seal being assembled from a mix
 	// without saying so.
 	Substrate string
+	// SandboxImage is the container image the jail ran in, "<ref>@<image
+	// id>" (sandbox.Identity.Image): the toolchain the tests ran with, so a
+	// verdict graded in one image never answers for another. "" for every
+	// other jail and the workspace substrate, and then it is left out of the
+	// hash entirely, so those keys are the ones they were before it existed.
+	SandboxImage string
 }
 
 // Substrate names, the permitted values of KeyInputs.Substrate.
@@ -62,6 +68,9 @@ func (k KeyInputs) CacheKey() string {
 		k.EngineVersion, k.ModelSet, k.AuditConfig, k.Substrate,
 	} {
 		fmt.Fprintf(h, "%d:%s|", len(f), f)
+	}
+	if k.SandboxImage != "" {
+		fmt.Fprintf(h, "image%d:%s|", len(k.SandboxImage), k.SandboxImage)
 	}
 	return hex.EncodeToString(h.Sum(nil))
 }

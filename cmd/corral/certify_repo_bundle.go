@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/pdbethke/corralai/internal/auditpush"
+	"github.com/pdbethke/corralai/internal/sandbox"
 	"github.com/pdbethke/corralai/internal/scanstore"
 )
 
@@ -72,6 +73,8 @@ type bundleMeta struct {
 	// scan-header facts only; the other grains do not carry them.
 	TreeDirty    *bool
 	RepoIdentity string
+	// Sandbox is which jail ran the scan (zero under --substrate workspace).
+	Sandbox sandbox.Identity
 }
 
 // buildBundle maps one recorded scan — its header and all four row grains —
@@ -133,6 +136,7 @@ func buildBundle(
 			FinishedAt: nilIfZeroTime(scan.FinishedAt),
 			Identity:   auditpush.Identity{Author: scan.Author, Committer: scan.Committer, CoAuthors: scan.CoAuthors},
 			TreeDirty:  meta.TreeDirty, RepoIdentity: meta.RepoIdentity,
+			SandboxBackend: meta.Sandbox.Backend, SandboxImage: meta.Sandbox.Image,
 		},
 		Files:        buildAuditRows(files, scanID, meta),
 		Mutants:      buildMutantRows(mutants, scanID, meta),

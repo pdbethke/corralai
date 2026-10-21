@@ -510,6 +510,7 @@ func runCertifyLocalAs(args []string, unattributed bool, stdout, stderr io.Write
 	if b, berr := localEntryBundle(in, verdict, measured, startedAt, localRunFacts{
 		treeDirty: auditedTreeDirty, repoIdentity: subjectIdentity,
 		mutantsFrom: mutantsFromSHA, recorder: rc,
+		sandbox: localSandboxIdentity(*jailFlag, stderr),
 	}); berr != nil {
 		fmt.Fprintf(stderr, "corral certify --local: no ledger entry written: %v\n", berr)
 	} else {

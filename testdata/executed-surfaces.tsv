@@ -127,6 +127,7 @@ corral certify --repo --timeout	executed	test:cmd/corral/certify_adversarial_tes
 corral certify --repo --max-tokens	executed	test:cmd/corral/local_endpoint_test.go
 corral certify --repo --prior	executed	test:cmd/corral/certify_repo_evidence_candidacy_test.go
 corral certify --repo --ledger	executed	test:cmd/corral/ledger_test.go
+corral certify --repo --jail	attested	run:2026-10-21 20261021T160348Z-1a3a401c0d33-7b286eff1936 and 20261021T163025Z-1a3a401c0d33-bc9901e0ab28 (the second records SandboxBackend container and SandboxImage pinned to the image id; --jail container, Kludex/starlette@1a3a401c, CORRALAI_EXEC_IMAGE with the suite's deps; 1396-test baseline passed offline, 7 proven gaps; scratch ledger; refusals in test:cmd/corral/certify_repo_jail_test.go)
 corral certify --repo --no-ledger	executed	test:cmd/corral/ledger_test.go
 corral certify --repo --top	executed	run:2026-09-02 md:corral_public scans 22-26
 corral certify --repo --transparency	executed	test:cmd/corral/certify_repo_transparency_test.go

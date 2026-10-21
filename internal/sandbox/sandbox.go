@@ -198,7 +198,8 @@ func FetchEnv() []string {
 	return append(env, fetchPins...)
 }
 
-// ScrubbedEnviron is the host environment WITHOUT corral's own secrets: every
+// ScrubbedEnviron is the host environment WITHOUT corral's own secrets or the
+// operator's desktop session (DesktopSession): every
 // provider key it knows by name (creds.CanonicalNames, which includes
 // GOOGLE_API_KEY via creds.Providers, plus the MotherDuck token) is dropped; everything else — PATH, HOME, GOPATH,
 // GOFLAGS, a venv, CI variables — is kept, because the audited suite needs
@@ -226,9 +227,31 @@ var CorralOwnSecrets = []string{
 	"MOTHERDUCK_TOKEN",
 }
 
+// DesktopSession are the handles to the operator's graphical session: the
+// X11 and Wayland displays, X11's auth cookie, and the session bus that
+// desktop services (notifications, xdg-open, portals) answer on. The
+// workspace substrate runs the audited suite on the host once per mutant, so a
+// suite with UI tests handed these opens real windows on the operator's
+// screen, again and again. Warp's integration tests did exactly that on
+// 2026-10-21, and from the desk it looked like an intrusion. A suite that
+// needs a display brings its own: `xvfb-run` in the test command sets DISPLAY
+// inside it, after this environment is built. The jail never had them
+// (MinimalEnv). XDG_RUNTIME_DIR stays: it is a directory tools write their
+// own runtime files to, not a way onto the screen.
+var DesktopSession = []string{
+	"DISPLAY",
+	"WAYLAND_DISPLAY",
+	"WAYLAND_SOCKET",
+	"XAUTHORITY",
+	"DBUS_SESSION_BUS_ADDRESS",
+}
+
 func ScrubbedEnviron() []string {
 	drop := map[string]bool{}
 	for _, n := range CorralOwnSecrets {
+		drop[n] = true
+	}
+	for _, n := range DesktopSession {
 		drop[n] = true
 	}
 	for _, n := range creds.CanonicalNames {

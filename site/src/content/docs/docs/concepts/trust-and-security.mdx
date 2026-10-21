@@ -54,6 +54,13 @@ killed outright — kill -9, out of memory, a runner reclaimed mid-step — can
 leave a mutant behind, and nothing detects it. Use it on a runner, a scratch
 clone, or a tree with no uncommitted work.
 
+The test command gets your environment, minus corral's own model keys and
+your desktop session: `DISPLAY`, `WAYLAND_DISPLAY`, `WAYLAND_SOCKET`,
+`XAUTHORITY` and `DBUS_SESSION_BUS_ADDRESS`. The suite runs once per mutant,
+so a suite with UI tests would otherwise open windows on your screen again and
+again. If yours needs a display, give it one in the test command itself, for
+example `-- xvfb-run -a cargo nextest run`.
+
 `corral review` runs a reviewer's reproduction scripts in the same offline
 sandbox by default, with `--substrate workspace` as the same opt-in for a CI
 runner.

@@ -9,6 +9,21 @@ still move between minor versions.
 Entries describe what changed for someone *using* the tool. For the full commit
 history of any release, `git log v0.3.4..v0.3.5`.
 
+## [Unreleased]
+
+### Changed
+
+- **`--substrate workspace` no longer hands the audited suite your desktop
+  session.** `DISPLAY`, `WAYLAND_DISPLAY`, `WAYLAND_SOCKET`, `XAUTHORITY` and
+  `DBUS_SESSION_BUS_ADDRESS` are removed from the test command's environment,
+  alongside corral's own model keys, for `certify --repo` and `corral review`.
+  The workspace substrate runs the suite on the host once per mutant, so a
+  suite with UI tests opened real windows on the operator's screen again and
+  again. A suite that needs a display gets one in its own test command, for
+  example `-- xvfb-run -a cargo nextest run`. If you ran corral itself under
+  `xvfb-run`, move `xvfb-run` into the test command. The jail never passed
+  these.
+
 ## [v1.0.0-rc.28] — 2026-10-21
 
 ### Fixed

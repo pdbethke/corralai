@@ -130,7 +130,7 @@ func reviewFlagSet(out io.Writer) (*flag.FlagSet, *reviewFlags) {
 	fs.BoolVar(&f.noLedger, "no-ledger", false, "print the review and write no entry, in either ledger")
 	fs.StringVar(&f.failOn, "fail-on", "", "exit 3 when a finding STANDS at this tier after the run: `reproduced` (its script ran and exited 0, and no reproduced refutation or adjudication overturned it). Off by default — the record is written either way; this is the merge gate's switch, for CI")
 	fs.DurationVar(&f.timeout, "timeout", time.Minute, "wall-clock bound on each reproduction script")
-	fs.StringVar(&f.substrate, "substrate", substrateJail, "where the reproduction scripts run: `jail` (default) — the offline sandbox certify grades in, over the tree at the commit with your dependency directories read-only; or `workspace` — a detached git worktree on the host, network on, model keys removed from the environment, for where the caller is the isolation boundary (a CI runner, as with certify --repo --substrate workspace)")
+	fs.StringVar(&f.substrate, "substrate", substrateJail, "where the reproduction scripts run: `jail` (default) — the offline sandbox certify grades in, over the tree at the commit with your dependency directories read-only; or `workspace` — a detached git worktree on the host, network on, model keys and your desktop session (DISPLAY, WAYLAND_DISPLAY, ...) removed from the environment, for where the caller is the isolation boundary (a CI runner, as with certify --repo --substrate workspace)")
 	fs.IntVar(&f.maxBytes, "max-bytes", 200000, "how many bytes of the scope the reviewer is shown; files past the cap are listed by name and the review records them as unshown")
 	return fs, f
 }

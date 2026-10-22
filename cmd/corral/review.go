@@ -416,7 +416,7 @@ func runReviewRun(args []string, stdout, stderr io.Writer) int {
 	if ledgerDir == "" {
 		ledgerDir = defaultLedgerDir(root)
 	}
-	signer, signed, kerr := ledgerSignerFromLocalKey()
+	signer, signed, kerr := selectLedgerSigner(stderr)
 	if kerr != nil {
 		fmt.Fprintf(stderr, "corral review: no entry written to %s: %v\n", ledgerDir, kerr)
 		return 1
@@ -935,7 +935,7 @@ func runReviewAdjudicate(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 	dir := strings.TrimRight(fs.Arg(0), "/")
-	signer, signed, kerr := ledgerSignerFromLocalKey()
+	signer, signed, kerr := selectLedgerSigner(stderr)
 	if kerr != nil {
 		fmt.Fprintf(stderr, "corral review adjudicate: %v\n", kerr)
 		return 1

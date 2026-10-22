@@ -105,7 +105,9 @@ func EntryHash(e LedgerEntry) (string, error) { return ledger.EntryHash(e) }
 type ledgerFile = LedgerEntry
 
 // LedgerSigner signs an entry's hash. cmd/corral supplies one from the
-// local certify key when it exists; nil writes an unsigned entry.
+// local certify key when it exists, or the keyless SigstoreLedgerSigner
+// (SigningKeyID ledger.KeyIDSigstore), whose "signature" is a Sigstore
+// bundle placed in the entry's Sigstore field; nil writes an unsigned entry.
 type LedgerSigner interface {
 	Sign(hash []byte) (keyID string, signature []byte, err error)
 	// SigningKeyID names the key BEFORE the entry is hashed. From
@@ -244,10 +246,16 @@ func lockLedgerDir(dir string) (func(), error) {
 // registration is caught.
 //
 // A ledger with no signer entries and no signer-carrying checkpoint skips the
-// guard entirely, so a stranger's keyless chain, and every ledger that has
+// guard entirely, so a stranger's unsigned chain, and every ledger that has
 // never used signers, append exactly as before. The root is always allowed:
-// it is how a key is registered in the first place.
+// it is how a key is registered in the first place. A keyless (Sigstore)
+// signer is allowed on any ledger: it holds no key a registration could
+// name, and its identity — the repository that signed — is what the reader
+// checks, by the repository the reader names.
 func requireRegisteredSigner(existing []LedgerEntry, signer LedgerSigner) error {
+	if signer != nil && signer.SigningKeyID() == ledger.KeyIDSigstore {
+		return nil
+	}
 	rootID, active := ActiveSigners(existing)
 	if rootID == "" {
 		return nil
@@ -278,7 +286,16 @@ func placeEntry(dir string, e LedgerEntry, prev string, signer LedgerSigner) (st
 	if err := os.MkdirAll(scans, 0o750); err != nil {
 		return "", fmt.Errorf("auditpush: ledger dir: %w", err)
 	}
+	// A keyless signer writes the keyless format; the verifier holds the two
+	// together (v6 ⇔ keyid sigstore), so the writer sets both from one test.
+	keyless := signer != nil && signer.SigningKeyID() == ledger.KeyIDSigstore
+	if keyless && (e.Kind == KindSigner || e.Kind == KindCheckpoint) {
+		return "", fmt.Errorf("auditpush: refusing to place a keyless %s entry — a signer change or checkpoint must be signed by the ledger's root key", e.Kind)
+	}
 	e.Format = LedgerFileFormat
+	if keyless {
+		e.Format = ledger.Format6
+	}
 	e.Prev = prev
 	// Pushed is PLACEMENT time — when the entry entered THIS directory —
 	// so file order and chain order agree by construction: an entry
@@ -296,7 +313,7 @@ func placeEntry(dir string, e LedgerEntry, prev string, signer LedgerSigner) (st
 		e.ScanUID = scanUID(e.Bundle.Scan, e.Pushed)
 		e.Bundle.Scan.ScanUID = e.ScanUID
 	}
-	e.Hash, e.KeyID, e.Signature, e.Raw = "", "", "", nil
+	e.Hash, e.KeyID, e.Signature, e.Sigstore, e.Raw = "", "", "", nil, nil
 	// The signer names itself BEFORE the hash is taken, because from
 	// corral-ledger-4 the name is part of what is hashed and signed. Set it
 	// after hashing and the name would sit outside the hash again, which is
@@ -317,6 +334,14 @@ func placeEntry(dir string, e LedgerEntry, prev string, signer LedgerSigner) (st
 	e.Hash = h
 	if signer != nil {
 		raw, _ := hex.DecodeString(h)
+		if keyless {
+			// Exactly the bytes the keyless verifier checks, from the one
+			// function both sides call, so they cannot disagree about what
+			// was signed.
+			if raw, err = ledger.KeylessArtifact(e); err != nil {
+				return "", err
+			}
+		}
 		keyID, sig, err := signer.Sign(raw)
 		if err != nil {
 			return "", fmt.Errorf("auditpush: sign ledger entry: %w", err)
@@ -324,7 +349,13 @@ func placeEntry(dir string, e LedgerEntry, prev string, signer LedgerSigner) (st
 		if keyID != e.KeyID {
 			return "", fmt.Errorf("auditpush: the signer named itself %q before hashing and %q when signing — the hashed bytes would not describe the key that signed them", e.KeyID, keyID)
 		}
-		e.Signature = hex.EncodeToString(sig)
+		if keyless {
+			// The bundle is the signature; Signature stays empty, as a
+			// keyless entry carrying both is a Problem.
+			e.Sigstore = json.RawMessage(sig)
+		} else {
+			e.Signature = hex.EncodeToString(sig)
+		}
 	}
 	// The file name: the placement time, then what the entry is about — a
 	// scan's commit and uid, a retraction's target, a checkpoint's replaced
@@ -558,11 +589,16 @@ func WriteRetraction(dir, target, reason string, signer LedgerSigner) (string, e
 // Signatures are not checked here: the callers do not all hold a key, and a
 // missing key must not read as a broken chain. Hashes, links, shape and
 // ordering are, which is what catches edited, removed or reordered bytes.
+//
+// Keyless entries are read the same way — IntegrityOnly: their shape is
+// checked, their bundle is not — because the writer has no repository to
+// name, and a chain must stay appendable after its first keyless entry.
 func RequireIntactChain(dir string) error {
-	checks, err := VerifyLedgerDir(dir, nil)
+	entries, err := ReadLedgerDir(dir)
 	if err != nil {
 		return err
 	}
+	checks := ledger.Verify(entries, ledger.Trust{IntegrityOnly: true})
 	for _, c := range checks {
 		if c.Problem != "" {
 			return fmt.Errorf("auditpush: %s does not verify (%s: %s)", dir, c.File, c.Problem)

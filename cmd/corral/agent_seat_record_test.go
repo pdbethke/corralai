@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -163,7 +164,7 @@ func TestPerModelAnalysisExcludesAnUnpinnedReviewSeat(t *testing.T) {
 	t.Setenv("CORRALAI_CERTIFY_KEY_FILE", filepath.Join(t.TempDir(), "certify_key"))
 	dir := filepath.Join(t.TempDir(), "ledger")
 	writeCacheTestEntry(t, dir, nil)
-	signer, _, _ := ledgerSignerFromLocalKey()
+	signer, _, _ := selectLedgerSigner(io.Discard)
 	code := 0
 	// "my-agent" is an operator agent no environment here defines: only the
 	// recorded tool can say it was an agent, not a model.
@@ -290,7 +291,7 @@ func TestTheScanHeaderTokensAreNullWhenNothingWasMetered(t *testing.T) {
 			b := buildBundle(scan, 0, []scanstore.File{{Path: "a.go", Lang: "go", Disposition: "audited"}}, nil, c.rows, nil,
 				auditpush.Link{}, false, "o/r", "c", "", bundleMeta{})
 			wh := filepath.Join(t.TempDir(), "w.duckdb")
-			if _, err := pushBundle(wh, b); err != nil {
+			if _, err := pushBundle(wh, b, io.Discard); err != nil {
 				t.Fatal(err)
 			}
 			db, err := attachWarehouse(wh, true)

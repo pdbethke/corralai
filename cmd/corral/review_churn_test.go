@@ -5,6 +5,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -28,7 +29,7 @@ func TestReviewChurnCountsDrainAndChurnFromTheRecord(t *testing.T) {
 	c1 := gitHeadCommit(repo)
 
 	ledger := filepath.Join(t.TempDir(), "ledger")
-	signer, _, _ := ledgerSignerFromLocalKey()
+	signer, _, _ := selectLedgerSigner(io.Discard)
 	zero := 0
 	finding := func(id string, line int) review.Finding {
 		return review.Finding{ID: id, Claim: "c", Declared: review.TierReproduced, Tier: review.TierReproduced, File: "pkg/a.go", Line: line, Script: "true", ExitCode: &zero}

@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"crypto/ed25519"
 	"encoding/hex"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -36,7 +37,7 @@ func pubHexOfSeed(t *testing.T, seed string) string {
 func pushAs(t *testing.T, dir, seed, commit string) {
 	t.Helper()
 	t.Setenv("CORRALAI_CERTIFY_KEY", seed)
-	if _, err := pushBundle(dir+"/", auditpush.Bundle{Scan: auditpush.ScanRow{Repo: "r", Commit: commit, ScanID: 1}, Files: []auditpush.Row{{Repo: "r", ScanID: 1, Path: "a.py"}}}); err != nil {
+	if _, err := pushBundle(dir+"/", auditpush.Bundle{Scan: auditpush.ScanRow{Repo: "r", Commit: commit, ScanID: 1}, Files: []auditpush.Row{{Repo: "r", ScanID: 1, Path: "a.py"}}}, io.Discard); err != nil {
 		t.Fatal(err)
 	}
 }

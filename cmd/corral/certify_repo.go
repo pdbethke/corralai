@@ -146,7 +146,17 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// Asked here, before anything is spent. Only when neither key variable is
 	// set: an explicit CORRALAI_CERTIFY_KEY_FILE naming a missing file is a
 	// deliberate first-run bootstrap, and asking now would mint it early.
-	if strings.TrimSpace(os.Getenv("CORRALAI_CERTIFY_KEY")) == "" && strings.TrimSpace(os.Getenv("CORRALAI_CERTIFY_KEY_FILE")) == "" {
+	//
+	// The same holds for the signer choice itself: an unknown
+	// CORRALAI_LEDGER_SIGNER, or keyless signing with no OIDC token, is
+	// refused here; under keyless the certify key is not used, so it is not
+	// asked about.
+	keylessLedger, _ := auditpush.KeylessSignerSelected()
+	if err := preflightLedgerSigner(); err != nil {
+		fmt.Fprintf(stderr, "corral certify --repo: the ledger signer cannot be used: %v — nothing was spent\n", err)
+		return 2
+	}
+	if !keylessLedger && strings.TrimSpace(os.Getenv("CORRALAI_CERTIFY_KEY")) == "" && strings.TrimSpace(os.Getenv("CORRALAI_CERTIFY_KEY_FILE")) == "" {
 		if _, kerr := loadLocalCertifyKeyIfConfigured(); kerr != nil && !errors.Is(kerr, errNoLocalKey) {
 			fmt.Fprintf(stderr, "corral certify --repo: the local certify key cannot be used: %v — nothing was spent\n", kerr)
 			return 2
@@ -1703,12 +1713,12 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		// own custody switch (--push-source) and withholds by default.
 		entryBundle.SourcePushed = true
 		entryBundle.Scan.SourcePushed = true
-		if c, lerr := pushBundle(ledgerDir+"/", entryBundle); lerr != nil {
+		if c, lerr := pushBundle(ledgerDir+"/", entryBundle, stderr); lerr != nil {
 			fmt.Fprintf(stderr, "corral certify --repo: writing the ledger entry to %s: %v\n", ledgerDir, lerr)
 			// A full disk stays fail-open; a signing key that could not be
 			// used does not. The run that keeps no record because its key was
 			// refused must not end green as if it had kept one.
-			if errors.Is(lerr, errKeyUnusable) && exitCode == 0 {
+			if errors.Is(lerr, errSignerUnusable) && exitCode == 0 {
 				exitCode = 1
 			}
 		} else if c.Total() > 0 {
@@ -1727,7 +1737,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		case subjErr != nil:
 			fmt.Fprintf(stderr, "corral certify --repo: pushing to %s: %v\n", *pushFlag, subjErr)
 		default:
-			c, perr := pushBundle(*pushFlag, bundle)
+			c, perr := pushBundle(*pushFlag, bundle, stderr)
 			switch {
 			case perr != nil:
 				fmt.Fprintf(stderr, "corral certify --repo: pushing to %s: %v\n", *pushFlag, perr)
@@ -5871,14 +5881,14 @@ func reusedVerdictTime(f reposcan.WeakFile) string {
 //
 // A thin wrapper on purpose: the mapping lives in certify_repo_bundle.go and
 // there is only one of it.
-func pushBundle(target string, b auditpush.Bundle) (auditpush.Counts, error) {
+func pushBundle(target string, b auditpush.Bundle, stderr io.Writer) (auditpush.Counts, error) {
 	if auditpush.IsLedgerDir(target) {
-		// A ledger-directory entry is SIGNED when a certify key is
-		// configured (the same key --local verdicts and --attest use),
-		// and written unsigned — and said to be — when none is. On a
-		// runner with no key, the recipe attests the entry file itself
-		// (actions/attest), which is the keyless equivalent.
-		signer, _, err := ledgerSignerFromLocalKey()
+		// A ledger-directory entry is signed by whatever selectLedgerSigner
+		// chooses: keylessly under CORRALAI_LEDGER_SIGNER=sigstore (the
+		// GitHub Actions run's own identity), else with the certify key
+		// when one is configured (the same key --local verdicts and
+		// --attest use), else unsigned — and said to be.
+		signer, _, err := selectLedgerSigner(stderr)
 		if err != nil {
 			return auditpush.Counts{}, err
 		}
@@ -5899,7 +5909,7 @@ func pushBundle(target string, b auditpush.Bundle) (auditpush.Counts, error) {
 // Fail-open without exception, and printed, never silent: a full disk or an
 // unwritable state directory costs this copy only. Unlike the repo entry, it
 // never touches the exit code — not even for a key the operator cannot use.
-// That refusal is ledgerSignerFromLocalKey's (nothing is written unsigned,
+// That refusal is selectLedgerSigner's (nothing is written unsigned,
 // because an unsigned entry is permanent), and it is the same key the repo
 // entry just failed on, which already turned the run red; charging it a
 // second time here would add nothing, and charging it only here would let a
@@ -5911,7 +5921,7 @@ func pushBundle(target string, b auditpush.Bundle) (auditpush.Counts, error) {
 // second append would record one run twice in one chain.
 func writeMachineLedgerCopy(b auditpush.Bundle, checkout, repoLedger string, stdout, stderr io.Writer) {
 	keepMachineLedgerCopy("corral certify --repo", "--repo", checkout, repoLedger, stdout, stderr, func(dir string) (bool, error) {
-		c, err := pushBundle(dir+"/", b)
+		c, err := pushBundle(dir+"/", b, stderr)
 		// The same guard the repo-ledger line has: an entry that wrote no
 		// rows is not announced as written.
 		return c.Total() > 0, err

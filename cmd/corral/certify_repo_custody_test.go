@@ -4,6 +4,7 @@ package main
 
 import (
 	"encoding/json"
+	"io"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -95,7 +96,7 @@ func TestEventsNeverCarrySourceBytes(t *testing.T) {
 				nil, nil, nil, events, auditpush.Link{}, true,
 				"o/r", "deadbeef", "", bundleMeta{})
 			entry.SourcePushed, entry.Scan.SourcePushed = true, true
-			if _, err := pushBundle(ledgerDir+"/", entry); err != nil {
+			if _, err := pushBundle(ledgerDir+"/", entry, io.Discard); err != nil {
 				t.Fatalf("writing the ledger entry: %v", err)
 			}
 			entries, err := auditpush.ReadLedgerDir(ledgerDir)
@@ -114,7 +115,7 @@ func TestEventsNeverCarrySourceBytes(t *testing.T) {
 				nil, nil, nil, events, auditpush.Link{}, sourcePushed,
 				"o/r", "deadbeef", "", bundleMeta{})
 			target := filepath.Join(t.TempDir(), "w.duckdb")
-			if _, err := pushBundle(target, b); err != nil {
+			if _, err := pushBundle(target, b, io.Discard); err != nil {
 				t.Fatalf("pushBundle: %v", err)
 			}
 			rows := queryRows(t, target, `SELECT kind, COALESCE(detail, '') FROM corral_events`)

@@ -34,7 +34,7 @@ func writeCacheTestEntry(t *testing.T, dir string, files []scanstore.File) {
 	b := buildBundle(scanstore.Scan{Owner: "acme", Repo: "r"}, 0, files, nil, nil, nil,
 		auditpush.Link{}, true, "acme/r", "abc", "", bundleMeta{})
 	b.SourcePushed, b.Scan.SourcePushed = true, true
-	if _, err := pushBundle(dir+"/", b); err != nil {
+	if _, err := pushBundle(dir+"/", b, io.Discard); err != nil {
 		t.Fatalf("writing the ledger entry: %v", err)
 	}
 }

@@ -249,7 +249,7 @@ func reuseFixtureScanOpt(t *testing.T, root, dsn string, deriver reposcan.Derive
 	entry := buildBundle(scan, 0, files, nil, modelRows, scanEventRows(ex), auditpush.Link{}, true,
 		"test-owner/test-repo", "deadbeef", "", bundleMeta{})
 	entry.SourcePushed, entry.Scan.SourcePushed = true, true
-	if _, perr := pushBundle(ledgerDir+"/", entry); perr != nil {
+	if _, perr := pushBundle(ledgerDir+"/", entry, io.Discard); perr != nil {
 		t.Fatalf("writing the ledger entry: %v stderr=%s", perr, errb.String())
 	}
 	entries, lerr := auditpush.ReadLedgerDir(ledgerDir)

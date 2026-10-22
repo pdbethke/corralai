@@ -20,10 +20,20 @@ import (
 // SigstoreRoot a Problem naming it. Neither has a default — the repository
 // is never guessed, and the public-good root is passed explicitly
 // (PublicGoodTrustedRoot) by whoever means it.
+//
+// IntegrityOnly is the reader that holds no trust at all and says so: a
+// keyless entry's bundle is not checked (as a zero RootPub leaves ed25519
+// signatures unchecked), while every hash, link and shape rule — the v6 ⇔
+// keyid pairing among them — still is. It is for a WRITER guarding its own
+// append (auditpush.RequireIntactChain), which has no repository to name and
+// must still extend a chain that holds keyless entries. It is a field the
+// caller sets, not what an empty Repo means: a reader that forgot the
+// repository is told so (ProblemNoLedgerRepo), never quietly skipped.
 type Trust struct {
-	RootPub      ed25519.PublicKey
-	Repo         string
-	SigstoreRoot *SigstoreRoot
+	RootPub       ed25519.PublicKey
+	Repo          string
+	SigstoreRoot  *SigstoreRoot
+	IntegrityOnly bool
 }
 
 // ChainCheck is one entry's verdict from Verify.

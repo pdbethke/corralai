@@ -85,31 +85,60 @@ func keylessProblem(e Entry, t Trust) (problem, signedBy string) {
 		return fmt.Sprintf("carries a sigstore bundle but is not a keyless entry (keyid %q)", e.KeyID), ""
 	case !keyless:
 		return "", ""
+	case t.IntegrityOnly:
+		// No signature is checked; the shape rules below still are.
+		return keylessShapeProblem(e), ""
 	case t.Repo == "":
 		// First, before any other check: the operator must name what to
 		// expect, and saying so is the most useful thing to read.
 		return ProblemNoLedgerRepo, ""
-	case e.Format != Format6:
-		return fmt.Sprintf("keyless entry: keyid %q needs format %s, not %s", KeyIDSigstore, Format6, e.Format), ""
-	case e.Kind == KindSigner || e.Kind == KindCheckpoint:
-		// Who may sign, and where a chain begins, stay with the root key: a
-		// keyless signer proves a repository, not authority over the chain.
-		return "keyless entry: a signer change or checkpoint must be signed by the ledger's root key", ""
-	case e.Signature != "":
-		return "keyless entry: carries an ed25519 signature as well as a sigstore bundle", ""
-	case len(e.Sigstore) == 0:
-		return "keyless entry: carries no sigstore bundle", ""
-	case t.SigstoreRoot == nil:
-		return "keyless entry: no Sigstore trust root was given to check it against", ""
+	}
+	if p := keylessShapeProblem(e); p != "" {
+		return p, ""
 	}
 	art, err := KeylessArtifact(e)
 	if err != nil {
 		return "keyless entry: " + err.Error(), ""
 	}
-	if err := verifyBundle(e.Sigstore, art, t.Repo, t.SigstoreRoot); err != nil {
+	if err := VerifyKeylessSignature(e.Sigstore, art, t.Repo, t.SigstoreRoot); err != nil {
 		return "keyless entry: " + err.Error(), ""
 	}
 	return "", githubURL(t.Repo)
+}
+
+// keylessShapeProblem is the part of a keyless entry's check that needs no
+// trust: its format, its kind, and that it carries a bundle and only a
+// bundle. IntegrityOnly runs exactly this.
+func keylessShapeProblem(e Entry) string {
+	switch {
+	case e.Format != Format6:
+		return fmt.Sprintf("keyless entry: keyid %q needs format %s, not %s", KeyIDSigstore, Format6, e.Format)
+	case e.Kind == KindSigner || e.Kind == KindCheckpoint:
+		// Who may sign, and where a chain begins, stay with the root key: a
+		// keyless signer proves a repository, not authority over the chain.
+		return "keyless entry: a signer change or checkpoint must be signed by the ledger's root key"
+	case e.Signature != "":
+		return "keyless entry: carries an ed25519 signature as well as a sigstore bundle"
+	case len(e.Sigstore) == 0:
+		return "keyless entry: carries no sigstore bundle"
+	}
+	return ""
+}
+
+// VerifyKeylessSignature is the bundle check on its own: bundleJSON is a
+// Sigstore signature over artifact, made in a GitHub Actions run of
+// github.com/<repo>, witnessed by a Rekor log in r. Verify runs it for every
+// keyless entry; the keyless SIGNER runs it on its own output before an
+// entry is placed, so an entry its readers would refuse is never written.
+// Neither repo nor r has a default.
+func VerifyKeylessSignature(bundleJSON, artifact []byte, repo string, r *SigstoreRoot) error {
+	switch {
+	case repo == "":
+		return errors.New(ProblemNoLedgerRepo)
+	case r == nil:
+		return errors.New("no Sigstore trust root was given to check it against")
+	}
+	return verifyBundle(bundleJSON, artifact, repo, r)
 }
 
 func githubURL(repo string) string { return "https://github.com/" + repo }

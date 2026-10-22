@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -669,7 +670,7 @@ func TestVerifyLedgerWalksTheChain(t *testing.T) {
 	t.Setenv("CORRALAI_CERTIFY_KEY_FILE", keyPath)
 	t.Setenv("CORRALAI_CERTIFY_KEY", "")
 	push := func(commit string) {
-		if _, err := pushBundle(dir, auditpush.Bundle{Scan: auditpush.ScanRow{Repo: "r", Commit: commit, ScanID: 1}, Files: []auditpush.Row{{Repo: "r", ScanID: 1, Path: "a.py"}}}); err != nil {
+		if _, err := pushBundle(dir, auditpush.Bundle{Scan: auditpush.ScanRow{Repo: "r", Commit: commit, ScanID: 1}, Files: []auditpush.Row{{Repo: "r", ScanID: 1, Path: "a.py"}}}, io.Discard); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -708,7 +709,7 @@ func TestVerifyLedgerNeverUsesTheLocalKeyImplicitly(t *testing.T) {
 	t.Setenv("CORRALAI_CERTIFY_KEY_FILE", filepath.Join(t.TempDir(), "certify.key"))
 	t.Setenv("CORRALAI_CERTIFY_KEY", "")
 	t.Setenv(auditpush.LedgerPubKeyEnv, "")
-	if _, err := pushBundle(dir, auditpush.Bundle{Scan: auditpush.ScanRow{Repo: "r", Commit: "aaaa1111", ScanID: 1}, Files: []auditpush.Row{{Repo: "r", ScanID: 1, Path: "a.py"}}}); err != nil {
+	if _, err := pushBundle(dir, auditpush.Bundle{Scan: auditpush.ScanRow{Repo: "r", Commit: "aaaa1111", ScanID: 1}, Files: []auditpush.Row{{Repo: "r", ScanID: 1, Path: "a.py"}}}, io.Discard); err != nil {
 		t.Fatal(err)
 	}
 	var out, errb bytes.Buffer

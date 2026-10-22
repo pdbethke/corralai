@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -149,7 +150,7 @@ func TestModelCallsReachTheLedger(t *testing.T) {
 	files := []scanstore.File{{Path: "pkg/a.go", Lang: "go", Disposition: "audited"}}
 
 	b := buildBundle(scan, 0, files, nil, calls, nil, auditpush.Link{}, false, "o/r", "deadbeef", "", bundleMeta{})
-	if _, err := pushBundle(dir+"/", b); err != nil {
+	if _, err := pushBundle(dir+"/", b, io.Discard); err != nil {
 		t.Fatalf("writing the ledger entry: %v", err)
 	}
 	st, err := openLedgerScans(dir)

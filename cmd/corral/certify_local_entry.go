@@ -188,7 +188,7 @@ func localEntryBundle(in localAuditInput, v advpool.Verdict, t advpool.RunTeleme
 //
 // Fail-open without exception: a write that fails is printed on stderr and
 // costs that copy only; the verdict and the exit code are the audit's. A key
-// that cannot be used is ledgerSignerFromLocalKey's refusal — nothing is
+// that cannot be used is selectLedgerSigner's refusal — nothing is
 // written unsigned, because an unsigned entry is permanent in a hash-linked
 // chain — printed the same way. (A repo scan turns a green run red on that
 // refusal for its PRIMARY entry; --local does not, because by the time it
@@ -225,7 +225,7 @@ func writeLocalLedgerEntries(b auditpush.Bundle, ledgerFlag string, noLedger boo
 }
 
 func writeLocalLedgerEntry(b auditpush.Bundle, dir string, stdout, stderr io.Writer) {
-	c, err := pushBundle(strings.TrimRight(dir, "/")+"/", b)
+	c, err := pushBundle(strings.TrimRight(dir, "/")+"/", b, stderr)
 	if err != nil {
 		fmt.Fprintf(stderr, "corral certify --local: writing the ledger entry to %s: %v\n", dir, err)
 		return

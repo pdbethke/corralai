@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/json"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -68,7 +69,7 @@ func recheckFixtureIn(t *testing.T, scripts map[string]string, commitOf func(rep
 	for _, id := range ids {
 		r.Findings = append(r.Findings, review.Finding{ID: id, Claim: "c " + id, Declared: review.TierReproduced, Tier: review.TierReproduced, Script: scripts[id], ExitCode: &zero})
 	}
-	signer, _, _ := ledgerSignerFromLocalKey()
+	signer, _, _ := selectLedgerSigner(io.Discard)
 	if _, err := auditpush.WriteReview(ledger, r, signer); err != nil {
 		t.Fatal(err)
 	}

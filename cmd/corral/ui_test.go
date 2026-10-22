@@ -9,6 +9,7 @@ import (
 	"github.com/pdbethke/corralai/internal/auditpush"
 	"github.com/pdbethke/corralai/internal/review"
 	"github.com/pdbethke/corralai/internal/scanstore"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -155,7 +156,7 @@ func TestUIShowsTheChainTheReviewsAndTheVerdicts(t *testing.T) {
 	t.Setenv("CORRALAI_CERTIFY_KEY_FILE", filepath.Join(t.TempDir(), "certify_key"))
 	dir := filepath.Join(t.TempDir(), "ledger")
 	writeCacheTestEntry(t, dir, []scanstore.File{{Path: "a.go", Disposition: "audited", Gradable: true, KillRate: ptrF(0.5)}})
-	signer, _, _ := ledgerSignerFromLocalKey()
+	signer, _, _ := selectLedgerSigner(io.Discard)
 	// The UI verifies against an EXPLICIT key only; hand it the one that signed.
 	lk, kerr := loadLocalCertifyKeyIfConfigured()
 	if kerr != nil {

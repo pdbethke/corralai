@@ -5,6 +5,7 @@ package main
 import (
 	"database/sql"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -135,7 +136,7 @@ func TestPushedRowsCarryTheStatementSHA(t *testing.T) {
 	}
 
 	bundle.Link = auditpush.Link{ScanID: 7, StatementSHA256: sha}
-	if _, err := pushBundle(db, bundle); err != nil {
+	if _, err := pushBundle(db, bundle, io.Discard); err != nil {
 		t.Fatal(err)
 	}
 
@@ -184,7 +185,7 @@ func TestPushWithoutAttestCarriesNoStatementSHA(t *testing.T) {
 	dir := t.TempDir()
 	db := filepath.Join(dir, "w.duckdb")
 
-	if _, err := pushBundle(db, oneAuditedFileBundle(0)); err != nil {
+	if _, err := pushBundle(db, oneAuditedFileBundle(0), io.Discard); err != nil {
 		t.Fatal(err)
 	}
 

@@ -665,3 +665,63 @@ func TestKeylessLeafMustBeCodeSigning(t *testing.T) {
 		t.Fatalf("a leaf with no EKU must fail: %+v", c)
 	}
 }
+
+// IntegrityOnly is the reader that holds no trust at all — the writer's own
+// RequireIntactChain before it appends. It checks hashes, links and the
+// keyless shape rules, and no signature: a keyless entry is not a Problem
+// there merely because no repository was named, or the chain could never be
+// extended past its first keyless entry.
+func TestKeylessIntegrityOnly(t *testing.T) {
+	s := newTestSigstore(t)
+	k1 := s.keylessEntry(t, "", 1, spec{})
+	k2 := s.keylessEntry(t, k1.Hash, 2, spec{})
+	for i, c := range ledger.Verify([]ledger.Entry{k1, k2}, ledger.Trust{IntegrityOnly: true}) {
+		if c.Problem != "" || !c.HashOK || !c.LinkOK || c.SigOK || !c.Signed {
+			t.Fatalf("entry %d: an intact keyless chain read for integrity only: %+v", i, c)
+		}
+	}
+	// A bundle over another entry is NOT caught here — no signature is
+	// checked — but every shape rule still is.
+	bad := k1
+	bad.Signature = "00" // outside the hash, so the entry still hashes clean
+	bad = reparse(t, bad)
+	if c := only(t, ledger.Verify([]ledger.Entry{bad}, ledger.Trust{IntegrityOnly: true})); !strings.Contains(c.Problem, "ed25519 signature as well") {
+		t.Fatalf("shape rules hold under IntegrityOnly: %+v", c)
+	}
+	noBundle := k1
+	noBundle.Sigstore = nil
+	if c := only(t, ledger.Verify([]ledger.Entry{reparse(t, noBundle)}, ledger.Trust{IntegrityOnly: true})); !strings.Contains(c.Problem, "carries no sigstore bundle") {
+		t.Fatalf("a keyless entry with no bundle is a Problem under IntegrityOnly: %+v", c)
+	}
+	v5 := k1
+	v5.Format = ledger.FileFormat
+	v5 = s.seal(t, v5, spec{})
+	if c := only(t, ledger.Verify([]ledger.Entry{v5}, ledger.Trust{IntegrityOnly: true})); !strings.Contains(c.Problem, ledger.Format6) {
+		t.Fatalf("the v6 pairing holds under IntegrityOnly: %+v", c)
+	}
+}
+
+// VerifyKeylessSignature is the bundle check alone, for a WRITER that holds
+// only the hash it just signed: the keyless signer checks its own output
+// with it before an entry is placed.
+func TestVerifyKeylessSignature(t *testing.T) {
+	s := newTestSigstore(t)
+	art := sha256.Sum256([]byte("an entry"))
+	b := s.issue(t, art[:], spec{})
+	if err := ledger.VerifyKeylessSignature(b, art[:], testRepo, s.ledgerRoot(t)); err != nil {
+		t.Fatalf("a good bundle: %v", err)
+	}
+	if err := ledger.VerifyKeylessSignature(b, art[:], "acme/other", s.ledgerRoot(t)); err == nil || !strings.Contains(err.Error(), "acme/other") {
+		t.Fatalf("another repository must fail naming it: %v", err)
+	}
+	other := sha256.Sum256([]byte("another entry"))
+	if err := ledger.VerifyKeylessSignature(b, other[:], testRepo, s.ledgerRoot(t)); err == nil {
+		t.Fatal("a bundle over another artifact must fail")
+	}
+	if err := ledger.VerifyKeylessSignature(b, art[:], "", s.ledgerRoot(t)); err == nil || err.Error() != ledger.ProblemNoLedgerRepo {
+		t.Fatalf("no repository: %v", err)
+	}
+	if err := ledger.VerifyKeylessSignature(b, art[:], testRepo, nil); err == nil || !strings.Contains(err.Error(), "Sigstore trust root") {
+		t.Fatalf("no root: %v", err)
+	}
+}

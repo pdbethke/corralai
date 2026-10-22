@@ -34,17 +34,12 @@ echo "gen-ledger-site: rendering $REF ($(git rev-parse --short "$REF"))"
 git archive "$REF" | tar -x -C "$TMP"
 
 mkdir -p "$OUT"
-# The site's menu, on every record page: a reader who arrives at an entry
-# from a PR or issue link must be able to find out what corral is.
-NAV=(
-  -nav "What is corral?=/"
-  -nav "How it works=/docs/how-it-works/"
-  -nav "Get started=/docs/getting-started/"
-  -nav "Field notes=/field-notes/"
-  -nav "GitHub=https://github.com/pdbethke/corralai"
-)
+# -site-chrome leaves a slot at the top of every record page; the site build
+# fills it with the site's own header (site/integrations/ledger-chrome.mjs),
+# so a reader who arrives at an entry from a PR or issue link can find out
+# what corral is.
 if [ -n "$PUBKEY" ]; then
-  go run ./scripts/ledgersite -ledger "$TMP" -out "$OUT" -pubkey "$PUBKEY" "${NAV[@]}"
+  go run ./scripts/ledgersite -ledger "$TMP" -out "$OUT" -pubkey "$PUBKEY" -site-chrome
 else
-  go run ./scripts/ledgersite -ledger "$TMP" -out "$OUT" "${NAV[@]}"
+  go run ./scripts/ledgersite -ledger "$TMP" -out "$OUT" -site-chrome
 fi

@@ -28,17 +28,34 @@ test('an entry page does not scroll sideways at 375px', async ({ page }) => {
   expect(await page.evaluate(overflow), `entry ${f} overflow in px`).toBeLessThanOrEqual(0);
 });
 
-// The pages a PR or issue link lands on must lead back to the site: a reader
-// there could not find out what corral is.
-test('an entry page carries the site menu back to the rest of the site', async ({ page }) => {
+// The pages a PR or issue link lands on must lead back to the site, and look
+// like it: the ledger-chrome integration copies the home page's own header
+// onto them, so the header here must match the home page's link for link and
+// be drawn in the same colors, with the Ledger link marked current.
+test('an entry page carries the same site header as the home page', async ({ page }) => {
   const f = firstOf(/\.html$/);
   expect(f, 'no entry pages: run scripts/gen-ledger-site.sh first').toBeTruthy();
-  await page.goto(`/ledger/entry/${f}`);
-  const nav = page.getByRole('navigation', { name: 'Site' });
-  for (const [label, href] of [['What is corral?', '/'], ['How it works', '/docs/how-it-works/'], ['Get started', '/docs/getting-started/']]) {
-    const link = nav.getByRole('link', { name: label, exact: true });
-    await expect(link).toHaveAttribute('href', href);
-    const res = await page.request.get(href);
-    expect(res.status(), `${href} returned ${res.status()}`).toBeLessThan(400);
-  }
+  const header = async (path: string) => {
+    await page.goto(path);
+    const h = page.locator('header.site-header');
+    await expect(h).toHaveCount(1);
+    return h.evaluate((el) => {
+      const link = el.querySelector('.sh-nav a:not([aria-current])')!;
+      const css = (e: Element, p: string) => getComputedStyle(e).getPropertyValue(p);
+      return {
+        links: [...el.querySelectorAll('nav a')].map((a) => [a.textContent, a.getAttribute('href')]),
+        current: [...el.querySelectorAll('[aria-current="page"]')].map((a) => a.getAttribute('href')),
+        bg: css(el, 'background-color'),
+        position: css(el, 'position'),
+        link: [css(link, 'color'), css(link, 'font-size'), css(link, 'padding')],
+        mark: css(el.querySelector('.cai-mark')!, 'color'),
+      };
+    });
+  };
+  const home = await header('/');
+  const entry = await header(`/ledger/entry/${f}`);
+  expect(entry.links).toEqual(home.links);
+  expect(home.current).toEqual(['/']);
+  expect(entry.current).toEqual(['/ledger/']);
+  expect({ ...entry, current: [] }).toEqual({ ...home, current: [] });
 });

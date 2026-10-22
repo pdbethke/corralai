@@ -634,7 +634,9 @@ func runVerifyLedger(dir, pubFlag, repoFlag, expectHead string, stdout, stderr i
 			bad++
 		case c.Keyless && c.SigOK:
 			what += fmt.Sprintf(", signed keylessly by %s and verified against the Sigstore root, for %s", c.Signer, trust.Repo)
-		case c.Signed && pub != nil:
+		case c.Signed && c.SigChecked:
+			// Checked per entry (ChainCheck.SigChecked), never inferred from
+			// whether a key was given; Problem above caught a failed check.
 			what += fmt.Sprintf(", signed by %s and verified against %s", signerLabel(c), pubSource)
 		case c.Signed:
 			what += fmt.Sprintf(", signed by %s — unverified, signature NOT CHECKED (no --pub, no %s)", signerLabel(c), auditpush.LedgerPubKeyEnv)

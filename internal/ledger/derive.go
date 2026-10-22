@@ -116,7 +116,7 @@ func Derive(raw []RawEntry, t Trust) (Derived, error) {
 
 	checks := Verify(chain, t)
 	for _, c := range checks {
-		d.Entries = append(d.Entries, statusOf(c, t))
+		d.Entries = append(d.Entries, statusOf(c))
 	}
 	for _, e := range off {
 		d.Entries = append(d.Entries, EntryStatus{File: e.File, Hash: e.Hash, Kind: e.Kind, KeyID: e.KeyID, Status: StatusFailed, Problem: problemOffChain})
@@ -165,9 +165,11 @@ func ledgerProblem(entries []EntryStatus, off int) string {
 	return ""
 }
 
-// statusOf turns Verify's check into a status. A signed entry cannot be called
-// verified without a root key to check it against: no pass by default.
-func statusOf(c ChainCheck, t Trust) EntryStatus {
+// statusOf turns Verify's check into a status. A signed entry is verified
+// only when its signature was CHECKED (ChainCheck.SigChecked) and held: no
+// pass by default, and no page-wide guess from whether a root key was given
+// — a keyless entry is checked by its repository, not the root key.
+func statusOf(c ChainCheck) EntryStatus {
 	st := EntryStatus{File: c.File, Hash: c.Hash, Kind: c.Kind, KeyID: c.KeyID}
 	switch {
 	case c.Problem != "":
@@ -176,11 +178,7 @@ func statusOf(c ChainCheck, t Trust) EntryStatus {
 		st.Status, st.Problem = StatusFailed, "hash or link does not check"
 	case !c.Signed:
 		st.Status = StatusUnsigned
-	case c.Keyless && c.SigOK:
-		// Checked against the repository and the Sigstore root, which is
-		// all a keyless entry's trust rests on; no root key is involved.
-		st.Status = StatusVerified
-	case len(t.RootPub) == 0 && !c.Keyless:
+	case !c.SigChecked:
 		st.Status, st.Problem = StatusFailed, "signed, but no root key was given to check the signature against"
 	case !c.SigOK:
 		st.Status, st.Problem = StatusFailed, "signature was not verified"

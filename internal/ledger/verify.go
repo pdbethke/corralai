@@ -39,6 +39,14 @@ type ChainCheck struct {
 	LinkOK bool // Prev names the previous entry's Hash (true for a genesis entry)
 	Signed bool // the entry carries a signature (ed25519, or a keyless Sigstore bundle)
 	SigOK  bool // the signature verifies under the key resolved for KeyID, or the keyless bundle verifies for Trust.Repo (false when unsigned, unresolved or no pub given)
+	// SigChecked says the signature was put to a check at all, whatever
+	// it concluded: an ed25519 signature with a key resolved for it, or a
+	// keyless bundle against the repository and Sigstore root the reader
+	// named. It is THE answer to "was this checked?" for every reader — the
+	// CLI, corral ui, the public site and Derive — so none of them decides
+	// it page-wide from whether a root key was given (which called a
+	// verified keyless entry "not checked"). False when unsigned.
+	SigChecked bool
 	// Keyless is set for a keyless (keyid KeyIDSigstore) entry: its trust is
 	// the repository that signed, not the root key, so a reader needs no
 	// RootPub to call it verified.
@@ -139,11 +147,12 @@ func walk(entries []Entry, t Trust, integrityOnly bool) ([]ChainCheck, *SignerSe
 		// never resolved against the signer set: it holds no key the set
 		// could name. keylessProblem also enforces, for EVERY entry, that
 		// format 6 and keyid "sigstore" go together.
-		keyless, signedBy := keylessProblem(e, t, integrityOnly)
+		keyless, signedBy, keylessChecked := keylessProblem(e, t, integrityOnly)
 		var name, keyProblem string
 		var key ed25519.PublicKey
 		if c.Keyless {
 			c.SigOK = keyless == "" && signedBy != ""
+			c.SigChecked = keylessChecked
 			c.Signer = signedBy
 		} else {
 			// The key is resolved BEFORE the signature is checked, from the
@@ -155,6 +164,7 @@ func walk(entries []Entry, t Trust, integrityOnly bool) ([]ChainCheck, *SignerSe
 				raw, _ := hex.DecodeString(e.Hash)
 				sig, _ := hex.DecodeString(e.Signature)
 				c.SigOK = ed25519.Verify(key, raw, sig)
+				c.SigChecked = true
 			}
 		}
 		shapeProblem := EntryShapeProblem(e)

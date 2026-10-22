@@ -91,13 +91,17 @@ type ChainView struct {
 	// run's own record, else the entry's kind. KeyID is the signer name
 	// the entry carries; it is self-reported unless the Note says the
 	// format covers it. Note is VerifyLedgerDir's caveat, in words.
-	// KeyGiven is false when no public key was supplied, so a signed
-	// entry's signature is unchecked, never "verified" and never "failed".
-	Pos      int
-	Kind     string
-	KeyID    string
-	Note     string
-	KeyGiven bool
+	// SigChecked is the chain check's own per-entry answer to "was the
+	// signature checked?" (ledger.ChainCheck.SigChecked): false for a
+	// signed entry means unchecked, never "verified" and never "failed".
+	// Keyless says whose trust it rests on — a repository, not a key — so
+	// an unchecked one names what was missing.
+	Pos        int
+	Kind       string
+	KeyID      string
+	Note       string
+	SigChecked bool
+	Keyless    bool
 }
 
 // EntryView is one review entry as a page.
@@ -155,7 +159,10 @@ type Site struct {
 	// the "verify it yourself" command so a reader can run the same check.
 	// Empty when the page was rendered without one.
 	PubKeyHex string
-	Reviews   []EntryView
+	// LedgerRepo is the repository keyless entries were checked against
+	// (owner/name), printed in the same command; empty when none was named.
+	LedgerRepo string
+	Reviews    []EntryView
 	// Chain is every entry of every kind, newest first: the chain itself,
 	// with each entry's check. Scan and review pages hold the detail.
 	Chain []ChainView
@@ -173,10 +180,14 @@ type Site struct {
 	// changed between the read and the check). They are not chain problems:
 	// nothing measured them, so the page says "not verified", not failed.
 	Unverified int
-	// SigsChecked is false when no public key was supplied. The page must
-	// then say signatures were NOT CHECKED — never imply they passed, and
-	// never imply they failed. (`corral verify` sets this standard: "NOTHING
-	// was verified ... That is not a pass.")
+	// SigsUnchecked counts signed entries whose signature was NOT CHECKED
+	// (per entry, from ChainCheck.SigChecked); SigsUncheckedKey is the
+	// ed25519 part of it, unchecked because no root key was given. The page
+	// must then say so — never imply they passed, and never imply they
+	// failed. (`corral verify` sets this standard: "NOTHING was verified ...
+	// That is not a pass.") It is counted, not decided page-wide from
+	// whether a key was given: a keyless entry is checked against its
+	// repository with no root key at all.
 	// CrossVendor counts reviews whose verifier resolved to a DIFFERENT
 	// vendor than the reviewer. VendorUndetermined counts reviews where at
 	// least one seat's vendor could not be resolved: those are excluded from
@@ -185,7 +196,8 @@ type Site struct {
 	CrossModel         int
 	VendorUndetermined int
 	Vendors            []string
-	SigsChecked        bool
+	SigsUnchecked      int
+	SigsUncheckedKey   int
 	SigsOK             int
 	SigsTotal          int
 	First, Last        time.Time
@@ -220,8 +232,8 @@ func repoWebURL(remote string) string {
 }
 
 // Build turns the ledger's entries and VerifyLedgerDir's checks of them
-// into a Site. sigsChecked says whether a public key was given to the checks.
-func Build(entries []auditpush.LedgerEntry, checks []auditpush.ChainCheck, sigsChecked bool) Site {
+// into a Site. Whether each signature was checked is read from its check.
+func Build(entries []auditpush.LedgerEntry, checks []auditpush.ChainCheck) Site {
 	paired := PairChecks(entries, checks)
 	// Only verdicts that STAND: LiveEntries drops a retracted adjudication
 	// and an adjudication of a retracted review. Adjudications over every
@@ -239,7 +251,6 @@ func Build(entries []auditpush.LedgerEntry, checks []auditpush.ChainCheck, sigsC
 		HasLedger:     true,
 		LedgerEntries: len(entries),
 		Retracted:     len(retracted),
-		SigsChecked:   sigsChecked,
 	}
 	models := map[string]bool{}
 	verifiers := map[string]bool{}
@@ -261,10 +272,16 @@ func Build(entries []auditpush.LedgerEntry, checks []auditpush.ChainCheck, sigsC
 		case c.Problem != "" || !c.HashOK || !c.LinkOK:
 			v.ChainProblems++
 		}
-		if c.Signed {
+		if c.Signed && c.Verified {
 			v.SigsTotal++
-			if c.SigOK {
+			switch {
+			case c.SigOK:
 				v.SigsOK++
+			case !c.SigChecked:
+				v.SigsUnchecked++
+				if !c.Keyless {
+					v.SigsUncheckedKey++
+				}
 			}
 		}
 		kind := e.Kind
@@ -276,7 +293,8 @@ func Build(entries []auditpush.LedgerEntry, checks []auditpush.ChainCheck, sigsC
 			Pushed: e.Pushed, Verified: c.Verified,
 			ChainHashOK: c.HashOK, ChainLinkOK: c.LinkOK, Signed: c.Signed,
 			SigOK: c.SigOK, Signer: c.Signer, ChainProblem: c.Problem, Genesis: c.Genesis,
-			Pos: i + 1, Kind: kind, KeyID: c.KeyID, Note: c.Note, KeyGiven: sigsChecked,
+			Pos: i + 1, Kind: kind, KeyID: c.KeyID, Note: c.Note,
+			SigChecked: c.SigChecked, Keyless: c.Keyless,
 		}
 		// The chain shows every entry (it IS the chain), but one that does
 		// not stand says so there, whatever its kind. Only the chain row

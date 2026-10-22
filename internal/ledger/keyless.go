@@ -75,35 +75,38 @@ func KeylessArtifact(e Entry) ([]byte, error) {
 // keyless entry whose bundle verifies for t.Repo, and signedBy is the
 // repository URI from its certificate. It is also where the format/keyid
 // pairing is enforced, for every entry: v6 ⇔ keyid sigstore, and only a
-// keyless entry may carry a bundle.
-func keylessProblem(e Entry, t Trust, integrityOnly bool) (problem, signedBy string) {
+// keyless entry may carry a bundle. checked is true when the bundle was put
+// to the signature check against a repository and a Sigstore root the
+// reader named — whatever it concluded — and false when it never got there.
+func keylessProblem(e Entry, t Trust, integrityOnly bool) (problem, signedBy string, checked bool) {
 	keyless := e.KeyID == KeyIDSigstore
 	switch {
 	case !keyless && e.Format == Format6:
-		return fmt.Sprintf("%s is the keyless format; its keyid must be %q, not %q", Format6, KeyIDSigstore, e.KeyID), ""
+		return fmt.Sprintf("%s is the keyless format; its keyid must be %q, not %q", Format6, KeyIDSigstore, e.KeyID), "", false
 	case !keyless && len(e.Sigstore) > 0:
-		return fmt.Sprintf("carries a sigstore bundle but is not a keyless entry (keyid %q)", e.KeyID), ""
+		return fmt.Sprintf("carries a sigstore bundle but is not a keyless entry (keyid %q)", e.KeyID), "", false
 	case !keyless:
-		return "", ""
+		return "", "", false
 	case integrityOnly:
 		// VerifyIntegrity: no signature is checked; the shape rules are.
-		return keylessShapeProblem(e), ""
+		return keylessShapeProblem(e), "", false
 	case t.Repo == "":
 		// First, before any other check: the operator must name what to
 		// expect, and saying so is the most useful thing to read.
-		return ProblemNoLedgerRepo, ""
+		return ProblemNoLedgerRepo, "", false
 	}
 	if p := keylessShapeProblem(e); p != "" {
-		return p, ""
+		return p, "", false
 	}
 	art, err := KeylessArtifact(e)
 	if err != nil {
-		return "keyless entry: " + err.Error(), ""
+		return "keyless entry: " + err.Error(), "", false
 	}
+	checked = t.SigstoreRoot != nil
 	if err := VerifyKeylessSignature(e.Sigstore, art, t.Repo, t.SigstoreRoot); err != nil {
-		return "keyless entry: " + err.Error(), ""
+		return "keyless entry: " + err.Error(), "", checked
 	}
-	return "", githubURL(t.Repo)
+	return "", githubURL(t.Repo), true
 }
 
 // keylessShapeProblem is the part of a keyless entry's check that needs no

@@ -30,7 +30,7 @@ func buildOK(entries []auditpush.LedgerEntry) Site {
 		entries[i].File = entries[i].Hash + ".json.gz"
 		checks = append(checks, okCheck(entries[i]))
 	}
-	return Build(entries, checks, true)
+	return Build(entries, checks)
 }
 
 func TestTheIndexShowsTheNewestAndPagesTheRest(t *testing.T) {
@@ -98,7 +98,7 @@ func TestTheChainListsEveryKindWithItsNote(t *testing.T) {
 }
 
 func TestAnEmptyLedgerRendersAndSaysItIsEmpty(t *testing.T) {
-	s := Build(nil, nil, false)
+	s := Build(nil, nil)
 	p, _ := NewPages()
 	var b bytes.Buffer
 	if err := p.Render(&b, s, "index.html"); err != nil {
@@ -152,7 +152,7 @@ func TestAChainRowNamesItsProblemOnce(t *testing.T) {
 	e.File = e.Hash + ".json.gz"
 	c := okCheck(e)
 	c.HashOK, c.Problem = false, "hash does not match the entry's bytes"
-	s := Build([]auditpush.LedgerEntry{e}, []auditpush.ChainCheck{c}, true)
+	s := Build([]auditpush.LedgerEntry{e}, []auditpush.ChainCheck{c})
 	p, _ := NewPages()
 	var b bytes.Buffer
 	if err := p.Render(&b, s, "chain-1.html"); err != nil {
@@ -183,4 +183,41 @@ func contains(xs []string, x string) bool {
 		}
 	}
 	return false
+}
+
+// Whether a signature was checked is a fact of each entry, not of the page:
+// a keyless entry is checked against its repository with no root key at
+// all, and must read as verified; an ed25519 entry beside it, with no root
+// key given, is the only thing the banner may call unchecked.
+func TestAKeylessEntryCheckedWithoutARootKeyReadsVerified(t *testing.T) {
+	k := reviewEntry("aaaaaaaaaaaa", 0)
+	k.File = k.Hash + ".json.gz"
+	kc := okCheck(k)
+	kc.Keyless, kc.KeyID, kc.Signer = true, "sigstore", "https://github.com/acme/widgets"
+	render := func(s Site, path string) string {
+		p, _ := NewPages()
+		var b bytes.Buffer
+		if err := p.Render(&b, s, path); err != nil {
+			t.Fatal(err)
+		}
+		return b.String()
+	}
+	s := Build([]auditpush.LedgerEntry{k}, []auditpush.ChainCheck{kc})
+	chain, idx := render(s, "chain-1.html"), render(s, "index.html")
+	if strings.Contains(chain, "signed, not checked") || !strings.Contains(chain, `chip ok">verified`) {
+		t.Errorf("a verified keyless entry is not shown verified on the chain page:\n%s", chain)
+	}
+	if strings.Contains(idx, "not checked") || !strings.Contains(idx, "1/1 verified") {
+		t.Errorf("the banner does not say the one keyless signature was verified:\n%s", idx)
+	}
+
+	e := reviewEntry("bbbbbbbbbbbb", 1)
+	e.File = e.Hash + ".json.gz"
+	ec := okCheck(e)
+	ec.SigOK, ec.SigChecked = false, false
+	s = Build([]auditpush.LedgerEntry{k, e}, []auditpush.ChainCheck{kc, ec})
+	idx = render(s, "index.html")
+	if !strings.Contains(idx, "no root key given: 1 ed25519 signature not checked") || !strings.Contains(idx, "1/2 verified") {
+		t.Errorf("a mixed page must name the unchecked ed25519 signature and count the verified keyless one:\n%s", idx)
+	}
 }

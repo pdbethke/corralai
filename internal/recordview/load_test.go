@@ -28,8 +28,8 @@ func TestLoadReadsVerifiesAndPairs(t *testing.T) {
 	if !s.HasLedger || s.LedgerEntries != 2 || len(s.Chain) != 2 || s.ChainProblems != 0 {
 		t.Fatalf("got HasLedger=%v entries=%d chain=%d problems=%d", s.HasLedger, s.LedgerEntries, len(s.Chain), s.ChainProblems)
 	}
-	if s.SigsChecked {
-		t.Fatal("no key was given, so signatures were not checked")
+	if s.SigsTotal != 0 || s.SigsUnchecked != 0 {
+		t.Fatalf("unsigned entries: SigsTotal=%d SigsUnchecked=%d, want 0 and 0", s.SigsTotal, s.SigsUnchecked)
 	}
 }
 

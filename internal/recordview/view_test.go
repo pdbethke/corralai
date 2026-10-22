@@ -18,7 +18,7 @@ import (
 func TestTheVerifyCommandCarriesThePublishedKey(t *testing.T) {
 	const key = "909429443700441a9f662c07c5f1b7110333fd7fb94fb21e8991e40f2cb6dc09"
 	out := t.TempDir()
-	if err := WriteStatic(out, Site{HasLedger: true, Generated: time.Unix(0, 0), LedgerEntries: 7, SigsChecked: true, PubKeyHex: key}); err != nil {
+	if err := WriteStatic(out, Site{HasLedger: true, Generated: time.Unix(0, 0), LedgerEntries: 7, PubKeyHex: key}); err != nil {
 		t.Fatal(err)
 	}
 	page := read(t, filepath.Join(out, "index.html"))
@@ -31,17 +31,17 @@ func TestTheVerifyCommandCarriesThePublishedKey(t *testing.T) {
 }
 
 // TestWithoutAKeyThePageSaysSo: rendered without a key, the page must not
-// invent one and must keep saying signatures were not checked.
+// invent one and must keep saying the ed25519 signatures were not checked.
 func TestWithoutAKeyThePageSaysSo(t *testing.T) {
 	out := t.TempDir()
-	if err := WriteStatic(out, Site{HasLedger: true, Generated: time.Unix(0, 0), LedgerEntries: 7}); err != nil {
+	if err := WriteStatic(out, Site{HasLedger: true, Generated: time.Unix(0, 0), LedgerEntries: 7, SigsTotal: 7, SigsUnchecked: 7, SigsUncheckedKey: 7}); err != nil {
 		t.Fatal(err)
 	}
 	page := read(t, filepath.Join(out, "index.html"))
 	if strings.Contains(page, "--pub ") && !strings.Contains(page, "--pub &lt;hex&gt;") {
 		t.Fatalf("a page rendered without a key printed one")
 	}
-	if !strings.Contains(page, "not checked") {
+	if !strings.Contains(page, "no root key given: 7 ed25519 signatures not checked") {
 		t.Fatalf("a page rendered without a key must say signatures were not checked")
 	}
 }

@@ -745,3 +745,45 @@ func TestVerifyKeylessSignature(t *testing.T) {
 		t.Fatalf("no root: %v", err)
 	}
 }
+
+// SigChecked is the one per-entry fact every reader asks "was this
+// signature checked?" of, so a page never decides it from whether a root key
+// was given: a keyless entry is checked by the repository, an ed25519 entry
+// by the key, and each says so for itself.
+func TestSigCheckedIsPerEntry(t *testing.T) {
+	s := newTestSigstore(t)
+	rootKey := key(0x47)
+	pub := rootKey.Public().(ed25519.PublicKey)
+	dir := t.TempDir()
+	scan(t, dir, 1, signerFor(rootKey))
+	entries := readBytes(t, dir)
+	k := s.keylessEntry(t, entries[0].Hash, 2, spec{})
+	entries = append(entries, k)
+	bad := s.keylessEntry(t, "", 3, spec{})
+
+	cases := []struct {
+		name    string
+		entries []ledger.Entry
+		trust   ledger.Trust
+		want    []bool
+	}{
+		{"repo, no root key: keyless checked, ed25519 not", entries, ledger.Trust{Repo: testRepo, SigstoreRoot: s.ledgerRoot(t)}, []bool{false, true}},
+		{"both", entries, ledger.Trust{RootPub: pub, Repo: testRepo, SigstoreRoot: s.ledgerRoot(t)}, []bool{true, true}},
+		{"root key, no repo: ed25519 checked, keyless not", entries, ledger.Trust{RootPub: pub}, []bool{true, false}},
+		{"keyless checked and FAILED is still checked", []ledger.Entry{bad}, ledger.Trust{Repo: "acme/other", SigstoreRoot: s.ledgerRoot(t)}, []bool{true}},
+		{"no Sigstore root: not checked", []ledger.Entry{bad}, ledger.Trust{Repo: testRepo}, []bool{false}},
+	}
+	for _, c := range cases {
+		checks := ledger.Verify(c.entries, c.trust)
+		for i, w := range c.want {
+			if checks[i].SigChecked != w {
+				t.Errorf("%s: entry %d SigChecked=%v, want %v (%+v)", c.name, i, checks[i].SigChecked, w, checks[i])
+			}
+		}
+	}
+	for _, c := range ledger.VerifyIntegrity(entries) {
+		if c.SigChecked {
+			t.Errorf("VerifyIntegrity checks no signature: %+v", c)
+		}
+	}
+}

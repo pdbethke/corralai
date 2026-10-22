@@ -84,7 +84,21 @@ func main() {
 
 	fmt.Printf("entries read:      %d\n", len(entries))
 	fmt.Printf("chain checks:      %d\n", len(checks))
-	fmt.Printf("signatures:        %s\n", map[bool]string{true: "checked against the explicit key", false: "NOT CHECKED (no -pubkey, no CORRALAI_LEDGER_PUBKEY)"}[pub != nil])
+	// Counted per entry from the check itself, as the page does: a keyless
+	// entry is checked against -repo with no key at all.
+	signed, checked, ok := 0, 0, 0
+	for _, c := range checks {
+		if c.Signed {
+			signed++
+		}
+		if c.SigChecked {
+			checked++
+		}
+		if c.SigOK {
+			ok++
+		}
+	}
+	fmt.Printf("signatures:        %d signed, %d checked, %d verified; %d NOT CHECKED (an ed25519 one needs -pubkey or CORRALAI_LEDGER_PUBKEY, a keyless one -repo)\n", signed, checked, ok, signed-checked)
 
 	live := auditpush.LiveEntries(entries)
 	retracted := auditpush.Retracted(entries)

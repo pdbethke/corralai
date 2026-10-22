@@ -46,25 +46,15 @@ type ChainCheck struct {
 	Note string
 }
 
-// Verify walks the chain: every entry's hash against its bytes,
-// every Prev against its predecessor, every signature against the key the
-// chain held for its keyid at that point (when pub, the ROOT key, is
-// given). It never stops at the first failure — a reader wants the whole
-// picture — and it never calls an unsigned entry verified.
-//
-// Until corral-ledger-5 every signature was checked against pub alone: one
-// key for the whole ledger, and keyid a label. Now pub is the root, and the
-// root's signer entries say which other keys may sign from where on, so a
-// second machine signs under its own key instead of holding a copy of the
-// root's. A key is good only between its registration and its revocation;
-// an entry it signed outside that window is a Problem, whatever its
-// signature says.
-
 // Verify walks the chain in the order given: every entry's hash against its
 // bytes, every Prev against its predecessor, every signature against the key
 // the chain held for its keyid at that point (when t.RootPub, the ROOT key,
 // is given). It never stops at the first failure — a reader wants the whole
 // picture — and it never calls an unsigned entry verified.
+//
+// Entries must be in chain order, oldest first, each Prev naming its
+// predecessor: Verify does not reorder, and a misordered slice is reported as
+// broken links.
 //
 // It takes entries, not a directory, because the browser reads a ledger as
 // bytes and the CLI reads it from disk and both must run THIS walk.

@@ -16,7 +16,7 @@ test('the homepage distinguishes variable discovery from a recorded proof', asyn
 
 test('the mutation guide explains assumptions, related work and bundle limits', async ({ page }) => {
   await page.goto('/docs/concepts/mutation-testing/');
-  const article = page.locator('.sl-markdown-content');
+  const article = page.locator('article.docs-article');
   await expect(article).toContainText('independent observations from a representative sample');
   await expect(article).toContainText('not a probability that your code is correct');
   await expect(article).toContainText('authored_together');

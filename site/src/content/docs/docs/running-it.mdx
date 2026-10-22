@@ -6,9 +6,12 @@ description: What an audit run prints, keeps and reuses, how dependencies reach 
 {/* SPDX-License-Identifier: Elastic-2.0 */}
 {/* Source: cmd/corral/main.go env doc block (via cross-link); deploy/demo/README.md, deploy/demo/Makefile */}
 
-:::note[Two kinds of section on this page]
+<aside class="callout callout-note">
+<p class="callout-title">Two kinds of section on this page</p>
+
 The scorecard, the matrix, verdict reuse, the progress echo and dependency binding are about an ordinary audit. Everything else here — dev mode, the demo compose stack, the verify gate and deploying behind a tunnel — describes the **brain**, corral's optional coordination daemon, which is frozen. Nothing in those sections is required for a verdict: `corral certify --local` and `--repo`, `corral review`, the GitHub Action, `verify`, `ui`, `seal` and `scans` never contact a brain. And nothing in the daemon is read by an audit — an audit's prompts are built from the goal, the code and its symbols, never from the daemon's shared memory or skills. See [the brain, and what it is not](https://github.com/pdbethke/corralai/blob/main/docs/corral/brain.md).
-:::
+
+</aside>
 
 ## Dev mode vs auth-on (the brain)
 

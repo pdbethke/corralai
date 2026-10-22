@@ -14,11 +14,14 @@ line, because corral has no default models — and by a handful of environment
 variables for keys, the sandbox, signing and where files live. There is no
 config file to hand-edit. Everything below is optional except the seats.
 
-:::note
+<aside class="callout callout-note">
+<p class="callout-title">Note</p>
+
 The **complete, always-current list** of variables is generated straight from
 the binary's own source comment — see [the `corral` CLI reference](/docs/cli/corral/).
 This page is the guided tour of the ones you reach for.
-:::
+
+</aside>
 
 ## Seats and provider keys
 
@@ -149,11 +152,14 @@ old directory in place instead, set `CORRALAI_STATE_DIR` to it.
 
 ## The optional daemon
 
-:::note[Frozen, and not read by any audit]
+<aside class="callout callout-note">
+<p class="callout-title">Frozen, and not read by any audit</p>
+
 Everything from here down configures the **brain** (`corral-wrangler serve`; `corral` with no verb
 only points there), corral's optional coordination daemon. It is frozen, and no
 audit needs or reads it. See [Running it](/docs/running-it/).
-:::
+
+</aside>
 
 The daemon is configured entirely through environment variables; with none set,
 it boots in dev mode (auth off) against defaults under the state directory.
@@ -166,11 +172,14 @@ it boots in dev mode (auth off) against defaults under the state directory.
 | `CORRALAI_MEMORY_DIR` | Where memory entries are written and indexed (markdown files) | `$STATE/memory` |
 | `CORRALAI_RECORDINGS_DB` | Recordings DuckDB for scrubbed replay exports | `$STATE/corralai_recordings.duckdb` |
 
-:::caution
+<aside class="callout callout-caution">
+<p class="callout-title">Caution</p>
+
 `CORRALAI_MEMORY_DIR` is the one directory memory is both **written** to and
 **indexed** from. Keep a demo or test brain pointed at a scratch directory (or a
 scratch `CORRALAI_STATE_DIR`) so it never picks up a personal memory corpus.
-:::
+
+</aside>
 
 ### Reliability & stall detection
 

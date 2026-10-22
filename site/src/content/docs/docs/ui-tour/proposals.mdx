@@ -3,9 +3,12 @@ title: Proposals
 description: The tab where the herd's proposed tests — and the learning loop's proposed lessons — wait for review.
 ---
 
-:::note[The optional daemon — frozen, and not read by any audit]
+<aside class="callout callout-note">
+<p class="callout-title">The optional daemon — frozen, and not read by any audit</p>
+
 This page describes the **brain**, corral's optional coordination daemon. It is frozen: shipped and supported, but no longer developed and not on the path an audit takes. Nothing on it is required for a verdict: `corral certify --local` and `--repo`, `corral review`, the GitHub Action, `verify`, `ui`, `seal` and `scans` never contact a brain. And nothing on it is read by an audit — an audit's prompts are built from the goal, the code and its symbols, never from the daemon's shared memory or skills. See [the brain, and what it is not](https://github.com/pdbethke/corralai/blob/main/docs/corral/brain.md).
-:::
+
+</aside>
 
 The Proposals tab's main job is the test-writer's handiwork: the real
 proposed test, reconstructed from the run's own tape, that the herd authored

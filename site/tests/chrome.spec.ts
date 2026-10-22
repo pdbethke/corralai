@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Elastic-2.0
 import { test, expect } from '@playwright/test';
 
-// The site chrome added for launch: a sticky header with the logo + primary
-// nav on the hand-authored pages, and a matching logo in the /docs header.
+// The site chrome: one sticky header with the logo + primary nav on every
+// page, /docs included.
 // These are light render/behavior checks — the heavier a11y/network invariants
 // live in site.spec.ts / docs.spec.ts and already cover the whole page.
 
@@ -166,7 +166,7 @@ test('the recordings page carries the same site header', async ({ page }) => {
 
 test('the docs header shows the CorralAI logo linking back to the site home', async ({ page }) => {
   await page.goto('/docs/getting-started/');
-  const title = page.locator('a.docs-site-title');
+  const title = page.locator('header.site-header a.sh-brand');
   await expect(title).toBeVisible();
   await expect(title).toHaveAttribute('href', '/');
   await expect(title).toContainText('CorralAI');
@@ -184,33 +184,37 @@ test('the launch docs pages render (configuration, MCP tools, limitations)', asy
     await expect(h1, `${url} must have exactly one <h1>`).toHaveCount(1);
     await expect(h1).toContainText(heading);
     // reachable from the sidebar
-    await expect(page.getByRole('navigation', { name: 'Main' })).toBeAttached();
+    await expect(page.getByRole('navigation', { name: 'Docs' })).toBeAttached();
   }
 });
 
-// /docs is Starlight, so it cannot use Header.astro, but its header draws the
-// same SiteNav and StarLink: same links in the same order, the same pill
-// colors, Docs current instead of Home.
-test('the docs header draws the same nav and Star as the site header', async ({ page }) => {
+// /docs draws Header.astro itself (until 2026-10-22 it was Starlight's header
+// made to look like it): the same header as the home page in every computed
+// detail that matters, with Docs current instead of Home.
+test('the docs header is the site header', async ({ page }) => {
   await page.setViewportSize({ width: 1400, height: 800 });
-  const read = async (path: string, scope: string) => {
+  const read = async (path: string) => {
     await page.goto(path);
-    return page.locator(scope).evaluate((el) => {
+    return page.locator('header.site-header').evaluate((el) => {
       const css = (e: Element, p: string) => getComputedStyle(e).getPropertyValue(p);
       const link = el.querySelector('nav.sh-nav a:not([aria-current])')!;
       const cur = el.querySelector('nav.sh-nav a[aria-current="page"]')!;
       return {
         links: [...el.querySelectorAll('nav.sh-nav a')].map((a) => [a.textContent, a.getAttribute('href')]),
         current: cur.textContent,
+        bar: [css(el, 'background-color'), css(el, 'position'), css(el, 'height')],
         link: [css(link, 'color'), css(link, 'font-size'), css(link, 'font-weight'), css(link, 'padding')],
         pill: [css(cur, 'color'), css(cur, 'background-color')],
         star: el.querySelector('a.sh-star')?.getAttribute('href'),
+        search: !!el.querySelector('[data-site-search-open]'),
+        theme: !!el.querySelector('[data-site-theme-toggle]'),
       };
     });
   };
-  const site = await read('/', 'header.site-header');
-  const docs = await read('/docs/getting-started/', 'header.header');
+  const site = await read('/');
+  const docs = await read('/docs/getting-started/');
   expect(site.current).toBe('Home');
   expect(docs.current).toBe('Docs');
+  expect(docs.search && docs.theme).toBe(true);
   expect({ ...docs, current: '' }).toEqual({ ...site, current: '' });
 });

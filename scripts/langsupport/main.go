@@ -17,7 +17,7 @@ import (
 )
 
 func main() {
-	site := flag.Bool("site", false, "prefix Starlight frontmatter for the site's copy")
+	site := flag.Bool("site", false, "prefix the docs frontmatter for the site's copy")
 	flag.Parse()
 	if _, err := os.Stdout.WriteString(render(*site)); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -25,7 +25,7 @@ func main() {
 	}
 }
 
-// render is the page: the site's copy carries Starlight frontmatter in place
+// render is the page: the site's copy carries docs frontmatter in place
 // of the repo copy's heading.
 func render(site bool) string {
 	var b strings.Builder

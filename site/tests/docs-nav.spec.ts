@@ -80,3 +80,19 @@ test('a record page carries only the chrome\'s own CSS from the home page', asyn
   expect(heroScope, 'the hero has a scope attribute to look for').toBeTruthy();
   expect(html).not.toContain(heroScope!);
 });
+
+for (const theme of ['light', 'dark']) {
+  test(`${theme}: a record page is on the same background as the rest of the site`, async ({ page }) => {
+    // The record pages keep their own palette (white cards); ledger-chrome
+    // gives them the site's --bg so they are not a lighter sheet among the
+    // site's cream ones.
+    await page.addInitScript((t) => localStorage.setItem('corralai-site-theme', t), theme);
+    const bg = async (path: string) => {
+      await page.goto(path);
+      return page.evaluate(() => getComputedStyle(document.body).backgroundColor);
+    };
+    const home = await bg('/');
+    expect(await bg('/ledger/')).toBe(home);
+    expect(await bg(`/ledger/entry/${entry}`)).toBe(home);
+  });
+}

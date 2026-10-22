@@ -62,23 +62,35 @@ export function splitBlocks(css) {
 
 // headerRules keeps the rules whose selector carries one of the header's
 // scoped classes, inside @media blocks too, plus the --stage-* palette the
-// header is drawn in (declared on :root in global.css).
+// header is drawn in (declared on :root in tokens.css), and the site's page
+// background, light and dark. The record pages keep their own palette for
+// everything else (their cards stay white); only the ground under them is
+// the site's, so a record page is not a lighter sheet among cream ones.
+// Both palettes call the background --bg, and the chrome comes after the
+// record page's own <style>, so the site's value wins.
 export function headerRules(css, scopes) {
   // scopes: strings any one of which in a selector makes the rule the chrome's
   const out = [];
   const stage = [];
+  const bg = {};
+  const decls = (body) => body.split(';').map((d) => d.trim());
   for (const { prelude, body } of splitBlocks(css)) {
+    const sel = prelude.replace(/["']/g, '');
     if (prelude.startsWith('@media') || prelude.startsWith('@supports')) {
       const inner = headerRules(body, scopes).rules;
       if (inner) out.push(`${prelude}{${inner}}`);
-    } else if (prelude === ':root') {
-      for (const decl of body.split(';')) if (decl.trim().startsWith('--stage-')) stage.push(decl.trim());
+    } else if (sel === ':root' || sel === ':root[data-theme=dark]') {
+      for (const d of decls(body)) {
+        if (sel === ':root' && d.startsWith('--stage-')) stage.push(d);
+        if (d.startsWith('--bg:')) bg[sel] = d;
+      }
     } else if (scopes.some((s) => prelude.includes(s))) {
       out.push(`${prelude}{${body}}`);
     }
   }
+  for (const sel of [':root[data-theme=dark]', ':root']) if (bg[sel]) out.unshift(`${sel}{${bg[sel]}}`);
   if (stage.length) out.unshift(`:root{${stage.join(';')}}`);
-  return { rules: out.join(''), stage: stage.length };
+  return { rules: out.join(''), stage: stage.length, bg: Object.keys(bg).length };
 }
 
 // chromeFrom pulls the header, its CSS and its scripts out of a built page.
@@ -94,15 +106,17 @@ export function chromeFrom(html, readCss) {
   if (!controls) throw new Error('ledger-chrome: no site-controls.js on the home page');
   const hrefs = [...html.matchAll(/<link rel="stylesheet" href="([^"]+)"/g)].map((m) => m[1]);
   const inline = [...html.matchAll(/<style>([\s\S]*?)<\/style>/g)].map((m) => m[1]);
-  let css = '', stage = 0;
+  let css = '', stage = 0, bg = 0;
   for (const sheet of [...hrefs.map(readCss), ...inline]) {
     const got = headerRules(sheet, [...scopes, '.site-side']);
     css += got.rules;
     stage += got.stage;
+    bg += got.bg;
   }
   if (!scopes.every((s) => css.includes(s))) throw new Error(`ledger-chrome: no CSS found for ${scopes.filter((s) => !css.includes(s)).join(', ')}`);
   if (!css.includes('body:has(.site-side)')) throw new Error('ledger-chrome: no rule moves the page over for the docs nav');
   if (!stage) throw new Error('ledger-chrome: no --stage-* palette found for the header');
+  if (bg < 2) throw new Error('ledger-chrome: the site\'s --bg, light and dark, was not found for the record pages');
   // Copied from the home page, the header marks Home as current; on a record
   // page the Ledger link is the current one.
   const marked = header

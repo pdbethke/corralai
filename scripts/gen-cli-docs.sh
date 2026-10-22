@@ -6,8 +6,8 @@
 # some binaries print usage to one, some to the other, and the docs must not
 # silently miss whichever a given binary picked), pulls the env-var doc-
 # comment block out of its main.go header, and emits markdown for each into
-# BOTH docs/cli/ (repo) and site/src/content/docs/docs/cli/ (Starlight tree —
-# the collection-root "docs" nesting Task 3 uses for every /docs/... page).
+# BOTH docs/cli/ (repo) and site/src/content/docs/docs/cli/ (the site's docs
+# collection, where every /docs/... page lives under a "docs" folder).
 #
 # --check: regenerate into a scratch dir and diff against the committed
 # files instead of overwriting them; exits 1 with the diff on any drift.

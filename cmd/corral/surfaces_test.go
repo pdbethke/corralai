@@ -320,7 +320,7 @@ func userFacingProse(t *testing.T) map[string]string {
 		}
 		// ONLY THE FILES THE GENERATOR EMITS are exempt — one per binary in
 		// cmd/, named for it. `docs/cli/overview.md` sits beside them, is
-		// hand-written, is published by Starlight, and advertised an
+		// hand-written, is published on the site, and advertised an
 		// unexecuted flag with every gate green because a directory prefix
 		// exempted the whole folder. The exemption is derived from cmd/, as
 		// the generator's own file list is.

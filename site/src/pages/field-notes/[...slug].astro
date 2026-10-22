@@ -57,7 +57,7 @@ const title = `${note.data.title} — Corralai field notes`;
         <time datetime={d.toISOString()}>{dateStr}</time>
         <h1>{note.data.title}</h1>
       </header>
-      <div class="note-body">
+      <div class="note-body prose">
         <Content />
       </div>
     </article>
@@ -75,34 +75,4 @@ const title = `${note.data.title} — Corralai field notes`;
   .note-head { margin-bottom: 32px; }
   .note-head time { display: block; font-size: 13px; color: var(--muted); margin-bottom: 12px; }
   .note-head h1 { font-size: clamp(28px, 5vw, 42px); line-height: 1.12; margin: 0; color: var(--fg); }
-
-  /* Prose. Tokens only (theme-aware); links amber, rules and code panels use the
-     muted line color so the note reads as one system with the rest of the site. */
-  .note-body { color: var(--fg); font-size: 17px; line-height: 1.7; }
-  .note-body :global(h2) { font-size: 24px; line-height: 1.25; margin: 40px 0 14px; color: var(--fg); }
-  .note-body :global(h3) { font-size: 19px; margin: 30px 0 10px; color: var(--fg); }
-  .note-body :global(p) { margin: 0 0 18px; }
-  .note-body :global(ul), .note-body :global(ol) { margin: 0 0 18px; padding-left: 1.3em; }
-  .note-body :global(li) { margin: 0 0 8px; }
-  .note-body :global(a) { color: var(--amber); text-underline-offset: 2px; }
-  .note-body :global(strong) { color: var(--fg); font-weight: 700; }
-  .note-body :global(em) { font-style: italic; }
-  .note-body :global(hr) {
-    border: 0;
-    border-top: 1px solid color-mix(in srgb, var(--muted) 30%, transparent);
-    margin: 34px 0;
-  }
-  .note-body :global(code) {
-    font-family: ui-monospace, SFMono-Regular, Menlo, "Cascadia Code", monospace;
-    font-size: 0.88em;
-    background: color-mix(in srgb, var(--muted) 16%, transparent);
-    padding: 0.12em 0.36em;
-    border-radius: 5px;
-  }
-  .note-body :global(blockquote) {
-    margin: 0 0 18px;
-    padding: 4px 0 4px 18px;
-    border-left: 3px solid var(--amber);
-    color: var(--muted);
-  }
 </style>

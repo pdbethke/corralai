@@ -444,7 +444,7 @@ standard.
 - `internal/adequacy/` — scoring, the bwrap jail, the workspace runner
 - `internal/sandbox/` — the isolation boundary and bind construction
 - `internal/lang/` — language plugins
-- `site/` — the Astro/Starlight site (`npm run build` in `site/`)
+- `site/` — the Astro site (docs included, under `src/pages/docs`) (`npm run build` in `site/`)
 - `docs/corral/` — the public knowledge corpus that ships to users
 - `docs/reviews/` — dated project reviews and their finding-status index. For
   periodic reviews, start with the index, keep finding IDs stable, and append

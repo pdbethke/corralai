@@ -1,8 +1,8 @@
 /* SPDX-License-Identifier: Elastic-2.0 */
 /* The palette (light, dark and the always-dark --stage-* header/cockpit
-   family) lives in tokens.css, which the docs load too (astro.config
-   customCss), so /docs draws from the same values instead of copies. */
+   family) lives in tokens.css; long-form text (field notes, docs) in prose.css. */
 @import './tokens.css';
+@import './prose.css';
 
 /* Cockpit SKINS — visual palettes for the replay instrument, switched from the
    cockpit HUD's #skinsel (replay-player.js setSkin() sets data-skin on <html>).

@@ -1,0 +1,89 @@
+---
+// SPDX-License-Identifier: Elastic-2.0
+// The docs sidebar, drawn from src/data/docs-sidebar.mjs. Groups are
+// <details> so they open and close without a script; a collapsed group opens
+// when it holds the current page. Under 900px the whole list folds into one
+// "Docs menu" disclosure above the article (the <details> below is forced
+// open on wider screens by CSS, and its summary hidden).
+import { DOCS_SIDEBAR, docsHref } from '../data/docs-sidebar.mjs';
+interface Props {
+  /** href of the page being drawn */
+  current: string;
+}
+const { current } = Astro.props;
+type Item = { label: string; slug?: string; items?: Item[]; collapsed?: boolean };
+const holds = (i: Item): boolean =>
+  i.slug ? docsHref(i.slug) === current : (i.items ?? []).some(holds);
+---
+<details class="docs-side" open data-pagefind-ignore="all">
+  <summary>Docs menu</summary>
+  <nav aria-label="Docs">
+    <ul>
+      {(function list(items: Item[]): any {
+        return items.map((i) =>
+          i.items ? (
+            <li>
+              <details open={!i.collapsed || holds(i)}>
+                <summary>{i.label}</summary>
+                <ul>{list(i.items)}</ul>
+              </details>
+            </li>
+          ) : (
+            <li>
+              <a href={docsHref(i.slug!)} aria-current={docsHref(i.slug!) === current ? 'page' : undefined}>{i.label}</a>
+            </li>
+          )
+        );
+      })(DOCS_SIDEBAR)}
+    </ul>
+  </nav>
+</details>
+
+<style>
+  .docs-side { font-size: 14px; }
+  .docs-side > summary { display: none; }
+  .docs-side nav {
+    position: sticky;
+    top: 60px;
+    max-height: calc(100vh - 60px);
+    overflow-y: auto;
+    padding: 32px 8px 32px 0;
+  }
+  .docs-side ul { list-style: none; margin: 0; padding: 0; }
+  .docs-side ul ul { padding-left: 12px; border-left: 1px solid var(--line); margin: 2px 0 6px 4px; }
+  .docs-side li { margin: 0; }
+  .docs-side a {
+    display: block;
+    padding: 4px 8px;
+    border-radius: 6px;
+    color: var(--fg);
+    text-decoration: none;
+    line-height: 1.4;
+  }
+  .docs-side a:hover { background: var(--panel); }
+  .docs-side a[aria-current='page'] { background: var(--sel); color: var(--amber); font-weight: 600; }
+  .docs-side details > summary {
+    cursor: pointer;
+    padding: 6px 8px 4px;
+    font-weight: 700;
+    color: var(--fg);
+    line-height: 1.35;
+  }
+
+  @media (max-width: 899px) {
+    .docs-side { margin: 16px 0 0; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+    .docs-side:not([open]) nav { display: none; }
+    .docs-side > summary { display: block; padding: 10px 14px; font-weight: 700; cursor: pointer; }
+    .docs-side nav { position: static; max-height: none; padding: 0 10px 12px; }
+  }
+</style>
+
+<script is:inline>
+  // Folded by default on a narrow screen; the markup ships open so the full
+  // list is there without a script and on wide screens.
+  (function () {
+    var d = document.currentScript && document.currentScript.previousElementSibling;
+    while (d && !(d.classList && d.classList.contains('docs-side'))) d = d.previousElementSibling;
+    if (d && window.matchMedia('(max-width: 899px)').matches) d.removeAttribute('open');
+  })();
+</script>

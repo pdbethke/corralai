@@ -5,7 +5,7 @@
 # page from the runner table and the parity list the code dispatches on
 # (internal/lang/runner.go, internal/lang/parity.go), into BOTH
 # docs/corral/language-support.md (repo) and
-# site/src/content/docs/docs/language-support.md (Starlight).
+# site/src/content/docs/docs/language-support.md (the site's docs).
 #
 # Why generated: a support matrix written by hand claims what someone
 # believed when they wrote it. This one is the table corral reads when it

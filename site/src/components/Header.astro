@@ -2,12 +2,18 @@
 // SPDX-License-Identifier: Elastic-2.0
 // The site header: a sticky, always-dark "corral" bar (the --stage-* palette,
 // same instrument tone as the cockpit viewport) carrying the CorralAI logo,
-// primary nav, a GitHub star CTA, and the light/dark toggle. It supersedes the
-// standalone floating ThemeToggle on the hand-authored pages (/, /recordings)
-// — the toggle now lives here, wired to the same 'corralai-site-theme' key the
-// per-page no-flash <head> script reads. /docs uses Starlight's own chrome
-// (with a matching logo via the SiteTitle override), so this component is for
-// the marketing pages only.
+// primary nav, site search, a GitHub star CTA, and the light/dark toggle,
+// wired to the same 'corralai-site-theme' key the per-page no-flash <head>
+// script reads. Every page draws it: the site pages,
+// /docs (src/pages/docs), and the Go-rendered /ledger/ pages, which get a copy
+// of it after the build (integrations/ledger-chrome.mjs).
+//
+// Search covers the whole site. The index is Pagefind's, built from dist after
+// the build (integrations/pagefind.mjs) and served from /pagefind/, so a search
+// never leaves corralai.dev. public/site-controls.js wires the button and the
+// dialog and loads Pagefind's UI on first open; it is a public script rather
+// than a component script because the /ledger/ copy carries it and not Astro's
+// bundle. The header is data-pagefind-ignore so its links are not results.
 interface Props {
   /** which primary nav item is the current page */
   active?: 'home' | 'docs' | 'recordings' | 'warehouse' | 'notes';
@@ -17,19 +23,32 @@ import Logo from './Logo.astro';
 import SiteNav from './SiteNav.astro';
 import StarLink from './StarLink.astro';
 ---
-<header class="site-header">
+<header class="site-header" data-pagefind-ignore="all">
   <div class="sh-inner">
     <a class="sh-brand" href="/" aria-label="Corralai — home">
       <Logo size={24} />
     </a>
     <SiteNav active={active} class="sh-nav-place" />
     <div class="sh-right">
+      <button class="sh-search" type="button" data-site-search-open aria-haspopup="dialog" aria-label="Search the site" title="Search (/ or Ctrl+K)">
+        <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><path fill="currentColor" d="M10.68 11.74a6 6 0 1 1 1.06-1.06l3.04 3.04a.75.75 0 1 1-1.06 1.06zM11.5 7a4.5 4.5 0 1 0-9 0 4.5 4.5 0 0 0 9 0"/></svg>
+        <span class="sh-search-label">Search</span>
+      </button>
       <StarLink />
       <button id="sh-theme-toggle" class="sh-theme" type="button" data-site-theme-toggle aria-label="Toggle light / dark theme" title="Toggle light / dark">
         <span class="sh-tt-icon" aria-hidden="true">🌙</span>
       </button>
     </div>
   </div>
+  <dialog class="sh-search-dialog" data-site-search aria-label="Search">
+    <div class="sh-search-box">
+      <div class="sh-search-head">
+        <span>Search corralai.dev</span>
+        <button type="button" data-site-search-close aria-label="Close search">Esc</button>
+      </div>
+      <div id="site-search-ui" class="sh-search-ui"></div>
+    </div>
+  </dialog>
 </header>
 
 <style>
@@ -91,6 +110,75 @@ import StarLink from './StarLink.astro';
     transition: border-color 0.12s ease;
   }
   .sh-theme:hover { border-color: var(--stage-amber); }
+  .sh-search {
+    height: 34px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0 12px;
+    border-radius: 999px;
+    background: var(--stage-panel);
+    color: var(--stage-muted);
+    border: 1px solid var(--stage-line);
+    font: inherit;
+    font-size: 14px;
+    cursor: pointer;
+  }
+  .sh-search:hover { color: var(--stage-fg); border-color: var(--stage-amber); }
+  .sh-search-dialog {
+    width: min(720px, calc(100vw - 32px));
+    max-height: min(80vh, 760px);
+    margin: 64px auto auto;
+    padding: 0;
+    border: 1px solid var(--stage-line);
+    border-radius: 12px;
+    background: var(--stage-bg);
+    color: var(--stage-fg);
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.35);
+    /* The dark --stage-* palette, like the bar it opens from: the /ledger/
+       copy of this header brings --stage-* with it and none of the page
+       tokens. Pagefind's UI reads the --pagefind-ui-* properties. */
+    --pagefind-ui-primary: var(--stage-amber);
+    --pagefind-ui-text: var(--stage-fg);
+    --pagefind-ui-background: var(--stage-bg);
+    --pagefind-ui-border: var(--stage-line);
+    --pagefind-ui-tag: var(--stage-panel);
+    --pagefind-ui-font: inherit;
+  }
+  .sh-search-dialog::backdrop { background: rgba(10, 12, 16, 0.55); }
+  /* Pagefind leaves the input's text color and <mark> to the browser:
+     black text on the dark field, and a bright yellow highlight. */
+  .sh-search-ui :global(.pagefind-ui__search-input),
+  .sh-search-ui :global(.pagefind-ui__search-clear) { color: var(--stage-fg); }
+  .sh-search-ui :global(mark) {
+    background: color-mix(in srgb, var(--stage-amber) 30%, transparent);
+    color: var(--stage-fg);
+    border-radius: 3px;
+    padding: 0 2px;
+  }
+  .sh-search-box { padding: 14px 18px 18px; }
+  .sh-search-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 10px;
+    font-size: 13px;
+    color: var(--stage-muted);
+  }
+  .sh-search-head button {
+    font: inherit;
+    font-size: 12px;
+    padding: 2px 8px;
+    border-radius: 6px;
+    border: 1px solid var(--stage-line);
+    background: var(--stage-panel);
+    color: var(--stage-fg);
+    cursor: pointer;
+  }
+  @media (max-width: 900px) {
+    .sh-search { width: 34px; padding: 0; justify-content: center; }
+    .sh-search-label { display: none; }
+  }
   @media (max-width: 560px) {
     .sh-inner { flex-wrap: wrap; gap: 8px 12px; padding: 8px 14px; }
     .sh-nav-place { order: 3; width: 100%; margin-left: 0; justify-content: flex-start; }

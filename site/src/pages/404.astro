@@ -1,0 +1,27 @@
+---
+// SPDX-License-Identifier: Elastic-2.0
+// The not-found page, with the site's header (and so its search) on it.
+import '../styles/global.css';
+import Header from '../components/Header.astro';
+import SiteFooter from '../components/SiteFooter.astro';
+---
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <script is:inline>
+    (function () { try { var t = localStorage.getItem('corralai-site-theme') || 'light'; document.documentElement.setAttribute('data-theme', t); } catch (e) {} })();
+  </script>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <title>Page not found — Corralai</title>
+  <meta name="robots" content="noindex" />
+</head>
+<body>
+  <Header />
+  <main class="section" data-pagefind-ignore="all">
+    <h1>404</h1>
+    <p>That page doesn't exist. Try searching, the <a href="/docs/getting-started/">docs</a> or the <a href="/">site home</a>.</p>
+  </main>
+  <SiteFooter />
+</body>
+</html>

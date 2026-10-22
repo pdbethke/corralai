@@ -13,7 +13,7 @@ interface Props { exclude?: string; limit?: number }
 const { exclude, limit = 8 } = Astro.props;
 const notes = (await publishedNotes()).filter((n) => n.id !== exclude).slice(0, limit);
 ---
-<aside class="fn-rail" aria-labelledby="fn-rail-title">
+<aside class="fn-rail" data-pagefind-ignore="all" aria-labelledby="fn-rail-title">
   <h2 id="fn-rail-title">Field notes</h2>
   <ol>
     {notes.map((n) => (

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Elastic-2.0
-// Site chrome controls: theme toggle + replay speed, wired across the sticky
-// header (#sh-theme-toggle, #sh-replay-speed) and the cockpit replay bar
+// Site chrome controls: theme toggle, site search + replay speed, wired across
+// the sticky header (#sh-theme-toggle, #sh-replay-speed) and the cockpit replay bar
 // (#replay-theme-toggle, #replay-speed). All elements marked with
 // data-site-theme-toggle / data-replay-speed stay in sync and persist to
 // localStorage (corralai-site-theme, corralai-replay-speed).
@@ -78,6 +78,59 @@
       });
     });
   }
+  // Site search: the header's button opens its <dialog>, and Pagefind's UI
+  // (/pagefind/, written next to the built site) is loaded on the first open,
+  // so a page that is never searched never fetches it. / and Ctrl/Cmd+K open
+  // it too. Under `astro dev` there is no index; the dialog says so.
+  var searchUI = null;
+  function openSearch() {
+    var dlg = document.querySelector('[data-site-search]');
+    if (!dlg) return;
+    if (!dlg.open) dlg.showModal();
+    if (searchUI) { focusSearch(dlg); return; }
+    searchUI = 'loading';
+    var css = document.createElement('link');
+    css.rel = 'stylesheet';
+    css.href = '/pagefind/pagefind-ui.css';
+    document.head.appendChild(css);
+    var js = document.createElement('script');
+    js.src = '/pagefind/pagefind-ui.js';
+    js.onload = function () {
+      searchUI = new window.PagefindUI({ element: '#site-search-ui', showSubResults: true, showImages: false, resetStyles: false });
+      focusSearch(dlg);
+    };
+    js.onerror = function () {
+      searchUI = null;
+      var ui = document.getElementById('site-search-ui');
+      if (ui) ui.textContent = 'Search is not available here: the index is built with the site (npm run build).';
+    };
+    document.head.appendChild(js);
+  }
+  function focusSearch(dlg) {
+    var input = dlg.querySelector('input');
+    if (input) input.focus();
+  }
+  function wireSearch() {
+    var dlg = document.querySelector('[data-site-search]');
+    if (!dlg) return;
+    document.querySelectorAll('[data-site-search-open]').forEach(function (b) {
+      b.addEventListener('click', openSearch);
+    });
+    document.querySelectorAll('[data-site-search-close]').forEach(function (b) {
+      b.addEventListener('click', function () { dlg.close(); });
+    });
+    // A click on the backdrop lands on the dialog itself, outside its box.
+    dlg.addEventListener('click', function (e) { if (e.target === dlg) dlg.close(); });
+    document.addEventListener('keydown', function (e) {
+      var typing = /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName) || e.target.isContentEditable;
+      if ((e.key === 'k' && (e.ctrlKey || e.metaKey)) || (e.key === '/' && !typing)) {
+        e.preventDefault();
+        openSearch();
+      }
+    });
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', wireSearch);
+  else wireSearch();
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', wire);
   else wire();
 })();

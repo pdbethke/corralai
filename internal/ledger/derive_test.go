@@ -445,3 +445,33 @@ func TestWriteTwoEntryFixture(t *testing.T) {
 		t.Fatalf("fixture derives to %+v", d)
 	}
 }
+
+// Derive carries Verify's Signer and Note into each status, so the page can
+// say who signed and what a retraction did without re-deriving either.
+func TestDeriveCarriesSignerAndNote(t *testing.T) {
+	fx := filepath.Join("testdata", "two-entries")
+	pub := fixtureKey().Public().(ed25519.PublicKey)
+	d, err := ledger.Derive(rawDir(t, fx), ledger.Trust{RootPub: pub})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, st := range d.Entries {
+		if st.Signer != "root" {
+			t.Fatalf("signer not carried: %+v", st)
+		}
+	}
+	dir, pub := mixedLedger(t)
+	d, err = ledger.Derive(rawDir(t, dir), ledger.Trust{RootPub: pub})
+	if err != nil {
+		t.Fatal(err)
+	}
+	notes := 0
+	for _, st := range d.Entries {
+		if st.Note != "" {
+			notes++
+		}
+	}
+	if notes == 0 {
+		t.Fatalf("no note carried from a ledger whose checks carry notes: %+v", d.Entries)
+	}
+}

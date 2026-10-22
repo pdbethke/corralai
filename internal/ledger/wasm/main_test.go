@@ -158,3 +158,62 @@ func TestDeriveKeylessReachesTheVerifier(t *testing.T) {
 		}
 	}
 }
+
+// rawJS is one in-memory entry as the page hands it over.
+func rawJS(arr js.Value, name string, e ledger.Entry, t *testing.T) {
+	t.Helper()
+	b, err := json.Marshal(e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	u8 := js.Global().Get("Uint8Array").New(len(b))
+	js.CopyBytesToJS(u8, b)
+	o := js.Global().Get("Object").New()
+	o.Set("name", name)
+	o.Set("bytes", u8)
+	arr.Call("push", o)
+}
+
+// Who signed and what an entry means for the chain (a retraction's reason)
+// are measured in Go and must survive the boundary into the page: a
+// field-by-field status that leaves them out drops them silently.
+func TestDeriveCarriesSignerAndNoteToJS(t *testing.T) {
+	pub, err := os.ReadFile(filepath.Join(fixtureDir, "rootpub.hex"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, thrown := call(jsEntries(t), trust(strings.TrimSpace(string(pub))))
+	if thrown != "" {
+		t.Fatalf("threw: %s", thrown)
+	}
+	if n := strings.Count(out, `"signer":"root"`); n != 2 {
+		t.Fatalf("want both fixture entries signed by root in the JS result, got %d in %s", n, out)
+	}
+
+	scan := ledger.Entry{Format: ledger.FileFormat, Pushed: time.Date(2026, 10, 22, 0, 0, 0, 0, time.UTC),
+		Bundle: ledger.Bundle{Scan: ledger.ScanRow{Repo: "o/r", Commit: "c", ScanID: 1}}}
+	scan.ScanUID = ledger.ScanUID(scan.Bundle.Scan, scan.Pushed)
+	scan.Bundle.Scan.ScanUID = scan.ScanUID
+	if scan.Hash, err = ledger.EntryHash(scan); err != nil {
+		t.Fatal(err)
+	}
+	rt := ledger.Entry{Format: ledger.FileFormat, Kind: ledger.KindRetract, Prev: scan.Hash, Retracts: scan.Hash,
+		Reason: "wrong scope", Pushed: scan.Pushed.Add(time.Second)}
+	if rt.Hash, err = ledger.EntryHash(rt); err != nil {
+		t.Fatal(err)
+	}
+	arr := js.Global().Get("Array").New()
+	rawJS(arr, "a.json", scan, t)
+	rawJS(arr, "b.json", rt, t)
+	out, thrown = call(arr, trust(""))
+	if thrown != "" {
+		t.Fatalf("threw: %s", thrown)
+	}
+	var d ledger.Derived
+	if err := json.Unmarshal([]byte(out), &d); err != nil {
+		t.Fatal(err)
+	}
+	if len(d.Entries) != 2 || !strings.Contains(d.Entries[1].Note, "wrong scope") || !strings.Contains(out, `"note":"retracts `) {
+		t.Fatalf("the retraction's note did not reach the page: %s", out)
+	}
+}

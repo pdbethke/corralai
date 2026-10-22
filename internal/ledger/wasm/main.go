@@ -7,6 +7,21 @@
 // ledger's rules: this file only converts values across the JS boundary and
 // refuses malformed input; every rule lives in ledger.Derive, so the CLI and
 // the page cannot disagree.
+//
+// The contract, as a page sees it:
+//
+//	corralLedgerDerive(
+//	  entries: {name: string, bytes: Uint8Array}[],
+//	  trust:   {rootPub: string /* hex, "" when unset */, repo: string /* owner/name, "" when unset */},
+//	): string  // JSON of ledger.Derived; throws Error on malformed input
+//
+// Derived is {format: "corral-derive-1", problem?, entries, scans, files,
+// mutants, calls, reviews, adjudications}; each of entries is
+// {file, hash, kind, keyid, status: "verified"|"unsigned"|"failed",
+// problem?, signer?, note?}. signer is who signed ("root", a registered
+// name, or a keyless entry's repository URI) and note is what the entry
+// means for the chain in words (a retraction's reason, an unsigned entry
+// among signed ones): both are Verify's, carried rather than re-derived.
 package main
 
 import (

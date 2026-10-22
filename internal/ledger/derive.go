@@ -30,6 +30,16 @@ type EntryStatus struct {
 	// signature) or "failed" (anything else; Problem says what).
 	Status  string `json:"status"`
 	Problem string `json:"problem,omitempty"`
+	// Signer is Verify's ChainCheck.Signer: "root", a registered signer's
+	// name, or — for a keyless entry that verified — the repository URI its
+	// certificate names. Empty when unsigned or unresolved; only Status
+	// "verified" says the signature was checked and held.
+	Signer string `json:"signer,omitempty"`
+	// Note is Verify's ChainCheck.Note: what a retraction, checkpoint,
+	// review or adjudication means for the chain, or a disclosure (an
+	// unsigned entry among signed ones, a self-reported signer name), in
+	// words. Carried so a page never re-derives it.
+	Note string `json:"note,omitempty"`
 }
 
 // Derived is a ledger's verified, live rows as one document. Every slice is
@@ -170,7 +180,7 @@ func ledgerProblem(entries []EntryStatus, off int) string {
 // pass by default, and no page-wide guess from whether a root key was given
 // — a keyless entry is checked by its repository, not the root key.
 func statusOf(c ChainCheck) EntryStatus {
-	st := EntryStatus{File: c.File, Hash: c.Hash, Kind: c.Kind, KeyID: c.KeyID}
+	st := EntryStatus{File: c.File, Hash: c.Hash, Kind: c.Kind, KeyID: c.KeyID, Signer: c.Signer, Note: c.Note}
 	switch {
 	case c.Problem != "":
 		st.Status, st.Problem = StatusFailed, c.Problem

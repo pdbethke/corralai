@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Elastic-2.0
-// Puts the site's own header on every /ledger/ page.
+// Puts the site's own header, and the docs nav drawn after it, on every
+// /ledger/ page.
 //
 // The record pages are rendered by Go (internal/recordview, via
 // scripts/gen-ledger-site.sh) into public/ledger before Astro runs, so they
@@ -12,9 +13,16 @@
 //
 // Only the header's own rules are copied, not the home page's stylesheet:
 // global.css restyles body, links and headings, which the record pages style
-// themselves. The rules are found by the scoped class Astro gives each
-// component (astro-xxxxxxxx), read off the header's markup, so a rule added
-// to Header.astro or Logo.astro comes along without anyone listing it.
+// themselves. The rules are found by the scope attribute Astro gives each
+// component (data-astro-cid-xxxxxxxx), read off the chrome's markup, so a
+// rule added to Header.astro or Logo.astro comes along without anyone
+// listing it. Astro leaves the scope off a selector inside :has(), so the
+// nav's rules that move the page over for it (`body:has(.site-side)`) are
+// found by the nav's class instead.
+//
+// (Until 2026-10-22 the scope was read with /astro-[a-z0-9]+/, which matches
+// only the "astro-cid" every scope attribute starts with: every record page
+// carried every scoped rule of the home page.)
 //
 // It fails the build rather than ship a record page without a way back to
 // the site: a missing header, a page with no slot or two.
@@ -54,44 +62,61 @@ export function splitBlocks(css) {
 
 // headerRules keeps the rules whose selector carries one of the header's
 // scoped classes, inside @media blocks too, plus the --stage-* palette the
-// header is drawn in (declared on :root in global.css).
+// header is drawn in (declared on :root in tokens.css), and the site's page
+// background, light and dark. The record pages keep their own palette for
+// everything else (their cards stay white); only the ground under them is
+// the site's, so a record page is not a lighter sheet among cream ones.
+// Both palettes call the background --bg, and the chrome comes after the
+// record page's own <style>, so the site's value wins.
 export function headerRules(css, scopes) {
+  // scopes: strings any one of which in a selector makes the rule the chrome's
   const out = [];
   const stage = [];
+  const bg = {};
+  const decls = (body) => body.split(';').map((d) => d.trim());
   for (const { prelude, body } of splitBlocks(css)) {
+    const sel = prelude.replace(/["']/g, '');
     if (prelude.startsWith('@media') || prelude.startsWith('@supports')) {
       const inner = headerRules(body, scopes).rules;
       if (inner) out.push(`${prelude}{${inner}}`);
-    } else if (prelude === ':root') {
-      for (const decl of body.split(';')) if (decl.trim().startsWith('--stage-')) stage.push(decl.trim());
+    } else if (sel === ':root' || sel === ':root[data-theme=dark]') {
+      for (const d of decls(body)) {
+        if (sel === ':root' && d.startsWith('--stage-')) stage.push(d);
+        if (d.startsWith('--bg:')) bg[sel] = d;
+      }
     } else if (scopes.some((s) => prelude.includes(s))) {
       out.push(`${prelude}{${body}}`);
     }
   }
+  for (const sel of [':root[data-theme=dark]', ':root']) if (bg[sel]) out.unshift(`${sel}{${bg[sel]}}`);
   if (stage.length) out.unshift(`:root{${stage.join(';')}}`);
-  return { rules: out.join(''), stage: stage.length };
+  return { rules: out.join(''), stage: stage.length, bg: Object.keys(bg).length };
 }
 
 // chromeFrom pulls the header, its CSS and its scripts out of a built page.
 export function chromeFrom(html, readCss) {
-  const header = html.match(/<header class="site-header[\s\S]*?<\/header>/)?.[0];
-  if (!header) throw new Error('ledger-chrome: no <header class="site-header"> on the home page');
-  const scopes = [...new Set(header.match(/astro-[a-z0-9]+/g) ?? [])];
-  if (!scopes.length) throw new Error('ledger-chrome: the header carries no scoped class, so its CSS cannot be found');
+  // The header and the docs nav Header.astro draws straight after it.
+  const header = html.match(/<header class="site-header[\s\S]*?<\/header>\s*<aside class="site-side[\s\S]*?<\/aside>/)?.[0];
+  if (!header) throw new Error('ledger-chrome: no <header class="site-header"> followed by <aside class="site-side"> on the home page');
+  const scopes = [...new Set(header.match(/data-astro-cid-[a-z0-9]+/g) ?? [])];
+  if (!scopes.length) throw new Error('ledger-chrome: the header carries no scope attribute, so its CSS cannot be found');
   const theme = html.match(/<script>[^<]*corralai-site-theme[^<]*<\/script>/)?.[0];
   if (!theme) throw new Error('ledger-chrome: no theme script on the home page');
   const controls = html.match(/<script src="\/site-controls\.js"[^>]*><\/script>/)?.[0];
   if (!controls) throw new Error('ledger-chrome: no site-controls.js on the home page');
   const hrefs = [...html.matchAll(/<link rel="stylesheet" href="([^"]+)"/g)].map((m) => m[1]);
   const inline = [...html.matchAll(/<style>([\s\S]*?)<\/style>/g)].map((m) => m[1]);
-  let css = '', stage = 0;
+  let css = '', stage = 0, bg = 0;
   for (const sheet of [...hrefs.map(readCss), ...inline]) {
-    const got = headerRules(sheet, scopes);
+    const got = headerRules(sheet, [...scopes, '.site-side']);
     css += got.rules;
     stage += got.stage;
+    bg += got.bg;
   }
-  if (!scopes.every((s) => css.includes(s))) throw new Error(`ledger-chrome: no CSS found for ${scopes.join(', ')}`);
+  if (!scopes.every((s) => css.includes(s))) throw new Error(`ledger-chrome: no CSS found for ${scopes.filter((s) => !css.includes(s)).join(', ')}`);
+  if (!css.includes('body:has(.site-side)')) throw new Error('ledger-chrome: no rule moves the page over for the docs nav');
   if (!stage) throw new Error('ledger-chrome: no --stage-* palette found for the header');
+  if (bg < 2) throw new Error('ledger-chrome: the site\'s --bg, light and dark, was not found for the record pages');
   // Copied from the home page, the header marks Home as current; on a record
   // page the Ledger link is the current one.
   const marked = header

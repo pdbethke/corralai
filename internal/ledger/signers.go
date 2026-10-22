@@ -75,7 +75,7 @@ func newSignerSet(entries []Entry, pub ed25519.PublicKey) *SignerSet {
 // entries) names nobody, so an unkeyed entry is never mistaken for it.
 func (s *SignerSet) isRoot(e Entry) bool {
 	if e.KeyID == LegacyRootKeyID {
-		return e.Format != FileFormat
+		return e.Format == Format4 || e.Format == Format3 || e.Format == Format2
 	}
 	return s.rootID != "" && e.KeyID == s.rootID
 }

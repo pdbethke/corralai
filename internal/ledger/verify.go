@@ -10,13 +10,20 @@ import (
 )
 
 // Trust is what a verifier holds from outside the ledger: the root key the
-// operator names, and (for the keyless-signing check that follows) the
-// repository the ledger is published from, as owner/name. A zero RootPub is
-// a keyless read: hashes, links and shape are checked, no signature is.
-// An empty Repo means none was named; Verify does not read it yet.
+// operator names, the repository the ledger is published from (owner/name),
+// and the Sigstore trust root that keyless entries are checked against.
+//
+// A zero RootPub reads key-signed entries without checking their signatures:
+// hashes, links and shape are checked, no signature is. Repo and
+// SigstoreRoot are read only for keyless (corral-ledger-6) entries, and both
+// are required there: an empty Repo is the Problem ProblemNoLedgerRepo, a nil
+// SigstoreRoot a Problem naming it. Neither has a default — the repository
+// is never guessed, and the public-good root is passed explicitly
+// (PublicGoodTrustedRoot) by whoever means it.
 type Trust struct {
-	RootPub ed25519.PublicKey
-	Repo    string
+	RootPub      ed25519.PublicKey
+	Repo         string
+	SigstoreRoot *SigstoreRoot
 }
 
 // ChainCheck is one entry's verdict from Verify.
@@ -30,13 +37,18 @@ type ChainCheck struct {
 	Commit string
 	HashOK bool // the stored Hash matches the entry's bytes
 	LinkOK bool // Prev names the previous entry's Hash (true for a genesis entry)
-	Signed bool // the entry carries a signature
-	SigOK  bool // the signature verifies under the key resolved for KeyID (false when unsigned, unresolved or no pub given)
-	KeyID  string
+	Signed bool // the entry carries a signature (ed25519, or a keyless Sigstore bundle)
+	SigOK  bool // the signature verifies under the key resolved for KeyID, or the keyless bundle verifies for Trust.Repo (false when unsigned, unresolved or no pub given)
+	// Keyless is set for a keyless (keyid KeyIDSigstore) entry: its trust is
+	// the repository that signed, not the root key, so a reader needs no
+	// RootPub to call it verified.
+	Keyless bool
+	KeyID   string
 	// Signer is who the chain says holds KeyID at this entry: "root", the
 	// name a register entry gave the key, or "" (unsigned, or a key the
 	// chain does not hold here). Filled with or without a key; only SigOK
-	// says the signature was checked.
+	// says the signature was checked. For a keyless entry it is the
+	// repository URI its certificate names, and only once that verified.
 	Signer  string
 	Problem string // "" when nothing is wrong
 	Genesis bool
@@ -83,7 +95,7 @@ func VerifyWithSigners(entries []Entry, t Trust) ([]ChainCheck, *SignerSet) {
 	// signed ones is a hole, not a style.
 	anySigned := false
 	for _, e := range entries {
-		if e.Signature != "" {
+		if e.Signature != "" || len(e.Sigstore) > 0 {
 			anySigned = true
 			break
 		}
@@ -97,15 +109,29 @@ func VerifyWithSigners(entries []Entry, t Trust) ([]ChainCheck, *SignerSet) {
 		h, herr := EntryHash(e)
 		c.HashOK = herr == nil && h == e.Hash
 		c.LinkOK = e.Prev == prevHash
-		c.Signed = e.Signature != ""
-		// The key is resolved BEFORE the signature is checked, from the set
-		// as it stands at this entry — never from the entry's own claim.
-		name, key, keyProblem := set.resolve(e)
-		c.Signer = name
-		if c.Signed && key != nil {
-			raw, _ := hex.DecodeString(e.Hash)
-			sig, _ := hex.DecodeString(e.Signature)
-			c.SigOK = ed25519.Verify(key, raw, sig)
+		c.Signed = e.Signature != "" || len(e.Sigstore) > 0
+		c.Keyless = e.KeyID == KeyIDSigstore
+		// A keyless entry is checked by the repository that signed it and
+		// never resolved against the signer set: it holds no key the set
+		// could name. keylessProblem also enforces, for EVERY entry, that
+		// format 6 and keyid "sigstore" go together.
+		keyless, signedBy := keylessProblem(e, t)
+		var name, keyProblem string
+		var key ed25519.PublicKey
+		if c.Keyless {
+			c.SigOK = keyless == "" && signedBy != ""
+			c.Signer = signedBy
+		} else {
+			// The key is resolved BEFORE the signature is checked, from the
+			// set as it stands at this entry — never from the entry's own
+			// claim.
+			name, key, keyProblem = set.resolve(e)
+			c.Signer = name
+			if e.Signature != "" && key != nil {
+				raw, _ := hex.DecodeString(e.Hash)
+				sig, _ := hex.DecodeString(e.Signature)
+				c.SigOK = ed25519.Verify(key, raw, sig)
+			}
 		}
 		shapeProblem := EntryShapeProblem(e)
 		changeProblem := ""
@@ -127,6 +153,8 @@ func VerifyWithSigners(entries []Entry, t Trust) ([]ChainCheck, *SignerSet) {
 			c.Problem = "scan_uid does not derive from the entry's scan row and pushed time — the identity was altered, or minted elsewhere"
 		case !c.LinkOK:
 			c.Problem = fmt.Sprintf("prev %.12s does not name the previous entry (%.12s) — an entry was removed, reordered or inserted", e.Prev, prevHash)
+		case keyless != "":
+			c.Problem = keyless
 		case seedProblem != "" && seedProblem == errCheckpointNotRoot:
 			// Before keyProblem: a checkpoint by a non-root key is not "an
 			// unregistered key" — the set is empty at a genesis — it is a
@@ -134,9 +162,9 @@ func VerifyWithSigners(entries []Entry, t Trust) ([]ChainCheck, *SignerSet) {
 			c.Problem = seedProblem
 		case keyProblem != "":
 			c.Problem = keyProblem
-		case c.Signed && key != nil && !c.SigOK && name == "root":
+		case e.Signature != "" && key != nil && !c.SigOK && name == "root":
 			c.Problem = "signature does not verify under the given key"
-		case c.Signed && key != nil && !c.SigOK:
+		case e.Signature != "" && key != nil && !c.SigOK:
 			c.Problem = fmt.Sprintf("signature does not verify under the key registered as %s (%s)", name, e.KeyID)
 		case e.Kind == KindCheckpoint && i != 0:
 			c.Problem = fmt.Sprintf("a checkpoint at position %d — a checkpoint is a genesis and stands only at the start of a chain", i+1)

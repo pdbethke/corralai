@@ -89,6 +89,12 @@ type Entry struct {
 	Hash      string `json:"hash,omitempty"`
 	KeyID     string `json:"keyid,omitempty"`
 	Signature string `json:"signature,omitempty"` // hex Ed25519 over Hash's raw bytes
+	// Sigstore (corral-ledger-6, keyid KeyIDSigstore) is a Sigstore bundle
+	// over Hash's raw bytes (KeylessArtifact), made with a GitHub Actions
+	// run's OIDC identity instead of a held key; see keyless.go. Like
+	// Signature it is outside the hash: it signs the hash, so it cannot be
+	// inside it.
+	Sigstore json.RawMessage `json:"sigstore,omitempty"`
 
 	// Raw is the entry's bytes as read from the directory, and File the
 	// name they were read from. Set by the readers, never written: from
@@ -145,6 +151,11 @@ type Checkpoint struct {
 func (e Entry) IsScan() bool { return e.Kind == KindScan }
 
 // FileFormat is the document version a ledger entry declares.
+// corral-ledger-6 (2026-10-22): a KEYLESS entry — keyid "sigstore", a
+// Sigstore bundle in place of an ed25519 signature, verified by the GitHub
+// repository whose Actions run signed it (keyless.go). It is used only for
+// keyless entries; key-signed and unsigned entries are still written as
+// corral-ledger-5, so FileFormat stays 5.
 // corral-ledger-5 (2026-10-19): keyid is a key FINGERPRINT
 // ("ed25519:" + 16 hex of sha256(pubkey)), not a convention name, and a
 // ledger may register signers (KindSigner), so a per-machine key can sign
@@ -169,6 +180,7 @@ func (e Entry) IsScan() bool { return e.Kind == KindScan }
 // pre-4 entry that its signer name is self-reported.
 const (
 	FileFormat = "corral-ledger-5"
+	Format6    = "corral-ledger-6"
 	Format4    = "corral-ledger-4"
 	Format3    = "corral-ledger-3"
 	Format2    = "corral-ledger-2"
@@ -176,7 +188,7 @@ const (
 
 // KnownFormat is what a reader accepts.
 func KnownFormat(f string) bool {
-	return f == FileFormat || f == Format4 || f == Format3 || f == Format2
+	return f == Format6 || f == FileFormat || f == Format4 || f == Format3 || f == Format2
 }
 
 // KeyIDIsHashed reports whether this format covers keyid in the hashed
@@ -254,7 +266,7 @@ func EntryShapeProblem(e Entry) string {
 // with those fields cleared, as those entries were written.
 func EntryHash(e Entry) (string, error) {
 	if e.Format == Format2 {
-		e.Hash, e.KeyID, e.Signature, e.Raw = "", "", "", nil
+		e.Hash, e.KeyID, e.Signature, e.Sigstore, e.Raw = "", "", "", nil, nil
 		js, err := CanonicalSparseJSON(e)
 		if err != nil {
 			return "", err
@@ -264,7 +276,7 @@ func EntryHash(e Entry) (string, error) {
 	}
 	raw := e.Raw
 	if raw == nil {
-		e.Hash, e.Signature = "", ""
+		e.Hash, e.Signature, e.Sigstore = "", "", nil
 		if !KeyIDIsHashed(e.Format) {
 			e.KeyID = ""
 		}
@@ -281,8 +293,9 @@ func EntryHash(e Entry) (string, error) {
 	return hex.EncodeToString(sum[:]), nil
 }
 
-// canonicalEntryBytes is CanonicalFullJSON over an entry with the three
-// fields the hash cannot contain removed from the tree itself, so the
+// canonicalEntryBytes is CanonicalFullJSON over an entry with the fields
+// the hash cannot contain (hash, signature, sigstore; keyid before format 4)
+// removed from the tree itself, so the
 // writer (which has them empty) and the reader (which has them filled)
 // hash the same bytes.
 func canonicalEntryBytes(raw []byte, keepKeyID bool) ([]byte, error) {
@@ -294,6 +307,7 @@ func canonicalEntryBytes(raw []byte, keepKeyID bool) ([]byte, error) {
 	}
 	delete(tree, "hash")
 	delete(tree, "signature")
+	delete(tree, "sigstore")
 	if !keepKeyID {
 		// Pre-corral-ledger-4: keyid sat outside the hash, so the signer
 		// name was editable without breaking anything. Kept for those

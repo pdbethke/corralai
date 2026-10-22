@@ -1,0 +1,467 @@
+// SPDX-License-Identifier: Elastic-2.0
+
+package ledger_test
+
+import (
+	"crypto/ecdsa"
+	"crypto/ed25519"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/sigstore/sigstore-go/pkg/root"
+
+	"github.com/pdbethke/corralai/internal/auditpush"
+	"github.com/pdbethke/corralai/internal/ledger"
+)
+
+func trustFor(s *testSigstore, t *testing.T, repo string) ledger.Trust {
+	return ledger.Trust{Repo: repo, SigstoreRoot: s.ledgerRoot(t)}
+}
+
+func only(t *testing.T, checks []ledger.ChainCheck) ledger.ChainCheck {
+	t.Helper()
+	if len(checks) != 1 {
+		t.Fatalf("want one check, got %+v", checks)
+	}
+	return checks[0]
+}
+
+func TestKeylessVerifies(t *testing.T) {
+	s := newTestSigstore(t)
+	e := s.keylessEntry(t, "", 1, spec{})
+	c := only(t, ledger.Verify([]ledger.Entry{e}, trustFor(s, t, testRepo)))
+	if c.Problem != "" || !c.Signed || !c.SigOK || !c.HashOK || !c.LinkOK {
+		t.Fatalf("a keyless entry from %s must verify: %+v", testRepo, c)
+	}
+	if c.Signer != "https://github.com/"+testRepo {
+		t.Fatalf("signer must name the repository that signed: %q", c.Signer)
+	}
+}
+
+func TestKeylessOtherRepoFails(t *testing.T) {
+	s := newTestSigstore(t)
+	e := s.keylessEntry(t, "", 1, spec{})
+	c := only(t, ledger.Verify([]ledger.Entry{e}, trustFor(s, t, "acme/other")))
+	if c.SigOK || !strings.Contains(c.Problem, "https://github.com/acme/widgets") || !strings.Contains(c.Problem, "https://github.com/acme/other") {
+		t.Fatalf("want a failure naming both repositories, got %+v", c)
+	}
+}
+
+func TestKeylessWrongHashFails(t *testing.T) {
+	s := newTestSigstore(t)
+	e := s.keylessEntry(t, "", 1, spec{})
+	other := s.keylessEntry(t, "", 2, spec{})
+	e.Sigstore = other.Sigstore // a real bundle, over a different entry's hash
+	e = reparse(t, e)
+	c := only(t, ledger.Verify([]ledger.Entry{e}, trustFor(s, t, testRepo)))
+	if c.SigOK || c.Problem == "" || !c.HashOK {
+		t.Fatalf("a bundle over another hash must fail, and the entry's own hash still check: %+v", c)
+	}
+}
+
+// Review Focus 5: no repository named is never a guess.
+func TestKeylessNoRepoNamed(t *testing.T) {
+	s := newTestSigstore(t)
+	e := s.keylessEntry(t, "", 1, spec{})
+	c := only(t, ledger.Verify([]ledger.Entry{e}, trustFor(s, t, "")))
+	const want = "keyless entry: the ledger's repository is not named (pass --ledger-repo owner/name)"
+	if c.Problem != want || c.SigOK {
+		t.Fatalf("problem = %q, want %q", c.Problem, want)
+	}
+	// Reported first, even for a bundle that would fail anyway.
+	e.Sigstore = json.RawMessage(`{"mediaType":"nonsense"}`)
+	c = only(t, ledger.Verify([]ledger.Entry{reparse(t, e)}, trustFor(s, t, "")))
+	if c.Problem != want {
+		t.Fatalf("problem = %q, want %q", c.Problem, want)
+	}
+}
+
+func TestKeylessNeedsSigstoreRoot(t *testing.T) {
+	s := newTestSigstore(t)
+	e := s.keylessEntry(t, "", 1, spec{})
+	c := only(t, ledger.Verify([]ledger.Entry{e}, ledger.Trust{Repo: testRepo}))
+	if c.SigOK || !strings.Contains(c.Problem, "Sigstore trust root") {
+		t.Fatalf("no trust root must fail naming it: %+v", c)
+	}
+}
+
+func TestKeylessMustBeV6(t *testing.T) {
+	s := newTestSigstore(t)
+	e := s.keylessEntry(t, "", 1, spec{})
+	e.Format = ledger.FileFormat
+	e = s.seal(t, e, spec{})
+	c := only(t, ledger.Verify([]ledger.Entry{e}, trustFor(s, t, testRepo)))
+	if c.SigOK || !strings.Contains(c.Problem, ledger.Format6) {
+		t.Fatalf("keyid sigstore in a %s entry must fail: %+v", ledger.FileFormat, c)
+	}
+}
+
+// The other direction: format 6 is ONLY the keyless format.
+func TestV6MustBeKeyless(t *testing.T) {
+	s := newTestSigstore(t)
+	root := key(0x41)
+	for _, keyid := range []string{"", ledger.KeyFingerprint(root.Public().(ed25519.PublicKey))} {
+		e := ledger.Entry{Format: ledger.Format6, KeyID: keyid, Pushed: time.Now().UTC().Truncate(time.Microsecond),
+			Bundle: ledger.Bundle{Scan: ledger.ScanRow{Repo: "o/r", Commit: "c", ScanID: 1}}}
+		e.ScanUID = ledger.ScanUID(e.Bundle.Scan, e.Pushed)
+		e.Bundle.Scan.ScanUID = e.ScanUID
+		h, err := ledger.EntryHash(e)
+		if err != nil {
+			t.Fatal(err)
+		}
+		e.Hash = h
+		if keyid != "" {
+			raw, _ := hex.DecodeString(h)
+			e.Signature = hex.EncodeToString(ed25519.Sign(root, raw))
+		}
+		c := only(t, ledger.Verify([]ledger.Entry{reparse(t, e)}, ledger.Trust{RootPub: root.Public().(ed25519.PublicKey), Repo: testRepo, SigstoreRoot: s.ledgerRoot(t)}))
+		// SigOK may be true (the ed25519 bytes do verify); the Problem is
+		// what fails the entry.
+		if !strings.Contains(c.Problem, `"`+ledger.KeyIDSigstore+`"`) {
+			t.Fatalf("a %s entry with keyid %q must fail: %+v", ledger.Format6, keyid, c)
+		}
+	}
+	// And a non-keyless entry may not carry a bundle at all.
+	e := s.keylessEntry(t, "", 1, spec{})
+	e.Format, e.KeyID, e.Raw = ledger.FileFormat, "", nil
+	h, _ := ledger.EntryHash(e)
+	e.Hash = h
+	c := only(t, ledger.Verify([]ledger.Entry{reparse(t, e)}, trustFor(s, t, testRepo)))
+	if !c.HashOK || !strings.Contains(c.Problem, "not a keyless entry") {
+		t.Fatalf("a sigstore bundle on a non-keyless entry must be a Problem: %+v", c)
+	}
+}
+
+// A keyless entry carries a bundle and nothing else that could sign it.
+func TestKeylessBundleAlone(t *testing.T) {
+	s := newTestSigstore(t)
+	both := s.keylessEntry(t, "", 1, spec{})
+	both.Signature = strings.Repeat("ab", 64)
+	none := s.keylessEntry(t, "", 2, spec{})
+	none.Sigstore = nil
+	for want, e := range map[string]ledger.Entry{"as well as a sigstore bundle": both, "carries no sigstore bundle": none} {
+		c := only(t, ledger.Verify([]ledger.Entry{reparse(t, e)}, trustFor(s, t, testRepo)))
+		if c.SigOK || !strings.Contains(c.Problem, want) {
+			t.Fatalf("want %q: %+v", want, c)
+		}
+	}
+}
+
+// Chain control stays with the root key: a keyless entry may not register or
+// revoke a signer, or stand as a checkpoint.
+func TestKeylessCannotControlTheChain(t *testing.T) {
+	s := newTestSigstore(t)
+	other := key(0x42).Public().(ed25519.PublicKey)
+	reg := ledger.Entry{Format: ledger.Format6, KeyID: ledger.KeyIDSigstore, Kind: ledger.KindSigner, Pushed: time.Now().UTC().Truncate(time.Microsecond),
+		Signer: &ledger.SignerChange{Action: ledger.SignerRegister, KeyID: ledger.KeyFingerprint(other), PubKey: hex.EncodeToString(other), Name: "x"}}
+	cp := ledger.Entry{Format: ledger.Format6, KeyID: ledger.KeyIDSigstore, Kind: ledger.KindCheckpoint, Pushed: time.Now().UTC().Truncate(time.Microsecond),
+		Checkpoint: &ledger.Checkpoint{Head: strings.Repeat("a", 64), Entries: 3, Through: time.Now().UTC().Truncate(time.Second)}}
+	for _, e := range []ledger.Entry{reg, cp} {
+		c := only(t, ledger.Verify([]ledger.Entry{s.seal(t, e, spec{})}, trustFor(s, t, testRepo)))
+		if c.Problem == "" || !strings.Contains(c.Problem, "root key") {
+			t.Fatalf("a keyless %s entry must be refused: %+v", e.Kind, c)
+		}
+	}
+}
+
+// The bundle is outside the hash, exactly as Signature is; everything hashed
+// still is.
+func TestSigstoreFieldNotHashed(t *testing.T) {
+	s := newTestSigstore(t)
+	e := s.keylessEntry(t, "", 1, spec{})
+	before, err := ledger.EntryHash(e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e2 := e
+	e2.Sigstore = json.RawMessage(`{"different":true}`)
+	e2 = reparse(t, e2)
+	if after, _ := ledger.EntryHash(e2); after != before {
+		t.Fatalf("changing the bundle changed the hash: %s -> %s", before, after)
+	}
+	e3 := e
+	e3.Raw = nil
+	e3.Sigstore = json.RawMessage(`{"different":true}`)
+	if after, _ := ledger.EntryHash(e3); after != before {
+		t.Fatalf("writer-side hash depends on the bundle: %s -> %s", before, after)
+	}
+	e4 := e
+	e4.Bundle.Scan.Commit = "fedcba654321"
+	e4.Raw = nil
+	if after, _ := ledger.EntryHash(e4); after == before {
+		t.Fatal("changing hashed content did not change the hash")
+	}
+}
+
+func TestKeylessArtifact(t *testing.T) {
+	e := ledger.Entry{Hash: strings.Repeat("ab", 32)}
+	got, err := ledger.KeylessArtifact(e)
+	if err != nil || hex.EncodeToString(got) != e.Hash {
+		t.Fatalf("got %x, %v", got, err)
+	}
+	for _, bad := range []string{"", "zz", strings.Repeat("ab", 31)} {
+		if _, err := ledger.KeylessArtifact(ledger.Entry{Hash: bad}); err == nil {
+			t.Fatalf("hash %q must be refused", bad)
+		}
+	}
+}
+
+// Review Focus 3: ed25519 v5 entries then keyless v6 entries, one chain.
+func TestMixedLedger(t *testing.T) {
+	s := newTestSigstore(t)
+	rootKey := key(0x43)
+	pub := rootKey.Public().(ed25519.PublicKey)
+	dir := t.TempDir()
+	rs := signerFor(rootKey)
+	scan(t, dir, 1, rs)
+	scan(t, dir, 2, rs)
+	entries := readBytes(t, dir)
+	k1 := s.keylessEntry(t, entries[len(entries)-1].Hash, 3, spec{})
+	k2 := s.keylessEntry(t, k1.Hash, 4, spec{})
+	entries = append(entries, k1, k2)
+
+	tr := ledger.Trust{RootPub: pub, Repo: testRepo, SigstoreRoot: s.ledgerRoot(t)}
+	for i, c := range ledger.Verify(entries, tr) {
+		if c.Problem != "" || !c.SigOK {
+			t.Fatalf("entry %d of a mixed chain: %+v", i, c)
+		}
+	}
+
+	var raw []ledger.RawEntry
+	des, err := os.ReadDir(filepath.Join(dir, auditpush.ScansSubdir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range des {
+		b, err := os.ReadFile(filepath.Join(dir, auditpush.ScansSubdir, d.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw = append(raw, ledger.RawEntry{Name: d.Name(), Bytes: b})
+	}
+	for _, k := range []ledger.Entry{k1, k2} {
+		raw = append(raw, ledger.RawEntry{Name: k.File, Bytes: k.Raw})
+	}
+	d, err := ledger.Derive(raw, tr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Problem != "" || len(d.Scans) != 4 {
+		t.Fatalf("want 4 scans from both kinds of signature, got %d (%s) %+v", len(d.Scans), d.Problem, d.Entries)
+	}
+}
+
+// A keyless chain needs no ed25519 root key: its trust is the repository.
+func TestKeylessChainNeedsNoRootKey(t *testing.T) {
+	s := newTestSigstore(t)
+	k1 := s.keylessEntry(t, "", 1, spec{})
+	k2 := s.keylessEntry(t, k1.Hash, 2, spec{})
+	d, err := ledger.Derive([]ledger.RawEntry{{Name: k1.File, Bytes: k1.Raw}, {Name: k2.File, Bytes: k2.Raw}}, trustFor(s, t, testRepo))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Problem != "" || len(d.Scans) != 2 {
+		t.Fatalf("want 2 verified scans with no root key, got %d (%s) %+v", len(d.Scans), d.Problem, d.Entries)
+	}
+	for _, st := range d.Entries {
+		if st.Status != ledger.StatusVerified {
+			t.Fatalf("status %+v", st)
+		}
+	}
+}
+
+func TestEmbeddedRootParses(t *testing.T) {
+	ours, err := ledger.PublicGoodTrustedRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile("sigstore_trusted_root.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	theirs, err := root.NewTrustedRootFromJSON(raw)
+	if err != nil {
+		t.Fatalf("sigstore-go refuses the embedded root: %v", err)
+	}
+	if got, want := ours.CertificateAuthorities(), len(theirs.FulcioCertificateAuthorities()); got != want || got == 0 {
+		t.Fatalf("certificate authorities: ours %d, sigstore-go %d", got, want)
+	}
+	for id := range theirs.RekorLogs() {
+		if !ours.HasLog(id) {
+			t.Fatalf("log %s is in sigstore-go's reading of the root and not ours", id)
+		}
+	}
+}
+
+// The verifier is our own BECAUSE sigstore-go cannot be in the browser build
+// (task-7 report): keep it out of the non-test closure for good.
+func TestLedgerHasNoSigstoreDependency(t *testing.T) {
+	cmd := exec.Command("go", "list", "-deps", "github.com/pdbethke/corralai/internal/ledger")
+	cmd.Env = append(os.Environ(), "GOOS=js", "GOARCH=wasm")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	for _, dep := range strings.Fields(string(out)) {
+		if strings.HasPrefix(dep, "github.com/sigstore/") {
+			t.Errorf("internal/ledger depends on %s", dep)
+		}
+	}
+}
+
+// The differential table: one valid bundle and single mutations of it,
+// judged by our verifier and by sigstore-go's. They must agree, except where
+// a row names a deliberate strictness of ours (then ours rejects and the
+// reason is stated).
+func TestKeylessDifferential(t *testing.T) {
+	s := newTestSigstore(t)
+	art := sha256.Sum256([]byte("an entry hash"))
+	artifact := art[:]
+	ourRoot := s.ledgerRoot(t)
+	untrustedCA := newTestSigstore(t)
+	// A log whose key is trusted only from an hour from now.
+	lateLog := newTestSigstore(t)
+	lateLog.logStart = time.Now().UTC().Add(time.Hour).Truncate(time.Second)
+	lateLog.rootJSON = lateLog.trustedRootJSON(t)
+	// A Fulcio authority whose stated validity ended ten minutes ago, though
+	// its certificates are still within their own dates.
+	expiredCA := newTestSigstore(t)
+	expiredCA.caEnd = time.Now().UTC().Add(-10 * time.Minute).Truncate(time.Second)
+	expiredCA.rootJSON = expiredCA.trustedRootJSON(t)
+	other := sha256.Sum256([]byte("other"))
+	p521, err := ecdsa.GenerateKey(elliptic.P521(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cases := []struct {
+		name   string
+		ss     *testSigstore // nil: s
+		sp     spec
+		repo   string
+		accept bool
+		// want is a substring of OUR error, so each row is caught by the
+		// check it targets and not by an earlier one by accident.
+		want string
+		// stricter: ours rejects where sigstore-go accepts, on purpose.
+		stricter string
+	}{
+		{name: "valid", accept: true},
+		{name: "flipped signature byte", sp: spec{sigFlip: true}, want: "signature does not verify under the signing certificate"},
+		{name: "wrong message digest", sp: spec{digestOverride: other[:]}, want: "message digest"},
+		{name: "signed from another repository", sp: spec{repo: "acme/other"}, want: "signed from https://github.com/acme/other"},
+		{name: "verified as another repository", repo: "acme/other", want: "not https://github.com/acme/other"},
+		{name: "wrong issuer", sp: spec{issuer: "https://accounts.google.com"}, want: "not GitHub Actions"},
+		{name: "rekor body hash mismatch", sp: spec{bodyHashOverride: hex.EncodeToString(other[:])}, want: "different artifact digest"},
+		{name: "rekor body signature mismatch", sp: spec{bodySigFlip: true}, want: "different signature"},
+		{name: "rekor body certificate mismatch", sp: spec{bodyCertOther: true}, want: "different certificate"},
+		{name: "checkpoint over another root hash", sp: spec{checkpointRoot: true}, want: "different root hash"},
+		{name: "checkpoint with a Rekor v2 origin", sp: spec{checkpointOrigin: "rekor.test"}, want: "not a Rekor v1 checkpoint"},
+		{name: "log key not yet valid at integrated time", ss: lateLog, want: "key is not valid at"},
+		{name: "Fulcio authority's validity over at integrated time", ss: expiredCA, want: "does not chain to a Fulcio authority"},
+		{name: "P-521 signing key", sp: spec{leafKey: p521}, want: "P-256 or P-384",
+			stricter: "the signer's ephemeral key is P-256; only P-256 and P-384 are accepted"},
+		{name: "bad SET", sp: spec{setFlip: true}, want: "signed entry timestamp"},
+		{name: "bad inclusion proof hash", sp: spec{proofHashFlip: true}, want: "inclusion proof does not lead"},
+		{name: "bad checkpoint signature", sp: spec{checkpointFlip: true}, want: "checkpoint signature"},
+		{name: "certificate outside validity at integrated time", sp: spec{integrated: time.Now().UTC().Add(30 * time.Minute)}, want: "not valid at the integrated time"},
+		{name: "unknown log id", sp: spec{logIDOverride: other[:]}, want: "not in the Sigstore trust root"},
+		{name: "duplicate tlog entry", sp: spec{extraTlog: true}, want: "want exactly 1"},
+		{name: "DSSE bundle", sp: spec{dsse: true}, want: "\"dsseEnvelope\""},
+		{name: "leaf from an untrusted CA", sp: spec{signingCAKey: untrustedCA.interKey, signingCACert: untrustedCA.interCert}, want: "does not chain to a Fulcio authority"},
+		{name: "no inclusion proof", sp: spec{noProof: true}, want: "no inclusion proof"},
+		{name: "bundle v0.2 media type", sp: spec{mediaType: "application/vnd.dev.sigstore.bundle+json;version=0.2"},
+			want: "media type", stricter: "one bundle shape: sigstore-go's v1.2.2 signer emits v0.3, and nothing else is accepted"},
+		{name: "RFC 3161 timestamp present", sp: spec{tsa: true},
+			want: `"timestampVerificationData"`, stricter: "corral relies on the Rekor-integrated time alone; a TSA block is a shape it does not accept"},
+		{name: "checkpoint names another tree size", sp: spec{checkpointSize: treeSize + 1},
+			want: "tree size", stricter: "rekor's VerifyCheckpointSignature compares only the root hash; the size is checked too"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := testRepo
+			if tc.repo != "" {
+				repo = tc.repo
+			}
+			ss, r := s, ourRoot
+			if tc.ss != nil {
+				ss, r = tc.ss, tc.ss.ledgerRoot(t)
+			}
+			b := ss.issue(t, artifact, tc.sp)
+			ours := ledger.VerifyKeylessBundle(b, artifact, repo, r)
+			theirs := oracle(t, ss.rootJSON, b, artifact, repo)
+			t.Logf("ours: %v | sigstore-go: %v", ours, theirs)
+			if (ours == nil) != tc.accept {
+				t.Fatalf("ours accepted=%v, want %v: %v", ours == nil, tc.accept, ours)
+			}
+			if !tc.accept && !strings.Contains(ours.Error(), tc.want) {
+				t.Fatalf("rejected by the wrong check: %v (want %q)", ours, tc.want)
+			}
+			if tc.stricter != "" {
+				if theirs != nil {
+					t.Fatalf("row says sigstore-go accepts (%s), but it rejected: %v", tc.stricter, theirs)
+				}
+				return
+			}
+			if (theirs == nil) != (ours == nil) {
+				t.Fatalf("disagreement: ours %v, sigstore-go %v", ours, theirs)
+			}
+		})
+	}
+	t.Logf("differential table: %d bundles", len(cases))
+}
+
+// A genuine public-good bundle: goreleaser v2.18.3's checksums.txt, signed
+// keylessly in GitHub Actions (Fulcio + rekor.sigstore.dev), verified
+// against the embedded root. Its RFC 3161 timestamp is removed first, because
+// corral's one bundle shape carries none; every byte that is verified —
+// certificate, signature, Rekor body, SET, inclusion proof, checkpoint — is
+// as the public-good instances issued it.
+func TestKeylessRealBundle(t *testing.T) {
+	r, err := ledger.PublicGoodTrustedRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifact, err := os.ReadFile("testdata/keyless/goreleaser-v2.18.3-checksums.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	orig, err := os.ReadFile("testdata/keyless/goreleaser-v2.18.3-checksums.txt.sigstore.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ledger.VerifyKeylessBundle(orig, artifact, "goreleaser/goreleaser", r); err == nil || !strings.Contains(err.Error(), "timestampVerificationData") {
+		t.Fatalf("the original carries a TSA timestamp and must be refused naming it: %v", err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(orig, &doc); err != nil {
+		t.Fatal(err)
+	}
+	delete(doc["verificationMaterial"].(map[string]any), "timestampVerificationData")
+	b, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ledger.VerifyKeylessBundle(b, artifact, "goreleaser/goreleaser", r); err != nil {
+		t.Fatalf("a genuine public-good bundle must verify: %v", err)
+	}
+	if err := ledger.VerifyKeylessBundle(b, artifact, "goreleaser/other", r); err == nil {
+		t.Fatal("verified as the wrong repository")
+	}
+	rootJSON, err := os.ReadFile("sigstore_trusted_root.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := oracle(t, rootJSON, b, artifact, "goreleaser/goreleaser"); err != nil {
+		t.Fatalf("sigstore-go rejects the fixture: %v", err)
+	}
+}

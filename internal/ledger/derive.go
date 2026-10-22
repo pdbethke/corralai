@@ -176,7 +176,11 @@ func statusOf(c ChainCheck, t Trust) EntryStatus {
 		st.Status, st.Problem = StatusFailed, "hash or link does not check"
 	case !c.Signed:
 		st.Status = StatusUnsigned
-	case len(t.RootPub) == 0:
+	case c.Keyless && c.SigOK:
+		// Checked against the repository and the Sigstore root, which is
+		// all a keyless entry's trust rests on; no root key is involved.
+		st.Status = StatusVerified
+	case len(t.RootPub) == 0 && !c.Keyless:
 		st.Status, st.Problem = StatusFailed, "signed, but no root key was given to check the signature against"
 	case !c.SigOK:
 		st.Status, st.Problem = StatusFailed, "signature was not verified"

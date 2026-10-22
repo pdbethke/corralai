@@ -10,6 +10,8 @@ import (
 	"os/signal"
 	"sync"
 	"time"
+
+	"github.com/pdbethke/corralai/internal/sandbox"
 )
 
 // agentWaitDelay is how long Wait gives an agent's output pipes to close
@@ -26,6 +28,10 @@ const agentWaitDelay = 5 * time.Second
 func agentCommand(ctx context.Context, argv []string) *exec.Cmd {
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...) // #nosec G204 -- the operator's own agent definition, as they defined it
 	cmd.WaitDelay = agentWaitDelay
+	// The agent keeps corral's environment (its own login and token
+	// variables) but never the run's GitHub Actions identity: a model with
+	// tools holding it could sign a ledger entry as the repository.
+	cmd.Env = sandbox.WithoutCIIdentity(nil)
 	ownProcessGroup(cmd)
 	// Cancel runs on exec's own goroutine, only after Start succeeded, so
 	// cmd.Process is set and not being written.

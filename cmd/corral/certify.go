@@ -21,6 +21,7 @@ import (
 
 	"github.com/pdbethke/corralai/internal/brainclient"
 	"github.com/pdbethke/corralai/internal/creds"
+	"github.com/pdbethke/corralai/internal/sandbox"
 )
 
 // buildRecord is the raw build record `corral certify` reports to the brain's
@@ -132,6 +133,9 @@ func (realRunner) GitVerifyCommit(sha string) (string, bool, error) {
 func (realRunner) RunCommand(argv []string, stdout, stderr io.Writer) (int, time.Duration, []byte, error) {
 	var combined bytes.Buffer
 	cmd := exec.Command(argv[0], argv[1:]...) // #nosec G204 -- argv is the operator-supplied check command, the entire point of `corral certify -- <cmd>`
+	// The project's command keeps the operator's environment, minus the
+	// run's GitHub Actions identity (sandbox.CIIdentityTokens).
+	cmd.Env = sandbox.WithoutCIIdentity(nil)
 	cmd.Stdout = io.MultiWriter(stdout, &combined)
 	cmd.Stderr = io.MultiWriter(stderr, &combined)
 	start := time.Now()

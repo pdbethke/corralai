@@ -246,9 +246,57 @@ var DesktopSession = []string{
 	"DBUS_SESSION_BUS_ADDRESS",
 }
 
+// CIIdentityTokens are the GitHub Actions credentials that let a process
+// act AS THE RUN: the OIDC token request pair a job granted id-token: write
+// exports, and the runtime token. Keyless ledger signing (auditpush, with
+// CORRALAI_LEDGER_SIGNER=sigstore, which the Action selects by itself on a
+// public repository) exchanges that OIDC token for a Fulcio certificate
+// naming the repository, so any code holding them can sign a ledger entry
+// that verifies as the repository's own. Under the Action's workspace
+// substrate the audited suite, model-written tests and review reproductions
+// run on the runner itself, in the same job.
+//
+// Corral's own signer reads them from corral's OWN process environment.
+// Every child the audit starts is built without them: ScrubbedEnviron (the
+// workspace runner), WithoutCIIdentity (the doors that otherwise inherit the
+// environment whole: agent seats, the Python preflight probe, `corral
+// certify -- <cmd>`), and the jail's allow-lists, which never carried them.
+// Found by the whole-branch review of keyless signing, 2026-10-22.
+var CIIdentityTokens = []string{
+	"ACTIONS_ID_TOKEN_REQUEST_URL",
+	"ACTIONS_ID_TOKEN_REQUEST_TOKEN",
+	"ACTIONS_RUNTIME_TOKEN",
+}
+
+// WithoutCIIdentity is env without CIIdentityTokens and otherwise unchanged,
+// for a child that must keep the rest of corral's environment (an agent CLI
+// needs its own login variables). A nil env is read as os.Environ(), so the
+// result can be assigned to cmd.Env directly — a nil cmd.Env would inherit
+// the tokens.
+func WithoutCIIdentity(env []string) []string {
+	if env == nil {
+		env = os.Environ()
+	}
+	drop := map[string]bool{}
+	for _, n := range CIIdentityTokens {
+		drop[n] = true
+	}
+	out := make([]string, 0, len(env))
+	for _, kv := range env {
+		k, _, _ := strings.Cut(kv, "=")
+		if !drop[k] {
+			out = append(out, kv)
+		}
+	}
+	return out
+}
+
 func ScrubbedEnviron() []string {
 	drop := map[string]bool{}
 	for _, n := range CorralOwnSecrets {
+		drop[n] = true
+	}
+	for _, n := range CIIdentityTokens {
 		drop[n] = true
 	}
 	for _, n := range DesktopSession {

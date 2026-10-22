@@ -614,6 +614,14 @@ What this puts on the record, in public, permanently:
   is empty) or when the job has no OIDC token. Give a private repository a
   certify key (`CORRALAI_CERTIFY_KEY` in the step's `env:`) to sign its
   entries; a configured key is never overridden by keyless signing.
+- **The token request credentials are removed from everything the audit
+  runs.** `ACTIONS_ID_TOKEN_REQUEST_URL`, `ACTIONS_ID_TOKEN_REQUEST_TOKEN` and
+  `ACTIONS_RUNTIME_TOKEN` are read only by corral's own signer. The audited
+  suite, model-written tests, review reproductions, agent seats and the
+  Python preflight probe all start without them, so code under audit cannot
+  mint a certificate for the repository and sign an entry as it. The rest of
+  the job's environment is kept. A step of *your* workflow that runs
+  untrusted code is outside corral and still sees them.
 - **One entry per run.** The Action points `CORRALAI_MACHINE_LEDGER` at the
   ledger directory, so the runner's machine-ledger copy and the repository
   entry are the same write. Without that a keyless run would log a second

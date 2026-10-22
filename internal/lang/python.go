@@ -399,6 +399,9 @@ func (pyPlugin) Preflight(testCmd []string) error {
 	// before it forces the pipes closed, rather than killing the whole
 	// group promptly the moment ctx expires.
 	sandbox.GuardProcess(probeCmd)
+	// The operator's interpreter, in the repository: pytest loads its
+	// conftest.py even for --version. Never with the run's CI identity.
+	probeCmd.Env = sandbox.WithoutCIIdentity(nil)
 	if out, err := probeCmd.CombinedOutput(); err != nil {
 		if ctx.Err() != nil {
 			return fmt.Errorf("lang: python plugin preflight — pytest importability probe via %q did not finish within %s: %v",
@@ -429,6 +432,7 @@ func pyPreflightStockDefault() error {
 	// GuardProcess: see the identical comment in Preflight above.
 	stockCmd := exec.CommandContext(ctx, bin, "-m", "pytest", "--version")
 	sandbox.GuardProcess(stockCmd)
+	stockCmd.Env = sandbox.WithoutCIIdentity(nil)
 	if out, err := stockCmd.CombinedOutput(); err != nil {
 		if ctx.Err() != nil {
 			return fmt.Errorf("lang: python plugin preflight — pytest importability probe did not finish within %s: %v", preflightProbeTimeout, ctx.Err())

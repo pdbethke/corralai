@@ -633,7 +633,7 @@ func runVerifyLedger(dir, pubFlag, repoFlag, expectHead string, stdout, stderr i
 			mark, what = "✗", c.Problem
 			bad++
 		case c.Keyless && c.SigOK:
-			what += fmt.Sprintf(", signed keylessly by %s and verified against the Sigstore root, for %s", c.Signer, repoFlag)
+			what += fmt.Sprintf(", signed keylessly by %s and verified against the Sigstore root, for %s", c.Signer, trust.Repo)
 		case c.Signed && pub != nil:
 			what += fmt.Sprintf(", signed by %s and verified against %s", signerLabel(c), pubSource)
 		case c.Signed:

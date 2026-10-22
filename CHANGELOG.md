@@ -15,7 +15,7 @@ history of any release, `git log v0.3.4..v0.3.5`.
 
 - **A ledger entry can be signed keylessly, by the GitHub repository that ran
   the audit.** Set `CORRALAI_LEDGER_SIGNER=sigstore` in a GitHub Actions run
-  (with `id-token: write`) and every ledger entry corral writes there is signed
+  (with the `id-token: write` permission, which it requires) and every ledger entry corral writes there is signed
   through Sigstore with the workflow's own identity instead of a key an
   ephemeral runner cannot keep. Such an entry is format `corral-ledger-6`, keyid
   `sigstore`, and carries a Sigstore bundle in place of an Ed25519 signature.
@@ -26,8 +26,13 @@ history of any release, `git log v0.3.4..v0.3.5`.
   a Problem saying so. It is never guessed from the scan's repo, the directory
   or git config. The Sigstore root the entry is checked against is the
   public-good root embedded in the release.
-  **Older readers:** a corral release before this one cannot read a ledger that
-  holds a `corral-ledger-6` entry. Key-signed and unsigned entries are still
+  Keyless signing has been exercised only against an in-process test
+  Fulcio and Rekor; it has not yet been run end to end in GitHub Actions.
+  `corral ledger checkpoint` and `corral ledger signer add|revoke|list` verify
+  under the root key only and cannot operate on a ledger that holds keyless
+  entries (they report those entries as failing).
+  **Older readers:** a corral release before this one cannot read, and refuses
+  the whole ledger, once it holds a `corral-ledger-6` entry. Key-signed and unsigned entries are still
   written as `corral-ledger-5`, so a ledger nobody signs keylessly stays
   readable by older releases.
 

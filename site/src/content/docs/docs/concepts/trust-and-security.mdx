@@ -188,6 +188,10 @@ We did not reuse the root-key path because an ephemeral runner cannot hold a
 root key, and we did not accept "any GitHub identity" because that would make
 every keyless entry from every repository look alike.
 
+Keyless signing has been exercised only against an in-process test Fulcio and
+Rekor; it has not yet been run end to end in GitHub Actions. The run must have
+the `id-token: write` permission, which keyless signing requires.
+
 Verification is therefore *against a repository you name*:
 
 ```bash
@@ -203,8 +207,13 @@ from the scan's repo, the directory or git config, because the repository the
 entries claim is the thing being checked. `corral ledger verify` and `corral ui`
 take the same flag.
 
+`corral ledger checkpoint` and `corral ledger signer add|revoke|list` verify
+under the root key only, so they cannot operate on a ledger that holds keyless
+entries; they report those entries as failing.
+
 Entries written this way are `corral-ledger-6`, and **a corral release before
-the one that introduced them cannot read a ledger that holds one**. Key-signed
+the one that introduced them cannot read, and refuses the whole ledger, once it
+holds one**. Key-signed
 and unsigned entries are still `corral-ledger-5`.
 
 ## Honest scope

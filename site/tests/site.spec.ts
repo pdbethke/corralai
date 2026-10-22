@@ -326,7 +326,9 @@ test('the page has no obvious accessibility footguns', async ({ page }) => {
   const linkCount = await links.count();
   for (let i = 0; i < linkCount; i++) {
     const link = links.nth(i);
-    const text = (await link.innerText()).trim();
+    // textContent, not innerText: a link in a closed <details> (the docs
+    // nav's collapsed groups) renders nothing until opened, and has its name.
+    const text = ((await link.textContent()) ?? '').trim();
     const ariaLabel = await link.getAttribute('aria-label');
     expect(
       text.length > 0 || (ariaLabel && ariaLabel.length > 0),

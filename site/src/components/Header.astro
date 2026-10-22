@@ -14,6 +14,10 @@
 // dialog and loads Pagefind's UI on first open; it is a public script rather
 // than a component script because the /ledger/ copy carries it and not Astro's
 // bundle. The header is data-pagefind-ignore so its links are not results.
+//
+// The docs nav (DocsSidebar) is drawn here too, straight after the header, so
+// it is on every page the header is on. Below 1024px it is a drawer, and the
+// header's Docs button (.sh-docs) opens it.
 interface Props {
   /** which primary nav item is the current page */
   active?: 'home' | 'docs' | 'recordings' | 'warehouse' | 'notes';
@@ -22,9 +26,14 @@ const { active } = Astro.props;
 import Logo from './Logo.astro';
 import SiteNav from './SiteNav.astro';
 import StarLink from './StarLink.astro';
+import DocsSidebar from './DocsSidebar.astro';
 ---
 <header class="site-header" data-pagefind-ignore="all">
   <div class="sh-inner">
+    <button class="sh-docs" type="button" data-site-side-toggle aria-controls="site-side" aria-expanded="false" aria-label="Docs menu">
+      <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M1.75 3h12.5a.75.75 0 0 1 0 1.5H1.75a.75.75 0 0 1 0-1.5m0 4.25h12.5a.75.75 0 0 1 0 1.5H1.75a.75.75 0 0 1 0-1.5m0 4.25h12.5a.75.75 0 0 1 0 1.5H1.75a.75.75 0 0 1 0-1.5"/></svg>
+      <span>Docs</span>
+    </button>
     <a class="sh-brand" href="/" aria-label="Corralai — home">
       <Logo size={24} />
     </a>
@@ -50,6 +59,7 @@ import StarLink from './StarLink.astro';
     </div>
   </dialog>
 </header>
+<DocsSidebar current={Astro.url.pathname} />
 
 <style>
   .site-header {
@@ -125,6 +135,25 @@ import StarLink from './StarLink.astro';
     cursor: pointer;
   }
   .sh-search:hover { color: var(--stage-fg); border-color: var(--stage-amber); }
+  .sh-docs {
+    display: none;
+    height: 34px;
+    align-items: center;
+    gap: 6px;
+    padding: 0 10px;
+    border-radius: 8px;
+    background: var(--stage-panel);
+    color: var(--stage-fg);
+    border: 1px solid var(--stage-line);
+    font: inherit;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .sh-docs:hover, .sh-docs[aria-expanded='true'] { border-color: var(--stage-amber); }
+  @media (max-width: 1023.98px) {
+    .sh-docs { display: inline-flex; }
+  }
   .sh-search-dialog {
     width: min(720px, calc(100vw - 32px));
     max-height: min(80vh, 760px);

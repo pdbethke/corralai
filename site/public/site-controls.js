@@ -129,8 +129,35 @@
       }
     });
   }
+  // The docs nav (DocsSidebar.astro): below 1024px a drawer the header's Docs
+  // button opens, by data-site-side on <html>; Escape, a click outside it or
+  // a link in it closes it. At any width the current page is scrolled into
+  // the nav's view, so a page deep in the list shows where it is.
+  function wireSide() {
+    var side = document.getElementById('site-side');
+    if (!side) return;
+    var root = document.documentElement;
+    var toggles = document.querySelectorAll('[data-site-side-toggle]');
+    function set(open) {
+      if (open) root.setAttribute('data-site-side', 'open');
+      else root.removeAttribute('data-site-side');
+      toggles.forEach(function (b) { b.setAttribute('aria-expanded', open ? 'true' : 'false'); });
+    }
+    var isOpen = function () { return root.getAttribute('data-site-side') === 'open'; };
+    toggles.forEach(function (b) {
+      b.addEventListener('click', function (e) { e.stopPropagation(); set(!isOpen()); });
+    });
+    document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && isOpen()) set(false); });
+    document.addEventListener('click', function (e) {
+      if (isOpen() && (!side.contains(e.target) || e.target.closest('a'))) set(false);
+    });
+    var here = side.querySelector('a[aria-current="page"]');
+    if (here) side.scrollTop = here.offsetTop - side.clientHeight / 3;
+  }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', wireSearch);
   else wireSearch();
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', wireSide);
+  else wireSide();
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', wire);
   else wire();
 })();

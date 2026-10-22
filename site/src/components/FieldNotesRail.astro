@@ -1,7 +1,7 @@
 ---
 // SPDX-License-Identifier: Elastic-2.0
 // The field-notes rail: the newest notes in a column on the right of the
-// front page and of every note page, so the notes are in view wherever a
+// front page, of every note page and of every docs page, so the notes are in view wherever a
 // reader is. The page around it decides where it goes on a narrow screen
 // (see .with-rail in global.css); the rail itself only lists.
 //
@@ -51,11 +51,11 @@ const notes = (await publishedNotes()).filter((n) => n.id !== exclude).slice(0, 
   .fn-rail-all a { text-decoration: none; }
 
   /* Wide screens: a sticky column below the sticky header. */
-  @media (min-width: 1180px) {
+  @media (min-width: 1360px) {
     .fn-rail { position: sticky; top: 76px; max-height: calc(100vh - 96px); overflow-y: auto; }
   }
   /* Narrow screens: a pointer, three notes long. */
-  @media (max-width: 1179.98px) {
+  @media (max-width: 1359.98px) {
     .fn-rail li:nth-child(n + 4) { display: none; }
   }
 </style>

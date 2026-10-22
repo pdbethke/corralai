@@ -59,15 +59,16 @@ test('a collapsed sidebar group opens on its own pages only', async ({ page }) =
   await expect(group(page)).toHaveAttribute('open', '');
 });
 
-test('on a phone the sidebar folds into a Docs menu above the page', async ({ page }) => {
-  await page.setViewportSize({ width: 375, height: 800 });
+test('a docs page carries the field-notes rail beside its contents, like the front page', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto('/docs/getting-started/');
-  const menu = page.locator('details.docs-side');
-  await expect(menu.locator('> summary')).toBeVisible();
-  await expect(page.getByRole('link', { name: 'Configuration' })).toBeHidden();
-  await menu.locator('> summary').click();
-  await expect(page.getByRole('link', { name: 'Configuration' })).toBeVisible();
-  expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(0);
+  const rail = page.locator('aside.fn-rail');
+  await expect(rail.locator('li a').first()).toHaveAttribute('href', /^\/field-notes\/[a-z0-9-]+\/$/);
+  const r = await rail.boundingBox();
+  const article = await page.locator('article.docs-article').boundingBox();
+  expect(r!.x, 'the rail sits right of the article').toBeGreaterThanOrEqual(article!.x + article!.width - 1);
+  const toc = await page.getByRole('navigation', { name: 'On this page' }).boundingBox();
+  expect(toc!.y + toc!.height, 'the contents list sits above the rail').toBeLessThanOrEqual(r!.y + 1);
 });
 
 test('a docs note renders as a callout with its title', async ({ page }) => {

@@ -155,11 +155,11 @@ func (p *Pages) Render(w io.Writer, s Site, path string) error {
 	if err := p.render(&buf, s, path); err != nil {
 		return err
 	}
-	_, err := w.Write(fillNav(buf.Bytes(), s.Nav))
+	_, err := w.Write(fillChrome(buf.Bytes(), s.SiteChrome))
 	return err
 }
 
-// render executes the template for path; Render puts Site.Nav in its slot.
+// render executes the template for path; Render keeps or drops the site chrome slot.
 func (p *Pages) render(w io.Writer, s Site, path string) error {
 	switch {
 	case path == "index.html":

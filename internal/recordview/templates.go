@@ -46,9 +46,6 @@ padding:1px 9px;font-size:.74rem;white-space:nowrap}
 .finding h3{margin-top:0}
 .claim{font-size:1rem;margin:.2em 0 .6em}
 .small{font-size:.82rem;color:var(--muted)}
-.sitenav{display:flex;flex-wrap:wrap;gap:6px 18px;font-size:.88rem;margin:0 0 24px;padding-bottom:12px;border-bottom:1px solid var(--line)}
-.sitenav a{text-decoration:none}
-.sitenav a:first-child{font-weight:600}
 .nowrap{white-space:nowrap}
 footer{margin-top:60px;padding-top:20px;border-top:1px solid var(--line);color:var(--muted);font-size:.85rem}
 .scroll{overflow-x:auto;max-width:100%}
@@ -89,8 +86,9 @@ const indexTmpl = `<!doctype html>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>corral/ledger — the record</title>
 <meta name="description" content="Every audit and review corral has recorded{{if .HasLedger}}: hash-linked, signed where a key was present, and reproducible{{end}}.">
-<style>` + baseCSS + `</style></head><body><div class="wrap">
-<nav data-sitenav></nav>
+<style>` + baseCSS + `</style></head><body>
+<div data-site-chrome></div>
+<div class="wrap">
 
 <h1>corral/ledger — the record</h1>
 <p class="lede">Every audit and review corral has recorded{{if .HasLedger}}, as a hash-linked chain, signed where a key was present{{end}}.
@@ -236,8 +234,9 @@ const entryTmpl = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>review {{.Short}} — corral/ledger</title>
-<style>` + baseCSS + `</style></head><body><div class="wrap">
-<nav data-sitenav></nav>
+<style>` + baseCSS + `</style></head><body>
+<div data-site-chrome></div>
+<div class="wrap">
 
 <p class="small"><a href="../index.html">← the record</a></p>
 <h1>Review <span class="mono">{{.Short}}</span></h1>
@@ -333,8 +332,9 @@ const scanTmpl = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>audit {{.Short}} — corral/ledger</title>
-<style>` + baseCSS + `</style></head><body><div class="wrap">
-<nav data-sitenav></nav>
+<style>` + baseCSS + `</style></head><body>
+<div data-site-chrome></div>
+<div class="wrap">
 
 <p class="small"><a href="../index.html">← the record</a></p>
 <h1>Audit <span class="mono">{{.Short}}</span></h1>
@@ -422,8 +422,9 @@ const listTmpl = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{{.What}}, page {{.N}} — corral/ledger</title>
-<style>` + baseCSS + `</style></head><body><div class="wrap">
-<nav data-sitenav></nav>
+<style>` + baseCSS + `</style></head><body>
+<div data-site-chrome></div>
+<div class="wrap">
 <p class="small"><a href="index.html">← the record</a></p>
 <h1>All {{.What}} <span class="small">page {{.N}} of {{.Of}}</span></h1>
 {{if not .HasLedger}}{{template "noledger"}}{{end}}
@@ -444,8 +445,9 @@ const chainTmpl = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>the chain, page {{.N}} — corral/ledger</title>
-<style>` + baseCSS + `</style></head><body><div class="wrap">
-<nav data-sitenav></nav>
+<style>` + baseCSS + `</style></head><body>
+<div data-site-chrome></div>
+<div class="wrap">
 <p class="small"><a href="index.html">← the record</a></p>
 <h1>The chain <span class="small">page {{.N}} of {{.Of}}, newest first</span></h1>
 {{template "chainclaim" .Site}}
@@ -485,8 +487,9 @@ const verdictsTmpl = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>awaiting a verdict - corral/ledger</title>
-<style>` + baseCSS + `</style></head><body><div class="wrap">
-<nav data-sitenav></nav>
+<style>` + baseCSS + `</style></head><body>
+<div data-site-chrome></div>
+<div class="wrap">
 <p class="small"><a href="index.html">&larr; the record</a></p>
 <h1>Awaiting a person's verdict{{if .HasLedger}} <span class="small">{{len .Awaiting}}</span>{{end}}</h1>
 {{if .HasLedger}}<p class="lede">Findings from reviews that stand, with no verdict that stands. Reproduced ones first: execution backed them.</p>{{end}}

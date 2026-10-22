@@ -3,11 +3,14 @@
 import { defineConfig } from 'astro/config';
 
 import starlight from '@astrojs/starlight';
+import ledgerChrome from './integrations/ledger-chrome.mjs';
 
 // https://astro.build/config
 export default defineConfig({
   site: 'https://corralai.dev',
   integrations: [
+    // Copies the site header onto the Go-rendered /ledger/ pages after the build.
+    ledgerChrome(),
     starlight({
       title: 'Corralai docs',
       description:

@@ -128,11 +128,12 @@ type EntryView struct {
 
 // Site is the whole record.
 type Site struct {
-	// Nav is the menu a site build puts at the top of every page, so a
-	// reader who lands on a record page from a link can reach the rest of
-	// the site and learn what corral is. corral ui leaves it empty: one
-	// person's own ledger needs no site menu.
-	Nav []NavLink
+	// SiteChrome keeps the slot at the top of every page for the site build
+	// to fill with the site's own header (site/integrations/ledger-chrome.mjs),
+	// so a reader who lands on a record page from a link can reach the rest
+	// of the site and learn what corral is. corral ui leaves it off: one
+	// person's own ledger needs no site header.
+	SiteChrome bool
 
 	// Write renders the adjudication controls. Only corral ui --write sets
 	// it, per request; a static build never does.

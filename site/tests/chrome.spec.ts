@@ -187,3 +187,30 @@ test('the launch docs pages render (configuration, MCP tools, limitations)', asy
     await expect(page.getByRole('navigation', { name: 'Main' })).toBeAttached();
   }
 });
+
+// /docs is Starlight, so it cannot use Header.astro, but its header draws the
+// same SiteNav and StarLink: same links in the same order, the same pill
+// colors, Docs current instead of Home.
+test('the docs header draws the same nav and Star as the site header', async ({ page }) => {
+  await page.setViewportSize({ width: 1400, height: 800 });
+  const read = async (path: string, scope: string) => {
+    await page.goto(path);
+    return page.locator(scope).evaluate((el) => {
+      const css = (e: Element, p: string) => getComputedStyle(e).getPropertyValue(p);
+      const link = el.querySelector('nav.sh-nav a:not([aria-current])')!;
+      const cur = el.querySelector('nav.sh-nav a[aria-current="page"]')!;
+      return {
+        links: [...el.querySelectorAll('nav.sh-nav a')].map((a) => [a.textContent, a.getAttribute('href')]),
+        current: cur.textContent,
+        link: [css(link, 'color'), css(link, 'font-size'), css(link, 'font-weight'), css(link, 'padding')],
+        pill: [css(cur, 'color'), css(cur, 'background-color')],
+        star: el.querySelector('a.sh-star')?.getAttribute('href'),
+      };
+    });
+  };
+  const site = await read('/', 'header.site-header');
+  const docs = await read('/docs/getting-started/', 'header.header');
+  expect(site.current).toBe('Home');
+  expect(docs.current).toBe('Docs');
+  expect({ ...docs, current: '' }).toEqual({ ...site, current: '' });
+});

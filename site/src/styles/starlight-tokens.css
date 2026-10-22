@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: Elastic-2.0 */
 /* Repoint Starlight's own CSS custom properties at the same daylight palette
-   used by the landing page (see src/styles/global.css), so /docs doesn't
+   used by the landing page (src/styles/tokens.css, loaded first), so /docs doesn't
    look like an unrelated skin bolted onto the rest of the site. */
 :root {
   --sl-color-bg: #faf3e6;
@@ -26,27 +26,27 @@ body {
    ONLY — every built-in inside it then renders light-on-dark for free, while the
    rest of the page keeps following the daylight/dark theme. */
 header.header {
-  background: #0e1116; /* --stage-bg */
-  border-bottom: 1px solid #33405a; /* --stage-line */
+  background: var(--stage-bg);
+  border-bottom: 1px solid var(--stage-line);
 
-  --sl-color-bg: #0e1116;
-  --sl-color-bg-nav: #0e1116;
-  --sl-color-black: #0e1116;
-  --sl-color-white: #e6e1d8; /* --stage-fg */
-  --sl-color-text: #e6e1d8;
-  --sl-color-text-invert: #0e1116; /* dark text on the amber active pill */
-  --sl-color-gray-1: #e6e1d8;
+  --sl-color-bg: var(--stage-bg);
+  --sl-color-bg-nav: var(--stage-bg);
+  --sl-color-black: var(--stage-bg);
+  --sl-color-white: var(--stage-fg);
+  --sl-color-text: var(--stage-fg);
+  --sl-color-text-invert: var(--stage-bg); /* dark text on the amber active pill */
+  --sl-color-gray-1: var(--stage-fg);
   --sl-color-gray-2: #b8b09c;
-  --sl-color-gray-3: #8a8170; /* --stage-muted */
+  --sl-color-gray-3: var(--stage-muted);
   --sl-color-gray-4: #5c5647;
-  --sl-color-gray-5: #33405a; /* --stage-line */
-  --sl-color-gray-6: #161b22; /* --stage-panel */
+  --sl-color-gray-5: var(--stage-line);
+  --sl-color-gray-6: var(--stage-panel);
   --sl-color-gray-7: #12161c;
-  --sl-color-text-accent: #e8a838; /* --stage-amber */
-  --sl-color-accent: #e8a838;
-  --sl-color-accent-low: #33405a;
-  --sl-color-hairline: #33405a;
-  --sl-color-hairline-light: #33405a;
-  --sl-color-hairline-shade: #33405a;
+  --sl-color-text-accent: var(--stage-amber);
+  --sl-color-accent: var(--stage-amber);
+  --sl-color-accent-low: var(--stage-line);
+  --sl-color-hairline: var(--stage-line);
+  --sl-color-hairline-light: var(--stage-line);
+  --sl-color-hairline-shade: var(--stage-line);
   color-scheme: dark;
 }

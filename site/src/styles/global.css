@@ -1,27 +1,9 @@
 /* SPDX-License-Identifier: Elastic-2.0 */
-/* Daylight palette: warm cream/parchment ground, dark-ink text, the same
-   amber accent read in daylight instead of on a terminal-dark background.
-   --stage-* stay dark — the replay hero is a product-shown-in-a-dark-window
-   viewport, framed against the light page, not itself restyled. Kept as
-   custom properties (not hand-picked per component) so a future
-   prefers-color-scheme dark variant is a token swap, not a rewrite. */
-:root {
-  --bg: #faf3e6; --fg: #241f18; --muted: #6b6152; --amber: #8f5e08; --red: #b8341f;
-  --line: #ddd0b3; --green: #3f7a52; --panel: #f2e9d6; --sel: #ece0c4; --card: rgba(255,251,242,.97);
-  --stage-bg: #0e1116; --stage-fg: #e6e1d8; --stage-muted: #8a8170; --stage-amber: #e8a838;
-  --stage-red: #e8503a; --stage-green: #8fdcab; --stage-line: #33405a; --stage-panel: #161b22;
-  color-scheme: light;
-}
-/* Dark mode — the page adopts the cockpit's own dark palette (the --stage-*
-   tokens), so in dark the whole site reads as one dark instrument rather than a
-   light page with a dark window cut into it. Opt-in via the toggle (persisted);
-   the no-flash head script + prefers-color-scheme set the initial value. The
-   --stage-* tokens are unchanged (the replay viewport is dark in both modes). */
-:root[data-theme="dark"] {
-  --bg: #0e1116; --fg: #e6e1d8; --muted: #8a8170; --amber: #e8a838; --red: #e8503a;
-  --line: #2a3344; --green: #8fdcab; --panel: #161b22; --sel: #1c2534; --card: rgba(22,27,34,.97);
-  color-scheme: dark;
-}
+/* The palette (light, dark and the always-dark --stage-* header/cockpit
+   family) lives in tokens.css, which the docs load too (astro.config
+   customCss), so /docs draws from the same values instead of copies. */
+@import './tokens.css';
+
 /* Cockpit SKINS — visual palettes for the replay instrument, switched from the
    cockpit HUD's #skinsel (replay-player.js setSkin() sets data-skin on <html>).
    Each skin overrides only the theme-invariant --stage-* tokens, so the swarm

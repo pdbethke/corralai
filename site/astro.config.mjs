@@ -4,6 +4,7 @@ import { defineConfig } from 'astro/config';
 
 import starlight from '@astrojs/starlight';
 import ledgerChrome from './integrations/ledger-chrome.mjs';
+import { SITE_NAV } from './src/data/site-nav.mjs';
 
 // https://astro.build/config
 export default defineConfig({
@@ -22,7 +23,7 @@ export default defineConfig({
       // fonts by default — no <link> to a Google/Adobe font host anywhere in
       // its default theme. Verified in Task 3 Step 5 and re-verified in
       // Task 8's e2e docs-session network interception.
-      customCss: ['./src/styles/starlight-tokens.css'],
+      customCss: ['./src/styles/tokens.css', './src/styles/starlight-tokens.css'],
       // Show the CorralAI lockup in the docs header (links back to the site
       // home), so /docs and the marketing pages read as one continuous site.
       components: {
@@ -35,13 +36,12 @@ export default defineConfig({
       sidebar: [
         {
           label: 'Site',
-          items: [
-            { label: 'Home', link: '/' },
-            { label: 'Recordings', link: '/recordings/' },
-            { label: 'DuckDB integration', link: '/warehouse/' },
-            { label: 'Field notes', link: '/field-notes/' },
-            { label: 'GitHub', link: 'https://github.com/pdbethke/corralai', attrs: { target: '_blank', rel: 'noopener noreferrer' } },
-          ],
+          // The same list the site and docs headers draw (src/data/site-nav.mjs).
+          items: SITE_NAV.filter((l) => l.key !== 'docs').map((l) => ({
+            label: l.label,
+            link: l.href,
+            ...(l.external ? { attrs: { target: '_blank', rel: 'noopener noreferrer' } } : {}),
+          })),
         },
         // First: what it is and how each flow works, in plain language — the
         // page a reader who has thirty seconds should land on.

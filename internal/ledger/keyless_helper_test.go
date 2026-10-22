@@ -5,6 +5,7 @@ package ledger_test
 import (
 	"bytes"
 	"crypto/ecdsa"
+	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
@@ -46,6 +47,11 @@ type testSigstore struct {
 	caStart, caEnd              time.Time
 	logStart                    time.Time
 	rootJSON                    []byte
+	// edLog lists the log under its own id but with an ed25519 key, as the
+	// public-good root lists its Rekor v2 log.
+	edLog bool
+	// logEnd, when set, ends the log key's validity in the root.
+	logEnd time.Time
 }
 
 const testRepo = "acme/widgets"
@@ -112,7 +118,12 @@ func (s *testSigstore) logID(t *testing.T) []byte {
 // verifiers read the SAME bytes.
 func (s *testSigstore) trustedRootJSON(t *testing.T) []byte {
 	t.Helper()
-	pkix, err := x509.MarshalPKIXPublicKey(&s.rekorKey.PublicKey)
+	var logPub any = &s.rekorKey.PublicKey
+	details := "PKIX_ECDSA_P256_SHA_256"
+	if s.edLog {
+		logPub, details = ed25519.PublicKey(make([]byte, ed25519.PublicKeySize)), "PKIX_ED25519"
+	}
+	pkix, err := x509.MarshalPKIXPublicKey(logPub)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,8 +134,8 @@ func (s *testSigstore) trustedRootJSON(t *testing.T) []byte {
 			"hashAlgorithm": "SHA2_256",
 			"publicKey": map[string]any{
 				"rawBytes":   pkix,
-				"keyDetails": "PKIX_ECDSA_P256_SHA_256",
-				"validFor":   map[string]any{"start": s.logStart.Format(time.RFC3339)},
+				"keyDetails": details,
+				"validFor":   validFor(s.logStart, s.logEnd),
 			},
 			"logId": map[string]any{"keyId": s.logID(t)},
 		}},
@@ -142,6 +153,14 @@ func (s *testSigstore) trustedRootJSON(t *testing.T) []byte {
 		t.Fatal(err)
 	}
 	return js
+}
+
+func validFor(start, end time.Time) map[string]any {
+	v := map[string]any{"start": start.Format(time.RFC3339)}
+	if !end.IsZero() {
+		v["end"] = end.Format(time.RFC3339)
+	}
+	return v
 }
 
 func (s *testSigstore) ledgerRoot(t *testing.T) *ledger.SigstoreRoot {
@@ -172,8 +191,33 @@ type spec struct {
 	checkpointFlip   bool
 	checkpointRoot   bool   // the checkpoint signs another root hash
 	checkpointOrigin string // non-empty: the checkpoint's first line
-	bodyCertOther    bool   // the Rekor body names another certificate
-	checkpointSize   int64  // non-zero: checkpoint names this size
+	cpHintFlip       bool   // a valid signature under a wrong key hint
+	cpNoSig          bool   // no signature lines at all
+	cpExtraBadSig    bool   // a second, invalid signature line after a good one
+	noEKU            bool
+	issuerV1         string // non-empty: the legacy 1.1 issuer differs from 1.8
+	issuerTrailing   bool   // trailing bytes after the 1.8 DER string
+	noSourceRepo     bool
+	digestAlg        string // messageDigest.algorithm
+	bodyHashAlg      string // the Rekor body's data.hash.algorithm
+	bodyKind         string
+	bodyAPIVersion   string
+	bodyPEMTrailing  bool
+	bodyPEMType      string
+	tlogKind         string
+	tlogVersion      string
+	logIndex         int64               // non-zero: the global log index (SET and entry)
+	integratedUnix   int64               // non-zero: the integrated time, in Unix seconds
+	bodyMutate       func([]byte) []byte // edits the body bytes before the log signs them
+	bundleMutate     func([]byte) []byte // edits the finished bundle JSON
+	repoTrailing     bool                // trailing bytes after the 1.12 DER string
+	issuerOnlyV1     bool                // only the legacy 1.1 issuer extension
+	noIssuer         bool                // neither issuer extension
+	issuerNotDER     bool                // 1.8 holds raw bytes, not a DER string
+	edLeaf           bool                // the leaf certifies an ed25519 key
+	notBefore        time.Time           // non-zero: the leaf's NotBefore
+	bodyCertOther    bool                // the Rekor body names another certificate
+	checkpointSize   int64               // non-zero: checkpoint names this size
 	logIDOverride    []byte
 	extraTlog        bool // a second (duplicate) tlog entry
 	dsse             bool // a DSSE envelope instead of a message signature
@@ -207,23 +251,57 @@ func (s *testSigstore) issue(t *testing.T, artifact []byte, sp spec) []byte {
 		sp.signingCAKey, sp.signingCACert = s.interKey, s.interCert
 	}
 	notBefore := time.Now().UTC().Add(-time.Minute).Truncate(time.Second)
+	if !sp.notBefore.IsZero() {
+		notBefore = sp.notBefore
+	}
 	if sp.integrated.IsZero() {
 		sp.integrated = notBefore.Add(30 * time.Second)
 	}
 	issuerDER, _ := asn1.MarshalWithParams(sp.issuer, "utf8")
+	if sp.issuerTrailing {
+		issuerDER = append(issuerDER, 0)
+	}
+	if sp.issuerNotDER {
+		issuerDER = []byte(sp.issuer)
+	}
+	v1 := sp.issuer
+	if sp.issuerV1 != "" {
+		v1 = sp.issuerV1
+	}
+	eku := []x509.ExtKeyUsage{x509.ExtKeyUsageCodeSigning}
+	if sp.noEKU {
+		eku = nil
+	}
 	repoDER, _ := asn1.MarshalWithParams("https://github.com/"+sp.repo, "utf8")
+	if sp.repoTrailing {
+		repoDER = append(repoDER, 0)
+	}
+	var exts []pkix.Extension
+	if !sp.noIssuer {
+		exts = append(exts, pkix.Extension{Id: asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 57264, 1, 1}, Value: []byte(v1)})
+	}
+	if !sp.noIssuer && !sp.issuerOnlyV1 {
+		exts = append(exts, pkix.Extension{Id: asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 57264, 1, 8}, Value: issuerDER})
+	}
+	if !sp.noSourceRepo {
+		exts = append(exts, pkix.Extension{Id: asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 57264, 1, 12}, Value: repoDER})
+	}
+	var leafPub any = &sp.leafKey.PublicKey
+	if sp.edLeaf {
+		edPub, _, err := ed25519.GenerateKey(rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		leafPub = edPub
+	}
 	san := mustURL(t, "https://github.com/"+sp.repo+"/.github/workflows/audit.yml@refs/heads/main")
 	leaf := mustCert(t, &x509.Certificate{
 		SerialNumber: big.NewInt(time.Now().UnixNano()),
 		NotBefore:    notBefore, NotAfter: notBefore.Add(10 * time.Minute),
-		KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageCodeSigning},
-		URIs: san,
-		ExtraExtensions: []pkix.Extension{
-			{Id: asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 57264, 1, 1}, Value: []byte(sp.issuer)},
-			{Id: asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 57264, 1, 8}, Value: issuerDER},
-			{Id: asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 57264, 1, 12}, Value: repoDER},
-		},
-	}, sp.signingCACert, &sp.leafKey.PublicKey, sp.signingCAKey)
+		KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: eku,
+		URIs:            san,
+		ExtraExtensions: exts,
+	}, sp.signingCACert, leafPub, sp.signingCAKey)
 
 	digest := sha256.Sum256(artifact)
 	sig, err := ecdsa.SignASN1(rand.Reader, sp.leafKey, digest[:])
@@ -248,15 +326,30 @@ func (s *testSigstore) issue(t *testing.T, artifact []byte, sp spec) []byte {
 			nil, &sp.leafKey.PublicKey, sp.leafKey)
 		certPEM = pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: other.Raw})
 	}
+	if sp.bodyPEMTrailing {
+		certPEM = append(certPEM, "trailing"...)
+	}
+	if sp.bodyPEMType != "" {
+		certPEM = pem.EncodeToMemory(&pem.Block{Type: sp.bodyPEMType, Bytes: leaf.Raw})
+	}
+	or := func(v, d string) string {
+		if v != "" {
+			return v
+		}
+		return d
+	}
 	body, err := json.Marshal(map[string]any{
-		"apiVersion": "0.0.1", "kind": "hashedrekord",
+		"apiVersion": or(sp.bodyAPIVersion, "0.0.1"), "kind": or(sp.bodyKind, "hashedrekord"),
 		"spec": map[string]any{
-			"data":      map[string]any{"hash": map[string]any{"algorithm": "sha256", "value": bodyHash}},
+			"data":      map[string]any{"hash": map[string]any{"algorithm": or(sp.bodyHashAlg, "sha256"), "value": bodyHash}},
 			"signature": map[string]any{"content": bodySig, "publicKey": map[string]any{"content": certPEM}},
 		},
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if sp.bodyMutate != nil {
+		body = sp.bodyMutate(body)
 	}
 
 	logID := s.logID(t)
@@ -264,6 +357,12 @@ func (s *testSigstore) issue(t *testing.T, artifact []byte, sp spec) []byte {
 		logID = sp.logIDOverride
 	}
 	globalIndex := int64(globalShift + leafIndex)
+	if sp.logIndex != 0 {
+		globalIndex = sp.logIndex
+	}
+	if sp.integratedUnix != 0 {
+		sp.integrated = time.Unix(sp.integratedUnix, 0)
+	}
 	set := s.sign(t, []byte(fmt.Sprintf(`{"body":%q,"integratedTime":%d,"logID":%q,"logIndex":%d}`,
 		base64.StdEncoding.EncodeToString(body), sp.integrated.Unix(), hex.EncodeToString(logID), globalIndex)))
 	if sp.setFlip {
@@ -299,7 +398,19 @@ func (s *testSigstore) issue(t *testing.T, artifact []byte, sp spec) []byte {
 	}
 	pkixDER, _ := x509.MarshalPKIXPublicKey(&s.rekorKey.PublicKey)
 	hint := sha256.Sum256(pkixDER)
-	envelope := note + "\n— rekor.test " + base64.StdEncoding.EncodeToString(append(hint[:4:4], noteSig...)) + "\n"
+	keyHint := append([]byte(nil), hint[:4]...)
+	if sp.cpHintFlip {
+		keyHint[0] ^= 1
+	}
+	envelope := note + "\n\u2014 rekor.test " + base64.StdEncoding.EncodeToString(append(keyHint, noteSig...)) + "\n"
+	if sp.cpNoSig {
+		envelope = note + "\n"
+	}
+	if sp.cpExtraBadSig {
+		bad := append([]byte(nil), noteSig...)
+		bad[len(bad)-1] ^= 1
+		envelope += "\u2014 rekor.test " + base64.StdEncoding.EncodeToString(append(hint[:4:4], bad...)) + "\n"
+	}
 
 	hashes := make([]any, len(proof))
 	for i, h := range proof {
@@ -308,7 +419,7 @@ func (s *testSigstore) issue(t *testing.T, artifact []byte, sp spec) []byte {
 	tle := map[string]any{
 		"logIndex":         strconv.FormatInt(globalIndex, 10),
 		"logId":            map[string]any{"keyId": logID},
-		"kindVersion":      map[string]any{"kind": "hashedrekord", "version": "0.0.1"},
+		"kindVersion":      map[string]any{"kind": or(sp.tlogKind, "hashedrekord"), "version": or(sp.tlogVersion, "0.0.1")},
 		"integratedTime":   strconv.FormatInt(sp.integrated.Unix(), 10),
 		"inclusionPromise": map[string]any{"signedEntryTimestamp": set},
 		"inclusionProof": map[string]any{
@@ -347,13 +458,40 @@ func (s *testSigstore) issue(t *testing.T, artifact []byte, sp spec) []byte {
 		if sp.digestOverride != nil {
 			md = sp.digestOverride
 		}
-		doc["messageSignature"] = map[string]any{"messageDigest": map[string]any{"algorithm": "SHA2_256", "digest": md}, "signature": sig}
+		doc["messageSignature"] = map[string]any{"messageDigest": map[string]any{"algorithm": or(sp.digestAlg, "SHA2_256"), "digest": md}, "signature": sig}
 	}
 	js, err := json.Marshal(doc)
 	if err != nil {
 		t.Fatal(err)
 	}
+	if sp.bundleMutate != nil {
+		js = sp.bundleMutate(js)
+	}
 	return js
+}
+
+// editTlog returns a bundleMutate that edits the bundle's first tlog entry
+// as a generic JSON tree (so a field can be removed or retyped), and fn may
+// also edit the whole document.
+func editBundle(fn func(doc, tle map[string]any)) func([]byte) []byte {
+	return func(b []byte) []byte {
+		var doc map[string]any
+		if err := json.Unmarshal(b, &doc); err != nil {
+			panic(err)
+		}
+		vm := doc["verificationMaterial"].(map[string]any)
+		tl := vm["tlogEntries"].([]any)
+		var tle map[string]any
+		if len(tl) > 0 {
+			tle = tl[0].(map[string]any)
+		}
+		fn(doc, tle)
+		out, err := json.Marshal(doc)
+		if err != nil {
+			panic(err)
+		}
+		return out
+	}
 }
 
 func (s *testSigstore) sign(t *testing.T, msg []byte) []byte {

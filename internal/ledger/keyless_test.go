@@ -8,11 +8,15 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/hex"
 	"encoding/json"
+	"math/big"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -334,6 +338,22 @@ func TestKeylessDifferential(t *testing.T) {
 	lateLog.rootJSON = lateLog.trustedRootJSON(t)
 	// A Fulcio authority whose stated validity ended ten minutes ago, though
 	// its certificates are still within their own dates.
+	edLog := newTestSigstore(t)
+	edLog.edLog = true
+	edLog.rootJSON = edLog.trustedRootJSON(t)
+	expiredLog := newTestSigstore(t)
+	expiredLog.logEnd = time.Now().UTC().Add(-10 * time.Minute).Truncate(time.Second)
+	expiredLog.rootJSON = expiredLog.trustedRootJSON(t)
+	// An intermediate whose EKU is server auth only: the chain may not
+	// lend code signing to a leaf it could not grant.
+	serverAuthCA := newTestSigstore(t)
+	serverAuthCA.interCert = mustCert(t, &x509.Certificate{
+		SerialNumber: big.NewInt(3), Subject: pkix.Name{CommonName: "server-auth-intermediate"},
+		NotBefore: serverAuthCA.caStart, NotAfter: serverAuthCA.caEnd.Add(time.Hour),
+		KeyUsage: x509.KeyUsageCertSign, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		BasicConstraintsValid: true, IsCA: true,
+	}, serverAuthCA.rootCert, &serverAuthCA.interKey.PublicKey, serverAuthCA.rootKey)
+	serverAuthCA.rootJSON = serverAuthCA.trustedRootJSON(t)
 	expiredCA := newTestSigstore(t)
 	expiredCA.caEnd = time.Now().UTC().Add(-10 * time.Minute).Truncate(time.Second)
 	expiredCA.rootJSON = expiredCA.trustedRootJSON(t)
@@ -356,6 +376,109 @@ func TestKeylessDifferential(t *testing.T) {
 		stricter string
 	}{
 		{name: "valid", accept: true},
+		// Fix round 1: rows for every check the first mutation pass left untested.
+		{name: "leaf without any extended key usage", sp: spec{noEKU: true}, want: "not for code signing",
+			stricter: "x509.Verify accepts a leaf with no EKU; code signing is required of the leaf itself"},
+		{name: "bundle: case-variant key", sp: spec{bundleMutate: replaceOnce(`"mediaType"`, `"MEDIATYPE"`)}, want: `unknown field "MEDIATYPE"`},
+		{name: "bundle: duplicate key, decoy first", sp: spec{bundleMutate: prefixKey(`"messageSignature":{"signature":"AAAA"},`)}, want: `duplicate field "messageSignature"`},
+		{name: "bundle: trailing brace", sp: spec{bundleMutate: func(b []byte) []byte { return append(b, '}') }}, want: "trailing data"},
+		{name: "body: case-variant key", sp: spec{bodyMutate: replaceOnce(`"apiVersion"`, `"APIVERSION"`)}, want: `unknown field "APIVERSION"`,
+			stricter: "rekor parses the body with encoding/json leniencies; one reading of a signed document is required"},
+		{name: "body: duplicate key, decoy first", sp: spec{bodyMutate: prefixKey(`"kind":"rekord",`)}, want: `duplicate field "kind"`,
+			stricter: "rekor parses the body with encoding/json leniencies; one reading of a signed document is required"},
+		{name: "body: trailing brace", sp: spec{bodyMutate: func(b []byte) []byte { return append(b, '}') }}, want: "trailing data",
+			stricter: "rekor parses the body with encoding/json leniencies; one reading of a signed document is required"},
+		{name: "bundle: int64 as a bare number", sp: spec{bundleMutate: editBundle(func(_, tle map[string]any) { tle["logIndex"] = 100004 })}, want: "quoted decimal",
+			stricter: "protojson writes every int64 quoted; a bare number is not the shape the signer emits"},
+		{name: "bundle: no certificate", sp: spec{bundleMutate: editBundle(func(doc, _ map[string]any) {
+			delete(doc["verificationMaterial"].(map[string]any), "certificate")
+		})}, want: "no signing certificate"},
+		{name: "bundle: no message signature", sp: spec{bundleMutate: editBundle(func(doc, _ map[string]any) { delete(doc, "messageSignature") })}, want: "no message signature"},
+		{name: "bundle: object where a scalar belongs", sp: spec{bundleMutate: editBundle(func(doc, _ map[string]any) { doc["mediaType"] = map[string]any{} })}, want: "want a scalar"},
+		{name: "bundle: scalar where an object belongs", sp: spec{bundleMutate: editBundle(func(doc, _ map[string]any) { doc["messageSignature"] = "x" })}, want: "want an object"},
+		{name: "bundle: object where an array belongs", sp: spec{bundleMutate: editBundle(func(_, tle map[string]any) {
+			tle["inclusionProof"].(map[string]any)["hashes"] = map[string]any{}
+		})}, want: "want an array"},
+		// Fix round 1, mechanical mutation pass: one row per check it found untested.
+		{name: "int64 not in canonical digits", sp: spec{bundleMutate: editBundle(func(_, tle map[string]any) { tle["logIndex"] = "0100004" })},
+			want: "canonical decimal"},
+		{name: "certificate rawBytes empty", sp: spec{bundleMutate: editBundle(func(doc, _ map[string]any) {
+			doc["verificationMaterial"].(map[string]any)["certificate"] = map[string]any{"rawBytes": ""}
+		})}, want: "no signing certificate"},
+		{name: "certificate not DER", sp: spec{bundleMutate: editBundle(func(doc, _ map[string]any) {
+			doc["verificationMaterial"].(map[string]any)["certificate"] = map[string]any{"rawBytes": "AAAA"}
+		})}, want: "signing certificate: x509"},
+		{name: "signed entry timestamp empty", sp: spec{bundleMutate: editBundle(func(_, tle map[string]any) {
+			tle["inclusionPromise"] = map[string]any{"signedEntryTimestamp": ""}
+		})}, want: "no signed entry timestamp"},
+		{name: "integrated time negative", sp: spec{integratedUnix: -1}, want: "out of range"},
+		{name: "log index beyond 2^53", sp: spec{logIndex: 1 << 54}, want: "out of range",
+			stricter: "RFC 8785 writes integers above 2^53 as doubles; refusing them keeps the SET payload exact"},
+		{name: "integrated before the leaf's NotBefore", sp: spec{notBefore: time.Now().UTC().Add(-time.Minute).Truncate(time.Second),
+			integrated: time.Now().UTC().Add(-5 * time.Minute)}, want: "not valid at the integrated time"},
+		{name: "intermediate not for code signing", ss: serverAuthCA, want: "does not chain to a Fulcio authority"},
+		{name: "source repository DER with trailing bytes", sp: spec{repoTrailing: true}, want: "source repository extension"},
+		{name: "legacy 1.1 issuer only", sp: spec{issuerOnlyV1: true}, accept: true},
+		{name: "no issuer extension", sp: spec{noIssuer: true}, want: "names no OIDC issuer"},
+		{name: "issuer 1.8 not a DER string", sp: spec{issuerNotDER: true}, want: "issuer extension"},
+		{name: "leaf certifies an ed25519 key", sp: spec{edLeaf: true}, want: "is not ECDSA"},
+		{name: "proof index negative", sp: spec{bundleMutate: editBundle(func(_, tle map[string]any) {
+			tle["inclusionProof"].(map[string]any)["logIndex"] = "-1"
+		})}, want: "outside a tree"},
+		{name: "checkpoint without its final newline", sp: spec{bundleMutate: editBundle(func(_, tle map[string]any) {
+			c := tle["inclusionProof"].(map[string]any)["checkpoint"].(map[string]any)
+			c["envelope"] = strings.TrimSuffix(c["envelope"].(string), "\n")
+		})}, want: "not a signed note"},
+		{name: "log key expired before integrated time", ss: expiredLog, want: "key is not valid at"},
+		{name: "bundle: no tlog entries", sp: spec{bundleMutate: editBundle(func(doc, _ map[string]any) {
+			doc["verificationMaterial"].(map[string]any)["tlogEntries"] = []any{}
+		})}, want: "carries 0 transparency-log entries"},
+		{name: "no signed entry timestamp", sp: spec{bundleMutate: editBundle(func(_, tle map[string]any) { delete(tle, "inclusionPromise") })}, want: "no signed entry timestamp"},
+		{name: "tlog kind is not hashedrekord", sp: spec{tlogKind: "dsse"}, want: "want hashedrekord 0.0.1",
+			stricter: "sigstore-go v1.2.2 reads the kind from the body and does not compare kindVersion on this path"},
+		{name: "tlog version is not 0.0.1", sp: spec{tlogVersion: "0.0.2"}, want: "want hashedrekord 0.0.1",
+			stricter: "sigstore-go v1.2.2 reads the kind from the body and does not compare kindVersion on this path"},
+		{name: "negative log index", sp: spec{logIndex: -1}, want: "out of range"},
+		{name: "integrated time beyond 2^53", sp: spec{integratedUnix: 1 << 54}, want: "out of range"},
+		{name: "issuers 1.1 and 1.8 disagree", sp: spec{issuerV1: "https://accounts.google.com"}, want: "two issuers",
+			stricter: "sigstore-go lets the later extension win; two issuers in one certificate are refused"},
+		{name: "issuer DER with trailing bytes", sp: spec{issuerTrailing: true}, want: "trailing bytes"},
+		{name: "no source repository extension", sp: spec{noSourceRepo: true}, want: "names no source repository"},
+		{name: "message digest algorithm SHA2_384", sp: spec{digestAlg: "SHA2_384"}, want: "message digest"},
+		{name: "body hash algorithm sha512", sp: spec{bodyHashAlg: "sha512"}, want: "different artifact digest"},
+		{name: "body kind rekord", sp: spec{bodyKind: "rekord"}, want: "log entry body is"},
+		{name: "body apiVersion 0.0.2", sp: spec{bodyAPIVersion: "0.0.2"}, want: "log entry body is"},
+		{name: "body certificate PEM with trailing data", sp: spec{bodyPEMTrailing: true}, want: "different certificate"},
+		{name: "body certificate PEM of another block type", sp: spec{bodyPEMType: "PUBLIC KEY"}, want: "different certificate"},
+		{name: "log with an ed25519 key", ss: edLog, want: "only ECDSA logs"},
+		{name: "proof index outside the tree", sp: spec{bundleMutate: editBundle(func(_, tle map[string]any) {
+			tle["inclusionProof"].(map[string]any)["logIndex"] = strconv.Itoa(treeSize)
+		})}, want: "outside a tree"},
+		{name: "proof root hash not 32 bytes", sp: spec{bundleMutate: editBundle(func(_, tle map[string]any) {
+			tle["inclusionProof"].(map[string]any)["rootHash"] = make([]byte, 31)
+		})}, want: "root hash is not 32 bytes"},
+		{name: "proof with an extra hash", sp: spec{bundleMutate: editBundle(func(_, tle map[string]any) {
+			p := tle["inclusionProof"].(map[string]any)
+			p["hashes"] = append(p["hashes"].([]any), p["hashes"].([]any)[0])
+		})}, want: "hashes, want"},
+		{name: "proof hash not 32 bytes", sp: spec{bundleMutate: editBundle(func(_, tle map[string]any) {
+			p := tle["inclusionProof"].(map[string]any)
+			p["hashes"].([]any)[0] = "AAAA"
+		})}, want: "hash is not 32 bytes"},
+		{name: "checkpoint is not a signed note", sp: spec{bundleMutate: editBundle(func(_, tle map[string]any) {
+			tle["inclusionProof"].(map[string]any)["checkpoint"] = map[string]any{"envelope": "rekor.test - 1\n7\n"}
+		})}, want: "not a signed note"},
+		{name: "checkpoint signature line malformed", sp: spec{bundleMutate: editBundle(func(_, tle map[string]any) {
+			c := tle["inclusionProof"].(map[string]any)["checkpoint"].(map[string]any)
+			c["envelope"] = c["envelope"].(string) + "not a signature line\n"
+		})}, want: "signature line is malformed"},
+		{name: "checkpoint signature not base64", sp: spec{bundleMutate: editBundle(func(_, tle map[string]any) {
+			c := tle["inclusionProof"].(map[string]any)["checkpoint"].(map[string]any)
+			c["envelope"] = c["envelope"].(string) + "\u2014 rekor.test !!!\n"
+		})}, want: "checkpoint signature is malformed"},
+		{name: "checkpoint key hint is another key's", sp: spec{cpHintFlip: true}, want: "checkpoint signature does not verify"},
+		{name: "checkpoint with no signature line", sp: spec{cpNoSig: true}, want: "carries no signature"},
+		{name: "checkpoint: a second signature line that does not verify", sp: spec{cpExtraBadSig: true}, want: "checkpoint signature does not verify"},
 		{name: "flipped signature byte", sp: spec{sigFlip: true}, want: "signature does not verify under the signing certificate"},
 		{name: "wrong message digest", sp: spec{digestOverride: other[:]}, want: "message digest"},
 		{name: "signed from another repository", sp: spec{repo: "acme/other"}, want: "signed from https://github.com/acme/other"},
@@ -420,6 +543,23 @@ func TestKeylessDifferential(t *testing.T) {
 	t.Logf("differential table: %d bundles", len(cases))
 }
 
+func replaceOnce(old, new string) func([]byte) []byte {
+	return func(b []byte) []byte {
+		out := strings.Replace(string(b), old, new, 1)
+		if out == string(b) {
+			panic("fixture: nothing to replace: " + old)
+		}
+		return []byte(out)
+	}
+}
+
+// prefixKey inserts a member at the start of the top-level object, so a
+// decoy comes BEFORE the real key and encoding/json's last-wins would pick
+// the real one: the duplicate itself must be refused.
+func prefixKey(member string) func([]byte) []byte {
+	return func(b []byte) []byte { return append([]byte("{"+member), b[1:]...) }
+}
+
 // A genuine public-good bundle: goreleaser v2.18.3's checksums.txt, signed
 // keylessly in GitHub Actions (Fulcio + rekor.sigstore.dev), verified
 // against the embedded root. Its RFC 3161 timestamp is removed first, because
@@ -463,5 +603,65 @@ func TestKeylessRealBundle(t *testing.T) {
 	}
 	if err := oracle(t, rootJSON, b, artifact, "goreleaser/goreleaser"); err != nil {
 		t.Fatalf("sigstore-go rejects the fixture: %v", err)
+	}
+}
+
+// Every refusal in ParseSigstoreRoot, one malformed root each.
+func TestParseSigstoreRootRefuses(t *testing.T) {
+	s := newTestSigstore(t)
+	edit := func(fn func(doc map[string]any)) []byte {
+		var doc map[string]any
+		if err := json.Unmarshal(s.rootJSON, &doc); err != nil {
+			t.Fatal(err)
+		}
+		fn(doc)
+		b, err := json.Marshal(doc)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return b
+	}
+	ca := func(doc map[string]any) map[string]any {
+		return doc["certificateAuthorities"].([]any)[0].(map[string]any)
+	}
+	tl := func(doc map[string]any) map[string]any { return doc["tlogs"].([]any)[0].(map[string]any) }
+	cases := []struct {
+		want string
+		js   []byte
+	}{
+		{"unexpected EOF", []byte("{")},
+		{"media type", edit(func(d map[string]any) { d["mediaType"] = "application/vnd.dev.sigstore.trustedroot+json;version=0.2" })},
+		{"no certificate", edit(func(d map[string]any) { d["certificateAuthorities"] = []any{} })},
+		{"no transparency", edit(func(d map[string]any) { d["tlogs"] = []any{} })},
+		{"certificate authority 0 has no chain", edit(func(d map[string]any) { ca(d)["certChain"] = map[string]any{"certificates": []any{}} })},
+		{"certificate authority 0 has no chain or no validity start", edit(func(d map[string]any) { delete(ca(d)["validFor"].(map[string]any), "start") })},
+		{"certificate authority 0, certificate 0", edit(func(d map[string]any) {
+			ca(d)["certChain"].(map[string]any)["certificates"].([]any)[0] = map[string]any{"rawBytes": "AAAA"}
+		})},
+		{"transparency log 0 has no log id", edit(func(d map[string]any) { delete(tl(d), "logId") })},
+		{"transparency log 0 has no log id or no validity start", edit(func(d map[string]any) { delete(tl(d)["publicKey"].(map[string]any), "validFor") })},
+		{"listed twice", edit(func(d map[string]any) { d["tlogs"] = []any{tl(d), tl(d)} })},
+		{"tags don", edit(func(d map[string]any) { tl(d)["publicKey"].(map[string]any)["rawBytes"] = "AAAA" })},
+	}
+	for _, c := range cases {
+		if _, err := ledger.ParseSigstoreRoot(c.js); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: got %v", c.want, err)
+		}
+	}
+	// Positive control: the unedited root parses.
+	r := s.ledgerRoot(t)
+	if r.CertificateAuthorities() != 1 || !r.HasLog(hex.EncodeToString(s.logID(t))) {
+		t.Fatal("the valid test root must parse")
+	}
+}
+
+// Important 1 of the security review: x509.Verify's KeyUsages accepts a leaf
+// with no EKU at all, so the leaf's own code-signing EKU is required.
+func TestKeylessLeafMustBeCodeSigning(t *testing.T) {
+	s := newTestSigstore(t)
+	e := s.keylessEntry(t, "", 1, spec{noEKU: true})
+	c := only(t, ledger.Verify([]ledger.Entry{e}, trustFor(s, t, testRepo)))
+	if c.SigOK || !strings.Contains(c.Problem, "not for code signing") {
+		t.Fatalf("a leaf with no EKU must fail: %+v", c)
 	}
 }

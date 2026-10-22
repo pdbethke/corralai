@@ -37,6 +37,12 @@ import (
 // public-good Rekor (v1) — and refuses everything else by name. sigstore-go
 // stays in the tests as the oracle: every check below is exercised against
 // it in keyless_test.go.
+//
+// Signed certificate timestamps (CT) are not checked: the addendum's checks
+// do not include them, and the property they add — that Fulcio publicly
+// logged the certificate — is not what a ledger entry rests on. The
+// certificate already chains to the trust root (check 1), and Rekor binds
+// these exact certificate bytes into its signed log entry (checks 4–6).
 
 // KeyIDSigstore is the keyid of a keyless entry, and Format6 its format;
 // each implies the other.
@@ -117,17 +123,23 @@ func (p *pbInt64) UnmarshalJSON(b []byte) error {
 	if err := json.Unmarshal(b, &s); err != nil {
 		return fmt.Errorf("int64 must be a quoted decimal: %s", b)
 	}
-	n, err := strconv.ParseInt(s, 10, 64)
-	if err != nil || strconv.FormatInt(n, 10) != s {
-		return fmt.Errorf("int64 must be a quoted decimal: %s", b)
+	// Canonical digits only ("7", not "07" or "+7"), so one value has one
+	// spelling in the signed bytes. The round trip is the whole check:
+	// ParseInt's error cases return 0 or ±MaxInt64, whose canonical
+	// spelling differs from any input that failed to parse, so its error
+	// adds nothing (a mutation pass confirmed the branch was unreachable).
+	n, _ := strconv.ParseInt(s, 10, 64)
+	if strconv.FormatInt(n, 10) != s {
+		return fmt.Errorf("int64 must be a canonical decimal: %s", b)
 	}
 	*p = pbInt64(n)
 	return nil
 }
 
-// sigstoreBundle is the ONE shape accepted. Decoding refuses unknown fields,
-// so a DSSE envelope, a certificate chain, a public key or a timestamp block
-// fails naming the field.
+// sigstoreBundle is the ONE shape accepted. It is decoded only after
+// strictjson.go's bundleShape walk, so a DSSE envelope, a certificate chain,
+// a public key or a timestamp block fails naming the field, and a key in
+// another case or a repeated key cannot change what is read.
 type sigstoreBundle struct {
 	MediaType            string `json:"mediaType"`
 	VerificationMaterial struct {
@@ -190,18 +202,6 @@ type hashedRekord struct {
 	} `json:"spec"`
 }
 
-func strictDecode(b []byte, v any) error {
-	dec := json.NewDecoder(bytes.NewReader(b))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(v); err != nil {
-		return err
-	}
-	if dec.More() {
-		return errors.New("trailing data after the JSON object")
-	}
-	return nil
-}
-
 // maxJSONInt is the largest integer RFC 8785 (JCS) writes as plain digits
 // without loss; Rekor's SET is signed over JCS output.
 const maxJSONInt = 1<<53 - 1
@@ -211,7 +211,7 @@ const maxJSONInt = 1<<53 - 1
 // in r. Every check is required; the first failure is returned.
 func verifyBundle(bundleJSON, artifact []byte, repo string, r *SigstoreRoot) error {
 	var b sigstoreBundle
-	if err := strictDecode(bundleJSON, &b); err != nil {
+	if err := strictDecode(bundleJSON, bundleShape, &b); err != nil {
 		return fmt.Errorf("the sigstore bundle is not the one shape corral accepts: %w", err)
 	}
 	vm := b.VerificationMaterial
@@ -252,6 +252,13 @@ func verifyBundle(bundleJSON, artifact []byte, repo string, r *SigstoreRoot) err
 	if at.Before(leaf.NotBefore) || at.After(leaf.NotAfter) {
 		return fmt.Errorf("signing certificate is not valid at the integrated time %s", at.Format(time.RFC3339))
 	}
+	// x509.Verify's KeyUsages accepts a leaf with NO extended key usage at
+	// all, so code signing is required of the leaf itself: a certificate
+	// Fulcio issued for some other purpose must not sign a ledger. (Stricter
+	// than sigstore-go, which relies on Verify alone.)
+	if !hasEKU(leaf, x509.ExtKeyUsageCodeSigning) {
+		return errors.New("signing certificate is not for code signing")
+	}
 	if !chainsToFulcio(leaf, at, r) {
 		return fmt.Errorf("signing certificate does not chain to a Fulcio authority in the Sigstore trust root at %s", at.Format(time.RFC3339))
 	}
@@ -289,7 +296,7 @@ func verifyBundle(bundleJSON, artifact []byte, repo string, r *SigstoreRoot) err
 	// digest. Without it the log's promise would vouch for some other entry
 	// while the bundle presented this one.
 	var body hashedRekord
-	if err := strictDecode(tl.CanonicalizedBody, &body); err != nil {
+	if err := strictDecode(tl.CanonicalizedBody, hashedRekordShape, &body); err != nil {
 		return fmt.Errorf("log entry body: %w", err)
 	}
 	if body.Kind != "hashedrekord" || body.APIVersion != "0.0.1" {
@@ -341,6 +348,15 @@ func verifyBundle(bundleJSON, artifact []byte, repo string, r *SigstoreRoot) err
 		return err
 	}
 	return verifyCheckpoint(p.Checkpoint.Envelope, int64(p.TreeSize), p.RootHash, lg.key)
+}
+
+func hasEKU(c *x509.Certificate, want x509.ExtKeyUsage) bool {
+	for _, u := range c.ExtKeyUsage {
+		if u == want {
+			return true
+		}
+	}
+	return false
 }
 
 // chainsToFulcio reports whether leaf chains, as a code-signing certificate,
@@ -430,13 +446,13 @@ func derString(b []byte) (string, error) {
 // differs from the entry's global logIndex; sigstore-go v1.2.2 pkg/tlog
 // VerifyInclusion passes the proof's index, and so does this.
 func verifyInclusion(index, size int64, leaf []byte, proof [][]byte, root []byte) error {
-	if index < 0 || size <= 0 || index >= size {
+	if index < 0 || index >= size { // also refuses size <= 0
 		return fmt.Errorf("inclusion proof index %d is outside a tree of %d", index, size)
 	}
 	if len(root) != sha256.Size {
 		return errors.New("inclusion proof root hash is not 32 bytes")
 	}
-	idx, last := uint64(index), uint64(size-1)
+	idx, last := uint64(index), uint64(size-1) // #nosec G115 -- 0 <= index < size was checked just above, so both are non-negative
 	inner := bits.Len64(idx ^ last)
 	border := bits.OnesCount64(idx >> uint(inner))
 	if len(proof) != inner+border {
@@ -501,7 +517,12 @@ func verifyCheckpoint(envelope string, size int64, root []byte, key *ecdsa.Publi
 	keySum := sha256.Sum256(der)
 	hint := binary.BigEndian.Uint32(keySum[:4])
 	textSum := sha256.Sum256([]byte(text))
-	n := 0
+	if sigs == "" {
+		return errors.New("checkpoint carries no signature")
+	}
+	// The signer NAME on a line is deliberately not compared to the
+	// origin's host, as rekor does not: the key hint and the signature
+	// under the log's key are what bind the note to the log.
 	for _, line := range strings.Split(strings.TrimSuffix(sigs, "\n"), "\n") {
 		f := strings.Fields(strings.TrimPrefix(line, "— "))
 		if !strings.HasPrefix(line, "— ") || len(f) != 2 {
@@ -514,10 +535,6 @@ func verifyCheckpoint(envelope string, size int64, root []byte, key *ecdsa.Publi
 		if binary.BigEndian.Uint32(raw[:4]) != hint || !ecdsa.VerifyASN1(key, textSum[:], raw[4:]) {
 			return errors.New("checkpoint signature does not verify under the log's key")
 		}
-		n++
-	}
-	if n == 0 {
-		return errors.New("checkpoint carries no signature")
 	}
 	return nil
 }

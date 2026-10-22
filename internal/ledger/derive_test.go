@@ -18,6 +18,7 @@ import (
 
 	"github.com/pdbethke/corralai/internal/auditpush"
 	"github.com/pdbethke/corralai/internal/ledger"
+	"github.com/pdbethke/corralai/internal/review"
 )
 
 func rawDir(t *testing.T, dir string) []ledger.RawEntry {
@@ -47,6 +48,34 @@ func pushScan(t *testing.T, dir string, id int64, audited int, s auditpush.Ledge
 	}
 }
 
+// tamperFile flips a byte in one signed entry's bytes (written back as plain
+// JSON, which ParseEntry accepts), without touching its stored hash.
+func tamperFile(t *testing.T, dir, file, from, to string) {
+	t.Helper()
+	path := filepath.Join(dir, auditpush.ScansSubdir, file)
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	zr, err := gzip.NewReader(bytes.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var plain bytes.Buffer
+	if _, err := plain.ReadFrom(zr); err != nil {
+		t.Fatal(err)
+	}
+	edited := bytes.Replace(plain.Bytes(), []byte(from), []byte(to), 1)
+	if bytes.Equal(edited, plain.Bytes()) {
+		t.Fatal("setup: nothing edited")
+	}
+	if err := os.WriteFile(path, edited, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// mixedLedger: scans 1-3 signed, scan 2 retracted by a signed retraction, then
+// one unsigned scan. One intact chain.
 func mixedLedger(t *testing.T) (dir string, pub ed25519.PublicKey) {
 	t.Helper()
 	root := key(0x41)
@@ -60,30 +89,31 @@ func mixedLedger(t *testing.T) (dir string, pub ed25519.PublicKey) {
 		t.Fatal(err)
 	}
 	pushScan(t, dir, 4, 1, nil) // unsigned, link intact
-	pushScan(t, dir, 5, 1, rs)  // to be tampered
-	es = readBytes(t, dir)
-	last := es[len(es)-1].File
-	path := filepath.Join(dir, auditpush.ScansSubdir, last)
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	zr, err := gzip.NewReader(bytes.NewReader(raw))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var plain bytes.Buffer
-	if _, err := plain.ReadFrom(zr); err != nil {
-		t.Fatal(err)
-	}
-	edited := bytes.Replace(plain.Bytes(), []byte(`"Audited": 1`), []byte(`"Audited": 9`), 1)
-	if bytes.Equal(edited, plain.Bytes()) {
-		t.Fatal("setup: nothing edited")
-	}
-	if err := os.WriteFile(path, edited, 0o644); err != nil { // plain JSON is accepted too
-		t.Fatal(err)
-	}
 	return dir, root.Public().(ed25519.PublicKey)
+}
+
+func mustMarshal(t *testing.T, v any) []byte {
+	t.Helper()
+	b, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+// wantNoRows asserts the R10 shape: every status listed, a ledger Problem
+// containing sub, and nothing counted.
+func wantNoRows(t *testing.T, d ledger.Derived, sub string) {
+	t.Helper()
+	if !strings.Contains(d.Problem, sub) {
+		t.Fatalf("Problem %q does not mention %q", d.Problem, sub)
+	}
+	if len(d.Scans)+len(d.Files)+len(d.Mutants)+len(d.Calls) != 0 || d.Reviews != 0 || len(d.Adjudications) != 0 {
+		t.Fatalf("rows served from a broken ledger: %+v", d)
+	}
+	if strings.Contains(string(mustMarshal(t, d)), "null") {
+		t.Fatal("null in output")
+	}
 }
 
 func TestDeriveCountsOnlyVerifiedLive(t *testing.T) {
@@ -92,28 +122,22 @@ func TestDeriveCountsOnlyVerifiedLive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if d.Format != "corral-derive-1" {
-		t.Fatalf("format %q", d.Format)
+	if d.Format != "corral-derive-1" || d.Problem != "" {
+		t.Fatalf("format %q problem %q", d.Format, d.Problem)
 	}
-	if len(d.Entries) != 6 {
-		t.Fatalf("want 6 entries, got %+v", d.Entries)
-	}
-	var ver, uns, fail int
+	var ver, uns int
 	for _, e := range d.Entries {
 		switch e.Status {
 		case "verified":
 			ver++
 		case "unsigned":
 			uns++
-		case "failed":
-			fail++
-			if e.Problem == "" {
-				t.Fatalf("failed with no problem: %+v", e)
-			}
+		default:
+			t.Fatalf("unexpected status: %+v", e)
 		}
 	}
-	if ver != 4 || uns != 1 || fail != 1 {
-		t.Fatalf("verified/unsigned/failed = %d/%d/%d: %+v", ver, uns, fail, d.Entries)
+	if len(d.Entries) != 5 || ver != 4 || uns != 1 {
+		t.Fatalf("verified/unsigned = %d/%d: %+v", ver, uns, d.Entries)
 	}
 	// The retracted scan (id 2) is verified but contributes nothing.
 	if d.Entries[1].Status != "verified" {
@@ -125,6 +149,129 @@ func TestDeriveCountsOnlyVerifiedLive(t *testing.T) {
 	}
 	if !reflect.DeepEqual(ids, []int64{1, 3}) {
 		t.Fatalf("scans %v, want [1 3]", ids)
+	}
+}
+
+// A flipped byte anywhere makes the ledger not intact: every status is listed,
+// no row is served.
+func TestDeriveTamperedEntryServesNoRows(t *testing.T) {
+	dir, pub := mixedLedger(t)
+	es := readBytes(t, dir)
+	tamperFile(t, dir, es[2].File, `"Audited": 1`, `"Audited": 9`)
+	d, err := ledger.Derive(rawDir(t, dir), ledger.Trust{RootPub: pub})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(d.Entries) != 5 || d.Entries[2].Status != "failed" || d.Entries[2].Problem == "" {
+		t.Fatalf("entries %+v", d.Entries)
+	}
+	wantNoRows(t, d, "does not verify")
+}
+
+// Attack (a): a flipped byte in the signed RETRACTION must not resurrect the
+// scan it voided.
+func TestDeriveTamperedRetractionServesNoRows(t *testing.T) {
+	dir, pub := mixedLedger(t)
+	es := readBytes(t, dir)
+	tamperFile(t, dir, es[3].File, "wrong repo", "wrong rep0")
+	d, err := ledger.Derive(rawDir(t, dir), ledger.Trust{RootPub: pub})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Entries[3].Status != "failed" {
+		t.Fatalf("tampered retraction: %+v", d.Entries[3])
+	}
+	wantNoRows(t, d, "does not verify")
+}
+
+// Attack (b): an unsigned fork off scan 2's hash, equal length and longer than
+// the real tail, must not displace real entries or resurrect retracted scans.
+func TestDeriveUnsignedForkServesNoRows(t *testing.T) {
+	for _, extra := range []int{1, 3} {
+		dir, pub := mixedLedger(t)
+		es := readBytes(t, dir) // s1 s2 s3 retract s4
+		// Build the fork in a copy of the ledger truncated after scan 2, so its
+		// entries carry Prev = scan 2's hash, then add them to the real dir.
+		forkDir := t.TempDir()
+		for _, e := range es[:2] {
+			b, err := os.ReadFile(filepath.Join(dir, auditpush.ScansSubdir, e.File))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.MkdirAll(filepath.Join(forkDir, auditpush.ScansSubdir), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(forkDir, auditpush.ScansSubdir, e.File), b, 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		for i := 0; i < extra+2; i++ { // longer than or equal to s3, retract, s4 plus extra
+			pushScan(t, forkDir, int64(100+i), 1, nil)
+		}
+		raw := rawDir(t, dir)
+		have := map[string]bool{}
+		for _, r := range raw {
+			have[r.Name] = true
+		}
+		for _, r := range rawDir(t, forkDir) {
+			if !have[r.Name] {
+				raw = append(raw, r)
+			}
+		}
+		d, err := ledger.Derive(raw, ledger.Trust{RootPub: pub})
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantNoRows(t, d, "single chain")
+		if !strings.Contains(d.Problem, "fork") {
+			t.Fatalf("Problem should mention the fork: %q", d.Problem)
+		}
+	}
+}
+
+// R11: an unsigned retraction in an intact chain is honoured (it can only
+// remove a number); an unsigned adjudication is ignored (it would assert one).
+func TestDeriveUnsignedRetractionHonouredAdjudicationIgnored(t *testing.T) {
+	root := key(0x43)
+	rs := signerFor(root)
+	pub := root.Public().(ed25519.PublicKey)
+	dir := t.TempDir()
+	pushScan(t, dir, 1, 1, rs)
+	pushScan(t, dir, 2, 1, rs)
+	es := readBytes(t, dir)
+	auditpush.SetLedgerSigner(nil)
+	if _, err := auditpush.WriteRetraction(dir, es[0].Hash, "bad run", nil); err != nil {
+		t.Fatal(err)
+	}
+	d, err := ledger.Derive(rawDir(t, dir), ledger.Trust{RootPub: pub})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Problem != "" || len(d.Scans) != 1 || d.Scans[0].ScanID != 2 {
+		t.Fatalf("unsigned retraction not honoured: %+v", d)
+	}
+	if d.Entries[2].Status != "unsigned" {
+		t.Fatalf("retraction status %+v", d.Entries[2])
+	}
+	// Unsigned adjudication of a signed review: ignored.
+	if _, err := auditpush.WriteReview(dir, review.Review{
+		Repo: "o/r", Commit: "deadbeef", Scope: "x", ReviewerModel: "m",
+		Findings: []review.Finding{{ID: "R1", Claim: "c", Declared: "HYPOTHESIS", Tier: "HYPOTHESIS"}},
+		Sound:    []string{"a", "b", "c"},
+	}, rs); err != nil {
+		t.Fatal(err)
+	}
+	es = readBytes(t, dir)
+	rev := es[len(es)-1].Hash
+	if _, err := auditpush.WriteAdjudication(dir, rev+"#R1", ledger.VerdictConfirmed, "p", "real", nil); err != nil {
+		t.Fatal(err)
+	}
+	d, err = ledger.Derive(rawDir(t, dir), ledger.Trust{RootPub: pub})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Problem != "" || d.Reviews != 1 || len(d.Adjudications) != 0 {
+		t.Fatalf("unsigned adjudication counted: %+v", d)
 	}
 }
 
@@ -168,7 +315,7 @@ func TestDeriveOrderIndependent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want, _ := json.Marshal(base)
+	want := mustMarshal(t, base)
 	r := rand.New(rand.NewSource(7))
 	for i := 0; i < 20; i++ {
 		sh := append([]ledger.RawEntry(nil), raw...)
@@ -177,7 +324,7 @@ func TestDeriveOrderIndependent(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		got, _ := json.Marshal(d)
+		got := mustMarshal(t, d)
 		if !bytes.Equal(got, want) {
 			t.Fatalf("shuffle %d changed the output:\n%s\n%s", i, got, want)
 		}
@@ -189,7 +336,7 @@ func TestDeriveEmptyAndNeverNull(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, _ := json.Marshal(d)
+	b := mustMarshal(t, d)
 	if strings.Contains(string(b), "null") || d.Format != "corral-derive-1" {
 		t.Fatalf("empty derive: %s", b)
 	}
@@ -240,7 +387,7 @@ func TestDeriveOffChainAndUnparseableAndDuplicate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(d.Entries) != 4 || len(d.Scans) != 2 {
+	if len(d.Entries) != 4 || len(d.Scans) != 0 || d.Problem == "" {
 		t.Fatalf("entries %+v scans %d", d.Entries, len(d.Scans))
 	}
 	for _, e := range d.Entries[2:] {

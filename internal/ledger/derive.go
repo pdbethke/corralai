@@ -18,7 +18,8 @@ type RawEntry struct {
 }
 
 // EntryStatus is what Derive concluded about one entry. Only "verified"
-// entries contribute rows to a Derived.
+// entries contribute rows to a Derived. Kind "" means a scan entry (KindScan
+// is the empty string so that pre-kind entries keep their hashes).
 type EntryStatus struct {
 	File  string `json:"file"`
 	Hash  string `json:"hash"`
@@ -32,9 +33,15 @@ type EntryStatus struct {
 }
 
 // Derived is a ledger's verified, live rows as one document. Every slice is
-// non-nil so it marshals as [] and never null.
+// non-nil so it marshals as [] and never null. The row types keep their Go
+// field names as JSON keys on purpose: they are hashed inside signed entries,
+// so adding json tags would change the canonical bytes (and every hash).
+//
+// Problem is ledger-level: when set, the ledger is not one intact chain and
+// the row slices are empty (see Derive). Entries still carries every status.
 type Derived struct {
 	Format        string                  `json:"format"`
+	Problem       string                  `json:"problem,omitempty"`
 	Entries       []EntryStatus           `json:"entries"`
 	Scans         []ScanRow               `json:"scans"`
 	Files         []Row                   `json:"files"`
@@ -54,14 +61,27 @@ const problemOffChain = "not on the ledger's chain"
 
 // Derive reads a ledger from its bytes and returns the rows a reader may
 // trust. It runs Verify and the record rules (Retracted, LiveEntries,
-// Adjudications) and adds no rule of its own: an entry contributes rows only
-// if Verify passed it with a signature that checked under t.RootPub, and a
-// retraction voids what it names exactly as it does for the CLI.
+// Adjudications) and adds no rule of its own.
 //
-// Entries are ordered by following Prev links back from the head, not by any
-// timestamp. Entries off that single chain (forks, orphans, a second head) and
-// files that do not parse are listed after it as failed: never dropped, never
-// counted. An error is returned only when two inputs share a name.
+// Rows are served only from ONE INTACT CHAIN, the same stance as
+// auditpush.RequireIntactChain, which refuses to serve (LoadDir), push or
+// extend a directory in which any entry has a Problem. If any entry is
+// failed, or a file does not parse, or any entry is off the single chain
+// (a fork or second head), Derived.Problem says why, Entries still lists
+// every status, and NO rows are returned. Per-entry trust is unsound: a
+// tampered retraction would drop out and resurrect the scan it voided, and an
+// unsigned fork could displace signed entries. This is stricter than the CLI
+// in one way: RequireIntactChain does not check signatures, Derive does.
+//
+// Within an intact chain a scan contributes rows only if it is "verified"
+// (hash, link and a signature that checks under t.RootPub). An unsigned
+// RETRACTION is honoured, because it can only remove a number; an unsigned
+// ADJUDICATION or scan or review is ignored, because it would assert one.
+//
+// Entries are ordered by following Prev links back from the head. The head
+// choice (with several heads: longest chain, then latest Pushed, then name)
+// only makes that order deterministic; it decides nothing about what counts.
+// An error is returned only when two inputs share a name.
 func Derive(raw []RawEntry, t Trust) (Derived, error) {
 	d := Derived{
 		Format:        DeriveFormat,
@@ -95,26 +115,33 @@ func Derive(raw []RawEntry, t Trust) (Derived, error) {
 	chain, off := orderByPrev(parsed)
 
 	checks := Verify(chain, t)
-	var verified []Entry
-	for i, c := range checks {
-		st := statusOf(c, t)
-		d.Entries = append(d.Entries, st)
-		if st.Status == StatusVerified {
-			verified = append(verified, chain[i])
-		}
+	for _, c := range checks {
+		d.Entries = append(d.Entries, statusOf(c, t))
 	}
 	for _, e := range off {
 		d.Entries = append(d.Entries, EntryStatus{File: e.File, Hash: e.Hash, Kind: e.Kind, KeyID: e.KeyID, Status: StatusFailed, Problem: problemOffChain})
 	}
 	d.Entries = append(d.Entries, unparsed...)
 
-	live := LiveEntries(verified)
+	if p := ledgerProblem(d.Entries, len(off)); p != "" {
+		d.Problem = p
+		return d, nil
+	}
+
+	// trusted: verified entries, plus unsigned retractions (subtractive only).
+	var trusted []Entry
+	for i, st := range d.Entries[:len(chain)] {
+		if st.Status == StatusVerified || (st.Status == StatusUnsigned && chain[i].Kind == KindRetract) {
+			trusted = append(trusted, chain[i])
+		}
+	}
+	live := LiveEntries(trusted)
 	for _, e := range live {
 		if e.Kind == KindReview {
 			d.Reviews++
 		}
 	}
-	for _, e := range ScanEntries(verified) {
+	for _, e := range ScanEntries(trusted) {
 		d.Scans = append(d.Scans, e.Bundle.Scan)
 		d.Files = append(d.Files, e.Bundle.Files...)
 		d.Mutants = append(d.Mutants, e.Bundle.Mutants...)
@@ -124,6 +151,20 @@ func Derive(raw []RawEntry, t Trust) (Derived, error) {
 	return d, nil
 }
 
+// ledgerProblem says why a ledger is not one intact chain, or "".
+func ledgerProblem(entries []EntryStatus, off int) string {
+	for _, e := range entries {
+		if e.Status == StatusFailed && e.Problem != problemOffChain {
+			return fmt.Sprintf("the ledger does not verify (%s: %s) — no rows are served from a chain that is not intact", e.File, e.Problem)
+		}
+	}
+	switch {
+	case off > 0:
+		return fmt.Sprintf("%d entries are not on the ledger's single chain (a fork, a second head, or orphans) — no rows are served from a chain that is not intact", off)
+	}
+	return ""
+}
+
 // statusOf turns Verify's check into a status. A signed entry cannot be called
 // verified without a root key to check it against: no pass by default.
 func statusOf(c ChainCheck, t Trust) EntryStatus {
@@ -131,7 +172,7 @@ func statusOf(c ChainCheck, t Trust) EntryStatus {
 	switch {
 	case c.Problem != "":
 		st.Status, st.Problem = StatusFailed, c.Problem
-	case !c.HashOK || !c.LinkOK:
+	case !c.HashOK || !c.LinkOK: // defensive: Verify sets Problem whenever either fails
 		st.Status, st.Problem = StatusFailed, "hash or link does not check"
 	case !c.Signed:
 		st.Status = StatusUnsigned

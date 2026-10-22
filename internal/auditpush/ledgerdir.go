@@ -649,6 +649,18 @@ func WriteCheckpoint(dir string, signer LedgerSigner, rootPub ed25519.PublicKey)
 	if len(entries) == 0 {
 		return "", 0, fmt.Errorf("auditpush: %s has no entries to checkpoint", dir)
 	}
+	// A ledger holding a keyless entry cannot be checkpointed. Chain control
+	// (who may sign, where the chain begins) stays with the root key, and the
+	// pruning below would delete entries a repository's identity vouched for,
+	// which the integrity-only read just under cannot tell apart from any
+	// other (it skips bundles). Refused here, at the one door, before
+	// anything is removed or written, whoever the caller and whatever it
+	// would sign with.
+	for _, e := range entries {
+		if e.KeyID == ledger.KeyIDSigstore {
+			return "", 0, fmt.Errorf("auditpush: %s holds keyless (sigstore) entries, so it cannot be checkpointed — chain control stays with the root key, and pruning would delete entries a repository's identity vouched for. Nothing written", dir)
+		}
+	}
 	// A checkpoint is the one verb that DESTROYS evidence, so it is the one
 	// verb that must look at it first. Pruning without verifying launders a
 	// chain: the tampered entry is deleted and the genesis that replaces it

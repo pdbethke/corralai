@@ -16,9 +16,12 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"io/fs"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -528,4 +531,52 @@ func certValidUntil(t *testing.T, notAfter time.Time) []byte {
 		t.Fatal(err)
 	}
 	return der
+}
+
+// The door itself refuses, not just the keyless signer: with a key-signing
+// checkpoint signer and no registrations (the path that used to fall through
+// to a prune), a chain holding a keyless entry is left byte for byte as it was.
+func TestCheckpointRefusesAChainWithKeylessEntries(t *testing.T) {
+	s := ledgertest.New(t)
+	dir := t.TempDir()
+	keyless := keylessTestSigner(t, s, keylessTestRepo, keylessTestRepo)
+	appendScan(t, dir, keyless, "aaaa1111")
+	appendScan(t, dir, keyless, "bbbb2222")
+	before := snapshotTree(t, dir)
+
+	_, pruned, err := WriteCheckpoint(dir, ledgerSigner, nil)
+	if err == nil || !strings.Contains(err.Error(), "keyless") {
+		t.Fatalf("checkpoint over keyless entries (pruned %d): %v — want a refusal naming keyless", pruned, err)
+	}
+	after := snapshotTree(t, dir)
+	if len(before) != len(after) {
+		t.Fatalf("file list changed: %d -> %d", len(before), len(after))
+	}
+	for name, b := range before {
+		if a, ok := after[name]; !ok || a != b {
+			t.Fatalf("%s changed or vanished after a refused checkpoint", name)
+		}
+	}
+}
+
+// snapshotTree maps every file under dir to its contents.
+func snapshotTree(t *testing.T, dir string) map[string]string {
+	t.Helper()
+	out := map[string]string{}
+	err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		b, rerr := os.ReadFile(p)
+		if rerr != nil {
+			return rerr
+		}
+		rel, _ := filepath.Rel(dir, p)
+		out[rel] = string(b)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
 }

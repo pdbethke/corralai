@@ -30,7 +30,9 @@ history of any release, `git log v0.3.4..v0.3.5`.
   Fulcio and Rekor; it has not yet been run end to end in GitHub Actions.
   `corral ledger checkpoint` and `corral ledger signer add|revoke|list` verify
   under the root key only and cannot operate on a ledger that holds keyless
-  entries (they report those entries as failing).
+  entries (the signer verbs report those entries as failing; `checkpoint`
+  refuses outright, before deleting anything, because pruning would delete
+  entries a repository's identity vouched for).
   **Older readers:** a corral release before this one cannot read, and refuses
   the whole ledger, once it holds a `corral-ledger-6` entry. Key-signed and unsigned entries are still
   written as `corral-ledger-5`, so a ledger nobody signs keylessly stays

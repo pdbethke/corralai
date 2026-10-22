@@ -497,7 +497,7 @@ and the fix belongs in the code, not a caveat in these docs.
 | `tests` | no | `""` | Optional JSON file mapping repo-relative **source** paths to their test files, consulted before filename convention. Needed whenever your project names tests after behaviour rather than after source files — common in JS/TS, where convention can pair *nothing* and the gate would then have no file to audit. A mapping to a file that does not exist is refused, not silently ignored. |
 | `timeout` | no | `""` (corral's own default, 30m) | Per-file budget, a Go duration. The default is sized for a PR author who did not choose to start an hours-long job, not for a whole audit: every mutant re-runs your suite, so one large file on a hosted runner is hours. Raise it (and the job's `timeout-minutes`) when you want the complete audit rather than a bounded sample. |
 | `max-tokens` | no | `""` (no cap) | Cap on model tokens for the audit — input + output, every audit seat, every file. The review step is not capped: `corral review` has no token cap. Checked before each call and charged after it; past the cap no further model call is made, and the cost line says so. The money bound, beside `top` (files) and `timeout` (clock). |
-| `ledger` | no | `""` | A directory inside the checkout that is the repository's **hash-linked ledger** — see "The ledger branch" below. This run's record is written as one JSON entry in `<ledger>/scans/` (naming the previous entry's hash, signed when a certify key is configured — see the honesty notes under "The ledger branch") and its graded mutants to `<ledger>/mutants/<commit>.json`; earlier entries are handed to the generator as a **prior** (same-bytes files only; the report says which). Commit the directory back to the `corral/ledger` branch after the step. |
+| `ledger` | no | `""` | A directory inside the checkout that is the repository's **hash-linked ledger** — see "The ledger branch" below. This run's record is written as one JSON entry in `<ledger>/scans/` (naming the previous entry's hash, signed with a certify key when one is configured, else keylessly on a public repository whose job grants `id-token: write`, else unsigned — see "Signing the ledger without a key" below) and its graded mutants to `<ledger>/mutants/<commit>.json`; earlier entries are handed to the generator as a **prior** (same-bytes files only; the report says which). Commit the directory back to the `corral/ledger` branch after the step. |
 | `top` | no | `""` (no bound on a pull request; 25 on a whole-repository run) | Audit at most this many of the highest-ranked candidate files. On a pull request the diff is the bound, and corral's default of 25 does not apply to it: left empty, every changed file that pairs with a test is audited. Set it to cap a PR; the changed files it cuts are listed as not audited. An audit costs roughly (mutants × your suite's **whole** runtime) **per file**, and the file count comes from the PR's diff — a number the author picks, not you. See "What one run costs" below before raising it. |
 | `path` | no | `""` (the whole repository) | Audit only the files under this directory, keeping the checkout whole: one package of a monorepo, such as a crate of a Cargo workspace. Tests are still found anywhere in the repository, the build still sees the root's files, and the ledger entry records the scope. |
 | `min-kill-rate` | no | `""` (unset) | Fail the run (exit 1) if **any individual audited file's** kill rate is below this value. Range 0.0-1.0 inclusive; a *minimum*, so a file exactly at the value passes. Opt-in — leave empty to keep the pre-`min-kill-rate` behaviour, where a weak-but-gradable suite still exits 0. See "Failing on a weak kill rate" below. |
@@ -580,69 +580,9 @@ ledger directory; a local run and an Action run are one writer with two
 places to put the file, and DuckDB (or MotherDuck) is the query surface
 over both, not the store.
 
-### Signing the ledger without a key, on a public repository
-
-A runner cannot keep a certify key, so on a **public** repository the Action
-signs each entry keylessly: when the job has `permissions: id-token: write`,
-the repository is public and no certify key is configured, it sets
-`CORRALAI_LEDGER_SIGNER=sigstore`. corral then obtains a short-lived Sigstore
-certificate bound to the run's GitHub OIDC identity and signs the entry with
-it. The entry is written as `corral-ledger-6` with key id `sigstore`.
-
-```yaml
-permissions:
-  contents: write
-  id-token: write   # lets the job ask GitHub for an OIDC token
-```
-
-What this puts on the record, in public, permanently:
-
-- **Each entry's hash, the repository and the workflow identity are written to
-  Sigstore's public Rekor log.** Every keyless entry is one Rekor entry, and
-  Rekor cannot be edited or deleted. That is the point (it is the external
-  witness a self-signed chain lacks) and the cost.
-- **The identity is the repository, not a workflow.** Any workflow in the
-  repository that is granted an OIDC token, including a `pull_request_target`
-  run, can sign entries that verify as this repository's. The signature
-  proves "a workflow in this repository wrote this", not "the audit workflow
-  wrote this". Do not grant `id-token: write` to workflows that run code you
-  do not trust.
-- **Private repositories are not signed keylessly.** The public log would name
-  the repository and workflow, so the Action writes the entry unsigned and
-  prints a notice. It also writes unsigned, with a notice, when the event does
-  not say whether the repository is public (`github.event.repository.private`
-  is empty) or when the job has no OIDC token. Give a private repository a
-  certify key (`CORRALAI_CERTIFY_KEY` in the step's `env:`) to sign its
-  entries; a configured key is never overridden by keyless signing.
-- **The token request credentials are removed from everything the audit
-  runs.** `ACTIONS_ID_TOKEN_REQUEST_URL`, `ACTIONS_ID_TOKEN_REQUEST_TOKEN` and
-  `ACTIONS_RUNTIME_TOKEN` are read only by corral's own signer. The audited
-  suite, model-written tests, review reproductions, agent seats and the
-  Python preflight probe all start without them, so code under audit cannot
-  mint a certificate for the repository and sign an entry as it. The rest of
-  the job's environment is kept. A step of *your* workflow that runs
-  untrusted code is outside corral and still sees them.
-- **One entry per run.** The Action points `CORRALAI_MACHINE_LEDGER` at the
-  ledger directory, so the runner's machine-ledger copy and the repository
-  entry are the same write. Without that a keyless run would log a second
-  Rekor entry for a copy the runner throws away. If your workflow sets
-  `CORRALAI_MACHINE_LEDGER` itself to a different directory, you get that
-  second entry.
-
-To verify, name the repository the entries must have been signed for:
-
-```
-corral verify --ledger <dir> --ledger-repo owner/name
-```
-
-`--ledger-repo` is required when the chain holds a keyless entry: corral never
-guesses the repository from the scan, the directory or git config, because the
-repository the entries claim is the thing being checked.
-
-**Status: signing in GitHub Actions has not yet been run end to end in GitHub
-Actions.** The keyless path has been exercised against an in-process Fulcio
-and Rekor, not against GitHub's OIDC issuer and the public Sigstore
-instance. Treat it as unproven until a run is recorded here.
+The recipe: check the branch out before the corral step, run the audit
+with `ledger:` pointing at it, attest the new entry, and commit the branch
+back, re-linking the entry if another run pushed first.
 
 ```yaml
       # The job needs: permissions: { contents: write, id-token: write, attestations: write }
@@ -704,14 +644,18 @@ instance. Treat it as unproven until a run is recorded here.
           exit 1
 ```
 
-Three honesty notes. **A runner has no certify key**, so its entries are
-signed only if you give it one: the hex-encoded 32-byte Ed25519 seed, stored
-as a secret and set as `CORRALAI_CERTIFY_KEY` in the corral step's `env:` (a
-composite action reads the step's environment) — the
-step above attests the entry file keylessly through the workflow's own
-identity instead, which is what `gh attestation verify` checks; the chain's
-hashes and links hold either way, and `verify --ledger` says which entries
-are unsigned rather than calling them verified. **A primed run sits a
+Three honesty notes. **A runner has no certify key of its own.** Give it
+one — the hex-encoded 32-byte Ed25519 seed, stored as a secret and set as
+`CORRALAI_CERTIFY_KEY` in the corral step's `env:` (a composite action reads
+the step's environment) — and its entries are signed with it. Without one,
+on a public repository whose job grants `id-token: write` (as this recipe
+does, for the attestation), the Action signs each entry keylessly with the
+repository's GitHub identity instead ([below](#signing-the-ledger-without-a-key-on-a-public-repository));
+anywhere else the entries are written unsigned, with a notice. The attest
+step separately attests the entry file through the workflow's identity,
+which is what `gh attestation verify` checks; the chain's hashes and links
+hold either way, and `verify --ledger` says which entries are unsigned
+rather than calling them verified. **A primed run sits a
 different exam** — the generator was
 told what survived last time and asked to plant elsewhere — so its kill rate
 is not comparable to an unprimed run's, and every verdict, ledger row and
@@ -784,6 +728,89 @@ naming the cut rather than hiding it.
 git worktree add .corral-ledger corral/ledger   # once
 corral brief --ledger .corral-ledger --changed origin/main
 ```
+
+### Signing the ledger without a key, on a public repository
+
+A runner cannot keep a certify key, so on a **public** repository the Action
+signs each entry keylessly: when the job has `permissions: id-token: write`,
+the repository is public and no certify key is configured, it sets
+`CORRALAI_LEDGER_SIGNER=sigstore`. corral then obtains a short-lived Sigstore
+certificate bound to the run's GitHub OIDC identity and signs the entry with
+it. The entry is written as `corral-ledger-6` with key id `sigstore`.
+
+```yaml
+permissions:
+  contents: write
+  id-token: write   # lets the job ask GitHub for an OIDC token
+```
+
+What this puts on the record, in public, permanently:
+
+- **Each entry's hash, the repository and the workflow identity are written to
+  Sigstore's public Rekor log.** Every keyless entry is one Rekor entry, and
+  Rekor cannot be edited or deleted. That is the point (it is the external
+  witness a self-signed chain lacks) and the cost.
+- **The identity is the repository, not a workflow.** Any workflow in the
+  repository that is granted an OIDC token, including a `pull_request_target`
+  run, can sign entries that verify as this repository's. The signature
+  proves "a workflow in this repository wrote this", not "the audit workflow
+  wrote this". Do not grant `id-token: write` to workflows that run code you
+  do not trust.
+- **Private repositories are not signed keylessly.** The public log would name
+  the repository and workflow, so the Action writes the entry unsigned and
+  prints a notice. It also writes unsigned, with a notice, when the event does
+  not say whether the repository is public (`github.event.repository.private`
+  is empty) or when the job has no OIDC token. Give a private repository a
+  certify key (`CORRALAI_CERTIFY_KEY` in the step's `env:`) to sign its
+  entries; a key configured in the step's environment is never overridden by
+  keyless signing.
+- **The token request credentials are removed from everything the audit
+  runs.** `ACTIONS_ID_TOKEN_REQUEST_URL`, `ACTIONS_ID_TOKEN_REQUEST_TOKEN` and
+  `ACTIONS_RUNTIME_TOKEN` are read only by corral's own signer. The audited
+  suite, model-written tests, review reproductions, agent seats and the
+  Python preflight probe all start without them, so code under audit cannot
+  mint a certificate for the repository and sign an entry as it. The rest of
+  the job's environment is kept. A step of *your* workflow that runs
+  untrusted code is outside corral and still sees them.
+- **One entry per run.** The Action points `CORRALAI_MACHINE_LEDGER` at the
+  ledger directory, so the runner's machine-ledger copy and the repository
+  entry are the same write. Without that a keyless run would log a second
+  Rekor entry for a copy the runner throws away. If your workflow sets
+  `CORRALAI_MACHINE_LEDGER` itself to a different directory, you get that
+  second entry.
+- **The choice lasts for the rest of the job.** The Action writes
+  `CORRALAI_LEDGER_SIGNER=sigstore` and `CORRALAI_MACHINE_LEDGER` to
+  `GITHUB_ENV`, so every later step sees them. In the recipe above that
+  includes the retry's `corral ledger append`, which re-signs the re-linked
+  entry keylessly: each push race costs one more public Rekor entry.
+- **Give a certify key through the environment.** The Action decides by
+  looking for `CORRALAI_CERTIFY_KEY` or `CORRALAI_CERTIFY_KEY_FILE` in the
+  step's environment. A key it cannot see there (one corral would find on
+  its own, in its state directory) loses to keyless signing, and corral prints
+  one line saying the key was not used. To opt out of keyless signing,
+  configure a certify key in the step's `env:`, or do not grant the job
+  `id-token: write` (the recipe grants it for the attestation step; without
+  it, drop that step too). Setting `CORRALAI_LEDGER_SIGNER` to any value other
+  than `sigstore` is refused by corral, not read as "off".
+- **Repository names are compared exactly.** `--ledger-repo` is matched,
+  case and all, against the repository URI in the signing certificate, which
+  is the name as GitHub spells it (`Acme/Widgets`, not `acme/widgets`, if that
+  is how the repository is named). Pass it as GitHub shows it.
+
+To verify, name the repository the entries must have been signed for:
+
+```
+corral verify --ledger <dir> --ledger-repo owner/name
+```
+
+`--ledger-repo` is required when the chain holds a keyless entry: corral never
+guesses the repository from the scan, the directory or git config, because the
+repository the entries claim is the thing being checked.
+
+**Status: signing in GitHub Actions has not yet been run end to end in GitHub
+Actions.** The keyless path has been exercised against an in-process Fulcio
+and Rekor, not against GitHub's OIDC issuer and the public Sigstore
+instance. Treat it as unproven until a run is recorded here.
 
 ## Where the report shows up
 

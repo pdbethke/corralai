@@ -11,6 +11,26 @@ history of any release, `git log v0.3.4..v0.3.5`.
 
 ## [Unreleased]
 
+### Added
+
+- **A ledger entry can be signed keylessly, by the GitHub repository that ran
+  the audit.** Set `CORRALAI_LEDGER_SIGNER=sigstore` in a GitHub Actions run
+  (with `id-token: write`) and every ledger entry corral writes there is signed
+  through Sigstore with the workflow's own identity instead of a key an
+  ephemeral runner cannot keep. Such an entry is format `corral-ledger-6`, keyid
+  `sigstore`, and carries a Sigstore bundle in place of an Ed25519 signature.
+  Any other value is refused naming `sigstore`; unset keeps today's behaviour.
+  `corral verify --ledger`, `corral ledger verify` and `corral ui` take a new
+  `--ledger-repo owner/name`, which a keyless entry is checked against; it is
+  required only when the chain holds one, and without it that entry fails with
+  a Problem saying so. It is never guessed from the scan's repo, the directory
+  or git config. The Sigstore root the entry is checked against is the
+  public-good root embedded in the release.
+  **Older readers:** a corral release before this one cannot read a ledger that
+  holds a `corral-ledger-6` entry. Key-signed and unsigned entries are still
+  written as `corral-ledger-5`, so a ledger nobody signs keylessly stays
+  readable by older releases.
+
 ### Changed
 
 - **`--substrate workspace` no longer hands the audited suite your desktop

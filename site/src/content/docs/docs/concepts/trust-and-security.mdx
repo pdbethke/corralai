@@ -175,6 +175,38 @@ appended to, signers or not.
   chain whose newest entries (a revocation, say) were deleted would make the
   revoked key permanent.
 
+### Keyless entries
+
+A ledger entry can instead be signed **keylessly**, by the GitHub repository
+whose Actions run wrote it. With `CORRALAI_LEDGER_SIGNER=sigstore` in a run
+that has `id-token: write`, corral signs each entry's hash through Sigstore
+with the workflow's OIDC identity and stores the Sigstore bundle in place of an
+Ed25519 signature (format `corral-ledger-6`, keyid `sigstore`). There is no key
+to keep, which is the point on a disposable runner; the cost is that trust moves
+from a key you hold to a repository identity and to Sigstore's public-good root.
+We did not reuse the root-key path because an ephemeral runner cannot hold a
+root key, and we did not accept "any GitHub identity" because that would make
+every keyless entry from every repository look alike.
+
+Verification is therefore *against a repository you name*:
+
+```bash
+corral verify --ledger <dir> --ledger-repo owner/name
+```
+
+A keyless entry verifies only if its certificate names exactly that repository
+and its bundle checks against the Sigstore root embedded in the release.
+`--ledger-repo` is required only when the chain holds a keyless entry; without
+it that entry fails with `keyless entry: the ledger's repository is not named
+(pass --ledger-repo owner/name)`. It must be `owner/name` and is never guessed
+from the scan's repo, the directory or git config, because the repository the
+entries claim is the thing being checked. `corral ledger verify` and `corral ui`
+take the same flag.
+
+Entries written this way are `corral-ledger-6`, and **a corral release before
+the one that introduced them cannot read a ledger that holds one**. Key-signed
+and unsigned entries are still `corral-ledger-5`.
+
 ## Honest scope
 
 corral measures whether a suite catches planted faults and proves the gaps it

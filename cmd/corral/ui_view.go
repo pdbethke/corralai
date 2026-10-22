@@ -15,7 +15,7 @@ import (
 // same reader `corral seal` uses, and whether this server may write. The
 // pages themselves are recordview's, the same ones the public record
 // page is built from.
-func uiSite(st sealReader, ledgerDir string, write bool) func() (recordview.Site, error) {
+func uiSite(st sealReader, ledgerDir, ledgerRepo string, write bool) func() (recordview.Site, error) {
 	return func() (recordview.Site, error) {
 		s := recordview.Site{}
 		if ledgerDir != "" {
@@ -25,7 +25,11 @@ func uiSite(st sealReader, ledgerDir string, write bool) func() (recordview.Site
 			if err != nil {
 				return recordview.Site{}, err
 			}
-			if s, err = recordview.Load(ledgerDir, pub); err != nil {
+			trust, err := ledgerTrust(pub, ledgerRepo)
+			if err != nil {
+				return recordview.Site{}, err
+			}
+			if s, err = recordview.LoadTrust(ledgerDir, trust); err != nil {
 				return recordview.Site{}, err
 			}
 		}

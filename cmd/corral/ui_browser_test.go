@@ -59,7 +59,7 @@ func TestUIWritePageInARealBrowser(t *testing.T) {
 	}
 	w.token = hex.EncodeToString(raw) // the page only captures a 64-hex token
 	w.ledgerDir, w.cli = ledger, inProcessCLI(t)
-	srv := httptest.NewUnstartedServer(uiHandlerWith(fakeSeal{}, ledger, w))
+	srv := httptest.NewUnstartedServer(uiHandlerWith(fakeSeal{}, ledger, "", w))
 	srv.Listener.Close() //nolint:errcheck
 	srv.Listener = ln
 	srv.Start()

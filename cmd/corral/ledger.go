@@ -49,6 +49,7 @@ func runLedger(args []string, stdout, stderr io.Writer) int {
 		fs.SetOutput(stderr)
 		pub := fs.String("pub", "", "hex-encoded Ed25519 public key to verify signatures against (default: $CORRALAI_LEDGER_PUBKEY; with neither, signatures are NOT CHECKED — the local certify key is never used)")
 		expectHead := fs.String("expect-head", "", "the hash this chain's newest entry must have, held from OUTSIDE the directory (a git ref, a Rekor receipt, a note). A chain verifies against itself, so removing the newest entries leaves the rest valid and no check inside can see it; this is the anchor that does. A prefix is accepted, but at least 12 hex characters — a short one names too many entries to be an anchor")
+		ledgerRepo := fs.String("ledger-repo", ledgerRepoUsageDefault, ledgerRepoUsage)
 		if err := fs.Parse(args[1:]); err != nil {
 			return flagParseExit(err)
 		}
@@ -56,7 +57,7 @@ func runLedger(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintln(stderr, "corral ledger verify: name one directory")
 			return 2
 		}
-		return runVerifyLedger(fs.Arg(0), *pub, *expectHead, stdout, stderr)
+		return runVerifyLedger(fs.Arg(0), *pub, *ledgerRepo, *expectHead, stdout, stderr)
 	}
 	fmt.Fprintf(stderr, "corral ledger: unknown verb %q\n%s", args[0], ledgerUsage)
 	return 2

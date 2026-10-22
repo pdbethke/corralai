@@ -713,7 +713,7 @@ func TestVerifyLedgerNeverUsesTheLocalKeyImplicitly(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out, errb bytes.Buffer
-	_ = runVerifyLedger(dir, "", "", &out, &errb)
+	_ = runVerifyLedger(dir, "", "", "", &out, &errb)
 	if strings.Contains(out.String(), "local certify key") {
 		t.Fatalf("verify used the local key implicitly:\n%s", out.String())
 	}
@@ -730,7 +730,7 @@ func TestVerifyLedgerRefusesGarbageEnvKey(t *testing.T) {
 	t.Setenv("CORRALAI_CERTIFY_KEY", "")
 	t.Setenv(auditpush.LedgerPubKeyEnv, "garbage")
 	var out, errb bytes.Buffer
-	if code := runVerifyLedger(dir, "", "", &out, &errb); code != 2 {
+	if code := runVerifyLedger(dir, "", "", "", &out, &errb); code != 2 {
 		t.Fatalf("exit = %d, want 2\n%s%s", code, out.String(), errb.String())
 	}
 	if !strings.Contains(errb.String(), auditpush.LedgerPubKeyEnv) {

@@ -167,6 +167,7 @@ corral seal --repo	executed	test:cmd/corral/certify_repo_writer_mode_test.go
 corral seal --top	executed	test:cmd/corral/certify_repo_test.go
 corral verify --attest	executed	test:cmd/corral/certify_repo_transparency_test.go
 corral verify --db	executed	test:cmd/corral/models_rank_test.go
+corral verify --ledger-repo	executed	test:cmd/corral/verify_ledger_repo_test.go (keyless entry fails without it with the Problem, passes with it, wrong repo fails, malformed refused)
 corral verify --ledger	executed	test:cmd/corral/verify_attest_test.go (intact chain, removed entry named, --attest+--ledger refused)
 corral verify --pub	executed	test:cmd/corral/verify_attest_test.go (right key verifies, wrong key FAILS without falling back, malformed key refused as unchecked)
 corral verify --rekor-index	executed	test:cmd/corral/verify_attest_test.go
@@ -181,6 +182,7 @@ corral-top --interval	unexecuted
 corral-top --token	executed	test:cmd/corral-top/main_test.go (envOr precedence behind the flag default)
 corral ui --db	executed	run:2026-09-02 `corral ui --db md:corral_public --print-url` resolved and opened the live warehouse; test:cmd/corral/ui_test.go
 corral ui --addr	executed	run:2026-09-02 `--addr 0.0.0.0:8787` emitted the non-loopback warning; test:cmd/corral/ui_test.go (isLoopback table)
+corral ui --ledger-repo	executed	test:cmd/corral/verify_ledger_repo_test.go (chain page carries the Problem without it, not with it)
 corral ui --open	executed	test:cmd/corral/ui_write_test.go
 corral ui --print-url	executed	run:2026-09-02 printed the URL and exited 0 without serving
 corral ui --repo	executed	test:cmd/corral/ui_write_test.go

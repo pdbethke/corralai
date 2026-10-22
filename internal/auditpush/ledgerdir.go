@@ -445,12 +445,24 @@ type ChainCheck = ledger.ChainCheck
 // VerifyLedgerDir reads a ledger directory and walks its chain under the
 // root key pub (nil: a keyless read). The walk itself is ledger.Verify, which
 // builds for the browser too; this is the directory half.
+//
+// It passes ONLY the root key, so a keyless (corral-ledger-6) entry in the
+// chain fails here naming the repository it was not told. A reader that can
+// meet keyless entries uses VerifyLedgerDirTrust.
 func VerifyLedgerDir(dir string, pub ed25519.PublicKey) ([]ChainCheck, error) {
+	return VerifyLedgerDirTrust(dir, ledger.Trust{RootPub: pub})
+}
+
+// VerifyLedgerDirTrust is VerifyLedgerDir with the whole of what a reader
+// trusts: the root key, the repository a keyless entry must name, and the
+// Sigstore root it is checked against. Each is the caller's explicit
+// decision; nothing here fills one in.
+func VerifyLedgerDirTrust(dir string, t ledger.Trust) ([]ChainCheck, error) {
 	entries, err := ReadLedgerDir(dir)
 	if err != nil {
 		return nil, err
 	}
-	return ledger.Verify(entries, ledger.Trust{RootPub: pub}), nil
+	return ledger.Verify(entries, t), nil
 }
 
 // verifyEntries is ledger.VerifyWithSigners: the checks and the signer set at

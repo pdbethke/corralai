@@ -77,6 +77,11 @@ DIGEST=$(sha256sum corral-audit-statement.json | cut -d" " -f1)
 gh api repos/<owner>/<repo>/attestations/sha256:$DIGEST
 ```
 
+A ledger written by that Action can also be signed keylessly entry by entry
+(`CORRALAI_LEDGER_SIGNER=sigstore`); name the repository that signed it and
+`corral verify --ledger <dir> --ledger-repo <owner>/<repo>` checks every entry
+against it. See [Keyless entries](/docs/concepts/trust-and-security/#keyless-entries).
+
 Both are the same in-toto envelope; they differ in who vouches for it. The local
 record says *this key signed this verdict*. The attestation says *this
 repository's workflow produced this verdict at this commit*, which is the claim a

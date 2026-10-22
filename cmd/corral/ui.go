@@ -45,6 +45,7 @@ func runUI(args []string, open func(dsn string) (sealReader, error), stdout, std
 	once := fs.Bool("print-url", false, "print the URL and exit without serving (for scripts and smoke tests)")
 	write := fs.Bool("write", false, "let this page WRITE: adjudicate findings and recheck them, by running corral's own subcommands. Loopback only; prints a URL carrying a launch token valid until the server exits — anyone with that URL can write verdicts in your name. The URL is printed, never opened, so the token stays off every process's command line; over SSH, tunnel the same port on both ends (ssh -L 8787:127.0.0.1:8787). A click on Confirm or Refute is a verdict recorded as you")
 	openBrowser := fs.Bool("open", false, "with --write, also open the URL in a browser. A convenience for a desktop: it hands the URL, token included, to the opener as a command-line argument, which other local processes can read while it runs")
+	ledgerRepo := fs.String("ledger-repo", ledgerRepoUsageDefault, ledgerRepoUsage)
 	repoDir := fs.String("repo", ".", "with --write, the checkout a finding's reproduction is rechecked against (its HEAD, in the sandbox — see corral review recheck)")
 	if err := fs.Parse(args); err != nil {
 		return flagParseExit(err)
@@ -109,7 +110,7 @@ func runUI(args []string, open func(dsn string) (sealReader, error), stdout, std
 		}
 	}
 
-	srv := &http.Server{Addr: *addr, Handler: uiHandlerWith(st, uiLedgerDir(target), writer), ReadHeaderTimeout: 10 * time.Second}
+	srv := &http.Server{Addr: *addr, Handler: uiHandlerWith(st, uiLedgerDir(target), *ledgerRepo, writer), ReadHeaderTimeout: 10 * time.Second}
 	if err := uiServe(srv); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		fmt.Fprintln(stderr, "corral ui:", err)
 		return 1
@@ -119,14 +120,14 @@ func runUI(args []string, open func(dsn string) (sealReader, error), stdout, std
 
 // uiHandler is the read-only page: exactly what `corral ui` served before
 // --write existed.
-func uiHandler(st sealReader, ledgerDir string) http.Handler {
-	return uiHandlerWith(st, ledgerDir, nil)
+func uiHandler(st sealReader, ledgerDir, ledgerRepo string) http.Handler {
+	return uiHandlerWith(st, ledgerDir, ledgerRepo, nil)
 }
 
 // uiHandlerWith serves the page; w != nil adds the write routes and, in
 // that mode only, refuses any request whose Host this server does not
 // answer to (DNS rebinding).
-func uiHandlerWith(st sealReader, ledgerDir string, wr *uiWriter) http.Handler {
+func uiHandlerWith(st sealReader, ledgerDir, ledgerRepo string, wr *uiWriter) http.Handler {
 	mux := http.NewServeMux()
 	if wr != nil {
 		mux.HandleFunc("/api/whoami", wr.guard(func(w http.ResponseWriter, r *http.Request) {
@@ -144,7 +145,7 @@ func uiHandlerWith(st sealReader, ledgerDir string, wr *uiWriter) http.Handler {
 	// public record is built from, read fresh on every request so a
 	// verdict written from another terminal shows on reload. GET and HEAD
 	// only, and only the paths recordview rendered; anything else is 404.
-	mux.Handle("/", recordview.Handler(uiSite(st, ledgerDir, wr != nil)))
+	mux.Handle("/", recordview.Handler(uiSite(st, ledgerDir, ledgerRepo, wr != nil)))
 	return hostGate(wr, mux)
 }
 

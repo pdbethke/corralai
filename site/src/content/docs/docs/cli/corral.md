@@ -1062,6 +1062,8 @@ Usage of ui:
     	local listen address. Loopback by default ON PURPOSE: the ledger is a map of where a codebase's tests are thinnest (default "127.0.0.1:8787")
   -db string
     	what to read: a ledger directory (the seal, the chain and the reviews) or a warehouse file / md:<db> (the seal only) — default $CORRAL_LEDGER, else ./.corral/ledger, the same resolution corral seal and corral scans use
+  -ledger-repo string
+    	the GitHub repository (owner/name) whose Actions identity signed this ledger's keyless entries. Required only when the chain holds a keyless (corral-ledger-6) entry, which is checked against exactly this repository; never guessed from the scan's repo, the directory or git config, because the repository the entries claim is the thing being checked
   -open
     	with --write, also open the URL in a browser. A convenience for a desktop: it hands the URL, token included, to the opener as a command-line argument, which other local processes can read while it runs
   -print-url
@@ -1082,6 +1084,8 @@ Usage of verify:
     	also recompute the warehouse rows' hash from this pushed DuckDB (a path, or md:<db> for MotherDuck) and compare it to the statement's claim; for a corral review --attest statement, the ledger DIRECTORY whose entry names it, so the reproductions' hash is recomputed from the entry. Every push of the scan the warehouse holds is tried (each has its own scan_uid); a VACUUMed warehouse can change row order and trip a false ✗ here without tampering
   -ledger --push <dir>/
     	walk a LEDGER DIRECTORY (the JSON entries --push <dir>/ writes, one per scan, each naming the previous entry's hash and carrying a signature): every entry's hash against its bytes, every link against its predecessor, every signature against --pub, else $CORRALAI_LEDGER_PUBKEY, else NOT CHECKED (the local certify key is never used to verify a ledger). One line per entry; an edited entry, a removed one, or a foreign signature is named. Instead of --attest, not with it
+  -ledger-repo string
+    	the GitHub repository (owner/name) whose Actions identity signed this ledger's keyless entries. Required only when the chain holds a keyless (corral-ledger-6) entry, which is checked against exactly this repository; never guessed from the scan's repo, the directory or git config, because the repository the entries claim is the thing being checked
   -pub string
     	hex-encoded Ed25519 public key to verify against. With --attest: default the local certify key (CORRALAI_CERTIFY_KEY_FILE). With --ledger: default $CORRALAI_LEDGER_PUBKEY, else signatures are NOT CHECKED — the local certify key is never used for a ledger
   -rekor-index int

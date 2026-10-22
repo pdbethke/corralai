@@ -148,6 +148,24 @@ func TestDocsLedgerClaimsNameKeyHolderAndUnsignedNote(t *testing.T) {
 	}
 }
 
+// The Action's keyless signing is documented where an operator will look: the
+// permission it needs, how a reader verifies the result, and that the path has
+// not been run end to end in Actions (so the page cannot be quietly read as a
+// claim that it has).
+func TestDocsActionKeylessSigningIsDocumented(t *testing.T) {
+	root := publicClaimRoot(t)
+	text := publicClaimText(t, root, "docs/corral/github-action.md")
+	for _, required := range []string{
+		"id-token: write",
+		"--ledger-repo",
+		"has not yet been run end to end in GitHub",
+	} {
+		if !strings.Contains(text, required) {
+			t.Errorf("docs/corral/github-action.md must say %q", required)
+		}
+	}
+}
+
 // After the distinct-edits fix every printed interval names its n as distinct;
 // an example that shows a bare (n=8) teaches a reader the old meaning.
 func TestDocsIntervalExamplesCountDistinctEdits(t *testing.T) {

@@ -580,6 +580,62 @@ ledger directory; a local run and an Action run are one writer with two
 places to put the file, and DuckDB (or MotherDuck) is the query surface
 over both, not the store.
 
+### Signing the ledger without a key, on a public repository
+
+A runner cannot keep a certify key, so on a **public** repository the Action
+signs each entry keylessly: when the job has `permissions: id-token: write`,
+the repository is public and no certify key is configured, it sets
+`CORRALAI_LEDGER_SIGNER=sigstore`. corral then obtains a short-lived Sigstore
+certificate bound to the run's GitHub OIDC identity and signs the entry with
+it. The entry is written as `corral-ledger-6` with key id `sigstore`.
+
+```yaml
+permissions:
+  contents: write
+  id-token: write   # lets the job ask GitHub for an OIDC token
+```
+
+What this puts on the record, in public, permanently:
+
+- **Each entry's hash, the repository and the workflow identity are written to
+  Sigstore's public Rekor log.** Every keyless entry is one Rekor entry, and
+  Rekor cannot be edited or deleted. That is the point (it is the external
+  witness a self-signed chain lacks) and the cost.
+- **The identity is the repository, not a workflow.** Any workflow in the
+  repository that is granted an OIDC token, including a `pull_request_target`
+  run, can sign entries that verify as this repository's. The signature
+  proves "a workflow in this repository wrote this", not "the audit workflow
+  wrote this". Do not grant `id-token: write` to workflows that run code you
+  do not trust.
+- **Private repositories are not signed keylessly.** The public log would name
+  the repository and workflow, so the Action writes the entry unsigned and
+  prints a notice. It also writes unsigned, with a notice, when the event does
+  not say whether the repository is public (`github.event.repository.private`
+  is empty) or when the job has no OIDC token. Give a private repository a
+  certify key (`CORRALAI_CERTIFY_KEY` in the step's `env:`) to sign its
+  entries; a configured key is never overridden by keyless signing.
+- **One entry per run.** The Action points `CORRALAI_MACHINE_LEDGER` at the
+  ledger directory, so the runner's machine-ledger copy and the repository
+  entry are the same write. Without that a keyless run would log a second
+  Rekor entry for a copy the runner throws away. If your workflow sets
+  `CORRALAI_MACHINE_LEDGER` itself to a different directory, you get that
+  second entry.
+
+To verify, name the repository the entries must have been signed for:
+
+```
+corral verify --ledger <dir> --ledger-repo owner/name
+```
+
+`--ledger-repo` is required when the chain holds a keyless entry: corral never
+guesses the repository from the scan, the directory or git config, because the
+repository the entries claim is the thing being checked.
+
+**Status: signing in GitHub Actions has not yet been run end to end in GitHub
+Actions.** The keyless path has been exercised against an in-process Fulcio
+and Rekor, not against GitHub's OIDC issuer and the public Sigstore
+instance. Treat it as unproven until a run is recorded here.
+
 ```yaml
       # The job needs: permissions: { contents: write, id-token: write, attestations: write }
       # — write to push the ledger branch, the other two for the attestation.

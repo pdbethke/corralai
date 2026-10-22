@@ -166,6 +166,62 @@ runs:
         echo "Installing corral@${ref} into ${gobin}"
         GOBIN="$gobin" go install "github.com/pdbethke/corralai/cmd/corral@${ref}"
         echo "$gobin" >> "$GITHUB_PATH"
+    # Choose how this run's ledger entries are signed.
+    #
+    # A runner cannot keep a certify key, so a public repository's entries are
+    # signed KEYLESSLY: corral asks Sigstore for a short-lived certificate
+    # bound to this workflow's GitHub OIDC identity (the repository), and the
+    # signature is recorded in the public Rekor log. That log entry names the
+    # repository and the workflow, forever, so it is only ever chosen for a
+    # repository that is already public. A private repository is written
+    # unsigned instead, with a notice, and never has the variable set.
+    #
+    # Nothing here guesses: visibility must read exactly "false" (the event
+    # payload has no repository object on some triggers, in which case the
+    # value is empty and we refuse), the id-token must be granted, and a
+    # certify key the operator configured is never overridden.
+    - name: Choose ledger signing
+      shell: bash
+      env:
+        LEDGER_DIR: ${{ inputs.ledger }}
+        REPO_PRIVATE: ${{ github.event.repository.private }}
+      run: |
+        set -euo pipefail
+        # No ledger directory: --no-ledger is passed, nothing is written, and
+        # there is nothing to sign.
+        [ -n "${LEDGER_DIR:-}" ] || exit 0
+        if [ -n "${CORRALAI_LEDGER_SIGNER:-}" ]; then
+          echo "::notice title=corral ledger signing::CORRALAI_LEDGER_SIGNER is already set to '${CORRALAI_LEDGER_SIGNER}' by the workflow; the Action leaves it alone."
+          exit 0
+        fi
+        if [ -n "${CORRALAI_CERTIFY_KEY:-}" ] || [ -n "${CORRALAI_CERTIFY_KEY_FILE:-}" ]; then
+          echo "::notice title=corral ledger signing::a certify key is configured, so entries are signed with it and not keylessly."
+          exit 0
+        fi
+        case "${REPO_PRIVATE:-}" in
+          false) ;;
+          true)
+            echo "::notice title=corral ledger signing::this repository is private, so ledger entries are written unsigned: a keyless signature is recorded in the public Rekor log and would name the repository and workflow. Configure CORRALAI_CERTIFY_KEY to sign them."
+            exit 0 ;;
+          *)
+            echo "::notice title=corral ledger signing::this event does not say whether the repository is public (github.event.repository.private is empty), so ledger entries are written unsigned rather than risk naming a private repository in a public log."
+            exit 0 ;;
+        esac
+        if [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
+          echo "::notice title=corral ledger signing::ledger entries are written unsigned: the job has no OIDC token. Add 'permissions: id-token: write' to the job to have them signed with this repository's identity."
+          exit 0
+        fi
+        echo "CORRALAI_LEDGER_SIGNER=sigstore" >> "$GITHUB_ENV"
+        # One keyless write per run. The machine-ledger copy is skipped when
+        # it resolves to the repo ledger itself (the entry is then written
+        # once, as the primary), so pointing it there keeps the runner's
+        # throwaway copy from adding a second public Rekor entry.
+        if [ -n "${CORRALAI_MACHINE_LEDGER:-}" ]; then
+          echo "::notice title=corral ledger signing::CORRALAI_MACHINE_LEDGER is already set by the workflow; if it is not the ledger directory, each keyless run writes a second public Rekor entry for the machine copy."
+        else
+          echo "CORRALAI_MACHINE_LEDGER=$(realpath -m "$LEDGER_DIR")" >> "$GITHUB_ENV"
+        fi
+        echo "::notice title=corral ledger signing::ledger entries will be signed with this repository's GitHub identity; each signature is a public Rekor log entry naming the repository and workflow."
     - name: Run corral
       shell: bash
       env:

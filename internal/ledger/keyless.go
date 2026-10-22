@@ -76,7 +76,7 @@ func KeylessArtifact(e Entry) ([]byte, error) {
 // repository URI from its certificate. It is also where the format/keyid
 // pairing is enforced, for every entry: v6 ⇔ keyid sigstore, and only a
 // keyless entry may carry a bundle.
-func keylessProblem(e Entry, t Trust) (problem, signedBy string) {
+func keylessProblem(e Entry, t Trust, integrityOnly bool) (problem, signedBy string) {
 	keyless := e.KeyID == KeyIDSigstore
 	switch {
 	case !keyless && e.Format == Format6:
@@ -85,8 +85,8 @@ func keylessProblem(e Entry, t Trust) (problem, signedBy string) {
 		return fmt.Sprintf("carries a sigstore bundle but is not a keyless entry (keyid %q)", e.KeyID), ""
 	case !keyless:
 		return "", ""
-	case t.IntegrityOnly:
-		// No signature is checked; the shape rules below still are.
+	case integrityOnly:
+		// VerifyIntegrity: no signature is checked; the shape rules are.
 		return keylessShapeProblem(e), ""
 	case t.Repo == "":
 		// First, before any other check: the operator must name what to
@@ -108,7 +108,7 @@ func keylessProblem(e Entry, t Trust) (problem, signedBy string) {
 
 // keylessShapeProblem is the part of a keyless entry's check that needs no
 // trust: its format, its kind, and that it carries a bundle and only a
-// bundle. IntegrityOnly runs exactly this.
+// bundle. VerifyIntegrity runs exactly this.
 func keylessShapeProblem(e Entry) string {
 	switch {
 	case e.Format != Format6:

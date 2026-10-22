@@ -413,7 +413,7 @@ func TestTokenSubject(t *testing.T) {
 
 func TestGitHubOIDCTokenRequest(t *testing.T) {
 	var gotAuth, gotAudience, gotOther string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotAuth, gotAudience, gotOther = r.Header.Get("Authorization"), r.URL.Query().Get("audience"), r.URL.Query().Get("api-version")
 		_ = json.NewEncoder(w).Encode(map[string]string{"value": "header.payload.sig"})
 	}))
@@ -431,7 +431,7 @@ func TestGitHubOIDCTokenRequest(t *testing.T) {
 		"empty value": func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(`{"value":""}`)) },
 		"not json":    func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(`<html>`)) },
 	} {
-		bad := httptest.NewServer(h)
+		bad := httptest.NewTLSServer(h)
 		_, err := githubOIDCToken(context.Background(), bad.Client(), bad.URL, "request-secret")
 		bad.Close()
 		if err == nil {
@@ -440,6 +440,46 @@ func TestGitHubOIDCTokenRequest(t *testing.T) {
 		if strings.Contains(err.Error(), "request-secret") {
 			t.Fatalf("%s: the request token leaked into the error: %v", name, err)
 		}
+	}
+}
+
+// The request bearer is a credential: an http:// token URL is refused before
+// anything is sent.
+func TestGitHubOIDCTokenRefusesPlainHTTP(t *testing.T) {
+	hit := false
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { hit = true }))
+	defer srv.Close()
+	_, err := githubOIDCToken(context.Background(), srv.Client(), srv.URL+"/token", "request-secret")
+	if err == nil || !strings.Contains(err.Error(), "https") || hit {
+		t.Fatalf("err %v, request sent %v — want a refusal before any request", err, hit)
+	}
+	if strings.Contains(err.Error(), "request-secret") {
+		t.Fatalf("the request token leaked into the error: %v", err)
+	}
+}
+
+// A Fulcio refusal says why — a bounded, one-line excerpt of its body — and
+// never carries the token, even from a server that echoes it back.
+func TestFulcioRefusalExcerpt(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte("invalid identity token\n\x1b[31m" + r.Header.Get("Authorization") + strings.Repeat("x", 2000)))
+	}))
+	defer srv.Close()
+	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	_, err := fulcioCertificate(context.Background(), srv.Client(), srv.URL, key, testJWT)
+	if err == nil {
+		t.Fatal("a 401 must be an error")
+	}
+	msg := err.Error()
+	if strings.Contains(msg, testJWT) {
+		t.Fatalf("the token appears in the error: %.200s", msg)
+	}
+	if !strings.Contains(msg, "401") || !strings.Contains(msg, "invalid identity token") || strings.ContainsAny(msg, "\n\x1b") {
+		t.Fatalf("want the status and a one-line excerpt: %.300s", msg)
+	}
+	if len(msg) > 700 {
+		t.Fatalf("excerpt not bounded: %d bytes", len(msg))
 	}
 }
 

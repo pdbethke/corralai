@@ -1253,6 +1253,9 @@ CORRALAI_LEARN_SWEEP_SECONDS  how often (seconds) the learn sweep clusters findi
 CORRALAI_BUILD_DB          `corral certify` signed build-record ledger DuckDB path (default $STATE/corralai_build.duckdb)
 CORRALAI_CERTIFY_KEY       hex-encoded Ed25519 seed (32 bytes) `corral certify` build attestations are signed with; takes priority over key file
 CORRALAI_CERTIFY_KEY_FILE  path to persist the certify signing key seed (default $STATE/corralai_certify_key); created 0600 on first run
+CORRALAI_LEDGER_SIGNER     how ledger entries are signed: "sigstore" signs keylessly with the GitHub Actions run's own identity
+                           (needs "permissions: id-token: write"; the certify key is then not used for ledger entries);
+                           unset keeps the certify key; any other value is refused
 CORRALAI_BRAIN_TOKEN       `corral certify`'s bearer token to authenticate to a brain (via `corral secret set`); distinct
                            from CORRALAI_BRAIN_KEY above (that's an Ed25519 IDENTITY SEED, not a bearer token — do not reuse it)
 CORRALAI_REKOR_URL         Sigstore Rekor instance report_build anchors signed build attestations to (default https://rekor.sigstore.dev);

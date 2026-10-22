@@ -666,38 +666,58 @@ func TestKeylessLeafMustBeCodeSigning(t *testing.T) {
 	}
 }
 
-// IntegrityOnly is the reader that holds no trust at all — the writer's own
-// RequireIntactChain before it appends. It checks hashes, links and the
+// VerifyIntegrity is the reader that holds no trust at all — the writer's
+// own RequireIntactChain before it appends. It checks hashes, links and the
 // keyless shape rules, and no signature: a keyless entry is not a Problem
 // there merely because no repository was named, or the chain could never be
-// extended past its first keyless entry.
-func TestKeylessIntegrityOnly(t *testing.T) {
+// extended past its first keyless entry. It is a separate function, never a
+// Trust setting, so a reader that names a repository always gets its check.
+func TestVerifyIntegrity(t *testing.T) {
 	s := newTestSigstore(t)
 	k1 := s.keylessEntry(t, "", 1, spec{})
 	k2 := s.keylessEntry(t, k1.Hash, 2, spec{})
-	for i, c := range ledger.Verify([]ledger.Entry{k1, k2}, ledger.Trust{IntegrityOnly: true}) {
+	for i, c := range ledger.VerifyIntegrity([]ledger.Entry{k1, k2}) {
 		if c.Problem != "" || !c.HashOK || !c.LinkOK || c.SigOK || !c.Signed {
-			t.Fatalf("entry %d: an intact keyless chain read for integrity only: %+v", i, c)
+			t.Fatalf("entry %d: an intact keyless chain read for integrity: %+v", i, c)
 		}
 	}
-	// A bundle over another entry is NOT caught here — no signature is
-	// checked — but every shape rule still is.
+	// A forged bundle — a genuine one over ANOTHER entry — passes the
+	// integrity read (no signature is checked: SigOK false) and fails the
+	// full one on the same chain.
+	other := s.keylessEntry(t, "", 9, spec{})
+	forged := k2
+	forged.Sigstore = other.Sigstore
+	forged = reparse(t, forged)
+	chain := []ledger.Entry{k1, forged}
+	ic := ledger.VerifyIntegrity(chain)
+	if c := ic[1]; c.Problem != "" || !c.HashOK || !c.LinkOK || c.SigOK {
+		t.Fatalf("integrity read of a forged bundle: %+v", c)
+	}
+	fc := ledger.Verify(chain, trustFor(s, t, testRepo))
+	if c := fc[1]; c.SigOK || !strings.Contains(c.Problem, "keyless entry:") {
+		t.Fatalf("the full read must report the forged bundle: %+v", c)
+	}
+	// Every shape rule still holds under the integrity read.
 	bad := k1
 	bad.Signature = "00" // outside the hash, so the entry still hashes clean
-	bad = reparse(t, bad)
-	if c := only(t, ledger.Verify([]ledger.Entry{bad}, ledger.Trust{IntegrityOnly: true})); !strings.Contains(c.Problem, "ed25519 signature as well") {
-		t.Fatalf("shape rules hold under IntegrityOnly: %+v", c)
+	if c := only(t, ledger.VerifyIntegrity([]ledger.Entry{reparse(t, bad)})); !strings.Contains(c.Problem, "ed25519 signature as well") {
+		t.Fatalf("shape rules hold under VerifyIntegrity: %+v", c)
 	}
 	noBundle := k1
 	noBundle.Sigstore = nil
-	if c := only(t, ledger.Verify([]ledger.Entry{reparse(t, noBundle)}, ledger.Trust{IntegrityOnly: true})); !strings.Contains(c.Problem, "carries no sigstore bundle") {
-		t.Fatalf("a keyless entry with no bundle is a Problem under IntegrityOnly: %+v", c)
+	if c := only(t, ledger.VerifyIntegrity([]ledger.Entry{reparse(t, noBundle)})); !strings.Contains(c.Problem, "carries no sigstore bundle") {
+		t.Fatalf("a keyless entry with no bundle is a Problem under VerifyIntegrity: %+v", c)
 	}
 	v5 := k1
 	v5.Format = ledger.FileFormat
 	v5 = s.seal(t, v5, spec{})
-	if c := only(t, ledger.Verify([]ledger.Entry{v5}, ledger.Trust{IntegrityOnly: true})); !strings.Contains(c.Problem, ledger.Format6) {
-		t.Fatalf("the v6 pairing holds under IntegrityOnly: %+v", c)
+	if c := only(t, ledger.VerifyIntegrity([]ledger.Entry{v5})); !strings.Contains(c.Problem, ledger.Format6) {
+		t.Fatalf("the v6 pairing holds under VerifyIntegrity: %+v", c)
+	}
+	// And a Trust with no repository is still told so — the integrity read
+	// is not what an empty Repo means.
+	if c := ledger.Verify(chain, ledger.Trust{})[0]; c.Problem != ledger.ProblemNoLedgerRepo {
+		t.Fatalf("Verify with no repository: %+v", c)
 	}
 }
 

@@ -20,20 +20,10 @@ import (
 // SigstoreRoot a Problem naming it. Neither has a default — the repository
 // is never guessed, and the public-good root is passed explicitly
 // (PublicGoodTrustedRoot) by whoever means it.
-//
-// IntegrityOnly is the reader that holds no trust at all and says so: a
-// keyless entry's bundle is not checked (as a zero RootPub leaves ed25519
-// signatures unchecked), while every hash, link and shape rule — the v6 ⇔
-// keyid pairing among them — still is. It is for a WRITER guarding its own
-// append (auditpush.RequireIntactChain), which has no repository to name and
-// must still extend a chain that holds keyless entries. It is a field the
-// caller sets, not what an empty Repo means: a reader that forgot the
-// repository is told so (ProblemNoLedgerRepo), never quietly skipped.
 type Trust struct {
-	RootPub       ed25519.PublicKey
-	Repo          string
-	SigstoreRoot  *SigstoreRoot
-	IntegrityOnly bool
+	RootPub      ed25519.PublicKey
+	Repo         string
+	SigstoreRoot *SigstoreRoot
 }
 
 // ChainCheck is one entry's verdict from Verify.
@@ -98,6 +88,30 @@ func Verify(entries []Entry, t Trust) []ChainCheck {
 // both, so a reader and a writer can never disagree about who was
 // registered when.
 func VerifyWithSigners(entries []Entry, t Trust) ([]ChainCheck, *SignerSet) {
+	return walk(entries, t, false)
+}
+
+// VerifyIntegrity is the walk for a reader that holds no trust at all and
+// says so by calling it: every hash, link and shape rule — the keyless v6 ⇔
+// keyid pairing among them — is checked, and NO signature of either kind
+// (SigOK is false throughout). It is for a WRITER guarding its own append
+// (auditpush.RequireIntactChain), which has no repository to name and must
+// still extend a chain that holds keyless entries.
+//
+// It is a function of its own, not a Trust setting, so a reader that names
+// a repository or a root key can never have that check skipped by a flag
+// set beside it; and an empty Trust.Repo still reads as ProblemNoLedgerRepo
+// in Verify, never as "integrity only".
+func VerifyIntegrity(entries []Entry) []ChainCheck {
+	checks, _ := walk(entries, Trust{}, true)
+	return checks
+}
+
+// walk is the one loop behind Verify, VerifyWithSigners and VerifyIntegrity.
+// integrityOnly skips keyless bundle verification (shape still checked);
+// with it, t is always the zero Trust, so no ed25519 signature is checked
+// either.
+func walk(entries []Entry, t Trust, integrityOnly bool) ([]ChainCheck, *SignerSet) {
 	pub := t.RootPub
 	set := newSignerSet(entries, pub)
 	// Whether this chain is a signed one at all: an entirely unsigned ledger
@@ -125,7 +139,7 @@ func VerifyWithSigners(entries []Entry, t Trust) ([]ChainCheck, *SignerSet) {
 		// never resolved against the signer set: it holds no key the set
 		// could name. keylessProblem also enforces, for EVERY entry, that
 		// format 6 and keyid "sigstore" go together.
-		keyless, signedBy := keylessProblem(e, t)
+		keyless, signedBy := keylessProblem(e, t, integrityOnly)
 		var name, keyProblem string
 		var key ed25519.PublicKey
 		if c.Keyless {

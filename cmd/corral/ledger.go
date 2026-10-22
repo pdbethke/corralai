@@ -361,6 +361,13 @@ func runLedgerCheckpoint(args []string, stdout, stderr io.Writer) int {
 		}
 		signer, rootPub, signed = root, rpub, "signed by root "+root.KeyID
 	} else {
+		// A checkpoint is a genesis: where the chain begins stays with the
+		// ledger's root key, and the verifier refuses a keyless one. Said
+		// here, before any signer is built or anything written.
+		if keyless, _ := auditpush.KeylessSignerSelected(); keyless {
+			fmt.Fprintf(stderr, "corral ledger checkpoint: %s=%s signs keylessly, and a checkpoint must be signed by the ledger's root key or the local certify key — unset %s to checkpoint. Nothing written\n", auditpush.LedgerSignerEnv, auditpush.LedgerSignerSigstore, auditpush.LedgerSignerEnv)
+			return 2
+		}
 		var kerr error
 		signer, signed, kerr = selectLedgerSigner(stderr)
 		if kerr != nil {

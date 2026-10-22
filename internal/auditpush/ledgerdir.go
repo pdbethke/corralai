@@ -109,6 +109,8 @@ type ledgerFile = LedgerEntry
 // (SigningKeyID ledger.KeyIDSigstore), whose "signature" is a Sigstore
 // bundle placed in the entry's Sigstore field; nil writes an unsigned entry.
 type LedgerSigner interface {
+	// Sign signs the entry's hash as BYTES — hex-decoded, which for a keyless
+	// signer is exactly ledger.KeylessArtifact(e) — never the hex string.
 	Sign(hash []byte) (keyID string, signature []byte, err error)
 	// SigningKeyID names the key BEFORE the entry is hashed. From
 	// corral-ledger-4 the signer's name is inside the hashed bytes, so it
@@ -590,15 +592,15 @@ func WriteRetraction(dir, target, reason string, signer LedgerSigner) (string, e
 // missing key must not read as a broken chain. Hashes, links, shape and
 // ordering are, which is what catches edited, removed or reordered bytes.
 //
-// Keyless entries are read the same way — IntegrityOnly: their shape is
-// checked, their bundle is not — because the writer has no repository to
+// Keyless entries are read the same way — ledger.VerifyIntegrity: their
+// shape is checked, their bundle is not — because the writer has no repository to
 // name, and a chain must stay appendable after its first keyless entry.
 func RequireIntactChain(dir string) error {
 	entries, err := ReadLedgerDir(dir)
 	if err != nil {
 		return err
 	}
-	checks := ledger.Verify(entries, ledger.Trust{IntegrityOnly: true})
+	checks := ledger.VerifyIntegrity(entries)
 	for _, c := range checks {
 		if c.Problem != "" {
 			return fmt.Errorf("auditpush: %s does not verify (%s: %s)", dir, c.File, c.Problem)

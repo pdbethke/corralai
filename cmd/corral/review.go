@@ -155,6 +155,14 @@ func runReviewRun(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "corral review: --scope and --reviewer-model are required")
 		return 2
 	}
+	// The entry is signed after the seats are paid; a signer that cannot be
+	// used is refused now, before anything is spent — as certify --repo does.
+	if !*noLedger {
+		if err := preflightLedgerSigner(); err != nil {
+			fmt.Fprintf(stderr, "corral review: the ledger signer cannot be used: %v — nothing was spent\n", err)
+			return 2
+		}
+	}
 	root, err := filepath.Abs(*repoDir)
 	if err != nil {
 		fmt.Fprintf(stderr, "corral review: %v\n", err)

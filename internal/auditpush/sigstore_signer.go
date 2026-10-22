@@ -399,7 +399,7 @@ func fulcioCertificate(ctx context.Context, client *http.Client, fulcioURL strin
 		return nil, err
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("answered %s", resp.Status)
+		return nil, fmt.Errorf("answered %s: %s", resp.Status, responseExcerpt(body, token))
 	}
 	type chain struct {
 		Chain struct {
@@ -436,6 +436,28 @@ func fulcioCertificate(ctx context.Context, client *http.Client, fulcioURL strin
 		return nil, errors.New("returned a certificate for another key")
 	}
 	return blk.Bytes, nil
+}
+
+// responseExcerpt is at most maxExcerpt bytes of a refusal's body, for the
+// operator to read why: control characters dropped so it stays one line,
+// and the token removed should a server ever echo it (it is sent only in a
+// header, so Fulcio has no reason to).
+func responseExcerpt(body []byte, token string) string {
+	const maxExcerpt = 512
+	s := string(body)
+	if token != "" {
+		s = strings.ReplaceAll(s, token, "[token]")
+	}
+	s = strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return -1
+		}
+		return r
+	}, s)
+	if len(s) > maxExcerpt {
+		s = strings.ToValidUTF8(s[:maxExcerpt], "") + "…"
+	}
+	return s
 }
 
 // tokenSubject is the identity a Fulcio proof of possession signs: the
@@ -506,6 +528,10 @@ func githubOIDCToken(ctx context.Context, client *http.Client, reqURL, reqToken 
 	u, err := url.Parse(reqURL)
 	if err != nil {
 		return "", errors.New("ACTIONS_ID_TOKEN_REQUEST_URL is not a URL")
+	}
+	// The request bearer is a credential; it goes over TLS or not at all.
+	if u.Scheme != "https" {
+		return "", fmt.Errorf("ACTIONS_ID_TOKEN_REQUEST_URL is not https (scheme %q) — the request token is never sent in the clear", u.Scheme)
 	}
 	q := u.Query()
 	q.Set("audience", sigstoreOIDCAudience)

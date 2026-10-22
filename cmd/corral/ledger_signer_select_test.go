@@ -193,3 +193,50 @@ func pubOfSeedHex(t *testing.T, seed string) ed25519.PublicKey {
 	}
 	return raw
 }
+
+// A checkpoint is a genesis and stays with the root key: under keyless it is
+// refused up front, naming the variable, and nothing is written.
+func TestLedgerCheckpointRefusesKeyless(t *testing.T) {
+	isolateStateHome(t)
+	dir := t.TempDir()
+	t.Setenv(auditpush.LedgerSignerEnv, "")
+	if _, err := pushBundle(dir+"/", auditpush.Bundle{Scan: auditpush.ScanRow{Repo: "r", Commit: "aaaa1111", ScanID: 1}}, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	before := ledgerFileCount(t, dir)
+	t.Setenv(auditpush.LedgerSignerEnv, "sigstore")
+	var out, errb bytes.Buffer
+	if code := runLedger([]string{"checkpoint", dir}, &out, &errb); code != 2 || !strings.Contains(errb.String(), "root key") || !strings.Contains(errb.String(), auditpush.LedgerSignerEnv) {
+		t.Fatalf("exit %d stderr %q — want 2 naming the root key and %s", code, errb.String(), auditpush.LedgerSignerEnv)
+	}
+	if ledgerFileCount(t, dir) != before {
+		t.Fatal("a keyless checkpoint changed the directory")
+	}
+}
+
+// review and certify --local sign their entry after the seats are paid, so
+// an unusable signer is refused before any spend — as certify --repo does.
+func TestReviewAndLocalRefuseUnusableSignerBeforeSpend(t *testing.T) {
+	isolateStateHome(t)
+	t.Setenv("ACTIONS_ID_TOKEN_REQUEST_URL", "")
+	t.Setenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN", "")
+	for _, v := range []string{"gpg", "sigstore"} {
+		t.Setenv(auditpush.LedgerSignerEnv, v)
+		var out, errb bytes.Buffer
+		if code := runReview([]string{"--scope", "x.go", "--reviewer-model", "m", "--repo", t.TempDir()}, &out, &errb); code != 2 || !strings.Contains(errb.String(), "the ledger signer cannot be used") || !strings.Contains(errb.String(), "nothing was spent") {
+			t.Fatalf("review %s=%s: exit %d stderr %.400s", auditpush.LedgerSignerEnv, v, code, errb.String())
+		}
+		out.Reset()
+		errb.Reset()
+		if code := runCertifyLocal([]string{"--local", "--code", "a.go", "--goal", "g", "--writer-model", "w", "--mutant-model", "m"}, &out, &errb); code != 2 || !strings.Contains(errb.String(), "the ledger signer cannot be used") || !strings.Contains(errb.String(), "nothing was spent") {
+			t.Fatalf("certify --local %s=%s: exit %d stderr %.400s", auditpush.LedgerSignerEnv, v, code, errb.String())
+		}
+	}
+	// --no-ledger writes no entry, so it asks nothing of the signer.
+	t.Setenv(auditpush.LedgerSignerEnv, "gpg")
+	var out, errb bytes.Buffer
+	runReview([]string{"--scope", "x.go", "--reviewer-model", "m", "--repo", t.TempDir(), "--no-ledger"}, &out, &errb)
+	if strings.Contains(errb.String(), "the ledger signer cannot be used") {
+		t.Fatalf("--no-ledger review asked about the signer: %.300s", errb.String())
+	}
+}

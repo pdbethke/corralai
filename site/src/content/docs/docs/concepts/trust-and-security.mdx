@@ -209,9 +209,10 @@ take the same flag.
 
 `corral ledger checkpoint` and `corral ledger signer add|revoke|list` verify
 under the root key only, so they cannot operate on a ledger that holds keyless
-entries. The signer verbs report those entries as failing, and `checkpoint`
-refuses outright, before deleting anything, because pruning would delete
-entries a repository's identity vouched for.
+entries. Each refuses before writing or deleting anything, saying the ledger
+holds keyless entries: signer changes and checkpoints are root-key operations
+on key-signed ledgers, and pruning would delete entries a repository's
+identity vouched for.
 
 Entries written this way are `corral-ledger-6`, and **a corral release before
 the one that introduced them cannot read, and refuses the whole ledger, once it

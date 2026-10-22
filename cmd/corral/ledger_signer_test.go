@@ -260,3 +260,36 @@ func TestCheckpointOnPlainChainUnchanged(t *testing.T) {
 		t.Fatalf("plain chain: exit %d\n%s", code, out)
 	}
 }
+
+// Signer changes are root-key operations on a key-signed ledger. On a chain
+// that holds a keyless entry the verbs said "pass --ledger-repo" (they have
+// no such flag) and add/revoke blamed the seed ("the seed is not this
+// chain's root") although it was. They now say what is true and write
+// nothing.
+func TestSignerVerbsRefuseAKeylessLedgerSayingWhy(t *testing.T) {
+	isolateStateHome(t)
+	f := newSignerFixture(t)
+	useTestKeylessSigner(t)
+	t.Setenv(auditpush.LedgerSignerEnv, "sigstore")
+	if _, err := pushBundle(f.dir+"/", auditpush.Bundle{Scan: auditpush.ScanRow{Repo: "r", Commit: "bbbb2222", ScanID: 2}, Files: []auditpush.Row{{Repo: "r", ScanID: 2, Path: "a.py"}}}, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(auditpush.LedgerSignerEnv, "")
+	before := ledgerFileCount(t, f.dir)
+	for _, args := range [][]string{
+		{"signer", "add", f.dir, "--name", "laptop", "--pub", pubHexOfSeed(t, seedHex(0x22))},
+		{"signer", "revoke", f.dir, "--keyid", "ed25519:0000000000000000", "--reason", "gone"},
+		{"signer", "list", "--pub", f.rootPub, f.dir},
+	} {
+		code, out := run(t, args...)
+		if code == 0 || !strings.Contains(out, "holds keyless entries") || !strings.Contains(out, "signer changes are root-key operations on key-signed ledgers") {
+			t.Errorf("%v: exit %d, want a refusal saying the ledger holds keyless entries:\n%s", args[:2], code, out)
+		}
+		if strings.Contains(out, "--ledger-repo") || strings.Contains(out, "seed is not this chain's root") {
+			t.Errorf("%v: the refusal names a flag the verb lacks or blames the seed:\n%s", args[:2], out)
+		}
+	}
+	if ledgerFileCount(t, f.dir) != before {
+		t.Fatal("a signer verb wrote to a keyless ledger")
+	}
+}

@@ -13,6 +13,7 @@ import (
 
 	"github.com/pdbethke/corralai/internal/auditpush"
 	"github.com/pdbethke/corralai/internal/buildstore"
+	"github.com/pdbethke/corralai/internal/ledger"
 )
 
 // ledgerRootKeyEnv carries the ledger's ROOT seed (hex Ed25519). The root is
@@ -52,6 +53,9 @@ func rootSignerFromEnv() (auditpush.Ed25519LedgerSigner, ed25519.PublicKey, erro
 // signed by anyone else shows Problems under it. Nothing is written when
 // any of them fails.
 func rootGate(verb, dir string, stderr io.Writer) (auditpush.Ed25519LedgerSigner, ed25519.PublicKey, bool) {
+	if refuseKeylessLedger(verb, dir, "nothing written", stderr) {
+		return auditpush.Ed25519LedgerSigner{}, nil, false
+	}
 	signer, rootPub, err := rootSignerFromEnv()
 	if err != nil {
 		fmt.Fprintf(stderr, "corral ledger %s: %v\n", verb, err)
@@ -89,6 +93,34 @@ func rootGate(verb, dir string, stderr io.Writer) (auditpush.Ed25519LedgerSigner
 		return signer, nil, false
 	}
 	return signer, rootPub, true
+}
+
+// refuseKeylessLedger is the root verbs' first check: a ledger holding a
+// keyless (sigstore) entry is refused, saying so, before anything is
+// verified. Without it the root walk reported the keyless entry's own
+// Problem ("pass --ledger-repo", a flag these verbs do not have) and
+// add/revoke went on to suggest "the seed is not this chain's root" when it
+// was. Signer changes and checkpoints are root-key operations on key-signed
+// ledgers (auditpush refuses to place either keylessly, and WriteCheckpoint
+// refuses a keyless chain), so the verb has nothing to do here. A directory
+// that cannot be read is left to the verify that follows, which names it.
+func refuseKeylessLedger(verb, dir, outcome string, stderr io.Writer) bool {
+	entries, err := auditpush.ReadLedgerDir(dir)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if e.KeyID != ledger.KeyIDSigstore {
+			continue
+		}
+		why := "signer changes are root-key operations on key-signed ledgers, and a keyless entry is vouched for by a repository, not by a key the chain registers"
+		if verb == "checkpoint" {
+			why = "a checkpoint is a root-key operation on key-signed ledgers, and pruning would delete entries a repository's identity vouched for"
+		}
+		fmt.Fprintf(stderr, "corral ledger %s: %s holds keyless entries (first: %s): %s — %s\n", verb, dir, e.File, why, outcome)
+		return true
+	}
+	return false
 }
 
 // runLedgerSigner is `corral ledger signer add|revoke|list`.
@@ -221,6 +253,9 @@ func runSignerList(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		fmt.Fprintf(stderr, "corral ledger signer list: %v\n", err)
 		return 2
+	}
+	if refuseKeylessLedger("signer list", dir, "no list is given", stderr) {
+		return 1
 	}
 	checks, err := auditpush.VerifyLedgerDir(dir, pub)
 	if err != nil {

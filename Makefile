@@ -4,6 +4,7 @@
 #   make install   go install all binaries
 #   make test      go test ./...
 #   make vet       go vet ./...
+#   make ledger-wasm  build the in-browser ledger deriver into ./bin/ledger-wasm
 #
 # (The demo lives under deploy/demo — see deploy/demo/Makefile.)
 
@@ -15,7 +16,7 @@ VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -X main.stampedVersion=$(VERSION)
 BINS    := corral corral-agent corral-observe corral-admin corral-desktop
 
-.PHONY: build install test vet tidy clean
+.PHONY: build install test vet tidy clean ledger-wasm
 
 build: ## build all binaries into ./bin, version-stamped
 	@mkdir -p bin
@@ -30,6 +31,9 @@ test: ## run the test suite
 
 vet: ## go vet
 	go vet ./...
+
+ledger-wasm: ## build ledger.wasm + wasm_exec.js into bin/ledger-wasm
+	bash scripts/build-ledger-wasm.sh bin/ledger-wasm
 
 tidy: ## go mod tidy
 	go mod tidy

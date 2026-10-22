@@ -639,8 +639,8 @@ func TestCheckpointRejectsMalformedSeedKey(t *testing.T) {
 			// And nothing was seeded, with or without a key (no panic either).
 			for _, pub := range []ed25519.PublicKey{pubOf(root), nil} {
 				_, set := verifyEntries(mustRead(t, dir), pub)
-				if len(set.list()) != 0 {
-					t.Fatalf("pub=%v: seeded %+v from a malformed checkpoint", pub != nil, set.list())
+				if len(set.List()) != 0 {
+					t.Fatalf("pub=%v: seeded %+v from a malformed checkpoint", pub != nil, set.List())
 				}
 			}
 		})

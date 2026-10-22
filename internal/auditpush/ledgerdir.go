@@ -307,7 +307,7 @@ func placeEntry(dir string, e LedgerEntry, prev string, signer LedgerSigner) (st
 		// spelling a Problem, so the writer refuses it rather than place an
 		// entry its own reader rejects.
 		if e.KeyID == LegacyRootKeyID {
-			return "", fmt.Errorf("auditpush: refusing to place %s", legacyKeyIDProblem)
+			return "", fmt.Errorf("auditpush: refusing to place %s", ledger.LegacyKeyIDProblem)
 		}
 	}
 	h, err := EntryHash(e)
@@ -406,208 +406,24 @@ func boolToInt(v bool) int {
 	return 0
 }
 
-// ChainCheck is one entry's verdict from VerifyLedgerDir.
-type ChainCheck struct {
-	File    string
-	ScanUID string
-	// Hash is the entry's own hash, so a caller can compare the chain's HEAD
-	// against an anchor held outside the directory. Truncation from the end
-	// leaves every surviving link valid and is invisible from within.
-	Hash   string
-	Commit string
-	HashOK bool // the stored Hash matches the entry's bytes
-	LinkOK bool // Prev names the previous entry's Hash (true for a genesis entry)
-	Signed bool // the entry carries a signature
-	SigOK  bool // the signature verifies under the key resolved for KeyID (false when unsigned, unresolved or no pub given)
-	KeyID  string
-	// Signer is who the chain says holds KeyID at this entry: "root", the
-	// name a register entry gave the key, or "" (unsigned, or a key the
-	// chain does not hold here). Filled with or without a key; only SigOK
-	// says the signature was checked.
-	Signer  string
-	Problem string // "" when nothing is wrong
-	Genesis bool
-	// Kind is the entry's kind; Note says what a retraction or checkpoint
-	// entry means for the chain, in words, when nothing is wrong with it.
-	Kind string
-	Note string
-}
+// ChainCheck is one entry's verdict; see ledger.ChainCheck.
+type ChainCheck = ledger.ChainCheck
 
-// VerifyLedgerDir walks the chain: every entry's hash against its bytes,
-// every Prev against its predecessor, every signature against the key the
-// chain held for its keyid at that point (when pub, the ROOT key, is
-// given). It never stops at the first failure — a reader wants the whole
-// picture — and it never calls an unsigned entry verified.
-//
-// Until corral-ledger-5 every signature was checked against pub alone: one
-// key for the whole ledger, and keyid a label. Now pub is the root, and the
-// root's signer entries say which other keys may sign from where on, so a
-// second machine signs under its own key instead of holding a copy of the
-// root's. A key is good only between its registration and its revocation;
-// an entry it signed outside that window is a Problem, whatever its
-// signature says.
+// VerifyLedgerDir reads a ledger directory and walks its chain under the
+// root key pub (nil: a keyless read). The walk itself is ledger.Verify, which
+// builds for the browser too; this is the directory half.
 func VerifyLedgerDir(dir string, pub ed25519.PublicKey) ([]ChainCheck, error) {
 	entries, err := ReadLedgerDir(dir)
 	if err != nil {
 		return nil, err
 	}
-	checks, _ := verifyEntries(entries, pub)
-	return checks, nil
+	return ledger.Verify(entries, ledger.Trust{RootPub: pub}), nil
 }
 
-// verifyEntries is THE walk: VerifyLedgerDir's checks, and the signer set
-// it leaves at the head, which is what ActiveSigners returns. One loop for
-// both, so a reader and a writer can never disagree about who was
-// registered when.
-func verifyEntries(entries []LedgerEntry, pub ed25519.PublicKey) ([]ChainCheck, *signerSet) {
-	set := newSignerSet(entries, pub)
-	// Whether this chain is a signed one at all: an entirely unsigned ledger
-	// is honest (no key was configured), but a single unsigned entry among
-	// signed ones is a hole, not a style.
-	anySigned := false
-	for _, e := range entries {
-		if e.Signature != "" {
-			anySigned = true
-			break
-		}
-	}
-	var out []ChainCheck
-	prevHash := ""
-	seen := map[string]bool{}
-	seenReview := map[string]bool{}
-	for i, e := range entries {
-		c := ChainCheck{ScanUID: e.ScanUID, Hash: e.Hash, Commit: e.Bundle.Scan.Commit, KeyID: e.KeyID, Genesis: i == 0, Kind: e.Kind, File: e.File}
-		h, herr := EntryHash(e)
-		c.HashOK = herr == nil && h == e.Hash
-		c.LinkOK = e.Prev == prevHash
-		c.Signed = e.Signature != ""
-		// The key is resolved BEFORE the signature is checked, from the set
-		// as it stands at this entry — never from the entry's own claim.
-		name, key, keyProblem := set.resolve(e)
-		c.Signer = name
-		if c.Signed && key != nil {
-			raw, _ := hex.DecodeString(e.Hash)
-			sig, _ := hex.DecodeString(e.Signature)
-			c.SigOK = ed25519.Verify(key, raw, sig)
-		}
-		shapeProblem := EntryShapeProblem(e)
-		changeProblem := ""
-		if e.Kind == KindSigner && shapeProblem == "" {
-			changeProblem = set.changeProblem(e)
-		}
-		seedProblem := ""
-		if e.Kind == KindCheckpoint && i == 0 && shapeProblem == "" {
-			seedProblem = set.seedProblem(e)
-		}
-		uidOK := true
-		if e.Format != ledgerFormat2 && e.IsScan() && e.Bundle.Scan != (ScanRow{}) {
-			uidOK = e.ScanUID == scanUID(e.Bundle.Scan, e.Pushed) && e.Bundle.Scan.ScanUID == e.ScanUID
-		}
-		switch {
-		case !c.HashOK:
-			c.Problem = "entry bytes do not match its hash — edited after it was written"
-		case !uidOK:
-			c.Problem = "scan_uid does not derive from the entry's scan row and pushed time — the identity was altered, or minted elsewhere"
-		case !c.LinkOK:
-			c.Problem = fmt.Sprintf("prev %.12s does not name the previous entry (%.12s) — an entry was removed, reordered or inserted", e.Prev, prevHash)
-		case seedProblem != "" && seedProblem == errCheckpointNotRoot:
-			// Before keyProblem: a checkpoint by a non-root key is not "an
-			// unregistered key" — the set is empty at a genesis — it is a
-			// genesis claiming authority to hand out keys.
-			c.Problem = seedProblem
-		case keyProblem != "":
-			c.Problem = keyProblem
-		case c.Signed && key != nil && !c.SigOK && name == "root":
-			c.Problem = "signature does not verify under the given key"
-		case c.Signed && key != nil && !c.SigOK:
-			c.Problem = fmt.Sprintf("signature does not verify under the key registered as %s (%s)", name, e.KeyID)
-		case e.Kind == KindCheckpoint && i != 0:
-			c.Problem = fmt.Sprintf("a checkpoint at position %d — a checkpoint is a genesis and stands only at the start of a chain", i+1)
-		case shapeProblem != "":
-			c.Problem = shapeProblem
-		case seedProblem != "":
-			c.Problem = seedProblem
-		case changeProblem != "":
-			c.Problem = changeProblem
-		case e.Kind == KindSigner:
-			c.Note = changeNote(e.Signer)
-		case e.Kind == KindCheckpoint:
-			c.Note = fmt.Sprintf("chain begins at a checkpoint: %d earlier entries (through %s, head %.12s) are not present", e.Checkpoint.Entries, e.Checkpoint.Through.UTC().Format("2006-01-02"), e.Checkpoint.Head)
-		case e.Kind == KindRetract && !seen[e.Retracts]:
-			c.Problem = fmt.Sprintf("retracts %.12s, which is not an earlier entry of this chain", e.Retracts)
-		case e.Kind == KindRetract:
-			c.Note = fmt.Sprintf("retracts %.12s: %s", e.Retracts, e.Reason)
-		case e.Kind == KindReview:
-			rep, cr, hy := e.Review.Counts()
-			c.Commit = e.Review.Commit
-			c.Note = fmt.Sprintf("review of %s by %s: %d reproduced, %d code-read, %d hypothesis", e.Review.Scope, e.Review.ReviewerModel, rep, cr, hy)
-		case e.Kind == KindAdjudication && !seenReview[strings.SplitN(e.Adjudication.Adjudicates, "#", 2)[0]]:
-			// The target must be a REVIEW. `seen` held every entry hash, so
-			// an adjudication naming a scan — or another adjudication —
-			// passed as though a finding had been ruled on. A ruling on
-			// something that has no findings is not a ruling.
-			c.Problem = "an adjudication of a finding whose review is not an earlier entry of this chain"
-		case e.Kind == KindAdjudication:
-			c.Note = fmt.Sprintf("%s %s by %s: %s", e.Adjudication.Verdict, shortRef(e.Adjudication.Adjudicates), e.Adjudication.By, e.Adjudication.Reason)
-		}
-		if e.Format == ledgerFormat2 && c.Problem == "" {
-			c.Note = strings.TrimSpace(c.Note + " · " + ledgerFormat2 + ": hashed in the sparse form (a recorded false or zero is not distinguished from an absent one) and its scan_uid is not derivable from the entry")
-			c.Note = strings.TrimPrefix(c.Note, "· ")
-		}
-		// Pre-corral-ledger-4 the signer NAME is not covered by the hash, so
-		// it is a label the entry asserts about itself rather than something
-		// the signature vouches for. Say so, rather than printing it as
-		// though it were established.
-		// UNSIGNED among signed entries: disclosed, NOT a failure.
-		//
-		// It was a Problem for one round. That refused a legitimate chain —
-		// one that gained a certify key partway, which is what a machine
-		// without a key produces and is exactly how CI runs — and because
-		// RequireIntactChain now guards checkpoint, append, push and
-		// LoadDir, a mixed chain became unusable at all four doors. Caught
-		// by CI, which has no key, while every local run passed because this
-		// machine has one.
-		//
-		// A missing signature and a REMOVED one are indistinguishable from
-		// inside the file, so the honest thing is to say what is true — this
-		// entry is unsigned and its neighbours are not — and let the reader
-		// judge. An over-strict fix is worse than the finding it closes; that
-		// is now twice in one day.
-		if !c.Signed && anySigned && c.Problem == "" {
-			c.Note = strings.TrimPrefix(strings.TrimSpace(c.Note+" · UNSIGNED, in a chain whose other entries are signed — it was written where no certify key was configured, or a signature was removed; the chain itself is intact either way"), "· ")
-		}
-		if !keyIDIsHashed(e.Format) && c.Signed && c.Problem == "" {
-			c.Note = strings.TrimPrefix(strings.TrimSpace(c.Note+" · signer name is self-reported: "+e.Format+" does not cover keyid in the hash, so it is not vouched for by the signature (the signature itself is checked)"), "· ")
-		}
-		// The set moves only on a signer entry that checked CLEAN, and only
-		// after its own check: the change cannot vouch for itself, and a
-		// tampered or forged one leaves the set as it was.
-		if e.Kind == KindSigner && c.Problem == "" {
-			set.apply(e.Signer)
-		}
-		if e.Kind == KindCheckpoint && i == 0 && c.Problem == "" {
-			set.seed(e.Checkpoint.Signers)
-		}
-		out = append(out, c)
-		prevHash = e.Hash
-		seen[e.Hash] = true
-		if e.Kind == KindReview {
-			seenReview[e.Hash] = true
-		}
-	}
-	return out, set
-}
-
-// shortRef renders "<hash>#Rn" as "<hash12>#Rn".
-func shortRef(ref string) string {
-	h, id, _ := strings.Cut(ref, "#")
-	if len(h) > 12 {
-		h = h[:12]
-	}
-	if id == "" {
-		return h
-	}
-	return h + "#" + id
+// verifyEntries is ledger.VerifyWithSigners: the checks and the signer set at
+// the head, from one walk.
+func verifyEntries(entries []LedgerEntry, pub ed25519.PublicKey) ([]ChainCheck, *ledger.SignerSet) {
+	return ledger.VerifyWithSigners(entries, ledger.Trust{RootPub: pub})
 }
 
 // WriteReview appends a KindReview entry.
@@ -675,17 +491,9 @@ func WriteAdjudication(dir, ref, verdict, by, reason string, signer LedgerSigner
 	return AppendLedgerEntry(dir, LedgerEntry{Kind: KindAdjudication, Adjudication: a}, signer)
 }
 
-// Adjudications returns, for every finding ref, the NEWEST adjudication in
-// entries — a later verdict by anyone supersedes an earlier one, and both
-// stay in the chain.
+// Adjudications returns the newest verdict per finding ref; see ledger.Adjudications.
 func Adjudications(entries []LedgerEntry) map[string]Adjudication {
-	out := map[string]Adjudication{}
-	for _, e := range entries {
-		if e.Kind == KindAdjudication && e.Adjudication != nil {
-			out[e.Adjudication.Adjudicates] = *e.Adjudication
-		}
-	}
-	return out
+	return ledger.Adjudications(entries)
 }
 
 // WriteRetraction appends a KindRetract entry naming target (an entry's
@@ -763,19 +571,8 @@ func RequireIntactChain(dir string) error {
 	return nil
 }
 
-// ChainHasSigners reports whether the chain registers signers at all: a
-// signer entry, or a leading checkpoint that carries a set.
-func ChainHasSigners(entries []LedgerEntry) bool {
-	for i, e := range entries {
-		if e.Kind == KindSigner {
-			return true
-		}
-		if i == 0 && e.Kind == KindCheckpoint && e.Checkpoint != nil && len(e.Checkpoint.Signers) > 0 {
-			return true
-		}
-	}
-	return false
-}
+// ChainHasSigners reports whether the chain registers signers at all; see ledger.ChainHasSigners.
+func ChainHasSigners(entries []LedgerEntry) bool { return ledger.ChainHasSigners(entries) }
 
 // WriteCheckpoint replaces every entry in dir with one KindCheckpoint
 // genesis that names the head it stood in for. The pruned files are
@@ -849,7 +646,7 @@ func WriteCheckpoint(dir string, signer LedgerSigner, rootPub ed25519.PublicKey)
 				return "", 0, fmt.Errorf("auditpush: %s does not verify under the root key (%s: %s) — refusing to prune, because a checkpoint would sign a set the root never authorized", dir, c.File, c.Problem)
 			}
 		}
-		carried = set.list()
+		carried = set.List()
 		if len(carried) == 0 {
 			carried = nil
 		}
@@ -875,77 +672,14 @@ func WriteCheckpoint(dir string, signer LedgerSigner, rootPub ed25519.PublicKey)
 	return name, len(entries), nil
 }
 
-// Retracted returns the hashes of every entry a KindRetract entry in
-// entries names.
-func Retracted(entries []LedgerEntry) map[string]LedgerEntry {
-	// A retraction that has ITSELF been retracted is not in force, so the
-	// entry it named comes back — retract, undo, redo, and the record
-	// alternates. Resolved in ONE REVERSE PASS: a retraction can only name
-	// an EARLIER entry, so walking from the newest backwards means every
-	// retraction that could void this one has already been decided.
-	//
-	// The first fix for this grew a monotone "void" set forward, which is
-	// wrong because voiding is not monotone — once a retraction is voided,
-	// everything it voided comes back — and it reported the original entry
-	// as NOT retracted at odd depth >= 3. Caught by a second cold review of
-	// this package, 2026-09-08, on the fix for the first one.
-	targeted := map[string]bool{} // named by an in-force retraction seen later in the chain
-	inForce := make([]LedgerEntry, 0, len(entries))
-	for i := len(entries) - 1; i >= 0; i-- {
-		e := entries[i]
-		if e.Kind != KindRetract {
-			continue
-		}
-		if targeted[e.Hash] {
-			continue // a later, in-force retraction retracted this one
-		}
-		inForce = append(inForce, e)
-		targeted[e.Retracts] = true
-	}
-	out := map[string]LedgerEntry{}
-	for _, e := range inForce {
-		out[e.Retracts] = e
-	}
-	return out
-}
+// Retracted returns every entry a retraction in force names; see ledger.Retracted.
+func Retracted(entries []LedgerEntry) map[string]LedgerEntry { return ledger.Retracted(entries) }
 
-// ScanEntries is the record as a reader should see it: the scan entries,
-// in chain order, with retracted ones left out. Every reader of the record
-// — the view, the prior, the verdict cache — goes through this, so a
-// retraction takes effect everywhere at once.
-func ScanEntries(entries []LedgerEntry) []LedgerEntry {
-	var out []LedgerEntry
-	for _, e := range LiveEntries(entries) {
-		if e.IsScan() {
-			out = append(out, e)
-		}
-	}
-	return out
-}
+// ScanEntries is the record as a reader should see it; see ledger.ScanEntries.
+func ScanEntries(entries []LedgerEntry) []LedgerEntry { return ledger.ScanEntries(entries) }
 
-// LiveEntries is every entry of every kind that stands: retracted entries
-// left out, and an adjudication of a retracted review left out with it.
-// A retraction used to reach scan entries only, so a retracted review's
-// rows and findings still loaded into the view and pushed to a warehouse
-// (ed079ca08965#R3); the view and the push go through this.
-func LiveEntries(entries []LedgerEntry) []LedgerEntry {
-	retracted := Retracted(entries)
-	var out []LedgerEntry
-	for _, e := range entries {
-		if _, gone := retracted[e.Hash]; gone {
-			continue
-		}
-		if e.Kind == KindAdjudication && e.Adjudication != nil {
-			if h, _, ok := cutRef(e.Adjudication.Adjudicates); ok {
-				if _, gone := retracted[h]; gone {
-					continue
-				}
-			}
-		}
-		out = append(out, e)
-	}
-	return out
-}
+// LiveEntries is every entry that stands; see ledger.LiveEntries.
+func LiveEntries(entries []LedgerEntry) []LedgerEntry { return ledger.LiveEntries(entries) }
 
 // ledgerFileNames lists entry files in push order (the same order
 // ReadLedgerDir returns, since names begin with the push timestamp).

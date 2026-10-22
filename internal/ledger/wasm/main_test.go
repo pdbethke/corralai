@@ -11,6 +11,7 @@ import (
 	"strings"
 	"syscall/js"
 	"testing"
+	"time"
 
 	"github.com/pdbethke/corralai/internal/ledger"
 )
@@ -110,6 +111,50 @@ func TestDeriveRefusesBadInput(t *testing.T) {
 		_, thrown := call(c.entries, c.trust)
 		if !strings.Contains(thrown, c.want) {
 			t.Errorf("%s: thrown %q, want it to name %q", c.name, thrown, c.want)
+		}
+	}
+}
+
+// The keyless path runs in the browser too: the embedded Sigstore root
+// parsed, the repository is required, and a keyless entry reaches the bundle
+// check. (A genuinely signed keyless entry needs a public-good signature,
+// which only a real Actions run can make; internal/ledger's differential and
+// real-bundle tests cover the verifier itself.)
+func TestDeriveKeylessReachesTheVerifier(t *testing.T) {
+	e := ledger.Entry{Format: ledger.Format6, KeyID: ledger.KeyIDSigstore, Pushed: time.Date(2026, 10, 22, 0, 0, 0, 0, time.UTC),
+		Bundle: ledger.Bundle{Scan: ledger.ScanRow{Repo: "o/r", Commit: "c", ScanID: 1}}}
+	e.ScanUID = ledger.ScanUID(e.Bundle.Scan, e.Pushed)
+	e.Bundle.Scan.ScanUID = e.ScanUID
+	h, err := ledger.EntryHash(e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.Hash = h
+	e.Sigstore = json.RawMessage(`{"mediaType":"application/vnd.dev.sigstore.bundle.v0.1+json"}`)
+	b, err := json.Marshal(e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for repo, want := range map[string]string{"": ledger.ProblemNoLedgerRepo, "acme/widgets": "bundle media type"} {
+		arr := js.Global().Get("Array").New()
+		u8 := js.Global().Get("Uint8Array").New(len(b))
+		js.CopyBytesToJS(u8, b)
+		o := js.Global().Get("Object").New()
+		o.Set("name", "k.json")
+		o.Set("bytes", u8)
+		arr.Call("push", o)
+		tr := trust("")
+		tr.Set("repo", repo)
+		out, thrown := call(arr, tr)
+		if thrown != "" {
+			t.Fatalf("threw: %s", thrown)
+		}
+		var d ledger.Derived
+		if err := json.Unmarshal([]byte(out), &d); err != nil {
+			t.Fatal(err)
+		}
+		if len(d.Entries) != 1 || d.Entries[0].Status != ledger.StatusFailed || !strings.Contains(d.Entries[0].Problem, want) {
+			t.Fatalf("repo %q: want a failed entry naming %q, got %+v", repo, want, d.Entries)
 		}
 	}
 }

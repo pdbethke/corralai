@@ -28,6 +28,12 @@ const thrower = `(inner) => (entries, trust) => {
   return r.value;
 }`
 
+// publicGood is the Sigstore root keyless entries are checked against,
+// parsed once at load. The page cannot choose another: the root embedded in
+// this build is the one its release was reviewed with. A parse failure is
+// thrown on every call rather than read as "no keyless entries verify".
+var publicGood, publicGoodErr = ledger.PublicGoodTrustedRoot()
+
 func register() {
 	inner := js.FuncOf(deriveJS)
 	wrapped := js.Global().Get("Function").New("return " + thrower).Invoke().Invoke(inner)
@@ -58,7 +64,10 @@ func derive(args []js.Value) (string, error) {
 	if trust.Type() != js.TypeObject {
 		return "", fmt.Errorf("trust must be an object {rootPub, repo}")
 	}
-	var t ledger.Trust
+	if publicGoodErr != nil {
+		return "", fmt.Errorf("the embedded Sigstore trust root does not parse: %w", publicGoodErr)
+	}
+	t := ledger.Trust{SigstoreRoot: publicGood}
 	for _, f := range []string{"rootPub", "repo"} {
 		if trust.Get(f).Type() != js.TypeString {
 			return "", fmt.Errorf("trust.%s must be a string (\"\" when unset)", f)

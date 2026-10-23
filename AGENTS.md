@@ -444,7 +444,12 @@ standard.
 - `internal/adequacy/` — scoring, the bwrap jail, the workspace runner
 - `internal/sandbox/` — the isolation boundary and bind construction
 - `internal/lang/` — language plugins
-- `site/` — the Astro site (docs included, under `src/pages/docs`) (`npm run build` in `site/`)
+- `site/` — the Astro site (docs included, under `src/pages/docs`) (`npm run build` in `site/`).
+  Astro 7.3.3+ starts `astro preview` as a *background* server when it sees an
+  AI-agent variable (`CLAUDECODE` and friends), so under an agent Playwright's
+  webServer "exits early" and `npm run test:e2e` fails before any test runs.
+  Run it as `env -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT npm run test:e2e`, and
+  clear a leftover server with `npx astro preview stop`. CI does not set these.
 - `docs/corral/` — the public knowledge corpus that ships to users
 - `docs/reviews/` — dated project reviews and their finding-status index. For
   periodic reviews, start with the index, keep finding IDs stable, and append

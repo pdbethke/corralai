@@ -190,6 +190,8 @@ Start here:
                                   audit a small bundled Go package end to end (2 minutes)
   corral doctor [flags] [-- <test cmd>]
                                   check sandbox, toolchain and keys for free before a paid run
+  corral setup                    wire corral's MCP server and skill into your coding agents
+                                  (shows the plan, asks first; --dry-run writes nothing)
   corral certify --repo . --dry-run
                                   list what corral can audit in this repo (no key, no money)
   corral certify --repo . --top 3 --max-tokens 3000000 <seats> -- <test cmd>
@@ -374,6 +376,16 @@ Usage:
                                   fixtures. The fastest honest answer to "what does this do?"
                                   flags: --writer-model/--mutant-model (required; corral has no
                                          default models) --critic-model --dir
+  corral setup [--client <id>]... [--all-detected] [--dry-run] [--yes] [--skill=false]
+  corral setup --uninstall [--client <id>]... [--all-detected] [--dry-run] [--yes]
+                                  register "corral mcp" as the MCP server "corral" in your coding
+                                  agents (claude_code codex gemini_cli cursor opencode antigravity
+                                  copilot_cli vscode) through each agent's own commands, and copy
+                                  corral's skill where the agent reads skills. Nothing is written
+                                  until the plan is printed and approved; --uninstall removes only
+                                  what setup added. No default selection: --client, --all-detected,
+                                  or pick on a terminal. Exits 0 when every selected agent verified
+                                  (or dry run, or nothing to do), 1 declined or unverified, 2 usage.
   corral mcp                     serve corral's findings corpus over stdio MCP, so an editor
                                   or agent can read what past audits found. READ-ONLY and
                                   local: no brain, no writes, no network listener.
@@ -605,6 +617,8 @@ func main() {
 		os.Exit(runLedger(os.Args[2:], os.Stdout, os.Stderr))
 	case "review":
 		os.Exit(runReview(os.Args[2:], os.Stdout, os.Stderr))
+	case "setup":
+		os.Exit(runSetup(os.Args[2:], os.Stdin, os.Stdout, os.Stderr))
 	case "brief":
 		os.Exit(runBrief(os.Args[2:], os.Stdout, os.Stderr))
 	case "verify":

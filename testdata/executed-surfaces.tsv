@@ -252,3 +252,9 @@ corral review recheck --substrate	executed	test:cmd/corral/review_jail_test.go (
 corral state migrate --dry-run	executed	test:cmd/corral/state_test.go (TestStateMigrateDryRunMovesNothing)
 corral state migrate --from	executed	test:cmd/corral/state_test.go (TestStateMigrateFromMovesAnExplicitDirectory)
 corral state migrate --resume	executed	test:cmd/corral/state_test.go (TestStateMigrateResumeAdoptsAndSaysSo)
+corral setup --all-detected	executed	test:cmd/corral/setup_test.go
+corral setup --client	executed	test:cmd/corral/setup_test.go
+corral setup --dry-run	executed	test:cmd/corral/setup_test.go
+corral setup --skill	executed	test:cmd/corral/setup_test.go
+corral setup --uninstall	executed	test:cmd/corral/setup_test.go
+corral setup --yes	executed	test:cmd/corral/setup_test.go

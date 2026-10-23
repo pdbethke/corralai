@@ -15,6 +15,8 @@ Start here:
                                   audit a small bundled Go package end to end (2 minutes)
   corral doctor [flags] [-- <test cmd>]
                                   check sandbox, toolchain and keys for free before a paid run
+  corral setup                    wire corral's MCP server and skill into your coding agents
+                                  (shows the plan, asks first; --dry-run writes nothing)
   corral certify --repo . --dry-run
                                   list what corral can audit in this repo (no key, no money)
   corral certify --repo . --top 3 --max-tokens 3000000 <seats> -- <test cmd>
@@ -199,6 +201,16 @@ Usage:
                                   fixtures. The fastest honest answer to "what does this do?"
                                   flags: --writer-model/--mutant-model (required; corral has no
                                          default models) --critic-model --dir
+  corral setup [--client <id>]... [--all-detected] [--dry-run] [--yes] [--skill=false]
+  corral setup --uninstall [--client <id>]... [--all-detected] [--dry-run] [--yes]
+                                  register "corral mcp" as the MCP server "corral" in your coding
+                                  agents (claude_code codex gemini_cli cursor opencode antigravity
+                                  copilot_cli vscode) through each agent's own commands, and copy
+                                  corral's skill where the agent reads skills. Nothing is written
+                                  until the plan is printed and approved; --uninstall removes only
+                                  what setup added. No default selection: --client, --all-detected,
+                                  or pick on a terminal. Exits 0 when every selected agent verified
+                                  (or dry run, or nothing to do), 1 declined or unverified, 2 usage.
   corral mcp                     serve corral's findings corpus over stdio MCP, so an editor
                                   or agent can read what past audits found. READ-ONLY and
                                   local: no brain, no writes, no network listener.
@@ -1028,6 +1040,42 @@ usage: corral secret set|get|list|rm <NAME>  (set reads the value from stdin —
 
 ```
 usage: corral secret set <NAME>  (value read from stdin — never a CLI arg)
+```
+
+## `corral setup` flags
+
+```
+Usage: corral setup [--client <id>]... [--all-detected] [--dry-run] [--yes] [--skill=false]
+       corral setup --uninstall [--client <id>]... [--all-detected] [--dry-run] [--yes]
+
+Registers "corral mcp" as the MCP server "corral" in your coding agents, and
+copies corral's skill where the agent reads skills. Nothing is written before
+the plan is printed and you approve it.
+
+Agents (ids): claude_code, codex, gemini_cli, cursor, opencode, antigravity,
+copilot_cli, vscode.
+
+Selection has no default: name agents with --client (repeatable), take every
+installed one with --all-detected, or run on a terminal and pick from the list.
+
+Exit codes:
+  0  every selected agent verified, or --dry-run, or nothing to do
+  1  the plan was declined, or an agent failed or could not be verified
+  2  usage error
+
+Flags:
+  -all-detected
+    	select every agent whose CLI is installed
+  -client value
+    	an agent id to wire (repeatable): claude_code, codex, gemini_cli, cursor, opencode, antigravity, copilot_cli, vscode
+  -dry-run
+    	print the plan and exit 0 without asking or writing
+  -skill
+    	also copy corral's skill; --skill=false omits it (default true)
+  -uninstall
+    	remove only what setup added (registrations, its skill copies)
+  -yes
+    	apply the plan without the prompt (for scripts)
 ```
 
 ## `corral state` flags

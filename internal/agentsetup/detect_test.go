@@ -308,3 +308,38 @@ func TestExecRunnerRunsFixedArgvAndTimesOut(t *testing.T) {
 		t.Error("empty argv accepted")
 	}
 }
+
+func TestDetectFillsSkillState(t *testing.T) {
+	home := t.TempDir()
+	for _, s := range Detect(context.Background(), absentRunner(t), home, allOn) {
+		want := SkillState("absent")
+		if s.Agent.ID == "vscode" {
+			want = "n/a"
+		}
+		if s.Skill != want {
+			t.Errorf("%s: skill %q, want %q", s.Agent.ID, s.Skill, want)
+		}
+	}
+	codex, _ := ByID("codex")
+	if err := WriteSkill(codex.SkillDir(home), "v", map[string][]byte{"SKILL.md": []byte("x")}); err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range Detect(context.Background(), absentRunner(t), home, allOn) {
+		if s.Agent.ID == "codex" && s.Skill != "managed" {
+			t.Errorf("codex skill %q after WriteSkill", s.Skill)
+		}
+	}
+	none := func(string) (string, error) { return "", errors.New("not on PATH") }
+	for _, s := range Detect(context.Background(), absentRunner(t), home, none) {
+		want := SkillState("absent")
+		switch s.Agent.ID {
+		case "vscode":
+			want = "n/a"
+		case "codex":
+			want = "managed"
+		}
+		if s.Installed || s.Skill != want {
+			t.Errorf("%s not installed: %+v", s.Agent.ID, s)
+		}
+	}
+}

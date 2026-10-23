@@ -119,3 +119,121 @@ func TestWriteSkillRefusesBadNames(t *testing.T) {
 		}
 	}
 }
+
+func TestMarkerKeyEscapingDirIsUnmanaged(t *testing.T) {
+	base := t.TempDir()
+	dir := filepath.Join(base, "corral")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(base, "outside")
+	if err := os.WriteFile(outside, []byte("precious"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m := `{"version":"v","files":{"../outside":"` + sum([]byte("precious")) + `"}}`
+	if err := os.WriteFile(filepath.Join(dir, MarkerName), []byte(m), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := skillState(dir); got != "unmanaged" {
+		t.Fatalf("state %s", got)
+	}
+	if err := RemoveSkill(dir); err == nil {
+		t.Fatal("RemoveSkill accepted a planted marker")
+	}
+	if b, err := os.ReadFile(outside); err != nil || string(b) != "precious" {
+		t.Fatalf("outside file damaged: %q %v", b, err)
+	}
+}
+
+func TestSymlinkedMarkerIsUnmanaged(t *testing.T) {
+	base := t.TempDir()
+	dir := filepath.Join(base, "corral")
+	if err := WriteSkill(dir, "v1", testFiles); err != nil {
+		t.Fatal(err)
+	}
+	real := filepath.Join(base, "marker-real")
+	if err := os.Rename(filepath.Join(dir, MarkerName), real); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(real, filepath.Join(dir, MarkerName)); err != nil {
+		t.Fatal(err)
+	}
+	if got := skillState(dir); got != "unmanaged" {
+		t.Fatalf("state %s", got)
+	}
+	if RemoveSkill(dir) == nil || WriteSkill(dir, "v2", testFiles) == nil {
+		t.Fatal("acted on a symlinked marker")
+	}
+}
+
+func TestSymlinkedSkillFileNotWrittenThrough(t *testing.T) {
+	base := t.TempDir()
+	dir := filepath.Join(base, "corral")
+	if err := WriteSkill(dir, "v1", testFiles); err != nil {
+		t.Fatal(err)
+	}
+	victim := filepath.Join(base, "victim")
+	if err := os.WriteFile(victim, []byte("mine"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(dir, "SKILL.md")
+	if err := os.Remove(p); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(victim, p); err != nil {
+		t.Fatal(err)
+	}
+	if got := skillState(dir); got != "unmanaged" {
+		t.Fatalf("state %s", got)
+	}
+	if WriteSkill(dir, "v2", testFiles) == nil {
+		t.Fatal("wrote over a symlinked file")
+	}
+	// even on a fresh dir, a link planted at a file path is replaced, not followed
+	fresh := filepath.Join(base, "fresh")
+	if err := writeAtomic(filepath.Join(base, "link"), []byte("x")); err != nil {
+		t.Fatal(err)
+	}
+	_ = fresh
+	if err := os.Remove(filepath.Join(base, "link")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(victim, filepath.Join(base, "link")); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeAtomic(filepath.Join(base, "link"), []byte("new")); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(victim); string(b) != "mine" {
+		t.Fatalf("wrote through the link: %q", b)
+	}
+}
+
+func TestUnreadableSkillDirIsUnmanaged(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads everything")
+	}
+	dir := filepath.Join(t.TempDir(), "corral")
+	if err := WriteSkill(dir, "v1", testFiles); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chmod(dir, 0o700) }()
+	if got := skillState(dir); got != "unmanaged" {
+		t.Fatalf("state %s", got)
+	}
+}
+
+func TestSkillDirsAre0700(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "corral")
+	if err := WriteSkill(dir, "v", testFiles); err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range []string{dir, filepath.Join(dir, "ref")} {
+		if fi, err := os.Stat(d); err != nil || fi.Mode().Perm() != 0o700 {
+			t.Errorf("%s: %v %v", d, fi, err)
+		}
+	}
+}

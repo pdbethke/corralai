@@ -31,7 +31,7 @@ type AgentRecord struct {
 // that exists but cannot be parsed is an error, because treating it as empty
 // would let the next save erase what setup had recorded.
 func LoadState(path string) (State, error) {
-	b, err := os.ReadFile(path)
+	b, err := os.ReadFile(path) // #nosec G304 -- caller-supplied state file (statedir path or the operator's override), same contract as --ledger
 	if errors.Is(err, fs.ErrNotExist) {
 		return State{Agents: map[string]AgentRecord{}}, nil
 	}

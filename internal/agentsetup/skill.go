@@ -36,6 +36,10 @@ func sum(b []byte) string {
 
 // readMarker returns the marker in dir, ok=false when absent or unparseable.
 func readMarker(dir string) (Marker, bool) {
+	// A symlinked marker is never trusted: it could point at a file anywhere.
+	if fi, err := os.Lstat(filepath.Join(dir, MarkerName)); err != nil || !fi.Mode().IsRegular() {
+		return Marker{}, false
+	}
 	b, err := os.ReadFile(filepath.Join(dir, MarkerName)) // #nosec G304 -- the skill directory chosen by the agent table
 	if err != nil {
 		return Marker{}, false
@@ -43,6 +47,13 @@ func readMarker(dir string) (Marker, bool) {
 	var m Marker
 	if json.Unmarshal(b, &m) != nil || m.Files == nil {
 		return Marker{}, false
+	}
+	// Keys become paths that RemoveSkill deletes: a key that escapes dir
+	// (or is absolute) makes the whole marker untrusted.
+	for rel := range m.Files {
+		if !validRel(rel) {
+			return Marker{}, false
+		}
 	}
 	return m, true
 }
@@ -71,8 +82,11 @@ func skillState(dir string) SkillState {
 		return "unmanaged"
 	}
 	var present []string
-	_ = filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
-		if err != nil || p == dir {
+	walkErr := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err // an unreadable directory is not an empty one
+		}
+		if p == dir {
 			return nil
 		}
 		if d.IsDir() {
@@ -82,6 +96,9 @@ func skillState(dir string) SkillState {
 		present = append(present, filepath.ToSlash(rel))
 		return nil
 	})
+	if walkErr != nil {
+		return "unmanaged"
+	}
 	if len(present) == 0 {
 		return "absent"
 	}
@@ -137,7 +154,7 @@ func WriteSkill(dir, version string, files map[string][]byte) error {
 		return fmt.Errorf("skill: %s exists and was not written by corral setup (or was edited); leaving it alone", dir)
 	}
 	old, _ := readMarker(dir)
-	if err := os.MkdirAll(dir, 0o750); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
 	m := Marker{Version: version, Files: map[string]string{}}
@@ -148,10 +165,10 @@ func WriteSkill(dir, version string, files map[string][]byte) error {
 	sort.Strings(names)
 	for _, rel := range names {
 		p := filepath.Join(dir, filepath.FromSlash(rel))
-		if err := os.MkdirAll(filepath.Dir(p), 0o750); err != nil {
+		if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
 			return err
 		}
-		if err := os.WriteFile(p, files[rel], 0o600); err != nil {
+		if err := writeAtomic(p, files[rel]); err != nil {
 			return err
 		}
 		m.Files[rel] = sum(files[rel])
@@ -166,7 +183,29 @@ func WriteSkill(dir, version string, files map[string][]byte) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(dir, MarkerName), append(b, '\n'), 0o600)
+	return writeAtomic(filepath.Join(dir, MarkerName), append(b, '\n'))
+}
+
+// writeAtomic writes via a temp file in the same directory and renames it into
+// place. The rename replaces a symlink at path rather than following it, so a
+// planted link can never redirect a write outside the skill directory.
+func writeAtomic(path string, data []byte) error {
+	f, err := os.CreateTemp(filepath.Dir(path), ".corral-setup-*")
+	if err != nil {
+		return err
+	}
+	tmp := f.Name()
+	_, werr := f.Write(data)
+	cerr := f.Close()
+	if err := errors.Join(werr, cerr, os.Chmod(tmp, 0o600)); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return nil
 }
 
 // pruneEmptyDirs removes empty subdirectories of dir (never dir itself).

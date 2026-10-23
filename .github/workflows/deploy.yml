@@ -190,6 +190,19 @@ jobs:
             grep -- '--- SKIP' /tmp/gotest.log | sed 's/.*--- SKIP: /  /' | sort -u
           fi
           exit "$rc"
+      - name: Fuzz the ledger parsers
+        if: steps.filter.outputs.code == 'true'
+        run: |
+          # The ledger parsers read attacker-controlled bytes (any GitHub repo's
+          # ledger, in the browser as WASM), so each gets a short native fuzz run
+          # on every code change. Go fuzzes one target per invocation. A target
+          # that finds a crash fails the step and writes the input to
+          # internal/ledger/testdata/fuzz/, which is then committed as a regression
+          # seed. -fuzzminimizetime keeps a run from spending its budget shrinking
+          # inputs (the default is 60s per new input, which starves the 20s run).
+          for target in FuzzParseEntry FuzzStrictJSON FuzzKeylessBundle FuzzDerive; do
+            go test ./internal/ledger/ -run '^$' -fuzz "^${target}\$" -fuzztime 20s -fuzzminimizetime 2s
+          done
       - name: Test the browser verifier (ledger WASM) under node
         if: steps.filter.outputs.code == 'true'
         run: |

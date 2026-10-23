@@ -5,6 +5,7 @@ package agentsetup
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -47,11 +48,16 @@ type Agent struct {
 	// Inspect's output (or, for vscode, from its config file). It decides on
 	// the presence of the server, never on status text such as Connected or
 	// Disabled: those depend on folder trust and on the server starting.
-	ParseInspect func(out []byte) (command []string, found bool)
-	// AbsentOnExit1: this agent's Inspect exits 1 when the server is absent
-	// (claude, codex and copilot `get`). For the others a nonzero exit is a
-	// failure, reported unknown.
-	AbsentOnExit1 bool
+	//
+	// err is non-nil when the output is neither a listing naming corral nor
+	// the agent's own recognised "not registered" message: setup could not see,
+	// so Detect reports Unknown. A recognised absent message is (nil, false,
+	// nil) whatever the exit code, so a get verb's exit 1 is absent only when
+	// it says so in its own words.
+	ParseInspect func(out []byte) (command []string, found bool, err error)
+	// FileFallback: when Inspect cannot run (not a timeout), read File instead
+	// (cursor only). Every other agent's failed inspect stays Unknown.
+	FileFallback bool
 
 	Remove [][]string // nil when the agent has no remove command (cursor, opencode, vscode)
 
@@ -103,22 +109,20 @@ func Agents() []Agent {
 	return []Agent{
 		{
 			ID: "claude_code", Name: "Claude Code", CLI: "claude",
-			Register:      mcpAdd("claude", []string{"-s", "user"}, true),
-			Inspect:       []string{"claude", "mcp", "get", "corral"},
-			ParseInspect:  parseClaude,
-			AbsentOnExit1: true,
-			Remove:        [][]string{{"claude", "mcp", "remove", "-s", "user", "corral"}},
+			Register:     mcpAdd("claude", []string{"-s", "user"}, true),
+			Inspect:      []string{"claude", "mcp", "get", "corral"},
+			ParseInspect: parseClaude,
+			Remove:       [][]string{{"claude", "mcp", "remove", "-s", "user", "corral"}},
 			// FACTS: Claude Code's documented location, not executed.
 			SkillMode: SkillOwn, SkillDir: skillDirUnder(".claude", "skills"),
 			Restart: "Start a new Claude Code session; running sessions do not pick up a new server.",
 		},
 		{
 			ID: "codex", Name: "Codex CLI", CLI: "codex",
-			Register:      mcpAdd("codex", nil, true),
-			Inspect:       []string{"codex", "mcp", "get", "corral"},
-			ParseInspect:  parseCodex,
-			AbsentOnExit1: true,
-			Remove:        [][]string{{"codex", "mcp", "remove", "corral"}},
+			Register:     mcpAdd("codex", nil, true),
+			Inspect:      []string{"codex", "mcp", "get", "corral"},
+			ParseInspect: parseCodex,
+			Remove:       [][]string{{"codex", "mcp", "remove", "corral"}},
 			// FACTS: ~/.codex/skills executed (skills/list, scope user), as is the shared dir.
 			SkillMode: SkillOwn, SkillDir: skillDirUnder(".codex", "skills"),
 			Restart: "Start a new Codex session.",
@@ -140,6 +144,7 @@ func Agents() []Agent {
 			Inspect:      []string{"cursor-agent", "mcp", "list"},
 			ParseInspect: parseCursor,
 			FileConfig:   ".cursor/mcp.json",
+			FileFallback: true,
 			File: &ConfigFile{
 				Path:       func(home string) string { return filepath.Join(home, ".cursor", "mcp.json") },
 				ServersKey: "mcpServers",
@@ -180,11 +185,10 @@ func Agents() []Agent {
 		},
 		{
 			ID: "copilot_cli", Name: "GitHub Copilot CLI", CLI: "copilot",
-			Register:      mcpAdd("copilot", nil, true),
-			Inspect:       []string{"copilot", "mcp", "get", "corral"},
-			ParseInspect:  parseCopilot,
-			AbsentOnExit1: true,
-			Remove:        [][]string{{"copilot", "mcp", "remove", "corral"}},
+			Register:     mcpAdd("copilot", nil, true),
+			Inspect:      []string{"copilot", "mcp", "get", "corral"},
+			ParseInspect: parseCopilot,
+			Remove:       [][]string{{"copilot", "mcp", "remove", "corral"}},
 			// FACTS: ~/.copilot/skills and the shared dir are both "Personal" per copilot's own help; not executed.
 			SkillMode: SkillOwn, SkillDir: skillDirUnder(".copilot", "skills"),
 			Restart: "Start a new Copilot session.",
@@ -199,9 +203,8 @@ func Agents() []Agent {
 				}{"corral", bin, []string{"mcp"}})
 				return [][]string{{"code", "--add-mcp", string(spec)}}
 			},
-			ParseInspect: func(out []byte) ([]string, bool) {
-				cmd, found, _ := parseServersJSON(out, "servers")
-				return cmd, found
+			ParseInspect: func(out []byte) ([]string, bool, error) {
+				return parseServersJSON(out, "servers")
 			},
 			File: &ConfigFile{
 				Path: func(home string) string {
@@ -259,55 +262,100 @@ func commandArgs(out []byte, cmdKey, argsKey string) []string {
 	return append([]string{c}, strings.Fields(a)...)
 }
 
-func parseClaude(out []byte) ([]string, bool) {
-	if !hasLine(out, "corral:") {
-		return nil, false
+// unrecognised is the "could not see" answer: output that neither names corral
+// nor says, in the agent's own words, that it is not registered.
+func unrecognised(out []byte) error {
+	t := strings.TrimSpace(string(out))
+	if len(t) > 200 {
+		t = t[:200] + "..."
 	}
-	return commandArgs(out, "Command:", "Args:"), true
+	return fmt.Errorf("unrecognised output: %q", t)
 }
 
-func parseCodex(out []byte) ([]string, bool) {
+// absentOr returns (nil, false, nil) when out matches an absent marker, else
+// an unrecognised-output error.
+func absentOr(out []byte, markers ...*regexp.Regexp) ([]string, bool, error) {
+	for _, m := range markers {
+		if m.Match(out) {
+			return nil, false, nil
+		}
+	}
+	return nil, false, unrecognised(out)
+}
+
+func parseClaude(out []byte) ([]string, bool, error) {
+	if hasLine(out, "corral:") {
+		return commandArgs(out, "Command:", "Args:"), true, nil
+	}
+	return absentOr(out, regexp.MustCompile(`No MCP server named "corral"`))
+}
+
+func parseCodex(out []byte) ([]string, bool, error) {
 	// Not `corral:`-prefixed: codex prints the bare name, then indented fields.
 	// A leading WARNING line is tolerated because only the exact name line counts.
-	if !hasLine(out, "corral") {
-		return nil, false
+	if hasLine(out, "corral") {
+		return commandArgs(out, "command:", "args:"), true, nil
 	}
-	return commandArgs(out, "command:", "args:"), true
+	return absentOr(out, regexp.MustCompile(`No MCP server named 'corral' found`))
 }
 
 var geminiRow = regexp.MustCompile(`(?m)^\S+ corral: (.+?) \((?:stdio|sse|http)\)`)
 
-func parseGemini(out []byte) ([]string, bool) {
-	m := geminiRow.FindSubmatch(out)
-	if m == nil {
-		return nil, false
+func parseGemini(out []byte) ([]string, bool, error) {
+	if m := geminiRow.FindSubmatch(out); m != nil {
+		return strings.Fields(string(m[1])), true, nil
 	}
-	return strings.Fields(string(m[1])), true
+	return absentOr(out, regexp.MustCompile(`No MCP servers configured|Configured MCP servers:`))
 }
 
 var cursorRow = regexp.MustCompile(`(?m)^corral: `)
 
 // parseCursor: `cursor-agent mcp list` names no command, so none is returned;
 // Detect fills it from the config file.
-func parseCursor(out []byte) ([]string, bool) {
-	return nil, cursorRow.Match(out)
+func parseCursor(out []byte) ([]string, bool, error) {
+	if cursorRow.Match(out) {
+		return nil, true, nil
+	}
+	return absentOr(out, regexp.MustCompile(`No MCP servers configured|(?m)^[^\s:]+: \S`))
 }
 
 var opencodeRow = regexp.MustCompile(`(?m)^\S+\s+\S+ corral\b`)
 
-func parseOpencode(out []byte) ([]string, bool) {
+// opencodeConfig finds the resolved-config object in `debug config` output:
+// the first '{' from which a JSON object decodes and that carries the config's
+// own keys, so a preamble containing a brace cannot defeat the search.
+func opencodeConfig(out []byte) (map[string]json.RawMessage, bool) {
+	for i := 0; i < len(out); i++ {
+		if out[i] != '{' {
+			continue
+		}
+		var doc map[string]json.RawMessage
+		if json.NewDecoder(bytes.NewReader(out[i:])).Decode(&doc) != nil {
+			continue
+		}
+		_, hasMCP := doc["mcp"]
+		_, hasSchema := doc["$schema"]
+		if hasMCP || hasSchema {
+			return doc, true
+		}
+	}
+	return nil, false
+}
+
+func parseOpencode(out []byte) ([]string, bool, error) {
 	out = []byte(ansi.ReplaceAllString(string(out), ""))
 	// `debug config` prints the resolved config as JSON: the machine-readable form.
-	if i := bytes.IndexByte(out, '{'); i >= 0 {
-		var cfg struct {
-			MCP map[string]struct {
-				Command []string `json:"command"`
-			} `json:"mcp"`
+	if doc, ok := opencodeConfig(out); ok {
+		var servers map[string]struct {
+			Command []string `json:"command"`
 		}
-		if json.Unmarshal(out[i:], &cfg) == nil {
-			s, ok := cfg.MCP["corral"]
-			return s.Command, ok
+		if raw, ok := doc["mcp"]; ok {
+			if err := json.Unmarshal(raw, &servers); err != nil {
+				return nil, false, fmt.Errorf("opencode mcp config does not parse: %w", err)
+			}
 		}
+		s, found := servers["corral"]
+		return s.Command, found, nil
 	}
 	// `mcp list`: "● ✓ corral connected", then "│ <command line>".
 	lines := strings.Split(string(out), "\n")
@@ -317,31 +365,30 @@ func parseOpencode(out []byte) ([]string, bool) {
 			if i+1 < len(lines) {
 				cmd = strings.Fields(strings.TrimLeft(strings.TrimSpace(lines[i+1]), "│ "))
 			}
-			return cmd, true
+			return cmd, true, nil
 		}
 	}
-	return nil, false
+	return absentOr(out, regexp.MustCompile(`MCP Servers`))
 }
 
 var agyRow = regexp.MustCompile(`(?m)^corral\s+\S+\s+\S+\s+(.+)$`)
 
-func parseAntigravity(out []byte) ([]string, bool) {
-	m := agyRow.FindSubmatch(out)
-	if m == nil {
-		return nil, false
+func parseAntigravity(out []byte) ([]string, bool, error) {
+	if m := agyRow.FindSubmatch(out); m != nil {
+		return strings.Fields(string(m[1])), true, nil
 	}
-	return strings.Fields(string(m[1])), true
+	return absentOr(out, regexp.MustCompile(`No MCP servers configured|(?m)^NAME\s+TYPE`))
 }
 
-func parseCopilot(out []byte) ([]string, bool) {
+func parseCopilot(out []byte) ([]string, bool, error) {
 	lines := strings.Split(string(out), "\n")
 	for i, l := range lines {
 		if strings.TrimRight(l, " \r") == "corral" {
 			c, _ := lineAfter([]byte(strings.Join(lines[i+1:], "\n")), "Command:")
-			return strings.Fields(c), true
+			return strings.Fields(c), true, nil
 		}
 	}
-	return nil, false
+	return absentOr(out, regexp.MustCompile(`Server "corral" not found`))
 }
 
 // parseServersJSON reads a config file whose `key` object maps server names to

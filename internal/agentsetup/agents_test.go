@@ -94,11 +94,12 @@ func TestRegisterArgvs(t *testing.T) {
 
 func TestParseInspectFixtures(t *testing.T) {
 	for _, a := range Agents() {
-		if _, found := a.ParseInspect(fixture(t, a.ID, "inspect-absent.txt")); found {
-			t.Errorf("%s: absent fixture parsed as found", a.ID)
+		_, found, err := a.ParseInspect(fixture(t, a.ID, "inspect-absent.txt"))
+		if found || (err != nil && a.ID != "vscode") { // vscode's "absent" is a missing file, never parsed
+			t.Errorf("%s: absent fixture: found=%v err=%v", a.ID, found, err)
 		}
-		cmd, found := a.ParseInspect(fixture(t, a.ID, "inspect-present.txt"))
-		if !found {
+		cmd, found, err := a.ParseInspect(fixture(t, a.ID, "inspect-present.txt"))
+		if !found || err != nil {
 			t.Errorf("%s: present fixture parsed as not found", a.ID)
 			continue
 		}
@@ -122,21 +123,21 @@ func TestParseInspectToleratesVariants(t *testing.T) {
 		for _, id := range ids {
 			a, _ := ByID(id)
 			parts := strings.SplitN(f, "/", 2)
-			cmd, found := a.ParseInspect(fixture(t, parts[0], parts[1]))
-			if !found || !reflect.DeepEqual(cmd, []string{"__CORRAL__", "mcp"}) {
+			cmd, found, err := a.ParseInspect(fixture(t, parts[0], parts[1]))
+			if !found || err != nil || !reflect.DeepEqual(cmd, []string{"__CORRAL__", "mcp"}) {
 				t.Errorf("%s: got %v %v", f, cmd, found)
 			}
 		}
 	}
 	for _, name := range []string{"inspect-unapproved.txt", "inspect-disabled.txt"} {
 		a, _ := ByID("cursor")
-		if _, found := a.ParseInspect(fixture(t, "cursor", name)); !found {
+		if _, found, _ := a.ParseInspect(fixture(t, "cursor", name)); !found {
 			t.Errorf("cursor %s: configured-but-not-ready must still be registered", name)
 		}
 	}
 	for _, id := range wantIDs {
 		a, _ := ByID(id)
-		if _, found := a.ParseInspect(fixture(t, id, "inspect-removed.txt")); found {
+		if _, found, _ := a.ParseInspect(fixture(t, id, "inspect-removed.txt")); found {
 			t.Errorf("%s: removed fixture parsed as found", id)
 		}
 	}
@@ -178,5 +179,22 @@ func TestConfigFilePaths(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", xdg)
 	if got := oc.File.Path(home); got != filepath.Join(xdg, "opencode", "opencode.jsonc") {
 		t.Errorf("XDG_CONFIG_HOME ignored: %q", got)
+	}
+}
+
+func TestParseInspectUnrecognisedIsAnError(t *testing.T) {
+	for _, a := range Agents() {
+		if _, found, err := a.ParseInspect([]byte("totally unexpected garbage")); found || err == nil {
+			t.Errorf("%s: garbage gave found=%v err=%v", a.ID, found, err)
+		}
+	}
+}
+
+func TestParseOpencodeJSONSurvivesAPreambleBrace(t *testing.T) {
+	a, _ := ByID("opencode")
+	out := append([]byte("loading {config\nnote: {\"x\" oops}\n"), fixture(t, "opencode", "config-present.txt")...)
+	cmd, found, err := a.ParseInspect(out)
+	if err != nil || !found || len(cmd) != 2 || cmd[0] != "__CORRAL__" {
+		t.Errorf("cmd=%v found=%v err=%v", cmd, found, err)
 	}
 }

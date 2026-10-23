@@ -77,8 +77,8 @@ func absentRunner(t *testing.T) *fakeRunner {
 			continue
 		}
 		r := reply{out: fixture(t, a.ID, "inspect-absent.txt")}
-		if a.AbsentOnExit1 {
-			r.err = exit1(t)
+		if a.ID == "claude_code" || a.ID == "codex" || a.ID == "copilot_cli" {
+			r.err = exit1(t) // the get verbs exit 1 when absent
 		}
 		f.replies[strings.Join(a.Inspect, " ")] = r
 	}
@@ -117,6 +117,42 @@ func TestDetectPresentReportsCommand(t *testing.T) {
 	f.replies[strings.Join(a.Inspect, " ")] = reply{out: fixture(t, "codex", "inspect-present.txt")}
 	s := byID(t, Detect(context.Background(), f, t.TempDir(), allOn), "codex")
 	if !s.Registered || len(s.Command) != 2 || s.Command[0] != "__CORRAL__" {
+		t.Errorf("%+v", s)
+	}
+}
+
+func TestDetectExit1WithoutTheAbsentMessageIsUnknown(t *testing.T) {
+	for _, id := range []string{"claude_code", "codex", "copilot_cli"} {
+		f := absentRunner(t)
+		a, _ := ByID(id)
+		f.replies[strings.Join(a.Inspect, " ")] = reply{out: []byte("Error: failed to parse config.toml"), err: exit1(t)}
+		s := byID(t, Detect(context.Background(), f, t.TempDir(), allOn), id)
+		if s.Registered || s.Unknown == "" {
+			t.Errorf("%s: %+v", id, s)
+		}
+	}
+}
+
+func TestDetectGarbageWithExit0IsUnknown(t *testing.T) {
+	f := absentRunner(t)
+	a, _ := ByID("opencode")
+	f.replies[strings.Join(a.Inspect, " ")] = reply{out: []byte("something else entirely")}
+	s := byID(t, Detect(context.Background(), f, t.TempDir(), allOn), "opencode")
+	if s.Registered || s.Unknown == "" {
+		t.Errorf("%+v", s)
+	}
+}
+
+func TestDetectOpencodeFailureDoesNotFallBackToFile(t *testing.T) {
+	home := t.TempDir()
+	oc, _ := ByID("opencode")
+	p := oc.File.Path(home)
+	_ = os.MkdirAll(filepath.Dir(p), 0o700)
+	_ = os.WriteFile(p, []byte(`{"mcp":{}}`), 0o600)
+	f := absentRunner(t)
+	f.replies[strings.Join(oc.Inspect, " ")] = reply{err: errors.New("cannot start")}
+	s := byID(t, Detect(context.Background(), f, home, allOn), "opencode")
+	if s.Registered || s.Unknown == "" {
 		t.Errorf("%+v", s)
 	}
 }

@@ -63,9 +63,10 @@ func detectOne(ctx context.Context, r Runner, home string, lookPath func(string)
 		out, err := r.Run(ctx, a.Inspect)
 		timedOut = errors.Is(err, context.DeadlineExceeded)
 		interpret(&st, a, out, err, timedOut)
-		if st.Unknown != "" && !timedOut && a.File != nil {
+		if st.Unknown != "" && !timedOut && a.FileFallback {
 			// The agent's list verb could not run at all; its config file can
-			// still say whether corral is registered (cursor).
+			// still say whether corral is registered (cursor only: for every
+			// other agent a failed inspect stays Unknown).
 			st.Unknown = ""
 			fromFile(&st, a, home)
 		}
@@ -90,15 +91,16 @@ func interpret(st *Status, a Agent, out []byte, err error, timedOut bool) {
 		st.Unknown = fmt.Sprintf("%s did not answer within %s", strings.Join(a.Inspect, " "), Timeout)
 		return
 	}
-	cmd, found := a.ParseInspect(out)
+	cmd, found, perr := a.ParseInspect(out)
 	var ee *exec.ExitError
 	switch {
 	case found:
 		st.Registered, st.Command = true, cmd
-	case err == nil:
-		// listed, not there
-	case errors.As(err, &ee) && ee.ExitCode() == 1 && a.AbsentOnExit1:
-		// the get verb's way of saying absent
+	case perr != nil:
+		st.Unknown = fmt.Sprintf("%s: %v (run: %v)", strings.Join(a.Inspect, " "), perr, err)
+	case err == nil || errors.As(err, &ee):
+		// The agent said, in its own recognised words, that corral is not
+		// registered (a get verb says so with exit 1).
 	default:
 		st.Unknown = fmt.Sprintf("%s failed: %v: %s", strings.Join(a.Inspect, " "), err, strings.TrimSpace(string(out)))
 	}

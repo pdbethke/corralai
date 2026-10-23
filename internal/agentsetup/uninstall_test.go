@@ -1,0 +1,143 @@
+// SPDX-License-Identifier: Elastic-2.0
+
+package agentsetup
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+func uninstall(t *testing.T, ss []Status, ids []string, state State) Plan {
+	t.Helper()
+	return BuildUninstallPlan(ss, ids, state, "/h")
+}
+
+func recorded(ids ...string) State {
+	s := State{Agents: map[string]AgentRecord{}}
+	for _, id := range ids {
+		s.Agents[id] = AgentRecord{Command: []string{tbin, "mcp"}}
+	}
+	return s
+}
+
+func reg(cmd ...string) func(*Status) {
+	return func(s *Status) { s.Registered, s.Command = true, cmd }
+}
+
+func TestUninstallRemovesWhatSetupAdded(t *testing.T) {
+	p := uninstall(t, []Status{st(t, "codex", reg(tbin, "mcp"))}, []string{"codex"}, recorded("codex"))
+	if len(p.Actions) != 1 || p.Actions[0].Kind != ActionRemove ||
+		strings.Join(p.Actions[0].Argv, " ") != "codex mcp remove corral" {
+		t.Fatalf("%+v", p.Actions)
+	}
+	// A path with spaces, split by a text parser, still matches.
+	p = uninstall(t, []Status{st(t, "codex", reg("/a", "b/corral", "mcp"))}, []string{"codex"},
+		State{Agents: map[string]AgentRecord{"codex": {Command: []string{"/a b/corral", "mcp"}}}})
+	if p.Actions[0].Kind != ActionRemove {
+		t.Fatalf("%+v", p.Actions)
+	}
+}
+
+func TestUninstallOnlyWhatSetupAdded(t *testing.T) {
+	p := uninstall(t, []Status{st(t, "codex", reg(tbin, "mcp"))}, []string{"codex"}, recorded())
+	if len(p.Actions) != 1 || p.Actions[0].Kind != ActionNoop || !strings.Contains(p.Actions[0].Note, "not added by") {
+		t.Fatalf("%+v", p.Actions)
+	}
+}
+
+func TestUninstallSkipsChangedCommand(t *testing.T) {
+	p := uninstall(t, []Status{st(t, "codex", reg("/other/corral", "mcp"))}, []string{"codex"}, recorded("codex"))
+	if len(p.Actions) != 1 || p.Actions[0].Kind != ActionNoop || !strings.Contains(p.Actions[0].Note, "changed") {
+		t.Fatalf("%+v", p.Actions)
+	}
+}
+
+func TestUninstallUnknownStatusIsLeftAlone(t *testing.T) {
+	p := uninstall(t, []Status{st(t, "codex", func(s *Status) { s.Unknown = "timed out" })}, []string{"codex"}, recorded("codex"))
+	if p.Actions[0].Kind != ActionNoop || !strings.Contains(p.Actions[0].Note, "could not read; nothing removed") {
+		t.Fatalf("%+v", p.Actions)
+	}
+}
+
+func TestUninstallFileAgentsUnwrite(t *testing.T) {
+	for _, id := range []string{"cursor", "opencode", "vscode"} {
+		p := uninstall(t, []Status{st(t, id, reg(tbin, "mcp"))}, []string{id}, recorded(id))
+		a, _ := ByID(id)
+		if len(p.Actions) != 1 || p.Actions[0].Kind != ActionUnwriteFile || p.Actions[0].Path != a.File.Path("/h") {
+			t.Errorf("%s: %+v", id, p.Actions)
+		}
+	}
+}
+
+func sharedAgent(id string) Status {
+	a := Agent{ID: id, Name: id, CLI: id, SkillMode: SkillShared,
+		Remove:   [][]string{{id, "rm"}},
+		SkillDir: func(h string) string { return filepath.Join(h, ".agents", "skills", "corral") }}
+	return Status{Agent: a, Installed: true, Registered: true, Command: []string{tbin, "mcp"}, Skill: "managed"}
+}
+
+func sharedState(ids ...string) State {
+	s := State{Agents: map[string]AgentRecord{}}
+	for _, id := range ids {
+		s.Agents[id] = AgentRecord{Command: []string{tbin, "mcp"}, SkillDir: "/h/.agents/skills/corral"}
+	}
+	return s
+}
+
+func hasKind(p Plan, k ActionKind) bool {
+	for _, a := range p.Actions {
+		if a.Kind == k {
+			return true
+		}
+	}
+	return false
+}
+
+func TestUninstallSharedSkillKeptForOtherUser(t *testing.T) {
+	ss := []Status{sharedAgent("a"), sharedAgent("b")}
+	state := sharedState("a", "b")
+	p := uninstall(t, ss, []string{"a"}, state)
+	if hasKind(p, ActionRemoveSkill) {
+		t.Fatalf("the skill is still b's: %+v", p.Actions)
+	}
+	if !hasKind(p, ActionRemove) {
+		t.Fatalf("%+v", p.Actions)
+	}
+	state = sharedState("b")
+	p = uninstall(t, ss, []string{"b"}, state)
+	if !hasKind(p, ActionRemoveSkill) {
+		t.Fatalf("%+v", p.Actions)
+	}
+	// Both at once: one removal of the shared dir.
+	p = uninstall(t, ss, []string{"a", "b"}, sharedState("a", "b"))
+	n := 0
+	for _, a := range p.Actions {
+		if a.Kind == ActionRemoveSkill {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("want one shared removal, got %d: %+v", n, p.Actions)
+	}
+}
+
+func TestUninstallLeavesUnmanagedSkill(t *testing.T) {
+	ss := []Status{sharedAgent("a")}
+	ss[0].Skill = "unmanaged"
+	p := uninstall(t, ss, []string{"a"}, sharedState("a"))
+	if hasKind(p, ActionRemoveSkill) {
+		t.Fatalf("%+v", p.Actions)
+	}
+	found := false
+	for _, a := range p.Actions {
+		if a.Kind == ActionSkipSkill && strings.Contains(a.Note, "not setup's") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected an explanatory skip: %+v", p.Actions)
+	}
+	_ = os.Stdout
+}

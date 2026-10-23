@@ -197,12 +197,12 @@ func writeAtomic(path string, data []byte) error {
 	tmp := f.Name()
 	_, werr := f.Write(data)
 	cerr := f.Close()
-	if err := errors.Join(werr, cerr, os.Chmod(tmp, 0o600)); err != nil {
-		_ = os.Remove(tmp)
+	if err := errors.Join(werr, cerr, os.Chmod(tmp, 0o600)); err != nil { // #nosec G703 -- tmp is the os.CreateTemp file beside path; path is the agent table's own location
+		_ = os.Remove(tmp) // #nosec G703 -- tmp is the os.CreateTemp file beside path; path is the agent table's own location
 		return err
 	}
-	if err := os.Rename(tmp, path); err != nil {
-		_ = os.Remove(tmp)
+	if err := os.Rename(tmp, path); err != nil { // #nosec G703 -- tmp is the os.CreateTemp file beside path; path is the agent table's own location
+		_ = os.Remove(tmp) // #nosec G703 -- tmp is the os.CreateTemp file beside path; path is the agent table's own location
 		return err
 	}
 	return nil

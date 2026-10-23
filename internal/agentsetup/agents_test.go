@@ -198,3 +198,18 @@ func TestParseOpencodeJSONSurvivesAPreambleBrace(t *testing.T) {
 		t.Errorf("cmd=%v found=%v err=%v", cmd, found, err)
 	}
 }
+
+func TestParseInspectErrorLinesAreNeverAbsent(t *testing.T) {
+	for _, msg := range []string{"Error: x", "Error: failed to connect", "Error: could not read config\n"} {
+		for _, a := range Agents() {
+			if _, found, err := a.ParseInspect([]byte(msg)); found || err == nil {
+				t.Errorf("%s: %q gave found=%v err=%v", a.ID, msg, found, err)
+			}
+		}
+	}
+	// What cursor prints for OTHER servers is still a recognised absent.
+	a, _ := ByID("cursor")
+	if _, found, err := a.ParseInspect([]byte("other: ready\nthird: not loaded (needs approval)\n")); found || err != nil {
+		t.Errorf("cursor with other servers: found=%v err=%v", found, err)
+	}
+}

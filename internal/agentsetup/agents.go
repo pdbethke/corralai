@@ -316,7 +316,7 @@ func parseCursor(out []byte) ([]string, bool, error) {
 	if cursorRow.Match(out) {
 		return nil, true, nil
 	}
-	return absentOr(out, regexp.MustCompile(`No MCP servers configured|(?m)^[^\s:]+: \S`))
+	return absentOr(out, regexp.MustCompile(`No MCP servers configured|(?m)^[^\s:]+: (?:ready|not loaded|disabled)\b`))
 }
 
 var opencodeRow = regexp.MustCompile(`(?m)^\S+\s+\S+ corral\b`)

@@ -33,7 +33,10 @@ JEST=30.5.2 VITEST=3.2.7 MOCHA=11.8.0 PHPUNIT=11.5.57
 mkdir -p "$DIR"
 cp -r "$OUT/src/." "$DIR/"
 cd "$DIR"
-npm install --silent --no-audit --no-fund "jest@$JEST" "vitest@$VITEST" "mocha@$MOCHA" >/dev/null
+# The versions are spelled out here, not interpolated, so a pin scanner can read them;
+# the guard below keeps them equal to the variables the manifest reports.
+[ "$JEST $VITEST $MOCHA" = "30.5.2 3.2.7 11.8.0" ] || { echo "JEST/VITEST/MOCHA drifted from the npm install line" >&2; exit 1; }
+npm install --silent --no-audit --no-fund jest@30.5.2 vitest@3.2.7 mocha@11.8.0 >/dev/null
 [ -f vendor/bin/phpunit ] || composer require -q --dev "phpunit/phpunit:$PHPUNIT"
 
 # --- list commands: stdout only, as the enumerator keeps it ---------------

@@ -1,0 +1,46 @@
+name: CodeQL
+
+# Static analysis that runs on the code itself, in addition to gosec in
+# scripts/check-security.sh. gosec is a Go-only linter; CodeQL does data-flow
+# analysis and also covers the Astro site's JavaScript/TypeScript.
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+  schedule:
+    - cron: "17 5 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    strategy:
+      fail-fast: false
+      matrix:
+        language: ["go", "javascript-typescript"]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        if: matrix.language == 'go'
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: github/codeql-action/init@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+        with:
+          languages: ${{ matrix.language }}
+          # Go is built by hand below, so the build is the module's own (cgo
+          # included: go-duckdb) rather than whatever autobuild guesses.
+          build-mode: ${{ matrix.language == 'go' && 'manual' || 'none' }}
+      - name: Build (Go)
+        if: matrix.language == 'go'
+        run: go build ./...
+      - uses: github/codeql-action/analyze@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+        with:
+          category: "/language:${{ matrix.language }}"

@@ -19,7 +19,7 @@
     "@astrojs/mdx": "7.0.2",
     "@astrojs/sitemap": "3.7.3",
     "@duckdb/duckdb-wasm": "^1.33.1-dev57.0",
-    "astro": "7.3.2",
+    "astro": "7.3.3",
     "pagefind": "1.5.2"
   },
   "devDependencies": {

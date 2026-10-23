@@ -105,7 +105,7 @@ func TestDetectAllAbsent(t *testing.T) {
 		t.Fatalf("%d statuses", len(ss))
 	}
 	for _, s := range ss {
-		if !s.Installed || s.Registered || s.Unknown != "" || s.ViaPlugin || s.Skill != "" {
+		if !s.Installed || s.Registered || s.Unknown != "" || s.ViaPlugin {
 			t.Errorf("%s: %+v", s.Agent.ID, s)
 		}
 	}

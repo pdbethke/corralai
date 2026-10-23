@@ -61,6 +61,13 @@ type Agent struct {
 
 	Remove [][]string // nil when the agent has no remove command (cursor, opencode, vscode)
 
+	// AddOverwrites is true when the agent's own add replaces an existing
+	// "corral" server (FACTS.md "Duplicate add": codex, gemini, agy, opencode,
+	// vscode), so a replace is one register action. False for claude and
+	// copilot, whose add refuses a duplicate (rc 1): a replace there must be
+	// remove-then-add. Cursor is file-based and its merge replaces in place.
+	AddOverwrites bool
+
 	SkillMode SkillMode
 	// SkillDir returns the corral skill directory (<root>/corral) under home;
 	// "" when SkillNone.
@@ -124,7 +131,8 @@ func Agents() []Agent {
 			ParseInspect: parseCodex,
 			Remove:       [][]string{{"codex", "mcp", "remove", "corral"}},
 			// FACTS: ~/.codex/skills executed (skills/list, scope user), as is the shared dir.
-			SkillMode: SkillOwn, SkillDir: skillDirUnder(".codex", "skills"),
+			AddOverwrites: true,
+			SkillMode:     SkillOwn, SkillDir: skillDirUnder(".codex", "skills"),
 			Restart: "Start a new Codex session.",
 		},
 		{
@@ -134,7 +142,8 @@ func Agents() []Agent {
 			ParseInspect: parseGemini,
 			Remove:       [][]string{{"gemini", "mcp", "remove", "-s", "user", "corral"}},
 			// FACTS: ~/.gemini/skills executed (gemini skills list), as is the shared dir.
-			SkillMode: SkillOwn, SkillDir: skillDirUnder(".gemini", "skills"),
+			AddOverwrites: true,
+			SkillMode:     SkillOwn, SkillDir: skillDirUnder(".gemini", "skills"),
 			Restart: "Start a new Gemini CLI session.",
 		},
 		{
@@ -169,9 +178,10 @@ func Agents() []Agent {
 				ServersKey: "mcp",
 			},
 			// FACTS: $XDG_CONFIG_HOME/opencode/skills executed (debug skill), as is the shared dir.
-			SkillMode: SkillOwn,
-			SkillDir:  func(home string) string { return filepath.Join(xdgConfigHome(home), "opencode", "skills", "corral") },
-			Restart:   "Start a new opencode session.",
+			AddOverwrites: true,
+			SkillMode:     SkillOwn,
+			SkillDir:      func(home string) string { return filepath.Join(xdgConfigHome(home), "opencode", "skills", "corral") },
+			Restart:       "Start a new opencode session.",
 		},
 		{
 			ID: "antigravity", Name: "Antigravity", CLI: "agy",
@@ -180,7 +190,8 @@ func Agents() []Agent {
 			ParseInspect: parseAntigravity,
 			Remove:       [][]string{{"agy", "mcp", "remove", "corral"}},
 			// FACTS: ~/.gemini/config/skills confirmed by agy's embedded changelog; the shared dir was not established.
-			SkillMode: SkillOwn, SkillDir: skillDirUnder(".gemini", "config", "skills"),
+			AddOverwrites: true,
+			SkillMode:     SkillOwn, SkillDir: skillDirUnder(".gemini", "config", "skills"),
 			Restart: "Start a new Antigravity session.",
 		},
 		{
@@ -216,7 +227,8 @@ func Agents() []Agent {
 				ServersKey: "servers",
 			},
 			// FACTS: no skill channel found by execution; VS Code is an MCP host here.
-			SkillMode: SkillNone, SkillDir: func(string) string { return "" },
+			AddOverwrites: true,
+			SkillMode:     SkillNone, SkillDir: func(string) string { return "" },
 			Restart: "Reload the VS Code window, or start the server from the MCP list.",
 		},
 	}

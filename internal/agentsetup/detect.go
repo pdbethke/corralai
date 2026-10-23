@@ -50,7 +50,10 @@ func Detect(ctx context.Context, r Runner, home string, lookPath func(string) (s
 }
 
 func detectOne(ctx context.Context, r Runner, home string, lookPath func(string) (string, error), a Agent) Status {
-	st := Status{Agent: a}
+	st := Status{Agent: a, Skill: "n/a"}
+	if a.SkillMode != SkillNone {
+		st.Skill = skillState(a.SkillDir(home))
+	}
 	if _, err := lookPath(a.CLI); err != nil {
 		return st
 	}

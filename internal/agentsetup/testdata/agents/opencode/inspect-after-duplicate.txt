@@ -1,0 +1,9 @@
+[0m
+┌  MCP Servers
+│
+●  ✗ corral [90mfailed
+│      MCP error -32000: Connection closed
+│      [90m/usr/bin/true mcp
+│
+└  1 server(s)
+

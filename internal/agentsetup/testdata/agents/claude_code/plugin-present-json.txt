@@ -5,8 +5,8 @@
     "scope": "user",
     "enabled": true,
     "installPath": "__SCRATCH__/home/claude_plugin/.claude/plugins/cache/corralai/corral/a6b89f41b9ef",
-    "installedAt": "2026-10-23T21:25:02.529Z",
-    "lastUpdated": "2026-10-23T21:25:02.529Z",
+    "installedAt": "2026-10-23T21:30:27.036Z",
+    "lastUpdated": "2026-10-23T21:30:27.036Z",
     "mcpServers": {
       "corral": {
         "command": "corral",

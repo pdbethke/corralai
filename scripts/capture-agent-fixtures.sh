@@ -20,8 +20,17 @@
 # additionally gets --user-data-dir inside the scratch HOME, no DISPLAY, so no
 # window can open.
 #
+# ENVIRONMENT: every agent call runs under `env -i` with an allowlist (PATH,
+# HOME, XDG_* with XDG_RUNTIME_DIR in the scratch too -- the snap `code`
+# wrapper needs one -- TERM, LANG), so no inherited agent override variable
+# (CLAUDE_CONFIG_DIR, CODEX_HOME, GEMINI_CLI_HOME, COPILOT_HOME,
+# OPENCODE_CONFIG, OPENCODE_CONFIG_DIR, ...) and no vendor API key can redirect
+# a write to the operator's real config or spend their credentials. The one
+# exception is the claude plugin marketplace clone, which gets SSH_AUTH_SOCK
+# only if the https clone below is refused (see FACTS.md).
+#
 # Fixtures are RAW stdout+stderr, except two mechanical substitutions so they
-# are machine independent: the scratch directory becomes `__SCRATCH__` and the
+# are machine independent: the OS user name becomes `__USER__`, the scratch directory becomes `__SCRATCH__` and the
 # corral binary becomes `__CORRAL__` (the binary lives under the scratch dir,
 # so it is substituted first). Nothing else is edited. Exit codes go beside
 # each fixture as <name>.rc.
@@ -40,6 +49,7 @@ SCRATCH="${1:-}"
 if [ -z "$SCRATCH" ]; then SCRATCH="$(mktemp -d)"; trap 'rm -rf "$SCRATCH"' EXIT; else KEEP=1; mkdir -p "$SCRATCH"; fi
 SCRATCH="$(cd "$SCRATCH" && pwd)"
 mkdir -p "$SCRATCH/bin"
+USER_NAME="$(id -un)"
 CORRAL="$SCRATCH/bin/corral"
 go build -o "$CORRAL" ./cmd/corral
 
@@ -48,9 +58,12 @@ newhome() {
 	H="$SCRATCH/home/$1"
 	rm -rf "$H"
 	mkdir -p "$H"/{config,data,state,cache}
+	mkdir -m 700 "$H/run"
 	export HOME="$H" XDG_CONFIG_HOME="$H/config" XDG_DATA_HOME="$H/data" \
 		XDG_STATE_HOME="$H/state" XDG_CACHE_HOME="$H/cache"
 	unset DISPLAY WAYLAND_DISPLAY
+	ENVCMD=(env -i "PATH=$PATH" "HOME=$HOME" "XDG_CONFIG_HOME=$XDG_CONFIG_HOME" "XDG_DATA_HOME=$XDG_DATA_HOME" \
+		"XDG_STATE_HOME=$XDG_STATE_HOME" "XDG_CACHE_HOME=$XDG_CACHE_HOME" "XDG_RUNTIME_DIR=$H/run" "TERM=${TERM:-dumb}" "LANG=${LANG:-C.UTF-8}")
 	cd "$H"
 }
 
@@ -60,12 +73,12 @@ cap() {
 	local id="$1" name="$2"
 	shift 2
 	mkdir -p "$OUT/$id"
-	timeout 60 "$@" </dev/null >"$OUT/$id/$name.txt" 2>&1
+	timeout 60 "${ENVCMD[@]}" "$@" </dev/null >"$OUT/$id/$name.txt" 2>&1
 	echo $? >"$OUT/$id/$name.rc"
 	# Codex warns on every call when its home is under /tmp (our scratch is);
 	# real homes are not, so the warning is an artifact of the scratch, not of
 	# codex's output. It is kept in the fixture (raw) and FACTS.md names it.
-	sed -i -e "s#$CORRAL#__CORRAL__#g" -e "s#$SCRATCH#__SCRATCH__#g" "$OUT/$id/$name.txt"
+	sed -i -e "s#$CORRAL#__CORRAL__#g" -e "s#$SCRATCH#__SCRATCH__#g" -e "s#\"username\": \"$USER_NAME\"#\"username\": \"__USER__\"#" "$OUT/$id/$name.txt"
 }
 
 have() { command -v "$1" >/dev/null 2>&1 || { echo "skip $2: $1 not on PATH" >&2; return 1; }; }
@@ -75,7 +88,7 @@ version() {
 	local id="$1"
 	shift
 	mkdir -p "$OUT/$id"
-	timeout 30 "$@" --version </dev/null >"$OUT/$id/versions.txt" 2>&1
+	timeout 30 "${ENVCMD[@]}" "$@" --version </dev/null >"$OUT/$id/versions.txt" 2>&1
 	sed -i -e "s#$CORRAL#__CORRAL__#g" -e "s#$SCRATCH#__SCRATCH__#g" "$OUT/$id/versions.txt"
 }
 
@@ -118,7 +131,12 @@ if have claude claude_code; then
 	# redundant and would duplicate it.
 	newhome claude_plugin
 	cap claude_code plugin-absent claude plugin list
-	cap claude_code plugin-marketplace-add claude plugin marketplace add pdbethke/corralai
+	cap claude_code plugin-marketplace-add claude plugin marketplace add https://github.com/pdbethke/corralai.git
+	if [ "$(cat "$OUT/claude_code/plugin-marketplace-add.rc")" != 0 ]; then
+		echo "claude_code: https marketplace add refused; retrying with SSH_AUTH_SOCK for this step only" >&2
+		ENVCMD+=("SSH_AUTH_SOCK=${SSH_AUTH_SOCK:-}")
+		cap claude_code plugin-marketplace-add-ssh claude plugin marketplace add pdbethke/corralai
+	fi
 	cap claude_code plugin-install claude plugin install corral@corralai
 	cap claude_code plugin-present claude plugin list
 	cap claude_code plugin-present-json claude plugin list --json
@@ -205,6 +223,9 @@ PY
 	register_opencode
 	cap opencode config-present opencode debug config
 	sed -e "s#$CORRAL#__CORRAL__#g" "$XDG_CONFIG_HOME/opencode/opencode.jsonc" >"$OUT/opencode/opencode.jsonc"
+	cap opencode register-duplicate opencode mcp add corral -- /usr/bin/true mcp
+	cap opencode inspect-after-duplicate opencode mcp list
+	register_opencode
 	cap opencode register-missing-command opencode mcp add corral2
 	remove_opencode
 	# an existing opencode.json (not .jsonc) is the file `mcp add` extends.
@@ -222,6 +243,9 @@ if have agy antigravity; then
 	register_antigravity() { cap antigravity register agy mcp add corral "$CORRAL" mcp; }
 	remove_antigravity() { cap antigravity remove agy mcp remove corral; }
 	cycle antigravity agy mcp list
+	register_antigravity
+	cap antigravity register-duplicate agy mcp add corral /usr/bin/true mcp
+	cap antigravity inspect-after-duplicate agy mcp list
 	register_antigravity
 	sed -e "s#$CORRAL#__CORRAL__#g" "$HOME/.gemini/config/mcp_config.json" >"$OUT/antigravity/mcp_config.json"
 	remove_antigravity
@@ -266,6 +290,10 @@ json.dump(d, open(p, "w"), indent="\t")
 PY
 	}
 	cycle vscode cat "$UD/User/mcp.json"
+	register_vscode
+	cap vscode register-duplicate code --user-data-dir "$UD" --extensions-dir "$HOME/ext" \
+		--add-mcp '{"name":"corral","command":"/usr/bin/true","args":["mcp"]}'
+	cat "$UD/User/mcp.json" >"$OUT/vscode/mcp-after-duplicate.json"
 	register_vscode
 	sed -e "s#$CORRAL#__CORRAL__#g" "$UD/User/mcp.json" >"$OUT/vscode/mcp.json"
 fi

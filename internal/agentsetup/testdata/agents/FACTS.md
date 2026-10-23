@@ -5,8 +5,14 @@ Captured 2026-10-23 on the workstation by `scripts/capture-agent-fixtures.sh`
 `HOME`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_STATE_HOME`, `XDG_CACHE_HOME`
 under it; cwd = that HOME. Never the operator's real configs.
 
-Fixtures are raw stdout+stderr with two mechanical substitutions: the scratch
-dir -> `__SCRATCH__`, the corral binary path -> `__CORRAL__`. Each fixture
+Every agent call runs under `env -i` with an allowlist (PATH, HOME, XDG_*
+including a scratch XDG_RUNTIME_DIR, TERM, LANG), so agent override variables
+(CLAUDE_CONFIG_DIR, CODEX_HOME, ...) and API keys are not inherited. Under
+`env -i` the OS user name is unset, so opencode's `debug config` prints
+`"username": "unknown"`; the script also maps a real user name to `__USER__`.
+
+Fixtures are raw stdout+stderr with mechanical substitutions: the scratch
+dir -> `__SCRATCH__`, the corral binary path -> `__CORRAL__`, the OS user name -> `__USER__`. Each fixture
 `<name>.txt` has `<name>.rc` (exit code) beside it. Fixture files per agent:
 `inspect-absent` (before), `register`, `inspect-present`, `remove`,
 `inspect-removed` (after remove), plus extras named below.
@@ -20,11 +26,14 @@ Cross-cutting facts the parsers must respect:
   (`corral mcp`) to health-check it, so inspect is not free and its status text
   depends on the server actually starting. Presence is the name line; do not
   key on "Connected".
-- Duplicate `add`: claude and copilot REFUSE (rc 1); codex, gemini, agy,
-  opencode and vscode silently overwrite (rc 0). So setup must inspect first.
+- Duplicate `add` (re-registered with a DIFFERENT command to see the effect):
+  claude and copilot REFUSE (rc 1); codex, gemini, agy, opencode and vscode
+  overwrite (rc 0; evidence: `register-duplicate`, and `inspect-after-duplicate`
+  / `mcp-after-duplicate.json` showing the new command). Cursor is file-based:
+  setup's own merge decides. So setup must inspect first.
 - `remove` of a missing server: rc 1 on claude, agy, copilot; rc 0 on codex and
-  gemini. Inspect rc is 1 when absent on claude and copilot (`get`), 0 on every
-  `list`-style inspect.
+  gemini. Inspect rc is 1 when absent on claude, codex and copilot (`get`) and
+  on vscode (`cat` of a missing file), 0 on every `list`-style inspect.
 - ANSI escapes are emitted by opencode even with stdout not a tty (fixtures
   keep them; strip `\x1b\[[0-9;]*m` before parsing).
 
@@ -44,7 +53,7 @@ Cross-cutting facts the parsers must respect:
 - Inspect: `claude mcp get corral` (absent: rc 1, `No MCP server named "corral". Run ...`). `claude mcp list` also works (`list-absent`, `list-present`).
 - Remove: `claude mcp remove -s user corral`. Afterwards inspect == absent (byte-identical).
 - Config file it edits: `~/.claude.json` key `mcpServers.corral` = `{type:"stdio",command,args:["mcp"],env:{}}`.
-- Plugin route (Step 1b, `plugin-*` fixtures): `claude plugin marketplace add pdbethke/corralai` (clones `git@github.com:pdbethke/corralai.git` over SSH -- needs a working GitHub SSH key or it fails; recorded in `plugin-marketplace-add.txt`), `claude plugin install corral@corralai` (scope user), inspect `claude plugin list` / `claude plugin list --json`, remove `claude plugin uninstall corral@corralai`. Absent: `No plugins installed. Use \`claude plugin install\` to install a plugin.` Present: block with `❯ corral@corralai`, `Version: <12-hex>`, `Scope: user`, `Status: ✔ enabled`. The `--json` form has `id`, `enabled`, and `mcpServers.corral = {command:"corral",args:["mcp"]}` -- the plugin registers its OWN `corral` MCP server (bare `corral mcp`), so with the plugin installed `claude mcp add corral` is redundant and duplicates it.
+- Plugin route (Step 1b, `plugin-*` fixtures): `claude plugin marketplace add pdbethke/corralai` (shorthand `pdbethke/corralai` clones over SSH and needed the operator's ssh-agent; the script instead passes `https://github.com/pdbethke/corralai.git`, which `marketplace add` accepts and which worked with no SSH and no credentials, `plugin-marketplace-add.txt`; the SSH shorthand is only retried, with SSH_AUTH_SOCK for that step, if https is refused), `claude plugin install corral@corralai` (scope user), inspect `claude plugin list` / `claude plugin list --json`, remove `claude plugin uninstall corral@corralai`. Absent: `No plugins installed. Use \`claude plugin install\` to install a plugin.` Present: block with `❯ corral@corralai`, `Version: <12-hex>`, `Scope: user`, `Status: ✔ enabled`. The `--json` form has `id`, `enabled`, and `mcpServers.corral = {command:"corral",args:["mcp"]}` -- the plugin registers its OWN `corral` MCP server (bare `corral mcp`), so with the plugin installed `claude mcp add corral` is redundant and duplicates it.
 - Skill directory: `~/.claude/skills/<name>/SKILL.md`. Source: Claude Code's documented location; NOT executed here (no `claude skills list` verb in 2.1.309). OpenCode's `debug skill` independently lists `~/.claude/skills` as a root.
 - Restart: running sessions do not pick up a new server; start a new session.
 
@@ -61,7 +70,7 @@ Cross-cutting facts the parsers must respect:
 - Register: `gemini mcp add -s user corral <corral> mcp` (default scope `project`; `-s user` required). rc 0.
 - Inspect: `gemini mcp list` (no `get`). Absent: `No MCP servers configured.` Present in an UNTRUSTED folder (a fresh scratch HOME is untrusted): a 2-line warning, then `○ corral: <cmd> (stdio) - Disabled`. In a trusted folder (`GEMINI_CLI_TRUST_WORKSPACE=true`, `inspect-present-trusted.txt`): `✓ corral: <cmd> (stdio) - Connected`. Presence = a line `corral: ` after the glyph.
 - Remove: `gemini mcp remove -s user corral`. Afterwards inspect == absent. File keeps `{"mcpServers":{}}`.
-- Duplicate add: rc 0, prints both `already configured` and `updated`.
+- Duplicate add: rc 0, prints both `already configured` and `updated` (earlier exploratory run, new command taken; not in the script's fixtures).
 - File: `~/.gemini/settings.json` `mcpServers.corral = {command,args}`.
 - Skill directory: `~/.gemini/skills/<name>/SKILL.md` and `~/.agents/skills/<name>/SKILL.md` (executed: `gemini skills list` listed both; it did NOT list `~/.claude/skills`). Prefer `~/.agents/skills`.
 - Restart: new session.

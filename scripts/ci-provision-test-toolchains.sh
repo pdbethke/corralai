@@ -27,10 +27,10 @@ sudo apt-get update || true
 
 echo "== Python (internal/lang python plugin) =="
 sudo apt-get install -y python3-pytest ||
-	python3 -m pip install --break-system-packages --quiet pytest || true
+	python3 -m pip install --break-system-packages --quiet pytest==9.1.1 || true
 python3 -m pytest --version || echo "pytest not available — python-in-jail test will SKIP"
 sudo apt-get install -y python3-pytest-cov ||
-	python3 -m pip install --break-system-packages --quiet pytest-cov || true
+	python3 -m pip install --break-system-packages --quiet pytest-cov==7.1.0 || true
 python3 -c "import pytest_cov" || echo "pytest-cov not available — python selection integration test will SKIP"
 
 echo "== PHP (internal/lang php plugin + its coverage reporter) =="
@@ -51,7 +51,7 @@ echo "== JS/TS (internal/lang javascript + typescript plugins) =="
 node --version || echo "node missing — js/ts-in-jail tests will SKIP"
 # Global npm lands under /usr/lib/node_modules, which IS jail-visible; a
 # project-local install is not.
-sudo npm install -g typescript @types/node || npm install -g typescript @types/node || true
+sudo npm install -g typescript@7.0.2 @types/node@26.6.5 || npm install -g typescript@7.0.2 @types/node@26.6.5 || true
 tsc --version || echo "tsc not available — ts-in-jail test will SKIP"
 
 echo "== Rust (internal/lang rust plugin; the jail's pinned RUSTUP_HOME) =="

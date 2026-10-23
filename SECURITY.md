@@ -246,7 +246,7 @@ Honesty is part of the model.
 
 Please report suspected vulnerabilities **privately** — do not open a public issue. Use the
 repository's **GitHub Security Advisories** ("Report a vulnerability") so a fix can be prepared
-before disclosure. Include reproduction steps and, ideally, a failing test in the style above.
+before disclosure: <https://github.com/pdbethke/corralai/security/advisories/new>. Include reproduction steps and, ideally, a failing test in the style above.
 
 We follow **coordinated disclosure** (aligned with ISO/IEC 29147 *disclosure* and 30111 *handling*):
 
@@ -272,6 +272,7 @@ the evidence:
 - **Scoring:** an **OpenSSF Scorecard** runs on every push to `main` (see the badge in the README).
 - **SBOM:** an SPDX Software Bill of Materials is generated in CI.
 - **Vulnerabilities:** `govulncheck` gates every merge (`scripts/check-security.sh`); `gosec`
-  static analysis runs alongside it.
+  static analysis runs alongside it. **CodeQL** analyses the Go and the site's JavaScript/TypeScript
+  on every push and pull request to `main`, and weekly.
 - **Dev process:** mapped to NIST **SSDF (SP 800-218)**; the local console is verified against
   **OWASP ASVS**.

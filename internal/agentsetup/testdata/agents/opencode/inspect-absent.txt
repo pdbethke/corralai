@@ -1,0 +1,7 @@
+[0m
+┌  MCP Servers
+│
+▲  No MCP servers configured
+│
+└  Add servers with: opencode mcp add
+

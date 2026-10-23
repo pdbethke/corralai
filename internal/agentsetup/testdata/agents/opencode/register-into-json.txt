@@ -1,0 +1,2 @@
+│
+◆  MCP server "corral" added to __SCRATCH__/home/opencode_json/config/opencode/opencode.json

@@ -1,0 +1,2 @@
+Added stdio MCP server corral with command: __CORRAL__ mcp to user config
+File modified: __SCRATCH__/home/claude_code/.claude.json

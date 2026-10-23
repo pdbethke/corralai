@@ -1,0 +1,2 @@
+Error: Server "corral" already exists. To update it, remove it first:
+  copilot mcp remove corral

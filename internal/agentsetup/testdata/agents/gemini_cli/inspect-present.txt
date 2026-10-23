@@ -1,0 +1,6 @@
+Warning: MCP servers are configured but disabled because this folder is untrusted.
+User-level servers are also suppressed in untrusted folders to prevent accidental side-effects.
+
+Configured MCP servers:
+
+○ corral: __CORRAL__ mcp (stdio) - Disabled

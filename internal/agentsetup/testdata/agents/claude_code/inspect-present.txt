@@ -1,0 +1,9 @@
+corral:
+  Scope: User config (available in all your projects)
+  Status: ✔ Connected
+  Type: stdio
+  Command: __CORRAL__
+  Args: mcp
+  Environment:
+
+To remove this server, run: claude mcp remove corral -s user

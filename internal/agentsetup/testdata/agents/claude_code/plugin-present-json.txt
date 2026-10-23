@@ -1,0 +1,20 @@
+[
+  {
+    "id": "corral@corralai",
+    "version": "a6b89f41b9ef",
+    "scope": "user",
+    "enabled": true,
+    "installPath": "__SCRATCH__/home/claude_plugin/.claude/plugins/cache/corralai/corral/a6b89f41b9ef",
+    "installedAt": "2026-10-23T21:25:02.529Z",
+    "lastUpdated": "2026-10-23T21:25:02.529Z",
+    "mcpServers": {
+      "corral": {
+        "command": "corral",
+        "args": [
+          "mcp"
+        ]
+      }
+    },
+    "projectEnabled": true
+  }
+]

@@ -1,0 +1,7 @@
+Installed plugins:
+
+  ❯ corral@corralai
+    Version: a6b89f41b9ef
+    Scope: user
+    Status: ✔ enabled
+

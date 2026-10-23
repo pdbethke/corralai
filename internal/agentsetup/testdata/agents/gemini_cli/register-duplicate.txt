@@ -1,0 +1,2 @@
+MCP server "corral" is already configured within user settings.
+MCP server "corral" updated in user settings.

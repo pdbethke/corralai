@@ -1,0 +1,4 @@
+Error: Server "corral" not found.
+
+Available servers:
+  (none)

@@ -1,0 +1,7 @@
+Added server "corral"
+
+corral
+  Type: local
+  Command: __CORRAL__ mcp
+  Tools: * (all)
+  Source: User

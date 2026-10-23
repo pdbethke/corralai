@@ -1,0 +1,1 @@
+MCP server corral already exists in user config

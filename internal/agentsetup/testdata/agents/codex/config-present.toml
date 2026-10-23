@@ -1,0 +1,3 @@
+[mcp_servers.corral]
+command = "__CORRAL__"
+args = ["mcp"]

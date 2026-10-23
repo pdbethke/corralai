@@ -1,0 +1,1 @@
+cat: __SCRATCH__/home/vscode/ud/User/mcp.json: No such file or directory

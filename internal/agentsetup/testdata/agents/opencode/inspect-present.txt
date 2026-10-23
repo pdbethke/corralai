@@ -1,0 +1,8 @@
+[0m
+┌  MCP Servers
+│
+●  ✓ corral [90mconnected
+│      [90m__CORRAL__ mcp
+│
+└  1 server(s)
+

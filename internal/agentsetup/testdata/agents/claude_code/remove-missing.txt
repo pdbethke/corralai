@@ -1,0 +1,1 @@
+No MCP server named "nope" in user scope

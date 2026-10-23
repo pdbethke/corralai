@@ -25,12 +25,15 @@ set -uo pipefail
 # `apt-get install` fails to find the package. Done once, up front.
 sudo apt-get update || true
 
+# Hashed requirements (pip-compile --generate-hashes from ci-python-requirements.in).
+PYREQ="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ci-python-requirements.txt"
+
 echo "== Python (internal/lang python plugin) =="
 sudo apt-get install -y python3-pytest ||
-	python3 -m pip install --break-system-packages --quiet pytest==9.1.1 || true
+	python3 -m pip install --break-system-packages --quiet --require-hashes -r "$PYREQ" || true
 python3 -m pytest --version || echo "pytest not available — python-in-jail test will SKIP"
 sudo apt-get install -y python3-pytest-cov ||
-	python3 -m pip install --break-system-packages --quiet pytest-cov==7.1.0 || true
+	true # pytest-cov is in the same hashed requirements file
 python3 -c "import pytest_cov" || echo "pytest-cov not available — python selection integration test will SKIP"
 
 echo "== PHP (internal/lang php plugin + its coverage reporter) =="

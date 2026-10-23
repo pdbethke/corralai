@@ -764,14 +764,21 @@ What this puts on the record, in public, permanently:
   certify key (`CORRALAI_CERTIFY_KEY` in the step's `env:`) to sign its
   entries; a key configured in the step's environment is never overridden by
   keyless signing.
-- **The token request credentials are removed from everything the audit
-  runs.** `ACTIONS_ID_TOKEN_REQUEST_URL`, `ACTIONS_ID_TOKEN_REQUEST_TOKEN` and
+- **The token request credentials are removed from the environment of
+  everything the audit runs, and that is not isolation.**
+  `ACTIONS_ID_TOKEN_REQUEST_URL`, `ACTIONS_ID_TOKEN_REQUEST_TOKEN` and
   `ACTIONS_RUNTIME_TOKEN` are read only by corral's own signer. The audited
   suite, model-written tests, review reproductions, agent seats and the
-  Python preflight probe all start without them, so code under audit cannot
-  mint a certificate for the repository and sign an entry as it. The rest of
-  the job's environment is kept. A step of *your* workflow that runs
-  untrusted code is outside corral and still sees them.
+  Python preflight probe all start without them in their environment. But the
+  Action audits with `--substrate workspace`: that code runs as the same user
+  in the same process namespace as corral and the step that started it, so it
+  can still read the credentials from a parent's `/proc/<pid>/environ` and
+  mint a certificate for the repository. A certify key in the environment is
+  exposed the same way. Read a signed Action entry as "this repository's
+  workflow published this", not as "the audited code could not have touched
+  it". The jail substrate runs the suite in its own process namespace and
+  does not have this exposure. A step of *your* workflow that runs untrusted
+  code is outside corral and sees them too.
 - **One entry per run.** The Action points `CORRALAI_MACHINE_LEDGER` at the
   ledger directory, so the runner's machine-ledger copy and the repository
   entry are the same write. Without that a keyless run would log a second

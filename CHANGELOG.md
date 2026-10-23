@@ -68,14 +68,20 @@ history of any release, `git log v0.3.4..v0.3.5`.
   file name.** A `.json.gz` file holding plain JSON, and a `.json` file
   holding gzip, are both read. A browser fetches bytes, and a CDN may serve a
   `.json.gz` already decompressed.
-- **Nothing the audit runs sees the GitHub Actions OIDC request
-  credentials.** `ACTIONS_ID_TOKEN_REQUEST_URL`,
+- **The GitHub Actions OIDC request credentials are removed from the
+  environment of everything the audit runs.** `ACTIONS_ID_TOKEN_REQUEST_URL`,
   `ACTIONS_ID_TOKEN_REQUEST_TOKEN` and `ACTIONS_RUNTIME_TOKEN` are removed
   from the audited suite's environment under `--substrate workspace`, from
   review reproductions, from agent seats, from the Python preflight probe and
-  from `corral certify -- <cmd>`. With keyless signing, code holding them
-  could have signed a ledger entry as the repository. corral's own signer
-  still reads them. The jail never passed them.
+  from `corral certify -- <cmd>`. corral's own signer still reads them. The
+  jail never passed them. **This is defence in depth, not isolation:** under
+  `--substrate workspace` (what the Action uses) the audited code runs as the
+  same user in the same process namespace, and can still read them from a
+  parent process's `/proc/<pid>/environ`. That was already true of a
+  certify key in the environment. So an entry the Action signs, keylessly or
+  with a key, shows that the repository's workflow published it, not that the
+  code under audit could not have influenced it. The jail substrate has its
+  own process namespace and is not affected.
 
 - **`--substrate workspace` no longer hands the audited suite your desktop
   session.** `DISPLAY`, `WAYLAND_DISPLAY`, `WAYLAND_SOCKET`, `XAUTHORITY` and

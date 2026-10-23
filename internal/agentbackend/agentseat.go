@@ -45,8 +45,9 @@ import (
 // verdict and review's ReviewerTool. So a definition must never carry a
 // credential: reference an environment variable the CLI reads instead.
 //
-// The command inherits corral's whole environment (cmd.Env is never set):
-// the CLI needs PATH, HOME and its own token variables. The cost is that a
+// The command inherits corral's environment, less the run's GitHub Actions
+// identity (sandbox.CIIdentityTokens, removed in agentCommand): the CLI
+// needs PATH, HOME and its own token variables. The cost is that a
 // vendor API key exported for corral's API seats reaches the CLI too, and a
 // CLI that prefers an API key over its subscription login will bill it.
 var builtinAgents = map[string]builtinAgent{

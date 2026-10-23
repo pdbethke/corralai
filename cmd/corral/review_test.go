@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -430,7 +431,7 @@ func TestReviewPlanProposesAndCountsFixBatches(t *testing.T) {
 	gitRun("commit", "-q", "-m", "base", "--no-gpg-sign")
 	reviewed := gitRevParseHead(t, root)
 	ledger := filepath.Join(root, ".corral", "ledger")
-	signer, _, _ := ledgerSignerFromLocalKey()
+	signer, _, _ := selectLedgerSigner(io.Discard)
 	code := 0
 	if _, err := auditpush.WriteReview(ledger, review.Review{Repo: "r", Commit: reviewed, Scope: "pkg/a.go", ReviewerModel: "m",
 		Findings: []review.Finding{{ID: "R1", Claim: "c", Declared: review.TierReproduced, Tier: review.TierReproduced, ExitCode: &code}}}, signer); err != nil {

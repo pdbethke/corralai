@@ -190,6 +190,20 @@ jobs:
             grep -- '--- SKIP' /tmp/gotest.log | sed 's/.*--- SKIP: /  /' | sort -u
           fi
           exit "$rc"
+      - name: Test the browser verifier (ledger WASM) under node
+        if: steps.filter.outputs.code == 'true'
+        run: |
+          # The results page runs the ledger verifier as WASM, so it is tested
+          # as WASM: GOOS=js, executed by node through go_js_wasm_exec. node is
+          # preinstalled on GitHub's ubuntu-latest images. If it is ever absent
+          # this step FAILS rather than skips: a skipped verifier test proves
+          # nothing about the verifier (see the SKIP census above).
+          if ! command -v node >/dev/null 2>&1; then
+            echo "::error::node is not on PATH; the WASM verifier test cannot run, and a skipped verifier test proves nothing." >&2
+            exit 1
+          fi
+          GOOS=js GOARCH=wasm go test ./internal/ledger/wasm/ -count=1 -v \
+            -exec "$(go env GOROOT)/lib/wasm/go_js_wasm_exec"
       - name: Check the CLI reference hasn't drifted from the real binaries
         if: steps.filter.outputs.code == 'true'
         # These two drift gates live HERE, in the always-on validate job, and

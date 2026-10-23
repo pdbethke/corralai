@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -238,7 +239,7 @@ func TestUnmeteredCallsSurviveFromTheSeatToEverySurface(t *testing.T) {
 
 	// The signed ledger entry, and the reader `scans show` uses.
 	dir := filepath.Join(t.TempDir(), "ledger")
-	if _, err := pushBundle(dir+"/", b); err != nil {
+	if _, err := pushBundle(dir+"/", b, io.Discard); err != nil {
 		t.Fatal(err)
 	}
 	st, err := openLedgerScans(dir)
@@ -267,7 +268,7 @@ func TestUnmeteredCallsSurviveFromTheSeatToEverySurface(t *testing.T) {
 
 	// The warehouse.
 	wh := filepath.Join(t.TempDir(), "w.duckdb")
-	if _, err := pushBundle(wh, b); err != nil {
+	if _, err := pushBundle(wh, b, io.Discard); err != nil {
 		t.Fatal(err)
 	}
 	db, err := attachWarehouse(wh, true)

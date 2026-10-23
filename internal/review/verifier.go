@@ -11,31 +11,13 @@ import (
 	"strings"
 
 	"github.com/pdbethke/corralai/internal/clip"
+	"github.com/pdbethke/corralai/internal/reviewrecord"
 )
 
-// Refutation is the verifier's answer to one finding. Declared is the tier
-// the verifier asserted for its refutation; Tier is what the record
-// carries after its script ran — the same demote-only rule the reviewer's
-// findings live under. Verdict is VerdictRefuted or VerdictStands.
-type Refutation struct {
-	Model    string `json:"model"`
-	Verdict  string `json:"verdict"`
-	Argument string `json:"argument"`
-	Declared string `json:"declared,omitempty"`
-	Tier     string `json:"tier,omitempty"`
-	Script   string `json:"script,omitempty"`
-	Stdout   string `json:"stdout,omitempty"`
-	ExitCode *int   `json:"exit_code,omitempty"`
-	Demoted  string `json:"demoted,omitempty"`
-	// Unrun is why the harness could not run the script (see
-	// Finding.Unrun): a refutation nobody executed moves nothing.
-	Unrun string `json:"unrun,omitempty"`
-}
-
-// The verifier's two verdicts.
+// The verifier's two verdicts (declared in reviewrecord).
 const (
-	VerdictRefuted = "REFUTED"
-	VerdictStands  = "STANDS"
+	VerdictRefuted = reviewrecord.VerdictRefuted
+	VerdictStands  = reviewrecord.VerdictStands
 )
 
 // VerifierBriefSystem is the verifier seat's standing instructions: refute

@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/pdbethke/corralai/internal/dirlock"
+	"github.com/pdbethke/corralai/internal/ledger"
 	"github.com/pdbethke/corralai/internal/review"
 )
 
@@ -65,175 +66,51 @@ func IsLedgerDir(target string) bool {
 	return err == nil && st.IsDir()
 }
 
-// LedgerEntry is the on-disk form: the bundle plus the push stamp, the
-// hash of the entry before it, and a signature — so the directory is a
-// SIGNED, HASH-LINKED LEDGER, not a folder of files. Editing an entry
-// breaks its signature; deleting or reordering one breaks the next entry's
-// Prev; and a reader with the public key can check both without trusting
-// whoever holds the branch. It is the part of a blockchain that was always
-// a good idea — an append-only log where every entry is signed and names
-// its predecessor — with one writer per directory and, when a stranger
-// must be able to trust it, Sigstore's public log as the outside witness,
-// instead of consensus.
-//
-// Hash is sha256 over the canonical sparse JSON (CanonicalSparseJSON) of
-// the entry with Hash and Signature cleared; Prev is the previous entry's
-// Hash, "" on the first entry (a stated genesis, never a fabricated link).
-// Signature is Ed25519 over Hash's bytes, KeyID naming the key: from
-// corral-ledger-5 its fingerprint (KeyFingerprint), resolved by the
-// verifier to the root or a registered signer; through corral-ledger-4 the
-// convention name "corral-certify", which means the root (LegacyRootKeyID).
-// Unsigned entries are legal (no key configured) and are SAID to be, by
-// every reader: a chain still orders them; only a signature says who.
-type LedgerEntry struct {
-	Format string `json:"format"`
-	// Kind is what the entry IS: "" (KindScan) for a run's own record —
-	// every entry ever written before kinds existed, so the field is
-	// omitted and their hashes stand — KindRetract for a judgment about an
-	// earlier entry, KindCheckpoint for a genesis that stands in for
-	// entries pruned before it. A reader that does not know a kind treats
-	// the entry as opaque: it is still in the chain, still hashed, still
-	// signed; it just is not a scan.
-	Kind string `json:"kind,omitempty"`
-	// Pushed is when the entry was PLACED in this directory (see
-	// AppendLedgerEntry), which is what orders the files; the run's own
-	// time is Bundle.Scan.StartedAt.
-	Pushed  time.Time `json:"pushed"`
-	ScanUID string    `json:"scan_uid"`
-	Prev    string    `json:"prev,omitempty"`
-	Bundle  Bundle    `json:"bundle"`
-	// Retracts (KindRetract) is the Hash of the entry this one retracts,
-	// and Reason says why, in the retractor's words. The retracted entry
-	// STAYS — a bad run is still a fact — and every reader of the record
-	// (the view, the prior, the verdict cache, `scans`) skips it from then
-	// on. Deleting it instead would break the next entry's link, which is
-	// the chain doing its job.
-	Retracts string `json:"retracts,omitempty"`
-	Reason   string `json:"reason,omitempty"`
-	// Checkpoint (KindCheckpoint) stands where pruned history was: the
-	// hash of the head it replaced and how many entries, through when.
-	// A checkpoint is always a genesis (Prev == ""), and the verifier says
-	// so — "chain begins at a checkpoint; N earlier entries not present"
-	// — rather than pretending the chain was always this short.
-	Checkpoint *Checkpoint `json:"checkpoint,omitempty"`
-	// Review (KindReview) is one review's record: the findings as
-	// RECORDED (reproductions run, tiers demoted where a script did not
-	// hold), the sound list, and the opinion. The entry is signed as a
-	// whole, which signs the reproductions — script, output, exit — and
-	// carries the opinion; the opinion is prose and is not what the
-	// signature vouches for. See internal/review.
-	Review *review.Review `json:"review,omitempty"`
-	// Adjudication (KindAdjudication) is a person's verdict on one finding
-	// — Adjudicates names it as <review entry hash>#<finding id> — with
-	// who decided and why. Automatic passes never write these; a later one
-	// by the same or another person is a new entry, and the newest stands.
-	Adjudication *Adjudication `json:"adjudication,omitempty"`
-	// Signer (KindSigner) registers or revokes a signing key. See signers.go.
-	Signer *SignerChange `json:"signer,omitempty"`
-	// Hash and Signature are computed over everything above.
-	Hash      string `json:"hash,omitempty"`
-	KeyID     string `json:"keyid,omitempty"`
-	Signature string `json:"signature,omitempty"` // hex Ed25519 over Hash's raw bytes
-
-	// Raw is the entry's bytes as read from the directory, and File the
-	// name they were read from. Set by the readers, never written: from
-	// corral-ledger-3 the hash is over the bytes on disk (see EntryHash),
-	// so a verifier re-hashes what is in the file, not what this binary's
-	// struct would re-marshal — a field added to the struct later must not
-	// change an older entry's hash.
-	Raw  []byte `json:"-"`
-	File string `json:"-"`
-}
-
-// The entry kinds. KindScan is the empty string on purpose: it is what
-// every entry written before kinds existed carries, and their hashes must
-// not change.
-const (
-	KindScan         = ""
-	KindRetract      = "retract"
-	KindCheckpoint   = "checkpoint"
-	KindReview       = "review"
-	KindAdjudication = "adjudication"
-	// KindSigner is declared in signers.go beside its payload.
+// The entry types, kinds, formats and the pure rules over an entry live in
+// internal/ledger, which builds for the browser. Everything here is an alias
+// or a thin wrapper, so no caller, test or signed ledger changes.
+type (
+	LedgerEntry  = ledger.Entry
+	Adjudication = ledger.Adjudication
+	Checkpoint   = ledger.Checkpoint
 )
 
-// Adjudication is a person's verdict on one finding of a review entry.
-type Adjudication struct {
-	Adjudicates string `json:"adjudicates"` // "<review entry hash>#<finding id>"
-	Verdict     string `json:"verdict"`     // VerdictConfirmed or VerdictRefuted
-	By          string `json:"by"`          // the principal, as they named themselves
-	Reason      string `json:"reason"`
-}
-
-// The two verdicts an adjudication carries.
 const (
-	VerdictConfirmed = "confirmed"
-	VerdictRefuted   = "refuted"
+	KindScan         = ledger.KindScan
+	KindRetract      = ledger.KindRetract
+	KindCheckpoint   = ledger.KindCheckpoint
+	KindReview       = ledger.KindReview
+	KindAdjudication = ledger.KindAdjudication
+
+	VerdictConfirmed = ledger.VerdictConfirmed
+	VerdictRefuted   = ledger.VerdictRefuted
+
+	LedgerFileFormat = ledger.FileFormat
+	ledgerFormat4    = ledger.Format4
+	ledgerFormat3    = ledger.Format3
+	ledgerFormat2    = ledger.Format2
 )
 
-// Checkpoint is what a KindCheckpoint entry carries about the history it
-// replaced.
-type Checkpoint struct {
-	Head    string    `json:"head"`    // the Hash of the last pruned entry
-	Entries int       `json:"entries"` // how many entries were pruned
-	Through time.Time `json:"through"` // the Pushed time of the last pruned entry
-	// Signers is the active signer set at the pruned head (ActiveSigners).
-	// A checkpoint deletes the register entries that made later entries'
-	// keys good, so without this the first entry a registered key signs
-	// after a prune would verify as "not a registered signer". It is
-	// omitempty on a nil slice so a chain that never registered a signer
-	// checkpoints byte-for-byte as before.
-	Signers []SignerKey `json:"signers,omitempty"`
-}
+func knownLedgerFormat(f string) bool  { return ledger.KnownFormat(f) }
+func keyIDIsHashed(format string) bool { return ledger.KeyIDIsHashed(format) }
 
-// IsScan reports whether the entry is a run's own record.
-func (e LedgerEntry) IsScan() bool { return e.Kind == KindScan }
+// EntryShapeProblem is the one rule for what an entry of each kind must
+// carry; see ledger.EntryShapeProblem.
+func EntryShapeProblem(e LedgerEntry) string { return ledger.EntryShapeProblem(e) }
+
+// EntryHash is what Hash holds; see ledger.EntryHash.
+func EntryHash(e LedgerEntry) (string, error) { return ledger.EntryHash(e) }
 
 // ledgerFile is the historical name; kept as the alias readers use.
 type ledgerFile = LedgerEntry
 
-// LedgerFileFormat is the document version a ledger entry declares.
-// corral-ledger-5 (2026-10-19): keyid is a key FINGERPRINT
-// ("ed25519:" + 16 hex of sha256(pubkey)), not a convention name, and a
-// ledger may register signers (KindSigner), so a per-machine key can sign
-// under a root's authority. Format-4 and older entries are read unchanged;
-// their "corral-certify" keyid means "the root key" (LegacyRootKeyID).
-// corral-ledger-4 (2026-09-08): keyid — the name of WHO signed — is inside
-// the hashed bytes, so editing it breaks the hash and the signature that
-// covers it. Through corral-ledger-3 keyid was deleted before hashing and
-// never compared to the verifying key, so a placed, signed entry could have
-// its signer rewritten to any name and still verify clean: the record
-// stating a custody nobody signed for. Found by a cold review, 2026-09-08.
-// corral-ledger-3 (2026-09-07): the hash is over the entry's FULL canonical
-// bytes (CanonicalFullJSON), and a scan entry's scan_uid derives from the
-// scan row and the entry's own Pushed time, so RecomputeScanUID over the
-// entry reproduces it. corral-ledger-2 entries are still read and verified
-// under their own rules — sparse hash; a uid minted from a time the entry
-// does not carry — and VerifyLedgerDir says so.
-//
-// Older entries keep verifying under their own rules; they are not
-// rewritten, because rewriting a record to fix a record is the thing this
-// whole directory exists to make impossible. VerifyLedgerDir notes on every
-// pre-4 entry that its signer name is self-reported.
-const (
-	LedgerFileFormat = "corral-ledger-5"
-	ledgerFormat4    = "corral-ledger-4"
-	ledgerFormat3    = "corral-ledger-3"
-	ledgerFormat2    = "corral-ledger-2"
-)
-
-// knownLedgerFormat is what a reader accepts.
-func knownLedgerFormat(f string) bool {
-	return f == LedgerFileFormat || f == ledgerFormat4 || f == ledgerFormat3 || f == ledgerFormat2
-}
-
-// keyIDIsHashed reports whether this format covers keyid in the hashed
-// bytes. Pre-4 entries carry an unauthenticated signer label.
-func keyIDIsHashed(format string) bool { return format != ledgerFormat3 && format != ledgerFormat2 }
-
 // LedgerSigner signs an entry's hash. cmd/corral supplies one from the
-// local certify key when it exists; nil writes an unsigned entry.
+// local certify key when it exists, or the keyless SigstoreLedgerSigner
+// (SigningKeyID ledger.KeyIDSigstore), whose "signature" is a Sigstore
+// bundle placed in the entry's Sigstore field; nil writes an unsigned entry.
 type LedgerSigner interface {
+	// Sign signs the entry's hash as BYTES — hex-decoded, which for a keyless
+	// signer is exactly ledger.KeylessArtifact(e) — never the hex string.
 	Sign(hash []byte) (keyID string, signature []byte, err error)
 	// SigningKeyID names the key BEFORE the entry is hashed. From
 	// corral-ledger-4 the signer's name is inside the hashed bytes, so it
@@ -254,120 +131,6 @@ func (s Ed25519LedgerSigner) Sign(hash []byte) (string, []byte, error) {
 }
 
 func (s Ed25519LedgerSigner) SigningKeyID() string { return s.KeyID }
-
-// EntryShapeProblem is the ONE rule for what an entry of each kind must
-// carry, used by the writer (placeEntry refuses to place what it names) and
-// by the verifier (a chain check reports it). It used to live in the
-// verbs only — WriteAdjudication, WriteRetraction, WriteReview — so an
-// entry that reached placeEntry another way (`corral ledger append` of a
-// file written elsewhere) was placed, signed and verified with no finding
-// id, an empty verdict and nobody deciding: the rule at one door and not
-// the other (review 559719120ef0#R1, Codex reviewing, Claude Code
-// verifying). "" when the entry is well-formed for its kind.
-func EntryShapeProblem(e LedgerEntry) string {
-	switch e.Kind {
-	case KindScan:
-		return ""
-	case KindRetract:
-		if strings.TrimSpace(e.Retracts) == "" || strings.TrimSpace(e.Reason) == "" {
-			return "a retraction names the entry it retracts and a reason"
-		}
-	case KindCheckpoint:
-		if e.Checkpoint == nil || e.Checkpoint.Head == "" {
-			return "a checkpoint entry that names no replaced head"
-		}
-		if p := checkpointSignersProblem(e.Checkpoint.Signers); p != "" {
-			return p
-		}
-	case KindReview:
-		if e.Review == nil {
-			return "a review entry that carries no review"
-		}
-		if strings.TrimSpace(e.Review.Commit) == "" || strings.TrimSpace(e.Review.Scope) == "" {
-			return "a review names a commit and a scope"
-		}
-	case KindAdjudication:
-		if e.Adjudication == nil {
-			return "an adjudication entry that carries no adjudication"
-		}
-		a := e.Adjudication
-		if _, id, ok := cutRef(a.Adjudicates); !ok || strings.TrimSpace(id) == "" {
-			return "an adjudication names a finding as <review hash>#<finding id>"
-		}
-		if a.Verdict != VerdictConfirmed && a.Verdict != VerdictRefuted {
-			return fmt.Sprintf("an adjudication's verdict is %s or %s, not %q", VerdictConfirmed, VerdictRefuted, a.Verdict)
-		}
-		if strings.TrimSpace(a.By) == "" || strings.TrimSpace(a.Reason) == "" {
-			return "an adjudication names who decided and why"
-		}
-	case KindSigner:
-		return signerShapeProblem(e.Signer)
-	default:
-		return fmt.Sprintf("an entry of unknown kind %q", e.Kind)
-	}
-	return ""
-}
-
-// EntryHash is what Hash holds. From corral-ledger-3: sha256 over the
-// entry's FULL canonical JSON — its bytes as written (Raw, when a reader
-// set it; this binary's marshalling of e otherwise, which is what the
-// writer puts on disk) with the hash, keyid and signature keys removed.
-// corral-ledger-2: sha256 over the canonical SPARSE JSON of the struct
-// with those fields cleared, as those entries were written.
-func EntryHash(e LedgerEntry) (string, error) {
-	if e.Format == ledgerFormat2 {
-		e.Hash, e.KeyID, e.Signature, e.Raw = "", "", "", nil
-		js, err := CanonicalSparseJSON(e)
-		if err != nil {
-			return "", err
-		}
-		sum := sha256.Sum256(js)
-		return hex.EncodeToString(sum[:]), nil
-	}
-	raw := e.Raw
-	if raw == nil {
-		e.Hash, e.Signature = "", ""
-		if !keyIDIsHashed(e.Format) {
-			e.KeyID = ""
-		}
-		var err error
-		if raw, err = json.Marshal(e); err != nil {
-			return "", err
-		}
-	}
-	js, err := canonicalEntryBytes(raw, keyIDIsHashed(e.Format))
-	if err != nil {
-		return "", err
-	}
-	sum := sha256.Sum256(js)
-	return hex.EncodeToString(sum[:]), nil
-}
-
-// canonicalEntryBytes is CanonicalFullJSON over an entry with the three
-// fields the hash cannot contain removed from the tree itself, so the
-// writer (which has them empty) and the reader (which has them filled)
-// hash the same bytes.
-func canonicalEntryBytes(raw []byte, keepKeyID bool) ([]byte, error) {
-	dec := json.NewDecoder(bytes.NewReader(raw))
-	dec.UseNumber()
-	var tree map[string]any
-	if err := dec.Decode(&tree); err != nil {
-		return nil, fmt.Errorf("auditpush: entry is not a JSON object: %w", err)
-	}
-	delete(tree, "hash")
-	delete(tree, "signature")
-	if !keepKeyID {
-		// Pre-corral-ledger-4: keyid sat outside the hash, so the signer
-		// name was editable without breaking anything. Kept for those
-		// entries only, so they still verify as written.
-		delete(tree, "keyid")
-	}
-	full, err := json.Marshal(tree)
-	if err != nil {
-		return nil, err
-	}
-	return CanonicalFullJSON(full)
-}
 
 // writeLedgerFile is the directory half of PushBundle: the same
 // canonicalised bundle the warehouse receives, as one signed, linked entry.
@@ -485,10 +248,16 @@ func lockLedgerDir(dir string) (func(), error) {
 // registration is caught.
 //
 // A ledger with no signer entries and no signer-carrying checkpoint skips the
-// guard entirely, so a stranger's keyless chain, and every ledger that has
+// guard entirely, so a stranger's unsigned chain, and every ledger that has
 // never used signers, append exactly as before. The root is always allowed:
-// it is how a key is registered in the first place.
+// it is how a key is registered in the first place. A keyless (Sigstore)
+// signer is allowed on any ledger: it holds no key a registration could
+// name, and its identity — the repository that signed — is what the reader
+// checks, by the repository the reader names.
 func requireRegisteredSigner(existing []LedgerEntry, signer LedgerSigner) error {
+	if signer != nil && signer.SigningKeyID() == ledger.KeyIDSigstore {
+		return nil
+	}
 	rootID, active := ActiveSigners(existing)
 	if rootID == "" {
 		return nil
@@ -519,7 +288,16 @@ func placeEntry(dir string, e LedgerEntry, prev string, signer LedgerSigner) (st
 	if err := os.MkdirAll(scans, 0o750); err != nil {
 		return "", fmt.Errorf("auditpush: ledger dir: %w", err)
 	}
+	// A keyless signer writes the keyless format; the verifier holds the two
+	// together (v6 ⇔ keyid sigstore), so the writer sets both from one test.
+	keyless := signer != nil && signer.SigningKeyID() == ledger.KeyIDSigstore
+	if keyless && (e.Kind == KindSigner || e.Kind == KindCheckpoint) {
+		return "", fmt.Errorf("auditpush: refusing to place a keyless %s entry — a signer change or checkpoint must be signed by the ledger's root key", e.Kind)
+	}
 	e.Format = LedgerFileFormat
+	if keyless {
+		e.Format = ledger.Format6
+	}
 	e.Prev = prev
 	// Pushed is PLACEMENT time — when the entry entered THIS directory —
 	// so file order and chain order agree by construction: an entry
@@ -537,7 +315,7 @@ func placeEntry(dir string, e LedgerEntry, prev string, signer LedgerSigner) (st
 		e.ScanUID = scanUID(e.Bundle.Scan, e.Pushed)
 		e.Bundle.Scan.ScanUID = e.ScanUID
 	}
-	e.Hash, e.KeyID, e.Signature, e.Raw = "", "", "", nil
+	e.Hash, e.KeyID, e.Signature, e.Sigstore, e.Raw = "", "", "", nil, nil
 	// The signer names itself BEFORE the hash is taken, because from
 	// corral-ledger-4 the name is part of what is hashed and signed. Set it
 	// after hashing and the name would sit outside the hash again, which is
@@ -548,7 +326,7 @@ func placeEntry(dir string, e LedgerEntry, prev string, signer LedgerSigner) (st
 		// spelling a Problem, so the writer refuses it rather than place an
 		// entry its own reader rejects.
 		if e.KeyID == LegacyRootKeyID {
-			return "", fmt.Errorf("auditpush: refusing to place %s", legacyKeyIDProblem)
+			return "", fmt.Errorf("auditpush: refusing to place %s", ledger.LegacyKeyIDProblem)
 		}
 	}
 	h, err := EntryHash(e)
@@ -558,6 +336,14 @@ func placeEntry(dir string, e LedgerEntry, prev string, signer LedgerSigner) (st
 	e.Hash = h
 	if signer != nil {
 		raw, _ := hex.DecodeString(h)
+		if keyless {
+			// Exactly the bytes the keyless verifier checks, from the one
+			// function both sides call, so they cannot disagree about what
+			// was signed.
+			if raw, err = ledger.KeylessArtifact(e); err != nil {
+				return "", err
+			}
+		}
 		keyID, sig, err := signer.Sign(raw)
 		if err != nil {
 			return "", fmt.Errorf("auditpush: sign ledger entry: %w", err)
@@ -565,7 +351,13 @@ func placeEntry(dir string, e LedgerEntry, prev string, signer LedgerSigner) (st
 		if keyID != e.KeyID {
 			return "", fmt.Errorf("auditpush: the signer named itself %q before hashing and %q when signing — the hashed bytes would not describe the key that signed them", e.KeyID, keyID)
 		}
-		e.Signature = hex.EncodeToString(sig)
+		if keyless {
+			// The bundle is the signature; Signature stays empty, as a
+			// keyless entry carrying both is a Problem.
+			e.Sigstore = json.RawMessage(sig)
+		} else {
+			e.Signature = hex.EncodeToString(sig)
+		}
 	}
 	// The file name: the placement time, then what the entry is about — a
 	// scan's commit and uid, a retraction's target, a checkpoint's replaced
@@ -629,21 +421,15 @@ func placeEntry(dir string, e LedgerEntry, prev string, signer LedgerSigner) (st
 	return name, nil
 }
 
-// ReadLedgerEntry reads one entry file (plain or gzipped).
+// ReadLedgerEntry reads one entry file (plain or gzipped). The parsing is
+// ledger.ParseEntry's, shared with the browser reader, so the two cannot
+// disagree about what an entry is.
 func ReadLedgerEntry(path string) (LedgerEntry, error) {
-	raw, err := readMaybeGzip(path)
+	raw, err := os.ReadFile(path) // #nosec G304 -- a file under the ledger directory the operator named
 	if err != nil {
 		return LedgerEntry{}, err
 	}
-	var e LedgerEntry
-	if err := json.Unmarshal(raw, &e); err != nil {
-		return LedgerEntry{}, fmt.Errorf("auditpush: %s: %w", filepath.Base(path), err)
-	}
-	e.Raw, e.File = raw, filepath.Base(path)
-	if !knownLedgerFormat(e.Format) {
-		return LedgerEntry{}, fmt.Errorf("auditpush: %s: format %q, want %q", filepath.Base(path), e.Format, LedgerFileFormat)
-	}
-	return e, nil
+	return ledger.ParseEntry(filepath.Base(path), raw)
 }
 
 func boolToInt(v bool) int {
@@ -653,208 +439,36 @@ func boolToInt(v bool) int {
 	return 0
 }
 
-// ChainCheck is one entry's verdict from VerifyLedgerDir.
-type ChainCheck struct {
-	File    string
-	ScanUID string
-	// Hash is the entry's own hash, so a caller can compare the chain's HEAD
-	// against an anchor held outside the directory. Truncation from the end
-	// leaves every surviving link valid and is invisible from within.
-	Hash   string
-	Commit string
-	HashOK bool // the stored Hash matches the entry's bytes
-	LinkOK bool // Prev names the previous entry's Hash (true for a genesis entry)
-	Signed bool // the entry carries a signature
-	SigOK  bool // the signature verifies under the key resolved for KeyID (false when unsigned, unresolved or no pub given)
-	KeyID  string
-	// Signer is who the chain says holds KeyID at this entry: "root", the
-	// name a register entry gave the key, or "" (unsigned, or a key the
-	// chain does not hold here). Filled with or without a key; only SigOK
-	// says the signature was checked.
-	Signer  string
-	Problem string // "" when nothing is wrong
-	Genesis bool
-	// Kind is the entry's kind; Note says what a retraction or checkpoint
-	// entry means for the chain, in words, when nothing is wrong with it.
-	Kind string
-	Note string
+// ChainCheck is one entry's verdict; see ledger.ChainCheck.
+type ChainCheck = ledger.ChainCheck
+
+// VerifyLedgerDir reads a ledger directory and walks its chain under the
+// root key pub (nil: a keyless read). The walk itself is ledger.Verify, which
+// builds for the browser too; this is the directory half.
+//
+// It passes ONLY the root key, so a keyless (corral-ledger-6) entry in the
+// chain fails here naming the repository it was not told. A reader that can
+// meet keyless entries uses VerifyLedgerDirTrust.
+func VerifyLedgerDir(dir string, pub ed25519.PublicKey) ([]ChainCheck, error) {
+	return VerifyLedgerDirTrust(dir, ledger.Trust{RootPub: pub})
 }
 
-// VerifyLedgerDir walks the chain: every entry's hash against its bytes,
-// every Prev against its predecessor, every signature against the key the
-// chain held for its keyid at that point (when pub, the ROOT key, is
-// given). It never stops at the first failure — a reader wants the whole
-// picture — and it never calls an unsigned entry verified.
-//
-// Until corral-ledger-5 every signature was checked against pub alone: one
-// key for the whole ledger, and keyid a label. Now pub is the root, and the
-// root's signer entries say which other keys may sign from where on, so a
-// second machine signs under its own key instead of holding a copy of the
-// root's. A key is good only between its registration and its revocation;
-// an entry it signed outside that window is a Problem, whatever its
-// signature says.
-func VerifyLedgerDir(dir string, pub ed25519.PublicKey) ([]ChainCheck, error) {
+// VerifyLedgerDirTrust is VerifyLedgerDir with the whole of what a reader
+// trusts: the root key, the repository a keyless entry must name, and the
+// Sigstore root it is checked against. Each is the caller's explicit
+// decision; nothing here fills one in.
+func VerifyLedgerDirTrust(dir string, t ledger.Trust) ([]ChainCheck, error) {
 	entries, err := ReadLedgerDir(dir)
 	if err != nil {
 		return nil, err
 	}
-	checks, _ := verifyEntries(entries, pub)
-	return checks, nil
+	return ledger.Verify(entries, t), nil
 }
 
-// verifyEntries is THE walk: VerifyLedgerDir's checks, and the signer set
-// it leaves at the head, which is what ActiveSigners returns. One loop for
-// both, so a reader and a writer can never disagree about who was
-// registered when.
-func verifyEntries(entries []LedgerEntry, pub ed25519.PublicKey) ([]ChainCheck, *signerSet) {
-	set := newSignerSet(entries, pub)
-	// Whether this chain is a signed one at all: an entirely unsigned ledger
-	// is honest (no key was configured), but a single unsigned entry among
-	// signed ones is a hole, not a style.
-	anySigned := false
-	for _, e := range entries {
-		if e.Signature != "" {
-			anySigned = true
-			break
-		}
-	}
-	var out []ChainCheck
-	prevHash := ""
-	seen := map[string]bool{}
-	seenReview := map[string]bool{}
-	for i, e := range entries {
-		c := ChainCheck{ScanUID: e.ScanUID, Hash: e.Hash, Commit: e.Bundle.Scan.Commit, KeyID: e.KeyID, Genesis: i == 0, Kind: e.Kind, File: e.File}
-		h, herr := EntryHash(e)
-		c.HashOK = herr == nil && h == e.Hash
-		c.LinkOK = e.Prev == prevHash
-		c.Signed = e.Signature != ""
-		// The key is resolved BEFORE the signature is checked, from the set
-		// as it stands at this entry — never from the entry's own claim.
-		name, key, keyProblem := set.resolve(e)
-		c.Signer = name
-		if c.Signed && key != nil {
-			raw, _ := hex.DecodeString(e.Hash)
-			sig, _ := hex.DecodeString(e.Signature)
-			c.SigOK = ed25519.Verify(key, raw, sig)
-		}
-		shapeProblem := EntryShapeProblem(e)
-		changeProblem := ""
-		if e.Kind == KindSigner && shapeProblem == "" {
-			changeProblem = set.changeProblem(e)
-		}
-		seedProblem := ""
-		if e.Kind == KindCheckpoint && i == 0 && shapeProblem == "" {
-			seedProblem = set.seedProblem(e)
-		}
-		uidOK := true
-		if e.Format != ledgerFormat2 && e.IsScan() && e.Bundle.Scan != (ScanRow{}) {
-			uidOK = e.ScanUID == scanUID(e.Bundle.Scan, e.Pushed) && e.Bundle.Scan.ScanUID == e.ScanUID
-		}
-		switch {
-		case !c.HashOK:
-			c.Problem = "entry bytes do not match its hash — edited after it was written"
-		case !uidOK:
-			c.Problem = "scan_uid does not derive from the entry's scan row and pushed time — the identity was altered, or minted elsewhere"
-		case !c.LinkOK:
-			c.Problem = fmt.Sprintf("prev %.12s does not name the previous entry (%.12s) — an entry was removed, reordered or inserted", e.Prev, prevHash)
-		case seedProblem != "" && seedProblem == errCheckpointNotRoot:
-			// Before keyProblem: a checkpoint by a non-root key is not "an
-			// unregistered key" — the set is empty at a genesis — it is a
-			// genesis claiming authority to hand out keys.
-			c.Problem = seedProblem
-		case keyProblem != "":
-			c.Problem = keyProblem
-		case c.Signed && key != nil && !c.SigOK && name == "root":
-			c.Problem = "signature does not verify under the given key"
-		case c.Signed && key != nil && !c.SigOK:
-			c.Problem = fmt.Sprintf("signature does not verify under the key registered as %s (%s)", name, e.KeyID)
-		case e.Kind == KindCheckpoint && i != 0:
-			c.Problem = fmt.Sprintf("a checkpoint at position %d — a checkpoint is a genesis and stands only at the start of a chain", i+1)
-		case shapeProblem != "":
-			c.Problem = shapeProblem
-		case seedProblem != "":
-			c.Problem = seedProblem
-		case changeProblem != "":
-			c.Problem = changeProblem
-		case e.Kind == KindSigner:
-			c.Note = changeNote(e.Signer)
-		case e.Kind == KindCheckpoint:
-			c.Note = fmt.Sprintf("chain begins at a checkpoint: %d earlier entries (through %s, head %.12s) are not present", e.Checkpoint.Entries, e.Checkpoint.Through.UTC().Format("2006-01-02"), e.Checkpoint.Head)
-		case e.Kind == KindRetract && !seen[e.Retracts]:
-			c.Problem = fmt.Sprintf("retracts %.12s, which is not an earlier entry of this chain", e.Retracts)
-		case e.Kind == KindRetract:
-			c.Note = fmt.Sprintf("retracts %.12s: %s", e.Retracts, e.Reason)
-		case e.Kind == KindReview:
-			rep, cr, hy := e.Review.Counts()
-			c.Commit = e.Review.Commit
-			c.Note = fmt.Sprintf("review of %s by %s: %d reproduced, %d code-read, %d hypothesis", e.Review.Scope, e.Review.ReviewerModel, rep, cr, hy)
-		case e.Kind == KindAdjudication && !seenReview[strings.SplitN(e.Adjudication.Adjudicates, "#", 2)[0]]:
-			// The target must be a REVIEW. `seen` held every entry hash, so
-			// an adjudication naming a scan — or another adjudication —
-			// passed as though a finding had been ruled on. A ruling on
-			// something that has no findings is not a ruling.
-			c.Problem = "an adjudication of a finding whose review is not an earlier entry of this chain"
-		case e.Kind == KindAdjudication:
-			c.Note = fmt.Sprintf("%s %s by %s: %s", e.Adjudication.Verdict, shortRef(e.Adjudication.Adjudicates), e.Adjudication.By, e.Adjudication.Reason)
-		}
-		if e.Format == ledgerFormat2 && c.Problem == "" {
-			c.Note = strings.TrimSpace(c.Note + " · " + ledgerFormat2 + ": hashed in the sparse form (a recorded false or zero is not distinguished from an absent one) and its scan_uid is not derivable from the entry")
-			c.Note = strings.TrimPrefix(c.Note, "· ")
-		}
-		// Pre-corral-ledger-4 the signer NAME is not covered by the hash, so
-		// it is a label the entry asserts about itself rather than something
-		// the signature vouches for. Say so, rather than printing it as
-		// though it were established.
-		// UNSIGNED among signed entries: disclosed, NOT a failure.
-		//
-		// It was a Problem for one round. That refused a legitimate chain —
-		// one that gained a certify key partway, which is what a machine
-		// without a key produces and is exactly how CI runs — and because
-		// RequireIntactChain now guards checkpoint, append, push and
-		// LoadDir, a mixed chain became unusable at all four doors. Caught
-		// by CI, which has no key, while every local run passed because this
-		// machine has one.
-		//
-		// A missing signature and a REMOVED one are indistinguishable from
-		// inside the file, so the honest thing is to say what is true — this
-		// entry is unsigned and its neighbours are not — and let the reader
-		// judge. An over-strict fix is worse than the finding it closes; that
-		// is now twice in one day.
-		if !c.Signed && anySigned && c.Problem == "" {
-			c.Note = strings.TrimPrefix(strings.TrimSpace(c.Note+" · UNSIGNED, in a chain whose other entries are signed — it was written where no certify key was configured, or a signature was removed; the chain itself is intact either way"), "· ")
-		}
-		if !keyIDIsHashed(e.Format) && c.Signed && c.Problem == "" {
-			c.Note = strings.TrimPrefix(strings.TrimSpace(c.Note+" · signer name is self-reported: "+e.Format+" does not cover keyid in the hash, so it is not vouched for by the signature (the signature itself is checked)"), "· ")
-		}
-		// The set moves only on a signer entry that checked CLEAN, and only
-		// after its own check: the change cannot vouch for itself, and a
-		// tampered or forged one leaves the set as it was.
-		if e.Kind == KindSigner && c.Problem == "" {
-			set.apply(e.Signer)
-		}
-		if e.Kind == KindCheckpoint && i == 0 && c.Problem == "" {
-			set.seed(e.Checkpoint.Signers)
-		}
-		out = append(out, c)
-		prevHash = e.Hash
-		seen[e.Hash] = true
-		if e.Kind == KindReview {
-			seenReview[e.Hash] = true
-		}
-	}
-	return out, set
-}
-
-// shortRef renders "<hash>#Rn" as "<hash12>#Rn".
-func shortRef(ref string) string {
-	h, id, _ := strings.Cut(ref, "#")
-	if len(h) > 12 {
-		h = h[:12]
-	}
-	if id == "" {
-		return h
-	}
-	return h + "#" + id
+// verifyEntries is ledger.VerifyWithSigners: the checks and the signer set at
+// the head, from one walk.
+func verifyEntries(entries []LedgerEntry, pub ed25519.PublicKey) ([]ChainCheck, *ledger.SignerSet) {
+	return ledger.VerifyWithSigners(entries, ledger.Trust{RootPub: pub})
 }
 
 // WriteReview appends a KindReview entry.
@@ -922,17 +536,9 @@ func WriteAdjudication(dir, ref, verdict, by, reason string, signer LedgerSigner
 	return AppendLedgerEntry(dir, LedgerEntry{Kind: KindAdjudication, Adjudication: a}, signer)
 }
 
-// Adjudications returns, for every finding ref, the NEWEST adjudication in
-// entries — a later verdict by anyone supersedes an earlier one, and both
-// stay in the chain.
+// Adjudications returns the newest verdict per finding ref; see ledger.Adjudications.
 func Adjudications(entries []LedgerEntry) map[string]Adjudication {
-	out := map[string]Adjudication{}
-	for _, e := range entries {
-		if e.Kind == KindAdjudication && e.Adjudication != nil {
-			out[e.Adjudication.Adjudicates] = *e.Adjudication
-		}
-	}
-	return out
+	return ledger.Adjudications(entries)
 }
 
 // WriteRetraction appends a KindRetract entry naming target (an entry's
@@ -997,11 +603,16 @@ func WriteRetraction(dir, target, reason string, signer LedgerSigner) (string, e
 // Signatures are not checked here: the callers do not all hold a key, and a
 // missing key must not read as a broken chain. Hashes, links, shape and
 // ordering are, which is what catches edited, removed or reordered bytes.
+//
+// Keyless entries are read the same way — ledger.VerifyIntegrity: their
+// shape is checked, their bundle is not — because the writer has no repository to
+// name, and a chain must stay appendable after its first keyless entry.
 func RequireIntactChain(dir string) error {
-	checks, err := VerifyLedgerDir(dir, nil)
+	entries, err := ReadLedgerDir(dir)
 	if err != nil {
 		return err
 	}
+	checks := ledger.VerifyIntegrity(entries)
 	for _, c := range checks {
 		if c.Problem != "" {
 			return fmt.Errorf("auditpush: %s does not verify (%s: %s)", dir, c.File, c.Problem)
@@ -1010,19 +621,8 @@ func RequireIntactChain(dir string) error {
 	return nil
 }
 
-// ChainHasSigners reports whether the chain registers signers at all: a
-// signer entry, or a leading checkpoint that carries a set.
-func ChainHasSigners(entries []LedgerEntry) bool {
-	for i, e := range entries {
-		if e.Kind == KindSigner {
-			return true
-		}
-		if i == 0 && e.Kind == KindCheckpoint && e.Checkpoint != nil && len(e.Checkpoint.Signers) > 0 {
-			return true
-		}
-	}
-	return false
-}
+// ChainHasSigners reports whether the chain registers signers at all; see ledger.ChainHasSigners.
+func ChainHasSigners(entries []LedgerEntry) bool { return ledger.ChainHasSigners(entries) }
 
 // WriteCheckpoint replaces every entry in dir with one KindCheckpoint
 // genesis that names the head it stood in for. The pruned files are
@@ -1048,6 +648,18 @@ func WriteCheckpoint(dir string, signer LedgerSigner, rootPub ed25519.PublicKey)
 	}
 	if len(entries) == 0 {
 		return "", 0, fmt.Errorf("auditpush: %s has no entries to checkpoint", dir)
+	}
+	// A ledger holding a keyless entry cannot be checkpointed. Chain control
+	// (who may sign, where the chain begins) stays with the root key, and the
+	// pruning below would delete entries a repository's identity vouched for,
+	// which the integrity-only read just under cannot tell apart from any
+	// other (it skips bundles). Refused here, at the one door, before
+	// anything is removed or written, whoever the caller and whatever it
+	// would sign with.
+	for _, e := range entries {
+		if e.KeyID == ledger.KeyIDSigstore {
+			return "", 0, fmt.Errorf("auditpush: %s holds keyless (sigstore) entries, so it cannot be checkpointed — chain control stays with the root key, and pruning would delete entries a repository's identity vouched for. Nothing written", dir)
+		}
 	}
 	// A checkpoint is the one verb that DESTROYS evidence, so it is the one
 	// verb that must look at it first. Pruning without verifying launders a
@@ -1096,7 +708,7 @@ func WriteCheckpoint(dir string, signer LedgerSigner, rootPub ed25519.PublicKey)
 				return "", 0, fmt.Errorf("auditpush: %s does not verify under the root key (%s: %s) — refusing to prune, because a checkpoint would sign a set the root never authorized", dir, c.File, c.Problem)
 			}
 		}
-		carried = set.list()
+		carried = set.List()
 		if len(carried) == 0 {
 			carried = nil
 		}
@@ -1122,77 +734,14 @@ func WriteCheckpoint(dir string, signer LedgerSigner, rootPub ed25519.PublicKey)
 	return name, len(entries), nil
 }
 
-// Retracted returns the hashes of every entry a KindRetract entry in
-// entries names.
-func Retracted(entries []LedgerEntry) map[string]LedgerEntry {
-	// A retraction that has ITSELF been retracted is not in force, so the
-	// entry it named comes back — retract, undo, redo, and the record
-	// alternates. Resolved in ONE REVERSE PASS: a retraction can only name
-	// an EARLIER entry, so walking from the newest backwards means every
-	// retraction that could void this one has already been decided.
-	//
-	// The first fix for this grew a monotone "void" set forward, which is
-	// wrong because voiding is not monotone — once a retraction is voided,
-	// everything it voided comes back — and it reported the original entry
-	// as NOT retracted at odd depth >= 3. Caught by a second cold review of
-	// this package, 2026-09-08, on the fix for the first one.
-	targeted := map[string]bool{} // named by an in-force retraction seen later in the chain
-	inForce := make([]LedgerEntry, 0, len(entries))
-	for i := len(entries) - 1; i >= 0; i-- {
-		e := entries[i]
-		if e.Kind != KindRetract {
-			continue
-		}
-		if targeted[e.Hash] {
-			continue // a later, in-force retraction retracted this one
-		}
-		inForce = append(inForce, e)
-		targeted[e.Retracts] = true
-	}
-	out := map[string]LedgerEntry{}
-	for _, e := range inForce {
-		out[e.Retracts] = e
-	}
-	return out
-}
+// Retracted returns every entry a retraction in force names; see ledger.Retracted.
+func Retracted(entries []LedgerEntry) map[string]LedgerEntry { return ledger.Retracted(entries) }
 
-// ScanEntries is the record as a reader should see it: the scan entries,
-// in chain order, with retracted ones left out. Every reader of the record
-// — the view, the prior, the verdict cache — goes through this, so a
-// retraction takes effect everywhere at once.
-func ScanEntries(entries []LedgerEntry) []LedgerEntry {
-	var out []LedgerEntry
-	for _, e := range LiveEntries(entries) {
-		if e.IsScan() {
-			out = append(out, e)
-		}
-	}
-	return out
-}
+// ScanEntries is the record as a reader should see it; see ledger.ScanEntries.
+func ScanEntries(entries []LedgerEntry) []LedgerEntry { return ledger.ScanEntries(entries) }
 
-// LiveEntries is every entry of every kind that stands: retracted entries
-// left out, and an adjudication of a retracted review left out with it.
-// A retraction used to reach scan entries only, so a retracted review's
-// rows and findings still loaded into the view and pushed to a warehouse
-// (ed079ca08965#R3); the view and the push go through this.
-func LiveEntries(entries []LedgerEntry) []LedgerEntry {
-	retracted := Retracted(entries)
-	var out []LedgerEntry
-	for _, e := range entries {
-		if _, gone := retracted[e.Hash]; gone {
-			continue
-		}
-		if e.Kind == KindAdjudication && e.Adjudication != nil {
-			if h, _, ok := cutRef(e.Adjudication.Adjudicates); ok {
-				if _, gone := retracted[h]; gone {
-					continue
-				}
-			}
-		}
-		out = append(out, e)
-	}
-	return out
-}
+// LiveEntries is every entry that stands; see ledger.LiveEntries.
+func LiveEntries(entries []LedgerEntry) []LedgerEntry { return ledger.LiveEntries(entries) }
 
 // ledgerFileNames lists entry files in push order (the same order
 // ReadLedgerDir returns, since names begin with the push timestamp).
@@ -1251,18 +800,14 @@ func ReadLedgerDir(dir string) ([]ledgerFile, error) {
 		if e.IsDir() || !isLedgerEntryName(e.Name()) {
 			continue
 		}
-		raw, err := readMaybeGzip(filepath.Join(scans, e.Name()))
+		raw, err := os.ReadFile(filepath.Join(scans, e.Name())) // #nosec G304 -- a file under the ledger directory the operator named
 		if err != nil {
 			return nil, err
 		}
-		var f ledgerFile
-		if err := json.Unmarshal(raw, &f); err != nil {
-			return nil, fmt.Errorf("auditpush: %s: %w", e.Name(), err)
+		f, err := ledger.ParseEntry(e.Name(), raw)
+		if err != nil {
+			return nil, err
 		}
-		if !knownLedgerFormat(f.Format) {
-			return nil, fmt.Errorf("auditpush: %s: format %q, want %q", e.Name(), f.Format, LedgerFileFormat)
-		}
-		f.Raw, f.File = raw, e.Name()
 		out = append(out, f)
 	}
 	// Chain order is Pushed order; the file name rides WITH its entry

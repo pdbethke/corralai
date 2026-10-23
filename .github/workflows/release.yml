@@ -98,6 +98,19 @@ jobs:
           fi
           echo "path=${RUNNER_TEMP}/notes.md" >> "$GITHUB_OUTPUT"
 
+      # The results site pins the verifier it runs to a release asset, so every
+      # release carries the browser verifier: ledger.wasm, the matching
+      # wasm_exec.js, and the sha256 the site pins. Built here, before the
+      # Release exists, so a failed build cancels the release instead of
+      # leaving a Release page with no verifier on it.
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build the browser ledger verifier (WASM)
+        run: scripts/build-ledger-wasm.sh "${RUNNER_TEMP}/wasm"
+
       - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -224,11 +237,17 @@ jobs:
               --title "$title" \
               --notes-file "${{ steps.notes.outputs.path }}" \
               --prerelease \
-              --verify-tag
+              --verify-tag \
+              "${RUNNER_TEMP}/wasm/ledger.wasm" \
+              "${RUNNER_TEMP}/wasm/wasm_exec.js" \
+              "${RUNNER_TEMP}/wasm/ledger.wasm.sha256"
           else
             gh release create "$version" \
               --title "$title" \
               --notes-file "${{ steps.notes.outputs.path }}" \
               --latest \
-              --verify-tag
+              --verify-tag \
+              "${RUNNER_TEMP}/wasm/ledger.wasm" \
+              "${RUNNER_TEMP}/wasm/wasm_exec.js" \
+              "${RUNNER_TEMP}/wasm/ledger.wasm.sha256"
           fi

@@ -22,25 +22,36 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"regexp"
 	"sort"
 
 	"github.com/pdbethke/corralai/internal/auditpush"
+	"github.com/pdbethke/corralai/internal/ledger"
 	"github.com/pdbethke/corralai/internal/recordview"
 )
 
+// repoRE is the shape of a GitHub owner/name; the same as corral verify's
+// --ledger-repo.
+var repoRE = regexp.MustCompile(`^[A-Za-z0-9-]+/[A-Za-z0-9._-]+$`)
+
 func main() {
-	ledger := flag.String("ledger", "", "the ledger directory (a checkout of the ledger branch)")
+	ledgerDir := flag.String("ledger", "", "the ledger directory (a checkout of the ledger branch)")
 	out := flag.String("out", "", "directory to write the static site into (index.html + entry/<hash>.html)")
 	pubHex := flag.String("pubkey", "", "hex Ed25519 public key to verify signatures against; else $CORRALAI_LEDGER_PUBKEY; with neither, signatures are NOT checked and the page says so")
+	repo := flag.String("repo", "", "REQUIRED: the GitHub repository (owner/name) whose Actions identity signed the ledger's keyless entries; they are checked against exactly this one")
 	siteChrome := flag.Bool("site-chrome", false, "leave the slot at the top of every page that the corralai.dev build fills with the site's own header")
 	flag.Parse()
 
-	if *ledger == "" {
+	if *ledgerDir == "" {
 		fmt.Fprintln(os.Stderr, "ledgersite: -ledger is required")
 		os.Exit(2)
 	}
-	if !auditpush.IsLedgerDir(*ledger) {
-		fmt.Fprintf(os.Stderr, "ledgersite: %s is not a ledger directory\n", *ledger)
+	if !repoRE.MatchString(*repo) {
+		fmt.Fprintf(os.Stderr, "ledgersite: -repo is required and must be owner/name, got %q\n", *repo)
+		os.Exit(2)
+	}
+	if !auditpush.IsLedgerDir(*ledgerDir) {
+		fmt.Fprintf(os.Stderr, "ledgersite: %s is not a ledger directory\n", *ledgerDir)
 		os.Exit(2)
 	}
 
@@ -54,12 +65,18 @@ func main() {
 		os.Exit(2)
 	}
 
-	entries, err := loadEntries(*ledger)
+	entries, err := loadEntries(*ledgerDir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ledgersite: reading entries: %v\n", err)
 		os.Exit(1)
 	}
-	checks, err := auditpush.VerifyLedgerDir(*ledger, pub)
+	root, err := ledger.PublicGoodTrustedRoot()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ledgersite: the embedded Sigstore root: %v\n", err)
+		os.Exit(1)
+	}
+	trust := ledger.Trust{RootPub: pub, Repo: *repo, SigstoreRoot: root}
+	checks, err := auditpush.VerifyLedgerDirTrust(*ledgerDir, trust)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ledgersite: verifying chain: %v\n", err)
 		os.Exit(1)
@@ -67,7 +84,21 @@ func main() {
 
 	fmt.Printf("entries read:      %d\n", len(entries))
 	fmt.Printf("chain checks:      %d\n", len(checks))
-	fmt.Printf("signatures:        %s\n", map[bool]string{true: "checked against the explicit key", false: "NOT CHECKED (no -pubkey, no CORRALAI_LEDGER_PUBKEY)"}[pub != nil])
+	// Counted per entry from the check itself, as the page does: a keyless
+	// entry is checked against -repo with no key at all.
+	signed, checked, ok := 0, 0, 0
+	for _, c := range checks {
+		if c.Signed {
+			signed++
+		}
+		if c.SigChecked {
+			checked++
+		}
+		if c.SigOK {
+			ok++
+		}
+	}
+	fmt.Printf("signatures:        %d signed, %d checked, %d verified; %d NOT CHECKED (an ed25519 one needs -pubkey or CORRALAI_LEDGER_PUBKEY, a keyless one -repo)\n", signed, checked, ok, signed-checked)
 
 	live := auditpush.LiveEntries(entries)
 	retracted := auditpush.Retracted(entries)
@@ -119,7 +150,7 @@ func main() {
 	if *out == "" {
 		return
 	}
-	v, err := recordview.Load(*ledger, pub)
+	v, err := recordview.LoadTrust(*ledgerDir, trust)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ledgersite: loading record: %v\n", err)
 		os.Exit(1)

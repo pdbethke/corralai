@@ -49,7 +49,7 @@ func warpLikeScan(hash string, sourcePushed bool) auditpush.LedgerEntry {
 }
 
 func okCheck(e auditpush.LedgerEntry) auditpush.ChainCheck {
-	return auditpush.ChainCheck{File: e.File, Hash: e.Hash, HashOK: true, LinkOK: true, Signed: true, SigOK: true}
+	return auditpush.ChainCheck{File: e.File, Hash: e.Hash, HashOK: true, LinkOK: true, Signed: true, SigOK: true, SigChecked: true}
 }
 
 func renderOne(t *testing.T, entries []auditpush.LedgerEntry) (index string, page func(short string) string) {
@@ -60,7 +60,7 @@ func renderOne(t *testing.T, entries []auditpush.LedgerEntry) (index string, pag
 		checks = append(checks, okCheck(entries[i]))
 	}
 	out := t.TempDir()
-	if err := WriteStatic(out, Build(entries, checks, true)); err != nil {
+	if err := WriteStatic(out, Build(entries, checks)); err != nil {
 		t.Fatal(err)
 	}
 	return read(t, filepath.Join(out, "index.html")), func(short string) string {
@@ -208,25 +208,25 @@ func TestTheIntervalIsOverDistinctEdits(t *testing.T) {
 // given. With a key, it is a failure, and the entry says who the chain says
 // held the key.
 func TestEntryBannerSaysWhoSignedAndDoesNotCallAFailureUnchecked(t *testing.T) {
-	render := func(sigsChecked bool, c auditpush.ChainCheck) string {
+	render := func(c auditpush.ChainCheck) string {
 		entries := []auditpush.LedgerEntry{warpLikeScan("abcdef0123456789abcdef", true)}
 		entries[0].File = entries[0].Hash + ".json.gz"
 		c.File, c.Hash, c.HashOK, c.LinkOK = entries[0].File, entries[0].Hash, true, true
 		out := t.TempDir()
-		if err := WriteStatic(out, Build(entries, []auditpush.ChainCheck{c}, sigsChecked)); err != nil {
+		if err := WriteStatic(out, Build(entries, []auditpush.ChainCheck{c})); err != nil {
 			t.Fatal(err)
 		}
 		return read(t, filepath.Join(out, "entry", shortHash(entries[0].Hash)+".html"))
 	}
-	ok := render(true, auditpush.ChainCheck{Signed: true, SigOK: true, Signer: "laptop"})
+	ok := render(auditpush.ChainCheck{Signed: true, SigOK: true, SigChecked: true, Signer: "laptop"})
 	if !strings.Contains(ok, "signed by laptop") {
 		t.Error("the page does not say who signed")
 	}
-	bad := render(true, auditpush.ChainCheck{Signed: true, Problem: "key not registered"})
+	bad := render(auditpush.ChainCheck{Signed: true, SigChecked: true, Problem: "key not registered"})
 	if strings.Contains(bad, "not checked (no key given)") || !strings.Contains(bad, "signature does NOT verify") {
 		t.Error("a signature that failed under a given key was rendered as unchecked")
 	}
-	nokey := render(false, auditpush.ChainCheck{Signed: true})
+	nokey := render(auditpush.ChainCheck{Signed: true})
 	if !strings.Contains(nokey, "not checked (no key given)") {
 		t.Error("with no key the page must say signatures were not checked")
 	}

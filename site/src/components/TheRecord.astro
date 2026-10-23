@@ -107,9 +107,10 @@ GROUP BY 1 ORDER BY 2 DESC;</code></pre>
         tail and the remaining chain is still valid: detecting that truncation
         needs an external record of the expected head. The ledger owner can
         delete files; verification is not a guarantee of completeness.
-        On a runner with no key, the
-        recipe attests the entry file itself with GitHub's keyless attestation
-        instead. <code>corral ledger verify</code> walks the
+        On a runner with no key, the Action signs each entry of a public
+        repository keylessly with the repository's GitHub identity, and the
+        recipe also attests the entry file with GitHub's keyless attestation;
+        a private repository's entries are written unsigned. <code>corral ledger verify</code> walks the
         chain from a clean checkout; pass a trusted public key to check its
         signatures. Corral's supported correction path does not edit an entry
         in place: a wrong entry is retracted by a later entry that

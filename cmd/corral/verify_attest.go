@@ -62,6 +62,7 @@ func runVerifyAttest(args []string, stdout, stderr io.Writer) int {
 	rekorIndexFlag := fs.Int64("rekor-index", -1, "also confirm this Rekor log index's entry matches the envelope (default: read the index --db recorded for this scan, if --db was given)")
 	pubFlag := fs.String("pub", "", "hex-encoded Ed25519 public key to verify against. With --attest: default the local certify key (CORRALAI_CERTIFY_KEY_FILE). With --ledger: default $CORRALAI_LEDGER_PUBKEY, else signatures are NOT CHECKED — the local certify key is never used for a ledger")
 	ledgerFlag := fs.String("ledger", "", "walk a LEDGER DIRECTORY (the JSON entries `--push <dir>/` writes, one per scan, each naming the previous entry's hash and carrying a signature): every entry's hash against its bytes, every link against its predecessor, every signature against --pub, else $CORRALAI_LEDGER_PUBKEY, else NOT CHECKED (the local certify key is never used to verify a ledger). One line per entry; an edited entry, a removed one, or a foreign signature is named. Instead of --attest, not with it")
+	ledgerRepoFlag := fs.String("ledger-repo", ledgerRepoUsageDefault, ledgerRepoUsage)
 	if err := fs.Parse(args); err != nil {
 		return flagParseExit(err)
 	}
@@ -70,7 +71,7 @@ func runVerifyAttest(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintln(stderr, "corral verify: --ledger walks a directory; --attest checks one statement — one or the other")
 			return 2
 		}
-		return runVerifyLedger(d, *pubFlag, "", stdout, stderr)
+		return runVerifyLedger(d, *pubFlag, *ledgerRepoFlag, "", stdout, stderr)
 	}
 	if fs.NArg() > 0 {
 		fmt.Fprintf(stderr, "corral verify: unexpected argument(s) %v\n", fs.Args())
@@ -597,7 +598,7 @@ func verifyRekorInclusion(ctx context.Context, envelope []byte, stmt map[string]
 // unsigned entry is reported, not failed, since the chain still orders it;
 // and a signed entry with no key to check against is "signed, unverified",
 // never "verified".
-func runVerifyLedger(dir, pubFlag, expectHead string, stdout, stderr io.Writer) int {
+func runVerifyLedger(dir, pubFlag, repoFlag, expectHead string, stdout, stderr io.Writer) int {
 	// The key is explicit or absent — never inferred. The local certify key
 	// is deliberately NOT a fallback here: it would make the machine's owner
 	// and a stranger reach different verdicts on the same record.
@@ -606,7 +607,12 @@ func runVerifyLedger(dir, pubFlag, expectHead string, stdout, stderr io.Writer) 
 		fmt.Fprintf(stderr, "corral verify: %v\n", err)
 		return 2
 	}
-	checks, err := auditpush.VerifyLedgerDir(strings.TrimRight(dir, "/"), pub)
+	trust, err := ledgerTrust(pub, repoFlag)
+	if err != nil {
+		fmt.Fprintf(stderr, "corral verify: %v\n", err)
+		return 2
+	}
+	checks, err := auditpush.VerifyLedgerDirTrust(strings.TrimRight(dir, "/"), trust)
 	if err != nil {
 		fmt.Fprintf(stderr, "corral verify: --ledger %s: %v\n", dir, err)
 		return 2
@@ -626,7 +632,11 @@ func runVerifyLedger(dir, pubFlag, expectHead string, stdout, stderr io.Writer) 
 		case c.Problem != "":
 			mark, what = "✗", c.Problem
 			bad++
-		case c.Signed && pub != nil:
+		case c.Keyless && c.SigOK:
+			what += fmt.Sprintf(", signed keylessly by %s and verified against the Sigstore root, for %s", c.Signer, trust.Repo)
+		case c.Signed && c.SigChecked:
+			// Checked per entry (ChainCheck.SigChecked), never inferred from
+			// whether a key was given; Problem above caught a failed check.
 			what += fmt.Sprintf(", signed by %s and verified against %s", signerLabel(c), pubSource)
 		case c.Signed:
 			what += fmt.Sprintf(", signed by %s — unverified, signature NOT CHECKED (no --pub, no %s)", signerLabel(c), auditpush.LedgerPubKeyEnv)

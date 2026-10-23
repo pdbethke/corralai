@@ -410,7 +410,7 @@ func TestAuditedParentSHAIsTheMutantsOwn(t *testing.T) {
 		"o/r", "deadbeef", "", bundleMeta{Passed: boolPtrT(false)})
 
 	target := filepath.Join(t.TempDir(), "w.duckdb")
-	if _, err := pushBundle(target, b); err != nil {
+	if _, err := pushBundle(target, b, io.Discard); err != nil {
 		t.Fatalf("pushBundle: %v", err)
 	}
 
@@ -494,7 +494,7 @@ func TestPushSourceCarriesTheAuthoredTestButNoMutantCode(t *testing.T) {
 			b := buildBundle(scan, 11, files, mutants, nil, nil, auditpush.Link{},
 				tc.sourcePushed, "o/r", "deadbeef", "", bundleMeta{})
 			target := filepath.Join(t.TempDir(), "w.duckdb")
-			if _, err := pushBundle(target, b); err != nil {
+			if _, err := pushBundle(target, b, io.Discard); err != nil {
 				t.Fatalf("pushBundle: %v", err)
 			}
 			got := queryRows(t, target, `SELECT count(*) FROM corral_audits WHERE authored_test IS NOT NULL`)
@@ -533,7 +533,7 @@ func TestWarehouseRowsSHA256HashesWhatIsPushed(t *testing.T) {
 	}
 
 	target := filepath.Join(t.TempDir(), "w.duckdb")
-	if _, err := pushBundle(target, b); err != nil {
+	if _, err := pushBundle(target, b, io.Discard); err != nil {
 		t.Fatalf("pushBundle: %v", err)
 	}
 	// Rebuild the bundle's source-bearing fields from what the warehouse
@@ -673,7 +673,7 @@ func TestEventTimestampsAreTheEventsOwn(t *testing.T) {
 	b := buildBundle(scanstore.Scan{Repo: "o/r", Commit: "deadbeef"}, 11, nil, nil, nil, events,
 		auditpush.Link{}, false, "o/r", "deadbeef", "", bundleMeta{})
 	target := filepath.Join(t.TempDir(), "w.duckdb")
-	if _, err := pushBundle(target, b); err != nil {
+	if _, err := pushBundle(target, b, io.Discard); err != nil {
 		t.Fatalf("pushBundle: %v", err)
 	}
 
@@ -739,7 +739,7 @@ func TestVerifyRowsHashSurvivesTheRealReader(t *testing.T) {
 		t.Fatalf("hash: %v", err)
 	}
 	target := filepath.Join(t.TempDir(), "w.duckdb")
-	if _, err := pushBundle(target, b); err != nil {
+	if _, err := pushBundle(target, b, io.Discard); err != nil {
 		t.Fatalf("pushBundle: %v", err)
 	}
 	db, err := sql.Open("duckdb", target)

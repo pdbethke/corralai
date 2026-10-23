@@ -122,39 +122,55 @@ func (w *rekorWitness) Anchor(ctx context.Context, dsseEnvelope []byte) (Entry, 
 		return Entry{}, fmt.Errorf("transparency: building dsse proposed entry: %w", err)
 	}
 
-	rc, err := client.GetRekorClient(w.rekorURL)
+	logEntry, err := SubmitLogEntry(ctx, w.rekorURL, pe)
 	if err != nil {
-		return Entry{}, fmt.Errorf("transparency: creating rekor client: %w", err)
+		return Entry{}, err
+	}
+	return w.toEntry(logEntry)
+}
+
+// SubmitLogEntry submits pe to the Rekor v1 instance at rekorURL and returns
+// the created entry. The create response may omit
+// the Merkle inclusion proof, so the entry is then re-fetched by UUID, once.
+// Whether a proof is still missing after that is the caller's to judge: the
+// dsse witness records the entry regardless, the keyless ledger signer
+// refuses it. The one door both use, so the refetch rule cannot drift.
+func SubmitLogEntry(ctx context.Context, rekorURL string, pe models.ProposedEntry) (models.LogEntryAnon, error) {
+	if rekorURL == "" {
+		return models.LogEntryAnon{}, errors.New("transparency: rekor URL is required")
+	}
+	rc, err := client.GetRekorClient(rekorURL)
+	if err != nil {
+		return models.LogEntryAnon{}, fmt.Errorf("transparency: creating rekor client: %w", err)
 	}
 
 	params := entries.NewCreateLogEntryParams().WithContext(ctx)
 	params.SetProposedEntry(pe)
 	resp, err := rc.Entries.CreateLogEntry(params)
 	if err != nil {
-		return Entry{}, fmt.Errorf("transparency: submitting entry to rekor: %w", err)
+		return models.LogEntryAnon{}, fmt.Errorf("transparency: submitting entry to rekor: %w", err)
 	}
 
 	logEntry, ok := resp.Payload[resp.ETag]
 	if !ok {
-		return Entry{}, errors.New("transparency: rekor response did not contain the created entry")
+		return models.LogEntryAnon{}, errors.New("transparency: rekor response did not contain the created entry")
 	}
 
 	// The create response may omit the Merkle inclusion proof; re-fetch by
-	// UUID until it is present, so VerifyInclusion has real proof material.
+	// UUID, so the caller has real proof material.
 	if logEntry.Verification == nil || logEntry.Verification.InclusionProof == nil {
-		fetched, ferr := w.fetchEntryByUUID(ctx, rc, resp.ETag)
+		fetched, ferr := fetchEntryByUUID(ctx, rc, resp.ETag)
 		if ferr != nil {
-			return Entry{}, ferr
+			return models.LogEntryAnon{}, ferr
 		}
 		logEntry = fetched
 	}
-
-	return w.toEntry(logEntry)
+	return logEntry, nil
 }
 
 // fetchEntryByUUID retrieves a fully-populated log entry (with inclusion
 // proof) by its UUID.
-func (w *rekorWitness) fetchEntryByUUID(ctx context.Context, rc *genclient.Rekor, uuid string) (models.LogEntryAnon, error) {
+func fetchEntryByUUID(ctx context.Context, rc *genclient.Rekor, uuid string) (models.LogEntryAnon, error) {
 	p := entries.NewGetLogEntryByUUIDParams().WithContext(ctx).WithEntryUUID(uuid)
 	resp, err := rc.Entries.GetLogEntryByUUID(p)
 	if err != nil {

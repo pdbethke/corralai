@@ -562,6 +562,25 @@ func TestWorkspaceRunnerNeverHandsTheSuiteCorralsSecrets(t *testing.T) {
 	}
 }
 
+// The Action's workspace substrate runs the suite in a job that may hold
+// id-token: write. Handed the token request credentials, the suite could mint
+// a Fulcio certificate for the repository and write a ledger entry that
+// verifies as the repository's own.
+func TestWorkspaceRunnerNeverHandsTheSuiteTheCIIdentity(t *testing.T) {
+	for _, n := range []string{"ACTIONS_ID_TOKEN_REQUEST_URL", "ACTIONS_ID_TOKEN_REQUEST_TOKEN", "ACTIONS_RUNTIME_TOKEN"} {
+		t.Setenv(n, "zz-the-runs-identity")
+	}
+	root := wsTree(t, map[string]string{"a.txt": "x\n"})
+	w := NewWorkspaceRunner(root, 0)
+	_, out, err := w.RunTestVerbose(context.Background(), nil, []string{"sh", "-c", "env"})
+	if err != nil {
+		t.Fatalf("RunTestVerbose: %v", err)
+	}
+	if strings.Contains(out, "zz-the-runs-identity") || !strings.Contains(out, "PATH=") {
+		t.Errorf("the test command received the run's CI identity, or lost PATH:\n%s", out)
+	}
+}
+
 // TestWorkspaceRunnerNeverHandsTheSuiteTheDesktop: the suite runs on the
 // host once per mutant, and with the operator's display it opened real
 // windows on their screen, again and again (Warp's UI tests, 2026-10-21). The

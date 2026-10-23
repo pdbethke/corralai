@@ -99,7 +99,7 @@ func retractedReviewLedger(t *testing.T) (dir, hash, reason string) {
 func TestUIHonoursARetractedReview(t *testing.T) {
 	t.Setenv("CORRALAI_CERTIFY_KEY_FILE", filepath.Join(t.TempDir(), "no-key"))
 	dir, hash, reason := retractedReviewLedger(t)
-	h := uiHandler(fakeSeal{}, dir)
+	h := uiHandler(fakeSeal{}, dir, "")
 	chain := uiGet(t, h, "/chain-1.html").Body.String()
 	if !strings.Contains(chain, "RETRACTED: "+reason) || !strings.Contains(chain, "RETRACTED with the review it adjudicates") {
 		t.Fatalf("the chain must mark the retracted review and its adjudication:\n%s", chain)

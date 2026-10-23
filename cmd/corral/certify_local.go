@@ -168,6 +168,15 @@ func runCertifyLocalAs(args []string, unattributed bool, stdout, stderr io.Write
 			return 2
 		}
 	}
+	// The ledger entry is signed at the END of the run; a signer that cannot
+	// be used (an unknown CORRALAI_LEDGER_SIGNER, keyless with no OIDC token)
+	// is refused now, before anything is spent — as certify --repo does.
+	if !*noLedgerFlag || strings.TrimSpace(*ledgerFlag) != "" {
+		if err := preflightLedgerSigner(); err != nil {
+			fmt.Fprintf(stderr, "corral certify --local: the ledger signer cannot be used: %v — nothing was spent\n", err)
+			return 2
+		}
+	}
 
 	// The shadow draw happens HERE, before the registry resolves any seat, so
 	// the drawn member — as typed — is resolved exactly like a named one.

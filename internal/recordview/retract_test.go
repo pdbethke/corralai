@@ -40,7 +40,7 @@ func renderAll(t *testing.T, entries []auditpush.LedgerEntry) (Site, string) {
 		entries[i].File = entries[i].Hash + ".json.gz"
 		checks = append(checks, okCheck(entries[i]))
 	}
-	s := Build(entries, checks, true)
+	s := Build(entries, checks)
 	out := t.TempDir()
 	if err := WriteStatic(out, s); err != nil {
 		t.Fatal(err)
@@ -99,7 +99,7 @@ func TestTheChainMarksWhatDoesNotStandBesideTheVerifierNote(t *testing.T) {
 		checks = append(checks, okCheck(entries[i]))
 	}
 	checks[0].Note = "signer name is self-reported"
-	s := Build(entries, checks, true)
+	s := Build(entries, checks)
 	notes := map[string]string{}
 	for _, c := range s.Chain {
 		notes[c.Hash] = c.Note

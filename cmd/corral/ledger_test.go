@@ -122,7 +122,7 @@ func TestLedgerAppendRelinksToTheCurrentHead(t *testing.T) {
 	target := t.TempDir()
 	staging := t.TempDir()
 	push := func(dir, commit string) {
-		if _, err := pushBundle(dir+"/", auditpush.Bundle{Scan: auditpush.ScanRow{Repo: "r", Commit: commit, ScanID: 1}, Files: []auditpush.Row{{Repo: "r", ScanID: 1, Path: "a.py"}}}); err != nil {
+		if _, err := pushBundle(dir+"/", auditpush.Bundle{Scan: auditpush.ScanRow{Repo: "r", Commit: commit, ScanID: 1}, Files: []auditpush.Row{{Repo: "r", ScanID: 1, Path: "a.py"}}}, io.Discard); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -275,7 +275,7 @@ func TestLedgerPushMovesTheRecordAndSkipsWhatTheWarehouseHolds(t *testing.T) {
 	writeCacheTestEntry(t, dir, []scanstore.File{{Path: "a.go", Disposition: "audited", Gradable: true, KillRate: ptrF(0.5), AuthoredTest: "func TestA(t *testing.T) {}", VerdictJSON: "{}"}})
 	writeCacheTestEntry(t, dir, []scanstore.File{{Path: "b.go", Disposition: "audited", Gradable: true, KillRate: ptrF(0.1)}})
 	entries, _ := auditpush.ReadLedgerDir(dir)
-	signer, _, _ := ledgerSignerFromLocalKey()
+	signer, _, _ := selectLedgerSigner(io.Discard)
 	if _, err := auditpush.WriteRetraction(dir, entries[1].Hash, "wrong commit", signer); err != nil {
 		t.Fatal(err)
 	}
@@ -340,7 +340,7 @@ func TestLedgerSignerUsesFingerprint(t *testing.T) {
 	t.Setenv("CORRALAI_CERTIFY_KEY", seed)
 	raw, _ := hex.DecodeString(seed)
 	want := auditpush.KeyFingerprint(ed25519.NewKeyFromSeed(raw).Public().(ed25519.PublicKey))
-	s, label, err := ledgerSignerFromLocalKey()
+	s, label, err := selectLedgerSigner(io.Discard)
 	if err != nil {
 		t.Fatal(err)
 	}

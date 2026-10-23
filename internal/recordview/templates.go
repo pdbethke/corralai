@@ -60,23 +60,24 @@ ul.tight{margin:.4em 0;padding-left:1.2em} ul.tight li{margin:.15em 0}
 table{font-size:.8rem}th,td{padding:6px}}
 `
 
-// verifyBanner is shared: it must say NOT CHECKED when no key was supplied,
-// which is neither a pass nor a failure. `corral verify` sets that standard.
+// verifyBanner is shared: it must say NOT CHECKED for every signature that
+// was not checked (counted per entry), which is neither a pass nor a failure. `corral verify` sets that standard.
 const verifyBanner = `
 {{define "emptyrecord"}}<div class="banner warn"><p><strong>The record is empty.</strong> This ledger has no entries yet:
 <code>corral certify</code> and <code>corral review</code> write them.</p></div>{{end}}
 {{define "noledger"}}<div class="banner warn"><p><strong>Not a ledger directory.</strong> This target is a warehouse, so there is no chain, no reviews and no verdicts to show here. Point <code>corral ui --db</code> at a ledger directory (<code>.corral/ledger</code>) to see them.</p></div>{{end}}
 {{define "chainclaim"}}{{if not .HasLedger}}{{template "noledger"}}{{else if .LedgerEntries}}{{template "verify" .}}{{else}}{{template "emptyrecord"}}{{end}}{{end}}
 {{define "verify"}}
-<div class="banner{{if .ChainProblems}} bad{{else if or .Unverified (not .SigsChecked)}} warn{{end}}">
+<div class="banner{{if .ChainProblems}} bad{{else if or .Unverified .SigsUnchecked}} warn{{end}}">
   <p><strong>Chain:</strong>
   {{if .ChainProblems}}<span class="chip bad">{{.ChainProblems}} problem(s)</span>
   {{else if .Unverified}}<span class="chip ok">intact</span> across the {{.VerifiedEntries}} entries that were checked — every one's hash matches its bytes and every link names its predecessor.
   {{else}}<span class="chip ok">intact</span> — every entry's hash matches its bytes and every link names its predecessor, across all {{.LedgerEntries}} entries.{{end}}</p>
   {{if .Unverified}}<p><span class="chip warn">not verified</span> {{.Unverified}} {{if eq .Unverified 1}}entry{{else}}entries{{end}} changed while being read — not verified; reload.</p>{{end}}
   <p><strong>Signatures:</strong>
-  {{if .SigsChecked}}<span class="chip ok">{{.SigsOK}}/{{.SigsTotal}} verified</span>
-  {{else}}<span class="chip warn">not checked</span> — this page was generated without a public key, so signature validity is <em>unknown</em>. That is not a pass and not a failure. {{.SigsTotal}} of {{.VerifiedEntries}} checked entries carry a signature; verify them yourself with the command below.{{end}}</p>
+  {{if not .SigsTotal}}<span class="chip warn">unsigned</span> — none of the {{.VerifiedEntries}} checked entries carries a signature.
+  {{else if not .SigsUnchecked}}<span class="chip ok">{{.SigsOK}}/{{.SigsTotal}} verified</span>
+  {{else}}<span class="chip warn">{{.SigsOK}}/{{.SigsTotal}} verified</span>{{if .SigsUncheckedKey}} — no root key given: {{.SigsUncheckedKey}} ed25519 signature{{if ne .SigsUncheckedKey 1}}s{{end}} not checked{{end}}. An unchecked signature's validity is <em>unknown</em>: that is not a pass and not a failure. Verify them yourself with the command below.{{end}}</p>
 </div>
 {{end}}
 `
@@ -192,7 +193,7 @@ git checkout corral/ledger      # {{.LedgerEntries}} gzipped JSON entries under 
 
 # walk the chain: every hash against its bytes, every link against its predecessor{{if .PubKeyHex}},
 # and every signature against the ledger's published key{{end}}
-corral ledger verify{{if .PubKeyHex}} --pub {{.PubKeyHex}}{{end}} .</pre>
+corral ledger verify{{if .PubKeyHex}} --pub {{.PubKeyHex}}{{end}}{{if .LedgerRepo}} --ledger-repo {{.LedgerRepo}}{{end}} .</pre>
 {{if .PubKeyHex}}<p class="small">That key is the repository's published <code>LEDGER_PUBKEY</code>, and it is the
 key this page checked the signatures against. Leave out <code>--pub</code> and corral uses <em>your</em> local
 certify key if you have one, which did not sign this record, or checks no signatures at all if you
@@ -220,7 +221,7 @@ const entryBanner = `
   {{if not .Verified}}<span class="chip warn">not verified</span> — it was appended while the ledger was being read, so the chain check never saw it. Its hash, link and signature are unknown, not failed: reload to check them.
   {{else}}<span class="chip{{if .ChainHashOK}} ok{{else}} bad{{end}}">hash {{if .ChainHashOK}}matches its bytes{{else}}MISMATCH{{end}}</span>
   <span class="chip{{if .ChainLinkOK}} ok{{else}} bad{{end}}">link {{if .ChainLinkOK}}{{if .Genesis}}genesis{{else}}names its predecessor{{end}}{{else}}BROKEN{{end}}</span>
-  {{if .Signed}}{{if not .KeyGiven}}<span class="chip warn">signed, not checked (no key given)</span>
+  {{if .Signed}}{{if not .SigChecked}}<span class="chip warn">signed, not checked ({{if .Keyless}}no repository given{{else}}no key given{{end}})</span>
   {{else if .SigOK}}<span class="chip ok">signature verified</span>
   {{else}}<span class="chip bad">signature does NOT verify</span>{{end}}{{if .Signer}} <span class="small">signed by {{.Signer}}</span>{{end}}
   {{else}}<span class="chip warn">unsigned</span>{{end}}{{end}}
@@ -458,7 +459,7 @@ const chainTmpl = `<!doctype html>
 <td class="small">{{.Note}}{{if .ChainProblem}} <span class="chip bad">{{.ChainProblem}}</span>{{end}}</td>
 <td>{{if not .Verified}}<span class="chip warn">not verified</span>
 {{else if not .Signed}}<span class="chip warn">unsigned</span>
-{{else if not .KeyGiven}}<span class="chip warn">signed, not checked</span>
+{{else if not .SigChecked}}<span class="chip warn">signed, not checked</span>
 {{else if .SigOK}}<span class="chip ok">verified</span>
 {{else}}<span class="chip bad">does NOT verify</span>{{end}}</td>
 </tr>{{end}}

@@ -11,8 +11,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/pdbethke/corralai/internal/auditpush"
+	"github.com/pdbethke/corralai/internal/statedir"
 )
 
 // `corral ledger` — the verbs for a ledger directory, the signed, hash-linked
@@ -47,6 +49,7 @@ func runLedger(args []string, stdout, stderr io.Writer) int {
 		fs.SetOutput(stderr)
 		pub := fs.String("pub", "", "hex-encoded Ed25519 public key to verify signatures against (default: $CORRALAI_LEDGER_PUBKEY; with neither, signatures are NOT CHECKED — the local certify key is never used)")
 		expectHead := fs.String("expect-head", "", "the hash this chain's newest entry must have, held from OUTSIDE the directory (a git ref, a Rekor receipt, a note). A chain verifies against itself, so removing the newest entries leaves the rest valid and no check inside can see it; this is the anchor that does. A prefix is accepted, but at least 12 hex characters — a short one names too many entries to be an anchor")
+		ledgerRepo := fs.String("ledger-repo", ledgerRepoUsageDefault, ledgerRepoUsage)
 		if err := fs.Parse(args[1:]); err != nil {
 			return flagParseExit(err)
 		}
@@ -54,7 +57,7 @@ func runLedger(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintln(stderr, "corral ledger verify: name one directory")
 			return 2
 		}
-		return runVerifyLedger(fs.Arg(0), *pub, *expectHead, stdout, stderr)
+		return runVerifyLedger(fs.Arg(0), *pub, *ledgerRepo, *expectHead, stdout, stderr)
 	}
 	fmt.Fprintf(stderr, "corral ledger: unknown verb %q\n%s", args[0], ledgerUsage)
 	return 2
@@ -111,7 +114,7 @@ func runLedgerAppend(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "corral ledger append: %v\n", err)
 		return 1
 	}
-	signer, signed, kerr := ledgerSignerFromLocalKey()
+	signer, signed, kerr := selectLedgerSigner(stderr)
 	if kerr != nil {
 		fmt.Fprintf(stderr, "corral ledger append: %v\n", kerr)
 		return 1
@@ -150,15 +153,45 @@ func defaultLedgerDir(repoDir string) string {
 	return filepath.Join(repoDir, ".corral", "ledger")
 }
 
-// ledgerSignerFromLocalKey is the signer every ledger verb writes with:
-// the local certify key when one is configured, else nil (unsigned, and
-// said to be by every reader). "Not configured" (errNoLocalKey) is the only
-// case that may write unsigned. Any other key error — the legacy-location
-// refusal above all — is returned, and the caller writes nothing: an
-// unsigned entry is permanent in a hash-linked chain, and one written because
-// the key was merely in the old place would sit forever in a ledger whose
-// every other entry verifies against LEDGER_PUBKEY.
-func ledgerSignerFromLocalKey() (auditpush.LedgerSigner, string, error) {
+// selectLedgerSigner is THE door every ledger writer goes through — certify
+// --repo's entry and its machine copy, certify --local's entries (both via
+// pushBundle), review and review adjudicate, and the ledger verbs append,
+// retract and checkpoint — so how an entry is signed is decided in one place
+// and cannot differ between verbs.
+//
+// CORRALAI_LEDGER_SIGNER chooses (auditpush.KeylessSignerSelected):
+//
+//   - "sigstore": the keyless signer, the GitHub Actions run's own identity
+//     through Sigstore (auditpush.NewGitHubSigstoreSigner). A certify key,
+//     if one is configured, is NOT used, and one line on stderr says so —
+//     once per process, as the signer itself is built once per process, so
+//     a run's entries share one certificate. A keyless signer that cannot
+//     be built (no OIDC token) is refused: it never falls back to the key or
+//     to unsigned, because the operator chose a signer and an entry made any
+//     other way is a permanent record they did not ask for.
+//   - unset or blank: the local certify key when one is configured, else
+//     nil (unsigned, and said to be by every reader). "Not configured"
+//     (errNoLocalKey) is the only case that may write unsigned. Any other
+//     key error — the legacy-location refusal above all — is returned, and
+//     the caller writes nothing: an unsigned entry is permanent in a
+//     hash-linked chain, and one written because the key was merely in the
+//     old place would sit forever in a ledger whose every other entry
+//     verifies against LEDGER_PUBKEY.
+//   - anything else: refused, naming the accepted value.
+//
+// Every refusal wraps errSignerUnusable.
+func selectLedgerSigner(stderr io.Writer) (auditpush.LedgerSigner, string, error) {
+	keyless, err := auditpush.KeylessSignerSelected()
+	if err != nil {
+		return nil, "", fmt.Errorf("%w: %w, so nothing was written", errSignerUnusable, err)
+	}
+	if keyless {
+		s, err := processKeylessLedgerSigner(stderr)
+		if err != nil {
+			return nil, "", fmt.Errorf("%w: %s=%s: %w, so nothing was written (it never falls back to a key or to unsigned)", errSignerUnusable, auditpush.LedgerSignerEnv, auditpush.LedgerSignerSigstore, err)
+		}
+		return s, "signed keylessly (Sigstore, this run's GitHub identity)", nil
+	}
 	priv, kerr := loadLocalCertifyKeyIfConfigured()
 	switch {
 	case kerr == nil:
@@ -170,13 +203,84 @@ func ledgerSignerFromLocalKey() (auditpush.LedgerSigner, string, error) {
 	case errors.Is(kerr, errNoLocalKey):
 		return nil, "unsigned", nil
 	}
-	return nil, "", fmt.Errorf("%w, so nothing was written (an unsigned entry would be permanent): %w", errKeyUnusable, kerr)
+	return nil, "", fmt.Errorf("%w: the local certify key: %w, so nothing was written (an unsigned entry would be permanent)", errSignerUnusable, kerr)
 }
 
-// errKeyUnusable marks ledgerSignerFromLocalKey's refusal, so a caller whose
+// errSignerUnusable marks selectLedgerSigner's refusal, so a caller whose
 // other write errors are fail-open (a full disk never changes a verdict) can
 // tell this one apart.
-var errKeyUnusable = errors.New("the local certify key cannot be used")
+var errSignerUnusable = errors.New("the ledger signer cannot be used")
+
+// newKeylessLedgerSigner builds the keyless signer. A variable only so a
+// test can supply one backed by an in-process Sigstore (ledgertest).
+var newKeylessLedgerSigner = func() (auditpush.LedgerSigner, error) {
+	return auditpush.NewGitHubSigstoreSigner()
+}
+
+// keylessLedgerSigner is the process's keyless signer, built on first use
+// and kept: every entry the run writes then shares one Fulcio certificate
+// (one OIDC token, one certificate, a log entry per ledger entry). A build
+// that fails is not kept, so the error is returned to every caller.
+var keylessLedgerSigner struct {
+	mu sync.Mutex
+	s  auditpush.LedgerSigner
+}
+
+func processKeylessLedgerSigner(stderr io.Writer) (auditpush.LedgerSigner, error) {
+	keylessLedgerSigner.mu.Lock()
+	defer keylessLedgerSigner.mu.Unlock()
+	if keylessLedgerSigner.s != nil {
+		return keylessLedgerSigner.s, nil
+	}
+	s, err := newKeylessLedgerSigner()
+	if err != nil {
+		return nil, err
+	}
+	if v := certifyKeyConfigured(); v != "" {
+		fmt.Fprintf(stderr, "corral: %s=%s — ledger entries are signed keylessly; the certify key (%s) is not used for them\n", auditpush.LedgerSignerEnv, auditpush.LedgerSignerSigstore, v)
+	}
+	keylessLedgerSigner.s = s
+	return s, nil
+}
+
+// resetKeylessLedgerSigner forgets the process's keyless signer (tests).
+func resetKeylessLedgerSigner() {
+	keylessLedgerSigner.mu.Lock()
+	keylessLedgerSigner.s = nil
+	keylessLedgerSigner.mu.Unlock()
+}
+
+// certifyKeyConfigured names where a certify key would have come from —
+// the variable that is set, or the key file at the default path — or ""
+// when none is. It only looks: nothing is read, and nothing is created.
+func certifyKeyConfigured() string {
+	for _, v := range []string{"CORRALAI_CERTIFY_KEY", "CORRALAI_CERTIFY_KEY_FILE"} {
+		if strings.TrimSpace(os.Getenv(v)) != "" {
+			return v
+		}
+	}
+	if p, err := statedir.Path(statedir.CertifyKey); err == nil {
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+	}
+	return ""
+}
+
+// preflightLedgerSigner asks, before a paid run, what selectLedgerSigner
+// would refuse at its end and can be known without the network: an unknown
+// CORRALAI_LEDGER_SIGNER, or keyless signing where this process has no OIDC
+// token or repository.
+func preflightLedgerSigner() error {
+	keyless, err := auditpush.KeylessSignerSelected()
+	if err != nil {
+		return err
+	}
+	if keyless {
+		return auditpush.CheckKeylessSigning()
+	}
+	return nil
+}
 
 func runLedgerRetract(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("corral ledger retract", flag.ContinueOnError)
@@ -193,7 +297,7 @@ func runLedgerRetract(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	dir, target := strings.TrimRight(fs.Arg(0), "/"), fs.Arg(1)
-	signer, signed, kerr := ledgerSignerFromLocalKey()
+	signer, signed, kerr := selectLedgerSigner(stderr)
 	if kerr != nil {
 		fmt.Fprintf(stderr, "corral ledger retract: %v\n", kerr)
 		return 1
@@ -258,8 +362,15 @@ func runLedgerCheckpoint(args []string, stdout, stderr io.Writer) int {
 		}
 		signer, rootPub, signed = root, rpub, "signed by root "+root.KeyID
 	} else {
+		// A checkpoint is a genesis: where the chain begins stays with the
+		// ledger's root key, and the verifier refuses a keyless one. Said
+		// here, before any signer is built or anything written.
+		if keyless, _ := auditpush.KeylessSignerSelected(); keyless {
+			fmt.Fprintf(stderr, "corral ledger checkpoint: %s=%s signs keylessly, and a checkpoint must be signed by the ledger's root key or the local certify key — unset %s to checkpoint. Nothing written\n", auditpush.LedgerSignerEnv, auditpush.LedgerSignerSigstore, auditpush.LedgerSignerEnv)
+			return 2
+		}
 		var kerr error
-		signer, signed, kerr = ledgerSignerFromLocalKey()
+		signer, signed, kerr = selectLedgerSigner(stderr)
 		if kerr != nil {
 			fmt.Fprintf(stderr, "corral ledger checkpoint: %v\n", kerr)
 			return 1

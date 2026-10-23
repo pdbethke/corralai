@@ -11,7 +11,77 @@ history of any release, `git log v0.3.4..v0.3.5`.
 
 ## [Unreleased]
 
+### Added
+
+- **A ledger entry can be signed keylessly, by the GitHub repository that ran
+  the audit.** Set `CORRALAI_LEDGER_SIGNER=sigstore` in a GitHub Actions run
+  (with the `id-token: write` permission, which it requires) and every ledger entry corral writes there is signed
+  through Sigstore with the workflow's own identity instead of a key an
+  ephemeral runner cannot keep. Such an entry is format `corral-ledger-6`, keyid
+  `sigstore`, and carries a Sigstore bundle in place of an Ed25519 signature.
+  Any other value is refused naming `sigstore`; unset keeps today's behaviour.
+  `corral verify --ledger`, `corral ledger verify` and `corral ui` take a new
+  `--ledger-repo owner/name`, which a keyless entry is checked against; it is
+  required only when the chain holds one, and without it that entry fails with
+  a Problem saying so. It is never guessed from the scan's repo, the directory
+  or git config. The Sigstore root the entry is checked against is the
+  public-good root embedded in the release.
+  Keyless signing has been exercised only against an in-process test
+  Fulcio and Rekor; it has not yet been run end to end in GitHub Actions.
+  `corral ledger checkpoint` and `corral ledger signer add|revoke|list` verify
+  under the root key only and cannot operate on a ledger that holds keyless
+  entries: each refuses before writing or deleting anything, saying the
+  ledger holds keyless entries (signer changes and checkpoints are root-key
+  operations on key-signed ledgers, and pruning would delete entries a
+  repository's identity vouched for).
+  **Older readers:** a corral release before this one cannot read, and refuses
+  the whole ledger, once it holds a `corral-ledger-6` entry. Key-signed and unsigned entries are still
+  written as `corral-ledger-5`, so a ledger nobody signs keylessly stays
+  readable by older releases.
+- **Every release carries the browser verifier.** `ledger.wasm`, the
+  matching `wasm_exec.js` and `ledger.wasm.sha256` are attached to each
+  GitHub Release, so a page can pin the exact verifier a release shipped: the
+  same chain, signature and record rules `corral verify` runs, compiled for
+  the browser.
+
 ### Changed
+
+- **The GitHub Action now signs ledger entries keylessly by itself on a
+  public repository.** When the `ledger` input is set, the repository is
+  public (`github.event.repository.private` is exactly `false`), the job
+  grants `id-token: write` and no certify key is in the step's environment
+  (`CORRALAI_CERTIFY_KEY` or `CORRALAI_CERTIFY_KEY_FILE`), the Action sets
+  `CORRALAI_LEDGER_SIGNER=sigstore` for the rest of the job. The documented
+  ledger recipe already grants `id-token: write` for its attestation step,
+  so **existing users of that recipe will, on upgrading, start writing
+  `corral-ledger-6` entries**, which corral releases before this one refuse
+  (the whole ledger, not just the entry), and **each signature is a public,
+  permanent Sigstore Rekor entry naming the repository and workflow**,
+  including the recipe's retry `corral ledger append` after a push race. To
+  keep the old behaviour, put a certify key in the corral step's `env:`
+  (the Action never overrides one it can see), or do not grant the job
+  `id-token: write` (and drop the attestation step that needs it). A private
+  repository, an event that does not say whether the repository is public,
+  and a job with no OIDC token are written unsigned with a notice, as before.
+  Keyless signing has not yet been run end to end in GitHub Actions.
+- **Ledger readers recognise a gzipped entry by its first two bytes, not its
+  file name.** A `.json.gz` file holding plain JSON, and a `.json` file
+  holding gzip, are both read. A browser fetches bytes, and a CDN may serve a
+  `.json.gz` already decompressed.
+- **The GitHub Actions OIDC request credentials are removed from the
+  environment of everything the audit runs.** `ACTIONS_ID_TOKEN_REQUEST_URL`,
+  `ACTIONS_ID_TOKEN_REQUEST_TOKEN` and `ACTIONS_RUNTIME_TOKEN` are removed
+  from the audited suite's environment under `--substrate workspace`, from
+  review reproductions, from agent seats, from the Python preflight probe and
+  from `corral certify -- <cmd>`. corral's own signer still reads them. The
+  jail never passed them. **This is defence in depth, not isolation:** under
+  `--substrate workspace` (what the Action uses) the audited code runs as the
+  same user in the same process namespace, and can still read them from a
+  parent process's `/proc/<pid>/environ`. That was already true of a
+  certify key in the environment. So an entry the Action signs, keylessly or
+  with a key, shows that the repository's workflow published it, not that the
+  code under audit could not have influenced it. The jail substrate has its
+  own process namespace and is not affected.
 
 - **`--substrate workspace` no longer hands the audited suite your desktop
   session.** `DISPLAY`, `WAYLAND_DISPLAY`, `WAYLAND_SOCKET`, `XAUTHORITY` and

@@ -123,8 +123,11 @@ A certify prompt carries the **audited source**, and source can carry text
 aimed at a model. A seat that can read the host could be steered by it. Audit
 code you are willing to show a coding agent running as you.
 
-**The CLI inherits corral's whole environment.** It needs `PATH`, `HOME` and
-its own token variables, so corral does not strip anything. That means a
+**The CLI inherits corral's environment.** It needs `PATH`, `HOME` and
+its own token variables, so corral strips only the GitHub Actions identity
+(`ACTIONS_ID_TOKEN_REQUEST_URL`, `ACTIONS_ID_TOKEN_REQUEST_TOKEN`,
+`ACTIONS_RUNTIME_TOKEN`), with which an agent could sign a ledger entry as
+the repository. That means a
 vendor API key you exported for corral's API seats (`ANTHROPIC_API_KEY`,
 `OPENAI_API_KEY`, ...) reaches the agent CLI too. A CLI that prefers an API
 key over its subscription login will **bill that key** instead of the

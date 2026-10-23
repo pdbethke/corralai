@@ -5,6 +5,7 @@ package main
 import (
 	"bytes"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -122,7 +123,7 @@ func TestLedgerWritersRefuseALegacyOnlyKeyAndWriteNothingUnsigned(t *testing.T) 
 	// Staged with no key anywhere: unsigned is the honest, allowed outcome.
 	staging := t.TempDir()
 	b := auditpush.Bundle{Scan: auditpush.ScanRow{Repo: "r", Commit: "bbbb2222", ScanID: 1}, Files: []auditpush.Row{{Repo: "r", ScanID: 1, Path: "a.py"}}}
-	if _, err := pushBundle(staging+"/", b); err != nil {
+	if _, err := pushBundle(staging+"/", b, io.Discard); err != nil {
 		t.Fatalf("no key configured must still write (unsigned): %v", err)
 	}
 	names, _ := os.ReadDir(filepath.Join(staging, auditpush.ScansSubdir))
@@ -131,7 +132,7 @@ func TestLedgerWritersRefuseALegacyOnlyKeyAndWriteNothingUnsigned(t *testing.T) 
 	plantLegacyCertifyKey(t, home)
 	target := t.TempDir()
 
-	if _, err := pushBundle(target+"/", b); err == nil {
+	if _, err := pushBundle(target+"/", b, io.Discard); err == nil {
 		t.Error("pushBundle wrote a ledger entry with the key refused")
 	} else if !strings.Contains(err.Error(), "state migrate") {
 		t.Errorf("pushBundle's error does not carry the refusal: %v", err)

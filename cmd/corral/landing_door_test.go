@@ -459,7 +459,7 @@ func TestBaselineFlakyIsOneValueFromTheRunnerToTheWarehouse(t *testing.T) {
 	}
 
 	target := filepath.Join(t.TempDir(), "w.duckdb")
-	if _, err := pushBundle(target, b); err != nil {
+	if _, err := pushBundle(target, b, io.Discard); err != nil {
 		t.Fatalf("pushBundle: %v", err)
 	}
 	db, err := sql.Open("duckdb", target)

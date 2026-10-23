@@ -457,14 +457,17 @@ standard.
   worktree: it is 100+ signed, hash-linked, gzipped JSON entries under `scans/`
   on its own branch. Read it without disturbing your checkout:
   `git fetch origin corral/ledger && git archive origin/corral/ledger | tar -x -C <tmp>`.
-  Every rule about what the record MEANS lives in `internal/auditpush` —
-  `VerifyLedgerDir` (chain + signatures), `Adjudications`, `Retracted`,
-  `LiveEntries`, `ReadLedgerEntry`. Do not re-derive any of them; read the
-  directory with `auditpush.ReadLedgerDir`. (This paragraph used to say
-  `ReadLedgerDir` returns an unexported type and to walk `scans/*.json.gz`
-  yourself. That was wrong — its element type is an alias of the exported
-  `LedgerEntry` — and it told agents to rebuild the reader that
-  `scripts/ledgersite` now shares with the CLI.)
+  Every rule about what the record MEANS lives in `internal/ledger` —
+  `Verify` (chain + signatures), `Adjudications`, `Retracted`, `LiveEntries`,
+  `ParseEntry` — which builds for the browser too. `internal/auditpush` keeps
+  the directory I/O (`ReadLedgerDir`, `VerifyLedgerDir`, the writers). Do not
+  re-derive any of them; read the directory with `auditpush.ReadLedgerDir`.
+  (This paragraph used to say `ReadLedgerDir` returns an unexported type and
+  to walk `scans/*.json.gz` yourself. That was wrong — its element type is an
+  alias of the exported `LedgerEntry` — and it told agents to rebuild the
+  reader that `scripts/ledgersite` now shares with the CLI. The rules moved
+  from `auditpush` to `ledger` on 2026-10-22; `auditpush` keeps one-line
+  wrappers under the old names.)
 - `scripts/ledgersite/` + `scripts/gen-ledger-site.sh` — writes the public record
   page into `site/public/ledger/` (gitignored; generated at site-deploy time)
   using `internal/recordview`, the one renderer `corral ui` serves too. Needs **only Go and git** — no key, no jail, no bwrap — so it

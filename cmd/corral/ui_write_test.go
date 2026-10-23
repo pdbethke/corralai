@@ -118,7 +118,7 @@ func post(target, host, origin, auth string) *http.Request {
 }
 
 func TestUIWriteGuardsEveryWrite(t *testing.T) {
-	h := uiHandlerWith(fakeSeal{}, "", testWriter(t, "127.0.0.1:8787"))
+	h := uiHandlerWith(fakeSeal{}, "", "", testWriter(t, "127.0.0.1:8787"))
 	for _, tc := range []struct {
 		name string
 		req  *http.Request
@@ -147,7 +147,7 @@ func TestUIWriteGuardsEveryWrite(t *testing.T) {
 }
 
 func TestUIWriteAllowsIPv6Loopback(t *testing.T) {
-	h := uiHandlerWith(fakeSeal{}, "", testWriter(t, "[::1]:8787"))
+	h := uiHandlerWith(fakeSeal{}, "", "", testWriter(t, "[::1]:8787"))
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, post("/api/whoami", "[::1]:8787", "http://[::1]:8787", "Bearer tok"))
 	if rec.Code != http.StatusOK {
@@ -158,7 +158,7 @@ func TestUIWriteAllowsIPv6Loopback(t *testing.T) {
 // Reads keep working without a token in write mode — but only for the
 // allowed hosts; read-only mode is unchanged and has no Host check at all.
 func TestUIWriteModeReadsNeedNoTokenButDoNeedTheHost(t *testing.T) {
-	h := uiHandlerWith(fakeSeal{}, "", testWriter(t, "127.0.0.1:8787"))
+	h := uiHandlerWith(fakeSeal{}, "", "", testWriter(t, "127.0.0.1:8787"))
 	ok := httptest.NewRequest(http.MethodGet, "/", nil)
 	ok.Host = "127.0.0.1:8787"
 	rec := httptest.NewRecorder()
@@ -174,7 +174,7 @@ func TestUIWriteModeReadsNeedNoTokenButDoNeedTheHost(t *testing.T) {
 		t.Fatalf("foreign Host read in write mode: %d, want 421", rec.Code)
 	}
 	rec = httptest.NewRecorder()
-	uiHandler(fakeSeal{}, "").ServeHTTP(rec, bad) // read-only mode: unchanged
+	uiHandler(fakeSeal{}, "", "").ServeHTTP(rec, bad) // read-only mode: unchanged
 	if rec.Code != http.StatusOK {
 		t.Fatalf("read-only mode must not add a Host check: %d", rec.Code)
 	}
@@ -183,7 +183,7 @@ func TestUIWriteModeReadsNeedNoTokenButDoNeedTheHost(t *testing.T) {
 // Write routes do not exist at all in read-only mode.
 func TestUIReadOnlyModeHasNoWriteRoutes(t *testing.T) {
 	rec := httptest.NewRecorder()
-	uiHandler(fakeSeal{}, "").ServeHTTP(rec, post("/api/whoami", "127.0.0.1:8787", "http://127.0.0.1:8787", "Bearer tok"))
+	uiHandler(fakeSeal{}, "", "").ServeHTTP(rec, post("/api/whoami", "127.0.0.1:8787", "http://127.0.0.1:8787", "Bearer tok"))
 	if rec.Code == http.StatusOK {
 		t.Fatal("read-only mode answered a write route")
 	}
@@ -214,7 +214,7 @@ func writeReq(path, body string) *http.Request {
 func writerOver(t *testing.T, repo, ledger string) (*uiWriter, http.Handler) {
 	w := testWriter(t, "127.0.0.1:8787")
 	w.repo, w.ledgerDir, w.cli = repo, ledger, inProcessCLI(t)
-	return w, uiHandlerWith(fakeSeal{}, ledger, w)
+	return w, uiHandlerWith(fakeSeal{}, ledger, "", w)
 }
 
 func TestUIAdjudicateWritesTheSameEntryTheCLIWould(t *testing.T) {
@@ -383,7 +383,7 @@ func TestUICancelledRequestDoesNotCancelTheRecheckChild(t *testing.T) {
 		}
 		return `{"ref":"x","outcome":"still-reproduces"}`, "", 0, nil
 	}
-	h := uiHandlerWith(fakeSeal{}, ledger, w)
+	h := uiHandlerWith(fakeSeal{}, ledger, "", w)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // the request context is already cancelled before the handler ever runs
 	body, _ := json.Marshal(map[string]string{"ref": hash + "#R1"})
@@ -413,7 +413,7 @@ func TestUICancelledRequestDoesNotCancelTheAdjudicateChild(t *testing.T) {
 		}
 		return "ok", "", 0, nil
 	}
-	h := uiHandlerWith(fakeSeal{}, ledger, w)
+	h := uiHandlerWith(fakeSeal{}, ledger, "", w)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // the request context is already cancelled before the handler ever runs
 	body, _ := json.Marshal(map[string]string{"ref": hash + "#R1", "verdict": "confirm", "reason": "r"})
@@ -493,7 +493,7 @@ func TestUIPageHandlesTheTokenOnlyTheWaySpecified(t *testing.T) {
 			}
 		}
 	}
-	rec := uiGet(t, uiHandler(fakeSeal{}, ledger), "/verdicts.html")
+	rec := uiGet(t, uiHandler(fakeSeal{}, ledger, ""), "/verdicts.html")
 	if strings.Contains(rec.Body.String(), "api/adjudicate") || strings.Contains(rec.Body.String(), `data-verdict=`) {
 		t.Error("read-only mode serves the write controls")
 	}

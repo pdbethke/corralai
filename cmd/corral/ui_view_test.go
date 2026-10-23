@@ -26,7 +26,7 @@ func TestUIServesTheRecordPages(t *testing.T) {
 	if _, err := auditpush.AppendLedgerEntry(dir, auditpush.LedgerEntry{Bundle: auditpush.Bundle{Scan: auditpush.ScanRow{Repo: "r", Commit: "abcdef1234567890", CorralVersion: "vtest"}}}, nil); err != nil {
 		t.Fatal(err)
 	}
-	h := uiHandler(fakeSeal{rows: []sealRow{{Repo: "r", Path: "a.go", KillRate: 0.5}}}, dir)
+	h := uiHandler(fakeSeal{rows: []sealRow{{Repo: "r", Path: "a.go", KillRate: 0.5}}}, dir, "")
 	for _, p := range []string{"/", "/chain-1.html", "/audits-1.html", "/verdicts.html"} {
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, p, nil))
@@ -42,7 +42,7 @@ func TestUIServesTheRecordPages(t *testing.T) {
 }
 
 func TestUIShowsASealReadFailure(t *testing.T) {
-	h := uiHandler(fakeSeal{err: errors.New("locked")}, "")
+	h := uiHandler(fakeSeal{err: errors.New("locked")}, "", "")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
 	if !strings.Contains(rec.Body.String(), "Could not read the seal: locked") {

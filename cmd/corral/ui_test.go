@@ -9,6 +9,7 @@ import (
 	"github.com/pdbethke/corralai/internal/auditpush"
 	"github.com/pdbethke/corralai/internal/review"
 	"github.com/pdbethke/corralai/internal/scanstore"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -51,7 +52,7 @@ func TestUIServesTheSealAndRanksProvenGapsFirst(t *testing.T) {
 		{Repo: "r", Path: "low-rate-nothing-proven.go", KillRate: 0.20, Survivors: 9, ProvenMissed: 0, TS: time.Now()},
 		{Repo: "r", Path: "proven.go", KillRate: 0.75, Survivors: 12, ProvenMissed: 12, TS: time.Now()},
 	}}
-	rec := uiGet(t, uiHandler(st, ""), "/")
+	rec := uiGet(t, uiHandler(st, "", ""), "/")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
@@ -68,7 +69,7 @@ func TestUIServesTheSealAndRanksProvenGapsFirst(t *testing.T) {
 // TestUIServesTheEmbeddedPage: the pages ship IN the binary. No CDN, no
 // network — the same posture as the jail.
 func TestUIServesTheEmbeddedPage(t *testing.T) {
-	rec := uiGet(t, uiHandler(fakeSeal{}, ""), "/")
+	rec := uiGet(t, uiHandler(fakeSeal{}, "", ""), "/")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d serving the page, want 200", rec.Code)
 	}
@@ -155,7 +156,7 @@ func TestUIShowsTheChainTheReviewsAndTheVerdicts(t *testing.T) {
 	t.Setenv("CORRALAI_CERTIFY_KEY_FILE", filepath.Join(t.TempDir(), "certify_key"))
 	dir := filepath.Join(t.TempDir(), "ledger")
 	writeCacheTestEntry(t, dir, []scanstore.File{{Path: "a.go", Disposition: "audited", Gradable: true, KillRate: ptrF(0.5)}})
-	signer, _, _ := ledgerSignerFromLocalKey()
+	signer, _, _ := selectLedgerSigner(io.Discard)
 	// The UI verifies against an EXPLICIT key only; hand it the one that signed.
 	lk, kerr := loadLocalCertifyKeyIfConfigured()
 	if kerr != nil {
@@ -179,7 +180,7 @@ func TestUIShowsTheChainTheReviewsAndTheVerdicts(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	h := uiHandler(fakeSeal{}, dir)
+	h := uiHandler(fakeSeal{}, dir, "")
 	chain := uiGet(t, h, "/chain-1.html")
 	if chain.Code != http.StatusOK {
 		t.Fatalf("chain status %d: %s", chain.Code, chain.Body.String())
@@ -233,7 +234,7 @@ func TestUIShowsTheChainTheReviewsAndTheVerdicts(t *testing.T) {
 	}
 
 	// Not a directory: the chain page says so rather than inventing a chain.
-	none := uiGet(t, uiHandler(fakeSeal{}, ""), "/chain-1.html")
+	none := uiGet(t, uiHandler(fakeSeal{}, "", ""), "/chain-1.html")
 	if none.Code != http.StatusOK || !strings.Contains(none.Body.String(), "Not a ledger directory") {
 		t.Errorf("no directory: %d %s", none.Code, none.Body.String())
 	}
@@ -263,7 +264,7 @@ func TestUILedgerNeverVerifiesAgainstTheLocalKeyImplicitly(t *testing.T) {
 	t.Setenv(auditpush.LedgerPubKeyEnv, "")
 	dir := filepath.Join(t.TempDir(), "ledger")
 	writeCacheTestEntry(t, dir, []scanstore.File{{Path: "a.go", Disposition: "audited", Gradable: true, KillRate: ptrF(0.5)}})
-	h := uiHandler(fakeSeal{}, dir)
+	h := uiHandler(fakeSeal{}, dir, "")
 	rec := uiGet(t, h, "/chain-1.html")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status %d", rec.Code)

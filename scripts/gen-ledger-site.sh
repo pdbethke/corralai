@@ -11,6 +11,9 @@
 # itself, so a malformed one is refused naming the true source.
 set -euo pipefail
 
+# The repository whose Actions identity signs the ledger's keyless entries. It
+# is stated here, not inferred, because the check is "signed by THIS repository".
+LEDGER_REPO="pdbethke/corralai"
 BRANCH="${CORRALAI_LEDGER_BRANCH:-corral/ledger}"
 OUT="${1:-site/public/ledger}"
 PUBKEY=""
@@ -39,7 +42,7 @@ mkdir -p "$OUT"
 # so a reader who arrives at an entry from a PR or issue link can find out
 # what corral is.
 if [ -n "$PUBKEY" ]; then
-  go run ./scripts/ledgersite -ledger "$TMP" -out "$OUT" -pubkey "$PUBKEY" -site-chrome
+  go run ./scripts/ledgersite -ledger "$TMP" -out "$OUT" -repo "$LEDGER_REPO" -pubkey "$PUBKEY" -site-chrome
 else
-  go run ./scripts/ledgersite -ledger "$TMP" -out "$OUT" -site-chrome
+  go run ./scripts/ledgersite -ledger "$TMP" -out "$OUT" -repo "$LEDGER_REPO" -site-chrome
 fi

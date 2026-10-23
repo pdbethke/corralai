@@ -42,7 +42,7 @@ func TestAnEntryTheVerifierNeverSawIsNotVerifiedRatherThanFailed(t *testing.T) {
 	for i := range entries {
 		entries[i].File = entries[i].Hash + ".json.gz"
 	}
-	s := Build(entries, []auditpush.ChainCheck{okCheck(entries[0])}, true)
+	s := Build(entries, []auditpush.ChainCheck{okCheck(entries[0])})
 	if s.ChainProblems != 0 || s.Unverified != 1 {
 		t.Errorf("ChainProblems=%d Unverified=%d, want 0 and 1", s.ChainProblems, s.Unverified)
 	}
@@ -79,7 +79,7 @@ func TestTheVerifiersNoteReachesTheEntryPage(t *testing.T) {
 	c.Note = "UNSIGNED, in a chain whose other entries are signed"
 	c.Signed, c.SigOK = false, false
 	out := t.TempDir()
-	if err := WriteStatic(out, Build([]auditpush.LedgerEntry{e}, []auditpush.ChainCheck{c}, true)); err != nil {
+	if err := WriteStatic(out, Build([]auditpush.LedgerEntry{e}, []auditpush.ChainCheck{c})); err != nil {
 		t.Fatal(err)
 	}
 	page := read(t, out+"/entry/ab12cd34ef56.html")
@@ -97,7 +97,7 @@ func TestASignatureThatFailsUnderAGivenKeySaysItDoesNotVerify(t *testing.T) {
 	c := okCheck(e)
 	c.SigOK, c.Problem = false, "signature does not verify under the given key"
 	out := t.TempDir()
-	if err := WriteStatic(out, Build([]auditpush.LedgerEntry{e}, []auditpush.ChainCheck{c}, true)); err != nil {
+	if err := WriteStatic(out, Build([]auditpush.LedgerEntry{e}, []auditpush.ChainCheck{c})); err != nil {
 		t.Fatal(err)
 	}
 	page := read(t, out+"/entry/ab12cd34ef56.html")
@@ -115,9 +115,9 @@ func TestWithNoKeyASignedEntryIsSignedAndUnchecked(t *testing.T) {
 	e := warpLikeScan("ab12cd34ef56", true)
 	e.File = e.Hash + ".json.gz"
 	c := okCheck(e)
-	c.SigOK, c.KeyID = false, "corral-certify"
+	c.SigOK, c.SigChecked, c.KeyID = false, false, "corral-certify"
 	out := t.TempDir()
-	if err := WriteStatic(out, Build([]auditpush.LedgerEntry{e}, []auditpush.ChainCheck{c}, false)); err != nil {
+	if err := WriteStatic(out, Build([]auditpush.LedgerEntry{e}, []auditpush.ChainCheck{c})); err != nil {
 		t.Fatal(err)
 	}
 	page := read(t, out+"/entry/ab12cd34ef56.html")

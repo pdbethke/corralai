@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/pdbethke/corralai/internal/ledger"
 	"github.com/pdbethke/corralai/internal/review"
 )
 
@@ -267,14 +268,7 @@ func nilIfZero(t time.Time) *time.Time {
 	return &t
 }
 
-func cutRef(ref string) (hash, id string, ok bool) {
-	for i := 0; i < len(ref); i++ {
-		if ref[i] == '#' {
-			return ref[:i], ref[i+1:], true
-		}
-	}
-	return ref, "", false
-}
+func cutRef(ref string) (hash, id string, ok bool) { return ledger.CutRef(ref) }
 
 // sha256HexOf is the hash the statement (internal/certify) also computes
 // for a script or an output: "" for "", so an absent script has no hash.

@@ -136,6 +136,7 @@ fi
 STASHED=""
 TMP_JSON=""
 TMP_META=""
+TMP_HIST=""
 if [ -f deploy/demo/.env ]; then
   STASHED="deploy/demo/.env.stashed-by-export-golden-run"
   mv deploy/demo/.env "$STASHED"
@@ -146,6 +147,7 @@ fi
 cleanup(){
   [ -n "$TMP_JSON" ] && rm -f "$TMP_JSON"
   [ -n "$TMP_META" ] && rm -f "$TMP_META"
+  [ -n "$TMP_HIST" ] && rm -f "$TMP_HIST"
   if [ -n "$STASHED" ] && [ -f "$STASHED" ]; then mv "$STASHED" deploy/demo/.env; fi
 }
 trap cleanup EXIT
@@ -156,11 +158,13 @@ curl_auth=(-fsS)
 # ---- resolve the mission id ----
 if [ -z "$MISSION_ID" ]; then
   echo "no --mission given; looking up the most recent completed mission at $BRAIN_URL/api/history"
-  MISSION_ID=$(curl "${curl_auth[@]}" "$BRAIN_URL/api/history" | python3 -c '
+  TMP_HIST="$(mktemp)"
+  curl "${curl_auth[@]}" "$BRAIN_URL/api/history" -o "$TMP_HIST"
+  MISSION_ID=$(python3 -c '
 import json, sys
-missions = json.load(sys.stdin).get("missions") or []
+missions = json.load(open(sys.argv[1])).get("missions") or []
 print(max(missions, key=lambda m: m.get("id", 0))["id"] if missions else "", end="")
-')
+' "$TMP_HIST")
   if [ -z "$MISSION_ID" ]; then
     echo "FAIL: no completed missions found at $BRAIN_URL/api/history — run 'make demo-mission' in deploy/demo/ first" >&2
     exit 1
@@ -253,9 +257,11 @@ fi
 # ---- write the final JSON + metadata sidecar ----
 MODELS_JSON="$(python3 scripts/scrub-golden-run.py models "$TMP_JSON")"
 
-META_JSON="$(curl "${curl_auth[@]}" "$BRAIN_URL/api/history" | python3 -c "
+[ -n "$TMP_HIST" ] || TMP_HIST="$(mktemp)"
+curl "${curl_auth[@]}" "$BRAIN_URL/api/history" -o "$TMP_HIST"
+META_JSON="$(python3 -c "
 import json, sys
-missions = json.load(sys.stdin).get('missions') or []
+missions = json.load(open(sys.argv[1])).get('missions') or []
 m = next((x for x in missions if x.get('id') == $MISSION_ID), {})
 meta = {
     'directive': m.get('directive', ''),
@@ -267,7 +273,7 @@ meta = {
     'platform': json.loads('''$PLATFORM_JSON'''),
 }
 print(json.dumps(meta))
-")"
+" "$TMP_HIST")"
 
 if [ "$DUCKDB_ONLY" -ne 1 ]; then
   mkdir -p "$(dirname "$OUT_JSON")"

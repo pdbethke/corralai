@@ -3,6 +3,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
@@ -66,6 +67,10 @@ type testSetup struct {
 func newTestSetup(t *testing.T, tty bool) *testSetup {
 	t.Helper()
 	ts := &testSetup{run: &setupFake{}, home: t.TempDir()}
+	// The agent table reads XDG_CONFIG_HOME (opencode's paths); no test may
+	// reach the operator's real configuration.
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
 	ts.state = filepath.Join(t.TempDir(), "state", "setup.json")
 	ts.env = setupEnv{
 		Home:   ts.home,
@@ -263,28 +268,36 @@ func TestSetupMCPFailureIsUnverified(t *testing.T) {
 }
 
 func TestInteractiveListUnticksNewlyDetected(t *testing.T) {
-	ts := newTestSetup(t, true)
-	// codex is installed but not wired; claude_code is wired by plugin only in
-	// the helper below, so test the list renderer on constructed statuses.
-	var b bytes.Buffer
+	ag := agentsetup.Agents()
 	st := []agentsetup.Status{
-		{Agent: agentsetup.Agents()[0], Installed: true, Registered: true},
-		{Agent: agentsetup.Agents()[1], Installed: true},
-		{Agent: agentsetup.Agents()[2]},
+		{Agent: ag[0], Installed: true, ViaPlugin: true}, // claude_code wired by the plugin
+		{Agent: ag[1], Installed: true},                  // codex detected, not wired
+		{Agent: ag[2], Installed: true, Registered: true},
+		{Agent: ag[3]},
 	}
-	ticked := []bool{wired(st[0]), wired(st[1]), wired(st[2])}
-	renderPickList(&b, st, ticked)
+	var b bytes.Buffer
+	got, err := pickAgents(bufio.NewReader(strings.NewReader("\n")), &b, st)
+	if err != nil {
+		t.Fatal(err)
+	}
 	out := b.String()
-	if !strings.Contains(out, "1. [x] Claude Code") || !strings.Contains(out, "2. [ ] Codex CLI") || !strings.Contains(out, "3. [ ] Gemini CLI (not installed)") {
-		t.Fatalf("list:\n%s", out)
+	for _, want := range []string{"1. [x] Claude Code", "2. [ ] Codex CLI", "3. [x] Gemini CLI", "4. [ ] Cursor (not installed)", "(not yet proven)"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("list lacks %q:\n%s", want, out)
+		}
 	}
-	if !strings.Contains(out, "(not yet proven)") {
-		t.Errorf("no proven marker:\n%s", out)
+	if strings.Join(got, ",") != "claude_code,gemini_cli" {
+		t.Errorf("Enter accepted %v, want only the wired agents", got)
+	}
+	got, _ = pickAgents(bufio.NewReader(strings.NewReader("2 1\n\n")), &bytes.Buffer{}, st)
+	if strings.Join(got, ",") != "codex,gemini_cli" {
+		t.Errorf("toggling 2 and 1 gave %v", got)
 	}
 
 	// End to end: toggling 2 on then accepting selects codex.
+	ts := newTestSetup(t, true)
 	code, out, errs := ts.run_([]string{"--dry-run"}, "2\n\n")
-	if code != 0 || !strings.Contains(out, "codex") || !strings.Contains(out, "mcp add corral") {
+	if code != 0 || !strings.Contains(out, "mcp add corral") {
 		t.Fatalf("code=%d out=%q err=%q", code, out, errs)
 	}
 }
@@ -311,5 +324,95 @@ func TestSetupAllDetectedSelectsInstalledOnly(t *testing.T) {
 	}
 	if !strings.Contains(out, "codex") || strings.Contains(out, "gemini_cli") {
 		t.Fatalf("plan should name only the installed codex:\n%s", out)
+	}
+}
+
+func TestSetupUninstallAfterSkillOnlySetupLeavesRegistration(t *testing.T) {
+	ts := newTestSetup(t, false)
+	ts.run.added = true // the person's own registration pre-exists
+	if code, out, _ := ts.run_([]string{"--client", "codex", "--yes"}, ""); code != 0 {
+		t.Fatalf("setup: %d %q", code, out)
+	}
+	code, out, _ := ts.run_([]string{"--uninstall", "--client", "codex", "--yes"}, "")
+	if code != 0 || !ts.run.added {
+		t.Fatalf("code=%d added=%v out=%q", code, ts.run.added, out)
+	}
+	if !strings.Contains(out, "registration left alone") || !strings.Contains(out, "skill removed") || strings.Contains(out, "still registered") {
+		t.Errorf("out = %q", out)
+	}
+	if _, err := os.Stat(filepath.Join(ts.home, ".codex", "skills", "corral")); err == nil {
+		t.Errorf("skill copy still present")
+	}
+}
+
+func TestSetupUninstallNothingToRemoveExitsZero(t *testing.T) {
+	ts := newTestSetup(t, false)
+	if code, _, _ := ts.run_([]string{"--client", "codex", "--yes"}, ""); code != 0 {
+		t.Fatal("setup failed")
+	}
+	ts.run.added = false // the registration vanished behind setup's back
+	code, out, _ := ts.run_([]string{"--uninstall", "--client", "codex", "--yes"}, "")
+	if code != 0 || !strings.Contains(out, "no longer registered") {
+		t.Fatalf("code=%d out=%q", code, out)
+	}
+}
+
+func TestSetupBlockedNoopExitsOne(t *testing.T) {
+	ts := newTestSetup(t, false)
+	code, out, _ := ts.run_([]string{"--client", "gemini_cli", "--yes"}, "")
+	if code != 1 || !strings.Contains(out, "not installed") {
+		t.Fatalf("code=%d out=%q", code, out)
+	}
+}
+
+func TestResultLineUninstallUnmanagedSkillIsNotRemoved(t *testing.T) {
+	ag, _ := agentsetup.ByID("codex")
+	plan := agentsetup.Plan{Actions: []agentsetup.Action{{AgentID: "codex", Kind: agentsetup.ActionRemoveSkill, Path: "/x"}}}
+	line, good := resultLine("codex", setupFlags{uninstall: true, skill: true}, "", plan, true,
+		agentsetup.Result{AgentID: "codex", OK: true}, agentsetup.Status{Agent: ag, Skill: "unmanaged"}, false, nil)
+	if good || !strings.Contains(line, "skill left in place (unmanaged)") || strings.Contains(line, "skill removed") {
+		t.Fatalf("good=%v line=%q", good, line)
+	}
+}
+
+func TestResolveBinaryRefusesTempThroughSymlink(t *testing.T) {
+	real := t.TempDir()
+	link := filepath.Join(t.TempDir(), "var")
+	if err := os.Symlink(real, link); err != nil {
+		t.Skip("no symlinks:", err)
+	}
+	resolved, _ := filepath.EvalSymlinks(real)
+	_, err := resolveSetupBinary(filepath.Join(resolved, "go-build", "corral"), "", link)
+	if err == nil || !strings.Contains(err.Error(), "go run") {
+		t.Fatalf("a binary under the resolved temp dir escaped the refusal: %v", err)
+	}
+}
+
+func TestResolveOnPath(t *testing.T) {
+	notFound := func(string) (string, error) { return "", errors.New("not found") }
+	ok := func(string) (string, error) { return "/usr/bin/corral", nil }
+	bad := func(string) (string, error) { return "", errors.New("loop") }
+	if p, err := resolveOnPath(notFound, bad); p != "" || err != nil {
+		t.Errorf("not on PATH: %q, %v", p, err)
+	}
+	if p, err := resolveOnPath(ok, func(s string) (string, error) { return "/opt/corral", nil }); p != "/opt/corral" || err != nil {
+		t.Errorf("resolved: %q, %v", p, err)
+	}
+	if _, err := resolveOnPath(ok, bad); err == nil || !strings.Contains(err.Error(), "/usr/bin/corral") {
+		t.Errorf("an unresolvable PATH hit must be an error, got %v", err)
+	}
+}
+
+func TestSetupSkillFalseRegistersWithoutSkill(t *testing.T) {
+	ts := newTestSetup(t, false)
+	code, out, errs := ts.run_([]string{"--client", "codex", "--yes", "--skill=false"}, "")
+	if code != 0 || !ts.run.added {
+		t.Fatalf("code=%d added=%v out=%q err=%q", code, ts.run.added, out, errs)
+	}
+	if _, err := os.Stat(filepath.Join(ts.home, ".codex", "skills", "corral")); err == nil {
+		t.Errorf("skill dir created despite --skill=false")
+	}
+	if !strings.Contains(out, "skill skipped (--skill=false)") {
+		t.Errorf("out = %q", out)
 	}
 }

@@ -38,21 +38,24 @@ func BuildUninstallPlan(stat []Status, selected []string, st State, home string)
 		add := func(k ActionKind, argv []string, path, note string) {
 			p.Actions = append(p.Actions, Action{AgentID: a.ID, Kind: k, Argv: argv, Path: path, Note: note})
 		}
+		settled := func(note string) {
+			p.Actions = append(p.Actions, Action{AgentID: a.ID, Kind: ActionNoop, Note: note, Settled: true})
+		}
 		rec, have := st.Agents[a.ID]
 		switch {
 		case !have:
-			add(ActionNoop, nil, "", "not added by setup, so setup leaves it alone")
+			settled("not added by setup, so setup leaves it alone")
 		case !s.Installed:
-			add(ActionNoop, nil, "", "not installed; nothing removed")
+			settled("not installed; nothing removed")
 		case s.Unknown != "":
 			add(ActionNoop, nil, "", "could not read; nothing removed: "+s.Unknown)
 		case len(rec.Command) == 0:
 			leaving[a.ID] = true // nothing registered by setup; only a skill claim
-			add(ActionNoop, nil, "", "the registration was not added by setup, so setup leaves it alone")
+			settled("the registration was not added by setup, so setup leaves it alone")
 		case !s.Registered:
-			add(ActionNoop, nil, "", "corral is no longer registered; nothing to remove")
-		case len(rec.Command) != 2 || rec.Command[1] != "mcp" || !sameCommand(s.Command, rec.Command[0]):
-			add(ActionNoop, nil, "", "the registration changed since setup ("+strings.Join(s.Command, " ")+"), so setup leaves it alone")
+			settled("corral is no longer registered; nothing to remove")
+		case len(rec.Command) != 2 || rec.Command[1] != "mcp" || !SameCommand(s.Command, rec.Command[0]):
+			settled("the registration changed since setup (" + strings.Join(s.Command, " ") + "), so setup leaves it alone")
 		case len(a.Remove) > 0:
 			leaving[a.ID] = true
 			for _, rm := range a.Remove {

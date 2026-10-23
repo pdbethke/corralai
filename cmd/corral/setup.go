@@ -84,11 +84,9 @@ func realSetupEnv() (setupEnv, error) {
 	if exe, err = filepath.EvalSymlinks(exe); err != nil {
 		return setupEnv{}, fmt.Errorf("resolving %s: %w", exe, err)
 	}
-	onPath := ""
-	if p, err := exec.LookPath("corral"); err == nil {
-		if r, err := filepath.EvalSymlinks(p); err == nil {
-			onPath = r
-		}
+	onPath, err := resolveOnPath(exec.LookPath, filepath.EvalSymlinks)
+	if err != nil {
+		return setupEnv{}, err
 	}
 	return setupEnv{
 		Home:     home,
@@ -110,6 +108,21 @@ func realSetupEnv() (setupEnv, error) {
 	}, nil
 }
 
+// resolveOnPath finds the corral on the shell's PATH, symlinks resolved. "" with
+// no error means it is not on PATH; a corral that IS on PATH but cannot be
+// resolved is an error, never "not on PATH".
+func resolveOnPath(lookPath, eval func(string) (string, error)) (string, error) {
+	p, err := lookPath("corral")
+	if err != nil {
+		return "", nil
+	}
+	r, err := eval(p)
+	if err != nil {
+		return "", fmt.Errorf("corral is on your PATH at %s but that path cannot be resolved: %w", p, err)
+	}
+	return r, nil
+}
+
 // resolveSetupBinary decides which corral path agents will launch. exe and
 // onPath are symlink-resolved by the caller; onPath is "" when corral is not
 // on PATH. A binary under tmpDir (a `go run` build) is refused because it
@@ -117,6 +130,11 @@ func realSetupEnv() (setupEnv, error) {
 // operator's shell and the agents would run different programs.
 func resolveSetupBinary(exe, onPath, tmpDir string) (string, error) {
 	if tmpDir != "" {
+		// exe arrives symlink-resolved, so compare against the resolved temp
+		// dir too (macOS: /var/folders is /private/var/folders).
+		if r, err := filepath.EvalSymlinks(tmpDir); err == nil {
+			tmpDir = r
+		}
 		if rel, err := filepath.Rel(filepath.Clean(tmpDir), exe); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel) {
 			return "", fmt.Errorf("%s is under the temp directory %s, so it will not survive: this looks like `go run`; build or install corral (go install ./cmd/corral) and run that", exe, tmpDir)
 		}
@@ -405,10 +423,6 @@ func statusOf(st []agentsetup.Status, id string) agentsetup.Status {
 	return agentsetup.Status{}
 }
 
-func sameLaunch(got []string, bin string) bool {
-	return strings.Join(got, " ") == bin+" mcp"
-}
-
 func notesOf(p agentsetup.Plan, id string, kinds ...agentsetup.ActionKind) []string {
 	var out []string
 	for _, a := range p.Actions {
@@ -422,6 +436,21 @@ func notesOf(p agentsetup.Plan, id string, kinds ...agentsetup.ActionKind) []str
 		}
 	}
 	return out
+}
+
+// noopsSettled reports whether the agent has noop actions and every one is a
+// satisfied end state rather than a blocked one.
+func noopsSettled(p agentsetup.Plan, id string) bool {
+	n := 0
+	for _, a := range p.Actions {
+		if a.AgentID == id && a.Kind == agentsetup.ActionNoop {
+			n++
+			if !a.Settled {
+				return false
+			}
+		}
+	}
+	return n > 0
 }
 
 func hasKind(p agentsetup.Plan, id string, k agentsetup.ActionKind) bool {
@@ -443,13 +472,10 @@ func resultLine(id string, f setupFlags, bin string, plan agentsetup.Plan, mutat
 		suffix = " (not yet proven)"
 	}
 	if !mutated {
-		// Only noop actions: say what the plan said, never "registered".
+		// Only noop actions: say what the plan said, never "registered". The
+		// exit code comes from the plan's own Settled marker, not from its words.
 		note := strings.Join(notesOf(plan, id, agentsetup.ActionNoop), "; ")
-		good := strings.HasPrefix(note, "already registered") || strings.HasPrefix(note, "wired by the corral plugin")
-		if f.uninstall {
-			good = strings.HasPrefix(note, "not added by setup") || strings.HasPrefix(note, "not installed")
-		}
-		return fmt.Sprintf("%s: %s%s", a.Name, note, suffix), good
+		return fmt.Sprintf("%s: %s%s", a.Name, note, suffix), noopsSettled(plan, id)
 	}
 	if !res.OK {
 		detail := strings.TrimSpace(res.Detail)
@@ -459,19 +485,23 @@ func resultLine(id string, f setupFlags, bin string, plan agentsetup.Plan, mutat
 	good := true
 	fail := func(s string) { parts = append(parts, s); good = false }
 	if f.uninstall {
-		switch {
-		case now.Unknown != "":
-			fail("could not confirm removal: " + now.Unknown)
-		case now.Registered:
-			fail("still registered")
-		default:
-			parts = append(parts, "unregistered")
+		if hasKind(plan, id, agentsetup.ActionRemove) || hasKind(plan, id, agentsetup.ActionUnwriteFile) {
+			switch {
+			case now.Unknown != "":
+				fail("could not confirm removal: " + now.Unknown)
+			case now.Registered:
+				fail("still registered")
+			default:
+				parts = append(parts, "unregistered")
+			}
+		} else {
+			parts = append(parts, "registration left alone")
 		}
 		if hasKind(plan, id, agentsetup.ActionRemoveSkill) {
-			if now.Skill == "managed" {
-				fail("skill still present")
-			} else {
+			if now.Skill == "absent" {
 				parts = append(parts, "skill removed")
+			} else {
+				fail(fmt.Sprintf("skill left in place (%s)", now.Skill))
 			}
 		}
 		if good {
@@ -482,7 +512,7 @@ func resultLine(id string, f setupFlags, bin string, plan agentsetup.Plan, mutat
 	switch {
 	case now.Unknown != "":
 		fail("registration unreadable: " + now.Unknown)
-	case now.Registered && sameLaunch(now.Command, bin):
+	case now.Registered && agentsetup.SameCommand(now.Command, bin):
 		parts = append(parts, fmt.Sprintf("registered (inspect shows %s mcp)", bin))
 	case now.Registered:
 		fail(fmt.Sprintf("registered but inspect shows %q", strings.Join(now.Command, " ")))

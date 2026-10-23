@@ -33,6 +33,12 @@ type Action struct {
 	Argv    []string // register/replace/enable/remove
 	Path    string   // write-skill/write-file/remove-skill/unwrite-file
 	Note    string   // why, e.g. "will replace: <old> → <new>"
+	// Settled marks a noop that is a satisfied end state (already registered,
+	// wired by the plugin, nothing of setup's to remove). A noop that is not
+	// Settled is Blocked: setup could not do or see what was asked (not
+	// installed, could not read). Callers decide exit codes from this, never
+	// from Note's wording.
+	Settled bool
 }
 
 // Plan is the ordered list of Actions.
@@ -48,9 +54,9 @@ type SetupOptions struct {
 
 const unproven = "(not yet proven)"
 
-// sameCommand compares a registered argv to [bin, "mcp"]. Text parsers split a
+// SameCommand compares a registered argv to [bin, "mcp"]. Text parsers split a
 // binary path containing spaces, so equality of the space-joined forms counts.
-func sameCommand(got []string, bin string) bool {
+func SameCommand(got []string, bin string) bool {
 	if len(got) == 2 && got[0] == bin && got[1] == "mcp" {
 		return true
 	}
@@ -88,13 +94,16 @@ func BuildSetupPlan(st []Status, selected []string, opt SetupOptions) (Plan, err
 		add := func(k ActionKind, argv []string, path, note string) {
 			acts = append(acts, Action{AgentID: a.ID, Kind: k, Argv: argv, Path: path, Note: note})
 		}
+		settled := func(note string) {
+			acts = append(acts, Action{AgentID: a.ID, Kind: ActionNoop, Note: note, Settled: true})
+		}
 		switch {
 		case !s.Installed:
 			add(ActionNoop, nil, "", "not installed")
 			p.Actions = append(p.Actions, acts...)
 			continue
 		case s.ViaPlugin:
-			add(ActionNoop, nil, "", "wired by the corral plugin")
+			settled("wired by the corral plugin")
 			p.Actions = append(p.Actions, tag(a, acts)...)
 			continue
 		case s.Unknown != "":
@@ -105,8 +114,8 @@ func BuildSetupPlan(st []Status, selected []string, opt SetupOptions) (Plan, err
 
 		regs := a.Register(opt.Bin)
 		switch {
-		case s.Registered && sameCommand(s.Command, opt.Bin):
-			add(ActionNoop, nil, "", "already registered: "+opt.Bin+" mcp")
+		case s.Registered && SameCommand(s.Command, opt.Bin):
+			settled("already registered: " + opt.Bin + " mcp")
 		case s.Registered:
 			old := "(command unknown)"
 			if len(s.Command) > 0 {

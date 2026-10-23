@@ -250,3 +250,93 @@ func TestApplyRemoveSkillOnUninstall(t *testing.T) {
 		t.Error("skill still there")
 	}
 }
+
+func TestApplyTwoRemovesSecondFailsKeepsRecord(t *testing.T) {
+	rm1, rm2 := []string{"x", "rm", "1"}, []string{"x", "rm", "2"}
+	f := &fakeRunner{replies: map[string]reply{
+		"x rm 1": {},
+		"x rm 2": {out: []byte("stuck"), err: errors.New("exit 1")},
+	}}
+	st := State{Agents: map[string]AgentRecord{"codex": {Command: []string{tbin, "mcp"}}}}
+	p := Plan{Actions: []Action{{AgentID: "codex", Kind: ActionRemove, Argv: rm1}, {AgentID: "codex", Kind: ActionRemove, Argv: rm2}}}
+	statePath := filepath.Join(t.TempDir(), "s.json")
+	res := Apply(context.Background(), f, p, t.TempDir(), statePath, tbin, "v", &st)
+	if res[0].OK {
+		t.Fatal("expected failure")
+	}
+	if len(st.Agents["codex"].Command) == 0 {
+		t.Fatalf("record cleared though a remove failed: %+v", st.Agents)
+	}
+	if saved, _ := LoadState(statePath); len(saved.Agents["codex"].Command) == 0 {
+		t.Fatal("persisted record was cleared")
+	}
+	f.replies["x rm 2"] = reply{}
+	if res := Apply(context.Background(), f, p, t.TempDir(), statePath, tbin, "v", &st); !res[0].OK {
+		t.Fatalf("%+v", res)
+	}
+	if _, ok := st.Agents["codex"]; ok {
+		t.Fatal("record kept after all removes succeeded")
+	}
+}
+
+func TestApplyReplaceFailureAfterRemoveSaysUnregistered(t *testing.T) {
+	rm := []string{"claude", "mcp", "remove", "-s", "user", "corral"}
+	add := []string{"claude", "mcp", "add", "-s", "user", "corral", "--", tbin, "mcp"}
+	f := &fakeRunner{replies: map[string]reply{
+		strings.Join(rm, " "):  {},
+		strings.Join(add, " "): {out: []byte("add failed"), err: errors.New("exit 1")},
+	}}
+	st := State{Agents: map[string]AgentRecord{"claude_code": {Command: []string{"/old/corral", "mcp"}}}}
+	p := Plan{Actions: []Action{{AgentID: "claude_code", Kind: ActionRemove, Argv: rm}, {AgentID: "claude_code", Kind: ActionReplace, Argv: add}}}
+	statePath := filepath.Join(t.TempDir(), "s.json")
+	res := Apply(context.Background(), f, p, t.TempDir(), statePath, tbin, "v", &st)
+	if res[0].OK || !strings.Contains(res[0].Detail, "UNREGISTERED") || !strings.Contains(res[0].Detail, "add failed") {
+		t.Fatalf("%+v", res)
+	}
+	if rec, ok := st.Agents["claude_code"]; ok {
+		t.Fatalf("state still claims a registration that is gone: %+v", rec)
+	}
+	if saved, _ := LoadState(statePath); len(saved.Agents) != 0 {
+		t.Fatalf("persisted: %+v", saved.Agents)
+	}
+}
+
+func TestApplyRefusesSymlinkedConfig(t *testing.T) {
+	home := t.TempDir()
+	target := filepath.Join(home, "dotfiles", "mcp.json")
+	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(target, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(home, ".cursor", "mcp.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, path); err != nil {
+		t.Fatal(err)
+	}
+	enable := []string{"cursor-agent", "mcp", "enable", "corral"}
+	f := &fakeRunner{replies: map[string]reply{strings.Join(enable, " "): {}}}
+	st := State{Agents: map[string]AgentRecord{}}
+	for _, k := range []ActionKind{ActionWriteFile, ActionUnwriteFile} {
+		p := Plan{Actions: []Action{{AgentID: "cursor", Kind: k, Path: path}, {AgentID: "cursor", Kind: ActionEnable, Argv: enable}}}
+		res := applyOne(t, f, p, home, &st)
+		if res[0].OK || !strings.Contains(res[0].Detail, path) || !strings.Contains(res[0].Detail, "symlink") {
+			t.Fatalf("%s: %+v", k, res)
+		}
+	}
+	if fi, _ := os.Lstat(path); fi.Mode()&os.ModeSymlink == 0 {
+		t.Error("the link was replaced")
+	}
+	if b, _ := os.ReadFile(target); string(b) != "{}" {
+		t.Errorf("target changed: %s", b)
+	}
+	if m, _ := filepath.Glob(path + ".corral.backup*"); len(m) != 0 {
+		t.Errorf("backup made: %v", m)
+	}
+	if len(f.calls) != 0 {
+		t.Errorf("enable ran after a refused write: %v", f.calls)
+	}
+}

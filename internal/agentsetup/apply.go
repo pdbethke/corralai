@@ -67,6 +67,7 @@ func Apply(ctx context.Context, r Runner, p Plan, home, statePath, bin, version 
 
 func applyAgent(ctx context.Context, r Runner, id string, acts []Action, bin, version string, st *State) Result {
 	installing, removing := false, false
+	removesTotal, removesDone := 0, 0
 	for _, a := range acts {
 		switch a.Kind {
 		case ActionRegister, ActionReplace, ActionEnable, ActionWriteFile:
@@ -74,7 +75,11 @@ func applyAgent(ctx context.Context, r Runner, id string, acts []Action, bin, ve
 		case ActionRemove, ActionUnwriteFile, ActionRemoveSkill:
 			removing = true
 		}
+		if a.Kind == ActionRemove {
+			removesTotal++
+		}
 	}
+	unregistered := false // a remove succeeded: the agent no longer has corral registered
 	rec, had := st.Agents[id]
 	fail := func(detail string) Result { return Result{AgentID: id, Detail: detail} }
 	changed := false
@@ -106,8 +111,17 @@ func applyAgent(ctx context.Context, r Runner, id string, acts []Action, bin, ve
 			}
 		case ActionRemove:
 			err = run(a.Argv)
-			if err == nil && !installing { // before a replace the registration is rewritten, not gone
-				rec.Command, rec.RegisterArgv, changed = nil, nil, true
+			if err == nil {
+				removesDone++
+				unregistered = true
+				// Uninstall: the record is cleared only once ALL of the agent's
+				// removes have succeeded, so a failure part way keeps what setup
+				// can still retry. Before a replace the registration is really
+				// gone after the first remove, so the record must say so even if
+				// the replace then fails.
+				if installing || removesDone == removesTotal {
+					rec.Command, rec.RegisterArgv, changed = nil, nil, true
+				}
 			}
 		case ActionWriteFile:
 			err = writeServerFile(a, id, bin)
@@ -134,18 +148,31 @@ func applyAgent(ctx context.Context, r Runner, id string, acts []Action, bin, ve
 		}
 		if err != nil {
 			if changed {
-				st.Agents[id] = rec // keep what did succeed before this step
+				store(st, id, rec) // keep what did succeed before this step
 			}
-			return fail(err.Error())
+			detail := err.Error()
+			if unregistered && installing {
+				detail += "\ncorral is now UNREGISTERED from this agent: the old registration was removed and the new one was not added"
+			}
+			return fail(detail)
 		}
 	}
 	switch {
 	case removing && !installing && len(rec.Command) == 0 && (changed || had):
 		delete(st.Agents, id)
 	case changed:
-		st.Agents[id] = rec
+		store(st, id, rec)
 	}
 	return Result{AgentID: id, OK: true}
+}
+
+// store keeps rec, or drops the agent when nothing of setup's remains in it.
+func store(st *State, id string, rec AgentRecord) {
+	if len(rec.Command) == 0 && len(rec.RegisterArgv) == 0 && rec.SkillDir == "" {
+		delete(st.Agents, id)
+		return
+	}
+	st.Agents[id] = rec
 }
 
 func serverFile(a Action, id string) (Agent, error) {
@@ -184,6 +211,9 @@ func unwriteServerFile(a Action, id string) error {
 // edit that produces content, and left missing by one that produces none.
 // Unchanged output writes nothing and makes no backup.
 func editConfigFile(path string, edit func(old []byte) ([]byte, error)) error {
+	if fi, err := os.Lstat(path); err == nil && fi.Mode()&fs.ModeSymlink != 0 {
+		return fmt.Errorf("%s is a symlink; setup will not edit a symlinked config file (edit its target yourself, or replace the link with a file)", path)
+	}
 	old, err := os.ReadFile(path) // #nosec G304 -- the agent table's config path
 	exists := err == nil
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {

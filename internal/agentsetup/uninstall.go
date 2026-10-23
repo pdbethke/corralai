@@ -15,9 +15,13 @@ import "strings"
 // Agents with a remove command get ActionRemove; agents whose only channel is a
 // config file (cursor, opencode, vscode) get ActionUnwriteFile on that file.
 //
-// The skill copy is removed only when it is setup's own unedited copy AND no
-// agent outside this uninstall still lists the directory in State: several
-// agents can share one directory, so removing it for one would break the rest.
+// The skill copy is removed only when it is setup's own unedited copy AND every
+// agent State lists as using the directory is leaving in THIS plan (its
+// registration is being removed, or it never had one). That is decided in a
+// second pass, after every agent's registration outcome is known: an agent
+// whose uninstall is a noop (unreadable, changed, not installed) keeps its
+// record, and with it its claim on a shared directory, whatever the order the
+// agents were listed in.
 // Unselected IDs are ignored (unknown IDs are the caller's to reject).
 func BuildUninstallPlan(stat []Status, selected []string, st State, home string) Plan {
 	want := map[string]bool{}
@@ -25,7 +29,7 @@ func BuildUninstallPlan(stat []Status, selected []string, st State, home string)
 		want[id] = true
 	}
 	var p Plan
-	skillDirs := map[string]bool{}
+	leaving := map[string]bool{}
 	for _, s := range stat {
 		a := s.Agent
 		if !want[a.ID] {
@@ -38,50 +42,54 @@ func BuildUninstallPlan(stat []Status, selected []string, st State, home string)
 		switch {
 		case !have:
 			add(ActionNoop, nil, "", "not added by setup, so setup leaves it alone")
-			continue
 		case !s.Installed:
 			add(ActionNoop, nil, "", "not installed; nothing removed")
-			continue
 		case s.Unknown != "":
 			add(ActionNoop, nil, "", "could not read; nothing removed: "+s.Unknown)
-			continue
-		}
-
-		switch {
 		case len(rec.Command) == 0:
+			leaving[a.ID] = true // nothing registered by setup; only a skill claim
 			add(ActionNoop, nil, "", "the registration was not added by setup, so setup leaves it alone")
 		case !s.Registered:
 			add(ActionNoop, nil, "", "corral is no longer registered; nothing to remove")
 		case len(rec.Command) != 2 || rec.Command[1] != "mcp" || !sameCommand(s.Command, rec.Command[0]):
 			add(ActionNoop, nil, "", "the registration changed since setup ("+strings.Join(s.Command, " ")+"), so setup leaves it alone")
 		case len(a.Remove) > 0:
+			leaving[a.ID] = true
 			for _, rm := range a.Remove {
 				add(ActionRemove, rm, "", "")
 			}
 		case a.File != nil:
+			leaving[a.ID] = true
 			add(ActionUnwriteFile, nil, a.File.Path(home), "delete only the corral entry")
 		default:
 			add(ActionNoop, nil, "", "the agent has no remove command")
 		}
+	}
 
-		dir := rec.SkillDir
-		if dir == "" || skillDirs[dir] {
+	skillDirs := map[string]bool{}
+	for _, s := range stat {
+		a := s.Agent
+		dir := st.Agents[a.ID].SkillDir
+		if !want[a.ID] || dir == "" || skillDirs[dir] {
 			continue
 		}
 		skillDirs[dir] = true
-		var others []string
+		var staying []string
 		for _, u := range st.SkillUsers(dir) {
-			if !want[u] {
-				others = append(others, u)
+			if !leaving[u] {
+				staying = append(staying, u)
 			}
 		}
+		act := func(k ActionKind, note string) {
+			p.Actions = append(p.Actions, Action{AgentID: a.ID, Kind: k, Path: dir, Note: note})
+		}
 		switch {
-		case len(others) > 0:
-			add(ActionSkipSkill, nil, dir, "skill: "+dir+" is still used by "+strings.Join(others, ", ")+", kept")
+		case len(staying) > 0:
+			act(ActionSkipSkill, "skill: "+dir+" is still used by "+strings.Join(staying, ", ")+", kept")
 		case s.Skill != "managed":
-			add(ActionSkipSkill, nil, dir, "skill: "+dir+" is not setup's unedited copy, left alone")
+			act(ActionSkipSkill, "skill: "+dir+" is not setup's unedited copy, left alone")
 		default:
-			add(ActionRemoveSkill, nil, dir, "")
+			act(ActionRemoveSkill, "")
 		}
 	}
 	return p

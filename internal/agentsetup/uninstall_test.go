@@ -141,3 +141,25 @@ func TestUninstallLeavesUnmanagedSkill(t *testing.T) {
 	}
 	_ = os.Stdout
 }
+
+// A shared directory is decided after every agent's outcome is known, so the
+// answer cannot depend on the order agents are listed in.
+func TestUninstallSharedSkillKeptWhenOtherUserIsNoop(t *testing.T) {
+	for _, order := range [][]string{{"a", "b"}, {"b", "a"}} {
+		var ss []Status
+		for _, id := range order {
+			s := sharedAgent(id)
+			if id == "a" {
+				s.Unknown = "timed out" // a's uninstall is a noop, so a keeps its record
+			}
+			ss = append(ss, s)
+		}
+		p := uninstall(t, ss, []string{"a", "b"}, sharedState("a", "b"))
+		if hasKind(p, ActionRemoveSkill) {
+			t.Errorf("order %v: skill removed while a still lists it: %+v", order, p.Actions)
+		}
+		if !hasKind(p, ActionRemove) {
+			t.Errorf("order %v: b's registration should still be removed: %+v", order, p.Actions)
+		}
+	}
+}

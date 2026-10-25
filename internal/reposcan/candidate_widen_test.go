@@ -399,3 +399,45 @@ func TestWidenCandidacyIsANoOpWithoutEvidence(t *testing.T) {
 		t.Errorf("promoted = %d, want 0", promoted)
 	}
 }
+
+// The unit-kind twin of TestWidenCandidacyLeavesAnAlreadyPairedCandidateByteIdentical
+// (ruling R2): an index built from test UNITS counts units, not tests, so it
+// must never write Candidate.CoveringTests — the ledger's covering_tests
+// column means "tests". An already-paired candidate comes back byte-identical
+// to what pairing produced, and a promoted one carries its landing file
+// with CoveringTests left nil (its count is UnitsFor's to answer).
+func TestWidenCandidacyByUnitsLeavesAnAlreadyPairedCandidateByteIdentical(t *testing.T) {
+	ts, ok := lang.ByName("typescript")
+	if !ok {
+		t.Fatal("no typescript plugin")
+	}
+	before := Candidate{Path: "src/a.ts", TestPath: "test/a.test.ts", Lang: "typescript", ViaSearch: true}
+	ev := UnitEvidence{Ran: true, Units: []UnitResult{
+		{Unit: "test/a.test.ts", Counts: map[string]lang.LineCounts{"src/a.ts": {Executed: 1, Executable: 10}}},
+		{Unit: "tests/other.test.ts", Counts: map[string]lang.LineCounts{
+			"src/a.ts": {Executed: 9, Executable: 10},
+			"src/b.ts": {Executed: 3, Executable: 4},
+		}},
+	}}
+	idx, idxOK := IndexFromUnits(ev, UnitTestFile(ts, map[string]string{"test/a.test.ts": "", "tests/other.test.ts": ""}))
+	if !idxOK || !idx.UnitKind() {
+		t.Fatalf("fixture: want a unit-kind index, got ok=%v unitKind=%v", idxOK, idx.UnitKind())
+	}
+
+	gotCands, gotExcl, promoted := WidenCandidacyByEvidence([]Candidate{before},
+		[]Exclusion{{Path: "src/b.ts", Reason: ReasonNoPairedTest}}, idx, idxOK)
+
+	if len(gotExcl) != 0 || promoted != 1 || len(gotCands) != 2 {
+		t.Fatalf("cands=%+v excl=%+v promoted=%d, want src/b.ts promoted beside the paired src/a.ts", gotCands, gotExcl, promoted)
+	}
+	if !reflect.DeepEqual(gotCands[0], before) {
+		t.Errorf("paired candidate = %+v, want byte-identical %+v (no CoveringTests from a unit index)", gotCands[0], before)
+	}
+	want := Candidate{Path: "src/b.ts", Lang: "typescript", CoveringTestPath: "tests/other.test.ts"}
+	if !reflect.DeepEqual(gotCands[1], want) {
+		t.Errorf("promoted candidate = %+v, want %+v (CoveringTests nil: units are not tests)", gotCands[1], want)
+	}
+	if n, measured := idx.UnitsFor("src/b.ts"); !measured || n != 1 {
+		t.Errorf("UnitsFor(src/b.ts) = %d, %v, want 1, true — the printed count's source", n, measured)
+	}
+}

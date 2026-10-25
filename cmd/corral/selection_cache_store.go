@@ -69,3 +69,10 @@ func (c *selectionLedgerCache) SelectionCachePut(ctx context.Context, treeDigest
 	defer func() { _ = st.Close() }()
 	return st.SelectionCachePut(ctx, treeDigest, cmdDigest, plugin, substrate, raw, note)
 }
+
+// unitsCachePlugin is the cache's plugin column for a unit evidence pass
+// (collectUnits): the language, namespaced, so a unit pass and a selection
+// pass of one language — or two shapes of evidence over one tree — never
+// answer each other's lookups. The raw bytes under it are the JSON of a
+// reposcan.UnitEvidence.
+func unitsCachePlugin(langName string) string { return langName + "/units" }

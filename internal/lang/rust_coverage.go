@@ -219,16 +219,7 @@ func (p rustPlugin) ParseCoverage(stdout, modulePath string) (executed map[strin
 // its reason: an instrument that could not run measured nothing, and saying
 // why is the whole of what the run produced.
 func (rustPlugin) CoverageCounts(stdout, modulePath string) (map[string]LineCounts, error) {
-	for _, ln := range strings.Split(stdout, "\n") {
-		ln = strings.TrimSpace(ln)
-		rest, ok := strings.CutPrefix(ln, rustCoverageUnavailable)
-		if !ok || (rest != "" && rest[0] != ' ') {
-			continue
-		}
-		reason := strings.TrimSpace(rest)
-		if reason == "" {
-			reason = "no reason given"
-		}
+	if reason, ok := CoverageUnavailable(stdout); ok {
 		return nil, fmt.Errorf("lang: rust coverage is unavailable: %s", reason)
 	}
 	return corralCoverageCounts(stdout, rustCoverageHeaderV2, "rust", modulePath)

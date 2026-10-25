@@ -68,6 +68,11 @@ const (
 	unitTruncated         = "report truncated"
 	unitNotAlone          = "not run: its one-unit form would also run another unit"
 	unitNoSuiteExit       = "no suite exit status in the report"
+	// unitCouldNotRun prefixes a runner's own error: the unit never ran,
+	// for a reason outside the tree (a jail that could not start).
+	unitCouldNotRun = "could not run: "
+	// unitCoverageUnavailable prefixes the instrument's own reason.
+	unitCoverageUnavailable = "coverage unavailable: "
 )
 
 // CollectUnitEvidence lists the units inv collects and runs each one's
@@ -162,6 +167,28 @@ func CollectUnitEvidence(ctx context.Context, runner commandRunner, files map[st
 	return UnitEvidence{Ran: true, Units: results}
 }
 
+// Settled reports whether this pass is a fact about the tree and the
+// command, and so may be kept for a later scan of the same tree (the
+// selection cache): it ran, and no unit's outcome came from THIS run's
+// circumstances — the deadline, an interrupt, a runner that could not
+// start. A red unit or one with no one-unit form is settled: the same tree
+// answers the same way. An unsettled pass is still evidence for the scan
+// that made it; it is only never reused.
+func (ev UnitEvidence) Settled() bool {
+	if !ev.Ran {
+		return false
+	}
+	for _, u := range ev.Units {
+		switch {
+		case u.Err == unitNotRunTimeLimit, u.Err == unitNotRunInterrupted,
+			u.Err == unitTimedOut, u.Err == unitInterrupted,
+			strings.HasPrefix(u.Err, unitCouldNotRun):
+			return false
+		}
+	}
+	return true
+}
+
 // runUnit runs one unit's coverage command and reads its report. Every way
 // the run can fail to measure is an Err, never an empty Counts.
 func runUnit(ctx context.Context, runner commandRunner, files map[string]string, reporter lang.CoverageReporter, cmd []string, modulePath string) UnitResult {
@@ -179,7 +206,7 @@ func runUnit(ctx context.Context, runner commandRunner, files map[string]string,
 	case err != nil && ctx.Err() != nil:
 		return UnitResult{Err: unitInterrupted}
 	case err != nil:
-		return UnitResult{Err: fmt.Sprintf("run failed: %v", err)}
+		return UnitResult{Err: unitCouldNotRun + err.Error()}
 	case exit > 0:
 		// A unit whose own run failed — a red test, a build error, a
 		// toolchain the jail lacks — is not evidence, even when a report
@@ -199,12 +226,22 @@ func runUnit(ctx context.Context, runner commandRunner, files map[string]string,
 	// exited with, and ends with the REDUCER's status, so a red unit's run
 	// can exit 0. Only a green unit's coverage is evidence, and a report
 	// that does not say how its suite exited is treated as red.
+	//
+	// A red suite is reported as red even when a later step also failed.
+	// Otherwise an instrument's own "unavailable" notice (lang.
+	// CoverageUnavailable) is read BEFORE the missing-trailer case: Rust's
+	// llvm-tools check runs before the suite, so its notice comes with no
+	// trailer, and "no suite exit status" would hide the one thing the
+	// operator has to install.
 	rc, ok := lang.SuiteExit(out)
+	if ok && rc != 0 {
+		return UnitResult{Err: fmt.Sprintf("run failed: exit %d", rc)}
+	}
+	if reason, unavailable := lang.CoverageUnavailable(out); unavailable {
+		return UnitResult{Err: unitCoverageUnavailable + reason}
+	}
 	if !ok {
 		return UnitResult{Err: unitNoSuiteExit}
-	}
-	if rc != 0 {
-		return UnitResult{Err: fmt.Sprintf("run failed: exit %d", rc)}
 	}
 	counts, err := reporter.CoverageCounts(out, modulePath)
 	if err != nil {

@@ -51,7 +51,10 @@ type Candidate struct {
 	// this file (including every candidate on a scan where no evidence ran
 	// at all) — never confused with a measured, genuine zero, which
 	// WidenCandidacyByEvidence excludes as ReasonUncovered rather than
-	// leaving as a zero-value Candidate.
+	// leaving as a zero-value Candidate. Also nil whenever the evidence was
+	// a unit pass (EvidenceIndex.UnitKind): a unit is a test FILE, package
+	// or target, not a test, and the column means tests; the unit count is
+	// EvidenceIndex.UnitsFor's to answer.
 	CoveringTests *int
 }
 
@@ -583,7 +586,9 @@ func EnumerateWithTests(root string, tests *TestMap) ([]Candidate, []Exclusion, 
 // the pairing-only candidacy the design calls the fallback.
 //
 // Already-paired candidates get CoveringTests filled in when the evidence
-// also measured them (ledger metadata only — see Candidate.CoveringTests);
+// also measured them (ledger metadata only — see Candidate.CoveringTests),
+// except from a unit-kind index, which counts units rather than tests and
+// so leaves CoveringTests nil on every candidate, paired or promoted;
 // TestPath, ViaSearch and every other field, and every excluded-for-another-
 // reason entry, are left exactly as the pairing walk produced them, which is
 // what keeps an already-candidate file's report line, grading command, cache
@@ -601,10 +606,17 @@ func WidenCandidacyByEvidence(cands []Candidate, excl []Exclusion, idx EvidenceI
 		return cands, excl, 0
 	}
 
+	// coveringTests is the count a candidate carries: none from a unit
+	// pass (see Candidate.CoveringTests), the per-test count otherwise.
+	coveringTests := func(n int) *int {
+		if idx.UnitKind() {
+			return nil
+		}
+		return &n
+	}
 	for i := range cands {
 		if n, _, _, _, measured := idx.CoverageFor(cands[i].Path); measured {
-			v := n
-			cands[i].CoveringTests = &v
+			cands[i].CoveringTests = coveringTests(n)
 		}
 	}
 
@@ -638,7 +650,6 @@ func WidenCandidacyByEvidence(cands []Candidate, excl []Exclusion, idx EvidenceI
 			// test", not a claim the evidence never actually made.
 			kept = append(kept, e)
 		case n > 0:
-			v := n
 			langName := ""
 			if p, ok := lang.Detect(e.Path); ok {
 				langName = p.Name()
@@ -647,7 +658,7 @@ func WidenCandidacyByEvidence(cands []Candidate, excl []Exclusion, idx EvidenceI
 				Path:             e.Path,
 				Lang:             langName,
 				CoveringTestPath: mostCovering,
-				CoveringTests:    &v,
+				CoveringTests:    coveringTests(n),
 			})
 			promoted++
 		case !isLibraryCode(e.Path, hasPath):

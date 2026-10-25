@@ -1,0 +1,435 @@
+// SPDX-License-Identifier: Elastic-2.0
+
+package main
+
+import (
+	"bytes"
+	"context"
+	"path/filepath"
+	"reflect"
+	"strings"
+	"sync"
+	"testing"
+
+	"github.com/pdbethke/corralai/internal/lang"
+	"github.com/pdbethke/corralai/internal/reposcan"
+)
+
+// fakeUnitPass stands in for the unit pass (collectUnitEvidence) so a test
+// of what certify --repo does WITH unit evidence needs no runner, no
+// coverage instrument and no jail. It records every call, and refuses —
+// as the real pass does — a worker count below one, so a caller that forgot
+// to pass the run's own setting is caught here rather than in production.
+type fakeUnitPass struct {
+	mu    sync.Mutex
+	ev    reposcan.UnitEvidence
+	calls []fakeUnitCall
+}
+
+type fakeUnitCall struct {
+	lang       string
+	argv       []string
+	modulePath string
+	workers    int
+}
+
+func (f *fakeUnitPass) install(t *testing.T) {
+	t.Helper()
+	prev := collectUnitEvidence
+	collectUnitEvidence = func(_ context.Context, _ coverageRunner, _ map[string]string, p lang.Plugin, inv lang.Invocation, modulePath string, workers int) reposcan.UnitEvidence {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		f.calls = append(f.calls, fakeUnitCall{lang: p.Name(), argv: inv.Argv, modulePath: modulePath, workers: workers})
+		if workers < 1 {
+			return reposcan.UnitEvidence{Note: "fake: no workers"}
+		}
+		return f.ev
+	}
+	t.Cleanup(func() { collectUnitEvidence = prev })
+}
+
+func (f *fakeUnitPass) called() []fakeUnitCall {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]fakeUnitCall(nil), f.calls...)
+}
+
+func unitRun(unit string, counts map[string]lang.LineCounts) reposcan.UnitResult {
+	return reposcan.UnitResult{Unit: unit, Counts: counts}
+}
+
+// unitEvidenceTSFixture is a TypeScript tree whose only test sits where no
+// filename convention or search pairs it with the source: a composition test
+// for src/app/Service.ts under tests/composition/, naming nothing it runs.
+func unitEvidenceTSFixture(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	mustWrite(t, filepath.Join(root, "src", "app", "Service.ts"), "export function serve(): number { return 1; }\n")
+	mustWrite(t, filepath.Join(root, "tests", "composition", "service.test.ts"), "test('composition', () => {});\n")
+	return root
+}
+
+func runUnitEvidenceScan(t *testing.T, root string, extra ...string) string {
+	t.Helper()
+	t.Setenv("ANTHROPIC_API_KEY", "test-placeholder-not-a-real-key")
+	args := []string{
+		"--repo", root, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant, "--critic-model", "off",
+		"--goals", writeGoals(t, root, `{}`), "--substrate", substrateWorkspace, "--no-selection-cache",
+	}
+	var out, errb bytes.Buffer
+	runCertifyRepo(append(args, extra...), &out, &errb)
+	return out.String() + "\n[stderr]\n" + errb.String()
+}
+
+// A file only a test unit's execution pairs becomes a candidate, landing
+// beside the unit that ran it, and the summary counts it as evidence-paired.
+// The covering count printed is the number of units (UnitsFor), and the
+// candidate carries no CoveringTests (ruling R2: units are not tests).
+func TestUnitEvidencePromotesAnUnpairedTSFile(t *testing.T) {
+	root := unitEvidenceTSFixture(t)
+	fake := &fakeUnitPass{ev: reposcan.UnitEvidence{Ran: true, Units: []reposcan.UnitResult{
+		unitRun("tests/composition/service.test.ts", map[string]lang.LineCounts{"src/app/Service.ts": {Executed: 1, Executable: 1}}),
+	}}}
+	fake.install(t)
+
+	s := runUnitEvidenceScan(t, root, "--", "vitest", "run")
+
+	calls := fake.called()
+	if len(calls) != 1 {
+		t.Fatalf("unit pass called %d time(s), want once:\n%s", len(calls), s)
+	}
+	if c := calls[0]; c.lang != "typescript" || c.workers != 1 || c.modulePath != root || !reflect.DeepEqual(c.argv, []string{"vitest", "run"}) {
+		t.Errorf("unit pass called with %+v; want typescript, the operator's argv, the repo root as module path (runPreflight's), and the workspace substrate's one worker", c)
+	}
+	if !strings.Contains(s, "src/app/Service.ts paired by evidence: 1 covering test unit(s), authored test lands beside tests/composition/service.test.ts") {
+		t.Errorf("missing the evidence-paired disclosure for the unit-paired file:\n%s", s)
+	}
+	if !strings.Contains(s, "evidence-paired 1 · name-paired 0") {
+		t.Errorf("the summary must count the unit-paired file as evidence-paired:\n%s", s)
+	}
+	if strings.Contains(s, "pairing-only candidacy") {
+		t.Errorf("unit evidence ran, so candidacy is not pairing-only:\n%s", s)
+	}
+	if !strings.Contains(s, "units: 1 run, 0 failed") {
+		t.Errorf("missing the units scan line:\n%s", s)
+	}
+}
+
+// A file name pairing already paired keeps its own test, byte-identical,
+// even when unit evidence says another unit executes most of it: evidence
+// only ADDS candidates (Review Focus 4).
+func TestUnitEvidenceNeverMovesANamePairedCandidate(t *testing.T) {
+	root := t.TempDir()
+	mustWrite(t, filepath.Join(root, "src", "a.ts"), "export function a(): number { return 1; }\n")
+	mustWrite(t, filepath.Join(root, "test", "a.test.ts"), "import { a } from '../src/a';\ntest('a', () => { expect(a()).toBe(1); });\n")
+	mustWrite(t, filepath.Join(root, "tests", "other.test.ts"), "test('other', () => {});\n")
+	ev := reposcan.UnitEvidence{Ran: true, Units: []reposcan.UnitResult{
+		unitRun("test/a.test.ts", map[string]lang.LineCounts{"src/a.ts": {Executed: 1, Executable: 10}}),
+		unitRun("tests/other.test.ts", map[string]lang.LineCounts{"src/a.ts": {Executed: 9, Executable: 10}}),
+	}}
+
+	without := &fakeUnitPass{ev: reposcan.UnitEvidence{Note: "fake: no unit evidence"}}
+	without.install(t)
+	before := runUnitEvidenceScan(t, root, "--", "vitest", "run")
+	with := &fakeUnitPass{ev: ev}
+	with.install(t)
+	after := runUnitEvidenceScan(t, root, "--", "vitest", "run")
+
+	if !strings.Contains(before, "name-paired 1") {
+		t.Fatalf("fixture: src/a.ts must be name-paired to test/a.test.ts:\n%s", before)
+	}
+	if diff := diffLines(unitCandidacyLines(before), unitCandidacyLines(after)); diff != "" {
+		t.Fatalf("src/a.ts's candidacy moved when unit evidence arrived:\n%s\nwithout:\n%s\nwith:\n%s", diff, before, after)
+	}
+	if strings.Contains(after, "paired by evidence") {
+		t.Errorf("a name-paired candidate is never disclosed as evidence-paired:\n%s", after)
+	}
+
+	// The job the scan would grade, built from the same candidates: one
+	// Enumerate, widened by the same unit index, emits the job pairing
+	// alone emits — TestPath, CoveringTestPath, CoveringTests all equal.
+	cands, excl, err := reposcan.Enumerate(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ts, _ := lang.ByName("typescript")
+	landing := map[string]string{"test/a.test.ts": "", "tests/other.test.ts": ""}
+	idx, ok := reposcan.IndexFromUnits(ev, reposcan.UnitTestFile(ts, landing))
+	if !ok {
+		t.Fatal("fixture: no unit index")
+	}
+	plainJobs := emitTestJobs(t, cands, root)
+	widened, _, _ := reposcan.WidenCandidacyByEvidence(append([]reposcan.Candidate(nil), cands...), excl, idx, ok)
+	if got := emitTestJobs(t, widened, root); !reflect.DeepEqual(got, plainJobs) {
+		t.Errorf("jobs moved:\n got %+v\nwant %+v", got, plainJobs)
+	}
+}
+
+func emitTestJobs(t *testing.T, cands []reposcan.Candidate, root string) []reposcan.Job {
+	t.Helper()
+	gs, err := reposcan.NewFileGoalSource(writeGoals(t, root, `{"src/a.ts": "a() must return 1"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	jobs, _, err := reposcan.EmitJobs(reposcan.EmitConfig{Root: root}, cands, gs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return jobs
+}
+
+// unitCandidacyLines is candidacyLines for this file's fixtures: the count
+// and summary lines (their trailing basis disclosure cut, which legitimately
+// differs between a run with evidence and one without) and every line that
+// names src/a.ts.
+func unitCandidacyLines(s string) string {
+	var out []string
+	for _, line := range strings.Split(s, "\n") {
+		switch {
+		case strings.Contains(line, "candidate(s)"), strings.Contains(line, "src/a.ts"):
+			out = append(out, line)
+		case strings.Contains(line, "evidence-paired"):
+			if i := strings.Index(line, " — "); i >= 0 {
+				line = line[:i]
+			}
+			out = append(out, line)
+		}
+	}
+	return strings.Join(out, "\n")
+}
+
+// The scan's audit config — and so every verdict's cache key — says how the
+// scan GRADES, and the unit pass changes no grading: the method stays what
+// selection evidence alone decides.
+func TestUnitEvidenceLeavesAuditConfigKeyAlone(t *testing.T) {
+	without := &localExecutor{}
+	with := &localExecutor{units: reposcan.UnitEvidence{Ran: true, Units: []reposcan.UnitResult{
+		unitRun("test/a.test.ts", map[string]lang.LineCounts{"src/a.ts": {Executed: 1, Executable: 1}}),
+	}}}
+	if got := with.selectionMethod(); got != "" {
+		t.Fatalf("selectionMethod with unit evidence = %q, want \"\"", got)
+	}
+	argv := []string{"vitest", "run"}
+	if a, b := auditConfigKey(false, without.selectionMethod(), argv, "", ""), auditConfigKey(false, with.selectionMethod(), argv, "", ""); a != b {
+		t.Errorf("auditConfigKey moved with unit evidence:\n without %s\n    with %s", a, b)
+	}
+	sel := &localExecutor{selection: reposcan.SelectionEvidence{Ran: true}}
+	if got := sel.selectionMethod(); got != "coverage-context" {
+		t.Errorf("negative control: selection evidence must still set the method, got %q", got)
+	}
+}
+
+// A command with no one-unit form (`npm test` with no script corral can
+// read) leaves the language name-paired for the run, and the scan says why
+// on the units line and on the summary line — never a silent zero (Review
+// Focus 2). The REAL pass runs here: it refuses before running anything.
+func TestUnitPassDisclosesACommandWithNoUnitForm(t *testing.T) {
+	root := unitEvidenceTSFixture(t)
+	s := runUnitEvidenceScan(t, root, "--", "npm", "test")
+
+	const note = "typescript: `npm test` has no one-unit form corral can list and run, so no unit evidence"
+	if !strings.Contains(s, "units: "+note) {
+		t.Errorf("missing the units line with the pass's own note:\n%s", s)
+	}
+	if !strings.Contains(s, "pairing-only candidacy (no selection evidence: "+note+")") {
+		t.Errorf("the summary must say candidacy is pairing-only, and why:\n%s", s)
+	}
+	if !strings.Contains(s, "evidence-paired 0") || strings.Contains(s, "paired by evidence") {
+		t.Errorf("nothing may be promoted without unit evidence:\n%s", s)
+	}
+}
+
+// --whole-suite is a GRADING choice; the unit pass is candidacy, so it still
+// runs and still promotes.
+func TestWholeSuiteStillRunsTheUnitPass(t *testing.T) {
+	root := unitEvidenceTSFixture(t)
+	fake := &fakeUnitPass{ev: reposcan.UnitEvidence{Ran: true, Units: []reposcan.UnitResult{
+		unitRun("tests/composition/service.test.ts", map[string]lang.LineCounts{"src/app/Service.ts": {Executed: 1, Executable: 1}}),
+	}}}
+	fake.install(t)
+
+	s := runUnitEvidenceScan(t, root, "--whole-suite", "--", "vitest", "run")
+
+	if len(fake.called()) != 1 {
+		t.Fatalf("--whole-suite must not disable the unit pass:\n%s", s)
+	}
+	if !strings.Contains(s, "src/app/Service.ts paired by evidence") {
+		t.Errorf("the unit-paired file must still be promoted under --whole-suite:\n%s", s)
+	}
+}
+
+// Python grades through its own per-test selector, and that path is
+// unchanged: the unit pass never runs for it, with or without --whole-suite.
+func TestPythonDoesNotRunTheUnitPass(t *testing.T) {
+	root := t.TempDir()
+	preflightUnpairedPythonFixture(t, root)
+	fake := &fakeUnitPass{ev: reposcan.UnitEvidence{Note: "fake"}}
+	fake.install(t)
+
+	s := runUnitEvidenceScan(t, root, "--whole-suite")
+
+	if calls := fake.called(); len(calls) != 0 {
+		t.Fatalf("the unit pass ran for Python: %+v\n%s", calls, s)
+	}
+	if strings.Contains(s, "units:") {
+		t.Errorf("no units line for a language with a per-test selector:\n%s", s)
+	}
+}
+
+// A unit that failed contributes nothing and is listed once, by name and
+// reason; a partial pass says so on the summary line.
+func TestUnitPassListsEachFailedUnit(t *testing.T) {
+	root := unitEvidenceTSFixture(t)
+	mustWrite(t, filepath.Join(root, "tests", "broken.test.ts"), "test('broken', () => {});\n")
+	fake := &fakeUnitPass{ev: reposcan.UnitEvidence{Ran: true, Units: []reposcan.UnitResult{
+		unitRun("tests/composition/service.test.ts", map[string]lang.LineCounts{"src/app/Service.ts": {Executed: 1, Executable: 1}}),
+		{Unit: "tests/broken.test.ts", Err: "coverage unavailable: llvm-tools missing"},
+	}}}
+	fake.install(t)
+
+	s := runUnitEvidenceScan(t, root, "--", "vitest", "run")
+
+	if !strings.Contains(s, "units: 2 run, 1 failed") {
+		t.Errorf("missing the units count line:\n%s", s)
+	}
+	if strings.Count(s, "tests/broken.test.ts: coverage unavailable: llvm-tools missing") != 1 {
+		t.Errorf("the failed unit must be listed exactly once with its reason:\n%s", s)
+	}
+	if !strings.Contains(s, "unit evidence is partial: 1 of 2 unit(s) contributed none") {
+		t.Errorf("the summary line must say the evidence is partial:\n%s", s)
+	}
+}
+
+// The workspace substrate passes the runner no files (it runs in the
+// checkout itself), so the landing map is built from the checkout: every
+// enumerated path, and the text only of what UnitTestFile reads.
+func TestWorkspaceUnitLandingReadsTheCheckout(t *testing.T) {
+	root := t.TempDir()
+	mustWrite(t, filepath.Join(root, "go.mod"), "module example.com/m\n\ngo 1.22\n")
+	mustWrite(t, filepath.Join(root, "pkg", "a.go"), "package pkg\n\nfunc A() int { return 1 }\n")
+	mustWrite(t, filepath.Join(root, "pkg", "a_test.go"), "package pkg\n\nimport \"testing\"\n\nfunc TestA(t *testing.T) {}\n")
+	mustWrite(t, filepath.Join(root, "README.md"), "hello\n")
+	cands, excl, err := reposcan.Enumerate(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	files, err := workspaceLandingFiles(root, checkoutInventory(cands, excl))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{"go.mod", "pkg/a.go", "pkg/a_test.go", "README.md"} {
+		if _, ok := files[p]; !ok {
+			t.Errorf("landing map lacks %s: %v", p, files)
+		}
+	}
+	if files["README.md"] != "" {
+		t.Errorf("README.md's text was read; only what landing reads is: %q", files["README.md"])
+	}
+	gp, _ := lang.ByName("go")
+	if got := reposcan.UnitTestFile(gp, files)("example.com/m/pkg", "pkg/a.go"); got != "pkg/a_test.go" {
+		t.Errorf("a Go unit lands on %q from the workspace map, want pkg/a_test.go", got)
+	}
+}
+
+// fakeSelectionCache is an in-memory selectionCacheStore keyed on all four
+// key columns.
+type fakeSelectionCache struct {
+	rows map[[4]string][]byte
+	gets [][4]string
+}
+
+func (c *fakeSelectionCache) SelectionCacheGet(_ context.Context, tree, cmd, plugin, substrate string) ([]byte, bool, error) {
+	k := [4]string{tree, cmd, plugin, substrate}
+	c.gets = append(c.gets, k)
+	raw, ok := c.rows[k]
+	return raw, ok, nil
+}
+
+func (c *fakeSelectionCache) SelectionCachePut(_ context.Context, tree, cmd, plugin, substrate string, raw []byte, _ string) error {
+	c.rows[[4]string{tree, cmd, plugin, substrate}] = raw
+	return nil
+}
+
+// The unit pass is cached under its own namespaced plugin key, only when it
+// is settled, and a hit is used exactly as a fresh pass — the seam is not
+// called, and the evidence and landing map are the same.
+func TestUnitPassIsCachedUnderItsOwnKey(t *testing.T) {
+	root := unitEvidenceTSFixture(t)
+	ev := reposcan.UnitEvidence{Ran: true, Units: []reposcan.UnitResult{
+		unitRun("tests/composition/service.test.ts", map[string]lang.LineCounts{"src/app/Service.ts": {Executed: 1, Executable: 1}}),
+	}}
+	cache := &fakeSelectionCache{rows: map[[4]string][]byte{}}
+	newEx := func() *localExecutor {
+		cands, excl, err := reposcan.Enumerate(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return &localExecutor{repoDir: root, substrate: substrateWorkspace, checkArgv: []string{"vitest", "run"},
+			selectionCache: cache, treeDigest: "tree", treeDigestComputed: true, unitWorkers: 1,
+			unitInventory: checkoutInventory(cands, excl)}
+	}
+	sources := []string{"src/app/Service.ts"}
+
+	fresh := &fakeUnitPass{ev: ev}
+	fresh.install(t)
+	first := newEx()
+	got := first.collectUnits(context.Background(), sources)
+	if len(fresh.called()) != 1 || !reflect.DeepEqual(got, ev) || first.unitsReused {
+		t.Fatalf("a miss must run the pass once and return its evidence: calls=%d got=%+v reused=%v", len(fresh.called()), got, first.unitsReused)
+	}
+	p := first.pendingUnitsPut
+	if p == nil || p.Plugin != "typescript/units" || p.TreeDigest != "tree" || p.Substrate != substrateWorkspace {
+		t.Fatalf("pendingUnitsPut = %+v, want a typescript/units row for this tree and substrate", p)
+	}
+	_ = cache.SelectionCachePut(context.Background(), p.TreeDigest, p.CmdDigest, p.Plugin, p.Substrate, p.Raw, "")
+
+	cached := &fakeUnitPass{ev: reposcan.UnitEvidence{Note: "must not run"}}
+	cached.install(t)
+	second := newEx()
+	hit := second.collectUnits(context.Background(), sources)
+	if len(cached.called()) != 0 || !second.unitsReused {
+		t.Fatalf("a hit must not run the pass: calls=%d reused=%v", len(cached.called()), second.unitsReused)
+	}
+	if !reflect.DeepEqual(hit, ev) || !reflect.DeepEqual(second.unitLanding, first.unitLanding) || second.pendingUnitsPut != nil {
+		t.Errorf("a hit must be used as the fresh pass was:\n hit %+v landing %v put %+v\nfresh %+v landing %v", hit, second.unitLanding, second.pendingUnitsPut, ev, first.unitLanding)
+	}
+
+	// An unsettled pass (a unit stopped by the time limit) is evidence for
+	// this scan and is never kept.
+	partial := &fakeUnitPass{ev: reposcan.UnitEvidence{Ran: true, Units: []reposcan.UnitResult{{Unit: "tests/composition/service.test.ts", Err: "not run (time limit)"}}}}
+	partial.install(t)
+	third := newEx()
+	third.selectionCache = &fakeSelectionCache{rows: map[[4]string][]byte{}}
+	third.collectUnits(context.Background(), sources)
+	if third.pendingUnitsPut != nil {
+		t.Errorf("an unsettled pass was queued for the cache: %+v", third.pendingUnitsPut)
+	}
+	// --no-selection-cache: no cache, no lookup, no put.
+	none := newEx()
+	none.selectionCache = nil
+	fresh.install(t)
+	none.collectUnits(context.Background(), sources)
+	if none.pendingUnitsPut != nil {
+		t.Errorf("no cache wired, yet a put was queued: %+v", none.pendingUnitsPut)
+	}
+}
+
+// A pass that ran and had every unit fail widens nothing, and the summary
+// says that is why candidacy is pairing-only — not the selection pass's
+// "no selector" note, which is about grading.
+func TestUnitPassWithNoGoodUnitSaysSo(t *testing.T) {
+	root := unitEvidenceTSFixture(t)
+	fake := &fakeUnitPass{ev: reposcan.UnitEvidence{Ran: true, Units: []reposcan.UnitResult{
+		{Unit: "tests/composition/service.test.ts", Err: "run failed: exit 1"},
+	}}}
+	fake.install(t)
+
+	s := runUnitEvidenceScan(t, root, "--", "vitest", "run")
+
+	if !strings.Contains(s, "pairing-only candidacy (no selection evidence: no unit of 1 contributed evidence)") {
+		t.Errorf("the summary must name the unit pass as the reason:\n%s", s)
+	}
+	if !strings.Contains(s, "tests/composition/service.test.ts: run failed: exit 1") {
+		t.Errorf("the failed unit must be listed:\n%s", s)
+	}
+}

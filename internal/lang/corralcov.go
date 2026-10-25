@@ -151,6 +151,34 @@ func SuiteExit(stdout string) (rc int, ok bool) {
 	return rc, found
 }
 
+// coverageUnavailableNotices are the lines a CoverageCmd prints, in place of
+// a report, when its instrument could not run at all — each followed by the
+// reason. Rust's is the only one today: its llvm-tools check runs before the
+// suite, so such a report has no suite-exit trailer either.
+var coverageUnavailableNotices = []string{rustCoverageUnavailable}
+
+// CoverageUnavailable is the reason a CoverageCmd's output gives for having
+// measured nothing because its instrument could not run (a missing
+// llvm-tools, a failed merge), ok false when it gives none. A caller that
+// would otherwise say only "no report" or "no suite exit status" says this
+// instead: it is what the operator has to fix.
+func CoverageUnavailable(stdout string) (reason string, ok bool) {
+	for _, ln := range strings.Split(stdout, "\n") {
+		ln = strings.TrimSpace(ln)
+		for _, notice := range coverageUnavailableNotices {
+			rest, has := strings.CutPrefix(ln, notice)
+			if !has || (rest != "" && rest[0] != ' ') {
+				continue
+			}
+			if reason = strings.TrimSpace(rest); reason == "" {
+				reason = "no reason given"
+			}
+			return reason, true
+		}
+	}
+	return "", false
+}
+
 // uncountedPrefix starts a v2 disclosure line: a file the reducer measured
 // and could not count, written as "# uncounted <path>: <reason>".
 const uncountedPrefix = "# uncounted "

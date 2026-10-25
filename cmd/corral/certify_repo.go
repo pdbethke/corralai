@@ -726,6 +726,11 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 			ledgerDir = defaultLedgerDir(*repoDir)
 		}
 		ex.wholeSuite = *wholeSuiteFlag
+		// Set here, not with the grading settings below: the unit pass runs
+		// before any job exists and resolves the operator's --runner and
+		// the scan's worker count as grading will.
+		ex.runner = *runnerFlag
+		ex.unitWorkers, _ = resolveScanWorkers(*swarmFlag, *substrateFlag)
 		// The selection cache lives in the file --cache-db names. Its Get
 		// half runs here; a fresh MISS's evidence is written after the scan
 		// (see pendingSelectionPut), once the run it came from is known to
@@ -960,6 +965,12 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	skipEvidence := *diffBase != "" && len(selected) == 0 && len(unpairableInDiff) == 0 && !diffTouchedATest
 	evidenceCandidacyOK := false
 	selectionMethod := ""
+	// evidenceIdx is the index candidacy was widened by, kept for the
+	// evidence-paired disclosure (a unit-kind index answers its covering
+	// count); unitsPartial is a unit pass that widened candidacy although
+	// some of its units contributed nothing.
+	var evidenceIdx reposcan.EvidenceIndex
+	unitsPartial := false
 	if ex != nil && !skipEvidence {
 		// Every source Enumerate saw, paired or not — this instrumented run
 		// answers about the whole tree, not just what pairing already
@@ -1003,9 +1014,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 				})
 			}
 		}
-		if ex.selection.Ran {
-			selectionMethod = "coverage-context"
-		}
+		selectionMethod = ex.selectionMethod()
 
 		// WIDEN: the SAME plugin resolution collectSelection just used, asked
 		// again here rather than threaded out of it: resolveSelectionPlugin
@@ -1017,6 +1026,27 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		if plug != nil {
 			idx, idxOK = reposcan.ParseEvidenceIndex(ex.selection, plug)
 		}
+		// THE UNIT PASS, for a language with no per-test selector: the
+		// evidence that widens its candidacy. Apart from grading — it runs
+		// under --whole-suite too, and selectionMethod above has already
+		// been decided without it.
+		if len(selectionSources) > 0 && runsUnitPass(plug) {
+			ex.unitInventory = checkoutInventory(cands, excl)
+			ex.units = ex.collectUnits(context.Background(), selectionSources)
+			printUnitPass(stdout, ex)
+			if ex.unitsDuration > 0 {
+				ex.events.forScan("phase_units", "", map[string]any{
+					"duration_ms": ex.unitsDuration.Milliseconds(),
+					"units":       len(ex.units.Units),
+					"failed":      unitPassFailed(ex.units),
+				})
+			}
+			if ex.unitLanding != nil {
+				idx, idxOK = reposcan.IndexFromUnits(ex.units, reposcan.UnitTestFile(plug, ex.unitLanding))
+			}
+			unitsPartial = idxOK && unitPassFailed(ex.units) > 0
+		}
+		evidenceIdx = idx
 		var promoted int
 		cands, excl, promoted = reposcan.WidenCandidacyByEvidence(cands, excl, idx, idxOK)
 		evidenceCandidacyOK = idxOK
@@ -1270,11 +1300,26 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	selectionNote := ""
 	if ex != nil {
 		selectionNote = ex.selection.Note
+		// For a language the unit pass serves, ITS reason is why candidacy
+		// is pairing-only; the selection note ("no selector for …") is
+		// about grading.
+		switch {
+		case ex.units.Note != "":
+			selectionNote = ex.units.Note
+		case ex.unitLandingNote != "":
+			selectionNote = ex.unitLandingNote
+		case ex.units.Ran && !evidenceCandidacyOK:
+			selectionNote = fmt.Sprintf("no unit of %d contributed evidence", len(ex.units.Units))
+		}
 	}
-	fmt.Fprintln(stdout, candidacySummaryLine(cands, excl, evidenceCandidacyOK, *dryRun, selectionNote))
+	summary := candidacySummaryLine(cands, excl, evidenceCandidacyOK, *dryRun, selectionNote)
+	if unitsPartial {
+		summary += fmt.Sprintf(" — unit evidence is partial: %d of %d unit(s) contributed none", unitPassFailed(ex.units), len(ex.units.Units))
+	}
+	fmt.Fprintln(stdout, summary)
 	printLanguageProfile(stdout, reposcan.BuildLanguageProfile(cands, excl))
 	printSearchPairings(stdout, cands)
-	printEvidencePairings(stdout, cands)
+	printEvidencePairings(stdout, cands, evidenceIdx)
 	if *dryRun {
 		printWouldAudit(stdout, jobs)
 	}
@@ -1389,7 +1434,6 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	}
 	ex.mutantConcurrency = mutantConc
 	ex.noFailFast = *noFailFastFlag
-	ex.runner = *runnerFlag
 	printRunDisclosures(stdout, ex, jobs)
 
 	// ex is non-nil here: it is constructed on every non-dry-run path above,
@@ -1583,6 +1627,13 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		p := ex.pendingSelectionPut
 		if perr := ex.selectionCache.SelectionCachePut(context.Background(), p.TreeDigest, p.CmdDigest, p.Plugin, p.Substrate, p.Raw, ""); perr != nil {
 			fmt.Fprintf(stderr, "corral certify --repo: the selection cache was NOT written: %v\n", perr)
+		}
+	}
+	// The unit pass's twin, under the same rule (see pendingUnitsPut).
+	if ex != nil && ex.pendingUnitsPut != nil && ex.selectionCache != nil {
+		p := ex.pendingUnitsPut
+		if perr := ex.selectionCache.SelectionCachePut(context.Background(), p.TreeDigest, p.CmdDigest, p.Plugin, p.Substrate, p.Raw, ""); perr != nil {
+			fmt.Fprintf(stderr, "corral certify --repo: the unit evidence cache was NOT written: %v\n", perr)
 		}
 	}
 
@@ -2893,24 +2944,34 @@ func (l *localExecutor) runPreflight(ctx context.Context, sources []string) repo
 	// SILENTLY and wrongly for any language added later; repo-root-by-default
 	// is correct for every filesystem-path reporter, so a new plugin has to
 	// opt OUT rather than remember to opt in.
-	repoRoot := l.repoDir
-	if langName == "go" {
-		// Go's coverage profile paths are import paths, not filesystem
-		// paths, on EITHER substrate — always need the module prefix to
-		// strip it back to a repo-relative path (see go.go's ParseCoverage).
-		//
-		// Fail-closed on a go.mod this cannot parse: without the prefix
-		// nothing aligns and the report would be a confident
-		// `0 executed, 0 findings, N not measured` — the silent empty result
-		// (see goModulePath).
-		mp, merr := goModulePath(l.repoDir)
-		if merr != nil {
-			return reposcan.CoverageMap{Note: fmt.Sprintf("preflight: cannot determine the Go module path, so no coverage path could be resolved: %v", merr)}
-		}
-		repoRoot = mp
+	repoRoot, merr := l.coverageModulePath(langName)
+	if merr != nil {
+		return reposcan.CoverageMap{Note: fmt.Sprintf("preflight: %v", merr)}
 	}
 
 	return reposcan.Preflight(ctx, runner, files, plug, testCmd, repoRoot)
+}
+
+// coverageModulePath is the root a CoverageReporter's CoverageCounts aligns
+// its paths against — the repository's filesystem root, or, for Go, the
+// module path — for the coverage pre-flight and the unit evidence pass
+// alike, so the two cannot drift in how they read a report.
+//
+// Go's coverage profile paths are import paths, not filesystem paths, on
+// EITHER substrate — always need the module prefix to strip it back to a
+// repo-relative path (see go.go's ParseCoverage). Fail-closed on a go.mod
+// this cannot parse: without the prefix nothing aligns and the report would
+// be a confident `0 executed, 0 findings, N not measured` — the silent
+// empty result (see goModulePath).
+func (l *localExecutor) coverageModulePath(langName string) (string, error) {
+	if langName != "go" {
+		return l.repoDir, nil
+	}
+	mp, err := goModulePath(l.repoDir)
+	if err != nil {
+		return "", fmt.Errorf("cannot determine the Go module path, so no coverage path could be resolved: %w", err)
+	}
+	return mp, nil
 }
 
 // pendingSelectionCachePut is a MISS's raw evidence, held on the executor
@@ -3088,6 +3149,17 @@ func (l *localExecutor) collectSelection(ctx context.Context, sources []string) 
 		l.pendingSelectionPut = &pendingSelectionCachePut{TreeDigest: treeDigest, CmdDigest: cmdDigest, Plugin: langName, Substrate: l.substrate, Raw: ev.Raw}
 	}
 	return ev
+}
+
+// selectionMethod is the scan's test-selection method for auditConfigKey:
+// "coverage-context" when the selection pass produced evidence, else "". It
+// reads the selection pass ONLY — the unit pass (l.units) decides candidacy,
+// never how a file is graded, so it must not move the key.
+func (l *localExecutor) selectionMethod() string {
+	if l.selection.Ran {
+		return "coverage-context"
+	}
+	return ""
 }
 
 // collectSelectionEvidence is reposcan.CollectSelectionEvidence behind a
@@ -3583,7 +3655,11 @@ func candidacySummaryLine(cands []reposcan.Candidate, excl []reposcan.Exclusion,
 // convention); an evidence-only candidate took neither, so it gets its own
 // disclosure line rather than being silently indistinguishable from a
 // convention-paired one.
-func printEvidencePairings(w io.Writer, cands []reposcan.Candidate) {
+//
+// The covering count is the index's own unit: tests for a per-test index
+// (Candidate.CoveringTests), test UNITS for a unit-kind one (UnitsFor),
+// which leaves CoveringTests nil by design.
+func printEvidencePairings(w io.Writer, cands []reposcan.Candidate, idx reposcan.EvidenceIndex) {
 	var evidenceOnly []reposcan.Candidate
 	for _, c := range cands {
 		if c.TestPath == "" {
@@ -3594,6 +3670,11 @@ func printEvidencePairings(w io.Writer, cands []reposcan.Candidate) {
 		if i == maxListedExclusions {
 			fmt.Fprintf(w, "    ... and %d more paired by evidence\n", len(evidenceOnly)-maxListedExclusions)
 			break
+		}
+		if idx.UnitKind() {
+			n, _ := idx.UnitsFor(c.Path)
+			fmt.Fprintf(w, "    %s paired by evidence: %d covering test unit(s), authored test lands beside %s\n", c.Path, n, c.CoveringTestPath)
+			continue
 		}
 		n := 0
 		if c.CoveringTests != nil {
@@ -4692,6 +4773,38 @@ type localExecutor struct {
 	// collected fresh (a cache hit, no cache wired, or the pass did not run
 	// at all).
 	pendingSelectionPut *pendingSelectionCachePut
+
+	// units is the scan's unit evidence pass (collectUnits): each test
+	// UNIT the operator's command collects, run alone under coverage, for
+	// a language with no per-test selector. It decides CANDIDACY only —
+	// which unpaired files an execution pairs — and never grading:
+	// selectionMethod reads selection, never units, so no cache key moves.
+	// Zero value: no pass ran.
+	units reposcan.UnitEvidence
+	// unitsDuration is how long the pass's own runs took, measured around
+	// them as selectionDuration is; zero when nothing ran (a cache hit, a
+	// refusal before any run).
+	unitsDuration time.Duration
+	// unitsReused is set when collectUnits served a cache HIT.
+	unitsReused bool
+	// unitWorkers is how many units run at once: the scan's own worker
+	// setting (resolveScanWorkers — --swarm on the jail, one on the
+	// workspace, whose one checkout the units share), set where the
+	// executor is built. Never a number of the pass's own.
+	unitWorkers int
+	// unitInventory is every file the scan's enumeration classified in the
+	// checkout (checkoutInventory), set before collectUnits: on the workspace
+	// substrate the landing map is built from it (workspaceLandingFiles).
+	unitInventory []string
+	// unitLanding is the repository the unit pass lands tests in
+	// (reposcan.UnitTestFile's files): the jail seed's files, or the
+	// workspace map. nil when it could not be built, and unitLandingNote
+	// then says why.
+	unitLanding     map[string]string
+	unitLandingNote string
+	// pendingUnitsPut is pendingSelectionPut's twin for a settled unit pass
+	// (reposcan.UnitEvidence.Settled), written at the same point.
+	pendingUnitsPut *pendingSelectionCachePut
 
 	// writerMode is the scan-wide --writer-mode, carried onto every job's
 	// localAuditInput. Resolved and validated once at the flag boundary.

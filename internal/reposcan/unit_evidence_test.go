@@ -5,6 +5,8 @@ package reposcan
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -609,5 +611,75 @@ func TestUnitPassTakesOnlyAGreenSuite(t *testing.T) {
 				t.Errorf("src/x.ts measured = %v", measured)
 			}
 		})
+	}
+}
+
+// A reporter that could not instrument the unit at all says why on a notice
+// line — Rust's llvm-tools check runs before the suite, so the report has
+// no suite-exit trailer — and that reason is the unit's Err, not "no suite
+// exit status in the report", which would hide what to install. The notice
+// is read whether or not a trailer precedes it (a later step — the merge,
+// the export — can fail after a green suite), and a red suite still reads
+// as red, the more fundamental failure.
+func TestUnitPassSaysWhyCoverageWasUnavailable(t *testing.T) {
+	listing := strings.Replace(unitListingFixture(t, "cargo-units.txt"), "/fixture/units/cargo", "/w", -1)
+	const notice = "corral-rust-coverage: unavailable llvm-profdata and llvm-cov are in neither the toolchain's llvm-tools nor PATH\n"
+	cases := []struct{ name, out, wantErr string }{
+		{"before the suite", notice, "coverage unavailable: llvm-profdata and llvm-cov are in neither the toolchain's llvm-tools nor PATH"},
+		{"after a green suite", "# suite-exit 0\n" + notice, "coverage unavailable: llvm-profdata and llvm-cov are in neither the toolchain's llvm-tools nor PATH"},
+		{"after a red suite", "# suite-exit 101\n" + notice, "run failed: exit 101"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newUnitFixture(t, "rust", []string{"cargo", "test", "-p", "units-a"}, listing)
+			for _, u := range []string{"units-a/bin:units-a", "units-a/lib", "units-a/test:it"} {
+				f.answer(u, sandbox.EnumerateResult{Output: tc.out})
+			}
+			ev := f.collect(context.Background(), "/w", 1)
+			if !ev.Ran {
+				t.Fatalf("ev = %+v, want the pass to have run", ev)
+			}
+			if u := unitByName(t, ev, "units-a/lib"); u.Err != tc.wantErr || u.Counts != nil {
+				t.Errorf("units-a/lib = %+v, want Err %q and no counts", u, tc.wantErr)
+			}
+		})
+	}
+}
+
+func unitListingFixture(t *testing.T, name string) string {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join("..", "lang", "testdata", "runners", name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
+// Settled is what a cache may keep: a pass whose every unit's outcome is a
+// property of the tree and the command. A unit the deadline or an interrupt
+// stopped, or that the runner could not start, says something about THIS
+// run only; caching it would freeze the gap into every later scan of the
+// same tree.
+func TestUnitEvidenceSettled(t *testing.T) {
+	ok := UnitResult{Unit: "a", Counts: map[string]lang.LineCounts{}}
+	cases := []struct {
+		name string
+		ev   UnitEvidence
+		want bool
+	}{
+		{"never ran", UnitEvidence{Note: "no unit form"}, false},
+		{"all green", UnitEvidence{Ran: true, Units: []UnitResult{ok}}, true},
+		{"a red unit", UnitEvidence{Ran: true, Units: []UnitResult{ok, {Unit: "b", Err: "run failed: exit 1"}}}, true},
+		{"cannot run alone", UnitEvidence{Ran: true, Units: []UnitResult{ok, {Unit: "b", Err: unitNotAlone}}}, true},
+		{"time limit", UnitEvidence{Ran: true, Units: []UnitResult{ok, {Unit: "b", Err: unitNotRunTimeLimit}}}, false},
+		{"timed out", UnitEvidence{Ran: true, Units: []UnitResult{ok, {Unit: "b", Err: unitTimedOut}}}, false},
+		{"interrupted", UnitEvidence{Ran: true, Units: []UnitResult{ok, {Unit: "b", Err: unitInterrupted}}}, false},
+		{"not run, interrupted", UnitEvidence{Ran: true, Units: []UnitResult{ok, {Unit: "b", Err: unitNotRunInterrupted}}}, false},
+		{"runner error", UnitEvidence{Ran: true, Units: []UnitResult{ok, {Unit: "b", Err: unitCouldNotRun + "jail: boom"}}}, false},
+	}
+	for _, tc := range cases {
+		if got := tc.ev.Settled(); got != tc.want {
+			t.Errorf("%s: Settled() = %v, want %v", tc.name, got, tc.want)
+		}
 	}
 }

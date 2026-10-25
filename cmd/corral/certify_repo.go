@@ -1080,6 +1080,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 					"duration_ms": ex.unitsDuration.Milliseconds(),
 					"units":       len(ex.units.Units),
 					"failed":      unitPassFailed(ex.units),
+					"uncounted":   unitPassUncounted(ex.units),
 				})
 			}
 			if ex.unitLanding != nil {
@@ -1414,6 +1415,9 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		writeEvidenceCache(ex, stderr)
 		if *jsonOut {
 			inv := buildScanInventoryAt(*repoDir, filepath.Base(*repoDir), totalFiles, rankSignal, cands, len(jobs), excl)
+			if ex != nil {
+				inv.Units = unitsJSON(ex.units)
+			}
 			if err := writeScanInventory(jsonSink, inv); err != nil {
 				fmt.Fprintf(stderr, "corral certify --repo: writing JSON inventory: %v\n", err)
 				return 1

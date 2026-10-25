@@ -53,6 +53,32 @@ type scanInventory struct {
 	// the repository.
 	ExcludedByReason map[string]int  `json:"excluded_by_reason"`
 	Auditable        []auditableJSON `json:"auditable"`
+	// Units is the unit evidence pass of a --dry-run --evidence scan, one
+	// entry per listed unit; absent when no pass ran. It is where each
+	// unit's uncounted files are listed in full: the human report gives
+	// only their count (ruling R22).
+	Units []unitJSON `json:"units,omitempty"`
+}
+
+// unitJSON is one unit of the evidence pass: its name, why it contributed
+// no evidence ("" when it did), and every file it measured and could not
+// count, as "<path>: <reason>".
+type unitJSON struct {
+	Unit      string   `json:"unit"`
+	Err       string   `json:"error,omitempty"`
+	Uncounted []string `json:"uncounted,omitempty"`
+}
+
+// unitsJSON is ev's units for the inventory, nil when the pass never ran.
+func unitsJSON(ev reposcan.UnitEvidence) []unitJSON {
+	if !ev.Ran {
+		return nil
+	}
+	out := make([]unitJSON, 0, len(ev.Units))
+	for _, u := range ev.Units {
+		out = append(out, unitJSON{Unit: u.Unit, Err: u.Err, Uncounted: u.Uncounted})
+	}
+	return out
 }
 
 type languageStatJSON struct {

@@ -240,6 +240,17 @@ func unitPassFailed(ev reposcan.UnitEvidence) int {
 	return n
 }
 
+// unitPassUncounted is how many file measurements the pass's units could
+// not count, summed over the units: the phase_units event's number, whose
+// list is the --dry-run --json inventory's.
+func unitPassUncounted(ev reposcan.UnitEvidence) int {
+	n := 0
+	for _, u := range ev.Units {
+		n += len(u.Uncounted)
+	}
+	return n
+}
+
 // printUnitPass is the scan's units line: how many units the pass listed and
 // how many contributed nothing, then each of those once with its reason;
 // when the pass never ran, its Note. A landing map that could not be built
@@ -260,7 +271,16 @@ func printUnitPass(w io.Writer, ex *localExecutor) {
 	fmt.Fprintf(w, "  units: %d run, %d failed (%s)\n", len(ev.Units), unitPassFailed(ev), basis)
 	for _, u := range ev.Units {
 		if u.Err != "" {
-			fmt.Fprintf(w, "    %s: %s\n", u.Unit, u.Err)
+			// A failed unit's reason ends with its output tail, which can
+			// run over several lines; each is indented under the unit so
+			// it reads as that unit's, not as a line of the scan.
+			fmt.Fprintf(w, "    %s: %s\n", u.Unit, strings.ReplaceAll(u.Err, "\n", "\n      "))
+		}
+		// The files a unit measured and could not count are a COUNT here
+		// and a list in the --dry-run --json inventory (ruling R22): listed
+		// on the scan line, REA's 25 units made it 1.4 MB.
+		if n := len(u.Uncounted); n > 0 {
+			fmt.Fprintf(w, "    %s: %d file(s) measured and not counted (listed in --dry-run --json)\n", u.Unit, n)
 		}
 	}
 	if ex.unitLandingNote != "" {

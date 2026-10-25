@@ -716,3 +716,56 @@ func TestUnitEvidenceSettled(t *testing.T) {
 		}
 	}
 }
+
+// A failed unit says what it printed, the way every other run failure here
+// does (failureTail): "run failed: exit 1" alone left an operator unable to
+// tell a jail-only failure from a real red test (commander.js, Task 11a).
+// The tail is the output BEFORE the suite-exit trailer: in the jail the
+// streams are one, and what follows the trailer is the coverage report, not
+// the failure.
+func TestUnitPassShowsAFailedUnitsOutput(t *testing.T) {
+	cases := []struct {
+		name    string
+		res     sandbox.EnumerateResult
+		wantErr string
+	}{
+		{"red suite, one stream", sandbox.EnumerateResult{Output: "AssertionError: expected 1\n    at alpha.test.ts:3\n# suite-exit 1\ncorral-js-coverage: v2\n7 10 src/x.ts\n"},
+			"run failed: exit 1: AssertionError: expected 1\n    at alpha.test.ts:3"},
+		{"red suite, stderr apart", sandbox.EnumerateResult{Output: "# suite-exit 1\ncorral-js-coverage: v2\n7 10 src/x.ts\n", Stderr: "TypeError: boom\n"},
+			"run failed: exit 1: TypeError: boom"},
+		{"command failed", sandbox.EnumerateResult{Output: "sh: 1: go: not found\n# suite-exit 127\n", ExitCode: 127},
+			"run failed: exited 127: sh: 1: go: not found"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newUnitFixture(t, "typescript", []string{"vitest", "run"}, vitestTwoUnits)
+			f.answer("test/alpha.test.ts", tc.res)
+			f.answer("test/beta.test.ts", sandbox.EnumerateResult{Output: jsReport("2 10 src/y.ts")})
+			ev := f.collect(context.Background(), "/w", 1)
+			if got := unitByName(t, ev, "test/alpha.test.ts").Err; got != tc.wantErr {
+				t.Errorf("alpha.Err = %q, want %q", got, tc.wantErr)
+			}
+		})
+	}
+}
+
+// A report that counted nothing because every file it measured was
+// uncountable names how many in its reason and keeps the list in Uncounted,
+// never in the reason: REA's 25 units each carried ~390 paths in their Err,
+// and the scan output was 1.4 MB (Task 11a, ruling R22).
+func TestUnitPassKeepsUncountedListsOutOfTheReason(t *testing.T) {
+	f := newUnitFixture(t, "typescript", []string{"vitest", "run"}, vitestTwoUnits)
+	f.answer("test/alpha.test.ts", sandbox.EnumerateResult{Output: jsReport("# uncounted src/a.ts: transformed code", "# uncounted src/b.ts: transformed code")})
+	f.answer("test/beta.test.ts", sandbox.EnumerateResult{Output: jsReport("2 10 src/y.ts")})
+
+	alpha := unitByName(t, f.collect(context.Background(), "/w", 1), "test/alpha.test.ts")
+	if !strings.HasPrefix(alpha.Err, "unparseable: ") || !strings.Contains(alpha.Err, "the reducer disclosed 2 file(s) it could not count") {
+		t.Errorf("alpha.Err = %q: want the unparseable reason with the count", alpha.Err)
+	}
+	if strings.Contains(alpha.Err, "src/a.ts") {
+		t.Errorf("alpha.Err carries the uncounted list: %q", alpha.Err)
+	}
+	if want := []string{"src/a.ts: transformed code", "src/b.ts: transformed code"}; !reflect.DeepEqual(alpha.Uncounted, want) {
+		t.Errorf("alpha.Uncounted = %q, want %q", alpha.Uncounted, want)
+	}
+}

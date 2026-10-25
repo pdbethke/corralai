@@ -5,7 +5,9 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -376,5 +378,60 @@ func TestDryRunEvidenceCachesASettledPass(t *testing.T) {
 	}
 	if !strings.Contains(second, "src/app/Service.ts paired by evidence") {
 		t.Errorf("the reused pass must pair as the fresh one did:\n%s", second)
+	}
+}
+
+// The scan line carries a COUNT of each unit's uncounted files and the
+// --json inventory carries the list (ruling R22): REA's 25 units each put
+// ~390 paths on the scan line, 1.4 MB of output. A failed unit's reason
+// keeps its output tail, indented under its unit so it reads as part of it.
+func TestUnitPassPrintsUncountedAsACountAndListsThemInJSON(t *testing.T) {
+	refuseModelEndpoints(t)
+	root := unitEvidenceTSFixture(t)
+	mustWrite(t, filepath.Join(root, "tests", "broken.test.ts"), "test('broken', () => {});\n")
+	fake := &fakeUnitPass{ev: reposcan.UnitEvidence{Ran: true, Units: []reposcan.UnitResult{
+		{Unit: "tests/composition/service.test.ts", Counts: map[string]lang.LineCounts{"src/app/Service.ts": {Executed: 1, Executable: 1}},
+			Uncounted: []string{"src/gen/a.ts: transformed code", "src/gen/b.ts: transformed code"}},
+		{Unit: "tests/broken.test.ts", Err: "run failed: exit 1: AssertionError: no\nat broken.test.ts:1", Uncounted: []string{"src/gen/c.ts: transformed code"}},
+	}}}
+	fake.install(t)
+	args := []string{"--repo", root, "--dry-run", "--evidence", "--substrate", substrateWorkspace, "--no-selection-cache"}
+
+	var out, errb bytes.Buffer
+	if code := runCertifyRepo(append(slices.Clone(args), "--", "vitest", "run"), &out, &errb); code != 0 {
+		t.Fatalf("exit %d\n%s\n%s", code, out.String(), errb.String())
+	}
+	s := out.String()
+	for _, want := range []string{
+		"    tests/composition/service.test.ts: 2 file(s) measured and not counted (listed in --dry-run --json)\n",
+		"    tests/broken.test.ts: run failed: exit 1: AssertionError: no\n      at broken.test.ts:1\n",
+		"    tests/broken.test.ts: 1 file(s) measured and not counted (listed in --dry-run --json)\n",
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("missing %q:\n%s", want, s)
+		}
+	}
+	if strings.Contains(s, "src/gen/a.ts") {
+		t.Errorf("an uncounted list reached the scan line:\n%s", s)
+	}
+
+	out.Reset()
+	errb.Reset()
+	if code := runCertifyRepo(append(slices.Clone(args), "--json", "--", "vitest", "run"), &out, &errb); code != 0 {
+		t.Fatalf("--json exit %d\n%s\n%s", code, out.String(), errb.String())
+	}
+	var inv struct {
+		Units []struct {
+			Unit      string   `json:"unit"`
+			Err       string   `json:"error"`
+			Uncounted []string `json:"uncounted"`
+		} `json:"units"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &inv); err != nil {
+		t.Fatalf("inventory is not JSON: %v\n%s", err, out.String())
+	}
+	if len(inv.Units) != 2 || inv.Units[1].Unit != "tests/broken.test.ts" || inv.Units[1].Err == "" || inv.Units[0].Err != "" ||
+		!slices.Equal(inv.Units[0].Uncounted, []string{"src/gen/a.ts: transformed code", "src/gen/b.ts: transformed code"}) {
+		t.Errorf("units in the inventory = %+v", inv.Units)
 	}
 }

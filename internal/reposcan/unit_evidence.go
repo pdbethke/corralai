@@ -218,9 +218,9 @@ func runUnit(ctx context.Context, runner commandRunner, files map[string]string,
 		// toolchain the jail lacks — is not evidence, even when a report
 		// still parses: a failing unit can stop before the code it would
 		// have executed, so its zeros are not "never executed".
-		return UnitResult{Err: fmt.Sprintf("run failed: exited %d%s", exit, failureTail(stderr, out))}
+		return UnitResult{Err: fmt.Sprintf("run failed: exited %d%s", exit, failureTail(stderr, lang.BeforeSuiteExit(out)))}
 	case detailed && exit < 0:
-		return UnitResult{Err: "run failed: the process did not exit normally" + failureTail(stderr, out)}
+		return UnitResult{Err: "run failed: the process did not exit normally" + failureTail(stderr, lang.BeforeSuiteExit(out))}
 	case truncated(out):
 		// Checked before parsing, as Preflight does: a report cut on a
 		// clean boundary parses as a partial map that looks complete.
@@ -241,7 +241,10 @@ func runUnit(ctx context.Context, runner commandRunner, files map[string]string,
 	// operator has to install.
 	rc, ok := lang.SuiteExit(out)
 	if ok && rc != 0 {
-		return UnitResult{Err: fmt.Sprintf("run failed: exit %d", rc)}
+		// What the suite printed before its trailer says why it failed
+		// (stderr when the runner kept it apart); the report after it
+		// does not.
+		return UnitResult{Err: fmt.Sprintf("run failed: exit %d%s", rc, failureTail(stderr, lang.BeforeSuiteExit(out)))}
 	}
 	if reason, unavailable := lang.CoverageUnavailable(out); unavailable {
 		return UnitResult{Err: unitCoverageUnavailable + reason}
@@ -251,6 +254,14 @@ func runUnit(ctx context.Context, runner commandRunner, files map[string]string,
 	}
 	counts, err := reporter.CoverageCounts(out, modulePath)
 	if err != nil {
+		// A report that counted nothing because every file it measured was
+		// uncountable gives their number in the reason and the list in
+		// Uncounted, where the scan's JSON carries it: in every unit's
+		// reason it made REA's scan output 1.4 MB (ruling R22).
+		var empty *lang.NoFileEntriesError
+		if errors.As(err, &empty) {
+			return UnitResult{Err: "unparseable: " + empty.Summary(), Uncounted: lang.UncountedCoverage(out)}
+		}
 		return UnitResult{Err: fmt.Sprintf("unparseable: %v", err)}
 	}
 	return UnitResult{Counts: counts, Uncounted: lang.UncountedCoverage(out)}

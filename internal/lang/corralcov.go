@@ -151,6 +151,29 @@ func SuiteExit(stdout string) (rc int, ok bool) {
 	return rc, found
 }
 
+// BeforeSuiteExit is what stdout printed before SuiteExit's trailer — the
+// suite's own output when the run returns one stream, as the jail does —
+// and all of stdout when there is no trailer. A failed unit's reason quotes
+// its tail: after the trailer comes the coverage report, which says nothing
+// about why the suite failed.
+func BeforeSuiteExit(stdout string) string {
+	cut := -1
+	i := 0
+	for ln := range strings.Lines(stdout) {
+		rest, has := strings.CutPrefix(strings.TrimSpace(ln), suiteExitPrefix)
+		if has {
+			if _, err := strconv.Atoi(strings.TrimSpace(rest)); err == nil {
+				cut = i
+			}
+		}
+		i += len(ln)
+	}
+	if cut < 0 {
+		return stdout
+	}
+	return stdout[:cut]
+}
+
 // coverageUnavailableNotices are the lines a CoverageCmd prints, in place of
 // a report, when its instrument could not run at all — each followed by the
 // reason. Rust's is the only one today: its llvm-tools check runs before the
@@ -296,6 +319,38 @@ func corralRepoPath(path, root string) (string, bool) {
 	return filepath.ToSlash(rel), true
 }
 
+// NoFileEntriesError is a v2 report with its header and no counted file:
+// the suite most likely never loaded an application file, or (Disclosed)
+// every file it measured was one the reducer could not count. Its Error
+// lists those files, as Preflight has always printed them; Summary gives
+// only their number, for a caller that reports the list elsewhere (the unit
+// pass, one reason per unit).
+type NoFileEntriesError struct {
+	Lang      string
+	Disclosed []string
+}
+
+func (e *NoFileEntriesError) Error() string {
+	why := ""
+	if len(e.Disclosed) > 0 {
+		why = fmt.Sprintf(" (the reducer disclosed %d file(s) it could not count: %s)", len(e.Disclosed), strings.Join(e.Disclosed, "; "))
+	}
+	return e.message(why)
+}
+
+// Summary is Error without the list of disclosed files.
+func (e *NoFileEntriesError) Summary() string {
+	why := ""
+	if len(e.Disclosed) > 0 {
+		why = fmt.Sprintf(" (the reducer disclosed %d file(s) it could not count)", len(e.Disclosed))
+	}
+	return e.message(why)
+}
+
+func (e *NoFileEntriesError) message(why string) string {
+	return fmt.Sprintf("lang: %s coverage report has a header but no file entries — the suite most likely never loaded an application file (a collection or import error), not a genuinely-empty result%s", e.Lang, why)
+}
+
 // corralReportKept refuses a report that parsed no entries, or kept none.
 //
 // KEPT, not merely PARSED. The out-of-root filter runs AFTER a line is
@@ -310,11 +365,7 @@ func corralRepoPath(path, root string) (string, bool) {
 // wrongly-rooted run produces now.
 func corralReportKept(langName, modulePath string, parsed, kept int, disclosed []string) error {
 	if parsed == 0 {
-		why := ""
-		if len(disclosed) > 0 {
-			why = fmt.Sprintf(" (the reducer disclosed %d file(s) it could not count: %s)", len(disclosed), strings.Join(disclosed, "; "))
-		}
-		return fmt.Errorf("lang: %s coverage report has a header but no file entries — the suite most likely never loaded an application file (a collection or import error), not a genuinely-empty result%s", langName, why)
+		return &NoFileEntriesError{Lang: langName, Disclosed: disclosed}
 	}
 	if kept == 0 {
 		return fmt.Errorf("lang: %s coverage report measured %d file(s), but NONE of them are under the repo root %q — every path was outside it (a dependency, the stdlib, or a wrong root). That is a failure to measure this repository, not a measurement that it is uncovered", langName, parsed, modulePath)

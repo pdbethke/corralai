@@ -999,6 +999,9 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// some of its units contributed nothing.
 	var evidenceIdx reposcan.EvidenceIndex
 	unitsPartial := false
+	// noSourcesNote is why neither evidence pass ran when the scan left them
+	// no source to run for (noEvidenceSourcesNote); "" otherwise.
+	noSourcesNote := ""
 	if ex != nil && !skipEvidence {
 		// Both evidence passes run under the operator's Ctrl-C: either can
 		// last selectionTimeout, and before this they ran under a context
@@ -1012,6 +1015,9 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		// resolved, or an evidence-only candidate could never be discovered
 		// in the first place.
 		selectionSources := enumeratedSourcePaths(cands, excl)
+		if len(selectionSources) == 0 {
+			noSourcesNote = noEvidenceSourcesNote(excl)
+		}
 		if len(selectionSources) > 0 {
 			// Announced only when it is about to happen: under --whole-suite
 			// collectSelection returns immediately without running anything, and
@@ -1353,6 +1359,8 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 			selectionNote = ex.unitLandingNote
 		case ex.units.Ran && !evidenceCandidacyOK:
 			selectionNote = fmt.Sprintf("no unit of %d contributed evidence", len(ex.units.Units))
+		case noSourcesNote != "":
+			selectionNote = noSourcesNote
 		}
 	}
 	summary := candidacySummaryLine(cands, excl, evidenceCandidacyOK, *dryRun && !*evidenceFlag, selectionNote)
@@ -3284,6 +3292,39 @@ func enumeratedSourcePaths(cands []reposcan.Candidate, enumOnlyExcl []reposcan.E
 		}
 	}
 	return out
+}
+
+// noEvidenceSourcesNote is why the evidence passes did not run on a scan that
+// left them no source (enumeratedSourcePaths was empty): the landing refused
+// every source it found, counted per language, or it found none in a
+// language corral audits. Said on the summary line, since a pass that never
+// ran prints no line of its own and "no selection evidence" alone is a zero
+// nobody explained (semver, Task 11a).
+func noEvidenceSourcesNote(excl []reposcan.Exclusion) string {
+	refused := map[string]int{}
+	for _, e := range excl {
+		if !reposcan.IsLandingRefusal(e.Reason) {
+			continue
+		}
+		name := "unknown-language"
+		if p, ok := lang.Detect(e.Path); ok {
+			name = p.Name()
+		}
+		refused[name]++
+	}
+	if len(refused) == 0 {
+		return "no source file in a language corral audits, so no evidence pass ran"
+	}
+	names := make([]string, 0, len(refused))
+	for n := range refused {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	parts := make([]string, len(names))
+	for i, n := range names {
+		parts[i] = fmt.Sprintf("%d %s source(s) test landing not built", refused[n], n)
+	}
+	return fmt.Sprintf("no source file can be audited yet (%s), so no evidence pass ran", strings.Join(parts, ", "))
 }
 
 // preflightFindings splits the enumerated source set into the three buckets

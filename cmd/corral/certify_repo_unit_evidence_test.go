@@ -517,3 +517,28 @@ func TestUnitPassCachesOnlyAFullyGreenPass(t *testing.T) {
 		}
 	})
 }
+
+// A crate whose every source is refused by the landing (inline tests only,
+// semver's shape, Task 11a) leaves the evidence passes no source to run for.
+// They do not run, and the summary says why: before this the scan printed
+// "pairing-only candidacy (no selection evidence)" with no reason at all and
+// no units line, a zero nobody explained.
+func TestEvidencePassThatCannotRunSaysWhy(t *testing.T) {
+	root := t.TempDir()
+	mustWrite(t, filepath.Join(root, "Cargo.toml"), "[package]\nname = \"inl\"\nversion = \"0.1.0\"\nedition = \"2021\"\n")
+	mustWrite(t, filepath.Join(root, "src", "lib.rs"), "pub fn one() -> u8 { 1 }\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn t() { assert_eq!(super::one(), 1); }\n}\n")
+	fake := &fakeUnitPass{ev: reposcan.UnitEvidence{Note: "fake"}}
+	fake.install(t)
+
+	s := runUnitEvidenceScan(t, root, "--", "cargo", "test")
+
+	if calls := fake.called(); len(calls) != 0 {
+		t.Fatalf("no source can be audited, so no unit pass may run: %+v\n%s", calls, s)
+	}
+	if strings.Contains(s, "(no selection evidence)") {
+		t.Errorf("the summary must say why no evidence pass ran:\n%s", s)
+	}
+	if !strings.Contains(s, "no selection evidence: no source file can be audited yet (1 rust source(s) test landing not built), so no evidence pass ran") {
+		t.Errorf("missing the reason on the summary line:\n%s", s)
+	}
+}

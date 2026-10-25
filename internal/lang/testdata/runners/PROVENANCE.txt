@@ -10,3 +10,7 @@ its working-directory prelude, the capture directory written as /fixture)
 Each *-fail, *-suitefail, *-loadfail and *-hookfail file is stdout+stderr of
 the runner's DEFAULT command on src/fail, not a TTY, as the jail runs it;
 minitest 5.20.0.
+Go, Ruby, PHP and Rust units and the *-help files (added 2026-10-25): go1.26.7,
+gotestsum 1.13.0 (go install), PHP 8.5.4,
+cargo 1.90.0, cargo-nextest 0.9.148 (cd1d6d546 2026-10-07).
+*-help files are each runner's --help; libtest-help.txt is a cargo-built test binary's.

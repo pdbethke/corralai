@@ -157,18 +157,24 @@ func withoutFlag(argv []string, names ...string) []string {
 // "--" and, unless flagsAfterFiles, a flag after the first file (node hands
 // those to the test files rather than reading them).
 func dropFileArgs(args []string, flagsAfterFiles bool, takesValue func(flag string) (value, known bool)) ([]string, bool) {
-	var kept []string
-	sawFile := false
+	kept, _, ok := splitFileArgs(args, flagsAfterFiles, takesValue)
+	return kept, ok
+}
+
+// splitFileArgs is dropFileArgs that also returns the file arguments it
+// dropped, for a row that must look at them (rspec refuses a file with a
+// line number).
+func splitFileArgs(args []string, flagsAfterFiles bool, takesValue func(flag string) (value, known bool)) (kept, files []string, ok bool) {
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		switch {
 		case a == "--":
-			return nil, false
+			return nil, nil, false
 		case !strings.HasPrefix(a, "-") || a == "-":
-			sawFile = true
+			files = append(files, a)
 			continue
-		case sawFile && !flagsAfterFiles:
-			return nil, false
+		case len(files) > 0 && !flagsAfterFiles:
+			return nil, nil, false
 		}
 		kept = append(kept, a)
 		bareNext := i+1 < len(args) && !strings.HasPrefix(args[i+1], "-")
@@ -178,11 +184,11 @@ func dropFileArgs(args []string, flagsAfterFiles bool, takesValue func(flag stri
 		value, known := takesValue(a)
 		switch {
 		case !known && bareNext, value && !bareNext && i+1 < len(args):
-			return nil, false
+			return nil, nil, false
 		case value && bareNext:
 			i++
 			kept = append(kept, args[i])
 		}
 	}
-	return kept, true
+	return kept, files, true
 }

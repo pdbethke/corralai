@@ -118,12 +118,15 @@ var runners = []Runner{
 		FailFast: []string{"-failfast"},
 		ListCmd:  goListCmd, ParseList: goParseTestList, SingleCmd: goSingleCmd,
 		FirstFailure: goFirstFailure, FailedTests: goFailedTests, DeselectCmd: goDeselectCmd,
+		ListUnits: goTestListUnits, ParseUnits: goParseUnits, UnitCmd: goTestUnitCmd,
+		Note: "one-package runs and their `go list` listing verified on go 1.26",
 	},
 	{
 		Name: "gotestsum", ID: "gotestsum", Languages: []string{"go"}, Words: []string{"gotestsum"},
 		ListCmd: goListCmd, ParseList: goParseTestList, SingleCmd: goSingleCmd,
 		FirstFailure: goFirstFailure,
-		Note:         "listing and one-test runs use `go test` itself; the killing test is read from `--- FAIL:` lines, which gotestsum passes through for a failed test but was not run here",
+		ListUnits:    gotestsumListUnits, ParseUnits: goParseUnits, UnitCmd: gotestsumUnitCmd,
+		Note: "listing and one-test runs use `go test` itself; the killing test is read from `--- FAIL:` lines, which gotestsum passes through for a failed test but was not run here; units are listed with `go list` and one package runs through gotestsum, verified on gotestsum 1.13",
 	},
 	{
 		Name: "pytest", ID: "pytest", Languages: []string{"python"}, Default: true, Words: []string{"pytest"},
@@ -200,18 +203,20 @@ var runners = []Runner{
 		Name:           "rspec", ID: "rspec", Languages: []string{"ruby"}, Default: true, Words: []string{"rspec"}, FailFast: []string{"--fail-fast"},
 		ListCmd: rspecListCmd, ParseList: rspecParseList, SingleCmd: rspecSingleCmd, ResolveByList: true, Coruns: lastFullColl,
 		FirstFailure: firstOf(rspecFailures), FailedTests: rspecFailures, DeselectCmd: rspecDeselectCmd,
-		Note: "listing and one-test runs verified on rspec-core 3.13 (one-test runs need 3.12 or later)",
+		ListUnits: rspecListUnits, ParseUnits: rspecParseUnits, UnitCmd: rspecUnitCmd,
+		Note: "listing, one-test and one-file runs verified on rspec-core 3.13 (one-test runs need 3.12 or later)",
 	},
 	{
 		Name: "minitest", ID: "minitest", Languages: []string{"ruby"}, Words: []string{"ruby", "rake", "testrb"},
 		FirstFailure: firstOf(minitestFailures), FailedTests: minitestFailures, DeselectCmd: minitestDeselectCmd,
-		Note: "minitest has no list mode and no full-name selector; rspec is the Ruby runner that lists and runs one test",
+		Note: "minitest has no list mode and no full-name selector; rspec is the Ruby runner that lists and runs one test; no unit evidence: no listing command; Ruby falls back to name pairing under minitest",
 	},
 	{
 		Name: "phpunit", ID: "phpunit", Languages: []string{"php"}, Default: true, Words: []string{"phpunit"},
 		FailFast: []string{"--stop-on-failure"}, FirstFailure: phpFirstFailure, FailedTests: phpFailures, DeselectCmd: phpunitDeselectCmd,
 		ListCmd: phpunitListCmd, ParseList: phpunitParseList, SingleCmd: phpunitSingleCmd, ResolveByList: true,
-		Note: "listing and one-test runs verified on PHPUnit 11.5",
+		ListUnits: phpunitListUnits, ParseUnits: phpunitParseUnits, UnitCmd: phpunitUnitCmd,
+		Note: "listing, one-test and one-file runs (`--list-test-files`) verified on PHPUnit 11.5; other versions were not run",
 	},
 	{
 		// FirstFailure and Flaky read the grammar off the output, not the
@@ -220,13 +225,16 @@ var runners = []Runner{
 		ListCmd: nextestListCmd, ParseList: nextestParseList, SingleCmd: nextestSingleCmd, ResolveByList: true,
 		FirstFailure: rustFirstFailure, Flaky: rustFlakyTests,
 		Disclose: nextestDisclose, PreflightBin: nextestPreflightBin,
+		ListUnits: nextestListUnits, ParseUnits: nextestParseUnits, UnitCmd: nextestUnitCmd,
+		Note: "one-binary runs (`-E 'binary_id(=...)'`) and their `list` listing verified on cargo-nextest 0.9.148; a command with its own filterset or a partition has no unit form",
 	},
 	{
 		Name: "cargo test", ID: "cargo-test", Languages: []string{"rust"}, Default: true, Words: []string{"cargo"},
 		ListCmd: libtestListCmd, ParseList: libtestParseList, SingleCmd: libtestSingleCmd, ResolveByList: true,
 		FirstFailure: rustFirstFailure, Flaky: rustFlakyTests,
 		Disclose: libtestDisclose, PreflightBin: libtestPreflightBin,
-		Note: "libtest has no retries; flaky tests are named when the output is nextest's (a wrapper that runs nextest under another command)",
+		ListUnits: cargoListUnits, ParseUnits: cargoParseUnits, UnitCmd: cargoUnitCmd,
+		Note: "libtest has no retries; flaky tests are named when the output is nextest's (a wrapper that runs nextest under another command); one-target runs (`--lib`, `--test`, `--bin`) verified on cargo 1.90, where a target name two packages share runs both, so in a workspace each crate's lib is not run alone; doc tests are no unit",
 	},
 }
 

@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: Elastic-2.0
 #
 # scripts/capture-runner-fixtures.sh [--keep] [DIR] — runs the real jest,
-# vitest, mocha, node --test, rspec and phpunit against the fixture suites in
+# vitest, mocha, node --test, rspec, phpunit, go test, gotestsum, cargo test
+# and cargo nextest against the fixture suites in
 # internal/lang/testdata/runners/src, writes what each runner's LIST command
 # prints into internal/lang/testdata/runners/, and checks that each runner's
 # one-test command really runs one test.
@@ -13,7 +14,8 @@
 # ships only after it ran against the real runner"). The commands below are
 # the ones the runner rows build (internal/lang/runner_*.go); keep them equal.
 #
-# Needs the network (npm, composer) and node, ruby with rspec, php. DIR
+# Needs the network (npm, composer, go install) and node, ruby with rspec,
+# php, go, cargo and cargo-nextest. DIR
 # defaults to a temp dir, removed on exit unless --keep; a kept DIR is what
 # CORRALAI_RUNNER_ROOT points TestRealRunnersListAndRunOne at. RSPEC overrides
 # the rspec command (a box whose rspec shim is broken can pass `ruby -S ...`).
@@ -65,7 +67,7 @@ PRELUDE='printf '"'"'corral-units-cwd %s\n'"'"' "$(pwd -P)" && exec "$@"'
 PDIR="$(pwd -P)"
 units() { # units <fixture> <cmd...>: the wrapped listing's stdout
   local f="$1"; shift
-  sh -c "$PRELUDE" corral-units "$@" 2>/dev/null | sed -e "s#$PDIR#/fixture#g" -e '/duration_ms/d' > "$OUT/$f" || true
+  sh -c "$PRELUDE" corral-units "$@" 2>/dev/null | sed -e "s#$PDIR#/fixture#g" -e "s#$HOME#~#g" -e '/duration_ms/d' > "$OUT/$f" || true
 }
 units jest-units.txt npx --no-install jest --ci units/jest --listTests --json
 units vitest-units.txt npx --no-install vitest list --reporter=verbose units/vitest --filesOnly --json
@@ -109,6 +111,74 @@ want vitest-unit 2 "$(npx --no-install vitest run --reporter=verbose units/vites
 want vitest-unit-substring-collision 3 "$(npx --no-install vitest run --root units/collide units/collide/a.vitest.test.mjs 2>&1 | sed 's/\x1b\[[0-9;]*m//g' | unitran)"
 want node-unit 2 "$(node --test --test-reporter=tap --test-concurrency 1 units/node/a.node.test.js 2>&1 | unitran)"
 want mocha-config-spec-merges 2 "$(cd units/mocharc && npx --no-install mocha t/a.mocha.js 2>&1 | unitran)"
+
+# --- Go, Ruby, PHP and Rust units (runner_units.go's other rows) -----------
+# Each listing is ListUnitsCmd's command for the operator command named in
+# the comment above it; each want is a one-unit run, or a measurement behind
+# the row's shape. a.* / package a / units-a's lib hold two tests, the rest one.
+help() { # help <fixture> <cmd...>: a runner's --help, the tables in runner_unit_options.go
+  local f="$1"; shift
+  "$@" 2>&1 | sed -e "s#$DIR#\$DIR#g" -e 's#/tmp/go-build[0-9]*/b[0-9]*/exe/#$GOBUILD/#g' > "$OUT/$f" || true
+}
+GOTESTSUM=1.13.0
+[ "$GOTESTSUM" = "1.13.0" ] || { echo "GOTESTSUM drifted from the install line" >&2; exit 1; }
+GOBIN="$DIR/bin" go install gotest.tools/gotestsum@v1.13.0
+# goUnitTemplate (go_units.go)
+GOT='{{if .Error}}error {{.ImportPath}}{{else if or .TestGoFiles .XTestGoFiles}}unit {{.ImportPath}}{{else}}none {{.ImportPath}}{{end}}'
+# go test -count=1 ./...  /  go test -tags extra ./...  /  go test ./nope
+(cd units/gomod && units go-units.txt go list -e -f "$GOT" ./...)
+(cd units/gomod && units go-units-tags.txt go list -tags extra -e -f "$GOT" ./...)
+(cd units/gomod && units go-units-error.txt go list -e -f "$GOT" ./nope)
+gopass() { grep -c -- '--- PASS' || true; }
+want go-unit 2 "$(cd units/gomod && go test -v -count=1 example.com/units/a 2>&1 | gopass)"
+want go-unit-xtest 1 "$(cd units/gomod && go test -v -count=1 example.com/units/b 2>&1 | gopass)"
+want gotestsum-no-args-runs "go test -json ./..." "$(cd units/gomod && "$DIR/bin/gotestsum" --debug 2>&1 | sed -n 's/^exec: \[\(.*\)\]$/\1/p')"
+want gotestsum-unit 2 "$(cd units/gomod && "$DIR/bin/gotestsum" --format standard-verbose -- -count=1 example.com/units/a 2>&1 | gopass)"
+help gotestsum-help.txt "$DIR/bin/gotestsum" --help
+
+# rspec units/rspec
+units rspec-units.txt $RSPEC units/rspec --dry-run --format json
+rbran() { grep -oE '[0-9]+ examples?' | grep -oE '[0-9]+' | tail -1; }
+want rspec-unit 2 "$($RSPEC units/rspec/spec/a_spec.rb 2>&1 | rbran)"
+want rspec-paths-union 3 "$($RSPEC units/rspec units/rspec/spec/a_spec.rb 2>&1 | rbran)"
+want rspec-dotrspec-path-not-added 2 "$(cd units/rspecrc && $RSPEC spec/a_spec.rb 2>&1 | rbran)"
+want rspec-profile-reads-next-word 3 "$(cd units/rspec && $RSPEC -p spec/a_spec.rb 2>&1 | rbran)"
+want rspec-no-profile-reads-no-word 2 "$(cd units/rspec && $RSPEC --no-profile spec/a_spec.rb 2>&1 | rbran)"
+help rspec-help.txt $RSPEC --help
+
+# vendor/bin/phpunit -c units/phpunit/phpunit.xml --testsuite unit  /  ... --group slow
+PHPC="vendor/bin/phpunit -c units/phpunit/phpunit.xml"
+units phpunit-units.txt $PHPC --testsuite unit --list-test-files
+units phpunit-units-group.txt $PHPC --group slow --list-test-files
+phpran() { sed -n 's/^OK (\([0-9]*\) tests\{0,1\}.*/\1/p'; }
+want phpunit-unit 2 "$($PHPC --testsuite unit units/phpunit/tests/ATest.php 2>&1 | phpran)"
+want phpunit-args-union 5 "$($PHPC units/phpunit/tests units/phpunit/tests/ATest.php 2>&1 | phpran)"
+want phpunit-file-replaces-testsuite 2 "$($PHPC --testsuite other units/phpunit/tests/ATest.php 2>&1 | phpran)"
+want phpunit-option-after-file 1 "$($PHPC units/phpunit/tests/ATest.php --group slow 2>&1 | phpran)"
+want phpunit-exclude-group-lists-no-empty-file 0 "$($PHPC --exclude-group slow --list-test-files units/phpunit/excl units/phpunit/tests 2>&1 | grep -c DTest || true)"
+want phpunit-colors-takes-no-next-word 'Test file "never" not found' "$($PHPC --colors never units/phpunit/tests/ATest.php 2>&1 | grep -o 'Test file "never" not found')"
+help phpunit-help.txt vendor/bin/phpunit --help
+
+# cargo test -p units-a  /  cargo test --workspace  /  cargo nextest run --workspace [integrates]
+cargoran() { grep -oE 'test result: ok\. [0-9]+ passed' | grep -oE '[0-9]+' | awk '{s+=$1} END {print s+0}'; }
+nextran() { sed -n 's/^ *Summary .* \([0-9]*\) tests\{0,1\} run:.*/\1/p'; }
+(cd units/cargo && units cargo-units.txt cargo test -p units-a --no-run --message-format=json)
+(cd units/cargo && units cargo-units-workspace.txt cargo test --workspace --no-run --message-format=json)
+(cd units/cargo && units nextest-units.txt cargo nextest list --workspace --message-format json)
+(cd units/cargo && units nextest-units-filter.txt cargo nextest list --workspace integrates --message-format json)
+want cargo-unit-lib 2 "$(cd units/cargo && cargo test -p units-a --lib 2>&1 | cargoran)"
+want cargo-unit-bin 1 "$(cd units/cargo && cargo test -p units-a --bin units-a 2>&1 | cargoran)"
+want cargo-unit-test 1 "$(cd units/cargo && cargo test -p units-a --test it 2>&1 | cargoran)"
+want cargo-targets-union 3 "$(cd units/cargo && cargo test -p units-a --test it --lib 2>&1 | cargoran)"
+want cargo-target-name-across-packages 2 "$(cd units/cargo && cargo test --workspace --test it 2>&1 | cargoran)"
+want nextest-unit 2 "$(cd units/cargo && cargo nextest run --workspace -E 'binary_id(=units-a)' 2>&1 | nextran)"
+want nextest-filtersets-union 3 "$(cd units/cargo && cargo nextest run --workspace -E 'binary_id(=units-a)' -E 'test(negates)' 2>&1 | nextran)"
+want nextest-name-filter-and-binary 0 "$(cd units/cargo && cargo nextest run --workspace integrates -E 'binary_id(=units-a)' 2>&1 | nextran)"
+want nextest-list-refuses-run-only "unexpected argument '--retries'" "$(cd units/cargo && cargo nextest list --workspace --retries 2 2>&1 | grep -o "unexpected argument '--retries'")"
+help cargo-test-help.txt cargo test --help
+help libtest-help.txt sh -c 'cd units/cargo && cargo test -q -p units-a --test it -- --help 2>/dev/null'
+help nextest-run-help.txt cargo nextest run --help
+help nextest-list-help.txt cargo nextest list --help
 
 # --- failing suites: what each DEFAULT reporter prints, and the skip commands --
 # (internal/lang/runner_failures.go). $DIR and $HOME are replaced: these files are public.
@@ -178,6 +248,10 @@ want composer-test-single 1 "$(composer test -- --filter '/(?:^|\\)CalcTest::tes
   echo "Each *-fail, *-suitefail, *-loadfail and *-hookfail file is stdout+stderr of"
   echo "the runner's DEFAULT command on src/fail, not a TTY, as the jail runs it;"
   echo "$(ruby -e 'require "minitest"; print "minitest ", Minitest::VERSION')."
+  echo "Go, Ruby, PHP and Rust units and the *-help files (added 2026-10-25): $(go version | awk '{print $3}'),"
+  echo "gotestsum $GOTESTSUM (go install), $(php -r 'echo "PHP ", PHP_VERSION;'),"
+  echo "$(cargo --version | awk '{print "cargo", $2}'), $(cargo nextest --version 2>/dev/null | head -1)."
+  echo "*-help files are each runner's --help; libtest-help.txt is a cargo-built test binary's."
 } > "$OUT/PROVENANCE.txt"
 
 exit "$fail"

@@ -94,8 +94,4 @@ var ParityExemptions = []Exemption{
 	{"rust", "selection", "per-test coverage contexts per runner; its own spec (runner table Phase 6)"},
 
 	{"python", "units", "evidence is per test through TestSelector"},
-	{"go", "units", "unit listing not yet wired for this language's runners (evidence pairing, next task)"},
-	{"ruby", "units", "unit listing not yet wired for this language's runners (evidence pairing, next task)"},
-	{"php", "units", "unit listing not yet wired for this language's runners (evidence pairing, next task)"},
-	{"rust", "units", "unit listing not yet wired for this language's runners (evidence pairing, next task)"},
 }

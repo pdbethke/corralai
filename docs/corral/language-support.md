@@ -14,16 +14,15 @@ What corral does with each language's tests. This page is rendered from the same
 | Name the killing test | ✓ | ✓ | ✓ | ✓ | ✓ (rspec, minitest) | ✓ | ✓ |
 | Stop at the first failure | ✓ | ✓ (jest, mocha) | ✓ | ✓ | ✓ (rspec) | — (1) | ✓ (jest, mocha) |
 | Keep the passing part of an authored test | ✓ | ✓ | ✓ | ✓ | ✓ (rspec, minitest) | — (2) | ✓ |
-| Run one test unit | — (3) | ✓ | — (3) | — (4) | — (3) | — (3) | ✓ |
+| Run one test unit | ✓ | ✓ | ✓ | — (3) | ✓ (rspec) | ✓ | ✓ |
 | Coverage pre-flight | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Grade only the tests that run the file | — (5) | — (6) | — (6) | ✓ | — (6) | — (6) | — (6) |
+| Grade only the tests that run the file | — (4) | — (5) | — (5) | ✓ | — (5) | — (5) | — (5) |
 
 1. nextest's --fail-fast and libtest's lack of one are not yet verified against a real run (runner table Phase 5)
 2. libtest --skip and nextest filtersets are not yet verified for salvage (runner table Phase 5)
-3. unit listing not yet wired for this language's runners (evidence pairing, next task)
-4. evidence is per test through TestSelector
-5. per-test coverage needs a run per test; its own spec (runner table Phase 6)
-6. per-test coverage contexts per runner; its own spec (runner table Phase 6)
+3. evidence is per test through TestSelector
+4. per-test coverage needs a run per test; its own spec (runner table Phase 6)
+5. per-test coverage contexts per runner; its own spec (runner table Phase 6)
 
 ## By runner
 
@@ -31,16 +30,16 @@ A language has a runner capability when any of its runners does; this is which. 
 
 | runner | `--runner` | languages | stop at first failure | list tests | run one test | run one test unit | names the killing test | salvage | names flaky tests | note |
 |---|---|---|---|---|---|---|---|---|---|---|
-| `go test` (default) | `go-test` | go | `-failfast` | ✓ | ✓ |  | ✓ | ✓ |  |  |
-| `gotestsum` | `gotestsum` | go |  | ✓ | ✓ |  | ✓ |  |  | listing and one-test runs use `go test` itself; the killing test is read from `--- FAIL:` lines, which gotestsum passes through for a failed test but was not run here |
+| `go test` (default) | `go-test` | go | `-failfast` | ✓ | ✓ | ✓ | ✓ | ✓ |  | one-package runs and their `go list` listing verified on go 1.26 |
+| `gotestsum` | `gotestsum` | go |  | ✓ | ✓ | ✓ | ✓ |  |  | listing and one-test runs use `go test` itself; the killing test is read from `--- FAIL:` lines, which gotestsum passes through for a failed test but was not run here; units are listed with `go list` and one package runs through gotestsum, verified on gotestsum 1.13 |
 | `pytest` (default) | `pytest` | python | `-x` | ✓ | ✓ |  | ✓ | ✓ |  |  |
 | `unittest` | `unittest` | python | `--failfast` | ✓ | ✓ |  |  |  |  | listing and one-test runs use pytest, which collects unittest suites; they need pytest installed |
 | `jest` | `jest` | javascript, typescript | `--bail` | ✓ | ✓ | ✓ | ✓ | ✓ |  | listing, one-test and one-file runs verified on jest 30.5 |
 | `mocha` | `mocha` | javascript, typescript | `--bail` | ✓ | ✓ |  | ✓ | ✓ |  | listing and one-test runs verified on mocha 11.8 (listing needs mocha 9 or later); no unit evidence: its config's spec list is always added to the files on its command line, so it has no one-file run |
 | `vitest` | `vitest` | javascript, typescript |  | ✓ | ✓ | ✓ | ✓ | ✓ |  | listing, one-test and one-file runs verified on vitest 3.2; vitest 1, 2 and 4 were not run |
 | `node --test` (default) | `node-test` | javascript, typescript |  | ✓ | ✓ | ✓ | ✓ | ✓ |  | node has no collect-only mode, so listing RUNS the test file once on the unmutated code; verified on node 22.23 and 24.22 (listing and running one file on node 22.23 only). Through a package script, listing, one-test runs and salvage need `--test` to be the script's last word, since node reads options only before the first file |
-| `rspec` (default) | `rspec` | ruby | `--fail-fast` | ✓ | ✓ |  | ✓ | ✓ |  | listing and one-test runs verified on rspec-core 3.13 (one-test runs need 3.12 or later) |
-| `minitest` | `minitest` | ruby |  |  |  |  | ✓ | ✓ |  | minitest has no list mode and no full-name selector; rspec is the Ruby runner that lists and runs one test |
-| `phpunit` (default) | `phpunit` | php | `--stop-on-failure` | ✓ | ✓ |  | ✓ | ✓ |  | listing and one-test runs verified on PHPUnit 11.5 |
-| `cargo nextest` | `cargo-nextest` | rust |  | ✓ | ✓ |  | ✓ |  | ✓ |  |
-| `cargo test` (default) | `cargo-test` | rust |  | ✓ | ✓ |  | ✓ |  | ✓ | libtest has no retries; flaky tests are named when the output is nextest's (a wrapper that runs nextest under another command) |
+| `rspec` (default) | `rspec` | ruby | `--fail-fast` | ✓ | ✓ | ✓ | ✓ | ✓ |  | listing, one-test and one-file runs verified on rspec-core 3.13 (one-test runs need 3.12 or later) |
+| `minitest` | `minitest` | ruby |  |  |  |  | ✓ | ✓ |  | minitest has no list mode and no full-name selector; rspec is the Ruby runner that lists and runs one test; no unit evidence: no listing command; Ruby falls back to name pairing under minitest |
+| `phpunit` (default) | `phpunit` | php | `--stop-on-failure` | ✓ | ✓ | ✓ | ✓ | ✓ |  | listing, one-test and one-file runs (`--list-test-files`) verified on PHPUnit 11.5; other versions were not run |
+| `cargo nextest` | `cargo-nextest` | rust |  | ✓ | ✓ | ✓ | ✓ |  | ✓ | one-binary runs (`-E 'binary_id(=...)'`) and their `list` listing verified on cargo-nextest 0.9.148; a command with its own filterset or a partition has no unit form |
+| `cargo test` (default) | `cargo-test` | rust |  | ✓ | ✓ | ✓ | ✓ |  | ✓ | libtest has no retries; flaky tests are named when the output is nextest's (a wrapper that runs nextest under another command); one-target runs (`--lib`, `--test`, `--bin`) verified on cargo 1.90, where a target name two packages share runs both, so in a workspace each crate's lib is not run alone; doc tests are no unit |

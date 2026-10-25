@@ -1,0 +1,5 @@
+corral-units-cwd /fixture/units/gomod
+unit example.com/units/a
+unit example.com/units/b
+none example.com/units/c
+none example.com/units/tagged

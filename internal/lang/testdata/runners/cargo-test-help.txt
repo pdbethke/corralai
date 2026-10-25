@@ -1,0 +1,66 @@
+Execute all unit and integration tests and build examples of a local package
+
+Usage: cargo test [OPTIONS] [TESTNAME] [-- [ARGS]...]
+
+Arguments:
+  [TESTNAME]  If specified, only run tests containing this string in their names
+  [ARGS]...   Arguments for the test binary
+
+Options:
+      --no-run                   Compile, but don't run tests
+      --no-fail-fast             Run all tests regardless of failure
+      --future-incompat-report   Outputs a future incompatibility report at the end of the build
+      --message-format <FMT>     Error format [possible values: human, short, json,
+                                 json-diagnostic-short, json-diagnostic-rendered-ansi,
+                                 json-render-diagnostics]
+  -q, --quiet                    Display one character per test instead of one line
+  -v, --verbose...               Use verbose output (-vv very verbose/build.rs output)
+      --color <WHEN>             Coloring [possible values: auto, always, never]
+      --config <KEY=VALUE|PATH>  Override a configuration value
+  -Z <FLAG>                      Unstable (nightly-only) flags to Cargo, see 'cargo -Z help' for
+                                 details
+  -h, --help                     Print help
+
+Package Selection:
+  -p, --package [<SPEC>]  Package to run tests for
+      --workspace         Test all packages in the workspace
+      --exclude <SPEC>    Exclude packages from the test
+      --all               Alias for --workspace (deprecated)
+
+Target Selection:
+      --lib               Test only this package's library
+      --bins              Test all binaries
+      --bin [<NAME>]      Test only the specified binary
+      --examples          Test all examples
+      --example [<NAME>]  Test only the specified example
+      --tests             Test all targets that have `test = true` set
+      --test [<NAME>]     Test only the specified test target
+      --benches           Test all targets that have `bench = true` set
+      --bench [<NAME>]    Test only the specified bench target
+      --all-targets       Test all targets (does not include doctests)
+      --doc               Test only this library's documentation
+
+Feature Selection:
+  -F, --features <FEATURES>  Space or comma separated list of features to activate
+      --all-features         Activate all available features
+      --no-default-features  Do not activate the `default` feature
+
+Compilation Options:
+  -j, --jobs <N>                Number of parallel jobs, defaults to # of CPUs.
+  -r, --release                 Build artifacts in release mode, with optimizations
+      --profile <PROFILE-NAME>  Build artifacts with the specified profile
+      --target [<TRIPLE>]       Build for the target triple
+      --target-dir <DIRECTORY>  Directory for all generated artifacts
+      --unit-graph              Output build graph in JSON (unstable)
+      --timings[=<FMTS>]        Timing output formats (unstable) (comma separated): html, json
+
+Manifest Options:
+      --manifest-path <PATH>  Path to Cargo.toml
+      --lockfile-path <PATH>  Path to Cargo.lock (unstable)
+      --ignore-rust-version   Ignore `rust-version` specification in packages
+      --locked                Assert that `Cargo.lock` will remain unchanged
+      --offline               Run without accessing the network
+      --frozen                Equivalent to specifying both --locked and --offline
+
+Run `cargo help test` for more detailed information.
+Run `cargo test -- --help` for test binary options.

@@ -1,0 +1,57 @@
+Usage:
+    $DIR/bin/gotestsum [flags] [--] [go test flags]
+    $DIR/bin/gotestsum [command]
+
+See https://pkg.go.dev/gotest.tools/gotestsum#section-readme for detailed documentation.
+
+Flags:
+      --debug                                       enabled debug logging
+  -f, --format string                               print format of test input (default "pkgname")
+      --format-hide-empty-pkg                       do not print empty packages in compact formats
+      --format-icons string                         use different icons, see help for options
+      --hide-summary summary                        hide sections of the summary: skipped,failed,errors,output (default none)
+      --jsonfile string                             write all TestEvents to file
+      --jsonfile-timing-events string               write only the pass, skip, and fail TestEvents to the file
+      --junitfile string                            write a JUnit XML file
+      --junitfile-hide-empty-pkg                    omit packages with no tests from the junit.xml file
+      --junitfile-hide-skipped-tests                omit skipped tests from the junit.xml file
+      --junitfile-project-name string               name of the project used in the junit.xml file
+      --junitfile-testcase-classname field-format   format the testcase classname field as: full, relative, short (default full)
+      --junitfile-testsuite-name field-format       format the testsuite name field as: full, relative, short (default full)
+      --max-fails int                               end the test run after this number of failures
+      --no-color                                    disable color output (default true)
+      --packages list                               space separated list of package to test
+      --post-run-command command                    command to run after the tests have completed
+      --raw-command                                 don't prepend 'go test -json' to the 'go test' command
+      --rerun-fails int[=2]                         rerun failed tests until they all pass, or attempts exceeds maximum. Defaults to max 2 reruns when enabled
+      --rerun-fails-abort-on-data-race              do not rerun tests if a data race is detected
+      --rerun-fails-max-failures int                do not rerun any tests if the initial run has more than this number of failures (default 10)
+      --rerun-fails-report string                   write a report to the file, of the tests that were rerun
+      --rerun-fails-run-root-test                   rerun the entire root testcase when any of its subtests fail, instead of only the failed subtest
+      --version                                     show version and exit
+      --watch                                       watch go files, and run tests when a file is modified
+      --watch-chdir                                 in watch mode change the working directory to the directory with the modified file before running tests
+      --watch-clear                                 in watch mode clear screen when rerun tests
+
+Formats:
+    dots                     print a character for each test
+    dots-v2                  experimental dots format, one package per line
+    pkgname                  print a line for each package
+    pkgname-and-test-fails   print a line for each package and failed test output
+    testname                 print a line for each test and package
+    testdox                  print a sentence for each test using gotestdox
+    github-actions           testname format with github actions log grouping
+    standard-quiet           standard go test format
+    standard-verbose         standard go test -v format
+
+Format icons:
+    default                  the original unicode (✓, ∅, ✖)
+    hivis                    higher visibility unicode (✅, ➖, ❌)
+    text                     simple text characters (PASS, SKIP, FAIL)
+    codicons                 requires a font from https://www.nerdfonts.com/ (  )
+    octicons                 requires a font from https://www.nerdfonts.com/ (  )
+    emoticons                requires a font from https://www.nerdfonts.com/ (󰇵 󰇶 󰇸)
+
+Commands:
+    $DIR/bin/gotestsum tool slowest   find or skip the slowest tests
+    $DIR/bin/gotestsum help           print this help text

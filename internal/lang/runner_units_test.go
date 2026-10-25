@@ -3,6 +3,7 @@
 package lang
 
 import (
+	"maps"
 	"os"
 	"os/exec"
 	"regexp"
@@ -327,4 +328,466 @@ func TestNodeUnitListingWithoutTAPIsNotAListing(t *testing.T) {
 			t.Errorf("%q read as %#v, want nil", out, got)
 		}
 	}
+}
+
+// unitCase checks one row end to end over a captured listing: the command
+// dispatches to the row, its listing reads as want, and the first unit (or
+// run) runs as wantRun.
+type unitCase struct {
+	row, lang, fixture string
+	argv               []string
+	want               []string
+	run                string // the unit UnitRunCmd is asked for; want[0] when empty
+	wantRun            []string
+}
+
+func (c unitCase) check(t *testing.T) {
+	t.Helper()
+	p, _ := ByName(c.lang)
+	inv := Cmd(c.argv)
+	if r, _ := RunnerFor(p, inv); r.Name != c.row {
+		t.Fatalf("%q dispatched to row %q, want %q", c.argv, r.Name, c.row)
+	}
+	if _, ok := ListUnitsCmd(p, inv); !ok {
+		t.Fatalf("%q: no unit listing command", c.argv)
+	}
+	got := ParseUnitList(p, inv, unitFixture(t, c.fixture))
+	if !slices.Equal(got, c.want) {
+		t.Errorf("%s: units = %q, want %q", c.fixture, got, c.want)
+	}
+	unit := c.run
+	if unit == "" {
+		unit = c.want[0]
+	}
+	if cmd, ok := UnitRunCmd(p, inv, unit); !ok || !slices.Equal(cmd, c.wantRun) {
+		t.Errorf("UnitRunCmd(%q, %q) = %q, %v, want %q", c.argv, unit, cmd, ok, c.wantRun)
+	}
+}
+
+// listCmd is ListUnitsCmd without the working-directory prelude.
+func listCmd(t *testing.T, lang string, argv []string) ([]string, bool) {
+	t.Helper()
+	p, _ := ByName(lang)
+	cmd, ok := ListUnitsCmd(p, Cmd(argv))
+	if !ok {
+		return nil, false
+	}
+	return cmd[4:], true
+}
+
+// Go's units are the packages with test files that the operator's package
+// patterns match, from go list under the operator's build context: the
+// tagged package's only test file needs -tags extra (captured), and c has
+// no test file. A pattern go cannot load is no listing, nor is no output.
+func TestGoRowsListPackagesWithTests(t *testing.T) {
+	ab := []string{"example.com/units/a", "example.com/units/b"}
+	for _, c := range []unitCase{
+		{row: "go test", lang: "go", fixture: "go-units.txt", argv: []string{"go", "test", "-count=1", "./..."}, want: ab,
+			wantRun: []string{"go", "test", "-count=1", "example.com/units/a"}},
+		{row: "go test", lang: "go", fixture: "go-units-tags.txt", argv: []string{"go", "test", "-tags", "extra", "./..."},
+			want: append(slices.Clone(ab), "example.com/units/tagged"), run: "example.com/units/tagged",
+			wantRun: []string{"go", "test", "-tags", "extra", "example.com/units/tagged"}},
+		{row: "gotestsum", lang: "go", fixture: "go-units.txt", argv: []string{"gotestsum", "--format", "standard-verbose", "--", "-count=1", "./..."}, want: ab,
+			wantRun: []string{"gotestsum", "--format", "standard-verbose", "--", "-count=1", "example.com/units/a"}},
+	} {
+		c.check(t)
+	}
+	tmpl := []string{"-e", "-f", goUnitTemplate}
+	for _, c := range []struct {
+		argv, want []string
+	}{
+		{[]string{"go", "test", "-race", "-tags", "extra", "-run", "^$"}, nil},
+		{[]string{"go", "test", "-C", "sub", "-race", "-tags=extra", "-v", "-json", "-timeout", "5m", "./..."}, append(append([]string{"go", "list", "-C", "sub", "-race", "-tags=extra"}, tmpl...), "./...")},
+		{[]string{"go", "test", "-v"}, append([]string{"go", "list"}, tmpl...)},
+		{[]string{"gotestsum"}, append(append([]string{"go", "list"}, tmpl...), "./...")},
+		{[]string{"gotestsum", "--format", "testname", "--", "-v"}, append([]string{"go", "list"}, tmpl...)},
+		{[]string{"gotestsum", "--", "-mod=vendor", "./a", "./b"}, append(append([]string{"go", "list", "-mod=vendor"}, tmpl...), "./a", "./b")},
+	} {
+		got, ok := listCmd(t, "go", c.argv)
+		if c.want == nil {
+			if ok {
+				t.Errorf("ListUnitsCmd(%q) = %q, want refused", c.argv, got)
+			}
+		} else if !ok || !slices.Equal(got, c.want) {
+			t.Errorf("ListUnitsCmd(%q) = %q, %v, want %q", c.argv, got, ok, c.want)
+		}
+	}
+	gp, _ := ByName("go")
+	inv := Cmd([]string{"go", "test", "./..."})
+	if got := ParseUnitList(gp, inv, unitFixture(t, "go-units-error.txt")); got != nil {
+		t.Errorf("a pattern go could not load = %q, want nil", got)
+	}
+	if got := ParseUnitList(gp, inv, unitsCwdMarker+"/r\n"); got != nil {
+		t.Errorf("no output = %#v, want nil: go printed nothing, it listed nothing", got)
+	}
+	if got := ParseUnitList(gp, inv, unitsCwdMarker+"/r\nnone example.com/m/c\n"); got == nil || len(got) != 0 {
+		t.Errorf("packages without tests = %#v, want an empty list", got)
+	}
+}
+
+// The one-package command is the operator's with only its package patterns
+// replaced; a command under which a package could run no test (-run, -skip,
+// -list, -c) or that go test reads otherwise (-args, file arguments, an
+// unlisted option before a word) has no unit form.
+func TestGoUnitCmdReplacesOnlyThePackagePatterns(t *testing.T) {
+	gp, _ := ByName("go")
+	pkg := "example.com/m/pkg"
+	for _, c := range []struct{ argv, want []string }{
+		{[]string{"go", "test", "-race", "./..."}, []string{"go", "test", "-race", pkg}},
+		{[]string{"go", "test", "./a", "./b", "-count", "1"}, []string{"go", "test", pkg, "-count", "1"}},
+		{[]string{"go", "test", "-v"}, []string{"go", "test", "-v", pkg}},
+		{[]string{"go", "test", "--timeout=5m", "-test.v", "./..."}, []string{"go", "test", "--timeout=5m", "-test.v", pkg}},
+		{[]string{"gotestsum"}, []string{"gotestsum", "--", pkg}},
+		{[]string{"gotestsum", "-f", "testname", "--", "-race", "./..."}, []string{"gotestsum", "-f", "testname", "--", "-race", pkg}},
+	} {
+		if got, ok := UnitRunCmd(gp, Cmd(c.argv), pkg); !ok || !slices.Equal(got, c.want) {
+			t.Errorf("UnitRunCmd(%q) = %q, %v, want %q", c.argv, got, ok, c.want)
+		}
+	}
+	for _, argv := range [][]string{
+		{"go", "test", "-run", "TestX", "./..."},
+		{"go", "test", "-skip=TestX", "./..."},
+		{"go", "test", "-list", ".", "./..."},
+		{"go", "test", "-c", "./..."},
+		{"go", "test", "./...", "-args", "-v"},
+		{"go", "test", "a_test.go", "a.go"},
+		{"go", "test", "-made-up", "x", "./..."},
+		{"go", "test", "-timeout"},
+		{"sh", "-c", "go test ./..."},
+		{"gotestsum", "./a"},
+		{"gotestsum", "--packages", "./a", "--", "-v"},
+		{"gotestsum", "--watch"},
+		{"gotestsum", "--raw-command", "--", "go", "test"},
+		{"gotestsum", "--made-up", "x", "--", "./..."},
+	} {
+		if got, ok := UnitRunCmd(gp, Cmd(argv), pkg); ok {
+			t.Errorf("UnitRunCmd(%q) = %q, want refused", argv, got)
+		}
+	}
+	if got, ok := UnitRunCmd(gp, Cmd([]string{"go", "test", "./..."}), "./pkg"); ok {
+		t.Errorf("a relative path is no listed import path: %q", got)
+	}
+}
+
+// rspec's units are the files of the dry run's examples, once each; one
+// unit is the operator's command with its own paths replaced (rspec runs
+// every path it is given: capture rspec-paths-union).
+func TestRspecUnitsFromDryRunJSON(t *testing.T) {
+	unitCase{row: "rspec", lang: "ruby", fixture: "rspec-units.txt",
+		argv:    []string{"ruby", "-S", "rspec", "units/rspec"},
+		want:    []string{"units/rspec/spec/a_spec.rb", "units/rspec/spec/b_spec.rb"},
+		wantRun: []string{"ruby", "-S", "rspec", "units/rspec/spec/a_spec.rb"}}.check(t)
+	rb, _ := ByName("ruby")
+	for _, c := range []struct{ argv, want []string }{
+		{[]string{"bundle", "exec", "rspec", "--format", "progress", "-t", "~slow", "spec"}, []string{"bundle", "exec", "rspec", "--format", "progress", "-t", "~slow", "a_spec.rb"}},
+		{[]string{"rspec", "spec/x", "--require", "spec_helper", "-Ilib"}, []string{"rspec", "--require", "spec_helper", "-Ilib", "a_spec.rb"}},
+		{[]string{"rspec", "--no-profile", "spec"}, []string{"rspec", "--no-profile", "a_spec.rb"}},
+	} {
+		if got, ok := UnitRunCmd(rb, Cmd(c.argv), "a_spec.rb"); !ok || !slices.Equal(got, c.want) {
+			t.Errorf("UnitRunCmd(%q) = %q, %v, want %q", c.argv, got, ok, c.want)
+		}
+	}
+	for _, argv := range [][]string{
+		{"rspec", "spec/a_spec.rb:12"},
+		{"rspec", "spec/a_spec.rb[1:2]"},
+		{"rspec", "-e", "adds"},
+		{"rspec", "--made-up", "spec"},
+		{"rspec", "--", "spec"},
+		{"rspec", "-p", "--format", "json"},
+	} {
+		if got, ok := UnitRunCmd(rb, Cmd(argv), "a_spec.rb"); ok {
+			t.Errorf("UnitRunCmd(%q) = %q, want refused", argv, got)
+		}
+		if got, ok := ListUnitsCmd(rb, Cmd(argv)); ok {
+			t.Errorf("ListUnitsCmd(%q) = %q, want refused", argv, got)
+		}
+	}
+	if got := ParseUnitList(rb, Cmd([]string{"rspec"}), unitsCwdMarker+"/r\n"+`{"version":"3.13.6"}`); got != nil {
+		t.Errorf("a report without examples = %#v, want nil", got)
+	}
+}
+
+// minitest has no listing command, so Ruby under minitest pairs by name;
+// the row says so on the support page.
+func TestMinitestHasNoUnitForm(t *testing.T) {
+	rb, _ := ByName("ruby")
+	r, _ := RunnerByID(rb, "minitest")
+	if r.ListUnits != nil || r.UnitCmd != nil || !strings.Contains(r.Note, "no listing command; Ruby falls back to name pairing under minitest") {
+		t.Errorf("minitest: units %v, note %q", r.ListUnits != nil, r.Note)
+	}
+}
+
+// PHPUnit's units are its own --list-test-files, which applies the
+// configuration, --testsuite and the group options (captured: under --group
+// slow only ATest is listed). One unit replaces the operator's file
+// arguments, since PHPUnit runs them all (capture phpunit-args-union).
+func TestPHPUnitUnitsFromListing(t *testing.T) {
+	conf := []string{"vendor/bin/phpunit", "-c", "units/phpunit/phpunit.xml"}
+	for _, c := range []unitCase{
+		{row: "phpunit", lang: "php", fixture: "phpunit-units.txt", argv: append(slices.Clone(conf), "--testsuite", "unit"),
+			want:    []string{"units/phpunit/tests/ATest.php", "units/phpunit/tests/BTest.php"},
+			wantRun: append(slices.Clone(conf), "--testsuite", "unit", "units/phpunit/tests/ATest.php")},
+		{row: "phpunit", lang: "php", fixture: "phpunit-units-group.txt", argv: append(slices.Clone(conf), "--group", "slow", "units/phpunit"),
+			want:    []string{"units/phpunit/tests/ATest.php"},
+			wantRun: append(slices.Clone(conf), "--group", "slow", "units/phpunit/tests/ATest.php")},
+	} {
+		c.check(t)
+	}
+	php, _ := ByName("php")
+	if got, ok := UnitRunCmd(php, Cmd([]string{"php", "-d", "memory_limit=1G", "vendor/bin/phpunit", "tests", "-dxdebug.mode=off", "--colors=never"}), "tests/ATest.php"); !ok ||
+		!slices.Equal(got, []string{"php", "-d", "memory_limit=1G", "vendor/bin/phpunit", "-dxdebug.mode=off", "--colors=never", "tests/ATest.php"}) {
+		t.Errorf("UnitRunCmd = %q, %v", got, ok)
+	}
+	for _, argv := range [][]string{
+		{"phpunit", "--filter", "testAdds"},
+		{"phpunit", "--made-up", "tests"},
+		{"phpunit", "--", "tests"},
+	} {
+		if got, ok := UnitRunCmd(php, Cmd(argv), "tests/ATest.php"); ok {
+			t.Errorf("UnitRunCmd(%q) = %q, want refused", argv, got)
+		}
+	}
+	script := Invocation{Argv: []string{"composer", "test"}, Script: []string{"phpunit"}, Pass: "--", Narrow: true}
+	if got, ok := UnitRunCmd(php, script, "tests/ATest.php"); !ok || !slices.Equal(got, []string{"composer", "test", "--", "tests/ATest.php"}) {
+		t.Errorf("composer test → phpunit: %q, %v", got, ok)
+	}
+	inv := Cmd([]string{"phpunit"})
+	for _, out := range []string{"", "PHPUnit 11.5.57 by Sebastian Bergmann and contributors.\n\nCannot open file \"x.xml\".\n"} {
+		if got := ParseUnitList(php, inv, unitsCwdMarker+"/r\n"+out); got != nil {
+			t.Errorf("%q = %#v, want nil: no file heading, no listing", out, got)
+		}
+	}
+}
+
+// cargo's units are the test targets `--no-run` builds, by kind. In a
+// workspace two packages' libs, and their tests/it.rs, share a name that
+// cargo selects across every package (capture
+// cargo-target-name-across-packages), so those are listed marked and not
+// run; the bin is unique and runs.
+func TestCargoUnitsFromNoRunJSON(t *testing.T) {
+	unitCase{row: "cargo test", lang: "rust", fixture: "cargo-units.txt",
+		argv: []string{"cargo", "test", "-p", "units-a"}, want: []string{"bin:units-a", "lib", "test:it"}, run: "lib",
+		wantRun: []string{"cargo", "test", "-p", "units-a", "--lib"}}.check(t)
+	rs, _ := ByName("rust")
+	inv := Cmd([]string{"cargo", "test", "--workspace"})
+	got := ParseUnitList(rs, inv, unitFixture(t, "cargo-units-workspace.txt"))
+	if len(got) != 3 || UnitName(got[0]) != "lib" || got[0] == "lib" || UnitName(got[1]) != "test:it" || got[1] == "test:it" || got[2] != "bin:units-a" {
+		t.Fatalf("workspace units = %q: want lib and test:it marked, bin:units-a not", got)
+	}
+	for _, u := range got[:2] {
+		if cmd, ok := UnitRunCmd(rs, inv, u); ok {
+			t.Errorf("a target name two packages share ran as %q", cmd)
+		}
+	}
+	if cmd, ok := UnitRunCmd(rs, inv, got[2]); !ok || !slices.Equal(cmd, []string{"cargo", "test", "--workspace", "--bin", "units-a"}) {
+		t.Errorf("bin:units-a = %q, %v", cmd, ok)
+	}
+	for _, out := range []string{
+		"",
+		`{"reason":"build-finished","success":false}`,
+		`{"reason":"compiler-artifact","package_id":"p","target":{"kind":["lib"],"name":"x"},"profile":{"test":true},"executable":"/x"}`,
+		"error: could not find `Cargo.toml`",
+	} {
+		if got := ParseUnitList(rs, inv, unitsCwdMarker+"/r\n"+out+"\n"); got != nil {
+			t.Errorf("%q = %#v, want nil: no successful build, no listing", out, got)
+		}
+	}
+}
+
+// One target is the operator's command with its own target selection
+// replaced (cargo runs every target selected: capture cargo-targets-union)
+// and the package scope, features and test-binary arguments kept. A
+// TESTNAME, a test-binary filter, --skip or --ignored could leave the
+// target nothing to run, which passes, so such a command has no unit form.
+func TestCargoUnitCmdKeepsPackageScope(t *testing.T) {
+	rs, _ := ByName("rust")
+	for _, c := range []struct {
+		argv []string
+		unit string
+		want []string
+	}{
+		{[]string{"cargo", "test", "-p", "a"}, "test:it", []string{"cargo", "test", "-p", "a", "--test", "it"}},
+		{[]string{"cargo", "+nightly", "test", "--workspace", "--lib", "--tests", "-F", "x", "--", "--test-threads", "1"}, "bin:b",
+			[]string{"cargo", "+nightly", "test", "--workspace", "-F", "x", "--bin", "b", "--", "--test-threads", "1"}},
+		{[]string{"cargo", "test", "--test", "it", "--release", "--", "--nocapture"}, "lib", []string{"cargo", "test", "--release", "--lib", "--", "--nocapture"}},
+	} {
+		if got, ok := UnitRunCmd(rs, Cmd(c.argv), c.unit); !ok || !slices.Equal(got, c.want) {
+			t.Errorf("UnitRunCmd(%q, %q) = %q, %v, want %q", c.argv, c.unit, got, ok, c.want)
+		}
+	}
+	if got, ok := listCmd(t, "rust", []string{"cargo", "test", "-p", "a", "--message-format", "short", "--", "--test-threads=1"}); !ok ||
+		!slices.Equal(got, []string{"cargo", "test", "-p", "a", "--no-run", "--message-format=json"}) {
+		t.Errorf("listing = %q, %v", got, ok)
+	}
+	for _, argv := range [][]string{
+		{"cargo", "test", "adds"},
+		{"cargo", "test", "--", "adds"},
+		{"cargo", "test", "--", "--skip", "slow"},
+		{"cargo", "test", "--", "--ignored"},
+		{"cargo", "test", "--doc"},
+		{"cargo", "test", "--no-run"},
+		{"cargo", "build"},
+		{"cargo", "test", "--made-up", "x"},
+	} {
+		if got, ok := UnitRunCmd(rs, Cmd(argv), "lib"); ok {
+			t.Errorf("UnitRunCmd(%q) = %q, want refused", argv, got)
+		}
+	}
+	for _, unit := range []string{"example:x", "test:", "test:a b", "doc"} {
+		if got, ok := UnitRunCmd(rs, Cmd([]string{"cargo", "test"}), unit); ok {
+			t.Errorf("unit %q ran as %q", unit, got)
+		}
+	}
+}
+
+// nextest's units are its test binaries with a test the run's filters
+// match, by binary id, which is unique across a workspace; one binary runs
+// under `-E 'binary_id(=<id>)'`, which nextest ANDs with name filters
+// (capture nextest-name-filter-and-binary) but ORs with another filterset
+// (nextest-filtersets-union), so a command with its own -E has no unit form.
+func TestNextestUnitsFromList(t *testing.T) {
+	all := []string{"units-a", "units-a::bin/units-a", "units-a::it", "units-b", "units-b::it"}
+	for _, c := range []unitCase{
+		{row: "cargo nextest", lang: "rust", fixture: "nextest-units.txt", argv: []string{"cargo", "nextest", "run", "--workspace"}, want: all,
+			wantRun: []string{"cargo", "nextest", "run", "--workspace", "-E", "binary_id(=units-a)"}},
+		{row: "cargo nextest", lang: "rust", fixture: "nextest-units-filter.txt", argv: []string{"cargo", "nextest", "run", "--workspace", "integrates", "--", "--exact"},
+			want:    []string{"units-a::it", "units-b::it"},
+			wantRun: []string{"cargo", "nextest", "run", "--workspace", "integrates", "-E", "binary_id(=units-a::it)", "--", "--exact"}},
+	} {
+		c.check(t)
+	}
+	got, ok := listCmd(t, "rust", []string{"cargo", "nextest", "run", "--workspace", "--retries", "2", "--no-fail-fast", "-j4", "-P", "ci", "--test-threads", "1", "adds", "--", "--skip", "x"})
+	if want := []string{"cargo", "nextest", "list", "--workspace", "-P", "ci", "adds", "--message-format", "json", "--", "--skip", "x"}; !ok || !slices.Equal(got, want) {
+		t.Errorf("listing = %q, %v, want %q: list refuses run-only options", got, ok, want)
+	}
+	rs, _ := ByName("rust")
+	for _, argv := range [][]string{
+		{"cargo", "nextest", "run", "-E", "test(adds)"},
+		{"cargo", "nextest", "run", "--filterset=test(adds)"},
+		{"cargo", "nextest", "run", "--partition", "count:1/2"},
+		{"cargo", "nextest", "run", "--no-run"},
+		{"cargo", "nextest", "run", "--made-up", "x"},
+	} {
+		if got, ok := UnitRunCmd(rs, Cmd(argv), "units-a"); ok {
+			t.Errorf("UnitRunCmd(%q) = %q, want refused", argv, got)
+		}
+		if got, ok := ListUnitsCmd(rs, Cmd(argv)); ok {
+			t.Errorf("ListUnitsCmd(%q) = %q, want refused", argv, got)
+		}
+	}
+	if got, ok := UnitRunCmd(rs, Cmd([]string{"cargo", "nextest", "run"}), "units-a) | all("); ok {
+		t.Errorf("a unit that is no binary id ran as %q", got)
+	}
+	if got := ParseUnitList(rs, Cmd([]string{"cargo", "nextest", "run"}), unitsCwdMarker+"/r\nerror: no Cargo.toml\n"); got != nil {
+		t.Errorf("no report = %#v, want nil", got)
+	}
+}
+
+// helpOptions reads a runner's --help into option name → whether it takes
+// its value from the next word. An option line is indented at most eight
+// columns (descriptions sit deeper); its names, joined by ", " or "|", end
+// at two spaces ("|" joins PHPUnit's `-c|--configuration`). A spelling after the last name decides for every name on
+// the line: " ARG", " <arg>" or " [ARG]" reads the next word, while
+// "[=ARG]", "=<arg>", "..." and pflag's " int[=2]" do not. Ruby's
+// `--[no-]x` is both names, the negation reading no word.
+func helpOptions(t *testing.T, help string) map[string]bool {
+	t.Helper()
+	line := regexp.MustCompile(`^(?: {1,8}|\t)(-[^ ].*?)(?:  |$)`)
+	name := regexp.MustCompile(`^(--\[no-\][A-Za-z0-9][A-Za-z0-9-]*|--?[A-Za-z0-9][A-Za-z0-9_-]*)(.*)$`)
+	out := map[string]bool{}
+	for _, l := range strings.Split(help, "\n") {
+		m := line.FindStringSubmatch(strings.TrimRight(l, " \r"))
+		if m == nil {
+			continue
+		}
+		var parts []string
+		for _, p := range strings.Split(m[1], ", ") {
+			parts = append(parts, strings.ReplaceAll(p, "|-", ", -"))
+		}
+		parts = strings.Split(strings.Join(parts, ", "), ", ")
+		last := name.FindStringSubmatch(parts[len(parts)-1])
+		if last == nil {
+			continue
+		}
+		suffix := last[2]
+		value := strings.HasPrefix(suffix, " ") && !regexp.MustCompile(`^ \w+\[=`).MatchString(suffix)
+		for _, part := range parts {
+			n := name.FindStringSubmatch(part)
+			if n == nil {
+				continue
+			}
+			if base, ok := strings.CutPrefix(n[1], "--[no-]"); ok {
+				out["--"+base] = value
+				out["--no-"+base] = false
+				continue
+			}
+			out[n[1]] = value
+		}
+	}
+	return out
+}
+
+// Every option table is its runner's own --help: each option listed with
+// the right value-ness, and none the help does not print. The help files
+// are the capture script's; Go's is go's own, read when it is the Go the
+// table was read from. nextest's run-only options are exactly those `list`
+// does not print, plus the run's --message-format.
+func TestUnitOptionTablesMatchTheirHelp(t *testing.T) {
+	check := func(name string, table optionTable, help map[string]bool, exceptions map[string]bool) {
+		t.Helper()
+		if len(help) < 5 {
+			t.Fatalf("%s: read %d options from its help", name, len(help))
+		}
+		for opt, value := range help {
+			if want, ok := exceptions[opt]; ok {
+				value = want
+			}
+			if got, known := table.takesValue(opt); !known || got != value {
+				t.Errorf("%s %s: table value=%v known=%v, help value=%v", name, opt, got, known, value)
+			}
+		}
+		for _, set := range []map[string]bool{table.values, table.flags} {
+			for opt := range set {
+				if _, ok := help[opt]; !ok {
+					t.Errorf("%s: the table lists %s, which its help does not", name, opt)
+				}
+			}
+		}
+	}
+	read := func(f string) map[string]bool { return helpOptions(t, unitFixture(t, f)) }
+	check("gotestsum", gotestsumOptions, read("gotestsum-help.txt"), nil)
+	check("rspec", rspecOptions, read("rspec-help.txt"), nil)
+	// `--help` prints --colors with a value PHPUnit reads only after "="
+	// (capture phpunit-colors-takes-no-next-word), and the one line too long
+	// for its column runs into the description after a single space.
+	check("phpunit", phpunitOptions, read("phpunit-help.txt"), map[string]bool{"--colors": false, "--do-not-fail-on-phpunit-deprecation": false})
+	check("cargo test", cargoTestOptions, read("cargo-test-help.txt"), nil)
+	check("libtest", libtestOptions, read("libtest-help.txt"), nil)
+	run, list := read("nextest-run-help.txt"), read("nextest-list-help.txt")
+	check("nextest run", nextestRunOptions, run, nil)
+	want := map[string]bool{"--message-format": true}
+	for opt := range run {
+		if _, ok := list[opt]; !ok {
+			want[opt] = true
+		}
+	}
+	if !maps.Equal(want, nextestRunOnly) {
+		t.Errorf("nextestRunOnly = %v, want %v", slices.Sorted(maps.Keys(nextestRunOnly)), slices.Sorted(maps.Keys(want)))
+	}
+
+	ver, err := exec.Command("go", "env", "GOVERSION").Output()
+	if err != nil || !strings.HasPrefix(string(ver), goOptionsFrom) {
+		t.Skipf("SKIP go: the table was read from %s, this is %s", goOptionsFrom, strings.TrimSpace(string(ver)))
+	}
+	goHelp := map[string]bool{}
+	for _, topic := range []string{"testflag", "build", "test"} {
+		out, err := exec.Command("go", "help", topic).Output() // #nosec G204 -- a fixed go help topic
+		if err != nil {
+			t.Fatal(err)
+		}
+		for opt, value := range helpOptions(t, string(out)) {
+			goHelp[strings.TrimPrefix(opt, "-")] = value
+		}
+	}
+	check("go test", goTestOptions, goHelp, nil)
 }

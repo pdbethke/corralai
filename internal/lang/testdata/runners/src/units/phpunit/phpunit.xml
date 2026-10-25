@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Fixture for the runner table's phpunit unit form (scripts/capture-runner-fixtures.sh). -->
+<phpunit xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <testsuites>
+    <testsuite name="unit">
+      <directory>tests</directory>
+    </testsuite>
+    <testsuite name="other">
+      <directory>other</directory>
+    </testsuite>
+  </testsuites>
+</phpunit>

@@ -1,0 +1,9 @@
+corral-units-cwd /fixture
+[
+  {
+    "file": "/fixture/units/collide/a.vitest.test.mjs"
+  },
+  {
+    "file": "/fixture/units/collide/xa.vitest.test.mjs"
+  }
+]

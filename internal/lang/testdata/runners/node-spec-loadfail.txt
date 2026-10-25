@@ -12,8 +12,8 @@ Error: this file does not load
     at Function.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:171:5)
     at node:internal/main/run_main_module:36:49
 
-Node.js v22.23.3
-✖ broken.node.test.js (28.942333ms)
+Node.js v22.23.4
+✖ broken.node.test.js (25.331332ms)
 ℹ tests 1
 ℹ suites 0
 ℹ pass 0
@@ -25,5 +25,5 @@ Node.js v22.23.3
 ✖ failing tests:
 
 test at broken.node.test.js:1:1
-✖ broken.node.test.js (28.942333ms)
+✖ broken.node.test.js (25.331332ms)
   'test failed'

@@ -4,7 +4,7 @@
     1) "before all" hook for "never runs"
 
 
-  0 passing (1ms)
+  0 passing (2ms)
   1 failing
 
   1) Hooked

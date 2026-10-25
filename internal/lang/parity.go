@@ -71,6 +71,7 @@ var Capabilities = []Capability{
 	rowCapability("first-failure", "Name the killing test", func(r Runner) bool { return r.FirstFailure != nil }),
 	rowCapability("fail-fast", "Stop at the first failure", func(r Runner) bool { return len(r.FailFast) > 0 }),
 	rowCapability("salvage", "Keep the passing part of an authored test", func(r Runner) bool { return r.FailedTests != nil && r.DeselectCmd != nil }),
+	rowCapability("units", "Run one test unit", func(r Runner) bool { return r.ListUnits != nil && r.UnitCmd != nil }),
 	{Key: "coverage", Title: "Coverage pre-flight", Has: func(p Plugin) bool { _, ok := p.(CoverageReporter); return ok }},
 	{Key: "selection", Title: "Grade only the tests that run the file", Has: func(p Plugin) bool { _, ok := p.(TestSelector); return ok }},
 }
@@ -91,4 +92,10 @@ var ParityExemptions = []Exemption{
 	{"ruby", "selection", "per-test coverage contexts per runner; its own spec (runner table Phase 6)"},
 	{"php", "selection", "per-test coverage contexts per runner; its own spec (runner table Phase 6)"},
 	{"rust", "selection", "per-test coverage contexts per runner; its own spec (runner table Phase 6)"},
+
+	{"python", "units", "evidence is per test through TestSelector"},
+	{"go", "units", "unit listing not yet wired for this language's runners (evidence pairing, next task)"},
+	{"ruby", "units", "unit listing not yet wired for this language's runners (evidence pairing, next task)"},
+	{"php", "units", "unit listing not yet wired for this language's runners (evidence pairing, next task)"},
+	{"rust", "units", "unit listing not yet wired for this language's runners (evidence pairing, next task)"},
 }

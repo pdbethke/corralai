@@ -1,0 +1,27 @@
+corral-units-cwd /fixture
+TAP version 13
+# Subtest: c only
+ok 1 - c only
+  ---
+  type: 'test'
+  ...
+1..0
+# Subtest: units/node/a.node.test.js
+ok 2 - units/node/a.node.test.js
+  ---
+  type: 'test'
+  ...
+1..0
+# Subtest: units/node/b.node.test.js
+ok 3 - units/node/b.node.test.js
+  ---
+  type: 'test'
+  ...
+1..3
+# tests 3
+# suites 0
+# pass 3
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0

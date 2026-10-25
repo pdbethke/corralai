@@ -67,6 +67,20 @@ type Runner struct {
 	// program, or ORed with the operator's own filter, runs a set nobody chose.
 	FailedTests func(output string) []string
 	DeselectCmd func(argv, ids []string) ([]string, bool)
+	// ListUnits is the command that lists the test UNITS argv collects —
+	// the smallest thing the runner runs on its own (a test file for the
+	// JavaScript runners) — and ParseUnits reads its stdout into unit names
+	// as the runner printed them: ParseUnitList makes them repository-
+	// relative. UnitCmd is argv running exactly one unit with every operator
+	// flag kept; it refuses (ok=false) where it cannot, as SingleCmd does: a
+	// name filter already in argv, file arguments it cannot tell from flag
+	// values, a launcher that takes no arguments. UnitCoruns reports whether
+	// running unit would also run other (the runner selects by a pattern a
+	// second listed unit can match); nil means a unit run is exact.
+	ListUnits  func(argv []string) ([]string, bool)
+	ParseUnits func(stdout string) []string
+	UnitCmd    func(argv []string, unit string) ([]string, bool)
+	UnitCoruns func(unit, other string) bool
 	// Disclose is what the scan line says about running this runner in
 	// repoDir; PreflightBin is the binary that must be on PATH.
 	Disclose     func(repoDir string, argv []string) []string
@@ -141,7 +155,8 @@ var runners = []Runner{
 		},
 		ListCmd: jestListCmd, ParseList: jestParseList, SingleCmd: jestSingleCmd, ResolveByList: true, Coruns: jestCoruns,
 		FirstFailure: firstOf(jestFailures), FailedTests: jestFailures, DeselectCmd: jestDeselectCmd,
-		Note: "listing and one-test runs verified on jest 30.5",
+		ListUnits: jestListUnits, ParseUnits: jestParseUnits, UnitCmd: jestUnitCmd,
+		Note: "listing, one-test and one-file runs verified on jest 30.5",
 	},
 	{
 		ListsFullNames: true,
@@ -151,7 +166,11 @@ var runners = []Runner{
 		},
 		ListCmd: mochaListCmd, ParseList: mochaParseList, SingleCmd: mochaSingleCmd, ResolveByList: true, Coruns: lastFullColl,
 		FirstFailure: firstOf(mochaFailures), FailedTests: mochaFailures, DeselectCmd: mochaDeselectCmd,
-		Note: "listing and one-test runs verified on mocha 11.8 (listing needs mocha 9 or later)",
+		// No unit form: mocha ADDS a configured spec (.mocharc) to the files
+		// on its command line (measured on mocha 11.8.0), so `mocha <file>`
+		// runs every configured spec as well, and argv cannot show whether
+		// a config names one.
+		Note: "listing and one-test runs verified on mocha 11.8 (listing needs mocha 9 or later); no one-file run, since mocha adds a configured spec to the files on its command line",
 	},
 	{
 		// Detect adds vitest's entry script to the word; a shell-wrapped
@@ -160,7 +179,8 @@ var runners = []Runner{
 		Detect:  func(argv []string) bool { return vitestIndex(argv) >= 0 },
 		ListCmd: vitestListCmd, ParseList: vitestParseList, SingleCmd: vitestSingleCmd, ResolveByList: true, Coruns: fullNameColl,
 		FirstFailure: firstOf(vitestFailures), FailedTests: vitestFailures, DeselectCmd: vitestDeselectCmd,
-		Note: "listing and one-test runs verified on vitest 3.2; vitest 1, 2 and 4 were not run",
+		ListUnits: vitestListUnits, ParseUnits: vitestParseUnits, UnitCmd: vitestUnitCmd, UnitCoruns: vitestUnitCoruns,
+		Note: "listing, one-test and one-file runs verified on vitest 3.2; vitest 1, 2 and 4 were not run",
 	},
 	{
 		Name: "node --test", ID: "node-test", Languages: []string{"javascript", "typescript"}, Default: true,
@@ -169,7 +189,8 @@ var runners = []Runner{
 		},
 		ListCmd: nodeListCmd, ParseList: nodeParseList, SingleCmd: nodeSingleCmd, ResolveByList: true, Coruns: nodeCoruns,
 		FirstFailure: firstOf(nodeFailures), FailedTests: nodeFailures, DeselectCmd: nodeDeselectCmd,
-		Note: "node has no collect-only mode, so listing RUNS the test file once on the unmutated code; verified on node 22.23 and 24.22. Through a package script, listing, one-test runs and salvage need `--test` to be the script's last word, since node reads options only before the first file",
+		ListUnits: nodeListUnits, ParseUnits: nodeParseUnits, UnitCmd: nodeUnitCmd,
+		Note: "node has no collect-only mode, so listing RUNS the test file once on the unmutated code; verified on node 22.23 and 24.22 (listing and running one file on node 22.23 only). Through a package script, listing, one-test runs and salvage need `--test` to be the script's last word, since node reads options only before the first file",
 	},
 	// rspec takes --fail-fast. Minitest is deliberately without one: its own
 	// --fail-fast arrived in minitest 5.22, and an older minitest treats an

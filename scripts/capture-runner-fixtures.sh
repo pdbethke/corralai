@@ -57,6 +57,22 @@ $RSPEC --dry-run --format json spec/join_spec.rb 2>/dev/null | ruby -rjson -e \
   > "$OUT/rspec-join-list.json"
 vendor/bin/phpunit --list-tests tests/CalcTest.php > "$OUT/phpunit-list.txt"
 
+# --- unit listings (internal/lang/runner_units.go): ListUnitsCmd's command --
+# runs under a prelude printing the working directory, which jest and vitest
+# need because they list absolute paths. The directory is written as /fixture:
+# these files are public.
+PRELUDE='printf '"'"'corral-units-cwd %s\n'"'"' "$(pwd -P)" && exec "$@"'
+PDIR="$(pwd -P)"
+units() { # units <fixture> <cmd...>: the wrapped listing's stdout
+  local f="$1"; shift
+  sh -c "$PRELUDE" corral-units "$@" 2>/dev/null | sed -e "s#$PDIR#/fixture#g" -e '/duration_ms/d' > "$OUT/$f" || true
+}
+units jest-units.txt npx --no-install jest --ci units/jest --listTests --json
+units vitest-units.txt npx --no-install vitest list --reporter=verbose units/vitest --filesOnly --json
+units vitest-units-collide.txt npx --no-install vitest list units/collide --filesOnly --json
+units node-units.txt node --test --test-only --test-reporter=tap --test-concurrency 1 'units/node/*.test.js'
+units node-units-only.txt node --test --test-only --test-reporter=tap 'units/node-only/*.test.js' 'units/node/*.test.js'
+
 # --- one-test commands: each must run exactly the tests named --------------
 fail=0
 want() { # want <runner> <expected> <got>
@@ -71,6 +87,20 @@ want node-leaf-collision 2 "$(node --test --test-reporter=tap --test-name-patter
 want rspec 1 "$($RSPEC --format json -E '\ACalc adds \(a\+b\)\z' spec/calc_spec.rb 2>/dev/null | ruby -rjson -e 'puts JSON.parse(STDIN.read)["summary"]["example_count"]')"
 want phpunit 1 "$(vendor/bin/phpunit --filter '/(?:^|\\)CalcTest::testAdds(?: with data set .*)?$/' tests/CalcTest.php | sed -n 's/^OK (\([0-9]*\) test.*/\1/p')"
 want phpunit-dataset 2 "$(vendor/bin/phpunit --filter '/(?:^|\\)CalcTest::testWith(?: with data set .*)?$/' tests/CalcTest.php | sed -n 's/^OK (\([0-9]*\) test.*/\1/p')"
+
+# One-unit commands (runner_units.go): units/*/a.* holds two tests and b.* one,
+# so a run of the unit alone passes 2. The second line of each pair is why the
+# row is shaped as it is: jest's --runTestsByPath also runs a file the operator
+# named; vitest's file filter is a substring of the path below its root, here
+# a.vitest.test.mjs of xa.vitest.test.mjs; mocha adds a configured spec to
+# the files on its command line, so mocha has no unit form.
+unitran() { grep -oE '(Tests:? +[0-9]+ passed)|(^# pass [0-9]+)|([0-9]+ passing)' | grep -oE '[0-9]+' | head -1; }
+want jest-unit 2 "$(npx --no-install jest --ci units/jest '--testPathIgnorePatterns=^(?!<rootDir>\/units\/jest\/a\.jest\.test\.js$)' 2>&1 | unitran)"
+want jest-runTestsByPath-adds-named-file 3 "$(npx --no-install jest units/jest/b.jest.test.js --runTestsByPath units/jest/a.jest.test.js 2>&1 | unitran)"
+want vitest-unit 2 "$(npx --no-install vitest run --reporter=verbose units/vitest/a.vitest.test.mjs 2>&1 | sed 's/\x1b\[[0-9;]*m//g' | unitran)"
+want vitest-unit-substring-collision 3 "$(npx --no-install vitest run --root units/collide units/collide/a.vitest.test.mjs 2>&1 | sed 's/\x1b\[[0-9;]*m//g' | unitran)"
+want node-unit 2 "$(node --test --test-reporter=tap --test-concurrency 1 units/node/a.node.test.js 2>&1 | unitran)"
+want mocha-config-spec-merges 2 "$(cd units/mocharc && npx --no-install mocha t/a.mocha.js 2>&1 | unitran)"
 
 # --- failing suites: what each DEFAULT reporter prints, and the skip commands --
 # (internal/lang/runner_failures.go). $DIR and $HOME are replaced: these files are public.
@@ -134,6 +164,8 @@ want composer-test-single 1 "$(composer test -- --filter '/(?:^|\\)CalcTest::tes
   echo "Launchers: npm $(npm --version) and pnpm $PNPM take extra script arguments after --,"
   echo "yarn $YARN takes them directly, composer $(composer --version 2>/dev/null | awk '{print $3}') after --."
   echo "Suites: src/. Each *-list file is the stdout of that runner's list command"
+  echo "(*-units files, added 2026-10-25 on node $(node --version): the unit listing under"
+  echo "its working-directory prelude, the capture directory written as /fixture)"
   echo "(jest and mocha JSON reduced to the fields the parsers read)."
   echo "Each *-fail, *-suitefail, *-loadfail and *-hookfail file is stdout+stderr of"
   echo "the runner's DEFAULT command on src/fail, not a TTY, as the jail runs it;"

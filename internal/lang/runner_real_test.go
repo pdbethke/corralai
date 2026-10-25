@@ -269,3 +269,85 @@ func TestOK(t *testing.T) {}
 		}
 	}
 }
+
+// TestRealRunnersListAndRunOneUnit drives each unit form end to end against
+// the real runner over src/units: list the units the operator's command
+// collects, then run the first alone and require only that file's tests to
+// run (a.* holds two tests, b.* one, so a run of both reads three). Gated as
+// TestRealRunnersListAndRunOne is.
+func TestRealRunnersListAndRunOneUnit(t *testing.T) {
+	root := os.Getenv("CORRALAI_RUNNER_ROOT")
+	passed := regexp.MustCompile(`(?m)^\s*Tests:?\s+(\d+) passed|^# pass (\d+)`)
+	for _, c := range []struct {
+		runner, lang  string
+		argv          []string
+		want          []string // the listing, or (throughScript) units it must hold
+		needsRoot     bool
+		throughScript bool
+	}{
+		{"node --test", "javascript", []string{"node", "--test", "--test-concurrency", "1", "units/node/*.test.js"},
+			[]string{"units/node/a.node.test.js", "units/node/b.node.test.js"}, false, false},
+		{"jest", "javascript", []string{"npx", "--no-install", "jest", "--ci", "units/jest"},
+			[]string{"units/jest/a.jest.test.js", "units/jest/b.jest.test.js"}, true, false},
+		{"vitest", "typescript", []string{"npx", "--no-install", "vitest", "run", "--reporter=verbose", "units/vitest"},
+			[]string{"units/vitest/a.vitest.test.mjs", "units/vitest/b.vitest.test.mjs"}, true, false},
+		{"jest", "javascript", []string{"npm", "test"},
+			[]string{"units/jest/a.jest.test.js", "units/jest/b.jest.test.js"}, true, true},
+	} {
+		t.Run(c.runner+"/"+c.argv[0], func(t *testing.T) {
+			dir := root
+			if !c.needsRoot {
+				dir = t.TempDir()
+				if err := os.CopyFS(dir, os.DirFS("testdata/runners/src")); err != nil {
+					t.Fatal(err)
+				}
+			} else if dir == "" {
+				t.Skipf("SKIP %s: CORRALAI_RUNNER_ROOT is not set (scripts/capture-runner-fixtures.sh --keep DIR)", c.runner)
+			}
+			if _, err := exec.LookPath(c.argv[0]); err != nil {
+				t.Skipf("SKIP %s: %s is not installed", c.runner, c.argv[0])
+			}
+			p, _ := ByName(c.lang)
+			inv := Cmd(c.argv)
+			if c.throughScript {
+				var err error
+				if inv, err = Resolve(p, dir, c.argv, ""); err != nil || inv.Script == nil {
+					t.Fatalf("Resolve(%q) = %+v, %v", c.argv, inv, err)
+				}
+			}
+			run := func(cmd []string) (string, string) {
+				var stdout, all bytes.Buffer
+				x := exec.Command(cmd[0], cmd[1:]...) // #nosec G204 -- the row's own command over a test fixture
+				x.Dir = dir
+				x.Stdout = &stdout
+				x.Stderr = &all
+				_ = x.Run()
+				return stdout.String(), stdout.String() + all.String()
+			}
+			list, ok := ListUnitsCmd(p, inv)
+			if !ok {
+				t.Fatal("no unit listing command")
+			}
+			out, all := run(list)
+			units := ParseUnitList(p, inv, out)
+			if c.throughScript {
+				for _, w := range c.want {
+					if !slices.Contains(units, w) {
+						t.Fatalf("%q listed %q, missing %q:\n%s", list, units, w, all)
+					}
+				}
+			} else if !slices.Equal(units, c.want) {
+				t.Fatalf("%q listed %q, want %q:\n%s", list, units, c.want, all)
+			}
+			one, ok := UnitRunCmd(p, inv, c.want[0])
+			if !ok {
+				t.Fatal("no one-unit command")
+			}
+			_, all = run(one)
+			m := passed.FindStringSubmatch(all)
+			if m == nil || m[1]+m[2] != "2" || strings.Contains(all, "b."+strings.SplitN(filepath.Base(c.want[0]), ".", 2)[1]) {
+				t.Errorf("%q did not run exactly %s's two tests:\n%s", one, c.want[0], all)
+			}
+		})
+	}
+}

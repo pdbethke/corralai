@@ -96,3 +96,29 @@ func TestUnmergeCursorRemovesOnlyCorral(t *testing.T) {
 		t.Error("accepted invalid")
 	}
 }
+
+// Unmerge is the destructive half: a servers key that is not an object, a
+// top level that is not an object, or JSONC is refused, never rewritten; a
+// file with no servers key or an empty one is returned byte-exact; the
+// generic key form (opencode "mcp", vscode "servers") removes only corral.
+func TestUnmergeServerConfigEdges(t *testing.T) {
+	for _, in := range []string{`{"servers":[]}`, `{"servers":"x"}`, `[]`, "{\"servers\":{} // c\n}"} {
+		if out, err := UnmergeServerConfig([]byte(in), "servers"); err == nil || out != nil {
+			t.Errorf("%q: out=%q err=%v, want a refusal", in, out, err)
+		}
+	}
+	for _, in := range []string{"", "  \n", `{"other":{"corral":{}}}`} {
+		out, err := UnmergeServerConfig([]byte(in), "servers")
+		if err != nil || string(out) != in {
+			t.Errorf("%q: out=%q err=%v, want unchanged", in, out, err)
+		}
+	}
+	in := "{\n  \"mcp\": {\n    \"corral\": {\"type\": \"local\"},\n    \"keep\": {\"type\": \"remote\"}\n  }\n}\n"
+	out, err := UnmergeServerConfig([]byte(in), "mcp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s := string(out); strings.Contains(s, "corral") || !strings.Contains(s, `"keep": {"type": "remote"}`) || !strings.HasSuffix(s, "}\n") {
+		t.Errorf("\n%s", s)
+	}
+}

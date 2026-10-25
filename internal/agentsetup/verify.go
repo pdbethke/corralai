@@ -11,6 +11,8 @@ import (
 	"io"
 	"os/exec"
 	"strings"
+	"sync"
+	"time"
 )
 
 // mcpProtocolVersion is what CheckMCP offers; corral's server (the Go MCP SDK)
@@ -29,15 +31,55 @@ type rpcMsg struct {
 	} `json:"error,omitempty"`
 }
 
+// stderrTail bounds how much of the server's stderr a CheckMCP failure
+// carries: the end, where a startup failure says why.
+const stderrTail = 2 << 10
+
+// tailBuffer keeps the last max bytes written to it. exec copies the child's
+// stderr into it from its own goroutine, so it is locked.
+type tailBuffer struct {
+	mu  sync.Mutex
+	max int
+	b   []byte
+	cut bool
+}
+
+func (t *tailBuffer) Write(p []byte) (int, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.b = append(t.b, p...)
+	if over := len(t.b) - t.max; over > 0 {
+		t.b, t.cut = t.b[over:], true
+	}
+	return len(p), nil
+}
+
+func (t *tailBuffer) String() string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	s := strings.TrimSpace(string(t.b))
+	if t.cut && s != "" {
+		s = "..." + s
+	}
+	return s
+}
+
 // CheckMCP proves `<bin> mcp` answers: it starts the server, speaks JSON-RPC
 // over its stdio (initialize, notifications/initialized, tools/list) and
 // requires the findings tools. This is what an agent will do on its first
 // launch, so a pass here means the registration points at something that works.
 // The child is killed afterwards and the whole exchange is bounded by Timeout.
+//
+// A failure carries the last stderrTail bytes of the server's stderr: a server
+// that will not start says why there, and "closed its output" alone would drop
+// that reason on the floor.
 func CheckMCP(ctx context.Context, bin string) error {
 	ctx, cancel := context.WithTimeout(ctx, Timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, bin, "mcp") // #nosec G204 -- the binary setup just registered, fixed argv, no shell
+	stderr := &tailBuffer{max: stderrTail}
+	cmd.Stderr = stderr
+	cmd.WaitDelay = 2 * time.Second // a grandchild holding stderr must not hold the check open
 	in, err := cmd.StdinPipe()
 	if err != nil {
 		return err
@@ -49,11 +91,22 @@ func CheckMCP(ctx context.Context, bin string) error {
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("starting %s mcp: %w", bin, err)
 	}
-	defer func() {
-		cancel()
-		_ = in.Close()
-		_ = cmd.Wait()
-	}()
+	err = handshake(ctx, bin, in, out)
+	// Stop the child and wait for it, so stderr has been copied in full
+	// before it is read.
+	cancel()
+	_ = in.Close()
+	_ = cmd.Wait()
+	if err != nil {
+		if tail := stderr.String(); tail != "" {
+			err = fmt.Errorf("%w; its stderr: %s", err, tail)
+		}
+	}
+	return err
+}
+
+// handshake is CheckMCP's JSON-RPC exchange over the child's stdio.
+func handshake(ctx context.Context, bin string, in io.Writer, out io.Reader) error {
 
 	msgs := make(chan rpcMsg)
 	go func() {

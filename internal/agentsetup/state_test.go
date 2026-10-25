@@ -12,7 +12,7 @@ import (
 func TestStateRoundTrip(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "sub", "setup.json")
 	want := State{Agents: map[string]AgentRecord{
-		"claude-code": {
+		"claude_code": {
 			RegisterArgv: [][]string{{"claude", "mcp", "add", "corral"}},
 			Command:      []string{"/usr/bin/corral", "mcp"},
 			SkillDir:     "/h/.claude/skills/corral",

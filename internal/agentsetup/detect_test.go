@@ -296,17 +296,80 @@ func TestDetectReturnsTableOrder(t *testing.T) {
 }
 
 func TestExecRunnerRunsFixedArgvAndTimesOut(t *testing.T) {
-	out, err := ExecRunner{Timeout: Timeout}.Run(context.Background(), []string{"sh", "-c", "echo hi; echo err >&2"})
+	dir := t.TempDir()
+	out, err := ExecRunner{Timeout: Timeout, Dir: dir}.Run(context.Background(), []string{"sh", "-c", "echo hi; echo err >&2"})
 	if err != nil || !strings.Contains(string(out), "hi") || !strings.Contains(string(out), "err") {
 		t.Errorf("out=%q err=%v", out, err)
 	}
-	_, err = ExecRunner{Timeout: 50 * time.Millisecond}.Run(context.Background(), []string{"sleep", "5"})
+	_, err = ExecRunner{Timeout: 50 * time.Millisecond, Dir: dir}.Run(context.Background(), []string{"sleep", "5"})
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Errorf("err = %v, want DeadlineExceeded", err)
 	}
-	if _, err := (ExecRunner{Timeout: Timeout}).Run(context.Background(), nil); err == nil {
+	if _, err := (ExecRunner{Timeout: Timeout, Dir: dir}).Run(context.Background(), nil); err == nil {
 		t.Error("empty argv accepted")
 	}
+}
+
+// The agents' inspect verbs merge project-level config from the directory
+// they run in (.mcp.json, .cursor/mcp.json, workspace settings), so an agent
+// CLI must run in the home directory setup operates on, never the caller's
+// cwd. And that directory has no default: an unset Dir is refused rather
+// than silently meaning "wherever corral was started".
+func TestExecRunnerRunsInItsDir(t *testing.T) {
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(t.TempDir()) // the caller's cwd is somewhere else
+	out, err := ExecRunner{Timeout: Timeout, Dir: dir}.Run(context.Background(), []string{"pwd", "-P"})
+	if err != nil || strings.TrimSpace(string(out)) != dir {
+		t.Fatalf("ran in %q (err %v), want %q", strings.TrimSpace(string(out)), err, dir)
+	}
+	if _, err := (ExecRunner{Timeout: Timeout}).Run(context.Background(), []string{"pwd"}); err == nil || !strings.Contains(err.Error(), "Dir") {
+		t.Fatalf("an ExecRunner with no Dir ran (err %v); it must name the missing Dir", err)
+	}
+}
+
+// A `claude plugin list` that fails or times out is a could-not-see, never
+// "no plugin": the plan must not register next to a plugin that may be enabled.
+func TestPluginListFailureIsUnknown(t *testing.T) {
+	for name, r := range map[string]reply{
+		"error":   {err: errors.New("boom")},
+		"timeout": {delay: time.Second},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := absentRunner(t)
+			f.replies["claude plugin list"] = r
+			ctx := context.Background()
+			if name == "timeout" {
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithTimeout(ctx, 20*time.Millisecond)
+				defer cancel()
+			}
+			s := detectOne(ctx, f, t.TempDir(), allOn, mustAgent(t, "claude_code"))
+			if s.ViaPlugin || s.Unknown == "" || !strings.Contains(s.Unknown, "claude plugin list") {
+				t.Fatalf("plugin list %s: %+v", name, s)
+			}
+			p, err := BuildSetupPlan([]Status{s}, []string{"claude_code"}, SetupOptions{Bin: "/b", Home: "/h"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, a := range p.Actions {
+				if a.Kind == ActionRegister || a.Kind == ActionReplace || a.Settled {
+					t.Fatalf("acted on an unread plugin state: %+v", a)
+				}
+			}
+		})
+	}
+}
+
+func mustAgent(t *testing.T, id string) Agent {
+	t.Helper()
+	a, ok := ByID(id)
+	if !ok {
+		t.Fatal("no agent " + id)
+	}
+	return a
 }
 
 func TestDetectFillsSkillState(t *testing.T) {

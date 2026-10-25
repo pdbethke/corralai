@@ -4,6 +4,7 @@ package agentsetup
 
 import (
 	"bytes"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -214,4 +215,75 @@ func TestPlanOnlySelectedAndUnknownIDErrors(t *testing.T) {
 func TestPlanNotInstalledIsNoop(t *testing.T) {
 	p := plan(t, []Status{st(t, "codex", func(s *Status) { s.Installed = false })}, []string{"codex"}, true)
 	wantKinds(t, p, ActionNoop)
+}
+
+// The printed plan names every file it will write or back up: a write-file or
+// unwrite-file step names the exact backup it will make (the first backup is
+// kept, so a later one carries the old bytes' hash), or says none is made.
+func TestPlanNamesTheBackupFile(t *testing.T) {
+	home := t.TempDir()
+	cur := mustAgent(t, "cursor")
+	path := cur.File.Path(home)
+	note := func() string {
+		t.Helper()
+		p, err := BuildSetupPlan([]Status{st(t, "cursor", nil)}, []string{"cursor"}, SetupOptions{Bin: tbin, Home: home})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return p.Actions[0].Note
+	}
+	if n := note(); !strings.Contains(n, "no backup") {
+		t.Errorf("missing file: %q", n)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`{"mcpServers":{}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if n := note(); !strings.Contains(n, "backup: "+path+".corral.backup") || strings.Contains(n, ".corral.backup.") {
+		t.Errorf("first backup: %q", n)
+	}
+	if err := os.WriteFile(path+".corral.backup", []byte("older"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	want, _ := BackupPath(path)
+	if !strings.HasPrefix(want, path+".corral.backup.") || len(want) != len(path+".corral.backup.")+12 {
+		t.Fatalf("BackupPath = %q", want)
+	}
+	if n := note(); !strings.Contains(n, "backup: "+want) {
+		t.Errorf("later backup: %q, want %q", n, want)
+	}
+	// Apply makes exactly the backup the plan named.
+	if err := editConfigFile(path, func([]byte) ([]byte, error) { return []byte("{}"), nil }); err != nil {
+		t.Fatal(err)
+	}
+	if b, err := os.ReadFile(want); err != nil || string(b) != `{"mcpServers":{}}` {
+		t.Errorf("the named backup %s holds %q (%v)", want, b, err)
+	}
+	// Uninstall's unwrite names its backup too.
+	u := BuildUninstallPlan([]Status{st(t, "cursor", reg(tbin, "mcp"))}, []string{"cursor"}, recorded("cursor"), home)
+	next, _ := BackupPath(path)
+	if u.Actions[0].Kind != ActionUnwriteFile || !strings.Contains(u.Actions[0].Note, "backup: "+next) {
+		t.Errorf("unwrite note %q, want backup %s", u.Actions[0].Note, next)
+	}
+}
+
+func TestPlanRenderLines(t *testing.T) {
+	p := Plan{Actions: []Action{
+		{AgentID: "codex", Kind: ActionRegister, Argv: []string{"codex", "mcp", "add", "corral"}},
+		{AgentID: "cursor", Kind: ActionWriteFile, Path: "/h/.cursor/mcp.json", Note: "add corral"},
+		{AgentID: "gemini_cli", Kind: ActionNoop, Note: "already registered"},
+		{AgentID: "codex", Kind: ActionSkipSkill},
+	}}
+	var buf bytes.Buffer
+	p.Render(&buf)
+	want := "" +
+		"  codex        register     codex mcp add corral\n" +
+		"  cursor       write-file   /h/.cursor/mcp.json  add corral\n" +
+		"  gemini_cli   noop          already registered\n" +
+		"  codex        skip-skill  \n"
+	if buf.String() != want {
+		t.Errorf("render:\n%q\nwant\n%q", buf.String(), want)
+	}
 }

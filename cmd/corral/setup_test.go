@@ -7,13 +7,17 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
+	"time"
 
+	"github.com/pdbethke/corralai/internal/agentbackend"
 	"github.com/pdbethke/corralai/internal/agentsetup"
 )
 
@@ -277,7 +281,7 @@ func TestInteractiveListUnticksNewlyDetected(t *testing.T) {
 		{Agent: ag[3]},
 	}
 	var b bytes.Buffer
-	got, err := pickAgents(bufio.NewReader(strings.NewReader("\n")), &b, st)
+	got, err := pickAgents(lines("\n"), &b, st)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -290,7 +294,7 @@ func TestInteractiveListUnticksNewlyDetected(t *testing.T) {
 	if strings.Join(got, ",") != "claude_code,gemini_cli" {
 		t.Errorf("Enter accepted %v, want only the wired agents", got)
 	}
-	got, _ = pickAgents(bufio.NewReader(strings.NewReader("2 1\n\n")), &bytes.Buffer{}, st)
+	got, _ = pickAgents(lines("2 1\n\n"), &bytes.Buffer{}, st)
 	if strings.Join(got, ",") != "codex,gemini_cli" {
 		t.Errorf("toggling 2 and 1 gave %v", got)
 	}
@@ -356,6 +360,21 @@ func TestSetupUninstallNothingToRemoveExitsZero(t *testing.T) {
 	if code != 0 || !strings.Contains(out, "no longer registered") {
 		t.Fatalf("code=%d out=%q", code, out)
 	}
+	// I1: the registration being gone does not make codex a user staying in
+	// its own skill directory: setup's copy and setup's record both go.
+	if strings.Contains(out, "still used by") || !strings.Contains(out, "removed (already unregistered, setup's record dropped, skill removed)") {
+		t.Errorf("out = %q", out)
+	}
+	if _, err := os.Stat(filepath.Join(ts.home, ".codex", "skills", "corral")); err == nil {
+		t.Errorf("setup's skill copy kept after uninstall")
+	}
+	st, err := agentsetup.LoadState(ts.state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := st.Agents["codex"]; ok {
+		t.Errorf("state still records codex: %+v", st.Agents)
+	}
 }
 
 func TestSetupBlockedNoopExitsOne(t *testing.T) {
@@ -416,4 +435,78 @@ func TestSetupSkillFalseRegistersWithoutSkill(t *testing.T) {
 	if !strings.Contains(out, "skill skipped (--skill=false)") {
 		t.Errorf("out = %q", out)
 	}
+}
+
+// Ctrl-C during setup says what setup does, which is not an audit's restore:
+// setup has no tree. It starts no new step, and the person is told so.
+func TestSetupContextSaysWhatAnInterruptDoes(t *testing.T) {
+	t.Cleanup(agentbackend.ResetInterrupted)
+	var buf bytes.Buffer
+	ctx, stop := setupContext(&buf)
+	defer stop()
+	if err := syscall.Kill(syscall.Getpid(), syscall.SIGTERM); err != nil {
+		t.Skipf("cannot signal self: %v", err)
+	}
+	select {
+	case <-ctx.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("no cancellation")
+	}
+	msg := buf.String()
+	if strings.Contains(msg, "tree") || !strings.Contains(msg, "no new step") || !strings.Contains(msg, "Ctrl-C again") {
+		t.Fatalf("interrupt message = %q", msg)
+	}
+}
+
+// An interrupt at the approval prompt is a decline: setup does not sit on
+// stdin waiting for a second Ctrl-C, and writes nothing.
+func TestSetupInterruptAtPromptWritesNothing(t *testing.T) {
+	t.Cleanup(agentbackend.ResetInterrupted)
+	ts := newTestSetup(t, false)
+	pr, pw := io.Pipe() // stdin that never answers
+	defer pw.Close()
+	go func() {
+		time.Sleep(200 * time.Millisecond)
+		_ = syscall.Kill(syscall.Getpid(), syscall.SIGTERM)
+	}()
+	var out, errb bytes.Buffer
+	done := make(chan int, 1)
+	go func() {
+		done <- runSetupWith([]string{"--client", "codex"}, pr, &out, &errb, func() (setupEnv, error) { return ts.env, nil })
+	}()
+	select {
+	case code := <-done:
+		if code != 1 || ts.run.mutated() || !strings.Contains(out.String(), "interrupted; nothing was written") {
+			t.Fatalf("code=%d mutated=%v out=%q", code, ts.run.mutated(), out.String())
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("setup kept waiting on stdin after the interrupt")
+	}
+	if _, err := os.Stat(ts.state); err == nil {
+		t.Error("state written after the interrupt")
+	}
+}
+
+// The result names the state file setup recorded into, once.
+func TestSetupNamesStateFileOnce(t *testing.T) {
+	ts := newTestSetup(t, false)
+	_, out, _ := ts.run_([]string{"--client", "codex", "--yes"}, "")
+	if n := strings.Count(out, ts.state); n != 1 {
+		t.Fatalf("state file named %d times:\n%s", n, out)
+	}
+	_, out, _ = ts.run_([]string{"--uninstall", "--client", "codex", "--yes"}, "")
+	if n := strings.Count(out, ts.state); n != 1 {
+		t.Fatalf("uninstall: state file named %d times:\n%s", n, out)
+	}
+	// A dry run records nothing, so it names no state file.
+	_, out, _ = ts.run_([]string{"--client", "codex", "--dry-run"}, "")
+	if strings.Contains(out, ts.state) {
+		t.Fatalf("dry run named the state file:\n%s", out)
+	}
+}
+
+// lines is pickAgents' reader over fixed input.
+func lines(in string) func() (string, error) {
+	r := bufio.NewReader(strings.NewReader(in))
+	return func() (string, error) { return r.ReadString('\n') }
 }

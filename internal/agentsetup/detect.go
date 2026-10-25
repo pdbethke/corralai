@@ -82,9 +82,22 @@ func detectOne(ctx context.Context, r Runner, home string, lookPath func(string)
 
 	if a.ID == "claude_code" {
 		out, err := r.Run(ctx, pluginListArgv)
-		// A failed plugin listing leaves ViaPlugin false: the plugin is a
-		// supplementary route and the MCP inspect above is authoritative.
-		st.ViaPlugin = err == nil && pluginEnabled(out)
+		// A plugin listing that failed or timed out is a could-not-see, so the
+		// agent is Unknown, never "no plugin": with the plugin enabled, a
+		// `claude mcp add` beside it would duplicate its server and skill.
+		if err != nil {
+			why := fmt.Sprintf("%s failed: %v: %s", strings.Join(pluginListArgv, " "), err, strings.TrimSpace(string(out)))
+			if errors.Is(err, context.DeadlineExceeded) {
+				why = fmt.Sprintf("%s did not answer within %s", strings.Join(pluginListArgv, " "), Timeout)
+			}
+			if st.Unknown == "" {
+				st.Unknown = why
+			} else {
+				st.Unknown += "; " + why
+			}
+			return st
+		}
+		st.ViaPlugin = pluginEnabled(out)
 	}
 	return st
 }

@@ -228,7 +228,7 @@ func Agents() []Agent {
 					if runtime.GOOS == "darwin" {
 						return filepath.Join(home, "Library", "Application Support", "Code", "User", "mcp.json")
 					}
-					return filepath.Join(home, ".config", "Code", "User", "mcp.json")
+					return filepath.Join(xdgConfigHome(home), "Code", "User", "mcp.json") // Electron honours XDG_CONFIG_HOME, as opencode does
 				},
 				ServersKey: "servers",
 			},

@@ -43,3 +43,21 @@ read l; echo '{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"list_audit_fin
 		t.Fatal("a missing binary must fail")
 	}
 }
+
+// A server that fails to start says why on stderr; the failure note carries
+// that reason (bounded to its last stderrTail bytes), not only "closed its
+// output".
+func TestCheckMCPFailureCarriesStderr(t *testing.T) {
+	err := CheckMCP(context.Background(), fakeServer(t, "echo 'corral: cannot open the state directory' >&2; exit 3\n"))
+	if err == nil || !strings.Contains(err.Error(), "cannot open the state directory") {
+		t.Fatalf("stderr dropped: %v", err)
+	}
+	// A flood of stderr is cut to its tail: the end is where the reason is.
+	err = CheckMCP(context.Background(), fakeServer(t, "i=0; while [ $i -lt 2000 ]; do echo noise-noise-noise >&2; i=$((i+1)); done; echo 'the real reason' >&2; exit 3\n"))
+	if err == nil || !strings.Contains(err.Error(), "the real reason") {
+		t.Fatalf("tail lost: %v", err)
+	}
+	if len(err.Error()) > stderrTail+512 {
+		t.Fatalf("stderr not bounded: %d bytes", len(err.Error()))
+	}
+}

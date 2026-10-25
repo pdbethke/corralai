@@ -163,3 +163,46 @@ func TestUninstallSharedSkillKeptWhenOtherUserIsNoop(t *testing.T) {
 		}
 	}
 }
+
+// I1: an agent whose registration is already gone (removed by hand) is
+// leaving, so setup's skill copy goes with it and its record is dropped. It is
+// never "still used by" itself.
+func TestUninstallRegistrationGoneRemovesSkillAndRecord(t *testing.T) {
+	codex := mustAgent(t, "codex")
+	dir := codex.SkillDir("/h")
+	state := State{Agents: map[string]AgentRecord{"codex": {Command: []string{tbin, "mcp"}, SkillDir: dir}}}
+	s := st(t, "codex", func(s *Status) { s.Skill = "managed" })
+	p := uninstall(t, []Status{s}, []string{"codex"}, state)
+	wantKinds(t, p, ActionNoop, ActionForget, ActionRemoveSkill)
+	if !p.Actions[0].Settled {
+		t.Errorf("an already-gone registration is a satisfied end state: %+v", p.Actions[0])
+	}
+	for _, a := range p.Actions {
+		if strings.Contains(a.Note, "still used by") {
+			t.Fatalf("the agent being uninstalled was counted as staying: %+v", a)
+		}
+	}
+	// Without a skill copy the stale record is still dropped.
+	state = State{Agents: map[string]AgentRecord{"codex": {Command: []string{tbin, "mcp"}}}}
+	wantKinds(t, uninstall(t, []Status{st(t, "codex", nil)}, []string{"codex"}, state), ActionNoop, ActionForget)
+}
+
+// I1: an agent whose CLI is gone is leaving too: its skill copy is removed.
+// Its registration record is kept, because the agent's own config (and with it
+// setup's registration) can outlive the CLI and come back with a reinstall.
+func TestUninstallNotInstalledRemovesSkill(t *testing.T) {
+	codex := mustAgent(t, "codex")
+	dir := codex.SkillDir("/h")
+	state := State{Agents: map[string]AgentRecord{"codex": {Command: []string{tbin, "mcp"}, SkillDir: dir}}}
+	s := st(t, "codex", func(s *Status) { s.Installed, s.Skill = false, "managed" })
+	p := uninstall(t, []Status{s}, []string{"codex"}, state)
+	wantKinds(t, p, ActionNoop, ActionRemoveSkill)
+	if strings.Contains(p.Actions[0].Note, "nothing removed") {
+		t.Errorf("the note must not say nothing is removed when the skill is: %q", p.Actions[0].Note)
+	}
+	for _, a := range p.Actions {
+		if strings.Contains(a.Note, "still used by") {
+			t.Fatalf("the agent being uninstalled was counted as staying: %+v", a)
+		}
+	}
+}

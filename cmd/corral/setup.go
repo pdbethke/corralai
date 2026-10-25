@@ -90,7 +90,7 @@ func realSetupEnv() (setupEnv, error) {
 	}
 	return setupEnv{
 		Home:     home,
-		Runner:   agentsetup.ExecRunner{Timeout: agentsetup.Timeout},
+		Runner:   agentsetup.ExecRunner{Timeout: agentsetup.Timeout, Dir: home}, // agent CLIs run in home, never the cwd (see ExecRunner.Dir)
 		LookPath: exec.LookPath,
 		IsTTY: func() bool {
 			fi, err := os.Stdin.Stat()
@@ -225,14 +225,24 @@ func runSetupWith(args []string, stdin io.Reader, stdout, stderr io.Writer, envF
 		}
 	}
 
-	ctx, cancel := auditContext(stderr)
+	ctx, cancel := setupContext(stderr)
 	defer cancel()
-	in := bufio.NewReader(stdin)
+	readLine := ctxLineReader(ctx, bufio.NewReader(stdin))
+	interrupted := func() int {
+		fmt.Fprintln(stdout, "interrupted; nothing was written")
+		return 1
+	}
 
 	statuses := agentsetup.Detect(ctx, env.Runner, env.Home, env.LookPath)
+	if ctx.Err() != nil {
+		return interrupted()
+	}
 	var selected []string
 	if interactive {
-		selected, err = pickAgents(in, stdout, statuses)
+		selected, err = pickAgents(readLine, stdout, statuses)
+		if ctx.Err() != nil {
+			return interrupted()
+		}
 		if err != nil {
 			fmt.Fprintf(stderr, "%s: %v\n", verb, err)
 			return 2
@@ -276,7 +286,11 @@ func runSetupWith(args []string, stdin io.Reader, stdout, stderr io.Writer, envF
 	mutating := mutatingAgents(plan)
 	if len(mutating) > 0 && !f.yes {
 		fmt.Fprint(stdout, "Apply this plan? [y/N] ")
-		line, _ := in.ReadString('\n')
+		line, _ := readLine()
+		if ctx.Err() != nil {
+			fmt.Fprintln(stdout)
+			return interrupted()
+		}
 		if a := strings.ToLower(strings.TrimSpace(line)); a != "y" && a != "yes" {
 			fmt.Fprintln(stdout, "declined; nothing was written")
 			return 1
@@ -284,8 +298,9 @@ func runSetupWith(args []string, stdin io.Reader, stdout, stderr io.Writer, envF
 	}
 
 	results := map[string]agentsetup.Result{}
+	statePath := ""
 	if len(mutating) > 0 {
-		statePath, err := env.StatePath(true)
+		statePath, err = env.StatePath(true)
 		if err != nil {
 			fmt.Fprintf(stderr, "%s: %v\n", verb, err)
 			return 1
@@ -301,11 +316,15 @@ func runSetupWith(args []string, stdin io.Reader, stdout, stderr io.Writer, envF
 		}
 	}
 
-	after := agentsetup.Detect(ctx, env.Runner, env.Home, env.LookPath)
+	// The re-read only reads, so it runs even after an interrupt (bounded by
+	// the agents' Timeout; a second Ctrl-C still exits at once): without it
+	// the result lines could not say what an interrupted run did.
+	readCtx := context.WithoutCancel(ctx)
+	after := agentsetup.Detect(readCtx, env.Runner, env.Home, env.LookPath)
 	var mcpErr error
 	mcpChecked := false
 	if !f.uninstall && len(mutating) > 0 {
-		mcpChecked, mcpErr = true, env.CheckMCP(ctx, bin)
+		mcpChecked, mcpErr = true, env.CheckMCP(readCtx, bin)
 	}
 	fmt.Fprintln(stdout)
 	ok := true
@@ -318,6 +337,9 @@ func runSetupWith(args []string, stdin io.Reader, stdout, stderr io.Writer, envF
 		if a, found := agentsetup.ByID(id); found && mutating[id] && results[id].OK && !f.uninstall {
 			fmt.Fprintf(stdout, "%s: %s\n", a.Name, a.Restart)
 		}
+	}
+	if statePath != "" {
+		fmt.Fprintf(stdout, "setup's record of what it added: %s\n", statePath)
 	}
 	if !ok {
 		return 1
@@ -363,9 +385,36 @@ func renderPickList(w io.Writer, st []agentsetup.Status, ticked []bool) {
 	}
 }
 
+// ctxLineReader reads one line per call from in, and returns ctx's error as
+// soon as ctx is done, so an interrupt at a prompt is answered at once rather
+// than after the person presses Enter. A read still blocked when ctx ends is
+// abandoned with its goroutine; setup is exiting by then.
+func ctxLineReader(ctx context.Context, in *bufio.Reader) func() (string, error) {
+	return func() (string, error) {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		type line struct {
+			s   string
+			err error
+		}
+		got := make(chan line, 1)
+		go func() {
+			s, err := in.ReadString('\n')
+			got <- line{s, err}
+		}()
+		select {
+		case l := <-got:
+			return l.s, l.err
+		case <-ctx.Done():
+			return "", ctx.Err()
+		}
+	}
+}
+
 // pickAgents asks which agents to act on: numbers toggle and the list is
 // shown again; an empty line (or the end of input) accepts.
-func pickAgents(in *bufio.Reader, w io.Writer, st []agentsetup.Status) ([]string, error) {
+func pickAgents(readLine func() (string, error), w io.Writer, st []agentsetup.Status) ([]string, error) {
 	ticked := make([]bool, len(st))
 	for i, s := range st {
 		ticked[i] = wired(s)
@@ -374,7 +423,7 @@ func pickAgents(in *bufio.Reader, w io.Writer, st []agentsetup.Status) ([]string
 		fmt.Fprintln(w, "Coding agents ([x] = already wired):")
 		renderPickList(w, st, ticked)
 		fmt.Fprint(w, "Type numbers to toggle (e.g. 1 3), Enter to accept: ")
-		line, err := in.ReadString('\n')
+		line, err := readLine()
 		if err != nil && !errors.Is(err, io.EOF) {
 			return nil, err
 		}
@@ -493,6 +542,15 @@ func resultLine(id string, f setupFlags, bin string, plan agentsetup.Plan, mutat
 				fail("still registered")
 			default:
 				parts = append(parts, "unregistered")
+			}
+		} else if hasKind(plan, id, agentsetup.ActionForget) {
+			switch {
+			case now.Unknown != "":
+				fail("could not confirm it is unregistered: " + now.Unknown)
+			case now.Registered:
+				fail("registered again (" + strings.Join(now.Command, " ") + ") after setup dropped its record")
+			default:
+				parts = append(parts, "already unregistered, setup's record dropped")
 			}
 		} else {
 			parts = append(parts, "registration left alone")

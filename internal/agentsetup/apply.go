@@ -56,9 +56,22 @@ func Apply(ctx context.Context, r Runner, p Plan, home, statePath, bin, version 
 	}
 	var results []Result
 	for _, id := range order {
+		// An interrupt (ctx canceled by Ctrl-C) starts no new agent: the
+		// person asked setup to stop, so nothing more of theirs is edited.
+		if ctx.Err() != nil {
+			results = append(results, Result{AgentID: id, Detail: "interrupted before this agent was started; nothing was changed in it"})
+			continue
+		}
 		res := applyAgent(ctx, r, id, groups[id], bin, version, st)
-		if err := SaveState(statePath, *st); err != nil && res.OK {
-			res = Result{AgentID: id, Detail: "carried out, but the setup state could not be saved: " + err.Error()}
+		// A failed save is reported either way: an agent that already failed
+		// may still have changed something (a remove before a failed replace),
+		// and the person must learn that the record of it is stale.
+		if err := SaveState(statePath, *st); err != nil {
+			if res.OK {
+				res = Result{AgentID: id, Detail: "carried out, but the setup state could not be saved: " + err.Error()}
+			} else {
+				res.Detail += "\nand the setup state could not be saved either, so its record of this agent may be stale: " + err.Error()
+			}
 		}
 		results = append(results, res)
 	}
@@ -72,7 +85,7 @@ func applyAgent(ctx context.Context, r Runner, id string, acts []Action, bin, ve
 		switch a.Kind {
 		case ActionRegister, ActionReplace, ActionEnable, ActionWriteFile:
 			installing = true
-		case ActionRemove, ActionUnwriteFile, ActionRemoveSkill:
+		case ActionRemove, ActionUnwriteFile, ActionRemoveSkill, ActionForget:
 			removing = true
 		}
 		if a.Kind == ActionRemove {
@@ -104,12 +117,19 @@ func applyAgent(ctx context.Context, r Runner, id string, acts []Action, bin, ve
 
 	for _, a := range acts {
 		var err error
-		switch a.Kind {
-		case ActionRegister, ActionReplace, ActionEnable:
+		// The file and skill steps never reach the Runner, so they would not
+		// notice an interrupt on their own: every step that changes anything
+		// checks ctx before it starts, and a step not started is not done.
+		if a.Kind != ActionNoop && a.Kind != ActionSkipSkill && ctx.Err() != nil {
+			err = fmt.Errorf("interrupted before %s; it and the steps after it were not started", a.Kind)
+		}
+		switch {
+		case err != nil: // interrupted: nothing is started
+		case a.Kind == ActionRegister, a.Kind == ActionReplace, a.Kind == ActionEnable:
 			if err = run(a.Argv); err == nil {
 				recordArgv(a.Argv)
 			}
-		case ActionRemove:
+		case a.Kind == ActionRemove:
 			err = run(a.Argv)
 			if err == nil {
 				removesDone++
@@ -123,17 +143,17 @@ func applyAgent(ctx context.Context, r Runner, id string, acts []Action, bin, ve
 					rec.Command, rec.RegisterArgv, changed = nil, nil, true
 				}
 			}
-		case ActionWriteFile:
+		case a.Kind == ActionWriteFile:
 			err = writeServerFile(a, id, bin)
 			if err == nil {
 				rec.Command, changed = command, true
 			}
-		case ActionUnwriteFile:
+		case a.Kind == ActionUnwriteFile:
 			err = unwriteServerFile(a, id)
 			if err == nil {
 				rec.Command, rec.RegisterArgv, changed = nil, nil, true
 			}
-		case ActionWriteSkill:
+		case a.Kind == ActionWriteSkill:
 			var files map[string][]byte
 			if files, err = skills.Corral(); err == nil {
 				err = WriteSkill(a.Path, version, files)
@@ -141,10 +161,12 @@ func applyAgent(ctx context.Context, r Runner, id string, acts []Action, bin, ve
 			if err == nil {
 				rec.SkillDir, changed = a.Path, true
 			}
-		case ActionRemoveSkill:
+		case a.Kind == ActionRemoveSkill:
 			if err = RemoveSkill(a.Path); err == nil {
 				rec.SkillDir, changed = "", true
 			}
+		case a.Kind == ActionForget:
+			rec.Command, rec.RegisterArgv, changed = nil, nil, true
 		}
 		if err != nil {
 			if changed {
@@ -230,14 +252,48 @@ func editConfigFile(path string, edit func(old []byte) ([]byte, error)) error {
 		return err
 	}
 	if exists {
-		bk := path + ".corral.backup"
-		if _, err := os.Lstat(bk); err == nil {
-			h := sha256.Sum256(old)
-			bk += "." + hex.EncodeToString(h[:])[:12]
-		}
+		bk := backupPathFor(path, old)
 		if err := writeAtomic(bk, old); err != nil {
 			return fmt.Errorf("backing up %s: %w", path, err)
 		}
 	}
 	return writeAtomic(path, next)
+}
+
+// backupPathFor is where editConfigFile backs up old, the current bytes of
+// path: <path>.corral.backup, or, when that FIRST backup already exists (it is
+// kept), <path>.corral.backup.<sha256-12 of old>.
+func backupPathFor(path string, old []byte) string {
+	bk := path + ".corral.backup"
+	if _, err := os.Lstat(bk); err == nil {
+		h := sha256.Sum256(old)
+		bk += "." + hex.EncodeToString(h[:])[:12]
+	}
+	return bk
+}
+
+// BackupPath names the backup an edit of the config file at path would make
+// now, so the printed plan can name it before anything is written. "" with no
+// error means the file does not exist, so no backup is made.
+func BackupPath(path string) (string, error) {
+	old, err := os.ReadFile(path) // #nosec G304 -- the agent table's config path
+	if errors.Is(err, fs.ErrNotExist) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return backupPathFor(path, old), nil
+}
+
+// backupNote is the plan's wording for BackupPath.
+func backupNote(path string) string {
+	bk, err := BackupPath(path)
+	switch {
+	case err != nil:
+		return "backup: could not be named (" + err.Error() + ")"
+	case bk == "":
+		return "no backup (the file does not exist yet)"
+	}
+	return "backup: " + bk
 }

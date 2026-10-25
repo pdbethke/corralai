@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -176,6 +177,14 @@ func TestConfigFilePaths(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", xdg)
 	if got := oc.File.Path(home); got != filepath.Join(xdg, "opencode", "opencode.jsonc") {
 		t.Errorf("XDG_CONFIG_HOME ignored: %q", got)
+	}
+	// VS Code (Electron) honours XDG_CONFIG_HOME on Linux too; reading
+	// ~/.config while it writes elsewhere would make a successful --add-mcp
+	// verify as NOT registered.
+	if runtime.GOOS == "linux" {
+		if got := vs.File.Path(home); got != filepath.Join(xdg, "Code", "User", "mcp.json") {
+			t.Errorf("vscode ignores XDG_CONFIG_HOME: %q", got)
+		}
 	}
 }
 

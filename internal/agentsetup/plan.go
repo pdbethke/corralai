@@ -23,6 +23,10 @@ const (
 	ActionRemove      ActionKind = "remove"       // run Argv: remove the server (uninstall, or before a replace)
 	ActionRemoveSkill ActionKind = "remove-skill" // delete the managed skill copy at Path (uninstall)
 	ActionUnwriteFile ActionKind = "unwrite-file" // delete corral from the config file at Path (uninstall)
+	// ActionForget drops setup's record of a registration that is already gone
+	// (removed by hand), so a later registration with the same command is never
+	// mistaken for setup's. It touches only the state file (uninstall).
+	ActionForget ActionKind = "forget"
 )
 
 // Action is one step. Setup builds a Plan of them and prints it before any is
@@ -64,7 +68,8 @@ func SameCommand(got []string, bin string) bool {
 }
 
 // BuildSetupPlan decides, per selected agent, what setup WILL do. It reads
-// statuses and writes nothing. An ID in selected that is not an agent is an
+// statuses (and, to name the backup a config-file edit will make, that file)
+// and writes nothing. An ID in selected that is not an agent is an
 // error. Actions follow the order of st.
 //
 // Registration: unregistered -> register; registered with [bin, "mcp"] ->
@@ -123,7 +128,8 @@ func BuildSetupPlan(st []Status, selected []string, opt SetupOptions) (Plan, err
 			}
 			note := fmt.Sprintf("will replace: %s → %s mcp", old, opt.Bin)
 			if a.FileConfig != "" {
-				add(ActionWriteFile, nil, a.File.Path(opt.Home), note)
+				path := a.File.Path(opt.Home)
+				add(ActionWriteFile, nil, path, note+"; "+backupNote(path))
 				for _, argv := range regs {
 					add(ActionEnable, argv, "", "")
 				}
@@ -139,7 +145,8 @@ func BuildSetupPlan(st []Status, selected []string, opt SetupOptions) (Plan, err
 			}
 		default:
 			if a.FileConfig != "" {
-				add(ActionWriteFile, nil, a.File.Path(opt.Home), "add corral to the config file")
+				path := a.File.Path(opt.Home)
+				add(ActionWriteFile, nil, path, "add corral to the config file; "+backupNote(path))
 				for _, argv := range regs {
 					add(ActionEnable, argv, "", "")
 				}

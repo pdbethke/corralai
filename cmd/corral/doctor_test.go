@@ -401,9 +401,10 @@ func init() {
 }
 
 func noAgentsEnv() doctorEnv {
+	home := filepath.Join(os.TempDir(), "doctor-no-home")
 	return doctorEnv{
-		Home:     filepath.Join(os.TempDir(), "doctor-no-home"),
-		Runner:   agentsetup.ExecRunner{},
+		Home:     home,
+		Runner:   agentsetup.ExecRunner{Dir: home},
 		LookPath: func(string) (string, error) { return "", errors.New("not found") },
 	}
 }
@@ -491,6 +492,21 @@ func TestDoctorAgentsNeverChangeExitCode(t *testing.T) {
 	if rcBase != rcWith {
 		t.Fatalf("agents moved the exit code: %d -> %d\n%s", rcBase, rcWith, withAgents.String())
 	}
+	// Equal exit codes alone prove little when the base run already fails
+	// (both are 1 on a host with no sandbox or key). The verdict line carries
+	// the failure COUNT, so it must be identical too: eight unreadable agents
+	// added no failure.
+	verdict := func(out string) string {
+		for _, l := range strings.Split(out, "\n") {
+			if strings.Contains(l, "check(s) failed") || strings.Contains(l, "All checks passed") {
+				return l
+			}
+		}
+		return ""
+	}
+	if vb, vw := verdict(base.String()), verdict(withAgents.String()); vb == "" || vb != vw {
+		t.Fatalf("agents changed the verdict: %q -> %q", vb, vw)
+	}
 	if !strings.Contains(withAgents.String(), "unknown (") || !strings.Contains(withAgents.String(), "corral setup") {
 		t.Fatalf("agents section missing:\n%s", withAgents.String())
 	}
@@ -503,4 +519,22 @@ type failingRunner struct{}
 
 func (failingRunner) Run(context.Context, []string) ([]byte, error) {
 	return nil, errors.New("boom")
+}
+
+// An info result never counts as a failure and never stops later checks,
+// whatever its ok field says: this is the mechanism that keeps the agents
+// section out of doctor's exit code, tested directly so it does not rest on
+// a whole-run comparison.
+func TestPrintCheckInfoNeverFails(t *testing.T) {
+	failed := 0
+	var b bytes.Buffer
+	if !printCheck(&b, checkResult{name: "agent", info: true, ok: false, fatal: true}, &failed) {
+		t.Error("an info result stopped later checks")
+	}
+	if failed != 0 || !strings.Contains(b.String(), "[info] agent") {
+		t.Fatalf("failed=%d out=%q", failed, b.String())
+	}
+	if printCheck(&b, checkResult{name: "sandbox", fatal: true}, &failed); failed != 1 {
+		t.Fatalf("a real failure was not counted: %d", failed)
+	}
 }

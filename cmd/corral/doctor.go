@@ -72,7 +72,7 @@ func realDoctorEnv() (doctorEnv, error) {
 	}
 	return doctorEnv{
 		Home:     home,
-		Runner:   agentsetup.ExecRunner{Timeout: agentsetup.Timeout},
+		Runner:   agentsetup.ExecRunner{Timeout: agentsetup.Timeout, Dir: home}, // agent CLIs run in home, never the cwd (see ExecRunner.Dir)
 		LookPath: exec.LookPath,
 	}, nil
 }
@@ -168,24 +168,22 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 // printCheck prints one result and counts a failure; false means a fatal
 // failure, after which later checks are skipped.
 func printCheck(stdout io.Writer, r checkResult, failed *int) bool {
-	{
-		mark := "ok  "
-		if r.info {
-			mark = "info"
-		} else if !r.ok {
-			mark = "FAIL"
-			*failed++
+	mark := "ok  "
+	if r.info {
+		mark = "info"
+	} else if !r.ok {
+		mark = "FAIL"
+		*failed++
+	}
+	fmt.Fprintf(stdout, "  [%s] %s\n", mark, r.name)
+	if r.detail != "" {
+		for _, line := range strings.Split(strings.TrimRight(r.detail, "\n"), "\n") {
+			fmt.Fprintf(stdout, "         %s\n", line)
 		}
-		fmt.Fprintf(stdout, "  [%s] %s\n", mark, r.name)
-		if r.detail != "" {
-			for _, line := range strings.Split(strings.TrimRight(r.detail, "\n"), "\n") {
-				fmt.Fprintf(stdout, "         %s\n", line)
-			}
-		}
-		if !r.info && !r.ok && r.fatal {
-			fmt.Fprintln(stdout, "         (later checks skipped — this one has to pass first)")
-			return false
-		}
+	}
+	if !r.info && !r.ok && r.fatal {
+		fmt.Fprintln(stdout, "         (later checks skipped — this one has to pass first)")
+		return false
 	}
 	return true
 }

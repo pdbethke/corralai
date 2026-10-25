@@ -17,7 +17,8 @@ import "strings"
 //
 // The skill copy is removed only when it is setup's own unedited copy AND every
 // agent State lists as using the directory is leaving in THIS plan (its
-// registration is being removed, or it never had one). That is decided in a
+// registration is being removed, it never had one, the registration is already
+// gone, or the agent's CLI is no longer installed). That is decided in a
 // second pass, after every agent's registration outcome is known: an agent
 // whose uninstall is a noop (unreadable, changed, not installed) keeps its
 // record, and with it its claim on a shared directory, whatever the order the
@@ -46,14 +47,25 @@ func BuildUninstallPlan(stat []Status, selected []string, st State, home string)
 		case !have:
 			settled("not added by setup, so setup leaves it alone")
 		case !s.Installed:
-			settled("not installed; nothing removed")
+			// The CLI is gone, so nothing reads setup's skill copy through it:
+			// the agent is leaving. Its registration record is KEPT, because
+			// the agent's own config can outlive the CLI and return with a
+			// reinstall, and a dropped record would make setup's registration
+			// look like a hand one.
+			leaving[a.ID] = true
+			settled("not installed; its registration is not removed")
 		case s.Unknown != "":
 			add(ActionNoop, nil, "", "could not read; nothing removed: "+s.Unknown)
 		case len(rec.Command) == 0:
 			leaving[a.ID] = true // nothing registered by setup; only a skill claim
 			settled("the registration was not added by setup, so setup leaves it alone")
 		case !s.Registered:
+			// Removed by hand: the agent is leaving, and setup's record of a
+			// registration that no longer exists is dropped, so it can never
+			// claim a later registration with the same command as setup's own.
+			leaving[a.ID] = true
 			settled("corral is no longer registered; nothing to remove")
+			add(ActionForget, nil, "", "drop setup's record of it")
 		case len(rec.Command) != 2 || rec.Command[1] != "mcp" || !SameCommand(s.Command, rec.Command[0]):
 			settled("the registration changed since setup (" + strings.Join(s.Command, " ") + "), so setup leaves it alone")
 		case len(a.Remove) > 0:
@@ -63,7 +75,8 @@ func BuildUninstallPlan(stat []Status, selected []string, st State, home string)
 			}
 		case a.File != nil:
 			leaving[a.ID] = true
-			add(ActionUnwriteFile, nil, a.File.Path(home), "delete only the corral entry")
+			path := a.File.Path(home)
+			add(ActionUnwriteFile, nil, path, "delete only the corral entry; "+backupNote(path))
 		default:
 			add(ActionNoop, nil, "", "the agent has no remove command")
 		}

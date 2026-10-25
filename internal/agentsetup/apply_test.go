@@ -340,3 +340,161 @@ func TestApplyRefusesSymlinkedConfig(t *testing.T) {
 		t.Errorf("enable ran after a refused write: %v", f.calls)
 	}
 }
+
+// I1: forget drops a registration record whose registration is already gone;
+// with the skill removed too, nothing of setup's remains and the agent's
+// record goes.
+func TestApplyForgetAndRemoveSkillDropsRecord(t *testing.T) {
+	home := t.TempDir()
+	dir := filepath.Join(home, ".codex", "skills", "corral")
+	if err := WriteSkill(dir, "v", map[string][]byte{"SKILL.md": []byte("x")}); err != nil {
+		t.Fatal(err)
+	}
+	st := State{Agents: map[string]AgentRecord{"codex": {Command: []string{tbin, "mcp"}, SkillDir: dir}}}
+	p := Plan{Actions: []Action{
+		{AgentID: "codex", Kind: ActionNoop, Settled: true},
+		{AgentID: "codex", Kind: ActionForget},
+		{AgentID: "codex", Kind: ActionRemoveSkill, Path: dir},
+	}}
+	if res := applyOne(t, &fakeRunner{}, p, home, &st); !res[0].OK {
+		t.Fatalf("%+v", res)
+	}
+	if _, ok := st.Agents["codex"]; ok || skillState(dir) != "absent" {
+		t.Fatalf("record %+v, skill %s", st.Agents, skillState(dir))
+	}
+	// A remove-skill alone (the agent is not installed) keeps the registration
+	// record and drops only the skill directory from it.
+	if err := WriteSkill(dir, "v", map[string][]byte{"SKILL.md": []byte("x")}); err != nil {
+		t.Fatal(err)
+	}
+	st = State{Agents: map[string]AgentRecord{"codex": {Command: []string{tbin, "mcp"}, SkillDir: dir}}}
+	p = Plan{Actions: []Action{{AgentID: "codex", Kind: ActionRemoveSkill, Path: dir}}}
+	if res := applyOne(t, &fakeRunner{}, p, home, &st); !res[0].OK {
+		t.Fatalf("%+v", res)
+	}
+	if rec := st.Agents["codex"]; rec.SkillDir != "" || len(rec.Command) != 2 {
+		t.Fatalf("record %+v", rec)
+	}
+}
+
+// I2: Ctrl-C cancels ctx, and setup must then start no new step. The file and
+// skill steps do not go through the Runner, so they check ctx themselves; a
+// skipped step is reported as not done and the state records nothing.
+func TestApplyCancelledStartsNoStep(t *testing.T) {
+	home := t.TempDir()
+	cursorFile := filepath.Join(home, ".cursor", "mcp.json")
+	skillDir := filepath.Join(home, ".cursor", "skills", "corral")
+	enable := []string{"cursor-agent", "mcp", "enable", "corral"}
+	f := &fakeRunner{replies: map[string]reply{strings.Join(enable, " "): {}}}
+	p := Plan{Actions: []Action{
+		{AgentID: "cursor", Kind: ActionWriteFile, Path: cursorFile},
+		{AgentID: "cursor", Kind: ActionEnable, Argv: enable},
+		{AgentID: "cursor", Kind: ActionWriteSkill, Path: skillDir},
+	}}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	st := State{Agents: map[string]AgentRecord{}}
+	statePath := filepath.Join(t.TempDir(), "s.json")
+	res := Apply(ctx, f, p, home, statePath, tbin, "vtest", &st)
+	if len(res) != 1 || res[0].OK || !strings.Contains(res[0].Detail, "interrupted") {
+		t.Fatalf("%+v", res)
+	}
+	if _, err := os.Stat(cursorFile); err == nil {
+		t.Error("the config file was written after the interrupt")
+	}
+	if _, err := os.Stat(skillDir); err == nil {
+		t.Error("the skill was written after the interrupt")
+	}
+	if len(f.calls) != 0 || len(st.Agents) != 0 {
+		t.Errorf("calls %v, state %+v", f.calls, st.Agents)
+	}
+
+	// Uninstall: an unwrite and a skill removal are not started either.
+	if err := WriteSkill(skillDir, "v", map[string][]byte{"SKILL.md": []byte("x")}); err != nil {
+		t.Fatal(err)
+	}
+	merged, err := MergeCursorConfig(nil, tbin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cursorFile, merged, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rec := AgentRecord{Command: []string{tbin, "mcp"}, SkillDir: skillDir}
+	st = State{Agents: map[string]AgentRecord{"cursor": rec}}
+	p = Plan{Actions: []Action{
+		{AgentID: "cursor", Kind: ActionUnwriteFile, Path: cursorFile},
+		{AgentID: "cursor", Kind: ActionRemoveSkill, Path: skillDir},
+	}}
+	res = Apply(ctx, f, p, home, statePath, tbin, "vtest", &st)
+	if res[0].OK || skillState(skillDir) != "managed" {
+		t.Fatalf("%+v skill %s", res, skillState(skillDir))
+	}
+	if b, _ := os.ReadFile(cursorFile); string(b) != string(merged) {
+		t.Errorf("the config file was edited after the interrupt: %s", b)
+	}
+	if got := st.Agents["cursor"]; got.SkillDir != skillDir || len(got.Command) != 2 {
+		t.Errorf("state changed although nothing was done: %+v", got)
+	}
+}
+
+// I2: an interrupt part way stops the agent at the next step, keeps what was
+// done on record, and starts no later agent.
+func TestApplyInterruptMidAgentKeepsWhatWasDone(t *testing.T) {
+	home := t.TempDir()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	argv := []string{"codex", "mcp", "add", "corral", "--", tbin, "mcp"}
+	r := cancelAfter{cancel: cancel}
+	p := Plan{Actions: []Action{
+		{AgentID: "codex", Kind: ActionRegister, Argv: argv},
+		{AgentID: "codex", Kind: ActionWriteSkill, Path: filepath.Join(home, ".codex", "skills", "corral")},
+		{AgentID: "gemini_cli", Kind: ActionWriteSkill, Path: filepath.Join(home, ".gemini", "skills", "corral")},
+	}}
+	st := State{Agents: map[string]AgentRecord{}}
+	res := Apply(ctx, r, p, home, filepath.Join(t.TempDir(), "s.json"), tbin, "vtest", &st)
+	if len(res) != 2 || res[0].OK || res[1].OK || !strings.Contains(res[0].Detail, "interrupted before write-skill") {
+		t.Fatalf("%+v", res)
+	}
+	if rec := st.Agents["codex"]; len(rec.Command) != 2 || rec.SkillDir != "" {
+		t.Errorf("codex record %+v: the registration that ran must be kept, the skill that did not must not", rec)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".gemini")); err == nil {
+		t.Error("a later agent was started after the interrupt")
+	}
+}
+
+// cancelAfter succeeds and then cancels: the interrupt arrives while a step runs.
+type cancelAfter struct{ cancel context.CancelFunc }
+
+func (c cancelAfter) Run(context.Context, []string) ([]byte, error) { c.cancel(); return nil, nil }
+
+// A state file that cannot be saved is reported whether or not the agent's
+// own steps succeeded: an agent that already failed must not hide it.
+func TestApplyStateSaveErrorNeverDropped(t *testing.T) {
+	blocker := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(blocker, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	statePath := filepath.Join(blocker, "s.json") // its parent is a file: the save fails
+	ok := []string{"codex", "mcp", "add", "corral", "--", tbin, "mcp"}
+	bad := []string{"gemini", "mcp", "add", "-s", "user", "corral", tbin, "mcp"}
+	f := &fakeRunner{replies: map[string]reply{
+		strings.Join(ok, " "):  {},
+		strings.Join(bad, " "): {out: []byte("boom"), err: errors.New("exit 1")},
+	}}
+	p := Plan{Actions: []Action{
+		{AgentID: "codex", Kind: ActionRegister, Argv: ok},
+		{AgentID: "gemini_cli", Kind: ActionRegister, Argv: bad},
+	}}
+	st := State{Agents: map[string]AgentRecord{}}
+	res := Apply(context.Background(), f, p, t.TempDir(), statePath, tbin, "vtest", &st)
+	for _, r := range res {
+		if r.OK || !strings.Contains(r.Detail, "setup state could not be saved") {
+			t.Errorf("%s: %+v", r.AgentID, r)
+		}
+	}
+	if !strings.Contains(res[1].Detail, "boom") {
+		t.Errorf("the agent's own failure was replaced: %q", res[1].Detail)
+	}
+}

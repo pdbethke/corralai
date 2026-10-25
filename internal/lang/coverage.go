@@ -29,9 +29,15 @@ type CoverageReporter interface {
 	// many of the file's executable lines the run executed, out of how many
 	// it measured. It keeps ParseCoverage's tri-state — present with
 	// Executed>0 is executed, present with Executed==0 is measured and never
-	// run, ABSENT is never measured — and ParseCoverage is derived from it
-	// (executed[p] = counts[p].Executed > 0), which
-	// TestParseCoverageAgreesWithCoverageCounts holds. An unparseable report
+	// run, ABSENT is never measured — and ParseCoverage agrees with it
+	// (executed[p] == (counts[p].Executed > 0)), which
+	// TestParseCoverageAgreesWithCoverageCounts holds, with ONE allowed
+	// divergence: Go's ParseCoverage may be true while Executed==0, and only
+	// when every block of that file that ran has zero statements (an empty
+	// function body, whose block is entered but adds nothing to a statement
+	// count). That file read executed before counts existed and must not
+	// move; evidence pairing reads Executed, so such a file is never
+	// promoted by unit evidence. No other reporter may diverge. An unparseable report
 	// is an ERROR. A reporter that cannot count yet returns an error saying
 	// so, never a made-up count.
 	//
@@ -80,7 +86,8 @@ var _ CoverageReporter = tsPlugin{}
 var _ CoverageReporter = phpPlugin{}
 
 // executedFromCounts is ParseCoverage derived from CoverageCounts, the one
-// place the rule lives: a file is executed when any of its lines ran, and the
+// place the rule lives for every reporter but Go (whose one allowed
+// divergence is stated on CoverageReporter.CoverageCounts): a file is executed when any of its lines ran, and the
 // key set — the tri-state's third state — is carried over unchanged.
 func executedFromCounts(counts map[string]LineCounts, err error) (map[string]bool, error) {
 	if err != nil {

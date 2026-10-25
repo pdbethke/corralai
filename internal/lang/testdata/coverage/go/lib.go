@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Elastic-2.0
+
 package corralfixture
 
 // Add is called by the fixture's test.

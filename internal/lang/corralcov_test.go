@@ -705,10 +705,23 @@ func TestParseCoverageAgreesWithCoverageCounts(t *testing.T) {
 			if !slices.Equal(slices.Sorted(maps.Keys(executed)), slices.Sorted(maps.Keys(counts))) {
 				t.Fatalf("key sets differ: ParseCoverage %v, CoverageCounts %v", executed, counts)
 			}
+			// The ONE allowed divergence (CoverageReporter.CoverageCounts): Go
+			// may read executed with Executed==0, never the other way round.
+			diverged := 0
 			for f, c := range counts {
-				if executed[f] != (c.Executed > 0) {
-					t.Errorf("%s: ParseCoverage says %v, counts say %+v", f, executed[f], c)
+				if executed[f] == (c.Executed > 0) {
+					continue
 				}
+				if name == "go" && executed[f] && c.Executed == 0 {
+					diverged++
+					continue
+				}
+				t.Errorf("%s: ParseCoverage says %v, counts say %+v", f, executed[f], c)
+			}
+			if wantDiverged := name == "go"; wantDiverged && diverged == 0 {
+				t.Errorf("go's captured report exercises no empty-function file, so the allowed divergence is untested")
+			} else if !wantDiverged && diverged != 0 {
+				t.Errorf("%s diverged %d times; only go may", name, diverged)
 			}
 		})
 	}

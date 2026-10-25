@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Elastic-2.0
+
 package corralfixture
 
 import "testing"
@@ -10,4 +12,5 @@ func TestAdd(t *testing.T) {
 		t.Fatal("Sign")
 	}
 	Empty()
+	Nothing()
 }

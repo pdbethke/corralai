@@ -95,8 +95,9 @@ func cargoListUnits(argv []string) ([]string, bool) {
 // cargoParseUnits reads cargo's JSON messages: each compiler-artifact built
 // as a test (profile.test) with an executable is a target, named by its
 // package and kind. The listing is read only when cargo reported the build
-// finished and succeeded; a build that failed, output that is not cargo's
-// messages, or a package id it cannot name is no listing. Two package ids
+// finished and succeeded; a build that failed, a JSON line that is not one of
+// cargo's messages, or a package id it cannot name is no listing. Lines that
+// are not JSON objects are cargo's stderr on the same stream, and skipped. Two package ids
 // with one name (a member and a dependency of the same name from another
 // source) cannot be told apart by -p, so such a unit is listed marked.
 // Example and bench targets, built as tests only under --examples,
@@ -119,7 +120,11 @@ func cargoParseUnits(stdout string) []string {
 	finished := false
 	for _, line := range strings.Split(stdout, "\n") {
 		line = strings.TrimSpace(line)
-		if line == "" {
+		// A line that is not a JSON object is cargo's stderr (Compiling,
+		// Finished, a warning): the jail returns both streams as one
+		// (capture cargo-units-jail.txt). It names no target, and the
+		// listing still needs cargo's own build-finished message to count.
+		if !strings.HasPrefix(line, "{") {
 			continue
 		}
 		var m message

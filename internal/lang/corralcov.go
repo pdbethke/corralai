@@ -557,6 +557,28 @@ func coverageMergeDir(header string) string {
 	return `printf '%s\n' ` + shellQuote(header) + `; cat "$d"/cov/* 2>/dev/null || true`
 }
 
+// unquotedProgram is a command word without the shell quotes around it,
+// when the whole word is ONE quoted string whose text the shell takes
+// literally: '…' with no quote inside, or "…" with nothing the shell would
+// expand. Every coverage wrapper names the operator's interpreter through
+// shellQuote ('go', '/home/u/sdk/go/bin/go'); read with its quotes, the jail
+// looked up a program literally called 'go' and bound nothing, and the run
+// failed `go: not found`. Any other word is returned as it is: a guess at
+// what the shell would make of it could only name the wrong program.
+func unquotedProgram(w string) string {
+	if len(w) < 2 {
+		return w
+	}
+	inner := w[1 : len(w)-1]
+	switch {
+	case w[0] == '\'' && w[len(w)-1] == '\'' && !strings.Contains(inner, "'"):
+		return inner
+	case w[0] == '"' && w[len(w)-1] == '"' && !strings.ContainsAny(inner, "\"$`\\"):
+		return inner
+	}
+	return w
+}
+
 // InterpretersIn returns every program a command will actually execute in
 // command position: argv[0] for a plain command, and each command-position
 // word of the script for a `sh -c` wrapper.
@@ -577,7 +599,26 @@ func InterpretersIn(argv []string) []string {
 	if cmdIsShellWrapped(argv) {
 		for i, a := range argv {
 			if a == "-c" && i+1 < len(argv) {
-				return shellCommandWords(argv[i+1])
+				// The words after the script are $0 and then the positional
+				// parameters. A script that runs `"$@"` in command position
+				// executes them, and that is the one place they are a program:
+				// lang.ListUnitsCmd passes the operator's listing this way, so
+				// it is never re-read by the shell, and reading only the
+				// script's words bound printf and pwd but never the `go` or
+				// `cargo` the listing ran.
+				var positional []string
+				if i+3 < len(argv) {
+					positional = argv[i+3:]
+				}
+				var out []string
+				for _, w := range shellCommandWords(argv[i+1]) {
+					if w == `"$@"` || w == `$@` {
+						out = append(out, InterpretersIn(positional)...)
+						continue
+					}
+					out = append(out, unquotedProgram(w))
+				}
+				return out
 			}
 		}
 	}

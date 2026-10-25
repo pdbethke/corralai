@@ -69,6 +69,13 @@ units() { # units <fixture> <cmd...>: the wrapped listing's stdout
   local f="$1"; shift
   sh -c "$PRELUDE" corral-units "$@" 2>/dev/null | sed -e "s#$PDIR#/fixture#g" -e "s#$HOME#~#g" -e '/duration_ms/d' > "$OUT/$f" || true
 }
+# unitsjail <fixture> <cmd...>: the same listing with stderr on the SAME stream,
+# which is how the bwrap jail returns a run's output (sandbox.Result.Output).
+# cargo's progress lines then sit between its JSON messages.
+unitsjail() {
+  local f="$1"; shift
+  sh -c "$PRELUDE" corral-units "$@" 2>&1 | sed -e "s#$PDIR#/fixture#g" -e "s#$HOME#~#g" -e '/duration_ms/d' > "$OUT/$f" || true
+}
 units jest-units.txt npx --no-install jest --ci units/jest --listTests --json
 units vitest-units.txt npx --no-install vitest list --reporter=verbose units/vitest --filesOnly --json
 units vitest-units-collide.txt npx --no-install vitest list units/collide --filesOnly --json
@@ -172,6 +179,7 @@ cargoran() { grep -oE 'test result: ok\. [0-9]+ passed' | grep -oE '[0-9]+' | aw
 nextran() { sed -n 's/^ *Summary .* \([0-9]*\) tests\{0,1\} run:.*/\1/p'; }
 (cd units/cargo && units cargo-units.txt cargo test -p units-a --no-run --message-format=json)
 (cd units/cargo && units cargo-units-workspace.txt cargo test --workspace --no-run --message-format=json)
+(cd units/cargo && cargo clean -q && unitsjail cargo-units-jail.txt cargo test -p units-a --no-run --message-format=json)
 (cd units/cargo && units nextest-units.txt cargo nextest list --workspace --message-format json)
 (cd units/cargo && units nextest-units-filter.txt cargo nextest list --workspace integrates --message-format json)
 want cargo-unit-lib 2 "$(cd units/cargo && cargo test -p units-a --lib 2>&1 | cargoran)"

@@ -571,6 +571,13 @@ func TestCargoUnitsFromNoRunJSON(t *testing.T) {
 	unitCase{row: "cargo test", lang: "rust", fixture: "cargo-units.txt",
 		argv: []string{"cargo", "test", "-p", "units-a"}, want: []string{"units-a/bin:units-a", "units-a/lib", "units-a/test:it"}, run: "units-a/lib",
 		wantRun: []string{"cargo", "test", "-p", "units-a", "--lib"}}.check(t)
+	// The jail returns stdout and stderr as one stream, so cargo's progress
+	// lines arrive between its JSON messages (indexmap, Task 11a: "could not
+	// read the unit listing"). They are cargo's stderr, not a malformed
+	// message, and the listing is the same.
+	unitCase{row: "cargo test", lang: "rust", fixture: "cargo-units-jail.txt",
+		argv: []string{"cargo", "test", "-p", "units-a"}, want: []string{"units-a/bin:units-a", "units-a/lib", "units-a/test:it"}, run: "units-a/lib",
+		wantRun: []string{"cargo", "test", "-p", "units-a", "--lib"}}.check(t)
 	unitCase{row: "cargo test", lang: "rust", fixture: "cargo-units-workspace.txt",
 		argv:    []string{"cargo", "test", "--workspace"},
 		want:    []string{"units-a/bin:units-a", "units-a/lib", "units-a/test:it", "units-b/lib", "units-b/test:it"},
@@ -878,5 +885,74 @@ func TestBundledShortNameFilterIsRefused(t *testing.T) {
 	}
 	if !strings.Contains(unitFixture(t, "jest-bundled-filter.txt"), "1 skipped, 1 passed") {
 		t.Error("the captured -ct run should have filtered a's two tests to one")
+	}
+}
+
+// THE LISTING MUST BIND THE TOOLCHAIN IT RUNS. The jail binds a command's
+// toolchain from InterpretersIn, and ListUnitsCmd passes the listing as the
+// prelude's positional parameters, which the script runs through `exec "$@"`.
+// Reading only the script's words found printf and pwd, so a Go under ~/sdk or
+// a rustup cargo was never bound and every jailed listing exited 127 with
+// `exec: go: not found` (gin and indexmap, Task 11a) while the unit runs and
+// the scan's graded runs beside it saw the same toolchain.
+func TestListUnitsCmdNamesTheOperatorsInterpreter(t *testing.T) {
+	for _, c := range []struct {
+		lang string
+		argv []string
+		want string
+	}{
+		{"go", []string{"/home/u/sdk/go/bin/go", "test", "./..."}, "/home/u/sdk/go/bin/go"},
+		{"rust", []string{"/home/u/.cargo/bin/cargo", "test"}, "/home/u/.cargo/bin/cargo"},
+		{"javascript", []string{"/home/u/.nvm/versions/node/v22/bin/npx", "jest"}, "/home/u/.nvm/versions/node/v22/bin/npx"},
+	} {
+		p, _ := ByName(c.lang)
+		cmd, ok := ListUnitsCmd(p, Cmd(c.argv))
+		if !ok {
+			t.Fatalf("%s: no listing for %q", c.lang, c.argv)
+		}
+		if got := InterpretersIn(cmd); !slices.Contains(got, c.want) {
+			t.Errorf("%s: InterpretersIn(%q) = %q, want it to include %q", c.lang, cmd, got, c.want)
+		}
+	}
+}
+
+// A positional parameter is a program only where the script runs it: `"$@"`
+// in command position. Anywhere else (an argument list, `set --`), the words
+// after $0 are data, and binding their first word would mount whatever a
+// caller's argument happened to name.
+func TestInterpretersInReadsPositionalsOnlyWhereTheScriptRunsThem(t *testing.T) {
+	for _, c := range []struct {
+		argv []string
+		want []string
+	}{
+		{[]string{"sh", "-c", `exec "$@"`, "x", "/opt/t/bin/tool", "a"}, []string{"/opt/t/bin/tool"}},
+		{[]string{"sh", "-c", `printf ok && exec "$@"`, "x", "go", "list"}, []string{"printf", "go"}},
+		{[]string{"sh", "-c", `echo "$@"`, "x", "/opt/t/bin/tool"}, []string{"echo"}},
+		{[]string{"sh", "-c", `set -- "$@" -v; tool "$@"`, "x", "/opt/t/bin/other"}, []string{"set", "tool"}},
+		{[]string{"sh", "-c", `exec "$@"`}, nil},
+	} {
+		if got := InterpretersIn(c.argv); !slices.Equal(got, c.want) {
+			t.Errorf("InterpretersIn(%q) = %q, want %q", c.argv, got, c.want)
+		}
+	}
+}
+
+// A coverage wrapper names the operator's interpreter shell-quoted in its
+// script (shellQuote: 'go'). The quotes are the shell's, not the program's
+// name, so the interpreter is the word without them; read with them, the
+// jail looked up a program called 'go' and bound nothing.
+func TestInterpretersInReadsAQuotedProgramWithoutItsQuotes(t *testing.T) {
+	for _, c := range []struct {
+		argv []string
+		want []string
+	}{
+		{[]string{"sh", "-c", `'/home/u/sdk/go/bin/go' 'test' './...'; rc=$?`}, []string{"/home/u/sdk/go/bin/go"}},
+		{[]string{"sh", "-c", `f=$(mktemp) && 'go' 'test' x`}, []string{"mktemp", "go"}},
+		{[]string{"sh", "-c", `"/opt/n/bin/node" x.js`}, []string{"/opt/n/bin/node"}},
+		{[]string{"sh", "-c", `'it'\''s' x`}, []string{`'it'\''s'`}},
+	} {
+		if got := InterpretersIn(c.argv); !slices.Equal(got, c.want) {
+			t.Errorf("InterpretersIn(%q) = %q, want %q", c.argv, got, c.want)
+		}
 	}
 }

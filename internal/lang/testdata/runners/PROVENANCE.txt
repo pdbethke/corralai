@@ -14,3 +14,7 @@ Go, Ruby, PHP and Rust units and the *-help files (added 2026-10-25): go1.26.7,
 gotestsum 1.13.0 (go install), PHP 8.5.4,
 cargo 1.90.0, cargo-nextest 0.9.148 (cd1d6d546 2026-10-07).
 *-help files are each runner's --help; libtest-help.txt is a cargo-built test binary's.
+cargo-units-jail.txt (added 2026-10-25, cargo 1.90.0): the cargo-units.txt
+listing from a clean target dir with stderr on the same stream, as the jail
+returns a run's output; cargo's Compiling/Finished lines sit between its
+JSON messages.

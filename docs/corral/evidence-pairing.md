@@ -10,6 +10,9 @@ the run printed. Nothing here is an estimate.
 Every run below was a free dry run, `certify --repo . --dry-run --evidence`,
 with no model and no key. Each target was a scratch clone at the commit named.
 The binary was built from branch `feat/evidence-pairing` at `22f2719e`. The
+runs marked **re-run** used the same branch after its fixes for what the first
+runs found (commits `54e33acf` to `bad88e83`). The first results stay on this
+page beside them. The
 workstation ran Linux with bubblewrap 0.11.1, node 22.23.4, go 1.26.10,
 ruby 3.3.8 with rspec-core 3.13.6, PHP 8.5.4 with pcov and phpunit 11.5.50,
 and cargo 1.90.0 with `llvm-tools` from the user's rustup toolchain. Every run
@@ -26,6 +29,7 @@ the scratch clone, where the clone was the isolation boundary.
 | language | repository | substrate | units run / failed | evidence-paired | name-paired | time |
 |---|---|---|---|---|---|---|
 | Go | gin-gonic/gin | workspace | 6 / 0 | 19 | 29 | 4.31 s |
+| Go | gin-gonic/gin (re-run) | jail | 6 / 0 | 19 | 29 | 42.4 s |
 | JavaScript | tj/commander.js | jail | 109 / 4 | 7 | 0 | 19.33 s |
 | JavaScript | tj/commander.js | workspace | 109 / 0 | 7 | 0 | 25.08 s |
 | JavaScript | expressjs/express | jail | no unit form (mocha) | 0 | 0 | 0.05 s |
@@ -33,6 +37,7 @@ the scratch clone, where the clone was the isolation boundary.
 | Ruby | ku1ik/rainbow | workspace | 11 / 4 | 10 | 0 | 2.50 s |
 | PHP | webmozart/assert | jail | 2 / 0 | 1 | 1 | 1.53 s |
 | Rust | indexmap-rs/indexmap | workspace | 5 / 0 | 0 | 2 | 12.88 s |
+| Rust | indexmap-rs/indexmap (re-run) | jail | 5 / 5 (coverage unavailable) | 0 | 2 | 8.15 s |
 
 ## Go: gin-gonic/gin
 
@@ -46,6 +51,21 @@ the scratch clone, where the clone was the isolation boundary.
   prelude (`printf`, `pwd`), not `go`. So the listing ran with no Go on its
   PATH. The scan stayed name-paired and printed that reason.
 - **Workspace run:** 6 units listed, 6 run, 0 failed; +19 candidates.
+- **Jail re-run** (commit `54e33acf`). The jail now binds the program the
+  prelude runs through `exec "$@"`, and the quoted interpreter in each unit's
+  coverage command. Before that fix, the unit runs failed next with
+  `sh: 1: go: not found`. The result now matches the workspace run (the time
+  includes `go mod vendor` in the sandbox):
+
+```
+  units: running 6 of 6 listed test unit(s) alone under coverage, 8 at a time, within 15m0s for the whole pass…
+  units: 6 run, 0 failed (8 at a time)
+  widened by evidence: +19 candidate(s); re-ranked by size-only under the same bound, auditing 25 of 48 candidate(s)
+  131 file(s) walked; 48 candidate(s); 25 job(s); 106 file(s) excluded from the audit
+  evidence-paired 19 · name-paired 29 · uncovered 0 · import-only 0
+```
+
+The workspace run's output:
 
 ```
   units: running 6 of 6 listed test unit(s) alone under coverage, 1 at a time, within 15m0s for the whole pass…
@@ -71,8 +91,14 @@ reached the 25-file audit bound.
   `tests/command.executableSubcommand.signals.test.js` and
   `tests/command.exitOverride.test.js`. Each of those files passes when run
   alone on the host (`node --test <file>`), and all four ran green in the
-  workspace run below. So they fail only inside the jail. Their output is not
+  workspace run below. So they fail only inside the jail. Their output was not
   shown on the scan line.
+- **Jail re-run** (commit `bad88e83`): the same 4 units failed, and each line
+  now carries the tail of what the unit printed. The tails show stack frames
+  from spawned child processes (`ChildProcess.exithandler`, the CJS module
+  loader) and, in `command.executableSubcommand.signals.test.js`, the
+  assertion `null !== 42` on a child's exit code. The other numbers were
+  unchanged: 109 run, 7 promoted, 19.15 s.
 
 ```
   units: running 109 of 109 listed test unit(s) alone under coverage, 8 at a time, within 15m0s for the whole pass…
@@ -140,6 +166,21 @@ Evidence pairing added all seven: `lib/command.js` (105 covering units),
 was 1.4 MB, because each failed unit's line carries its full list of uncounted
 files.
 
+- **Re-run** (commit `bad88e83`, same command, workspace): the same 25 of 25
+  units failed. Each line now gives a count, for example
+  `392 file(s) measured and not counted (listed in --dry-run --json)`, and
+  the full lists are in the `--dry-run --json` inventory's `units` field. The
+  scan output was 18,129 bytes; the first run's was 1,422,138. 1 m 51.9 s.
+- Remapping vitest's transformed ranges through Node's own source-map cache
+  (`--enable-source-maps`) was tried and does not work. On node 22.23.4 the
+  coverage files' `source-map-cache` held only `node_modules` files Node
+  loaded itself, never a project source. vitest 5.0.3 runs each project module
+  through `vm.runInThisContext`, and Node did not cache a map for code compiled
+  that way, even with an inline `sourceMappingURL`; a minimal `vm` script
+  showed the same. vitest-run files therefore stay uncounted.
+- **Jail re-run** with `dist/` moved out of the clone: the jail still could not
+  be prepared (`more than 64 MiB of text`).
+
 ## Ruby: ku1ik/rainbow
 
 - Commit `c6fcabf39c2475dbdb219c23c24a1d8c9dbd4a28`. rainbow was chosen
@@ -201,13 +242,27 @@ beside `tests/AssertTest.php`).
   is auditable only when its test lands in a separate file. The first
   candidate tried, `dtolnay/semver` (`280ebcb6`), has none. All 13 of its
   sources are excluded as `test-landing-not-built` before pairing, so it gives
-  the unit pass nothing to run for (its scan printed no `units:` line).
+  the unit pass nothing to run for (its scan printed no `units:` line). On the
+  re-run (commit `65f13a47`) its summary line says why:
+  `pairing-only candidacy (no selection evidence: no source file can be audited yet (13 rust source(s) test landing not built), so no evidence pass ran)`.
 - Command: `corral certify --repo . --substrate workspace --dry-run --evidence -- cargo test`
 - **Jail run:** the listing failed with `exec: cargo: not found`, for the same
   reason as Go: `cargo` lives in `~/.cargo/bin`. A second jail run named
   the system toolchain's `/usr/local/cargo/bin/cargo`, and its listing failed
   with ``could not execute process `rustc -vV` ``. The system toolchain also
   has no `llvm-tools`.
+- **Jail re-run** (commits `54e33acf`, `9aa2be49`): the listing now runs. The
+  jail binds the program behind the prelude, and cargo's listing is read
+  although its progress lines share the jail's one output stream. All 5 units
+  then failed with the reason the instrument gives. The toolchain the jail
+  resolved (`/usr/local/rustup/toolchains/1.92.0-x86_64-unknown-linux-gnu`)
+  has no `llvm-tools`:
+  `coverage unavailable: llvm-profdata and llvm-cov are in neither the toolchain's llvm-tools (…) nor PATH: install them with 'rustup component add llvm-tools' for the toolchain the suite builds with`.
+  In the first re-run the remedy read `install them with  for`, because the
+  shell executed the backquoted command; `9aa2be49` prints it as text. A
+  workspace run against that same system toolchain printed the remedy, and
+  the toolchain's `lib/rustlib/x86_64-unknown-linux-gnu/bin` held the same
+  four entries before and after the run.
 - **Workspace run:** 5 units (`indexmap/lib`, `indexmap/test:equivalent_trait`,
   `indexmap/test:macros_full_path`, `indexmap/test:quick`,
   `indexmap/test:tests`), 0 failed. Each unit's coverage carried real
@@ -225,4 +280,8 @@ No file was promoted. The 28 sources without a separate test file are excluded
 as `test-landing-not-built` before pairing, so the evidence never reaches
 them. That holds even for `src/inner/extract.rs`, which `test:quick` executed
 in full and whose integration-test landing (`tests/quick.rs`) exists. The two
-auditable files were already name-paired.
+auditable files were already name-paired. Promoting such a file on unit
+evidence is not built. `certify --local --repo-dir . --code src/inner/extract.rs`
+refuses the file before any spend, because the authored test's landing is
+derived from the source and lands on the source itself. A promoted file would
+therefore be listed by the scan and then refused by the audit.

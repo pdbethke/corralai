@@ -239,13 +239,17 @@ package reposcan
 // no such sample, and its printed band counted duplicates (eight copies of
 // one edit as n=8). Shape change: two fields added.
 //
-// "34" (2026-10-25): covering_units recorded for unit evidence pairing. A
-// file paired or promoted by a unit evidence pass (Go, JavaScript,
-// TypeScript, Ruby, PHP, Rust) carries how many test UNITS executed it, in
-// its own field from candidate to ledger row (Candidate.CoveringUnits →
-// ledger.Row.CoveringUnits → covering_units); covering_tests keeps meaning
-// Python's per-test count and is never set from units. A "33" row from a
-// unit-evidenced scan has no unit count. Shape unchanged; record bump.
+// "34" (2026-10-25): evidence pairing in every language. The jest and vitest
+// one-test and salvage commands refuse a bundled short name filter, which a
+// "33" verdict's commands did not. Preflight results changed: files with no executable lines are omitted, the
+// pcov include marker is fixed, and the vitest script-range check is new.
+// Rust gained a coverage pre-flight. A unit evidence pass now pairs files by
+// execution in Go, JavaScript, TypeScript, Ruby, PHP and Rust, which changes
+// which files are audited. Riding along, a record change only: the number of
+// test units that executed a file is kept in its own field (Candidate.
+// CoveringUnits, then ledger.Row.CoveringUnits, then covering_units), and
+// covering_tests keeps meaning Python's per-test count. Shape unchanged;
+// behaviour bump.
 const VerdictGeneration = "34"
 
 // VerdictShapeSHA256 fingerprints advpool.Verdict's serialized shape: every

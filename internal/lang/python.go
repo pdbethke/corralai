@@ -757,7 +757,7 @@ func (pyPlugin) CoverageCmd(testCmd []string) (cmd []string, ok bool) {
 	// whatever (if anything) happens to be sitting at the default path.
 	script := `f=$(mktemp) && trap 'rm -f "$f"' EXIT && ` +
 		`COVERAGE_FILE="$f" ` + quotedInterp + " -m coverage run -m " + strings.Join(quotedModule, " ") +
-		`; rc=$?; case $rc in 0|1) ;; *) exit "$rc" ;; esac; ` +
+		`; rc=$?; ` + suiteExitTrailer + `; case $rc in 0|1) ;; *) exit "$rc" ;; esac; ` +
 		`COVERAGE_FILE="$f" ` + quotedInterp + " -m coverage json -o -"
 	return []string{"sh", "-c", script}, true
 }

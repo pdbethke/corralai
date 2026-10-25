@@ -67,6 +67,7 @@ const (
 	unitInterrupted       = "interrupted"
 	unitTruncated         = "report truncated"
 	unitNotAlone          = "not run: its one-unit form would also run another unit"
+	unitNoSuiteExit       = "no suite exit status in the report"
 )
 
 // CollectUnitEvidence lists the units inv collects and runs each one's
@@ -191,6 +192,19 @@ func runUnit(ctx context.Context, runner commandRunner, files map[string]string,
 		// Checked before parsing, as Preflight does: a report cut on a
 		// clean boundary parses as a partial map that looks complete.
 		return UnitResult{Err: unitTruncated}
+	}
+	// The suite's own exit status, from the trailer every CoverageCmd
+	// prints (lang.SuiteExit). The command's exit status above is not
+	// enough: a coverage wrapper reduces the report whatever the suite
+	// exited with, and ends with the REDUCER's status, so a red unit's run
+	// can exit 0. Only a green unit's coverage is evidence, and a report
+	// that does not say how its suite exited is treated as red.
+	rc, ok := lang.SuiteExit(out)
+	if !ok {
+		return UnitResult{Err: unitNoSuiteExit}
+	}
+	if rc != 0 {
+		return UnitResult{Err: fmt.Sprintf("run failed: exit %d", rc)}
 	}
 	counts, err := reporter.CoverageCounts(out, modulePath)
 	if err != nil {
@@ -318,8 +332,10 @@ func IndexFromUnits(ev UnitEvidence, unitTestFile func(unit, source string) stri
 //     own landing when the repository has it.
 //   - Go: a unit is a package import path. It lands only on the source's OWN
 //     package, in the source's directory (the nearest go.mod names the
-//     module), on `<source base>_test.go` when that exists, else on the
-//     package directory's lexically first `_test.go`.
+//     module), and only on an INTERNAL test file — one whose package clause
+//     is the source's: `<source base>_test.go` when that is one, else the
+//     directory's lexically first internal `_test.go`, else nothing. The
+//     package clauses are read from files' text.
 //   - Rust: `<pkg>/test:<name>` (nextest `<pkg>::<name>`) lands on the
 //     package's tests/<name>.rs or tests/<name>/main.rs; `<pkg>/lib` (nextest
 //     `<pkg>`) on the source itself — an in-file #[cfg(test)] module — when
@@ -376,15 +392,72 @@ func goUnitLanding(files map[string]string) func(unit, source string) string {
 		if !ok || unit != pkg {
 			return ""
 		}
+		// Only an INTERNAL test file can land: one in the source's own
+		// package clause. An external test file (`package <name>_test`)
+		// is compiled as a separate package and cannot reach unexported
+		// identifiers, which is the very reason a unit outside the package
+		// does not land (R4). A source whose package clause cannot be read
+		// lands nothing.
+		clause := goPackageClause(files[source])
+		if clause == "" {
+			return ""
+		}
+		internal := func(f string) bool {
+			text, ok := files[f]
+			return ok && goPackageClause(text) == clause
+		}
 		own := under(dir, strings.TrimSuffix(path.Base(source), ".go")+"_test.go")
-		if _, ok := files[own]; ok {
+		if internal(own) {
 			return own
 		}
-		if fs := testFiles[dir]; len(fs) > 0 {
-			return fs[0]
+		for _, f := range testFiles[dir] {
+			if internal(f) {
+				return f
+			}
 		}
 		return ""
 	}
+}
+
+// goPackageClause is the package name a Go file's text declares, or ""
+// when no package clause can be read. Comments before it — line comments,
+// build constraints, block comments — are passed over.
+func goPackageClause(text string) string {
+	inBlock := false
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimSpace(line)
+		for line != "" {
+			if inBlock {
+				end := strings.Index(line, "*/")
+				if end < 0 {
+					line = ""
+					break
+				}
+				inBlock = false
+				line = strings.TrimSpace(line[end+2:])
+				continue
+			}
+			if strings.HasPrefix(line, "//") {
+				line = ""
+				break
+			}
+			if strings.HasPrefix(line, "/*") {
+				inBlock = true
+				line = line[2:]
+				continue
+			}
+			rest, ok := strings.CutPrefix(line, "package")
+			if !ok || rest == "" || !strings.ContainsAny(rest[:1], " \t") {
+				return ""
+			}
+			name := strings.Fields(rest)
+			if len(name) == 0 {
+				return ""
+			}
+			return strings.TrimSuffix(name[0], ";")
+		}
+	}
+	return ""
 }
 
 // goImportPathOf is the import path of the package in dir: the nearest

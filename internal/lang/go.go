@@ -277,7 +277,7 @@ func (goPlugin) CoverageCmd(testCmd []string) (cmd []string, ok bool) {
 	// fail-closed direction is preserved; only the red-suite case changes.
 	script := `f=$(mktemp) && trap 'rm -f "$f"' EXIT && ` +
 		strings.Join(quoted, " ") + ` -coverpkg=./... -coverprofile="$f"` +
-		`; rc=$?; case $rc in 0|1) ;; *) exit "$rc" ;; esac; ` +
+		`; rc=$?; ` + suiteExitTrailer + `; case $rc in 0|1) ;; *) exit "$rc" ;; esac; ` +
 		goCoverageReduceScript
 	return []string{"sh", "-c", script}, true
 }

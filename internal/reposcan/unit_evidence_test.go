@@ -129,7 +129,7 @@ func unitByName(t *testing.T, ev UnitEvidence, name string) UnitResult {
 const vitestTwoUnits = "corral-units-cwd /w\n[{\"file\":\"/w/test/alpha.test.ts\"},{\"file\":\"/w/test/beta.test.ts\"}]\n"
 
 func jsReport(lines ...string) string {
-	return "corral-js-coverage: v2\n" + strings.Join(lines, "\n") + "\n"
+	return "# suite-exit 0\ncorral-js-coverage: v2\n" + strings.Join(lines, "\n") + "\n"
 }
 
 // fileUnitLanding is the landing resolver for file units, over the fixture's
@@ -286,7 +286,7 @@ func TestUnitPassRefusesATruncatedReport(t *testing.T) {
 
 func TestUnitPassUnparseableReportIsNotEvidence(t *testing.T) {
 	f := newUnitFixture(t, "typescript", []string{"vitest", "run"}, vitestTwoUnits)
-	f.answer("test/alpha.test.ts", sandbox.EnumerateResult{Output: "Segmentation fault\n"})
+	f.answer("test/alpha.test.ts", sandbox.EnumerateResult{Output: "# suite-exit 0\nSegmentation fault\n"})
 	f.answer("test/beta.test.ts", sandbox.EnumerateResult{Output: jsReport("2 10 src/y.ts")})
 
 	ev := f.collect(context.Background(), "/w", 1)
@@ -401,22 +401,32 @@ const goTwoUnits = "corral-units-cwd /w\nunit m/other\nunit m/pkg\nnone m/cmd\n"
 func goFiles() map[string]string {
 	return map[string]string{
 		"go.mod":              "module m\n\ngo 1.22\n",
-		"pkg/a.go":            "",
-		"pkg/b.go":            "",
-		"pkg/b_test.go":       "",
-		"pkg/z_test.go":       "",
-		"other/o.go":          "",
-		"other/o_test.go":     "",
+		"pkg/a.go":            "// SPDX-License-Identifier: Elastic-2.0\n\npackage pkg\n",
+		"pkg/b.go":            "package pkg\n",
+		"pkg/b_test.go":       "//go:build !race\n\n/* a block\n comment */\npackage pkg\n",
+		"pkg/z_test.go":       "package pkg\n",
+		"other/o.go":          "package other\n",
+		"other/o_test.go":     "package other\n",
 		"sub/go.mod":          "module example.com/sub\n",
-		"sub/inner/i.go":      "",
-		"sub/inner/i_test.go": "",
+		"sub/inner/i.go":      "package inner\n",
+		"sub/inner/i_test.go": "package inner\n",
+		// mix's own m_test.go and its lexically first test file are
+		// external; only z_test.go is in package mix.
+		"mix/m.go":        "package mix\n",
+		"mix/a_test.go":   "package mix_test\n",
+		"mix/m_test.go":   "package mix_test\n",
+		"mix/z_test.go":   "package mix\n",
+		"ext/e.go":        "package ext\n",
+		"ext/e_test.go":   "package ext_test\n",
+		"blank/k.go":      "",
+		"blank/k_test.go": "package blank\n",
 	}
 }
 
 func TestGoUnitOutsideThePackageDoesNotLand(t *testing.T) {
 	f := newUnitFixture(t, "go", []string{"go", "test", "./..."}, goTwoUnits)
-	f.answer("m/other", sandbox.EnumerateResult{Output: "mode: set\nm/pkg/a.go:0,1 5 3\nm/other/o.go:0,1 4 4\n"})
-	f.answer("m/pkg", sandbox.EnumerateResult{Output: "mode: set\nm/pkg/a.go:0,0 5 0\nm/pkg/b.go:0,1 2 2\n"})
+	f.answer("m/other", sandbox.EnumerateResult{Output: "# suite-exit 0\nmode: set\nm/pkg/a.go:0,1 5 3\nm/other/o.go:0,1 4 4\n"})
+	f.answer("m/pkg", sandbox.EnumerateResult{Output: "# suite-exit 0\nmode: set\nm/pkg/a.go:0,0 5 0\nm/pkg/b.go:0,1 2 2\n"})
 
 	ev := f.collect(context.Background(), "m", 2)
 	if !ev.Ran {
@@ -461,6 +471,9 @@ func TestUnitTestFileGo(t *testing.T) {
 		{"example.com/sub/inner", "sub/inner/i.go", "sub/inner/i_test.go"}, // a nested module
 		{"m/sub/inner", "sub/inner/i.go", ""},                              // not the nested module's path
 		{"m/cmd", "cmd/main.go", ""},                                       // a package with no test file here
+		{"m/mix", "mix/m.go", "mix/z_test.go"},                             // external test files never land
+		{"m/ext", "ext/e.go", ""},                                          // only external test files: nothing lands
+		{"m/blank", "blank/k.go", ""},                                      // no readable package clause
 	}
 	for _, tc := range cases {
 		if got := land(tc.unit, tc.source); got != tc.want {
@@ -563,5 +576,38 @@ func TestUnitPassPartialPassClaimsNoZero(t *testing.T) {
 	}
 	if n, _, _, _, measured := idx.CoverageFor("src/x.ts"); n != 1 || !measured {
 		t.Errorf("CoverageFor(src/x.ts) = (%d, %v), want alpha's evidence kept", n, measured)
+	}
+}
+
+// A unit is evidence only when its own suite exited 0, as the report's
+// suite-exit trailer says — not when the coverage command did, which ends
+// with the reducer's status.
+func TestUnitPassTakesOnlyAGreenSuite(t *testing.T) {
+	report := "corral-js-coverage: v2\n7 10 src/x.ts\n"
+	cases := []struct {
+		name, out, wantErr string
+	}{
+		{"green", "# suite-exit 0\n" + report, ""},
+		{"red", "# suite-exit 1\n" + report, "run failed: exit 1"},
+		{"no status", report, "no suite exit status in the report"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newUnitFixture(t, "typescript", []string{"vitest", "run"}, vitestTwoUnits)
+			f.answer("test/alpha.test.ts", sandbox.EnumerateResult{Output: tc.out, ExitCode: 0})
+			f.answer("test/beta.test.ts", sandbox.EnumerateResult{Output: jsReport("2 10 src/y.ts")})
+			ev := f.collect(context.Background(), "/w", 1)
+			alpha := unitByName(t, ev, "test/alpha.test.ts")
+			if alpha.Err != tc.wantErr {
+				t.Errorf("alpha.Err = %q, want %q", alpha.Err, tc.wantErr)
+			}
+			if (tc.wantErr != "") != (alpha.Counts == nil) {
+				t.Errorf("alpha.Counts = %+v with Err %q", alpha.Counts, alpha.Err)
+			}
+			idx, _ := IndexFromUnits(ev, fileUnitLanding(f.p, "test/alpha.test.ts", "test/beta.test.ts"))
+			if _, _, _, _, measured := idx.CoverageFor("src/x.ts"); measured != (tc.wantErr == "") {
+				t.Errorf("src/x.ts measured = %v", measured)
+			}
+		})
 	}
 }

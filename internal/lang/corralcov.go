@@ -112,6 +112,45 @@ func corralCoverageCounts(stdout, header, langName, modulePath string) (map[stri
 	return counts, nil
 }
 
+// suiteExitPrefix starts the line every CoverageCmd prints on stdout once the
+// wrapped suite has exited: "# suite-exit <rc>", rc being the suite's own
+// exit status.
+const suiteExitPrefix = "# suite-exit "
+
+// suiteExitTrailer is the shell that prints that line from $rc, the
+// suite's exit status as each CoverageCmd script captures it.
+//
+// It is printed straight after the suite exits and BEFORE the report, not
+// after it. Every later exit path of a script — Go's and Python's re-raise
+// of an unusual status, Rust's "unavailable" notices — then still carries
+// it, and every report reader already ignores what precedes the report
+// (the v2 header, Go's "mode:" line, coverage.py's last-line JSON), so no
+// parser had to learn to skip it. A suite's own stdout (Go, Python) comes
+// before it, which is why SuiteExit reads the LAST such line: a test that
+// prints the text cannot speak for the run.
+const suiteExitTrailer = `printf '# suite-exit %s\n' "$rc"`
+
+// SuiteExit is the wrapped suite's own exit status, read from the trailer a
+// CoverageCmd prints (suiteExitTrailer). ok is false when there is none — a
+// script that stopped before its suite exited, a truncated or foreign
+// output — and a caller that needs the status must then treat the run as
+// failed: an absent status is never a pass.
+func SuiteExit(stdout string) (rc int, ok bool) {
+	found := false
+	for _, ln := range strings.Split(stdout, "\n") {
+		rest, has := strings.CutPrefix(strings.TrimSpace(ln), suiteExitPrefix)
+		if !has {
+			continue
+		}
+		n, err := strconv.Atoi(strings.TrimSpace(rest))
+		if err != nil {
+			continue
+		}
+		rc, found = n, true
+	}
+	return rc, found
+}
+
 // uncountedPrefix starts a v2 disclosure line: a file the reducer measured
 // and could not count, written as "# uncounted <path>: <reason>".
 const uncountedPrefix = "# uncounted "
@@ -285,6 +324,12 @@ func firstLineExcerpt(s string) string {
 // and the parser turns THAT into an error. The fail-closed direction is
 // preserved by the parser, which is where it belongs — an exit code is a poor
 // proxy for "was anything measured", and it was guessing wrong.
+//
+// The exit code is still RECORDED: the suite-exit trailer (suiteExitTrailer)
+// is printed between the suite and the reduction, so a caller that must
+// know whether the suite passed (unit evidence, which takes a unit's
+// coverage only from a green run) reads it with SuiteExit, while every
+// reader of the report itself is unchanged.
 func coverageRunAndReduce(setup, env string, testCmd []string, reduce string) []string {
 	quoted := make([]string, len(testCmd))
 	for i, arg := range testCmd {
@@ -292,7 +337,7 @@ func coverageRunAndReduce(setup, env string, testCmd []string, reduce string) []
 	}
 	script := `d=$(mktemp -d) && trap 'rm -rf "$d"' EXIT && ` + setup +
 		env + " " + strings.Join(quoted, " ") + " >&2" +
-		"; " + reduce
+		"; rc=$?; " + suiteExitTrailer + "; " + reduce
 	return []string{"sh", "-c", script}
 }
 

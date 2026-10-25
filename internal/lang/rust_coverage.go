@@ -112,7 +112,7 @@ func (rustPlugin) CoverageCmd(testCmd []string) (cmd []string, ok bool) {
 		`fi` + "\n" +
 		`mkdir -p "$d/prof" || exit 1` + "\n" +
 		`export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }-C instrument-coverage" LLVM_PROFILE_FILE="$d/prof/%p-%m.profraw" CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-target}/corral-coverage"` + "\n" +
-		shellJoin(testCmd) + ` >&2; rc=$?` + "\n" +
+		shellJoin(testCmd) + ` >&2; rc=$?; ` + suiteExitTrailer + "\n" +
 		`case $rc in 0|101) ;; *) exit $rc ;; esac` + "\n" +
 		`set -- "$d"/prof/*.profraw` + "\n" +
 		`if [ ! -e "$1" ]; then printf '%s\n' ` + shellQuote(rustCoverageHeaderV2) + `; exit 0; fi` + "\n" +

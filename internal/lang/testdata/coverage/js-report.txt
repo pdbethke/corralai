@@ -1,3 +1,4 @@
+# suite-exit 0
 corral-js-coverage: v2
 1 2 lib/calc.js
 0 1 lib/dead.js

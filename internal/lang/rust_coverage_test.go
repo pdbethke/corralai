@@ -138,4 +138,15 @@ func TestRustCoverageUnavailableIsAnError(t *testing.T) {
 	if strings.Contains(stderr.String(), "cargo") {
 		t.Errorf("the suite ran although the report could never be read:\n%s", stderr.String())
 	}
+	// The remedy is TEXT. Written in backquotes inside the double-quoted
+	// reason, the shell ran `rustup component add llvm-tools` as a command
+	// substitution — on the workspace substrate that installs a component on
+	// the operator's toolchain — and the reason read "install them with  for
+	// the toolchain" (indexmap in the jail, Task 11 fix).
+	if !strings.Contains(err.Error(), "rustup component add llvm-tools") {
+		t.Errorf("the reason lost its remedy: %v", err)
+	}
+	if strings.Contains(stderr.String(), "rustup") {
+		t.Errorf("the reason's remedy was executed:\n%s", stderr.String())
+	}
 }

@@ -108,7 +108,7 @@ func (rustPlugin) CoverageCmd(testCmd []string) (cmd []string, ok bool) {
 		`lt="$(` + rustc + ` --print sysroot 2>/dev/null)/lib/rustlib/$host/bin"` + "\n" +
 		`if [ -n "$host" ] && [ -x "$lt/llvm-profdata" ] && [ -x "$lt/llvm-cov" ]; then pd="$lt/llvm-profdata"; cov="$lt/llvm-cov"` + "\n" +
 		`elif command -v llvm-profdata >/dev/null 2>&1 && command -v llvm-cov >/dev/null 2>&1; then pd=llvm-profdata; cov=llvm-cov` + "\n" +
-		`else unavailable "llvm-profdata and llvm-cov are in neither the toolchain's llvm-tools ($lt) nor PATH: install them with ` + "`rustup component add llvm-tools`" + ` for the toolchain the suite builds with"` + "\n" +
+		`else unavailable "llvm-profdata and llvm-cov are in neither the toolchain's llvm-tools ($lt) nor PATH: install them with 'rustup component add llvm-tools' for the toolchain the suite builds with"` + "\n" +
 		`fi` + "\n" +
 		`mkdir -p "$d/prof" || exit 1` + "\n" +
 		`export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }-C instrument-coverage" LLVM_PROFILE_FILE="$d/prof/%p-%m.profraw" CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-target}/corral-coverage"` + "\n" +

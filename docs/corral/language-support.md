@@ -14,14 +14,13 @@ What corral does with each language's tests. This page is rendered from the same
 | Name the killing test | ✓ | ✓ | ✓ | ✓ | ✓ (rspec, minitest) | ✓ | ✓ |
 | Stop at the first failure | ✓ | ✓ (jest, mocha) | ✓ | ✓ | ✓ (rspec) | — (1) | ✓ (jest, mocha) |
 | Keep the passing part of an authored test | ✓ | ✓ | ✓ | ✓ | ✓ (rspec, minitest) | — (2) | ✓ |
-| Coverage pre-flight | ✓ | ✓ | ✓ | ✓ | ✓ | — (3) | ✓ |
-| Grade only the tests that run the file | — (4) | — (5) | — (5) | ✓ | — (5) | — (5) | — (5) |
+| Coverage pre-flight | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Grade only the tests that run the file | — (3) | — (4) | — (4) | ✓ | — (4) | — (4) | — (4) |
 
 1. nextest's --fail-fast and libtest's lack of one are not yet verified against a real run (runner table Phase 5)
 2. libtest --skip and nextest filtersets are not yet verified for salvage (runner table Phase 5)
-3. cargo llvm-cov is not wired yet (runner table Phase 5)
-4. per-test coverage needs a run per test; its own spec (runner table Phase 6)
-5. per-test coverage contexts per runner; its own spec (runner table Phase 6)
+3. per-test coverage needs a run per test; its own spec (runner table Phase 6)
+4. per-test coverage contexts per runner; its own spec (runner table Phase 6)
 
 ## By runner
 

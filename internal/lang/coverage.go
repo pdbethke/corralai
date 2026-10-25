@@ -82,6 +82,14 @@ var _ CoverageReporter = tsPlugin{}
 // worked around.
 var _ CoverageReporter = phpPlugin{}
 
+// rustPlugin implements CoverageReporter with the toolchain's own
+// instrumentation (rustc's -C instrument-coverage and the llvm-tools rustup
+// component), not cargo-llvm-cov: that is a separate install the audited
+// repository may not have, and what it does here is three commands
+// rustPlugin.CoverageCmd's script runs itself. A toolchain without
+// llvm-tools is disclosed as unavailable, never read as an empty report.
+var _ CoverageReporter = rustPlugin{}
+
 // executedFromCounts is ParseCoverage derived from CoverageCounts, the one
 // place the rule lives for every reporter but Go (whose one allowed
 // divergence is stated on CoverageReporter.CoverageCounts): a file is executed when any of its lines ran, and the

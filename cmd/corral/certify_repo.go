@@ -934,19 +934,26 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// and it was, for name-pairing only.
 	diffTouchedATest := false
 	mightBeTest := mightBeTestPredicate()
+	evidenceLangs := preflightLanguages(enumeratedSourcePaths(cands, excl))
 	for path := range diffChanged {
 		// A changed test in a language the instrumented run cannot attribute
-		// — one with no lang.CoverageReporter (Rust) — is treated as the scan
-		// treats a file in a language it does not audit: running the
-		// evidence pass for it would cost a suite run and find nothing. Its
-		// sources are still reached the other way, by pairing: a source whose
-		// own declaration loads the changed test pairs to it.
+		// — one with no lang.CoverageReporter, or one none of the scan's
+		// evidence sources is in (a Rust test beside Rust sources the
+		// landing refuses: the run would be the OTHER language's suite) — is
+		// treated as the scan treats a file in a language it does not audit:
+		// running the evidence pass for it would cost a suite run and find
+		// nothing. Its sources are still reached the other way, by pairing:
+		// a source whose own declaration loads the changed test pairs to it.
+		//
+		// The reporter check alone was this rule while Rust had no
+		// reporter; once it gained one, a Rust-test-only diff in a
+		// Python+Rust repository ran Python's suite to attribute it.
 		//
 		// This asked lang.CheckTestLanding of the TEST path until the Rust
 		// landing arrived. That was the same answer only while every Rust
 		// file was refused; a landing is a question about a SOURCE, and the
 		// one asked here is about evidence.
-		if mightBeTest(path) && evidenceCanAttribute(path) {
+		if mightBeTest(path) && evidenceCanAttribute(path, evidenceLangs) {
 			diffTouchedATest = true
 			break
 		}
@@ -3524,13 +3531,17 @@ func printRunDisclosures(w io.Writer, ex *localExecutor, jobs []reposcan.Job) {
 // evidenceCanAttribute reports whether the scan's instrumented run can say
 // which sources a changed test at path defends: true for a file no plugin
 // claims (a fixture, a data file — the run is how anything about it is
-// learned) and for a language whose plugin reports coverage; false for a
-// language with no lang.CoverageReporter, whose tests no instrumented run can
-// attribute.
-func evidenceCanAttribute(path string) bool {
+// learned) and for a language whose plugin reports coverage AND that is one
+// of the scan's evidence languages (evidenceLangs, from preflightLanguages
+// over the same sources the run instruments); false otherwise, since no
+// instrumented run of this scan executes that language's suite.
+func evidenceCanAttribute(path string, evidenceLangs map[string]bool) bool {
 	p, ok := lang.Detect(path)
 	if !ok {
 		return true
+	}
+	if !evidenceLangs[p.Name()] {
+		return false
 	}
 	_, ok = p.(lang.CoverageReporter)
 	return ok

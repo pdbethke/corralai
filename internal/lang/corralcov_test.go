@@ -63,6 +63,7 @@ func TestCoverageCmdRefusesForeignCommands(t *testing.T) {
 		"javascript": {{"pytest", "-q"}, {"go", "test", "./..."}, {"rspec"}, {}},
 		"typescript": {{"pytest", "-q"}, {"go", "test", "./..."}, {"rspec"}, {}},
 		"php":        {{"pytest", "-q"}, {"go", "test", "./..."}, {"rspec"}, {"npm", "test"}, {}},
+		"rust":       {{"pytest", "-q"}, {"go", "test", "./..."}, {"rspec"}, {"npm", "test"}, {"sh", "-c", "cargo test"}, {}},
 	}
 	for name, cmds := range foreign {
 		p, ok := ByName(name)
@@ -357,6 +358,7 @@ func TestCoverageReporterSurvivesRunningInACopyOfTheRepo(t *testing.T) {
 		{"ruby", "ruby", "ruby", []string{"ruby", "-Ilib", "test/calc_test.rb"}},
 		{"javascript", "js", "node", []string{"node", "--test"}},
 		{"php", "php", "php", []string{"php", "test/CalcTest.php"}},
+		{"rust", "rust", "cargo", []string{"cargo", "test"}},
 	} {
 		t.Run(tc.lang, func(t *testing.T) {
 			if _, err := exec.LookPath(tc.tool); err != nil {
@@ -365,6 +367,11 @@ func TestCoverageReporterSurvivesRunningInACopyOfTheRepo(t *testing.T) {
 			if tc.lang == "php" {
 				if exec.Command("php", "-r", `exit(extension_loaded("pcov") ? 0 : 1);`).Run() != nil {
 					t.Skip("php has no coverage driver")
+				}
+			}
+			if tc.lang == "rust" {
+				if exec.Command(rustLLVMToolsProbe[0], rustLLVMToolsProbe[1:]...).Run() != nil { // #nosec G204 -- a fixed probe
+					t.Skip("the rust toolchain has no llvm-tools")
 				}
 			}
 			original, _ := filepath.Abs(filepath.Join("testdata", "coverage", tc.dir))
@@ -565,6 +572,10 @@ var capturedCoverageReport = map[string]struct {
 	probe             []string
 	testCmd           []string
 	payload, compared func(string) string
+	// scratchEnv names an environment variable the live run points at a
+	// fresh temp directory: a build cache the run would otherwise leave
+	// inside testdata (cargo's target directory).
+	scratchEnv string
 }{
 	"javascript": {dir: "js", report: "js-report.txt", tool: "node", testCmd: []string{"node", "--test"}, payload: coverageAsIs, compared: coverageAsIs},
 	"go":         {dir: "go", report: "go-report.txt", tool: "go", testCmd: []string{"go", "test", "-count=1", "./..."}, payload: goCoveragePayload, compared: coverageAsIs},
@@ -574,7 +585,14 @@ var capturedCoverageReport = map[string]struct {
 		probe: []string{"php", "-r", `exit(extension_loaded("pcov") ? 0 : 1);`}},
 	"python": {dir: "python", report: "python-report.txt", tool: "python3", testCmd: []string{"python3", "-m", "pytest", "-q"}, payload: pyCoveragePayload, compared: pyCoverageCompared,
 		probe: []string{"python3", "-c", "import coverage, pytest"}},
+	"rust": {dir: "rust", report: "rust-report.txt", tool: "cargo", testCmd: []string{"cargo", "test"}, payload: coverageAsIs, compared: coverageAsIs,
+		probe: rustLLVMToolsProbe, scratchEnv: "CARGO_TARGET_DIR"},
 }
+
+// rustLLVMToolsProbe exits 0 when the active toolchain carries llvm-tools,
+// or llvm-cov is on PATH: what rustPlugin.CoverageCmd needs, looked up the
+// same way.
+var rustLLVMToolsProbe = []string{"sh", "-c", `b="$(rustc --print sysroot)/lib/rustlib/$(rustc -vV | sed -n 's/^host: //p')/bin"; test -x "$b/llvm-cov" || command -v llvm-cov`}
 
 // coverageAsIs is a report that is stable as printed.
 func coverageAsIs(s string) string { return s }
@@ -659,6 +677,9 @@ func TestCapturedCoverageReportsMatchALiveRun(t *testing.T) {
 				if err := exec.Command(fx.probe[0], fx.probe[1:]...).Run(); err != nil { // #nosec G204 -- a fixed probe from the table above
 					t.Skipf("%v failed (%v) — this machine lacks the coverage instrument the live half needs", fx.probe, err)
 				}
+			}
+			if fx.scratchEnv != "" {
+				t.Setenv(fx.scratchEnv, t.TempDir())
 			}
 			stdout, _, stderr, runErr := runCoverageFixture(t, langName, fx.dir, fx.testCmd)
 			stdout = fx.payload(stdout)

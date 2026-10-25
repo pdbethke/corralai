@@ -1,0 +1,15 @@
+# Provenance of ../rust-report.txt. A real run; nothing hand-written.
+command:  rustPlugin.CoverageCmd(["cargo", "test"]) run in this directory, stdout only, with CARGO_TARGET_DIR
+          pointed at a fresh temp dir (TestCapturedCoverageReportsMatchALiveRun, CORRALAI_RECAPTURE_COVERAGE=1)
+rustc:    rustc 1.90.0 (1159e78c4 2025-09-14)   host x86_64-unknown-linux-gnu, LLVM 20.1.8
+cargo:    cargo 1.90.0 (840b83a10 2025-07-30)
+llvm-tools (rustup component, the toolchain's lib/rustlib/<host>/bin):
+          llvm-cov 20.1.8-rust-1.90.0-stable   llvm-profdata 20.1.8-rust-1.90.0-stable
+captured: 2026-10-25
+trimmed:  nothing. The reducer prints working-directory-relative paths, so the report carries no machine path.
+fixture:  src/calc.rs  add is tested, sub is not          -> 0 < executed < executable
+          src/dead.rs  compiled, never called             -> executed 0
+          src/shape.rs a const and a struct, no fn body   -> absent (llvm-cov maps no line)
+          src/lib.rs   module declarations only           -> absent
+          src/unloaded.rs in no module tree, never built  -> absent
+          tests/calc_test.rs the integration test         -> executed

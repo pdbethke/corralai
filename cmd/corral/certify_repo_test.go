@@ -4881,9 +4881,14 @@ func TestCertifyRepoSelectionSourcesLeaveOutALandingRefusedFile(t *testing.T) {
 // BEFORE asking whether the plugin can instrument anything at all, so a scan
 // that could audit nothing still paid for it (final review I1). Asserted
 // through the seed seam: no build, not a timing.
+//
+// Rust has had a coverage reporter since its `cargo test` became
+// instrumentable, so the command here is one it refuses (cargo-nextest,
+// whose flags the --no-run listing cannot reuse): the property is "a command
+// the plugin cannot instrument", and the stock command no longer is one.
 func TestScanPassesPrepareNoJailForALanguageThatCannotBeInstrumented(t *testing.T) {
 	var builds atomic.Int32
-	ex := newLocalExecutor(t.TempDir(), nil, "", 0, io.Discard)
+	ex := newLocalExecutor(t.TempDir(), []string{"cargo", "nextest", "run"}, "", 0, io.Discard)
 	ex.jailErr = nil
 	ex.seeds = newSeedCache(func(lang string) (repoSeed, error) {
 		builds.Add(1)
@@ -4891,7 +4896,7 @@ func TestScanPassesPrepareNoJailForALanguageThatCannotBeInstrumented(t *testing.
 	})
 	defer ex.Close()
 
-	sources := []string{"src/lib.rs"} // rust: neither a TestSelector nor a CoverageReporter
+	sources := []string{"src/lib.rs"} // rust: no TestSelector, and a CoverageCmd that refuses nextest
 	sel := ex.collectSelection(context.Background(), sources)
 	if sel.Ran || sel.Note == "" {
 		t.Errorf("selection = %+v, want a not-run note", sel)

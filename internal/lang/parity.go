@@ -85,8 +85,6 @@ var ParityExemptions = []Exemption{
 
 	{"rust", "salvage", "libtest --skip and nextest filtersets are not yet verified for salvage (runner table Phase 5)"},
 
-	{"rust", "coverage", "cargo llvm-cov is not wired yet (runner table Phase 5)"},
-
 	{"go", "selection", "per-test coverage needs a run per test; its own spec (runner table Phase 6)"},
 	{"javascript", "selection", "per-test coverage contexts per runner; its own spec (runner table Phase 6)"},
 	{"typescript", "selection", "per-test coverage contexts per runner; its own spec (runner table Phase 6)"},

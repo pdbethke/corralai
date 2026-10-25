@@ -42,9 +42,6 @@ func TestEveryAgentRowIsComplete(t *testing.T) {
 		if a.Name == "" || a.CLI == "" || a.ParseInspect == nil || a.Restart == "" || a.Register == nil {
 			t.Errorf("%s: incomplete row %+v", a.ID, a)
 		}
-		if a.Proven {
-			t.Errorf("%s: Proven must be false until Task 8", a.ID)
-		}
 		if a.Inspect == nil && a.File == nil {
 			t.Errorf("%s: no inspect command and no config file", a.ID)
 		}
@@ -211,5 +208,45 @@ func TestParseInspectErrorLinesAreNeverAbsent(t *testing.T) {
 	a, _ := ByID("cursor")
 	if _, found, err := a.ParseInspect([]byte("other: ready\nthird: not loaded (needs approval)\n")); found || err != nil {
 		t.Errorf("cursor with other servers: found=%v err=%v", found, err)
+	}
+}
+
+// The docs' support table and the Proven flags are one claim stated twice:
+// setup labels an agent "(not yet proven)" from the flag, and a reader trusts
+// the table. Every agent has a row, and the rows marked proven are exactly the
+// agents whose flag is set.
+func TestAgentsProvenMatchesDocs(t *testing.T) {
+	src, err := os.ReadFile(filepath.Join("..", "..", "docs", "corral", "agent-setup.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, support, ok := strings.Cut(string(src), "\n## Support\n")
+	if !ok {
+		t.Fatal(`docs/corral/agent-setup.md has no "## Support" section`)
+	}
+	support, _, _ = strings.Cut(support, "\n## ")
+	rows := map[string]string{} // id -> the Proven cell
+	for _, line := range strings.Split(support, "\n") {
+		cells := strings.Split(strings.Trim(strings.TrimSpace(line), "|"), "|")
+		if len(cells) < 4 {
+			continue
+		}
+		id := strings.Trim(strings.TrimSpace(cells[1]), "`")
+		if _, ok := ByID(id); ok {
+			rows[id] = strings.ToLower(strings.TrimSpace(cells[3]))
+		}
+	}
+	for _, a := range Agents() {
+		cell, ok := rows[a.ID]
+		if !ok {
+			t.Errorf("%s has no row in docs/corral/agent-setup.md", a.ID)
+			continue
+		}
+		if cell != "yes" && cell != "no" {
+			t.Errorf("%s: Proven cell is %q, want yes or no", a.ID, cell)
+		}
+		if docProven := cell == "yes"; docProven != a.Proven {
+			t.Errorf("%s: docs say proven=%v, agents.go says Proven=%v", a.ID, docProven, a.Proven)
+		}
 	}
 }

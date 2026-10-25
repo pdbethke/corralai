@@ -963,8 +963,31 @@ that is a deliberate act, is in
 use corral the way corral uses a model: read the record, check every claim by
 running something, and leave the verdicts to a person.
 
-**Claude Code — install it as a plugin.** Two commands, which install the skill
-and wire the findings MCP server together, so there is no `.mcp.json` to edit:
+**One command for every agent you use:**
+
+```bash
+corral setup
+```
+
+It finds your coding agents, lets you pick (nothing is ticked for you), prints
+every command it will run and file it will write, and on your yes registers
+`corral mcp` and copies the skill into each. `--client <id>` or
+`--all-detected` for scripts, `--dry-run` to see the plan, `--uninstall` to
+remove exactly what it added; `corral doctor` shows each agent's state. Proven
+on Linux, 2026-10-25, by a headless prompt that loaded the skill and called
+`list_audit_findings`: **Claude Code, Codex CLI, Cursor, OpenCode, Antigravity
+and GitHub Copilot CLI** (Copilot loaded the skill only when the prompt named
+it). Setup also wires **Gemini CLI** and **VS Code**, labelled
+`(not yet proven)`: Gemini CLI's personal login was refused, and VS Code has no
+headless prompt. Per-agent commands, evidence and limits:
+**[docs/corral/agent-setup.md](docs/corral/agent-setup.md)**.
+
+**Claude Code — or install it as a plugin.** Two commands, which install the
+skill and wire the findings MCP server together and track this repository's
+`main` (`corral setup` instead copies the skill that matches your binary).
+When the plugin is installed and enabled, setup reports Claude Code as wired by
+the plugin and changes nothing there (unit-tested; not yet run against a real
+plugin install):
 
 ```bash
 claude plugin marketplace add pdbethke/corralai
@@ -975,8 +998,7 @@ claude plugin install corral@corralai
 installed, it does not ship one.
 
 **Any other Agent Skills client.** Copy the folder to where your agent loads
-skills (`~/.claude/skills/corral/`, or `.claude/skills/corral/` in the repo).
-To let the agent read findings over MCP as well, add this to `.mcp.json`:
+skills, and register the server in its MCP config:
 
 ```json
 { "mcpServers": { "corral": { "command": "corral", "args": ["mcp"] } } }
@@ -1000,9 +1022,9 @@ from a clean config directory — the marketplace added from this repository, th
 plugin installed and reported enabled, the inventory showing one skill and one
 MCP server, and `corral mcp` answering `tools/list` over stdio with
 `list_audit_findings` and `get_audit_finding`. They have not been run on macOS
-or Windows, nor in Cowork, and the skill has not yet been run in other Agent
-Skills clients (Codex, Cursor, Gemini CLI, Hermes Agent, OpenClaw), so no
-support for any of those is claimed.
+or Windows, nor in Cowork. The other agents are covered by `corral setup`'s
+proof above; Hermes Agent and OpenClaw have not been run, so no support for
+them is claimed.
 
 ## Review — a cold model's opinion, linked to reproductions it ran
 

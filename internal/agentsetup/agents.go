@@ -75,7 +75,7 @@ type Agent struct {
 
 	FileConfig string      // non-empty only for cursor: path relative to home, ".cursor/mcp.json"
 	File       *ConfigFile // see ConfigFile
-	Proven     bool        // a headless load of corral through this agent has been executed; false for all eight until Task 8
+	Proven     bool        // a headless prompt through this agent loaded the skill and called list_audit_findings (docs/corral/agent-setup.md)
 	Restart    string
 }
 
@@ -120,8 +120,9 @@ func Agents() []Agent {
 			Inspect:      []string{"claude", "mcp", "get", "corral"},
 			ParseInspect: parseClaude,
 			Remove:       [][]string{{"claude", "mcp", "remove", "-s", "user", "corral"}},
-			// FACTS: Claude Code's documented location, not executed.
+			// FACTS: Claude Code's documented location; loaded by the 2026-10-25 headless proof.
 			SkillMode: SkillOwn, SkillDir: skillDirUnder(".claude", "skills"),
+			Proven:  true, // the 2026-10-25 headless proof, docs/corral/agent-setup.md
 			Restart: "Start a new Claude Code session; running sessions do not pick up a new server.",
 		},
 		{
@@ -133,6 +134,7 @@ func Agents() []Agent {
 			// FACTS: ~/.codex/skills executed (skills/list, scope user), as is the shared dir.
 			AddOverwrites: true,
 			SkillMode:     SkillOwn, SkillDir: skillDirUnder(".codex", "skills"),
+			Proven:  true, // the 2026-10-25 headless proof, docs/corral/agent-setup.md
 			Restart: "Start a new Codex session.",
 		},
 		{
@@ -158,8 +160,9 @@ func Agents() []Agent {
 				Path:       func(home string) string { return filepath.Join(home, ".cursor", "mcp.json") },
 				ServersKey: "mcpServers",
 			},
-			// FACTS: ~/.cursor/skills from strings in the cursor-agent bundle, not executed.
+			// FACTS: ~/.cursor/skills from strings in the cursor-agent bundle; loaded by the 2026-10-25 headless proof.
 			SkillMode: SkillOwn, SkillDir: skillDirUnder(".cursor", "skills"),
+			Proven:  true, // the 2026-10-25 headless proof, docs/corral/agent-setup.md
 			Restart: "Start a new Cursor session or agent run.",
 		},
 		{
@@ -181,6 +184,7 @@ func Agents() []Agent {
 			AddOverwrites: true,
 			SkillMode:     SkillOwn,
 			SkillDir:      func(home string) string { return filepath.Join(xdgConfigHome(home), "opencode", "skills", "corral") },
+			Proven:        true, // the 2026-10-25 headless proof, docs/corral/agent-setup.md
 			Restart:       "Start a new opencode session.",
 		},
 		{
@@ -189,9 +193,10 @@ func Agents() []Agent {
 			Inspect:      []string{"agy", "mcp", "list"},
 			ParseInspect: parseAntigravity,
 			Remove:       [][]string{{"agy", "mcp", "remove", "corral"}},
-			// FACTS: ~/.gemini/config/skills confirmed by agy's embedded changelog; the shared dir was not established.
+			// FACTS: ~/.gemini/config/skills confirmed by agy's embedded changelog and loaded by the 2026-10-25 headless proof; the shared dir was not established.
 			AddOverwrites: true,
 			SkillMode:     SkillOwn, SkillDir: skillDirUnder(".gemini", "config", "skills"),
+			Proven:  true, // the 2026-10-25 headless proof, docs/corral/agent-setup.md
 			Restart: "Start a new Antigravity session.",
 		},
 		{
@@ -200,8 +205,9 @@ func Agents() []Agent {
 			Inspect:      []string{"copilot", "mcp", "get", "corral"},
 			ParseInspect: parseCopilot,
 			Remove:       [][]string{{"copilot", "mcp", "remove", "corral"}},
-			// FACTS: ~/.copilot/skills and the shared dir are both "Personal" per copilot's own help; not executed.
+			// FACTS: ~/.copilot/skills and the shared dir are both "Personal" per copilot's own help; ~/.copilot/skills listed by `copilot skill list` and loaded by the 2026-10-25 headless proof.
 			SkillMode: SkillOwn, SkillDir: skillDirUnder(".copilot", "skills"),
+			Proven:  true, // the 2026-10-25 headless proof, docs/corral/agent-setup.md
 			Restart: "Start a new Copilot session.",
 		},
 		{

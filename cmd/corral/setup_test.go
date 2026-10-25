@@ -215,7 +215,8 @@ func TestSetupNeedsApproval(t *testing.T) {
 	if code != 0 || !ts.run.added {
 		t.Fatalf("--yes: code=%d added=%v out=%q err=%q", code, ts.run.added, out, errs)
 	}
-	if !strings.Contains(out, "verified") || !strings.Contains(out, "mcp answered") || !strings.Contains(out, "(not yet proven)") {
+	// codex is proven (docs/corral/agent-setup.md), so its result line carries no label.
+	if !strings.Contains(out, "verified") || !strings.Contains(out, "mcp answered") || strings.Contains(out, "not yet proven") {
 		t.Errorf("result line: %q", out)
 	}
 	if ts.checks != 1 {

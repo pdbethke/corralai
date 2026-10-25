@@ -174,7 +174,9 @@ func TestPlanUnknownIsNotActedOn(t *testing.T) {
 }
 
 func TestPlanUnprovenLabelled(t *testing.T) {
-	p := plan(t, []Status{st(t, "codex", nil)}, []string{"codex"}, true)
+	u := st(t, "codex", nil)
+	u.Agent.Proven = false // the label follows the flag, whatever the table says today
+	p := plan(t, []Status{u}, []string{"codex"}, true)
 	var buf bytes.Buffer
 	p.Render(&buf)
 	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")

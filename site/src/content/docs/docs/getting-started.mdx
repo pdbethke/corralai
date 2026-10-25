@@ -299,8 +299,8 @@ corral setup --dry-run --all-detected   # see the plan, write nothing
 corral setup --uninstall --all-detected # remove only what setup added
 ```
 
-Nothing is ticked for you, and nothing is written until you have seen the plan
-and said yes. Proven on Linux (2026-10-25) in Claude Code, Codex CLI, Cursor,
+Detected agents start unticked and agents already wired start ticked, and
+nothing is written until you have seen the plan and said yes. Proven on Linux (2026-10-25) in Claude Code, Codex CLI, Cursor,
 OpenCode, Antigravity and GitHub Copilot CLI; Gemini CLI and VS Code are wired
 but labelled `(not yet proven)`. See
 [agent setup](https://github.com/pdbethke/corralai/blob/main/docs/corral/agent-setup.md)

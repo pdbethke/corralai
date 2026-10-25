@@ -969,7 +969,8 @@ running something, and leave the verdicts to a person.
 corral setup
 ```
 
-It finds your coding agents, lets you pick (nothing is ticked for you), prints
+It finds your coding agents, lets you pick (detected agents start unticked;
+agents already wired start ticked), prints
 every command it will run and file it will write, and on your yes registers
 `corral mcp` and copies the skill into each. `--client <id>` or
 `--all-detected` for scripts, `--dry-run` to see the plan, `--uninstall` to

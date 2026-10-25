@@ -16,8 +16,11 @@ corral setup --uninstall --all-detected # remove only what setup added
 
 Nothing is selected for you: name agents with `--client`, take every installed
 one with `--all-detected`, or pick on a terminal (detected agents start
-unticked). The plan is printed, every command it will run and every file it
-will write, before you approve it; `--yes` approves it for scripts.
+unticked; agents already wired start ticked, so on `--uninstall` every wired
+agent starts selected). The plan is printed, every command it will run and
+every file it will write or back up, before you approve it; `--yes` approves it
+for scripts. Ctrl-C stops it: no new step starts, a running agent command is
+stopped, and the result lines say what was done.
 
 ## What it does, per agent
 
@@ -37,19 +40,43 @@ differs from your shell's still finds it. Setup refuses a binary under the
 temp directory (a `go run` build) and refuses when `corral` on your PATH is a
 different file, naming both.
 
+Every agent command runs with your home directory as its working directory,
+not the directory you ran setup from: the agents' list commands also read
+project-level config (a repository's `.mcp.json`, `.cursor/mcp.json`, workspace
+settings), and setup registers and inspects at user level only.
+
 Where an agent has its own command for a step, setup runs that command. Where
 it has none, setup edits the config file itself, backed up first to
 `<file>.corral.backup` (the first backup is kept; later ones are
-`.corral.backup.<hash>`), preserving every other key, and refusing a file it
+`.corral.backup.<hash>`; the plan names the exact backup file), preserving
+every other key, and refusing a file it
 cannot parse or a symlinked one. That is Cursor's registration and removal,
 OpenCode's removal and VS Code's inspect and removal.
 
 Each skill copy carries a `.corral-setup.json` marker with the hash of every
 file setup wrote. A copy without the marker, or with files you edited, is
 reported `unmanaged` and never touched. Setup records what it registered in
-its state file (`corral state paths` prints it), and `--uninstall` removes a
-registration only when that file says setup made it and the agent still shows
-the same command. `corral doctor` lists each agent's corral state.
+its state file (`corral state paths` prints it; the result names it too), and
+`--uninstall` removes a registration only when that file says setup made it
+and the agent still shows the same command. A registration you already removed
+by hand has its record dropped, and setup's skill copy is removed with it.
+`corral doctor` lists each agent's corral state.
+
+## Limits
+
+- `--uninstall` does not restore a registration of your own that setup
+  replaced (you approved a `will replace:` line): it removes setup's, and the
+  agent is left with no `corral` server. For the config-file agents the
+  pre-edit file is still in its `.corral.backup`.
+- Agent home-override variables (`CODEX_HOME`, `CLAUDE_CONFIG_DIR` and the
+  like) are inherited by the agent commands, so a registration lands where the
+  agent reads it, but setup does not follow them for skill directories or for
+  Cursor's `~/.cursor/mcp.json`: with one set, the skill is copied under your
+  home directory, where that agent may not look.
+- OpenCode is inspected through `opencode debug config`, which prints its whole
+  resolved configuration. Setup reads that output in memory to find the
+  `corral` entry and never prints or stores it, but it can include provider API
+  keys and other servers' environment.
 
 ## Support
 
@@ -101,7 +128,8 @@ Claude Code: verified: registered (inspect shows /home/<user>/go/bin/corral mcp)
 VS Code: verified: registered (inspect shows /home/<user>/go/bin/corral mcp), skill n/a, mcp answered
 ```
 
-(At the time every line also ended `(not yet proven)`.)
+(At the time every line also ended `(not yet proven)`, and a `write-file` line
+did not yet name its backup file.)
 
 **The prompt.** Run in an empty scratch git repository, so no project skill or
 instruction file was in scope:
@@ -135,8 +163,8 @@ transcript must show the tool call.
 **Uninstall round trip.** `corral setup --uninstall --all-detected --yes`
 removed every registration and every skill copy; afterwards each agent's own
 inspect command no longer showed corral, both edited JSON files had no
-`corral` entry, and `corral doctor` reported every agent "not registered;
-skill absent". Cursor's `mcp.json` came back byte-identical. Gemini CLI's
+`corral` entry, and `corral doctor` reported every agent "not registered", with
+its skill absent (VS Code: `skill n/a`, as it has no skill channel). Cursor's `mcp.json` came back byte-identical. Gemini CLI's
 `settings.json` and OpenCode's `opencode.jsonc` were left with an empty
 `mcpServers: {}` / `mcp: {}` object. Antigravity's own `agy mcp add`/`remove`
 rewrite `~/.gemini/config/mcp_config.json`: keys come back sorted and empty

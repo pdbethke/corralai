@@ -15,16 +15,19 @@ history of any release, `git log v0.3.4..v0.3.5`.
 
 - **`corral setup` wires corral into your coding agents.** It detects Claude
   Code, Codex CLI, Gemini CLI, Cursor, OpenCode, Antigravity, GitHub Copilot
-  CLI and VS Code, lets you pick (detected agents start unticked; `--client
-  <id>` or `--all-detected` for scripts, and with neither and no terminal it
-  refuses), prints every command and file write, and on your yes (or `--yes`)
+  CLI and VS Code, lets you pick (detected agents start unticked and agents
+  already wired start ticked; `--client <id>` or `--all-detected` for scripts,
+  and with neither and no terminal it refuses), prints every command, file
+  write and backup, and on your yes (or `--yes`)
   registers `corral mcp` through each agent's own command and copies the
   `corral` skill embedded in the binary to its skills directory
   (`--skill=false` omits it). Where an agent has no command for a step
   (Cursor's registration, OpenCode's and VS Code's removal) setup edits the
   config file after backing it up. A skill copy you edited, or one setup did
-  not install, is left alone. `corral setup --uninstall` removes only what its
-  state file says it added, and `corral doctor` gains an informational agents
+  not install, is left alone. Agent commands run in your home directory, so a
+  repository's own MCP config never changes what setup sees. `corral setup
+  --uninstall` removes only what its state file says it added, and `corral
+  doctor` gains an informational agents
   section. Proven on Linux by a headless prompt that loaded the skill and
   called `list_audit_findings` in Claude Code, Codex CLI, Cursor, OpenCode,
   Antigravity and GitHub Copilot CLI; Gemini CLI and VS Code are labelled

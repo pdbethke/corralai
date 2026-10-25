@@ -1,0 +1,2 @@
+NAME    TYPE   STATUS   COMMAND/URL
+corral  stdio  enabled  __CORRAL__ mcp

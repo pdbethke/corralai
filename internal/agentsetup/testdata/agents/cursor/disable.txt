@@ -1,0 +1,2 @@
+✓ Disabled MCP server: corral
+The server will no longer be loaded or prompted for approval.

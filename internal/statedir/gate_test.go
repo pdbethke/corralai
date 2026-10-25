@@ -20,6 +20,23 @@ import (
 // file called legacy.go anywhere in the tree.
 const legacyFile = "internal/statedir/legacy.go"
 
+// agentTableFile is the one agentsetup production file allowed to name
+// ".claude" in a Go string: the table of coding agents must say where Claude
+// Code keeps its skills (an integration, not corral state). Exempt from rule
+// (a) only; rule (b), ".claude/corralai", stays binding there. Pinned by full
+// path like legacyFile, so no sibling file in the package inherits it.
+const agentTableFile = "internal/agentsetup/agents.go"
+
+// integrationCaptures are the files that record what coding agents themselves
+// print and where they keep their configuration. `corral setup` writes INTO
+// agent config on purpose (an MCP registration, a skill copy), the way
+// .claude/skills is legal everywhere, and these files must name those paths to
+// say so. They hold no corral state. Pinned by full path or directory prefix,
+// never by base name, as legacyFile is.
+func integrationCapture(path string) bool {
+	return path == "scripts/capture-agent-fixtures.sh" || strings.HasPrefix(path, "internal/agentsetup/testdata/")
+}
+
 // homeAnchoredClaude matches a ".claude" directory reached from a home
 // directory: ~/.claude, $HOME/.claude, ${HOME}/.claude, /root/.claude,
 // /home/<user>/.claude, or a home-directory call followed by a ".claude"
@@ -55,7 +72,7 @@ func violations(path string, src []byte) []string {
 			if tok == token.EOF {
 				break
 			}
-			if tok == token.STRING && strings.Contains(lit, ".claude") && path != legacyFile {
+			if tok == token.STRING && strings.Contains(lit, ".claude") && path != legacyFile && path != agentTableFile {
 				out = append(out, fset.Position(pos).String()+": string literal names .claude")
 			}
 			if (tok == token.STRING || tok == token.COMMENT) && strings.Contains(lit, ".claude/corralai") && path != legacyFile {
@@ -72,6 +89,9 @@ func violations(path string, src []byte) []string {
 		out = append(out, path+": names a corral file under .claude")
 	}
 	if ext := filepath.Ext(path); ext == ".md" || ext == ".mdx" {
+		return out
+	}
+	if integrationCapture(path) {
 		return out
 	}
 	for _, loc := range homeAnchoredClaude.FindAllStringIndex(text, -1) {
@@ -129,6 +149,28 @@ func TestGateCatchesAPlantedPath(t *testing.T) {
 		if v := violations(path, []byte(src)); len(v) != 0 {
 			t.Errorf("the gate flags a legal mention in %s: %v", path, v)
 		}
+	}
+	// The integration-capture exemption is those paths only, and only for rule (c).
+	home := []byte("HOME=/home/x/.claude.json")
+	if v := violations("internal/agentsetup/testdata/agents/x.txt", home); len(v) != 0 {
+		t.Errorf("an agent-output capture is flagged: %v", v)
+	}
+	if len(violations("internal/agentsetup/other.sh", home)) == 0 || len(violations("scripts/other.sh", home)) == 0 {
+		t.Error("the capture exemption is wider than its pinned paths")
+	}
+	if len(violations("internal/agentsetup/testdata/x.txt", []byte("~/.claude/corralai_x"))) == 0 {
+		t.Error("the capture exemption must not excuse corral state under .claude")
+	}
+	// The agent table may name Claude Code's skills directory, nothing more.
+	table := "package agentsetup\nvar d = filepath.Join(h, \".claude\", \"skills\")\n"
+	if v := violations(agentTableFile, []byte(table)); len(v) != 0 {
+		t.Errorf("the agent table is flagged for naming .claude/skills: %v", v)
+	}
+	if len(violations(agentTableFile, []byte("package agentsetup\nvar d = filepath.Join(h, \".claude/corralai_x\")\n"))) == 0 {
+		t.Error("the agent table is excused from rule (b): corral state under .claude/corralai")
+	}
+	if len(violations("internal/agentsetup/detect.go", []byte(table))) == 0 {
+		t.Error("another agentsetup file may name .claude: the exemption must be agents.go only")
 	}
 	// The exemption is the exact path, not the base name.
 	if len(violations("internal/other/legacy.go", []byte("package other\nvar d = filepath.Join(h, \".claude\")\n"))) == 0 {

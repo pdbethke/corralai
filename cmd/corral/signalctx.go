@@ -44,6 +44,22 @@ import (
 // is itself wedged can still abandon the process. Trapping every signal would
 // replace a stranded mutant with an unkillable run.
 func auditContext(stderr io.Writer) (context.Context, context.CancelFunc) {
+	return interruptContext(stderr, "\ncorral: interrupted — finishing the current step so the tree is restored; press Ctrl-C again to abandon it")
+}
+
+// setupContext is auditContext for `corral setup`, which has no tree to
+// restore: an interrupt there means "start no new step". Apply checks ctx
+// before every step, an agent CLI already running is killed through its
+// context, and a file write in progress is a temp-file rename that either
+// lands whole or not at all. The read-only re-detect still runs, so the result
+// lines say what was done.
+func setupContext(stderr io.Writer) (context.Context, context.CancelFunc) {
+	return interruptContext(stderr, "\ncorral setup: interrupted — nothing more will be written: no new step starts and a running agent command is stopped. setup re-reads each agent so the lines below say what was done; press Ctrl-C again to exit at once")
+}
+
+// interruptContext is the mechanism behind auditContext and setupContext; msg
+// is what the person is told when the first signal arrives.
+func interruptContext(stderr io.Writer, msg string) (context.Context, context.CancelFunc) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	sigc := make(chan os.Signal, 1)
@@ -62,7 +78,7 @@ func auditContext(stderr io.Writer) (context.Context, context.CancelFunc) {
 			// Restore default handling first: from here a second Ctrl-C
 			// terminates the process outright.
 			signal.Stop(sigc)
-			fmt.Fprintln(stderr, "\ncorral: interrupted — finishing the current step so the tree is restored; press Ctrl-C again to abandon it")
+			fmt.Fprintln(stderr, msg)
 			// Recorded where every verb's "was this run interrupted" check
 			// reads it (operatorInterrupted), and every live agent seat is
 			// stopped: a run interrupted while only API seats were in

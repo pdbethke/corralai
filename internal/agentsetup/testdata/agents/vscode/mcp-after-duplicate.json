@@ -1,0 +1,11 @@
+{
+	"servers": {
+		"corral": {
+			"command": "/usr/bin/true",
+			"args": [
+				"mcp"
+			]
+		}
+	},
+	"inputs": []
+}

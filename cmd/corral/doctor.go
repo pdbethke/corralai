@@ -9,12 +9,14 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"strings"
 	"time"
 
 	"github.com/pdbethke/corralai/internal/adequacy"
 	"github.com/pdbethke/corralai/internal/advpool"
 	"github.com/pdbethke/corralai/internal/agentbackend"
+	"github.com/pdbethke/corralai/internal/agentsetup"
 	"github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/reposcan"
 	"github.com/pdbethke/corralai/internal/sandbox"
@@ -46,6 +48,33 @@ type checkResult struct {
 	detail string
 	// fatal marks a check whose failure makes every later check meaningless.
 	fatal bool
+	// info marks a line that reports and never judges: it prints with its own
+	// mark, is never counted as a failure, and never moves the exit code.
+	info bool
+}
+
+// doctorEnv is what the agents section reads from the machine, injected the
+// way setup's is so tests never touch the real HOME or run a real agent CLI.
+type doctorEnv struct {
+	Home     string
+	Runner   agentsetup.Runner
+	LookPath func(string) (string, error)
+}
+
+// doctorAgentEnv resolves the machine's environment for the agents section.
+// A variable so the package's tests can substitute it; production never does.
+var doctorAgentEnv = realDoctorEnv
+
+func realDoctorEnv() (doctorEnv, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return doctorEnv{}, fmt.Errorf("cannot find your home directory: %w", err)
+	}
+	return doctorEnv{
+		Home:     home,
+		Runner:   agentsetup.ExecRunner{Timeout: agentsetup.Timeout, Dir: home}, // agent CLIs run in home, never the cwd (see ExecRunner.Dir)
+		LookPath: exec.LookPath,
+	}, nil
 }
 
 func runDoctor(args []string, stdout, stderr io.Writer) int {
@@ -119,22 +148,11 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 
 	failed := 0
 	for _, r := range results {
-		mark := "ok  "
-		if !r.ok {
-			mark = "FAIL"
-			failed++
-		}
-		fmt.Fprintf(stdout, "  [%s] %s\n", mark, r.name)
-		if r.detail != "" {
-			for _, line := range strings.Split(strings.TrimRight(r.detail, "\n"), "\n") {
-				fmt.Fprintf(stdout, "         %s\n", line)
-			}
-		}
-		if !r.ok && r.fatal {
-			fmt.Fprintln(stdout, "         (later checks skipped — this one has to pass first)")
+		if !printCheck(stdout, r, &failed) {
 			break
 		}
 	}
+	printAgentsSection(stdout)
 	if failed > 0 {
 		fmt.Fprintf(stdout, "\n%d check(s) failed — fix these before spending a run.\n", failed)
 		return 1
@@ -145,6 +163,87 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 	fmt.Fprintln(stdout, "  - whether a multi-file project needs --repo-dir (it does — the bare --code form seeds only that file and its test).")
 	fmt.Fprintln(stdout, "`certify --local` reports the first as COULD-NOT-GRADE with the runner's own output.")
 	return 0
+}
+
+// printCheck prints one result and counts a failure; false means a fatal
+// failure, after which later checks are skipped.
+func printCheck(stdout io.Writer, r checkResult, failed *int) bool {
+	mark := "ok  "
+	if r.info {
+		mark = "info"
+	} else if !r.ok {
+		mark = "FAIL"
+		*failed++
+	}
+	fmt.Fprintf(stdout, "  [%s] %s\n", mark, r.name)
+	if r.detail != "" {
+		for _, line := range strings.Split(strings.TrimRight(r.detail, "\n"), "\n") {
+			fmt.Fprintf(stdout, "         %s\n", line)
+		}
+	}
+	if !r.info && !r.ok && r.fatal {
+		fmt.Fprintln(stdout, "         (later checks skipped — this one has to pass first)")
+		return false
+	}
+	return true
+}
+
+// printAgentsSection reports each installed coding agent's corral wiring. It
+// is informational only: doctor answers "would an audit run work", and agent
+// wiring is not an audit prerequisite. Detection is already concurrent, so the
+// section costs at most one inspect timeout.
+func printAgentsSection(stdout io.Writer) {
+	fmt.Fprintln(stdout, "\nCoding agents (informational — never affects the result above):")
+	var res []checkResult
+	env, err := doctorAgentEnv()
+	if err != nil {
+		res = []checkResult{{name: "agents not inspected: " + err.Error(), info: true}}
+	} else {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		res = checkAgents(agentsetup.Detect(ctx, env.Runner, env.Home, env.LookPath))
+	}
+	failed := 0
+	for _, r := range res {
+		printCheck(stdout, r, &failed)
+	}
+	fmt.Fprintln(stdout, "  `corral setup` wires agents.")
+}
+
+// checkAgents is one informational line per INSTALLED agent; an agent whose CLI
+// is absent prints nothing. The wording and the reading of Status match what
+// `corral setup` shows: wired is Registered or ViaPlugin, and an inspect that
+// could not answer is "unknown", never "not registered".
+func checkAgents(st []agentsetup.Status) []checkResult {
+	var out []checkResult
+	for _, s := range st {
+		if !s.Installed {
+			continue
+		}
+		var wiring string
+		switch {
+		case s.Registered:
+			wiring = "registered"
+			if len(s.Command) > 0 {
+				wiring += " (" + strings.Join(s.Command, " ") + ")"
+			}
+		case s.ViaPlugin:
+			wiring = "wired by the corral plugin"
+		case s.Unknown != "":
+			wiring = "unknown (" + strings.Join(strings.Fields(s.Unknown), " ") + ")"
+		default:
+			wiring = "not registered"
+		}
+		line := fmt.Sprintf("%s: %s; skill %s", s.Agent.Name, wiring, s.Skill)
+		if !s.Agent.Proven {
+			line += " (not yet proven)"
+		}
+		out = append(out, checkResult{name: line, info: true})
+	}
+	if len(out) == 0 {
+		out = append(out, checkResult{name: "no coding agent CLI found on PATH", info: true})
+	}
+	return out
 }
 
 func checkSandbox(iso sandbox.Isolator, err error) checkResult {

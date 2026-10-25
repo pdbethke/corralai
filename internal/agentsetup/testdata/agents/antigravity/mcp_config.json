@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "corral": {
+      "args": [
+        "mcp"
+      ],
+      "command": "__CORRAL__",
+      "disabled": false
+    }
+  }
+}

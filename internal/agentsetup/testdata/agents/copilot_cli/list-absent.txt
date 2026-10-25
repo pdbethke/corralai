@@ -1,0 +1,5 @@
+No MCP servers configured.
+
+Add a server with:
+  copilot mcp add <name> -- <command> [args...]
+  copilot mcp add --transport http <name> <url>

@@ -1,0 +1,2 @@
+Removed MCP server corral from user config
+File modified: __SCRATCH__/home/claude_code/.claude.json

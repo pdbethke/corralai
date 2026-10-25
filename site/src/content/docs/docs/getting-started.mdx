@@ -286,6 +286,26 @@ can see.
 Walk through a real verdict end to end in
 [Your first audit, in detail](/docs/first-audit/).
 
+## In your coding agent: `corral setup`
+
+If you work in a coding agent, one command wires corral into it: the read-only
+findings server (`corral mcp`) and the `corral` skill, which teaches the agent
+to read corral's record, check a finding by running something, and leave the
+verdict to you.
+
+```bash
+corral setup                    # pick your agents from a list
+corral setup --dry-run --all-detected   # see the plan, write nothing
+corral setup --uninstall --all-detected # remove only what setup added
+```
+
+Detected agents start unticked and agents already wired start ticked, and
+nothing is written until you have seen the plan and said yes. Proven on Linux (2026-10-25) in Claude Code, Codex CLI, Gemini CLI,
+Cursor, OpenCode, Antigravity and GitHub Copilot CLI; VS Code is wired but
+labelled `(not yet proven)`. See
+[agent setup](https://github.com/pdbethke/corralai/blob/main/docs/corral/agent-setup.md)
+for each agent's commands and the evidence.
+
 ## The brain (optional)
 
 Everything on this page runs with no server. The **brain** is corral's optional

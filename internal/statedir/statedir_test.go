@@ -95,8 +95,8 @@ func TestPathPrecedence(t *testing.T) {
 
 func TestTableIsWellFormed(t *testing.T) {
 	fakeHost(t, "linux", map[string]string{"CORRALAI_STATE_DIR": "/s", "CORRALAI_CACHE_DIR": "/c"}, "/h")
-	if len(Files()) != 25 {
-		t.Fatalf("want 25 rows (spec Appendix A plus the machine ledger), got %d", len(Files()))
+	if len(Files()) != 26 {
+		t.Fatalf("want 26 rows (spec Appendix A, the machine ledger and the setup state), got %d", len(Files()))
 	}
 	seenPath, seenVar := map[string]File{}, map[string]File{}
 	for _, f := range Files() {

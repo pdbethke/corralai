@@ -1,0 +1,1 @@
+No MCP servers configured (expected in .cursor/mcp.json or ~/.cursor/mcp.json)

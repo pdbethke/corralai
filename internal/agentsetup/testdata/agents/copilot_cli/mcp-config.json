@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "corral": {
+      "tools": [
+        "*"
+      ],
+      "type": "local",
+      "command": "__CORRAL__",
+      "args": [
+        "mcp"
+      ]
+    }
+  }
+}

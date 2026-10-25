@@ -1,0 +1,1 @@
+No MCP server named "corral". Run `claude mcp add` to add one.

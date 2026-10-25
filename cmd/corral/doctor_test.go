@@ -4,12 +4,15 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/pdbethke/corralai/internal/agentsetup"
 	"github.com/pdbethke/corralai/internal/sandbox"
 )
 
@@ -387,5 +390,152 @@ func TestDoctorPairingSaysADeclaredTestWasRefusedOutsideTheRoot(t *testing.T) {
 	}
 	if strings.Contains(got.detail, "Nothing to look for") || !strings.Contains(got.detail, "outside the audit root") || !strings.Contains(got.detail, "secret.txt") {
 		t.Fatalf("want the refused declaration named, got: %s", got.detail)
+	}
+}
+
+func init() {
+	// Every doctor run in this package sees no coding agents unless a test
+	// says otherwise: the section reads the machine's agent CLIs, and no test
+	// may run those.
+	doctorAgentEnv = func() (doctorEnv, error) { return noAgentsEnv(), nil }
+}
+
+func noAgentsEnv() doctorEnv {
+	home := filepath.Join(os.TempDir(), "doctor-no-home")
+	return doctorEnv{
+		Home:     home,
+		Runner:   agentsetup.ExecRunner{Dir: home},
+		LookPath: func(string) (string, error) { return "", errors.New("not found") },
+	}
+}
+
+func agentStatus(id string) agentsetup.Status {
+	for _, a := range agentsetup.Agents() {
+		if a.ID == id {
+			return agentsetup.Status{Agent: a, Skill: "n/a"}
+		}
+	}
+	panic("no agent " + id)
+}
+
+func TestDoctorAgentsLines(t *testing.T) {
+	reg := agentStatus("codex")
+	reg.Installed, reg.Registered, reg.Command, reg.Skill = true, true, []string{"/opt/corral/corral", "mcp"}, "managed"
+	not := agentStatus("gemini_cli")
+	not.Installed, not.Skill = true, "absent"
+	not.Agent.Proven = false // the label follows the flag, whatever the table says today
+	unk := agentStatus("opencode")
+	unk.Installed, unk.Unknown, unk.Skill = true, "opencode mcp list failed:\nboom", "unmanaged"
+	plug := agentStatus("claude_code")
+	plug.Installed, plug.ViaPlugin, plug.Skill = true, true, "refused-symlink"
+
+	res := checkAgents([]agentsetup.Status{reg, not, unk, plug})
+	var lines []string
+	for _, r := range res {
+		if !r.info {
+			t.Fatalf("agent results must be info-only: %+v", r)
+		}
+		lines = append(lines, r.name)
+	}
+	all := strings.Join(lines, "\n")
+	for _, want := range []string{
+		reg.Agent.Name + ": registered (/opt/corral/corral mcp)",
+		not.Agent.Name + ": not registered",
+		unk.Agent.Name + ": unknown (opencode mcp list failed: boom)",
+		plug.Agent.Name + ": wired by the corral plugin",
+		"skill managed", "skill absent", "skill unmanaged", "skill refused-symlink",
+		"(not yet proven)",
+	} {
+		if !strings.Contains(all, want) {
+			t.Errorf("missing %q in:\n%s", want, all)
+		}
+	}
+	for _, l := range lines {
+		if strings.Contains(l, unk.Agent.Name) && strings.Contains(l, "not registered") {
+			t.Errorf("unknown rendered as not registered: %s", l)
+		}
+	}
+}
+
+func TestDoctorAgentsSkipsUninstalled(t *testing.T) {
+	res := checkAgents([]agentsetup.Status{agentStatus("codex"), agentStatus("cursor")})
+	if len(res) != 1 || !res[0].info || !strings.Contains(res[0].name, "no coding agent") {
+		t.Fatalf("want one info line saying none installed, got %+v", res)
+	}
+	one := agentStatus("codex")
+	one.Installed = true
+	res = checkAgents([]agentsetup.Status{one, agentStatus("cursor")})
+	if len(res) != 1 || strings.Contains(res[0].name, agentStatus("cursor").Agent.Name) {
+		t.Fatalf("uninstalled agent must print nothing: %+v", res)
+	}
+}
+
+// agent wiring is not an audit prerequisite: it never moves the exit code.
+func TestDoctorAgentsNeverChangeExitCode(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	t.Setenv("GEMINI_API_KEY", "")
+	t.Setenv("GOOGLE_API_KEY", "")
+	t.Setenv("OPENAI_API_KEY", "")
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	args := []string{"--repo", t.TempDir(), "--mutant-model", "gemini-3.6-pro", "--writer-model", "gemini-3.6-pro", "--critic-model", "off"}
+	var base, withAgents bytes.Buffer
+	rcBase := runDoctor(args, &base, &bytes.Buffer{})
+
+	t.Cleanup(func() { doctorAgentEnv = func() (doctorEnv, error) { return noAgentsEnv(), nil } })
+	doctorAgentEnv = func() (doctorEnv, error) {
+		e := noAgentsEnv()
+		e.LookPath = func(string) (string, error) { return "/bin/x", nil }
+		e.Runner = failingRunner{}
+		return e, nil
+	}
+	rcWith := runDoctor(args, &withAgents, &bytes.Buffer{})
+	if rcBase != rcWith {
+		t.Fatalf("agents moved the exit code: %d -> %d\n%s", rcBase, rcWith, withAgents.String())
+	}
+	// Equal exit codes alone prove little when the base run already fails
+	// (both are 1 on a host with no sandbox or key). The verdict line carries
+	// the failure COUNT, so it must be identical too: eight unreadable agents
+	// added no failure.
+	verdict := func(out string) string {
+		for _, l := range strings.Split(out, "\n") {
+			if strings.Contains(l, "check(s) failed") || strings.Contains(l, "All checks passed") {
+				return l
+			}
+		}
+		return ""
+	}
+	if vb, vw := verdict(base.String()), verdict(withAgents.String()); vb == "" || vb != vw {
+		t.Fatalf("agents changed the verdict: %q -> %q", vb, vw)
+	}
+	if !strings.Contains(withAgents.String(), "unknown (") || !strings.Contains(withAgents.String(), "corral setup") {
+		t.Fatalf("agents section missing:\n%s", withAgents.String())
+	}
+	if strings.Contains(withAgents.String(), "[FAIL] Codex") {
+		t.Fatalf("agent line rendered as a failure:\n%s", withAgents.String())
+	}
+}
+
+type failingRunner struct{}
+
+func (failingRunner) Run(context.Context, []string) ([]byte, error) {
+	return nil, errors.New("boom")
+}
+
+// An info result never counts as a failure and never stops later checks,
+// whatever its ok field says: this is the mechanism that keeps the agents
+// section out of doctor's exit code, tested directly so it does not rest on
+// a whole-run comparison.
+func TestPrintCheckInfoNeverFails(t *testing.T) {
+	failed := 0
+	var b bytes.Buffer
+	if !printCheck(&b, checkResult{name: "agent", info: true, ok: false, fatal: true}, &failed) {
+		t.Error("an info result stopped later checks")
+	}
+	if failed != 0 || !strings.Contains(b.String(), "[info] agent") {
+		t.Fatalf("failed=%d out=%q", failed, b.String())
+	}
+	if printCheck(&b, checkResult{name: "sandbox", fatal: true}, &failed); failed != 1 {
+		t.Fatalf("a real failure was not counted: %d", failed)
 	}
 }

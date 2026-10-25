@@ -1,0 +1,11 @@
+{
+	"servers": {
+		"corral": {
+			"command": "__CORRAL__",
+			"args": [
+				"mcp"
+			]
+		}
+	},
+	"inputs": []
+}

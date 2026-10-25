@@ -97,6 +97,10 @@ var (
 	ControlGateDB    = File{State, "corralai_control_gate.duckdb", "CORRALAI_CONTROL_GATE_DB"}
 	CacheDB          = File{Cache, "corralai_cache.duckdb", "CORRALAI_CACHE_DB"}
 
+	// SetupState records what `corral setup` registered and installed, so
+	// undo removes exactly that. It is history (State), not rebuildable.
+	SetupState = File{State, "corralai_setup.json", "CORRALAI_SETUP_STATE"}
+
 	// MachineLedger is a DIRECTORY, not a file: this machine's own ledger,
 	// where every run writes a complete entry whether or not the audited repo
 	// keeps one. It lives in State (not the repo, not Cache) because it is
@@ -117,7 +121,7 @@ var table = []File{
 	MissionDB, QueueDB, ReferenceDB, TelemetryDB, RecordingsDB, LearnDB,
 	TaskArtifactsDB, BuildDB, BugCatchDB, CriticScoreDB, MutantAttemptsDB,
 	MatrixDB, RepoCodeDB, GateDB, ControlSpecDB, ControlGateDB, CacheDB,
-	MachineLedger,
+	MachineLedger, SetupState,
 }
 
 // Files is the whole table, for tests, migrate and `corral state paths`.

@@ -1,0 +1,3 @@
+Checking MCP server health…
+
+corral: __CORRAL__ mcp - ✔ Connected

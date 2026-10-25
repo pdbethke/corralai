@@ -3,6 +3,7 @@
 package lang
 
 import (
+	"errors"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -242,4 +243,44 @@ func gotestsumUnitCmd(argv []string, unit string) ([]string, bool) {
 		return nil, false
 	}
 	return append(append(slices.Clone(head), "--"), goWithPackage(opts, at, unit)...), true
+}
+
+// GoModuleDirective is the module path a go.mod's text declares, or the
+// error that says why there is none ("no module directive", "a module
+// directive with no path"; a caller prefixes the file's name and "has").
+// Both legal spellings an earlier prefix-cut mis-parsed are handled: a
+// quoted path (`module "example.com/x"`, and its backquoted variant) and a
+// trailing `//` comment (`module example.com/x // v2`), plus tab separation.
+// It is the one parser for that directive: the coverage pre-flight reads
+// go.mod from disk through it, and unit evidence reads it from the scan's
+// files, to turn a package import path into the directory it names.
+func GoModuleDirective(gomod string) (string, error) {
+	for _, line := range strings.Split(gomod, "\n") {
+		rest, ok := strings.CutPrefix(strings.TrimSpace(line), "module")
+		if !ok {
+			continue
+		}
+		// "module" must be its own token: `moduleX ...` is not the
+		// directive, while `module\tpath` is.
+		if rest != "" && !strings.ContainsAny(rest[:1], " \t") {
+			continue
+		}
+		// A `//` comment may trail the directive; everything after it is
+		// commentary, not part of the path.
+		if i := strings.Index(rest, "//"); i >= 0 {
+			rest = rest[:i]
+		}
+		rest = strings.TrimSpace(rest)
+		// go.mod tokens may be quoted (") or raw-quoted (`).
+		if len(rest) >= 2 {
+			if (rest[0] == '"' && rest[len(rest)-1] == '"') || (rest[0] == '`' && rest[len(rest)-1] == '`') {
+				rest = rest[1 : len(rest)-1]
+			}
+		}
+		if rest == "" {
+			return "", errors.New("a module directive with no path")
+		}
+		return rest, nil
+	}
+	return "", errors.New("no module directive")
 }

@@ -16,10 +16,24 @@ import (
 // decision, so the evidence is parsed exactly once regardless of repo size.
 type EvidenceIndex struct {
 	files map[string]evidenceFileEntry
+	// unitKind marks an index built from test UNITS (IndexFromUnits), whose
+	// covering count is a number of units, not of tests: one unit is a whole
+	// test file, package or target, so the count is not the per-test number a
+	// Python index reports and must not be shown as one. ParseEvidenceIndex
+	// leaves it false.
+	unitKind bool
 }
+
+// UnitKind reports whether the index was built from test units
+// (IndexFromUnits) rather than from per-test evidence (ParseEvidenceIndex).
+func (idx EvidenceIndex) UnitKind() bool { return idx.unitKind }
 
 type evidenceFileEntry struct {
 	coveringTests int
+	// coveringUnits is, in a unit-kind index, the number of units that
+	// executed this file AND can land a test for it (IndexFromUnits); it
+	// equals coveringTests there and is 0 in a per-test index.
+	coveringUnits int
 	mostCovering  string // the covering test FILE with the most executed lines; "" when coveringTests == 0
 	// coveringFiles is EVERY test file that executed this source, not only
 	// the most-covering one. A --diff-base scan needs the whole set: a pull
@@ -64,6 +78,21 @@ func (idx EvidenceIndex) CoverageFor(path string) (coveringTests int, mostCoveri
 		return 0, "", false, false, false
 	}
 	return f.coveringTests, f.mostCovering, f.hasStatic, f.hasStatements, true
+}
+
+// UnitsFor answers one file by unit: how many test units executed it and
+// can land a test for it, and whether a unit pass measured it at all.
+// measured is false for a file no unit measured and for every file of a
+// per-test index (ParseEvidenceIndex), which has no units to count.
+func (idx EvidenceIndex) UnitsFor(path string) (n int, measured bool) {
+	if !idx.unitKind {
+		return 0, false
+	}
+	f, ok := idx.files[path]
+	if !ok {
+		return 0, false
+	}
+	return f.coveringUnits, true
 }
 
 // Measured reports whether the evidence's own file list contains path

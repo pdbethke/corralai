@@ -3,7 +3,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -3127,49 +3126,19 @@ func selectionCmdDigest(cmd []string) string {
 // feature's whole tri-state contract exists to prevent, so the caller
 // reports the failure instead (see runPreflight).
 //
-// Both legal spellings the earlier prefix-cut mis-parsed are handled: a
-// quoted path (`module "example.com/x"`, and its backquoted variant) and a
-// trailing `//` comment (`module example.com/x // v2`), plus tab separation.
+// The directive itself is parsed by lang.GoModuleDirective, which unit
+// evidence also reads go.mod text through.
 func goModulePath(repoDir string) (string, error) {
 	p := filepath.Join(repoDir, "go.mod")
-	f, err := os.Open(p) // #nosec G304,G703 -- repoDir is the operator's own --repo
+	text, err := os.ReadFile(p) // #nosec G304,G703 -- repoDir is the operator's own --repo
 	if err != nil {
 		return "", fmt.Errorf("reading %s: %w", p, err)
 	}
-	defer func() { _ = f.Close() }()
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		rest, ok := strings.CutPrefix(line, "module")
-		if !ok {
-			continue
-		}
-		// "module" must be its own token: `moduleX ...` is not the
-		// directive, while `module\tpath` is.
-		if rest != "" && !strings.ContainsAny(rest[:1], " \t") {
-			continue
-		}
-		// A `//` comment may trail the directive; everything after it is
-		// commentary, not part of the path.
-		if i := strings.Index(rest, "//"); i >= 0 {
-			rest = rest[:i]
-		}
-		rest = strings.TrimSpace(rest)
-		// go.mod tokens may be quoted (") or raw-quoted (`).
-		if len(rest) >= 2 {
-			if (rest[0] == '"' && rest[len(rest)-1] == '"') || (rest[0] == '`' && rest[len(rest)-1] == '`') {
-				rest = rest[1 : len(rest)-1]
-			}
-		}
-		if rest == "" {
-			return "", fmt.Errorf("%s has a module directive with no path", p)
-		}
-		return rest, nil
+	mp, err := lang.GoModuleDirective(string(text))
+	if err != nil {
+		return "", fmt.Errorf("%s has %v", p, err)
 	}
-	if serr := scanner.Err(); serr != nil {
-		return "", fmt.Errorf("reading %s: %w", p, serr)
-	}
-	return "", fmt.Errorf("%s has no module directive", p)
+	return mp, nil
 }
 
 // enumeratedSourcePaths reconstructs "every file reposcan.Enumerate treated

@@ -56,6 +56,15 @@ type Candidate struct {
 	// or target, not a test, and the column means tests; the unit count is
 	// EvidenceIndex.UnitsFor's to answer.
 	CoveringTests *int
+	// CoveringUnits is the number of test UNITS (a test file, package or
+	// target the runner can run alone) the evidence showed execute this
+	// file — EvidenceIndex.UnitsFor, set by WidenCandidacyByEvidence only
+	// from a unit-kind index, and carried to the ledger's covering_units
+	// column. Its own field because a unit is not a test: folding it into
+	// CoveringTests would quietly redefine Python's covering-test count for
+	// every reader of covering_tests. nil whenever the evidence was not a
+	// unit pass or never measured this file — never a fabricated 0.
+	CoveringUnits *int
 }
 
 // Exclusion is a file deliberately NOT audited, with a machine-stable reason.
@@ -588,7 +597,8 @@ func EnumerateWithTests(root string, tests *TestMap) ([]Candidate, []Exclusion, 
 // Already-paired candidates get CoveringTests filled in when the evidence
 // also measured them (ledger metadata only — see Candidate.CoveringTests),
 // except from a unit-kind index, which counts units rather than tests and
-// so leaves CoveringTests nil on every candidate, paired or promoted;
+// so leaves CoveringTests nil on every candidate, paired or promoted, and
+// fills CoveringUnits (UnitsFor) on both instead;
 // TestPath, ViaSearch and every other field, and every excluded-for-another-
 // reason entry, are left exactly as the pairing walk produced them, which is
 // what keeps an already-candidate file's report line, grading command, cache
@@ -614,10 +624,19 @@ func WidenCandidacyByEvidence(cands []Candidate, excl []Exclusion, idx EvidenceI
 		}
 		return &n
 	}
+	// coveringUnits is the unit count a candidate carries: UnitsFor's, from
+	// a unit-kind index only (see Candidate.CoveringUnits); nil otherwise.
+	coveringUnits := func(path string) *int {
+		if n, measured := idx.UnitsFor(path); measured {
+			return &n
+		}
+		return nil
+	}
 	for i := range cands {
 		if n, _, _, _, measured := idx.CoverageFor(cands[i].Path); measured {
 			cands[i].CoveringTests = coveringTests(n)
 		}
+		cands[i].CoveringUnits = coveringUnits(cands[i].Path)
 	}
 
 	// hasPath is lang.LibraryCodeClassifier's file-existence oracle: the
@@ -659,6 +678,7 @@ func WidenCandidacyByEvidence(cands []Candidate, excl []Exclusion, idx EvidenceI
 				Lang:             langName,
 				CoveringTestPath: mostCovering,
 				CoveringTests:    coveringTests(n),
+				CoveringUnits:    coveringUnits(e.Path),
 			})
 			promoted++
 		case !isLibraryCode(e.Path, hasPath):

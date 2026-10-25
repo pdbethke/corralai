@@ -36,6 +36,10 @@ type Job struct {
 	// when the evidence never measured it (no evidence run, or a
 	// pairing-only fallback — see WidenCandidacyByEvidence).
 	CoveringTests *int
+	// CoveringUnits is Candidate.CoveringUnits, carried through for the
+	// ledger's covering_units column: how many test units executed this
+	// file. nil unless the evidence was a unit pass that measured it.
+	CoveringUnits *int
 	Goal          Goal
 	CacheKey      string
 	// GoalReused mirrors GoalWasReused(Goal): this file's goal was served
@@ -258,6 +262,7 @@ func EmitJobs(cfg EmitConfig, cands []Candidate, gs GoalSource) ([]Job, []Exclus
 			Path: c.Path, TestPath: c.TestPath, Lang: c.Lang,
 			CoveringTestPath: c.CoveringTestPath,
 			CoveringTests:    c.CoveringTests,
+			CoveringUnits:    c.CoveringUnits,
 			Goal:             goal, CacheKey: key,
 			GoalReused: GoalWasReused(goal),
 		})

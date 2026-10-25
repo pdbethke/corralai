@@ -244,7 +244,8 @@ CREATE TABLE IF NOT EXISTS corral_audits (
   mutants_from                VARCHAR,
   authored_landing            VARCHAR,
   baseline_flaky              VARCHAR,
-  seat_tools                  VARCHAR
+  seat_tools                  VARCHAR,
+  covering_units              INTEGER
 );`
 
 // The mutant grain's outcome CHECK is the same discipline scan_files'
@@ -431,6 +432,10 @@ var corralAuditsMigrationCols = []struct{ name, ddl string }{
 	// The roster's agent tools beside models_by_role (Row.SeatTools). NULL
 	// on every row before it: those rosters held API seats only.
 	{"seat_tools", "seat_tools VARCHAR"},
+	// The unit evidence pass's count beside covering_tests (Row.CoveringUnits).
+	// NULL on every row before it, and on every row whose evidence was not a
+	// unit pass.
+	{"covering_units", "covering_units INTEGER"},
 }
 
 // The other four tables are NEW at schema_version 2, so nothing predates
@@ -1208,8 +1213,8 @@ func insertFileRow(tx *sql.Tx, uid string, now time.Time, r Row) error {
 	    mutant_budget, mutant_budget_rule, complexity,
 	    symbols, symbols_probed, decisions, decisions_probed,
 	    challenger_mutants, challenger_survived_writer, challenger_survived_shadow, challenger_union, challenger_shared,
-	    priors_applied, prior_digest, computed_at, mutants_from, authored_landing, baseline_flaky, seat_tools
-	  ) VALUES (`+placeholders(99)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
+	    priors_applied, prior_digest, computed_at, mutants_from, authored_landing, baseline_flaky, seat_tools, covering_units
+	  ) VALUES (`+placeholders(100)+`)`, // #nosec G202 -- placeholders(n) emits only "?, ?, …" for a constant count; every value is a bound parameter and no external input reaches the SQL text
 		uid, now, r.Repo, r.Commit, r.Path, r.Lang,
 		killRate, r.Survivors, r.ProvenMissed,
 		r.TimedOut, r.TestWriterFailed, r.PoolTestUnsound,
@@ -1240,7 +1245,7 @@ func insertFileRow(tx *sql.Tx, uid string, now time.Time, r Row) error {
 		r.Symbols, r.SymbolsProbed, r.Decisions, r.DecisionsProbed,
 		r.ChallengerMutants, r.ChallengerSurvivedWriter, r.ChallengerSurvivedShadow, r.ChallengerUnion, r.ChallengerShared,
 		r.PriorsApplied, nullIfEmpty(r.PriorDigest), nullTime(r.ComputedAt), nullIfEmpty(r.MutantsFrom),
-		nullIfEmpty(r.AuthoredLanding), nullIfEmpty(r.BaselineFlaky), nullIfEmpty(r.SeatTools),
+		nullIfEmpty(r.AuthoredLanding), nullIfEmpty(r.BaselineFlaky), nullIfEmpty(r.SeatTools), r.CoveringUnits,
 	)
 	if err != nil {
 		return fmt.Errorf("auditpush: insert %s: %w", r.Path, err)

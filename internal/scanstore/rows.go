@@ -293,6 +293,13 @@ type File struct {
 	// genuine zero. Additive: a row written before this column existed is
 	// also NULL.
 	CoveringTests *int
+	// CoveringUnits is reposcan.Candidate.CoveringUnits, carried whole: how
+	// many test UNITS the unit evidence pass showed execute this file. A
+	// separate field from CoveringTests because a unit (a test file, package
+	// or target) is not a test. nil for every row whose evidence was not a
+	// unit pass, or that it never measured; omitempty, so such a row's JSON
+	// is byte-identical to what it was before this field existed.
+	CoveringUnits *int `json:",omitempty"`
 	// MutantsFrom is the sha256 of the RECORDED MUTANT SET this row's audit
 	// replayed (`certify --repo --mutants`), and empty when the run generated
 	// its own mutants — which is the normal case and every pre-`--mutants`

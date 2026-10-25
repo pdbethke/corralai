@@ -151,7 +151,10 @@ func TestUnitEvidenceNeverMovesANamePairedCandidate(t *testing.T) {
 
 	// The job the scan would grade, built from the same candidates: one
 	// Enumerate, widened by the same unit index, emits the job pairing
-	// alone emits — TestPath, CoveringTestPath, CoveringTests all equal.
+	// alone emits — TestPath, CoveringTestPath, CoveringTests and the cache
+	// key all equal. The one field unit evidence adds is CoveringUnits
+	// (ruling R3), ledger metadata in its own column: both units executed
+	// src/a.ts, so 2.
 	cands, excl, err := reposcan.Enumerate(root)
 	if err != nil {
 		t.Fatal(err)
@@ -164,7 +167,12 @@ func TestUnitEvidenceNeverMovesANamePairedCandidate(t *testing.T) {
 	}
 	plainJobs := emitTestJobs(t, cands, root)
 	widened, _, _ := reposcan.WidenCandidacyByEvidence(append([]reposcan.Candidate(nil), cands...), excl, idx, ok)
-	if got := emitTestJobs(t, widened, root); !reflect.DeepEqual(got, plainJobs) {
+	got := emitTestJobs(t, widened, root)
+	if len(got) != 1 || got[0].CoveringUnits == nil || *got[0].CoveringUnits != 2 {
+		t.Fatalf("widened job's CoveringUnits = %+v, want 2", got)
+	}
+	got[0].CoveringUnits = nil
+	if !reflect.DeepEqual(got, plainJobs) {
 		t.Errorf("jobs moved:\n got %+v\nwant %+v", got, plainJobs)
 	}
 }

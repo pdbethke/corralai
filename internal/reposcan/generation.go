@@ -238,7 +238,15 @@ package reposcan
 // every printed and signed 95% interval is taken over it. A "32" verdict has
 // no such sample, and its printed band counted duplicates (eight copies of
 // one edit as n=8). Shape change: two fields added.
-const VerdictGeneration = "33"
+//
+// "34" (2026-10-25): covering_units recorded for unit evidence pairing. A
+// file paired or promoted by a unit evidence pass (Go, JavaScript,
+// TypeScript, Ruby, PHP, Rust) carries how many test UNITS executed it, in
+// its own field from candidate to ledger row (Candidate.CoveringUnits →
+// ledger.Row.CoveringUnits → covering_units); covering_tests keeps meaning
+// Python's per-test count and is never set from units. A "33" row from a
+// unit-evidenced scan has no unit count. Shape unchanged; record bump.
+const VerdictGeneration = "34"
 
 // VerdictShapeSHA256 fingerprints advpool.Verdict's serialized shape: every
 // exported field's name, type and json tag, sorted by name and hashed.

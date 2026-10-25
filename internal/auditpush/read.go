@@ -339,7 +339,7 @@ func readFileRows(db *sql.DB, where string, args ...any) ([]Row, error) {
 		mutant_budget, mutant_budget_rule, complexity,
 		symbols, symbols_probed, decisions, decisions_probed,
 		challenger_mutants, challenger_survived_writer, challenger_survived_shadow, challenger_union, challenger_shared,
-		priors_applied, prior_digest, computed_at, mutants_from, authored_landing, baseline_flaky, seat_tools
+		priors_applied, prior_digest, computed_at, mutants_from, authored_landing, baseline_flaky, seat_tools, covering_units
 	   FROM corral_audits WHERE `+where, args...) // #nosec G202 -- where is a constant clause from readGrains; every value is a bound parameter
 	if err != nil {
 		return nil, err
@@ -371,7 +371,7 @@ func readFileRows(db *sql.DB, where string, args ...any) ([]Row, error) {
 		var chMutants, chSurvW, chSurvS, chUnion, chShared sql.NullInt64
 		var priorsApplied sql.NullInt64
 		var priorDigest sql.NullString
-		var coveringTests sql.NullInt64
+		var coveringTests, coveringUnits sql.NullInt64
 		var mutantsFrom, authoredLanding, baselineFlaky, seatTools sql.NullString
 		var computedAt sql.NullTime
 		var importOnly sql.NullBool
@@ -401,7 +401,7 @@ func readFileRows(db *sql.DB, where string, args ...any) ([]Row, error) {
 			&mutantBudget, &mutantBudgetRule, &complexity,
 			&symbols, &symbolsProbed, &decisions, &decisionsProbed,
 			&chMutants, &chSurvW, &chSurvS, &chUnion, &chShared,
-			&priorsApplied, &priorDigest, &computedAt, &mutantsFrom, &authoredLanding, &baselineFlaky, &seatTools,
+			&priorsApplied, &priorDigest, &computedAt, &mutantsFrom, &authoredLanding, &baselineFlaky, &seatTools, &coveringUnits,
 		); err != nil {
 			return nil, err
 		}
@@ -452,6 +452,7 @@ func readFileRows(db *sql.DB, where string, args ...any) ([]Row, error) {
 		r.VerdictJSON = verdictJSON.String
 		r.PromptShape = promptShape.String
 		r.CoveringTests = nullInt(coveringTests)
+		r.CoveringUnits = nullInt(coveringUnits)
 		r.ImportOnly = nullBoolPtr(importOnly)
 		r.MutantBudget = nullInt(mutantBudget)
 		r.MutantBudgetRule = mutantBudgetRule.String

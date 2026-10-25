@@ -388,6 +388,9 @@ func buildScanFileRows(results []reposcan.FileResult, excluded []reposcan.Exclus
 				// any row from a scan where the evidence never measured this
 				// file.
 				CoveringTests: r.Job.CoveringTests,
+				// CoveringUnits: the unit pass's count, in its own column —
+				// see reposcan.Candidate.CoveringUnits.
+				CoveringUnits: r.Job.CoveringUnits,
 			})
 			continue
 		}
@@ -413,6 +416,7 @@ func buildScanFileRows(results []reposcan.FileResult, excluded []reposcan.Exclus
 			GoalsDerived:  goalsDerivedFor(r.Job.Goal),
 			GoalReused:    goalReusedFor(r.Job.GoalReused),
 			CoveringTests: r.Job.CoveringTests,
+			CoveringUnits: r.Job.CoveringUnits,
 		})
 	}
 

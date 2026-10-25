@@ -239,6 +239,17 @@ type Row struct {
 	// (no evidence collected, or a pairing-only fallback) — never confused
 	// with a measured, genuine zero.
 	CoveringTests *int
+	// CoveringUnits mirrors scanstore.File.CoveringUnits: the number of test
+	// UNITS the unit evidence pass showed execute this file, in its own
+	// column so a unit count never redefines CoveringTests. NULL for a row
+	// whose evidence was not a unit pass, or that never measured this file.
+	// omitempty, so every row without it — every Python row, every row
+	// written before it existed — marshals to the bytes it always did. An
+	// additive field needs no new ledger format: from corral-ledger-3 an
+	// entry's hash is over its bytes as written (EntryHash, Entry.Raw), and
+	// ParseEntry's json.Unmarshal ignores a key an older reader does not
+	// know (TestAnEntryCarryingCoveringUnitsStillVerifies).
+	CoveringUnits *int `json:",omitempty"`
 	// ImportOnly mirrors scanstore.File.ImportOnly: refines Uncovered — nil
 	// for a row pushed before this column existed, *true when the file was
 	// executed at import time and never by a test directly (see

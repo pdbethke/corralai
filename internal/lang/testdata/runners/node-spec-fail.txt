@@ -1,11 +1,11 @@
 ▶ Calc
-  ✖ adds (a+b) (0.929117ms)
-  ✔ ok (0.099729ms)
+  ✖ adds (a+b) (0.927402ms)
+  ✔ ok (0.104578ms)
   ▶ neg
-    ✖ adds (0.159031ms)
-  ✖ neg (0.268408ms)
-✖ Calc (2.051951ms)
-✖ top level (0.225066ms)
+    ✖ adds (0.146256ms)
+  ✖ neg (0.251284ms)
+✖ Calc (2.047338ms)
+✖ top level (0.200369ms)
 ℹ tests 4
 ℹ suites 2
 ℹ pass 1
@@ -17,7 +17,7 @@
 ✖ failing tests:
 
 test at fail/f.node.test.js:4:3
-✖ adds (a+b) (0.929117ms)
+✖ adds (a+b) (0.927402ms)
   AssertionError [ERR_ASSERTION]: 2 == 3
       at TestContext.<anonymous> ($DIR/fail/f.node.test.js:4:35)
       at Test.runInAsyncScope (node:async_hooks:214:14)
@@ -38,7 +38,7 @@ test at fail/f.node.test.js:4:3
   }
 
 test at fail/f.node.test.js:6:27
-✖ adds (0.159031ms)
+✖ adds (0.146256ms)
   Error: boom
       at TestContext.<anonymous> ($DIR/fail/f.node.test.js:6:52)
       at Test.runInAsyncScope (node:async_hooks:214:14)
@@ -52,7 +52,7 @@ test at fail/f.node.test.js:6:27
       at Array.map (<anonymous>)
 
 test at fail/f.node.test.js:8:1
-✖ top level (0.225066ms)
+✖ top level (0.200369ms)
   AssertionError [ERR_ASSERTION]: 1 == 2
       at TestContext.<anonymous> ($DIR/fail/f.node.test.js:8:34)
       at Test.runInAsyncScope (node:async_hooks:214:14)

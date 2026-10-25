@@ -836,3 +836,47 @@ func TestNextestTestListDropsRunOnlyOptions(t *testing.T) {
 		t.Errorf("a bundle with no -E still runs one test: %q, %v", got, ok)
 	}
 }
+
+// A name filter set inside a bundle of short options is a name filter
+// (measured, capture-runner-fixtures.sh jest-bundled-short-t-filters,
+// jest-it-filters, vitest-ut-filters), so every jest and vitest command that
+// appends a selection refuses it: list, one test, salvage, units.
+func TestBundledShortNameFilterIsRefused(t *testing.T) {
+	js, _ := ByName("javascript")
+	ts, _ := ByName("typescript")
+	for _, c := range []struct {
+		p    Plugin
+		argv []string
+	}{
+		{js, []string{"npx", "jest", "-ct", "foo"}},
+		{js, []string{"npx", "jest", "-it", "foo"}},
+		{js, []string{"npx", "jest", "-tfoo"}},
+		{js, []string{"node", "./node_modules/jest/bin/jest.js", "-bt", "foo"}},
+		{ts, []string{"npx", "vitest", "run", "-ut", "foo"}},
+		{ts, []string{"npx", "vitest", "run", "-tfoo"}},
+	} {
+		inv := Cmd(c.argv)
+		if cmd, ok := ListTestsCmd(c.p, inv, "a.test.js"); ok {
+			t.Errorf("ListTestsCmd(%q) = %q", c.argv, cmd)
+		}
+		if cmd, ok := SingleTestCmd(c.p, inv, "a.test.js", "x"); ok {
+			t.Errorf("SingleTestCmd(%q) = %q", c.argv, cmd)
+		}
+		if cmd, ok := DeselectCmd(c.p, inv, []string{"x"}); ok {
+			t.Errorf("DeselectCmd(%q) = %q", c.argv, cmd)
+		}
+		if cmd, ok := ListUnitsCmd(c.p, inv); ok {
+			t.Errorf("ListUnitsCmd(%q) = %q", c.argv, cmd)
+		}
+		if cmd, ok := UnitRunCmd(c.p, inv, "a.test.js"); ok {
+			t.Errorf("UnitRunCmd(%q) = %q", c.argv, cmd)
+		}
+	}
+	// A bundle without the filter letter is no filter.
+	if _, ok := UnitRunCmd(js, Cmd([]string{"npx", "jest", "-ci"}), "a.test.js"); !ok {
+		t.Error("-ci sets no name filter")
+	}
+	if !strings.Contains(unitFixture(t, "jest-bundled-filter.txt"), "1 skipped, 1 passed") {
+		t.Error("the captured -ct run should have filtered a's two tests to one")
+	}
+}

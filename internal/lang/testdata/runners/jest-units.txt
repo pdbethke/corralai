@@ -1,2 +1,2 @@
 corral-units-cwd /fixture
-["/fixture/units/jest/b.jest.test.js","/fixture/units/jest/a.jest.test.js"]
+["/fixture/units/jest/a.jest.test.js","/fixture/units/jest/b.jest.test.js"]

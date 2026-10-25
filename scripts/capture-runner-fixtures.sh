@@ -104,6 +104,13 @@ want jest-unit 2 "$(npx --no-install jest --ci units/jest --runTestsByPath units
 want jest-rootDir-pattern-under-projects "no test, exit 0" "$(cd units/projects && npx --no-install jest --passWithNoTests '--testPathIgnorePatterns=^(?!<rootDir>\/p1\/a\.jest\.test\.js$)' >/dev/null 2>&1 && echo "no test, exit 0")"
 (cd units/projects && npx --no-install jest --passWithNoTests --runTestsByPath p1/a.jest.test.js '--testPathIgnorePatterns=^(?!.*\/p1\/a\.jest\.test\.js$)' 2>&1) | sed -e 's/\x1b\[[0-9;]*m//g' -e "s#$DIR#\$DIR#g" -e '/^Time: \|^Ran all/d' > "$OUT/jest-unit-projects.txt"
 want jest-unit-projects 2 "$(unitran < "$OUT/jest-unit-projects.txt")"
+# A name filter set inside a bundle of short options filters too, which the
+# rows refuse (jestNarrowable, vitestNarrowable): each ran 1 of a's 2 tests.
+npx --no-install jest units/jest/a.jest.test.js -ct 'a one' 2>&1 | sed -e 's/\x1b\[[0-9;]*m//g' -e '/^Time: \|^Ran all/d' > "$OUT/jest-bundled-filter.txt"
+jestpassed() { sed -n 's/^Tests:.* \([0-9]*\) passed.*/\1/p'; }
+want jest-bundled-short-t-filters 1 "$(jestpassed < "$OUT/jest-bundled-filter.txt")"
+want jest-it-filters 1 "$(npx --no-install jest units/jest/a.jest.test.js -it 'a one' 2>&1 | jestpassed)"
+want vitest-ut-filters 1 "$(npx --no-install vitest run units/vitest/a.vitest.test.mjs -ut 'a one' </dev/null 2>&1 | sed 's/\x1b\[[0-9;]*m//g' | unitran)"
 # A shard of one file can be empty, and an empty run passes; UnitCmd drops it.
 want node-shard-of-one-file-is-empty "0 exit 0" "$(out=$(node --test --test-reporter=tap --test-shard=2/2 units/node/a.node.test.js 2>&1) && echo "$(printf '%s' "$out" | unitran) exit 0")"
 want jest-runTestsByPath-adds-named-file 3 "$(npx --no-install jest units/jest/b.jest.test.js --runTestsByPath units/jest/a.jest.test.js 2>&1 | unitran)"

@@ -11,6 +11,20 @@ import (
 // vitestFilters are vitest's name filters, in both spellings it accepts.
 var vitestFilters = []string{"-t", "--testNamePattern", "--test-name-pattern"}
 
+// vitestShortFlags are vitest 3.2.7's other single-letter options (version,
+// root, config, update, watch, help). Its option parser (cac, over mri)
+// reads a bundle letter by letter and hands the next word to the last:
+// `vitest run -ut 'a one'` ran 1 of the file's 2 tests (measured), a name
+// filter hasFlag cannot see.
+const vitestShortFlags = "vrcuwh"
+
+// vitestNarrowable is narrowable for a vitest command, refusing a name
+// filter set inside a bundle of short options after the vitest word too.
+func vitestNarrowable(argv []string) bool {
+	i := max(vitestIndex(argv), 0)
+	return narrowable(argv, vitestFilters...) && !shortBundleSets(argv[i:], vitestShortFlags, "t")
+}
+
 // vitestIndex is the position of the word that is vitest in argv: the vitest
 // binary, or its entry script run by a host interpreter
 // (`node ./node_modules/vitest/vitest.mjs`, the shape AGENTS.md gives for the
@@ -29,7 +43,7 @@ func vitestIndex(argv []string) int {
 // run/watch/dev replaced, else mode inserted after the vitest word.
 func vitestWithMode(argv []string, mode string) ([]string, bool) {
 	i := vitestIndex(argv)
-	if i < 0 || !narrowable(argv, vitestFilters...) {
+	if i < 0 || !vitestNarrowable(argv) {
 		return nil, false
 	}
 	cmd := slices.Clone(argv)

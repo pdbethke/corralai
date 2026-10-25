@@ -5,8 +5,9 @@ F.EF
 
 
   1) Failure:
-MyApp::NegTest#test_x [fail/f_test.rb:8]:
-Expected false to be truthy.
+CalcTest#test_adds [fail/f_test.rb:4]:
+Expected: 3
+  Actual: 2
 
   2) Error:
 CalcTest#test_boom:
@@ -14,8 +15,7 @@ RuntimeError: boom
     fail/f_test.rb:6:in `test_boom'
 
   3) Failure:
-CalcTest#test_adds [fail/f_test.rb:4]:
-Expected: 3
-  Actual: 2
+MyApp::NegTest#test_x [fail/f_test.rb:8]:
+Expected false to be truthy.
 
 4 runs, 2 assertions, 2 failures, 1 errors, 0 skips

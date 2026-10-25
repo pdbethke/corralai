@@ -11,13 +11,29 @@ import (
 // accepts; a command carrying one is not narrowed further.
 var jestFilters = []string{"-t", "--testNamePattern", "--test-name-pattern"}
 
+// jestShortFlags are jest 30.5.2's other single-letter options (bail, config,
+// expand, maxWorkers, onlyChanged, onlyFailures, runInBand, updateSnapshot).
+// Its option parser (yargs) reads a bundle of them letter by letter and
+// hands the next word to the last: `-ct foo`, `-it foo` and `-ut foo` each
+// ran 1 of the file's 2 tests (measured), a name filter hasFlag cannot see.
+const jestShortFlags = "bceowfiu"
+
+// jestNarrowable is narrowable for a jest command: no name filter in either
+// spelling, and none set inside a bundle of short options after the jest
+// word. `-tfoo` is refused too, though yargs reads it as letters (measured:
+// it filtered nothing), since a reading nobody can see is not a guarantee.
+func jestNarrowable(argv []string) bool {
+	i := max(wordIndex(argv, "jest"), entryScriptIndex(argv, "jest", "bin/jest.js"), 0)
+	return narrowable(argv, jestFilters...) && !shortBundleSets(argv[i:], jestShortFlags, "t")
+}
+
 // jestListCmd asks jest for its JSON report under a name pattern no test
 // matches (`^\b$` cannot match a non-empty name): every test is collected and
 // reported "pending", none runs. The test file is appended exactly as
 // jestSingleCmd appends it, so the list holds every test a single run could
 // reach — jest reads it as a path regex, which can match a second file.
 func jestListCmd(argv []string, testPath string) ([]string, bool) {
-	if !narrowable(argv, jestFilters...) {
+	if !jestNarrowable(argv) {
 		return nil, false
 	}
 	return append(slices.Clone(argv), "--json", "--testNamePattern", `^\b$`, testPath), true
@@ -50,7 +66,7 @@ func jestParseList(stdout string) []string {
 // jestSingleCmd runs the one test whose full name (jest's fullName: the
 // titles joined by spaces) is id's.
 func jestSingleCmd(argv []string, testPath, id string) ([]string, bool) {
-	if id == "" || !narrowable(argv, jestFilters...) {
+	if id == "" || !jestNarrowable(argv) {
 		return nil, false
 	}
 	return append(slices.Clone(argv), "--testNamePattern", "^"+jsRegexQuote(fullName(id))+"$", testPath), true
@@ -67,7 +83,7 @@ func jestCoruns(id, other string) bool {
 // collects, as a JSON array of absolute paths, nothing run (verified on jest
 // 30.5.2).
 func jestListUnits(argv []string) ([]string, bool) {
-	if !narrowable(argv, jestFilters...) {
+	if !jestNarrowable(argv) {
 		return nil, false
 	}
 	return append(slices.Clone(argv), "--listTests", "--json"), true
@@ -100,7 +116,7 @@ func jestParseUnits(stdout string) []string {
 // listed under the configured ones. A listed file whose path ends in
 // /unit would also survive the pattern; jestUnitCoruns marks that unit.
 func jestUnitCmd(argv []string, unit string) ([]string, bool) {
-	if unit == "" || !narrowable(argv, jestFilters...) {
+	if unit == "" || !jestNarrowable(argv) {
 		return nil, false
 	}
 	return append(withoutFlag(argv, "--shard"), "--runTestsByPath", unit, "--testPathIgnorePatterns=^(?!.*"+jsRegexQuote("/"+unit)+"$)"), true

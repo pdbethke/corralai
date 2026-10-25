@@ -37,7 +37,7 @@ the scratch clone, where the clone was the isolation boundary.
 | Ruby | ku1ik/rainbow | workspace | 11 / 4 | 10 | 0 | 2.50 s |
 | PHP | webmozart/assert | jail | 2 / 0 | 1 | 1 | 1.53 s |
 | Rust | indexmap-rs/indexmap | workspace | 5 / 0 | 0 | 2 | 12.88 s |
-| Rust | indexmap-rs/indexmap (re-run) | jail | 5 / 5 (coverage unavailable) | 0 | 2 | 8.15 s |
+| Rust | indexmap-rs/indexmap (re-run) | jail | 5 / 5 (coverage unavailable) | 0 | 2 | 9.50 s |
 
 ## Go: gin-gonic/gin
 
@@ -139,8 +139,8 @@ Evidence pairing added all seven: `lib/command.js` (105 covering units),
 - Command: `corral certify --repo . --path src --substrate workspace --dry-run --evidence -- node ./node_modules/vitest/vitest.mjs run tests/composition`
   (vitest 5.0.3). The command is scoped to `tests/composition`, the directory
   where an authored test for `src/application/reverse/ReverseEngineeringService.ts`
-  would land. The whole suite has 2,186 test files; a host run of it was
-  stopped after more than ten minutes.
+  would land. The whole suite has 2,186 test files (`vitest list --filesOnly
+  --json` on the clone).
 - **Without `--path src`**, the scan spans Python and TypeScript, and an
   explicit test command is refused for a multi-language scan (exit 2).
 - **Jail run** (with `--path src`): the jail could not be prepared:
@@ -251,18 +251,30 @@ beside `tests/AssertTest.php`).
   the system toolchain's `/usr/local/cargo/bin/cargo`, and its listing failed
   with ``could not execute process `rustc -vV` ``. The system toolchain also
   has no `llvm-tools`.
-- **Jail re-run** (commits `54e33acf`, `9aa2be49`): the listing now runs. The
-  jail binds the program behind the prelude, and cargo's listing is read
-  although its progress lines share the jail's one output stream. All 5 units
-  then failed with the reason the instrument gives. The toolchain the jail
+- **Jail re-run after `54e33acf`** (8.15 s): the listing ran. The jail now
+  binds the program behind the prelude, and it reads cargo's listing even
+  though cargo's progress lines share the jail's one output stream. All 5
+  units then failed with the instrument's reason. The toolchain the jail
   resolved (`/usr/local/rustup/toolchains/1.92.0-x86_64-unknown-linux-gnu`)
-  has no `llvm-tools`:
-  `coverage unavailable: llvm-profdata and llvm-cov are in neither the toolchain's llvm-tools (…) nor PATH: install them with 'rustup component add llvm-tools' for the toolchain the suite builds with`.
-  In the first re-run the remedy read `install them with  for`, because the
-  shell executed the backquoted command; `9aa2be49` prints it as text. A
-  workspace run against that same system toolchain printed the remedy, and
-  the toolchain's `lib/rustlib/x86_64-unknown-linux-gnu/bin` held the same
-  four entries before and after the run.
+  has no `llvm-tools`. That run's reason ended `install them with  for the
+  toolchain the suite builds with`: the remedy was missing because the shell
+  executed the backquoted command.
+- **Jail re-run after `9aa2be49`** (binary at `f9ee65b0`, 9.50 s): 5 run,
+  5 failed, each with the remedy printed as text:
+
+```
+  units: running 5 of 5 listed test unit(s) alone under coverage, 8 at a time, within 15m0s for the whole pass…
+  units: 5 run, 5 failed (8 at a time)
+    indexmap/lib: coverage unavailable: llvm-profdata and llvm-cov are in neither the toolchain's llvm-tools (/usr/local/rustup/toolchains/1.92.0-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/bin) nor PATH: install them with 'rustup component add llvm-tools' for the toolchain the suite builds with
+  evidence-paired 0 · name-paired 2 · uncovered 0 · import-only 0 — pairing-only candidacy (no selection evidence: no unit of 5 contributed evidence)
+```
+
+  (The other four units' lines are the same reason.) A workspace run against
+  the same system toolchain, through
+  `RUSTUP_HOME=/usr/local/rustup` and `/usr/local/cargo/bin/cargo test`, also
+  printed the remedy for all 5 units. Listed before and after that run, the
+  toolchain's `lib/rustlib/x86_64-unknown-linux-gnu/bin` held the same four
+  entries: `gcc-ld`, `rust-lld`, `rust-objcopy` and `wasm-component-ld`.
 - **Workspace run:** 5 units (`indexmap/lib`, `indexmap/test:equivalent_trait`,
   `indexmap/test:macros_full_path`, `indexmap/test:quick`,
   `indexmap/test:tests`), 0 failed. Each unit's coverage carried real

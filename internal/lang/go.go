@@ -217,26 +217,34 @@ func goListTestsCmd(testPath string) ([]string, bool) {
 // reaches ParseCoverage byte-for-byte and still trips its validation).
 const goCoverageReduceScript = `awk '` +
 	// Line 1 is always "mode: <mode>" for a well-formed profile — pass it
-	// through untouched, so ParseCoverage's own header check still runs
+	// through untouched, so the parser's own header check still runs
 	// against the real thing, not a reduction artifact.
 	`NR==1{print;next} ` +
 	// A real block line is exactly 3 whitespace-separated fields:
 	// "<path>:<range> <numStmt> <count>". Anything else (garbled output, a
 	// truncated line) is passed through UNCHANGED rather than reduced —
-	// ParseCoverage sees the exact original bytes and still errors on it,
+	// the parser sees the exact original bytes and still errors on it,
 	// the same as if this script did not exist.
 	`NF!=3{print;next} ` +
-	`{c=index($1,":"); if(c<=1||$3!~/^[0-9]+$/){print;next} ` +
-	`p=substr($1,1,c-1); if($3+0>0){any[p]=1} seen[p]=1} ` +
-	// One synthetic line per distinct file: count=1 if ANY occurrence
-	// anywhere (any test binary, any block) executed it, else 0 — never
-	// dropped, so a file that was measured and genuinely never executed
-	// (every block, every test binary, count 0) still gets its
-	// present-false entry; only a file with ZERO lines in the whole raw
-	// profile is absent, unchanged from before this reduction existed. The
-	// range/numStmt fields are placeholders — ParseCoverage never reads
-	// past the colon-prefixed path and the trailing count.
-	`END{for(p in seen) print p":0,0 1 "(p in any?1:0)}' "$f"`
+	`{c=index($1,":"); if(c<=1||$3!~/^[0-9]+$/||$2!~/^[0-9]+$/){print;next} ` +
+	// A block is identified by file+position: -coverpkg=./... repeats the
+	// SAME block once per test binary that imports it, each with its own
+	// hit count. Its statements count ONCE, and it ran if ANY occurrence
+	// did, so keep the largest hit per block.
+	`p=substr($1,1,c-1); if(!(p in seen)){seen[p]=1; ord[++n]=p} if(!($1 in stm)){stm[$1]=$2+0; fil[$1]=p} ` +
+	`if($3+0>hit[$1]+0){hit[$1]=$3+0}} ` +
+	// One synthetic line per distinct file, "<path>:0,<any> <executable>
+	// <executed>": executable is the sum of numStmt over the file's
+	// distinct blocks, executed the sum over those that ran. The range
+	// "0,<any>" cannot occur in a real profile (lines start at 1) so the
+	// parser tells a reduced line from a raw one; <any> is 1 when ANY block
+	// ran, which stays true for a block with zero statements (an empty
+	// function body) that executed without adding to the executed sum — the
+	// file's executed/not-executed bit must not depend on the sums. A file
+	// measured and never executed still gets a line (executed 0, any 0);
+	// only a file with ZERO lines in the whole raw profile is absent.
+	`END{for(k in fil){p=fil[k]; e[p]+=stm[k]; if(hit[k]+0>0){x[p]+=stm[k]; a[p]=1}} ` +
+	`for(i=1;i<=n;i++){p=ord[i]; print p":0,"(p in a?1:0)" "e[p]" "x[p]+0}}' "$f"`
 
 // CoverageCmd appends -coverpkg/-coverprofile to testCmd, so it claims only a
 // command those flags can reach: see goTestShaped. Any other command is
@@ -318,7 +326,43 @@ func shellQuote(s string) string {
 // block executed), a later count-0 block for the SAME file must not
 // overwrite it back to false.
 func (goPlugin) ParseCoverage(stdout, modulePath string) (executed map[string]bool, err error) {
-	executed = make(map[string]bool)
+	tally, err := parseGoProfile(stdout, modulePath)
+	if err != nil {
+		return nil, err
+	}
+	executed = make(map[string]bool, len(tally))
+	for p, t := range tally {
+		executed[p] = t.hit
+	}
+	return executed, nil
+}
+
+// goFileTally is what one profile says about one file: the statements its
+// distinct blocks hold, the statements of those that ran, and whether any
+// block ran at all (true for an executed block with zero statements too).
+type goFileTally struct {
+	executed, executable int
+	hit                  bool
+}
+
+// goBlock is a block's statement count and its largest hit across the
+// profile's repeats of it.
+type goBlock struct {
+	stmts, hit int
+}
+
+// parseGoProfile is the one reader of the profile (raw or reduced) behind
+// both ParseCoverage and CoverageCounts, so the two cannot disagree on what
+// a line means or which line is malformed. Every non-blank line after the
+// mode header must be a block line or the whole report is an error, never a
+// silently shrunken one. Raw blocks are deduplicated by file+position taking
+// the largest hit, because -coverpkg repeats a block per test binary; a
+// reduced line (range "0,<any>", see goCoverageReduceScript) is already
+// aggregated and added as it stands.
+func parseGoProfile(stdout, modulePath string) (map[string]*goFileTally, error) {
+	tally := make(map[string]*goFileTally)
+	blocks := make(map[string]*goBlock)
+	owner := make(map[string]string)
 	sawMode := false
 	for i, line := range strings.Split(stdout, "\n") {
 		trimmed := strings.TrimSpace(line)
@@ -339,6 +383,10 @@ func (goPlugin) ParseCoverage(stdout, modulePath string) (executed map[string]bo
 		if convErr != nil {
 			return nil, fmt.Errorf("lang: unparseable coverage count on line %d: %q", i+1, line)
 		}
+		stmts, convErr := strconv.Atoi(fields[1])
+		if convErr != nil || stmts < 0 || count < 0 {
+			return nil, fmt.Errorf("lang: unparseable coverage statement count on line %d: %q", i+1, line)
+		}
 		colon := strings.Index(fields[0], ":")
 		if colon <= 0 {
 			return nil, fmt.Errorf("lang: unparseable coverage block on line %d: %q", i+1, line)
@@ -347,16 +395,37 @@ func (goPlugin) ParseCoverage(stdout, modulePath string) (executed map[string]bo
 		if modulePath != "" {
 			path = strings.TrimPrefix(path, modulePath+"/")
 		}
-		if count > 0 {
-			executed[path] = true
-		} else if _, seen := executed[path]; !seen {
-			executed[path] = false
+		t := tally[path]
+		if t == nil {
+			t = &goFileTally{}
+			tally[path] = t
 		}
+		if rng := fields[0][colon+1:]; strings.HasPrefix(rng, "0,") {
+			t.executable += stmts
+			t.executed += count
+			t.hit = t.hit || rng == "0,1" || count > 0
+			continue
+		}
+		b := blocks[fields[0]]
+		if b == nil {
+			b = &goBlock{stmts: stmts}
+			blocks[fields[0]] = b
+			owner[fields[0]] = path
+		}
+		b.hit = max(b.hit, count)
 	}
 	if !sawMode {
 		return nil, fmt.Errorf("lang: coverage report has no \"mode:\" header (got %d bytes)", len(stdout))
 	}
-	return executed, nil
+	for key, b := range blocks {
+		t := tally[owner[key]]
+		t.executable += b.stmts
+		if b.hit > 0 {
+			t.executed += b.stmts
+			t.hit = true
+		}
+	}
+	return tally, nil
 }
 
 // WorkspaceRunEnv is a no-op: the Go build/test cache (GOCACHE) is
@@ -580,8 +649,22 @@ func (goPlugin) Vendor(repoDir string) (VendorStep, bool) {
 // exact same repo-relative name (see the php plugin).
 func (goPlugin) DependencyDirs() []DepDir { return []DepDir{{Name: "vendor"}} }
 
-// CoverageCounts is not built for go yet (evidence-pairing plan, Tasks 2–3):
-// it says so rather than report a count it does not have.
-func (goPlugin) CoverageCounts(string, string) (map[string]LineCounts, error) {
-	return nil, errCountsNotYetReported("go")
+// CoverageCounts reads the same profile as ParseCoverage into statement
+// counts: Executable is the sum of numStmt over a file's distinct blocks and
+// Executed the sum over those that ran in any test binary. A statement is
+// Go's unit of coverage, so these are statement counts under the line-count
+// name the other languages share. ParseCoverage is NOT derived from
+// Executed>0 here: a block with zero statements (an empty function body)
+// that ran makes its file executed without adding to Executed, and that
+// file read executed before counts existed.
+func (goPlugin) CoverageCounts(stdout, modulePath string) (map[string]LineCounts, error) {
+	tally, err := parseGoProfile(stdout, modulePath)
+	if err != nil {
+		return nil, err
+	}
+	counts := make(map[string]LineCounts, len(tally))
+	for p, t := range tally {
+		counts[p] = LineCounts{Executed: t.executed, Executable: t.executable}
+	}
+	return counts, nil
 }

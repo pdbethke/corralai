@@ -586,7 +586,7 @@ func TestCorralCoverageCountsNeverDowngradesAHit(t *testing.T) {
 // not built yet: each returns "<lang>: line counts not yet reported", so
 // nothing reads a fake count. Tasks 2–3 of the evidence-pairing plan remove a
 // name here when its reporter gains counts.
-var coverageCountsPending = []string{"go", "python", "ruby", "php"}
+var coverageCountsPending = []string{"python", "ruby", "php"}
 
 // capturedCoverageReport names, per language, the report a REAL run of the
 // fixture suite produced, and the command that produced it. The file is
@@ -597,6 +597,7 @@ var capturedCoverageReport = map[string]struct {
 	testCmd           []string
 }{
 	"javascript": {dir: "js", report: "js-report.txt", tool: "node", testCmd: []string{"node", "--test"}},
+	"go":         {dir: "go", report: "go-report.txt", tool: "go", testCmd: []string{"go", "test", "-count=1", "./..."}},
 	"typescript": {dir: "ts", report: "ts-report.txt", tool: "node", testCmd: []string{"node", "--test"}},
 }
 
@@ -637,6 +638,12 @@ func TestCapturedCoverageReportsMatchALiveRun(t *testing.T) {
 				t.Skipf("%s not installed — the live half of this check needs the real runtime", fx.tool)
 			}
 			stdout, _, stderr, runErr := runCoverageFixture(t, langName, fx.dir, fx.testCmd)
+			// `go test` prints its own timing line ahead of the profile, which
+			// changes every run; the report is what follows the profile's mode
+			// header, and that is what is captured and compared.
+			if i := strings.Index(stdout, "mode: "); i > 0 {
+				stdout = stdout[i:]
+			}
 			path := filepath.Join("testdata", "coverage", fx.report)
 			if os.Getenv("CORRALAI_RECAPTURE_COVERAGE") == "1" {
 				if err := os.WriteFile(path, []byte(stdout), 0o600); err != nil {

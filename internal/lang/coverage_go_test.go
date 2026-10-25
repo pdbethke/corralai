@@ -329,3 +329,133 @@ func TestGoCoverageCmdClaimsOnlyInstrumentableCommands(t *testing.T) {
 		}
 	}
 }
+
+// THREE BLOCKS, ONE FILE: statements are summed per file, and a block counts
+// as executed by its hit, not by how many statements it holds.
+func TestGoCoverageCountsSumsBlocksPerFile(t *testing.T) {
+	raw := "mode: set\n" +
+		"github.com/x/a.go:1.1,2.2 2 1\n" +
+		"github.com/x/a.go:3.1,4.2 3 1\n" +
+		"github.com/x/a.go:5.1,6.2 4 0\n"
+	got, err := goPlugin{}.CoverageCounts(raw, "github.com/x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := (LineCounts{Executed: 5, Executable: 9}); got["a.go"] != want {
+		t.Errorf("a.go = %+v, want %+v", got["a.go"], want)
+	}
+}
+
+// -coverpkg REPEATS A BLOCK PER TEST BINARY: it is one block, counted once,
+// and it ran if any binary ran it.
+func TestGoCoverageCountsDeduplicatesBlocksRepeatedPerTestBinary(t *testing.T) {
+	raw := "mode: set\n" +
+		"x/a.go:1.1,2.2 2 0\n" +
+		"x/a.go:3.1,4.2 3 0\n" +
+		"x/a.go:1.1,2.2 2 7\n" +
+		"x/a.go:1.1,2.2 2 0\n" +
+		"x/b.go:1.1,2.2 1 0\n" +
+		"x/b.go:1.1,2.2 1 0\n"
+	got, err := goPlugin{}.CoverageCounts(raw, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]LineCounts{"x/a.go": {Executed: 2, Executable: 5}, "x/b.go": {Executed: 0, Executable: 1}}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("got %v, want %v", got, want)
+	}
+}
+
+func TestGoCoverageCountsUnparseableIsError(t *testing.T) {
+	for _, raw := range []string{"", "x/a.go:1.1,2.2 1 1\n", "mode: set\nx/a.go:1.1,2.2 one 1\n", "mode: set\nx/a.go:1.1,2.2 1\n"} {
+		if got, err := (goPlugin{}).CoverageCounts(raw, ""); err == nil {
+			t.Errorf("CoverageCounts(%q) = %v, want an error", raw, got)
+		}
+	}
+}
+
+// A REAL PROFILE: captured by running corral's own internal/pairing tests with
+// -coverpkg. Dedupe is a function the package tests call, so it has executed
+// statements, and no file can execute more statements than it holds.
+func TestGoCoverageCountsFromRealProfile(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("testdata", "coverage", "go-pairing-profile.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const mod = "github.com/pdbethke/corralai"
+	counts, err := goPlugin{}.CoverageCounts(string(raw), mod)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dedupe := counts["internal/pairing/dedupe.go"]
+	if dedupe.Executed == 0 || dedupe.Executable < dedupe.Executed {
+		t.Errorf("dedupe.go = %+v, want executed > 0 and executable >= executed", dedupe)
+	}
+	for p, c := range counts {
+		if c.Executed > c.Executable {
+			t.Errorf("%s: executed %d exceeds executable %d", p, c.Executed, c.Executable)
+		}
+	}
+	executed, err := goPlugin{}.ParseCoverage(string(raw), mod)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for p, c := range counts {
+		if executed[p] != (c.Executed > 0) {
+			t.Errorf("%s: ParseCoverage %v disagrees with %+v", p, executed[p], c)
+		}
+	}
+}
+
+// THE REDUCER KEEPS THE COUNTS: run for real over a profile with repeated
+// blocks and a zero-statement block that ran, it must give the same counts
+// as the raw profile does, and must not turn that file's executed bit off.
+func TestGoCoverageReduceScriptKeepsCountsAndTheExecutedBit(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("no sh on PATH")
+	}
+	if _, err := exec.LookPath("awk"); err != nil {
+		t.Skip("no awk on PATH")
+	}
+	raw := "mode: set\n" +
+		"x/a.go:1.1,2.2 2 0\n" +
+		"x/a.go:3.1,4.2 3 1\n" +
+		"x/a.go:1.1,2.2 2 1\n" +
+		"x/empty.go:1.1,1.5 0 1\n" + // an empty function body that ran
+		"x/dead.go:1.1,2.2 4 0\n"
+	profile := filepath.Join(t.TempDir(), "profile.out")
+	if err := os.WriteFile(profile, []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "sh", "-c", `f=`+shellQuote(profile)+`; `+goCoverageReduceScript).Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := goPlugin{}
+	fromRaw, err := p.CoverageCounts(raw, "x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fromReduced, err := p.CoverageCounts(string(out), "x")
+	if err != nil {
+		t.Fatalf("%v; reduced was %q", err, out)
+	}
+	if !reflect.DeepEqual(fromRaw, fromReduced) {
+		t.Errorf("reduced counts %v differ from raw counts %v; reduced was %q", fromReduced, fromRaw, out)
+	}
+	if want := (LineCounts{Executed: 5, Executable: 5}); fromReduced["a.go"] != want {
+		t.Errorf("a.go = %+v, want %+v", fromReduced["a.go"], want)
+	}
+	for _, in := range []string{raw, string(out)} {
+		executed, err := p.ParseCoverage(in, "x")
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := map[string]bool{"a.go": true, "empty.go": true, "dead.go": false}
+		if !reflect.DeepEqual(executed, want) {
+			t.Errorf("ParseCoverage = %v, want %v (input %q)", executed, want, in)
+		}
+	}
+}

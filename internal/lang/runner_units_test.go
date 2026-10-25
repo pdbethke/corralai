@@ -494,6 +494,9 @@ func TestRspecUnitsFromDryRunJSON(t *testing.T) {
 		{"rspec", "--made-up", "spec"},
 		{"rspec", "--", "spec"},
 		{"rspec", "-p", "--format", "json"},
+		{"rspec", "-eadds"},
+		{"rspec", "-Eadds"},
+		{"rspec", "-bwE", "adds"},
 	} {
 		if got, ok := UnitRunCmd(rb, Cmd(argv), "a_spec.rb"); ok {
 			t.Errorf("UnitRunCmd(%q) = %q, want refused", argv, got)
@@ -559,46 +562,59 @@ func TestPHPUnitUnitsFromListing(t *testing.T) {
 	}
 }
 
-// cargo's units are the test targets `--no-run` builds, by kind. In a
-// workspace two packages' libs, and their tests/it.rs, share a name that
-// cargo selects across every package (capture
-// cargo-target-name-across-packages), so those are listed marked and not
-// run; the bin is unique and runs.
+// cargo's units are the test targets `--no-run` builds, named by package
+// and kind. Two packages' libs, and their tests/it.rs, share a target name
+// that cargo selects in every package the command selects (capture
+// cargo-target-name-across-packages), so each unit names its package and
+// runs under `-p <package>` alone.
 func TestCargoUnitsFromNoRunJSON(t *testing.T) {
 	unitCase{row: "cargo test", lang: "rust", fixture: "cargo-units.txt",
-		argv: []string{"cargo", "test", "-p", "units-a"}, want: []string{"bin:units-a", "lib", "test:it"}, run: "lib",
+		argv: []string{"cargo", "test", "-p", "units-a"}, want: []string{"units-a/bin:units-a", "units-a/lib", "units-a/test:it"}, run: "units-a/lib",
 		wantRun: []string{"cargo", "test", "-p", "units-a", "--lib"}}.check(t)
+	unitCase{row: "cargo test", lang: "rust", fixture: "cargo-units-workspace.txt",
+		argv:    []string{"cargo", "test", "--workspace"},
+		want:    []string{"units-a/bin:units-a", "units-a/lib", "units-a/test:it", "units-b/lib", "units-b/test:it"},
+		run:     "units-b/test:it",
+		wantRun: []string{"cargo", "test", "-p", "units-b", "--test", "it"}}.check(t)
 	rs, _ := ByName("rust")
 	inv := Cmd([]string{"cargo", "test", "--workspace"})
-	got := ParseUnitList(rs, inv, unitFixture(t, "cargo-units-workspace.txt"))
-	if len(got) != 3 || UnitName(got[0]) != "lib" || got[0] == "lib" || UnitName(got[1]) != "test:it" || got[1] == "test:it" || got[2] != "bin:units-a" {
-		t.Fatalf("workspace units = %q: want lib and test:it marked, bin:units-a not", got)
-	}
-	for _, u := range got[:2] {
-		if cmd, ok := UnitRunCmd(rs, inv, u); ok {
-			t.Errorf("a target name two packages share ran as %q", cmd)
-		}
-	}
-	if cmd, ok := UnitRunCmd(rs, inv, got[2]); !ok || !slices.Equal(cmd, []string{"cargo", "test", "--workspace", "--bin", "units-a"}) {
-		t.Errorf("bin:units-a = %q, %v", cmd, ok)
-	}
 	for _, out := range []string{
 		"",
 		`{"reason":"build-finished","success":false}`,
-		`{"reason":"compiler-artifact","package_id":"p","target":{"kind":["lib"],"name":"x"},"profile":{"test":true},"executable":"/x"}`,
+		`{"reason":"compiler-artifact","package_id":"p#x@1","target":{"kind":["lib"],"name":"x"},"profile":{"test":true},"executable":"/x"}`,
+		`{"reason":"compiler-artifact","package_id":"what","target":{"kind":["lib"],"name":"x"},"profile":{"test":true},"executable":"/x"}` + "\n" + `{"reason":"build-finished","success":true}`,
 		"error: could not find `Cargo.toml`",
 	} {
 		if got := ParseUnitList(rs, inv, unitsCwdMarker+"/r\n"+out+"\n"); got != nil {
-			t.Errorf("%q = %#v, want nil: no successful build, no listing", out, got)
+			t.Errorf("%q = %#v, want nil: no successful build or no package name, no listing", out, got)
 		}
 	}
 }
 
-// One target is the operator's command with its own target selection
-// replaced (cargo runs every target selected: capture cargo-targets-union)
-// and the package scope, features and test-binary arguments kept. A
-// TESTNAME, a test-binary filter, --skip or --ignored could leave the
-// target nothing to run, which passes, so such a command has no unit form.
+// A package id names its package three ways: `<src>#<name>@<ver>`, the
+// same without the name when it is the path's last element (measured on
+// cargo 1.90 for a package `same` in a directory `same`), and the older
+// `<name> <ver> (<src>)`.
+func TestCargoPackageName(t *testing.T) {
+	for id, want := range map[string]string{
+		"path+file:///w/a#units-a@0.1.0":                                    "units-a",
+		"path+file:///w/same#0.1.0":                                         "same",
+		"registry+https://github.com/rust-lang/crates.io-index#serde@1.0.0": "serde",
+		"units-a 0.1.0 (path+file:///w/a)":                                  "units-a",
+	} {
+		if got, ok := cargoPackageName(id); !ok || got != want {
+			t.Errorf("cargoPackageName(%q) = %q, %v, want %q", id, got, ok, want)
+		}
+	}
+}
+
+// One target is the operator's command with its own package and target
+// selection replaced by the unit's (cargo runs every target selected, in
+// every package selected: captures cargo-targets-union,
+// cargo-workspace-plus-p-adds) and features, profile and test-binary
+// arguments kept. A TESTNAME, a test-binary filter, --skip or --ignored
+// could leave the target nothing to run, which passes, so such a command
+// has no unit form.
 func TestCargoUnitCmdKeepsPackageScope(t *testing.T) {
 	rs, _ := ByName("rust")
 	for _, c := range []struct {
@@ -606,10 +622,11 @@ func TestCargoUnitCmdKeepsPackageScope(t *testing.T) {
 		unit string
 		want []string
 	}{
-		{[]string{"cargo", "test", "-p", "a"}, "test:it", []string{"cargo", "test", "-p", "a", "--test", "it"}},
-		{[]string{"cargo", "+nightly", "test", "--workspace", "--lib", "--tests", "-F", "x", "--", "--test-threads", "1"}, "bin:b",
-			[]string{"cargo", "+nightly", "test", "--workspace", "-F", "x", "--bin", "b", "--", "--test-threads", "1"}},
-		{[]string{"cargo", "test", "--test", "it", "--release", "--", "--nocapture"}, "lib", []string{"cargo", "test", "--release", "--lib", "--", "--nocapture"}},
+		{[]string{"cargo", "test", "-p", "a"}, "a/test:it", []string{"cargo", "test", "-p", "a", "--test", "it"}},
+		{[]string{"cargo", "+nightly", "test", "--workspace", "--exclude", "c", "--lib", "--tests", "-F", "x", "--", "--test-threads", "1"}, "b/bin:b",
+			[]string{"cargo", "+nightly", "test", "-F", "x", "-p", "b", "--bin", "b", "--", "--test-threads", "1"}},
+		{[]string{"cargo", "test", "-pa", "--package=b", "--all", "--test", "it", "--release", "--target-dir", "t", "--", "--nocapture"}, "b/lib",
+			[]string{"cargo", "test", "--release", "--target-dir", "t", "-p", "b", "--lib", "--", "--nocapture"}},
 	} {
 		if got, ok := UnitRunCmd(rs, Cmd(c.argv), c.unit); !ok || !slices.Equal(got, c.want) {
 			t.Errorf("UnitRunCmd(%q, %q) = %q, %v, want %q", c.argv, c.unit, got, ok, c.want)
@@ -623,17 +640,18 @@ func TestCargoUnitCmdKeepsPackageScope(t *testing.T) {
 		{"cargo", "test", "adds"},
 		{"cargo", "test", "--", "adds"},
 		{"cargo", "test", "--", "--skip", "slow"},
+		{"cargo", "test", "--", "--skip=slow"},
 		{"cargo", "test", "--", "--ignored"},
 		{"cargo", "test", "--doc"},
 		{"cargo", "test", "--no-run"},
 		{"cargo", "build"},
 		{"cargo", "test", "--made-up", "x"},
 	} {
-		if got, ok := UnitRunCmd(rs, Cmd(argv), "lib"); ok {
+		if got, ok := UnitRunCmd(rs, Cmd(argv), "a/lib"); ok {
 			t.Errorf("UnitRunCmd(%q) = %q, want refused", argv, got)
 		}
 	}
-	for _, unit := range []string{"example:x", "test:", "test:a b", "doc"} {
+	for _, unit := range []string{"lib", "test:it", "a/example:x", "a/test:", "a/test:a b", "a/doc", "a b/lib"} {
 		if got, ok := UnitRunCmd(rs, Cmd([]string{"cargo", "test"}), unit); ok {
 			t.Errorf("unit %q ran as %q", unit, got)
 		}
@@ -641,10 +659,12 @@ func TestCargoUnitCmdKeepsPackageScope(t *testing.T) {
 }
 
 // nextest's units are its test binaries with a test the run's filters
-// match, by binary id, which is unique across a workspace; one binary runs
-// under `-E 'binary_id(=<id>)'`, which nextest ANDs with name filters
-// (capture nextest-name-filter-and-binary) but ORs with another filterset
-// (nextest-filtersets-union), so a command with its own -E has no unit form.
+// match, by binary id, which is already package-qualified (`units-a::it`)
+// and so unique across a workspace; one binary runs under
+// `-E 'binary_id(=<id>)'`, which nextest ANDs with name filters (capture
+// nextest-name-filter-and-binary) but ORs with another filterset
+// (nextest-filtersets-union), so a command with its own -E, however
+// written, has no unit form.
 func TestNextestUnitsFromList(t *testing.T) {
 	all := []string{"units-a", "units-a::bin/units-a", "units-a::it", "units-b", "units-b::it"}
 	for _, c := range []unitCase{
@@ -664,6 +684,9 @@ func TestNextestUnitsFromList(t *testing.T) {
 	for _, argv := range [][]string{
 		{"cargo", "nextest", "run", "-E", "test(adds)"},
 		{"cargo", "nextest", "run", "--filterset=test(adds)"},
+		{"cargo", "nextest", "run", "-Etest(adds)"},
+		{"cargo", "nextest", "run", "-rEtest(adds)"},
+		{"cargo", "nextest", "run", "-R1234"},
 		{"cargo", "nextest", "run", "--partition", "count:1/2"},
 		{"cargo", "nextest", "run", "--no-run"},
 		{"cargo", "nextest", "run", "--made-up", "x"},
@@ -790,4 +813,26 @@ func TestUnitOptionTablesMatchTheirHelp(t *testing.T) {
 		}
 	}
 	check("go test", goTestOptions, goHelp, nil)
+}
+
+// The one-test listing drops the run-only options `cargo nextest list`
+// refuses, as the unit listing does (capture
+// nextest-list-refuses-every-run-only: list refused each one), and a
+// one-test run refuses an -E written attached, which hasFlag misses and
+// nextest would OR with the test's own.
+func TestNextestTestListDropsRunOnlyOptions(t *testing.T) {
+	rs, _ := ByName("rust")
+	inv := Cmd([]string{"cargo", "nextest", "run", "--retries", "2", "--fail-fast", "--no-fail-fast", "--test-threads", "4", "-j4", "--no-capture", "-p", "x", "--run-ignored", "all", "--", "--nocapture"})
+	got, ok := ListTestsCmd(rs, inv, "src/lib.rs")
+	if want := []string{"cargo", "nextest", "list", "-p", "x", "--run-ignored", "all", "--message-format", "oneline"}; !ok || !slices.Equal(got, want) {
+		t.Errorf("ListTestsCmd = %q, %v, want %q", got, ok, want)
+	}
+	for _, argv := range [][]string{{"cargo", "nextest", "run", "-Etest(x)"}, {"cargo", "nextest", "run", "-rEtest(x)"}} {
+		if got, ok := SingleTestCmd(rs, Cmd(argv), "src/lib.rs", "tests::a"); ok {
+			t.Errorf("SingleTestCmd(%q) = %q, want refused", argv, got)
+		}
+	}
+	if got, ok := SingleTestCmd(rs, Cmd([]string{"cargo", "nextest", "run", "-r", "-p", "x"}), "src/lib.rs", "tests::a"); !ok || !slices.Contains(got, "test(=tests::a)") {
+		t.Errorf("a bundle with no -E still runs one test: %q, %v", got, ok)
+	}
 }

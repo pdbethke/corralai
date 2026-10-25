@@ -11,15 +11,24 @@ import (
 )
 
 // A Rust test unit is a test TARGET: the one test binary cargo builds for a
-// package's library (`lib`), for each binary (`bin:<name>`) and for each
-// integration test (`test:<name>`). Doc tests are no unit: they are not a
-// binary of their own, and a target-selection flag never runs them.
+// package's library, for each binary and for each integration test. cargo
+// test names one `<package>/lib`, `<package>/bin:<name>`,
+// `<package>/test:<name>`; nextest names one by its own binary id. Doc tests
+// are no unit: they are not a binary of their own, and a target-selection
+// flag never runs them.
 
 // cargoTargetFlags select which targets `cargo test` builds and runs. cargo
 // runs every target selected, the operator's beside the unit's (measured on
 // cargo 1.90: `cargo test -p units-a --test it --lib` ran both), so a unit
 // run drops the operator's; the listing, which applied them, keeps them.
 var cargoTargetFlags = optionSet(`--lib --bins --bin --examples --example --tests --test --benches --bench --all-targets`)
+
+// cargoPackageFlags select which packages `cargo test` tests. A unit run
+// replaces them with `-p <its package>`: -p does not narrow --workspace, it
+// adds to it (measured on cargo 1.90: `cargo test --workspace -p units-a
+// --lib` ran both packages' libs), and a target name two packages share is
+// selected in each (`cargo test --workspace --test it` ran both its).
+var cargoPackageFlags = optionSet(`--workspace --all -p --package --exclude`)
 
 // cargoTestSplit reads a `cargo test` command: the words through `test`
 // (head), cargo's options after it, and the test-binary arguments after
@@ -85,12 +94,11 @@ func cargoListUnits(argv []string) ([]string, bool) {
 
 // cargoParseUnits reads cargo's JSON messages: each compiler-artifact built
 // as a test (profile.test) with an executable is a target, named by its
-// kind. The listing is read only when cargo reported the build finished and
-// succeeded; a build that failed, or output that is not cargo's messages, is
-// no listing. A target name two packages share (every crate's `lib`, a
-// `tests/it.rs` in each) cannot be run alone: cargo selects targets by name
-// across every package the command selects (measured: `cargo test
-// --workspace --test it` ran both packages' it), so it is listed marked.
+// package and kind. The listing is read only when cargo reported the build
+// finished and succeeded; a build that failed, output that is not cargo's
+// messages, or a package id it cannot name is no listing. Two package ids
+// with one name (a member and a dependency of the same name from another
+// source) cannot be told apart by -p, so such a unit is listed marked.
 // Example and bench targets, built as tests only under --examples,
 // --benches or --all-targets, are not units of this row.
 func cargoParseUnits(stdout string) []string {
@@ -129,6 +137,11 @@ func cargoParseUnits(stdout string) []string {
 				continue
 			}
 			if u := cargoUnitName(m.Target.Kind, m.Target.Name); u != "" {
+				pkg, ok := cargoPackageName(m.PackageID)
+				if !ok {
+					return nil
+				}
+				u = pkg + "/" + u
 				if packages[u] == nil {
 					packages[u] = map[string]bool{}
 				}
@@ -169,28 +182,51 @@ func cargoUnitName(kinds []string, name string) string {
 
 var cargoTargetName = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 
-// cargoUnitSelector is the target-selection flag for a unit.
-func cargoUnitSelector(unit string) ([]string, bool) {
-	if unit == "lib" {
-		return []string{"--lib"}, true
+// cargoPackageName is the package name in a cargo package id: the current
+// spec form `<source>#<name>@<version>`, the same form with the name left
+// out when it is the source path's last element (`path+file:///w/same#0.1.0`,
+// measured on cargo 1.90), or the older `<name> <version> (<source>)`.
+func cargoPackageName(id string) (string, bool) {
+	var name string
+	if src, frag, ok := strings.Cut(id, "#"); ok {
+		if n, _, ok := strings.Cut(frag, "@"); ok {
+			name = n
+		} else {
+			name = src[strings.LastIndex(src, "/")+1:]
+		}
+	} else if f := strings.Fields(id); len(f) == 3 {
+		name = f[0]
 	}
-	kind, name, ok := strings.Cut(unit, ":")
+	return name, cargoTargetName.MatchString(name)
+}
+
+// cargoUnitSelector is the package and target-selection flags for a unit.
+func cargoUnitSelector(unit string) ([]string, bool) {
+	pkg, target, ok := strings.Cut(unit, "/")
+	if !ok || !cargoTargetName.MatchString(pkg) {
+		return nil, false
+	}
+	sel := []string{"-p", pkg}
+	if target == "lib" {
+		return append(sel, "--lib"), true
+	}
+	kind, name, ok := strings.Cut(target, ":")
 	if !ok || (kind != "test" && kind != "bin") || !cargoTargetName.MatchString(name) {
 		return nil, false
 	}
-	return []string{"--" + kind, name}, true
+	return append(sel, "--"+kind, name), true
 }
 
-// cargoUnitCmd runs one target: argv without its own target selection, with
-// the unit's, every other option (-p, --workspace, features, profile) and
-// the test-binary arguments kept.
+// cargoUnitCmd runs one target of one package: argv with its own package and
+// target selection replaced by the unit's, every other option (features,
+// profile, target dir) and the test-binary arguments kept.
 func cargoUnitCmd(argv []string, unit string) ([]string, bool) {
 	head, opts, tail, ok := cargoTestSplit(argv)
 	sel, okSel := cargoUnitSelector(unit)
 	if !ok || !okSel {
 		return nil, false
 	}
-	cmd := append(slices.Clone(head), cargoWithoutTargets(opts)...)
+	cmd := append(slices.Clone(head), cargoWithout(opts, cargoTargetFlags, cargoPackageFlags)...)
 	cmd = append(cmd, sel...)
 	if tail != nil {
 		cmd = append(append(cmd, "--"), tail...)
@@ -198,14 +234,21 @@ func cargoUnitCmd(argv []string, unit string) ([]string, bool) {
 	return cmd, true
 }
 
-// cargoWithoutTargets is opts without cargo's target-selection flags and the
-// optional names they read (`--test it`).
-func cargoWithoutTargets(opts []string) []string {
+// cargoWithout is opts without the flags of the sets and the values they
+// read (`--test it`, `-p a`, `-pa`, `--exclude=b`).
+func cargoWithout(opts []string, sets ...map[string]bool) []string {
+	in := func(name string) bool {
+		return slices.ContainsFunc(sets, func(s map[string]bool) bool { return s[name] })
+	}
 	var out []string
 	for i := 0; i < len(opts); i++ {
-		name, _, hasEq := strings.Cut(opts[i], "=")
-		if !cargoTargetFlags[name] {
-			out = append(out, opts[i])
+		a := opts[i]
+		name, _, hasEq := strings.Cut(a, "=")
+		if len(a) > 2 && a[0] == '-' && a[1] != '-' && in(a[:2]) {
+			continue // a short flag with its value attached
+		}
+		if !in(name) {
+			out = append(out, a)
 			continue
 		}
 		if value, _ := cargoTestOptions.takesValue(name); value && !hasEq && i+1 < len(opts) && !strings.HasPrefix(opts[i+1], "-") {
@@ -235,7 +278,8 @@ func nextestRunSplit(argv []string) (pre, opts, tail []string, ok bool) {
 	}
 	opts = head[i+1:]
 	if _, ok := dropFileArgs(opts, true, nextestRunOptions.takesValue); !ok ||
-		hasFlag(opts, "-E", "--filterset", "--filter-expr", "--partition", "-R", "--rerun", "--no-run") {
+		hasFlag(opts, "-E", "--filterset", "--filter-expr", "--partition", "-R", "--rerun", "--no-run") ||
+		shortBundleSets(opts, nextestShortFlags, "ER") {
 		return nil, nil, nil, false
 	}
 	return head[:i], opts, tail, true
@@ -250,25 +294,39 @@ func nextestListUnits(argv []string) ([]string, bool) {
 	if !ok {
 		return nil, false
 	}
-	cmd := append(slices.Clone(pre), "list")
+	cmd := append(append(slices.Clone(pre), "list"), nextestListArgs(opts)...)
+	cmd = append(cmd, "--message-format", "json")
+	return append(cmd, tail...), true
+}
+
+// nextestListArgs is a run's options and name filters without the run-only
+// options `cargo nextest list` refuses (and their values): every one of
+// nextestRunOnly was refused by list on cargo-nextest 0.9.148 (capture
+// nextest-list-refuses-every-run-only), so a listing that kept one listed
+// nothing.
+func nextestListArgs(opts []string) []string {
+	var out []string
 	for i := 0; i < len(opts); i++ {
 		a := opts[i]
 		name, _, hasEq := strings.Cut(a, "=")
 		value, _ := nextestRunOptions.takesValue(name)
 		takes := strings.HasPrefix(a, "-") && value && !hasEq && i+1 < len(opts)
 		if !nextestRunOnly[name] && (len(name) <= 2 || name[1] == '-' || !nextestRunOnly[name[:2]]) {
-			cmd = append(cmd, a)
+			out = append(out, a)
 			if takes {
-				cmd = append(cmd, opts[i+1])
+				out = append(out, opts[i+1])
 			}
 		}
 		if takes {
 			i++
 		}
 	}
-	cmd = append(cmd, "--message-format", "json")
-	return append(cmd, tail...), true
+	return out
 }
+
+// nextestShortFlags are nextest run's short options that take no value,
+// which clap lets a bundle carry before one that does (`-rEtest(x)`).
+const nextestShortFlags = "vhr"
 
 // nextestParseUnits reads `list --message-format json`: each test binary
 // with a test the run's filters match is a unit, named by its binary id

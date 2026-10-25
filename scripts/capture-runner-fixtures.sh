@@ -140,6 +140,7 @@ help gotestsum-help.txt "$DIR/bin/gotestsum" --help
 units rspec-units.txt $RSPEC units/rspec --dry-run --format json
 rbran() { grep -oE '[0-9]+ examples?' | grep -oE '[0-9]+' | tail -1; }
 want rspec-unit 2 "$($RSPEC units/rspec/spec/a_spec.rb 2>&1 | rbran)"
+want rspec-attached-e-filters 1 "$($RSPEC -eone units/rspec/spec/a_spec.rb 2>&1 | rbran)"
 want rspec-paths-union 3 "$($RSPEC units/rspec units/rspec/spec/a_spec.rb 2>&1 | rbran)"
 want rspec-dotrspec-path-not-added 2 "$(cd units/rspecrc && $RSPEC spec/a_spec.rb 2>&1 | rbran)"
 want rspec-profile-reads-next-word 3 "$(cd units/rspec && $RSPEC -p spec/a_spec.rb 2>&1 | rbran)"
@@ -171,10 +172,28 @@ want cargo-unit-bin 1 "$(cd units/cargo && cargo test -p units-a --bin units-a 2
 want cargo-unit-test 1 "$(cd units/cargo && cargo test -p units-a --test it 2>&1 | cargoran)"
 want cargo-targets-union 3 "$(cd units/cargo && cargo test -p units-a --test it --lib 2>&1 | cargoran)"
 want cargo-target-name-across-packages 2 "$(cd units/cargo && cargo test --workspace --test it 2>&1 | cargoran)"
+# -p adds to --workspace rather than narrowing it, so a unit run replaces the
+# operator's package selection with -p <its package>; each runs only its own.
+want cargo-workspace-plus-p-adds 3 "$(cd units/cargo && cargo test --workspace -p units-a --lib 2>&1 | cargoran)"
+want cargo-unit-b-lib 1 "$(cd units/cargo && cargo test -p units-b --lib 2>&1 | cargoran)"
+want cargo-unit-b-test 1 "$(cd units/cargo && cargo test -p units-b --test it 2>&1 | cargoran)"
 want nextest-unit 2 "$(cd units/cargo && cargo nextest run --workspace -E 'binary_id(=units-a)' 2>&1 | nextran)"
 want nextest-filtersets-union 3 "$(cd units/cargo && cargo nextest run --workspace -E 'binary_id(=units-a)' -E 'test(negates)' 2>&1 | nextran)"
 want nextest-name-filter-and-binary 0 "$(cd units/cargo && cargo nextest run --workspace integrates -E 'binary_id(=units-a)' 2>&1 | nextran)"
-want nextest-list-refuses-run-only "unexpected argument '--retries'" "$(cd units/cargo && cargo nextest list --workspace --retries 2 2>&1 | grep -o "unexpected argument '--retries'")"
+# An -E written attached is a filterset too, ORed with the unit's.
+want nextest-attached-filterset-ors 2 "$(cd units/cargo && cargo nextest run --workspace '-Etest(negates)' -E 'binary_id(=units-a::it)' 2>&1 | nextran)"
+# Every run-only option (nextestRunOnly, runner_unit_options.go) is refused by list.
+refused=0
+for o in "-R x" "--rerun x" "--no-run" "-j 1" "--test-threads 1" "--retries 1" "--flaky-result pass" "--fail-fast" \
+  "--no-fail-fast" "--max-fail 1" "--debugger gdb" "--tracer strace" "--no-tests pass" "--no-capture" "--stress-count 1" \
+  "--stress-duration 1s" "--failure-output final" "--success-output never" "--status-level all" "--final-status-level all" \
+  "--no-output-indent" "--hide-progress-bar" "--no-input-handler" "--max-progress-running 1" "--message-format libtest-json" \
+  "--message-format-version 0.1"; do
+  # shellcheck disable=SC2086 # each option and its value are two words
+  out="$(cd units/cargo && cargo nextest list --workspace $o 2>&1 || true)"
+  case "$out" in *"unexpected argument"* | *"invalid value"*) refused=$((refused + 1)) ;; esac
+done
+want nextest-list-refuses-every-run-only 26 "$refused"
 help cargo-test-help.txt cargo test --help
 help libtest-help.txt sh -c 'cd units/cargo && cargo test -q -p units-a --test it -- --help 2>/dev/null'
 help nextest-run-help.txt cargo nextest run --help

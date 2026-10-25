@@ -192,3 +192,27 @@ func splitFileArgs(args []string, flagsAfterFiles bool, takesValue func(flag str
 	}
 	return kept, files, true
 }
+
+// shortBundleSets reports whether a single-dash word of argv sets one of the
+// short options in refused, written attached or bundled: `-Etest(x)`, or
+// `-rE` after short options that take no value (flags). A short option
+// that takes a value ends the bundle, the rest being its value. hasFlag
+// sees only `-E` and `-E=x`, and an attached filter it misses is ORed with a
+// unit's own (measured on cargo-nextest 0.9.148: `'-Etest(negates)' -E
+// 'binary_id(=nx::it)'` ran two binaries' tests).
+func shortBundleSets(argv []string, flags, refused string) bool {
+	for _, a := range argv {
+		if len(a) < 2 || a[0] != '-' || a[1] == '-' {
+			continue
+		}
+		for _, c := range a[1:] {
+			if strings.ContainsRune(refused, c) {
+				return true
+			}
+			if !strings.ContainsRune(flags, c) {
+				break
+			}
+		}
+	}
+	return false
+}

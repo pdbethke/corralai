@@ -102,7 +102,7 @@ func rspecUnitCmd(argv []string, unit string) ([]string, bool) {
 // the command has no unit form; neither has one with a name filter.
 func rspecUnitArgs(argv []string) (head, kept []string, ok bool) {
 	i := wordIndex(argv, "rspec")
-	if i < 0 || !narrowable(argv, rspecFilters...) {
+	if i < 0 || !narrowable(argv, rspecFilters...) || shortBundleSets(argv[i+1:], rspecShortFlags, "eE") {
 		return nil, nil, false
 	}
 	kept, files, ok := splitFileArgs(argv[i+1:], true, rspecOptions.takesValue)
@@ -116,5 +116,9 @@ func rspecUnitArgs(argv []string) (head, kept []string, ok bool) {
 	}
 	return argv[:i+1], kept, true
 }
+
+// rspecShortFlags are rspec's short options that take no value, which Ruby's
+// OptionParser lets a bundle carry before -e or -E (`-be foo`, `-Efoo`).
+const rspecShortFlags = "bwnXvh"
 
 var rspecLocation = regexp.MustCompile(`:\d+(:\d+)*$|\[[\d:,]+\]$`)

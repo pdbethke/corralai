@@ -234,7 +234,7 @@ var runners = []Runner{
 		FirstFailure: rustFirstFailure, Flaky: rustFlakyTests,
 		Disclose: libtestDisclose, PreflightBin: libtestPreflightBin,
 		ListUnits: cargoListUnits, ParseUnits: cargoParseUnits, UnitCmd: cargoUnitCmd,
-		Note: "libtest has no retries; flaky tests are named when the output is nextest's (a wrapper that runs nextest under another command); one-target runs (`--lib`, `--test`, `--bin`) verified on cargo 1.90, where a target name two packages share runs both, so in a workspace each crate's lib is not run alone; doc tests are no unit",
+		Note: "libtest has no retries; flaky tests are named when the output is nextest's (a wrapper that runs nextest under another command); one-target runs (`-p <package>` with `--lib`, `--test` or `--bin`, in place of the command's own package and target selection) verified on cargo 1.90; doc tests, examples and benches are no unit",
 	},
 }
 

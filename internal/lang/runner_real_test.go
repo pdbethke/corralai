@@ -4,6 +4,7 @@ package lang
 
 import (
 	"bytes"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -361,11 +362,13 @@ func TestRealRunnersListAndRunOneUnit(t *testing.T) {
 
 // TestRealRunnersListAndRunOneUnitBeyondJS is TestRealRunnersListAndRunOneUnit
 // for the Go, Ruby, PHP and Rust rows: list the units the command collects
-// with the real runner, then run one and require exactly its tests to run.
-// go test and rspec run wherever they are installed, over a copy of the
-// fixtures; gotestsum, PHPUnit and the two cargo rows need
+// with the real runner, then run each named unit and require exactly its
+// tests to run. go test and rspec run wherever they are installed, over a
+// copy of the fixtures; gotestsum, PHPUnit and the two cargo rows need
 // CORRALAI_RUNNER_ROOT (the capture script installs gotestsum and PHPUnit
-// there and has built the cargo workspace, so a run does not compile it).
+// there and has built the cargo workspace, so a run does not compile it). A
+// toolchain that is absent is SKIPPED by name, as the other real-runner
+// tests do, so the CI census shows what was not driven.
 func TestRealRunnersListAndRunOneUnitBeyondJS(t *testing.T) {
 	root := os.Getenv("CORRALAI_RUNNER_ROOT")
 	rspec := []string{"rspec"}
@@ -373,46 +376,55 @@ func TestRealRunnersListAndRunOneUnitBeyondJS(t *testing.T) {
 		rspec = []string{"ruby", "-S", "rspec"}
 	}
 	gopass := regexp.MustCompile(`(?m)^\s*--- PASS`)
-	cargo := regexp.MustCompile(`test result: ok\. (\d+) passed`)
+	goCount := func(s string) int { return len(gopass.FindAllString(s, -1)) }
+	cargoPassed := regexp.MustCompile(`test result: ok\. (\d+) passed`)
+	cargoCount := func(s string) int {
+		n := 0
+		for _, m := range cargoPassed.FindAllStringSubmatch(s, -1) {
+			k, _ := strconv.Atoi(m[1])
+			n += k
+		}
+		return n
+	}
+	nextestSummary := regexp.MustCompile(`Summary .* (\d+) tests? run: (\d+) passed`)
+	nextestCount := func(s string) int {
+		m := nextestSummary.FindStringSubmatch(s)
+		if m == nil || m[1] != m[2] {
+			return -1
+		}
+		n, _ := strconv.Atoi(m[1])
+		return n
+	}
 	for _, c := range []struct {
 		runner, lang, sub string
 		argv              []string
+		probe             []string // must run, else the case is skipped naming it
 		want              []string
-		unit              string
-		tests             int
+		tests             map[string]int // unit → the tests it alone runs
 		count             func(string) int
 		needsRoot         bool
 	}{
-		{"go test", "go", "units/gomod", []string{"go", "test", "-v", "-count=1", "./..."},
-			[]string{"example.com/units/a", "example.com/units/b"}, "example.com/units/a", 2,
-			func(s string) int { return len(gopass.FindAllString(s, -1)) }, false},
+		{"go test", "go", "units/gomod", []string{"go", "test", "-v", "-count=1", "./..."}, []string{"go", "version"},
+			[]string{"example.com/units/a", "example.com/units/b"},
+			map[string]int{"example.com/units/a": 2, "example.com/units/b": 1}, goCount, false},
 		{"gotestsum", "go", "units/gomod", []string{filepath.Join(root, "bin", "gotestsum"), "--format", "standard-verbose", "--", "-count=1", "./..."},
-			[]string{"example.com/units/a", "example.com/units/b"}, "example.com/units/b", 1,
-			func(s string) int { return len(gopass.FindAllString(s, -1)) }, true},
-		{"rspec", "ruby", "", append(slices.Clone(rspec), "units/rspec"),
-			[]string{"units/rspec/spec/a_spec.rb", "units/rspec/spec/b_spec.rb"}, "units/rspec/spec/a_spec.rb", 2, ran, false},
+			[]string{filepath.Join(root, "bin", "gotestsum"), "--version"},
+			[]string{"example.com/units/a", "example.com/units/b"}, map[string]int{"example.com/units/b": 1}, goCount, true},
+		{"rspec", "ruby", "", append(slices.Clone(rspec), "units/rspec"), append(slices.Clone(rspec), "--version"),
+			[]string{"units/rspec/spec/a_spec.rb", "units/rspec/spec/b_spec.rb"},
+			map[string]int{"units/rspec/spec/a_spec.rb": 2, "units/rspec/spec/b_spec.rb": 1}, ran, false},
 		{"phpunit", "php", "", []string{"vendor/bin/phpunit", "-c", "units/phpunit/phpunit.xml", "--testsuite", "unit"},
-			[]string{"units/phpunit/tests/ATest.php", "units/phpunit/tests/BTest.php"}, "units/phpunit/tests/ATest.php", 2, ran, true},
-		{"cargo test", "rust", "units/cargo", []string{"cargo", "test", "-p", "units-a"},
-			[]string{"bin:units-a", "lib", "test:it"}, "lib", 2,
-			func(s string) int {
-				n := 0
-				for _, m := range cargo.FindAllStringSubmatch(s, -1) {
-					k, _ := strconv.Atoi(m[1])
-					n += k
-				}
-				return n
-			}, true},
-		{"cargo nextest", "rust", "units/cargo", []string{"cargo", "nextest", "run", "--workspace"},
-			[]string{"units-a", "units-a::bin/units-a", "units-a::it", "units-b", "units-b::it"}, "units-b::it", 1,
-			func(s string) int {
-				m := regexp.MustCompile(`Summary .* (\d+) tests? run: (\d+) passed`).FindStringSubmatch(s)
-				if m == nil || m[1] != m[2] {
-					return -1
-				}
-				n, _ := strconv.Atoi(m[1])
-				return n
-			}, true},
+			[]string{"vendor/bin/phpunit", "--version"},
+			[]string{"units/phpunit/tests/ATest.php", "units/phpunit/tests/BTest.php"},
+			map[string]int{"units/phpunit/tests/ATest.php": 2, "units/phpunit/tests/BTest.php": 1}, ran, true},
+		// Two packages each with a lib and a tests/it.rs: every unit, the
+		// shared names included, runs its own package's target alone.
+		{"cargo test", "rust", "units/cargo", []string{"cargo", "test", "--workspace"}, []string{"cargo", "--version"},
+			[]string{"units-a/bin:units-a", "units-a/lib", "units-a/test:it", "units-b/lib", "units-b/test:it"},
+			map[string]int{"units-a/bin:units-a": 1, "units-a/lib": 2, "units-a/test:it": 1, "units-b/lib": 1, "units-b/test:it": 1}, cargoCount, true},
+		{"cargo nextest", "rust", "units/cargo", []string{"cargo", "nextest", "run", "--workspace"}, []string{"cargo", "nextest", "--version"},
+			[]string{"units-a", "units-a::bin/units-a", "units-a::it", "units-b", "units-b::it"},
+			map[string]int{"units-a": 2, "units-b::it": 1}, nextestCount, true},
 	} {
 		t.Run(c.runner, func(t *testing.T) {
 			dir := root
@@ -424,15 +436,10 @@ func TestRealRunnersListAndRunOneUnitBeyondJS(t *testing.T) {
 			} else if dir == "" {
 				t.Skipf("SKIP %s: CORRALAI_RUNNER_ROOT is not set (scripts/capture-runner-fixtures.sh --keep DIR)", c.runner)
 			}
-			bin := c.argv[0]
-			if strings.Contains(bin, "/") && !filepath.IsAbs(bin) {
-				bin = filepath.Join(dir, bin) // vendor/bin/phpunit, from the root
-			}
-			if _, err := exec.LookPath(bin); err != nil {
-				t.Skipf("SKIP %s: %s is not installed", c.runner, c.argv[0])
-			}
-			if c.runner == "rspec" && exec.Command(rspec[0], append(rspec[1:], "--version")...).Run() != nil {
-				t.Skip("SKIP rspec: rspec is not installed")
+			probe := exec.Command(c.probe[0], c.probe[1:]...) // #nosec G204 -- a fixed version probe
+			probe.Dir = dir
+			if probe.Run() != nil {
+				t.Skipf("SKIP %s: %s is not installed", c.runner, strings.Join(c.probe[:len(c.probe)-1], " "))
 			}
 			p, _ := ByName(c.lang)
 			inv := Cmd(c.argv)
@@ -456,12 +463,15 @@ func TestRealRunnersListAndRunOneUnitBeyondJS(t *testing.T) {
 			if units := ParseUnitList(p, inv, out); !slices.Equal(units, c.want) {
 				t.Fatalf("%q listed %q, want %q:\n%s", list, units, c.want, all)
 			}
-			one, ok := UnitRunCmd(p, inv, c.unit)
-			if !ok {
-				t.Fatal("no one-unit command")
-			}
-			if _, all = run(one); c.count(all) != c.tests {
-				t.Errorf("%q did not run exactly %s's %d tests:\n%s", one, c.unit, c.tests, all)
+			for _, unit := range slices.Sorted(maps.Keys(c.tests)) {
+				one, ok := UnitRunCmd(p, inv, unit)
+				if !ok {
+					t.Errorf("no one-unit command for %s", unit)
+					continue
+				}
+				if _, all = run(one); c.count(all) != c.tests[unit] {
+					t.Errorf("%q did not run exactly %s's %d tests:\n%s", one, unit, c.tests[unit], all)
+				}
 			}
 		})
 	}

@@ -89,7 +89,7 @@ Windows.
 |---|---|---|---|---|
 | Claude Code | `claude_code` | 2.1.309 | yes | loaded the skill unprompted |
 | Codex CLI | `codex` | 0.163.0 | yes | loaded the skill unprompted; headless `exec` needs the tool approved (below) |
-| Gemini CLI | `gemini_cli` | 0.60.0 | no | setup and verify pass; the prompt could not run: the personal-tier login is refused ("This client is no longer supported for Gemini Code Assist for individuals") |
+| Gemini CLI | `gemini_cli` | 0.60.0 | yes | loaded the skill unprompted, on an API key: Google refuses the personal-tier login ("This client is no longer supported for Gemini Code Assist for individuals"), and a user setting of `oauth-personal` wins over `GEMINI_API_KEY`, so the run used a clean home (below) |
 | Cursor | `cursor` | 2026.10.22-27dcf5f | yes | loaded the skill unprompted; headless needs `--force` for the MCP call |
 | OpenCode | `opencode` | 1.18.25 | yes | loaded the skill unprompted |
 | Antigravity | `antigravity` | 1.4.7 | yes | loaded the skill unprompted; headless needs the MCP permission (below) |
@@ -153,7 +153,7 @@ transcript must show the tool call.
 |---|---|---|
 | Claude Code | `claude -p --output-format stream-json --verbose --no-session-persistence --allowedTools mcp__corral__list_audit_findings < prompt` | pass: `Skill(corral)`, then `mcp__corral__list_audit_findings`; named the three bugs and finding `89:1` / `TestContainerTmpfsAllowsExec` |
 | Codex CLI | `codex exec --json --skip-git-repo-check -s read-only -c 'mcp_servers.corral.tools.list_audit_findings.approval_mode="approve"' - < prompt` | pass: read `~/.codex/skills/corral/SKILL.md`, `mcp_tool_call` `list_audit_findings` completed; three bugs, `89:1`. Without the `-c` approval the call fails: "MCP tool call requires approval, but approval policy is never". With shell forbidden it could not open the skill file at all |
-| Gemini CLI | `gemini -p <prompt> -o stream-json --skip-trust --approval-mode yolo` | not run: `IneligibleTierError` at login |
+| Gemini CLI | in a clean home (`env -i HOME=<scratch>`, scratch `XDG_CONFIG_HOME`/`XDG_CACHE_HOME`): `corral setup --client gemini_cli --yes`, then `security.auth.selectedType` set to `gemini-api-key` in that home's `~/.gemini/settings.json`; then `GEMINI_API_KEY=… gemini -p <prompt> -o stream-json --skip-trust --approval-mode yolo`, with `XDG_STATE_HOME` pointed at the real state directory so `corral mcp` read the real findings store | pass: `activate_skill` (corral), `mcp_corral_list_audit_findings` success; three bugs, `89:1`. Model `auto` (gemini-3.6-flash), 49,602 tokens. On the workstation's own home the prompt could not run: `IneligibleTierError` at login, with the key exported and with `GEMINI_DEFAULT_AUTH_TYPE=gemini-api-key` |
 | Cursor | `cursor-agent -p --output-format stream-json --approve-mcps --trust --force <prompt>` | pass: read `~/.cursor/skills/corral/SKILL.md`, `corral-list_audit_findings` succeeded; three bugs, `89:1`. Without `--force` the skill loaded but both MCP calls were rejected |
 | OpenCode | `opencode run --format json <prompt>` | pass: `skill` (corral), `corral_list_audit_findings` completed; three bugs, `89:1` |
 | Antigravity | `agy -p <prompt> --output-format stream-json --dangerously-skip-permissions` | pass: read `~/.gemini/config/skills/corral/SKILL.md`, `call_mcp_tool` corral/`list_audit_findings` done; three bugs, `89:1`. Without the flag the skill loaded and the MCP call was auto-denied ("headless mode cannot prompt for" the `mcp` permission) |

@@ -29,8 +29,8 @@ history of any release, `git log v0.3.4..v0.3.5`.
   --uninstall` removes only what its state file says it added, and `corral
   doctor` gains an informational agents
   section. Proven on Linux by a headless prompt that loaded the skill and
-  called `list_audit_findings` in Claude Code, Codex CLI, Cursor, OpenCode,
-  Antigravity and GitHub Copilot CLI; Gemini CLI and VS Code are labelled
+  called `list_audit_findings` in Claude Code, Codex CLI, Gemini CLI, Cursor,
+  OpenCode, Antigravity and GitHub Copilot CLI; VS Code is labelled
   `(not yet proven)`. See `docs/corral/agent-setup.md`.
 - **A ledger entry can be signed keylessly, by the GitHub repository that ran
   the audit.** Set `CORRALAI_LEDGER_SIGNER=sigstore` in a GitHub Actions run

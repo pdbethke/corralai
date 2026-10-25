@@ -146,6 +146,7 @@ func Agents() []Agent {
 			// FACTS: ~/.gemini/skills executed (gemini skills list), as is the shared dir.
 			AddOverwrites: true,
 			SkillMode:     SkillOwn, SkillDir: skillDirUnder(".gemini", "skills"),
+			Proven:  true, // the 2026-10-25 headless proof, docs/corral/agent-setup.md
 			Restart: "Start a new Gemini CLI session.",
 		},
 		{

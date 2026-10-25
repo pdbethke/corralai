@@ -280,13 +280,14 @@ func TestInteractiveListUnticksNewlyDetected(t *testing.T) {
 		{Agent: ag[2], Installed: true, Registered: true},
 		{Agent: ag[3]},
 	}
+	st[3].Agent.Proven = false // the label follows the flag, whatever the table says today
 	var b bytes.Buffer
 	got, err := pickAgents(lines("\n"), &b, st)
 	if err != nil {
 		t.Fatal(err)
 	}
 	out := b.String()
-	for _, want := range []string{"1. [x] Claude Code", "2. [ ] Codex CLI", "3. [x] Gemini CLI", "4. [ ] Cursor (not installed)", "(not yet proven)"} {
+	for _, want := range []string{"1. [x] Claude Code", "2. [ ] Codex CLI", "3. [x] Gemini CLI", "4. [ ] Cursor (not installed) (not yet proven)"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("list lacks %q:\n%s", want, out)
 		}

@@ -976,11 +976,11 @@ every command it will run and file it will write, and on your yes registers
 `--all-detected` for scripts, `--dry-run` to see the plan, `--uninstall` to
 remove exactly what it added; `corral doctor` shows each agent's state. Proven
 on Linux, 2026-10-25, by a headless prompt that loaded the skill and called
-`list_audit_findings`: **Claude Code, Codex CLI, Cursor, OpenCode, Antigravity
-and GitHub Copilot CLI** (Copilot loaded the skill only when the prompt named
-it). Setup also wires **Gemini CLI** and **VS Code**, labelled
-`(not yet proven)`: Gemini CLI's personal login was refused, and VS Code has no
-headless prompt. Per-agent commands, evidence and limits:
+`list_audit_findings`: **Claude Code, Codex CLI, Gemini CLI, Cursor, OpenCode,
+Antigravity and GitHub Copilot CLI** (Copilot loaded the skill only when the
+prompt named it; Gemini CLI ran on an API key, because Google now refuses its
+personal login). Setup also wires **VS Code**, labelled `(not yet proven)`: it
+has no headless prompt. Per-agent commands, evidence and limits:
 **[docs/corral/agent-setup.md](docs/corral/agent-setup.md)**.
 
 **Claude Code — or install it as a plugin.** Two commands, which install the

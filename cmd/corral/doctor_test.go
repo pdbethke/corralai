@@ -423,6 +423,7 @@ func TestDoctorAgentsLines(t *testing.T) {
 	reg.Installed, reg.Registered, reg.Command, reg.Skill = true, true, []string{"/opt/corral/corral", "mcp"}, "managed"
 	not := agentStatus("gemini_cli")
 	not.Installed, not.Skill = true, "absent"
+	not.Agent.Proven = false // the label follows the flag, whatever the table says today
 	unk := agentStatus("opencode")
 	unk.Installed, unk.Unknown, unk.Skill = true, "opencode mcp list failed:\nboom", "unmanaged"
 	plug := agentStatus("claude_code")

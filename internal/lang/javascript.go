@@ -203,11 +203,58 @@ func (jsPlugin) WorkspaceRunEnv() (env []string, cleanup func()) { return nil, f
 // V8 writes raw range data — megabytes for an ordinary project — so the
 // reduction runs IN NODE and only one line per file crosses to stdout. See
 // corralCoverageReport for why that boundary matters.
-const jsCoverageReduce = `const fs=require('fs'),path=require('path');
+//
+// LINE COUNTS FROM V8 RANGES. V8 reports, per function, a list of
+// [startOffset, endOffset) ranges with an execution count, where a nested
+// range overrides the one around it. The reducer reads the file from disk,
+// paints every source position with its innermost range's count, and then
+// counts lines: a line is EXECUTABLE if a non-blank character on it lies in a
+// measured function, and EXECUTED if one of those characters ran.
+//
+// "Measured function" is the named-function rule the boolean always used,
+// kept because the counts must agree with it (ParseCoverage is derived from
+// them). The unnamed top-level wrapper runs merely because something
+// REQUIRED the file, so counting its lines would mark every imported-but-unused
+// module as executed — measured directly on a fixture: a required, never-called
+// module reports its wrapper hot and every named function cold. So when a file
+// has named functions, only lines inside them are counted; a file with none (a
+// constants module, a side-effecting script) can only be judged by its
+// wrapper, and every line of it is counted.
+//
+// What the count is not: V8 gives positions, not statements, so a comment or a
+// lone brace inside a function body counts as a line. That is the same for
+// every unit run over a file, which is what the count is for — ranking units
+// against each other on one file — and it is why counts are never compared
+// across languages.
+//
+// A file whose ranges do not fit the source on disk (a runner that executes
+// TRANSFORMED code under the original file's URL, a file changed or deleted
+// since it ran) cannot be counted. It is DISCLOSED on a "# uncounted" line and
+// left out of the counts, never given a number. Ranges may run past the end
+// by an appended suffix — Node's TypeScript stripping keeps every position
+// and appends a sourceURL comment — so only a range that STARTS past the end
+// is a mismatch; ends are clamped. A transform that keeps the length close
+// enough to fit is not detectable here, and is the stated limit.
+//
+// Output is sorted by path so one run's report is byte-stable, which is what
+// lets the captured fixture reports be checked against a live run.
+const jsCoverageReduce = `const fs=require('fs'),path=require('path'),url=require('url');
 const dir=process.argv[2];
-const state=new Map();
+const lines=new Map(),uncounted=new Map(),sources=new Map();
 let files=[];
 try{files=fs.readdirSync(dir)}catch(e){}
+files.sort();
+function blank(c){return c===32||c===9||c===13||c===11||c===12||c===0xA0||c===0xFEFF}
+function source(p){
+  if(!sources.has(p)){
+    let s=null;
+    try{s=fs.readFileSync(p,'utf8')}catch(e){s=null}
+    // Node strips a byte-order mark before compiling, so V8's offsets start after it.
+    if(s!==null&&s.charCodeAt(0)===0xFEFF)s=s.slice(1);
+    sources.set(p,s);
+  }
+  return sources.get(p);
+}
 for(const f of files){
   if(!f.endsWith('.json'))continue;
   let j;
@@ -215,36 +262,58 @@ for(const f of files){
   for(const s of (j.result||[])){
     if(typeof s.url!=='string'||!s.url.startsWith('file://'))continue;
     let p;
-    try{p=require('url').fileURLToPath(s.url)}catch(e){continue}
-    // node_modules is a dependency, never a candidate for audit. Dropping it
-    // here keeps the report small; the parser would drop it later anyway only
-    // if it fell outside the repo root, which a vendored dep does not.
+    try{p=url.fileURLToPath(s.url)}catch(e){continue}
+    // node_modules is a dependency, never a candidate for audit.
     if(p.includes('/node_modules/'))continue;
-    const fns=s.functions||[];
-    // A NAMED function that ran is the signal. The unnamed top-level wrapper
-    // runs merely because something REQUIRED the file, so counting it would
-    // mark every imported-but-unused module as executed — measured directly
-    // on a fixture: a required, never-called module reports its wrapper hot
-    // and every named function cold. A file with no named functions at all
-    // (a constants module, a side-effecting script) can only be judged by
-    // its wrapper, so it falls back to that.
     // RELATIVE TO THE WORKING DIRECTORY — see the Ruby reducer for why an
     // absolute path is only ever right on one substrate. Outside cwd is a
     // dependency or the runtime, never a candidate.
     const rel=path.relative(process.cwd(),p);
     if(rel===''||rel==='..'||rel.startsWith('..'+path.sep)||path.isAbsolute(rel))continue;
-    p=rel.split(path.sep).join('/');
+    const key=rel.split(path.sep).join('/');
+    const fns=s.functions||[];
     const named=fns.filter(fn=>fn.functionName);
-    const hit=named.length
-      ? named.some(fn=>(fn.ranges||[]).some(r=>r.count>0))
-      : fns.some(fn=>(fn.ranges||[]).some(r=>r.count>0));
-    // Several processes (test workers) report the same file. Executed by ANY
-    // of them is executed; never downgrade a true to a false.
-    state.set(p,(state.get(p)||false)||hit);
+    const scope=named.length?named:fns;
+    const src=source(p);
+    if(src===null){uncounted.set(key,'the source could not be read');continue}
+    const n=src.length;
+    const all=[];
+    for(const fn of fns)for(const r of (fn.ranges||[]))all.push(r);
+    if(all.some(r=>!(r.startOffset>=0)||r.startOffset>n||!(r.endOffset>=r.startOffset))){
+      uncounted.set(key,'its coverage ranges do not fit the source on disk (transformed code, or a file changed since it ran)');
+      continue;
+    }
+    // Paint outer ranges first so an inner range overrides the one around it.
+    all.sort((a,b)=>a.startOffset-b.startOffset||b.endOffset-a.endOffset);
+    const hot=new Uint8Array(n),inScope=new Uint8Array(n);
+    for(const r of all){const e=Math.min(r.endOffset,n),v=r.count>0?1:0;for(let i=r.startOffset;i<e;i++)hot[i]=v}
+    for(const fn of scope)for(const r of (fn.ranges||[])){const e=Math.min(r.endOffset,n);for(let i=r.startOffset;i<e;i++)inScope[i]=1}
+    let st=lines.get(key);
+    if(!st){
+      let count=1;for(let i=0;i<n;i++)if(src.charCodeAt(i)===10)count++;
+      st={exe:new Uint8Array(count),ran:new Uint8Array(count)};
+      lines.set(key,st);
+    }
+    // Several processes (test workers) report the same file: a line executed
+    // by ANY of them is executed. Never downgrade a hit.
+    let ln=0;
+    for(let i=0;i<n;i++){
+      const c=src.charCodeAt(i);
+      if(c===10){ln++;continue}
+      if(blank(c)||!inScope[i])continue;
+      st.exe[ln]=1;
+      if(hot[i])st.ran[ln]=1;
+    }
   }
 }
-const out=['` + jsCoverageHeader + `'];
-for(const [p,hit] of state)out.push((hit?'1 ':'0 ')+p);
+const sum=a=>a.reduce((t,v)=>t+v,0);
+const out=['` + jsCoverageHeaderV2 + `'];
+const keys=[...new Set([...lines.keys(),...uncounted.keys()])].sort();
+for(const k of keys){
+  const st=lines.get(k);
+  if(st)out.push(sum(st.ran)+' '+sum(st.exe)+' '+k);
+  else out.push('# uncounted '+k+': '+uncounted.get(k));
+}
 process.stdout.write(out.join('\n')+'\n');
 `
 
@@ -267,10 +336,17 @@ func (jsPlugin) CoverageCmd(testCmd []string) (cmd []string, ok bool) {
 	return coverageRunAndReduce(setup, env, testCmd, `node "$d/corral_reduce.js" "$d/cov"`), true
 }
 
-// ParseCoverage reads the reduced report jsCoverageReduce writes. The grammar
-// and its tri-state are shared with Ruby — see corralCoverageReport.
-func (jsPlugin) ParseCoverage(stdout, modulePath string) (executed map[string]bool, err error) {
-	return corralCoverageReport(stdout, jsCoverageHeader, "javascript", modulePath)
+// ParseCoverage is derived from CoverageCounts: a file is executed when any
+// of its executable lines ran. The tri-state is CoverageCounts' own.
+func (p jsPlugin) ParseCoverage(stdout, modulePath string) (executed map[string]bool, err error) {
+	return executedFromCounts(p.CoverageCounts(stdout, modulePath))
+}
+
+// CoverageCounts reads the version-2 report jsCoverageReduce writes — see the
+// reducer for what an executable line is in V8's terms, and
+// corralCoverageCounts for the grammar.
+func (jsPlugin) CoverageCounts(stdout, modulePath string) (map[string]LineCounts, error) {
+	return corralCoverageCounts(stdout, jsCoverageHeaderV2, "javascript", modulePath)
 }
 
 // LineComment is the javascript line-comment marker.

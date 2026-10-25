@@ -3683,6 +3683,9 @@ func (f fakeReporter) CoverageCmd([]string) ([]string, bool) { return f.instrume
 func (f fakeReporter) ParseCoverage(string, string) (map[string]bool, error) {
 	return nil, nil
 }
+func (f fakeReporter) CoverageCounts(string, string) (map[string]lang.LineCounts, error) {
+	return nil, nil
+}
 
 // TestPickPreflightLanguageDifferentInstrumentationDeclinesAsAmbiguous: two
 // languages that accept the command but would run it DIFFERENTLY are a real

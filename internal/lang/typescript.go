@@ -215,6 +215,11 @@ func (tsPlugin) ParseCoverage(stdout, modulePath string) (executed map[string]bo
 	return jsPlugin{}.ParseCoverage(stdout, modulePath)
 }
 
+// CoverageCounts reads the same reduced report jsPlugin produces.
+func (tsPlugin) CoverageCounts(stdout, modulePath string) (map[string]LineCounts, error) {
+	return jsPlugin{}.CoverageCounts(stdout, modulePath)
+}
+
 // LineComment is the typescript line-comment marker.
 func (tsPlugin) LineComment() string { return "//" }
 

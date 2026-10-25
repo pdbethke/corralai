@@ -2,6 +2,8 @@
 
 package lang
 
+import "fmt"
+
 // CoverageReporter is implemented by plugins that can report, in ONE
 // instrumented suite run, which source files the suite actually executed.
 //
@@ -22,6 +24,28 @@ type CoverageReporter interface {
 	// modulePath is the language's path prefix to strip ("" when unused).
 	// Pure. An unparseable report is an ERROR, never an empty map.
 	ParseCoverage(stdout, modulePath string) (executed map[string]bool, err error)
+
+	// CoverageCounts reads the same report as per-file LINE COUNTS: how
+	// many of the file's executable lines the run executed, out of how many
+	// it measured. It keeps ParseCoverage's tri-state — present with
+	// Executed>0 is executed, present with Executed==0 is measured and never
+	// run, ABSENT is never measured — and ParseCoverage is derived from it
+	// (executed[p] = counts[p].Executed > 0), which
+	// TestParseCoverageAgreesWithCoverageCounts holds. An unparseable report
+	// is an ERROR. A reporter that cannot count yet returns an error saying
+	// so, never a made-up count.
+	//
+	// The counts exist so evidence can name the test unit that executed
+	// MOST of a file, which a boolean cannot rank.
+	CoverageCounts(stdout, modulePath string) (map[string]LineCounts, error)
+}
+
+// LineCounts is one file's line coverage from one report: Executed of its
+// Executable lines ran. What counts as an executable line is each
+// instrument's own answer (see each reporter's CoverageCounts), so counts
+// rank units within one language and are never compared across languages.
+type LineCounts struct {
+	Executed, Executable int
 }
 
 // goPlugin implements CoverageReporter; verified against corral's own suite
@@ -54,3 +78,23 @@ var _ CoverageReporter = tsPlugin{}
 // EXTENSION — see phpPlugin.CoverageCmd for why that is disclosed rather than
 // worked around.
 var _ CoverageReporter = phpPlugin{}
+
+// executedFromCounts is ParseCoverage derived from CoverageCounts, the one
+// place the rule lives: a file is executed when any of its lines ran, and the
+// key set — the tri-state's third state — is carried over unchanged.
+func executedFromCounts(counts map[string]LineCounts, err error) (map[string]bool, error) {
+	if err != nil {
+		return nil, err
+	}
+	executed := make(map[string]bool, len(counts))
+	for p, c := range counts {
+		executed[p] = c.Executed > 0
+	}
+	return executed, nil
+}
+
+// errCountsNotYetReported is what a reporter returns from CoverageCounts until
+// its reducer reports line counts: a stated gap, never a made-up count.
+func errCountsNotYetReported(langName string) error {
+	return fmt.Errorf("%s: line counts not yet reported", langName)
+}

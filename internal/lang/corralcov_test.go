@@ -4,6 +4,8 @@ package lang
 
 import (
 	"bytes"
+	"maps"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
@@ -228,29 +230,10 @@ func TestCoverageReporterAgainstRealSuites(t *testing.T) {
 			}
 			p, _ := ByName(tc.lang)
 			r := p.(CoverageReporter)
-			cmd, ok := r.CoverageCmd(tc.testCmd)
-			if !ok {
-				t.Fatalf("CoverageCmd refused %v", tc.testCmd)
-			}
-			root, err := filepath.Abs(filepath.Join("testdata", "coverage", tc.dir))
+			stdout, root, stderr, runErr := runCoverageFixture(t, tc.lang, tc.dir, tc.testCmd)
+			got, err := r.ParseCoverage(stdout, root)
 			if err != nil {
-				t.Fatal(err)
-			}
-			c := exec.Command(cmd[0], cmd[1:]...)
-			c.Dir = root
-			// STDERR IS CAPTURED, and separately from stdout. The instrumented
-			// command deliberately pushes the suite's own output to stderr so
-			// stdout carries only the report — which means every reason a run
-			// could fail lives in the half a bare .Output() throws away. A
-			// failure that reports "the report was empty" without the
-			// interpreter's error costs a full CI round trip to learn nothing.
-			var stderr bytes.Buffer
-			c.Stderr = &stderr
-			stdout, runErr := c.Output()
-
-			got, err := r.ParseCoverage(string(stdout), root)
-			if err != nil {
-				t.Fatalf("ParseCoverage: %v\nrun error: %v\nstdout:\n%s\nSTDERR:\n%s", err, runErr, stdout, stderr.String())
+				t.Fatalf("ParseCoverage: %v\nrun error: %v\nstdout:\n%s\nSTDERR:\n%s", err, runErr, stdout, stderr)
 			}
 			for _, f := range tc.wantExecuted {
 				if v, ok := got[f]; !ok || !v {
@@ -516,5 +499,210 @@ func TestCoverageClaimsMatchTheListsTheyReplaced(t *testing.T) {
 		if !slices.Equal(got, want) {
 			t.Errorf("%s claims %q, want %q", lang, got, want)
 		}
+	}
+}
+
+// THE V2 GRAMMAR CARRIES LINE COUNTS: `<executed> <executable> <path>`. A
+// path outside the root is dropped exactly as v1 drops it, and the tri-state
+// survives: a present entry with Executed==0 is measured-and-never-run.
+func TestCorralCoverageCountsParsesV2(t *testing.T) {
+	got, err := corralCoverageCounts("corral-js-coverage: v2\n3 10 /r/a.js\n0 4 /r/b.js\n", jsCoverageHeaderV2, "javascript", "/r")
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	want := map[string]LineCounts{"a.js": {Executed: 3, Executable: 10}, "b.js": {Executed: 0, Executable: 4}}
+	if !maps.Equal(got, want) {
+		t.Errorf("got %v, want %v", got, want)
+	}
+}
+
+// A STALE REDUCER IS AN ERROR, NOT A HALF-READ. A v1 body has no counts; read
+// as v2 it would either fail line by line or, worse, be guessed at. The error
+// names the header it wanted so the mismatch is legible.
+func TestCorralCoverageCountsRefusesV1(t *testing.T) {
+	for _, tc := range []struct{ name, in, header string }{
+		{"js v1", jsCoverageHeader + "\n1 /r/a.js\n0 /r/b.js\n", jsCoverageHeaderV2},
+		{"ruby v1", rubyCoverageHeader + "\n1 /r/a.rb\n", rubyCoverageHeaderV2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := corralCoverageCounts(tc.in, tc.header, "x", "/r")
+			if err == nil {
+				t.Fatalf("want an error, got %v", got)
+			}
+			if got != nil {
+				t.Errorf("an error must return a NIL map: %v", got)
+			}
+			if !strings.Contains(err.Error(), tc.header) {
+				t.Errorf("the error must name the header it wanted (%q), got: %v", tc.header, err)
+			}
+		})
+	}
+}
+
+// Every malformed v2 shape is an error with a nil map, never a partial one.
+func TestCorralCoverageCountsRefusesGarbage(t *testing.T) {
+	h := jsCoverageHeaderV2
+	for _, tc := range []struct{ name, in string }{
+		{"empty", ""},
+		{"no header", "1 2 /r/a.js"},
+		{"header but no entries", h},
+		{"only disclosures", h + "\n# uncounted lib/a.js: the source could not be read"},
+		{"v1 line under a v2 header", h + "\n1 /r/a.js"},
+		{"non-numeric executed", h + "\nx 2 /r/a.js"},
+		{"non-numeric executable", h + "\n1 y /r/a.js"},
+		{"negative count", h + "\n-1 2 /r/a.js"},
+		{"executed exceeds executable", h + "\n5 2 /r/a.js"},
+		{"missing path", h + "\n1 2"},
+		{"all outside root", h + "\n1 2 /usr/lib/node/x.js"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := corralCoverageCounts(tc.in, h, "javascript", "/r")
+			if err == nil {
+				t.Fatalf("want an error, got %v", got)
+			}
+			if got != nil {
+				t.Errorf("an error must return a NIL map: %v", got)
+			}
+		})
+	}
+}
+
+// Several processes report one file: the larger count of each kind wins, so a
+// run that executed it is never downgraded by one that only loaded it, and no
+// count is invented by adding lines that may be the same lines.
+func TestCorralCoverageCountsNeverDowngradesAHit(t *testing.T) {
+	for _, order := range []string{"2 5 /r/a.js\n0 5 /r/a.js", "0 5 /r/a.js\n2 5 /r/a.js"} {
+		got, err := corralCoverageCounts(jsCoverageHeaderV2+"\n"+order, jsCoverageHeaderV2, "javascript", "/r")
+		if err != nil {
+			t.Fatalf("parse: %v", err)
+		}
+		if got["a.js"] != (LineCounts{Executed: 2, Executable: 5}) {
+			t.Errorf("order %q: got %v, want {2 5}", strings.ReplaceAll(order, "\n", " | "), got["a.js"])
+		}
+	}
+}
+
+// coverageCountsPending is THE ONE LIST of reporters whose CoverageCounts is
+// not built yet: each returns "<lang>: line counts not yet reported", so
+// nothing reads a fake count. Tasks 2–3 of the evidence-pairing plan remove a
+// name here when its reporter gains counts.
+var coverageCountsPending = []string{"go", "python", "ruby", "php"}
+
+// capturedCoverageReport names, per language, the report a REAL run of the
+// fixture suite produced, and the command that produced it. The file is
+// written only by TestCapturedCoverageReportsMatchALiveRun with
+// CORRALAI_RECAPTURE_COVERAGE=1 — never by hand.
+var capturedCoverageReport = map[string]struct {
+	dir, report, tool string
+	testCmd           []string
+}{
+	"javascript": {dir: "js", report: "js-report.txt", tool: "node", testCmd: []string{"node", "--test"}},
+	"typescript": {dir: "ts", report: "ts-report.txt", tool: "node", testCmd: []string{"node", "--test"}},
+}
+
+// runCoverageFixture runs lang's CoverageCmd over the fixture suite in
+// testdata/coverage/<dir> and returns its stdout (the report) and the
+// fixture's absolute root. STDERR is captured separately and shown on failure:
+// the instrumented command pushes the suite's own output there, so every
+// reason a run could fail lives in the half a bare .Output() throws away.
+func runCoverageFixture(t *testing.T, langName, dir string, testCmd []string) (stdout, root string, stderr string, runErr error) {
+	t.Helper()
+	p, _ := ByName(langName)
+	r := p.(CoverageReporter)
+	cmd, ok := r.CoverageCmd(testCmd)
+	if !ok {
+		t.Fatalf("CoverageCmd refused %v", testCmd)
+	}
+	root, err := filepath.Abs(filepath.Join("testdata", "coverage", dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := exec.Command(cmd[0], cmd[1:]...)
+	c.Dir = root
+	var errBuf bytes.Buffer
+	c.Stderr = &errBuf
+	out, runErr := c.Output()
+	return string(out), root, errBuf.String(), runErr
+}
+
+// THE CAPTURED REPORTS ARE WHAT A LIVE RUN PRINTS, byte for byte. This is
+// what keeps them from being hand-edited or going stale when the reducer
+// changes: with the runtime installed, any drift fails here. Set
+// CORRALAI_RECAPTURE_COVERAGE=1 to rewrite them from a real run.
+func TestCapturedCoverageReportsMatchALiveRun(t *testing.T) {
+	for _, langName := range slices.Sorted(maps.Keys(capturedCoverageReport)) {
+		fx := capturedCoverageReport[langName]
+		t.Run(langName, func(t *testing.T) {
+			if _, err := exec.LookPath(fx.tool); err != nil {
+				t.Skipf("%s not installed — the live half of this check needs the real runtime", fx.tool)
+			}
+			stdout, _, stderr, runErr := runCoverageFixture(t, langName, fx.dir, fx.testCmd)
+			path := filepath.Join("testdata", "coverage", fx.report)
+			if os.Getenv("CORRALAI_RECAPTURE_COVERAGE") == "1" {
+				if err := os.WriteFile(path, []byte(stdout), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				t.Logf("recaptured %s (run error: %v)", path, runErr)
+				return
+			}
+			want, err := os.ReadFile(path) // #nosec G304 -- a fixed testdata path
+			if err != nil {
+				t.Fatal(err)
+			}
+			if stdout != string(want) {
+				t.Errorf("a live run no longer prints the captured %s.\nlive:\n%s\ncaptured:\n%s\nrun error: %v\nSTDERR:\n%s\n"+
+					"If the reducer changed on purpose, recapture with CORRALAI_RECAPTURE_COVERAGE=1.", path, stdout, want, runErr, stderr)
+			}
+		})
+	}
+}
+
+// PARSECOVERAGE IS DERIVED FROM COVERAGECOUNTS, and this holds it there: over
+// each language's real captured report, a file is executed exactly when it
+// has an executed line, and both maps name the same files. A reporter in
+// coverageCountsPending is skipped by name; any other reporter must have a
+// captured report, so a new one cannot skip this by omission.
+func TestParseCoverageAgreesWithCoverageCounts(t *testing.T) {
+	for name, p := range registry {
+		r, ok := p.(CoverageReporter)
+		if !ok {
+			continue
+		}
+		t.Run(name, func(t *testing.T) {
+			if slices.Contains(coverageCountsPending, name) {
+				if _, err := r.CoverageCounts("", ""); err == nil || !strings.Contains(err.Error(), "line counts not yet reported") {
+					t.Fatalf("%s is listed as pending but CoverageCounts did not say so: %v", name, err)
+				}
+				t.Skipf("%s: line counts not yet reported (coverageCountsPending)", name)
+			}
+			fx, ok := capturedCoverageReport[name]
+			if !ok {
+				t.Fatalf("%s reports line counts but has no captured report in capturedCoverageReport", name)
+			}
+			raw, err := os.ReadFile(filepath.Join("testdata", "coverage", fx.report)) // #nosec G304 -- a fixed testdata path
+			if err != nil {
+				t.Fatal(err)
+			}
+			root, err := filepath.Abs(filepath.Join("testdata", "coverage", fx.dir))
+			if err != nil {
+				t.Fatal(err)
+			}
+			executed, err := r.ParseCoverage(string(raw), root)
+			if err != nil {
+				t.Fatalf("ParseCoverage: %v", err)
+			}
+			counts, err := r.CoverageCounts(string(raw), root)
+			if err != nil {
+				t.Fatalf("CoverageCounts: %v", err)
+			}
+			if !slices.Equal(slices.Sorted(maps.Keys(executed)), slices.Sorted(maps.Keys(counts))) {
+				t.Fatalf("key sets differ: ParseCoverage %v, CoverageCounts %v", executed, counts)
+			}
+			for f, c := range counts {
+				if executed[f] != (c.Executed > 0) {
+					t.Errorf("%s: ParseCoverage says %v, counts say %+v", f, executed[f], c)
+				}
+			}
+		})
 	}
 }

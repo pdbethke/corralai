@@ -343,3 +343,9 @@ func (rubyPlugin) LineComment() string { return "#" }
 
 // DependencyDirs is Bundler's local install directory.
 func (rubyPlugin) DependencyDirs() []DepDir { return []DepDir{{Name: ".bundle"}} }
+
+// CoverageCounts is not built for ruby yet (evidence-pairing plan, Tasks 2–3):
+// it says so rather than report a count it does not have.
+func (rubyPlugin) CoverageCounts(string, string) (map[string]LineCounts, error) {
+	return nil, errCountsNotYetReported("ruby")
+}

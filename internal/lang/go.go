@@ -579,3 +579,9 @@ func (goPlugin) Vendor(repoDir string) (VendorStep, bool) {
 // module vendor dir first, and Composer's PHP dependency tree lands at the
 // exact same repo-relative name (see the php plugin).
 func (goPlugin) DependencyDirs() []DepDir { return []DepDir{{Name: "vendor"}} }
+
+// CoverageCounts is not built for go yet (evidence-pairing plan, Tasks 2–3):
+// it says so rather than report a count it does not have.
+func (goPlugin) CoverageCounts(string, string) (map[string]LineCounts, error) {
+	return nil, errCountsNotYetReported("go")
+}

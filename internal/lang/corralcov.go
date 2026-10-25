@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -25,18 +26,35 @@ import (
 // pre-flight is most useful for. What crosses the boundary is one line per
 // file.
 //
-// The grammar:
+// The grammar, version 1 (Ruby and PHP until they report counts):
 //
 //	<header>            a language-specific magic line, e.g. corral-ruby-coverage: v1
 //	1 /abs/path/to/file executed
 //	0 /abs/path/to/file measured, and never executed
 //
+// Version 2 carries LINE COUNTS, so evidence can rank which test unit ran
+// most of a file (a boolean cannot):
+//
+//	<header>                 e.g. corral-js-coverage: v2
+//	<executed> <executable> <path>
+//	# <disclosure>           a file the reducer measured and could not count, and why
+//
 // A file that was never measured emits NO LINE AT ALL. That absence is the
-// third state and it carries real weight — see corralCoverageReport.
+// third state and it carries real weight — see corralCoverageReport. A v2
+// disclosure line leaves its file absent too: a count the instrument could
+// not give is not measured, and writing one in would be inventing it.
+//
+// The version is in the header, and each parser accepts only its own, so a
+// stale reducer is refused rather than half-read.
 const (
 	rubyCoverageHeader = "corral-ruby-coverage: v1"
 	jsCoverageHeader   = "corral-js-coverage: v1"
 	// phpCoverageHeader is declared in php.go, beside the script that writes it.
+
+	// The v2 headers sit beside v1 while Ruby moves over (evidence-pairing
+	// plan, Task 3, deletes the v1 constants and corralCoverageReport).
+	rubyCoverageHeaderV2 = "corral-ruby-coverage: v2"
+	jsCoverageHeaderV2   = "corral-js-coverage: v2"
 )
 
 // corralCoverageReport parses the reduced report into CoverageReporter's
@@ -57,32 +75,14 @@ const (
 // covered nothing", which is a repo-wide accusation manufactured out of a
 // failure to measure.
 func corralCoverageReport(stdout, header, langName, modulePath string) (executed map[string]bool, err error) {
-	trimmed := strings.TrimSpace(stdout)
-	if trimmed == "" {
-		return nil, fmt.Errorf("lang: %s coverage report is empty — the instrumented run produced nothing, which is a failure to measure, not a measurement of nothing", langName)
+	body, err := corralReportBody(stdout, header, langName)
+	if err != nil {
+		return nil, err
 	}
-	lines := strings.Split(trimmed, "\n")
-	hdr := -1
-	for i, ln := range lines {
-		if strings.TrimSpace(ln) == header {
-			hdr = i
-			break
-		}
-	}
-	if hdr < 0 {
-		return nil, fmt.Errorf("lang: unparseable %s coverage report: no %q header (got %d line(s), starting %q)",
-			langName, header, len(lines), firstLineExcerpt(trimmed))
-	}
-
-	root := modulePath
-	if root != "" {
-		if abs, absErr := filepath.Abs(root); absErr == nil {
-			root = abs
-		}
-	}
+	root := corralReportRoot(modulePath)
 	executed = make(map[string]bool)
 	parsed := 0
-	for _, ln := range lines[hdr+1:] {
+	for _, ln := range body {
 		ln = strings.TrimSpace(ln)
 		if ln == "" {
 			continue
@@ -92,35 +92,10 @@ func corralCoverageReport(stdout, header, langName, modulePath string) (executed
 			return nil, fmt.Errorf("lang: unparseable %s coverage report line %q (want `0 <path>` or `1 <path>`)", langName, ln)
 		}
 		parsed++
-		rel := path
-		// A RELATIVE PATH IS ALREADY REPO-RELATIVE and is taken as it is —
-		// the reducers emit cwd-relative paths precisely so that no
-		// substrate needs to know a root. Only an absolute path is aligned.
-		// (alignPyPath draws the same line for coverage.py's output.)
-		if !filepath.IsAbs(path) {
-			clean := filepath.ToSlash(filepath.Clean(path))
-			if clean == "." || clean == ".." || strings.HasPrefix(clean, "../") {
-				continue
-			}
-			if hit == "1" {
-				executed[clean] = true
-			} else if _, already := executed[clean]; !already {
-				executed[clean] = false
-			}
+		rel, ok := corralRepoPath(path, root)
+		if !ok {
 			continue
 		}
-		if root != "" {
-			r, relErr := filepath.Rel(root, path)
-			// Outside the repo root is a gem, a stdlib file, or something
-			// in node_modules. Not a candidate for audit, so it must not
-			// appear in the map at all rather than as an entry a caller
-			// could report on.
-			if relErr != nil || r == ".." || strings.HasPrefix(r, ".."+string(filepath.Separator)) {
-				continue
-			}
-			rel = r
-		}
-		rel = filepath.ToSlash(rel)
 		// A file reported more than once (several test processes, several
 		// workers) is executed if ANY run executed it. Never downgrade a
 		// true to a false.
@@ -130,23 +105,166 @@ func corralCoverageReport(stdout, header, langName, modulePath string) (executed
 			executed[rel] = false
 		}
 	}
-	if parsed == 0 {
-		return nil, fmt.Errorf("lang: %s coverage report has a header but no file entries — the suite most likely never loaded an application file (a collection or import error), not a genuinely-empty result", langName)
-	}
-	// KEPT, not merely PARSED. The out-of-root filter above runs AFTER a line
-	// is counted, so a report consisting entirely of gems, stdlib or
-	// node_modules used to satisfy the "has entries" check and then return an
-	// EMPTY map with no error — which the caller reads as Ran=true and reports
-	// as a repo-wide "0 files executed". That is a claim about the repository
-	// manufactured out of a run that measured nothing in it.
-	//
-	// It is a real shape, not a hypothetical: it is what every non-Go language
-	// produced whenever the caller passed an empty root, and it is what a
-	// wrongly-rooted run produces now.
-	if len(executed) == 0 {
-		return nil, fmt.Errorf("lang: %s coverage report measured %d file(s), but NONE of them are under the repo root %q — every path was outside it (a dependency, the stdlib, or a wrong root). That is a failure to measure this repository, not a measurement that it is uncovered", langName, parsed, modulePath)
+	if err := corralReportKept(langName, modulePath, parsed, len(executed), nil); err != nil {
+		return nil, err
 	}
 	return executed, nil
+}
+
+// corralCoverageCounts parses a version-2 reduced report into per-file line
+// counts. It keeps every rule corralCoverageReport keeps — the header, the
+// tri-state, the out-of-root drop, the refusal of a report that kept nothing
+// — and adds one: executed can never exceed executable, since a report that
+// says so is not a measurement of anything.
+//
+// A file reported by several processes keeps the LARGER count of each kind.
+// That can under-count a file two processes ran different halves of, and
+// never over-counts it: lines are not identified in the report, so adding the
+// counts could count the same line twice, and an invented line is the error
+// this format must not make. Reducers that see lines (the JavaScript one)
+// merge processes before they print, so for them this never arises.
+func corralCoverageCounts(stdout, header, langName, modulePath string) (map[string]LineCounts, error) {
+	body, err := corralReportBody(stdout, header, langName)
+	if err != nil {
+		return nil, err
+	}
+	root := corralReportRoot(modulePath)
+	counts := make(map[string]LineCounts)
+	parsed := 0
+	var disclosed []string
+	for _, ln := range body {
+		ln = strings.TrimSpace(ln)
+		if ln == "" {
+			continue
+		}
+		if strings.HasPrefix(ln, "#") {
+			disclosed = append(disclosed, strings.TrimSpace(strings.TrimPrefix(ln, "#")))
+			continue
+		}
+		c, path, ok := parseCountsLine(ln)
+		if !ok {
+			return nil, fmt.Errorf("lang: unparseable %s coverage report line %q (want `<executed> <executable> <path>`, executed <= executable)", langName, ln)
+		}
+		parsed++
+		rel, ok := corralRepoPath(path, root)
+		if !ok {
+			continue
+		}
+		prev := counts[rel]
+		counts[rel] = LineCounts{Executed: max(prev.Executed, c.Executed), Executable: max(prev.Executable, c.Executable)}
+	}
+	if err := corralReportKept(langName, modulePath, parsed, len(counts), disclosed); err != nil {
+		return nil, err
+	}
+	return counts, nil
+}
+
+// parseCountsLine reads `<executed> <executable> <path>`. The path is the
+// rest of the line, so a path with a space in it survives.
+func parseCountsLine(ln string) (LineCounts, string, bool) {
+	exe, rest, found := strings.Cut(ln, " ")
+	if !found {
+		return LineCounts{}, "", false
+	}
+	tot, path, found := strings.Cut(rest, " ")
+	if !found || strings.TrimSpace(path) == "" {
+		return LineCounts{}, "", false
+	}
+	e, err1 := strconv.Atoi(exe)
+	n, err2 := strconv.Atoi(tot)
+	if err1 != nil || err2 != nil || e < 0 || n < 0 || e > n {
+		return LineCounts{}, "", false
+	}
+	return LineCounts{Executed: e, Executable: n}, path, true
+}
+
+// corralReportBody returns the lines after the report's header, or the error
+// that says why there is no report: empty output, or no header of this
+// version. A header of ANOTHER version is named as such — that is a stale
+// reducer, and saying so is cheaper than letting someone diff two scripts.
+func corralReportBody(stdout, header, langName string) ([]string, error) {
+	trimmed := strings.TrimSpace(stdout)
+	if trimmed == "" {
+		return nil, fmt.Errorf("lang: %s coverage report is empty — the instrumented run produced nothing, which is a failure to measure, not a measurement of nothing", langName)
+	}
+	lines := strings.Split(trimmed, "\n")
+	family, _, _ := strings.Cut(header, ": ")
+	for i, ln := range lines {
+		ln = strings.TrimSpace(ln)
+		if ln == header {
+			return lines[i+1:], nil
+		}
+		if strings.HasPrefix(ln, family+": ") {
+			return nil, fmt.Errorf("lang: %s coverage report has header %q, want %q — the reducer that wrote it is a different version from the parser reading it", langName, ln, header)
+		}
+	}
+	return nil, fmt.Errorf("lang: unparseable %s coverage report: no %q header (got %d line(s), starting %q)",
+		langName, header, len(lines), firstLineExcerpt(trimmed))
+}
+
+// corralReportRoot is modulePath made absolute, so reported absolute paths
+// can be aligned to it ("" stays "": no root, no alignment).
+func corralReportRoot(modulePath string) string {
+	if modulePath == "" {
+		return ""
+	}
+	if abs, err := filepath.Abs(modulePath); err == nil {
+		return abs
+	}
+	return modulePath
+}
+
+// corralRepoPath aligns one reported path to a repo-relative, slash-separated
+// key. ok=false drops the entry entirely: outside the root is a gem, a stdlib
+// file, or something in node_modules — not a candidate for audit, so it must
+// not appear in the map as an entry a caller could report on.
+func corralRepoPath(path, root string) (string, bool) {
+	// A RELATIVE PATH IS ALREADY REPO-RELATIVE and is taken as it is — the
+	// reducers emit cwd-relative paths precisely so that no substrate needs
+	// to know a root. Only an absolute path is aligned. (alignPyPath draws
+	// the same line for coverage.py's output.)
+	if !filepath.IsAbs(path) {
+		clean := filepath.ToSlash(filepath.Clean(path))
+		if clean == "." || clean == ".." || strings.HasPrefix(clean, "../") {
+			return "", false
+		}
+		return clean, true
+	}
+	rel := path
+	if root != "" {
+		r, err := filepath.Rel(root, path)
+		if err != nil || r == ".." || strings.HasPrefix(r, ".."+string(filepath.Separator)) {
+			return "", false
+		}
+		rel = r
+	}
+	return filepath.ToSlash(rel), true
+}
+
+// corralReportKept refuses a report that parsed no entries, or kept none.
+//
+// KEPT, not merely PARSED. The out-of-root filter runs AFTER a line is
+// counted, so a report consisting entirely of gems, stdlib or node_modules
+// used to satisfy the "has entries" check and then return an EMPTY map with
+// no error — which the caller reads as Ran=true and reports as a repo-wide "0
+// files executed". That is a claim about the repository manufactured out of a
+// run that measured nothing in it.
+//
+// It is a real shape, not a hypothetical: it is what every non-Go language
+// produced whenever the caller passed an empty root, and it is what a
+// wrongly-rooted run produces now.
+func corralReportKept(langName, modulePath string, parsed, kept int, disclosed []string) error {
+	if parsed == 0 {
+		why := ""
+		if len(disclosed) > 0 {
+			why = fmt.Sprintf(" (the reducer disclosed %d file(s) it could not count: %s)", len(disclosed), strings.Join(disclosed, "; "))
+		}
+		return fmt.Errorf("lang: %s coverage report has a header but no file entries — the suite most likely never loaded an application file (a collection or import error), not a genuinely-empty result%s", langName, why)
+	}
+	if kept == 0 {
+		return fmt.Errorf("lang: %s coverage report measured %d file(s), but NONE of them are under the repo root %q — every path was outside it (a dependency, the stdlib, or a wrong root). That is a failure to measure this repository, not a measurement that it is uncovered", langName, parsed, modulePath)
+	}
+	return nil
 }
 
 // firstLineExcerpt returns a short single-line excerpt for error messages.

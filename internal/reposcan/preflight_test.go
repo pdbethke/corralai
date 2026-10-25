@@ -64,6 +64,12 @@ func (p covPlugin) ParseCoverage(stdout, modulePath string) (map[string]bool, er
 	return p.parseFn(stdout, modulePath)
 }
 
+// CoverageCounts is never read by Preflight, which reads ParseCoverage; it
+// exists only to satisfy the interface, and says so if anything calls it.
+func (p covPlugin) CoverageCounts(string, string) (map[string]lang.LineCounts, error) {
+	return nil, errors.New("covPlugin: CoverageCounts is not part of what Preflight reads")
+}
+
 var _ lang.CoverageReporter = covPlugin{}
 
 func TestPreflight_HappyPath(t *testing.T) {

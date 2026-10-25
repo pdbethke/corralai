@@ -3,6 +3,10 @@
 package lang
 
 import (
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -98,5 +102,135 @@ func TestJavaScriptCandidatesOrder(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// THE COUNTS COME FROM A REAL V8 RUN, not a hand-written report: the captured
+// report is what TestCapturedCoverageReportsMatchALiveRun checks against a
+// live run. The fixture's negative control is dead.{js,ts}: required by the
+// suite and never called, so its module wrapper ran and none of its named
+// functions did. It must read as measured (Executable>0) and never executed
+// (Executed==0) — counting the wrapper's lines would call mere loading
+// execution, the defect named-function coverage exists to avoid.
+func TestJSCoverageCountsFromRealV8Output(t *testing.T) {
+	for _, tc := range []struct{ lang, ext string }{{"javascript", "js"}, {"typescript", "ts"}} {
+		t.Run(tc.lang, func(t *testing.T) {
+			fx := capturedCoverageReport[tc.lang]
+			raw, err := os.ReadFile(filepath.Join("testdata", "coverage", fx.report)) // #nosec G304 -- a fixed testdata path
+			if err != nil {
+				t.Fatal(err)
+			}
+			root, err := filepath.Abs(filepath.Join("testdata", "coverage", fx.dir))
+			if err != nil {
+				t.Fatal(err)
+			}
+			p, _ := ByName(tc.lang)
+			got, err := p.(CoverageReporter).CoverageCounts(string(raw), root)
+			if err != nil {
+				t.Fatalf("CoverageCounts: %v", err)
+			}
+			calc, dead := "lib/calc."+tc.ext, "lib/dead."+tc.ext
+			if c, ok := got[calc]; !ok || c.Executed == 0 || c.Executed > c.Executable {
+				t.Errorf("%s is called by the suite: want 0 < Executed <= Executable, got present=%v %+v", calc, ok, c)
+			}
+			// add ran and sub did not, so not every executable line executed.
+			if c := got[calc]; c.Executed >= c.Executable {
+				t.Errorf("%s: sub is never called, so Executed must be below Executable, got %+v", calc, c)
+			}
+			if c, ok := got[dead]; !ok || c.Executed != 0 || c.Executable == 0 {
+				t.Errorf("%s is required and never called: want Executed==0 && Executable>0, got present=%v %+v", dead, ok, c)
+			}
+			if _, ok := got["lib/unloaded."+tc.ext]; ok {
+				t.Errorf("lib/unloaded.%s is never loaded: want ABSENT", tc.ext)
+			}
+		})
+	}
+}
+
+// runJSReducer runs jsCoverageReduce over hand-built V8 coverage files, in a
+// temp project whose sources are given, and returns its report. The INPUT is
+// built by hand here so the two edge cases below can be reached at all; the
+// reducer that reads it is the shipped one, run by the real node.
+func runJSReducer(t *testing.T, sources map[string]string, v8 []string) string {
+	t.Helper()
+	if _, err := exec.LookPath("node"); err != nil {
+		t.Skip("node not installed — the reducer runs in node")
+	}
+	root := t.TempDir()
+	for rel, body := range sources {
+		p := filepath.Join(root, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cov := filepath.Join(root, "cov")
+	if err := os.Mkdir(cov, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	for i, body := range v8 {
+		body = strings.ReplaceAll(body, "ROOT", root)
+		if err := os.WriteFile(filepath.Join(cov, fmt.Sprintf("coverage-%d.json", i)), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	script := filepath.Join(t.TempDir(), "reduce.js")
+	if err := os.WriteFile(script, []byte(jsCoverageReduce), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c := exec.Command("node", script, cov) // #nosec G204 -- node and a temp script this test wrote
+	c.Dir = root
+	out, err := c.Output()
+	if err != nil {
+		t.Fatalf("reducer: %v", err)
+	}
+	return string(out)
+}
+
+// A FILE WHOSE RANGES DO NOT FIT ITS SOURCE IS DISCLOSED, NEVER COUNTED. A
+// runner that executes transformed code under the original file's URL hands
+// V8 offsets into code that is not on disk; mapping them onto the file would
+// produce a count of nothing in particular.
+func TestJSReducerDisclosesRangesThatDoNotFitTheSource(t *testing.T) {
+	out := runJSReducer(t,
+		map[string]string{"lib/a.js": "function a() { return 1; }\n", "lib/b.js": "function b() { return 2; }\n"},
+		[]string{`{"result":[
+		 {"url":"file://ROOT/lib/a.js","functions":[{"functionName":"","ranges":[{"startOffset":0,"endOffset":27,"count":1}]},{"functionName":"a","ranges":[{"startOffset":500,"endOffset":540,"count":1}]}]},
+		 {"url":"file://ROOT/lib/b.js","functions":[{"functionName":"","ranges":[{"startOffset":0,"endOffset":27,"count":1}]},{"functionName":"b","ranges":[{"startOffset":0,"endOffset":26,"count":1}]}]}]}`})
+	if !strings.Contains(out, "# uncounted lib/a.js:") {
+		t.Errorf("want lib/a.js disclosed as uncounted, got:\n%s", out)
+	}
+	got, err := corralCoverageCounts(out, jsCoverageHeaderV2, "javascript", "")
+	if err != nil {
+		t.Fatalf("parse: %v\n%s", err, out)
+	}
+	if _, ok := got["lib/a.js"]; ok {
+		t.Errorf("an uncounted file must be ABSENT, not given a count: %v", got)
+	}
+	if got["lib/b.js"] != (LineCounts{Executed: 1, Executable: 1}) {
+		t.Errorf("lib/b.js: want {1 1}, got %+v", got["lib/b.js"])
+	}
+}
+
+// Two processes that ran DIFFERENT functions of one file: the reducer sees
+// lines, so it unions them — both lines executed — rather than keeping the
+// larger of two counts the way the line-blind parser has to.
+func TestJSReducerUnionsLinesAcrossProcesses(t *testing.T) {
+	src := "function a() { return 1; }\nfunction b() { return 2; }\n"
+	proc := func(aCount, bCount int) string {
+		return fmt.Sprintf(`{"result":[{"url":"file://ROOT/lib/x.js","functions":[
+		 {"functionName":"","ranges":[{"startOffset":0,"endOffset":54,"count":1}]},
+		 {"functionName":"a","ranges":[{"startOffset":0,"endOffset":26,"count":%d}]},
+		 {"functionName":"b","ranges":[{"startOffset":27,"endOffset":53,"count":%d}]}]}]}`, aCount, bCount)
+	}
+	out := runJSReducer(t, map[string]string{"lib/x.js": src}, []string{proc(1, 0), proc(0, 1)})
+	got, err := corralCoverageCounts(out, jsCoverageHeaderV2, "javascript", "")
+	if err != nil {
+		t.Fatalf("parse: %v\n%s", err, out)
+	}
+	if got["lib/x.js"] != (LineCounts{Executed: 2, Executable: 2}) {
+		t.Errorf("want {2 2} (each process ran one of the two lines), got %+v\n%s", got["lib/x.js"], out)
 	}
 }

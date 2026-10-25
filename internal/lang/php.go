@@ -669,3 +669,9 @@ func (phpPlugin) LineComment() string { return "//" }
 func (phpPlugin) DependencyDirs() []DepDir {
 	return []DepDir{{Name: "vendor", CopyPerTree: []string{"autoload.php", "composer"}}}
 }
+
+// CoverageCounts is not built for php yet (evidence-pairing plan, Tasks 2–3):
+// it says so rather than report a count it does not have.
+func (phpPlugin) CoverageCounts(string, string) (map[string]LineCounts, error) {
+	return nil, errCountsNotYetReported("php")
+}

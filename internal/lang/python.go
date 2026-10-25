@@ -1984,3 +1984,9 @@ func (pyPlugin) DependencyDirs() []DepDir {
 		{Name: ".tox", RunWrites: true},
 	}
 }
+
+// CoverageCounts is not built for python yet (evidence-pairing plan, Tasks 2–3):
+// it says so rather than report a count it does not have.
+func (pyPlugin) CoverageCounts(string, string) (map[string]LineCounts, error) {
+	return nil, errCountsNotYetReported("python")
+}

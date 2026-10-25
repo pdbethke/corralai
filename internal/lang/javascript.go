@@ -228,13 +228,18 @@ func (jsPlugin) WorkspaceRunEnv() (env []string, cleanup func()) { return nil, f
 // across languages.
 //
 // A file whose ranges do not fit the source on disk (a runner that executes
-// TRANSFORMED code under the original file's URL, a file changed or deleted
-// since it ran) cannot be counted. It is DISCLOSED on a "# uncounted" line and
-// left out of the counts, never given a number. Ranges may run past the end
-// by an appended suffix — Node's TypeScript stripping keeps every position
-// and appends a sourceURL comment — so only a range that STARTS past the end
-// is a mismatch; ends are clamped. A transform that keeps the length close
-// enough to fit is not detectable here, and is the stated limit.
+// TRANSFORMED code under the original file's URL, as vitest does, or a file
+// changed or deleted since it ran) cannot be counted. It is DISCLOSED on a
+// "# uncounted <path>: <reason>" line and left out of the counts, never given
+// a number. The test is the SCRIPT-LEVEL range, which spans whatever text V8
+// compiled: it must equal the file's length on disk, or that length plus the
+// sourceURL comment Node's TypeScript stripping appends (stripping keeps
+// every position, so the file's own offsets stay true). A range that merely
+// starts inside the file proves nothing — shifted offsets of transformed code
+// usually do. Because ParseCoverage is derived from these counts, such a file
+// is ABSENT from Preflight's map too (never measured), rather than given a
+// boolean read off offsets into some other text. What remains undetectable is
+// a transform that preserves the file's exact length.
 //
 // Output is sorted by path so one run's report is byte-stable, which is what
 // lets the captured fixture reports be checked against a live run.
@@ -279,7 +284,21 @@ for(const f of files){
     const n=src.length;
     const all=[];
     for(const fn of fns)for(const r of (fn.ranges||[]))all.push(r);
-    if(all.some(r=>!(r.startOffset>=0)||r.startOffset>n||!(r.endOffset>=r.startOffset))){
+    // THE SCRIPT RANGE MUST SPAN THE FILE ON DISK, exactly: the length of
+    // the source, or that plus the sourceURL comment Node's TypeScript
+    // stripping appends. Anything else means V8 ran different text under
+    // this URL (a runner that transforms first), and its offsets mean
+    // nothing in this file even when they happen to land inside it.
+    let script=-1;
+    for(const fn of fns){const r=(fn.ranges||[])[0];if(r&&!fn.functionName&&r.startOffset===0&&r.endOffset>script)script=r.endOffset}
+    const stripped=/\.[cm]?ts$/.test(p)?n+('\n\n//# sourceURL='+s.url).length:-1;
+    if(script!==n&&script!==stripped){
+      uncounted.set(key,script<0
+        ?'V8 reported no script-level range for it'
+        :'V8 ran '+script+' characters under its URL and the file on disk has '+n+' (transformed code, or a file changed since it ran)');
+      continue;
+    }
+    if(all.some(r=>!(r.startOffset>=0)||r.startOffset>script||!(r.endOffset>=r.startOffset))){
       uncounted.set(key,'its coverage ranges do not fit the source on disk (transformed code, or a file changed since it ran)');
       continue;
     }

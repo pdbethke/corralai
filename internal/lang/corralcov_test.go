@@ -706,3 +706,28 @@ func TestParseCoverageAgreesWithCoverageCounts(t *testing.T) {
 		})
 	}
 }
+
+// A DISCLOSURE SURVIVES A REPORT THAT ALSO HAS COUNTS. CoverageCounts leaves
+// the uncounted file absent; UncountedCoverage is where its reason is read,
+// with the path normalised exactly as CoverageCounts normalises one.
+func TestUncountedCoverageKeepsDisclosuresBesideCounts(t *testing.T) {
+	report := jsCoverageHeaderV2 + "\n" +
+		"1 2 lib/a.js\n" +
+		"# uncounted ./lib/b.js: V8 ran 300 characters under its URL and the file on disk has 120\n" +
+		"0 3 lib/c.js\n"
+	counts, err := corralCoverageCounts(report, jsCoverageHeaderV2, "javascript", "")
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if want := map[string]LineCounts{"lib/a.js": {1, 2}, "lib/c.js": {0, 3}}; !maps.Equal(counts, want) {
+		t.Errorf("counts = %v, want %v", counts, want)
+	}
+	got := UncountedCoverage(report)
+	want := []string{"lib/b.js: V8 ran 300 characters under its URL and the file on disk has 120"}
+	if !slices.Equal(got, want) {
+		t.Errorf("UncountedCoverage = %q, want %q", got, want)
+	}
+	if extra := UncountedCoverage(jsCoverageHeaderV2 + "\n# uncounted ../outside.js: x\n1 1 lib/a.js\n"); len(extra) != 0 {
+		t.Errorf("a path escaping the repository must be dropped as CoverageCounts drops it, got %q", extra)
+	}
+}

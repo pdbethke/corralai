@@ -234,3 +234,47 @@ func TestJSReducerUnionsLinesAcrossProcesses(t *testing.T) {
 		t.Errorf("want {2 2} (each process ran one of the two lines), got %+v\n%s", got["lib/x.js"], out)
 	}
 }
+
+// A SCRIPT RANGE THAT IS NOT THE FILE ON DISK MEANS V8 RAN OTHER TEXT under
+// this URL — vitest runs transformed code, whose shifted offsets usually still
+// START inside the file, so a start-past-the-end check alone passes them and
+// counts lines of nothing in particular. Shorter or longer, the file is
+// disclosed and absent: from the counts, and from ParseCoverage (the boolean
+// Preflight reads), which is now "never measured" rather than a value read off
+// offsets into some other text.
+func TestJSReducerDisclosesAScriptRangeThatIsNotTheFile(t *testing.T) {
+	src := "function a() { return 1; }\n" // 27 characters
+	doc := func(scriptEnd int) string {
+		return fmt.Sprintf(`{"result":[
+		 {"url":"file://ROOT/lib/a.js","functions":[{"functionName":"","ranges":[{"startOffset":0,"endOffset":%d,"count":1}]},{"functionName":"a","ranges":[{"startOffset":0,"endOffset":20,"count":1}]}]},
+		 {"url":"file://ROOT/lib/ok.js","functions":[{"functionName":"","ranges":[{"startOffset":0,"endOffset":27,"count":1}]},{"functionName":"a","ranges":[{"startOffset":0,"endOffset":26,"count":1}]}]}]}`, scriptEnd)
+	}
+	for _, tc := range []struct {
+		name string
+		end  int
+	}{{"shorter", 20}, {"longer", 40}} {
+		t.Run(tc.name, func(t *testing.T) {
+			out := runJSReducer(t, map[string]string{"lib/a.js": src, "lib/ok.js": src}, []string{doc(tc.end)})
+			counts, err := corralCoverageCounts(out, jsCoverageHeaderV2, "javascript", "")
+			if err != nil {
+				t.Fatalf("parse: %v\n%s", err, out)
+			}
+			if _, ok := counts["lib/a.js"]; ok {
+				t.Errorf("lib/a.js must be uncounted, got %+v\n%s", counts["lib/a.js"], out)
+			}
+			if counts["lib/ok.js"] != (LineCounts{Executed: 1, Executable: 1}) {
+				t.Errorf("lib/ok.js (script range == file) must still count: %+v", counts["lib/ok.js"])
+			}
+			if u := UncountedCoverage(out); len(u) != 1 || !strings.HasPrefix(u[0], "lib/a.js: V8 ran ") {
+				t.Errorf("UncountedCoverage = %q, want one lib/a.js disclosure", u)
+			}
+			executed, err := jsPlugin{}.ParseCoverage(out, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, ok := executed["lib/a.js"]; ok {
+				t.Errorf("Preflight's boolean for lib/a.js must be ABSENT, got %v", executed["lib/a.js"])
+			}
+		})
+	}
+}

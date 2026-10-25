@@ -159,6 +159,41 @@ func corralCoverageCounts(stdout, header, langName, modulePath string) (map[stri
 	return counts, nil
 }
 
+// uncountedPrefix starts a v2 disclosure line: a file the reducer measured
+// and could not count, written as "# uncounted <path>: <reason>".
+const uncountedPrefix = "# uncounted "
+
+// UncountedCoverage returns each file a v2 report DISCLOSED as measured but
+// uncountable, as "<repo-relative path>: <reason>".
+//
+// CoverageCounts leaves such a file absent, which is the honest state for a
+// count, but absence alone would drop the reason on the floor whenever the
+// report also had counted entries — and "why is this file missing" is
+// exactly what an operator reading the scan line will ask. Pure; it reads the
+// same report CoverageCounts reads, and normalises paths the same way
+// (corralRepoPath; the reducers print cwd-relative paths, so no root is
+// needed, and a path that escapes the repository is dropped as it is there).
+func UncountedCoverage(stdout string) []string {
+	var out []string
+	for _, ln := range strings.Split(stdout, "\n") {
+		ln = strings.TrimSpace(ln)
+		rest, ok := strings.CutPrefix(ln, uncountedPrefix)
+		if !ok {
+			continue
+		}
+		path, reason, ok := strings.Cut(rest, ": ")
+		if !ok {
+			path, reason = rest, "no reason given"
+		}
+		rel, ok := corralRepoPath(strings.TrimSpace(path), "")
+		if !ok {
+			continue
+		}
+		out = append(out, rel+": "+strings.TrimSpace(reason))
+	}
+	return out
+}
+
 // parseCountsLine reads `<executed> <executable> <path>`. The path is the
 // rest of the line, so a path with a space in it survives.
 func parseCountsLine(ln string) (LineCounts, string, bool) {

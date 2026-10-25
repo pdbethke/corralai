@@ -82,25 +82,32 @@ func jestParseUnits(stdout string) []string {
 	return paths
 }
 
-// jestUnitCmd runs exactly one listed test file: argv with an ignore
-// pattern that ignores every path but <rootDir>/unit. It narrows the set
-// argv collects rather than adding to it, so the operator's own path
-// patterns and flags all stay as they are.
+// jestUnitCmd runs exactly one listed test file: argv, without its shard
+// (the listing applied it), with --runTestsByPath and the unit, and an
+// ignore pattern that ignores every path not ending in /unit.
 //
-// Not `--runTestsByPath <file>`: that treats EVERY path argument as exact,
-// so a test file the operator named on the command line runs beside the unit
-// (measured on jest 30.5.2: `jest b.jest.test.js --runTestsByPath
-// a.jest.test.js` ran both files' three tests). A pattern on the CLI replaces
-// the configured testPathIgnorePatterns, so the pattern is anchored at
-// <rootDir> and matches the listed file alone: an unanchored suffix would
-// also reach a file the configured patterns ignored. When the configured
-// rootDir is not the working directory the unit is named from, nothing
-// matches and jest exits non-zero ("No tests found"), a failed unit, never a
-// different one. jest substitutes <rootDir> unescaped, so a root holding a
-// regular-expression character widens nothing it would not already match.
+// --runTestsByPath reads the unit as an exact path from the working
+// directory, which is what the unit is named from, so a unit cannot match
+// nothing: not under a configured rootDir elsewhere, not under `projects`,
+// each with its own rootDir (measured on jest 30.5.2: a pattern anchored at
+// <rootDir> matched nothing under projects, and with --passWithNoTests jest
+// then passed having run no test). --runTestsByPath alone is not enough: it
+// reads EVERY path argument as exact, so a test file the operator named
+// would run beside the unit (`jest b.jest.test.js --runTestsByPath
+// a.jest.test.js` ran both). The ignore pattern drops it. A CLI pattern
+// replaces the configured testPathIgnorePatterns, which is harmless here:
+// only the paths on the command line are candidates, and the unit was
+// listed under the configured ones. A listed file whose path ends in
+// /unit would also survive the pattern; jestUnitCoruns marks that unit.
 func jestUnitCmd(argv []string, unit string) ([]string, bool) {
 	if unit == "" || !narrowable(argv, jestFilters...) {
 		return nil, false
 	}
-	return append(slices.Clone(argv), "--testPathIgnorePatterns=^(?!<rootDir>"+jsRegexQuote("/"+unit)+"$)"), true
+	return append(withoutFlag(argv, "--shard"), "--runTestsByPath", unit, "--testPathIgnorePatterns=^(?!.*"+jsRegexQuote("/"+unit)+"$)"), true
+}
+
+// jestUnitCoruns: other survives unit's ignore pattern when its path ends
+// in /unit.
+func jestUnitCoruns(unit, other string) bool {
+	return unit != other && strings.HasSuffix(other, "/"+unit)
 }

@@ -155,7 +155,7 @@ var runners = []Runner{
 		},
 		ListCmd: jestListCmd, ParseList: jestParseList, SingleCmd: jestSingleCmd, ResolveByList: true, Coruns: jestCoruns,
 		FirstFailure: firstOf(jestFailures), FailedTests: jestFailures, DeselectCmd: jestDeselectCmd,
-		ListUnits: jestListUnits, ParseUnits: jestParseUnits, UnitCmd: jestUnitCmd,
+		ListUnits: jestListUnits, ParseUnits: jestParseUnits, UnitCmd: jestUnitCmd, UnitCoruns: jestUnitCoruns,
 		Note: "listing, one-test and one-file runs verified on jest 30.5",
 	},
 	{
@@ -170,7 +170,7 @@ var runners = []Runner{
 		// on its command line (measured on mocha 11.8.0), so `mocha <file>`
 		// runs every configured spec as well, and argv cannot show whether
 		// a config names one.
-		Note: "listing and one-test runs verified on mocha 11.8 (listing needs mocha 9 or later); no one-file run, since mocha adds a configured spec to the files on its command line",
+		Note: "listing and one-test runs verified on mocha 11.8 (listing needs mocha 9 or later); no unit evidence: its config's spec list is always added to the files on its command line, so it has no one-file run",
 	},
 	{
 		// Detect adds vitest's entry script to the word; a shell-wrapped

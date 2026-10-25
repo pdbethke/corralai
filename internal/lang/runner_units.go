@@ -124,6 +124,30 @@ func decodeArray(stdout string, v any) bool {
 	return false
 }
 
+// withoutFlag is argv without the flag names, in either spelling (`--x=v`,
+// or `--x v` when the next word is not a flag). A one-unit run drops what
+// the listing already applied and what would narrow the unit itself: a
+// shard of one file can be empty, and an empty run exits 0 (measured on
+// node 22.23.4: `node --test --test-shard=2/2 a.node.test.js` ran no test
+// and passed).
+func withoutFlag(argv []string, names ...string) []string {
+	var out []string
+	for i := 0; i < len(argv); i++ {
+		a := argv[i]
+		if slices.Contains(names, a) {
+			if i+1 < len(argv) && !strings.HasPrefix(argv[i+1], "-") {
+				i++
+			}
+			continue
+		}
+		if f, _, ok := strings.Cut(a, "="); ok && slices.Contains(names, f) {
+			continue
+		}
+		out = append(out, a)
+	}
+	return out
+}
+
 // dropFileArgs is args (the words after a runner's name and subcommand)
 // without its file arguments, for a row that replaces the operator's files
 // with one unit. takesValue says, for a flag written without "=", whether

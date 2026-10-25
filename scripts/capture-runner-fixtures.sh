@@ -70,7 +70,7 @@ units() { # units <fixture> <cmd...>: the wrapped listing's stdout
 units jest-units.txt npx --no-install jest --ci units/jest --listTests --json
 units vitest-units.txt npx --no-install vitest list --reporter=verbose units/vitest --filesOnly --json
 units vitest-units-collide.txt npx --no-install vitest list units/collide --filesOnly --json
-units node-units.txt node --test --test-only --test-reporter=tap --test-concurrency 1 'units/node/*.test.js'
+units node-units.txt node --test --test-only --test-reporter=tap --test-concurrency 1 units/node/a.node.test.js units/node/b.node.test.js
 units node-units-only.txt node --test --test-only --test-reporter=tap 'units/node-only/*.test.js' 'units/node/*.test.js'
 
 # --- one-test commands: each must run exactly the tests named --------------
@@ -95,7 +95,15 @@ want phpunit-dataset 2 "$(vendor/bin/phpunit --filter '/(?:^|\\)CalcTest::testWi
 # a.vitest.test.mjs of xa.vitest.test.mjs; mocha adds a configured spec to
 # the files on its command line, so mocha has no unit form.
 unitran() { grep -oE '(Tests:? +[0-9]+ passed)|(^# pass [0-9]+)|([0-9]+ passing)' | grep -oE '[0-9]+' | head -1; }
-want jest-unit 2 "$(npx --no-install jest --ci units/jest '--testPathIgnorePatterns=^(?!<rootDir>\/units\/jest\/a\.jest\.test\.js$)' 2>&1 | unitran)"
+want jest-unit 2 "$(npx --no-install jest --ci units/jest --runTestsByPath units/jest/a.jest.test.js '--testPathIgnorePatterns=^(?!.*\/units\/jest\/a\.jest\.test\.js$)' 2>&1 | unitran)"
+# Under projects each project has its own rootDir: a pattern anchored at
+# <rootDir> matches nothing and, with --passWithNoTests, passes having run no
+# test. The row's form names the unit by its path from the working directory.
+want jest-rootDir-pattern-under-projects "no test, exit 0" "$(cd units/projects && npx --no-install jest --passWithNoTests '--testPathIgnorePatterns=^(?!<rootDir>\/p1\/a\.jest\.test\.js$)' >/dev/null 2>&1 && echo "no test, exit 0")"
+(cd units/projects && npx --no-install jest --passWithNoTests --runTestsByPath p1/a.jest.test.js '--testPathIgnorePatterns=^(?!.*\/p1\/a\.jest\.test\.js$)' 2>&1) | sed -e 's/\x1b\[[0-9;]*m//g' -e "s#$DIR#\$DIR#g" -e '/^Time: \|^Ran all/d' > "$OUT/jest-unit-projects.txt"
+want jest-unit-projects 2 "$(unitran < "$OUT/jest-unit-projects.txt")"
+# A shard of one file can be empty, and an empty run passes; UnitCmd drops it.
+want node-shard-of-one-file-is-empty "0 exit 0" "$(out=$(node --test --test-reporter=tap --test-shard=2/2 units/node/a.node.test.js 2>&1) && echo "$(printf '%s' "$out" | unitran) exit 0")"
 want jest-runTestsByPath-adds-named-file 3 "$(npx --no-install jest units/jest/b.jest.test.js --runTestsByPath units/jest/a.jest.test.js 2>&1 | unitran)"
 want vitest-unit 2 "$(npx --no-install vitest run --reporter=verbose units/vitest/a.vitest.test.mjs 2>&1 | sed 's/\x1b\[[0-9;]*m//g' | unitran)"
 want vitest-unit-substring-collision 3 "$(npx --no-install vitest run --root units/collide units/collide/a.vitest.test.mjs 2>&1 | sed 's/\x1b\[[0-9;]*m//g' | unitran)"

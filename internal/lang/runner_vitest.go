@@ -105,8 +105,8 @@ func vitestParseUnits(stdout string) []string {
 	return paths
 }
 
-// vitestUnitCmd runs one test file: argv under `run`, with the operator's
-// file filters replaced by the unit, since vitest runs the files ANY filter
+// vitestUnitCmd runs one test file: argv under `run`, without its shard
+// (withoutFlag), with the operator's file filters replaced by the unit, since vitest runs the files ANY filter
 // matches. A bare word after a flag written without "=" may be that flag's
 // value or a filter, and vitest's options are too many to tell, so such a
 // command has no unit form.
@@ -116,7 +116,7 @@ func vitestUnitCmd(argv []string, unit string) ([]string, bool) {
 		return nil, false
 	}
 	i := vitestIndex(cmd) + 2 // past the vitest word and `run`
-	flags, ok := dropFileArgs(cmd[i:], true, func(string) (bool, bool) { return false, false })
+	flags, ok := dropFileArgs(withoutFlag(cmd[i:], "--shard"), true, func(string) (bool, bool) { return false, false })
 	if !ok {
 		return nil, false
 	}

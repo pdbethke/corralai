@@ -285,7 +285,7 @@ func TestRealRunnersListAndRunOneUnit(t *testing.T) {
 		needsRoot     bool
 		throughScript bool
 	}{
-		{"node --test", "javascript", []string{"node", "--test", "--test-concurrency", "1", "units/node/*.test.js"},
+		{"node --test", "javascript", []string{"node", "--test", "--test-concurrency", "1", "units/node/a.node.test.js", "units/node/b.node.test.js"},
 			[]string{"units/node/a.node.test.js", "units/node/b.node.test.js"}, false, false},
 		{"jest", "javascript", []string{"npx", "--no-install", "jest", "--ci", "units/jest"},
 			[]string{"units/jest/a.jest.test.js", "units/jest/b.jest.test.js"}, true, false},
@@ -306,6 +306,13 @@ func TestRealRunnersListAndRunOneUnit(t *testing.T) {
 			}
 			if _, err := exec.LookPath(c.argv[0]); err != nil {
 				t.Skipf("SKIP %s: %s is not installed", c.runner, c.argv[0])
+			}
+			if c.argv[0] == "node" {
+				// --test-only's file results were measured on node 22.
+				ver, err := exec.Command("node", "--version").Output()
+				if major, _ := strconv.Atoi(strings.TrimPrefix(strings.SplitN(string(ver), ".", 2)[0], "v")); err != nil || major < 22 {
+					t.Skipf("SKIP %s: node %s is older than 22", c.runner, strings.TrimSpace(string(ver)))
+				}
 			}
 			p, _ := ByName(c.lang)
 			inv := Cmd(c.argv)

@@ -38,7 +38,7 @@ func TestJSRunnersListAndRunOneUnit(t *testing.T) {
 			"jest", "javascript", "jest-units.txt",
 			[]string{"npx", "--no-install", "jest", "--ci", "units/jest"},
 			[]string{"units/jest/a.jest.test.js", "units/jest/b.jest.test.js"},
-			[]string{"npx", "--no-install", "jest", "--ci", "units/jest", `--testPathIgnorePatterns=^(?!<rootDir>\/units\/jest\/a\.jest\.test\.js$)`},
+			[]string{"npx", "--no-install", "jest", "--ci", "units/jest", "--runTestsByPath", "units/jest/a.jest.test.js", `--testPathIgnorePatterns=^(?!.*\/units\/jest\/a\.jest\.test\.js$)`},
 		},
 		{
 			"vitest", "typescript", "vitest-units.txt",
@@ -48,7 +48,7 @@ func TestJSRunnersListAndRunOneUnit(t *testing.T) {
 		},
 		{
 			"node --test", "javascript", "node-units.txt",
-			[]string{"node", "--test", "--test-concurrency", "1", "units/node/*.test.js"},
+			[]string{"node", "--test", "--test-concurrency", "1", "units/node/a.node.test.js", "units/node/b.node.test.js"},
 			[]string{"units/node/a.node.test.js", "units/node/b.node.test.js"},
 			[]string{"node", "--test", "--test-concurrency", "1", "units/node/a.node.test.js"},
 		},
@@ -152,7 +152,7 @@ func TestUnitCmdThroughAPackageScript(t *testing.T) {
 	js, _ := ByName("javascript")
 	jestScript := Invocation{Argv: []string{"npm", "test"}, Script: []string{"jest"}, Pass: "--", Narrow: true}
 	got, ok := UnitRunCmd(js, jestScript, "a.test.js")
-	if want := []string{"npm", "test", "--", `--testPathIgnorePatterns=^(?!<rootDir>\/a\.test\.js$)`}; !ok || !slices.Equal(got, want) {
+	if want := []string{"npm", "test", "--", "--runTestsByPath", "a.test.js", `--testPathIgnorePatterns=^(?!.*\/a\.test\.js$)`}; !ok || !slices.Equal(got, want) {
 		t.Errorf("npm test → jest: %q, %v, want %q", got, ok, want)
 	}
 	nodeFiles := Invocation{Argv: []string{"npm", "test"}, Script: []string{"node", "--test", "test/"}, Pass: "--", Narrow: true}
@@ -259,5 +259,72 @@ func TestDecodeArrayStartsAtTheReportLine(t *testing.T) {
 	}
 	if decodeArray("> pkg@1 test\nNo tests found\n", &got) {
 		t.Error("no report line, yet decoded")
+	}
+}
+
+// A shard of one file can be empty, and an empty run passes (measured:
+// capture-runner-fixtures.sh node-shard-of-one-file-is-empty), so each unit
+// run drops the operator's shard; the listing, which applied it, keeps it.
+func TestUnitCmdDropsTheShard(t *testing.T) {
+	js, _ := ByName("javascript")
+	ts, _ := ByName("typescript")
+	for _, c := range []struct {
+		p           Plugin
+		argv, want  []string
+		listHasFlag string
+	}{
+		{js, []string{"jest", "--shard=1/2"}, []string{"jest", "--runTestsByPath", "a.test.js", `--testPathIgnorePatterns=^(?!.*\/a\.test\.js$)`}, "--shard=1/2"},
+		{js, []string{"jest", "--shard", "1/2", "--ci"}, []string{"jest", "--ci", "--runTestsByPath", "a.test.js", `--testPathIgnorePatterns=^(?!.*\/a\.test\.js$)`}, "--shard"},
+		{ts, []string{"vitest", "run", "--shard=1/2"}, []string{"vitest", "run", "a.test.js"}, "--shard=1/2"},
+		{ts, []string{"vitest", "run", "--shard", "1/2"}, []string{"vitest", "run", "a.test.js"}, "--shard"},
+		{js, []string{"node", "--test", "--test-shard=2/2", "t/*.test.js"}, []string{"node", "--test", "a.test.js"}, "--test-shard=2/2"},
+		{js, []string{"node", "--test", "--test-shard", "2/2", "t/*.test.js"}, []string{"node", "--test", "a.test.js"}, "--test-shard"},
+	} {
+		inv := Cmd(c.argv)
+		if got, ok := UnitRunCmd(c.p, inv, "a.test.js"); !ok || !slices.Equal(got, c.want) {
+			t.Errorf("UnitRunCmd(%q) = %q, %v, want %q", c.argv, got, ok, c.want)
+		}
+		if list, ok := ListUnitsCmd(c.p, inv); !ok || !slices.Contains(list, c.listHasFlag) {
+			t.Errorf("ListUnitsCmd(%q) = %q, %v: the listing keeps the shard", c.argv, list, ok)
+		}
+	}
+}
+
+// A listed file whose path ends in /unit survives jest's unit ignore
+// pattern, so that unit cannot run alone.
+func TestJestUnitThatAnotherEndsWithIsNotAlone(t *testing.T) {
+	js, _ := ByName("javascript")
+	inv := Cmd([]string{"jest"})
+	got := ParseUnitList(js, inv, unitsCwdMarker+"/r\n"+`["/r/a.test.js","/r/x/a.test.js"]`+"\n")
+	if len(got) != 2 || got[0] == UnitName(got[0]) || got[1] != "x/a.test.js" {
+		t.Errorf("units = %q: want a.test.js marked, x/a.test.js not", got)
+	}
+}
+
+// Under a jest config with projects, the unit run names the unit by its path
+// from the working directory and runs it (captured: a.* has two tests). A
+// pattern anchored at <rootDir> matched nothing there and, under
+// --passWithNoTests, passed (capture-runner-fixtures.sh
+// jest-rootDir-pattern-under-projects).
+func TestJestUnitRunsUnderProjects(t *testing.T) {
+	out := unitFixture(t, "jest-unit-projects.txt")
+	if !regexp.MustCompile(`(?m)^Tests:\s+2 passed, 2 total`).MatchString(out) || strings.Contains(out, "b.jest.test.js") {
+		t.Errorf("the captured unit run did not run exactly p1/a.jest.test.js:\n%s", out)
+	}
+}
+
+// No TAP header is no listing, never a listing of no files.
+func TestNodeUnitListingWithoutTAPIsNotAListing(t *testing.T) {
+	js, _ := ByName("javascript")
+	inv := Cmd([]string{"node", "--test"})
+	for _, out := range []string{"", "node: bad option: --made-up\n", "TAP version 13\n1..0\n# tests 0\n"} {
+		got := ParseUnitList(js, inv, unitsCwdMarker+"/r\n"+out)
+		if strings.HasPrefix(out, "TAP") {
+			if got == nil || len(got) != 0 {
+				t.Errorf("a TAP report of no files = %#v, want an empty list", got)
+			}
+		} else if got != nil {
+			t.Errorf("%q read as %#v, want nil", out, got)
+		}
 	}
 }

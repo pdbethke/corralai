@@ -189,6 +189,11 @@ var nodeUnitExts = []string{".js", ".cjs", ".mjs", ".jsx", ".ts", ".cts", ".mts"
 // carries exitCode) is still a unit the command collects; its own run will
 // fail and say so.
 func nodeParseUnits(stdout string) []string {
+	// No TAP header is no listing (node did not start, or crashed before
+	// reporting), never a listing of no files.
+	if !strings.HasPrefix(strings.TrimLeft(stdout, "\n"), "TAP version ") {
+		return nil
+	}
 	entries, _ := nodeEntries(stdout)
 	units := []string{}
 	for _, e := range entries {
@@ -205,7 +210,7 @@ func nodeParseUnits(stdout string) []string {
 }
 
 // nodeUnitCmd runs one test file: argv with the operator's files and globs
-// replaced by the unit, every option kept. Options come before the first
+// replaced by the unit, every option kept but its shard (withoutFlag). Options come before the first
 // file (nodeWith), and node's own option table (runner_node_options.go)
 // says which of them read the next word; anything it cannot place is
 // refused.
@@ -213,7 +218,7 @@ func nodeUnitCmd(argv []string, unit string) ([]string, bool) {
 	if unit == "" || !narrowable(argv, nodeFilters...) || !slices.Contains(argv, "--test") {
 		return nil, false
 	}
-	flags, ok := dropFileArgs(argv[1:], false, nodeOptionTakesValue)
+	flags, ok := dropFileArgs(withoutFlag(argv[1:], "--test-shard"), false, nodeOptionTakesValue)
 	if !ok {
 		return nil, false
 	}

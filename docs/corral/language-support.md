@@ -36,7 +36,7 @@ A language has a runner capability when any of its runners does; this is which. 
 | `pytest` (default) | `pytest` | python | `-x` | ✓ | ✓ |  | ✓ | ✓ |  |  |
 | `unittest` | `unittest` | python | `--failfast` | ✓ | ✓ |  |  |  |  | listing and one-test runs use pytest, which collects unittest suites; they need pytest installed |
 | `jest` | `jest` | javascript, typescript | `--bail` | ✓ | ✓ | ✓ | ✓ | ✓ |  | listing, one-test and one-file runs verified on jest 30.5 |
-| `mocha` | `mocha` | javascript, typescript | `--bail` | ✓ | ✓ |  | ✓ | ✓ |  | listing and one-test runs verified on mocha 11.8 (listing needs mocha 9 or later); no one-file run, since mocha adds a configured spec to the files on its command line |
+| `mocha` | `mocha` | javascript, typescript | `--bail` | ✓ | ✓ |  | ✓ | ✓ |  | listing and one-test runs verified on mocha 11.8 (listing needs mocha 9 or later); no unit evidence: its config's spec list is always added to the files on its command line, so it has no one-file run |
 | `vitest` | `vitest` | javascript, typescript |  | ✓ | ✓ | ✓ | ✓ | ✓ |  | listing, one-test and one-file runs verified on vitest 3.2; vitest 1, 2 and 4 were not run |
 | `node --test` (default) | `node-test` | javascript, typescript |  | ✓ | ✓ | ✓ | ✓ | ✓ |  | node has no collect-only mode, so listing RUNS the test file once on the unmutated code; verified on node 22.23 and 24.22 (listing and running one file on node 22.23 only). Through a package script, listing, one-test runs and salvage need `--test` to be the script's last word, since node reads options only before the first file |
 | `rspec` (default) | `rspec` | ruby | `--fail-fast` | ✓ | ✓ |  | ✓ | ✓ |  | listing and one-test runs verified on rspec-core 3.13 (one-test runs need 3.12 or later) |

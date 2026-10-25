@@ -13,7 +13,7 @@ Error: this file does not load
     at node:internal/main/run_main_module:36:49
 
 Node.js v22.23.4
-✖ broken.node.test.js (25.331332ms)
+✖ broken.node.test.js (26.882178ms)
 ℹ tests 1
 ℹ suites 0
 ℹ pass 0
@@ -25,5 +25,5 @@ Node.js v22.23.4
 ✖ failing tests:
 
 test at broken.node.test.js:1:1
-✖ broken.node.test.js (25.331332ms)
+✖ broken.node.test.js (26.882178ms)
   'test failed'

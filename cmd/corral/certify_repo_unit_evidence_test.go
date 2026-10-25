@@ -5,6 +5,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"io"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -36,12 +37,15 @@ type fakeUnitCall struct {
 func (f *fakeUnitPass) install(t *testing.T) {
 	t.Helper()
 	prev := collectUnitEvidence
-	collectUnitEvidence = func(_ context.Context, _ coverageRunner, _ map[string]string, p lang.Plugin, inv lang.Invocation, modulePath string, workers int) reposcan.UnitEvidence {
+	collectUnitEvidence = func(_ context.Context, _ coverageRunner, _ map[string]string, p lang.Plugin, inv lang.Invocation, modulePath string, workers int, announce func(runnable, listed int)) reposcan.UnitEvidence {
 		f.mu.Lock()
 		defer f.mu.Unlock()
 		f.calls = append(f.calls, fakeUnitCall{lang: p.Name(), argv: inv.Argv, modulePath: modulePath, workers: workers})
 		if workers < 1 {
 			return reposcan.UnitEvidence{Note: "fake: no workers"}
+		}
+		if f.ev.Ran {
+			announce(len(f.ev.Units), len(f.ev.Units))
 		}
 		return f.ev
 	}
@@ -364,7 +368,7 @@ func TestUnitPassIsCachedUnderItsOwnKey(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		return &localExecutor{repoDir: root, substrate: substrateWorkspace, checkArgv: []string{"vitest", "run"},
+		return &localExecutor{repoDir: root, substrate: substrateWorkspace, checkArgv: []string{"vitest", "run"}, progress: io.Discard,
 			selectionCache: cache, treeDigest: "tree", treeDigestComputed: true, unitWorkers: 1,
 			unitInventory: checkoutInventory(cands, excl)}
 	}
@@ -448,7 +452,7 @@ func TestUnitPassCachesOnlyAFullyGreenPass(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		return &localExecutor{repoDir: root, substrate: substrateWorkspace, checkArgv: []string{"vitest", "run"},
+		return &localExecutor{repoDir: root, substrate: substrateWorkspace, checkArgv: []string{"vitest", "run"}, progress: io.Discard,
 			selectionCache: cache, treeDigest: "tree", treeDigestComputed: true, unitWorkers: 1,
 			unitInventory: checkoutInventory(cands, excl)}
 	}

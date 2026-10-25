@@ -1160,6 +1160,8 @@ Usage of certify --repo:
     	bound the scan to files changed since this git ref: every candidate that changed, or whose paired test changed, is audited. In a PR the diff IS the bound, so the default --top does not apply on this path; an EXPLICIT --top still does, auditing that many of the changed files by rank and reporting the rest as not audited
   -dry-run
     	enumerate and emit jobs, then stop — no audits run
+  -evidence
+    	with --dry-run: run the evidence pass in the sandbox (no model, no key) so the plan shows what a real run would audit
   -goals string
     	JSON file mapping repo-relative paths to goals (default: derive a goal per file)
   -jail string

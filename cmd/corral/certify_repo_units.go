@@ -34,8 +34,8 @@ import (
 // the seam collectSelectionEvidence is for the selection pass: the one call
 // in collectUnits that runs the project's tests, so a test of what the scan
 // does with unit evidence can stand in for it without a runner.
-var collectUnitEvidence = func(ctx context.Context, runner coverageRunner, files map[string]string, p lang.Plugin, inv lang.Invocation, modulePath string, workers int) reposcan.UnitEvidence {
-	return reposcan.CollectUnitEvidence(ctx, runner, files, p, inv, modulePath, workers)
+var collectUnitEvidence = func(ctx context.Context, runner coverageRunner, files map[string]string, p lang.Plugin, inv lang.Invocation, modulePath string, workers int, announce func(runnable, listed int)) reposcan.UnitEvidence {
+	return reposcan.CollectUnitEvidence(ctx, runner, files, p, inv, modulePath, workers, announce)
 }
 
 // runsUnitPass reports whether the unit pass is the evidence path for plug:
@@ -115,7 +115,10 @@ func (l *localExecutor) collectUnits(ctx context.Context, sources []string) repo
 	passCtx, cancel := context.WithTimeout(ctx, selectionTimeout)
 	defer cancel()
 	start := time.Now()
-	ev := collectUnitEvidence(passCtx, runner, files, plug, inv, modulePath, l.unitWorkers)
+	ev := collectUnitEvidence(passCtx, runner, files, plug, inv, modulePath, l.unitWorkers, func(runnable, listed int) {
+		fmt.Fprintf(l.progress, "  units: running %d of %d listed test unit(s) alone under coverage, %d at a time, within %s for the whole pass…\n",
+			runnable, listed, l.unitWorkers, selectionTimeout)
+	})
 	l.unitsDuration = time.Since(start)
 	if ev.Settled() && keyOK {
 		if raw, merr := json.Marshal(ev); merr == nil {

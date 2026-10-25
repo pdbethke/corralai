@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -75,7 +76,12 @@ type unitFixture struct {
 	inv  lang.Invocation
 	run  *unitFakeRunner
 	list []string
+	// announced is every call the pass made to its announce callback, with
+	// how many commands had run by then.
+	announced []unitAnnounce
 }
+
+type unitAnnounce struct{ runnable, listed, ranBefore int }
 
 func newUnitFixture(t *testing.T, langName string, argv []string, listing string) *unitFixture {
 	t.Helper()
@@ -114,7 +120,27 @@ func (f *unitFixture) answer(unit string, res sandbox.EnumerateResult) {
 }
 
 func (f *unitFixture) collect(ctx context.Context, modulePath string, workers int) UnitEvidence {
-	return CollectUnitEvidence(ctx, f.run, map[string]string{}, f.p, f.inv, modulePath, workers)
+	return CollectUnitEvidence(ctx, f.run, map[string]string{}, f.p, f.inv, modulePath, workers, func(runnable, listed int) {
+		f.run.mu.Lock()
+		ran := len(f.run.ran)
+		f.run.mu.Unlock()
+		f.announced = append(f.announced, unitAnnounce{runnable, listed, ran})
+	})
+}
+
+// The pass announces itself once, after listing and before the first unit
+// runs, with how many units will run of how many were listed: a pass can
+// last the whole selection budget, and the operator is told before it does.
+func TestUnitPassAnnouncesBeforeTheFirstUnitRuns(t *testing.T) {
+	f := newUnitFixture(t, "typescript", []string{"vitest", "run"}, vitestTwoUnits)
+	f.answer("test/alpha.test.ts", sandbox.EnumerateResult{Output: jsReport("7 10 src/x.ts")})
+	f.answer("test/beta.test.ts", sandbox.EnumerateResult{Output: jsReport("2 10 src/x.ts")})
+
+	f.collect(context.Background(), "/w", 1)
+	want := []unitAnnounce{{runnable: 2, listed: 2, ranBefore: 1}}
+	if !reflect.DeepEqual(f.announced, want) {
+		t.Errorf("announced %+v, want %+v (once, after only the listing ran)", f.announced, want)
+	}
 }
 
 func unitByName(t *testing.T, ev UnitEvidence, name string) UnitResult {
@@ -312,7 +338,11 @@ func TestUnitPassKeepsWhatAReducerCouldNotCount(t *testing.T) {
 func TestUnitPassNoUnitFormIsNotEvidence(t *testing.T) {
 	ts, _ := lang.ByName("typescript")
 	r := &unitFakeRunner{}
-	ev := CollectUnitEvidence(context.Background(), r, nil, ts, lang.Cmd([]string{"make", "test"}), "/w", 2)
+	announced := false
+	ev := CollectUnitEvidence(context.Background(), r, nil, ts, lang.Cmd([]string{"make", "test"}), "/w", 2, func(int, int) { announced = true })
+	if announced {
+		t.Error("a pass that runs no unit announced itself")
+	}
 	if ev.Ran {
 		t.Fatalf("ev = %+v, want not Ran", ev)
 	}

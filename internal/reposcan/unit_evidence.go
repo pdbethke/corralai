@@ -88,7 +88,13 @@ const (
 // modulePath is passed to CoverageCounts exactly as Preflight passes it: the
 // Go module path for Go, the repository root for the filesystem-path
 // reporters.
-func CollectUnitEvidence(ctx context.Context, runner commandRunner, files map[string]string, p lang.Plugin, inv lang.Invocation, modulePath string, workers int) UnitEvidence {
+//
+// announce is called once, after the listing and before the first unit
+// runs, with how many units will run and how many the listing named, so the
+// caller can tell the operator what a pass that may last its whole deadline
+// is about to do. It is not called when no unit runs. It is required: the
+// pass has no output of its own to fall back on.
+func CollectUnitEvidence(ctx context.Context, runner commandRunner, files map[string]string, p lang.Plugin, inv lang.Invocation, modulePath string, workers int, announce func(runnable, listed int)) UnitEvidence {
 	command := strings.Join(inv.Argv, " ")
 	if workers < 1 {
 		return UnitEvidence{Note: fmt.Sprintf("%s: unit evidence needs at least one worker, and was given %d workers", p.Name(), workers)}
@@ -146,6 +152,7 @@ func CollectUnitEvidence(ctx context.Context, runner commandRunner, files map[st
 		return UnitEvidence{Units: results, Note: fmt.Sprintf("%s: no unit `%s` collects can run alone under coverage, so no unit evidence", p.Name(), command)}
 	}
 
+	announce(len(runnable), len(units))
 	jobs := make(chan int)
 	var wg sync.WaitGroup
 	for range min(workers, len(runnable)) {

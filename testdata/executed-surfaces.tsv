@@ -95,6 +95,7 @@ corral certify --repo --derive-model	executed	run:2026-09-02 md:corral_public sc
 corral certify --repo --diff-base	executed	test:cmd/corral/certify_repo_selcache_test.go
 corral certify --repo --path	executed	test:cmd/corral/certify_repo_test.go
 corral certify --repo --dry-run	executed	test:cmd/corral/certify_repo_writer_mode_test.go
+corral certify --repo --evidence	executed	test:cmd/corral/certify_repo_dryrun_evidence_test.go (TestDryRunEvidenceRunsPythonsSelectionPass runs real pytest+coverage; the unit-pass tests stand in a fake for the jail)
 corral certify --repo --goals	executed	test:cmd/corral/certify_repo_selcache_test.go
 corral certify --repo --json	executed	test:cmd/corral/models_rank_test.go
 corral certify --repo --local-endpoint	executed	test:cmd/corral/local_endpoint_test.go (parseLocalEndpoints, shared by both paths)

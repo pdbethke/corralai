@@ -874,14 +874,16 @@ corral certify --repo . --dry-run --json     # the same inventory as data
 ```
 
 ```
-evidence-paired 0 · name-paired 28 · uncovered 0 · import-only 0 — uncovered/evidence-paired unknown without a run — pairing shown
+evidence-paired 0 · name-paired 28 · uncovered 0 · import-only 0 — evidence pairing runs on a real run or with --dry-run --evidence
 languages detected:
   python  28 source file(s): 6 auditable, 21 with no paired test, 1 ambiguous (+9 test file(s))
 ```
 
 The candidacy line (`evidence-paired · name-paired · uncovered · import-only`) is the
 v0.8.1 addition: `--dry-run` runs no suite, so `uncovered`/`evidence-paired` read 0
-and say so rather than implying a measurement — on a real run, evidence can widen
+and say so rather than implying a measurement. `--dry-run --evidence` runs the
+evidence pass in the sandbox (no model, no key) so the plan shows what a real run
+would audit — on a real run, evidence can widen
 candidacy past filename pairing (see below). Widened candidates compete under the
 same `--top` bound as everyone else: the report re-ranks and says `auditing N of M`
 once more, and N never exceeds what you asked for. Files under a language's test

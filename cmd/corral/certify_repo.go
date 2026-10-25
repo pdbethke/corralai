@@ -2870,8 +2870,8 @@ func (l *localExecutor) runPreflight(ctx context.Context, sources []string) repo
 	// that made the pre-flight INERT for ruby, javascript, typescript and php
 	// the moment they got coverage reporters. Those four report ABSOLUTE
 	// filesystem paths (Ruby's Coverage.result, V8's fileURLToPath, pcov), and
-	// corralCoverageReport skips relativisation entirely when the root is
-	// empty. Every downstream consumer — splitPreflightFindings,
+	// the shared parser (corralCoverageReport then, corralCoverageCounts now)
+	// skips relativisation entirely when the root is empty. Every downstream consumer — splitPreflightFindings,
 	// preflightState — keys on repo-RELATIVE paths, so nothing ever matched
 	// and every scan printed a confident "0 executed, N not measured" with
 	// Ran=true. Measured on the committed fixtures: ruby came back with 18

@@ -143,6 +143,13 @@ func TestJSCoverageCountsFromRealV8Output(t *testing.T) {
 			if _, ok := got["lib/unloaded."+tc.ext]; ok {
 				t.Errorf("lib/unloaded.%s is never loaded: want ABSENT", tc.ext)
 			}
+			// An EMPTY file the suite requires has no executable line: there
+			// is nothing to have run or skipped, so it is not measurable and
+			// must be absent, never {0 0} — which ParseCoverage would read as
+			// "measured, never executed", an accusation it cannot deserve.
+			if c, ok := got["lib/empty."+tc.ext]; ok {
+				t.Errorf("lib/empty.%s has no executable line: want ABSENT, got %+v", tc.ext, c)
+			}
 		})
 	}
 }

@@ -202,7 +202,7 @@ func (jsPlugin) WorkspaceRunEnv() (env []string, cleanup func()) { return nil, f
 //
 // V8 writes raw range data — megabytes for an ordinary project — so the
 // reduction runs IN NODE and only one line per file crosses to stdout. See
-// corralCoverageReport for why that boundary matters.
+// corralCoverageCounts for why that boundary matters.
 //
 // LINE COUNTS FROM V8 RANGES. V8 reports, per function, a list of
 // [startOffset, endOffset) ranges with an execution count, where a nested
@@ -330,7 +330,10 @@ const out=['` + jsCoverageHeaderV2 + `'];
 const keys=[...new Set([...lines.keys(),...uncounted.keys()])].sort();
 for(const k of keys){
   const st=lines.get(k);
-  if(st)out.push(sum(st.ran)+' '+sum(st.exe)+' '+k);
+  // NO EXECUTABLE LINE, NO ENTRY: a file V8 measured with nothing in it to
+  // run (whitespace only) is not measurable, and "0 0" would read as
+  // measured-and-never-executed, accusing it of a gap it cannot have.
+  if(st){const exe=sum(st.exe);if(exe>0)out.push(sum(st.ran)+' '+exe+' '+k);}
   else out.push('# uncounted '+k+': '+uncounted.get(k));
 }
 process.stdout.write(out.join('\n')+'\n');

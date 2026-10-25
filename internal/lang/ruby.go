@@ -186,7 +186,9 @@ func (rubyPlugin) WorkspaceRunEnv() (env []string, cleanup func()) { return nil,
 // rubyCoveragePreload is the script RUBYOPT loads before the suite. It writes
 // to a FILE rather than stdout, and the shell cats that file afterwards: a
 // suite's own output shares stdout, and interleaving a report into it would
-// make the report unparseable exactly when the suite is noisiest.
+// make the report unparseable exactly when the suite is noisiest. What it
+// writes is the version-2 body, `<executed> <executable> <path>` per file
+// (see corralCoverageCounts).
 const rubyCoveragePreload = `require 'coverage'
 require 'pathname'
 # METHOD coverage, not just line coverage, and the difference is not academic.
@@ -201,7 +203,7 @@ begin
   Coverage.start(lines: true, methods: true)
 rescue ArgumentError, TypeError
   # Rubies before 2.6 have no method coverage. Fall back rather than refuse:
-  # a coarser measurement is still worth more than none, and ParseCoverage's
+  # a coarser measurement is still worth more than none, and the report's
   # tri-state means a false positive here reads as "auditable", never as a
   # gap that was proven absent.
   Coverage.start
@@ -246,49 +248,70 @@ def CorralCov.write(res)
     # per process into a directory; this is that design, applied here.
     dir = ENV['CORRAL_COV_DIR']
     dest = File.join(dir, "#{Process.pid}-#{object_id}.txt")
-    File.open(dest, 'w') do |out|
-      res.each do |path, data|
-        if data.is_a?(Hash)
-          methods = data[:methods] || {}
-          lines = data[:lines] || []
-          # A file with no methods at all (a script, a constants file) can
-          # only be judged by its lines. A file WITH methods is judged by
-          # whether any of them ran.
-          hit = if methods.empty?
-                  lines.any? { |c| !c.nil? && c > 0 } ? 1 : 0
-                else
-                  methods.values.any? { |c| !c.nil? && c > 0 } ? 1 : 0
-                end
-          measurable = !methods.empty? || lines.any? { |c| !c.nil? }
-        else
-          lines = data
-          next unless lines.respond_to?(:any?)
-          measurable = lines.any? { |c| !c.nil? }
-          hit = lines.any? { |c| !c.nil? && c > 0 } ? 1 : 0
-        end
-        # nil marks a line that cannot be executed (blank, comment, an 'end').
-        # A file with nothing measurable is SKIPPED, not reported as
-        # never-executed: absent means "not measured", which is the honest
-        # answer for a file that had no statement to skip.
-        next unless measurable
-        # RELATIVE TO THE WORKING DIRECTORY, not absolute. The suite runs in
-        # the repo on the workspace substrate and in an ephemeral copy of it
-        # on the jail substrate, and only the former is a path the caller
-        # knows. Coverage.result hands back absolute paths, so an absolute
-        # report was aligned against the repo directory — correct on one
-        # substrate and a guaranteed "NONE under the repo root" on the
-        # default one. Relative to cwd is repo-relative on both. Files
-        # outside cwd (gems, stdlib) are dropped here; they are never
-        # candidates.
-        rel = begin
-          Pathname.new(path).relative_path_from(Pathname.pwd).to_s
-        rescue ArgumentError
-          next
-        end
-        next if rel == '..' || rel.start_with?('../')
-        out.puts "#{hit} #{rel}"
+    rows = []
+    res.each do |path, data|
+      if data.is_a?(Hash)
+        methods = data[:methods] || {}
+        lines = data[:lines] || []
+      else
+        # Rubies before 2.6: a bare Array of line counts, no methods.
+        methods = {}
+        lines = data
+        next unless lines.respond_to?(:each_with_index)
       end
+      # LINE COUNTS, judged the way the boolean always was. A file with no
+      # methods at all (a script, a constants file) can only be judged by its
+      # lines: every non-nil line is executable and a positive one executed.
+      # A file WITH methods is judged by its methods, because its def lines
+      # run when it is merely REQUIRED: an executable line is a non-nil line
+      # inside a method's range, and it counts as executed only when it ran
+      # inside a method that was CALLED. (A one-line method's line count is
+      # its definition's, measured: calling it does not raise it, which is
+      # why "called" comes from the method counts, never from the line.)
+      executable = 0
+      executed = 0
+      if methods.empty?
+        lines.each do |c|
+          next if c.nil?
+          executable += 1
+          executed += 1 if c > 0
+        end
+      else
+        ranges = methods.map { |k, n| [k[2], k[4], !n.nil? && n > 0] }
+        lines.each_with_index do |c, i|
+          next if c.nil?
+          ln = i + 1
+          inside = ranges.select { |first, last, _| ln >= first && ln <= last }
+          next if inside.empty?
+          executable += 1
+          executed += 1 if c > 0 && inside.any? { |_, _, called| called }
+        end
+      end
+      # nil marks a line that cannot be executed (blank, comment, an 'end').
+      # A file with NO executable line is SKIPPED, not reported 0 0: absent
+      # means "not measured", the honest answer for a file with nothing in it
+      # that could have run, and 0 0 would read as measured-and-never-run.
+      next if executable.zero?
+      # RELATIVE TO THE WORKING DIRECTORY, not absolute. The suite runs in
+      # the repo on the workspace substrate and in an ephemeral copy of it
+      # on the jail substrate, and only the former is a path the caller
+      # knows. Coverage.result hands back absolute paths, so an absolute
+      # report was aligned against the repo directory — correct on one
+      # substrate and a guaranteed "NONE under the repo root" on the
+      # default one. Relative to cwd is repo-relative on both. Files
+      # outside cwd (gems, stdlib) are dropped here; they are never
+      # candidates.
+      rel = begin
+        Pathname.new(path).relative_path_from(Pathname.pwd).to_s
+      rescue ArgumentError
+        next
+      end
+      next if rel == '..' || rel.start_with?('../')
+      rows << "#{executed} #{executable} #{rel}"
     end
+    # Sorted by path, so one run's report is byte-stable and the captured
+    # fixture report can be held to a live run.
+    File.write(dest, rows.sort_by { |r| r.split(' ', 3)[2] }.map { |r| r + "\n" }.join)
   rescue StandardError => e
     # Never let the reporter's own failure change the suite's exit code —
     # the caller distinguishes "could not measure" from "measured nothing",
@@ -328,14 +351,22 @@ func (rubyPlugin) CoverageCmd(testCmd []string) (cmd []string, ok bool) {
 	}
 	setup := `mkdir -p "$d/cov" && cat > "$d/corral_cov.rb" <<'CORRAL_RB_EOF'` + "\n" + rubyCoveragePreload + "CORRAL_RB_EOF\n"
 	env := `CORRAL_COV_DIR="$d/cov" RUBYOPT="-r$d/corral_cov ${RUBYOPT:-}"`
-	return coverageRunAndReduce(setup, env, testCmd, coverageMergeDir(rubyCoverageHeader)), true
+	return coverageRunAndReduce(setup, env, testCmd, coverageMergeDir(rubyCoverageHeaderV2)), true
 }
 
-// ParseCoverage reads the reduced report rubyCoveragePreload writes. The
-// grammar and its tri-state are shared with JavaScript — see
-// corralCoverageReport.
-func (rubyPlugin) ParseCoverage(stdout, modulePath string) (executed map[string]bool, err error) {
-	return corralCoverageReport(stdout, rubyCoverageHeader, "ruby", modulePath)
+// ParseCoverage is derived from CoverageCounts: a file is executed when a line
+// ran inside a called method (or, in a file with no methods, when any line
+// ran). The tri-state is CoverageCounts' own.
+func (p rubyPlugin) ParseCoverage(stdout, modulePath string) (executed map[string]bool, err error) {
+	return executedFromCounts(p.CoverageCounts(stdout, modulePath))
+}
+
+// CoverageCounts reads the version-2 report rubyCoveragePreload writes — see
+// the preload for what an executable and an executed line are in Ruby's
+// terms, and corralCoverageCounts for the grammar, shared with JavaScript
+// and PHP.
+func (rubyPlugin) CoverageCounts(stdout, modulePath string) (map[string]LineCounts, error) {
+	return corralCoverageCounts(stdout, rubyCoverageHeaderV2, "ruby", modulePath)
 }
 
 // LineComment is the ruby line-comment marker.
@@ -343,9 +374,3 @@ func (rubyPlugin) LineComment() string { return "#" }
 
 // DependencyDirs is Bundler's local install directory.
 func (rubyPlugin) DependencyDirs() []DepDir { return []DepDir{{Name: ".bundle"}} }
-
-// CoverageCounts is not built for ruby yet (evidence-pairing plan, Tasks 2–3):
-// it says so rather than report a count it does not have.
-func (rubyPlugin) CoverageCounts(string, string) (map[string]LineCounts, error) {
-	return nil, errCountsNotYetReported("ruby")
-}

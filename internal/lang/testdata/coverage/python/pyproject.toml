@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: Elastic-2.0
+#
+# The fixture's own configuration, as a real project carries it: coverage.py
+# measures lib/ (so a file nothing imports is reported measured-and-never-run,
+# not left out), and pytest finds lib from the fixture root.
+[tool.coverage.run]
+source = ["lib"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+addopts = "-p no:cacheprovider"

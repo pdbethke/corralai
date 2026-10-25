@@ -208,3 +208,11 @@ spl_autoload_register(function ($c) {
 		t.Fatalf("the load check accepted a class extending a class that exists nowhere:\n%s", out)
 	}
 }
+
+// PHP COUNTS COME FROM A REAL pcov RUN of the fixture suite (the captured
+// report a live run is held to). Shape.php is an interface: pcov reports a hit
+// for it only on the file's implicit include marker, one line past its end,
+// which is not a line of the file and must not make it read as executed.
+func TestPHPCoverageCountsFromRealRun(t *testing.T) {
+	assertFixtureCounts(t, capturedCounts(t, "php"), "lib/Calc.php", "lib/Dead.php", "lib/Unloaded.php", "lib/Shape.php")
+}

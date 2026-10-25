@@ -123,3 +123,11 @@ func TestRubyCandidatesOrder(t *testing.T) {
 		})
 	}
 }
+
+// RUBY COUNTS COME FROM A REAL RUN of the fixture suite (the captured report a
+// live run is held to). dead.rb is the negative control: its `def` lines run
+// when it is required, so line counts alone would credit it — a line counts
+// as executed only inside a method that was called.
+func TestRubyCoverageCountsFromRealRun(t *testing.T) {
+	assertFixtureCounts(t, capturedCounts(t, "ruby"), "lib/calc.rb", "lib/dead.rb", "lib/unloaded.rb", "lib/empty.rb")
+}

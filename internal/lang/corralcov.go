@@ -26,96 +26,49 @@ import (
 // pre-flight is most useful for. What crosses the boundary is one line per
 // file.
 //
-// The grammar, version 1 (Ruby and PHP until they report counts):
+// The grammar, version 2 — LINE COUNTS, so evidence can rank which test unit
+// ran most of a file (a boolean cannot):
 //
-//	<header>            a language-specific magic line, e.g. corral-ruby-coverage: v1
-//	1 /abs/path/to/file executed
-//	0 /abs/path/to/file measured, and never executed
-//
-// Version 2 carries LINE COUNTS, so evidence can rank which test unit ran
-// most of a file (a boolean cannot):
-//
-//	<header>                 e.g. corral-js-coverage: v2
+//	<header>                 a language-specific magic line, e.g. corral-js-coverage: v2
 //	<executed> <executable> <path>
 //	# <disclosure>           a file the reducer measured and could not count, and why
 //
 // A file that was never measured emits NO LINE AT ALL. That absence is the
-// third state and it carries real weight — see corralCoverageReport. A v2
+// third state and it carries real weight — see corralCoverageCounts. A
 // disclosure line leaves its file absent too: a count the instrument could
-// not give is not measured, and writing one in would be inventing it.
+// not give is not measured, and writing one in would be inventing it. So does
+// a file with no executable line: there is nothing in it that could have run,
+// and "0 0" would read as measured-and-never-executed. Every reducer omits it.
 //
 // The version is in the header, and each parser accepts only its own, so a
-// stale reducer is refused rather than half-read.
+// stale reducer is refused rather than half-read. Version 1 (`1 <path>` /
+// `0 <path>`, a boolean per file) is retired: nothing emits it, and a report
+// carrying its header is refused by name.
 const (
-	rubyCoverageHeader = "corral-ruby-coverage: v1"
-	jsCoverageHeader   = "corral-js-coverage: v1"
-	// phpCoverageHeader is declared in php.go, beside the script that writes it.
-
-	// The v2 headers sit beside v1 while Ruby moves over (evidence-pairing
-	// plan, Task 3, deletes the v1 constants and corralCoverageReport).
 	rubyCoverageHeaderV2 = "corral-ruby-coverage: v2"
 	jsCoverageHeaderV2   = "corral-js-coverage: v2"
+	// phpCoverageHeaderV2 is declared in php.go, beside the script that writes it.
 )
 
-// corralCoverageReport parses the reduced report into CoverageReporter's
-// tri-state map.
+// corralCoverageCounts parses a reduced report into per-file line counts.
 //
-// TRI-STATE, and the third state is the point: present-true is executed,
-// present-false is measured-and-never-executed (the only real finding), and
-// ABSENT means this run never measured the file. Both runtimes here observe
-// only what the suite LOADED, so a source file nothing requires is absent
-// rather than false. Recording it as false would accuse every file outside the
-// suite's import graph of being untested, when the honest claim is that this
-// run never looked at it — the same distinction pyPlugin.ParseCoverage draws
-// for files outside coverage.py's configured source scope.
+// TRI-STATE, and the third state is the point: present with Executed>0 is
+// executed, present with Executed==0 is measured-and-never-executed (the only
+// real finding), and ABSENT means this run never measured the file. Every
+// runtime here observes only what the suite LOADED, so a source file nothing
+// requires is absent rather than zero. Recording it as zero would accuse every
+// file outside the suite's import graph of being untested, when the honest
+// claim is that this run never looked at it — the same distinction
+// pyPlugin.CoverageCounts draws for files outside coverage.py's configured
+// source scope.
 //
 // The header check is what makes an unparseable report an ERROR instead of an
 // empty map. Without it any unrelated output — a stack trace, a bundler
 // warning, a truncated dump — parses as zero entries and reads as "the suite
 // covered nothing", which is a repo-wide accusation manufactured out of a
-// failure to measure.
-func corralCoverageReport(stdout, header, langName, modulePath string) (executed map[string]bool, err error) {
-	body, err := corralReportBody(stdout, header, langName)
-	if err != nil {
-		return nil, err
-	}
-	root := corralReportRoot(modulePath)
-	executed = make(map[string]bool)
-	parsed := 0
-	for _, ln := range body {
-		ln = strings.TrimSpace(ln)
-		if ln == "" {
-			continue
-		}
-		hit, path, found := strings.Cut(ln, " ")
-		if !found || (hit != "0" && hit != "1") {
-			return nil, fmt.Errorf("lang: unparseable %s coverage report line %q (want `0 <path>` or `1 <path>`)", langName, ln)
-		}
-		parsed++
-		rel, ok := corralRepoPath(path, root)
-		if !ok {
-			continue
-		}
-		// A file reported more than once (several test processes, several
-		// workers) is executed if ANY run executed it. Never downgrade a
-		// true to a false.
-		if hit == "1" {
-			executed[rel] = true
-		} else if _, already := executed[rel]; !already {
-			executed[rel] = false
-		}
-	}
-	if err := corralReportKept(langName, modulePath, parsed, len(executed), nil); err != nil {
-		return nil, err
-	}
-	return executed, nil
-}
-
-// corralCoverageCounts parses a version-2 reduced report into per-file line
-// counts. It keeps every rule corralCoverageReport keeps — the header, the
-// tri-state, the out-of-root drop, the refusal of a report that kept nothing
-// — and adds one: executed can never exceed executable, since a report that
-// says so is not a measurement of anything.
+// failure to measure. Paths outside the root are dropped, a report that kept
+// nothing is refused (corralReportKept), and executed can never exceed
+// executable, since a report that says so is not a measurement of anything.
 //
 // A file reported by several processes keeps the LARGER count of each kind.
 // That can under-count a file two processes ran different halves of, and

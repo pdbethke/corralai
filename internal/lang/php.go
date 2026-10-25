@@ -482,7 +482,7 @@ func (phpPlugin) ConcatTests(parts []AuthoredPart) (string, error) {
 // those lets you splice in `-d` flags. A LEADING COLON means "the default scan
 // directory, then this one" — dropping the colon would replace the default and
 // unload pcov itself, along with every other extension the suite needs.
-const phpCoverageHeader = "corral-php-coverage: v1"
+const phpCoverageHeaderV2 = "corral-php-coverage: v2"
 
 // phpCoveragePrepend is loaded by auto_prepend_file before any application
 // code, which is the only point at which pcov can see the files that follow.
@@ -494,7 +494,9 @@ const phpCoverageHeader = "corral-php-coverage: v1"
 // merely required looks executed under a naive any-positive-line rule. Add
 // top-level statements and it looks executed twice over. Reflection gives the
 // start and end line of every user-defined method and function, so the
-// question becomes the right one: did any BODY in this file run?
+// question becomes the right one: did any BODY in this file run? The report
+// is the version-2 body, `<executed> <executable> <path>` per file (see
+// corralCoverageCounts), counting only lines inside those bodies.
 //
 // \pcov\collect takes \pcov\all deliberately. \pcov\inclusive with an empty
 // filter SEGFAULTS the interpreter — found the hard way; it wants a non-empty
@@ -553,32 +555,58 @@ register_shutdown_function(function () {
     $dest = $dir . '/' . getmypid() . '-' . mt_rand() . '.txt';
     $out = @fopen($dest, 'w');
     if ($out === false) { return; }
+    // RELATIVE TO THE WORKING DIRECTORY — see the Ruby reducer for why an
+    // absolute path is only ever right on one substrate. Outside cwd is
+    // vendor/ or the runtime, never a candidate, and is skipped before any
+    // work is done on it.
+    $cwd = getcwd();
+    if ($cwd === false) { fclose($out); return; }
+    $prefix = rtrim($cwd, '/') . '/';
+    // Sorted by path, so one run's report is byte-stable and the captured
+    // fixture report can be held to a live run.
+    ksort($data);
     foreach ($data as $path => $lines) {
-        $bodies = isset($ranges[$path]) ? $ranges[$path] : [];
-        $hit = 0; $measurable = 0;
-        if ($bodies) {
-            // Only lines INSIDE a method or function body count. pcov marks an
-            // executable-but-unexecuted line -1 and an executed one > 0.
-            foreach ($lines as $n => $c) {
-                foreach ($bodies as $r) {
-                    if ($n >= $r[0] && $n <= $r[1]) { $measurable++; if ($c > 0) { $hit = 1; } break; }
-                }
-            }
-        } else {
-            // No user-defined body at all: a plain script or a constants file,
-            // which can only be judged by whether anything in it ran.
-            foreach ($lines as $n => $c) { $measurable++; if ($c > 0) { $hit = 1; } }
-        }
-        // Nothing measurable means nothing to have skipped: absent, not false.
-        if ($measurable === 0) { continue; }
-        // RELATIVE TO THE WORKING DIRECTORY — see the Ruby reducer for why
-        // an absolute path is only ever right on one substrate. Outside cwd
-        // is vendor/ or the runtime, never a candidate.
-        $cwd = getcwd();
-        if ($cwd === false) { continue; }
-        $prefix = rtrim($cwd, '/') . '/';
         if (strncmp($path, $prefix, strlen($prefix)) !== 0) { continue; }
-        fwrite($out, ($hit ? "1 " : "0 ") . substr($path, strlen($prefix)) . "\n");
+        $bodies = isset($ranges[$path]) ? $ranges[$path] : [];
+        // pcov reports one hit for a file's IMPLICIT INCLUDE MARKER, a line
+        // past its last line (measured: a 4-line file reports a hit at line
+        // 5). It is not a line of the file and nothing in the file ran on it,
+        // so it is dropped: without that, an interface or a comment-only file
+        // that was merely required reads as executed. Only a file with no
+        // body needs this — a body's range never reaches past the file — so
+        // only that file is read. A file with no final newline puts the
+        // marker ON its last line, where it cannot be told from that line's
+        // own statement and stays: the residue of this rule.
+        $last = PHP_INT_MAX;
+        if (!$bodies) {
+            $src = @file_get_contents($path);
+            if ($src === false) { continue; }
+            $last = substr_count($src, "\n") + (($src !== '' && substr($src, -1) !== "\n") ? 1 : 0);
+        }
+        $executed = 0; $executable = 0;
+        foreach ($lines as $n => $c) {
+            if ($n > $last) { continue; }
+            if ($bodies) {
+                // Only lines INSIDE a method or function body count. pcov
+                // marks an executable-but-unexecuted line -1 and an executed
+                // one > 0. A line inside two ranges is still one line.
+                $inside = false;
+                foreach ($bodies as $r) {
+                    if ($n >= $r[0] && $n <= $r[1]) { $inside = true; break; }
+                }
+                if (!$inside) { continue; }
+            }
+            // A file with no user-defined body at all (a plain script, a
+            // constants file) can only be judged by whether anything in it
+            // ran, so every line of it counts.
+            $executable++;
+            if ($c > 0) { $executed++; }
+        }
+        // NO EXECUTABLE LINE, NO ENTRY: absent means not measurable, the
+        // honest answer for a file with nothing in it that could have run,
+        // and "0 0" would read as measured-and-never-executed.
+        if ($executable === 0) { continue; }
+        fwrite($out, $executed . " " . $executable . " " . substr($path, strlen($prefix)) . "\n");
     }
     fclose($out);
   } catch (Throwable $e) {
@@ -649,14 +677,21 @@ func (phpPlugin) CoverageCmd(testCmd []string) (cmd []string, ok bool) {
 			break
 		}
 	}
-	return coverageRunAndReduce(setup, env, instrumented, coverageMergeDir(phpCoverageHeader)), true
+	return coverageRunAndReduce(setup, env, instrumented, coverageMergeDir(phpCoverageHeaderV2)), true
 }
 
-// ParseCoverage reads the reduced report phpCoveragePrepend writes. The grammar
-// and its tri-state are shared with Ruby and JavaScript — see
-// corralCoverageReport.
-func (phpPlugin) ParseCoverage(stdout, modulePath string) (executed map[string]bool, err error) {
-	return corralCoverageReport(stdout, phpCoverageHeader, "php", modulePath)
+// ParseCoverage is derived from CoverageCounts: a file is executed when a
+// line inside one of its bodies ran (or, in a file with no body, any line of
+// it). The tri-state is CoverageCounts' own.
+func (p phpPlugin) ParseCoverage(stdout, modulePath string) (executed map[string]bool, err error) {
+	return executedFromCounts(p.CoverageCounts(stdout, modulePath))
+}
+
+// CoverageCounts reads the version-2 report phpCoveragePrepend writes — see
+// the prepend for what an executable line is in pcov's terms, and
+// corralCoverageCounts for the grammar, shared with Ruby and JavaScript.
+func (phpPlugin) CoverageCounts(stdout, modulePath string) (map[string]LineCounts, error) {
+	return corralCoverageCounts(stdout, phpCoverageHeaderV2, "php", modulePath)
 }
 
 // LineComment is the php line-comment marker.
@@ -668,10 +703,4 @@ func (phpPlugin) LineComment() string { return "//" }
 // directory, so each private tree needs its own (see DepDir.CopyPerTree).
 func (phpPlugin) DependencyDirs() []DepDir {
 	return []DepDir{{Name: "vendor", CopyPerTree: []string{"autoload.php", "composer"}}}
-}
-
-// CoverageCounts is not built for php yet (evidence-pairing plan, Tasks 2–3):
-// it says so rather than report a count it does not have.
-func (phpPlugin) CoverageCounts(string, string) (map[string]LineCounts, error) {
-	return nil, errCountsNotYetReported("php")
 }

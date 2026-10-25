@@ -4,6 +4,7 @@ package lang
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -501,5 +502,71 @@ func TestPythonCoverageCmdShellInjectionPayloadsAreInertWhenExecuted(t *testing.
 				t.Fatalf("injection payload %q executed for real — marker file %s was created", payload, marker)
 			}
 		})
+	}
+}
+
+// PYTHON'S COUNTS ARE coverage.py's OWN: summary.covered_lines executed of
+// summary.num_statements executable, per file, with no reinterpretation. A
+// file with no statement (a bare package __init__.py) is absent, as it is
+// from ParseCoverage, and the out-of-scope and out-of-root rules are
+// ParseCoverage's unchanged.
+func TestPythonCoverageCountsFromCoverageJSON(t *testing.T) {
+	got, err := pyPlugin{}.CoverageCounts(fixtureMixed, "")
+	if err != nil {
+		t.Fatalf("CoverageCounts: %v", err)
+	}
+	want := map[string]LineCounts{
+		"src/flask/app.py":      {Executed: 395, Executable: 435},
+		"src/flask/__main__.py": {Executed: 0, Executable: 2},
+		"src/flask/helpers.py":  {Executed: 124, Executable: 132},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("fixtureMixed: got %v, want %v", got, want)
+	}
+
+	got, err = pyPlugin{}.CoverageCounts(fixtureAllZero, "")
+	if err != nil {
+		t.Fatalf("CoverageCounts(fixtureAllZero): %v", err)
+	}
+	if want := map[string]LineCounts{"src/flask/__main__.py": {Executed: 0, Executable: 2}}; !reflect.DeepEqual(got, want) {
+		t.Errorf("fixtureAllZero: the two zero-statement __init__.py files must be absent, got %v, want %v", got, want)
+	}
+
+	impossible := `{"meta": {"format": 3}, "files": {"a.py": {"summary": {"covered_lines": 5, "num_statements": 2}}}, "totals": {"covered_lines": 5, "num_statements": 2}}`
+	for name, in := range map[string]string{"zero totals": fixtureAllZeroTotals, "unparseable": "not json", "executed exceeds executable": impossible} {
+		if got, err := (pyPlugin{}).CoverageCounts(in, ""); err == nil || got != nil {
+			t.Errorf("%s: want an error and a nil map, got %v, %v", name, got, err)
+		}
+	}
+}
+
+// THE SAME, FROM A REAL RUN of the python fixture suite (the captured report a
+// live run is held to): calc.py is called in part, unloaded.py is never
+// imported but inside coverage.py's configured source, so it is MEASURED with
+// nothing run, and empty.py is imported and has no statement, so it is absent.
+func TestPythonCoverageCountsFromRealRun(t *testing.T) {
+	got := capturedCounts(t, "python")
+	if c, ok := got["lib/calc.py"]; !ok || c.Executed == 0 || c.Executed >= c.Executable {
+		t.Errorf("lib/calc.py: want 0 < Executed < Executable, got present=%v %+v (full: %v)", ok, c, got)
+	}
+	if c, ok := got["lib/unloaded.py"]; !ok || c.Executed != 0 || c.Executable == 0 {
+		t.Errorf("lib/unloaded.py is in the configured source and never imported: want Executed==0 && Executable>0, got present=%v %+v", ok, c)
+	}
+	if c, ok := got["lib/empty.py"]; ok {
+		t.Errorf("lib/empty.py has no statement: want ABSENT, got %+v", c)
+	}
+	raw, err := os.ReadFile(filepath.Join("testdata", "coverage", "python-report.txt")) // #nosec G304 -- a fixed testdata path
+	if err != nil {
+		t.Fatal(err)
+	}
+	var r pyCoverageReport
+	if err := json.Unmarshal(raw, &r); err != nil {
+		t.Fatal(err)
+	}
+	for p, c := range got {
+		s := r.Files[p].Summary
+		if c != (LineCounts{Executed: s.CoveredLines, Executable: s.NumStatements}) {
+			t.Errorf("%s: counts %+v are not coverage.py's summary %d/%d", p, c, s.CoveredLines, s.NumStatements)
+		}
 	}
 }

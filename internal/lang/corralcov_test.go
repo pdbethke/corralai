@@ -4,6 +4,8 @@ package lang
 
 import (
 	"bytes"
+	"encoding/json"
+	"fmt"
 	"maps"
 	"os"
 	"os/exec"
@@ -14,32 +16,32 @@ import (
 )
 
 // THE TRI-STATE IS THE WHOLE CONTRACT, so it is tested directly rather than
-// only through a live run: present-true is executed, present-false is
-// measured-and-never-executed, and ABSENT means never measured. Collapsing the
-// third state into the second turns "we did not look" into "we looked and
-// found nothing", which is a repo-wide accusation manufactured from a failure
-// to measure.
-func TestCorralCoverageReportTriState(t *testing.T) {
+// only through a live run: present with Executed>0 is executed, present with
+// Executed==0 is measured-and-never-executed, and ABSENT means never
+// measured. Collapsing the third state into the second turns "we did not
+// look" into "we looked and found nothing", which is a repo-wide accusation
+// manufactured from a failure to measure.
+func TestCorralCoverageCountsTriState(t *testing.T) {
 	root := "/repo"
 	report := strings.Join([]string{
-		rubyCoverageHeader,
-		"1 /repo/lib/calc.rb",
-		"0 /repo/lib/dead.rb",
-		"1 /usr/lib/ruby/3.3.0/set.rb", // outside the root: dropped entirely
+		rubyCoverageHeaderV2,
+		"2 3 /repo/lib/calc.rb",
+		"0 2 /repo/lib/dead.rb",
+		"1 1 /usr/lib/ruby/3.3.0/set.rb", // outside the root: dropped entirely
 	}, "\n")
 
-	got, err := corralCoverageReport(report, rubyCoverageHeader, "ruby", root)
+	got, err := corralCoverageCounts(report, rubyCoverageHeaderV2, "ruby", root)
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	if v, ok := got["lib/calc.rb"]; !ok || !v {
-		t.Errorf("lib/calc.rb: want present-true, got present=%v value=%v", ok, v)
+	if c, ok := got["lib/calc.rb"]; !ok || c != (LineCounts{Executed: 2, Executable: 3}) {
+		t.Errorf("lib/calc.rb: want {2 3}, got present=%v %+v", ok, c)
 	}
-	if v, ok := got["lib/dead.rb"]; !ok || v {
-		t.Errorf("lib/dead.rb: want present-FALSE (measured, never executed), got present=%v value=%v", ok, v)
+	if c, ok := got["lib/dead.rb"]; !ok || c.Executed != 0 || c.Executable == 0 {
+		t.Errorf("lib/dead.rb: want measured and never executed, got present=%v %+v", ok, c)
 	}
 	if _, ok := got["lib/unloaded.rb"]; ok {
-		t.Error("a file the report never mentioned must be ABSENT, never inserted as false")
+		t.Error("a file the report never mentioned must be ABSENT, never inserted as {0 0}")
 	}
 	for k := range got {
 		if strings.HasPrefix(k, "..") || filepath.IsAbs(k) {
@@ -48,47 +50,6 @@ func TestCorralCoverageReportTriState(t *testing.T) {
 	}
 	if len(got) != 2 {
 		t.Errorf("want exactly the 2 in-root entries, got %d: %v", len(got), got)
-	}
-}
-
-// A REPORT THAT DID NOT PARSE MUST BE AN ERROR, NEVER AN EMPTY MAP. Every one
-// of these inputs would otherwise read as "the suite covered nothing" — which
-// is why the header exists at all.
-func TestCorralCoverageReportRefusesGarbage(t *testing.T) {
-	for _, tc := range []struct{ name, in string }{
-		{"empty", ""},
-		{"whitespace", "   \n\n  "},
-		{"no header", "1 /repo/lib/a.rb\n0 /repo/lib/b.rb"},
-		{"stack trace only", "Traceback:\n  something exploded\n"},
-		{"header but no entries", rubyCoverageHeader},
-		{"malformed hit column", rubyCoverageHeader + "\nyes /repo/lib/a.rb"},
-		{"missing path", rubyCoverageHeader + "\n1"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			got, err := corralCoverageReport(tc.in, rubyCoverageHeader, "ruby", "/repo")
-			if err == nil {
-				t.Fatalf("want an error, got a map: %v", got)
-			}
-			if got != nil {
-				t.Errorf("an error must return a NIL map, not a partial one: %v", got)
-			}
-		})
-	}
-}
-
-// A file reported by several test processes (workers, sharded runs) is
-// executed if ANY of them executed it. A later 0 must never downgrade an
-// earlier 1 — with jest or `node --test` spawning one process per file, the
-// same module is routinely reported both ways in one run.
-func TestCorralCoverageReportNeverDowngradesAHit(t *testing.T) {
-	for _, order := range []string{"1 /repo/a.js\n0 /repo/a.js", "0 /repo/a.js\n1 /repo/a.js"} {
-		got, err := corralCoverageReport(jsCoverageHeader+"\n"+order, jsCoverageHeader, "javascript", "/repo")
-		if err != nil {
-			t.Fatalf("parse: %v", err)
-		}
-		if !got["a.js"] {
-			t.Errorf("order %q: a hit from any process must win, got false", strings.ReplaceAll(order, "\n", " | "))
-		}
 	}
 }
 
@@ -187,21 +148,21 @@ func TestCoverageReporterAgainstRealSuites(t *testing.T) {
 			testCmd:      []string{"ruby", "-Ilib", "test/calc_test.rb"},
 			wantExecuted: []string{"lib/calc.rb"},
 			wantMeasured: []string{"lib/dead.rb"},
-			wantAbsent:   []string{"lib/unloaded.rb"},
+			wantAbsent:   []string{"lib/unloaded.rb", "lib/empty.rb"},
 		},
 		{
 			lang: "javascript", dir: "js", tool: "node",
 			testCmd:      []string{"node", "--test"},
 			wantExecuted: []string{"lib/calc.js"},
 			wantMeasured: []string{"lib/dead.js"},
-			wantAbsent:   []string{"lib/unloaded.js"},
+			wantAbsent:   []string{"lib/unloaded.js", "lib/empty.js"},
 		},
 		{
 			lang: "php", dir: "php", tool: "php",
 			testCmd:      []string{"php", "test/CalcTest.php"},
 			wantExecuted: []string{"lib/Calc.php"},
 			wantMeasured: []string{"lib/Dead.php"},
-			wantAbsent:   []string{"lib/Unloaded.php"},
+			wantAbsent:   []string{"lib/Unloaded.php", "lib/Shape.php"},
 		},
 		{
 			lang: "typescript", dir: "ts", tool: "node",
@@ -249,7 +210,7 @@ func TestCoverageReporterAgainstRealSuites(t *testing.T) {
 			}
 			for _, f := range tc.wantAbsent {
 				if _, ok := got[f]; ok {
-					t.Errorf("%s is never loaded by the suite: want ABSENT (not measured), but it is in the map", f)
+					t.Errorf("%s is never loaded by the suite, or has no executable line: want ABSENT (not measured), but it is in the map", f)
 				}
 			}
 		})
@@ -319,9 +280,9 @@ func TestCoverageReporterMergesSubprocessReports(t *testing.T) {
 //
 // This is the exact shape every non-Go language produced while the caller was
 // passing an empty root, and the shape a wrongly-rooted run produces now.
-func TestCorralCoverageReportRefusesAnAllOutsideRootReport(t *testing.T) {
-	in := rubyCoverageHeader + "\n1 /usr/lib/ruby/3.3.0/set.rb\n0 /usr/lib/ruby/3.3.0/json.rb"
-	got, err := corralCoverageReport(in, rubyCoverageHeader, "ruby", "/repo")
+func TestCorralCoverageCountsRefusesAnAllOutsideRootReport(t *testing.T) {
+	in := rubyCoverageHeaderV2 + "\n1 4 /usr/lib/ruby/3.3.0/set.rb\n0 2 /usr/lib/ruby/3.3.0/json.rb"
+	got, err := corralCoverageCounts(in, rubyCoverageHeaderV2, "ruby", "/repo")
 	if err == nil {
 		t.Fatalf("want an error, got a map: %v", got)
 	}
@@ -518,11 +479,14 @@ func TestCorralCoverageCountsParsesV2(t *testing.T) {
 
 // A STALE REDUCER IS AN ERROR, NOT A HALF-READ. A v1 body has no counts; read
 // as v2 it would either fail line by line or, worse, be guessed at. The error
-// names the header it wanted so the mismatch is legible.
+// names the header it wanted so the mismatch is legible. Nothing emits v1 any
+// more, which is exactly when a stale copy of a reducer would be the one
+// still printing it, so the v1 headers are spelled out here.
 func TestCorralCoverageCountsRefusesV1(t *testing.T) {
 	for _, tc := range []struct{ name, in, header string }{
-		{"js v1", jsCoverageHeader + "\n1 /r/a.js\n0 /r/b.js\n", jsCoverageHeaderV2},
-		{"ruby v1", rubyCoverageHeader + "\n1 /r/a.rb\n", rubyCoverageHeaderV2},
+		{"js v1", "corral-js-coverage: v1\n1 /r/a.js\n0 /r/b.js\n", jsCoverageHeaderV2},
+		{"ruby v1", "corral-ruby-coverage: v1\n1 /r/a.rb\n", rubyCoverageHeaderV2},
+		{"php v1", "corral-php-coverage: v1\n1 /r/a.php\n", phpCoverageHeaderV2},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, err := corralCoverageCounts(tc.in, tc.header, "x", "/r")
@@ -544,7 +508,9 @@ func TestCorralCoverageCountsRefusesGarbage(t *testing.T) {
 	h := jsCoverageHeaderV2
 	for _, tc := range []struct{ name, in string }{
 		{"empty", ""},
+		{"whitespace", "   \n\n  "},
 		{"no header", "1 2 /r/a.js"},
+		{"stack trace only", "Traceback:\n  something exploded\n"},
 		{"header but no entries", h},
 		{"only disclosures", h + "\n# uncounted lib/a.js: the source could not be read"},
 		{"v1 line under a v2 header", h + "\n1 /r/a.js"},
@@ -582,23 +548,75 @@ func TestCorralCoverageCountsNeverDowngradesAHit(t *testing.T) {
 	}
 }
 
-// coverageCountsPending is THE ONE LIST of reporters whose CoverageCounts is
-// not built yet: each returns "<lang>: line counts not yet reported", so
-// nothing reads a fake count. Tasks 2–3 of the evidence-pairing plan remove a
-// name here when its reporter gains counts.
-var coverageCountsPending = []string{"python", "ruby", "php"}
-
 // capturedCoverageReport names, per language, the report a REAL run of the
 // fixture suite produced, and the command that produced it. The file is
 // written only by TestCapturedCoverageReportsMatchALiveRun with
-// CORRALAI_RECAPTURE_COVERAGE=1 — never by hand.
+// CORRALAI_RECAPTURE_COVERAGE=1 — never by hand. Every CoverageReporter has
+// one, which is what TestParseCoverageAgreesWithCoverageCounts requires.
+//
+// probe, when set, must exit 0 for the live half to run: PHP needs a coverage
+// EXTENSION and Python needs coverage.py, and an interpreter without them is
+// an environment fact, not drift. payload is what of a live run's stdout is
+// the report, and compared is what of a report must match byte for byte —
+// both named per language, since what is stable differs (see coverageAsIs,
+// goCoveragePayload, pyCoveragePayload, pyCoverageCompared).
 var capturedCoverageReport = map[string]struct {
 	dir, report, tool string
+	probe             []string
 	testCmd           []string
+	payload, compared func(string) string
 }{
-	"javascript": {dir: "js", report: "js-report.txt", tool: "node", testCmd: []string{"node", "--test"}},
-	"go":         {dir: "go", report: "go-report.txt", tool: "go", testCmd: []string{"go", "test", "-count=1", "./..."}},
-	"typescript": {dir: "ts", report: "ts-report.txt", tool: "node", testCmd: []string{"node", "--test"}},
+	"javascript": {dir: "js", report: "js-report.txt", tool: "node", testCmd: []string{"node", "--test"}, payload: coverageAsIs, compared: coverageAsIs},
+	"go":         {dir: "go", report: "go-report.txt", tool: "go", testCmd: []string{"go", "test", "-count=1", "./..."}, payload: goCoveragePayload, compared: coverageAsIs},
+	"typescript": {dir: "ts", report: "ts-report.txt", tool: "node", testCmd: []string{"node", "--test"}, payload: coverageAsIs, compared: coverageAsIs},
+	"ruby":       {dir: "ruby", report: "ruby-report.txt", tool: "ruby", testCmd: []string{"ruby", "-Ilib", "test/calc_test.rb"}, payload: coverageAsIs, compared: coverageAsIs},
+	"php": {dir: "php", report: "php-report.txt", tool: "php", testCmd: []string{"php", "test/CalcTest.php"}, payload: coverageAsIs, compared: coverageAsIs,
+		probe: []string{"php", "-r", `exit(extension_loaded("pcov") ? 0 : 1);`}},
+	"python": {dir: "python", report: "python-report.txt", tool: "python3", testCmd: []string{"python3", "-m", "pytest", "-q"}, payload: pyCoveragePayload, compared: pyCoverageCompared,
+		probe: []string{"python3", "-c", "import coverage, pytest"}},
+}
+
+// coverageAsIs is a report that is stable as printed.
+func coverageAsIs(s string) string { return s }
+
+// goCoveragePayload drops the timing line `go test` prints ahead of the
+// profile, which changes every run; the report is what follows the profile's
+// mode header.
+func goCoveragePayload(s string) string {
+	if i := strings.Index(s, "mode: "); i > 0 {
+		return s[i:]
+	}
+	return s
+}
+
+// pyCoveragePayload is the JSON report: the last non-blank line, which is
+// where pyPlugin.ParseCoverage finds it. Ahead of it is pytest's own
+// progress output, timing included.
+func pyCoveragePayload(s string) string {
+	lines := strings.Split(strings.TrimRight(s, "\n"), "\n")
+	return lines[len(lines)-1] + "\n"
+}
+
+// pyCoverageCompared is what of coverage.py's JSON must match a live run:
+// every file's summary counts and the totals, which is all CoverageCounts
+// reads. The rest is not stable across runs or machines — a timestamp, the
+// coverage.py version, and per-version extras (the functions and classes
+// breakdowns appeared in 7.5) — so comparing it byte for byte would fail on
+// a CI runner whose coverage.py is older without anything corral reads
+// having changed. An unparseable report compares as itself, so it still
+// fails.
+func pyCoverageCompared(s string) string {
+	var r pyCoverageReport
+	if err := json.Unmarshal([]byte(strings.TrimSpace(s)), &r); err != nil {
+		return s
+	}
+	var b strings.Builder
+	for _, p := range slices.Sorted(maps.Keys(r.Files)) {
+		f := r.Files[p].Summary
+		fmt.Fprintf(&b, "%d %d %s\n", f.CoveredLines, f.NumStatements, p)
+	}
+	fmt.Fprintf(&b, "totals %d\n", r.Totals.CoveredLines)
+	return b.String()
 }
 
 // runCoverageFixture runs lang's CoverageCmd over the fixture suite in
@@ -637,13 +655,13 @@ func TestCapturedCoverageReportsMatchALiveRun(t *testing.T) {
 			if _, err := exec.LookPath(fx.tool); err != nil {
 				t.Skipf("%s not installed — the live half of this check needs the real runtime", fx.tool)
 			}
-			stdout, _, stderr, runErr := runCoverageFixture(t, langName, fx.dir, fx.testCmd)
-			// `go test` prints its own timing line ahead of the profile, which
-			// changes every run; the report is what follows the profile's mode
-			// header, and that is what is captured and compared.
-			if i := strings.Index(stdout, "mode: "); i > 0 {
-				stdout = stdout[i:]
+			if fx.probe != nil {
+				if err := exec.Command(fx.probe[0], fx.probe[1:]...).Run(); err != nil { // #nosec G204 -- a fixed probe from the table above
+					t.Skipf("%v failed (%v) — this machine lacks the coverage instrument the live half needs", fx.probe, err)
+				}
 			}
+			stdout, _, stderr, runErr := runCoverageFixture(t, langName, fx.dir, fx.testCmd)
+			stdout = fx.payload(stdout)
 			path := filepath.Join("testdata", "coverage", fx.report)
 			if os.Getenv("CORRALAI_RECAPTURE_COVERAGE") == "1" {
 				if err := os.WriteFile(path, []byte(stdout), 0o600); err != nil {
@@ -656,7 +674,7 @@ func TestCapturedCoverageReportsMatchALiveRun(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if stdout != string(want) {
+			if fx.compared(stdout) != fx.compared(string(want)) {
 				t.Errorf("a live run no longer prints the captured %s.\nlive:\n%s\ncaptured:\n%s\nrun error: %v\nSTDERR:\n%s\n"+
 					"If the reducer changed on purpose, recapture with CORRALAI_RECAPTURE_COVERAGE=1.", path, stdout, want, runErr, stderr)
 			}
@@ -676,12 +694,6 @@ func TestParseCoverageAgreesWithCoverageCounts(t *testing.T) {
 			continue
 		}
 		t.Run(name, func(t *testing.T) {
-			if slices.Contains(coverageCountsPending, name) {
-				if _, err := r.CoverageCounts("", ""); err == nil || !strings.Contains(err.Error(), "line counts not yet reported") {
-					t.Fatalf("%s is listed as pending but CoverageCounts did not say so: %v", name, err)
-				}
-				t.Skipf("%s: line counts not yet reported (coverageCountsPending)", name)
-			}
 			fx, ok := capturedCoverageReport[name]
 			if !ok {
 				t.Fatalf("%s reports line counts but has no captured report in capturedCoverageReport", name)
@@ -749,5 +761,54 @@ func TestUncountedCoverageKeepsDisclosuresBesideCounts(t *testing.T) {
 	}
 	if extra := UncountedCoverage(jsCoverageHeaderV2 + "\n# uncounted ../outside.js: x\n1 1 lib/a.js\n"); len(extra) != 0 {
 		t.Errorf("a path escaping the repository must be dropped as CoverageCounts drops it, got %q", extra)
+	}
+}
+
+// capturedCounts is CoverageCounts over langName's captured real-run report
+// (the one TestCapturedCoverageReportsMatchALiveRun holds to a live run),
+// parsed against its fixture root.
+func capturedCounts(t *testing.T, langName string) map[string]LineCounts {
+	t.Helper()
+	fx, ok := capturedCoverageReport[langName]
+	if !ok {
+		t.Fatalf("%s has no captured coverage report", langName)
+	}
+	raw, err := os.ReadFile(filepath.Join("testdata", "coverage", fx.report)) // #nosec G304 -- a fixed testdata path
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, err := filepath.Abs(filepath.Join("testdata", "coverage", fx.dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, _ := ByName(langName)
+	got, err := p.(CoverageReporter).CoverageCounts(string(raw), root)
+	if err != nil {
+		t.Fatalf("%s CoverageCounts: %v", langName, err)
+	}
+	return got
+}
+
+// assertFixtureCounts holds the shape every reduce-in-process fixture has: a
+// called file executed in part, a required-and-never-called file measured
+// with nothing run, a never-loaded file absent, and a loaded file with no
+// executable line absent too — nothing in it could have run, so it is not
+// measurable, and "measured, never executed" would accuse it of a gap it
+// cannot have.
+func assertFixtureCounts(t *testing.T, got map[string]LineCounts, called, dead, unloaded, empty string) {
+	t.Helper()
+	if c, ok := got[called]; !ok || c.Executed == 0 || c.Executed >= c.Executable {
+		t.Errorf("%s: one method is called and one is not, want 0 < Executed < Executable, got present=%v %+v (full: %v)", called, ok, c, got)
+	}
+	if dead != "" {
+		if c, ok := got[dead]; !ok || c.Executed != 0 || c.Executable == 0 {
+			t.Errorf("%s is loaded and never called: want Executed==0 && Executable>0, got present=%v %+v", dead, ok, c)
+		}
+	}
+	if _, ok := got[unloaded]; ok && unloaded != "" {
+		t.Errorf("%s is never loaded: want ABSENT, got %+v", unloaded, got[unloaded])
+	}
+	if c, ok := got[empty]; ok {
+		t.Errorf("%s has no executable line: want ABSENT (not measurable), got %+v", empty, c)
 	}
 }

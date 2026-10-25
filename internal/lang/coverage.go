@@ -2,8 +2,6 @@
 
 package lang
 
-import "fmt"
-
 // CoverageReporter is implemented by plugins that can report, in ONE
 // instrumented suite run, which source files the suite actually executed.
 //
@@ -38,8 +36,7 @@ type CoverageReporter interface {
 	// count). That file read executed before counts existed and must not
 	// move; evidence pairing reads Executed, so such a file is never
 	// promoted by unit evidence. No other reporter may diverge. An unparseable report
-	// is an ERROR. A reporter that cannot count yet returns an error saying
-	// so, never a made-up count.
+	// is an ERROR, and a reporter never makes up a count it was not given.
 	//
 	// The counts exist so evidence can name the test unit that executed
 	// MOST of a file, which a boolean cannot rank.
@@ -98,10 +95,4 @@ func executedFromCounts(counts map[string]LineCounts, err error) (map[string]boo
 		executed[p] = c.Executed > 0
 	}
 	return executed, nil
-}
-
-// errCountsNotYetReported is what a reporter returns from CoverageCounts until
-// its reducer reports line counts: a stated gap, never a made-up count.
-func errCountsNotYetReported(langName string) error {
-	return fmt.Errorf("%s: line counts not yet reported", langName)
 }

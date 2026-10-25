@@ -1,6 +1,7 @@
 <?php
 require_once __DIR__ . '/../lib/Calc.php';
 require_once __DIR__ . '/../lib/Dead.php';
+require_once __DIR__ . '/../lib/Shape.php';
 
 $c = new Calc();
 if ($c->add(1, 2) !== 3) {

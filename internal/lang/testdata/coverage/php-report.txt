@@ -1,0 +1,3 @@
+corral-php-coverage: v2
+1 2 lib/Calc.php
+0 1 lib/Dead.php

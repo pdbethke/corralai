@@ -1,0 +1,3 @@
+corral-ruby-coverage: v2
+1 2 lib/calc.rb
+0 2 lib/dead.rb

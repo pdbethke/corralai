@@ -4802,8 +4802,9 @@ type localExecutor struct {
 	// then says why.
 	unitLanding     map[string]string
 	unitLandingNote string
-	// pendingUnitsPut is pendingSelectionPut's twin for a settled unit pass
-	// (reposcan.UnitEvidence.Settled), written at the same point.
+	// pendingUnitsPut is pendingSelectionPut's twin for a unit pass in
+	// which every unit succeeded (reposcan.UnitEvidence.Settled), written
+	// at the same point.
 	pendingUnitsPut *pendingSelectionCachePut
 
 	// writerMode is the scan-wide --writer-mode, carried onto every job's

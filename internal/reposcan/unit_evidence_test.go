@@ -655,11 +655,12 @@ func unitListingFixture(t *testing.T, name string) string {
 	return string(b)
 }
 
-// Settled is what a cache may keep: a pass whose every unit's outcome is a
-// property of the tree and the command. A unit the deadline or an interrupt
-// stopped, or that the runner could not start, says something about THIS
-// run only; caching it would freeze the gap into every later scan of the
-// same tree.
+// Settled is what a cache may keep (ruling R15): a pass in which EVERY unit
+// succeeded. Any failure may be the environment's rather than the tree's —
+// a deadline, an interrupt, a runner that could not start, but also a
+// coverage instrument the jail lacks or a unit red for a missing toolchain —
+// and the cache is keyed on the tree, so a cached failure would outlive the
+// operator's fix.
 func TestUnitEvidenceSettled(t *testing.T) {
 	ok := UnitResult{Unit: "a", Counts: map[string]lang.LineCounts{}}
 	cases := []struct {
@@ -669,8 +670,10 @@ func TestUnitEvidenceSettled(t *testing.T) {
 	}{
 		{"never ran", UnitEvidence{Note: "no unit form"}, false},
 		{"all green", UnitEvidence{Ran: true, Units: []UnitResult{ok}}, true},
-		{"a red unit", UnitEvidence{Ran: true, Units: []UnitResult{ok, {Unit: "b", Err: "run failed: exit 1"}}}, true},
-		{"cannot run alone", UnitEvidence{Ran: true, Units: []UnitResult{ok, {Unit: "b", Err: unitNotAlone}}}, true},
+		{"a red unit", UnitEvidence{Ran: true, Units: []UnitResult{ok, {Unit: "b", Err: "run failed: exit 1"}}}, false},
+		{"cannot run alone", UnitEvidence{Ran: true, Units: []UnitResult{ok, {Unit: "b", Err: unitNotAlone}}}, false},
+		{"coverage unavailable", UnitEvidence{Ran: true, Units: []UnitResult{ok, {Unit: "b", Err: unitCoverageUnavailable + "llvm-tools missing"}}}, false},
+		{"all failed", UnitEvidence{Ran: true, Units: []UnitResult{{Unit: "a", Err: "run failed: exit 1"}, {Unit: "b", Err: "run failed: exit 2"}}}, false},
 		{"time limit", UnitEvidence{Ran: true, Units: []UnitResult{ok, {Unit: "b", Err: unitNotRunTimeLimit}}}, false},
 		{"timed out", UnitEvidence{Ran: true, Units: []UnitResult{ok, {Unit: "b", Err: unitTimedOut}}}, false},
 		{"interrupted", UnitEvidence{Ran: true, Units: []UnitResult{ok, {Unit: "b", Err: unitInterrupted}}}, false},

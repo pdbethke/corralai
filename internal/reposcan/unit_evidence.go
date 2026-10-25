@@ -167,22 +167,21 @@ func CollectUnitEvidence(ctx context.Context, runner commandRunner, files map[st
 	return UnitEvidence{Ran: true, Units: results}
 }
 
-// Settled reports whether this pass is a fact about the tree and the
-// command, and so may be kept for a later scan of the same tree (the
-// selection cache): it ran, and no unit's outcome came from THIS run's
-// circumstances — the deadline, an interrupt, a runner that could not
-// start. A red unit or one with no one-unit form is settled: the same tree
-// answers the same way. An unsettled pass is still evidence for the scan
-// that made it; it is only never reused.
+// Settled reports whether this pass may be kept for a later scan of the
+// same tree (the selection cache): it ran, and EVERY unit succeeded. Any
+// unit failure disqualifies it, because none can be told apart from the
+// environment's: a deadline, an interrupt or a runner that could not start,
+// but equally a coverage instrument the jail lacks, or a unit red because a
+// toolchain is missing. The cache is keyed on the tree, so a cached failure
+// would be served again after the operator fixed the environment (ruling
+// R15). An unsettled pass is still evidence for the scan that made it; it
+// is only never reused.
 func (ev UnitEvidence) Settled() bool {
 	if !ev.Ran {
 		return false
 	}
 	for _, u := range ev.Units {
-		switch {
-		case u.Err == unitNotRunTimeLimit, u.Err == unitNotRunInterrupted,
-			u.Err == unitTimedOut, u.Err == unitInterrupted,
-			strings.HasPrefix(u.Err, unitCouldNotRun):
+		if u.Err != "" {
 			return false
 		}
 	}

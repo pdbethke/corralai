@@ -433,3 +433,75 @@ func TestUnitPassWithNoGoodUnitSaysSo(t *testing.T) {
 		t.Errorf("the failed unit must be listed:\n%s", s)
 	}
 }
+
+// Ruling R15: only a pass in which every unit succeeded is cached. A pass
+// with an unavailable instrument, a red unit, or nothing but failures is
+// evidence for its own scan, never Put, and the next scan of the same tree
+// runs the collector again — so an operator who fixes the environment is not
+// served the old failure.
+func TestUnitPassCachesOnlyAFullyGreenPass(t *testing.T) {
+	root := unitEvidenceTSFixture(t)
+	green := unitRun("tests/composition/service.test.ts", map[string]lang.LineCounts{"src/app/Service.ts": {Executed: 1, Executable: 1}})
+	sources := []string{"src/app/Service.ts"}
+	newEx := func(cache selectionCacheStore) *localExecutor {
+		cands, excl, err := reposcan.Enumerate(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return &localExecutor{repoDir: root, substrate: substrateWorkspace, checkArgv: []string{"vitest", "run"},
+			selectionCache: cache, treeDigest: "tree", treeDigestComputed: true, unitWorkers: 1,
+			unitInventory: checkoutInventory(cands, excl)}
+	}
+	// scan is one scan's collect plus the recording sequence's Put.
+	scan := func(cache *fakeSelectionCache) *localExecutor {
+		ex := newEx(cache)
+		ex.units = ex.collectUnits(context.Background(), sources)
+		if p := ex.pendingUnitsPut; p != nil {
+			_ = cache.SelectionCachePut(context.Background(), p.TreeDigest, p.CmdDigest, p.Plugin, p.Substrate, p.Raw, "")
+		}
+		return ex
+	}
+	failing := map[string]reposcan.UnitEvidence{
+		"one unavailable unit": {Ran: true, Units: []reposcan.UnitResult{green, {Unit: "tests/b.test.ts", Err: "coverage unavailable: llvm-tools missing"}}},
+		"one red unit":         {Ran: true, Units: []reposcan.UnitResult{green, {Unit: "tests/b.test.ts", Err: "run failed: exit 1"}}},
+		"all failed": {Ran: true, Units: []reposcan.UnitResult{
+			{Unit: "tests/composition/service.test.ts", Err: "run failed: exit 1"},
+			{Unit: "tests/b.test.ts", Err: "run failed: exit 1"},
+		}},
+	}
+	for name, ev := range failing {
+		t.Run(name, func(t *testing.T) {
+			cache := &fakeSelectionCache{rows: map[[4]string][]byte{}}
+			fake := &fakeUnitPass{ev: ev}
+			fake.install(t)
+			first := scan(cache)
+			if first.pendingUnitsPut != nil || len(cache.rows) != 0 {
+				t.Fatalf("a pass with a failed unit was cached: put=%+v rows=%d", first.pendingUnitsPut, len(cache.rows))
+			}
+			if !reflect.DeepEqual(first.units, ev) {
+				t.Errorf("the scan that made it must still use it: %+v", first.units)
+			}
+			second := scan(cache)
+			if n := len(fake.called()); n != 2 || second.unitsReused {
+				t.Errorf("the next scan must run the collector again: calls=%d reused=%v", n, second.unitsReused)
+			}
+		})
+	}
+	t.Run("fully green", func(t *testing.T) {
+		ev := reposcan.UnitEvidence{Ran: true, Units: []reposcan.UnitResult{green}}
+		cache := &fakeSelectionCache{rows: map[[4]string][]byte{}}
+		fake := &fakeUnitPass{ev: ev}
+		fake.install(t)
+		first := scan(cache)
+		if len(cache.rows) != 1 {
+			t.Fatalf("a fully green pass must be cached, rows=%d", len(cache.rows))
+		}
+		second := scan(cache)
+		if n := len(fake.called()); n != 1 || !second.unitsReused {
+			t.Fatalf("the second scan must be served from the cache: calls=%d reused=%v", n, second.unitsReused)
+		}
+		if !reflect.DeepEqual(second.units, first.units) || !reflect.DeepEqual(second.units, ev) {
+			t.Errorf("the reused pass must be byte-identical:\n got %+v\nwant %+v", second.units, ev)
+		}
+	})
+}

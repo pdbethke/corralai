@@ -51,7 +51,7 @@ func runsUnitPass(plug lang.Plugin) bool {
 }
 
 // collectUnits runs the unit pass for the scan's language over sources (the
-// enumerated source set, as collectSelection takes it), or serves a settled
+// enumerated source set, as collectSelection takes it), or serves a fully green
 // earlier pass over a byte-identical tree from the selection cache. Every
 // refusal is a Note, never fatal: the scan stays name-paired for that
 // language, and says so.

@@ -933,6 +933,17 @@ test file was tried in July and inverted a verdict on `requests/adapters.py`
 (1.00 → 0.00) because that file's real tests live in `test_requests.py`.
 Coverage finds them; a filename rule cannot.
 
+The same idea reaches the other languages as **evidence pairing**. For Go,
+JavaScript, TypeScript, Ruby, PHP and Rust, a `certify --repo` run lists the
+test units your command collects (a test file, a Go package, a Cargo target),
+runs each alone under coverage, and makes a candidate of any source file a
+green unit executed and a test can land beside, even when no naming rule pairs
+it. `--dry-run --evidence` runs that pass for free. It is not universal: mocha,
+minitest and vitest's default forks pool give no unit evidence, and Rust's is
+measured but not yet used for candidacy. What ran on real repositories, and
+what did not, is in
+[docs/corral/evidence-pairing.md](docs/corral/evidence-pairing.md).
+
 Today this is implemented for Python (pytest with `pytest-cov`). A language
 or harness without a selector, a project without `pytest-cov`, or a run whose
 evidence cannot be read grades against the **whole suite, and the record says

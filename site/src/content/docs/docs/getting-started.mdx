@@ -30,6 +30,14 @@ cd your-repo
 corral certify --repo . --dry-run
 ```
 
+In Go, JavaScript, TypeScript, Ruby, PHP or Rust, add `--evidence` and your test
+command to also see which files a green test executes even though no filename
+pairs them. It runs your suite in the sandbox, with no model and no key:
+
+```bash
+corral certify --repo . --dry-run --evidence -- <your test command>
+```
+
 Then audit the three highest-ranked files, with a cap on what the run may spend:
 
 ```bash

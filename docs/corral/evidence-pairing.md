@@ -396,3 +396,7 @@ evidence is not built. `certify --local --repo-dir . --code src/inner/extract.rs
 refuses the file before any spend, because the authored test's landing is
 derived from the source and lands on the source itself. A promoted file would
 therefore be listed by the scan and then refused by the audit.
+
+## Real audit
+
+Real audit (codex writer, claude-code mutant/critic/derive): result to be recorded by the controller.

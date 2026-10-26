@@ -75,7 +75,8 @@ export type Gap = {
 export type ModelLine = {
   role: string; // "mutant-generator"
   model: string;
-  files: number;
+  files: number; // distinct (repo, commit, path)
+  rows: number; // graded rows the figures sum; more than files when a file was graded in several runs
   mutants_planted: number;
   survivors: number;
   proven_missed: number;
@@ -265,7 +266,13 @@ export async function loadLedger(repo: string, fetchFn: typeof fetch): Promise<L
     rootPub = '';
     rootPubSource = 'absent';
   } else if (k.res.status === 200) {
-    rootPub = (await k.res.text()).trim();
+    // The body can fail after the status arrived (a reset connection); that is
+    // this URL's fetch failing, not a rejection of the whole load.
+    try {
+      rootPub = (await k.res.text()).trim();
+    } catch {
+      return { kind: 'fetch-failed', repo, url: kURL, status: 'network' };
+    }
     rootPubSource = 'LEDGER_PUBKEY';
   } else {
     return { kind: 'fetch-failed', repo, url: kURL, status: k.res.status };

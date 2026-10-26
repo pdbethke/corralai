@@ -264,6 +264,32 @@ test('a LEDGER_PUBKEY read that fails other than 404 is fetch-failed', async ({ 
   expect(await load(page)).toEqual({ kind: 'fetch-failed', repo: REPO, url: rawURL('LEDGER_PUBKEY'), status: 503 });
 });
 
+// The status can arrive and the body still fail (a connection reset mid-body).
+// page.route cannot break a body halfway, so the fetch seam hands back a
+// response whose text() rejects, for the key's URL only.
+test('a LEDGER_PUBKEY body that fails to read is fetch-failed naming that URL, not a rejected load', async ({ page }) => {
+  await serveLedger(page, { dir: GOOD });
+  await harness(page);
+  const r = await page.evaluate(async (repo) => {
+    const real = window.fetch.bind(window);
+    const fetchFn = async (input: RequestInfo | URL, init?: RequestInit) => {
+      const res = await real(input, init);
+      if (String(input).endsWith('/LEDGER_PUBKEY')) {
+        return new Proxy(res, {
+          get: (t, k) => (k === 'text' ? () => Promise.reject(new TypeError('body stream reset')) : (Reflect.get(t, k) as any)?.bind?.(t) ?? Reflect.get(t, k)),
+        });
+      }
+      return res;
+    };
+    try {
+      return await (window as any).__ledger.loadLedger(repo, fetchFn);
+    } catch (e) {
+      return { rejected: String(e) };
+    }
+  }, REPO);
+  expect(r).toEqual({ kind: 'fetch-failed', repo: REPO, url: rawURL('LEDGER_PUBKEY'), status: 'network' });
+});
+
 test('entries are read at most 8 at a time', async ({ page }) => {
   const extra = Array.from({ length: 20 }, (_, i) => `2026${String(i).padStart(4, '0')}-extra.json`);
   let inFlight = 0;

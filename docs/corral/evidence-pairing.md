@@ -36,6 +36,7 @@ the scratch clone, where the clone was the isolation boundary.
 | TypeScript | morluto/rea | workspace | 25 / 25 | 0 | 564 | 110.55 s |
 | TypeScript | morluto/rea (re-run, vm source maps) | workspace | 25 / 0 | 23 | 564 | 92.7 s |
 | TypeScript | morluto/rea (re-run, vm source maps, review fixes) | workspace | 25 / 0 | 23 | 564 | 104.5 s |
+| TypeScript | morluto/rea (re-run, landing map over the whole repository) | workspace | 25 / 0 | 238 | 564 | 104.9 s |
 | Ruby | ku1ik/rainbow | workspace | 11 / 4 | 10 | 0 | 2.50 s |
 | PHP | webmozart/assert | jail | 2 / 0 | 1 | 1 | 1.53 s |
 | Rust | indexmap-rs/indexmap | workspace | 5 / 0 | 0 | 2 | 12.88 s |
@@ -226,6 +227,27 @@ files.
   holds a literal U+2028 in a string, and its map's lines are ECMAScript lines.
   Since `e56612cc` it is read that way, and no unit reports an uncounted file.
   The output was 10,717 bytes; 1 m 44.5 s.
+- **Every run above under-counted** (fixed in `d812b60a`). The workspace
+  substrate's landing map was built from the files inside `--path`, so a
+  unit's test outside the scope did not exist as a landing. Under `--path src`
+  only the `tests/composition` files some source had already name-paired were
+  present. With `--path src/application/reverse`, all 25 units ran green and
+  nothing was paired. The map now covers the whole repository, and the same
+  command reads:
+
+```
+  units: 25 run, 0 failed (1 at a time)
+  widened by evidence: +238 candidate(s); re-ranked by size-only under the same bound, auditing 25 of 802 candidate(s)
+  2812 file(s) walked; 802 candidate(s); 25 job(s); 2787 file(s) excluded from the audit
+  evidence-paired 238 · name-paired 564 · uncovered 0 · import-only 200
+```
+
+  `ReverseEngineeringService.ts` now has 8 covering units and lands beside
+  `tests/composition/reverseEngineeringEdgeCases.test.ts`. That landing is
+  the same under `--path src`, `--path src/application` and
+  `--path src/application/reverse` (each with `--all`, reusing the one cached
+  unit pass). It is no longer among the 25 files the size-ranked bound picks
+  under `--path src`. The output was 11,155 bytes; 1 m 44.9 s.
 - **Jail re-run** with `dist/` moved out of the clone: the jail still could not
   be prepared (`more than 64 MiB of text`).
 

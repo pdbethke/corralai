@@ -260,7 +260,7 @@ func (jsPlugin) WorkspaceRunEnv() (env []string, cleanup func()) { return nil, f
 // lets the captured fixture reports be checked against a live run.
 const jsCoverageReduce = `const fs=require('fs'),path=require('path'),url=require('url');
 const dir=process.argv[2];
-const lines=new Map(),uncounted=new Map(),sources=new Map();
+const lines=new Map(),uncounted=new Map(),sources=new Map(),loaded=new Set();
 let files=[];
 try{files=fs.readdirSync(dir)}catch(e){}
 files.sort();
@@ -453,10 +453,14 @@ for(const f of files){
     // TRANSFORMED CODE WITH A RECORDED MAP: a runner that evaluates through
     // node:vm (vitest, jest) ran this text, whose inline source map corral's
     // preload recorded, matched by path and by the script's exact length.
+    // LOADED: the script-level range ran, so the module's own top level
+    // executed — whether or not any function of it did.
+    const top=fns.some(fn=>!fn.functionName&&(fn.ranges||[]).some(r=>r.startOffset===0&&r.endOffset===script&&r.count>0));
     const rec=(maps.get(p)||[]).find(r=>r.length===script);
     if(rec){
       const why=countMapped(p,rec,fns);
       if(why&&!lines.has(key))uncounted.set(key,why);
+      if(top)loaded.add(key);
       continue;
     }
     const src=source(p);
@@ -482,6 +486,7 @@ for(const f of files){
       continue;
     }
     count(key,src,fns);
+    if(top)loaded.add(key);
   }
 }
 const sum=a=>a.reduce((t,v)=>t+v,0);
@@ -492,7 +497,7 @@ for(const k of keys){
   // NO EXECUTABLE LINE, NO ENTRY: a file V8 measured with nothing in it to
   // run (whitespace only) is not measurable, and "0 0" would read as
   // measured-and-never-executed, accusing it of a gap it cannot have.
-  if(st){const exe=sum(st.exe);if(exe>0)out.push(sum(st.ran)+' '+exe+' '+k);}
+  if(st){const exe=sum(st.exe);if(exe>0){out.push(sum(st.ran)+' '+exe+' '+k);if(loaded.has(k))out.push('# loaded '+k)}}
   else out.push('# uncounted '+k+': '+uncounted.get(k));
 }
 process.stdout.write(out.join('\n')+'\n');

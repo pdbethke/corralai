@@ -502,3 +502,43 @@ func TestCoveringTestsNeverSetFromUnits(t *testing.T) {
 }
 
 func intPtr(n int) *int { return &n }
+
+// UNIT EVIDENCE SAYS ONLY WHAT ITS UNITS RAN (ruling R24). A file a unit
+// LOADED whose functions never ran is import-only, the claim the codebase
+// already has for that shape; a file measured at zero that no unit even
+// loaded is uncovered under a reason scoped to the command's units, never
+// Python's "no test executes this file", which speaks for the whole suite.
+// REA's composition units made the unscoped claim 200 times (review I1).
+func TestWidenCandidacyByUnitsSaysOnlyWhatTheUnitsRan(t *testing.T) {
+	ts, ok := lang.ByName("typescript")
+	if !ok {
+		t.Fatal("no typescript plugin")
+	}
+	ev := UnitEvidence{Ran: true, Units: []UnitResult{
+		{Unit: "test/a.test.ts", Counts: map[string]lang.LineCounts{
+			"src/loaded.ts": {Executed: 0, Executable: 6},
+			"src/dead.ts":   {Executed: 0, Executable: 4},
+		}, Loaded: []string{"src/loaded.ts"}},
+	}}
+	idx, idxOK := IndexFromUnits(ev, UnitTestFile(ts, map[string]string{"test/a.test.ts": ""}))
+	if !idxOK || !idx.UnitKind() {
+		t.Fatalf("fixture: want a unit-kind index, got ok=%v unitKind=%v", idxOK, idx.UnitKind())
+	}
+	_, excl, _ := WidenCandidacyByEvidence(nil, []Exclusion{
+		{Path: "src/loaded.ts", Reason: ReasonNoPairedTest},
+		{Path: "src/dead.ts", Reason: ReasonNoPairedTest},
+	}, idx, idxOK)
+	got := map[string]string{}
+	for _, e := range excl {
+		got[e.Path] = e.Reason
+	}
+	if got["src/loaded.ts"] != ReasonImportOnly {
+		t.Errorf("src/loaded.ts = %q, want %q: a unit loaded it and ran none of its functions", got["src/loaded.ts"], ReasonImportOnly)
+	}
+	if got["src/dead.ts"] != ReasonUncoveredByUnits {
+		t.Errorf("src/dead.ts = %q, want %q: scoped to the units this command runs", got["src/dead.ts"], ReasonUncoveredByUnits)
+	}
+	if ReasonUncoveredByUnits == ReasonUncovered || !IsUncovered(ReasonUncoveredByUnits) || !IsUncovered(ReasonUncovered) || IsUncovered(ReasonImportOnly) {
+		t.Error("the scoped reason is its own string, and both uncovered reasons are uncovered")
+	}
+}

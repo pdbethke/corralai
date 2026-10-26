@@ -542,3 +542,35 @@ func TestEvidencePassThatCannotRunSaysWhy(t *testing.T) {
 		t.Errorf("missing the reason on the summary line:\n%s", s)
 	}
 }
+
+// A unit pass's negative findings reach the scan line as what they are
+// (ruling R24): a file a unit loaded with nothing of it run counts as
+// import-only, and one no unit loaded counts as uncovered under the reason
+// scoped to the command's units.
+func TestUnitPassNegativeFindingsAreScopedAndCounted(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		loaded []string
+		want   []string
+	}{
+		{"loaded", []string{"src/app/Service.ts"}, []string{"uncovered 0 · import-only 1", "src/app/Service.ts (" + reposcan.ReasonImportOnly + ")"}},
+		{"not loaded", nil, []string{"uncovered 1 · import-only 0", "src/app/Service.ts (" + reposcan.ReasonUncoveredByUnits + ")"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := unitEvidenceTSFixture(t)
+			fake := &fakeUnitPass{ev: reposcan.UnitEvidence{Ran: true, Units: []reposcan.UnitResult{
+				{Unit: "tests/composition/service.test.ts", Counts: map[string]lang.LineCounts{"src/app/Service.ts": {Executed: 0, Executable: 3}}, Loaded: tc.loaded},
+			}}}
+			fake.install(t)
+			s := runUnitEvidenceScan(t, root, "--", "vitest", "run")
+			for _, w := range tc.want {
+				if !strings.Contains(s, w) {
+					t.Errorf("missing %q:\n%s", w, s)
+				}
+			}
+			if strings.Contains(s, reposcan.ReasonUncovered+")") {
+				t.Errorf("a unit pass must never make the whole-suite claim %q:\n%s", reposcan.ReasonUncovered, s)
+			}
+		})
+	}
+}

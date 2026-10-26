@@ -90,6 +90,11 @@ func corralCoverageCounts(stdout, header, langName, modulePath string) (map[stri
 		if ln == "" {
 			continue
 		}
+		if strings.HasPrefix(ln, loadedPrefix) {
+			// A loaded file is a fact about a counted run, not a file the
+			// reducer could not count (LoadedCoverage).
+			continue
+		}
 		if strings.HasPrefix(ln, "#") {
 			disclosed = append(disclosed, strings.TrimSpace(strings.TrimPrefix(ln, "#")))
 			continue
@@ -205,6 +210,30 @@ func CoverageUnavailable(stdout string) (reason string, ok bool) {
 // uncountedPrefix starts a v2 disclosure line: a file the reducer measured
 // and could not count, written as "# uncounted <path>: <reason>".
 const uncountedPrefix = "# uncounted "
+
+// loadedPrefix starts a v2 line naming a file whose module-level code the
+// run executed: "# loaded <path>". Only the JavaScript reducer prints it.
+const loadedPrefix = "# loaded "
+
+// LoadedCoverage returns each file a v2 report names as LOADED: its
+// module-level code ran, whether or not any function of it did. A file
+// counted with nothing executed that was loaded is import-only, not
+// uncovered — the shape coverage.py records as static coverage. Paths are
+// normalised as UncountedCoverage normalises them; nil when the report names
+// none (every reporter but the JavaScript one).
+func LoadedCoverage(stdout string) []string {
+	var out []string
+	for _, ln := range strings.Split(stdout, "\n") {
+		rest, ok := strings.CutPrefix(strings.TrimSpace(ln), loadedPrefix)
+		if !ok {
+			continue
+		}
+		if rel, ok := corralRepoPath(strings.TrimSpace(rest), ""); ok {
+			out = append(out, rel)
+		}
+	}
+	return out
+}
 
 // UncountedCoverage returns each file a v2 report DISCLOSED as measured but
 // uncountable, as "<repo-relative path>: <reason>".

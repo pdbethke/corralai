@@ -443,7 +443,7 @@ func buildScanFileRows(results []reposcan.FileResult, excluded []reposcan.Exclus
 			// headline finding was queryable only by string comparison on a
 			// column meant for humans, not by the boolean column meant for
 			// exactly this.
-			Uncovered: e.Reason == reposcan.ReasonUncovered,
+			Uncovered: reposcan.IsUncovered(e.Reason),
 			// ImportOnly mirrors Uncovered's own fix, at the SAME candidacy
 			// grain: a file WidenCandidacyByEvidence excluded as
 			// reposcan.ReasonImportOnly is executed (import-time only), not
@@ -542,7 +542,7 @@ func exclusionEvidence(reason, preflightState string) string {
 	switch reason {
 	case reposcan.ReasonNoPairedTest, reposcan.ReasonAmbiguousTest, reposcan.ReasonNotSelected:
 		return "paired"
-	case reposcan.ReasonUncovered, reposcan.ReasonImportOnly, reposcan.ReasonNoExecutableCode:
+	case reposcan.ReasonUncovered, reposcan.ReasonUncoveredByUnits, reposcan.ReasonImportOnly, reposcan.ReasonNoExecutableCode:
 		// These three exist ONLY because an instrumented run measured the
 		// file — "uncovered" and "import-only" are coverage verdicts, and
 		// "no executable code" is what the same instrument says about a

@@ -3288,7 +3288,7 @@ func enumeratedSourcePaths(cands []reposcan.Candidate, enumOnlyExcl []reposcan.E
 	}
 	for _, e := range enumOnlyExcl {
 		if e.Reason != reposcan.ReasonNoPairedTest && e.Reason != reposcan.ReasonAmbiguousTest &&
-			e.Reason != reposcan.ReasonUncovered && e.Reason != reposcan.ReasonImportOnly {
+			!reposcan.IsUncovered(e.Reason) && e.Reason != reposcan.ReasonImportOnly {
 			continue
 		}
 		if _, ok := lang.Detect(e.Path); ok {
@@ -3714,10 +3714,10 @@ func candidacySummaryLine(cands []reposcan.Candidate, excl []reposcan.Exclusion,
 	}
 	uncovered, importOnly := 0, 0
 	for _, e := range excl {
-		switch e.Reason {
-		case reposcan.ReasonUncovered:
+		switch {
+		case reposcan.IsUncovered(e.Reason):
 			uncovered++
-		case reposcan.ReasonImportOnly:
+		case e.Reason == reposcan.ReasonImportOnly:
 			// Counted on its own, the same way uncovered is: a different,
 			// honest finding (executed, just never by a test directly —
 			// see ReasonImportOnly's own doc), not folded into uncovered's

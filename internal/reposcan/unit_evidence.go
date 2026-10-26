@@ -43,7 +43,13 @@ type UnitResult struct {
 	// absent from Counts, which is the honest count, and the reason is kept
 	// here so absence never loses its explanation.
 	Uncounted []string
-	Err       string
+	// Loaded is every file whose module-level code the unit's run executed
+	// (lang.LoadedCoverage): it was loaded, whether or not any function of
+	// it ran. A file in Counts with nothing executed and in Loaded is
+	// import-only, not uncovered (ruling R24). Nil for a reporter that does
+	// not report loading.
+	Loaded []string
+	Err    string
 }
 
 // UnitEvidence is one scan's unit pass. Ran false means there is no unit
@@ -264,7 +270,7 @@ func runUnit(ctx context.Context, runner commandRunner, files map[string]string,
 		}
 		return UnitResult{Err: fmt.Sprintf("unparseable: %v", err)}
 	}
-	return UnitResult{Counts: counts, Uncounted: lang.UncountedCoverage(out)}
+	return UnitResult{Counts: counts, Uncounted: lang.UncountedCoverage(out), Loaded: lang.LoadedCoverage(out)}
 }
 
 // truncated reports whether out ends with the runner's truncation marker.
@@ -314,9 +320,9 @@ func IndexFromUnits(ev UnitEvidence, unitTestFile func(unit, source string) stri
 		return EvidenceIndex{}, false
 	}
 	type tally struct {
-		executed, hasStatements bool
-		units                   int
-		perFile                 map[string]int
+		executed, hasStatements, loaded bool
+		units                           int
+		perFile                         map[string]int
 	}
 	tallies := map[string]*tally{}
 	succeeded, partial := 0, false
@@ -326,6 +332,10 @@ func IndexFromUnits(ev UnitEvidence, unitTestFile func(unit, source string) stri
 			continue
 		}
 		succeeded++
+		loaded := make(map[string]bool, len(u.Loaded))
+		for _, f := range u.Loaded {
+			loaded[f] = true
+		}
 		for src, lc := range u.Counts {
 			t := tallies[src]
 			if t == nil {
@@ -333,6 +343,7 @@ func IndexFromUnits(ev UnitEvidence, unitTestFile func(unit, source string) stri
 				tallies[src] = t
 			}
 			t.hasStatements = t.hasStatements || lc.Executable > 0
+			t.loaded = t.loaded || loaded[src]
 			if lc.Executed == 0 {
 				continue
 			}
@@ -367,6 +378,10 @@ func IndexFromUnits(ev UnitEvidence, unitTestFile func(unit, source string) stri
 			coveringUnits: t.units,
 			mostCovering:  best,
 			coveringFiles: covering,
+			// A unit that loaded the file ran its module-level code: the
+			// unit-pass counterpart of a per-test index's static coverage,
+			// which is what makes an unexecuted file import-only.
+			hasStatic:     t.loaded,
 			hasStatements: t.hasStatements,
 		}
 	}

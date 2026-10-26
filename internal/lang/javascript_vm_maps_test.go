@@ -501,3 +501,21 @@ func TestJSReducerLeavesOutAFunctionWithAnUnmappedRange(t *testing.T) {
 		t.Errorf("f has a range that maps nowhere, so it must not be counted at all:\n%s", out)
 	}
 }
+
+// THE REDUCER SAYS WHICH FILES WERE LOADED (ruling R24). lib/dead.ts is
+// imported by the suite and none of its functions runs: its module top level
+// ran, so it is loaded — import-only to a unit pass, not uncovered. A
+// "# loaded" line is a fact about a counted file, never one of the files the
+// reducer could not count.
+func TestJSReducerReportsWhichFilesWereLoaded(t *testing.T) {
+	report, err := os.ReadFile(filepath.Join("testdata", "coverage", vitestReport)) // #nosec G304 -- a fixed testdata path
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := LoadedCoverage(string(report)), []string{"lib/calc.ts", "lib/dead.ts", "test/calc.test.ts"}; !slices.Equal(got, want) {
+		t.Errorf("LoadedCoverage = %q, want %q", got, want)
+	}
+	if _, err := (jsPlugin{}).CoverageCounts("corral-js-coverage: v2\n# loaded lib/x.ts\n", ""); err == nil || !strings.Contains(err.Error(), "header but no file entries") || strings.Contains(err.Error(), "could not count") {
+		t.Errorf("a report with only a loaded line: err = %v, want no file entries and nothing disclosed as uncountable", err)
+	}
+}

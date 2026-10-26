@@ -140,6 +140,16 @@ const (
 	// it is the disclosure text itself, not a machine code a reader has to
 	// translate.
 	ReasonUncovered = "uncovered — no test executes this file"
+	// ReasonUncoveredByUnits is ReasonUncovered's claim made from a UNIT
+	// pass (IndexFromUnits), scoped to what ran: every test unit the
+	// operator's command collects ran alone and none executed the file, and
+	// none loaded it either (that would be ReasonImportOnly). It is its own
+	// string because the units are only what this command collects — a
+	// suite's other tests may execute the file — and Python's
+	// ReasonUncovered, which speaks for the whole per-test selection, keeps
+	// its text (ruling R24). Every reader asks IsUncovered. The exact string
+	// is load-bearing, same as ReasonUncovered's.
+	ReasonUncoveredByUnits = "uncovered — no test unit this command runs executes this file"
 	// ReasonImportOnly marks a source file the selection evidence
 	// positively measured at zero covering TESTS but non-empty coverage
 	// OUTSIDE any test context — executed only at import/module-load time
@@ -192,6 +202,14 @@ const (
 	ReasonDeclarationsUnreadable = "test-declarations-unreadable"
 )
 
+// IsUncovered reports whether reason is an uncovered finding: the evidence
+// measured the file and nothing it ran executed or loaded it
+// (ReasonUncovered from a per-test selection, ReasonUncoveredByUnits from a
+// unit pass). The one question every count, record and gate asks.
+func IsUncovered(reason string) bool {
+	return reason == ReasonUncovered || reason == ReasonUncoveredByUnits
+}
+
 // IsLandingRefusal reports whether reason is one of Enumerate's refusals of
 // a file whose authored test would land on the file itself
 // (lang.CheckTestLanding): the one question every gate, bucket and
@@ -231,7 +249,7 @@ func UnauditableChangedSource(reason string) bool {
 		// accepted: an unaudited Rust change passes the gate with only the
 		// disclosure.
 		return false
-	case ReasonUncovered, ReasonImportOnly:
+	case ReasonUncovered, ReasonUncoveredByUnits, ReasonImportOnly:
 		// Also "we could not measure it" — but these are REPORTED as
 		// uncovered by the scan itself, which the report already surfaces
 		// and the operator opted into by running with coverage. Left out so
@@ -705,7 +723,11 @@ func WidenCandidacyByEvidence(cands []Candidate, excl []Exclusion, idx EvidenceI
 			// See ReasonImportOnly's own doc.
 			kept = append(kept, Exclusion{Path: e.Path, Reason: ReasonImportOnly})
 		default:
-			kept = append(kept, Exclusion{Path: e.Path, Reason: ReasonUncovered})
+			reason := ReasonUncovered
+			if idx.UnitKind() {
+				reason = ReasonUncoveredByUnits
+			}
+			kept = append(kept, Exclusion{Path: e.Path, Reason: reason})
 		}
 	}
 

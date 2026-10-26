@@ -575,6 +575,19 @@ FROM read_json_auto('scans/*.json.gz') AS e, unnest(e.bundle.Mutants) AS t(m)
 GROUP BY ALL ORDER BY entry, planted DESC;
 ```
 
+**Publish the root key on the branch.** An ed25519-signed ledger publishes
+its root public key as `LEDGER_PUBKEY` (the hex key, one line) at the
+branch root, beside `scans/`. Nothing that writes or reads entries looks
+outside `scans/` and `mutants/`, so the file disturbs neither. The results
+page at corralai.dev/results/ verifies a ledger's entries against the key
+that ledger publishes there; a ledger with no `LEDGER_PUBKEY` has its
+signed entries shown as failed, naming the missing key, and an unsigned or
+keyless ledger needs none. corral's own branch carries it (byte-identical
+to the repository's `LEDGER_PUBKEY`). The key on the branch proves only
+that the branch is internally consistent; trusting that the key is the
+project's is a separate step (a key published elsewhere, or keyless
+signing's repository identity).
+
 The same entries a laptop run writes into its own
 ledger directory; a local run and an Action run are one writer with two
 places to put the file, and DuckDB (or MotherDuck) is the query surface

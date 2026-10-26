@@ -260,6 +260,79 @@ func replaceOutsideLiterals(s string, syn literalSyntax, re *regexp.Regexp, repl
 // headerPrefix is emitted verbatim before the hoisted headers (Go's package
 // clause; empty for Python) and headerWrap renders the de-duplicated header
 // lines (Go folds them into one import block; Python emits them as they were).
+// headerStatement returns the header that starts at lines[start], and the
+// index of its last line. A header runs until its brackets balance, so a
+// multi-line import (`import {` … `} from "m";`, Python's `from m import (`
+// … `)`) is ONE header. It was hoisted by its first line alone, which left
+// its specifier lines and `} from "m";` in the body: REA's five proven
+// tests merged into a file that did not parse. Brackets inside a quoted
+// string do not count; an import never needs one, and a header whose
+// brackets never balance ends at the last line rather than swallowing
+// nothing.
+func headerStatement(lines []string, start int) (string, int) {
+	stmt := strings.TrimRight(lines[start], " \t")
+	depth := bracketDelta(stmt)
+	end := start
+	for depth > 0 && end+1 < len(lines) {
+		end++
+		l := strings.TrimRight(lines[end], " \t")
+		stmt += "\n" + l
+		depth += bracketDelta(l)
+	}
+	return stmt, end
+}
+
+// bracketDelta is the opening minus closing brackets on a line, outside
+// quotes and before a line comment (`//`, or Python's and Ruby's `#`), so
+// `import x from "y"; // see (note` opens nothing.
+func bracketDelta(line string) int {
+	d := 0
+	var quote, prev rune
+	for _, r := range line {
+		switch {
+		case quote != 0:
+			if r == quote {
+				quote = 0
+			}
+		case r == '#' || (r == '/' && prev == '/'):
+			return d
+		case r == '"' || r == '\'' || r == '`':
+			quote = r
+		case r == '(' || r == '{' || r == '[':
+			d++
+		case r == ')' || r == '}' || r == ']':
+			d--
+		}
+		prev = r
+	}
+	return d
+}
+
+// headerKey is a header's identity for de-duplication and the specifier
+// refusal: its words joined by single spaces, a trailing comma before a
+// closing bracket dropped. One import laid out on one line in one part and
+// across lines in another is the same import.
+func headerKey(stmt string) string {
+	k := strings.Join(strings.Fields(stmt), " ")
+	return strings.NewReplacer(", }", " }", ", )", " )", ",}", "}", ",)", ")").Replace(k)
+}
+
+// headerStatements are a source's top-level headers, each whole.
+func headerStatements(source string, isHeader func(string) bool) []string {
+	var out []string
+	lines := strings.Split(source, "\n")
+	for j := 0; j < len(lines); j++ {
+		t := strings.TrimRight(lines[j], " \t")
+		if t == "" || t[0] == ' ' || t[0] == '\t' || !isHeader(t) {
+			continue
+		}
+		var stmt string
+		stmt, j = headerStatement(lines, j)
+		out = append(out, stmt)
+	}
+	return out
+}
+
 func mergeParts(parts []AuthoredPart, spec concatSpec, headerPrefix string, headerWrap func([]string) string) (string, error) {
 	if spec.precheck != nil {
 		if err := spec.precheck(parts); err != nil {
@@ -280,17 +353,20 @@ func mergeParts(parts []AuthoredPart, spec concatSpec, headerPrefix string, head
 	for i, part := range parts {
 		partDecls[i] = map[string]bool{}
 		var body []string
-		for _, line := range strings.Split(part.Source, "\n") {
-			trimmed := strings.TrimRight(line, " \t")
+		lines := strings.Split(part.Source, "\n")
+		for j := 0; j < len(lines); j++ {
+			trimmed := strings.TrimRight(lines[j], " \t")
 			if strings.TrimSpace(trimmed) == "" {
 				body = append(body, "")
 				continue
 			}
 			isTopLevel := trimmed[0] != ' ' && trimmed[0] != '\t'
 			if isTopLevel && spec.isHeader(trimmed) {
-				if !seenHeader[trimmed] {
-					seenHeader[trimmed] = true
-					headers = append(headers, trimmed)
+				var stmt string
+				stmt, j = headerStatement(lines, j)
+				if key := headerKey(stmt); !seenHeader[key] {
+					seenHeader[key] = true
+					headers = append(headers, stmt)
 				}
 				continue
 			}
@@ -514,21 +590,21 @@ var (
 // ReferenceError inside a test that was PROVEN to work. Refused instead, with
 // the module named, so the part is delivered separately and still runs.
 func jsSpecifiersDiffer(parts []AuthoredPart) error {
-	seen := map[string]string{} // module -> the first import line that named it
+	seen := map[string]string{} // module -> the first import that named it, as a headerKey
 	for _, part := range parts {
-		for _, line := range strings.Split(part.Source, "\n") {
-			trimmed := strings.TrimSpace(line)
-			if !jsImportRe.MatchString(trimmed) {
-				continue
-			}
-			m := jsModuleRe.FindStringSubmatch(trimmed)
+		// Whole statements: a multi-line import names its module on its
+		// LAST line, so a line-by-line scan saw no module and let two
+		// different specifier lists through (REA).
+		for _, stmt := range headerStatements(part.Source, jsImportRe.MatchString) {
+			key := headerKey(stmt)
+			m := jsModuleRe.FindStringSubmatch(key)
 			if m == nil {
 				continue
 			}
-			if first, ok := seen[m[1]]; ok && first != trimmed {
-				return fmt.Errorf("lang: two authored parts import different specifiers from %q (%q vs %q); merging them would rewrite an import the model wrote", m[1], first, trimmed)
+			if first, ok := seen[m[1]]; ok && first != key {
+				return fmt.Errorf("lang: two authored parts import different specifiers from %q (%q vs %q); merging them would rewrite an import the model wrote", m[1], first, key)
 			}
-			seen[m[1]] = trimmed
+			seen[m[1]] = key
 		}
 	}
 	return nil

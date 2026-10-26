@@ -737,7 +737,7 @@ func printAuthoredTogether(w io.Writer, indent, together, out string) {
 	case advpool.AuthoredTogetherPass:
 		fmt.Fprintf(w, "%sthe proven tests also pass when run together on the unmutated code\n", indent)
 	case advpool.AuthoredTogetherFail:
-		fmt.Fprintf(w, "%sWARNING: the proven tests each pass alone but FAIL when run together on the unmutated code — they interfere (shared state?) and need fixing before you add them:\n", indent)
+		fmt.Fprintf(w, "%sWARNING: the proven tests each pass alone but FAIL when run together, as one merged file, on the unmutated code — the tests interfere (shared state) or the merge broke the file; the runner output below says which. Fix the file before you add it:\n", indent)
 		for _, l := range strings.Split(strings.TrimSpace(out), "\n") {
 			fmt.Fprintf(w, "%s  | %s\n", indent, l)
 		}

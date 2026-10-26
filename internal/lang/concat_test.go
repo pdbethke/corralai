@@ -311,3 +311,82 @@ func TestPHPConcatDoesNotMergeUnderPHPUnit10(t *testing.T) {
 		t.Errorf("the second proven test should ride separately with the reason: %+v", extra)
 	}
 }
+
+// MULTI-LINE IMPORTS ARE ONE HEADER. The merge hoisted an import by its
+// first line only, so `import {` went to the top of the file and its
+// specifier lines and `} from "…"` stayed in the body: REA's five proven
+// tests merged into a file that did not parse, and the together check
+// reported the parse error as tests that "interfere (shared state?)". A
+// header now runs until its brackets balance, in JS/TS and in Python.
+func TestConcatKeepsAMultiLineImportWhole(t *testing.T) {
+	for _, name := range []string{"javascript", "typescript"} {
+		c := concatenatorFor(t, name)
+		multi := "import {\n  OwnedCommandFailure,\n  runOwnedCommand,\n} from \"../src/OwnedCommand.js\";\n"
+		out, err := c.ConcatTests([]AuthoredPart{
+			{MutantID: "s0/m1", Source: "import { it } from \"vitest\";\n" + multi + "\nit(\"a\", () => { runOwnedCommand(OwnedCommandFailure); });\n"},
+			{MutantID: "s0/m2", Source: "import { it } from \"vitest\";\n" + multi + "\nit(\"b\", () => {});\n"},
+		})
+		if err != nil {
+			t.Fatalf("%s: ConcatTests: %v", name, err)
+		}
+		if strings.Count(out, multi) != 1 {
+			t.Errorf("%s: the multi-line import must appear once, whole:\n%s", name, out)
+		}
+		if i, j := strings.Index(out, multi), strings.Index(out, "it(\"a\""); i < 0 || j < i {
+			t.Errorf("%s: the multi-line import must be hoisted above the tests:\n%s", name, out)
+		}
+	}
+	py := concatenatorFor(t, "python")
+	out, err := py.ConcatTests([]AuthoredPart{
+		{MutantID: "s0/m1", Source: "from mod import (\n    a,\n    b,\n)\n\ndef test_a():\n    assert a\n"},
+		{MutantID: "s0/m2", Source: "from mod import (\n    a,\n    b,\n)\n\ndef test_b():\n    assert b\n"},
+	})
+	if err != nil {
+		t.Fatalf("python: ConcatTests: %v", err)
+	}
+	if strings.Count(out, "from mod import (\n    a,\n    b,\n)\n") != 1 || strings.Count(out, "    a,") != 1 {
+		t.Errorf("python: the parenthesised import must appear once, whole:\n%s", out)
+	}
+}
+
+// The specifier refusal must see a multi-line import's module, which is on
+// its LAST line. REA's parts imported OwnedCommandFailure alone in one part
+// and with runOwnedCommand, across lines, in another; the precheck read the
+// `import {` line, found no module, and let both through.
+func TestJavaScriptConcatRefusesDifferentSpecifiersAcrossLines(t *testing.T) {
+	parts := []AuthoredPart{
+		{MutantID: "s0/m1", Source: "import { OwnedCommandFailure } from \"../src/OwnedCommand.js\";\nit(\"a\", () => {});\n"},
+		{MutantID: "s0/m2", Source: "import {\n  OwnedCommandFailure,\n  runOwnedCommand,\n} from \"../src/OwnedCommand.js\";\nit(\"b\", () => {});\n"},
+	}
+	merged, extra := ConcatAuthored(mustPlugin(t, "typescript"), parts)
+	if len(extra) != 1 || extra[0].MutantID != "s0/m2" || !strings.Contains(extra[0].Reason, "../src/OwnedCommand.js") {
+		t.Fatalf("extra = %+v, want the second part refused naming the module", extra)
+	}
+	if strings.Contains(merged, "runOwnedCommand") {
+		t.Errorf("the refused part leaked into the merge:\n%s", merged)
+	}
+	// The same specifiers laid out differently are the same import.
+	same := []AuthoredPart{
+		{MutantID: "s0/m1", Source: "import { A, B } from \"m\";\nit(\"a\", () => {});\n"},
+		{MutantID: "s0/m2", Source: "import {\n  A,\n  B\n} from \"m\";\nit(\"b\", () => {});\n"},
+	}
+	merged, extra = ConcatAuthored(mustPlugin(t, "typescript"), same)
+	if len(extra) != 0 || strings.Count(merged, "from \"m\"") != 1 {
+		t.Errorf("one import laid out two ways must merge to one: extra=%+v\n%s", extra, merged)
+	}
+}
+
+// A bracket in a trailing comment opens nothing: the next line is a test,
+// not the rest of the import.
+func TestConcatIgnoresABracketInAnImportsComment(t *testing.T) {
+	out, err := concatenatorFor(t, "javascript").ConcatTests([]AuthoredPart{
+		{MutantID: "s0/m1", Source: "import x from \"y\"; // see (note\nit(\"a\", () => {});\n"},
+		{MutantID: "s0/m2", Source: "import x from \"y\"; // see (note\nit(\"b\", () => {});\n"},
+	})
+	if err != nil {
+		t.Fatalf("ConcatTests: %v", err)
+	}
+	if strings.Count(out, "it(\"a\"") != 1 || strings.Count(out, "it(\"b\"") != 1 || strings.Count(out, "import x") != 1 {
+		t.Errorf("a commented bracket swallowed a test into the import:\n%s", out)
+	}
+}

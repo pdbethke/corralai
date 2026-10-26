@@ -210,6 +210,17 @@ history of any release, `git log v0.3.4..v0.3.5`.
   composite, incremental and declaration output off. corral's own options
   remain only where there is no `tsconfig.json`, which is its single-file
   scaffold.
+- **Proven tests with a multi-line import merge into a file that parses.**
+  The merge moved an import to the top of the file by its first line only,
+  so `import {` was hoisted and its names and `} from "…"` stayed below:
+  REA's five proven tests merged into a file vitest could not parse. The
+  check that runs them together then reported tests that "interfere (shared
+  state?)", which they did not. An import now runs until its brackets
+  balance (JavaScript, TypeScript and Python's `from m import (…)`), one
+  import laid out two ways counts as one, and two parts importing different
+  names from one module are kept as separate files, as one-line imports
+  already were. The warning now says a failure together is interference or
+  a broken merge, and points at the runner output that tells them apart.
 
 ## [v1.0.0-rc.28] — 2026-10-21
 

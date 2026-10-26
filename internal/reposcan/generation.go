@@ -255,7 +255,10 @@ package reposcan
 // own tsconfig (extended, file selection still corral's) instead of pinned
 // options (ruling R27). A "34" TypeScript verdict for a project whose code
 // needs its own options was graded with the gate off, its authored tests
-// never type-checked (REA). Shape unchanged; behaviour bump.
+// never type-checked (REA). Riding along: proven tests with a multi-line
+// import now merge into a file that parses, so a "34" AuthoredTest and its
+// AuthoredTogether result could be a broken merge. Shape unchanged;
+// behaviour bump.
 const VerdictGeneration = "35"
 
 // VerdictShapeSHA256 fingerprints advpool.Verdict's serialized shape: every

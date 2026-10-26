@@ -93,7 +93,7 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 		writerPool:  "the challenger WRITER pool a certify run will draw from. doctor draws nothing: it checks the pool exactly as --shadow-pool's is checked",
 		seed:        "the --shadow-seed a certify run will replay. doctor draws nothing: it checks the seed parses and that a pool is named for it to replay",
 	})
-	deriveModel := fs.String("derive-model", "", "the goal-derivation model a `certify --repo` run will name, if any")
+	deriveModel := fs.String("derive-model", "", "the goal-derivation model a `certify --repo` run will name, if any. Naming it makes doctor SPEND ONE small real derive call through certify's own deriver, on a tiny built-in file with an obvious property, and fail the check when the seat errors or returns an empty reply; nothing is called unless this is named")
 	repoDir := fs.String("repo", ".", "the repository the run will audit — where its .corral/models.json registry is read from, exactly as certify reads it")
 	if err := fs.Parse(args); err != nil {
 		return flagParseExit(err)
@@ -141,7 +141,14 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 		results = append(results, checkToolchain(iso, cmd, nil, plug))
 	}
 	results = append(results, checkHerd(*mutantModel, *writerModel, *criticModel, *shadow.model, *shadow.writerModel, seatReg)...)
-	results = append(results, checkDeriveSeat(*deriveModel, seatReg.deriveEndpoint())...)
+	derive := checkDeriveSeat(*deriveModel, seatReg.deriveEndpoint())
+	results = append(results, derive...)
+	if strings.TrimSpace(*deriveModel) != "" && checksPassed(derive) {
+		// The one check that spends: run only when the seat was named and
+		// its static checks passed, so a missing CLI or key is reported as
+		// that, not as a failed call.
+		results = append(results, probeDeriveSeat(strings.TrimSpace(*deriveModel), seatReg.deriveEndpoint()))
+	}
 	if strings.TrimSpace(*code) != "" {
 		results = append(results, checkPairing(*code, *test))
 	}
@@ -501,6 +508,60 @@ func checkDeriveSeat(model, endpoint string) []checkResult {
 		return []checkResult{{name: name, detail: err.Error()}}
 	}
 	return []checkResult{{name: name, ok: true}}
+}
+
+// checksPassed reports whether every result is a pass (or information).
+func checksPassed(rs []checkResult) bool {
+	for _, r := range rs {
+		if !r.ok && !r.info {
+			return false
+		}
+	}
+	return true
+}
+
+// doctorDeriver builds the probe's deriver: newLLMDeriver, certify's own
+// derive seat, behind a seam so the probe's outcomes are testable without a
+// real call.
+var doctorDeriver = newLLMDeriver
+
+// deriveProbeCandidate and deriveProbeSource are the probe's fixed input: a
+// tiny file whose correctness property is obvious, so a working seat has
+// something to say about it.
+var deriveProbeCandidate = reposcan.Candidate{Path: "probe/clamp.go", Lang: "go"}
+
+const deriveProbeSource = "package probe\n\n// Clamp returns v limited to the closed range [lo, hi].\nfunc Clamp(v, lo, hi int) int {\n\tif v < lo {\n\t\treturn lo\n\t}\n\tif v > hi {\n\t\treturn hi\n\t}\n\treturn v\n}\n"
+
+// probeDeriveSeat makes ONE real derive call through certify's own deriver
+// (ruling R25) and reports what came back: a goal (its first line), an
+// explicit NONE, an empty reply, or the seat's error, with the tokens the
+// seat reported or "not metered". An empty reply or an error fails: either
+// one is a seat that produced nothing, which a certify run turns into
+// derive-failed files (and once turned into "ungoaled — purely
+// declarative", B6). It spends one call, and says so.
+func probeDeriveSeat(model, endpoint string) checkResult {
+	name := "derive seat answers (" + model + ") — spends one call"
+	d, err := doctorDeriver(model, endpoint)
+	if err != nil {
+		return checkResult{name: name, detail: err.Error()}
+	}
+	text, ok, derr := d.Derive(context.Background(), deriveProbeCandidate, deriveProbeSource)
+	spent := "spent one call; the seat did not report its token use (not metered)"
+	if r, isReporter := d.(usageReporter); isReporter {
+		for _, row := range r.modelCallRows() {
+			if row.UnmeteredCalls == 0 {
+				spent = fmt.Sprintf("spent one call: %d input / %d output tokens", row.InputTokens, row.OutputTokens)
+			}
+		}
+	}
+	switch {
+	case derr != nil:
+		return checkResult{name: name, detail: derr.Error()}
+	case !ok:
+		return checkResult{name: name, ok: true, detail: "answered NONE (no testable property) for a file with an obvious one; a certify run would exclude such files as ungoaled\n" + spent}
+	}
+	first, _, _ := strings.Cut(strings.TrimSpace(text), "\n")
+	return checkResult{name: name, ok: true, detail: "goal: " + strings.TrimSpace(first) + "\n" + spent}
 }
 
 // checkPairing answers the question that silently produces a useless run: does

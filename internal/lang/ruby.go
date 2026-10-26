@@ -307,11 +307,19 @@ def CorralCov.write(res)
         next
       end
       next if rel == '..' || rel.start_with?('../')
-      rows << "#{executed} #{executable} #{rel}"
+      rows << ["#{executed} #{executable} #{rel}", rel, 0]
+      # LOADED, the JavaScript reducer's "# loaded" line (LoadedCoverage):
+      # any line that ran at all — a class body, a constant, a def line, all
+      # of which run on require. A file whose methods were never called
+      # still had its top-level code executed by this run, so unit evidence
+      # reads it as import-only. Without this line it read as "no unit
+      # executes this file", which was false (ruling R24, final review I1).
+      rows << ["# loaded #{rel}", rel, 1] if lines.any? { |c| !c.nil? && c > 0 }
     end
-    # Sorted by path, so one run's report is byte-stable and the captured
-    # fixture report can be held to a live run.
-    File.write(dest, rows.sort_by { |r| r.split(' ', 3)[2] }.map { |r| r + "\n" }.join)
+    # Sorted by path, each file's counts before its loaded line, so one
+    # run's report is byte-stable and the captured fixture report can be
+    # held to a live run.
+    File.write(dest, rows.sort_by { |_, rel, ord| [rel, ord] }.map { |r, _, _| r + "\n" }.join)
   rescue StandardError => e
     # Never let the reporter's own failure change the suite's exit code —
     # the caller distinguishes "could not measure" from "measured nothing",

@@ -3,6 +3,8 @@
 package reposcan
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
 	"sort"
 	"testing"
@@ -540,5 +542,44 @@ func TestWidenCandidacyByUnitsSaysOnlyWhatTheUnitsRan(t *testing.T) {
 	}
 	if ReasonUncoveredByUnits == ReasonUncovered || !IsUncovered(ReasonUncoveredByUnits) || !IsUncovered(ReasonUncovered) || IsUncovered(ReasonImportOnly) {
 		t.Error("the scoped reason is its own string, and both uncovered reasons are uncovered")
+	}
+}
+
+// R24 HOLDS IN RUBY AND PHP TOO (final review I1). The reports are the ones
+// a real run of internal/lang's fixture suites printed (held to a live run
+// there): lib/dead.rb and lib/Dead.php are required by the unit, their class
+// bodies and constants run, and no method of theirs is called. They are
+// import-only. Before the reducers printed `# loaded`, both came out
+// "uncovered — no test unit this command runs executes this file", which
+// the unit had in fact done.
+func TestWidenCandidacyByUnitsCallsARubyOrPHPFileLoadedNeverCalledImportOnly(t *testing.T) {
+	cases := []struct{ lang, report, unit, dead string }{
+		{"ruby", "ruby-report.txt", "test/calc_test.rb", "lib/dead.rb"},
+		{"php", "php-report.txt", "test/CalcTest.php", "lib/Dead.php"},
+	}
+	for _, c := range cases {
+		t.Run(c.lang, func(t *testing.T) {
+			p, ok := lang.ByName(c.lang)
+			if !ok {
+				t.Fatalf("no %s plugin", c.lang)
+			}
+			raw, err := os.ReadFile(filepath.Join("..", "lang", "testdata", "coverage", c.report)) // #nosec G304 -- a fixed testdata path
+			if err != nil {
+				t.Fatal(err)
+			}
+			counts, err := p.(lang.CoverageReporter).CoverageCounts(string(raw), "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			ev := UnitEvidence{Ran: true, Units: []UnitResult{{Unit: c.unit, Counts: counts, Loaded: lang.LoadedCoverage(string(raw))}}}
+			idx, idxOK := IndexFromUnits(ev, UnitTestFile(p, map[string]string{c.unit: ""}))
+			if !idxOK {
+				t.Fatal("fixture: want a unit-kind index")
+			}
+			_, excl, _ := WidenCandidacyByEvidence(nil, []Exclusion{{Path: c.dead, Reason: ReasonNoPairedTest}}, idx, idxOK)
+			if len(excl) != 1 || excl[0].Reason != ReasonImportOnly {
+				t.Errorf("%s exclusions = %+v, want one %q: the unit loaded it and called none of its methods", c.dead, excl, ReasonImportOnly)
+			}
+		})
 	}
 }

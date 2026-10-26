@@ -833,3 +833,45 @@ func assertFixtureCounts(t *testing.T, got map[string]LineCounts, called, dead, 
 		t.Errorf("%s has no executable line: want ABSENT (not measurable), got %+v", empty, c)
 	}
 }
+
+// A FILE A RUN LOADED AND NEVER CALLED IS NAMED LOADED, in every reporter
+// that can see it (ruling R24, carried past JavaScript by the final review's
+// I1). Ruby runs a required file's class body, constants and def lines;
+// pcov reports a required PHP file's top-level statements and its include
+// marker. Both reports used to drop that, so unit evidence recorded such a
+// file `uncovered` — the loudest claim the record carries — when a unit had
+// in fact executed it. The reports are captured from real runs and held to a
+// live one (TestCapturedCoverageReportsMatchALiveRun). A file never loaded,
+// or one with nothing executable, is never named.
+func TestReportsNameALoadedFileWhoseMethodsNeverRan(t *testing.T) {
+	cases := []struct {
+		lang, report                string
+		called, dead, unloaded, nop string
+	}{
+		{"ruby", "ruby-report.txt", "lib/calc.rb", "lib/dead.rb", "lib/unloaded.rb", "lib/empty.rb"},
+		{"php", "php-report.txt", "lib/Calc.php", "lib/Dead.php", "lib/Unloaded.php", "lib/Shape.php"},
+	}
+	for _, c := range cases {
+		t.Run(c.lang, func(t *testing.T) {
+			raw, err := os.ReadFile(filepath.Join("testdata", "coverage", c.report)) // #nosec G304 -- a fixed testdata path
+			if err != nil {
+				t.Fatal(err)
+			}
+			loaded := LoadedCoverage(string(raw))
+			for _, want := range []string{c.called, c.dead} {
+				if !slices.Contains(loaded, want) {
+					t.Errorf("LoadedCoverage = %q, want it to name %s: the run loaded it", loaded, want)
+				}
+			}
+			for _, never := range []string{c.unloaded, c.nop} {
+				if slices.Contains(loaded, never) {
+					t.Errorf("LoadedCoverage = %q names %s, which the run never loaded or which has nothing executable", loaded, never)
+				}
+			}
+			counts := capturedCounts(t, c.lang)
+			if lc := counts[c.dead]; lc.Executed != 0 || lc.Executable == 0 {
+				t.Errorf("%s counts = %+v: loading it must not make its methods read as executed", c.dead, lc)
+			}
+		})
+	}
+}

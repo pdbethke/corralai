@@ -100,9 +100,11 @@ history of any release, `git log v0.3.4..v0.3.5`.
   Rust evidence is measured and shown, but not yet used for candidacy: a
   promoted file would land its test in `tests/<name>.rs`, which reaches only
   the public API, and the in-file `#[cfg(test)]` landing is not built
-  (indexmap: 0 promoted, 5 units run). Go, Ruby, PHP and Rust coverage cannot
-  tell a file a unit only loaded from dead code; only JavaScript and
-  TypeScript report `import-only`. In the jail, a Go or Rust toolchain under
+  (indexmap: 0 promoted, 5 units run). Go and Rust coverage cannot tell a
+  file a unit only loaded from dead code, because neither counts code outside
+  a function; JavaScript, TypeScript, Ruby and PHP report such a file
+  `import-only` (Ruby and PHP from a captured fixture run: a required class
+  whose method is never called). In the jail, a Go or Rust toolchain under
   `$HOME` or rspec under `~/.local/share/gem` is not visible (install under
   `/usr`, or use `--substrate workspace` on a scratch clone), and a clone
   holding more than 64 MiB of text cannot be seeded (REA's built `dist/`).

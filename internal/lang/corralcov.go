@@ -213,7 +213,9 @@ func CoverageUnavailable(stdout string) (reason string, ok bool) {
 const uncountedPrefix = "# uncounted "
 
 // loadedPrefix starts a v2 line naming a file whose module-level code the
-// run executed: "# loaded <path>". Only the JavaScript reducer prints it.
+// run executed: "# loaded <path>". The JavaScript, Ruby and PHP reducers
+// print it; Go's and Rust's coverage count only code inside functions, so
+// they cannot.
 const loadedPrefix = "# loaded "
 
 // LoadedCoverage returns each file a v2 report names as LOADED: its
@@ -221,7 +223,7 @@ const loadedPrefix = "# loaded "
 // counted with nothing executed that was loaded is import-only, not
 // uncovered — the shape coverage.py records as static coverage. Paths are
 // normalised as UncountedCoverage normalises them; nil when the report names
-// none (every reporter but the JavaScript one).
+// none (always, for Go and Rust).
 func LoadedCoverage(stdout string) []string {
 	var out []string
 	for _, ln := range strings.Split(stdout, "\n") {

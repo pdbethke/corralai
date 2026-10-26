@@ -606,7 +606,19 @@ register_shutdown_function(function () {
         // honest answer for a file with nothing in it that could have run,
         // and "0 0" would read as measured-and-never-executed.
         if ($executable === 0) { continue; }
-        fwrite($out, $executed . " " . $executable . " " . substr($path, strlen($prefix)) . "\n");
+        $rel = substr($path, strlen($prefix));
+        fwrite($out, $executed . " " . $executable . " " . $rel . "\n");
+        // LOADED, the JavaScript reducer's "# loaded" line (LoadedCoverage):
+        // any hit at all, the include marker among them, means the file's
+        // top-level code ran — it was required, its class declared, its
+        // top-level statements executed — whether or not a body did. Unit
+        // evidence reads such a file as import-only; without this line it
+        // read as "no unit executes this file", which was false (ruling R24,
+        // final review I1). The marker that must not count as an executed
+        // LINE above is exactly the evidence that the file was LOADED.
+        foreach ($lines as $c) {
+            if ($c > 0) { fwrite($out, "# loaded " . $rel . "\n"); break; }
+        }
     }
     fclose($out);
   } catch (Throwable $e) {

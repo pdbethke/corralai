@@ -481,13 +481,29 @@ process.stdout.write(out.join('\n')+'\n');
 // The same pattern as Ruby's RUBYOPT preload and PHP's auto_prepend_file,
 // and it adds nothing to the audited repository. It must never change what
 // the suite does: vm.runInThisContext, vm.compileFunction and the vm.Script
-// constructor are wrapped only to READ their arguments, then the original is
-// called with the original arguments and `this` (new.target for Script),
-// and its result or exception is returned untouched. Recording failures are
-// swallowed, and it prints nothing. What a suite CAN observe is one more
-// stack frame inside vm calls, and that these three properties are
-// wrappers; the behaviour-preservation test runs a suite that inspects vm
-// with and without it.
+// constructor are wrapped only to READ their arguments. The original is then
+// called with the original arguments and `this` (new.target for Script), and
+// its result or exception is returned untouched. Every function the
+// recording calls is captured at load, so a suite's later spy on fs (or
+// JSON, Buffer, a String method) never sees corral's write. Options are read
+// through their property descriptors, so a getter runs exactly as often as
+// vm runs it; a getter-defined option leaves that evaluation unrecorded. The
+// wrappers keep the originals' name and length, String() of each reads as
+// the original's source, and instances of vm.Script keep their prototype,
+// with prototype.constructor === vm.Script. The behaviour-preservation test
+// (testdata/coverage/vmprobe) runs every one of these observations with and
+// without the preload. Recording failures are swallowed, and it prints
+// nothing.
+//
+// What a suite CAN still observe: one more stack frame inside these calls;
+// Function.prototype.toString.call() of the three (it reads the wrapper or
+// the Proxy); a Proxy passed as options sees a getOwnPropertyDescriptor
+// trap; an fs mock at the binding level (below the fs module) sees the
+// write; each mapped evaluation costs one synchronous append; and
+// module.syncBuiltinESMExports() also syncs into ESM any CJS builtin export
+// an earlier --require patched without syncing. An operator --permission
+// policy that cannot read $d makes every Node process fail to load it, which
+// fails each unit visibly.
 //
 // Each process appends one JSON line per evaluated code string that carries
 // a base64 inline map — its filename, length, line/column offsets, line
@@ -495,57 +511,86 @@ process.stdout.write(out.join('\n')+'\n');
 const jsCoveragePreload = `'use strict';
 (function(){
 const fs=require('fs'),path=require('path'),vm=require('vm'),mod=require('module');
-const dir=path.join(__dirname,'maps');
+// Every function the recording path calls is taken NOW, at load, so a suite
+// that later spies on or stubs fs, JSON, Buffer or a String method never
+// sees corral's call.
+const call=Function.prototype.call.bind(Function.prototype.call);
+const appendFileSync=fs.appendFileSync,mkdirSync=fs.mkdirSync,join=path.join;
+const stringify=JSON.stringify,bufferFrom=Buffer.from,isInteger=Number.isInteger;
+const apply=Reflect.apply,construct=Reflect.construct,reflectGet=Reflect.get,getOwn=Reflect.getOwnPropertyDescriptor,define=Reflect.defineProperty;
+const fnToString=Function.prototype.toString;
+const lastIndexOf=String.prototype.lastIndexOf,slice=String.prototype.slice,indexOf=String.prototype.indexOf,exec=RegExp.prototype.exec,toStr=Buffer.prototype.toString;
+const dir=join(__dirname,'maps');
 const marker='//# sourceMappingURL=data:application/json';
+const base64=/^[^,\s]*;base64,([A-Za-z0-9+/=]+)/;
 let file=null;
 function target(){
   if(file===null){
     let tid=0;
     try{tid=require('worker_threads').threadId}catch(e){}
-    fs.mkdirSync(dir,{recursive:true});
-    file=path.join(dir,process.pid+'-'+tid+'.jsonl');
+    call(mkdirSync,fs,dir,{recursive:true});
+    file=join(dir,process.pid+'-'+tid+'.jsonl');
   }
   return file;
 }
-// vm's own reading of an absent offset is 0.
-function offset(options,key){
-  return options!==null&&typeof options==='object'&&Number.isInteger(options[key])?options[key]:0;
+// An option is read through its property descriptor, never through a
+// getter: a getter would run once more than vm runs it. A getter-defined
+// option (or one inherited) leaves that evaluation unrecorded.
+function own(options,key){
+  if(options===null||typeof options!=='object')return undefined;
+  const d=getOwn(options,key);
+  return d&&!d.get&&!d.set?d.value:undefined;
+}
+function lineLengths(code){
+  const out=[];let at=0;
+  for(;;){const nl=call(indexOf,code,'\n',at);if(nl<0){out[out.length]=code.length-at;return out}out[out.length]=nl-at;at=nl+1}
 }
 function record(kind,code,options){
   try{
     if(typeof code!=='string')return;
-    const at=code.lastIndexOf(marker);
+    const at=call(lastIndexOf,code,marker);
     if(at<0)return;
-    const m=/^[^,\s]*;base64,([A-Za-z0-9+/=]+)/.exec(code.slice(at+marker.length));
+    const m=call(exec,base64,call(slice,code,at+marker.length));
     if(!m)return;
-    const filename=typeof options==='string'?options:(options!==null&&typeof options==='object'&&typeof options.filename==='string'?options.filename:'');
-    if(!filename)return;
-    const lineLengths=code.split('\n').map(l=>l.length);
-    fs.appendFileSync(target(),JSON.stringify({kind,filename,length:code.length,lineOffset:offset(options,'lineOffset'),columnOffset:offset(options,'columnOffset'),lineLengths,map:Buffer.from(m[1],'base64').toString('utf8')})+'\n');
+    const filename=typeof options==='string'?options:own(options,'filename');
+    if(typeof filename!=='string'||filename==='')return;
+    const lo=own(options,'lineOffset'),co=own(options,'columnOffset');
+    // vm's own reading of an absent offset is 0.
+    appendRecord({kind,filename,length:code.length,lineOffset:isInteger(lo)?lo:0,columnOffset:isInteger(co)?co:0,lineLengths:lineLengths(code),map:call(toStr,bufferFrom(m[1],'base64'),'utf8')});
   }catch(e){}
 }
-// A wrapper carries the original's name and length, so code that reads them
-// sees what it would without the preload.
+function appendRecord(r){call(appendFileSync,fs,target(),stringify(r)+'\n')}
+// A wrapper carries the original's name and length, and String() of it
+// reads as the original's source.
 function same(w,orig){
-  for(const k of ['name','length']){
-    try{Object.defineProperty(w,k,Object.getOwnPropertyDescriptor(orig,k))}catch(e){}
-  }
+  for(const k of ['name','length'])define(w,k,getOwn(orig,k));
+  define(w,'toString',{value:fnToString.bind(orig),writable:true,configurable:true});
   return w;
 }
 const runInThisContext=vm.runInThisContext;
 vm.runInThisContext=same(function(code,options){
   record('script',code,options);
-  return Reflect.apply(runInThisContext,this,arguments);
+  return apply(runInThisContext,this,arguments);
 },runInThisContext);
 const compileFunction=vm.compileFunction;
 vm.compileFunction=same(function(code,params,options){
   record('function',code,options);
-  return Reflect.apply(compileFunction,this,arguments);
+  return apply(compileFunction,this,arguments);
 },compileFunction);
-vm.Script=new Proxy(vm.Script,{construct(t,args,nt){
-  record('script',args[0],args[1]);
-  return Reflect.construct(t,args,nt);
-}});
+// vm.Script stays the same class to its instances: the Proxy constructs the
+// original with new.target untouched, and the prototype's constructor names
+// the Proxy, which is what vm.Script now is.
+const Script=vm.Script;
+const toSource=fnToString.bind(Script);
+const ScriptProxy=new Proxy(Script,{
+  construct(t,args,nt){
+    record('script',args[0],args[1]);
+    return construct(t,args,nt===ScriptProxy?Script:nt);
+  },
+  get(t,k,recv){return k==='toString'?toSource:reflectGet(t,k,recv)}
+});
+define(Script.prototype,'constructor',{value:ScriptProxy,writable:true,configurable:true,enumerable:false});
+vm.Script=ScriptProxy;
 mod.syncBuiltinESMExports();
 })();
 `

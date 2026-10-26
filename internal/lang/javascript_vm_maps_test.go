@@ -384,3 +384,32 @@ func TestJSReducerSkipsAFunctionWhoseOwnRangeMapsNowhere(t *testing.T) {
 		t.Errorf("a.ts: f ran in full, and the added function's block must not mark a line of it cold:\n%s", out)
 	}
 }
+
+// An operator's own quoted --require (a path with a space) still loads, and
+// corral's comes after it.
+func TestJSCoverageCmdKeepsAnOperatorsQuotedRequire(t *testing.T) {
+	if _, err := exec.LookPath("node"); err != nil {
+		t.Skip("node not installed")
+	}
+	dir := filepath.Join(t.TempDir(), "a b")
+	if err := os.Mkdir(dir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "x.js"), []byte("globalThis.__operator = 'loaded';\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cmd, ok := jsPlugin{}.CoverageCmd([]string{"node", "-e", "console.error('OP=' + globalThis.__operator + ' NO=' + process.env.NODE_OPTIONS)"})
+	if !ok {
+		t.Fatal("CoverageCmd refused node -e")
+	}
+	c := exec.Command(cmd[0], cmd[1:]...) // #nosec G204 -- the command under test
+	c.Dir = t.TempDir()
+	c.Env = append(os.Environ(), `NODE_OPTIONS=--require "`+filepath.Join(dir, "x.js")+`"`)
+	var stderr bytes.Buffer
+	c.Stderr = &stderr
+	_ = c.Run()
+	want := `OP=loaded NO=--require "` + filepath.Join(dir, "x.js") + `" --require "`
+	if !strings.Contains(stderr.String(), want) {
+		t.Errorf("stderr = %q, want it to contain %q", stderr.String(), want)
+	}
+}

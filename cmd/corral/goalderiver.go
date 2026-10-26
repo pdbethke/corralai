@@ -236,7 +236,15 @@ func (d llmDeriver) Derive(ctx context.Context, c reposcan.Candidate, source str
 		d.usage.add(c.Path, d.model, reply.Usage, time.Since(start))
 	}
 	text := strings.TrimSpace(reply.Content)
-	if text == "" || strings.EqualFold(text, "NONE") {
+	if text == "" {
+		// The SEAT produced nothing — never the file's property. Only an
+		// explicit NONE says there is no testable property; an empty reply
+		// read as NONE once excluded a 41 KB service as "purely
+		// declarative" (B6). An error makes the file derive-failed, naming
+		// the seat.
+		return "", false, fmt.Errorf("the derive seat %s returned an empty reply for %s", d.model, c.Path)
+	}
+	if strings.EqualFold(text, "NONE") {
 		return "", false, nil
 	}
 	return text, true, nil

@@ -50,15 +50,23 @@ func TestLLMDeriverReturnsTheGoalText(t *testing.T) {
 	}
 }
 
-// An empty or refusing reply is the file's property, not an outage.
-func TestLLMDeriverEmptyReplyIsNotAnError(t *testing.T) {
-	d := llmDeriver{b: &fakeBackend{reply: "   "}}
+// AN EMPTY REPLY IS THE SEAT'S FAILURE, NEVER THE FILE'S PROPERTY (B6). Only
+// an explicit NONE says the file has no testable property. An empty reply
+// says the seat produced nothing — an agent CLI whose headless run returned
+// no text, a provider that answered with no content — and reading it as
+// NONE excluded a 41 KB service as "purely declarative". It is an error, so
+// the file is derive-failed and the scan says the seat failed.
+func TestLLMDeriverEmptyReplyIsAnErrorNotUngoaled(t *testing.T) {
+	d := llmDeriver{b: &fakeBackend{reply: "   "}, model: "claude-code"}
 	_, ok, err := d.Derive(context.Background(), reposcan.Candidate{Path: "a.go"}, "x")
-	if err != nil {
-		t.Fatalf("empty reply must not be an error: %v", err)
+	if err == nil || ok {
+		t.Fatalf("an empty reply must be an error, not ungoaled: ok=%v err=%v", ok, err)
 	}
-	if ok {
-		t.Fatal("empty reply must be ungoaled")
+	if !strings.Contains(err.Error(), "claude-code") || !strings.Contains(err.Error(), "empty") {
+		t.Errorf("the error must name the seat and say the reply was empty: %v", err)
+	}
+	if _, ok, err := (llmDeriver{b: &fakeBackend{reply: "NONE"}}).Derive(context.Background(), reposcan.Candidate{Path: "a.go"}, "x"); err != nil || ok {
+		t.Errorf("an explicit NONE stays ungoaled: ok=%v err=%v", ok, err)
 	}
 }
 

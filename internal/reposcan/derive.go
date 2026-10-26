@@ -70,8 +70,10 @@ const maxSourceBytes int64 = 256 << 10
 const defaultDeriveBackoff = 500 * time.Millisecond
 
 // Deriver proposes a correctness/security goal for a file from its SOURCE
-// ALONE. ok=false with a nil error means the model had nothing usable to say;
-// a non-nil error means infrastructure failed.
+// ALONE. ok=false with a nil error means the model said explicitly that the
+// file has no testable property (its NONE); a non-nil error means the seat or
+// its infrastructure failed — an EMPTY reply included, which is the seat
+// producing nothing, never a statement about the file (B6).
 type Deriver interface {
 	Derive(ctx context.Context, c Candidate, source string) (text string, ok bool, err error)
 }
@@ -151,8 +153,13 @@ func (s derivingGoalSource) GoalFor(c Candidate) (Goal, bool, error) {
 			}
 			continue
 		}
-		if !ok || strings.TrimSpace(text) == "" {
-			return Goal{}, false, nil // the file's own property: ungoaled
+		if !ok {
+			return Goal{}, false, nil // the model's explicit NONE: ungoaled
+		}
+		if strings.TrimSpace(text) == "" {
+			// ok with nothing in it is the deriver's failure, never the
+			// file's property (B6): derive-failed, not ungoaled.
+			return Goal{}, false, fmt.Errorf("reposcan: deriving a goal for %s: the deriver reported a goal with no text", c.Path)
 		}
 		return Goal{
 			Text:       strings.TrimSpace(text),

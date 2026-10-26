@@ -626,7 +626,7 @@ func jsSpecifiersDiffer(parts []AuthoredPart) error {
 			}
 			for _, spec := range named.specs {
 				local := jsImportLocal(spec)
-				if prev, ok := locals[mod][local]; ok && prev != spec {
+				if prev, ok := locals[mod][local]; ok && prev != spec && !jsSameBinding(prev, spec) {
 					return fmt.Errorf("lang: two authored parts bind %q from %q two ways (%q vs %q); merging them would leave one part calling the wrong binding", local, mod, prev, spec)
 				}
 				locals[mod][local] = spec
@@ -658,6 +658,14 @@ func parseJSNamedImport(key string) (jsNamedImport, bool) {
 		}
 	}
 	return n, true
+}
+
+// jsSameBinding reports whether two specifiers bind one name to one export
+// and differ only in that one is type-only (`type X` beside `X`): the value
+// import also names the type, so the union keeps the value form. The part
+// that imports X as a value is what proves X is a value at all.
+func jsSameBinding(a, b string) bool {
+	return a != b && strings.TrimPrefix(a, "type ") == strings.TrimPrefix(b, "type ")
 }
 
 // jsImportLocal is the name a specifier binds: `B` for `A as B`, `A` for
@@ -698,8 +706,11 @@ func jsUnionImports(headers []string) string {
 		}
 		g.count++
 		for _, spec := range n.specs {
-			if !slices.Contains(g.n.specs, spec) {
+			switch i := slices.IndexFunc(g.n.specs, func(have string) bool { return have == spec || jsSameBinding(have, spec) }); {
+			case i < 0:
 				g.n.specs = append(g.n.specs, spec)
+			case strings.HasPrefix(g.n.specs[i], "type "):
+				g.n.specs[i] = spec // the value import also names the type
 			}
 		}
 		out[i] = ""

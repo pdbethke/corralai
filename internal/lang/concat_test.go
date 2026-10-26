@@ -442,3 +442,19 @@ func TestConcatIgnoresABracketInAnImportsComment(t *testing.T) {
 		t.Errorf("a commented bracket swallowed a test into the import:\n%s", out)
 	}
 }
+
+// `{ type X }` beside `{ X }` from one module is one binding, not two: the
+// value import also names the type, and the part that imports X as a value
+// proves X is one. REA's run B kept a proven test apart for exactly this.
+func TestJavaScriptConcatUnifiesATypeAndAValueImportOfOneName(t *testing.T) {
+	merged, extra := ConcatAuthored(mustPlugin(t, "typescript"), []AuthoredPart{
+		{MutantID: "s0/m1", Source: "import { OwnedCommandFailure, type runOwnedCommand } from \"../src/OwnedCommand.js\";\nit(\"a\", () => {});\n"},
+		{MutantID: "s0/m2", Source: "import { runOwnedCommand } from \"../src/OwnedCommand.js\";\nit(\"b\", () => {});\n"},
+	})
+	if len(extra) != 0 {
+		t.Fatalf("a type and a value import of one name must merge: %+v", extra)
+	}
+	if want := "import { OwnedCommandFailure, runOwnedCommand } from \"../src/OwnedCommand.js\";"; !strings.Contains(merged, want) {
+		t.Errorf("want %s (the value import wins):\n%s", want, merged)
+	}
+}

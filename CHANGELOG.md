@@ -239,7 +239,12 @@ history of any release, `git log v0.3.4..v0.3.5`.
   separate files. A default or namespace import that differs, or one name
   bound two ways (`{ a as x }` beside `{ x }`), is still kept apart, and the
   run's log now gives that reason instead of a fixed one that was often
-  wrong.
+  wrong. `{ type X }` beside `{ X }` is one name and merges to `{ X }`.
+- **`certify --repo` prints why a model seat failed.** A writer, challenger
+  or critic seat whose model call failed had its error printed only to the
+  per-file progress stream, which `--repo` discards, so the log said only
+  "unreachable, rate-limited, or a server error". The seat's own error now
+  reaches the log on that path.
 
 ## [v1.0.0-rc.28] — 2026-10-21
 

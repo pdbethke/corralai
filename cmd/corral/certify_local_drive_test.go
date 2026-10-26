@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -278,5 +280,50 @@ func TestDriveLocalRunFailsFastOnATerminalToolchainError(t *testing.T) {
 	}
 	if ticks != 0 {
 		t.Fatal("no ticks should be needed to classify a terminal error")
+	}
+}
+
+// A WRITER SEAT'S FAILURE SAYS WHAT FAILED, ON EVERY PATH. certify --repo
+// hands each file's audit a discarded progress stream, so the seat's real
+// error — printed only there — never reached the operator: REA's run B lost
+// two codex writer calls and the log could only guess "unreachable,
+// rate-limited, or a server error". The error now goes through log, the
+// channel the pool's own lines use, whatever progress is.
+func TestWriterSeatFailureLogsTheErrorWithProgressDiscarded(t *testing.T) {
+	var buf strings.Builder
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+
+	survivors := []adequacy.Mutant{{ID: "m2", Replace: "two"}}
+	d, q, _ := newTimeoutTestDriver(t, 0.5, survivors)
+	rs := advpool.RunSpec{
+		Repo: "local", Commit: "local", Goal: "irrelevant",
+		CodePath: "x.go", Code: "package p\n",
+		DevTestPath: "x_test.go", DevTestCode: "package p\n",
+		NMutants: 2, Lang: "go",
+	}
+	const missionID = 102
+	if err := d.StartRun(missionID, rs, nil); err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+	base := timeoutTestChatterFor()
+	chatterFor := func(role string) agentworker.Chatter {
+		if role == advpool.RoleTestWriter {
+			return failingChatter{err: errors.New("codex: You've hit your usage limit")}
+		}
+		return base(role)
+	}
+	actorFor := func(role string) string { return recordActor(role, "model") }
+	ctx := context.Background()
+	for i := 0; i < 6; i++ {
+		if _, err := d.Tick(ctx, missionID); err != nil {
+			t.Fatalf("tick: %v", err)
+		}
+		if _, err := runReadyTasks(ctx, q, missionID, chatterFor, nil, actorFor, 1, io.Discard); err != nil {
+			t.Fatalf("runReadyTasks: %v", err)
+		}
+	}
+	if !strings.Contains(buf.String(), "You've hit your usage limit") {
+		t.Fatalf("the writer seat's error never reached the log with progress discarded:\n%s", buf.String())
 	}
 }

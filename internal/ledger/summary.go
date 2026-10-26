@@ -99,21 +99,26 @@ type Gap struct {
 }
 
 // ModelLine is one model's figures over the files it shares with another
-// model in the same role (see summarizeModels).
+// model in the same role (see summarizeModels). Files counts distinct
+// (Repo, Commit, Path); Rows counts the graded rows the figures sum, which is
+// more than Files when the model graded one file in several runs.
 type ModelLine struct {
 	Role           string   `json:"role"`
 	Model          string   `json:"model"`
 	Files          int      `json:"files"`
+	Rows           int      `json:"rows"`
 	MutantsPlanted int      `json:"mutants_planted"`
 	Survivors      int      `json:"survivors"`
 	ProvenMissed   int      `json:"proven_missed"`
 	CaughtShare    *float64 `json:"caught_share"`
 }
 
-// comparedRole is the seat the model comparison is about: the model that
+// ComparedRole is the seat the model comparison is about: the model that
 // wrote the faults. A different generator on the same file is a different
-// exam, which is what makes the comparison a question about the model.
-const comparedRole = "mutant-generator"
+// exam, which is what makes the comparison a question about the model. It is
+// advpool.RoleMutantGenerator, which this browser-safe package cannot import;
+// advpool's TestLedgerComparesTheMutantGeneratorRole holds the two equal.
+const ComparedRole = "mutant-generator"
 
 // Summarize computes a Summary from served scans, one Bundle per live,
 // verified scan entry in ledger order.
@@ -278,7 +283,7 @@ func gapsOf(b Bundle) []Gap {
 // summarizeModels is the like-for-like comparison. Two models' kill rates on
 // different files compare the files as much as the models, so a line counts
 // only files ((Repo, Commit, Path): the same bytes) graded under more than
-// one distinct model in comparedRole, and each model's line sums only its own
+// one distinct model in ComparedRole, and each model's line sums only its own
 // rows on those files. A seat that named a tool rather than a model (an
 // unpinned agent seat) is no evidence about a model and is left out, by the
 // rule every per-model reader applies (seatrecord.RecordedSeatNamesAModel). A
@@ -296,15 +301,15 @@ func summarizeModels(scans []Bundle) []ModelLine {
 			if !gradedFile(f) {
 				continue
 			}
-			if m, ok := seatModel(f, comparedRole); ok {
+			if m, ok := seatModel(f, ComparedRole); ok {
 				k := key{f.Repo, f.Commit, f.Path}
 				byFile[k] = append(byFile[k], rated{m, f})
 			}
 		}
 	}
 	byModel := map[string]*tally{}
-	files := map[string]int{}
-	for _, rs := range byFile {
+	files := map[string]map[key]bool{}
+	for k, rs := range byFile {
 		distinct := map[string]bool{}
 		for _, r := range rs {
 			distinct[r.model] = true
@@ -317,12 +322,15 @@ func summarizeModels(scans []Bundle) []ModelLine {
 				byModel[r.model] = &tally{}
 			}
 			byModel[r.model].add(r.f)
-			files[r.model]++
+			if files[r.model] == nil {
+				files[r.model] = map[key]bool{}
+			}
+			files[r.model][k] = true
 		}
 	}
 	out := []ModelLine{}
 	for m, t := range byModel {
-		out = append(out, ModelLine{Role: comparedRole, Model: m, Files: files[m],
+		out = append(out, ModelLine{Role: ComparedRole, Model: m, Files: len(files[m]), Rows: t.graded,
 			MutantsPlanted: t.planted, Survivors: t.survivors, ProvenMissed: t.proven, CaughtShare: t.share()})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Model < out[j].Model })

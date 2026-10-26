@@ -170,6 +170,10 @@ func TestSummaryGaps(t *testing.T) {
 	}
 	if !reflect.DeepEqual(s.Gaps, want) {
 		t.Fatalf("gaps\n got %+v\nwant %+v", s.Gaps, want)
+	} // The gap list and the proven count describe the same files; a page
+	// showing both must never show two different numbers for one fact.
+	if len(s.Gaps) != s.Totals.ProvenMissed {
+		t.Fatalf("%d gaps listed, totals say %d proven missed", len(s.Gaps), s.Totals.ProvenMissed)
 	}
 }
 
@@ -195,10 +199,12 @@ func TestSummaryModelsLikeForLike(t *testing.T) {
 			withModel(graded("x.go", 10, 2, 4, 3), "m2", ""),
 			withModel(graded("z.go", 10, 0, 3, 3), "claude-code", "2.1.309 (Claude Code)"), // a tool, not a model
 		),
+		// m1 grades x.go a second time: one more row, still one file.
+		runOf("3", "c1", at(3), withModel(graded("x.go", 10, 0, 4, 4), "m1", "")),
 	})
 	want := []ledger.ModelLine{
-		{Role: "mutant-generator", Model: "m1", Files: 1, MutantsPlanted: 10, Survivors: 2, ProvenMissed: 2, CaughtShare: fp(0.8)},
-		{Role: "mutant-generator", Model: "m2", Files: 1, MutantsPlanted: 12, Survivors: 4, ProvenMissed: 3, CaughtShare: fp(0.6)},
+		{Role: "mutant-generator", Model: "m1", Files: 1, Rows: 2, MutantsPlanted: 20, Survivors: 6, ProvenMissed: 6, CaughtShare: fp(0.7)},
+		{Role: "mutant-generator", Model: "m2", Files: 1, Rows: 1, MutantsPlanted: 12, Survivors: 4, ProvenMissed: 3, CaughtShare: fp(0.6)},
 	}
 	if !reflect.DeepEqual(s.Models, want) {
 		t.Fatalf("models\n got %s\nwant %s", summaryJSON(t, ledger.Summary{Models: s.Models}), summaryJSON(t, ledger.Summary{Models: want}))

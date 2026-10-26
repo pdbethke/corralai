@@ -8,8 +8,8 @@
   },
   "scripts": {
     "dev": "ASTRO_TELEMETRY_DISABLED=1 astro dev",
-    "predev": "node scripts/build-analytics.mjs",
-    "prebuild": "bash ../scripts/sync-site-assets.sh --check && node scripts/build-analytics.mjs",
+    "predev": "node scripts/build-analytics.mjs && node scripts/build-ledger-wasm.mjs",
+    "prebuild": "bash ../scripts/sync-site-assets.sh --check && node scripts/build-analytics.mjs && node scripts/build-ledger-wasm.mjs",
     "build": "ASTRO_TELEMETRY_DISABLED=1 astro build",
     "preview": "ASTRO_TELEMETRY_DISABLED=1 astro preview",
     "astro": "ASTRO_TELEMETRY_DISABLED=1 astro",

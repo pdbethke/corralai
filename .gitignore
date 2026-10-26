@@ -88,3 +88,11 @@ corral-wrangler
 # site build time by scripts/gen-ledger-site.sh. Derived, never committed: it
 # changes when the LEDGER advances, not when this repo does.
 site/public/ledger/
+
+# The results page's verifier, ledger.Derive as WebAssembly — built from this
+# checkout by site/scripts/build-ledger-wasm.mjs on prebuild/predev. Derived,
+# never committed: it must come from the same commit as the page.
+site/public/results/wasm/
+# Copied from internal/ledger/testdata by site/tests/results-loader.spec.ts
+# (plus a tampered copy it makes); the Go fixture is the one source.
+site/tests/fixtures/ledgers/

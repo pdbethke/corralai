@@ -550,7 +550,10 @@ func coverageRunnerNamed(testCmd []string, runners []string) bool {
 // This is a lexer, not a parser: it does not honour quoting, so a command
 // substitution or a quoted `;` can still split a word. That direction is safe
 // — it can only produce EXTRA candidate words, and every one of them still has
-// to equal a runner name to match. It cannot make a runner disappear.
+// to equal a runner name to match. It cannot make a runner disappear. The one
+// thing it removes before lexing is the body of a quoted-delimiter
+// here-document whose closing line it finds (withoutHeredocBodies), which
+// the shell itself reads as text, never as commands.
 func shellCommandWords(script string) []string {
 	script = withoutHeredocBodies(script)
 	var words []string
@@ -604,37 +607,53 @@ func shellCommandWords(script string) []string {
 	return words
 }
 
-// heredocStart finds a here-document operator and its delimiter word:
-// `<<EOF`, `<<-EOF`, `<<'EOF'`, `<<"EOF"`.
-var heredocStart = regexp.MustCompile(`<<(-?)\s*(['"]?)([A-Za-z_][A-Za-z0-9_]*)['"]?`)
+// quotedHeredoc finds a here-document whose delimiter is quoted —
+// `<<'EOF'`, `<<"EOF"`, `<<-'EOF'` — the only shape whose body the shell
+// takes as literal text, with no expansion or command substitution. Every
+// here-document corral writes itself has that shape.
+var quotedHeredoc = regexp.MustCompile(`<<(-?)\s*(['"])([^'"\s]+)['"]`)
 
-// withoutHeredocBodies is script with every here-document's body removed: the
-// lines after a line that opens one, up to and including the line that is
-// its delimiter (leading tabs stripped for `<<-`). A body is the DATA a
-// command reads, never commands, and every JavaScript coverage command
-// writes its reducer and preload through one: read as shell, each JS token
-// was looked up as a program, and `code` in the preload resolved to the
-// host's VS Code snap, failing every jailed unit.
+// withoutHeredocBodies is script with the body of every quoted-delimiter
+// here-document removed: the lines after the line that opens it, up to and
+// including its delimiter line (leading tabs stripped for `<<-`). Such a
+// body is the DATA a command reads, never commands, and every JavaScript
+// coverage command writes its reducer and preload through one: read as
+// shell, each JS token was looked up as a program, and `code` in the
+// preload resolved to the host's VS Code snap, failing every jailed unit.
+//
+// It must never hide a command, so anything it cannot be sure of is left
+// to be read as before (review I5): a here-string (`<<<`), an unquoted
+// delimiter (the shell runs its body's $(…)), and a quoted one whose
+// closing line never comes — which is also what `<<'X'` inside a quoted
+// string usually looks like.
 func withoutHeredocBodies(script string) string {
 	if !strings.Contains(script, "<<") {
 		return script
 	}
-	var out []string
 	lines := strings.Split(script, "\n")
+	var out []string
 	for i := 0; i < len(lines); i++ {
 		out = append(out, lines[i])
-		for _, m := range heredocStart.FindAllStringSubmatch(lines[i], -1) {
-			dashed, delim := m[1] == "-", m[3]
-			for i+1 < len(lines) {
-				i++
-				body := lines[i]
+		for _, m := range quotedHeredoc.FindAllStringSubmatchIndex(lines[i], -1) {
+			if m[0] > 0 && lines[i][m[0]-1] == '<' {
+				continue // `<<<'x'`: a here-string, not a here-document
+			}
+			dashed, delim := lines[i][m[2]:m[3]] == "-", lines[i][m[6]:m[7]]
+			end := -1
+			for j := i + 1; j < len(lines); j++ {
+				body := lines[j]
 				if dashed {
 					body = strings.TrimLeft(body, "\t")
 				}
 				if body == delim {
+					end = j
 					break
 				}
 			}
+			if end < 0 {
+				break // no closing line: not a heredoc corral can be sure of
+			}
+			i = end
 		}
 	}
 	return strings.Join(out, "\n")

@@ -979,3 +979,36 @@ func TestInterpretersInSkipsHeredocBodies(t *testing.T) {
 		t.Errorf("the JS coverage command's interpreters lost node: %q", words)
 	}
 }
+
+// ONLY A HEREDOC CORRAL CAN BE SURE OF IS SKIPPED (review I5). Skipping
+// must never hide a command: a here-string, an arithmetic shift, `<<` inside
+// a quoted string, a delimiter that is not a word, an unquoted heredoc
+// (whose $(…) the shell runs), and a quoted heredoc whose closing line never
+// comes all leave every following command visible. Only a quoted-delimiter
+// heredoc whose closing line is found — the shape of every heredoc corral
+// writes — is data.
+func TestInterpretersInHidesNoCommandBehindAHeredocItCannotBeSureOf(t *testing.T) {
+	for _, c := range []struct {
+		name, script string
+		want         []string
+	}{
+		{"here-string", "cat <<<foo\nnode t.js", []string{"cat", "node"}},
+		{"arithmetic shift", "n=$((1<<4))\nnode t.js", []string{"node"}},
+		{"quoted text", "echo \"a <<'X' b\"\nnode t.js", []string{"echo", "node"}},
+		{"non-word delimiter", "cat <<END-OF\nx\nEND-OF\nnode t.js", []string{"cat", "x", "END-OF", "node"}},
+		{"unquoted heredoc runs its substitutions", "cat <<EOF\n$(python3 gen.py)\nEOF\nnode t.js", []string{"cat", "python3", "EOF", "node"}},
+		{"no closing line", "cat <<'EOF'\nnode t.js", []string{"cat", "node"}},
+		{"quoted heredoc is data", "cat <<'EOF'\ncode(1)\nEOF\nnode t.js", []string{"cat", "node"}},
+		{"dashed quoted heredoc is data", "cat <<-\"T\"\n\tvim x\n\tT\nnode t.js", []string{"cat", "node"}},
+	} {
+		got := InterpretersIn([]string{"sh", "-c", c.script})
+		for _, w := range c.want {
+			if !slices.Contains(got, w) {
+				t.Errorf("%s: InterpretersIn = %q, missing %q", c.name, got, w)
+			}
+		}
+		if c.name == "quoted heredoc is data" && slices.Contains(got, "code") || c.name == "dashed quoted heredoc is data" && slices.Contains(got, "vim") {
+			t.Errorf("%s: InterpretersIn = %q read the heredoc body", c.name, got)
+		}
+	}
+}

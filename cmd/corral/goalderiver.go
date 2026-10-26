@@ -36,7 +36,14 @@ Do not describe what the code does. Do not mention tests. Do not explain your re
 // so a prompt edit can never miss the bump: any change to either text
 // without bumping this constant would let a cached goal from the OLD
 // prompt masquerade as an answer to the new one.
-const GoalPromptRev = "gp1"
+//
+// gp2 (ruling R28): the prompt text did not change, but what a cached row
+// can mean did. Under gp1 an EMPTY derive reply was read as NONE and cached
+// as ungoaled, so a cache written then can answer "no testable property"
+// for a file whose seat simply produced nothing (B6), with no model asked.
+// Since 85f5afae an empty reply is a seat failure and is never cached; the
+// bump keys every gp1 row apart, so none of them is served.
+const GoalPromptRev = "gp2"
 
 // goalDeriverPromptDigest pins sha256(goalDeriverSystem +
 // goalDeriverUserTemplate) — see TestGoalDeriverPromptDigestIsPinned, which

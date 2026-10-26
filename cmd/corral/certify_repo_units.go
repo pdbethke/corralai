@@ -269,7 +269,19 @@ func printUnitPass(w io.Writer, ex *localExecutor) {
 		basis = "reused — tree unchanged since an earlier scan (cached evidence)"
 	}
 	fmt.Fprintf(w, "  units: %d run, %d failed (%s)\n", len(ev.Units), unitPassFailed(ev), basis)
+	// Capped as printEvidencePairings caps its list: on a large suite that
+	// hits the time limit every unit has a line, and the full list is the
+	// count line above plus --dry-run --json (ruling R30).
+	listed, withheld := 0, 0
 	for _, u := range ev.Units {
+		if u.Err == "" && len(u.Uncounted) == 0 {
+			continue
+		}
+		if listed == maxListedExclusions {
+			withheld++
+			continue
+		}
+		listed++
 		if u.Err != "" {
 			// A failed unit's reason ends with its output tail, which can
 			// run over several lines; each is indented under the unit so
@@ -282,6 +294,9 @@ func printUnitPass(w io.Writer, ex *localExecutor) {
 		if n := len(u.Uncounted); n > 0 {
 			fmt.Fprintf(w, "    %s: %d file(s) measured and not counted (listed in --dry-run --json)\n", u.Unit, n)
 		}
+	}
+	if withheld > 0 {
+		fmt.Fprintf(w, "    ... and %d more unit(s) that failed or left files uncounted (every one is in --dry-run --json)\n", withheld)
 	}
 	if ex.unitLandingNote != "" {
 		fmt.Fprintf(w, "  units: %s\n", ex.unitLandingNote)

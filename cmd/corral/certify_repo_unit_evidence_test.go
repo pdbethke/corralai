@@ -5,6 +5,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"path/filepath"
 	"reflect"
@@ -685,5 +686,35 @@ func TestDiffBaseWidensAGoSourceWhenAnotherTestFileOfItsPackageChanges(t *testin
 	}
 	if !strings.Contains(s, "widened by evidence: +1 in scope — pkg/c.go") {
 		t.Errorf("a PR that weakened pkg/b_test.go must put evidence-only pkg/c.go in scope:\n%s", s)
+	}
+}
+
+// THE FAILED-UNIT LIST IS CAPPED as printEvidencePairings caps its list
+// (maxListedExclusions, then "... and N more"), ruling R30 / Task 8 m1. On
+// a large suite that hits the time limit every unit has a line, and the
+// uncapped list was the 1.4 MB scan output shape again. The count line
+// still says how many failed, and --dry-run --json lists every one.
+func TestUnitPassCapsTheFailedUnitList(t *testing.T) {
+	root := unitEvidenceTSFixture(t)
+	units := []reposcan.UnitResult{
+		unitRun("tests/composition/service.test.ts", map[string]lang.LineCounts{"src/app/Service.ts": {Executed: 1, Executable: 1}}),
+	}
+	failed := maxListedExclusions + 5
+	for i := range failed {
+		units = append(units, reposcan.UnitResult{Unit: fmt.Sprintf("tests/t%02d.test.ts", i), Err: "not run (time limit)"})
+	}
+	fake := &fakeUnitPass{ev: reposcan.UnitEvidence{Ran: true, Units: units}}
+	fake.install(t)
+
+	s := runUnitEvidenceScan(t, root, "--", "vitest", "run")
+
+	if !strings.Contains(s, fmt.Sprintf("units: %d run, %d failed", failed+1, failed)) {
+		t.Errorf("missing the full count line:\n%s", s)
+	}
+	if got := strings.Count(s, ": not run (time limit)"); got != maxListedExclusions {
+		t.Errorf("%d failed-unit lines printed, want %d:\n%s", got, maxListedExclusions, s)
+	}
+	if !strings.Contains(s, "    ... and 5 more unit(s) that failed or left files uncounted (every one is in --dry-run --json)") {
+		t.Errorf("the cap must say how many lines it withheld:\n%s", s)
 	}
 }

@@ -74,6 +74,11 @@ func ParseUnitList(p Plugin, inv Invocation, stdout string) []string {
 			u = rel
 		}
 		u = strings.TrimPrefix(filepath.ToSlash(filepath.Clean(u)), "./")
+		// A relative unit is held to cwd as an absolute one is above: one
+		// that climbs out of it is no unit of this repository.
+		if u == ".." || strings.HasPrefix(u, "../") {
+			continue
+		}
 		if u != "" && u != "." {
 			units = append(units, u)
 		}

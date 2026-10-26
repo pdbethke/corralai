@@ -1120,3 +1120,16 @@ func TestShellCommandWordsHonoursQuoting(t *testing.T) {
 		}
 	}
 }
+
+// A RELATIVE UNIT IS HELD TO THE WORKING DIRECTORY TOO (ruling R30, Task 5
+// minor 1). An absolute listed path outside cwd was already dropped; a
+// relative one that climbs out (`../x.test.js`, `a/../../x.test.js`) was
+// kept, and a unit outside the repository is no unit of it.
+func TestParseUnitListDropsARelativeUnitOutsideTheWorkingDirectory(t *testing.T) {
+	js, _ := ByName("javascript")
+	inv := Cmd([]string{"npx", "jest"})
+	out := unitsCwdMarker + "/r\n" + `["a.test.js","../up.test.js","b/../../up2.test.js","..","./c/../d.test.js"]` + "\n"
+	if got := ParseUnitList(js, inv, out); !slices.Equal(got, []string{"a.test.js", "d.test.js"}) {
+		t.Errorf("units = %q: want only the ones inside the working directory", got)
+	}
+}

@@ -251,11 +251,11 @@ package reposcan
 // covering_tests keeps meaning Python's per-test count. Shape unchanged;
 // behaviour bump.
 //
-// "35" (2026-10-26): TypeScript's compile gate takes the project's resolved
-// target and lib (tsc --showConfig) instead of a pinned es2022 (ruling R27).
-// A "34" TypeScript verdict for a project on a newer library was graded with
-// the gate off, its authored tests never type-checked (REA). Shape
-// unchanged; behaviour bump.
+// "35" (2026-10-26): TypeScript's compile gate checks under the project's
+// own tsconfig (extended, file selection still corral's) instead of pinned
+// options (ruling R27). A "34" TypeScript verdict for a project whose code
+// needs its own options was graded with the gate off, its authored tests
+// never type-checked (REA). Shape unchanged; behaviour bump.
 const VerdictGeneration = "35"
 
 // VerdictShapeSHA256 fingerprints advpool.Verdict's serialized shape: every

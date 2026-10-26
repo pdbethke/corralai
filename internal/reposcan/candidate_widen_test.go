@@ -423,7 +423,7 @@ func TestWidenCandidacyByUnitsLeavesAnAlreadyPairedCandidateByteIdentical(t *tes
 			"src/b.ts": {Executed: 3, Executable: 4},
 		}},
 	}}
-	idx, idxOK := IndexFromUnits(ev, UnitTestFile(ts, map[string]string{"test/a.test.ts": "", "tests/other.test.ts": ""}))
+	idx, idxOK := IndexFromUnits(ev, UnitFilesFor(ts, map[string]string{"test/a.test.ts": "", "tests/other.test.ts": ""}))
 	if !idxOK || !idx.UnitKind() {
 		t.Fatalf("fixture: want a unit-kind index, got ok=%v unitKind=%v", idxOK, idx.UnitKind())
 	}
@@ -463,7 +463,7 @@ func TestCoveringTestsNeverSetFromUnits(t *testing.T) {
 		{Unit: "test/b.test.ts", Counts: map[string]lang.LineCounts{"src/a.ts": {Executed: 1, Executable: 10}, "src/c.ts": {Executed: 1, Executable: 3}}},
 		{Unit: "test/c.test.ts", Counts: map[string]lang.LineCounts{"src/c.ts": {Executed: 2, Executable: 3}}},
 	}}
-	idx, idxOK := IndexFromUnits(ev, UnitTestFile(ts, map[string]string{"test/a.test.ts": "", "test/b.test.ts": "", "test/c.test.ts": ""}))
+	idx, idxOK := IndexFromUnits(ev, UnitFilesFor(ts, map[string]string{"test/a.test.ts": "", "test/b.test.ts": "", "test/c.test.ts": ""}))
 	if !idxOK || !idx.UnitKind() {
 		t.Fatalf("fixture: want a unit-kind index, got ok=%v unitKind=%v", idxOK, idx.UnitKind())
 	}
@@ -522,7 +522,7 @@ func TestWidenCandidacyByUnitsSaysOnlyWhatTheUnitsRan(t *testing.T) {
 			"src/dead.ts":   {Executed: 0, Executable: 4},
 		}, Loaded: []string{"src/loaded.ts"}},
 	}}
-	idx, idxOK := IndexFromUnits(ev, UnitTestFile(ts, map[string]string{"test/a.test.ts": ""}))
+	idx, idxOK := IndexFromUnits(ev, UnitFilesFor(ts, map[string]string{"test/a.test.ts": ""}))
 	if !idxOK || !idx.UnitKind() {
 		t.Fatalf("fixture: want a unit-kind index, got ok=%v unitKind=%v", idxOK, idx.UnitKind())
 	}
@@ -572,7 +572,7 @@ func TestWidenCandidacyByUnitsCallsARubyOrPHPFileLoadedNeverCalledImportOnly(t *
 				t.Fatal(err)
 			}
 			ev := UnitEvidence{Ran: true, Units: []UnitResult{{Unit: c.unit, Counts: counts, Loaded: lang.LoadedCoverage(string(raw))}}}
-			idx, idxOK := IndexFromUnits(ev, UnitTestFile(p, map[string]string{c.unit: ""}))
+			idx, idxOK := IndexFromUnits(ev, UnitFilesFor(p, map[string]string{c.unit: ""}))
 			if !idxOK {
 				t.Fatal("fixture: want a unit-kind index")
 			}

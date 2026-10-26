@@ -305,7 +305,7 @@ func failureTail(stderr, out string) string {
 //
 // A source file's covering count is the number of successful units that
 // executed at least one of its lines AND can land a test for it:
-// unitTestFile(unit, source) names the test file an authored test for that
+// uf.Landing(unit, source) names the test file an authored test for that
 // source would go in when it is graded by that unit, and "" when no such
 // file exists (a Go test outside the source's package cannot reach its
 // unexported code; a Rust integration test of one crate does not grade
@@ -314,6 +314,15 @@ func failureTail(stderr, out string) string {
 // with the most executed lines of the file, summed per landing file, with
 // moreSpecificTestPath breaking ties as ParseEvidenceIndex does.
 //
+// A file's covering test FILES (EvidenceIndex.CoveredByAny, the --diff-base
+// question "does this changed test defend this source?") are every test file
+// each of those units compiled, uf.TestFiles(unit), together with its
+// landing. For a file unit that is the unit itself; a Go package unit
+// compiles every _test.go of its package, internal and external, so a change
+// to any of them changes what ran the source. Recording only the landing
+// left an evidence-only file out of a PR's scope when the PR changed one of
+// the package's other test files (final review I2).
+//
 // Two shapes are left OUT of the index — unmeasured, never a measured
 // zero — because a zero would be a claim the evidence does not support:
 //   - a file some unit executed but no unit can land a test for. It was
@@ -321,7 +330,7 @@ func failureTail(stderr, out string) string {
 //   - a file no landable unit executed, when the pass was partial (a unit
 //     failed, timed out or never ran). The unit that did not finish may be
 //     the one that executes it, and a failed unit is never "covered nothing".
-func IndexFromUnits(ev UnitEvidence, unitTestFile func(unit, source string) string) (EvidenceIndex, bool) {
+func IndexFromUnits(ev UnitEvidence, uf UnitFiles) (EvidenceIndex, bool) {
 	if !ev.Ran {
 		return EvidenceIndex{}, false
 	}
@@ -329,6 +338,7 @@ func IndexFromUnits(ev UnitEvidence, unitTestFile func(unit, source string) stri
 		executed, hasStatements, loaded bool
 		units                           int
 		perFile                         map[string]int
+		compiled                        map[string]bool
 	}
 	tallies := map[string]*tally{}
 	succeeded, partial := 0, false
@@ -345,7 +355,7 @@ func IndexFromUnits(ev UnitEvidence, unitTestFile func(unit, source string) stri
 		for src, lc := range u.Counts {
 			t := tallies[src]
 			if t == nil {
-				t = &tally{perFile: map[string]int{}}
+				t = &tally{perFile: map[string]int{}, compiled: map[string]bool{}}
 				tallies[src] = t
 			}
 			t.hasStatements = t.hasStatements || lc.Executable > 0
@@ -354,12 +364,16 @@ func IndexFromUnits(ev UnitEvidence, unitTestFile func(unit, source string) stri
 				continue
 			}
 			t.executed = true
-			landing := unitTestFile(u.Unit, src)
+			landing := uf.Landing(u.Unit, src)
 			if landing == "" {
 				continue
 			}
 			t.units++
 			t.perFile[landing] += lc.Executed
+			t.compiled[landing] = true
+			for _, tf := range uf.TestFiles(u.Unit) {
+				t.compiled[tf] = true
+			}
 		}
 	}
 	if succeeded == 0 {
@@ -371,10 +385,8 @@ func IndexFromUnits(ev UnitEvidence, unitTestFile func(unit, source string) stri
 		if t.units == 0 && (t.executed || partial) {
 			continue
 		}
-		covering := make(map[string]bool, len(t.perFile))
 		best, bestLines := "", -1
 		for testFile, lines := range t.perFile {
-			covering[testFile] = true
 			if lines > bestLines || (lines == bestLines && moreSpecificTestPath(testFile, best)) {
 				best, bestLines = testFile, lines
 			}
@@ -383,7 +395,7 @@ func IndexFromUnits(ev UnitEvidence, unitTestFile func(unit, source string) stri
 			coveringTests: t.units,
 			coveringUnits: t.units,
 			mostCovering:  best,
-			coveringFiles: covering,
+			coveringFiles: t.compiled,
 			// A unit that loaded the file ran its module-level code: the
 			// unit-pass counterpart of a per-test index's static coverage,
 			// which is what makes an unexecuted file import-only.
@@ -392,6 +404,99 @@ func IndexFromUnits(ev UnitEvidence, unitTestFile func(unit, source string) stri
 		}
 	}
 	return EvidenceIndex{files: files, unitKind: true}, true
+}
+
+// UnitFiles is what IndexFromUnits needs to know about the repository's
+// units: Landing, the test file an authored test for a source lands in when
+// a unit grades it (UnitTestFile), and TestFiles, every test file a unit
+// compiles (UnitTestFiles). Both are required; UnitFilesFor builds them.
+type UnitFiles struct {
+	Landing   func(unit, source string) string
+	TestFiles func(unit string) []string
+}
+
+// UnitFilesFor is p's UnitFiles over the repository's files.
+func UnitFilesFor(p lang.Plugin, files map[string]string) UnitFiles {
+	return UnitFiles{Landing: UnitTestFile(p, files), TestFiles: UnitTestFiles(p, files)}
+}
+
+// UnitTestFiles answers which of the repository's test files a unit
+// compiles and runs, for --diff-base's question of which changed test files
+// a unit's evidence speaks for. It names files the repository has, never a
+// guessed path, and nothing for a unit it cannot place.
+//
+//   - JavaScript, TypeScript, Ruby, PHP: a unit is a test file; it is the
+//     one file.
+//   - Go: a unit is a package import path; `go test` compiles every
+//     `_test.go` in that package's directory, internal (`package p`) and
+//     external (`package p_test`) alike.
+//   - Rust: `<pkg>/test:<name>` (nextest `<pkg>::<name>`) is the target's
+//     tests/<name>.rs or tests/<name>/main.rs. A lib or bin unit's tests are
+//     in-file modules of its sources, which Landing already names; Rust
+//     evidence promotes nothing yet (ruling R23).
+//
+// Every other language names nothing.
+func UnitTestFiles(p lang.Plugin, files map[string]string) func(unit string) []string {
+	switch p.Name() {
+	case "javascript", "typescript", "ruby", "php":
+		return func(unit string) []string {
+			if _, ok := files[unit]; ok {
+				return []string{unit}
+			}
+			return nil
+		}
+	case "go":
+		return goUnitTestFiles(files)
+	case "rust":
+		return rustUnitTestFiles(files)
+	}
+	return func(string) []string { return nil }
+}
+
+func goUnitTestFiles(files map[string]string) func(unit string) []string {
+	var once sync.Once
+	byPkg := map[string][]string{} // import path -> its directory's _test.go files, sorted
+	return func(unit string) []string {
+		once.Do(func() {
+			byDir := map[string][]string{}
+			for f := range files {
+				if strings.HasSuffix(f, "_test.go") {
+					byDir[path.Dir(f)] = append(byDir[path.Dir(f)], f)
+				}
+			}
+			for dir, fs := range byDir {
+				pkg, ok := goImportPathOf(files, dir)
+				if !ok {
+					continue
+				}
+				sort.Strings(fs)
+				byPkg[pkg] = fs
+			}
+		})
+		return byPkg[unit]
+	}
+}
+
+func rustUnitTestFiles(files map[string]string) func(unit string) []string {
+	var once sync.Once
+	pkgDirs := map[string]string{}
+	return func(unit string) []string {
+		once.Do(func() { pkgDirs = rustPackageDirs(files) })
+		pkg, kind, name, ok := rustUnitParts(unit)
+		if !ok || kind != "test" {
+			return nil
+		}
+		dir := pkgDirs[pkg]
+		if dir == "" {
+			return nil
+		}
+		for _, f := range []string{under(dir, "tests/"+name+".rs"), under(dir, "tests/"+name+"/main.rs")} {
+			if _, ok := files[f]; ok {
+				return []string{f}
+			}
+		}
+		return nil
+	}
 }
 
 // UnitTestFile is the landing resolver IndexFromUnits takes, for p's units
@@ -558,24 +663,9 @@ func goImportPathOf(files map[string]string, dir string) (string, bool) {
 
 func rustUnitLanding(files map[string]string) func(unit, source string) string {
 	var once sync.Once
-	pkgDirs := map[string]string{} // package name -> its directory; "" when two share a name
+	pkgDirs := map[string]string{}
 	return func(unit, source string) string {
-		once.Do(func() {
-			for f, text := range files {
-				if path.Base(f) != "Cargo.toml" {
-					continue
-				}
-				name, ok := tomllite.StringValue(text, "package", "name")
-				if !ok {
-					continue
-				}
-				if _, seen := pkgDirs[name]; seen {
-					pkgDirs[name] = ""
-					continue
-				}
-				pkgDirs[name] = path.Dir(f)
-			}
-		})
+		once.Do(func() { pkgDirs = rustPackageDirs(files) })
 		pkg, kind, name, ok := rustUnitParts(unit)
 		if !ok {
 			return ""
@@ -609,6 +699,27 @@ func rustUnitLanding(files map[string]string) func(unit, source string) string {
 		}
 		return ""
 	}
+}
+
+// rustPackageDirs maps each Cargo package name to its directory, "" when
+// two manifests share a name (neither can be told apart from the other).
+func rustPackageDirs(files map[string]string) map[string]string {
+	pkgDirs := map[string]string{}
+	for f, text := range files {
+		if path.Base(f) != "Cargo.toml" {
+			continue
+		}
+		name, ok := tomllite.StringValue(text, "package", "name")
+		if !ok {
+			continue
+		}
+		if _, seen := pkgDirs[name]; seen {
+			pkgDirs[name] = ""
+			continue
+		}
+		pkgDirs[name] = path.Dir(f)
+	}
+	return pkgDirs
 }
 
 // rustUnitParts reads a Rust unit name in either runner's spelling: cargo

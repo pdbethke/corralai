@@ -1088,7 +1088,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 				})
 			}
 			if ex.unitLanding != nil {
-				idx, idxOK = reposcan.IndexFromUnits(ex.units, reposcan.UnitTestFile(plug, ex.unitLanding))
+				idx, idxOK = reposcan.IndexFromUnits(ex.units, reposcan.UnitFilesFor(plug, ex.unitLanding))
 			}
 			unitsPartial = idxOK && unitPassFailed(ex.units) > 0
 		}

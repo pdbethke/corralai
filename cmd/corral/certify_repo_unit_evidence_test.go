@@ -162,7 +162,7 @@ func TestUnitEvidenceNeverMovesANamePairedCandidate(t *testing.T) {
 	}
 	ts, _ := lang.ByName("typescript")
 	landing := map[string]string{"test/a.test.ts": "", "tests/other.test.ts": ""}
-	idx, ok := reposcan.IndexFromUnits(ev, reposcan.UnitTestFile(ts, landing))
+	idx, ok := reposcan.IndexFromUnits(ev, reposcan.UnitFilesFor(ts, landing))
 	if !ok {
 		t.Fatal("fixture: no unit index")
 	}
@@ -648,5 +648,42 @@ func TestAnEvidenceOnlyCandidateIsAskedForItsGoal(t *testing.T) {
 	}
 	if !slices.Equal(d.asked, []string{"src/app/Service.ts"}) {
 		t.Errorf("deriver asked about %q, want exactly the evidence-paired src/app/Service.ts:\n%s", d.asked, s)
+	}
+}
+
+// A PR THAT CHANGES A NON-LANDING GO TEST FILE puts the evidence-only
+// source its package unit ran in scope (final review I2). pkg/c.go has no
+// c_test.go, so only unit evidence pairs it, landing on pkg/a_test.go. The
+// PR weakens pkg/b_test.go, which the same `go test` unit compiled: before
+// the index recorded every test file a unit compiled, CoveredByAny saw only
+// the landing and the gate scoped c.go out — failing open on exactly the
+// change the diff block exists to catch.
+func TestDiffBaseWidensAGoSourceWhenAnotherTestFileOfItsPackageChanges(t *testing.T) {
+	root := t.TempDir()
+	gitRun := gitCmd(t, root)
+	mustWrite(t, filepath.Join(root, "go.mod"), "module m\n\ngo 1.22\n")
+	mustWrite(t, filepath.Join(root, "pkg", "c.go"), "package pkg\n\nfunc C() int { return 1 }\n")
+	mustWrite(t, filepath.Join(root, "pkg", "a_test.go"), "package pkg\n")
+	mustWrite(t, filepath.Join(root, "pkg", "b_test.go"), "package pkg\n")
+	mustWrite(t, filepath.Join(root, "pkg", "x_test.go"), "package pkg_test\n")
+	gitRun("init", "-q")
+	gitRun("add", ".")
+	gitRun("commit", "-q", "-m", "base", "--no-gpg-sign")
+	base := gitRevParseHead(t, root)
+	mustWrite(t, filepath.Join(root, "pkg", "b_test.go"), "package pkg // assertions removed\n")
+	gitRun("add", "pkg/b_test.go")
+	gitRun("commit", "-q", "-m", "weaken b_test.go", "--no-gpg-sign")
+
+	fake := &fakeUnitPass{ev: reposcan.UnitEvidence{Ran: true, Units: []reposcan.UnitResult{
+		unitRun("m/pkg", map[string]lang.LineCounts{"pkg/c.go": {Executed: 1, Executable: 1}}),
+	}}}
+	fake.install(t)
+
+	s := runUnitEvidenceScan(t, root, "--diff-base", base, "--dry-run", "--evidence", "--", "go", "test", "./...")
+	if len(fake.called()) != 1 {
+		t.Fatalf("unit pass called %d time(s), want once — a changed test file runs it:\n%s", len(fake.called()), s)
+	}
+	if !strings.Contains(s, "widened by evidence: +1 in scope — pkg/c.go") {
+		t.Errorf("a PR that weakened pkg/b_test.go must put evidence-only pkg/c.go in scope:\n%s", s)
 	}
 }

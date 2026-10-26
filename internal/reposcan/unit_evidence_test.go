@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -160,14 +161,14 @@ func jsReport(lines ...string) string {
 	return "# suite-exit 0\ncorral-js-coverage: v2\n" + strings.Join(lines, "\n") + "\n"
 }
 
-// fileUnitLanding is the landing resolver for file units, over the fixture's
+// fileUnitLanding is the UnitFiles for file units, over the fixture's
 // repository paths.
-func fileUnitLanding(p lang.Plugin, paths ...string) func(string, string) string {
+func fileUnitLanding(p lang.Plugin, paths ...string) UnitFiles {
 	files := map[string]string{}
 	for _, path := range paths {
 		files[path] = ""
 	}
-	return UnitTestFile(p, files)
+	return UnitFilesFor(p, files)
 }
 
 func TestUnitPassBuildsTheIndexFromEachUnit(t *testing.T) {
@@ -464,7 +465,7 @@ func TestGoUnitOutsideThePackageDoesNotLand(t *testing.T) {
 	if !ev.Ran {
 		t.Fatalf("ev = %+v", ev)
 	}
-	idx, ok := IndexFromUnits(ev, UnitTestFile(f.p, goFiles()))
+	idx, ok := IndexFromUnits(ev, UnitFilesFor(f.p, goFiles()))
 	if !ok {
 		t.Fatal("IndexFromUnits ok = false")
 	}
@@ -793,5 +794,63 @@ func TestUnitPassNamesVitestsForksPoolWhenNoWorkerCoverage(t *testing.T) {
 	j.answer("test/beta.test.ts", sandbox.EnumerateResult{Output: jsReport("2 10 src/y.ts")})
 	if got := unitByName(t, j.collect(context.Background(), "/w", 1), "test/alpha.test.ts").Err; !strings.HasPrefix(got, "unparseable: ") {
 		t.Errorf("jest alpha.Err = %q, want the general unparseable reason", got)
+	}
+}
+
+// A GO UNIT COMPILES EVERY TEST FILE OF ITS PACKAGE, and the index records
+// all of them as covering what it ran (final review I2). The landing stays
+// one internal test file — that is where an authored test goes — but
+// CoveredByAny answers --diff-base's question, "does this changed test
+// defend this source?", and a change to b_test.go or to the external
+// x_test.go changes the unit that ran c.go exactly as a change to a_test.go
+// does. Recording only the landing made a PR that weakened b_test.go leave
+// an evidence-only c.go out of scope: the gate failed open.
+func TestUnitIndexRecordsEveryTestFileAGoUnitCompiled(t *testing.T) {
+	goPlug, _ := lang.ByName("go")
+	files := map[string]string{
+		"go.mod":          "module m\n",
+		"pkg/c.go":        "package pkg\n",
+		"pkg/a_test.go":   "package pkg\n",
+		"pkg/b_test.go":   "package pkg\n",
+		"pkg/x_test.go":   "package pkg_test\n",
+		"other/o.go":      "package other\n",
+		"other/o_test.go": "package other\n",
+	}
+	ev := UnitEvidence{Ran: true, Units: []UnitResult{
+		{Unit: "m/pkg", Counts: map[string]lang.LineCounts{"pkg/c.go": {Executed: 2, Executable: 4}}},
+	}}
+	idx, ok := IndexFromUnits(ev, UnitFilesFor(goPlug, files))
+	if !ok {
+		t.Fatal("IndexFromUnits ok = false")
+	}
+	if n, most, _, _, _ := idx.CoverageFor("pkg/c.go"); n != 1 || most != "pkg/a_test.go" {
+		t.Errorf("CoverageFor(pkg/c.go) = (%d, %q), want one unit landing on pkg/a_test.go (unchanged)", n, most)
+	}
+	for _, tf := range []string{"pkg/a_test.go", "pkg/b_test.go", "pkg/x_test.go"} {
+		if !idx.CoveredByAny("pkg/c.go", map[string]bool{tf: true}) {
+			t.Errorf("CoveredByAny(pkg/c.go, {%s}) = false: the unit that ran c.go compiled %s", tf, tf)
+		}
+	}
+	if idx.CoveredByAny("pkg/c.go", map[string]bool{"other/o_test.go": true}) {
+		t.Error("CoveredByAny(pkg/c.go, {other/o_test.go}) = true: another package's test was never compiled into the unit")
+	}
+}
+
+func TestUnitTestFilesNamesWhatEachUnitCompiles(t *testing.T) {
+	goPlug, _ := lang.ByName("go")
+	ts, _ := lang.ByName("typescript")
+	goTests := UnitFilesFor(goPlug, goFiles()).TestFiles
+	if got, want := goTests("m/mix"), []string{"mix/a_test.go", "mix/m_test.go", "mix/z_test.go"}; !slices.Equal(got, want) {
+		t.Errorf("Go m/mix test files = %q, want %q (internal and external alike)", got, want)
+	}
+	if got := goTests("m/nope"); len(got) != 0 {
+		t.Errorf("Go unknown package test files = %q, want none", got)
+	}
+	fileTests := UnitFilesFor(ts, map[string]string{"test/a.test.ts": ""}).TestFiles
+	if got := fileTests("test/a.test.ts"); !slices.Equal(got, []string{"test/a.test.ts"}) {
+		t.Errorf("file unit test files = %q, want the unit itself", got)
+	}
+	if got := fileTests("test/missing.test.ts"); len(got) != 0 {
+		t.Errorf("a unit the repository lacks names %q, want none", got)
 	}
 }

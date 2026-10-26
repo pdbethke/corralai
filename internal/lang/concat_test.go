@@ -183,18 +183,25 @@ func TestJavaScriptConcatDedupesImportsAndSuffixesHelpers(t *testing.T) {
 }
 
 // TestJavaScriptConcatRefusesSameModuleDifferentSpecifiers: two imports from
-// one module with different specifier lists cannot be de-duplicated by
-// dropping a line (that loses a binding) and merging their braces is a rewrite
-// of the model's own code. Refused, with a reason the operator can read.
+// one module that cannot be UNIONED safely — a default import beside a named
+// one, or one local name bound two ways — are refused with a reason the
+// operator can read, and the refused part is delivered on its own.
+//
+// Until 2026-10-26 every different specifier list was refused, on the
+// ground that merging braces rewrites the model's import. On REA that
+// split 5 of 6 proven tests into separate files, because writers import
+// different subsets of one module ({ A } here, { A, B } there). A union of
+// plain named imports cannot lose a binding — that refusal's whole
+// rationale — so it is now merged (TestJavaScriptConcatUnionsNamedImports).
 func TestJavaScriptConcatRefusesSameModuleDifferentSpecifiers(t *testing.T) {
 	c := concatenatorFor(t, "javascript")
 	parts := []AuthoredPart{
 		{MutantID: "s0/m1", Source: "import { test } from 'node:test';\ntest('a', () => {});\n"},
-		{MutantID: "s0/m2", Source: "import { test, describe } from 'node:test';\ntest('b', () => {});\n"},
+		{MutantID: "s0/m2", Source: "import nt from 'node:test';\nnt('b', () => {});\n"},
 	}
 	err := func() error { _, e := c.ConcatTests(parts); return e }()
 	if err == nil {
-		t.Fatal("ConcatTests merged two different specifier lists from one module")
+		t.Fatal("ConcatTests merged a default import with a named one from one module")
 	}
 	if !strings.Contains(err.Error(), "node:test") {
 		t.Errorf("the error does not name the module: %v", err)
@@ -208,6 +215,51 @@ func TestJavaScriptConcatRefusesSameModuleDifferentSpecifiers(t *testing.T) {
 	}
 	if !strings.Contains(merged, "test('a'") {
 		t.Errorf("the mergeable part was lost:\n%s", merged)
+	}
+	// One local name bound two ways cannot be unioned either.
+	_, extra = ConcatAuthored(mustPlugin(t, "typescript"), []AuthoredPart{
+		{MutantID: "s0/m1", Source: "import { a as x } from 'm';\nit('a', () => x);\n"},
+		{MutantID: "s0/m2", Source: "import { x } from 'm';\nit('b', () => x);\n"},
+	})
+	if len(extra) != 1 || !strings.Contains(extra[0].Reason, `"x"`) {
+		t.Errorf("a local bound two ways must be refused naming it: %+v", extra)
+	}
+}
+
+// TestJavaScriptConcatUnionsNamedImports: REA's proven tests imported
+// { OwnedCommandFailure } in one part and, across lines,
+// { OwnedCommandFailure, runOwnedCommand } in another. Both are plain named
+// imports from one module, so the merged file imports the union once, and
+// every part lands in it.
+func TestJavaScriptConcatUnionsNamedImports(t *testing.T) {
+	for _, name := range []string{"javascript", "typescript"} {
+		merged, extra := ConcatAuthored(mustPlugin(t, name), []AuthoredPart{
+			{MutantID: "s0/m1", Source: "import { OwnedCommandFailure } from \"../src/OwnedCommand.js\";\nimport type { P } from \"../src/P.js\";\nit(\"a\", () => {});\n"},
+			{MutantID: "s0/m2", Source: "import {\n  OwnedCommandFailure,\n  runOwnedCommand,\n} from \"../src/OwnedCommand.js\";\nimport type { Q } from \"../src/P.js\";\nit(\"b\", () => {});\n"},
+			{MutantID: "s0/m3", Source: "import { OwnedCommandFailure } from \"../src/OwnedCommand.js\";\nit(\"c\", () => {});\n"},
+		})
+		if len(extra) != 0 {
+			t.Fatalf("%s: plain named imports must union, got refusals %+v", name, extra)
+		}
+		if want := "import { OwnedCommandFailure, runOwnedCommand } from \"../src/OwnedCommand.js\";"; strings.Count(merged, want) != 1 || strings.Count(merged, "OwnedCommand.js") != 1 {
+			t.Errorf("%s: want exactly %s:\n%s", name, want, merged)
+		}
+		if want := "import type { P, Q } from \"../src/P.js\";"; !strings.Contains(merged, want) {
+			t.Errorf("%s: want %s:\n%s", name, want, merged)
+		}
+		for _, title := range []string{`it("a"`, `it("b"`, `it("c"`} {
+			if strings.Count(merged, title) != 1 {
+				t.Errorf("%s: %s missing from the merge:\n%s", name, title, merged)
+			}
+		}
+	}
+	// An import only one part makes is left exactly as written.
+	merged, _ := ConcatAuthored(mustPlugin(t, "typescript"), []AuthoredPart{
+		{MutantID: "s0/m1", Source: "import {\n  A,\n} from \"m\";\nit(\"a\", () => A);\n"},
+		{MutantID: "s0/m2", Source: "it(\"b\", () => {});\n"},
+	})
+	if !strings.Contains(merged, "import {\n  A,\n} from \"m\";") {
+		t.Errorf("an import nothing collides with must stay verbatim:\n%s", merged)
 	}
 }
 
@@ -309,5 +361,100 @@ func TestPHPConcatDoesNotMergeUnderPHPUnit10(t *testing.T) {
 	}
 	if len(extra) != 1 || extra[0].MutantID != "s0/m2" || !strings.Contains(extra[0].Reason, "PHPUnit 10+") {
 		t.Errorf("the second proven test should ride separately with the reason: %+v", extra)
+	}
+}
+
+// MULTI-LINE IMPORTS ARE ONE HEADER. The merge hoisted an import by its
+// first line only, so `import {` went to the top of the file and its
+// specifier lines and `} from "…"` stayed in the body: REA's five proven
+// tests merged into a file that did not parse, and the together check
+// reported the parse error as tests that "interfere (shared state?)". A
+// header now runs until its brackets balance, in JS/TS and in Python.
+func TestConcatKeepsAMultiLineImportWhole(t *testing.T) {
+	for _, name := range []string{"javascript", "typescript"} {
+		c := concatenatorFor(t, name)
+		multi := "import {\n  OwnedCommandFailure,\n  runOwnedCommand,\n} from \"../src/OwnedCommand.js\";\n"
+		out, err := c.ConcatTests([]AuthoredPart{
+			{MutantID: "s0/m1", Source: "import { it } from \"vitest\";\n" + multi + "\nit(\"a\", () => { runOwnedCommand(OwnedCommandFailure); });\n"},
+			{MutantID: "s0/m2", Source: "import { it } from \"vitest\";\n" + multi + "\nit(\"b\", () => {});\n"},
+		})
+		if err != nil {
+			t.Fatalf("%s: ConcatTests: %v", name, err)
+		}
+		if strings.Count(out, multi) != 1 {
+			t.Errorf("%s: the multi-line import must appear once, whole:\n%s", name, out)
+		}
+		if i, j := strings.Index(out, multi), strings.Index(out, "it(\"a\""); i < 0 || j < i {
+			t.Errorf("%s: the multi-line import must be hoisted above the tests:\n%s", name, out)
+		}
+	}
+	py := concatenatorFor(t, "python")
+	out, err := py.ConcatTests([]AuthoredPart{
+		{MutantID: "s0/m1", Source: "from mod import (\n    a,\n    b,\n)\n\ndef test_a():\n    assert a\n"},
+		{MutantID: "s0/m2", Source: "from mod import (\n    a,\n    b,\n)\n\ndef test_b():\n    assert b\n"},
+	})
+	if err != nil {
+		t.Fatalf("python: ConcatTests: %v", err)
+	}
+	if strings.Count(out, "from mod import (\n    a,\n    b,\n)\n") != 1 || strings.Count(out, "    a,") != 1 {
+		t.Errorf("python: the parenthesised import must appear once, whole:\n%s", out)
+	}
+}
+
+// The specifier check must see a multi-line import's module, which is on
+// its LAST line: a line scan found no module there and let a default import
+// and a named one from the same module through to a file with a duplicate
+// binding.
+func TestJavaScriptConcatRefusesDifferentImportsAcrossLines(t *testing.T) {
+	parts := []AuthoredPart{
+		{MutantID: "s0/m1", Source: "import OwnedCommand from \"../src/OwnedCommand.js\";\nit(\"a\", () => {});\n"},
+		{MutantID: "s0/m2", Source: "import {\n  OwnedCommandFailure,\n  runOwnedCommand,\n} from \"../src/OwnedCommand.js\";\nit(\"b\", () => {});\n"},
+	}
+	merged, extra := ConcatAuthored(mustPlugin(t, "typescript"), parts)
+	if len(extra) != 1 || extra[0].MutantID != "s0/m2" || !strings.Contains(extra[0].Reason, "../src/OwnedCommand.js") {
+		t.Fatalf("extra = %+v, want the second part refused naming the module", extra)
+	}
+	if strings.Contains(merged, "runOwnedCommand") {
+		t.Errorf("the refused part leaked into the merge:\n%s", merged)
+	}
+	// The same specifiers laid out differently are the same import.
+	same := []AuthoredPart{
+		{MutantID: "s0/m1", Source: "import { A, B } from \"m\";\nit(\"a\", () => {});\n"},
+		{MutantID: "s0/m2", Source: "import {\n  A,\n  B\n} from \"m\";\nit(\"b\", () => {});\n"},
+	}
+	merged, extra = ConcatAuthored(mustPlugin(t, "typescript"), same)
+	if len(extra) != 0 || strings.Count(merged, "from \"m\"") != 1 {
+		t.Errorf("one import laid out two ways must merge to one: extra=%+v\n%s", extra, merged)
+	}
+}
+
+// A bracket in a trailing comment opens nothing: the next line is a test,
+// not the rest of the import.
+func TestConcatIgnoresABracketInAnImportsComment(t *testing.T) {
+	out, err := concatenatorFor(t, "javascript").ConcatTests([]AuthoredPart{
+		{MutantID: "s0/m1", Source: "import x from \"y\"; // see (note\nit(\"a\", () => {});\n"},
+		{MutantID: "s0/m2", Source: "import x from \"y\"; // see (note\nit(\"b\", () => {});\n"},
+	})
+	if err != nil {
+		t.Fatalf("ConcatTests: %v", err)
+	}
+	if strings.Count(out, "it(\"a\"") != 1 || strings.Count(out, "it(\"b\"") != 1 || strings.Count(out, "import x") != 1 {
+		t.Errorf("a commented bracket swallowed a test into the import:\n%s", out)
+	}
+}
+
+// `{ type X }` beside `{ X }` from one module is one binding, not two: the
+// value import also names the type, and the part that imports X as a value
+// proves X is one. REA's run B kept a proven test apart for exactly this.
+func TestJavaScriptConcatUnifiesATypeAndAValueImportOfOneName(t *testing.T) {
+	merged, extra := ConcatAuthored(mustPlugin(t, "typescript"), []AuthoredPart{
+		{MutantID: "s0/m1", Source: "import { OwnedCommandFailure, type runOwnedCommand } from \"../src/OwnedCommand.js\";\nit(\"a\", () => {});\n"},
+		{MutantID: "s0/m2", Source: "import { runOwnedCommand } from \"../src/OwnedCommand.js\";\nit(\"b\", () => {});\n"},
+	})
+	if len(extra) != 0 {
+		t.Fatalf("a type and a value import of one name must merge: %+v", extra)
+	}
+	if want := "import { OwnedCommandFailure, runOwnedCommand } from \"../src/OwnedCommand.js\";"; !strings.Contains(merged, want) {
+		t.Errorf("want %s (the value import wins):\n%s", want, merged)
 	}
 }

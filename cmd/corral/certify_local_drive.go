@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log"
 	"sync"
 	"time"
 
@@ -296,7 +297,7 @@ func runOneTask(ctx context.Context, q *queue.Store, missionID int64, workerID s
 			// is fabricated data landing in the shared scorecard that feeds
 			// model routing (see advpool.ShadowProviderFailedResult) — worse
 			// than recording nothing.
-			fmt.Fprintf(progress, "certify --local: challenger seat %s failed (%v) — measurement skipped, the audit continues\n", task.Key, rerr)
+			reportSeatFailure(progress, "certify --local: challenger seat %s failed (%v) — measurement skipped, the audit continues", task.Key, rerr)
 			result, findings = advpool.ShadowProviderFailedResult, nil
 		} else if task.Role == "test-writer" {
 			// THE PRIMARY WRITER FAILING TO ANSWER IS NOT A FAILED AUDIT. By
@@ -306,7 +307,7 @@ func runOneTask(ctx context.Context, q *queue.Store, missionID int64, workerID s
 			// The sentinel lets the driver converge on the measurement it
 			// has, flagged as writer-failed, exactly as it does for a writer
 			// that never produced a compiling test.
-			fmt.Fprintf(progress, "certify: the test-writer's model call failed (%v) — the dev-adequacy result stands, no authored test; the file is flagged writer-failed\n", rerr)
+			reportSeatFailure(progress, "certify: the test-writer's model call for %s failed (%v) — the dev-adequacy result stands, no authored test for it", task.Key, rerr)
 			result, findings = advpool.WriterProviderFailedResult, nil
 		} else if task.Role == advpool.RoleTestCritic {
 			// The critic is advisory and never gates a verdict, so its call
@@ -314,7 +315,7 @@ func runOneTask(ctx context.Context, q *queue.Store, missionID int64, workerID s
 			// with every mutant scored into COULD-NOT-GRADE. Completing under
 			// the incomplete-critic marker lets the run converge with the
 			// verdict saying the review did not reach it — never a clean one.
-			fmt.Fprintf(progress, "certify: the test-critic's model call failed (%v) — the audit continues; the critic review is INCOMPLETE\n", rerr)
+			reportSeatFailure(progress, "certify: the test-critic's model call failed (%v) — the audit continues; the critic review is INCOMPLETE", rerr)
 			result, findings = agentworker.CriticIncompletePrefix+"the critic's model call failed: "+rerr.Error(), nil
 		} else {
 			return fmt.Errorf("running role %q: %w", task.Role, rerr)
@@ -365,6 +366,26 @@ var validFindingType = map[string]bool{
 	"regression": true, "note": true, "change-request": true, "ops": true,
 }
 var validFindingSeverity = map[string]bool{"low": true, "medium": true, "high": true, "critical": true}
+
+// reportSeatFailure prints a seat's own error where the operator will see
+// it. That is the progress stream when there is one; certify --repo hands
+// each file's audit a discarded one (io.Discard, so N concurrent audits do
+// not interleave), and there the error goes to the log, the channel the
+// pool's own lines already use. The driver's line for the same failure
+// sees only a sentinel and can only guess at the cause: REA's run B lost
+// two codex writer calls and printed "unreachable, rate-limited, or a
+// server error" with the real error nowhere.
+func reportSeatFailure(progress io.Writer, format string, args ...any) {
+	under := progress
+	if sw, ok := progress.(*syncWriter); ok {
+		under = sw.w // runReadyTasks's wrapper around the caller's stream
+	}
+	if under == nil || under == io.Discard {
+		log.Printf(format, args...)
+		return
+	}
+	fmt.Fprintf(progress, format+"\n", args...)
+}
 
 func normalizeFinding(f *queue.Finding) {
 	if !validFindingType[f.Type] {

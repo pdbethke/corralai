@@ -250,7 +250,19 @@ package reposcan
 // CoveringUnits, then ledger.Row.CoveringUnits, then covering_units), and
 // covering_tests keeps meaning Python's per-test count. Shape unchanged;
 // behaviour bump.
-const VerdictGeneration = "34"
+//
+// "35" (2026-10-26): TypeScript's compile gate checks under the project's
+// own tsconfig (extended, file selection still corral's) instead of pinned
+// options (ruling R27). A "34" TypeScript verdict for a project whose code
+// needs its own options was graded with the gate off, its authored tests
+// never type-checked (REA). Riding along: proven tests with a multi-line
+// import now merge into a file that parses, so a "34" AuthoredTest and its
+// AuthoredTogether result could be a broken merge; a TypeScript authored
+// test whose own lines do not type-check is no longer excused from the
+// compile check, so a "34" TypeScript ProvenMissed can count tests that do
+// not type-check; and plain named imports of one module are unioned in the
+// merged file. Shape unchanged; behaviour bump.
+const VerdictGeneration = "35"
 
 // VerdictShapeSHA256 fingerprints advpool.Verdict's serialized shape: every
 // exported field's name, type and json tag, sorted by name and hashed.

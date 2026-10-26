@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -123,4 +124,127 @@ func mustLook(t *testing.T, name string) string {
 		t.Skipf("%s not installed", name)
 	}
 	return p
+}
+
+// THE PROJECT'S OPTIONS GOVERN THE COMPILE CHECK (ruling R27). The check
+// used to pin its own options, so a repository failed the baseline check in
+// code the audit never touched and the gate was switched off for the whole
+// run: es2022 refused REA's toSorted (es2023), and without REA's
+// exactOptionalPropertyTypes a module its service imports failed TS2411.
+// The temp project now extends the project's tsconfig and overrides only
+// what keeps the check scoped and emit-free. Run with a real compiler.
+func TestTypeScriptCompileCheckUsesTheProjectsOptions(t *testing.T) {
+	nodeModules := os.Getenv("CORRALAI_TYPESCRIPT_NODE_MODULES")
+	globalTsc, _ := exec.LookPath("tsc")
+	if nodeModules == "" && globalTsc == "" {
+		t.Skip("no TypeScript compiler: set CORRALAI_TYPESCRIPT_NODE_MODULES or install tsc globally")
+	}
+	run := func(t *testing.T, files map[string]string) (string, error) {
+		t.Helper()
+		repo := t.TempDir()
+		if nodeModules != "" {
+			if err := os.Symlink(nodeModules, filepath.Join(repo, "node_modules")); err != nil {
+				t.Fatal(err)
+			}
+		}
+		for name, body := range files {
+			p := filepath.Join(repo, filepath.FromSlash(name))
+			if err := os.MkdirAll(filepath.Dir(p), 0o750); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		cmd := tsPlugin{}.CompileCheck("src/foo.ts", "tests/foo.test.ts")[0]
+		c := exec.Command(cmd[0], cmd[1:]...) // #nosec G204 -- the command under test
+		c.Dir = repo
+		path := filepath.Dir(mustLook(t, "node")) + ":/usr/bin:/bin"
+		if globalTsc != "" {
+			path = filepath.Dir(globalTsc) + ":" + path
+		}
+		c.Env = []string{"PATH=" + path, "HOME=" + t.TempDir()}
+		out, err := c.CombinedOutput()
+		return string(out), err
+	}
+	const sorted = "export function f(xs: number[]): number[] { return xs.toSorted((a, b) => a - b); }\n"
+	const test = "import { f } from '../src/foo.ts';\nexport const g: number[] = f([2, 1]);\n"
+	es2023 := `{"compilerOptions":{"target":"es2023","lib":["es2023"],"strict":true}}`
+
+	if out, err := run(t, map[string]string{"src/foo.ts": sorted, "tests/foo.test.ts": test, "tsconfig.json": es2023}); err != nil {
+		t.Errorf("an es2023 project's toSorted was rejected: %v\n%s", err, out)
+	}
+	if out, err := run(t, map[string]string{"src/foo.ts": sorted, "tests/foo.test.ts": test, "base.json": es2023, "tsconfig.json": `{"extends":"./base.json"}`}); err != nil {
+		t.Errorf("options inherited through extends were not used: %v\n%s", err, out)
+	}
+	// REA's TS2411: legal only under exactOptionalPropertyTypes.
+	const exact = "type J = string | number;\nexport interface E { [k: string]: J; recovery?: string }\nexport function f(xs: number[]): number[] { return xs; }\n"
+	if out, err := run(t, map[string]string{"src/foo.ts": exact, "tests/foo.test.ts": test, "tsconfig.json": `{"compilerOptions":{"strict":true,"exactOptionalPropertyTypes":true}}`}); err != nil {
+		t.Errorf("a project's exactOptionalPropertyTypes was not applied: %v\n%s", err, out)
+	}
+	// The project's file selection never enters: an error elsewhere, and a
+	// build-only setup (composite, a rootDir the test sits outside,
+	// declarationDir, tsBuildInfoFile), all leave the scoped check passing.
+	build := `{"compilerOptions":{"target":"es2023","lib":["es2023"],"strict":true,"composite":true,"rootDir":"src","outDir":"dist","declarationDir":"types","tsBuildInfoFile":"x.tsbuildinfo"},"include":["src"]}`
+	if out, err := run(t, map[string]string{"src/foo.ts": sorted, "tests/foo.test.ts": test, "tsconfig.json": build, "src/broken.ts": "export const x: number = 'no';\n"}); err != nil {
+		t.Errorf("a build-only tsconfig or an error outside the audit failed the scoped check: %v\n%s", err, out)
+	}
+	// A real type error in the audited file is still caught under it.
+	if out, err := run(t, map[string]string{"src/foo.ts": "export function f(xs: number[]): number[] { return 'x'; }\n", "tests/foo.test.ts": test, "tsconfig.json": es2023}); err == nil || !strings.Contains(out, "TS2322") {
+		t.Errorf("a type error in the audited file must fail the check (TS2322): %v\n%s", err, out)
+	}
+	// With no tsconfig the scaffold's es2022 still applies.
+	if out, err := run(t, map[string]string{"src/foo.ts": sorted, "tests/foo.test.ts": test}); err == nil || !strings.Contains(out, "toSorted") {
+		t.Errorf("with no tsconfig the scaffold's es2022 must reject toSorted: %v\n%s", err, out)
+	}
+}
+
+// What the check hands tsc, read back through a fake project compiler that
+// answers --showConfig with a fixed resolution and prints the project file
+// it is then run with, so these hold on any TypeScript version.
+func TestTypeScriptCompileCheckExtendsTheProjectsTsconfig(t *testing.T) {
+	cfg := func(t *testing.T, showConfig string, showRC int, tsconfig bool) (string, error) {
+		t.Helper()
+		repo := t.TempDir()
+		writeExe(t, filepath.Join(repo, "node_modules", ".bin", "tsc"),
+			"#!/bin/sh\nif [ \"$1\" = --showConfig ]; then printf '%s' '"+showConfig+"'; exit "+strconv.Itoa(showRC)+"; fi\ncat \"$2\"\n")
+		if tsconfig {
+			if err := os.WriteFile(filepath.Join(repo, "tsconfig.json"), []byte("{}"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		cmd := tsPlugin{}.CompileCheck("foo.ts", "foo.test.ts")[0]
+		c := exec.Command(cmd[0], cmd[1:]...) // #nosec G204 -- the command under test
+		c.Dir = repo
+		c.Env = []string{"PATH=" + filepath.Dir(mustLook(t, "node")) + ":/usr/bin:/bin", "HOME=" + t.TempDir()}
+		out, err := c.CombinedOutput()
+		return string(out), err
+	}
+	out, err := cfg(t, `{"compilerOptions":{"strict":true}}`, 0, true)
+	if err != nil {
+		t.Fatalf("check failed: %v\n%s", err, out)
+	}
+	for _, want := range []string{`"extends":"`, `/tsconfig.json"`, `"include":[]`, `"files":[`, `/foo.ts"`, `/foo.test.ts"`, `"noEmit":true`, `"composite":false`, `"tsBuildInfoFile":null`, `"declarationDir":null`, `/node_modules/@types"]`} {
+		if !strings.Contains(out, want) {
+			t.Errorf("want %s in the project file tsc ran with:\n%s", want, out)
+		}
+	}
+	// corral's own options never override the project's.
+	for _, never := range []string{"es2022", `"strict"`, `"target"`, `"module"`} {
+		if strings.Contains(out, never) {
+			t.Errorf("%s must come from the project, not corral:\n%s", never, out)
+		}
+	}
+	// A project that names its typeRoots keeps them.
+	if out, err := cfg(t, `{"compilerOptions":{"typeRoots":["./types"]}}`, 0, true); err != nil || strings.Contains(out, "typeRoots") {
+		t.Errorf("the project's own typeRoots must not be overridden: %v\n%s", err, out)
+	}
+	// No tsconfig at all (the single-file scaffold): corral's options.
+	if out, err := cfg(t, `unused`, 0, false); err != nil || !strings.Contains(out, `"target":"es2022"`) || strings.Contains(out, "extends") {
+		t.Errorf("with no tsconfig the scaffold's options must stand: %v\n%s", err, out)
+	}
+	// A --showConfig that fails fails the check, saying so.
+	if out, err := cfg(t, `error TS5083: Cannot read file`, 1, true); err == nil || !strings.Contains(out, "could not resolve tsconfig.json") {
+		t.Errorf("a failing --showConfig must fail the check by name: %v\n%s", err, out)
+	}
 }

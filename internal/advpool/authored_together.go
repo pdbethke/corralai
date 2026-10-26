@@ -51,6 +51,6 @@ func (d *Driver) checkAuthoredTogether(ctx context.Context, run *runState) {
 	}
 	run.authoredTogether = AuthoredTogetherFail
 	run.authoredTogetherOutput = clip.Tail(strings.TrimSpace(out), 2000)
-	log.Printf("advpool: %s: the %d proven tests each pass alone but FAIL when run together on the unmutated code — they interfere; see authored_together_output",
+	log.Printf("advpool: %s: the %d proven tests each pass alone but FAIL when run together on the unmutated code (interference, or a broken merge); see authored_together_output",
 		run.rs.CodePath, run.provenMissed)
 }

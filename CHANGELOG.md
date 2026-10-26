@@ -196,6 +196,55 @@ history of any release, `git log v0.3.4..v0.3.5`.
   and bind its directory. The script is now read with the shell's own
   quoting, and the JavaScript, TypeScript, Ruby and PHP wrappers pass your
   command as arguments rather than splicing it into the script.
+- **TypeScript's compile gate checks under your project's tsconfig.** It
+  pinned its own options (`es2022`, `strict`), so a repository failed the
+  baseline check in code the audit never touched, and the gate was switched
+  off for the whole run: mutants were graded by execution alone and authored
+  tests were never type-checked. REA was audited that way: `es2022` refused
+  its `toSorted` (es2023), and without its `exactOptionalPropertyTypes` a
+  module its service imports failed TS2411. The check now extends your
+  `tsconfig.json`, so every option applies as in your own build, and
+  overrides only what keeps it scoped and emit-free: the files checked are
+  still only the audited file and its test (your `include` and its errors
+  elsewhere never enter), with no emit, `rootDir` at the repository, and
+  composite, incremental and declaration output off. corral's own options
+  remain only where there is no `tsconfig.json`, which is its single-file
+  scaffold.
+- **Proven tests with a multi-line import merge into a file that parses.**
+  The merge moved an import to the top of the file by its first line only,
+  so `import {` was hoisted and its names and `} from "…"` stayed below:
+  REA's five proven tests merged into a file vitest could not parse. The
+  check that runs them together then reported tests that "interfere (shared
+  state?)", which they did not. An import now runs until its brackets
+  balance (JavaScript, TypeScript and Python's `from m import (…)`), one
+  import laid out two ways counts as one, and two parts importing different
+  names from one module are kept as separate files, as one-line imports
+  already were. The warning now says a failure together is interference or
+  a broken merge, and points at the runner output that tells them apart.
+- **A TypeScript test corral writes must type-check to count as proven.**
+  When an authored test failed the compile check, corral re-ran the check
+  without it to learn whether the source itself was broken, and skipped the
+  check if so. TypeScript's check names the test only inside one script, so
+  the re-run always failed (the test file was gone) and every TypeScript
+  authored test with a type error was excused, then graded by execution,
+  which strips types without checking them. On REA such tests (TS2352 and
+  TS2820 in their own lines) were counted as proven. A failure the compiler
+  reports against the authored test file is now never excused: the writer is
+  shown the error and tries again, and a test that never type-checks is not
+  a proof.
+- **Proven tests that import different names from one module merge.**
+  `import { A } from "m"` in one proven test and `import { A, B } from "m"`
+  in another now become one `import { A, B } from "m"` in the merged file;
+  they used to be refused, and on REA 5 of 6 proven tests arrived as
+  separate files. A default or namespace import that differs, or one name
+  bound two ways (`{ a as x }` beside `{ x }`), is still kept apart, and the
+  run's log now gives that reason instead of a fixed one that was often
+  wrong. `{ type X }` beside `{ X }` is one name and merges to `{ X }`.
+- **`certify --repo` prints why a model seat failed.** A writer, challenger
+  or critic seat whose model call failed had its error printed only to the
+  per-file progress stream, which `--repo` discards, so the log said only
+  "unreachable, rate-limited, or a server error". The seat's own error now
+  reaches the log on that path.
 
 ## [v1.0.0-rc.28] — 2026-10-21
 

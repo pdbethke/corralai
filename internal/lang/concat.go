@@ -5,6 +5,7 @@ package lang
 import (
 	"fmt"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -260,6 +261,79 @@ func replaceOutsideLiterals(s string, syn literalSyntax, re *regexp.Regexp, repl
 // headerPrefix is emitted verbatim before the hoisted headers (Go's package
 // clause; empty for Python) and headerWrap renders the de-duplicated header
 // lines (Go folds them into one import block; Python emits them as they were).
+// headerStatement returns the header that starts at lines[start], and the
+// index of its last line. A header runs until its brackets balance, so a
+// multi-line import (`import {` … `} from "m";`, Python's `from m import (`
+// … `)`) is ONE header. It was hoisted by its first line alone, which left
+// its specifier lines and `} from "m";` in the body: REA's five proven
+// tests merged into a file that did not parse. Brackets inside a quoted
+// string do not count; an import never needs one, and a header whose
+// brackets never balance ends at the last line rather than swallowing
+// nothing.
+func headerStatement(lines []string, start int) (string, int) {
+	stmt := strings.TrimRight(lines[start], " \t")
+	depth := bracketDelta(stmt)
+	end := start
+	for depth > 0 && end+1 < len(lines) {
+		end++
+		l := strings.TrimRight(lines[end], " \t")
+		stmt += "\n" + l
+		depth += bracketDelta(l)
+	}
+	return stmt, end
+}
+
+// bracketDelta is the opening minus closing brackets on a line, outside
+// quotes and before a line comment (`//`, or Python's and Ruby's `#`), so
+// `import x from "y"; // see (note` opens nothing.
+func bracketDelta(line string) int {
+	d := 0
+	var quote, prev rune
+	for _, r := range line {
+		switch {
+		case quote != 0:
+			if r == quote {
+				quote = 0
+			}
+		case r == '#' || (r == '/' && prev == '/'):
+			return d
+		case r == '"' || r == '\'' || r == '`':
+			quote = r
+		case r == '(' || r == '{' || r == '[':
+			d++
+		case r == ')' || r == '}' || r == ']':
+			d--
+		}
+		prev = r
+	}
+	return d
+}
+
+// headerKey is a header's identity for de-duplication and the specifier
+// refusal: its words joined by single spaces, a trailing comma before a
+// closing bracket dropped. One import laid out on one line in one part and
+// across lines in another is the same import.
+func headerKey(stmt string) string {
+	k := strings.Join(strings.Fields(stmt), " ")
+	return strings.NewReplacer(", }", " }", ", )", " )", ",}", "}", ",)", ")").Replace(k)
+}
+
+// headerStatements are a source's top-level headers, each whole.
+func headerStatements(source string, isHeader func(string) bool) []string {
+	var out []string
+	lines := strings.Split(source, "\n")
+	for j := 0; j < len(lines); j++ {
+		t := strings.TrimRight(lines[j], " \t")
+		if t == "" || t[0] == ' ' || t[0] == '\t' || !isHeader(t) {
+			continue
+		}
+		var stmt string
+		stmt, j = headerStatement(lines, j)
+		out = append(out, stmt)
+	}
+	return out
+}
+
 func mergeParts(parts []AuthoredPart, spec concatSpec, headerPrefix string, headerWrap func([]string) string) (string, error) {
 	if spec.precheck != nil {
 		if err := spec.precheck(parts); err != nil {
@@ -280,17 +354,20 @@ func mergeParts(parts []AuthoredPart, spec concatSpec, headerPrefix string, head
 	for i, part := range parts {
 		partDecls[i] = map[string]bool{}
 		var body []string
-		for _, line := range strings.Split(part.Source, "\n") {
-			trimmed := strings.TrimRight(line, " \t")
+		lines := strings.Split(part.Source, "\n")
+		for j := 0; j < len(lines); j++ {
+			trimmed := strings.TrimRight(lines[j], " \t")
 			if strings.TrimSpace(trimmed) == "" {
 				body = append(body, "")
 				continue
 			}
 			isTopLevel := trimmed[0] != ' ' && trimmed[0] != '\t'
 			if isTopLevel && spec.isHeader(trimmed) {
-				if !seenHeader[trimmed] {
-					seenHeader[trimmed] = true
-					headers = append(headers, trimmed)
+				var stmt string
+				stmt, j = headerStatement(lines, j)
+				if key := headerKey(stmt); !seenHeader[key] {
+					seenHeader[key] = true
+					headers = append(headers, stmt)
 				}
 				continue
 			}
@@ -504,40 +581,163 @@ var (
 	jsClassRe  = regexp.MustCompile(`^class\s+([A-Za-z_$][\w$]*)`)
 )
 
-// jsSpecifiersDiffer refuses two parts whose imports pull DIFFERENT specifier
-// lists from the SAME module.
+// jsSpecifiersDiffer refuses two parts whose imports from ONE module cannot
+// be unioned safely.
 //
-// Exact-duplicate lines are the ordinary case and de-duplicate cleanly. Two
-// different lists are the trap: dropping one loses a binding the part that
-// wrote it uses, and merging the braces means rewriting the model's own import
-// — a rewrite whose failure mode (a missing binding) is a runtime
-// ReferenceError inside a test that was PROVEN to work. Refused instead, with
-// the module named, so the part is delivered separately and still runs.
+// Exact duplicates de-duplicate cleanly, and so do plain named imports
+// (`import { A } …` beside `import { A, B } …`): jsUnionImports writes the
+// union once, which binds every name each part used and cannot lose one.
+// That loss was the whole reason every different list used to be refused,
+// and on REA the refusal split 5 of 6 proven tests into separate files,
+// because writers import different subsets of one module. What is still
+// refused, with the module named so the part is delivered separately and
+// still runs: a default or namespace import that differs from another
+// import of the module, and one local name bound two ways (`{ a as x }`
+// beside `{ x }`), where any merge would leave one part calling the wrong
+// binding.
 func jsSpecifiersDiffer(parts []AuthoredPart) error {
-	seen := map[string]string{} // module -> the first import line that named it
+	seen := map[string]string{}              // module -> the first import that named it, as a headerKey
+	locals := map[string]map[string]string{} // module -> local name -> the specifier that bound it
 	for _, part := range parts {
-		for _, line := range strings.Split(part.Source, "\n") {
-			trimmed := strings.TrimSpace(line)
-			if !jsImportRe.MatchString(trimmed) {
-				continue
-			}
-			m := jsModuleRe.FindStringSubmatch(trimmed)
+		// Whole statements: a multi-line import names its module on its
+		// LAST line, so a line-by-line scan saw no module and let two
+		// different imports through (REA).
+		for _, stmt := range headerStatements(part.Source, jsImportRe.MatchString) {
+			key := headerKey(stmt)
+			m := jsModuleRe.FindStringSubmatch(key)
 			if m == nil {
 				continue
 			}
-			if first, ok := seen[m[1]]; ok && first != trimmed {
-				return fmt.Errorf("lang: two authored parts import different specifiers from %q (%q vs %q); merging them would rewrite an import the model wrote", m[1], first, trimmed)
+			mod := m[1]
+			named, isNamed := parseJSNamedImport(key)
+			if first, ok := seen[mod]; ok && first != key {
+				if _, firstNamed := parseJSNamedImport(first); !isNamed || !firstNamed {
+					return fmt.Errorf("lang: two authored parts import %q differently (%q vs %q), and only plain named imports can be merged; merging them would rewrite an import the model wrote", mod, first, key)
+				}
 			}
-			seen[m[1]] = trimmed
+			if _, ok := seen[mod]; !ok {
+				seen[mod] = key
+			}
+			if !isNamed {
+				continue
+			}
+			if locals[mod] == nil {
+				locals[mod] = map[string]string{}
+			}
+			for _, spec := range named.specs {
+				local := jsImportLocal(spec)
+				if prev, ok := locals[mod][local]; ok && prev != spec && !jsSameBinding(prev, spec) {
+					return fmt.Errorf("lang: two authored parts bind %q from %q two ways (%q vs %q); merging them would leave one part calling the wrong binding", local, mod, prev, spec)
+				}
+				locals[mod][local] = spec
+			}
 		}
 	}
 	return nil
 }
 
+// jsNamedImportRe is a plain named import, normalised by headerKey to one
+// line: `import { A, B as C } from "m";`, or `import type { … }`.
+var jsNamedImportRe = regexp.MustCompile(`^import\s+(type\s+)?\{([^}]*)\}\s*from\s*(['"])([^'"]+)['"]\s*;?$`)
+
+type jsNamedImport struct {
+	typeOnly      bool
+	quote, module string
+	specs         []string
+}
+
+func parseJSNamedImport(key string) (jsNamedImport, bool) {
+	m := jsNamedImportRe.FindStringSubmatch(key)
+	if m == nil {
+		return jsNamedImport{}, false
+	}
+	n := jsNamedImport{typeOnly: m[1] != "", quote: m[3], module: m[4]}
+	for _, spec := range strings.Split(m[2], ",") {
+		if spec = strings.Join(strings.Fields(spec), " "); spec != "" {
+			n.specs = append(n.specs, spec)
+		}
+	}
+	return n, true
+}
+
+// jsSameBinding reports whether two specifiers bind one name to one export
+// and differ only in that one is type-only (`type X` beside `X`): the value
+// import also names the type, so the union keeps the value form. The part
+// that imports X as a value is what proves X is a value at all.
+func jsSameBinding(a, b string) bool {
+	return a != b && strings.TrimPrefix(a, "type ") == strings.TrimPrefix(b, "type ")
+}
+
+// jsImportLocal is the name a specifier binds: `B` for `A as B`, `A` for
+// `A` or `type A`.
+func jsImportLocal(spec string) string {
+	spec = strings.TrimPrefix(spec, "type ")
+	if i := strings.LastIndex(spec, " as "); i >= 0 {
+		return strings.TrimSpace(spec[i+4:])
+	}
+	return spec
+}
+
+// jsUnionImports writes the merged file's header block. Plain named imports
+// of one module (type-only ones apart from value ones) become one import of
+// their specifiers' union, in first-seen order, at the first one's place.
+// An import nothing else names is left exactly as the writer wrote it, so a
+// file merged from one part reads like the file that was proven.
+// jsSpecifiersDiffer has already refused every set this cannot union.
+func jsUnionImports(headers []string) string {
+	type group struct {
+		first int
+		n     jsNamedImport
+		count int
+	}
+	groups := map[string]*group{}
+	out := make([]string, len(headers))
+	for i, h := range headers {
+		out[i] = h
+		n, ok := parseJSNamedImport(headerKey(h))
+		if !ok {
+			continue
+		}
+		gk := fmt.Sprintf("%t\x00%s", n.typeOnly, n.module)
+		g, ok := groups[gk]
+		if !ok {
+			groups[gk] = &group{first: i, n: n, count: 1}
+			continue
+		}
+		g.count++
+		for _, spec := range n.specs {
+			switch i := slices.IndexFunc(g.n.specs, func(have string) bool { return have == spec || jsSameBinding(have, spec) }); {
+			case i < 0:
+				g.n.specs = append(g.n.specs, spec)
+			case strings.HasPrefix(g.n.specs[i], "type "):
+				g.n.specs[i] = spec // the value import also names the type
+			}
+		}
+		out[i] = ""
+	}
+	for _, g := range groups {
+		if g.count < 2 {
+			continue
+		}
+		kw := "import "
+		if g.n.typeOnly {
+			kw = "import type "
+		}
+		out[g.first] = kw + "{ " + strings.Join(g.n.specs, ", ") + " } from " + g.n.quote + g.n.module + g.n.quote + ";"
+	}
+	kept := out[:0]
+	for _, h := range out {
+		if h != "" {
+			kept = append(kept, h)
+		}
+	}
+	return strings.Join(kept, "\n")
+}
+
 // ConcatTests folds several proven node:test/vitest/jest files into one:
-// imports hoisted and de-duplicated by exact text, colliding top-level
-// bindings suffixed with their mutant id, two different specifier lists from
-// one module refused.
+// imports hoisted and de-duplicated, plain named imports of one module
+// unioned, colliding top-level bindings suffixed with their mutant id, and
+// imports of one module that cannot be unioned refused.
 //
 // EVERY top-level binding is renameable here, unlike Go and Python where only
 // a test is. A JS test is a `test('title', …)` CALL, not a declaration — its
@@ -546,9 +746,7 @@ func jsSpecifiersDiffer(parts []AuthoredPart) error {
 // top-level `const`/`function` in ESM is a SyntaxError, not a shadow — so
 // suffixing them is the merge, not a compromise.
 func (jsPlugin) ConcatTests(parts []AuthoredPart) (string, error) {
-	return mergeParts(parts, jsConcatSpec(), "", func(headers []string) string {
-		return strings.Join(headers, "\n")
-	})
+	return mergeParts(parts, jsConcatSpec(), "", jsUnionImports)
 }
 
 // ConcatTests is jsPlugin's, unchanged: TypeScript's test files differ from

@@ -107,11 +107,12 @@ func (tsPlugin) CompileCheck(codePath, testPath string) [][]string {
 	// specified" — in every repo that has a tsconfig, which is every repo.
 	//
 	// The temp project lists exactly the audited file, the test, and the
-	// shim when present, with the options the scaffold assumes, so the
-	// check stays scoped (imports are still followed) and the project's own
-	// tsconfig — with its file selection and its pre-existing errors — is
-	// never consulted. Written under $TMPDIR, so nothing lands in the tree
-	// the workspace runner restores; removed on every exit path.
+	// shim when present, so the check stays scoped (imports are still
+	// followed) and the project's file selection, with its pre-existing
+	// errors, is never used. Its OPTIONS are the project's when it has a
+	// tsconfig.json (see below), the scaffold's otherwise. Written under
+	// $TMPDIR, so nothing lands in the tree the workspace runner restores;
+	// removed on every exit path.
 	files := []string{codePath}
 	if testPath != "" && testPath != codePath {
 		files = append(files, testPath)
@@ -128,6 +129,30 @@ func (tsPlugin) CompileCheck(codePath, testPath string) [][]string {
 		// R26), else tsc on PATH. On the workspace substrate PATH is the
 		// host's, which has no node_modules/.bin on it.
 		`if [ -x node_modules/.bin/tsc ]; then t="./node_modules/.bin/tsc"; elif [ -f node_modules/typescript/bin/tsc ]; then t="node ./node_modules/typescript/bin/tsc"; else t=tsc; fi; ` +
+		// A project with a tsconfig.json is checked UNDER IT (ruling R27).
+		// The pinned options above are the single-file scaffold's; against
+		// a repository they rejected code the audit never touched, at
+		// baseline, which switched the gate off for the whole run: es2022
+		// refused REA's toSorted (es2023), and without its
+		// exactOptionalPropertyTypes a module the service imports failed
+		// TS2411. Any option that changes what type-checks can do that, so
+		// the temp project EXTENDS the project's tsconfig (every option,
+		// relative paths resolved against the project, the way tsc itself
+		// does it) and overrides only what keeps the check scoped and
+		// emit-free: our files with an empty include, so the project's file
+		// selection and its errors elsewhere never enter; noEmit; rootDir at
+		// the repository, so a test outside the project's rootDir is not
+		// TS6059; composite, incremental and declaration off, and the
+		// options that are then an error (TS5069) reset with null. A
+		// tsconfig with no typeRoots gets the repository's
+		// node_modules/@types, which is where tsc would have looked from the
+		// project's directory rather than from $TMPDIR. --showConfig is read
+		// only to learn whether typeRoots is set; one that fails fails the
+		// check by name.
+		`if [ -f tsconfig.json ]; then ` +
+		`if ! $t --showConfig -p tsconfig.json > "$d/project.json" 2>&1; then echo "corral: the project's tsc could not resolve tsconfig.json (tsc --showConfig):"; cat "$d/project.json"; rm -rf "$d"; exit 2; fi; ` +
+		`node -e 'const fs=require("fs");const [p,o,root]=process.argv.slice(1);const files=JSON.parse(fs.readFileSync(o,"utf8")).files;const r=JSON.parse(fs.readFileSync(p,"utf8")).compilerOptions||{};const co={noEmit:true,skipLibCheck:true,allowImportingTsExtensions:true,rootDir:root,composite:false,incremental:false,declaration:false,declarationMap:false,emitDeclarationOnly:false,tsBuildInfoFile:null,declarationDir:null};if(r.typeRoots===undefined)co.typeRoots=[root+"/node_modules/@types"];fs.writeFileSync(o,JSON.stringify({extends:root+"/tsconfig.json",compilerOptions:co,include:[],files}))' "$d/project.json" "$d/corral-tsc.json" "$PWD" || { echo "corral: could not write the check's project file over tsconfig.json"; rm -rf "$d"; exit 2; }; ` +
+		`fi; ` +
 		`$t -p "$d/corral-tsc.json"; rc=$?; rm -rf "$d"; exit $rc`
 	return [][]string{{"sh", "-c", script}}
 }

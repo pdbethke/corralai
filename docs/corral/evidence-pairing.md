@@ -399,6 +399,13 @@ therefore be listed by the scan and then refused by the audit.
 
 ## Real audit
 
+> **Correction (2026-10-26).** The 0.85 below is not a clean measurement.
+> Besides the disabled compile gate it discloses, six of its authored tests
+> failed their own type check and were excused by a corral defect (the
+> authored-test check could not see a test named only inside TypeScript's
+> `sh -c` script), so they were graded by execution alone. The result is
+> left as it was run; the clean re-measure is the next section.
+
 One real audit of `src/application/reverse/ReverseEngineeringService.ts`, the file this work was built to reach, on the founder's subscription seats (writer `codex`; mutant generator, critic and goal derivation `claude-code`), `--substrate workspace` on the scratch clone, recorded only to scratch ledgers:
 
 ```text
@@ -413,3 +420,85 @@ corral certify --repo . --path src/application/reverse --top 1 --substrate works
 - Two earlier attempts ended COULD-NOT-GRADE and are kept here because they found real defects, both fixed on this branch: the file was reported "ungoaled — purely declarative" with no model asked (the goal source was chosen before evidence widened the selection), then the TypeScript pre-check refused a project whose `tsc` lives in `node_modules/.bin`.
 
 Capture: the controller's scratchpad `evidence-proof/fix/rea-audit-b7.out`.
+
+## REA re-measured, and against Stryker (2026-10-26)
+
+Getting the audit above ready to show found five more corral defects, each
+by running it, and all fixed before the numbers below were taken:
+
+- **The compile gate checked TypeScript with corral's own options.** Pinned
+  `es2022` refused REA's `toSorted`; with target and lib carried over, REA's
+  `exactOptionalPropertyTypes` was the next thing missing (TS2411 in a module
+  the service imports). The check now extends the project's `tsconfig.json`
+  and overrides only what keeps it scoped and emit-free. With it the gate
+  stays on for REA and rejects the mutants that do not type-check (2 and 5
+  in the two runs below).
+- **An authored test with a type error was excused.** The gate's "does the
+  unmodified source fail too?" re-run removed the test, `tsc` then failed on
+  the missing file, and the failure was waived: 6 such tests in the run
+  above, and 1 and 2 in the two runs that followed it. A failure the compiler reports against
+  the authored test file is now never excused.
+- **The proven tests merged into a file that did not parse.** A multi-line
+  `import { … } from "…"` was hoisted by its first line only; the together
+  check then blamed the tests for "shared state".
+- **Proven tests that import different names from one module were kept in
+  separate files** (5 of 6 in one run). Plain named imports are now unioned.
+- **A failed writer seat's own error was discarded** under `certify --repo`;
+  the log could only guess "unreachable, rate-limited, or a server error".
+
+Two runs at the fixed head, same command and seats as above, scratch ledgers
+only:
+
+| | run A | run B |
+|---|---|---|
+| kill rate | 0.79 (30 of 38) | 0.69 (24 of 35) |
+| 95% interval | 0.64–0.89 | 0.52–0.81 |
+| mutants rejected by the compile gate | 2 | 5 |
+| survivors proven catchable | 8 of 8 | 5 of 11 (4 tried and missed; 2 writer calls to `codex` failed) |
+| proven tests in one merged file | all 8, passing together | 4 merged, 1 separate (a `type` import, since fixed) |
+| cost | 0.9M in / 29.1k out, 21 calls (0.6M cached) | 1.3M in / 34.1k out, 27 calls (1.0M cached) |
+| wall clock | 24m53s (21m21s authoring) | 29m24s (26m43s authoring) |
+
+Run A's merged file was then dropped into REA beside its tests: vitest ran
+all 8 tests together and passed, and `tsc` under REA's own `tsconfig.json`
+reported no error.
+
+**Against REA's own mutation-test set.** corral graded with
+`vitest run tests/composition`. REA mutation-tests this file against a
+different, hand-picked set: `vitest.reverse-tools.config.ts`, 37 files and
+695 tests, 1m14s on unmodified code. (REA's full suite is 1,339 test files and
+was still running after 26 minutes on one machine; `vitest related` on the
+service did not finish in 15.) Each of run A's 8 proven mutants was applied to
+the source and that set run against it: **7 passed all 695 tests**, and 1
+(s0/m4) failed 2 of them. So 7 are gaps in the tests REA itself uses to
+mutation-test this file, each with a corral test that kills it.
+
+**Against Stryker on the same file and the same 695 tests** (Stryker 10.0.0,
+`perTest` coverage, REA's typescript checker):
+
+| | Stryker, REA's config | Stryker, whole file | corral, run A |
+|---|---|---|---|
+| mutants on this file | 417 (REA's selected ranges) | 966 | 40 |
+| did not compile | 197 | 400 | 2, rejected by the gate |
+| survived | 65 | 166 | 8 |
+| survivors with a test that kills them | none written | none written | 8 |
+| score | 67.27% | 68.55% | 0.79 |
+| wall clock | 46m01s, concurrency 2, over 9 files (830 mutants) | 30m43s, concurrency 6 | 24m53s, 6 trees |
+
+Where whole-file Stryker stands on the lines of corral's 7 gaps:
+
+- 2 (s0/m15, lines 597–599; s4/m1, line 322): every Stryker mutant there
+  that compiled was killed.
+- 3 (s0/m8, 774–776; s0/m18, 675; s5/m2, 135–138): every Stryker mutant
+  there failed to compile (9, 4 and 3), so Stryker says nothing about those
+  lines.
+- 2 (s0/m13, 607–608; s6/m1, 1015–1016): Stryker also has a survivor there.
+
+What this does not show: Stryker's 166 survivors were not triaged, so how many
+are real gaps and how many are equivalent mutants is not known, and corral
+says nothing about most of them. This is one file in one repository, across
+two corral runs whose kill rates differ by 0.10 with overlapping intervals.
+
+Captures: the controller's scratchpad `evidence-proof/r27/` (`run-A.out`,
+`run-B.out`, `survivor-check.json`, `stryker/rea-config.out`,
+`stryker/wholefile.out` and their JSON reports).

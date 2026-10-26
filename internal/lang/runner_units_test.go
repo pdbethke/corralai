@@ -956,3 +956,26 @@ func TestInterpretersInReadsAQuotedProgramWithoutItsQuotes(t *testing.T) {
 		}
 	}
 }
+
+// A HEREDOC BODY IS DATA, NOT COMMANDS. Every JavaScript coverage command
+// writes its reducer and preload through `cat > … <<'CORRAL_JS_EOF'`, and
+// reading those bodies as shell made the jail look up every JS token as a
+// program: once the preload contained `lineLengths(code)`, the word `code`
+// resolved to the host's VS Code snap and every jailed unit of commander and
+// jest failed "code resolves to a snap" (Task 11 B2 round 1).
+func TestInterpretersInSkipsHeredocBodies(t *testing.T) {
+	got := InterpretersIn([]string{"sh", "-c", "d=$(mktemp -d) && cat > \"$d/x.js\" <<'EOF'\ncode(1)\nconst f = 2\nEOF\ncat <<-\"T\"\n\tvim x\n\tT\nnode \"$d/x.js\""})
+	if want := []string{"mktemp", "cat", "cat", "node"}; !slices.Equal(got, want) {
+		t.Errorf("InterpretersIn = %q, want %q", got, want)
+	}
+	c, _ := jsPlugin{}.CoverageCmd([]string{"node", "--test"})
+	words := InterpretersIn(c)
+	for _, bad := range []string{"code", "const", "function", "return"} {
+		if slices.Contains(words, bad) {
+			t.Errorf("the JS coverage command's interpreters include %q, a word of its heredoc: %q", bad, words)
+		}
+	}
+	if !slices.Contains(words, "node") {
+		t.Errorf("the JS coverage command's interpreters lost node: %q", words)
+	}
+}

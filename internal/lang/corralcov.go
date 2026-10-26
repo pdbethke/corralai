@@ -5,6 +5,7 @@ package lang
 import (
 	"fmt"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -551,6 +552,7 @@ func coverageRunnerNamed(testCmd []string, runners []string) bool {
 // — it can only produce EXTRA candidate words, and every one of them still has
 // to equal a runner name to match. It cannot make a runner disappear.
 func shellCommandWords(script string) []string {
+	script = withoutHeredocBodies(script)
 	var words []string
 	seps := func(r byte) bool {
 		return r == ';' || r == '&' || r == '|' || r == '\n' || r == '(' || r == ')'
@@ -600,6 +602,42 @@ func shellCommandWords(script string) []string {
 		}
 	}
 	return words
+}
+
+// heredocStart finds a here-document operator and its delimiter word:
+// `<<EOF`, `<<-EOF`, `<<'EOF'`, `<<"EOF"`.
+var heredocStart = regexp.MustCompile(`<<(-?)\s*(['"]?)([A-Za-z_][A-Za-z0-9_]*)['"]?`)
+
+// withoutHeredocBodies is script with every here-document's body removed: the
+// lines after a line that opens one, up to and including the line that is
+// its delimiter (leading tabs stripped for `<<-`). A body is the DATA a
+// command reads, never commands, and every JavaScript coverage command
+// writes its reducer and preload through one: read as shell, each JS token
+// was looked up as a program, and `code` in the preload resolved to the
+// host's VS Code snap, failing every jailed unit.
+func withoutHeredocBodies(script string) string {
+	if !strings.Contains(script, "<<") {
+		return script
+	}
+	var out []string
+	lines := strings.Split(script, "\n")
+	for i := 0; i < len(lines); i++ {
+		out = append(out, lines[i])
+		for _, m := range heredocStart.FindAllStringSubmatch(lines[i], -1) {
+			dashed, delim := m[1] == "-", m[3]
+			for i+1 < len(lines) {
+				i++
+				body := lines[i]
+				if dashed {
+					body = strings.TrimLeft(body, "\t")
+				}
+				if body == delim {
+					break
+				}
+			}
+		}
+	}
+	return strings.Join(out, "\n")
 }
 
 // coverageTransparentWord is the set of shell keywords and command wrappers

@@ -399,4 +399,17 @@ therefore be listed by the scan and then refused by the audit.
 
 ## Real audit
 
-Real audit (codex writer, claude-code mutant/critic/derive): result to be recorded by the controller.
+One real audit of `src/application/reverse/ReverseEngineeringService.ts`, the file this work was built to reach, on the founder's subscription seats (writer `codex`; mutant generator, critic and goal derivation `claude-code`), `--substrate workspace` on the scratch clone, recorded only to scratch ledgers:
+
+```text
+corral certify --repo . --path src/application/reverse --top 1 --substrate workspace --writer-model codex --mutant-model claude-code --critic-model claude-code --derive-model claude-code --ledger <scratch> --cache-db <scratch> -- node ./node_modules/vitest/vitest.mjs run tests/composition
+```
+
+- Paired by evidence: 8 covering test units; corral's authored test lands beside `tests/composition/reverseEngineeringEdgeCases.test.ts`.
+- `kill rate 0.85 (6 survivor(s), 5 proven missed)`; `95% interval 0.70–0.93 (n=39 distinct)`; reached 16 of 21 symbols, 51 of 177 decision points.
+- The per-survivor writer proved 5 of 6 survivors catchable by execution; the sixth's authored test ran soundly and did not kill it, so it stays unproven.
+- Graded by the whole collected suite (`no selector for typescript`). The compile gate was disabled for this file and the run said so: corral's pinned TypeScript options (es2022) reject the project's own code (`TS2550: Property 'toSorted' does not exist`), so mutants were graded by execution only (vitest strips types without checking them).
+- Cost: `0.6M tokens in / 24.9k out across 15 calls (0.4M cached)`; wall clock 6m21.6s.
+- Two earlier attempts ended COULD-NOT-GRADE and are kept here because they found real defects, both fixed on this branch: the file was reported "ungoaled — purely declarative" with no model asked (the goal source was chosen before evidence widened the selection), then the TypeScript pre-check refused a project whose `tsc` lives in `node_modules/.bin`.
+
+Capture: the controller's scratchpad `evidence-proof/fix/rea-audit-b7.out`.

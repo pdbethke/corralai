@@ -35,6 +35,7 @@ the scratch clone, where the clone was the isolation boundary.
 | JavaScript | expressjs/express | jail | no unit form (mocha) | 0 | 0 | 0.05 s |
 | TypeScript | morluto/rea | workspace | 25 / 25 | 0 | 564 | 110.55 s |
 | TypeScript | morluto/rea (re-run, vm source maps) | workspace | 25 / 0 | 23 | 564 | 92.7 s |
+| TypeScript | morluto/rea (re-run, vm source maps, review fixes) | workspace | 25 / 0 | 23 | 564 | 104.5 s |
 | Ruby | ku1ik/rainbow | workspace | 11 / 4 | 10 | 0 | 2.50 s |
 | PHP | webmozart/assert | jail | 2 / 0 | 1 | 1 | 1.53 s |
 | Rust | indexmap-rs/indexmap | workspace | 5 / 0 | 0 | 2 | 12.88 s |
@@ -203,6 +204,28 @@ files.
   loaded where no named function ran under any `tests/composition` unit. That
   is a statement about the command this run was scoped to, not about the whole
   suite. The output was 10,703 bytes; 1 m 32.7 s.
+- **Re-run after the review's fixes** (commits `56c81ac7` to `e56612cc`), same
+  command:
+
+```
+  units: running 25 of 25 listed test unit(s) alone under coverage, 1 at a time, within 15m0s for the whole pass…
+  units: 25 run, 0 failed (1 at a time)
+  widened by evidence: +23 candidate(s); re-ranked by size-only under the same bound, auditing 25 of 587 candidate(s)
+  2812 file(s) walked; 587 candidate(s); 25 job(s); 2787 file(s) excluded from the audit
+  evidence-paired 23 · name-paired 564 · uncovered 0 · import-only 200
+    src/application/reverse/ReverseEngineeringService.ts paired by evidence: 1 covering test unit(s), authored test lands beside tests/composition/reverseEngineering.test.ts
+```
+
+  The previous run's "uncovered 200" was wrong. A unit had loaded every one of
+  those files, and only their functions had not run, so they are import-only,
+  the finding for that shape (`9515bf9e`). A unit pass that does find a file
+  no unit loaded calls it `uncovered — no test unit this command runs executes
+  this file`, scoped to the command's units. Python's whole-suite wording is
+  kept for Python. On an intermediate run, `src/wasm/WasmGlueAdapter.ts` was
+  disclosed as uncounted ("its source map points past the file on disk"). It
+  holds a literal U+2028 in a string, and its map's lines are ECMAScript lines.
+  Since `e56612cc` it is read that way, and no unit reports an uncounted file.
+  The output was 10,717 bytes; 1 m 44.5 s.
 - **Jail re-run** with `dist/` moved out of the clone: the jail still could not
   be prepared (`more than 64 MiB of text`).
 
@@ -225,7 +248,15 @@ repositories built from the runner-table fixture suites
   vitest 3.2.7's default pool, `forks`, the run wrote one V8 coverage file
   (the main process's), and no fixture source was in it, so a forks-pool
   vitest 3.2.7 suite gives no unit evidence with or without the preload.
-  REA's composition tests run under `threads`.
+  REA's composition tests run under `threads`. A forks-pool unit now says so
+  on its line. On the runner fixture's vitest units, run in the jail under the
+  default pool, each read `no worker coverage: the run's V8 coverage named no
+  project file, which is what vitest's forks pool gives (measured on vitest
+  3.2.7); run with --pool=threads`. The vitest row of the language-support
+  page states the condition.
+- After the review's fixes, jest (3 run, 0 failed, `lib/one.js` promoted, jail
+  and workspace) and commander.js in the jail (109 run, 4 failed, 7 promoted)
+  were re-run, with the same results.
 
 ## Ruby: ku1ik/rainbow
 

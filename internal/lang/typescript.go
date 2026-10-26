@@ -128,6 +128,24 @@ func (tsPlugin) CompileCheck(codePath, testPath string) [][]string {
 		// R26), else tsc on PATH. On the workspace substrate PATH is the
 		// host's, which has no node_modules/.bin on it.
 		`if [ -x node_modules/.bin/tsc ]; then t="./node_modules/.bin/tsc"; elif [ -f node_modules/typescript/bin/tsc ]; then t="node ./node_modules/typescript/bin/tsc"; else t=tsc; fi; ` +
+		// The project's target and lib, and nothing else of its tsconfig
+		// (ruling R27). es2022 alone rejected REA's toSorted (es2023) in
+		// code the audit never touched, at baseline, which switched the
+		// gate off for the whole run. --showConfig is the project's own
+		// compiler resolving its own tsconfig, extends included; file
+		// selection stays ours, so the check stays scoped. Where the
+		// project sets no target (or no lib), es2022 is dropped and the
+		// project's compiler default applies, as it does in the project's
+		// own build: es2022 is the single-file scaffold's choice, never a
+		// project's. (tsc 7 resolves an unparseable tsconfig to {} with
+		// exit 0, so that case lands here too; a failing --showConfig still
+		// fails the check by name.) Older tsc spells a lib
+		// "lib.es2023.d.ts", the form compilerOptions.lib does not accept,
+		// hence the strip.
+		`if [ -f tsconfig.json ]; then ` +
+		`if ! $t --showConfig -p tsconfig.json > "$d/project.json" 2>&1; then echo "corral: the project's tsc could not resolve tsconfig.json (tsc --showConfig):"; cat "$d/project.json"; rm -rf "$d"; exit 2; fi; ` +
+		`node -e 'const fs=require("fs");const [p,o]=process.argv.slice(1);const c=JSON.parse(fs.readFileSync(o,"utf8"));const r=JSON.parse(fs.readFileSync(p,"utf8")).compilerOptions||{};delete c.compilerOptions.target;if(r.target!==undefined)c.compilerOptions.target=r.target;if(Array.isArray(r.lib))c.compilerOptions.lib=r.lib.map(l=>String(l).replace(/^lib\./,"").replace(/\.d\.ts$/,""));fs.writeFileSync(o,JSON.stringify(c))' "$d/project.json" "$d/corral-tsc.json" || { echo "corral: could not read the target and lib that tsc --showConfig resolved from tsconfig.json"; rm -rf "$d"; exit 2; }; ` +
+		`fi; ` +
 		`$t -p "$d/corral-tsc.json"; rc=$?; rm -rf "$d"; exit $rc`
 	return [][]string{{"sh", "-c", script}}
 }

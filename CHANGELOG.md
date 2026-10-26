@@ -196,6 +196,18 @@ history of any release, `git log v0.3.4..v0.3.5`.
   and bind its directory. The script is now read with the shell's own
   quoting, and the JavaScript, TypeScript, Ruby and PHP wrappers pass your
   command as arguments rather than splicing it into the script.
+- **TypeScript's compile gate checks with your project's target and lib.**
+  It pinned `es2022`, so a project written for a newer library failed the
+  baseline check in code the audit never touched, and the gate was switched
+  off for the whole run: mutants were graded by execution alone and authored
+  tests were never type-checked. REA, which calls `Array.prototype.toSorted`
+  (es2023), was audited that way. The check now asks your own `tsc
+  --showConfig` what `tsconfig.json` resolves to, `extends` included, and
+  carries over `target` and `lib` and nothing else: the files checked are
+  still only the audited file and its test. A project that sets no target
+  gets its compiler's own default; `es2022` stays only where there is no
+  `tsconfig.json`, which is corral's single-file scaffold. A `--showConfig`
+  that fails fails the check and says so.
 
 ## [v1.0.0-rc.28] — 2026-10-21
 

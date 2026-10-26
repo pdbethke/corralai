@@ -119,7 +119,9 @@ func TestTSCompileCheckIsScopedNotProjectWide(t *testing.T) {
 	// repository's tsconfig.json: that is what keeps the check scoped on
 	// tsc 5 and alive at all on tsc 6 (TS5112 refuses files on the command
 	// line beside a tsconfig).
-	if strings.Contains(got, "tsconfig.json") || !strings.Contains(got, "corral-tsc.json") {
+	// The repository's tsconfig is read only through --showConfig, for its
+	// target and lib (ruling R27); it is never the project tsc runs.
+	if strings.Contains(got, "-p tsconfig.json\"") || strings.Contains(got, "-p \"tsconfig.json") || !strings.Contains(got, `$t -p "$d/corral-tsc.json"`) || !strings.Contains(got, "--showConfig -p tsconfig.json") {
 		t.Fatalf("compile check must run against corral's own project file, never the repository's tsconfig: %q", got)
 	}
 	for _, want := range []string{"src/client/ApiError.ts", "src/client/__tests__/ApiError.test.ts", `\"noEmit\":true`, `\"strict\":true`, "corral-env.d.ts"} {

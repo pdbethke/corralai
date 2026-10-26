@@ -16,6 +16,8 @@ OUT="$1"
 cd "$(dirname "$0")/.."
 mkdir -p "$OUT"
 GOOS=js GOARCH=wasm go build -trimpath -ldflags "-s -w" -o "$OUT/ledger.wasm" ./internal/ledger/wasm
-cp "$(go env GOROOT)/lib/wasm/wasm_exec.js" "$OUT/wasm_exec.js"
+# GOROOT files are read-only on many installs, so a plain cp onto an
+# earlier build's copy fails; install writes a fresh 0644 file each time.
+install -m 0644 "$(go env GOROOT)/lib/wasm/wasm_exec.js" "$OUT/wasm_exec.js"
 (cd "$OUT" && sha256sum ledger.wasm > ledger.wasm.sha256)
 echo "ledger.wasm: $(wc -c < "$OUT/ledger.wasm") bytes"

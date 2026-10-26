@@ -34,6 +34,7 @@ the scratch clone, where the clone was the isolation boundary.
 | JavaScript | tj/commander.js | workspace | 109 / 0 | 7 | 0 | 25.08 s |
 | JavaScript | expressjs/express | jail | no unit form (mocha) | 0 | 0 | 0.05 s |
 | TypeScript | morluto/rea | workspace | 25 / 25 | 0 | 564 | 110.55 s |
+| TypeScript | morluto/rea (re-run, vm source maps) | workspace | 25 / 0 | 23 | 564 | 92.7 s |
 | Ruby | ku1ik/rainbow | workspace | 11 / 4 | 10 | 0 | 2.50 s |
 | PHP | webmozart/assert | jail | 2 / 0 | 1 | 1 | 1.53 s |
 | Rust | indexmap-rs/indexmap | workspace | 5 / 0 | 0 | 2 | 12.88 s |
@@ -177,9 +178,54 @@ files.
   loaded itself, never a project source. vitest 5.0.3 runs each project module
   through `vm.runInThisContext`, and Node did not cache a map for code compiled
   that way, even with an inline `sourceMappingURL`; a minimal `vm` script
-  showed the same. vitest-run files therefore stay uncounted.
+  showed the same, so remapping through that cache leaves vitest-run files
+  uncounted.
+- **Re-run with corral's vm source-map preload** (founder's choice, commit
+  `8d8c664f`). Each JavaScript/TypeScript unit
+  run now loads a corral file through `NODE_OPTIONS=--require`, appended to any
+  `NODE_OPTIONS` the operator set. The file records the inline source map of
+  code evaluated through `node:vm`, and the reducer maps each V8 range through
+  `node:module`'s `SourceMap` back onto the original file. Same command,
+  workspace substrate:
+
+```
+  units: running 25 of 25 listed test unit(s) alone under coverage, 1 at a time, within 15m0s for the whole pass…
+  units: 25 run, 0 failed (1 at a time)
+  widened by evidence: +23 candidate(s); re-ranked by size-only under the same bound, auditing 25 of 587 candidate(s)
+  2812 file(s) walked; 587 candidate(s); 25 job(s); 2787 file(s) excluded from the audit
+  evidence-paired 23 · name-paired 564 · uncovered 200 · import-only 0
+    src/application/reverse/ReverseEngineeringService.ts paired by evidence: 1 covering test unit(s), authored test lands beside tests/composition/reverseEngineering.test.ts
+```
+
+  `ReverseEngineeringService.ts` is now evidence-paired, landing beside
+  `tests/composition/reverseEngineering.test.ts`, and it is among the 25 files
+  the bounded audit would grade. The 200 `uncovered` files are files a unit
+  loaded where no named function ran under any `tests/composition` unit. That
+  is a statement about the command this run was scoped to, not about the whole
+  suite. The output was 10,703 bytes; 1 m 32.7 s.
 - **Jail re-run** with `dist/` moved out of the clone: the jail still could not
   be prepared (`more than 64 MiB of text`).
+
+### vitest and jest on the runner fixtures
+
+These were measured beside the REA re-run, with the same preload, on scratch
+repositories built from the runner-table fixture suites
+(`internal/lang/testdata/runners/src`) with the real runners installed.
+
+- **jest 30.5.2**, `node ./node_modules/jest/bin/jest.js jest`, with one jest
+  unit that requires `lib/one.js`. Before the preload, in both the jail and the
+  workspace, all 3 units read `unparseable … (the reducer disclosed N file(s)
+  it could not count)`. With it, 3 run, 0 failed, and `lib/one.js` is paired
+  by evidence (1 covering unit, landing beside `jest/c.jest.test.js`), on
+  both substrates.
+- **vitest 3.2.7** (`internal/lang/testdata/coverage/vitest`, a fixture with
+  a called file, an imported-but-never-called file and a never-imported one):
+  the captured report reads `4 8 lib/calc.ts`, `0 6 lib/dead.ts`, and has no
+  line for `lib/unloaded.ts`. That fixture runs with `--pool=threads`. Under
+  vitest 3.2.7's default pool, `forks`, the run wrote one V8 coverage file
+  (the main process's), and no fixture source was in it, so a forks-pool
+  vitest 3.2.7 suite gives no unit evidence with or without the preload.
+  REA's composition tests run under `threads`.
 
 ## Ruby: ku1ik/rainbow
 

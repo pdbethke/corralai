@@ -81,6 +81,21 @@ func TestDeriveFromJS(t *testing.T) {
 	if n := strings.Count(out, `"status":"verified"`); n != 2 {
 		t.Fatalf("verified count %d in %s", n, out)
 	}
+	// The page draws Summary and computes nothing, so it must cross the
+	// boundary whole; read it from the raw JSON, not through the Go type.
+	var raw struct {
+		Summary *struct {
+			Totals *struct {
+				Scans *int `json:"scans"`
+			} `json:"totals"`
+		} `json:"summary"`
+	}
+	if err := json.Unmarshal([]byte(out), &raw); err != nil {
+		t.Fatal(err)
+	}
+	if raw.Summary == nil || raw.Summary.Totals == nil || raw.Summary.Totals.Scans == nil || *raw.Summary.Totals.Scans != 2 {
+		t.Fatalf("want summary.totals.scans == 2 in %s", out)
+	}
 }
 
 func TestDeriveRegisteredGlobal(t *testing.T) {

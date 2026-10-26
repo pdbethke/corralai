@@ -16,7 +16,10 @@
 //	): string  // JSON of ledger.Derived; throws Error on malformed input
 //
 // Derived is {format: "corral-derive-1", problem?, entries, scans, files,
-// mutants, calls, reviews, adjudications}; each of entries is
+// mutants, calls, reviews, adjudications, summary}. summary is ledger.Summary,
+// every figure the page shows ({totals, runs, gaps, models}, snake_case keys,
+// null where nothing was measured); the page draws it and computes nothing.
+// Each of entries is
 // {file, hash, kind, keyid, status: "verified"|"unsigned"|"failed",
 // problem?, signer?, note?}. signer is who signed ("root", a registered
 // name, or a keyless entry's repository URI) and note is what the entry

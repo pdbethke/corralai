@@ -49,6 +49,10 @@ type EntryStatus struct {
 //
 // Problem is ledger-level: when set, the ledger is not one intact chain and
 // the row slices are empty (see Derive). Entries still carries every status.
+//
+// Summary is the exception to "never null": its unmeasured figures (no
+// telemetry, nothing graded, no finish time) are null on purpose, because a
+// 0 there would be a measurement nobody made. Its slices are never null.
 type Derived struct {
 	Format        string                  `json:"format"`
 	Problem       string                  `json:"problem,omitempty"`
@@ -59,6 +63,7 @@ type Derived struct {
 	Calls         []ModelCallRow          `json:"calls"`
 	Reviews       int                     `json:"reviews"`
 	Adjudications map[string]Adjudication `json:"adjudications"`
+	Summary       Summary                 `json:"summary"`
 }
 
 const (
@@ -101,6 +106,7 @@ func Derive(raw []RawEntry, t Trust) (Derived, error) {
 		Mutants:       []MutantRow{},
 		Calls:         []ModelCallRow{},
 		Adjudications: map[string]Adjudication{},
+		Summary:       Summarize(nil),
 	}
 	names := map[string]bool{}
 	for _, r := range raw {
@@ -151,13 +157,16 @@ func Derive(raw []RawEntry, t Trust) (Derived, error) {
 			d.Reviews++
 		}
 	}
+	var served []Bundle
 	for _, e := range ScanEntries(trusted) {
+		served = append(served, e.Bundle)
 		d.Scans = append(d.Scans, e.Bundle.Scan)
 		d.Files = append(d.Files, e.Bundle.Files...)
 		d.Mutants = append(d.Mutants, e.Bundle.Mutants...)
 		d.Calls = append(d.Calls, e.Bundle.Calls...)
 	}
 	d.Adjudications = Adjudications(live)
+	d.Summary = Summarize(served)
 	return d, nil
 }
 

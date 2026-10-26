@@ -111,9 +111,19 @@ func wantNoRows(t *testing.T, d ledger.Derived, sub string) {
 	if len(d.Scans)+len(d.Files)+len(d.Mutants)+len(d.Calls) != 0 || d.Reviews != 0 || len(d.Adjudications) != 0 {
 		t.Fatalf("rows served from a broken ledger: %+v", d)
 	}
-	if strings.Contains(string(mustMarshal(t, d)), "null") {
+	if strings.Contains(withoutAbsences(mustMarshal(t, d)), "null") {
 		t.Fatal("null in output")
 	}
+}
+
+// withoutAbsences drops the Summary's deliberate nulls (an unmeasured figure
+// is null, never 0), so a "never null" check still catches a null slice.
+func withoutAbsences(b []byte) string {
+	s := string(b)
+	for _, k := range []string{`"caught_share":null`, `"telemetry":null`, `"last_run":null`} {
+		s = strings.ReplaceAll(s, k, "")
+	}
+	return s
 }
 
 func TestDeriveCountsOnlyVerifiedLive(t *testing.T) {
@@ -337,7 +347,7 @@ func TestDeriveEmptyAndNeverNull(t *testing.T) {
 		t.Fatal(err)
 	}
 	b := mustMarshal(t, d)
-	if strings.Contains(string(b), "null") || d.Format != "corral-derive-1" {
+	if strings.Contains(withoutAbsences(b), "null") || d.Format != "corral-derive-1" {
 		t.Fatalf("empty derive: %s", b)
 	}
 }

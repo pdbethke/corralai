@@ -51,8 +51,20 @@ type Candidate struct {
 	// this file (including every candidate on a scan where no evidence ran
 	// at all) — never confused with a measured, genuine zero, which
 	// WidenCandidacyByEvidence excludes as ReasonUncovered rather than
-	// leaving as a zero-value Candidate.
+	// leaving as a zero-value Candidate. Also nil whenever the evidence was
+	// a unit pass (EvidenceIndex.UnitKind): a unit is a test FILE, package
+	// or target, not a test, and the column means tests; the unit count is
+	// EvidenceIndex.UnitsFor's to answer.
 	CoveringTests *int
+	// CoveringUnits is the number of test UNITS (a test file, package or
+	// target the runner can run alone) the evidence showed execute this
+	// file — EvidenceIndex.UnitsFor, set by WidenCandidacyByEvidence only
+	// from a unit-kind index, and carried to the ledger's covering_units
+	// column. Its own field because a unit is not a test: folding it into
+	// CoveringTests would quietly redefine Python's covering-test count for
+	// every reader of covering_tests. nil whenever the evidence was not a
+	// unit pass or never measured this file — never a fabricated 0.
+	CoveringUnits *int
 }
 
 // Exclusion is a file deliberately NOT audited, with a machine-stable reason.
@@ -128,6 +140,16 @@ const (
 	// it is the disclosure text itself, not a machine code a reader has to
 	// translate.
 	ReasonUncovered = "uncovered — no test executes this file"
+	// ReasonUncoveredByUnits is ReasonUncovered's claim made from a UNIT
+	// pass (IndexFromUnits), scoped to what ran: every test unit the
+	// operator's command collects ran alone and none executed the file, and
+	// none loaded it either (that would be ReasonImportOnly). It is its own
+	// string because the units are only what this command collects — a
+	// suite's other tests may execute the file — and Python's
+	// ReasonUncovered, which speaks for the whole per-test selection, keeps
+	// its text (ruling R24). Every reader asks IsUncovered. The exact string
+	// is load-bearing, same as ReasonUncovered's.
+	ReasonUncoveredByUnits = "uncovered — no test unit this command runs executes this file"
 	// ReasonImportOnly marks a source file the selection evidence
 	// positively measured at zero covering TESTS but non-empty coverage
 	// OUTSIDE any test context — executed only at import/module-load time
@@ -180,6 +202,14 @@ const (
 	ReasonDeclarationsUnreadable = "test-declarations-unreadable"
 )
 
+// IsUncovered reports whether reason is an uncovered finding: the evidence
+// measured the file and nothing it ran executed or loaded it
+// (ReasonUncovered from a per-test selection, ReasonUncoveredByUnits from a
+// unit pass). The one question every count, record and gate asks.
+func IsUncovered(reason string) bool {
+	return reason == ReasonUncovered || reason == ReasonUncoveredByUnits
+}
+
 // IsLandingRefusal reports whether reason is one of Enumerate's refusals of
 // a file whose authored test would land on the file itself
 // (lang.CheckTestLanding): the one question every gate, bucket and
@@ -219,7 +249,7 @@ func UnauditableChangedSource(reason string) bool {
 		// accepted: an unaudited Rust change passes the gate with only the
 		// disclosure.
 		return false
-	case ReasonUncovered, ReasonImportOnly:
+	case ReasonUncovered, ReasonUncoveredByUnits, ReasonImportOnly:
 		// Also "we could not measure it" — but these are REPORTED as
 		// uncovered by the scan itself, which the report already surfaces
 		// and the operator opted into by running with coverage. Left out so
@@ -583,7 +613,10 @@ func EnumerateWithTests(root string, tests *TestMap) ([]Candidate, []Exclusion, 
 // the pairing-only candidacy the design calls the fallback.
 //
 // Already-paired candidates get CoveringTests filled in when the evidence
-// also measured them (ledger metadata only — see Candidate.CoveringTests);
+// also measured them (ledger metadata only — see Candidate.CoveringTests),
+// except from a unit-kind index, which counts units rather than tests and
+// so leaves CoveringTests nil on every candidate, paired or promoted, and
+// fills CoveringUnits (UnitsFor) on both instead;
 // TestPath, ViaSearch and every other field, and every excluded-for-another-
 // reason entry, are left exactly as the pairing walk produced them, which is
 // what keeps an already-candidate file's report line, grading command, cache
@@ -601,11 +634,27 @@ func WidenCandidacyByEvidence(cands []Candidate, excl []Exclusion, idx EvidenceI
 		return cands, excl, 0
 	}
 
+	// coveringTests is the count a candidate carries: none from a unit
+	// pass (see Candidate.CoveringTests), the per-test count otherwise.
+	coveringTests := func(n int) *int {
+		if idx.UnitKind() {
+			return nil
+		}
+		return &n
+	}
+	// coveringUnits is the unit count a candidate carries: UnitsFor's, from
+	// a unit-kind index only (see Candidate.CoveringUnits); nil otherwise.
+	coveringUnits := func(path string) *int {
+		if n, measured := idx.UnitsFor(path); measured {
+			return &n
+		}
+		return nil
+	}
 	for i := range cands {
 		if n, _, _, _, measured := idx.CoverageFor(cands[i].Path); measured {
-			v := n
-			cands[i].CoveringTests = &v
+			cands[i].CoveringTests = coveringTests(n)
 		}
+		cands[i].CoveringUnits = coveringUnits(cands[i].Path)
 	}
 
 	// hasPath is lang.LibraryCodeClassifier's file-existence oracle: the
@@ -638,7 +687,6 @@ func WidenCandidacyByEvidence(cands []Candidate, excl []Exclusion, idx EvidenceI
 			// test", not a claim the evidence never actually made.
 			kept = append(kept, e)
 		case n > 0:
-			v := n
 			langName := ""
 			if p, ok := lang.Detect(e.Path); ok {
 				langName = p.Name()
@@ -647,7 +695,8 @@ func WidenCandidacyByEvidence(cands []Candidate, excl []Exclusion, idx EvidenceI
 				Path:             e.Path,
 				Lang:             langName,
 				CoveringTestPath: mostCovering,
-				CoveringTests:    &v,
+				CoveringTests:    coveringTests(n),
+				CoveringUnits:    coveringUnits(e.Path),
 			})
 			promoted++
 		case !isLibraryCode(e.Path, hasPath):
@@ -674,7 +723,11 @@ func WidenCandidacyByEvidence(cands []Candidate, excl []Exclusion, idx EvidenceI
 			// See ReasonImportOnly's own doc.
 			kept = append(kept, Exclusion{Path: e.Path, Reason: ReasonImportOnly})
 		default:
-			kept = append(kept, Exclusion{Path: e.Path, Reason: ReasonUncovered})
+			reason := ReasonUncovered
+			if idx.UnitKind() {
+				reason = ReasonUncoveredByUnits
+			}
+			kept = append(kept, Exclusion{Path: e.Path, Reason: reason})
 		}
 	}
 

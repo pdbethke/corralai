@@ -5,7 +5,9 @@ package lang
 import (
 	"fmt"
 	"path/filepath"
+	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -25,128 +27,382 @@ import (
 // pre-flight is most useful for. What crosses the boundary is one line per
 // file.
 //
-// The grammar:
+// The grammar, version 2 — LINE COUNTS, so evidence can rank which test unit
+// ran most of a file (a boolean cannot):
 //
-//	<header>            a language-specific magic line, e.g. corral-ruby-coverage: v1
-//	1 /abs/path/to/file executed
-//	0 /abs/path/to/file measured, and never executed
+//	<header>                 a language-specific magic line, e.g. corral-js-coverage: v2
+//	<executed> <executable> <path>
+//	# <disclosure>           a file the reducer measured and could not count, and why
 //
 // A file that was never measured emits NO LINE AT ALL. That absence is the
-// third state and it carries real weight — see corralCoverageReport.
+// third state and it carries real weight — see corralCoverageCounts. A
+// disclosure line leaves its file absent too: a count the instrument could
+// not give is not measured, and writing one in would be inventing it. So does
+// a file with no executable line: there is nothing in it that could have run,
+// and "0 0" would read as measured-and-never-executed. Every reducer omits it.
+//
+// The version is in the header, and each parser accepts only its own, so a
+// stale reducer is refused rather than half-read. Version 1 (`1 <path>` /
+// `0 <path>`, a boolean per file) is retired: nothing emits it, and a report
+// carrying its header is refused by name.
 const (
-	rubyCoverageHeader = "corral-ruby-coverage: v1"
-	jsCoverageHeader   = "corral-js-coverage: v1"
-	// phpCoverageHeader is declared in php.go, beside the script that writes it.
+	rubyCoverageHeaderV2 = "corral-ruby-coverage: v2"
+	jsCoverageHeaderV2   = "corral-js-coverage: v2"
+	// phpCoverageHeaderV2 is declared in php.go, beside the script that writes it.
 )
 
-// corralCoverageReport parses the reduced report into CoverageReporter's
-// tri-state map.
+// corralCoverageCounts parses a reduced report into per-file line counts.
 //
-// TRI-STATE, and the third state is the point: present-true is executed,
-// present-false is measured-and-never-executed (the only real finding), and
-// ABSENT means this run never measured the file. Both runtimes here observe
-// only what the suite LOADED, so a source file nothing requires is absent
-// rather than false. Recording it as false would accuse every file outside the
-// suite's import graph of being untested, when the honest claim is that this
-// run never looked at it — the same distinction pyPlugin.ParseCoverage draws
-// for files outside coverage.py's configured source scope.
+// TRI-STATE, and the third state is the point: present with Executed>0 is
+// executed, present with Executed==0 is measured-and-never-executed (the only
+// real finding), and ABSENT means this run never measured the file. Every
+// runtime here observes only what the suite LOADED, so a source file nothing
+// requires is absent rather than zero. Recording it as zero would accuse every
+// file outside the suite's import graph of being untested, when the honest
+// claim is that this run never looked at it — the same distinction
+// pyPlugin.CoverageCounts draws for files outside coverage.py's configured
+// source scope.
 //
 // The header check is what makes an unparseable report an ERROR instead of an
 // empty map. Without it any unrelated output — a stack trace, a bundler
 // warning, a truncated dump — parses as zero entries and reads as "the suite
 // covered nothing", which is a repo-wide accusation manufactured out of a
-// failure to measure.
-func corralCoverageReport(stdout, header, langName, modulePath string) (executed map[string]bool, err error) {
+// failure to measure. Paths outside the root are dropped, a report that kept
+// nothing is refused (corralReportKept), and executed can never exceed
+// executable, since a report that says so is not a measurement of anything.
+//
+// A file reported by several processes keeps the LARGER count of each kind.
+// That can under-count a file two processes ran different halves of, and
+// never over-counts it: lines are not identified in the report, so adding the
+// counts could count the same line twice, and an invented line is the error
+// this format must not make. Reducers that see lines (the JavaScript one)
+// merge processes before they print, so for them this never arises.
+func corralCoverageCounts(stdout, header, langName, modulePath string) (map[string]LineCounts, error) {
+	body, err := corralReportBody(stdout, header, langName)
+	if err != nil {
+		return nil, err
+	}
+	root := corralReportRoot(modulePath)
+	counts := make(map[string]LineCounts)
+	parsed := 0
+	var disclosed []string
+	for _, ln := range body {
+		ln = strings.TrimSpace(ln)
+		if ln == "" {
+			continue
+		}
+		if strings.HasPrefix(ln, loadedPrefix) {
+			// A loaded file is a fact about a counted run, not a file the
+			// reducer could not count (LoadedCoverage).
+			continue
+		}
+		if strings.HasPrefix(ln, "#") {
+			disclosed = append(disclosed, strings.TrimSpace(strings.TrimPrefix(ln, "#")))
+			continue
+		}
+		c, path, ok := parseCountsLine(ln)
+		if !ok {
+			return nil, fmt.Errorf("lang: unparseable %s coverage report line %q (want `<executed> <executable> <path>`, executed <= executable)", langName, ln)
+		}
+		parsed++
+		rel, ok := corralRepoPath(path, root)
+		if !ok {
+			continue
+		}
+		prev := counts[rel]
+		counts[rel] = LineCounts{Executed: max(prev.Executed, c.Executed), Executable: max(prev.Executable, c.Executable)}
+	}
+	if err := corralReportKept(langName, modulePath, parsed, len(counts), disclosed); err != nil {
+		return nil, err
+	}
+	return counts, nil
+}
+
+// suiteExitPrefix starts the line every CoverageCmd prints on stdout once the
+// wrapped suite has exited: "# suite-exit <rc>", rc being the suite's own
+// exit status.
+const suiteExitPrefix = "# suite-exit "
+
+// suiteExitTrailer is the shell that prints that line from $rc, the
+// suite's exit status as each CoverageCmd script captures it.
+//
+// It is printed straight after the suite exits and BEFORE the report, not
+// after it. Every later exit path of a script — Go's and Python's re-raise
+// of an unusual status, Rust's "unavailable" notices — then still carries
+// it, and every report reader already ignores what precedes the report
+// (the v2 header, Go's "mode:" line, coverage.py's last-line JSON), so no
+// parser had to learn to skip it. A suite's own stdout (Go, Python) comes
+// before it, which is why SuiteExit reads the LAST such line: a test that
+// prints the text cannot speak for the run.
+const suiteExitTrailer = `printf '# suite-exit %s\n' "$rc"`
+
+// SuiteExit is the wrapped suite's own exit status, read from the trailer a
+// CoverageCmd prints (suiteExitTrailer). ok is false when there is none — a
+// script that stopped before its suite exited, a truncated or foreign
+// output — and a caller that needs the status must then treat the run as
+// failed: an absent status is never a pass.
+func SuiteExit(stdout string) (rc int, ok bool) {
+	found := false
+	for _, ln := range strings.Split(stdout, "\n") {
+		rest, has := strings.CutPrefix(strings.TrimSpace(ln), suiteExitPrefix)
+		if !has {
+			continue
+		}
+		n, err := strconv.Atoi(strings.TrimSpace(rest))
+		if err != nil {
+			continue
+		}
+		rc, found = n, true
+	}
+	return rc, found
+}
+
+// BeforeSuiteExit is what stdout printed before SuiteExit's trailer — the
+// suite's own output when the run returns one stream, as the jail does —
+// and all of stdout when there is no trailer. A failed unit's reason quotes
+// its tail: after the trailer comes the coverage report, which says nothing
+// about why the suite failed.
+func BeforeSuiteExit(stdout string) string {
+	cut := -1
+	i := 0
+	for ln := range strings.Lines(stdout) {
+		rest, has := strings.CutPrefix(strings.TrimSpace(ln), suiteExitPrefix)
+		if has {
+			if _, err := strconv.Atoi(strings.TrimSpace(rest)); err == nil {
+				cut = i
+			}
+		}
+		i += len(ln)
+	}
+	if cut < 0 {
+		return stdout
+	}
+	return stdout[:cut]
+}
+
+// coverageUnavailableNotices are the lines a CoverageCmd prints, in place of
+// a report, when its instrument could not run at all — each followed by the
+// reason. Rust's is the only one today: its llvm-tools check runs before the
+// suite, so such a report has no suite-exit trailer either.
+var coverageUnavailableNotices = []string{rustCoverageUnavailable}
+
+// CoverageUnavailable is the reason a CoverageCmd's output gives for having
+// measured nothing because its instrument could not run (a missing
+// llvm-tools, a failed merge), ok false when it gives none. A caller that
+// would otherwise say only "no report" or "no suite exit status" says this
+// instead: it is what the operator has to fix.
+func CoverageUnavailable(stdout string) (reason string, ok bool) {
+	for _, ln := range strings.Split(stdout, "\n") {
+		ln = strings.TrimSpace(ln)
+		for _, notice := range coverageUnavailableNotices {
+			rest, has := strings.CutPrefix(ln, notice)
+			if !has || (rest != "" && rest[0] != ' ') {
+				continue
+			}
+			if reason = strings.TrimSpace(rest); reason == "" {
+				reason = "no reason given"
+			}
+			return reason, true
+		}
+	}
+	return "", false
+}
+
+// uncountedPrefix starts a v2 disclosure line: a file the reducer measured
+// and could not count, written as "# uncounted <path>: <reason>".
+const uncountedPrefix = "# uncounted "
+
+// loadedPrefix starts a v2 line naming a file whose module-level code the
+// run executed: "# loaded <path>". The JavaScript, Ruby and PHP reducers
+// print it; Go's and Rust's coverage count only code inside functions, so
+// they cannot.
+const loadedPrefix = "# loaded "
+
+// LoadedCoverage returns each file a v2 report names as LOADED: its
+// module-level code ran, whether or not any function of it did. A file
+// counted with nothing executed that was loaded is import-only, not
+// uncovered — the shape coverage.py records as static coverage. Paths are
+// normalised as UncountedCoverage normalises them; nil when the report names
+// none (always, for Go and Rust).
+func LoadedCoverage(stdout string) []string {
+	var out []string
+	for _, ln := range strings.Split(stdout, "\n") {
+		rest, ok := strings.CutPrefix(strings.TrimSpace(ln), loadedPrefix)
+		if !ok {
+			continue
+		}
+		if rel, ok := corralRepoPath(strings.TrimSpace(rest), ""); ok {
+			out = append(out, rel)
+		}
+	}
+	return out
+}
+
+// UncountedCoverage returns each file a v2 report DISCLOSED as measured but
+// uncountable, as "<repo-relative path>: <reason>".
+//
+// CoverageCounts leaves such a file absent, which is the honest state for a
+// count, but absence alone would drop the reason on the floor whenever the
+// report also had counted entries — and "why is this file missing" is
+// exactly what an operator reading the scan line will ask. Pure; it reads the
+// same report CoverageCounts reads, and normalises paths the same way
+// (corralRepoPath; the reducers print cwd-relative paths, so no root is
+// needed, and a path that escapes the repository is dropped as it is there).
+func UncountedCoverage(stdout string) []string {
+	var out []string
+	for _, ln := range strings.Split(stdout, "\n") {
+		ln = strings.TrimSpace(ln)
+		rest, ok := strings.CutPrefix(ln, uncountedPrefix)
+		if !ok {
+			continue
+		}
+		path, reason, ok := strings.Cut(rest, ": ")
+		if !ok {
+			path, reason = rest, "no reason given"
+		}
+		rel, ok := corralRepoPath(strings.TrimSpace(path), "")
+		if !ok {
+			continue
+		}
+		out = append(out, rel+": "+strings.TrimSpace(reason))
+	}
+	return out
+}
+
+// parseCountsLine reads `<executed> <executable> <path>`. The path is the
+// rest of the line, so a path with a space in it survives.
+func parseCountsLine(ln string) (LineCounts, string, bool) {
+	exe, rest, found := strings.Cut(ln, " ")
+	if !found {
+		return LineCounts{}, "", false
+	}
+	tot, path, found := strings.Cut(rest, " ")
+	if !found || strings.TrimSpace(path) == "" {
+		return LineCounts{}, "", false
+	}
+	e, err1 := strconv.Atoi(exe)
+	n, err2 := strconv.Atoi(tot)
+	if err1 != nil || err2 != nil || e < 0 || n < 0 || e > n {
+		return LineCounts{}, "", false
+	}
+	return LineCounts{Executed: e, Executable: n}, path, true
+}
+
+// corralReportBody returns the lines after the report's header, or the error
+// that says why there is no report: empty output, or no header of this
+// version. A header of ANOTHER version is named as such — that is a stale
+// reducer, and saying so is cheaper than letting someone diff two scripts.
+func corralReportBody(stdout, header, langName string) ([]string, error) {
 	trimmed := strings.TrimSpace(stdout)
 	if trimmed == "" {
 		return nil, fmt.Errorf("lang: %s coverage report is empty — the instrumented run produced nothing, which is a failure to measure, not a measurement of nothing", langName)
 	}
 	lines := strings.Split(trimmed, "\n")
-	hdr := -1
+	family, _, _ := strings.Cut(header, ": ")
 	for i, ln := range lines {
-		if strings.TrimSpace(ln) == header {
-			hdr = i
-			break
-		}
-	}
-	if hdr < 0 {
-		return nil, fmt.Errorf("lang: unparseable %s coverage report: no %q header (got %d line(s), starting %q)",
-			langName, header, len(lines), firstLineExcerpt(trimmed))
-	}
-
-	root := modulePath
-	if root != "" {
-		if abs, absErr := filepath.Abs(root); absErr == nil {
-			root = abs
-		}
-	}
-	executed = make(map[string]bool)
-	parsed := 0
-	for _, ln := range lines[hdr+1:] {
 		ln = strings.TrimSpace(ln)
-		if ln == "" {
-			continue
+		if ln == header {
+			return lines[i+1:], nil
 		}
-		hit, path, found := strings.Cut(ln, " ")
-		if !found || (hit != "0" && hit != "1") {
-			return nil, fmt.Errorf("lang: unparseable %s coverage report line %q (want `0 <path>` or `1 <path>`)", langName, ln)
-		}
-		parsed++
-		rel := path
-		// A RELATIVE PATH IS ALREADY REPO-RELATIVE and is taken as it is —
-		// the reducers emit cwd-relative paths precisely so that no
-		// substrate needs to know a root. Only an absolute path is aligned.
-		// (alignPyPath draws the same line for coverage.py's output.)
-		if !filepath.IsAbs(path) {
-			clean := filepath.ToSlash(filepath.Clean(path))
-			if clean == "." || clean == ".." || strings.HasPrefix(clean, "../") {
-				continue
-			}
-			if hit == "1" {
-				executed[clean] = true
-			} else if _, already := executed[clean]; !already {
-				executed[clean] = false
-			}
-			continue
-		}
-		if root != "" {
-			r, relErr := filepath.Rel(root, path)
-			// Outside the repo root is a gem, a stdlib file, or something
-			// in node_modules. Not a candidate for audit, so it must not
-			// appear in the map at all rather than as an entry a caller
-			// could report on.
-			if relErr != nil || r == ".." || strings.HasPrefix(r, ".."+string(filepath.Separator)) {
-				continue
-			}
-			rel = r
-		}
-		rel = filepath.ToSlash(rel)
-		// A file reported more than once (several test processes, several
-		// workers) is executed if ANY run executed it. Never downgrade a
-		// true to a false.
-		if hit == "1" {
-			executed[rel] = true
-		} else if _, already := executed[rel]; !already {
-			executed[rel] = false
+		if strings.HasPrefix(ln, family+": ") {
+			return nil, fmt.Errorf("lang: %s coverage report has header %q, want %q — the reducer that wrote it is a different version from the parser reading it", langName, ln, header)
 		}
 	}
+	return nil, fmt.Errorf("lang: unparseable %s coverage report: no %q header (got %d line(s), starting %q)",
+		langName, header, len(lines), firstLineExcerpt(trimmed))
+}
+
+// corralReportRoot is modulePath made absolute, so reported absolute paths
+// can be aligned to it ("" stays "": no root, no alignment).
+func corralReportRoot(modulePath string) string {
+	if modulePath == "" {
+		return ""
+	}
+	if abs, err := filepath.Abs(modulePath); err == nil {
+		return abs
+	}
+	return modulePath
+}
+
+// corralRepoPath aligns one reported path to a repo-relative, slash-separated
+// key. ok=false drops the entry entirely: outside the root is a gem, a stdlib
+// file, or something in node_modules — not a candidate for audit, so it must
+// not appear in the map as an entry a caller could report on.
+func corralRepoPath(path, root string) (string, bool) {
+	// A RELATIVE PATH IS ALREADY REPO-RELATIVE and is taken as it is — the
+	// reducers emit cwd-relative paths precisely so that no substrate needs
+	// to know a root. Only an absolute path is aligned. (alignPyPath draws
+	// the same line for coverage.py's output.)
+	if !filepath.IsAbs(path) {
+		clean := filepath.ToSlash(filepath.Clean(path))
+		if clean == "." || clean == ".." || strings.HasPrefix(clean, "../") {
+			return "", false
+		}
+		return clean, true
+	}
+	rel := path
+	if root != "" {
+		r, err := filepath.Rel(root, path)
+		if err != nil || r == ".." || strings.HasPrefix(r, ".."+string(filepath.Separator)) {
+			return "", false
+		}
+		rel = r
+	}
+	return filepath.ToSlash(rel), true
+}
+
+// NoFileEntriesError is a v2 report with its header and no counted file:
+// the suite most likely never loaded an application file, or (Disclosed)
+// every file it measured was one the reducer could not count. Its Error
+// lists those files, as Preflight has always printed them; Summary gives
+// only their number, for a caller that reports the list elsewhere (the unit
+// pass, one reason per unit).
+type NoFileEntriesError struct {
+	Lang      string
+	Disclosed []string
+}
+
+func (e *NoFileEntriesError) Error() string {
+	why := ""
+	if len(e.Disclosed) > 0 {
+		why = fmt.Sprintf(" (the reducer disclosed %d file(s) it could not count: %s)", len(e.Disclosed), strings.Join(e.Disclosed, "; "))
+	}
+	return e.message(why)
+}
+
+// Summary is Error without the list of disclosed files.
+func (e *NoFileEntriesError) Summary() string {
+	why := ""
+	if len(e.Disclosed) > 0 {
+		why = fmt.Sprintf(" (the reducer disclosed %d file(s) it could not count)", len(e.Disclosed))
+	}
+	return e.message(why)
+}
+
+func (e *NoFileEntriesError) message(why string) string {
+	return fmt.Sprintf("lang: %s coverage report has a header but no file entries — the suite most likely never loaded an application file (a collection or import error), not a genuinely-empty result%s", e.Lang, why)
+}
+
+// corralReportKept refuses a report that parsed no entries, or kept none.
+//
+// KEPT, not merely PARSED. The out-of-root filter runs AFTER a line is
+// counted, so a report consisting entirely of gems, stdlib or node_modules
+// used to satisfy the "has entries" check and then return an EMPTY map with
+// no error — which the caller reads as Ran=true and reports as a repo-wide "0
+// files executed". That is a claim about the repository manufactured out of a
+// run that measured nothing in it.
+//
+// It is a real shape, not a hypothetical: it is what every non-Go language
+// produced whenever the caller passed an empty root, and it is what a
+// wrongly-rooted run produces now.
+func corralReportKept(langName, modulePath string, parsed, kept int, disclosed []string) error {
 	if parsed == 0 {
-		return nil, fmt.Errorf("lang: %s coverage report has a header but no file entries — the suite most likely never loaded an application file (a collection or import error), not a genuinely-empty result", langName)
+		return &NoFileEntriesError{Lang: langName, Disclosed: disclosed}
 	}
-	// KEPT, not merely PARSED. The out-of-root filter above runs AFTER a line
-	// is counted, so a report consisting entirely of gems, stdlib or
-	// node_modules used to satisfy the "has entries" check and then return an
-	// EMPTY map with no error — which the caller reads as Ran=true and reports
-	// as a repo-wide "0 files executed". That is a claim about the repository
-	// manufactured out of a run that measured nothing in it.
-	//
-	// It is a real shape, not a hypothetical: it is what every non-Go language
-	// produced whenever the caller passed an empty root, and it is what a
-	// wrongly-rooted run produces now.
-	if len(executed) == 0 {
-		return nil, fmt.Errorf("lang: %s coverage report measured %d file(s), but NONE of them are under the repo root %q — every path was outside it (a dependency, the stdlib, or a wrong root). That is a failure to measure this repository, not a measurement that it is uncovered", langName, parsed, modulePath)
+	if kept == 0 {
+		return fmt.Errorf("lang: %s coverage report measured %d file(s), but NONE of them are under the repo root %q — every path was outside it (a dependency, the stdlib, or a wrong root). That is a failure to measure this repository, not a measurement that it is uncovered", langName, parsed, modulePath)
 	}
-	return executed, nil
+	return nil
 }
 
 // firstLineExcerpt returns a short single-line excerpt for error messages.
@@ -179,15 +435,28 @@ func firstLineExcerpt(s string) string {
 // and the parser turns THAT into an error. The fail-closed direction is
 // preserved by the parser, which is where it belongs — an exit code is a poor
 // proxy for "was anything measured", and it was guessing wrong.
+//
+// The exit code is still RECORDED: the suite-exit trailer (suiteExitTrailer)
+// is printed between the suite and the reduction, so a caller that must
+// know whether the suite passed (unit evidence, which takes a unit's
+// coverage only from a green run) reads it with SuiteExit, while every
+// reader of the report itself is unchanged.
+//
+// THE OPERATOR'S COMMAND IS PASSED AS POSITIONAL PARAMETERS and run as
+// `"$@"`, never spliced into the script (ruling R29). The shell then never
+// re-reads it, and the jail takes the programs to bind from the argv itself
+// (InterpretersIn reads `"$@"` as the positionals), the shape
+// ListUnitsCmd's listing already has. The script holds only corral's own
+// text.
+// coverageArgv0 is the $0 a coverage wrapper's script runs under: the
+// word after the script, before the operator's command.
+const coverageArgv0 = "corral-coverage"
+
 func coverageRunAndReduce(setup, env string, testCmd []string, reduce string) []string {
-	quoted := make([]string, len(testCmd))
-	for i, arg := range testCmd {
-		quoted[i] = shellQuote(arg)
-	}
 	script := `d=$(mktemp -d) && trap 'rm -rf "$d"' EXIT && ` + setup +
-		env + " " + strings.Join(quoted, " ") + " >&2" +
-		"; " + reduce
-	return []string{"sh", "-c", script}
+		env + ` "$@" >&2` +
+		"; rc=$?; " + suiteExitTrailer + "; " + reduce
+	return append([]string{"sh", "-c", script, coverageArgv0}, testCmd...)
 }
 
 // coverageLaunchers are the launchers and interpreters a language's suites
@@ -287,60 +556,77 @@ func coverageRunnerNamed(testCmd []string, runners []string) bool {
 // languages at once and get the pre-flight skipped as "ambiguous" — defeating
 // the exact disambiguation the allow-list exists to perform.
 //
-// This is a lexer, not a parser: it does not honour quoting, so a command
-// substitution or a quoted `;` can still split a word. That direction is safe
-// — it can only produce EXTRA candidate words, and every one of them still has
-// to equal a runner name to match. It cannot make a runner disappear.
+// It reads the script through shellCommands, which honours the shell's
+// quoting, so a quoted `;` or space never splits a word and a word is
+// returned without its quotes (`'go'` is go). The one thing removed before
+// lexing is the body of a quoted-delimiter here-document whose closing line
+// is found (withoutHeredocBodies), which the shell itself reads as text,
+// never as commands.
 func shellCommandWords(script string) []string {
 	var words []string
-	seps := func(r byte) bool {
-		return r == ';' || r == '&' || r == '|' || r == '\n' || r == '(' || r == ')'
-	}
-	i := 0
-	for i < len(script) {
-		for i < len(script) && (script[i] == ' ' || script[i] == '\t' || seps(script[i])) {
-			i++
-		}
-		if i >= len(script) {
-			break
-		}
-		// A comment runs to end of line and contains no command.
-		if script[i] == '#' {
-			for i < len(script) && script[i] != '\n' {
-				i++
-			}
-			continue
-		}
-		start := i
-		for i < len(script) && script[i] != ' ' && script[i] != '\t' && !seps(script[i]) {
-			i++
-		}
-		word := script[start:i]
-		// `FOO=bar cmd` — an assignment is not the command.
-		if eq := strings.IndexByte(word, '='); eq > 0 && !strings.ContainsAny(word[:eq], "/.") {
-			continue
-		}
-		// A shell keyword or an exec-style wrapper is TRANSPARENT: the command
-		// is the next word, not this one. rubyPlugin.TestCmd() is exactly this
-		// shape — `if grep -q RSpec "$t"; then exec rspec "$t"; else exec ruby
-		// "$t"; fi` — so without this the plugin cannot instrument its own
-		// stock command, which is the failure the repository's
-		// TestPluginStockCommandSatisfiesOwnCoverageCmd exists to catch.
-		if coverageTransparentWord[word] {
-			continue
-		}
-		// `>&2` splits on `&` and leaves "2" in command position. A bare
-		// number is a file descriptor, never a program.
-		if strings.Trim(word, "0123456789") == "" {
-			continue
-		}
-		words = append(words, word)
-		// Everything up to the next separator is this command's arguments.
-		for i < len(script) && !seps(script[i]) {
-			i++
+	for _, cmd := range shellCommands(withoutHeredocBodies(script)) {
+		if argv := commandArgv(cmd); len(argv) > 0 {
+			words = append(words, argv[0].text)
 		}
 	}
 	return words
+}
+
+// quotedHeredoc finds a here-document whose delimiter is quoted —
+// `<<'EOF'`, `<<"EOF"`, `<<-'EOF'` — the only shape whose body the shell
+// takes as literal text, with no expansion or command substitution. Every
+// here-document corral writes itself has that shape.
+var quotedHeredoc = regexp.MustCompile(`<<(-?)\s*(['"])([^'"\s]+)['"]`)
+
+// withoutHeredocBodies is script with the body of every quoted-delimiter
+// here-document removed: the lines after the line that opens it, up to and
+// including its delimiter line (leading tabs stripped for `<<-`). Such a
+// body is the DATA a command reads, never commands, and every JavaScript
+// coverage command writes its reducer and preload through one: read as
+// shell, each JS token was looked up as a program, and `code` in the
+// preload resolved to the host's VS Code snap, failing every jailed unit.
+//
+// It must never hide a command, so anything it cannot be sure of is left
+// to be read as before (review I5): a here-string (`<<<`), an unquoted
+// delimiter (the shell runs its body's $(…)), and a quoted one whose
+// closing line never comes — which is also what `<<'X'` inside a quoted
+// string usually looks like.
+func withoutHeredocBodies(script string) string {
+	if !strings.Contains(script, "<<") {
+		return script
+	}
+	lines := strings.Split(script, "\n")
+	var out []string
+	for i := 0; i < len(lines); i++ {
+		// The opening line is kept and read; several heredocs on it are
+		// taken in order, each body starting after the previous one's
+		// delimiter line and closed by its own (review I6: indexing the
+		// advancing lines[i] here panicked on `cat <<'A' <<'B'`).
+		line := lines[i]
+		out = append(out, line)
+		for _, m := range quotedHeredoc.FindAllStringSubmatchIndex(line, -1) {
+			if m[0] > 0 && line[m[0]-1] == '<' {
+				continue // `<<<'x'`: a here-string, not a here-document
+			}
+			dashed, delim := line[m[2]:m[3]] == "-", line[m[6]:m[7]]
+			end := -1
+			for j := i + 1; j < len(lines); j++ {
+				body := lines[j]
+				if dashed {
+					body = strings.TrimLeft(body, "\t")
+				}
+				if body == delim {
+					end = j
+					break
+				}
+			}
+			if end < 0 {
+				break // no closing line: not a heredoc corral can be sure of
+			}
+			i = end
+		}
+	}
+	return strings.Join(out, "\n")
 }
 
 // coverageTransparentWord is the set of shell keywords and command wrappers
@@ -398,7 +684,41 @@ func InterpretersIn(argv []string) []string {
 	if cmdIsShellWrapped(argv) {
 		for i, a := range argv {
 			if a == "-c" && i+1 < len(argv) {
-				return shellCommandWords(argv[i+1])
+				// The words after the script are $0 and then the positional
+				// parameters. A script that runs `"$@"` in command position
+				// executes them, and that is the one place they are a program:
+				// lang.ListUnitsCmd passes the operator's listing this way, so
+				// it is never re-read by the shell, and reading only the
+				// script's words bound printf and pwd but never the `go` or
+				// `cargo` the listing ran.
+				var positional []string
+				if i+3 < len(argv) {
+					positional = argv[i+3:]
+				}
+				var out []string
+				for _, cmd := range shellCommands(withoutHeredocBodies(argv[i+1])) {
+					words := commandArgv(cmd)
+					if len(words) == 0 {
+						continue
+					}
+					if raw := words[0].raw; raw == `"$@"` || raw == `$@` {
+						out = append(out, InterpretersIn(positional)...)
+						continue
+					}
+					// A command that is itself a `sh -c` wrapper — the
+					// operator's own, named in corral's wrapper as quoted
+					// words — is read through, as the outer one is.
+					texts := make([]string, len(words))
+					for j, w := range words {
+						texts[j] = w.text
+					}
+					if cmdIsShellWrapped(texts) {
+						out = append(out, InterpretersIn(texts)...)
+						continue
+					}
+					out = append(out, texts[0])
+				}
+				return out
 			}
 		}
 	}

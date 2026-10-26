@@ -1,0 +1,4 @@
+mode: set
+corralfixture/empty.go:0,1 0 0
+corralfixture/lib.go:0,1 7 3
+corralfixture/other.go:0,0 1 0

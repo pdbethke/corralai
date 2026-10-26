@@ -352,7 +352,7 @@ func pytestPreflightProbe(testCmd []string) (probe []string, ok bool) {
 // "cd" as the executable) would be worse, a false diagnosis rather than an
 // honest, less-precise one — not a case where the fallback avoids failing
 // closed altogether.
-func (pyPlugin) Preflight(testCmd []string) error {
+func (pyPlugin) Preflight(repoRoot string, testCmd []string) error {
 	if len(testCmd) == 0 {
 		return pyPreflightStockDefault()
 	}
@@ -757,7 +757,7 @@ func (pyPlugin) CoverageCmd(testCmd []string) (cmd []string, ok bool) {
 	// whatever (if anything) happens to be sitting at the default path.
 	script := `f=$(mktemp) && trap 'rm -f "$f"' EXIT && ` +
 		`COVERAGE_FILE="$f" ` + quotedInterp + " -m coverage run -m " + strings.Join(quotedModule, " ") +
-		`; rc=$?; case $rc in 0|1) ;; *) exit "$rc" ;; esac; ` +
+		`; rc=$?; ` + suiteExitTrailer + `; case $rc in 0|1) ;; *) exit "$rc" ;; esac; ` +
 		`COVERAGE_FILE="$f" ` + quotedInterp + " -m coverage json -o -"
 	return []string{"sh", "-c", script}, true
 }
@@ -878,7 +878,18 @@ type pyCoverageReport struct {
 // one file genuinely had coverage, is not a legitimate empty result, it is
 // a sign modulePath is wrong or the project needs a path remap corral
 // cannot see — so that combination is an error too.
-func (pyPlugin) ParseCoverage(stdout, modulePath string) (executed map[string]bool, err error) {
+func (p pyPlugin) ParseCoverage(stdout, modulePath string) (executed map[string]bool, err error) {
+	return executedFromCounts(p.CoverageCounts(stdout, modulePath))
+}
+
+// CoverageCounts is coverage.py's own per-file summary, unreinterpreted:
+// summary.covered_lines executed of summary.num_statements executable — a
+// statement count, coverage.py's answer to what an executable line is. Every
+// rule ParseCoverage documents above (the payload is the last line, the
+// required keys, totals.covered_lines == 0 is an error, a file with
+// num_statements == 0 is absent, the alignment and out-of-root rules) is
+// THIS function's: ParseCoverage is derived from it, so the two cannot drift.
+func (pyPlugin) CoverageCounts(stdout, modulePath string) (map[string]LineCounts, error) {
 	lines := strings.Split(stdout, "\n")
 	i := len(lines) - 1
 	for i >= 0 && strings.TrimSpace(lines[i]) == "" {
@@ -942,10 +953,15 @@ func (pyPlugin) ParseCoverage(stdout, modulePath string) (executed map[string]bo
 	root := normalizePyRepoRoot(modulePath)
 	sawPositiveEntry := false
 	sawPositiveAligned := false
-	executed = make(map[string]bool)
+	counts := make(map[string]LineCounts)
 	for path, f := range report.Files {
 		if f.Summary.NumStatements == 0 {
 			continue
+		}
+		// The same refusal corralCoverageCounts makes: more lines executed
+		// than exist, or a negative count, is not a measurement of anything.
+		if f.Summary.CoveredLines < 0 || f.Summary.CoveredLines > f.Summary.NumStatements {
+			return nil, fmt.Errorf("lang: python coverage report gives %q covered_lines %d of num_statements %d — not a measurement", path, f.Summary.CoveredLines, f.Summary.NumStatements)
 		}
 		exec := f.Summary.CoveredLines > 0
 		if exec {
@@ -974,7 +990,7 @@ func (pyPlugin) ParseCoverage(stdout, modulePath string) (executed map[string]bo
 			// it is not a file corral can name).
 			continue
 		}
-		executed[p] = exec
+		counts[p] = LineCounts{Executed: f.Summary.CoveredLines, Executable: f.Summary.NumStatements}
 		if exec {
 			sawPositiveAligned = true
 		}
@@ -982,7 +998,7 @@ func (pyPlugin) ParseCoverage(stdout, modulePath string) (executed map[string]bo
 	if sawPositiveEntry && !sawPositiveAligned {
 		return nil, fmt.Errorf("lang: python coverage report has file(s) with covered_lines > 0, but none aligned under repo root %q — likely a wrong modulePath or a coverage.py [tool.coverage.paths] remap corral cannot see, not a genuinely empty result", modulePath)
 	}
-	return executed, nil
+	return counts, nil
 }
 
 // normalizePyRepoRoot cleans modulePath into the exact form ParseCoverage's

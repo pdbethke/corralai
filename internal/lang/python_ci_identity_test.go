@@ -23,7 +23,7 @@ func TestPythonPreflightProbeNeverCarriesTheCIIdentity(t *testing.T) {
 	if err := os.WriteFile(fake, []byte("#!/bin/sh\nenv\nexit 1\n"), 0o755); err != nil { // #nosec G306 -- a test's own executable stub
 		t.Fatal(err)
 	}
-	err := pyPlugin{}.Preflight([]string{fake, "-m", "pytest", "-q"})
+	err := pyPlugin{}.Preflight("", []string{fake, "-m", "pytest", "-q"})
 	if err == nil {
 		t.Fatal("the failing probe returned no error")
 	}

@@ -3,6 +3,7 @@
 package lang
 
 import (
+	"path/filepath"
 	"slices"
 	"strings"
 )
@@ -159,4 +160,67 @@ func nodeCoruns(id, other string) bool {
 		}
 	}
 	return false
+}
+
+// nodeListUnits lists the test files argv collects by running them under
+// --test-only with the TAP reporter: node 22 has no list mode, and under
+// --test-only a file with no `only` test runs none of its tests and reports
+// ITSELF, by the path node resolved (relative to the working directory),
+// as one result (measured on node 22.23.4; nodeParseUnits for the case
+// where a file carries an `only` test). Node's own file resolution — its
+// default globs, the operator's files and globs — is what decides the list.
+// The files' top-level code runs, against the unmutated tree, as nodeListCmd's
+// run does.
+func nodeListUnits(argv []string) ([]string, bool) {
+	if !narrowable(argv, append(nodeFilters, "--test-reporter", "--test-reporter-destination")...) {
+		return nil, false
+	}
+	return nodeWith(argv, "", "--test-only", "--test-reporter=tap")
+}
+
+// nodeUnitExts are the extensions node's test runner loads.
+var nodeUnitExts = []string{".js", ".cjs", ".mjs", ".jsx", ".ts", ".cts", ".mts", ".tsx"}
+
+// nodeParseUnits reads nodeListUnits' TAP: each top-level result is a file.
+// A file that carries an `only` test reports that test in its place under
+// --test-only and its path appears nowhere, so a top-level result that is
+// not a file path means the list is incomplete, and nil is returned rather
+// than a list missing a file. A file that failed to load (its result
+// carries exitCode) is still a unit the command collects; its own run will
+// fail and say so.
+func nodeParseUnits(stdout string) []string {
+	// No TAP header is no listing (node did not start, or crashed before
+	// reporting), never a listing of no files.
+	if !strings.HasPrefix(strings.TrimLeft(stdout, "\n"), "TAP version ") {
+		return nil
+	}
+	entries, _ := nodeEntries(stdout)
+	units := []string{}
+	for _, e := range entries {
+		if len(e.path) != 1 {
+			continue
+		}
+		name := e.path[0]
+		if e.typ != "test" || !slices.Contains(nodeUnitExts, strings.ToLower(filepath.Ext(name))) {
+			return nil
+		}
+		units = append(units, name)
+	}
+	return units
+}
+
+// nodeUnitCmd runs one test file: argv with the operator's files and globs
+// replaced by the unit, every option kept but its shard (withoutFlag). Options come before the first
+// file (nodeWith), and node's own option table (runner_node_options.go)
+// says which of them read the next word; anything it cannot place is
+// refused.
+func nodeUnitCmd(argv []string, unit string) ([]string, bool) {
+	if unit == "" || !narrowable(argv, nodeFilters...) || !slices.Contains(argv, "--test") {
+		return nil, false
+	}
+	flags, ok := dropFileArgs(withoutFlag(argv[1:], "--test-shard"), false, nodeOptionTakesValue)
+	if !ok {
+		return nil, false
+	}
+	return append(append([]string{argv[0]}, flags...), unit), true
 }

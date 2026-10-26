@@ -133,7 +133,7 @@ func TestPHPPreflight(t *testing.T) {
 	p, _ := ByName("php")
 	// A nonsense binary name can never resolve on any host: Preflight must
 	// report an error, not a silent pass.
-	if err := p.Preflight([]string{"totally-not-a-real-binary-xyz"}); err == nil {
+	if err := p.Preflight("", []string{"totally-not-a-real-binary-xyz"}); err == nil {
 		t.Fatal("Preflight with an unresolvable test command binary must fail closed")
 	}
 }
@@ -149,15 +149,15 @@ func TestPHPCoverageCmdDisablesTheProjectsOwnCoverage(t *testing.T) {
 	if !ok {
 		t.Fatal("no coverage command")
 	}
-	if !strings.Contains(cmd[2], "'phpunit.xml' '--no-coverage'") {
-		t.Errorf("phpunit run must carry --no-coverage: %s", cmd[2])
+	if got := cmd[len(cmd)-2:]; got[0] != "phpunit.xml" || got[1] != "--no-coverage" {
+		t.Errorf("phpunit run must carry --no-coverage: %q", cmd)
 	}
 	cmd, ok = phpPlugin{}.CoverageCmd([]string{"composer", "test"})
 	if !ok {
 		t.Fatal("no coverage command for composer")
 	}
-	if strings.Contains(cmd[2], "--no-coverage") {
-		t.Errorf("a composer script must not have phpunit flags appended: %s", cmd[2])
+	if strings.Contains(strings.Join(cmd, " "), "--no-coverage") {
+		t.Errorf("a composer script must not have phpunit flags appended: %q", cmd)
 	}
 }
 
@@ -207,4 +207,12 @@ spl_autoload_register(function ($c) {
 	if out, err := load("src/Broken.php"); err == nil {
 		t.Fatalf("the load check accepted a class extending a class that exists nowhere:\n%s", out)
 	}
+}
+
+// PHP COUNTS COME FROM A REAL pcov RUN of the fixture suite (the captured
+// report a live run is held to). Shape.php is an interface: pcov reports a hit
+// for it only on the file's implicit include marker, one line past its end,
+// which is not a line of the file and must not make it read as executed.
+func TestPHPCoverageCountsFromRealRun(t *testing.T) {
+	assertFixtureCounts(t, capturedCounts(t, "php"), "lib/Calc.php", "lib/Dead.php", "lib/Unloaded.php", "lib/Shape.php")
 }

@@ -988,7 +988,7 @@ func resolveAuditPlugin(in localAuditInput) (lang.Plugin, error) {
 	// how the suite runs and is stronger evidence than any stock guess this
 	// plugin could make about the host's default toolchain. See
 	// lang.Plugin.Preflight's doc comment.
-	if err := plug.Preflight(in.checkArgv); err != nil {
+	if err := plug.Preflight(in.repoDir, in.checkArgv); err != nil {
 		return nil, auditErr("%s toolchain unavailable — refusing to grade: %v", plug.Name(), err)
 	}
 	// The jail's own requirements, asked only where a jail runs: every

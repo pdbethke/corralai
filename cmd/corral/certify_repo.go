@@ -3,7 +3,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -84,6 +83,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	commit := fs.String("commit", "", "commit SHA the report is bound to")
 	swarmFlag := fs.Int("swarm", 0, "max concurrent audit workers (0 = auto-size to this host's cores); on --substrate workspace it also sizes the private trees that score one file's mutants at once (budget/4, min 1), so --swarm 4 is one tree")
 	dryRun := fs.Bool("dry-run", false, "enumerate and emit jobs, then stop — no audits run")
+	evidenceFlag := fs.Bool("evidence", false, "with --dry-run: run the evidence pass in the sandbox (no model, no key) so the plan shows what a real run would audit")
 	jsonOut := fs.Bool("json", false, "with --dry-run, emit the repository's audit surface as JSON instead of the human report: per-language counts, every auditable file with its inferred test pairing, and the machine-stable exclusion tally. Needs no key, no jail and no money — it is the free inventory a UI or a tenant's own tooling can consume instead of scraping stdout")
 	substrateFlag := fs.String("substrate", substrateJail, "where the audit runs: "+substrateJail+" (bwrap) or "+substrateWorkspace+" (mutate --repo in place; the caller IS the isolation boundary, e.g. an ephemeral CI runner)")
 	jailFlag := fs.String("jail", "", "sandbox backend for --substrate jail: bwrap (Linux) or container, or sandbox-exec (macOS) (default: auto-detect for this OS). \"container\" runs every test command in CORRALAI_EXEC_IMAGE, an image carrying the project's toolchain, so nothing has to be installed on the host")
@@ -116,6 +116,13 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	timeoutFlag := fs.Duration("timeout", defaultRunTimeout, "per-file WALL-CLOCK budget, measured from that file's run start — not a no-progress timer. A file still making steady progress is stopped when it exceeds this and banks a needs-review TIMEOUT verdict, keeping its dev kill rate and survivors but losing the PROVING half. Same default and semantics as `certify --local`'s --timeout; raise it for a file with many survivors, which needs the most room and has the most to prove. PER FILE, so it multiplies: a scan of N files with W workers can spend up to (N/W) x this in the worst case, which is what --top and --swarm are for")
 	if err := fs.Parse(flagArgs); err != nil {
 		return flagParseExit(err)
+	}
+	// Refused, not ignored: a real run collects evidence anyway, so an
+	// operator who typed --evidence on one asked for something the flag
+	// does not do, and a silently inert flag would read as having worked.
+	if *evidenceFlag && !*dryRun {
+		fmt.Fprintln(stderr, "corral certify --repo: --evidence only changes --dry-run; a real run always collects evidence")
+		return 2
 	}
 	// Removed with a POINTER, not deprecated into a warning: --scope-tests
 	// picked a file's grading surface by FILENAME convention, which inverted
@@ -369,6 +376,10 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// test that lives outside it. Everything downstream — ranking, counts,
 	// the exclusion tally, the ledger's file rows — then describes the
 	// scope alone.
+	// The whole repository's files, before the scope bounds them: the unit
+	// pass's landing map is a question about where TESTS are, and a test
+	// outside --path is still a landing (B5).
+	repoInventory := checkoutInventory(cands, excl)
 	cands, excl = scopeEnumeration(scope, cands, excl)
 
 	// --json emits the inventory INSTEAD of the human report, matching the
@@ -706,7 +717,8 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	//
 	// Skipped on a dry run, which never audits anything: demanding a jail and a
 	// provider key to print the jobs a scan WOULD emit would refuse the one
-	// invocation that costs nothing.
+	// invocation that costs nothing. A dry run with --evidence asks the jail
+	// half only — it runs the evidence pass, and calls no model.
 	ledgerDir := ""
 	var ex *localExecutor
 	// ONE token budget for the whole scan — every file's grading seats AND
@@ -716,17 +728,27 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// ONE tool probe for the whole scan: every agent seat's version is read
 	// once, and the cache key, each verdict and the bundle all record it.
 	scanTools := newSeatToolProbe()
-	if !*dryRun {
+	// The executor is built for every run that executes anything: a real run,
+	// and a dry run with --evidence, which runs exactly the real run's
+	// evidence phase and nothing after it. Everything an evidence pass reads
+	// — substrate, jail, --whole-suite, --runner, the worker count, the
+	// selection cache — is set here, the same for both, so the plan cannot
+	// pair differently from the run it previews. What only grading reads
+	// (models, the prior, the replayed mutants, the provider preflight)
+	// stays in the real-run block below, so this path names no seat and
+	// builds no model endpoint.
+	if !*dryRun || *evidenceFlag {
 		// Each job runs the whole tree in a jail and grades it with the
 		// project's own test command. Given after `--`; absent, the language
 		// plugin's stock recursive command is used — resolved per job, since a
 		// repo can mix languages.
 		ex = newLocalExecutorWithJail(*repoDir, checkArgv, *substrateFlag, *jailFlag, *timeoutFlag, stdout)
-		ledgerDir = strings.TrimRight(*ledgerFlag, "/")
-		if ledgerDir == "" {
-			ledgerDir = defaultLedgerDir(*repoDir)
-		}
 		ex.wholeSuite = *wholeSuiteFlag
+		// Set here, not with the grading settings below: the unit pass runs
+		// before any job exists and resolves the operator's --runner and
+		// the scan's worker count as grading will.
+		ex.runner = *runnerFlag
+		ex.unitWorkers, _ = resolveScanWorkers(*swarmFlag, *substrateFlag)
 		// The selection cache lives in the file --cache-db names. Its Get
 		// half runs here; a fresh MISS's evidence is written after the scan
 		// (see pendingSelectionPut), once the run it came from is known to
@@ -738,6 +760,24 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 				return 2
 			}
 			ex.selectionCache = newSelectionLedgerCache(cacheDSN)
+		}
+		// Deferred, not called at the end: a panic mid-scan must still release
+		// the staging dirs the shared seeds created. Deferred here so it also
+		// covers the early returns below.
+		defer ex.Close()
+	}
+	if *dryRun && ex != nil {
+		// The jail preflight, as a real run asks it: a host that cannot
+		// sandbox would otherwise report every evidence pass as a note.
+		if err := ex.preflight(); err != nil {
+			fmt.Fprintf(stderr, "corral certify --repo: %v\n", err)
+			return 1
+		}
+	}
+	if !*dryRun {
+		ledgerDir = strings.TrimRight(*ledgerFlag, "/")
+		if ledgerDir == "" {
+			ledgerDir = defaultLedgerDir(*repoDir)
 		}
 		ex.presetMutants = presetMutants
 		ex.mutantSink = mutantRecorder.sink
@@ -775,10 +815,6 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 			critic: *criticModelFlag, shadow: *shadow.model,
 			shadowWriter: *shadow.writerModel, shadowSelection: shadowSels,
 		}
-		// Deferred, not called at the end: a panic mid-scan must still release
-		// the staging dirs the shared seeds created. Deferred here so it also
-		// covers the early returns below.
-		defer ex.Close()
 		// Jail preflight: a host that cannot sandbox grades nothing, and saying
 		// so now beats reporting every file as ungradable — after paying for a
 		// goal for each of them.
@@ -934,19 +970,26 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// and it was, for name-pairing only.
 	diffTouchedATest := false
 	mightBeTest := mightBeTestPredicate()
+	evidenceLangs := preflightLanguages(enumeratedSourcePaths(cands, excl))
 	for path := range diffChanged {
 		// A changed test in a language the instrumented run cannot attribute
-		// — one with no lang.CoverageReporter (Rust) — is treated as the scan
-		// treats a file in a language it does not audit: running the
-		// evidence pass for it would cost a suite run and find nothing. Its
-		// sources are still reached the other way, by pairing: a source whose
-		// own declaration loads the changed test pairs to it.
+		// — one with no lang.CoverageReporter, or one none of the scan's
+		// evidence sources is in (a Rust test beside Rust sources the
+		// landing refuses: the run would be the OTHER language's suite) — is
+		// treated as the scan treats a file in a language it does not audit:
+		// running the evidence pass for it would cost a suite run and find
+		// nothing. Its sources are still reached the other way, by pairing:
+		// a source whose own declaration loads the changed test pairs to it.
+		//
+		// The reporter check alone was this rule while Rust had no
+		// reporter; once it gained one, a Rust-test-only diff in a
+		// Python+Rust repository ran Python's suite to attribute it.
 		//
 		// This asked lang.CheckTestLanding of the TEST path until the Rust
 		// landing arrived. That was the same answer only while every Rust
 		// file was refused; a landing is a question about a SOURCE, and the
 		// one asked here is about evidence.
-		if mightBeTest(path) && evidenceCanAttribute(path) {
+		if mightBeTest(path) && evidenceCanAttribute(path, evidenceLangs) {
 			diffTouchedATest = true
 			break
 		}
@@ -954,12 +997,31 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	skipEvidence := *diffBase != "" && len(selected) == 0 && len(unpairableInDiff) == 0 && !diffTouchedATest
 	evidenceCandidacyOK := false
 	selectionMethod := ""
+	// evidenceIdx is the index candidacy was widened by, kept for the
+	// evidence-paired disclosure (a unit-kind index answers its covering
+	// count); unitsPartial is a unit pass that widened candidacy although
+	// some of its units contributed nothing.
+	var evidenceIdx reposcan.EvidenceIndex
+	unitsPartial := false
+	// noSourcesNote is why neither evidence pass ran when the scan left them
+	// no source to run for (noEvidenceSourcesNote); "" otherwise.
+	noSourcesNote := ""
 	if ex != nil && !skipEvidence {
+		// Both evidence passes run under the operator's Ctrl-C: either can
+		// last selectionTimeout, and before this they ran under a context
+		// nothing cancelled, so an interrupt killed the process outright.
+		// Scoped to this phase — the audit below registers its own — so
+		// goal derivation between the two keeps the behaviour it had.
+		evidenceCtx, stopEvidenceSignals := interruptContext(stderr, "\ncorral: interrupted — stopping the evidence pass; nothing will be recorded. Press Ctrl-C again to abandon it at once")
+		defer stopEvidenceSignals()
 		// Every source Enumerate saw, paired or not — this instrumented run
 		// answers about the whole tree, not just what pairing already
 		// resolved, or an evidence-only candidate could never be discovered
 		// in the first place.
 		selectionSources := enumeratedSourcePaths(cands, excl)
+		if len(selectionSources) == 0 {
+			noSourcesNote = noEvidenceSourcesNote(excl)
+		}
 		if len(selectionSources) > 0 {
 			// Announced only when it is about to happen: under --whole-suite
 			// collectSelection returns immediately without running anything, and
@@ -980,7 +1042,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 			// nowhere else — see localExecutor.selectionDuration. A clock started
 			// here would tick for --whole-suite too, which returns from that call
 			// having run nothing at all.
-			ex.selection = ex.collectSelection(context.Background(), selectionSources)
+			ex.selection = ex.collectSelection(evidenceCtx, selectionSources)
 			if !ex.selection.Ran {
 				fmt.Fprintf(stdout, "  selection: grading by the WHOLE suite — %s\n", ex.selection.Note)
 			}
@@ -997,9 +1059,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 				})
 			}
 		}
-		if ex.selection.Ran {
-			selectionMethod = "coverage-context"
-		}
+		selectionMethod = ex.selectionMethod()
 
 		// WIDEN: the SAME plugin resolution collectSelection just used, asked
 		// again here rather than threaded out of it: resolveSelectionPlugin
@@ -1011,6 +1071,36 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		if plug != nil {
 			idx, idxOK = reposcan.ParseEvidenceIndex(ex.selection, plug)
 		}
+		// THE UNIT PASS, for a language with no per-test selector: the
+		// evidence that widens its candidacy. Apart from grading — it runs
+		// under --whole-suite too, and selectionMethod above has already
+		// been decided without it.
+		if len(selectionSources) > 0 && runsUnitPass(plug) {
+			ex.unitInventory = repoInventory
+			ex.units = ex.collectUnits(evidenceCtx, selectionSources)
+			printUnitPass(stdout, ex)
+			if ex.unitsDuration > 0 {
+				ex.events.forScan("phase_units", "", map[string]any{
+					"duration_ms": ex.unitsDuration.Milliseconds(),
+					"units":       len(ex.units.Units),
+					"failed":      unitPassFailed(ex.units),
+					"uncounted":   unitPassUncounted(ex.units),
+				})
+			}
+			if ex.unitLanding != nil {
+				idx, idxOK = reposcan.IndexFromUnits(ex.units, reposcan.UnitFilesFor(plug, ex.unitLanding))
+			}
+			unitsPartial = idxOK && unitPassFailed(ex.units) > 0
+		}
+		// The evidence phase is over: Ctrl-C from here is the next phase's
+		// to handle. An interrupted pass has already said which units it
+		// never ran; it widens nothing and caches nothing, and the run
+		// records nothing, a dry run as a real one.
+		stopEvidenceSignals()
+		if operatorInterrupted(nil) {
+			return refuse()
+		}
+		evidenceIdx = idx
 		var promoted int
 		cands, excl, promoted = reposcan.WidenCandidacyByEvidence(cands, excl, idx, idxOK)
 		evidenceCandidacyOK = idxOK
@@ -1210,6 +1300,28 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 			return key
 		},
 	}
+	// The goal source was resolved above, from the NAME-paired selection.
+	// When that selected nothing, it was the no-goals source, and every file
+	// evidence then promoted was excluded "ungoaled" with no model ever asked
+	// (B6: REA under --path src/application/reverse, ModelCalls=0, a paid
+	// audit ending COULD-NOT-GRADE). It is resolved again over the final
+	// selection, with the same refusals (no --derive-model, a seat that
+	// cannot start, a --runner that serves none of these files), still
+	// before any goal is derived or any grading seat runs.
+	if _, none := gs.(noGoals); none && len(selected) > 0 {
+		if err := runnerServesSome(*runnerFlag, selected); err != nil {
+			fmt.Fprintf(stderr, "corral certify --repo: %v\n", err)
+			return 2
+		}
+		gs, disclosure, code = resolveGoalSource(stderr, *repoDir, *goalsPath, *deriveModel, seatReg.deriveEndpoint(), *dryRun, len(selected), keepDeriver, goalStore, *noGoalCacheFlag, !*noGoalCacheFlag)
+		if code != 0 {
+			return code
+		}
+		cachingGS, cacheWired = gs.(*reposcan.CachingGoalSource)
+		if disclosure != "" {
+			fmt.Fprintln(stdout, disclosure)
+		}
+	}
 	jobs, goalExcl, err := reposcan.EmitJobs(cfg, selected, gs)
 	if operatorInterrupted(err) {
 		return refuse()
@@ -1264,11 +1376,28 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	selectionNote := ""
 	if ex != nil {
 		selectionNote = ex.selection.Note
+		// For a language the unit pass serves, ITS reason is why candidacy
+		// is pairing-only; the selection note ("no selector for …") is
+		// about grading.
+		switch {
+		case ex.units.Note != "":
+			selectionNote = ex.units.Note
+		case ex.unitLandingNote != "":
+			selectionNote = ex.unitLandingNote
+		case ex.units.Ran && !evidenceCandidacyOK:
+			selectionNote = fmt.Sprintf("no unit of %d contributed evidence", len(ex.units.Units))
+		case noSourcesNote != "":
+			selectionNote = noSourcesNote
+		}
 	}
-	fmt.Fprintln(stdout, candidacySummaryLine(cands, excl, evidenceCandidacyOK, *dryRun, selectionNote))
+	summary := candidacySummaryLine(cands, excl, evidenceCandidacyOK, *dryRun && !*evidenceFlag, selectionNote)
+	if unitsPartial {
+		summary += fmt.Sprintf(" — unit evidence is partial: %d of %d unit(s) contributed none", unitPassFailed(ex.units), len(ex.units.Units))
+	}
+	fmt.Fprintln(stdout, summary)
 	printLanguageProfile(stdout, reposcan.BuildLanguageProfile(cands, excl))
 	printSearchPairings(stdout, cands)
-	printEvidencePairings(stdout, cands)
+	printEvidencePairings(stdout, cands, evidenceIdx)
 	if *dryRun {
 		printWouldAudit(stdout, jobs)
 	}
@@ -1295,9 +1424,10 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// every input it refused before.
 	argvErr := checkArgvSpansOneLanguage(checkArgv, jobs)
 
-	// --dry-run returns here, before any suite ever runs — including the
-	// pre-flight's own instrumented run. Dry run means no execution, full
-	// stop; --preflight opts INTO an extra suite run, it does not opt a dry
+	// --dry-run returns here, before any audit runs — and before the
+	// pre-flight's own instrumented run. The only execution a dry run ever
+	// makes is the evidence pass above, and only when --evidence asked for
+	// it; --preflight opts INTO an extra suite run, it does not opt a dry
 	// run out of being dry. The audit's refusal still outranks it, exactly
 	// as when this check ran above.
 	if *dryRun {
@@ -1305,8 +1435,15 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stderr, "corral certify --repo: %v\n", argvErr)
 			return 2
 		}
+		// An --evidence dry run completed its pass, so what it measured is
+		// cached as a real run's would be, and the run it previews reuses
+		// it on a byte-identical tree instead of paying for it twice.
+		writeEvidenceCache(ex, stderr)
 		if *jsonOut {
 			inv := buildScanInventoryAt(*repoDir, filepath.Base(*repoDir), totalFiles, rankSignal, cands, len(jobs), excl)
+			if ex != nil {
+				inv.Units = unitsJSON(ex.units)
+			}
 			if err := writeScanInventory(jsonSink, inv); err != nil {
 				fmt.Fprintf(stderr, "corral certify --repo: writing JSON inventory: %v\n", err)
 				return 1
@@ -1383,7 +1520,6 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	}
 	ex.mutantConcurrency = mutantConc
 	ex.noFailFast = *noFailFastFlag
-	ex.runner = *runnerFlag
 	printRunDisclosures(stdout, ex, jobs)
 
 	// ex is non-nil here: it is constructed on every non-dry-run path above,
@@ -1568,17 +1704,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	eventRows := scanEventRows(ex)
 
 	const scanID int64 = 0
-	// A fresh selection MISS's raw evidence is held on the executor (see
-	// pendingSelectionPut's own doc) and written to the cache only now,
-	// once the run that produced it has completed. Best effort, like every
-	// write from here on: a lost cache row costs the NEXT scan an
-	// instrumented run, never THIS scan's exit code.
-	if ex != nil && ex.pendingSelectionPut != nil && ex.selectionCache != nil {
-		p := ex.pendingSelectionPut
-		if perr := ex.selectionCache.SelectionCachePut(context.Background(), p.TreeDigest, p.CmdDigest, p.Plugin, p.Substrate, p.Raw, ""); perr != nil {
-			fmt.Fprintf(stderr, "corral certify --repo: the selection cache was NOT written: %v\n", perr)
-		}
-	}
+	writeEvidenceCache(ex, stderr)
 
 	// The bundle: the record's rows in the warehouse's shape, ONCE. Built
 	// before the attestation, so the statement can sign its hash, and used
@@ -2870,8 +2996,8 @@ func (l *localExecutor) runPreflight(ctx context.Context, sources []string) repo
 	// that made the pre-flight INERT for ruby, javascript, typescript and php
 	// the moment they got coverage reporters. Those four report ABSOLUTE
 	// filesystem paths (Ruby's Coverage.result, V8's fileURLToPath, pcov), and
-	// corralCoverageReport skips relativisation entirely when the root is
-	// empty. Every downstream consumer — splitPreflightFindings,
+	// the shared parser (corralCoverageReport then, corralCoverageCounts now)
+	// skips relativisation entirely when the root is empty. Every downstream consumer — splitPreflightFindings,
 	// preflightState — keys on repo-RELATIVE paths, so nothing ever matched
 	// and every scan printed a confident "0 executed, N not measured" with
 	// Ran=true. Measured on the committed fixtures: ruby came back with 18
@@ -2887,24 +3013,34 @@ func (l *localExecutor) runPreflight(ctx context.Context, sources []string) repo
 	// SILENTLY and wrongly for any language added later; repo-root-by-default
 	// is correct for every filesystem-path reporter, so a new plugin has to
 	// opt OUT rather than remember to opt in.
-	repoRoot := l.repoDir
-	if langName == "go" {
-		// Go's coverage profile paths are import paths, not filesystem
-		// paths, on EITHER substrate — always need the module prefix to
-		// strip it back to a repo-relative path (see go.go's ParseCoverage).
-		//
-		// Fail-closed on a go.mod this cannot parse: without the prefix
-		// nothing aligns and the report would be a confident
-		// `0 executed, 0 findings, N not measured` — the silent empty result
-		// (see goModulePath).
-		mp, merr := goModulePath(l.repoDir)
-		if merr != nil {
-			return reposcan.CoverageMap{Note: fmt.Sprintf("preflight: cannot determine the Go module path, so no coverage path could be resolved: %v", merr)}
-		}
-		repoRoot = mp
+	repoRoot, merr := l.coverageModulePath(langName)
+	if merr != nil {
+		return reposcan.CoverageMap{Note: fmt.Sprintf("preflight: %v", merr)}
 	}
 
 	return reposcan.Preflight(ctx, runner, files, plug, testCmd, repoRoot)
+}
+
+// coverageModulePath is the root a CoverageReporter's CoverageCounts aligns
+// its paths against — the repository's filesystem root, or, for Go, the
+// module path — for the coverage pre-flight and the unit evidence pass
+// alike, so the two cannot drift in how they read a report.
+//
+// Go's coverage profile paths are import paths, not filesystem paths, on
+// EITHER substrate — always need the module prefix to strip it back to a
+// repo-relative path (see go.go's ParseCoverage). Fail-closed on a go.mod
+// this cannot parse: without the prefix nothing aligns and the report would
+// be a confident `0 executed, 0 findings, N not measured` — the silent
+// empty result (see goModulePath).
+func (l *localExecutor) coverageModulePath(langName string) (string, error) {
+	if langName != "go" {
+		return l.repoDir, nil
+	}
+	mp, err := goModulePath(l.repoDir)
+	if err != nil {
+		return "", fmt.Errorf("cannot determine the Go module path, so no coverage path could be resolved: %w", err)
+	}
+	return mp, nil
 }
 
 // pendingSelectionCachePut is a MISS's raw evidence, held on the executor
@@ -3084,6 +3220,17 @@ func (l *localExecutor) collectSelection(ctx context.Context, sources []string) 
 	return ev
 }
 
+// selectionMethod is the scan's test-selection method for auditConfigKey:
+// "coverage-context" when the selection pass produced evidence, else "". It
+// reads the selection pass ONLY — the unit pass (l.units) decides candidacy,
+// never how a file is graded, so it must not move the key.
+func (l *localExecutor) selectionMethod() string {
+	if l.selection.Ran {
+		return "coverage-context"
+	}
+	return ""
+}
+
 // collectSelectionEvidence is reposcan.CollectSelectionEvidence behind a
 // package var, the same seam newWorkspacePool/probeWorkspacePool use: it is
 // the one call in collectSelection that runs the project's whole suite, and a
@@ -3120,49 +3267,19 @@ func selectionCmdDigest(cmd []string) string {
 // feature's whole tri-state contract exists to prevent, so the caller
 // reports the failure instead (see runPreflight).
 //
-// Both legal spellings the earlier prefix-cut mis-parsed are handled: a
-// quoted path (`module "example.com/x"`, and its backquoted variant) and a
-// trailing `//` comment (`module example.com/x // v2`), plus tab separation.
+// The directive itself is parsed by lang.GoModuleDirective, which unit
+// evidence also reads go.mod text through.
 func goModulePath(repoDir string) (string, error) {
 	p := filepath.Join(repoDir, "go.mod")
-	f, err := os.Open(p) // #nosec G304,G703 -- repoDir is the operator's own --repo
+	text, err := os.ReadFile(p) // #nosec G304,G703 -- repoDir is the operator's own --repo
 	if err != nil {
 		return "", fmt.Errorf("reading %s: %w", p, err)
 	}
-	defer func() { _ = f.Close() }()
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		rest, ok := strings.CutPrefix(line, "module")
-		if !ok {
-			continue
-		}
-		// "module" must be its own token: `moduleX ...` is not the
-		// directive, while `module\tpath` is.
-		if rest != "" && !strings.ContainsAny(rest[:1], " \t") {
-			continue
-		}
-		// A `//` comment may trail the directive; everything after it is
-		// commentary, not part of the path.
-		if i := strings.Index(rest, "//"); i >= 0 {
-			rest = rest[:i]
-		}
-		rest = strings.TrimSpace(rest)
-		// go.mod tokens may be quoted (") or raw-quoted (`).
-		if len(rest) >= 2 {
-			if (rest[0] == '"' && rest[len(rest)-1] == '"') || (rest[0] == '`' && rest[len(rest)-1] == '`') {
-				rest = rest[1 : len(rest)-1]
-			}
-		}
-		if rest == "" {
-			return "", fmt.Errorf("%s has a module directive with no path", p)
-		}
-		return rest, nil
+	mp, err := lang.GoModuleDirective(string(text))
+	if err != nil {
+		return "", fmt.Errorf("%s has %v", p, err)
 	}
-	if serr := scanner.Err(); serr != nil {
-		return "", fmt.Errorf("reading %s: %w", p, serr)
-	}
-	return "", fmt.Errorf("%s has no module directive", p)
+	return mp, nil
 }
 
 // enumeratedSourcePaths reconstructs "every file reposcan.Enumerate treated
@@ -3197,7 +3314,7 @@ func enumeratedSourcePaths(cands []reposcan.Candidate, enumOnlyExcl []reposcan.E
 	}
 	for _, e := range enumOnlyExcl {
 		if e.Reason != reposcan.ReasonNoPairedTest && e.Reason != reposcan.ReasonAmbiguousTest &&
-			e.Reason != reposcan.ReasonUncovered && e.Reason != reposcan.ReasonImportOnly {
+			!reposcan.IsUncovered(e.Reason) && e.Reason != reposcan.ReasonImportOnly {
 			continue
 		}
 		if _, ok := lang.Detect(e.Path); ok {
@@ -3205,6 +3322,39 @@ func enumeratedSourcePaths(cands []reposcan.Candidate, enumOnlyExcl []reposcan.E
 		}
 	}
 	return out
+}
+
+// noEvidenceSourcesNote is why the evidence passes did not run on a scan that
+// left them no source (enumeratedSourcePaths was empty): the landing refused
+// every source it found, counted per language, or it found none in a
+// language corral audits. Said on the summary line, since a pass that never
+// ran prints no line of its own and "no selection evidence" alone is a zero
+// nobody explained (semver, Task 11a).
+func noEvidenceSourcesNote(excl []reposcan.Exclusion) string {
+	refused := map[string]int{}
+	for _, e := range excl {
+		if !reposcan.IsLandingRefusal(e.Reason) {
+			continue
+		}
+		name := "unknown-language"
+		if p, ok := lang.Detect(e.Path); ok {
+			name = p.Name()
+		}
+		refused[name]++
+	}
+	if len(refused) == 0 {
+		return "no source file in a language corral audits, so no evidence pass ran"
+	}
+	names := make([]string, 0, len(refused))
+	for n := range refused {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	parts := make([]string, len(names))
+	for i, n := range names {
+		parts[i] = fmt.Sprintf("%d %s source(s) test landing not built", refused[n], n)
+	}
+	return fmt.Sprintf("no source file can be audited yet (%s), so no evidence pass ran", strings.Join(parts, ", "))
 }
 
 // preflightFindings splits the enumerated source set into the three buckets
@@ -3524,16 +3674,43 @@ func printRunDisclosures(w io.Writer, ex *localExecutor, jobs []reposcan.Job) {
 // evidenceCanAttribute reports whether the scan's instrumented run can say
 // which sources a changed test at path defends: true for a file no plugin
 // claims (a fixture, a data file — the run is how anything about it is
-// learned) and for a language whose plugin reports coverage; false for a
-// language with no lang.CoverageReporter, whose tests no instrumented run can
-// attribute.
-func evidenceCanAttribute(path string) bool {
+// learned) and for a language whose plugin reports coverage AND that is one
+// of the scan's evidence languages (evidenceLangs, from preflightLanguages
+// over the same sources the run instruments); false otherwise, since no
+// instrumented run of this scan executes that language's suite.
+func evidenceCanAttribute(path string, evidenceLangs map[string]bool) bool {
 	p, ok := lang.Detect(path)
 	if !ok {
 		return true
 	}
+	if !evidenceLangs[p.Name()] {
+		return false
+	}
 	_, ok = p.(lang.CoverageReporter)
 	return ok
+}
+
+// writeEvidenceCache writes a fresh evidence pass's result to the selection
+// cache. A fresh selection MISS's raw evidence is held on the executor (see
+// pendingSelectionPut's own doc), and the unit pass's beside it (see
+// pendingUnitsPut), and written only once the run that produced it has
+// completed — the end of a real run, or of an --evidence dry run. Best
+// effort, like every write after a run: a lost cache row costs the NEXT scan
+// an instrumented run, never THIS scan's exit code.
+func writeEvidenceCache(ex *localExecutor, stderr io.Writer) {
+	if ex == nil || ex.selectionCache == nil {
+		return
+	}
+	if p := ex.pendingSelectionPut; p != nil {
+		if perr := ex.selectionCache.SelectionCachePut(context.Background(), p.TreeDigest, p.CmdDigest, p.Plugin, p.Substrate, p.Raw, ""); perr != nil {
+			fmt.Fprintf(stderr, "corral certify --repo: the selection cache was NOT written: %v\n", perr)
+		}
+	}
+	if p := ex.pendingUnitsPut; p != nil {
+		if perr := ex.selectionCache.SelectionCachePut(context.Background(), p.TreeDigest, p.CmdDigest, p.Plugin, p.Substrate, p.Raw, ""); perr != nil {
+			fmt.Fprintf(stderr, "corral certify --repo: the unit evidence cache was NOT written: %v\n", perr)
+		}
+	}
 }
 
 // candidacySummaryLine is the design's own required line: how many
@@ -3549,6 +3726,9 @@ func evidenceCanAttribute(path string) bool {
 // would call that "uncovered" on essentially every Python repo. It also
 // says WHICH basis produced these numbers, because a reader must never
 // mistake a pairing-only fallback's zeros for "nothing was uncovered".
+//
+// dryRun is a dry run that ran no evidence pass (no --evidence); a dry run
+// with --evidence measured, and reads as a real run does.
 func candidacySummaryLine(cands []reposcan.Candidate, excl []reposcan.Exclusion, evidenceOK, dryRun bool, selectionNote string) string {
 	evidencePaired, namePaired := 0, 0
 	for _, c := range cands {
@@ -3560,10 +3740,10 @@ func candidacySummaryLine(cands []reposcan.Candidate, excl []reposcan.Exclusion,
 	}
 	uncovered, importOnly := 0, 0
 	for _, e := range excl {
-		switch e.Reason {
-		case reposcan.ReasonUncovered:
+		switch {
+		case reposcan.IsUncovered(e.Reason):
 			uncovered++
-		case reposcan.ReasonImportOnly:
+		case e.Reason == reposcan.ReasonImportOnly:
 			// Counted on its own, the same way uncovered is: a different,
 			// honest finding (executed, just never by a test directly —
 			// see ReasonImportOnly's own doc), not folded into uncovered's
@@ -3575,10 +3755,12 @@ func candidacySummaryLine(cands []reposcan.Candidate, excl []reposcan.Exclusion,
 	switch {
 	case dryRun:
 		// EXACT wording per the design's Dry-run honesty decision: a dry run
-		// never runs the suite, so it must never guess at coverage — pairing
-		// is all it has, and it says so rather than print zeros that would
-		// read as "the evidence measured this and found nothing".
-		line += " — uncovered/evidence-paired unknown without a run — pairing shown"
+		// without --evidence never runs the suite, so it must never guess at
+		// coverage — pairing is all it has, and it says where evidence
+		// pairing does run rather than print zeros that would read as "the
+		// evidence measured this and found nothing". A dry run WITH
+		// --evidence is passed here as false: it measured, like a real run.
+		line += " — evidence pairing runs on a real run or with --dry-run --evidence"
 	case !evidenceOK:
 		// selectionNote is ex.selection.Note (empty when there was never an
 		// executor to ask, e.g. a scan that skipped evidence collection
@@ -3603,7 +3785,11 @@ func candidacySummaryLine(cands []reposcan.Candidate, excl []reposcan.Exclusion,
 // convention); an evidence-only candidate took neither, so it gets its own
 // disclosure line rather than being silently indistinguishable from a
 // convention-paired one.
-func printEvidencePairings(w io.Writer, cands []reposcan.Candidate) {
+//
+// The covering count is the index's own unit: tests for a per-test index
+// (Candidate.CoveringTests), test UNITS for a unit-kind one (UnitsFor),
+// which leaves CoveringTests nil by design.
+func printEvidencePairings(w io.Writer, cands []reposcan.Candidate, idx reposcan.EvidenceIndex) {
 	var evidenceOnly []reposcan.Candidate
 	for _, c := range cands {
 		if c.TestPath == "" {
@@ -3614,6 +3800,11 @@ func printEvidencePairings(w io.Writer, cands []reposcan.Candidate) {
 		if i == maxListedExclusions {
 			fmt.Fprintf(w, "    ... and %d more paired by evidence\n", len(evidenceOnly)-maxListedExclusions)
 			break
+		}
+		if idx.UnitKind() {
+			n, _ := idx.UnitsFor(c.Path)
+			fmt.Fprintf(w, "    %s paired by evidence: %d covering test unit(s), authored test lands beside %s\n", c.Path, n, c.CoveringTestPath)
+			continue
 		}
 		n := 0
 		if c.CoveringTests != nil {
@@ -4712,6 +4903,42 @@ type localExecutor struct {
 	// collected fresh (a cache hit, no cache wired, or the pass did not run
 	// at all).
 	pendingSelectionPut *pendingSelectionCachePut
+
+	// units is the scan's unit evidence pass (collectUnits): each test
+	// UNIT the operator's command collects, run alone under coverage, for
+	// a language with no per-test selector. It decides CANDIDACY only —
+	// which unpaired files an execution pairs — and never grading:
+	// selectionMethod reads selection, never units, so no cache key moves.
+	// Zero value: no pass ran.
+	units reposcan.UnitEvidence
+	// unitsDuration is how long the pass's own runs took, measured around
+	// them as selectionDuration is; zero when nothing ran (a cache hit, a
+	// refusal before any run).
+	unitsDuration time.Duration
+	// unitsReused is set when collectUnits served a cache HIT.
+	unitsReused bool
+	// unitWorkers is how many units run at once: the scan's own worker
+	// setting (resolveScanWorkers — --swarm on the jail, one on the
+	// workspace, whose one checkout the units share), set where the
+	// executor is built. Never a number of the pass's own.
+	unitWorkers int
+	// unitInventory is every file the scan's enumeration classified in the
+	// checkout (checkoutInventory), over the WHOLE repository, never only
+	// --path's subtree, set before collectUnits: on the workspace substrate
+	// the landing map is built from it (workspaceLandingFiles), and a unit's
+	// test outside the scope is still a landing (B5). The jail's landing map
+	// is its seed, which holds the whole repository already.
+	unitInventory []string
+	// unitLanding is the repository the unit pass lands tests in
+	// (reposcan.UnitTestFile's files): the jail seed's files, or the
+	// workspace map. nil when it could not be built, and unitLandingNote
+	// then says why.
+	unitLanding     map[string]string
+	unitLandingNote string
+	// pendingUnitsPut is pendingSelectionPut's twin for a unit pass in
+	// which every unit succeeded (reposcan.UnitEvidence.Settled), written
+	// at the same point.
+	pendingUnitsPut *pendingSelectionCachePut
 
 	// writerMode is the scan-wide --writer-mode, carried onto every job's
 	// localAuditInput. Resolved and validated once at the flag boundary.

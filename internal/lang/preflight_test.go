@@ -100,7 +100,7 @@ func TestPythonPreflightHonorsEnvPrefixedOperatorCommand(t *testing.T) {
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	p, _ := ByName("python")
-	if err := p.Preflight([]string{"PYTHONPATH=src", "pytest", "-q"}); err != nil {
+	if err := p.Preflight("", []string{"PYTHONPATH=src", "pytest", "-q"}); err != nil {
 		t.Fatalf("an env-assignment-prefixed operator command must not be refused as if PYTHONPATH=src were the executable, got: %v", err)
 	}
 }
@@ -118,7 +118,7 @@ func TestPythonPreflightHonorsEnvPrefixedOperatorCommand(t *testing.T) {
 // instead of erroring on "cd" specifically.
 func TestPythonPreflightFallsBackForShellCompoundOperatorCommand(t *testing.T) {
 	p, _ := ByName("python")
-	err := p.Preflight([]string{"cd", "sub", "&&", "pytest", "-q"})
+	err := p.Preflight("", []string{"cd", "sub", "&&", "pytest", "-q"})
 	// Whatever the stock check decides (host-dependent: pass if this test
 	// host has python3+pytest, fail otherwise) is fine — the property this
 	// test pins is that it is NOT the "cd" naming error a literal-testCmd[0]
@@ -175,7 +175,7 @@ func TestPythonPreflightProbeTimesOutRatherThanHanging(t *testing.T) {
 
 	p, _ := ByName("python")
 	start := time.Now()
-	err := p.Preflight([]string{hung, "-m", "pytest", "-q"})
+	err := p.Preflight("", []string{hung, "-m", "pytest", "-q"})
 	elapsed := time.Since(start)
 
 	if err == nil {
@@ -209,7 +209,7 @@ func TestPythonPreflightStockDefaultProbeAlsoTimesOut(t *testing.T) {
 
 	p, _ := ByName("python")
 	start := time.Now()
-	err := p.Preflight(nil)
+	err := p.Preflight("", nil)
 	elapsed := time.Since(start)
 
 	if err == nil {
@@ -251,7 +251,7 @@ func TestPythonPreflightProbeDoesNotLeakProcesses(t *testing.T) {
 	}
 
 	plug, _ := ByName("python")
-	if err := plug.Preflight([]string{p, "-m", "pytest", "-q"}); err == nil {
+	if err := plug.Preflight("", []string{p, "-m", "pytest", "-q"}); err == nil {
 		t.Fatal("Preflight must fail on a hung probe binary")
 	}
 

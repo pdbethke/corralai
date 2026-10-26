@@ -1,10 +1,20 @@
-Captured by scripts/capture-runner-fixtures.sh on 2026-10-16.
+Captured by scripts/capture-runner-fixtures.sh on 2026-10-25.
 jest 30.5.2, vitest 3.2.7, mocha 11.8.0 (npm); PHPUnit 11.5.57 (composer)
-node v22.23.3; rspec-core 3.13.6
+node v22.23.4; rspec-core 3.13.6
 Launchers: npm 10.9.9 and pnpm 9.15.9 take extra script arguments after --,
 yarn 1.22.22 takes them directly, composer 2.9.5 after --.
-Suites: src/ (rspec-join-list.json: spec/join_spec.rb, added 2026-10-18 with rspec-core 3.13.6). Each *-list file is the stdout of that runner's list command
+Suites: src/. Each *-list file is the stdout of that runner's list command
+(*-units files, added 2026-10-25 on node v22.23.4: the unit listing under
+its working-directory prelude, the capture directory written as /fixture)
 (jest and mocha JSON reduced to the fields the parsers read).
 Each *-fail, *-suitefail, *-loadfail and *-hookfail file is stdout+stderr of
 the runner's DEFAULT command on src/fail, not a TTY, as the jail runs it;
 minitest 5.20.0.
+Go, Ruby, PHP and Rust units and the *-help files (added 2026-10-25): go1.26.7,
+gotestsum 1.13.0 (go install), PHP 8.5.4,
+cargo 1.90.0, cargo-nextest 0.9.148 (cd1d6d546 2026-10-07).
+*-help files are each runner's --help; libtest-help.txt is a cargo-built test binary's.
+cargo-units-jail.txt (added 2026-10-25, cargo 1.90.0): the cargo-units.txt
+listing from a clean target dir with stderr on the same stream, as the jail
+returns a run's output; cargo's Compiling/Finished lines sit between its
+JSON messages.

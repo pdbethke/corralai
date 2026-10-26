@@ -156,7 +156,8 @@ func (s *scanEventSink) drain() []scanstore.Event {
 // `code` and `dev_test_code` are the only two any emit in internal/advpool
 // produces today (audited beat by beat: pool_subject, phase_pool,
 // phase_generation, pool_shard, pool_dev_adequacy, phase_authored_pass,
-// phase_critic, pool_verdict, plus the scan-scoped phase_selection). The
+// phase_critic, pool_verdict, plus the scan-scoped phase_selection and
+// phase_units). The
 // rest are named in advance because this is a leak that is invisible until
 // someone reads a warehouse: a future emit that reaches for the obvious name
 // is redacted on arrival instead of shipping source for a release.

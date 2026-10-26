@@ -11,6 +11,20 @@ import (
 // vitestFilters are vitest's name filters, in both spellings it accepts.
 var vitestFilters = []string{"-t", "--testNamePattern", "--test-name-pattern"}
 
+// vitestShortFlags are vitest 3.2.7's other single-letter options (version,
+// root, config, update, watch, help). Its option parser (cac, over mri)
+// reads a bundle letter by letter and hands the next word to the last:
+// `vitest run -ut 'a one'` ran 1 of the file's 2 tests (measured), a name
+// filter hasFlag cannot see.
+const vitestShortFlags = "vrcuwh"
+
+// vitestNarrowable is narrowable for a vitest command, refusing a name
+// filter set inside a bundle of short options after the vitest word too.
+func vitestNarrowable(argv []string) bool {
+	i := max(vitestIndex(argv), 0)
+	return narrowable(argv, vitestFilters...) && !shortBundleSets(argv[i:], vitestShortFlags, "t")
+}
+
 // vitestIndex is the position of the word that is vitest in argv: the vitest
 // binary, or its entry script run by a host interpreter
 // (`node ./node_modules/vitest/vitest.mjs`, the shape AGENTS.md gives for the
@@ -29,7 +43,7 @@ func vitestIndex(argv []string) int {
 // run/watch/dev replaced, else mode inserted after the vitest word.
 func vitestWithMode(argv []string, mode string) ([]string, bool) {
 	i := vitestIndex(argv)
-	if i < 0 || !narrowable(argv, vitestFilters...) {
+	if i < 0 || !vitestNarrowable(argv) {
 		return nil, false
 	}
 	cmd := slices.Clone(argv)
@@ -74,4 +88,62 @@ func vitestSingleCmd(argv []string, testPath, id string) ([]string, bool) {
 		return nil, false
 	}
 	return append(cmd, "-t", "^"+jsRegexQuote(fullName(id))+"$", testPath), true
+}
+
+// vitestListUnits is vitest's own `list --filesOnly` over argv: the test
+// files argv collects, collected and not run. --json comes last so it is
+// read as a flag, not as the file to write the list to, and prints each file
+// as an absolute path (verified on vitest 3.2.7; the plain-text form is
+// relative to the configured root, which need not be the working directory).
+func vitestListUnits(argv []string) ([]string, bool) {
+	cmd, ok := vitestWithMode(argv, "list")
+	if !ok {
+		return nil, false
+	}
+	return append(cmd, "--filesOnly", "--json"), true
+}
+
+// vitestParseUnits reads `list --filesOnly --json`'s array of files. A file
+// in two projects is listed twice; ParseUnitList keeps it once.
+func vitestParseUnits(stdout string) []string {
+	var files []struct {
+		File string `json:"file"`
+	}
+	if !decodeArray(stdout, &files) {
+		return nil
+	}
+	paths := []string{}
+	for _, f := range files {
+		paths = append(paths, f.File)
+	}
+	return paths
+}
+
+// vitestUnitCmd runs one test file: argv under `run`, without its shard
+// (withoutFlag), with the operator's file filters replaced by the unit, since vitest runs the files ANY filter
+// matches. A bare word after a flag written without "=" may be that flag's
+// value or a filter, and vitest's options are too many to tell, so such a
+// command has no unit form.
+func vitestUnitCmd(argv []string, unit string) ([]string, bool) {
+	cmd, ok := vitestWithMode(argv, "run")
+	if unit == "" || !ok {
+		return nil, false
+	}
+	i := vitestIndex(cmd) + 2 // past the vitest word and `run`
+	flags, ok := dropFileArgs(withoutFlag(cmd[i:], "--shard"), true, func(string) (bool, bool) { return false, false })
+	if !ok {
+		return nil, false
+	}
+	return append(append(slices.Clone(cmd[:i]), flags...), unit), true
+}
+
+// vitestUnitCoruns: vitest selects the files whose path, relative to its
+// root, contains a filter — the filter as given, or made relative to that
+// root — ignoring case (vitest 3.2.7's filterFiles). The root may sit below
+// the working directory the unit is named from, where the filter shrinks to
+// as little as the base name (measured: `vitest run --root units/collide
+// units/collide/a.vitest.test.mjs` also ran xa.vitest.test.mjs), so unit
+// coruns other whenever other contains unit's base name.
+func vitestUnitCoruns(unit, other string) bool {
+	return unit != other && strings.Contains(strings.ToLower(other), strings.ToLower(filepath.Base(unit)))
 }

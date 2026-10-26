@@ -352,7 +352,7 @@ func TestPHPSandboxProbeIsTheJailsHalf(t *testing.T) {
 	cmd := []string{"php9.9", "vendor/bin/phpunit"}
 
 	p, _ := ByName("php")
-	if err := p.Preflight(cmd); err != nil {
+	if err := p.Preflight("", cmd); err != nil {
 		t.Fatalf("Preflight must admit an interpreter the HOST can run — it runs on every substrate: %v", err)
 	}
 	err := JailPreflight(p, cmd)

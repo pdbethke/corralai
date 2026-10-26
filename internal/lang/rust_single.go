@@ -17,15 +17,14 @@ func libtestListCmd(testCmd []string, _ string) ([]string, bool) {
 // nextestListCmd lists the tests a `cargo nextest run` command runs: its own
 // `list` subcommand in place of `run`, in its one-line format, with the
 // operator's arguments to the test binaries dropped since listing runs none
-// of them.
+// of them, and the run-only options list refuses (nextestListArgs).
 func nextestListCmd(testCmd []string, _ string) ([]string, bool) {
 	head, _ := splitAtDashDash(testCmd)
 	i := slices.Index(head, "run")
 	if i < 0 {
 		return nil, false
 	}
-	cmd := slices.Clone(head)
-	cmd[i] = "list"
+	cmd := append(append(slices.Clone(head[:i]), "list"), nextestListArgs(head[i+1:])...)
 	return append(cmd, "--message-format", "oneline"), true
 }
 
@@ -84,6 +83,9 @@ func nextestSingleCmd(testCmd []string, _, id string) ([]string, bool) {
 			strings.HasPrefix(a, "--filterset=") || strings.HasPrefix(a, "--filter-expr=") {
 			return nil, false
 		}
+	}
+	if shortBundleSets(head, nextestShortFlags, "E") {
+		return nil, false
 	}
 	cmd := append(slices.Clone(head), "-E", "test(="+id+")")
 	return append(cmd, tail...), true

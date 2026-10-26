@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -50,15 +51,23 @@ func TestLLMDeriverReturnsTheGoalText(t *testing.T) {
 	}
 }
 
-// An empty or refusing reply is the file's property, not an outage.
-func TestLLMDeriverEmptyReplyIsNotAnError(t *testing.T) {
-	d := llmDeriver{b: &fakeBackend{reply: "   "}}
+// AN EMPTY REPLY IS THE SEAT'S FAILURE, NEVER THE FILE'S PROPERTY (B6). Only
+// an explicit NONE says the file has no testable property. An empty reply
+// says the seat produced nothing — an agent CLI whose headless run returned
+// no text, a provider that answered with no content — and reading it as
+// NONE excluded a 41 KB service as "purely declarative". It is an error, so
+// the file is derive-failed and the scan says the seat failed.
+func TestLLMDeriverEmptyReplyIsAnErrorNotUngoaled(t *testing.T) {
+	d := llmDeriver{b: &fakeBackend{reply: "   "}, model: "claude-code"}
 	_, ok, err := d.Derive(context.Background(), reposcan.Candidate{Path: "a.go"}, "x")
-	if err != nil {
-		t.Fatalf("empty reply must not be an error: %v", err)
+	if err == nil || ok {
+		t.Fatalf("an empty reply must be an error, not ungoaled: ok=%v err=%v", ok, err)
 	}
-	if ok {
-		t.Fatal("empty reply must be ungoaled")
+	if !strings.Contains(err.Error(), "claude-code") || !strings.Contains(err.Error(), "empty") {
+		t.Errorf("the error must name the seat and say the reply was empty: %v", err)
+	}
+	if _, ok, err := (llmDeriver{b: &fakeBackend{reply: "NONE"}}).Derive(context.Background(), reposcan.Candidate{Path: "a.go"}, "x"); err != nil || ok {
+		t.Errorf("an explicit NONE stays ungoaled: ok=%v err=%v", ok, err)
 	}
 }
 
@@ -175,5 +184,47 @@ func TestTheDeriverJoinsTheScansModelCalls(t *testing.T) {
 	// contributes nothing and does not break the scan's rows.
 	if rows := scanModelCallRowsWith(nil, nil); len(rows) != 0 {
 		t.Fatalf("no deriver, no rows: %+v", rows)
+	}
+}
+
+// gp1Store holds one row the way every goal cache written before 85f5afae
+// may: an EMPTY derive reply cached as ungoaled under prompt revision gp1.
+type gp1Store struct{ asked []string }
+
+func (s *gp1Store) GoalCacheGet(_ context.Context, path, _, _, promptRev string) (string, string, bool, bool, error) {
+	s.asked = append(s.asked, promptRev)
+	if promptRev == "gp1" {
+		return "", "", true, true, nil
+	}
+	return "", "", false, false, nil
+}
+func (s *gp1Store) GoalCachePut(context.Context, string, string, string, string, string, string, bool) error {
+	return nil
+}
+
+type countingGoalSource struct{ calls int }
+
+func (c *countingGoalSource) GoalFor(reposcan.Candidate) (reposcan.Goal, bool, error) {
+	c.calls++
+	return reposcan.Goal{Text: "a goal", Provenance: "derived:m@v"}, true, nil
+}
+
+// A GOAL CACHE WRITTEN BEFORE THE EMPTY-REPLY FIX IS NOT SERVED (ruling R28).
+// Under gp1 an empty derive reply was cached as ungoaled, so a cache built by
+// a run like B6's would keep answering "no testable property" with no model
+// asked. GoalPromptRev moved to gp2, which keys every row gp1 wrote apart:
+// such a row is a miss, and the file is derived again.
+func TestAGoalCachedUnderGP1IsAMiss(t *testing.T) {
+	if GoalPromptRev == "gp1" {
+		t.Fatalf("GoalPromptRev is still gp1: rows that cached an empty reply as ungoaled would be served")
+	}
+	root := t.TempDir()
+	mustWrite(t, filepath.Join(root, "a.go"), "package a\n")
+	inner := &countingGoalSource{}
+	store := &gp1Store{}
+	gs := reposcan.NewCachingGoalSource(root, inner, store, "claude-code", GoalPromptRev, true)
+	g, ok, err := gs.GoalFor(reposcan.Candidate{Path: "a.go", Lang: "go"})
+	if err != nil || !ok || g.Text != "a goal" || inner.calls != 1 {
+		t.Errorf("a gp1 ungoaled row was served: goal=%+v ok=%v err=%v inner calls=%d (store asked under %q)", g, ok, err, inner.calls, store.asked)
 	}
 }

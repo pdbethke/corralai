@@ -275,7 +275,7 @@ func jsNames(id string) string { return jsRegexQuote(fullName(id)) }
 // so a passing test whose name differs only in case is skipped too — a
 // narrower exam, never a wrong one.
 func jestDeselectCmd(argv, ids []string) ([]string, bool) {
-	if len(ids) == 0 || !narrowable(argv, jestFilters...) {
+	if len(ids) == 0 || !jestNarrowable(argv) {
 		return nil, false
 	}
 	return append(slices.Clone(argv), "--testNamePattern", "^(?!(?:"+alternation(ids, jsNames)+")$)"), true
@@ -284,7 +284,7 @@ func jestDeselectCmd(argv, ids []string) ([]string, bool) {
 // vitestDeselectCmd is jest's lookahead on vitest's -t. The command is the
 // operator's as it stands: it already ran once to fail, so no mode is added.
 func vitestDeselectCmd(argv, ids []string) ([]string, bool) {
-	if len(ids) == 0 || vitestIndex(argv) < 0 || !narrowable(argv, vitestFilters...) {
+	if len(ids) == 0 || vitestIndex(argv) < 0 || !vitestNarrowable(argv) {
 		return nil, false
 	}
 	return append(slices.Clone(argv), "-t", "^(?!(?:"+alternation(ids, jsNames)+")$)"), true

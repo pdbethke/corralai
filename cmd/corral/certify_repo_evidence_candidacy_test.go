@@ -20,9 +20,9 @@ import (
 // run honesty decision: --dry-run never runs the suite, so it must never
 // widen candidacy by a measurement it does not have — mypkg/core.py (covered
 // only by tests/test_smoke.py, no filename pairing) stays UNPAIRED, and the
-// summary says outright that uncovered/evidence-paired is unknown without a
-// run rather than silently printing zeros a reader could mistake for "the
-// evidence measured this and found nothing".
+// summary says outright that evidence pairing runs only on a real run or
+// with --dry-run --evidence, rather than silently printing zeros a reader
+// could mistake for "the evidence measured this and found nothing".
 func TestCertifyRepoDryRunNeverWidensCandidacyByEvidence(t *testing.T) {
 	root := t.TempDir()
 	preflightUnpairedPythonFixture(t, root)
@@ -42,7 +42,7 @@ func TestCertifyRepoDryRunNeverWidensCandidacyByEvidence(t *testing.T) {
 	if strings.Contains(s, "paired by evidence") {
 		t.Errorf("a dry run must print no evidence-paired candidate at all:\n%s", s)
 	}
-	if !strings.Contains(s, "uncovered/evidence-paired unknown without a run — pairing shown") {
+	if !strings.Contains(s, " — evidence pairing runs on a real run or with --dry-run --evidence") {
 		t.Errorf("missing the dry-run honesty line, verbatim:\n%s", s)
 	}
 }

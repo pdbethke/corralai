@@ -22,6 +22,33 @@ type CoverageReporter interface {
 	// modulePath is the language's path prefix to strip ("" when unused).
 	// Pure. An unparseable report is an ERROR, never an empty map.
 	ParseCoverage(stdout, modulePath string) (executed map[string]bool, err error)
+
+	// CoverageCounts reads the same report as per-file LINE COUNTS: how
+	// many of the file's executable lines the run executed, out of how many
+	// it measured. It keeps ParseCoverage's tri-state — present with
+	// Executed>0 is executed, present with Executed==0 is measured and never
+	// run, ABSENT is never measured — and ParseCoverage agrees with it
+	// (executed[p] == (counts[p].Executed > 0)), which
+	// TestParseCoverageAgreesWithCoverageCounts holds, with ONE allowed
+	// divergence: Go's ParseCoverage may be true while Executed==0, and only
+	// when every block of that file that ran has zero statements (an empty
+	// function body, whose block is entered but adds nothing to a statement
+	// count). That file read executed before counts existed and must not
+	// move; evidence pairing reads Executed, so such a file is never
+	// promoted by unit evidence. No other reporter may diverge. An unparseable report
+	// is an ERROR, and a reporter never makes up a count it was not given.
+	//
+	// The counts exist so evidence can name the test unit that executed
+	// MOST of a file, which a boolean cannot rank.
+	CoverageCounts(stdout, modulePath string) (map[string]LineCounts, error)
+}
+
+// LineCounts is one file's line coverage from one report: Executed of its
+// Executable lines ran. What counts as an executable line is each
+// instrument's own answer (see each reporter's CoverageCounts), so counts
+// rank units within one language and are never compared across languages.
+type LineCounts struct {
+	Executed, Executable int
 }
 
 // goPlugin implements CoverageReporter; verified against corral's own suite
@@ -54,3 +81,26 @@ var _ CoverageReporter = tsPlugin{}
 // EXTENSION — see phpPlugin.CoverageCmd for why that is disclosed rather than
 // worked around.
 var _ CoverageReporter = phpPlugin{}
+
+// rustPlugin implements CoverageReporter with the toolchain's own
+// instrumentation (rustc's -C instrument-coverage and the llvm-tools rustup
+// component), not cargo-llvm-cov: that is a separate install the audited
+// repository may not have, and what it does here is three commands
+// rustPlugin.CoverageCmd's script runs itself. A toolchain without
+// llvm-tools is disclosed as unavailable, never read as an empty report.
+var _ CoverageReporter = rustPlugin{}
+
+// executedFromCounts is ParseCoverage derived from CoverageCounts, the one
+// place the rule lives for every reporter but Go (whose one allowed
+// divergence is stated on CoverageReporter.CoverageCounts): a file is executed when any of its lines ran, and the
+// key set — the tri-state's third state — is carried over unchanged.
+func executedFromCounts(counts map[string]LineCounts, err error) (map[string]bool, error) {
+	if err != nil {
+		return nil, err
+	}
+	executed := make(map[string]bool, len(counts))
+	for p, c := range counts {
+		executed[p] = c.Executed > 0
+	}
+	return executed, nil
+}

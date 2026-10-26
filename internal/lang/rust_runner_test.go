@@ -149,7 +149,7 @@ func TestRustJailPreflightUserHomeProxyNeedsTheSystemToolchain(t *testing.T) {
 	fakeHomeCargo(t, true)
 	withSystemRustupHome(t, t.TempDir()) // exists, but holds no toolchains
 
-	if err := (rustPlugin{}).Preflight([]string{"cargo", "test"}); err != nil {
+	if err := (rustPlugin{}).Preflight("", []string{"cargo", "test"}); err != nil {
 		t.Fatalf("Preflight must admit a stock ~/.cargo rustup install — nothing it checks needs a jail: %v", err)
 	}
 	p, _ := ByName("rust")
@@ -209,7 +209,7 @@ func TestRustJailPreflightNonProxyUserHomeCargoPasses(t *testing.T) {
 // layout is the jail's requirement, and a workspace run has no jail.
 func TestRustPreflightMissingCargoSaysOnlyThatItIsMissing(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
-	err := rustPlugin{}.Preflight([]string{"cargo", "test"})
+	err := rustPlugin{}.Preflight("", []string{"cargo", "test"})
 	if err == nil || !strings.Contains(err.Error(), `"cargo" not found on PATH`) {
 		t.Fatalf("a missing cargo must be refused as missing, got: %v", err)
 	}

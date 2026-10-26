@@ -1,0 +1,5 @@
+# suite-exit 0
+corral-rust-coverage: v2
+3 6 src/calc.rs
+0 4 src/dead.rs
+3 3 tests/calc_test.rs

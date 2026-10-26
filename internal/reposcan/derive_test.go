@@ -261,3 +261,15 @@ func TestDeriverStopsAtAnInterruptWithoutRetrying(t *testing.T) {
 		t.Fatalf("deriver called %d times and slept %d times, want 1 and 0", f.calls, slept)
 	}
 }
+
+// A Deriver that says ok with no text produced nothing: an error, so the
+// file is derive-failed, never ungoaled (B6). Only ok=false — the model's
+// explicit "no testable property" — is ungoaled.
+func TestDeriverOKWithEmptyTextIsAnError(t *testing.T) {
+	root := derivRoot(t)
+	gs := NewDerivingGoalSource(root, &fakeDeriver{ok: true, text: "  "}, "m", "v", 1)
+	_, ok, err := gs.GoalFor(Candidate{Path: "pkg/a.go", TestPath: "pkg/a_test.go"})
+	if err == nil || ok {
+		t.Fatalf("ok with an empty goal must be an error: ok=%v err=%v", ok, err)
+	}
+}

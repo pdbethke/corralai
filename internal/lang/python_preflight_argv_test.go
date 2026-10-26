@@ -39,7 +39,7 @@ func TestPythonPreflightHonorsExplicitVenvInterpreter(t *testing.T) {
 	venvPython := writeFakeExe(t, dir, "python", "pytest 7.4.0", 0)
 
 	p, _ := ByName("python")
-	if err := p.Preflight([]string{venvPython, "-m", "pytest", "-q"}); err != nil {
+	if err := p.Preflight("", []string{venvPython, "-m", "pytest", "-q"}); err != nil {
 		t.Fatalf("Preflight with an explicit, working venv interpreter must pass, got: %v", err)
 	}
 }
@@ -57,7 +57,7 @@ func TestPythonPreflightFailsClosedNamingTheOperatorsInterpreter(t *testing.T) {
 	brokenPython := writeFakeExe(t, dir, "python", "No module named pytest", 1)
 
 	p, _ := ByName("python")
-	err := p.Preflight([]string{brokenPython, "-m", "pytest", "-q"})
+	err := p.Preflight("", []string{brokenPython, "-m", "pytest", "-q"})
 	if err == nil {
 		t.Fatal("Preflight must fail closed when the operator's interpreter cannot import pytest")
 	}
@@ -73,7 +73,7 @@ func TestPythonPreflightFailsClosedNamingTheOperatorsInterpreter(t *testing.T) {
 func TestPythonPreflightFailsClosedForAnAbsentExplicitInterpreter(t *testing.T) {
 	p, _ := ByName("python")
 	missing := filepath.Join(t.TempDir(), "does-not-exist", "python")
-	err := p.Preflight([]string{missing, "-m", "pytest", "-q"})
+	err := p.Preflight("", []string{missing, "-m", "pytest", "-q"})
 	if err == nil {
 		t.Fatal("Preflight must fail closed for an interpreter path that does not exist")
 	}
@@ -88,7 +88,7 @@ func TestPythonPreflightBarePytestChecksThatBinaryDirectly(t *testing.T) {
 	fakePytest := writeFakeExe(t, dir, "pytest", "pytest 7.4.0", 0)
 
 	p, _ := ByName("python")
-	if err := p.Preflight([]string{fakePytest, "-q"}); err != nil {
+	if err := p.Preflight("", []string{fakePytest, "-q"}); err != nil {
 		t.Fatalf("Preflight with a working, explicitly-pathed pytest must pass, got: %v", err)
 	}
 }
@@ -101,13 +101,13 @@ func TestPythonPreflightBarePytestChecksThatBinaryDirectly(t *testing.T) {
 func TestPythonPreflightUnrecognizedShapeStillChecksPresence(t *testing.T) {
 	p, _ := ByName("python")
 
-	if err := p.Preflight([]string{"tox-wrapper-that-does-not-exist-anywhere", "-e", "py311"}); err == nil {
+	if err := p.Preflight("", []string{"tox-wrapper-that-does-not-exist-anywhere", "-e", "py311"}); err == nil {
 		t.Fatal("Preflight must still fail closed when the operator's own command binary is absent, even in an unrecognized shape")
 	}
 
 	dir := t.TempDir()
 	fakeTox := writeFakeExe(t, dir, "tox", "", 0)
-	if err := p.Preflight([]string{fakeTox, "-e", "py311"}); err != nil {
+	if err := p.Preflight("", []string{fakeTox, "-e", "py311"}); err != nil {
 		t.Fatalf("an unrecognized-but-present command must pass the presence check, got: %v", err)
 	}
 }

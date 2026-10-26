@@ -100,7 +100,12 @@ type Plugin interface {
 	// Preflight runs on EVERY substrate, so it checks only what every
 	// substrate needs. A requirement of the jail alone belongs to the
 	// optional JailPreflighter, which only jailed doors ask.
-	Preflight(testCmd []string) error
+	//
+	// repoRoot is the repository the run grades, "" when there is none
+	// (single-file mode, the brain): a project's own toolchain lives there
+	// (TypeScript's node_modules/.bin/tsc), and a plugin that can use it
+	// checks there before PATH.
+	Preflight(repoRoot string, testCmd []string) error
 	PromptLang() string       // human label, for verdict metadata + logs
 	TestWriterSystem() string // language-specific test-writer system prompt
 	MutantSystem() string     // language-specific mutant-generator system prompt

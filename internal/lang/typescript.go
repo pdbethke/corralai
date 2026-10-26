@@ -3,6 +3,8 @@
 package lang
 
 import (
+	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -122,7 +124,11 @@ func (tsPlugin) CompileCheck(codePath, testPath string) [][]string {
 		`extra=""; if [ -f corral-env.d.ts ]; then extra=",\"$PWD/corral-env.d.ts\""; fi; ` +
 		`printf '%s' "{\"compilerOptions\":{\"noEmit\":true,\"skipLibCheck\":true,\"target\":\"es2022\",\"module\":\"nodenext\",\"moduleResolution\":\"nodenext\",\"strict\":true,\"allowImportingTsExtensions\":true},\"files\":[` +
 		strings.Join(quoted, ",") + `$extra]}" > "$d/corral-tsc.json"; ` +
-		`tsc -p "$d/corral-tsc.json"; rc=$?; rm -rf "$d"; exit $rc`
+		// The project's own compiler first (Preflight's order, ruling
+		// R26), else tsc on PATH. On the workspace substrate PATH is the
+		// host's, which has no node_modules/.bin on it.
+		`if [ -x node_modules/.bin/tsc ]; then t="./node_modules/.bin/tsc"; elif [ -f node_modules/typescript/bin/tsc ]; then t="node ./node_modules/typescript/bin/tsc"; else t=tsc; fi; ` +
+		`$t -p "$d/corral-tsc.json"; rc=$?; rm -rf "$d"; exit $rc`
 	return [][]string{{"sh", "-c", script}}
 }
 
@@ -142,12 +148,41 @@ func (tsPlugin) HarnessFiles() []string { return jsPlugin{}.HarnessFiles() }
 // Plugin.Preflight's doc comment. tsc is checked UNCONDITIONALLY either way:
 // CompileCheck always invokes it directly, never via testCmd, so there is no
 // operator-supplied command to defer to for it.
-func (tsPlugin) Preflight(testCmd []string) error {
+//
+// The compiler is the PROJECT's own when it has one (B7, ruling R26): its
+// node_modules/.bin/tsc, or the typescript package's bin/tsc, ahead of a tsc
+// on PATH, on every substrate — the same order CompileCheck's script uses at
+// run time, so the check and the compile cannot disagree about which tsc. A
+// project-local TypeScript with no global one (REA) was refused here before
+// its first mutant.
+func (tsPlugin) Preflight(repoRoot string, testCmd []string) error {
 	if err := toolOnPath(preflightBin(testCmd, "node")); err != nil {
 		return err
 	}
-	return toolOnPath("tsc")
+	var looked []string
+	if repoRoot != "" {
+		for _, rel := range projectTscPaths {
+			p := filepath.Join(repoRoot, filepath.FromSlash(rel))
+			if fi, err := os.Stat(p); err == nil && fi.Mode().IsRegular() {
+				return nil
+			}
+			looked = append(looked, p)
+		}
+	}
+	if err := toolOnPath("tsc"); err != nil {
+		if len(looked) == 0 {
+			return err
+		}
+		return fmt.Errorf("lang: no TypeScript compiler: not the project's (%s) and not on PATH: %w", strings.Join(looked, ", "), err)
+	}
+	return nil
 }
+
+// projectTscPaths are where a project's own TypeScript compiler lives,
+// repository-relative, in the order Preflight and CompileCheck try them:
+// npm's bin link, then the package's own entry script (run with node, for a
+// tree installed without bin links).
+var projectTscPaths = []string{"node_modules/.bin/tsc", "node_modules/typescript/bin/tsc"}
 
 func (tsPlugin) PromptLang() string { return "TypeScript" }
 
@@ -213,6 +248,11 @@ func (tsPlugin) CoverageCmd(testCmd []string) (cmd []string, ok bool) {
 // ParseCoverage reads the same reduced report jsPlugin produces.
 func (tsPlugin) ParseCoverage(stdout, modulePath string) (executed map[string]bool, err error) {
 	return jsPlugin{}.ParseCoverage(stdout, modulePath)
+}
+
+// CoverageCounts reads the same reduced report jsPlugin produces.
+func (tsPlugin) CoverageCounts(stdout, modulePath string) (map[string]LineCounts, error) {
+	return jsPlugin{}.CoverageCounts(stdout, modulePath)
 }
 
 // LineComment is the typescript line-comment marker.

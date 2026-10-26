@@ -874,14 +874,16 @@ corral certify --repo . --dry-run --json     # the same inventory as data
 ```
 
 ```
-evidence-paired 0 · name-paired 28 · uncovered 0 · import-only 0 — uncovered/evidence-paired unknown without a run — pairing shown
+evidence-paired 0 · name-paired 28 · uncovered 0 · import-only 0 — evidence pairing runs on a real run or with --dry-run --evidence
 languages detected:
   python  28 source file(s): 6 auditable, 21 with no paired test, 1 ambiguous (+9 test file(s))
 ```
 
 The candidacy line (`evidence-paired · name-paired · uncovered · import-only`) is the
 v0.8.1 addition: `--dry-run` runs no suite, so `uncovered`/`evidence-paired` read 0
-and say so rather than implying a measurement — on a real run, evidence can widen
+and say so rather than implying a measurement. `--dry-run --evidence` runs the
+evidence pass in the sandbox (no model, no key) so the plan shows what a real run
+would audit — on a real run, evidence can widen
 candidacy past filename pairing (see below). Widened candidates compete under the
 same `--top` bound as everyone else: the report re-ranks and says `auditing N of M`
 once more, and N never exceeds what you asked for. Files under a language's test
@@ -930,6 +932,17 @@ execution evidence, never from filenames: scoping by the conventionally-paired
 test file was tried in July and inverted a verdict on `requests/adapters.py`
 (1.00 → 0.00) because that file's real tests live in `test_requests.py`.
 Coverage finds them; a filename rule cannot.
+
+The same idea reaches the other languages as **evidence pairing**. For Go,
+JavaScript, TypeScript, Ruby, PHP and Rust, a `certify --repo` run lists the
+test units your command collects (a test file, a Go package, a Cargo target),
+runs each alone under coverage, and makes a candidate of any source file a
+green unit executed and a test can land beside, even when no naming rule pairs
+it. `--dry-run --evidence` runs that pass for free. It is not universal: mocha,
+minitest and vitest's default forks pool give no unit evidence, and Rust's is
+measured but not yet used for candidacy. What ran on real repositories, and
+what did not, is in
+[docs/corral/evidence-pairing.md](docs/corral/evidence-pairing.md).
 
 Today this is implemented for Python (pytest with `pytest-cov`). A language
 or harness without a selector, a project without `pytest-cov`, or a run whose

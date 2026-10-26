@@ -63,7 +63,77 @@ history of any release, `git log v0.3.4..v0.3.5`.
   same chain, signature and record rules `corral verify` runs, compiled for
   the browser.
 
+- **Evidence pairing for Go, JavaScript, TypeScript, Ruby, PHP and Rust.**
+  A source file that no naming rule pairs with a test (commander.js's
+  behaviour-named `tests/command.help.test.js`, rainbow's `spec/unit/`
+  layout, gin's `render/` files) becomes auditable when a green test unit
+  executed it and a test can land beside it. A unit is what the command
+  collects: a test file for JavaScript, TypeScript, Ruby and PHP, a package
+  for Go, a Cargo target for Rust. On every `certify --repo` the unit pass
+  lists the units, runs each alone under coverage inside the sandbox, keeps a
+  unit's coverage only when that unit's own suite exited 0, and widens
+  candidacy by what executed. It runs apart from grading, within the
+  existing 15-minute selection limit for the whole pass, and a pass in which
+  every unit succeeded is cached. `certify --repo . --dry-run --evidence --
+  <your test command>` runs the same pass for free: no model, no key. What
+  ran on real repositories, with the commands and the output, is in
+  [docs/corral/evidence-pairing.md](docs/corral/evidence-pairing.md): gin
+  (+19 files), commander.js (+7, from 109 units), rainbow (+10), one
+  webmozart/assert file, and morluto/rea (+238 under `--path src`). Rust
+  gained a coverage pre-flight on the toolchain's own instrument-coverage; it
+  reports unavailable, with the `rustup component add llvm-tools` remedy,
+  where `llvm-tools` is missing. Jest and vitest code, which runs through
+  `node:vm`, is counted against the original files by a small preload corral
+  adds to `NODE_OPTIONS` (appended to any value you set) for a unit run: it
+  records the inline source map of code a runner evaluates through `node:vm`,
+  passes every argument and result through unchanged, and adds nothing to
+  your repository. A suite can still observe it as one more stack frame
+  inside those calls and in `Function.prototype.toString.call()` of the three
+  wrapped `vm` functions; the remaining traces are listed in the comment
+  above it in `internal/lang/javascript.go`.
+  **Known limits, each measured or read from the runner table:** mocha has no
+  one-file run, so a mocha command gets no unit evidence (express, run: "has
+  no one-unit form corral can list and run"); minitest has no listing mode, so
+  Ruby under minitest stays on name pairing; vitest's default `forks` pool
+  wrote no worker coverage on vitest 3.2.7, so run it with `--pool=threads`
+  (a forks-pool unit now says so on its line); vitest 1, 2 and 4 were not run.
+  Rust evidence is measured and shown, but not yet used for candidacy: a
+  promoted file would land its test in `tests/<name>.rs`, which reaches only
+  the public API, and the in-file `#[cfg(test)]` landing is not built
+  (indexmap: 0 promoted, 5 units run). Go and Rust coverage cannot tell a
+  file a unit only loaded from dead code, because neither counts code outside
+  a function; JavaScript, TypeScript, Ruby and PHP report such a file
+  `import-only` (Ruby and PHP from a captured fixture run: a required class
+  whose method is never called). In the jail, a Go or Rust toolchain under
+  `$HOME` or rspec under `~/.local/share/gem` is not visible (install under
+  `/usr`, or use `--substrate workspace` on a scratch clone), and a clone
+  holding more than 64 MiB of text cannot be seeded (REA's built `dist/`).
+
 ### Changed
+
+- **`VerdictGeneration` is now 34, so every cached verdict is measured once
+  more.** Three things in this release can move a verdict: jest and vitest
+  one-test and salvage commands refuse a name filter bundled into short
+  options (`-ct foo`), which a 33 verdict's commands accepted; pre-flight
+  results changed (a file with no executable lines is omitted rather than
+  reported as measured and never executed, the PHP pcov include marker is
+  fixed, and vitest's script-range check is new); and unit evidence changes
+  which files are audited in six languages. The shape is unchanged.
+- **A new record column, `covering_units`.** It holds how many test units
+  executed a file; `covering_tests` keeps meaning Python's per-test count and
+  stays NULL for unit evidence, so the two are never mixed.
+- **Go coverage that cannot be read is refused, not counted.** `ParseCoverage`
+  returns an error for a negative or non-numeric count instead of reading it.
+- **Under unit evidence, "uncovered" is scoped to the command.** A file no
+  unit executed is `uncovered — no test unit this command runs executes this
+  file`; Python's whole-suite wording is unchanged. A JavaScript or TypeScript
+  file a unit loaded but whose functions never ran is `import-only`. On REA
+  an earlier run printed 200 such files as uncovered; the corrected run
+  prints them as import-only.
+- **The dry-run summary suffix changed.** A plain `--dry-run` says
+  `evidence pairing runs on a real run or with --dry-run --evidence`, and a
+  scan that left the unit pass nothing to run says why instead of printing an
+  unexplained "no selection evidence".
 
 - **The GitHub Action now signs ledger entries keylessly by itself on a
   public repository.** When the `ledger` input is set, the repository is
@@ -112,6 +182,20 @@ history of any release, `git log v0.3.4..v0.3.5`.
   example `-- xvfb-run -a cargo nextest run`. If you ran corral itself under
   `xvfb-run`, move `xvfb-run` into the test command. The jail never passed
   these.
+
+### Fixed
+
+- **The jail binds the toolchain your test command names, and nothing a
+  repository's file names.** The jail found the programs to bind by
+  splitting corral's own coverage scripts at every space and `;`, quotes or
+  not. The JavaScript wrapper's `NODE_OPTIONS` value hid the operator's node,
+  so a jailed unit run with a node outside `/usr` failed `not found`
+  (commander.js, measured: all 109 units before the fix; 109 run, 4 failed,
+  7 promoted after it, the same as with the system node). A test file named
+  like `tests/x;/path/to/tool;.test.js` made the jail look up `/path/to/tool`
+  and bind its directory. The script is now read with the shell's own
+  quoting, and the JavaScript, TypeScript, Ruby and PHP wrappers pass your
+  command as arguments rather than splicing it into the script.
 
 ## [v1.0.0-rc.28] — 2026-10-21
 

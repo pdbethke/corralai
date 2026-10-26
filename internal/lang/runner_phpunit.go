@@ -57,3 +57,63 @@ func phpunitSingleCmd(argv []string, testPath, id string) ([]string, bool) {
 	filter := `/(?:^|\\)` + regexQuoter.Replace(class) + "::" + regexQuoter.Replace(method) + `(?: with data set .*)?$/`
 	return append(slices.Clone(argv), "--filter", filter, testPath), true
 }
+
+// phpunitListUnits is PHPUnit's own `--list-test-files` over argv: the test
+// files the command collects, after its configuration's suites, the
+// operator's arguments and every group or filter option (measured on
+// PHPUnit 11.5.57: under --group slow only the file with a slow test was
+// listed, and under --exclude-group slow a file whose only test is slow was
+// not).
+func phpunitListUnits(argv []string) ([]string, bool) {
+	if _, _, ok := phpunitUnitArgs(argv); !ok {
+		return nil, false
+	}
+	return append(slices.Clone(argv), "--list-test-files"), true
+}
+
+// phpunitParseUnits reads the ` - <path>` lines under `Available test
+// files:`; with no such heading, PHPUnit listed nothing (an error, another
+// mode), which is no listing.
+func phpunitParseUnits(stdout string) []string {
+	var files []string
+	for _, line := range strings.Split(stdout, "\n") {
+		line = strings.TrimRight(line, "\r")
+		if files == nil {
+			if line == "Available test files:" {
+				files = []string{}
+			}
+			continue
+		}
+		if f, ok := strings.CutPrefix(line, " - "); ok && f != "" {
+			files = append(files, f)
+		}
+	}
+	return files
+}
+
+// phpunitUnitCmd runs one test file: argv with the operator's file and
+// directory arguments replaced by it. PHPUnit runs every argument it is
+// given (measured: `phpunit tests tests/ATest.php` ran ATest twice beside
+// BTest, 5 tests), and a file argument takes the place of the configured
+// suites, --testsuite included (measured: `--testsuite other tests/ATest.php`
+// ran ATest), so the options can all stay.
+func phpunitUnitCmd(argv []string, unit string) ([]string, bool) {
+	head, kept, ok := phpunitUnitArgs(argv)
+	if !ok || unit == "" || strings.HasPrefix(unit, "-") {
+		return nil, false
+	}
+	return append(append(slices.Clone(head), kept...), unit), true
+}
+
+// phpunitUnitArgs splits argv at its phpunit word into the words up to it
+// and the options after it, without the file arguments. PHPUnit reads
+// options after a file (measured: `tests/ATest.php --group slow` ran one
+// test).
+func phpunitUnitArgs(argv []string) (head, kept []string, ok bool) {
+	i := wordIndex(argv, "phpunit")
+	if i < 0 || !narrowable(argv, "--filter") {
+		return nil, nil, false
+	}
+	kept, ok = dropFileArgs(argv[i+1:], true, phpunitOptions.takesValue)
+	return argv[:i+1], kept, ok
+}

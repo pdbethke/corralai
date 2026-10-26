@@ -39,7 +39,7 @@ func (stubPlugin) LineComment() string                                 { return 
 func (stubPlugin) DependencyDirs() []lang.DepDir                       { return nil }
 func (stubPlugin) CompileCheck(string, string) [][]string              { return nil }
 func (stubPlugin) TestRules() []pairing.Rule                           { return nil }
-func (stubPlugin) Preflight([]string) error                            { return nil }
+func (stubPlugin) Preflight(string, []string) error                    { return nil }
 func (stubPlugin) PromptLang() string                                  { return "" }
 func (stubPlugin) TestWriterSystem() string                            { return "" }
 func (stubPlugin) MutantSystem() string                                { return "" }
@@ -62,6 +62,12 @@ type covPlugin struct {
 func (p covPlugin) CoverageCmd(testCmd []string) ([]string, bool) { return p.cmd, p.cmdOK }
 func (p covPlugin) ParseCoverage(stdout, modulePath string) (map[string]bool, error) {
 	return p.parseFn(stdout, modulePath)
+}
+
+// CoverageCounts is never read by Preflight, which reads ParseCoverage; it
+// exists only to satisfy the interface, and says so if anything calls it.
+func (p covPlugin) CoverageCounts(string, string) (map[string]lang.LineCounts, error) {
+	return nil, errors.New("covPlugin: CoverageCounts is not part of what Preflight reads")
 }
 
 var _ lang.CoverageReporter = covPlugin{}

@@ -1,0 +1,5 @@
+corral-units-cwd /fixture
+PHPUnit 11.5.57 by Sebastian Bergmann and contributors.
+
+Available test files:
+ - /fixture/units/phpunit/tests/ATest.php

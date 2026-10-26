@@ -417,7 +417,7 @@ Usage of doctor:
   -critic-model string
     	the test-critic model whose credential to check
   -derive-model certify --repo
-    	the goal-derivation model a certify --repo run will name, if any
+    	the goal-derivation model a certify --repo run will name, if any. Naming it makes doctor SPEND ONE small real derive call through certify's own deriver, on a tiny built-in file with an obvious property, and fail the check when the seat errors or returns an empty reply; nothing is called unless this is named
   -jail string
     	sandbox backend (default: auto-detect). "container" needs CORRALAI_EXEC_IMAGE set to a toolchain image, e.g. CORRALAI_EXEC_IMAGE=python:3.12-bookworm
   -mutant-model string
@@ -1160,6 +1160,8 @@ Usage of certify --repo:
     	bound the scan to files changed since this git ref: every candidate that changed, or whose paired test changed, is audited. In a PR the diff IS the bound, so the default --top does not apply on this path; an EXPLICIT --top still does, auditing that many of the changed files by rank and reporting the rest as not audited
   -dry-run
     	enumerate and emit jobs, then stop — no audits run
+  -evidence
+    	with --dry-run: run the evidence pass in the sandbox (no model, no key) so the plan shows what a real run would audit
   -goals string
     	JSON file mapping repo-relative paths to goals (default: derive a goal per file)
   -jail string

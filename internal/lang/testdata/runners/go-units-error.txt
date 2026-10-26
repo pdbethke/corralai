@@ -1,0 +1,2 @@
+corral-units-cwd /fixture/units/gomod
+error ./nope

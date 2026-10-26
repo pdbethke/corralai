@@ -240,6 +240,7 @@ func buildAuditRows(files []scanstore.File, scanID int64, meta bundleMeta) []aud
 			VerdictJSON:              f.VerdictJSON,
 			PromptShape:              f.PromptShape,
 			CoveringTests:            f.CoveringTests,
+			CoveringUnits:            f.CoveringUnits,
 			ImportOnly:               f.ImportOnly,
 			MutantBudget:             f.MutantBudget,
 			MutantBudgetRule:         f.MutantBudgetRule,

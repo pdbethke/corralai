@@ -3,6 +3,8 @@
 package reposcan
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
 	"sort"
 	"testing"
@@ -397,5 +399,187 @@ func TestWidenCandidacyIsANoOpWithoutEvidence(t *testing.T) {
 	}
 	if promoted != 0 {
 		t.Errorf("promoted = %d, want 0", promoted)
+	}
+}
+
+// The unit-kind twin of TestWidenCandidacyLeavesAnAlreadyPairedCandidateByteIdentical
+// (ruling R2): an index built from test UNITS counts units, not tests, so it
+// must never write Candidate.CoveringTests — the ledger's covering_tests
+// column means "tests". An already-paired candidate comes back with every
+// pairing field byte-identical to what pairing produced, and a promoted one
+// carries its landing file with CoveringTests left nil. The one field a
+// unit index may write is CoveringUnits (ruling R3), ledger metadata in its
+// own column, exactly as CoveringTests is for a per-test index.
+func TestWidenCandidacyByUnitsLeavesAnAlreadyPairedCandidateByteIdentical(t *testing.T) {
+	ts, ok := lang.ByName("typescript")
+	if !ok {
+		t.Fatal("no typescript plugin")
+	}
+	before := Candidate{Path: "src/a.ts", TestPath: "test/a.test.ts", Lang: "typescript", ViaSearch: true}
+	ev := UnitEvidence{Ran: true, Units: []UnitResult{
+		{Unit: "test/a.test.ts", Counts: map[string]lang.LineCounts{"src/a.ts": {Executed: 1, Executable: 10}}},
+		{Unit: "tests/other.test.ts", Counts: map[string]lang.LineCounts{
+			"src/a.ts": {Executed: 9, Executable: 10},
+			"src/b.ts": {Executed: 3, Executable: 4},
+		}},
+	}}
+	idx, idxOK := IndexFromUnits(ev, UnitFilesFor(ts, map[string]string{"test/a.test.ts": "", "tests/other.test.ts": ""}))
+	if !idxOK || !idx.UnitKind() {
+		t.Fatalf("fixture: want a unit-kind index, got ok=%v unitKind=%v", idxOK, idx.UnitKind())
+	}
+
+	gotCands, gotExcl, promoted := WidenCandidacyByEvidence([]Candidate{before},
+		[]Exclusion{{Path: "src/b.ts", Reason: ReasonNoPairedTest}}, idx, idxOK)
+
+	if len(gotExcl) != 0 || promoted != 1 || len(gotCands) != 2 {
+		t.Fatalf("cands=%+v excl=%+v promoted=%d, want src/b.ts promoted beside the paired src/a.ts", gotCands, gotExcl, promoted)
+	}
+	paired := before
+	paired.CoveringUnits = intPtr(2)
+	if !reflect.DeepEqual(gotCands[0], paired) {
+		t.Errorf("paired candidate = %+v, want %+v (pairing fields byte-identical, no CoveringTests from a unit index, CoveringUnits 2)", gotCands[0], paired)
+	}
+	want := Candidate{Path: "src/b.ts", Lang: "typescript", CoveringTestPath: "tests/other.test.ts", CoveringUnits: intPtr(1)}
+	if !reflect.DeepEqual(gotCands[1], want) {
+		t.Errorf("promoted candidate = %+v, want %+v (CoveringTests nil: units are not tests)", gotCands[1], want)
+	}
+	if n, measured := idx.UnitsFor("src/b.ts"); !measured || n != 1 {
+		t.Errorf("UnitsFor(src/b.ts) = %d, %v, want 1, true — the printed count's source", n, measured)
+	}
+}
+
+// CoveringTests means Python's per-test count and nothing else: a unit-kind
+// index never writes it, on a paired or a promoted candidate, and writes
+// CoveringUnits instead — the units UnitsFor counts. A per-test index is the
+// mirror image: CoveringTests set, CoveringUnits nil, so neither count ever
+// stands in for the other in the ledger.
+func TestCoveringTestsNeverSetFromUnits(t *testing.T) {
+	ts, ok := lang.ByName("typescript")
+	if !ok {
+		t.Fatal("no typescript plugin")
+	}
+	ev := UnitEvidence{Ran: true, Units: []UnitResult{
+		{Unit: "test/a.test.ts", Counts: map[string]lang.LineCounts{"src/a.ts": {Executed: 2, Executable: 10}}},
+		{Unit: "test/b.test.ts", Counts: map[string]lang.LineCounts{"src/a.ts": {Executed: 1, Executable: 10}, "src/c.ts": {Executed: 1, Executable: 3}}},
+		{Unit: "test/c.test.ts", Counts: map[string]lang.LineCounts{"src/c.ts": {Executed: 2, Executable: 3}}},
+	}}
+	idx, idxOK := IndexFromUnits(ev, UnitFilesFor(ts, map[string]string{"test/a.test.ts": "", "test/b.test.ts": "", "test/c.test.ts": ""}))
+	if !idxOK || !idx.UnitKind() {
+		t.Fatalf("fixture: want a unit-kind index, got ok=%v unitKind=%v", idxOK, idx.UnitKind())
+	}
+	cands, _, _ := WidenCandidacyByEvidence(
+		[]Candidate{{Path: "src/a.ts", TestPath: "test/a.test.ts", Lang: "typescript"}},
+		[]Exclusion{{Path: "src/c.ts", Reason: ReasonNoPairedTest}}, idx, idxOK)
+	if len(cands) != 2 {
+		t.Fatalf("cands = %+v, want the paired src/a.ts and the promoted src/c.ts", cands)
+	}
+	for _, c := range cands {
+		if c.CoveringTests != nil {
+			t.Errorf("%s: CoveringTests = %d from a unit index; units are not tests", c.Path, *c.CoveringTests)
+		}
+		want, measured := idx.UnitsFor(c.Path)
+		if !measured || c.CoveringUnits == nil || *c.CoveringUnits != want || want != 2 {
+			t.Errorf("%s: CoveringUnits = %v, want UnitsFor's %d (measured %v), which is 2", c.Path, c.CoveringUnits, want, measured)
+		}
+	}
+
+	perTest, perTestOK := widenFixtureIndex(t, map[string]lang.FileCoverage{
+		"pkg/a.py": {Tests: map[string]int{"tests/test_a.py::t1": 1, "tests/test_a.py::t2": 1}},
+		"pkg/u.py": {Tests: map[string]int{"tests/test_a.py::t1": 1}},
+	})
+	pcands, _, _ := WidenCandidacyByEvidence(
+		[]Candidate{{Path: "pkg/a.py", TestPath: "tests/test_a.py", Lang: "python"}},
+		[]Exclusion{{Path: "pkg/u.py", Reason: ReasonNoPairedTest}}, perTest, perTestOK)
+	if len(pcands) != 2 {
+		t.Fatalf("per-test cands = %+v, want two", pcands)
+	}
+	for _, c := range pcands {
+		if c.CoveringUnits != nil {
+			t.Errorf("%s: CoveringUnits = %d from a per-test index; it counts units only", c.Path, *c.CoveringUnits)
+		}
+		if c.CoveringTests == nil {
+			t.Errorf("%s: CoveringTests nil from a per-test index", c.Path)
+		}
+	}
+}
+
+func intPtr(n int) *int { return &n }
+
+// UNIT EVIDENCE SAYS ONLY WHAT ITS UNITS RAN (ruling R24). A file a unit
+// LOADED whose functions never ran is import-only, the claim the codebase
+// already has for that shape; a file measured at zero that no unit even
+// loaded is uncovered under a reason scoped to the command's units, never
+// Python's "no test executes this file", which speaks for the whole suite.
+// REA's composition units made the unscoped claim 200 times (review I1).
+func TestWidenCandidacyByUnitsSaysOnlyWhatTheUnitsRan(t *testing.T) {
+	ts, ok := lang.ByName("typescript")
+	if !ok {
+		t.Fatal("no typescript plugin")
+	}
+	ev := UnitEvidence{Ran: true, Units: []UnitResult{
+		{Unit: "test/a.test.ts", Counts: map[string]lang.LineCounts{
+			"src/loaded.ts": {Executed: 0, Executable: 6},
+			"src/dead.ts":   {Executed: 0, Executable: 4},
+		}, Loaded: []string{"src/loaded.ts"}},
+	}}
+	idx, idxOK := IndexFromUnits(ev, UnitFilesFor(ts, map[string]string{"test/a.test.ts": ""}))
+	if !idxOK || !idx.UnitKind() {
+		t.Fatalf("fixture: want a unit-kind index, got ok=%v unitKind=%v", idxOK, idx.UnitKind())
+	}
+	_, excl, _ := WidenCandidacyByEvidence(nil, []Exclusion{
+		{Path: "src/loaded.ts", Reason: ReasonNoPairedTest},
+		{Path: "src/dead.ts", Reason: ReasonNoPairedTest},
+	}, idx, idxOK)
+	got := map[string]string{}
+	for _, e := range excl {
+		got[e.Path] = e.Reason
+	}
+	if got["src/loaded.ts"] != ReasonImportOnly {
+		t.Errorf("src/loaded.ts = %q, want %q: a unit loaded it and ran none of its functions", got["src/loaded.ts"], ReasonImportOnly)
+	}
+	if got["src/dead.ts"] != ReasonUncoveredByUnits {
+		t.Errorf("src/dead.ts = %q, want %q: scoped to the units this command runs", got["src/dead.ts"], ReasonUncoveredByUnits)
+	}
+	if ReasonUncoveredByUnits == ReasonUncovered || !IsUncovered(ReasonUncoveredByUnits) || !IsUncovered(ReasonUncovered) || IsUncovered(ReasonImportOnly) {
+		t.Error("the scoped reason is its own string, and both uncovered reasons are uncovered")
+	}
+}
+
+// R24 HOLDS IN RUBY AND PHP TOO (final review I1). The reports are the ones
+// a real run of internal/lang's fixture suites printed (held to a live run
+// there): lib/dead.rb and lib/Dead.php are required by the unit, their class
+// bodies and constants run, and no method of theirs is called. They are
+// import-only. Before the reducers printed `# loaded`, both came out
+// "uncovered — no test unit this command runs executes this file", which
+// the unit had in fact done.
+func TestWidenCandidacyByUnitsCallsARubyOrPHPFileLoadedNeverCalledImportOnly(t *testing.T) {
+	cases := []struct{ lang, report, unit, dead string }{
+		{"ruby", "ruby-report.txt", "test/calc_test.rb", "lib/dead.rb"},
+		{"php", "php-report.txt", "test/CalcTest.php", "lib/Dead.php"},
+	}
+	for _, c := range cases {
+		t.Run(c.lang, func(t *testing.T) {
+			p, ok := lang.ByName(c.lang)
+			if !ok {
+				t.Fatalf("no %s plugin", c.lang)
+			}
+			raw, err := os.ReadFile(filepath.Join("..", "lang", "testdata", "coverage", c.report)) // #nosec G304 -- a fixed testdata path
+			if err != nil {
+				t.Fatal(err)
+			}
+			counts, err := p.(lang.CoverageReporter).CoverageCounts(string(raw), "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			ev := UnitEvidence{Ran: true, Units: []UnitResult{{Unit: c.unit, Counts: counts, Loaded: lang.LoadedCoverage(string(raw))}}}
+			idx, idxOK := IndexFromUnits(ev, UnitFilesFor(p, map[string]string{c.unit: ""}))
+			if !idxOK {
+				t.Fatal("fixture: want a unit-kind index")
+			}
+			_, excl, _ := WidenCandidacyByEvidence(nil, []Exclusion{{Path: c.dead, Reason: ReasonNoPairedTest}}, idx, idxOK)
+			if len(excl) != 1 || excl[0].Reason != ReasonImportOnly {
+				t.Errorf("%s exclusions = %+v, want one %q: the unit loaded it and called none of its methods", c.dead, excl, ReasonImportOnly)
+			}
+		})
 	}
 }

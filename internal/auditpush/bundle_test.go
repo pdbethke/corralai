@@ -810,3 +810,53 @@ func TestScanSandboxReachesTheWarehouse(t *testing.T) {
 		t.Errorf("sandbox round trip = %q %q", got.SandboxBackend, got.SandboxImage)
 	}
 }
+
+// covering_units is its own column, NULL when unmeasured, and the reader
+// hands back exactly what the writer was given — the round trip the
+// warehouse-rows hash depends on (a field written and not read back would
+// fail `verify --db` on every row that carries it). covering_tests is left
+// untouched beside it: a unit count never lands in the tests column.
+func TestCoveringUnitsRoundTripsThroughTheWarehouse(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "w.duckdb")
+	b := sampleBundle()
+	b.Files[0].CoveringUnits = ip(3)
+	b.Files[0].CoveringTests = nil
+	b.Files = append(b.Files, Row{Repo: "o/r", Commit: "abc", RunURL: "https://ci/1", ScanID: 7,
+		Path: "pkg/py.py", Lang: "python", Disposition: "audited", CoveringTests: ip(2)})
+	if _, err := PushBundle(target, b); err != nil {
+		t.Fatalf("PushBundle: %v", err)
+	}
+	db := openWarehouse(t, target)
+	for path, want := range map[string][2]*int{
+		b.Files[0].Path: {nil, ip(3)},
+		"pkg/py.py":     {ip(2), nil},
+	} {
+		var tests, units sql.NullInt64
+		if err := db.QueryRow(`SELECT covering_tests, covering_units FROM corral_audits WHERE path = ?`, path).Scan(&tests, &units); err != nil {
+			t.Fatalf("%s: %v", path, err)
+		}
+		for i, got := range []sql.NullInt64{tests, units} {
+			col := [2]string{"covering_tests", "covering_units"}[i]
+			switch w := want[i]; {
+			case w == nil && got.Valid:
+				t.Errorf("%s: %s = %d, want NULL", path, col, got.Int64)
+			case w != nil && (!got.Valid || int(got.Int64) != *w):
+				t.Errorf("%s: %s = %v (valid %v), want %d", path, col, got.Int64, got.Valid, *w)
+			}
+		}
+	}
+	rb, err := ReadBundle(db, "o/r", 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	read := map[string]Row{}
+	for _, r := range rb.Files {
+		read[r.Path] = r
+	}
+	if got := read[b.Files[0].Path].CoveringUnits; got == nil || *got != 3 {
+		t.Errorf("read back CoveringUnits = %v, want 3", got)
+	}
+	if got := read["pkg/py.py"].CoveringUnits; got != nil {
+		t.Errorf("read back CoveringUnits = %d on an unmeasured row, want nil", *got)
+	}
+}

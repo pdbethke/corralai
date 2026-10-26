@@ -27,6 +27,11 @@ on:
       - "internal/recordview/**"
       - "scripts/ledgersite/**"
       - "scripts/gen-ledger-site.sh"
+      # /results/ runs the ledger verifier in the visitor's browser, built
+      # from this commit at site build (site/scripts/build-ledger-wasm.mjs),
+      # so a verifier change must redeploy the page that runs it.
+      - "internal/ledger/**"
+      - "scripts/build-ledger-wasm.sh"
   pull_request:
     branches: [main]
     paths:
@@ -35,6 +40,8 @@ on:
       - "internal/recordview/**"
       - "scripts/ledgersite/**"
       - "scripts/gen-ledger-site.sh"
+      - "internal/ledger/**"
+      - "scripts/build-ledger-wasm.sh"
   # The /ledger/ pages are rendered from the corral/ledger branch at deploy
   # time, and new entries (the Action, the campaign's weekly runs) never touch
   # site/**, so without this the record page lagged until the next site

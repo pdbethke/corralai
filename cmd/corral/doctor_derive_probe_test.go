@@ -74,3 +74,21 @@ func TestDoctorProbesNothingWithoutADeriveModel(t *testing.T) {
 		t.Errorf("doctor probed a derive seat nobody named:\n%s", out.String())
 	}
 }
+
+// THE SPENT CALL IS ALWAYS SHOWN (review I1). A fatal check (here an unknown
+// sandbox backend) stops the other checks' output; the derive probe still
+// says it is spending a call, before making it, and prints what came back.
+func TestDoctorShowsTheDeriveProbeAfterAFatalCheck(t *testing.T) {
+	installDoctorDeriver(t, &fakeBackend{reply: "Clamp bounds v.", usage: agentbackend.Usage{InputTokens: 10, OutputTokens: 4}})
+	var out bytes.Buffer
+	runDoctor([]string{"--repo", t.TempDir(), "--jail", "no-such-backend", "--derive-model", "llama3.2:3b"}, &out, &bytes.Buffer{})
+	s := out.String()
+	if !strings.Contains(s, "later checks skipped") {
+		t.Fatalf("fixture: the sandbox check must be fatal:\n%s", s)
+	}
+	announce := strings.Index(s, "spending one derive call on llama3.2:3b")
+	result := strings.Index(s, "derive seat answers (llama3.2:3b)")
+	if announce < 0 || result < announce || !strings.Contains(s, "goal: Clamp bounds v.") {
+		t.Errorf("the probe must be announced, then reported, after a fatal check:\n%s", s)
+	}
+}

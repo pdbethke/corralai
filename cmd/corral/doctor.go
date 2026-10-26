@@ -143,12 +143,6 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 	results = append(results, checkHerd(*mutantModel, *writerModel, *criticModel, *shadow.model, *shadow.writerModel, seatReg)...)
 	derive := checkDeriveSeat(*deriveModel, seatReg.deriveEndpoint())
 	results = append(results, derive...)
-	if strings.TrimSpace(*deriveModel) != "" && checksPassed(derive) {
-		// The one check that spends: run only when the seat was named and
-		// its static checks passed, so a missing CLI or key is reported as
-		// that, not as a failed call.
-		results = append(results, probeDeriveSeat(strings.TrimSpace(*deriveModel), seatReg.deriveEndpoint()))
-	}
 	if strings.TrimSpace(*code) != "" {
 		results = append(results, checkPairing(*code, *test))
 	}
@@ -158,6 +152,15 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 		if !printCheck(stdout, r, &failed) {
 			break
 		}
+	}
+	// The one check that spends, run only when the seat was named and its
+	// static checks passed (a missing CLI or key is reported as that, not as
+	// a failed call). It runs AFTER the other checks have printed and is
+	// announced before the call, so a fatal check above can never hide a
+	// call that was spent (review I1, ruling R25).
+	if model := strings.TrimSpace(*deriveModel); model != "" && checksPassed(derive) {
+		fmt.Fprintf(stdout, "  spending one derive call on %s…\n", model)
+		printCheck(stdout, probeDeriveSeat(model, seatReg.deriveEndpoint()), &failed)
 	}
 	printAgentsSection(stdout)
 	if failed > 0 {

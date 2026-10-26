@@ -353,7 +353,7 @@ func TestJSReducerSkipsAFunctionWhoseOwnRangeMapsNowhere(t *testing.T) {
 	gen := "XX\nfunction f() {\n  return 1;\n}"
 	m, _ := json.Marshal(map[string]any{"version": 3, "sources": []string{"a.ts"}, "names": []string{}, "mappings": ";AAAA;AACA;AACA"})
 	rec, _ := json.Marshal(map[string]any{"kind": "script", "filename": filepath.Join(root, "a.ts"), "length": len(gen),
-		"lineOffset": 0, "columnOffset": 0, "lineLengths": []int{2, 14, 11, 1}, "map": string(m)})
+		"lineOffset": 0, "columnOffset": 0, "lineStarts": startsOf([]int{2, 14, 11, 1}), "map": string(m)})
 	d := t.TempDir()
 	for _, sub := range []string{"cov", "maps"} {
 		if err := os.Mkdir(filepath.Join(d, sub), 0o750); err != nil {
@@ -414,6 +414,18 @@ func TestJSCoverageCmdKeepsAnOperatorsQuotedRequire(t *testing.T) {
 	}
 }
 
+// startsOf is the line starts of a text of the given \n-separated line
+// lengths: the preload's lineStarts for a text with no other terminator.
+func startsOf(lengths []int) []int {
+	out := []int{}
+	at := 0
+	for _, l := range lengths {
+		out = append(out, at)
+		at += l + 1
+	}
+	return out
+}
+
 // runMappedReducer runs the shipped reducer over one script a.ts, evaluated
 // as gen (lineLengths) with the recorded source map payload, and the given V8
 // functions (ranges in gen's offsets); disk is a.ts's text on disk.
@@ -432,7 +444,7 @@ func runMappedReducer(t *testing.T, disk string, lineLengths []int, payload map[
 	}
 	m, _ := json.Marshal(payload)
 	rec, _ := json.Marshal(map[string]any{"kind": "script", "filename": filepath.Join(root, "a.ts"), "length": length,
-		"lineOffset": 0, "columnOffset": 0, "lineLengths": lineLengths, "map": string(m)})
+		"lineOffset": 0, "columnOffset": 0, "lineStarts": startsOf(lineLengths), "map": string(m)})
 	d := t.TempDir()
 	for _, sub := range []string{"cov", "maps"} {
 		if err := os.Mkdir(filepath.Join(d, sub), 0o750); err != nil {
@@ -517,5 +529,62 @@ func TestJSReducerReportsWhichFilesWereLoaded(t *testing.T) {
 	}
 	if _, err := (jsPlugin{}).CoverageCounts("corral-js-coverage: v2\n# loaded lib/x.ts\n", ""); err == nil || !strings.Contains(err.Error(), "header but no file entries") || strings.Contains(err.Error(), "could not count") {
 		t.Errorf("a report with only a loaded line: err = %v, want no file entries and nothing disclosed as uncountable", err)
+	}
+}
+
+// SOURCE MAP LINES ARE ECMASCRIPT LINES. A source map counts U+2028 and
+// U+2029 (and a lone \r) as line breaks, as V8 and every JS tool do; reading
+// the file by \n alone put REA's src/wasm/WasmGlueAdapter.ts, whose string
+// literals hold a literal U+2028 and U+2029, two lines out of step with its
+// map ("its source map points past the file on disk", Task 11 B2 round 1:
+// 735 of 2,951 mapped positions out of range by \n lines, 0 by ECMAScript
+// lines). Run for real: the preload records a vm evaluation of the file
+// with an identity map, V8 measures it, the reducer counts it.
+func TestJSReducerReadsMapLinesAsECMAScriptLines(t *testing.T) {
+	if _, err := exec.LookPath("node"); err != nil {
+		t.Skip("node not installed")
+	}
+	root := t.TempDir()
+	// ECMAScript lines: 0 "a='", 1 "'", 2 the function, 3 "f();", 4 "0;"; by
+	// \n alone the function is line 1 and line 2 is the 4-character "f();",
+	// which the map's column 47 (the closing brace) lies past.
+	src := "a='\u2028'\nfunction f() { return 'some long string here'; }\nf();\n0;\n"
+	if err := os.WriteFile(filepath.Join(root, "a.js"), []byte(src), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// The evaluated code writes the separator as the escape \u2028, as
+	// esbuild prints it, so it is one line shorter than the file: its map
+	// sends generated line 1 (the function) to original line 2, with
+	// segments at the function's start, its `return` (column 15) and its
+	// closing brace (column 47).
+	m, _ := json.Marshal(map[string]any{"version": 3, "sources": []string{"a.js"}, "names": []string{}, "mappings": "AAAA;AAEA,eAAe,gCAAgC;AAC/C;AACA", "sourcesContent": []string{src}})
+	d := t.TempDir()
+	if err := os.WriteFile(filepath.Join(d, "corral_maps.cjs"), []byte(jsCoveragePreload), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	driver := filepath.Join(d, "driver.cjs")
+	code := fmt.Sprintf("const vm=require('vm'),fs=require('fs');const src=fs.readFileSync(%q,'utf8').split(String.fromCharCode(0x2028)).join('\\\\u2028');vm.runInThisContext(src+'//# sourceMappingURL=data:application/json;base64,'+Buffer.from(%q).toString('base64'),{filename:%q});\n",
+		filepath.Join(root, "a.js"), string(m), filepath.Join(root, "a.js"))
+	if err := os.WriteFile(driver, []byte(code), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c := exec.Command("node", driver) // #nosec G204 -- node and a script this test wrote
+	c.Dir = root
+	c.Env = append(os.Environ(), "NODE_V8_COVERAGE="+filepath.Join(d, "cov"), "NODE_OPTIONS=--require "+filepath.Join(d, "corral_maps.cjs"))
+	if out, err := c.CombinedOutput(); err != nil {
+		t.Fatalf("driver: %v\n%s", err, out)
+	}
+	script := filepath.Join(d, "corral_reduce.js")
+	if err := os.WriteFile(script, []byte(jsCoverageReduce), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r := exec.Command("node", script, filepath.Join(d, "cov")) // #nosec G204 -- node and a temp script this test wrote
+	r.Dir = root
+	out, err := r.Output()
+	if err != nil {
+		t.Fatalf("reducer: %v", err)
+	}
+	if !strings.Contains(string(out), "\n1 1 a.js\n") {
+		t.Errorf("a.js: f's one line ran, counted through ECMAScript lines:\n%s", out)
 	}
 }

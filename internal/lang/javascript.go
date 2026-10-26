@@ -337,8 +337,21 @@ function count(key,src,fns){
     if(hot[i])st.ran[ln]=1;
   }
 }
-// lineStarts is each line's first offset in a text of the given line lengths.
-function lineStarts(lengths){const out=[];let o=0;for(const l of lengths){out.push(o);o+=l+1}return out}
+// lineSpans is each line of text, by ECMAScript's line terminators (\n, \r,
+// \r\n, U+2028, U+2029), as its start offset and the offset of its end
+// (where its terminator begins): the lines a source map counts, original
+// side and generated side alike. A file read by \n alone puts every line
+// after a literal U+2028 out of step with its map.
+function lineSpans(text){
+  const starts=[0],ends=[];
+  for(let i=0;i<text.length;i++){
+    const c=text.charCodeAt(i);
+    if(c===13&&text.charCodeAt(i+1)===10){ends.push(i);starts.push(i+2);i++;continue}
+    if(c===10||c===13||c===0x2028||c===0x2029){ends.push(i);starts.push(i+1)}
+  }
+  ends.push(text.length);
+  return {starts,ends};
+}
 function lineAt(starts,off){let lo=0,hi=starts.length-1;while(lo<hi){const m=(lo+hi+1)>>1;if(starts[m]<=off)lo=m;else hi=m-1}return lo}
 // countMapped counts a script evaluated through node:vm by the original
 // files its recorded source map names: each range's start and last
@@ -349,7 +362,7 @@ function lineAt(starts,off){let lo=0,hi=starts.length-1;while(lo<hi){const m=(lo
 function countMapped(p,rec,fns){
   let sm;
   try{sm=new (require('module').SourceMap)(JSON.parse(rec.map))}catch(e){return 'its recorded source map could not be read'}
-  const gen=lineStarts(rec.lineLengths||[]);
+  const gen=Array.isArray(rec.lineStarts)?rec.lineStarts:[];
   let sourceRoot='';
   try{const pl=JSON.parse(rec.map);if(typeof pl.sourceRoot==='string')sourceRoot=pl.sourceRoot}catch(e){}
   const origStarts=new Map();
@@ -391,11 +404,11 @@ function countMapped(p,rec,fns){
     const text=source(src);
     if(text===null)return null;
     if(bad.has(src)||!described(src,text))return null;
-    if(!origStarts.has(src)){const ls=[];let o=0;for(const l of text.split('\n')){ls.push(o);o+=l.length+1}origStarts.set(src,ls)}
-    const ls=origStarts.get(src);
+    if(!origStarts.has(src))origStarts.set(src,lineSpans(text));
+    const {starts:ls,ends}=origStarts.get(src);
     const past=()=>{bad.set(src,'its source map points past the file on disk (changed since it ran, or the map names another file)');return null};
     if(e.originalLine<0||e.originalLine>=ls.length)return past();
-    const lineEnd=e.originalLine+1<ls.length?ls[e.originalLine+1]-1:text.length;
+    const lineEnd=ends[e.originalLine];
     if(ls[e.originalLine]+e.originalColumn>lineEnd)return past();
     // Within one mapping segment, generated and original text advance
     // together (a segment is one token or a run copied as is), so the
@@ -554,7 +567,7 @@ const appendFileSync=fs.appendFileSync,mkdirSync=fs.mkdirSync,join=path.join;
 const stringify=JSON.stringify,bufferFrom=Buffer.from,isInteger=Number.isInteger;
 const apply=Reflect.apply,construct=Reflect.construct,reflectGet=Reflect.get,getOwn=Reflect.getOwnPropertyDescriptor,define=Reflect.defineProperty;
 const fnToString=Function.prototype.toString;
-const lastIndexOf=String.prototype.lastIndexOf,slice=String.prototype.slice,indexOf=String.prototype.indexOf,exec=RegExp.prototype.exec,toStr=Buffer.prototype.toString;
+const lastIndexOf=String.prototype.lastIndexOf,slice=String.prototype.slice,charCodeAt=String.prototype.charCodeAt,exec=RegExp.prototype.exec,toStr=Buffer.prototype.toString;
 const dir=join(__dirname,'maps');
 const marker='//# sourceMappingURL=data:application/json';
 const base64=/^[^,\s]*;base64,([A-Za-z0-9+/=]+)/;
@@ -576,9 +589,17 @@ function own(options,key){
   const d=getOwn(options,key);
   return d&&!d.get&&!d.set?d.value:undefined;
 }
-function lineLengths(code){
-  const out=[];let at=0;
-  for(;;){const nl=call(indexOf,code,'\n',at);if(nl<0){out[out.length]=code.length-at;return out}out[out.length]=nl-at;at=nl+1}
+// lineStarts is where each line of code starts, by ECMAScript's line
+// terminators (\n, \r, \r\n, U+2028, U+2029): the lines a source map's
+// generated positions count.
+function lineStarts(code){
+  const out=[0];
+  for(let i=0;i<code.length;i++){
+    const c=call(charCodeAt,code,i);
+    if(c===13&&call(charCodeAt,code,i+1)===10)continue;
+    if(c===10||c===13||c===0x2028||c===0x2029)out[out.length]=i+1;
+  }
+  return out;
 }
 function record(kind,code,options){
   try{
@@ -591,7 +612,7 @@ function record(kind,code,options){
     if(typeof filename!=='string'||filename==='')return;
     const lo=own(options,'lineOffset'),co=own(options,'columnOffset');
     // vm's own reading of an absent offset is 0.
-    appendRecord({kind,filename,length:code.length,lineOffset:isInteger(lo)?lo:0,columnOffset:isInteger(co)?co:0,lineLengths:lineLengths(code),map:call(toStr,bufferFrom(m[1],'base64'),'utf8')});
+    appendRecord({kind,filename,length:code.length,lineOffset:isInteger(lo)?lo:0,columnOffset:isInteger(co)?co:0,lineStarts:lineStarts(code),map:call(toStr,bufferFrom(m[1],'base64'),'utf8')});
   }catch(e){}
 }
 function appendRecord(r){call(appendFileSync,fs,target(),stringify(r)+'\n')}

@@ -250,6 +250,23 @@ def CorralCov.write(res)
     dest = File.join(dir, "#{Process.pid}-#{object_id}.txt")
     rows = []
     res.each do |path, data|
+      # RELATIVE TO THE WORKING DIRECTORY, not absolute. The suite runs in
+      # the repo on the workspace substrate and in an ephemeral copy of it
+      # on the jail substrate, and only the former is a path the caller
+      # knows. Coverage.result hands back absolute paths, so an absolute
+      # report was aligned against the repo directory — correct on one
+      # substrate and a guaranteed "NONE under the repo root" on the
+      # default one. Relative to cwd is repo-relative on both. Files
+      # outside cwd (gems, stdlib) are dropped FIRST, before any of their
+      # data is read, as the PHP prepend drops them: they are never
+      # candidates, and counting them was work done in the operator's own
+      # process at exit for nothing (ruling R30).
+      rel = begin
+        Pathname.new(path).relative_path_from(Pathname.pwd).to_s
+      rescue ArgumentError
+        next
+      end
+      next if rel == '..' || rel.start_with?('../')
       if data.is_a?(Hash)
         methods = data[:methods] || {}
         lines = data[:lines] || []
@@ -292,21 +309,6 @@ def CorralCov.write(res)
       # means "not measured", the honest answer for a file with nothing in it
       # that could have run, and 0 0 would read as measured-and-never-run.
       next if executable.zero?
-      # RELATIVE TO THE WORKING DIRECTORY, not absolute. The suite runs in
-      # the repo on the workspace substrate and in an ephemeral copy of it
-      # on the jail substrate, and only the former is a path the caller
-      # knows. Coverage.result hands back absolute paths, so an absolute
-      # report was aligned against the repo directory — correct on one
-      # substrate and a guaranteed "NONE under the repo root" on the
-      # default one. Relative to cwd is repo-relative on both. Files
-      # outside cwd (gems, stdlib) are dropped here; they are never
-      # candidates.
-      rel = begin
-        Pathname.new(path).relative_path_from(Pathname.pwd).to_s
-      rescue ArgumentError
-        next
-      end
-      next if rel == '..' || rel.start_with?('../')
       rows << ["#{executed} #{executable} #{rel}", rel, 0]
       # LOADED, the JavaScript reducer's "# loaded" line (LoadedCoverage):
       # any line that ran at all — a class body, a constant, a def line, all

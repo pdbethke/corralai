@@ -3,6 +3,9 @@
 package lang
 
 import (
+	"os"
+	"os/exec"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -130,4 +133,44 @@ func TestRubyCandidatesOrder(t *testing.T) {
 // as executed only inside a method that was called.
 func TestRubyCoverageCountsFromRealRun(t *testing.T) {
 	assertFixtureCounts(t, capturedCounts(t, "ruby"), "lib/calc.rb", "lib/dead.rb", "lib/unloaded.rb", "lib/empty.rb")
+}
+
+// THE RUBY PRELOAD DROPS A FILE OUTSIDE THE WORKING DIRECTORY BEFORE IT
+// COUNTS IT, as the PHP prepend does (ruling R30, final review T3). A gem or
+// stdlib file is never a candidate, so counting it was at_exit work done in
+// the operator's own process for nothing — and any surprise in its data
+// (here, line data that is not a list) failed the whole report.
+func TestRubyPreloadNeverCountsAFileOutsideTheWorkingDirectory(t *testing.T) {
+	if _, err := exec.LookPath("ruby"); err != nil {
+		t.Skip("ruby not installed")
+	}
+	dir := t.TempDir()
+	preload := filepath.Join(dir, "corral_cov.rb")
+	if err := os.WriteFile(preload, []byte(rubyCoveragePreload), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cov := filepath.Join(dir, "cov")
+	if err := os.Mkdir(cov, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	work := filepath.Join(dir, "work")
+	if err := os.Mkdir(work, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	script := `CorralCov.write({"/outside/gem.rb" => {lines: :not_a_list, methods: {}}, File.join(Dir.pwd, "a.rb") => {lines: [1, nil], methods: {}}})`
+	c := exec.Command("ruby", "-r"+preload, "-e", script) // #nosec G204 -- ruby and a temp preload this test wrote
+	c.Dir = work
+	c.Env = append(os.Environ(), "CORRAL_COV_DIR="+cov)
+	if out, err := c.CombinedOutput(); err != nil || strings.Contains(string(out), "reporter failed") {
+		t.Fatalf("ruby: %v\n%s", err, out)
+	}
+	entries, _ := os.ReadDir(cov)
+	var report strings.Builder
+	for _, e := range entries {
+		b, _ := os.ReadFile(filepath.Join(cov, e.Name())) // #nosec G304 -- a temp file this test's process wrote
+		report.Write(b)
+	}
+	if !strings.Contains(report.String(), "1 1 a.rb") || strings.Contains(report.String(), "gem.rb") {
+		t.Errorf("report = %q, want a.rb counted and the out-of-cwd gem never read", report.String())
+	}
 }

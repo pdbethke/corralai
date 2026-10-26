@@ -31,7 +31,7 @@ func TestTypeScriptPlugin(t *testing.T) {
 	// fails every authored test. See TestTSCompileCheckIsScopedNotProjectWide.
 	if got := p.CompileCheck("foo.ts", "foo.test.ts"); len(got) != 1 ||
 		!reflect.DeepEqual(got[0][:2], []string{"sh", "-c"}) ||
-		!strings.Contains(got[0][2], "tsc -p") || !strings.Contains(got[0][2], "$PWD/foo.ts") || !strings.Contains(got[0][2], "$PWD/foo.test.ts") {
+		!strings.Contains(got[0][2], `$t -p "$d/corral-tsc.json"`) || !strings.Contains(got[0][2], "$PWD/foo.ts") || !strings.Contains(got[0][2], "$PWD/foo.test.ts") {
 		t.Fatalf("CompileCheck = %v", got)
 	}
 	sc := p.Scaffold()

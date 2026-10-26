@@ -152,7 +152,7 @@ func (rustPlugin) TestRules() []pairing.Rule {
 // That is ALL it checks, because Preflight runs on every substrate: a stock
 // rustup install (~/.cargo, no sudo) is exactly what --substrate workspace
 // runs, on the host. What only the jail needs is JailPreflight's.
-func (rustPlugin) Preflight(testCmd []string) error {
+func (rustPlugin) Preflight(repoRoot string, testCmd []string) error {
 	return toolOnPath(rustPreflightBin(testCmd))
 }
 

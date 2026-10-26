@@ -51,7 +51,7 @@ func TestWorkspaceRunnerPythonPycacheStaleness(t *testing.T) {
 	// Skipping (not failing) is the established shape here: a missing
 	// toolchain makes a language test prove nothing, and deploy.yml's
 	// `-v` skip census exists so that a skip is never mistaken for a pass.
-	if err := p.Preflight(nil); err != nil {
+	if err := p.Preflight("", nil); err != nil {
 		t.Skipf("python toolchain cannot run this test on this host (%v) — this test is about __pycache__ handling, not about provisioning", err)
 	}
 

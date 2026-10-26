@@ -8,7 +8,7 @@ import (
 
 // TestPluginStockCommandSatisfiesOwnPreflight is the self-consistency
 // property this file exists to pin: for every registered plugin,
-// p.Preflight(p.TestCmd()) must agree with p.Preflight(nil) — a plugin
+// p.Preflight("", p.TestCmd()) must agree with p.Preflight("", nil) — a plugin
 // whose OWN stock command fails its OWN preflight gate is incoherent by
 // construction. This is exactly the shape of the Ruby regression: TestCmd()
 // returned a single-element `sh -c` shell snippet (see ruby.go's doc
@@ -24,12 +24,12 @@ func TestPluginStockCommandSatisfiesOwnPreflight(t *testing.T) {
 	for _, name := range Names() {
 		p := registry[name]
 		t.Run(name, func(t *testing.T) {
-			nilErr := p.Preflight(nil)
+			nilErr := p.Preflight("", nil)
 			if nilErr != nil {
 				t.Skipf("skipping %s: Preflight(nil) already fails for want of a toolchain on this host: %v", name, nilErr)
 			}
 
-			stockErr := p.Preflight(p.TestCmd())
+			stockErr := p.Preflight("", p.TestCmd())
 			if stockErr != nil {
 				t.Fatalf("%s: Preflight(nil) passed but Preflight(TestCmd()) failed — this plugin's own stock command does not satisfy its own preflight gate: %v\nTestCmd() = %v", name, stockErr, p.TestCmd())
 			}

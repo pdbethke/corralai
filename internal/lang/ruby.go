@@ -126,7 +126,7 @@ func (rubyPlugin) HarnessFiles() []string {
 // comment. It deliberately does NOT require the rspec gem: only a run whose
 // DEV suite is RSpec needs it, and a missing gem then fails the jail
 // command — fail-closed, never a false pass.
-func (rubyPlugin) Preflight(testCmd []string) error {
+func (rubyPlugin) Preflight(repoRoot string, testCmd []string) error {
 	return toolOnPath(preflightBin(testCmd, "ruby"))
 }
 

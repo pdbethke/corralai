@@ -369,7 +369,7 @@ func (emptySeqPlugin) CompileCheck(_, _ string) [][]string {
 func (emptySeqPlugin) TestRules() []pairing.Rule {
 	return []pairing.Rule{{Shape: pairing.Sibling, Name: "{base}.test"}}
 }
-func (emptySeqPlugin) Preflight([]string) error                            { return nil }
+func (emptySeqPlugin) Preflight(string, []string) error                    { return nil }
 func (emptySeqPlugin) PromptLang() string                                  { return "" }
 func (emptySeqPlugin) TestWriterSystem() string                            { return "" }
 func (emptySeqPlugin) MutantSystem() string                                { return "" }

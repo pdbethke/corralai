@@ -732,7 +732,9 @@ func (rt *AdvPoolRuntime) StartRun(in AdvPoolRunSpec) (int64, error) {
 	// too (golang.JailPreflight) — the same two calls certify's door makes for
 	// a jailed run.
 	argv := adequacy.ShellSplit(in.TestCmd)
-	if err := langPlugin.Preflight(argv); err != nil {
+	// No repository root: the brain grades an uploaded file and its test,
+	// so only a toolchain on PATH can serve it.
+	if err := langPlugin.Preflight("", argv); err != nil {
 		return 0, fmt.Errorf("advpool: language toolchain unavailable — refusing to run: %w", err)
 	}
 	if err := golang.JailPreflight(langPlugin, argv); err != nil {

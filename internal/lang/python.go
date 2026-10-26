@@ -352,7 +352,7 @@ func pytestPreflightProbe(testCmd []string) (probe []string, ok bool) {
 // "cd" as the executable) would be worse, a false diagnosis rather than an
 // honest, less-precise one — not a case where the fallback avoids failing
 // closed altogether.
-func (pyPlugin) Preflight(testCmd []string) error {
+func (pyPlugin) Preflight(repoRoot string, testCmd []string) error {
 	if len(testCmd) == 0 {
 		return pyPreflightStockDefault()
 	}

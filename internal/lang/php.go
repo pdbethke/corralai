@@ -215,7 +215,7 @@ func (phpPlugin) HarnessFiles() []string {
 // passed (an explicit php8.5 in testCmd), but CompileCheck's then-hardcoded
 // "php -l" invalidated all 40 mutants with "sh: 1: php: not found" — a cost
 // a free, pre-spend probe would have caught. See phpJailPreflight.
-func (phpPlugin) Preflight(testCmd []string) error {
+func (phpPlugin) Preflight(repoRoot string, testCmd []string) error {
 	interp, _, err := phpInterpreterAndProbe(testCmd)
 	if err != nil {
 		return err

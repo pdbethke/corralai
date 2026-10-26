@@ -39,7 +39,7 @@ func (stubPlugin) LineComment() string                                 { return 
 func (stubPlugin) DependencyDirs() []lang.DepDir                       { return nil }
 func (stubPlugin) CompileCheck(string, string) [][]string              { return nil }
 func (stubPlugin) TestRules() []pairing.Rule                           { return nil }
-func (stubPlugin) Preflight([]string) error                            { return nil }
+func (stubPlugin) Preflight(string, []string) error                    { return nil }
 func (stubPlugin) PromptLang() string                                  { return "" }
 func (stubPlugin) TestWriterSystem() string                            { return "" }
 func (stubPlugin) MutantSystem() string                                { return "" }

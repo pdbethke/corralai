@@ -73,7 +73,7 @@ func (goPlugin) TestRules() []pairing.Rule {
 // Preflight checks the operator's own test command's binary (e.g. a
 // `gotestsum` wrapper named after `--`) when one is given, else the stock
 // "go" — see preflightBin and Plugin.Preflight's doc comment.
-func (goPlugin) Preflight(testCmd []string) error {
+func (goPlugin) Preflight(repoRoot string, testCmd []string) error {
 	return toolOnPath(preflightBin(testCmd, "go"))
 }
 

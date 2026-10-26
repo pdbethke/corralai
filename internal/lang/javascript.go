@@ -146,7 +146,7 @@ func (jsPlugin) HarnessFiles() []string {
 // script or a node version manager's shim not on PATH under "node") when one
 // is given, else the stock "node" — see preflightBin and Plugin.Preflight's
 // doc comment.
-func (jsPlugin) Preflight(testCmd []string) error {
+func (jsPlugin) Preflight(repoRoot string, testCmd []string) error {
 	return toolOnPath(preflightBin(testCmd, "node"))
 }
 

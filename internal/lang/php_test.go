@@ -133,7 +133,7 @@ func TestPHPPreflight(t *testing.T) {
 	p, _ := ByName("php")
 	// A nonsense binary name can never resolve on any host: Preflight must
 	// report an error, not a silent pass.
-	if err := p.Preflight([]string{"totally-not-a-real-binary-xyz"}); err == nil {
+	if err := p.Preflight("", []string{"totally-not-a-real-binary-xyz"}); err == nil {
 		t.Fatal("Preflight with an unresolvable test command binary must fail closed")
 	}
 }

@@ -1012,3 +1012,35 @@ func TestInterpretersInHidesNoCommandBehindAHeredocItCannotBeSureOf(t *testing.T
 		}
 	}
 }
+
+// Several quoted heredocs on one line are read in order: each body follows
+// the previous one's delimiter line, closed by its own (review I6). The
+// second match once indexed the FIRST heredoc's delimiter line and panicked
+// ("index out of range [9] with length 1") on `cat <<'A' <<'B'`, an input
+// that can come from an operator's own test command.
+func TestInterpretersInReadsTwoHeredocsOnOneLineInOrder(t *testing.T) {
+	got := InterpretersIn([]string{"sh", "-c", "cat <<'A' <<'B'\ncode a\nA\nvim b\nB\nnode t.js"})
+	if want := []string{"cat", "node"}; !slices.Equal(got, want) {
+		t.Errorf("InterpretersIn = %q, want %q: both bodies stripped, the command after both kept", got, want)
+	}
+}
+
+// No heredoc line, however malformed, may panic: the script is an
+// operator's, and a crash there takes corral down with it.
+func TestWithoutHeredocBodiesNeverPanics(t *testing.T) {
+	for _, s := range []string{
+		"cat <<'A' <<'B'", "cat <<'A' <<'B'\nA", "cat <<'A' <<'B'\nA\nB", "<<'A'<<'B'<<'C'\nA\nB\nC\n",
+		"<<''", "<<'", "<<\"\"\n\n", "x <<'A' y <<\"A\"\nA\nA", "<<<'A'\nA", "<<-'A'\n\tA\n<<'B'", "\n\n<<'A'", "<<'A'\n",
+		"cat <<'A' <<'BB' <<'C'\nlong body line here\nA\nB\nBB\nC\nnode x", "a<<'A'b<<'B'c\nB\nA",
+	} {
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					t.Errorf("withoutHeredocBodies(%q) panicked: %v", s, r)
+				}
+			}()
+			_ = withoutHeredocBodies(s)
+			_ = InterpretersIn([]string{"sh", "-c", s})
+		}()
+	}
+}

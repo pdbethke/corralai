@@ -633,12 +633,17 @@ func withoutHeredocBodies(script string) string {
 	lines := strings.Split(script, "\n")
 	var out []string
 	for i := 0; i < len(lines); i++ {
-		out = append(out, lines[i])
-		for _, m := range quotedHeredoc.FindAllStringSubmatchIndex(lines[i], -1) {
-			if m[0] > 0 && lines[i][m[0]-1] == '<' {
+		// The opening line is kept and read; several heredocs on it are
+		// taken in order, each body starting after the previous one's
+		// delimiter line and closed by its own (review I6: indexing the
+		// advancing lines[i] here panicked on `cat <<'A' <<'B'`).
+		line := lines[i]
+		out = append(out, line)
+		for _, m := range quotedHeredoc.FindAllStringSubmatchIndex(line, -1) {
+			if m[0] > 0 && line[m[0]-1] == '<' {
 				continue // `<<<'x'`: a here-string, not a here-document
 			}
-			dashed, delim := lines[i][m[2]:m[3]] == "-", lines[i][m[6]:m[7]]
+			dashed, delim := line[m[2]:m[3]] == "-", line[m[6]:m[7]]
 			end := -1
 			for j := i + 1; j < len(lines); j++ {
 				body := lines[j]

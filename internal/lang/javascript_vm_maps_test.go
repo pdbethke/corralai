@@ -413,3 +413,91 @@ func TestJSCoverageCmdKeepsAnOperatorsQuotedRequire(t *testing.T) {
 		t.Errorf("stderr = %q, want it to contain %q", stderr.String(), want)
 	}
 }
+
+// runMappedReducer runs the shipped reducer over one script a.ts, evaluated
+// as gen (lineLengths) with the recorded source map payload, and the given V8
+// functions (ranges in gen's offsets); disk is a.ts's text on disk.
+func runMappedReducer(t *testing.T, disk string, lineLengths []int, payload map[string]any, functions string) string {
+	t.Helper()
+	if _, err := exec.LookPath("node"); err != nil {
+		t.Skip("node not installed — the reducer runs in node")
+	}
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "a.ts"), []byte(disk), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	length := len(lineLengths) - 1
+	for _, l := range lineLengths {
+		length += l
+	}
+	m, _ := json.Marshal(payload)
+	rec, _ := json.Marshal(map[string]any{"kind": "script", "filename": filepath.Join(root, "a.ts"), "length": length,
+		"lineOffset": 0, "columnOffset": 0, "lineLengths": lineLengths, "map": string(m)})
+	d := t.TempDir()
+	for _, sub := range []string{"cov", "maps"} {
+		if err := os.Mkdir(filepath.Join(d, sub), 0o750); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(d, "maps", "1-0.jsonl"), append(rec, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	v8 := fmt.Sprintf(`{"result":[{"url":"file://%s/a.ts","functions":[{"functionName":"","ranges":[{"startOffset":0,"endOffset":%d,"count":1}]},%s]}]}`, root, length, functions)
+	if err := os.WriteFile(filepath.Join(d, "cov", "coverage-0.json"), []byte(v8), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	script := filepath.Join(d, "corral_reduce.js")
+	if err := os.WriteFile(script, []byte(jsCoverageReduce), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c := exec.Command("node", script, filepath.Join(d, "cov")) // #nosec G204 -- node and a temp script this test wrote
+	c.Dir = root
+	out, err := c.Output()
+	if err != nil {
+		t.Fatalf("reducer: %v", err)
+	}
+	return string(out)
+}
+
+// A MAPPED FILE IS COUNTED ONLY ON THE TEXT ITS MAP DESCRIBES. The map's
+// sourcesContent, when it has one, must be the file on disk; a map without
+// it must not point past the file. Either failing means the file changed
+// since it ran (or the map names another file), and painting V8's counts on
+// it would be a guess (review I3).
+func TestJSReducerCountsAMappedFileOnlyOnTheTextItsMapDescribes(t *testing.T) {
+	const ran = "function f() {\n  return 1;\n}\n"
+	f := `{"functionName":"f","ranges":[{"startOffset":3,"endOffset":31,"count":1}]}`
+	lens := []int{2, 14, 11, 1}
+	payload := func(content any) map[string]any {
+		p := map[string]any{"version": 3, "sources": []string{"a.ts"}, "names": []string{}, "mappings": ";AAAA;AACA;AACA"}
+		if content != nil {
+			p["sourcesContent"] = []any{content}
+		}
+		return p
+	}
+	if out := runMappedReducer(t, ran, lens, payload(ran), f); !strings.Contains(out, "\n3 3 a.ts\n") {
+		t.Errorf("the disk text is the map's sourcesContent, so it is counted:\n%s", out)
+	}
+	if out := runMappedReducer(t, "function f() {\n  return 2;\n}\n", lens, payload(ran), f); !strings.Contains(out, "# uncounted a.ts: the file on disk is not the text its source map was made from") {
+		t.Errorf("a disk text that is not the map's sourcesContent must be uncounted:\n%s", out)
+	}
+	if out := runMappedReducer(t, "function f() {}\n", lens, payload(nil), f); !strings.Contains(out, "# uncounted a.ts: its source map points past the file on disk") {
+		t.Errorf("a map with no sourcesContent that points past the disk text must be uncounted:\n%s", out)
+	}
+}
+
+// A function with ANY range that maps nowhere is left out whole (review M1):
+// keeping its outer range while dropping a cold inner block would paint that
+// block's lines as executed.
+func TestJSReducerLeavesOutAFunctionWithAnUnmappedRange(t *testing.T) {
+	// Generated: a.ts's three lines, then an added line the map does not cover.
+	disk := "function f() {\n  if (x) { y(); }\n}\n"
+	payload := map[string]any{"version": 3, "sources": []string{"a.ts"}, "names": []string{}, "mappings": "AAAA;AACA;AACA", "sourcesContent": []string{disk}}
+	// f spans lines 0-2 (offsets 0..33), and has a cold block whose end lies
+	// on the unmapped line 3.
+	fn := `{"functionName":"f","ranges":[{"startOffset":0,"endOffset":33,"count":1},{"startOffset":24,"endOffset":36,"count":0}]}`
+	out := runMappedReducer(t, disk, []int{14, 16, 1, 2}, payload, fn)
+	if strings.Contains(out, " a.ts\n") && !strings.Contains(out, "# uncounted a.ts") {
+		t.Errorf("f has a range that maps nowhere, so it must not be counted at all:\n%s", out)
+	}
+}

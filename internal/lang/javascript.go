@@ -233,14 +233,18 @@ func (jsPlugin) WorkspaceRunEnv() (env []string, cleanup func()) { return nil, f
 // map, matched by the file's path and the script's exact length, each range's
 // start and last character are mapped through node:module's SourceMap onto
 // the ORIGINAL file, and the range is painted there; the counting below is
-// then the same as for code run as written. A range whose ends map to no
-// original position, to two files, or backwards, is left out, never guessed,
-// and a mapped source outside the working directory or under node_modules
-// is not counted.
+// then the same as for code run as written. A function with any range whose
+// ends map to no original position, to two files, or backwards, is left out
+// whole, never guessed, and a mapped source outside the working directory or
+// under node_modules is not counted. The original file must be the text the
+// map describes: the map's sourcesContent, when it carries one (vitest's
+// do), must equal the file on disk, and a map without it must not point past
+// the file; otherwise the file is DISCLOSED as uncounted (changed since it
+// ran, or the map names another file).
 //
-// A file whose ranges do not fit the source on disk (transformed code with
-// no recorded map, or a file changed or deleted since it ran) cannot be
-// counted. It is DISCLOSED on a
+// Without a recorded map, a file whose ranges do not fit the source on disk
+// (transformed code, or a file changed or deleted since it ran) cannot be
+// counted either. It is DISCLOSED on a
 // "# uncounted <path>: <reason>" line and left out of the counts, never given
 // a number. The test is the SCRIPT-LEVEL range, which spans whatever text V8
 // compiled: it must equal the file's length on disk, or that length plus the
@@ -349,6 +353,24 @@ function countMapped(p,rec,fns){
   let sourceRoot='';
   try{const pl=JSON.parse(rec.map);if(typeof pl.sourceRoot==='string')sourceRoot=pl.sourceRoot}catch(e){}
   const origStarts=new Map();
+  // A source this map cannot be trusted to describe, and why: its
+  // sourcesContent is not the file on disk, or (with no sourcesContent) it
+  // points past the file. Such a file is uncounted, never painted.
+  const bad=new Map();
+  let payload={};
+  try{payload=JSON.parse(rec.map)}catch(e){}
+  const contents=new Map();
+  if(Array.isArray(payload.sources)&&Array.isArray(payload.sourcesContent)){
+    payload.sources.forEach((s,i)=>{const r=resolve(s);if(r!==null&&typeof payload.sourcesContent[i]==='string')contents.set(r,payload.sourcesContent[i])});
+  }
+  function described(src,text){
+    if(!contents.has(src))return true;
+    let c=contents.get(src);
+    if(c.charCodeAt(0)===0xFEFF)c=c.slice(1);
+    if(c===text)return true;
+    bad.set(src,'the file on disk is not the text its source map was made from (changed since it ran, or the map names another file)');
+    return false;
+  }
   function resolve(s){
     if(typeof s!=='string'||s==='')return null;
     if(s.startsWith('file://'))return toPath(s);
@@ -368,11 +390,13 @@ function countMapped(p,rec,fns){
     if(src===null)return null;
     const text=source(src);
     if(text===null)return null;
+    if(bad.has(src)||!described(src,text))return null;
     if(!origStarts.has(src)){const ls=[];let o=0;for(const l of text.split('\n')){ls.push(o);o+=l.length+1}origStarts.set(src,ls)}
     const ls=origStarts.get(src);
-    if(e.originalLine<0||e.originalLine>=ls.length)return null;
+    const past=()=>{bad.set(src,'its source map points past the file on disk (changed since it ran, or the map names another file)');return null};
+    if(e.originalLine<0||e.originalLine>=ls.length)return past();
     const lineEnd=e.originalLine+1<ls.length?ls[e.originalLine+1]-1:text.length;
-    if(ls[e.originalLine]+e.originalColumn>lineEnd)return null;
+    if(ls[e.originalLine]+e.originalColumn>lineEnd)return past();
     // Within one mapping segment, generated and original text advance
     // together (a segment is one token or a run copied as is), so the
     // position is the segment's original start plus how far into the
@@ -383,28 +407,34 @@ function countMapped(p,rec,fns){
   const bySrc=new Map();
   for(const fn of fns){
     const per=new Map();
-    let head=true;
+    let whole=true;
     for(const r of (fn.ranges||[])){
       const a=r.endOffset>r.startOffset?orig(r.startOffset):null,b=a?orig(r.endOffset-1):null;
       const ok=a&&b&&a.src===b.src&&b.at>=a.at;
-      // A function whose own range maps nowhere is code the runner added
-      // (its module wrapper, export getters): none of its ranges is the
-      // original's, and a block of it left alone could read as a cold line.
-      if(head&&!ok)break;
-      head=false;
-      if(!ok)continue;
+      // A function with ANY range that maps nowhere is left out whole. When
+      // it is its own range, it is code the runner added (its module
+      // wrapper, export getters), and a block of it left alone could read
+      // as a cold line; when it is an inner block, keeping the outer range
+      // would paint that block's lines as executed.
+      if(!ok){whole=false;break}
       if(!per.has(a.src))per.set(a.src,[]);
       per.get(a.src).push({startOffset:a.at,endOffset:b.at+1,count:r.count});
     }
+    if(!whole)continue;
     for(const [src,ranges] of per){
       if(!bySrc.has(src))bySrc.set(src,[]);
       bySrc.get(src).push({functionName:fn.functionName,ranges});
     }
   }
+  for(const [src,why] of bad){
+    const key=keyOf(src);
+    if(key!==null&&!lines.has(key))uncounted.set(key,why);
+  }
   for(const [src,mapped] of bySrc){
     const key=keyOf(src);
-    if(key!==null)count(key,source(src),mapped);
+    if(key!==null&&!bad.has(src))count(key,source(src),mapped);
   }
+  if(bad.has(p))return '';
   return bySrc.has(p)?'':'its recorded source map maps none of its executed ranges onto it';
 }
 for(const f of files){

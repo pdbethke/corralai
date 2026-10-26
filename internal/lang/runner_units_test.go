@@ -949,7 +949,9 @@ func TestInterpretersInReadsAQuotedProgramWithoutItsQuotes(t *testing.T) {
 		{[]string{"sh", "-c", `'/home/u/sdk/go/bin/go' 'test' './...'; rc=$?`}, []string{"/home/u/sdk/go/bin/go"}},
 		{[]string{"sh", "-c", `f=$(mktemp) && 'go' 'test' x`}, []string{"mktemp", "go"}},
 		{[]string{"sh", "-c", `"/opt/n/bin/node" x.js`}, []string{"/opt/n/bin/node"}},
-		{[]string{"sh", "-c", `'it'\''s' x`}, []string{`'it'\''s'`}},
+		// The shell's own reading, now that the lexer honours quoting: it
+		// was returned as written while the old lexer could only guess.
+		{[]string{"sh", "-c", `'it'\''s' x`}, []string{"it's"}},
 	} {
 		if got := InterpretersIn(c.argv); !slices.Equal(got, c.want) {
 			t.Errorf("InterpretersIn(%q) = %q, want %q", c.argv, got, c.want)
@@ -1042,5 +1044,79 @@ func TestWithoutHeredocBodiesNeverPanics(t *testing.T) {
 			_ = withoutHeredocBodies(s)
 			_ = InterpretersIn([]string{"sh", "-c", s})
 		}()
+	}
+}
+
+// THE JAIL BINDS WHAT THE OPERATOR'S ARGV NAMES, read whole (ruling R29,
+// final review I3). Two negative controls, both measured on the reviewer's
+// scratch copy before the fix:
+//
+//   - a JavaScript coverage command whose NODE_OPTIONS value holds spaces
+//     and escaped quotes split into the junk program `}--require`, which
+//     swallowed the operator's own quoted node path, so only the reducer's
+//     bare `node` was bound and a node not on PATH was `not found`;
+//   - a repository's test-file path `tests/x;/home/u/.local/bin/evil;.test.js`
+//     put /home/u/.local/bin/evil in command position, and the jail looked
+//     it up and asked to bind its toolchain root.
+//
+// Every coverage wrapper is checked, since every one embeds operator words.
+func TestInterpretersInReadsCorralsOwnQuotingWhole(t *testing.T) {
+	const node = "/home/u/.nvm/versions/node/v22/bin/node"
+	const evil = "/home/u/.local/bin/evil"
+	hostile := "tests/x;" + evil + ";.test.js"
+	for _, c := range []struct {
+		lang string
+		argv []string
+		want string
+	}{
+		{"javascript", []string{node, "--test", "a.test.js"}, node},
+		{"typescript", []string{node, "--test", "a.test.ts"}, node},
+		{"javascript", []string{"node", "--test", hostile}, "node"},
+		{"typescript", []string{"vitest", "run", hostile}, "vitest"},
+		{"ruby", []string{"/home/u/.rbenv/shims/rspec", hostile}, "/home/u/.rbenv/shims/rspec"},
+		{"php", []string{"/home/u/php/bin/php", "vendor/bin/phpunit", hostile}, "/home/u/php/bin/php"},
+		{"go", []string{"/home/u/sdk/go/bin/go", "test", "./" + hostile}, "/home/u/sdk/go/bin/go"},
+		{"rust", []string{"/home/u/.cargo/bin/cargo", "test", "--test", hostile}, "/home/u/.cargo/bin/cargo"},
+		{"python", []string{"/home/u/.venv/bin/python", "-m", "pytest", hostile}, "/home/u/.venv/bin/python"},
+	} {
+		p, _ := ByName(c.lang)
+		cmd, ok := p.(CoverageReporter).CoverageCmd(c.argv)
+		if !ok {
+			t.Fatalf("%s CoverageCmd refused %q", c.lang, c.argv)
+		}
+		got := InterpretersIn(cmd)
+		if !slices.Contains(got, c.want) {
+			t.Errorf("%s %q: InterpretersIn = %q, missing the operator's %s", c.lang, c.argv, got, c.want)
+		}
+		for _, w := range got {
+			if strings.Contains(w, "--require") || strings.Contains(w, "evil") || strings.Contains(w, ".test.") || strings.Contains(w, "'") || strings.Contains(w, `"`) {
+				t.Errorf("%s %q: InterpretersIn names %q, which is no program the command runs (full: %q)", c.lang, c.argv, w, got)
+			}
+		}
+	}
+}
+
+// The quote-aware lexer splits only where the shell does: inside '…', "…"
+// and after a backslash a separator is text, and a command substitution —
+// bare or inside double quotes — is read for the commands it runs.
+func TestShellCommandWordsHonoursQuoting(t *testing.T) {
+	for _, c := range []struct {
+		script string
+		want   []string
+	}{
+		{`'a;b' x; c`, []string{"a;b", "c"}},
+		{`"a b" x && c`, []string{"a b", "c"}},
+		{`a\;b x | c`, []string{"a;b", "c"}},
+		{`X="1 2; evil" Y='3|4' run "$@"`, []string{"run"}},
+		{`v="$(rustc -vV | sed -n p)/x" && go test`, []string{"rustc", "sed", "go"}},
+		{`d=$(mktemp -d) && node "$d/r.js" 2>&1 >&2; cat x`, []string{"mktemp", "node", "cat"}},
+		{`R="-r$d/x ${RUBYOPT:-}" ${RUNNER:-rspec a} b`, []string{"${RUNNER:-rspec a}"}},
+		{`echo 'it'\''s'; 'it'\''s' x`, []string{"echo", "it's"}},
+		{`# 'a comment; evil'` + "\nnode t.js", []string{"node"}},
+		{`exec "$@"`, []string{"$@"}},
+	} {
+		if got := shellCommandWords(c.script); !slices.Equal(got, c.want) {
+			t.Errorf("shellCommandWords(%q) = %q, want %q", c.script, got, c.want)
+		}
 	}
 }

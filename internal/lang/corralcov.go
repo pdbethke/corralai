@@ -441,15 +441,22 @@ func firstLineExcerpt(s string) string {
 // know whether the suite passed (unit evidence, which takes a unit's
 // coverage only from a green run) reads it with SuiteExit, while every
 // reader of the report itself is unchanged.
+//
+// THE OPERATOR'S COMMAND IS PASSED AS POSITIONAL PARAMETERS and run as
+// `"$@"`, never spliced into the script (ruling R29). The shell then never
+// re-reads it, and the jail takes the programs to bind from the argv itself
+// (InterpretersIn reads `"$@"` as the positionals), the shape
+// ListUnitsCmd's listing already has. The script holds only corral's own
+// text.
+// coverageArgv0 is the $0 a coverage wrapper's script runs under: the
+// word after the script, before the operator's command.
+const coverageArgv0 = "corral-coverage"
+
 func coverageRunAndReduce(setup, env string, testCmd []string, reduce string) []string {
-	quoted := make([]string, len(testCmd))
-	for i, arg := range testCmd {
-		quoted[i] = shellQuote(arg)
-	}
 	script := `d=$(mktemp -d) && trap 'rm -rf "$d"' EXIT && ` + setup +
-		env + " " + strings.Join(quoted, " ") + " >&2" +
+		env + ` "$@" >&2` +
 		"; rc=$?; " + suiteExitTrailer + "; " + reduce
-	return []string{"sh", "-c", script}
+	return append([]string{"sh", "-c", script, coverageArgv0}, testCmd...)
 }
 
 // coverageLaunchers are the launchers and interpreters a language's suites
@@ -549,61 +556,17 @@ func coverageRunnerNamed(testCmd []string, runners []string) bool {
 // languages at once and get the pre-flight skipped as "ambiguous" — defeating
 // the exact disambiguation the allow-list exists to perform.
 //
-// This is a lexer, not a parser: it does not honour quoting, so a command
-// substitution or a quoted `;` can still split a word. That direction is safe
-// — it can only produce EXTRA candidate words, and every one of them still has
-// to equal a runner name to match. It cannot make a runner disappear. The one
-// thing it removes before lexing is the body of a quoted-delimiter
-// here-document whose closing line it finds (withoutHeredocBodies), which
-// the shell itself reads as text, never as commands.
+// It reads the script through shellCommands, which honours the shell's
+// quoting, so a quoted `;` or space never splits a word and a word is
+// returned without its quotes (`'go'` is go). The one thing removed before
+// lexing is the body of a quoted-delimiter here-document whose closing line
+// is found (withoutHeredocBodies), which the shell itself reads as text,
+// never as commands.
 func shellCommandWords(script string) []string {
-	script = withoutHeredocBodies(script)
 	var words []string
-	seps := func(r byte) bool {
-		return r == ';' || r == '&' || r == '|' || r == '\n' || r == '(' || r == ')'
-	}
-	i := 0
-	for i < len(script) {
-		for i < len(script) && (script[i] == ' ' || script[i] == '\t' || seps(script[i])) {
-			i++
-		}
-		if i >= len(script) {
-			break
-		}
-		// A comment runs to end of line and contains no command.
-		if script[i] == '#' {
-			for i < len(script) && script[i] != '\n' {
-				i++
-			}
-			continue
-		}
-		start := i
-		for i < len(script) && script[i] != ' ' && script[i] != '\t' && !seps(script[i]) {
-			i++
-		}
-		word := script[start:i]
-		// `FOO=bar cmd` — an assignment is not the command.
-		if eq := strings.IndexByte(word, '='); eq > 0 && !strings.ContainsAny(word[:eq], "/.") {
-			continue
-		}
-		// A shell keyword or an exec-style wrapper is TRANSPARENT: the command
-		// is the next word, not this one. rubyPlugin.TestCmd() is exactly this
-		// shape — `if grep -q RSpec "$t"; then exec rspec "$t"; else exec ruby
-		// "$t"; fi` — so without this the plugin cannot instrument its own
-		// stock command, which is the failure the repository's
-		// TestPluginStockCommandSatisfiesOwnCoverageCmd exists to catch.
-		if coverageTransparentWord[word] {
-			continue
-		}
-		// `>&2` splits on `&` and leaves "2" in command position. A bare
-		// number is a file descriptor, never a program.
-		if strings.Trim(word, "0123456789") == "" {
-			continue
-		}
-		words = append(words, word)
-		// Everything up to the next separator is this command's arguments.
-		for i < len(script) && !seps(script[i]) {
-			i++
+	for _, cmd := range shellCommands(withoutHeredocBodies(script)) {
+		if argv := commandArgv(cmd); len(argv) > 0 {
+			words = append(words, argv[0].text)
 		}
 	}
 	return words
@@ -701,28 +664,6 @@ func coverageMergeDir(header string) string {
 	return `printf '%s\n' ` + shellQuote(header) + `; cat "$d"/cov/* 2>/dev/null || true`
 }
 
-// unquotedProgram is a command word without the shell quotes around it,
-// when the whole word is ONE quoted string whose text the shell takes
-// literally: '…' with no quote inside, or "…" with nothing the shell would
-// expand. Every coverage wrapper names the operator's interpreter through
-// shellQuote ('go', '/home/u/sdk/go/bin/go'); read with its quotes, the jail
-// looked up a program literally called 'go' and bound nothing, and the run
-// failed `go: not found`. Any other word is returned as it is: a guess at
-// what the shell would make of it could only name the wrong program.
-func unquotedProgram(w string) string {
-	if len(w) < 2 {
-		return w
-	}
-	inner := w[1 : len(w)-1]
-	switch {
-	case w[0] == '\'' && w[len(w)-1] == '\'' && !strings.Contains(inner, "'"):
-		return inner
-	case w[0] == '"' && w[len(w)-1] == '"' && !strings.ContainsAny(inner, "\"$`\\"):
-		return inner
-	}
-	return w
-}
-
 // InterpretersIn returns every program a command will actually execute in
 // command position: argv[0] for a plain command, and each command-position
 // word of the script for a `sh -c` wrapper.
@@ -755,12 +696,27 @@ func InterpretersIn(argv []string) []string {
 					positional = argv[i+3:]
 				}
 				var out []string
-				for _, w := range shellCommandWords(argv[i+1]) {
-					if w == `"$@"` || w == `$@` {
+				for _, cmd := range shellCommands(withoutHeredocBodies(argv[i+1])) {
+					words := commandArgv(cmd)
+					if len(words) == 0 {
+						continue
+					}
+					if raw := words[0].raw; raw == `"$@"` || raw == `$@` {
 						out = append(out, InterpretersIn(positional)...)
 						continue
 					}
-					out = append(out, unquotedProgram(w))
+					// A command that is itself a `sh -c` wrapper — the
+					// operator's own, named in corral's wrapper as quoted
+					// words — is read through, as the outer one is.
+					texts := make([]string, len(words))
+					for j, w := range words {
+						texts[j] = w.text
+					}
+					if cmdIsShellWrapped(texts) {
+						out = append(out, InterpretersIn(texts)...)
+						continue
+					}
+					out = append(out, texts[0])
 				}
 				return out
 			}

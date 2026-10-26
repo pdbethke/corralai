@@ -183,6 +183,20 @@ history of any release, `git log v0.3.4..v0.3.5`.
   `xvfb-run`, move `xvfb-run` into the test command. The jail never passed
   these.
 
+### Fixed
+
+- **The jail binds the toolchain your test command names, and nothing a
+  repository's file names.** The jail found the programs to bind by
+  splitting corral's own coverage scripts at every space and `;`, quotes or
+  not. The JavaScript wrapper's `NODE_OPTIONS` value hid the operator's node,
+  so a jailed unit run with a node outside `/usr` failed `not found`
+  (commander.js, measured: all 109 units before the fix; 109 run, 4 failed,
+  7 promoted after it, the same as with the system node). A test file named
+  like `tests/x;/path/to/tool;.test.js` made the jail look up `/path/to/tool`
+  and bind its directory. The script is now read with the shell's own
+  quoting, and the JavaScript, TypeScript, Ruby and PHP wrappers pass your
+  command as arguments rather than splicing it into the script.
+
 ## [v1.0.0-rc.28] — 2026-10-21
 
 ### Fixed

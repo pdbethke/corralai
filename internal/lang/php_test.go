@@ -149,15 +149,15 @@ func TestPHPCoverageCmdDisablesTheProjectsOwnCoverage(t *testing.T) {
 	if !ok {
 		t.Fatal("no coverage command")
 	}
-	if !strings.Contains(cmd[2], "'phpunit.xml' '--no-coverage'") {
-		t.Errorf("phpunit run must carry --no-coverage: %s", cmd[2])
+	if got := cmd[len(cmd)-2:]; got[0] != "phpunit.xml" || got[1] != "--no-coverage" {
+		t.Errorf("phpunit run must carry --no-coverage: %q", cmd)
 	}
 	cmd, ok = phpPlugin{}.CoverageCmd([]string{"composer", "test"})
 	if !ok {
 		t.Fatal("no coverage command for composer")
 	}
-	if strings.Contains(cmd[2], "--no-coverage") {
-		t.Errorf("a composer script must not have phpunit flags appended: %s", cmd[2])
+	if strings.Contains(strings.Join(cmd, " "), "--no-coverage") {
+		t.Errorf("a composer script must not have phpunit flags appended: %q", cmd)
 	}
 }
 

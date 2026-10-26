@@ -1300,6 +1300,28 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 			return key
 		},
 	}
+	// The goal source was resolved above, from the NAME-paired selection.
+	// When that selected nothing, it was the no-goals source, and every file
+	// evidence then promoted was excluded "ungoaled" with no model ever asked
+	// (B6: REA under --path src/application/reverse, ModelCalls=0, a paid
+	// audit ending COULD-NOT-GRADE). It is resolved again over the final
+	// selection, with the same refusals (no --derive-model, a seat that
+	// cannot start, a --runner that serves none of these files), still
+	// before any goal is derived or any grading seat runs.
+	if _, none := gs.(noGoals); none && len(selected) > 0 {
+		if err := runnerServesSome(*runnerFlag, selected); err != nil {
+			fmt.Fprintf(stderr, "corral certify --repo: %v\n", err)
+			return 2
+		}
+		gs, disclosure, code = resolveGoalSource(stderr, *repoDir, *goalsPath, *deriveModel, seatReg.deriveEndpoint(), *dryRun, len(selected), keepDeriver, goalStore, *noGoalCacheFlag, !*noGoalCacheFlag)
+		if code != 0 {
+			return code
+		}
+		cachingGS, cacheWired = gs.(*reposcan.CachingGoalSource)
+		if disclosure != "" {
+			fmt.Fprintln(stdout, disclosure)
+		}
+	}
 	jobs, goalExcl, err := reposcan.EmitJobs(cfg, selected, gs)
 	if operatorInterrupted(err) {
 		return refuse()

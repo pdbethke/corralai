@@ -8,6 +8,7 @@ import (
 	"io"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -600,5 +601,52 @@ func TestUnitEvidenceIsTheSameUnderAPathAndItsParent(t *testing.T) {
 				t.Errorf("--path %q: src/app/Service.ts must be paired by evidence as it is with no --path:\n%s", scope, s)
 			}
 		})
+	}
+}
+
+// recordingDeriver counts the files it was asked about and answers NONE, so
+// the scan stops at goal derivation without any grading seat running.
+type recordingDeriver struct {
+	mu    sync.Mutex
+	asked []string
+}
+
+func (d *recordingDeriver) Derive(_ context.Context, c reposcan.Candidate, _ string) (string, bool, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.asked = append(d.asked, c.Path)
+	return "", false, nil
+}
+
+// A FILE ONLY EVIDENCE PAIRED STILL GETS ITS GOAL DERIVED (B6). The goal
+// source was resolved before the evidence pass, from the name-paired
+// selection; on a scan where name pairing found nothing (REA with --path
+// src/application/reverse) that was the no-goals source, so the promoted
+// file was excluded "ungoaled — purely declarative" with no model ever
+// asked (ModelCalls=0), and the paid audit ended COULD-NOT-GRADE.
+func TestAnEvidenceOnlyCandidateIsAskedForItsGoal(t *testing.T) {
+	root := unitEvidenceTSFixture(t)
+	fake := &fakeUnitPass{ev: reposcan.UnitEvidence{Ran: true, Units: []reposcan.UnitResult{
+		unitRun("tests/composition/service.test.ts", map[string]lang.LineCounts{"src/app/Service.ts": {Executed: 1, Executable: 1}}),
+	}}}
+	fake.install(t)
+	d := &recordingDeriver{}
+	prev := certifyRepoDeriver
+	t.Cleanup(func() { certifyRepoDeriver = prev })
+	certifyRepoDeriver = func(string, string) (reposcan.Deriver, error) { return d, nil }
+	t.Setenv("ANTHROPIC_API_KEY", "test-placeholder-not-a-real-key")
+
+	var out, errb bytes.Buffer
+	runCertifyRepo([]string{
+		"--repo", root, "--writer-model", testHerdWriter, "--mutant-model", testHerdMutant, "--critic-model", "off",
+		"--derive-model", testHerdWriter, "--no-goal-cache", "--no-ledger", "--substrate", substrateWorkspace, "--no-selection-cache",
+		"--", "vitest", "run",
+	}, &out, &errb)
+	s := out.String() + "\n[stderr]\n" + errb.String()
+	if !strings.Contains(s, "src/app/Service.ts paired by evidence") {
+		t.Fatalf("fixture: the file must be paired by evidence:\n%s", s)
+	}
+	if !slices.Equal(d.asked, []string{"src/app/Service.ts"}) {
+		t.Errorf("deriver asked about %q, want exactly the evidence-paired src/app/Service.ts:\n%s", d.asked, s)
 	}
 }

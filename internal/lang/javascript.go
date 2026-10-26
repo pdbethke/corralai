@@ -441,7 +441,7 @@ function countMapped(p,rec,fns){
   }
   for(const [src,why] of bad){
     const key=keyOf(src);
-    if(key!==null&&!lines.has(key))uncounted.set(key,why);
+    if(key!==null)uncounted.set(key,why);
   }
   for(const [src,mapped] of bySrc){
     const key=keyOf(src);
@@ -472,7 +472,7 @@ for(const f of files){
     const rec=(maps.get(p)||[]).find(r=>r.length===script);
     if(rec){
       const why=countMapped(p,rec,fns);
-      if(why&&!lines.has(key))uncounted.set(key,why);
+      if(why)uncounted.set(key,why);
       if(top)loaded.add(key);
       continue;
     }
@@ -510,8 +510,11 @@ for(const k of keys){
   // NO EXECUTABLE LINE, NO ENTRY: a file V8 measured with nothing in it to
   // run (whitespace only) is not measurable, and "0 0" would read as
   // measured-and-never-executed, accusing it of a gap it cannot have.
-  if(st){const exe=sum(st.exe);if(exe>0){out.push(sum(st.ran)+' '+exe+' '+k);if(loaded.has(k))out.push('# loaded '+k)}}
-  else out.push('# uncounted '+k+': '+uncounted.get(k));
+  // A file ANY process could not count is uncounted, whatever another
+  // counted: the process that could not count it may be the one it ran in,
+  // and a count from the others would read as a measured zero.
+  if(uncounted.has(k))out.push('# uncounted '+k+': '+uncounted.get(k));
+  else{const exe=sum(st.exe);if(exe>0){out.push(sum(st.ran)+' '+exe+' '+k);if(loaded.has(k))out.push('# loaded '+k)}}
 }
 process.stdout.write(out.join('\n')+'\n');
 `

@@ -285,3 +285,29 @@ func TestJSReducerDisclosesAScriptRangeThatIsNotTheFile(t *testing.T) {
 		})
 	}
 }
+
+// A FILE ANY PROCESS COULD NOT COUNT IS UNCOUNTED, in either order (ruling
+// R30, final review T1). One worker counts lib/x.js with nothing run; another
+// ran text under its URL that is not the file on disk. The file is not a
+// measured zero — the second process may be exactly where it ran — so it is
+// disclosed and absent, whichever process's report the reducer reads first.
+// Before, a count read first won and the disclosure was dropped, and a
+// disclosure read first lost to the count.
+func TestJSReducerUncountsAFileAnyProcessCouldNotCount(t *testing.T) {
+	src := "function a() { return 1; }\n" // 27 characters
+	counted := `{"result":[{"url":"file://ROOT/lib/x.js","functions":[
+	 {"functionName":"","ranges":[{"startOffset":0,"endOffset":27,"count":1}]},
+	 {"functionName":"a","ranges":[{"startOffset":0,"endOffset":26,"count":0}]}]}]}`
+	foreign := `{"result":[{"url":"file://ROOT/lib/x.js","functions":[
+	 {"functionName":"","ranges":[{"startOffset":0,"endOffset":90,"count":1}]},
+	 {"functionName":"a","ranges":[{"startOffset":10,"endOffset":60,"count":1}]}]}]}`
+	for name, order := range map[string][]string{"counted first": {counted, foreign}, "uncountable first": {foreign, counted}} {
+		out := runJSReducer(t, map[string]string{"lib/x.js": src}, order)
+		if !strings.Contains(out, "# uncounted lib/x.js:") {
+			t.Errorf("%s: want lib/x.js disclosed as uncounted, got:\n%s", name, out)
+		}
+		if strings.Contains(out, " lib/x.js\n") && !strings.Contains(out, "# uncounted lib/x.js") || strings.Contains(out, "0 1 lib/x.js") {
+			t.Errorf("%s: lib/x.js must not be a measured zero:\n%s", name, out)
+		}
+	}
+}

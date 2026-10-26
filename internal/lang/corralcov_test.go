@@ -705,9 +705,8 @@ func TestCapturedCoverageReportsMatchALiveRun(t *testing.T) {
 
 // PARSECOVERAGE IS DERIVED FROM COVERAGECOUNTS, and this holds it there: over
 // each language's real captured report, a file is executed exactly when it
-// has an executed line, and both maps name the same files. A reporter in
-// coverageCountsPending is skipped by name; any other reporter must have a
-// captured report, so a new one cannot skip this by omission.
+// has an executed line, and both maps name the same files. Every reporter
+// must have a captured report, so a new one cannot skip this by omission.
 func TestParseCoverageAgreesWithCoverageCounts(t *testing.T) {
 	for name, p := range registry {
 		r, ok := p.(CoverageReporter)

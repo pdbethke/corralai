@@ -769,3 +769,29 @@ func TestUnitPassKeepsUncountedListsOutOfTheReason(t *testing.T) {
 		t.Errorf("alpha.Uncounted = %q, want %q", alpha.Uncounted, want)
 	}
 }
+
+// A vitest unit whose coverage names no project file — no entry and nothing
+// disclosed — is what vitest's default forks pool gives (measured on vitest
+// 3.2.7: its worker writes no V8 coverage), and its reason says so and what
+// to do, instead of "unparseable" (review I4). The reason is the vitest
+// row's fact; jest's identical report keeps the general reason.
+func TestUnitPassNamesVitestsForksPoolWhenNoWorkerCoverage(t *testing.T) {
+	f := newUnitFixture(t, "typescript", []string{"vitest", "run"}, vitestTwoUnits)
+	f.answer("test/alpha.test.ts", sandbox.EnumerateResult{Output: jsReport()})
+	f.answer("test/beta.test.ts", sandbox.EnumerateResult{Output: jsReport("2 10 src/y.ts")})
+	vt, _ := lang.ByName("typescript")
+	want := lang.UnitNoCoverageReason(vt, lang.Cmd([]string{"vitest", "run"}))
+	if want == "" || !strings.Contains(want, "forks pool") || !strings.Contains(want, "--pool=threads") {
+		t.Fatalf("vitest's no-coverage reason = %q, want it to name the forks pool and --pool=threads", want)
+	}
+	if got := unitByName(t, f.collect(context.Background(), "/w", 1), "test/alpha.test.ts").Err; got != want {
+		t.Errorf("alpha.Err = %q, want %q", got, want)
+	}
+
+	j := newUnitFixture(t, "typescript", []string{"jest"}, "corral-units-cwd /w\n[\"/w/test/alpha.test.ts\",\"/w/test/beta.test.ts\"]\n")
+	j.answer("test/alpha.test.ts", sandbox.EnumerateResult{Output: jsReport()})
+	j.answer("test/beta.test.ts", sandbox.EnumerateResult{Output: jsReport("2 10 src/y.ts")})
+	if got := unitByName(t, j.collect(context.Background(), "/w", 1), "test/alpha.test.ts").Err; !strings.HasPrefix(got, "unparseable: ") {
+		t.Errorf("jest alpha.Err = %q, want the general unparseable reason", got)
+	}
+}

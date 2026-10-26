@@ -96,6 +96,16 @@ func ParseUnitList(p Plugin, inv Invocation, stdout string) []string {
 	return out
 }
 
+// UnitNoCoverageReason is argv's runner's UnitNoCoverage: why one of its
+// unit runs whose coverage names no project file gave none, or "".
+func UnitNoCoverageReason(p Plugin, inv Invocation) string {
+	r, ok := RunnerFor(p, inv)
+	if !ok {
+		return ""
+	}
+	return r.UnitNoCoverage
+}
+
 // UnitName is a listed unit without the mark ParseUnitList gives one that
 // cannot run alone.
 func UnitName(unit string) string { return listedName(unit) }

@@ -158,6 +158,7 @@ func CollectUnitEvidence(ctx context.Context, runner commandRunner, files map[st
 		return UnitEvidence{Units: results, Note: fmt.Sprintf("%s: no unit `%s` collects can run alone under coverage, so no unit evidence", p.Name(), command)}
 	}
 
+	noCoverage := lang.UnitNoCoverageReason(p, inv)
 	announce(len(runnable), len(units))
 	jobs := make(chan int)
 	var wg sync.WaitGroup
@@ -166,7 +167,7 @@ func CollectUnitEvidence(ctx context.Context, runner commandRunner, files map[st
 		go func() {
 			defer wg.Done()
 			for i := range jobs {
-				r := runUnit(ctx, runner, files, reporter, cmds[i], modulePath)
+				r := runUnit(ctx, runner, files, reporter, cmds[i], modulePath, noCoverage)
 				r.Unit = results[i].Unit
 				results[i] = r
 			}
@@ -202,8 +203,10 @@ func (ev UnitEvidence) Settled() bool {
 }
 
 // runUnit runs one unit's coverage command and reads its report. Every way
-// the run can fail to measure is an Err, never an empty Counts.
-func runUnit(ctx context.Context, runner commandRunner, files map[string]string, reporter lang.CoverageReporter, cmd []string, modulePath string) UnitResult {
+// the run can fail to measure is an Err, never an empty Counts. noCoverage
+// is the runner's known cause for a report that names no project file at
+// all (lang.UnitNoCoverageReason), "" for none.
+func runUnit(ctx context.Context, runner commandRunner, files map[string]string, reporter lang.CoverageReporter, cmd []string, modulePath, noCoverage string) UnitResult {
 	if err := ctx.Err(); err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {
 			return UnitResult{Err: unitNotRunTimeLimit}
@@ -266,6 +269,9 @@ func runUnit(ctx context.Context, runner commandRunner, files map[string]string,
 		// reason it made REA's scan output 1.4 MB (ruling R22).
 		var empty *lang.NoFileEntriesError
 		if errors.As(err, &empty) {
+			if len(empty.Disclosed) == 0 && noCoverage != "" {
+				return UnitResult{Err: noCoverage}
+			}
 			return UnitResult{Err: "unparseable: " + empty.Summary(), Uncounted: lang.UncountedCoverage(out)}
 		}
 		return UnitResult{Err: fmt.Sprintf("unparseable: %v", err)}

@@ -81,6 +81,11 @@ type Runner struct {
 	ParseUnits func(stdout string) []string
 	UnitCmd    func(argv []string, unit string) ([]string, bool)
 	UnitCoruns func(unit, other string) bool
+	// UnitNoCoverage is what a one-unit run of this runner means when its
+	// coverage report names no project file at all — no entry, nothing
+	// disclosed — measured, with what to do about it; "" when the runner
+	// has no such known cause and the general "unparseable" reason stands.
+	UnitNoCoverage string
 	// Disclose is what the scan line says about running this runner in
 	// repoDir; PreflightBin is the binary that must be on PATH.
 	Disclose     func(repoDir string, argv []string) []string
@@ -183,7 +188,8 @@ var runners = []Runner{
 		ListCmd: vitestListCmd, ParseList: vitestParseList, SingleCmd: vitestSingleCmd, ResolveByList: true, Coruns: fullNameColl,
 		FirstFailure: firstOf(vitestFailures), FailedTests: vitestFailures, DeselectCmd: vitestDeselectCmd,
 		ListUnits: vitestListUnits, ParseUnits: vitestParseUnits, UnitCmd: vitestUnitCmd, UnitCoruns: vitestUnitCoruns,
-		Note: "listing, one-test and one-file runs verified on vitest 3.2; vitest 1, 2 and 4 were not run",
+		UnitNoCoverage: "no worker coverage: the run's V8 coverage named no project file, which is what vitest's forks pool gives (measured on vitest 3.2.7); run with --pool=threads",
+		Note:           "listing, one-test and one-file runs verified on vitest 3.2; unit evidence needs --pool=threads (vitest 3.2.7's default forks pool wrote no worker coverage); unit evidence counted through corral's vm source-map preload on vitest 3.2.7 and 5.0.3; vitest 1, 2 and 4 were not run",
 	},
 	{
 		Name: "node --test", ID: "node-test", Languages: []string{"javascript", "typescript"}, Default: true,

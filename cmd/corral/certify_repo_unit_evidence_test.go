@@ -574,3 +574,31 @@ func TestUnitPassNegativeFindingsAreScopedAndCounted(t *testing.T) {
 		})
 	}
 }
+
+// EVIDENCE DOES NOT DEPEND ON HOW NARROW --path IS (B5). --path bounds which
+// files are audited, never where their tests may live: the unit
+// tests/composition/service.test.ts is outside every scope below and is the
+// landing of src/app/Service.ts under each. On REA, --path
+// src/application/reverse ran 25 green units and paired nothing, while
+// --path src paired ReverseEngineeringService.ts: the workspace landing map
+// was built from the SCOPED inventory, so a test outside the scope did not
+// exist to UnitTestFile.
+func TestUnitEvidenceIsTheSameUnderAPathAndItsParent(t *testing.T) {
+	for _, scope := range []string{"", "src", "src/app"} {
+		t.Run("path="+scope, func(t *testing.T) {
+			root := unitEvidenceTSFixture(t)
+			fake := &fakeUnitPass{ev: reposcan.UnitEvidence{Ran: true, Units: []reposcan.UnitResult{
+				unitRun("tests/composition/service.test.ts", map[string]lang.LineCounts{"src/app/Service.ts": {Executed: 1, Executable: 1}}),
+			}}}
+			fake.install(t)
+			args := []string{"--", "vitest", "run"}
+			if scope != "" {
+				args = append([]string{"--path", scope}, args...)
+			}
+			s := runUnitEvidenceScan(t, root, args...)
+			if !strings.Contains(s, "src/app/Service.ts paired by evidence: 1 covering test unit(s), authored test lands beside tests/composition/service.test.ts") {
+				t.Errorf("--path %q: src/app/Service.ts must be paired by evidence as it is with no --path:\n%s", scope, s)
+			}
+		})
+	}
+}

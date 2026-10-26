@@ -376,6 +376,10 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	// test that lives outside it. Everything downstream — ranking, counts,
 	// the exclusion tally, the ledger's file rows — then describes the
 	// scope alone.
+	// The whole repository's files, before the scope bounds them: the unit
+	// pass's landing map is a question about where TESTS are, and a test
+	// outside --path is still a landing (B5).
+	repoInventory := checkoutInventory(cands, excl)
 	cands, excl = scopeEnumeration(scope, cands, excl)
 
 	// --json emits the inventory INSTEAD of the human report, matching the
@@ -1072,7 +1076,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		// under --whole-suite too, and selectionMethod above has already
 		// been decided without it.
 		if len(selectionSources) > 0 && runsUnitPass(plug) {
-			ex.unitInventory = checkoutInventory(cands, excl)
+			ex.unitInventory = repoInventory
 			ex.units = ex.collectUnits(evidenceCtx, selectionSources)
 			printUnitPass(stdout, ex)
 			if ex.unitsDuration > 0 {
@@ -4897,8 +4901,11 @@ type localExecutor struct {
 	// executor is built. Never a number of the pass's own.
 	unitWorkers int
 	// unitInventory is every file the scan's enumeration classified in the
-	// checkout (checkoutInventory), set before collectUnits: on the workspace
-	// substrate the landing map is built from it (workspaceLandingFiles).
+	// checkout (checkoutInventory), over the WHOLE repository, never only
+	// --path's subtree, set before collectUnits: on the workspace substrate
+	// the landing map is built from it (workspaceLandingFiles), and a unit's
+	// test outside the scope is still a landing (B5). The jail's landing map
+	// is its seed, which holds the whole repository already.
 	unitInventory []string
 	// unitLanding is the repository the unit pass lands tests in
 	// (reposcan.UnitTestFile's files): the jail seed's files, or the

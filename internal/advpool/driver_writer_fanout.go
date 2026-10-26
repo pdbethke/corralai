@@ -399,8 +399,11 @@ func (d *Driver) finishWriterFanout(run *runState) {
 			run.rs.CodePath, measured, len(run.writerOrder))
 	}
 	if len(run.authoredExtra) > 0 {
-		log.Printf("advpool: %s: %d proven test(s) could not be merged into one file (a name the language's concatenator will not rewrite) — they ride the verdict separately rather than being dropped",
-			run.rs.CodePath, len(run.authoredExtra))
+		// The parts' own reason, not a guess at one: this line used to
+		// name a collision the concatenator would not rename whatever
+		// the cause, and on REA the cause was two import lists.
+		log.Printf("advpool: %s: %d proven test(s) could not be merged into one file — they ride the verdict separately rather than being dropped (first reason: %s)",
+			run.rs.CodePath, len(run.authoredExtra), run.authoredExtra[0].Reason)
 	}
 }
 

@@ -1080,10 +1080,16 @@ func (v JailValidator) CompileTest(ctx context.Context, codePath, code, test str
 		// survivor on that file could be proven. So a failing command is run
 		// once more without the authored test, and skipped if it fails there
 		// too. A command naming the test file is the test's own check and is
-		// never excused. Skipping cannot fabricate a proof: the test is still
-		// run against the compliant code before it can kill anything, and a
-		// test that does not build fails there.
-		if !slices.Contains(cmd, testPath) {
+		// never excused, and neither is a failure the compiler reports
+		// AGAINST the test file: TypeScript's check is one sh -c script that
+		// names the test only inside the script, so on REA (2026-10-26) the
+		// argv check never saw it, the re-run without the test failed on the
+		// missing file, and tests with TS2352 in their own lines were excused,
+		// graded by execution (vitest strips types without checking them) and
+		// counted as proven. Skipping a check the source alone fails cannot
+		// fabricate a proof where the runner builds what it runs: the test is
+		// still run against the compliant code before it can kill anything.
+		if !slices.Contains(cmd, testPath) && !outputNamesFile(output, testPath) {
 			if ok, _, berr := v.runCompileCmd(ctx, unmodified, cmd); berr == nil && !ok {
 				log.Printf("advpool: %s: compile check %s rejects the UNMODIFIED source too, so it cannot judge the authored test — skipped; the test is graded by execution instead. Gate output: %s",
 					codePath, strings.Join(cmd, " "), strings.TrimSpace(output))
@@ -1102,6 +1108,22 @@ func (v JailValidator) CompileTest(ctx context.Context, codePath, code, test str
 		return &CompileError{Output: output, Cmd: cmd}
 	}
 	return nil
+}
+
+// outputNamesFile reports whether compiler output attributes a diagnostic to
+// path: the path itself, or its base name followed by the position syntax
+// compilers print after a file (tsc `x.ts(15,23)`, go and ruby `x.go:12`),
+// for a compiler that prints the path in another frame (`./pkg/x_test.go`,
+// an absolute temp path).
+func outputNamesFile(output, path string) bool {
+	if path == "" || output == "" {
+		return false
+	}
+	if strings.Contains(output, path) {
+		return true
+	}
+	base := filepath.Base(path)
+	return strings.Contains(output, base+"(") || strings.Contains(output, base+":")
 }
 
 // runCompileCmd runs one command of the compile sequence, with its output

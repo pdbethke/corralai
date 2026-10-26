@@ -257,8 +257,11 @@ package reposcan
 // needs its own options was graded with the gate off, its authored tests
 // never type-checked (REA). Riding along: proven tests with a multi-line
 // import now merge into a file that parses, so a "34" AuthoredTest and its
-// AuthoredTogether result could be a broken merge. Shape unchanged;
-// behaviour bump.
+// AuthoredTogether result could be a broken merge; a TypeScript authored
+// test whose own lines do not type-check is no longer excused from the
+// compile check, so a "34" TypeScript ProvenMissed can count tests that do
+// not type-check; and plain named imports of one module are unioned in the
+// merged file. Shape unchanged; behaviour bump.
 const VerdictGeneration = "35"
 
 // VerdictShapeSHA256 fingerprints advpool.Verdict's serialized shape: every

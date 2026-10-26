@@ -221,6 +221,25 @@ history of any release, `git log v0.3.4..v0.3.5`.
   names from one module are kept as separate files, as one-line imports
   already were. The warning now says a failure together is interference or
   a broken merge, and points at the runner output that tells them apart.
+- **A TypeScript test corral writes must type-check to count as proven.**
+  When an authored test failed the compile check, corral re-ran the check
+  without it to learn whether the source itself was broken, and skipped the
+  check if so. TypeScript's check names the test only inside one script, so
+  the re-run always failed (the test file was gone) and every TypeScript
+  authored test with a type error was excused, then graded by execution,
+  which strips types without checking them. On REA such tests (TS2352 and
+  TS2820 in their own lines) were counted as proven. A failure the compiler
+  reports against the authored test file is now never excused: the writer is
+  shown the error and tries again, and a test that never type-checks is not
+  a proof.
+- **Proven tests that import different names from one module merge.**
+  `import { A } from "m"` in one proven test and `import { A, B } from "m"`
+  in another now become one `import { A, B } from "m"` in the merged file;
+  they used to be refused, and on REA 5 of 6 proven tests arrived as
+  separate files. A default or namespace import that differs, or one name
+  bound two ways (`{ a as x }` beside `{ x }`), is still kept apart, and the
+  run's log now gives that reason instead of a fixed one that was often
+  wrong.
 
 ## [v1.0.0-rc.28] — 2026-10-21
 

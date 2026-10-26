@@ -90,3 +90,55 @@ func TestCompileTestKeepsACheckOnlyTheTestBreaks(t *testing.T) {
 		t.Fatalf("a check only the authored test fails = %v, want a *CompileError", err)
 	}
 }
+
+// tscJail answers a TypeScript-shaped compile command — ONE `sh -c` script
+// with both paths inside it, never as argv elements — the way tsc does: a
+// file the script names that is absent is an error, and so is a type error
+// in a file it names, reported against that file's path.
+type tscJail struct{ files []string }
+
+func (j tscJail) RunTest(ctx context.Context, ws map[string]string, cmd []string) (bool, error) {
+	ok, _, err := j.RunTestVerbose(ctx, ws, cmd)
+	return ok, err
+}
+
+func (j tscJail) RunTestVerbose(_ context.Context, ws map[string]string, cmd []string) (bool, string, error) {
+	script := strings.Join(cmd, " ")
+	var out []string
+	for _, p := range j.files {
+		if !strings.Contains(script, p) {
+			continue
+		}
+		body, ok := ws[p]
+		switch {
+		case !ok:
+			out = append(out, "error TS6053: File '"+p+"' not found.")
+		case strings.Contains(body, "BADTYPE"):
+			out = append(out, p+"(15,23): error TS2352: Conversion of type may be a mistake.")
+		}
+	}
+	return len(out) == 0, strings.Join(out, "\n"), nil
+}
+
+// AN AUTHORED TEST THAT DOES NOT TYPE-CHECK IS REFUSED (REA, 2026-10-26).
+// TypeScript's check is one script that names the test inside it, so the
+// argv check below never saw the test named; re-run without the test, tsc
+// failed on the missing file, the failure was excused as "the unmodified
+// source fails too", and tests with TS2352 in their own lines were graded by
+// execution (vitest strips types) and counted as proven. A failure the
+// compiler reports AGAINST THE TEST FILE is the test's own and is never
+// excused.
+func TestCompileTestRefusesATypeErrorInTheTestItself(t *testing.T) {
+	testPath := advPoolTestPath("src/Service.ts")
+	v := JailValidator{Jail: tscJail{files: []string{"src/Service.ts", testPath}}}
+	err := v.CompileTest(context.Background(), "src/Service.ts", "export const s = 1;\n", "const x = {} as BADTYPE;\n")
+	var ce *CompileError
+	if !errors.As(err, &ce) || !strings.Contains(ce.Output, testPath+"(15,23)") {
+		t.Fatalf("a test with a type error in its own lines = %v, want a *CompileError carrying tsc's output", err)
+	}
+	// A source that does not type-check by itself still excuses the check,
+	// as for PHP: the output names only the source.
+	if err := v.CompileTest(context.Background(), "src/Service.ts", "export const s = BADTYPE;\n", "import { s } from '../src/Service.ts';\n"); err != nil {
+		t.Fatalf("a check only the source fails refused a sound test: %v", err)
+	}
+}

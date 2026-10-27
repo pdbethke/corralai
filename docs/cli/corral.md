@@ -162,6 +162,11 @@ Usage:
                                   listed. Reads the ledger only; writes nothing. --changed
                                   <base> takes the files changed since a ref; --max-items
                                   bounds it and names the cut
+  corral tests map --repo-dir <dir> [--jail bwrap|container] [--workers N] [--out <file>] -- <test cmd>
+                                  the test map certify --repo grades by — which test units execute
+                                  which source files — built through the same evidence path with no
+                                  model call: sources, units, the ones no unit executes and each unit
+                                  that contributed no evidence, with why. --out writes it as JSON
   corral verify --attest <path> [flags]
                                   the checker for a certify --repo --attest statement: verifies
                                   its DSSE signature (against --pub or the local certify key,
@@ -1100,6 +1105,42 @@ Usage of state migrate:
 
 ```
 usage: corral state paths  (takes no arguments; prints each file's root, name, override variable and resolved path)
+```
+
+## `corral tests` flags
+
+```
+corral tests — the repository's test map: which test units execute which source files.
+
+  corral tests map --repo-dir <dir> [--jail bwrap|container] [--workers N] [--out <file>] -- <test cmd>
+                                  build the map through the evidence path certify --repo grades by
+                                  (the same selection cache included), call no model, and print how
+                                  many sources and units it holds, the sources no unit executes and
+                                  each unit that contributed no evidence, with why. --out writes
+                                  the map as JSON
+```
+
+## `corral tests map` flags
+
+```
+usage: corral tests map --repo-dir <dir> [--jail bwrap|container] [--workers N] [--out <file>] -- <test cmd>
+
+  -cache-db string
+    	path to corral's local CACHE of instrumented test selections (default: $CORRALAI_CACHE_DB, else $CACHE/corralai_cache.duckdb, see corral state paths); a byte-identical tree reuses the evidence certify --repo collected
+  -jail string
+    	sandbox backend for --substrate jail: bwrap (Linux), container or sandbox-exec (macOS) (default: auto-detect for this OS)
+  -no-selection-cache
+    	skip the selection cache: always run the evidence pass, and keep nothing
+  -out testmap.Read
+    	write the test map to this file as JSON (the format testmap.Read reads back)
+  -repo-dir string
+    	path of the repository to map (required)
+  -runner string
+    	the test runner behind the test command, when corral cannot read it from the command or its package script (a runner id: go-test, pytest, jest, vitest, mocha, node-test, rspec, phpunit, cargo-nextest, ...; docs/corral/language-support.md lists them). Overrides detection; corral still runs your command as given, and adds a runner's own arguments (fail-fast, one-test runs) only where the command or its script names that runner
+  -substrate string
+    	where the evidence runs: jail (bwrap) or workspace (the checkout itself; the caller IS the isolation boundary, e.g. an ephemeral CI runner), as certify --repo (default "jail")
+  -workers int
+    	test units run alone under coverage at once. REQUIRED when the language's evidence is a unit pass on --substrate jail (every language but Python); corral names no count. --substrate workspace runs one at a time, as certify --repo does, and takes no count
 ```
 
 ## `corral ui` flags

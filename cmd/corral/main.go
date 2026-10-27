@@ -337,6 +337,11 @@ Usage:
                                   listed. Reads the ledger only; writes nothing. --changed
                                   <base> takes the files changed since a ref; --max-items
                                   bounds it and names the cut
+  corral tests map --repo-dir <dir> [--jail bwrap|container] [--workers N] [--out <file>] -- <test cmd>
+                                  the test map certify --repo grades by — which test units execute
+                                  which source files — built through the same evidence path with no
+                                  model call: sources, units, the ones no unit executes and each unit
+                                  that contributed no evidence, with why. --out writes it as JSON
   corral verify --attest <path> [flags]
                                   the checker for a certify --repo --attest statement: verifies
                                   its DSSE signature (against --pub or the local certify key,
@@ -621,6 +626,8 @@ func main() {
 		os.Exit(runSetup(os.Args[2:], os.Stdin, os.Stdout, os.Stderr))
 	case "brief":
 		os.Exit(runBrief(os.Args[2:], os.Stdout, os.Stderr))
+	case "tests":
+		os.Exit(runTests(os.Args[2:], os.Stdout, os.Stderr))
 	case "verify":
 		// `corral verify` — the checker for a `certify --repo --attest`
 		// AUDIT statement (signature + --db warehouse rows + Rekor

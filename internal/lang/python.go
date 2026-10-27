@@ -1593,39 +1593,67 @@ func (pyPlugin) Select(evidence []byte, repoRoot, codePath, testPath string, tes
 // collected from, so this matches Select's own root="" behaviour for a
 // relative measured path.
 func (pyPlugin) Index(evidence []byte) (map[string]FileCoverage, error) {
-	rep, err := parsePySelectionEvidence(evidence)
+	doc, err := pyPlugin{}.Evidence(evidence)
 	if err != nil {
 		return nil, err
 	}
-	out := make(map[string]FileCoverage, len(rep.Files))
-	for path, f := range rep.Files {
+	out := make(map[string]FileCoverage, len(doc.Files))
+	for path, f := range doc.Files {
 		p, ok := alignPyPath(path, "")
 		if !ok {
 			continue
 		}
 		tests := make(map[string]int, len(f.Tests))
+		for id, rngs := range f.Tests {
+			n := 0
+			for _, r := range rngs {
+				n += r.End - r.Start + 1
+			}
+			tests[id] = n
+		}
+		out[p] = FileCoverage{Tests: tests, HasStatic: len(f.Static) > 0, HasStatements: f.HasStatements}
+	}
+	return out, nil
+}
+
+// Evidence implements TestEvidence: the corral-selection-3 document as a
+// language-agnostic EvidenceDoc, for the test map. It shares
+// parsePySelectionEvidence with Select — no second reader of the format — and
+// Index is a reduction over it, so there is one place the document is
+// interpreted. Paths are kept exactly as the evidence stores them; the caller
+// aligns them. A malformed lines index degrades per entry (as Index always
+// did): that range is dropped, the test stays listed with what remains.
+func (pyPlugin) Evidence(evidence []byte) (EvidenceDoc, error) {
+	rep, err := parsePySelectionEvidence(evidence)
+	if err != nil {
+		return EvidenceDoc{}, err
+	}
+	doc := EvidenceDoc{Of: rep.Tests, Files: make(map[string]FileEvidence, len(rep.Files))}
+	for path, f := range rep.Files {
+		tests := make(map[string][]LineRange, len(f.Tests))
 		for _, id := range f.Tests {
-			tests[id] = 0
+			tests[id] = nil
 		}
 		for idxStr, rngs := range f.Lines {
 			idx, err := strconv.Atoi(idxStr)
 			if err != nil || idx < 0 || idx >= len(f.Tests) {
-				// Index degrades per-entry rather than failing the whole
-				// scan-wide readout over one file's malformed lines index —
-				// unlike Select, which errors because it is answering about
-				// exactly one file and has nothing safer to fall back to.
 				continue
 			}
 			id := f.Tests[idx]
-			n := 0
 			for _, r := range rngs {
-				n += r[1] - r[0] + 1
+				tests[id] = append(tests[id], LineRange{Start: r[0], End: r[1]})
 			}
-			tests[id] += n
 		}
-		out[p] = FileCoverage{Tests: tests, HasStatic: len(f.Static) > 0, HasStatements: f.Statements == nil || *f.Statements > 0}
+		var static []LineRange
+		for _, r := range f.Static {
+			static = append(static, LineRange{Start: r[0], End: r[1]})
+		}
+		// A nil Statements means the reducer's own analysis failed for this
+		// file: UNKNOWN, read as "has statements" so a real finding is
+		// never swallowed.
+		doc.Files[path] = FileEvidence{Tests: tests, Static: static, HasStatements: f.Statements == nil || *f.Statements > 0}
 	}
-	return out, nil
+	return doc, nil
 }
 
 // IsLibraryCode implements lang.LibraryCodeClassifier: path is library code

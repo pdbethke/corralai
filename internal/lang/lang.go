@@ -611,6 +611,33 @@ type TestSelector interface {
 	Index(evidence []byte) (map[string]FileCoverage, error)
 }
 
+// TestEvidence is the part of a plugin the test map needs: the command that
+// produces whole-suite evidence and a reader that turns its output into an
+// EvidenceDoc. It parses evidence only and selects nothing; TestSelector
+// (which also satisfies it through Instrument) goes away once the map
+// replaces it.
+type TestEvidence interface {
+	Instrument(testCmd []string) (cmd []string, ok bool)
+	Evidence(raw []byte) (EvidenceDoc, error)
+}
+
+// EvidenceDoc is one evidence run, per file, before any path is aligned or
+// any test is named a unit.
+type EvidenceDoc struct {
+	// Of is how many tests the run collected.
+	Of int
+	// Files is keyed by the path exactly as the evidence stores it.
+	Files map[string]FileEvidence
+}
+
+// FileEvidence is what the run recorded for one source file. A test listed
+// with no ranges was seen to cover the file without a line count.
+type FileEvidence struct {
+	Tests         map[string][]LineRange // test id -> executed ranges of this file
+	Static        []LineRange            // executed outside any test (import time)
+	HasStatements bool                   // the file has executable statements at all
+}
+
 // FileCoverage is one measured file's entry from TestSelector.Index: every
 // covering test (by whatever selector the evidence stores as a test's
 // identity), mapped to how many of THIS file's lines it executed. A caller

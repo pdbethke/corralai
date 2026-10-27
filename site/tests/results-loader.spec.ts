@@ -36,7 +36,8 @@ const RAW_HEADERS = { 'access-control-allow-origin': '*', 'content-type': 'appli
 // entry's JSON changed ("Cores": 0 -> 1), re-gzipped so the entry still
 // parses and the change is caught by the hash, not by the gzip reader.
 test.beforeAll(() => {
-  fs.rmSync(FIXTURES, { recursive: true, force: true });
+  // Only this spec's own directories: results.spec.ts writes beside them, in a parallel worker.
+  for (const d of [GOOD, TAMPERED]) fs.rmSync(d, { recursive: true, force: true });
   fs.cpSync(SOURCE_FIXTURE, GOOD, { recursive: true });
   fs.cpSync(SOURCE_FIXTURE, TAMPERED, { recursive: true });
   const victim = fs.readdirSync(path.join(TAMPERED, 'scans')).sort()[0];

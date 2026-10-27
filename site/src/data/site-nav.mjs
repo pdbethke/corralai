@@ -10,6 +10,7 @@ export const SITE_NAV = [
   { key: 'home', label: 'Home', href: '/' },
   { key: 'docs', label: 'Docs', href: '/docs/getting-started/' },
   { key: 'recordings', label: 'Recordings', href: '/recordings/' },
+  { key: 'results', label: 'Results', href: '/results/' },
   { key: 'ledger', label: 'Ledger', href: '/ledger/' },
   { key: 'warehouse', label: 'DuckDB integration', href: '/warehouse/' },
   { key: 'notes', label: 'Field notes', href: '/field-notes/' },

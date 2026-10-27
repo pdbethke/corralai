@@ -1,0 +1,211 @@
+---
+// SPDX-License-Identifier: Elastic-2.0
+// Live results: /results/?repo=owner/name is one repository's report card (A),
+// /results/ every listed ledger on one page (B). Nothing on this page is
+// built from the record at deploy time: the browser reads each ledger from
+// GitHub, verifies and derives it with corral's own Go code compiled to
+// WebAssembly (src/lib/ledger.ts), and draws what that returns
+// (src/lib/results-view.ts). A new ledger entry shows up on the next page
+// load, with no site deploy.
+import '../../styles/global.css';
+import Header from '../../components/Header.astro';
+import SiteFooter from '../../components/SiteFooter.astro';
+
+const title = 'Results — every number verified in your browser — Corralai';
+const description =
+  "corral's audit results, read live from each repository's signed ledger and verified in your browser by corral's own verifier: proven missing tests, the share of planted bugs each suite caught, and every entry's signature.";
+---
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <script is:inline>
+    (function () { try { var t = localStorage.getItem('corralai-site-theme') || 'light'; document.documentElement.setAttribute('data-theme', t); } catch (e) {} })();
+  </script>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <title>{title}</title>
+  <meta name="description" content={description} />
+  <link rel="canonical" href="https://corralai.dev/results/" />
+</head>
+<body>
+  <Header active="results" />
+  <main class="section results">
+    <p class="eyebrow">Results</p>
+    <h1>What corral measured, verified in your browser</h1>
+    <p class="lede">
+      corral plants bugs in a file, runs the project's own tests against each one, and writes a test for
+      every bug the suite let through. A <strong>proven missing test</strong> is one of those tests that corral then
+      ran: it passes on the real code and catches the planted bug. Each run is recorded as a signed, hash-linked
+      entry on the repository's <code>corral/ledger</code> branch. This page reads those entries straight
+      from GitHub and checks every hash and signature with corral's own verifier, compiled to WebAssembly,
+      before it draws a single figure.
+    </p>
+
+    <form class="lookup" action="/results/" method="get" role="search">
+      <label for="lookup-repo">Repository</label>
+      <div class="lookup-row">
+        <input id="lookup-repo" name="repo" type="text" required placeholder="owner/name" autocomplete="off" spellcheck="false" />
+        <button type="submit">Look up</button>
+      </div>
+      <p class="lookup-hint">Any public repository with a <code>corral/ledger</code> branch. <a class="b-only-hide" href="/results/">All listed ledgers</a></p>
+    </form>
+
+    <div id="results" data-state="loading" aria-live="polite">
+      <noscript><p class="load-error">This page verifies each ledger in your browser, so it needs JavaScript. The signed entries are on each repository's <code>corral/ledger</code> branch, and <a href="/ledger/">corral's own ledger</a> is rendered without it.</p></noscript>
+    </div>
+  </main>
+  <SiteFooter />
+</body>
+</html>
+
+<script>
+  import { main } from '../../lib/results-view';
+  main(document.getElementById('results')!, document.querySelector('form.lookup') as HTMLFormElement);
+</script>
+
+<style is:global>
+  /* Chart series colours. Light: the site's amber and the reference palette's
+     blue; dark: the reference palette's dark yellow and blue (the site's dark
+     amber #e8a838 sits above the dark lightness band). Both pairs pass the
+     dataviz validator on the page and card surfaces (task-4-report.md). */
+  :root { --viz-1: #8f5e08; --viz-2: #2a78d6; --viz-surface: #fffbf2; }
+  :root[data-theme='dark'] { --viz-1: #c98500; --viz-2: #3987e5; --viz-surface: #161b22; }
+
+  .results { max-width: 1040px; }
+  .results .eyebrow { margin: 0 0 6px; color: var(--amber); font-weight: 700; font-size: 0.8rem; letter-spacing: 0.08em; text-transform: uppercase; }
+  .results h1 { margin: 0 0 14px; font-size: clamp(1.7rem, 4vw, 2.4rem); line-height: 1.15; letter-spacing: -0.01em; }
+  .results .lede { max-width: 760px; font-size: 1.05rem; line-height: 1.6; margin: 0 0 26px; }
+  .results code { background: var(--sel); border-radius: 4px; padding: 1px 5px; font-size: 0.88em; overflow-wrap: anywhere; }
+  .results .muted { color: var(--muted); }
+  .results .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.84rem; overflow-wrap: anywhere; }
+
+  .lookup { margin: 0 0 30px; max-width: 560px; }
+  .lookup label { display: block; font-weight: 600; font-size: 0.88rem; margin-bottom: 6px; }
+  .lookup-row { display: flex; gap: 8px; }
+  .lookup input { flex: 1; min-width: 0; font: inherit; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.95rem; padding: 9px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--fg); }
+  .lookup input:focus { outline: 2px solid var(--amber); outline-offset: 1px; }
+  .lookup button { font: inherit; font-weight: 600; padding: 9px 18px; border: 0; border-radius: 8px; background: var(--amber); color: var(--bg); cursor: pointer; }
+  .lookup-hint { margin: 8px 0 0; font-size: 0.85rem; color: var(--muted); }
+  body[data-view='b'] .b-only-hide { display: none; }
+
+  #results .loading { color: var(--muted); padding: 28px 0; }
+  #results .loading::before { content: ''; display: inline-block; width: 10px; height: 10px; margin-right: 10px; border-radius: 50%; background: var(--amber); animation: results-pulse 1.1s ease-in-out infinite; }
+  @keyframes results-pulse { 50% { opacity: 0.25; } }
+  @media (prefers-reduced-motion: reduce) { #results .loading::before { animation: none; } }
+  .load-error, .sort-error, .empty-ledger { padding: 14px 16px; border: 1px solid var(--line); border-left: 3px solid var(--amber); border-radius: 8px; background: var(--card); overflow-wrap: anywhere; }
+
+  .a-head { margin: 0 0 18px; }
+  .a-repo { margin: 0 0 4px; font-size: 1.35rem; overflow-wrap: anywhere; }
+  .a-repo a { color: var(--fg); text-decoration: none; }
+  .a-repo a:hover { color: var(--amber); }
+  .listed-note { margin: 0; overflow-wrap: anywhere; }
+  .timing { margin: 2px 0 0; font-size: 0.85rem; }
+
+  .tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 12px; margin: 0 0 34px; }
+  .tile { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px 15px; min-width: 0; }
+  .tile-label { font-size: 0.8rem; font-weight: 600; color: var(--muted); line-height: 1.35; }
+  .tile-value { font-size: 1.75rem; font-weight: 650; line-height: 1.15; margin: 6px 0 4px; overflow-wrap: anywhere; }
+  .tile-caption { font-size: 0.8rem; color: var(--muted); line-height: 1.4; }
+  .tile-hero { border-color: color-mix(in srgb, var(--amber) 55%, var(--line)); }
+  .tile-hero .tile-value { font-size: 2.6rem; color: var(--amber); }
+  /* A value that is a phrase (nothing graded, no telemetry) is set smaller than a number. */
+  .tile .tile-value.tile-phrase { font-size: 1.1rem; font-weight: 600; color: var(--fg); padding: 6px 0 2px; }
+
+  .block { margin: 0 0 38px; }
+  .block > h2 { font-size: 1.2rem; margin: 0 0 12px; padding-bottom: 8px; border-bottom: 1px solid var(--line); }
+  .charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr)); gap: 16px; }
+
+  .viz { margin: 0; background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px 10px; min-width: 0; position: relative; }
+  .viz-head { display: flex; gap: 12px; align-items: flex-start; justify-content: space-between; margin-bottom: 8px; }
+  .viz-head figcaption { min-width: 0; }
+  .viz-title { display: block; font-weight: 650; font-size: 0.95rem; }
+  .viz-note { display: block; color: var(--muted); font-size: 0.8rem; line-height: 1.45; margin-top: 3px; }
+  .viz-toggle { flex: none; font: inherit; font-size: 0.78rem; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--line); background: transparent; color: var(--fg); cursor: pointer; }
+  .viz-toggle:hover { border-color: var(--amber); }
+  .viz-legend { list-style: none; display: flex; flex-wrap: wrap; gap: 4px 16px; padding: 0; margin: 0 0 6px; font-size: 0.82rem; color: var(--fg); }
+  .viz-legend li { display: flex; align-items: center; gap: 7px; }
+  .viz-key-line { display: inline-block; width: 16px; height: 3px; border-radius: 2px; flex: none; }
+  .viz-plot { position: relative; min-height: 210px; }
+  .viz-svg { display: block; overflow: visible; }
+  .viz-svg:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; border-radius: 4px; }
+  .viz-grid { stroke: var(--line); stroke-width: 1; }
+  .viz-axis { stroke: color-mix(in srgb, var(--muted) 55%, var(--line)); stroke-width: 1; }
+  .viz-tick { fill: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+  .viz-line { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+  .viz-dot { stroke: var(--viz-surface); stroke-width: 2; }
+  .viz-cross { stroke: var(--muted); stroke-width: 1; }
+  .viz-tip { position: absolute; left: 0; top: 0; z-index: 5; pointer-events: none; min-width: 150px; max-width: 280px; padding: 8px 10px; border-radius: 8px; background: var(--fg); color: var(--bg); font-size: 0.8rem; line-height: 1.45; box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18); }
+  .viz-tip-head { opacity: 0.8; margin-bottom: 3px; overflow-wrap: anywhere; }
+  .viz-tip-row { display: flex; align-items: center; gap: 7px; }
+  .viz-tip-row strong { font-variant-numeric: tabular-nums; }
+  .viz-tip-name { opacity: 0.8; }
+  .viz-bars { display: grid; gap: 8px; padding: 4px 0 6px; }
+  .viz-bar-row { display: grid; grid-template-columns: minmax(0, 34%) 1fr auto; align-items: center; gap: 10px; border-radius: 6px; padding: 2px 4px; }
+  .viz-bar-row:hover, .viz-bar-row:focus-visible { background: var(--sel); outline: none; }
+  .viz-bar-label { font-size: 0.84rem; overflow-wrap: anywhere; }
+  .viz-bar-sub { display: block; color: var(--muted); font-size: 0.76rem; }
+  .viz-bar-track { height: 16px; }
+  .viz-bar { height: 16px; border-radius: 0 4px 4px 0; min-width: 2px; }
+  .viz-bar-value { font-size: 0.84rem; font-variant-numeric: tabular-nums; }
+  .viz-tablewrap, .tablewrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; background: var(--card); }
+  .viz-tablewrap { border: 0; background: transparent; }
+
+  .results table { width: 100%; border-collapse: collapse; font-size: 0.88rem; }
+  .results th, .results td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  .results tbody tr:last-child td { border-bottom: 0; }
+  .results th { color: var(--muted); font-weight: 650; font-size: 0.76rem; text-transform: uppercase; letter-spacing: 0.04em; background: var(--sel); white-space: nowrap; }
+  .results th a { color: inherit; text-decoration: none; }
+  .results th a:hover, .results th a.sort-on { color: var(--amber); }
+  .results th[aria-sort='descending'] a::after { content: ' ↓'; }
+  .results th[aria-sort='ascending'] a::after { content: ' ↑'; }
+  .results td.num, .results th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .results td.num { white-space: nowrap; }
+
+  table.gaps td { overflow-wrap: anywhere; }
+  .gap-file code { display: inline-block; }
+  .gap-ids { max-width: 340px; }
+  .mutant-id { display: inline-block; margin: 0 4px 4px 0; padding: 1px 6px; border-radius: 5px; background: var(--sel); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.76rem; white-space: nowrap; }
+  .gap-where { display: block; color: var(--muted); font-size: 0.78rem; margin-top: 3px; }
+  table.gaps details summary { cursor: pointer; color: var(--amber); font-weight: 600; font-size: 0.85rem; white-space: nowrap; }
+  table.gaps pre { margin: 8px 0 0; padding: 10px 12px; max-height: 360px; max-width: min(640px, 70vw); overflow: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; font-size: 0.78rem; line-height: 1.5; white-space: pre; }
+
+  table.board .board-repo a { font-weight: 600; color: var(--fg); white-space: nowrap; }
+  table.board .board-repo a:hover { color: var(--amber); }
+  table.board .board-error { color: var(--muted); overflow-wrap: anywhere; }
+
+  details.entries > summary { cursor: pointer; font-weight: 600; padding: 4px 0 10px; }
+  details.entries td { overflow-wrap: anywhere; }
+  .status { font-weight: 600; font-size: 0.82rem; }
+  .status-verified { color: var(--green); }
+  .status-failed { color: var(--red); }
+  .status-unsigned { color: var(--muted); }
+  .entry-problem, .entry-note { color: var(--muted); font-size: 0.8rem; margin-top: 2px; }
+
+  .problem { margin: 0 0 30px; padding: 14px 18px; border: 1px solid var(--red); border-radius: 10px; background: var(--card); overflow-wrap: anywhere; }
+  .problem p { margin: 0 0 8px; }
+  .problem-head { font-weight: 650; }
+  .problem ul { margin: 0; padding-left: 20px; }
+
+  /* On a phone the gaps table is a list of cards: four columns of a path,
+     a count, chips and a toggle cannot share 340px without breaking the path
+     one character per line. */
+  @media (max-width: 640px) {
+    table.gaps thead { display: none; }
+    table.gaps, table.gaps tbody, table.gaps tr, table.gaps td { display: block; width: 100%; }
+    table.gaps tr { padding: 10px 12px; border-bottom: 1px solid var(--line); }
+    table.gaps tbody tr:last-child { border-bottom: 0; }
+    table.gaps td { border: 0; padding: 2px 0; }
+    table.gaps td.num { text-align: left; font-weight: 600; margin-top: 4px; }
+    table.gaps td.num::after { content: ' proven'; font-weight: 400; color: var(--muted); }
+    .gap-ids { max-width: none; }
+  }
+  @media (max-width: 560px) {
+    .tiles { grid-template-columns: 1fr 1fr; gap: 10px; }
+    .tile { padding: 12px; }
+    .tile-value { font-size: 1.35rem; }
+    .tile-hero { grid-column: 1 / -1; }
+    .tile-hero .tile-value { font-size: 2.2rem; }
+    .results th, .results td { padding: 7px 9px; }
+    .viz { padding: 12px 12px 8px; }
+  }
+</style>

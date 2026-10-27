@@ -239,3 +239,28 @@ func TestWithAuthoredTestRefusesWhatItCannotRunExactly(t *testing.T) {
 		t.Errorf("pytest has no UnitsCmd; got %v", got)
 	}
 }
+
+// A file with no executable statements, and one only loaded (static)
+// coverage reached, are neither uncovered nor graded-by-unreported: the first
+// has nothing to execute, the second was executed.
+func TestUncoveredSkipsStatementlessAndStaticFiles(t *testing.T) {
+	m := Map{
+		Method: MethodUnitEvidence,
+		Of:     1,
+		Sources: map[string]Source{
+			"real.ts":  {HasStatements: true},
+			"types.ts": {HasStatements: false},
+			"load.ts":  {HasStatements: true, HasStatic: true},
+		},
+		Tests: map[string]Node{"u": {ID: "u", Grain: GrainUnit}},
+	}
+	unc, graded := Uncovered(m)
+	if len(unc) != 1 || unc[0] != "real.ts" || len(graded) != 0 {
+		t.Errorf("uncovered %v, graded-by-unreported %v; want only real.ts uncovered", unc, graded)
+	}
+	m.Tests["bad"] = Node{ID: "bad", Grain: GrainUnit, Err: "failed"}
+	unc, graded = Uncovered(m)
+	if len(unc) != 0 || len(graded) != 1 || graded[0] != "real.ts" {
+		t.Errorf("with an unreported unit: uncovered %v, graded %v; want only real.ts graded", unc, graded)
+	}
+}

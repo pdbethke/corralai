@@ -208,7 +208,14 @@ func Uncovered(m Map) (uncovered, unselectedButGraded []string) {
 	if err != nil {
 		return nil, nil
 	}
-	for p := range m.Sources {
+	for p, src := range m.Sources {
+		// A file with no executable statements has nothing for a test to
+		// execute, and one with static (import/load-time) coverage was
+		// executed, only never by a test directly: neither is "uncovered",
+		// in either group.
+		if !src.HasStatements || src.HasStatic {
+			continue
+		}
 		ids, err := selectedIDs(m, grain, p, nil)
 		if err != nil {
 			continue

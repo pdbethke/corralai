@@ -3,11 +3,12 @@
 package testmap
 
 import (
+	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
 
@@ -25,7 +26,7 @@ import (
 // pyEquiv is Python's side of the comparison: the plugin's old selector, its
 // evidence reader, and the pytest row the engine builds commands from.
 type pyEquiv struct {
-	sel lang.TestSelector
+	p   lang.Plugin
 	ev  lang.TestEvidence
 	row lang.Runner
 }
@@ -40,7 +41,7 @@ func newPyEquiv(t *testing.T) pyEquiv {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return pyEquiv{sel: p.(lang.TestSelector), ev: p.(lang.TestEvidence), row: row}
+	return pyEquiv{p: p, ev: p.(lang.TestEvidence), row: row}
 }
 
 // pyMap is the map a caller builds for Select: the evidence read once, every
@@ -153,56 +154,171 @@ func (e pyEquiv) engineSelect(c selectCase) (lang.Selection, error) {
 // the per-mutant pass narrows them.
 var equivSpans = []lang.LineRange{{}, {Start: 1, End: 1}, {Start: 2, End: 2}, {Start: 6, End: 6}, {Start: 2, End: 6}, {Start: 41, End: 42}, {Start: 29, End: 31}, {Start: 70, End: 75}, {Start: 10, End: 19}, {Start: 5, End: 6}}
 
-func TestEngineMatchesPythonSelector(t *testing.T) {
-	e := newPyEquiv(t)
-	authored := []string{"tests/test_corral_calc.py", "tests/test_corral_x.py", "tests/test_corral_untested.py"}
-	carried := [][]string{nil, {"--deselect", "tests/test_corral.py::test_wrong"}, {"--deselect=tests/test_calc.py::test_add"}}
+// observer is one side of the comparison: a way to Select, narrow by span
+// and add the authored test. Python's side was the plugin's old selector;
+// the engine's side is this package.
+type observer struct {
+	sel      func(c selectCase) (lang.Selection, error)
+	forSpan  func(sel lang.Selection, span lang.LineRange) ([]string, []string, string)
+	authored func(sel lang.Selection, testCmd []string, repoRoot, path string) ([]string, bool)
+}
 
-	for _, c := range pySelectCases(t) {
-		t.Run("Select/"+c.name, func(t *testing.T) {
-			want, wantErr := e.sel.Select(c.evidence, c.root, c.code, c.test, c.cmd)
-			got, gotErr := e.engineSelect(c)
-			if (wantErr != nil) != c.wantErr {
-				t.Fatalf("fixture drift: python err = %v, case says wantErr=%v", wantErr, c.wantErr)
+func (e pyEquiv) engine() observer {
+	return observer{
+		sel: e.engineSelect,
+		forSpan: func(sel lang.Selection, span lang.LineRange) ([]string, []string, string) {
+			return ForSpan(sel, e.row, span)
+		},
+		authored: func(sel lang.Selection, testCmd []string, repoRoot, path string) ([]string, bool) {
+			return WithAuthoredTest(Map{Method: MethodCoverageContext}, sel, e.row, testCmd, repoRoot, path)
+		},
+	}
+}
+
+var (
+	equivAuthored = []string{"tests/test_corral_calc.py", "tests/test_corral_x.py", "tests/test_corral_untested.py"}
+	equivCarried  = [][]string{nil, {"--deselect", "tests/test_corral.py::test_wrong"}, {"--deselect=tests/test_calc.py::test_add"}}
+)
+
+// render is one observation as text that keeps every distinction the old
+// field-by-field comparison kept: %#v tells a nil slice or map from an empty
+// one, and prints map keys sorted, so equal text is reflect.DeepEqual
+// values. An observation too long to read in a diff (the 3000-id selections)
+// is held as its length and sha256, which still changes on any byte.
+func render(v string) string {
+	if len(v) <= 2048 {
+		return v
+	}
+	sum := sha256.Sum256([]byte(v))
+	return fmt.Sprintf("len=%d sha256=%x head=%s", len(v), sum, v[:200])
+}
+
+// observe runs every input the old selector's tests used through o, keyed
+// by what was asked. live is the evidence a real pytest-cov run of the
+// fixture printed, nil when none could run.
+func observe(t *testing.T, o observer, live []byte) map[string]string {
+	t.Helper()
+	out := map[string]string{}
+	narrow := func(key string, sel lang.Selection, cmds [][]string, root string) {
+		for _, span := range equivSpans {
+			cmd, tests, rule := o.forSpan(sel, span)
+			out[fmt.Sprintf("%s/ForSpan %d-%d", key, span.Start, span.End)] = render(fmt.Sprintf("%q %#v %#v", rule, cmd, tests))
+		}
+		for _, a := range equivAuthored {
+			for _, cmd := range cmds {
+				got, ok := o.authored(sel, cmd, root, a)
+				out[fmt.Sprintf("%s/WithAuthoredTest %q + %s", key, cmd, a)] = render(fmt.Sprintf("ok=%v %#v", ok, got))
 			}
-			if errText(gotErr) != errText(wantErr) {
-				t.Fatalf("error:\n engine %v\n python %v", gotErr, wantErr)
-			}
-			if wantErr != nil {
-				return
-			}
-			if c.wantEmpty != (len(want.Tests) == 0) {
-				t.Fatalf("fixture drift: python Tests = %v, case says empty=%v", want.Tests, c.wantEmpty)
-			}
-			if !reflect.DeepEqual(got, want) {
-				t.Fatalf("Selection:\n engine %#v\n python %#v", got, want)
-			}
-			// The selection the engine built must also narrow and take the
-			// authored test exactly as Python's would.
-			for _, span := range equivSpans {
-				compareForSpan(t, e, want, span)
-			}
-			for _, a := range authored {
-				for _, extra := range carried {
-					compareWithAuthored(t, e, want, append(append([]string{}, c.cmd...), extra...), c.root, a)
-				}
-			}
-		})
+		}
+	}
+	withCarried := func(base []string) [][]string {
+		var cmds [][]string
+		for _, extra := range equivCarried {
+			cmds = append(cmds, append(append([]string{}, base...), extra...))
+		}
+		return cmds
 	}
 
-	// The hand-built selections the ForSpan and WithAuthoredTest tests use.
+	cases := pySelectCases(t)
+	if live != nil {
+		cases = append(cases, selectCase{name: "live fixture evidence", evidence: live, root: pyTestdata(t, "pycov-fixture"), code: "pkg/calc.py", test: "tests/test_calc.py", cmd: []string{"python3", "-m", "pytest", "-q"}})
+	}
+	for _, c := range cases {
+		key := "Select/" + c.name
+		sel, err := o.sel(c)
+		if (err != nil) != c.wantErr {
+			t.Fatalf("%s: err = %v, case says wantErr=%v", key, err, c.wantErr)
+		}
+		if err != nil {
+			out[key] = "error: " + errText(err)
+			continue
+		}
+		if c.wantEmpty != (len(sel.Tests) == 0) {
+			t.Fatalf("%s: Tests = %v, case says empty=%v", key, sel.Tests, c.wantEmpty)
+		}
+		out[key] = render(fmt.Sprintf("%#v", sel))
+		// The selection must also narrow and take the authored test.
+		narrow(key, sel, withCarried(c.cmd), c.root)
+	}
 	for name, sel := range pyHandSelections() {
-		t.Run("Hand/"+name, func(t *testing.T) {
-			for _, span := range equivSpans {
-				compareForSpan(t, e, sel, span)
-			}
-			base := []string{"python3", "-m", "pytest", "-q"}
-			for _, a := range authored {
-				for _, extra := range carried {
-					compareWithAuthored(t, e, sel, append(append([]string{}, base...), extra...), "", a)
-				}
-			}
-		})
+		narrow("Hand/"+name, sel, withCarried([]string{"python3", "-m", "pytest", "-q"}), "")
+	}
+	return out
+}
+
+// pyGolden is what Python's own selector answered for every observation,
+// captured from pyPlugin before its selector methods were deleted (Task 6).
+// It is never regenerated: it is the record of the behaviour the engine
+// must not move.
+const pyGolden = "testdata/python-selector-golden.json"
+
+func readPyGolden(t *testing.T) map[string]string {
+	t.Helper()
+	b, err := os.ReadFile(pyGolden)
+	if err != nil {
+		t.Fatalf("%s: %v — it is the frozen record of Python's selector and is never regenerated", pyGolden, err)
+	}
+	var g map[string]string
+	if err := json.Unmarshal(b, &g); err != nil {
+		t.Fatal(err)
+	}
+	return g
+}
+
+// liveFixtureEvidence runs the pytest-cov fixture through Python's
+// instrumentation (TestPythonSelectionEndToEndOnFixture's evidence). nil,
+// with the reason, when pytest-cov is absent.
+func liveFixtureEvidence(t *testing.T, e pyEquiv) ([]byte, string) {
+	t.Helper()
+	if _, err := exec.LookPath("python3"); err != nil {
+		return nil, "python3 not on PATH"
+	}
+	if out, err := exec.Command("python3", "-c", "import pytest_cov, coverage").CombinedOutput(); err != nil {
+		return nil, fmt.Sprintf("pytest-cov not importable: %s", out)
+	}
+	fixture := pyTestdata(t, "pycov-fixture")
+	cmd, ok := e.ev.Instrument([]string{"python3", "-m", "pytest", "-q"})
+	if !ok {
+		t.Fatal("Instrument refused the fixture command")
+	}
+	c := exec.Command(cmd[0], cmd[1:]...)
+	c.Dir = fixture
+	c.Env = append(os.Environ(), "PYTHONPATH="+fixture, "PYTHONDONTWRITEBYTECODE=1")
+	out, err := c.Output()
+	if err != nil {
+		t.Fatalf("instrumented run: %v\n%s", err, out)
+	}
+	return out, ""
+}
+
+// TestEngineMatchesPythonSelector holds the engine to Python's recorded
+// answers, observation by observation. The live-evidence observations are
+// compared only where pytest-cov can run; every other one always is.
+func TestEngineMatchesPythonSelector(t *testing.T) {
+	e := newPyEquiv(t)
+	live, why := liveFixtureEvidence(t, e)
+	if live == nil {
+		t.Logf("live-evidence observations not compared: %s", why)
+	}
+	want := readPyGolden(t)
+	got := observe(t, e.engine(), live)
+	for k, w := range want {
+		if live == nil && strings.HasPrefix(k, "Select/live fixture evidence") {
+			continue
+		}
+		g, ok := got[k]
+		if !ok {
+			t.Errorf("%s: no longer observed — an input the golden holds was dropped", k)
+			continue
+		}
+		if g != w {
+			t.Errorf("%s:\n engine %s\n python %s", k, g, w)
+		}
+	}
+	for k := range got {
+		if _, ok := want[k]; !ok {
+			t.Errorf("%s: observed but not in %s — the golden is never regenerated; a new input belongs in a new test", k, pyGolden)
+		}
 	}
 }
 
@@ -280,57 +396,4 @@ func pyHandSelections() map[string]lang.Selection {
 	out["deselect across a selection"] = lang.Selection{Base: base, Cmd: append(append([]string{}, base...), "tests/test_calc.py::test_add"), Tests: []string{"tests/test_calc.py::test_add"}}
 	out["zero"] = lang.Selection{}
 	return out
-}
-
-func compareForSpan(t *testing.T, e pyEquiv, sel lang.Selection, span lang.LineRange) {
-	t.Helper()
-	wantCmd, wantTests, wantRule := e.sel.ForSpan(sel, span)
-	gotCmd, gotTests, gotRule := ForSpan(sel, e.row, span)
-	if gotRule != wantRule || !reflect.DeepEqual(gotCmd, wantCmd) || !reflect.DeepEqual(gotTests, wantTests) {
-		t.Errorf("ForSpan %v:\n engine %q %v %v\n python %q %v %v", span, gotRule, gotCmd, gotTests, wantRule, wantCmd, wantTests)
-	}
-}
-
-func compareWithAuthored(t *testing.T, e pyEquiv, sel lang.Selection, testCmd []string, repoRoot, path string) {
-	t.Helper()
-	want := e.sel.WithAuthoredTest(sel, testCmd, path)
-	got, ok := WithAuthoredTest(Map{Method: MethodCoverageContext}, sel, e.row, testCmd, repoRoot, path)
-	if !ok || !reflect.DeepEqual(got, want) {
-		t.Errorf("WithAuthoredTest %v + %s:\n engine %v ok=%v\n python %v", testCmd, path, got, ok, want)
-	}
-}
-
-// The live fixture run (TestPythonSelectionEndToEndOnFixture's evidence):
-// what pytest-cov emits today must select the same on both sides. Skips,
-// never fails, when pytest-cov is absent, as that test does.
-func TestEngineMatchesPythonSelectorOnLiveEvidence(t *testing.T) {
-	if _, err := exec.LookPath("python3"); err != nil {
-		t.Skip("python3 not on PATH")
-	}
-	if out, err := exec.Command("python3", "-c", "import pytest_cov, coverage").CombinedOutput(); err != nil {
-		t.Skipf("pytest-cov not importable: %s", out)
-	}
-	e := newPyEquiv(t)
-	fixture := pyTestdata(t, "pycov-fixture")
-	argv := []string{"python3", "-m", "pytest", "-q"}
-	cmd, ok := e.ev.Instrument(argv)
-	if !ok {
-		t.Fatal("Instrument refused the fixture command")
-	}
-	c := exec.Command(cmd[0], cmd[1:]...)
-	c.Dir = fixture
-	c.Env = append(os.Environ(), "PYTHONPATH="+fixture, "PYTHONDONTWRITEBYTECODE=1")
-	out, err := c.Output()
-	if err != nil {
-		t.Fatalf("instrumented run: %v\n%s", err, out)
-	}
-	sc := selectCase{evidence: out, root: fixture, code: "pkg/calc.py", test: "tests/test_calc.py", cmd: argv}
-	want, wantErr := e.sel.Select(sc.evidence, sc.root, sc.code, sc.test, sc.cmd)
-	got, gotErr := e.engineSelect(sc)
-	if wantErr != nil || gotErr != nil {
-		t.Fatalf("engine err %v, python err %v", gotErr, wantErr)
-	}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("Selection:\n engine %#v\n python %#v", got, want)
-	}
 }

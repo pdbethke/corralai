@@ -40,6 +40,10 @@ type wireEdge struct {
 	Source   string      `json:"source"`
 	Lines    []wireRange `json:"lines"`
 	Executed int         `json:"executed"`
+	// omitempty so a map that sets neither (every test-grain map) writes,
+	// and digests to, exactly the bytes it did before the fields existed.
+	Loaded    bool   `json:"loaded,omitempty"`
+	Uncounted string `json:"uncounted,omitempty"`
 }
 
 // schema has no omitempty: a file with no schema must read as schema 0 and be
@@ -117,7 +121,7 @@ func toWire(m Map) wireMap {
 	if m.Edges != nil {
 		w.Edges = make([]wireEdge, len(m.Edges))
 		for i, e := range m.Edges {
-			w.Edges[i] = wireEdge{e.Test, e.Source, toWireRanges(e.Lines), e.Executed}
+			w.Edges[i] = wireEdge{e.Test, e.Source, toWireRanges(e.Lines), e.Executed, e.Loaded, e.Uncounted}
 		}
 		sort.Slice(w.Edges, func(i, j int) bool {
 			if w.Edges[i].Source != w.Edges[j].Source {
@@ -177,7 +181,7 @@ func Read(r io.Reader) (Map, error) {
 	if w.Edges != nil {
 		m.Edges = make([]Edge, len(w.Edges))
 		for i, e := range w.Edges {
-			m.Edges[i] = Edge{e.Test, e.Source, fromWireRanges(e.Lines), e.Executed}
+			m.Edges[i] = Edge{e.Test, e.Source, fromWireRanges(e.Lines), e.Executed, e.Loaded, e.Uncounted}
 		}
 	}
 	return m, nil

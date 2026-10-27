@@ -44,7 +44,10 @@ func unitRunSpec(t *testing.T, m testmap.Map, codePath, devTestPath string) RunS
 		t.Fatalf("fixture: %v", err)
 	}
 	return RunSpec{Lang: "typescript", CodePath: codePath, DevTestPath: devTestPath, TestCmd: "vitest run",
-		Selection: sel, SelectionMap: m, RepoDir: "/repo"}
+		Selection: sel, SelectionMap: m, RepoDir: "/repo",
+		// What the scan's scorer resolves for a workspace with no colliding
+		// file (JailScorer.AuthoredTestPath).
+		AuthoredTestPath: authoredTestPath(AuthoredLanding{}, codePath, devTestPath, nil)}
 }
 
 // The dev pass of a language graded by units runs exactly the selected
@@ -169,5 +172,43 @@ func TestASelectionWithNoRunnerRowIsDisclosed(t *testing.T) {
 	v := verdictFromSpec(rs)
 	if !strings.Contains(v.TestSelection.Fallback, "names no runner row") || v.TestSelection.AuthoredAlone {
 		t.Errorf("verdict selection = %+v, want a fallback naming the missing runner row", v.TestSelection)
+	}
+}
+
+// Fix round 1. The verdict judges the authored test at the path the scorer
+// really writes it to. The scorer renames a path that collides with a file
+// already in the workspace, and for vitest a renamed file is a different
+// unit, with different corun answers: the verdict computing its own path
+// without the workspace said "alone" for a pass the scorer ran whole. The
+// path is resolved once, by the scorer, and carried on the RunSpec.
+func TestTheVerdictJudgesTheAuthoredPathTheScorerRuns(t *testing.T) {
+	m := vitestUnitMap([]string{"tests/one.test.ts", "tests/two.test.ts", "elsewhere/one_corral1.test.ts"}, "tests/one.test.ts")
+	rs := unitRunSpec(t, m, "src/one.ts", "tests/one.test.ts")
+	s := JailScorer{Lang: rs.Lang, Selection: rs.Selection, SelectionMap: m, RepoDir: rs.RepoDir, DevTestPath: rs.DevTestPath,
+		BaseFiles: map[string]string{"src/one.ts": "", "tests/one.test.ts": "", "tests/one_corral.test.ts": ""}}
+	path := s.AuthoredTestPath(rs.CodePath)
+	if path != "tests/one_corral1.test.ts" {
+		t.Fatalf("fixture: the scorer must rename past the colliding file, got %q", path)
+	}
+	if rs.AuthoredTestPath == path {
+		t.Fatal("fixture: the workspace-blind path must differ from the scorer's")
+	}
+	if v := verdictFromSpec(rs); !v.TestSelection.AuthoredAlone {
+		t.Fatalf("fixture: the workspace-blind path coruns nothing, so it reads alone: %+v", v.TestSelection)
+	}
+
+	rs.AuthoredTestPath = path
+	v := verdictFromSpec(rs)
+	if v.TestSelection.AuthoredAlone || !strings.Contains(v.TestSelection.AuthoredFallback, "elsewhere/one_corral1.test.ts") {
+		t.Errorf("verdict = %+v, want not alone, the refusal naming the unit the renamed file coruns", v.TestSelection)
+	}
+	if got := s.authoredCmd(rs.CodePath, adequacy.ShellSplit(rs.TestCmd)); !reflect.DeepEqual(got, []string{"vitest", "run"}) {
+		t.Errorf("the scorer ran %v; the verdict says the whole command", got)
+	}
+
+	// No defaults: a repository run carrying no resolved path claims nothing.
+	rs.AuthoredTestPath = ""
+	if v := verdictFromSpec(rs); v.TestSelection.AuthoredAlone || !strings.Contains(v.TestSelection.AuthoredFallback, "no resolved authored test path") {
+		t.Errorf("no resolved path: %+v", v.TestSelection)
 	}
 }

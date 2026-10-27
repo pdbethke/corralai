@@ -941,10 +941,12 @@ func selectionRowErr(langName string, sel golang.Selection, m testmap.Map) (gola
 //   - alone: the authored pass runs the authored test ALONE, the stronger
 //     claim the verdict's AuthoredAlone makes.
 //
-// The authored test's path is the scorer's rule without the workspace's
-// file list (which only renames a path that collides with an existing file,
-// never moves it to another directory or unit): the verdict is spec-derived,
-// as AuthoredAlone always was, so a cached and a fresh verdict say the same.
+// The authored test's path is the one the scorer resolved and the RunSpec
+// carries (AuthoredTestPath): the scorer renames a path that collides with
+// a file in its workspace, and a renamed file can be another unit. It used
+// to be recomputed here without the workspace, which could judge a file the
+// pass never ran. The verdict stays spec-derived, as AuthoredAlone always
+// was, so a cached and a fresh verdict say the same.
 // The commands are built from the run's TestCmd, the base every pass starts
 // from.
 func selectionDisclosure(rs RunSpec) (dev, authored string, alone bool) {
@@ -964,7 +966,16 @@ func selectionDisclosure(rs RunSpec) (dev, authored string, alone bool) {
 			dev = fmt.Sprintf("advpool: no command runs the paired test %s alone (%v), so the dev pass runs the whole command", rs.DevTestPath, err)
 		}
 	}
-	path := authoredTestPath(rs.Landing, rs.CodePath, rs.DevTestPath, nil)
+	path := rs.AuthoredTestPath
+	if path == "" {
+		if rs.RepoDir != "" {
+			why := "advpool: the run carries no resolved authored test path (RunSpec.AuthoredTestPath), so nothing can be said about what the authored pass ran"
+			return dev, why, false
+		}
+		// Single-file mode: the scorer has no workspace, so its path is
+		// this rule with no files to collide with.
+		path = authoredTestPath(rs.Landing, rs.CodePath, rs.DevTestPath, nil)
+	}
 	_, aloneErr := testmap.AuthoredTestCmd(rs.SelectionMap, golang.Selection{Base: sel.Base}, r, base, rs.RepoDir, path)
 	if aloneErr == nil {
 		return dev, "", true
@@ -973,6 +984,14 @@ func selectionDisclosure(rs RunSpec) (dev, authored string, alone bool) {
 		authored = fmt.Sprintf("advpool: the authored test %s could not run alone or beside the selection (%v), so the authored pass runs the whole command", path, err)
 	}
 	return dev, authored, false
+}
+
+// AuthoredTestPath is where this scorer writes the authored test for
+// codePath: the landing rule, renamed past any file already in its
+// workspace. The run's RunSpec carries it (RunSpec.AuthoredTestPath) so the
+// verdict judges the same file.
+func (s JailScorer) AuthoredTestPath(codePath string) string {
+	return authoredTestPath(s.Landing, codePath, s.DevTestPath, s.BaseFiles)
 }
 
 // AuthoredCommand is the command the AUTHORED pass really runs for codePath,

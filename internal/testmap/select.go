@@ -55,9 +55,13 @@ func grainOf(m Map) (string, error) {
 //   - At unit grain, a map in which no unit reported evidence is refused
 //     before the file is looked up, with the pass's own Note: every unit
 //     would be "unreported", and a command of all of them is the whole
-//     suite under a name that says it was narrowed (Review Focus 5). Only
-//     an edge whose unit executed something selects it — a zero-executed
-//     edge records a measurement, not an execution — and every unreported
+//     suite under a name that says it was narrowed (Review Focus 5). An
+//     edge selects its unit when the unit executed the file, loaded it
+//     (import-time code ran, R24), or measured it and could not count it
+//     (Uncounted: it may have run it, and nothing says it did not). Only a
+//     unit that measured the file, executed none of it and did not load it
+//     selects nothing — that edge records a measurement (a -coverpkg run
+//     measures every package it builds), not an execution. Every unreported
 //     unit joins every selection, so partial evidence never under-selects
 //     (Review Focus 1). A measured file no reported unit executes is then
 //     graded by the unreported units, and is uncovered only when there are
@@ -119,7 +123,7 @@ func Select(m Map, r lang.Runner, testCmd []string, repoRoot, codePath, testPath
 		if n.Grain != grain {
 			return lang.Selection{}, fmt.Errorf("testmap: %s map is %s, but node %q has grain %q, not %q", m.Lang, m.Method, e.Test, n.Grain, grain)
 		}
-		if grain == GrainUnit && e.Executed == 0 {
+		if grain == GrainUnit && e.Executed == 0 && !e.Loaded && e.Uncounted == "" {
 			continue
 		}
 		if !seen[e.Test] {

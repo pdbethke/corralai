@@ -223,3 +223,32 @@ func TestUnitSelectionForRefusesAMapNamingNoRunner(t *testing.T) {
 		t.Errorf("a javascript file read from a typescript map: %+v", sel)
 	}
 }
+
+// Fix round 1. A unit that measured a file and could not count it
+// (UnitResult.Uncounted) has no Err and no count for the file, and was left
+// out of its selection: under-selection the evidence does not support. It is
+// an edge now, and selects its unit. So does a unit that only LOADED the
+// file; a unit that measured it with nothing executed and did not load it
+// does not.
+func TestUnitSelectionForSelectsUnitsThatLoadedOrCouldNotCount(t *testing.T) {
+	p, _ := lang.Detect("a.ts")
+	argv := []string{"vitest", "run"}
+	ev := UnitEvidence{Ran: true, Units: []UnitResult{
+		{Unit: "test/alpha.test.ts", Counts: map[string]lang.LineCounts{"src/x.ts": {Executed: 3, Executable: 5}}},
+		{Unit: "test/beta.test.ts", Uncounted: []string{"src/x.ts: no line table"}},
+		{Unit: "test/gamma.test.ts", Counts: map[string]lang.LineCounts{"src/x.ts": {Executed: 0, Executable: 5}}, Loaded: []string{"src/x.ts"}},
+		{Unit: "test/delta.test.ts", Counts: map[string]lang.LineCounts{"src/x.ts": {Executed: 0, Executable: 5}}},
+	}}
+	m := MapFromUnits(ev, fileUnitLanding(p, "test/alpha.test.ts", "test/beta.test.ts", "test/gamma.test.ts", "test/delta.test.ts", "src/x.ts"), lang.Cmd(argv), p)
+	sel := UnitSelectionFor(m, p, "", "src/x.ts", "test/alpha.test.ts", argv)
+	want := []string{"test/alpha.test.ts", "test/beta.test.ts", "test/gamma.test.ts"}
+	if sel.Fallback != "" || !reflect.DeepEqual(sel.Tests, want) {
+		t.Errorf("selection = %+v, want %v", sel, want)
+	}
+	// The uncounting unit adds no candidacy: the index still reads only
+	// executed counts.
+	idx, ok := IndexFromUnits(ev, fileUnitLanding(p, "test/alpha.test.ts", "test/beta.test.ts", "test/gamma.test.ts", "test/delta.test.ts", "src/x.ts"))
+	if n, _ := idx.UnitsFor("src/x.ts"); !ok || n != 1 {
+		t.Errorf("index covering units for x = %d (ok %v), want 1: an uncounted or loaded-only unit is not a covering unit", n, ok)
+	}
+}

@@ -342,7 +342,9 @@ func printUnitGrading(w io.Writer, ex *localExecutor, langName string) {
 		}
 		fmt.Fprintln(w, line+")")
 	case !ev.Ran:
-		fmt.Fprintf(w, "  selection: grading by the WHOLE suite — %s\n", ev.Note)
+		fmt.Fprintf(w, "  selection: grading by the WHOLE suite — %s\n", ex.unitsNotRunReason(langName))
+	case reposcan.NoRunnerRow(ex.unitMap) != "":
+		fmt.Fprintf(w, "  selection: grading by the WHOLE suite — %s\n", reposcan.NoRunnerRow(ex.unitMap))
 	default:
 		why := fmt.Sprintf("no unit of %d reported evidence", len(ev.Units))
 		if ev.Note != "" {

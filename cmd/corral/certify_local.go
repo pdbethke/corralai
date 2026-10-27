@@ -1658,6 +1658,9 @@ type runSubject struct {
 	// landing is the wiring's AuthoredLanding — the same value the scorer
 	// and validator write with (jailWiring.landing).
 	landing advpool.AuthoredLanding
+	// authoredTestPath is where the wiring's scorer writes the authored
+	// test (JailScorer.AuthoredTestPath), so the verdict judges that file.
+	authoredTestPath string
 	// inv is the resolved test command (auditJailPrep.inv).
 	inv lang.Invocation
 }
@@ -1740,7 +1743,7 @@ func newAuditRunSpec(in localAuditInput, roles auditRoles, subj runSubject) advp
 		Repo: subj.repo, Commit: subj.commit, Goal: strings.TrimSpace(in.goal),
 		CodePath: subj.codePath, Code: subj.code,
 		DevTestPath: subj.devTestPath, DevTestCode: subj.devTest,
-		Landing: subj.landing,
+		Landing: subj.landing, AuthoredTestPath: subj.authoredTestPath,
 		// Quoted, not space-joined: TestCmd is a STRING that gets re-split
 		// downstream, and a plain Join is not reversible — an argument
 		// containing a space (an inline -e script, --filter="a b") comes back
@@ -2038,8 +2041,9 @@ func auditOneFile(ctx context.Context, in localAuditInput) (advpool.Verdict, err
 		codePath: codeKey, code: string(code),
 		devTestPath: devTestKey, devTest: string(devTest),
 		lang: plug.Name(), importPath: prep.importPath,
-		landing: prep.wiring.landing,
-		inv:     prep.inv,
+		landing:          prep.wiring.landing,
+		authoredTestPath: prep.wiring.scorer.AuthoredTestPath(codeKey),
+		inv:              prep.inv,
 	})
 
 	// Signatures are best-effort (mirrors the brain's StartRun): a failure just

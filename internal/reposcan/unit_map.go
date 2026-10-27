@@ -5,6 +5,7 @@ package reposcan
 import (
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/testmap"
@@ -23,8 +24,10 @@ import (
 //
 // An edge is one (unit, source) pair the unit's own coverage run measured,
 // with Executed the lines it ran and no Lines (a unit run reports counts,
-// not which lines). A zero-executed edge is kept: measured and never run is a
-// fact about the file. A source's HasStatements is "some unit found an
+// not which lines), Loaded when the run loaded the file, and Uncounted
+// (the reporter's reason) for a file it measured and could not count. A
+// zero-executed edge is kept: measured and never run is a fact about the
+// file. A source's HasStatements is "some unit found an
 // executable statement in it" and HasStatic is "some unit loaded it" (ruling
 // R24), so an unexecuted file stays import-only rather than uncovered.
 //
@@ -67,7 +70,27 @@ func unitMap(ev UnitEvidence, uf UnitFiles) testmap.Map {
 			s.HasStatements = s.HasStatements || lc.Executable > 0
 			s.HasStatic = s.HasStatic || loaded[src]
 			m.Sources[src] = s
-			m.Edges = append(m.Edges, testmap.Edge{Test: u.Unit, Source: src, Executed: lc.Executed})
+			m.Edges = append(m.Edges, testmap.Edge{Test: u.Unit, Source: src, Executed: lc.Executed, Loaded: loaded[src]})
+		}
+		// A file the unit loaded but did not count, and a file it measured
+		// and could not count, are edges too: each is a reason the unit may
+		// execute the file, and the selection engine selects the unit for it
+		// — leaving it out under-selects exactly where the evidence is
+		// silent. Neither becomes a Source: no count says anything about the
+		// file, so a file only such units saw stays absent from the
+		// evidence (whole-suite, never uncovered) unless another unit
+		// counted it.
+		for _, f := range u.Loaded {
+			if _, counted := u.Counts[f]; !counted {
+				m.Edges = append(m.Edges, testmap.Edge{Test: u.Unit, Source: f, Loaded: true})
+			}
+		}
+		for _, entry := range u.Uncounted {
+			path, why, ok := strings.Cut(entry, ": ")
+			if !ok {
+				why = "no reason given"
+			}
+			m.Edges = append(m.Edges, testmap.Edge{Test: u.Unit, Source: path, Uncounted: why})
 		}
 	}
 	sort.Slice(m.Edges, func(i, j int) bool {
@@ -91,8 +114,8 @@ func UnitSelectionFor(m testmap.Map, p lang.Plugin, repoRoot, codePath, testPath
 	if m.Lang != p.Name() {
 		return lang.Selection{Fallback: fmt.Sprintf("the unit pass ran for %s, so it has no evidence about %s file %s", m.Lang, p.Name(), codePath)}
 	}
-	if m.Runner == "" {
-		return lang.Selection{Fallback: fmt.Sprintf("the %s unit evidence names no runner row for %v, so no unit can be selected to run", m.Lang, m.Command)}
+	if why := NoRunnerRow(m); why != "" {
+		return lang.Selection{Fallback: why}
 	}
 	r, err := lang.RunnerByID(p, m.Runner)
 	if err != nil {
@@ -103,4 +126,14 @@ func UnitSelectionFor(m testmap.Map, p lang.Plugin, repoRoot, codePath, testPath
 		return lang.Selection{Fallback: err.Error()}
 	}
 	return sel
+}
+
+// NoRunnerRow is why a unit map can select nothing for want of a runner row
+// to run its units with, or "" when it names one. The one wording, so the
+// scan's selection line and each file's fallback say the same thing.
+func NoRunnerRow(m testmap.Map) string {
+	if m.Runner != "" {
+		return ""
+	}
+	return fmt.Sprintf("the %s unit evidence names no runner row for %v, so no unit can be selected to run", m.Lang, m.Command)
 }

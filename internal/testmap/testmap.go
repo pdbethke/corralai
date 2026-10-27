@@ -70,12 +70,19 @@ type Node struct {
 	Err   string   // why it contributed no evidence; "" when it did
 }
 
-// Edge says Test executed Lines of Source, Executed times in all.
+// Edge says Test executed Lines of Source, Executed times in all. A unit
+// edge also says what a count alone cannot: Loaded, the unit's run executed
+// Source's module-level code (ruling R24), and Uncounted, the unit's run
+// measured Source but could not count it, with the reporter's reason. Each
+// is a reason the unit may execute Source although Executed is zero, so the
+// engine selects the unit for it; a test-grain edge sets neither.
 type Edge struct {
-	Test     string
-	Source   string
-	Lines    []lang.LineRange
-	Executed int
+	Test      string
+	Source    string
+	Lines     []lang.LineRange
+	Executed  int
+	Loaded    bool
+	Uncounted string
 }
 
 // EdgesTo returns the edges whose Source is source, in map order.

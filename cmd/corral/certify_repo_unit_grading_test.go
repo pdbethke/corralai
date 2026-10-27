@@ -237,6 +237,12 @@ func TestAuthoredPassAddsTheAuthoredUnit(t *testing.T) {
 	if want := vitestUnitsCmd(t, units...); !reflect.DeepEqual(got, want) {
 		t.Errorf("authored command = %v, want %v", got, want)
 	}
+	// The verdict judges the file the scorer writes (fix round 1).
+	rs := newAuditRunSpec(in, auditRoles{}, runSubject{lang: "typescript", codePath: job.Path, devTestPath: job.TestPath,
+		authoredTestPath: scorer.AuthoredTestPath(job.Path)})
+	if rs.AuthoredTestPath != authored[0] || !advpool.AuthoredAlone(rs) {
+		t.Errorf("RunSpec.AuthoredTestPath = %q (AuthoredAlone %v), want the scorer's %q", rs.AuthoredTestPath, advpool.AuthoredAlone(rs), authored[0])
+	}
 }
 
 // A file the evidence measured and no reporting unit executed is UNCOVERED,
@@ -333,5 +339,35 @@ func TestUnitGradedScanSaysHowItGrades(t *testing.T) {
 	s = runUnitEvidenceScan(t, root, "--dry-run", "--evidence", "--", "vitest", "run")
 	if !strings.Contains(s, "selection: grading by the WHOLE suite — no unit of 1 reported evidence: the unit pass stopped at its time limit") {
 		t.Errorf("a pass with no reported unit must say the scan grades whole-suite, and why:\n%s", s)
+	}
+}
+
+// The selection line never claims unit grading the files will not get: a
+// unit map naming no runner row grades every file whole-suite (each says
+// so), and the scan line says so too; and a pass that never ran with no
+// note of its own still names a reason rather than ending in a dash.
+func TestUnitGradingLineNeverClaimsWhatFilesDoNotGet(t *testing.T) {
+	root := unitGradingFixture(t)
+	ex := unitGradedExecutor(t, root, reposcan.UnitEvidence{Ran: true, Units: []reposcan.UnitResult{
+		unitRun("tests/one.test.ts", map[string]lang.LineCounts{"src/a.ts": {Executed: 1, Executable: 1}}),
+	}})
+	ex.unitMap.Runner = ""
+	var b strings.Builder
+	printUnitGrading(&b, ex, "typescript")
+	if !strings.Contains(b.String(), "selection: grading by the WHOLE suite — ") || !strings.Contains(b.String(), "names no runner row") {
+		t.Errorf("no runner row: line = %q, want whole suite naming the missing row", b.String())
+	}
+	if sel := ex.selectionFor(tsJob("src/a.ts", "tests/one.test.ts")); sel.Method != "" || !strings.Contains(sel.Fallback, "names no runner row") {
+		t.Errorf("no runner row: the file's own selection = %+v", sel)
+	}
+	if got := ex.selectionMethod(); got != "" {
+		t.Errorf("no runner row: selectionMethod = %q, want \"\" — no file is graded by units", got)
+	}
+
+	never := &localExecutor{}
+	b.Reset()
+	printUnitGrading(&b, never, "typescript")
+	if got := b.String(); strings.HasSuffix(strings.TrimSpace(got), "—") || !strings.Contains(got, "no unit evidence was collected for typescript") {
+		t.Errorf("pass with no note: line = %q, want the reason selectionFor gives", got)
 	}
 }

@@ -46,6 +46,16 @@ type RunSpec struct {
 	// nothing for a path one. It MUST equal the JailScorer's and the
 	// JailValidator's Landing.
 	Landing AuthoredLanding
+	// AuthoredTestPath is where the authored test is written, as the run's
+	// JailScorer resolved it (JailScorer.AuthoredTestPath): the scorer
+	// renames a path that collides with a file already in the workspace,
+	// and at unit grain a renamed file can be a different unit with
+	// different corun answers. The verdict judges the authored pass's
+	// command at this path (selectionDisclosure), so what it says is about
+	// the file the pass ran. Required for a repository run with a
+	// Selection; "" in single-file mode, where the scorer has no workspace
+	// to collide with and the path is the landing rule's alone.
+	AuthoredTestPath string
 
 	// Selection narrows TestCmd to the tests that EXECUTED CodePath, from
 	// evidence recorded once per scan (the scan's test map, through the

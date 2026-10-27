@@ -127,3 +127,23 @@ func TestAuthoredTestCmdSaysWhyItRefuses(t *testing.T) {
 		t.Errorf("got %v err=%v, want %v", got, err, want)
 	}
 }
+
+// Fix round 1 (amends the zero-executed rule). A unit edge selects its unit
+// when the unit EXECUTED the file, LOADED it (module-level code ran at
+// import, ruling R24 — the import may be what a mutant breaks), or MEASURED
+// it and could not count it (Uncounted: it may have executed it; nothing
+// says it did not). Only a unit that measured the file, executed none of it
+// and did not load it selects nothing.
+func TestSelectUnitGrainSelectsLoadingAndUncountingUnits(t *testing.T) {
+	r := jestRow(t)
+	m := unitMap([]string{"test/a.test.js", "test/b.test.js", "test/c.test.js", "test/d.test.js"}, "test/a.test.js")
+	m.Edges = append(m.Edges,
+		Edge{Test: "test/b.test.js", Source: "src/a.js", Loaded: true},
+		Edge{Test: "test/c.test.js", Source: "src/a.js"},
+		Edge{Test: "test/d.test.js", Source: "src/a.js", Uncounted: "no line table for this file"})
+	sel, err := Select(m, r, jestArgv, "", "src/a.js", "")
+	want := []string{"test/a.test.js", "test/b.test.js", "test/d.test.js"}
+	if err != nil || !reflect.DeepEqual(sel.Tests, want) {
+		t.Errorf("Tests=%v err=%v, want the executing, loading and uncounting units %v", sel.Tests, err, want)
+	}
+}

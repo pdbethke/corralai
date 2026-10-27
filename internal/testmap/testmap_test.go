@@ -100,3 +100,34 @@ func TestEdgesToReturnsOnlyThatSource(t *testing.T) {
 		t.Fatal("unknown source must have no edges")
 	}
 }
+
+// A unit edge's Loaded and Uncounted survive the wire, and a map that sets
+// neither writes exactly what it wrote before they existed (omitempty), so no
+// test-grain map's digest moved.
+func TestUnitEdgeFlagsRoundTripAndAreOmittedWhenUnset(t *testing.T) {
+	in := Map{Schema: Schema, Lang: "go", Runner: "go-test", Method: MethodUnitEvidence, Of: 1,
+		Sources: map[string]Source{"a.go": {HasStatements: true}},
+		Tests:   map[string]Node{"m/a": {ID: "m/a", Grain: GrainUnit}},
+		Edges: []Edge{
+			{Test: "m/a", Source: "a.go", Loaded: true},
+			{Test: "m/a", Source: "b.go", Uncounted: "no line table"},
+		}}
+	var buf bytes.Buffer
+	if err := Write(&buf, in); err != nil {
+		t.Fatal(err)
+	}
+	out, err := Read(bytes.NewReader(buf.Bytes()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(out.Edges, in.Edges) {
+		t.Errorf("edges = %+v, want %+v", out.Edges, in.Edges)
+	}
+	var plain bytes.Buffer
+	if err := Write(&plain, sample()); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(plain.String(), "loaded") || strings.Contains(plain.String(), "uncounted") {
+		t.Errorf("a map setting neither flag must not write them:\n%s", plain.String())
+	}
+}

@@ -3262,10 +3262,24 @@ func (l *localExecutor) selectionMethod() string {
 // in which no unit reported (it timed out before any finished) grades
 // nothing — every file falls back to the whole suite with the pass's note
 // (testmap.Select refuses it, Review Focus 5) — so it must not name a method
-// the scan's files were not graded by. A map naming no runner row still
-// counts: each file then says, by name, why it could not be narrowed.
+// the scan's files were not graded by. A map naming no runner row
+// grades nothing either: every file falls back, naming the missing row
+// (reposcan.NoRunnerRow), so the scan's method and line must not claim
+// otherwise.
 func (l *localExecutor) unitGrades() bool {
-	return l.units.Ran && l.unitMap.Method != "" && len(l.unitMap.Unreported()) < len(l.unitMap.Tests)
+	return l.units.Ran && l.unitMap.Method != "" && l.unitMap.Runner != "" && len(l.unitMap.Unreported()) < len(l.unitMap.Tests)
+}
+
+// unitsNotRunReason is why a file of langName has no unit evidence to be
+// graded by when the unit pass did not run: the pass's own reason, as the
+// units line printed it, or — for a pass that never started (no source to
+// run for, a diff that touched none), which has none — a sentence saying
+// so. An empty reason would be an undisclosed whole-suite grade.
+func (l *localExecutor) unitsNotRunReason(langName string) string {
+	if l.units.Note != "" {
+		return l.units.Note
+	}
+	return fmt.Sprintf("no unit evidence was collected for %s", langName)
 }
 
 // collectSelectionEvidence is reposcan.CollectSelectionEvidence behind a
@@ -5570,14 +5584,7 @@ func (l *localExecutor) selectionFor(j reposcan.Job) lang.Selection {
 		return l.selection.For(p, l.repoDir, j.Path, j.TestPath, base)
 	}
 	if !l.units.Ran {
-		// The pass's own reason, as the units line printed it; a pass that
-		// never started (no source to run for, a diff that touched none)
-		// has none, and an empty Fallback would be an undisclosed
-		// whole-suite grade.
-		if l.units.Note != "" {
-			return lang.Selection{Fallback: l.units.Note}
-		}
-		return lang.Selection{Fallback: fmt.Sprintf("no unit evidence was collected for %s", j.Lang)}
+		return lang.Selection{Fallback: l.unitsNotRunReason(j.Lang)}
 	}
 	return reposcan.UnitSelectionFor(l.unitMap, p, l.repoDir, j.Path, j.TestPath, base)
 }

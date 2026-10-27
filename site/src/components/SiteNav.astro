@@ -41,4 +41,11 @@ const { active, class: className } = Astro.props;
   }
   .sh-nav a:hover { color: var(--stage-fg); background: var(--stage-panel); }
   .sh-nav a[aria-current='page'] { color: var(--stage-bg); background: var(--stage-amber); }
+  /* Below 560px the nav takes its own full-width row under the brand
+     (Header.astro) and wraps. Tighter pills keep eight links on the two rows
+     seven took; results.spec.ts holds the height to the seven-link one. */
+  @media (max-width: 560px) {
+    .sh-nav { gap: 4px 2px; }
+    .sh-nav a { padding: 6px 7px; }
+  }
 </style>

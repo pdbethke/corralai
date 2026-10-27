@@ -24,3 +24,27 @@ func TestTheWarehouseExtractUsesTheSamePredicate(t *testing.T) {
 		t.Fatalf("scripts/build-warehouse-parquet.py must define %s — the same predicate the Go stores apply", want)
 	}
 }
+
+// The rule, read from the record alone: a recorded tool says an agent sat,
+// and only a pin names its model; a built-in name with no tool is an older
+// agent record. (agentbackend's TestRecordedSeatNamesAModelIsEnvFree holds the
+// same cases through its wrapper.)
+func TestRecordedSeatNamesAModel(t *testing.T) {
+	for _, c := range []struct {
+		spec, tool string
+		want       bool
+	}{
+		{"codex", "codex-cli 0.160.0", false},
+		{"codex:gpt-6-astra", "codex-cli 0.160.0", true},
+		{"gpt-6", "", true},
+		{"", "", false},
+		{"  ", "", false},
+		{"claude-code", "", false},
+		{"claude-code:claude-opus-5-5", "", true},
+		{"antigravity", "", false},
+	} {
+		if got := RecordedSeatNamesAModel(c.spec, c.tool); got != c.want {
+			t.Errorf("RecordedSeatNamesAModel(%q, %q) = %v, want %v", c.spec, c.tool, got, c.want)
+		}
+	}
+}

@@ -53,5 +53,6 @@ func allowed(dep string, allow []string) bool {
 
 func TestLedgerIsBrowserSafe(t *testing.T) {
 	assertBrowserSafe(t, "github.com/pdbethke/corralai/internal/ledger",
-		"github.com/pdbethke/corralai/internal/reviewrecord")
+		"github.com/pdbethke/corralai/internal/reviewrecord",
+		"github.com/pdbethke/corralai/internal/seatrecord")
 }

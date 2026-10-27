@@ -785,8 +785,12 @@ func readMaybeGzip(path string) ([]byte, error) {
 	return io.ReadAll(zr)
 }
 
-// ReadLedgerDir returns every bundle in dir, oldest push first.
-func ReadLedgerDir(dir string) ([]ledgerFile, error) {
+// ReadRawLedgerDir returns every entry file in dir's scans/ as it sits on
+// disk, in name order: the input ledger.Derive takes, and the same files a
+// browser fetches. Nothing is parsed, so a file that does not parse is still
+// listed and Derive reports it rather than this reader hiding it. A directory
+// with no scans/ holds no entries (nil, nil), as for ReadLedgerDir.
+func ReadRawLedgerDir(dir string) ([]ledger.RawEntry, error) {
 	scans := filepath.Join(dir, ScansSubdir)
 	entries, err := os.ReadDir(scans)
 	if err != nil {
@@ -795,7 +799,7 @@ func ReadLedgerDir(dir string) ([]ledgerFile, error) {
 		}
 		return nil, fmt.Errorf("auditpush: ledger dir: %w", err)
 	}
-	var out []ledgerFile
+	var out []ledger.RawEntry
 	for _, e := range entries {
 		if e.IsDir() || !isLedgerEntryName(e.Name()) {
 			continue
@@ -804,7 +808,20 @@ func ReadLedgerDir(dir string) ([]ledgerFile, error) {
 		if err != nil {
 			return nil, err
 		}
-		f, err := ledger.ParseEntry(e.Name(), raw)
+		out = append(out, ledger.RawEntry{Name: e.Name(), Bytes: raw})
+	}
+	return out, nil
+}
+
+// ReadLedgerDir returns every bundle in dir, oldest push first.
+func ReadLedgerDir(dir string) ([]ledgerFile, error) {
+	raw, err := ReadRawLedgerDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	var out []ledgerFile
+	for _, r := range raw {
+		f, err := ledger.ParseEntry(r.Name, r.Bytes)
 		if err != nil {
 			return nil, err
 		}

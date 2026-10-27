@@ -486,3 +486,37 @@ func TestLedgerDirPushNamesTheEntryItWrote(t *testing.T) {
 		t.Errorf("a warehouse push names entry %q keyid %q, want neither", w.Entry, w.KeyID)
 	}
 }
+
+// ReadRawLedgerDir hands a deriver the files exactly as they sit on disk —
+// gzip left compressed, a corrupt file still listed (Derive reports it, a
+// reader that dropped it would hide it) — and the same files ReadLedgerDir
+// reads: .json and .json.gz under scans/, no dotfiles, no directories.
+func TestReadRawLedgerDirIsTheFilesAsWritten(t *testing.T) {
+	dir := t.TempDir()
+	if raw, err := ReadRawLedgerDir(dir); err != nil || raw != nil {
+		t.Fatalf("no scans/: got %v, %v; want nil, nil like ReadLedgerDir", raw, err)
+	}
+	scans := filepath.Join(dir, ScansSubdir)
+	if err := os.MkdirAll(filepath.Join(scans, "sub.json"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	files := map[string][]byte{
+		"b.json.gz":    {0x1f, 0x8b, 0x00},
+		"a.json":       []byte(`not json`),
+		".hidden.json": []byte(`{}`),
+		"notes.txt":    []byte(`x`),
+	}
+	for n, b := range files {
+		if err := os.WriteFile(filepath.Join(scans, n), b, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	raw, err := ReadRawLedgerDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(raw) != 2 || raw[0].Name != "a.json" || raw[1].Name != "b.json.gz" ||
+		!bytes.Equal(raw[0].Bytes, files["a.json"]) || !bytes.Equal(raw[1].Bytes, files["b.json.gz"]) {
+		t.Fatalf("raw entries %+v", raw)
+	}
+}

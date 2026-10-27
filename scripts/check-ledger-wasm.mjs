@@ -1,15 +1,18 @@
 // Derive a ledger directory through ledger.wasm and print what it concluded.
-// usage: node check-ledger-wasm.mjs <wasmdir> <ledgerdir> <pubhex>
-// Prints one JSON object: {problem, entries, verified, unsigned, failed, scans}.
+// usage: node check-ledger-wasm.mjs <wasmdir> <ledgerdir> <pubhex> <owner/name> <outfile>
+// Writes the wasm's full Derived JSON to <outfile>, exactly the string it
+// returned, so the shell wrapper can compare it byte for byte with the native
+// Derive (scripts/ledgerderive). Prints one JSON object:
+// {problem, entries, verified, unsigned, failed, scans}.
 // Exit 1 on a ledger-level problem or any failed entry; the shell wrapper
 // compares verified against the CLI's count.
 import fs from "node:fs";
 import path from "node:path";
 import vm from "node:vm";
 
-const [wasmDir, ledgerDir, pub] = process.argv.slice(2);
-if (!wasmDir || !ledgerDir || pub === undefined) {
-  console.error("usage: check-ledger-wasm.mjs <wasmdir> <ledgerdir> <pubhex>");
+const [wasmDir, ledgerDir, pub, repo, outFile] = process.argv.slice(2);
+if (!wasmDir || !ledgerDir || pub === undefined || !repo || !outFile) {
+  console.error("usage: check-ledger-wasm.mjs <wasmdir> <ledgerdir> <pubhex> <owner/name> <outfile>");
   process.exit(2);
 }
 // wasm_exec.js is a classic script that populates globalThis.
@@ -28,7 +31,12 @@ const entries = fs.existsSync(scans)
                    (e.name.endsWith(".json") || e.name.endsWith(".json.gz")))
       .map(e => ({ name: e.name, bytes: new Uint8Array(fs.readFileSync(path.join(scans, e.name))) }))
   : [];
-const d = JSON.parse(globalThis.corralLedgerDerive(entries, { rootPub: pub, repo: "" }));
+// Files in name order, the order the native reader (auditpush.ReadRawLedgerDir)
+// hands them over; Derive sorts by name itself, so this is belt and braces.
+entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+const out = globalThis.corralLedgerDerive(entries, { rootPub: pub, repo });
+fs.writeFileSync(outFile, out);
+const d = JSON.parse(out);
 const n = s => d.entries.filter(e => e.status === s).length;
 console.log(JSON.stringify({
   problem: d.problem ?? "", entries: d.entries.length,

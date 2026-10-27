@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/pdbethke/corralai/internal/agentworker"
+	"github.com/pdbethke/corralai/internal/seatrecord"
 )
 
 // A meter fed metered and unmetered calls counts every call, counts the
@@ -166,5 +167,25 @@ func TestRecordedSeatNamesAModelIsEnvFree(t *testing.T) {
 		if got := RecordedSeatNamesAModel(c.spec, c.tool); got != c.want {
 			t.Errorf("RecordedSeatNamesAModel(%q, %q) = %v, want %v", c.spec, c.tool, got, c.want)
 		}
+	}
+}
+
+// The recorded rule lives in seatrecord so a browser-safe reader (the ledger's
+// Summary, compiled to WASM) applies it without importing the backends. Its
+// copy of the built-in names must be exactly this package's: a built-in added
+// here and not there would read as an API model in every pre-tool record.
+func TestSeatrecordKnowsEveryBuiltinAgent(t *testing.T) {
+	got := map[string]bool{}
+	for _, n := range seatrecord.BuiltinAgentNames() {
+		got[n] = true
+	}
+	for name := range builtinAgents {
+		if !got[name] {
+			t.Errorf("built-in agent %q is missing from seatrecord.BuiltinAgentNames", name)
+		}
+		delete(got, name)
+	}
+	for name := range got {
+		t.Errorf("seatrecord.BuiltinAgentNames has %q, which is not a built-in agent here", name)
 	}
 }

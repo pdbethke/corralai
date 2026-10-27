@@ -1695,7 +1695,7 @@ func collapseToFilesIfTooLong(ids []string) ([]string, bool) {
 	}
 	files := map[string]bool{}
 	for _, id := range ids {
-		files[strings.SplitN(id, "::", 2)[0]] = true
+		files[pyTestUnit(id)] = true
 	}
 	out := make([]string, 0, len(files))
 	for f := range files {
@@ -1920,6 +1920,16 @@ func lastNonEmptyLine(b []byte) string {
 		}
 	}
 	return ""
+}
+
+// AlignEvidencePath is the path a coverage report stores, as the
+// repo-relative key a test map uses: a relative path is taken as
+// repo-relative; an absolute one is aligned under repoRoot, and dropped
+// (ok=false) when it lies outside it. It is the rule the Python selector has
+// always aligned its evidence by, exported so the map a caller builds for the
+// selection engine aligns paths the same way.
+func AlignEvidencePath(path, repoRoot string) (string, bool) {
+	return alignPyPath(path, normalizePyRepoRoot(repoRoot))
 }
 
 // alignPyPath is ParseCoverage's absolute-path rule, shared: a relative

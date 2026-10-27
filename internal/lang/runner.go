@@ -91,6 +91,13 @@ type Runner struct {
 	// ids with every operator flag kept; it refuses (ok=false) where it
 	// cannot, as SingleCmd does.
 	TestsCmd func(base []string, ids []string) ([]string, bool)
+	// TestUnit names the unit a test id belongs to, in a spelling TestsCmd
+	// accepts in place of the id (pytest: the file before "::"). It is what
+	// a selection whose ids would overflow the command line widens to: a
+	// coarser set, still the evidence's, never the whole suite. nil means
+	// the row's ids cannot be widened; a caller then runs the selection it
+	// already had.
+	TestUnit func(id string) string
 	// UnitsCmd is argv running exactly these units (the multi-unit UnitCmd),
 	// refusing wherever UnitCmd would, and refusing a list that is not a set
 	// (empty, an empty name, a name twice). UnitCmd(argv, u) is
@@ -146,6 +153,11 @@ func pyTestsCmd(base, ids []string) ([]string, bool) {
 	return append(append([]string{}, base...), ids...), true
 }
 
+// pyTestUnit is the file a pytest node id lives in: everything before its
+// first "::". pytest collects a file named on the command line as it
+// collects a node id, so the file stands in for its ids.
+func pyTestUnit(id string) string { return strings.SplitN(id, "::", 2)[0] }
+
 // runners is the table. ORDER IS LOAD-BEARING: RunnerFor takes the first row
 // that matches, so a row whose command also contains a more general row's
 // word comes first (cargo nextest before cargo test, jest and mocha before
@@ -176,7 +188,7 @@ var runners = []Runner{
 		FailFast: []string{"-x"},
 		ListCmd:  pyListCmd, ParseList: pyParseTestList, SingleCmd: pySingleCmd,
 		FirstFailure: pyFirstFailure, FailedTests: pyFailedTests, DeselectCmd: pyDeselectCmd,
-		CollectionBase: stripPyCollectionTargets, TestsCmd: pyTestsCmd, CarryArgs: deselectArgs,
+		CollectionBase: stripPyCollectionTargets, TestsCmd: pyTestsCmd, TestUnit: pyTestUnit, CarryArgs: deselectArgs,
 	},
 	{
 		// No salvage: unittest exits 2 on pytest's --deselect, so a rerun

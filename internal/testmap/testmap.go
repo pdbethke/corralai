@@ -6,10 +6,12 @@
 // evidence each runner unit reported); nothing here infers a pairing from a
 // file name, because a name proves only that a test mentions a file.
 //
-// The package holds data and its canonical serialisation, nothing else: how
-// evidence is collected lives with the runner, and how a map is turned into a
-// selection lives with the caller. internal/lang must never import this
-// package; testmap imports lang only for LineRange.
+// The package holds the data, its canonical serialisation, and the one
+// selection engine (select.go) that turns a map plus a runner row into a
+// lang.Selection and its commands. How evidence is collected lives with the
+// runner. internal/lang must never import this package; testmap imports lang
+// for LineRange, the Runner row whose fields build every command, and the
+// Selection type grading consumes.
 package testmap
 
 import (
@@ -28,6 +30,12 @@ const (
 	GrainUnit = "unit"
 	GrainTest = "test"
 )
+
+// MethodUnitEvidence names a map built from the unit pass: one node per
+// runner unit, an edge wherever a unit's own coverage run executed a file,
+// and no line ranges. Its nodes are GrainUnit, as MethodCoverageContext's
+// are GrainTest; the engine reads the grain from the method.
+const MethodUnitEvidence = "unit-evidence"
 
 // Map records which test nodes executed which source files, and under what
 // conditions that evidence was collected.

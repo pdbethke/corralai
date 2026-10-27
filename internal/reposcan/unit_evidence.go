@@ -299,7 +299,9 @@ func failureTail(stderr, out string) string {
 	return ": " + tail
 }
 
-// IndexFromUnits builds the EvidenceIndex a unit pass supports. ok is false
+// IndexFromUnits builds the EvidenceIndex a unit pass supports, as a view of
+// the pass's test map (MapFromUnits): the map holds what each unit measured
+// and which units have no evidence, this holds what candidacy makes of it. ok is false
 // when the pass never ran or no unit succeeded: there is nothing to widen
 // candidacy with.
 //
@@ -334,50 +336,37 @@ func IndexFromUnits(ev UnitEvidence, uf UnitFiles) (EvidenceIndex, bool) {
 	if !ev.Ran {
 		return EvidenceIndex{}, false
 	}
+	m := unitMap(ev, uf)
 	type tally struct {
-		executed, hasStatements, loaded bool
-		units                           int
-		perFile                         map[string]int
-		compiled                        map[string]bool
+		executed bool
+		units    int
+		perFile  map[string]int
+		compiled map[string]bool
 	}
 	tallies := map[string]*tally{}
-	succeeded, partial := 0, false
-	for _, u := range ev.Units {
-		if u.Err != "" {
-			partial = true
+	for src := range m.Sources {
+		tallies[src] = &tally{perFile: map[string]int{}, compiled: map[string]bool{}}
+	}
+	partial := len(m.Unreported()) > 0
+	if len(m.Unreported()) == len(m.Tests) {
+		return EvidenceIndex{}, false
+	}
+	for _, e := range m.Edges {
+		if e.Executed == 0 {
 			continue
 		}
-		succeeded++
-		loaded := make(map[string]bool, len(u.Loaded))
-		for _, f := range u.Loaded {
-			loaded[f] = true
+		t := tallies[e.Source]
+		t.executed = true
+		landing := uf.Landing(e.Test, e.Source)
+		if landing == "" {
+			continue
 		}
-		for src, lc := range u.Counts {
-			t := tallies[src]
-			if t == nil {
-				t = &tally{perFile: map[string]int{}, compiled: map[string]bool{}}
-				tallies[src] = t
-			}
-			t.hasStatements = t.hasStatements || lc.Executable > 0
-			t.loaded = t.loaded || loaded[src]
-			if lc.Executed == 0 {
-				continue
-			}
-			t.executed = true
-			landing := uf.Landing(u.Unit, src)
-			if landing == "" {
-				continue
-			}
-			t.units++
-			t.perFile[landing] += lc.Executed
-			t.compiled[landing] = true
-			for _, tf := range uf.TestFiles(u.Unit) {
-				t.compiled[tf] = true
-			}
+		t.units++
+		t.perFile[landing] += e.Executed
+		t.compiled[landing] = true
+		for _, tf := range m.Tests[e.Test].Files {
+			t.compiled[tf] = true
 		}
-	}
-	if succeeded == 0 {
-		return EvidenceIndex{}, false
 	}
 
 	files := make(map[string]evidenceFileEntry, len(tallies))
@@ -391,6 +380,7 @@ func IndexFromUnits(ev UnitEvidence, uf UnitFiles) (EvidenceIndex, bool) {
 				best, bestLines = testFile, lines
 			}
 		}
+		s := m.Sources[src]
 		files[src] = evidenceFileEntry{
 			coveringTests: t.units,
 			coveringUnits: t.units,
@@ -399,8 +389,8 @@ func IndexFromUnits(ev UnitEvidence, uf UnitFiles) (EvidenceIndex, bool) {
 			// A unit that loaded the file ran its module-level code: the
 			// unit-pass counterpart of a per-test index's static coverage,
 			// which is what makes an unexecuted file import-only.
-			hasStatic:     t.loaded,
-			hasStatements: t.hasStatements,
+			hasStatic:     s.HasStatic,
+			hasStatements: s.HasStatements,
 		}
 	}
 	return EvidenceIndex{files: files, unitKind: true}, true

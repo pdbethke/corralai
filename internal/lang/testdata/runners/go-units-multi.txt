@@ -1,0 +1,12 @@
+# argv: go test -v -count=1 -tags extra ./...
+$ go test -v -count=1 -tags extra example.com/units/a example.com/units/b
+=== RUN   TestAdd
+--- PASS: TestAdd
+=== RUN   TestAddMore
+--- PASS: TestAddMore
+PASS
+ok  	example.com/units/a
+=== RUN   TestNeg
+--- PASS: TestNeg
+PASS
+ok  	example.com/units/b

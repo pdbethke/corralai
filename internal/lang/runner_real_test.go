@@ -476,3 +476,107 @@ func TestRealRunnersListAndRunOneUnitBeyondJS(t *testing.T) {
 		})
 	}
 }
+
+// TestRealRunnersRunSeveralUnits drives each row's multi-unit command against
+// the real runner: of three units (units/multi: a holds one test, b two, c
+// four; Go reuses units/gomod under -tags extra, Rust the cargo workspace),
+// run a and b through UnitsRunCmd and require the runner's own count to be
+// exactly theirs — 3, which no other subset gives — and none of the third
+// unit's tests in the output. cargo's cross product is driven too: the run
+// of one package's lib and another's integration test runs five tests, and
+// UnitsCoruns must name the two units that adds. Gated and skipped by name
+// as TestRealRunnersListAndRunOneUnitBeyondJS is.
+func TestRealRunnersRunSeveralUnits(t *testing.T) {
+	root := os.Getenv("CORRALAI_RUNNER_ROOT")
+	rspec := []string{"rspec"}
+	if exec.Command("rspec", "--version").Run() != nil {
+		rspec = []string{"ruby", "-S", "rspec"}
+	}
+	for _, c := range []struct {
+		runner, lang, sub string
+		argv              []string
+		probe             []string // must run, else the case is skipped naming it
+		units             []string
+		count             func(string) int
+		want              int
+		absent            []string // the unnamed unit's tests
+		corun             []string // listed units UnitsCoruns must name
+		needsRoot         bool
+	}{
+		{"go test", "go", "units/gomod", []string{"go", "test", "-v", "-count=1", "-tags", "extra", "./..."}, []string{"go", "version"},
+			[]string{"example.com/units/a", "example.com/units/b"}, goPassCount, 3, []string{"TestTwo"}, nil, false},
+		{"gotestsum", "go", "units/gomod", []string{filepath.Join(root, "bin", "gotestsum"), "--format", "standard-verbose", "--", "-count=1", "-tags", "extra", "./..."},
+			[]string{filepath.Join(root, "bin", "gotestsum"), "--version"},
+			[]string{"example.com/units/a", "example.com/units/b"}, goPassCount, 3, []string{"TestTwo"}, nil, true},
+		{"jest", "javascript", "", []string{"npx", "--no-install", "jest", "--ci", "units/multi/jest"}, []string{"npx", "--no-install", "jest", "--version"},
+			[]string{"units/multi/jest/a.jest.test.js", "units/multi/jest/b.jest.test.js"}, jsTestsPassed, 3, []string{"c.jest.test.js", "c one"}, nil, true},
+		{"vitest", "typescript", "", []string{"npx", "--no-install", "vitest", "run", "--reporter=verbose", "units/multi/vitest"}, []string{"npx", "--no-install", "vitest", "--version"},
+			[]string{"units/multi/vitest/a.vitest.test.mjs", "units/multi/vitest/b.vitest.test.mjs"}, jsTestsPassed, 3, []string{"c.vitest.test.mjs", "c one"}, nil, true},
+		{"node --test", "javascript", "", []string{"node", "--test", "--test-reporter=tap", "--test-concurrency", "1", "units/multi/node/*.node.test.js"}, []string{"node", "--version"},
+			[]string{"units/multi/node/a.node.test.js", "units/multi/node/b.node.test.js"}, ran, 3, []string{"c one"}, nil, false},
+		{"rspec", "ruby", "", append(slices.Clone(rspec), "--format", "documentation", "units/multi/rspec"), append(slices.Clone(rspec), "--version"),
+			[]string{"units/multi/rspec/spec/a_spec.rb", "units/multi/rspec/spec/b_spec.rb"}, ran, 3, []string{"Multi C", "c one"}, nil, false},
+		{"phpunit", "php", "", []string{"vendor/bin/phpunit", "--testdox", "units/multi/phpunit/tests"}, []string{"vendor/bin/phpunit", "--version"},
+			[]string{"units/multi/phpunit/tests/MultiATest.php", "units/multi/phpunit/tests/MultiBTest.php"}, ran, 3, []string{"Multi C", "C one"}, nil, true},
+		{"cargo test", "rust", "units/cargo", []string{"cargo", "test", "--workspace"}, []string{"cargo", "--version"},
+			[]string{"units-a/lib", "units-b/lib"}, cargoPassCount, 3, []string{"integrates", "tests::runs"}, nil, true},
+		{"cargo test", "rust", "units/cargo", []string{"cargo", "test", "--workspace"}, []string{"cargo", "--version"},
+			[]string{"units-a/lib", "units-b/test:it"}, cargoPassCount, 5, []string{"tests::runs"}, []string{"units-a/test:it", "units-b/lib"}, true},
+		{"cargo nextest", "rust", "units/cargo", []string{"cargo", "nextest", "run", "--workspace"}, []string{"cargo", "nextest", "--version"},
+			[]string{"units-a", "units-b::it"}, nextestPassCount, 3, []string{"units-a::it", "tests::negates", "tests::runs"}, nil, true},
+	} {
+		t.Run(c.runner+"/"+strings.Join(c.units, "+"), func(t *testing.T) {
+			dir := root
+			if !c.needsRoot {
+				dir = t.TempDir()
+				if err := os.CopyFS(dir, os.DirFS("testdata/runners/src")); err != nil {
+					t.Fatal(err)
+				}
+			} else if dir == "" {
+				t.Skipf("SKIP %s: CORRALAI_RUNNER_ROOT is not set (scripts/capture-runner-fixtures.sh --keep DIR)", c.runner)
+			}
+			probe := exec.Command(c.probe[0], c.probe[1:]...) // #nosec G204 -- a fixed version probe
+			probe.Dir = dir
+			if probe.Run() != nil {
+				t.Skipf("SKIP %s: %s is not installed", c.runner, strings.Join(c.probe[:len(c.probe)-1], " "))
+			}
+			p, _ := ByName(c.lang)
+			inv := Cmd(c.argv)
+			r, _ := RunnerFor(p, inv)
+			if r.Name != c.runner {
+				t.Fatalf("%q dispatched to %q", c.argv, r.Name)
+			}
+			cmd, ok := UnitsRunCmd(p, inv, c.units)
+			if !ok {
+				t.Fatalf("no multi-unit command for %q", c.units)
+			}
+			var all bytes.Buffer
+			x := exec.Command(cmd[0], cmd[1:]...) // #nosec G204 -- the row's own command over a test fixture
+			x.Dir = filepath.Join(dir, c.sub)
+			x.Stdout = &all
+			x.Stderr = &all
+			_ = x.Run()
+			out := all.String()
+			if n := c.count(out); n != c.want {
+				t.Errorf("%q ran %d tests, want %d:\n%s", cmd, n, c.want, out)
+			}
+			for _, s := range c.absent {
+				if strings.Contains(out, s) {
+					t.Errorf("%q ran %q, which no named unit holds:\n%s", cmd, s, out)
+				}
+			}
+			for _, other := range c.corun {
+				if r.UnitsCoruns == nil || !r.UnitsCoruns(c.units, other) {
+					t.Errorf("the run of %q also ran %s, and UnitsCoruns does not say so", c.units, other)
+				}
+			}
+			if len(c.corun) == 0 && r.UnitsCoruns != nil {
+				for _, other := range []string{"units-a/test:it", "units-a/bin:units-a", "units-b/test:it"} {
+					if !slices.Contains(c.units, other) && r.UnitsCoruns(c.units, other) {
+						t.Errorf("UnitsCoruns(%q, %s) is true, but the run counted only the named units", c.units, other)
+					}
+				}
+			}
+		})
+	}
+}

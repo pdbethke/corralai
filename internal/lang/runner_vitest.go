@@ -119,14 +119,16 @@ func vitestParseUnits(stdout string) []string {
 	return paths
 }
 
-// vitestUnitCmd runs one test file: argv under `run`, without its shard
-// (withoutFlag), with the operator's file filters replaced by the unit, since vitest runs the files ANY filter
-// matches. A bare word after a flag written without "=" may be that flag's
-// value or a filter, and vitest's options are too many to tell, so such a
-// command has no unit form.
-func vitestUnitCmd(argv []string, unit string) ([]string, bool) {
+// vitestUnitsCmd runs the test files: argv under `run`, without its shard
+// (withoutFlag), with the operator's file filters replaced by the units,
+// since vitest runs the files ANY filter matches (so several units are
+// several filters, each a unit's path; vitestUnitCoruns says which other
+// listed file a unit's filter also matches). A bare word after a flag
+// written without "=" may be that flag's value or a filter, and vitest's
+// options are too many to tell, so such a command has no unit form.
+func vitestUnitsCmd(argv []string, units []string) ([]string, bool) {
 	cmd, ok := vitestWithMode(argv, "run")
-	if unit == "" || !ok {
+	if !unitSet(units) || !ok {
 		return nil, false
 	}
 	i := vitestIndex(cmd) + 2 // past the vitest word and `run`
@@ -134,7 +136,7 @@ func vitestUnitCmd(argv []string, unit string) ([]string, bool) {
 	if !ok {
 		return nil, false
 	}
-	return append(append(slices.Clone(cmd[:i]), flags...), unit), true
+	return append(append(slices.Clone(cmd[:i]), flags...), units...), true
 }
 
 // vitestUnitCoruns: vitest selects the files whose path, relative to its

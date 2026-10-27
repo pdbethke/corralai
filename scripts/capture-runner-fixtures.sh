@@ -214,6 +214,57 @@ help libtest-help.txt sh -c 'cd units/cargo && cargo test -q -p units-a --test i
 help nextest-run-help.txt cargo nextest run --help
 help nextest-list-help.txt cargo nextest list --help
 
+# --- multi-unit commands (UnitsCmd, runner_units_multi_test.go) ------------
+# Each row's command for units a and b of three: units/multi/* holds a with one
+# test, b two, c four, so a run's count names the set it ran (3 = a and b);
+# Go reuses units/gomod under -tags extra (a two, b one, tagged one), Rust the
+# cargo workspace. Each fixture is `# argv:` the operator's command, `$ ` the
+# row's command for the units (keep it equal to what the row builds; the
+# test compares them), then the run's stdout+stderr.
+# The agent variables are unset because jest 30 prints only its summary, not
+# the tests it ran, when it sees one (measured under Claude Code: AI_AGENT).
+multi() { # multi <fixture> <operator argv> <cmd...>
+  local f="$1" argv="$2"; shift 2
+  { echo "# argv: $argv"; echo "\$ $*"; env -u AI_AGENT -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT "$@" 2>&1; } |
+    sed -e 's/\x1b\[[0-9;]*m//g' -e "s#$PDIR#/fixture#g" -e "s#$DIR#/fixture#g" -e "s#$HOME#~#g" \
+    -e '/duration_ms\|^Time: \|^Ran all\|Duration \|Start at \|^Finished in\|Finished `test` profile\|Running \|Compiling \|Starting \|Nextest run ID\|^Randomized with seed/d' \
+    -e 's/ ([0-9.]* \?m\?s)$//' -e 's/ [0-9]*ms$//' -e 's/\t[0-9.]*s$//' -e 's/ in [0-9.]*s$//' -e 's/ \[ *[0-9.]*s\]/ [time]/' > "$OUT/$f" || true
+}
+multiran() { sed -e '1,2d' "$OUT/$1" | grep -oE '(Tests:? +[0-9]+ passed)|(^# pass [0-9]+)|([0-9]+ examples?, 0 failures)|(OK \([0-9]+ tests?)|(--- PASS)|(test result: ok\. [0-9]+ passed)|( [0-9]+ tests? run: [0-9]+ passed)' |
+  awk '/--- PASS/ {n++; next} {match($0, /[0-9]+/); n += substr($0, RSTART, RLENGTH)} END {print n+0}'; }
+(cd units/gomod && multi go-units-multi.txt "go test -v -count=1 -tags extra ./..." \
+  go test -v -count=1 -tags extra example.com/units/a example.com/units/b)
+want go-units-multi 3 "$(multiran go-units-multi.txt)"
+(cd units/gomod && multi gotestsum-units-multi.txt "$DIR/bin/gotestsum --format standard-verbose -- -count=1 -tags extra ./..." \
+  "$DIR/bin/gotestsum" --format standard-verbose -- -count=1 -tags extra example.com/units/a example.com/units/b)
+want gotestsum-units-multi 3 "$(multiran gotestsum-units-multi.txt)"
+multi jest-units-multi.txt "npx --no-install jest --ci --verbose units/multi/jest" \
+  npx --no-install jest --ci --verbose units/multi/jest --runTestsByPath units/multi/jest/a.jest.test.js units/multi/jest/b.jest.test.js \
+  '--testPathIgnorePatterns=^(?!.*(?:\/units\/multi\/jest\/a\.jest\.test\.js|\/units\/multi\/jest\/b\.jest\.test\.js)$)'
+want jest-units-multi 3 "$(multiran jest-units-multi.txt)"
+multi vitest-units-multi.txt "npx --no-install vitest run --reporter=verbose units/multi/vitest" \
+  npx --no-install vitest run --reporter=verbose units/multi/vitest/a.vitest.test.mjs units/multi/vitest/b.vitest.test.mjs
+want vitest-units-multi 3 "$(multiran vitest-units-multi.txt)"
+multi node-units-multi.txt "node --test --test-reporter=tap --test-concurrency 1 units/multi/node/*.node.test.js" \
+  node --test --test-reporter=tap --test-concurrency 1 units/multi/node/a.node.test.js units/multi/node/b.node.test.js
+want node-units-multi 3 "$(multiran node-units-multi.txt)"
+# shellcheck disable=SC2086 # RSPEC may be two words (ruby -S rspec)
+multi rspec-units-multi.txt "$RSPEC --format documentation units/multi/rspec" \
+  $RSPEC --format documentation units/multi/rspec/spec/a_spec.rb units/multi/rspec/spec/b_spec.rb
+want rspec-units-multi 3 "$(multiran rspec-units-multi.txt)"
+multi phpunit-units-multi.txt "vendor/bin/phpunit --testdox units/multi/phpunit/tests" \
+  vendor/bin/phpunit --testdox units/multi/phpunit/tests/MultiATest.php units/multi/phpunit/tests/MultiBTest.php
+want phpunit-units-multi 3 "$(multiran phpunit-units-multi.txt)"
+(cd units/cargo && multi cargo-units-multi.txt "cargo test --workspace" cargo test -p units-a -p units-b --lib)
+want cargo-units-multi 3 "$(multiran cargo-units-multi.txt)"
+# cargo selects targets across the packages it is given: units-a/lib with
+# units-b/test:it also runs units-a's it and units-b's lib (cargoUnitsCoruns).
+(cd units/cargo && multi cargo-units-multi-coruns.txt "cargo test --workspace" cargo test -p units-a -p units-b --lib --test it)
+want cargo-units-multi-coruns 5 "$(multiran cargo-units-multi-coruns.txt)"
+(cd units/cargo && multi nextest-units-multi.txt "cargo nextest run --workspace" \
+  cargo nextest run --workspace -E 'binary_id(=units-a)' -E 'binary_id(=units-b::it)')
+want nextest-units-multi 3 "$(multiran nextest-units-multi.txt)"
+
 # --- failing suites: what each DEFAULT reporter prints, and the skip commands --
 # (internal/lang/runner_failures.go). $DIR and $HOME are replaced: these files are public.
 fails() { # fails <fixture> <cmd...>: stdout+stderr, ANSI stripped

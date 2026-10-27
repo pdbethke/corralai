@@ -640,25 +640,12 @@ func goPackageClause(text string) string {
 	return ""
 }
 
-// goImportPathOf is the import path of the package in dir: the nearest
-// go.mod at or above it names the module, and dir's place below that go.mod
-// the rest. ok is false when no go.mod above dir declares a module.
+// goImportPathOf is lang.GoImportPathOf over the scan's files.
 func goImportPathOf(files map[string]string, dir string) (string, bool) {
-	for d := dir; ; d = path.Dir(d) {
-		if text, ok := files[under(d, "go.mod")]; ok {
-			mod, err := lang.GoModuleDirective(text)
-			if err != nil {
-				return "", false
-			}
-			if d == dir {
-				return mod, true
-			}
-			return mod + "/" + strings.TrimPrefix(dir, under(d, "")), true
-		}
-		if d == "." || d == "/" {
-			return "", false
-		}
-	}
+	return lang.GoImportPathOf(func(name string) (string, bool) {
+		text, ok := files[name]
+		return text, ok
+	}, dir)
 }
 
 func rustUnitLanding(files map[string]string) func(unit, source string) string {

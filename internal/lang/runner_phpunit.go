@@ -91,18 +91,18 @@ func phpunitParseUnits(stdout string) []string {
 	return files
 }
 
-// phpunitUnitCmd runs one test file: argv with the operator's file and
-// directory arguments replaced by it. PHPUnit runs every argument it is
+// phpunitUnitsCmd runs the test files: argv with the operator's file and
+// directory arguments replaced by them. PHPUnit runs every argument it is
 // given (measured: `phpunit tests tests/ATest.php` ran ATest twice beside
 // BTest, 5 tests), and a file argument takes the place of the configured
 // suites, --testsuite included (measured: `--testsuite other tests/ATest.php`
 // ran ATest), so the options can all stay.
-func phpunitUnitCmd(argv []string, unit string) ([]string, bool) {
+func phpunitUnitsCmd(argv []string, units []string) ([]string, bool) {
 	head, kept, ok := phpunitUnitArgs(argv)
-	if !ok || unit == "" || strings.HasPrefix(unit, "-") {
+	if !ok || !fileUnits(units) {
 		return nil, false
 	}
-	return append(append(slices.Clone(head), kept...), unit), true
+	return append(append(slices.Clone(head), kept...), units...), true
 }
 
 // phpunitUnitArgs splits argv at its phpunit word into the words up to it

@@ -92,14 +92,20 @@ type Runner struct {
 	// cannot, as SingleCmd does.
 	TestsCmd func(base []string, ids []string) ([]string, bool)
 	// UnitsCmd is argv running exactly these units (the multi-unit UnitCmd),
-	// refusing wherever UnitCmd would. UnitsCoruns reports whether a run of
+	// refusing wherever UnitCmd would, and refusing a list that is not a set
+	// (empty, an empty name, a name twice). UnitCmd(argv, u) is
+	// UnitsCmd(argv, [u]) on every row. UnitsCoruns reports whether a run of
 	// units would also run other, as UnitCoruns does for one; nil means a
 	// multi-unit run is exact. UnitForFile names the unit a test file
-	// belongs to, so the authored test is run in the unit it was written
-	// into. All three are nil on a runner with no unit pass.
+	// (repository-relative) belongs to, in the spelling the row lists units
+	// in, so the authored test is run in the unit it was written into even
+	// when no listing named that unit. It reads the repository's own
+	// manifests under repoRoot where the unit's name is declared there (Go's
+	// module path, a Cargo package name); ok=false when no unit the row can
+	// run holds the file. All three are nil on a runner with no unit pass.
 	UnitsCmd    func(argv []string, units []string) ([]string, bool)
 	UnitsCoruns func(units []string, other string) bool
-	UnitForFile func(testFile string) (string, bool)
+	UnitForFile func(repoRoot, testFile string) (string, bool)
 	// CarryArgs is the operator args a selected command must keep when the
 	// authored pass rebuilds argv from the base (pytest --deselect): the one
 	// thing a caller may legitimately add back to a narrowed command.
@@ -153,15 +159,17 @@ var runners = []Runner{
 		FailFast: []string{"-failfast"},
 		ListCmd:  goListCmd, ParseList: goParseTestList, SingleCmd: goSingleCmd,
 		FirstFailure: goFirstFailure, FailedTests: goFailedTests, DeselectCmd: goDeselectCmd,
-		ListUnits: goTestListUnits, ParseUnits: goParseUnits, UnitCmd: goTestUnitCmd,
-		Note: "one-package runs and their `go list` listing verified on go 1.26",
+		ListUnits: goTestListUnits, ParseUnits: goParseUnits, UnitCmd: oneUnit(goTestUnitsCmd),
+		UnitsCmd: goTestUnitsCmd, UnitForFile: goUnitForFile,
+		Note: "one-package and several-package runs and their `go list` listing verified on go 1.26",
 	},
 	{
 		Name: "gotestsum", ID: "gotestsum", Languages: []string{"go"}, Words: []string{"gotestsum"},
 		ListCmd: goListCmd, ParseList: goParseTestList, SingleCmd: goSingleCmd,
 		FirstFailure: goFirstFailure,
-		ListUnits:    gotestsumListUnits, ParseUnits: goParseUnits, UnitCmd: gotestsumUnitCmd,
-		Note: "listing and one-test runs use `go test` itself; the killing test is read from `--- FAIL:` lines, which gotestsum passes through for a failed test but was not run here; units are listed with `go list` and one package runs through gotestsum, verified on gotestsum 1.13",
+		ListUnits:    gotestsumListUnits, ParseUnits: goParseUnits, UnitCmd: oneUnit(gotestsumUnitsCmd),
+		UnitsCmd: gotestsumUnitsCmd, UnitForFile: goUnitForFile,
+		Note: "listing and one-test runs use `go test` itself; the killing test is read from `--- FAIL:` lines, which gotestsum passes through for a failed test but was not run here; units are listed with `go list` and one or several packages run through gotestsum, verified on gotestsum 1.13",
 	},
 	{
 		Name: "pytest", ID: "pytest", Languages: []string{"python"}, Default: true, Words: []string{"pytest"},
@@ -194,8 +202,9 @@ var runners = []Runner{
 		},
 		ListCmd: jestListCmd, ParseList: jestParseList, SingleCmd: jestSingleCmd, ResolveByList: true, Coruns: jestCoruns,
 		FirstFailure: firstOf(jestFailures), FailedTests: jestFailures, DeselectCmd: jestDeselectCmd,
-		ListUnits: jestListUnits, ParseUnits: jestParseUnits, UnitCmd: jestUnitCmd, UnitCoruns: jestUnitCoruns,
-		Note: "listing, one-test and one-file runs verified on jest 30.5",
+		ListUnits: jestListUnits, ParseUnits: jestParseUnits, UnitCmd: oneUnit(jestUnitsCmd), UnitCoruns: jestUnitCoruns,
+		UnitsCmd: jestUnitsCmd, UnitsCoruns: eachUnitCoruns(jestUnitCoruns), UnitForFile: fileUnitForFile,
+		Note: "listing, one-test, one-file and several-file runs verified on jest 30.5",
 	},
 	{
 		ListsFullNames: true,
@@ -218,9 +227,10 @@ var runners = []Runner{
 		Detect:  func(argv []string) bool { return vitestIndex(argv) >= 0 },
 		ListCmd: vitestListCmd, ParseList: vitestParseList, SingleCmd: vitestSingleCmd, ResolveByList: true, Coruns: fullNameColl,
 		FirstFailure: firstOf(vitestFailures), FailedTests: vitestFailures, DeselectCmd: vitestDeselectCmd,
-		ListUnits: vitestListUnits, ParseUnits: vitestParseUnits, UnitCmd: vitestUnitCmd, UnitCoruns: vitestUnitCoruns,
+		ListUnits: vitestListUnits, ParseUnits: vitestParseUnits, UnitCmd: oneUnit(vitestUnitsCmd), UnitCoruns: vitestUnitCoruns,
+		UnitsCmd: vitestUnitsCmd, UnitsCoruns: eachUnitCoruns(vitestUnitCoruns), UnitForFile: fileUnitForFile,
 		UnitNoCoverage: "no worker coverage: the run's V8 coverage named no project file, which is what vitest's forks pool gives (measured on vitest 3.2.7); run with --pool=threads",
-		Note:           "listing, one-test and one-file runs verified on vitest 3.2; unit evidence needs --pool=threads (vitest 3.2.7's default forks pool wrote no worker coverage); unit evidence counted through corral's vm source-map preload on vitest 3.2.7 and 5.0.3; vitest 1, 2 and 4 were not run",
+		Note:           "listing, one-test, one-file and several-file runs verified on vitest 3.2; unit evidence needs --pool=threads (vitest 3.2.7's default forks pool wrote no worker coverage); unit evidence counted through corral's vm source-map preload on vitest 3.2.7 and 5.0.3; vitest 1, 2 and 4 were not run",
 	},
 	{
 		Name: "node --test", ID: "node-test", Languages: []string{"javascript", "typescript"}, Default: true,
@@ -229,8 +239,9 @@ var runners = []Runner{
 		},
 		ListCmd: nodeListCmd, ParseList: nodeParseList, SingleCmd: nodeSingleCmd, ResolveByList: true, Coruns: nodeCoruns,
 		FirstFailure: firstOf(nodeFailures), FailedTests: nodeFailures, DeselectCmd: nodeDeselectCmd,
-		ListUnits: nodeListUnits, ParseUnits: nodeParseUnits, UnitCmd: nodeUnitCmd,
-		Note: "node has no collect-only mode, so listing RUNS the test file once on the unmutated code; verified on node 22.23 and 24.22 (listing and running one file on node 22.23 only). Through a package script, listing, one-test runs and salvage need `--test` to be the script's last word, since node reads options only before the first file",
+		ListUnits: nodeListUnits, ParseUnits: nodeParseUnits, UnitCmd: oneUnit(nodeUnitsCmd),
+		UnitsCmd: nodeUnitsCmd, UnitForFile: fileUnitForFile,
+		Note: "node has no collect-only mode, so listing RUNS the test file once on the unmutated code; verified on node 22.23 and 24.22 (listing and running one or several files on node 22.23 only). Through a package script, listing, one-test runs and salvage need `--test` to be the script's last word, since node reads options only before the first file",
 	},
 	// rspec takes --fail-fast. Minitest is deliberately without one: its own
 	// --fail-fast arrived in minitest 5.22, and an older minitest treats an
@@ -240,8 +251,9 @@ var runners = []Runner{
 		Name:           "rspec", ID: "rspec", Languages: []string{"ruby"}, Default: true, Words: []string{"rspec"}, FailFast: []string{"--fail-fast"},
 		ListCmd: rspecListCmd, ParseList: rspecParseList, SingleCmd: rspecSingleCmd, ResolveByList: true, Coruns: lastFullColl,
 		FirstFailure: firstOf(rspecFailures), FailedTests: rspecFailures, DeselectCmd: rspecDeselectCmd,
-		ListUnits: rspecListUnits, ParseUnits: rspecParseUnits, UnitCmd: rspecUnitCmd,
-		Note: "listing, one-test and one-file runs verified on rspec-core 3.13 (one-test runs need 3.12 or later)",
+		ListUnits: rspecListUnits, ParseUnits: rspecParseUnits, UnitCmd: oneUnit(rspecUnitsCmd),
+		UnitsCmd: rspecUnitsCmd, UnitForFile: fileUnitForFile,
+		Note: "listing, one-test, one-file and several-file runs verified on rspec-core 3.13 (one-test runs need 3.12 or later)",
 	},
 	{
 		Name: "minitest", ID: "minitest", Languages: []string{"ruby"}, Words: []string{"ruby", "rake", "testrb"},
@@ -252,8 +264,9 @@ var runners = []Runner{
 		Name: "phpunit", ID: "phpunit", Languages: []string{"php"}, Default: true, Words: []string{"phpunit"},
 		FailFast: []string{"--stop-on-failure"}, FirstFailure: phpFirstFailure, FailedTests: phpFailures, DeselectCmd: phpunitDeselectCmd,
 		ListCmd: phpunitListCmd, ParseList: phpunitParseList, SingleCmd: phpunitSingleCmd, ResolveByList: true,
-		ListUnits: phpunitListUnits, ParseUnits: phpunitParseUnits, UnitCmd: phpunitUnitCmd,
-		Note: "listing, one-test and one-file runs (`--list-test-files`) verified on PHPUnit 11.5; other versions were not run",
+		ListUnits: phpunitListUnits, ParseUnits: phpunitParseUnits, UnitCmd: oneUnit(phpunitUnitsCmd),
+		UnitsCmd: phpunitUnitsCmd, UnitForFile: fileUnitForFile,
+		Note: "listing, one-test, one-file and several-file runs (`--list-test-files`) verified on PHPUnit 11.5; other versions were not run",
 	},
 	{
 		// FirstFailure and Flaky read the grammar off the output, not the
@@ -262,16 +275,18 @@ var runners = []Runner{
 		ListCmd: nextestListCmd, ParseList: nextestParseList, SingleCmd: nextestSingleCmd, ResolveByList: true,
 		FirstFailure: rustFirstFailure, Flaky: rustFlakyTests,
 		Disclose: nextestDisclose, PreflightBin: nextestPreflightBin,
-		ListUnits: nextestListUnits, ParseUnits: nextestParseUnits, UnitCmd: nextestUnitCmd,
-		Note: "one-binary runs (`-E 'binary_id(=...)'`) and their `list` listing verified on cargo-nextest 0.9.148; a command with its own filterset or a partition has no unit form",
+		ListUnits: nextestListUnits, ParseUnits: nextestParseUnits, UnitCmd: oneUnit(nextestUnitsCmd),
+		UnitsCmd: nextestUnitsCmd, UnitForFile: nextestUnitForFile,
+		Note: "one-binary and several-binary runs (one `-E 'binary_id(=...)'` each) and their `list` listing verified on cargo-nextest 0.9.148; a command with its own filterset or a partition has no unit form",
 	},
 	{
 		Name: "cargo test", ID: "cargo-test", Languages: []string{"rust"}, Default: true, Words: []string{"cargo"},
 		ListCmd: libtestListCmd, ParseList: libtestParseList, SingleCmd: libtestSingleCmd, ResolveByList: true,
 		FirstFailure: rustFirstFailure, Flaky: rustFlakyTests,
 		Disclose: libtestDisclose, PreflightBin: libtestPreflightBin,
-		ListUnits: cargoListUnits, ParseUnits: cargoParseUnits, UnitCmd: cargoUnitCmd,
-		Note: "libtest has no retries; flaky tests are named when the output is nextest's (a wrapper that runs nextest under another command); one-target runs (`-p <package>` with `--lib`, `--test` or `--bin`, in place of the command's own package and target selection) verified on cargo 1.90; doc tests, examples and benches are no unit",
+		ListUnits: cargoListUnits, ParseUnits: cargoParseUnits, UnitCmd: oneUnit(cargoUnitsCmd),
+		UnitsCmd: cargoUnitsCmd, UnitsCoruns: cargoUnitsCoruns, UnitForFile: cargoUnitForFile,
+		Note: "libtest has no retries; flaky tests are named when the output is nextest's (a wrapper that runs nextest under another command); one-target runs (`-p <package>` with `--lib`, `--test` or `--bin`, in place of the command's own package and target selection) verified on cargo 1.90; a run of several targets runs each named target in every named package, since cargo selects targets across the packages it is given (measured on cargo 1.90); doc tests, examples and benches are no unit",
 	},
 }
 

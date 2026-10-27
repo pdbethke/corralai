@@ -4,6 +4,7 @@ package lang
 
 import (
 	"encoding/json"
+	"path"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -124,6 +125,80 @@ func UnitRunCmd(p Plugin, inv Invocation, unit string) ([]string, bool) {
 	}
 	return inv.shape(p, func(w []string) ([]string, bool) { return r.UnitCmd(w, unit) })
 }
+
+// UnitsRunCmd is argv's runner narrowed to exactly the listed units, shaped
+// as UnitRunCmd is; ok=false when the runner has no multi-unit form for
+// argv, or a unit cannot run alone. A run of several units can still collect
+// one nobody named: UnitsCorun says so.
+func UnitsRunCmd(p Plugin, inv Invocation, units []string) ([]string, bool) {
+	r, ok := RunnerFor(p, inv)
+	if !ok || r.UnitsCmd == nil || slices.ContainsFunc(units, func(u string) bool { return u != listedName(u) }) {
+		return nil, false
+	}
+	return inv.shape(p, func(w []string) ([]string, bool) { return r.UnitsCmd(w, units) })
+}
+
+// unitSet reports whether units is a set a multi-unit command can take: at
+// least one, no empty name, none twice. An empty list is never "every unit",
+// and a name twice is refused rather than run twice (PHPUnit runs a file it
+// is given twice twice: capture phpunit-args-union).
+func unitSet(units []string) bool {
+	if len(units) == 0 || slices.Contains(units, "") {
+		return false
+	}
+	seen := make(map[string]bool, len(units))
+	for _, u := range units {
+		if seen[u] {
+			return false
+		}
+		seen[u] = true
+	}
+	return true
+}
+
+// oneUnit is a row's UnitCmd built from its UnitsCmd, so the one-unit and
+// multi-unit forms cannot drift: UnitCmd(argv, u) is UnitsCmd(argv, [u]),
+// refusals included.
+func oneUnit(units func(argv, units []string) ([]string, bool)) func([]string, string) ([]string, bool) {
+	return func(argv []string, unit string) ([]string, bool) { return units(argv, []string{unit}) }
+}
+
+// eachUnitCoruns is a row's UnitsCoruns for a runner whose multi-unit
+// selection is the union of its one-unit selections: other is collected when
+// nobody named it and one named unit's selection also takes it.
+func eachUnitCoruns(coruns func(unit, other string) bool) func([]string, string) bool {
+	return func(units []string, other string) bool {
+		if slices.Contains(units, other) {
+			return false
+		}
+		return slices.ContainsFunc(units, func(u string) bool { return coruns(u, other) })
+	}
+}
+
+// repoRelative is testFile as a unit name: repository-relative, slash-
+// separated, cleaned; ok=false for no file, an absolute path, or one that
+// climbs out of the repository, as ParseUnitList drops such a listed unit.
+func repoRelative(testFile string) (string, bool) {
+	if testFile == "" || filepath.IsAbs(testFile) || path.IsAbs(filepath.ToSlash(testFile)) {
+		return "", false
+	}
+	f := path.Clean(filepath.ToSlash(testFile))
+	if f == "." || f == ".." || strings.HasPrefix(f, "../") {
+		return "", false
+	}
+	return f, true
+}
+
+// fileUnits is unitSet for units appended as bare words: none may start
+// with "-", which the runner would read as an option.
+func fileUnits(units []string) bool {
+	return unitSet(units) && !slices.ContainsFunc(units, func(u string) bool { return strings.HasPrefix(u, "-") })
+}
+
+// fileUnitForFile is UnitForFile for a runner whose unit IS a test file
+// (jest, vitest, node, rspec, PHPUnit): the file itself, named as the
+// listing names one.
+func fileUnitForFile(_, testFile string) (string, bool) { return repoRelative(testFile) }
 
 // decodeArray decodes the JSON array a runner prints on stdout into v,
 // starting at the first line that begins with "[" — decodeReport's rule for

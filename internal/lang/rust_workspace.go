@@ -89,12 +89,20 @@ func (rustPlugin) ScopeCmd(repoDir, codePath string, testCmd []string) ([]string
 
 // owningCrate resolves the crate that owns codePath; see ScopeCmd.
 func owningCrate(repoDir, codePath string) (string, error) {
+	name, _, err := owningCrateDir(repoDir, codePath)
+	return name, err
+}
+
+// owningCrateDir is owningCrate with the directory of the package's
+// Cargo.toml, which a file's place in its package (tests/, src/) is read
+// against.
+func owningCrateDir(repoDir, codePath string) (string, string, error) {
 	if strings.TrimSpace(repoDir) == "" {
-		return "", fmt.Errorf("%s: there is no checkout to read a Cargo.toml from, so corral cannot say which crate owns it; name it with `-p <crate>` in the test command", codePath)
+		return "", "", fmt.Errorf("%s: there is no checkout to read a Cargo.toml from, so corral cannot say which crate owns it; name it with `-p <crate>` in the test command", codePath)
 	}
 	root, err := filepath.Abs(repoDir)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	file := filepath.FromSlash(codePath)
 	if !filepath.IsAbs(file) {
@@ -121,13 +129,13 @@ func owningCrate(repoDir, codePath string) (string, error) {
 		}
 		text, err := os.ReadFile(manifest) // #nosec G304 -- a Cargo.toml found by walking up from the file under audit, inside the repository
 		if err != nil {
-			return "", fmt.Errorf("%s: reading %s: %v", codePath, manifest, err)
+			return "", "", fmt.Errorf("%s: reading %s: %v", codePath, manifest, err)
 		}
 		if name, ok := tomllite.StringValue(string(text), "package", "name"); ok {
 			if !cargoCrateName.MatchString(name) {
-				return "", fmt.Errorf("%s: %s names its package %q, which is not a crate name cargo accepts, so corral will not put it on a command line", codePath, manifest, name)
+				return "", "", fmt.Errorf("%s: %s names its package %q, which is not a crate name cargo accepts, so corral will not put it on a command line", codePath, manifest, name)
 			}
-			return name, nil
+			return name, d, nil
 		}
 		parent := filepath.Dir(d)
 		if parent == d {
@@ -136,7 +144,7 @@ func owningCrate(repoDir, codePath string) (string, error) {
 		dir = parent
 	}
 	if firstSeen == "" {
-		return "", fmt.Errorf("%s: no Cargo.toml at or above it within the repository, so corral cannot say which crate to grade; name it with `-p <crate>` in the test command", codePath)
+		return "", "", fmt.Errorf("%s: no Cargo.toml at or above it within the repository, so corral cannot say which crate to grade; name it with `-p <crate>` in the test command", codePath)
 	}
-	return "", fmt.Errorf("%s: the nearest manifest, %s, is a virtual manifest (a [workspace] with no [package] name) and no package manifest sits above the file, so corral cannot say which crate owns it; name it with `-p <crate>` in the test command", codePath, firstSeen)
+	return "", "", fmt.Errorf("%s: the nearest manifest, %s, is a virtual manifest (a [workspace] with no [package] name) and no package manifest sits above the file, so corral cannot say which crate owns it; name it with `-p <crate>` in the test command", codePath, firstSeen)
 }

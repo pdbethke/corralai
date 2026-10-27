@@ -1,0 +1,8 @@
+# argv: cargo nextest run --workspace
+$ cargo nextest run --workspace -E binary_id(=units-a) -E binary_id(=units-b::it)
+────────────
+        PASS [time] (1/3) units-b::it integrates
+        PASS [time] (2/3) units-a tests::adds
+        PASS [time] (3/3) units-a tests::adds_more
+────────────
+     Summary [time] 3 tests run: 3 passed, 0 skipped

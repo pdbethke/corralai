@@ -215,7 +215,7 @@ func nodeParseUnits(stdout string) []string {
 // table (runner_node_options.go) says which of them read the next word;
 // anything it cannot place is refused.
 func nodeUnitsCmd(argv []string, units []string) ([]string, bool) {
-	if !unitSet(units) || !narrowable(argv, nodeFilters...) || !slices.Contains(argv, "--test") {
+	if !fileUnits(units) || !narrowable(argv, nodeFilters...) || !slices.Contains(argv, "--test") {
 		return nil, false
 	}
 	flags, ok := dropFileArgs(withoutFlag(argv[1:], "--test-shard"), false, nodeOptionTakesValue)

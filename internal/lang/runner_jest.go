@@ -120,7 +120,7 @@ func jestParseUnits(stdout string) []string {
 // pattern that keeps a path ending in any of them (measured on jest 30.5.2:
 // capture jest-units-multi).
 func jestUnitsCmd(argv []string, units []string) ([]string, bool) {
-	if !unitSet(units) || !jestNarrowable(argv) {
+	if !fileUnits(units) || !jestNarrowable(argv) {
 		return nil, false
 	}
 	keep := make([]string, len(units))

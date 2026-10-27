@@ -129,7 +129,7 @@ func UnitRunCmd(p Plugin, inv Invocation, unit string) ([]string, bool) {
 // UnitsRunCmd is argv's runner narrowed to exactly the listed units, shaped
 // as UnitRunCmd is; ok=false when the runner has no multi-unit form for
 // argv, or a unit cannot run alone. A run of several units can still collect
-// one nobody named: UnitsCorun says so.
+// one nobody named: the row's UnitsCoruns says so.
 func UnitsRunCmd(p Plugin, inv Invocation, units []string) ([]string, bool) {
 	r, ok := RunnerFor(p, inv)
 	if !ok || r.UnitsCmd == nil || slices.ContainsFunc(units, func(u string) bool { return u != listedName(u) }) {

@@ -301,11 +301,13 @@ func cargoUnitsCoruns(units []string, other string) bool {
 
 // rustUnitTarget places a test file in its package's targets: the package
 // that owns it (owningCrateDir), and the integration-test target a
-// tests/<name>.rs or tests/<name>/main.rs is, or the library for a file
-// under src/ when the package has src/lib.rs. A binary's source (src/main.rs,
-// src/bin/), a module below tests/, a bench or an example is no unit here,
-// and neither is a target cargo was told about in Cargo.toml rather than
-// finding it by its place, which this reads no further than the place.
+// tests/<name>.rs or tests/<name>/main.rs is, or the library for src/lib.rs
+// and for any file under src/ of a package with src/lib.rs and no binary. A
+// binary's source (src/main.rs, src/bin/), any other src/ file of a package
+// that also has a binary, a module below tests/, a bench or an example is no
+// unit here, and neither is a target cargo was told about in Cargo.toml
+// rather than finding it by its place, which this reads no further than the
+// place.
 func rustUnitTarget(repoRoot, testFile string) (pkg, kind, name string, ok bool) {
 	f, ok := repoRelative(testFile)
 	if !ok || repoRoot == "" {
@@ -330,7 +332,15 @@ func rustUnitTarget(repoRoot, testFile string) (pkg, kind, name string, ok bool)
 	case len(parts) == 3 && parts[0] == "tests" && parts[2] == "main.rs":
 		name = parts[1]
 	case parts[0] == "src" && len(parts) > 1 && rel != filepath.Join("src", "main.rs") && parts[1] != "bin":
-		if _, err := os.Stat(filepath.Join(dir, "src", "lib.rs")); err != nil {
+		if !exists(filepath.Join(dir, "src", "lib.rs")) {
+			return "", "", "", false
+		}
+		// src/lib.rs is the library's root. Any other file under src/ in a
+		// package that also has a binary may be a module the binary
+		// declares (`mod foo;` in main.rs), which --lib never compiles: its
+		// test would be silently uncollected, so it is refused.
+		binary := exists(filepath.Join(dir, "src", "main.rs")) || exists(filepath.Join(dir, "src", "bin"))
+		if rel != filepath.Join("src", "lib.rs") && binary {
 			return "", "", "", false
 		}
 		return pkg, "lib", "", true
@@ -338,6 +348,12 @@ func rustUnitTarget(repoRoot, testFile string) (pkg, kind, name string, ok bool)
 		return "", "", "", false
 	}
 	return pkg, "test", name, cargoTargetName.MatchString(name)
+}
+
+// exists reports whether p is present on disk.
+func exists(p string) bool {
+	_, err := os.Stat(p)
+	return err == nil
 }
 
 // cargoUnitForFile is rustUnitTarget in cargo test's unit spelling.

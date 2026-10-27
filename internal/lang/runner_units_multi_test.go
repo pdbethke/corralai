@@ -292,6 +292,9 @@ func TestUnitForFileNamesTheAuthoredUnit(t *testing.T) {
 		{"cargo-test", cargo, "a/src/lib.rs", "units-a/lib"},
 		{"cargo-nextest", cargo, "a/tests/new.rs", "units-a::new"},
 		{"cargo-nextest", cargo, "b/src/lib.rs", "units-b"},
+		// A module of a pure-library package is compiled into the lib.
+		{"cargo-test", cargo, "b/src/extra.rs", "units-b/lib"},
+		{"cargo-nextest", cargo, "b/src/extra.rs", "units-b"},
 	} {
 		got, ok := rowByID(t, c.row).UnitForFile(c.root, c.file)
 		if !ok || got != c.want {
@@ -320,9 +323,34 @@ func TestUnitForFileRefusesWhatNoUnitHolds(t *testing.T) {
 		{"no Cargo.toml package above it", "cargo-test", gomod, "a/tests/new.rs"},
 		{"a nested tests dir is a module, not a target", "cargo-nextest", cargo, "a/tests/common/mod.rs"},
 		{"no lib in the package", "cargo-test", cargo, "a/src/bin/x.rs"},
+		// units-a has src/lib.rs AND src/main.rs: a module beside them may be
+		// the binary's (`mod foo;` in main.rs), which --lib never compiles,
+		// so its test would be silently uncollected.
+		{"a module of a package that also has a binary", "cargo-test", cargo, "a/src/foo.rs"},
+		{"a module of a package that also has a binary", "cargo-nextest", cargo, "a/src/foo.rs"},
 	} {
 		if got, ok := rowByID(t, c.row).UnitForFile(c.root, c.file); ok {
 			t.Errorf("%s: %s UnitForFile(%q) = %q, want refused", c.why, c.row, c.file, got)
+		}
+	}
+}
+
+// A unit is appended as a bare word, so one that starts with "-" would be
+// read as an option. Every file-unit row refuses it, as rspec and PHPUnit
+// always did (fileUnitForFile does not refuse such a name).
+func TestFileUnitsRefuseANameReadAsAnOption(t *testing.T) {
+	for id, argv := range map[string][]string{
+		"jest": {"jest"}, "vitest": {"vitest", "run"}, "node-test": {"node", "--test"},
+		"rspec": {"rspec"}, "phpunit": {"phpunit"},
+	} {
+		r := rowByID(t, id)
+		if _, ok := r.UnitsCmd(argv, []string{"a.test.js"}); !ok {
+			t.Errorf("%s refused a plain unit; the case below proves nothing", id)
+		}
+		for _, units := range [][]string{{"-x.test.js"}, {"a.test.js", "--watch"}} {
+			if cmd, ok := r.UnitsCmd(argv, units); ok {
+				t.Errorf("%s: UnitsCmd(%q, %q) = %q, want refused", id, argv, units, cmd)
+			}
 		}
 	}
 }

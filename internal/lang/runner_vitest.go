@@ -128,7 +128,7 @@ func vitestParseUnits(stdout string) []string {
 // options are too many to tell, so such a command has no unit form.
 func vitestUnitsCmd(argv []string, units []string) ([]string, bool) {
 	cmd, ok := vitestWithMode(argv, "run")
-	if !unitSet(units) || !ok {
+	if !fileUnits(units) || !ok {
 		return nil, false
 	}
 	i := vitestIndex(cmd) + 2 // past the vitest word and `run`

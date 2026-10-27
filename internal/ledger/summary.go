@@ -44,9 +44,12 @@ type Totals struct {
 	Scans          int `json:"scans"`
 	FilesAudited   int `json:"files_audited"`
 	MutantsPlanted int `json:"mutants_planted"`
-	Survivors      int `json:"survivors"`
-	ProvenMissed   int `json:"proven_missed"`
-	CouldNotGrade  int `json:"could_not_grade"`
+	// MutantsGraded is CaughtShare's denominator: the planted mutants that
+	// reached grading, compile-gate rejects excluded (see tally.share).
+	MutantsGraded int `json:"mutants_graded"`
+	Survivors     int `json:"survivors"`
+	ProvenMissed  int `json:"proven_missed"`
+	CouldNotGrade int `json:"could_not_grade"`
 	// CaughtShare is the share of graded mutants the suites caught, pooled
 	// over every graded file (see caughtShare); nil when nothing was graded.
 	CaughtShare *float64 `json:"caught_share"`
@@ -101,6 +104,7 @@ type RunPoint struct {
 	FinishedAt     *time.Time `json:"finished_at"`
 	FilesAudited   int        `json:"files_audited"`
 	MutantsPlanted int        `json:"mutants_planted"`
+	MutantsGraded  int        `json:"mutants_graded"`
 	Survivors      int        `json:"survivors"`
 	ProvenMissed   int        `json:"proven_missed"`
 	CaughtShare    *float64   `json:"caught_share"`
@@ -132,6 +136,7 @@ type ModelLine struct {
 	Files          int      `json:"files"`
 	Rows           int      `json:"rows"`
 	MutantsPlanted int      `json:"mutants_planted"`
+	MutantsGraded  int      `json:"mutants_graded"`
 	Survivors      int      `json:"survivors"`
 	ProvenMissed   int      `json:"proven_missed"`
 	CaughtShare    *float64 `json:"caught_share"`
@@ -165,7 +170,7 @@ func Summarize(scans []Bundle) Summary {
 		all.merge(run)
 		s.Runs = append(s.Runs, RunPoint{
 			ScanUID: b.Scan.ScanUID, Repo: b.Scan.Repo, Commit: b.Scan.Commit, FinishedAt: b.Scan.FinishedAt,
-			FilesAudited: run.audited, MutantsPlanted: run.planted, Survivors: run.survivors,
+			FilesAudited: run.audited, MutantsPlanted: run.planted, MutantsGraded: run.gradedMutants, Survivors: run.survivors,
 			ProvenMissed: run.proven, CaughtShare: run.share(),
 		})
 		if b.Scan.FinishedAt != nil && (s.Totals.LastRun == nil || b.Scan.FinishedAt.After(*s.Totals.LastRun)) {
@@ -186,6 +191,7 @@ func Summarize(scans []Bundle) Summary {
 	s.Totals.Scans = len(scans)
 	s.Totals.FilesAudited = all.audited
 	s.Totals.MutantsPlanted = all.planted
+	s.Totals.MutantsGraded = all.gradedMutants
 	s.Totals.Survivors = all.survivors
 	s.Totals.ProvenMissed = all.proven
 	s.Totals.CouldNotGrade = all.audited - all.graded
@@ -355,7 +361,7 @@ func summarizeModels(scans []Bundle) []ModelLine {
 	out := []ModelLine{}
 	for m, t := range byModel {
 		out = append(out, ModelLine{Role: ComparedRole, Model: m, Files: len(files[m]), Rows: t.graded,
-			MutantsPlanted: t.planted, Survivors: t.survivors, ProvenMissed: t.proven, CaughtShare: t.share()})
+			MutantsPlanted: t.planted, MutantsGraded: t.gradedMutants, Survivors: t.survivors, ProvenMissed: t.proven, CaughtShare: t.share()})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Model < out[j].Model })
 	return out

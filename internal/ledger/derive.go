@@ -3,6 +3,7 @@
 package ledger
 
 import (
+	"crypto/ed25519"
 	"fmt"
 	"sort"
 )
@@ -54,8 +55,13 @@ type EntryStatus struct {
 // telemetry, nothing graded, no finish time) are null on purpose, because a
 // 0 there would be a measurement nobody made. Its slices are never null.
 type Derived struct {
-	Format        string                  `json:"format"`
-	Problem       string                  `json:"problem,omitempty"`
+	Format  string `json:"format"`
+	Problem string `json:"problem,omitempty"`
+	// RootKeyID is the fingerprint (KeyFingerprint, the form an entry's keyid
+	// takes) of the root key signatures were checked against, "" when none was
+	// given. Derive only names it: where the key came from, and so whose key
+	// it is, is the caller's to say.
+	RootKeyID     string                  `json:"root_keyid"`
 	Entries       []EntryStatus           `json:"entries"`
 	Scans         []ScanRow               `json:"scans"`
 	Files         []Row                   `json:"files"`
@@ -107,6 +113,9 @@ func Derive(raw []RawEntry, t Trust) (Derived, error) {
 		Calls:         []ModelCallRow{},
 		Adjudications: map[string]Adjudication{},
 		Summary:       Summarize(nil),
+	}
+	if len(t.RootPub) == ed25519.PublicKeySize {
+		d.RootKeyID = KeyFingerprint(t.RootPub)
 	}
 	names := map[string]bool{}
 	for _, r := range raw {

@@ -3,6 +3,7 @@
 package ledger_test
 
 import (
+	"crypto/ed25519"
 	"encoding/json"
 	"math"
 	"reflect"
@@ -62,6 +63,11 @@ func TestSummaryTotals(t *testing.T) {
 	// Mutant figures are over the graded files: the same set the share is over.
 	if tt.MutantsPlanted != 11 || tt.Survivors != 4 || tt.ProvenMissed != 3 {
 		t.Fatalf("planted/survivors/proven = %d/%d/%d", tt.MutantsPlanted, tt.Survivors, tt.ProvenMissed)
+	}
+	// The share's own denominator is served beside it: planted counts the
+	// compile-gate reject that graded does not.
+	if tt.MutantsGraded != 10 || s.Runs[0].MutantsGraded != 4 || s.Runs[1].MutantsGraded != 6 {
+		t.Fatalf("graded totals %d, runs %d/%d", tt.MutantsGraded, s.Runs[0].MutantsGraded, s.Runs[1].MutantsGraded)
 	}
 	// (4-1 + 6-3) / (4 + 6)
 	if tt.CaughtShare == nil || !near(*tt.CaughtShare, 0.6) {
@@ -203,8 +209,8 @@ func TestSummaryModelsLikeForLike(t *testing.T) {
 		runOf("3", "c1", at(3), withModel(graded("x.go", 10, 0, 4, 4), "m1", "")),
 	})
 	want := []ledger.ModelLine{
-		{Role: "mutant-generator", Model: "m1", Files: 1, Rows: 2, MutantsPlanted: 20, Survivors: 6, ProvenMissed: 6, CaughtShare: fp(0.7)},
-		{Role: "mutant-generator", Model: "m2", Files: 1, Rows: 1, MutantsPlanted: 12, Survivors: 4, ProvenMissed: 3, CaughtShare: fp(0.6)},
+		{Role: "mutant-generator", Model: "m1", Files: 1, Rows: 2, MutantsPlanted: 20, MutantsGraded: 20, Survivors: 6, ProvenMissed: 6, CaughtShare: fp(0.7)},
+		{Role: "mutant-generator", Model: "m2", Files: 1, Rows: 1, MutantsPlanted: 12, MutantsGraded: 10, Survivors: 4, ProvenMissed: 3, CaughtShare: fp(0.6)},
 	}
 	if !reflect.DeepEqual(s.Models, want) {
 		t.Fatalf("models\n got %s\nwant %s", summaryJSON(t, ledger.Summary{Models: s.Models}), summaryJSON(t, ledger.Summary{Models: want}))
@@ -313,5 +319,27 @@ func TestDeriveEntryCountsInJSON(t *testing.T) {
 		if !strings.Contains(j, k) {
 			t.Fatalf("want %s in %s", k, j)
 		}
+	}
+}
+
+// Derived names the root key it checked signatures against, as the same
+// fingerprint an entry's keyid carries, so a page can say which key without
+// doing any crypto itself; "" when no key was given.
+func TestDeriveNamesTheRootKey(t *testing.T) {
+	fx := "testdata/two-entries"
+	pub := fixtureKey().Public().(ed25519.PublicKey)
+	d, err := ledger.Derive(rawDir(t, fx), ledger.Trust{RootPub: pub})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.RootKeyID != ledger.KeyFingerprint(pub) || d.RootKeyID != d.Entries[0].KeyID {
+		t.Fatalf("root keyid %q, entry keyid %q", d.RootKeyID, d.Entries[0].KeyID)
+	}
+	d, err = ledger.Derive(rawDir(t, fx), ledger.Trust{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.RootKeyID != "" || !strings.Contains(string(mustMarshal(t, d)), `"root_keyid":""`) {
+		t.Fatalf("no key given, root keyid %q", d.RootKeyID)
 	}
 }

@@ -53,7 +53,10 @@ type repoSeed struct {
 // cmdName is the command the operator actually ran ("corral certify --local" or
 // "corral certify --repo"); it prefixes the prep messages and errors so a --repo
 // operator is never told about a command they never invoked.
-func buildRepoSeed(cmdName, repoDir, langName string, iso sandbox.Isolator, bindDirs []string, noBindDeps bool, out io.Writer) (repoSeed, error) {
+//
+// seedLimit is the most text, in bytes, the seed may hold (loadOpts.SeedLimit):
+// the operator's --seed-limit, or seedLimitBuiltin where the verb has none.
+func buildRepoSeed(cmdName, repoDir, langName string, iso sandbox.Isolator, bindDirs []string, noBindDeps bool, seedLimit int64, out io.Writer) (repoSeed, error) {
 	seedDir, cleanup, verr := ensureVendored(cmdName, repoDir, langName, iso, out)
 	if verr != nil {
 		return repoSeed{cleanup: func() {}}, verr
@@ -62,7 +65,7 @@ func buildRepoSeed(cmdName, repoDir, langName string, iso sandbox.Isolator, bind
 	if iso != nil {
 		backendName = iso.Name()
 	}
-	files, binds, lerr := loadRepoFiles(seedDir, buildLoadOpts(backendName, bindDirs, noBindDeps))
+	files, binds, lerr := loadRepoFiles(seedDir, buildLoadOpts(backendName, bindDirs, noBindDeps, seedLimit))
 	if lerr != nil {
 		cleanup()
 		return repoSeed{cleanup: func() {}}, fmt.Errorf("reading --repo-dir %s: %v", repoDir, lerr)
@@ -320,9 +323,10 @@ func (s *stringSlice) Set(v string) error {
 
 // buildLoadOpts is the testable flag→loadOpts seam: it carries the resolved
 // backend name (the container-fallback rule in shouldBind needs it),
-// --bind-dir's accumulated dirs, and --no-bind-deps straight into loadOpts.
-func buildLoadOpts(backendName string, bindDirs []string, noBindDeps bool) loadOpts {
-	return loadOpts{BackendName: backendName, ExtraBindDir: bindDirs, NoBindDeps: noBindDeps}
+// --bind-dir's accumulated dirs, --no-bind-deps and the resolved
+// --seed-limit straight into loadOpts.
+func buildLoadOpts(backendName string, bindDirs []string, noBindDeps bool, seedLimit int64) loadOpts {
+	return loadOpts{BackendName: backendName, ExtraBindDir: bindDirs, NoBindDeps: noBindDeps, SeedLimit: seedLimit}
 }
 
 // loadOpts configures loadRepoFiles' dep-dir detection: which sandbox
@@ -337,7 +341,13 @@ type loadOpts struct {
 	// seeds its jail from a worktree at the commit, where untracked
 	// dependency dirs are absent, and binds them from the operator's checkout.
 	NoFiles bool
-	rootAbs string // absolute root, set internally before the walk
+	// SeedLimit is the most text, in bytes, the seed may hold before the
+	// repository is refused (--seed-limit, resolveSeedLimit). Required
+	// whenever files are read: loadRepoFiles names no bound of its own, so a
+	// caller that forgot one is refused rather than handed a number it never
+	// chose.
+	SeedLimit int64
+	rootAbs   string // absolute root, set internally before the walk
 }
 
 // depDirNames are directory basenames auto-detected as dependency trees:
@@ -354,7 +364,7 @@ var depDirNames = treedirs.SharedDependencies()
 // only bwrap (--ro-bind Host Target) and container (-v Host:Target:ro) can.
 // macOS sandbox-exec (and any other/unknown backend) grants file-read* at the
 // dir's ORIGINAL host path only, with no relocate primitive, so it must copy
-// the dep dir into the seed instead (subject to the 64 MiB cap) — binding it
+// the dep dir into the seed instead (subject to the seed limit) — binding it
 // would leave the toolchain (cwd = workspace) unable to find it at all.
 func shouldBind(rel, name string, opts loadOpts) bool {
 	if opts.NoBindDeps {
@@ -401,8 +411,9 @@ func worldReadableDir(dir string) bool {
 // --bind-dir entries) it detected and excluded from that seed so they can be
 // bind-mounted read-only instead of copied. It skips
 // .git, every language-declared build directory (isBuildDir), files over 1 MiB (data/fixtures, not source), and anything that
-// isn't valid UTF-8 (binaries the text-only jail can't carry), and caps the
-// total so a huge checkout can't blow up the workspace. The keys are exactly
+// isn't valid UTF-8 (binaries the text-only jail can't carry), and refuses a
+// tree over opts.SeedLimit so a huge checkout can't blow up the workspace —
+// every jailed run writes the whole seed to disk. The keys are exactly
 // the paths a mutant overlay and the project's own test command reference
 // (e.g. `more_itertools/recipes.py`, `tests/test_recipes.py`).
 func loadRepoFiles(root string, opts loadOpts) (map[string]string, []adequacy.DepBind, error) {
@@ -410,7 +421,9 @@ func loadRepoFiles(root string, opts loadOpts) (map[string]string, []adequacy.De
 	// Every language's test directories, built once for the walk's
 	// fixture carve-out below.
 	testRules := lang.AllTestRules()
-	const maxTotal = 64 << 20 // 64 MiB of text total
+	if !opts.NoFiles && opts.SeedLimit <= 0 {
+		return nil, nil, fmt.Errorf("no jail seed limit was given (loadOpts.SeedLimit is %d); the caller must name one", opts.SeedLimit)
+	}
 
 	rootAbs, aerr := filepath.Abs(root)
 	if aerr != nil {
@@ -468,6 +481,11 @@ func loadRepoFiles(root string, opts loadOpts) (map[string]string, []adequacy.De
 	files := make(map[string]string)
 	var binds []adequacy.DepBind
 	var total int64
+	// overAt is the file that first took the seed past its limit. The walk
+	// goes on MEASURING after it (and keeps nothing), so the refusal can
+	// say how much text the tree has, which is the number --seed-limit must
+	// clear — "more than 64 MiB" would leave the operator guessing again.
+	overAt := ""
 	walkErr := fs.WalkDir(r.FS(), ".", func(rel string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -527,18 +545,24 @@ func loadRepoFiles(root string, opts loadOpts) (map[string]string, []adequacy.De
 			// of what the suite measures, an arbitrary binary elsewhere in the
 			// tree is not — and mirrors the same `testdata` carve-out the
 			// test-surface digest already makes, for the same reason.
-			// maxFile/maxTotal still bound it.
+			// maxFile and the seed limit still bound it.
 			return nil
 		}
 		total += int64(len(b))
-		if total > maxTotal {
-			return fmt.Errorf("repo has more than %d MiB of text — too large to seed the jail workspace", maxTotal>>20)
+		if overAt == "" && total > opts.SeedLimit {
+			overAt = rel
+			files = nil // what was kept is never used; let it go now
 		}
-		files[rel] = string(b) // fs.WalkDir yields slash-separated paths
+		if overAt == "" {
+			files[rel] = string(b) // fs.WalkDir yields slash-separated paths
+		}
 		return nil
 	})
 	if walkErr != nil {
 		return nil, nil, walkErr
+	}
+	if overAt != "" {
+		return nil, nil, fmt.Errorf("repo has %.1f MiB of text to seed the jail workspace, over the %d MiB seed limit (passed at %s); --seed-limit <MiB> raises it, at the cost of writing that much to $TMPDIR for every jailed run in flight", float64(total)/(1<<20), opts.SeedLimit>>20, overAt)
 	}
 	return files, binds, nil
 }

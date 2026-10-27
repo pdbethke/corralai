@@ -71,7 +71,7 @@ func TestBuildRepoSeedLoadsTreeAndAlwaysReturnsCleanup(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	seed, err := buildRepoSeed("corral certify --local", root, "python", namedIsolator("bwrap"), nil, false, io.Discard)
+	seed, err := buildRepoSeed("corral certify --local", root, "python", namedIsolator("bwrap"), nil, false, seedLimitBuiltin, io.Discard)
 	if err != nil {
 		t.Fatalf("buildRepoSeed: %v", err)
 	}
@@ -90,7 +90,7 @@ func TestBuildRepoSeedLoadsTreeAndAlwaysReturnsCleanup(t *testing.T) {
 }
 
 func TestBuildRepoSeedPropagatesLoadError(t *testing.T) {
-	_, err := buildRepoSeed("corral certify --local", filepath.Join(t.TempDir(), "does-not-exist"), "python", namedIsolator("bwrap"), nil, false, io.Discard)
+	_, err := buildRepoSeed("corral certify --local", filepath.Join(t.TempDir(), "does-not-exist"), "python", namedIsolator("bwrap"), nil, false, seedLimitBuiltin, io.Discard)
 	if err == nil {
 		t.Fatal("a missing repo dir must be an error, not an empty seed")
 	}

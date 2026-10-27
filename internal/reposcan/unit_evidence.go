@@ -202,6 +202,22 @@ func (ev UnitEvidence) Settled() bool {
 	return true
 }
 
+// CutShort is how many units the pass's own deadline cut: never started
+// before it passed (unitNotRunTimeLimit) or stopped by it mid-run
+// (unitTimedOut). It is the one number an operator can act on by giving the
+// pass more time, so the caller names its bound beside it; every other reason
+// a unit contributes nothing is the tree's or the environment's, and more
+// time would not change it.
+func (ev UnitEvidence) CutShort() int {
+	n := 0
+	for _, u := range ev.Units {
+		if u.Err == unitNotRunTimeLimit || u.Err == unitTimedOut {
+			n++
+		}
+	}
+	return n
+}
+
 // runUnit runs one unit's coverage command and reads its report. Every way
 // the run can fail to measure is an Err, never an empty Counts. noCoverage
 // is the runner's known cause for a report that names no project file at

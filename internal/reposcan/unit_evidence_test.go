@@ -854,3 +854,28 @@ func TestUnitTestFilesNamesWhatEachUnitCompiles(t *testing.T) {
 		t.Errorf("a unit the repository lacks names %q, want none", got)
 	}
 }
+
+// CutShort counts the units the pass's own deadline cut: those never started
+// (unitNotRunTimeLimit) and those stopped mid-run by it (unitTimedOut). The
+// scan line and corral tests map name the bound and the flag that raises it
+// from this number, so every other way a unit contributes nothing — a red
+// run, an interrupt, a runner that could not start — must not count.
+func TestUnitEvidenceCutShortCountsOnlyTheDeadline(t *testing.T) {
+	ok := UnitResult{Unit: "a", Counts: map[string]lang.LineCounts{}}
+	ev := UnitEvidence{Ran: true, Units: []UnitResult{
+		ok,
+		{Unit: "b", Err: unitNotRunTimeLimit},
+		{Unit: "c", Err: unitNotRunTimeLimit},
+		{Unit: "d", Err: unitTimedOut},
+		{Unit: "e", Err: unitInterrupted},
+		{Unit: "f", Err: unitNotRunInterrupted},
+		{Unit: "g", Err: "run failed: exit 1"},
+		{Unit: "h", Err: unitCouldNotRun + "jail: boom"},
+	}}
+	if got := ev.CutShort(); got != 3 {
+		t.Errorf("CutShort() = %d, want 3 (two not started, one stopped by the deadline)", got)
+	}
+	if got := (UnitEvidence{Ran: true, Units: []UnitResult{ok}}).CutShort(); got != 0 {
+		t.Errorf("a pass the deadline never reached: CutShort() = %d, want 0", got)
+	}
+}

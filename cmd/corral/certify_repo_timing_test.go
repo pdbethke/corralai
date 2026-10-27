@@ -243,7 +243,7 @@ func TestSelectionTimeIsRecordedOnlyWhenTheSuiteActuallyRan(t *testing.T) {
 		t.Errorf("--whole-suite recorded %v of selection time for a pass that never ran", ws.selectionDuration)
 	}
 
-	ran := &localExecutor{substrate: substrateWorkspace, repoDir: t.TempDir()}
+	ran := &localExecutor{substrate: substrateWorkspace, repoDir: t.TempDir(), evidenceTimeout: selectionTimeout}
 	ran.selection = ran.collectSelection(context.Background(), []string{"a.py"})
 	if !ran.selection.Ran {
 		t.Fatalf("the fixture did not reach the instrumented run: %+v", ran.selection)

@@ -559,7 +559,9 @@ func newJailReproducer(iso sandbox.Isolator, root, commit, scope string, timeout
 		return nil, nil, err
 	}
 	langName := reviewLang(tree, scope)
-	seed, err := buildRepoSeed("corral review", tree, langName, iso, nil, false, progress)
+	// review takes no --seed-limit: its seed is a worktree at the reviewed
+	// commit, bounded as every jail was before the flag existed.
+	seed, err := buildRepoSeed("corral review", tree, langName, iso, nil, false, seedLimitBuiltin, progress)
 	if err != nil {
 		removeTree()
 		return nil, nil, err

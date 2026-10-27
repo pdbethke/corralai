@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/pdbethke/corralai/internal/lang"
 	"github.com/pdbethke/corralai/internal/reposcan"
@@ -34,15 +35,19 @@ type fakeUnitCall struct {
 	argv       []string
 	modulePath string
 	workers    int
+	// deadline is the pass context's deadline when it had one: the bound
+	// the pass ran under (--evidence-timeout, else selectionTimeout).
+	deadline time.Time
 }
 
 func (f *fakeUnitPass) install(t *testing.T) {
 	t.Helper()
 	prev := collectUnitEvidence
-	collectUnitEvidence = func(_ context.Context, _ coverageRunner, _ map[string]string, p lang.Plugin, inv lang.Invocation, modulePath string, workers int, announce func(runnable, listed int)) reposcan.UnitEvidence {
+	collectUnitEvidence = func(ctx context.Context, _ coverageRunner, _ map[string]string, p lang.Plugin, inv lang.Invocation, modulePath string, workers int, announce func(runnable, listed int)) reposcan.UnitEvidence {
 		f.mu.Lock()
 		defer f.mu.Unlock()
-		f.calls = append(f.calls, fakeUnitCall{lang: p.Name(), argv: inv.Argv, modulePath: modulePath, workers: workers})
+		deadline, _ := ctx.Deadline()
+		f.calls = append(f.calls, fakeUnitCall{lang: p.Name(), argv: inv.Argv, modulePath: modulePath, workers: workers, deadline: deadline})
 		if workers < 1 {
 			return reposcan.UnitEvidence{Note: "fake: no workers"}
 		}
@@ -358,7 +363,7 @@ func TestUnitPassIsCachedUnderItsOwnKey(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		return &localExecutor{repoDir: root, substrate: substrateWorkspace, checkArgv: []string{"vitest", "run"}, progress: io.Discard,
+		return &localExecutor{repoDir: root, substrate: substrateWorkspace, checkArgv: []string{"vitest", "run"}, progress: io.Discard, evidenceTimeout: selectionTimeout,
 			selectionCache: cache, treeDigest: "tree", treeDigestComputed: true, unitWorkers: 1,
 			unitInventory: checkoutInventory(cands, excl)}
 	}
@@ -442,7 +447,7 @@ func TestUnitPassCachesOnlyAFullyGreenPass(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		return &localExecutor{repoDir: root, substrate: substrateWorkspace, checkArgv: []string{"vitest", "run"}, progress: io.Discard,
+		return &localExecutor{repoDir: root, substrate: substrateWorkspace, checkArgv: []string{"vitest", "run"}, progress: io.Discard, evidenceTimeout: selectionTimeout,
 			selectionCache: cache, treeDigest: "tree", treeDigestComputed: true, unitWorkers: 1,
 			unitInventory: checkoutInventory(cands, excl)}
 	}

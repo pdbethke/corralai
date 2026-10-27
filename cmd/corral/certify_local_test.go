@@ -134,7 +134,7 @@ func TestLoadRepoFiles_SkipsGitBinaryAndKeysRepoRelative(t *testing.T) {
 	write(".git/config", []byte("[core]\n"))
 	write("logo.bin", []byte{0xff, 0xfe, 0x00, 0x01}) // invalid UTF-8 -> skipped
 
-	files, _, err := loadRepoFiles(root, loadOpts{})
+	files, _, err := loadRepoFiles(root, loadOpts{SeedLimit: seedLimitBuiltin})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1129,11 +1129,11 @@ func TestMatrixTapeDetail_CarriesCountsAndCandidateSelectors(t *testing.T) {
 	}
 }
 
-// TestBuildLoadOpts proves the --bind-dir/--no-bind-deps flags reach
+// TestBuildLoadOpts proves the --bind-dir/--no-bind-deps/--seed-limit flags reach
 // loadRepoFiles' loadOpts unchanged, keyed under the resolved backend name.
 func TestBuildLoadOpts(t *testing.T) {
-	o := buildLoadOpts("container", []string{"third"}, true)
-	if o.BackendName != "container" || !o.NoBindDeps || len(o.ExtraBindDir) != 1 || o.ExtraBindDir[0] != "third" {
+	o := buildLoadOpts("container", []string{"third"}, true, 5<<20)
+	if o.BackendName != "container" || !o.NoBindDeps || len(o.ExtraBindDir) != 1 || o.ExtraBindDir[0] != "third" || o.SeedLimit != 5<<20 {
 		t.Fatalf("loadOpts not built from flags: %+v", o)
 	}
 }
@@ -1205,7 +1205,7 @@ func TestLoadRepoFiles_BindDirEscape_FailsClosed(t *testing.T) {
 
 	cases := []string{"../escape", "..", "/etc"}
 	for _, bad := range cases {
-		_, _, err := loadRepoFiles(root, loadOpts{ExtraBindDir: []string{bad}})
+		_, _, err := loadRepoFiles(root, loadOpts{ExtraBindDir: []string{bad}, SeedLimit: seedLimitBuiltin})
 		if err == nil {
 			t.Fatalf("--bind-dir %q: expected a fail-closed error, got nil", bad)
 		}

@@ -17,12 +17,14 @@ import (
 
 const testsUsage = `corral tests — the repository's test map: which test units execute which source files.
 
-  corral tests map --repo-dir <dir> [--jail bwrap|container] [--workers N] [--out <file>] -- <test cmd>
+  corral tests map --repo-dir <dir> [--jail bwrap|container] [--workers N] [--seed-limit MiB]
+                   [--evidence-timeout D] [--out <file>] -- <test cmd>
                                   build the map through the evidence path certify --repo grades by
                                   (the same selection cache included), call no model, and print how
                                   many sources and units it holds, the sources no unit executes and
                                   each unit that contributed no evidence, with why. --out writes
-                                  the map as JSON
+                                  the map as JSON. --seed-limit and --evidence-timeout raise
+                                  the jail seed limit (64 MiB) and the evidence bound (15m)
 `
 
 // runTests dispatches `corral tests <verb>`. Only `map` exists; a name that is
@@ -49,7 +51,7 @@ func runTestsMap(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	fs.Usage = func() {
-		fmt.Fprintf(stderr, "usage: corral tests map --repo-dir <dir> [--jail bwrap|container] [--workers N] [--out <file>] -- <test cmd>\n\n")
+		fmt.Fprintf(stderr, "usage: corral tests map --repo-dir <dir> [--jail bwrap|container] [--workers N] [--seed-limit MiB] [--evidence-timeout D] [--out <file>] -- <test cmd>\n\n")
 		fs.PrintDefaults()
 	}
 	repoDir := fs.String("repo-dir", "", "path of the repository to map (required)")
@@ -60,6 +62,8 @@ func runTestsMap(args []string, stdout, stderr io.Writer) int {
 	runnerFlag := fs.String("runner", "", runnerHelp)
 	cacheDSNFlag := fs.String("cache-db", "", "path to corral's local CACHE of instrumented test selections (default: $CORRALAI_CACHE_DB, else $CACHE/corralai_cache.duckdb, see corral state paths); a byte-identical tree reuses the evidence certify --repo collected")
 	noCacheFlag := fs.Bool("no-selection-cache", false, "skip the selection cache: always run the evidence pass, and keep nothing")
+	seedLimitFlag := fs.Int("seed-limit", 0, seedLimitHelp+". --substrate jail only")
+	evidenceTimeoutFlag := fs.Duration("evidence-timeout", 0, evidenceTimeoutHelp)
 	if err := fs.Parse(flagArgs); err != nil {
 		return flagParseExit(err)
 	}
@@ -85,6 +89,22 @@ func runTestsMap(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "%s: --jail %s has no effect with --substrate %s, which runs no sandbox; drop one of them\n", name, *jailFlag, substrateWorkspace)
 		return 2
 	}
+	// --seed-limit bounds the jail's seed; the workspace substrate builds
+	// none, so there it would be a setting that silently does nothing.
+	if flagWasSet(fs, "seed-limit") && *substrateFlag == substrateWorkspace {
+		fmt.Fprintf(stderr, "%s: --seed-limit has no effect with --substrate %s, which seeds no jail; drop it\n", name, substrateWorkspace)
+		return 2
+	}
+	seedLimit, err := resolveSeedLimit(fs, *seedLimitFlag)
+	if err != nil {
+		fmt.Fprintf(stderr, "%s: %v\n", name, err)
+		return 2
+	}
+	evidenceTimeout, err := resolveEvidenceTimeout(fs, *evidenceTimeoutFlag)
+	if err != nil {
+		fmt.Fprintf(stderr, "%s: %v\n", name, err)
+		return 2
+	}
 	if *runnerFlag != "" {
 		if err := lang.CheckRunnerID(*runnerFlag); err != nil {
 			fmt.Fprintf(stderr, "%s: %v\n", name, err)
@@ -106,6 +126,7 @@ func runTestsMap(args []string, stdout, stderr io.Writer) int {
 	ex := newLocalExecutorWithJail(*repoDir, checkArgv, *substrateFlag, *jailFlag, defaultRunTimeout, stdout)
 	defer ex.Close()
 	ex.runner = *runnerFlag
+	ex.seedLimit, ex.evidenceTimeout = seedLimit, evidenceTimeout
 	if !*noCacheFlag {
 		dsn, cerr := cacheDSNOr(*cacheDSNFlag)
 		if cerr != nil {
@@ -164,6 +185,11 @@ func runTestsMap(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	printTestsMap(stdout, m)
+	// The units the evidence bound cut are among the "no evidence" above;
+	// this says which bound and the flag that raises it.
+	if cut := ex.units.CutShort(); unitPass && cut > 0 {
+		fmt.Fprintln(stdout, evidenceCutNote(cut, ex.evidenceTimeout))
+	}
 	// Written after the summary, and only now: a pass that did not run wrote
 	// nothing above, so a file on disk always holds a map that was built.
 	writeEvidenceCache(ex, stderr)

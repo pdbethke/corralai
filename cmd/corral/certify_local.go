@@ -149,7 +149,8 @@ func runCertifyLocalAs(args []string, unattributed bool, stdout, stderr io.Write
 	fs.Var(&bindDirFlag, "bind-dir", "extra repo-relative dependency dir to mount read-only into the jail instead of copying it into the workspace (repeatable; node_modules/vendor/.venv/venv/.bundle are auto-detected) — --repo-dir mode only")
 	ledgerFlag := fs.String("ledger", "", "ALSO write this run's ledger entry to this ledger DIRECTORY, beside the machine ledger (the state directory's ledger, see corral state paths; override CORRALAI_MACHINE_LEDGER) every --local run writes to. Refused inside --repo-dir: --local never writes into the checkout. One signed, hash-linked entry per run; corral verify --ledger <dir> walks the chain")
 	noLedgerFlag := fs.Bool("no-ledger", false, "write no entry to the machine ledger (an explicit --ledger is still written)")
-	noBindDepsFlag := fs.Bool("no-bind-deps", false, "copy dependency dirs into the jail workspace instead of bind-mounting them read-only (the pre-bind behavior; subject to the workspace size cap)")
+	noBindDepsFlag := fs.Bool("no-bind-deps", false, "copy dependency dirs into the jail workspace instead of bind-mounting them read-only (the pre-bind behavior; subject to the seed limit, --seed-limit)")
+	seedLimitFlag := fs.Int("seed-limit", 0, seedLimitHelp+". --repo-dir mode only")
 	if err := fs.Parse(flagArgs); err != nil {
 		return flagParseExit(err)
 	}
@@ -260,6 +261,17 @@ func runCertifyLocalAs(args []string, unattributed bool, stdout, stderr io.Write
 
 	if strings.TrimSpace(*repoDirFlag) == "" && (len(bindDirFlag) > 0 || *noBindDepsFlag) {
 		fmt.Fprintln(stderr, "corral certify --local: --bind-dir/--no-bind-deps require --repo-dir (they configure how the cloned tree is seeded into the jail; a single --code file has no dependency dirs to bind or copy)")
+		return 2
+	}
+	// --seed-limit bounds the tree --repo-dir seeds; a single --code file
+	// seeds no tree, so without --repo-dir it would be silently unread.
+	if strings.TrimSpace(*repoDirFlag) == "" && flagWasSet(fs, "seed-limit") {
+		fmt.Fprintln(stderr, "corral certify --local: --seed-limit requires --repo-dir (it bounds the repository text seeded into the jail; a single --code file seeds no repository)")
+		return 2
+	}
+	seedLimit, slerr := resolveSeedLimit(fs, *seedLimitFlag)
+	if slerr != nil {
+		fmt.Fprintf(stderr, "corral certify --local: %v\n", slerr)
 		return 2
 	}
 	// --bind-dir asks to BIND a dir read-only; --no-bind-deps asks to COPY every
@@ -483,6 +495,7 @@ func runCertifyLocalAs(args []string, unattributed bool, stdout, stderr io.Write
 		localEndpoints: localEndpoints,
 		tokenBudget:    agentbackend.NewTokenBudget(*maxTokensFlag),
 		bindDirs:       bindDirFlag, noBindDeps: *noBindDepsFlag,
+		seedLimit: seedLimit,
 
 		repo: subjectRepo, commit: subjectCommit, subjectResolved: true,
 
@@ -644,6 +657,10 @@ type localAuditInput struct {
 	jail       string
 	bindDirs   []string
 	noBindDeps bool
+	// seedLimit is the jail seed limit in bytes (--seed-limit,
+	// resolveSeedLimit), handed to buildRepoSeed when the job builds its
+	// own seed; a scan's shared seed was already built under the scan's.
+	seedLimit int64
 	// runner is the operator's --runner: the runner-table row behind
 	// checkArgv when corral cannot read it (lang.Resolve). "" = detect.
 	runner string
@@ -1207,7 +1224,7 @@ func prepareAuditJail(ctx context.Context, in localAuditInput, plug lang.Plugin,
 		codePath: in.codePath, testPath: tp, repoDir: repoDir, langName: plug.Name(), fsPath: fsPath,
 		code: code, devTest: devTest, checkArgv: in.checkArgv, inv: inv,
 		baseArgv: in.baseArgv, selection: in.selection, selectionMap: in.selectionMap,
-		bindDirFlag: in.bindDirs, noBindDepsFlag: in.noBindDeps, stdout: stdout,
+		bindDirFlag: in.bindDirs, noBindDepsFlag: in.noBindDeps, seedLimit: in.seedLimit, stdout: stdout,
 		seed: in.seed, substrate: in.substrate, mutantConcurrency: in.mutantConcurrency,
 		concurrency: in.concurrency, pool: in.pool, noFailFast: in.noFailFast,
 	})
@@ -2261,6 +2278,7 @@ type jailWiringInput struct {
 	selectionMap   testmap.Map // localAuditInput.selectionMap
 	bindDirFlag    []string
 	noBindDepsFlag bool
+	seedLimit      int64 // localAuditInput.seedLimit
 	stdout         io.Writer
 	seed           *repoSeed // non-nil: use this prebuilt, SHARED seed instead of building one
 	substrate      string    // "" or substrateJail = the bwrap jail (today's behavior); substrateWorkspace = mutate repoDir in place, no jail
@@ -2577,7 +2595,7 @@ func buildJailWiring(ctx context.Context, in jailWiringInput) (w jailWiring, err
 			// langs, non-modules, or already-vendored repos). Seed from the
 			// returned dir.
 			var serr error
-			seed, serr = buildRepoSeed("corral certify --local", in.repoDir, in.langName, in.iso, in.bindDirFlag, in.noBindDepsFlag, in.stdout)
+			seed, serr = buildRepoSeed("corral certify --local", in.repoDir, in.langName, in.iso, in.bindDirFlag, in.noBindDepsFlag, in.seedLimit, in.stdout)
 			if serr != nil {
 				return w, serr
 			}

@@ -67,10 +67,12 @@ func runsUnitPass(plug lang.Plugin) bool {
 // refusal is a Note, never fatal: the scan stays name-paired for that
 // language, and says so.
 //
-// Its bounds are the scan's own: the whole pass runs under selectionTimeout
-// (units not started by then are recorded "not run (time limit)", the ones
-// that finished keep their evidence), each unit's command under the same
-// per-command cap the selection run has, and l.unitWorkers units at a time.
+// Its bounds are the scan's own: the whole pass runs under l.evidenceTimeout
+// (--evidence-timeout, else selectionTimeout; units not started by then are
+// recorded "not run (time limit)", the ones that finished keep their
+// evidence, and the scan line counts the ones it cut and names the flag),
+// each unit's command under the same bound and the per-command output cap
+// the selection run has, and l.unitWorkers units at a time.
 //
 // It also sets l.unitLanding, the repository a unit's authored test lands in,
 // which the caller hands to reposcan.UnitTestFile — on a cache hit as on a
@@ -91,7 +93,10 @@ func (l *localExecutor) collectUnits(ctx context.Context, sources []string) repo
 	if err != nil {
 		return reposcan.UnitEvidence{Note: fmt.Sprintf("%s: %v", langName, err)}
 	}
-	runner, files, err := l.scanRunner(langName, plug, selectionMaxOutput, selectionTimeout)
+	if l.evidenceTimeout <= 0 {
+		return reposcan.UnitEvidence{Note: fmt.Sprintf("%s: unit pass: no evidence bound was set (--evidence-timeout)", langName)}
+	}
+	runner, files, err := l.scanRunner(langName, plug, selectionMaxOutput, l.evidenceTimeout)
 	if err != nil {
 		return reposcan.UnitEvidence{Note: fmt.Sprintf("%s: unit pass: %v", langName, err)}
 	}
@@ -124,12 +129,12 @@ func (l *localExecutor) collectUnits(ctx context.Context, sources []string) repo
 		}
 	}
 
-	passCtx, cancel := context.WithTimeout(ctx, selectionTimeout)
+	passCtx, cancel := context.WithTimeout(ctx, l.evidenceTimeout)
 	defer cancel()
 	start := time.Now()
 	ev := collectUnitEvidence(passCtx, runner, files, plug, inv, modulePath, l.unitWorkers, func(runnable, listed int) {
 		fmt.Fprintf(l.progress, "  units: running %d of %d listed test unit(s) alone under coverage, %d at a time, within %s for the whole pass…\n",
-			runnable, listed, l.unitWorkers, selectionTimeout)
+			runnable, listed, l.unitWorkers, l.evidenceTimeout)
 	})
 	l.unitsDuration = time.Since(start)
 	if ev.Ran {
@@ -289,6 +294,12 @@ func printUnitPass(w io.Writer, ex *localExecutor) {
 		basis = "reused — tree unchanged since an earlier scan (cached evidence)"
 	}
 	fmt.Fprintf(w, "  units: %d run, %d failed (%s)\n", len(ev.Units), unitPassFailed(ev), basis)
+	// The one failure more time would fix, said with the bound and the flag
+	// that raises it: a large suite that meets the bound otherwise reads as
+	// a list of "not run (time limit)" with no way past it named.
+	if cut := ev.CutShort(); cut > 0 {
+		fmt.Fprintf(w, "  units: %s\n", evidenceCutNote(cut, ex.evidenceTimeout))
+	}
 	// Capped as printEvidencePairings caps its list: on a large suite that
 	// hits the time limit every unit has a line, and the full list is the
 	// count line above plus --dry-run --json (ruling R30).

@@ -88,6 +88,8 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	jsonOut := fs.Bool("json", false, "with --dry-run, emit the repository's audit surface as JSON instead of the human report: per-language counts, every auditable file with its inferred test pairing, and the machine-stable exclusion tally. Needs no key, no jail and no money — it is the free inventory a UI or a tenant's own tooling can consume instead of scraping stdout")
 	substrateFlag := fs.String("substrate", substrateJail, "where the audit runs: "+substrateJail+" (bwrap) or "+substrateWorkspace+" (mutate --repo in place; the caller IS the isolation boundary, e.g. an ephemeral CI runner)")
 	jailFlag := fs.String("jail", "", "sandbox backend for --substrate jail: bwrap (Linux) or container, or sandbox-exec (macOS) (default: auto-detect for this OS). \"container\" runs every test command in CORRALAI_EXEC_IMAGE, an image carrying the project's toolchain, so nothing has to be installed on the host")
+	seedLimitFlag := fs.Int("seed-limit", 0, seedLimitHelp+". --substrate jail only")
+	evidenceTimeoutFlag := fs.Duration("evidence-timeout", 0, evidenceTimeoutHelp)
 	pathFlag := fs.String("path", "", "bound the scan to this subtree of --repo (a directory, relative to it), keeping the repository whole: tests are still found anywhere in it, and the audit's copies still carry the root's build files (a Cargo workspace manifest, a monorepo's package.json). Pair it with a test command scoped the same way, e.g. cargo test -p <crate>")
 	diffBase := fs.String("diff-base", "", "bound the scan to files changed since this git ref: every candidate that changed, or whose paired test changed, is audited. In a PR the diff IS the bound, so the default --top does not apply on this path; an EXPLICIT --top still does, auditing that many of the changed files by rank and reporting the rest as not audited")
 	pushFlag := fs.String("push", "", "append this scan's per-file verdicts to a DuckDB you own — a path, or `md:<db>` for MotherDuck (which reads motherduck_token from the environment; the database is created on first push if it does not already exist — a MotherDuck SHARE is a read target and cannot be pushed to). corral has no hosted tier and keeps nothing: the warehouse is yours, and any DuckDB works, so this is a destination rather than a lock-in. Append-only. Every row carries the ledger's scan id (0 when --record was not given), and — traceable only with --attest — the sha256 of the signed statement it came from, so a row can be checked against something a third party can verify; without --attest, statement_sha256 is honestly empty rather than fabricated; and with --attest, a statement that FAILS to write withholds the push too, since a row that cannot name the statement it came from is not written. It answers what one pull request cannot — a single kill rate is a sample, and the same unchanged diff has scored 0.85 and 0.90; forty of them are a distribution")
@@ -320,6 +322,23 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	}
 	if *jailFlag != "" && *substrateFlag == substrateWorkspace {
 		fmt.Fprintf(stderr, "corral certify --repo: --jail %s has no effect with --substrate %s, which runs no sandbox; drop one of them\n", *jailFlag, substrateWorkspace)
+		return 2
+	}
+	// The two operator-settable bounds (run_bounds.go). --seed-limit bounds
+	// the jail's seed, and the workspace substrate builds none, so there it
+	// would be a setting that silently does nothing.
+	if flagWasSet(fs, "seed-limit") && *substrateFlag == substrateWorkspace {
+		fmt.Fprintf(stderr, "corral certify --repo: --seed-limit has no effect with --substrate %s, which seeds no jail; drop it\n", substrateWorkspace)
+		return 2
+	}
+	seedLimit, err := resolveSeedLimit(fs, *seedLimitFlag)
+	if err != nil {
+		fmt.Fprintf(stderr, "corral certify --repo: %v\n", err)
+		return 2
+	}
+	evidenceTimeout, err := resolveEvidenceTimeout(fs, *evidenceTimeoutFlag)
+	if err != nil {
+		fmt.Fprintf(stderr, "corral certify --repo: %v\n", err)
 		return 2
 	}
 
@@ -745,6 +764,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		// repo can mix languages.
 		ex = newLocalExecutorWithJail(*repoDir, checkArgv, *substrateFlag, *jailFlag, *timeoutFlag, stdout)
 		ex.wholeSuite = *wholeSuiteFlag
+		ex.seedLimit, ex.evidenceTimeout = seedLimit, evidenceTimeout
 		// Set here, not with the grading settings below: the unit pass runs
 		// before any job exists and resolves the operator's --runner and
 		// the scan's worker count as grading will.
@@ -1009,7 +1029,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 	noSourcesNote := ""
 	if ex != nil && !skipEvidence {
 		// Both evidence passes run under the operator's Ctrl-C: either can
-		// last selectionTimeout, and before this they ran under a context
+		// last the evidence bound, and before this they ran under a context
 		// nothing cancelled, so an interrupt killed the process outright.
 		// Scoped to this phase — the audit below registers its own — so
 		// goal derivation between the two keeps the behaviour it had.
@@ -2755,7 +2775,10 @@ const preflightTimeout = 5 * time.Minute
 // grades a different question.
 const selectionMaxOutput = 64 << 20
 
-// selectionTimeout: see selectionMaxOutput.
+// selectionTimeout: see selectionMaxOutput. It is the evidence bound when the
+// operator names none; --evidence-timeout replaces it (run_bounds.go), since
+// a suite ~11x requests' is not the largest corral meets: REA's 2,186 vitest
+// units left 1,918 not run at 15 minutes.
 const selectionTimeout = 15 * time.Minute
 
 // coverageRunner is the minimal seam runPreflight needs to hand to
@@ -3214,15 +3237,24 @@ func (l *localExecutor) collectSelection(ctx context.Context, sources []string) 
 	if _, note := reposcan.SelectionCommand(plug, testCmd, sources); note != "" {
 		return reposcan.SelectionEvidence{Note: note}
 	}
-	runner, files, err := l.scanRunner(langName, plug, selectionMaxOutput, selectionTimeout)
+	if l.evidenceTimeout <= 0 {
+		return reposcan.SelectionEvidence{Note: "selection: no evidence bound was set (--evidence-timeout)"}
+	}
+	runner, files, err := l.scanRunner(langName, plug, selectionMaxOutput, l.evidenceTimeout)
 	if err != nil {
 		return reposcan.SelectionEvidence{Note: fmt.Sprintf("selection: %v", err)}
 	}
 	// THE INSTRUMENTED RUN, and the only statement in this function that runs
 	// the project's suite. The clock is here, and only here: every return
 	// above is a decision, not a run, and must record no time.
+	watch := &timeoutWatch{}
 	start := time.Now()
-	ev := collectSelectionEvidence(ctx, runner, files, plug, testCmd, sources)
+	ev := collectSelectionEvidence(ctx, watch.wrap(runner), files, plug, testCmd, sources)
+	// A run the bound stopped already says it failed and why, in the
+	// runner's words; it did not say which bound, or that one flag moves it.
+	if !ev.Ran && watch.hit() {
+		ev.Note += evidenceBoundNote(l.evidenceTimeout)
+	}
 	// Recorded even when the run produced no usable evidence: the suite still
 	// executed, and the minutes it burned are part of what this scan cost.
 	l.selectionDuration = time.Since(start)
@@ -5025,6 +5057,17 @@ type localExecutor struct {
 	unitsDuration time.Duration
 	// unitsReused is set when collectUnits served a cache HIT.
 	unitsReused bool
+	// seedLimit is the jail seed limit in bytes (--seed-limit,
+	// resolveSeedLimit), read when the first seed is built, not at
+	// construction, so the flag boundary sets it after newLocalExecutor.
+	// The constructor sets seedLimitBuiltin: an executor nobody configured
+	// seeds as every jail did before the flag existed.
+	seedLimit int64
+	// evidenceTimeout bounds the evidence pass (--evidence-timeout,
+	// resolveEvidenceTimeout): Python's one instrumented run, and the unit
+	// pass and each unit's run within it. The constructor sets
+	// selectionTimeout, the bound before the flag existed.
+	evidenceTimeout time.Duration
 	// unitWorkers is how many units run at once: the scan's own worker
 	// setting (resolveScanWorkers — --swarm on the jail, one on the
 	// workspace, whose one checkout the units share), set where the
@@ -5136,6 +5179,11 @@ func newLocalExecutorWithJail(repoDir string, checkArgv []string, substrate, jai
 		baselineRuns: 2,
 		substrate:    substrate,
 		timeout:      timeout,
+		// The bounds that applied before --seed-limit and
+		// --evidence-timeout existed; each verb's flag boundary replaces
+		// them with the operator's when given (run_bounds.go).
+		seedLimit:       seedLimitBuiltin,
+		evidenceTimeout: selectionTimeout,
 		// Concurrent jobs write progress; serialize so two files' notices
 		// cannot interleave mid-line.
 		progress:    &syncWriter{w: progress},
@@ -5190,7 +5238,7 @@ func newLocalExecutorWithJail(repoDir string, checkArgv []string, substrate, jai
 			if l.jailErr != nil {
 				return repoSeed{cleanup: func() {}}, l.jailErr
 			}
-			return buildRepoSeed("corral certify --repo", repoDir, langName, l.iso, nil, false, l.progress)
+			return buildRepoSeed("corral certify --repo", repoDir, langName, l.iso, nil, false, l.seedLimit, l.progress)
 		})
 	}
 	return l
@@ -5235,7 +5283,10 @@ func (l *localExecutor) auditInputFor(j reposcan.Job) localAuditInput {
 		tokenBudget:    l.tokenBudget,
 		toolProbe:      l.toolProbe,
 		repoDir:        l.repoDir,
-		codePath:       j.Path,
+		// Read only when the job builds its own seed (no shared one): the
+		// scan's bound, so the two can never seed under different limits.
+		seedLimit: l.seedLimit,
+		codePath:  j.Path,
 		// j.TestPath is empty for an evidence-only candidate BY
 		// CONSTRUCTION (see reposcan.WidenCandidacyByEvidence): the whole
 		// point is that no filename convention paired one. Leaving testPath

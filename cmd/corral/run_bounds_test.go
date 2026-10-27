@@ -339,3 +339,107 @@ func TestCertifyLocalSeedLimitFlagBoundsTheJailSeed(t *testing.T) {
 		t.Errorf("certify --local --seed-limit 1 over 1.2 MiB must refuse naming the flag and the total:\n%s", s)
 	}
 }
+
+// A dry run without --evidence runs no pass and seeds no jail, which is
+// known from the arguments alone: both flags are refused there.
+func TestBoundsAreRefusedOnADryRunWithoutEvidence(t *testing.T) {
+	refuseModelEndpoints(t)
+	root, fake := testsMapFixture(t)
+	for _, flagArgs := range [][]string{{"--seed-limit", "100"}, {"--evidence-timeout", "1h"}} {
+		var out, errb bytes.Buffer
+		args := append([]string{"--repo", root, "--dry-run"}, flagArgs...)
+		code := runCertifyRepo(append(args, "--", "vitest", "run"), &out, &errb)
+		if code != 2 || !strings.Contains(errb.String(), flagArgs[0]) || !strings.Contains(errb.String(), "--evidence") {
+			t.Errorf("certify --repo --dry-run %v: exit %d, want 2 naming the flag and --evidence:\n%s", flagArgs, code, errb.String())
+		}
+	}
+	if n := len(fake.called()); n != 0 {
+		t.Errorf("the unit pass ran %d time(s) on a refused run", n)
+	}
+}
+
+// --whole-suite still runs the unit pass (candidacy needs it), so
+// --evidence-timeout is honoured there, not refused; Python's instrumented
+// run is skipped under it, and the selection line says the flag went unused.
+func TestEvidenceTimeoutUnderWholeSuite(t *testing.T) {
+	refuseModelEndpoints(t)
+	t.Run("a unit language reads it", func(t *testing.T) {
+		root, fake := testsMapFixture(t)
+		var out, errb bytes.Buffer
+		start := time.Now()
+		code := runCertifyRepo([]string{"--repo", root, "--dry-run", "--evidence", "--whole-suite", "--substrate", substrateWorkspace,
+			"--no-selection-cache", "--evidence-timeout", "2h", "--", "vitest", "run"}, &out, &errb)
+		if code != 0 {
+			t.Fatalf("exit %d\n%s", code, errb.String())
+		}
+		calls := fake.called()
+		if len(calls) != 1 || calls[0].deadline.Sub(start) < 2*time.Hour-time.Minute {
+			t.Errorf("under --whole-suite the unit pass must run under the flag's bound: calls = %+v", calls)
+		}
+	})
+	t.Run("Python says it went unused", func(t *testing.T) {
+		root := t.TempDir()
+		mustWrite(t, filepath.Join(root, "pkg", "mod.py"), "def f():\n    return 1\n")
+		mustWrite(t, filepath.Join(root, "tests", "test_mod.py"), "def test_f():\n    pass\n")
+		run := func(extra ...string) string {
+			args := append([]string{"--repo", root, "--dry-run", "--evidence", "--whole-suite", "--substrate", substrateWorkspace, "--no-selection-cache"}, extra...)
+			var out, errb bytes.Buffer
+			runCertifyRepo(append(args, "--", "python3", "-m", "pytest", "tests"), &out, &errb)
+			return out.String() + "\n[stderr]\n" + errb.String()
+		}
+		const want = "--evidence-timeout not used (--whole-suite runs no instrumented run)"
+		if s := run("--evidence-timeout", "1h"); !strings.Contains(s, want) {
+			t.Errorf("missing %q:\n%s", want, s)
+		}
+		if s := run(); strings.Contains(s, "--evidence-timeout") {
+			t.Errorf("a scan that named no bound must print what it printed before the flag:\n%s", s)
+		}
+	})
+}
+
+// A selection-cache hit runs nothing, so a named bound is never read; that
+// cannot be refused in advance, so the line reporting the evidence says it.
+func TestEvidenceTimeoutUnusedOnACacheHitIsSaid(t *testing.T) {
+	refuseModelEndpoints(t)
+	const want = "--evidence-timeout not used (cached evidence, no run)"
+
+	// corral tests map, through the real selection cache.
+	root := unitEvidenceTSFixture(t)
+	gitRun := gitCmd(t, root)
+	gitRun("init", "-q")
+	gitRun("add", ".")
+	gitRun("commit", "-q", "-m", "base", "--no-gpg-sign")
+	fake := &fakeUnitPass{ev: reposcan.UnitEvidence{Ran: true, Units: []reposcan.UnitResult{
+		unitRun("tests/composition/service.test.ts", map[string]lang.LineCounts{"src/app/Service.ts": {Executed: 1, Executable: 1}}),
+	}}}
+	fake.install(t)
+	cacheDB := filepath.Join(t.TempDir(), "cache.duckdb")
+	run := func(extra ...string) string {
+		args := append([]string{"map", "--repo-dir", root, "--substrate", substrateWorkspace, "--cache-db", cacheDB}, extra...)
+		var out, errb bytes.Buffer
+		if code := runTests(append(args, "--", "vitest", "run"), &out, &errb); code != 0 {
+			t.Fatalf("exit %d\n%s", code, errb.String())
+		}
+		return out.String()
+	}
+	if s := run("--evidence-timeout", "1h"); strings.Contains(s, want) {
+		t.Errorf("the first run ran the pass, so it read the bound:\n%s", s)
+	}
+	if s := run("--evidence-timeout", "1h"); !strings.Contains(s, want) {
+		t.Errorf("a cache hit must say the bound went unused:\n%s", s)
+	}
+	if n := len(fake.called()); n != 1 {
+		t.Fatalf("the pass ran %d time(s), want 1 (the second run is a cache hit)", n)
+	}
+	if s := run(); strings.Contains(s, "--evidence-timeout") {
+		t.Errorf("with no flag, a cache hit prints what it printed before the flag:\n%s", s)
+	}
+
+	// The scan line says the same, on the units line certify --repo prints.
+	ex := &localExecutor{units: reposcan.UnitEvidence{Ran: true}, unitsReused: true, evidenceTimeoutGiven: true}
+	var b bytes.Buffer
+	printUnitPass(&b, ex)
+	if !strings.Contains(b.String(), want) {
+		t.Errorf("the scan's units line on a cache hit must say the bound went unused:\n%s", b.String())
+	}
+}

@@ -291,7 +291,7 @@ func printUnitPass(w io.Writer, ex *localExecutor) {
 	// event's to record.
 	basis := fmt.Sprintf("%d at a time", ex.unitWorkers)
 	if ex.unitsReused {
-		basis = "reused — tree unchanged since an earlier scan (cached evidence)"
+		basis = "reused — tree unchanged since an earlier scan (cached evidence)" + ex.evidenceTimeoutUnused("cached evidence, no run")
 	}
 	fmt.Fprintf(w, "  units: %d run, %d failed (%s)\n", len(ev.Units), unitPassFailed(ev), basis)
 	// The one failure more time would fix, said with the bound and the flag

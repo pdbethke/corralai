@@ -331,6 +331,21 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "corral certify --repo: --seed-limit has no effect with --substrate %s, which seeds no jail; drop it\n", substrateWorkspace)
 		return 2
 	}
+	// A dry run without --evidence builds no executor: no seed, no pass,
+	// so neither bound would be read.
+	if *dryRun && !*evidenceFlag {
+		for _, name := range []string{"seed-limit", "evidence-timeout"} {
+			if flagWasSet(fs, name) {
+				fmt.Fprintf(stderr, "corral certify --repo: --%s has no effect on --dry-run without --evidence, which runs no evidence pass and seeds no jail; add --evidence or drop it\n", name)
+				return 2
+			}
+		}
+	}
+	// --evidence-timeout is NOT refused under --whole-suite: the unit pass
+	// still runs there (candidacy needs it) and reads the bound. Only
+	// Python's instrumented run is skipped, and which language a scan
+	// resolves is not known until enumeration, so that case is said on the
+	// selection line instead (evidenceTimeoutUnused).
 	seedLimit, err := resolveSeedLimit(fs, *seedLimitFlag)
 	if err != nil {
 		fmt.Fprintf(stderr, "corral certify --repo: %v\n", err)
@@ -765,6 +780,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		ex = newLocalExecutorWithJail(*repoDir, checkArgv, *substrateFlag, *jailFlag, *timeoutFlag, stdout)
 		ex.wholeSuite = *wholeSuiteFlag
 		ex.seedLimit, ex.evidenceTimeout = seedLimit, evidenceTimeout
+		ex.evidenceTimeoutGiven = flagWasSet(fs, "evidence-timeout")
 		// Set here, not with the grading settings below: the unit pass runs
 		// before any job exists and resolves the operator's --runner and
 		// the scan's worker count as grading will.
@@ -1064,7 +1080,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 			// "running" for a run that is never going to happen.
 			if !*wholeSuiteFlag && !unitLanguage {
 				if ex.selectionCachePeek(selectionSources) {
-					fmt.Fprintln(stdout, "  selection: reused — tree unchanged since an earlier scan (cached evidence)")
+					fmt.Fprintln(stdout, "  selection: reused — tree unchanged since an earlier scan (cached evidence)"+ex.evidenceTimeoutUnused("cached evidence, no run"))
 				} else {
 					fmt.Fprintln(stdout, "  selection: running the suite once with per-test coverage instrumentation…")
 				}
@@ -1075,7 +1091,11 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 			// having run nothing at all.
 			ex.selection = ex.collectSelection(evidenceCtx, selectionSources)
 			if !ex.selection.Ran && !unitLanguage {
-				fmt.Fprintf(stdout, "  selection: grading by the WHOLE suite — %s\n", ex.selection.Note)
+				unused := ""
+				if *wholeSuiteFlag {
+					unused = ex.evidenceTimeoutUnused("--whole-suite runs no instrumented run")
+				}
+				fmt.Fprintf(stdout, "  selection: grading by the WHOLE suite — %s%s\n", ex.selection.Note, unused)
 			}
 			// SCAN-SCOPED: this instrumented run happens ONCE, for the whole
 			// repo, before any per-file driver exists — the driver has no
@@ -5068,6 +5088,11 @@ type localExecutor struct {
 	// pass and each unit's run within it. The constructor sets
 	// selectionTimeout, the bound before the flag existed.
 	evidenceTimeout time.Duration
+	// evidenceTimeoutGiven is whether the operator named --evidence-timeout,
+	// so a run that never reads the bound (a cache hit, Python under
+	// --whole-suite) can say the flag went unused rather than drop it
+	// silently.
+	evidenceTimeoutGiven bool
 	// unitWorkers is how many units run at once: the scan's own worker
 	// setting (resolveScanWorkers — --swarm on the jail, one on the
 	// workspace, whose one checkout the units share), set where the

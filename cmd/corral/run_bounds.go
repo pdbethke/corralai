@@ -26,12 +26,37 @@ import (
 //
 // So both are operator-settable, and neither moves without the operator:
 // with no flag the bound is exactly the one that applied before the flag
-// existed, and the flag is refused where nothing would read it. They were not
-// made required, which would break every existing invocation to name a
-// number that suits nearly every repository; nor raised, which would spend
-// the safety margin on every repository to suit one. Whatever stops a run
-// names the flag that moves its bound, so the operator who meets one learns
-// the way past it in the same line.
+// existed. They were not made required, which would break every existing
+// invocation to name a number that suits nearly every repository; nor raised,
+// which would spend the safety margin on every repository to suit one.
+// Whatever stops a run names the flag that moves its bound, so the operator
+// who meets one learns the way past it in the same line.
+//
+// Where each flag is refused, because what the flag names is known from the
+// arguments alone not to exist:
+//   - --seed-limit: on --substrate workspace (certify --repo, tests map),
+//     which seeds no jail; on certify --local without --repo-dir, which seeds
+//     no repository; on certify --repo --dry-run without --evidence, which
+//     builds no executor.
+//   - --evidence-timeout: on certify --repo --dry-run without --evidence,
+//     which runs no evidence pass.
+//
+// Where a given flag can still go unread, and is SAID to on the line that
+// reports the evidence (evidenceTimeoutUnused), because it cannot be known
+// before the run:
+//   - --evidence-timeout on a selection-cache hit: the evidence is served,
+//     nothing runs, and whether the cache holds the tree is not known until
+//     it is asked.
+//   - --evidence-timeout under --whole-suite when the scan's language is
+//     Python: its one instrumented run is skipped. It is not refused under
+//     --whole-suite, because every other language's unit pass still runs
+//     there (candidacy needs it) and reads the bound, and the language is
+//     only known after enumeration.
+//   - --seed-limit when the scan never builds a seed: a jail run whose
+//     evidence is served from the cache and that audits no file (an empty
+//     --diff-base, every file cached). Not disclosed: the seed is built on
+//     the first jailed run, so an unread limit there changed nothing a
+//     reader could misread.
 
 // seedLimitBuiltinMiB is the jail seed limit without --seed-limit: 64 MiB of
 // text, the bound loadRepoFiles always had. It is a guard against seeding a
@@ -154,4 +179,15 @@ func (w *timeoutWatch) wrap(r coverageRunner) coverageRunner {
 		return watchedDetailedRunner{watchedRunner: plain, detailed: d}
 	}
 	return plain
+}
+
+// evidenceTimeoutUnused is the clause a line about evidence that ran nothing
+// appends when the operator named --evidence-timeout: the bound was never
+// read, and why. "" when the flag was not given, so a scan that named no
+// bound prints exactly what it printed before the flag existed.
+func (l *localExecutor) evidenceTimeoutUnused(why string) string {
+	if !l.evidenceTimeoutGiven {
+		return ""
+	}
+	return "; --evidence-timeout not used (" + why + ")"
 }

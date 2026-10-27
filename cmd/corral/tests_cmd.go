@@ -127,6 +127,7 @@ func runTestsMap(args []string, stdout, stderr io.Writer) int {
 	defer ex.Close()
 	ex.runner = *runnerFlag
 	ex.seedLimit, ex.evidenceTimeout = seedLimit, evidenceTimeout
+	ex.evidenceTimeoutGiven = flagWasSet(fs, "evidence-timeout")
 	if !*noCacheFlag {
 		dsn, cerr := cacheDSNOr(*cacheDSNFlag)
 		if cerr != nil {
@@ -189,6 +190,11 @@ func runTestsMap(args []string, stdout, stderr io.Writer) int {
 	// this says which bound and the flag that raises it.
 	if cut := ex.units.CutShort(); unitPass && cut > 0 {
 		fmt.Fprintln(stdout, evidenceCutNote(cut, ex.evidenceTimeout))
+	}
+	// A map served from the selection cache ran nothing, so a bound the
+	// operator named was never read; say so rather than let it pass as used.
+	if (ex.unitsReused || ex.selectionReused) && ex.evidenceTimeoutGiven {
+		fmt.Fprintf(stdout, "evidence: reused from the selection cache — tree unchanged since an earlier run%s\n", ex.evidenceTimeoutUnused("cached evidence, no run"))
 	}
 	// Written after the summary, and only now: a pass that did not run wrote
 	// nothing above, so a file on disk always holds a map that was built.

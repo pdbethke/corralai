@@ -81,6 +81,29 @@ type Runner struct {
 	ParseUnits func(stdout string) []string
 	UnitCmd    func(argv []string, unit string) ([]string, bool)
 	UnitCoruns func(unit, other string) bool
+	// CollectionBase is argv with the operator's collection targets removed,
+	// so appending a chosen set NARROWS the run instead of joining a
+	// directory argv already names (pytest `tests/` plus a node id still
+	// collects the whole directory). nil means appending narrows as it is:
+	// argv is the base.
+	CollectionBase func(argv []string, repoRoot string) []string
+	// TestsCmd is base (a CollectionBase result) running exactly these test
+	// ids with every operator flag kept; it refuses (ok=false) where it
+	// cannot, as SingleCmd does.
+	TestsCmd func(base []string, ids []string) ([]string, bool)
+	// UnitsCmd is argv running exactly these units (the multi-unit UnitCmd),
+	// refusing wherever UnitCmd would. UnitsCoruns reports whether a run of
+	// units would also run other, as UnitCoruns does for one; nil means a
+	// multi-unit run is exact. UnitForFile names the unit a test file
+	// belongs to, so the authored test is run in the unit it was written
+	// into. All three are nil on a runner with no unit pass.
+	UnitsCmd    func(argv []string, units []string) ([]string, bool)
+	UnitsCoruns func(units []string, other string) bool
+	UnitForFile func(testFile string) (string, bool)
+	// CarryArgs is the operator args a selected command must keep when the
+	// authored pass rebuilds argv from the base (pytest --deselect): the one
+	// thing a caller may legitimately add back to a narrowed command.
+	CarryArgs func(argv []string) []string
 	// UnitNoCoverage is what a one-unit run of this runner means when its
 	// coverage report names no project file at all — no entry, nothing
 	// disclosed — measured, with what to do about it; "" when the runner
@@ -108,6 +131,13 @@ func goSingleCmd(_ []string, testPath, id string) ([]string, bool) {
 func pyListCmd(_ []string, testPath string) ([]string, bool) { return pyListTestsCmd(testPath) }
 func pySingleCmd(_ []string, testPath, id string) ([]string, bool) {
 	return pySingleTestCmd(testPath, id)
+}
+
+// pyTestsCmd appends the chosen node ids to base. It copies base: Select
+// built Cmd the same way, and a shared backing array would let two commands
+// overwrite each other's ids.
+func pyTestsCmd(base, ids []string) ([]string, bool) {
+	return append(append([]string{}, base...), ids...), true
 }
 
 // runners is the table. ORDER IS LOAD-BEARING: RunnerFor takes the first row
@@ -138,6 +168,7 @@ var runners = []Runner{
 		FailFast: []string{"-x"},
 		ListCmd:  pyListCmd, ParseList: pyParseTestList, SingleCmd: pySingleCmd,
 		FirstFailure: pyFirstFailure, FailedTests: pyFailedTests, DeselectCmd: pyDeselectCmd,
+		CollectionBase: stripPyCollectionTargets, TestsCmd: pyTestsCmd, CarryArgs: deselectArgs,
 	},
 	{
 		// No salvage: unittest exits 2 on pytest's --deselect, so a rerun

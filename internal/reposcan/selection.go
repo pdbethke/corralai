@@ -37,7 +37,10 @@ type SelectionEvidence struct {
 // names each test's unit in the map, and whose TestsCmd and CollectionBase
 // build every narrowed command from it. A plugin produces evidence only for
 // a command its instrumentation accepts (Python's, a pytest command), so
-// the row is the one that command names. A row with no TestUnit cannot name
+// the row is the one that command names. The row is detected from the
+// command alone and ignores an operator's --runner: harmless, because only a
+// pytest-shaped command instruments at all, and that command names the
+// pytest row whatever --runner says. A row with no TestUnit cannot name
 // a node's unit, which the engine widens to over the argv cap: refused, never
 // built with units left blank.
 func selectionRow(p lang.Plugin, testCmd []string) (lang.Runner, error) {

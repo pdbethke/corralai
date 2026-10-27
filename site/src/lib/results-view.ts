@@ -98,6 +98,8 @@ export function errorSentence(r: Exclude<LedgerResult, { kind: 'derived' }>): st
       return `GitHub's answer for ${r.url} was not a file listing (${r.message}), so the ledger was not derived.`;
     case 'derive-failed':
       return `The verifier could not run in this browser (${r.message}). This says nothing about the ledger itself.`;
+    case 'bad-root-key':
+      return `The root key this ledger publishes, ${r.url}, could not be used: ${r.message}. No entry was checked.`;
   }
 }
 
@@ -146,9 +148,12 @@ function aTiles(d: Derived): HTMLElement {
       key: 'caught',
       label: 'Share of graded planted bugs the suite caught',
       value: t.caught_share === null ? 'nothing graded' : pct(t.caught_share),
-      caption: t.caught_share === null ? 'no audited file was graded' : `of ${count(t.mutants_planted)} planted in graded files; mutants that did not compile are excluded`,
+      caption:
+        t.caught_share === null
+          ? 'no audited file was graded'
+          : `of ${count(t.mutants_graded)} graded planted bugs; ${count(t.mutants_planted)} were planted, and any that did not compile are in no share`,
     },
-    { key: 'verified', label: 'Entries verified', value: `${v}/${n}`, caption: u > 0 ? `${count(u)} unsigned, counted in no figure` : 'checked in this browser by corral\'s own verifier' },
+    { key: 'verified', label: 'Entries verified', value: `${v}/${n}`, caption: u > 0 ? `${count(u)} unsigned, counted in no figure` : 'intact and signed by the root key named above, checked in this browser' },
     { key: 'planted', label: 'Mutants planted', value: count(t.mutants_planted), caption: `${count(t.survivors)} survived the suite` },
     {
       key: 'files',
@@ -162,19 +167,42 @@ function aTiles(d: Derived): HTMLElement {
   ]);
 }
 
-// The tiles of a ledger that did not verify: the same labels, no values. A
-// figure from a chain that is not intact would be a number nobody verified.
-function blankTiles(): HTMLElement {
-  return tiles(
-    ['Proven missing tests', 'Share of graded planted bugs the suite caught', 'Entries verified', 'Mutants planted'].map((label, i) => ({
-      key: ['proven', 'caught', 'verified', 'planted'][i],
-      label,
-      value: 'not shown',
-      caption: 'the ledger did not verify',
-      hero: i === 0,
-    })),
-  );
+const plural = (n: number, one: string, many: string) => `${count(n)} ${n === 1 ? one : many}`;
+
+// The tiles of a ledger with no figure to show: the same labels, a phrase for
+// a value. The entries tile keeps Derive's counts (Totals.entries_*), which
+// stay true when nothing else can be shown.
+function phraseTiles(d: Derived, value: string, caption: string, verifiedCaption: string): HTMLElement {
+  const { v, n } = verifiedCounts(d);
+  return tiles([
+    { key: 'proven', label: 'Proven missing tests', value, caption, hero: true },
+    { key: 'caught', label: 'Share of graded planted bugs the suite caught', value, caption },
+    { key: 'verified', label: 'Entries verified', value: `${v}/${n}`, caption: verifiedCaption },
+    { key: 'planted', label: 'Mutants planted', value, caption },
+  ]);
 }
+
+// A ledger that did not verify: a figure from a chain that is not intact
+// would be a number nobody verified.
+const problemTiles = (d: Derived) =>
+  phraseTiles(
+    d,
+    'not shown',
+    'the ledger did not verify',
+    `${plural(d.summary.totals.entries_failed, 'entry', 'entries')} did not verify, so the chain is not intact; no other figure is shown`,
+  );
+
+// A ledger that verified but holds no verified scan (every entry unsigned, or
+// only reviews): its counts would be zeros nobody measured.
+const noRunTiles = (d: Derived) =>
+  phraseTiles(
+    d,
+    'no verified run',
+    'no scan entry on this ledger verified',
+    d.summary.totals.entries_unsigned > 0
+      ? `${plural(d.summary.totals.entries_unsigned, 'unsigned entry', 'unsigned entries')}; an unsigned entry counts in no figure`
+      : 'no entry here is a scan',
+  );
 
 // ---- Sections.
 
@@ -312,7 +340,7 @@ function modelsBlock(lines: { ledger: string; m: ModelLine }[], showLedger: bool
       value: m.proven_missed,
       detail: [
         `${count(m.proven_missed)} proven missing tests`,
-        `${count(m.mutants_planted)} planted, ${count(m.survivors)} survived`,
+        `${count(m.mutants_planted)} planted, ${count(m.mutants_graded)} graded, ${count(m.survivors)} survived`,
         `share caught: ${m.caught_share === null ? 'nothing graded' : pct(m.caught_share)}`,
         `${count(m.files)} files, ${count(m.rows)} graded rows`,
       ],
@@ -322,6 +350,7 @@ function modelsBlock(lines: { ledger: string; m: ModelLine }[], showLedger: bool
     table: [
       { heading: 'Proven missing tests', cells: lines.map(({ m }) => count(m.proven_missed)) },
       { heading: 'Planted', cells: lines.map(({ m }) => count(m.mutants_planted)) },
+      { heading: 'Graded', cells: lines.map(({ m }) => count(m.mutants_graded)) },
       { heading: 'Share caught', cells: lines.map(({ m }) => (m.caught_share === null ? 'nothing graded' : pct(m.caught_share))) },
       { heading: 'Files', cells: lines.map(({ m }) => count(m.files)) },
       { heading: 'Graded rows', cells: lines.map(({ m }) => count(m.rows)) },
@@ -354,15 +383,23 @@ function entriesTable(d: Derived): HTMLElement {
   return det;
 }
 
-function listedNote(repo: string, listings: Listings, rootPubSource: 'LEDGER_PUBKEY' | 'absent'): HTMLElement {
+// listedNote says whether the repo is listed, which root key the entries
+// were checked against (Derive's fingerprint), and what that check shows: the
+// key is read from the same branch as the entries, so "verified" means intact
+// and signed by that key, not that the key is the project's. A listing does
+// not pin a key yet (phase 5), so the listed note claims no more than that.
+function listedNote(repo: string, listings: Listings, r: Extract<LedgerResult, { kind: 'derived' }>): HTMLElement {
+  let listed: string;
+  let l: Listing | undefined;
+  if (!listings.ok) listed = `Whether ${repo} is listed could not be read (${listings.message}).`;
+  else if ((l = listings.listings.find((x) => x.repo === repo))) listed = `Listed by corral on ${l.listed_at}.`;
+  else listed = `${repo} is not listed.`;
+  const at = r.commit.slice(0, 12);
   const key =
-    rootPubSource === 'LEDGER_PUBKEY'
-      ? 'verified against the key this ledger publishes'
-      : 'this ledger publishes no root key, so no signed entry could be checked';
-  if (!listings.ok) return para('listed-note', `Whether ${repo} is listed could not be read (${listings.message}); ${key}.`);
-  const l = listings.listings.find((x) => x.repo === repo);
-  if (!l) return para('listed-note', `${repo} is not listed; ${key}.`);
-  return para('listed-note', `Listed ${l.listed_at}, signing ${l.signing}; ${key} (LEDGER_PUBKEY on its corral/ledger branch).`);
+    r.rootPubSource === 'LEDGER_PUBKEY' && r.derived.root_keyid !== ''
+      ? `Entries were checked against root key ${r.derived.root_keyid}, read from LEDGER_PUBKEY on the same corral/ledger branch as the entries, at commit ${at}. So “verified” means the entries are intact and signed by that key; it does not show that the key is the project's.${l ? ' A listing does not pin the key yet.' : ''}`
+      : `This ledger publishes no root key (no LEDGER_PUBKEY on its corral/ledger branch), so no signed entry could be checked. Entries were read at commit ${at}.`;
+  return para('listed-note', `${listed} ${key}`);
 }
 
 function problemPanel(d: Derived): HTMLElement {
@@ -393,8 +430,8 @@ export function renderA(root: HTMLElement, result: LedgerResult, listings: Listi
   const h = el('h2', 'a-repo');
   h.appendChild(link(`https://github.com/${result.repo}/tree/corral/ledger`, result.repo));
   head.appendChild(h);
-  head.appendChild(listedNote(result.repo, listings, result.rootPubSource));
-  head.appendChild(para('muted timing', `Read from GitHub and verified in this browser by corral's own verifier in ${(ms / 1000).toFixed(1)} s.`));
+  head.appendChild(listedNote(result.repo, listings, result));
+  head.appendChild(para('muted timing', `Read from GitHub and checked in this browser by corral's own verifier in ${(ms / 1000).toFixed(1)} s.`));
   root.appendChild(head);
 
   if (d.entries.length === 0) {
@@ -402,10 +439,14 @@ export function renderA(root: HTMLElement, result: LedgerResult, listings: Listi
     return;
   }
   if (d.problem) {
-    root.append(blankTiles(), problemPanel(d), section('Entries', entriesTable(d)));
+    root.append(problemTiles(d), problemPanel(d), section('Entries', entriesTable(d)));
     return;
   }
   const s = d.summary;
+  if (s.totals.scans === 0) {
+    root.append(noRunTiles(d), para('muted', 'No verified run on this ledger, so there is nothing to chart or list.'), section('Entries', entriesTable(d)));
+    return;
+  }
   root.append(
     aTiles(d),
     section('Each run', runCharts(s)),
@@ -419,10 +460,10 @@ export function renderA(root: HTMLElement, result: LedgerResult, listings: Listi
 
 type Loaded = { listing: Listing; result: LedgerResult };
 
-// A ledger counts on B when it derived with no problem and has entries: that
-// is the "verified" the page can stand behind.
+// A ledger counts on B when it derived with no problem and served at least
+// one verified run: a ledger of unsigned entries has entries but no figure.
 const intact = (r: LedgerResult): r is Extract<LedgerResult, { kind: 'derived' }> =>
-  r.kind === 'derived' && !r.derived.problem && r.derived.entries.length > 0;
+  r.kind === 'derived' && !r.derived.problem && r.derived.entries.length > 0 && r.derived.summary.totals.scans > 0;
 
 function sortRows(rows: Loaded[], key: SortKey): Loaded[] {
   const good = rows.filter((r) => intact(r.result)) as (Loaded & { result: Extract<LedgerResult, { kind: 'derived' }> })[];
@@ -486,7 +527,11 @@ function board(rows: Loaded[], key: SortKey): HTMLElement {
           ? errorSentence(result)
           : result.derived.entries.length === 0
             ? 'This ledger has no entries yet.'
-            : `${result.derived.problem} Its figures are not shown.`;
+            : result.derived.problem
+              ? `${result.derived.problem} Its figures are not shown.`
+              : result.derived.summary.totals.entries_unsigned > 0
+                ? `No verified run on this ledger (${plural(result.derived.summary.totals.entries_unsigned, 'unsigned entry counts', 'unsigned entries count')} in no figure).`
+                : 'No verified run on this ledger.';
       const td = el('td', 'board-error', msg);
       td.colSpan = cols.length - 1;
       tr.appendChild(td);
@@ -504,8 +549,13 @@ function bTotals(rows: Loaded[]): HTMLElement {
   const tel = good.map((r) => r.derived.summary.totals.telemetry).filter((t) => t !== null);
   const list: Tile[] = [
     { key: 'proven', label: 'Proven missing tests', value: count(sum((s) => s.totals.proven_missed)), caption: `added across the listed ledgers below, ${runs(sum((s) => s.totals.scans))} in all; a file audited more than once counts each run`, hero: true },
-    { key: 'repos', label: 'Ledgers verified', value: count(good.length), caption: `of ${count(rows.length)} listed, each verified in this browser` },
-    { key: 'planted', label: 'Mutants planted and run', value: count(sum((s) => s.totals.mutants_planted)), caption: `${count(sum((s) => s.totals.survivors))} survived the suite` },
+    { key: 'repos', label: 'Ledgers verified', value: count(good.length), caption: `of ${count(rows.length)} listed: intact, signed by the root key each publishes, with a verified run` },
+    {
+      key: 'planted',
+      label: 'Mutants planted',
+      value: count(sum((s) => s.totals.mutants_planted)),
+      caption: `${count(sum((s) => s.totals.mutants_graded))} compiled and ran against the suite; ${count(sum((s) => s.totals.survivors))} survived it`,
+    },
   ];
   if (tel.length === 0) list.push({ key: 'telemetry', label: 'Model calls', value: 'no telemetry recorded' });
   else {
@@ -535,7 +585,7 @@ export function renderB(root: HTMLElement, rows: Loaded[], sort: string) {
     boardBody.push(p);
   } else {
     boardBody.push(
-      para('muted', 'Each figure is that ledger\'s own, verified in this browser. Shares are per ledger and never averaged across them. Select a column heading to sort.'),
+      para('muted', 'Each figure is that ledger\'s own, checked in this browser against the root key the ledger publishes on its own branch (a listing does not pin the key yet). Shares are per ledger and never averaged across them. Select a column heading to sort.'),
       board(rows, sort as SortKey),
     );
   }

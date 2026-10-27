@@ -29,6 +29,7 @@ const SOURCE_FIXTURE = path.join(ROOT, 'internal', 'ledger', 'testdata', 'two-en
 const GOOD = path.join(FIXTURES, 'page-two-entries');
 const TAMPERED = path.join(FIXTURES, 'page-tampered');
 const EMPTY = path.join(FIXTURES, 'page-empty');
+const UNSIGNED = path.join(FIXTURES, 'page-unsigned');
 const PREFIX = path.join(FIXTURES, 'page-real-prefix');
 const PREFIX_LAST = '20260908T154158Z-36e4a824f340-d65faf854374.json.gz';
 const ALLOWED_HOSTS = new Set(['localhost', 'api.github.com', 'raw.githubusercontent.com']);
@@ -54,7 +55,7 @@ function ledgerRef(): string {
 }
 
 test.beforeAll(() => {
-  for (const d of [GOOD, TAMPERED, EMPTY, PREFIX]) fs.rmSync(d, { recursive: true, force: true });
+  for (const d of [GOOD, TAMPERED, EMPTY, UNSIGNED, PREFIX]) fs.rmSync(d, { recursive: true, force: true });
   fs.cpSync(SOURCE_FIXTURE, GOOD, { recursive: true });
   fs.cpSync(SOURCE_FIXTURE, TAMPERED, { recursive: true });
   const victim = fs.readdirSync(path.join(TAMPERED, 'scans')).sort()[0];
@@ -65,6 +66,17 @@ test.beforeAll(() => {
   fs.writeFileSync(file, zlib.gzipSync(Buffer.from(tampered, 'utf8')));
   fs.mkdirSync(path.join(EMPTY, 'scans'), { recursive: true });
   fs.copyFileSync(path.join(SOURCE_FIXTURE, 'rootpub.hex'), path.join(EMPTY, 'rootpub.hex'));
+  // unsigned: two-entries with each signature removed. The signature is
+  // outside the hashed body, so the chain still checks and both entries are
+  // honestly unsigned: a ledger with entries and no verified run.
+  fs.mkdirSync(path.join(UNSIGNED, 'scans'), { recursive: true });
+  fs.copyFileSync(path.join(SOURCE_FIXTURE, 'rootpub.hex'), path.join(UNSIGNED, 'rootpub.hex'));
+  for (const n of fs.readdirSync(path.join(SOURCE_FIXTURE, 'scans'))) {
+    const e = JSON.parse(zlib.gunzipSync(fs.readFileSync(path.join(SOURCE_FIXTURE, 'scans', n))).toString('utf8'));
+    if (typeof e.signature !== 'string') throw new Error(`${n} carries no signature to remove`);
+    delete e.signature;
+    fs.writeFileSync(path.join(UNSIGNED, 'scans', n), zlib.gzipSync(Buffer.from(JSON.stringify(e), 'utf8')));
+  }
 
   const ref = ledgerRef();
   const names = execFileSync('git', ['ls-tree', '--name-only', `${ref}:scans`], { cwd: ROOT, encoding: 'utf8' })
@@ -80,7 +92,9 @@ test.beforeAll(() => {
   fs.writeFileSync(path.join(PREFIX, 'rootpub.hex'), execFileSync('git', ['show', `${ref}:LEDGER_PUBKEY`], { cwd: ROOT }));
 });
 
-type Ledger = { dir: string } | { treesStatus: number };
+type Ledger = { dir: string } | { apiStatus: number };
+// Every fixture ledger's branch head; reads at any other ref get a 404.
+const HEAD = 'feedface00000000000000000000000000000000';
 
 // serve answers GitHub for every repo in `ledgers` from its fixture (or with
 // a bare status for the trees call), and any other repo with a 404 (no
@@ -97,10 +111,19 @@ async function serve(page: Page, ledgers: Record<string, Ledger>, listings?: obj
     );
   }
   await page.route('https://api.github.com/**', async (route) => {
-    const m = /^\/repos\/([^/]+\/[^/]+)\/git\/trees\/corral%2Fledger$/.exec(new URL(route.request().url()).pathname);
-    const l = m ? ledgers[m[1]] : undefined;
-    if (!l) return route.fulfill({ status: 404, headers: API_HEADERS, body: '{"message":"Not Found"}' });
-    if ('treesStatus' in l) return route.fulfill({ status: l.treesStatus, headers: API_HEADERS, body: '{}' });
+    const p = new URL(route.request().url()).pathname;
+    // The branch head first (a status-only ledger answers here), then the tree
+    // at exactly that commit.
+    const ref = /^\/repos\/([^/]+\/[^/]+)\/git\/ref\/heads\/corral\/ledger$/.exec(p);
+    if (ref) {
+      const l = ledgers[ref[1]];
+      if (!l) return route.fulfill({ status: 404, headers: API_HEADERS, body: '{"message":"Not Found"}' });
+      if ('apiStatus' in l) return route.fulfill({ status: l.apiStatus, headers: API_HEADERS, body: '{}' });
+      return route.fulfill({ status: 200, headers: API_HEADERS, body: JSON.stringify({ object: { sha: HEAD, type: 'commit' } }) });
+    }
+    const m = /^\/repos\/([^/]+\/[^/]+)\/git\/trees\/([0-9a-f]{40})$/.exec(p);
+    const l = m && m[2] === HEAD ? ledgers[m[1]] : undefined;
+    if (!l || 'apiStatus' in l) return route.fulfill({ status: 404, headers: API_HEADERS, body: '{"message":"Not Found"}' });
     const tree = [
       { path: 'LEDGER_PUBKEY', type: 'blob' },
       ...fs.readdirSync(path.join(l.dir, 'scans')).map((f) => ({ path: `scans/${f}`, type: 'blob' })),
@@ -108,10 +131,10 @@ async function serve(page: Page, ledgers: Record<string, Ledger>, listings?: obj
     return route.fulfill({ status: 200, headers: API_HEADERS, body: JSON.stringify({ sha: 'x', tree, truncated: false }) });
   });
   await page.route('https://raw.githubusercontent.com/**', async (route) => {
-    const m = /^\/([^/]+\/[^/]+)\/corral\/ledger\/(.+)$/.exec(new URL(route.request().url()).pathname);
-    const l = m ? ledgers[m[1]] : undefined;
-    if (!m || !l || 'treesStatus' in l) return route.fulfill({ status: 404, headers: RAW_HEADERS, body: '404' });
-    const rel = decodeURIComponent(m[2]);
+    const m = /^\/([^/]+\/[^/]+)\/([0-9a-f]{40})\/(.+)$/.exec(new URL(route.request().url()).pathname);
+    const l = m && m[2] === HEAD ? ledgers[m[1]] : undefined;
+    if (!m || !l || 'apiStatus' in l) return route.fulfill({ status: 404, headers: RAW_HEADERS, body: '404' });
+    const rel = decodeURIComponent(m[3]);
     const f = rel === 'LEDGER_PUBKEY' ? path.join(l.dir, 'rootpub.hex') : path.join(l.dir, rel);
     if (!fs.existsSync(f)) return route.fulfill({ status: 404, headers: RAW_HEADERS, body: '404' });
     return route.fulfill({ status: 200, headers: RAW_HEADERS, body: fs.readFileSync(f) });
@@ -157,7 +180,11 @@ test('A on the real prefix draws runs, gaps with their proving tests, telemetry 
   await expect(tile(page, 'planted')).toHaveText('80');
   await expect(tile(page, 'telemetry')).toHaveText('53');
   await expect(tile(page, 'reviews')).toHaveText('24');
-  await expect(page.locator('.listed-note')).toContainText('Listed 2026-10-22');
+  await expect(page.locator('.listed-note')).toContainText('Listed by corral on 2026-10-22.');
+  await expect(page.locator('.listed-note')).toContainText('root key ed25519:a12d11f8f3e5d12c');
+  await expect(page.locator('.listed-note')).toContainText("it does not show that the key is the project's. A listing does not pin the key yet.");
+  // The share's own denominator, from Go.
+  await expect(page.locator('[data-tile="caught"] .tile-caption')).toHaveText('of 80 graded planted bugs; 80 were planted, and any that did not compile are in no share');
   await expect(page.locator('figure.viz')).toHaveCount(2);
   await expect(page.locator('.viz-legend li')).toHaveText(['survived the suite', 'proven missing tests']);
   // Hovering the run chart shows one tooltip with every series.
@@ -186,7 +213,7 @@ test('A on the real prefix draws runs, gaps with their proving tests, telemetry 
   await expect(page.getByText('No file has been graded by two different mutant models at the same commit yet')).toBeVisible();
 });
 
-test('A on the tampered copy names the failing entry and shows no number in any tile', async ({ page }) => {
+test('A on the tampered copy names the failing entry and shows no figure but the entry counts', async ({ page }) => {
   await serve(page, { 'o/r': { dir: TAMPERED } }, { listings: [] });
   await page.goto('/results/?repo=o/r');
   await loaded(page);
@@ -196,7 +223,11 @@ test('A on the tampered copy names the failing entry and shows no number in any 
   await expect(failing.first()).toContainText('.json.gz');
   const tiles = page.locator('.tile');
   expect(await tiles.count()).toBeGreaterThan(0);
-  for (const t of await tiles.allInnerTexts()) expect(t, `a tile shows a number: ${t}`).not.toMatch(/\d/);
+  // The entry counts are Derive's and still true with a problem; every other
+  // tile has no number in it.
+  await expect(tile(page, 'verified')).toHaveText('1/2');
+  await expect(page.locator('[data-tile="verified"] .tile-caption')).toHaveText('1 entry did not verify, so the chain is not intact; no other figure is shown');
+  for (const t of await page.locator('.tile:not([data-tile="verified"])').allInnerTexts()) expect(t, `a tile shows a number: ${t}`).not.toMatch(/\d/);
   await expect(page.locator('figure.viz')).toHaveCount(0);
 });
 
@@ -204,17 +235,24 @@ test('A for an unlisted repo says it is not listed and which key it verified aga
   await serve(page, { 'o/r': { dir: GOOD } }, { listings: [listing('pdbethke/corralai')] });
   await page.goto('/results/?repo=o/r');
   await loaded(page);
-  await expect(page.locator('.listed-note')).toHaveText('o/r is not listed; verified against the key this ledger publishes.');
+  const note = page.locator('.listed-note');
+  await expect(note).toContainText('o/r is not listed.');
+  // The key is named, as Derive fingerprinted it, and the page says what
+  // checking against a key from the same branch does and does not show.
+  await expect(note).toContainText('root key ed25519:f0b74a4534f38901');
+  await expect(note).toContainText(`read from LEDGER_PUBKEY on the same corral/ledger branch as the entries, at commit ${HEAD.slice(0, 12)}`);
+  await expect(note).toContainText("So “verified” means the entries are intact and signed by that key; it does not show that the key is the project's.");
 });
 
 test('A for an unlisted repo with no root key says the ledger publishes none', async ({ page }) => {
   await serve(page, { 'o/r': { dir: GOOD } }, { listings: [] });
-  await page.route('https://raw.githubusercontent.com/o/r/corral/ledger/LEDGER_PUBKEY', (route) =>
+  await page.route(`https://raw.githubusercontent.com/o/r/${HEAD}/LEDGER_PUBKEY`, (route) =>
     route.fulfill({ status: 404, headers: RAW_HEADERS, body: '404' }),
   );
   await page.goto('/results/?repo=o/r');
   await loaded(page);
-  await expect(page.locator('.listed-note')).toContainText('o/r is not listed; this ledger publishes no root key');
+  await expect(page.locator('.listed-note')).toContainText('o/r is not listed.');
+  await expect(page.locator('.listed-note')).toContainText('This ledger publishes no root key (no LEDGER_PUBKEY on its corral/ledger branch), so no signed entry could be checked.');
 });
 
 test('A on a ledger with no entries says so, with no tiles and no 0/0', async ({ page }) => {
@@ -229,7 +267,7 @@ test('A on a ledger with no entries says so, with no tiles and no 0/0', async ({
 test('every load error has its own sentence and renders no number', async ({ page }) => {
   const cases: [string, Record<string, Ledger>, RegExp][] = [
     ['o/none', {}, /has no corral\/ledger branch/],
-    ['o/down', { 'o/down': { treesStatus: 500 } }, /answered HTTP 500/],
+    ['o/down', { 'o/down': { apiStatus: 500 } }, /answered HTTP 500/],
     ['not a repo', {}, /is not a repository name/],
   ];
   for (const [repo, ledgers, sentence] of cases) {
@@ -243,7 +281,7 @@ test('every load error has its own sentence and renders no number', async ({ pag
 });
 
 test('B with two listings, one answering 500, shows the good ledger and the other its own error', async ({ page }) => {
-  const offsite = await serve(page, { 'o/r': { dir: GOOD }, 'o/down': { treesStatus: 500 } }, { listings: [listing('o/r'), listing('o/down')] });
+  const offsite = await serve(page, { 'o/r': { dir: GOOD }, 'o/down': { apiStatus: 500 } }, { listings: [listing('o/r'), listing('o/down')] });
   await page.goto('/results/');
   await loaded(page);
   const rows = page.locator('table.board tbody tr');
@@ -363,4 +401,47 @@ test('sourceURL refuses paths and repo names that would leave the audited file',
   }
   expect(sourceURL('pallets/flask', 'main', 'x.py')).toBeNull();
   expect(shortRepo('https://github.com/pallets/flask.git')).toBe('pallets/flask');
+});
+
+test('A on a ledger whose entries are all unsigned shows no verified run, never zeros', async ({ page }) => {
+  await serve(page, { 'o/r': { dir: UNSIGNED } }, { listings: [] });
+  await page.goto('/results/?repo=o/r');
+  await loaded(page);
+  await expect(tile(page, 'verified')).toHaveText('0/2');
+  await expect(page.locator('[data-tile="verified"] .tile-caption')).toHaveText('2 unsigned entries; an unsigned entry counts in no figure');
+  for (const key of ['proven', 'caught', 'planted']) await expect(tile(page, key)).toHaveText('no verified run');
+  for (const t of await page.locator('.tile:not([data-tile="verified"])').allInnerTexts()) expect(t, `a tile shows a number: ${t}`).not.toMatch(/\d/);
+  await expect(page.getByText('No verified run on this ledger, so there is nothing to chart or list.')).toBeVisible();
+  await expect(page.locator('figure.viz')).toHaveCount(0);
+});
+
+test('B gives a ledger with no verified run its own sentence, and does not count it as verified', async ({ page }) => {
+  await serve(page, { 'o/r': { dir: GOOD }, 'o/u': { dir: UNSIGNED } }, { listings: [listing('o/r'), listing('o/u')] });
+  await page.goto('/results/');
+  await loaded(page);
+  const row = page.locator('table.board tr[data-repo="o/u"]');
+  await expect(row).toContainText('No verified run on this ledger (2 unsigned entries count in no figure).');
+  await expect(tile(page, 'repos')).toHaveText('1');
+  // What the tile counts: planted, of which graded ran against the suite.
+  await expect(page.locator('[data-tile="planted"] .tile-label')).toHaveText('Mutants planted');
+});
+
+test('a LEDGER_PUBKEY that is not a key has its own sentence naming the file', async ({ page }) => {
+  await serve(page, { 'o/r': { dir: GOOD } }, { listings: [] });
+  await page.route(`https://raw.githubusercontent.com/o/r/${HEAD}/LEDGER_PUBKEY`, (route) =>
+    route.fulfill({ status: 200, headers: RAW_HEADERS, body: '0xdeadbeef' }),
+  );
+  await page.goto('/results/?repo=o/r');
+  await loaded(page);
+  await expect(page.locator('.load-error')).toHaveText(
+    `The root key this ledger publishes, https://raw.githubusercontent.com/o/r/${HEAD}/LEDGER_PUBKEY, could not be used: it is not one ed25519 public key written as 64 hex characters. No entry was checked.`,
+  );
+  await expect(page.locator('.tile')).toHaveCount(0);
+});
+
+test('the page title claims checking, not more', async ({ page }) => {
+  await serve(page, {}, { listings: [] });
+  await page.goto('/results/');
+  await expect(page).toHaveTitle('Results — checked in your browser against each ledger’s own key — Corralai');
+  await expect(page.locator('h1')).toHaveText('What corral measured, checked in your browser');
 });

@@ -11,9 +11,9 @@ import '../../styles/global.css';
 import Header from '../../components/Header.astro';
 import SiteFooter from '../../components/SiteFooter.astro';
 
-const title = 'Results — every number verified in your browser — Corralai';
+const title = 'Results — checked in your browser against each ledger’s own key — Corralai';
 const description =
-  "corral's audit results, read live from each repository's signed ledger and verified in your browser by corral's own verifier: proven missing tests, the share of planted bugs each suite caught, and every entry's signature.";
+  "corral's audit results, read live from each repository's signed ledger and checked in your browser by corral's own verifier against the key the ledger publishes: proven missing tests, the share of planted bugs each suite caught, and every entry's signature.";
 ---
 <html lang="en">
 <head>
@@ -31,14 +31,15 @@ const description =
   <Header active="results" />
   <main class="section results">
     <p class="eyebrow">Results</p>
-    <h1>What corral measured, verified in your browser</h1>
+    <h1>What corral measured, checked in your browser</h1>
     <p class="lede">
       corral plants bugs in a file, runs the project's own tests against each one, and writes a test for
       every bug the suite let through. A <strong>proven missing test</strong> is one of those tests that corral then
       ran: it passes on the real code and catches the planted bug. Each run is recorded as a signed, hash-linked
       entry on the repository's <code>corral/ledger</code> branch. This page reads those entries straight
-      from GitHub and checks every hash and signature with corral's own verifier, compiled to WebAssembly,
-      before it draws a single figure.
+      from GitHub and, before it draws a single figure, checks every hash, link and signature with corral's
+      own verifier, compiled to WebAssembly, against the root key the branch itself publishes. That shows the
+      record is intact and signed by that key; which key it is, is named on each report.
     </p>
 
     <form class="lookup" action="/results/" method="get" role="search">

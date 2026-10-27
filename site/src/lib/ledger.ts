@@ -41,6 +41,7 @@ export type Totals = {
   scans: number;
   files_audited: number;
   mutants_planted: number;
+  mutants_graded: number; // caught_share's denominator: compile-gate rejects excluded
   survivors: number;
   proven_missed: number;
   could_not_grade: number;
@@ -61,6 +62,7 @@ export type RunPoint = {
   finished_at: string | null; // RFC 3339
   files_audited: number;
   mutants_planted: number;
+  mutants_graded: number;
   survivors: number;
   proven_missed: number;
   caught_share: number | null;
@@ -83,6 +85,7 @@ export type ModelLine = {
   files: number; // distinct (repo, commit, path)
   rows: number; // graded rows the figures sum; more than files when a file was graded in several runs
   mutants_planted: number;
+  mutants_graded: number;
   survivors: number;
   proven_missed: number;
   caught_share: number | null;
@@ -111,6 +114,9 @@ export type OpaqueRow = Readonly<Record<string, unknown>>;
 export type Derived = {
   format: typeof DERIVE_FORMAT;
   problem?: string;
+  // The fingerprint of the root key signatures were checked against, in the
+  // form an entry's keyid takes; "" when no key was given.
+  root_keyid: string;
   entries: EntryStatus[];
   scans: OpaqueRow[];
   files: OpaqueRow[];
@@ -124,7 +130,9 @@ export type Derived = {
 // ---- The loader.
 
 export type LedgerResult =
-  | { kind: 'derived'; repo: string; derived: Derived; rootPubSource: 'LEDGER_PUBKEY' | 'absent' }
+  // commit is the corral/ledger head the whole load read: the listing, the
+  // key and every entry come from that one commit.
+  | { kind: 'derived'; repo: string; commit: string; derived: Derived; rootPubSource: 'LEDGER_PUBKEY' | 'absent' }
   | { kind: 'no-ledger'; repo: string }
   | { kind: 'rate-limited'; repo: string; resetAt: Date }
   | { kind: 'too-large'; repo: string }
@@ -136,6 +144,10 @@ export type LedgerResult =
   // (two entries with one name), or it returned a format this page does not
   // know. Not a verdict about the ledger.
   | { kind: 'derive-failed'; repo: string; message: string }
+  // The branch's LEDGER_PUBKEY is present but is not one ed25519 public key
+  // as 64 hex characters (empty, a PEM, a 0x prefix). It is about the
+  // ledger, so it is not derive-failed.
+  | { kind: 'bad-root-key'; repo: string; url: string; message: string }
   | { kind: 'bad-repo'; input: string };
 
 const BRANCH = 'corral/ledger';
@@ -151,10 +163,15 @@ export function parseRepo(input: string): string | null {
   return name === '.' || name === '..' ? null : input;
 }
 
-const treesURL = (repo: string) =>
-  `https://api.github.com/repos/${repo}/git/trees/${encodeURIComponent(BRANCH)}?recursive=1`;
-const rawURL = (repo: string, p: string) =>
-  `https://raw.githubusercontent.com/${repo}/${BRANCH}/${p.split('/').map(encodeURIComponent).join('/')}`;
+// The branch is resolved to its head commit once, and everything after reads
+// that commit: raw.githubusercontent.com caches by branch name for minutes, so
+// reading by name could list an entry from one commit and 404 on it at another.
+const refURL = (repo: string) => `https://api.github.com/repos/${repo}/git/ref/heads/${BRANCH}`;
+const treesURL = (repo: string, sha: string) => `https://api.github.com/repos/${repo}/git/trees/${sha}?recursive=1`;
+const rawURL = (repo: string, sha: string, p: string) =>
+  `https://raw.githubusercontent.com/${repo}/${sha}/${p.split('/').map(encodeURIComponent).join('/')}`;
+const SHA_RE = /^[0-9a-f]{40}$/;
+const ROOT_KEY_RE = /^[0-9a-fA-F]{64}$/;
 
 // isEntryPath keeps what auditpush.ReadLedgerDir reads: files directly under
 // scans/ ending .json or .json.gz, no dotfiles, no subdirectories.
@@ -231,26 +248,50 @@ function deriver(fetchFn: typeof fetch): Promise<DeriveFn> {
 
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
+type APIGot = { ok: true; body: unknown } | { ok: false; result: LedgerResult };
+
+// apiJSON reads one api.github.com response as JSON, turning each way it can
+// fail into its own result: the network, the rate limit (with its reset time),
+// a 404 (no-ledger only where notFoundIsNoLedger: a missing branch, not a
+// missing tree of a commit just resolved), any other status, or a body that
+// is not JSON.
+async function apiJSON(fetchFn: typeof fetch, repo: string, url: string, init: RequestInit, notFoundIsNoLedger: boolean): Promise<APIGot> {
+  const g = await get(fetchFn, repo, url, init);
+  if (!g.ok) return { ok: false, result: g.failure };
+  if (g.res.status === 404 && notFoundIsNoLedger) return { ok: false, result: { kind: 'no-ledger', repo } };
+  const resetAt = rateLimitReset(g.res);
+  if (resetAt !== null) return { ok: false, result: { kind: 'rate-limited', repo, resetAt } };
+  if (g.res.status !== 200) return { ok: false, result: { kind: 'fetch-failed', repo, url, status: g.res.status } };
+  try {
+    return { ok: true, body: await g.res.json() };
+  } catch (e) {
+    return { ok: false, result: { kind: 'bad-response', repo, url, message: `not JSON: ${message(e)}` } };
+  }
+}
+
 // loadLedger reads repo's corral/ledger branch from GitHub and derives it.
 // fetchFn is an injection seam for tests, not a default: the page passes
 // window.fetch.
 export async function loadLedger(repo: string, fetchFn: typeof fetch): Promise<LedgerResult> {
   if (parseRepo(repo) === null) return { kind: 'bad-repo', input: repo };
 
-  // 1. The file list.
-  const tURL = treesURL(repo);
-  const t = await get(fetchFn, repo, tURL, { headers: { Accept: 'application/vnd.github+json' } });
-  if (!t.ok) return t.failure;
-  if (t.res.status === 404) return { kind: 'no-ledger', repo };
-  const resetAt = rateLimitReset(t.res);
-  if (resetAt !== null) return { kind: 'rate-limited', repo, resetAt };
-  if (t.res.status !== 200) return { kind: 'fetch-failed', repo, url: tURL, status: t.res.status };
-  let listing: { tree?: unknown; truncated?: unknown };
-  try {
-    listing = await t.res.json();
-  } catch (e) {
-    return { kind: 'bad-response', repo, url: tURL, message: `not JSON: ${message(e)}` };
+  const api = { headers: { Accept: 'application/vnd.github+json' } };
+
+  // 1. The branch head. A missing branch is no-ledger; everything after reads
+  // this one commit.
+  const rURL = refURL(repo);
+  const ref = await apiJSON(fetchFn, repo, rURL, api, true);
+  if (!ref.ok) return ref.result;
+  const sha = (ref.body as { object?: { sha?: unknown } } | null)?.object?.sha;
+  if (typeof sha !== 'string' || !SHA_RE.test(sha)) {
+    return { kind: 'bad-response', repo, url: rURL, message: 'no commit sha in the branch ref' };
   }
+
+  // 2. The file list at that commit.
+  const tURL = treesURL(repo, sha);
+  const t = await apiJSON(fetchFn, repo, tURL, api, false);
+  if (!t.ok) return t.result;
+  const listing = t.body as { tree?: unknown; truncated?: unknown } | null;
   if (listing === null || typeof listing !== 'object' || !Array.isArray(listing.tree)) {
     return { kind: 'bad-response', repo, url: tURL, message: 'no tree array in the listing' };
   }
@@ -260,9 +301,10 @@ export async function loadLedger(repo: string, fetchFn: typeof fetch): Promise<L
     .map((n) => n.path as string)
     .sort();
 
-  // 2. The root key. Absent is a state the result names, not an error: Derive
-  // then reports each signed entry as unchecked.
-  const kURL = rawURL(repo, 'LEDGER_PUBKEY');
+  // 3. The root key. Absent is a state the result names, not an error: Derive
+  // then reports each signed entry as unchecked. Present but not a key is
+  // bad-root-key, never a silent "no key".
+  const kURL = rawURL(repo, sha, 'LEDGER_PUBKEY');
   const k = await get(fetchFn, repo, kURL);
   if (!k.ok) return k.failure;
   let rootPub: string;
@@ -278,12 +320,18 @@ export async function loadLedger(repo: string, fetchFn: typeof fetch): Promise<L
     } catch {
       return { kind: 'fetch-failed', repo, url: kURL, status: 'network' };
     }
+    if (!ROOT_KEY_RE.test(rootPub)) {
+      return {
+        kind: 'bad-root-key', repo, url: kURL,
+        message: rootPub === '' ? 'the file is empty' : 'it is not one ed25519 public key written as 64 hex characters',
+      };
+    }
     rootPubSource = 'LEDGER_PUBKEY';
   } else {
     return { kind: 'fetch-failed', repo, url: kURL, status: k.res.status };
   }
 
-  // 3. The entries, at most MAX_IN_FLIGHT at a time. The first failure stops
+  // 4. The entries, at most MAX_IN_FLIGHT at a time. The first failure stops
   // new reads and fails the load: there is no partial derive.
   const entries: { name: string; bytes: Uint8Array }[] = new Array(paths.length);
   let failure: Failure | null = null;
@@ -291,7 +339,7 @@ export async function loadLedger(repo: string, fetchFn: typeof fetch): Promise<L
   const worker = async () => {
     while (failure === null && next < paths.length) {
       const i = next++;
-      const url = rawURL(repo, paths[i]);
+      const url = rawURL(repo, sha, paths[i]);
       const r = await get(fetchFn, repo, url);
       if (!r.ok) {
         failure ??= r.failure;
@@ -312,7 +360,7 @@ export async function loadLedger(repo: string, fetchFn: typeof fetch): Promise<L
   await Promise.all(Array.from({ length: Math.min(MAX_IN_FLIGHT, paths.length) }, worker));
   if (failure !== null) return failure;
 
-  // 4. Derive.
+  // 5. Derive.
   let derived: Derived;
   try {
     const derive = await deriver(fetchFn);
@@ -323,5 +371,5 @@ export async function loadLedger(repo: string, fetchFn: typeof fetch): Promise<L
   if (derived?.format !== DERIVE_FORMAT) {
     return { kind: 'derive-failed', repo, message: `Derive returned format ${JSON.stringify(derived?.format)}, this page reads ${DERIVE_FORMAT}` };
   }
-  return { kind: 'derived', repo, derived, rootPubSource };
+  return { kind: 'derived', repo, commit: sha, derived, rootPubSource };
 }

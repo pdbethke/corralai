@@ -21,6 +21,8 @@ const FIXTURES = path.join(SITE, 'tests', 'fixtures', 'ledgers');
 const GOOD = path.join(FIXTURES, 'two-entries');
 const TAMPERED = path.join(FIXTURES, 'tampered');
 const REPO = 'o/r';
+// The branch head the fixture's ref answers with: every later read must be at it.
+const SHA = '0123456789abcdef0123456789abcdef01234567';
 const HARNESS = 'http://localhost:4321/__results-loader-harness';
 const ALLOWED_HOSTS = new Set(['localhost', 'api.github.com', 'raw.githubusercontent.com']);
 // What api.github.com exposes to a cross-origin reader, so the fixture's
@@ -49,10 +51,13 @@ test.beforeAll(() => {
 });
 
 const scanFiles = (dir: string) => fs.readdirSync(path.join(dir, 'scans')).sort();
-const rawURL = (p: string) => `https://raw.githubusercontent.com/${REPO}/corral/ledger/${p}`;
+const rawURL = (p: string) => `https://raw.githubusercontent.com/${REPO}/${SHA}/${p}`;
+const REF_URL = `https://api.github.com/repos/${REPO}/git/ref/heads/corral/ledger`;
+const TREES_URL = `https://api.github.com/repos/${REPO}/git/trees/${SHA}?recursive=1`;
 
 type Serve = {
   dir: string;
+  ref?: (route: Route) => Promise<void> | void;
   trees?: (route: Route) => Promise<void> | void;
   raw?: (route: Route, p: string) => Promise<void> | void;
   extraScans?: string[];
@@ -64,9 +69,13 @@ type Serve = {
 async function serveLedger(page: Page, s: Serve) {
   const scans = [...scanFiles(s.dir), ...(s.extraScans ?? [])];
   await page.route('https://api.github.com/**', async (route) => {
-    if (s.trees) return s.trees(route);
     const url = new URL(route.request().url());
-    expect(url.pathname).toBe(`/repos/${REPO}/git/trees/corral%2Fledger`);
+    if (url.pathname === `/repos/${REPO}/git/ref/heads/corral/ledger`) {
+      if (s.ref) return s.ref(route);
+      return route.fulfill({ status: 200, headers: API_HEADERS, body: JSON.stringify({ ref: 'refs/heads/corral/ledger', object: { sha: SHA, type: 'commit' } }) });
+    }
+    if (s.trees) return s.trees(route);
+    expect(url.pathname).toBe(`/repos/${REPO}/git/trees/${SHA}`);
     expect(url.searchParams.get('recursive')).toBe('1');
     const tree = [
       { path: 'README.md', type: 'blob' },
@@ -80,7 +89,7 @@ async function serveLedger(page: Page, s: Serve) {
     await route.fulfill({ status: 200, headers: API_HEADERS, body: JSON.stringify({ sha: 'x', tree, truncated: false }) });
   });
   await page.route('https://raw.githubusercontent.com/**', async (route) => {
-    const prefix = `/${REPO}/corral/ledger/`;
+    const prefix = `/${REPO}/${SHA}/`;
     const p = new URL(route.request().url()).pathname;
     expect(p.startsWith(prefix), p).toBe(true);
     const rel = decodeURIComponent(p.slice(prefix.length));
@@ -120,7 +129,11 @@ test('the two-entries fixture derives, both entries verified, two scans in the s
   const r = await load(page);
   expect(r.kind).toBe('derived');
   expect(r.repo).toBe(REPO);
+  expect(r.commit).toBe(SHA);
   expect(r.rootPubSource).toBe('LEDGER_PUBKEY');
+  // Derive names the key it checked against, as the entries' keyid does.
+  expect(r.derived.root_keyid).toBe('ed25519:f0b74a4534f38901');
+  expect(r.derived.entries[0].keyid).toBe(r.derived.root_keyid);
   expect(r.derived.format).toBe('corral-derive-1');
   expect(r.derived.problem).toBeUndefined();
   expect(r.derived.summary.totals.scans).toBe(2);
@@ -138,7 +151,7 @@ test('a one-byte-tampered entry derives with a problem and every total empty', a
   expect(r.derived.entries.some((e: any) => e.status === 'failed')).toBe(true);
   const { totals, runs, gaps, models } = r.derived.summary;
   expect(totals).toEqual({
-    scans: 0, files_audited: 0, mutants_planted: 0, survivors: 0, proven_missed: 0, could_not_grade: 0,
+    scans: 0, files_audited: 0, mutants_planted: 0, mutants_graded: 0, survivors: 0, proven_missed: 0, could_not_grade: 0,
     caught_share: null, telemetry: null, last_run: null,
     // The entry counts describe the entry list, which a problem does not empty.
     entries_verified: 1, entries_unsigned: 0, entries_failed: 1,
@@ -169,19 +182,55 @@ test('no LEDGER_PUBKEY on the branch: rootPub is absent and signed entries fail,
 test('a repository with no corral/ledger branch is no-ledger, not zeros', async ({ page }) => {
   await serveLedger(page, {
     dir: GOOD,
-    trees: (route) => route.fulfill({ status: 404, headers: API_HEADERS, body: '{"message":"Not Found"}' }),
+    ref: (route) => route.fulfill({ status: 404, headers: API_HEADERS, body: '{"message":"Not Found"}' }),
   });
   await harness(page);
   expect(await load(page)).toEqual({ kind: 'no-ledger', repo: REPO });
 });
 
+// The tree of a commit the ref just named is not "no branch": it is that
+// read failing.
+test('a 404 on the tree of the resolved commit is fetch-failed, not no-ledger', async ({ page }) => {
+  await serveLedger(page, {
+    dir: GOOD,
+    trees: (route) => route.fulfill({ status: 404, headers: API_HEADERS, body: '{"message":"Not Found"}' }),
+  });
+  await harness(page);
+  expect(await load(page)).toEqual({ kind: 'fetch-failed', repo: REPO, url: TREES_URL, status: 404 });
+});
+
+test('a branch ref with no commit sha is bad-response naming the ref URL', async ({ page }) => {
+  await serveLedger(page, {
+    dir: GOOD,
+    ref: (route) => route.fulfill({ status: 200, headers: API_HEADERS, body: JSON.stringify({ object: { sha: 'main' } }) }),
+  });
+  await harness(page);
+  expect(await load(page)).toEqual({ kind: 'bad-response', repo: REPO, url: REF_URL, message: 'no commit sha in the branch ref' });
+});
+
+// The key file is read at the same commit and must be one key: an empty file
+// or another encoding is named, never read as "no key".
+for (const [body, why] of [['', 'the file is empty'], ['\n', 'the file is empty'], [`0x${'ab'.repeat(32)}`, 'it is not one ed25519 public key written as 64 hex characters'], ['-----BEGIN PUBLIC KEY-----', 'it is not one ed25519 public key written as 64 hex characters']]) {
+  test(`a LEDGER_PUBKEY of ${JSON.stringify(body)} is bad-root-key naming its URL`, async ({ page }) => {
+    await serveLedger(page, {
+      dir: GOOD,
+      raw: (route, p) =>
+        p === 'LEDGER_PUBKEY'
+          ? route.fulfill({ status: 200, headers: RAW_HEADERS, body })
+          : route.fulfill({ status: 200, headers: RAW_HEADERS, body: fs.readFileSync(path.join(GOOD, p)) }),
+    });
+    await harness(page);
+    expect(await load(page)).toEqual({ kind: 'bad-root-key', repo: REPO, url: rawURL('LEDGER_PUBKEY'), message: why });
+  });
+}
+
 // Review Focus 2.
-for (const status of [403, 429]) {
-  test(`GitHub's rate limit (${status}, remaining 0) is rate-limited with the reset time`, async ({ page }) => {
+for (const [status, at] of [[403, 'ref'], [429, 'ref'], [403, 'trees'], [429, 'trees']] as const) {
+  test(`GitHub's rate limit (${status} on the ${at} call, remaining 0) is rate-limited with the reset time`, async ({ page }) => {
     const reset = 1793000000;
     await serveLedger(page, {
       dir: GOOD,
-      trees: (route) =>
+      [at]: (route: Route) =>
         route.fulfill({
           status,
           headers: { ...API_HEADERS, 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': String(reset) },
@@ -206,7 +255,7 @@ test('a 403 that is not the rate limit is fetch-failed, naming the URL', async (
   await harness(page);
   expect(await load(page)).toEqual({
     kind: 'fetch-failed', repo: REPO, status: 403,
-    url: `https://api.github.com/repos/${REPO}/git/trees/corral%2Fledger?recursive=1`,
+    url: TREES_URL,
   });
 });
 

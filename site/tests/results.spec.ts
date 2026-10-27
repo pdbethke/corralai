@@ -172,7 +172,11 @@ test('A on the real prefix draws runs, gaps with their proving tests, telemetry 
   await expect(page.locator('table.gaps .mutant-id')).toHaveCount(20);
   const perRow = await page.locator('table.gaps tbody td.num').allInnerTexts();
   expect(perRow.reduce((a, x) => a + Number(x), 0)).toBe(20);
-  await expect(page.getByRole('heading', { name: 'Proven missing tests (20)' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Proven missing tests (20, across 2 runs)' })).toBeVisible();
+  // The headline sums runs, and says so: a file audited twice counts twice.
+  await expect(page.locator('[data-tile="proven"] .tile-caption')).toHaveText(
+    'planted bugs the suite let through across 2 runs, each then caught by a test corral wrote and ran; a file audited more than once counts each run',
+  );
   const first = page.locator('table.gaps tbody tr').first().locator('details');
   await first.locator('summary').click();
   await expect(first.locator('pre')).toContainText('def test');
@@ -257,6 +261,9 @@ test('B sorts by ?sort=proven, and an unknown sort is an error, not a quiet defa
   expect(await page.locator('table.board tbody tr').evaluateAll((rs) => rs.map((r) => r.getAttribute('data-repo')))).toEqual(['pdbethke/corralai', 'o/r']);
   await expect(page.locator('table.board th[aria-sort="descending"]')).toContainText('Proven missing tests');
   await expect(tile(page, 'proven')).toHaveText('20');
+  await expect(page.locator('[data-tile="proven"] .tile-caption')).toHaveText(
+    'added across the listed ledgers below, 4 runs in all; a file audited more than once counts each run',
+  );
   await expect(tile(page, 'repos')).toHaveText('2');
 
   await page.goto('/results/?sort=name');
@@ -313,3 +320,24 @@ test('the nav carries Results beside Ledger, and Results is current on /results/
   await expect(nav.getByRole('link', { name: 'Results', exact: true })).toHaveAttribute('aria-current', 'page');
   await expect(nav.getByRole('link', { name: 'Ledger', exact: true })).toBeVisible();
 });
+
+// Adding "Results" must not grow the header on a phone: at 375px the nav
+// stays the height the seven-link nav had. The baseline is measured in the
+// same browser (so the same fonts): the Results link removed and the pills
+// put back to their wider pre-change spacing (gap 4px, padding 6px 10px).
+for (const url of ['/', '/results/']) {
+  test(`at 375px the header nav on ${url} is no taller than it was before Results was added`, async ({ page }) => {
+    await page.setViewportSize({ width: 375, height: 800 });
+    await serve(page, {}, { listings: [] });
+    await page.goto(url);
+    const nav = page.locator('header.site-header nav.sh-nav');
+    const now = (await nav.boundingBox())!.height;
+    const before = await nav.evaluate((n) => {
+      (n as HTMLElement).style.gap = '4px';
+      for (const a of n.querySelectorAll('a')) (a as HTMLElement).style.padding = '6px 10px';
+      [...n.querySelectorAll('a')].find((a) => a.textContent === 'Results')!.remove();
+      return n.getBoundingClientRect().height;
+    });
+    expect(now, `nav is ${now}px, was ${before}px`).toBe(before);
+  });
+}

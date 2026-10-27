@@ -55,6 +55,8 @@ function para(cls: string, ...parts: (string | Node)[]): HTMLParagraphElement {
 // ---- Formatting (presentation only).
 
 const count = (n: number) => n.toLocaleString('en-US');
+// Totals.scans is the run count: one ledger scan entry is one run.
+const runs = (n: number) => `${count(n)} run${n === 1 ? '' : 's'}`;
 export const pct = (v: number) => `${(Math.round(v * 1000) / 10).toFixed(1)}%`;
 
 function compact(n: number): string {
@@ -149,7 +151,7 @@ function aTiles(d: Derived): HTMLElement {
   const t = s.totals;
   const { v, u, n } = verifiedCounts(d);
   return tiles([
-    { key: 'proven', label: 'Proven missing tests', value: count(t.proven_missed), caption: 'planted bugs the suite let through, each then caught by a test corral wrote and ran', hero: true },
+    { key: 'proven', label: 'Proven missing tests', value: count(t.proven_missed), caption: `planted bugs the suite let through across ${runs(t.scans)}, each then caught by a test corral wrote and ran; a file audited more than once counts each run`, hero: true },
     {
       key: 'caught',
       label: 'Share of graded planted bugs the suite caught',
@@ -413,7 +415,7 @@ export function renderA(root: HTMLElement, result: LedgerResult, listings: Listi
   root.append(
     aTiles(d),
     section('Each run', runCharts(s)),
-    section(`Proven missing tests (${count(s.gaps.length)})`, gapsTable(s)),
+    section(`Proven missing tests (${count(s.gaps.length)}, across ${runs(s.totals.scans)})`, gapsTable(s)),
     section('Models compared', modelsBlock(s.models.map((m) => ({ ledger: result.repo, m })), false)),
     section('Entries', entriesTable(d)),
   );
@@ -507,7 +509,7 @@ function bTotals(rows: Loaded[]): HTMLElement {
   const sum = (f: (s: Summary) => number) => good.reduce((a, r) => a + f(r.derived.summary), 0);
   const tel = good.map((r) => r.derived.summary.totals.telemetry).filter((t) => t !== null);
   const list: Tile[] = [
-    { key: 'proven', label: 'Proven missing tests', value: count(sum((s) => s.totals.proven_missed)), caption: 'added across the listed ledgers below', hero: true },
+    { key: 'proven', label: 'Proven missing tests', value: count(sum((s) => s.totals.proven_missed)), caption: `added across the listed ledgers below, ${runs(sum((s) => s.totals.scans))} in all; a file audited more than once counts each run`, hero: true },
     { key: 'repos', label: 'Ledgers verified', value: count(good.length), caption: `of ${count(rows.length)} listed, each verified in this browser` },
     { key: 'planted', label: 'Mutants planted and run', value: count(sum((s) => s.totals.mutants_planted)), caption: `${count(sum((s) => s.totals.survivors))} survived the suite` },
   ];

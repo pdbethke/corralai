@@ -4,6 +4,7 @@ package reposcan
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/pdbethke/corralai/internal/lang"
@@ -178,4 +179,47 @@ func legacyIndexFromUnits(ev UnitEvidence, uf UnitFiles) (EvidenceIndex, bool) {
 		}
 	}
 	return EvidenceIndex{files: files, unitKind: true}, true
+}
+
+// A file of the unit pass's language is answered by the engine from the
+// pass's map: the units that executed it, plus every unit that reported
+// nothing. A zero-executed edge (alpha measured src/y.ts and ran none of it)
+// selects nothing, so y is graded by the failed unit alone.
+func TestUnitSelectionForSelectsThroughTheEngine(t *testing.T) {
+	p, _ := lang.Detect("a.ts")
+	argv := []string{"vitest", "run"}
+	m := MapFromUnits(unitMapEvidence(), unitMapFiles(p), lang.Cmd(argv), p)
+
+	sel := UnitSelectionFor(m, p, "", "src/x.ts", "test/alpha.test.ts", argv)
+	want := []string{"test/alpha.test.ts", "test/beta.test.ts", "test/broken.test.ts"}
+	if sel.Fallback != "" || sel.Method != testmap.MethodUnitEvidence || !reflect.DeepEqual(sel.Tests, want) || sel.Of != 3 {
+		t.Fatalf("x: %+v, want the two units that ran it and the one that reported nothing", sel)
+	}
+	if n := testmap.UnreportedIn(m, sel); n != 1 {
+		t.Errorf("x: %d unreported unit(s) in the selection, want 1", n)
+	}
+	if y := UnitSelectionFor(m, p, "", "src/y.ts", "test/alpha.test.ts", argv); !reflect.DeepEqual(y.Tests, []string{"test/broken.test.ts"}) {
+		t.Errorf("y: %+v, want the unreported unit alone", y)
+	}
+}
+
+// No defaults: a unit map that names no runner row (a language with no row
+// for the command) is refused by name, and the file grades whole-suite with
+// that reason — never with a row nobody chose.
+func TestUnitSelectionForRefusesAMapNamingNoRunner(t *testing.T) {
+	p, _ := lang.Detect("a.ts")
+	argv := []string{"vitest", "run"}
+	m := MapFromUnits(unitMapEvidence(), unitMapFiles(p), lang.Cmd(argv), p)
+	m.Runner = ""
+	sel := UnitSelectionFor(m, p, "", "src/x.ts", "test/alpha.test.ts", argv)
+	if sel.Method != "" || sel.Cmd != nil || !strings.Contains(sel.Fallback, "names no runner row") {
+		t.Errorf("selection = %+v, want a whole-suite fallback naming the missing runner row", sel)
+	}
+
+	// The map answers for its own language only.
+	js, _ := lang.ByName("javascript")
+	m.Runner = "vitest"
+	if sel := UnitSelectionFor(m, js, "", "src/x.ts", "", argv); sel.Method != "" || !strings.Contains(sel.Fallback, "typescript") {
+		t.Errorf("a javascript file read from a typescript map: %+v", sel)
+	}
 }

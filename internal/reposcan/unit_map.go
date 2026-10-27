@@ -3,6 +3,7 @@
 package reposcan
 
 import (
+	"fmt"
 	"sort"
 
 	"github.com/pdbethke/corralai/internal/lang"
@@ -76,4 +77,30 @@ func unitMap(ev UnitEvidence, uf UnitFiles) testmap.Map {
 		return m.Edges[i].Test < m.Edges[j].Test
 	})
 	return m
+}
+
+// UnitSelectionFor answers one file of the unit pass's language from the
+// pass's map, through the selection engine (testmap.Select): the units
+// whose own run executed codePath, plus every unit that reported no
+// evidence. It is SelectionEvidence.For's counterpart for a language whose
+// evidence is per unit, and like it every non-answer is a Selection with a
+// Fallback saying why the file grades whole-suite: a map of another
+// language, a map naming no runner row (refused by name, never re-detected
+// from the command — no defaults), or anything the engine refuses.
+func UnitSelectionFor(m testmap.Map, p lang.Plugin, repoRoot, codePath, testPath string, testCmd []string) lang.Selection {
+	if m.Lang != p.Name() {
+		return lang.Selection{Fallback: fmt.Sprintf("the unit pass ran for %s, so it has no evidence about %s file %s", m.Lang, p.Name(), codePath)}
+	}
+	if m.Runner == "" {
+		return lang.Selection{Fallback: fmt.Sprintf("the %s unit evidence names no runner row for %v, so no unit can be selected to run", m.Lang, m.Command)}
+	}
+	r, err := lang.RunnerByID(p, m.Runner)
+	if err != nil {
+		return lang.Selection{Fallback: err.Error()}
+	}
+	sel, err := testmap.Select(m, r, testCmd, repoRoot, codePath, testPath)
+	if err != nil {
+		return lang.Selection{Fallback: err.Error()}
+	}
+	return sel
 }

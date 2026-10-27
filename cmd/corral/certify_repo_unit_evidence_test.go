@@ -212,27 +212,6 @@ func unitCandidacyLines(s string) string {
 	return strings.Join(out, "\n")
 }
 
-// The scan's audit config — and so every verdict's cache key — says how the
-// scan GRADES, and the unit pass changes no grading: the method stays what
-// selection evidence alone decides.
-func TestUnitEvidenceLeavesAuditConfigKeyAlone(t *testing.T) {
-	without := &localExecutor{}
-	with := &localExecutor{units: reposcan.UnitEvidence{Ran: true, Units: []reposcan.UnitResult{
-		unitRun("test/a.test.ts", map[string]lang.LineCounts{"src/a.ts": {Executed: 1, Executable: 1}}),
-	}}}
-	if got := with.selectionMethod(); got != "" {
-		t.Fatalf("selectionMethod with unit evidence = %q, want \"\"", got)
-	}
-	argv := []string{"vitest", "run"}
-	if a, b := auditConfigKey(false, without.selectionMethod(), argv, "", ""), auditConfigKey(false, with.selectionMethod(), argv, "", ""); a != b {
-		t.Errorf("auditConfigKey moved with unit evidence:\n without %s\n    with %s", a, b)
-	}
-	sel := &localExecutor{selection: reposcan.SelectionEvidence{Ran: true}}
-	if got := sel.selectionMethod(); got != "coverage-context" {
-		t.Errorf("negative control: selection evidence must still set the method, got %q", got)
-	}
-}
-
 // A command with no one-unit form (`npm test` with no script corral can
 // read) leaves the language name-paired for the run, and the scan says why
 // on the units line and on the summary line — never a silent zero (Review
@@ -253,8 +232,9 @@ func TestUnitPassDisclosesACommandWithNoUnitForm(t *testing.T) {
 	}
 }
 
-// --whole-suite is a GRADING choice; the unit pass is candidacy, so it still
-// runs and still promotes.
+// --whole-suite is a GRADING choice; the unit pass also decides candidacy,
+// so it still runs and still promotes (and grades nothing — see
+// TestUnitEvidenceNamesItsMethodInTheAuditConfigKey).
 func TestWholeSuiteStillRunsTheUnitPass(t *testing.T) {
 	root := unitEvidenceTSFixture(t)
 	fake := &fakeUnitPass{ev: reposcan.UnitEvidence{Ran: true, Units: []reposcan.UnitResult{

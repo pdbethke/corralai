@@ -398,7 +398,9 @@ func toMutantRefsWith(ms []adequacy.Mutant, grading map[string]adequacy.MutantGr
 // whole suite (Method "") or the narrowed set of tests that evidence showed
 // executed the file under audit (Method set, Selected of Of). Fallback
 // carries why a selector could not narrow (no selector for the language,
-// stale/missing evidence) even though Method is set.
+// stale/missing evidence), or — with Method set — why the dev pass ran the
+// whole command anyway (an uncovered file whose paired test the engine
+// could not run alone, a map naming no runner row; selectionDisclosure).
 type TestSelection struct {
 	Method   string `json:"method"` // "" = whole suite
 	Selected int    `json:"selected"`
@@ -433,6 +435,19 @@ type TestSelection struct {
 	// without it, any test in the shared command could have supplied the
 	// kill — a different, weaker claim.
 	AuthoredAlone bool `json:"authored_alone,omitempty"`
+	// Unreported is how many of the Selected units are in the selection
+	// only because they reported no evidence (a unit whose own run failed
+	// or never started under the unit pass). Partial evidence must never
+	// under-select, so the engine adds every such unit to every unit
+	// selection; this count says how much of Selected is evidence and how
+	// much is caution. Zero for a test-grain or whole-suite run.
+	Unreported int `json:"unreported,omitempty"`
+	// AuthoredFallback is why the AUTHORED pass could not run the authored
+	// test alone or beside the selection, and so ran the run's whole
+	// command (testmap.AuthoredTestCmd's refusal, verbatim). Fallback is
+	// the dev pass's reason; the two passes can fall back independently,
+	// and a proven count under this one is a whole-command measurement.
+	AuthoredFallback string `json:"authored_fallback,omitempty"`
 }
 
 // Concurrency discloses how many private trees the workspace substrate's

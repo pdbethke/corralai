@@ -50,7 +50,7 @@ func TestParseEvidenceIndexFalseWhenEvidenceDidNotRun(t *testing.T) {
 }
 
 func TestParseEvidenceIndexFalseForASelectorLessPlugin(t *testing.T) {
-	// A plugin that does not implement lang.TestSelector at all.
+	// A plugin that does not implement lang.TestEvidence at all.
 	_, ok := ParseEvidenceIndex(SelectionEvidence{Ran: true, Raw: []byte("x")}, plainPlugin{})
 	if ok {
 		t.Fatal("ParseEvidenceIndex must return false for a plugin with no selector")

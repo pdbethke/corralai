@@ -10,6 +10,7 @@ import (
 	"github.com/pdbethke/corralai/internal/adequacy"
 	"github.com/pdbethke/corralai/internal/killrate"
 	"github.com/pdbethke/corralai/internal/queue"
+	"github.com/pdbethke/corralai/internal/testmap"
 )
 
 // MethodCoverageLines is TestSelection.Method for a run that graded each
@@ -37,6 +38,11 @@ const MethodCoverageLines = "coverage-lines"
 // guard is a test asserting the value survives Score -> aggregate -> report ->
 // ledger -> attestation, rather than a reader noticing the second site.
 func verdictFromSpec(rs RunSpec) Verdict {
+	devFallback, authoredFallback, alone := selectionDisclosure(rs)
+	fallback := rs.Selection.Fallback
+	if fallback == "" {
+		fallback = devFallback
+	}
 	return Verdict{
 		Repo:            rs.Repo,
 		Commit:          rs.Commit,
@@ -45,8 +51,11 @@ func verdictFromSpec(rs RunSpec) Verdict {
 		PriorsApplied:   rs.PriorsApplied, PriorDigest: rs.PriorDigest, PriorSource: rs.PriorSource,
 		TestSelection: TestSelection{
 			Method: rs.Selection.Method, Selected: len(rs.Selection.Tests),
-			Of: rs.Selection.Of, Fallback: rs.Selection.Fallback,
-			AuthoredAlone: AuthoredAlone(rs),
+			Of: rs.Selection.Of, Fallback: fallback,
+			AuthoredAlone: alone, AuthoredFallback: authoredFallback,
+			// Counted back out of the Selection rather than carried on it:
+			// the units that will run, not a number the selection claimed.
+			Unreported: testmap.UnreportedIn(rs.SelectionMap, rs.Selection),
 		},
 		// Concurrency rides straight through — including onto a timed-out
 		// verdict (timeoutVerdict builds off this same function), since the

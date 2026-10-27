@@ -4896,7 +4896,7 @@ func TestScanPassesPrepareNoJailForALanguageThatCannotBeInstrumented(t *testing.
 	})
 	defer ex.Close()
 
-	sources := []string{"src/lib.rs"} // rust: no TestSelector, and a CoverageCmd that refuses nextest
+	sources := []string{"src/lib.rs"} // rust: no per-test evidence (lang.TestEvidence), and a CoverageCmd that refuses nextest
 	sel := ex.collectSelection(context.Background(), sources)
 	if sel.Ran || sel.Note == "" {
 		t.Errorf("selection = %+v, want a not-run note", sel)

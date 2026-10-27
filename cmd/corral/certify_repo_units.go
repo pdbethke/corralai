@@ -19,12 +19,23 @@ import (
 )
 
 // The unit evidence pass in certify --repo: for a language with no per-test
-// selector (every language but Python), each test unit the operator's command
+// evidence (every language but Python), each test unit the operator's command
 // collects is run alone under coverage once (reposcan.CollectUnitEvidence),
-// and the result widens CANDIDACY exactly as Python's selection evidence does
-// — a source file only a unit's execution pairs becomes a candidate, landing
-// beside that unit. It never touches grading: selectionMethod, and so
-// auditConfigKey and every verdict's cache key, read only the selection pass.
+// and the result does for that language both things Python's selection
+// evidence does. It widens CANDIDACY — a source file only a unit's execution
+// pairs becomes a candidate, landing beside that unit — and it GRADES: each
+// file is graded by the units whose own run executed it, plus every unit
+// that reported no evidence (selectionFor, through the one selection engine
+// in internal/testmap), and the scan's method is "unit-evidence"
+// (selectionMethod), so auditConfigKey and every verdict's cache key say so.
+//
+// It decided candidacy alone at first, and grading stayed whole-suite: the
+// evidence that pairs a file with a unit is the same evidence that says
+// which units run it, so every planted bug in a non-Python file was graded
+// by tests the scan had already measured never reach it. Grading by it
+// waited for the engine that could refuse what it cannot run exactly (a
+// selection that would also collect a unit nobody named) and for failed
+// units to be carried rather than dropped.
 //
 // Python keeps its own path because its selector already attributes
 // coverage per test from one run; a unit pass there would be a second,
@@ -107,6 +118,7 @@ func (l *localExecutor) collectUnits(ctx context.Context, sources []string) repo
 			var cached reposcan.UnitEvidence
 			if gerr == nil && hit && json.Unmarshal(raw, &cached) == nil && cached.Ran {
 				l.unitsReused = true
+				l.unitMap = reposcan.MapFromUnits(cached, reposcan.UnitFilesFor(plug, l.unitLanding), inv, plug)
 				return cached
 			}
 		}
@@ -120,6 +132,14 @@ func (l *localExecutor) collectUnits(ctx context.Context, sources []string) repo
 			runnable, listed, l.unitWorkers, selectionTimeout)
 	})
 	l.unitsDuration = time.Since(start)
+	if ev.Ran {
+		// The map grading reads (selectionFor), built here because this is
+		// where the invocation the pass ran under — and so the runner row
+		// that reads its units — is known. A pass that did not run builds
+		// none: there is nothing to grade by, and selectionFor says why
+		// from ev.Note.
+		l.unitMap = reposcan.MapFromUnits(ev, reposcan.UnitFilesFor(plug, l.unitLanding), inv, plug)
+	}
 	if ev.Settled() && keyOK {
 		if raw, merr := json.Marshal(ev); merr == nil {
 			l.pendingUnitsPut = &pendingSelectionCachePut{TreeDigest: treeDigest, CmdDigest: cmdDigest, Plugin: unitsCachePlugin(langName), Substrate: l.substrate, Raw: raw}
@@ -300,5 +320,34 @@ func printUnitPass(w io.Writer, ex *localExecutor) {
 	}
 	if ex.unitLandingNote != "" {
 		fmt.Fprintf(w, "  units: %s\n", ex.unitLandingNote)
+	}
+}
+
+// printUnitGrading is the scan's selection line for a language the unit
+// pass serves, printed once the pass has decided how the scan grades: by
+// the units each file's evidence links, with how many units are in every
+// selection only because they reported nothing; or by the whole suite, and
+// why. It is the line the selection pass prints for Python, said about the
+// evidence that actually grades.
+func printUnitGrading(w io.Writer, ex *localExecutor, langName string) {
+	ev := ex.units
+	switch {
+	case ex.wholeSuite:
+		fmt.Fprintln(w, "  selection: grading by the WHOLE suite — --whole-suite")
+	case ex.unitGrades():
+		failed := unitPassFailed(ev)
+		line := fmt.Sprintf("  selection: grading each %s file by the test units its evidence says execute it (%d of %d unit(s) reported", langName, len(ev.Units)-failed, len(ev.Units))
+		if failed > 0 {
+			line += fmt.Sprintf("; the %d that did not are added to every file's selection", failed)
+		}
+		fmt.Fprintln(w, line+")")
+	case !ev.Ran:
+		fmt.Fprintf(w, "  selection: grading by the WHOLE suite — %s\n", ev.Note)
+	default:
+		why := fmt.Sprintf("no unit of %d reported evidence", len(ev.Units))
+		if ev.Note != "" {
+			why += ": " + ev.Note
+		}
+		fmt.Fprintf(w, "  selection: grading by the WHOLE suite — %s\n", why)
 	}
 }

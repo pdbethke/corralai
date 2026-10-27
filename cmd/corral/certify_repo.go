@@ -37,6 +37,7 @@ import (
 	"github.com/pdbethke/corralai/internal/scanstore"
 	"github.com/pdbethke/corralai/internal/shadowpool"
 	"github.com/pdbethke/corralai/internal/statedir"
+	"github.com/pdbethke/corralai/internal/testmap"
 )
 
 // defaultScanTop bounds a scan by default. Provisional: large enough to be
@@ -1022,6 +1023,16 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 		if len(selectionSources) == 0 {
 			noSourcesNote = noEvidenceSourcesNote(excl)
 		}
+		// The scan's evidence language: resolveSelectionPlugin does no I/O
+		// (it only inspects the enumerated sources and the operator's own
+		// testCmd), so it is asked once, here, and every pass below reads
+		// the same answer. A language the unit pass serves runs no per-test
+		// instrumented run, so the selection pass's own lines — "running the
+		// suite once with per-test coverage", "WHOLE suite — no selector" —
+		// would describe work never done and a grading that is not the
+		// scan's; its grading line is printed after the unit pass instead.
+		plug, _, _, _ := ex.resolveSelectionPlugin(selectionSources)
+		unitLanguage := runsUnitPass(plug)
 		if len(selectionSources) > 0 {
 			// Announced only when it is about to happen: under --whole-suite
 			// collectSelection returns immediately without running anything, and
@@ -1031,7 +1042,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 			// minutes-long) instrumented run collectSelection would otherwise be
 			// about to start — so the announce line can say "reused" instead of
 			// "running" for a run that is never going to happen.
-			if !*wholeSuiteFlag {
+			if !*wholeSuiteFlag && !unitLanguage {
 				if ex.selectionCachePeek(selectionSources) {
 					fmt.Fprintln(stdout, "  selection: reused — tree unchanged since an earlier scan (cached evidence)")
 				} else {
@@ -1043,7 +1054,7 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 			// here would tick for --whole-suite too, which returns from that call
 			// having run nothing at all.
 			ex.selection = ex.collectSelection(evidenceCtx, selectionSources)
-			if !ex.selection.Ran {
+			if !ex.selection.Ran && !unitLanguage {
 				fmt.Fprintf(stdout, "  selection: grading by the WHOLE suite — %s\n", ex.selection.Note)
 			}
 			// SCAN-SCOPED: this instrumented run happens ONCE, for the whole
@@ -1059,26 +1070,28 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 				})
 			}
 		}
-		selectionMethod = ex.selectionMethod()
-
-		// WIDEN: the SAME plugin resolution collectSelection just used, asked
-		// again here rather than threaded out of it: resolveSelectionPlugin
-		// does no I/O (it only inspects the already-enumerated sources and
-		// the operator's own testCmd), so a second call costs nothing.
-		plug, _, _, _ := ex.resolveSelectionPlugin(selectionSources)
+		// WIDEN: by the SAME plugin resolution collectSelection used.
 		var idx reposcan.EvidenceIndex
 		var idxOK bool
 		if plug != nil {
 			idx, idxOK = reposcan.ParseEvidenceIndex(ex.selection, plug)
 		}
 		// THE UNIT PASS, for a language with no per-test selector: the
-		// evidence that widens its candidacy. Apart from grading — it runs
-		// under --whole-suite too, and selectionMethod above has already
-		// been decided without it.
-		if len(selectionSources) > 0 && runsUnitPass(plug) {
+		// evidence that widens its candidacy AND grades its files — each by
+		// the units whose own run executed it, plus every unit that reported
+		// nothing (selectionFor). It runs under --whole-suite too, because
+		// candidacy needs it; there it grades nothing (selectionMethod).
+		//
+		// It once decided candidacy only, and selectionMethod was taken
+		// before it ran, from the selection pass alone. The evidence that
+		// pairs a file with a unit is the evidence that says which units run
+		// it, so grading the file by every unit threw away a measurement the
+		// scan had already paid for.
+		if len(selectionSources) > 0 && unitLanguage {
 			ex.unitInventory = repoInventory
 			ex.units = ex.collectUnits(evidenceCtx, selectionSources)
 			printUnitPass(stdout, ex)
+			printUnitGrading(stdout, ex, plug.Name())
 			if ex.unitsDuration > 0 {
 				ex.events.forScan("phase_units", "", map[string]any{
 					"duration_ms": ex.unitsDuration.Milliseconds(),
@@ -1092,6 +1105,8 @@ func runCertifyRepo(args []string, stdout, stderr io.Writer) int {
 			}
 			unitsPartial = idxOK && unitPassFailed(ex.units) > 0
 		}
+		// Decided once both passes have run: the unit pass grades too.
+		selectionMethod = ex.selectionMethod()
 		// The evidence phase is over: Ctrl-C from here is the next phase's
 		// to handle. An interrupted pass has already said which units it
 		// never ran; it widens nothing and caches nothing, and the run
@@ -3221,14 +3236,36 @@ func (l *localExecutor) collectSelection(ctx context.Context, sources []string) 
 }
 
 // selectionMethod is the scan's test-selection method for auditConfigKey:
-// "coverage-context" when the selection pass produced evidence, else "". It
-// reads the selection pass ONLY — the unit pass (l.units) decides candidacy,
-// never how a file is graded, so it must not move the key.
+// "coverage-context" when the selection pass produced evidence,
+// "unit-evidence" when the unit pass did (unitGrades), else "" — and ""
+// under --whole-suite, which grades nothing by evidence whatever ran.
+//
+// It read the selection pass ONLY while the unit pass decided candidacy
+// alone. Since the unit pass grades too (every language but Python is
+// graded by the units its evidence links), a scan graded by units measures
+// something different from a whole-suite one, and a key that could not tell
+// them apart would serve one's verdict for the other.
 func (l *localExecutor) selectionMethod() string {
-	if l.selection.Ran {
-		return "coverage-context"
+	switch {
+	case l.wholeSuite:
+		return ""
+	case l.selection.Ran:
+		return testmap.MethodCoverageContext
+	case l.unitGrades():
+		return testmap.MethodUnitEvidence
 	}
 	return ""
+}
+
+// unitGrades reports whether the unit pass's map grades the scan's files of
+// its language: the pass ran and at least one unit reported evidence. A pass
+// in which no unit reported (it timed out before any finished) grades
+// nothing — every file falls back to the whole suite with the pass's note
+// (testmap.Select refuses it, Review Focus 5) — so it must not name a method
+// the scan's files were not graded by. A map naming no runner row still
+// counts: each file then says, by name, why it could not be narrowed.
+func (l *localExecutor) unitGrades() bool {
+	return l.units.Ran && l.unitMap.Method != "" && len(l.unitMap.Unreported()) < len(l.unitMap.Tests)
 }
 
 // collectSelectionEvidence is reposcan.CollectSelectionEvidence behind a
@@ -4906,11 +4943,18 @@ type localExecutor struct {
 
 	// units is the scan's unit evidence pass (collectUnits): each test
 	// UNIT the operator's command collects, run alone under coverage, for
-	// a language with no per-test selector. It decides CANDIDACY only —
-	// which unpaired files an execution pairs — and never grading:
-	// selectionMethod reads selection, never units, so no cache key moves.
+	// a language with no per-test selector. It decides CANDIDACY — which
+	// unpaired files an execution pairs — and, through unitMap, GRADING:
+	// each file of its language is graded by the units that executed it
+	// plus every unit that reported nothing (selectionFor), and
+	// selectionMethod names it, so the cache key moves with it. (It decided
+	// candidacy alone until the engine could grade by units; see
+	// certify_repo_units.go's header.)
 	// Zero value: no pass ran.
 	units reposcan.UnitEvidence
+	// unitMap is units as a test map (reposcan.MapFromUnits), built where
+	// the pass's invocation is known; the zero Map when no pass ran.
+	unitMap testmap.Map
 	// unitsDuration is how long the pass's own runs took, measured around
 	// them as selectionDuration is; zero when nothing ran (a cache hit, a
 	// refusal before any run).
@@ -5169,7 +5213,7 @@ func (l *localExecutor) auditInputFor(j reposcan.Job) localAuditInput {
 		// The scan's map, which sel was made from: the pool builds every
 		// later command from sel through the engine, which reads the row and
 		// the grain from it (advpool.RunSpec.SelectionMap).
-		selectionMap: l.selection.Map,
+		selectionMap: l.mapFor(j),
 		// The scan's one instrumented run, carried onto every file's spec —
 		// see localExecutor.selectionDuration.
 		selectionDuration: l.selectionDuration,
@@ -5502,6 +5546,14 @@ func (l *localExecutor) Execute(ctx context.Context, j reposcan.Job) (reposcan.F
 // The base handed to the selector is the operator's `-- <cmd>` when they gave
 // one, else the plugin's stock recursive command: the operator's markers and
 // flags are honoured, and the selection only ever narrows what they chose.
+//
+// Which evidence answers depends on the language: Python's per-test
+// selection pass (lang.TestEvidence), or, for every other language, the
+// unit pass's map — the units whose own run executed the file, plus every
+// unit that reported nothing (reposcan.UnitSelectionFor). The unit pass
+// once decided candidacy only, and every non-Python file graded against the
+// whole suite whatever its evidence said; the evidence was already there,
+// per unit, and the engine that narrows Python's selection narrows by it.
 func (l *localExecutor) selectionFor(j reposcan.Job) lang.Selection {
 	if l.wholeSuite {
 		return lang.Selection{Fallback: "--whole-suite"}
@@ -5514,7 +5566,33 @@ func (l *localExecutor) selectionFor(j reposcan.Job) lang.Selection {
 	if len(base) == 0 {
 		base = p.TestCmd()
 	}
-	return l.selection.For(p, l.repoDir, j.Path, j.TestPath, base)
+	if _, perTest := p.(lang.TestEvidence); perTest {
+		return l.selection.For(p, l.repoDir, j.Path, j.TestPath, base)
+	}
+	if !l.units.Ran {
+		// The pass's own reason, as the units line printed it; a pass that
+		// never started (no source to run for, a diff that touched none)
+		// has none, and an empty Fallback would be an undisclosed
+		// whole-suite grade.
+		if l.units.Note != "" {
+			return lang.Selection{Fallback: l.units.Note}
+		}
+		return lang.Selection{Fallback: fmt.Sprintf("no unit evidence was collected for %s", j.Lang)}
+	}
+	return reposcan.UnitSelectionFor(l.unitMap, p, l.repoDir, j.Path, j.TestPath, base)
+}
+
+// mapFor is the test map j's Selection was made from — the one every later
+// command for the job is built from (localAuditInput.selectionMap, testCmd):
+// the selection pass's for a language with per-test evidence, the unit
+// pass's for every other.
+func (l *localExecutor) mapFor(j reposcan.Job) testmap.Map {
+	if p, ok := lang.ByName(j.Lang); ok {
+		if _, perTest := p.(lang.TestEvidence); !perTest {
+			return l.unitMap
+		}
+	}
+	return l.selection.Map
 }
 
 // baseCmd is the job's UNNARROWED command: the operator's `-- <cmd>` if they
@@ -5552,7 +5630,7 @@ func (l *localExecutor) baseCmd(j reposcan.Job) []string {
 // unknown language yields nil and the audit fails closed downstream rather
 // than grading with someone else's command.
 func (l *localExecutor) testCmd(j reposcan.Job, sel lang.Selection) []string {
-	return advpool.DevCommandArgv(sel, l.selection.Map, j.Lang, l.baseCmd(j), l.repoDir, j.TestPath)
+	return advpool.DevCommandArgv(sel, l.mapFor(j), j.Lang, l.baseCmd(j), l.repoDir, j.TestPath)
 }
 
 // printLanguageProfile renders the per-language inventory the enumeration

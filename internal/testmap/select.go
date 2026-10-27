@@ -3,6 +3,7 @@
 package testmap
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
 	"slices"
@@ -51,6 +52,16 @@ func grainOf(m Map) (string, error) {
 //     The message says whether its paired test was seen, as Python's did.
 //   - codePath measured with no edge is uncovered: a Selection with Method,
 //     Of and Base and no Cmd.
+//   - At unit grain, a map in which no unit reported evidence is refused
+//     before the file is looked up, with the pass's own Note: every unit
+//     would be "unreported", and a command of all of them is the whole
+//     suite under a name that says it was narrowed (Review Focus 5). Only
+//     an edge whose unit executed something selects it — a zero-executed
+//     edge records a measurement, not an execution — and every unreported
+//     unit joins every selection, so partial evidence never under-selects
+//     (Review Focus 1). A measured file no reported unit executes is then
+//     graded by the unreported units, and is uncovered only when there are
+//     none.
 //   - Otherwise the ids are sorted so the command, and the cache key built
 //     from it, is stable. A test-grain set over MaxArgv widens to its nodes'
 //     units and drops its line evidence, which is keyed by ids that will no
@@ -68,6 +79,11 @@ func Select(m Map, r lang.Runner, testCmd []string, repoRoot, codePath, testPath
 	}
 	if err := canRun(r, grain); err != nil {
 		return lang.Selection{}, err
+	}
+	if grain == GrainUnit {
+		if err := someUnitReported(m); err != nil {
+			return lang.Selection{}, err
+		}
 	}
 	want := filepath.ToSlash(codePath)
 	src, measured := m.Sources[want]
@@ -103,12 +119,23 @@ func Select(m Map, r lang.Runner, testCmd []string, repoRoot, codePath, testPath
 		if n.Grain != grain {
 			return lang.Selection{}, fmt.Errorf("testmap: %s map is %s, but node %q has grain %q, not %q", m.Lang, m.Method, e.Test, n.Grain, grain)
 		}
+		if grain == GrainUnit && e.Executed == 0 {
+			continue
+		}
 		if !seen[e.Test] {
 			seen[e.Test] = true
 			ids = append(ids, e.Test)
 		}
 		if grain == GrainTest && len(e.Lines) > 0 {
 			sel.Lines[e.Test] = append(sel.Lines[e.Test], e.Lines...)
+		}
+	}
+	if grain == GrainUnit {
+		for _, id := range m.Unreported() {
+			if !seen[id] {
+				seen[id] = true
+				ids = append(ids, id)
+			}
 		}
 	}
 	if len(ids) == 0 {
@@ -149,6 +176,36 @@ func Select(m Map, r lang.Runner, testCmd []string, repoRoot, codePath, testPath
 	}
 	sel.Tests, sel.Cmd = ids, cmd
 	return sel, nil
+}
+
+// someUnitReported refuses a unit map in which no listed unit contributed
+// evidence: the pass timed out before any unit finished, or every unit
+// failed. The pass's own Note says why, verbatim, so the whole-suite
+// fallback names the real cause rather than a file it never measured.
+func someUnitReported(m Map) error {
+	if len(m.Unreported()) < len(m.Tests) {
+		return nil
+	}
+	why := fmt.Sprintf("testmap: the %s unit pass reported no unit's evidence (%d listed, none reported), so no unit can be selected", m.Lang, len(m.Tests))
+	if m.Note != "" {
+		why += ": " + m.Note
+	}
+	return errors.New(why)
+}
+
+// UnreportedIn is how many of sel's units are in it only because they
+// reported no evidence (m's Unreported), which Select adds to every
+// unit-grain selection. It is counted back out of the selection, rather
+// than carried on it, so the count is always of units that will actually
+// run: a selection the engine refused carries no Tests and counts zero.
+func UnreportedIn(m Map, sel lang.Selection) int {
+	n := 0
+	for _, id := range sel.Tests {
+		if node, ok := m.Tests[id]; ok && node.Grain == GrainUnit && node.Err != "" {
+			n++
+		}
+	}
+	return n
 }
 
 // canRun refuses a row with no command for the map's grain, before any
@@ -340,25 +397,36 @@ func sortBySpanCoverage(ids []string, sel lang.Selection, span lang.LineRange) {
 // decides the grain and the listed units the corun check needs; a Selection
 // carries neither.
 func WithAuthoredTest(m Map, sel lang.Selection, r lang.Runner, testCmd []string, repoRoot, authoredTestPath string) ([]string, bool) {
+	cmd, err := AuthoredTestCmd(m, sel, r, testCmd, repoRoot, authoredTestPath)
+	return cmd, err == nil
+}
+
+// AuthoredTestCmd is WithAuthoredTest with the reason it has no command. A
+// caller that runs something else in its place (the whole command) must
+// say so where the measurement is recorded, and this is the sentence it
+// says.
+func AuthoredTestCmd(m Map, sel lang.Selection, r lang.Runner, testCmd []string, repoRoot, authoredTestPath string) ([]string, error) {
 	grain, err := grainOf(m)
-	if err != nil || canRun(r, grain) != nil {
-		return nil, false
+	if err != nil {
+		return nil, err
+	}
+	if err := canRun(r, grain); err != nil {
+		return nil, err
 	}
 	if grain == GrainUnit {
 		if r.UnitForFile == nil {
-			return nil, false
+			return nil, fmt.Errorf("testmap: the %s runner cannot name the unit a test file belongs to, so %s cannot be added to a unit selection", r.ID, authoredTestPath)
 		}
 		u, ok := r.UnitForFile(repoRoot, authoredTestPath)
 		if !ok {
-			return nil, false
+			return nil, fmt.Errorf("testmap: no %s unit holds %s, so it cannot be added to a unit selection", r.ID, authoredTestPath)
 		}
 		units := slices.Clone(sel.Tests)
 		if !slices.Contains(units, u) {
 			units = append(units, u)
 		}
 		sort.Strings(units)
-		cmd, err := unitsCmd(m, r, testCmd, units)
-		return cmd, err == nil
+		return unitsCmd(m, r, testCmd, units)
 	}
 
 	base := sel.Cmd
@@ -370,12 +438,12 @@ func WithAuthoredTest(m Map, sel lang.Selection, r lang.Runner, testCmd []string
 	}
 	out, ok := r.TestsCmd(base, []string{authoredTestPath})
 	if !ok {
-		return nil, false
+		return nil, fmt.Errorf("testmap: the %s runner cannot add %s to %v", r.ID, authoredTestPath, base)
 	}
 	if r.CarryArgs != nil {
 		out = append(out, r.CarryArgs(testCmd)...)
 	}
-	return out, true
+	return out, nil
 }
 
 // argvLen approximates the length of a command line carrying args, as one

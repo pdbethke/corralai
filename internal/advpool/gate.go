@@ -522,11 +522,15 @@ const RuleAuthoredAlone = "authored-alone"
 
 // AuthoredAlone reports whether this run's authored pass proves survivors
 // with the authored test alone — true exactly when the run carries a
-// selection the engine can build commands from (selectionRow). It is
+// selection the engine can build commands from (selectionRow) AND the
+// engine builds the authored-alone command (selectionDisclosure). It used
+// to stop at the first: a unit row can refuse the authored unit (it would
+// also run a listed unit nobody named, or no unit holds the file), and the
+// pass then ran something else while the verdict still said "alone". It is
 // spec-derived so the verdict can say it without asking the scorer.
 func AuthoredAlone(rs RunSpec) bool {
-	_, ok := selectionRow(rs.Lang, rs.Selection, rs.SelectionMap)
-	return ok
+	_, _, alone := selectionDisclosure(rs)
+	return alone
 }
 
 func (s JailScorer) ScoreAuthoredReport(ctx context.Context, codePath, code, test string, mutants []adequacy.Mutant, testCmd string) (adequacy.Report, error) {
@@ -562,6 +566,9 @@ func (s JailScorer) ScoreAuthoredReport(ctx context.Context, codePath, code, tes
 				return adequacy.MutantCommand{Cmd: alone, Tests: 1, Rule: RuleAuthoredAlone}
 			}))
 		} else {
+			// Disclosed on the verdict, not only here: selectionDisclosure
+			// asks the engine the same question, so AuthoredAlone is false
+			// and, when cmd is the whole command, AuthoredFallback says why.
 			log.Printf("advpool: %s: no command runs the authored test %s alone with the %s runner; the authored pass runs %v", codePath, path, r.ID, cmd)
 		}
 	}
@@ -831,7 +838,9 @@ func DevCommandArgv(sel golang.Selection, m testmap.Map, langName string, base [
 	if !ok {
 		// No command runs the paired test alone. Running base instead grades
 		// against the whole suite, which the Selection's Uncovered finding
-		// does not describe — so it is said, here, where it happens.
+		// does not describe — so it is said on the verdict's Fallback
+		// (selectionDisclosure asks the engine the same question), and
+		// logged here, where it happens.
 		log.Printf("advpool: no command runs the paired test %s alone with the %s runner; the uncovered file's dev pass runs %v", devTestPath, r.ID, base)
 		return base
 	}
@@ -874,28 +883,96 @@ func DevCommandFor(rs RunSpec) adequacy.CommandFor {
 // selectionRow is the runner row that built sel from m, which the engine
 // builds every further command from (the authored pass, the uncovered dev
 // pass, each mutant's span), or false when there is nothing to build from:
-// no Method (the zero Selection — the whole suite), a language whose plugin
-// produces no test evidence, or a map naming no row of that language. The
-// row is the map's own (Map.Runner, recorded where the evidence was read),
-// not one re-detected from the command here: a Selection is narrowed by one
-// row, and a second detection could only ever disagree with it.
+// no Method (the zero Selection — the whole suite), or a map naming no row
+// of the run's language. The row is the map's own (Map.Runner, recorded
+// where the evidence was read), not one re-detected from the command here:
+// a Selection is narrowed by one row, and a second detection could only
+// ever disagree with it.
+//
+// It once also required the plugin to produce per-test evidence
+// (lang.TestEvidence), which only Python does: every other language's
+// selection, made from the unit pass's map, was then silently run
+// whole-suite. The map is what says a selection can be built; the plugin's
+// own evidence form is the map builder's business.
 func selectionRow(langName string, sel golang.Selection, m testmap.Map) (golang.Runner, bool) {
-	if sel.Method == "" {
-		return golang.Runner{}, false
-	}
-	p, ok := golang.ByName(langName)
-	if !ok {
-		return golang.Runner{}, false
-	}
-	if _, ok := p.(golang.TestEvidence); !ok {
-		return golang.Runner{}, false
-	}
-	r, err := golang.RunnerByID(p, m.Runner)
+	r, err := selectionRowErr(langName, sel, m)
 	if err != nil {
-		log.Printf("advpool: %s selection carries no usable runner row (%v); its commands are not narrowed", langName, err)
+		if sel.Method != "" {
+			log.Printf("advpool: %v; its commands are not narrowed", err)
+		}
 		return golang.Runner{}, false
 	}
 	return r, true
+}
+
+// selectionRowErr is selectionRow with the reason it found no row, for the
+// verdict to disclose (selectionDisclosure). A map naming no row is refused
+// by name: no row is re-detected or assumed in its place.
+func selectionRowErr(langName string, sel golang.Selection, m testmap.Map) (golang.Runner, error) {
+	if sel.Method == "" {
+		return golang.Runner{}, fmt.Errorf("advpool: the selection has no method: nothing was narrowed")
+	}
+	p, ok := golang.ByName(langName)
+	if !ok {
+		return golang.Runner{}, fmt.Errorf("advpool: %s selection is for a language corral does not know", langName)
+	}
+	if m.Runner == "" {
+		return golang.Runner{}, fmt.Errorf("advpool: the %s selection's map names no runner row, so no command can be built from it", langName)
+	}
+	r, err := golang.RunnerByID(p, m.Runner)
+	if err != nil {
+		return golang.Runner{}, fmt.Errorf("advpool: %s selection carries no usable runner row (%v)", langName, err)
+	}
+	return r, nil
+}
+
+// selectionDisclosure is what the engine would NOT build for this run, said
+// on the verdict where the measurement is recorded: every one of these
+// refusals makes a pass run the run's whole command instead of the command
+// its Selection describes, which is a different measurement.
+//
+//   - dev: why the DEV pass runs the whole command although the Selection
+//     has a Method — its map names no usable row, or the file is uncovered
+//     and its paired test's command cannot be built (DevCommandArgv's two
+//     fallbacks). "" when the dev pass runs what the Selection says.
+//   - authored: why the AUTHORED pass runs the whole command — neither the
+//     authored test alone nor the selection plus it could be built
+//     (JailScorer.ScoreAuthoredReport tries them in that order).
+//   - alone: the authored pass runs the authored test ALONE, the stronger
+//     claim the verdict's AuthoredAlone makes.
+//
+// The authored test's path is the scorer's rule without the workspace's
+// file list (which only renames a path that collides with an existing file,
+// never moves it to another directory or unit): the verdict is spec-derived,
+// as AuthoredAlone always was, so a cached and a fresh verdict say the same.
+// The commands are built from the run's TestCmd, the base every pass starts
+// from.
+func selectionDisclosure(rs RunSpec) (dev, authored string, alone bool) {
+	sel := rs.Selection
+	if sel.Method == "" {
+		return "", "", false
+	}
+	r, err := selectionRowErr(rs.Lang, sel, rs.SelectionMap)
+	if err != nil {
+		return err.Error(), err.Error(), false
+	}
+	base := adequacy.ShellSplit(rs.TestCmd)
+	if len(sel.Tests) == 0 {
+		if rs.DevTestPath == "" {
+			dev = "advpool: the file is uncovered but has no paired test file to run alone, so the dev pass runs the whole command"
+		} else if _, err := testmap.AuthoredTestCmd(rs.SelectionMap, sel, r, base, rs.RepoDir, rs.DevTestPath); err != nil {
+			dev = fmt.Sprintf("advpool: no command runs the paired test %s alone (%v), so the dev pass runs the whole command", rs.DevTestPath, err)
+		}
+	}
+	path := authoredTestPath(rs.Landing, rs.CodePath, rs.DevTestPath, nil)
+	_, aloneErr := testmap.AuthoredTestCmd(rs.SelectionMap, golang.Selection{Base: sel.Base}, r, base, rs.RepoDir, path)
+	if aloneErr == nil {
+		return dev, "", true
+	}
+	if _, err := testmap.AuthoredTestCmd(rs.SelectionMap, sel, r, base, rs.RepoDir, path); err != nil {
+		authored = fmt.Sprintf("advpool: the authored test %s could not run alone or beside the selection (%v), so the authored pass runs the whole command", path, err)
+	}
+	return dev, authored, false
 }
 
 // AuthoredCommand is the command the AUTHORED pass really runs for codePath,
@@ -929,7 +1006,8 @@ func (s JailScorer) authoredCmd(codePath string, cmd []string) []string {
 		// No command runs the selection plus the authored test exactly; the
 		// pass runs the resolved command, and the positive control
 		// (verifyAuthoredTestReaches) still decides whether it reached the
-		// authored test at all.
+		// authored test at all. The verdict's AuthoredFallback says so
+		// (selectionDisclosure asks the engine the same question).
 		log.Printf("advpool: %s: no command adds the authored test %s to the selection with the %s runner; the authored pass runs %v", codePath, path, r.ID, cmd)
 		return cmd
 	}

@@ -20,6 +20,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
 import { execFileSync } from 'node:child_process';
+import { stripTypeScriptTypes } from 'node:module';
 
 const SITE = path.join(import.meta.dirname, '..');
 const ROOT = path.join(SITE, '..');
@@ -164,6 +165,8 @@ test('A on the real prefix draws runs, gaps with their proving tests, telemetry 
   const box = (await plot.boundingBox())!;
   await plot.hover({ position: { x: box.width - 30, y: box.height / 2 } });
   await expect(page.locator('figure.viz').first().locator('.viz-tip')).toContainText('proven missing tests');
+  // Runs are numbered among every run on the ledger, not among the graded ones.
+  await expect(page.locator('figure.viz').first().locator('.viz-tip')).toContainText('Run 2 of 2');
   // The table twin carries every value.
   await page.locator('figure.viz').first().getByRole('button', { name: 'Show table' }).click();
   await expect(page.locator('figure.viz').first().locator('.viz-table tbody tr')).toHaveCount(2);
@@ -341,3 +344,23 @@ for (const url of ['/', '/results/']) {
     expect(now, `nav is ${now}px, was ${before}px`).toBe(before);
   });
 }
+
+// sourceURL builds a github.com link from a ledger's own strings (a gap's
+// repo, commit and path), so a path that walks out of the blob ("..") or a
+// repo name of "." or ".." gets no link at all. src/lib/links.ts has no
+// imports, so it is loaded here with its types stripped, in Node.
+test('sourceURL refuses paths and repo names that would leave the audited file', async () => {
+  const src = stripTypeScriptTypes(fs.readFileSync(path.join(SITE, 'src', 'lib', 'links.ts'), 'utf8'));
+  const { sourceURL, shortRepo } = await import(`data:text/javascript,${encodeURIComponent(src)}`);
+  const sha = '36e4a824f340dc3d8a1de7d3fd2c3b4c1c4f5e6a';
+  expect(sourceURL('https://github.com/pallets/flask', sha, 'src/flask/app.py')).toBe(`https://github.com/pallets/flask/blob/${sha}/src/flask/app.py`);
+  expect(sourceURL('pallets/flask', sha, 'a b/c#d.py')).toBe(`https://github.com/pallets/flask/blob/${sha}/a%20b/c%23d.py`);
+  for (const p of ['../../../other/repo/blob/x/y', 'src/../../x', './a', 'a//b', '/abs', 'a/', '', 'a/./b']) {
+    expect(sourceURL('pallets/flask', sha, p), p).toBeNull();
+  }
+  for (const r of ['pallets/..', 'pallets/.', 'https://github.com/pallets/..', 'https://gitlab.com/a/b', 'a/b/c']) {
+    expect(sourceURL(r, sha, 'x.py'), r).toBeNull();
+  }
+  expect(sourceURL('pallets/flask', 'main', 'x.py')).toBeNull();
+  expect(shortRepo('https://github.com/pallets/flask.git')).toBe('pallets/flask');
+});

@@ -3,11 +3,14 @@
 // (no repo, every listed ledger on one page).
 //
 // Every figure drawn here is a field of Derived.summary, as ledger.Derive
-// computed it in this browser (ledger.ts). This module formats, sorts and
-// lays out; it never sums rows, filters entries or decides which entries
-// count. The one arithmetic it does is B's totals across ledgers, which adds
-// counts each ledger's Summary already gave (a presentation of several
-// records side by side); shares are never averaged across ledgers.
+// computed it in this browser (ledger.ts), entry counts included
+// (Totals.entries_*). This module formats, sorts and lays out; it never sums
+// rows, counts entries or decides which entries count. It does pick entries
+// to LIST (the failed ones under a ledger's problem), and groups gaps by run
+// and file for display. The one arithmetic it does is B's totals across
+// ledgers, which adds counts each ledger's Summary already gave (a
+// presentation of several records side by side); shares are never averaged
+// across ledgers.
 //
 // A could-not-load or could-not-verify state never renders as a number: each
 // LedgerResult kind has its own sentence, and a ledger with a problem shows
@@ -17,6 +20,7 @@
 
 import { loadLedger, parseRepo, type Derived, type Gap, type LedgerResult, type ModelLine, type Summary } from './ledger';
 import { barChart, lineChart } from './charts';
+import { shortRepo, sourceURL } from './links';
 
 export type Listing = { repo: string; listed_at: string; signing: string };
 type Listings = { ok: true; listings: Listing[] } | { ok: false; message: string };
@@ -73,20 +77,6 @@ const stamp = (iso: string) =>
 
 const shortSha = (c: string) => (/^[0-9a-f]{12,}$/.test(c) ? c.slice(0, 12) : c);
 
-// A scan's repo is the audited repository (a URL or owner/name), which is not
-// the ledger's own repository: corral's ledger records audits of others.
-const GH_REPO = /^(?:https:\/\/github\.com\/)?([A-Za-z0-9-]+\/[A-Za-z0-9._-]+?)(?:\.git)?\/?$/;
-export function shortRepo(repo: string): string {
-  const m = GH_REPO.exec(repo);
-  return m ? m[1] : repo;
-}
-
-export function sourceURL(repo: string, commit: string, path: string): string | null {
-  const m = GH_REPO.exec(repo);
-  if (!m || !/^[0-9a-f]{7,40}$/.test(commit)) return null;
-  return `https://github.com/${m[1]}/blob/${commit}/${path.split('/').map(encodeURIComponent).join('/')}`;
-}
-
 // ---- What each failure says. None carries a number but a status code or a
 // time, and none is phrased as a verdict about a project.
 
@@ -140,10 +130,10 @@ function telemetryTile(s: Summary): Tile {
   return { key: 'telemetry', label: 'Model calls', value: count(t.model_calls), caption: parts.join('; ') };
 }
 
+// The entry counts are Derive's (Totals.entries_*); n is the list's length.
 function verifiedCounts(d: Derived) {
-  const v = d.entries.filter((e) => e.status === 'verified').length;
-  const u = d.entries.filter((e) => e.status === 'unsigned').length;
-  return { v, u, n: d.entries.length };
+  const t = d.summary.totals;
+  return { v: t.entries_verified, u: t.entries_unsigned, n: d.entries.length };
 }
 
 function aTiles(d: Derived): HTMLElement {
@@ -206,7 +196,11 @@ function runCharts(s: Summary): HTMLElement {
     return out;
   }
   const xLabels = graded.map((r) => (r.finished_at === null ? 'no finish time' : day(r.finished_at)));
-  const xDetail = graded.map((r, i) => `Run ${i + 1} · ${shortRepo(r.repo)} · ${r.finished_at === null ? 'no finish time recorded' : stamp(r.finished_at)}`);
+  // "Run N of M" numbers a run among every run on the ledger, graded or not,
+  // so the numbers match the ledger and do not shift when a run is left out.
+  const xDetail = graded.map(
+    (r) => `Run ${s.runs.indexOf(r) + 1} of ${s.runs.length} · ${shortRepo(r.repo)} · ${r.finished_at === null ? 'no finish time recorded' : stamp(r.finished_at)}`,
+  );
   const skippedNote = skipped > 0 ? ` ${count(skipped)} run${skipped === 1 ? '' : 's'} that graded no file ${skipped === 1 ? 'is' : 'are'} left out.` : '';
   out.appendChild(
     lineChart({

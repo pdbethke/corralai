@@ -140,6 +140,8 @@ test('a one-byte-tampered entry derives with a problem and every total empty', a
   expect(totals).toEqual({
     scans: 0, files_audited: 0, mutants_planted: 0, survivors: 0, proven_missed: 0, could_not_grade: 0,
     caught_share: null, telemetry: null, last_run: null,
+    // The entry counts describe the entry list, which a problem does not empty.
+    entries_verified: 1, entries_unsigned: 0, entries_failed: 1,
   });
   expect([runs, gaps, models, r.derived.scans, r.derived.files]).toEqual([[], [], [], [], []]);
 });

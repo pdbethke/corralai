@@ -141,6 +141,7 @@ func Derive(raw []RawEntry, t Trust) (Derived, error) {
 
 	if p := ledgerProblem(d.Entries, len(off)); p != "" {
 		d.Problem = p
+		d.Summary.Totals.countEntries(d.Entries)
 		return d, nil
 	}
 
@@ -167,6 +168,7 @@ func Derive(raw []RawEntry, t Trust) (Derived, error) {
 	}
 	d.Adjudications = Adjudications(live)
 	d.Summary = Summarize(served)
+	d.Summary.Totals.countEntries(d.Entries)
 	return d, nil
 }
 

@@ -55,6 +55,30 @@ type Totals struct {
 	Telemetry *Telemetry `json:"telemetry"`
 	// LastRun is the latest FinishedAt; nil when no scan recorded one.
 	LastRun *time.Time `json:"last_run"`
+	// EntriesVerified, EntriesUnsigned and EntriesFailed count Derived.Entries
+	// by Status, so a page shows "n of m verified" without tallying the list
+	// itself. Unlike every figure above they are set when Derived.Problem is:
+	// they describe the entry list, which Derive returns with a problem too,
+	// and zeros there would claim nothing verified when most entries did.
+	// Summarize leaves them 0; Derive fills them (countEntries).
+	EntriesVerified int `json:"entries_verified"`
+	EntriesUnsigned int `json:"entries_unsigned"`
+	EntriesFailed   int `json:"entries_failed"`
+}
+
+// countEntries sets Totals' entry counts from the statuses Derive returns.
+func (t *Totals) countEntries(es []EntryStatus) {
+	t.EntriesVerified, t.EntriesUnsigned, t.EntriesFailed = 0, 0, 0
+	for _, e := range es {
+		switch e.Status {
+		case StatusVerified:
+			t.EntriesVerified++
+		case StatusUnsigned:
+			t.EntriesUnsigned++
+		case StatusFailed:
+			t.EntriesFailed++
+		}
+	}
 }
 
 // Telemetry sums the Calls rows of the scans that have any, and says how many

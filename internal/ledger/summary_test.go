@@ -243,6 +243,10 @@ func TestDeriveFillsSummary(t *testing.T) {
 	if d.Summary.Totals.Scans != len(d.Scans) || len(d.Summary.Runs) != 2 {
 		t.Fatalf("summary scans %d / runs %d, want the %d served", d.Summary.Totals.Scans, len(d.Summary.Runs), len(d.Scans))
 	}
+	v, u, f := statusCounts(d.Entries)
+	if tot := d.Summary.Totals; tot.EntriesVerified != v || tot.EntriesUnsigned != u || tot.EntriesFailed != f || v+u+f != len(d.Entries) || u == 0 {
+		t.Fatalf("entry counts %d/%d/%d, entries say %d/%d/%d of %d", tot.EntriesVerified, tot.EntriesUnsigned, tot.EntriesFailed, v, u, f, len(d.Entries))
+	}
 	served := map[string]bool{}
 	for _, s := range d.Scans {
 		served[s.ScanUID] = true
@@ -266,11 +270,46 @@ func TestDeriveSummaryEmptyOnProblem(t *testing.T) {
 	if d.Problem == "" {
 		t.Fatal("setup: no problem")
 	}
-	if !reflect.DeepEqual(d.Summary, ledger.Summarize(nil)) || d.Summary.Totals.Scans != 0 {
+	// The entry counts still describe the entry list, which Derive returns
+	// with a problem too: zeros there would say nothing verified when most
+	// entries did. Every other figure is empty.
+	v, u, f := statusCounts(d.Entries)
+	tot := d.Summary.Totals
+	if tot.EntriesVerified != v || tot.EntriesUnsigned != u || tot.EntriesFailed != f || f == 0 || v == 0 {
+		t.Fatalf("entry counts %d/%d/%d, entries say %d/%d/%d", tot.EntriesVerified, tot.EntriesUnsigned, tot.EntriesFailed, v, u, f)
+	}
+	empty := ledger.Summarize(nil)
+	empty.Totals.EntriesVerified, empty.Totals.EntriesUnsigned, empty.Totals.EntriesFailed = v, u, f
+	if !reflect.DeepEqual(d.Summary, empty) || d.Summary.Totals.Scans != 0 {
 		t.Fatalf("summary served from a broken ledger: %+v", d.Summary)
 	}
 	j := summaryJSON(t, d.Summary)
 	for _, k := range []string{`"runs":[]`, `"gaps":[]`, `"models":[]`, `"caught_share":null`} {
+		if !strings.Contains(j, k) {
+			t.Fatalf("want %s in %s", k, j)
+		}
+	}
+}
+
+// statusCounts tallies entry statuses the long way, for the tests to hold
+// Summary's counts against.
+func statusCounts(es []ledger.EntryStatus) (v, u, f int) {
+	for _, e := range es {
+		switch e.Status {
+		case "verified":
+			v++
+		case "unsigned":
+			u++
+		case "failed":
+			f++
+		}
+	}
+	return
+}
+
+func TestDeriveEntryCountsInJSON(t *testing.T) {
+	j := summaryJSON(t, ledger.Summarize(nil))
+	for _, k := range []string{`"entries_verified":0`, `"entries_unsigned":0`, `"entries_failed":0`} {
 		if !strings.Contains(j, k) {
 			t.Fatalf("want %s in %s", k, j)
 		}

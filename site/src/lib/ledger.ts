@@ -47,6 +47,11 @@ export type Totals = {
   caught_share: number | null;
   telemetry: Telemetry | null;
   last_run: string | null; // RFC 3339
+  // Derived.entries by status, as Derive counted them. Set even when the
+  // ledger has a problem: they describe the entry list, not the record.
+  entries_verified: number;
+  entries_unsigned: number;
+  entries_failed: number;
 };
 
 export type RunPoint = {
